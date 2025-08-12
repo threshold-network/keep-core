@@ -25,7 +25,7 @@ require (
 	github.com/btcsuite/btcd/v2 v2.0.0-00010101000000-000000000000
 	github.com/btcsuite/btcutil v1.0.3-0.20201208143702-a53e38424cce
 	github.com/checksum0/go-electrum v0.0.0-20220912200153-b862ac442cf9
-	github.com/ethereum/go-ethereum v1.13.11
+	github.com/ethereum/go-ethereum v1.13.15
 	github.com/go-test/deep v1.0.8
 	github.com/google/gofuzz v1.2.0
 	github.com/hashicorp/go-multierror v1.1.1
