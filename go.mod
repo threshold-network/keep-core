@@ -19,7 +19,7 @@ replace (
 
 require (
 	github.com/bnb-chain/tss-lib v1.3.5
-	github.com/btcsuite/btcd v0.23.1
+	github.com/btcsuite/btcd v0.23.2
 	github.com/btcsuite/btcd/btcec/v2 v2.2.0
 	github.com/btcsuite/btcd/chaincfg/chainhash v1.0.1
 	github.com/btcsuite/btcd/v2 v2.0.0-00010101000000-000000000000
