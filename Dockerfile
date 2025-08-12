@@ -1,4 +1,4 @@
-FROM golang:1.20.13-alpine3.19 AS build-sources
+FROM golang:1.20.13-alpine3.20 AS build-sources
 
 ENV GOPATH=/go \
 	GOBIN=/go/bin \
@@ -10,7 +10,7 @@ ENV GOPATH=/go \
 
 # TODO: Remove perl once go-ethereum is upgraded to 1.11.
 #       See pkg/chain/ethereum/tbtc/gen/Makefile and after_abi_hook for details.
-RUN apk add --update --no-cache \
+RUN apk update && apk upgrade && apk add --update --no-cache \
 	g++ \
 	linux-headers \
 	protobuf-dev \
@@ -84,11 +84,14 @@ RUN GOOS=linux make build \
 	version=$VERSION \
 	revision=$REVISION
 
-FROM alpine:3.19 as runtime-docker
+FROM alpine:3.20 as runtime-docker
 
 ENV APP_NAME=keep-client \
 	APP_DIR=/go/src/github.com/keep-network/keep-core \
 	BIN_PATH=/usr/local/bin
+
+# Update Alpine packages to get latest security patches
+RUN apk update && apk upgrade && rm -rf /var/cache/apk/*
 
 COPY --from=build-docker $APP_DIR/$APP_NAME $BIN_PATH
 
