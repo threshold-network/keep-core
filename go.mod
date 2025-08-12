@@ -49,7 +49,7 @@ require (
 	golang.org/x/exp v0.0.0-20231110203233-9a3e6036ecaa
 	golang.org/x/sync v0.5.0
 	golang.org/x/term v0.18.0
-	google.golang.org/protobuf v1.31.0
+	google.golang.org/protobuf v1.33.0
 	google.golang.org/protobuf/dev v0.0.0-00010101000000-000000000000
 )
 
