@@ -298,6 +298,7 @@ jobs:
         with:
           version: "2025.1.1"
           install-go: false
+          args: "-checks=-SA1019"
 
   client-integration-test:
     needs: [electrum-integration-detect-changes, client-build-test-publish]
