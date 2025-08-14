@@ -36,9 +36,6 @@ WORKDIR $APP_DIR
 COPY go.mod go.sum $APP_DIR/
 RUN go mod download
 
-# Install code generators.
-RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.32.0
-
 # Copy source code for generation.
 COPY ./pkg/beacon/dkg/result/gen $APP_DIR/pkg/beacon/dkg/result/gen
 COPY ./pkg/beacon/entry/gen $APP_DIR/pkg/beacon/entry/gen
@@ -57,6 +54,12 @@ COPY ./pkg/tecdsa/gen $APP_DIR/pkg/tecdsa/gen
 COPY ./pkg/protocol/announcer/gen $APP_DIR/pkg/protocol/announcer/gen
 COPY ./pkg/protocol/inactivity/gen $APP_DIR/pkg/protocol/inactivity/gen
 
+# Add missing dependencies for Ethereum bindings generation
+RUN go get github.com/peterh/liner github.com/graph-gophers/graphql-go github.com/ferranbt/fastssz github.com/influxdata/influxdb-client-go/v2 github.com/influxdata/influxdb1-client/v2
+
+# Install code generators.
+RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.32.0
+
 # Environment is to download published and tagged NPM packages versions.
 ARG ENVIRONMENT
 
@@ -68,6 +71,9 @@ COPY ./config $APP_DIR/config
 RUN make generate environment=$ENVIRONMENT
 
 COPY ./ $APP_DIR/
+
+# Update go.sum with any missing dependencies
+RUN go mod tidy && go mod download
 
 #
 # Build Docker Image
