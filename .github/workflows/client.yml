@@ -123,7 +123,7 @@ jobs:
           docker save --output /tmp/go-build-env-image.tar go-build-env
 
       - name: Upload Docker Build Image
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: go-build-env-image
           path: /tmp/go-build-env-image.tar
@@ -189,7 +189,7 @@ jobs:
           context: .
 
       - name: Archive Client Binaries
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: binaries
           path: |
