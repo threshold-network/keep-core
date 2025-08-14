@@ -133,7 +133,7 @@ jobs:
           docker run \
             --workdir /go/src/github.com/keep-network/keep-core \
             go-build-env \
-            gotestsum
+            gotestsum -- -timeout 15m
 
       - name: Build Docker Runtime Image
         if: github.event_name != 'workflow_dispatch'
