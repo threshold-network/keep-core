@@ -20,7 +20,7 @@ import "./WalletRegistry.sol";
 
 /// @title Allowlist
 /// @notice The allowlist contract replaces the Threshold TokenStaking contract
-///         and is as an outcome of TIP-092 and TIP-100 governance decisions.
+///         as an outcome of TIP-092 and TIP-100 governance decisions.
 ///         Staking tokens is no longer required to operate nodes. Beta stakers
 ///         are selected by the DAO and operate the network based on the
 ///         allowlist maintained by the DAO.
