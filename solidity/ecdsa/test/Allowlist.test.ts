@@ -1,10 +1,9 @@
 /* eslint-disable @typescript-eslint/no-unused-expressions */
-import { ethers, helpers } from "hardhat"
+import { ethers } from "hardhat"
 import { smock } from "@defi-wonderland/smock"
 import { expect } from "chai"
 
 import type { FakeContract } from "@defi-wonderland/smock"
-import type { ContractTransaction } from "ethers"
 import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type { Allowlist, WalletRegistry } from "../typechain"
 
@@ -50,6 +49,15 @@ describe("Allowlist", () => {
       await expect(
         allowlist.initialize(walletRegistry.address)
       ).to.be.revertedWith("Initializable: contract is already initialized")
+    })
+
+    it("should revert if initialized with zero address", async () => {
+      const AllowlistFactory = await ethers.getContractFactory("Allowlist")
+      const newAllowlist = await AllowlistFactory.deploy()
+
+      await expect(newAllowlist.initialize(ZERO_ADDRESS)).to.be.revertedWith(
+        "ZeroAddress"
+      )
     })
   })
 
@@ -99,6 +107,22 @@ describe("Allowlist", () => {
             .connect(governance)
             .addStakingProvider(stakingProvider1.address, weight)
         ).to.be.reverted
+      })
+
+      it("should revert if staking provider is zero address", async () => {
+        const weight = ethers.utils.parseEther("40000")
+
+        await expect(
+          allowlist.connect(governance).addStakingProvider(ZERO_ADDRESS, weight)
+        ).to.be.revertedWith("ZeroAddress")
+      })
+
+      it("should revert if weight is zero", async () => {
+        await expect(
+          allowlist
+            .connect(governance)
+            .addStakingProvider(stakingProvider1.address, 0)
+        ).to.be.revertedWith("ZeroWeight")
       })
     })
 
@@ -277,6 +301,20 @@ describe("Allowlist", () => {
             .connect(walletRegistry.wallet)
             .approveAuthorizationDecrease(stakingProvider2.address)
         ).to.be.reverted
+      })
+
+      it("should revert if no decrease was requested (bypass protection)", async () => {
+        // Add a staking provider but don't request decrease
+        await allowlist
+          .connect(governance)
+          .addStakingProvider(stakingProvider2.address, initialWeight)
+
+        // Trying to approve decrease without requesting it first should fail
+        await expect(
+          allowlist
+            .connect(walletRegistry.wallet)
+            .approveAuthorizationDecrease(stakingProvider2.address)
+        ).to.be.revertedWith("NoDecreasePending")
       })
     })
 
