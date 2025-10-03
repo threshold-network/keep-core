@@ -794,10 +794,13 @@ contract WalletRegistry is
     ///      attacks related to the gas limit manipulation, this function
     ///      requires an extra amount of gas to be left at the end of the
     ///      execution.
+    ///
+    ///      This function is EIP-7702 compatible - it does not restrict
+    ///      callers to EOAs, allowing accounts with delegated code execution
+    ///      to participate in DKG result challenges. Gas manipulation
+    ///      protection is enforced via `dkg.requireChallengeExtraGas()`
+    ///      regardless of caller type.
     function challengeDkgResult(DKG.Result calldata dkgResult) external {
-        // solhint-disable-next-line avoid-tx-origin
-        require(msg.sender == tx.origin, "Not EOA");
-
         (
             bytes32 maliciousDkgResultHash,
             uint32 maliciousDkgResultSubmitterId

@@ -2247,22 +2247,47 @@ describe("WalletRegistry - Wallet Creation", async () => {
   describe("challengeDkgResult", async () => {
     context("with caller being a contract", async () => {
       let dkgChallenger: DkgChallenger
+      let dkgResult: DkgResult
+      let dkgResultHash: string
+      let startBlock: number
+      let dkgSeed: BigNumber
 
-      before("request new wallet", async () => {
+      before("setup malicious DKG result", async () => {
         await createSnapshot()
 
+        // Deploy challenger contract
         const DkgChallenger = await ethers.getContractFactory("DkgChallenger")
         dkgChallenger = await DkgChallenger.deploy(walletRegistry.address)
+
+        // Request new wallet
+        await walletRegistry.connect(walletOwner.wallet).requestNewWallet()
+
+        // Submit relay entry to start DKG
+        ;({ startBlock, dkgSeed } = await submitRelayEntry(walletRegistry))
+
+        // Submit malicious DKG result (mixed operators)
+        ;({ dkgResult, dkgResultHash } = await signAndSubmitArbitraryDkgResult(
+          walletRegistry,
+          groupPublicKey,
+          mixOperators(await selectGroup(sortitionPool, dkgSeed)),
+          startBlock,
+          noMisbehaved
+        ))
       })
 
       after(async () => {
         await restoreSnapshot()
       })
 
-      it("should revert", async () => {
+      it("should allow challenge from contract (EIP-7702 compatible)", async () => {
+        // This test demonstrates that the EOA check should be removed
+        // Currently fails due to "Not EOA" check at line 799
+        // After GREEN phase (EOA check removal), this will pass
         await expect(
-          dkgChallenger.challengeDkgResult(stubDkgResult)
-        ).to.be.revertedWith("Not EOA")
+          dkgChallenger.challengeDkgResult(dkgResult)
+        )
+          .to.emit(walletRegistry, "DkgResultChallenged")
+          .withArgs(dkgResultHash, dkgChallenger.address, "Invalid group members")
       })
     })
 
