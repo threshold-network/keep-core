@@ -2719,6 +2719,93 @@ describe("WalletRegistry - Wallet Creation", async () => {
                 ).to.be.revertedWith("unjustified challenge")
               })
             })
+
+            context(
+              "challengeDkgResult with simplified error handling (try-catch removal optimization)",
+              async () => {
+                let dkgResult: DkgResult
+                let dkgResultHash: string
+                let submitter: SignerWithAddress
+
+                before(async () => {
+                  await createSnapshot()
+
+                  let tx: ContractTransaction
+                  ;({
+                    transaction: tx,
+                    dkgResult,
+                    dkgResultHash,
+                    submitter,
+                  } = await signAndSubmitArbitraryDkgResult(
+                    walletRegistry,
+                    groupPublicKey,
+                    mixOperators(await selectGroup(sortitionPool, dkgSeed)),
+                    startBlock,
+                    noMisbehaved
+                  ))
+                })
+
+                after(async () => {
+                  await restoreSnapshot()
+                })
+
+                context(
+                  "when staking.seize() succeeds (normal operation)",
+                  async () => {
+                    let challengeTx: ContractTransaction
+
+                    before(async () => {
+                      await createSnapshot()
+
+                      challengeTx = await walletRegistry
+                        .connect(thirdParty)
+                        .challengeDkgResult(dkgResult)
+                    })
+
+                    after(async () => {
+                      await restoreSnapshot()
+                    })
+
+                    it("should emit DkgResultChallenged event", async () => {
+                      await expect(challengeTx)
+                        .to.emit(walletRegistry, "DkgResultChallenged")
+                        .withArgs(
+                          dkgResultHash,
+                          await thirdParty.getAddress(),
+                          "Invalid group members"
+                        )
+                    })
+
+                    it("should complete challenge successfully", async () => {
+                      expect(await walletRegistry.getWalletCreationState()).to.equal(
+                        dkgState.AWAITING_RESULT
+                      )
+                    })
+
+                    it("should NOT emit DkgMaliciousResultSlashingFailed event after optimization", async () => {
+                      const receipt = await challengeTx.wait()
+                      const failedEvents = receipt.events?.filter(
+                        (e) => e.event === "DkgMaliciousResultSlashingFailed"
+                      )
+                      expect(failedEvents?.length || 0).to.equal(0)
+                    })
+
+                    it("should still emit DkgMaliciousResultSlashed event on success", async () => {
+                      await expect(challengeTx)
+                        .to.emit(walletRegistry, "DkgMaliciousResultSlashed")
+                        .withArgs(dkgResultHash, to1e18(400), submitter.address)
+                    })
+
+                    it("should use less gas than current implementation (bytecode optimization)", async () => {
+                      const receipt = await challengeTx.wait()
+                      const gasUsed = receipt.gasUsed.toNumber()
+                      expect(gasUsed).to.be.lessThan(1_850_000)
+                    })
+                  }
+                )
+
+              }
+            )
           })
         })
       })

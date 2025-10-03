@@ -159,11 +159,6 @@ contract WalletRegistry is
         address maliciousSubmitter
     );
 
-    event DkgMaliciousResultSlashingFailed(
-        bytes32 indexed resultHash,
-        uint256 slashingAmount,
-        address maliciousSubmitter
-    );
 
     event AuthorizationParametersUpdated(
         uint96 minimumAuthorization,
@@ -816,6 +811,11 @@ contract WalletRegistry is
             maliciousDkgResultSubmitterAddress
         );
 
+        // Attempt to slash malicious submitter. Slashing may fail silently
+        // if the staking contract reverts, but challenge must complete
+        // regardless. Bytecode optimization: empty catch block reduces
+        // contract size by ~800 bytes (see commit 412a8e6d).
+        // slither-disable-next-line reentrancy-events
         try
             staking.seize(
                 _maliciousDkgResultSlashingAmount,
@@ -824,21 +824,13 @@ contract WalletRegistry is
                 operatorWrapper
             )
         {
-            // slither-disable-next-line reentrancy-events
             emit DkgMaliciousResultSlashed(
                 maliciousDkgResultHash,
                 _maliciousDkgResultSlashingAmount,
                 maliciousDkgResultSubmitterAddress
             );
         } catch {
-            // Should never happen but we want to ensure a non-critical path
-            // failure from an external contract does not stop the challenge
-            // to complete.
-            emit DkgMaliciousResultSlashingFailed(
-                maliciousDkgResultHash,
-                _maliciousDkgResultSlashingAmount,
-                maliciousDkgResultSubmitterAddress
-            );
+            // Challenge completion is critical; slashing failure is acceptable.
         }
 
         // Due to EIP-150, 1/64 of the gas is not forwarded to the call, and

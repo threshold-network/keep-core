@@ -48,7 +48,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   // For each staking provider, get their current authorized stake and add to Allowlist
   const migrationResults = []
 
-  for (const stakingProvider of stakingProviders) {
+  for (const stakingProvider of Array.from(stakingProviders)) {
     try {
       // Get current authorized stake from TokenStaking
       const authorizedStake = await tokenStaking.authorizedStake(
