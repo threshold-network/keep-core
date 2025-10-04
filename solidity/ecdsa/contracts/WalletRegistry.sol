@@ -570,6 +570,14 @@ contract WalletRegistry is
         uint256 _resultSubmissionTimeout,
         uint256 _submitterPrecedencePeriodLength
     ) external onlyGovernance {
+        // Consolidated state validation for all DKG parameter setters. Since all
+        // setters are called exclusively from this function, we perform the state
+        // check once here instead of in each individual setter to reduce bytecode size.
+        require(
+            dkg.currentState() == DKG.State.IDLE,
+            "Current state is not IDLE"
+        );
+
         dkg.setSeedTimeout(_seedTimeout);
         dkg.setResultChallengePeriodLength(_resultChallengePeriodLength);
         dkg.setResultChallengeExtraGas(_resultChallengeExtraGas);
@@ -798,8 +806,8 @@ contract WalletRegistry is
     ///      This function is EIP-7702 compatible - it does not restrict
     ///      callers to EOAs, allowing accounts with delegated code execution
     ///      to participate in DKG result challenges. Gas manipulation
-    ///      protection is enforced via `dkg.requireChallengeExtraGas()`
-    ///      regardless of caller type.
+    ///      protection is enforced via inline gas check regardless of caller
+    ///      type.
     function challengeDkgResult(DKG.Result calldata dkgResult) external {
         (
             bytes32 maliciousDkgResultHash,
@@ -844,8 +852,12 @@ contract WalletRegistry is
         // such a way that the call inside try-catch fails with out-of-gas and
         // the rest of the function is executed with the remaining 1/64 of gas,
         // we require an extra gas amount to be left at the end of the call to
-        // `challengeDkgResult`.
-        dkg.requireChallengeExtraGas();
+        // `challengeDkgResult`. This check enforces EIP-150 gas protection by
+        // ensuring sufficient gas remains for safe execution.
+        require(
+            gasleft() >= dkg.parameters.resultChallengeExtraGas,
+            "Not enough extra gas left"
+        );
     }
 
     /// @notice Notifies about operators who are inactive. Using this function,
