@@ -16,6 +16,7 @@ pragma solidity 0.8.17;
 
 import "./api/IWalletRegistry.sol";
 import "./api/IWalletOwner.sol";
+import "./Allowlist.sol";
 import "./libraries/Wallets.sol";
 import {EcdsaAuthorization as Authorization} from "./libraries/EcdsaAuthorization.sol";
 import {EcdsaDkg as DKG} from "./libraries/EcdsaDkg.sol";
@@ -119,6 +120,15 @@ contract WalletRegistry is
     /// @custom:oz-upgrades-unsafe-allow state-variable-immutable
     IStaking public immutable staking;
     IRandomBeacon public randomBeacon;
+
+    /// @notice Allowlist contract for weight-based operator authorization.
+    ///         When set (non-zero address), takes precedence over legacy TokenStaking.
+    ///         This enables gradual migration from T staking to allowlist-based
+    ///         authorization following TIP-092, while maintaining backward
+    ///         compatibility with existing deployments.
+    /// @dev Set via initializeV2() during proxy upgrade. When allowlist is zero
+    ///      address (default), the legacy TokenStaking authorization path is used.
+    Allowlist public allowlist;
 
     // Events
     event DkgStarted(uint256 indexed seed);
@@ -238,9 +248,21 @@ contract WalletRegistry is
         address notifier
     );
 
+    /// @notice Dual-mode authorization modifier supporting both Allowlist and
+    ///         legacy TokenStaking authorization paths.
+    /// @dev Authorization precedence:
+    ///      1. If allowlist is set (non-zero), only allowlist contract can call
+    ///      2. If allowlist is NOT set (zero), only legacy staking contract can call
+    ///      This ensures a clean migration path while maintaining backward compatibility.
+    ///      The address is cached in a local variable to minimize gas costs from
+    ///      storage reads (SLOAD operation).
     modifier onlyStakingContract() {
+        address _allowlist = address(allowlist);
         require(
-            msg.sender == address(staking),
+            // Allowlist authorization path (post-TIP-092)
+            (_allowlist != address(0) && msg.sender == _allowlist) ||
+                // Legacy staking authorization path (pre-TIP-092, backward compatible)
+                (_allowlist == address(0) && msg.sender == address(staking)),
             "Caller is not the staking contract"
         );
         _;
@@ -343,6 +365,22 @@ contract WalletRegistry is
         _notifyOperatorInactivityGasOffset = 93_000;
         _notifySeedTimeoutGasOffset = 7_250;
         _notifyDkgTimeoutNegativeGasOffset = 2_300;
+    }
+
+    /// @notice Upgrades WalletRegistry to support allowlist-based authorization.
+    ///         This function enables the migration from legacy TokenStaking to the
+    ///         new Allowlist contract following TIP-092 governance decision.
+    ///         Once called, the allowlist contract becomes the sole authority for
+    ///         operator authorization, replacing the TokenStaking contract.
+    /// @param _allowlist Address of the Allowlist contract
+    /// @dev Uses reinitializer(2) for proxy upgrade compatibility. Can only be
+    ///      called once per proxy upgrade. The zero address check prevents
+    ///      misconfiguration that would break authorization.
+    ///      After successful execution, the onlyStakingContract modifier will
+    ///      only accept calls from the allowlist contract.
+    function initializeV2(address _allowlist) external reinitializer(2) {
+        require(_allowlist != address(0), "Allowlist address cannot be zero");
+        allowlist = Allowlist(_allowlist);
     }
 
     /// @notice Withdraws application rewards for the given staking provider.
