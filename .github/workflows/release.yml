@@ -19,7 +19,8 @@ jobs:
 
       - name: Resolve versions
         run: |
-          echo "version=$(git describe --tags --match "v[0-9]*" HEAD)" >> $GITHUB_ENV
+          echo "version=$(git describe --tags --match "v[0-9]*" HEAD)" \
+            >> $GITHUB_ENV
           echo "revision=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
@@ -41,7 +42,8 @@ jobs:
           build-args: |
             VERSION=${{ env.version }}
             REVISION=${{ env.revision }}
-          load: true # load image to local registry to use it in next steps
+          # load image to local registry to use it in next steps
+          load: true
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new
           context: .
@@ -69,7 +71,8 @@ jobs:
         id: release_notes
         run: |
           # Get the previous tag for release notes
-          PREV_TAG=$(git describe --tags --abbrev=0 --match "v[0-9]*" HEAD^ 2>/dev/null || echo "")
+          PREV_TAG=$(git describe --tags --abbrev=0 --match "v[0-9]*" \
+            HEAD^ 2>/dev/null || echo "")
 
           # Create release notes
           echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
@@ -78,15 +81,19 @@ jobs:
           echo "Built from commit: ${{ env.revision }}" >> $GITHUB_OUTPUT
           echo "" >> $GITHUB_OUTPUT
           echo "### Downloads" >> $GITHUB_OUTPUT
-          echo "- **Linux AMD64**: \`keep-client-mainnet-${{ env.version }}-linux-amd64.tar.gz\`" >> $GITHUB_OUTPUT
-          echo "- **macOS AMD64**: \`keep-client-mainnet-${{ env.version }}-darwin-amd64.tar.gz\`" >> $GITHUB_OUTPUT
+          echo "- **Linux AMD64**: \`keep-client-mainnet-${{ env.version }}-linux-amd64.tar.gz\`" \
+            >> $GITHUB_OUTPUT
+          echo "- **macOS AMD64**: \`keep-client-mainnet-${{ env.version }}-darwin-amd64.tar.gz\`" \
+            >> $GITHUB_OUTPUT
           echo "" >> $GITHUB_OUTPUT
           echo "### Verification" >> $GITHUB_OUTPUT
-          echo "All binaries include MD5 and SHA256 checksums for verification." >> $GITHUB_OUTPUT
+          echo "All binaries include MD5 and SHA256 checksums for verification." \
+            >> $GITHUB_OUTPUT
           echo "" >> $GITHUB_OUTPUT
           if [ -n "$PREV_TAG" ]; then
             echo "### Changes since $PREV_TAG" >> $GITHUB_OUTPUT
-            git log --oneline --no-merges "$PREV_TAG..HEAD" | head -20 >> $GITHUB_OUTPUT
+            git log --oneline --no-merges "$PREV_TAG..HEAD" | head -20 \
+              >> $GITHUB_OUTPUT
           fi
           echo "EOF" >> $GITHUB_OUTPUT
 
