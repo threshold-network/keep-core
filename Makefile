@@ -107,7 +107,7 @@ define go_build_cmd
 	$(eval arch := $(4))
 
 	GOOS=$(os) GOARCH=$(arch) go build \
-		-ldflags "-X github.com/keep-network/keep-core/build.Version=$(version) -X github.com/keep-network/keep-core/build.Revision=$(revision)" \
+		-ldflags "-X github.com/keep-network/keep-core/build.Version=$(version) -X github.com/keep-network/keep-core/build.Revision=$(revision) -checklinkname=0" \
 		-o $(out_dir)/$(file_name) \
 		-a \
 		.
