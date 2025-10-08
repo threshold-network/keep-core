@@ -280,6 +280,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
+      - name: Install protoc-gen-go
+        run: go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.32.0
+      - name: Generate code
+        run: make generate environment=development
       - run: go vet
 
   client-lint:
@@ -293,6 +297,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
+      - name: Install protoc-gen-go
+        run: go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.32.0
+      - name: Generate code
+        run: make generate environment=development
       - name: Staticcheck
         uses: dominikh/staticcheck-action@v1.4.0
         with:
