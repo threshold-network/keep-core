@@ -54,8 +54,6 @@ COPY ./pkg/tecdsa/gen $APP_DIR/pkg/tecdsa/gen
 COPY ./pkg/protocol/announcer/gen $APP_DIR/pkg/protocol/announcer/gen
 COPY ./pkg/protocol/inactivity/gen $APP_DIR/pkg/protocol/inactivity/gen
 
-# Add missing dependencies for Ethereum bindings generation
-RUN go get github.com/peterh/liner github.com/graph-gophers/graphql-go github.com/ferranbt/fastssz github.com/influxdata/influxdb-client-go/v2 github.com/influxdata/influxdb1-client/v2
 
 # Install code generators.
 RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.32.0
