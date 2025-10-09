@@ -20,7 +20,7 @@ import "./WalletRegistry.sol";
 
 /// @title Allowlist
 /// @notice The allowlist contract replaces the Threshold TokenStaking contract
-///         and is as an outcome of TIP-092 and TIP-100 governance decisions.
+///         as an outcome of TIP-092 and TIP-100 governance decisions.
 ///         Staking tokens is no longer required to operate nodes. Beta stakers
 ///         are selected by the DAO and operate the network based on the
 ///         allowlist maintained by the DAO.
@@ -31,6 +31,7 @@ contract Allowlist is Ownable2StepUpgradeable {
     struct StakingProviderInfo {
         uint96 weight;
         uint96 pendingNewWeight;
+        bool decreasePending;
     }
 
     /// @notice Mapping between the staking provider address and a struct
@@ -59,6 +60,9 @@ contract Allowlist is Ownable2StepUpgradeable {
     error StakingProviderUnknown();
     error RequestedWeightNotBelowCurrentWeight();
     error NotWalletRegistry();
+    error NoDecreasePending();
+    error ZeroAddress();
+    error ZeroWeight();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -66,6 +70,10 @@ contract Allowlist is Ownable2StepUpgradeable {
     }
 
     function initialize(address _walletRegistry) external initializer {
+        if (_walletRegistry == address(0)) {
+            revert ZeroAddress();
+        }
+
         __Ownable2Step_init();
 
         walletRegistry = WalletRegistry(_walletRegistry);
@@ -80,6 +88,14 @@ contract Allowlist is Ownable2StepUpgradeable {
         external
         onlyOwner
     {
+        if (stakingProvider == address(0)) {
+            revert ZeroAddress();
+        }
+
+        if (weight == 0) {
+            revert ZeroWeight();
+        }
+
         StakingProviderInfo storage info = stakingProviders[stakingProvider];
 
         if (info.weight != 0) {
@@ -124,6 +140,7 @@ contract Allowlist is Ownable2StepUpgradeable {
         emit WeightDecreaseRequested(stakingProvider, currentWeight, newWeight);
 
         info.pendingNewWeight = newWeight;
+        info.decreasePending = true;
         walletRegistry.authorizationDecreaseRequested(
             stakingProvider,
             currentWeight,
@@ -151,10 +168,15 @@ contract Allowlist is Ownable2StepUpgradeable {
             revert StakingProviderUnknown();
         }
 
+        if (!info.decreasePending) {
+            revert NoDecreasePending();
+        }
+
         emit WeightDecreaseFinalized(stakingProvider, currentWeight, newWeight);
 
         info.weight = newWeight;
         info.pendingNewWeight = 0;
+        info.decreasePending = false;
         return newWeight;
     }
 
