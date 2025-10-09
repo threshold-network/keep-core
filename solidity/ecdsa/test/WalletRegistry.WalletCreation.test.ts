@@ -2964,6 +2964,18 @@ describe("WalletRegistry - Wallet Creation", async () => {
                   .withArgs(stakingProvider, to1e18(400), false)
               })
             })
+
+            context("with insufficient gas provided", async () => {
+              it("should revert when gas check fails", async () => {
+                // This test verifies the gas check works
+                // After GREEN phase migration to custom errors, error type will change
+                await expect(
+                  walletRegistry
+                    .connect(thirdParty)
+                    .challengeDkgResult(dkgResult, { gasLimit: 200000 })
+                ).to.be.reverted
+              })
+            })
           })
 
           context("at the end of challenge period", async () => {

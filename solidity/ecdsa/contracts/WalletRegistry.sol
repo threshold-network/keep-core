@@ -169,7 +169,6 @@ contract WalletRegistry is
         address maliciousSubmitter
     );
 
-
     event AuthorizationParametersUpdated(
         uint96 minimumAuthorization,
         uint64 authorizationDecreaseDelay,
@@ -248,6 +247,55 @@ contract WalletRegistry is
         address notifier
     );
 
+    // Custom Errors
+
+    // Authorization Errors
+
+    /// @notice Raised when caller is not the staking contract or allowlist contract.
+    error CallerNotStakingContract();
+
+    /// @notice Raised when caller is not the designated wallet owner contract.
+    error CallerNotWalletOwner();
+
+    /// @notice Raised when caller is not the governance address.
+    error CallerNotGovernance();
+
+    /// @notice Raised when caller is not the authorized random beacon contract.
+    error CallerNotRandomBeacon();
+
+    // Validation Errors
+
+    /// @notice Raised when allowlist address provided is zero address.
+    error AllowlistAddressZero();
+
+    /// @notice Raised when querying an operator that has not been registered.
+    error UnknownOperator();
+
+    /// @notice Raised when provided nonce does not match the expected inactivity claim nonce.
+    error InvalidNonce();
+
+    /// @notice Raised when the hash of provided group members does not match wallet's stored hash.
+    error InvalidGroupMembers();
+
+    /// @notice Raised when the hash of provided wallet member IDs does not match stored hash.
+    error InvalidWalletMembersIdentifiers();
+
+    /// @notice Raised when querying with an address that is not a sortition pool operator.
+    error NotSortitionPoolOperator();
+
+    /// @notice Raised when provided wallet member index is outside valid range [1, length].
+    error WalletMemberIndexOutOfRange();
+
+    // State Errors
+
+    /// @notice Raised when DKG parameter update attempted while DKG state is not IDLE.
+    error CurrentStateNotIdle();
+
+    // Configuration Errors
+
+    /// @notice Raised when insufficient gas remains after challengeDkgResult execution.
+    error NotEnoughExtraGasLeft();
+
     /// @notice Dual-mode authorization modifier supporting both Allowlist and
     ///         legacy TokenStaking authorization paths.
     /// @dev Authorization precedence:
@@ -258,27 +306,26 @@ contract WalletRegistry is
     ///      storage reads (SLOAD operation).
     modifier onlyStakingContract() {
         address _allowlist = address(allowlist);
-        require(
+        if (_allowlist != address(0)) {
             // Allowlist authorization path (post-TIP-092)
-            (_allowlist != address(0) && msg.sender == _allowlist) ||
-                // Legacy staking authorization path (pre-TIP-092, backward compatible)
-                (_allowlist == address(0) && msg.sender == address(staking)),
-            "Caller is not the staking contract"
-        );
+            if (msg.sender != _allowlist) revert CallerNotStakingContract();
+        } else {
+            // Legacy staking authorization path (pre-TIP-092, backward compatible)
+            if (msg.sender != address(staking))
+                revert CallerNotStakingContract();
+        }
         _;
     }
 
     /// @notice Reverts if called not by the Wallet Owner.
     modifier onlyWalletOwner() {
-        require(
-            msg.sender == address(walletOwner),
-            "Caller is not the Wallet Owner"
-        );
+        if (msg.sender != address(walletOwner)) revert CallerNotWalletOwner();
         _;
     }
 
+    /// @notice Reverts if called not by the governance.
     modifier onlyReimbursableAdmin() override {
-        require(governance == msg.sender, "Caller is not the governance");
+        if (msg.sender != governance) revert CallerNotGovernance();
         _;
     }
 
@@ -379,7 +426,7 @@ contract WalletRegistry is
     ///      After successful execution, the onlyStakingContract modifier will
     ///      only accept calls from the allowlist contract.
     function initializeV2(address _allowlist) external reinitializer(2) {
-        require(_allowlist != address(0), "Allowlist address cannot be zero");
+        if (_allowlist == address(0)) revert AllowlistAddressZero();
         allowlist = Allowlist(_allowlist);
     }
 
@@ -390,7 +437,7 @@ contract WalletRegistry is
     /// @dev Emits `RewardsWithdrawn` event.
     function withdrawRewards(address stakingProvider) external {
         address operator = stakingProviderToOperator(stakingProvider);
-        require(operator != address(0), "Unknown operator");
+        if (operator == address(0)) revert UnknownOperator();
         (, address beneficiary, ) = staking.rolesOf(stakingProvider);
         uint96 amount = sortitionPool.withdrawRewards(operator, beneficiary);
         // slither-disable-next-line reentrancy-events
@@ -611,10 +658,7 @@ contract WalletRegistry is
         // Consolidated state validation for all DKG parameter setters. Since all
         // setters are called exclusively from this function, we perform the state
         // check once here instead of in each individual setter to reduce bytecode size.
-        require(
-            dkg.currentState() == DKG.State.IDLE,
-            "Current state is not IDLE"
-        );
+        if (dkg.currentState() != DKG.State.IDLE) revert CurrentStateNotIdle();
 
         dkg.setSeedTimeout(_seedTimeout);
         dkg.setResultChallengePeriodLength(_resultChallengePeriodLength);
@@ -727,10 +771,9 @@ contract WalletRegistry is
     /// @dev Can be called only by the random beacon contract.
     /// @param relayEntry Relay entry.
     function __beaconCallback(uint256 relayEntry, uint256) external {
-        require(
-            msg.sender == address(randomBeacon),
-            "Caller is not the Random Beacon"
-        );
+        if (msg.sender != address(randomBeacon)) {
+            revert CallerNotRandomBeacon();
+        }
 
         dkg.start(relayEntry);
     }
@@ -892,10 +935,9 @@ contract WalletRegistry is
         // we require an extra gas amount to be left at the end of the call to
         // `challengeDkgResult`. This check enforces EIP-150 gas protection by
         // ensuring sufficient gas remains for safe execution.
-        require(
-            gasleft() >= dkg.parameters.resultChallengeExtraGas,
-            "Not enough extra gas left"
-        );
+        if (gasleft() < dkg.parameters.resultChallengeExtraGas) {
+            revert NotEnoughExtraGasLeft();
+        }
     }
 
     /// @notice Notifies about operators who are inactive. Using this function,
@@ -926,16 +968,17 @@ contract WalletRegistry is
 
         bytes32 walletID = claim.walletID;
 
-        require(nonce == inactivityClaimNonce[walletID], "Invalid nonce");
+        if (nonce != inactivityClaimNonce[walletID]) {
+            revert InvalidNonce();
+        }
 
         (bytes32 pubKeyX, bytes32 pubKeyY) = wallets
             .getWalletPublicKeyCoordinates(walletID);
         bytes32 memberIdsHash = wallets.getWalletMembersIdsHash(walletID);
 
-        require(
-            memberIdsHash == keccak256(abi.encode(groupMembers)),
-            "Invalid group members"
-        );
+        if (memberIdsHash != keccak256(abi.encode(groupMembers))) {
+            revert InvalidGroupMembers();
+        }
 
         uint32[] memory ineligibleOperators = Inactivity.verifyClaim(
             sortitionPool,
@@ -1156,7 +1199,7 @@ contract WalletRegistry is
         returns (uint96)
     {
         address operator = stakingProviderToOperator(stakingProvider);
-        require(operator != address(0), "Unknown operator");
+        if (operator == address(0)) revert UnknownOperator();
         return sortitionPool.getAvailableRewards(operator);
     }
 

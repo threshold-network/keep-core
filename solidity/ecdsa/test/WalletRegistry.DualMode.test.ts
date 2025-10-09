@@ -137,7 +137,7 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
           fromAmount,
           toAmount
         )
-      ).to.be.revertedWith("Caller is not the staking contract")
+      ).to.be.revertedWith("CallerNotStakingContract")
 
       await ethers.provider.send("hardhat_stopImpersonatingAccount", [stakingContract.address])
     })
@@ -152,7 +152,7 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
           fromAmount,
           toAmount
         )
-      ).to.be.revertedWith("Caller is not the staking contract")
+      ).to.be.revertedWith("CallerNotStakingContract")
     })
 
     it("should allow authorization decrease request from allowlist contract", async () => {
@@ -240,7 +240,7 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
           fromAmount,
           toAmount
         )
-      ).to.be.revertedWith("Caller is not the staking contract")
+      ).to.be.revertedWith("CallerNotStakingContract")
 
       await ethers.provider.send("hardhat_stopImpersonatingAccount", [allowlist.address])
     })
@@ -255,7 +255,7 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
           fromAmount,
           toAmount
         )
-      ).to.be.revertedWith("Caller is not the staking contract")
+      ).to.be.revertedWith("CallerNotStakingContract")
     })
   })
 
@@ -313,7 +313,7 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
         toAmount
       )
 
-      await expect(tx).to.be.revertedWith("Caller is not the staking contract")
+      await expect(tx).to.be.revertedWith("CallerNotStakingContract")
 
       // Gas measurement would be done here in actual implementation
       // This test validates the error message is preserved
@@ -459,7 +459,7 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
           fromAmount,
           toAmount
         )
-      ).to.be.revertedWith("Caller is not the staking contract")
+      ).to.be.revertedWith("CallerNotStakingContract")
 
       await ethers.provider.send("hardhat_stopImpersonatingAccount", [stakingContract.address])
     })
@@ -567,7 +567,7 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
           toAmount,
           fromAmount
         )
-      ).to.be.revertedWith("Caller is not the staking contract")
+      ).to.be.revertedWith("CallerNotStakingContract")
 
       await ethers.provider.send("hardhat_stopImpersonatingAccount", [stakingContract.address])
 

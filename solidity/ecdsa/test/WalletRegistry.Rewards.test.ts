@@ -73,7 +73,7 @@ describe("WalletRegistry - Rewards", () => {
       it("should revert", async () => {
         await expect(
           walletRegistry.withdrawRewards(thirdParty.address)
-        ).to.be.revertedWith("Unknown operator")
+        ).to.be.revertedWith("UnknownOperator")
       })
     })
 
@@ -127,7 +127,7 @@ describe("WalletRegistry - Rewards", () => {
       it("should revert", async () => {
         await expect(
           walletRegistry.availableRewards(thirdParty.address)
-        ).to.be.revertedWith("Unknown operator")
+        ).to.be.revertedWith("UnknownOperator")
       })
     })
 

@@ -29,6 +29,31 @@ describe("WalletRegistry - Upgrade", async () => {
     EcdsaInactivity = await helpers.contracts.getContract("EcdsaInactivity")
   })
 
+  describe("initializeV2", () => {
+    describe("when allowlist address is zero", () => {
+      it("should revert with AllowlistAddressZero", async () => {
+        await deployments.fixture()
+
+        await expect(
+          upgradeProxy("WalletRegistry", "WalletRegistry", {
+            factoryOpts: {
+              libraries: { EcdsaInactivity: EcdsaInactivity.address },
+              signer: proxyAdminOwner,
+            },
+            proxyOpts: {
+              constructorArgs: [AddressZero, AddressZero],
+              call: {
+                fn: "initializeV2",
+                args: [AddressZero], // Zero address should be rejected
+              },
+              unsafeAllow: ["external-library-linking"],
+            },
+          })
+        ).to.be.rejectedWith(Error, "AllowlistAddressZero")
+      })
+    })
+  })
+
   describe("upgradeProxy", () => {
     describe("when new contract fails upgradeability validation", () => {
       describe("when a variable was added before old variables", () => {
