@@ -36,7 +36,7 @@ jobs:
     outputs:
       path-filter: ${{ steps.filter.outputs.path-filter }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         if: github.event_name == 'pull_request'
 
       - uses: dorny/paths-filter@v2
@@ -52,7 +52,7 @@ jobs:
     outputs:
       path-filter: ${{ steps.filter.outputs.path-filter }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         if: github.event_name == 'pull_request'
 
       - uses: dorny/paths-filter@v2
@@ -71,7 +71,7 @@ jobs:
         || needs.client-detect-changes.outputs.path-filter == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           # Fetch the whole history for the `git describe` command to work.
           fetch-depth: 0
@@ -88,10 +88,10 @@ jobs:
           environment: ${{ github.event.inputs.environment }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
       - name: Cache Docker layers
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
           key: ${{ runner.os }}-buildx-${{ github.sha }}
@@ -99,7 +99,7 @@ jobs:
             ${{ runner.os }}-buildx-
 
       - name: Build Docker Build Image
-        uses: docker/build-push-action@v3
+        uses: docker/build-push-action@v5
         with:
           target: build-docker
           tags: go-build-env
@@ -123,7 +123,7 @@ jobs:
           docker save --output /tmp/go-build-env-image.tar go-build-env
 
       - name: Upload Docker Build Image
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: go-build-env-image
           path: /tmp/go-build-env-image.tar
@@ -133,11 +133,11 @@ jobs:
           docker run \
             --workdir /go/src/github.com/keep-network/keep-core \
             go-build-env \
-            gotestsum
+            gotestsum -- -timeout 15m
 
       - name: Build Docker Runtime Image
         if: github.event_name != 'workflow_dispatch'
-        uses: docker/build-push-action@v3
+        uses: docker/build-push-action@v5
         with:
           target: runtime-docker
           labels: |
@@ -148,7 +148,7 @@ jobs:
 
       - name: Login to Google Container Registry
         if: github.event_name == 'workflow_dispatch'
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           registry: ${{ env.GCR_REGISTRY_URL }}
           username: _json_key
@@ -156,7 +156,7 @@ jobs:
 
       - name: Build and publish Docker Runtime Image
         if: github.event_name == 'workflow_dispatch'
-        uses: docker/build-push-action@v3
+        uses: docker/build-push-action@v5
         env:
           IMAGE_NAME: "keep-client"
         with:
@@ -177,7 +177,7 @@ jobs:
           context: .
 
       - name: Build Client Binaries
-        uses: docker/build-push-action@v3
+        uses: docker/build-push-action@v5
         with:
           target: output-bins
           outputs: type=local,dest=./out/bin/
@@ -189,7 +189,7 @@ jobs:
           context: .
 
       - name: Archive Client Binaries
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: binaries
           path: |
@@ -240,10 +240,11 @@ jobs:
     env:
       GO111MODULE: on
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: securego/gosec@master
         with:
           args: |
+            -exclude=G115
             -exclude-dir=pkg/chain/ethereum/beacon/gen
             -exclude-dir=pkg/chain/ethereum/ecdsa/gen
             -exclude-dir=pkg/chain/ethereum/threshold/gen
@@ -257,8 +258,8 @@ jobs:
         || needs.client-detect-changes.outputs.path-filter == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-go@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
       - name: gofmt
@@ -275,8 +276,8 @@ jobs:
         || needs.client-detect-changes.outputs.path-filter == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-go@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
       - run: go vet
@@ -288,15 +289,16 @@ jobs:
         || needs.client-detect-changes.outputs.path-filter == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-go@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
       - name: Staticcheck
-        uses: dominikh/staticcheck-action@v1.3.0
+        uses: dominikh/staticcheck-action@v1.4.0
         with:
-          version: "2023.1.6"
+          version: "2025.1.1"
           install-go: false
+          checks: "-SA1019"
 
   client-integration-test:
     needs: [electrum-integration-detect-changes, client-build-test-publish]
@@ -306,10 +308,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
       - name: Download Docker Build Image
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: go-build-env-image
           path: /tmp

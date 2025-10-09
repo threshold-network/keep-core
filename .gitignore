@@ -55,6 +55,8 @@ yarn-error.log
 /solidity*/**/export.json
 
 # Go bindings generator
+# Note: Some specific _address files are committed as empty placeholders
+# to satisfy //go:embed directives during CI builds that don't run go generate
 /pkg/chain/**/gen/_address/
 /pkg/chain/**/gen/_contracts/
 /pkg/chain/**/gen/abi/*.abi
