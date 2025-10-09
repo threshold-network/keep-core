@@ -28,7 +28,7 @@ on:
         required: false
         default: "main"
 
-# TODO: Implement automatic releases creation on tags push with https://github.com/softprops/action-gh-release
+# Automatic releases are now handled by the dedicated release.yml workflow
 
 jobs:
   client-detect-changes:
