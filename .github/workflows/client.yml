@@ -78,7 +78,7 @@ jobs:
 
       - name: Resolve versions
         run: |
-          echo "version=$(git describe --tags --match "v[0-9]*" HEAD)" >> $GITHUB_ENV
+          echo "version=$(git describe --tags --match 'v[0-9]*' HEAD)" >> $GITHUB_ENV
           echo "revision=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
       - name: Load environment variables
