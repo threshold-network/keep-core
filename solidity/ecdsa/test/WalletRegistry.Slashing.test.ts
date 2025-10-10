@@ -71,7 +71,7 @@ describe("WalletRegistry - Slashing", () => {
               walletID,
               membersIDs
             )
-        ).to.be.revertedWith("Caller is not the Wallet Owner")
+        ).to.be.revertedWith("CallerNotWalletOwner")
       })
     })
 
@@ -89,7 +89,7 @@ describe("WalletRegistry - Slashing", () => {
                 walletID,
                 corruptedMembersIDs
               )
-          ).to.be.revertedWith("Invalid wallet members identifiers")
+          ).to.be.revertedWith("InvalidWalletMembersIdentifiers")
         })
       })
 

@@ -1041,10 +1041,8 @@ contract WalletRegistry is
         uint32[] calldata walletMembersIDs
     ) external onlyWalletOwner {
         bytes32 memberIdsHash = wallets.getWalletMembersIdsHash(walletID);
-        require(
-            memberIdsHash == keccak256(abi.encode(walletMembersIDs)),
-            "Invalid wallet members identifiers"
-        );
+        if (memberIdsHash != keccak256(abi.encode(walletMembersIDs)))
+            revert InvalidWalletMembersIdentifiers();
 
         address[] memory groupMembersAddresses = sortitionPool.getIDOperators(
             walletMembersIDs
@@ -1109,20 +1107,15 @@ contract WalletRegistry is
     ) external view returns (bool) {
         uint32 operatorID = sortitionPool.getOperatorID(operator);
 
-        require(operatorID != 0, "Not a sortition pool operator");
+        if (operatorID == 0) revert NotSortitionPoolOperator();
 
         bytes32 memberIdsHash = wallets.getWalletMembersIdsHash(walletID);
 
-        require(
-            memberIdsHash == keccak256(abi.encode(walletMembersIDs)),
-            "Invalid wallet members identifiers"
-        );
+        if (memberIdsHash != keccak256(abi.encode(walletMembersIDs)))
+            revert InvalidWalletMembersIdentifiers();
 
-        require(
-            1 <= walletMemberIndex &&
-                walletMemberIndex <= walletMembersIDs.length,
-            "Wallet member index is out of range"
-        );
+        if (walletMemberIndex < 1 || walletMemberIndex > walletMembersIDs.length)
+            revert WalletMemberIndexOutOfRange();
 
         return walletMembersIDs[walletMemberIndex - 1] == operatorID;
     }

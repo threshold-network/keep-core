@@ -311,7 +311,7 @@ describe("WalletRegistry - Wallets", async () => {
       it("should revert", async () => {
         await expect(
           walletRegistry.connect(thirdParty).closeWallet(walletID)
-        ).to.be.revertedWith("Caller is not the Wallet Owner")
+        ).to.be.revertedWith("CallerNotWalletOwner")
       })
     })
 
@@ -458,7 +458,7 @@ describe("WalletRegistry - Wallets", async () => {
                       walletMembersAddresses[0],
                       0
                     )
-                  ).to.be.revertedWith("Wallet member index is out of range")
+                  ).to.be.revertedWith("WalletMemberIndexOutOfRange")
                 })
               }
             )
@@ -475,7 +475,7 @@ describe("WalletRegistry - Wallets", async () => {
                       walletMembersAddresses[0],
                       walletMembersIDs.length + 1
                     )
-                  ).to.be.revertedWith("Wallet member index is out of range")
+                  ).to.be.revertedWith("WalletMemberIndexOutOfRange")
                 })
               }
             )
@@ -495,7 +495,7 @@ describe("WalletRegistry - Wallets", async () => {
                   walletMembersAddresses[0],
                   0
                 )
-              ).to.be.revertedWith("Invalid wallet members identifiers")
+              ).to.be.revertedWith("InvalidWalletMembersIdentifiers")
             })
           }
         )
@@ -518,7 +518,7 @@ describe("WalletRegistry - Wallets", async () => {
               operator,
               0
             )
-          ).to.be.revertedWith("Not a sortition pool operator")
+          ).to.be.revertedWith("NotSortitionPoolOperator")
         })
       }
     )
