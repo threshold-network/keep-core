@@ -8,6 +8,10 @@ import (
 //go:generate make
 
 var (
+	// NOTE: The _address/* files are empty placeholders committed to the repository
+	// to satisfy go:embed directives during CI builds (go vet, staticcheck) that don't run
+	// go generate. The files get populated with actual contract addresses during go generate.
+
 	//go:embed _address/Bridge
 	bridgeAddressFileContent string
 
