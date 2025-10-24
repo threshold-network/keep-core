@@ -425,7 +425,10 @@ contract WalletRegistry is
     ///      misconfiguration that would break authorization.
     ///      After successful execution, the onlyStakingContract modifier will
     ///      only accept calls from the allowlist contract.
-    function initializeV2(address _allowlist) external reinitializer(2) {
+    ///      SECURITY CRITICAL: The onlyGovernance modifier prevents front-running
+    ///      attacks where a malicious actor could call this function before
+    ///      legitimate governance, taking control of operator authorization.
+    function initializeV2(address _allowlist) external reinitializer(2) onlyGovernance {
         if (_allowlist == address(0)) revert AllowlistAddressZero();
         allowlist = Allowlist(_allowlist);
     }
@@ -435,6 +438,28 @@ contract WalletRegistry is
     ///         address set in the staking contract. Reverts if staking provider
     ///         has not registered the operator address.
     /// @dev Emits `RewardsWithdrawn` event.
+    ///
+    /// NOT MIGRATED: Beneficiary lookup remains on TokenStaking because
+    /// migrating dead code costs 50-100 bytes with zero benefit.
+    ///
+    /// Historical Context (TIP-092/100 - February 15, 2025):
+    /// - Sortition pool DKG participation rewards HALTED Feb 15, 2025
+    /// - TokenStaking notification rewards HALTED for ECDSA/RandomBeacon
+    /// - Only TACo application rewards continue (6-month transition)
+    /// - This function now returns 0 for all ECDSA operators (no rewards)
+    ///
+    /// Migration Decision Rationale:
+    /// - Bytecode cost: 50-100 bytes to migrate beneficiary lookup to Allowlist
+    /// - Benefit: Zero (function returns 0 - no rewards to withdraw)
+    /// - Preserved for historical compatibility and potential future reactivation
+    ///
+    /// Technical Note: If rewards are reactivated, Allowlist migration would
+    /// be required as Allowlist.rolesOf() always returns stakingProvider as
+    /// beneficiary (no delegation support), while TokenStaking.rolesOf()
+    /// returns configured beneficiary (supports owner != beneficiary delegation).
+    ///
+    /// Stakeholder Decision: Pragmatic choice to avoid bytecode cost for
+    /// dead code (ACP Consensus 2025-10-21, predating TIP-092/100 implementation).
     function withdrawRewards(address stakingProvider) external {
         address operator = stakingProviderToOperator(stakingProvider);
         if (operator == address(0)) revert UnknownOperator();
@@ -476,7 +501,7 @@ contract WalletRegistry is
     ///         authorization decrease requested, it is activated by starting
     ///         the authorization decrease delay.
     function joinSortitionPool() external {
-        authorization.joinSortitionPool(staking, sortitionPool);
+        authorization.joinSortitionPool(_currentAuthorizationSource(), sortitionPool);
     }
 
     /// @notice Updates status of the operator in the sortition pool. If there
@@ -484,7 +509,7 @@ contract WalletRegistry is
     ///         starting the authorization decrease delay.
     ///         Function reverts if the operator is not known.
     function updateOperatorStatus(address operator) external {
-        authorization.updateOperatorStatus(staking, sortitionPool, operator);
+        authorization.updateOperatorStatus(_currentAuthorizationSource(), sortitionPool, operator);
     }
 
     /// @notice Used by T staking contract to inform the application that the
@@ -532,6 +557,20 @@ contract WalletRegistry is
     ///         overwritten.
     ///
     /// @dev Can only be called by T staking contract.
+    ///
+    /// IMPLEMENTATION NOTE: This function does NOT require authorization
+    /// source routing (no _currentAuthorizationSource() parameter) because
+    /// it operates solely on internal library state.
+    ///
+    /// Technical Rationale:
+    /// - Records authorization decrease request in internal mappings only
+    /// - Does NOT query external contracts for authorization amounts
+    /// - Does NOT apply the decrease (approval happens later via separate call)
+    /// - Contrast with involuntaryAuthorizationDecrease() which MUST query
+    ///   current authorization amounts and therefore requires routing parameter
+    ///
+    /// Post-Migration Behavior: Unchanged - requests are recorded without
+    /// querying authorization source (TokenStaking or Allowlist).
     function authorizationDecreaseRequested(
         address stakingProvider,
         uint96 fromAmount,
@@ -549,7 +588,7 @@ contract WalletRegistry is
     ///         yet or if the authorization decrease was not requested for the
     ///         given staking provider.
     function approveAuthorizationDecrease(address stakingProvider) external {
-        authorization.approveAuthorizationDecrease(staking, stakingProvider);
+        authorization.approveAuthorizationDecrease(_currentAuthorizationSource(), stakingProvider);
     }
 
     /// @notice Used by T staking contract to inform the application the
@@ -572,7 +611,7 @@ contract WalletRegistry is
         uint96 toAmount
     ) external onlyStakingContract {
         authorization.involuntaryAuthorizationDecrease(
-            staking,
+            _currentAuthorizationSource(),
             sortitionPool,
             stakingProvider,
             fromAmount,
@@ -903,6 +942,32 @@ contract WalletRegistry is
             maliciousDkgResultSubmitterAddress
         );
 
+        // NOT MIGRATED: Slashing call remains on TokenStaking for pragmatic
+        // reasons, not functional requirements.
+        //
+        // Critical Context - TokenStaking.seize() is a STUB (TIP-100):
+        // - Function ONLY emits NotificationReceived event
+        // - NO token operations, NO storage mutations, NO economic penalty
+        // - Both TokenStaking.seize() and Allowlist.seize() provide symbolic
+        //   slashing only (event emission for monitoring)
+        // - Actual enforcement mechanism: DAO governance via requestWeightDecrease()
+        //
+        // Migration Decision Rationale:
+        // - Bytecode cost: 100-200 bytes to route through Allowlist
+        // - Benefit: Zero (both contracts provide identical symbolic behavior)
+        // - Event preservation: TokenStaking event includes amount/rewardMultiplier
+        //   fields for monitoring continuity (though values are symbolic)
+        // - Risk: Zero implementation risk (no code changes = no bugs)
+        //
+        // Historical Note: The presence of staking.seize() may create a false
+        // impression of economic slashing. In reality, economic slashing was
+        // removed in TIP-100 implementation. This call exists for event telemetry
+        // and DAO governance coordination only.
+        //
+        // Stakeholder Decision: Pragmatic choice to save bytecode and avoid
+        // implementation risk for functionally equivalent routing options
+        // (ACP Consensus 2025-10-21).
+
         // Attempt to slash malicious submitter. Slashing may fail silently
         // if the staking contract reverts, but challenge must complete
         // regardless. Bytecode optimization: empty catch block reduces
@@ -959,6 +1024,26 @@ contract WalletRegistry is
     /// @param nonce Current inactivity claim nonce for the given wallet signing
     ///              group. Must be the same as the stored one.
     /// @param groupMembers Identifiers of the wallet signing group members.
+    ///
+    /// NOT MIGRATED: This function does not interact with any authorization
+    /// source (staking or allowlist). It operates independently by:
+    /// - Verifying inactivity claims using wallet signatures and group
+    ///   membership
+    /// - Applying penalties (reward ineligibility) directly to sortition pool
+    /// - No need to query or update authorization state
+    /// - Wallet heartbeat failures trigger callbacks independent of stake
+    ///   amounts
+    ///
+    /// Historical Context (TIP-092/100 - February 15, 2025):
+    /// - Reward ban penalty now has minimal economic impact (rewards halted)
+    /// - Function remains relevant for governance and monitoring purposes
+    /// - Provides signal for DAO to review operator performance
+    /// - Wallet heartbeat failure detection still critical for system health
+    ///
+    /// Stakeholder Rationale: Inactivity penalties are wallet-level governance
+    /// mechanisms that apply regardless of authorization source (TokenStaking
+    /// or Allowlist). The claim verification and penalty application do not
+    /// depend on authorization routing, so migration is unnecessary.
     function notifyOperatorInactivity(
         Inactivity.Claim calldata claim,
         uint256 nonce,
@@ -1180,7 +1265,7 @@ contract WalletRegistry is
         view
         returns (uint96)
     {
-        return authorization.eligibleStake(staking, stakingProvider);
+        return authorization.eligibleStake(_currentAuthorizationSource(), stakingProvider);
     }
 
     /// @notice Returns the amount of rewards available for withdrawal for the
@@ -1245,7 +1330,23 @@ contract WalletRegistry is
     ///         authorized stake is non-zero, function returns false.
     function isOperatorUpToDate(address operator) external view returns (bool) {
         return
-            authorization.isOperatorUpToDate(staking, sortitionPool, operator);
+            authorization.isOperatorUpToDate(_currentAuthorizationSource(), sortitionPool, operator);
+    }
+
+    /// @notice Returns the current authorization source contract.
+    /// @dev Returns the allowlist contract if set, otherwise returns the
+    ///      staking contract. This enables conditional routing of
+    ///      authorization queries during the migration period.
+    /// @return The address of the current authorization source contract
+    function _currentAuthorizationSource()
+        internal
+        view
+        returns (IStaking)
+    {
+        return
+            address(allowlist) != address(0)
+                ? IStaking(address(allowlist))
+                : staking;
     }
 
     /// @notice Returns true if the given operator is in the sortition pool.
