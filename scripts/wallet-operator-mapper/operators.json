@@ -1,0 +1,131 @@
+{
+  "operators": {
+    "keep": [
+      {
+        "provider": "STAKED",
+        "address": "0xf401aae8c639eb1638fd99b90eae8a4c54f9894d",
+        "status": "KEEP"
+      },
+      {
+        "provider": "P2P",
+        "address": "0xb074a3b960f29a1448a2dd4de95210ca492c18d4",
+        "status": "KEEP"
+      },
+      {
+        "provider": "BOAR",
+        "address": "0xffb804c2de78576ad011f68a7df63d739b8c8155",
+        "status": "KEEP"
+      },
+      {
+        "provider": "NUCO",
+        "address": "0xd7f138ccf194ca2f49c28870b3b5f556b57fb8b7",
+        "status": "KEEP"
+      }
+    ],
+    "disable": [
+      {
+        "provider": "STAKED",
+        "address": "0x7b251041b2445a3517db540d6fc9f7826c583922",
+        "status": "DISABLE"
+      },
+      {
+        "provider": "STAKED",
+        "address": "0xf28b3e1decf9aa2c389685d27f699a6bc6f4cdab",
+        "status": "DISABLE"
+      },
+      {
+        "provider": "STAKED",
+        "address": "0x35a78efe7a7531b4268df011bb2c5e002e20eb8b",
+        "status": "DISABLE"
+      },
+      {
+        "provider": "STAKED",
+        "address": "0xabe527adbe374d38deabd5f540da44da971a09a1",
+        "status": "DISABLE"
+      },
+      {
+        "provider": "STAKED",
+        "address": "0x4a1be85bf8eb73e748715bd40926349041427b98",
+        "status": "DISABLE"
+      },
+      {
+        "provider": "P2P",
+        "address": "0xb102b1e8b61376d1d4f0bd8f6e4e4bb3cf79b75b",
+        "status": "DISABLE"
+      },
+      {
+        "provider": "P2P",
+        "address": "0x8235b62a2b69b03d577b254d980437702238028c",
+        "status": "DISABLE"
+      },
+      {
+        "provider": "P2P",
+        "address": "0x448386af932b9b433da640d88b9b9fc21af82e0d",
+        "status": "DISABLE"
+      },
+      {
+        "provider": "P2P",
+        "address": "0xcffd10eb581f659dea37f7a1e8ca6c4193ae44d8",
+        "status": "DISABLE"
+      },
+      {
+        "provider": "P2P",
+        "address": "0x87a185a640739482824fc718323d6df7ab1192f5",
+        "status": "DISABLE"
+      },
+      {
+        "provider": "BOAR",
+        "address": "0x39dbe14b0b8d3f9d2fc36eb1f58e0a0959fab1ca",
+        "status": "DISABLE"
+      },
+      {
+        "provider": "BOAR",
+        "address": "0xae58c689e5846aa1f18bf65e096a47fbca63b82e",
+        "status": "DISABLE"
+      },
+      {
+        "provider": "BOAR",
+        "address": "0x65a4ebd101a7a8a762eb3f20371f5222e3490eee",
+        "status": "DISABLE"
+      },
+      {
+        "provider": "BOAR",
+        "address": "0x909e8c501bc6cd135efb6878577dac89b95f34dc",
+        "status": "DISABLE"
+      },
+      {
+        "provider": "BOAR",
+        "address": "0xff4cd368f6a9a69d3e082c26414c0f0666b8a02f",
+        "status": "DISABLE"
+      },
+      {
+        "provider": "NUCO",
+        "address": "0xb6c7382f67c6866597ff3d8902220f1505bd6825",
+        "status": "DISABLE"
+      }
+    ]
+  },
+  "summary": {
+    "totalOperators": 20,
+    "keep": 4,
+    "disable": 16,
+    "byProvider": {
+      "STAKED": {
+        "keep": 1,
+        "disable": 5
+      },
+      "P2P": {
+        "keep": 1,
+        "disable": 5
+      },
+      "BOAR": {
+        "keep": 1,
+        "disable": 5
+      },
+      "NUCO": {
+        "keep": 1,
+        "disable": 1
+      }
+    }
+  }
+}

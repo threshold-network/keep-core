@@ -1,0 +1,13 @@
+# Environment
+.env
+
+# Dependencies
+node_modules/
+package-lock.json
+
+# Output
+wallet-operator-mapping.json
+
+# Logs
+*.log
+npm-debug.log*

@@ -1,0 +1,29 @@
+{
+  "contractAddress": "0x46d52E41C2F300BC82217Ce22b920c34995204eb",
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "ecdsaWalletID",
+          "type": "bytes32"
+        }
+      ],
+      "name": "getWalletMembers",
+      "outputs": [
+        {
+          "internalType": "uint32[]",
+          "name": "",
+          "type": "uint32[]"
+        },
+        {
+          "internalType": "address[]",
+          "name": "",
+          "type": "address[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ]
+}
