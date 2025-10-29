@@ -10,7 +10,8 @@ const fs = require('fs');
 const path = require('path');
 
 const MAPPING_FILE = path.join(__dirname, 'wallet-operator-mapping.json');
-const CSV_PATH = '/Users/leonardosaturnino/Documents/GitHub/memory-bank/20250809-beta-staker-consolidation/knowledge/threshold_stakers_may_2025.csv';
+const CSV_PATH = process.env.THRESHOLD_STAKERS_CSV_PATH ||
+  path.join(__dirname, 'data', 'threshold_stakers_may_2025.csv');
 
 console.log('🔍 Operator List Validation\n');
 console.log('='.repeat(80));

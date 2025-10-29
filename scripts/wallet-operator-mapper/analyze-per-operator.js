@@ -119,10 +119,10 @@ Object.entries(operatorShares).forEach(([addr, data]) => {
   if (providerShares[data.provider]) {
     if (data.status === 'KEEP') {
       providerShares[data.provider].keep += data.totalShare;
-      providerShares[data.provider].keepWallets = data.walletCount;
+      providerShares[data.provider].keepWallets += data.walletCount;
     } else {
       providerShares[data.provider].disable += data.totalShare;
-      providerShares[data.provider].disableWallets = data.walletCount;
+      providerShares[data.provider].disableWallets += data.walletCount;
     }
   }
 });

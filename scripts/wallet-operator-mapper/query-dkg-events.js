@@ -29,7 +29,8 @@ if (limitArg) {
 }
 
 // File paths
-const PROOF_OF_FUNDS_PATH = '/Users/leonardosaturnino/Documents/GitHub/memory-bank/20250809-beta-staker-consolidation/knowledge/20251006-tbtc-proof-of-funds.json';
+const PROOF_OF_FUNDS_PATH = process.env.PROOF_OF_FUNDS_PATH ||
+  path.join(__dirname, 'data', 'tbtc-proof-of-funds.json');
 const OPERATORS_PATH = path.join(__dirname, 'operators.json');
 const BRIDGE_CONTRACT_PATH = path.join(__dirname, 'contracts', 'Bridge.json');
 const OUTPUT_PATH = path.join(__dirname, 'wallet-operator-mapping.json');

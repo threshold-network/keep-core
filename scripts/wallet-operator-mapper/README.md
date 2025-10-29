@@ -12,8 +12,42 @@ npm install
 cp .env.example .env
 # Edit .env with your Alchemy/Infura archive node URL
 
-# 3. Run analysis
+# 3. Set up data files (see Data Files Setup below)
+mkdir -p data
+# Copy required data files to ./data/ directory
+
+# 4. Run analysis
 node analyze-per-operator.js
+```
+
+## Data Files Setup
+
+The scripts require two data files from the Memory Bank project:
+
+### Required Files
+
+1. **tBTC Proof of Funds** (`tbtc-proof-of-funds.json`)
+   - Contains wallet balances and metadata
+   - Source: Memory Bank `/knowledge/20251006-tbtc-proof-of-funds.json`
+
+2. **Threshold Stakers CSV** (`threshold_stakers_may_2025.csv`)
+   - Contains operator list and stake information
+   - Source: Memory Bank `/knowledge/threshold_stakers_may_2025.csv`
+
+### Setup Options
+
+**Option 1: Use default data directory** (recommended)
+```bash
+mkdir -p data
+cp /path/to/memory-bank/knowledge/20251006-tbtc-proof-of-funds.json data/tbtc-proof-of-funds.json
+cp /path/to/memory-bank/knowledge/threshold_stakers_may_2025.csv data/threshold_stakers_may_2025.csv
+```
+
+**Option 2: Use environment variables**
+```bash
+# Add to .env file:
+PROOF_OF_FUNDS_PATH=/custom/path/to/tbtc-proof-of-funds.json
+THRESHOLD_STAKERS_CSV_PATH=/custom/path/to/threshold_stakers_may_2025.csv
 ```
 
 ## What This Does
