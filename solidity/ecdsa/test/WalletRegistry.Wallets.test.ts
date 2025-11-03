@@ -311,7 +311,7 @@ describe("WalletRegistry - Wallets", async () => {
       it("should revert", async () => {
         await expect(
           walletRegistry.connect(thirdParty).closeWallet(walletID)
-        ).to.be.revertedWith("CallerNotWalletOwner")
+        ).to.be.revertedWithCustomError(walletRegistry, "CallerNotWalletOwner")
       })
     })
 
@@ -458,7 +458,7 @@ describe("WalletRegistry - Wallets", async () => {
                       walletMembersAddresses[0],
                       0
                     )
-                  ).to.be.revertedWith("WalletMemberIndexOutOfRange")
+                  ).to.be.revertedWithCustomError(walletRegistry, "WalletMemberIndexOutOfRange")
                 })
               }
             )
@@ -475,7 +475,7 @@ describe("WalletRegistry - Wallets", async () => {
                       walletMembersAddresses[0],
                       walletMembersIDs.length + 1
                     )
-                  ).to.be.revertedWith("WalletMemberIndexOutOfRange")
+                  ).to.be.revertedWithCustomError(walletRegistry, "WalletMemberIndexOutOfRange")
                 })
               }
             )
@@ -495,7 +495,7 @@ describe("WalletRegistry - Wallets", async () => {
                   walletMembersAddresses[0],
                   0
                 )
-              ).to.be.revertedWith("InvalidWalletMembersIdentifiers")
+              ).to.be.revertedWithCustomError(walletRegistry, "InvalidWalletMembersIdentifiers")
             })
           }
         )
@@ -518,7 +518,7 @@ describe("WalletRegistry - Wallets", async () => {
               operator,
               0
             )
-          ).to.be.revertedWith("NotSortitionPoolOperator")
+          ).to.be.revertedWithCustomError(walletRegistry, "NotSortitionPoolOperator")
         })
       }
     )

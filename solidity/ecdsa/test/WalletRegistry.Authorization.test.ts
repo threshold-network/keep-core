@@ -519,7 +519,7 @@ describe("WalletRegistry - Authorization", () => {
           walletRegistry
             .connect(thirdParty)
             .authorizationIncreased(stakingProvider.address, 0, stakedAmount)
-        ).to.be.revertedWith("Caller is not the staking contract")
+        ).to.be.revertedWithCustomError(walletRegistry, "CallerNotStakingContract")
       })
     })
 
@@ -696,7 +696,7 @@ describe("WalletRegistry - Authorization", () => {
           walletRegistry
             .connect(thirdParty)
             .authorizationDecreaseRequested(stakingProvider.address, 100, 99)
-        ).to.be.revertedWith("Caller is not the staking contract")
+        ).to.be.revertedWithCustomError(walletRegistry, "CallerNotStakingContract")
       })
     })
 
@@ -1945,7 +1945,7 @@ describe("WalletRegistry - Authorization", () => {
           walletRegistry
             .connect(thirdParty)
             .involuntaryAuthorizationDecrease(stakingProvider.address, 100, 99)
-        ).to.be.revertedWith("Caller is not the staking contract")
+        ).to.be.revertedWithCustomError(walletRegistry, "CallerNotStakingContract")
       })
     })
 
@@ -2157,7 +2157,7 @@ describe("WalletRegistry - Authorization", () => {
       it("should revert", async () => {
         await expect(
           walletRegistry.connect(thirdParty).joinSortitionPool()
-        ).to.be.revertedWith("Unknown operator")
+        ).to.be.revertedWithCustomError(walletRegistry, "UnknownOperator")
       })
     })
 
@@ -2443,7 +2443,7 @@ describe("WalletRegistry - Authorization", () => {
       it("should revert", async () => {
         await expect(
           walletRegistry.updateOperatorStatus(thirdParty.address)
-        ).to.be.revertedWith("Unknown operator")
+        ).to.be.revertedWithCustomError(walletRegistry, "UnknownOperator")
       })
     })
 
@@ -3067,7 +3067,7 @@ describe("WalletRegistry - Authorization", () => {
         it("should revert", async () => {
           await expect(
             walletRegistry.isOperatorUpToDate(thirdParty.address)
-          ).to.be.revertedWith("Unknown operator")
+          ).to.be.revertedWithCustomError(walletRegistry, "UnknownOperator")
         })
       })
     })
@@ -4184,7 +4184,7 @@ describe("WalletRegistry - Migration Scenario Tests (TIP-092)", () => {
     it("should revert initializeV2 with zero address", async () => {
       await expect(
         walletRegistry.initializeV2(ZERO_ADDRESS)
-      ).to.be.revertedWith("AllowlistAddressZero")
+      ).to.be.revertedWithCustomError(walletRegistry, "AllowlistAddressZero")
     })
 
     /**

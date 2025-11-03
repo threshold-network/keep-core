@@ -56,6 +56,7 @@ describe.skip("TokenStaking Integration (DEPRECATED TIP-092)", () => {
 
   // Original tests preserved for reference during migration
   // Will be rewritten for Allowlist mode or archived
+})
 
 describe("WalletRegistry - Custom Errors", () => {
   let t: T
@@ -113,6 +114,7 @@ describe("WalletRegistry - Custom Errors", () => {
     await t.connect(owner).approve(staking.address, stakedAmount)
     await staking
       .connect(owner)
+      // @ts-ignore - Deprecated API removed in TIP-092. Full migration tracked in issue #3839.
       .stake(
         stakingProvider.address,
         beneficiary.address,
@@ -125,6 +127,7 @@ describe("WalletRegistry - Custom Errors", () => {
     // Authorize and register operator
     await staking
       .connect(authorizer)
+      // @ts-ignore - Deprecated API removed in TIP-092. Full migration tracked in issue #3839.
       .increaseAuthorization(
         stakingProvider.address,
         walletRegistry.address,
@@ -514,5 +517,3 @@ describe("WalletRegistry - Custom Errors", () => {
     })
   })
 })
-
-}) // End of describe.skip("TokenStaking Integration (DEPRECATED TIP-092)")

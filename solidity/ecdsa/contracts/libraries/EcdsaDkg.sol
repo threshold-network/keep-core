@@ -447,7 +447,6 @@ library EcdsaDkg {
         return (maliciousResultHash, maliciousSubmitter);
     }
 
-
     /// @notice Checks if DKG result is valid for the current DKG.
     /// @param result DKG result.
     /// @return True if the result is valid. If the result is invalid it returns

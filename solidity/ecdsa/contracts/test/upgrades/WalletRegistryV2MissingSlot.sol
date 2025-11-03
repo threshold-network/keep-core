@@ -163,6 +163,12 @@ contract WalletRegistryV2MissingSlot is
         address maliciousSubmitter
     );
 
+    event DkgMaliciousResultSlashingFailed(
+        bytes32 indexed resultHash,
+        uint256 slashingAmount,
+        address maliciousSubmitter
+    );
+
     event AuthorizationParametersUpdated(
         uint96 minimumAuthorization,
         uint64 authorizationDecreaseDelay,
@@ -765,7 +771,14 @@ contract WalletRegistryV2MissingSlot is
                 maliciousDkgResultSubmitterAddress
             );
         } catch {
-            // Challenge completion is critical; slashing failure is acceptable.
+            // Should never happen but we want to ensure a non-critical path
+            // failure from an external contract does not stop the challenge
+            // to complete.
+            emit DkgMaliciousResultSlashingFailed(
+                maliciousDkgResultHash,
+                _maliciousDkgResultSlashingAmount,
+                maliciousDkgResultSubmitterAddress
+            );
         }
 
         // Due to EIP150, 1/64 of the gas is not forwarded to the call, and
