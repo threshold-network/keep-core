@@ -66,3 +66,9 @@ tmp/
 
 # Output directory
 out/
+
+# Script working directories and artifacts
+scripts/wallet-operator-mapper/.env
+scripts/wallet-operator-mapper/data/
+scripts/wallet-operator-mapper/*.json
+scripts/wallet-operator-mapper/package-lock.json
