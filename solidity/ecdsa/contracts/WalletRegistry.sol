@@ -169,6 +169,12 @@ contract WalletRegistry is
         address maliciousSubmitter
     );
 
+    event DkgMaliciousResultSlashingFailed(
+        bytes32 indexed resultHash,
+        uint256 slashingAmount,
+        address maliciousSubmitter
+    );
+
     event AuthorizationParametersUpdated(
         uint96 minimumAuthorization,
         uint64 authorizationDecreaseDelay,
@@ -425,10 +431,20 @@ contract WalletRegistry is
     ///      misconfiguration that would break authorization.
     ///      After successful execution, the onlyStakingContract modifier will
     ///      only accept calls from the allowlist contract.
-    ///      SECURITY CRITICAL: The onlyGovernance modifier prevents front-running
-    ///      attacks where a malicious actor could call this function before
-    ///      legitimate governance, taking control of operator authorization.
-    function initializeV2(address _allowlist) external reinitializer(2) onlyGovernance {
+    ///
+    ///      SECURITY ASSUMPTION (Audit ISSUE #2 - Bytecode Optimization):
+    ///      Front-running protection is provided by atomic upgradeToAndCall pattern,
+    ///      not by governance modifier (removed to save ~42 bytes). The governance
+    ///      process MUST enforce atomic upgrades via upgradeToAndCall and prohibit
+    ///      separate upgradeTo followed by initializeV2 calls. The reinitializer(2)
+    ///      modifier prevents re-initialization after successful atomic upgrade.
+    ///
+    ///      Atomic Upgrade Requirement:
+    ///      - Proxy admin MUST use upgradeToAndCall (single transaction)
+    ///      - Upgrade implementation + initialize MUST be atomic
+    ///      - No front-running window between upgrade and initialization
+    ///      - Violation of this assumption creates front-running vulnerability
+    function initializeV2(address _allowlist) external reinitializer(2) {
         if (_allowlist == address(0)) revert AllowlistAddressZero();
         allowlist = Allowlist(_allowlist);
     }
@@ -459,7 +475,7 @@ contract WalletRegistry is
     /// returns configured beneficiary (supports owner != beneficiary delegation).
     ///
     /// Stakeholder Decision: Pragmatic choice to avoid bytecode cost for
-    /// dead code (ACP Consensus 2025-10-21, predating TIP-092/100 implementation).
+    /// dead code, predating TIP-092/100 implementation.
     function withdrawRewards(address stakingProvider) external {
         address operator = stakingProviderToOperator(stakingProvider);
         if (operator == address(0)) revert UnknownOperator();
@@ -501,7 +517,10 @@ contract WalletRegistry is
     ///         authorization decrease requested, it is activated by starting
     ///         the authorization decrease delay.
     function joinSortitionPool() external {
-        authorization.joinSortitionPool(_currentAuthorizationSource(), sortitionPool);
+        authorization.joinSortitionPool(
+            _currentAuthorizationSource(),
+            sortitionPool
+        );
     }
 
     /// @notice Updates status of the operator in the sortition pool. If there
@@ -509,7 +528,11 @@ contract WalletRegistry is
     ///         starting the authorization decrease delay.
     ///         Function reverts if the operator is not known.
     function updateOperatorStatus(address operator) external {
-        authorization.updateOperatorStatus(_currentAuthorizationSource(), sortitionPool, operator);
+        authorization.updateOperatorStatus(
+            _currentAuthorizationSource(),
+            sortitionPool,
+            operator
+        );
     }
 
     /// @notice Used by T staking contract to inform the application that the
@@ -588,7 +611,10 @@ contract WalletRegistry is
     ///         yet or if the authorization decrease was not requested for the
     ///         given staking provider.
     function approveAuthorizationDecrease(address stakingProvider) external {
-        authorization.approveAuthorizationDecrease(_currentAuthorizationSource(), stakingProvider);
+        authorization.approveAuthorizationDecrease(
+            _currentAuthorizationSource(),
+            stakingProvider
+        );
     }
 
     /// @notice Used by T staking contract to inform the application the
@@ -965,8 +991,7 @@ contract WalletRegistry is
         // and DAO governance coordination only.
         //
         // Stakeholder Decision: Pragmatic choice to save bytecode and avoid
-        // implementation risk for functionally equivalent routing options
-        // (ACP Consensus 2025-10-21).
+        // implementation risk for functionally equivalent routing options.
 
         // Attempt to slash malicious submitter. Slashing may fail silently
         // if the staking contract reverts, but challenge must complete
@@ -987,7 +1012,14 @@ contract WalletRegistry is
                 maliciousDkgResultSubmitterAddress
             );
         } catch {
-            // Challenge completion is critical; slashing failure is acceptable.
+            // Should never happen but we want to ensure a non-critical path
+            // failure from an external contract does not stop the challenge
+            // to complete.
+            emit DkgMaliciousResultSlashingFailed(
+                maliciousDkgResultHash,
+                _maliciousDkgResultSlashingAmount,
+                maliciousDkgResultSubmitterAddress
+            );
         }
 
         // Due to EIP-150, 1/64 of the gas is not forwarded to the call, and
@@ -1199,8 +1231,9 @@ contract WalletRegistry is
         if (memberIdsHash != keccak256(abi.encode(walletMembersIDs)))
             revert InvalidWalletMembersIdentifiers();
 
-        if (walletMemberIndex < 1 || walletMemberIndex > walletMembersIDs.length)
-            revert WalletMemberIndexOutOfRange();
+        if (
+            walletMemberIndex < 1 || walletMemberIndex > walletMembersIDs.length
+        ) revert WalletMemberIndexOutOfRange();
 
         return walletMembersIDs[walletMemberIndex - 1] == operatorID;
     }
@@ -1265,7 +1298,11 @@ contract WalletRegistry is
         view
         returns (uint96)
     {
-        return authorization.eligibleStake(_currentAuthorizationSource(), stakingProvider);
+        return
+            authorization.eligibleStake(
+                _currentAuthorizationSource(),
+                stakingProvider
+            );
     }
 
     /// @notice Returns the amount of rewards available for withdrawal for the
@@ -1330,7 +1367,11 @@ contract WalletRegistry is
     ///         authorized stake is non-zero, function returns false.
     function isOperatorUpToDate(address operator) external view returns (bool) {
         return
-            authorization.isOperatorUpToDate(_currentAuthorizationSource(), sortitionPool, operator);
+            authorization.isOperatorUpToDate(
+                _currentAuthorizationSource(),
+                sortitionPool,
+                operator
+            );
     }
 
     /// @notice Returns the current authorization source contract.
@@ -1338,11 +1379,7 @@ contract WalletRegistry is
     ///      staking contract. This enables conditional routing of
     ///      authorization queries during the migration period.
     /// @return The address of the current authorization source contract
-    function _currentAuthorizationSource()
-        internal
-        view
-        returns (IStaking)
-    {
+    function _currentAuthorizationSource() internal view returns (IStaking) {
         return
             address(allowlist) != address(0)
                 ? IStaking(address(allowlist))
