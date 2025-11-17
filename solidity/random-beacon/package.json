@@ -34,7 +34,7 @@
   },
   "dependencies": {
     "@keep-network/sortition-pools": "^2.0.0-pre.16",
-    "@openzeppelin/contracts": "4.7.3",
+    "@openzeppelin/contracts": "4.9.3",
     "@thesis/solidity-contracts": "github:thesis/solidity-contracts#4985bcf",
     "@threshold-network/solidity-contracts": "development"
   },
