@@ -65,7 +65,7 @@ variable "storage_objectviewer_iam_role" {
 }
 
 variable "storage_objectviewer_iam_members" {
-  default = ["user:liam.zebedee@thesis.co"]
+  default = []
 }
 
 # bucket vars
@@ -118,11 +118,6 @@ variable "nat_gateway_ip_address_type" {
   default     = "external"
 }
 
-# helm provider
-variable "tiller_namespace_name" {
-  default = "tiller"
-}
-
 # gke
 variable "gke_cluster" {
   description = "The Google managed part of the cluster configuration."
@@ -135,7 +130,8 @@ variable "gke_cluster" {
     daily_maintenance_window_start_time = "00:00"
     network_policy_enabled              = false
     network_policy_provider             = "PROVIDER_UNSPECIFIED"
-    logging_service                     = "logging.googleapis.com"
+    logging_service                     = "logging.googleapis.com/kubernetes"
+    monitoring_service                  = "monitoring.googleapis.com/kubernetes"
   }
 }
 
@@ -145,7 +141,7 @@ variable "gke_node_pool" {
   default {
     name         = "default-node-pool"
     node_count   = "1"
-    machine_type = "n1-standard-4"
+    machine_type = "n1-standard-2"
     disk_type    = "pd-ssd"
     disk_size_gb = 100
     auto_repair  = "true"
@@ -188,61 +184,21 @@ variable "eth_miner_ropsten_loadbalancer_address_type" {
   default     = "external"
 }
 
-# gke_metrics
-variable "gke_metrics_namespace" {
-  default = "metrics"
-}
-
-variable "kube_state_metrics" {
-  default {
-    version = "0.13.0"
-  }
-}
-
-variable "prometheus_to_sd" {
-  default {
-    version = "0.1.1"
-  }
-}
-
-# openvpn
+# helm_release openvpn
 variable "openvpn" {
-  default {
-    name    = "helm-openvpn"
-    version = "3.13.3"
-  }
-}
+  description = "Configuration values for the keep-prd VPN server."
 
-variable "openvpn_parameters" {
   default {
+    name                          = "openvpn"
+    namespace                     = "default"
+    helm_chart                    = "stable/openvpn"
+    helm_chart_version            = "4.2.2"
     route_all_traffic_through_vpn = "false"
-    gke_master_ipv4_cidr_address  = "172.16.0.0"
+    gke_master_cidr               = "172.16.0.0"
   }
 }
 
 # deployment infrastructure
-## pull
-variable "create_ci_publish_to_gcr_service_account" {
-  description = "Create ServiceAccount for CI to publish images to keep-dev GCR."
-  default     = true
-}
-
-variable "keel" {
-  default {
-    name      = "helm-keel"
-    namespace = "tiller"
-    version   = "0.8.16"
-  }
-}
-
-variable "keel_parameters" {
-  default {
-    helm_provider_enabled = true
-    rbac_install_enabled  = true
-    gcr_enabled           = true
-  }
-}
-
 ## push
 
 # gcp_deploy
@@ -255,9 +211,10 @@ variable "jumphost" {
 
 variable "utility_box" {
   default {
-    name         = "keep-dev-utility-box"
-    tags         = "gke-subnet"
-    machine_type = "g1-small"
-    tools        = "kubectl, helm, jq, nodejs, geth"
+    name          = "keep-dev-utility-box"
+    tags          = "gke-subnet"
+    machine_type  = "g1-small"
+    machine_image = "ubuntu-os-cloud/ubuntu-1804-lts"
+    tools         = "kubectl, helm, jq, nodejs, geth"
   }
 }
