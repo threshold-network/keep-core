@@ -1,0 +1,436 @@
+= Stake delegation
+
+To improve security,
+the Keep network does not require token owners to perform
+the day-to-day operations of staking
+with the private keys holding the tokens.
+This is achieved by _stake delegation_,
+where different addresses hold different responsibilities
+and cold storage is supported to the highest extent practicable.
+
+There are a few different models for stake delegation
+with their individual tradeoffs,
+but a few commonalities exist:
+each model is designed to provide the desired functionality
+of separate roles with their individual responsibilities;
+each model is compatible with either leveraged or fully backed operation;
+and each model imposes a waiting period
+before liquid tokens can be freely withdrawn after staking.
+
+== Basic description
+Anyone with at least a threshold amount of tokens (_Stake~min~_)
+can set them aside as collateral
+and earn the right to participate in network operations.
+This is called _staking_.
+_Stakers_ can earn rewards from contributing to the network,
+but if they misbehave their collateral can be taken away
+(_stake slashing_) as punishment.
+
+A token owner may wish to stake in a variety of different ways,
+for security or efficiency reasons.
+To support different ways of staking,
+the _owner_ can _delegate_ various responsibilities to different addresses:
+
+owner::
+Provides the tokens for the staker
+
+operator::
+Handles the day-to-day participation in the network operations
+
+beneficiary::
+Collects any rewards earned by the staker
+
+authorizer::
+Authorizes contracts to protect against buggy or compromised upgrades
+
+The different roles can all be performed by the same address;
+they may be divided between different addresses controlled by the same person;
+or they may be different parties entirely,
+executing a sophisticated scheme of cold storage and third-party delegation.
+As far as the network is concerned,
+any of these arrangements simply forms a _staker_.
+
+staker::
+An abstraction representing the _owner_, _operator_, _beneficiary_ and _authorizer_
+each performing their respective roles.
+
+The roles of the _operator_, _beneficiary_ and _authorizer_
+may also be called _delegatees_
+as they are appointed by the _owner_ or _delegator_.
+
+delegatee::
+The _operator_, _beneficiary_ or _authorizer_
+
+delegator::
+The _owner_, contrasted to the _delegatees_
+
+== Staking vs. delegation
+While the concepts of _staking_ and _delegation_ may seem similar,
+and some models always perform them at the same time,
+they do not mean the same thing.
+
+=== Staking
+_Staking_ means a token holder
+setting some or all of their tokens aside
+as collateral for performing work in the network.
+In return for losing the liquidity
+and freedom to use the tokens however they wish,
+the owner gains the right to earn rewards
+for the work that has been performed
+using their staked tokens as collateral.
+
+Staked tokens are locked and cannot be withdrawn until _unstaked_.
+Unstaking requires a lengthy waiting period
+to encourage stability and discourage short-term thinking.
+The _unstaking period_ reduces the rewards that may be earned while unstaking,
+and prevents stakers from performing "hit-and-run" attacks
+where the staker position is abused to harm the network
+and the staked tokens quickly sold before the markets react.
+
+=== Delegation
+_Delegation_ means the owner of staked tokens assigning the roles
+of _operator_, _beneficiary_ and _authorizer_
+for participating in network operations.
+Only _delegated_ stakes can earn rewards.
+
+Under some stake delegation models,
+tokens may be _staked_ but _undelegated_.
+Stakes could be undelegated as the first step to _unstaking_,
+or as a part of _re-delegating_
+by reassigning the _delegatee_ roles to different addresses than before.
+
+== Stake delegation models
+The goals of stake delegation can be achieved in different ways.
+
+=== Direct vs indirect staking
+One of the most important architectural considerations is
+how _direct_ or _indirect_ staking should be.
+With _direct staking_,
+staking is a status of the token-holder account.
+In _semi-indirect_ or _fully indirect staking_
+a _staker_ is an abstraction separate from the owner account,
+with its own identity and token balance.
+The directness of staking has ramifications on
+operating cost,
+system complexity,
+the ease of supporting certain features,
+and the security of contract upgrades.
+
+==== Direct staking
+_Direct staking_ is simple and straightforward:
+staking is a status of the token-holder account.
+Direct staking could thus be also called _"owner-centric staking"_.
+This lends itself most naturally to "all-or-nothing" staking
+with a simple boolean flag denoting the status,
+but partial staking would also be possible.
+
+With this conceptual simplicity comes great disadvantage.
+
+The initial simplicity advantage diminishes
+when more sophisticated features such as delegation are included,
+and the operator's identity is behind a layer of indirection
+making the verification of operator signatures
+more expensive than necessary.
+
+Staking in the token contract requires special considerations
+to ensure that the stakes are secured appropriately.
+Attempting to transfer tokens from a staking address needs to be blocked,
+and a choice has to be made
+on whether to allow transfers into staking addresses.
+
+Worst of all,
+turning staking into a cross-cutting concern
+has unacceptable security implications.
+The token contract has to either duplicate staking-related functionality,
+or implement staking in its entirety.
+Even if the staking contract is separate from the token contract,
+it needs root access to stakers' token balances,
+which complicates the upgrade process.
+Either the staking contract is made permanent,
+upgradeable only by hard forks,
+or the token contract needs to be aware of the upgrade process
+on top of all other responsibilities heaped upon it.
+
+The owner-centric model
+permits only one operator per owner
+which makes it impossible for other contracts
+to act as intermediaries for staking.
+Token grants would require separate consideration,
+bringing yet another cross-cutting concern into existence.
+
+Every mitigation to these problems,
+insofar as mitigation is possible,
+further diminishes the advantages of direct staking
+without eliminating the fundamental drawbacks.
+
+==== Indirect staking
+Indirect staking fully resolves the issues with direct staking
+by moving all staking-related functionality
+into a separate _staking contract_
+and having _owners_ transfer their staked tokens to the staking contract.
+Upon unstaking,
+the staking contract returns the remaining tokens to the owner.
+This model naturally lends itself to staking partial amounts
+instead of the entire balance,
+and there is no reason to limit the number of operators per owner.
+
+The token contract can be entirely free of cross-cutting concerns,
+and the ability to have multiple operators per owner address
+enables loosely coupled token grants.
+The staking contract has full control over the staked tokens,
+as required for effective staking in the first place,
+but it cannot touch any tokens it has not been given.
+
+Upgrading staking contracts becomes trivially easy
+if unstaking and restaking is tolerated,
+and even a delay-free approach becomes significantly easier and safer.
+The worst-case outcome with upgrades
+can be limited to stakers being able to free tokens prematurely,
+with no non-consensual exposure to other risks.
+
+The staking contract uses an abstraction of _staker_,
+a useful fiction similar to "limited-liability corporation".
+Each _staker_ has its own token balance,
+recorded in the _staking contract_
+alongside the addresses of its _owner_, _operator_, _beneficiary_ and _authorizer_.
+
+==== Semi-indirect staking
+In _semi-indirect staking_
+the staking contract identifies _stakers_ by their _operator address_.
+Thus it could be also called _"operator-centric staking"_.
+Each owner can divide their tokens over an arbitrary number of operators,
+but each operator can only work for one owner.
+Because new operator addresses are easy to create,
+this does not impose any genuine limit
+on any actor's ability to operate for many different holders
+if there ever is a legitimate need.
+
+Because stakers are identified by their operator address,
+_semi-indirect staking_ has the most favorable cost profile.
+Authenticating transactions and messages
+from some participant in an operation
+only requires referencing the member list of that operation.
+In all other models
+the most common action in the network
+has to go through an additional layer of indirection.
+
+The tight coupling between _staker_ and _operator_
+is the main downside of semi-indirect staking.
+Reassigning delegatees can become complex and difficult.
+
+==== Fully indirect staking
+In _fully indirect staking_ each _staker_ has a synthetic _staker ID_.
+There is no coupling of stakers to the addresses of any role,
+making fully indirect staking be _"staker-centric staking"_.
+A single address could act as the operator of an arbitrary number of stakers,
+and _redelegating_ enjoys the greatest possible flexibility.
+
+The only, albeit not insignificant,
+downside of _fully indirect staking_
+is the necessity of an additional on-chain lookup
+when authenticating participants in an operation.
+The work contract has to first reference the member list of the operation
+to get the _staker ID_ of the specific member,
+then query the operator address of that staker.
+
+=== The relationship of staking and delegation
+Another significant consideration is
+whether to bundle staking and delegation,
+so that each staker is locked to the delegatees
+and the delegatee addresses can only be changed by unstaking,
+or to handle staking and delegation separately,
+permitting changes to the delegatees.
+If re-delegation is permitted,
+it could be slow and expensive like unstaking
+or the system could be designed to safely support fast delegatee changes.
+
+==== No redelegation
+The simplest solution would be
+to treat staking and delegation as one and the same.
+Delegation happens when the owner stakes the tokens,
+and unstaking is undelegation.
+To _redelegate_,
+the owner must unstake and restake.
+
+==== Slow redelegation
+A relatively simple way to separate staking and delegation
+is to permit redelegating
+only in conjunction with a waiting period.
+An owner who wishes to redelegate
+would first _undelegate_,
+wait for the tokens to be freed as _staked but undelegated_,
+and then _delegate_ them again.
+
+Redelegating has an opportunity cost
+because no new operations can be entered while undelegating,
+but the _undelegating time_ would only be constrained by
+the need for operations to finish
+and could be significantly shorter than the _unstaking time_.
+_Undelegated stakes_ could not be withdrawn
+without waiting the entire unstaking time.
+
+==== Fast redelegation
+_Fast redelegation_ means a method
+which does not impose an opportunity cost when redelegating.
+Delegatees could be changed on the fly
+without interruption to active operations.
+
+==== Partial redelegation
+An _unconstrained_ redelegation model
+permits _partial redelegation_ of some fraction to a different operator
+without moving the entire stake.
+Stakes can be moved, divided and combined
+without waiting for the entire unstaking time.
+Instead, stake reorganization is either instant (with fast redelegation)
+or incurs the shorter _undelegating delay_ (with slow redelegation).
+
+If redelegation is _limited_,
+the owner can appoint a different operator for a particular staker
+as long as the entire staked amount is redelegated at once.
+Stakes can be moved around,
+but not divided or combined without unstaking and restaking.
+
+Depending on the design,
+redelegation can be _limited_ or _unconstrained_
+independently of whether it is _slow_ or _fast_.
+
+=== Arguments for redelegation
+While easy redelegation appears attractive,
+it is not certain what important purpose it would actually serve
+to justify the design complexity it may require.
+
+==== Security
+On the surface, redelegation is appealing
+as a method to contain and recover from operator compromise.
+However, tokens staked on active operations
+at the time of the compromise
+remain at risk.
+_Fully backed operation_ has better ability to recover
+as free stakes would not be impacted,
+but under _leveraged operation_
+even a single active operation poses a major risk to stakes.
+The best way to reduce the harm of operator compromise
+is to not have operator compromise.
+
+==== Scalability
+Load-balancing operations across multiple computers
+is another conceivable argument for redelegation.
+
+However, blitzpantsing provides an initial load-balancing method
+that should be adequate for a relatively long time.
+If complete blitzpantsing were to be insufficient
+to make it possible to operate a client
+on a single contemporary machine,
+assigning a new operator whenever necessary has some appeal.
+
+Limited redelegation only enables
+load-balancing with a coarse form of round-robin scheduling
+as a large stake can be passed from operator to operator
+but not divided among multiple operators.
+In the long term, this has higher costs than blitzpantsing
+especially if redelegation is slow.
+
+Unconstrained redelegation makes it possible
+to perform blitzpantsing on existing stakes
+without unstaking and restaking.
+If redelegation is also fast,
+each minimum staker can further round-robin schedule their stakes.
+
+==== Sub-operators as an alternative load-balancing method
+An alternative load-balancing method would be
+for the main operator of a staker to appoint sub-operators for each operation,
+leaving only work selection duties for the main operator.
+This could even be combined with
+intermediate operator addresses for each work contract
+to divide work selection loads as well.
+
+With equal levels of blitzpantsing,
+using suboperators provides more effective load-balancing
+than round-robin scheduling.
+
+In both cases the current (main) operator performs all work selection,
+but with round-robin scheduling
+the current operator is also responsible for all active operations
+it has been selected for since the last redelegation.
+
+Work selection is expected to be
+significantly less complex and involved than the actual operations,
+so suboperators should have a major advantage
+even if intermediate operators for work selection are not used,
+or a single work contract is responsible for the entirety of the load.
+
+(This may change if staker indistinguishability is introduced
+and a ZKP-heavy method of proving available stake is required,
+but that scenario requires a different staking model
+so these considerations would not apply anyway.)
+
+==== Reducing operator commitment
+If redelegation is not possible,
+operating is a commitment lasting at least the unstaking time.
+The opportunity cost of unstaking is significant,
+further reducing the ability of either side
+to bail from an unsatisfactory arrangement.
+
+_Slow redelegation_ would reduce the time commitment and opportunity cost,
+while _fast redelegation_ would
+make switching operators effectively costless.
+
+=== Possible combinations
+When considering all aspects of staking, delegating and operating as a whole,
+some combinations work particularly well together.
+
+==== Semi-indirect staking, leveraged operation, no redelegation
+The simplest realistic option.
+Minimizes implementation complexity and on-chain state,
+with the favorable cost characteristics of semi-indirect staking.
+Suitable for MVP.
+
+==== Semi-indirect staking, leveraged operation, slow redelegation
+Slow redelegation brings little additional complexity
+even with semi-indirect staking.
+Redelegation requires waiting for active operations to finish
+before the stake can be transferred to a different operator.
+
+Partial redelegation is easy to implement under this model
+as no tokens are actively used as collateral at the moment of redelegation.
+
+==== Semi-indirect staking, leveraged operation, fast redelegation
+The combination of leveraged operation and fast redelegation
+creates unique challenges.
+It must be possible to redelegate instantly,
+without missing opportunities in work selection,
+but ensuring that misbehavior is punishable
+requires tracking previous operators until all their operations finish.
+
+With limited redelegation this can be done
+by linking current and previous operators linearly under one staked sum.
+Unconstrained redelegation seems possible but prohibitively inconvenient.
+
+==== Fully indirect staking, leveraged operation, fast redelegation
+TBD
+
+==== Semi-indirect staking, fully backed operation, fast redelegation
+Fully backed operation makes redelegation simpler and easier,
+turning fast redelegation with semi-indirect staking into a realistic option.
+The favorable cost characteristics of semi-indirect staking
+compensate slightly for the complexity of fully backed operation,
+while the latter removes the main downside of the former
+by providing an easy method for unconstrained redelegation.
+
+Free stakes can be transferred to a different operator at any time,
+while locked stakes have to wait for operations to finish.
+Because participant selection for operations is based on free stake,
+the requirement for redelegation without opportunity cost is satisfied.
+To unstake, stake would have to remain untouched at some operator
+for the required time.
+
+It is possible to even support sub-operators with semi-indirect staking.
+The main operator designates a new sub-operator when joining an operation,
+and the entry for the sub-operator contains
+the operation-specific stake,
+and the main operator's address.
+When the operation finishes,
+the sub-operator's stake is freed at the main operator.
+This maintains the favorable one-step authentication of semi-indirect staking,
+provides a simple way to track stake for each operation,
+and enables offloading work to sub-operators.
