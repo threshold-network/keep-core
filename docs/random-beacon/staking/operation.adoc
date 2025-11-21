@@ -1,0 +1,408 @@
+= Operating models
+
+To develop a suitable staking model for the network,
+it is necessary to choose between two different models
+for operating on stakes: _leveraged_ or _fully backed_.
+
+== Fully backed operation
+Staked tokens are divided to
+_free stakes_ that can be used as collateral for new operations,
+and _locked stakes_ that are already backing some existing operation.
+When a (virtual) staker joins a new operation
+requiring some amount of tokens as collateral,
+the staker is required to _lock up_ some of their _free stake_.
+
+This _locked stake_ is held as collateral
+to ensure any misbehavior in the operation can be properly penalized,
+and cannot be used for any other operation.
+When the operation finishes,
+all stake locked for that particular operation is released.
+
+This ensures that all operations are always _fully backed_ by actual stake,
+and operations never interfere with each other's stakes.
+However, the network throughput is limited
+because there is only so much stake available for collateral,
+especially for operations requiring high stakes.
+
+== Leveraged operation
+When operations require tokens as collateral,
+stakers who join the operation are required to hold sufficient stake
+without considering other operations.
+A staker is able to join more operations
+than they could pay the maximum penalty for,
+thus becoming _leveraged_.
+
+If a _leveraged_ staker gets penalised on some of their operations,
+their token balance may fall below
+the amount they would be slashed for some subsequent misbehavior.
+A staker whose penalty exceeds their remaining stake
+_defaults_ on the operation.
+The possibility of a default
+can significantly reduce the incentives for correct behavior.
+
+On the upside,
+leveraged operation is simpler and cheaper to implement,
+it has no limits on the number of concurrent operations,
+and the _marginal deterrent_ to misbehavior can be higher.
+
+== Demand and network throughput
+Let a staker's _used stake_ be the sum of the stakes required
+for each operation they participate in.
+In fully backed operation _used stake = locked stake_.
+With leveraged operation,
+_used stake_ equals the sum of all penalties the staker could incur
+from misbehaving on each operation they participate in.
+
+A staker's _usage ratio (UR)_ equals ther _used stake / total stake_.
+In fully backed operation
+each staker by definition has a usage ratio between 0 and 1.
+Let the system's _average usage ratio (AUR)_ be
+the _total used stake / total tokens staked_ across all stakers.
+This is also between 0 and 1.
+
+=== Scaling with fully backed operation
+Because _used stake = stake per operation * concurrent operations_,
+the limit of _UR = 1_ limits the number of concurrent operations
+to _total tokens staked / stake per operation_.
+Correspondingly,
+the only way to increase the limit on concurrent operations
+is to reduce the _stake per operation_ as demand increases.
+
+==== Adjustment by hard fork
+The simplest method would be to perform hard forks
+to update stake requirements whenever usage gets too high.
+This is unlikely to be viable
+for a successful system aiming at significant growth.
+
+==== Decreasing stake requirements
+Another relatively simple method would be to reduce stakes and penalties
+dynamically as usage increases.
+Any new operations after the adjustment would use the new stake quantities,
+while existing operations stay on the old stakes until released.
+
+Because the update applies incrementally,
+it would be necessary to maintain a sufficient margin
+to avoid running out of free stake.
+For example, stakes could be halved globally whenever the UR exceeds 0.5.
+
+This has the downside that pre-update and post-update stakes are inequal.
+Someone joining an operation just before the update
+would have locked up twice the tokens for the same reward
+as someone joining a similar operation shortly after.
+
+Additionally, the protocol may not be able to cope with rapid growth
+if demand rises faster than old operations end and release more tokens.
+Determining the update threshold in periods of rapid growth
+would require complex formulae to avoid running out of free tokens.
+
+==== Separate stake units
+If locked stakes are denominated in _stake units_
+instead of absolute token amounts,
+scaling the system becomes relatively simple.
+
+The exchange rate of tokens to stake units
+would be centrally managed based on the usage ratio,
+and any actions involving stake would use the latest exchange rate.
+Work contracts would define their stake requirements in stake units,
+and locked stakes would be denominated in stake units as well.
+
+If Alice, with 3 stake,
+joins an operation requiring 2 stake units
+when the exchange rate is 1,
+the staking contract would record 2 stake units locked up.
+At this time Alice's locked stakes would be worth 2/3 tokens,
+and thus she would not be eligible
+to join another operation requiring 2 stake units.
+
+If the exchange rate rises to 1.4 stake units per token,
+Alice's 3 staked tokens would equal 4.2 stake units.
+Now Alice would be able to join another operation,
+bringing her locked stake units to 4, worth 2.86 tokens.
+
+When Alice finishes one operation honorably,
+the corresponding 2 stake units are unlocked.
+If Alice gets penalized,
+the penalty is denominated in stake units
+and her tokens are seized according to the exchange rate.
+If the exchange rate is 1.7 at the time of a penalty of 2 units,
+Alice's stake would be slashed by 1.18 tokens.
+
+The exchange rate could be updated in a very fine-grained manner,
+and stakes would be freed up immediately to match growing demand. 
+
+== Leverage, overleverage and attacks
+Call the ratio _used stake / stake_ the _leverage ratio_.
+This is the same formula as the _usage ratio_ of fully backed operation,
+but is not constrained to be below 1.
+
+If Alice has 50 stake and is participating in 7 operations,
+each of which could cause a punishment of 5 stake for misbehavior,
+Alice's _used stake_ is 35 and her _leverage ratio_ is 0.7.
+If Bob participates in 12 operations his _used stake_ would be 60,
+leading to a _leverage ratio_ of 1.2.
+A staker can be called _leveraged_ when their _leverage ratio_ exceeds 1;
+with _leverage ratio =< 1_ the staker is _unleveraged_.
+
+If there is 10,000 stake in the system overall,
+and 1,000 stakers participating on average in 2.8 operations,
+with 14 tokens at stake,
+the _average leverage ratio_ is 1.4.
+With leveraged stakes, _average leverage ratio_ equals the _demand ratio_.
+
+If Alice has a _leverage ratio_ exceeding the _average leverage ratio_,
+she may be called _overleveraged_ relative to other stakers.
+Let _overleverage ratio_ equal
+_leverage ratio / max(1, average leverage ratio)_.
+If Alice's LR is 3.0 and the ALR is 2.0,
+Alice's _overleverage ratio_ would be 1.5.
+If Bob's LR is 1.8 he would be _underleveraged_ at OR = 0.9.
+
+=== Overleverage attacks
+When a staker misbehaves,
+the standard recourse is to punish them by taking away staked tokens.
+If Mallory has a high leverage ratio,
+their operations aren't all backed by actual stake.
+Thus it becomes possible for Mallory to misbehave in multiple operations
+while suffering far less than the face value of the penalty.
+
+We have three relevant concepts:
+
+marginal deterrent::
+How much Mallory would lose by misbehaving _once_,
+at the most favorable opportunity available
+
+total deterrent::
+How much Mallory would lose by misbehaving
+on some or all operations they are participating in
+
+per-operation deterrent::
+_total deterrent / affected operations_;
+how much Mallory would lose _per operation_
+by misbehaving on multiple operations
+
+Overleverage attacks exploit the difference
+between marginal deterrent when misbehaving on one operation
+and per-operation deterrent when misbehaving on many.
+If Mallory has multiple operations backed by the minimum stake,
+and it gets slashed away entirely from one misbehavior,
+misbehaving on the remaining operations is effectively free.
+
+In this basic scenario
+Mallory's _marginal deterrent_ equals their _total deterrent_,
+and the effective _per-operation deterrent_ equals the minimum stake
+divided by Mallory's leverage ratio.
+
+==== Demand ratio and overleverage
+When analyzed in a vacuum,
+it appears as if any degree of leverage would render the network vulnerable.
+However, when comparing fully backed and leveraged operation,
+it is necessary to consider the demand ratio as well.
+
+When the demand ratio (DR) is below 1,
+all operations use the same stake regardless of the staking model.
+With the average leverage ratio (ALR) equaling the demand ratio,
+all stakers whose stakes are leveraged are by definition overleveraged.
+
+When the DR exceeds 1,
+fully backed operation necessitates reducing the minimum stake. 
+This changes the balance between fully backed and leveraged operation,
+as fully backed operation can only sustain a maximum penalty of
+_initial minimum stake / demand ratio_.
+Leveraged operation has no such constraint
+and the minimum stake and maximum penalty can stay constant.
+
+The result of this asymmetry is that an absolutely leveraged staker
+whose leverage ratio equals the DR = ALR
+will still have the same _total deterrent_ over all their operations
+as they would under fully backed operation,
+while having a significantly greater _marginal deterrent_.
+This discrepancy is arguably desirable
+if opportunities to profitably misbehave are uncommon.
+
+A different picture emerges when considering a staker
+who is _overleveraged_ compared to the average.
+In this case the marginal deterrent remains high,
+but the effective _per-operation deterrent_ is divided by the OR.
+Under fully backed operation it is not possible to become overleveraged
+and per-operation deterrent remains constant.
+
+.Deterrent amounts
+|===
+|Type |Value under fully backed operation |Value under leveraged operation
+
+|Marginal deterrent
+|minimum stake / DR
+|minimum stake
+
+|Total deterrent
+|staked tokens
+|staked tokens
+
+|Per-operation deterrent
+|minimum stake / DR
+|minimum stake / (DR * OR)
+|===
+
+The name _overleverage attack_
+comes from how the per-operation deterrent
+is equal to the fully backed equivalent
+divided by the specific staker's overleverage ratio.
+
+==== Blitzpantsing reduction
+The law of large numbers significantly reduces the likelihood
+of a staker having a large overleverage ratio
+as their total stake increases.
+This can be entirely circumvented with blitzpantsing.
+
+Because operations are joined on the granularity of virtual stakers,
+a large staker is practically guaranteed
+to have some of their virtual stakers _overleveraged_
+while others are _underleveraged_.
+Dividing these virtual stakers to separate identities
+removes the smoothing effect of the law of large numbers
+and lets the adversary pick the most favorable identities
+for the overleverage attack.
+
+Consider Mallory who has _m~total~_ virtual stakers,
+participating in _ops~total~_ operations.
+These virtual stakers can be divided into the following groups:
+
+* the virtual stakers with the same leverage ratio as the average: _vs~avg~_
+(or leverage ratio of 1 if the average is lower)
+* overleveraged virtual stakers: _vs~over~_ 
+* virtual stakers that participate in some operations,
+but are underleveraged compared to the average: _vs~under~_
+* virtual stakers who do not participate in any operations: _vs~none~_
+
+Let the number of virtual stakers in each category be
+_m~avg~, m~over~, m~under~_ or _m~none~_ respectively,
+and the total operations participated in
+by virtual stakers in each category be
+_ops~avg~, ops~over~_ and _ops~under~_.
+
+If _m~over~ > 0_, a blitzpantsed Mallory could perform an overleverage attack
+with _some_ virtual stakers _vs~over~_
+even if Mallory is overall _underleveraged_ compared to the average.
+The virtual stakers who aren't participating in any operations
+are particularly noteworthy;
+stake held by _vs~none~_ can be entirely protected from slashing
+via blitzpantsing.
+
+The only scenario where blitzpantsing does not strengthen overleverage attacks
+compared to a monolithic stake
+is when all virtual stakers are equally leveraged. 
+In such a case there is still no disadvantage to blitzpantsing
+beyond the (marginal) transaction costs
+of setting up a large number of separate stakers.
+
+Due to the blitzpantsing reduction,
+the real deterrents are:
+
+.Deterrent amounts
+|===
+|Type |Value with blitzpantsing
+
+|Marginal deterrent
+|minimum stake
+
+|Total deterrent
+|staked tokens * (1 - m~none~/m~total~) = minimum stake * (m~total~ - m~none~)
+
+|Per-operation deterrent (attacking indiscriminately)
+|minimum stake * (1 - m~none~/m~total~) / (DR * OR) =
+minimum stake * (m~total~ - m~none~) / ops~total~
+
+|Per-operation deterrent (overleveraged virtual stakers only)
+|minimum stake * m~over~ / ops~over~
+|===
+
+==== Modeling
+The number of operations some virtual staker participates in
+is given by the binomial distribution _B(n, P)_
+where _n_ is the number of concurrent operations in the network
+and _P_ is the probability of a virtual staker being selected
+for any particular operation,
+equaling _group size / number of active virtual stakers_.
+Thanks to the blitzpantsing reduction,
+large stakers can be simply modeled as perfectly colluding virtual stakers
+instead of the hypergeometric distribution
+they would form in a monolithic model.
+
+The model can be further simplified
+by approximating the above binomial distribution
+with a poisson distribution _Pois(nP)_.
+The value
+_nP = concurrent operations * group size / number of active virtual stakers_
+equals the average leverage ratio
+_maximum penalty * concurrent operations * group size / total stake_
+when _maximum penalty = minimum stake_
+and all stakers are active:
+_nP = concurrent operations * group size / (total stake / minimum stake) = ALR_.
+
+This approximation _Pois(ALR)_ is applicable
+regardless of the exact group size,
+number of concurrent operations,
+or number of virtual stakers,
+as long as the group size is very small
+compared to the total number of virtual stakers.
+A common rule of thumb requires that _n > 100_ and _np < 10_;
+example values of _group size = 100_ and
+_minimum stake / total tokens = 1 / 100,000_
+give _p = 1 / 1,000_,
+satisfying this requirement when _0.1 < ALR < 10_.
+
+With an _ALR = LR~mallory~ = 1_, we get the following numbers:
+
+m~none~ = P(0, 1) * m~total~ = 0.37 * m~total~
+
+m~avg~ = P(1, 1) * m~total~ = 0.37 * m~total~
+
+m~over~ = P~over~(1, 1) * m~total~ = 0.26 * m~total~
+
+The average leverage ratio of the overleveraged virtual stakers
+is _0.63 / 0.26 = 2.42_.
+If Mallory only leaves out the virtual stakers whose stake sits unused,
+the effective overleverage ratio of the other virtual stakers
+is _1 / 0.63 = 1.59_.
+
+==== Overleverage attack mitigation
+As the ALR increases, the viability of overleverage attacks decreases.
+An OR of 2 is much easier to achieve with an ALR of 1,
+where a minimum staker needs to join 2 operations,
+than with an ALR of 10 where 20 operations would be required.
+In the latter case only 0.35% of minimum stakers would have an OR of 2 or more,
+compared to the 26% of the first scenario.
+
+|===
+|ALR |Minimum LR for OR >= 2 |Probability
+
+|1 |2 |0.26
+|2 |4 |0.14
+|3 |6 |0.084
+|4 |8 |0.051
+|5 |10 |0.032
+|10 |20 |0.0035
+|===
+
+A lower ALR also provides protection from overleverage attacks,
+as the fraction of used stake held by overleveraged virtual stakers decreases:
+
+|===
+|ALR |P(1, ALR) |P~over~(1, ALR) |Overleveraged stake |Average overleverage
+
+|0.5 |0.30 |0.090 |0.4 |2.22
+|0.4 |0.27 |0.062 |0.33 |2.10
+|0.25 |0.19 |0.027 |0.24 |2.22
+|0.1 |0.090 |0.0047 |0.1 |2.12
+|===
+
+While maintaining a low ALR is not viable for a successful system,
+it is possible to get the benefits of a high ALR with a lower DR
+by requiring a higher minimum stake.
+If the minimum stake is some multiple _X_ of the maximum penalty,
+the relationship of _nP_ and _ALR_ becomes _ALR = nP / X_.
+When _ALR >= 1_, this gives an effective average leverage ratio
+of _ALR * X_ for the probability distribution of overleverage ratios.
+When _ALR < 1_, the overleverage ratio becomes effectively _UR / X_.
+Even a small multiplier of _X = 3 ~ 5_
+has a dramatic effect in reducing overleverage attack risk.
