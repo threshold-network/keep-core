@@ -1,0 +1,261 @@
+:toc: macro
+
+= RFC 10: Punishing invalid signature shares
+
+.DRAFT
+****
+NOTE: This RFC is in draft form. It has not yet been approved for
+implementation.
+****
+
+:icons: font
+:numbered:
+toc::[]
+
+== Background
+
+If signature shares aren't verified,
+broadcasting invalid shares can serve as a DOS attack vector.
+If signature shares are verified
+before reconstructing the threshold signature,
+and invalid signature shares rejected,
+the major DOS attack vector is closed.
+It is possible to additionally validate signature shares on-chain
+and thus punish operators who broadcast invalid shares.
+
+Without on-chain verification and punishment,
+operators can broadcast invalid shares to others without consequences.
+While broadcasting invalid shares doesn't present a DOS attack opportunity
+when operators validate the signature shares they receive from others
+and drop invalid shares,
+it is generally undesirable to leave opportunities for nuisance misbehavior.
+
+== Proposal
+
+When an operator receives invalid signature shares
+from another member in a signing group,
+they should prepare a proof of misbehavior
+and publish it on-chain
+so the misbehaving operator can be punished.
+
+When a group is created,
+a merkle root of each member's individual public keys
+is stored on-chain.
+The merkle root is used for validating proofs of misbehavior,
+and it has other potential uses later.
+
+=== Goal
+
+To incentivize operators to follow the protocol precisely
+by punishing those who broadcast invalid threshold signature shares to others.
+
+=== Terminology
+
+`P1`:: The generator point for the BLS elliptic curve
+
+`X_k`:: The group private key of `Group_k`
+
+`Y_k`:: The group public key: `Y_k = P1 * X_k`
+
+`Entry_e`:: The entry matching the entry identifier `e`
+
+`Input_e`:: The input for generating the new entry:
+`Entry_e = Input_e * X`
+
+`x_i`:: The individual private key of `P_i`
+
+`y_i`:: The individual public key of `P_i`: `y_i = P1 * x_i`
+
+`Share_i`:: The signature share by `P_i`: `Share_i = Input_e * x_i`
+
+`N`:: The number of members in a group
+
+`H`:: The number of members required for a honest majority
+
+=== Implementation
+
+Instead of the basic verification from RFC 8,
+signature shares are broadcast and verified
+using a more involved process
+that permits the creation of proofs of misbehavior
+that can be verified on-chain.
+
+The proof of misbehavior is verified
+using a merkle path from the accused participant's individual private key
+to a merkle root of all group members' individual private keys
+stored on-chain as a part of the DKG result.
+
+Using an on-chain merkle root minimizes storage requirements,
+while permitting _O(log(N))_ verification of misbehavior proofs.
+The merkle root is also useful for other purposes.
+
+==== Merkle trees of individual public keys
+
+At the conclusion of DKG for `Group_k`,
+the individual public key `y_i` is calculated
+for each participant `P_i` in `Group_k`.
+The individual public keys are hashed
+and the hashes placed as leaf nodes in a _merkle tree_,
+where each non-leaf node is further labeled
+with the hash of the hashes in its child nodes.
+If the number of members is not equal to _2^n_ for some _n_,
+unused leaf nodes in the tree are filled with the empty string `""`.
+
+The hash at the root of the tree,
+the _merkle root_ of the group's individual public keys,
+is included in the DKG result and published on-chain.
+
+For example, for a group with 7 participants:
+
+----
+H_1 = H(y_1)
+H_2 = H(y_2)
+...
+H_7 = H(y_7)
+
+H_12 = H(H_1, H_2)
+H_34 = H(H_3, H_4)
+H_56 = H(H_5, H_6)
+H_78 = H(H_7, "")
+
+H_1234 = H(H_12, H_34)
+H_5678 = H(H_56, H_78)
+
+H_12345678 = H(H_1234, H_5678)
+----
+
+`H_12345678` is the _merkle root_ of the example case.
+
+The _merkle root_ makes it possible
+to verify any `y_i` on chain as the individual private key of `P_i`,
+by using a _merkle path_ from the _merkle root_ to `y_i`.
+The _merkle path_ contains hashes
+from other branches of the tree,
+so that the _merkle root_ can be calculated.
+In the example with `y_5` this would be
+`[H_6, H_78, H_1234]`:
+
+----
+H_5 = H(y_5)
+H_56 = H(H_5, H_6)
+H_5678 = H(H_56, H_78)
+H_12345678 = H(H_1234, H_5678)
+----
+
+If the obtained _merkle root_ matches the value
+recorded at group creation,
+the provided `y_i` and `i` are valid.
+
+The _merkle path_ for `y_i` from a group of `N` members
+is always of a known length,
+and is consumed in a specific order
+as the positions of the hashes in each branch
+can be calculated from `i`.
+Thus the _merkle path_ can be provided as a simple list of hashes,
+without labels.
+
+==== Verifying signature shares
+
+When `P_j` creates a signature share `Share_i`
+as a member of `Group_k` producing a threshold signature for `Entry_e`,
+the share must be broadcast as a _signature share message_,
+which must contain:
+
+* The entry identifier `e` for this particular entry;
+this is used to prevent replay attacks
+and to retrieve the information of `Group_k`.
+if the message is used in a misbehavior proof.
+* the signature share `Share_j`
+* the member index `j` of the sender `P_j`;
+`P_j` and their _operator ECDSA public key_
+can be identified from `Group_k` and `j`,
+but `P_j` cannot be identified from `Group_k` and the operator key.
+* a signature to the above data,
+using the _operator ECDSA key_ of `P_j`;
+this provides non-repudiability for the misbehavior proof.
+
+When `P_i` receives a _signature share message_ from `P_j`,
+they must verify the following:
+
+* the message is correctly formatted
+* the entry identifier `e` is correct
+* the signature with the _operator ECDSA key_ of `P_j` is valid
+
+If any of the above checks fail,
+the message must be rejected as invalid.
+If the above checks pass,
+the _message_ is valid but `Share_j` may still be invalid.
+
+When `P_i` receives a signature share `Share_j`
+from a valid signature share message broadcast by `P_j`,
+the share can be verified by `blsVerify(Share_j, y_j, Input_e)`.
+If `Share_j` is valid,
+`P_i` can use it for reconstructing the threshold signature.
+If `Share_j` is invalid,
+`P_i` must not use it for reconstructing the entry.
+
+==== Proofs of misbehavior
+
+When `P_i` receives a valid _signature share message_
+(_"message"_ for short from now on)
+from `P_j`, containing an invalid `Share_j`,
+`P_i` should produce and publish a _proof of misbehavior_ (_"proof"_).
+
+The _proof_ must contain:
+
+* The _message_ with the invalid share from `P_j`
+* The individual private key `y_j` of `P_j`,
+used to verify the `Share_j` in the _message_.
+* The _merkle path_ from `y_j` to the _merkle root_ of the group `Group_k`,
+to verify `y_j`.
+* The member index `i` of the tattletale `P_i`,
+used to reward the correct party if the proof is valid.
+It is not necessary to verify the sender,
+as `P_i` is not punished if the proof is invalid.
+
+When the _proof_ is processed on-chain,
+the _message_ is parsed and its elements extracted.
+If the _message_ is incorrectly formatted,
+the processing is aborted.
+
+The _entry identifier_ `e` is used
+to determine the `Group_k` tasked with producing `Entry_e`.
+The _member index_ `j` is used
+to retrieve the _operator ECDSA key_ of `P_j`,
+and the signature on the _message_ is checked.
+If the signature is invalid, processing is aborted.
+
+The _merkle root_ of `Group_k`, `MerkleRoot_k` is retrieved.
+The individual public key `y_j` and the _merkle path_ from the _proof_
+are checked against `MerkleRoot_k`.
+If the merkle path is invalid for the member index `j` from the _message_,
+processing is aborted.
+
+If the merkle path is valid,
+the _signature share_ is checked with `blsVerify(Share_j, y_j, Input_e)`.
+If the share is invalid,
+`P_j` is punished for broadcasting an invalid signature share,
+and `P_i` is rewarded for proving the misbehavior of `P_j`.
+If multiple _proofs of misbehavior_ are presented
+for the same _signature share message_,
+and proofs after the first one must be immediately rejected.
+
+=== Limitations
+
+What are the limitations of this approach?
+
+== Future Work
+
+The inclusion of the merkle root in the on-chain data on signing groups
+enables further improvements in the future.
+The merkle root and on-chain validation of signature shares
+can be used to mitigate lynchpin attacks
+where some actor is preventing an entry from being generated.
+By publishing their signature shares on-chain,
+operators can prove their non-culpability
+for delays in signing or failures to produce a signature altogether.
+
+[bibliography]
+== Related Links
+
+* link:rfc-8-beacon-signature-share-verification.adoc[RFC 8: Beacon signature share verification]
