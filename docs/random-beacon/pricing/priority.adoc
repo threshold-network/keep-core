@@ -1,0 +1,304 @@
+= Bid for priority
+Fees for generating new entries
+are the only source of revenue for the beacon.
+For the economic viability of the beacon,
+it is important that sufficient value can be captured
+to make the beacon independently profitable.
+
+_Bid for Priority (BfP)_ is a pricing model
+which encourages customers to bid against each other,
+by sorting entry requests by the associated bids
+and serving highest bidders fastest.
+Additionally, high bidders enjoy higher stakes
+and thus have more assurance
+against failures to produce entries.
+Scarcity is created primarily
+by having each entry serve only one _callback_.
+
+== Overview
+In _Bid for Priority_,
+requests for new entries are processed in _batches_
+which consist of all requests received in the same block,
+sorted according to the bid amounts.
+Each request has a _priority rank_;
+the highest bidder has a _priority rank_ of 1 (highest),
+the second-highest bidder being 2 (lower than 1, higher than any other),
+and so on.
+The highest-ranking request of each batch
+is called the _top request_ of the batch.
+
+The _top request_ is always served first within the batch.
+Each lower-ranking request can be served
+once the entries for higher-ranking requests of the same batch have been mined.
+
+Optionally, the _top request_ may only be served
+after the _top request_ of the previous batch has been mined.
+Alternatively, a higher-bidding top request can be served
+before the previous, lower-bidding top request,
+but a top request with a lower bid is required to wait.
+
+If the entry fails to be produced,
+or some _Keep operator_ misbehaves in the entry generation,
+the _operator/s_ will be held responsible for the failure.
+When penalties are given out,
+the nominal penalty amount is divided by the _priority rank_
+of the associated request.
+Penalties related to a _top request_ are given out in full;
+penalties for a third-rank request are divided by 3, etc.
+
+The beacon defines a minimum _entry price_
+for generating a new entry.
+_Insufficient bids_ that don't reach the _entry price_
+must be increased by _support bids_
+to be eligible for generating an entry.
+The _entry price_ should be set
+to always cover the gas costs of the beacon;
+including request processing,
+entry generation,
+and signing group creation with DKG;
+and to provide some profit
+to the _Keep operators_ generating the entry for the request.
+When beacon demand is high,
+the entry price should grow higher
+to increase the share of beacon fees
+that goes to operator profits instead of gas fees. 
+
+== Details
+
+=== Requests
+Each request for a new beacon entry
+contains a _bid amount_,
+_callback address_,
+and _callback gas allowance_.
+(Depending on the beacon design,
+a request may also contain other data
+that is not relevant to the pricing model.)
+
+When the request is made,
+it must transfer currency
+equal to the _bid amount + callback gas allowance_
+to the beacon.
+
+The _bid_ is used to pay gas fees and operator rewards,
+while the _callback allowance_ should cover the gas fees
+of calling the provided _callback address_
+with the new entry.
+
+==== Sufficient and insufficient bids
+A request whose _bid amount_ is at least the current _entry price_
+is _sufficient_ for generating a new entry
+as soon as it becomes _eligible_.
+A request whose _bid amount_ is less than the _entry price_
+is _insufficient_.
+A request with an _insufficient_ bid
+requires a _support bid_
+to make the request _eligible_ for generating a beacon entry,
+and is likely to have a very low priority.
+
+==== Support bid
+A _support bid_ is an operation
+which increases the _bid amount_ and/or _callback gas allowance_
+of an existing request.
+
+A _support bid_ is placed
+by identifying the request it supports,
+the _bid support amount_,
+and the _callback support amount_.
+When a support bid is made,
+currency equal to the _bid support + callback support_
+must be transferred to the beacon.
+
+When a valid support bid is received,
+the corresponding request is updated
+by adding the support amounts to the _bid_ and _callback allowance_,
+respectively.
+If the request had an _insufficient_ bid,
+it can become _sufficient_
+if the new _bid amount_ equals or exceeds the _entry price_.
+No reordering of request _priority ranks_ is done;
+if an insufficient-bidding request is preceded
+by other insufficient-bid requests,
+it does not become eligible for a new entry
+by upgrading only the specific request.
+Instead, all requests involved
+must have their bids upgraded by support bids
+for the lower-ranked request to receive an entry.
+
+==== Request expiration (optional)
+If requests are made with an expiration time,
+_insufficient_ bids can be removed from the request pool
+once the expiration time is reached,
+and the _bid amount_ refunded to the requester
+after subtracting transaction fees.
+
+Requests with _sufficient_ bids
+are guaranteed to receive an entry,
+and cannot expire.
+
+=== Batch processing
+Favoring high bidders is a crucial element
+of the plan to capture enough value to make the beacon profitable.
+A higher rank in the bidding
+makes the beacon faster and more reliable
+in responding to the request.
+
+Processing requests as they arrive would be complicated
+and subject to extensive miner manipulation.
+Instead, the requests are processed in _batches_.
+Each _batch_ is the set of requests
+that have been mined in the same block.
+While miners can still choose which requests to include or exclude,
+they cannot reorder transactions that contain requests
+to frontrun the bidding
+without losing transaction fees.
+
+Requests within _batches_ are ordered by their bid amounts.
+The highest-ranked request from each _batch_
+is eligible for a new entry
+either immediately,
+or after the previous _top request_ has been served,
+depending on design choices.
+
+When a request is _served_ by generating a valid new entry,
+it is removed from the _pending requests_
+with the effect that the next-highest request becomes eligible.
+As a consequence,
+each request is competing with other requests within its batch
+(and the top request may be competing with the previous top request).
+
+==== Receiving and batching requests
+_Requests_ are submitted in on-chain transactions.
+When requests are received,
+they are processed to calculate any necessary values
+that rely on information known at the time of the request,
+and stored for further use.
+
+After a block has been mined,
+request transactions processed within that block form a _batch_.
+The requests are ordered by their _bid values_,
+and added to the _pending requests_ from previous batches.
+This, however, is not an active state-modifying operation;
+all necessary information can be calculated statically.
+
+==== Pending requests and eligibility
+_Pending requests_ are arranged by the _batch_ they were received in,
+and requests from the same _batch_ are sorted by their _bid values_.
+The _pending requests_ contain all requests that have been made,
+but haven't been _served_ with a new entry.
+
+The _pending requests_ can be thought of
+as a map of batches to stacks of requests: +
+`pending_requests[batch]: Map[Blockheight -> Stack[Request]]`. +
+The top request of each batch('s stack)
+is _eligible_ for a new entry.
+
+When a request is _served_,
+it is popped from the stack of its batch
+and the next request becomes _eligible_.
+The _priority rank_ of each request remains constant
+even after higher-ranking requests from its batch
+have been served.
+
+==== Serving requests
+Each group that can generate an entry for an _eligible request_
+should proceed to do so.
+Once a valid entry has been produced and mined on-chain,
+the corresponding request is _served_.
+The members of the _signing group_ are rewarded for their contribution
+(or punished if extremely late).
+The request is removed from the pending requests,
+making the next-highest ranking request of the same batch
+eligible in the next block.
+
+=== Entry price
+The _BfP_ pricing requires
+a dynamically calculated minimum price
+for generating beacon entries.
+The _entry price_ must guarantee an adequate _operator profit_
+after accounting for the costs of entry generation
+and signing group selection:
+
+_GasCost~beacon~ = GasCost~entry~ + (GasCost~DKG~ * Frequency~DKG~)_ +
+_Profit~beacon~ = EntryPrice - GasCost~beacon~_
+
+It seems desirable
+that the _entry price_ should not grow significantly
+when the beacon is _uncongested_
+(at most one entry is requested per block);
+instead, the beacon should respond to growing demand
+by generating more entries.
+
+When the beacon is _congested_
+with multiple entries being requested each block,
+the _entry price_ should rise to increase operator profits.
+The exact formula is subject to further research
+but the price could be calculated by
+taking the total number of entries
+generated in the last _X_ blocks,
+applying an _adjustment function_ to this number,
+multiplying the minimum per-entry profit by that result,
+and adding an estimate of the necessary gas fees:
+
+_EntryPrice = (f~adjust~(n~entries~) * MinimumProfit) + GasCost~beacon~_
+
+An example of a potentially suitable adjustment function
+would be: _f~adjust~(n~entries~) = (1 + (n~entries~ / Y))^Z_
+for some _Y_ and _Z_
+(e.g. _Y = X_ and _Z = 1/2_,
+giving the adjustment as
+"the square root of the average number of entries per block plus 1").
+
+== Areas of further research
+
+=== Freeriding
+Because it's effectively impossible to DRM entropy,
+there is little reason why the inevitably public on-chain entries
+could not be used as an efficient entropy source.
+
+If the contract makes entries `private`
+and only provides them to the callbacks,
+it may be sufficient to prevent freeriding on-chain 
+and instead require freeriders
+to parse raw transaction data with separate client software.
+Additionally, entry manipulateability may discourage freeriding
+in some circumstances.
+
+=== Callback pooling
+While _BfP_ limits callbacks to one per entry,
+it is possible to create an external contract
+which lets customers pool their callbacks
+and pay only for one entry.
+
+Callback pooling is mostly limited by
+the amount of gas required for processing the callbacks.
+Within this constraint,
+combining callbacks and splitting the entry fee
+is not unreasonably difficult.
+It is not clear
+what downsides such a scheme would have
+for its users.
+
+The gas limit on callback pooling can be mostly eliminated
+by having two classes of callbacks:
+"privileged" and "unprivileged".
+Privileged callbacks are called immediately
+when the new entry is received,
+while unprivileged callbacks are triggered by separate transactions.
+Unprivileged callbacks can be used
+to construct a commit-reveal scheme
+which defeats any manipulateability by third parties.
+
+=== Manipulateability
+If the requester can manipulate the entry,
+freeriders not using a commit-reveal scheme
+(including all autonomous smart contracts)
+are at risk of having the entry manipulated
+to their disadvantage.
+This could act as an incentive to bid for entries separately.
+
+Autonomous requesters
+have to generate any free inputs
+in some manner.
+This may provide an opportunity
+for third parties to manipulate independent autonomous requests
+by meddling with the data that generates the inputs.

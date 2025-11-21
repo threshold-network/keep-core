@@ -1,0 +1,354 @@
+== Goals and requirements
+For the beacon to be useful,
+it needs to satisfy certain requirements.
+
+The purpose of the beacon is to produce random numbers
+in a decentralized, trustless way.
+
+For a random number to be _trustless_,
+it must be derived from some known value
+using a _verifiable_ and _deterministic_ but _unpredictable_ process.
+It is also desirable for the process to be _reliable_.
+
+Verifiability::
+Verifiability means that for each random number,
+it is possible to tell whether it was generated correctly or not.
+If the process of generating random numbers is not _verifiable_,
+it can be subverted with no recourse
+by submitting invalid numbers.
+
+Determinism::
+For any given input there should be only one valid output.
+If the random numbers are not deterministic,
+the parties generating them could manipulate the outcome.
+
+Unpredictability::
+Unpredictability means that it is impossible to calculate
+the output of the process for some given input,
+except by running the process.
+If the process is not _unpredictable_,
+and some party is able to _front-run_ the process
+to calculate outputs for arbitrary inputs,
+parties able to influence the inputs can gain an advantage.
+
+Reliability::
+Reliability means that it should be difficult
+to prevent the random numbers from being generated.
+The process should be resilient to both
+natural failures and adverse network conditions,
+and targeted adversarial action.
+
+== BLS threshold signatures
+The method chosen for this is _BLS threshold signatures_
+performed by a large _signing groups_ composed of _Keep operators_.
+
+Each _signing group_ has a unique _group secret key_,
+with the corresponding _public key_ published on-chain.
+To generate a random number,
+the _signing group_ is first selected from the available groups
+using some _group selection input_.
+The _signing group_ proceeds to sign some _signing input_
+with its _group secret key_
+to produce a new _beacon entry_.
+
+BLS signatures are _deterministic_;
+for any given _signing group_ and _signing input_,
+there is only one possible _beacon entry_.
+The _beacon entry_ is _verifiable_
+using the _group public key_ and _signing input_.
+
+With _threshold signatures_,
+the _signing group_ is able to produce a signature when required
+as long as a majority of the _signing group's_ members
+are _active_ and perform their part of the process correctly.
+With suitable on-chain incentives,
+the process is expected to be highly _reliable_.
+
+The output is _unpredictable_,
+meaning that no adversary can _front-run_ the beacon
+and produce signatures for arbitrary input,
+as long as the group is not _compromised_ by some adversary
+who knows the _group secret key_.
+This is achieved if a majority of members is _honest_
+and does not let the adversary know their _secret key shares_.
+If the _signing group_ is compromised by some adversary,
+the entries produced by that group
+are no longer _unpredictable_ to the adversary.
+They are, however, unpredictable to all other parties.
+
+Signing group::
+A set of _Keep operators_ assigned to work together
+to produce beacon entries
+
+Group member::
+A _Keep operator_ in some signing group
+
+Group secret key::
+A BLS private key created by the group
+but not known to any single member
+
+Group public key::
+A BLS public key for verifying
+beacon entries produced by the group
+
+Lynchpinned group::
+A group which cannot produce signatures
+without the contribution of a specific actor.
+
+Compromised group::
+A group for which some actor is able to generate unauthorized signatures.
+
+Controlled group::
+A group where a majority of members is controlled by the same actor.
+Controlled groups are always lynchpinned and compromised by the controller,
+but a group which is lynchpinned and compromised by the same actor
+is not necessarily controlled by it.
+
+== Requests
+The beacon produces random numbers in response to _requests_.
+_Requests_ are on-chain operations containing _request parameters_.
+A _request_ may be submitted _directly_ as its own transaction,
+or it may be submitted _autonomously_ by a smart contract
+in response to some transaction.
+
+The _immediate requester_ is the party
+making the request and choosing the _request parameters_.
+The _ultimate requester_ is the party creating the _transaction_
+that leads to the request being made.
+
+With _direct requests_,
+the _immediate_ and _ultimate requester_ are the same party.
+In the case of _autonomous requests_,
+the smart contract is the _immediate requester_.
+
+When a request is made,
+the beacon has access to the _request parameters_
+and on-chain information from the _request environment_.
+
+Request::
+On-chain operation asking for a new beacon entry
+
+Direct request::
+A _request_ made in its own transaction,
+whose sender specifies the _request parameters_
+
+Autonomous request::
+A _request_ where the _request parameters_
+are specified by some smart contract,
+as part of a transaction whose sender is not directly involved
+in making the request
+
+Request parameters::
+Information contained within a _request_
+
+Request environment::
+Information available on-chain when a _request_ is made
+
+Immediate requester::
+The actor or smart contract performing the _request_ call
+
+Ultimate requester::
+The sender of the transaction causing the request to be made
+
+== Signing group selection
+When a new entry is requested,
+the signing group needs to be selected.
+Depending on beacon design,
+this may happen at the time the request is received or later.
+
+The information available
+at the time of signing group selection
+consists of the _request parameters_
+and the _selection environment_.
+These are used to determine the available groups
+and the _selection input_,
+after which the _selection input_ is used
+to choose the signing group.
+
+`available_groups = get_available_groups(selection_env, request_params)` +
+`selection_input = determine_selection_input(selection_env, request_params)` +
+`signing_group = available_groups.choose(selection_input)`
+
+Selection environment::
+Information available on-chain when the _signing group_ is selected
+
+Selection input::
+Information used to select the _signing group_
+
+== Signature generation
+Depending on beacon design,
+the chosen group may be expected
+to produce the new entry immediately or at some later time.
+
+The information available at the time of signing
+consists of the _request parameters_
+and the _signing environment_.
+These are used to determine the _signing input_,
+which the _signing group_ is then expected to sign.
+
+`signing_input = determine_signing_input(signing_env, request_params)` +
+`new_entry = signing_group.bls_sign(signing_input)`
+
+== Information flows
+The beacon can be analyzed as
+deterministic functions over various pieces of information.
+
+`output = function(input_1, input_2, ...)`
+
+=== Ultimate determiner
+In many cases it is useful to consider the _ultimate determiner_
+of various outputs.
+When other inputs are known and fixed on-chain,
+the last actor with freedom to choose their input
+_ultimately determines_ the output of the function.
+
+The _ultimate determiner_ of the output is not necessarily
+the last actor to provide input.
+
+If Alice asks Bob to create a BLS signature for some message,
+using a secret key whose public key is known,
+the _ultimate determiner_ of the signature
+is not Bob but Alice.
+
+`signature = bls_sign(bob.bls_secret_key, message)`
+
+Bob performs the final calculation,
+but there is only one possible outcome.
+If Alice had chosen a different message,
+the signature would be different.
+Thus the signature is _ultimately determined_ by Alice
+by her choice of the message to sign.
+
+If Alice had asked for an ECDSA signature instead,
+the output would have been _ultimately determined_ by Bob
+because ECDSA employs the nonce _k_,
+which Bob is able to choose freely:
+
+`k = bob.generate_nonce()` +
+`signature = ecdsa_sign(bob.ecdsa_secret_key, message, k)`
+
+=== Unpredictably determining
+If the _ultimate determiner_ is not able to calculate the output
+before choosing and publishing their input,
+the output is _unpredictably determined_ by them.
+In the BLS example Alice _unpredictably determines_ the signature
+because only Bob knows
+what outputs different messages would lead to.
+In the ECDSA example the signature is not determined unpredictably,
+because Bob is able to calculate arbitrarily many signatures
+for different values of _k_
+and choose the most favorable one.
+
+=== Partially determining
+If the _ultimate determiner_
+has very little control over the outcome,
+they _partially determine_ it. 
+
+If Bob has two BLS keys,
+and Alice lets him choose which one to sign her message with,
+Bob _partially determines_ the signature.
+Bob is able to choose between the known outcomes of
+`bls_sign(bob.bls_secret_key_1, message)` and
+`bls_sign(bob.bls_secret_key_2, message)`,
+but has no further control over the signature.
+
+If Alice wants either Bob or Carol
+to provide a BLS signature to her message,
+and she lets Bob choose the signer,
+Bob again _partially determines_ the signature.
+In this case Bob is able to choose only between
+the known outcome of `bob.bls_sign(message)`
+and the unknown outcome of `carol.bls_sign(message)`.
+
+Ultimate determiner::
+The last actor to freely choose input for some function
+is the _ultimate determiner_ of its output.
+
+Unpredictably determined::
+An output is _unpredictably determined_
+if the _ultimate determiner_ cannot calculate
+outcomes for different inputs.
+
+Partially determined::
+An output is _partially determined_
+if the _ultimate determiner_ can only choose
+between a small number of alternative outcomes.
+
+=== Ultimate determiners in the beacon
+When designing the beacon,
+who _ultimately determines_ various values
+is one of the most significant questions.
+
+With activist miners,
+any input from outside the _requester_
+is _ultimately determined_ by miners,
+who can include, exclude, and reorder transactions in blocks.
+Other requesters' and third parties' transactions
+can be messed with,
+or miners could create their own transactions
+to manipulate the on-chain environment.
+Miners aren't your friends,
+and thus it seems prudent that beacon entries should be
+_ultimately determined_ by the requester,
+or at most _partially_ or _unpredictably determined_ by the miners.
+
+In some corner cases
+the entries cannot be _ultimately determined_ by the requester.
+With sufficiently pervasive miner censorship
+the beacon would time out
+and a new signing group would have to be selected,
+letting the miners at least _partially determine_ the outcome.
+If a lynchpinned group ends up selected
+the lynchpin party can force the entry to time out,
+again _partially determining_ the outcome.
+
+=== Ultimate determiners with compromised groups
+If no groups are compromised,
+the entries will be _unpredictably determined_
+regardless of the _ultimate determiner_.
+This isn't particularly interesting
+and the beacon should be able to limit the damage
+caused by a small fraction of groups being compromised.
+
+If some groups are compromised,
+the beacon entries will be _unpredictably determined_
+only if their _ultimate determiner_ is not the same party
+who compromised the groups.
+
+If commit-reveal by the requester is used,
+any party that does not collude with the requester
+would only _unpredictably determine_ the entry.
+However, commit-reveal is slow
+and incompatible with autonomous requests.
+
+==== Ultimate determiners in signing group selection
+If the ultimate determiner of the signing group for some new entry
+has compromised at least one group,
+they may be able to ensure that
+the compromised group gets selected for that entry.
+
+As a weaker version,
+the ultimate determiner can favor groups
+they are disprportionately represented in.
+If the signing group is ultimately determined by miners,
+the selection can be biased
+in favor of operators with connections to miners.
+
+==== Ultimate determiners in entry generation
+TODO
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
