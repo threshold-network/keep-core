@@ -58,7 +58,7 @@ var testConfigs = map[string]testConfig{
 			URL:                 "tcp://electrum.blockstream.info:60001",
 			Network:             bitcoin.Testnet,
 			RequestTimeout:      requestTimeout * 2,
-			RequestRetryTimeout: requestRetryTimeout * 2,
+			RequestRetryTimeout: requestRetryTimeout * 6, // allow slower public electrum responses
 		},
 		network: bitcoin.Testnet,
 	},
@@ -67,7 +67,7 @@ var testConfigs = map[string]testConfig{
 			URL:                 "ssl://electrum.blockstream.info:60002",
 			Network:             bitcoin.Testnet,
 			RequestTimeout:      requestTimeout * 2,
-			RequestRetryTimeout: requestRetryTimeout * 2,
+			RequestRetryTimeout: requestRetryTimeout * 6, // allow slower public electrum responses
 		},
 		network: bitcoin.Testnet,
 	},
