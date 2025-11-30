@@ -5,6 +5,7 @@ package ethereum
 
 import (
 	"fmt"
+	"os"
 	"reflect"
 	"testing"
 	"time"
@@ -17,9 +18,12 @@ import (
 // TODO: Include integration test in the CI.
 // To run the tests execute `go test -v -tags=integration ./...`
 
-const ethereumURL = "https://mainnet.infura.io/v3/f41c6e3d505d44c182a5e5adefdaa43f"
-
 func TestBaseChain_GetBlockNumberByTimestamp(t *testing.T) {
+	ethereumURL := os.Getenv("ETHEREUM_MAINNET_RPC_URL")
+	if ethereumURL == "" {
+		t.Skip("ETHEREUM_MAINNET_RPC_URL not set; skipping integration test")
+	}
+
 	client, err := ethclient.Dial(ethereumURL)
 	if err != nil {
 		t.Fatal(err)
