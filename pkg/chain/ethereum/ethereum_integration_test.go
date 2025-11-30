@@ -21,7 +21,7 @@ import (
 func TestBaseChain_GetBlockNumberByTimestamp(t *testing.T) {
 	ethereumURL := os.Getenv("ETHEREUM_MAINNET_RPC_URL")
 	if ethereumURL == "" {
-		t.Skip("ETHEREUM_MAINNET_RPC_URL not set; skipping integration test")
+		t.Fatal("ETHEREUM_MAINNET_RPC_URL not set")
 	}
 
 	client, err := ethclient.Dial(ethereumURL)
