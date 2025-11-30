@@ -291,6 +291,8 @@ func TestGetLatestBlockHeight_Integration(t *testing.T) {
 
 	for testName, testConfig := range testConfigs {
 		t.Run(testName+"_get", func(t *testing.T) {
+			skipTestnetWSS(t, testName, testConfig)
+
 			electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
 			defer cancelCtx()
 
@@ -320,6 +322,8 @@ func TestGetLatestBlockHeight_Integration(t *testing.T) {
 
 	for testName, config := range testConfigs {
 		t.Run(testName+"_compare", func(t *testing.T) {
+			skipTestnetWSS(t, testName, config)
+
 			result := results[config.network.String()][testName]
 			ref := expectedBlockHeightRef[config.network.String()]
 
@@ -584,18 +588,26 @@ func runParallel(t *testing.T, runFunc func(t *testing.T, testConfig testConfig)
 		testConfig := testConfig
 
 		t.Run(testName, func(t *testing.T) {
-		if strings.HasPrefix(testConfig.clientConfig.URL, "wss://electrumx-server.test.tbtc.network:8443") {
-			// TODO(3843): The test WSS endpoint is currently offline/handshake-failing
-			// (sslv3 alert handshake failure), so skip until a healthy host
-			// is restored or replaced.
-			t.Skip("skip electrumx wss tests: test endpoint TLS handshake fails")
-		}
+			skipTestnetWSS(t, testName, testConfig)
 
 			t.Parallel()
 
 			runFunc(t, testConfig)
 		})
 	}
+}
+
+func skipTestnetWSS(t *testing.T, testName string, testConfig testConfig) {
+	if !strings.Contains(testConfig.clientConfig.URL, "electrumx-server.test.tbtc.network") &&
+		!strings.Contains(testName, "electrumx wss") &&
+		!strings.Contains(testName, "electrumx-server.test.tbtc.network") {
+		return
+	}
+
+	// TODO(3843): The test WSS endpoint is currently offline/handshake-failing
+	// (sslv3 alert handshake failure), so skip until a healthy host is restored
+	// or replaced.
+	t.Skip("skip electrumx wss tests: test endpoint TLS handshake fails")
 }
 
 func newTestConnection(t *testing.T, config electrum.Config) (bitcoin.Chain, context.CancelFunc) {
