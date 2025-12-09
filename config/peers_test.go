@@ -18,15 +18,14 @@ func TestResolvePeers(t *testing.T) {
 		"mainnet network": {
 			network: network.Mainnet,
 			expectedPeers: []string{
-				"/dns4/bst-a01.tbtc.boar.network/tcp/5001/ipfs/16Uiu2HAmAmCrLuUmnBgpavU8y8JBUN6jWAQ93JwydZy3ABRyY6wU",
-				"/dns4/bst-b01.tbtc.boar.network/tcp/5001/ipfs/16Uiu2HAm4w5HdJQxBnadGRepaiGfWVvtMzhdAGZVcrf9i71mv69V",
+				"/dns4/keep-validator-0.prod-eks-eu-west-1.staked.cloud/tcp/3919/ipfs/16Uiu2HAm6Fs6Fn71n7PqRmpHMbfMkZUCGYhW5RL81MSMg57AANkZ",
+				"/dns4/keep-validator-1.prod-eks-ap-northeast-2.staked.cloud/tcp/3919/ipfs/16Uiu2HAm5UzZb1TTYBjb2959h4z4VHzjt585SQqZnJPBrDnJuob7",
+				"/dns4/keep-validator-2.prod-eks-eu-north-1.staked.cloud/tcp/3919/ipfs/16Uiu2HAmJvbYNhzY6a8kiG2zzrqXGnYWax7CQTbiMHoAvY4qLvg7",
 			}},
 		"sepolia network": {
 			network: network.Testnet,
 			expectedPeers: []string{
-				"/dns4/bootstrap-0.test.keep.network/tcp/3919/ipfs/16Uiu2HAmCcfVpHwfBKNFbQuhvGuFXHVLQ65gB4sJm7HyrcZuLttH",
-				"/dns4/bootstrap-1.test.keep.network/tcp/3919/ipfs/16Uiu2HAm3eJtyFKAttzJ85NLMromHuRg4yyum3CREMf6CHBBV6KY",
-				"/dns4/bst-a01.test.keep.boar.network/tcp/6001/ipfs/16Uiu2HAmSLDSahiKyTbCNNu8wJmZAsiKF7wuYJ8mogY8ZuAG1jhu",
+				"/dns4/keep-validator-0.eks-ap-northeast-2-secure.staging.staked.cloud/tcp/3919/ipfs/16Uiu2HAm77eSvRq5ioD4J8VFPkq3bJHBEHkssCuiFkgAoABwjo2S",
 			},
 		},
 		"developer network": {
