@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/keep-network/keep-common/pkg/persistence"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/announcer"
@@ -53,10 +54,11 @@ const (
 type node struct {
 	groupParameters *GroupParameters
 
-	chain          Chain
-	btcChain       bitcoin.Chain
-	netProvider    net.Provider
-	walletRegistry *walletRegistry
+	chain           Chain
+	btcChain        bitcoin.Chain
+	netProvider     net.Provider
+	walletRegistry  *walletRegistry
+	metricsRecorder *clientinfo.MetricsRecorder
 
 	// walletDispatcher ensures only one action is executed by a wallet at
 	// a time. All possible activities of a created wallet must be represented
@@ -179,6 +181,7 @@ func newNode(
 		workPersistence,
 		scheduler,
 		node.waitForBlockHeight,
+		nil, // metricsRecorder will be set after node creation
 	)
 
 	return node, nil
@@ -334,9 +337,10 @@ func (n *node) getSigningExecutor(
 		membershipValidator,
 		n.groupParameters,
 		n.protocolLatch,
-		blockCounter.CurrentBlock,
+		n.getCurrentBlockHeight,
 		n.waitForBlockHeight,
 		signingAttemptsLimit,
+		n.metricsRecorder,
 	)
 
 	n.signingExecutors[executorKey] = executor

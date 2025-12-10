@@ -2,11 +2,14 @@ package tbtc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/announcer"
@@ -58,6 +61,7 @@ type signingExecutor struct {
 	// be made by a single signer for the given message. Once the attempts
 	// limit is hit the signer gives up.
 	signingAttemptsLimit uint
+	metricsRecorder      *clientinfo.MetricsRecorder
 }
 
 func newSigningExecutor(
@@ -69,6 +73,7 @@ func newSigningExecutor(
 	getCurrentBlockFn getCurrentBlockFn,
 	waitForBlockFn waitForBlockFn,
 	signingAttemptsLimit uint,
+	metricsRecorder *clientinfo.MetricsRecorder,
 ) *signingExecutor {
 	return &signingExecutor{
 		lock:                 semaphore.NewWeighted(1),
@@ -80,6 +85,7 @@ func newSigningExecutor(
 		getCurrentBlockFn:    getCurrentBlockFn,
 		waitForBlockFn:       waitForBlockFn,
 		signingAttemptsLimit: signingAttemptsLimit,
+		metricsRecorder:      metricsRecorder,
 	}
 }
 
@@ -94,6 +100,7 @@ func (se *signingExecutor) signBatch(
 	messages []*big.Int,
 	startBlock uint64,
 ) ([]*tecdsa.Signature, error) {
+	batchStartTime := time.Now()
 	wallet := se.wallet()
 
 	walletPublicKeyBytes, err := marshalPublicKey(wallet.publicKey)
@@ -158,6 +165,12 @@ func (se *signingExecutor) signBatch(
 
 		signatures[i] = signature
 		endBlocks[i] = endBlock
+	}
+
+	// Record batch signing metrics
+	if se.metricsRecorder != nil {
+		batchDuration := time.Since(batchStartTime)
+		se.metricsRecorder.RecordSigningBatch(len(messages), batchDuration)
 	}
 
 	return signatures, nil
@@ -255,6 +268,7 @@ func (se *signingExecutor) sign(
 				se.waitForBlockFn,
 			)
 
+			signingStartTime := time.Now()
 			loopResult, err := retryLoop.start(
 				loopCtx,
 				se.waitForBlockFn,
@@ -265,6 +279,8 @@ func (se *signingExecutor) sign(
 						zap.Uint64("attemptStartBlock", attempt.startBlock),
 						zap.Uint64("attemptTimeoutBlock", attempt.timeoutBlock),
 					)
+
+					attemptStartTime := time.Now()
 
 					signingAttemptLogger.Infof(
 						"[member:%v] starting signing protocol "+
@@ -310,7 +326,24 @@ func (se *signingExecutor) sign(
 						se.membershipValidator,
 					)
 					if err != nil {
+						// Record failed signing attempt
+						if se.metricsRecorder != nil {
+							attemptDuration := time.Since(attemptStartTime)
+							status := "failure"
+							if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+								status = "timeout"
+								se.metricsRecorder.RecordContextTimeout("signing_execution")
+							}
+							se.metricsRecorder.RecordSigningExecutionDuration(attemptDuration, status)
+							se.metricsRecorder.RecordProtocolError("signing", "execution_failure")
+						}
 						return nil, 0, err
+					}
+
+					// Record successful signing attempt
+					if se.metricsRecorder != nil {
+						attemptDuration := time.Since(attemptStartTime)
+						se.metricsRecorder.RecordSigningExecutionDuration(attemptDuration, "success")
 					}
 
 					endBlock, err := se.getCurrentBlockFn()
@@ -321,6 +354,7 @@ func (se *signingExecutor) sign(
 					return result, endBlock, nil
 				},
 			)
+			signingDuration := time.Since(signingStartTime)
 			if err != nil {
 				// Signer failed so there is no point to hold the loopCtx.
 				// Cancel it regardless of their timeout.
@@ -333,7 +367,20 @@ func (se *signingExecutor) sign(
 					err,
 				)
 
+				// Record failed signing metrics
+				if se.metricsRecorder != nil {
+					se.metricsRecorder.RecordSigningExecutionDuration(signingDuration, "failure")
+					if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+						se.metricsRecorder.RecordOperationTimeout("signing")
+					}
+				}
+
 				return
+			}
+
+			// Record successful signing metrics
+			if se.metricsRecorder != nil {
+				se.metricsRecorder.RecordSigningExecutionDuration(signingDuration, "success")
 			}
 
 			// Just as mentioned in the comment above the definition of loopCtx,

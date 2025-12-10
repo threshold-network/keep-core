@@ -24,7 +24,16 @@ type Config struct {
 type Registry struct {
 	*clientinfo.Registry
 
-	ctx context.Context
+	ctx             context.Context
+	metricsRecorder *MetricsRecorder
+}
+
+// MetricsRecorder returns the metrics recorder for this registry.
+func (r *Registry) MetricsRecorder() *MetricsRecorder {
+	if r.metricsRecorder == nil {
+		r.metricsRecorder = NewMetricsRecorder(r)
+	}
+	return r.metricsRecorder
 }
 
 // Initialize set up the client info registry and enables metrics and
@@ -37,7 +46,11 @@ func Initialize(
 		return nil, false
 	}
 
-	registry := &Registry{clientinfo.NewRegistry(), ctx}
+	registry := &Registry{
+		Registry:        clientinfo.NewRegistry(),
+		ctx:             ctx,
+		metricsRecorder: nil, // Will be initialized lazily via MetricsRecorder()
+	}
 
 	registry.EnableServer(port)
 
