@@ -337,7 +337,7 @@ func (n *node) getSigningExecutor(
 		membershipValidator,
 		n.groupParameters,
 		n.protocolLatch,
-		n.getCurrentBlockHeight,
+		blockCounter.CurrentBlock,
 		n.waitForBlockHeight,
 		signingAttemptsLimit,
 		n.metricsRecorder,
