@@ -103,6 +103,12 @@ func Initialize(
 		return fmt.Errorf("cannot set up TBTC node: [%v]", err)
 	}
 
+	// Set metrics recorder if client info is configured
+	if clientInfo != nil {
+		node.metricsRecorder = clientInfo.MetricsRecorder()
+		node.dkgExecutor.metricsRecorder = node.metricsRecorder
+	}
+
 	err = node.runCoordinationLayer(ctx)
 	if err != nil {
 		return fmt.Errorf("cannot run coordination layer: [%w]", err)

@@ -4,15 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"golang.org/x/exp/maps"
 	"math/big"
 	"sort"
+	"time"
+
+	"golang.org/x/exp/maps"
 
 	"go.uber.org/zap"
 
 	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-common/pkg/persistence"
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/announcer"
@@ -63,7 +66,8 @@ type dkgExecutor struct {
 	// waitForBlockFn is a function used to wait for the given block.
 	waitForBlockFn waitForBlockFn
 
-	tecdsaExecutor *dkg.Executor
+	tecdsaExecutor  *dkg.Executor
+	metricsRecorder *clientinfo.MetricsRecorder
 }
 
 // newDkgExecutor creates a new instance of dkgExecutor struct. There should
@@ -80,6 +84,7 @@ func newDkgExecutor(
 	workPersistence persistence.BasicHandle,
 	scheduler *generator.Scheduler,
 	waitForBlockFn waitForBlockFn,
+	metricsRecorder *clientinfo.MetricsRecorder,
 ) *dkgExecutor {
 	tecdsaExecutor := dkg.NewExecutor(
 		logger,
@@ -102,6 +107,7 @@ func newDkgExecutor(
 		protocolLatch:   protocolLatch,
 		tecdsaExecutor:  tecdsaExecutor,
 		waitForBlockFn:  waitForBlockFn,
+		metricsRecorder: metricsRecorder,
 	}
 }
 
@@ -330,6 +336,7 @@ func (de *dkgExecutor) generateSigningGroup(
 				dkgAttemptsLimit,
 			)
 
+			startTime := time.Now()
 			result, err := retryLoop.start(
 				ctx,
 				de.waitForBlockFn,
@@ -340,13 +347,26 @@ func (de *dkgExecutor) generateSigningGroup(
 						zap.Uint64("attemptTimeoutBlock", attempt.timeoutBlock),
 					)
 
+					attemptStartTime := time.Now()
+					excludedMembersCount := len(attempt.excludedMembersIndexes)
+					actualGroupSize := de.groupParameters.GroupSize - excludedMembersCount
+
 					dkgAttemptLogger.Infof(
 						"[member:%v] scheduled dkg attempt "+
 							"with [%v] group members (excluded: [%v])",
 						memberIndex,
-						de.groupParameters.GroupSize-len(attempt.excludedMembersIndexes),
+						actualGroupSize,
 						attempt.excludedMembersIndexes,
 					)
+
+					// Record DKG attempt retry metrics
+					if de.metricsRecorder != nil {
+						de.metricsRecorder.RecordDKGAttemptRetry(
+							int(attempt.number),
+							actualGroupSize,
+							excludedMembersCount,
+						)
+					}
 
 					// Set up the attempt timeout signal.
 					attemptCtx, _ := withCancelOnBlock(
@@ -381,12 +401,34 @@ func (de *dkgExecutor) generateSigningGroup(
 							err,
 						)
 
+						// Record failed attempt metrics
+						if de.metricsRecorder != nil {
+							de.metricsRecorder.RecordDKGExecutionDuration(
+								time.Since(attemptStartTime),
+								"failure",
+							)
+							if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+								de.metricsRecorder.RecordContextTimeout("dkg_execution")
+							} else {
+								de.metricsRecorder.RecordProtocolError("dkg", "execution_failure")
+							}
+						}
+
 						return nil, err
+					}
+
+					// Record successful attempt metrics
+					if de.metricsRecorder != nil {
+						de.metricsRecorder.RecordDKGExecutionDuration(
+							time.Since(attemptStartTime),
+							"success",
+						)
 					}
 
 					return result, nil
 				},
 			)
+			dkgDuration := time.Since(startTime)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
 					dkgLogger.Infof(
@@ -394,6 +436,10 @@ func (de *dkgExecutor) generateSigningGroup(
 							"aborting DKG protocol execution",
 						memberIndex,
 					)
+					if de.metricsRecorder != nil {
+						de.metricsRecorder.RecordDKGExecutionDuration(dkgDuration, "canceled")
+						de.metricsRecorder.RecordContextTimeout("dkg_execution")
+					}
 					return
 				}
 
@@ -402,7 +448,18 @@ func (de *dkgExecutor) generateSigningGroup(
 					memberIndex,
 					err,
 				)
+				if de.metricsRecorder != nil {
+					de.metricsRecorder.RecordDKGExecutionDuration(dkgDuration, "failure")
+					if errors.Is(err, context.DeadlineExceeded) {
+						de.metricsRecorder.RecordOperationTimeout("dkg")
+					}
+				}
 				return
+			}
+
+			// Record successful DKG execution
+			if de.metricsRecorder != nil {
+				de.metricsRecorder.RecordDKGExecutionDuration(dkgDuration, "success")
 			}
 
 			signer, err := de.registerSigner(
