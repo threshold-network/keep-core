@@ -59,9 +59,6 @@ contract WalletRegistry is
     ///         `_maliciousDkgResultSlashingAmount`.
     uint96 internal _maliciousDkgResultSlashingAmount;
 
-
-    
-
     /// @notice Percentage of the staking contract malicious behavior
     ///         notification reward which will be transferred to the notifier
     ///         reporting about a malicious DKG result. Notifiers are rewarded
