@@ -10,7 +10,7 @@ commonLabels:
 
 images:
   - name: keep-maintainer
-    newName: keepnetwork/keep-client
+    newName: thresholdnetwork/keep-client
     newTag: v2.1.0
 
 configMapGenerator:

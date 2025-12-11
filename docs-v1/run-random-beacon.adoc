@@ -267,13 +267,13 @@ See the link:development#building[building] section in our developer docs.
 
 === Get Image
 
-https://hub.docker.com/r/keepnetwork/keep-client/
+https://hub.docker.com/r/thresholdnetwork/keep-client/
 
 *Latest:*
-`docker pull keepnetwork/keep-client`
+`docker pull thresholdnetwork/keep-client`
 
 *Tag:*
-`docker pull keepnetwork/keep-client:<tag-version>`
+`docker pull thresholdnetwork/keep-client:<tag-version>`
 
 === Run Image
 This is a sample run command for illustration purposes only.
@@ -293,7 +293,7 @@ docker run -d \
 --log-opt max-size=100m \
 --log-opt max-file=3 \
 -p 3919:3919 \
-keepnetwork/keep-client:<version> --config /mnt/keep-client/config/keep-client-config.toml start
+thresholdnetwork/keep-client:<version> --config /mnt/keep-client/config/keep-client-config.toml start
 ----
 
 == Deployment Considerations
