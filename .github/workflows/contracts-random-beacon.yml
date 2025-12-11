@@ -1,5 +1,9 @@
 name: Solidity Random Beacon
 
+permissions:
+  contents: read
+  pull-requests: read
+
 on:
   schedule:
     - cron: "0 0 * * *"
@@ -45,6 +49,8 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
 
       - uses: dorny/paths-filter@v2
         if: github.event_name == 'pull_request'
@@ -54,6 +60,11 @@ jobs:
             path-filter:
               - './solidity/random-beacon/**'
               - './.github/workflows/contracts-random-beacon.yml'
+
+      - name: Set default path-filter for non-PR events
+        if: github.event_name != 'pull_request'
+        id: filter
+        run: echo "path-filter=true" >> $GITHUB_OUTPUT
 
   contracts-lint:
     needs: contracts-detect-changes
