@@ -29,9 +29,9 @@ docker buildx build \
 docker buildx build \
     --platform=linux/amd64 \
     --target runtime-docker \
-    --tag keepnetwork/keep-client:latest \
-    --tag keepnetwork/keep-client:${VERSION} \
-    --tag keepnetwork/keep-client:${ENVIRONMENT} \
+    --tag thresholdnetwork/keep-client:latest \
+    --tag thresholdnetwork/keep-client:${VERSION} \
+    --tag thresholdnetwork/keep-client:${ENVIRONMENT} \
     --build-arg ENVIRONMENT=${ENVIRONMENT} \
     --build-arg VERSION=${VERSION} \
     --build-arg REVISION=${REVISION} \
