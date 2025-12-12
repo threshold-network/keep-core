@@ -4,7 +4,7 @@ on:
   pull_request:
     branches:
       - main
-  # We intend to use `workflow dispatch` in two different situations/paths:
+  # We intend to use `workflow dispatch` in two different situations/paths
   # 1. If a workflow will be manually dispatched from branch named
   #    `dapp-development`, workflow will deploy the contracts on the selected
   #    testnet and publish them to NPM registry with `dapp-dev-<environment>`
