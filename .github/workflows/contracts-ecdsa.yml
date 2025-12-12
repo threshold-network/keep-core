@@ -1,5 +1,9 @@
 name: Solidity ECDSA
 
+permissions:
+  contents: read
+  pull-requests: read
+
 on:
   schedule:
     - cron: "0 0 * * *"
@@ -41,8 +45,11 @@ jobs:
   contracts-detect-changes:
     runs-on: ubuntu-latest
     outputs:
-      path-filter: ${{ steps.filter.outputs.path-filter }}
+      path-filter: ${{ steps.set-output.outputs.path-filter }}
     steps:
+      - name: Initialize job
+        run: echo "Starting contracts-detect-changes job"
+
       - uses: actions/checkout@v3
         if: github.event_name == 'pull_request'
 
@@ -54,6 +61,20 @@ jobs:
             path-filter:
               - './solidity/ecdsa/**'
               - './.github/workflows/contracts-ecdsa.yml'
+
+      - name: Set path-filter output
+        id: set-output
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "path-filter=true" >> $GITHUB_OUTPUT
+          else
+            FILTER_OUTPUT="${{ steps.filter.outputs.path-filter }}"
+            if [ -n "$FILTER_OUTPUT" ] && [ "$FILTER_OUTPUT" != "" ]; then
+              echo "path-filter=$FILTER_OUTPUT" >> $GITHUB_OUTPUT
+            else
+              echo "path-filter=false" >> $GITHUB_OUTPUT
+            fi
+          fi
 
   contracts-lint:
     needs: contracts-detect-changes
