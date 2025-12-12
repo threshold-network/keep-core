@@ -1,0 +1,352 @@
+name: Solidity ECDSA
+
+on:
+  # We intend to use `workflow dispatch` in two different situations/paths:
+  # 1. If a workflow will be manually dispatched from branch named
+  #    `dapp-development`, workflow will deploy the contracts on the selected
+  #    testnet and publish them to NPM registry with `dapp-dev-<environment>`
+  #    suffix and `dapp-development-<environment>` tag. Such packages are meant
+  #    to be used locally by the team developing Threshold Token dApp and may
+  #    contain contracts that have different values from the ones used on
+  #    mainnet.
+  # 2. If a workflow will be manually dispatched from a branch which name is not
+  #    `dapp-development`, the workflow will deploy the contracts on the
+  #    selected testnet and publish them to NPM registry with `<environment>`
+  #    suffix and tag. Such packages will be used later to deploy public
+  #    Threshold Token dApp on a testnet, with contracts resembling those used
+  #    on mainnet.
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment (network) for workflow execution, e.g. `sepolia`"
+        required: true
+      upstream_builds:
+        description: "Upstream builds"
+        required: false
+      upstream_ref:
+        description: "Git reference to checkout (e.g. branch name)"
+        required: false
+        default: "main"
+
+jobs:
+  contracts-detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      path-filter: ${{ steps.set-output.outputs.path-filter }}
+    steps:
+      - name: Set path-filter output
+        id: set-output
+        run: echo "path-filter=true" >> $GITHUB_OUTPUT
+
+  contracts-lint:
+    needs: contracts-detect-changes
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./solidity/ecdsa
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-node@v3
+        with:
+          # Using fixed version, because 18.16 was sometimes causing issues with
+          # artifacts generation during `hardhat compile` - see
+          # https://github.com/NomicFoundation/hardhat/issues/3877
+          node-version: "18.15.0"
+          cache: "yarn"
+          cache-dependency-path: solidity/ecdsa/yarn.lock
+
+      - name: Install dependencies
+        run: yarn install
+
+      - name: Build
+        run: yarn build
+
+      - name: Lint
+        run: yarn lint
+
+  contracts-slither:
+    needs: contracts-detect-changes
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./solidity/ecdsa
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-node@v3
+        with:
+          # Using fixed version, because 18.16 was sometimes causing issues with
+          # artifacts generation during `hardhat compile` - see
+          # https://github.com/NomicFoundation/hardhat/issues/3877
+          node-version: "18.15.0"
+          cache: "yarn"
+          cache-dependency-path: solidity/ecdsa/yarn.lock
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: 3.10.8
+
+      - name: Install Solidity
+        env:
+          SOLC_VERSION: 0.8.9 # according to solidity.version in hardhat.config.ts
+        run: |
+          pip3 install solc-select
+          solc-select install $SOLC_VERSION
+          solc-select use $SOLC_VERSION
+
+      - name: Install Slither
+        env:
+          SLITHER_VERSION: 0.8.3
+        run: pip3 install slither-analyzer==$SLITHER_VERSION
+
+      - name: Install dependencies
+        run: yarn install
+
+      # As a workaround for a slither issue https://github.com/crytic/slither/issues/1140
+      # we disable compilation of dependencies when running slither.
+      - name: Run Slither
+        run: SKIP_DEPENDENCY_COMPILER=true slither .
+
+  contracts-build-and-test:
+    needs: contracts-detect-changes
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./solidity/ecdsa
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-node@v3
+        with:
+          # Using fixed version, because 18.16 was sometimes causing issues with
+          # artifacts generation during `hardhat compile` - see
+          # https://github.com/NomicFoundation/hardhat/issues/3877
+          node-version: "18.15.0"
+          cache: "yarn"
+          cache-dependency-path: solidity/ecdsa/yarn.lock
+
+      - name: Install dependencies
+        run: yarn install
+
+      - name: Build solidity contracts
+        run: yarn build
+
+      - name: Run tests
+        if: github.ref != 'refs/heads/dapp-development'
+        run: yarn test
+
+  contracts-deployment-dry-run:
+    needs: contracts-detect-changes
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./solidity/ecdsa
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-node@v3
+        with:
+          # Using fixed version, because 18.16 was sometimes causing issues with
+          # artifacts generation during `hardhat compile` - see
+          # https://github.com/NomicFoundation/hardhat/issues/3877
+          node-version: "18.15.0"
+          cache: "yarn"
+          cache-dependency-path: solidity/ecdsa/yarn.lock
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Deploy contracts
+        run: yarn deploy:test
+
+      - name: Build Docker Image
+        uses: ./.github/actions/docker-build-push
+        with:
+          imageName: keep-ecdsa-hardhat
+          push: false
+          context: ./solidity/ecdsa
+
+  contracts-deployment-testnet:
+    needs: [contracts-build-and-test]
+    if: |
+      github.event_name == 'workflow_dispatch'
+        && github.ref != 'refs/heads/dapp-development'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./solidity/ecdsa
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-node@v3
+        with:
+          # Using fixed version, because 18.16 was sometimes causing issues with
+          # artifacts generation during `hardhat compile` - see
+          # https://github.com/NomicFoundation/hardhat/issues/3877
+          node-version: "18.15.0"
+          cache: "yarn"
+          cache-dependency-path: solidity/ecdsa/yarn.lock
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Get upstream packages versions
+        uses: keep-network/ci/actions/upstream-builds-query@v2
+        id: upstream-builds-query
+        with:
+          upstream-builds: ${{ github.event.inputs.upstream_builds }}
+          query: |
+            threshold-contracts-version = github.com/threshold-network/solidity-contracts#version
+            random-beacon-version = github.com/keep-network/keep-core/random-beacon#version
+
+      - name: Resolve latest contracts
+        run: |
+          yarn upgrade \
+            @threshold-network/solidity-contracts@${{ steps.upstream-builds-query.outputs.threshold-contracts-version }} \
+            @keep-network/random-beacon@${{ steps.upstream-builds-query.outputs.random-beacon-version }} \
+            @keep-network/sortition-pools
+
+      # TODO: Remove this step. We replace sortition pools for deployment on testnet
+      # with forked contracts that were tweaked to make operators joining the pool
+      # easier. This should never be used outside of the test environment. On
+      # test environment it should be used temporarily only.
+      - name: Use Sortition Pool forked contracts
+        run: |
+          yarn upgrade @keep-network/sortition-pools@github:keep-network/sortition-pools#test-fork
+
+      - name: Configure tenderly
+        env:
+          TENDERLY_TOKEN: ${{ secrets.TENDERLY_TOKEN }}
+        run: ./config_tenderly.sh
+
+      - name: Deploy contracts
+        env:
+          CHAIN_API_URL: ${{ secrets.SEPOLIA_ETH_HOSTNAME_HTTP }}
+          ACCOUNTS_PRIVATE_KEYS: ${{ secrets.TESTNET_ETH_CONTRACT_OWNER_PRIVATE_KEY }}
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+        run: yarn deploy --network ${{ github.event.inputs.environment }}
+
+      - name: Bump up package version
+        id: npm-version-bump
+        uses: keep-network/npm-version-bump@v2
+        with:
+          work-dir: solidity/ecdsa
+          environment: ${{ github.event.inputs.environment }}
+          branch: ${{ github.ref }}
+          commit: ${{ github.sha }}
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access=public --tag ${{ github.event.inputs.environment }} --network=${{ github.event.inputs.environment }}
+
+      - name: Build and Publish Docker image
+        uses: ./.github/actions/docker-build-push
+        with:
+          environment: ${{ github.event.inputs.environment }}
+          imageName: keep-ecdsa-hardhat
+          context: ./solidity/ecdsa
+          push: true
+          gcrJsonKey: ${{ secrets.KEEP_TEST_GCR_JSON_KEY }}
+
+      - name: Notify CI about completion of the workflow
+        uses: keep-network/ci/actions/notify-workflow-completed@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
+        with:
+          module: "github.com/keep-network/keep-core/ecdsa"
+          url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          environment: ${{ github.event.inputs.environment }}
+          upstream_builds: ${{ github.event.inputs.upstream_builds }}
+          upstream_ref: ${{ github.event.inputs.upstream_ref }}
+          version: ${{ steps.npm-version-bump.outputs.version }}
+
+  # This job is responsible for publishing packackes with slightly modified
+  # contracts. The modifications are there to help with the process of testing
+  # some features on the T Token Dashboard. The job starts only if workflow
+  # gets triggered by the `workflow_dispatch` event on the branch called
+  # `dapp-development`.
+  contracts-dapp-development-deployment-testnet:
+    needs: [contracts-build-and-test]
+    if: |
+      github.event_name == 'workflow_dispatch'
+        && github.ref == 'refs/heads/dapp-development'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./solidity/ecdsa
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-node@v3
+        with:
+          # Using fixed version, because 18.16 was sometimes causing issues with
+          # artifacts generation during `hardhat compile` - see
+          # https://github.com/NomicFoundation/hardhat/issues/3877
+          node-version: "18.15.0"
+          cache: "yarn"
+          cache-dependency-path: solidity/ecdsa/yarn.lock
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Get upstream packages versions
+        uses: keep-network/ci/actions/upstream-builds-query@v2
+        id: upstream-builds-query
+        with:
+          upstream-builds: ${{ github.event.inputs.upstream_builds }}
+          query: |
+            threshold-contracts-version = github.com/threshold-network/solidity-contracts#version
+            random-beacon-version = github.com/keep-network/keep-core/random-beacon#version
+
+      - name: Resolve latest contracts
+        run: |
+          yarn upgrade \
+            @threshold-network/solidity-contracts@${{ steps.upstream-builds-query.outputs.threshold-contracts-version }} \
+            @keep-network/random-beacon@${{ steps.upstream-builds-query.outputs.random-beacon-version }} \
+            @keep-network/sortition-pools
+      
+      - name: Deploy contracts
+        env:
+          CHAIN_API_URL: ${{ secrets.SEPOLIA_ETH_HOSTNAME_HTTP }}
+          ACCOUNTS_PRIVATE_KEYS: ${{ secrets.DAPP_DEV_TESTNET_ETH_CONTRACT_OWNER_PRIVATE_KEY }}
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+        run: yarn deploy --network ${{ github.event.inputs.environment }}
+
+      - name: Bump up package version
+        id: npm-version-bump
+        uses: keep-network/npm-version-bump@v2
+        with:
+          work-dir: solidity/ecdsa
+          environment: dapp-dev-${{ github.event.inputs.environment }}
+          branch: ${{ github.ref }}
+          commit: ${{ github.sha }}
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access=public --tag dapp-development-${{ github.event.inputs.environment }} --network=${{ github.event.inputs.environment }}
+
+      - name: Build and Publish Docker image
+        uses: ./.github/actions/docker-build-push
+        with:
+          environment: ${{ github.event.inputs.environment }}
+          imageName: keep-ecdsa-hardhat-dapp-dev
+          context: ./solidity/ecdsa
+          push: true
+          gcrJsonKey: ${{ secrets.KEEP_TEST_GCR_JSON_KEY }}
+
+      - name: Notify CI about completion of the workflow
+        uses: keep-network/ci/actions/notify-workflow-completed@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
+        with:
+          module: "github.com/keep-network/keep-core/ecdsa"
+          url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          environment: ${{ github.event.inputs.environment }}
+          upstream_builds: ${{ github.event.inputs.upstream_builds }}
+          upstream_ref: dapp-development
+          version: ${{ steps.npm-version-bump.outputs.version }}
