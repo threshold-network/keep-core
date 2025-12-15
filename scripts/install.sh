@@ -186,7 +186,8 @@ if [ "$SKIP_DEPLOYMENT" != true ]; then
 
   cd "$TBTC_SOL_PATH"
 
-  yarn install
+  yarn install --ignore-scripts
+  npm rebuild
 
   printf "${LOG_START}Linking threshold-network/solidity-contracts...${LOG_END}"
   yarn link @threshold-network/solidity-contracts
@@ -201,11 +202,32 @@ if [ "$SKIP_DEPLOYMENT" != true ]; then
   yarn build
 
   # deploy tbtc
-  printf "${LOG_START}Deploying tbtc contracts...${LOG_END}"
+  printf "${LOG_START}Deploying tbtc-v2 contracts...${LOG_END}"
   yarn deploy --reset --network $NETWORK
+
+  # Link the package. Replace existing link (see: https://github.com/yarnpkg/yarn/issues/7216)
+  yarn unlink || true && yarn link
   # create export folder
   yarn prepack
 fi
+
+cd $TMP
+printf "${LOG_START}Cloning token-dashboard...${LOG_END}"
+git clone https://github.com/threshold-network/token-dashboard.git
+
+cd "$TMP/token-dashboard"
+
+printf "${LOG_START}Linking threshold-network/solidity-contracts...${LOG_END}"
+yarn link @threshold-network/solidity-contracts
+
+printf "${LOG_START}Linking ecdsa...${LOG_END}"
+yarn link @keep-network/ecdsa 
+
+printf "${LOG_START}Linking random-beacon...${LOG_END}"
+yarn link @keep-network/random-beacon
+
+printf "${LOG_START}Linking tbtc-v2...${LOG_END}"
+yarn link @keep-network/tbtc-v2
 
 if [ "$SKIP_CLIENT_BUILD" = false ]; then
   printf "${LOG_START}Building client...${LOG_END}"
