@@ -15,7 +15,7 @@ docker run --detach \
     --log-opt max-file=3 \
     -p 3919:3919 \
     -p 9601:9601 \
-    keepnetwork/keep-client:latest \
+    thresholdnetwork/keep-client:latest \
     start \
     --ethereum.url $ETHEREUM_WS_URL \
     --ethereum.keyFile /mnt/keep/config/$OPERATOR_KEY_FILE_NAME \
