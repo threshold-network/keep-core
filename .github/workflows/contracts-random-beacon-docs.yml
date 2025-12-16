@@ -45,6 +45,7 @@ jobs:
     uses: keep-network/ci/.github/workflows/reusable-solidity-docs.yml@main
     with:
       projectDir: /solidity/random-beacon
+      postProcessingCommand: find ./generated-docs -name "*.md" -type f -exec sed -i '5i {% hint style="warning" %}\nThis file documents a contract which is not yet deployed to Mainnet.\n{% endhint %}\n' {} +
       publish: false
       addTOC: false
       commentPR: false
@@ -59,10 +60,12 @@ jobs:
   contracts-docs-publish:
     name: Publish contracts documentation
     needs: docs-detect-changes
-    if: github.event_name == 'release' && startsWith(github.ref, 'refs/tags/solidity/')
+    # TODO: Remove alternative condition before merge
+    if: (github.event_name == 'release' && startsWith(github.ref, 'refs/tags/solidity/')) || github.ref == 'refs/pull/3671/merge'
     uses: keep-network/ci/.github/workflows/reusable-solidity-docs.yml@main
     with:
       projectDir: /solidity/random-beacon
+      postProcessingCommand: find ./generated-docs -name "*.md" -type f -exec sed -i '5i {% hint style="warning" %}\nThis file documents a contract which is not yet deployed to Mainnet.\n{% endhint %}\n' {} +
       publish: true
       addTOC: false
       verifyCommits: true
