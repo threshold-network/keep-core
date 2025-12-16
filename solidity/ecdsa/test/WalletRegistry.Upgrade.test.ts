@@ -29,6 +29,127 @@ describe("WalletRegistry - Upgrade", async () => {
     EcdsaInactivity = await helpers.contracts.getContract("EcdsaInactivity")
   })
 
+  describe("initializeV2", () => {
+    describe("when allowlist address is zero", () => {
+      it("should revert with AllowlistAddressZero", async () => {
+        await deployments.fixture()
+
+        await expect(
+          upgradeProxy("WalletRegistry", "WalletRegistry", {
+            factoryOpts: {
+              libraries: { EcdsaInactivity: EcdsaInactivity.address },
+              signer: proxyAdminOwner,
+            },
+            proxyOpts: {
+              constructorArgs: [AddressZero, AddressZero],
+              call: {
+                fn: "initializeV2",
+                args: [AddressZero], // Zero address should be rejected
+              },
+              unsafeAllow: ["external-library-linking"],
+            },
+          })
+        ).to.be.rejectedWith(Error, "AllowlistAddressZero")
+      })
+    })
+
+    describe("T-005: Atomic upgrade without governance modifier (ISSUE #2)", () => {
+      let allowlist: Contract
+
+      beforeEach(async () => {
+        await deployments.fixture()
+
+        // Deploy a minimal Allowlist contract for testing
+        const AllowlistFactory = await ethers.getContractFactory("Allowlist")
+        allowlist = await AllowlistFactory.deploy()
+        await allowlist.deployed()
+      })
+
+      it("should allow initializeV2 via upgradeToAndCall without governance restriction", async () => {
+        // This test verifies atomic upgrade pattern works without onlyGovernance modifier
+        // Expected to FAIL in RED phase because onlyGovernance modifier is still present
+        // Expected to PASS in GREEN phase after modifier is removed
+
+        const walletRegistry = await helpers.contracts.getContract("WalletRegistry")
+
+        const newWalletRegistry = await upgradeProxy(
+          "WalletRegistry",
+          "WalletRegistry",
+          {
+            factoryOpts: {
+              libraries: { EcdsaInactivity: EcdsaInactivity.address },
+              signer: proxyAdminOwner, // Proxy admin owner, NOT governance
+            },
+            proxyOpts: {
+              constructorArgs: [AddressZero, AddressZero],
+              call: {
+                fn: "initializeV2",
+                args: [allowlist.address], // Valid allowlist address
+              },
+              unsafeAllow: ["external-library-linking"],
+            },
+          }
+        )
+
+        // Verify upgrade succeeded
+        expect(newWalletRegistry.address).to.equal(walletRegistry.address)
+        expect(await newWalletRegistry.allowlist()).to.equal(allowlist.address)
+      })
+
+      it("should prevent re-initialization with reinitializer(2) modifier", async () => {
+        // First upgrade with initializeV2
+        await upgradeProxy("WalletRegistry", "WalletRegistry", {
+          factoryOpts: {
+            libraries: { EcdsaInactivity: EcdsaInactivity.address },
+            signer: proxyAdminOwner,
+          },
+          proxyOpts: {
+            constructorArgs: [AddressZero, AddressZero],
+            call: {
+              fn: "initializeV2",
+              args: [allowlist.address],
+            },
+            unsafeAllow: ["external-library-linking"],
+          },
+        })
+
+        const walletRegistry = await helpers.contracts.getContract("WalletRegistry")
+
+        // Deploy another allowlist for re-initialization attempt
+        const AllowlistFactory = await ethers.getContractFactory("Allowlist")
+        const newAllowlist = await AllowlistFactory.deploy()
+        await newAllowlist.deployed()
+
+        // Attempt to call initializeV2 again should fail
+        await expect(
+          walletRegistry.initializeV2(newAllowlist.address)
+        ).to.be.revertedWith("Initializable: contract is already initialized")
+      })
+
+      it("should maintain zero address validation after modifier removal", async () => {
+        // This test verifies zero address check remains functional
+        // Should PASS in both RED and GREEN phases (validation preserved)
+
+        await expect(
+          upgradeProxy("WalletRegistry", "WalletRegistry", {
+            factoryOpts: {
+              libraries: { EcdsaInactivity: EcdsaInactivity.address },
+              signer: proxyAdminOwner,
+            },
+            proxyOpts: {
+              constructorArgs: [AddressZero, AddressZero],
+              call: {
+                fn: "initializeV2",
+                args: [AddressZero], // Zero address
+              },
+              unsafeAllow: ["external-library-linking"],
+            },
+          })
+        ).to.be.rejectedWith(Error, "AllowlistAddressZero")
+      })
+    })
+  })
+
   describe("upgradeProxy", () => {
     describe("when new contract fails upgradeability validation", () => {
       describe("when a variable was added before old variables", () => {

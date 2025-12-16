@@ -1030,7 +1030,7 @@ describe("WalletRegistry - Inactivity", () => {
             1,
             membersIDs
           ) // Initial nonce is `0`.
-        ).to.be.revertedWith("Invalid nonce")
+        ).to.be.revertedWithCustomError(walletRegistry, "InvalidNonce")
       })
     })
 
@@ -1049,7 +1049,7 @@ describe("WalletRegistry - Inactivity", () => {
             0,
             invalidMembersId
           )
-        ).to.be.revertedWith("Invalid group members")
+        ).to.be.revertedWithCustomError(walletRegistry, "InvalidGroupMembers")
       })
     })
   })

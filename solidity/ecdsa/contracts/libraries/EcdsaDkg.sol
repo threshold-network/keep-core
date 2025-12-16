@@ -358,7 +358,7 @@ library EcdsaDkg {
                 block.number >
                 challengePeriodEnd +
                     self.parameters.submitterPrecedencePeriodLength,
-            "Only the DKG result submitter can approve the result at this moment"
+            "Only submitter can approve now"
         );
 
         // Extract misbehaved members identifiers. Misbehaved members indices
@@ -447,24 +447,6 @@ library EcdsaDkg {
         return (maliciousResultHash, maliciousSubmitter);
     }
 
-    /// @notice Due to EIP150, 1/64 of the gas is not forwarded to the call, and
-    ///         will be kept to execute the remaining operations in the function
-    ///         after the call inside the try-catch.
-    ///
-    ///         To ensure there is no way for the caller to manipulate gas limit
-    ///         in such a way that the call inside try-catch fails with out-of-gas
-    ///         and the rest of the function is executed with the remaining
-    ///         1/64 of gas, we require an extra gas amount to be left at the
-    ///         end of the call to the function challenging DKG result and
-    ///         wrapping the call to EcdsaDkgValidator and TokenStaking
-    ///         contracts inside a try-catch.
-    function requireChallengeExtraGas(Data storage self) internal view {
-        require(
-            gasleft() >= self.parameters.resultChallengeExtraGas,
-            "Not enough extra gas left"
-        );
-    }
-
     /// @notice Checks if DKG result is valid for the current DKG.
     /// @param result DKG result.
     /// @return True if the result is valid. If the result is invalid it returns
@@ -480,26 +462,26 @@ library EcdsaDkg {
     }
 
     /// @notice Set setSeedTimeout parameter.
+    /// @dev State validation is performed by the caller to reduce bytecode size
+    ///      by eliminating redundant checks across multiple setter functions.
     function setSeedTimeout(Data storage self, uint256 newSeedTimeout)
         internal
     {
-        require(currentState(self) == State.IDLE, "Current state is not IDLE");
-
-        require(newSeedTimeout > 0, "New value should be greater than zero");
+        require(newSeedTimeout > 0, "Value must be greater than zero");
 
         self.parameters.seedTimeout = newSeedTimeout;
     }
 
     /// @notice Set resultChallengePeriodLength parameter.
+    /// @dev State validation is performed by the caller to reduce bytecode size
+    ///      by eliminating redundant checks across multiple setter functions.
     function setResultChallengePeriodLength(
         Data storage self,
         uint256 newResultChallengePeriodLength
     ) internal {
-        require(currentState(self) == State.IDLE, "Current state is not IDLE");
-
         require(
             newResultChallengePeriodLength > 0,
-            "New value should be greater than zero"
+            "Value must be greater than zero"
         );
 
         self
@@ -508,31 +490,33 @@ library EcdsaDkg {
     }
 
     /// @notice Set resultChallengeExtraGas parameter.
+    /// @dev State validation is performed by the caller to reduce bytecode size
+    ///      by eliminating redundant checks across multiple setter functions.
     function setResultChallengeExtraGas(
         Data storage self,
         uint256 newResultChallengeExtraGas
     ) internal {
-        require(currentState(self) == State.IDLE, "Current state is not IDLE");
-
         self.parameters.resultChallengeExtraGas = newResultChallengeExtraGas;
     }
 
     /// @notice Set resultSubmissionTimeout parameter.
+    /// @dev State validation is performed by the caller to reduce bytecode size
+    ///      by eliminating redundant checks across multiple setter functions.
     function setResultSubmissionTimeout(
         Data storage self,
         uint256 newResultSubmissionTimeout
     ) internal {
-        require(currentState(self) == State.IDLE, "Current state is not IDLE");
-
         require(
             newResultSubmissionTimeout > 0,
-            "New value should be greater than zero"
+            "Value must be greater than zero"
         );
 
         self.parameters.resultSubmissionTimeout = newResultSubmissionTimeout;
     }
 
     /// @notice Set submitterPrecedencePeriodLength parameter.
+    /// @dev This setter retains its state validation check because it requires
+    ///      additional validation logic that compares against resultSubmissionTimeout.
     function setSubmitterPrecedencePeriodLength(
         Data storage self,
         uint256 newSubmitterPrecedencePeriodLength
@@ -542,7 +526,7 @@ library EcdsaDkg {
         require(
             newSubmitterPrecedencePeriodLength <
                 self.parameters.resultSubmissionTimeout,
-            "New value should be less than result submission period length"
+            "Value exceeds result submission timeout"
         );
 
         self

@@ -11,6 +11,7 @@ on:
       - "docs/**"
       - "infrastructure/**"
       - "scripts/**"
+      - "solidity/**"
       - "solidity-v1/**"
       - "token-stakedrop/**"
   pull_request:
@@ -45,7 +46,7 @@ jobs:
         with:
           filters: |
             path-filter:
-              - './!((docs-v1|docs|infrastructure|scripts|solidity-v1|token-stakedrop)/**)'
+              - './!((docs-v1|docs|infrastructure|scripts|solidity|solidity-v1|token-stakedrop)/**)'
 
   electrum-integration-detect-changes:
     runs-on: ubuntu-latest
@@ -123,7 +124,7 @@ jobs:
           docker save --output /tmp/go-build-env-image.tar go-build-env
 
       - name: Upload Docker Build Image
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: go-build-env-image
           path: /tmp/go-build-env-image.tar
@@ -189,7 +190,7 @@ jobs:
           context: .
 
       - name: Archive Client Binaries
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: binaries
           path: |
@@ -309,7 +310,7 @@ jobs:
         uses: docker/setup-buildx-action@v2
 
       - name: Download Docker Build Image
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: go-build-env-image
           path: /tmp

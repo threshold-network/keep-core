@@ -43,3 +43,4 @@ export default func
 
 func.tags = ["Allowlist"]
 func.dependencies = ["WalletRegistry"]
+func.id = "deploy_allowlist"
