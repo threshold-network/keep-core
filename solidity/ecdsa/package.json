@@ -29,7 +29,7 @@
     "build": "hardhat compile",
     "test": "USE_EXTERNAL_DEPLOY=true TEST_USE_STUBS_ECDSA=true hardhat test",
     "deploy": "hardhat deploy --export export.json",
-    "deploy:test": "USE_EXTERNAL_DEPLOY=true TEST_USE_STUBS_ECDSA=true hardhat deploy",
+    "deploy:local": "USE_EXTERNAL_DEPLOY=true hardhat deploy",
     "prepack": "tsc -p tsconfig.export.json && hardhat export-artifacts --including-no-public-functions export/artifacts",
     "prepublishOnly": "hardhat prepare-artifacts --network $npm_config_network"
   },

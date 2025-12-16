@@ -161,7 +161,7 @@ jobs:
         run: yarn install --frozen-lockfile
 
       - name: Deploy contracts
-        run: yarn deploy:test
+        run: yarn deploy:local
 
       - name: Build Docker Image
         uses: ./.github/actions/docker-build-push

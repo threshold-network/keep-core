@@ -18,7 +18,7 @@
     "build": "hardhat compile",
     "test": "hardhat check-accounts-count && USE_EXTERNAL_DEPLOY=true TEST_USE_STUBS_BEACON=true hardhat test",
     "deploy": "hardhat deploy --export export.json",
-    "deploy:test": "USE_EXTERNAL_DEPLOY=true hardhat deploy",
+    "deploy:local": "USE_EXTERNAL_DEPLOY=true hardhat deploy",
     "format": "npm run lint",
     "format:fix": "npm run lint:fix",
     "lint": "npm run lint:eslint && npm run lint:sol && npm run lint:config",
