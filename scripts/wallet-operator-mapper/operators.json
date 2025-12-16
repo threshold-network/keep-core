@@ -1,114 +1,407 @@
 {
+  "metadata": {
+    "description": "Complete operator list for tBTC v2 beta staker consolidation",
+    "source": "threshold_stakers_may_2025.json",
+    "lastUpdated": "2025-12-05",
+    "consolidationProject": "20250809-beta-staker-consolidation"
+  },
   "operators": {
     "keep": [
       {
         "provider": "STAKED",
+        "identification": "Staked",
         "address": "0xf401aae8c639eb1638fd99b90eae8a4c54f9894d",
-        "status": "KEEP"
+        "stakingProvider": "0x16fCc54E027a342F0683263eb43Cd9af1BD72169",
+        "tStake": 38416500,
+        "operatorType": "beta_staker",
+        "status": "KEEP",
+        "notes": "Primary Staked operator"
       },
       {
         "provider": "P2P",
+        "identification": "P2P",
         "address": "0xb074a3b960f29a1448a2dd4de95210ca492c18d4",
-        "status": "KEEP"
+        "stakingProvider": "0xDC09db6e5DA859eDeb7FC7bDCf47545056dC35F7",
+        "tStake": 20000000,
+        "operatorType": "beta_staker",
+        "status": "KEEP",
+        "notes": "Primary P2P operator"
       },
       {
         "provider": "BOAR",
+        "identification": "Boar",
         "address": "0xffb804c2de78576ad011f68a7df63d739b8c8155",
-        "status": "KEEP"
+        "stakingProvider": "0xAAFc71044C2B832dDDFcedb0AE99695B0367dC57",
+        "tStake": 62765213,
+        "operatorType": "beta_staker",
+        "status": "KEEP",
+        "notes": "Primary Boar operator"
       },
       {
         "provider": "NUCO",
+        "identification": "NuCo",
         "address": "0xd7f138ccf194ca2f49c28870b3b5f556b57fb8b7",
-        "status": "KEEP"
+        "stakingProvider": "0x97d065B567cc4543D20dffaa7009f9aDe64d7E26",
+        "tStake": 20000000,
+        "operatorType": "beta_staker",
+        "status": "KEEP",
+        "notes": "Primary NuCo operator"
+      },
+      {
+        "provider": "PROFESSIONAL",
+        "identification": "Colossus Digital",
+        "address": "0xb4c3bc96509f8b172ba9b066ba83f80ddf1df4a8",
+        "stakingProvider": "0x43df8c68a56249CC151dfb3a7E82cC7Fd624cF2a",
+        "tStake": 40000000,
+        "operatorType": "professional",
+        "status": "KEEP",
+        "notes": "NuCo delegated professional operator"
+      },
+      {
+        "provider": "PROFESSIONAL",
+        "identification": "Sub7",
+        "address": "0x516c1024745fb62174fe8b5a4ffb0c428cc695f9",
+        "stakingProvider": "0x885fA88126955D5CFE0170A134e0300B8d3EfF47",
+        "tStake": 30000000,
+        "operatorType": "professional",
+        "status": "KEEP",
+        "notes": "TG delegated professional operator"
+      },
+      {
+        "provider": "PROFESSIONAL",
+        "identification": "Delight Labs",
+        "address": "0xaeda27ab0037986825397da7bc415f2af8ceb458",
+        "stakingProvider": "0x9Aa35dCE841A43693Cde23B86c394E1aEFb61c65",
+        "tStake": 30000000,
+        "operatorType": "professional",
+        "status": "KEEP",
+        "notes": "TG delegated professional operator"
+      },
+      {
+        "provider": "PROFESSIONAL",
+        "identification": "Global Stake",
+        "address": "0xfb7ac2d1ee57b6d8fec1b591bea77dbf04482d99",
+        "stakingProvider": "0x331F6346C4c1bdb4Ef7467056C66250F0Eb8A44f",
+        "tStake": 40000000,
+        "operatorType": "professional",
+        "status": "KEEP",
+        "notes": "NuCo delegated professional operator"
+      },
+      {
+        "provider": "PROFESSIONAL",
+        "identification": "Republic Crypto",
+        "address": "0xd141a4d940347f64610f36035b898e5f48ee1890",
+        "stakingProvider": "0xc54238cac19bB8D57a9Bcdd28C3fdd49d82378D8",
+        "tStake": 40000000,
+        "operatorType": "professional",
+        "status": "KEEP",
+        "notes": "NuCo delegated professional operator"
+      },
+      {
+        "provider": "PROFESSIONAL",
+        "identification": "Kiln",
+        "address": "0xdd2adeaf1662a6bbfaf7ccd87273bea6cbbb4dd8",
+        "stakingProvider": "0xBf40548b6Fd104C3cA9B2F6b2E2383301dB1c023",
+        "tStake": 40000000,
+        "operatorType": "professional",
+        "status": "KEEP",
+        "notes": "NuCo delegated - security/migration rotating to new signer (Sep 2025)"
+      },
+      {
+        "provider": "PROFESSIONAL",
+        "identification": "Ponkila",
+        "address": "0x58cccc6d3a4eb343f5d42264a95254b28b8c10fe",
+        "stakingProvider": "0xedd0C77314f07fCA414B549156A0d9C915B096E9",
+        "tStake": 30000000,
+        "operatorType": "professional",
+        "status": "KEEP",
+        "notes": "TG delegated professional operator"
+      },
+      {
+        "provider": "PROFESSIONAL",
+        "identification": "Liquify",
+        "address": "0x6b7a51a596d6de6fcb860dd2b9a90443cc5ba1a5",
+        "stakingProvider": "0x621074D613Fc938bD9381AB77Ef3609a02432628",
+        "tStake": 40000000,
+        "operatorType": "professional",
+        "status": "KEEP",
+        "notes": "NuCo delegated - NO KEY SHARES (never participated in DKG)"
+      },
+      {
+        "provider": "PROFESSIONAL",
+        "identification": "Stake Capital",
+        "address": "0xc123905fde3de1e7d1a267d2a0249d9b326b60fc",
+        "stakingProvider": "0xB0C9F472b2066691Ab7FEE5b6702c28ab35888b2",
+        "tStake": 40000000,
+        "operatorType": "professional",
+        "status": "KEEP",
+        "notes": "NuCo delegated professional operator"
+      },
+      {
+        "provider": "COMMUNITY",
+        "identification": "Shoegazer",
+        "address": "0xce1041328785c524aa949a53a3d1010571e9d3c3",
+        "stakingProvider": "0xBDC3D611B79349e0b3d63833619875E89388298D",
+        "tStake": 40000000,
+        "operatorType": "community",
+        "status": "KEEP",
+        "notes": "NuCo delegated community operator"
+      },
+      {
+        "provider": "COMMUNITY",
+        "identification": "James Campbell",
+        "address": "0x48bb2b5ad7c31e097a86cdb9e337e6bce97f46ac",
+        "stakingProvider": "0xc9909E3d0B87A1A2eB0f1194Ec5e3694464Ac522",
+        "tStake": 40000000,
+        "operatorType": "community",
+        "status": "KEEP",
+        "notes": "Agoro delegated community operator"
+      },
+      {
+        "provider": "COMMUNITY",
+        "identification": "Evandro Saturnino",
+        "address": "0xb71c49e11048bf3d2bc0bab81252334295dee012",
+        "stakingProvider": "0x8afC0e9F8207975301893452bDeD1e8F2892f953",
+        "tStake": 40000000,
+        "operatorType": "community",
+        "status": "KEEP",
+        "notes": "Agoro delegated community operator"
+      },
+      {
+        "provider": "COMMUNITY",
+        "identification": "The Egg",
+        "address": "0x29a35c3396fe34bd278414d7b30e6e195226778d",
+        "stakingProvider": "0x58d665406Cf0F890daD766389DF879E84cc55671",
+        "tStake": 40000000,
+        "operatorType": "community",
+        "status": "KEEP",
+        "notes": "NuCo delegated community operator"
+      },
+      {
+        "provider": "COMMUNITY",
+        "identification": "0x10003",
+        "address": "0x3e7015749b5a18395e4a33d3190fba70b83c6d24",
+        "stakingProvider": "0x39A2D252769363D070a77fE3ad24b9954e1fB876",
+        "tStake": 40000000,
+        "operatorType": "community",
+        "status": "KEEP",
+        "notes": "Agoro delegated community operator"
+      },
+      {
+        "provider": "COMMUNITY",
+        "identification": "Vict0x",
+        "address": "0x47ba8409089fdb991db511e10b39063b84a83d9d",
+        "stakingProvider": "0xE6C074228932F53C9E50928AD69DB760649A8C4d",
+        "tStake": 40000000,
+        "operatorType": "community",
+        "status": "KEEP",
+        "notes": "Agoro delegated community operator"
+      },
+      {
+        "provider": "COMMUNITY",
+        "identification": "Blitmore",
+        "address": "0x92d59decaf8dae35474fe03756282885661edd1c",
+        "stakingProvider": "0xF2962794EbE69fc88F8dB441c1CD13b9F90B1Fe7",
+        "tStake": 32061176,
+        "operatorType": "community",
+        "status": "KEEP",
+        "notes": "Self-delegated community operator"
+      },
+      {
+        "provider": "COMMUNITY",
+        "identification": "BitFwd (dtbx)",
+        "address": "0x8bbc75caeafa3020298d924a0958a6a783584e21",
+        "stakingProvider": "0x557C836714aFd04f796686b0a50528714B549C74",
+        "tStake": 40000000,
+        "operatorType": "community",
+        "status": "KEEP",
+        "notes": "NuCo delegated - NO KEY SHARES (never participated in DKG)"
       }
     ],
     "disable": [
       {
         "provider": "STAKED",
+        "identification": "Staked",
         "address": "0x7b251041b2445a3517db540d6fc9f7826c583922",
-        "status": "DISABLE"
+        "stakingProvider": "0xCC957f683a7e3093388946d03193Eee10086b900",
+        "tStake": 38416500,
+        "operatorType": "beta_staker",
+        "status": "DISABLE",
+        "notes": "Redundant Staked operator"
       },
       {
         "provider": "STAKED",
+        "identification": "Staked",
         "address": "0xf28b3e1decf9aa2c389685d27f699a6bc6f4cdab",
-        "status": "DISABLE"
+        "stakingProvider": "0xEAE5790C6eE3b6425f39D3Fd33644a7cb90C75A5",
+        "tStake": 38416500,
+        "operatorType": "beta_staker",
+        "status": "DISABLE",
+        "notes": "Redundant Staked operator"
       },
       {
         "provider": "STAKED",
+        "identification": "Staked",
         "address": "0x35a78efe7a7531b4268df011bb2c5e002e20eb8b",
-        "status": "DISABLE"
+        "stakingProvider": "0x02faA4286eF91247f8D09F36618D4694717F76bB",
+        "tStake": 38416500,
+        "operatorType": "beta_staker",
+        "status": "DISABLE",
+        "notes": "Redundant Staked operator"
       },
       {
         "provider": "STAKED",
+        "identification": "Staked",
         "address": "0xabe527adbe374d38deabd5f540da44da971a09a1",
-        "status": "DISABLE"
+        "stakingProvider": "0xBa1Ac67539c09AdDe63335635869c86f8e463514",
+        "tStake": 38416500,
+        "operatorType": "beta_staker",
+        "status": "DISABLE",
+        "notes": "Redundant Staked operator"
       },
       {
         "provider": "STAKED",
+        "identification": "Staked",
         "address": "0x4a1be85bf8eb73e748715bd40926349041427b98",
-        "status": "DISABLE"
+        "stakingProvider": "0xa6E3A08FaE33898fC31C4f6C7a584827D809352D",
+        "tStake": 21342000,
+        "operatorType": "beta_staker",
+        "status": "DISABLE",
+        "notes": "Redundant Staked operator"
       },
       {
         "provider": "P2P",
+        "identification": "P2P",
         "address": "0xb102b1e8b61376d1d4f0bd8f6e4e4bb3cf79b75b",
-        "status": "DISABLE"
+        "stakingProvider": "0xdA08C16C86B78cD56CB10FDc0370EFc549d8638B",
+        "tStake": 36000000,
+        "operatorType": "beta_staker",
+        "status": "DISABLE",
+        "notes": "Redundant P2P operator"
       },
       {
         "provider": "P2P",
+        "identification": "P2P",
         "address": "0x8235b62a2b69b03d577b254d980437702238028c",
-        "status": "DISABLE"
+        "stakingProvider": "0xC0B851DCBf00bA59D8B1f490aF93dEC4275cFFcC",
+        "tStake": 36000000,
+        "operatorType": "beta_staker",
+        "status": "DISABLE",
+        "notes": "Redundant P2P operator"
       },
       {
         "provider": "P2P",
+        "identification": "P2P",
         "address": "0x448386af932b9b433da640d88b9b9fc21af82e0d",
-        "status": "DISABLE"
+        "stakingProvider": "0x372626FF774573E82eb7D4545EE96F68F75aaFF6",
+        "tStake": 36000000,
+        "operatorType": "beta_staker",
+        "status": "DISABLE",
+        "notes": "Redundant P2P operator"
       },
       {
         "provider": "P2P",
+        "identification": "P2P",
         "address": "0xcffd10eb581f659dea37f7a1e8ca6c4193ae44d8",
-        "status": "DISABLE"
+        "stakingProvider": "0xB88A62417eb9e6320AF7620BE0CFBE2dddd435A5",
+        "tStake": 36000000,
+        "operatorType": "beta_staker",
+        "status": "DISABLE",
+        "notes": "Redundant P2P operator"
       },
       {
         "provider": "P2P",
+        "identification": "P2P",
         "address": "0x87a185a640739482824fc718323d6df7ab1192f5",
-        "status": "DISABLE"
+        "stakingProvider": "0xb78F9EFE4F713feEFcAB466d2eE41972a0E45205",
+        "tStake": 36000000,
+        "operatorType": "beta_staker",
+        "status": "DISABLE",
+        "notes": "Redundant P2P operator"
       },
       {
         "provider": "BOAR",
+        "identification": "Boar",
         "address": "0x39dbe14b0b8d3f9d2fc36eb1f58e0a0959fab1ca",
-        "status": "DISABLE"
+        "stakingProvider": "0x6dEE1fd2b29e2214a4f9aB9Ba5f3D17C8Cb56D11",
+        "tStake": 62765213,
+        "operatorType": "beta_staker",
+        "status": "DISABLE",
+        "notes": "Redundant Boar operator"
       },
       {
         "provider": "BOAR",
+        "identification": "Boar",
         "address": "0xae58c689e5846aa1f18bf65e096a47fbca63b82e",
-        "status": "DISABLE"
+        "stakingProvider": "0x5838636dCDd92113998FEcbcDeDf5B0d8bEB4920",
+        "tStake": 62765213,
+        "operatorType": "beta_staker",
+        "status": "DISABLE",
+        "notes": "Redundant Boar operator"
       },
       {
         "provider": "BOAR",
+        "identification": "Boar",
         "address": "0x65a4ebd101a7a8a762eb3f20371f5222e3490eee",
-        "status": "DISABLE"
+        "stakingProvider": "0xa7baCa5A92842689359Fb1782e75D6eFF59152e6",
+        "tStake": 20000000,
+        "operatorType": "beta_staker",
+        "status": "DISABLE",
+        "notes": "Redundant Boar operator"
       },
       {
         "provider": "BOAR",
+        "identification": "Boar",
         "address": "0x909e8c501bc6cd135efb6878577dac89b95f34dc",
-        "status": "DISABLE"
+        "stakingProvider": "0xE4A3492c8b085aB5eDB6FDAE329f172056f6b04e",
+        "tStake": 14120496,
+        "operatorType": "beta_staker",
+        "status": "DISABLE",
+        "notes": "Redundant Boar operator"
       },
       {
         "provider": "BOAR",
+        "identification": "Boar",
         "address": "0xff4cd368f6a9a69d3e082c26414c0f0666b8a02f",
-        "status": "DISABLE"
+        "stakingProvider": "0xcA5Ac1b59796bE580820e9C66d395977d4F7c3C0",
+        "tStake": 20000000,
+        "operatorType": "beta_staker",
+        "status": "DISABLE",
+        "notes": "Redundant Boar operator"
       },
       {
         "provider": "NUCO",
+        "identification": "NuCo",
         "address": "0xb6c7382f67c6866597ff3d8902220f1505bd6825",
-        "status": "DISABLE"
+        "stakingProvider": "0xc1268db05E7bD38BD85b2C3Fef80F8968a2c933A",
+        "tStake": 20000000,
+        "operatorType": "beta_staker",
+        "status": "DISABLE",
+        "notes": "Redundant NuCo operator"
       }
     ]
   },
   "summary": {
-    "totalOperators": 20,
-    "keep": 4,
+    "totalOperators": 37,
+    "keep": 21,
     "disable": 16,
+    "byOperatorType": {
+      "beta_staker": {
+        "total": 20,
+        "keep": 4,
+        "disable": 16
+      },
+      "professional": {
+        "total": 9,
+        "keep": 9,
+        "disable": 0
+      },
+      "community": {
+        "total": 8,
+        "keep": 8,
+        "disable": 0
+      }
+    },
     "byProvider": {
       "STAKED": {
         "keep": 1,
@@ -125,7 +418,20 @@
       "NUCO": {
         "keep": 1,
         "disable": 1
+      },
+      "PROFESSIONAL": {
+        "keep": 9,
+        "disable": 0
+      },
+      "COMMUNITY": {
+        "keep": 8,
+        "disable": 0
       }
-    }
+    },
+    "operatorsWithoutKeyShares": [
+      "0x6b7a51a596d6de6fcb860dd2b9a90443cc5ba1a5",
+      "0x8bbc75caeafa3020298d924a0958a6a783584e21"
+    ],
+    "notes": "Liquify and BitFwd have never participated in DKG - no key shares for existing wallets"
   }
 }

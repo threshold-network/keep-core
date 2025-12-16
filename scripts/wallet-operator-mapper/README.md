@@ -76,6 +76,30 @@ Verifies operator list completeness against CSV data.
 - **Purpose**: Data quality checks
 - **Usage**: Optional validation step
 
+## Utility Scripts
+
+### query-proof-of-funds.js
+Queries ALL tBTC wallets from Bridge contract and their Bitcoin balances.
+- **Requirements**: Archive node RPC + internet (uses mempool.space API)
+- **Runtime**: Several minutes (rate-limited Bitcoin API calls)
+- **Output**: JSON with wallet PKHs, Bitcoin addresses, and balances
+- **Usage**: Generate proof-of-funds reports for audits
+
+### query-sortition-pool.js
+Checks operators from `operators.json` against sortition pool status.
+- **Output**: `sortition-pool-operators.json`
+- **Usage**: Verify which operators are active in the pool
+
+### query-all-pool-operators.js
+Discovers ALL operators in sortition pool by iterating member IDs.
+- **Output**: `pool-operators-complete.json`
+- **Usage**: Find operators not in our known list (completeness check)
+
+### query-all-stakers.js
+Queries all stakers from TokenStaking contract events.
+- **Runtime**: ~1 minute (queries historical events)
+- **Usage**: Verify completeness of staker documentation
+
 ## Configuration Files
 
 ### operators.json ⭐ CRITICAL
