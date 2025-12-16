@@ -400,8 +400,6 @@ github.com/jtolds/gls v4.20.0+incompatible h1:xdiiI2gbIgH/gLH7ADydsJ1uDOEzR8yvV7
 github.com/jtolds/gls v4.20.0+incompatible/go.mod h1:QJZ7F/aHp+rZTRtaJ1ow/lLfFfVYBRgL+9YlvaHOwJU=
 github.com/keep-network/go-electrum v0.0.0-20240206170935-6038cb594daa h1:AKTJr+STc4rP9NcN2ppP9Zft3GbYechFW8q/S8UNQrQ=
 github.com/keep-network/go-electrum v0.0.0-20240206170935-6038cb594daa/go.mod h1:eiMFzdvS+x8Voi0bmiZtVfJ3zMNRUnPNDnhCQR0tudo=
-github.com/keep-network/keep-common v1.7.1-0.20240424094333-bd36cd25bb74 h1:cG2BiQJj6+v86duIAuDd6sPJZqLVWaOPxzt3nWQQaAo=
-github.com/keep-network/keep-common v1.7.1-0.20240424094333-bd36cd25bb74/go.mod h1:OmaZrnZODf6RJ95yUn2kBjy8Z4u2npPJQkSiyimluto=
 github.com/kisielk/errcheck v1.1.0/go.mod h1:EZBBE59ingxPouuu3KfxchcWSUPOHkagtvWXihfKN4Q=
 github.com/kisielk/errcheck v1.2.0/go.mod h1:/BMXB+zMLi60iA8Vv6Ksmxu/1UDYcXs4uQLJ+jE2L00=
 github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI2bnpBCr8=
@@ -719,6 +717,8 @@ github.com/supranational/blst v0.3.11/go.mod h1:jZJtfjgudtNl4en1tzwPIV3KjUnQUvG3
 github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7 h1:epCh84lMvA70Z7CTTCmYQn2CKbY8j86K7/FAIr141uY=
 github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7/go.mod h1:q4W45IWZaF22tdD+VEXcAWRA037jwmWEB5VWYORlTpc=
 github.com/tarm/serial v0.0.0-20180830185346-98f6abe2eb07/go.mod h1:kDXzergiv9cbyO7IOYJZWg1U88JhDg3PB6klq9Hg2pA=
+github.com/threshold-network/keep-common v1.7.1-tlabs.0 h1:E3Qy3yoeA3+9Ybi08Bb1Xm1D2fFxoberQwUjw+UEK8k=
+github.com/threshold-network/keep-common v1.7.1-tlabs.0/go.mod h1:OmaZrnZODf6RJ95yUn2kBjy8Z4u2npPJQkSiyimluto=
 github.com/threshold-network/tss-lib v0.0.0-20230901144531-2e712689cfbe h1:dOKhoYxZjXwFIyGnxgU+Sa1obZPMHRhu6e44oOLkzU4=
 github.com/threshold-network/tss-lib v0.0.0-20230901144531-2e712689cfbe/go.mod h1:o3zAAo7A88ZJnCE1qpjy1hTqPn+GPQlxRsj8soz14UU=
 github.com/tklauser/go-sysconf v0.3.12 h1:0QaGUFOdQaIVdPgfITYzaTegZvdCjmYO52cSFAEVmqU=

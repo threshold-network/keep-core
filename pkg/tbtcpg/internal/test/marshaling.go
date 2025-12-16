@@ -3,6 +3,7 @@ package test
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/keep-network/keep-core/pkg/tbtcpg"
 	"math/big"
@@ -273,7 +274,9 @@ func (psts *ProposeSweepTestScenario) UnmarshalJSON(data []byte) error {
 
 	// Unmarshal expected error
 	if len(unmarshaled.ExpectedErr) > 0 {
-		psts.ExpectedErr = fmt.Errorf(unmarshaled.ExpectedErr)
+		// fmt.Errorf requires a constant format string; ExpectedErr is a
+		// plain string so use errors.New to avoid formatting interpretation.
+		psts.ExpectedErr = errors.New(unmarshaled.ExpectedErr)
 	}
 
 	return nil

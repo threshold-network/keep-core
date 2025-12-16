@@ -321,8 +321,11 @@ jobs:
           docker load --input /tmp/go-build-env-image.tar
 
       - name: Run Go Integration Tests
+        env:
+          ETHEREUM_MAINNET_RPC_URL: ${{ secrets.ETHEREUM_MAINNET_RPC_URL }}
         run: |
           docker run \
+            -e ETHEREUM_MAINNET_RPC_URL \
             --workdir /go/src/github.com/keep-network/keep-core \
             go-build-env \
             gotestsum -- -timeout 20m -tags=integration ./...
