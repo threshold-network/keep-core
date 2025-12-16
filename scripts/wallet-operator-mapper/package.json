@@ -1,0 +1,26 @@
+{
+  "name": "wallet-operator-mapper",
+  "version": "1.0.0",
+  "description": "Query Ethereum to map tBTC wallets to operators",
+  "main": "query-wallets.js",
+  "scripts": {
+    "query": "node query-wallets.js",
+    "test": "node query-wallets.js --dry-run"
+  },
+  "keywords": [
+    "tbtc",
+    "wallet",
+    "operator",
+    "ethereum",
+    "threshold"
+  ],
+  "author": "Leonardo Saturnino",
+  "license": "MIT",
+  "dependencies": {
+    "ethers": "^6.13.4",
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

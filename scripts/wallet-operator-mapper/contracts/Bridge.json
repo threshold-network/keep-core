@@ -1,0 +1,71 @@
+{
+  "contractAddress": "0x5e4861a80B55f035D899f66772117F00FA0E8e7B",
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "bytes20",
+          "name": "walletPubKeyHash",
+          "type": "bytes20"
+        }
+      ],
+      "name": "wallets",
+      "outputs": [
+        {
+          "components": [
+            {
+              "internalType": "bytes32",
+              "name": "ecdsaWalletID",
+              "type": "bytes32"
+            },
+            {
+              "internalType": "bytes32",
+              "name": "mainUtxoHash",
+              "type": "bytes32"
+            },
+            {
+              "internalType": "uint64",
+              "name": "pendingRedemptionsValue",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint32",
+              "name": "createdAt",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "movingFundsRequestedAt",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "closingStartedAt",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "pendingMovedFundsSweepRequestsCount",
+              "type": "uint32"
+            },
+            {
+              "internalType": "enum Wallets.WalletState",
+              "name": "state",
+              "type": "uint8"
+            },
+            {
+              "internalType": "bytes32",
+              "name": "movingFundsTargetWalletsCommitmentHash",
+              "type": "bytes32"
+            }
+          ],
+          "internalType": "struct Wallets.Wallet",
+          "name": "",
+          "type": "tuple"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ]
+}
