@@ -295,6 +295,13 @@ type coordinationExecutor struct {
 	protocolLatch       *generator.ProtocolLatch
 
 	waitForBlockFn waitForBlockFn
+
+	// metricsRecorder is optional and used for recording performance metrics
+	metricsRecorder interface {
+		IncrementCounter(name string, value float64)
+		SetGauge(name string, value float64)
+		RecordDuration(name string, duration time.Duration)
+	}
 }
 
 // newCoordinationExecutor creates a new coordination executor for the
@@ -363,6 +370,8 @@ func (ce *coordinationExecutor) coordinate(
 
 	execLogger.Info("starting coordination")
 
+	startTime := time.Now()
+
 	seed, err := ce.getSeed(window.coordinationBlock)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute coordination seed: [%v]", err)
@@ -411,6 +420,10 @@ func (ce *coordinationExecutor) coordinate(
 			// no point to keep the context active as retransmissions do not
 			// occur anyway.
 			cancelCtx()
+			if ce.metricsRecorder != nil {
+				ce.metricsRecorder.IncrementCounter("coordination_failed_total", 1)
+				ce.metricsRecorder.RecordDuration("coordination_duration_seconds", time.Since(startTime))
+			}
 			return nil, fmt.Errorf(
 				"failed to execute leader's routine: [%v]",
 				err,
@@ -431,6 +444,10 @@ func (ce *coordinationExecutor) coordinate(
 			append(actionsChecklist, ActionNoop),
 		)
 		if err != nil {
+			if ce.metricsRecorder != nil {
+				ce.metricsRecorder.IncrementCounter("coordination_failed_total", 1)
+				ce.metricsRecorder.RecordDuration("coordination_duration_seconds", time.Since(startTime))
+			}
 			return nil, fmt.Errorf(
 				"failed to execute follower's routine: [%v]",
 				err,
@@ -459,7 +476,21 @@ func (ce *coordinationExecutor) coordinate(
 
 	execLogger.Infof("coordination completed with result: [%s]", result)
 
+	// Record successful coordination metrics
+	if ce.metricsRecorder != nil {
+		ce.metricsRecorder.RecordDuration("coordination_duration_seconds", time.Since(startTime))
+	}
+
 	return result, nil
+}
+
+// setMetricsRecorder sets the metrics recorder for the coordination executor.
+func (ce *coordinationExecutor) setMetricsRecorder(recorder interface {
+	IncrementCounter(name string, value float64)
+	SetGauge(name string, value float64)
+	RecordDuration(name string, duration time.Duration)
+}) {
+	ce.metricsRecorder = recorder
 }
 
 // getSeed computes the coordination seed for the given coordination window.

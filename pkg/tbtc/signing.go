@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
@@ -58,6 +59,13 @@ type signingExecutor struct {
 	// be made by a single signer for the given message. Once the attempts
 	// limit is hit the signer gives up.
 	signingAttemptsLimit uint
+
+	// metricsRecorder is optional and used for recording performance metrics
+	metricsRecorder interface {
+		IncrementCounter(name string, value float64)
+		SetGauge(name string, value float64)
+		RecordDuration(name string, duration time.Duration)
+	}
 }
 
 func newSigningExecutor(
@@ -147,6 +155,7 @@ func (se *signingExecutor) signBatch(
 
 		signature, _, endBlock, err := se.sign(ctx, message, signingStartBlock)
 		if err != nil {
+			// Error metrics are already recorded in sign() method
 			return nil, err
 		}
 
@@ -179,6 +188,12 @@ func (se *signingExecutor) sign(
 		return nil, nil, 0, errSigningExecutorBusy
 	}
 	defer se.lock.Release(1)
+
+	startTime := time.Now()
+
+	if se.metricsRecorder != nil {
+		se.metricsRecorder.IncrementCounter("signing_operations_total", 1)
+	}
 
 	wallet := se.wallet()
 
@@ -333,6 +348,10 @@ func (se *signingExecutor) sign(
 					err,
 				)
 
+				// Note: We don't record failure metrics here because the failure
+				// is only for one signer. The overall signing operation failure
+				// is recorded in the select statement below when no outcome is received.
+
 				return
 			}
 
@@ -386,8 +405,17 @@ func (se *signingExecutor) sign(
 	// signer, that means all signers failed and have not produced a signature.
 	select {
 	case outcome := <-signingOutcomeChan:
+		if se.metricsRecorder != nil {
+			se.metricsRecorder.IncrementCounter("signing_success_total", 1)
+			se.metricsRecorder.RecordDuration("signing_duration_seconds", time.Since(startTime))
+		}
 		return outcome.signature, outcome.activityReport, outcome.endBlock, nil
 	default:
+		if se.metricsRecorder != nil {
+			se.metricsRecorder.IncrementCounter("signing_failed_total", 1)
+			se.metricsRecorder.IncrementCounter("signing_timeouts_total", 1)
+			se.metricsRecorder.RecordDuration("signing_duration_seconds", time.Since(startTime))
+		}
 		return nil, nil, 0, fmt.Errorf("all signers failed")
 	}
 }
@@ -396,4 +424,13 @@ func (se *signingExecutor) wallet() wallet {
 	// All signers belong to one wallet. Take that wallet from the
 	// first signer.
 	return se.signers[0].wallet
+}
+
+// setMetricsRecorder sets the metrics recorder for the signing executor.
+func (se *signingExecutor) setMetricsRecorder(recorder interface {
+	IncrementCounter(name string, value float64)
+	SetGauge(name string, value float64)
+	RecordDuration(name string, duration time.Duration)
+}) {
+	se.metricsRecorder = recorder
 }

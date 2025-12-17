@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/keep-network/keep-core/pkg/tbtcpg"
 
 	"github.com/keep-network/keep-common/pkg/persistence"
@@ -86,6 +88,22 @@ func start(cmd *cobra.Command) error {
 		signing,
 		blockCounter,
 	)
+
+	// Wire performance metrics into network provider if available
+	if clientInfoRegistry != nil {
+		perfMetrics := clientinfo.NewPerformanceMetrics(clientInfoRegistry)
+		// Type assert to libp2p provider to set metrics recorder
+		// The provider struct is not exported, so we use interface assertion
+		if setter, ok := netProvider.(interface {
+			SetMetricsRecorder(recorder interface {
+				IncrementCounter(name string, value float64)
+				SetGauge(name string, value float64)
+				RecordDuration(name string, duration time.Duration)
+			})
+		}); ok {
+			setter.SetMetricsRecorder(perfMetrics)
+		}
+	}
 
 	// Initialize beacon and tbtc only for non-bootstrap nodes.
 	// Skip initialization for bootstrap nodes as they are only used for network

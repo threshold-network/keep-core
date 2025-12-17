@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -73,6 +74,13 @@ type channel struct {
 	unmarshalersByType map[string]func() net.TaggedUnmarshaler
 
 	retransmissionTicker *retransmission.Ticker
+
+	// metricsRecorder is optional and used for recording performance metrics
+	metricsRecorder interface {
+		IncrementCounter(name string, value float64)
+		SetGauge(name string, value float64)
+		RecordDuration(name string, duration time.Duration)
+	}
 }
 
 type messageHandler struct {
@@ -239,7 +247,11 @@ func (c *channel) publish(message *pb.BroadcastNetworkMessage) error {
 	c.publisherMutex.Lock()
 	defer c.publisherMutex.Unlock()
 
-	return c.publisher.Publish(context.TODO(), messageBytes)
+	publishErr := c.publisher.Publish(context.TODO(), messageBytes)
+	if publishErr == nil && c.metricsRecorder != nil {
+		c.metricsRecorder.IncrementCounter("message_broadcast_total", 1)
+	}
+	return publishErr
 }
 
 func (c *channel) handleMessages(ctx context.Context) {
@@ -282,6 +294,9 @@ func (c *channel) incomingMessageWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case msg := <-c.incomingMessageQueue:
+			if c.metricsRecorder != nil {
+				c.metricsRecorder.IncrementCounter("message_received_total", 1)
+			}
 			if err := c.processPubsubMessage(msg); err != nil {
 				logger.Error(err)
 			}
@@ -423,4 +438,50 @@ func extractPublicKey(peer peer.ID) (*operator.PublicKey, error) {
 	}
 
 	return networkPublicKeyToOperatorPublicKey(publicKey)
+}
+
+// setMetricsRecorder sets the metrics recorder for the channel and starts
+// periodic queue size monitoring.
+func (c *channel) setMetricsRecorder(recorder interface {
+	IncrementCounter(name string, value float64)
+	SetGauge(name string, value float64)
+	RecordDuration(name string, duration time.Duration)
+}) {
+	c.metricsRecorder = recorder
+	// Start periodic queue size monitoring
+	if recorder != nil {
+		go c.monitorQueueSizes(recorder)
+	}
+}
+
+// monitorQueueSizes periodically records queue sizes as metrics.
+func (c *channel) monitorQueueSizes(recorder interface {
+	SetGauge(name string, value float64)
+}) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Stop monitoring when channel is closed (we'll use a simple ticker for now)
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			// Record incoming message queue size
+			queueSize := float64(len(c.incomingMessageQueue))
+			recorder.SetGauge("incoming_message_queue_size", queueSize)
+
+			// Record message handler queue sizes
+			c.messageHandlersMutex.Lock()
+			for i, handler := range c.messageHandlers {
+				handlerQueueSize := float64(len(handler.channel))
+				recorder.SetGauge("message_handler_queue_size", handlerQueueSize)
+				_ = i // avoid unused variable
+			}
+			c.messageHandlersMutex.Unlock()
+		case <-ctx.Done():
+			return
+		}
+	}
 }
