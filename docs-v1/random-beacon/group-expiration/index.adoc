@@ -202,7 +202,7 @@ removed from the pool for any later outputs).
 If expiration is applied before selection:
 
 - At _T_, _G~i~_ doesn't expire, and is thus eligible for _V~j~_
-- At _T'_, _G~i~_ has expired and is not eligible for _V~j~_. Mallory's goal is achived.
+- At _T'_, _G~i~_ has expired and is not eligible for _V~j~_. Mallory's goal is achieved.
 
 If expiration is applied after selection:
 

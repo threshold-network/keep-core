@@ -533,7 +533,7 @@ reduce costs compared to including them in each delegation agreement.
 If the new contract is found compromised, the recourse is for the _owner_ or
 _operator_ to unstake or for the _panic button_ to be used to halt all
 operations on the compromised contract. Once authorized, a contract is
-technically capable of completely burning or transfering any staked tokens, even
+technically capable of completely burning or transferring any staked tokens, even
 if unstaking has been ordered. If this were not the case it would be possible to
 avoid legitimate penalties.
 

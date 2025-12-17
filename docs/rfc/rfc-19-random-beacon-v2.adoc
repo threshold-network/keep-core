@@ -74,7 +74,7 @@ Once the group submits the result to the chain, a challenge period starts.
 During the challenge period, anyone can notify that the submitted DKG result
 contains group members not selected by the pool. This leads to slashing all
 members who signed the result and the notifier receives 5% from the slashed amount.
-The malicious result is immediatelly discarded.
+The malicious result is immediately discarded.
 The length of the challenge period and slashing amount are governable parameters.
 
 Once the challenge period passes, anyone can unlock the sortition pool and mark
@@ -226,7 +226,7 @@ interface IRandomBeaconConsumer {
 We should extend the timeout for submitting relay entry to give operators more
 time to react. We should extend the time for a single member to become eligible
 from 6 blocks to 10 blocks and make it a governable parameter. 
-After the initial timeout passes (group size multipled by the number of blocks
+After the initial timeout passes (group size multiplied by the number of blocks
 for a member to become eligible to submit relay entry), if no entry was
 provided, all operators in the group should start bleeding and losing their
 stake. The bleeding should increase linearly from 0 to the governable slashing 

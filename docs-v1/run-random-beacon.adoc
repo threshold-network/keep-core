@@ -8,7 +8,7 @@ toc::[]
 
 == System Considerations
 
-The Keep Network expects certain capabilites for each node running on the network.  To help attain
+The Keep Network expects certain capabilities for each node running on the network.  To help attain
 these capabilities consider the following criteria:
 
 - It is paramount that Keep nodes remain available to the Keep Network. We strongly encourage a
@@ -21,7 +21,7 @@ these capabilities consider the following criteria:
 - Recommended machine types by provider:
 
 Your operating environment will ultimately dictate what machine type to go with.  This is
-particulary relevant if you're running a containerized solution where multiple applications
+particularly relevant if you're running a containerized solution where multiple applications
 are sharing VM resources.  The below types are sufficient for running at least one instance of the
 Keep Random Beacon client.
 
@@ -238,7 +238,7 @@ Application configurations are stored in a `.toml` file and passed to the applic
 |Yes
 
 |`AnnouncedAddresses`
-|Multiaddr formatted hostnames or addresses annouced to the
+|Multiaddr formatted hostnames or addresses announced to the
 Keep Network. More on multiaddr format
 https://docs.libp2p.io/reference/glossary/#multiaddr[in the libp2p
 reference].
