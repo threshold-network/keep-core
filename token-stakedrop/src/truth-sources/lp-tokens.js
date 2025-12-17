@@ -281,7 +281,7 @@ export class LPTokenTruthSource extends ITruthSource {
    * function in UniswapV2Pair contract, which produces the same equation as above.
    *
    * References:
-   * Returns in Uniswap: https://uniswap.org/docs/v2/advanced-topics/understanding-returns/
+   * Returns in Uniswap: https://app.uniswap.org/
    * LP minting: https://github.com/Uniswap/uniswap-v2-core/blob/4dd59067c76dea4a0e8e4bfdda41877a6b16dedc/contracts/UniswapV2Pair.sol#L123
    *
    * @param {BN} lpStakerBalance LP amount staked by a staker in a LPRewardsContract
