@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"sync"
+	"time"
 
 	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -111,6 +112,13 @@ type node struct {
 	// proposalGenerator is the implementation of the coordination proposal
 	// generator used by the node.
 	proposalGenerator CoordinationProposalGenerator
+
+	// performanceMetrics is optional and used for recording performance metrics
+	performanceMetrics interface {
+		IncrementCounter(name string, value float64)
+		SetGauge(name string, value float64)
+		RecordDuration(name string, duration time.Duration)
+	}
 }
 
 func newNode(
@@ -182,6 +190,22 @@ func newNode(
 	)
 
 	return node, nil
+}
+
+// setPerformanceMetrics sets the performance metrics recorder for the node
+// and wires it into components that support metrics.
+func (n *node) setPerformanceMetrics(metrics interface {
+	IncrementCounter(name string, value float64)
+	SetGauge(name string, value float64)
+	RecordDuration(name string, duration time.Duration)
+}) {
+	n.performanceMetrics = metrics
+	if n.walletDispatcher != nil {
+		n.walletDispatcher.setMetricsRecorder(metrics)
+	}
+	if n.dkgExecutor != nil {
+		n.dkgExecutor.setMetricsRecorder(metrics)
+	}
 }
 
 // operatorAddress returns the node's operator address.
@@ -339,6 +363,11 @@ func (n *node) getSigningExecutor(
 		signingAttemptsLimit,
 	)
 
+	// Wire metrics recorder if available
+	if n.performanceMetrics != nil {
+		executor.setMetricsRecorder(n.performanceMetrics)
+	}
+
 	n.signingExecutors[executorKey] = executor
 
 	return executor, true, nil
@@ -433,6 +462,11 @@ func (n *node) getCoordinationExecutor(
 		n.protocolLatch,
 		n.waitForBlockHeight,
 	)
+
+	// Wire metrics recorder if available
+	if n.performanceMetrics != nil {
+		executor.setMetricsRecorder(n.performanceMetrics)
+	}
 
 	n.coordinationExecutors[executorKey] = executor
 
@@ -934,6 +968,11 @@ func (n *node) runCoordinationLayer(
 	// Prepare a callback function that will be called every time a new
 	// coordination window is detected.
 	onWindowFn := func(window *coordinationWindow) {
+		// Track coordination window detection
+		if n.performanceMetrics != nil {
+			n.performanceMetrics.IncrementCounter("coordination_windows_detected_total", 1)
+		}
+
 		// Fetch all wallets controlled by the node. It is important to
 		// get the wallets every time the window is triggered as the
 		// node may have started controlling a new wallet in the meantime.
@@ -998,6 +1037,8 @@ func executeCoordinationProcedure(
 
 	procedureLogger.Infof("starting coordination procedure")
 
+	startTime := time.Now()
+
 	executor, ok, err := node.getCoordinationExecutor(walletPublicKey)
 	if err != nil {
 		procedureLogger.Errorf("cannot get coordination executor: [%v]", err)
@@ -1015,6 +1056,10 @@ func executeCoordinationProcedure(
 	result, err := executor.coordinate(window)
 	if err != nil {
 		procedureLogger.Errorf("coordination procedure failed: [%v]", err)
+		if node.performanceMetrics != nil {
+			node.performanceMetrics.IncrementCounter("coordination_failed_total", 1)
+			node.performanceMetrics.RecordDuration("coordination_duration_seconds", time.Since(startTime))
+		}
 		return nil, false
 	}
 
@@ -1022,6 +1067,12 @@ func executeCoordinationProcedure(
 		"coordination procedure finished successfully with result [%s]",
 		result,
 	)
+
+	// Record successful coordination procedure
+	if node.performanceMetrics != nil {
+		node.performanceMetrics.IncrementCounter("coordination_procedures_executed_total", 1)
+		node.performanceMetrics.RecordDuration("coordination_duration_seconds", time.Since(startTime))
+	}
 
 	return result, true
 }

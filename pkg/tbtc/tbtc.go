@@ -120,6 +120,10 @@ func Initialize(
 				},
 			},
 		)
+
+		// Initialize performance metrics
+		perfMetrics := clientinfo.NewPerformanceMetrics(clientInfo)
+		node.setPerformanceMetrics(perfMetrics)
 	}
 
 	err = sortition.MonitorPool(
