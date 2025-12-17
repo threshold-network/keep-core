@@ -146,6 +146,21 @@ jobs:
           push: false
           context: .
 
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build multi-platform Runtime Inage
+        if: github.event_name != 'workflow_dispatch'
+        uses: docker/build-push-action@v3
+        with:
+          target: runtime-docker
+          platforms: linux/amd64,linux/arm64
+          labels: |
+            version=${{ env.version }}
+            revision=${{ env.revision }}
+          push: false
+          context: .
+
       - name: Login to Google Container Registry
         if: github.event_name == 'workflow_dispatch'
         uses: docker/login-action@v3
@@ -161,6 +176,29 @@ jobs:
           IMAGE_NAME: "keep-client"
         with:
           target: runtime-docker
+          tags: |
+            ${{ env.GCR_REGISTRY_URL }}/${{ env.GOOGLE_PROJECT_ID }}/${{ env.IMAGE_NAME }}
+            ${{ env.GCR_REGISTRY_URL }}/${{ env.GOOGLE_PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ env.version }}
+            ${{ env.GCR_REGISTRY_URL }}/${{ env.GOOGLE_PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ github.event.inputs.environment }}
+            ${{ env.GCR_REGISTRY_URL }}/${{ env.GOOGLE_PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ env.version }}-${{ github.event.inputs.environment }}
+          labels: |
+            version=${{ env.version }}
+            revision=${{ env.revision }}
+          build-args: |
+            ENVIRONMENT=${{ github.event.inputs.environment }}
+            VERSION=${{ env.version }}
+            REVISION=${{ env.revision }}
+          push: true
+          context: .
+
+      - name: Build and publish multi-platform Docker Runtime Image
+        if: github.event_name == 'workflow_dispatch'
+        uses: docker/build-push-action@v3
+        env:
+          IMAGE_NAME: "keep-client-mp"
+        with:
+          target: runtime-docker
+          platforms: linux/amd64, linux/arm64
           tags: |
             ${{ env.GCR_REGISTRY_URL }}/${{ env.GOOGLE_PROJECT_ID }}/${{ env.IMAGE_NAME }}
             ${{ env.GCR_REGISTRY_URL }}/${{ env.GOOGLE_PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ env.version }}
