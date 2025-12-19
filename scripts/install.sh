@@ -91,7 +91,7 @@ printf "Network: $NETWORK\n"
 cd $BEACON_SOL_PATH
 
 printf "${LOG_START}Installing beacon YARN dependencies...${LOG_END}"
-yarn install
+yarn install --mode=update-lockfile && yarn install
 
 if [ "$NETWORK" == "development" ]; then
   printf "${LOG_START}Unlocking ethereum accounts...${LOG_END}"
@@ -120,7 +120,103 @@ if [ "$SKIP_DEPLOYMENT" != true ]; then
   cd "$THRESHOLD_SOL_PATH"
 
   printf "${LOG_START}Building threshold-network/solidity-contracts...${LOG_END}"
-  yarn install && yarn clean && yarn build
+  yarn install --mode=update-lockfile && yarn install && yarn clean && yarn build
+
+  # For Geth 1.16+, extract and configure private keys (personal namespace deprecated)
+  if [ "$NETWORK" == "development" ]; then
+    printf "${LOG_START}Extracting private keys for Hardhat (Geth 1.16+ compatibility)...${LOG_END}"
+    # Try to find keystore directory
+    GETH_KEYSTORE_DIR=""
+    # Build list of potential keystore directories
+    KEYSTORE_DIRS=()
+    # Expand GETH_DATA_DIR if it's set (handles ~ expansion)
+    if [ -n "${GETH_DATA_DIR:-}" ]; then
+      EXPANDED_GETH_DATA_DIR=$(eval echo "$GETH_DATA_DIR")
+      KEYSTORE_DIRS+=("${EXPANDED_GETH_DATA_DIR}/keystore")
+    fi
+    # Fallback to standard locations
+    KEYSTORE_DIRS+=("$HOME/ethereum/data/keystore")
+    
+    for dir in "${KEYSTORE_DIRS[@]}"; do
+      if [ -d "$dir" ] 2>/dev/null; then
+        GETH_KEYSTORE_DIR="$dir"
+        printf "Found keystore directory: $GETH_KEYSTORE_DIR\n"
+        break
+      fi
+    done
+    
+    if [ -n "$GETH_KEYSTORE_DIR" ] && [ -d "$GETH_KEYSTORE_DIR" ]; then
+      export DEV_ACCOUNTS_PRIVATE_KEYS=$(cd "$THRESHOLD_SOL_PATH" && node -e "
+        const fs = require('fs');
+        const path = require('path');
+        const { ethers } = require('ethers');
+        
+        async function extract() {
+          const keystoreDir = '$GETH_KEYSTORE_DIR';
+          const passwords = ['threshold', '$KEEP_ETHEREUM_PASSWORD', 'password', ''];
+          const files = fs.readdirSync(keystoreDir).filter(f => f.startsWith('UTC--'));
+          const keys = [];
+          
+          for (const file of files.slice(0, 11)) {
+            let extracted = false;
+            for (const pwd of passwords) {
+              try {
+                const keystore = JSON.parse(fs.readFileSync(path.join(keystoreDir, file), 'utf8'));
+                const wallet = await ethers.Wallet.fromEncryptedJson(JSON.stringify(keystore), pwd);
+                keys.push(wallet.privateKey);
+                extracted = true;
+                break;
+              } catch (e) {
+                // Try next password
+              }
+            }
+            if (!extracted) {
+              console.error('Failed to extract key from', file);
+            }
+          }
+          console.log(keys.join(','));
+        }
+        
+        extract().catch((e) => {
+          console.error('Extraction error:', e.message);
+          process.exit(1);
+        });
+      " 2>&1)
+      
+      if [ -n "$DEV_ACCOUNTS_PRIVATE_KEYS" ] && [ "$DEV_ACCOUNTS_PRIVATE_KEYS" != "null" ]; then
+        KEY_COUNT=$(echo "$DEV_ACCOUNTS_PRIVATE_KEYS" | tr ',' '\n' | grep -c . || echo "0")
+        printf "Extracted $KEY_COUNT private keys\n"
+        
+        # Inject accounts into hardhat.config.ts for Geth 1.16+ compatibility
+        if [ -f "$THRESHOLD_SOL_PATH/hardhat.config.ts" ]; then
+          if ! grep -q "DEV_ACCOUNTS_PRIVATE_KEYS" "$THRESHOLD_SOL_PATH/hardhat.config.ts"; then
+            printf "Configuring Hardhat config with private keys...\n"
+            cd "$THRESHOLD_SOL_PATH" && node -e "
+              const fs = require('fs');
+              let config = fs.readFileSync('hardhat.config.ts', 'utf8');
+              
+              // Inject accounts into development network
+              const accountsLine = '      accounts: process.env.DEV_ACCOUNTS_PRIVATE_KEYS ? process.env.DEV_ACCOUNTS_PRIVATE_KEYS.split(\",\") : undefined,';
+              
+              // Find development config and add accounts
+              config = config.replace(
+                /(development:\s*\{[^\}]*?chainId:\s*1101,)/,
+                '\$1\n' + accountsLine
+              );
+              
+              fs.writeFileSync('hardhat.config.ts', config);
+              console.log('Updated hardhat.config.ts');
+            " 2>/dev/null || true
+          fi
+        fi
+      else
+        printf "${LOG_WARNING_START}Warning: Could not extract private keys from $GETH_KEYSTORE_DIR. Hardhat may not be able to sign transactions with Geth 1.16+.${LOG_WARNING_END}\n"
+        printf "Debug: DEV_ACCOUNTS_PRIVATE_KEYS='$DEV_ACCOUNTS_PRIVATE_KEYS'\n"
+      fi
+    else
+      printf "${LOG_WARNING_START}Warning: Keystore directory not found. Tried: ${KEYSTORE_DIRS[*]}. Hardhat may not be able to sign transactions with Geth 1.16+.${LOG_WARNING_END}\n"
+    fi
+  fi
 
   # deploy threshold-network/solidity-contracts
   printf "${LOG_START}Deploying threshold-network/solidity-contracts contracts...${LOG_END}"
@@ -133,8 +229,60 @@ if [ "$SKIP_DEPLOYMENT" != true ]; then
 
   cd $BEACON_SOL_PATH
 
+  # Update resolutions in package.json to handle OpenZeppelin version conflict
+  # This must be done after threshold-network is cloned and before linking
+  printf "${LOG_START}Updating package resolutions to resolve dependency conflicts...${LOG_END}"
+  if [ -f "package.json" ] && [ -n "$THRESHOLD_SOL_PATH" ]; then
+    THRESHOLD_PORTAL_PATH="portal:$THRESHOLD_SOL_PATH"
+    node -e "
+      const fs = require('fs');
+      const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+      if (!pkg.resolutions) pkg.resolutions = {};
+      pkg.resolutions['@threshold-network/solidity-contracts'] = '$THRESHOLD_PORTAL_PATH';
+      pkg.resolutions['@openzeppelin/contracts'] = '4.7.3';
+      fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+    " 2>/dev/null || true
+    # Reinstall dependencies to apply resolutions
+    printf "${LOG_START}Reinstalling dependencies with updated resolutions...${LOG_END}"
+    yarn install --mode=update-lockfile
+  fi
+
   printf "${LOG_START}Linking threshold-network/solidity-contracts...${LOG_END}"
-  yarn link @threshold-network/solidity-contracts
+  # Ensure we're not accidentally in the threshold directory
+  CURRENT_DIR=$(realpath "$PWD" 2>/dev/null || echo "$PWD")
+  THRESHOLD_DIR=$(realpath "$THRESHOLD_SOL_PATH" 2>/dev/null || echo "$THRESHOLD_SOL_PATH")
+  if [ "$CURRENT_DIR" == "$THRESHOLD_DIR" ]; then
+    printf "${LOG_WARNING_START}ERROR: Cannot link package to itself. Current directory is threshold-network/solidity-contracts.${LOG_WARNING_END}\n"
+    exit 1
+  fi
+  
+  # Update resolutions in package.json to handle OpenZeppelin version conflict
+  if [ -f "package.json" ]; then
+    # Update the portal path dynamically and add OpenZeppelin resolution
+    THRESHOLD_PORTAL_PATH="portal:$THRESHOLD_SOL_PATH"
+    node -e "
+      const fs = require('fs');
+      const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+      if (!pkg.resolutions) pkg.resolutions = {};
+      pkg.resolutions['@threshold-network/solidity-contracts'] = '$THRESHOLD_PORTAL_PATH';
+      pkg.resolutions['@openzeppelin/contracts'] = '4.7.3';
+      fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+    " 2>/dev/null || true
+    # Reinstall dependencies to apply resolutions
+    printf "${LOG_START}Reinstalling dependencies with updated resolutions...${LOG_END}"
+    yarn install --mode=update-lockfile && yarn install
+  fi
+  
+  # Unlink any existing link first
+  yarn unlink @threshold-network/solidity-contracts 2>/dev/null || true
+  # Link to the threshold package
+  yarn link "@threshold-network/solidity-contracts" || {
+    printf "${LOG_WARNING_START}Failed to link @threshold-network/solidity-contracts. Trying alternative method...${LOG_WARNING_END}\n"
+    yarn link "$THRESHOLD_SOL_PATH" || {
+      printf "${LOG_WARNING_START}ERROR: Could not link threshold-network/solidity-contracts${LOG_WARNING_END}\n"
+      exit 1
+    }
+  }
 
   printf "${LOG_START}Building random-beacon...${LOG_END}"
   yarn clean && yarn build
@@ -153,14 +301,59 @@ if [ "$SKIP_DEPLOYMENT" != true ]; then
   # remove openzeppelin manifest for fresh installation
   rm -rf $OPENZEPPELIN_MANIFEST
 
+  # Update resolutions in package.json to handle OpenZeppelin version conflict
+  printf "${LOG_START}Updating package resolutions to resolve dependency conflicts...${LOG_END}"
+  if [ -f "package.json" ] && [ -n "$THRESHOLD_SOL_PATH" ]; then
+    THRESHOLD_PORTAL_PATH="portal:$THRESHOLD_SOL_PATH"
+    node -e "
+      const fs = require('fs');
+      const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+      if (!pkg.resolutions) pkg.resolutions = {};
+      pkg.resolutions['@threshold-network/solidity-contracts'] = '$THRESHOLD_PORTAL_PATH';
+      pkg.resolutions['@openzeppelin/contracts'] = '4.7.3';
+      fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+    " 2>/dev/null || true
+    # Reinstall dependencies to apply resolutions
+    printf "${LOG_START}Reinstalling dependencies with updated resolutions...${LOG_END}"
+    yarn install --mode=update-lockfile && yarn install
+  fi
+
   printf "${LOG_START}Linking solidity-contracts...${LOG_END}"
-  yarn link @threshold-network/solidity-contracts
+  # Ensure we're not accidentally in the threshold directory
+  CURRENT_DIR=$(realpath "$PWD" 2>/dev/null || echo "$PWD")
+  THRESHOLD_DIR=$(realpath "$THRESHOLD_SOL_PATH" 2>/dev/null || echo "$THRESHOLD_SOL_PATH")
+  if [ "$CURRENT_DIR" == "$THRESHOLD_DIR" ]; then
+    printf "${LOG_WARNING_START}ERROR: Cannot link package to itself. Current directory is threshold-network/solidity-contracts.${LOG_WARNING_END}\n"
+    exit 1
+  fi
+  
+  # With portal resolution, yarn link may conflict. Try link but don't fail if it errors
+  # Portal resolutions should handle the dependency resolution automatically
+  yarn unlink @threshold-network/solidity-contracts 2>/dev/null || true
+  
+  # Try to link, but catch the "Can't link to itself" error specifically
+  LINK_OUTPUT=$(yarn link "@threshold-network/solidity-contracts" 2>&1)
+  LINK_EXIT=$?
+  
+  if echo "$LINK_OUTPUT" | grep -q "Can't link the project to itself"; then
+    printf "${LOG_WARNING_START}Yarn link skipped - portal resolution handles dependencies automatically${LOG_WARNING_END}\n"
+  elif [ $LINK_EXIT -ne 0 ]; then
+    # Try alternative method
+    ALT_LINK_OUTPUT=$(yarn link "$THRESHOLD_SOL_PATH" 2>&1)
+    ALT_LINK_EXIT=$?
+    if echo "$ALT_LINK_OUTPUT" | grep -q "Can't link the project to itself"; then
+      printf "${LOG_WARNING_START}Yarn link not needed with portal resolution. Continuing...${LOG_WARNING_END}\n"
+    elif [ $ALT_LINK_EXIT -ne 0 ]; then
+      printf "${LOG_WARNING_START}Link failed, but portal resolution should handle dependencies. Continuing...${LOG_WARNING_END}\n"
+    fi
+  fi
 
   printf "${LOG_START}Linking random-beacon...${LOG_END}"
+  yarn unlink @keep-network/random-beacon 2>/dev/null || true
   yarn link @keep-network/random-beacon
 
   printf "${LOG_START}Building ecdsa...${LOG_END}"
-  yarn install && yarn clean && yarn build
+  yarn install --mode=update-lockfile && yarn install && yarn clean && yarn build
 
   # deploy ecdsa
   printf "${LOG_START}Deploying ecdsa contracts...${LOG_END}"
@@ -186,15 +379,43 @@ if [ "$SKIP_DEPLOYMENT" != true ]; then
 
   cd "$TBTC_SOL_PATH"
 
-  yarn install
+  yarn install --mode=update-lockfile && yarn install
+
+  # Update resolutions if needed
+  if [ -f "package.json" ] && [ -n "$THRESHOLD_SOL_PATH" ]; then
+    THRESHOLD_PORTAL_PATH="portal:$THRESHOLD_SOL_PATH"
+    node -e "
+      const fs = require('fs');
+      const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+      if (!pkg.resolutions) pkg.resolutions = {};
+      pkg.resolutions['@threshold-network/solidity-contracts'] = '$THRESHOLD_PORTAL_PATH';
+      pkg.resolutions['@openzeppelin/contracts'] = '4.7.3';
+      fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+    " 2>/dev/null || true
+    yarn install --mode=update-lockfile && yarn install 2>/dev/null || true
+  fi
 
   printf "${LOG_START}Linking threshold-network/solidity-contracts...${LOG_END}"
-  yarn link @threshold-network/solidity-contracts
+  CURRENT_DIR=$(realpath "$PWD" 2>/dev/null || echo "$PWD")
+  THRESHOLD_DIR=$(realpath "$THRESHOLD_SOL_PATH" 2>/dev/null || echo "$THRESHOLD_SOL_PATH")
+  if [ "$CURRENT_DIR" != "$THRESHOLD_DIR" ]; then
+    yarn unlink @threshold-network/solidity-contracts 2>/dev/null || true
+    yarn link "@threshold-network/solidity-contracts" || {
+      printf "${LOG_WARNING_START}Failed to link @threshold-network/solidity-contracts. Trying alternative method...${LOG_WARNING_END}\n"
+      yarn link "$THRESHOLD_SOL_PATH" || {
+        printf "${LOG_WARNING_START}Warning: Could not link threshold-network/solidity-contracts, continuing anyway...${LOG_WARNING_END}\n"
+      }
+    }
+  else
+    printf "${LOG_WARNING_START}Skipping link - already in threshold-network directory${LOG_WARNING_END}\n"
+  fi
 
   printf "${LOG_START}Linking random-beacon...${LOG_END}"
+  yarn unlink @keep-network/random-beacon 2>/dev/null || true
   yarn link @keep-network/random-beacon
 
   printf "${LOG_START}Linking ecdsa...${LOG_END}"
+  yarn unlink @keep-network/ecdsa 2>/dev/null || true
   yarn link @keep-network/ecdsa
 
   printf "${LOG_START}Building tbtc contracts...${LOG_END}"

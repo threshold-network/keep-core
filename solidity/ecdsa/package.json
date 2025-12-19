@@ -35,6 +35,16 @@
   },
   "devDependencies": {
     "@defi-wonderland/smock": "^2.0.7",
+    "@ethersproject/abi": "^5.7.0",
+    "@ethersproject/abstract-provider": "^5.7.0",
+    "@ethersproject/abstract-signer": "^5.7.0",
+    "@ethersproject/address": "^5.7.0",
+    "@ethersproject/bignumber": "^5.7.0",
+    "@ethersproject/bytes": "^5.7.0",
+    "@ethersproject/contracts": "^5.7.0",
+    "@ethersproject/providers": "^5.7.0",
+    "@ethersproject/strings": "^5.7.0",
+    "@ethersproject/wallet": "^5.7.0",
     "@keep-network/hardhat-helpers": "^0.6.0-pre.15",
     "@keep-network/hardhat-local-networks-config": "^0.1.0-pre.4",
     "@nomiclabs/hardhat-ethers": "^2.0.6",
@@ -47,6 +57,7 @@
     "@typechain/hardhat": "^4.0.0",
     "@types/chai": "^4.3.0",
     "@types/chai-as-promised": "^7.1.5",
+    "@types/lodash": "^4",
     "@types/mocha": "^9.1.0",
     "@types/node": "^17.0.10",
     "chai": "^4.3.4",
@@ -54,11 +65,13 @@
     "eslint": "^7.32.0",
     "ethereum-waffle": "^3.4.0",
     "ethers": "^5.5.3",
+    "fs-extra": "^11.1.1",
     "hardhat": "^2.10.0",
     "hardhat-contract-sizer": "^2.3.0",
     "hardhat-dependency-compiler": "^1.1.2",
     "hardhat-deploy": "^0.11.11",
     "hardhat-gas-reporter": "^1.0.8",
+    "lodash": "^4.17.21",
     "prettier": "^2.5.1",
     "prettier-plugin-sh": "^0.8.1",
     "prettier-plugin-solidity": "^1.0.0-beta.19",
@@ -78,5 +91,11 @@
   },
   "engines": {
     "node": ">= 14.0.0"
+  },
+  "packageManager": "yarn@4.8.1+sha512.bc946f2a022d7a1a38adfc15b36a66a3807a67629789496c3714dd1703d2e6c6b1c69ff9ec3b43141ac7a1dd853b7685638eb0074300386a59c18df351ef8ff6",
+  "resolutions": {
+    "@openzeppelin/contracts": "4.7.3",
+    "@openzeppelin/contracts-upgradeable": "4.7.3",
+    "@threshold-network/solidity-contracts": "portal:/Users/levakhnazarov/threshold/fork2/keep-core/tmp/solidity-contracts"
   }
 }

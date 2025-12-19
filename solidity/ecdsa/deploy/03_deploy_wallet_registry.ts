@@ -2,13 +2,35 @@ import type { HardhatRuntimeEnvironment } from "hardhat/types"
 import type { DeployFunction } from "hardhat-deploy/types"
 
 const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
-  const { getNamedAccounts, deployments, ethers, helpers } = hre
+  const { getNamedAccounts, deployments, ethers, helpers, upgrades } = hre
   const { deployer } = await getNamedAccounts()
+  const { log } = deployments
 
   const EcdsaSortitionPool = await deployments.get("EcdsaSortitionPool")
   const TokenStaking = await deployments.get("TokenStaking")
   const ReimbursementPool = await deployments.get("ReimbursementPool")
-  const RandomBeacon = await deployments.get("RandomBeacon")
+  
+  // Try to get RandomBeacon, or find it from random-beacon package
+  let RandomBeacon = await deployments.getOrNull("RandomBeacon")
+  if (!RandomBeacon) {
+    const fs = require("fs")
+    const path = require("path")
+    const randomBeaconPath = path.resolve(
+      __dirname,
+      "../../random-beacon/deployments/development/RandomBeacon.json"
+    )
+    if (fs.existsSync(randomBeaconPath)) {
+      const beaconData = JSON.parse(fs.readFileSync(randomBeaconPath, "utf8"))
+      await deployments.save("RandomBeacon", {
+        address: beaconData.address,
+        abi: beaconData.abi,
+      })
+      RandomBeacon = await deployments.get("RandomBeacon")
+    } else {
+      throw new Error("RandomBeacon contract not found")
+    }
+  }
+  
   const EcdsaDkgValidator = await deployments.get("EcdsaDkgValidator")
 
   const EcdsaInactivity = await deployments.deploy("EcdsaInactivity", {
@@ -17,8 +39,21 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     waitConfirmations: 1,
   })
 
-  const [walletRegistry, proxyDeployment] = await helpers.upgrades.deployProxy(
-    "WalletRegistry",
+  // Check if WalletRegistry is already deployed
+  const existingWalletRegistry = await deployments.getOrNull("WalletRegistry")
+  let walletRegistry, proxyDeployment
+  if (existingWalletRegistry) {
+    log(`WalletRegistry already deployed at ${existingWalletRegistry.address}, reusing it`)
+    walletRegistry = await helpers.contracts.getContract("WalletRegistry")
+    // Get proxy deployment info from OpenZeppelin upgrades
+    const proxyAdmin = await upgrades.admin.getInstance()
+    proxyDeployment = {
+      address: walletRegistry.address,
+      args: [],
+    }
+  } else {
+    [walletRegistry, proxyDeployment] = await helpers.upgrades.deployProxy(
+      "WalletRegistry",
     {
       contractName:
         process.env.TEST_USE_STUBS_ECDSA === "true"
@@ -41,7 +76,8 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
         kind: "transparent",
       },
     }
-  )
+    )
+  }
 
   await helpers.ownable.transferOwnership(
     "EcdsaSortitionPool",

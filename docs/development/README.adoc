@@ -27,9 +27,9 @@ xref:../run-keep-node.adoc#config-file[configuration] section.
 
 To quickly setup and start a client use the following scripts from the project root:
 
-* `./scripts/install.sh`
-* `./scripts/initialize.sh`
-* `./scrtips/start.sh`
+* `./scripts/install.sh --network development`
+* `./scripts/initialize.sh --network development`
+* `./scripts/start.sh`
 
 == Installation scripts explained
 
@@ -58,7 +58,7 @@ Usage:
 
 Environment variables:
 
-        KEEP_ETHEREUM_PASSWORD: The password to unlock local Ethereum accounts to set up delegations. Required only for 'local' network. Default value is 'password'
+        KEEP_ETHEREUM_PASSWORD: The password to unlock local Ethereum accounts to set up delegations. Required only for 'development' network. Default value is 'password'
 
 Optional line arguments:
 

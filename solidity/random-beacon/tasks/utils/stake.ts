@@ -45,16 +45,28 @@ export async function stake(
       )} T to the staking provider ${providerAddress}...`
     )
 
-    await (
-      await staking
-        .connect(await ethers.getSigner(ownerAddress))
-        .stake(
-          providerAddress,
-          beneficiaryAddress,
-          authorizerAddress,
-          stakeAmount
+    const stakingWithSigner = staking.connect(await ethers.getSigner(ownerAddress))
+    
+    try {
+      // Try to call stake function (available in ExtendedTokenStaking)
+      await (await stakingWithSigner.stake(
+        providerAddress,
+        beneficiaryAddress,
+        authorizerAddress,
+        stakeAmount
+      )).wait()
+    } catch (error: any) {
+      if (error.message?.includes('stake is not a function') || 
+          error.message?.includes('is not a function')) {
+        throw new Error(
+          'TokenStaking contract does not have a stake function. ' +
+          'For development, you need to deploy ExtendedTokenStaking (from TokenStakingTestSet.sol) ' +
+          'instead of TokenStaking. The stake function is only available in ExtendedTokenStaking ' +
+          'which is used for testing and development.'
         )
-    ).wait()
+      }
+      throw error
+    }
   } else if (currentStake.lt(stakeAmount)) {
     const topUpAmount = stakeAmount.sub(currentStake)
 

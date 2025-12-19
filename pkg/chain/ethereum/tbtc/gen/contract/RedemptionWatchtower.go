@@ -2165,6 +2165,43 @@ func (rw *RedemptionWatchtower) OwnerAtBlock(
 	return result, err
 }
 
+func (rw *RedemptionWatchtower) REQUIREDOBJECTIONSCOUNT() (uint8, error) {
+	result, err := rw.contract.REQUIREDOBJECTIONSCOUNT(
+		rw.callerOptions,
+	)
+
+	if err != nil {
+		return result, rw.errorResolver.ResolveError(
+			err,
+			rw.callerOptions.From,
+			nil,
+			"rEQUIREDOBJECTIONSCOUNT",
+		)
+	}
+
+	return result, err
+}
+
+func (rw *RedemptionWatchtower) REQUIREDOBJECTIONSCOUNTAtBlock(
+	blockNumber *big.Int,
+) (uint8, error) {
+	var result uint8
+
+	err := chainutil.CallAtBlock(
+		rw.callerOptions.From,
+		blockNumber,
+		nil,
+		rw.contractABI,
+		rw.caller,
+		rw.errorResolver,
+		rw.contractAddress,
+		"rEQUIREDOBJECTIONSCOUNT",
+		&result,
+	)
+
+	return result, err
+}
+
 func (rw *RedemptionWatchtower) VetoFreezePeriod() (uint32, error) {
 	result, err := rw.contract.VetoFreezePeriod(
 		rw.callerOptions,

@@ -1,0 +1,18 @@
+{
+  "name": "@keep-network/tbtc-stub",
+  "version": "1.0.0",
+  "scripts": {
+    "compile": "hardhat compile",
+    "deploy": "hardhat deploy"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@nomicfoundation/hardhat-ethers": "^3.0.0",
+    "@typechain/ethers-v6": "^0.5.1",
+    "@typechain/hardhat": "^9.1.0",
+    "hardhat": "^2.22.0",
+    "hardhat-deploy": "^0.12.4",
+    "ethers": "^6.13.0",
+    "typescript": "^5.0.0"
+  }
+}

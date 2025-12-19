@@ -10,7 +10,8 @@
     "petersburgBlock": 0,
     "daoForkBlock": 0,
     "istanbulBlock": 0,
-    "daoForkSupport": true
+    "daoForkSupport": true,
+    "terminalTotalDifficulty": null
   },
     "coinbase": "0x0000000000000000000000000000000000000000",
     "difficulty": "0x20",

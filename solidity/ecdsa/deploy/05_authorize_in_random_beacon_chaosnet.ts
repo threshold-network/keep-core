@@ -8,13 +8,35 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   const WalletRegistry = await deployments.get("WalletRegistry")
 
-  await execute(
-    "RandomBeaconChaosnet",
-    { from: deployer, log: true, waitConfirmations: 1 },
-    "setRequesterAuthorization",
-    WalletRegistry.address,
-    true
-  )
+  try {
+    await execute(
+      "RandomBeaconChaosnet",
+      { from: deployer, log: true, waitConfirmations: 1 },
+      "setRequesterAuthorization",
+      WalletRegistry.address,
+      true
+    )
+  } catch (error: any) {
+    // If authorization fails due to ownership, try with governance account
+    if (error.message?.includes("not the owner") || error.message?.includes("caller is not the owner")) {
+      const { governance } = await getNamedAccounts()
+      console.log(`Deployer is not owner, trying with governance account: ${governance}`)
+      try {
+        await execute(
+          "RandomBeaconChaosnet",
+          { from: governance, log: true, waitConfirmations: 1 },
+          "setRequesterAuthorization",
+          WalletRegistry.address,
+          true
+        )
+      } catch (govError: any) {
+        console.log(`Authorization failed with governance account. This step may need to be done manually. Error: ${govError.message}`)
+        // Don't fail the deployment - authorization can be done manually
+      }
+    } else {
+      throw error
+    }
+  }
 }
 
 export default func

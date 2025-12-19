@@ -1,0 +1,41 @@
+{
+  "language": "Solidity",
+  "sources": {
+    "contracts/BridgeStub.sol": {
+      "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.17;\n\n/**\n * @title BridgeStub\n * @notice Minimal stub implementation of Bridge contract for local development\n */\ncontract BridgeStub {\n    address public bank;\n    address public relay;\n    address public ecdsaWalletRegistry;\n    address public reimbursementPool;\n\n    constructor(\n        address _bank,\n        address _relay,\n        address _ecdsaWalletRegistry,\n        address _reimbursementPool\n    ) {\n        bank = _bank;\n        relay = _relay;\n        ecdsaWalletRegistry = _ecdsaWalletRegistry;\n        reimbursementPool = _reimbursementPool;\n    }\n\n    function contractReferences()\n        external\n        view\n        returns (\n            address _bank,\n            address _relay,\n            address _ecdsaWalletRegistry,\n            address _reimbursementPool\n        )\n    {\n        return (bank, relay, ecdsaWalletRegistry, reimbursementPool);\n    }\n}\n"
+    },
+    "contracts/MaintainerProxyStub.sol": {
+      "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.17;\n\n/**\n * @title MaintainerProxyStub\n * @notice Minimal stub implementation of MaintainerProxy contract for local development\n */\ncontract MaintainerProxyStub {\n    // Minimal stub - just needs to exist\n}\n"
+    },
+    "contracts/WalletProposalValidatorStub.sol": {
+      "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.17;\n\n/**\n * @title WalletProposalValidatorStub\n * @notice Minimal stub implementation of WalletProposalValidator contract for local development\n */\ncontract WalletProposalValidatorStub {\n    // Minimal stub - just needs to exist\n}\n"
+    }
+  },
+  "settings": {
+    "optimizer": {
+      "enabled": true,
+      "runs": 200
+    },
+    "outputSelection": {
+      "*": {
+        "*": [
+          "abi",
+          "evm.bytecode",
+          "evm.deployedBytecode",
+          "evm.methodIdentifiers",
+          "metadata",
+          "devdoc",
+          "userdoc",
+          "storageLayout",
+          "evm.gasEstimates"
+        ],
+        "": [
+          "ast"
+        ]
+      }
+    },
+    "metadata": {
+      "useLiteralContent": true
+    }
+  }
+}
