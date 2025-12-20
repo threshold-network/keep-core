@@ -30,3 +30,4 @@ export default func
 
 func.tags = ["EcdsaDkgValidator"]
 func.dependencies = ["EcdsaSortitionPool"]
+func.id = "deploy_ecdsa_dkg_validator"

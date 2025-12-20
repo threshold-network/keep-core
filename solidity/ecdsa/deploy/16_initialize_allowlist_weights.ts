@@ -46,7 +46,10 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   // Load pre-calculated weights from JSON
   // These weights include accumulated stakes from consolidated beta stakers
-  const weightsPath = path.join(__dirname, "data/allowlist-weights.json")
+  // Use network-specific file if available
+  const networkSpecificPath = path.join(__dirname, `data/allowlist-weights-${hre.network.name}.json`)
+  const defaultPath = path.join(__dirname, "data/allowlist-weights.json")
+  const weightsPath = fs.existsSync(networkSpecificPath) ? networkSpecificPath : defaultPath
 
   if (!fs.existsSync(weightsPath)) {
     throw new Error(
@@ -309,6 +312,7 @@ export default func
 
 func.tags = ["InitializeAllowlistWeights"]
 func.dependencies = ["Allowlist", "UpgradeWalletRegistryV2"]
+func.id = "initialize_allowlist_weights"
 
 // Only run this script when explicitly requested
 func.skip = async () => !process.env.MIGRATE_ALLOWLIST_WEIGHTS

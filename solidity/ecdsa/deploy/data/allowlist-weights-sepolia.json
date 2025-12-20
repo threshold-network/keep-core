@@ -1,0 +1,148 @@
+{
+  "metadata": {
+    "generatedAt": "2025-12-20T04:54:02.243Z",
+    "source": "sepolia-staking.json",
+    "branch": "sepolia-testnet",
+    "governanceChanges": "NONE REQUIRED",
+    "weightFormat": "uint96 with 18 decimals (T-token scale)",
+    "poolWeightDivisor": "1000000000000000000",
+    "minimumAuthorization": "40000000000000000000000",
+    "minimumAuthorizationT": "40000",
+    "note": "Sepolia testnet operators - direct stake mapping without consolidation"
+  },
+  "summary": {
+    "operatorsAddedToAllowlist": 10,
+    "operatorsNotAdded": 0,
+    "totalOriginalTStake": 8000000,
+    "totalAccumulatedTStake": 8000000,
+    "stakeIncreaseFromConsolidation": 0,
+    "totalWeight": "8000000000000000000000000"
+  },
+  "weightCalculation": {
+    "formula": "weight = authorized_stake (already in 18 decimal format)",
+    "note": "Sepolia operators use individual authorized stakes directly as weights"
+  },
+  "betaStakerConsolidation": [],
+  "operators": [
+    {
+      "identification": "Sepolia-Operator-1",
+      "stakingProvider": "0x0eC14BC7cCA82c942Cf276F6BbD0413216dDB2bE",
+      "operator": "0x0eC14BC7cCA82c942Cf276F6BbD0413216dDB2bE",
+      "operatorType": "testnet",
+      "providerGroup": null,
+      "originalTStake": 800000,
+      "accumulatedTStake": 800000,
+      "weight": "800000000000000000000000",
+      "poolWeightAfterDivision": 800000,
+      "weightNote": "Direct stake from TokenStaking"
+    },
+    {
+      "identification": "Sepolia-Operator-2",
+      "stakingProvider": "0xcAB2a402bAc470686d14956FB310D51BbEF9fA31",
+      "operator": "0xcAB2a402bAc470686d14956FB310D51BbEF9fA31",
+      "operatorType": "testnet",
+      "providerGroup": null,
+      "originalTStake": 800000,
+      "accumulatedTStake": 800000,
+      "weight": "800000000000000000000000",
+      "poolWeightAfterDivision": 800000,
+      "weightNote": "Direct stake from TokenStaking"
+    },
+    {
+      "identification": "Sepolia-Operator-3",
+      "stakingProvider": "0x3FF855895EF4aC833c32Ab6A0d6C7fBfA137E26E",
+      "operator": "0x3FF855895EF4aC833c32Ab6A0d6C7fBfA137E26E",
+      "operatorType": "testnet",
+      "providerGroup": null,
+      "originalTStake": 800000,
+      "accumulatedTStake": 800000,
+      "weight": "800000000000000000000000",
+      "poolWeightAfterDivision": 800000,
+      "weightNote": "Direct stake from TokenStaking"
+    },
+    {
+      "identification": "Sepolia-Operator-4",
+      "stakingProvider": "0x0954efEFeb970D317a51736201B4EB2De75FF5DE",
+      "operator": "0x0954efEFeb970D317a51736201B4EB2De75FF5DE",
+      "operatorType": "testnet",
+      "providerGroup": null,
+      "originalTStake": 800000,
+      "accumulatedTStake": 800000,
+      "weight": "800000000000000000000000",
+      "poolWeightAfterDivision": 800000,
+      "weightNote": "Direct stake from TokenStaking"
+    },
+    {
+      "identification": "Sepolia-Operator-5",
+      "stakingProvider": "0x1Aa7A9De6bd5A5802A98be50fF12F5A024a5aBE0",
+      "operator": "0x1Aa7A9De6bd5A5802A98be50fF12F5A024a5aBE0",
+      "operatorType": "testnet",
+      "providerGroup": null,
+      "originalTStake": 800000,
+      "accumulatedTStake": 800000,
+      "weight": "800000000000000000000000",
+      "poolWeightAfterDivision": 800000,
+      "weightNote": "Direct stake from TokenStaking"
+    },
+    {
+      "identification": "Sepolia-Operator-6",
+      "stakingProvider": "0xaC049223397e2F25Ea9FE56D5ee0896F6d8E8CB7",
+      "operator": "0xaC049223397e2F25Ea9FE56D5ee0896F6d8E8CB7",
+      "operatorType": "testnet",
+      "providerGroup": null,
+      "originalTStake": 800000,
+      "accumulatedTStake": 800000,
+      "weight": "800000000000000000000000",
+      "poolWeightAfterDivision": 800000,
+      "weightNote": "Direct stake from TokenStaking"
+    },
+    {
+      "identification": "Sepolia-Operator-7",
+      "stakingProvider": "0xD12A53056b74d96F89910aD3485da69A662F7930",
+      "operator": "0xD12A53056b74d96F89910aD3485da69A662F7930",
+      "operatorType": "testnet",
+      "providerGroup": null,
+      "originalTStake": 800000,
+      "accumulatedTStake": 800000,
+      "weight": "800000000000000000000000",
+      "poolWeightAfterDivision": 800000,
+      "weightNote": "Direct stake from TokenStaking"
+    },
+    {
+      "identification": "Sepolia-Operator-8",
+      "stakingProvider": "0x5cD847903Bb7F29de77Eecc135628cA5b104A355",
+      "operator": "0x5cD847903Bb7F29de77Eecc135628cA5b104A355",
+      "operatorType": "testnet",
+      "providerGroup": null,
+      "originalTStake": 800000,
+      "accumulatedTStake": 800000,
+      "weight": "800000000000000000000000",
+      "poolWeightAfterDivision": 800000,
+      "weightNote": "Direct stake from TokenStaking"
+    },
+    {
+      "identification": "Sepolia-Operator-9",
+      "stakingProvider": "0x76bc6bAD38728329FE1c0E57D2555726f26a0399",
+      "operator": "0x76bc6bAD38728329FE1c0E57D2555726f26a0399",
+      "operatorType": "testnet",
+      "providerGroup": null,
+      "originalTStake": 800000,
+      "accumulatedTStake": 800000,
+      "weight": "800000000000000000000000",
+      "poolWeightAfterDivision": 800000,
+      "weightNote": "Direct stake from TokenStaking"
+    },
+    {
+      "identification": "Sepolia-Operator-10",
+      "stakingProvider": "0x677753A3cb8F3575Be626f6A1F26e5C027C0aF29",
+      "operator": "0x677753A3cb8F3575Be626f6A1F26e5C027C0aF29",
+      "operatorType": "testnet",
+      "providerGroup": null,
+      "originalTStake": 800000,
+      "accumulatedTStake": 800000,
+      "weight": "800000000000000000000000",
+      "poolWeightAfterDivision": 800000,
+      "weightNote": "Direct stake from TokenStaking"
+    }
+  ]
+}

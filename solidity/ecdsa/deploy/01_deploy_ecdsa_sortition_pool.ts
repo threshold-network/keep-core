@@ -44,3 +44,4 @@ func.tags = ["EcdsaSortitionPool"]
 // TokenStaking and T deployments are expected to be resolved from
 // @threshold-network/solidity-contracts
 func.dependencies = ["TokenStaking", "T"]
+func.id = "deploy_ecdsa_sortition_pool"
