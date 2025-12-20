@@ -1,0 +1,676 @@
+{
+  "metadata": {
+    "generatedAt": "2025-12-19T23:54:23.981Z",
+    "source": "threshold_stakers_may_2025.json",
+    "branch": "feat/WalletRegistry-Optimization",
+    "governanceChanges": "NONE REQUIRED",
+    "weightFormat": "uint96 with 18 decimals (T-token scale)",
+    "poolWeightDivisor": "1000000000000000000",
+    "minimumAuthorization": "40000000000000000000000",
+    "minimumAuthorizationT": "40000",
+    "note": "Beta staker weights use ACCUMULATED stake from all operators in provider group. Professional/community operators use individual stake."
+  },
+  "summary": {
+    "operatorsAddedToAllowlist": 20,
+    "operatorsNotAdded": 17,
+    "totalOriginalTStake": 743242889,
+    "totalAccumulatedTStake": 1297901811,
+    "stakeIncreaseFromConsolidation": 554658922,
+    "totalWeight": "1297901811000000000000000000"
+  },
+  "weightCalculation": {
+    "formula": "weight = accumulated_t_stake * 1e18",
+    "betaStakerNote": "For beta stakers, accumulated_t_stake = sum of all T stake from operators in the same provider group (Staked, P2P, Boar, NuCo)",
+    "professionalCommunityNote": "For professional/community operators, accumulated_t_stake = individual operator T stake",
+    "example": {
+      "input": "P2P staying operator (original: 20,000,000 T, accumulated from 6 operators: 200,000,000 T)",
+      "calculation": "200000000 * 1000000000000000000",
+      "output": "200000000000000000000000000",
+      "poolWeight": "200000000 (after division by poolWeightDivisor)"
+    }
+  },
+  "betaStakerConsolidation": [
+    {
+      "providerGroup": "Boar",
+      "stayingOperator": "0xAAFc71044C2B832dDDFcedb0AE99695B0367dC57",
+      "stayingOperatorOriginalStake": 62765213,
+      "accumulatedStake": 242416135,
+      "consolidatedOperators": 6,
+      "operatorDetails": [
+        {
+          "stakingProvider": "0xAAFc71044C2B832dDDFcedb0AE99695B0367dC57",
+          "stake": 62765213,
+          "status": "staying"
+        },
+        {
+          "stakingProvider": "0x6dEE1fd2b29e2214a4f9aB9Ba5f3D17C8Cb56D11",
+          "stake": 62765213,
+          "status": "deprecated"
+        },
+        {
+          "stakingProvider": "0x5838636dCDd92113998FEcbcDeDf5B0d8bEB4920",
+          "stake": 62765213,
+          "status": "deprecated"
+        },
+        {
+          "stakingProvider": "0xE4A3492c8b085aB5eDB6FDAE329f172056f6b04e",
+          "stake": 14120496,
+          "status": "deprecated"
+        },
+        {
+          "stakingProvider": "0xa7baCa5A92842689359Fb1782e75D6eFF59152e6",
+          "stake": 20000000,
+          "status": "deprecated"
+        },
+        {
+          "stakingProvider": "0xcA5Ac1b59796bE580820e9C66d395977d4F7c3C0",
+          "stake": 20000000,
+          "status": "deprecated"
+        }
+      ]
+    },
+    {
+      "providerGroup": "NuCo",
+      "stayingOperator": "0x97d065B567cc4543D20dffaa7009f9aDe64d7E26",
+      "stayingOperatorOriginalStake": 20000000,
+      "accumulatedStake": 40000000,
+      "consolidatedOperators": 2,
+      "operatorDetails": [
+        {
+          "stakingProvider": "0x97d065B567cc4543D20dffaa7009f9aDe64d7E26",
+          "stake": 20000000,
+          "status": "staying"
+        },
+        {
+          "stakingProvider": "0xc1268db05E7bD38BD85b2C3Fef80F8968a2c933A",
+          "stake": 20000000,
+          "status": "deprecated"
+        }
+      ]
+    },
+    {
+      "providerGroup": "P2P",
+      "stayingOperator": "0xDC09db6e5DA859eDeb7FC7bDCf47545056dC35F7",
+      "stayingOperatorOriginalStake": 20000000,
+      "accumulatedStake": 200000000,
+      "consolidatedOperators": 6,
+      "operatorDetails": [
+        {
+          "stakingProvider": "0xDC09db6e5DA859eDeb7FC7bDCf47545056dC35F7",
+          "stake": 20000000,
+          "status": "staying"
+        },
+        {
+          "stakingProvider": "0xdA08C16C86B78cD56CB10FDc0370EFc549d8638B",
+          "stake": 36000000,
+          "status": "deprecated"
+        },
+        {
+          "stakingProvider": "0xC0B851DCBf00bA59D8B1f490aF93dEC4275cFFcC",
+          "stake": 36000000,
+          "status": "deprecated"
+        },
+        {
+          "stakingProvider": "0x372626FF774573E82eb7D4545EE96F68F75aaFF6",
+          "stake": 36000000,
+          "status": "deprecated"
+        },
+        {
+          "stakingProvider": "0xB88A62417eb9e6320AF7620BE0CFBE2dddd435A5",
+          "stake": 36000000,
+          "status": "deprecated"
+        },
+        {
+          "stakingProvider": "0xb78F9EFE4F713feEFcAB466d2eE41972a0E45205",
+          "stake": 36000000,
+          "status": "deprecated"
+        }
+      ]
+    },
+    {
+      "providerGroup": "Staked",
+      "stayingOperator": "0x16fCc54E027a342F0683263eb43Cd9af1BD72169",
+      "stayingOperatorOriginalStake": 38416500,
+      "accumulatedStake": 213424500,
+      "consolidatedOperators": 6,
+      "operatorDetails": [
+        {
+          "stakingProvider": "0x16fCc54E027a342F0683263eb43Cd9af1BD72169",
+          "stake": 38416500,
+          "status": "staying"
+        },
+        {
+          "stakingProvider": "0xCC957f683a7e3093388946d03193Eee10086b900",
+          "stake": 38416500,
+          "status": "deprecated"
+        },
+        {
+          "stakingProvider": "0xEAE5790C6eE3b6425f39D3Fd33644a7cb90C75A5",
+          "stake": 38416500,
+          "status": "deprecated"
+        },
+        {
+          "stakingProvider": "0x02faA4286eF91247f8D09F36618D4694717F76bB",
+          "stake": 38416500,
+          "status": "deprecated"
+        },
+        {
+          "stakingProvider": "0xBa1Ac67539c09AdDe63335635869c86f8e463514",
+          "stake": 38416500,
+          "status": "deprecated"
+        },
+        {
+          "stakingProvider": "0xa6E3A08FaE33898fC31C4f6C7a584827D809352D",
+          "stake": 21342000,
+          "status": "deprecated"
+        }
+      ]
+    }
+  ],
+  "operators": [
+    {
+      "identification": "Boar",
+      "stakingProvider": "0xAAFc71044C2B832dDDFcedb0AE99695B0367dC57",
+      "operator": "0xFfB804c2De78576Ad011f68a7DF63d739b8C8155",
+      "operatorType": "beta_staker",
+      "providerGroup": "Boar",
+      "originalTStake": 62765213,
+      "accumulatedTStake": 242416135,
+      "weight": "242416135000000000000000000",
+      "poolWeightAfterDivision": 242416135,
+      "weightNote": "Accumulated from 6 Boar operators"
+    },
+    {
+      "identification": "Staked",
+      "stakingProvider": "0x16fCc54E027a342F0683263eb43Cd9af1BD72169",
+      "operator": "0xf401aaE8C639eB1638Fd99B90EaE8a4C54F9894D",
+      "operatorType": "beta_staker",
+      "providerGroup": "Staked",
+      "originalTStake": 38416500,
+      "accumulatedTStake": 213424500,
+      "weight": "213424500000000000000000000",
+      "poolWeightAfterDivision": 213424500,
+      "weightNote": "Accumulated from 6 Staked operators"
+    },
+    {
+      "identification": "P2P",
+      "stakingProvider": "0xDC09db6e5DA859eDeb7FC7bDCf47545056dC35F7",
+      "operator": "0xB074A3B960f29a1448a2Dd4De95210ca492c18d4",
+      "operatorType": "beta_staker",
+      "providerGroup": "P2P",
+      "originalTStake": 20000000,
+      "accumulatedTStake": 200000000,
+      "weight": "200000000000000000000000000",
+      "poolWeightAfterDivision": 200000000,
+      "weightNote": "Accumulated from 6 P2P operators"
+    },
+    {
+      "identification": "Colossus Digital",
+      "stakingProvider": "0x43df8c68a56249CC151dfb3a7E82cC7Fd624cF2a",
+      "operator": "0xB4C3Bc96509f8B172Ba9b066Ba83f80ddF1dF4A8",
+      "operatorType": "professional",
+      "providerGroup": null,
+      "originalTStake": 40000000,
+      "accumulatedTStake": 40000000,
+      "weight": "40000000000000000000000000",
+      "poolWeightAfterDivision": 40000000,
+      "weightNote": "Individual operator stake"
+    },
+    {
+      "identification": "Global Stake",
+      "stakingProvider": "0x331F6346C4c1bdb4Ef7467056C66250F0Eb8A44f",
+      "operator": "0xfB7AC2D1ee57B6D8FeC1b591bea77DbF04482D99",
+      "operatorType": "professional",
+      "providerGroup": null,
+      "originalTStake": 40000000,
+      "accumulatedTStake": 40000000,
+      "weight": "40000000000000000000000000",
+      "poolWeightAfterDivision": 40000000,
+      "weightNote": "Individual operator stake"
+    },
+    {
+      "identification": "Republic Crypto",
+      "stakingProvider": "0xc54238cac19bB8D57a9Bcdd28C3fdd49d82378D8",
+      "operator": "0xD141a4d940347F64610F36035b898E5F48ee1890",
+      "operatorType": "professional",
+      "providerGroup": null,
+      "originalTStake": 40000000,
+      "accumulatedTStake": 40000000,
+      "weight": "40000000000000000000000000",
+      "poolWeightAfterDivision": 40000000,
+      "weightNote": "Individual operator stake"
+    },
+    {
+      "identification": "Liquify",
+      "stakingProvider": "0x621074D613Fc938bD9381AB77Ef3609a02432628",
+      "operator": "0x6b7A51a596D6de6fCb860dD2b9a90443cc5BA1A5",
+      "operatorType": "professional",
+      "providerGroup": null,
+      "originalTStake": 40000000,
+      "accumulatedTStake": 40000000,
+      "weight": "40000000000000000000000000",
+      "poolWeightAfterDivision": 40000000,
+      "weightNote": "Individual operator stake"
+    },
+    {
+      "identification": "Stake Capital",
+      "stakingProvider": "0xB0C9F472b2066691Ab7FEE5b6702c28ab35888b2",
+      "operator": "0xC123905fde3De1E7D1A267D2a0249D9b326b60Fc",
+      "operatorType": "professional",
+      "providerGroup": null,
+      "originalTStake": 40000000,
+      "accumulatedTStake": 40000000,
+      "weight": "40000000000000000000000000",
+      "poolWeightAfterDivision": 40000000,
+      "weightNote": "Individual operator stake"
+    },
+    {
+      "identification": "Shoegazer",
+      "stakingProvider": "0xBDC3D611B79349e0b3d63833619875E89388298D",
+      "operator": "0xcE1041328785C524aA949A53a3d1010571e9D3C3",
+      "operatorType": "community",
+      "providerGroup": null,
+      "originalTStake": 40000000,
+      "accumulatedTStake": 40000000,
+      "weight": "40000000000000000000000000",
+      "poolWeightAfterDivision": 40000000,
+      "weightNote": "Individual operator stake"
+    },
+    {
+      "identification": "James Campbell",
+      "stakingProvider": "0xc9909E3d0B87A1A2eB0f1194Ec5e3694464Ac522",
+      "operator": "0x48Bb2b5ad7c31e097a86CDB9e337e6bCe97F46Ac",
+      "operatorType": "community",
+      "providerGroup": null,
+      "originalTStake": 40000000,
+      "accumulatedTStake": 40000000,
+      "weight": "40000000000000000000000000",
+      "poolWeightAfterDivision": 40000000,
+      "weightNote": "Individual operator stake"
+    },
+    {
+      "identification": "Evandro Saturnino",
+      "stakingProvider": "0x8afC0e9F8207975301893452bDeD1e8F2892f953",
+      "operator": "0xb71c49E11048bf3d2BC0BaB81252334295dee012",
+      "operatorType": "community",
+      "providerGroup": null,
+      "originalTStake": 40000000,
+      "accumulatedTStake": 40000000,
+      "weight": "40000000000000000000000000",
+      "poolWeightAfterDivision": 40000000,
+      "weightNote": "Individual operator stake"
+    },
+    {
+      "identification": "The Egg",
+      "stakingProvider": "0x58d665406Cf0F890daD766389DF879E84cc55671",
+      "operator": "0x29A35c3396Fe34bd278414d7b30E6e195226778D",
+      "operatorType": "community",
+      "providerGroup": null,
+      "originalTStake": 40000000,
+      "accumulatedTStake": 40000000,
+      "weight": "40000000000000000000000000",
+      "poolWeightAfterDivision": 40000000,
+      "weightNote": "Individual operator stake"
+    },
+    {
+      "identification": "0x10003",
+      "stakingProvider": "0x39A2D252769363D070a77fE3ad24b9954e1fB876",
+      "operator": "0x3e7015749b5a18395e4a33d3190fba70b83c6d24",
+      "operatorType": "community",
+      "providerGroup": null,
+      "originalTStake": 40000000,
+      "accumulatedTStake": 40000000,
+      "weight": "40000000000000000000000000",
+      "poolWeightAfterDivision": 40000000,
+      "weightNote": "Individual operator stake"
+    },
+    {
+      "identification": "Vict0x",
+      "stakingProvider": "0xE6C074228932F53C9E50928AD69DB760649A8C4d",
+      "operator": "0x47ba8409089FDB991Db511E10B39063b84A83d9D",
+      "operatorType": "community",
+      "providerGroup": null,
+      "originalTStake": 40000000,
+      "accumulatedTStake": 40000000,
+      "weight": "40000000000000000000000000",
+      "poolWeightAfterDivision": 40000000,
+      "weightNote": "Individual operator stake"
+    },
+    {
+      "identification": "BitFwd (dtbx)",
+      "stakingProvider": "0x557C836714aFd04f796686b0a50528714B549C74",
+      "operator": "0x8BBC75CAeAFa3020298D924a0958a6A783584e21",
+      "operatorType": "community",
+      "providerGroup": null,
+      "originalTStake": 40000000,
+      "accumulatedTStake": 40000000,
+      "weight": "40000000000000000000000000",
+      "poolWeightAfterDivision": 40000000,
+      "weightNote": "Individual operator stake"
+    },
+    {
+      "identification": "NuCo",
+      "stakingProvider": "0x97d065B567cc4543D20dffaa7009f9aDe64d7E26",
+      "operator": "0xD7F138ccF194ca2F49c28870b3b5F556B57Fb8b7",
+      "operatorType": "beta_staker",
+      "providerGroup": "NuCo",
+      "originalTStake": 20000000,
+      "accumulatedTStake": 40000000,
+      "weight": "40000000000000000000000000",
+      "poolWeightAfterDivision": 40000000,
+      "weightNote": "Accumulated from 2 NuCo operators"
+    },
+    {
+      "identification": "Blitmore",
+      "stakingProvider": "0xF2962794EbE69fc88F8dB441c1CD13b9F90B1Fe7",
+      "operator": "0x92d59dEcAF8DaE35474FE03756282885661EDd1C",
+      "operatorType": "community",
+      "providerGroup": null,
+      "originalTStake": 32061176,
+      "accumulatedTStake": 32061176,
+      "weight": "32061176000000000000000000",
+      "poolWeightAfterDivision": 32061176,
+      "weightNote": "Individual operator stake"
+    },
+    {
+      "identification": "Sub7",
+      "stakingProvider": "0x885fA88126955D5CFE0170A134e0300B8d3EfF47",
+      "operator": "0x516C1024745FB62174fe8b5a4fFb0c428cc695f9",
+      "operatorType": "professional",
+      "providerGroup": null,
+      "originalTStake": 30000000,
+      "accumulatedTStake": 30000000,
+      "weight": "30000000000000000000000000",
+      "poolWeightAfterDivision": 30000000,
+      "weightNote": "Individual operator stake"
+    },
+    {
+      "identification": "Delight Labs",
+      "stakingProvider": "0x9Aa35dCE841A43693Cde23B86c394E1aEFb61c65",
+      "operator": "0xAEDA27AB0037986825397da7bC415F2aF8CEb458",
+      "operatorType": "professional",
+      "providerGroup": null,
+      "originalTStake": 30000000,
+      "accumulatedTStake": 30000000,
+      "weight": "30000000000000000000000000",
+      "poolWeightAfterDivision": 30000000,
+      "weightNote": "Individual operator stake"
+    },
+    {
+      "identification": "Ponkila",
+      "stakingProvider": "0xedd0C77314f07fCA414B549156A0d9C915B096E9",
+      "operator": "0x58cccc6d3a4eb343f5d42264a95254b28b8c10fe",
+      "operatorType": "professional",
+      "providerGroup": null,
+      "originalTStake": 30000000,
+      "accumulatedTStake": 30000000,
+      "weight": "30000000000000000000000000",
+      "poolWeightAfterDivision": 30000000,
+      "weightNote": "Individual operator stake"
+    }
+  ],
+  "deprecatedOperatorsNotAdded": [
+    {
+      "identification": "Boar",
+      "stakingProvider": "0x6dEE1fd2b29e2214a4f9aB9Ba5f3D17C8Cb56D11",
+      "operator": "0x39dbe14b0B8D3f9D2FC36EB1F58e0A0959fab1CA",
+      "providerGroup": "Boar",
+      "currentTStake": 62765213,
+      "reason": "Redundant operator - stake consolidated to primary operator"
+    },
+    {
+      "identification": "Boar",
+      "stakingProvider": "0x5838636dCDd92113998FEcbcDeDf5B0d8bEB4920",
+      "operator": "0xAE58c689E5846AA1F18bF65e096A47fbca63b82e",
+      "providerGroup": "Boar",
+      "currentTStake": 62765213,
+      "reason": "Redundant operator - stake consolidated to primary operator"
+    },
+    {
+      "identification": "Kiln",
+      "stakingProvider": "0xBf40548b6Fd104C3cA9B2F6b2E2383301dB1c023",
+      "operator": "0xdd2adeaf1662a6bbfaf7ccd87273bea6cbbb4dd8",
+      "providerGroup": null,
+      "currentTStake": 40000000,
+      "reason": "Leaving the Beta Staker Pool - NOT added to Allowlist"
+    },
+    {
+      "identification": "Staked",
+      "stakingProvider": "0xCC957f683a7e3093388946d03193Eee10086b900",
+      "operator": "0x7B251041b2445a3517db540d6fc9f7826C583922",
+      "providerGroup": "Staked",
+      "currentTStake": 38416500,
+      "reason": "Redundant operator - stake consolidated to primary operator"
+    },
+    {
+      "identification": "Staked",
+      "stakingProvider": "0xEAE5790C6eE3b6425f39D3Fd33644a7cb90C75A5",
+      "operator": "0xf28B3e1DEcF9aA2C389685D27f699A6Bc6f4cdaB",
+      "providerGroup": "Staked",
+      "currentTStake": 38416500,
+      "reason": "Redundant operator - stake consolidated to primary operator"
+    },
+    {
+      "identification": "Staked",
+      "stakingProvider": "0x02faA4286eF91247f8D09F36618D4694717F76bB",
+      "operator": "0x35a78eFE7a7531b4268dF011BB2C5e002e20EB8B",
+      "providerGroup": "Staked",
+      "currentTStake": 38416500,
+      "reason": "Redundant operator - stake consolidated to primary operator"
+    },
+    {
+      "identification": "Staked",
+      "stakingProvider": "0xBa1Ac67539c09AdDe63335635869c86f8e463514",
+      "operator": "0xaBE527aDbE374d38DEABd5F540DA44da971a09a1",
+      "providerGroup": "Staked",
+      "currentTStake": 38416500,
+      "reason": "Redundant operator - stake consolidated to primary operator"
+    },
+    {
+      "identification": "P2P",
+      "stakingProvider": "0xdA08C16C86B78cD56CB10FDc0370EFc549d8638B",
+      "operator": "0xB102B1e8b61376d1D4F0Bd8F6E4e4bB3Cf79B75b",
+      "providerGroup": "P2P",
+      "currentTStake": 36000000,
+      "reason": "Redundant operator - stake consolidated to primary operator"
+    },
+    {
+      "identification": "P2P",
+      "stakingProvider": "0xC0B851DCBf00bA59D8B1f490aF93dEC4275cFFcC",
+      "operator": "0x8235b62A2B69b03D577b254d980437702238028c",
+      "providerGroup": "P2P",
+      "currentTStake": 36000000,
+      "reason": "Redundant operator - stake consolidated to primary operator"
+    },
+    {
+      "identification": "P2P",
+      "stakingProvider": "0x372626FF774573E82eb7D4545EE96F68F75aaFF6",
+      "operator": "0x448386Af932b9b433dA640D88b9B9FC21AF82E0d",
+      "providerGroup": "P2P",
+      "currentTStake": 36000000,
+      "reason": "Redundant operator - stake consolidated to primary operator"
+    },
+    {
+      "identification": "P2P",
+      "stakingProvider": "0xB88A62417eb9e6320AF7620BE0CFBE2dddd435A5",
+      "operator": "0xcffd10eb581f659deA37f7a1e8CA6c4193aE44D8",
+      "providerGroup": "P2P",
+      "currentTStake": 36000000,
+      "reason": "Redundant operator - stake consolidated to primary operator"
+    },
+    {
+      "identification": "P2P",
+      "stakingProvider": "0xb78F9EFE4F713feEFcAB466d2eE41972a0E45205",
+      "operator": "0x87A185a640739482824fC718323D6dF7AB1192f5",
+      "providerGroup": "P2P",
+      "currentTStake": 36000000,
+      "reason": "Redundant operator - stake consolidated to primary operator"
+    },
+    {
+      "identification": "Staked",
+      "stakingProvider": "0xa6E3A08FaE33898fC31C4f6C7a584827D809352D",
+      "operator": "0x4a1bE85bf8Eb73E748715bD40926349041427b98",
+      "providerGroup": "Staked",
+      "currentTStake": 21342000,
+      "reason": "Redundant operator - stake consolidated to primary operator"
+    },
+    {
+      "identification": "NuCo",
+      "stakingProvider": "0xc1268db05E7bD38BD85b2C3Fef80F8968a2c933A",
+      "operator": "0xB6C7382f67c6866597ff3D8902220f1505Bd6825",
+      "providerGroup": "NuCo",
+      "currentTStake": 20000000,
+      "reason": "Redundant operator - stake consolidated to primary operator"
+    },
+    {
+      "identification": "Boar",
+      "stakingProvider": "0xa7baCa5A92842689359Fb1782e75D6eFF59152e6",
+      "operator": "0x65a4ebD101A7A8A762eB3f20371f5222e3490EEE",
+      "providerGroup": "Boar",
+      "currentTStake": 20000000,
+      "reason": "Redundant operator - stake consolidated to primary operator"
+    },
+    {
+      "identification": "Boar",
+      "stakingProvider": "0xcA5Ac1b59796bE580820e9C66d395977d4F7c3C0",
+      "operator": "0xfF4CD368F6A9a69D3e082C26414c0f0666B8A02F",
+      "providerGroup": "Boar",
+      "currentTStake": 20000000,
+      "reason": "Redundant operator - stake consolidated to primary operator"
+    },
+    {
+      "identification": "Boar",
+      "stakingProvider": "0xE4A3492c8b085aB5eDB6FDAE329f172056f6b04e",
+      "operator": "0x909E8C501bc6Cd135Efb6878577dAC89B95f34dC",
+      "providerGroup": "Boar",
+      "currentTStake": 14120496,
+      "reason": "Redundant operator - stake consolidated to primary operator"
+    }
+  ],
+  "solidityInitialization": {
+    "description": "Call addStakingProvider for each STAYING operator with ACCUMULATED weight",
+    "operatorCount": 20,
+    "calls": [
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0xAAFc71044C2B832dDDFcedb0AE99695B0367dC57",
+        "weight": "242416135000000000000000000",
+        "comment": "Boar - pool weight: 242416135 (accumulated from 62765213)"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0x16fCc54E027a342F0683263eb43Cd9af1BD72169",
+        "weight": "213424500000000000000000000",
+        "comment": "Staked - pool weight: 213424500 (accumulated from 38416500)"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0xDC09db6e5DA859eDeb7FC7bDCf47545056dC35F7",
+        "weight": "200000000000000000000000000",
+        "comment": "P2P - pool weight: 200000000 (accumulated from 20000000)"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0x43df8c68a56249CC151dfb3a7E82cC7Fd624cF2a",
+        "weight": "40000000000000000000000000",
+        "comment": "Colossus Digital - pool weight: 40000000"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0x331F6346C4c1bdb4Ef7467056C66250F0Eb8A44f",
+        "weight": "40000000000000000000000000",
+        "comment": "Global Stake - pool weight: 40000000"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0xc54238cac19bB8D57a9Bcdd28C3fdd49d82378D8",
+        "weight": "40000000000000000000000000",
+        "comment": "Republic Crypto - pool weight: 40000000"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0x621074D613Fc938bD9381AB77Ef3609a02432628",
+        "weight": "40000000000000000000000000",
+        "comment": "Liquify - pool weight: 40000000"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0xB0C9F472b2066691Ab7FEE5b6702c28ab35888b2",
+        "weight": "40000000000000000000000000",
+        "comment": "Stake Capital - pool weight: 40000000"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0xBDC3D611B79349e0b3d63833619875E89388298D",
+        "weight": "40000000000000000000000000",
+        "comment": "Shoegazer - pool weight: 40000000"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0xc9909E3d0B87A1A2eB0f1194Ec5e3694464Ac522",
+        "weight": "40000000000000000000000000",
+        "comment": "James Campbell - pool weight: 40000000"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0x8afC0e9F8207975301893452bDeD1e8F2892f953",
+        "weight": "40000000000000000000000000",
+        "comment": "Evandro Saturnino - pool weight: 40000000"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0x58d665406Cf0F890daD766389DF879E84cc55671",
+        "weight": "40000000000000000000000000",
+        "comment": "The Egg - pool weight: 40000000"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0x39A2D252769363D070a77fE3ad24b9954e1fB876",
+        "weight": "40000000000000000000000000",
+        "comment": "0x10003 - pool weight: 40000000"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0xE6C074228932F53C9E50928AD69DB760649A8C4d",
+        "weight": "40000000000000000000000000",
+        "comment": "Vict0x - pool weight: 40000000"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0x557C836714aFd04f796686b0a50528714B549C74",
+        "weight": "40000000000000000000000000",
+        "comment": "BitFwd (dtbx) - pool weight: 40000000"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0x97d065B567cc4543D20dffaa7009f9aDe64d7E26",
+        "weight": "40000000000000000000000000",
+        "comment": "NuCo - pool weight: 40000000 (accumulated from 20000000)"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0xF2962794EbE69fc88F8dB441c1CD13b9F90B1Fe7",
+        "weight": "32061176000000000000000000",
+        "comment": "Blitmore - pool weight: 32061176"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0x885fA88126955D5CFE0170A134e0300B8d3EfF47",
+        "weight": "30000000000000000000000000",
+        "comment": "Sub7 - pool weight: 30000000"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0x9Aa35dCE841A43693Cde23B86c394E1aEFb61c65",
+        "weight": "30000000000000000000000000",
+        "comment": "Delight Labs - pool weight: 30000000"
+      },
+      {
+        "function": "addStakingProvider",
+        "stakingProvider": "0xedd0C77314f07fCA414B549156A0d9C915B096E9",
+        "weight": "30000000000000000000000000",
+        "comment": "Ponkila - pool weight: 30000000"
+      }
+    ]
+  }
+}

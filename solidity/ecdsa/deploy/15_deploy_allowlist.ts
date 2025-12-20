@@ -24,17 +24,27 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     }
   )
 
-  // Transfer ownership to governance if specified and different from deployer
-  if (governance && governance !== deployer) {
-    await helpers.ownable.transferOwnership("Allowlist", governance, deployer)
-  }
+  // IMPORTANT: Do NOT transfer ownership here!
+  // Allowlist uses Ownable2StepUpgradeable which requires two steps:
+  // 1. transferOwnership(newOwner) - sets pendingOwner
+  // 2. acceptOwnership() - new owner must call to complete transfer
+  //
+  // If we transfer here, script 16 would fail because:
+  // - governance becomes pendingOwner (not owner)
+  // - deployer is still the actual owner
+  // - script 16 would try to use governance signer → onlyOwner fails
+  //
+  // Ownership transfer is handled at the END of script 16 after weights are set.
 
   // Log deployment information
   console.log(`Allowlist deployed at: ${allowlist.address}`)
   console.log(
     `Allowlist proxy admin: ${proxyDeployment.receipt.contractAddress}`
   )
-  console.log(`Allowlist owner: ${await allowlist.owner()}`)
+  console.log(`Allowlist owner: ${await allowlist.owner()} (deployer)`)
+  if (governance && governance !== deployer) {
+    console.log(`Ownership will be transferred to governance (${governance}) after weights initialization`)
+  }
 
   return true
 }
