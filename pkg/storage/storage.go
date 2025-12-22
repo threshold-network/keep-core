@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 
@@ -42,27 +43,34 @@ func Initialize(config Config, encryptionPassword string) (Storage, error) {
 
 	storageRootDir := filepath.Clean(config.Dir)
 
-	if err := persistence.EnsureDirectoryExists(
+	// Ensure the parent directory exists before creating subdirectories
+	if err := os.MkdirAll(storageRootDir, 0755); err != nil {
+		return storage, fmt.Errorf(
+			"cannot create storage root directory [%s]: [%w]",
 		storageRootDir,
-		keyStoreDirName,
-	); err != nil {
+			err,
+		)
+	}
+
+	// Create keystore directory
+	keystoreDir := filepath.Join(storageRootDir, keyStoreDirName)
+	if err := os.MkdirAll(keystoreDir, 0755); err != nil {
 		return storage, fmt.Errorf(
 			"cannot create storage directory for keystore: [%w]",
 			err,
 		)
 	}
-	storage.keystoreDir = filepath.Join(storageRootDir, keyStoreDirName)
+	storage.keystoreDir = keystoreDir
 
-	if err := persistence.EnsureDirectoryExists(
-		storageRootDir,
-		workDirName,
-	); err != nil {
+	// Create work directory
+	workDir := filepath.Join(storageRootDir, workDirName)
+	if err := os.MkdirAll(workDir, 0755); err != nil {
 		return storage, fmt.Errorf(
 			"cannot create storage directory for work: [%w]",
 			err,
 		)
 	}
-	storage.workDir = filepath.Join(storageRootDir, workDirName)
+	storage.workDir = workDir
 
 	storage.encryptionPassword = encryptionPassword
 
@@ -91,7 +99,8 @@ func (s *Storage) initializeKeyStorePersistence(parentDir string, dir string) (
 	persistence.ProtectedHandle,
 	error,
 ) {
-	if err := persistence.EnsureDirectoryExists(parentDir, dir); err != nil {
+	dirPath := filepath.Join(parentDir, dir)
+	if err := os.MkdirAll(dirPath, 0755); err != nil {
 		return nil, fmt.Errorf(
 			"cannot create storage directory [%s] in [%s]: [%w]",
 			dir,
@@ -119,7 +128,8 @@ func (s *Storage) initializeWorkPersistence(parentDir string, dir string) (
 	persistence.BasicHandle,
 	error,
 ) {
-	if err := persistence.EnsureDirectoryExists(parentDir, dir); err != nil {
+	dirPath := filepath.Join(parentDir, dir)
+	if err := os.MkdirAll(dirPath, 0755); err != nil {
 		return nil, fmt.Errorf(
 			"cannot create storage directory [%s] in [%s]: [%w]",
 			dir,
