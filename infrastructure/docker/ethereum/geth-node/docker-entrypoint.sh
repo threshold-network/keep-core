@@ -27,7 +27,8 @@ cat <<EOF >> /root/genesis.json
     "chainId": 1101,
     "homesteadBlock": 0,
     "eip155Block": 0,
-    "eip158Block": 0
+    "eip158Block": 0,
+    "terminalTotalDifficulty": null
   },
   "difficulty" : "0x20000",
   "gasLimit"   : "0x493E00",
@@ -48,8 +49,13 @@ cat /root/genesis.json
 echo ""
 
 # initialize chain with our genesis.json parameters
-echo "-- Initialize geth"
-/geth init /root/genesis.json
+# Only initialize if chaindata doesn't already exist
+if [ ! -d "/root/.ethereum/geth/chaindata" ]; then
+  echo "-- No chaindata directory. Need to Initialize. Writing genesis block..."
+  /geth init /root/genesis.json
+else
+  echo "-- Chaindata directory already exists. Skipping initialization."
+fi
 echo ""
 
 # start miner and allocate rewards to account0
@@ -61,6 +67,6 @@ exec "/geth" --port 30303 --networkid 1101 \
     --rpc --rpcport 8545 --rpcaddr 0.0.0.0 --rpccorsdomain "" \
     --rpcapi "db,ssh,miner,admin,eth,net,web3,personal" \
     --syncmode "fast" \
-    --mine --miner.threads=1 \
+    --mine --minerthreads=1 \
     --identity $RANDOM_ID \
     --miner.etherbase=$GETH_ETH_ACCOUNT0

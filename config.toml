@@ -1,0 +1,132 @@
+# This is a sample TOML configuration file for the Keep client.
+
+[ethereum]
+URL = "ws://127.0.0.1:8546"
+KeyFile = "/Users/levakhnazarov/ethereum/data/keystore/UTC--2025-12-18T18-53-35.539381000Z--7966c178f466b060aaeb2b91e9149a5fb2ec9c53"
+KeyFilePassword = "password"
+
+# Uncomment to override the defaults for transaction status monitoring.
+
+# MiningCheckInterval is the interval in which transaction
+# mining status is checked. If the transaction is not mined within this
+# time, the gas price is increased and transaction is resubmitted.
+#
+# MiningCheckInterval = 60  # 60 sec (default value)
+
+# MaxGasFeeCap specifies the maximum gas fee cap the client is
+# willing to pay for the transaction to be mined. The offered transaction
+# gas cost can not be higher than the max gas fee cap value. If the maximum
+# allowed gas fee cap is reached, no further resubmission attempts are
+# performed. This property should be set only for Ethereum. In case of
+# legacy non-EIP-1559 transactions, this field works in the same way as
+# `MaxGasPrice` property.
+#
+# MaxGasFeeCap = "500 Gwei" # 500 Gwei (default value)
+
+# Uncomment to enable Ethereum node rate limiting. Both properties can be
+# used together or separately.
+#
+# RequestsPerSecondLimit sets the maximum average number of requests
+# per second which can be executed against the Ethereum node.
+# All types of Ethereum node requests are rate-limited,
+# including view function calls.
+#
+# RequestsPerSecondLimit = 150
+
+# ConcurrencyLimit sets the maximum number of concurrent requests which
+# can be executed against the Ethereum node at the same time.
+# This limit affects all types of Ethereum node requests,
+# including view function calls.
+#
+# ConcurrencyLimit = 30
+
+# BalanceAlertThreshold defines a minimum value of the operator's account
+# balance below which the client will start reporting errors in logs.
+# A value can be provided in `wei`, `Gwei` or `ether`, e.g. `7.5 ether`,
+# `7500000000 Gwei`.
+#
+# BalanceAlertThreshold = "0.5 ether" # 0.5 ether (default value)
+
+[bitcoin.electrum]
+# URL to the Electrum server in format: `scheme://hostname:port`.
+# Should be uncommented only when using a custom Electrum server. Otherwise,
+# one of the default embedded servers is selected randomly at startup.
+# For local development, a URL is required to pass validation.
+# Using a testnet Electrum server URL as a placeholder.
+# Replace this with a real Electrum server URL if needed for Bitcoin functionality.
+URL = "tcp://148.251.237.196:50001"
+
+# Timeout for a single attempt of Electrum connection establishment.
+# ConnectTimeout = "10s"
+
+# Timeout for Electrum connection establishment retries.
+# ConnectRetryTimeout = "1m"
+
+# Timeout for a single attempt of Electrum protocol request.
+# RequestTimeout = "30s"
+
+# Timeout for Electrum protocol request retries.
+# RequestRetryTimeout = "2m"
+
+# Interval for connection keep alive requests.
+# KeepAliveInterval = "5m"
+
+[network]
+Bootstrap = false
+Peers = [
+	"/ip4/127.0.0.1/tcp/3919/ipfs/16Uiu2HAmFRJtCWfdXhZEZHWb4tUpH1QMMgzH1oiamCfUuK6NgqWX",
+]
+Port = 3920
+
+# Uncomment to override the node's default addresses announced in the network
+# AnnouncedAddresses = ["/dns4/example.com/tcp/3919", "/ip4/80.70.60.50/tcp/3919"]
+
+# Uncomment to enable courtesy message dissemination for topics this node is
+# not subscribed to. Messages will be forwarded to peers for the duration
+# specified as a value in seconds.
+# Message dissemination is disabled by default and should be enabled only
+# on selected bootstrap nodes. It is not a good idea to enable dissemination
+# on non-bootstrap node as it may clutter communication and eventually lead
+# to blacklisting the node. The maximum allowed value is 90 seconds.
+#
+# DisseminationTime = 90
+
+[storage]
+Dir = "/Users/levakhnazarov/threshold/fork2/keep-core/data"
+
+# ClientInfo exposes metrics and diagnostics modules.
+# 
+# Metrics collects and exposes information useful for external monitoring tools usually
+# operating on time series data.
+# All values exposed by metrics module are quantifiable or countable.
+#
+# The following metrics are available:
+# - connected peers count
+# - connected bootstraps count
+# - eth client connectivity status
+# 
+# Diagnostics module exposes the following information:
+# - list of connected peers along with their network id and ethereum operator address
+# - information about the client's network id and ethereum operator address
+[clientInfo]
+Port = 9601
+NetworkMetricsTick = 60
+EthereumMetricsTick = 600
+
+# Uncomment to overwrite default values for TBTC config.
+#
+# [tbtc]
+# PreParamsPoolSize = 3000
+# PreParamsGenerationTimeout = "2m"
+# PreParamsGenerationDelay = "10s"
+# PreParamsGenerationConcurrency = 1
+# KeyGenerationConcurrency = 1
+
+# Developer options to work with locally deployed contracts
+[developer]
+TokenStakingAddress = "0x6d19C0b4bd2B49eCa000C2Fd910c2Db9607f34ee"
+RandomBeaconAddress = "0x18266866EbBab6cA7f5F2724e22CEF54a98Cda92"
+WalletRegistryAddress = "0xbd49D2e3E501918CD08Eb4cCa34984F428c83464"
+BridgeAddress = "0xD5c25Cf659a65dD3Eb7856bcadD8539225Cd66dB"
+MaintainerProxyAddress = "0xE2C7e629CD089b9163D9Ffe924b3d11AF4d9d261"
+WalletProposalValidatorAddress = "0x7Df6bd0a30eeEAbea50aC8014829FFC013Cc9ca0"

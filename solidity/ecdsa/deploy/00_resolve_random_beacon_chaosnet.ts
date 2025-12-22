@@ -17,7 +17,26 @@ const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
       `using existing RandomBeaconChaosnet at ${RandomBeaconChaosnet.address}`
     )
   } else {
+    // Try to find it from the random-beacon package directly
+    const fs = require("fs")
+    const path = require("path")
+    const randomBeaconPath = path.resolve(
+      __dirname,
+      "../../random-beacon/deployments/development/RandomBeaconChaosnet.json"
+    )
+    if (fs.existsSync(randomBeaconPath)) {
+      const chaosnetData = JSON.parse(fs.readFileSync(randomBeaconPath, "utf8"))
+      log(
+        `using RandomBeaconChaosnet from random-beacon package at ${chaosnetData.address}`
+      )
+      // Register it with deployments
+      await deployments.save("RandomBeaconChaosnet", {
+        address: chaosnetData.address,
+        abi: chaosnetData.abi,
+      })
+    } else {
     throw new Error("deployed RandomBeaconChaosnet contract not found")
+    }
   }
 }
 

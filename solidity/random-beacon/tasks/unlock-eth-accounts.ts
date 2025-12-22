@@ -17,6 +17,38 @@ task("unlock-accounts", "Unlock ethereum accounts").setAction(
       console.log(`Total accounts: ${accounts.length}`)
       console.log("---------------------------------")
 
+      if (accounts.length === 0) {
+        console.log("No accounts found. Make sure Geth is running with --unlock flag.")
+        return
+      }
+
+      // Check if personal_unlockAccount is available (Geth < 1.16)
+      let personalNamespaceAvailable = false
+      try {
+        await provider.send("personal_listAccounts", [])
+        personalNamespaceAvailable = true
+      } catch (error: any) {
+        // If error code is -32601, the method doesn't exist (Geth 1.16+)
+        if (error.code === -32601 || error.error?.code === -32601) {
+          personalNamespaceAvailable = false
+        } else {
+          // Other errors, assume it's available but failed for another reason
+          personalNamespaceAvailable = true
+        }
+      }
+
+      if (!personalNamespaceAvailable) {
+        console.log("\nGeth 1.16+ detected: personal namespace is deprecated.")
+        console.log("Accounts should be unlocked via --unlock flag when starting Geth.")
+        console.log("Skipping RPC unlock (accounts are already unlocked via --unlock).")
+        console.log(`\nFound ${accounts.length} accounts available for use:`)
+        for (let i = 0; i < accounts.length; i++) {
+          console.log(`  Account ${i}: ${accounts[i]}`)
+        }
+        return
+      }
+
+      // For older Geth versions, unlock via RPC
       for (let i = 0; i < accounts.length; i++) {
         const account = accounts[i]
 

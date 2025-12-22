@@ -7,6 +7,258 @@
 
 = Setting up local T network for development purposes
 
+== Quick Start Guide
+
+This is a complete step-by-step guide to set up a local T network for development.
+
+=== Step 1: Prerequisites
+
+Install the following:
+
+* https://geth.ethereum.org/[Geth Ethereum client] - Ethereum client
+* https://nodejs.org/[Node.js] - JavaScript runtime (check Hardhat compatibility)
+* https://yarnpkg.com/[Yarn] - Package manager
+
+Verify installations:
+
+```
+$ geth version
+$ node --version
+$ yarn --version
+```
+
+=== Step 2: Create Directory Structure
+
+```
+$ mkdir -p ~/ethereum/data/keystore
+```
+
+=== Step 3: Generate Ethereum Accounts
+
+You need at least 11 Ethereum accounts. Create them using one of these methods:
+
+**Method 1: Using a loop (recommended)**
+
+```
+$ for i in {1..11}; do
+    echo "password" | geth account new --keystore ~/ethereum/data/keystore --password <(echo "password")
+  done
+```
+
+**Method 2: One by one**
+
+```
+$ geth account new --keystore ~/ethereum/data/keystore
+# Enter password: password
+# Repeat this 11 times
+```
+
+**Verify accounts were created:**
+
+```
+$ geth account list --keystore ~/ethereum/data/keystore/
+```
+
+You should see at least 11 accounts listed. Note the address of Account #0 (the first account) - this will be your miner account.
+
+=== Step 4: Create Genesis File
+
+Create a `genesis.json` file in your project root directory. Use the provided script:
+
+```
+$ cd /path/to/keep-core
+$ ./scripts/generate-genesis.sh
+```
+
+Or manually create it (see detailed instructions below):
+
+```
+$ cd /path/to/keep-core
+$ cat > generate-genesis.sh << 'EOF'
+#!/bin/bash
+GENESIS_FILE="genesis.json"
+
+echo '{' > $GENESIS_FILE
+echo '    "config": {' >> $GENESIS_FILE
+echo '        "chainId": 1101,' >> $GENESIS_FILE
+echo '        "eip150Block": 0,' >> $GENESIS_FILE
+echo '        "eip155Block": 0,' >> $GENESIS_FILE
+echo '        "eip158Block": 0,' >> $GENESIS_FILE
+echo '        "byzantiumBlock": 0,' >> $GENESIS_FILE
+echo '        "homesteadBlock": 0,' >> $GENESIS_FILE
+echo '        "constantinopleBlock": 0,' >> $GENESIS_FILE
+echo '        "petersburgBlock": 0,' >> $GENESIS_FILE
+echo '        "daoForkBlock": 0,' >> $GENESIS_FILE
+echo '        "istanbulBlock": 0,' >> $GENESIS_FILE
+echo '        "daoForkSupport": true,' >> $GENESIS_FILE
+echo '        "terminalTotalDifficulty": null' >> $GENESIS_FILE
+echo '    },' >> $GENESIS_FILE
+echo '    "difficulty": "0x20",' >> $GENESIS_FILE
+echo '    "gasLimit": "0x7A1200",' >> $GENESIS_FILE
+echo '    "alloc": {' >> $GENESIS_FILE
+
+# Extract account addresses and add to genesis
+ACCOUNTS=$(geth account list --keystore ~/ethereum/data/keystore/ 2>/dev/null | grep -o '{[^}]*}' | sed 's/{//;s/}//' | head -15)
+FIRST=true
+for addr in $ACCOUNTS; do
+    if [ "$FIRST" = true ]; then
+        FIRST=false
+    else
+        echo ',' >> $GENESIS_FILE
+    fi
+    echo "        \"0x$addr\": { \"balance\": \"1000000000000000000000000000000000000000000000000000000\" }" | tr -d '\n' >> $GENESIS_FILE
+done
+
+echo '' >> $GENESIS_FILE
+echo '    }' >> $GENESIS_FILE
+echo '}' >> $GENESIS_FILE
+
+echo "Generated $GENESIS_FILE"
+EOF
+
+$ chmod +x generate-genesis.sh
+$ ./generate-genesis.sh
+```
+
+Or manually create `genesis.json` with all your account addresses (see detailed instructions below).
+
+=== Step 5: Set Environment Variables
+
+```
+$ export GETH_DATA_DIR=~/ethereum/data
+$ export GETH_ETHEREUM_ACCOUNT=$(geth account list --keystore ~/ethereum/data/keystore/ 2>/dev/null | head -1 | grep -o '{[^}]*}' | sed 's/{//;s/}//' | sed 's/^/0x/')
+$ export KEEP_ETHEREUM_PASSWORD=password
+
+# Verify the miner account was set correctly
+$ echo "Miner account: $GETH_ETHEREUM_ACCOUNT"
+```
+
+=== Step 6: Initialize Geth Chain
+
+**Important:** If you have an existing chain and want to start fresh, remove it first:
+
+```
+$ rm -rf $GETH_DATA_DIR/geth
+```
+
+Initialize the chain:
+
+```
+$ geth --datadir=$GETH_DATA_DIR init genesis.json
+```
+
+You should see "Successfully wrote genesis state" messages.
+
+=== Step 7: Start Geth with Mining
+
+Start Geth in a separate terminal window (keep it running):
+
+```
+$ export GETH_DATA_DIR=~/ethereum/data
+$ export GETH_ETHEREUM_ACCOUNT=$(geth account list --keystore ~/ethereum/data/keystore/ 2>/dev/null | head -1 | grep -o '{[^}]*}' | sed 's/{//;s/}//' | sed 's/^/0x/')
+
+$ geth --port 3000 --networkid 1101 --identity 'somerandomidentity' --ws --ws.addr '127.0.0.1' --ws.port '8546' --ws.origins '*' --ws.api 'admin, debug, web3, eth, txpool, personal, ethash, miner, net' --http --http.port '8545' --http.addr '127.0.0.1' --http.corsdomain '' --http.api 'admin, debug, web3, eth, txpool, personal, ethash, miner, net' --datadir=$GETH_DATA_DIR --allow-insecure-unlock --miner.etherbase=$GETH_ETHEREUM_ACCOUNT --mine --miner.threads=1
+```
+
+Wait for Geth to start mining blocks. You should see messages like:
+```
+INFO [timestamp] 🔨 mined potential block number=1 hash=...
+```
+
+**Verify Geth is running:**
+
+```
+$ curl -X POST -H "Content-Type: application/json" --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' http://localhost:8545
+```
+
+You should get a response with a block number greater than 0.
+
+=== Step 8: Install Contracts and Build Client
+
+In your keep-core project directory:
+
+```
+$ cd /path/to/keep-core
+
+# Set environment variables (if not already set)
+$ export GETH_DATA_DIR=~/ethereum/data
+$ export KEEP_ETHEREUM_PASSWORD=password
+
+# Run the installation script
+$ ./scripts/install.sh --network development
+```
+
+This will:
+* Install dependencies
+* Unlock Ethereum accounts
+* Build and deploy contracts (threshold-network, random-beacon, ecdsa, tbtc-v2)
+* Build the client
+
+**Note:** This process can take 10-30 minutes depending on your system.
+
+=== Step 9: Initialize Clients
+
+For each client/peer you want to run, initialize it:
+
+```
+$ export GETH_DATA_DIR=~/ethereum/data
+$ export KEEP_ETHEREUM_PASSWORD=password
+
+$ ./scripts/initialize.sh --network development
+```
+
+The script will prompt you to select a config file. It will:
+* Mint and approve T tokens
+* Stake T tokens
+* Increase authorization for RandomBeacon and WalletRegistry
+* Register operator for RandomBeacon and WalletRegistry
+
+Repeat this step for each client instance you want to run (use different config files).
+
+=== Step 10: Start Clients
+
+Start each client instance:
+
+```
+$ export GETH_DATA_DIR=~/ethereum/data
+$ export KEEP_ETHEREUM_PASSWORD=password
+
+$ ./scripts/start.sh
+```
+
+Select the config file that matches the one you used during initialization.
+
+=== Troubleshooting
+
+**Problem: "insufficient funds" error**
+
+* Make sure Geth is running and mining blocks
+* Verify accounts have balance: `curl -X POST -H "Content-Type: application/json" --data '{"jsonrpc":"2.0","method":"eth_getBalance","params":["0xYOUR_ADDRESS","latest"],"id":1}' http://localhost:8545`
+* Re-initialize the chain with genesis.json if accounts have 0 balance
+
+**Problem: "Could not decrypt key with given password"**
+
+* Make sure all accounts were created with password "password"
+* Check that KEEP_ETHEREUM_PASSWORD is set correctly
+
+**Problem: "Can't link the project to itself"**
+
+* This has been fixed in the install script
+* Make sure you're using the latest version of the script
+
+**Problem: Geth not mining blocks**
+
+* Check that `--mine` flag is included
+* Verify `--miner.etherbase` is set to a valid account address
+* Check Geth logs for errors
+
+**Problem: Script can't find keystore**
+
+* Set `GETH_DATA_DIR` environment variable: `export GETH_DATA_DIR=~/ethereum/data`
+* Verify keystore exists: `ls ~/ethereum/data/keystore/`
+
+== Detailed Instructions
+
 == Pre-requirements
 * Installed https://geth.ethereum.org/[Geth Ethereum client]. Please refer to the docs
 on how to install Geth locally.
@@ -25,8 +277,21 @@ $ mkdir ~/ethereum/data/keystore
 [#ethereum-accounts]
 === Generate ethereum accounts
 
-Create a new account for a local Ethereum client and set the password to just `password`.
-Please note, for non-development environements you should use a stronger password.
+[IMPORTANT]
+====
+The installation scripts require at least 11 Ethereum accounts to be created.
+Make sure you create enough accounts before proceeding.
+====
+
+Create accounts for your local Ethereum client. Each account will be used by T network
+peers or for contract deployment. Peer's network identifier is derived from the
+account's address and all messages from the peer are signed with the private key
+belonging to the account.
+
+For simplicity, set the password to `password` for all accounts during development.
+Please note, for non-development environments you should use a stronger password.
+
+Create the first account (this will be used as the miner account):
 ```
 $ geth account new --keystore ~/ethereum/data/keystore
 
@@ -37,9 +302,7 @@ Repeat passphrase:
 Address: {3e208f39da1bc335464f40d85546ad6a1b66a9a4}
 ```
 
-Create a new account for each T peer individually. Peer's network identifier
-is derived from the account's address and all messages from the peer are signed
-with the private key belonging to the account. Create 5 accounts for 5 peers. For simplicity, please set the password to `password`.
+Create additional accounts (you need at least 11 total). Repeat this command until you have created enough accounts:
 ```
 $ geth account new --keystore ~/ethereum/data/keystore
 
@@ -48,38 +311,18 @@ Your new account is locked with a password. Please give a password. Do not forge
 Passphrase:
 Repeat passphrase:
 Address: {a232599810ecc03816adf607272705b71ff271ac}
+```
 
+Continue creating accounts until you have at least 11 total. You can use a simple loop:
+
+```
+$ for i in {1..10}; do echo "password" | geth account new --keystore ~/ethereum/data/keystore --password <(echo "password"); done
+```
+
+Or create them one by one:
+```
 $ geth account new --keystore ~/ethereum/data/keystore
-
-INFO [10-31|14:31:38.690] Maximum peer count                       ETH=25 LES=0 total=25
-Your new account is locked with a password. Please give a password. Do not forget this password.
-Passphrase:
-Repeat passphrase:
-Address: {b7314de01d5f3188c7df0a9e95f3477bcaae2120}
-
-$ geth account new --keystore ~/ethereum/data/keystore
-
-INFO [10-31|14:34:46.260] Maximum peer count                       ETH=25 LES=0 total=25
-Your new account is locked with a password. Please give a password. Do not forget this password.
-Passphrase:
-Repeat passphrase:
-Address: {5ef1e10dd1830af50924db623c7a9d90bf8a71be}
-
-$ geth account new --keystore ~/ethereum/data/keystore
-
-INFO [10-31|14:35:08.025] Maximum peer count                       ETH=25 LES=0 total=25
-Your new account is locked with a password. Please give a password. Do not forget this password.
-Passphrase:
-Repeat passphrase:
-Address: {64c20c1ae603c30553de4ea5dd10cc1760b956be}
-
-$ geth account new --keystore ~/ethereum/data/keystore
-
-INFO [10-31|14:35:27.173] Maximum peer count                       ETH=25 LES=0 total=25
-Your new account is locked with a password. Please give a password. Do not forget this password.
-Passphrase:
-Repeat passphrase:
-Address: {c4cba981a8edb64276f71a49f9392bad7a726417}
+# ... (repeat until you have 11 accounts)
 ```
 
 Check if accounts have been created correctly and `geth` can recognize them:
@@ -96,10 +339,28 @@ Account #5: {c4cba981a8edb64276f71a49f9392bad7a726417} keystore:///Users/piotr/e
 
 === Initialize chain
 
-Initialize your local Ethereum node from `genesis.json` file. This allows to
-issue some tokens to the accounts we just created. We assign tokens to all
-addresses. The account under alloc is the address of the account prepended with
-`0x`.
+Create a `genesis.json` file in your current directory. This file will initialize
+your local Ethereum node and pre-fund the accounts you created. The account addresses
+in the `alloc` section should be prefixed with `0x` and should match all the accounts
+you created.
+
+Save the following content to `genesis.json`, replacing the addresses with your actual
+account addresses (you can get them by running `geth account list --keystore ~/ethereum/data/keystore/`):
+
+[NOTE]
+====
+If you encounter an error like "database contains incompatible genesis", it means
+your database already has a genesis block with a different hash. To fix this,
+you need to remove the existing chaindata and reinitialize:
+
+```
+$ rm -rf $GETH_DATA_DIR/geth
+$ geth --datadir=$GETH_DATA_DIR init genesis.json
+```
+
+This will delete all existing blockchain data, so only do this if you're okay
+with starting fresh.
+====
 
 ```
 {
@@ -114,7 +375,8 @@ addresses. The account under alloc is the address of the account prepended with
         "petersburgBlock": 0,
         "daoForkBlock": 0,
         "istanbulBlock": 0,
-        "daoForkSupport": true
+        "daoForkSupport": true,
+        "terminalTotalDifficulty": null
     },
     "difficulty": "0x20",
     "gasLimit": "0x7A1200",
@@ -130,13 +392,21 @@ addresses. The account under alloc is the address of the account prepended with
 
 ```
 
-Save the path to your data directory and `geth` client's account in
-environment variables:
+[NOTE]
+====
+Make sure to include all your account addresses in the `alloc` section of `genesis.json`.
+Each address should be prefixed with `0x` and have a balance assigned. The example below
+shows 6 accounts, but you should include all accounts you created (at least 11).
+====
+
+Save the path to your data directory and `geth` client's account (the first account you created)
+in environment variables. Update the paths to match your system:
 ```
-$ export GETH_DATA_DIR=/Users/piotr/ethereum/data/
+$ export GETH_DATA_DIR=~/ethereum/data/
 $ export GETH_ETHEREUM_ACCOUNT=0x3e208f39da1bc335464f40d85546ad6a1b66a9a4
 ```
 
+Now initialize the chain with your genesis file:
 ```
 $ geth --datadir=$GETH_DATA_DIR init genesis.json
 
@@ -153,8 +423,13 @@ INFO [10-31|15:55:25.846] Successfully wrote genesis state         database=ligh
 
 === Run ethereum client
 
-Start Ethereum client locally using client's wallet address.
+Start Ethereum client locally using the miner account address. The client will:
+- Listen on port 3000 for P2P connections
+- Expose HTTP RPC on port 8545
+- Expose WebSocket RPC on port 8546
+- Mine blocks and send rewards to the specified account
 
+Multi-line version (easier to read):
 ```
 $ geth --port 3000 --networkid 1101 --identity 'somerandomidentity' \
        --ws --ws.addr '127.0.0.1' --ws.port '8546' --ws.origins '*' \ 
@@ -163,6 +438,25 @@ $ geth --port 3000 --networkid 1101 --identity 'somerandomidentity' \
        --http.api 'admin, debug, web3, eth, txpool, personal, ethash, miner, net' \
        --datadir=$GETH_DATA_DIR --allow-insecure-unlock \
        --miner.etherbase=$GETH_ETHEREUM_ACCOUNT --mine --miner.threads=1
+```
+
+Single-line version (easier to copy-paste):
+```
+$ geth --port 3000 --networkid 1101 --identity 'somerandomidentity' --ws --ws.addr '127.0.0.1' --ws.port '8546' --ws.origins '*' --ws.api 'admin, debug, web3, eth, txpool, personal, ethash, miner, net' --http --http.port '8545' --http.addr '127.0.0.1' --http.corsdomain '' --http.api 'admin, debug, web3, eth, txpool, personal, ethash, miner, net' --datadir=$GETH_DATA_DIR --allow-insecure-unlock --miner.etherbase=$GETH_ETHEREUM_ACCOUNT --mine --miner.threads=1
+```
+
+[NOTE]
+====
+When using the multi-line version, make sure there are no trailing spaces after the backslash (`\`).
+The backslash must be the last character on the line for proper line continuation.
+====
+
+[NOTE]
+====
+For Geth 1.16+, the `personal` namespace is deprecated. If you encounter issues with
+account unlocking, the installation scripts will automatically extract private keys
+from the keystore and configure Hardhat to use them directly.
+====
 
 INFO [10-31|15:02:22.113] Maximum peer count                       ETH=25 LES=0 total=25
 INFO [10-31|15:02:22.128] Starting peer-to-peer node               instance=Geth/somerandomidentity/v1.8.14-stable/darwin-amd64/go1.10.3
@@ -198,3 +492,131 @@ INFO [10-31|15:03:49.852] 🔨 mined potential block                  number=1 h
 
 (...)
 ```
+
+== Complete Setup Checklist
+
+Use this checklist to ensure you've completed all steps:
+
+[ ] Installed Geth, Node.js, and Yarn
+[ ] Created directory structure (`~/ethereum/data/keystore`)
+[ ] Generated at least 11 Ethereum accounts
+[ ] Created `genesis.json` file with all accounts
+[ ] Set environment variables (`GETH_DATA_DIR`, `GETH_ETHEREUM_ACCOUNT`, `KEEP_ETHEREUM_PASSWORD`)
+[ ] Initialized Geth chain with `genesis.json`
+[ ] Started Geth with mining enabled (in separate terminal)
+[ ] Verified Geth is mining blocks (block number > 0)
+[ ] Ran `./scripts/install.sh --network development`
+[ ] Initialized at least one client with `./scripts/initialize.sh`
+[ ] Started client with `./scripts/start.sh`
+
+== Quick Reference Commands
+
+**Set environment variables:**
+```
+export GETH_DATA_DIR=~/ethereum/data
+export GETH_ETHEREUM_ACCOUNT=0x$(geth account list --keystore ~/ethereum/data/keystore/ 2>/dev/null | head -1 | grep -o '{[^}]*}' | sed 's/{//;s/}//')
+export KEEP_ETHEREUM_PASSWORD=password
+```
+
+**Generate genesis.json:**
+```
+./scripts/generate-genesis.sh
+```
+
+**Initialize chain:**
+```
+geth --datadir=$GETH_DATA_DIR init genesis.json
+```
+
+**Start Geth:**
+```
+geth --port 3000 --networkid 1101 --identity 'somerandomidentity' --ws --ws.addr '127.0.0.1' --ws.port '8546' --ws.origins '*' --ws.api 'admin, debug, web3, eth, txpool, personal, ethash, miner, net' --http --http.port '8545' --http.addr '127.0.0.1' --http.corsdomain '' --http.api 'admin, debug, web3, eth, txpool, personal, ethash, miner, net' --datadir=$GETH_DATA_DIR --allow-insecure-unlock --miner.etherbase=$GETH_ETHEREUM_ACCOUNT --mine --miner.threads=1
+```
+
+**Install contracts:**
+```
+./scripts/install.sh --network development
+```
+
+**Initialize client:**
+```
+./scripts/initialize.sh --network development
+```
+
+**Start client:**
+```
+./scripts/start.sh
+```
+
+== Next Steps
+
+After completing the setup:
+
+* Check the xref:../README.adoc[main README] for more information
+* Review xref:../run-keep-node.adoc[Run Keep Node] documentation
+* Explore the `configs/` directory for client configuration examples
+* Join the https://discord.gg/threshold[Discord community] for support
+
+== Complete Setup Checklist
+
+Use this checklist to ensure you've completed all steps:
+
+[ ] Installed Geth, Node.js, and Yarn
+[ ] Created directory structure (`~/ethereum/data/keystore`)
+[ ] Generated at least 11 Ethereum accounts
+[ ] Created `genesis.json` file with all accounts
+[ ] Set environment variables (`GETH_DATA_DIR`, `GETH_ETHEREUM_ACCOUNT`, `KEEP_ETHEREUM_PASSWORD`)
+[ ] Initialized Geth chain with `genesis.json`
+[ ] Started Geth with mining enabled (in separate terminal)
+[ ] Verified Geth is mining blocks (block number > 0)
+[ ] Ran `./scripts/install.sh --network development`
+[ ] Initialized at least one client with `./scripts/initialize.sh`
+[ ] Started client with `./scripts/start.sh`
+
+== Quick Reference Commands
+
+**Set environment variables:**
+```
+export GETH_DATA_DIR=~/ethereum/data
+export GETH_ETHEREUM_ACCOUNT=0x$(geth account list --keystore ~/ethereum/data/keystore/ 2>/dev/null | head -1 | grep -o '{[^}]*}' | sed 's/{//;s/}//')
+export KEEP_ETHEREUM_PASSWORD=password
+```
+
+**Generate genesis.json:**
+```
+./scripts/generate-genesis.sh
+```
+
+**Initialize chain:**
+```
+geth --datadir=$GETH_DATA_DIR init genesis.json
+```
+
+**Start Geth:**
+```
+geth --port 3000 --networkid 1101 --identity 'somerandomidentity' --ws --ws.addr '127.0.0.1' --ws.port '8546' --ws.origins '*' --ws.api 'admin, debug, web3, eth, txpool, personal, ethash, miner, net' --http --http.port '8545' --http.addr '127.0.0.1' --http.corsdomain '' --http.api 'admin, debug, web3, eth, txpool, personal, ethash, miner, net' --datadir=$GETH_DATA_DIR --allow-insecure-unlock --miner.etherbase=$GETH_ETHEREUM_ACCOUNT --mine --miner.threads=1
+```
+
+**Install contracts:**
+```
+./scripts/install.sh --network development
+```
+
+**Initialize client:**
+```
+./scripts/initialize.sh --network development
+```
+
+**Start client:**
+```
+./scripts/start.sh
+```
+
+== Next Steps
+
+After completing the setup:
+
+* Check the xref:README.adoc[main README] for more information
+* Review xref:../run-keep-node.adoc[Run Keep Node] documentation
+* Explore the `configs/` directory for client configuration examples
+* Join the https://discord.gg/threshold[Discord community] for support

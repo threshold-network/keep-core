@@ -127,12 +127,27 @@ type walletDispatcher struct {
 	// given wallet. The mapping key is the uncompressed public key
 	// (with 04 prefix) of the wallet.
 	actions map[string]WalletActionType
+	// metricsRecorder is optional and used for recording performance metrics
+	metricsRecorder interface {
+		IncrementCounter(name string, value float64)
+		SetGauge(name string, value float64)
+		RecordDuration(name string, duration time.Duration)
+	}
 }
 
 func newWalletDispatcher() *walletDispatcher {
 	return &walletDispatcher{
 		actions: make(map[string]WalletActionType),
 	}
+}
+
+// setMetricsRecorder sets the metrics recorder for the wallet dispatcher.
+func (wd *walletDispatcher) setMetricsRecorder(recorder interface {
+	IncrementCounter(name string, value float64)
+	SetGauge(name string, value float64)
+	RecordDuration(name string, duration time.Duration)
+}) {
+	wd.metricsRecorder = recorder
 }
 
 // dispatch sends the given walletAction for execution. If the wallet is
@@ -154,16 +169,36 @@ func (wd *walletDispatcher) dispatch(action walletAction) error {
 	key := hex.EncodeToString(walletPublicKeyBytes)
 
 	if _, ok := wd.actions[key]; ok {
+		if wd.metricsRecorder != nil {
+			wd.metricsRecorder.IncrementCounter("wallet_dispatcher_rejected_total", 1)
+		}
 		return errWalletBusy
 	}
 
 	wd.actions[key] = action.actionType()
 
+	// Update metrics
+	if wd.metricsRecorder != nil {
+		wd.actionsMutex.Lock()
+		activeCount := float64(len(wd.actions))
+		wd.actionsMutex.Unlock()
+		wd.metricsRecorder.SetGauge("wallet_dispatcher_active_actions", activeCount)
+		wd.metricsRecorder.IncrementCounter("wallet_actions_total", 1)
+	}
+
 	go func() {
+		startTime := time.Now()
 		defer func() {
 			wd.actionsMutex.Lock()
 			delete(wd.actions, key)
+			activeCount := float64(len(wd.actions))
 			wd.actionsMutex.Unlock()
+
+			// Update metrics
+			if wd.metricsRecorder != nil {
+				wd.metricsRecorder.SetGauge("wallet_dispatcher_active_actions", activeCount)
+				wd.metricsRecorder.RecordDuration("wallet_action_duration_seconds", time.Since(startTime))
+			}
 		}()
 
 		walletActionLogger.Infof("starting action execution")
@@ -174,7 +209,14 @@ func (wd *walletDispatcher) dispatch(action walletAction) error {
 				"action execution terminated with error: [%v]",
 				err,
 			)
+			if wd.metricsRecorder != nil {
+				wd.metricsRecorder.IncrementCounter("wallet_action_failed_total", 1)
+			}
 			return
+		}
+
+		if wd.metricsRecorder != nil {
+			wd.metricsRecorder.IncrementCounter("wallet_action_success_total", 1)
 		}
 
 		walletActionLogger.Infof("action execution terminated with success")

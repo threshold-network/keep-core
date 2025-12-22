@@ -1,0 +1,42 @@
+{
+  "address": "0xE2C7e629CD089b9163D9Ffe924b3d11AF4d9d261",
+  "abi": [],
+  "transactionHash": "0xcbae5daaaab8707cbdd23fe25a338fef4bc7bee3a008ec8a88057c3a63ea9bd2",
+  "receipt": {
+    "to": null,
+    "from": "0x7966C178f466B060aAeb2B91e9149A5FB2Ec9c53",
+    "contractAddress": "0xE2C7e629CD089b9163D9Ffe924b3d11AF4d9d261",
+    "transactionIndex": 0,
+    "gasUsed": "67054",
+    "logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "blockHash": "0xe6f6f69d93271002441fa07ce834410b1e147a9303378e0a40198180700c9aa2",
+    "transactionHash": "0xcbae5daaaab8707cbdd23fe25a338fef4bc7bee3a008ec8a88057c3a63ea9bd2",
+    "logs": [],
+    "blockNumber": 4078,
+    "cumulativeGasUsed": "67054",
+    "status": 1,
+    "byzantium": true
+  },
+  "args": [],
+  "numDeployments": 1,
+  "solcInputHash": "4096395ce79c7ad0c5cac2d23f9ea6c5",
+  "metadata": "{\"compiler\":{\"version\":\"0.8.17+commit.8df45f5f\"},\"language\":\"Solidity\",\"output\":{\"abi\":[],\"devdoc\":{\"kind\":\"dev\",\"methods\":{},\"title\":\"MaintainerProxyStub\",\"version\":1},\"userdoc\":{\"kind\":\"user\",\"methods\":{},\"notice\":\"Minimal stub implementation of MaintainerProxy contract for local development\",\"version\":1}},\"settings\":{\"compilationTarget\":{\"contracts/MaintainerProxyStub.sol\":\"MaintainerProxyStub\"},\"evmVersion\":\"london\",\"libraries\":{},\"metadata\":{\"bytecodeHash\":\"ipfs\",\"useLiteralContent\":true},\"optimizer\":{\"enabled\":true,\"runs\":200},\"remappings\":[]},\"sources\":{\"contracts/MaintainerProxyStub.sol\":{\"content\":\"// SPDX-License-Identifier: MIT\\npragma solidity ^0.8.17;\\n\\n/**\\n * @title MaintainerProxyStub\\n * @notice Minimal stub implementation of MaintainerProxy contract for local development\\n */\\ncontract MaintainerProxyStub {\\n    // Minimal stub - just needs to exist\\n}\\n\",\"keccak256\":\"0xc3793a7963d246240cb0e739d0a6fcf5f1eed70d48870faec70eb85483a482e3\",\"license\":\"MIT\"}},\"version\":1}",
+  "bytecode": "0x6080604052348015600f57600080fd5b50603f80601d6000396000f3fe6080604052600080fdfea26469706673582212206b0d1c16d8410ff8de0f161d31e49d7d0708bffda7e6620076199762a4c887fc64736f6c63430008110033",
+  "deployedBytecode": "0x6080604052600080fdfea26469706673582212206b0d1c16d8410ff8de0f161d31e49d7d0708bffda7e6620076199762a4c887fc64736f6c63430008110033",
+  "devdoc": {
+    "kind": "dev",
+    "methods": {},
+    "title": "MaintainerProxyStub",
+    "version": 1
+  },
+  "userdoc": {
+    "kind": "user",
+    "methods": {},
+    "notice": "Minimal stub implementation of MaintainerProxy contract for local development",
+    "version": 1
+  },
+  "storageLayout": {
+    "storage": [],
+    "types": null
+  }
+}

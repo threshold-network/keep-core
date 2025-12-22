@@ -1,0 +1,125 @@
+{
+  "address": "0xD5c25Cf659a65dD3Eb7856bcadD8539225Cd66dB",
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_bank",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "_relay",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "_ecdsaWalletRegistry",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "_reimbursementPool",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
+      "inputs": [],
+      "name": "bank",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "contractReferences",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "_bank",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "_relay",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "_ecdsaWalletRegistry",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "_reimbursementPool",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "ecdsaWalletRegistry",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "getRedemptionWatchtower",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "pure",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "reimbursementPool",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "relay",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ],
+  "numDeployments": 1
+}

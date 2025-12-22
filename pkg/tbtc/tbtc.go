@@ -120,6 +120,10 @@ func Initialize(
 				},
 			},
 		)
+
+		// Initialize performance metrics
+		perfMetrics := clientinfo.NewPerformanceMetrics(clientInfo)
+		node.setPerformanceMetrics(perfMetrics)
 	}
 
 	err = sortition.MonitorPool(
@@ -178,6 +182,10 @@ func Initialize(
 			}
 
 			if dkgState == AwaitingResult {
+				// Increment DKG requested metric
+				if node.performanceMetrics != nil {
+					node.performanceMetrics.IncrementCounter(clientinfo.MetricDKGRequestedTotal, 1)
+				}
 				// Fetch all past DKG started events starting from one
 				// confirmation period before the original event's block.
 				// If there was a chain reorg, the event we received could be

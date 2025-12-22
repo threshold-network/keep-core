@@ -1,0 +1,42 @@
+{
+  "address": "0x7Df6bd0a30eeEAbea50aC8014829FFC013Cc9ca0",
+  "abi": [],
+  "transactionHash": "0x0aa5138f179ca0f9fe9f94495430ad022f4c91727f96b8682dd70b97ef4e1554",
+  "receipt": {
+    "to": null,
+    "from": "0x7966C178f466B060aAeb2B91e9149A5FB2Ec9c53",
+    "contractAddress": "0x7Df6bd0a30eeEAbea50aC8014829FFC013Cc9ca0",
+    "transactionIndex": 0,
+    "gasUsed": "67066",
+    "logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "blockHash": "0x5ff12a7232b6b87ad1b63c972f46c99072a6fc77a55c9eebcace87832270f544",
+    "transactionHash": "0x0aa5138f179ca0f9fe9f94495430ad022f4c91727f96b8682dd70b97ef4e1554",
+    "logs": [],
+    "blockNumber": 4080,
+    "cumulativeGasUsed": "67066",
+    "status": 1,
+    "byzantium": true
+  },
+  "args": [],
+  "numDeployments": 1,
+  "solcInputHash": "4096395ce79c7ad0c5cac2d23f9ea6c5",
+  "metadata": "{\"compiler\":{\"version\":\"0.8.17+commit.8df45f5f\"},\"language\":\"Solidity\",\"output\":{\"abi\":[],\"devdoc\":{\"kind\":\"dev\",\"methods\":{},\"title\":\"WalletProposalValidatorStub\",\"version\":1},\"userdoc\":{\"kind\":\"user\",\"methods\":{},\"notice\":\"Minimal stub implementation of WalletProposalValidator contract for local development\",\"version\":1}},\"settings\":{\"compilationTarget\":{\"contracts/WalletProposalValidatorStub.sol\":\"WalletProposalValidatorStub\"},\"evmVersion\":\"london\",\"libraries\":{},\"metadata\":{\"bytecodeHash\":\"ipfs\",\"useLiteralContent\":true},\"optimizer\":{\"enabled\":true,\"runs\":200},\"remappings\":[]},\"sources\":{\"contracts/WalletProposalValidatorStub.sol\":{\"content\":\"// SPDX-License-Identifier: MIT\\npragma solidity ^0.8.17;\\n\\n/**\\n * @title WalletProposalValidatorStub\\n * @notice Minimal stub implementation of WalletProposalValidator contract for local development\\n */\\ncontract WalletProposalValidatorStub {\\n    // Minimal stub - just needs to exist\\n}\\n\",\"keccak256\":\"0x25cb86bc90e1facc4002d1a2e448f016fd6d013ba16bd942729943359e8424fd\",\"license\":\"MIT\"}},\"version\":1}",
+  "bytecode": "0x6080604052348015600f57600080fd5b50603f80601d6000396000f3fe6080604052600080fdfea264697066735822122057957261389845feba8ad84a4dfd508b924d2c40f35a0e69cda74bf1669ec07564736f6c63430008110033",
+  "deployedBytecode": "0x6080604052600080fdfea264697066735822122057957261389845feba8ad84a4dfd508b924d2c40f35a0e69cda74bf1669ec07564736f6c63430008110033",
+  "devdoc": {
+    "kind": "dev",
+    "methods": {},
+    "title": "WalletProposalValidatorStub",
+    "version": 1
+  },
+  "userdoc": {
+    "kind": "user",
+    "methods": {},
+    "notice": "Minimal stub implementation of WalletProposalValidator contract for local development",
+    "version": 1
+  },
+  "storageLayout": {
+    "storage": [],
+    "types": null
+  }
+}

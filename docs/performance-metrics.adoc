@@ -1,0 +1,364 @@
+= Performance Metrics
+
+The Keep Core client exposes performance metrics that can be used to monitor
+the health and performance of node operations. These metrics are available
+through the `/metrics` endpoint when the client info endpoint is configured.
+
+== Metrics Endpoint
+
+Metrics are exposed via HTTP at the `/metrics` endpoint on the port configured
+in the `ClientInfo` section of the configuration file (default: `9601`).
+
+Example:
+----
+curl http://localhost:9601/metrics
+----
+
+== Metric Types
+
+The client uses three types of metrics:
+
+* **Counters**: Cumulative counts that only increase (e.g., total operations)
+* **Gauges**: Current values that can go up or down (e.g., queue sizes, active operations)
+* **Durations**: Time measurements for operations (exposed as average duration and count)
+
+== Available Metrics
+
+=== Distributed Key Generation (DKG) Metrics
+
+==== `performance_dkg_joined_total`
+*Type*: Counter
+*Description*: Total number of times the node has joined a DKG process
+*Labels*: None
+
+==== `performance_dkg_failed_total`
+*Type*: Counter
+*Description*: Total number of failed DKG attempts
+*Labels*: None
+
+==== `performance_dkg_duration_seconds`
+*Type*: Gauge (average)
+*Description*: Average duration of DKG operations in seconds
+*Labels*: None
+
+==== `performance_dkg_duration_seconds_count`
+*Type*: Gauge
+*Description*: Total number of DKG operations completed
+*Labels*: None
+
+==== `performance_dkg_validation_total`
+*Type*: Counter
+*Description*: Total number of DKG result validations performed
+*Labels*: None
+
+==== `performance_dkg_challenges_submitted_total`
+*Type*: Counter
+*Description*: Total number of DKG challenges submitted on-chain
+*Labels*: None
+
+==== `performance_dkg_approvals_submitted_total`
+*Type*: Counter
+*Description*: Total number of DKG approvals submitted on-chain
+*Labels*: None
+
+=== Signing Operation Metrics
+
+==== `performance_signing_operations_total`
+*Type*: Counter
+*Description*: Total number of signing operations attempted
+*Labels*: None
+
+==== `performance_signing_success_total`
+*Type*: Counter
+*Description*: Total number of successful signing operations
+*Labels*: None
+
+==== `performance_signing_failed_total`
+*Type*: Counter
+*Description*: Total number of failed signing operations
+*Labels*: None
+
+==== `performance_signing_duration_seconds`
+*Type*: Gauge (average)
+*Description*: Average duration of signing operations in seconds
+*Labels*: None
+
+==== `performance_signing_duration_seconds_count`
+*Type*: Gauge
+*Description*: Total number of signing operations completed
+*Labels*: None
+
+==== `performance_signing_timeouts_total`
+*Type*: Counter
+*Description*: Total number of signing operations that timed out
+*Labels*: None
+
+=== Wallet Action Metrics
+
+==== `performance_wallet_actions_total`
+*Type*: Counter
+*Description*: Total number of wallet actions dispatched
+*Labels*: None
+
+==== `performance_wallet_action_success_total`
+*Type*: Counter
+*Description*: Total number of successfully completed wallet actions
+*Labels*: None
+
+==== `performance_wallet_action_failed_total`
+*Type*: Counter
+*Description*: Total number of failed wallet actions
+*Labels*: None
+
+==== `performance_wallet_action_duration_seconds`
+*Type*: Gauge (average)
+*Description*: Average duration of wallet actions in seconds
+*Labels*: None
+
+==== `performance_wallet_action_duration_seconds_count`
+*Type*: Gauge
+*Description*: Total number of wallet actions completed
+*Labels*: None
+
+==== `performance_wallet_heartbeat_failures_total`
+*Type*: Counter
+*Description*: Total number of heartbeat failures across all wallets
+*Labels*: None
+
+=== Wallet Dispatcher Metrics
+
+==== `performance_wallet_dispatcher_active_actions`
+*Type*: Gauge
+*Description*: Current number of wallets with active actions being executed
+*Labels*: None
+*Note*: This metric helps identify when wallets are busy and cannot accept new actions
+
+==== `performance_wallet_dispatcher_rejected_total`
+*Type*: Counter
+*Description*: Total number of wallet actions rejected because the wallet was busy
+*Labels*: None
+*Note*: High values indicate that wallets are frequently busy and actions may need retry logic
+
+=== Coordination Metrics
+
+==== `performance_coordination_windows_detected_total`
+*Type*: Counter
+*Description*: Total number of coordination windows detected
+*Labels*: None
+
+==== `performance_coordination_procedures_executed_total`
+*Type*: Counter
+*Description*: Total number of coordination procedures executed
+*Labels*: None
+
+==== `performance_coordination_failed_total`
+*Type*: Counter
+*Description*: Total number of failed coordination procedures
+*Labels*: None
+
+==== `performance_coordination_duration_seconds`
+*Type*: Gauge (average)
+*Description*: Average duration of coordination procedures in seconds
+*Labels*: None
+
+=== Network Metrics
+
+==== `performance_incoming_message_queue_size`
+*Type*: Gauge
+*Description*: Current size of the incoming message queue
+*Labels*: `channel` (channel name)
+*Note*: Maximum queue size is 4096. Values approaching this limit indicate message processing bottlenecks.
+
+==== `performance_message_handler_queue_size`
+*Type*: Gauge
+*Description*: Current size of message handler queues
+*Labels*: `channel` (channel name), `handler` (handler ID)
+*Note*: Maximum queue size per handler is 512.
+
+==== `performance_peer_connections_total`
+*Type*: Counter
+*Description*: Total number of peer connections established
+*Labels*: None
+
+==== `performance_peer_disconnections_total`
+*Type*: Counter
+*Description*: Total number of peer disconnections
+*Labels*: None
+
+==== `performance_message_broadcast_total`
+*Type*: Counter
+*Description*: Total number of messages broadcast to the network
+*Labels*: None
+
+==== `performance_message_received_total`
+*Type*: Counter
+*Description*: Total number of messages received from the network
+*Labels*: None
+
+==== `performance_ping_test_total`
+*Type*: Counter
+*Description*: Total number of ping tests performed
+*Labels*: None
+
+==== `performance_ping_test_success_total`
+*Type*: Counter
+*Description*: Total number of successful ping tests
+*Labels*: None
+
+==== `performance_ping_test_failed_total`
+*Type*: Counter
+*Description*: Total number of failed ping tests
+*Labels*: None
+
+=== Relay Entry Metrics (Beacon Node)
+
+==== `performance_relay_entry_generation_total`
+*Type*: Counter
+*Description*: Total number of relay entry generation attempts
+*Labels*: None
+
+==== `performance_relay_entry_success_total`
+*Type*: Counter
+*Description*: Total number of successful relay entries generated
+*Labels*: None
+
+==== `performance_relay_entry_failed_total`
+*Type*: Counter
+*Description*: Total number of failed relay entry generations
+*Labels*: None
+
+==== `performance_relay_entry_duration_seconds`
+*Type*: Gauge (average)
+*Description*: Average duration of relay entry generation in seconds
+*Labels*: None
+
+==== `performance_relay_entry_timeout_reported_total`
+*Type*: Counter
+*Description*: Total number of relay entry timeouts reported on-chain
+*Labels*: None
+
+== Existing Metrics
+
+The following metrics were already available and are documented here for completeness:
+
+=== Network Connectivity Metrics
+
+==== `connected_peers_count`
+*Type*: Gauge
+*Description*: Current number of connected peers
+*Update Frequency*: 1 minute (configurable)
+
+==== `connected_bootstrap_count`
+*Type*: Gauge
+*Description*: Current number of connected bootstrap nodes
+*Update Frequency*: 1 minute (configurable)
+
+==== `eth_connectivity`
+*Type*: Gauge
+*Description*: Ethereum chain connectivity status (1 = connected, 0 = disconnected)
+*Update Frequency*: 10 minutes (configurable)
+
+==== `btc_connectivity`
+*Type*: Gauge
+*Description*: Bitcoin chain connectivity status (1 = connected, 0 = disconnected)
+*Update Frequency*: 10 minutes (configurable)
+
+=== Application Metrics
+
+==== `tbtc_pre_params_count`
+*Type*: Gauge
+*Description*: Current number of pre-parameters in the DKG executor pool
+*Update Frequency*: 1 minute
+
+== Monitoring Recommendations
+
+=== Key Metrics to Monitor
+
+1. **Operation Success Rates**: Monitor the ratio of success to total operations
+   - `performance_signing_success_total / performance_signing_operations_total`
+   - `performance_wallet_action_success_total / performance_wallet_actions_total`
+
+2. **Operation Durations**: Track average operation times
+   - Alert if `performance_signing_duration_seconds` exceeds expected thresholds
+   - Alert if `performance_dkg_duration_seconds` exceeds expected thresholds
+
+3. **Queue Sizes**: Monitor message queue sizes
+   - Alert if `performance_incoming_message_queue_size` exceeds 3000 (75% of capacity)
+   - Alert if `performance_message_handler_queue_size` exceeds 400 (75% of capacity)
+
+4. **Wallet Dispatcher**: Monitor wallet action rejection rates
+   - Alert if `performance_wallet_dispatcher_rejected_total` increases rapidly
+   - Monitor `performance_wallet_dispatcher_active_actions` to understand wallet utilization
+
+5. **Network Health**: Monitor peer connectivity
+   - Alert if `connected_peers_count` drops significantly
+   - Alert if `eth_connectivity` or `btc_connectivity` becomes 0
+
+=== Alert Thresholds
+
+Recommended alert thresholds:
+
+* **High Priority Alerts**:
+  - `eth_connectivity == 0` for more than 1 minute
+  - `performance_signing_failed_total` rate > 10% of total operations
+  - `performance_wallet_action_failed_total` rate > 5% of total actions
+
+* **Medium Priority Alerts**:
+  - `connected_peers_count` drops by more than 20% in 10 minutes
+  - `performance_incoming_message_queue_size` > 3000
+  - `performance_wallet_dispatcher_rejected_total` rate > 5% of dispatched actions
+
+* **Low Priority Alerts**:
+  - `performance_signing_duration_seconds` > 60 seconds (average)
+  - `performance_dkg_duration_seconds` > 300 seconds (average)
+  - `performance_ping_test_failed_total` rate > 10% of ping tests
+
+== Prometheus Integration
+
+These metrics are compatible with Prometheus and can be scraped using a
+Prometheus configuration:
+
+[source,yaml]
+----
+scrape_configs:
+  - job_name: 'keep-node'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:9601']
+----
+
+== Grafana Dashboards
+
+You can create Grafana dashboards using these metrics to visualize:
+
+* Operation success rates over time
+* Average operation durations
+* Queue sizes and trends
+* Network connectivity status
+* Wallet action throughput
+
+== Metric Naming Convention
+
+Performance metrics follow this naming convention:
+
+* Counters: `performance_<operation>_total`
+* Gauges: `performance_<operation>_<unit>` (e.g., `_seconds`, `_size`)
+* Durations: `performance_<operation>_duration_seconds` (average) and
+  `performance_<operation>_duration_seconds_count` (count)
+
+== Implementation Notes
+
+* Metrics are only available when the client info endpoint is configured
+* Metrics are updated periodically (typically every 1 minute for application metrics)
+* Counters are cumulative and never decrease
+* Gauges reflect current state and can increase or decrease
+* Duration metrics track both average duration and total count
+
+== Troubleshooting
+
+If metrics are not appearing:
+
+1. Verify that the client info endpoint is configured in the config file
+2. Check that the metrics port is accessible (default: 9601)
+3. Verify that `/metrics` endpoint returns data: `curl http://localhost:9601/metrics`
+4. Check logs for any errors related to metrics initialization
