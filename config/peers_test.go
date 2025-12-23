@@ -16,18 +16,12 @@ func TestResolvePeers(t *testing.T) {
 		expectedError error
 	}{
 		"mainnet network": {
-			network: network.Mainnet,
-			expectedPeers: []string{
-				"/dns4/bst-a01.tbtc.boar.network/tcp/5001/ipfs/16Uiu2HAmAmCrLuUmnBgpavU8y8JBUN6jWAQ93JwydZy3ABRyY6wU",
-				"/dns4/bst-b01.tbtc.boar.network/tcp/5001/ipfs/16Uiu2HAm4w5HdJQxBnadGRepaiGfWVvtMzhdAGZVcrf9i71mv69V",
-			}},
+			network:       network.Mainnet,
+			expectedPeers: []string{},
+		},
 		"sepolia network": {
-			network: network.Testnet,
-			expectedPeers: []string{
-				"/dns4/bootstrap-0.test.keep.network/tcp/3919/ipfs/16Uiu2HAmCcfVpHwfBKNFbQuhvGuFXHVLQ65gB4sJm7HyrcZuLttH",
-				"/dns4/bootstrap-1.test.keep.network/tcp/3919/ipfs/16Uiu2HAm3eJtyFKAttzJ85NLMromHuRg4yyum3CREMf6CHBBV6KY",
-				"/dns4/bst-a01.test.keep.boar.network/tcp/6001/ipfs/16Uiu2HAmSLDSahiKyTbCNNu8wJmZAsiKF7wuYJ8mogY8ZuAG1jhu",
-			},
+			network:       network.Testnet,
+			expectedPeers: []string{},
 		},
 		"developer network": {
 			network: network.Developer,
