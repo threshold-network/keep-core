@@ -1,6 +1,56 @@
+#bootstrap nodes
 /dns4/bst-b01.tbtc.boar.network/tcp/5001/ipfs/16Uiu2HAm4w5HdJQxBnadGRepaiGfWVvtMzhdAGZVcrf9i71mv69V
 /dns4/keep-validator-0.prod-eks-eu-west-1.staked.cloud/tcp/3919/ipfs/16Uiu2HAm6Fs6Fn71n7PqRmpHMbfMkZUCGYhW5RL81MSMg57AANkZ
 /dns4/keep-validator-1.prod-eks-ap-northeast-2.staked.cloud/tcp/3919/ipfs/16Uiu2HAm5UzZb1TTYBjb2959h4z4VHzjt585SQqZnJPBrDnJuob7
 /dns4/keep-validator-2.prod-eks-eu-north-1.staked.cloud/tcp/3919/ipfs/16Uiu2HAmJvbYNhzY6a8kiG2zzrqXGnYWax7CQTbiMHoAvY4qLvg7
 /dns4/bootstrap-b1.threshold.p2p.org/tcp/3919/ipfs/16Uiu2HAmG7kjmp4D3C9jkvA8s59tfJzPfJSVqQJkhG6tEvVhJW68
 /dns4/bootstrap-b2.threshold.p2p.org/tcp/3919/ipfs/16Uiu2HAmSuXryEFqeDaMmRZ7KeUdQmHCt3PiWVNpe37q2xR3VT5n
+
+#original beta stakers
+#Staked
+Staked3,keep-validator-3.prod-eks-ap-northeast-2.staked.cloud:3919
+Staked4,keep-validator-4.prod-eks-ap-northeast-2.staked.cloud:3919
+Staked5,keep-validator-5.prod-eks-eu-north-1.staked.cloud:3919
+Staked6,keep-validator-6.prod-eks-eu-north-1.staked.cloud:3919
+Staked7,keep-validator-7.prod-eks-eu-west-1.staked.cloud:3919
+Staked8,keep-validator-8.prod-eks-eu-west-1.staked.cloud:3919
+
+#P2P
+P2P1,35.210.22.52:3906
+P2P2,35.210.22.52:3904
+P2P3,35.210.22.52:3903
+P2P4,35.210.22.52:3905
+P2P5,0xB074A3B960f29a1448a2Dd4De95210ca492c18d4 (down)
+P2P6,0xB102B1e8b61376d1D4F0Bd8F6E4e4bB3Cf79B75b (down)
+
+#NuCo
+NuCo1,13.58.238.128:3919
+NuCo2,165.232.68.185:3919
+
+#Boar
+Boar1,35.208.181.200:6012
+Boar2,178.156.190.206:9601 (down) messaged
+Boar3,35.209.196.186:6021
+Boar4,178.156.190.206:9602 (down) messaged
+Boar5,91.98.128.146:6004
+Boar6,91.98.128.146:6003
+
+#pro beta stakers
+ColossusDigital,138.201.251.149:3919
+Sub7,34.95.131.254:3919 and 29845
+DelightLabs,13.209.70.114:3919
+GlobalStake,204.93.241.110:3919
+RepublicCrypto,51.81.154.237:3919
+Ponkila,135.181.90.126:3919
+Liquify,173.234.17.204:3919 responded timely to req for status check
+StakeCapital,18.218.95.143:3919
+
+#community beta stakers
+vict0x,68.183.90.141:3919
+the_egg,64.227.165.209:3919
+blitmore,klimah.venndo.com:3919
+Shoegazer,167.99.58.9:3919
+JamesCampbell,95.183.51.44:3919
+EvandroSaturnino,143.198.18.229:3919
+BitFwd-dtbx,51.75.71.106:3919
+0x10003,91.236.199.161:3919
