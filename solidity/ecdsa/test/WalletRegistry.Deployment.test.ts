@@ -53,21 +53,8 @@ describe("WalletRegistry - Deployment", async () => {
   })
 
   it("should set WalletRegistry proxy admin", async () => {
-    // To let a non-proxy-admin read the admin we have to read it directly from
-    // the storage slot, see: https://docs.openzeppelin.com/contracts/4.x/api/proxy#TransparentUpgradeableProxy-admin--
     expect(
-      ethers.utils.defaultAbiCoder.decode(
-        ["address"],
-        await ethers.provider.getStorageAt(
-          walletRegistry.address,
-          "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103"
-        )
-      )[0],
-      "invalid WalletRegistry proxy admin (read from storage slot)"
-    ).to.be.equal(proxyAdmin.address)
-
-    expect(
-      await walletRegistryProxy.connect(proxyAdmin.address).callStatic.admin(),
+      await upgrades.erc1967.getAdminAddress(walletRegistry.address),
       "invalid WalletRegistry proxy admin"
     ).to.be.equal(proxyAdmin.address)
   })
@@ -79,23 +66,8 @@ describe("WalletRegistry - Deployment", async () => {
   })
 
   it("should set WalletRegistry implementation", async () => {
-    // To let a non-proxy-admin read the implementation we have to read it directly from
-    // the storage slot, see: https://docs.openzeppelin.com/contracts/4.x/api/proxy#TransparentUpgradeableProxy-implementation--
     expect(
-      ethers.utils.defaultAbiCoder.decode(
-        ["address"],
-        await ethers.provider.getStorageAt(
-          walletRegistry.address,
-          "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
-        )
-      )[0],
-      "invalid WalletRegistry implementation (read from storage slot)"
-    ).to.be.equal(walletRegistryImplementationAddress)
-
-    expect(
-      await walletRegistryProxy
-        .connect(proxyAdmin.address)
-        .callStatic.implementation(),
+      await upgrades.erc1967.getImplementationAddress(walletRegistry.address),
       "invalid WalletRegistry implementation"
     ).to.be.equal(walletRegistryImplementationAddress)
   })
@@ -105,15 +77,6 @@ describe("WalletRegistry - Deployment", async () => {
       await proxyAdmin.getProxyImplementation(walletRegistryProxy.address),
       "invalid proxy implementation"
     ).to.be.equal(walletRegistryImplementationAddress)
-  })
-
-  it("should set implementation address different than proxy address", async () => {
-    expect(
-      await walletRegistryProxy
-        .connect(proxyAdmin.address)
-        .callStatic.implementation(),
-      "invalid ProxyAdmin owner"
-    ).to.be.not.equal(walletRegistry.address)
   })
 
   it("should set WalletRegistry governance", async () => {

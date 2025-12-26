@@ -73,7 +73,7 @@ describe("WalletRegistry - Rewards", () => {
       it("should revert", async () => {
         await expect(
           walletRegistry.withdrawRewards(thirdParty.address)
-        ).to.be.revertedWith("Unknown operator")
+        ).to.be.revertedWithCustomError(walletRegistry, "UnknownOperator")
       })
     })
 
@@ -127,7 +127,7 @@ describe("WalletRegistry - Rewards", () => {
       it("should revert", async () => {
         await expect(
           walletRegistry.availableRewards(thirdParty.address)
-        ).to.be.revertedWith("Unknown operator")
+        ).to.be.revertedWithCustomError(walletRegistry, "UnknownOperator")
       })
     })
 
@@ -185,7 +185,7 @@ describe("WalletRegistry - Rewards", () => {
           walletRegistry
             .connect(thirdParty)
             .withdrawIneligibleRewards(thirdParty.address)
-        ).to.be.revertedWith("Caller is not the governance")
+        ).to.be.revertedWithCustomError(walletRegistry, "CallerNotGovernance")
       })
     })
 

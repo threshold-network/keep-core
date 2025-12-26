@@ -1,7 +1,8 @@
-import "@nomiclabs/hardhat-etherscan"
+import "@nomicfoundation/hardhat-verify"
 import "@keep-network/hardhat-helpers"
 import "@keep-network/hardhat-local-networks-config"
 import "@nomiclabs/hardhat-waffle"
+import "@nomicfoundation/hardhat-chai-matchers"
 import "@openzeppelin/hardhat-upgrades"
 import "@typechain/hardhat"
 import "hardhat-deploy"
@@ -142,22 +143,22 @@ const config: HardhatUserConfig = {
   namedAccounts: {
     deployer: {
       default: 1, // take the second account
-      sepolia: 0,
-      mainnet: 0, // "0x123694886DBf5Ac94DDA07135349534536D14cAf"
+      sepolia: "0x68ad60CC5e8f3B7cC53beaB321cf0e6036962dBc",
+      mainnet: "0x716089154304f22a2F9c8d2f8C45815183BF3532",
     },
     governance: {
       default: 2,
-      sepolia: 0,
+      sepolia: "0x68ad60CC5e8f3B7cC53beaB321cf0e6036962dBc",
       mainnet: "0x9f6e831c8f8939dc0c830c6e492e7cef4f9c2f5f", // Threshold Council
     },
     chaosnetOwner: {
       default: 3,
-      sepolia: 0,
+      sepolia: "0x68ad60CC5e8f3B7cC53beaB321cf0e6036962dBc",
       mainnet: "0x9f6e831c8f8939dc0c830c6e492e7cef4f9c2f5f", // Threshold Council
     },
     esdm: {
       default: 4,
-      sepolia: 0,
+      sepolia: "0x68ad60CC5e8f3B7cC53beaB321cf0e6036962dBc",
       mainnet: "0x9f6e831c8f8939dc0c830c6e492e7cef4f9c2f5f", // Threshold Council
     },
   },
@@ -189,6 +190,7 @@ const config: HardhatUserConfig = {
         "node_modules/@keep-network/random-beacon/deployments/development",
       ],
       sepolia: [
+        "./external/sepolia",
         "node_modules/@threshold-network/solidity-contracts/artifacts",
         "node_modules/@keep-network/random-beacon/artifacts",
       ],
