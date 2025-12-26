@@ -54,3 +54,14 @@ export default func
 func.tags = ["Allowlist"]
 func.dependencies = ["WalletRegistry"]
 func.id = "deploy_allowlist"
+
+// Skip if Allowlist is already deployed
+func.skip = async (hre: HardhatRuntimeEnvironment) => {
+  const { deployments } = hre
+  const existingAllowlist = await deployments.getOrNull("Allowlist")
+  if (existingAllowlist) {
+    console.log(`Skipping Allowlist deployment - already deployed at ${existingAllowlist.address}`)
+    return true
+  }
+  return false
+}

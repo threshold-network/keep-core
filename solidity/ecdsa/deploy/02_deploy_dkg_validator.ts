@@ -5,6 +5,13 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const { getNamedAccounts, deployments, helpers } = hre
   const { deployer } = await getNamedAccounts()
 
+  // Skip if EcdsaDkgValidator already deployed (for existing mainnet/testnet deployments)
+  const existingDkgValidator = await deployments.getOrNull("EcdsaDkgValidator")
+  if (existingDkgValidator) {
+    console.log(`using existing EcdsaDkgValidator at ${existingDkgValidator.address}`)
+    return true
+  }
+
   const EcdsaSortitionPool = await deployments.get("EcdsaSortitionPool")
 
   const EcdsaDkgValidator = await deployments.deploy("EcdsaDkgValidator", {
