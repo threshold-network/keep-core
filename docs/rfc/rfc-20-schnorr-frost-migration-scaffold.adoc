@@ -1,0 +1,49 @@
+= RFC-20: Schnorr/FROST Migration Scaffold
+
+*Author:* keep-core contributors
+*Status:* Draft
+*Date:* 2026-02-19
+
+== Summary
+
+This RFC introduces the initial keep-core scaffolding for migrating tBTC from
+threshold ECDSA signatures to Schnorr/FROST signatures.
+
+This change does not switch runtime signing logic yet. It defines core data
+types and compatibility helpers required by follow-up protocol, chain, and
+wallet orchestration changes.
+
+== Initial Deliverables
+
+* New `pkg/frost` package with:
+** Taproot x-only output key type (`OutputKey`)
+** BIP-340 Schnorr signature type (`Signature`)
+** Serialization and logging helpers for Schnorr signatures
+** Legacy compatibility alias helper:
+`HASH160(0x02 || xOnlyOutputKey)`
+
+== Compatibility Model
+
+FROST wallets are expected to use 32-byte x-only keys as canonical identifiers.
+During migration, legacy 20-byte wallet key hash paths are supported via
+compatibility alias:
+
+----
+walletPubKeyHashCompat = HASH160(0x02 || xOnlyOutputKey)
+----
+
+== Follow-up Work
+
+1. Add FROST signer and coordinator interfaces to replace `pkg/tecdsa/signing`.
+2. Introduce FROST DKG executor replacing GG18 pre-params and DKG wiring.
+3. Update tBTC chain interfaces and wallet registry integration to accept
+   x-only keys as canonical wallet identities.
+4. Update Bitcoin transaction builders to support P2TR key-path spends.
+5. Add dual-stack runtime routing: GG18 existing wallets + FROST new wallets.
+6. Add full integration tests for mixed wallet generations and migration flows.
+
+== Non-Goals (This RFC Revision)
+
+* No production FROST coordinator implementation.
+* No on-chain contract ABI migration in this repository.
+* No replacement of existing GG18 runtime paths yet.
