@@ -1,6 +1,6 @@
 = RFC-20: Schnorr/FROST Migration Scaffold
 
-*Author:* keep-core contributors
+*Author:* Threshold Labs
 *Status:* Draft
 *Date:* 2026-02-19
 
