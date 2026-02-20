@@ -48,13 +48,18 @@ func (leb *legacyExecutionBackend) Execute(
 		excludedMembersIndexes = request.Attempt.ExcludedMembersIndexes
 	}
 
+	privateKeyShare, err := request.LegacyPrivateKeyShare()
+	if err != nil {
+		return nil, err
+	}
+
 	legacyResult, err := legacySigning.Execute(
 		ctx,
 		logger,
 		request.Message,
 		request.SessionID,
 		request.MemberIndex,
-		request.PrivateKeyShare,
+		privateKeyShare,
 		request.GroupSize,
 		request.DishonestThreshold,
 		excludedMembersIndexes,

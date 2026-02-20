@@ -35,6 +35,7 @@ func Execute(
 		Message:             message,
 		SessionID:           sessionID,
 		MemberIndex:         memberIndex,
+		SignerMaterial:      privateKeyShare,
 		PrivateKeyShare:     privateKeyShare,
 		GroupSize:           groupSize,
 		DishonestThreshold:  dishonestThreshold,
