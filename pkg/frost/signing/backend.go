@@ -3,6 +3,7 @@ package signing
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/ipfs/go-log/v2"
@@ -23,9 +24,19 @@ type ExecutionBackend interface {
 }
 
 var (
+	// ErrNativeExecutionBackendUnavailable is returned when native backend is
+	// requested but not linked in the current build.
+	ErrNativeExecutionBackendUnavailable = fmt.Errorf(
+		"native FROST signing backend is unavailable in this build",
+	)
+
 	executionBackendMutex sync.RWMutex
 	executionBackend      ExecutionBackend = newLegacyExecutionBackend()
 )
+
+// LegacyExecutionBackendName is a stable identifier of the transitional
+// legacy tECDSA bridge backend.
+const LegacyExecutionBackendName = legacyExecutionBackendName
 
 func currentExecutionBackend() ExecutionBackend {
 	executionBackendMutex.RLock()
@@ -58,4 +69,21 @@ func ResetExecutionBackend() {
 // CurrentExecutionBackendName returns the active backend name.
 func CurrentExecutionBackendName() string {
 	return currentExecutionBackend().Name()
+}
+
+// SetExecutionBackendByName configures the runtime backend by a stable name.
+//
+// Supported values:
+//   - "", "legacy", "legacy-tecdsa-bridge": transitional legacy bridge backend
+//   - "native", "ffi": reserved for native FROST backend (currently unavailable)
+func SetExecutionBackendByName(name string) error {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "", "legacy", legacyExecutionBackendName:
+		ResetExecutionBackend()
+		return nil
+	case "native", "ffi":
+		return ErrNativeExecutionBackendUnavailable
+	default:
+		return fmt.Errorf("unknown FROST signing backend: [%s]", name)
+	}
 }

@@ -133,6 +133,10 @@ func newNode(
 	proposalGenerator CoordinationProposalGenerator,
 	config Config,
 ) (*node, error) {
+	if err := configureFrostSigningBackend(config); err != nil {
+		return nil, fmt.Errorf("cannot configure FROST signing backend: [%v]", err)
+	}
+
 	walletRegistry, err := newWalletRegistry(
 		keyStorePersistance,
 		chain.CalculateWalletID,
@@ -191,6 +195,10 @@ func newNode(
 	)
 
 	return node, nil
+}
+
+func configureFrostSigningBackend(config Config) error {
+	return signing.SetExecutionBackendByName(config.FrostSigningBackend)
 }
 
 // setPerformanceMetrics sets the performance metrics recorder for the node

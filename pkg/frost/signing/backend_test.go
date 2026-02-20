@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ipfs/go-log/v2"
@@ -59,6 +60,50 @@ func TestCurrentExecutionBackendName_Default(t *testing.T) {
 func TestSetExecutionBackend_Nil(t *testing.T) {
 	if err := SetExecutionBackend(nil); err == nil {
 		t.Fatal("expected nil backend error")
+	}
+}
+
+func TestSetExecutionBackendByName(t *testing.T) {
+	ResetExecutionBackend()
+	t.Cleanup(ResetExecutionBackend)
+
+	if err := SetExecutionBackendByName(""); err != nil {
+		t.Fatalf("unexpected default backend config error: [%v]", err)
+	}
+	if CurrentExecutionBackendName() != legacyExecutionBackendName {
+		t.Fatalf(
+			"unexpected backend name for default config\\nexpected: [%s]\\nactual:   [%s]",
+			legacyExecutionBackendName,
+			CurrentExecutionBackendName(),
+		)
+	}
+
+	if err := SetExecutionBackendByName("LEGACY"); err != nil {
+		t.Fatalf("unexpected legacy backend config error: [%v]", err)
+	}
+	if CurrentExecutionBackendName() != legacyExecutionBackendName {
+		t.Fatalf(
+			"unexpected backend name for legacy config\\nexpected: [%s]\\nactual:   [%s]",
+			legacyExecutionBackendName,
+			CurrentExecutionBackendName(),
+		)
+	}
+
+	err := SetExecutionBackendByName("native")
+	if err == nil {
+		t.Fatal("expected native backend unavailable error")
+	}
+	if !strings.Contains(err.Error(), ErrNativeExecutionBackendUnavailable.Error()) {
+		t.Fatalf(
+			"unexpected native backend error\\nexpected substring: [%s]\\nactual:             [%s]",
+			ErrNativeExecutionBackendUnavailable.Error(),
+			err.Error(),
+		)
+	}
+
+	err = SetExecutionBackendByName("unknown")
+	if err == nil {
+		t.Fatal("expected unknown backend error")
 	}
 }
 

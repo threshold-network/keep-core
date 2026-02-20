@@ -65,6 +65,10 @@ type Config struct {
 	PreParamsGenerationConcurrency int
 	// Concurrency level for key-generation for tECDSA.
 	KeyGenerationConcurrency int
+	// FrostSigningBackend selects the FROST signing backend implementation.
+	// Supported values are resolved by pkg/frost/signing.SetExecutionBackendByName.
+	// Empty value defaults to the transitional legacy bridge backend.
+	FrostSigningBackend string
 }
 
 // Initialize kicks off the TBTC by initializing internal state, ensuring
