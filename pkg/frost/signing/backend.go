@@ -23,6 +23,10 @@ type ExecutionBackend interface {
 	RegisterUnmarshallers(channel net.BroadcastChannel)
 }
 
+type nativeExecutionAvailabilityReporter interface {
+	NativeExecutionAvailable() bool
+}
+
 var (
 	// ErrNativeExecutionBackendUnavailable is returned when native backend is
 	// requested but not linked in the current build.
@@ -174,6 +178,7 @@ func RegisterNativeExecutionAdapterForBuild() {
 func currentNativeExecutionBackend() (ExecutionBackend, error) {
 	executionBackendMutex.RLock()
 	adapter := nativeExecutionAdapter
+	mode := nativeExecutionMode
 	executionBackendMutex.RUnlock()
 
 	if adapter == nil {
@@ -181,6 +186,18 @@ func currentNativeExecutionBackend() (ExecutionBackend, error) {
 			"%w: no native execution adapter registered",
 			ErrNativeExecutionBackendUnavailable,
 		)
+	}
+
+	if mode == nativeExecutionModeStrict {
+		if reporter, ok := adapter.(nativeExecutionAvailabilityReporter); ok {
+			if !reporter.NativeExecutionAvailable() {
+				return nil, fmt.Errorf(
+					"%w: %w",
+					ErrNativeExecutionBackendUnavailable,
+					ErrNativeCryptographyUnavailable,
+				)
+			}
+		}
 	}
 
 	backend, err := newNativeExecutionBackend(adapter)

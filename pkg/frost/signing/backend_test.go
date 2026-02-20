@@ -35,6 +35,11 @@ type mockNativeExecutionAdapter struct {
 	lastChannel                net.BroadcastChannel
 }
 
+type mockNativeExecutionAdapterWithAvailability struct {
+	*mockNativeExecutionAdapter
+	nativeExecutionAvailable bool
+}
+
 func (meb *mockExecutionBackend) Name() string {
 	return meb.name
 }
@@ -71,6 +76,10 @@ func (mnea *mockNativeExecutionAdapter) RegisterUnmarshallers(
 ) {
 	mnea.registerUnmarshallersCalls++
 	mnea.lastChannel = channel
+}
+
+func (mneawa *mockNativeExecutionAdapterWithAvailability) NativeExecutionAvailable() bool {
+	return mneawa.nativeExecutionAvailable
 }
 
 func TestCurrentExecutionBackendName_Default(t *testing.T) {
@@ -226,6 +235,52 @@ func TestSetExecutionBackendByName_NativeAdapterRegistered(t *testing.T) {
 		t.Fatalf(
 			"unexpected native register unmarshallers calls count: [%d]",
 			adapter.registerUnmarshallersCalls,
+		)
+	}
+}
+
+func TestSetExecutionBackendByName_FFIStrictAvailabilityCheck(t *testing.T) {
+	ResetExecutionBackend()
+	UnregisterNativeExecutionAdapter()
+	t.Cleanup(ResetExecutionBackend)
+	t.Cleanup(UnregisterNativeExecutionAdapter)
+
+	adapter := &mockNativeExecutionAdapterWithAvailability{
+		mockNativeExecutionAdapter: &mockNativeExecutionAdapter{},
+		nativeExecutionAvailable:   false,
+	}
+
+	if err := RegisterNativeExecutionAdapter(adapter); err != nil {
+		t.Fatalf("failed registering native execution adapter: [%v]", err)
+	}
+
+	err := SetExecutionBackendByName("ffi")
+	if err == nil {
+		t.Fatal("expected ffi backend unavailable error")
+	}
+	if !errors.Is(err, ErrNativeExecutionBackendUnavailable) {
+		t.Fatalf(
+			"unexpected ffi backend error\\nexpected: [%v]\\nactual:   [%v]",
+			ErrNativeExecutionBackendUnavailable,
+			err,
+		)
+	}
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected strict-mode availability error\\nexpected: [%v]\\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	if err := SetExecutionBackendByName("native"); err != nil {
+		t.Fatalf("unexpected native backend config error: [%v]", err)
+	}
+	if CurrentExecutionBackendName() != nativeExecutionBackendName {
+		t.Fatalf(
+			"unexpected backend name for native config\\nexpected: [%s]\\nactual:   [%s]",
+			nativeExecutionBackendName,
+			CurrentExecutionBackendName(),
 		)
 	}
 }

@@ -79,6 +79,27 @@ func TestNativeExecutionBackend_FrostNativeBuildSelectable(t *testing.T) {
 			err,
 		)
 	}
+
+	err = SetExecutionBackendByName("ffi")
+	if err == nil {
+		t.Fatal("expected strict ffi backend unavailable error")
+	}
+
+	if !errors.Is(err, ErrNativeExecutionBackendUnavailable) {
+		t.Fatalf(
+			"unexpected ffi backend error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeExecutionBackendUnavailable,
+			err,
+		)
+	}
+
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected ffi native-availability error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
 }
 
 func TestBuildTaggedNativeExecutionAdapter_Execute_UsesNativeBridgeWhenAvailable(

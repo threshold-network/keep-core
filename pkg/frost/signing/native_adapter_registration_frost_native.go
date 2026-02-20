@@ -38,6 +38,10 @@ func newBuildTaggedNativeExecutionAdapter() *buildTaggedNativeExecutionAdapter {
 	}
 }
 
+func (btnea *buildTaggedNativeExecutionAdapter) NativeExecutionAvailable() bool {
+	return btnea.nativeBridge != nil && btnea.nativeBridge.IsAvailable()
+}
+
 func (btnea *buildTaggedNativeExecutionAdapter) Execute(
 	ctx context.Context,
 	logger log.StandardLogger,
