@@ -305,7 +305,7 @@ func excludeOperatorTriplets(
 			for k := j + 1; k < len(operators); k++ {
 				leftOperator := operators[i]
 				middleOperator := operators[j]
-				rightOperator := operators[j]
+				rightOperator := operators[k]
 
 				// Only include the operators triples that have few enough seats such
 				// that if they were excluded we still have at least
