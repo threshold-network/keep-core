@@ -9,12 +9,12 @@ import (
 	"time"
 
 	"github.com/keep-network/keep-core/pkg/clientinfo"
+	"github.com/keep-network/keep-core/pkg/frost"
+	"github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/announcer"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"github.com/keep-network/keep-core/pkg/tecdsa"
-	"github.com/keep-network/keep-core/pkg/tecdsa/signing"
 	"go.uber.org/zap"
 	"golang.org/x/sync/semaphore"
 )
@@ -102,7 +102,7 @@ func (se *signingExecutor) signBatch(
 	ctx context.Context,
 	messages []*big.Int,
 	startBlock uint64,
-) ([]*tecdsa.Signature, error) {
+) ([]*frost.Signature, error) {
 	wallet := se.wallet()
 
 	walletPublicKeyBytes, err := marshalPublicKey(wallet.publicKey)
@@ -139,7 +139,7 @@ func (se *signingExecutor) signBatch(
 	)
 
 	signingStartBlock := startBlock // start block for the first signing
-	signatures := make([]*tecdsa.Signature, len(messages))
+	signatures := make([]*frost.Signature, len(messages))
 	endBlocks := make([]uint64, len(messages))
 
 	for i, message := range messages {
@@ -184,7 +184,7 @@ func (se *signingExecutor) sign(
 	ctx context.Context,
 	message *big.Int,
 	startBlock uint64,
-) (*tecdsa.Signature, *signingActivityReport, uint64, error) {
+) (*frost.Signature, *signingActivityReport, uint64, error) {
 	if lockAcquired := se.lock.TryAcquire(1); !lockAcquired {
 		// Record failure metrics for lock acquisition failure
 		if se.metricsRecorder != nil {
@@ -223,7 +223,7 @@ func (se *signingExecutor) sign(
 	)
 
 	type signingOutcome struct {
-		signature      *tecdsa.Signature
+		signature      *frost.Signature
 		activityReport *signingActivityReport
 		endBlock       uint64
 	}

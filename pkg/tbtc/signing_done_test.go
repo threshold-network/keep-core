@@ -14,12 +14,11 @@ import (
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/local_v1"
+	"github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/net/local"
 	"github.com/keep-network/keep-core/pkg/operator"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"github.com/keep-network/keep-core/pkg/tecdsa"
-	"github.com/keep-network/keep-core/pkg/tecdsa/signing"
 )
 
 // TestSigningDoneCheck is a happy path test.
@@ -46,11 +45,7 @@ func TestSigningDoneCheck(t *testing.T) {
 	attemptTimeoutBlock := uint64(1000)
 	attemptMemberIndexes := memberIndexes[:groupParameters.HonestThreshold]
 	result := &signing.Result{
-		Signature: &tecdsa.Signature{
-			R:          big.NewInt(200),
-			S:          big.NewInt(300),
-			RecoveryID: 2,
-		},
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(200), big.NewInt(300)),
 	}
 
 	type outcome struct {
@@ -166,11 +161,7 @@ func TestSigningDoneCheck_MissingConfirmation(t *testing.T) {
 	attemptTimeoutBlock := uint64(1000)
 	attemptMemberIndexes := memberIndexes[:groupParameters.HonestThreshold]
 	result := &signing.Result{
-		Signature: &tecdsa.Signature{
-			R:          big.NewInt(200),
-			S:          big.NewInt(300),
-			RecoveryID: 2,
-		},
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(200), big.NewInt(300)),
 	}
 
 	doneCheck.listen(
@@ -229,18 +220,10 @@ func TestSigningDoneCheck_AnotherSignature(t *testing.T) {
 	attemptTimeoutBlock := uint64(1000)
 	attemptMemberIndexes := memberIndexes[:groupParameters.HonestThreshold]
 	correctResult := &signing.Result{
-		Signature: &tecdsa.Signature{
-			R:          big.NewInt(200),
-			S:          big.NewInt(300),
-			RecoveryID: 2,
-		},
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(200), big.NewInt(300)),
 	}
 	incorrectResult := &signing.Result{
-		Signature: &tecdsa.Signature{
-			R:          big.NewInt(201),
-			S:          big.NewInt(300),
-			RecoveryID: 2,
-		},
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(201), big.NewInt(300)),
 	}
 
 	doneCheck.listen(

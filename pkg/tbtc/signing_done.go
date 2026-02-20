@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/keep-network/keep-core/pkg/frost"
+	"github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"github.com/keep-network/keep-core/pkg/tecdsa"
-	"github.com/keep-network/keep-core/pkg/tecdsa/signing"
 )
 
 // signingDoneReceiveBuffer is a buffer for messages received from the broadcast
@@ -35,7 +35,7 @@ type signingDoneMessage struct {
 	senderID      group.MemberIndex
 	message       *big.Int
 	attemptNumber uint64
-	signature     *tecdsa.Signature
+	signature     *frost.Signature
 	endBlock      uint64
 }
 
@@ -170,7 +170,7 @@ func (sdc *signingDoneCheck) waitUntilAllDone(ctx context.Context) (
 
 		case <-ticker.C:
 			if sdc.expectedSignersCount == len(sdc.doneSigners) {
-				var signature *tecdsa.Signature
+				var signature *frost.Signature
 				var latestEndBlock uint64
 
 				for _, doneMessage := range sdc.doneSigners {

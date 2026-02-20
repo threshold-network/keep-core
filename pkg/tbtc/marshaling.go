@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tbtc/gen/pb"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
@@ -114,7 +115,7 @@ func (sdm *signingDoneMessage) Unmarshal(bytes []byte) error {
 		return err
 	}
 
-	signature := &tecdsa.Signature{}
+	signature := &frost.Signature{}
 	if err := signature.Unmarshal(pbMsg.Signature); err != nil {
 		return fmt.Errorf("cannot unmarshal signature: [%v]", err)
 	}

@@ -11,9 +11,8 @@ import (
 
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"github.com/keep-network/keep-core/pkg/tecdsa"
-	"github.com/keep-network/keep-core/pkg/tecdsa/signing"
 )
 
 func TestSigningRetryLoop(t *testing.T) {
@@ -46,11 +45,7 @@ func TestSigningRetryLoop(t *testing.T) {
 	}
 
 	testResult := &signing.Result{
-		Signature: &tecdsa.Signature{
-			R:          big.NewInt(300),
-			S:          big.NewInt(400),
-			RecoveryID: 2,
-		},
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(300), big.NewInt(400)),
 	}
 
 	var tests = map[string]struct {

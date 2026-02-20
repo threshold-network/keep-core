@@ -6,12 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/keep-network/keep-core/pkg/tecdsa"
-
 	"github.com/go-test/deep"
 
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/tbtc/internal/test"
 )
 
@@ -104,14 +103,13 @@ func TestRedemptionAction_Execute(t *testing.T) {
 			// Create a signing executor mock instance.
 			signingExecutor := newMockWalletSigningExecutor()
 
-			// The signature within the scenario fixture is in the format
-			// suitable for applying them directly to a Bitcoin transaction.
-			// However, the signing executor operates on raw tECDSA signatures
-			// so, we need to unpack it first.
-			rawSignature := &tecdsa.Signature{
-				R: scenario.Signature.R,
-				S: scenario.Signature.S,
-			}
+			// The signature within the scenario fixture is represented as
+			// big integer components and needs conversion to runtime signature
+			// container used by signing executor.
+			rawSignature := mustFrostSignatureFromBigInts(
+				scenario.Signature.R,
+				scenario.Signature.S,
+			)
 
 			// Set up the signing executor mock to return the signature from
 			// the test fixture when called with the expected parameters.
@@ -120,7 +118,7 @@ func TestRedemptionAction_Execute(t *testing.T) {
 			signingExecutor.setSignatures(
 				[]*big.Int{scenario.ExpectedSigHash},
 				proposalProcessingStartBlock,
-				[]*tecdsa.Signature{rawSignature},
+				[]*frost.Signature{rawSignature},
 			)
 
 			action := newRedemptionAction(

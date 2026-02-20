@@ -9,8 +9,8 @@ import (
 
 	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
 
 const (
@@ -60,7 +60,7 @@ type heartbeatSigningExecutor interface {
 		ctx context.Context,
 		message *big.Int,
 		startBlock uint64,
-	) (*tecdsa.Signature, *signingActivityReport, uint64, error)
+	) (*frost.Signature, *signingActivityReport, uint64, error)
 }
 
 // heartbeatInactivityClaimExecutor is an interface meant to decouple the

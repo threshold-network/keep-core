@@ -19,7 +19,6 @@ import (
 	netlocal "github.com/keep-network/keep-core/pkg/net/local"
 	"github.com/keep-network/keep-core/pkg/operator"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"github.com/keep-network/keep-core/pkg/tecdsa"
 	"golang.org/x/exp/slices"
 
 	"github.com/keep-network/keep-core/internal/testutils"
@@ -1034,12 +1033,8 @@ func TestCoordinationExecutor_ExecuteFollowerRoutine(t *testing.T) {
 			senderID:      leaderID,
 			message:       big.NewInt(100),
 			attemptNumber: 2,
-			signature: &tecdsa.Signature{
-				R:          big.NewInt(200),
-				S:          big.NewInt(300),
-				RecoveryID: 3,
-			},
-			endBlock: 4500,
+			signature:     mustFrostSignatureFromBigInts(big.NewInt(200), big.NewInt(300)),
+			endBlock:      4500,
 		})
 		if err != nil {
 			t.Error(err)

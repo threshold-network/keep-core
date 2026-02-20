@@ -17,6 +17,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
+	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 	"go.uber.org/zap"
@@ -281,7 +282,7 @@ type walletSigningExecutor interface {
 		ctx context.Context,
 		messages []*big.Int,
 		startBlock uint64,
-	) ([]*tecdsa.Signature, error)
+	) ([]*frost.Signature, error)
 }
 
 // walletTransactionExecutor is a component allowing to sign and broadcast
@@ -354,8 +355,8 @@ func (wte *walletTransactionExecutor) signTransaction(
 	containers := make([]*bitcoin.SignatureContainer, len(signatures))
 	for i, signature := range signatures {
 		containers[i] = &bitcoin.SignatureContainer{
-			R:         signature.R,
-			S:         signature.S,
+			R:         new(big.Int).SetBytes(signature.R[:]),
+			S:         new(big.Int).SetBytes(signature.S[:]),
 			PublicKey: wte.executingWallet.publicKey,
 		}
 	}

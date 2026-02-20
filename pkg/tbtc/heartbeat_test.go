@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/keep-network/keep-core/internal/testutils"
+	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
 
 func TestHeartbeatAction_HappyPath(t *testing.T) {
@@ -612,7 +612,7 @@ func (mhse *mockHeartbeatSigningExecutor) sign(
 	ctx context.Context,
 	message *big.Int,
 	startBlock uint64,
-) (*tecdsa.Signature, *signingActivityReport, uint64, error) {
+) (*frost.Signature, *signingActivityReport, uint64, error) {
 	mhse.requestedMessage = message
 	mhse.requestedStartBlock = startBlock
 
@@ -636,7 +636,7 @@ func (mhse *mockHeartbeatSigningExecutor) sign(
 		inactiveMembers: inactiveMembers,
 	}
 
-	return &tecdsa.Signature{}, activityReport, startBlock + 1, nil
+	return &frost.Signature{}, activityReport, startBlock + 1, nil
 }
 
 type mockInactivityClaimExecutor struct {

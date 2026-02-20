@@ -47,6 +47,35 @@ func TestSignatureSerialize(t *testing.T) {
 	}
 }
 
+func TestSignatureMarshalUnmarshal(t *testing.T) {
+	original := &Signature{
+		R: [SignatureComponentSize]byte{0x11, 0x22, 0x33},
+		S: [SignatureComponentSize]byte{0xaa, 0xbb, 0xcc},
+	}
+
+	marshaled, err := original.Marshal()
+	if err != nil {
+		t.Fatalf("marshal failed: [%v]", err)
+	}
+
+	decoded := &Signature{}
+	if err := decoded.Unmarshal(marshaled); err != nil {
+		t.Fatalf("unmarshal failed: [%v]", err)
+	}
+
+	if !original.Equals(decoded) {
+		t.Fatalf("decoded signature does not match original")
+	}
+}
+
+func TestSignatureUnmarshal_InvalidLength(t *testing.T) {
+	signature := &Signature{}
+	err := signature.Unmarshal([]byte{0x01, 0x02, 0x03})
+	if err == nil {
+		t.Fatal("expected invalid-length unmarshal error")
+	}
+}
+
 func TestSignatureString(t *testing.T) {
 	signature := &Signature{
 		R: [SignatureComponentSize]byte{0x01, 0x02},

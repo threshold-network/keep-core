@@ -38,8 +38,8 @@ func TestSigningExecutor_Sign(t *testing.T) {
 	if !ecdsa.Verify(
 		walletPublicKey,
 		message.Bytes(),
-		signature.R,
-		signature.S,
+		new(big.Int).SetBytes(signature.R[:]),
+		new(big.Int).SetBytes(signature.S[:]),
 	) {
 		t.Errorf("invalid signature: [%+v]", signature)
 	}
@@ -99,8 +99,8 @@ func TestSigningExecutor_SignBatch(t *testing.T) {
 		if !ecdsa.Verify(
 			walletPublicKey,
 			messages[i].Bytes(),
-			signature.R,
-			signature.S,
+			new(big.Int).SetBytes(signature.R[:]),
+			new(big.Int).SetBytes(signature.S[:]),
 		) {
 			t.Errorf("invalid signature [%v]: [%+v]", i, signature)
 		}

@@ -13,9 +13,9 @@ import (
 
 	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa/retry"
-	"github.com/keep-network/keep-core/pkg/tecdsa/signing"
 	"golang.org/x/exp/slices"
 )
 

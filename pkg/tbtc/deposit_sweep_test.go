@@ -7,10 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/keep-network/keep-core/pkg/tecdsa"
-
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/tbtc/internal/test"
 )
 
@@ -171,16 +170,15 @@ func TestDepositSweepAction_Execute(t *testing.T) {
 			// Create a signing executor mock instance.
 			signingExecutor := newMockWalletSigningExecutor()
 
-			// The signatures within the scenario fixture are in the format
-			// suitable for applying them directly to a Bitcoin transaction.
-			// However, the signing executor operates on raw tECDSA signatures
-			// so, we need to unpack them first.
-			rawSignatures := make([]*tecdsa.Signature, len(scenario.Signatures))
+			// The signatures within the scenario fixture are represented as
+			// big integer components and need conversion to runtime signature
+			// containers used by signing executor.
+			rawSignatures := make([]*frost.Signature, len(scenario.Signatures))
 			for i, signature := range scenario.Signatures {
-				rawSignatures[i] = &tecdsa.Signature{
-					R: signature.R,
-					S: signature.S,
-				}
+				rawSignatures[i] = mustFrostSignatureFromBigInts(
+					signature.R,
+					signature.S,
+				)
 			}
 
 			// Set up the signing executor mock to return the signatures from

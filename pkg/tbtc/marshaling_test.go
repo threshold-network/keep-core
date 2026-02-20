@@ -13,9 +13,9 @@ import (
 	fuzz "github.com/google/gofuzz"
 
 	"github.com/keep-network/keep-core/internal/testutils"
+	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/internal/pbutils"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
 
 func TestSignerMarshalling(t *testing.T) {
@@ -53,12 +53,8 @@ func TestSigningDoneMessage_MarshalingRoundtrip(t *testing.T) {
 		senderID:      group.MemberIndex(10),
 		message:       big.NewInt(100),
 		attemptNumber: 2,
-		signature: &tecdsa.Signature{
-			R:          big.NewInt(200),
-			S:          big.NewInt(300),
-			RecoveryID: 3,
-		},
-		endBlock: 4500,
+		signature:     mustFrostSignatureFromBigInts(big.NewInt(200), big.NewInt(300)),
+		endBlock:      4500,
 	}
 	unmarshaled := &signingDoneMessage{}
 
@@ -78,7 +74,7 @@ func TestFuzzSigningDoneMessage_MarshalingRoundtrip(t *testing.T) {
 			senderID      group.MemberIndex
 			message       big.Int
 			attemptNumber uint64
-			signature     tecdsa.Signature
+			signature     frost.Signature
 			endBlock      uint64
 		)
 

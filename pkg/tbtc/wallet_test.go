@@ -8,8 +8,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"github.com/keep-network/keep-core/pkg/chain"
-	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"math/big"
 	"reflect"
 	"sync"
@@ -18,6 +16,9 @@ import (
 
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/frost"
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
 
@@ -418,12 +419,12 @@ func generateWallet(privateKey *big.Int) wallet {
 
 type mockWalletSigningExecutor struct {
 	signaturesMutex sync.Mutex
-	signatures      map[[32]byte][]*tecdsa.Signature
+	signatures      map[[32]byte][]*frost.Signature
 }
 
 func newMockWalletSigningExecutor() *mockWalletSigningExecutor {
 	return &mockWalletSigningExecutor{
-		signatures: make(map[[32]byte][]*tecdsa.Signature),
+		signatures: make(map[[32]byte][]*frost.Signature),
 	}
 }
 
@@ -431,7 +432,7 @@ func (mwse *mockWalletSigningExecutor) signBatch(
 	ctx context.Context,
 	messages []*big.Int,
 	startBlock uint64,
-) ([]*tecdsa.Signature, error) {
+) ([]*frost.Signature, error) {
 	mwse.signaturesMutex.Lock()
 	defer mwse.signaturesMutex.Unlock()
 
@@ -448,7 +449,7 @@ func (mwse *mockWalletSigningExecutor) signBatch(
 func (mwse *mockWalletSigningExecutor) setSignatures(
 	messages []*big.Int,
 	startBlock uint64,
-	signatures []*tecdsa.Signature,
+	signatures []*frost.Signature,
 ) {
 	mwse.signaturesMutex.Lock()
 	defer mwse.signaturesMutex.Unlock()
