@@ -129,6 +129,24 @@ func TestSetExecutionBackendByName(t *testing.T) {
 			err,
 		)
 	}
+	if !nativeExecutionFallbackAllowed() {
+		t.Fatal("expected fallback-allowed mode for native backend selection")
+	}
+
+	err = SetExecutionBackendByName("ffi")
+	if err == nil {
+		t.Fatal("expected ffi backend unavailable error")
+	}
+	if !errors.Is(err, ErrNativeExecutionBackendUnavailable) {
+		t.Fatalf(
+			"unexpected ffi backend error\\nexpected: [%v]\\nactual:   [%v]",
+			ErrNativeExecutionBackendUnavailable,
+			err,
+		)
+	}
+	if nativeExecutionFallbackAllowed() {
+		t.Fatal("expected strict mode for ffi backend selection")
+	}
 
 	err = SetExecutionBackendByName("unknown")
 	if err == nil {
@@ -161,6 +179,16 @@ func TestSetExecutionBackendByName_NativeAdapterRegistered(t *testing.T) {
 			nativeExecutionBackendName,
 			CurrentExecutionBackendName(),
 		)
+	}
+	if nativeExecutionFallbackAllowed() {
+		t.Fatal("expected strict mode for ffi backend selection")
+	}
+
+	if err := SetExecutionBackendByName("native"); err != nil {
+		t.Fatalf("unexpected native backend config error: [%v]", err)
+	}
+	if !nativeExecutionFallbackAllowed() {
+		t.Fatal("expected fallback-allowed mode for native backend selection")
 	}
 
 	executeResult, err := Execute(

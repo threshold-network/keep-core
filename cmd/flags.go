@@ -313,7 +313,9 @@ func initTbtcFlags(cmd *cobra.Command, cfg *config.Config) {
 		&cfg.Tbtc.FrostSigningBackend,
 		"tbtc.frostSigningBackend",
 		"",
-		"FROST signing backend name (legacy, native, ffi). Empty value selects legacy.",
+		"FROST signing backend name (legacy, native, ffi). "+
+			"`native` allows transitional legacy fallback; `ffi` requires native execution. "+
+			"Empty value selects legacy.",
 	)
 }
 

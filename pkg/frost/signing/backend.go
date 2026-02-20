@@ -36,6 +36,7 @@ var (
 	executionBackendMutex  sync.RWMutex
 	executionBackend       ExecutionBackend = newLegacyExecutionBackend()
 	nativeExecutionAdapter NativeExecutionAdapter
+	nativeExecutionMode    = nativeExecutionModeFallbackAllowed
 )
 
 // LegacyExecutionBackendName is a stable identifier of the transitional
@@ -45,6 +46,17 @@ const LegacyExecutionBackendName = legacyExecutionBackendName
 // NativeExecutionBackendName is a stable identifier of the native FROST
 // execution backend.
 const NativeExecutionBackendName = nativeExecutionBackendName
+
+type nativeExecutionModeValue uint8
+
+const (
+	// nativeExecutionModeFallbackAllowed means the native adapter may fall back
+	// to transitional legacy execution when native cryptography is unavailable.
+	nativeExecutionModeFallbackAllowed nativeExecutionModeValue = iota
+	// nativeExecutionModeStrict requires native cryptographic execution and
+	// does not allow fallback to transitional legacy execution.
+	nativeExecutionModeStrict
+)
 
 func currentExecutionBackend() ExecutionBackend {
 	executionBackendMutex.RLock()
@@ -72,6 +84,7 @@ func ResetExecutionBackend() {
 	defer executionBackendMutex.Unlock()
 
 	executionBackend = newLegacyExecutionBackend()
+	nativeExecutionMode = nativeExecutionModeFallbackAllowed
 }
 
 // CurrentExecutionBackendName returns the active backend name.
@@ -83,13 +96,24 @@ func CurrentExecutionBackendName() string {
 //
 // Supported values:
 //   - "", "legacy", "legacy-tecdsa-bridge": transitional legacy bridge backend
-//   - "native", "ffi": native FROST backend (requires registered native adapter)
+//   - "native": native route with transitional fallback to legacy when native
+//     cryptography is unavailable
+//   - "ffi": strict native route; no fallback to legacy execution
 func SetExecutionBackendByName(name string) error {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "", "legacy", legacyExecutionBackendName:
 		ResetExecutionBackend()
 		return nil
-	case "native", "ffi":
+	case "native":
+		setNativeExecutionMode(nativeExecutionModeFallbackAllowed)
+		nativeBackend, err := currentNativeExecutionBackend()
+		if err != nil {
+			return err
+		}
+
+		return SetExecutionBackend(nativeBackend)
+	case "ffi":
+		setNativeExecutionMode(nativeExecutionModeStrict)
 		nativeBackend, err := currentNativeExecutionBackend()
 		if err != nil {
 			return err
@@ -99,6 +123,20 @@ func SetExecutionBackendByName(name string) error {
 	default:
 		return fmt.Errorf("unknown FROST signing backend: [%s]", name)
 	}
+}
+
+func setNativeExecutionMode(mode nativeExecutionModeValue) {
+	executionBackendMutex.Lock()
+	defer executionBackendMutex.Unlock()
+
+	nativeExecutionMode = mode
+}
+
+func nativeExecutionFallbackAllowed() bool {
+	executionBackendMutex.RLock()
+	defer executionBackendMutex.RUnlock()
+
+	return nativeExecutionMode == nativeExecutionModeFallbackAllowed
 }
 
 // RegisterNativeExecutionAdapter sets a native adapter used by the

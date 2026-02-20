@@ -68,6 +68,9 @@ type Config struct {
 	// FrostSigningBackend selects the FROST signing backend implementation.
 	// Supported values are resolved by pkg/frost/signing.SetExecutionBackendByName.
 	// Empty value defaults to the transitional legacy bridge backend.
+	// `native` allows transitional legacy fallback when native cryptographic
+	// execution is unavailable. `ffi` requires native execution and does not
+	// allow fallback.
 	FrostSigningBackend string
 }
 

@@ -14,9 +14,11 @@ import (
 // buildTaggedNativeExecutionAdapter is a transitional adapter wired when the
 // frost_native build tag is enabled.
 //
-// The adapter uses a native execution bridge when available and falls back to
-// the legacy tECDSA bridge runtime only when native cryptography is
-// unavailable.
+// The adapter uses a native execution bridge when available.
+//
+// Backend mode behavior:
+//   - `native`: fallback to legacy bridge when native cryptography is unavailable
+//   - `ffi`: no fallback; native cryptographic execution is required
 type buildTaggedNativeExecutionAdapter struct {
 	nativeBridge nativeExecutionBridge
 	fallback     ExecutionBackend
@@ -51,12 +53,20 @@ func (btnea *buildTaggedNativeExecutionAdapter) Execute(
 			return nil, fmt.Errorf("native bridge execution failed: [%w]", err)
 		}
 
+		if !nativeExecutionFallbackAllowed() {
+			return nil, err
+		}
+
 		if logger != nil {
 			logger.Warnf(
 				"native FROST cryptography unavailable; falling back to legacy bridge backend: [%v]",
 				err,
 			)
 		}
+	}
+
+	if !nativeExecutionFallbackAllowed() {
+		return nil, ErrNativeCryptographyUnavailable
 	}
 
 	if btnea.fallback == nil {
@@ -71,6 +81,10 @@ func (btnea *buildTaggedNativeExecutionAdapter) RegisterUnmarshallers(
 ) {
 	if btnea.nativeBridge != nil && btnea.nativeBridge.IsAvailable() {
 		btnea.nativeBridge.RegisterUnmarshallers(channel)
+		return
+	}
+
+	if !nativeExecutionFallbackAllowed() {
 		return
 	}
 

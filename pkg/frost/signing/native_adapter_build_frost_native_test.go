@@ -234,6 +234,87 @@ func TestBuildTaggedNativeExecutionAdapter_Execute_ReturnsBridgeError(
 	}
 }
 
+func TestBuildTaggedNativeExecutionAdapter_Execute_StrictModeNoFallbackWhenUnavailable(
+	t *testing.T,
+) {
+	setNativeExecutionMode(nativeExecutionModeStrict)
+	t.Cleanup(func() {
+		setNativeExecutionMode(nativeExecutionModeFallbackAllowed)
+	})
+
+	bridge := &mockNativeExecutionBridge{
+		available: false,
+	}
+
+	fallback := &mockExecutionBackend{
+		name:   "fallback",
+		result: &Result{},
+	}
+
+	adapter := &buildTaggedNativeExecutionAdapter{
+		nativeBridge: bridge,
+		fallback:     fallback,
+	}
+
+	_, err := adapter.Execute(context.Background(), nil, &Request{})
+	if err == nil {
+		t.Fatal("expected execute error")
+	}
+
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected execute error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	if fallback.executeCalls != 0 {
+		t.Fatalf("unexpected fallback execute calls count: [%d]", fallback.executeCalls)
+	}
+}
+
+func TestBuildTaggedNativeExecutionAdapter_Execute_StrictModeNoFallbackOnUnavailableError(
+	t *testing.T,
+) {
+	setNativeExecutionMode(nativeExecutionModeStrict)
+	t.Cleanup(func() {
+		setNativeExecutionMode(nativeExecutionModeFallbackAllowed)
+	})
+
+	bridge := &mockNativeExecutionBridge{
+		available: true,
+		err:       ErrNativeCryptographyUnavailable,
+	}
+
+	fallback := &mockExecutionBackend{
+		name:   "fallback",
+		result: &Result{},
+	}
+
+	adapter := &buildTaggedNativeExecutionAdapter{
+		nativeBridge: bridge,
+		fallback:     fallback,
+	}
+
+	_, err := adapter.Execute(context.Background(), nil, &Request{})
+	if err == nil {
+		t.Fatal("expected execute error")
+	}
+
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected execute error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	if fallback.executeCalls != 0 {
+		t.Fatalf("unexpected fallback execute calls count: [%d]", fallback.executeCalls)
+	}
+}
+
 func TestBuildTaggedNativeExecutionAdapter_RegisterUnmarshallers_UsesNativeWhenAvailable(
 	t *testing.T,
 ) {
@@ -289,6 +370,35 @@ func TestBuildTaggedNativeExecutionAdapter_RegisterUnmarshallers_FallsBackWhenUn
 	}
 
 	if fallback.registerUnmarshallersCalls != 1 {
+		t.Fatalf(
+			"unexpected fallback register unmarshallers calls count: [%d]",
+			fallback.registerUnmarshallersCalls,
+		)
+	}
+}
+
+func TestBuildTaggedNativeExecutionAdapter_RegisterUnmarshallers_StrictModeNoFallback(
+	t *testing.T,
+) {
+	setNativeExecutionMode(nativeExecutionModeStrict)
+	t.Cleanup(func() {
+		setNativeExecutionMode(nativeExecutionModeFallbackAllowed)
+	})
+
+	bridge := &mockNativeExecutionBridge{
+		available: false,
+	}
+
+	fallback := &mockExecutionBackend{name: "fallback"}
+
+	adapter := &buildTaggedNativeExecutionAdapter{
+		nativeBridge: bridge,
+		fallback:     fallback,
+	}
+
+	adapter.RegisterUnmarshallers(nil)
+
+	if fallback.registerUnmarshallersCalls != 0 {
 		t.Fatalf(
 			"unexpected fallback register unmarshallers calls count: [%d]",
 			fallback.registerUnmarshallersCalls,
