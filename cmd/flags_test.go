@@ -225,6 +225,13 @@ var cmdFlagsTests = map[string]struct {
 		expectedValueFromFlag: 101,
 		defaultValue:          runtime.GOMAXPROCS(0),
 	},
+	"tbtc.frostSigningBackend": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.FrostSigningBackend },
+		flagName:              "--tbtc.frostSigningBackend",
+		flagValue:             "native",
+		expectedValueFromFlag: "native",
+		defaultValue:          "",
+	},
 	"maintainer.bitcoinDifficulty": {
 		readValueFunc:         func(c *config.Config) interface{} { return c.Maintainer.BitcoinDifficulty.Enabled },
 		flagName:              "--bitcoinDifficulty",

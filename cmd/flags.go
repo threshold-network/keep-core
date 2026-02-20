@@ -308,6 +308,13 @@ func initTbtcFlags(cmd *cobra.Command, cfg *config.Config) {
 		tbtc.DefaultKeyGenerationConcurrency,
 		"tECDSA key generation concurrency.",
 	)
+
+	cmd.Flags().StringVar(
+		&cfg.Tbtc.FrostSigningBackend,
+		"tbtc.frostSigningBackend",
+		"",
+		"FROST signing backend name (legacy, native, ffi). Empty value selects legacy.",
+	)
 }
 
 // Initialize flags for Maintainer configuration.
