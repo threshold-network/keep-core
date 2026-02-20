@@ -157,13 +157,131 @@ func TestSetExecutionBackendByName(t *testing.T) {
 			err,
 		)
 	}
-	if nativeExecutionFallbackAllowed() {
-		t.Fatal("expected strict mode for ffi backend selection")
+	if !nativeExecutionFallbackAllowed() {
+		t.Fatal(
+			"expected previous fallback-allowed mode after failed ffi backend selection",
+		)
+	}
+	if CurrentExecutionBackendName() != legacyExecutionBackendName {
+		t.Fatalf(
+			"unexpected backend name after failed ffi config\\nexpected: [%s]\\nactual:   [%s]",
+			legacyExecutionBackendName,
+			CurrentExecutionBackendName(),
+		)
 	}
 
 	err = SetExecutionBackendByName("unknown")
 	if err == nil {
 		t.Fatal("expected unknown backend error")
+	}
+}
+
+func TestSetExecutionBackendByName_NativeFailureRestoresPreviousMode(
+	t *testing.T,
+) {
+	ResetExecutionBackend()
+	UnregisterNativeExecutionAdapter()
+	UnregisterNativeExecutionBridge()
+	UnregisterNativeExecutionFFIExecutor()
+	t.Cleanup(ResetExecutionBackend)
+	t.Cleanup(UnregisterNativeExecutionAdapter)
+	t.Cleanup(UnregisterNativeExecutionBridge)
+	t.Cleanup(UnregisterNativeExecutionFFIExecutor)
+
+	setNativeExecutionMode(nativeExecutionModeStrict)
+	if nativeExecutionFallbackAllowed() {
+		t.Fatal("expected strict mode before failed native backend selection")
+	}
+
+	err := SetExecutionBackendByName("native")
+	if err == nil {
+		t.Fatal("expected native backend unavailable error")
+	}
+	if !errors.Is(err, ErrNativeExecutionBackendUnavailable) {
+		t.Fatalf(
+			"unexpected native backend error\\nexpected: [%v]\\nactual:   [%v]",
+			ErrNativeExecutionBackendUnavailable,
+			err,
+		)
+	}
+
+	if nativeExecutionFallbackAllowed() {
+		t.Fatal("expected strict mode to be restored after failed native selection")
+	}
+	if CurrentExecutionBackendName() != legacyExecutionBackendName {
+		t.Fatalf(
+			"unexpected backend name after failed native config\\nexpected: [%s]\\nactual:   [%s]",
+			legacyExecutionBackendName,
+			CurrentExecutionBackendName(),
+		)
+	}
+}
+
+func TestSetExecutionBackendByName_FFIFailurePreservesNativeModeAndBackend(
+	t *testing.T,
+) {
+	ResetExecutionBackend()
+	UnregisterNativeExecutionAdapter()
+	UnregisterNativeExecutionBridge()
+	UnregisterNativeExecutionFFIExecutor()
+	t.Cleanup(ResetExecutionBackend)
+	t.Cleanup(UnregisterNativeExecutionAdapter)
+	t.Cleanup(UnregisterNativeExecutionBridge)
+	t.Cleanup(UnregisterNativeExecutionFFIExecutor)
+
+	adapter := &mockNativeExecutionAdapterWithAvailability{
+		mockNativeExecutionAdapter: &mockNativeExecutionAdapter{},
+		nativeExecutionAvailable:   false,
+	}
+
+	if err := RegisterNativeExecutionAdapter(adapter); err != nil {
+		t.Fatalf("failed registering native execution adapter: [%v]", err)
+	}
+
+	if err := SetExecutionBackendByName("native"); err != nil {
+		t.Fatalf("unexpected native backend config error: [%v]", err)
+	}
+	if !nativeExecutionFallbackAllowed() {
+		t.Fatal("expected fallback-allowed mode after native backend selection")
+	}
+	if CurrentExecutionBackendName() != nativeExecutionBackendName {
+		t.Fatalf(
+			"unexpected backend name for native config\\nexpected: [%s]\\nactual:   [%s]",
+			nativeExecutionBackendName,
+			CurrentExecutionBackendName(),
+		)
+	}
+
+	err := SetExecutionBackendByName("ffi")
+	if err == nil {
+		t.Fatal("expected ffi backend unavailable error")
+	}
+	if !errors.Is(err, ErrNativeExecutionBackendUnavailable) {
+		t.Fatalf(
+			"unexpected ffi backend error\\nexpected: [%v]\\nactual:   [%v]",
+			ErrNativeExecutionBackendUnavailable,
+			err,
+		)
+	}
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected strict-mode availability error\\nexpected: [%v]\\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	if !nativeExecutionFallbackAllowed() {
+		t.Fatal(
+			"expected fallback-allowed mode to be preserved after failed ffi selection",
+		)
+	}
+	if CurrentExecutionBackendName() != nativeExecutionBackendName {
+		t.Fatalf(
+			"unexpected backend name after failed ffi config\\nexpected: [%s]\\nactual:   [%s]",
+			nativeExecutionBackendName,
+			CurrentExecutionBackendName(),
+		)
 	}
 }
 

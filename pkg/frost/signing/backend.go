@@ -112,24 +112,47 @@ func SetExecutionBackendByName(name string) error {
 		ResetExecutionBackend()
 		return nil
 	case "native":
+		previousMode := currentNativeExecutionMode()
 		setNativeExecutionMode(nativeExecutionModeFallbackAllowed)
+
 		nativeBackend, err := currentNativeExecutionBackend()
 		if err != nil {
+			setNativeExecutionMode(previousMode)
 			return err
 		}
 
-		return SetExecutionBackend(nativeBackend)
+		if err := SetExecutionBackend(nativeBackend); err != nil {
+			setNativeExecutionMode(previousMode)
+			return err
+		}
+
+		return nil
 	case "ffi":
+		previousMode := currentNativeExecutionMode()
 		setNativeExecutionMode(nativeExecutionModeStrict)
+
 		nativeBackend, err := currentNativeExecutionBackend()
 		if err != nil {
+			setNativeExecutionMode(previousMode)
 			return err
 		}
 
-		return SetExecutionBackend(nativeBackend)
+		if err := SetExecutionBackend(nativeBackend); err != nil {
+			setNativeExecutionMode(previousMode)
+			return err
+		}
+
+		return nil
 	default:
 		return fmt.Errorf("unknown FROST signing backend: [%s]", name)
 	}
+}
+
+func currentNativeExecutionMode() nativeExecutionModeValue {
+	executionBackendMutex.RLock()
+	defer executionBackendMutex.RUnlock()
+
+	return nativeExecutionMode
 }
 
 func setNativeExecutionMode(mode nativeExecutionModeValue) {

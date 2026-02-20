@@ -66,6 +66,8 @@ func TestConfigureFrostSigningBackend_FFIStrictUnavailable_NoBridge(t *testing.T
 	frostsigning.UnregisterNativeExecutionBridge()
 	frostsigning.UnregisterNativeExecutionFFIExecutor()
 	frostsigning.RegisterNativeExecutionAdapterForBuild()
+	// Remove build-registered bridge and executor to exercise strict ffi
+	// configuration when no native cryptography path is available.
 	frostsigning.UnregisterNativeExecutionBridge()
 	frostsigning.UnregisterNativeExecutionFFIExecutor()
 	t.Cleanup(frostsigning.ResetExecutionBackend)

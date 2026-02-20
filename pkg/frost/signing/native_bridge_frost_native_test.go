@@ -5,6 +5,7 @@ package signing
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ipfs/go-log/v2"
@@ -155,6 +156,157 @@ func TestBuildTaggedNativeExecutionBridge_Execute_FallsBackWithoutFFIExecutor(
 	}
 
 	if fallback.executeCalls != 1 {
+		t.Fatalf("unexpected fallback execute calls count: [%d]", fallback.executeCalls)
+	}
+}
+
+func TestBuildTaggedNativeExecutionBridge_Execute_StrictNoFallbackOnFFIUnavailableError(
+	t *testing.T,
+) {
+	setNativeExecutionMode(nativeExecutionModeStrict)
+	t.Cleanup(func() {
+		setNativeExecutionMode(nativeExecutionModeFallbackAllowed)
+	})
+
+	ffiExecutor := &mockNativeExecutionFFIExecutor{
+		err: ErrNativeCryptographyUnavailable,
+	}
+	fallback := &mockExecutionBackend{
+		name:   "fallback",
+		result: &Result{},
+	}
+
+	bridge := &buildTaggedNativeExecutionBridge{
+		ffiExecutorProvider: staticNativeFFIExecutorProvider(ffiExecutor),
+		delegate:            fallback,
+	}
+
+	_, err := bridge.Execute(context.Background(), nil, &Request{})
+	if err == nil {
+		t.Fatal("expected execute error")
+	}
+
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected execute error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	if ffiExecutor.executeCalls != 1 {
+		t.Fatalf(
+			"unexpected ffi executor execute calls count: [%d]",
+			ffiExecutor.executeCalls,
+		)
+	}
+
+	if fallback.executeCalls != 0 {
+		t.Fatalf("unexpected fallback execute calls count: [%d]", fallback.executeCalls)
+	}
+}
+
+func TestBuildTaggedNativeExecutionBridge_Execute_FallsBackOnFFIUnavailableError(
+	t *testing.T,
+) {
+	setNativeExecutionMode(nativeExecutionModeFallbackAllowed)
+	t.Cleanup(func() {
+		setNativeExecutionMode(nativeExecutionModeFallbackAllowed)
+	})
+
+	expectedResult := &Result{}
+	ffiExecutor := &mockNativeExecutionFFIExecutor{
+		err: ErrNativeCryptographyUnavailable,
+	}
+	fallback := &mockExecutionBackend{
+		name:   "fallback",
+		result: expectedResult,
+	}
+
+	bridge := &buildTaggedNativeExecutionBridge{
+		ffiExecutorProvider: staticNativeFFIExecutorProvider(ffiExecutor),
+		delegate:            fallback,
+	}
+
+	result, err := bridge.Execute(context.Background(), nil, &Request{})
+	if err != nil {
+		t.Fatalf("unexpected execute error: [%v]", err)
+	}
+
+	if result != expectedResult {
+		t.Fatalf(
+			"unexpected result\nexpected: [%+v]\nactual:   [%+v]",
+			expectedResult,
+			result,
+		)
+	}
+
+	if ffiExecutor.executeCalls != 1 {
+		t.Fatalf(
+			"unexpected ffi executor execute calls count: [%d]",
+			ffiExecutor.executeCalls,
+		)
+	}
+
+	if fallback.executeCalls != 1 {
+		t.Fatalf("unexpected fallback execute calls count: [%d]", fallback.executeCalls)
+	}
+}
+
+func TestBuildTaggedNativeExecutionBridge_Execute_NoFallbackOnFFIExecutionError(
+	t *testing.T,
+) {
+	setNativeExecutionMode(nativeExecutionModeFallbackAllowed)
+	t.Cleanup(func() {
+		setNativeExecutionMode(nativeExecutionModeFallbackAllowed)
+	})
+
+	ffiExecutionError := errors.New("ffi executor crashed")
+	ffiExecutor := &mockNativeExecutionFFIExecutor{
+		err: ffiExecutionError,
+	}
+	fallback := &mockExecutionBackend{
+		name:   "fallback",
+		result: &Result{},
+	}
+
+	bridge := &buildTaggedNativeExecutionBridge{
+		ffiExecutorProvider: staticNativeFFIExecutorProvider(ffiExecutor),
+		delegate:            fallback,
+	}
+
+	_, err := bridge.Execute(context.Background(), nil, &Request{})
+	if err == nil {
+		t.Fatal("expected execute error")
+	}
+
+	if !errors.Is(err, ffiExecutionError) {
+		t.Fatalf(
+			"unexpected execute error\nexpected to wrap: [%v]\nactual:           [%v]",
+			ffiExecutionError,
+			err,
+		)
+	}
+
+	if errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected availability error wrapping for non-availability failure: [%v]",
+			err,
+		)
+	}
+
+	if !strings.Contains(err.Error(), "native FFI executor execution failed") {
+		t.Fatalf("unexpected error message: [%v]", err)
+	}
+
+	if ffiExecutor.executeCalls != 1 {
+		t.Fatalf(
+			"unexpected ffi executor execute calls count: [%d]",
+			ffiExecutor.executeCalls,
+		)
+	}
+
+	if fallback.executeCalls != 0 {
 		t.Fatalf("unexpected fallback execute calls count: [%d]", fallback.executeCalls)
 	}
 }
