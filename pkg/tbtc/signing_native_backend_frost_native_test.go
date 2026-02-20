@@ -44,6 +44,10 @@ func TestSigningExecutor_Sign_NativeBackend(t *testing.T) {
 		t.Fatalf("unexpected native backend signing error: [%v]", err)
 	}
 
+	// Transitional path note:
+	// The current native-tag adapter delegates to legacy tECDSA signing.
+	// Switch this verification to Schnorr/BIP-340 once native FROST crypto
+	// execution is linked.
 	walletPublicKey := executor.wallet().publicKey
 	if !ecdsa.Verify(
 		walletPublicKey,

@@ -30,6 +30,9 @@ var (
 		"native FROST signing backend is unavailable in this build",
 	)
 
+	// executionBackend and nativeExecutionAdapter are process-global runtime
+	// state. Tests mutating this state must run sequentially; do not use
+	// t.Parallel in such tests.
 	executionBackendMutex  sync.RWMutex
 	executionBackend       ExecutionBackend = newLegacyExecutionBackend()
 	nativeExecutionAdapter NativeExecutionAdapter
