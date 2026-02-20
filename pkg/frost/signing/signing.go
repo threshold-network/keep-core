@@ -10,7 +10,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
-	legacySigning "github.com/keep-network/keep-core/pkg/tecdsa/signing"
 )
 
 // Execute runs signing and returns a Schnorr-shaped 64-byte signature.
@@ -28,61 +27,34 @@ func Execute(
 	privateKeyShare *tecdsa.PrivateKeyShare,
 	groupSize int,
 	dishonestThreshold int,
-	excludedMembersIndexes []group.MemberIndex,
 	channel net.BroadcastChannel,
 	membershipValidator *group.MembershipValidator,
 	attempt *Attempt,
 ) (*Result, error) {
-	if attempt != nil {
-		logger.Infof(
-			"[member:%v] executing FROST signing attempt [%v] "+
-				"with coordinator [%v] (included: [%v], excluded: [%v])",
-			memberIndex,
-			attempt.Number,
-			attempt.CoordinatorMemberIndex,
-			attempt.IncludedMembersIndexes,
-			attempt.ExcludedMembersIndexes,
-		)
+	request := &Request{
+		Message:             message,
+		SessionID:           sessionID,
+		MemberIndex:         memberIndex,
+		PrivateKeyShare:     privateKeyShare,
+		GroupSize:           groupSize,
+		DishonestThreshold:  dishonestThreshold,
+		Channel:             channel,
+		MembershipValidator: membershipValidator,
+		Attempt:             cloneAttempt(attempt),
 	}
 
-	legacyExcludedMembersIndexes := excludedMembersIndexes
-	if attempt != nil && len(attempt.ExcludedMembersIndexes) > 0 {
-		legacyExcludedMembersIndexes = attempt.ExcludedMembersIndexes
-	}
-
-	legacyResult, err := legacySigning.Execute(
+	return currentExecutionBackend().Execute(
 		ctx,
 		logger,
-		message,
-		sessionID,
-		memberIndex,
-		privateKeyShare,
-		groupSize,
-		dishonestThreshold,
-		legacyExcludedMembersIndexes,
-		channel,
-		membershipValidator,
+		request,
 	)
-	if err != nil {
-		return nil, err
-	}
-
-	signature, err := FromTECDSASignature(legacyResult.Signature)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Result{
-		Signature: signature,
-		Attempt:   cloneAttempt(attempt),
-	}, nil
 }
 
 // RegisterUnmarshallers initializes all required message unmarshallers.
 // For now, signing transport message formats are delegated to the legacy
 // engine implementation.
 func RegisterUnmarshallers(channel net.BroadcastChannel) {
-	legacySigning.RegisterUnmarshallers(channel)
+	currentExecutionBackend().RegisterUnmarshallers(channel)
 }
 
 // FromTECDSASignature maps a legacy signature to the fixed-width Schnorr

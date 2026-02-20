@@ -357,7 +357,6 @@ func (se *signingExecutor) sign(
 						wallet.groupDishonestThreshold(
 							se.groupParameters.HonestThreshold,
 						),
-						attempt.excludedMembersIndexes,
 						se.broadcastChannel,
 						se.membershipValidator,
 						attemptInfo,
