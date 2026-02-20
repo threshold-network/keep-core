@@ -19,12 +19,12 @@ var (
 	)
 )
 
-// nativeExecutionBridge defines a native cryptographic execution entrypoint
+// NativeExecutionBridge defines a native cryptographic execution entrypoint
 // used by the frost_native adapter.
 //
 // The current implementation returns ErrNativeCryptographyUnavailable. Future
 // FFI-backed integrations should provide an available bridge implementation.
-type nativeExecutionBridge interface {
+type NativeExecutionBridge interface {
 	IsAvailable() bool
 	Execute(
 		ctx context.Context,
@@ -34,7 +34,43 @@ type nativeExecutionBridge interface {
 	RegisterUnmarshallers(channel net.BroadcastChannel)
 }
 
-func newNativeExecutionBridge() nativeExecutionBridge {
+// RegisterNativeExecutionBridge registers a native execution bridge for
+// frost_native adapter routing.
+func RegisterNativeExecutionBridge(bridge NativeExecutionBridge) error {
+	if bridge == nil {
+		return errors.New("native execution bridge is nil")
+	}
+
+	executionBackendMutex.Lock()
+	defer executionBackendMutex.Unlock()
+
+	registeredNativeExecBridge = bridge
+
+	return nil
+}
+
+// UnregisterNativeExecutionBridge clears the registered native execution
+// bridge.
+func UnregisterNativeExecutionBridge() {
+	executionBackendMutex.Lock()
+	defer executionBackendMutex.Unlock()
+
+	registeredNativeExecBridge = nil
+}
+
+func currentNativeExecutionBridge() NativeExecutionBridge {
+	executionBackendMutex.RLock()
+	defer executionBackendMutex.RUnlock()
+
+	return registeredNativeExecBridge
+}
+
+func newNativeExecutionBridge() NativeExecutionBridge {
+	bridge := currentNativeExecutionBridge()
+	if bridge != nil {
+		return bridge
+	}
+
 	return &unlinkedNativeExecutionBridge{}
 }
 

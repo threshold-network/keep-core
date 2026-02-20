@@ -45,12 +45,22 @@ func (mneb *mockNativeExecutionBridge) RegisterUnmarshallers(
 	mneb.lastChannel = channel
 }
 
+func staticNativeBridgeProvider(
+	bridge NativeExecutionBridge,
+) func() NativeExecutionBridge {
+	return func() NativeExecutionBridge {
+		return bridge
+	}
+}
+
 func TestNativeExecutionBackend_FrostNativeBuildSelectable(t *testing.T) {
 	ResetExecutionBackend()
 	UnregisterNativeExecutionAdapter()
+	UnregisterNativeExecutionBridge()
 	RegisterNativeExecutionAdapterForBuild()
 	t.Cleanup(ResetExecutionBackend)
 	t.Cleanup(UnregisterNativeExecutionAdapter)
+	t.Cleanup(UnregisterNativeExecutionBridge)
 
 	err := SetExecutionBackendByName("native")
 	if err != nil {
@@ -100,6 +110,29 @@ func TestNativeExecutionBackend_FrostNativeBuildSelectable(t *testing.T) {
 			err,
 		)
 	}
+
+	registeredBridge := &mockNativeExecutionBridge{
+		available: true,
+		result:    &Result{},
+	}
+
+	err = RegisterNativeExecutionBridge(registeredBridge)
+	if err != nil {
+		t.Fatalf("failed registering native execution bridge: [%v]", err)
+	}
+
+	err = SetExecutionBackendByName("ffi")
+	if err != nil {
+		t.Fatalf("unexpected strict ffi backend config error: [%v]", err)
+	}
+
+	if CurrentExecutionBackendName() != NativeExecutionBackendName {
+		t.Fatalf(
+			"unexpected backend name for strict ffi config\nexpected: [%s]\nactual:   [%s]",
+			NativeExecutionBackendName,
+			CurrentExecutionBackendName(),
+		)
+	}
 }
 
 func TestBuildTaggedNativeExecutionAdapter_Execute_UsesNativeBridgeWhenAvailable(
@@ -114,8 +147,8 @@ func TestBuildTaggedNativeExecutionAdapter_Execute_UsesNativeBridgeWhenAvailable
 	fallback := &mockExecutionBackend{name: "fallback"}
 
 	adapter := &buildTaggedNativeExecutionAdapter{
-		nativeBridge: bridge,
-		fallback:     fallback,
+		nativeBridgeProvider: staticNativeBridgeProvider(bridge),
+		fallback:             fallback,
 	}
 
 	result, err := adapter.Execute(context.Background(), nil, &Request{})
@@ -154,8 +187,8 @@ func TestBuildTaggedNativeExecutionAdapter_Execute_FallsBackWhenBridgeUnavailabl
 	}
 
 	adapter := &buildTaggedNativeExecutionAdapter{
-		nativeBridge: bridge,
-		fallback:     fallback,
+		nativeBridgeProvider: staticNativeBridgeProvider(bridge),
+		fallback:             fallback,
 	}
 
 	result, err := adapter.Execute(context.Background(), nil, &Request{})
@@ -195,8 +228,8 @@ func TestBuildTaggedNativeExecutionAdapter_Execute_FallsBackOnUnavailableBridgeE
 	}
 
 	adapter := &buildTaggedNativeExecutionAdapter{
-		nativeBridge: bridge,
-		fallback:     fallback,
+		nativeBridgeProvider: staticNativeBridgeProvider(bridge),
+		fallback:             fallback,
 	}
 
 	result, err := adapter.Execute(context.Background(), nil, &Request{})
@@ -233,8 +266,8 @@ func TestBuildTaggedNativeExecutionAdapter_Execute_ReturnsBridgeError(
 	fallback := &mockExecutionBackend{name: "fallback"}
 
 	adapter := &buildTaggedNativeExecutionAdapter{
-		nativeBridge: bridge,
-		fallback:     fallback,
+		nativeBridgeProvider: staticNativeBridgeProvider(bridge),
+		fallback:             fallback,
 	}
 
 	_, err := adapter.Execute(context.Background(), nil, &Request{})
@@ -273,8 +306,8 @@ func TestBuildTaggedNativeExecutionAdapter_Execute_StrictModeNoFallbackWhenUnava
 	}
 
 	adapter := &buildTaggedNativeExecutionAdapter{
-		nativeBridge: bridge,
-		fallback:     fallback,
+		nativeBridgeProvider: staticNativeBridgeProvider(bridge),
+		fallback:             fallback,
 	}
 
 	_, err := adapter.Execute(context.Background(), nil, &Request{})
@@ -314,8 +347,8 @@ func TestBuildTaggedNativeExecutionAdapter_Execute_StrictModeNoFallbackOnUnavail
 	}
 
 	adapter := &buildTaggedNativeExecutionAdapter{
-		nativeBridge: bridge,
-		fallback:     fallback,
+		nativeBridgeProvider: staticNativeBridgeProvider(bridge),
+		fallback:             fallback,
 	}
 
 	_, err := adapter.Execute(context.Background(), nil, &Request{})
@@ -346,8 +379,8 @@ func TestBuildTaggedNativeExecutionAdapter_RegisterUnmarshallers_UsesNativeWhenA
 	fallback := &mockExecutionBackend{name: "fallback"}
 
 	adapter := &buildTaggedNativeExecutionAdapter{
-		nativeBridge: bridge,
-		fallback:     fallback,
+		nativeBridgeProvider: staticNativeBridgeProvider(bridge),
+		fallback:             fallback,
 	}
 
 	adapter.RegisterUnmarshallers(nil)
@@ -377,8 +410,8 @@ func TestBuildTaggedNativeExecutionAdapter_RegisterUnmarshallers_FallsBackWhenUn
 	fallback := &mockExecutionBackend{name: "fallback"}
 
 	adapter := &buildTaggedNativeExecutionAdapter{
-		nativeBridge: bridge,
-		fallback:     fallback,
+		nativeBridgeProvider: staticNativeBridgeProvider(bridge),
+		fallback:             fallback,
 	}
 
 	adapter.RegisterUnmarshallers(nil)
@@ -413,8 +446,8 @@ func TestBuildTaggedNativeExecutionAdapter_RegisterUnmarshallers_StrictModeNoFal
 	fallback := &mockExecutionBackend{name: "fallback"}
 
 	adapter := &buildTaggedNativeExecutionAdapter{
-		nativeBridge: bridge,
-		fallback:     fallback,
+		nativeBridgeProvider: staticNativeBridgeProvider(bridge),
+		fallback:             fallback,
 	}
 
 	adapter.RegisterUnmarshallers(nil)

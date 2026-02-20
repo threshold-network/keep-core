@@ -20,8 +20,8 @@ import (
 //   - `native`: fallback to legacy bridge when native cryptography is unavailable
 //   - `ffi`: no fallback; native cryptographic execution is required
 type buildTaggedNativeExecutionAdapter struct {
-	nativeBridge nativeExecutionBridge
-	fallback     ExecutionBackend
+	nativeBridgeProvider func() NativeExecutionBridge
+	fallback             ExecutionBackend
 }
 
 func registerNativeExecutionAdapterForBuild() {
@@ -33,13 +33,22 @@ func registerNativeExecutionAdapterForBuild() {
 
 func newBuildTaggedNativeExecutionAdapter() *buildTaggedNativeExecutionAdapter {
 	return &buildTaggedNativeExecutionAdapter{
-		nativeBridge: newNativeExecutionBridge(),
-		fallback:     newLegacyExecutionBackend(),
+		nativeBridgeProvider: newNativeExecutionBridge,
+		fallback:             newLegacyExecutionBackend(),
 	}
 }
 
 func (btnea *buildTaggedNativeExecutionAdapter) NativeExecutionAvailable() bool {
-	return btnea.nativeBridge != nil && btnea.nativeBridge.IsAvailable()
+	nativeBridge := btnea.currentNativeBridge()
+	return nativeBridge != nil && nativeBridge.IsAvailable()
+}
+
+func (btnea *buildTaggedNativeExecutionAdapter) currentNativeBridge() NativeExecutionBridge {
+	if btnea.nativeBridgeProvider == nil {
+		return nil
+	}
+
+	return btnea.nativeBridgeProvider()
 }
 
 func (btnea *buildTaggedNativeExecutionAdapter) Execute(
@@ -47,8 +56,9 @@ func (btnea *buildTaggedNativeExecutionAdapter) Execute(
 	logger log.StandardLogger,
 	request *Request,
 ) (*Result, error) {
-	if btnea.nativeBridge != nil && btnea.nativeBridge.IsAvailable() {
-		result, err := btnea.nativeBridge.Execute(ctx, logger, request)
+	nativeBridge := btnea.currentNativeBridge()
+	if nativeBridge != nil && nativeBridge.IsAvailable() {
+		result, err := nativeBridge.Execute(ctx, logger, request)
 		if err == nil {
 			return result, nil
 		}
@@ -83,8 +93,9 @@ func (btnea *buildTaggedNativeExecutionAdapter) Execute(
 func (btnea *buildTaggedNativeExecutionAdapter) RegisterUnmarshallers(
 	channel net.BroadcastChannel,
 ) {
-	if btnea.nativeBridge != nil && btnea.nativeBridge.IsAvailable() {
-		btnea.nativeBridge.RegisterUnmarshallers(channel)
+	nativeBridge := btnea.currentNativeBridge()
+	if nativeBridge != nil && nativeBridge.IsAvailable() {
+		nativeBridge.RegisterUnmarshallers(channel)
 		return
 	}
 
