@@ -25,7 +25,12 @@ type buildTaggedNativeExecutionAdapter struct {
 }
 
 func registerNativeExecutionAdapterForBuild() {
-	err := RegisterNativeExecutionAdapter(newBuildTaggedNativeExecutionAdapter())
+	err := RegisterNativeExecutionBridge(newBuildTaggedNativeExecutionBridge())
+	if err != nil {
+		panic(fmt.Sprintf("failed to register build-tagged native bridge: [%v]", err))
+	}
+
+	err = RegisterNativeExecutionAdapter(newBuildTaggedNativeExecutionAdapter())
 	if err != nil {
 		panic(fmt.Sprintf("failed to register build-tagged native adapter: [%v]", err))
 	}

@@ -12,12 +12,38 @@ import (
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 )
 
-func TestConfigureFrostSigningBackend_FFIStrictUnavailable_BuildAdapter(t *testing.T) {
+func TestConfigureFrostSigningBackend_FFIStrictConfigured_BuildAdapter(t *testing.T) {
 	frostsigning.ResetExecutionBackend()
 	frostsigning.UnregisterNativeExecutionAdapter()
+	frostsigning.UnregisterNativeExecutionBridge()
 	frostsigning.RegisterNativeExecutionAdapterForBuild()
 	t.Cleanup(frostsigning.ResetExecutionBackend)
 	t.Cleanup(frostsigning.UnregisterNativeExecutionAdapter)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionBridge)
+
+	err := configureFrostSigningBackend(Config{FrostSigningBackend: "ffi"})
+	if err != nil {
+		t.Fatalf("unexpected strict ffi backend configuration error: [%v]", err)
+	}
+
+	if frostsigning.CurrentExecutionBackendName() != frostsigning.NativeExecutionBackendName {
+		t.Fatalf(
+			"unexpected backend name\nexpected: [%s]\nactual:   [%s]",
+			frostsigning.NativeExecutionBackendName,
+			frostsigning.CurrentExecutionBackendName(),
+		)
+	}
+}
+
+func TestConfigureFrostSigningBackend_FFIStrictUnavailable_NoBridge(t *testing.T) {
+	frostsigning.ResetExecutionBackend()
+	frostsigning.UnregisterNativeExecutionAdapter()
+	frostsigning.UnregisterNativeExecutionBridge()
+	frostsigning.RegisterNativeExecutionAdapterForBuild()
+	frostsigning.UnregisterNativeExecutionBridge()
+	t.Cleanup(frostsigning.ResetExecutionBackend)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionAdapter)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionBridge)
 
 	err := configureFrostSigningBackend(Config{FrostSigningBackend: "ffi"})
 	if err == nil {
@@ -46,9 +72,11 @@ func TestSigningExecutor_Sign_NativeBackend(t *testing.T) {
 
 	frostsigning.ResetExecutionBackend()
 	frostsigning.UnregisterNativeExecutionAdapter()
+	frostsigning.UnregisterNativeExecutionBridge()
 	frostsigning.RegisterNativeExecutionAdapterForBuild()
 	t.Cleanup(frostsigning.ResetExecutionBackend)
 	t.Cleanup(frostsigning.UnregisterNativeExecutionAdapter)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionBridge)
 
 	err := configureFrostSigningBackend(Config{FrostSigningBackend: "native"})
 	if err != nil {
