@@ -13,9 +13,9 @@ import (
 
 	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/frost/retry"
 	"github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"github.com/keep-network/keep-core/pkg/tecdsa/retry"
 	"golang.org/x/exp/slices"
 )
 
@@ -43,6 +43,17 @@ func signingAttemptMaximumBlocks() uint {
 		signingAttemptAnnouncementActiveBlocks +
 		signingAttemptMaximumProtocolBlocks +
 		signingAttemptCoolDownBlocks
+}
+
+// signingAttemptSeed computes a deterministic seed used for retry and
+// coordinator selection for a given signed message.
+func signingAttemptSeed(message *big.Int) int64 {
+	// Compute the 8-byte seed needed for the random retry algorithm. We take
+	// the first 8 bytes of the hash of the signed message. This allows us to
+	// not care in this piece of the code about the length of the message and
+	// how this message is proposed.
+	messageSha256 := sha256.Sum256(message.Bytes())
+	return int64(binary.BigEndian.Uint64(messageSha256[:8]))
 }
 
 // signingAnnouncer represents a component responsible for exchanging readiness
@@ -108,13 +119,6 @@ func newSigningRetryLoop(
 	announcer signingAnnouncer,
 	doneCheck signingDoneCheckStrategy,
 ) *signingRetryLoop {
-	// Compute the 8-byte seed needed for the random retry algorithm. We take
-	// the first 8 bytes of the hash of the signed message. This allows us to
-	// not care in this piece of the code about the length of the message and
-	// how this message is proposed.
-	messageSha256 := sha256.Sum256(message.Bytes())
-	attemptSeed := int64(binary.BigEndian.Uint64(messageSha256[:8]))
-
 	return &signingRetryLoop{
 		logger:                  logger,
 		message:                 message,
@@ -124,7 +128,7 @@ func newSigningRetryLoop(
 		announcer:               announcer,
 		attemptCounter:          0,
 		attemptStartBlock:       initialStartBlock,
-		attemptSeed:             attemptSeed,
+		attemptSeed:             signingAttemptSeed(message),
 		doneCheck:               doneCheck,
 	}
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/frost"
+	"github.com/keep-network/keep-core/pkg/frost/roast"
 	"github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
@@ -291,12 +292,38 @@ func (se *signingExecutor) sign(
 						zap.Uint64("attemptTimeoutBlock", attempt.timeoutBlock),
 					)
 
+					includedMembersIndexes := attemptIncludedMembersIndexes(
+						wallet.groupSize(),
+						attempt.excludedMembersIndexes,
+					)
+
+					coordinatorMemberIndex, err := roast.SelectCoordinator(
+						includedMembersIndexes,
+						signingAttemptSeed(message),
+						attempt.number,
+					)
+					if err != nil {
+						return nil, 0, fmt.Errorf(
+							"cannot select signing coordinator for attempt [%v]: [%w]",
+							attempt.number,
+							err,
+						)
+					}
+
+					attemptInfo := &signing.Attempt{
+						Number:                 attempt.number,
+						CoordinatorMemberIndex: coordinatorMemberIndex,
+						IncludedMembersIndexes: includedMembersIndexes,
+						ExcludedMembersIndexes: attempt.excludedMembersIndexes,
+					}
+
 					signingAttemptLogger.Infof(
 						"[member:%v] starting signing protocol "+
-							"with [%v] group members (excluded: [%v])",
+							"with [%v] group members (coordinator: [%v], excluded: [%v])",
 						signer.signingGroupMemberIndex,
-						wallet.groupSize()-len(attempt.excludedMembersIndexes),
-						attempt.excludedMembersIndexes,
+						len(includedMembersIndexes),
+						coordinatorMemberIndex,
+						attemptInfo.ExcludedMembersIndexes,
 					)
 
 					// Set up the attempt timeout signal.
@@ -333,6 +360,7 @@ func (se *signingExecutor) sign(
 						attempt.excludedMembersIndexes,
 						se.broadcastChannel,
 						se.membershipValidator,
+						attemptInfo,
 					)
 					if err != nil {
 						return nil, 0, err
@@ -435,6 +463,26 @@ func (se *signingExecutor) wallet() wallet {
 	// All signers belong to one wallet. Take that wallet from the
 	// first signer.
 	return se.signers[0].wallet
+}
+
+func attemptIncludedMembersIndexes(
+	groupSize int,
+	excludedMembersIndexes []group.MemberIndex,
+) []group.MemberIndex {
+	excludedMembersIndexesSet := make(map[group.MemberIndex]bool)
+	for _, excludedMemberIndex := range excludedMembersIndexes {
+		excludedMembersIndexesSet[excludedMemberIndex] = true
+	}
+
+	includedMembersIndexes := make([]group.MemberIndex, 0)
+	for i := 0; i < groupSize; i++ {
+		memberIndex := group.MemberIndex(i + 1)
+		if !excludedMembersIndexesSet[memberIndex] {
+			includedMembersIndexes = append(includedMembersIndexes, memberIndex)
+		}
+	}
+
+	return includedMembersIndexes
 }
 
 // setMetricsRecorder sets the metrics recorder for the signing executor.

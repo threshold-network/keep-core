@@ -31,7 +31,25 @@ func Execute(
 	excludedMembersIndexes []group.MemberIndex,
 	channel net.BroadcastChannel,
 	membershipValidator *group.MembershipValidator,
+	attempt *Attempt,
 ) (*Result, error) {
+	if attempt != nil {
+		logger.Infof(
+			"[member:%v] executing FROST signing attempt [%v] "+
+				"with coordinator [%v] (included: [%v], excluded: [%v])",
+			memberIndex,
+			attempt.Number,
+			attempt.CoordinatorMemberIndex,
+			attempt.IncludedMembersIndexes,
+			attempt.ExcludedMembersIndexes,
+		)
+	}
+
+	legacyExcludedMembersIndexes := excludedMembersIndexes
+	if attempt != nil && len(attempt.ExcludedMembersIndexes) > 0 {
+		legacyExcludedMembersIndexes = attempt.ExcludedMembersIndexes
+	}
+
 	legacyResult, err := legacySigning.Execute(
 		ctx,
 		logger,
@@ -41,7 +59,7 @@ func Execute(
 		privateKeyShare,
 		groupSize,
 		dishonestThreshold,
-		excludedMembersIndexes,
+		legacyExcludedMembersIndexes,
 		channel,
 		membershipValidator,
 	)
@@ -54,7 +72,10 @@ func Execute(
 		return nil, err
 	}
 
-	return &Result{Signature: signature}, nil
+	return &Result{
+		Signature: signature,
+		Attempt:   cloneAttempt(attempt),
+	}, nil
 }
 
 // RegisterUnmarshallers initializes all required message unmarshallers.
