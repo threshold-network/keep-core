@@ -346,20 +346,23 @@ func (se *signingExecutor) sign(
 						attempt.number,
 					)
 
-					result, err := signing.Execute(
+					result, err := signing.ExecuteRequest(
 						attemptCtx,
 						signingAttemptLogger,
-						message,
-						sessionID,
-						signer.signingGroupMemberIndex,
-						signer.privateKeyShare,
-						wallet.groupSize(),
-						wallet.groupDishonestThreshold(
-							se.groupParameters.HonestThreshold,
-						),
-						se.broadcastChannel,
-						se.membershipValidator,
-						attemptInfo,
+						&signing.Request{
+							Message:         message,
+							SessionID:       sessionID,
+							MemberIndex:     signer.signingGroupMemberIndex,
+							SignerMaterial:  signer.signingMaterial(),
+							PrivateKeyShare: signer.privateKeyShare,
+							GroupSize:       wallet.groupSize(),
+							DishonestThreshold: wallet.groupDishonestThreshold(
+								se.groupParameters.HonestThreshold,
+							),
+							Channel:             se.broadcastChannel,
+							MembershipValidator: se.membershipValidator,
+							Attempt:             attemptInfo,
+						},
 					)
 					if err != nil {
 						return nil, 0, err

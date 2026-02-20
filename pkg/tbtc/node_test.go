@@ -491,6 +491,7 @@ func createMockSigner(t *testing.T) *signer {
 		},
 		signingGroupMemberIndex: group.MemberIndex(1),
 		privateKeyShare:         privateKeyShare,
+		signerMaterial:          privateKeyShare,
 	}
 }
 

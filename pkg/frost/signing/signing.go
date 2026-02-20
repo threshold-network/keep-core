@@ -41,13 +41,30 @@ func Execute(
 		DishonestThreshold:  dishonestThreshold,
 		Channel:             channel,
 		MembershipValidator: membershipValidator,
-		Attempt:             cloneAttempt(attempt),
+		Attempt:             attempt,
 	}
+
+	return ExecuteRequest(ctx, logger, request)
+}
+
+// ExecuteRequest runs signing using a fully-populated request object.
+// It clones mutable request metadata needed for execution safety.
+func ExecuteRequest(
+	ctx context.Context,
+	logger log.StandardLogger,
+	request *Request,
+) (*Result, error) {
+	if request == nil {
+		return nil, fmt.Errorf("request is nil")
+	}
+
+	clonedRequest := *request
+	clonedRequest.Attempt = cloneAttempt(request.Attempt)
 
 	return currentExecutionBackend().Execute(
 		ctx,
 		logger,
-		request,
+		&clonedRequest,
 	)
 }
 

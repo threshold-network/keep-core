@@ -84,6 +84,7 @@ func (s *signer) Unmarshal(bytes []byte) error {
 	}
 	s.signingGroupMemberIndex = group.MemberIndex(pbSigner.SigningGroupMemberIndex)
 	s.privateKeyShare = privateKeyShare
+	s.signerMaterial = privateKeyShare
 
 	return nil
 }

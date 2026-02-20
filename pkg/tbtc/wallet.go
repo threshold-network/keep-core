@@ -780,6 +780,10 @@ type signer struct {
 	// privateKeyShare is the tECDSA private key share required to participate
 	// in the signing process.
 	privateKeyShare *tecdsa.PrivateKeyShare
+
+	// signerMaterial carries backend-specific signer material used by the
+	// FROST signing runtime. Legacy path falls back to privateKeyShare.
+	signerMaterial any
 }
 
 // newSigner constructs a new instance of the wallet's signer.
@@ -798,7 +802,16 @@ func newSigner(
 		wallet:                  wallet,
 		signingGroupMemberIndex: signingGroupMemberIndex,
 		privateKeyShare:         privateKeyShare,
+		signerMaterial:          privateKeyShare,
 	}
+}
+
+func (s *signer) signingMaterial() any {
+	if s.signerMaterial != nil {
+		return s.signerMaterial
+	}
+
+	return s.privateKeyShare
 }
 
 func (s *signer) String() string {
