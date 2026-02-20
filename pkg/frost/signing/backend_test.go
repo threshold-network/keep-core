@@ -103,9 +103,11 @@ func TestSetExecutionBackendByName(t *testing.T) {
 	ResetExecutionBackend()
 	UnregisterNativeExecutionAdapter()
 	UnregisterNativeExecutionBridge()
+	UnregisterNativeExecutionFFIExecutor()
 	t.Cleanup(ResetExecutionBackend)
 	t.Cleanup(UnregisterNativeExecutionAdapter)
 	t.Cleanup(UnregisterNativeExecutionBridge)
+	t.Cleanup(UnregisterNativeExecutionFFIExecutor)
 
 	if err := SetExecutionBackendByName(""); err != nil {
 		t.Fatalf("unexpected default backend config error: [%v]", err)
@@ -169,9 +171,11 @@ func TestSetExecutionBackendByName_NativeAdapterRegistered(t *testing.T) {
 	ResetExecutionBackend()
 	UnregisterNativeExecutionAdapter()
 	UnregisterNativeExecutionBridge()
+	UnregisterNativeExecutionFFIExecutor()
 	t.Cleanup(ResetExecutionBackend)
 	t.Cleanup(UnregisterNativeExecutionAdapter)
 	t.Cleanup(UnregisterNativeExecutionBridge)
+	t.Cleanup(UnregisterNativeExecutionFFIExecutor)
 
 	expectedResult := &Result{Signature: &frost.Signature{}}
 	adapter := &mockNativeExecutionAdapter{
@@ -247,9 +251,11 @@ func TestSetExecutionBackendByName_FFIStrictAvailabilityCheck(t *testing.T) {
 	ResetExecutionBackend()
 	UnregisterNativeExecutionAdapter()
 	UnregisterNativeExecutionBridge()
+	UnregisterNativeExecutionFFIExecutor()
 	t.Cleanup(ResetExecutionBackend)
 	t.Cleanup(UnregisterNativeExecutionAdapter)
 	t.Cleanup(UnregisterNativeExecutionBridge)
+	t.Cleanup(UnregisterNativeExecutionFFIExecutor)
 
 	adapter := &mockNativeExecutionAdapterWithAvailability{
 		mockNativeExecutionAdapter: &mockNativeExecutionAdapter{},
@@ -300,6 +306,12 @@ func TestRegisterNativeExecutionAdapter_Nil(t *testing.T) {
 func TestRegisterNativeExecutionBridge_Nil(t *testing.T) {
 	if err := RegisterNativeExecutionBridge(nil); err == nil {
 		t.Fatal("expected nil native bridge error")
+	}
+}
+
+func TestRegisterNativeExecutionFFIExecutor_Nil(t *testing.T) {
+	if err := RegisterNativeExecutionFFIExecutor(nil); err == nil {
+		t.Fatal("expected nil native FFI executor error")
 	}
 }
 

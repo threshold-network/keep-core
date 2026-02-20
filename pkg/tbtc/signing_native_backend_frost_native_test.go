@@ -9,19 +9,44 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/ipfs/go-log/v2"
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
+	"github.com/keep-network/keep-core/pkg/net"
 )
+
+type noopNativeExecutionFFIExecutor struct{}
+
+func (nnefe *noopNativeExecutionFFIExecutor) Execute(
+	ctx context.Context,
+	logger log.StandardLogger,
+	request *frostsigning.Request,
+) (*frostsigning.Result, error) {
+	return nil, nil
+}
+
+func (nnefe *noopNativeExecutionFFIExecutor) RegisterUnmarshallers(
+	channel net.BroadcastChannel,
+) {
+}
 
 func TestConfigureFrostSigningBackend_FFIStrictConfigured_BuildAdapter(t *testing.T) {
 	frostsigning.ResetExecutionBackend()
 	frostsigning.UnregisterNativeExecutionAdapter()
 	frostsigning.UnregisterNativeExecutionBridge()
+	frostsigning.UnregisterNativeExecutionFFIExecutor()
 	frostsigning.RegisterNativeExecutionAdapterForBuild()
+	err := frostsigning.RegisterNativeExecutionFFIExecutor(
+		&noopNativeExecutionFFIExecutor{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected native FFI executor registration error: [%v]", err)
+	}
 	t.Cleanup(frostsigning.ResetExecutionBackend)
 	t.Cleanup(frostsigning.UnregisterNativeExecutionAdapter)
 	t.Cleanup(frostsigning.UnregisterNativeExecutionBridge)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionFFIExecutor)
 
-	err := configureFrostSigningBackend(Config{FrostSigningBackend: "ffi"})
+	err = configureFrostSigningBackend(Config{FrostSigningBackend: "ffi"})
 	if err != nil {
 		t.Fatalf("unexpected strict ffi backend configuration error: [%v]", err)
 	}
@@ -39,11 +64,14 @@ func TestConfigureFrostSigningBackend_FFIStrictUnavailable_NoBridge(t *testing.T
 	frostsigning.ResetExecutionBackend()
 	frostsigning.UnregisterNativeExecutionAdapter()
 	frostsigning.UnregisterNativeExecutionBridge()
+	frostsigning.UnregisterNativeExecutionFFIExecutor()
 	frostsigning.RegisterNativeExecutionAdapterForBuild()
 	frostsigning.UnregisterNativeExecutionBridge()
+	frostsigning.UnregisterNativeExecutionFFIExecutor()
 	t.Cleanup(frostsigning.ResetExecutionBackend)
 	t.Cleanup(frostsigning.UnregisterNativeExecutionAdapter)
 	t.Cleanup(frostsigning.UnregisterNativeExecutionBridge)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionFFIExecutor)
 
 	err := configureFrostSigningBackend(Config{FrostSigningBackend: "ffi"})
 	if err == nil {
@@ -73,10 +101,12 @@ func TestSigningExecutor_Sign_NativeBackend(t *testing.T) {
 	frostsigning.ResetExecutionBackend()
 	frostsigning.UnregisterNativeExecutionAdapter()
 	frostsigning.UnregisterNativeExecutionBridge()
+	frostsigning.UnregisterNativeExecutionFFIExecutor()
 	frostsigning.RegisterNativeExecutionAdapterForBuild()
 	t.Cleanup(frostsigning.ResetExecutionBackend)
 	t.Cleanup(frostsigning.UnregisterNativeExecutionAdapter)
 	t.Cleanup(frostsigning.UnregisterNativeExecutionBridge)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionFFIExecutor)
 
 	err := configureFrostSigningBackend(Config{FrostSigningBackend: "native"})
 	if err != nil {

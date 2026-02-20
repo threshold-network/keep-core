@@ -91,15 +91,15 @@ func TestNativeExecutionBackend_FrostNativeBuildSelectable(t *testing.T) {
 	}
 
 	err = SetExecutionBackendByName("ffi")
-	if err != nil {
-		t.Fatalf("unexpected strict ffi backend config error: [%v]", err)
+	if err == nil {
+		t.Fatal("expected strict ffi backend unavailable error")
 	}
 
-	if CurrentExecutionBackendName() != NativeExecutionBackendName {
+	if !errors.Is(err, ErrNativeExecutionBackendUnavailable) {
 		t.Fatalf(
-			"unexpected backend name for strict ffi config\nexpected: [%s]\nactual:   [%s]",
-			NativeExecutionBackendName,
-			CurrentExecutionBackendName(),
+			"unexpected ffi backend error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeExecutionBackendUnavailable,
+			err,
 		)
 	}
 
