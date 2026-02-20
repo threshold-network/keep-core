@@ -29,11 +29,6 @@ var (
 	ErrNativeExecutionBackendUnavailable = fmt.Errorf(
 		"native FROST signing backend is unavailable in this build",
 	)
-	// ErrNativeExecutionBackendNotImplemented is returned when native backend
-	// can be selected but does not provide a cryptographic execution engine yet.
-	ErrNativeExecutionBackendNotImplemented = fmt.Errorf(
-		"native FROST signing backend is not implemented",
-	)
 
 	executionBackendMutex  sync.RWMutex
 	executionBackend       ExecutionBackend = newLegacyExecutionBackend()
@@ -124,6 +119,15 @@ func UnregisterNativeExecutionAdapter() {
 	defer executionBackendMutex.Unlock()
 
 	nativeExecutionAdapter = nil
+}
+
+// RegisterNativeExecutionAdapterForBuild attempts to register the native
+// adapter provided by the current build flavor.
+//
+// On default builds, this is a no-op.
+// On `frost_native` builds, this registers the tagged native adapter.
+func RegisterNativeExecutionAdapterForBuild() {
+	registerNativeExecutionAdapterForBuild()
 }
 
 func currentNativeExecutionBackend() (ExecutionBackend, error) {

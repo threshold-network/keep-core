@@ -10,8 +10,11 @@ import (
 	"github.com/keep-network/keep-core/pkg/net"
 )
 
-// buildTaggedNativeExecutionAdapter is a placeholder adapter wired when
-// the frost_native build tag is enabled.
+// buildTaggedNativeExecutionAdapter is a transitional adapter wired when the
+// frost_native build tag is enabled.
+//
+// Until native FROST cryptographic execution is linked, this adapter delegates
+// execution and unmarshaler wiring to the legacy tECDSA bridge runtime.
 type buildTaggedNativeExecutionAdapter struct{}
 
 func registerNativeExecutionAdapterForBuild() {
@@ -26,13 +29,11 @@ func (btnea *buildTaggedNativeExecutionAdapter) Execute(
 	logger log.StandardLogger,
 	request *Request,
 ) (*Result, error) {
-	return nil, fmt.Errorf(
-		"%w: build tag [frost_native] uses placeholder adapter",
-		ErrNativeExecutionBackendNotImplemented,
-	)
+	return newLegacyExecutionBackend().Execute(ctx, logger, request)
 }
 
 func (btnea *buildTaggedNativeExecutionAdapter) RegisterUnmarshallers(
 	channel net.BroadcastChannel,
 ) {
+	newLegacyExecutionBackend().RegisterUnmarshallers(channel)
 }

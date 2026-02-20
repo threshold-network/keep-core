@@ -1,5 +1,5 @@
 package signing
 
 func init() {
-	registerNativeExecutionAdapterForBuild()
+	RegisterNativeExecutionAdapterForBuild()
 }

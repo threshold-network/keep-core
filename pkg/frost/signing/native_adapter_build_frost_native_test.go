@@ -4,14 +4,14 @@ package signing
 
 import (
 	"context"
-	"errors"
+	"strings"
 	"testing"
 )
 
 func TestNativeExecutionBackend_FrostNativeBuildSelectable(t *testing.T) {
 	ResetExecutionBackend()
 	UnregisterNativeExecutionAdapter()
-	registerNativeExecutionAdapterForBuild()
+	RegisterNativeExecutionAdapterForBuild()
 	t.Cleanup(ResetExecutionBackend)
 	t.Cleanup(UnregisterNativeExecutionAdapter)
 
@@ -28,27 +28,17 @@ func TestNativeExecutionBackend_FrostNativeBuildSelectable(t *testing.T) {
 		)
 	}
 
-	_, err = Execute(
-		context.Background(),
-		nil,
-		nil,
-		"session-id",
-		1,
-		nil,
-		10,
-		4,
-		nil,
-		nil,
-		nil,
-	)
+	adapter := &buildTaggedNativeExecutionAdapter{}
+
+	_, err = adapter.Execute(context.Background(), nil, nil)
 	if err == nil {
-		t.Fatal("expected placeholder native execution error")
+		t.Fatal("expected request validation error")
 	}
 
-	if !errors.Is(err, ErrNativeExecutionBackendNotImplemented) {
+	if !strings.Contains(err.Error(), "request is nil") {
 		t.Fatalf(
-			"unexpected native execution error\nexpected: [%v]\nactual:   [%v]",
-			ErrNativeExecutionBackendNotImplemented,
+			"unexpected native execution error\nexpected substring: [%s]\nactual:             [%v]",
+			"request is nil",
 			err,
 		)
 	}
