@@ -29,6 +29,11 @@ var (
 	ErrNativeExecutionBackendUnavailable = fmt.Errorf(
 		"native FROST signing backend is unavailable in this build",
 	)
+	// ErrNativeExecutionBackendNotImplemented is returned when native backend
+	// can be selected but does not provide a cryptographic execution engine yet.
+	ErrNativeExecutionBackendNotImplemented = fmt.Errorf(
+		"native FROST signing backend is not implemented",
+	)
 
 	executionBackendMutex  sync.RWMutex
 	executionBackend       ExecutionBackend = newLegacyExecutionBackend()
@@ -80,7 +85,7 @@ func CurrentExecutionBackendName() string {
 //
 // Supported values:
 //   - "", "legacy", "legacy-tecdsa-bridge": transitional legacy bridge backend
-//   - "native", "ffi": reserved for native FROST backend (currently unavailable)
+//   - "native", "ffi": native FROST backend (requires registered native adapter)
 func SetExecutionBackendByName(name string) error {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "", "legacy", legacyExecutionBackendName:
