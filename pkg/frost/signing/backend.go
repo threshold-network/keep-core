@@ -30,13 +30,18 @@ var (
 		"native FROST signing backend is unavailable in this build",
 	)
 
-	executionBackendMutex sync.RWMutex
-	executionBackend      ExecutionBackend = newLegacyExecutionBackend()
+	executionBackendMutex  sync.RWMutex
+	executionBackend       ExecutionBackend = newLegacyExecutionBackend()
+	nativeExecutionAdapter NativeExecutionAdapter
 )
 
 // LegacyExecutionBackendName is a stable identifier of the transitional
 // legacy tECDSA bridge backend.
 const LegacyExecutionBackendName = legacyExecutionBackendName
+
+// NativeExecutionBackendName is a stable identifier of the native FROST
+// execution backend.
+const NativeExecutionBackendName = nativeExecutionBackendName
 
 func currentExecutionBackend() ExecutionBackend {
 	executionBackendMutex.RLock()
@@ -82,8 +87,60 @@ func SetExecutionBackendByName(name string) error {
 		ResetExecutionBackend()
 		return nil
 	case "native", "ffi":
-		return ErrNativeExecutionBackendUnavailable
+		nativeBackend, err := currentNativeExecutionBackend()
+		if err != nil {
+			return err
+		}
+
+		return SetExecutionBackend(nativeBackend)
 	default:
 		return fmt.Errorf("unknown FROST signing backend: [%s]", name)
 	}
+}
+
+// RegisterNativeExecutionAdapter sets a native adapter used by the
+// native FROST execution backend.
+func RegisterNativeExecutionAdapter(adapter NativeExecutionAdapter) error {
+	if adapter == nil {
+		return fmt.Errorf("native execution adapter is nil")
+	}
+
+	executionBackendMutex.Lock()
+	defer executionBackendMutex.Unlock()
+
+	nativeExecutionAdapter = adapter
+
+	return nil
+}
+
+// UnregisterNativeExecutionAdapter clears the native adapter registration.
+func UnregisterNativeExecutionAdapter() {
+	executionBackendMutex.Lock()
+	defer executionBackendMutex.Unlock()
+
+	nativeExecutionAdapter = nil
+}
+
+func currentNativeExecutionBackend() (ExecutionBackend, error) {
+	executionBackendMutex.RLock()
+	adapter := nativeExecutionAdapter
+	executionBackendMutex.RUnlock()
+
+	if adapter == nil {
+		return nil, fmt.Errorf(
+			"%w: no native execution adapter registered",
+			ErrNativeExecutionBackendUnavailable,
+		)
+	}
+
+	backend, err := newNativeExecutionBackend(adapter)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"%w: [%v]",
+			ErrNativeExecutionBackendUnavailable,
+			err,
+		)
+	}
+
+	return backend, nil
 }

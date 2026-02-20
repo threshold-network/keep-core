@@ -2,9 +2,9 @@ package signing
 
 import (
 	"context"
+	"errors"
 	"math/big"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/ipfs/go-log/v2"
@@ -16,6 +16,16 @@ import (
 type mockExecutionBackend struct {
 	name string
 
+	executeCalls int
+	lastRequest  *Request
+	result       *Result
+	err          error
+
+	registerUnmarshallersCalls int
+	lastChannel                net.BroadcastChannel
+}
+
+type mockNativeExecutionAdapter struct {
 	executeCalls int
 	lastRequest  *Request
 	result       *Result
@@ -46,6 +56,23 @@ func (meb *mockExecutionBackend) RegisterUnmarshallers(
 	meb.lastChannel = channel
 }
 
+func (mnea *mockNativeExecutionAdapter) Execute(
+	ctx context.Context,
+	logger log.StandardLogger,
+	request *Request,
+) (*Result, error) {
+	mnea.executeCalls++
+	mnea.lastRequest = request
+	return mnea.result, mnea.err
+}
+
+func (mnea *mockNativeExecutionAdapter) RegisterUnmarshallers(
+	channel net.BroadcastChannel,
+) {
+	mnea.registerUnmarshallersCalls++
+	mnea.lastChannel = channel
+}
+
 func TestCurrentExecutionBackendName_Default(t *testing.T) {
 	ResetExecutionBackend()
 	if CurrentExecutionBackendName() != legacyExecutionBackendName {
@@ -65,7 +92,9 @@ func TestSetExecutionBackend_Nil(t *testing.T) {
 
 func TestSetExecutionBackendByName(t *testing.T) {
 	ResetExecutionBackend()
+	UnregisterNativeExecutionAdapter()
 	t.Cleanup(ResetExecutionBackend)
+	t.Cleanup(UnregisterNativeExecutionAdapter)
 
 	if err := SetExecutionBackendByName(""); err != nil {
 		t.Fatalf("unexpected default backend config error: [%v]", err)
@@ -93,17 +122,89 @@ func TestSetExecutionBackendByName(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected native backend unavailable error")
 	}
-	if !strings.Contains(err.Error(), ErrNativeExecutionBackendUnavailable.Error()) {
+	if !errors.Is(err, ErrNativeExecutionBackendUnavailable) {
 		t.Fatalf(
-			"unexpected native backend error\\nexpected substring: [%s]\\nactual:             [%s]",
-			ErrNativeExecutionBackendUnavailable.Error(),
-			err.Error(),
+			"unexpected native backend error\\nexpected: [%v]\\nactual:   [%v]",
+			ErrNativeExecutionBackendUnavailable,
+			err,
 		)
 	}
 
 	err = SetExecutionBackendByName("unknown")
 	if err == nil {
 		t.Fatal("expected unknown backend error")
+	}
+}
+
+func TestSetExecutionBackendByName_NativeAdapterRegistered(t *testing.T) {
+	ResetExecutionBackend()
+	UnregisterNativeExecutionAdapter()
+	t.Cleanup(ResetExecutionBackend)
+	t.Cleanup(UnregisterNativeExecutionAdapter)
+
+	expectedResult := &Result{Signature: &frost.Signature{}}
+	adapter := &mockNativeExecutionAdapter{
+		result: expectedResult,
+	}
+
+	if err := RegisterNativeExecutionAdapter(adapter); err != nil {
+		t.Fatalf("failed registering native execution adapter: [%v]", err)
+	}
+
+	if err := SetExecutionBackendByName("ffi"); err != nil {
+		t.Fatalf("unexpected native backend config error: [%v]", err)
+	}
+
+	if CurrentExecutionBackendName() != nativeExecutionBackendName {
+		t.Fatalf(
+			"unexpected backend name for native config\\nexpected: [%s]\\nactual:   [%s]",
+			nativeExecutionBackendName,
+			CurrentExecutionBackendName(),
+		)
+	}
+
+	executeResult, err := Execute(
+		context.Background(),
+		nil,
+		big.NewInt(100),
+		"session-id",
+		1,
+		nil,
+		10,
+		4,
+		nil,
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("unexpected execute error: [%v]", err)
+	}
+
+	if executeResult != expectedResult {
+		t.Fatalf(
+			"unexpected execute result\\nexpected: [%+v]\\nactual:   [%+v]",
+			expectedResult,
+			executeResult,
+		)
+	}
+
+	if adapter.executeCalls != 1 {
+		t.Fatalf("unexpected native execute calls count: [%d]", adapter.executeCalls)
+	}
+
+	RegisterUnmarshallers(nil)
+
+	if adapter.registerUnmarshallersCalls != 1 {
+		t.Fatalf(
+			"unexpected native register unmarshallers calls count: [%d]",
+			adapter.registerUnmarshallersCalls,
+		)
+	}
+}
+
+func TestRegisterNativeExecutionAdapter_Nil(t *testing.T) {
+	if err := RegisterNativeExecutionAdapter(nil); err == nil {
+		t.Fatal("expected nil native adapter error")
 	}
 }
 
