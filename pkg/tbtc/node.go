@@ -134,7 +134,7 @@ func newNode(
 	config Config,
 ) (*node, error) {
 	if err := configureFrostSigningBackend(config); err != nil {
-		return nil, fmt.Errorf("cannot configure FROST signing backend: [%v]", err)
+		return nil, fmt.Errorf("cannot configure FROST signing backend: %w", err)
 	}
 
 	walletRegistry, err := newWalletRegistry(
