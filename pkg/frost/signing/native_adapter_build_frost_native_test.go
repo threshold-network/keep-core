@@ -57,10 +57,12 @@ func TestNativeExecutionBackend_FrostNativeBuildSelectable(t *testing.T) {
 	ResetExecutionBackend()
 	UnregisterNativeExecutionAdapter()
 	UnregisterNativeExecutionBridge()
+	UnregisterNativeExecutionFFIExecutor()
 	RegisterNativeExecutionAdapterForBuild()
 	t.Cleanup(ResetExecutionBackend)
 	t.Cleanup(UnregisterNativeExecutionAdapter)
 	t.Cleanup(UnregisterNativeExecutionBridge)
+	t.Cleanup(UnregisterNativeExecutionFFIExecutor)
 
 	err := SetExecutionBackendByName("native")
 	if err != nil {
@@ -91,19 +93,15 @@ func TestNativeExecutionBackend_FrostNativeBuildSelectable(t *testing.T) {
 	}
 
 	err = SetExecutionBackendByName("ffi")
-	if err == nil {
-		t.Fatal("expected strict ffi backend unavailable error")
-	}
-
-	if !errors.Is(err, ErrNativeExecutionBackendUnavailable) {
+	if err != nil {
 		t.Fatalf(
-			"unexpected ffi backend error\nexpected: [%v]\nactual:   [%v]",
-			ErrNativeExecutionBackendUnavailable,
+			"unexpected strict ffi backend config error\nexpected: [nil]\nactual:   [%v]",
 			err,
 		)
 	}
 
 	UnregisterNativeExecutionBridge()
+	UnregisterNativeExecutionFFIExecutor()
 
 	err = SetExecutionBackendByName("ffi")
 	if err == nil {

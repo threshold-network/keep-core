@@ -15,21 +15,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/net"
 )
 
-type noopNativeExecutionFFISigningPrimitive struct{}
-
-func (nnefsp *noopNativeExecutionFFISigningPrimitive) Sign(
-	ctx context.Context,
-	logger log.StandardLogger,
-	request *frostsigning.NativeExecutionFFISigningRequest,
-) (*frost.Signature, error) {
-	return &frost.Signature{}, nil
-}
-
-func (nnefsp *noopNativeExecutionFFISigningPrimitive) RegisterUnmarshallers(
-	channel net.BroadcastChannel,
-) {
-}
-
 type countingNativeExecutionFFISigningPrimitive struct {
 	signCalls int
 }
@@ -54,18 +39,12 @@ func TestConfigureFrostSigningBackend_FFIStrictConfigured_BuildAdapter(t *testin
 	frostsigning.UnregisterNativeExecutionBridge()
 	frostsigning.UnregisterNativeExecutionFFIExecutor()
 	frostsigning.RegisterNativeExecutionAdapterForBuild()
-	err := frostsigning.RegisterNativeExecutionFFISigningPrimitive(
-		&noopNativeExecutionFFISigningPrimitive{},
-	)
-	if err != nil {
-		t.Fatalf("unexpected native FFI primitive registration error: [%v]", err)
-	}
 	t.Cleanup(frostsigning.ResetExecutionBackend)
 	t.Cleanup(frostsigning.UnregisterNativeExecutionAdapter)
 	t.Cleanup(frostsigning.UnregisterNativeExecutionBridge)
 	t.Cleanup(frostsigning.UnregisterNativeExecutionFFIExecutor)
 
-	err = configureFrostSigningBackend(Config{FrostSigningBackend: "ffi"})
+	err := configureFrostSigningBackend(Config{FrostSigningBackend: "ffi"})
 	if err != nil {
 		t.Fatalf("unexpected strict ffi backend configuration error: [%v]", err)
 	}
@@ -157,6 +136,72 @@ func TestSigningExecutor_Sign_NativeBackend(t *testing.T) {
 	// The current native-tag adapter delegates to legacy tECDSA signing.
 	// Switch this verification to Schnorr/BIP-340 once native FROST crypto
 	// execution is linked.
+	walletPublicKey := executor.wallet().publicKey
+	if !ecdsa.Verify(
+		walletPublicKey,
+		message.Bytes(),
+		new(big.Int).SetBytes(signature.R[:]),
+		new(big.Int).SetBytes(signature.S[:]),
+	) {
+		t.Fatalf("invalid signature: [%+v]", signature)
+	}
+
+	if endBlock <= startBlock {
+		t.Fatal("wrong end block")
+	}
+}
+
+func TestSigningExecutor_Sign_FFIStrictBackend_WithNativeSignerMaterial(
+	t *testing.T,
+) {
+	executor := setupSigningExecutor(t)
+
+	for _, signer := range executor.signers {
+		payload, err := signer.privateKeyShare.Marshal()
+		if err != nil {
+			t.Fatalf("failed marshaling signer private key share: [%v]", err)
+		}
+
+		signer.signerMaterial = &frostsigning.NativeSignerMaterial{
+			Format:  frostsigning.NativeSignerMaterialFormatFrostUniFFIV1,
+			Payload: payload,
+		}
+	}
+
+	frostsigning.ResetExecutionBackend()
+	frostsigning.UnregisterNativeExecutionAdapter()
+	frostsigning.UnregisterNativeExecutionBridge()
+	frostsigning.UnregisterNativeExecutionFFIExecutor()
+	frostsigning.RegisterNativeExecutionAdapterForBuild()
+	t.Cleanup(frostsigning.ResetExecutionBackend)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionAdapter)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionBridge)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionFFIExecutor)
+
+	err := configureFrostSigningBackend(Config{FrostSigningBackend: "ffi"})
+	if err != nil {
+		t.Fatalf("unexpected strict ffi backend config error: [%v]", err)
+	}
+
+	if frostsigning.CurrentExecutionBackendName() != frostsigning.NativeExecutionBackendName {
+		t.Fatalf(
+			"unexpected backend name\nexpected: [%s]\nactual:   [%s]",
+			frostsigning.NativeExecutionBackendName,
+			frostsigning.CurrentExecutionBackendName(),
+		)
+	}
+
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	defer cancelCtx()
+
+	message := big.NewInt(100)
+	startBlock := uint64(0)
+
+	signature, _, endBlock, err := executor.sign(ctx, message, startBlock)
+	if err != nil {
+		t.Fatalf("unexpected strict ffi signing error: [%v]", err)
+	}
+
 	walletPublicKey := executor.wallet().publicKey
 	if !ecdsa.Verify(
 		walletPublicKey,

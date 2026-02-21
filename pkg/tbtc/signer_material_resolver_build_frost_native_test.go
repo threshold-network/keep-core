@@ -3,9 +3,74 @@
 package tbtc
 
 import (
+	"bytes"
 	"errors"
 	"testing"
+
+	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
+	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
+
+func TestRegisterSignerMaterialResolverForBuild_UsesDefaultProvider(
+	t *testing.T,
+) {
+	UnregisterSignerMaterialResolver()
+	UnregisterSignerMaterialResolverProviderForBuild()
+	t.Cleanup(UnregisterSignerMaterialResolver)
+	t.Cleanup(UnregisterSignerMaterialResolverProviderForBuild)
+
+	err := RegisterSignerMaterialResolverForBuild()
+	if err != nil {
+		t.Fatalf("unexpected build resolver registration error: [%v]", err)
+	}
+
+	privateKeyShare := createMockSigner(t).privateKeyShare
+
+	result, err := resolveSignerMaterial(privateKeyShare)
+	if err != nil {
+		t.Fatalf("unexpected resolver error: [%v]", err)
+	}
+
+	nativeSignerMaterial, ok := result.(*frostsigning.NativeSignerMaterial)
+	if !ok {
+		t.Fatalf(
+			"unexpected resolved signer material type\nexpected: [%T]\nactual:   [%T]",
+			&frostsigning.NativeSignerMaterial{},
+			result,
+		)
+	}
+
+	if nativeSignerMaterial.Format != frostsigning.NativeSignerMaterialFormatFrostUniFFIV1 {
+		t.Fatalf(
+			"unexpected native signer material format\nexpected: [%s]\nactual:   [%s]",
+			frostsigning.NativeSignerMaterialFormatFrostUniFFIV1,
+			nativeSignerMaterial.Format,
+		)
+	}
+
+	decodedPrivateKeyShare := &tecdsa.PrivateKeyShare{}
+	if err := decodedPrivateKeyShare.Unmarshal(nativeSignerMaterial.Payload); err != nil {
+		t.Fatalf("failed unmarshalling resolved signer payload: [%v]", err)
+	}
+
+	expectedPayload, err := privateKeyShare.Marshal()
+	if err != nil {
+		t.Fatalf("failed marshaling expected private key share: [%v]", err)
+	}
+
+	actualPayload, err := decodedPrivateKeyShare.Marshal()
+	if err != nil {
+		t.Fatalf("failed marshaling decoded private key share: [%v]", err)
+	}
+
+	if !bytes.Equal(expectedPayload, actualPayload) {
+		t.Fatalf(
+			"unexpected resolved signer payload\nexpected: [%x]\nactual:   [%x]",
+			expectedPayload,
+			actualPayload,
+		)
+	}
+}
 
 func TestRegisterSignerMaterialResolverForBuild_UsesRegisteredProvider(
 	t *testing.T,

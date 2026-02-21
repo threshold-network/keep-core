@@ -36,6 +36,21 @@ func TestRegisterNativeExecutionFFISigningPrimitiveForBuild_UsesProvider(
 	}
 }
 
+func TestRegisterNativeExecutionFFISigningPrimitiveForBuild_UsesDefaultProvider(
+	t *testing.T,
+) {
+	UnregisterNativeExecutionFFISigningPrimitiveProviderForBuild()
+	UnregisterNativeExecutionFFIExecutor()
+	t.Cleanup(UnregisterNativeExecutionFFISigningPrimitiveProviderForBuild)
+	t.Cleanup(UnregisterNativeExecutionFFIExecutor)
+
+	RegisterNativeExecutionFFISigningPrimitiveForBuild()
+
+	if currentNativeExecutionFFIExecutor() == nil {
+		t.Fatal("expected FFI executor registration from default build provider")
+	}
+}
+
 func TestRegisterNativeExecutionFFISigningPrimitiveForBuild_ProviderErrorPanics(
 	t *testing.T,
 ) {

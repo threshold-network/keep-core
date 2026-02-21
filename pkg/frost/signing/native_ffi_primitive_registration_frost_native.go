@@ -7,7 +7,7 @@ import "fmt"
 func registerNativeExecutionFFISigningPrimitiveForBuild() error {
 	provider := currentNativeExecutionFFISigningPrimitiveProviderForBuild()
 	if provider == nil {
-		return nil
+		provider = defaultNativeExecutionFFISigningPrimitiveProviderForBuild
 	}
 
 	primitive, err := provider()
