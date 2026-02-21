@@ -18,6 +18,10 @@ func defaultNativeExecutionFFISigningPrimitiveProviderForBuild() (
 	NativeExecutionFFISigningPrimitive,
 	error,
 ) {
+	if err := registerBuildTaggedNativeFROSTSigningEngine(); err != nil {
+		return nil, err
+	}
+
 	return &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}, nil
 }
 
