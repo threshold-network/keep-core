@@ -1,6 +1,10 @@
 package retransmission
 
-import "github.com/keep-network/keep-core/pkg/net"
+import (
+	"sync"
+
+	"github.com/keep-network/keep-core/pkg/net"
+)
 
 // Strategy represents a specific retransmission strategy.
 type Strategy interface {
@@ -44,6 +48,7 @@ func (ss *StandardStrategy) Tick(retransmitFn RetransmitFn) error {
 // ticks, between third and fourth is 4 ticks and so on. Graphically, the
 // schedule looks as follows: R _ R _ _ R _ _ _ _  R _ _ _ _ _ _ _ _ R
 type BackoffStrategy struct {
+	mutex          sync.Mutex
 	tickCounter    uint64
 	delay          uint64
 	retransmitTick uint64
@@ -61,6 +66,9 @@ func WithBackoffStrategy() *BackoffStrategy {
 
 // Tick implements the Strategy.Tick function.
 func (bos *BackoffStrategy) Tick(retransmitFn RetransmitFn) error {
+	bos.mutex.Lock()
+	defer bos.mutex.Unlock()
+
 	bos.tickCounter++
 
 	if bos.tickCounter == bos.retransmitTick {

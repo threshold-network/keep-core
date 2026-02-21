@@ -54,7 +54,7 @@ type signingDoneCheck struct {
 	cancelReceiveCtx     context.CancelFunc
 	expectedSignersCount int
 	doneSigners          map[group.MemberIndex]*signingDoneMessage
-	doneSignersMutex     sync.Mutex
+	doneSignersMutex     sync.RWMutex
 }
 
 func newSigningDoneCheck(
@@ -90,13 +90,15 @@ func (sdc *signingDoneCheck) listen(
 	// causes warnings on the channel level.
 	sdc.receiveCtx, sdc.cancelReceiveCtx = context.WithCancel(ctx)
 
+	sdc.doneSignersMutex.Lock()
+	sdc.expectedSignersCount = len(attemptMembersIndexes)
+	sdc.doneSigners = make(map[group.MemberIndex]*signingDoneMessage)
+	sdc.doneSignersMutex.Unlock()
+
 	messagesChan := make(chan net.Message, signingDoneReceiveBuffer)
 	sdc.broadcastChannel.Recv(sdc.receiveCtx, func(message net.Message) {
 		messagesChan <- message
 	})
-
-	sdc.expectedSignersCount = len(attemptMembersIndexes)
-	sdc.doneSigners = make(map[group.MemberIndex]*signingDoneMessage)
 
 	go func() {
 		for {
@@ -117,9 +119,9 @@ func (sdc *signingDoneCheck) listen(
 					continue
 				}
 
-				sdc.doneSignersMutex.Lock()
-				sdc.doneSigners[doneMessage.senderID] = doneMessage
-				sdc.doneSignersMutex.Unlock()
+				if !sdc.recordDoneMessage(doneMessage) {
+					continue
+				}
 
 			case <-sdc.receiveCtx.Done():
 				return
@@ -169,11 +171,12 @@ func (sdc *signingDoneCheck) waitUntilAllDone(ctx context.Context) (
 			return nil, 0, errWaitDoneTimedOut
 
 		case <-ticker.C:
-			if sdc.expectedSignersCount == len(sdc.doneSigners) {
+			expectedSignersCount, doneSigners := sdc.snapshotDoneSigners()
+			if expectedSignersCount == len(doneSigners) {
 				var signature *frost.Signature
 				var latestEndBlock uint64
 
-				for _, doneMessage := range sdc.doneSigners {
+				for _, doneMessage := range doneSigners {
 					if signature == nil {
 						signature = doneMessage.signature
 					} else {
@@ -206,12 +209,6 @@ func (sdc *signingDoneCheck) isValidDoneMessage(
 	attemptNumber uint64,
 	attemptTimeoutBlock uint64,
 ) bool {
-	_, signerDone := sdc.doneSigners[doneMessage.senderID]
-	if signerDone {
-		// only one done message allowed
-		return false
-	}
-
 	if !sdc.membershipValidator.IsValidMembership(
 		doneMessage.senderID,
 		senderPublicKey,
@@ -236,4 +233,57 @@ func (sdc *signingDoneCheck) isValidDoneMessage(
 	}
 
 	return true
+}
+
+func (sdc *signingDoneCheck) recordDoneMessage(
+	doneMessage *signingDoneMessage,
+) bool {
+	sdc.doneSignersMutex.Lock()
+	defer sdc.doneSignersMutex.Unlock()
+
+	if _, signerDone := sdc.doneSigners[doneMessage.senderID]; signerDone {
+		// Only one done message is allowed for the given signer.
+		return false
+	}
+
+	sdc.doneSigners[doneMessage.senderID] = doneMessage.clone()
+	return true
+}
+
+func (sdc *signingDoneCheck) snapshotDoneSigners() (
+	int,
+	[]*signingDoneMessage,
+) {
+	sdc.doneSignersMutex.RLock()
+	defer sdc.doneSignersMutex.RUnlock()
+
+	result := make([]*signingDoneMessage, 0, len(sdc.doneSigners))
+	for _, doneMessage := range sdc.doneSigners {
+		result = append(result, doneMessage.clone())
+	}
+
+	return sdc.expectedSignersCount, result
+}
+
+func (sdm *signingDoneMessage) clone() *signingDoneMessage {
+	if sdm == nil {
+		return nil
+	}
+
+	result := &signingDoneMessage{
+		senderID:      sdm.senderID,
+		attemptNumber: sdm.attemptNumber,
+		endBlock:      sdm.endBlock,
+	}
+
+	if sdm.message != nil {
+		result.message = new(big.Int).Set(sdm.message)
+	}
+
+	if sdm.signature != nil {
+		signatureCopy := *sdm.signature
+		result.signature = &signatureCopy
+	}
+
+	return result
 }
