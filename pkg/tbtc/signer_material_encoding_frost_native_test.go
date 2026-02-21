@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
+	"github.com/keep-network/keep-core/pkg/tbtc/gen/pb"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestUnmarshalSignerMaterialFromPersistence_LegacyEncodingResolvesNativeMaterialOnFrostNativeBuild(
@@ -72,5 +74,62 @@ func TestUnmarshalSignerMaterialFromPersistence_LegacyEncodingResolvesNativeMate
 			legacyEncoded,
 			actualPayload,
 		)
+	}
+}
+
+func TestSignerMarshalling_LegacyRoundtripMigratesToNativeEnvelopeOnFrostNativeBuild(
+	t *testing.T,
+) {
+	UnregisterSignerMaterialResolver()
+	UnregisterSignerMaterialResolverProviderForBuild()
+	t.Cleanup(UnregisterSignerMaterialResolver)
+	t.Cleanup(UnregisterSignerMaterialResolverProviderForBuild)
+
+	if err := RegisterSignerMaterialResolverForBuild(); err != nil {
+		t.Fatalf("unexpected build resolver registration error: [%v]", err)
+	}
+
+	legacySigner := createMockSigner(t)
+	legacySigner.signerMaterial = legacySigner.privateKeyShare
+
+	initialEncodedSigner, err := legacySigner.Marshal()
+	if err != nil {
+		t.Fatalf("unexpected initial signer marshal error: [%v]", err)
+	}
+
+	initialPBSigner := &pb.Signer{}
+	if err := proto.Unmarshal(initialEncodedSigner, initialPBSigner); err != nil {
+		t.Fatalf("unexpected initial proto unmarshal error: [%v]", err)
+	}
+
+	if bytes.HasPrefix(initialPBSigner.PrivateKeyShare, signerMaterialEnvelopePrefix) {
+		t.Fatal("expected initial legacy signer encoding without native envelope")
+	}
+
+	unmarshaledSigner := &signer{}
+	if err := unmarshaledSigner.Unmarshal(initialEncodedSigner); err != nil {
+		t.Fatalf("unexpected signer unmarshal error: [%v]", err)
+	}
+
+	if _, ok := unmarshaledSigner.signerMaterial.(*frostsigning.NativeSignerMaterial); !ok {
+		t.Fatalf(
+			"unexpected signer material type after legacy unmarshal\nexpected: [%T]\nactual:   [%T]",
+			&frostsigning.NativeSignerMaterial{},
+			unmarshaledSigner.signerMaterial,
+		)
+	}
+
+	migratedEncodedSigner, err := unmarshaledSigner.Marshal()
+	if err != nil {
+		t.Fatalf("unexpected migrated signer marshal error: [%v]", err)
+	}
+
+	migratedPBSigner := &pb.Signer{}
+	if err := proto.Unmarshal(migratedEncodedSigner, migratedPBSigner); err != nil {
+		t.Fatalf("unexpected migrated proto unmarshal error: [%v]", err)
+	}
+
+	if !bytes.HasPrefix(migratedPBSigner.PrivateKeyShare, signerMaterialEnvelopePrefix) {
+		t.Fatal("expected migrated signer encoding with native envelope prefix")
 	}
 }
