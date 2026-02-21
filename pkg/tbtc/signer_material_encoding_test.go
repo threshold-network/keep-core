@@ -84,9 +84,15 @@ func TestMarshalSignerMaterialForPersistence_NativeSignerMaterial(t *testing.T) 
 }
 
 func TestUnmarshalSignerMaterialFromPersistence_NativeEnvelope(t *testing.T) {
+	signer := createMockSigner(t)
+	payload, err := signer.privateKeyShare.Marshal()
+	if err != nil {
+		t.Fatalf("unexpected private key share marshal error: [%v]", err)
+	}
+
 	encoded, err := encodeNativeSignerMaterialForPersistence(
 		frostsigning.NativeSignerMaterialFormatFrostUniFFIV1,
-		[]byte{0x10, 0x20},
+		payload,
 	)
 	if err != nil {
 		t.Fatalf("unexpected encode error: [%v]", err)
@@ -97,8 +103,21 @@ func TestUnmarshalSignerMaterialFromPersistence_NativeEnvelope(t *testing.T) {
 		t.Fatalf("unexpected unmarshal error: [%v]", err)
 	}
 
-	if decoded.privateKeyShare != nil {
-		t.Fatal("expected nil private key share for native signer material")
+	if decoded.privateKeyShare == nil {
+		t.Fatal("expected legacy private key share recovery from native signer material")
+	}
+
+	recoveredPayload, err := decoded.privateKeyShare.Marshal()
+	if err != nil {
+		t.Fatalf("unexpected recovered private key share marshal error: [%v]", err)
+	}
+
+	if !bytes.Equal(recoveredPayload, payload) {
+		t.Fatalf(
+			"unexpected recovered private key share\nexpected: [%x]\nactual:   [%x]",
+			payload,
+			recoveredPayload,
+		)
 	}
 
 	nativeSignerMaterial, ok := decoded.signerMaterial.(*frostsigning.NativeSignerMaterial)
@@ -115,6 +134,14 @@ func TestUnmarshalSignerMaterialFromPersistence_NativeEnvelope(t *testing.T) {
 			"unexpected signer material format\nexpected: [%v]\nactual:   [%v]",
 			frostsigning.NativeSignerMaterialFormatFrostUniFFIV1,
 			nativeSignerMaterial.Format,
+		)
+	}
+
+	if !bytes.Equal(nativeSignerMaterial.Payload, payload) {
+		t.Fatalf(
+			"unexpected signer material payload\nexpected: [%x]\nactual:   [%x]",
+			payload,
+			nativeSignerMaterial.Payload,
 		)
 	}
 }

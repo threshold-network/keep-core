@@ -49,6 +49,8 @@ func marshalSignerMaterialForPersistence(
 			material.Payload,
 		)
 	case []byte:
+		// Transitional compatibility: raw bytes are treated as
+		// frost-uniffi-v1 payloads produced by default resolver paths.
 		return encodeNativeSignerMaterialForPersistence(
 			frostsigning.NativeSignerMaterialFormatFrostUniFFIV1,
 			material,
@@ -69,9 +71,13 @@ func unmarshalSignerMaterialFromPersistence(
 	}
 
 	if isNative {
+		privateKeyShare := legacyPrivateKeyShareFromNativeSignerMaterial(
+			nativeSignerMaterial,
+		)
+
 		return &unmarshaledSignerMaterial{
 			signerMaterial:  nativeSignerMaterial,
-			privateKeyShare: nil,
+			privateKeyShare: privateKeyShare,
 		}, nil
 	}
 
@@ -217,4 +223,23 @@ func readPersistenceUvarint(data []byte, offset int) (uint64, int, error) {
 	}
 
 	return value, lengthBytes, nil
+}
+
+func legacyPrivateKeyShareFromNativeSignerMaterial(
+	nativeSignerMaterial *frostsigning.NativeSignerMaterial,
+) *tecdsa.PrivateKeyShare {
+	if nativeSignerMaterial == nil {
+		return nil
+	}
+
+	if nativeSignerMaterial.Format != frostsigning.NativeSignerMaterialFormatFrostUniFFIV1 {
+		return nil
+	}
+
+	privateKeyShare := &tecdsa.PrivateKeyShare{}
+	if err := privateKeyShare.Unmarshal(nativeSignerMaterial.Payload); err != nil {
+		return nil
+	}
+
+	return privateKeyShare
 }
