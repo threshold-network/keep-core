@@ -3,10 +3,15 @@
 package tbtc
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
+	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ipfs/go-log/v2"
@@ -16,7 +21,22 @@ import (
 )
 
 type countingNativeExecutionFFISigningPrimitive struct {
-	signCalls int
+	signCalls atomic.Int64
+}
+
+type deterministicNativeExecutionFFISigningPrimitiveForTBTC struct {
+	signCalls atomic.Int64
+}
+
+var deterministicNativeFROSTSignatureForTBTC = [frost.SignatureSize]byte{
+	0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+	0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+	0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+	0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20,
+	0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
+	0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F, 0x30,
+	0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
+	0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40,
 }
 
 func (cnefsp *countingNativeExecutionFFISigningPrimitive) Sign(
@@ -24,11 +44,47 @@ func (cnefsp *countingNativeExecutionFFISigningPrimitive) Sign(
 	logger log.StandardLogger,
 	request *frostsigning.NativeExecutionFFISigningRequest,
 ) (*frost.Signature, error) {
-	cnefsp.signCalls++
+	cnefsp.signCalls.Add(1)
 	return &frost.Signature{}, nil
 }
 
 func (cnefsp *countingNativeExecutionFFISigningPrimitive) RegisterUnmarshallers(
+	channel net.BroadcastChannel,
+) {
+}
+
+func (dnefspf *deterministicNativeExecutionFFISigningPrimitiveForTBTC) Sign(
+	ctx context.Context,
+	logger log.StandardLogger,
+	request *frostsigning.NativeExecutionFFISigningRequest,
+) (*frost.Signature, error) {
+	dnefspf.signCalls.Add(1)
+
+	if request == nil {
+		return nil, fmt.Errorf("request is nil")
+	}
+
+	nativeSignerMaterial := request.SignerMaterial
+	if nativeSignerMaterial == nil {
+		return nil, fmt.Errorf("native signer material is nil")
+	}
+
+	if nativeSignerMaterial.Format != frostsigning.NativeSignerMaterialFormatFrostUniFFIV2 {
+		return nil, fmt.Errorf(
+			"unexpected signer material format: [%s]",
+			nativeSignerMaterial.Format,
+		)
+	}
+
+	signature := &frost.Signature{}
+	if err := signature.Unmarshal(deterministicNativeFROSTSignatureForTBTC[:]); err != nil {
+		return nil, err
+	}
+
+	return signature, nil
+}
+
+func (dnefspf *deterministicNativeExecutionFFISigningPrimitiveForTBTC) RegisterUnmarshallers(
 	channel net.BroadcastChannel,
 ) {
 }
@@ -155,18 +211,25 @@ func TestSigningExecutor_Sign_FFIStrictBackend_WithNativeSignerMaterial(
 	t *testing.T,
 ) {
 	executor := setupSigningExecutor(t)
+	configureSignersWithNativeFROSTUniFFIV2Material(t, executor)
+
+	primitive := &deterministicNativeExecutionFFISigningPrimitiveForTBTC{}
 
 	frostsigning.ResetExecutionBackend()
 	frostsigning.UnregisterNativeExecutionAdapter()
 	frostsigning.UnregisterNativeExecutionBridge()
 	frostsigning.UnregisterNativeExecutionFFIExecutor()
 	frostsigning.RegisterNativeExecutionAdapterForBuild()
+	err := frostsigning.RegisterNativeExecutionFFISigningPrimitive(primitive)
+	if err != nil {
+		t.Fatalf("unexpected native FFI primitive registration error: [%v]", err)
+	}
 	t.Cleanup(frostsigning.ResetExecutionBackend)
 	t.Cleanup(frostsigning.UnregisterNativeExecutionAdapter)
 	t.Cleanup(frostsigning.UnregisterNativeExecutionBridge)
 	t.Cleanup(frostsigning.UnregisterNativeExecutionFFIExecutor)
 
-	err := configureFrostSigningBackend(Config{FrostSigningBackend: "ffi"})
+	err = configureFrostSigningBackend(Config{FrostSigningBackend: "ffi"})
 	if err != nil {
 		t.Fatalf("unexpected strict ffi backend config error: [%v]", err)
 	}
@@ -190,14 +253,21 @@ func TestSigningExecutor_Sign_FFIStrictBackend_WithNativeSignerMaterial(
 		t.Fatalf("unexpected strict ffi signing error: [%v]", err)
 	}
 
-	walletPublicKey := executor.wallet().publicKey
-	if !ecdsa.Verify(
-		walletPublicKey,
-		message.Bytes(),
-		new(big.Int).SetBytes(signature.R[:]),
-		new(big.Int).SetBytes(signature.S[:]),
-	) {
-		t.Fatalf("invalid signature: [%+v]", signature)
+	signatureBytes, err := signature.Marshal()
+	if err != nil {
+		t.Fatalf("cannot marshal signature: [%v]", err)
+	}
+
+	if !bytes.Equal(signatureBytes, deterministicNativeFROSTSignatureForTBTC[:]) {
+		t.Fatalf(
+			"unexpected native FROST signature\nexpected: [%x]\nactual:   [%x]",
+			deterministicNativeFROSTSignatureForTBTC[:],
+			signatureBytes,
+		)
+	}
+
+	if primitive.signCalls.Load() == 0 {
+		t.Fatal("expected native FFI primitive sign call")
 	}
 
 	if endBlock <= startBlock {
@@ -256,11 +326,11 @@ func TestSigningExecutor_Sign_NativeBackend_FallsBackWhenOnlyLegacySignerMateria
 		t.Fatalf("unexpected native backend signing error: [%v]", err)
 	}
 
-	if primitive.signCalls != 0 {
+	if primitive.signCalls.Load() != 0 {
 		t.Fatalf(
 			"unexpected native primitive sign calls count\nexpected: [%d]\nactual:   [%d]",
 			0,
-			primitive.signCalls,
+			primitive.signCalls.Load(),
 		)
 	}
 
@@ -276,5 +346,42 @@ func TestSigningExecutor_Sign_NativeBackend_FallsBackWhenOnlyLegacySignerMateria
 
 	if endBlock <= startBlock {
 		t.Fatal("wrong end block")
+	}
+}
+
+func configureSignersWithNativeFROSTUniFFIV2Material(
+	t *testing.T,
+	executor *signingExecutor,
+) {
+	t.Helper()
+
+	publicKeyPackage := &frostsigning.NativeFROSTPublicKeyPackage{
+		VerifyingShares: map[string]string{
+			"1": "share-1",
+		},
+		VerifyingKey: "group-verifying-key",
+	}
+
+	for _, signer := range executor.signers {
+		keyPackage := &frostsigning.NativeFROSTKeyPackage{
+			Identifier: strconv.FormatUint(uint64(signer.signingGroupMemberIndex), 10),
+			Data:       []byte{byte(signer.signingGroupMemberIndex)},
+		}
+
+		payload, err := json.Marshal(struct {
+			KeyPackage       *frostsigning.NativeFROSTKeyPackage       `json:"keyPackage"`
+			PublicKeyPackage *frostsigning.NativeFROSTPublicKeyPackage `json:"publicKeyPackage"`
+		}{
+			KeyPackage:       keyPackage,
+			PublicKeyPackage: publicKeyPackage,
+		})
+		if err != nil {
+			t.Fatalf("cannot marshal native signer material payload: [%v]", err)
+		}
+
+		signer.signerMaterial = &frostsigning.NativeSignerMaterial{
+			Format:  frostsigning.NativeSignerMaterialFormatFrostUniFFIV2,
+			Payload: payload,
+		}
 	}
 }
