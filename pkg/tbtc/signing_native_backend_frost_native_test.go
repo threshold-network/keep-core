@@ -156,18 +156,6 @@ func TestSigningExecutor_Sign_FFIStrictBackend_WithNativeSignerMaterial(
 ) {
 	executor := setupSigningExecutor(t)
 
-	for _, signer := range executor.signers {
-		payload, err := signer.privateKeyShare.Marshal()
-		if err != nil {
-			t.Fatalf("failed marshaling signer private key share: [%v]", err)
-		}
-
-		signer.signerMaterial = &frostsigning.NativeSignerMaterial{
-			Format:  frostsigning.NativeSignerMaterialFormatFrostUniFFIV1,
-			Payload: payload,
-		}
-	}
-
 	frostsigning.ResetExecutionBackend()
 	frostsigning.UnregisterNativeExecutionAdapter()
 	frostsigning.UnregisterNativeExecutionBridge()
@@ -221,6 +209,12 @@ func TestSigningExecutor_Sign_NativeBackend_FallsBackWhenOnlyLegacySignerMateria
 	t *testing.T,
 ) {
 	executor := setupSigningExecutor(t)
+
+	// Force legacy-only signer material to exercise fallback classification
+	// behavior even when frost_native build defaults resolve to native material.
+	for _, signer := range executor.signers {
+		signer.signerMaterial = signer.privateKeyShare
+	}
 
 	primitive := &countingNativeExecutionFFISigningPrimitive{}
 

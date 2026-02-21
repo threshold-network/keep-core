@@ -80,8 +80,22 @@ func unmarshalSignerMaterialFromPersistence(
 		return nil, fmt.Errorf("cannot unmarshal private key share: [%w]", err)
 	}
 
+	resolvedSignerMaterial, err := resolveSignerMaterial(privateKeyShare)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot resolve signer material from legacy private key share: [%w]",
+			err,
+		)
+	}
+
+	if resolvedSignerMaterial == nil {
+		return nil, fmt.Errorf(
+			"resolved signer material from legacy private key share is nil",
+		)
+	}
+
 	return &unmarshaledSignerMaterial{
-		signerMaterial:  privateKeyShare,
+		signerMaterial:  resolvedSignerMaterial,
 		privateKeyShare: privateKeyShare,
 	}, nil
 }
