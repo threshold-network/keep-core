@@ -22,8 +22,9 @@ func defaultNativeExecutionFFISigningPrimitiveProviderForBuild() (
 }
 
 // buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive is a
-// transitional primitive that consumes native signer material while executing
-// legacy tECDSA signing under the hood.
+// transitional primitive that executes native two-round FROST when
+// `frost-uniffi-v2` signer material is provided, and preserves legacy bridge
+// execution for `frost-uniffi-v1` payloads.
 type buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive struct{}
 
 func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive) Sign(
@@ -39,6 +40,47 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 		return nil, fmt.Errorf("request message is nil")
 	}
 
+	if request.SignerMaterial == nil {
+		return nil, fmt.Errorf(
+			"%w: signer material is nil",
+			ErrNativeCryptographyUnavailable,
+		)
+	}
+
+	switch request.SignerMaterial.Format {
+	case NativeSignerMaterialFormatFrostUniFFIV2:
+		nativeSignerMaterial, err := decodeNativeFROSTUniFFIV2SignerMaterial(
+			request.SignerMaterial,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		return executeNativeFROSTSigning(
+			ctx,
+			logger,
+			request,
+			currentNativeFROSTSigningEngine(),
+			nativeSignerMaterial,
+		)
+
+	case NativeSignerMaterialFormatFrostUniFFIV1:
+		return btlcnnefsp.signWithLegacyTECDSABridge(ctx, logger, request)
+
+	default:
+		return nil, fmt.Errorf(
+			"%w: unsupported signer material format: [%s]",
+			ErrNativeCryptographyUnavailable,
+			request.SignerMaterial.Format,
+		)
+	}
+}
+
+func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive) signWithLegacyTECDSABridge(
+	ctx context.Context,
+	logger log.StandardLogger,
+	request *NativeExecutionFFISigningRequest,
+) (*frost.Signature, error) {
 	privateKeyShare, err := decodeBuildTaggedLegacyPrivateKeyShare(
 		request.SignerMaterial,
 	)
@@ -74,6 +116,7 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive) RegisterUnmarshallers(
 	channel net.BroadcastChannel,
 ) {
+	registerNativeFROSTSigningUnmarshallers(channel)
 	legacySigning.RegisterUnmarshallers(channel)
 }
 
