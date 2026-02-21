@@ -521,11 +521,17 @@ func (de *dkgExecutor) registerSigner(
 		)
 	}
 
+	signerMaterial, err := resolveSignerMaterial(result.PrivateKeyShare)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve signer material: [%w]", err)
+	}
+
 	signer := newSigner(
 		result.PrivateKeyShare.PublicKey(),
 		finalSigningGroupOperators,
 		finalSigningGroupMemberIndex,
 		result.PrivateKeyShare,
+		signerMaterial,
 	)
 
 	err = de.walletRegistry.registerSigner(signer)

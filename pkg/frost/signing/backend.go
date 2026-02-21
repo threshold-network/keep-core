@@ -199,6 +199,7 @@ func UnregisterNativeExecutionAdapter() {
 // On `frost_native` builds, this registers the tagged native adapter.
 func RegisterNativeExecutionAdapterForBuild() {
 	registerNativeExecutionAdapterForBuild()
+	RegisterNativeExecutionFFISigningPrimitiveForBuild()
 }
 
 func currentNativeExecutionBackend() (ExecutionBackend, error) {

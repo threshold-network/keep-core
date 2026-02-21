@@ -792,17 +792,22 @@ func newSigner(
 	walletSigningGroupOperators []chain.Address,
 	signingGroupMemberIndex group.MemberIndex,
 	privateKeyShare *tecdsa.PrivateKeyShare,
+	signerMaterial any,
 ) *signer {
 	wallet := wallet{
 		publicKey:             walletPublicKey,
 		signingGroupOperators: walletSigningGroupOperators,
 	}
 
+	if signerMaterial == nil {
+		signerMaterial = privateKeyShare
+	}
+
 	return &signer{
 		wallet:                  wallet,
 		signingGroupMemberIndex: signingGroupMemberIndex,
 		privateKeyShare:         privateKeyShare,
-		signerMaterial:          privateKeyShare,
+		signerMaterial:          signerMaterial,
 	}
 }
 
