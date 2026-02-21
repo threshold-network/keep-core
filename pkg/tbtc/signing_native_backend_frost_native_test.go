@@ -30,6 +30,24 @@ func (nnefsp *noopNativeExecutionFFISigningPrimitive) RegisterUnmarshallers(
 ) {
 }
 
+type countingNativeExecutionFFISigningPrimitive struct {
+	signCalls int
+}
+
+func (cnefsp *countingNativeExecutionFFISigningPrimitive) Sign(
+	ctx context.Context,
+	logger log.StandardLogger,
+	request *frostsigning.NativeExecutionFFISigningRequest,
+) (*frost.Signature, error) {
+	cnefsp.signCalls++
+	return &frost.Signature{}, nil
+}
+
+func (cnefsp *countingNativeExecutionFFISigningPrimitive) RegisterUnmarshallers(
+	channel net.BroadcastChannel,
+) {
+}
+
 func TestConfigureFrostSigningBackend_FFIStrictConfigured_BuildAdapter(t *testing.T) {
 	frostsigning.ResetExecutionBackend()
 	frostsigning.UnregisterNativeExecutionAdapter()
@@ -139,6 +157,74 @@ func TestSigningExecutor_Sign_NativeBackend(t *testing.T) {
 	// The current native-tag adapter delegates to legacy tECDSA signing.
 	// Switch this verification to Schnorr/BIP-340 once native FROST crypto
 	// execution is linked.
+	walletPublicKey := executor.wallet().publicKey
+	if !ecdsa.Verify(
+		walletPublicKey,
+		message.Bytes(),
+		new(big.Int).SetBytes(signature.R[:]),
+		new(big.Int).SetBytes(signature.S[:]),
+	) {
+		t.Fatalf("invalid signature: [%+v]", signature)
+	}
+
+	if endBlock <= startBlock {
+		t.Fatal("wrong end block")
+	}
+}
+
+func TestSigningExecutor_Sign_NativeBackend_FallsBackWhenOnlyLegacySignerMaterial(
+	t *testing.T,
+) {
+	executor := setupSigningExecutor(t)
+
+	primitive := &countingNativeExecutionFFISigningPrimitive{}
+
+	frostsigning.ResetExecutionBackend()
+	frostsigning.UnregisterNativeExecutionAdapter()
+	frostsigning.UnregisterNativeExecutionBridge()
+	frostsigning.UnregisterNativeExecutionFFIExecutor()
+	frostsigning.RegisterNativeExecutionAdapterForBuild()
+	err := frostsigning.RegisterNativeExecutionFFISigningPrimitive(primitive)
+	if err != nil {
+		t.Fatalf("unexpected native FFI primitive registration error: [%v]", err)
+	}
+	t.Cleanup(frostsigning.ResetExecutionBackend)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionAdapter)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionBridge)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionFFIExecutor)
+
+	err = configureFrostSigningBackend(Config{FrostSigningBackend: "native"})
+	if err != nil {
+		t.Fatalf("unexpected native backend config error: [%v]", err)
+	}
+
+	if frostsigning.CurrentExecutionBackendName() != frostsigning.NativeExecutionBackendName {
+		t.Fatalf(
+			"unexpected backend name\nexpected: [%s]\nactual:   [%s]",
+			frostsigning.NativeExecutionBackendName,
+			frostsigning.CurrentExecutionBackendName(),
+		)
+	}
+
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	defer cancelCtx()
+
+	message := big.NewInt(100)
+	startBlock := uint64(0)
+
+	signature, _, endBlock, err := executor.sign(ctx, message, startBlock)
+	if err != nil {
+		t.Fatalf("unexpected native backend signing error: [%v]", err)
+	}
+
+	if primitive.signCalls != 0 {
+		t.Fatalf(
+			"unexpected native primitive sign calls count\nexpected: [%d]\nactual:   [%d]",
+			0,
+			primitive.signCalls,
+		)
+	}
+
 	walletPublicKey := executor.wallet().publicKey
 	if !ecdsa.Verify(
 		walletPublicKey,

@@ -118,6 +118,14 @@ func TestNativeExecutionFFIExecutorAdapter_Execute_ValidatesSignerMaterial(
 		t.Fatal("expected error")
 	}
 
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
 	if !strings.Contains(err.Error(), "native signer material has wrong type") {
 		t.Fatalf(
 			"unexpected error\nexpected substring: [%s]\nactual:             [%v]",

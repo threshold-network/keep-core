@@ -82,7 +82,7 @@ func (nefea *nativeExecutionFFIExecutorAdapter) Execute(
 
 	signerMaterial, err := request.NativeSignerMaterial()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: [%v]", ErrNativeCryptographyUnavailable, err)
 	}
 
 	signature, err := nefea.primitive.Sign(
