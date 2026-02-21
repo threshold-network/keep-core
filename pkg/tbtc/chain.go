@@ -257,6 +257,10 @@ type BridgeChain interface {
 	// if the wallet was not found.
 	GetWallet(walletPublicKeyHash [20]byte) (*WalletChainData, error)
 
+	// WalletPublicKeyHashForWalletID resolves canonical wallet ID to the
+	// 20-byte compatibility wallet public key hash used by legacy interfaces.
+	WalletPublicKeyHashForWalletID(walletID [32]byte) ([20]byte, error)
+
 	// OnWalletClosed registers a callback that is invoked when an on-chain
 	// notification of the wallet closed is seen. The notification occurs when
 	// the wallet is closed or terminated.
@@ -342,6 +346,7 @@ type NewWalletRegisteredEvent struct {
 type NewWalletRegisteredEventFilter struct {
 	StartBlock          uint64
 	EndBlock            *uint64
+	WalletID            [][32]byte
 	EcdsaWalletID       [][32]byte
 	WalletPublicKeyHash [][20]byte
 }

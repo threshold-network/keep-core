@@ -1196,22 +1196,50 @@ func (n *node) archiveClosedWallets() error {
 	for _, walletPublicKey := range walletPublicKeys {
 		walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
 
-		walletID, err := n.chain.CalculateWalletID(walletPublicKey)
+		var walletID [32]byte
+		var ecdsaWalletID [32]byte
+
+		walletChainData, err := n.chain.GetWallet(walletPublicKeyHash)
 		if err != nil {
-			return fmt.Errorf(
-				"could not calculate wallet ID for wallet with public key "+
-					"hash [0x%x]: [%v]",
-				walletPublicKeyHash,
-				err,
-			)
+			walletID, err = n.chain.CalculateWalletID(walletPublicKey)
+			if err != nil {
+				return fmt.Errorf(
+					"could not resolve wallet IDs for wallet with public key "+
+						"hash [0x%x]: [%v]",
+					walletPublicKeyHash,
+					err,
+				)
+			}
+
+			// Legacy fallback for deployments where canonical wallet lookup
+			// is unavailable.
+			ecdsaWalletID = walletID
+		} else {
+			walletID = walletChainData.WalletID
+			if walletID == [32]byte{} {
+				walletID = DeriveLegacyWalletID(walletPublicKeyHash)
+			}
+
+			ecdsaWalletID = walletChainData.EcdsaWalletID
+			if ecdsaWalletID == [32]byte{} {
+				ecdsaWalletID, err = n.chain.CalculateWalletID(walletPublicKey)
+				if err != nil {
+					return fmt.Errorf(
+						"could not calculate ECDSA wallet ID for wallet with public key "+
+							"hash [0x%x]: [%v]",
+						walletPublicKeyHash,
+						err,
+					)
+				}
+			}
 		}
 
-		isRegistered, err := n.chain.IsWalletRegistered(walletID)
+		isRegistered, err := n.chain.IsWalletRegistered(ecdsaWalletID)
 		if err != nil {
 			return fmt.Errorf(
-				"could not check if wallet is registered for wallet with ID "+
+				"could not check if wallet is registered for wallet with ECDSA ID "+
 					"[0x%x]: [%v]",
-				walletPublicKeyHash,
+				ecdsaWalletID,
 				err,
 			)
 		}
@@ -1283,19 +1311,42 @@ func (n *node) handleWalletClosure(walletID [32]byte) error {
 		return fmt.Errorf("wallet closure not confirmed")
 	}
 
-	wallet, ok := n.walletRegistry.getWalletByID(walletID)
+	walletPublicKeyHash, err := n.chain.WalletPublicKeyHashForWalletID(walletID)
+	if err != nil {
+		logger.Warnf(
+			"cannot resolve wallet public key hash for wallet ID [0x%x]: [%v]; "+
+				"falling back to local wallet ID matching",
+			walletID,
+			err,
+		)
+
+		wallet, ok := n.walletRegistry.getWalletByID(walletID)
+		if !ok {
+			// Wallet was not found in the registry. The wallet is not controlled
+			// by this node.
+			logger.Infof(
+				"node does not control wallet with ID [0x%x]; quitting wallet "+
+					"archiving",
+				walletID,
+			)
+			return nil
+		}
+
+		walletPublicKeyHash = bitcoin.PublicKeyHash(wallet.publicKey)
+	}
+
+	_, ok := n.walletRegistry.getWalletByPublicKeyHash(walletPublicKeyHash)
 	if !ok {
 		// Wallet was not found in the registry. The wallet is not controlled by
 		// this node.
 		logger.Infof(
-			"node does not control wallet with ID [0x%x]; quitting wallet "+
-				"archiving",
+			"node does not control wallet with ID [0x%x] and public key hash "+
+				"[0x%x]; quitting wallet archiving",
 			walletID,
+			walletPublicKeyHash,
 		)
 		return nil
 	}
-
-	walletPublicKeyHash := bitcoin.PublicKeyHash(wallet.publicKey)
 
 	err = n.walletRegistry.archiveWallet(walletPublicKeyHash)
 	if err != nil {

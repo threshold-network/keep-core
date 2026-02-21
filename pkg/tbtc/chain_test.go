@@ -892,6 +892,25 @@ func (lc *localChain) GetWallet(walletPublicKeyHash [20]byte) (
 	return walletChainData, nil
 }
 
+func (lc *localChain) WalletPublicKeyHashForWalletID(
+	walletID [32]byte,
+) ([20]byte, error) {
+	lc.walletsMutex.Lock()
+	defer lc.walletsMutex.Unlock()
+
+	for walletPublicKeyHash, walletData := range lc.wallets {
+		if walletData == nil {
+			continue
+		}
+
+		if walletID == walletData.WalletID || walletID == walletData.EcdsaWalletID {
+			return walletPublicKeyHash, nil
+		}
+	}
+
+	return [20]byte{}, fmt.Errorf("wallet not found")
+}
+
 func (lc *localChain) IsWalletRegistered(EcdsaWalletID [32]byte) (bool, error) {
 	lc.walletsMutex.Lock()
 	defer lc.walletsMutex.Unlock()
