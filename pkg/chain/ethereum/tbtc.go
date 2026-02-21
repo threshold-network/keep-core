@@ -1397,6 +1397,7 @@ func (tc *TbtcChain) PastNewWalletRegisteredEvents(
 	convertedEvents := make([]*tbtc.NewWalletRegisteredEvent, 0)
 	for _, event := range events {
 		convertedEvent := &tbtc.NewWalletRegisteredEvent{
+			WalletID:            tbtc.DeriveLegacyWalletID(event.WalletPubKeyHash),
 			EcdsaWalletID:       event.EcdsaWalletID,
 			WalletPublicKeyHash: event.WalletPubKeyHash,
 			BlockNumber:         event.Raw.BlockNumber,
@@ -1474,6 +1475,7 @@ func (tc *TbtcChain) GetWallet(
 	}
 
 	return &tbtc.WalletChainData{
+		WalletID:                               tbtc.DeriveLegacyWalletID(walletPublicKeyHash),
 		EcdsaWalletID:                          wallet.EcdsaWalletID,
 		MainUtxoHash:                           wallet.MainUtxoHash,
 		PendingRedemptionsValue:                wallet.PendingRedemptionsValue,

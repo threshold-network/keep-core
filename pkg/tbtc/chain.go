@@ -329,6 +329,10 @@ type BridgeChain interface {
 
 // NewWalletRegisteredEvent represents a new wallet registered event.
 type NewWalletRegisteredEvent struct {
+	// WalletID is the canonical bridge wallet identifier.
+	// For legacy ECDSA wallets, this is derived as a left-padded
+	// 20-byte wallet public key hash.
+	WalletID            [32]byte
 	EcdsaWalletID       [32]byte
 	WalletPublicKeyHash [20]byte
 	BlockNumber         uint64
@@ -413,6 +417,10 @@ type DepositChainRequest struct {
 
 // WalletChainData represents wallet data stored on-chain.
 type WalletChainData struct {
+	// WalletID is the canonical bridge wallet identifier.
+	// For legacy ECDSA wallets, this is derived as a left-padded
+	// 20-byte wallet public key hash.
+	WalletID                               [32]byte
 	EcdsaWalletID                          [32]byte
 	MainUtxoHash                           [32]byte
 	PendingRedemptionsValue                uint64

@@ -916,6 +916,10 @@ func (lc *localChain) setWallet(
 	lc.walletsMutex.Lock()
 	defer lc.walletsMutex.Unlock()
 
+	if walletChainData != nil && walletChainData.WalletID == [32]byte{} {
+		walletChainData.WalletID = DeriveLegacyWalletID(walletPublicKeyHash)
+	}
+
 	lc.wallets[walletPublicKeyHash] = walletChainData
 }
 
