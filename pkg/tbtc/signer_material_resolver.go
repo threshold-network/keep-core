@@ -14,6 +14,10 @@ type SignerMaterialResolver interface {
 	ResolveSignerMaterial(privateKeyShare *tecdsa.PrivateKeyShare) (any, error)
 }
 
+// SignerMaterialResolverProviderForBuild produces a signer material resolver
+// bound to the current build/runtime flavor.
+type SignerMaterialResolverProviderForBuild func() (SignerMaterialResolver, error)
+
 type legacyPrivateKeyShareSignerMaterialResolver struct{}
 
 func (lpkssmr *legacyPrivateKeyShareSignerMaterialResolver) ResolveSignerMaterial(
@@ -27,8 +31,9 @@ func (lpkssmr *legacyPrivateKeyShareSignerMaterialResolver) ResolveSignerMateria
 }
 
 var (
-	signerMaterialResolverMutex sync.RWMutex
-	signerMaterialResolver      SignerMaterialResolver = &legacyPrivateKeyShareSignerMaterialResolver{}
+	signerMaterialResolverMutex            sync.RWMutex
+	signerMaterialResolver                 SignerMaterialResolver = &legacyPrivateKeyShareSignerMaterialResolver{}
+	signerMaterialResolverProviderForBuild SignerMaterialResolverProviderForBuild
 )
 
 // RegisterSignerMaterialResolver registers a signer material resolver used by
@@ -54,11 +59,44 @@ func UnregisterSignerMaterialResolver() {
 	signerMaterialResolver = &legacyPrivateKeyShareSignerMaterialResolver{}
 }
 
+// RegisterSignerMaterialResolverProviderForBuild registers a provider used by
+// RegisterSignerMaterialResolverForBuild.
+func RegisterSignerMaterialResolverProviderForBuild(
+	provider SignerMaterialResolverProviderForBuild,
+) error {
+	if provider == nil {
+		return fmt.Errorf("signer material resolver provider is nil")
+	}
+
+	signerMaterialResolverMutex.Lock()
+	defer signerMaterialResolverMutex.Unlock()
+
+	signerMaterialResolverProviderForBuild = provider
+
+	return nil
+}
+
+// UnregisterSignerMaterialResolverProviderForBuild clears build-scoped resolver
+// provider registration.
+func UnregisterSignerMaterialResolverProviderForBuild() {
+	signerMaterialResolverMutex.Lock()
+	defer signerMaterialResolverMutex.Unlock()
+
+	signerMaterialResolverProviderForBuild = nil
+}
+
 func currentSignerMaterialResolver() SignerMaterialResolver {
 	signerMaterialResolverMutex.RLock()
 	defer signerMaterialResolverMutex.RUnlock()
 
 	return signerMaterialResolver
+}
+
+func currentSignerMaterialResolverProviderForBuild() SignerMaterialResolverProviderForBuild {
+	signerMaterialResolverMutex.RLock()
+	defer signerMaterialResolverMutex.RUnlock()
+
+	return signerMaterialResolverProviderForBuild
 }
 
 func resolveSignerMaterial(privateKeyShare *tecdsa.PrivateKeyShare) (any, error) {

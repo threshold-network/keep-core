@@ -2,4 +2,6 @@
 
 package signing
 
-func registerNativeExecutionFFISigningPrimitiveForBuild() {}
+func registerNativeExecutionFFISigningPrimitiveForBuild() error {
+	return nil
+}

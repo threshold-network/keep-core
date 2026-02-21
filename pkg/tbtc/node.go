@@ -133,6 +133,13 @@ func newNode(
 	proposalGenerator CoordinationProposalGenerator,
 	config Config,
 ) (*node, error) {
+	if err := RegisterSignerMaterialResolverForBuild(); err != nil {
+		return nil, fmt.Errorf(
+			"cannot register signer material resolver for build: %w",
+			err,
+		)
+	}
+
 	if err := configureFrostSigningBackend(config); err != nil {
 		return nil, fmt.Errorf("cannot configure FROST signing backend: %w", err)
 	}
