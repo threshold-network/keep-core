@@ -10,21 +10,22 @@ import (
 	"testing"
 
 	"github.com/ipfs/go-log/v2"
+	"github.com/keep-network/keep-core/pkg/frost"
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/net"
 )
 
-type noopNativeExecutionFFIExecutor struct{}
+type noopNativeExecutionFFISigningPrimitive struct{}
 
-func (nnefe *noopNativeExecutionFFIExecutor) Execute(
+func (nnefsp *noopNativeExecutionFFISigningPrimitive) Sign(
 	ctx context.Context,
 	logger log.StandardLogger,
-	request *frostsigning.Request,
-) (*frostsigning.Result, error) {
-	return nil, nil
+	request *frostsigning.NativeExecutionFFISigningRequest,
+) (*frost.Signature, error) {
+	return &frost.Signature{}, nil
 }
 
-func (nnefe *noopNativeExecutionFFIExecutor) RegisterUnmarshallers(
+func (nnefsp *noopNativeExecutionFFISigningPrimitive) RegisterUnmarshallers(
 	channel net.BroadcastChannel,
 ) {
 }
@@ -35,11 +36,11 @@ func TestConfigureFrostSigningBackend_FFIStrictConfigured_BuildAdapter(t *testin
 	frostsigning.UnregisterNativeExecutionBridge()
 	frostsigning.UnregisterNativeExecutionFFIExecutor()
 	frostsigning.RegisterNativeExecutionAdapterForBuild()
-	err := frostsigning.RegisterNativeExecutionFFIExecutor(
-		&noopNativeExecutionFFIExecutor{},
+	err := frostsigning.RegisterNativeExecutionFFISigningPrimitive(
+		&noopNativeExecutionFFISigningPrimitive{},
 	)
 	if err != nil {
-		t.Fatalf("unexpected native FFI executor registration error: [%v]", err)
+		t.Fatalf("unexpected native FFI primitive registration error: [%v]", err)
 	}
 	t.Cleanup(frostsigning.ResetExecutionBackend)
 	t.Cleanup(frostsigning.UnregisterNativeExecutionAdapter)

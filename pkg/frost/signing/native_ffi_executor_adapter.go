@@ -14,13 +14,15 @@ import (
 // NativeExecutionFFISigningRequest is the canonical request passed to a native
 // FFI signing primitive.
 type NativeExecutionFFISigningRequest struct {
-	Message            *big.Int
-	SessionID          string
-	MemberIndex        group.MemberIndex
-	GroupSize          int
-	DishonestThreshold int
-	SignerMaterial     *NativeSignerMaterial
-	Attempt            *Attempt
+	Message             *big.Int
+	SessionID           string
+	MemberIndex         group.MemberIndex
+	GroupSize           int
+	DishonestThreshold  int
+	Channel             net.BroadcastChannel
+	MembershipValidator *group.MembershipValidator
+	SignerMaterial      *NativeSignerMaterial
+	Attempt             *Attempt
 }
 
 // NativeExecutionFFISigningPrimitive is a minimal cryptographic primitive
@@ -87,13 +89,15 @@ func (nefea *nativeExecutionFFIExecutorAdapter) Execute(
 		ctx,
 		logger,
 		&NativeExecutionFFISigningRequest{
-			Message:            request.Message,
-			SessionID:          request.SessionID,
-			MemberIndex:        request.MemberIndex,
-			GroupSize:          request.GroupSize,
-			DishonestThreshold: request.DishonestThreshold,
-			SignerMaterial:     signerMaterial,
-			Attempt:            cloneAttempt(request.Attempt),
+			Message:             request.Message,
+			SessionID:           request.SessionID,
+			MemberIndex:         request.MemberIndex,
+			GroupSize:           request.GroupSize,
+			DishonestThreshold:  request.DishonestThreshold,
+			Channel:             request.Channel,
+			MembershipValidator: request.MembershipValidator,
+			SignerMaterial:      signerMaterial,
+			Attempt:             cloneAttempt(request.Attempt),
 		},
 	)
 	if err != nil {
