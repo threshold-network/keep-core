@@ -4,12 +4,17 @@ import (
 	"bytes"
 	"crypto/ecdsa"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	tbtcabi "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
+	tbtcpkg "github.com/keep-network/keep-core/pkg/tbtc"
 
 	"github.com/keep-network/keep-core/pkg/chain"
 
@@ -321,6 +326,287 @@ func TestCalculateWalletID(t *testing.T) {
 	)
 
 	testutils.AssertBytesEqual(t, expectedWalletID[:], actualWalletID[:])
+}
+
+func TestPastNewWalletRegisteredEvents_UsesV2EventsWhenAvailable(t *testing.T) {
+	startBlock := uint64(500)
+	endBlock := uint64(700)
+
+	expectedWalletIDA := [32]byte{0xaa}
+	expectedWalletIDB := [32]byte{0xbb}
+
+	expectedECDSAWalletIDA := [32]byte{0xa1}
+	expectedECDSAWalletIDB := [32]byte{0xb1}
+
+	expectedWalletPublicKeyHashA := [20]byte{0x11}
+	expectedWalletPublicKeyHashB := [20]byte{0x22}
+
+	legacyFallbackCalled := false
+
+	actualEvents, err := pastNewWalletRegisteredEvents(
+		startBlock,
+		&endBlock,
+		nil,
+		nil,
+		nil,
+		func(
+			actualStartBlock uint64,
+			actualEndBlock *uint64,
+			_ [][32]byte,
+			_ [][32]byte,
+			_ [][20]byte,
+		) ([]*tbtcabi.BridgeNewWalletRegisteredV2, error) {
+			if actualStartBlock != startBlock {
+				t.Fatalf("unexpected start block: [%v]", actualStartBlock)
+			}
+
+			if actualEndBlock == nil || *actualEndBlock != endBlock {
+				t.Fatalf("unexpected end block: [%v]", actualEndBlock)
+			}
+
+			// Provide events out of order to verify post-conversion sort.
+			return []*tbtcabi.BridgeNewWalletRegisteredV2{
+				{
+					WalletID:         expectedWalletIDB,
+					EcdsaWalletID:    expectedECDSAWalletIDB,
+					WalletPubKeyHash: expectedWalletPublicKeyHashB,
+					Raw:              types.Log{BlockNumber: 650},
+				},
+				{
+					WalletID:         expectedWalletIDA,
+					EcdsaWalletID:    expectedECDSAWalletIDA,
+					WalletPubKeyHash: expectedWalletPublicKeyHashA,
+					Raw:              types.Log{BlockNumber: 600},
+				},
+			}, nil
+		},
+		func(uint64, *uint64, [][32]byte, [][20]byte) ([]*tbtcabi.BridgeNewWalletRegistered, error) {
+			legacyFallbackCalled = true
+			return nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+
+	if legacyFallbackCalled {
+		t.Fatal("legacy fallback should not be called when v2 events are present")
+	}
+
+	if len(actualEvents) != 2 {
+		t.Fatalf("unexpected events count: [%v]", len(actualEvents))
+	}
+
+	// Expect ascending block order after conversion.
+	if actualEvents[0].BlockNumber != 600 || actualEvents[1].BlockNumber != 650 {
+		t.Fatalf(
+			"unexpected event ordering by block: [%v], [%v]",
+			actualEvents[0].BlockNumber,
+			actualEvents[1].BlockNumber,
+		)
+	}
+
+	if actualEvents[0].WalletID != expectedWalletIDA ||
+		actualEvents[1].WalletID != expectedWalletIDB {
+		t.Fatal("unexpected wallet IDs in converted events")
+	}
+}
+
+func TestPastNewWalletRegisteredEvents_FallsBackToLegacyWhenV2Empty(t *testing.T) {
+	expectedECDSAWalletID := [32]byte{0xdd}
+	expectedWalletPublicKeyHash := [20]byte{0xee}
+
+	legacyFallbackCalled := false
+
+	actualEvents, err := pastNewWalletRegisteredEvents(
+		1,
+		nil,
+		nil, // no canonical wallet-ID filter -> fallback path enabled
+		nil,
+		nil,
+		func(uint64, *uint64, [][32]byte, [][32]byte, [][20]byte) ([]*tbtcabi.BridgeNewWalletRegisteredV2, error) {
+			return []*tbtcabi.BridgeNewWalletRegisteredV2{}, nil
+		},
+		func(uint64, *uint64, [][32]byte, [][20]byte) ([]*tbtcabi.BridgeNewWalletRegistered, error) {
+			legacyFallbackCalled = true
+			return []*tbtcabi.BridgeNewWalletRegistered{
+				{
+					EcdsaWalletID:    expectedECDSAWalletID,
+					WalletPubKeyHash: expectedWalletPublicKeyHash,
+					Raw:              types.Log{BlockNumber: 1000},
+				},
+			}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+
+	if !legacyFallbackCalled {
+		t.Fatal("legacy fallback should be called when v2 events are empty")
+	}
+
+	if len(actualEvents) != 1 {
+		t.Fatalf("unexpected events count: [%v]", len(actualEvents))
+	}
+
+	expectedWalletID := tbtcpkg.DeriveLegacyWalletID(expectedWalletPublicKeyHash)
+	if actualEvents[0].WalletID != expectedWalletID {
+		t.Fatalf(
+			"unexpected derived legacy wallet ID\nexpected: [%x]\nactual:   [%x]",
+			expectedWalletID,
+			actualEvents[0].WalletID,
+		)
+	}
+}
+
+func TestPastNewWalletRegisteredEvents_DoesNotFallbackWithWalletIDFilter(t *testing.T) {
+	legacyFallbackCalled := false
+
+	walletIDFilter := [][32]byte{
+		{0x1},
+	}
+
+	actualEvents, err := pastNewWalletRegisteredEvents(
+		1,
+		nil,
+		walletIDFilter,
+		nil,
+		nil,
+		func(uint64, *uint64, [][32]byte, [][32]byte, [][20]byte) ([]*tbtcabi.BridgeNewWalletRegisteredV2, error) {
+			return []*tbtcabi.BridgeNewWalletRegisteredV2{}, nil
+		},
+		func(uint64, *uint64, [][32]byte, [][20]byte) ([]*tbtcabi.BridgeNewWalletRegistered, error) {
+			legacyFallbackCalled = true
+			return nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+
+	if legacyFallbackCalled {
+		t.Fatal("legacy fallback should be skipped when walletID filter is provided")
+	}
+
+	if len(actualEvents) != 0 {
+		t.Fatalf("unexpected events count: [%v]", len(actualEvents))
+	}
+}
+
+func TestResolveWalletPublicKeyHashForWalletID(t *testing.T) {
+	t.Run("returns canonical mapping when non-zero", func(t *testing.T) {
+		walletID := [32]byte{0x01}
+		expectedWalletPublicKeyHash := [20]byte{0xaa}
+
+		actualWalletPublicKeyHash, err := resolveWalletPublicKeyHashForWalletID(
+			walletID,
+			func(actualWalletID [32]byte) ([20]byte, error) {
+				if actualWalletID != walletID {
+					t.Fatalf("unexpected wallet ID: [%x]", actualWalletID)
+				}
+
+				return expectedWalletPublicKeyHash, nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+
+		if actualWalletPublicKeyHash != expectedWalletPublicKeyHash {
+			t.Fatalf(
+				"unexpected wallet public key hash\nexpected: [%x]\nactual:   [%x]",
+				expectedWalletPublicKeyHash,
+				actualWalletPublicKeyHash,
+			)
+		}
+	})
+
+	t.Run("falls back to legacy extraction when canonical lookup errors", func(t *testing.T) {
+		expectedWalletPublicKeyHash := [20]byte{0xbb}
+		legacyWalletID := tbtcpkg.DeriveLegacyWalletID(expectedWalletPublicKeyHash)
+
+		actualWalletPublicKeyHash, err := resolveWalletPublicKeyHashForWalletID(
+			legacyWalletID,
+			func([32]byte) ([20]byte, error) {
+				return [20]byte{}, errors.New("canonical lookup unavailable")
+			},
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+
+		if actualWalletPublicKeyHash != expectedWalletPublicKeyHash {
+			t.Fatalf(
+				"unexpected wallet public key hash\nexpected: [%x]\nactual:   [%x]",
+				expectedWalletPublicKeyHash,
+				actualWalletPublicKeyHash,
+			)
+		}
+	})
+
+	t.Run("falls back to legacy extraction when canonical lookup returns zero", func(t *testing.T) {
+		expectedWalletPublicKeyHash := [20]byte{0xbc}
+		legacyWalletID := tbtcpkg.DeriveLegacyWalletID(expectedWalletPublicKeyHash)
+
+		actualWalletPublicKeyHash, err := resolveWalletPublicKeyHashForWalletID(
+			legacyWalletID,
+			func([32]byte) ([20]byte, error) {
+				return [20]byte{}, nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+
+		if actualWalletPublicKeyHash != expectedWalletPublicKeyHash {
+			t.Fatalf(
+				"unexpected wallet public key hash\nexpected: [%x]\nactual:   [%x]",
+				expectedWalletPublicKeyHash,
+				actualWalletPublicKeyHash,
+			)
+		}
+	})
+
+	t.Run("returns wrapped canonical error for non-legacy IDs", func(t *testing.T) {
+		walletID := [32]byte{0xff}
+		canonicalErr := errors.New("rpc failure")
+
+		_, err := resolveWalletPublicKeyHashForWalletID(
+			walletID,
+			func([32]byte) ([20]byte, error) {
+				return [20]byte{}, canonicalErr
+			},
+		)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+
+		if !strings.Contains(err.Error(), "cannot resolve wallet public key hash") {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+		if !strings.Contains(err.Error(), canonicalErr.Error()) {
+			t.Fatalf("expected canonical error to be wrapped: [%v]", err)
+		}
+	})
+
+	t.Run("returns not found for non-legacy IDs when canonical lookup returns zero", func(t *testing.T) {
+		walletID := [32]byte{0xfe}
+
+		_, err := resolveWalletPublicKeyHashForWalletID(
+			walletID,
+			func([32]byte) ([20]byte, error) {
+				return [20]byte{}, nil
+			},
+		)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+
+		if !strings.Contains(err.Error(), "wallet public key hash not found") {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+	})
 }
 
 func TestParseDkgResultValidationOutcome(t *testing.T) {

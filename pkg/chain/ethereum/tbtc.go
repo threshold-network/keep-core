@@ -1386,7 +1386,42 @@ func (tc *TbtcChain) PastNewWalletRegisteredEvents(
 		walletPublicKeyHash = filter.WalletPublicKeyHash
 	}
 
-	v2Events, err := tc.bridge.PastNewWalletRegisteredV2Events(
+	return pastNewWalletRegisteredEvents(
+		startBlock,
+		endBlock,
+		walletID,
+		ecdsaWalletID,
+		walletPublicKeyHash,
+		tc.bridge.PastNewWalletRegisteredV2Events,
+		tc.bridge.PastNewWalletRegisteredEvents,
+	)
+}
+
+type pastNewWalletRegisteredV2EventsFn func(
+	startBlock uint64,
+	endBlock *uint64,
+	walletID [][32]byte,
+	ecdsaWalletID [][32]byte,
+	walletPubKeyHash [][20]byte,
+) ([]*tbtcabi.BridgeNewWalletRegisteredV2, error)
+
+type pastNewWalletRegisteredEventsFn func(
+	startBlock uint64,
+	endBlock *uint64,
+	ecdsaWalletID [][32]byte,
+	walletPubKeyHash [][20]byte,
+) ([]*tbtcabi.BridgeNewWalletRegistered, error)
+
+func pastNewWalletRegisteredEvents(
+	startBlock uint64,
+	endBlock *uint64,
+	walletID [][32]byte,
+	ecdsaWalletID [][32]byte,
+	walletPublicKeyHash [][20]byte,
+	pastV2Events pastNewWalletRegisteredV2EventsFn,
+	pastLegacyEvents pastNewWalletRegisteredEventsFn,
+) ([]*tbtc.NewWalletRegisteredEvent, error) {
+	v2Events, err := pastV2Events(
 		startBlock,
 		endBlock,
 		walletID,
@@ -1411,7 +1446,7 @@ func (tc *TbtcChain) PastNewWalletRegisteredEvents(
 
 	// Fallback for legacy deployments that do not emit NewWalletRegisteredV2.
 	if len(convertedEvents) == 0 && len(walletID) == 0 {
-		legacyEvents, err := tc.bridge.PastNewWalletRegisteredEvents(
+		legacyEvents, err := pastLegacyEvents(
 			startBlock,
 			endBlock,
 			ecdsaWalletID,
@@ -1440,7 +1475,7 @@ func (tc *TbtcChain) PastNewWalletRegisteredEvents(
 		},
 	)
 
-	return convertedEvents, err
+	return convertedEvents, nil
 }
 
 func (tc *TbtcChain) CalculateWalletID(
@@ -1524,7 +1559,21 @@ func (tc *TbtcChain) GetWallet(
 func (tc *TbtcChain) WalletPublicKeyHashForWalletID(
 	walletID [32]byte,
 ) ([20]byte, error) {
-	walletPublicKeyHash, err := tc.bridge.WalletPubKeyHashForWalletID(walletID)
+	return resolveWalletPublicKeyHashForWalletID(
+		walletID,
+		tc.bridge.WalletPubKeyHashForWalletID,
+	)
+}
+
+type walletPublicKeyHashForWalletIDFn func(
+	walletID [32]byte,
+) ([20]byte, error)
+
+func resolveWalletPublicKeyHashForWalletID(
+	walletID [32]byte,
+	resolveCanonical walletPublicKeyHashForWalletIDFn,
+) ([20]byte, error) {
+	walletPublicKeyHash, err := resolveCanonical(walletID)
 	if err == nil {
 		if walletPublicKeyHash != [20]byte{} {
 			return walletPublicKeyHash, nil
