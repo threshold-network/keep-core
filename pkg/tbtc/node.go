@@ -1313,7 +1313,11 @@ func (n *node) handleWalletClosure(walletID [32]byte) error {
 
 	walletPublicKeyHash, err := n.chain.WalletPublicKeyHashForWalletID(walletID)
 	if err != nil {
-		logger.Warnf(
+		// WalletClosed events still carry ECDSA wallet IDs from the legacy
+		// registry path. Until closure events are emitted with canonical IDs,
+		// canonical wallet-ID resolution is expected to miss and we use the
+		// local registry fallback below.
+		logger.Debugf(
 			"cannot resolve wallet public key hash for wallet ID [0x%x]: [%v]; "+
 				"falling back to local wallet ID matching",
 			walletID,
