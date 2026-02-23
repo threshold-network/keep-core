@@ -4,6 +4,7 @@ package signing
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -37,6 +38,7 @@ func defaultNativeExecutionFFISigningPrimitiveProviderForBuild() (
 type buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive struct{}
 
 const buildTaggedTBTCSignerBootstrapVersionToken = "bootstrap"
+const buildTaggedTBTCSignerSyntheticContributionDomain = "tbtc-signer-bootstrap-contribution-v1"
 
 type nativeTBTCSignerVersionedEngine interface {
 	Version() (string, error)
@@ -381,9 +383,14 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 		return fmt.Errorf("cannot determine included members: [%w]", err)
 	}
 
-	roundContributions := buildTaggedTBTCSignerSyntheticRoundContributions(
+	roundContributions, err := buildTaggedTBTCSignerSyntheticRoundContributions(
+		roundState,
 		includedMembersIndexes,
 	)
+	if err != nil {
+		return fmt.Errorf("cannot build synthetic round contributions: [%w]", err)
+	}
+
 	if len(roundContributions) < int(roundState.RequiredContributions) {
 		return fmt.Errorf(
 			"insufficient synthetic round contributions: [%v] < [%v]",
@@ -408,8 +415,25 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 }
 
 func buildTaggedTBTCSignerSyntheticRoundContributions(
+	roundState *NativeTBTCSignerRoundState,
 	includedMembersIndexes []group.MemberIndex,
-) []NativeTBTCSignerRoundContribution {
+) ([]NativeTBTCSignerRoundContribution, error) {
+	if roundState == nil {
+		return nil, fmt.Errorf("round state is nil")
+	}
+
+	if roundState.SessionID == "" {
+		return nil, fmt.Errorf("round state session ID is empty")
+	}
+
+	if roundState.RoundID == "" {
+		return nil, fmt.Errorf("round state round ID is empty")
+	}
+
+	if roundState.MessageDigestHex == "" {
+		return nil, fmt.Errorf("round state message digest is empty")
+	}
+
 	contributions := make(
 		[]NativeTBTCSignerRoundContribution,
 		0,
@@ -418,24 +442,30 @@ func buildTaggedTBTCSignerSyntheticRoundContributions(
 
 	for _, memberIndex := range includedMembersIndexes {
 		if memberIndex == 0 {
-			continue
+			return nil, fmt.Errorf("included member index is zero")
 		}
 
 		identifier := uint16(memberIndex)
+		seed := fmt.Sprintf(
+			"%s:%s:%s:%s:%d",
+			buildTaggedTBTCSignerSyntheticContributionDomain,
+			roundState.SessionID,
+			roundState.RoundID,
+			roundState.MessageDigestHex,
+			identifier,
+		)
+		shareDigest := sha256.Sum256([]byte(seed))
+
 		contributions = append(
 			contributions,
 			NativeTBTCSignerRoundContribution{
 				Identifier: identifier,
-				Data: []byte{
-					byte(identifier >> 8),
-					byte(identifier),
-					0x01,
-				},
+				Data:       append([]byte{}, shareDigest[:]...),
 			},
 		)
 	}
 
-	return contributions
+	return contributions, nil
 }
 
 func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive) signWithLegacyTECDSABridge(

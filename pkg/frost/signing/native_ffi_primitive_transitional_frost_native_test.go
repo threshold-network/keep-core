@@ -518,6 +518,142 @@ func TestBuildTaggedTBTCSignerRunDKGInputs_RejectsInvalidRequest(t *testing.T) {
 	}
 }
 
+func TestBuildTaggedTBTCSignerSyntheticRoundContributions(t *testing.T) {
+	roundState := &NativeTBTCSignerRoundState{
+		SessionID:        "session-1",
+		RoundID:          "round-1",
+		MessageDigestHex: "aabbccdd",
+	}
+
+	contributionsFirst, err := buildTaggedTBTCSignerSyntheticRoundContributions(
+		roundState,
+		[]group.MemberIndex{1, 2, 3},
+	)
+	if err != nil {
+		t.Fatalf("unexpected synthetic contribution error: [%v]", err)
+	}
+
+	contributionsSecond, err := buildTaggedTBTCSignerSyntheticRoundContributions(
+		roundState,
+		[]group.MemberIndex{1, 2, 3},
+	)
+	if err != nil {
+		t.Fatalf("unexpected synthetic contribution error: [%v]", err)
+	}
+
+	if len(contributionsFirst) != 3 {
+		t.Fatalf(
+			"unexpected contribution count\nexpected: [%v]\nactual:   [%v]",
+			3,
+			len(contributionsFirst),
+		)
+	}
+
+	expectedIdentifiers := []uint16{1, 2, 3}
+	for i, contribution := range contributionsFirst {
+		if contribution.Identifier != expectedIdentifiers[i] {
+			t.Fatalf(
+				"unexpected contribution identifier at index [%d]\nexpected: [%v]\nactual:   [%v]",
+				i,
+				expectedIdentifiers[i],
+				contribution.Identifier,
+			)
+		}
+
+		if len(contribution.Data) != 32 {
+			t.Fatalf(
+				"unexpected contribution size at index [%d]\nexpected: [%v]\nactual:   [%v]",
+				i,
+				32,
+				len(contribution.Data),
+			)
+		}
+
+		if !bytes.Equal(contribution.Data, contributionsSecond[i].Data) {
+			t.Fatalf("expected deterministic contribution at index [%d]", i)
+		}
+	}
+
+	roundStateChanged := &NativeTBTCSignerRoundState{
+		SessionID:        "session-1",
+		RoundID:          "round-2",
+		MessageDigestHex: "aabbccdd",
+	}
+	contributionsChanged, err := buildTaggedTBTCSignerSyntheticRoundContributions(
+		roundStateChanged,
+		[]group.MemberIndex{1, 2, 3},
+	)
+	if err != nil {
+		t.Fatalf("unexpected synthetic contribution error: [%v]", err)
+	}
+
+	if bytes.Equal(contributionsFirst[0].Data, contributionsChanged[0].Data) {
+		t.Fatal("expected contribution data to change when round metadata changes")
+	}
+}
+
+func TestBuildTaggedTBTCSignerSyntheticRoundContributions_RejectsInvalidInput(t *testing.T) {
+	testCases := []struct {
+		name       string
+		roundState *NativeTBTCSignerRoundState
+		members    []group.MemberIndex
+	}{
+		{
+			name:       "nil round state",
+			roundState: nil,
+			members:    []group.MemberIndex{1, 2},
+		},
+		{
+			name: "empty session id",
+			roundState: &NativeTBTCSignerRoundState{
+				SessionID:        "",
+				RoundID:          "round-1",
+				MessageDigestHex: "aa",
+			},
+			members: []group.MemberIndex{1, 2},
+		},
+		{
+			name: "empty round id",
+			roundState: &NativeTBTCSignerRoundState{
+				SessionID:        "session-1",
+				RoundID:          "",
+				MessageDigestHex: "aa",
+			},
+			members: []group.MemberIndex{1, 2},
+		},
+		{
+			name: "empty message digest",
+			roundState: &NativeTBTCSignerRoundState{
+				SessionID:        "session-1",
+				RoundID:          "round-1",
+				MessageDigestHex: "",
+			},
+			members: []group.MemberIndex{1, 2},
+		},
+		{
+			name: "zero member index",
+			roundState: &NativeTBTCSignerRoundState{
+				SessionID:        "session-1",
+				RoundID:          "round-1",
+				MessageDigestHex: "aa",
+			},
+			members: []group.MemberIndex{0, 2},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := buildTaggedTBTCSignerSyntheticRoundContributions(
+				tc.roundState,
+				tc.members,
+			)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
 func TestBuildTaggedTBTCSignerRoundKeyGroup(t *testing.T) {
 	testCases := []struct {
 		name        string
