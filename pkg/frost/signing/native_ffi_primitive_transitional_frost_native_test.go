@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"math/big"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/internal/tecdsatest"
@@ -21,19 +23,24 @@ type mockBuildTaggedTBTCSignerEngine struct {
 	runDKGThreshold    uint16
 	runDKGResult       *NativeTBTCSignerDKGResult
 	runDKGErr          error
-	version            string
-	versionErr         error
-	startCalled        bool
-	startSessionID     string
-	startMessage       []byte
-	startKeyGroup      string
-	startRoundState    *NativeTBTCSignerRoundState
-	startErr           error
-	finalizeCalled     bool
-	finalizeSessionID  string
-	finalizeInputs     []NativeTBTCSignerRoundContribution
-	finalizeSignature  []byte
-	finalizeErr        error
+	runDKGFn           func(
+		sessionID string,
+		participants []NativeTBTCSignerDKGParticipant,
+		threshold uint16,
+	) (*NativeTBTCSignerDKGResult, error)
+	version           string
+	versionErr        error
+	startCalled       bool
+	startSessionID    string
+	startMessage      []byte
+	startKeyGroup     string
+	startRoundState   *NativeTBTCSignerRoundState
+	startErr          error
+	finalizeCalled    bool
+	finalizeSessionID string
+	finalizeInputs    []NativeTBTCSignerRoundContribution
+	finalizeSignature []byte
+	finalizeErr       error
 }
 
 func (mbttse *mockBuildTaggedTBTCSignerEngine) RunDKG(
@@ -51,6 +58,10 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) RunDKG(
 
 	if mbttse.runDKGErr != nil {
 		return nil, mbttse.runDKGErr
+	}
+
+	if mbttse.runDKGFn != nil {
+		return mbttse.runDKGFn(sessionID, participants, threshold)
 	}
 
 	if mbttse.runDKGResult != nil {
@@ -660,6 +671,7 @@ func TestBuildTaggedTBTCSignerRoundKeyGroup(t *testing.T) {
 		payload     *NativeTBTCSignerMaterialPayload
 		dkgResult   *NativeTBTCSignerDKGResult
 		expected    string
+		substituted bool
 		expectError bool
 	}{
 		{
@@ -670,7 +682,8 @@ func TestBuildTaggedTBTCSignerRoundKeyGroup(t *testing.T) {
 			dkgResult: &NativeTBTCSignerDKGResult{
 				KeyGroup: "group-1",
 			},
-			expected: "group-1",
+			expected:    "group-1",
+			substituted: false,
 		},
 		{
 			name: "legacy source mismatch uses dkg key group",
@@ -681,7 +694,8 @@ func TestBuildTaggedTBTCSignerRoundKeyGroup(t *testing.T) {
 			dkgResult: &NativeTBTCSignerDKGResult{
 				KeyGroup: "dkg-group",
 			},
-			expected: "dkg-group",
+			expected:    "dkg-group",
+			substituted: true,
 		},
 		{
 			name: "non-legacy source mismatch rejects",
@@ -698,7 +712,7 @@ func TestBuildTaggedTBTCSignerRoundKeyGroup(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			actual, err := buildTaggedTBTCSignerRoundKeyGroup(tc.payload, tc.dkgResult)
+			actual, substituted, err := buildTaggedTBTCSignerRoundKeyGroup(tc.payload, tc.dkgResult)
 			if tc.expectError {
 				if err == nil {
 					t.Fatal("expected error")
@@ -714,6 +728,82 @@ func TestBuildTaggedTBTCSignerRoundKeyGroup(t *testing.T) {
 			if actual != tc.expected {
 				t.Fatalf(
 					"unexpected key group\nexpected: [%v]\nactual:   [%v]",
+					tc.expected,
+					actual,
+				)
+			}
+
+			if substituted != tc.substituted {
+				t.Fatalf(
+					"unexpected substitution flag\nexpected: [%v]\nactual:   [%v]",
+					tc.substituted,
+					substituted,
+				)
+			}
+		})
+	}
+}
+
+func TestIsBuildTaggedTBTCSignerBootstrapVersion(t *testing.T) {
+	testCases := []struct {
+		name     string
+		version  string
+		expected bool
+	}{
+		{
+			name:     "valid exact bootstrap",
+			version:  "tbtc-signer/0.1.0-bootstrap",
+			expected: true,
+		},
+		{
+			name:     "valid bootstrap dotted suffix",
+			version:  "tbtc-signer/0.1.0-bootstrap.1",
+			expected: true,
+		},
+		{
+			name:     "invalid non-bootstrap prerelease",
+			version:  "tbtc-signer/0.1.0-post-bootstrap",
+			expected: false,
+		},
+		{
+			name:     "invalid major version one",
+			version:  "tbtc-signer/1.0.0-bootstrap",
+			expected: false,
+		},
+		{
+			name:     "invalid missing prerelease",
+			version:  "tbtc-signer/0.1.0",
+			expected: false,
+		},
+		{
+			name:     "invalid malformed core semver",
+			version:  "tbtc-signer/0.1-bootstrap",
+			expected: false,
+		},
+		{
+			name:     "invalid prefix",
+			version:  "other/0.1.0-bootstrap",
+			expected: false,
+		},
+		{
+			name:     "invalid uppercase bootstrap token",
+			version:  "tbtc-signer/0.1.0-Bootstrap",
+			expected: false,
+		},
+		{
+			name:     "invalid substring trap",
+			version:  "tbtc-signer/0.1.0-post-bootstrap-cleanup",
+			expected: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			actual := isBuildTaggedTBTCSignerBootstrapVersion(tc.version)
+			if actual != tc.expected {
+				t.Fatalf(
+					"unexpected bootstrap version classification\nversion:  [%s]\nexpected: [%v]\nactual:   [%v]",
+					tc.version,
 					tc.expected,
 					actual,
 				)
@@ -1087,5 +1177,124 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 
 	if event.LegacyPrivateKeyShareExists {
 		t.Fatal("expected fallback event without legacy private key share")
+	}
+}
+
+func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_AttemptVariationRunDKGConflictFallsBack(
+	t *testing.T,
+) {
+	UnregisterNativeTBTCSignerEngine()
+	UnregisterNativeTBTCSignerFallbackObserver()
+	t.Cleanup(UnregisterNativeTBTCSignerEngine)
+	t.Cleanup(UnregisterNativeTBTCSignerFallbackObserver)
+
+	var firstParticipants []NativeTBTCSignerDKGParticipant
+	engine := &mockBuildTaggedTBTCSignerEngine{
+		version: "tbtc-signer/0.1.0",
+		runDKGFn: func(
+			sessionID string,
+			participants []NativeTBTCSignerDKGParticipant,
+			threshold uint16,
+		) (*NativeTBTCSignerDKGResult, error) {
+			if firstParticipants == nil {
+				firstParticipants = append(
+					[]NativeTBTCSignerDKGParticipant{},
+					participants...,
+				)
+
+				return &NativeTBTCSignerDKGResult{
+					SessionID:        sessionID,
+					KeyGroup:         "group-1",
+					ParticipantCount: uint16(len(participants)),
+					Threshold:        threshold,
+					CreatedAtUnix:    1,
+				}, nil
+			}
+
+			if !reflect.DeepEqual(participants, firstParticipants) {
+				return nil, errors.New("session_conflict")
+			}
+
+			return &NativeTBTCSignerDKGResult{
+				SessionID:        sessionID,
+				KeyGroup:         "group-1",
+				ParticipantCount: uint16(len(participants)),
+				Threshold:        threshold,
+				CreatedAtUnix:    1,
+			}, nil
+		},
+	}
+
+	err := RegisterNativeTBTCSignerEngine(engine)
+	if err != nil {
+		t.Fatalf("unexpected registration error: [%v]", err)
+	}
+
+	var observedEvents []NativeTBTCSignerFallbackEvent
+	err = RegisterNativeTBTCSignerFallbackObserver(
+		func(event NativeTBTCSignerFallbackEvent) {
+			observedEvents = append(observedEvents, event)
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected observer registration error: [%v]", err)
+	}
+
+	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
+
+	baseRequest := &NativeExecutionFFISigningRequest{
+		Message:            big.NewInt(123),
+		SessionID:          "session-1",
+		MemberIndex:        1,
+		GroupSize:          3,
+		DishonestThreshold: 1,
+		SignerMaterial: &NativeSignerMaterial{
+			Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
+			Payload: []byte(`{"keyGroup":"group-1","keyGroupSource":"legacy-wallet-pubkey"}`),
+		},
+	}
+
+	_, err = primitive.Sign(nil, nil, baseRequest)
+	if err == nil {
+		t.Fatal("expected first signing error due to legacy fallback without private key share")
+	}
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected first signing error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	secondRequest := *baseRequest
+	secondRequest.Attempt = &Attempt{
+		ExcludedMembersIndexes: []group.MemberIndex{3},
+	}
+
+	_, err = primitive.Sign(nil, nil, &secondRequest)
+	if err == nil {
+		t.Fatal("expected second signing error due to legacy fallback without private key share")
+	}
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected second signing error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	if len(observedEvents) != 2 {
+		t.Fatalf(
+			"unexpected fallback event count\nexpected: [%d]\nactual:   [%d]",
+			2,
+			len(observedEvents),
+		)
+	}
+
+	if !strings.Contains(observedEvents[1].Reason, "session_conflict") {
+		t.Fatalf(
+			"expected second fallback reason to include session_conflict\nactual: [%s]",
+			observedEvents[1].Reason,
+		)
 	}
 }

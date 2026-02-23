@@ -37,7 +37,8 @@ func defaultNativeExecutionFFISigningPrimitiveProviderForBuild() (
 // is wired end-to-end.
 type buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive struct{}
 
-const buildTaggedTBTCSignerBootstrapVersionToken = "bootstrap"
+const buildTaggedTBTCSignerVersionPrefix = "tbtc-signer/"
+const buildTaggedTBTCSignerBootstrapVersionPrerelease = "bootstrap"
 const buildTaggedTBTCSignerSyntheticContributionDomain = "tbtc-signer-bootstrap-contribution-v1"
 
 type nativeTBTCSignerVersionedEngine interface {
@@ -146,7 +147,7 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 			logger,
 			request,
 			legacyPrivateKeyShare,
-			"tbtc-signer RunDKG failed",
+			fmt.Sprintf("tbtc-signer RunDKG failed: [%v]", err),
 			payload.KeyGroupSource,
 		)
 	}
@@ -173,7 +174,7 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 		)
 	}
 
-	keyGroupForRound, err := buildTaggedTBTCSignerRoundKeyGroup(
+	keyGroupForRound, keyGroupSubstituted, err := buildTaggedTBTCSignerRoundKeyGroup(
 		payload,
 		dkgResult,
 	)
@@ -185,6 +186,15 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 			legacyPrivateKeyShare,
 			err.Error(),
 			payload.KeyGroupSource,
+		)
+	}
+
+	if keyGroupSubstituted && logger != nil {
+		logger.Debugf(
+			"substituting scaffold key group from payload source [%s]: payload [%s] -> RunDKG [%s]",
+			payload.KeyGroupSource,
+			payload.KeyGroup,
+			dkgResult.KeyGroup,
 		)
 	}
 
@@ -207,15 +217,15 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 			logger,
 			request,
 			legacyPrivateKeyShare,
-			"cannot query tbtc-signer version; coarse round scaffold skipped",
+			fmt.Sprintf(
+				"cannot query tbtc-signer version; coarse round scaffold skipped: [%v]",
+				err,
+			),
 			payload.KeyGroupSource,
 		)
 	}
 
-	if !strings.Contains(
-		strings.ToLower(engineVersion),
-		buildTaggedTBTCSignerBootstrapVersionToken,
-	) {
+	if !isBuildTaggedTBTCSignerBootstrapVersion(engineVersion) {
 		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
 			ctx,
 			logger,
@@ -239,7 +249,7 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 			logger,
 			request,
 			legacyPrivateKeyShare,
-			"tbtc-signer bootstrap coarse round failed",
+			fmt.Sprintf("tbtc-signer bootstrap coarse round failed: [%v]", err),
 			payload.KeyGroupSource,
 		)
 	}
@@ -313,30 +323,75 @@ func buildTaggedTBTCSignerDKGPlaceholderPublicKeyHex(identifier uint16) string {
 func buildTaggedTBTCSignerRoundKeyGroup(
 	payload *NativeTBTCSignerMaterialPayload,
 	dkgResult *NativeTBTCSignerDKGResult,
-) (string, error) {
+) (string, bool, error) {
 	if payload == nil {
-		return "", fmt.Errorf("tbtc-signer payload is nil")
+		return "", false, fmt.Errorf("tbtc-signer payload is nil")
 	}
 
 	if dkgResult == nil {
-		return "", fmt.Errorf("tbtc-signer RunDKG result is nil")
+		return "", false, fmt.Errorf("tbtc-signer RunDKG result is nil")
 	}
 
 	if dkgResult.KeyGroup == "" {
-		return "", fmt.Errorf("tbtc-signer RunDKG key group is empty")
+		return "", false, fmt.Errorf("tbtc-signer RunDKG key group is empty")
 	}
 
 	if payload.KeyGroup == dkgResult.KeyGroup {
-		return payload.KeyGroup, nil
+		return payload.KeyGroup, false, nil
 	}
 
 	if payload.KeyGroupSource == NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey {
 		// Scaffold compatibility: legacy-wallet-pubkey key groups are
 		// placeholder-only and expected to diverge from coarse RunDKG output.
-		return dkgResult.KeyGroup, nil
+		return dkgResult.KeyGroup, true, nil
 	}
 
-	return "", fmt.Errorf("tbtc-signer key group does not match RunDKG result")
+	return "", false, fmt.Errorf("tbtc-signer key group does not match RunDKG result")
+}
+
+func isBuildTaggedTBTCSignerBootstrapVersion(version string) bool {
+	version = strings.TrimSpace(version)
+	if !strings.HasPrefix(version, buildTaggedTBTCSignerVersionPrefix) {
+		return false
+	}
+
+	version = strings.TrimPrefix(version, buildTaggedTBTCSignerVersionPrefix)
+	coreVersion, prerelease, hasPrerelease := strings.Cut(version, "-")
+	if !hasPrerelease {
+		return false
+	}
+
+	if prerelease != buildTaggedTBTCSignerBootstrapVersionPrerelease &&
+		!strings.HasPrefix(
+			prerelease,
+			buildTaggedTBTCSignerBootstrapVersionPrerelease+".",
+		) {
+		return false
+	}
+
+	coreSegments := strings.Split(coreVersion, ".")
+	if len(coreSegments) != 3 {
+		return false
+	}
+
+	// Bootstrap scaffold must be enabled only on 0.x.y pre-release builds.
+	if coreSegments[0] != "0" {
+		return false
+	}
+
+	for _, segment := range coreSegments {
+		if segment == "" {
+			return false
+		}
+
+		for _, character := range segment {
+			if character < '0' || character > '9' {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
