@@ -3,6 +3,7 @@
 package signing
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -29,10 +30,18 @@ func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 		"key-group",
 	)
 	if err == nil {
-		t.Fatal("expected not-implemented tbtc-signer bridge error")
+		t.Fatal("expected unavailable tbtc-signer bridge error")
 	}
 
-	if !strings.Contains(err.Error(), "not implemented") {
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"expected native cryptography unavailable error: [%v], got [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	if !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("unexpected bridge error: [%v]", err)
 	}
 }
