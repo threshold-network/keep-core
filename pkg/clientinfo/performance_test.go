@@ -306,6 +306,7 @@ func TestMetricsInitialization(t *testing.T) {
 		MetricDKGJoinedTotal,
 		MetricSigningOperationsTotal,
 		MetricSigningSuccessTotal,
+		MetricSigningNativeTBTCSignerFallbackTotal,
 	}
 
 	for _, counterName := range counters {

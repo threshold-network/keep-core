@@ -216,6 +216,26 @@ func (n *node) setPerformanceMetrics(metrics interface {
 	RecordDuration(name string, duration time.Duration)
 }) {
 	n.performanceMetrics = metrics
+
+	if metrics == nil {
+		signing.UnregisterNativeTBTCSignerFallbackObserver()
+	} else {
+		err := signing.RegisterNativeTBTCSignerFallbackObserver(
+			func(event signing.NativeTBTCSignerFallbackEvent) {
+				metrics.IncrementCounter(
+					clientinfo.MetricSigningNativeTBTCSignerFallbackTotal,
+					1,
+				)
+			},
+		)
+		if err != nil {
+			logger.Warnf(
+				"cannot register native tbtc-signer fallback observer: [%v]",
+				err,
+			)
+		}
+	}
+
 	if n.walletDispatcher != nil {
 		n.walletDispatcher.setMetricsRecorder(metrics)
 	}

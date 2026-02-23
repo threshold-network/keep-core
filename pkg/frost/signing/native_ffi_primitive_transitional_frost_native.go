@@ -122,6 +122,7 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 			"tbtc-signer coarse session flow is not wired (keyGroupSource=%s)",
 			payload.KeyGroupSource,
 		),
+		payload.KeyGroupSource,
 	)
 }
 
@@ -186,7 +187,17 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 	request *NativeExecutionFFISigningRequest,
 	legacyPrivateKeyShare *tecdsa.PrivateKeyShare,
 	reason string,
+	keyGroupSource string,
 ) (*frost.Signature, error) {
+	emitNativeTBTCSignerFallbackEvent(
+		NativeTBTCSignerFallbackEvent{
+			SessionID:                   request.SessionID,
+			Reason:                      reason,
+			KeyGroupSource:              keyGroupSource,
+			LegacyPrivateKeyShareExists: legacyPrivateKeyShare != nil,
+		},
+	)
+
 	if legacyPrivateKeyShare == nil {
 		return nil, fmt.Errorf("%w: %s", ErrNativeCryptographyUnavailable, reason)
 	}

@@ -401,16 +401,28 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 	t *testing.T,
 ) {
 	UnregisterNativeTBTCSignerEngine()
+	UnregisterNativeTBTCSignerFallbackObserver()
 	t.Cleanup(UnregisterNativeTBTCSignerEngine)
+	t.Cleanup(UnregisterNativeTBTCSignerFallbackObserver)
+
+	var observedEvents []NativeTBTCSignerFallbackEvent
+	err := RegisterNativeTBTCSignerFallbackObserver(
+		func(event NativeTBTCSignerFallbackEvent) {
+			observedEvents = append(observedEvents, event)
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected observer registration error: [%v]", err)
+	}
 
 	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
 
-	_, err := primitive.Sign(nil, nil, &NativeExecutionFFISigningRequest{
+	_, err = primitive.Sign(nil, nil, &NativeExecutionFFISigningRequest{
 		Message:   big.NewInt(123),
 		SessionID: "session-1",
 		SignerMaterial: &NativeSignerMaterial{
 			Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
-			Payload: []byte(`{"keyGroup":"group-1"}`),
+			Payload: []byte(`{"keyGroup":"group-1","keyGroupSource":"legacy-wallet-pubkey"}`),
 		},
 	})
 	if err == nil {
@@ -423,5 +435,34 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 			ErrNativeCryptographyUnavailable,
 			err,
 		)
+	}
+
+	if len(observedEvents) != 1 {
+		t.Fatalf(
+			"unexpected fallback event count\nexpected: [%d]\nactual:   [%d]",
+			1,
+			len(observedEvents),
+		)
+	}
+
+	event := observedEvents[0]
+	if event.SessionID != "session-1" {
+		t.Fatalf(
+			"unexpected fallback session ID\nexpected: [%s]\nactual:   [%s]",
+			"session-1",
+			event.SessionID,
+		)
+	}
+
+	if event.KeyGroupSource != "legacy-wallet-pubkey" {
+		t.Fatalf(
+			"unexpected fallback key group source\nexpected: [%s]\nactual:   [%s]",
+			"legacy-wallet-pubkey",
+			event.KeyGroupSource,
+		)
+	}
+
+	if event.LegacyPrivateKeyShareExists {
+		t.Fatal("expected fallback event without legacy private key share")
 	}
 }

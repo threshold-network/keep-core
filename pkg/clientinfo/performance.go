@@ -107,6 +107,7 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricSigningSuccessTotal,
 		MetricSigningFailedTotal,
 		MetricSigningTimeoutsTotal,
+		MetricSigningNativeTBTCSignerFallbackTotal,
 		MetricWalletActionsTotal,
 		MetricWalletActionSuccessTotal,
 		MetricWalletActionFailedTotal,
@@ -125,9 +126,11 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 	}
 
 	// First, initialize all counters in the map
+	pm.countersMutex.Lock()
 	for _, name := range counters {
 		pm.counters[name] = &counter{value: 0}
 	}
+	pm.countersMutex.Unlock()
 
 	// Then, register observers (this prevents concurrent map read/write)
 	for _, name := range counters {
@@ -151,39 +154,59 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 	}
 
 	// Register per-action type wallet metrics
-	// For each action type, register: total, success_total, failed_total, duration_seconds
+	// For each action type, register: total, success_total, failed_total, duration_seconds.
+	// Collect first, then initialize all maps, and only then register observers to
+	// avoid concurrent map writes while observers are reading.
+	perActionCounters := []string{}
+	perActionDurations := []string{}
 	for _, actionType := range GetAllWalletActionTypes() {
-		actionCounters := []string{
+		perActionCounters = append(
+			perActionCounters,
 			WalletActionMetricName(actionType, "total"),
 			WalletActionMetricName(actionType, "success_total"),
 			WalletActionMetricName(actionType, "failed_total"),
-		}
-		for _, name := range actionCounters {
-			pm.counters[name] = &counter{value: 0}
-			metricName := name // Capture for closure
-			pm.registry.ObserveApplicationSource(
-				"performance",
-				map[string]Source{
-					metricName: func() float64 {
-						pm.countersMutex.RLock()
-						c, exists := pm.counters[metricName]
-						pm.countersMutex.RUnlock()
-						if !exists {
-							return 0
-						}
-						c.mutex.RLock()
-						defer c.mutex.RUnlock()
-						return c.value
-					},
-				},
-			)
-		}
+		)
+		perActionDurations = append(
+			perActionDurations,
+			WalletActionMetricName(actionType, "duration_seconds"),
+		)
+	}
 
-		// Register duration metric for this action type
-		durationName := WalletActionMetricName(actionType, "duration_seconds")
+	pm.countersMutex.Lock()
+	for _, name := range perActionCounters {
+		pm.counters[name] = &counter{value: 0}
+	}
+	pm.countersMutex.Unlock()
+
+	for _, name := range perActionCounters {
+		metricName := name // Capture for closure
+		pm.registry.ObserveApplicationSource(
+			"performance",
+			map[string]Source{
+				metricName: func() float64 {
+					pm.countersMutex.RLock()
+					c, exists := pm.counters[metricName]
+					pm.countersMutex.RUnlock()
+					if !exists {
+						return 0
+					}
+					c.mutex.RLock()
+					defer c.mutex.RUnlock()
+					return c.value
+				},
+			},
+		)
+	}
+
+	pm.histogramsMutex.Lock()
+	for _, durationName := range perActionDurations {
 		pm.histograms[durationName] = &histogram{
 			buckets: make(map[float64]float64),
 		}
+	}
+	pm.histogramsMutex.Unlock()
+
+	for _, durationName := range perActionDurations {
 		durationMetricName := durationName // Capture for closure
 		pm.registry.ObserveApplicationSource(
 			"performance",
@@ -218,11 +241,13 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 	}
 
 	// First, initialize all histograms in the map
+	pm.histogramsMutex.Lock()
 	for _, name := range durationMetrics {
 		pm.histograms[name] = &histogram{
 			buckets: make(map[float64]float64),
 		}
 	}
+	pm.histogramsMutex.Unlock()
 
 	// Then, register observers (this prevents concurrent map read/write)
 	for _, name := range durationMetrics {
@@ -273,9 +298,11 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 	}
 
 	// First, initialize all gauges in the map
+	pm.gaugesMutex.Lock()
 	for _, name := range gauges {
 		pm.gauges[name] = &gauge{value: 0}
 	}
+	pm.gaugesMutex.Unlock()
 
 	// Then, register observers (this prevents concurrent map read/write)
 	for _, name := range gauges {
@@ -549,6 +576,9 @@ const (
 	MetricSigningDurationSeconds      = "signing_duration_seconds"
 	MetricSigningAttemptsPerOperation = "signing_attempts_per_operation"
 	MetricSigningTimeoutsTotal        = "signing_timeouts_total"
+	// MetricSigningNativeTBTCSignerFallbackTotal counts the number of times the
+	// frost_tbtc_signer path fell back to legacy tECDSA execution.
+	MetricSigningNativeTBTCSignerFallbackTotal = "signing_native_tbtc_signer_fallback_total"
 
 	// Wallet Action Metrics (aggregate)
 	MetricWalletActionsTotal           = "wallet_actions_total"
