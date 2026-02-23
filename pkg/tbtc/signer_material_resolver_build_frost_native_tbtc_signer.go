@@ -1,8 +1,11 @@
-//go:build frost_native && !(frost_tbtc_signer && cgo)
+//go:build frost_native && frost_tbtc_signer && cgo
 
 package tbtc
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
@@ -31,9 +34,9 @@ func defaultSignerMaterialResolverProviderForBuild() (SignerMaterialResolver, er
 	return &buildTaggedNativeSignerMaterialResolver{}, nil
 }
 
-// buildTaggedNativeSignerMaterialResolver derives transitional native signer
-// material from a legacy private key share for frost_native builds not using
-// the `frost_tbtc_signer` tag.
+// buildTaggedNativeSignerMaterialResolver derives transitional signer material
+// for frost_tbtc_signer builds. It carries a deterministic key-group handle and
+// embeds legacy private-key-share bytes to preserve temporary Go-side fallback.
 type buildTaggedNativeSignerMaterialResolver struct{}
 
 func (btnsmr *buildTaggedNativeSignerMaterialResolver) ResolveSignerMaterial(
@@ -43,13 +46,28 @@ func (btnsmr *buildTaggedNativeSignerMaterialResolver) ResolveSignerMaterial(
 		return nil, fmt.Errorf("private key share is nil")
 	}
 
-	payload, err := privateKeyShare.Marshal()
+	legacyPrivateKeySharePayload, err := privateKeyShare.Marshal()
 	if err != nil {
 		return nil, fmt.Errorf("cannot marshal private key share: [%w]", err)
 	}
 
+	walletPublicKeyBytes, err := marshalPublicKey(privateKeyShare.PublicKey())
+	if err != nil {
+		return nil, fmt.Errorf("cannot marshal wallet public key: [%w]", err)
+	}
+
+	keyGroupDigest := sha256.Sum256(walletPublicKeyBytes)
+
+	payload, err := json.Marshal(tbtcSignerMaterialPayload{
+		KeyGroup:                 hex.EncodeToString(keyGroupDigest[:]),
+		LegacyPrivateKeyShareHex: hex.EncodeToString(legacyPrivateKeySharePayload),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("cannot marshal tbtc signer material payload: [%w]", err)
+	}
+
 	return &frostsigning.NativeSignerMaterial{
-		Format:  frostsigning.NativeSignerMaterialFormatFrostUniFFIV1,
+		Format:  frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
 		Payload: payload,
 	}, nil
 }

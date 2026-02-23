@@ -4,6 +4,7 @@ package signing
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
@@ -90,37 +91,51 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 	logger log.StandardLogger,
 	request *NativeExecutionFFISigningRequest,
 ) (*frost.Signature, error) {
-	keyGroup, err := decodeBuildTaggedTBTCSignerKeyGroup(request.SignerMaterial)
+	payload, err := decodeBuildTaggedTBTCSignerMaterialPayload(request.SignerMaterial)
+	if err != nil {
+		return nil, err
+	}
+
+	legacyPrivateKeyShare, err := decodeBuildTaggedTBTCSignerLegacyPrivateKeyShare(payload)
 	if err != nil {
 		return nil, err
 	}
 
 	engine := currentNativeTBTCSignerEngine()
 	if engine == nil {
-		return nil, fmt.Errorf(
-			"%w: native tbtc-signer engine is unavailable",
-			ErrNativeCryptographyUnavailable,
+		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
+			ctx,
+			logger,
+			request,
+			legacyPrivateKeyShare,
+			"native tbtc-signer engine is unavailable",
 		)
 	}
 
 	_, err = engine.StartSignRound(
 		request.SessionID,
 		request.Message.Bytes(),
-		keyGroup,
+		payload.KeyGroup,
 	)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"%w: tbtc-signer StartSignRound failed: [%v]",
-			ErrNativeCryptographyUnavailable,
-			err,
+		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
+			ctx,
+			logger,
+			request,
+			legacyPrivateKeyShare,
+			fmt.Sprintf("tbtc-signer StartSignRound failed: [%v]", err),
 		)
 	}
 
 	// The coarse-session finalize flow is intentionally deferred until keep-core
-	// transport/orchestration is migrated from round-level message exchange.
-	return nil, fmt.Errorf(
-		"%w: tbtc-signer coarse session finalize flow is not wired",
-		ErrNativeCryptographyUnavailable,
+	// transport/orchestration is migrated from round-level message exchange. Use
+	// a Go-side legacy fallback while this migration is in progress.
+	return btlcnnefsp.fallbackTBTCSignerLegacySigning(
+		ctx,
+		logger,
+		request,
+		legacyPrivateKeyShare,
+		"tbtc-signer coarse session finalize flow is not wired",
 	)
 }
 
@@ -134,6 +149,24 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 	)
 	if err != nil {
 		return nil, err
+	}
+
+	return btlcnnefsp.signWithLegacyPrivateKeyShare(
+		ctx,
+		logger,
+		request,
+		privateKeyShare,
+	)
+}
+
+func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive) signWithLegacyPrivateKeyShare(
+	ctx context.Context,
+	logger log.StandardLogger,
+	request *NativeExecutionFFISigningRequest,
+	privateKeyShare *tecdsa.PrivateKeyShare,
+) (*frost.Signature, error) {
+	if privateKeyShare == nil {
+		return nil, fmt.Errorf("legacy private key share is nil")
 	}
 
 	excludedMembersIndexes := []group.MemberIndex{}
@@ -159,6 +192,32 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 	}
 
 	return FromTECDSASignature(legacyResult.Signature)
+}
+
+func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive) fallbackTBTCSignerLegacySigning(
+	ctx context.Context,
+	logger log.StandardLogger,
+	request *NativeExecutionFFISigningRequest,
+	legacyPrivateKeyShare *tecdsa.PrivateKeyShare,
+	reason string,
+) (*frost.Signature, error) {
+	if legacyPrivateKeyShare == nil {
+		return nil, fmt.Errorf("%w: %s", ErrNativeCryptographyUnavailable, reason)
+	}
+
+	if logger != nil {
+		logger.Warnf(
+			"falling back to legacy tECDSA signer path for tbtc-signer payload: [%s]",
+			reason,
+		)
+	}
+
+	return btlcnnefsp.signWithLegacyPrivateKeyShare(
+		ctx,
+		logger,
+		request,
+		legacyPrivateKeyShare,
+	)
 }
 
 func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive) RegisterUnmarshallers(
@@ -206,21 +265,22 @@ func decodeBuildTaggedLegacyPrivateKeyShare(
 }
 
 type buildTaggedTBTCSignerMaterialPayload struct {
-	KeyGroup string `json:"keyGroup"`
+	KeyGroup                 string `json:"keyGroup"`
+	LegacyPrivateKeyShareHex string `json:"legacyPrivateKeyShareHex,omitempty"`
 }
 
-func decodeBuildTaggedTBTCSignerKeyGroup(
+func decodeBuildTaggedTBTCSignerMaterialPayload(
 	signerMaterial *NativeSignerMaterial,
-) (string, error) {
+) (*buildTaggedTBTCSignerMaterialPayload, error) {
 	if signerMaterial == nil {
-		return "", fmt.Errorf(
+		return nil, fmt.Errorf(
 			"%w: signer material is nil",
 			ErrNativeCryptographyUnavailable,
 		)
 	}
 
 	if signerMaterial.Format != NativeSignerMaterialFormatFrostTBTCSignerV1 {
-		return "", fmt.Errorf(
+		return nil, fmt.Errorf(
 			"%w: unsupported signer material format: [%s]",
 			ErrNativeCryptographyUnavailable,
 			signerMaterial.Format,
@@ -228,7 +288,7 @@ func decodeBuildTaggedTBTCSignerKeyGroup(
 	}
 
 	if len(signerMaterial.Payload) == 0 {
-		return "", fmt.Errorf(
+		return nil, fmt.Errorf(
 			"%w: signer material payload is empty",
 			ErrNativeCryptographyUnavailable,
 		)
@@ -236,7 +296,7 @@ func decodeBuildTaggedTBTCSignerKeyGroup(
 
 	var payload buildTaggedTBTCSignerMaterialPayload
 	if err := json.Unmarshal(signerMaterial.Payload, &payload); err != nil {
-		return "", fmt.Errorf(
+		return nil, fmt.Errorf(
 			"%w: cannot unmarshal tbtc-signer payload: [%v]",
 			ErrNativeCryptographyUnavailable,
 			err,
@@ -244,11 +304,50 @@ func decodeBuildTaggedTBTCSignerKeyGroup(
 	}
 
 	if payload.KeyGroup == "" {
-		return "", fmt.Errorf(
+		return nil, fmt.Errorf(
 			"%w: tbtc-signer key group is empty",
 			ErrNativeCryptographyUnavailable,
 		)
 	}
 
+	return &payload, nil
+}
+
+func decodeBuildTaggedTBTCSignerKeyGroup(
+	signerMaterial *NativeSignerMaterial,
+) (string, error) {
+	payload, err := decodeBuildTaggedTBTCSignerMaterialPayload(signerMaterial)
+	if err != nil {
+		return "", err
+	}
+
 	return payload.KeyGroup, nil
+}
+
+func decodeBuildTaggedTBTCSignerLegacyPrivateKeyShare(
+	payload *buildTaggedTBTCSignerMaterialPayload,
+) (*tecdsa.PrivateKeyShare, error) {
+	if payload == nil || payload.LegacyPrivateKeyShareHex == "" {
+		return nil, nil
+	}
+
+	legacyPrivateKeySharePayload, err := hex.DecodeString(payload.LegacyPrivateKeyShareHex)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"%w: cannot decode tbtc-signer legacy private key share: [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	privateKeyShare := &tecdsa.PrivateKeyShare{}
+	if err := privateKeyShare.Unmarshal(legacyPrivateKeySharePayload); err != nil {
+		return nil, fmt.Errorf(
+			"%w: cannot unmarshal tbtc-signer legacy private key share: [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	return privateKeyShare, nil
 }

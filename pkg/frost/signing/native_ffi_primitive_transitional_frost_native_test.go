@@ -4,6 +4,7 @@ package signing
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -246,6 +247,111 @@ func TestDecodeBuildTaggedTBTCSignerKeyGroup_RejectsInvalidMaterial(
 					ErrNativeCryptographyUnavailable,
 					err,
 				)
+			}
+		})
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerLegacyPrivateKeyShare(t *testing.T) {
+	fixtures, err := tecdsatest.LoadPrivateKeyShareTestFixtures(5)
+	if err != nil {
+		t.Fatalf("failed loading key share fixtures: [%v]", err)
+	}
+
+	expectedPrivateKeyShare := tecdsa.NewPrivateKeyShare(fixtures[0])
+	expectedPayload, err := expectedPrivateKeyShare.Marshal()
+	if err != nil {
+		t.Fatalf("failed marshaling private key share: [%v]", err)
+	}
+
+	decodedPrivateKeyShare, err := decodeBuildTaggedTBTCSignerLegacyPrivateKeyShare(
+		&buildTaggedTBTCSignerMaterialPayload{
+			KeyGroup:                 "group-1",
+			LegacyPrivateKeyShareHex: hex.EncodeToString(expectedPayload),
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected decode error: [%v]", err)
+	}
+
+	if decodedPrivateKeyShare == nil {
+		t.Fatal("expected decoded private key share")
+	}
+
+	actualPayload, err := decodedPrivateKeyShare.Marshal()
+	if err != nil {
+		t.Fatalf("failed marshaling decoded private key share: [%v]", err)
+	}
+
+	if !bytes.Equal(expectedPayload, actualPayload) {
+		t.Fatalf(
+			"unexpected decoded private key share\nexpected: [%x]\nactual:   [%x]",
+			expectedPayload,
+			actualPayload,
+		)
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerLegacyPrivateKeyShare_RejectsInvalidPayload(
+	t *testing.T,
+) {
+	testCases := []struct {
+		name        string
+		payload     *buildTaggedTBTCSignerMaterialPayload
+		expectError bool
+	}{
+		{
+			name:        "nil payload",
+			payload:     nil,
+			expectError: false,
+		},
+		{
+			name:        "empty legacy private key share",
+			payload:     &buildTaggedTBTCSignerMaterialPayload{},
+			expectError: false,
+		},
+		{
+			name: "invalid hex",
+			payload: &buildTaggedTBTCSignerMaterialPayload{
+				LegacyPrivateKeyShareHex: "zz",
+			},
+			expectError: true,
+		},
+		{
+			name: "invalid private key share payload",
+			payload: &buildTaggedTBTCSignerMaterialPayload{
+				LegacyPrivateKeyShareHex: hex.EncodeToString(big.NewInt(123).Bytes()),
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			decoded, err := decodeBuildTaggedTBTCSignerLegacyPrivateKeyShare(tc.payload)
+
+			if tc.expectError {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+
+				if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+					t.Fatalf(
+						"unexpected error\nexpected: [%v]\nactual:   [%v]",
+						ErrNativeCryptographyUnavailable,
+						err,
+					)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("expected nil error, got: [%v]", err)
+			}
+
+			if decoded != nil {
+				t.Fatalf("expected nil decoded private key share, got: [%v]", decoded)
 			}
 		})
 	}
