@@ -10,10 +10,18 @@ const (
 	NativeSignerMaterialFormatFrostTBTCSignerV1 = "frost-tbtc-signer-v1"
 )
 
+// NativeTBTCSignerMaterialPayload is the signer-material payload schema for
+// `frost-tbtc-signer-v1`.
+type NativeTBTCSignerMaterialPayload struct {
+	KeyGroup                 string `json:"keyGroup"`
+	KeyGroupSource           string `json:"keyGroupSource,omitempty"`
+	LegacyPrivateKeyShareHex string `json:"legacyPrivateKeyShareHex,omitempty"`
+}
+
 // NativeTBTCSignerRoundContribution is a participant contribution consumed by
 // tbtc-signer during signature finalization.
 type NativeTBTCSignerRoundContribution struct {
-	Identifier string `json:"identifier"`
+	Identifier uint16 `json:"identifier"`
 	Data       []byte `json:"data"`
 }
 

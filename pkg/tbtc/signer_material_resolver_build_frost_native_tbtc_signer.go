@@ -58,8 +58,11 @@ func (btnsmr *buildTaggedNativeSignerMaterialResolver) ResolveSignerMaterial(
 
 	keyGroupDigest := sha256.Sum256(walletPublicKeyBytes)
 
-	payload, err := json.Marshal(tbtcSignerMaterialPayload{
+	// TODO: Replace this placeholder key-group derivation with Rust DKG output.
+	// The current value identifies scaffold-era material only.
+	payload, err := json.Marshal(frostsigning.NativeTBTCSignerMaterialPayload{
 		KeyGroup:                 hex.EncodeToString(keyGroupDigest[:]),
+		KeyGroupSource:           "legacy-wallet-pubkey",
 		LegacyPrivateKeyShareHex: hex.EncodeToString(legacyPrivateKeySharePayload),
 	})
 	if err != nil {

@@ -265,7 +265,7 @@ func TestDecodeBuildTaggedTBTCSignerLegacyPrivateKeyShare(t *testing.T) {
 	}
 
 	decodedPrivateKeyShare, err := decodeBuildTaggedTBTCSignerLegacyPrivateKeyShare(
-		&buildTaggedTBTCSignerMaterialPayload{
+		&NativeTBTCSignerMaterialPayload{
 			KeyGroup:                 "group-1",
 			LegacyPrivateKeyShareHex: hex.EncodeToString(expectedPayload),
 		},
@@ -297,7 +297,7 @@ func TestDecodeBuildTaggedTBTCSignerLegacyPrivateKeyShare_RejectsInvalidPayload(
 ) {
 	testCases := []struct {
 		name        string
-		payload     *buildTaggedTBTCSignerMaterialPayload
+		payload     *NativeTBTCSignerMaterialPayload
 		expectError bool
 	}{
 		{
@@ -307,19 +307,19 @@ func TestDecodeBuildTaggedTBTCSignerLegacyPrivateKeyShare_RejectsInvalidPayload(
 		},
 		{
 			name:        "empty legacy private key share",
-			payload:     &buildTaggedTBTCSignerMaterialPayload{},
+			payload:     &NativeTBTCSignerMaterialPayload{},
 			expectError: false,
 		},
 		{
 			name: "invalid hex",
-			payload: &buildTaggedTBTCSignerMaterialPayload{
+			payload: &NativeTBTCSignerMaterialPayload{
 				LegacyPrivateKeyShareHex: "zz",
 			},
 			expectError: true,
 		},
 		{
 			name: "invalid private key share payload",
-			payload: &buildTaggedTBTCSignerMaterialPayload{
+			payload: &NativeTBTCSignerMaterialPayload{
 				LegacyPrivateKeyShareHex: hex.EncodeToString(big.NewInt(123).Bytes()),
 			},
 			expectError: true,
@@ -391,23 +391,37 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 		)
 	}
 
-	if !engine.startCalled {
-		t.Fatal("expected StartSignRound call")
+	if engine.startCalled {
+		t.Fatal("did not expect StartSignRound call while coarse finalize flow is unwired")
 	}
 
-	if engine.sessionID != "session-1" {
-		t.Fatalf(
-			"unexpected session ID\nexpected: [%v]\nactual:   [%v]",
-			"session-1",
-			engine.sessionID,
-		)
+}
+
+func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_NoEngineNoLegacyShare(
+	t *testing.T,
+) {
+	UnregisterNativeTBTCSignerEngine()
+	t.Cleanup(UnregisterNativeTBTCSignerEngine)
+
+	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
+
+	_, err := primitive.Sign(nil, nil, &NativeExecutionFFISigningRequest{
+		Message:   big.NewInt(123),
+		SessionID: "session-1",
+		SignerMaterial: &NativeSignerMaterial{
+			Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
+			Payload: []byte(`{"keyGroup":"group-1"}`),
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error")
 	}
 
-	if engine.keyGroup != "group-1" {
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
 		t.Fatalf(
-			"unexpected key group\nexpected: [%v]\nactual:   [%v]",
-			"group-1",
-			engine.keyGroup,
+			"unexpected error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
 		)
 	}
 }

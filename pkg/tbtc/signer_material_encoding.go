@@ -244,7 +244,7 @@ func legacyPrivateKeyShareFromNativeSignerMaterial(
 		return privateKeyShare
 
 	case frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1:
-		var payload tbtcSignerMaterialPayload
+		var payload frostsigning.NativeTBTCSignerMaterialPayload
 		if err := json.Unmarshal(nativeSignerMaterial.Payload, &payload); err != nil {
 			return nil
 		}

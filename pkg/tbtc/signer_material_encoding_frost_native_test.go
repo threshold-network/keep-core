@@ -66,13 +66,17 @@ func TestUnmarshalSignerMaterialFromPersistence_LegacyEncodingResolvesNativeMate
 		}
 
 	case frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1:
-		var payload tbtcSignerMaterialPayload
+		var payload frostsigning.NativeTBTCSignerMaterialPayload
 		if err := json.Unmarshal(nativeSignerMaterial.Payload, &payload); err != nil {
 			t.Fatalf("failed unmarshalling tbtc signer material payload: [%v]", err)
 		}
 
 		if payload.KeyGroup == "" {
 			t.Fatal("expected non-empty tbtc-signer key group")
+		}
+
+		if payload.KeyGroupSource == "" {
+			t.Fatal("expected non-empty tbtc-signer key group source")
 		}
 
 		legacyPrivateKeySharePayload, err := hex.DecodeString(payload.LegacyPrivateKeyShareHex)

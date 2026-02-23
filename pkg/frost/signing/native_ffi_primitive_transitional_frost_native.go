@@ -30,8 +30,9 @@ func defaultNativeExecutionFFISigningPrimitiveProviderForBuild() (
 // buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive is a
 // transitional primitive that executes native two-round FROST when
 // `frost-uniffi-v2` signer material is provided, and preserves legacy bridge
-// execution for `frost-uniffi-v1` payloads. `frost-tbtc-signer-v1` is reserved
-// for coarse session engine integration and currently returns a scaffold error.
+// execution for `frost-uniffi-v1` payloads. `frost-tbtc-signer-v1` currently
+// routes through a temporary legacy fallback until coarse session finalize flow
+// is wired end-to-end.
 type buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive struct{}
 
 func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive) Sign(
@@ -101,41 +102,26 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 		return nil, err
 	}
 
-	engine := currentNativeTBTCSignerEngine()
-	if engine == nil {
-		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
-			ctx,
-			logger,
-			request,
-			legacyPrivateKeyShare,
-			"native tbtc-signer engine is unavailable",
+	// Do not start coarse native sessions until finalize flow is wired. Calling
+	// StartSignRound without finalize would orphan signer-engine state.
+	if currentNativeTBTCSignerEngine() != nil && logger != nil {
+		logger.Warnf(
+			"native tbtc-signer engine is registered but coarse finalize flow is not wired; using legacy fallback",
 		)
 	}
 
-	_, err = engine.StartSignRound(
-		request.SessionID,
-		request.Message.Bytes(),
-		payload.KeyGroup,
-	)
-	if err != nil {
-		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
-			ctx,
-			logger,
-			request,
-			legacyPrivateKeyShare,
-			fmt.Sprintf("tbtc-signer StartSignRound failed: [%v]", err),
-		)
-	}
-
-	// The coarse-session finalize flow is intentionally deferred until keep-core
-	// transport/orchestration is migrated from round-level message exchange. Use
-	// a Go-side legacy fallback while this migration is in progress.
+	// The coarse-session flow is intentionally deferred until keep-core
+	// orchestration is migrated from round-level message exchange. Use a Go-side
+	// legacy fallback while this migration is in progress.
 	return btlcnnefsp.fallbackTBTCSignerLegacySigning(
 		ctx,
 		logger,
 		request,
 		legacyPrivateKeyShare,
-		"tbtc-signer coarse session finalize flow is not wired",
+		fmt.Sprintf(
+			"tbtc-signer coarse session flow is not wired (keyGroupSource=%s)",
+			payload.KeyGroupSource,
+		),
 	)
 }
 
@@ -264,14 +250,9 @@ func decodeBuildTaggedLegacyPrivateKeyShare(
 	return privateKeyShare, nil
 }
 
-type buildTaggedTBTCSignerMaterialPayload struct {
-	KeyGroup                 string `json:"keyGroup"`
-	LegacyPrivateKeyShareHex string `json:"legacyPrivateKeyShareHex,omitempty"`
-}
-
 func decodeBuildTaggedTBTCSignerMaterialPayload(
 	signerMaterial *NativeSignerMaterial,
-) (*buildTaggedTBTCSignerMaterialPayload, error) {
+) (*NativeTBTCSignerMaterialPayload, error) {
 	if signerMaterial == nil {
 		return nil, fmt.Errorf(
 			"%w: signer material is nil",
@@ -294,7 +275,7 @@ func decodeBuildTaggedTBTCSignerMaterialPayload(
 		)
 	}
 
-	var payload buildTaggedTBTCSignerMaterialPayload
+	var payload NativeTBTCSignerMaterialPayload
 	if err := json.Unmarshal(signerMaterial.Payload, &payload); err != nil {
 		return nil, fmt.Errorf(
 			"%w: cannot unmarshal tbtc-signer payload: [%v]",
@@ -325,7 +306,7 @@ func decodeBuildTaggedTBTCSignerKeyGroup(
 }
 
 func decodeBuildTaggedTBTCSignerLegacyPrivateKeyShare(
-	payload *buildTaggedTBTCSignerMaterialPayload,
+	payload *NativeTBTCSignerMaterialPayload,
 ) (*tecdsa.PrivateKeyShare, error) {
 	if payload == nil || payload.LegacyPrivateKeyShareHex == "" {
 		return nil, nil
