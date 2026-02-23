@@ -4,14 +4,18 @@ package signing
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"errors"
 	"math/big"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/keep-network/keep-core/pkg/internal/tecdsatest"
+	"github.com/keep-network/keep-core/pkg/net/local"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
@@ -131,6 +135,67 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) FinalizeSignRound(
 	}
 
 	return []byte{0xaa}, nil
+}
+
+type deterministicBuildTaggedTBTCSignerBootstrapRoundEngine struct {
+	roundState    *NativeTBTCSignerRoundState
+	finalizeMutex sync.Mutex
+	finalizeCalls int
+	finalizeInput []NativeTBTCSignerRoundContribution
+}
+
+func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) RunDKG(
+	sessionID string,
+	participants []NativeTBTCSignerDKGParticipant,
+	threshold uint16,
+) (*NativeTBTCSignerDKGResult, error) {
+	return &NativeTBTCSignerDKGResult{
+		SessionID:        sessionID,
+		KeyGroup:         "group-1",
+		ParticipantCount: uint16(len(participants)),
+		Threshold:        threshold,
+		CreatedAtUnix:    1,
+	}, nil
+}
+
+func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) StartSignRound(
+	sessionID string,
+	_ []byte,
+	_ string,
+) (*NativeTBTCSignerRoundState, error) {
+	if dbttsbre.roundState != nil {
+		return dbttsbre.roundState, nil
+	}
+
+	return &NativeTBTCSignerRoundState{
+		SessionID:             sessionID,
+		RoundID:               "round-1",
+		RequiredContributions: 2,
+		MessageDigestHex:      "00",
+	}, nil
+}
+
+func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) FinalizeSignRound(
+	_ string,
+	roundContributions []NativeTBTCSignerRoundContribution,
+) ([]byte, error) {
+	dbttsbre.finalizeMutex.Lock()
+	defer dbttsbre.finalizeMutex.Unlock()
+
+	dbttsbre.finalizeCalls++
+	dbttsbre.finalizeInput = append(
+		[]NativeTBTCSignerRoundContribution{},
+		roundContributions...,
+	)
+
+	return []byte{0xaa}, nil
+}
+
+func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) finalizeInputs() []NativeTBTCSignerRoundContribution {
+	dbttsbre.finalizeMutex.Lock()
+	defer dbttsbre.finalizeMutex.Unlock()
+
+	return append([]NativeTBTCSignerRoundContribution{}, dbttsbre.finalizeInput...)
 }
 
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_ValidatesRequest(
@@ -662,6 +727,119 @@ func TestBuildTaggedTBTCSignerSyntheticRoundContributions_RejectsInvalidInput(t 
 				t.Fatal("expected error")
 			}
 		})
+	}
+}
+
+func TestExecuteBuildTaggedTBTCSignerBootstrapCoarseRound_ExchangesContributionsOverChannel(
+	t *testing.T,
+) {
+	provider := local.Connect()
+	channel, err := provider.BroadcastChannelFor("tbtc-signer-bootstrap-round-plumbing-test")
+	if err != nil {
+		t.Fatalf("failed creating broadcast channel: [%v]", err)
+	}
+
+	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
+	primitive.RegisterUnmarshallers(channel)
+
+	roundState := &NativeTBTCSignerRoundState{
+		SessionID:             "session-1",
+		RoundID:               "round-1",
+		RequiredContributions: 2,
+		MessageDigestHex:      "0011",
+	}
+
+	engineByMember := map[group.MemberIndex]*deterministicBuildTaggedTBTCSignerBootstrapRoundEngine{
+		1: &deterministicBuildTaggedTBTCSignerBootstrapRoundEngine{roundState: roundState},
+		2: &deterministicBuildTaggedTBTCSignerBootstrapRoundEngine{roundState: roundState},
+	}
+
+	requestByMember := map[group.MemberIndex]*NativeExecutionFFISigningRequest{
+		1: {
+			Message:            big.NewInt(123),
+			SessionID:          "session-1",
+			MemberIndex:        1,
+			GroupSize:          2,
+			DishonestThreshold: 1,
+			Channel:            channel,
+			Attempt: &Attempt{
+				Number:                 1,
+				CoordinatorMemberIndex: 1,
+				IncludedMembersIndexes: []group.MemberIndex{1, 2},
+			},
+		},
+		2: {
+			Message:            big.NewInt(123),
+			SessionID:          "session-1",
+			MemberIndex:        2,
+			GroupSize:          2,
+			DishonestThreshold: 1,
+			Channel:            channel,
+			Attempt: &Attempt{
+				Number:                 1,
+				CoordinatorMemberIndex: 1,
+				IncludedMembersIndexes: []group.MemberIndex{1, 2},
+			},
+		},
+	}
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelCtx()
+
+	var wg sync.WaitGroup
+	signingErrors := make(chan error, len(requestByMember))
+
+	for memberIndex, request := range requestByMember {
+		engine := engineByMember[memberIndex]
+		wg.Add(1)
+
+		go func(
+			signingRequest *NativeExecutionFFISigningRequest,
+			signingEngine NativeTBTCSignerEngine,
+		) {
+			defer wg.Done()
+
+			signingErrors <- executeBuildTaggedTBTCSignerBootstrapCoarseRound(
+				ctx,
+				signingRequest,
+				"group-1",
+				signingEngine,
+			)
+		}(request, engine)
+	}
+
+	wg.Wait()
+	close(signingErrors)
+
+	for signingErr := range signingErrors {
+		if signingErr != nil {
+			t.Fatalf("unexpected signing error: [%v]", signingErr)
+		}
+	}
+
+	for memberIndex, engine := range engineByMember {
+		finalizeInputs := engine.finalizeInputs()
+		if len(finalizeInputs) != 2 {
+			t.Fatalf(
+				"unexpected finalize input count for member [%v]\nexpected: [%v]\nactual:   [%v]",
+				memberIndex,
+				2,
+				len(finalizeInputs),
+			)
+		}
+
+		if finalizeInputs[0].Identifier != 1 || finalizeInputs[1].Identifier != 2 {
+			t.Fatalf(
+				"unexpected finalize identifiers for member [%v]\nexpected: [1 2]\nactual:   [%v %v]",
+				memberIndex,
+				finalizeInputs[0].Identifier,
+				finalizeInputs[1].Identifier,
+			)
+		}
+
+		if len(finalizeInputs[0].Data) == 0 || len(finalizeInputs[1].Data) == 0 {
+			t.Fatalf("expected non-empty finalize contribution data for member [%v]", memberIndex)
+		}
 	}
 }
 

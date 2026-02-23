@@ -40,9 +40,57 @@ type buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive struct{}
 const buildTaggedTBTCSignerVersionPrefix = "tbtc-signer/"
 const buildTaggedTBTCSignerBootstrapVersionPrerelease = "bootstrap"
 const buildTaggedTBTCSignerSyntheticContributionDomain = "tbtc-signer-bootstrap-contribution-v1"
+const buildTaggedTBTCSignerMessageTypePrefix = "frost_signing/native_tbtc_signer/"
 
 type nativeTBTCSignerVersionedEngine interface {
 	Version() (string, error)
+}
+
+type buildTaggedTBTCSignerRoundContributionMessage struct {
+	SenderIDValue          uint32 `json:"senderID"`
+	SessionIDValue         string `json:"sessionID"`
+	ContributionIdentifier uint16 `json:"contributionIdentifier"`
+	ContributionData       []byte `json:"contributionData"`
+}
+
+func (bttsrcm *buildTaggedTBTCSignerRoundContributionMessage) SenderID() group.MemberIndex {
+	return group.MemberIndex(bttsrcm.SenderIDValue)
+}
+
+func (bttsrcm *buildTaggedTBTCSignerRoundContributionMessage) SessionID() string {
+	return bttsrcm.SessionIDValue
+}
+
+func (bttsrcm *buildTaggedTBTCSignerRoundContributionMessage) Type() string {
+	return buildTaggedTBTCSignerMessageTypePrefix + "round_contribution"
+}
+
+func (bttsrcm *buildTaggedTBTCSignerRoundContributionMessage) Marshal() ([]byte, error) {
+	return json.Marshal(bttsrcm)
+}
+
+func (bttsrcm *buildTaggedTBTCSignerRoundContributionMessage) Unmarshal(data []byte) error {
+	if err := json.Unmarshal(data, bttsrcm); err != nil {
+		return err
+	}
+
+	if bttsrcm.SenderID() == 0 {
+		return fmt.Errorf("sender ID is zero")
+	}
+
+	if bttsrcm.SessionID() == "" {
+		return fmt.Errorf("session ID is empty")
+	}
+
+	if bttsrcm.ContributionIdentifier == 0 {
+		return fmt.Errorf("contribution identifier is zero")
+	}
+
+	if len(bttsrcm.ContributionData) == 0 {
+		return fmt.Errorf("contribution data is empty")
+	}
+
+	return nil
 }
 
 func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive) Sign(
@@ -240,6 +288,7 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 	}
 
 	if err := executeBuildTaggedTBTCSignerBootstrapCoarseRound(
+		ctx,
 		request,
 		keyGroupForRound,
 		nativeEngine,
@@ -395,6 +444,7 @@ func isBuildTaggedTBTCSignerBootstrapVersion(version string) bool {
 }
 
 func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
+	ctx context.Context,
 	request *NativeExecutionFFISigningRequest,
 	keyGroup string,
 	nativeEngine NativeTBTCSignerEngine,
@@ -409,6 +459,22 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 
 	if nativeEngine == nil {
 		return fmt.Errorf("native tbtc-signer engine is nil")
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	includedMembersSet, includedMembersIndexes, err := includedMembersFromRequest(request)
+	if err != nil {
+		return fmt.Errorf("cannot determine included members: [%w]", err)
+	}
+
+	if _, ok := includedMembersSet[request.MemberIndex]; !ok {
+		return fmt.Errorf(
+			"member [%v] not included in tbtc-signer signing attempt",
+			request.MemberIndex,
+		)
 	}
 
 	messageBytes := request.Message.Bytes()
@@ -433,22 +499,20 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 		return fmt.Errorf("start sign round required contributions are zero")
 	}
 
-	_, includedMembersIndexes, err := includedMembersFromRequest(request)
-	if err != nil {
-		return fmt.Errorf("cannot determine included members: [%w]", err)
-	}
-
-	roundContributions, err := buildTaggedTBTCSignerSyntheticRoundContributions(
+	roundContributions, err := buildTaggedTBTCSignerRoundContributions(
+		ctx,
+		request,
 		roundState,
+		includedMembersSet,
 		includedMembersIndexes,
 	)
 	if err != nil {
-		return fmt.Errorf("cannot build synthetic round contributions: [%w]", err)
+		return fmt.Errorf("cannot collect round contributions: [%w]", err)
 	}
 
 	if len(roundContributions) < int(roundState.RequiredContributions) {
 		return fmt.Errorf(
-			"insufficient synthetic round contributions: [%v] < [%v]",
+			"insufficient round contributions: [%v] < [%v]",
 			len(roundContributions),
 			roundState.RequiredContributions,
 		)
@@ -467,6 +531,154 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 	}
 
 	return nil
+}
+
+func buildTaggedTBTCSignerRoundContributions(
+	ctx context.Context,
+	request *NativeExecutionFFISigningRequest,
+	roundState *NativeTBTCSignerRoundState,
+	includedMembersSet map[group.MemberIndex]struct{},
+	includedMembersIndexes []group.MemberIndex,
+) ([]NativeTBTCSignerRoundContribution, error) {
+	if request == nil {
+		return nil, fmt.Errorf("request is nil")
+	}
+
+	if request.Channel == nil {
+		// Compatibility path for unit tests that do not attach a broadcast
+		// channel. Runtime signer flows provide a channel and use contribution
+		// exchange with peers.
+		return buildTaggedTBTCSignerSyntheticRoundContributions(
+			roundState,
+			includedMembersIndexes,
+		)
+	}
+
+	ownContributions, err := buildTaggedTBTCSignerSyntheticRoundContributions(
+		roundState,
+		[]group.MemberIndex{request.MemberIndex},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build own round contribution: [%w]", err)
+	}
+
+	if len(ownContributions) != 1 {
+		return nil, fmt.Errorf("unexpected own contribution count: [%v]", len(ownContributions))
+	}
+
+	ownContribution := ownContributions[0]
+
+	roundContributionMessage := &buildTaggedTBTCSignerRoundContributionMessage{
+		SenderIDValue:          uint32(request.MemberIndex),
+		SessionIDValue:         request.SessionID,
+		ContributionIdentifier: ownContribution.Identifier,
+		ContributionData:       append([]byte{}, ownContribution.Data...),
+	}
+
+	if err := request.Channel.Send(
+		ctx,
+		roundContributionMessage,
+		net.BackoffRetransmissionStrategy,
+	); err != nil {
+		return nil, fmt.Errorf("cannot send round contribution message: [%w]", err)
+	}
+
+	peerMessages, err := collectBuildTaggedTBTCSignerRoundContributionMessages(
+		ctx,
+		request,
+		includedMembersSet,
+		includedMembersIndexes,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	contributionsBySender := map[group.MemberIndex]NativeTBTCSignerRoundContribution{
+		request.MemberIndex: ownContribution,
+	}
+
+	for senderID, message := range peerMessages {
+		contributionsBySender[senderID] = NativeTBTCSignerRoundContribution{
+			Identifier: message.ContributionIdentifier,
+			Data:       append([]byte{}, message.ContributionData...),
+		}
+	}
+
+	orderedContributions := make(
+		[]NativeTBTCSignerRoundContribution,
+		0,
+		len(includedMembersIndexes),
+	)
+	for _, memberIndex := range includedMembersIndexes {
+		contribution, ok := contributionsBySender[memberIndex]
+		if !ok {
+			return nil, fmt.Errorf("missing contribution from member [%v]", memberIndex)
+		}
+
+		orderedContributions = append(orderedContributions, contribution)
+	}
+
+	return orderedContributions, nil
+}
+
+func collectBuildTaggedTBTCSignerRoundContributionMessages(
+	ctx context.Context,
+	request *NativeExecutionFFISigningRequest,
+	includedMembersSet map[group.MemberIndex]struct{},
+	includedMembersIndexes []group.MemberIndex,
+) (map[group.MemberIndex]*buildTaggedTBTCSignerRoundContributionMessage, error) {
+	expectedMessagesCount := len(includedMembersIndexes) - 1
+	if expectedMessagesCount <= 0 {
+		return map[group.MemberIndex]*buildTaggedTBTCSignerRoundContributionMessage{}, nil
+	}
+
+	recvCtx, cancelRecvCtx := context.WithCancel(ctx)
+	defer cancelRecvCtx()
+
+	messageChan := make(
+		chan *buildTaggedTBTCSignerRoundContributionMessage,
+		expectedMessagesCount*4+1,
+	)
+
+	request.Channel.Recv(recvCtx, func(message net.Message) {
+		payload, ok := message.Payload().(*buildTaggedTBTCSignerRoundContributionMessage)
+		if !ok {
+			return
+		}
+
+		if !shouldAcceptNativeFROSTMessage(
+			request,
+			includedMembersSet,
+			payload.SenderID(),
+			payload.SessionID(),
+			message.SenderPublicKey(),
+		) {
+			return
+		}
+
+		select {
+		case messageChan <- payload:
+		default:
+		}
+	})
+
+	receivedMessages := make(
+		map[group.MemberIndex]*buildTaggedTBTCSignerRoundContributionMessage,
+	)
+	for len(receivedMessages) < expectedMessagesCount {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf(
+				"tbtc-signer round contribution collection interrupted: [%w]",
+				ctx.Err(),
+			)
+
+		case message := <-messageChan:
+			receivedMessages[message.SenderID()] = message
+		}
+	}
+
+	return receivedMessages, nil
 }
 
 func buildTaggedTBTCSignerSyntheticRoundContributions(
@@ -617,8 +829,15 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive) RegisterUnmarshallers(
 	channel net.BroadcastChannel,
 ) {
+	registerBuildTaggedTBTCSignerUnmarshallers(channel)
 	registerNativeFROSTSigningUnmarshallers(channel)
 	legacySigning.RegisterUnmarshallers(channel)
+}
+
+func registerBuildTaggedTBTCSignerUnmarshallers(channel net.BroadcastChannel) {
+	channel.SetUnmarshaler(func() net.TaggedUnmarshaler {
+		return &buildTaggedTBTCSignerRoundContributionMessage{}
+	})
 }
 
 func decodeBuildTaggedLegacyPrivateKeyShare(
