@@ -62,7 +62,7 @@ func (btnsmr *buildTaggedNativeSignerMaterialResolver) ResolveSignerMaterial(
 	// The current value identifies scaffold-era material only.
 	payload, err := json.Marshal(frostsigning.NativeTBTCSignerMaterialPayload{
 		KeyGroup:                 hex.EncodeToString(keyGroupDigest[:]),
-		KeyGroupSource:           "legacy-wallet-pubkey",
+		KeyGroupSource:           frostsigning.NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey,
 		LegacyPrivateKeyShareHex: hex.EncodeToString(legacyPrivateKeySharePayload),
 	})
 	if err != nil {

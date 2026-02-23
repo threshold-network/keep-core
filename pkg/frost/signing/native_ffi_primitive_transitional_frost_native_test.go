@@ -518,6 +518,74 @@ func TestBuildTaggedTBTCSignerRunDKGInputs_RejectsInvalidRequest(t *testing.T) {
 	}
 }
 
+func TestBuildTaggedTBTCSignerRoundKeyGroup(t *testing.T) {
+	testCases := []struct {
+		name        string
+		payload     *NativeTBTCSignerMaterialPayload
+		dkgResult   *NativeTBTCSignerDKGResult
+		expected    string
+		expectError bool
+	}{
+		{
+			name: "exact match",
+			payload: &NativeTBTCSignerMaterialPayload{
+				KeyGroup: "group-1",
+			},
+			dkgResult: &NativeTBTCSignerDKGResult{
+				KeyGroup: "group-1",
+			},
+			expected: "group-1",
+		},
+		{
+			name: "legacy source mismatch uses dkg key group",
+			payload: &NativeTBTCSignerMaterialPayload{
+				KeyGroup:       "legacy-group",
+				KeyGroupSource: NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey,
+			},
+			dkgResult: &NativeTBTCSignerDKGResult{
+				KeyGroup: "dkg-group",
+			},
+			expected: "dkg-group",
+		},
+		{
+			name: "non-legacy source mismatch rejects",
+			payload: &NativeTBTCSignerMaterialPayload{
+				KeyGroup:       "legacy-group",
+				KeyGroupSource: "dkg-persisted",
+			},
+			dkgResult: &NativeTBTCSignerDKGResult{
+				KeyGroup: "dkg-group",
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			actual, err := buildTaggedTBTCSignerRoundKeyGroup(tc.payload, tc.dkgResult)
+			if tc.expectError {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: [%v]", err)
+			}
+
+			if actual != tc.expected {
+				t.Fatalf(
+					"unexpected key group\nexpected: [%v]\nactual:   [%v]",
+					tc.expected,
+					actual,
+				)
+			}
+		})
+	}
+}
+
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath(
 	t *testing.T,
 ) {
@@ -690,6 +758,129 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 		if len(contribution.Data) == 0 {
 			t.Fatalf("expected non-empty contribution data at index [%d]", i)
 		}
+	}
+}
+
+func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_BootstrapVersion_LegacyKeyGroupSourceUsesRunDKGResult(
+	t *testing.T,
+) {
+	engine := &mockBuildTaggedTBTCSignerEngine{
+		version: "tbtc-signer/0.1.0-bootstrap",
+		runDKGResult: &NativeTBTCSignerDKGResult{
+			SessionID:        "session-1",
+			KeyGroup:         "group-from-dkg",
+			ParticipantCount: 3,
+			Threshold:        2,
+			CreatedAtUnix:    1,
+		},
+		finalizeSignature: []byte{0xaa},
+	}
+	UnregisterNativeTBTCSignerEngine()
+	t.Cleanup(UnregisterNativeTBTCSignerEngine)
+
+	err := RegisterNativeTBTCSignerEngine(engine)
+	if err != nil {
+		t.Fatalf("unexpected registration error: [%v]", err)
+	}
+
+	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
+
+	_, err = primitive.Sign(nil, nil, &NativeExecutionFFISigningRequest{
+		Message:            big.NewInt(123),
+		SessionID:          "session-1",
+		MemberIndex:        1,
+		GroupSize:          3,
+		DishonestThreshold: 1,
+		SignerMaterial: &NativeSignerMaterial{
+			Format: NativeSignerMaterialFormatFrostTBTCSignerV1,
+			Payload: []byte(
+				`{"keyGroup":"legacy-wallet-derived","keyGroupSource":"legacy-wallet-pubkey"}`,
+			),
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	if !engine.startCalled {
+		t.Fatal("expected StartSignRound call in bootstrap path")
+	}
+
+	if engine.startKeyGroup != "group-from-dkg" {
+		t.Fatalf(
+			"unexpected StartSignRound key group\nexpected: [%v]\nactual:   [%v]",
+			"group-from-dkg",
+			engine.startKeyGroup,
+		)
+	}
+
+	if !engine.finalizeCalled {
+		t.Fatal("expected FinalizeSignRound call in bootstrap path")
+	}
+}
+
+func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_BootstrapVersion_KeyGroupMismatchNonLegacySourceSkipsCoarseRound(
+	t *testing.T,
+) {
+	engine := &mockBuildTaggedTBTCSignerEngine{
+		version: "tbtc-signer/0.1.0-bootstrap",
+		runDKGResult: &NativeTBTCSignerDKGResult{
+			SessionID:        "session-1",
+			KeyGroup:         "group-from-dkg",
+			ParticipantCount: 3,
+			Threshold:        2,
+			CreatedAtUnix:    1,
+		},
+	}
+	UnregisterNativeTBTCSignerEngine()
+	t.Cleanup(UnregisterNativeTBTCSignerEngine)
+
+	err := RegisterNativeTBTCSignerEngine(engine)
+	if err != nil {
+		t.Fatalf("unexpected registration error: [%v]", err)
+	}
+
+	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
+
+	_, err = primitive.Sign(nil, nil, &NativeExecutionFFISigningRequest{
+		Message:            big.NewInt(123),
+		SessionID:          "session-1",
+		MemberIndex:        1,
+		GroupSize:          3,
+		DishonestThreshold: 1,
+		SignerMaterial: &NativeSignerMaterial{
+			Format: NativeSignerMaterialFormatFrostTBTCSignerV1,
+			Payload: []byte(
+				`{"keyGroup":"legacy-wallet-derived","keyGroupSource":"dkg-persisted"}`,
+			),
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	if engine.startCalled {
+		t.Fatal("did not expect StartSignRound call for non-legacy key-group mismatch")
+	}
+
+	if engine.finalizeCalled {
+		t.Fatal("did not expect FinalizeSignRound call for non-legacy key-group mismatch")
 	}
 }
 

@@ -171,13 +171,17 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 		)
 	}
 
-	if payload.KeyGroup != dkgResult.KeyGroup {
+	keyGroupForRound, err := buildTaggedTBTCSignerRoundKeyGroup(
+		payload,
+		dkgResult,
+	)
+	if err != nil {
 		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
 			ctx,
 			logger,
 			request,
 			legacyPrivateKeyShare,
-			"tbtc-signer key group does not match RunDKG result",
+			err.Error(),
 			payload.KeyGroupSource,
 		)
 	}
@@ -225,7 +229,7 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 
 	if err := executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 		request,
-		payload.KeyGroup,
+		keyGroupForRound,
 		nativeEngine,
 	); err != nil {
 		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
@@ -302,6 +306,35 @@ func buildTaggedTBTCSignerDKGPlaceholderPublicKeyHex(identifier uint16) string {
 	// Transitional placeholder until canonical member public keys are available
 	// in the native signing request path.
 	return fmt.Sprintf("02%04x", identifier)
+}
+
+func buildTaggedTBTCSignerRoundKeyGroup(
+	payload *NativeTBTCSignerMaterialPayload,
+	dkgResult *NativeTBTCSignerDKGResult,
+) (string, error) {
+	if payload == nil {
+		return "", fmt.Errorf("tbtc-signer payload is nil")
+	}
+
+	if dkgResult == nil {
+		return "", fmt.Errorf("tbtc-signer RunDKG result is nil")
+	}
+
+	if dkgResult.KeyGroup == "" {
+		return "", fmt.Errorf("tbtc-signer RunDKG key group is empty")
+	}
+
+	if payload.KeyGroup == dkgResult.KeyGroup {
+		return payload.KeyGroup, nil
+	}
+
+	if payload.KeyGroupSource == NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey {
+		// Scaffold compatibility: legacy-wallet-pubkey key groups are
+		// placeholder-only and expected to diverge from coarse RunDKG output.
+		return dkgResult.KeyGroup, nil
+	}
+
+	return "", fmt.Errorf("tbtc-signer key group does not match RunDKG result")
 }
 
 func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
