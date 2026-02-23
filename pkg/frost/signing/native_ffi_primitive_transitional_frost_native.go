@@ -102,11 +102,82 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 		return nil, err
 	}
 
-	// Do not start coarse native sessions until finalize flow is wired. Calling
-	// StartSignRound without finalize would orphan signer-engine state.
-	if currentNativeTBTCSignerEngine() != nil && logger != nil {
-		logger.Warnf(
-			"native tbtc-signer engine is registered but coarse finalize flow is not wired; using legacy fallback",
+	nativeEngine := currentNativeTBTCSignerEngine()
+	if nativeEngine == nil {
+		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
+			ctx,
+			logger,
+			request,
+			legacyPrivateKeyShare,
+			"native tbtc-signer engine is unavailable",
+			payload.KeyGroupSource,
+		)
+	}
+
+	dkgParticipants, dkgThreshold, err := buildTaggedTBTCSignerRunDKGInputs(request)
+	if err != nil {
+		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
+			ctx,
+			logger,
+			request,
+			legacyPrivateKeyShare,
+			fmt.Sprintf("cannot prepare tbtc-signer RunDKG request: [%v]", err),
+			payload.KeyGroupSource,
+		)
+	}
+
+	dkgResult, err := nativeEngine.RunDKG(
+		request.SessionID,
+		dkgParticipants,
+		dkgThreshold,
+	)
+	if err != nil {
+		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
+			ctx,
+			logger,
+			request,
+			legacyPrivateKeyShare,
+			"tbtc-signer RunDKG failed",
+			payload.KeyGroupSource,
+		)
+	}
+
+	if dkgResult == nil {
+		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
+			ctx,
+			logger,
+			request,
+			legacyPrivateKeyShare,
+			"tbtc-signer RunDKG returned nil result",
+			payload.KeyGroupSource,
+		)
+	}
+
+	if dkgResult.KeyGroup == "" {
+		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
+			ctx,
+			logger,
+			request,
+			legacyPrivateKeyShare,
+			"tbtc-signer RunDKG returned empty key group",
+			payload.KeyGroupSource,
+		)
+	}
+
+	if payload.KeyGroup != dkgResult.KeyGroup {
+		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
+			ctx,
+			logger,
+			request,
+			legacyPrivateKeyShare,
+			"tbtc-signer key group does not match RunDKG result",
+			payload.KeyGroupSource,
+		)
+	}
+
+	if logger != nil {
+		logger.Debugf(
+			"validated tbtc-signer key-group contract via RunDKG; using legacy fallback until finalize flow is wired",
 		)
 	}
 
@@ -118,12 +189,59 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 		logger,
 		request,
 		legacyPrivateKeyShare,
-		fmt.Sprintf(
-			"tbtc-signer coarse session flow is not wired (keyGroupSource=%s)",
-			payload.KeyGroupSource,
-		),
+		"tbtc-signer RunDKG is wired but coarse finalize flow is not wired",
 		payload.KeyGroupSource,
 	)
+}
+
+func buildTaggedTBTCSignerRunDKGInputs(
+	request *NativeExecutionFFISigningRequest,
+) ([]NativeTBTCSignerDKGParticipant, uint16, error) {
+	_, includedMembersIndexes, err := includedMembersFromRequest(request)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if len(includedMembersIndexes) < 2 {
+		return nil, 0, fmt.Errorf("insufficient included members for DKG")
+	}
+
+	threshold := request.DishonestThreshold + 1
+	if threshold < 2 {
+		return nil, 0, fmt.Errorf("derived threshold is below minimum: [%v]", threshold)
+	}
+
+	if threshold > len(includedMembersIndexes) {
+		return nil, 0, fmt.Errorf(
+			"derived threshold exceeds included members count: [%v] > [%v]",
+			threshold,
+			len(includedMembersIndexes),
+		)
+	}
+
+	participants := make([]NativeTBTCSignerDKGParticipant, 0, len(includedMembersIndexes))
+	for _, memberIndex := range includedMembersIndexes {
+		if memberIndex == 0 {
+			return nil, 0, fmt.Errorf("included member index is zero")
+		}
+
+		identifier := uint16(memberIndex)
+		participants = append(
+			participants,
+			NativeTBTCSignerDKGParticipant{
+				Identifier:   identifier,
+				PublicKeyHex: buildTaggedTBTCSignerDKGPlaceholderPublicKeyHex(identifier),
+			},
+		)
+	}
+
+	return participants, uint16(threshold), nil
+}
+
+func buildTaggedTBTCSignerDKGPlaceholderPublicKeyHex(identifier uint16) string {
+	// Transitional placeholder until canonical member public keys are available
+	// in the native signing request path.
+	return fmt.Sprintf("02%04x", identifier)
 }
 
 func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive) signWithLegacyTECDSABridge(

@@ -11,14 +11,21 @@ import (
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/internal/tecdsatest"
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
 
 type mockBuildTaggedTBTCSignerEngine struct {
-	startCalled bool
-	sessionID   string
-	message     []byte
-	keyGroup    string
+	runDKGCalled       bool
+	runDKGSessionID    string
+	runDKGParticipants []NativeTBTCSignerDKGParticipant
+	runDKGThreshold    uint16
+	runDKGResult       *NativeTBTCSignerDKGResult
+	runDKGErr          error
+	startCalled        bool
+	startSessionID     string
+	startMessage       []byte
+	startKeyGroup      string
 }
 
 func (mbttse *mockBuildTaggedTBTCSignerEngine) RunDKG(
@@ -26,7 +33,29 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) RunDKG(
 	participants []NativeTBTCSignerDKGParticipant,
 	threshold uint16,
 ) (*NativeTBTCSignerDKGResult, error) {
-	return nil, fmt.Errorf("not used")
+	mbttse.runDKGCalled = true
+	mbttse.runDKGSessionID = sessionID
+	mbttse.runDKGParticipants = append(
+		[]NativeTBTCSignerDKGParticipant{},
+		participants...,
+	)
+	mbttse.runDKGThreshold = threshold
+
+	if mbttse.runDKGErr != nil {
+		return nil, mbttse.runDKGErr
+	}
+
+	if mbttse.runDKGResult != nil {
+		return mbttse.runDKGResult, nil
+	}
+
+	return &NativeTBTCSignerDKGResult{
+		SessionID:        sessionID,
+		KeyGroup:         "group-1",
+		ParticipantCount: uint16(len(participants)),
+		Threshold:        threshold,
+		CreatedAtUnix:    1,
+	}, nil
 }
 
 func (mbttse *mockBuildTaggedTBTCSignerEngine) StartSignRound(
@@ -35,9 +64,9 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) StartSignRound(
 	keyGroup string,
 ) (*NativeTBTCSignerRoundState, error) {
 	mbttse.startCalled = true
-	mbttse.sessionID = sessionID
-	mbttse.message = append([]byte{}, message...)
-	mbttse.keyGroup = keyGroup
+	mbttse.startSessionID = sessionID
+	mbttse.startMessage = append([]byte{}, message...)
+	mbttse.startKeyGroup = keyGroup
 
 	return &NativeTBTCSignerRoundState{
 		SessionID:             sessionID,
@@ -365,6 +394,91 @@ func TestDecodeBuildTaggedTBTCSignerLegacyPrivateKeyShare_RejectsInvalidPayload(
 	}
 }
 
+func TestBuildTaggedTBTCSignerRunDKGInputs(t *testing.T) {
+	participants, threshold, err := buildTaggedTBTCSignerRunDKGInputs(
+		&NativeExecutionFFISigningRequest{
+			GroupSize:          5,
+			DishonestThreshold: 2,
+			Attempt: &Attempt{
+				IncludedMembersIndexes: []group.MemberIndex{1, 3, 5},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected RunDKG inputs error: [%v]", err)
+	}
+
+	if threshold != 3 {
+		t.Fatalf(
+			"unexpected threshold\nexpected: [%v]\nactual:   [%v]",
+			3,
+			threshold,
+		)
+	}
+
+	if len(participants) != 3 {
+		t.Fatalf(
+			"unexpected participants count\nexpected: [%v]\nactual:   [%v]",
+			3,
+			len(participants),
+		)
+	}
+
+	expectedIdentifiers := []uint16{1, 3, 5}
+	expectedPublicKeys := []string{"020001", "020003", "020005"}
+
+	for i := range participants {
+		if participants[i].Identifier != expectedIdentifiers[i] {
+			t.Fatalf(
+				"unexpected participant identifier at index [%d]\nexpected: [%v]\nactual:   [%v]",
+				i,
+				expectedIdentifiers[i],
+				participants[i].Identifier,
+			)
+		}
+
+		if participants[i].PublicKeyHex != expectedPublicKeys[i] {
+			t.Fatalf(
+				"unexpected participant public key at index [%d]\nexpected: [%v]\nactual:   [%v]",
+				i,
+				expectedPublicKeys[i],
+				participants[i].PublicKeyHex,
+			)
+		}
+	}
+}
+
+func TestBuildTaggedTBTCSignerRunDKGInputs_RejectsInvalidRequest(t *testing.T) {
+	testCases := []struct {
+		name    string
+		request *NativeExecutionFFISigningRequest
+	}{
+		{
+			name: "zero group size",
+			request: &NativeExecutionFFISigningRequest{
+				GroupSize:          0,
+				DishonestThreshold: 1,
+			},
+		},
+		{
+			name: "derived threshold exceeds participants",
+			request: &NativeExecutionFFISigningRequest{
+				GroupSize:          2,
+				DishonestThreshold: 2,
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := buildTaggedTBTCSignerRunDKGInputs(tc.request)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath(
 	t *testing.T,
 ) {
@@ -380,8 +494,11 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
 
 	_, err = primitive.Sign(nil, nil, &NativeExecutionFFISigningRequest{
-		Message:   big.NewInt(123),
-		SessionID: "session-1",
+		Message:            big.NewInt(123),
+		SessionID:          "session-1",
+		MemberIndex:        1,
+		GroupSize:          3,
+		DishonestThreshold: 1,
 		SignerMaterial: &NativeSignerMaterial{
 			Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
 			Payload: []byte(`{"keyGroup":"group-1"}`),
@@ -399,10 +516,37 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 		)
 	}
 
+	if !engine.runDKGCalled {
+		t.Fatal("expected RunDKG call in tbtc-signer path")
+	}
+
+	if engine.runDKGSessionID != "session-1" {
+		t.Fatalf(
+			"unexpected RunDKG session ID\nexpected: [%v]\nactual:   [%v]",
+			"session-1",
+			engine.runDKGSessionID,
+		)
+	}
+
+	if engine.runDKGThreshold != 2 {
+		t.Fatalf(
+			"unexpected RunDKG threshold\nexpected: [%v]\nactual:   [%v]",
+			2,
+			engine.runDKGThreshold,
+		)
+	}
+
+	if len(engine.runDKGParticipants) != 3 {
+		t.Fatalf(
+			"unexpected RunDKG participants count\nexpected: [%v]\nactual:   [%v]",
+			3,
+			len(engine.runDKGParticipants),
+		)
+	}
+
 	if engine.startCalled {
 		t.Fatal("did not expect StartSignRound call while coarse finalize flow is unwired")
 	}
-
 }
 
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_NoEngineNoLegacyShare(
