@@ -19,9 +19,11 @@ func (mntse *mockNativeTBTCSignerEngine) RunDKG(
 
 func (mntse *mockNativeTBTCSignerEngine) StartSignRound(
 	sessionID string,
+	memberIdentifier uint16,
 	message []byte,
 	keyGroup string,
 ) (*NativeTBTCSignerRoundState, error) {
+	_ = memberIdentifier
 	return nil, fmt.Errorf("not implemented")
 }
 

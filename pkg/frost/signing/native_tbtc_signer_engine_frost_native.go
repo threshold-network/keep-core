@@ -51,6 +51,7 @@ type NativeTBTCSignerRoundState struct {
 	RoundID               string `json:"roundID"`
 	RequiredContributions uint16 `json:"requiredContributions"`
 	MessageDigestHex      string `json:"messageDigestHex"`
+	OwnContribution       *NativeTBTCSignerRoundContribution
 }
 
 // NativeTBTCSignerEngine executes coarse, session-keyed tbtc-signer
@@ -63,6 +64,7 @@ type NativeTBTCSignerEngine interface {
 	) (*NativeTBTCSignerDKGResult, error)
 	StartSignRound(
 		sessionID string,
+		memberIdentifier uint16,
 		message []byte,
 		keyGroup string,
 	) (*NativeTBTCSignerRoundState, error)

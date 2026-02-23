@@ -27,6 +27,7 @@ func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 
 	_, err = engine.StartSignRound(
 		"session-1",
+		1,
 		[]byte("message"),
 		"key-group",
 	)
@@ -253,6 +254,7 @@ func TestDecodeBuildTaggedTBTCSignerRunDKGResponse(t *testing.T) {
 func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload(t *testing.T) {
 	payload, err := buildTaggedTBTCSignerStartSignRoundRequestPayload(
 		"session-1",
+		3,
 		[]byte{0xab, 0xcd},
 		"key-group-1",
 	)
@@ -288,11 +290,36 @@ func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload(t *testing.T) {
 			request.KeyGroup,
 		)
 	}
+
+	if request.MemberIdentifier != 3 {
+		t.Fatalf(
+			"unexpected member identifier\nexpected: [%v]\nactual:   [%v]",
+			3,
+			request.MemberIdentifier,
+		)
+	}
 }
 
 func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload_EmptySessionID(t *testing.T) {
 	_, err := buildTaggedTBTCSignerStartSignRoundRequestPayload(
 		"",
+		1,
+		[]byte{0xab},
+		"key-group-1",
+	)
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"expected native cryptography unavailable error: [%v], got [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+}
+
+func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload_ZeroMemberID(t *testing.T) {
+	_, err := buildTaggedTBTCSignerStartSignRoundRequestPayload(
+		"session-1",
+		0,
 		[]byte{0xab},
 		"key-group-1",
 	)
@@ -360,7 +387,7 @@ func TestBuildTaggedTBTCSignerFinalizeSignRoundRequestPayload(t *testing.T) {
 func TestDecodeBuildTaggedTBTCSignerStartSignRoundResponse(t *testing.T) {
 	roundState, err := decodeBuildTaggedTBTCSignerStartSignRoundResponse(
 		[]byte(
-			`{"session_id":"session-1","round_id":"round-1","required_contributions":2,"message_digest_hex":"abcd"}`,
+			`{"session_id":"session-1","round_id":"round-1","required_contributions":2,"message_digest_hex":"abcd","own_contribution":{"identifier":3,"signature_share_hex":"deadbeef"}}`,
 		),
 	)
 	if err != nil {
@@ -397,6 +424,38 @@ func TestDecodeBuildTaggedTBTCSignerStartSignRoundResponse(t *testing.T) {
 			"abcd",
 			roundState.MessageDigestHex,
 		)
+	}
+
+	if roundState.OwnContribution == nil {
+		t.Fatal("expected own contribution in round state response")
+	}
+
+	if roundState.OwnContribution.Identifier != 3 {
+		t.Fatalf(
+			"unexpected own contribution identifier\nexpected: [%v]\nactual:   [%v]",
+			3,
+			roundState.OwnContribution.Identifier,
+		)
+	}
+
+	expectedOwnContributionData := []byte{0xde, 0xad, 0xbe, 0xef}
+	if len(roundState.OwnContribution.Data) != len(expectedOwnContributionData) {
+		t.Fatalf(
+			"unexpected own contribution data length\nexpected: [%v]\nactual:   [%v]",
+			len(expectedOwnContributionData),
+			len(roundState.OwnContribution.Data),
+		)
+	}
+
+	for i := range roundState.OwnContribution.Data {
+		if roundState.OwnContribution.Data[i] != expectedOwnContributionData[i] {
+			t.Fatalf(
+				"unexpected own contribution byte at index [%d]\nexpected: [%x]\nactual:   [%x]",
+				i,
+				expectedOwnContributionData[i],
+				roundState.OwnContribution.Data[i],
+			)
+		}
 	}
 }
 

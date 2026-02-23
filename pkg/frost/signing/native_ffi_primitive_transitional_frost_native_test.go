@@ -36,6 +36,7 @@ type mockBuildTaggedTBTCSignerEngine struct {
 	versionErr        error
 	startCalled       bool
 	startSessionID    string
+	startMemberID     uint16
 	startMessage      []byte
 	startKeyGroup     string
 	startRoundState   *NativeTBTCSignerRoundState
@@ -91,11 +92,13 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) Version() (string, error) {
 
 func (mbttse *mockBuildTaggedTBTCSignerEngine) StartSignRound(
 	sessionID string,
+	memberIdentifier uint16,
 	message []byte,
 	keyGroup string,
 ) (*NativeTBTCSignerRoundState, error) {
 	mbttse.startCalled = true
 	mbttse.startSessionID = sessionID
+	mbttse.startMemberID = memberIdentifier
 	mbttse.startMessage = append([]byte{}, message...)
 	mbttse.startKeyGroup = keyGroup
 
@@ -160,10 +163,18 @@ func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) RunDKG(
 
 func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) StartSignRound(
 	sessionID string,
+	memberIdentifier uint16,
 	_ []byte,
 	_ string,
 ) (*NativeTBTCSignerRoundState, error) {
 	if dbttsbre.roundState != nil {
+		if dbttsbre.roundState.OwnContribution == nil {
+			dbttsbre.roundState.OwnContribution = &NativeTBTCSignerRoundContribution{
+				Identifier: memberIdentifier,
+				Data:       []byte{byte(memberIdentifier), 0xab},
+			}
+		}
+
 		return dbttsbre.roundState, nil
 	}
 
@@ -172,6 +183,10 @@ func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) StartSig
 		RoundID:               "round-1",
 		RequiredContributions: 2,
 		MessageDigestHex:      "00",
+		OwnContribution: &NativeTBTCSignerRoundContribution{
+			Identifier: memberIdentifier,
+			Data:       []byte{byte(memberIdentifier), 0xab},
+		},
 	}, nil
 }
 
@@ -742,16 +757,31 @@ func TestExecuteBuildTaggedTBTCSignerBootstrapCoarseRound_ExchangesContributions
 	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
 	primitive.RegisterUnmarshallers(channel)
 
-	roundState := &NativeTBTCSignerRoundState{
-		SessionID:             "session-1",
-		RoundID:               "round-1",
-		RequiredContributions: 2,
-		MessageDigestHex:      "0011",
-	}
-
 	engineByMember := map[group.MemberIndex]*deterministicBuildTaggedTBTCSignerBootstrapRoundEngine{
-		1: &deterministicBuildTaggedTBTCSignerBootstrapRoundEngine{roundState: roundState},
-		2: &deterministicBuildTaggedTBTCSignerBootstrapRoundEngine{roundState: roundState},
+		1: &deterministicBuildTaggedTBTCSignerBootstrapRoundEngine{
+			roundState: &NativeTBTCSignerRoundState{
+				SessionID:             "session-1",
+				RoundID:               "round-1",
+				RequiredContributions: 2,
+				MessageDigestHex:      "0011",
+				OwnContribution: &NativeTBTCSignerRoundContribution{
+					Identifier: 1,
+					Data:       []byte{0x11, 0x01},
+				},
+			},
+		},
+		2: &deterministicBuildTaggedTBTCSignerBootstrapRoundEngine{
+			roundState: &NativeTBTCSignerRoundState{
+				SessionID:             "session-1",
+				RoundID:               "round-1",
+				RequiredContributions: 2,
+				MessageDigestHex:      "0011",
+				OwnContribution: &NativeTBTCSignerRoundContribution{
+					Identifier: 2,
+					Data:       []byte{0x22, 0x02},
+				},
+			},
+		},
 	}
 
 	requestByMember := map[group.MemberIndex]*NativeExecutionFFISigningRequest{
@@ -839,6 +869,24 @@ func TestExecuteBuildTaggedTBTCSignerBootstrapCoarseRound_ExchangesContributions
 
 		if len(finalizeInputs[0].Data) == 0 || len(finalizeInputs[1].Data) == 0 {
 			t.Fatalf("expected non-empty finalize contribution data for member [%v]", memberIndex)
+		}
+
+		if !bytes.Equal(finalizeInputs[0].Data, []byte{0x11, 0x01}) {
+			t.Fatalf(
+				"unexpected contribution data for identifier 1, member [%v]\nexpected: [%x]\nactual:   [%x]",
+				memberIndex,
+				[]byte{0x11, 0x01},
+				finalizeInputs[0].Data,
+			)
+		}
+
+		if !bytes.Equal(finalizeInputs[1].Data, []byte{0x22, 0x02}) {
+			t.Fatalf(
+				"unexpected contribution data for identifier 2, member [%v]\nexpected: [%x]\nactual:   [%x]",
+				memberIndex,
+				[]byte{0x22, 0x02},
+				finalizeInputs[1].Data,
+			)
 		}
 	}
 }
@@ -1117,6 +1165,14 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 			"unexpected StartSignRound session ID\nexpected: [%v]\nactual:   [%v]",
 			"session-1",
 			engine.startSessionID,
+		)
+	}
+
+	if engine.startMemberID != 1 {
+		t.Fatalf(
+			"unexpected StartSignRound member identifier\nexpected: [%v]\nactual:   [%v]",
+			1,
+			engine.startMemberID,
 		)
 	}
 

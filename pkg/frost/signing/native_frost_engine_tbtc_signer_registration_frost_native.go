@@ -137,16 +137,18 @@ type buildTaggedTBTCSignerRunDKGResponse struct {
 }
 
 type buildTaggedTBTCSignerStartSignRoundRequest struct {
-	SessionID  string `json:"session_id"`
-	MessageHex string `json:"message_hex"`
-	KeyGroup   string `json:"key_group"`
+	SessionID        string `json:"session_id"`
+	MemberIdentifier uint16 `json:"member_identifier"`
+	MessageHex       string `json:"message_hex"`
+	KeyGroup         string `json:"key_group"`
 }
 
 type buildTaggedTBTCSignerStartSignRoundResponse struct {
-	SessionID             string `json:"session_id"`
-	RoundID               string `json:"round_id"`
-	RequiredContributions uint16 `json:"required_contributions"`
-	MessageDigestHex      string `json:"message_digest_hex"`
+	SessionID             string                                          `json:"session_id"`
+	RoundID               string                                          `json:"round_id"`
+	RequiredContributions uint16                                          `json:"required_contributions"`
+	MessageDigestHex      string                                          `json:"message_digest_hex"`
+	OwnContribution       *buildTaggedTBTCSignerFinalizeRoundContribution `json:"own_contribution"`
 }
 
 type buildTaggedTBTCSignerFinalizeSignRoundRequest struct {
@@ -212,11 +214,13 @@ func (bttse *buildTaggedTBTCSignerEngine) RunDKG(
 
 func (bttse *buildTaggedTBTCSignerEngine) StartSignRound(
 	sessionID string,
+	memberIdentifier uint16,
 	message []byte,
 	keyGroup string,
 ) (*NativeTBTCSignerRoundState, error) {
 	requestPayload, err := buildTaggedTBTCSignerStartSignRoundRequestPayload(
 		sessionID,
+		memberIdentifier,
 		message,
 		keyGroup,
 	)
@@ -395,6 +399,7 @@ func decodeBuildTaggedTBTCSignerRunDKGResponse(
 
 func buildTaggedTBTCSignerStartSignRoundRequestPayload(
 	sessionID string,
+	memberIdentifier uint16,
 	message []byte,
 	keyGroup string,
 ) ([]byte, error) {
@@ -412,10 +417,18 @@ func buildTaggedTBTCSignerStartSignRoundRequestPayload(
 		)
 	}
 
+	if memberIdentifier == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"StartSignRound",
+			"member identifier is zero",
+		)
+	}
+
 	request := buildTaggedTBTCSignerStartSignRoundRequest{
-		SessionID:  sessionID,
-		MessageHex: hex.EncodeToString(message),
-		KeyGroup:   keyGroup,
+		SessionID:        sessionID,
+		MemberIdentifier: memberIdentifier,
+		MessageHex:       hex.EncodeToString(message),
+		KeyGroup:         keyGroup,
 	}
 
 	payload, err := json.Marshal(request)
@@ -461,11 +474,47 @@ func decodeBuildTaggedTBTCSignerStartSignRoundResponse(
 		)
 	}
 
+	var ownContribution *NativeTBTCSignerRoundContribution
+	if response.OwnContribution != nil {
+		if response.OwnContribution.Identifier == 0 {
+			return nil, buildTaggedTBTCSignerOperationError(
+				"StartSignRound",
+				"response own contribution identifier is zero",
+			)
+		}
+
+		if response.OwnContribution.SignatureShareHex == "" {
+			return nil, buildTaggedTBTCSignerOperationError(
+				"StartSignRound",
+				"response own contribution signature share is empty",
+			)
+		}
+
+		ownContributionData, err := hex.DecodeString(
+			response.OwnContribution.SignatureShareHex,
+		)
+		if err != nil {
+			return nil, buildTaggedTBTCSignerOperationError(
+				"StartSignRound",
+				fmt.Sprintf(
+					"response own contribution signature share is invalid hex: %v",
+					err,
+				),
+			)
+		}
+
+		ownContribution = &NativeTBTCSignerRoundContribution{
+			Identifier: response.OwnContribution.Identifier,
+			Data:       ownContributionData,
+		}
+	}
+
 	return &NativeTBTCSignerRoundState{
 		SessionID:             response.SessionID,
 		RoundID:               response.RoundID,
 		RequiredContributions: response.RequiredContributions,
 		MessageDigestHex:      response.MessageDigestHex,
+		OwnContribution:       ownContribution,
 	}, nil
 }
 

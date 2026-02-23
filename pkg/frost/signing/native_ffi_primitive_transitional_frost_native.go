@@ -482,8 +482,13 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 		messageBytes = []byte{0}
 	}
 
+	if request.MemberIndex == 0 {
+		return fmt.Errorf("request member index is zero")
+	}
+
 	roundState, err := nativeEngine.StartSignRound(
 		request.SessionID,
+		uint16(request.MemberIndex),
 		messageBytes,
 		keyGroup,
 	)
@@ -554,19 +559,13 @@ func buildTaggedTBTCSignerRoundContributions(
 		)
 	}
 
-	ownContributions, err := buildTaggedTBTCSignerSyntheticRoundContributions(
+	ownContribution, err := buildTaggedTBTCSignerOwnRoundContribution(
+		request,
 		roundState,
-		[]group.MemberIndex{request.MemberIndex},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("cannot build own round contribution: [%w]", err)
 	}
-
-	if len(ownContributions) != 1 {
-		return nil, fmt.Errorf("unexpected own contribution count: [%v]", len(ownContributions))
-	}
-
-	ownContribution := ownContributions[0]
 
 	roundContributionMessage := &buildTaggedTBTCSignerRoundContributionMessage{
 		SenderIDValue:          uint32(request.MemberIndex),
@@ -619,6 +618,64 @@ func buildTaggedTBTCSignerRoundContributions(
 	}
 
 	return orderedContributions, nil
+}
+
+func buildTaggedTBTCSignerOwnRoundContribution(
+	request *NativeExecutionFFISigningRequest,
+	roundState *NativeTBTCSignerRoundState,
+) (NativeTBTCSignerRoundContribution, error) {
+	if request == nil {
+		return NativeTBTCSignerRoundContribution{}, fmt.Errorf("request is nil")
+	}
+
+	if request.MemberIndex == 0 {
+		return NativeTBTCSignerRoundContribution{}, fmt.Errorf("request member index is zero")
+	}
+
+	if roundState != nil && roundState.OwnContribution != nil {
+		ownContribution := roundState.OwnContribution
+		if ownContribution.Identifier == 0 {
+			return NativeTBTCSignerRoundContribution{}, fmt.Errorf(
+				"round state own contribution identifier is zero",
+			)
+		}
+
+		if len(ownContribution.Data) == 0 {
+			return NativeTBTCSignerRoundContribution{}, fmt.Errorf(
+				"round state own contribution data is empty",
+			)
+		}
+
+		if ownContribution.Identifier != uint16(request.MemberIndex) {
+			return NativeTBTCSignerRoundContribution{}, fmt.Errorf(
+				"round state own contribution identifier [%v] does not match member index [%v]",
+				ownContribution.Identifier,
+				request.MemberIndex,
+			)
+		}
+
+		return NativeTBTCSignerRoundContribution{
+			Identifier: ownContribution.Identifier,
+			Data:       append([]byte{}, ownContribution.Data...),
+		}, nil
+	}
+
+	ownContributions, err := buildTaggedTBTCSignerSyntheticRoundContributions(
+		roundState,
+		[]group.MemberIndex{request.MemberIndex},
+	)
+	if err != nil {
+		return NativeTBTCSignerRoundContribution{}, err
+	}
+
+	if len(ownContributions) != 1 {
+		return NativeTBTCSignerRoundContribution{}, fmt.Errorf(
+			"unexpected own contribution count: [%v]",
+			len(ownContributions),
+		)
+	}
+
+	return ownContributions[0], nil
 }
 
 func collectBuildTaggedTBTCSignerRoundContributionMessages(
