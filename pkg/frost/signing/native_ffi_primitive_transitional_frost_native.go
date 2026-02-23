@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-core/pkg/frost"
@@ -34,6 +35,12 @@ func defaultNativeExecutionFFISigningPrimitiveProviderForBuild() (
 // routes through a temporary legacy fallback until coarse session finalize flow
 // is wired end-to-end.
 type buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive struct{}
+
+const buildTaggedTBTCSignerBootstrapVersionToken = "bootstrap"
+
+type nativeTBTCSignerVersionedEngine interface {
+	Version() (string, error)
+}
 
 func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive) Sign(
 	ctx context.Context,
@@ -175,21 +182,74 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 		)
 	}
 
-	if logger != nil {
-		logger.Debugf(
-			"validated tbtc-signer key-group contract via RunDKG; using legacy fallback until finalize flow is wired",
+	versionedEngine, isVersioned := nativeEngine.(nativeTBTCSignerVersionedEngine)
+	if !isVersioned {
+		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
+			ctx,
+			logger,
+			request,
+			legacyPrivateKeyShare,
+			"tbtc-signer version API is unavailable; coarse round scaffold skipped",
+			payload.KeyGroupSource,
 		)
 	}
 
-	// The coarse-session flow is intentionally deferred until keep-core
-	// orchestration is migrated from round-level message exchange. Use a Go-side
-	// legacy fallback while this migration is in progress.
+	engineVersion, err := versionedEngine.Version()
+	if err != nil {
+		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
+			ctx,
+			logger,
+			request,
+			legacyPrivateKeyShare,
+			"cannot query tbtc-signer version; coarse round scaffold skipped",
+			payload.KeyGroupSource,
+		)
+	}
+
+	if !strings.Contains(
+		strings.ToLower(engineVersion),
+		buildTaggedTBTCSignerBootstrapVersionToken,
+	) {
+		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
+			ctx,
+			logger,
+			request,
+			legacyPrivateKeyShare,
+			fmt.Sprintf(
+				"tbtc-signer version [%s] is not bootstrap; coarse round scaffold skipped",
+				engineVersion,
+			),
+			payload.KeyGroupSource,
+		)
+	}
+
+	if err := executeBuildTaggedTBTCSignerBootstrapCoarseRound(
+		request,
+		payload.KeyGroup,
+		nativeEngine,
+	); err != nil {
+		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
+			ctx,
+			logger,
+			request,
+			legacyPrivateKeyShare,
+			"tbtc-signer bootstrap coarse round failed",
+			payload.KeyGroupSource,
+		)
+	}
+
+	if logger != nil {
+		logger.Debugf(
+			"validated tbtc-signer key-group contract via RunDKG and bootstrap coarse round; using legacy fallback until signature cutover",
+		)
+	}
+
 	return btlcnnefsp.fallbackTBTCSignerLegacySigning(
 		ctx,
 		logger,
 		request,
 		legacyPrivateKeyShare,
-		"tbtc-signer RunDKG is wired but coarse finalize flow is not wired",
+		"tbtc-signer bootstrap coarse round completed; using legacy fallback during migration",
 		payload.KeyGroupSource,
 	)
 }
@@ -242,6 +302,107 @@ func buildTaggedTBTCSignerDKGPlaceholderPublicKeyHex(identifier uint16) string {
 	// Transitional placeholder until canonical member public keys are available
 	// in the native signing request path.
 	return fmt.Sprintf("02%04x", identifier)
+}
+
+func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
+	request *NativeExecutionFFISigningRequest,
+	keyGroup string,
+	nativeEngine NativeTBTCSignerEngine,
+) error {
+	if request == nil {
+		return fmt.Errorf("request is nil")
+	}
+
+	if request.Message == nil {
+		return fmt.Errorf("request message is nil")
+	}
+
+	if nativeEngine == nil {
+		return fmt.Errorf("native tbtc-signer engine is nil")
+	}
+
+	messageBytes := request.Message.Bytes()
+	if len(messageBytes) == 0 {
+		messageBytes = []byte{0}
+	}
+
+	roundState, err := nativeEngine.StartSignRound(
+		request.SessionID,
+		messageBytes,
+		keyGroup,
+	)
+	if err != nil {
+		return fmt.Errorf("start sign round failed: [%w]", err)
+	}
+
+	if roundState == nil {
+		return fmt.Errorf("start sign round returned nil state")
+	}
+
+	if roundState.RequiredContributions == 0 {
+		return fmt.Errorf("start sign round required contributions are zero")
+	}
+
+	_, includedMembersIndexes, err := includedMembersFromRequest(request)
+	if err != nil {
+		return fmt.Errorf("cannot determine included members: [%w]", err)
+	}
+
+	roundContributions := buildTaggedTBTCSignerSyntheticRoundContributions(
+		includedMembersIndexes,
+	)
+	if len(roundContributions) < int(roundState.RequiredContributions) {
+		return fmt.Errorf(
+			"insufficient synthetic round contributions: [%v] < [%v]",
+			len(roundContributions),
+			roundState.RequiredContributions,
+		)
+	}
+
+	signature, err := nativeEngine.FinalizeSignRound(
+		request.SessionID,
+		roundContributions,
+	)
+	if err != nil {
+		return fmt.Errorf("finalize sign round failed: [%w]", err)
+	}
+
+	if len(signature) == 0 {
+		return fmt.Errorf("finalize sign round returned empty signature")
+	}
+
+	return nil
+}
+
+func buildTaggedTBTCSignerSyntheticRoundContributions(
+	includedMembersIndexes []group.MemberIndex,
+) []NativeTBTCSignerRoundContribution {
+	contributions := make(
+		[]NativeTBTCSignerRoundContribution,
+		0,
+		len(includedMembersIndexes),
+	)
+
+	for _, memberIndex := range includedMembersIndexes {
+		if memberIndex == 0 {
+			continue
+		}
+
+		identifier := uint16(memberIndex)
+		contributions = append(
+			contributions,
+			NativeTBTCSignerRoundContribution{
+				Identifier: identifier,
+				Data: []byte{
+					byte(identifier >> 8),
+					byte(identifier),
+					0x01,
+				},
+			},
+		)
+	}
+
+	return contributions
 }
 
 func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive) signWithLegacyTECDSABridge(

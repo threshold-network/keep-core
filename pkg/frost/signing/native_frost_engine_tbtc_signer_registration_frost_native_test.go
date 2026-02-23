@@ -45,6 +45,26 @@ func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 	if !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("unexpected bridge error: [%v]", err)
 	}
+
+	versionedEngine, ok := engine.(interface {
+		Version() (string, error)
+	})
+	if !ok {
+		t.Fatal("expected versioned native tbtc-signer engine")
+	}
+
+	_, err = versionedEngine.Version()
+	if err == nil {
+		t.Fatal("expected unavailable tbtc-signer version bridge error")
+	}
+
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"expected native cryptography unavailable error: [%v], got [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
 }
 
 func TestBuildTaggedTBTCSignerRunDKGRequestPayload(t *testing.T) {

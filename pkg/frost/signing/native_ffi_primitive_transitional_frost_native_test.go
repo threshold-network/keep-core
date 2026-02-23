@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"math/big"
 	"testing"
 
@@ -22,10 +21,19 @@ type mockBuildTaggedTBTCSignerEngine struct {
 	runDKGThreshold    uint16
 	runDKGResult       *NativeTBTCSignerDKGResult
 	runDKGErr          error
+	version            string
+	versionErr         error
 	startCalled        bool
 	startSessionID     string
 	startMessage       []byte
 	startKeyGroup      string
+	startRoundState    *NativeTBTCSignerRoundState
+	startErr           error
+	finalizeCalled     bool
+	finalizeSessionID  string
+	finalizeInputs     []NativeTBTCSignerRoundContribution
+	finalizeSignature  []byte
+	finalizeErr        error
 }
 
 func (mbttse *mockBuildTaggedTBTCSignerEngine) RunDKG(
@@ -58,6 +66,14 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) RunDKG(
 	}, nil
 }
 
+func (mbttse *mockBuildTaggedTBTCSignerEngine) Version() (string, error) {
+	if mbttse.versionErr != nil {
+		return "", mbttse.versionErr
+	}
+
+	return mbttse.version, nil
+}
+
 func (mbttse *mockBuildTaggedTBTCSignerEngine) StartSignRound(
 	sessionID string,
 	message []byte,
@@ -67,6 +83,14 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) StartSignRound(
 	mbttse.startSessionID = sessionID
 	mbttse.startMessage = append([]byte{}, message...)
 	mbttse.startKeyGroup = keyGroup
+
+	if mbttse.startErr != nil {
+		return nil, mbttse.startErr
+	}
+
+	if mbttse.startRoundState != nil {
+		return mbttse.startRoundState, nil
+	}
 
 	return &NativeTBTCSignerRoundState{
 		SessionID:             sessionID,
@@ -80,7 +104,22 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) FinalizeSignRound(
 	sessionID string,
 	roundContributions []NativeTBTCSignerRoundContribution,
 ) ([]byte, error) {
-	return nil, fmt.Errorf("not used")
+	mbttse.finalizeCalled = true
+	mbttse.finalizeSessionID = sessionID
+	mbttse.finalizeInputs = append(
+		[]NativeTBTCSignerRoundContribution{},
+		roundContributions...,
+	)
+
+	if mbttse.finalizeErr != nil {
+		return nil, mbttse.finalizeErr
+	}
+
+	if len(mbttse.finalizeSignature) > 0 {
+		return append([]byte{}, mbttse.finalizeSignature...), nil
+	}
+
+	return []byte{0xaa}, nil
 }
 
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_ValidatesRequest(
@@ -545,7 +584,112 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 	}
 
 	if engine.startCalled {
-		t.Fatal("did not expect StartSignRound call while coarse finalize flow is unwired")
+		t.Fatal("did not expect StartSignRound call for non-bootstrap tbtc-signer version")
+	}
+
+	if engine.finalizeCalled {
+		t.Fatal("did not expect FinalizeSignRound call for non-bootstrap tbtc-signer version")
+	}
+}
+
+func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_BootstrapVersion(
+	t *testing.T,
+) {
+	engine := &mockBuildTaggedTBTCSignerEngine{
+		version:           "tbtc-signer/0.1.0-bootstrap",
+		finalizeSignature: []byte{0xaa},
+	}
+	UnregisterNativeTBTCSignerEngine()
+	t.Cleanup(UnregisterNativeTBTCSignerEngine)
+
+	err := RegisterNativeTBTCSignerEngine(engine)
+	if err != nil {
+		t.Fatalf("unexpected registration error: [%v]", err)
+	}
+
+	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
+
+	_, err = primitive.Sign(nil, nil, &NativeExecutionFFISigningRequest{
+		Message:            big.NewInt(123),
+		SessionID:          "session-1",
+		MemberIndex:        1,
+		GroupSize:          3,
+		DishonestThreshold: 1,
+		SignerMaterial: &NativeSignerMaterial{
+			Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
+			Payload: []byte(`{"keyGroup":"group-1"}`),
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	if !engine.runDKGCalled {
+		t.Fatal("expected RunDKG call in bootstrap tbtc-signer path")
+	}
+
+	if !engine.startCalled {
+		t.Fatal("expected StartSignRound call in bootstrap tbtc-signer path")
+	}
+
+	if engine.startSessionID != "session-1" {
+		t.Fatalf(
+			"unexpected StartSignRound session ID\nexpected: [%v]\nactual:   [%v]",
+			"session-1",
+			engine.startSessionID,
+		)
+	}
+
+	if engine.startKeyGroup != "group-1" {
+		t.Fatalf(
+			"unexpected StartSignRound key group\nexpected: [%v]\nactual:   [%v]",
+			"group-1",
+			engine.startKeyGroup,
+		)
+	}
+
+	if !engine.finalizeCalled {
+		t.Fatal("expected FinalizeSignRound call in bootstrap tbtc-signer path")
+	}
+
+	if engine.finalizeSessionID != "session-1" {
+		t.Fatalf(
+			"unexpected FinalizeSignRound session ID\nexpected: [%v]\nactual:   [%v]",
+			"session-1",
+			engine.finalizeSessionID,
+		)
+	}
+
+	if len(engine.finalizeInputs) != 3 {
+		t.Fatalf(
+			"unexpected FinalizeSignRound contributions count\nexpected: [%v]\nactual:   [%v]",
+			3,
+			len(engine.finalizeInputs),
+		)
+	}
+
+	expectedIdentifiers := []uint16{1, 2, 3}
+	for i, contribution := range engine.finalizeInputs {
+		if contribution.Identifier != expectedIdentifiers[i] {
+			t.Fatalf(
+				"unexpected contribution identifier at index [%d]\nexpected: [%v]\nactual:   [%v]",
+				i,
+				expectedIdentifiers[i],
+				contribution.Identifier,
+			)
+		}
+
+		if len(contribution.Data) == 0 {
+			t.Fatalf("expected non-empty contribution data at index [%d]", i)
+		}
 	}
 }
 

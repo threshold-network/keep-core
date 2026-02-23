@@ -21,6 +21,7 @@ typedef struct {
   TbtcBuffer buffer;
 } TbtcSignerResult;
 
+typedef TbtcSignerResult (*tbtc_version_fn)(void);
 typedef TbtcSignerResult (*tbtc_run_dkg_fn)(
   const uint8_t* request_ptr,
   size_t request_len
@@ -41,6 +42,18 @@ static TbtcSignerResult unavailable_tbtc_signer_result(void) {
   result.buffer.ptr = NULL;
   result.buffer.len = 0;
   return result;
+}
+
+static TbtcSignerResult tbtc_signer_version(void) {
+  tbtc_version_fn version = (tbtc_version_fn)dlsym(
+    RTLD_DEFAULT,
+    "frost_tbtc_version"
+  );
+  if (version == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+
+  return version();
 }
 
 static TbtcSignerResult tbtc_signer_run_dkg(const uint8_t* request_ptr, size_t request_len) {
@@ -156,6 +169,23 @@ const buildTaggedTBTCSignerUnavailableStatusCode = -1
 
 func registerBuildTaggedNativeFROSTSigningEngine() error {
 	return RegisterNativeTBTCSignerEngine(&buildTaggedTBTCSignerEngine{})
+}
+
+func (bttse *buildTaggedTBTCSignerEngine) Version() (string, error) {
+	responsePayload, err := callBuildTaggedTBTCSignerVersion()
+	if err != nil {
+		return "", err
+	}
+
+	version := string(responsePayload)
+	if version == "" {
+		return "", buildTaggedTBTCSignerOperationError(
+			"Version",
+			"response version is empty",
+		)
+	}
+
+	return version, nil
 }
 
 func (bttse *buildTaggedTBTCSignerEngine) RunDKG(
@@ -523,6 +553,11 @@ func decodeBuildTaggedTBTCSignerFinalizeSignRoundResponse(
 	}
 
 	return signature, nil
+}
+
+func callBuildTaggedTBTCSignerVersion() ([]byte, error) {
+	result := C.tbtc_signer_version()
+	return parseBuildTaggedTBTCSignerResult("Version", result)
 }
 
 func callBuildTaggedTBTCSignerRunDKG(
