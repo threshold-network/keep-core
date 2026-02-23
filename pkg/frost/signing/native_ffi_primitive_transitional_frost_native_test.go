@@ -5,12 +5,45 @@ package signing
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math/big"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/internal/tecdsatest"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
+
+type mockBuildTaggedTBTCSignerEngine struct {
+	startCalled bool
+	sessionID   string
+	message     []byte
+	keyGroup    string
+}
+
+func (mbttse *mockBuildTaggedTBTCSignerEngine) StartSignRound(
+	sessionID string,
+	message []byte,
+	keyGroup string,
+) (*NativeTBTCSignerRoundState, error) {
+	mbttse.startCalled = true
+	mbttse.sessionID = sessionID
+	mbttse.message = append([]byte{}, message...)
+	mbttse.keyGroup = keyGroup
+
+	return &NativeTBTCSignerRoundState{
+		SessionID:             sessionID,
+		RoundID:               "round-1",
+		RequiredContributions: 2,
+		MessageDigestHex:      "00",
+	}, nil
+}
+
+func (mbttse *mockBuildTaggedTBTCSignerEngine) FinalizeSignRound(
+	sessionID string,
+	roundContributions []NativeTBTCSignerRoundContribution,
+) ([]byte, error) {
+	return nil, fmt.Errorf("not used")
+}
 
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_ValidatesRequest(
 	t *testing.T,
@@ -139,5 +172,136 @@ func TestDecodeBuildTaggedLegacyPrivateKeyShare_RejectsInvalidMaterial(
 				)
 			}
 		})
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerKeyGroup(t *testing.T) {
+	keyGroup, err := decodeBuildTaggedTBTCSignerKeyGroup(&NativeSignerMaterial{
+		Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
+		Payload: []byte(`{"keyGroup":"group-1"}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected decode error: [%v]", err)
+	}
+
+	if keyGroup != "group-1" {
+		t.Fatalf(
+			"unexpected key group\nexpected: [%v]\nactual:   [%v]",
+			"group-1",
+			keyGroup,
+		)
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerKeyGroup_RejectsInvalidMaterial(
+	t *testing.T,
+) {
+	testCases := []struct {
+		name           string
+		signerMaterial *NativeSignerMaterial
+	}{
+		{
+			name:           "nil signer material",
+			signerMaterial: nil,
+		},
+		{
+			name: "unsupported format",
+			signerMaterial: &NativeSignerMaterial{
+				Format:  "other",
+				Payload: []byte(`{"keyGroup":"group-1"}`),
+			},
+		},
+		{
+			name: "empty payload",
+			signerMaterial: &NativeSignerMaterial{
+				Format: NativeSignerMaterialFormatFrostTBTCSignerV1,
+			},
+		},
+		{
+			name: "invalid payload",
+			signerMaterial: &NativeSignerMaterial{
+				Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
+				Payload: []byte(`{"keyGroup":`),
+			},
+		},
+		{
+			name: "empty key group",
+			signerMaterial: &NativeSignerMaterial{
+				Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
+				Payload: []byte(`{"keyGroup":""}`),
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := decodeBuildTaggedTBTCSignerKeyGroup(tc.signerMaterial)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+
+			if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+				t.Fatalf(
+					"unexpected error\nexpected: [%v]\nactual:   [%v]",
+					ErrNativeCryptographyUnavailable,
+					err,
+				)
+			}
+		})
+	}
+}
+
+func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath(
+	t *testing.T,
+) {
+	engine := &mockBuildTaggedTBTCSignerEngine{}
+	UnregisterNativeTBTCSignerEngine()
+	t.Cleanup(UnregisterNativeTBTCSignerEngine)
+
+	err := RegisterNativeTBTCSignerEngine(engine)
+	if err != nil {
+		t.Fatalf("unexpected registration error: [%v]", err)
+	}
+
+	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
+
+	_, err = primitive.Sign(nil, nil, &NativeExecutionFFISigningRequest{
+		Message:   big.NewInt(123),
+		SessionID: "session-1",
+		SignerMaterial: &NativeSignerMaterial{
+			Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
+			Payload: []byte(`{"keyGroup":"group-1"}`),
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	if !engine.startCalled {
+		t.Fatal("expected StartSignRound call")
+	}
+
+	if engine.sessionID != "session-1" {
+		t.Fatalf(
+			"unexpected session ID\nexpected: [%v]\nactual:   [%v]",
+			"session-1",
+			engine.sessionID,
+		)
+	}
+
+	if engine.keyGroup != "group-1" {
+		t.Fatalf(
+			"unexpected key group\nexpected: [%v]\nactual:   [%v]",
+			"group-1",
+			engine.keyGroup,
+		)
 	}
 }

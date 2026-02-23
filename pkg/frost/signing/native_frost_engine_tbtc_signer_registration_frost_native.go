@@ -4,55 +4,25 @@ package signing
 
 import "fmt"
 
-type buildTaggedTBTCSignerNativeFROSTBridge struct{}
+type buildTaggedTBTCSignerEngine struct{}
 
 func registerBuildTaggedNativeFROSTSigningEngine() error {
-	engine, err := newUniFFINativeFROSTSigningEngine(
-		&buildTaggedTBTCSignerNativeFROSTBridge{},
-	)
-	if err != nil {
-		return err
-	}
-
-	return RegisterNativeFROSTSigningEngine(engine)
+	return RegisterNativeTBTCSignerEngine(&buildTaggedTBTCSignerEngine{})
 }
 
-func (bttsnfb *buildTaggedTBTCSignerNativeFROSTBridge) GenerateNoncesAndCommitments(
-	keyPackageIdentifier string,
-	keyPackageData []byte,
-) (
-	noncesData []byte,
-	commitmentIdentifier string,
-	commitmentData []byte,
-	err error,
-) {
-	return nil, "", nil, buildTaggedTBTCSignerBridgeNotImplementedError(
-		"GenerateNoncesAndCommitments",
-	)
-}
-
-func (bttsnfb *buildTaggedTBTCSignerNativeFROSTBridge) NewSigningPackage(
+func (bttse *buildTaggedTBTCSignerEngine) StartSignRound(
+	sessionID string,
 	message []byte,
-	commitments []uniFFINativeFROSTCommitment,
-) (signingPackageData []byte, err error) {
-	return nil, buildTaggedTBTCSignerBridgeNotImplementedError("NewSigningPackage")
+	keyGroup string,
+) (*NativeTBTCSignerRoundState, error) {
+	return nil, buildTaggedTBTCSignerBridgeNotImplementedError("StartSignRound")
 }
 
-func (bttsnfb *buildTaggedTBTCSignerNativeFROSTBridge) Sign(
-	signingPackageData []byte,
-	noncesData []byte,
-	keyPackageIdentifier string,
-	keyPackageData []byte,
-) (signatureShareIdentifier string, signatureShareData []byte, err error) {
-	return "", nil, buildTaggedTBTCSignerBridgeNotImplementedError("Sign")
-}
-
-func (bttsnfb *buildTaggedTBTCSignerNativeFROSTBridge) Aggregate(
-	signingPackageData []byte,
-	signatureShares []uniFFINativeFROSTSignatureShare,
-	publicKeyPackage *NativeFROSTPublicKeyPackage,
-) (signature []byte, err error) {
-	return nil, buildTaggedTBTCSignerBridgeNotImplementedError("Aggregate")
+func (bttse *buildTaggedTBTCSignerEngine) FinalizeSignRound(
+	sessionID string,
+	roundContributions []NativeTBTCSignerRoundContribution,
+) ([]byte, error) {
+	return nil, buildTaggedTBTCSignerBridgeNotImplementedError("FinalizeSignRound")
 }
 
 func buildTaggedTBTCSignerBridgeNotImplementedError(operation string) error {

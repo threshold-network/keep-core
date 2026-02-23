@@ -4,6 +4,7 @@ package signing
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/ipfs/go-log/v2"
@@ -28,7 +29,8 @@ func defaultNativeExecutionFFISigningPrimitiveProviderForBuild() (
 // buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive is a
 // transitional primitive that executes native two-round FROST when
 // `frost-uniffi-v2` signer material is provided, and preserves legacy bridge
-// execution for `frost-uniffi-v1` payloads.
+// execution for `frost-uniffi-v1` payloads. `frost-tbtc-signer-v1` is reserved
+// for coarse session engine integration and currently returns a scaffold error.
 type buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive struct{}
 
 func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive) Sign(
@@ -71,6 +73,9 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 	case NativeSignerMaterialFormatFrostUniFFIV1:
 		return btlcnnefsp.signWithLegacyTECDSABridge(ctx, logger, request)
 
+	case NativeSignerMaterialFormatFrostTBTCSignerV1:
+		return btlcnnefsp.signWithTBTCSignerCoarseEngine(ctx, logger, request)
+
 	default:
 		return nil, fmt.Errorf(
 			"%w: unsupported signer material format: [%s]",
@@ -78,6 +83,45 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 			request.SignerMaterial.Format,
 		)
 	}
+}
+
+func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive) signWithTBTCSignerCoarseEngine(
+	ctx context.Context,
+	logger log.StandardLogger,
+	request *NativeExecutionFFISigningRequest,
+) (*frost.Signature, error) {
+	keyGroup, err := decodeBuildTaggedTBTCSignerKeyGroup(request.SignerMaterial)
+	if err != nil {
+		return nil, err
+	}
+
+	engine := currentNativeTBTCSignerEngine()
+	if engine == nil {
+		return nil, fmt.Errorf(
+			"%w: native tbtc-signer engine is unavailable",
+			ErrNativeCryptographyUnavailable,
+		)
+	}
+
+	_, err = engine.StartSignRound(
+		request.SessionID,
+		request.Message.Bytes(),
+		keyGroup,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"%w: tbtc-signer StartSignRound failed: [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	// The coarse-session finalize flow is intentionally deferred until keep-core
+	// transport/orchestration is migrated from round-level message exchange.
+	return nil, fmt.Errorf(
+		"%w: tbtc-signer coarse session finalize flow is not wired",
+		ErrNativeCryptographyUnavailable,
+	)
 }
 
 func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive) signWithLegacyTECDSABridge(
@@ -159,4 +203,52 @@ func decodeBuildTaggedLegacyPrivateKeyShare(
 	}
 
 	return privateKeyShare, nil
+}
+
+type buildTaggedTBTCSignerMaterialPayload struct {
+	KeyGroup string `json:"keyGroup"`
+}
+
+func decodeBuildTaggedTBTCSignerKeyGroup(
+	signerMaterial *NativeSignerMaterial,
+) (string, error) {
+	if signerMaterial == nil {
+		return "", fmt.Errorf(
+			"%w: signer material is nil",
+			ErrNativeCryptographyUnavailable,
+		)
+	}
+
+	if signerMaterial.Format != NativeSignerMaterialFormatFrostTBTCSignerV1 {
+		return "", fmt.Errorf(
+			"%w: unsupported signer material format: [%s]",
+			ErrNativeCryptographyUnavailable,
+			signerMaterial.Format,
+		)
+	}
+
+	if len(signerMaterial.Payload) == 0 {
+		return "", fmt.Errorf(
+			"%w: signer material payload is empty",
+			ErrNativeCryptographyUnavailable,
+		)
+	}
+
+	var payload buildTaggedTBTCSignerMaterialPayload
+	if err := json.Unmarshal(signerMaterial.Payload, &payload); err != nil {
+		return "", fmt.Errorf(
+			"%w: cannot unmarshal tbtc-signer payload: [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	if payload.KeyGroup == "" {
+		return "", fmt.Errorf(
+			"%w: tbtc-signer key group is empty",
+			ErrNativeCryptographyUnavailable,
+		)
+	}
+
+	return payload.KeyGroup, nil
 }

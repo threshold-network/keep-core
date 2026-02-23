@@ -7,10 +7,10 @@ import (
 	"testing"
 )
 
-func TestRegisterBuildTaggedTBTCSignerNativeFROSTSigningEngine(t *testing.T) {
-	UnregisterNativeFROSTSigningEngine()
+func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
+	UnregisterNativeTBTCSignerEngine()
 	t.Cleanup(func() {
-		UnregisterNativeFROSTSigningEngine()
+		UnregisterNativeTBTCSignerEngine()
 	})
 
 	err := registerBuildTaggedNativeFROSTSigningEngine()
@@ -18,15 +18,16 @@ func TestRegisterBuildTaggedTBTCSignerNativeFROSTSigningEngine(t *testing.T) {
 		t.Fatalf("unexpected registration error: [%v]", err)
 	}
 
-	engine := currentNativeFROSTSigningEngine()
+	engine := currentNativeTBTCSignerEngine()
 	if engine == nil {
-		t.Fatal("expected native FROST signing engine registration")
+		t.Fatal("expected native tbtc-signer engine registration")
 	}
 
-	_, _, err = engine.GenerateNoncesAndCommitments(&NativeFROSTKeyPackage{
-		Identifier: "participant-1",
-		Data:       []byte{1, 2, 3},
-	})
+	_, err = engine.StartSignRound(
+		"session-1",
+		[]byte("message"),
+		"key-group",
+	)
 	if err == nil {
 		t.Fatal("expected not-implemented tbtc-signer bridge error")
 	}
