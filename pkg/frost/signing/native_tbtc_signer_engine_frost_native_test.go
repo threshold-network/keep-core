@@ -9,6 +9,14 @@ import (
 
 type mockNativeTBTCSignerEngine struct{}
 
+func (mntse *mockNativeTBTCSignerEngine) RunDKG(
+	sessionID string,
+	participants []NativeTBTCSignerDKGParticipant,
+	threshold uint16,
+) (*NativeTBTCSignerDKGResult, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 func (mntse *mockNativeTBTCSignerEngine) StartSignRound(
 	sessionID string,
 	message []byte,

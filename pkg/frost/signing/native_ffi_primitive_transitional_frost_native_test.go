@@ -21,6 +21,14 @@ type mockBuildTaggedTBTCSignerEngine struct {
 	keyGroup    string
 }
 
+func (mbttse *mockBuildTaggedTBTCSignerEngine) RunDKG(
+	sessionID string,
+	participants []NativeTBTCSignerDKGParticipant,
+	threshold uint16,
+) (*NativeTBTCSignerDKGResult, error) {
+	return nil, fmt.Errorf("not used")
+}
+
 func (mbttse *mockBuildTaggedTBTCSignerEngine) StartSignRound(
 	sessionID string,
 	message []byte,

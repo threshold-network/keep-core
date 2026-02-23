@@ -18,6 +18,22 @@ type NativeTBTCSignerMaterialPayload struct {
 	LegacyPrivateKeyShareHex string `json:"legacyPrivateKeyShareHex,omitempty"`
 }
 
+// NativeTBTCSignerDKGParticipant identifies a DKG participant for coarse
+// tbtc-signer RunDKG operation.
+type NativeTBTCSignerDKGParticipant struct {
+	Identifier   uint16 `json:"identifier"`
+	PublicKeyHex string `json:"publicKeyHex"`
+}
+
+// NativeTBTCSignerDKGResult captures DKG result metadata returned by RunDKG.
+type NativeTBTCSignerDKGResult struct {
+	SessionID        string `json:"sessionID"`
+	KeyGroup         string `json:"keyGroup"`
+	ParticipantCount uint16 `json:"participantCount"`
+	Threshold        uint16 `json:"threshold"`
+	CreatedAtUnix    uint64 `json:"createdAtUnix"`
+}
+
 // NativeTBTCSignerRoundContribution is a participant contribution consumed by
 // tbtc-signer during signature finalization.
 type NativeTBTCSignerRoundContribution struct {
@@ -37,6 +53,11 @@ type NativeTBTCSignerRoundState struct {
 // NativeTBTCSignerEngine executes coarse, session-keyed tbtc-signer
 // operations.
 type NativeTBTCSignerEngine interface {
+	RunDKG(
+		sessionID string,
+		participants []NativeTBTCSignerDKGParticipant,
+		threshold uint16,
+	) (*NativeTBTCSignerDKGResult, error)
 	StartSignRound(
 		sessionID string,
 		message []byte,

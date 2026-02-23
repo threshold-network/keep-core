@@ -21,6 +21,10 @@ typedef struct {
   TbtcBuffer buffer;
 } TbtcSignerResult;
 
+typedef TbtcSignerResult (*tbtc_run_dkg_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
 typedef TbtcSignerResult (*tbtc_start_sign_round_fn)(
   const uint8_t* request_ptr,
   size_t request_len
@@ -37,6 +41,18 @@ static TbtcSignerResult unavailable_tbtc_signer_result(void) {
   result.buffer.ptr = NULL;
   result.buffer.len = 0;
   return result;
+}
+
+static TbtcSignerResult tbtc_signer_run_dkg(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_run_dkg_fn run_dkg = (tbtc_run_dkg_fn)dlsym(
+    RTLD_DEFAULT,
+    "frost_tbtc_run_dkg"
+  );
+  if (run_dkg == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+
+  return run_dkg(request_ptr, request_len);
 }
 
 static TbtcSignerResult tbtc_signer_start_sign_round(const uint8_t* request_ptr, size_t request_len) {
@@ -88,6 +104,25 @@ type buildTaggedTBTCSignerErrorResponse struct {
 	Message string `json:"message"`
 }
 
+type buildTaggedTBTCSignerRunDKGRequest struct {
+	SessionID    string                                `json:"session_id"`
+	Participants []buildTaggedTBTCSignerDKGParticipant `json:"participants"`
+	Threshold    uint16                                `json:"threshold"`
+}
+
+type buildTaggedTBTCSignerDKGParticipant struct {
+	Identifier   uint16 `json:"identifier"`
+	PublicKeyHex string `json:"public_key_hex"`
+}
+
+type buildTaggedTBTCSignerRunDKGResponse struct {
+	SessionID        string `json:"session_id"`
+	KeyGroup         string `json:"key_group"`
+	ParticipantCount uint16 `json:"participant_count"`
+	Threshold        uint16 `json:"threshold"`
+	CreatedAtUnix    uint64 `json:"created_at_unix"`
+}
+
 type buildTaggedTBTCSignerStartSignRoundRequest struct {
 	SessionID  string `json:"session_id"`
 	MessageHex string `json:"message_hex"`
@@ -121,6 +156,28 @@ const buildTaggedTBTCSignerUnavailableStatusCode = -1
 
 func registerBuildTaggedNativeFROSTSigningEngine() error {
 	return RegisterNativeTBTCSignerEngine(&buildTaggedTBTCSignerEngine{})
+}
+
+func (bttse *buildTaggedTBTCSignerEngine) RunDKG(
+	sessionID string,
+	participants []NativeTBTCSignerDKGParticipant,
+	threshold uint16,
+) (*NativeTBTCSignerDKGResult, error) {
+	requestPayload, err := buildTaggedTBTCSignerRunDKGRequestPayload(
+		sessionID,
+		participants,
+		threshold,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	responsePayload, err := callBuildTaggedTBTCSignerRunDKG(requestPayload)
+	if err != nil {
+		return nil, err
+	}
+
+	return decodeBuildTaggedTBTCSignerRunDKGResponse(responsePayload)
 }
 
 func (bttse *buildTaggedTBTCSignerEngine) StartSignRound(
@@ -183,6 +240,127 @@ func buildTaggedTBTCSignerOperationError(
 		operation,
 		message,
 	)
+}
+
+func buildTaggedTBTCSignerRunDKGRequestPayload(
+	sessionID string,
+	participants []NativeTBTCSignerDKGParticipant,
+	threshold uint16,
+) ([]byte, error) {
+	if sessionID == "" {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"RunDKG",
+			"session ID is empty",
+		)
+	}
+
+	if len(participants) == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"RunDKG",
+			"participants are empty",
+		)
+	}
+
+	if threshold == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"RunDKG",
+			"threshold is zero",
+		)
+	}
+
+	requestParticipants := make(
+		[]buildTaggedTBTCSignerDKGParticipant,
+		0,
+		len(participants),
+	)
+
+	for i, participant := range participants {
+		if participant.Identifier == 0 {
+			return nil, buildTaggedTBTCSignerOperationError(
+				"RunDKG",
+				fmt.Sprintf("participant [%d] identifier is zero", i),
+			)
+		}
+
+		if participant.PublicKeyHex == "" {
+			return nil, buildTaggedTBTCSignerOperationError(
+				"RunDKG",
+				fmt.Sprintf("participant [%d] public key hex is empty", i),
+			)
+		}
+
+		requestParticipants = append(
+			requestParticipants,
+			buildTaggedTBTCSignerDKGParticipant{
+				Identifier:   participant.Identifier,
+				PublicKeyHex: participant.PublicKeyHex,
+			},
+		)
+	}
+
+	request := buildTaggedTBTCSignerRunDKGRequest{
+		SessionID:    sessionID,
+		Participants: requestParticipants,
+		Threshold:    threshold,
+	}
+
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"RunDKG",
+			fmt.Sprintf("cannot marshal request: %v", err),
+		)
+	}
+
+	return payload, nil
+}
+
+func decodeBuildTaggedTBTCSignerRunDKGResponse(
+	responsePayload []byte,
+) (*NativeTBTCSignerDKGResult, error) {
+	var response buildTaggedTBTCSignerRunDKGResponse
+	if err := json.Unmarshal(responsePayload, &response); err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"RunDKG",
+			fmt.Sprintf("cannot decode response payload: %v", err),
+		)
+	}
+
+	if response.SessionID == "" {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"RunDKG",
+			"response session ID is empty",
+		)
+	}
+
+	if response.KeyGroup == "" {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"RunDKG",
+			"response key group is empty",
+		)
+	}
+
+	if response.ParticipantCount == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"RunDKG",
+			"response participant count is zero",
+		)
+	}
+
+	if response.Threshold == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"RunDKG",
+			"response threshold is zero",
+		)
+	}
+
+	return &NativeTBTCSignerDKGResult{
+		SessionID:        response.SessionID,
+		KeyGroup:         response.KeyGroup,
+		ParticipantCount: response.ParticipantCount,
+		Threshold:        response.Threshold,
+		CreatedAtUnix:    response.CreatedAtUnix,
+	}, nil
 }
 
 func buildTaggedTBTCSignerStartSignRoundRequestPayload(
@@ -345,6 +523,18 @@ func decodeBuildTaggedTBTCSignerFinalizeSignRoundResponse(
 	}
 
 	return signature, nil
+}
+
+func callBuildTaggedTBTCSignerRunDKG(
+	requestPayload []byte,
+) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"RunDKG",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_run_dkg(requestPtr, requestLen)
+		},
+	)
 }
 
 func callBuildTaggedTBTCSignerStartSignRound(

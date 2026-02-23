@@ -47,6 +47,189 @@ func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 	}
 }
 
+func TestBuildTaggedTBTCSignerRunDKGRequestPayload(t *testing.T) {
+	payload, err := buildTaggedTBTCSignerRunDKGRequestPayload(
+		"session-1",
+		[]NativeTBTCSignerDKGParticipant{
+			{
+				Identifier:   1,
+				PublicKeyHex: "02aa",
+			},
+			{
+				Identifier:   2,
+				PublicKeyHex: "02bb",
+			},
+		},
+		2,
+	)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+
+	var request buildTaggedTBTCSignerRunDKGRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+
+	if request.SessionID != "session-1" {
+		t.Fatalf(
+			"unexpected session id\nexpected: [%v]\nactual:   [%v]",
+			"session-1",
+			request.SessionID,
+		)
+	}
+
+	if request.Threshold != 2 {
+		t.Fatalf(
+			"unexpected threshold\nexpected: [%v]\nactual:   [%v]",
+			2,
+			request.Threshold,
+		)
+	}
+
+	if len(request.Participants) != 2 {
+		t.Fatalf(
+			"unexpected participants count\nexpected: [%v]\nactual:   [%v]",
+			2,
+			len(request.Participants),
+		)
+	}
+
+	if request.Participants[0].Identifier != 1 {
+		t.Fatalf(
+			"unexpected participant identifier\nexpected: [%v]\nactual:   [%v]",
+			1,
+			request.Participants[0].Identifier,
+		)
+	}
+
+	if request.Participants[0].PublicKeyHex != "02aa" {
+		t.Fatalf(
+			"unexpected participant public key hex\nexpected: [%v]\nactual:   [%v]",
+			"02aa",
+			request.Participants[0].PublicKeyHex,
+		)
+	}
+}
+
+func TestBuildTaggedTBTCSignerRunDKGRequestPayload_RejectsInvalidInput(t *testing.T) {
+	testCases := []struct {
+		name         string
+		sessionID    string
+		participants []NativeTBTCSignerDKGParticipant
+		threshold    uint16
+	}{
+		{
+			name:         "empty session id",
+			sessionID:    "",
+			participants: []NativeTBTCSignerDKGParticipant{{Identifier: 1, PublicKeyHex: "02aa"}},
+			threshold:    2,
+		},
+		{
+			name:         "empty participants",
+			sessionID:    "session-1",
+			participants: nil,
+			threshold:    2,
+		},
+		{
+			name:      "zero threshold",
+			sessionID: "session-1",
+			participants: []NativeTBTCSignerDKGParticipant{
+				{Identifier: 1, PublicKeyHex: "02aa"},
+			},
+			threshold: 0,
+		},
+		{
+			name:      "participant zero identifier",
+			sessionID: "session-1",
+			participants: []NativeTBTCSignerDKGParticipant{
+				{Identifier: 0, PublicKeyHex: "02aa"},
+			},
+			threshold: 1,
+		},
+		{
+			name:      "participant empty public key hex",
+			sessionID: "session-1",
+			participants: []NativeTBTCSignerDKGParticipant{
+				{Identifier: 1, PublicKeyHex: ""},
+			},
+			threshold: 1,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := buildTaggedTBTCSignerRunDKGRequestPayload(
+				tc.sessionID,
+				tc.participants,
+				tc.threshold,
+			)
+			if err == nil {
+				t.Fatal("expected payload build error")
+			}
+
+			if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+				t.Fatalf(
+					"expected native cryptography unavailable error: [%v], got [%v]",
+					ErrNativeCryptographyUnavailable,
+					err,
+				)
+			}
+		})
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerRunDKGResponse(t *testing.T) {
+	result, err := decodeBuildTaggedTBTCSignerRunDKGResponse(
+		[]byte(
+			`{"session_id":"session-1","key_group":"group-1","participant_count":3,"threshold":2,"created_at_unix":123456789}`,
+		),
+	)
+	if err != nil {
+		t.Fatalf("unexpected decode error: [%v]", err)
+	}
+
+	if result.SessionID != "session-1" {
+		t.Fatalf(
+			"unexpected session id\nexpected: [%v]\nactual:   [%v]",
+			"session-1",
+			result.SessionID,
+		)
+	}
+
+	if result.KeyGroup != "group-1" {
+		t.Fatalf(
+			"unexpected key group\nexpected: [%v]\nactual:   [%v]",
+			"group-1",
+			result.KeyGroup,
+		)
+	}
+
+	if result.ParticipantCount != 3 {
+		t.Fatalf(
+			"unexpected participant count\nexpected: [%v]\nactual:   [%v]",
+			3,
+			result.ParticipantCount,
+		)
+	}
+
+	if result.Threshold != 2 {
+		t.Fatalf(
+			"unexpected threshold\nexpected: [%v]\nactual:   [%v]",
+			2,
+			result.Threshold,
+		)
+	}
+
+	if result.CreatedAtUnix != 123456789 {
+		t.Fatalf(
+			"unexpected created-at unix\nexpected: [%v]\nactual:   [%v]",
+			123456789,
+			result.CreatedAtUnix,
+		)
+	}
+}
+
 func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload(t *testing.T) {
 	payload, err := buildTaggedTBTCSignerStartSignRoundRequestPayload(
 		"session-1",
