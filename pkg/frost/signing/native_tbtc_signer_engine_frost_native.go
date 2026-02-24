@@ -51,6 +51,7 @@ type NativeTBTCSignerRoundState struct {
 	RoundID               string `json:"roundID"`
 	RequiredContributions uint16 `json:"requiredContributions"`
 	MessageDigestHex      string `json:"messageDigestHex"`
+	SigningParticipants   []uint16
 	OwnContribution       *NativeTBTCSignerRoundContribution
 }
 
@@ -67,6 +68,7 @@ type NativeTBTCSignerEngine interface {
 		memberIdentifier uint16,
 		message []byte,
 		keyGroup string,
+		signingParticipants []uint16,
 	) (*NativeTBTCSignerRoundState, error)
 	FinalizeSignRound(
 		sessionID string,

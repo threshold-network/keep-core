@@ -32,20 +32,21 @@ type mockBuildTaggedTBTCSignerEngine struct {
 		participants []NativeTBTCSignerDKGParticipant,
 		threshold uint16,
 	) (*NativeTBTCSignerDKGResult, error)
-	version           string
-	versionErr        error
-	startCalled       bool
-	startSessionID    string
-	startMemberID     uint16
-	startMessage      []byte
-	startKeyGroup     string
-	startRoundState   *NativeTBTCSignerRoundState
-	startErr          error
-	finalizeCalled    bool
-	finalizeSessionID string
-	finalizeInputs    []NativeTBTCSignerRoundContribution
-	finalizeSignature []byte
-	finalizeErr       error
+	version                  string
+	versionErr               error
+	startCalled              bool
+	startSessionID           string
+	startMemberID            uint16
+	startMessage             []byte
+	startKeyGroup            string
+	startSigningParticipants []uint16
+	startRoundState          *NativeTBTCSignerRoundState
+	startErr                 error
+	finalizeCalled           bool
+	finalizeSessionID        string
+	finalizeInputs           []NativeTBTCSignerRoundContribution
+	finalizeSignature        []byte
+	finalizeErr              error
 }
 
 func (mbttse *mockBuildTaggedTBTCSignerEngine) RunDKG(
@@ -95,12 +96,14 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) StartSignRound(
 	memberIdentifier uint16,
 	message []byte,
 	keyGroup string,
+	signingParticipants []uint16,
 ) (*NativeTBTCSignerRoundState, error) {
 	mbttse.startCalled = true
 	mbttse.startSessionID = sessionID
 	mbttse.startMemberID = memberIdentifier
 	mbttse.startMessage = append([]byte{}, message...)
 	mbttse.startKeyGroup = keyGroup
+	mbttse.startSigningParticipants = append([]uint16{}, signingParticipants...)
 
 	if mbttse.startErr != nil {
 		return nil, mbttse.startErr
@@ -166,6 +169,7 @@ func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) StartSig
 	memberIdentifier uint16,
 	_ []byte,
 	_ string,
+	signingParticipants []uint16,
 ) (*NativeTBTCSignerRoundState, error) {
 	if dbttsbre.roundState != nil {
 		if dbttsbre.roundState.OwnContribution == nil {
@@ -178,11 +182,16 @@ func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) StartSig
 		return dbttsbre.roundState, nil
 	}
 
+	if len(signingParticipants) == 0 {
+		signingParticipants = []uint16{memberIdentifier}
+	}
+
 	return &NativeTBTCSignerRoundState{
 		SessionID:             sessionID,
 		RoundID:               "round-1",
 		RequiredContributions: 2,
 		MessageDigestHex:      "00",
+		SigningParticipants:   append([]uint16{}, signingParticipants...),
 		OwnContribution: &NativeTBTCSignerRoundContribution{
 			Identifier: memberIdentifier,
 			Data:       []byte{byte(memberIdentifier), 0xab},
@@ -1184,6 +1193,15 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 		)
 	}
 
+	expectedSigningParticipants := []uint16{1, 2, 3}
+	if !reflect.DeepEqual(engine.startSigningParticipants, expectedSigningParticipants) {
+		t.Fatalf(
+			"unexpected StartSignRound signing participants\nexpected: [%v]\nactual:   [%v]",
+			expectedSigningParticipants,
+			engine.startSigningParticipants,
+		)
+	}
+
 	if !engine.finalizeCalled {
 		t.Fatal("expected FinalizeSignRound call in bootstrap tbtc-signer path")
 	}
@@ -1279,6 +1297,15 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 			"unexpected StartSignRound key group\nexpected: [%v]\nactual:   [%v]",
 			"group-from-dkg",
 			engine.startKeyGroup,
+		)
+	}
+
+	expectedSigningParticipants := []uint16{1, 2, 3}
+	if !reflect.DeepEqual(engine.startSigningParticipants, expectedSigningParticipants) {
+		t.Fatalf(
+			"unexpected StartSignRound signing participants\nexpected: [%v]\nactual:   [%v]",
+			expectedSigningParticipants,
+			engine.startSigningParticipants,
 		)
 	}
 

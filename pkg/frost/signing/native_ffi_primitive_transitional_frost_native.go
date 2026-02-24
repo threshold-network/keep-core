@@ -486,11 +486,19 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 		return fmt.Errorf("request member index is zero")
 	}
 
+	signingParticipants, err := buildTaggedTBTCSignerSigningParticipants(
+		includedMembersIndexes,
+	)
+	if err != nil {
+		return fmt.Errorf("cannot derive signing participants: [%w]", err)
+	}
+
 	roundState, err := nativeEngine.StartSignRound(
 		request.SessionID,
 		uint16(request.MemberIndex),
 		messageBytes,
 		keyGroup,
+		signingParticipants,
 	)
 	if err != nil {
 		return fmt.Errorf("start sign round failed: [%w]", err)
@@ -502,6 +510,27 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 
 	if roundState.RequiredContributions == 0 {
 		return fmt.Errorf("start sign round required contributions are zero")
+	}
+
+	if len(roundState.SigningParticipants) > 0 {
+		if len(roundState.SigningParticipants) != len(signingParticipants) {
+			return fmt.Errorf(
+				"start sign round returned unexpected signing participants count: [%v] != [%v]",
+				len(roundState.SigningParticipants),
+				len(signingParticipants),
+			)
+		}
+
+		for i := range signingParticipants {
+			if roundState.SigningParticipants[i] != signingParticipants[i] {
+				return fmt.Errorf(
+					"start sign round returned unexpected signing participant at index [%d]: [%v] != [%v]",
+					i,
+					roundState.SigningParticipants[i],
+					signingParticipants[i],
+				)
+			}
+		}
 	}
 
 	roundContributions, err := buildTaggedTBTCSignerRoundContributions(
@@ -536,6 +565,33 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 	}
 
 	return nil
+}
+
+func buildTaggedTBTCSignerSigningParticipants(
+	includedMembersIndexes []group.MemberIndex,
+) ([]uint16, error) {
+	if len(includedMembersIndexes) == 0 {
+		return nil, fmt.Errorf("included members are empty")
+	}
+
+	signingParticipants := make([]uint16, 0, len(includedMembersIndexes))
+	seenParticipants := make(map[uint16]struct{}, len(includedMembersIndexes))
+
+	for _, memberIndex := range includedMembersIndexes {
+		if memberIndex == 0 {
+			return nil, fmt.Errorf("included member index is zero")
+		}
+
+		participant := uint16(memberIndex)
+		if _, ok := seenParticipants[participant]; ok {
+			return nil, fmt.Errorf("duplicate included member index: [%v]", memberIndex)
+		}
+
+		seenParticipants[participant] = struct{}{}
+		signingParticipants = append(signingParticipants, participant)
+	}
+
+	return signingParticipants, nil
 }
 
 func buildTaggedTBTCSignerRoundContributions(
