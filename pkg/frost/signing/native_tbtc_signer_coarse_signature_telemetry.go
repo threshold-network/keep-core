@@ -26,8 +26,7 @@ var (
 
 // RegisterNativeTBTCSignerCoarseSignatureObserver registers a process-wide
 // observer used to report tbtc-signer coarse-signature success events.
-// Only a single observer is supported; a subsequent registration replaces the
-// existing observer.
+// Only a single observer is supported.
 func RegisterNativeTBTCSignerCoarseSignatureObserver(
 	observer NativeTBTCSignerCoarseSignatureObserver,
 ) error {
@@ -37,6 +36,12 @@ func RegisterNativeTBTCSignerCoarseSignatureObserver(
 
 	nativeTBTCSignerCoarseSignatureObserverMutex.Lock()
 	defer nativeTBTCSignerCoarseSignatureObserverMutex.Unlock()
+
+	if nativeTBTCSignerCoarseSignatureObserver != nil {
+		return fmt.Errorf(
+			"native tbtc-signer coarse signature observer is already registered",
+		)
+	}
 
 	nativeTBTCSignerCoarseSignatureObserver = observer
 
