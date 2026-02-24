@@ -30,12 +30,12 @@ type NativeTBTCSignerRoundContribution struct {
 // NativeTBTCSignerRoundState captures coarse session round metadata returned by
 // StartSignRound.
 type NativeTBTCSignerRoundState struct {
-	SessionID             string `json:"sessionID"`
-	RoundID               string `json:"roundID"`
-	RequiredContributions uint16 `json:"requiredContributions"`
-	MessageDigestHex      string `json:"messageDigestHex"`
-	SigningParticipants   []uint16
-	OwnContribution       *NativeTBTCSignerRoundContribution
+	SessionID             string                             `json:"sessionID"`
+	RoundID               string                             `json:"roundID"`
+	RequiredContributions uint16                             `json:"requiredContributions"`
+	MessageDigestHex      string                             `json:"messageDigestHex"`
+	SigningParticipants   []uint16                           `json:"signingParticipants"`
+	OwnContribution       *NativeTBTCSignerRoundContribution `json:"ownContribution"`
 }
 
 // NativeTBTCSignerEngine executes coarse, session-keyed tbtc-signer

@@ -1467,21 +1467,46 @@ func pastNewWalletRegisteredV2Events(
 	walletPublicKeyHash [][20]byte,
 	bridge any,
 ) ([]*tbtc.NewWalletRegisteredEvent, error) {
+	if bridge == nil {
+		return nil, nil
+	}
+
 	bridgeValue := reflect.ValueOf(bridge)
 	pastV2Events := bridgeValue.MethodByName("PastNewWalletRegisteredV2Events")
 	if !pastV2Events.IsValid() {
 		return nil, nil
 	}
 
-	results := pastV2Events.Call(
-		[]reflect.Value{
-			reflect.ValueOf(startBlock),
-			reflect.ValueOf(endBlock),
-			reflect.ValueOf(walletID),
-			reflect.ValueOf(ecdsaWalletID),
-			reflect.ValueOf(walletPublicKeyHash),
-		},
+	var (
+		results []reflect.Value
+		callErr error
 	)
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				callErr = fmt.Errorf(
+					"panic calling PastNewWalletRegisteredV2Events: [%v]",
+					recovered,
+				)
+			}
+		}()
+
+		results = pastV2Events.Call(
+			[]reflect.Value{
+				reflect.ValueOf(startBlock),
+				reflect.ValueOf(endBlock),
+				reflect.ValueOf(walletID),
+				reflect.ValueOf(ecdsaWalletID),
+				reflect.ValueOf(walletPublicKeyHash),
+			},
+		)
+	}()
+
+	if callErr != nil {
+		return nil, callErr
+	}
+
 	if len(results) != 2 {
 		return nil, fmt.Errorf(
 			"unexpected PastNewWalletRegisteredV2Events result count: [%v]",
@@ -1534,6 +1559,13 @@ func pastNewWalletRegisteredV2Events(
 			walletPubKeyHashField = eventValue.FieldByName("WalletPublicKeyHash")
 		}
 		rawField := eventValue.FieldByName("Raw")
+		if !rawField.IsValid() {
+			return nil, fmt.Errorf(
+				"unexpected NewWalletRegisteredV2 raw event payload at index [%v]",
+				i,
+			)
+		}
+
 		if rawField.Kind() == reflect.Pointer {
 			if rawField.IsNil() {
 				return nil, fmt.Errorf("unexpected nil raw event payload")
@@ -1541,6 +1573,15 @@ func pastNewWalletRegisteredV2Events(
 
 			rawField = rawField.Elem()
 		}
+
+		if rawField.Kind() != reflect.Struct {
+			return nil, fmt.Errorf(
+				"unexpected NewWalletRegisteredV2 raw event payload kind at index [%v]: [%v]",
+				i,
+				rawField.Kind(),
+			)
+		}
+
 		blockNumberField := rawField.FieldByName("BlockNumber")
 
 		if !walletIDField.IsValid() ||
@@ -1686,13 +1727,10 @@ func resolveWalletPublicKeyHashForWalletID(
 	bridge any,
 ) ([20]byte, error) {
 	resolveCanonical, ok := bridge.(walletPublicKeyHashForWalletIDFn)
-	if !ok {
-		resolveCanonical = nil
-	}
 
 	var walletPublicKeyHash [20]byte
 	var err error
-	if resolveCanonical != nil {
+	if ok {
 		walletPublicKeyHash, err = resolveCanonical.WalletPubKeyHashForWalletID(walletID)
 	} else {
 		err = fmt.Errorf("wallet public key hash accessor unavailable")
@@ -1706,6 +1744,14 @@ func resolveWalletPublicKeyHashForWalletID(
 
 	legacyWalletPublicKeyHash, ok := tbtc.WalletPublicKeyHashFromLegacyWalletID(walletID)
 	if ok {
+		if err != nil {
+			logger.Infof(
+				"canonical wallet public key hash resolution failed for wallet ID [0x%x]; using legacy derivation: [%v]",
+				walletID,
+				err,
+			)
+		}
+
 		return legacyWalletPublicKeyHash, nil
 	}
 
