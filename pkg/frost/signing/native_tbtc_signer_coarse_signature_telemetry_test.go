@@ -51,3 +51,16 @@ func TestEmitNativeTBTCSignerCoarseSignatureEvent(t *testing.T) {
 		)
 	}
 }
+
+func TestEmitNativeTBTCSignerCoarseSignatureEventWithoutObserver(t *testing.T) {
+	UnregisterNativeTBTCSignerCoarseSignatureObserver()
+	t.Cleanup(UnregisterNativeTBTCSignerCoarseSignatureObserver)
+
+	emitNativeTBTCSignerCoarseSignatureEvent(
+		NativeTBTCSignerCoarseSignatureEvent{
+			SessionID:      "session-1",
+			KeyGroupSource: "legacy-wallet-pubkey",
+			EngineVersion:  "tbtc-signer/0.1.0-bootstrap",
+		},
+	)
+}
