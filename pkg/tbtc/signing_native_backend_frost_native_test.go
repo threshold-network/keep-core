@@ -10,7 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"reflect"
 	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -18,6 +21,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/frost"
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/net"
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
 type countingNativeExecutionFFISigningPrimitive struct {
@@ -26,6 +30,17 @@ type countingNativeExecutionFFISigningPrimitive struct {
 
 type deterministicNativeExecutionFFISigningPrimitiveForTBTC struct {
 	signCalls atomic.Int64
+}
+
+type attemptTrackingNativeExecutionFFISigningPrimitiveForTBTC struct {
+	signCalls atomic.Int64
+	mutex     sync.Mutex
+	records   []attemptTrackingRecordForTBTC
+}
+
+type attemptTrackingRecordForTBTC struct {
+	attemptNumber       uint
+	includedMemberIndex []group.MemberIndex
 }
 
 var deterministicNativeFROSTSignatureForTBTC = [frost.SignatureSize]byte{
@@ -87,6 +102,87 @@ func (dnefspf *deterministicNativeExecutionFFISigningPrimitiveForTBTC) Sign(
 func (dnefspf *deterministicNativeExecutionFFISigningPrimitiveForTBTC) RegisterUnmarshallers(
 	channel net.BroadcastChannel,
 ) {
+}
+
+func (atnefspf *attemptTrackingNativeExecutionFFISigningPrimitiveForTBTC) Sign(
+	ctx context.Context,
+	logger log.StandardLogger,
+	request *frostsigning.NativeExecutionFFISigningRequest,
+) (*frost.Signature, error) {
+	atnefspf.signCalls.Add(1)
+
+	if request == nil {
+		return nil, fmt.Errorf("request is nil")
+	}
+
+	if request.Attempt == nil {
+		return nil, fmt.Errorf("request attempt is nil")
+	}
+
+	atnefspf.mutex.Lock()
+	atnefspf.records = append(
+		atnefspf.records,
+		attemptTrackingRecordForTBTC{
+			attemptNumber: request.Attempt.Number,
+			includedMemberIndex: append(
+				[]group.MemberIndex{},
+				request.Attempt.IncludedMembersIndexes...,
+			),
+		},
+	)
+	atnefspf.mutex.Unlock()
+
+	// Force retry-loop progression so the next attempt is exercised.
+	if request.Attempt.Number == 1 {
+		return nil, fmt.Errorf("forced attempt failure")
+	}
+
+	signature := &frost.Signature{}
+	if err := signature.Unmarshal(deterministicNativeFROSTSignatureForTBTC[:]); err != nil {
+		return nil, err
+	}
+
+	return signature, nil
+}
+
+func (atnefspf *attemptTrackingNativeExecutionFFISigningPrimitiveForTBTC) RegisterUnmarshallers(
+	channel net.BroadcastChannel,
+) {
+}
+
+func (atnefspf *attemptTrackingNativeExecutionFFISigningPrimitiveForTBTC) uniqueCohortsByAttempt() map[uint][][]group.MemberIndex {
+	atnefspf.mutex.Lock()
+	defer atnefspf.mutex.Unlock()
+
+	result := make(map[uint][][]group.MemberIndex)
+	seen := make(map[uint]map[string]struct{})
+
+	for _, record := range atnefspf.records {
+		if seen[record.attemptNumber] == nil {
+			seen[record.attemptNumber] = make(map[string]struct{})
+		}
+
+		keyParts := make([]string, 0, len(record.includedMemberIndex))
+		for _, memberIndex := range record.includedMemberIndex {
+			keyParts = append(
+				keyParts,
+				strconv.FormatUint(uint64(memberIndex), 10),
+			)
+		}
+		cohortKey := strings.Join(keyParts, ",")
+
+		if _, ok := seen[record.attemptNumber][cohortKey]; ok {
+			continue
+		}
+
+		seen[record.attemptNumber][cohortKey] = struct{}{}
+		result[record.attemptNumber] = append(
+			result[record.attemptNumber],
+			append([]group.MemberIndex{}, record.includedMemberIndex...),
+		)
+	}
+
+	return result
 }
 
 func TestConfigureFrostSigningBackend_FFIStrictConfigured_BuildAdapter(t *testing.T) {
@@ -342,6 +438,118 @@ func TestSigningExecutor_Sign_NativeBackend_FallsBackWhenOnlyLegacySignerMateria
 		new(big.Int).SetBytes(signature.S[:]),
 	) {
 		t.Fatalf("invalid signature: [%+v]", signature)
+	}
+
+	if endBlock <= startBlock {
+		t.Fatal("wrong end block")
+	}
+}
+
+func TestSigningExecutor_Sign_FFIStrictBackend_AttemptVariationChangesCohortSelection(
+	t *testing.T,
+) {
+	executor := setupSigningExecutor(t)
+	configureSignersWithNativeFROSTUniFFIV2Material(t, executor)
+
+	primitive := &attemptTrackingNativeExecutionFFISigningPrimitiveForTBTC{}
+
+	frostsigning.ResetExecutionBackend()
+	frostsigning.UnregisterNativeExecutionAdapter()
+	frostsigning.UnregisterNativeExecutionBridge()
+	frostsigning.UnregisterNativeExecutionFFIExecutor()
+	frostsigning.RegisterNativeExecutionAdapterForBuild()
+	err := frostsigning.RegisterNativeExecutionFFISigningPrimitive(primitive)
+	if err != nil {
+		t.Fatalf("unexpected native FFI primitive registration error: [%v]", err)
+	}
+	t.Cleanup(frostsigning.ResetExecutionBackend)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionAdapter)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionBridge)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionFFIExecutor)
+
+	err = configureFrostSigningBackend(Config{FrostSigningBackend: "ffi"})
+	if err != nil {
+		t.Fatalf("unexpected strict ffi backend config error: [%v]", err)
+	}
+
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	defer cancelCtx()
+
+	message := big.NewInt(100)
+	startBlock := uint64(0)
+
+	signature, _, endBlock, err := executor.sign(ctx, message, startBlock)
+	if err != nil {
+		t.Fatalf("unexpected strict ffi signing error: [%v]", err)
+	}
+
+	signatureBytes, err := signature.Marshal()
+	if err != nil {
+		t.Fatalf("cannot marshal signature: [%v]", err)
+	}
+
+	if !bytes.Equal(signatureBytes, deterministicNativeFROSTSignatureForTBTC[:]) {
+		t.Fatalf(
+			"unexpected native FROST signature\nexpected: [%x]\nactual:   [%x]",
+			deterministicNativeFROSTSignatureForTBTC[:],
+			signatureBytes,
+		)
+	}
+
+	if primitive.signCalls.Load() == 0 {
+		t.Fatal("expected native FFI primitive sign call")
+	}
+
+	cohortsByAttempt := primitive.uniqueCohortsByAttempt()
+	attemptOneCohorts, ok := cohortsByAttempt[1]
+	if !ok {
+		t.Fatal("expected observed cohort for attempt 1")
+	}
+	if len(attemptOneCohorts) != 1 {
+		t.Fatalf(
+			"unexpected unique cohort count for attempt 1\nexpected: [%d]\nactual:   [%d]",
+			1,
+			len(attemptOneCohorts),
+		)
+	}
+
+	attemptTwoCohorts, ok := cohortsByAttempt[2]
+	if !ok {
+		t.Fatal("expected observed cohort for attempt 2")
+	}
+	if len(attemptTwoCohorts) != 1 {
+		t.Fatalf(
+			"unexpected unique cohort count for attempt 2\nexpected: [%d]\nactual:   [%d]",
+			1,
+			len(attemptTwoCohorts),
+		)
+	}
+
+	attemptOneCohort := attemptOneCohorts[0]
+	attemptTwoCohort := attemptTwoCohorts[0]
+
+	expectedCohortSize := executor.groupParameters.HonestThreshold
+	if len(attemptOneCohort) != expectedCohortSize {
+		t.Fatalf(
+			"unexpected cohort size for attempt 1\nexpected: [%d]\nactual:   [%d]",
+			expectedCohortSize,
+			len(attemptOneCohort),
+		)
+	}
+	if len(attemptTwoCohort) != expectedCohortSize {
+		t.Fatalf(
+			"unexpected cohort size for attempt 2\nexpected: [%d]\nactual:   [%d]",
+			expectedCohortSize,
+			len(attemptTwoCohort),
+		)
+	}
+
+	if reflect.DeepEqual(attemptOneCohort, attemptTwoCohort) {
+		t.Fatalf(
+			"expected cohort variation across attempts\nattempt 1: [%v]\nattempt 2: [%v]",
+			attemptOneCohort,
+			attemptTwoCohort,
+		)
 	}
 
 	if endBlock <= startBlock {
