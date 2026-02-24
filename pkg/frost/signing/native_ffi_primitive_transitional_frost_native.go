@@ -302,14 +302,15 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 		)
 	}
 
-	if err := executeBuildTaggedTBTCSignerBootstrapCoarseRound(
+	coarseSignatureBytes, err := executeBuildTaggedTBTCSignerBootstrapCoarseRoundWithSignature(
 		ctx,
 		request,
 		keyGroupForRound,
 		nativeEngine,
 		includedMembersSet,
 		includedMembersIndexes,
-	); err != nil {
+	)
+	if err != nil {
 		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
 			ctx,
 			logger,
@@ -320,20 +321,25 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 		)
 	}
 
-	if logger != nil {
-		logger.Debugf(
-			"validated tbtc-signer key-group contract via RunDKG and bootstrap coarse round; using legacy fallback until signature cutover",
+	coarseSignature, err := decodeBuildTaggedTBTCSignerSignature(coarseSignatureBytes)
+	if err != nil {
+		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
+			ctx,
+			logger,
+			request,
+			legacyPrivateKeyShare,
+			fmt.Sprintf("cannot decode tbtc-signer coarse signature: [%v]", err),
+			payload.KeyGroupSource,
 		)
 	}
 
-	return btlcnnefsp.fallbackTBTCSignerLegacySigning(
-		ctx,
-		logger,
-		request,
-		legacyPrivateKeyShare,
-		"tbtc-signer bootstrap coarse round completed; using legacy fallback during migration",
-		payload.KeyGroupSource,
-	)
+	if logger != nil {
+		logger.Debugf(
+			"validated tbtc-signer key-group contract via RunDKG and bootstrap coarse round; returning coarse signature",
+		)
+	}
+
+	return coarseSignature, nil
 }
 
 func buildTaggedTBTCSignerRunDKGInputs(
@@ -482,16 +488,36 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 	includedMembersSet map[group.MemberIndex]struct{},
 	includedMembersIndexes []group.MemberIndex,
 ) error {
+	_, err := executeBuildTaggedTBTCSignerBootstrapCoarseRoundWithSignature(
+		ctx,
+		request,
+		keyGroup,
+		nativeEngine,
+		includedMembersSet,
+		includedMembersIndexes,
+	)
+
+	return err
+}
+
+func executeBuildTaggedTBTCSignerBootstrapCoarseRoundWithSignature(
+	ctx context.Context,
+	request *NativeExecutionFFISigningRequest,
+	keyGroup string,
+	nativeEngine NativeTBTCSignerEngine,
+	includedMembersSet map[group.MemberIndex]struct{},
+	includedMembersIndexes []group.MemberIndex,
+) ([]byte, error) {
 	if request == nil {
-		return fmt.Errorf("request is nil")
+		return nil, fmt.Errorf("request is nil")
 	}
 
 	if request.Message == nil {
-		return fmt.Errorf("request message is nil")
+		return nil, fmt.Errorf("request message is nil")
 	}
 
 	if nativeEngine == nil {
-		return fmt.Errorf("native tbtc-signer engine is nil")
+		return nil, fmt.Errorf("native tbtc-signer engine is nil")
 	}
 
 	if ctx == nil {
@@ -502,12 +528,12 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 		var err error
 		includedMembersSet, includedMembersIndexes, err = includedMembersFromRequest(request)
 		if err != nil {
-			return fmt.Errorf("cannot determine included members: [%w]", err)
+			return nil, fmt.Errorf("cannot determine included members: [%w]", err)
 		}
 	}
 
 	if _, ok := includedMembersSet[request.MemberIndex]; !ok {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"member [%v] not included in tbtc-signer signing attempt",
 			request.MemberIndex,
 		)
@@ -519,14 +545,14 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 	}
 
 	if request.MemberIndex == 0 {
-		return fmt.Errorf("request member index is zero")
+		return nil, fmt.Errorf("request member index is zero")
 	}
 
 	signingParticipants, err := buildTaggedTBTCSignerSigningParticipants(
 		includedMembersIndexes,
 	)
 	if err != nil {
-		return fmt.Errorf("cannot derive signing participants: [%w]", err)
+		return nil, fmt.Errorf("cannot derive signing participants: [%w]", err)
 	}
 
 	roundState, err := nativeEngine.StartSignRound(
@@ -537,20 +563,20 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 		signingParticipants,
 	)
 	if err != nil {
-		return fmt.Errorf("start sign round failed: [%w]", err)
+		return nil, fmt.Errorf("start sign round failed: [%w]", err)
 	}
 
 	if roundState == nil {
-		return fmt.Errorf("start sign round returned nil state")
+		return nil, fmt.Errorf("start sign round returned nil state")
 	}
 
 	if roundState.RequiredContributions == 0 {
-		return fmt.Errorf("start sign round required contributions are zero")
+		return nil, fmt.Errorf("start sign round required contributions are zero")
 	}
 
 	if len(signingParticipants) > 0 {
 		if len(roundState.SigningParticipants) != len(signingParticipants) {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"start sign round returned unexpected signing participants count: [%v] != [%v]",
 				len(roundState.SigningParticipants),
 				len(signingParticipants),
@@ -559,7 +585,7 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 
 		for i := range signingParticipants {
 			if roundState.SigningParticipants[i] != signingParticipants[i] {
-				return fmt.Errorf(
+				return nil, fmt.Errorf(
 					"start sign round returned unexpected signing participant at index [%d]: [%v] != [%v]",
 					i,
 					roundState.SigningParticipants[i],
@@ -577,11 +603,11 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 		includedMembersIndexes,
 	)
 	if err != nil {
-		return fmt.Errorf("cannot collect round contributions: [%w]", err)
+		return nil, fmt.Errorf("cannot collect round contributions: [%w]", err)
 	}
 
 	if len(roundContributions) < int(roundState.RequiredContributions) {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"insufficient round contributions: [%v] < [%v]",
 			len(roundContributions),
 			roundState.RequiredContributions,
@@ -593,14 +619,27 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 		roundContributions,
 	)
 	if err != nil {
-		return fmt.Errorf("finalize sign round failed: [%w]", err)
+		return nil, fmt.Errorf("finalize sign round failed: [%w]", err)
 	}
 
 	if len(signature) == 0 {
-		return fmt.Errorf("finalize sign round returned empty signature")
+		return nil, fmt.Errorf("finalize sign round returned empty signature")
 	}
 
-	return nil
+	return signature, nil
+}
+
+func decodeBuildTaggedTBTCSignerSignature(signature []byte) (*frost.Signature, error) {
+	if len(signature) == 0 {
+		return nil, fmt.Errorf("signature is empty")
+	}
+
+	result := &frost.Signature{}
+	if err := result.Unmarshal(signature); err != nil {
+		return nil, fmt.Errorf("invalid frost signature bytes: [%w]", err)
+	}
+
+	return result, nil
 }
 
 func buildTaggedTBTCSignerSigningParticipants(
