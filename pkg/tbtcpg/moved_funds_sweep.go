@@ -25,8 +25,8 @@ var ErrNoPendingMovedFundsSweepRequests = fmt.Errorf(
 
 // MovedFundsSweepLookBackBlocks is the look-back period in blocks used
 // when searching for submitted moving funds-related events. It's equal to
-// 30 days assuming 12 seconds per block.
-const MovedFundsSweepLookBackBlocks = uint64(216000)
+// 50 days assuming 12 seconds per block.
+const MovedFundsSweepLookBackBlocks = uint64(360000)
 
 // MovedFundsSweepTask is a task that may produce a moved funds sweep proposal.
 type MovedFundsSweepTask struct {

@@ -7,6 +7,12 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	// gopsutil provides cross-platform system and process utilities.
+	// It supports linux/amd64 and darwin/amd64 (the target platforms for this codebase),
+	// as well as Windows, FreeBSD, OpenBSD, and Solaris.
+	"github.com/shirou/gopsutil/cpu"
+	"github.com/shirou/gopsutil/mem"
 )
 
 // PerformanceMetricsRecorder provides a simple interface for recording
@@ -108,6 +114,12 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricSigningFailedTotal,
 		MetricSigningTimeoutsTotal,
 		MetricSigningNativeTBTCSignerFallbackTotal,
+		MetricRedemptionExecutionsTotal,
+		MetricRedemptionExecutionsSuccessTotal,
+		MetricRedemptionExecutionsFailedTotal,
+		MetricRedemptionProofSubmissionsTotal,
+		MetricRedemptionProofSubmissionsSuccessTotal,
+		MetricRedemptionProofSubmissionsFailedTotal,
 		MetricWalletActionsTotal,
 		MetricWalletActionSuccessTotal,
 		MetricWalletActionFailedTotal,
@@ -115,6 +127,7 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricCoordinationWindowsDetectedTotal,
 		MetricCoordinationProceduresExecutedTotal,
 		MetricCoordinationFailedTotal,
+		MetricCoordinationLeaderTimeoutTotal,
 		MetricPeerConnectionsTotal,
 		MetricPeerDisconnectionsTotal,
 		MetricMessageBroadcastTotal,
@@ -122,6 +135,10 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricPingTestsTotal,
 		MetricPingTestSuccessTotal,
 		MetricPingTestFailedTotal,
+		MetricNetworkJoinRequestsTotal,
+		MetricNetworkJoinRequestsSuccessTotal,
+		MetricNetworkJoinRequestsFailedTotal,
+		MetricFirewallRejectionsTotal,
 		MetricWalletDispatcherRejectedTotal,
 	}
 
@@ -235,9 +252,12 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 	durationMetrics := []string{
 		MetricDKGDurationSeconds,
 		MetricSigningDurationSeconds,
+		MetricRedemptionActionDurationSeconds,
 		MetricWalletActionDurationSeconds,
 		MetricCoordinationDurationSeconds,
+		MetricCoordinationWindowDurationSeconds,
 		MetricPingTestDurationSeconds,
+		MetricNetworkHandshakeDurationSeconds,
 	}
 
 	// First, initialize all histograms in the map
@@ -295,6 +315,9 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricCPUUtilization,
 		MetricMemoryUsageMB,
 		MetricGoroutineCount,
+		MetricCPULoadPercent,
+		MetricRAMUtilizationPercent,
+		MetricSwapUtilizationPercent,
 	}
 
 	// First, initialize all gauges in the map
@@ -421,7 +444,7 @@ func (pm *PerformanceMetrics) SetGauge(name string, value float64) {
 // observeSystemMetrics periodically collects and updates system metrics
 // including CPU utilization, memory usage, and goroutine count.
 func (pm *PerformanceMetrics) observeSystemMetrics(ctx context.Context) {
-	ticker := time.NewTicker(10 * time.Second) // Update every 10 seconds
+	ticker := time.NewTicker(60 * time.Second) // Update every 10 seconds
 	defer ticker.Stop()
 
 	var lastMemStats runtime.MemStats
@@ -455,6 +478,9 @@ func (pm *PerformanceMetrics) observeSystemMetrics(ctx context.Context) {
 				lastMemStats = memStats
 				lastUpdateTime = now
 			}
+
+			// Update OS-level machine stats
+			pm.updateMachineStats()
 		case <-ctx.Done():
 			return
 		}
@@ -508,6 +534,37 @@ func (pm *PerformanceMetrics) calculateCPUUtilizationHeuristic(
 	}
 
 	return cpuUtilization
+}
+
+// updateMachineStats collects and updates OS-level machine statistics
+// including CPU load, RAM utilization, and swapfile utilization.
+func (pm *PerformanceMetrics) updateMachineStats() {
+	// Get CPU load percentage (1-second average)
+	// NOTE: cpu.Percent blocks for the specified duration (1 second) to sample
+	// CPU usage over that interval. This blocking behavior is intentional and
+	// necessary to obtain an accurate CPU utilization measurement. The function
+	// will not return until the 1-second sampling period completes.
+	cpuPercent, err := cpu.Percent(time.Second, false)
+	if err == nil && len(cpuPercent) > 0 {
+		pm.SetGauge(MetricCPULoadPercent, cpuPercent[0])
+	}
+
+	// Get memory statistics
+	memInfo, err := mem.VirtualMemory()
+	if err == nil {
+		// RAM utilization percentage
+		pm.SetGauge(MetricRAMUtilizationPercent, memInfo.UsedPercent)
+
+		// Swap utilization percentage
+		swapInfo, err := mem.SwapMemory()
+		if err == nil && swapInfo.Total > 0 {
+			swapUtilizationPercent := (float64(swapInfo.Used) / float64(swapInfo.Total)) * 100.0
+			pm.SetGauge(MetricSwapUtilizationPercent, swapUtilizationPercent)
+		} else {
+			// If swap is not available or has no total, set to 0
+			pm.SetGauge(MetricSwapUtilizationPercent, 0)
+		}
+	}
 }
 
 // NoOpPerformanceMetrics is a no-op implementation of PerformanceMetricsRecorder
@@ -580,6 +637,17 @@ const (
 	// frost_tbtc_signer path fell back to legacy tECDSA execution.
 	MetricSigningNativeTBTCSignerFallbackTotal = "signing_native_tbtc_signer_fallback_total"
 
+	// Redemption Metrics
+	MetricRedemptionExecutionsTotal        = "redemption_executions_total"
+	MetricRedemptionExecutionsSuccessTotal = "redemption_executions_success_total"
+	MetricRedemptionExecutionsFailedTotal  = "redemption_executions_failed_total"
+	MetricRedemptionActionDurationSeconds  = "redemption_action_duration_seconds"
+
+	// Redemption Proof Submission Metrics (SPV maintainer)
+	MetricRedemptionProofSubmissionsTotal        = "redemption_proof_submissions_total"
+	MetricRedemptionProofSubmissionsSuccessTotal = "redemption_proof_submissions_success_total"
+	MetricRedemptionProofSubmissionsFailedTotal  = "redemption_proof_submissions_failed_total"
+
 	// Wallet Action Metrics (aggregate)
 	MetricWalletActionsTotal           = "wallet_actions_total"
 	MetricWalletActionSuccessTotal     = "wallet_action_success_total"
@@ -595,8 +663,17 @@ const (
 	// Coordination Metrics
 	MetricCoordinationWindowsDetectedTotal    = "coordination_windows_detected_total"
 	MetricCoordinationProceduresExecutedTotal = "coordination_procedures_executed_total"
-	MetricCoordinationFailedTotal             = "coordination_failed_total"
+	MetricCoordinationFailedTotal             = "coordination_failed_total"         // Only when node is leader
+	MetricCoordinationLeaderTimeoutTotal      = "coordination_leader_timeout_total" // When follower observes leader timeout
 	MetricCoordinationDurationSeconds         = "coordination_duration_seconds"
+
+	// Coordination Window Metrics (per-window tracking)
+	MetricCoordinationWindowDurationSeconds    = "coordination_window_duration_seconds"
+	MetricCoordinationWindowWalletsCoordinated = "coordination_window_wallets_coordinated"
+	MetricCoordinationWindowWalletsSuccessful  = "coordination_window_wallets_successful"
+	MetricCoordinationWindowWalletsFailed      = "coordination_window_wallets_failed"
+	MetricCoordinationWindowTotalFaults        = "coordination_window_total_faults"
+	MetricCoordinationWindowCoordinationBlock  = "coordination_window_coordination_block"
 
 	// Network Metrics
 	MetricIncomingMessageQueueSize = "incoming_message_queue_size"
@@ -610,14 +687,24 @@ const (
 	MetricPingTestFailedTotal      = "ping_test_failed_total"
 	MetricPingTestDurationSeconds  = "ping_test_duration_seconds"
 
+	// Network Join Request Metrics (inbound connection attempts from peers)
+	MetricNetworkJoinRequestsTotal        = "network_join_requests_total"         // Total inbound join attempts
+	MetricNetworkJoinRequestsSuccessTotal = "network_join_requests_success_total" // Successful joins
+	MetricNetworkJoinRequestsFailedTotal  = "network_join_requests_failed_total"  // Failed joins (handshake failure)
+	MetricNetworkHandshakeDurationSeconds = "network_handshake_duration_seconds"  // Handshake duration
+	MetricFirewallRejectionsTotal         = "firewall_rejections_total"           // Firewall rejections
+
 	// Wallet Dispatcher Metrics
 	MetricWalletDispatcherActiveActions = "wallet_dispatcher_active_actions"
 	MetricWalletDispatcherRejectedTotal = "wallet_dispatcher_rejected_total"
 
 	// System Metrics
-	MetricCPUUtilization = "cpu_utilization_percent"
-	MetricMemoryUsageMB  = "memory_usage_mb"
-	MetricGoroutineCount = "goroutine_count"
+	MetricCPUUtilization         = "cpu_utilization_percent"
+	MetricMemoryUsageMB          = "memory_usage_mb"
+	MetricGoroutineCount         = "goroutine_count"
+	MetricCPULoadPercent         = "cpu_load_percent"
+	MetricRAMUtilizationPercent  = "ram_utilization_percent"
+	MetricSwapUtilizationPercent = "swap_utilization_percent"
 )
 
 // WalletActionMetricName generates a metric name for a specific wallet action type.

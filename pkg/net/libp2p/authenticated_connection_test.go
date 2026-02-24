@@ -64,6 +64,7 @@ func TestPinnedAndMessageKeyMismatch(t *testing.T) {
 		responder.networkPrivateKey,
 		firewall,
 		authProtocolID,
+		nil, // metricsRecorder
 	)
 	if err == nil {
 		t.Fatal("should not have successfully completed handshake")
@@ -259,6 +260,7 @@ func connectInitiatorAndResponder(
 			responderPeerID,
 			firewall,
 			authProtocolID,
+			nil, // metricsRecorder
 		)
 		done <- struct{}{}
 	}(initiatorConn, initiator.peerID, initiator.networkPrivateKey, responder.peerID)
@@ -270,6 +272,7 @@ func connectInitiatorAndResponder(
 		responder.networkPrivateKey,
 		firewall,
 		authProtocolID,
+		nil, // metricsRecorder
 	)
 
 	<-done // handshake is done

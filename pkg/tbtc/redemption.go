@@ -12,6 +12,7 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 )
 
 const (
@@ -164,11 +165,11 @@ func newRedemptionAction(
 }
 
 func (ra *redemptionAction) execute() error {
-	executionStartTime := time.Now()
+	startTime := time.Now()
 
 	// Record redemption execution attempt
 	if ra.metricsRecorder != nil {
-		ra.metricsRecorder.IncrementCounter("redemption_executions_total", 1)
+		ra.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionExecutionsTotal, 1)
 	}
 
 	validateProposalLogger := ra.logger.With(
@@ -185,8 +186,7 @@ func (ra *redemptionAction) execute() error {
 	)
 	if err != nil {
 		if ra.metricsRecorder != nil {
-			ra.metricsRecorder.IncrementCounter("redemption_executions_failed_total", 1)
-			ra.metricsRecorder.RecordDuration("redemption_execution_duration_seconds", time.Since(executionStartTime))
+			ra.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionExecutionsFailedTotal, 1)
 		}
 		return fmt.Errorf("validate proposal step failed: [%v]", err)
 	}
@@ -198,8 +198,7 @@ func (ra *redemptionAction) execute() error {
 	)
 	if err != nil {
 		if ra.metricsRecorder != nil {
-			ra.metricsRecorder.IncrementCounter("redemption_executions_failed_total", 1)
-			ra.metricsRecorder.RecordDuration("redemption_execution_duration_seconds", time.Since(executionStartTime))
+			ra.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionExecutionsFailedTotal, 1)
 		}
 		return fmt.Errorf(
 			"error while determining wallet's main UTXO: [%v]",
@@ -211,8 +210,7 @@ func (ra *redemptionAction) execute() error {
 	// in case.
 	if walletMainUtxo == nil {
 		if ra.metricsRecorder != nil {
-			ra.metricsRecorder.IncrementCounter("redemption_executions_failed_total", 1)
-			ra.metricsRecorder.RecordDuration("redemption_execution_duration_seconds", time.Since(executionStartTime))
+			ra.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionExecutionsFailedTotal, 1)
 		}
 		return fmt.Errorf("redeeming wallet has no main UTXO")
 	}
@@ -225,8 +223,7 @@ func (ra *redemptionAction) execute() error {
 	)
 	if err != nil {
 		if ra.metricsRecorder != nil {
-			ra.metricsRecorder.IncrementCounter("redemption_executions_failed_total", 1)
-			ra.metricsRecorder.RecordDuration("redemption_execution_duration_seconds", time.Since(executionStartTime))
+			ra.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionExecutionsFailedTotal, 1)
 		}
 		return fmt.Errorf(
 			"error while ensuring wallet state is synced between "+
@@ -245,8 +242,7 @@ func (ra *redemptionAction) execute() error {
 	)
 	if err != nil {
 		if ra.metricsRecorder != nil {
-			ra.metricsRecorder.IncrementCounter("redemption_executions_failed_total", 1)
-			ra.metricsRecorder.RecordDuration("redemption_execution_duration_seconds", time.Since(executionStartTime))
+			ra.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionExecutionsFailedTotal, 1)
 		}
 		return fmt.Errorf(
 			"error while assembling redemption transaction: [%v]",
@@ -261,13 +257,11 @@ func (ra *redemptionAction) execute() error {
 	// Just in case. This should never happen.
 	if ra.proposalExpiryBlock < ra.signingTimeoutSafetyMarginBlocks {
 		if ra.metricsRecorder != nil {
-			ra.metricsRecorder.IncrementCounter("redemption_executions_failed_total", 1)
-			ra.metricsRecorder.RecordDuration("redemption_execution_duration_seconds", time.Since(executionStartTime))
+			ra.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionExecutionsFailedTotal, 1)
 		}
 		return fmt.Errorf("invalid proposal expiry block")
 	}
 
-	signingStartTime := time.Now()
 	redemptionTx, err := ra.transactionExecutor.signTransaction(
 		signTxLogger,
 		unsignedRedemptionTx,
@@ -276,15 +270,9 @@ func (ra *redemptionAction) execute() error {
 	)
 	if err != nil {
 		if ra.metricsRecorder != nil {
-			ra.metricsRecorder.IncrementCounter("redemption_executions_failed_total", 1)
-			ra.metricsRecorder.RecordDuration("redemption_execution_duration_seconds", time.Since(executionStartTime))
+			ra.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionExecutionsFailedTotal, 1)
 		}
 		return fmt.Errorf("sign transaction step failed: [%v]", err)
-	}
-
-	// Record redemption transaction signing duration
-	if ra.metricsRecorder != nil {
-		ra.metricsRecorder.RecordDuration("redemption_tx_signing_duration_seconds", time.Since(signingStartTime))
 	}
 
 	broadcastTxLogger := ra.logger.With(
@@ -300,16 +288,15 @@ func (ra *redemptionAction) execute() error {
 	)
 	if err != nil {
 		if ra.metricsRecorder != nil {
-			ra.metricsRecorder.IncrementCounter("redemption_executions_failed_total", 1)
-			ra.metricsRecorder.RecordDuration("redemption_execution_duration_seconds", time.Since(executionStartTime))
+			ra.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionExecutionsFailedTotal, 1)
 		}
 		return fmt.Errorf("broadcast transaction step failed: [%v]", err)
 	}
 
 	// Record successful redemption execution
 	if ra.metricsRecorder != nil {
-		ra.metricsRecorder.IncrementCounter("redemption_executions_success_total", 1)
-		ra.metricsRecorder.RecordDuration("redemption_execution_duration_seconds", time.Since(executionStartTime))
+		ra.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionExecutionsSuccessTotal, 1)
+		ra.metricsRecorder.RecordDuration(clientinfo.MetricRedemptionActionDurationSeconds, time.Since(startTime))
 	}
 
 	return nil

@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"time"
 
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	libp2pnetwork "github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	keepNet "github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/net/gen/pb"
 	"github.com/keep-network/keep-core/pkg/net/security/handshake"
@@ -89,7 +91,15 @@ func newAuthenticatedInboundConnection(
 	privateKey libp2pcrypto.PrivKey,
 	firewall keepNet.Firewall,
 	protocol string,
+	metricsRecorder MetricsRecorder,
 ) (*authenticatedConnection, error) {
+	startTime := time.Now()
+
+	// Track inbound join request attempt
+	if metricsRecorder != nil {
+		metricsRecorder.IncrementCounter(clientinfo.MetricNetworkJoinRequestsTotal, 1)
+	}
+
 	ac := &authenticatedConnection{
 		Conn:                unauthenticatedConn,
 		connState:           connState,
@@ -102,6 +112,11 @@ func newAuthenticatedInboundConnection(
 	ac.initializePipe()
 
 	if err := ac.runHandshakeAsResponder(); err != nil {
+		// Track failed join request (handshake failure)
+		if metricsRecorder != nil {
+			metricsRecorder.IncrementCounter(clientinfo.MetricNetworkJoinRequestsFailedTotal, 1)
+		}
+
 		// close the conn before returning (if it hasn't already)
 		// otherwise we leak.
 		if closeErr := ac.Close(); closeErr != nil {
@@ -112,11 +127,23 @@ func newAuthenticatedInboundConnection(
 	}
 
 	if err := ac.checkFirewallRules(); err != nil {
+		// Track firewall rejection
+		if metricsRecorder != nil {
+			metricsRecorder.IncrementCounter(clientinfo.MetricFirewallRejectionsTotal, 1)
+			metricsRecorder.IncrementCounter(clientinfo.MetricNetworkJoinRequestsFailedTotal, 1)
+		}
+
 		if closeErr := ac.Close(); closeErr != nil {
 			logger.Debugf("could not close the connection: [%v]", closeErr)
 		}
 
 		return nil, fmt.Errorf("connection handshake failed: [%v]", err)
+	}
+
+	// Track successful join request
+	if metricsRecorder != nil {
+		metricsRecorder.IncrementCounter(clientinfo.MetricNetworkJoinRequestsSuccessTotal, 1)
+		metricsRecorder.RecordDuration(clientinfo.MetricNetworkHandshakeDurationSeconds, time.Since(startTime))
 	}
 
 	return ac, nil
@@ -135,7 +162,10 @@ func newAuthenticatedOutboundConnection(
 	remotePeerID peer.ID,
 	firewall keepNet.Firewall,
 	protocol string,
+	metricsRecorder MetricsRecorder,
 ) (*authenticatedConnection, error) {
+	startTime := time.Now()
+
 	remotePublicKey, err := remotePeerID.ExtractPublicKey()
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -171,6 +201,11 @@ func newAuthenticatedOutboundConnection(
 		}
 
 		return nil, fmt.Errorf("connection handshake failed: [%v]", err)
+	}
+
+	// Record handshake duration for outbound connections
+	if metricsRecorder != nil {
+		metricsRecorder.RecordDuration(clientinfo.MetricNetworkHandshakeDurationSeconds, time.Since(startTime))
 	}
 
 	return ac, nil

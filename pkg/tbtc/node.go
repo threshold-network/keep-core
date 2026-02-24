@@ -120,6 +120,9 @@ type node struct {
 		SetGauge(name string, value float64)
 		RecordDuration(name string, duration time.Duration)
 	}
+
+	// windowMetricsTracker tracks detailed metrics for individual coordination windows
+	windowMetricsTracker *coordinationWindowMetrics
 }
 
 func newNode(
@@ -236,6 +239,12 @@ func (n *node) setPerformanceMetrics(metrics interface {
 		}
 	}
 
+	// Initialize window metrics tracker with performance metrics
+	// Keep metrics for the last 100 windows (approximately 25 hours at 900 blocks per window)
+	if perfMetrics, ok := metrics.(clientinfo.PerformanceMetricsRecorder); ok {
+		n.windowMetricsTracker = newCoordinationWindowMetrics(perfMetrics, 100)
+	}
+
 	if n.walletDispatcher != nil {
 		n.walletDispatcher.setMetricsRecorder(metrics)
 	}
@@ -262,6 +271,16 @@ func (n *node) setPerformanceMetrics(metrics interface {
 		executor.setMetricsRecorder(metrics)
 	}
 	n.coordinationExecutorsMutex.Unlock()
+}
+
+// GetCoordinationWindowsSummary returns a summary of coordination window metrics.
+// Returns nil if the window metrics tracker is not initialized.
+func (n *node) GetCoordinationWindowsSummary() *WindowMetricsSummary {
+	if n.windowMetricsTracker == nil {
+		return nil
+	}
+	summary := n.windowMetricsTracker.GetSummary()
+	return &summary
 }
 
 // operatorAddress returns the node's operator address.
@@ -1036,13 +1055,34 @@ func (n *node) runCoordinationLayer(
 
 	coordinationResultChan := make(chan *coordinationResult)
 
+	// Track the previous window to record its end when a new one starts
+	// Use a mutex to safely access from multiple goroutines
+	var previousWindowMu sync.Mutex
+	var previousWindow *coordinationWindow
+
 	// Prepare a callback function that will be called every time a new
 	// coordination window is detected.
 	onWindowFn := func(window *coordinationWindow) {
+		previousWindowMu.Lock()
+		// Record end of previous window if it exists
+		if previousWindow != nil && n.windowMetricsTracker != nil {
+			n.windowMetricsTracker.recordWindowEnd(previousWindow)
+		}
+		previousWindowMu.Unlock()
+
 		// Track coordination window detection
 		if n.performanceMetrics != nil {
 			n.performanceMetrics.IncrementCounter(clientinfo.MetricCoordinationWindowsDetectedTotal, 1)
 		}
+
+		// Record window start in detailed metrics tracker
+		if n.windowMetricsTracker != nil {
+			n.windowMetricsTracker.recordWindowStart(window)
+		}
+
+		previousWindowMu.Lock()
+		previousWindow = window
+		previousWindowMu.Unlock()
 
 		// Fetch all wallets controlled by the node. It is important to
 		// get the wallets every time the window is triggered as the
@@ -1085,6 +1125,17 @@ func (n *node) runCoordinationLayer(
 		}
 	}()
 
+	// Start a cleanup goroutine to record the end time of the last window on shutdown
+	go func() {
+		<-ctx.Done()
+		// Record end time for the active window if it exists and hasn't been ended yet
+		previousWindowMu.Lock()
+		if previousWindow != nil && n.windowMetricsTracker != nil {
+			n.windowMetricsTracker.recordWindowEnd(previousWindow)
+		}
+		previousWindowMu.Unlock()
+	}()
+
 	return nil
 }
 
@@ -1122,10 +1173,36 @@ func executeCoordinationProcedure(
 		return nil, false
 	}
 
+	startTime := time.Now()
 	result, err := executor.coordinate(window)
+	duration := time.Since(startTime)
+
 	if err != nil {
 		procedureLogger.Errorf("coordination procedure failed: [%v]", err)
 		// Metrics are already recorded in executor.coordinate() for failures
+
+		// Record window metrics for failed coordination
+		if node.windowMetricsTracker != nil {
+			walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
+			// Extract leader and faults from partial result if available
+			// (e.g., when follower routine fails, we know who the leader was)
+			leader := chain.Address("")
+			var faults []*coordinationFault
+			if result != nil {
+				leader = result.leader
+				faults = result.faults
+			}
+			node.windowMetricsTracker.recordWalletCoordination(
+				window,
+				walletPublicKeyHash,
+				leader,
+				"",
+				false,
+				duration,
+				faults,
+				err, // capture the error message
+			)
+		}
 		return nil, false
 	}
 
@@ -1135,6 +1212,25 @@ func executeCoordinationProcedure(
 	)
 
 	// Metrics are already recorded in executor.coordinate() for successful executions
+
+	// Record window metrics for successful coordination
+	if node.windowMetricsTracker != nil {
+		walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
+		actionType := ""
+		if result.proposal != nil {
+			actionType = result.proposal.ActionType().String()
+		}
+		node.windowMetricsTracker.recordWalletCoordination(
+			window,
+			walletPublicKeyHash,
+			result.leader,
+			actionType,
+			true,
+			duration,
+			result.faults,
+			nil, // no error on success
+		)
+	}
 
 	return result, true
 }

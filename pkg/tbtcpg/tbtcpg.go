@@ -2,6 +2,7 @@ package tbtcpg
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -82,6 +83,9 @@ func (pg *ProposalGenerator) Generate(
 		request.ActionsChecklist,
 	)
 
+	var taskErrors []error
+	var unsupportedActions []string
+
 	for _, action := range request.ActionsChecklist {
 		walletLogger.Infof("starting proposal task [%s]", action)
 
@@ -91,16 +95,18 @@ func (pg *ProposalGenerator) Generate(
 
 		if taskIndex < 0 {
 			walletLogger.Warnf("proposal task [%s] is not supported", action)
+			unsupportedActions = append(unsupportedActions, action.String())
 			continue
 		}
 
 		proposal, ok, err := pg.tasks[taskIndex].Run(request)
 		if err != nil {
-			return nil, fmt.Errorf(
-				"error while running proposal task [%s]: [%v]",
-				action,
-				err,
-			)
+			walletLogger.With(
+				zap.String("action", action.String()),
+				zap.Error(err),
+			).Error("proposal task failed; continuing with next task")
+			taskErrors = append(taskErrors, fmt.Errorf("task [%s]: [%w]", action, err))
+			continue
 		}
 
 		if !ok {
@@ -117,6 +123,26 @@ func (pg *ProposalGenerator) Generate(
 		)
 
 		return proposal, nil
+	}
+
+	// If we have errors from all attempted tasks (excluding unsupported ones),
+	// return an error so the retry loop can help with transient issues.
+	// If tasks completed without result (ok=false, err=nil), that's fine - return Noop.
+	if len(taskErrors) > 0 && len(taskErrors) == len(request.ActionsChecklist)-len(unsupportedActions) {
+		walletLogger.Error(
+			"all proposal tasks failed with errors; returning error for retry",
+			zap.Int("failedTasks", len(taskErrors)),
+			zap.Int("totalTasks", len(request.ActionsChecklist)),
+		)
+		// Build a detailed error message with all task errors
+		errorMsgs := make([]string, len(taskErrors))
+		for i, err := range taskErrors {
+			errorMsgs[i] = err.Error()
+		}
+		return nil, fmt.Errorf(
+			"all proposal tasks failed: [%s]",
+			strings.Join(errorMsgs, " "),
+		)
 	}
 
 	walletLogger.Infof(

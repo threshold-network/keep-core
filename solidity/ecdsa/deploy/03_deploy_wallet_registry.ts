@@ -5,6 +5,15 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   const { getNamedAccounts, deployments, ethers, helpers } = hre
   const { deployer } = await getNamedAccounts()
 
+  // Skip if WalletRegistry already deployed (for existing testnet deployments)
+  const existingWalletRegistry = await deployments.getOrNull("WalletRegistry")
+  if (existingWalletRegistry) {
+    console.log(
+      `using existing WalletRegistry at ${existingWalletRegistry.address}`
+    )
+    return true
+  }
+
   const EcdsaSortitionPool = await deployments.get("EcdsaSortitionPool")
   const TokenStaking = await deployments.get("TokenStaking")
   const ReimbursementPool = await deployments.get("ReimbursementPool")
@@ -67,6 +76,8 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       address: walletRegistry.address,
     })
   }
+
+  return true
 }
 
 export default func
@@ -79,3 +90,4 @@ func.dependencies = [
   "TokenStaking",
   "EcdsaDkgValidator",
 ]
+func.id = "deploy_wallet_registry"

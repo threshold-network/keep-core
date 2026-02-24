@@ -102,7 +102,7 @@ describe("WalletRegistry - Random Beacon", async () => {
       it("should revert", async () => {
         await expect(
           walletRegistry.connect(thirdParty).__beaconCallback(123, 456)
-        ).to.be.revertedWith("Caller is not the Random Beacon")
+        ).to.be.revertedWithCustomError(walletRegistry, "CallerNotRandomBeacon")
       })
     })
 

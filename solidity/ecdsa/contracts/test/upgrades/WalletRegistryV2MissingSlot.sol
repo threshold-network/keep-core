@@ -789,8 +789,12 @@ contract WalletRegistryV2MissingSlot is
         // such a way that the call inside try-catch fails with out-of-gas and
         // the rest of the function is executed with the remaining 1/64 of gas,
         // we require an extra gas amount to be left at the end of the call to
-        // `challengeDkgResult`.
-        dkg.requireChallengeExtraGas();
+        // `challengeDkgResult`. This check enforces EIP-150 gas protection by
+        // ensuring sufficient gas remains for safe execution.
+        require(
+            gasleft() >= dkg.parameters.resultChallengeExtraGas,
+            "Not enough extra gas left"
+        );
     }
 
     /// @notice Notifies about operators who are inactive. Using this function,

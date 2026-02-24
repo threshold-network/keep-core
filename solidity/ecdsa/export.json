@@ -2,6 +2,434 @@
   "name": "mainnet",
   "chainId": "1",
   "contracts": {
+    "Allowlist": {
+      "address": "0x5e1b4e41ea2eea6ac7656431ccdc7b204a88386f",
+      "abi": [
+        {
+          "inputs": [],
+          "stateMutability": "nonpayable",
+          "type": "constructor"
+        },
+        {
+          "inputs": [],
+          "name": "NoDecreasePending",
+          "type": "error"
+        },
+        {
+          "inputs": [],
+          "name": "NotWalletRegistry",
+          "type": "error"
+        },
+        {
+          "inputs": [],
+          "name": "RequestedWeightNotBelowCurrentWeight",
+          "type": "error"
+        },
+        {
+          "inputs": [],
+          "name": "StakingProviderAlreadyAdded",
+          "type": "error"
+        },
+        {
+          "inputs": [],
+          "name": "StakingProviderUnknown",
+          "type": "error"
+        },
+        {
+          "inputs": [],
+          "name": "ZeroAddress",
+          "type": "error"
+        },
+        {
+          "inputs": [],
+          "name": "ZeroWeight",
+          "type": "error"
+        },
+        {
+          "anonymous": false,
+          "inputs": [
+            {
+              "indexed": false,
+              "internalType": "uint8",
+              "name": "version",
+              "type": "uint8"
+            }
+          ],
+          "name": "Initialized",
+          "type": "event"
+        },
+        {
+          "anonymous": false,
+          "inputs": [
+            {
+              "indexed": false,
+              "internalType": "address",
+              "name": "notifier",
+              "type": "address"
+            },
+            {
+              "indexed": false,
+              "internalType": "address[]",
+              "name": "stakingProviders",
+              "type": "address[]"
+            }
+          ],
+          "name": "MaliciousBehaviorIdentified",
+          "type": "event"
+        },
+        {
+          "anonymous": false,
+          "inputs": [
+            {
+              "indexed": true,
+              "internalType": "address",
+              "name": "previousOwner",
+              "type": "address"
+            },
+            {
+              "indexed": true,
+              "internalType": "address",
+              "name": "newOwner",
+              "type": "address"
+            }
+          ],
+          "name": "OwnershipTransferStarted",
+          "type": "event"
+        },
+        {
+          "anonymous": false,
+          "inputs": [
+            {
+              "indexed": true,
+              "internalType": "address",
+              "name": "previousOwner",
+              "type": "address"
+            },
+            {
+              "indexed": true,
+              "internalType": "address",
+              "name": "newOwner",
+              "type": "address"
+            }
+          ],
+          "name": "OwnershipTransferred",
+          "type": "event"
+        },
+        {
+          "anonymous": false,
+          "inputs": [
+            {
+              "indexed": true,
+              "internalType": "address",
+              "name": "stakingProvider",
+              "type": "address"
+            },
+            {
+              "indexed": false,
+              "internalType": "uint96",
+              "name": "weight",
+              "type": "uint96"
+            }
+          ],
+          "name": "StakingProviderAdded",
+          "type": "event"
+        },
+        {
+          "anonymous": false,
+          "inputs": [
+            {
+              "indexed": true,
+              "internalType": "address",
+              "name": "stakingProvider",
+              "type": "address"
+            },
+            {
+              "indexed": false,
+              "internalType": "uint96",
+              "name": "oldWeight",
+              "type": "uint96"
+            },
+            {
+              "indexed": false,
+              "internalType": "uint96",
+              "name": "newWeight",
+              "type": "uint96"
+            }
+          ],
+          "name": "WeightDecreaseFinalized",
+          "type": "event"
+        },
+        {
+          "anonymous": false,
+          "inputs": [
+            {
+              "indexed": true,
+              "internalType": "address",
+              "name": "stakingProvider",
+              "type": "address"
+            },
+            {
+              "indexed": false,
+              "internalType": "uint96",
+              "name": "oldWeight",
+              "type": "uint96"
+            },
+            {
+              "indexed": false,
+              "internalType": "uint96",
+              "name": "newWeight",
+              "type": "uint96"
+            }
+          ],
+          "name": "WeightDecreaseRequested",
+          "type": "event"
+        },
+        {
+          "inputs": [],
+          "name": "acceptOwnership",
+          "outputs": [],
+          "stateMutability": "nonpayable",
+          "type": "function"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "stakingProvider",
+              "type": "address"
+            },
+            {
+              "internalType": "uint96",
+              "name": "weight",
+              "type": "uint96"
+            }
+          ],
+          "name": "addStakingProvider",
+          "outputs": [],
+          "stateMutability": "nonpayable",
+          "type": "function"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "stakingProvider",
+              "type": "address"
+            }
+          ],
+          "name": "approveAuthorizationDecrease",
+          "outputs": [
+            {
+              "internalType": "uint96",
+              "name": "",
+              "type": "uint96"
+            }
+          ],
+          "stateMutability": "nonpayable",
+          "type": "function"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "stakingProvider",
+              "type": "address"
+            },
+            {
+              "internalType": "address",
+              "name": "",
+              "type": "address"
+            }
+          ],
+          "name": "authorizedStake",
+          "outputs": [
+            {
+              "internalType": "uint96",
+              "name": "",
+              "type": "uint96"
+            }
+          ],
+          "stateMutability": "view",
+          "type": "function"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "_walletRegistry",
+              "type": "address"
+            }
+          ],
+          "name": "initialize",
+          "outputs": [],
+          "stateMutability": "nonpayable",
+          "type": "function"
+        },
+        {
+          "inputs": [],
+          "name": "owner",
+          "outputs": [
+            {
+              "internalType": "address",
+              "name": "",
+              "type": "address"
+            }
+          ],
+          "stateMutability": "view",
+          "type": "function"
+        },
+        {
+          "inputs": [],
+          "name": "pendingOwner",
+          "outputs": [
+            {
+              "internalType": "address",
+              "name": "",
+              "type": "address"
+            }
+          ],
+          "stateMutability": "view",
+          "type": "function"
+        },
+        {
+          "inputs": [],
+          "name": "renounceOwnership",
+          "outputs": [],
+          "stateMutability": "nonpayable",
+          "type": "function"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "stakingProvider",
+              "type": "address"
+            },
+            {
+              "internalType": "uint96",
+              "name": "newWeight",
+              "type": "uint96"
+            }
+          ],
+          "name": "requestWeightDecrease",
+          "outputs": [],
+          "stateMutability": "nonpayable",
+          "type": "function"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "stakingProvider",
+              "type": "address"
+            }
+          ],
+          "name": "rolesOf",
+          "outputs": [
+            {
+              "internalType": "address",
+              "name": "stakeOwner",
+              "type": "address"
+            },
+            {
+              "internalType": "address payable",
+              "name": "beneficiary",
+              "type": "address"
+            },
+            {
+              "internalType": "address",
+              "name": "authorizer",
+              "type": "address"
+            }
+          ],
+          "stateMutability": "view",
+          "type": "function"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "uint96",
+              "name": "",
+              "type": "uint96"
+            },
+            {
+              "internalType": "uint256",
+              "name": "",
+              "type": "uint256"
+            },
+            {
+              "internalType": "address",
+              "name": "notifier",
+              "type": "address"
+            },
+            {
+              "internalType": "address[]",
+              "name": "_stakingProviders",
+              "type": "address[]"
+            }
+          ],
+          "name": "seize",
+          "outputs": [],
+          "stateMutability": "nonpayable",
+          "type": "function"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "",
+              "type": "address"
+            }
+          ],
+          "name": "stakingProviders",
+          "outputs": [
+            {
+              "internalType": "uint96",
+              "name": "weight",
+              "type": "uint96"
+            },
+            {
+              "internalType": "uint96",
+              "name": "pendingNewWeight",
+              "type": "uint96"
+            },
+            {
+              "internalType": "bool",
+              "name": "decreasePending",
+              "type": "bool"
+            }
+          ],
+          "stateMutability": "view",
+          "type": "function"
+        },
+        {
+          "inputs": [
+            {
+              "internalType": "address",
+              "name": "newOwner",
+              "type": "address"
+            }
+          ],
+          "name": "transferOwnership",
+          "outputs": [],
+          "stateMutability": "nonpayable",
+          "type": "function"
+        },
+        {
+          "inputs": [],
+          "name": "walletRegistry",
+          "outputs": [
+            {
+              "internalType": "contract WalletRegistry",
+              "name": "",
+              "type": "address"
+            }
+          ],
+          "stateMutability": "view",
+          "type": "function"
+        }
+      ]
+    },
     "EcdsaDkgValidator": {
       "address": "0x0125c8977a02b2Fa3970b1ED9AF02f5Bedd4eF27",
       "abi": [

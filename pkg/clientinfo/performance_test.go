@@ -64,6 +64,11 @@ func TestConcurrentCounterDifferentMetrics(t *testing.T) {
 		MetricSigningFailedTotal,
 	}
 
+	// Add timeout to prevent test from hanging indefinitely
+	testCtx, testCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer testCancel()
+
+	done := make(chan struct{})
 	var wg sync.WaitGroup
 	for _, metricName := range metrics {
 		for i := 0; i < numGoroutines; i++ {
@@ -71,12 +76,28 @@ func TestConcurrentCounterDifferentMetrics(t *testing.T) {
 			go func(name string) {
 				defer wg.Done()
 				for j := 0; j < incrementsPer; j++ {
-					pm.IncrementCounter(name, 1)
+					select {
+					case <-testCtx.Done():
+						return
+					default:
+						pm.IncrementCounter(name, 1)
+					}
 				}
 			}(metricName)
 		}
 	}
-	wg.Wait()
+
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Test completed successfully
+	case <-testCtx.Done():
+		t.Fatal("Test timed out waiting for goroutines to complete")
+	}
 
 	expected := float64(numGoroutines * incrementsPer)
 	for _, metricName := range metrics {
@@ -321,6 +342,9 @@ func TestMetricsInitialization(t *testing.T) {
 		MetricCPUUtilization,
 		MetricMemoryUsageMB,
 		MetricGoroutineCount,
+		MetricCPULoadPercent,
+		MetricRAMUtilizationPercent,
+		MetricSwapUtilizationPercent,
 	}
 
 	for _, gaugeName := range gauges {

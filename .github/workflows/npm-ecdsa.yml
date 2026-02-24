@@ -33,12 +33,8 @@ jobs:
           cache: "yarn"
           cache-dependency-path: solidity/ecdsa/yarn.lock
 
-      - name: Resolve latest contracts
-        run: |
-          yarn upgrade --exact \
-            @keep-network/random-beacon \
-            @keep-network/sortition-pools \
-            @threshold-network/solidity-contracts
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
 
       # Deploy contracts to a local network to generate deployment artifacts that
       # are required by dashboard and client compilation.

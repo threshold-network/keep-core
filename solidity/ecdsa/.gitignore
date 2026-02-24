@@ -13,3 +13,13 @@ deployments/*
 
 # OpenZeppelin
 .openzeppelin/unknown-*.json
+
+# Environment variables (NEVER commit private keys!)
+.env
+.env.local
+.env.*.local
+.env.sepolia
+.env.mainnet
+
+# Migration results (may contain sensitive info)
+migration-results.json

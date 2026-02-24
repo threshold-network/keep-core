@@ -59,7 +59,7 @@ func TestProposalGenerator_Generate(t *testing.T) {
 			},
 			expectedProposal: &mockCoordinationProposal{tbtc.ActionDepositSweep},
 		},
-		"first task returns error": {
+		"first task returns error but second succeeds": {
 			tasks: []ProposalTask{
 				&mockProposalTask{
 					action: tbtc.ActionRedemption,
@@ -78,8 +78,52 @@ func TestProposalGenerator_Generate(t *testing.T) {
 				tbtc.ActionRedemption,
 				tbtc.ActionDepositSweep,
 			},
+			expectedProposal: &mockCoordinationProposal{tbtc.ActionDepositSweep},
+			expectedErr:      nil,
+		},
+		"all tasks return error": {
+			tasks: []ProposalTask{
+				&mockProposalTask{
+					action: tbtc.ActionRedemption,
+					results: map[[20]byte]mockProposalTaskResult{
+						walletPublicKeyHash: resultError,
+					},
+				},
+				&mockProposalTask{
+					action: tbtc.ActionDepositSweep,
+					results: map[[20]byte]mockProposalTaskResult{
+						walletPublicKeyHash: resultError,
+					},
+				},
+			},
+			actionsChecklist: []tbtc.WalletActionType{
+				tbtc.ActionRedemption,
+				tbtc.ActionDepositSweep,
+			},
 			expectedProposal: nil,
-			expectedErr:      fmt.Errorf("error while running proposal task [Redemption]: [proposal task error]"),
+			expectedErr:      fmt.Errorf("all proposal tasks failed: [task [Redemption]: [proposal task error] task [DepositSweep]: [proposal task error]]"),
+		},
+		"some tasks return error but others complete without result": {
+			tasks: []ProposalTask{
+				&mockProposalTask{
+					action: tbtc.ActionRedemption,
+					results: map[[20]byte]mockProposalTaskResult{
+						walletPublicKeyHash: resultError,
+					},
+				},
+				&mockProposalTask{
+					action: tbtc.ActionDepositSweep,
+					results: map[[20]byte]mockProposalTaskResult{
+						walletPublicKeyHash: resultEmpty,
+					},
+				},
+			},
+			actionsChecklist: []tbtc.WalletActionType{
+				tbtc.ActionRedemption,
+				tbtc.ActionDepositSweep,
+			},
+			expectedProposal: &tbtc.NoopProposal{},
+			expectedErr:      nil,
 		},
 		"first task is unsupported": {
 			tasks: []ProposalTask{

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -189,7 +190,12 @@ func TestProviderSetAnnouncedAddresses(t *testing.T) {
 		fmt.Sprintf("/ip4/100.20.50.30/tcp/3919/ipfs/%v", provider.ID()),
 	}
 	providerAddresses := provider.ConnectionManager().AddrStrings()
-	if strings.Join(expectedAddresses, " ") != strings.Join(providerAddresses, " ") {
+	// Compare as sets; libp2p address order may vary by version
+	sort.Strings(expectedAddresses)
+	got := make([]string, len(providerAddresses))
+	copy(got, providerAddresses)
+	sort.Strings(got)
+	if strings.Join(expectedAddresses, " ") != strings.Join(got, " ") {
 		t.Fatalf(
 			"expected: provider addresses [%v]\nactual: provider addresses [%v]",
 			expectedAddresses,

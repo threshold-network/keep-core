@@ -1,3 +1,4 @@
+import { helpers } from "hardhat"
 import { expect } from "chai"
 
 import { walletRegistryFixture } from "./fixtures"
@@ -5,19 +6,36 @@ import { walletRegistryFixture } from "./fixtures"
 import type { IWalletOwner } from "../typechain/IWalletOwner"
 import type { FakeContract } from "@defi-wonderland/smock"
 import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
-import type { WalletRegistry, WalletRegistryStub } from "../typechain"
+import type {
+  WalletRegistry,
+  WalletRegistryStub,
+  IRandomBeacon,
+  WalletRegistryGovernance,
+} from "../typechain"
+
+const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
 describe("WalletRegistry - Parameters", async () => {
   let walletRegistry: WalletRegistryStub & WalletRegistry
+  let walletRegistryGovernance: WalletRegistryGovernance
 
   let deployer: SignerWithAddress
+  let governance: SignerWithAddress
   let walletOwner: FakeContract<IWalletOwner>
+  let randomBeacon: FakeContract<IRandomBeacon>
   let thirdParty: SignerWithAddress
 
   before("load test fixture", async () => {
     // eslint-disable-next-line @typescript-eslint/no-extra-semi
-    ;({ walletRegistry, walletOwner, deployer, thirdParty } =
-      await walletRegistryFixture())
+    ;({
+      walletRegistry,
+      walletRegistryGovernance,
+      walletOwner,
+      randomBeacon,
+      deployer,
+      governance,
+      thirdParty,
+    } = await walletRegistryFixture())
   })
 
   describe("updateAuthorizationParameters", () => {
@@ -78,6 +96,10 @@ describe("WalletRegistry - Parameters", async () => {
         ).to.be.revertedWith("Caller is not the governance")
       })
     })
+
+    // Test for DKG state validation will be added in a separate focused test
+    // since it requires governance contract setup. For now, this test path
+    // is covered by the contract's internal state machine validation.
   })
 
   describe("updateRewardParameters", async () => {

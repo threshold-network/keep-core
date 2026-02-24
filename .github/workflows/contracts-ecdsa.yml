@@ -109,7 +109,7 @@ jobs:
       # As a workaround for a slither issue https://github.com/crytic/slither/issues/1140
       # we disable compilation of dependencies when running slither.
       - name: Run Slither
-        run: SKIP_DEPENDENCY_COMPILER=true slither .
+        run: SKIP_DEPENDENCY_COMPILER=true slither . --compile-force-framework hardhat
 
   contracts-build-and-test:
     needs: contracts-detect-changes

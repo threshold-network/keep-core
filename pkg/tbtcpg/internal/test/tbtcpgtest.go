@@ -3,7 +3,6 @@ package test
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/keep-network/keep-core/pkg/tbtcpg"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -12,7 +11,9 @@ import (
 	"time"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/tbtc"
+	"github.com/keep-network/keep-core/pkg/tbtcpg"
 )
 
 const (
@@ -34,6 +35,7 @@ type Deposit struct {
 	RevealBlockNumber uint64
 	RevealedAt        time.Time
 	SweptAt           time.Time
+	Vault             *chain.Address
 }
 
 // FindDepositsToSweepTestScenario represents a test scenario of finding deposits to sweep.
@@ -89,6 +91,7 @@ func (psts *ProposeSweepTestScenario) DepositsReferences() []*tbtcpg.DepositRefe
 			FundingTxHash:      d.FundingTxHash,
 			FundingOutputIndex: d.FundingOutputIndex,
 			RevealBlock:        d.RevealBlock,
+			Vault:              d.Vault,
 		}
 	}
 

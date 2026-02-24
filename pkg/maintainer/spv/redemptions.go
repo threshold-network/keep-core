@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -46,12 +47,12 @@ func submitRedemptionProof(
 ) error {
 	// Record proof submission attempt
 	if metricsRecorder != nil {
-		metricsRecorder.IncrementCounter("redemption_proof_submissions_total", 1)
+		metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionProofSubmissionsTotal, 1)
 	}
 
 	if requiredConfirmations == 0 {
 		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter("redemption_proof_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionProofSubmissionsFailedTotal, 1)
 		}
 		return fmt.Errorf(
 			"provided required confirmations count must be greater than 0",
@@ -65,7 +66,7 @@ func submitRedemptionProof(
 	)
 	if err != nil {
 		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter("redemption_proof_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionProofSubmissionsFailedTotal, 1)
 		}
 		return fmt.Errorf(
 			"failed to assemble transaction spv proof: [%v]",
@@ -79,7 +80,7 @@ func submitRedemptionProof(
 	)
 	if err != nil {
 		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter("redemption_proof_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionProofSubmissionsFailedTotal, 1)
 		}
 		return fmt.Errorf(
 			"error while parsing transaction inputs: [%v]",
@@ -94,7 +95,7 @@ func submitRedemptionProof(
 		walletPublicKeyHash,
 	); err != nil {
 		if metricsRecorder != nil {
-			metricsRecorder.IncrementCounter("redemption_proof_submissions_failed_total", 1)
+			metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionProofSubmissionsFailedTotal, 1)
 		}
 		return fmt.Errorf(
 			"failed to submit redemption proof with reimbursement: [%v]",
@@ -104,7 +105,7 @@ func submitRedemptionProof(
 
 	// Record successful proof submission
 	if metricsRecorder != nil {
-		metricsRecorder.IncrementCounter("redemption_proof_submissions_success_total", 1)
+		metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionProofSubmissionsSuccessTotal, 1)
 	}
 
 	return nil

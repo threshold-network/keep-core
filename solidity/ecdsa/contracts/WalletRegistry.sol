@@ -16,6 +16,7 @@ pragma solidity 0.8.17;
 
 import "./api/IWalletRegistry.sol";
 import "./api/IWalletOwner.sol";
+import "./Allowlist.sol";
 import "./libraries/Wallets.sol";
 import {EcdsaAuthorization as Authorization} from "./libraries/EcdsaAuthorization.sol";
 import {EcdsaDkg as DKG} from "./libraries/EcdsaDkg.sol";
@@ -119,6 +120,15 @@ contract WalletRegistry is
     /// @custom:oz-upgrades-unsafe-allow state-variable-immutable
     IStaking public immutable staking;
     IRandomBeacon public randomBeacon;
+
+    /// @notice Allowlist contract for weight-based operator authorization.
+    ///         When set (non-zero address), takes precedence over legacy TokenStaking.
+    ///         This enables gradual migration from T staking to allowlist-based
+    ///         authorization following TIP-092, while maintaining backward
+    ///         compatibility with existing deployments.
+    /// @dev Set via initializeV2() during proxy upgrade. When allowlist is zero
+    ///      address (default), the legacy TokenStaking authorization path is used.
+    Allowlist public allowlist;
 
     // Events
     event DkgStarted(uint256 indexed seed);
@@ -243,25 +253,85 @@ contract WalletRegistry is
         address notifier
     );
 
+    // Custom Errors
+
+    // Authorization Errors
+
+    /// @notice Raised when caller is not the staking contract or allowlist contract.
+    error CallerNotStakingContract();
+
+    /// @notice Raised when caller is not the designated wallet owner contract.
+    error CallerNotWalletOwner();
+
+    /// @notice Raised when caller is not the governance address.
+    error CallerNotGovernance();
+
+    /// @notice Raised when caller is not the authorized random beacon contract.
+    error CallerNotRandomBeacon();
+
+    // Validation Errors
+
+    /// @notice Raised when allowlist address provided is zero address.
+    error AllowlistAddressZero();
+
+    /// @notice Raised when querying an operator that has not been registered.
+    error UnknownOperator();
+
+    /// @notice Raised when provided nonce does not match the expected inactivity claim nonce.
+    error InvalidNonce();
+
+    /// @notice Raised when the hash of provided group members does not match wallet's stored hash.
+    error InvalidGroupMembers();
+
+    /// @notice Raised when the hash of provided wallet member IDs does not match stored hash.
+    error InvalidWalletMembersIdentifiers();
+
+    /// @notice Raised when querying with an address that is not a sortition pool operator.
+    error NotSortitionPoolOperator();
+
+    /// @notice Raised when provided wallet member index is outside valid range [1, length].
+    error WalletMemberIndexOutOfRange();
+
+    // State Errors
+
+    /// @notice Raised when DKG parameter update attempted while DKG state is not IDLE.
+    error CurrentStateNotIdle();
+
+    // Configuration Errors
+
+    /// @notice Raised when insufficient gas remains after challengeDkgResult execution.
+    error NotEnoughExtraGasLeft();
+
+    /// @notice Dual-mode authorization modifier supporting both Allowlist and
+    ///         legacy TokenStaking authorization paths.
+    /// @dev Authorization precedence:
+    ///      1. If allowlist is set (non-zero), only allowlist contract can call
+    ///      2. If allowlist is NOT set (zero), only legacy staking contract can call
+    ///      This ensures a clean migration path while maintaining backward compatibility.
+    ///      The address is cached in a local variable to minimize gas costs from
+    ///      storage reads (SLOAD operation).
     modifier onlyStakingContract() {
-        require(
-            msg.sender == address(staking),
-            "Caller is not the staking contract"
-        );
+        address _allowlist = address(allowlist);
+        if (_allowlist != address(0)) {
+            // Allowlist authorization path (post-TIP-092)
+            if (msg.sender != _allowlist) revert CallerNotStakingContract();
+        } else {
+            // Legacy staking authorization path (pre-TIP-092, backward compatible)
+            if (msg.sender != address(staking))
+                revert CallerNotStakingContract();
+        }
         _;
     }
 
     /// @notice Reverts if called not by the Wallet Owner.
     modifier onlyWalletOwner() {
-        require(
-            msg.sender == address(walletOwner),
-            "Caller is not the Wallet Owner"
-        );
+        if (msg.sender != address(walletOwner)) revert CallerNotWalletOwner();
         _;
     }
 
+    /// @notice Reverts if called not by the governance.
     modifier onlyReimbursableAdmin() override {
-        require(governance == msg.sender, "Caller is not the governance");
+        if (msg.sender != governance) revert CallerNotGovernance();
         _;
     }
 
@@ -350,14 +420,65 @@ contract WalletRegistry is
         _notifyDkgTimeoutNegativeGasOffset = 2_300;
     }
 
+    /// @notice Upgrades WalletRegistry to support allowlist-based authorization.
+    ///         This function enables the migration from legacy TokenStaking to the
+    ///         new Allowlist contract following TIP-092 governance decision.
+    ///         Once called, the allowlist contract becomes the sole authority for
+    ///         operator authorization, replacing the TokenStaking contract.
+    /// @param _allowlist Address of the Allowlist contract
+    /// @dev Uses reinitializer(2) for proxy upgrade compatibility. Can only be
+    ///      called once per proxy upgrade. The zero address check prevents
+    ///      misconfiguration that would break authorization.
+    ///      After successful execution, the onlyStakingContract modifier will
+    ///      only accept calls from the allowlist contract.
+    ///
+    ///      SECURITY ASSUMPTION (Audit ISSUE #2 - Bytecode Optimization):
+    ///      Front-running protection is provided by atomic upgradeToAndCall pattern,
+    ///      not by governance modifier (removed to save ~42 bytes). The governance
+    ///      process MUST enforce atomic upgrades via upgradeToAndCall and prohibit
+    ///      separate upgradeTo followed by initializeV2 calls. The reinitializer(2)
+    ///      modifier prevents re-initialization after successful atomic upgrade.
+    ///
+    ///      Atomic Upgrade Requirement:
+    ///      - Proxy admin MUST use upgradeToAndCall (single transaction)
+    ///      - Upgrade implementation + initialize MUST be atomic
+    ///      - No front-running window between upgrade and initialization
+    ///      - Violation of this assumption creates front-running vulnerability
+    function initializeV2(address _allowlist) external reinitializer(2) {
+        if (_allowlist == address(0)) revert AllowlistAddressZero();
+        allowlist = Allowlist(_allowlist);
+    }
+
     /// @notice Withdraws application rewards for the given staking provider.
     ///         Rewards are withdrawn to the staking provider's beneficiary
     ///         address set in the staking contract. Reverts if staking provider
     ///         has not registered the operator address.
     /// @dev Emits `RewardsWithdrawn` event.
+    ///
+    /// NOT MIGRATED: Beneficiary lookup remains on TokenStaking because
+    /// migrating dead code costs 50-100 bytes with zero benefit.
+    ///
+    /// Historical Context (TIP-092/100 - February 15, 2025):
+    /// - Sortition pool DKG participation rewards HALTED Feb 15, 2025
+    /// - TokenStaking notification rewards HALTED for ECDSA/RandomBeacon
+    /// - Only TACo application rewards continue (6-month transition)
+    /// - This function now returns 0 for all ECDSA operators (no rewards)
+    ///
+    /// Migration Decision Rationale:
+    /// - Bytecode cost: 50-100 bytes to migrate beneficiary lookup to Allowlist
+    /// - Benefit: Zero (function returns 0 - no rewards to withdraw)
+    /// - Preserved for historical compatibility and potential future reactivation
+    ///
+    /// Technical Note: If rewards are reactivated, Allowlist migration would
+    /// be required as Allowlist.rolesOf() always returns stakingProvider as
+    /// beneficiary (no delegation support), while TokenStaking.rolesOf()
+    /// returns configured beneficiary (supports owner != beneficiary delegation).
+    ///
+    /// Stakeholder Decision: Pragmatic choice to avoid bytecode cost for
+    /// dead code, predating TIP-092/100 implementation.
     function withdrawRewards(address stakingProvider) external {
         address operator = stakingProviderToOperator(stakingProvider);
-        require(operator != address(0), "Unknown operator");
+        if (operator == address(0)) revert UnknownOperator();
         (, address beneficiary, ) = staking.rolesOf(stakingProvider);
         uint96 amount = sortitionPool.withdrawRewards(operator, beneficiary);
         // slither-disable-next-line reentrancy-events
@@ -396,7 +517,10 @@ contract WalletRegistry is
     ///         authorization decrease requested, it is activated by starting
     ///         the authorization decrease delay.
     function joinSortitionPool() external {
-        authorization.joinSortitionPool(staking, sortitionPool);
+        authorization.joinSortitionPool(
+            _currentAuthorizationSource(),
+            sortitionPool
+        );
     }
 
     /// @notice Updates status of the operator in the sortition pool. If there
@@ -404,7 +528,11 @@ contract WalletRegistry is
     ///         starting the authorization decrease delay.
     ///         Function reverts if the operator is not known.
     function updateOperatorStatus(address operator) external {
-        authorization.updateOperatorStatus(staking, sortitionPool, operator);
+        authorization.updateOperatorStatus(
+            _currentAuthorizationSource(),
+            sortitionPool,
+            operator
+        );
     }
 
     /// @notice Used by T staking contract to inform the application that the
@@ -452,6 +580,20 @@ contract WalletRegistry is
     ///         overwritten.
     ///
     /// @dev Can only be called by T staking contract.
+    ///
+    /// IMPLEMENTATION NOTE: This function does NOT require authorization
+    /// source routing (no _currentAuthorizationSource() parameter) because
+    /// it operates solely on internal library state.
+    ///
+    /// Technical Rationale:
+    /// - Records authorization decrease request in internal mappings only
+    /// - Does NOT query external contracts for authorization amounts
+    /// - Does NOT apply the decrease (approval happens later via separate call)
+    /// - Contrast with involuntaryAuthorizationDecrease() which MUST query
+    ///   current authorization amounts and therefore requires routing parameter
+    ///
+    /// Post-Migration Behavior: Unchanged - requests are recorded without
+    /// querying authorization source (TokenStaking or Allowlist).
     function authorizationDecreaseRequested(
         address stakingProvider,
         uint96 fromAmount,
@@ -469,7 +611,10 @@ contract WalletRegistry is
     ///         yet or if the authorization decrease was not requested for the
     ///         given staking provider.
     function approveAuthorizationDecrease(address stakingProvider) external {
-        authorization.approveAuthorizationDecrease(staking, stakingProvider);
+        authorization.approveAuthorizationDecrease(
+            _currentAuthorizationSource(),
+            stakingProvider
+        );
     }
 
     /// @notice Used by T staking contract to inform the application the
@@ -492,7 +637,7 @@ contract WalletRegistry is
         uint96 toAmount
     ) external onlyStakingContract {
         authorization.involuntaryAuthorizationDecrease(
-            staking,
+            _currentAuthorizationSource(),
             sortitionPool,
             stakingProvider,
             fromAmount,
@@ -575,6 +720,11 @@ contract WalletRegistry is
         uint256 _resultSubmissionTimeout,
         uint256 _submitterPrecedencePeriodLength
     ) external onlyGovernance {
+        // Consolidated state validation for all DKG parameter setters. Since all
+        // setters are called exclusively from this function, we perform the state
+        // check once here instead of in each individual setter to reduce bytecode size.
+        if (dkg.currentState() != DKG.State.IDLE) revert CurrentStateNotIdle();
+
         dkg.setSeedTimeout(_seedTimeout);
         dkg.setResultChallengePeriodLength(_resultChallengePeriodLength);
         dkg.setResultChallengeExtraGas(_resultChallengeExtraGas);
@@ -686,10 +836,9 @@ contract WalletRegistry is
     /// @dev Can be called only by the random beacon contract.
     /// @param relayEntry Relay entry.
     function __beaconCallback(uint256 relayEntry, uint256) external {
-        require(
-            msg.sender == address(randomBeacon),
-            "Caller is not the Random Beacon"
-        );
+        if (msg.sender != address(randomBeacon)) {
+            revert CallerNotRandomBeacon();
+        }
 
         dkg.start(relayEntry);
     }
@@ -799,10 +948,13 @@ contract WalletRegistry is
     ///      attacks related to the gas limit manipulation, this function
     ///      requires an extra amount of gas to be left at the end of the
     ///      execution.
+    ///
+    ///      This function is EIP-7702 compatible - it does not restrict
+    ///      callers to EOAs, allowing accounts with delegated code execution
+    ///      to participate in DKG result challenges. Gas manipulation
+    ///      protection is enforced via inline gas check regardless of caller
+    ///      type.
     function challengeDkgResult(DKG.Result calldata dkgResult) external {
-        // solhint-disable-next-line avoid-tx-origin
-        require(msg.sender == tx.origin, "Not EOA");
-
         (
             bytes32 maliciousDkgResultHash,
             uint32 maliciousDkgResultSubmitterId
@@ -816,6 +968,36 @@ contract WalletRegistry is
             maliciousDkgResultSubmitterAddress
         );
 
+        // NOT MIGRATED: Slashing call remains on TokenStaking for pragmatic
+        // reasons, not functional requirements.
+        //
+        // Critical Context - TokenStaking.seize() is a STUB (TIP-100):
+        // - Function ONLY emits NotificationReceived event
+        // - NO token operations, NO storage mutations, NO economic penalty
+        // - Both TokenStaking.seize() and Allowlist.seize() provide symbolic
+        //   slashing only (event emission for monitoring)
+        // - Actual enforcement mechanism: DAO governance via requestWeightDecrease()
+        //
+        // Migration Decision Rationale:
+        // - Bytecode cost: 100-200 bytes to route through Allowlist
+        // - Benefit: Zero (both contracts provide identical symbolic behavior)
+        // - Event preservation: TokenStaking event includes amount/rewardMultiplier
+        //   fields for monitoring continuity (though values are symbolic)
+        // - Risk: Zero implementation risk (no code changes = no bugs)
+        //
+        // Historical Note: The presence of staking.seize() may create a false
+        // impression of economic slashing. In reality, economic slashing was
+        // removed in TIP-100 implementation. This call exists for event telemetry
+        // and DAO governance coordination only.
+        //
+        // Stakeholder Decision: Pragmatic choice to save bytecode and avoid
+        // implementation risk for functionally equivalent routing options.
+
+        // Attempt to slash malicious submitter. Slashing may fail silently
+        // if the staking contract reverts, but challenge must complete
+        // regardless. Bytecode optimization: empty catch block reduces
+        // contract size by ~800 bytes (see commit 412a8e6d).
+        // slither-disable-next-line reentrancy-events
         try
             staking.seize(
                 _maliciousDkgResultSlashingAmount,
@@ -824,7 +1006,6 @@ contract WalletRegistry is
                 operatorWrapper
             )
         {
-            // slither-disable-next-line reentrancy-events
             emit DkgMaliciousResultSlashed(
                 maliciousDkgResultHash,
                 _maliciousDkgResultSlashingAmount,
@@ -849,8 +1030,11 @@ contract WalletRegistry is
         // such a way that the call inside try-catch fails with out-of-gas and
         // the rest of the function is executed with the remaining 1/64 of gas,
         // we require an extra gas amount to be left at the end of the call to
-        // `challengeDkgResult`.
-        dkg.requireChallengeExtraGas();
+        // `challengeDkgResult`. This check enforces EIP-150 gas protection by
+        // ensuring sufficient gas remains for safe execution.
+        if (gasleft() < dkg.parameters.resultChallengeExtraGas) {
+            revert NotEnoughExtraGasLeft();
+        }
     }
 
     /// @notice Notifies about operators who are inactive. Using this function,
@@ -872,6 +1056,26 @@ contract WalletRegistry is
     /// @param nonce Current inactivity claim nonce for the given wallet signing
     ///              group. Must be the same as the stored one.
     /// @param groupMembers Identifiers of the wallet signing group members.
+    ///
+    /// NOT MIGRATED: This function does not interact with any authorization
+    /// source (staking or allowlist). It operates independently by:
+    /// - Verifying inactivity claims using wallet signatures and group
+    ///   membership
+    /// - Applying penalties (reward ineligibility) directly to sortition pool
+    /// - No need to query or update authorization state
+    /// - Wallet heartbeat failures trigger callbacks independent of stake
+    ///   amounts
+    ///
+    /// Historical Context (TIP-092/100 - February 15, 2025):
+    /// - Reward ban penalty now has minimal economic impact (rewards halted)
+    /// - Function remains relevant for governance and monitoring purposes
+    /// - Provides signal for DAO to review operator performance
+    /// - Wallet heartbeat failure detection still critical for system health
+    ///
+    /// Stakeholder Rationale: Inactivity penalties are wallet-level governance
+    /// mechanisms that apply regardless of authorization source (TokenStaking
+    /// or Allowlist). The claim verification and penalty application do not
+    /// depend on authorization routing, so migration is unnecessary.
     function notifyOperatorInactivity(
         Inactivity.Claim calldata claim,
         uint256 nonce,
@@ -881,16 +1085,17 @@ contract WalletRegistry is
 
         bytes32 walletID = claim.walletID;
 
-        require(nonce == inactivityClaimNonce[walletID], "Invalid nonce");
+        if (nonce != inactivityClaimNonce[walletID]) {
+            revert InvalidNonce();
+        }
 
         (bytes32 pubKeyX, bytes32 pubKeyY) = wallets
             .getWalletPublicKeyCoordinates(walletID);
         bytes32 memberIdsHash = wallets.getWalletMembersIdsHash(walletID);
 
-        require(
-            memberIdsHash == keccak256(abi.encode(groupMembers)),
-            "Invalid group members"
-        );
+        if (memberIdsHash != keccak256(abi.encode(groupMembers))) {
+            revert InvalidGroupMembers();
+        }
 
         uint32[] memory ineligibleOperators = Inactivity.verifyClaim(
             sortitionPool,
@@ -953,10 +1158,8 @@ contract WalletRegistry is
         uint32[] calldata walletMembersIDs
     ) external onlyWalletOwner {
         bytes32 memberIdsHash = wallets.getWalletMembersIdsHash(walletID);
-        require(
-            memberIdsHash == keccak256(abi.encode(walletMembersIDs)),
-            "Invalid wallet members identifiers"
-        );
+        if (memberIdsHash != keccak256(abi.encode(walletMembersIDs)))
+            revert InvalidWalletMembersIdentifiers();
 
         address[] memory groupMembersAddresses = sortitionPool.getIDOperators(
             walletMembersIDs
@@ -1021,20 +1224,16 @@ contract WalletRegistry is
     ) external view returns (bool) {
         uint32 operatorID = sortitionPool.getOperatorID(operator);
 
-        require(operatorID != 0, "Not a sortition pool operator");
+        if (operatorID == 0) revert NotSortitionPoolOperator();
 
         bytes32 memberIdsHash = wallets.getWalletMembersIdsHash(walletID);
 
-        require(
-            memberIdsHash == keccak256(abi.encode(walletMembersIDs)),
-            "Invalid wallet members identifiers"
-        );
+        if (memberIdsHash != keccak256(abi.encode(walletMembersIDs)))
+            revert InvalidWalletMembersIdentifiers();
 
-        require(
-            1 <= walletMemberIndex &&
-                walletMemberIndex <= walletMembersIDs.length,
-            "Wallet member index is out of range"
-        );
+        if (
+            walletMemberIndex < 1 || walletMemberIndex > walletMembersIDs.length
+        ) revert WalletMemberIndexOutOfRange();
 
         return walletMembersIDs[walletMemberIndex - 1] == operatorID;
     }
@@ -1099,7 +1298,11 @@ contract WalletRegistry is
         view
         returns (uint96)
     {
-        return authorization.eligibleStake(staking, stakingProvider);
+        return
+            authorization.eligibleStake(
+                _currentAuthorizationSource(),
+                stakingProvider
+            );
     }
 
     /// @notice Returns the amount of rewards available for withdrawal for the
@@ -1111,7 +1314,7 @@ contract WalletRegistry is
         returns (uint96)
     {
         address operator = stakingProviderToOperator(stakingProvider);
-        require(operator != address(0), "Unknown operator");
+        if (operator == address(0)) revert UnknownOperator();
         return sortitionPool.getAvailableRewards(operator);
     }
 
@@ -1164,7 +1367,23 @@ contract WalletRegistry is
     ///         authorized stake is non-zero, function returns false.
     function isOperatorUpToDate(address operator) external view returns (bool) {
         return
-            authorization.isOperatorUpToDate(staking, sortitionPool, operator);
+            authorization.isOperatorUpToDate(
+                _currentAuthorizationSource(),
+                sortitionPool,
+                operator
+            );
+    }
+
+    /// @notice Returns the current authorization source contract.
+    /// @dev Returns the allowlist contract if set, otherwise returns the
+    ///      staking contract. This enables conditional routing of
+    ///      authorization queries during the migration period.
+    /// @return The address of the current authorization source contract
+    function _currentAuthorizationSource() internal view returns (IStaking) {
+        return
+            address(allowlist) != address(0)
+                ? IStaking(address(allowlist))
+                : staking;
     }
 
     /// @notice Returns true if the given operator is in the sortition pool.
