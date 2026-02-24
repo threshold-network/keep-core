@@ -11,9 +11,9 @@ import (
 
 // Request carries execution input for a FROST signing backend.
 type Request struct {
-	Message             *big.Int
-	SessionID           string
-	MemberIndex         group.MemberIndex
+	Message     *big.Int
+	SessionID   string
+	MemberIndex group.MemberIndex
 	// SignerMaterial carries backend-specific signer material.
 	// Legacy backend expects *tecdsa.PrivateKeyShare.
 	SignerMaterial any

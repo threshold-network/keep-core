@@ -22,8 +22,10 @@ func (mntse *mockNativeTBTCSignerEngine) StartSignRound(
 	memberIdentifier uint16,
 	message []byte,
 	keyGroup string,
+	signingParticipants []uint16,
 ) (*NativeTBTCSignerRoundState, error) {
 	_ = memberIdentifier
+	_ = signingParticipants
 	return nil, fmt.Errorf("not implemented")
 }
 

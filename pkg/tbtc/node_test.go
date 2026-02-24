@@ -100,9 +100,7 @@ func TestNode_GetSigningExecutor(t *testing.T) {
 		len(executor.signers),
 	)
 
-	if !reflect.DeepEqual(signer, executor.signers[0]) {
-		t.Errorf("executor holds an unexpected signer")
-	}
+	assertSignerEquivalent(t, "executor signer", signer, executor.signers[0])
 
 	expectedChannel := fmt.Sprintf(
 		"%s-%s",

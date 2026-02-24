@@ -30,6 +30,7 @@ func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 		1,
 		[]byte("message"),
 		"key-group",
+		nil,
 	)
 	if err == nil {
 		t.Fatal("expected unavailable tbtc-signer bridge error")
@@ -257,6 +258,7 @@ func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload(t *testing.T) {
 		3,
 		[]byte{0xab, 0xcd},
 		"key-group-1",
+		[]uint16{1, 2, 3},
 	)
 	if err != nil {
 		t.Fatalf("unexpected payload build error: [%v]", err)
@@ -298,6 +300,26 @@ func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload(t *testing.T) {
 			request.MemberIdentifier,
 		)
 	}
+
+	if len(request.SigningParticipants) != 3 {
+		t.Fatalf(
+			"unexpected signing participants count\nexpected: [%v]\nactual:   [%v]",
+			3,
+			len(request.SigningParticipants),
+		)
+	}
+
+	expectedSigningParticipants := []uint16{1, 2, 3}
+	for i := range expectedSigningParticipants {
+		if request.SigningParticipants[i] != expectedSigningParticipants[i] {
+			t.Fatalf(
+				"unexpected signing participant at index [%d]\nexpected: [%v]\nactual:   [%v]",
+				i,
+				expectedSigningParticipants[i],
+				request.SigningParticipants[i],
+			)
+		}
+	}
 }
 
 func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload_EmptySessionID(t *testing.T) {
@@ -306,6 +328,7 @@ func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload_EmptySessionID(t *tes
 		1,
 		[]byte{0xab},
 		"key-group-1",
+		nil,
 	)
 	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
 		t.Fatalf(
@@ -322,6 +345,7 @@ func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload_ZeroMemberID(t *testi
 		0,
 		[]byte{0xab},
 		"key-group-1",
+		nil,
 	)
 	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
 		t.Fatalf(
@@ -387,7 +411,7 @@ func TestBuildTaggedTBTCSignerFinalizeSignRoundRequestPayload(t *testing.T) {
 func TestDecodeBuildTaggedTBTCSignerStartSignRoundResponse(t *testing.T) {
 	roundState, err := decodeBuildTaggedTBTCSignerStartSignRoundResponse(
 		[]byte(
-			`{"session_id":"session-1","round_id":"round-1","required_contributions":2,"message_digest_hex":"abcd","own_contribution":{"identifier":3,"signature_share_hex":"deadbeef"}}`,
+			`{"session_id":"session-1","round_id":"round-1","required_contributions":2,"message_digest_hex":"abcd","signing_participants":[1,2,3],"own_contribution":{"identifier":3,"signature_share_hex":"deadbeef"}}`,
 		),
 	)
 	if err != nil {
@@ -426,6 +450,14 @@ func TestDecodeBuildTaggedTBTCSignerStartSignRoundResponse(t *testing.T) {
 		)
 	}
 
+	if len(roundState.SigningParticipants) != 3 {
+		t.Fatalf(
+			"unexpected signing participants count\nexpected: [%v]\nactual:   [%v]",
+			3,
+			len(roundState.SigningParticipants),
+		)
+	}
+
 	if roundState.OwnContribution == nil {
 		t.Fatal("expected own contribution in round state response")
 	}
@@ -456,6 +488,69 @@ func TestDecodeBuildTaggedTBTCSignerStartSignRoundResponse(t *testing.T) {
 				roundState.OwnContribution.Data[i],
 			)
 		}
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerStartSignRoundResponse_RejectsZeroSigningParticipant(
+	t *testing.T,
+) {
+	_, err := decodeBuildTaggedTBTCSignerStartSignRoundResponse(
+		[]byte(
+			`{"session_id":"session-1","round_id":"round-1","required_contributions":2,"message_digest_hex":"abcd","signing_participants":[1,0,3],"own_contribution":{"identifier":3,"signature_share_hex":"deadbeef"}}`,
+		),
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerStartSignRoundResponse_RejectsDuplicateSigningParticipant(
+	t *testing.T,
+) {
+	_, err := decodeBuildTaggedTBTCSignerStartSignRoundResponse(
+		[]byte(
+			`{"session_id":"session-1","round_id":"round-1","required_contributions":2,"message_digest_hex":"abcd","signing_participants":[1,2,2],"own_contribution":{"identifier":3,"signature_share_hex":"deadbeef"}}`,
+		),
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerStartSignRoundResponse_RejectsZeroOwnContributionIdentifier(
+	t *testing.T,
+) {
+	_, err := decodeBuildTaggedTBTCSignerStartSignRoundResponse(
+		[]byte(
+			`{"session_id":"session-1","round_id":"round-1","required_contributions":2,"message_digest_hex":"abcd","signing_participants":[1,2,3],"own_contribution":{"identifier":0,"signature_share_hex":"deadbeef"}}`,
+		),
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
 	}
 }
 

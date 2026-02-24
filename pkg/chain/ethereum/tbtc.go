@@ -1392,18 +1392,10 @@ func (tc *TbtcChain) PastNewWalletRegisteredEvents(
 		walletID,
 		ecdsaWalletID,
 		walletPublicKeyHash,
-		tc.bridge.PastNewWalletRegisteredV2Events,
+		tc.bridge,
 		tc.bridge.PastNewWalletRegisteredEvents,
 	)
 }
-
-type pastNewWalletRegisteredV2EventsFn func(
-	startBlock uint64,
-	endBlock *uint64,
-	walletID [][32]byte,
-	ecdsaWalletID [][32]byte,
-	walletPubKeyHash [][20]byte,
-) ([]*tbtcabi.BridgeNewWalletRegisteredV2, error)
 
 type pastNewWalletRegisteredEventsFn func(
 	startBlock uint64,
@@ -1418,30 +1410,19 @@ func pastNewWalletRegisteredEvents(
 	walletID [][32]byte,
 	ecdsaWalletID [][32]byte,
 	walletPublicKeyHash [][20]byte,
-	pastV2Events pastNewWalletRegisteredV2EventsFn,
+	bridge any,
 	pastLegacyEvents pastNewWalletRegisteredEventsFn,
 ) ([]*tbtc.NewWalletRegisteredEvent, error) {
-	v2Events, err := pastV2Events(
+	convertedEvents, err := pastNewWalletRegisteredV2Events(
 		startBlock,
 		endBlock,
 		walletID,
 		ecdsaWalletID,
 		walletPublicKeyHash,
+		bridge,
 	)
 	if err != nil {
 		return nil, err
-	}
-
-	convertedEvents := make([]*tbtc.NewWalletRegisteredEvent, 0, len(v2Events))
-	for _, event := range v2Events {
-		convertedEvent := &tbtc.NewWalletRegisteredEvent{
-			WalletID:            event.WalletID,
-			EcdsaWalletID:       event.EcdsaWalletID,
-			WalletPublicKeyHash: event.WalletPubKeyHash,
-			BlockNumber:         event.Raw.BlockNumber,
-		}
-
-		convertedEvents = append(convertedEvents, convertedEvent)
 	}
 
 	// Fallback for legacy deployments that do not emit NewWalletRegisteredV2.
@@ -1474,6 +1455,159 @@ func pastNewWalletRegisteredEvents(
 			return convertedEvents[i].BlockNumber < convertedEvents[j].BlockNumber
 		},
 	)
+
+	return convertedEvents, nil
+}
+
+func pastNewWalletRegisteredV2Events(
+	startBlock uint64,
+	endBlock *uint64,
+	walletID [][32]byte,
+	ecdsaWalletID [][32]byte,
+	walletPublicKeyHash [][20]byte,
+	bridge any,
+) ([]*tbtc.NewWalletRegisteredEvent, error) {
+	if bridge == nil {
+		return nil, nil
+	}
+
+	bridgeValue := reflect.ValueOf(bridge)
+	pastV2Events := bridgeValue.MethodByName("PastNewWalletRegisteredV2Events")
+	if !pastV2Events.IsValid() {
+		return nil, nil
+	}
+
+	var (
+		results []reflect.Value
+		callErr error
+	)
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				callErr = fmt.Errorf(
+					"panic calling PastNewWalletRegisteredV2Events: [%v]",
+					recovered,
+				)
+			}
+		}()
+
+		results = pastV2Events.Call(
+			[]reflect.Value{
+				reflect.ValueOf(startBlock),
+				reflect.ValueOf(endBlock),
+				reflect.ValueOf(walletID),
+				reflect.ValueOf(ecdsaWalletID),
+				reflect.ValueOf(walletPublicKeyHash),
+			},
+		)
+	}()
+
+	if callErr != nil {
+		return nil, callErr
+	}
+
+	if len(results) != 2 {
+		return nil, fmt.Errorf(
+			"unexpected PastNewWalletRegisteredV2Events result count: [%v]",
+			len(results),
+		)
+	}
+
+	if !results[1].IsNil() {
+		err, ok := results[1].Interface().(error)
+		if !ok {
+			return nil, fmt.Errorf(
+				"unexpected PastNewWalletRegisteredV2Events error type: [%T]",
+				results[1].Interface(),
+			)
+		}
+
+		return nil, err
+	}
+
+	eventsValue := results[0]
+	if eventsValue.Kind() != reflect.Slice {
+		return nil, fmt.Errorf(
+			"unexpected PastNewWalletRegisteredV2Events events type: [%v]",
+			eventsValue.Kind(),
+		)
+	}
+
+	convertedEvents := make([]*tbtc.NewWalletRegisteredEvent, 0, eventsValue.Len())
+	for i := 0; i < eventsValue.Len(); i++ {
+		eventValue := eventsValue.Index(i)
+		if eventValue.Kind() == reflect.Pointer {
+			if eventValue.IsNil() {
+				continue
+			}
+
+			eventValue = eventValue.Elem()
+		}
+
+		if eventValue.Kind() != reflect.Struct {
+			return nil, fmt.Errorf(
+				"unexpected NewWalletRegisteredV2 event kind: [%v]",
+				eventValue.Kind(),
+			)
+		}
+
+		walletIDField := eventValue.FieldByName("WalletID")
+		ecdsaWalletIDField := eventValue.FieldByName("EcdsaWalletID")
+		walletPubKeyHashField := eventValue.FieldByName("WalletPubKeyHash")
+		if !walletPubKeyHashField.IsValid() {
+			walletPubKeyHashField = eventValue.FieldByName("WalletPublicKeyHash")
+		}
+		rawField := eventValue.FieldByName("Raw")
+		if !rawField.IsValid() {
+			return nil, fmt.Errorf(
+				"unexpected NewWalletRegisteredV2 raw event payload at index [%v]",
+				i,
+			)
+		}
+
+		if rawField.Kind() == reflect.Pointer {
+			if rawField.IsNil() {
+				return nil, fmt.Errorf("unexpected nil raw event payload")
+			}
+
+			rawField = rawField.Elem()
+		}
+
+		if rawField.Kind() != reflect.Struct {
+			return nil, fmt.Errorf(
+				"unexpected NewWalletRegisteredV2 raw event payload kind at index [%v]: [%v]",
+				i,
+				rawField.Kind(),
+			)
+		}
+
+		blockNumberField := rawField.FieldByName("BlockNumber")
+
+		if !walletIDField.IsValid() ||
+			walletIDField.Type() != reflect.TypeOf([32]byte{}) ||
+			!ecdsaWalletIDField.IsValid() ||
+			ecdsaWalletIDField.Type() != reflect.TypeOf([32]byte{}) ||
+			!walletPubKeyHashField.IsValid() ||
+			walletPubKeyHashField.Type() != reflect.TypeOf([20]byte{}) ||
+			!blockNumberField.IsValid() ||
+			blockNumberField.Kind() != reflect.Uint64 {
+			return nil, fmt.Errorf(
+				"unexpected NewWalletRegisteredV2 event shape at index [%v]",
+				i,
+			)
+		}
+
+		convertedEvents = append(
+			convertedEvents,
+			&tbtc.NewWalletRegisteredEvent{
+				WalletID:            walletIDField.Interface().([32]byte),
+				EcdsaWalletID:       ecdsaWalletIDField.Interface().([32]byte),
+				WalletPublicKeyHash: walletPubKeyHashField.Interface().([20]byte),
+				BlockNumber:         blockNumberField.Uint(),
+			},
+		)
+	}
 
 	return convertedEvents, nil
 }
@@ -1536,7 +1670,10 @@ func (tc *TbtcChain) GetWallet(
 		return nil, fmt.Errorf("cannot parse wallet state: [%v]", err)
 	}
 
-	walletID, err := tc.bridge.WalletID(walletPublicKeyHash)
+	walletID, err := walletIDForWalletPublicKeyHash(
+		tc.bridge,
+		walletPublicKeyHash,
+	)
 	if err != nil {
 		// Fallback for legacy deployments where walletID accessor may not exist.
 		walletID = tbtc.DeriveLegacyWalletID(walletPublicKeyHash)
@@ -1561,19 +1698,44 @@ func (tc *TbtcChain) WalletPublicKeyHashForWalletID(
 ) ([20]byte, error) {
 	return resolveWalletPublicKeyHashForWalletID(
 		walletID,
-		tc.bridge.WalletPubKeyHashForWalletID,
+		tc.bridge,
 	)
 }
 
-type walletPublicKeyHashForWalletIDFn func(
-	walletID [32]byte,
-) ([20]byte, error)
+type walletIDForWalletPublicKeyHashFn interface {
+	WalletID(walletPublicKeyHash [20]byte) ([32]byte, error)
+}
+
+func walletIDForWalletPublicKeyHash(
+	bridge any,
+	walletPublicKeyHash [20]byte,
+) ([32]byte, error) {
+	resolver, ok := bridge.(walletIDForWalletPublicKeyHashFn)
+	if !ok {
+		return [32]byte{}, fmt.Errorf("wallet ID accessor unavailable")
+	}
+
+	return resolver.WalletID(walletPublicKeyHash)
+}
+
+type walletPublicKeyHashForWalletIDFn interface {
+	WalletPubKeyHashForWalletID(walletID [32]byte) ([20]byte, error)
+}
 
 func resolveWalletPublicKeyHashForWalletID(
 	walletID [32]byte,
-	resolveCanonical walletPublicKeyHashForWalletIDFn,
+	bridge any,
 ) ([20]byte, error) {
-	walletPublicKeyHash, err := resolveCanonical(walletID)
+	resolveCanonical, ok := bridge.(walletPublicKeyHashForWalletIDFn)
+
+	var walletPublicKeyHash [20]byte
+	var err error
+	if ok {
+		walletPublicKeyHash, err = resolveCanonical.WalletPubKeyHashForWalletID(walletID)
+	} else {
+		err = fmt.Errorf("wallet public key hash accessor unavailable")
+	}
+
 	if err == nil {
 		if walletPublicKeyHash != [20]byte{} {
 			return walletPublicKeyHash, nil
@@ -1582,6 +1744,14 @@ func resolveWalletPublicKeyHashForWalletID(
 
 	legacyWalletPublicKeyHash, ok := tbtc.WalletPublicKeyHashFromLegacyWalletID(walletID)
 	if ok {
+		if err != nil {
+			logger.Infof(
+				"canonical wallet public key hash resolution failed for wallet ID [0x%x]; using legacy derivation: [%v]",
+				walletID,
+				err,
+			)
+		}
+
 		return legacyWalletPublicKeyHash, nil
 	}
 

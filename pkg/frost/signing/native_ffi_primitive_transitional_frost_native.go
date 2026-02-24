@@ -172,7 +172,22 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 		)
 	}
 
-	dkgParticipants, dkgThreshold, err := buildTaggedTBTCSignerRunDKGInputs(request)
+	includedMembersSet, includedMembersIndexes, err := includedMembersFromRequest(request)
+	if err != nil {
+		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
+			ctx,
+			logger,
+			request,
+			legacyPrivateKeyShare,
+			fmt.Sprintf("cannot determine included members: [%v]", err),
+			payload.KeyGroupSource,
+		)
+	}
+
+	dkgParticipants, dkgThreshold, err := buildTaggedTBTCSignerRunDKGInputsForIncludedMembers(
+		request,
+		includedMembersIndexes,
+	)
 	if err != nil {
 		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
 			ctx,
@@ -292,6 +307,8 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 		request,
 		keyGroupForRound,
 		nativeEngine,
+		includedMembersSet,
+		includedMembersIndexes,
 	); err != nil {
 		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
 			ctx,
@@ -325,6 +342,20 @@ func buildTaggedTBTCSignerRunDKGInputs(
 	_, includedMembersIndexes, err := includedMembersFromRequest(request)
 	if err != nil {
 		return nil, 0, err
+	}
+
+	return buildTaggedTBTCSignerRunDKGInputsForIncludedMembers(
+		request,
+		includedMembersIndexes,
+	)
+}
+
+func buildTaggedTBTCSignerRunDKGInputsForIncludedMembers(
+	request *NativeExecutionFFISigningRequest,
+	includedMembersIndexes []group.MemberIndex,
+) ([]NativeTBTCSignerDKGParticipant, uint16, error) {
+	if request == nil {
+		return nil, 0, fmt.Errorf("request is nil")
 	}
 
 	if len(includedMembersIndexes) < 2 {
@@ -448,6 +479,8 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 	request *NativeExecutionFFISigningRequest,
 	keyGroup string,
 	nativeEngine NativeTBTCSignerEngine,
+	includedMembersSet map[group.MemberIndex]struct{},
+	includedMembersIndexes []group.MemberIndex,
 ) error {
 	if request == nil {
 		return fmt.Errorf("request is nil")
@@ -465,9 +498,12 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 		ctx = context.Background()
 	}
 
-	includedMembersSet, includedMembersIndexes, err := includedMembersFromRequest(request)
-	if err != nil {
-		return fmt.Errorf("cannot determine included members: [%w]", err)
+	if includedMembersSet == nil || len(includedMembersIndexes) == 0 {
+		var err error
+		includedMembersSet, includedMembersIndexes, err = includedMembersFromRequest(request)
+		if err != nil {
+			return fmt.Errorf("cannot determine included members: [%w]", err)
+		}
 	}
 
 	if _, ok := includedMembersSet[request.MemberIndex]; !ok {
@@ -486,11 +522,19 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 		return fmt.Errorf("request member index is zero")
 	}
 
+	signingParticipants, err := buildTaggedTBTCSignerSigningParticipants(
+		includedMembersIndexes,
+	)
+	if err != nil {
+		return fmt.Errorf("cannot derive signing participants: [%w]", err)
+	}
+
 	roundState, err := nativeEngine.StartSignRound(
 		request.SessionID,
 		uint16(request.MemberIndex),
 		messageBytes,
 		keyGroup,
+		signingParticipants,
 	)
 	if err != nil {
 		return fmt.Errorf("start sign round failed: [%w]", err)
@@ -502,6 +546,27 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 
 	if roundState.RequiredContributions == 0 {
 		return fmt.Errorf("start sign round required contributions are zero")
+	}
+
+	if len(signingParticipants) > 0 {
+		if len(roundState.SigningParticipants) != len(signingParticipants) {
+			return fmt.Errorf(
+				"start sign round returned unexpected signing participants count: [%v] != [%v]",
+				len(roundState.SigningParticipants),
+				len(signingParticipants),
+			)
+		}
+
+		for i := range signingParticipants {
+			if roundState.SigningParticipants[i] != signingParticipants[i] {
+				return fmt.Errorf(
+					"start sign round returned unexpected signing participant at index [%d]: [%v] != [%v]",
+					i,
+					roundState.SigningParticipants[i],
+					signingParticipants[i],
+				)
+			}
+		}
 	}
 
 	roundContributions, err := buildTaggedTBTCSignerRoundContributions(
@@ -536,6 +601,33 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRound(
 	}
 
 	return nil
+}
+
+func buildTaggedTBTCSignerSigningParticipants(
+	includedMembersIndexes []group.MemberIndex,
+) ([]uint16, error) {
+	if len(includedMembersIndexes) == 0 {
+		return nil, fmt.Errorf("included members are empty")
+	}
+
+	signingParticipants := make([]uint16, 0, len(includedMembersIndexes))
+	seenParticipants := make(map[uint16]struct{}, len(includedMembersIndexes))
+
+	for _, memberIndex := range includedMembersIndexes {
+		if memberIndex == 0 {
+			return nil, fmt.Errorf("included member index is zero")
+		}
+
+		participant := uint16(memberIndex)
+		if _, ok := seenParticipants[participant]; ok {
+			return nil, fmt.Errorf("duplicate included member index: [%v]", memberIndex)
+		}
+
+		seenParticipants[participant] = struct{}{}
+		signingParticipants = append(signingParticipants, participant)
+	}
+
+	return signingParticipants, nil
 }
 
 func buildTaggedTBTCSignerRoundContributions(

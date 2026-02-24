@@ -137,10 +137,11 @@ type buildTaggedTBTCSignerRunDKGResponse struct {
 }
 
 type buildTaggedTBTCSignerStartSignRoundRequest struct {
-	SessionID        string `json:"session_id"`
-	MemberIdentifier uint16 `json:"member_identifier"`
-	MessageHex       string `json:"message_hex"`
-	KeyGroup         string `json:"key_group"`
+	SessionID           string   `json:"session_id"`
+	MemberIdentifier    uint16   `json:"member_identifier"`
+	MessageHex          string   `json:"message_hex"`
+	KeyGroup            string   `json:"key_group"`
+	SigningParticipants []uint16 `json:"signing_participants,omitempty"`
 }
 
 type buildTaggedTBTCSignerStartSignRoundResponse struct {
@@ -148,6 +149,7 @@ type buildTaggedTBTCSignerStartSignRoundResponse struct {
 	RoundID               string                                          `json:"round_id"`
 	RequiredContributions uint16                                          `json:"required_contributions"`
 	MessageDigestHex      string                                          `json:"message_digest_hex"`
+	SigningParticipants   []uint16                                        `json:"signing_participants,omitempty"`
 	OwnContribution       *buildTaggedTBTCSignerFinalizeRoundContribution `json:"own_contribution"`
 }
 
@@ -217,12 +219,14 @@ func (bttse *buildTaggedTBTCSignerEngine) StartSignRound(
 	memberIdentifier uint16,
 	message []byte,
 	keyGroup string,
+	signingParticipants []uint16,
 ) (*NativeTBTCSignerRoundState, error) {
 	requestPayload, err := buildTaggedTBTCSignerStartSignRoundRequestPayload(
 		sessionID,
 		memberIdentifier,
 		message,
 		keyGroup,
+		signingParticipants,
 	)
 	if err != nil {
 		return nil, err
@@ -402,6 +406,7 @@ func buildTaggedTBTCSignerStartSignRoundRequestPayload(
 	memberIdentifier uint16,
 	message []byte,
 	keyGroup string,
+	signingParticipants []uint16,
 ) ([]byte, error) {
 	if sessionID == "" {
 		return nil, buildTaggedTBTCSignerOperationError(
@@ -424,11 +429,29 @@ func buildTaggedTBTCSignerStartSignRoundRequestPayload(
 		)
 	}
 
+	seenParticipants := make(map[uint16]struct{}, len(signingParticipants))
+	for i, participant := range signingParticipants {
+		if participant == 0 {
+			return nil, buildTaggedTBTCSignerOperationError(
+				"StartSignRound",
+				fmt.Sprintf("signing participant [%d] is zero", i),
+			)
+		}
+		if _, ok := seenParticipants[participant]; ok {
+			return nil, buildTaggedTBTCSignerOperationError(
+				"StartSignRound",
+				fmt.Sprintf("signing participant [%d] is duplicated", participant),
+			)
+		}
+		seenParticipants[participant] = struct{}{}
+	}
+
 	request := buildTaggedTBTCSignerStartSignRoundRequest{
-		SessionID:        sessionID,
-		MemberIdentifier: memberIdentifier,
-		MessageHex:       hex.EncodeToString(message),
-		KeyGroup:         keyGroup,
+		SessionID:           sessionID,
+		MemberIdentifier:    memberIdentifier,
+		MessageHex:          hex.EncodeToString(message),
+		KeyGroup:            keyGroup,
+		SigningParticipants: append([]uint16{}, signingParticipants...),
 	}
 
 	payload, err := json.Marshal(request)
@@ -474,6 +497,25 @@ func decodeBuildTaggedTBTCSignerStartSignRoundResponse(
 		)
 	}
 
+	seenSigningParticipants := make(map[uint16]struct{}, len(response.SigningParticipants))
+	for _, participant := range response.SigningParticipants {
+		if participant == 0 {
+			return nil, buildTaggedTBTCSignerOperationError(
+				"StartSignRound",
+				"response signing participant is zero",
+			)
+		}
+
+		if _, ok := seenSigningParticipants[participant]; ok {
+			return nil, buildTaggedTBTCSignerOperationError(
+				"StartSignRound",
+				fmt.Sprintf("response signing participant [%d] is duplicated", participant),
+			)
+		}
+
+		seenSigningParticipants[participant] = struct{}{}
+	}
+
 	var ownContribution *NativeTBTCSignerRoundContribution
 	if response.OwnContribution != nil {
 		if response.OwnContribution.Identifier == 0 {
@@ -514,6 +556,7 @@ func decodeBuildTaggedTBTCSignerStartSignRoundResponse(
 		RoundID:               response.RoundID,
 		RequiredContributions: response.RequiredContributions,
 		MessageDigestHex:      response.MessageDigestHex,
+		SigningParticipants:   append([]uint16{}, response.SigningParticipants...),
 		OwnContribution:       ownContribution,
 	}, nil
 }

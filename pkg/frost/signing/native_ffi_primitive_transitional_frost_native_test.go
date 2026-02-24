@@ -32,13 +32,21 @@ type mockBuildTaggedTBTCSignerEngine struct {
 		participants []NativeTBTCSignerDKGParticipant,
 		threshold uint16,
 	) (*NativeTBTCSignerDKGResult, error)
-	version           string
-	versionErr        error
-	startCalled       bool
-	startSessionID    string
-	startMemberID     uint16
-	startMessage      []byte
-	startKeyGroup     string
+	version                  string
+	versionErr               error
+	startCalled              bool
+	startSessionID           string
+	startMemberID            uint16
+	startMessage             []byte
+	startKeyGroup            string
+	startSigningParticipants []uint16
+	startSignRoundFn         func(
+		sessionID string,
+		memberIdentifier uint16,
+		message []byte,
+		keyGroup string,
+		signingParticipants []uint16,
+	) (*NativeTBTCSignerRoundState, error)
 	startRoundState   *NativeTBTCSignerRoundState
 	startErr          error
 	finalizeCalled    bool
@@ -95,18 +103,37 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) StartSignRound(
 	memberIdentifier uint16,
 	message []byte,
 	keyGroup string,
+	signingParticipants []uint16,
 ) (*NativeTBTCSignerRoundState, error) {
 	mbttse.startCalled = true
 	mbttse.startSessionID = sessionID
 	mbttse.startMemberID = memberIdentifier
 	mbttse.startMessage = append([]byte{}, message...)
 	mbttse.startKeyGroup = keyGroup
+	mbttse.startSigningParticipants = append([]uint16{}, signingParticipants...)
 
 	if mbttse.startErr != nil {
 		return nil, mbttse.startErr
 	}
 
+	if mbttse.startSignRoundFn != nil {
+		return mbttse.startSignRoundFn(
+			sessionID,
+			memberIdentifier,
+			message,
+			keyGroup,
+			signingParticipants,
+		)
+	}
+
 	if mbttse.startRoundState != nil {
+		if len(mbttse.startRoundState.SigningParticipants) == 0 {
+			mbttse.startRoundState.SigningParticipants = append(
+				[]uint16{},
+				signingParticipants...,
+			)
+		}
+
 		return mbttse.startRoundState, nil
 	}
 
@@ -115,6 +142,7 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) StartSignRound(
 		RoundID:               "round-1",
 		RequiredContributions: 2,
 		MessageDigestHex:      "00",
+		SigningParticipants:   append([]uint16{}, signingParticipants...),
 	}, nil
 }
 
@@ -166,6 +194,7 @@ func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) StartSig
 	memberIdentifier uint16,
 	_ []byte,
 	_ string,
+	signingParticipants []uint16,
 ) (*NativeTBTCSignerRoundState, error) {
 	if dbttsbre.roundState != nil {
 		if dbttsbre.roundState.OwnContribution == nil {
@@ -175,7 +204,18 @@ func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) StartSig
 			}
 		}
 
+		if len(dbttsbre.roundState.SigningParticipants) == 0 {
+			dbttsbre.roundState.SigningParticipants = append(
+				[]uint16{},
+				signingParticipants...,
+			)
+		}
+
 		return dbttsbre.roundState, nil
+	}
+
+	if len(signingParticipants) == 0 {
+		signingParticipants = []uint16{memberIdentifier}
 	}
 
 	return &NativeTBTCSignerRoundState{
@@ -183,6 +223,7 @@ func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) StartSig
 		RoundID:               "round-1",
 		RequiredContributions: 2,
 		MessageDigestHex:      "00",
+		SigningParticipants:   append([]uint16{}, signingParticipants...),
 		OwnContribution: &NativeTBTCSignerRoundContribution{
 			Identifier: memberIdentifier,
 			Data:       []byte{byte(memberIdentifier), 0xab},
@@ -834,6 +875,8 @@ func TestExecuteBuildTaggedTBTCSignerBootstrapCoarseRound_ExchangesContributions
 				signingRequest,
 				"group-1",
 				signingEngine,
+				nil,
+				nil,
 			)
 		}(request, engine)
 	}
@@ -888,6 +931,254 @@ func TestExecuteBuildTaggedTBTCSignerBootstrapCoarseRound_ExchangesContributions
 				finalizeInputs[1].Data,
 			)
 		}
+	}
+}
+
+func TestExecuteBuildTaggedTBTCSignerBootstrapCoarseRound_UsesThresholdCohortOverFullGroup(
+	t *testing.T,
+) {
+	provider := local.Connect()
+	channel, err := provider.BroadcastChannelFor("tbtc-signer-bootstrap-round-threshold-cohort-test")
+	if err != nil {
+		t.Fatalf("failed creating broadcast channel: [%v]", err)
+	}
+
+	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
+	primitive.RegisterUnmarshallers(channel)
+
+	engineByMember := map[group.MemberIndex]*mockBuildTaggedTBTCSignerEngine{
+		1: {
+			startRoundState: &NativeTBTCSignerRoundState{
+				SessionID:             "session-threshold",
+				RoundID:               "round-threshold",
+				RequiredContributions: 2,
+				MessageDigestHex:      "0011",
+				SigningParticipants:   []uint16{1, 3},
+				OwnContribution: &NativeTBTCSignerRoundContribution{
+					Identifier: 1,
+					Data:       []byte{0x11, 0x01},
+				},
+			},
+		},
+		3: {
+			startRoundState: &NativeTBTCSignerRoundState{
+				SessionID:             "session-threshold",
+				RoundID:               "round-threshold",
+				RequiredContributions: 2,
+				MessageDigestHex:      "0011",
+				SigningParticipants:   []uint16{1, 3},
+				OwnContribution: &NativeTBTCSignerRoundContribution{
+					Identifier: 3,
+					Data:       []byte{0x33, 0x03},
+				},
+			},
+		},
+	}
+
+	requestByMember := map[group.MemberIndex]*NativeExecutionFFISigningRequest{
+		1: {
+			Message:            big.NewInt(123),
+			SessionID:          "session-threshold",
+			MemberIndex:        1,
+			GroupSize:          3,
+			DishonestThreshold: 1,
+			Channel:            channel,
+			Attempt: &Attempt{
+				Number:                 1,
+				CoordinatorMemberIndex: 1,
+				IncludedMembersIndexes: []group.MemberIndex{1, 3},
+			},
+		},
+		3: {
+			Message:            big.NewInt(123),
+			SessionID:          "session-threshold",
+			MemberIndex:        3,
+			GroupSize:          3,
+			DishonestThreshold: 1,
+			Channel:            channel,
+			Attempt: &Attempt{
+				Number:                 1,
+				CoordinatorMemberIndex: 1,
+				IncludedMembersIndexes: []group.MemberIndex{1, 3},
+			},
+		},
+	}
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelCtx()
+
+	var wg sync.WaitGroup
+	signingErrors := make(chan error, len(requestByMember))
+
+	for memberIndex, request := range requestByMember {
+		engine := engineByMember[memberIndex]
+		wg.Add(1)
+
+		go func(
+			signingRequest *NativeExecutionFFISigningRequest,
+			signingEngine NativeTBTCSignerEngine,
+		) {
+			defer wg.Done()
+
+			signingErrors <- executeBuildTaggedTBTCSignerBootstrapCoarseRound(
+				ctx,
+				signingRequest,
+				"group-1",
+				signingEngine,
+				nil,
+				nil,
+			)
+		}(request, engine)
+	}
+
+	wg.Wait()
+	close(signingErrors)
+
+	for signingErr := range signingErrors {
+		if signingErr != nil {
+			t.Fatalf("unexpected signing error: [%v]", signingErr)
+		}
+	}
+
+	expectedSigningParticipants := []uint16{1, 3}
+	for memberIndex, engine := range engineByMember {
+		if !reflect.DeepEqual(engine.startSigningParticipants, expectedSigningParticipants) {
+			t.Fatalf(
+				"unexpected StartSignRound signing participants for member [%v]\nexpected: [%v]\nactual:   [%v]",
+				memberIndex,
+				expectedSigningParticipants,
+				engine.startSigningParticipants,
+			)
+		}
+
+		if len(engine.finalizeInputs) != 2 {
+			t.Fatalf(
+				"unexpected finalize input count for member [%v]\nexpected: [%v]\nactual:   [%v]",
+				memberIndex,
+				2,
+				len(engine.finalizeInputs),
+			)
+		}
+
+		if engine.finalizeInputs[0].Identifier != 1 || engine.finalizeInputs[1].Identifier != 3 {
+			t.Fatalf(
+				"unexpected finalize identifiers for member [%v]\nexpected: [1 3]\nactual:   [%v %v]",
+				memberIndex,
+				engine.finalizeInputs[0].Identifier,
+				engine.finalizeInputs[1].Identifier,
+			)
+		}
+	}
+}
+
+func TestExecuteBuildTaggedTBTCSignerBootstrapCoarseRound_FailsWhenRoundStateSigningParticipantsMismatch(
+	t *testing.T,
+) {
+	request := &NativeExecutionFFISigningRequest{
+		Message:            big.NewInt(123),
+		SessionID:          "session-1",
+		MemberIndex:        1,
+		GroupSize:          2,
+		DishonestThreshold: 1,
+		Attempt: &Attempt{
+			Number:                 1,
+			CoordinatorMemberIndex: 1,
+			IncludedMembersIndexes: []group.MemberIndex{1, 2},
+		},
+	}
+
+	engine := &mockBuildTaggedTBTCSignerEngine{
+		startRoundState: &NativeTBTCSignerRoundState{
+			SessionID:             "session-1",
+			RoundID:               "round-1",
+			RequiredContributions: 2,
+			MessageDigestHex:      "0011",
+			SigningParticipants:   []uint16{1, 3},
+			OwnContribution: &NativeTBTCSignerRoundContribution{
+				Identifier: 1,
+				Data:       []byte{0x11, 0x01},
+			},
+		},
+	}
+
+	err := executeBuildTaggedTBTCSignerBootstrapCoarseRound(
+		context.Background(),
+		request,
+		"group-1",
+		engine,
+		nil,
+		nil,
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	expectedErrFragment := "start sign round returned unexpected signing participant"
+	if !strings.Contains(err.Error(), expectedErrFragment) {
+		t.Fatalf(
+			"unexpected error\nexpected to contain: [%v]\nactual:              [%v]",
+			expectedErrFragment,
+			err,
+		)
+	}
+}
+
+func TestExecuteBuildTaggedTBTCSignerBootstrapCoarseRound_FailsWhenRoundStateSigningParticipantsMissing(
+	t *testing.T,
+) {
+	request := &NativeExecutionFFISigningRequest{
+		Message:            big.NewInt(123),
+		SessionID:          "session-1",
+		MemberIndex:        1,
+		GroupSize:          2,
+		DishonestThreshold: 1,
+		Attempt: &Attempt{
+			Number:                 1,
+			CoordinatorMemberIndex: 1,
+			IncludedMembersIndexes: []group.MemberIndex{1, 2},
+		},
+	}
+
+	engine := &mockBuildTaggedTBTCSignerEngine{
+		startSignRoundFn: func(
+			sessionID string,
+			memberIdentifier uint16,
+			message []byte,
+			keyGroup string,
+			signingParticipants []uint16,
+		) (*NativeTBTCSignerRoundState, error) {
+			return &NativeTBTCSignerRoundState{
+				SessionID:             sessionID,
+				RoundID:               "round-1",
+				RequiredContributions: 2,
+				MessageDigestHex:      "0011",
+				OwnContribution: &NativeTBTCSignerRoundContribution{
+					Identifier: memberIdentifier,
+					Data:       []byte{0x11, 0x01},
+				},
+			}, nil
+		},
+	}
+
+	err := executeBuildTaggedTBTCSignerBootstrapCoarseRound(
+		context.Background(),
+		request,
+		"group-1",
+		engine,
+		nil,
+		nil,
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	expectedErrFragment := "start sign round returned unexpected signing participants count"
+	if !strings.Contains(err.Error(), expectedErrFragment) {
+		t.Fatalf(
+			"unexpected error\nexpected to contain: [%v]\nactual:              [%v]",
+			expectedErrFragment,
+			err,
+		)
 	}
 }
 
@@ -1184,6 +1475,15 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 		)
 	}
 
+	expectedSigningParticipants := []uint16{1, 2, 3}
+	if !reflect.DeepEqual(engine.startSigningParticipants, expectedSigningParticipants) {
+		t.Fatalf(
+			"unexpected StartSignRound signing participants\nexpected: [%v]\nactual:   [%v]",
+			expectedSigningParticipants,
+			engine.startSigningParticipants,
+		)
+	}
+
 	if !engine.finalizeCalled {
 		t.Fatal("expected FinalizeSignRound call in bootstrap tbtc-signer path")
 	}
@@ -1279,6 +1579,15 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 			"unexpected StartSignRound key group\nexpected: [%v]\nactual:   [%v]",
 			"group-from-dkg",
 			engine.startKeyGroup,
+		)
+	}
+
+	expectedSigningParticipants := []uint16{1, 2, 3}
+	if !reflect.DeepEqual(engine.startSigningParticipants, expectedSigningParticipants) {
+		t.Fatalf(
+			"unexpected StartSignRound signing participants\nexpected: [%v]\nactual:   [%v]",
+			expectedSigningParticipants,
+			engine.startSigningParticipants,
 		)
 	}
 
@@ -1522,6 +1831,176 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 			"unexpected fallback event count\nexpected: [%d]\nactual:   [%d]",
 			2,
 			len(observedEvents),
+		)
+	}
+
+	if !strings.Contains(observedEvents[1].Reason, "session_conflict") {
+		t.Fatalf(
+			"expected second fallback reason to include session_conflict\nactual: [%s]",
+			observedEvents[1].Reason,
+		)
+	}
+}
+
+func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_BootstrapVersion_AttemptVariationStartSignRoundConflictFallsBack(
+	t *testing.T,
+) {
+	UnregisterNativeTBTCSignerEngine()
+	UnregisterNativeTBTCSignerFallbackObserver()
+	t.Cleanup(UnregisterNativeTBTCSignerEngine)
+	t.Cleanup(UnregisterNativeTBTCSignerFallbackObserver)
+
+	var firstSigningParticipants []uint16
+	var observedSigningParticipants [][]uint16
+
+	engine := &mockBuildTaggedTBTCSignerEngine{
+		version: "tbtc-signer/0.1.0-bootstrap",
+		runDKGFn: func(
+			sessionID string,
+			participants []NativeTBTCSignerDKGParticipant,
+			threshold uint16,
+		) (*NativeTBTCSignerDKGResult, error) {
+			return &NativeTBTCSignerDKGResult{
+				SessionID:        sessionID,
+				KeyGroup:         "group-1",
+				ParticipantCount: uint16(len(participants)),
+				Threshold:        threshold,
+				CreatedAtUnix:    1,
+			}, nil
+		},
+		startSignRoundFn: func(
+			sessionID string,
+			_ uint16,
+			_ []byte,
+			_ string,
+			signingParticipants []uint16,
+		) (*NativeTBTCSignerRoundState, error) {
+			observedSigningParticipants = append(
+				observedSigningParticipants,
+				append([]uint16{}, signingParticipants...),
+			)
+
+			if firstSigningParticipants == nil {
+				firstSigningParticipants = append(
+					[]uint16{},
+					signingParticipants...,
+				)
+			} else if !reflect.DeepEqual(signingParticipants, firstSigningParticipants) {
+				return nil, errors.New("session_conflict")
+			}
+
+			return &NativeTBTCSignerRoundState{
+				SessionID:             sessionID,
+				RoundID:               "round-1",
+				RequiredContributions: 2,
+				MessageDigestHex:      "00",
+				SigningParticipants: append(
+					[]uint16{},
+					signingParticipants...,
+				),
+			}, nil
+		},
+	}
+
+	err := RegisterNativeTBTCSignerEngine(engine)
+	if err != nil {
+		t.Fatalf("unexpected registration error: [%v]", err)
+	}
+
+	var observedEvents []NativeTBTCSignerFallbackEvent
+	err = RegisterNativeTBTCSignerFallbackObserver(
+		func(event NativeTBTCSignerFallbackEvent) {
+			observedEvents = append(observedEvents, event)
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected observer registration error: [%v]", err)
+	}
+
+	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
+
+	baseRequest := &NativeExecutionFFISigningRequest{
+		Message:            big.NewInt(123),
+		SessionID:          "session-1",
+		MemberIndex:        1,
+		GroupSize:          3,
+		DishonestThreshold: 1,
+		SignerMaterial: &NativeSignerMaterial{
+			Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
+			Payload: []byte(`{"keyGroup":"group-1","keyGroupSource":"legacy-wallet-pubkey"}`),
+		},
+	}
+
+	_, err = primitive.Sign(nil, nil, baseRequest)
+	if err == nil {
+		t.Fatal("expected first signing error due to legacy fallback without private key share")
+	}
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected first signing error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	secondRequest := *baseRequest
+	secondRequest.Attempt = &Attempt{
+		ExcludedMembersIndexes: []group.MemberIndex{2},
+	}
+
+	_, err = primitive.Sign(nil, nil, &secondRequest)
+	if err == nil {
+		t.Fatal("expected second signing error due to legacy fallback without private key share")
+	}
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected second signing error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	if len(observedSigningParticipants) != 2 {
+		t.Fatalf(
+			"unexpected StartSignRound call count\nexpected: [%d]\nactual:   [%d]",
+			2,
+			len(observedSigningParticipants),
+		)
+	}
+
+	expectedFirstParticipants := []uint16{1, 2, 3}
+	if !reflect.DeepEqual(observedSigningParticipants[0], expectedFirstParticipants) {
+		t.Fatalf(
+			"unexpected first StartSignRound signing participants\nexpected: [%v]\nactual:   [%v]",
+			expectedFirstParticipants,
+			observedSigningParticipants[0],
+		)
+	}
+
+	expectedSecondParticipants := []uint16{1, 3}
+	if !reflect.DeepEqual(observedSigningParticipants[1], expectedSecondParticipants) {
+		t.Fatalf(
+			"unexpected second StartSignRound signing participants\nexpected: [%v]\nactual:   [%v]",
+			expectedSecondParticipants,
+			observedSigningParticipants[1],
+		)
+	}
+
+	if len(observedEvents) != 2 {
+		t.Fatalf(
+			"unexpected fallback event count\nexpected: [%d]\nactual:   [%d]",
+			2,
+			len(observedEvents),
+		)
+	}
+
+	if !strings.Contains(
+		observedEvents[0].Reason,
+		"tbtc-signer bootstrap coarse round completed",
+	) {
+		t.Fatalf(
+			"expected first fallback reason to include bootstrap completion\nactual: [%s]",
+			observedEvents[0].Reason,
 		)
 	}
 

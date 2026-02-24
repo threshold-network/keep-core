@@ -328,6 +328,105 @@ func TestCalculateWalletID(t *testing.T) {
 	testutils.AssertBytesEqual(t, expectedWalletID[:], actualWalletID[:])
 }
 
+type pastNewWalletRegisteredV2EventsBridgeMock struct {
+	pastEvents func(
+		startBlock uint64,
+		endBlock *uint64,
+		walletID [][32]byte,
+		ecdsaWalletID [][32]byte,
+		walletPublicKeyHash [][20]byte,
+	) ([]*tbtcabi.BridgeNewWalletRegisteredV2, error)
+}
+
+func (m *pastNewWalletRegisteredV2EventsBridgeMock) PastNewWalletRegisteredV2Events(
+	startBlock uint64,
+	endBlock *uint64,
+	walletID [][32]byte,
+	ecdsaWalletID [][32]byte,
+	walletPublicKeyHash [][20]byte,
+) ([]*tbtcabi.BridgeNewWalletRegisteredV2, error) {
+	return m.pastEvents(
+		startBlock,
+		endBlock,
+		walletID,
+		ecdsaWalletID,
+		walletPublicKeyHash,
+	)
+}
+
+type pastNewWalletRegisteredV2EventsAltFieldBridgeMock struct {
+	pastEvents func(
+		startBlock uint64,
+		endBlock *uint64,
+		walletID [][32]byte,
+		ecdsaWalletID [][32]byte,
+		walletPublicKeyHash [][20]byte,
+	) ([]*pastNewWalletRegisteredV2EventsAltFieldEvent, error)
+}
+
+type pastNewWalletRegisteredV2EventsAltFieldEvent struct {
+	WalletID            [32]byte
+	EcdsaWalletID       [32]byte
+	WalletPublicKeyHash [20]byte
+	Raw                 types.Log
+}
+
+func (m *pastNewWalletRegisteredV2EventsAltFieldBridgeMock) PastNewWalletRegisteredV2Events(
+	startBlock uint64,
+	endBlock *uint64,
+	walletID [][32]byte,
+	ecdsaWalletID [][32]byte,
+	walletPublicKeyHash [][20]byte,
+) ([]*pastNewWalletRegisteredV2EventsAltFieldEvent, error) {
+	return m.pastEvents(
+		startBlock,
+		endBlock,
+		walletID,
+		ecdsaWalletID,
+		walletPublicKeyHash,
+	)
+}
+
+type pastNewWalletRegisteredV2EventsMissingRawBridgeMock struct {
+	pastEvents func(
+		startBlock uint64,
+		endBlock *uint64,
+		walletID [][32]byte,
+		ecdsaWalletID [][32]byte,
+		walletPublicKeyHash [][20]byte,
+	) ([]*pastNewWalletRegisteredV2EventsMissingRawEvent, error)
+}
+
+type pastNewWalletRegisteredV2EventsMissingRawEvent struct {
+	WalletID         [32]byte
+	EcdsaWalletID    [32]byte
+	WalletPubKeyHash [20]byte
+}
+
+func (m *pastNewWalletRegisteredV2EventsMissingRawBridgeMock) PastNewWalletRegisteredV2Events(
+	startBlock uint64,
+	endBlock *uint64,
+	walletID [][32]byte,
+	ecdsaWalletID [][32]byte,
+	walletPublicKeyHash [][20]byte,
+) ([]*pastNewWalletRegisteredV2EventsMissingRawEvent, error) {
+	return m.pastEvents(
+		startBlock,
+		endBlock,
+		walletID,
+		ecdsaWalletID,
+		walletPublicKeyHash,
+	)
+}
+
+type pastNewWalletRegisteredV2EventsWrongSignatureBridgeMock struct{}
+
+func (m *pastNewWalletRegisteredV2EventsWrongSignatureBridgeMock) PastNewWalletRegisteredV2Events(
+	startBlock uint64,
+) ([]*tbtcabi.BridgeNewWalletRegisteredV2, error) {
+	return nil, nil
+}
+
 func TestPastNewWalletRegisteredEvents_UsesV2EventsWhenAvailable(t *testing.T) {
 	startBlock := uint64(500)
 	endBlock := uint64(700)
@@ -349,36 +448,38 @@ func TestPastNewWalletRegisteredEvents_UsesV2EventsWhenAvailable(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		func(
-			actualStartBlock uint64,
-			actualEndBlock *uint64,
-			_ [][32]byte,
-			_ [][32]byte,
-			_ [][20]byte,
-		) ([]*tbtcabi.BridgeNewWalletRegisteredV2, error) {
-			if actualStartBlock != startBlock {
-				t.Fatalf("unexpected start block: [%v]", actualStartBlock)
-			}
+		&pastNewWalletRegisteredV2EventsBridgeMock{
+			pastEvents: func(
+				actualStartBlock uint64,
+				actualEndBlock *uint64,
+				_ [][32]byte,
+				_ [][32]byte,
+				_ [][20]byte,
+			) ([]*tbtcabi.BridgeNewWalletRegisteredV2, error) {
+				if actualStartBlock != startBlock {
+					t.Fatalf("unexpected start block: [%v]", actualStartBlock)
+				}
 
-			if actualEndBlock == nil || *actualEndBlock != endBlock {
-				t.Fatalf("unexpected end block: [%v]", actualEndBlock)
-			}
+				if actualEndBlock == nil || *actualEndBlock != endBlock {
+					t.Fatalf("unexpected end block: [%v]", actualEndBlock)
+				}
 
-			// Provide events out of order to verify post-conversion sort.
-			return []*tbtcabi.BridgeNewWalletRegisteredV2{
-				{
-					WalletID:         expectedWalletIDB,
-					EcdsaWalletID:    expectedECDSAWalletIDB,
-					WalletPubKeyHash: expectedWalletPublicKeyHashB,
-					Raw:              types.Log{BlockNumber: 650},
-				},
-				{
-					WalletID:         expectedWalletIDA,
-					EcdsaWalletID:    expectedECDSAWalletIDA,
-					WalletPubKeyHash: expectedWalletPublicKeyHashA,
-					Raw:              types.Log{BlockNumber: 600},
-				},
-			}, nil
+				// Provide events out of order to verify post-conversion sort.
+				return []*tbtcabi.BridgeNewWalletRegisteredV2{
+					{
+						WalletID:         expectedWalletIDB,
+						EcdsaWalletID:    expectedECDSAWalletIDB,
+						WalletPubKeyHash: expectedWalletPublicKeyHashB,
+						Raw:              types.Log{BlockNumber: 650},
+					},
+					{
+						WalletID:         expectedWalletIDA,
+						EcdsaWalletID:    expectedECDSAWalletIDA,
+						WalletPubKeyHash: expectedWalletPublicKeyHashA,
+						Raw:              types.Log{BlockNumber: 600},
+					},
+				}, nil
+			},
 		},
 		func(uint64, *uint64, [][32]byte, [][20]byte) ([]*tbtcabi.BridgeNewWalletRegistered, error) {
 			legacyFallbackCalled = true
@@ -424,8 +525,16 @@ func TestPastNewWalletRegisteredEvents_FallsBackToLegacyWhenV2Empty(t *testing.T
 		nil, // no canonical wallet-ID filter -> fallback path enabled
 		nil,
 		nil,
-		func(uint64, *uint64, [][32]byte, [][32]byte, [][20]byte) ([]*tbtcabi.BridgeNewWalletRegisteredV2, error) {
-			return []*tbtcabi.BridgeNewWalletRegisteredV2{}, nil
+		&pastNewWalletRegisteredV2EventsBridgeMock{
+			pastEvents: func(
+				uint64,
+				*uint64,
+				[][32]byte,
+				[][32]byte,
+				[][20]byte,
+			) ([]*tbtcabi.BridgeNewWalletRegisteredV2, error) {
+				return []*tbtcabi.BridgeNewWalletRegisteredV2{}, nil
+			},
 		},
 		func(uint64, *uint64, [][32]byte, [][20]byte) ([]*tbtcabi.BridgeNewWalletRegistered, error) {
 			legacyFallbackCalled = true
@@ -473,8 +582,16 @@ func TestPastNewWalletRegisteredEvents_DoesNotFallbackWithWalletIDFilter(t *test
 		walletIDFilter,
 		nil,
 		nil,
-		func(uint64, *uint64, [][32]byte, [][32]byte, [][20]byte) ([]*tbtcabi.BridgeNewWalletRegisteredV2, error) {
-			return []*tbtcabi.BridgeNewWalletRegisteredV2{}, nil
+		&pastNewWalletRegisteredV2EventsBridgeMock{
+			pastEvents: func(
+				uint64,
+				*uint64,
+				[][32]byte,
+				[][32]byte,
+				[][20]byte,
+			) ([]*tbtcabi.BridgeNewWalletRegisteredV2, error) {
+				return []*tbtcabi.BridgeNewWalletRegisteredV2{}, nil
+			},
 		},
 		func(uint64, *uint64, [][32]byte, [][20]byte) ([]*tbtcabi.BridgeNewWalletRegistered, error) {
 			legacyFallbackCalled = true
@@ -494,6 +611,133 @@ func TestPastNewWalletRegisteredEvents_DoesNotFallbackWithWalletIDFilter(t *test
 	}
 }
 
+func TestPastNewWalletRegisteredV2Events_ReturnsEmptyWhenMethodUnavailable(t *testing.T) {
+	actualEvents, err := pastNewWalletRegisteredV2Events(
+		1,
+		nil,
+		nil,
+		nil,
+		nil,
+		struct{}{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+
+	if len(actualEvents) != 0 {
+		t.Fatalf("unexpected events count: [%v]", len(actualEvents))
+	}
+}
+
+func TestPastNewWalletRegisteredV2Events_UsesWalletPublicKeyHashFallbackField(t *testing.T) {
+	expectedWalletID := [32]byte{0x01}
+	expectedECDSAWalletID := [32]byte{0x02}
+	expectedWalletPublicKeyHash := [20]byte{0x03}
+
+	actualEvents, err := pastNewWalletRegisteredV2Events(
+		11,
+		nil,
+		nil,
+		nil,
+		nil,
+		&pastNewWalletRegisteredV2EventsAltFieldBridgeMock{
+			pastEvents: func(
+				uint64,
+				*uint64,
+				[][32]byte,
+				[][32]byte,
+				[][20]byte,
+			) ([]*pastNewWalletRegisteredV2EventsAltFieldEvent, error) {
+				return []*pastNewWalletRegisteredV2EventsAltFieldEvent{
+					{
+						WalletID:            expectedWalletID,
+						EcdsaWalletID:       expectedECDSAWalletID,
+						WalletPublicKeyHash: expectedWalletPublicKeyHash,
+						Raw:                 types.Log{BlockNumber: 121},
+					},
+				}, nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+
+	if len(actualEvents) != 1 {
+		t.Fatalf("unexpected events count: [%v]", len(actualEvents))
+	}
+
+	if actualEvents[0].WalletPublicKeyHash != expectedWalletPublicKeyHash {
+		t.Fatalf(
+			"unexpected wallet public key hash\nexpected: [%x]\nactual:   [%x]",
+			expectedWalletPublicKeyHash,
+			actualEvents[0].WalletPublicKeyHash,
+		)
+	}
+}
+
+func TestPastNewWalletRegisteredV2Events_ReturnsErrorOnCallPanic(t *testing.T) {
+	_, err := pastNewWalletRegisteredV2Events(
+		1,
+		nil,
+		nil,
+		nil,
+		nil,
+		&pastNewWalletRegisteredV2EventsWrongSignatureBridgeMock{},
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	if !strings.Contains(err.Error(), "panic calling PastNewWalletRegisteredV2Events") {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
+func TestPastNewWalletRegisteredV2Events_ReturnsErrorWhenRawMissing(t *testing.T) {
+	_, err := pastNewWalletRegisteredV2Events(
+		1,
+		nil,
+		nil,
+		nil,
+		nil,
+		&pastNewWalletRegisteredV2EventsMissingRawBridgeMock{
+			pastEvents: func(
+				uint64,
+				*uint64,
+				[][32]byte,
+				[][32]byte,
+				[][20]byte,
+			) ([]*pastNewWalletRegisteredV2EventsMissingRawEvent, error) {
+				return []*pastNewWalletRegisteredV2EventsMissingRawEvent{
+					{
+						WalletID:         [32]byte{0x05},
+						EcdsaWalletID:    [32]byte{0x06},
+						WalletPubKeyHash: [20]byte{0x07},
+					},
+				}, nil
+			},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	if !strings.Contains(err.Error(), "raw event payload") {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
+type walletPublicKeyHashForWalletIDBridgeMock struct {
+	resolve func(walletID [32]byte) ([20]byte, error)
+}
+
+func (m *walletPublicKeyHashForWalletIDBridgeMock) WalletPubKeyHashForWalletID(
+	walletID [32]byte,
+) ([20]byte, error) {
+	return m.resolve(walletID)
+}
+
 func TestResolveWalletPublicKeyHashForWalletID(t *testing.T) {
 	t.Run("returns canonical mapping when non-zero", func(t *testing.T) {
 		walletID := [32]byte{0x01}
@@ -501,12 +745,14 @@ func TestResolveWalletPublicKeyHashForWalletID(t *testing.T) {
 
 		actualWalletPublicKeyHash, err := resolveWalletPublicKeyHashForWalletID(
 			walletID,
-			func(actualWalletID [32]byte) ([20]byte, error) {
-				if actualWalletID != walletID {
-					t.Fatalf("unexpected wallet ID: [%x]", actualWalletID)
-				}
+			&walletPublicKeyHashForWalletIDBridgeMock{
+				resolve: func(actualWalletID [32]byte) ([20]byte, error) {
+					if actualWalletID != walletID {
+						t.Fatalf("unexpected wallet ID: [%x]", actualWalletID)
+					}
 
-				return expectedWalletPublicKeyHash, nil
+					return expectedWalletPublicKeyHash, nil
+				},
 			},
 		)
 		if err != nil {
@@ -528,8 +774,10 @@ func TestResolveWalletPublicKeyHashForWalletID(t *testing.T) {
 
 		actualWalletPublicKeyHash, err := resolveWalletPublicKeyHashForWalletID(
 			legacyWalletID,
-			func([32]byte) ([20]byte, error) {
-				return [20]byte{}, errors.New("canonical lookup unavailable")
+			&walletPublicKeyHashForWalletIDBridgeMock{
+				resolve: func([32]byte) ([20]byte, error) {
+					return [20]byte{}, errors.New("canonical lookup unavailable")
+				},
 			},
 		)
 		if err != nil {
@@ -551,8 +799,10 @@ func TestResolveWalletPublicKeyHashForWalletID(t *testing.T) {
 
 		actualWalletPublicKeyHash, err := resolveWalletPublicKeyHashForWalletID(
 			legacyWalletID,
-			func([32]byte) ([20]byte, error) {
-				return [20]byte{}, nil
+			&walletPublicKeyHashForWalletIDBridgeMock{
+				resolve: func([32]byte) ([20]byte, error) {
+					return [20]byte{}, nil
+				},
 			},
 		)
 		if err != nil {
@@ -574,8 +824,10 @@ func TestResolveWalletPublicKeyHashForWalletID(t *testing.T) {
 
 		_, err := resolveWalletPublicKeyHashForWalletID(
 			walletID,
-			func([32]byte) ([20]byte, error) {
-				return [20]byte{}, canonicalErr
+			&walletPublicKeyHashForWalletIDBridgeMock{
+				resolve: func([32]byte) ([20]byte, error) {
+					return [20]byte{}, canonicalErr
+				},
 			},
 		)
 		if err == nil {
@@ -595,8 +847,10 @@ func TestResolveWalletPublicKeyHashForWalletID(t *testing.T) {
 
 		_, err := resolveWalletPublicKeyHashForWalletID(
 			walletID,
-			func([32]byte) ([20]byte, error) {
-				return [20]byte{}, nil
+			&walletPublicKeyHashForWalletIDBridgeMock{
+				resolve: func([32]byte) ([20]byte, error) {
+					return [20]byte{}, nil
+				},
 			},
 		)
 		if err == nil {
