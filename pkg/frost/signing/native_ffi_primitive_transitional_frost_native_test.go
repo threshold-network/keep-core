@@ -40,13 +40,20 @@ type mockBuildTaggedTBTCSignerEngine struct {
 	startMessage             []byte
 	startKeyGroup            string
 	startSigningParticipants []uint16
-	startRoundState          *NativeTBTCSignerRoundState
-	startErr                 error
-	finalizeCalled           bool
-	finalizeSessionID        string
-	finalizeInputs           []NativeTBTCSignerRoundContribution
-	finalizeSignature        []byte
-	finalizeErr              error
+	startSignRoundFn         func(
+		sessionID string,
+		memberIdentifier uint16,
+		message []byte,
+		keyGroup string,
+		signingParticipants []uint16,
+	) (*NativeTBTCSignerRoundState, error)
+	startRoundState   *NativeTBTCSignerRoundState
+	startErr          error
+	finalizeCalled    bool
+	finalizeSessionID string
+	finalizeInputs    []NativeTBTCSignerRoundContribution
+	finalizeSignature []byte
+	finalizeErr       error
 }
 
 func (mbttse *mockBuildTaggedTBTCSignerEngine) RunDKG(
@@ -107,6 +114,16 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) StartSignRound(
 
 	if mbttse.startErr != nil {
 		return nil, mbttse.startErr
+	}
+
+	if mbttse.startSignRoundFn != nil {
+		return mbttse.startSignRoundFn(
+			sessionID,
+			memberIdentifier,
+			message,
+			keyGroup,
+			signingParticipants,
+		)
 	}
 
 	if mbttse.startRoundState != nil {
@@ -1734,6 +1751,176 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 			"unexpected fallback event count\nexpected: [%d]\nactual:   [%d]",
 			2,
 			len(observedEvents),
+		)
+	}
+
+	if !strings.Contains(observedEvents[1].Reason, "session_conflict") {
+		t.Fatalf(
+			"expected second fallback reason to include session_conflict\nactual: [%s]",
+			observedEvents[1].Reason,
+		)
+	}
+}
+
+func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_BootstrapVersion_AttemptVariationStartSignRoundConflictFallsBack(
+	t *testing.T,
+) {
+	UnregisterNativeTBTCSignerEngine()
+	UnregisterNativeTBTCSignerFallbackObserver()
+	t.Cleanup(UnregisterNativeTBTCSignerEngine)
+	t.Cleanup(UnregisterNativeTBTCSignerFallbackObserver)
+
+	var firstSigningParticipants []uint16
+	var observedSigningParticipants [][]uint16
+
+	engine := &mockBuildTaggedTBTCSignerEngine{
+		version: "tbtc-signer/0.1.0-bootstrap",
+		runDKGFn: func(
+			sessionID string,
+			participants []NativeTBTCSignerDKGParticipant,
+			threshold uint16,
+		) (*NativeTBTCSignerDKGResult, error) {
+			return &NativeTBTCSignerDKGResult{
+				SessionID:        sessionID,
+				KeyGroup:         "group-1",
+				ParticipantCount: uint16(len(participants)),
+				Threshold:        threshold,
+				CreatedAtUnix:    1,
+			}, nil
+		},
+		startSignRoundFn: func(
+			sessionID string,
+			_ uint16,
+			_ []byte,
+			_ string,
+			signingParticipants []uint16,
+		) (*NativeTBTCSignerRoundState, error) {
+			observedSigningParticipants = append(
+				observedSigningParticipants,
+				append([]uint16{}, signingParticipants...),
+			)
+
+			if firstSigningParticipants == nil {
+				firstSigningParticipants = append(
+					[]uint16{},
+					signingParticipants...,
+				)
+			} else if !reflect.DeepEqual(signingParticipants, firstSigningParticipants) {
+				return nil, errors.New("session_conflict")
+			}
+
+			return &NativeTBTCSignerRoundState{
+				SessionID:             sessionID,
+				RoundID:               "round-1",
+				RequiredContributions: 2,
+				MessageDigestHex:      "00",
+				SigningParticipants: append(
+					[]uint16{},
+					signingParticipants...,
+				),
+			}, nil
+		},
+	}
+
+	err := RegisterNativeTBTCSignerEngine(engine)
+	if err != nil {
+		t.Fatalf("unexpected registration error: [%v]", err)
+	}
+
+	var observedEvents []NativeTBTCSignerFallbackEvent
+	err = RegisterNativeTBTCSignerFallbackObserver(
+		func(event NativeTBTCSignerFallbackEvent) {
+			observedEvents = append(observedEvents, event)
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected observer registration error: [%v]", err)
+	}
+
+	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
+
+	baseRequest := &NativeExecutionFFISigningRequest{
+		Message:            big.NewInt(123),
+		SessionID:          "session-1",
+		MemberIndex:        1,
+		GroupSize:          3,
+		DishonestThreshold: 1,
+		SignerMaterial: &NativeSignerMaterial{
+			Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
+			Payload: []byte(`{"keyGroup":"group-1","keyGroupSource":"legacy-wallet-pubkey"}`),
+		},
+	}
+
+	_, err = primitive.Sign(nil, nil, baseRequest)
+	if err == nil {
+		t.Fatal("expected first signing error due to legacy fallback without private key share")
+	}
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected first signing error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	secondRequest := *baseRequest
+	secondRequest.Attempt = &Attempt{
+		ExcludedMembersIndexes: []group.MemberIndex{2},
+	}
+
+	_, err = primitive.Sign(nil, nil, &secondRequest)
+	if err == nil {
+		t.Fatal("expected second signing error due to legacy fallback without private key share")
+	}
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unexpected second signing error\nexpected: [%v]\nactual:   [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	if len(observedSigningParticipants) != 2 {
+		t.Fatalf(
+			"unexpected StartSignRound call count\nexpected: [%d]\nactual:   [%d]",
+			2,
+			len(observedSigningParticipants),
+		)
+	}
+
+	expectedFirstParticipants := []uint16{1, 2, 3}
+	if !reflect.DeepEqual(observedSigningParticipants[0], expectedFirstParticipants) {
+		t.Fatalf(
+			"unexpected first StartSignRound signing participants\nexpected: [%v]\nactual:   [%v]",
+			expectedFirstParticipants,
+			observedSigningParticipants[0],
+		)
+	}
+
+	expectedSecondParticipants := []uint16{1, 3}
+	if !reflect.DeepEqual(observedSigningParticipants[1], expectedSecondParticipants) {
+		t.Fatalf(
+			"unexpected second StartSignRound signing participants\nexpected: [%v]\nactual:   [%v]",
+			expectedSecondParticipants,
+			observedSigningParticipants[1],
+		)
+	}
+
+	if len(observedEvents) != 2 {
+		t.Fatalf(
+			"unexpected fallback event count\nexpected: [%d]\nactual:   [%d]",
+			2,
+			len(observedEvents),
+		)
+	}
+
+	if !strings.Contains(
+		observedEvents[0].Reason,
+		"tbtc-signer bootstrap coarse round completed",
+	) {
+		t.Fatalf(
+			"expected first fallback reason to include bootstrap completion\nactual: [%s]",
+			observedEvents[0].Reason,
 		)
 	}
 
