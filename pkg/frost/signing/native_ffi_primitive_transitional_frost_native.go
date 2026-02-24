@@ -32,9 +32,9 @@ func defaultNativeExecutionFFISigningPrimitiveProviderForBuild() (
 // buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive is a
 // transitional primitive that executes native two-round FROST when
 // `frost-uniffi-v2` signer material is provided, and preserves legacy bridge
-// execution for `frost-uniffi-v1` payloads. `frost-tbtc-signer-v1` currently
-// routes through a temporary legacy fallback until coarse session finalize flow
-// is wired end-to-end.
+// execution for `frost-uniffi-v1` payloads. `frost-tbtc-signer-v1` uses the
+// coarse signing flow for bootstrap engine versions and falls back to legacy
+// signing for unsupported or failed coarse-path executions.
 type buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive struct{}
 
 const buildTaggedTBTCSignerVersionPrefix = "tbtc-signer/"
@@ -338,6 +338,14 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 			"validated tbtc-signer key-group contract via RunDKG and bootstrap coarse round; returning coarse signature",
 		)
 	}
+
+	emitNativeTBTCSignerCoarseSignatureEvent(
+		NativeTBTCSignerCoarseSignatureEvent{
+			SessionID:      request.SessionID,
+			KeyGroupSource: payload.KeyGroupSource,
+			EngineVersion:  engineVersion,
+		},
+	)
 
 	return coarseSignature, nil
 }

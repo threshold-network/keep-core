@@ -1421,8 +1421,10 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 	}
 	UnregisterNativeTBTCSignerEngine()
 	UnregisterNativeTBTCSignerFallbackObserver()
+	UnregisterNativeTBTCSignerCoarseSignatureObserver()
 	t.Cleanup(UnregisterNativeTBTCSignerEngine)
 	t.Cleanup(UnregisterNativeTBTCSignerFallbackObserver)
+	t.Cleanup(UnregisterNativeTBTCSignerCoarseSignatureObserver)
 
 	err := RegisterNativeTBTCSignerEngine(engine)
 	if err != nil {
@@ -1437,6 +1439,19 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 	)
 	if err != nil {
 		t.Fatalf("unexpected observer registration error: [%v]", err)
+	}
+
+	var observedCoarseSignatureEvents []NativeTBTCSignerCoarseSignatureEvent
+	err = RegisterNativeTBTCSignerCoarseSignatureObserver(
+		func(event NativeTBTCSignerCoarseSignatureEvent) {
+			observedCoarseSignatureEvents = append(
+				observedCoarseSignatureEvents,
+				event,
+			)
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected coarse observer registration error: [%v]", err)
 	}
 
 	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
@@ -1526,6 +1541,30 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 		)
 	}
 
+	if len(observedCoarseSignatureEvents) != 1 {
+		t.Fatalf(
+			"unexpected coarse signature event count\nexpected: [%d]\nactual:   [%d]",
+			1,
+			len(observedCoarseSignatureEvents),
+		)
+	}
+
+	if observedCoarseSignatureEvents[0].SessionID != "session-1" {
+		t.Fatalf(
+			"unexpected coarse signature session ID\nexpected: [%s]\nactual:   [%s]",
+			"session-1",
+			observedCoarseSignatureEvents[0].SessionID,
+		)
+	}
+
+	if observedCoarseSignatureEvents[0].EngineVersion != "tbtc-signer/0.1.0-bootstrap" {
+		t.Fatalf(
+			"unexpected coarse signature engine version\nexpected: [%s]\nactual:   [%s]",
+			"tbtc-signer/0.1.0-bootstrap",
+			observedCoarseSignatureEvents[0].EngineVersion,
+		)
+	}
+
 	if engine.finalizeSessionID != "session-1" {
 		t.Fatalf(
 			"unexpected FinalizeSignRound session ID\nexpected: [%v]\nactual:   [%v]",
@@ -1568,8 +1607,10 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 	}
 	UnregisterNativeTBTCSignerEngine()
 	UnregisterNativeTBTCSignerFallbackObserver()
+	UnregisterNativeTBTCSignerCoarseSignatureObserver()
 	t.Cleanup(UnregisterNativeTBTCSignerEngine)
 	t.Cleanup(UnregisterNativeTBTCSignerFallbackObserver)
+	t.Cleanup(UnregisterNativeTBTCSignerCoarseSignatureObserver)
 
 	err := RegisterNativeTBTCSignerEngine(engine)
 	if err != nil {
@@ -1584,6 +1625,19 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 	)
 	if err != nil {
 		t.Fatalf("unexpected observer registration error: [%v]", err)
+	}
+
+	var observedCoarseSignatureEvents []NativeTBTCSignerCoarseSignatureEvent
+	err = RegisterNativeTBTCSignerCoarseSignatureObserver(
+		func(event NativeTBTCSignerCoarseSignatureEvent) {
+			observedCoarseSignatureEvents = append(
+				observedCoarseSignatureEvents,
+				event,
+			)
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected coarse observer registration error: [%v]", err)
 	}
 
 	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
@@ -1640,6 +1694,13 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 			observedEvents[0].Reason,
 		)
 	}
+
+	if len(observedCoarseSignatureEvents) != 0 {
+		t.Fatalf(
+			"did not expect coarse signature events\nactual: [%v]",
+			observedCoarseSignatureEvents,
+		)
+	}
 }
 
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_BootstrapVersion_LegacyKeyGroupSourceUsesRunDKGResult(
@@ -1657,11 +1718,26 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 		finalizeSignature: buildTaggedTBTCSignerValidTestSignature(0x22),
 	}
 	UnregisterNativeTBTCSignerEngine()
+	UnregisterNativeTBTCSignerCoarseSignatureObserver()
 	t.Cleanup(UnregisterNativeTBTCSignerEngine)
+	t.Cleanup(UnregisterNativeTBTCSignerCoarseSignatureObserver)
 
 	err := RegisterNativeTBTCSignerEngine(engine)
 	if err != nil {
 		t.Fatalf("unexpected registration error: [%v]", err)
+	}
+
+	var observedCoarseSignatureEvents []NativeTBTCSignerCoarseSignatureEvent
+	err = RegisterNativeTBTCSignerCoarseSignatureObserver(
+		func(event NativeTBTCSignerCoarseSignatureEvent) {
+			observedCoarseSignatureEvents = append(
+				observedCoarseSignatureEvents,
+				event,
+			)
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected coarse observer registration error: [%v]", err)
 	}
 
 	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
@@ -1724,6 +1800,30 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 
 	if !engine.finalizeCalled {
 		t.Fatal("expected FinalizeSignRound call in bootstrap path")
+	}
+
+	if len(observedCoarseSignatureEvents) != 1 {
+		t.Fatalf(
+			"unexpected coarse signature event count\nexpected: [%d]\nactual:   [%d]",
+			1,
+			len(observedCoarseSignatureEvents),
+		)
+	}
+
+	if observedCoarseSignatureEvents[0].KeyGroupSource != "legacy-wallet-pubkey" {
+		t.Fatalf(
+			"unexpected coarse signature key group source\nexpected: [%s]\nactual:   [%s]",
+			"legacy-wallet-pubkey",
+			observedCoarseSignatureEvents[0].KeyGroupSource,
+		)
+	}
+
+	if observedCoarseSignatureEvents[0].EngineVersion != "tbtc-signer/0.1.0-bootstrap" {
+		t.Fatalf(
+			"unexpected coarse signature engine version\nexpected: [%s]\nactual:   [%s]",
+			"tbtc-signer/0.1.0-bootstrap",
+			observedCoarseSignatureEvents[0].EngineVersion,
+		)
 	}
 }
 
@@ -1789,8 +1889,10 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 ) {
 	UnregisterNativeTBTCSignerEngine()
 	UnregisterNativeTBTCSignerFallbackObserver()
+	UnregisterNativeTBTCSignerCoarseSignatureObserver()
 	t.Cleanup(UnregisterNativeTBTCSignerEngine)
 	t.Cleanup(UnregisterNativeTBTCSignerFallbackObserver)
+	t.Cleanup(UnregisterNativeTBTCSignerCoarseSignatureObserver)
 
 	var observedEvents []NativeTBTCSignerFallbackEvent
 	err := RegisterNativeTBTCSignerFallbackObserver(
@@ -1859,8 +1961,10 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 ) {
 	UnregisterNativeTBTCSignerEngine()
 	UnregisterNativeTBTCSignerFallbackObserver()
+	UnregisterNativeTBTCSignerCoarseSignatureObserver()
 	t.Cleanup(UnregisterNativeTBTCSignerEngine)
 	t.Cleanup(UnregisterNativeTBTCSignerFallbackObserver)
+	t.Cleanup(UnregisterNativeTBTCSignerCoarseSignatureObserver)
 
 	var firstParticipants []NativeTBTCSignerDKGParticipant
 	engine := &mockBuildTaggedTBTCSignerEngine{
@@ -1978,8 +2082,10 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 ) {
 	UnregisterNativeTBTCSignerEngine()
 	UnregisterNativeTBTCSignerFallbackObserver()
+	UnregisterNativeTBTCSignerCoarseSignatureObserver()
 	t.Cleanup(UnregisterNativeTBTCSignerEngine)
 	t.Cleanup(UnregisterNativeTBTCSignerFallbackObserver)
+	t.Cleanup(UnregisterNativeTBTCSignerCoarseSignatureObserver)
 
 	var firstSigningParticipants []uint16
 	var observedSigningParticipants [][]uint16
@@ -2047,6 +2153,19 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 	)
 	if err != nil {
 		t.Fatalf("unexpected observer registration error: [%v]", err)
+	}
+
+	var observedCoarseSignatureEvents []NativeTBTCSignerCoarseSignatureEvent
+	err = RegisterNativeTBTCSignerCoarseSignatureObserver(
+		func(event NativeTBTCSignerCoarseSignatureEvent) {
+			observedCoarseSignatureEvents = append(
+				observedCoarseSignatureEvents,
+				event,
+			)
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected coarse observer registration error: [%v]", err)
 	}
 
 	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
@@ -2126,6 +2245,14 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 		t.Fatalf(
 			"expected fallback reason to include session_conflict\nactual: [%s]",
 			observedEvents[0].Reason,
+		)
+	}
+
+	if len(observedCoarseSignatureEvents) != 1 {
+		t.Fatalf(
+			"unexpected coarse signature event count\nexpected: [%d]\nactual:   [%d]",
+			1,
+			len(observedCoarseSignatureEvents),
 		)
 	}
 }
