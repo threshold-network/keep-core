@@ -3,6 +3,8 @@ package tbtc
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
@@ -232,14 +234,38 @@ func legacyPrivateKeyShareFromNativeSignerMaterial(
 		return nil
 	}
 
-	if nativeSignerMaterial.Format != frostsigning.NativeSignerMaterialFormatFrostUniFFIV1 {
+	switch nativeSignerMaterial.Format {
+	case frostsigning.NativeSignerMaterialFormatFrostUniFFIV1:
+		privateKeyShare := &tecdsa.PrivateKeyShare{}
+		if err := privateKeyShare.Unmarshal(nativeSignerMaterial.Payload); err != nil {
+			return nil
+		}
+
+		return privateKeyShare
+
+	case frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1:
+		var payload frostsigning.NativeTBTCSignerMaterialPayload
+		if err := json.Unmarshal(nativeSignerMaterial.Payload, &payload); err != nil {
+			return nil
+		}
+
+		if payload.LegacyPrivateKeyShareHex == "" {
+			return nil
+		}
+
+		legacyPayload, err := hex.DecodeString(payload.LegacyPrivateKeyShareHex)
+		if err != nil {
+			return nil
+		}
+
+		privateKeyShare := &tecdsa.PrivateKeyShare{}
+		if err := privateKeyShare.Unmarshal(legacyPayload); err != nil {
+			return nil
+		}
+
+		return privateKeyShare
+
+	default:
 		return nil
 	}
-
-	privateKeyShare := &tecdsa.PrivateKeyShare{}
-	if err := privateKeyShare.Unmarshal(nativeSignerMaterial.Payload); err != nil {
-		return nil
-	}
-
-	return privateKeyShare
 }

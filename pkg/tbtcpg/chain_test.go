@@ -1047,6 +1047,25 @@ func (lc *LocalChain) GetWallet(walletPublicKeyHash [20]byte) (
 	return data, nil
 }
 
+func (lc *LocalChain) WalletPublicKeyHashForWalletID(
+	walletID [32]byte,
+) ([20]byte, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	for walletPublicKeyHash, walletData := range lc.walletChainData {
+		if walletData == nil {
+			continue
+		}
+
+		if walletData.WalletID == walletID || walletData.EcdsaWalletID == walletID {
+			return walletPublicKeyHash, nil
+		}
+	}
+
+	return [20]byte{}, fmt.Errorf("wallet public key hash for wallet ID not found")
+}
+
 func (lc *LocalChain) SetWallet(
 	walletPublicKeyHash [20]byte,
 	data *tbtc.WalletChainData,

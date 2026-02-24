@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -149,6 +150,93 @@ func (dnfse *deterministicNativeFROSTSigningEngine) Aggregate(
 	return signatureDigest[:], nil
 }
 
+type recordingNativeFROSTSigningEngine struct {
+	deterministicNativeFROSTSigningEngine
+	mutex                     sync.Mutex
+	commitmentIDSnapshots     [][]string
+	signatureShareIDSnapshots [][]string
+}
+
+func (rnfse *recordingNativeFROSTSigningEngine) NewSigningPackage(
+	message []byte,
+	commitments []*NativeFROSTCommitment,
+) (*NativeFROSTSigningPackage, error) {
+	commitmentIDs := make([]string, 0, len(commitments))
+	for _, commitment := range commitments {
+		if commitment == nil {
+			commitmentIDs = append(commitmentIDs, "<nil>")
+			continue
+		}
+
+		commitmentIDs = append(commitmentIDs, commitment.Identifier)
+	}
+
+	rnfse.mutex.Lock()
+	rnfse.commitmentIDSnapshots = append(
+		rnfse.commitmentIDSnapshots,
+		append([]string{}, commitmentIDs...),
+	)
+	rnfse.mutex.Unlock()
+
+	return rnfse.deterministicNativeFROSTSigningEngine.NewSigningPackage(
+		message,
+		commitments,
+	)
+}
+
+func (rnfse *recordingNativeFROSTSigningEngine) Aggregate(
+	signingPackage *NativeFROSTSigningPackage,
+	signatureShares []*NativeFROSTSignatureShare,
+	publicKeyPackage *NativeFROSTPublicKeyPackage,
+) ([]byte, error) {
+	signatureShareIDs := make([]string, 0, len(signatureShares))
+	for _, signatureShare := range signatureShares {
+		if signatureShare == nil {
+			signatureShareIDs = append(signatureShareIDs, "<nil>")
+			continue
+		}
+
+		signatureShareIDs = append(signatureShareIDs, signatureShare.Identifier)
+	}
+
+	rnfse.mutex.Lock()
+	rnfse.signatureShareIDSnapshots = append(
+		rnfse.signatureShareIDSnapshots,
+		append([]string{}, signatureShareIDs...),
+	)
+	rnfse.mutex.Unlock()
+
+	return rnfse.deterministicNativeFROSTSigningEngine.Aggregate(
+		signingPackage,
+		signatureShares,
+		publicKeyPackage,
+	)
+}
+
+func (rnfse *recordingNativeFROSTSigningEngine) commitmentIDs() [][]string {
+	rnfse.mutex.Lock()
+	defer rnfse.mutex.Unlock()
+
+	snapshots := make([][]string, 0, len(rnfse.commitmentIDSnapshots))
+	for _, snapshot := range rnfse.commitmentIDSnapshots {
+		snapshots = append(snapshots, append([]string{}, snapshot...))
+	}
+
+	return snapshots
+}
+
+func (rnfse *recordingNativeFROSTSigningEngine) signatureShareIDs() [][]string {
+	rnfse.mutex.Lock()
+	defer rnfse.mutex.Unlock()
+
+	snapshots := make([][]string, 0, len(rnfse.signatureShareIDSnapshots))
+	for _, snapshot := range rnfse.signatureShareIDSnapshots {
+		snapshots = append(snapshots, append([]string{}, snapshot...))
+	}
+
+	return snapshots
+}
+
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_NativeFROSTPath(
 	t *testing.T,
 ) {
@@ -231,6 +319,190 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_Nati
 	}
 }
 
+func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_NativeFROSTPath_AttemptVariationUsesCohortSelections(
+	t *testing.T,
+) {
+	engine := &recordingNativeFROSTSigningEngine{}
+	RegisterNativeFROSTSigningEngine(engine)
+	t.Cleanup(UnregisterNativeFROSTSigningEngine)
+
+	provider := local.Connect()
+	channel, err := provider.BroadcastChannelFor("native-frost-signing-protocol-attempt-variation-test")
+	if err != nil {
+		t.Fatalf("failed creating broadcast channel: [%v]", err)
+	}
+
+	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
+	primitive.RegisterUnmarshallers(channel)
+
+	runRound := func(
+		sessionID string,
+		includedMembers []group.MemberIndex,
+		groupSize int,
+	) []*frost.Signature {
+		requests := make([]*NativeExecutionFFISigningRequest, len(includedMembers))
+		for i := 0; i < len(includedMembers); i++ {
+			memberIndex := includedMembers[i]
+
+			request, roundErr := newNativeFROSTSigningRequestWithSessionForTest(
+				memberIndex,
+				includedMembers,
+				channel,
+				groupSize,
+				sessionID,
+			)
+			if roundErr != nil {
+				t.Fatalf(
+					"failed preparing request for member [%v] in session [%s]: [%v]",
+					memberIndex,
+					sessionID,
+					roundErr,
+				)
+			}
+
+			requests[i] = request
+		}
+
+		ctx, cancelCtx := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancelCtx()
+
+		results := make([]*frostSignatureResultForTest, len(includedMembers))
+		var wg sync.WaitGroup
+		wg.Add(len(includedMembers))
+
+		for i := 0; i < len(includedMembers); i++ {
+			go func(index int) {
+				defer wg.Done()
+
+				signature, signErr := primitive.Sign(ctx, nil, requests[index])
+				results[index] = &frostSignatureResultForTest{
+					signature: signature,
+					err:       signErr,
+				}
+			}(i)
+		}
+
+		wg.Wait()
+
+		signatures := make([]*frost.Signature, len(includedMembers))
+		for i := 0; i < len(includedMembers); i++ {
+			if results[i] == nil {
+				t.Fatalf(
+					"missing signing result for member [%v] in session [%s]",
+					includedMembers[i],
+					sessionID,
+				)
+			}
+
+			if results[i].err != nil {
+				t.Fatalf(
+					"unexpected signing error for member [%v] in session [%s]: [%v]",
+					includedMembers[i],
+					sessionID,
+					results[i].err,
+				)
+			}
+
+			if results[i].signature == nil {
+				t.Fatalf(
+					"nil signature for member [%v] in session [%s]",
+					includedMembers[i],
+					sessionID,
+				)
+			}
+
+			signatures[i] = results[i].signature
+		}
+
+		return signatures
+	}
+
+	assertSignaturesMatch := func(
+		sessionID string,
+		signatures []*frost.Signature,
+	) {
+		if len(signatures) == 0 {
+			t.Fatalf("no signatures for session [%s]", sessionID)
+		}
+
+		for i := 1; i < len(signatures); i++ {
+			if !signatures[0].Equals(signatures[i]) {
+				t.Fatalf(
+					"signature mismatch in session [%s]\nfirst:  [%v]\nsecond: [%v]",
+					sessionID,
+					signatures[0],
+					signatures[i],
+				)
+			}
+		}
+	}
+
+	roundOneSignatures := runRound(
+		"native-frost-signing-session-attempt-1",
+		[]group.MemberIndex{1, 2, 3},
+		3,
+	)
+	assertSignaturesMatch("native-frost-signing-session-attempt-1", roundOneSignatures)
+
+	roundTwoSignatures := runRound(
+		"native-frost-signing-session-attempt-2",
+		[]group.MemberIndex{1, 3},
+		3,
+	)
+	assertSignaturesMatch("native-frost-signing-session-attempt-2", roundTwoSignatures)
+
+	snapshotHistogram := func(snapshots [][]string) map[string]int {
+		histogram := make(map[string]int)
+		for _, snapshot := range snapshots {
+			histogram[strings.Join(snapshot, ",")]++
+		}
+
+		return histogram
+	}
+
+	expectedHistogram := map[string]int{
+		"member-1,member-2,member-3": 3,
+		"member-1,member-3":          2,
+	}
+
+	assertHistogram := func(name string, actual map[string]int) {
+		if len(actual) != len(expectedHistogram) {
+			t.Fatalf(
+				"unexpected %s histogram size\nexpected: [%v]\nactual:   [%v]",
+				name,
+				len(expectedHistogram),
+				len(actual),
+			)
+		}
+
+		for key, expectedCount := range expectedHistogram {
+			actualCount, ok := actual[key]
+			if !ok {
+				t.Fatalf("missing %s histogram key: [%s]", name, key)
+			}
+
+			if actualCount != expectedCount {
+				t.Fatalf(
+					"unexpected %s count for key [%s]\nexpected: [%v]\nactual:   [%v]",
+					name,
+					key,
+					expectedCount,
+					actualCount,
+				)
+			}
+		}
+	}
+
+	assertHistogram(
+		"commitment IDs",
+		snapshotHistogram(engine.commitmentIDs()),
+	)
+	assertHistogram(
+		"signature share IDs",
+		snapshotHistogram(engine.signatureShareIDs()),
+	)
+}
+
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_NativeFROSTPathWithoutEngine(
 	t *testing.T,
 ) {
@@ -281,6 +553,22 @@ func newNativeFROSTSigningRequestForTest(
 	channel net.BroadcastChannel,
 	groupSize int,
 ) (*NativeExecutionFFISigningRequest, error) {
+	return newNativeFROSTSigningRequestWithSessionForTest(
+		memberIndex,
+		includedMembers,
+		channel,
+		groupSize,
+		"native-frost-signing-session",
+	)
+}
+
+func newNativeFROSTSigningRequestWithSessionForTest(
+	memberIndex group.MemberIndex,
+	includedMembers []group.MemberIndex,
+	channel net.BroadcastChannel,
+	groupSize int,
+	sessionID string,
+) (*NativeExecutionFFISigningRequest, error) {
 	keyPackage := &NativeFROSTKeyPackage{
 		Identifier: fmt.Sprintf("member-%v", memberIndex),
 		Data: []byte{
@@ -307,7 +595,7 @@ func newNativeFROSTSigningRequestForTest(
 
 	return &NativeExecutionFFISigningRequest{
 		Message:            bigOneForTest(),
-		SessionID:          "native-frost-signing-session",
+		SessionID:          sessionID,
 		MemberIndex:        memberIndex,
 		GroupSize:          groupSize,
 		DishonestThreshold: 1,

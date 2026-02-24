@@ -1,4 +1,4 @@
-//go:build frost_native
+//go:build frost_native && !(frost_tbtc_signer && cgo)
 
 package tbtc
 
@@ -32,7 +32,8 @@ func defaultSignerMaterialResolverProviderForBuild() (SignerMaterialResolver, er
 }
 
 // buildTaggedNativeSignerMaterialResolver derives transitional native signer
-// material from a legacy private key share for frost_native builds.
+// material from a legacy private key share for frost_native builds not using
+// the `frost_tbtc_signer` tag.
 type buildTaggedNativeSignerMaterialResolver struct{}
 
 func (btnsmr *buildTaggedNativeSignerMaterialResolver) ResolveSignerMaterial(

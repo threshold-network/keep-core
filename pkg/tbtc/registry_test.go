@@ -283,9 +283,12 @@ func TestWalletRegistry_PrePopulateWalletCache(t *testing.T) {
 		len(walletRegistry.walletCache[walletStorageKey].signers),
 	)
 
-	if !reflect.DeepEqual(signer, walletRegistry.walletCache[walletStorageKey].signers[0]) {
-		t.Errorf("loaded wallet signer differs from the original one")
-	}
+	assertSignerEquivalent(
+		t,
+		"pre-populated wallet signer",
+		signer,
+		walletRegistry.walletCache[walletStorageKey].signers[0],
+	)
 }
 
 func TestWalletRegistry_GetWalletsPublicKeys(t *testing.T) {
@@ -459,9 +462,12 @@ func TestWalletStorage_LoadSigners(t *testing.T) {
 		len(signersByWallet[walletStorageKey]),
 	)
 
-	if !reflect.DeepEqual(signer, signersByWallet[walletStorageKey][0]) {
-		t.Errorf("loaded wallet signer differs from the original one")
-	}
+	assertSignerEquivalent(
+		t,
+		"loaded wallet signer",
+		signer,
+		signersByWallet[walletStorageKey][0],
+	)
 }
 
 func TestWalletStorage_ArchiveWallet(t *testing.T) {
