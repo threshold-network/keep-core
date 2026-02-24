@@ -634,6 +634,9 @@ func decodeBuildTaggedTBTCSignerSignature(signature []byte) (*frost.Signature, e
 		return nil, fmt.Errorf("signature is empty")
 	}
 
+	// Unmarshal validates signature wire format (length + split into R/S) only.
+	// Cryptographic validity is enforced by downstream Schnorr verification at
+	// submission time.
 	result := &frost.Signature{}
 	if err := result.Unmarshal(signature); err != nil {
 		return nil, fmt.Errorf("invalid frost signature bytes: [%w]", err)
