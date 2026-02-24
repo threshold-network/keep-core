@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +42,11 @@ type attemptTrackingNativeExecutionFFISigningPrimitiveForTBTC struct {
 type attemptTrackingRecordForTBTC struct {
 	attemptNumber       uint
 	includedMemberIndex []group.MemberIndex
+}
+
+type attemptTrackingNativeTBTCSignerEngineForTBTC struct {
+	mutex                 sync.Mutex
+	startCohortsByAttempt map[uint][][]uint16
 }
 
 var deterministicNativeFROSTSignatureForTBTC = [frost.SignatureSize]byte{
@@ -183,6 +189,137 @@ func (atnefspf *attemptTrackingNativeExecutionFFISigningPrimitiveForTBTC) unique
 	}
 
 	return result
+}
+
+func (atntsfe *attemptTrackingNativeTBTCSignerEngineForTBTC) Version() (string, error) {
+	return "tbtc-signer/0.1.0-bootstrap", nil
+}
+
+func (atntsfe *attemptTrackingNativeTBTCSignerEngineForTBTC) RunDKG(
+	sessionID string,
+	participants []frostsigning.NativeTBTCSignerDKGParticipant,
+	threshold uint16,
+) (*frostsigning.NativeTBTCSignerDKGResult, error) {
+	return &frostsigning.NativeTBTCSignerDKGResult{
+		SessionID:        sessionID,
+		KeyGroup:         "group-1",
+		ParticipantCount: uint16(len(participants)),
+		Threshold:        threshold,
+		CreatedAtUnix:    1,
+	}, nil
+}
+
+func (atntsfe *attemptTrackingNativeTBTCSignerEngineForTBTC) StartSignRound(
+	sessionID string,
+	memberIdentifier uint16,
+	message []byte,
+	keyGroup string,
+	signingParticipants []uint16,
+) (*frostsigning.NativeTBTCSignerRoundState, error) {
+	attemptNumber, err := attemptNumberFromSessionIDForTBTC(sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	if keyGroup == "" {
+		return nil, fmt.Errorf("key group is empty")
+	}
+
+	if memberIdentifier == 0 {
+		return nil, fmt.Errorf("member identifier is zero")
+	}
+
+	if len(message) == 0 {
+		return nil, fmt.Errorf("message is empty")
+	}
+
+	if len(signingParticipants) == 0 {
+		return nil, fmt.Errorf("signing participants are empty")
+	}
+
+	atntsfe.mutex.Lock()
+	if atntsfe.startCohortsByAttempt == nil {
+		atntsfe.startCohortsByAttempt = make(map[uint][][]uint16)
+	}
+
+	cohort := append([]uint16{}, signingParticipants...)
+	atntsfe.startCohortsByAttempt[attemptNumber] = append(
+		atntsfe.startCohortsByAttempt[attemptNumber],
+		cohort,
+	)
+	atntsfe.mutex.Unlock()
+
+	return &frostsigning.NativeTBTCSignerRoundState{
+		SessionID:             sessionID,
+		RoundID:               fmt.Sprintf("round-%v", attemptNumber),
+		RequiredContributions: uint16(len(signingParticipants)),
+		MessageDigestHex:      "00",
+		SigningParticipants:   append([]uint16{}, signingParticipants...),
+		OwnContribution: &frostsigning.NativeTBTCSignerRoundContribution{
+			Identifier: memberIdentifier,
+			Data:       []byte{byte(memberIdentifier), byte(attemptNumber)},
+		},
+	}, nil
+}
+
+func (atntsfe *attemptTrackingNativeTBTCSignerEngineForTBTC) FinalizeSignRound(
+	sessionID string,
+	roundContributions []frostsigning.NativeTBTCSignerRoundContribution,
+) ([]byte, error) {
+	if _, err := attemptNumberFromSessionIDForTBTC(sessionID); err != nil {
+		return nil, err
+	}
+
+	if len(roundContributions) == 0 {
+		return nil, fmt.Errorf("round contributions are empty")
+	}
+
+	return []byte{0xaa}, nil
+}
+
+func (atntsfe *attemptTrackingNativeTBTCSignerEngineForTBTC) uniqueStartCohortsByAttempt() map[uint][][]uint16 {
+	atntsfe.mutex.Lock()
+	defer atntsfe.mutex.Unlock()
+
+	result := make(map[uint][][]uint16)
+	seen := make(map[uint]map[string]struct{})
+
+	for attemptNumber, cohorts := range atntsfe.startCohortsByAttempt {
+		if seen[attemptNumber] == nil {
+			seen[attemptNumber] = make(map[string]struct{})
+		}
+
+		for _, cohort := range cohorts {
+			parts := make([]string, 0, len(cohort))
+			for _, participant := range cohort {
+				parts = append(parts, strconv.FormatUint(uint64(participant), 10))
+			}
+			key := strings.Join(parts, ",")
+
+			if _, ok := seen[attemptNumber][key]; ok {
+				continue
+			}
+
+			seen[attemptNumber][key] = struct{}{}
+			result[attemptNumber] = append(result[attemptNumber], append([]uint16{}, cohort...))
+		}
+	}
+
+	return result
+}
+
+func attemptNumberFromSessionIDForTBTC(sessionID string) (uint, error) {
+	separatorIndex := strings.LastIndex(sessionID, "-")
+	if separatorIndex < 0 || separatorIndex == len(sessionID)-1 {
+		return 0, fmt.Errorf("invalid session id format: [%s]", sessionID)
+	}
+
+	attemptNumber, err := strconv.ParseUint(sessionID[separatorIndex+1:], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("cannot parse attempt number from session id [%s]: [%w]", sessionID, err)
+	}
+
+	return uint(attemptNumber), nil
 }
 
 func TestConfigureFrostSigningBackend_FFIStrictConfigured_BuildAdapter(t *testing.T) {
@@ -557,6 +694,152 @@ func TestSigningExecutor_Sign_FFIStrictBackend_AttemptVariationChangesCohortSele
 	}
 }
 
+func TestSigningExecutor_Sign_FFIStrictBackend_TBTCSignerPath_AttemptVariationChangesCohortSelection(
+	t *testing.T,
+) {
+	executor := setupSigningExecutor(t)
+	configureSignersWithTBTCSignerMaterial(t, executor, 3)
+
+	nativeTBTCSignerEngine := &attemptTrackingNativeTBTCSignerEngineForTBTC{}
+
+	frostsigning.UnregisterNativeTBTCSignerEngine()
+	frostsigning.UnregisterNativeTBTCSignerFallbackObserver()
+	t.Cleanup(frostsigning.UnregisterNativeTBTCSignerEngine)
+	t.Cleanup(frostsigning.UnregisterNativeTBTCSignerFallbackObserver)
+
+	err := frostsigning.RegisterNativeTBTCSignerEngine(nativeTBTCSignerEngine)
+	if err != nil {
+		t.Fatalf("unexpected native tbtc-signer engine registration error: [%v]", err)
+	}
+
+	var fallbackEvents []frostsigning.NativeTBTCSignerFallbackEvent
+	err = frostsigning.RegisterNativeTBTCSignerFallbackObserver(
+		func(event frostsigning.NativeTBTCSignerFallbackEvent) {
+			fallbackEvents = append(fallbackEvents, event)
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected fallback observer registration error: [%v]", err)
+	}
+
+	frostsigning.ResetExecutionBackend()
+	frostsigning.UnregisterNativeExecutionAdapter()
+	frostsigning.UnregisterNativeExecutionBridge()
+	frostsigning.UnregisterNativeExecutionFFIExecutor()
+	frostsigning.RegisterNativeExecutionAdapterForBuild()
+	t.Cleanup(frostsigning.ResetExecutionBackend)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionAdapter)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionBridge)
+	t.Cleanup(frostsigning.UnregisterNativeExecutionFFIExecutor)
+
+	err = configureFrostSigningBackend(Config{FrostSigningBackend: "ffi"})
+	if err != nil {
+		t.Fatalf("unexpected strict ffi backend config error: [%v]", err)
+	}
+
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	defer cancelCtx()
+
+	message := big.NewInt(100)
+	startBlock := uint64(0)
+
+	signature, _, endBlock, err := executor.sign(ctx, message, startBlock)
+	if err != nil {
+		t.Fatalf("unexpected strict ffi tbtc-signer-path signing error: [%v]", err)
+	}
+
+	walletPublicKey := executor.wallet().publicKey
+	if !ecdsa.Verify(
+		walletPublicKey,
+		message.Bytes(),
+		new(big.Int).SetBytes(signature.R[:]),
+		new(big.Int).SetBytes(signature.S[:]),
+	) {
+		t.Fatalf("invalid signature: [%+v]", signature)
+	}
+
+	cohortsByAttempt := nativeTBTCSignerEngine.uniqueStartCohortsByAttempt()
+	attemptOneCohorts, ok := cohortsByAttempt[1]
+	if !ok {
+		t.Fatal("expected observed StartSignRound cohort for attempt 1")
+	}
+	if len(attemptOneCohorts) != 1 {
+		t.Fatalf(
+			"unexpected unique cohort count for attempt 1\nexpected: [%d]\nactual:   [%d]",
+			1,
+			len(attemptOneCohorts),
+		)
+	}
+
+	attemptTwoCohorts, ok := cohortsByAttempt[2]
+	if !ok {
+		t.Fatal("expected observed StartSignRound cohort for attempt 2")
+	}
+	if len(attemptTwoCohorts) != 1 {
+		t.Fatalf(
+			"unexpected unique cohort count for attempt 2\nexpected: [%d]\nactual:   [%d]",
+			1,
+			len(attemptTwoCohorts),
+		)
+	}
+
+	attemptOneCohort := attemptOneCohorts[0]
+	attemptTwoCohort := attemptTwoCohorts[0]
+
+	expectedCohortSize := executor.groupParameters.HonestThreshold
+	if len(attemptOneCohort) != expectedCohortSize {
+		t.Fatalf(
+			"unexpected cohort size for attempt 1\nexpected: [%d]\nactual:   [%d]",
+			expectedCohortSize,
+			len(attemptOneCohort),
+		)
+	}
+	if len(attemptTwoCohort) != expectedCohortSize {
+		t.Fatalf(
+			"unexpected cohort size for attempt 2\nexpected: [%d]\nactual:   [%d]",
+			expectedCohortSize,
+			len(attemptTwoCohort),
+		)
+	}
+
+	if !containsParticipantForTBTC(attemptOneCohort, 3) {
+		t.Fatalf(
+			"expected attempt 1 cohort to include broken signer member 3\nactual: [%v]",
+			attemptOneCohort,
+		)
+	}
+
+	if containsParticipantForTBTC(attemptTwoCohort, 3) {
+		t.Fatalf(
+			"expected attempt 2 cohort to exclude broken signer member 3\nactual: [%v]",
+			attemptTwoCohort,
+		)
+	}
+
+	if reflect.DeepEqual(attemptOneCohort, attemptTwoCohort) {
+		t.Fatalf(
+			"expected cohort variation across attempts\nattempt 1: [%v]\nattempt 2: [%v]",
+			attemptOneCohort,
+			attemptTwoCohort,
+		)
+	}
+
+	missingLegacyFallbackObserved := false
+	for _, event := range fallbackEvents {
+		if !event.LegacyPrivateKeyShareExists {
+			missingLegacyFallbackObserved = true
+			break
+		}
+	}
+	if !missingLegacyFallbackObserved {
+		t.Fatal("expected at least one fallback event without legacy private key share")
+	}
+
+	if endBlock <= startBlock {
+		t.Fatal("wrong end block")
+	}
+}
+
 func configureSignersWithNativeFROSTUniFFIV2Material(
 	t *testing.T,
 	executor *signingExecutor,
@@ -592,4 +875,48 @@ func configureSignersWithNativeFROSTUniFFIV2Material(
 			Payload: payload,
 		}
 	}
+}
+
+func configureSignersWithTBTCSignerMaterial(
+	t *testing.T,
+	executor *signingExecutor,
+	brokenMemberIndex group.MemberIndex,
+) {
+	t.Helper()
+
+	for _, signer := range executor.signers {
+		legacyPrivateKeyShareHex := ""
+		if signer.signingGroupMemberIndex != brokenMemberIndex {
+			legacyPrivateKeySharePayload, err := signer.privateKeyShare.Marshal()
+			if err != nil {
+				t.Fatalf("cannot marshal private key share: [%v]", err)
+			}
+
+			legacyPrivateKeyShareHex = hex.EncodeToString(legacyPrivateKeySharePayload)
+		}
+
+		payload, err := json.Marshal(frostsigning.NativeTBTCSignerMaterialPayload{
+			KeyGroup:                 "group-1",
+			KeyGroupSource:           frostsigning.NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey,
+			LegacyPrivateKeyShareHex: legacyPrivateKeyShareHex,
+		})
+		if err != nil {
+			t.Fatalf("cannot marshal tbtc-signer material payload: [%v]", err)
+		}
+
+		signer.signerMaterial = &frostsigning.NativeSignerMaterial{
+			Format:  frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
+			Payload: payload,
+		}
+	}
+}
+
+func containsParticipantForTBTC(cohort []uint16, memberIndex uint16) bool {
+	for _, participant := range cohort {
+		if participant == memberIndex {
+			return true
+		}
+	}
+
+	return false
 }
