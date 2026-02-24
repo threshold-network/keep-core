@@ -26,9 +26,7 @@ func TestSignerMarshalling(t *testing.T) {
 	if err := pbutils.RoundTrip(marshaled, unmarshaled); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(marshaled, unmarshaled) {
-		t.Fatal("unexpected content of unmarshaled signer")
-	}
+	assertSignerEquivalent(t, "unmarshaled signer", marshaled, unmarshaled)
 }
 
 func TestSignerMarshalling_NonTECDSAKey(t *testing.T) {

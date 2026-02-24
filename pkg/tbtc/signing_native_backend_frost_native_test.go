@@ -707,13 +707,8 @@ func TestSigningExecutor_Sign_FFIStrictBackend_TBTCSignerPath_AttemptVariationCh
 	t.Cleanup(frostsigning.UnregisterNativeTBTCSignerEngine)
 	t.Cleanup(frostsigning.UnregisterNativeTBTCSignerFallbackObserver)
 
-	err := frostsigning.RegisterNativeTBTCSignerEngine(nativeTBTCSignerEngine)
-	if err != nil {
-		t.Fatalf("unexpected native tbtc-signer engine registration error: [%v]", err)
-	}
-
 	var fallbackEvents []frostsigning.NativeTBTCSignerFallbackEvent
-	err = frostsigning.RegisterNativeTBTCSignerFallbackObserver(
+	err := frostsigning.RegisterNativeTBTCSignerFallbackObserver(
 		func(event frostsigning.NativeTBTCSignerFallbackEvent) {
 			fallbackEvents = append(fallbackEvents, event)
 		},
@@ -727,6 +722,10 @@ func TestSigningExecutor_Sign_FFIStrictBackend_TBTCSignerPath_AttemptVariationCh
 	frostsigning.UnregisterNativeExecutionBridge()
 	frostsigning.UnregisterNativeExecutionFFIExecutor()
 	frostsigning.RegisterNativeExecutionAdapterForBuild()
+	err = frostsigning.RegisterNativeTBTCSignerEngine(nativeTBTCSignerEngine)
+	if err != nil {
+		t.Fatalf("unexpected native tbtc-signer engine registration error: [%v]", err)
+	}
 	t.Cleanup(frostsigning.ResetExecutionBackend)
 	t.Cleanup(frostsigning.UnregisterNativeExecutionAdapter)
 	t.Cleanup(frostsigning.UnregisterNativeExecutionBridge)
