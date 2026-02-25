@@ -43,130 +43,6 @@ func TestWalletTransactionExecutor_SignTransaction_ReturnsBuildTaprootTxError(
 	}
 }
 
-func TestNativeUnsignedTransactionIODiverges_MatchingIO(t *testing.T) {
-	txHashBytes := make([]byte, bitcoin.HashByteLength)
-	for i := range txHashBytes {
-		txHashBytes[i] = byte(i + 1)
-	}
-
-	txHash, err := bitcoin.NewHash(txHashBytes, bitcoin.InternalByteOrder)
-	if err != nil {
-		t.Fatalf("cannot build tx hash: [%v]", err)
-	}
-
-	scriptPubKey := mustDecodeHex(t, "0014deadbeef")
-	nativeTransaction := &bitcoin.Transaction{
-		Version: 2,
-		Inputs: []*bitcoin.TransactionInput{
-			{
-				Outpoint: &bitcoin.TransactionOutpoint{
-					TransactionHash: txHash,
-					OutputIndex:     7,
-				},
-				Sequence: 0xffffffff,
-			},
-		},
-		Outputs: []*bitcoin.TransactionOutput{
-			{
-				Value:           1000,
-				PublicKeyScript: scriptPubKey,
-			},
-		},
-		Locktime: 0,
-	}
-
-	nativeTxHex := hex.EncodeToString(nativeTransaction.Serialize(bitcoin.Standard))
-
-	expectedInputs := []bitcoin.UnsignedTransactionInput{
-		{
-			TxIDHex:   txHash.Hex(bitcoin.ReversedByteOrder),
-			Vout:      7,
-			ValueSats: 1234,
-		},
-	}
-	expectedOutputs := []bitcoin.UnsignedTransactionOutput{
-		{
-			ScriptPubKeyHex: "0014deadbeef",
-			ValueSats:       1000,
-		},
-	}
-
-	diverges, err := nativeUnsignedTransactionIODiverges(
-		nativeTxHex,
-		expectedInputs,
-		expectedOutputs,
-	)
-	if err != nil {
-		t.Fatalf("unexpected comparison error: [%v]", err)
-	}
-
-	if diverges {
-		t.Fatal("expected matching unsigned transaction I/O")
-	}
-}
-
-func TestNativeUnsignedTransactionIODiverges_MismatchedIO(t *testing.T) {
-	txHashBytes := make([]byte, bitcoin.HashByteLength)
-	for i := range txHashBytes {
-		txHashBytes[i] = byte(i + 1)
-	}
-
-	txHash, err := bitcoin.NewHash(txHashBytes, bitcoin.InternalByteOrder)
-	if err != nil {
-		t.Fatalf("cannot build tx hash: [%v]", err)
-	}
-
-	scriptPubKey := mustDecodeHex(t, "0014deadbeef")
-	nativeTransaction := &bitcoin.Transaction{
-		Version: 2,
-		Inputs: []*bitcoin.TransactionInput{
-			{
-				Outpoint: &bitcoin.TransactionOutpoint{
-					TransactionHash: txHash,
-					OutputIndex:     7,
-				},
-				Sequence: 0xffffffff,
-			},
-		},
-		Outputs: []*bitcoin.TransactionOutput{
-			{
-				Value:           1000,
-				PublicKeyScript: scriptPubKey,
-			},
-		},
-		Locktime: 0,
-	}
-
-	nativeTxHex := hex.EncodeToString(nativeTransaction.Serialize(bitcoin.Standard))
-
-	expectedInputs := []bitcoin.UnsignedTransactionInput{
-		{
-			TxIDHex:   txHash.Hex(bitcoin.ReversedByteOrder),
-			Vout:      7,
-			ValueSats: 1234,
-		},
-	}
-	expectedOutputs := []bitcoin.UnsignedTransactionOutput{
-		{
-			ScriptPubKeyHex: "0014deadbeef",
-			ValueSats:       999,
-		},
-	}
-
-	diverges, err := nativeUnsignedTransactionIODiverges(
-		nativeTxHex,
-		expectedInputs,
-		expectedOutputs,
-	)
-	if err != nil {
-		t.Fatalf("unexpected comparison error: [%v]", err)
-	}
-
-	if !diverges {
-		t.Fatal("expected unsigned transaction I/O divergence")
-	}
-}
-
 func TestEvaluateNativeUnsignedTransactionForSigning_ObservationalModeLogsWarning(
 	t *testing.T,
 ) {
@@ -222,6 +98,89 @@ func TestEvaluateNativeUnsignedTransactionForSigning_ObservationalModeLogsWarnin
 			Outputs: []*bitcoin.TransactionOutput{
 				{
 					Value:           999,
+					PublicKeyScript: scriptPubKey,
+				},
+			},
+			Locktime: 0,
+		},
+		false,
+	)
+	if err != nil {
+		t.Fatalf("unexpected evaluation error: [%v]", err)
+	}
+
+	if nativeUnsignedTx != nil {
+		t.Fatal("did not expect native transaction substitution in observational mode")
+	}
+
+	if len(logger.warningMessages) != 1 {
+		t.Fatalf(
+			"unexpected warning message count\nexpected: [%v]\nactual:   [%v]",
+			1,
+			len(logger.warningMessages),
+		)
+	}
+
+	if !strings.Contains(logger.warningMessages[0], "diverges") {
+		t.Fatalf("unexpected warning message: [%v]", logger.warningMessages[0])
+	}
+}
+
+func TestEvaluateNativeUnsignedTransactionForSigning_ObservationalModeLogsWarningOnStructuralDivergence(
+	t *testing.T,
+) {
+	logger := &warningCaptureLogger{}
+
+	txHashBytes := make([]byte, bitcoin.HashByteLength)
+	for i := range txHashBytes {
+		txHashBytes[i] = byte(i + 1)
+	}
+
+	txHash, err := bitcoin.NewHash(txHashBytes, bitcoin.InternalByteOrder)
+	if err != nil {
+		t.Fatalf("cannot build tx hash: [%v]", err)
+	}
+
+	scriptPubKey := mustDecodeHex(t, "0014deadbeef")
+	nativeTransaction := &bitcoin.Transaction{
+		Version: 2,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: txHash,
+					OutputIndex:     7,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           1000,
+				PublicKeyScript: scriptPubKey,
+			},
+		},
+		Locktime: 0,
+	}
+
+	nativeTxHex := hex.EncodeToString(nativeTransaction.Serialize(bitcoin.Standard))
+
+	nativeUnsignedTx, err := evaluateNativeUnsignedTransactionForSigning(
+		logger,
+		nativeTxHex,
+		&bitcoin.Transaction{
+			Version: 1,
+			Inputs: []*bitcoin.TransactionInput{
+				{
+					Outpoint: &bitcoin.TransactionOutpoint{
+						TransactionHash: txHash,
+						OutputIndex:     7,
+					},
+					Sequence: 0xffffffff,
+				},
+			},
+			Outputs: []*bitcoin.TransactionOutput{
+				{
+					Value:           1000,
 					PublicKeyScript: scriptPubKey,
 				},
 			},

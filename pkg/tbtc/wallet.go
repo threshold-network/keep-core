@@ -512,23 +512,6 @@ func decodeNativeUnsignedTransactionHex(
 	return nativeUnsignedTx, nil
 }
 
-func nativeUnsignedTransactionIODiverges(
-	nativeUnsignedTxHex string,
-	expectedInputs []bitcoin.UnsignedTransactionInput,
-	expectedOutputs []bitcoin.UnsignedTransactionOutput,
-) (bool, error) {
-	nativeUnsignedTx, err := decodeNativeUnsignedTransactionHex(nativeUnsignedTxHex)
-	if err != nil {
-		return false, err
-	}
-
-	return nativeUnsignedTransactionIODivergesFromTransaction(
-		nativeUnsignedTx,
-		expectedInputs,
-		expectedOutputs,
-	)
-}
-
 func nativeUnsignedTransactionDivergesFromTransaction(
 	nativeUnsignedTx *bitcoin.Transaction,
 	expectedTransaction *bitcoin.Transaction,
@@ -556,31 +539,6 @@ func nativeUnsignedTransactionDivergesFromTransaction(
 			!unsignedTransactionOutputsEqual(
 				actualShape.Outputs,
 				expectedShape.Outputs,
-			),
-		nil
-}
-
-func nativeUnsignedTransactionIODivergesFromTransaction(
-	nativeUnsignedTx *bitcoin.Transaction,
-	expectedInputs []bitcoin.UnsignedTransactionInput,
-	expectedOutputs []bitcoin.UnsignedTransactionOutput,
-) (bool, error) {
-	actualInputReferences, actualOutputs, err := extractUnsignedTransactionIOFromTransaction(
-		nativeUnsignedTx,
-	)
-	if err != nil {
-		return false, err
-	}
-
-	expectedInputReferences := unsignedTransactionInputReferences(expectedInputs)
-
-	return !unsignedTransactionInputReferencesEqual(
-			expectedInputReferences,
-			actualInputReferences,
-		) ||
-			!unsignedTransactionOutputsEqual(
-				expectedOutputs,
-				actualOutputs,
 			),
 		nil
 }
@@ -651,21 +609,6 @@ func extractUnsignedTransactionShapeFromTransaction(
 		InputSequences:  inputSequences,
 		Outputs:         outputs,
 	}, nil
-}
-
-func extractUnsignedTransactionIOFromTransaction(
-	transaction *bitcoin.Transaction,
-) (
-	[]unsignedTransactionInputReference,
-	[]bitcoin.UnsignedTransactionOutput,
-	error,
-) {
-	shape, err := extractUnsignedTransactionShapeFromTransaction(transaction)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return shape.InputReferences, shape.Outputs, nil
 }
 
 func unsignedTransactionInputReferences(
