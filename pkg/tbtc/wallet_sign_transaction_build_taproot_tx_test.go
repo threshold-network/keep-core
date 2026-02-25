@@ -582,6 +582,13 @@ func TestWalletTransactionExecutor_SignTransaction_DoesNotSubstituteWhenGateDisa
 		t.Fatalf("unexpected signTransaction error: [%v]", err)
 	}
 
+	if tx.Version != 1 {
+		t.Fatalf(
+			"unexpected non-substituted transaction version\nexpected: [1]\nactual:   [%v]",
+			tx.Version,
+		)
+	}
+
 	if tx.Version == nativeUnsignedTx.Version {
 		t.Fatalf(
 			"did not expect transaction version substitution when gate disabled: [%v]",
@@ -589,10 +596,24 @@ func TestWalletTransactionExecutor_SignTransaction_DoesNotSubstituteWhenGateDisa
 		)
 	}
 
+	if tx.Locktime != 0 {
+		t.Fatalf(
+			"unexpected non-substituted transaction locktime\nexpected: [0]\nactual:   [%v]",
+			tx.Locktime,
+		)
+	}
+
 	if tx.Locktime == nativeUnsignedTx.Locktime {
 		t.Fatalf(
 			"did not expect transaction locktime substitution when gate disabled: [%v]",
 			tx.Locktime,
+		)
+	}
+
+	if tx.Inputs[0].Sequence != 0xffffffff {
+		t.Fatalf(
+			"unexpected non-substituted input sequence\nexpected: [4294967295]\nactual:   [%v]",
+			tx.Inputs[0].Sequence,
 		)
 	}
 
@@ -605,6 +626,78 @@ func TestWalletTransactionExecutor_SignTransaction_DoesNotSubstituteWhenGateDisa
 
 	if len(logger.warningMessages) != 0 {
 		t.Fatalf("unexpected warning logs: [%v]", logger.warningMessages)
+	}
+}
+
+func TestWalletTransactionExecutor_SignTransaction_RejectsNativeUnsignedTransactionDivergenceWhenGateEnabled(
+	t *testing.T,
+) {
+	privateKey, unsignedTx, _, nativeUnsignedTx := buildTaprootTxSubstitutionFixture(t)
+
+	divergingNativeUnsignedTx := *nativeUnsignedTx
+	divergingOutputs := make(
+		[]*bitcoin.TransactionOutput,
+		len(nativeUnsignedTx.Outputs),
+	)
+	for i, output := range nativeUnsignedTx.Outputs {
+		if output == nil {
+			t.Fatalf("native fixture output [%d] is nil", i)
+		}
+
+		clonedOutput := *output
+		divergingOutputs[i] = &clonedOutput
+	}
+	divergingNativeUnsignedTx.Outputs = divergingOutputs
+	divergingNativeUnsignedTx.Outputs[0].Value = nativeUnsignedTx.Outputs[0].Value - 1
+	divergingNativeUnsignedTxHex := hex.EncodeToString(
+		divergingNativeUnsignedTx.Serialize(bitcoin.Standard),
+	)
+
+	originalBuildTaprootTxViaNativeSignerFn := buildTaprootTxViaNativeSignerFn
+	originalSigningSubstitutionEnabledFn := nativeBuildTaprootTxSigningSubstitutionEnabledFn
+	t.Cleanup(func() {
+		buildTaprootTxViaNativeSignerFn = originalBuildTaprootTxViaNativeSignerFn
+		nativeBuildTaprootTxSigningSubstitutionEnabledFn = originalSigningSubstitutionEnabledFn
+	})
+
+	buildTaprootTxViaNativeSignerFn = func(
+		unsignedTx *bitcoin.TransactionBuilder,
+	) (string, error) {
+		return divergingNativeUnsignedTxHex, nil
+	}
+	nativeBuildTaprootTxSigningSubstitutionEnabledFn = func() bool {
+		return true
+	}
+
+	wte := &walletTransactionExecutor{
+		executingWallet: wallet{
+			publicKey: &privateKey.PublicKey,
+		},
+		signingExecutor: &deterministicECDSASigningExecutorForBuildTaprootTxSubstitution{
+			privateKey: privateKey,
+		},
+		waitForBlockFn: func(ctx context.Context, block uint64) error {
+			return nil
+		},
+	}
+
+	logger := &warningCaptureLogger{}
+
+	tx, err := wte.signTransaction(logger, unsignedTx, 0, 0)
+	if err == nil {
+		t.Fatal("expected signTransaction divergence error")
+	}
+
+	if tx != nil {
+		t.Fatal("expected no signed transaction on substitution divergence")
+	}
+
+	if !strings.Contains(err.Error(), "diverges") {
+		t.Fatalf("unexpected signTransaction divergence error: [%v]", err)
+	}
+
+	if len(logger.warningMessages) != 0 {
+		t.Fatalf("unexpected warning logs in substitution mode: [%v]", logger.warningMessages)
 	}
 }
 
