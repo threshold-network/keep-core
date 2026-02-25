@@ -1,13 +1,20 @@
 package tbtc
 
 import (
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/frost"
+	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
 
 func TestWalletTransactionExecutor_SignTransaction_ReturnsBuildTaprootTxError(
@@ -411,6 +418,289 @@ func TestNativeBuildTaprootTxSigningSubstitutionEnabled(t *testing.T) {
 	}
 }
 
+func TestWalletTransactionExecutor_SignTransaction_SubstitutesNativeUnsignedTransactionWhenGateEnabled(
+	t *testing.T,
+) {
+	privateKey, unsignedTx, nativeUnsignedTxHex, nativeUnsignedTx := buildTaprootTxSubstitutionFixture(t)
+
+	originalBuildTaprootTxViaNativeSignerFn := buildTaprootTxViaNativeSignerFn
+	originalSigningSubstitutionEnabledFn := nativeBuildTaprootTxSigningSubstitutionEnabledFn
+	t.Cleanup(func() {
+		buildTaprootTxViaNativeSignerFn = originalBuildTaprootTxViaNativeSignerFn
+		nativeBuildTaprootTxSigningSubstitutionEnabledFn = originalSigningSubstitutionEnabledFn
+	})
+
+	buildTaprootTxViaNativeSignerFn = func(
+		unsignedTx *bitcoin.TransactionBuilder,
+	) (string, error) {
+		return nativeUnsignedTxHex, nil
+	}
+	nativeBuildTaprootTxSigningSubstitutionEnabledFn = func() bool {
+		return true
+	}
+
+	wte := &walletTransactionExecutor{
+		executingWallet: wallet{
+			publicKey: &privateKey.PublicKey,
+		},
+		signingExecutor: &deterministicECDSASigningExecutorForBuildTaprootTxSubstitution{
+			privateKey: privateKey,
+		},
+		waitForBlockFn: func(ctx context.Context, block uint64) error {
+			return nil
+		},
+	}
+
+	logger := &warningCaptureLogger{}
+
+	tx, err := wte.signTransaction(logger, unsignedTx, 0, 0)
+	if err != nil {
+		t.Fatalf("unexpected signTransaction error: [%v]", err)
+	}
+
+	if tx.Version != nativeUnsignedTx.Version {
+		t.Fatalf(
+			"unexpected substituted transaction version\nexpected: [%v]\nactual:   [%v]",
+			nativeUnsignedTx.Version,
+			tx.Version,
+		)
+	}
+
+	if tx.Locktime != nativeUnsignedTx.Locktime {
+		t.Fatalf(
+			"unexpected substituted transaction locktime\nexpected: [%v]\nactual:   [%v]",
+			nativeUnsignedTx.Locktime,
+			tx.Locktime,
+		)
+	}
+
+	if len(tx.Inputs) != len(nativeUnsignedTx.Inputs) {
+		t.Fatalf(
+			"unexpected substituted input count\nexpected: [%v]\nactual:   [%v]",
+			len(nativeUnsignedTx.Inputs),
+			len(tx.Inputs),
+		)
+	}
+
+	if tx.Inputs[0].Outpoint.TransactionHash != nativeUnsignedTx.Inputs[0].Outpoint.TransactionHash {
+		t.Fatalf(
+			"unexpected substituted input txid\nexpected: [%v]\nactual:   [%v]",
+			nativeUnsignedTx.Inputs[0].Outpoint.TransactionHash,
+			tx.Inputs[0].Outpoint.TransactionHash,
+		)
+	}
+
+	if tx.Inputs[0].Outpoint.OutputIndex != nativeUnsignedTx.Inputs[0].Outpoint.OutputIndex {
+		t.Fatalf(
+			"unexpected substituted input vout\nexpected: [%v]\nactual:   [%v]",
+			nativeUnsignedTx.Inputs[0].Outpoint.OutputIndex,
+			tx.Inputs[0].Outpoint.OutputIndex,
+		)
+	}
+
+	if tx.Inputs[0].Sequence != nativeUnsignedTx.Inputs[0].Sequence {
+		t.Fatalf(
+			"unexpected substituted input sequence\nexpected: [%v]\nactual:   [%v]",
+			nativeUnsignedTx.Inputs[0].Sequence,
+			tx.Inputs[0].Sequence,
+		)
+	}
+
+	if len(tx.Inputs[0].SignatureScript) == 0 {
+		t.Fatal("expected signature script to be populated after signing")
+	}
+
+	if len(tx.Outputs) != len(nativeUnsignedTx.Outputs) {
+		t.Fatalf(
+			"unexpected substituted output count\nexpected: [%v]\nactual:   [%v]",
+			len(nativeUnsignedTx.Outputs),
+			len(tx.Outputs),
+		)
+	}
+
+	if tx.Outputs[0].Value != nativeUnsignedTx.Outputs[0].Value {
+		t.Fatalf(
+			"unexpected substituted output value\nexpected: [%v]\nactual:   [%v]",
+			nativeUnsignedTx.Outputs[0].Value,
+			tx.Outputs[0].Value,
+		)
+	}
+
+	if !bytes.Equal(
+		tx.Outputs[0].PublicKeyScript,
+		nativeUnsignedTx.Outputs[0].PublicKeyScript,
+	) {
+		t.Fatalf(
+			"unexpected substituted output script\nexpected: [%x]\nactual:   [%x]",
+			nativeUnsignedTx.Outputs[0].PublicKeyScript,
+			tx.Outputs[0].PublicKeyScript,
+		)
+	}
+
+	if len(logger.warningMessages) != 0 {
+		t.Fatalf("unexpected warning logs: [%v]", logger.warningMessages)
+	}
+}
+
+func TestWalletTransactionExecutor_SignTransaction_DoesNotSubstituteWhenGateDisabled(
+	t *testing.T,
+) {
+	privateKey, unsignedTx, nativeUnsignedTxHex, nativeUnsignedTx := buildTaprootTxSubstitutionFixture(t)
+
+	originalBuildTaprootTxViaNativeSignerFn := buildTaprootTxViaNativeSignerFn
+	originalSigningSubstitutionEnabledFn := nativeBuildTaprootTxSigningSubstitutionEnabledFn
+	t.Cleanup(func() {
+		buildTaprootTxViaNativeSignerFn = originalBuildTaprootTxViaNativeSignerFn
+		nativeBuildTaprootTxSigningSubstitutionEnabledFn = originalSigningSubstitutionEnabledFn
+	})
+
+	buildTaprootTxViaNativeSignerFn = func(
+		unsignedTx *bitcoin.TransactionBuilder,
+	) (string, error) {
+		return nativeUnsignedTxHex, nil
+	}
+	nativeBuildTaprootTxSigningSubstitutionEnabledFn = func() bool {
+		return false
+	}
+
+	wte := &walletTransactionExecutor{
+		executingWallet: wallet{
+			publicKey: &privateKey.PublicKey,
+		},
+		signingExecutor: &deterministicECDSASigningExecutorForBuildTaprootTxSubstitution{
+			privateKey: privateKey,
+		},
+		waitForBlockFn: func(ctx context.Context, block uint64) error {
+			return nil
+		},
+	}
+
+	logger := &warningCaptureLogger{}
+
+	tx, err := wte.signTransaction(logger, unsignedTx, 0, 0)
+	if err != nil {
+		t.Fatalf("unexpected signTransaction error: [%v]", err)
+	}
+
+	if tx.Version == nativeUnsignedTx.Version {
+		t.Fatalf(
+			"did not expect transaction version substitution when gate disabled: [%v]",
+			tx.Version,
+		)
+	}
+
+	if tx.Locktime == nativeUnsignedTx.Locktime {
+		t.Fatalf(
+			"did not expect transaction locktime substitution when gate disabled: [%v]",
+			tx.Locktime,
+		)
+	}
+
+	if tx.Inputs[0].Sequence == nativeUnsignedTx.Inputs[0].Sequence {
+		t.Fatalf(
+			"did not expect input sequence substitution when gate disabled: [%v]",
+			tx.Inputs[0].Sequence,
+		)
+	}
+
+	if len(logger.warningMessages) != 0 {
+		t.Fatalf("unexpected warning logs: [%v]", logger.warningMessages)
+	}
+}
+
+func buildTaprootTxSubstitutionFixture(
+	t *testing.T,
+) (
+	*ecdsa.PrivateKey,
+	*bitcoin.TransactionBuilder,
+	string,
+	*bitcoin.Transaction,
+) {
+	privateKey := &ecdsa.PrivateKey{
+		PublicKey: ecdsa.PublicKey{
+			Curve: tecdsa.Curve,
+		},
+		D: big.NewInt(111),
+	}
+	privateKey.PublicKey.X, privateKey.PublicKey.Y = tecdsa.Curve.ScalarBaseMult(
+		privateKey.D.Bytes(),
+	)
+
+	pubKeyHash := [20]byte{}
+	for i := range pubKeyHash {
+		pubKeyHash[i] = byte(i + 1)
+	}
+
+	lockingScript, err := bitcoin.PayToPublicKeyHash(pubKeyHash)
+	if err != nil {
+		t.Fatalf("cannot create locking script: [%v]", err)
+	}
+
+	localBitcoinChain := newLocalBitcoinChain()
+
+	fundingTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Inputs:  []*bitcoin.TransactionInput{},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           10000,
+				PublicKeyScript: lockingScript,
+			},
+		},
+		Locktime: 0,
+	}
+
+	if err := localBitcoinChain.BroadcastTransaction(fundingTransaction); err != nil {
+		t.Fatalf("cannot broadcast funding transaction: [%v]", err)
+	}
+
+	unsignedTx := bitcoin.NewTransactionBuilder(localBitcoinChain)
+	if err := unsignedTx.AddPublicKeyHashInput(
+		&bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: fundingTransaction.Hash(),
+				OutputIndex:     0,
+			},
+			Value: 10000,
+		},
+	); err != nil {
+		t.Fatalf("cannot add unsigned input: [%v]", err)
+	}
+
+	replacementOutputScript := mustDecodeHex(t, "0014deadbeef")
+	unsignedTx.AddOutput(
+		&bitcoin.TransactionOutput{
+			Value:           9000,
+			PublicKeyScript: replacementOutputScript,
+		},
+	)
+
+	nativeUnsignedTx := &bitcoin.Transaction{
+		Version:  3,
+		Locktime: 123,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: fundingTransaction.Hash(),
+					OutputIndex:     0,
+				},
+				Sequence: 0xfffffffd,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           9000,
+				PublicKeyScript: replacementOutputScript,
+			},
+		},
+	}
+
+	return privateKey,
+		unsignedTx,
+		hex.EncodeToString(nativeUnsignedTx.Serialize(bitcoin.Standard)),
+		nativeUnsignedTx
+}
+
 func mustDecodeHex(t *testing.T, value string) []byte {
 	result, err := hex.DecodeString(value)
 	if err != nil {
@@ -451,4 +741,37 @@ func (wcl *warningCaptureLogger) Warnf(format string, args ...interface{}) {
 		wcl.warningMessages,
 		fmt.Sprintf(format, args...),
 	)
+}
+
+type deterministicECDSASigningExecutorForBuildTaprootTxSubstitution struct {
+	privateKey *ecdsa.PrivateKey
+}
+
+func (desefbts *deterministicECDSASigningExecutorForBuildTaprootTxSubstitution) signBatch(
+	ctx context.Context,
+	messages []*big.Int,
+	startBlock uint64,
+) ([]*frost.Signature, error) {
+	signatures := make([]*frost.Signature, 0, len(messages))
+
+	for _, message := range messages {
+		r, s, err := ecdsa.Sign(
+			rand.Reader,
+			desefbts.privateKey,
+			message.Bytes(),
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		signature := &frost.Signature{}
+		rBytes := r.Bytes()
+		copy(signature.R[len(signature.R)-len(rBytes):], rBytes)
+		sBytes := s.Bytes()
+		copy(signature.S[len(signature.S)-len(sBytes):], sBytes)
+
+		signatures = append(signatures, signature)
+	}
+
+	return signatures, nil
 }
