@@ -611,23 +611,6 @@ func extractUnsignedTransactionShapeFromTransaction(
 	}, nil
 }
 
-func unsignedTransactionInputReferences(
-	inputs []bitcoin.UnsignedTransactionInput,
-) []unsignedTransactionInputReference {
-	result := make([]unsignedTransactionInputReference, 0, len(inputs))
-	for _, input := range inputs {
-		result = append(
-			result,
-			unsignedTransactionInputReference{
-				TxIDHex: input.TxIDHex,
-				Vout:    input.Vout,
-			},
-		)
-	}
-
-	return result
-}
-
 func unsignedTransactionInputReferencesEqual(
 	first []unsignedTransactionInputReference,
 	second []unsignedTransactionInputReference,
