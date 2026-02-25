@@ -23,6 +23,11 @@ import (
 	"go.uber.org/zap"
 )
 
+type unsignedTransactionInputReference struct {
+	TxIDHex string
+	Vout    uint32
+}
+
 // WalletActionType represents actions types that can be performed by a wallet.
 type WalletActionType uint8
 
@@ -334,6 +339,21 @@ func (wte *walletTransactionExecutor) signTransaction(
 			"received unsigned transaction from native tbtc-signer BuildTaprootTx [txHexLen:%d]",
 			len(nativeUnsignedTxHex),
 		)
+
+		expectedInputs, expectedOutputs, err := unsignedTx.UnsignedTransactionIO()
+		if err != nil {
+			signTxLogger.Warnf(
+				"cannot compare native BuildTaprootTx unsigned transaction I/O with Go builder state: [%v]",
+				err,
+			)
+		} else {
+			warnOnNativeUnsignedTransactionIODivergence(
+				signTxLogger,
+				nativeUnsignedTxHex,
+				expectedInputs,
+				expectedOutputs,
+			)
+		}
 	}
 
 	signTxLogger.Infof("computing transaction's sig hashes")
@@ -389,6 +409,170 @@ func (wte *walletTransactionExecutor) signTransaction(
 	signTxLogger.Infof("transaction created successfully")
 
 	return tx, nil
+}
+
+func warnOnNativeUnsignedTransactionIODivergence(
+	signTxLogger log.StandardLogger,
+	nativeUnsignedTxHex string,
+	expectedInputs []bitcoin.UnsignedTransactionInput,
+	expectedOutputs []bitcoin.UnsignedTransactionOutput,
+) {
+	diverges, err := nativeUnsignedTransactionIODiverges(
+		nativeUnsignedTxHex,
+		expectedInputs,
+		expectedOutputs,
+	)
+	if err != nil {
+		signTxLogger.Warnf(
+			"cannot compare native BuildTaprootTx unsigned transaction I/O with Go builder state: [%v]",
+			err,
+		)
+		return
+	}
+
+	if diverges {
+		signTxLogger.Warnf(
+			"native BuildTaprootTx unsigned transaction I/O diverges from Go builder state",
+		)
+	}
+}
+
+func nativeUnsignedTransactionIODiverges(
+	nativeUnsignedTxHex string,
+	expectedInputs []bitcoin.UnsignedTransactionInput,
+	expectedOutputs []bitcoin.UnsignedTransactionOutput,
+) (bool, error) {
+	nativeUnsignedTxBytes, err := hex.DecodeString(nativeUnsignedTxHex)
+	if err != nil {
+		return false, fmt.Errorf("cannot decode native tx hex: [%w]", err)
+	}
+
+	nativeUnsignedTx := &bitcoin.Transaction{}
+	if err := nativeUnsignedTx.Deserialize(nativeUnsignedTxBytes); err != nil {
+		return false, fmt.Errorf("cannot deserialize native tx bytes: [%w]", err)
+	}
+
+	actualInputReferences, actualOutputs, err := extractUnsignedTransactionIOFromTransaction(
+		nativeUnsignedTx,
+	)
+	if err != nil {
+		return false, err
+	}
+
+	expectedInputReferences := unsignedTransactionInputReferences(expectedInputs)
+
+	return !unsignedTransactionInputReferencesEqual(
+			expectedInputReferences,
+			actualInputReferences,
+		) ||
+			!unsignedTransactionOutputsEqual(
+				expectedOutputs,
+				actualOutputs,
+			),
+		nil
+}
+
+func extractUnsignedTransactionIOFromTransaction(
+	transaction *bitcoin.Transaction,
+) (
+	[]unsignedTransactionInputReference,
+	[]bitcoin.UnsignedTransactionOutput,
+	error,
+) {
+	inputReferences := make(
+		[]unsignedTransactionInputReference,
+		0,
+		len(transaction.Inputs),
+	)
+	for i, input := range transaction.Inputs {
+		if input == nil {
+			return nil, nil, fmt.Errorf("transaction input [%d] is nil", i)
+		}
+
+		if input.Outpoint == nil {
+			return nil, nil, fmt.Errorf("transaction input [%d] outpoint is nil", i)
+		}
+
+		inputReferences = append(
+			inputReferences,
+			unsignedTransactionInputReference{
+				TxIDHex: input.Outpoint.TransactionHash.Hex(bitcoin.ReversedByteOrder),
+				Vout:    input.Outpoint.OutputIndex,
+			},
+		)
+	}
+
+	outputs := make([]bitcoin.UnsignedTransactionOutput, 0, len(transaction.Outputs))
+	for i, output := range transaction.Outputs {
+		if output == nil {
+			return nil, nil, fmt.Errorf("transaction output [%d] is nil", i)
+		}
+
+		if output.Value < 0 {
+			return nil, nil, fmt.Errorf("transaction output [%d] value is negative", i)
+		}
+
+		outputs = append(
+			outputs,
+			bitcoin.UnsignedTransactionOutput{
+				ScriptPubKeyHex: hex.EncodeToString(output.PublicKeyScript),
+				ValueSats:       uint64(output.Value),
+			},
+		)
+	}
+
+	return inputReferences, outputs, nil
+}
+
+func unsignedTransactionInputReferences(
+	inputs []bitcoin.UnsignedTransactionInput,
+) []unsignedTransactionInputReference {
+	result := make([]unsignedTransactionInputReference, 0, len(inputs))
+	for _, input := range inputs {
+		result = append(
+			result,
+			unsignedTransactionInputReference{
+				TxIDHex: input.TxIDHex,
+				Vout:    input.Vout,
+			},
+		)
+	}
+
+	return result
+}
+
+func unsignedTransactionInputReferencesEqual(
+	first []unsignedTransactionInputReference,
+	second []unsignedTransactionInputReference,
+) bool {
+	if len(first) != len(second) {
+		return false
+	}
+
+	for i := range first {
+		if first[i] != second[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+func unsignedTransactionOutputsEqual(
+	first []bitcoin.UnsignedTransactionOutput,
+	second []bitcoin.UnsignedTransactionOutput,
+) bool {
+	if len(first) != len(second) {
+		return false
+	}
+
+	for i := range first {
+		if first[i] != second[i] {
+			return false
+		}
+	}
+
+	return true
 }
 
 // broadcastTransaction broadcasts a signed Bitcoin transaction until

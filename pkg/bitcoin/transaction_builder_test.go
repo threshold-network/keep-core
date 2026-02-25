@@ -222,8 +222,9 @@ func TestTransactionBuilder_UnsignedTransactionIO(t *testing.T) {
 
 	var txHash chainhash.Hash
 	for i := range txHash {
-		txHash[i] = 0x11
+		txHash[i] = byte(i + 1)
 	}
+	const expectedTxIDHex = "201f1e1d1c1b1a191817161514131211100f0e0d0c0b0a090807060504030201"
 
 	builder.internal.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&txHash, 7), nil, nil))
 	builder.sigHashArgs = append(builder.sigHashArgs, &inputSigHashArgs{value: 1234})
@@ -241,10 +242,10 @@ func TestTransactionBuilder_UnsignedTransactionIO(t *testing.T) {
 		t.Fatalf("unexpected input count: [%d]", len(inputs))
 	}
 
-	if inputs[0].TxIDHex != txHash.String() {
+	if inputs[0].TxIDHex != expectedTxIDHex {
 		t.Fatalf(
 			"unexpected input txid\nexpected: [%v]\nactual:   [%v]",
-			txHash.String(),
+			expectedTxIDHex,
 			inputs[0].TxIDHex,
 		)
 	}

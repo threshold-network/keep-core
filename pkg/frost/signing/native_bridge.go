@@ -17,6 +17,12 @@ var (
 	ErrNativeCryptographyUnavailable = errors.New(
 		"native FROST cryptographic execution is unavailable",
 	)
+	// ErrNativeBridgeOperationFailed indicates that native cryptographic
+	// execution is available but a bridge operation returned a non-success
+	// status. This error should not trigger availability fallback.
+	ErrNativeBridgeOperationFailed = errors.New(
+		"native FROST bridge operation failed",
+	)
 )
 
 // NativeExecutionBridge defines a native cryptographic execution entrypoint

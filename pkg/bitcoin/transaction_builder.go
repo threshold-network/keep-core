@@ -350,6 +350,8 @@ func (tb *TransactionBuilder) UnsignedTransactionIO() (
 		inputs = append(
 			inputs,
 			UnsignedTransactionInput{
+				// chainhash.Hash.String renders txid in standard Bitcoin display
+				// (RPC/explorer) byte order, i.e. reversed vs internal bytes.
 				TxIDHex:   input.PreviousOutPoint.Hash.String(),
 				Vout:      input.PreviousOutPoint.Index,
 				ValueSats: uint64(value),

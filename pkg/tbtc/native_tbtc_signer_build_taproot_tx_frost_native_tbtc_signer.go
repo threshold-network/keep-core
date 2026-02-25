@@ -56,8 +56,10 @@ func buildTaprootTxViaNativeSigner(
 		nil,
 	)
 	if err != nil {
-		// Keep legacy fallback behavior when native tbtc-signer bridge is not
-		// linked/available for the running build.
+		// Keep legacy fallback behavior for the observational BuildTaprootTx
+		// phase when native bridge support is unavailable.
+		// Note that current bridge error mapping can also classify operational
+		// failures as unavailable; tighten this split before signing-substitution.
 		if errors.Is(err, frostsigning.ErrNativeCryptographyUnavailable) {
 			return "", nil
 		}
@@ -88,6 +90,8 @@ func buildTaprootTxSessionID(
 	inputs []bitcoin.UnsignedTransactionInput,
 	outputs []bitcoin.UnsignedTransactionOutput,
 ) string {
+	// Session ID is deterministically derived from Go-side transaction I/O using
+	// encoding/json. Rust currently treats this session_id as opaque.
 	sessionPayload, err := json.Marshal(struct {
 		Inputs  []bitcoin.UnsignedTransactionInput  `json:"inputs"`
 		Outputs []bitcoin.UnsignedTransactionOutput `json:"outputs"`

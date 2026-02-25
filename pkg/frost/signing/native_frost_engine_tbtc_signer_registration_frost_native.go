@@ -343,6 +343,18 @@ func buildTaggedTBTCSignerOperationError(
 	)
 }
 
+func buildTaggedTBTCSignerBridgeOperationError(
+	operation string,
+	message string,
+) error {
+	return fmt.Errorf(
+		"%w: tbtc-signer bridge operation [%v] failed: [%s]",
+		ErrNativeBridgeOperationFailed,
+		operation,
+		message,
+	)
+}
+
 func buildTaggedTBTCSignerRunDKGRequestPayload(
 	sessionID string,
 	participants []NativeTBTCSignerDKGParticipant,
@@ -930,20 +942,15 @@ func parseBuildTaggedTBTCSignerResult(
 	defer C.tbtc_signer_free_buffer(result.buffer.ptr, result.buffer.len)
 
 	statusCode := int32(result.status_code)
-	if statusCode == buildTaggedTBTCSignerUnavailableStatusCode {
-		return nil, buildTaggedTBTCSignerUnavailableError(operation)
-	}
 
 	var payload []byte
 	if result.buffer.ptr != nil && result.buffer.len > 0 {
 		payload = C.GoBytes(unsafe.Pointer(result.buffer.ptr), C.int(result.buffer.len))
 	}
 
-	if statusCode != 0 {
-		return nil, buildTaggedTBTCSignerOperationError(
-			operation,
-			buildTaggedTBTCSignerErrorMessage(payload),
-		)
+	statusErr := buildTaggedTBTCSignerResultStatusError(operation, statusCode, payload)
+	if statusErr != nil {
+		return nil, statusErr
 	}
 
 	if len(payload) == 0 {
@@ -954,6 +961,25 @@ func parseBuildTaggedTBTCSignerResult(
 	}
 
 	return payload, nil
+}
+
+func buildTaggedTBTCSignerResultStatusError(
+	operation string,
+	statusCode int32,
+	payload []byte,
+) error {
+	if statusCode == buildTaggedTBTCSignerUnavailableStatusCode {
+		return buildTaggedTBTCSignerUnavailableError(operation)
+	}
+
+	if statusCode != 0 {
+		return buildTaggedTBTCSignerBridgeOperationError(
+			operation,
+			buildTaggedTBTCSignerErrorMessage(payload),
+		)
+	}
+
+	return nil
 }
 
 func buildTaggedTBTCSignerErrorMessage(payload []byte) string {

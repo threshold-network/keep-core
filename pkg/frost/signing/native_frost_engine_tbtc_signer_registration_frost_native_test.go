@@ -91,6 +91,62 @@ func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 	}
 }
 
+func TestBuildTaggedTBTCSignerResultStatusError_Unavailable(t *testing.T) {
+	err := buildTaggedTBTCSignerResultStatusError(
+		"BuildTaprootTx",
+		buildTaggedTBTCSignerUnavailableStatusCode,
+		nil,
+	)
+	if err == nil {
+		t.Fatal("expected unavailable error")
+	}
+
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"expected native cryptography unavailable error: [%v], got [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	if errors.Is(err, ErrNativeBridgeOperationFailed) {
+		t.Fatalf(
+			"did not expect native bridge operation failed error: [%v]",
+			err,
+		)
+	}
+}
+
+func TestBuildTaggedTBTCSignerResultStatusError_BridgeOperationFailure(t *testing.T) {
+	err := buildTaggedTBTCSignerResultStatusError(
+		"BuildTaprootTx",
+		2,
+		[]byte(`{"code":"validation","message":"invalid input"}`),
+	)
+	if err == nil {
+		t.Fatal("expected bridge operation failure error")
+	}
+
+	if !errors.Is(err, ErrNativeBridgeOperationFailed) {
+		t.Fatalf(
+			"expected native bridge operation failed error: [%v], got [%v]",
+			ErrNativeBridgeOperationFailed,
+			err,
+		)
+	}
+
+	if errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"did not expect native cryptography unavailable error: [%v]",
+			err,
+		)
+	}
+
+	if !strings.Contains(err.Error(), "validation: invalid input") {
+		t.Fatalf("unexpected bridge operation error: [%v]", err)
+	}
+}
+
 func TestBuildTaggedTBTCSignerRunDKGRequestPayload(t *testing.T) {
 	payload, err := buildTaggedTBTCSignerRunDKGRequestPayload(
 		"session-1",
