@@ -310,6 +310,61 @@ func (tb *TransactionBuilder) TotalInputsValue() int64 {
 	return totalInputsValue
 }
 
+// ReplaceUnsignedTransaction replaces the internal unsigned transaction while
+// preserving per-input sighash metadata collected during builder input setup.
+func (tb *TransactionBuilder) ReplaceUnsignedTransaction(
+	transaction *Transaction,
+) error {
+	if transaction == nil {
+		return fmt.Errorf("transaction is nil")
+	}
+
+	if len(transaction.Inputs) != len(tb.sigHashArgs) {
+		return fmt.Errorf(
+			"input metadata mismatch: [%d] tx inputs, [%d] sighash args",
+			len(transaction.Inputs),
+			len(tb.sigHashArgs),
+		)
+	}
+
+	previousInputs := tb.internal.TxIn
+
+	replacedInternal := newInternalTransaction()
+	replacedInternal.fromTransaction(transaction)
+
+	for i := range replacedInternal.TxIn {
+		if i >= len(previousInputs) {
+			break
+		}
+
+		previousInput := previousInputs[i]
+		replacedInput := replacedInternal.TxIn[i]
+
+		if previousInput == nil || replacedInput == nil {
+			continue
+		}
+
+		if tb.sigHashArgs[i].witness {
+			if len(replacedInput.Witness) == 0 && len(previousInput.Witness) == 1 {
+				redeemScript := append([]byte{}, previousInput.Witness[0]...)
+				replacedInput.Witness = wire.TxWitness{redeemScript}
+			}
+		} else {
+			if len(replacedInput.SignatureScript) == 0 && len(previousInput.SignatureScript) > 0 {
+				replacedInput.SignatureScript = append(
+					[]byte{},
+					previousInput.SignatureScript...,
+				)
+			}
+		}
+	}
+
+	tb.internal = replacedInternal
+	tb.sigHashes = nil
+
+	return nil
+}
+
 // UnsignedTransactionInput carries canonical unsigned input metadata extracted
 // from the builder state.
 type UnsignedTransactionInput struct {

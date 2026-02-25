@@ -160,7 +160,9 @@ func TestNativeUnsignedTransactionIODiverges_MismatchedIO(t *testing.T) {
 	}
 }
 
-func TestWarnOnNativeUnsignedTransactionIODivergence_LogsWarning(t *testing.T) {
+func TestEvaluateNativeUnsignedTransactionForSigning_ObservationalModeLogsWarning(
+	t *testing.T,
+) {
 	logger := &warningCaptureLogger{}
 
 	txHashBytes := make([]byte, bitcoin.HashByteLength)
@@ -196,7 +198,7 @@ func TestWarnOnNativeUnsignedTransactionIODivergence_LogsWarning(t *testing.T) {
 
 	nativeTxHex := hex.EncodeToString(nativeTransaction.Serialize(bitcoin.Standard))
 
-	warnOnNativeUnsignedTransactionIODivergence(
+	nativeUnsignedTx, err := evaluateNativeUnsignedTransactionForSigning(
 		logger,
 		nativeTxHex,
 		[]bitcoin.UnsignedTransactionInput{
@@ -212,7 +214,15 @@ func TestWarnOnNativeUnsignedTransactionIODivergence_LogsWarning(t *testing.T) {
 				ValueSats:       999,
 			},
 		},
+		false,
 	)
+	if err != nil {
+		t.Fatalf("unexpected evaluation error: [%v]", err)
+	}
+
+	if nativeUnsignedTx != nil {
+		t.Fatal("did not expect native transaction substitution in observational mode")
+	}
 
 	if len(logger.warningMessages) != 1 {
 		t.Fatalf(
@@ -224,6 +234,180 @@ func TestWarnOnNativeUnsignedTransactionIODivergence_LogsWarning(t *testing.T) {
 
 	if !strings.Contains(logger.warningMessages[0], "diverges") {
 		t.Fatalf("unexpected warning message: [%v]", logger.warningMessages[0])
+	}
+}
+
+func TestEvaluateNativeUnsignedTransactionForSigning_SubstitutionModeRejectsDivergence(
+	t *testing.T,
+) {
+	logger := &warningCaptureLogger{}
+
+	txHashBytes := make([]byte, bitcoin.HashByteLength)
+	for i := range txHashBytes {
+		txHashBytes[i] = byte(i + 1)
+	}
+
+	txHash, err := bitcoin.NewHash(txHashBytes, bitcoin.InternalByteOrder)
+	if err != nil {
+		t.Fatalf("cannot build tx hash: [%v]", err)
+	}
+
+	scriptPubKey := mustDecodeHex(t, "0014deadbeef")
+	nativeTransaction := &bitcoin.Transaction{
+		Version: 2,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: txHash,
+					OutputIndex:     7,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           1000,
+				PublicKeyScript: scriptPubKey,
+			},
+		},
+		Locktime: 0,
+	}
+
+	nativeTxHex := hex.EncodeToString(nativeTransaction.Serialize(bitcoin.Standard))
+
+	nativeUnsignedTx, err := evaluateNativeUnsignedTransactionForSigning(
+		logger,
+		nativeTxHex,
+		[]bitcoin.UnsignedTransactionInput{
+			{
+				TxIDHex:   txHash.Hex(bitcoin.ReversedByteOrder),
+				Vout:      7,
+				ValueSats: 1234,
+			},
+		},
+		[]bitcoin.UnsignedTransactionOutput{
+			{
+				ScriptPubKeyHex: "0014deadbeef",
+				ValueSats:       999,
+			},
+		},
+		true,
+	)
+	if err == nil {
+		t.Fatal("expected substitution-mode divergence error")
+	}
+
+	if !strings.Contains(err.Error(), "diverges") {
+		t.Fatalf("unexpected substitution-mode error: [%v]", err)
+	}
+
+	if nativeUnsignedTx != nil {
+		t.Fatal("did not expect native transaction on divergence")
+	}
+
+	if len(logger.warningMessages) != 0 {
+		t.Fatalf("unexpected warnings in substitution mode: [%v]", logger.warningMessages)
+	}
+}
+
+func TestEvaluateNativeUnsignedTransactionForSigning_SubstitutionModeAcceptsMatchingIO(
+	t *testing.T,
+) {
+	logger := &warningCaptureLogger{}
+
+	txHashBytes := make([]byte, bitcoin.HashByteLength)
+	for i := range txHashBytes {
+		txHashBytes[i] = byte(i + 1)
+	}
+
+	txHash, err := bitcoin.NewHash(txHashBytes, bitcoin.InternalByteOrder)
+	if err != nil {
+		t.Fatalf("cannot build tx hash: [%v]", err)
+	}
+
+	scriptPubKey := mustDecodeHex(t, "0014deadbeef")
+	nativeTransaction := &bitcoin.Transaction{
+		Version: 2,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: txHash,
+					OutputIndex:     7,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           1000,
+				PublicKeyScript: scriptPubKey,
+			},
+		},
+		Locktime: 0,
+	}
+
+	nativeTxHex := hex.EncodeToString(nativeTransaction.Serialize(bitcoin.Standard))
+
+	nativeUnsignedTx, err := evaluateNativeUnsignedTransactionForSigning(
+		logger,
+		nativeTxHex,
+		[]bitcoin.UnsignedTransactionInput{
+			{
+				TxIDHex:   txHash.Hex(bitcoin.ReversedByteOrder),
+				Vout:      7,
+				ValueSats: 1234,
+			},
+		},
+		[]bitcoin.UnsignedTransactionOutput{
+			{
+				ScriptPubKeyHex: "0014deadbeef",
+				ValueSats:       1000,
+			},
+		},
+		true,
+	)
+	if err != nil {
+		t.Fatalf("unexpected substitution-mode evaluation error: [%v]", err)
+	}
+
+	if nativeUnsignedTx == nil {
+		t.Fatal("expected native transaction substitution candidate")
+	}
+
+	if len(logger.warningMessages) != 0 {
+		t.Fatalf("unexpected warnings in substitution mode: [%v]", logger.warningMessages)
+	}
+}
+
+func TestNativeBuildTaprootTxSigningSubstitutionEnabled(t *testing.T) {
+	testCases := []struct {
+		name     string
+		envValue string
+		expected bool
+	}{
+		{name: "unset", envValue: "", expected: false},
+		{name: "true", envValue: "true", expected: true},
+		{name: "TRUE", envValue: "TRUE", expected: true},
+		{name: "one", envValue: "1", expected: true},
+		{name: "yes", envValue: "yes", expected: true},
+		{name: "on", envValue: "on", expected: true},
+		{name: "false", envValue: "false", expected: false},
+		{name: "zero", envValue: "0", expected: false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(nativeBuildTaprootTxSigningSubstitutionEnvVar, tc.envValue)
+
+			actual := nativeBuildTaprootTxSigningSubstitutionEnabled()
+			if actual != tc.expected {
+				t.Fatalf(
+					"unexpected flag state\nexpected: [%v]\nactual:   [%v]",
+					tc.expected,
+					actual,
+				)
+			}
+		})
 	}
 }
 

@@ -217,6 +217,163 @@ func TestTransactionBuilder_AddOutput(t *testing.T) {
 	assertInternalOutput(t, builder, 0, output)
 }
 
+func TestTransactionBuilder_ReplaceUnsignedTransaction(t *testing.T) {
+	builder := NewTransactionBuilder(nil)
+
+	var initialInputHash1 chainhash.Hash
+	var initialInputHash2 chainhash.Hash
+	initialInputHash1[0] = 0x11
+	initialInputHash2[0] = 0x22
+
+	builder.internal.AddTxIn(
+		wire.NewTxIn(
+			wire.NewOutPoint(&initialInputHash1, 1),
+			[]byte{0xde, 0xad},
+			nil,
+		),
+	)
+	builder.internal.AddTxIn(
+		wire.NewTxIn(
+			wire.NewOutPoint(&initialInputHash2, 2),
+			nil,
+			[][]byte{{0xbe, 0xef}},
+		),
+	)
+	builder.sigHashArgs = append(
+		builder.sigHashArgs,
+		&inputSigHashArgs{value: 111, scriptCode: []byte{0x51}, witness: false},
+		&inputSigHashArgs{value: 222, scriptCode: []byte{0x52}, witness: true},
+	)
+	builder.sigHashes = []*big.Int{big.NewInt(1), big.NewInt(2)}
+
+	var replacementInputHash1 chainhash.Hash
+	var replacementInputHash2 chainhash.Hash
+	replacementInputHash1[0] = 0x33
+	replacementInputHash2[0] = 0x44
+
+	err := builder.ReplaceUnsignedTransaction(
+		&Transaction{
+			Version: 2,
+			Inputs: []*TransactionInput{
+				{
+					Outpoint: &TransactionOutpoint{
+						TransactionHash: Hash(replacementInputHash1),
+						OutputIndex:     7,
+					},
+					Sequence: 0xffffffff,
+				},
+				{
+					Outpoint: &TransactionOutpoint{
+						TransactionHash: Hash(replacementInputHash2),
+						OutputIndex:     8,
+					},
+					Sequence: 0xffffffff,
+				},
+			},
+			Outputs: []*TransactionOutput{
+				{
+					Value:           1000,
+					PublicKeyScript: hexToSlice(t, "0014deadbeef"),
+				},
+			},
+			Locktime: 0,
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected replacement error: [%v]", err)
+	}
+
+	if len(builder.sigHashes) != 0 {
+		t.Fatalf("expected sighashes reset after replacement: [%d]", len(builder.sigHashes))
+	}
+
+	// Preserve P2SH/P2WSH placeholder scripts needed for final signature
+	// application while replacing tx skeleton.
+	if !reflect.DeepEqual([]byte{0xde, 0xad}, builder.internal.TxIn[0].SignatureScript) {
+		t.Fatalf(
+			"unexpected preserved signature script\nexpected: [%x]\nactual:   [%x]",
+			[]byte{0xde, 0xad},
+			builder.internal.TxIn[0].SignatureScript,
+		)
+	}
+
+	if len(builder.internal.TxIn[1].Witness) != 1 {
+		t.Fatalf("unexpected preserved witness length: [%d]", len(builder.internal.TxIn[1].Witness))
+	}
+
+	if !reflect.DeepEqual([]byte{0xbe, 0xef}, builder.internal.TxIn[1].Witness[0]) {
+		t.Fatalf(
+			"unexpected preserved witness script\nexpected: [%x]\nactual:   [%x]",
+			[]byte{0xbe, 0xef},
+			builder.internal.TxIn[1].Witness[0],
+		)
+	}
+
+	inputs, outputs, err := builder.UnsignedTransactionIO()
+	if err != nil {
+		t.Fatalf("unexpected extraction error after replacement: [%v]", err)
+	}
+
+	if len(inputs) != 2 {
+		t.Fatalf("unexpected input count after replacement: [%d]", len(inputs))
+	}
+
+	if inputs[0].TxIDHex != replacementInputHash1.String() || inputs[0].Vout != 7 {
+		t.Fatalf("unexpected first input after replacement: [%+v]", inputs[0])
+	}
+
+	if inputs[1].TxIDHex != replacementInputHash2.String() || inputs[1].Vout != 8 {
+		t.Fatalf("unexpected second input after replacement: [%+v]", inputs[1])
+	}
+
+	if len(outputs) != 1 {
+		t.Fatalf("unexpected output count after replacement: [%d]", len(outputs))
+	}
+}
+
+func TestTransactionBuilder_ReplaceUnsignedTransaction_RejectsInputMetadataMismatch(
+	t *testing.T,
+) {
+	builder := NewTransactionBuilder(nil)
+
+	var txHash chainhash.Hash
+	builder.internal.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&txHash, 0), nil, nil))
+	builder.sigHashArgs = append(builder.sigHashArgs, &inputSigHashArgs{value: 1})
+
+	err := builder.ReplaceUnsignedTransaction(
+		&Transaction{
+			Inputs: []*TransactionInput{
+				{
+					Outpoint: &TransactionOutpoint{
+						TransactionHash: Hash(txHash),
+						OutputIndex:     0,
+					},
+				},
+				{
+					Outpoint: &TransactionOutpoint{
+						TransactionHash: Hash(txHash),
+						OutputIndex:     1,
+					},
+				},
+			},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected input metadata mismatch error")
+	}
+
+	if !reflect.DeepEqual(
+		fmt.Sprintf(
+			"input metadata mismatch: [%d] tx inputs, [%d] sighash args",
+			2,
+			1,
+		),
+		err.Error(),
+	) {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
 func TestTransactionBuilder_UnsignedTransactionIO(t *testing.T) {
 	builder := NewTransactionBuilder(nil)
 

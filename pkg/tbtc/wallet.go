@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -302,6 +304,9 @@ type walletTransactionExecutor struct {
 }
 
 var buildTaprootTxViaNativeSignerFn = buildTaprootTxViaNativeSigner
+var nativeBuildTaprootTxSigningSubstitutionEnabledFn = nativeBuildTaprootTxSigningSubstitutionEnabled
+
+const nativeBuildTaprootTxSigningSubstitutionEnvVar = "KEEP_CORE_NATIVE_BUILDTX_SIGNING_SUBSTITUTION"
 
 func newWalletTransactionExecutor(
 	btcChain bitcoin.Chain,
@@ -326,6 +331,8 @@ func (wte *walletTransactionExecutor) signTransaction(
 	signingStartBlock uint64,
 	signingTimeoutBlock uint64,
 ) (*bitcoin.Transaction, error) {
+	substitutionEnabled := nativeBuildTaprootTxSigningSubstitutionEnabledFn()
+
 	nativeUnsignedTxHex, err := buildTaprootTxViaNativeSignerFn(unsignedTx)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -342,17 +349,44 @@ func (wte *walletTransactionExecutor) signTransaction(
 
 		expectedInputs, expectedOutputs, err := unsignedTx.UnsignedTransactionIO()
 		if err != nil {
+			if substitutionEnabled {
+				return nil, fmt.Errorf(
+					"cannot compare native BuildTaprootTx unsigned transaction I/O with Go builder state: [%v]",
+					err,
+				)
+			}
+
 			signTxLogger.Warnf(
 				"cannot compare native BuildTaprootTx unsigned transaction I/O with Go builder state: [%v]",
 				err,
 			)
 		} else {
-			warnOnNativeUnsignedTransactionIODivergence(
+			nativeUnsignedTx, err := evaluateNativeUnsignedTransactionForSigning(
 				signTxLogger,
 				nativeUnsignedTxHex,
 				expectedInputs,
 				expectedOutputs,
+				substitutionEnabled,
 			)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"cannot process native BuildTaprootTx unsigned transaction for signing: [%v]",
+					err,
+				)
+			}
+
+			if nativeUnsignedTx != nil {
+				if err := unsignedTx.ReplaceUnsignedTransaction(nativeUnsignedTx); err != nil {
+					return nil, fmt.Errorf(
+						"cannot substitute Go unsigned transaction with native BuildTaprootTx output: [%v]",
+						err,
+					)
+				}
+
+				signTxLogger.Infof(
+					"substituted Go unsigned transaction with native tbtc-signer BuildTaprootTx output",
+				)
+			}
 		}
 	}
 
@@ -411,30 +445,89 @@ func (wte *walletTransactionExecutor) signTransaction(
 	return tx, nil
 }
 
-func warnOnNativeUnsignedTransactionIODivergence(
+func nativeBuildTaprootTxSigningSubstitutionEnabled() bool {
+	switch strings.ToLower(
+		strings.TrimSpace(
+			os.Getenv(nativeBuildTaprootTxSigningSubstitutionEnvVar),
+		),
+	) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func evaluateNativeUnsignedTransactionForSigning(
 	signTxLogger log.StandardLogger,
 	nativeUnsignedTxHex string,
 	expectedInputs []bitcoin.UnsignedTransactionInput,
 	expectedOutputs []bitcoin.UnsignedTransactionOutput,
-) {
-	diverges, err := nativeUnsignedTransactionIODiverges(
-		nativeUnsignedTxHex,
-		expectedInputs,
-		expectedOutputs,
-	)
+	substitutionEnabled bool,
+) (*bitcoin.Transaction, error) {
+	nativeUnsignedTx, err := decodeNativeUnsignedTransactionHex(nativeUnsignedTxHex)
 	if err != nil {
+		if substitutionEnabled {
+			return nil, err
+		}
+
 		signTxLogger.Warnf(
 			"cannot compare native BuildTaprootTx unsigned transaction I/O with Go builder state: [%v]",
 			err,
 		)
-		return
+		return nil, nil
+	}
+
+	diverges, err := nativeUnsignedTransactionIODivergesFromTransaction(
+		nativeUnsignedTx,
+		expectedInputs,
+		expectedOutputs,
+	)
+	if err != nil {
+		if substitutionEnabled {
+			return nil, err
+		}
+
+		signTxLogger.Warnf(
+			"cannot compare native BuildTaprootTx unsigned transaction I/O with Go builder state: [%v]",
+			err,
+		)
+		return nil, nil
 	}
 
 	if diverges {
+		if substitutionEnabled {
+			return nil, fmt.Errorf(
+				"native BuildTaprootTx unsigned transaction I/O diverges from Go builder state",
+			)
+		}
+
 		signTxLogger.Warnf(
 			"native BuildTaprootTx unsigned transaction I/O diverges from Go builder state",
 		)
 	}
+
+	if substitutionEnabled {
+		return nativeUnsignedTx, nil
+	}
+
+	return nil, nil
+}
+
+func decodeNativeUnsignedTransactionHex(
+	nativeUnsignedTxHex string,
+) (*bitcoin.Transaction, error) {
+	nativeUnsignedTxBytes, err := hex.DecodeString(nativeUnsignedTxHex)
+	if err != nil {
+		return nil, fmt.Errorf("cannot decode native tx hex: [%w]", err)
+	}
+
+	nativeUnsignedTx := &bitcoin.Transaction{}
+	if err := nativeUnsignedTx.Deserialize(nativeUnsignedTxBytes); err != nil {
+		return nil, fmt.Errorf("cannot deserialize native tx bytes: [%w]", err)
+	}
+
+	return nativeUnsignedTx, nil
 }
 
 func nativeUnsignedTransactionIODiverges(
@@ -442,16 +535,23 @@ func nativeUnsignedTransactionIODiverges(
 	expectedInputs []bitcoin.UnsignedTransactionInput,
 	expectedOutputs []bitcoin.UnsignedTransactionOutput,
 ) (bool, error) {
-	nativeUnsignedTxBytes, err := hex.DecodeString(nativeUnsignedTxHex)
+	nativeUnsignedTx, err := decodeNativeUnsignedTransactionHex(nativeUnsignedTxHex)
 	if err != nil {
-		return false, fmt.Errorf("cannot decode native tx hex: [%w]", err)
+		return false, err
 	}
 
-	nativeUnsignedTx := &bitcoin.Transaction{}
-	if err := nativeUnsignedTx.Deserialize(nativeUnsignedTxBytes); err != nil {
-		return false, fmt.Errorf("cannot deserialize native tx bytes: [%w]", err)
-	}
+	return nativeUnsignedTransactionIODivergesFromTransaction(
+		nativeUnsignedTx,
+		expectedInputs,
+		expectedOutputs,
+	)
+}
 
+func nativeUnsignedTransactionIODivergesFromTransaction(
+	nativeUnsignedTx *bitcoin.Transaction,
+	expectedInputs []bitcoin.UnsignedTransactionInput,
+	expectedOutputs []bitcoin.UnsignedTransactionOutput,
+) (bool, error) {
 	actualInputReferences, actualOutputs, err := extractUnsignedTransactionIOFromTransaction(
 		nativeUnsignedTx,
 	)
