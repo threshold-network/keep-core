@@ -36,6 +36,15 @@ func (mntse *mockNativeTBTCSignerEngine) FinalizeSignRound(
 	return nil, fmt.Errorf("not implemented")
 }
 
+func (mntse *mockNativeTBTCSignerEngine) BuildTaprootTx(
+	sessionID string,
+	inputs []NativeTBTCSignerTxInput,
+	outputs []NativeTBTCSignerTxOutput,
+	scriptTreeHex *string,
+) (*NativeTBTCSignerTxResult, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 func TestRegisterNativeTBTCSignerEngineRejectsNil(t *testing.T) {
 	UnregisterNativeTBTCSignerEngine()
 	t.Cleanup(UnregisterNativeTBTCSignerEngine)

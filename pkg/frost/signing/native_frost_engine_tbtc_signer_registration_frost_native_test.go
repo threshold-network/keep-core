@@ -48,6 +48,28 @@ func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 		t.Fatalf("unexpected bridge error: [%v]", err)
 	}
 
+	_, err = engine.BuildTaprootTx(
+		"session-1",
+		[]NativeTBTCSignerTxInput{
+			{TxIDHex: "11", Vout: 0, ValueSats: 1},
+		},
+		[]NativeTBTCSignerTxOutput{
+			{ScriptPubKeyHex: "0014", ValueSats: 1},
+		},
+		nil,
+	)
+	if err == nil {
+		t.Fatal("expected unavailable tbtc-signer build-tx bridge error")
+	}
+
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"expected native cryptography unavailable error: [%v], got [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
 	versionedEngine, ok := engine.(interface {
 		Version() (string, error)
 	})
@@ -580,5 +602,198 @@ func TestDecodeBuildTaggedTBTCSignerFinalizeSignRoundResponse(t *testing.T) {
 				signature[i],
 			)
 		}
+	}
+}
+
+func TestBuildTaggedTBTCSignerBuildTaprootTxRequestPayload(t *testing.T) {
+	scriptTreeHex := "deadbeef"
+
+	payload, err := buildTaggedTBTCSignerBuildTaprootTxRequestPayload(
+		"session-buildtx-1",
+		[]NativeTBTCSignerTxInput{
+			{
+				TxIDHex:   strings.Repeat("11", 32),
+				Vout:      3,
+				ValueSats: 1000,
+			},
+		},
+		[]NativeTBTCSignerTxOutput{
+			{
+				ScriptPubKeyHex: "0014deadbeef",
+				ValueSats:       900,
+			},
+		},
+		&scriptTreeHex,
+	)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+
+	var request buildTaggedTBTCSignerBuildTaprootTxRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+
+	if request.SessionID != "session-buildtx-1" {
+		t.Fatalf(
+			"unexpected session id\nexpected: [%v]\nactual:   [%v]",
+			"session-buildtx-1",
+			request.SessionID,
+		)
+	}
+
+	if len(request.Inputs) != 1 {
+		t.Fatalf(
+			"unexpected input count\nexpected: [%v]\nactual:   [%v]",
+			1,
+			len(request.Inputs),
+		)
+	}
+
+	if request.Inputs[0].TxIDHex != strings.Repeat("11", 32) {
+		t.Fatalf(
+			"unexpected input txid\nexpected: [%v]\nactual:   [%v]",
+			strings.Repeat("11", 32),
+			request.Inputs[0].TxIDHex,
+		)
+	}
+
+	if len(request.Outputs) != 1 {
+		t.Fatalf(
+			"unexpected output count\nexpected: [%v]\nactual:   [%v]",
+			1,
+			len(request.Outputs),
+		)
+	}
+
+	if request.Outputs[0].ScriptPubKeyHex != "0014deadbeef" {
+		t.Fatalf(
+			"unexpected output script pubkey\nexpected: [%v]\nactual:   [%v]",
+			"0014deadbeef",
+			request.Outputs[0].ScriptPubKeyHex,
+		)
+	}
+
+	if request.ScriptTreeHex == nil || *request.ScriptTreeHex != scriptTreeHex {
+		t.Fatal("expected script tree hex to be present and preserved")
+	}
+}
+
+func TestBuildTaggedTBTCSignerBuildTaprootTxRequestPayload_RejectsInvalidInput(
+	t *testing.T,
+) {
+	scriptTreeHex := ""
+
+	testCases := []struct {
+		name          string
+		sessionID     string
+		inputs        []NativeTBTCSignerTxInput
+		outputs       []NativeTBTCSignerTxOutput
+		scriptTreeHex *string
+	}{
+		{
+			name:      "empty session id",
+			sessionID: "",
+			inputs: []NativeTBTCSignerTxInput{
+				{TxIDHex: strings.Repeat("11", 32), Vout: 0, ValueSats: 1},
+			},
+			outputs: []NativeTBTCSignerTxOutput{
+				{ScriptPubKeyHex: "0014aa", ValueSats: 1},
+			},
+		},
+		{
+			name:      "empty inputs",
+			sessionID: "session-1",
+			inputs:    nil,
+			outputs: []NativeTBTCSignerTxOutput{
+				{ScriptPubKeyHex: "0014aa", ValueSats: 1},
+			},
+		},
+		{
+			name:      "empty outputs",
+			sessionID: "session-1",
+			inputs: []NativeTBTCSignerTxInput{
+				{TxIDHex: strings.Repeat("11", 32), Vout: 0, ValueSats: 1},
+			},
+			outputs: nil,
+		},
+		{
+			name:      "input txid empty",
+			sessionID: "session-1",
+			inputs: []NativeTBTCSignerTxInput{
+				{TxIDHex: "", Vout: 0, ValueSats: 1},
+			},
+			outputs: []NativeTBTCSignerTxOutput{
+				{ScriptPubKeyHex: "0014aa", ValueSats: 1},
+			},
+		},
+		{
+			name:      "output script empty",
+			sessionID: "session-1",
+			inputs: []NativeTBTCSignerTxInput{
+				{TxIDHex: strings.Repeat("11", 32), Vout: 0, ValueSats: 1},
+			},
+			outputs: []NativeTBTCSignerTxOutput{
+				{ScriptPubKeyHex: "", ValueSats: 1},
+			},
+		},
+		{
+			name:      "script tree empty string",
+			sessionID: "session-1",
+			inputs: []NativeTBTCSignerTxInput{
+				{TxIDHex: strings.Repeat("11", 32), Vout: 0, ValueSats: 1},
+			},
+			outputs: []NativeTBTCSignerTxOutput{
+				{ScriptPubKeyHex: "0014aa", ValueSats: 1},
+			},
+			scriptTreeHex: &scriptTreeHex,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := buildTaggedTBTCSignerBuildTaprootTxRequestPayload(
+				tc.sessionID,
+				tc.inputs,
+				tc.outputs,
+				tc.scriptTreeHex,
+			)
+			if err == nil {
+				t.Fatal("expected payload build error")
+			}
+
+			if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+				t.Fatalf(
+					"expected native cryptography unavailable error: [%v], got [%v]",
+					ErrNativeCryptographyUnavailable,
+					err,
+				)
+			}
+		})
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerBuildTaprootTxResponse(t *testing.T) {
+	result, err := decodeBuildTaggedTBTCSignerBuildTaprootTxResponse(
+		[]byte(`{"session_id":"session-buildtx-1","tx_hex":"deadbeef"}`),
+	)
+	if err != nil {
+		t.Fatalf("unexpected decode error: [%v]", err)
+	}
+
+	if result.SessionID != "session-buildtx-1" {
+		t.Fatalf(
+			"unexpected session id\nexpected: [%v]\nactual:   [%v]",
+			"session-buildtx-1",
+			result.SessionID,
+		)
+	}
+
+	if result.TxHex != "deadbeef" {
+		t.Fatalf(
+			"unexpected tx hex\nexpected: [%v]\nactual:   [%v]",
+			"deadbeef",
+			result.TxHex,
+		)
 	}
 }

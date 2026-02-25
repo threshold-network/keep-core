@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/wire"
 	"github.com/keep-network/keep-core/internal/testutils"
 )
 
@@ -213,6 +215,101 @@ func TestTransactionBuilder_AddOutput(t *testing.T) {
 	builder.AddOutput(output)
 
 	assertInternalOutput(t, builder, 0, output)
+}
+
+func TestTransactionBuilder_UnsignedTransactionIO(t *testing.T) {
+	builder := NewTransactionBuilder(nil)
+
+	var txHash chainhash.Hash
+	for i := range txHash {
+		txHash[i] = 0x11
+	}
+
+	builder.internal.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&txHash, 7), nil, nil))
+	builder.sigHashArgs = append(builder.sigHashArgs, &inputSigHashArgs{value: 1234})
+	builder.AddOutput(&TransactionOutput{
+		Value:           1000,
+		PublicKeyScript: hexToSlice(t, "0014deadbeef"),
+	})
+
+	inputs, outputs, err := builder.UnsignedTransactionIO()
+	if err != nil {
+		t.Fatalf("unexpected extraction error: [%v]", err)
+	}
+
+	if len(inputs) != 1 {
+		t.Fatalf("unexpected input count: [%d]", len(inputs))
+	}
+
+	if inputs[0].TxIDHex != txHash.String() {
+		t.Fatalf(
+			"unexpected input txid\nexpected: [%v]\nactual:   [%v]",
+			txHash.String(),
+			inputs[0].TxIDHex,
+		)
+	}
+
+	if inputs[0].Vout != 7 {
+		t.Fatalf("unexpected input vout: [%d]", inputs[0].Vout)
+	}
+
+	if inputs[0].ValueSats != 1234 {
+		t.Fatalf("unexpected input value: [%d]", inputs[0].ValueSats)
+	}
+
+	if len(outputs) != 1 {
+		t.Fatalf("unexpected output count: [%d]", len(outputs))
+	}
+
+	if outputs[0].ScriptPubKeyHex != "0014deadbeef" {
+		t.Fatalf(
+			"unexpected output script\nexpected: [%v]\nactual:   [%v]",
+			"0014deadbeef",
+			outputs[0].ScriptPubKeyHex,
+		)
+	}
+
+	if outputs[0].ValueSats != 1000 {
+		t.Fatalf("unexpected output value: [%d]", outputs[0].ValueSats)
+	}
+}
+
+func TestTransactionBuilder_UnsignedTransactionIO_RejectsNegativeInputValue(
+	t *testing.T,
+) {
+	builder := NewTransactionBuilder(nil)
+
+	var txHash chainhash.Hash
+	builder.internal.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&txHash, 0), nil, nil))
+	builder.sigHashArgs = append(builder.sigHashArgs, &inputSigHashArgs{value: -1})
+	builder.AddOutput(&TransactionOutput{
+		Value:           1,
+		PublicKeyScript: hexToSlice(t, "0014aa"),
+	})
+
+	_, _, err := builder.UnsignedTransactionIO()
+	if err == nil {
+		t.Fatal("expected extraction error")
+	}
+}
+
+func TestTransactionBuilder_UnsignedTransactionIO_RejectsNegativeOutputValue(
+	t *testing.T,
+) {
+	builder := NewTransactionBuilder(nil)
+
+	var txHash chainhash.Hash
+	builder.internal.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&txHash, 0), nil, nil))
+	builder.sigHashArgs = append(builder.sigHashArgs, &inputSigHashArgs{value: 1})
+	builder.AddOutput(&TransactionOutput{
+		Value:           -1,
+		PublicKeyScript: hexToSlice(t, "0014aa"),
+	})
+
+	_, _, err := builder.UnsignedTransactionIO()
+	if err == nil {
+		t.Fatal("expected extraction error")
+	}
 }
 
 // The goal of this test is making sure that the TransactionBuilder can

@@ -296,6 +296,8 @@ type walletTransactionExecutor struct {
 	waitForBlockFn waitForBlockFn
 }
 
+var buildTaprootTxViaNativeSignerFn = buildTaprootTxViaNativeSigner
+
 func newWalletTransactionExecutor(
 	btcChain bitcoin.Chain,
 	executingWallet wallet,
@@ -319,6 +321,21 @@ func (wte *walletTransactionExecutor) signTransaction(
 	signingStartBlock uint64,
 	signingTimeoutBlock uint64,
 ) (*bitcoin.Transaction, error) {
+	nativeUnsignedTxHex, err := buildTaprootTxViaNativeSignerFn(unsignedTx)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"error while building unsigned transaction with native tbtc-signer: [%v]",
+			err,
+		)
+	}
+
+	if nativeUnsignedTxHex != "" {
+		signTxLogger.Debugf(
+			"received unsigned transaction from native tbtc-signer BuildTaprootTx [txHexLen:%d]",
+			len(nativeUnsignedTxHex),
+		)
+	}
+
 	signTxLogger.Infof("computing transaction's sig hashes")
 
 	sigHashes, err := unsignedTx.ComputeSignatureHashes()

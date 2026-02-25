@@ -168,6 +168,15 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) FinalizeSignRound(
 	return []byte{0xaa}, nil
 }
 
+func (mbttse *mockBuildTaggedTBTCSignerEngine) BuildTaprootTx(
+	sessionID string,
+	inputs []NativeTBTCSignerTxInput,
+	outputs []NativeTBTCSignerTxOutput,
+	scriptTreeHex *string,
+) (*NativeTBTCSignerTxResult, error) {
+	return nil, errors.New("not implemented")
+}
+
 type deterministicBuildTaggedTBTCSignerBootstrapRoundEngine struct {
 	roundState    *NativeTBTCSignerRoundState
 	finalizeMutex sync.Mutex
@@ -245,6 +254,15 @@ func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) Finalize
 	)
 
 	return []byte{0xaa}, nil
+}
+
+func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) BuildTaprootTx(
+	sessionID string,
+	inputs []NativeTBTCSignerTxInput,
+	outputs []NativeTBTCSignerTxOutput,
+	scriptTreeHex *string,
+) (*NativeTBTCSignerTxResult, error) {
+	return nil, errors.New("not implemented")
 }
 
 func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) finalizeInputs() []NativeTBTCSignerRoundContribution {

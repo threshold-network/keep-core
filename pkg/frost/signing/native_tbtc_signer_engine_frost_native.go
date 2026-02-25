@@ -27,6 +27,28 @@ type NativeTBTCSignerRoundContribution struct {
 	Data       []byte `json:"data"`
 }
 
+// NativeTBTCSignerTxInput describes an unsigned transaction input consumed by
+// BuildTaprootTx.
+type NativeTBTCSignerTxInput struct {
+	TxIDHex   string `json:"txIDHex"`
+	Vout      uint32 `json:"vout"`
+	ValueSats uint64 `json:"valueSats"`
+}
+
+// NativeTBTCSignerTxOutput describes an unsigned transaction output consumed
+// by BuildTaprootTx.
+type NativeTBTCSignerTxOutput struct {
+	ScriptPubKeyHex string `json:"scriptPubKeyHex"`
+	ValueSats       uint64 `json:"valueSats"`
+}
+
+// NativeTBTCSignerTxResult captures unsigned transaction metadata returned by
+// BuildTaprootTx.
+type NativeTBTCSignerTxResult struct {
+	SessionID string `json:"sessionID"`
+	TxHex     string `json:"txHex"`
+}
+
 // NativeTBTCSignerRoundState captures coarse session round metadata returned by
 // StartSignRound.
 type NativeTBTCSignerRoundState struct {
@@ -57,6 +79,12 @@ type NativeTBTCSignerEngine interface {
 		sessionID string,
 		roundContributions []NativeTBTCSignerRoundContribution,
 	) ([]byte, error)
+	BuildTaprootTx(
+		sessionID string,
+		inputs []NativeTBTCSignerTxInput,
+		outputs []NativeTBTCSignerTxOutput,
+		scriptTreeHex *string,
+	) (*NativeTBTCSignerTxResult, error)
 }
 
 var nativeTBTCSignerEngine NativeTBTCSignerEngine

@@ -2,6 +2,7 @@ package bitcoin
 
 import (
 	"crypto/ecdsa"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 
@@ -307,6 +308,71 @@ func (tb *TransactionBuilder) TotalInputsValue() int64 {
 	}
 
 	return totalInputsValue
+}
+
+// UnsignedTransactionInput carries canonical unsigned input metadata extracted
+// from the builder state.
+type UnsignedTransactionInput struct {
+	TxIDHex   string
+	Vout      uint32
+	ValueSats uint64
+}
+
+// UnsignedTransactionOutput carries canonical unsigned output metadata
+// extracted from the builder state.
+type UnsignedTransactionOutput struct {
+	ScriptPubKeyHex string
+	ValueSats       uint64
+}
+
+// UnsignedTransactionIO returns canonical unsigned transaction input/output
+// metadata from the builder state.
+func (tb *TransactionBuilder) UnsignedTransactionIO() (
+	[]UnsignedTransactionInput,
+	[]UnsignedTransactionOutput,
+	error,
+) {
+	if len(tb.internal.TxIn) != len(tb.sigHashArgs) {
+		return nil, nil, fmt.Errorf(
+			"input metadata mismatch: [%d] tx inputs, [%d] sighash args",
+			len(tb.internal.TxIn),
+			len(tb.sigHashArgs),
+		)
+	}
+
+	inputs := make([]UnsignedTransactionInput, 0, len(tb.internal.TxIn))
+	for i, input := range tb.internal.TxIn {
+		value := tb.sigHashArgs[i].value
+		if value < 0 {
+			return nil, nil, fmt.Errorf("input [%d] value is negative", i)
+		}
+
+		inputs = append(
+			inputs,
+			UnsignedTransactionInput{
+				TxIDHex:   input.PreviousOutPoint.Hash.String(),
+				Vout:      input.PreviousOutPoint.Index,
+				ValueSats: uint64(value),
+			},
+		)
+	}
+
+	outputs := make([]UnsignedTransactionOutput, 0, len(tb.internal.TxOut))
+	for i, output := range tb.internal.TxOut {
+		if output.Value < 0 {
+			return nil, nil, fmt.Errorf("output [%d] value is negative", i)
+		}
+
+		outputs = append(
+			outputs,
+			UnsignedTransactionOutput{
+				ScriptPubKeyHex: hex.EncodeToString(output.PkScript),
+				ValueSats:       uint64(output.Value),
+			},
+		)
+	}
+
+	return inputs, outputs, nil
 }
 
 // inputSigHashArgs is a helper structure holding some arguments required to
