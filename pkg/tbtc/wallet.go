@@ -347,46 +347,30 @@ func (wte *walletTransactionExecutor) signTransaction(
 			len(nativeUnsignedTxHex),
 		)
 
-		expectedInputs, expectedOutputs, err := unsignedTx.UnsignedTransactionIO()
+		nativeUnsignedTx, err := evaluateNativeUnsignedTransactionForSigning(
+			signTxLogger,
+			nativeUnsignedTxHex,
+			unsignedTx.UnsignedTransaction(),
+			substitutionEnabled,
+		)
 		if err != nil {
-			if substitutionEnabled {
-				return nil, fmt.Errorf(
-					"cannot compare native BuildTaprootTx unsigned transaction I/O with Go builder state: [%v]",
-					err,
-				)
-			}
-
-			signTxLogger.Warnf(
-				"cannot compare native BuildTaprootTx unsigned transaction I/O with Go builder state: [%v]",
+			return nil, fmt.Errorf(
+				"cannot process native BuildTaprootTx unsigned transaction for signing: [%v]",
 				err,
 			)
-		} else {
-			nativeUnsignedTx, err := evaluateNativeUnsignedTransactionForSigning(
-				signTxLogger,
-				nativeUnsignedTxHex,
-				expectedInputs,
-				expectedOutputs,
-				substitutionEnabled,
-			)
-			if err != nil {
+		}
+
+		if nativeUnsignedTx != nil {
+			if err := unsignedTx.ReplaceUnsignedTransaction(nativeUnsignedTx); err != nil {
 				return nil, fmt.Errorf(
-					"cannot process native BuildTaprootTx unsigned transaction for signing: [%v]",
+					"cannot substitute Go unsigned transaction with native BuildTaprootTx output: [%v]",
 					err,
 				)
 			}
 
-			if nativeUnsignedTx != nil {
-				if err := unsignedTx.ReplaceUnsignedTransaction(nativeUnsignedTx); err != nil {
-					return nil, fmt.Errorf(
-						"cannot substitute Go unsigned transaction with native BuildTaprootTx output: [%v]",
-						err,
-					)
-				}
-
-				signTxLogger.Infof(
-					"substituted Go unsigned transaction with native tbtc-signer BuildTaprootTx output",
-				)
-			}
+			signTxLogger.Infof(
+				"substituted Go unsigned transaction with native tbtc-signer BuildTaprootTx output",
+			)
 		}
 	}
 
@@ -461,8 +445,7 @@ func nativeBuildTaprootTxSigningSubstitutionEnabled() bool {
 func evaluateNativeUnsignedTransactionForSigning(
 	signTxLogger log.StandardLogger,
 	nativeUnsignedTxHex string,
-	expectedInputs []bitcoin.UnsignedTransactionInput,
-	expectedOutputs []bitcoin.UnsignedTransactionOutput,
+	expectedTransaction *bitcoin.Transaction,
 	substitutionEnabled bool,
 ) (*bitcoin.Transaction, error) {
 	nativeUnsignedTx, err := decodeNativeUnsignedTransactionHex(nativeUnsignedTxHex)
@@ -472,16 +455,15 @@ func evaluateNativeUnsignedTransactionForSigning(
 		}
 
 		signTxLogger.Warnf(
-			"cannot compare native BuildTaprootTx unsigned transaction I/O with Go builder state: [%v]",
+			"cannot compare native BuildTaprootTx unsigned transaction with Go builder state: [%v]",
 			err,
 		)
 		return nil, nil
 	}
 
-	diverges, err := nativeUnsignedTransactionIODivergesFromTransaction(
+	diverges, err := nativeUnsignedTransactionDivergesFromTransaction(
 		nativeUnsignedTx,
-		expectedInputs,
-		expectedOutputs,
+		expectedTransaction,
 	)
 	if err != nil {
 		if substitutionEnabled {
@@ -489,7 +471,7 @@ func evaluateNativeUnsignedTransactionForSigning(
 		}
 
 		signTxLogger.Warnf(
-			"cannot compare native BuildTaprootTx unsigned transaction I/O with Go builder state: [%v]",
+			"cannot compare native BuildTaprootTx unsigned transaction with Go builder state: [%v]",
 			err,
 		)
 		return nil, nil
@@ -498,12 +480,12 @@ func evaluateNativeUnsignedTransactionForSigning(
 	if diverges {
 		if substitutionEnabled {
 			return nil, fmt.Errorf(
-				"native BuildTaprootTx unsigned transaction I/O diverges from Go builder state",
+				"native BuildTaprootTx unsigned transaction diverges from Go builder state",
 			)
 		}
 
 		signTxLogger.Warnf(
-			"native BuildTaprootTx unsigned transaction I/O diverges from Go builder state",
+			"native BuildTaprootTx unsigned transaction diverges from Go builder state",
 		)
 	}
 
@@ -547,6 +529,37 @@ func nativeUnsignedTransactionIODiverges(
 	)
 }
 
+func nativeUnsignedTransactionDivergesFromTransaction(
+	nativeUnsignedTx *bitcoin.Transaction,
+	expectedTransaction *bitcoin.Transaction,
+) (bool, error) {
+	actualShape, err := extractUnsignedTransactionShapeFromTransaction(nativeUnsignedTx)
+	if err != nil {
+		return false, err
+	}
+
+	expectedShape, err := extractUnsignedTransactionShapeFromTransaction(expectedTransaction)
+	if err != nil {
+		return false, err
+	}
+
+	return actualShape.Version != expectedShape.Version ||
+			actualShape.Locktime != expectedShape.Locktime ||
+			!unsignedTransactionInputReferencesEqual(
+				actualShape.InputReferences,
+				expectedShape.InputReferences,
+			) ||
+			!unsignedTransactionInputSequencesEqual(
+				actualShape.InputSequences,
+				expectedShape.InputSequences,
+			) ||
+			!unsignedTransactionOutputsEqual(
+				actualShape.Outputs,
+				expectedShape.Outputs,
+			),
+		nil
+}
+
 func nativeUnsignedTransactionIODivergesFromTransaction(
 	nativeUnsignedTx *bitcoin.Transaction,
 	expectedInputs []bitcoin.UnsignedTransactionInput,
@@ -572,25 +585,34 @@ func nativeUnsignedTransactionIODivergesFromTransaction(
 		nil
 }
 
-func extractUnsignedTransactionIOFromTransaction(
+type unsignedTransactionShape struct {
+	Version         int32
+	Locktime        uint32
+	InputReferences []unsignedTransactionInputReference
+	InputSequences  []uint32
+	Outputs         []bitcoin.UnsignedTransactionOutput
+}
+
+func extractUnsignedTransactionShapeFromTransaction(
 	transaction *bitcoin.Transaction,
-) (
-	[]unsignedTransactionInputReference,
-	[]bitcoin.UnsignedTransactionOutput,
-	error,
-) {
+) (*unsignedTransactionShape, error) {
+	if transaction == nil {
+		return nil, fmt.Errorf("transaction is nil")
+	}
+
 	inputReferences := make(
 		[]unsignedTransactionInputReference,
 		0,
 		len(transaction.Inputs),
 	)
+	inputSequences := make([]uint32, 0, len(transaction.Inputs))
 	for i, input := range transaction.Inputs {
 		if input == nil {
-			return nil, nil, fmt.Errorf("transaction input [%d] is nil", i)
+			return nil, fmt.Errorf("transaction input [%d] is nil", i)
 		}
 
 		if input.Outpoint == nil {
-			return nil, nil, fmt.Errorf("transaction input [%d] outpoint is nil", i)
+			return nil, fmt.Errorf("transaction input [%d] outpoint is nil", i)
 		}
 
 		inputReferences = append(
@@ -600,16 +622,17 @@ func extractUnsignedTransactionIOFromTransaction(
 				Vout:    input.Outpoint.OutputIndex,
 			},
 		)
+		inputSequences = append(inputSequences, input.Sequence)
 	}
 
 	outputs := make([]bitcoin.UnsignedTransactionOutput, 0, len(transaction.Outputs))
 	for i, output := range transaction.Outputs {
 		if output == nil {
-			return nil, nil, fmt.Errorf("transaction output [%d] is nil", i)
+			return nil, fmt.Errorf("transaction output [%d] is nil", i)
 		}
 
 		if output.Value < 0 {
-			return nil, nil, fmt.Errorf("transaction output [%d] value is negative", i)
+			return nil, fmt.Errorf("transaction output [%d] value is negative", i)
 		}
 
 		outputs = append(
@@ -621,7 +644,28 @@ func extractUnsignedTransactionIOFromTransaction(
 		)
 	}
 
-	return inputReferences, outputs, nil
+	return &unsignedTransactionShape{
+		Version:         transaction.Version,
+		Locktime:        transaction.Locktime,
+		InputReferences: inputReferences,
+		InputSequences:  inputSequences,
+		Outputs:         outputs,
+	}, nil
+}
+
+func extractUnsignedTransactionIOFromTransaction(
+	transaction *bitcoin.Transaction,
+) (
+	[]unsignedTransactionInputReference,
+	[]bitcoin.UnsignedTransactionOutput,
+	error,
+) {
+	shape, err := extractUnsignedTransactionShapeFromTransaction(transaction)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return shape.InputReferences, shape.Outputs, nil
 }
 
 func unsignedTransactionInputReferences(
@@ -661,6 +705,23 @@ func unsignedTransactionInputReferencesEqual(
 func unsignedTransactionOutputsEqual(
 	first []bitcoin.UnsignedTransactionOutput,
 	second []bitcoin.UnsignedTransactionOutput,
+) bool {
+	if len(first) != len(second) {
+		return false
+	}
+
+	for i := range first {
+		if first[i] != second[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+func unsignedTransactionInputSequencesEqual(
+	first []uint32,
+	second []uint32,
 ) bool {
 	if len(first) != len(second) {
 		return false

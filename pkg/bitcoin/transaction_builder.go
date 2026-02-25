@@ -365,6 +365,11 @@ func (tb *TransactionBuilder) ReplaceUnsignedTransaction(
 	return nil
 }
 
+// UnsignedTransaction returns the current unsigned transaction builder state.
+func (tb *TransactionBuilder) UnsignedTransaction() *Transaction {
+	return tb.internal.toTransaction()
+}
+
 // UnsignedTransactionInput carries canonical unsigned input metadata extracted
 // from the builder state.
 type UnsignedTransactionInput struct {
