@@ -333,15 +333,25 @@ func (tb *TransactionBuilder) ReplaceUnsignedTransaction(
 	replacedInternal.fromTransaction(transaction)
 
 	for i := range replacedInternal.TxIn {
-		if i >= len(previousInputs) {
-			break
-		}
-
 		previousInput := previousInputs[i]
 		replacedInput := replacedInternal.TxIn[i]
 
 		if previousInput == nil || replacedInput == nil {
 			continue
+		}
+
+		if len(replacedInput.SignatureScript) > 0 {
+			return fmt.Errorf(
+				"replacement transaction input [%d] has unexpected non-empty signature script",
+				i,
+			)
+		}
+
+		if len(replacedInput.Witness) > 0 {
+			return fmt.Errorf(
+				"replacement transaction input [%d] has unexpected non-empty witness",
+				i,
+			)
 		}
 
 		if tb.sigHashArgs[i].witness {
