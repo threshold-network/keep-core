@@ -1,4 +1,4 @@
-//go:build frost_native && !(frost_uniffi_sdk && cgo) && !(frost_tbtc_signer && cgo)
+//go:build frost_native && !(frost_tbtc_signer && cgo) && !(frost_uniffi_sdk && cgo && frost_uniffi_legacy)
 
 package signing
 

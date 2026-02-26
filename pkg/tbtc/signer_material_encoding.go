@@ -51,8 +51,8 @@ func marshalSignerMaterialForPersistence(
 			material.Payload,
 		)
 	case []byte:
-		// Transitional compatibility: raw bytes are treated as
-		// frost-uniffi-v1 payloads produced by default resolver paths.
+		// Transitional compatibility: raw bytes are treated as legacy
+		// frost-uniffi-v1 payloads from previously persisted signer entries.
 		return encodeNativeSignerMaterialForPersistence(
 			frostsigning.NativeSignerMaterialFormatFrostUniFFIV1,
 			material,

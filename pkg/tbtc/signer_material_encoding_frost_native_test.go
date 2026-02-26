@@ -52,53 +52,40 @@ func TestUnmarshalSignerMaterialFromPersistence_LegacyEncodingResolvesNativeMate
 		)
 	}
 
-	var actualPayload []byte
-	switch nativeSignerMaterial.Format {
-	case frostsigning.NativeSignerMaterialFormatFrostUniFFIV1:
-		decodedPrivateKeyShare := &tecdsa.PrivateKeyShare{}
-		if err := decodedPrivateKeyShare.Unmarshal(nativeSignerMaterial.Payload); err != nil {
-			t.Fatalf("failed unmarshalling native signer material payload: [%v]", err)
-		}
-
-		actualPayload, err = decodedPrivateKeyShare.Marshal()
-		if err != nil {
-			t.Fatalf("failed marshaling decoded private key share: [%v]", err)
-		}
-
-	case frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1:
-		var payload frostsigning.NativeTBTCSignerMaterialPayload
-		if err := json.Unmarshal(nativeSignerMaterial.Payload, &payload); err != nil {
-			t.Fatalf("failed unmarshalling tbtc signer material payload: [%v]", err)
-		}
-
-		if payload.KeyGroup == "" {
-			t.Fatal("expected non-empty tbtc-signer key group")
-		}
-
-		if payload.KeyGroupSource == "" {
-			t.Fatal("expected non-empty tbtc-signer key group source")
-		}
-
-		legacyPrivateKeySharePayload, err := hex.DecodeString(payload.LegacyPrivateKeyShareHex)
-		if err != nil {
-			t.Fatalf("failed decoding legacy private key share payload: [%v]", err)
-		}
-
-		decodedPrivateKeyShare := &tecdsa.PrivateKeyShare{}
-		if err := decodedPrivateKeyShare.Unmarshal(legacyPrivateKeySharePayload); err != nil {
-			t.Fatalf("failed unmarshalling decoded private key share: [%v]", err)
-		}
-
-		actualPayload, err = decodedPrivateKeyShare.Marshal()
-		if err != nil {
-			t.Fatalf("failed marshaling decoded private key share: [%v]", err)
-		}
-
-	default:
+	if nativeSignerMaterial.Format != frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1 {
 		t.Fatalf(
-			"unexpected signer material format\nactual: [%v]",
+			"unexpected signer material format\nexpected: [%v]\nactual:   [%v]",
+			frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
 			nativeSignerMaterial.Format,
 		)
+	}
+
+	var payload frostsigning.NativeTBTCSignerMaterialPayload
+	if err := json.Unmarshal(nativeSignerMaterial.Payload, &payload); err != nil {
+		t.Fatalf("failed unmarshalling tbtc signer material payload: [%v]", err)
+	}
+
+	if payload.KeyGroup == "" {
+		t.Fatal("expected non-empty tbtc-signer key group")
+	}
+
+	if payload.KeyGroupSource == "" {
+		t.Fatal("expected non-empty tbtc-signer key group source")
+	}
+
+	legacyPrivateKeySharePayload, err := hex.DecodeString(payload.LegacyPrivateKeyShareHex)
+	if err != nil {
+		t.Fatalf("failed decoding legacy private key share payload: [%v]", err)
+	}
+
+	decodedPrivateKeyShare := &tecdsa.PrivateKeyShare{}
+	if err := decodedPrivateKeyShare.Unmarshal(legacyPrivateKeySharePayload); err != nil {
+		t.Fatalf("failed unmarshalling decoded private key share: [%v]", err)
+	}
+
+	actualPayload, err := decodedPrivateKeyShare.Marshal()
+	if err != nil {
+		t.Fatalf("failed marshaling decoded private key share: [%v]", err)
 	}
 
 	if !bytes.Equal(actualPayload, legacyEncoded) {

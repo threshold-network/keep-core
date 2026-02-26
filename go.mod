@@ -203,7 +203,6 @@ require (
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/whyrusleeping/go-keyspace v0.0.0-20160322163242-5b898ac5add1 // indirect
-	github.com/zecdev/frost-uniffi-sdk v0.0.0-20260221162625-51e08b3fb886
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.38.0 // indirect
@@ -226,5 +225,3 @@ require (
 	lukechampine.com/blake3 v1.3.0 // indirect
 	rsc.io/tmplfunc v0.0.3 // indirect
 )
-
-replace github.com/zecdev/frost-uniffi-sdk => github.com/tlabs-xyz/frost-uniffi-sdk v0.0.0-20260221162625-51e08b3fb886

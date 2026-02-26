@@ -3,6 +3,9 @@
 package tbtc
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
@@ -43,13 +46,29 @@ func (btnsmr *buildTaggedNativeSignerMaterialResolver) ResolveSignerMaterial(
 		return nil, fmt.Errorf("private key share is nil")
 	}
 
-	payload, err := privateKeyShare.Marshal()
+	legacyPrivateKeySharePayload, err := privateKeyShare.Marshal()
 	if err != nil {
 		return nil, fmt.Errorf("cannot marshal private key share: [%w]", err)
 	}
 
+	walletPublicKeyBytes, err := marshalPublicKey(privateKeyShare.PublicKey())
+	if err != nil {
+		return nil, fmt.Errorf("cannot marshal wallet public key: [%w]", err)
+	}
+
+	keyGroupDigest := sha256.Sum256(walletPublicKeyBytes)
+
+	payload, err := json.Marshal(frostsigning.NativeTBTCSignerMaterialPayload{
+		KeyGroup:                 hex.EncodeToString(keyGroupDigest[:]),
+		KeyGroupSource:           frostsigning.NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey,
+		LegacyPrivateKeyShareHex: hex.EncodeToString(legacyPrivateKeySharePayload),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("cannot marshal tbtc signer material payload: [%w]", err)
+	}
+
 	return &frostsigning.NativeSignerMaterial{
-		Format:  frostsigning.NativeSignerMaterialFormatFrostUniFFIV1,
+		Format:  frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
 		Payload: payload,
 	}, nil
 }
