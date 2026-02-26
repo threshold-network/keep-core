@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +24,11 @@ import (
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 	"go.uber.org/zap"
 )
+
+type unsignedTransactionInputReference struct {
+	TxIDHex string
+	Vout    uint32
+}
 
 // WalletActionType represents actions types that can be performed by a wallet.
 type WalletActionType uint8
@@ -296,6 +303,11 @@ type walletTransactionExecutor struct {
 	waitForBlockFn waitForBlockFn
 }
 
+var buildTaprootTxViaNativeSignerFn = buildTaprootTxViaNativeSigner
+var nativeBuildTaprootTxSigningSubstitutionEnabledFn = nativeBuildTaprootTxSigningSubstitutionEnabled
+
+const nativeBuildTaprootTxSigningSubstitutionEnvVar = "KEEP_CORE_NATIVE_BUILDTX_SIGNING_SUBSTITUTION"
+
 func newWalletTransactionExecutor(
 	btcChain bitcoin.Chain,
 	executingWallet wallet,
@@ -319,6 +331,49 @@ func (wte *walletTransactionExecutor) signTransaction(
 	signingStartBlock uint64,
 	signingTimeoutBlock uint64,
 ) (*bitcoin.Transaction, error) {
+	substitutionEnabled := nativeBuildTaprootTxSigningSubstitutionEnabledFn()
+
+	nativeUnsignedTxHex, err := buildTaprootTxViaNativeSignerFn(unsignedTx)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"error while building unsigned transaction with native tbtc-signer: [%v]",
+			err,
+		)
+	}
+
+	if nativeUnsignedTxHex != "" {
+		signTxLogger.Debugf(
+			"received unsigned transaction from native tbtc-signer BuildTaprootTx [txHexLen:%d]",
+			len(nativeUnsignedTxHex),
+		)
+
+		nativeUnsignedTx, err := evaluateNativeUnsignedTransactionForSigning(
+			signTxLogger,
+			nativeUnsignedTxHex,
+			unsignedTx.UnsignedTransaction(),
+			substitutionEnabled,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot process native BuildTaprootTx unsigned transaction for signing: [%v]",
+				err,
+			)
+		}
+
+		if nativeUnsignedTx != nil {
+			if err := unsignedTx.ReplaceUnsignedTransaction(nativeUnsignedTx); err != nil {
+				return nil, fmt.Errorf(
+					"cannot substitute Go unsigned transaction with native BuildTaprootTx output: [%v]",
+					err,
+				)
+			}
+
+			signTxLogger.Infof(
+				"substituted Go unsigned transaction with native tbtc-signer BuildTaprootTx output",
+			)
+		}
+	}
+
 	signTxLogger.Infof("computing transaction's sig hashes")
 
 	sigHashes, err := unsignedTx.ComputeSignatureHashes()
@@ -372,6 +427,305 @@ func (wte *walletTransactionExecutor) signTransaction(
 	signTxLogger.Infof("transaction created successfully")
 
 	return tx, nil
+}
+
+func nativeBuildTaprootTxSigningSubstitutionEnabled() bool {
+	switch strings.ToLower(
+		strings.TrimSpace(
+			os.Getenv(nativeBuildTaprootTxSigningSubstitutionEnvVar),
+		),
+	) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func evaluateNativeUnsignedTransactionForSigning(
+	signTxLogger log.StandardLogger,
+	nativeUnsignedTxHex string,
+	expectedTransaction *bitcoin.Transaction,
+	substitutionEnabled bool,
+) (*bitcoin.Transaction, error) {
+	nativeUnsignedTx, err := decodeNativeUnsignedTransactionHex(nativeUnsignedTxHex)
+	if err != nil {
+		if substitutionEnabled {
+			return nil, err
+		}
+
+		signTxLogger.Warnf(
+			"cannot compare native BuildTaprootTx unsigned transaction with Go builder state: [%v]",
+			err,
+		)
+		return nil, nil
+	}
+
+	diverges, divergenceReason, err := nativeUnsignedTransactionDivergesFromTransaction(
+		nativeUnsignedTx,
+		expectedTransaction,
+	)
+	if err != nil {
+		if substitutionEnabled {
+			return nil, err
+		}
+
+		signTxLogger.Warnf(
+			"cannot compare native BuildTaprootTx unsigned transaction with Go builder state: [%v]",
+			err,
+		)
+		return nil, nil
+	}
+
+	if diverges {
+		divergenceMessage := "native BuildTaprootTx unsigned transaction diverges from Go builder state"
+		if divergenceReason != "" {
+			divergenceMessage = fmt.Sprintf(
+				"%s: %s",
+				divergenceMessage,
+				divergenceReason,
+			)
+		}
+
+		if substitutionEnabled {
+			return nil, fmt.Errorf("%s", divergenceMessage)
+		}
+
+		signTxLogger.Warnf(divergenceMessage)
+	}
+
+	if substitutionEnabled {
+		return nativeUnsignedTx, nil
+	}
+
+	return nil, nil
+}
+
+func decodeNativeUnsignedTransactionHex(
+	nativeUnsignedTxHex string,
+) (*bitcoin.Transaction, error) {
+	nativeUnsignedTxBytes, err := hex.DecodeString(nativeUnsignedTxHex)
+	if err != nil {
+		return nil, fmt.Errorf("cannot decode native tx hex: [%w]", err)
+	}
+
+	nativeUnsignedTx := &bitcoin.Transaction{}
+	if err := nativeUnsignedTx.Deserialize(nativeUnsignedTxBytes); err != nil {
+		return nil, fmt.Errorf("cannot deserialize native tx bytes: [%w]", err)
+	}
+
+	return nativeUnsignedTx, nil
+}
+
+func nativeUnsignedTransactionDivergesFromTransaction(
+	nativeUnsignedTx *bitcoin.Transaction,
+	expectedTransaction *bitcoin.Transaction,
+) (bool, string, error) {
+	actualShape, err := extractUnsignedTransactionShapeFromTransaction(nativeUnsignedTx)
+	if err != nil {
+		return false, "", err
+	}
+
+	expectedShape, err := extractUnsignedTransactionShapeFromTransaction(expectedTransaction)
+	if err != nil {
+		return false, "", err
+	}
+
+	if actualShape.Version != expectedShape.Version {
+		return true, fmt.Sprintf(
+			"version mismatch: expected [%d], got [%d]",
+			expectedShape.Version,
+			actualShape.Version,
+		), nil
+	}
+
+	if actualShape.Locktime != expectedShape.Locktime {
+		return true, fmt.Sprintf(
+			"locktime mismatch: expected [%d], got [%d]",
+			expectedShape.Locktime,
+			actualShape.Locktime,
+		), nil
+	}
+
+	if reason, diverges := unsignedTransactionInputReferencesDivergenceReason(
+		actualShape.InputReferences,
+		expectedShape.InputReferences,
+	); diverges {
+		return true, reason, nil
+	}
+
+	if reason, diverges := unsignedTransactionInputSequencesDivergenceReason(
+		actualShape.InputSequences,
+		expectedShape.InputSequences,
+	); diverges {
+		return true, reason, nil
+	}
+
+	if reason, diverges := unsignedTransactionOutputsDivergenceReason(
+		actualShape.Outputs,
+		expectedShape.Outputs,
+	); diverges {
+		return true, reason, nil
+	}
+
+	return false, "", nil
+}
+
+func unsignedTransactionInputReferencesDivergenceReason(
+	actual []unsignedTransactionInputReference,
+	expected []unsignedTransactionInputReference,
+) (string, bool) {
+	if len(actual) != len(expected) {
+		return fmt.Sprintf(
+			"input reference count mismatch: expected [%d], got [%d]",
+			len(expected),
+			len(actual),
+		), true
+	}
+
+	for i := range actual {
+		if actual[i] != expected[i] {
+			return fmt.Sprintf(
+				"input reference mismatch at index [%d]: expected [%s:%d], got [%s:%d]",
+				i,
+				expected[i].TxIDHex,
+				expected[i].Vout,
+				actual[i].TxIDHex,
+				actual[i].Vout,
+			), true
+		}
+	}
+
+	return "", false
+}
+
+type unsignedTransactionShape struct {
+	Version         int32
+	Locktime        uint32
+	InputReferences []unsignedTransactionInputReference
+	InputSequences  []uint32
+	Outputs         []bitcoin.UnsignedTransactionOutput
+}
+
+func extractUnsignedTransactionShapeFromTransaction(
+	transaction *bitcoin.Transaction,
+) (*unsignedTransactionShape, error) {
+	if transaction == nil {
+		return nil, fmt.Errorf("transaction is nil")
+	}
+
+	inputReferences := make(
+		[]unsignedTransactionInputReference,
+		0,
+		len(transaction.Inputs),
+	)
+	inputSequences := make([]uint32, 0, len(transaction.Inputs))
+	for i, input := range transaction.Inputs {
+		if input == nil {
+			return nil, fmt.Errorf("transaction input [%d] is nil", i)
+		}
+
+		if input.Outpoint == nil {
+			return nil, fmt.Errorf("transaction input [%d] outpoint is nil", i)
+		}
+
+		inputReferences = append(
+			inputReferences,
+			unsignedTransactionInputReference{
+				TxIDHex: input.Outpoint.TransactionHash.Hex(bitcoin.ReversedByteOrder),
+				Vout:    input.Outpoint.OutputIndex,
+			},
+		)
+		inputSequences = append(inputSequences, input.Sequence)
+	}
+
+	outputs := make([]bitcoin.UnsignedTransactionOutput, 0, len(transaction.Outputs))
+	for i, output := range transaction.Outputs {
+		if output == nil {
+			return nil, fmt.Errorf("transaction output [%d] is nil", i)
+		}
+
+		if output.Value < 0 {
+			return nil, fmt.Errorf("transaction output [%d] value is negative", i)
+		}
+
+		outputs = append(
+			outputs,
+			bitcoin.UnsignedTransactionOutput{
+				ScriptPubKeyHex: hex.EncodeToString(output.PublicKeyScript),
+				ValueSats:       uint64(output.Value),
+			},
+		)
+	}
+
+	return &unsignedTransactionShape{
+		Version:         transaction.Version,
+		Locktime:        transaction.Locktime,
+		InputReferences: inputReferences,
+		InputSequences:  inputSequences,
+		Outputs:         outputs,
+	}, nil
+}
+
+func unsignedTransactionOutputsDivergenceReason(
+	actual []bitcoin.UnsignedTransactionOutput,
+	expected []bitcoin.UnsignedTransactionOutput,
+) (string, bool) {
+	if len(actual) != len(expected) {
+		return fmt.Sprintf(
+			"output count mismatch: expected [%d], got [%d]",
+			len(expected),
+			len(actual),
+		), true
+	}
+
+	for i := range actual {
+		if actual[i].ValueSats != expected[i].ValueSats {
+			return fmt.Sprintf(
+				"output value mismatch at index [%d]: expected [%d], got [%d]",
+				i,
+				expected[i].ValueSats,
+				actual[i].ValueSats,
+			), true
+		}
+
+		if actual[i].ScriptPubKeyHex != expected[i].ScriptPubKeyHex {
+			return fmt.Sprintf(
+				"output script mismatch at index [%d]: expected [%s], got [%s]",
+				i,
+				expected[i].ScriptPubKeyHex,
+				actual[i].ScriptPubKeyHex,
+			), true
+		}
+	}
+
+	return "", false
+}
+
+func unsignedTransactionInputSequencesDivergenceReason(
+	actual []uint32,
+	expected []uint32,
+) (string, bool) {
+	if len(actual) != len(expected) {
+		return fmt.Sprintf(
+			"input sequence count mismatch: expected [%d], got [%d]",
+			len(expected),
+			len(actual),
+		), true
+	}
+
+	for i := range actual {
+		if actual[i] != expected[i] {
+			return fmt.Sprintf(
+				"input sequence mismatch at index [%d]: expected [%d], got [%d]",
+				i,
+				expected[i],
+				actual[i],
+			), true
+		}
+	}
+
+	return "", false
 }
 
 // broadcastTransaction broadcasts a signed Bitcoin transaction until

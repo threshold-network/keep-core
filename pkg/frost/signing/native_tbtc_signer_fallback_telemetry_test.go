@@ -14,6 +14,25 @@ func TestRegisterNativeTBTCSignerFallbackObserverRejectsNil(t *testing.T) {
 	}
 }
 
+func TestRegisterNativeTBTCSignerFallbackObserverRejectsDuplicate(t *testing.T) {
+	UnregisterNativeTBTCSignerFallbackObserver()
+	t.Cleanup(UnregisterNativeTBTCSignerFallbackObserver)
+
+	firstErr := RegisterNativeTBTCSignerFallbackObserver(
+		func(NativeTBTCSignerFallbackEvent) {},
+	)
+	if firstErr != nil {
+		t.Fatalf("unexpected first registration error: [%v]", firstErr)
+	}
+
+	secondErr := RegisterNativeTBTCSignerFallbackObserver(
+		func(NativeTBTCSignerFallbackEvent) {},
+	)
+	if secondErr == nil {
+		t.Fatal("expected duplicate registration error")
+	}
+}
+
 func TestEmitNativeTBTCSignerFallbackEvent(t *testing.T) {
 	UnregisterNativeTBTCSignerFallbackObserver()
 	t.Cleanup(UnregisterNativeTBTCSignerFallbackObserver)

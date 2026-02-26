@@ -34,6 +34,10 @@ typedef TbtcSignerResult (*tbtc_finalize_sign_round_fn)(
   const uint8_t* request_ptr,
   size_t request_len
 );
+typedef TbtcSignerResult (*tbtc_build_taproot_tx_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
 typedef void (*tbtc_free_buffer_fn)(uint8_t* ptr, size_t len);
 
 static TbtcSignerResult unavailable_tbtc_signer_result(void) {
@@ -90,6 +94,18 @@ static TbtcSignerResult tbtc_signer_finalize_sign_round(const uint8_t* request_p
   }
 
   return finalize_sign_round(request_ptr, request_len);
+}
+
+static TbtcSignerResult tbtc_signer_build_taproot_tx(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_build_taproot_tx_fn build_taproot_tx = (tbtc_build_taproot_tx_fn)dlsym(
+    RTLD_DEFAULT,
+    "frost_tbtc_build_taproot_tx"
+  );
+  if (build_taproot_tx == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+
+  return build_taproot_tx(request_ptr, request_len);
 }
 
 static void tbtc_signer_free_buffer(uint8_t* ptr, size_t len) {
@@ -167,6 +183,29 @@ type buildTaggedTBTCSignerFinalizeSignRoundResponse struct {
 	SessionID    string `json:"session_id"`
 	RoundID      string `json:"round_id"`
 	SignatureHex string `json:"signature_hex"`
+}
+
+type buildTaggedTBTCSignerBuildTaprootTxRequest struct {
+	SessionID     string                                      `json:"session_id"`
+	Inputs        []buildTaggedTBTCSignerBuildTaprootTxInput  `json:"inputs"`
+	Outputs       []buildTaggedTBTCSignerBuildTaprootTxOutput `json:"outputs"`
+	ScriptTreeHex *string                                     `json:"script_tree_hex,omitempty"`
+}
+
+type buildTaggedTBTCSignerBuildTaprootTxInput struct {
+	TxIDHex   string `json:"txid_hex"`
+	Vout      uint32 `json:"vout"`
+	ValueSats uint64 `json:"value_sats"`
+}
+
+type buildTaggedTBTCSignerBuildTaprootTxOutput struct {
+	ScriptPubKeyHex string `json:"script_pubkey_hex"`
+	ValueSats       uint64 `json:"value_sats"`
+}
+
+type buildTaggedTBTCSignerBuildTaprootTxResponse struct {
+	SessionID string `json:"session_id"`
+	TxHex     string `json:"tx_hex"`
 }
 
 const buildTaggedTBTCSignerUnavailableStatusCode = -1
@@ -260,6 +299,30 @@ func (bttse *buildTaggedTBTCSignerEngine) FinalizeSignRound(
 	return decodeBuildTaggedTBTCSignerFinalizeSignRoundResponse(responsePayload)
 }
 
+func (bttse *buildTaggedTBTCSignerEngine) BuildTaprootTx(
+	sessionID string,
+	inputs []NativeTBTCSignerTxInput,
+	outputs []NativeTBTCSignerTxOutput,
+	scriptTreeHex *string,
+) (*NativeTBTCSignerTxResult, error) {
+	requestPayload, err := buildTaggedTBTCSignerBuildTaprootTxRequestPayload(
+		sessionID,
+		inputs,
+		outputs,
+		scriptTreeHex,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	responsePayload, err := callBuildTaggedTBTCSignerBuildTaprootTx(requestPayload)
+	if err != nil {
+		return nil, err
+	}
+
+	return decodeBuildTaggedTBTCSignerBuildTaprootTxResponse(responsePayload)
+}
+
 func buildTaggedTBTCSignerUnavailableError(operation string) error {
 	return fmt.Errorf(
 		"%w: tbtc-signer bridge operation [%v] is unavailable; link libfrost_tbtc",
@@ -275,6 +338,18 @@ func buildTaggedTBTCSignerOperationError(
 	return fmt.Errorf(
 		"%w: tbtc-signer bridge operation [%v] failed: [%s]",
 		ErrNativeCryptographyUnavailable,
+		operation,
+		message,
+	)
+}
+
+func buildTaggedTBTCSignerBridgeOperationError(
+	operation string,
+	message string,
+) error {
+	return fmt.Errorf(
+		"%w: tbtc-signer bridge operation [%v] failed: [%s]",
+		ErrNativeBridgeOperationFailed,
 		operation,
 		message,
 	)
@@ -647,6 +722,147 @@ func decodeBuildTaggedTBTCSignerFinalizeSignRoundResponse(
 	return signature, nil
 }
 
+func buildTaggedTBTCSignerBuildTaprootTxRequestPayload(
+	sessionID string,
+	inputs []NativeTBTCSignerTxInput,
+	outputs []NativeTBTCSignerTxOutput,
+	scriptTreeHex *string,
+) ([]byte, error) {
+	if sessionID == "" {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"BuildTaprootTx",
+			"session ID is empty",
+		)
+	}
+
+	if len(inputs) == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"BuildTaprootTx",
+			"inputs are empty",
+		)
+	}
+
+	if len(outputs) == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"BuildTaprootTx",
+			"outputs are empty",
+		)
+	}
+
+	requestInputs := make(
+		[]buildTaggedTBTCSignerBuildTaprootTxInput,
+		0,
+		len(inputs),
+	)
+	for i, input := range inputs {
+		if input.TxIDHex == "" {
+			return nil, buildTaggedTBTCSignerOperationError(
+				"BuildTaprootTx",
+				fmt.Sprintf("input [%d] txid hex is empty", i),
+			)
+		}
+
+		requestInputs = append(
+			requestInputs,
+			buildTaggedTBTCSignerBuildTaprootTxInput{
+				TxIDHex:   input.TxIDHex,
+				Vout:      input.Vout,
+				ValueSats: input.ValueSats,
+			},
+		)
+	}
+
+	requestOutputs := make(
+		[]buildTaggedTBTCSignerBuildTaprootTxOutput,
+		0,
+		len(outputs),
+	)
+	for i, output := range outputs {
+		if output.ScriptPubKeyHex == "" {
+			return nil, buildTaggedTBTCSignerOperationError(
+				"BuildTaprootTx",
+				fmt.Sprintf("output [%d] script pubkey hex is empty", i),
+			)
+		}
+
+		requestOutputs = append(
+			requestOutputs,
+			buildTaggedTBTCSignerBuildTaprootTxOutput{
+				ScriptPubKeyHex: output.ScriptPubKeyHex,
+				ValueSats:       output.ValueSats,
+			},
+		)
+	}
+
+	var requestScriptTreeHex *string
+	if scriptTreeHex != nil {
+		if *scriptTreeHex == "" {
+			return nil, buildTaggedTBTCSignerOperationError(
+				"BuildTaprootTx",
+				"script tree hex is empty",
+			)
+		}
+
+		copied := *scriptTreeHex
+		requestScriptTreeHex = &copied
+	}
+
+	request := buildTaggedTBTCSignerBuildTaprootTxRequest{
+		SessionID:     sessionID,
+		Inputs:        requestInputs,
+		Outputs:       requestOutputs,
+		ScriptTreeHex: requestScriptTreeHex,
+	}
+
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"BuildTaprootTx",
+			fmt.Sprintf("cannot marshal request: %v", err),
+		)
+	}
+
+	return payload, nil
+}
+
+func decodeBuildTaggedTBTCSignerBuildTaprootTxResponse(
+	responsePayload []byte,
+) (*NativeTBTCSignerTxResult, error) {
+	var response buildTaggedTBTCSignerBuildTaprootTxResponse
+	if err := json.Unmarshal(responsePayload, &response); err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"BuildTaprootTx",
+			fmt.Sprintf("cannot decode response payload: %v", err),
+		)
+	}
+
+	if response.SessionID == "" {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"BuildTaprootTx",
+			"response session ID is empty",
+		)
+	}
+
+	if response.TxHex == "" {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"BuildTaprootTx",
+			"response tx hex is empty",
+		)
+	}
+
+	if _, err := hex.DecodeString(response.TxHex); err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"BuildTaprootTx",
+			fmt.Sprintf("response tx hex is invalid: %v", err),
+		)
+	}
+
+	return &NativeTBTCSignerTxResult{
+		SessionID: response.SessionID,
+		TxHex:     response.TxHex,
+	}, nil
+}
+
 func callBuildTaggedTBTCSignerVersion() ([]byte, error) {
 	result := C.tbtc_signer_version()
 	return parseBuildTaggedTBTCSignerResult("Version", result)
@@ -688,6 +904,18 @@ func callBuildTaggedTBTCSignerFinalizeSignRound(
 	)
 }
 
+func callBuildTaggedTBTCSignerBuildTaprootTx(
+	requestPayload []byte,
+) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"BuildTaprootTx",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_build_taproot_tx(requestPtr, requestLen)
+		},
+	)
+}
+
 func callBuildTaggedTBTCSignerOperation(
 	operation string,
 	requestPayload []byte,
@@ -714,20 +942,15 @@ func parseBuildTaggedTBTCSignerResult(
 	defer C.tbtc_signer_free_buffer(result.buffer.ptr, result.buffer.len)
 
 	statusCode := int32(result.status_code)
-	if statusCode == buildTaggedTBTCSignerUnavailableStatusCode {
-		return nil, buildTaggedTBTCSignerUnavailableError(operation)
-	}
 
 	var payload []byte
 	if result.buffer.ptr != nil && result.buffer.len > 0 {
 		payload = C.GoBytes(unsafe.Pointer(result.buffer.ptr), C.int(result.buffer.len))
 	}
 
-	if statusCode != 0 {
-		return nil, buildTaggedTBTCSignerOperationError(
-			operation,
-			buildTaggedTBTCSignerErrorMessage(payload),
-		)
+	statusErr := buildTaggedTBTCSignerResultStatusError(operation, statusCode, payload)
+	if statusErr != nil {
+		return nil, statusErr
 	}
 
 	if len(payload) == 0 {
@@ -738,6 +961,25 @@ func parseBuildTaggedTBTCSignerResult(
 	}
 
 	return payload, nil
+}
+
+func buildTaggedTBTCSignerResultStatusError(
+	operation string,
+	statusCode int32,
+	payload []byte,
+) error {
+	if statusCode == buildTaggedTBTCSignerUnavailableStatusCode {
+		return buildTaggedTBTCSignerUnavailableError(operation)
+	}
+
+	if statusCode != 0 {
+		return buildTaggedTBTCSignerBridgeOperationError(
+			operation,
+			buildTaggedTBTCSignerErrorMessage(payload),
+		)
+	}
+
+	return nil
 }
 
 func buildTaggedTBTCSignerErrorMessage(payload []byte) string {

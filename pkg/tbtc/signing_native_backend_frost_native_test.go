@@ -277,6 +277,15 @@ func (atntsfe *attemptTrackingNativeTBTCSignerEngineForTBTC) FinalizeSignRound(
 	return []byte{0xaa}, nil
 }
 
+func (atntsfe *attemptTrackingNativeTBTCSignerEngineForTBTC) BuildTaprootTx(
+	sessionID string,
+	inputs []frostsigning.NativeTBTCSignerTxInput,
+	outputs []frostsigning.NativeTBTCSignerTxOutput,
+	scriptTreeHex *string,
+) (*frostsigning.NativeTBTCSignerTxResult, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 func (atntsfe *attemptTrackingNativeTBTCSignerEngineForTBTC) uniqueStartCohortsByAttempt() map[uint][][]uint16 {
 	atntsfe.mutex.Lock()
 	defer atntsfe.mutex.Unlock()

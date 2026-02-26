@@ -24,6 +24,7 @@ var (
 
 // RegisterNativeTBTCSignerFallbackObserver registers a process-wide observer
 // used to report tbtc-signer fallback events.
+// Only a single observer is supported.
 func RegisterNativeTBTCSignerFallbackObserver(
 	observer NativeTBTCSignerFallbackObserver,
 ) error {
@@ -33,6 +34,10 @@ func RegisterNativeTBTCSignerFallbackObserver(
 
 	nativeTBTCSignerFallbackObserverMutex.Lock()
 	defer nativeTBTCSignerFallbackObserverMutex.Unlock()
+
+	if nativeTBTCSignerFallbackObserver != nil {
+		return fmt.Errorf("native tbtc-signer fallback observer is already registered")
+	}
 
 	nativeTBTCSignerFallbackObserver = observer
 
