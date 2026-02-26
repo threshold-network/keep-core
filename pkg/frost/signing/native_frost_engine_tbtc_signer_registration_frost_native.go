@@ -337,18 +337,6 @@ func buildTaggedTBTCSignerOperationError(
 ) error {
 	return fmt.Errorf(
 		"%w: tbtc-signer bridge operation [%v] failed: [%s]",
-		ErrNativeCryptographyUnavailable,
-		operation,
-		message,
-	)
-}
-
-func buildTaggedTBTCSignerBridgeOperationError(
-	operation string,
-	message string,
-) error {
-	return fmt.Errorf(
-		"%w: tbtc-signer bridge operation [%v] failed: [%s]",
 		ErrNativeBridgeOperationFailed,
 		operation,
 		message,
@@ -973,7 +961,7 @@ func buildTaggedTBTCSignerResultStatusError(
 	}
 
 	if statusCode != 0 {
-		return buildTaggedTBTCSignerBridgeOperationError(
+		return buildTaggedTBTCSignerOperationError(
 			operation,
 			buildTaggedTBTCSignerErrorMessage(payload),
 		)

@@ -14,12 +14,15 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/frost"
+	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
 
 func TestWalletTransactionExecutor_SignTransaction_ReturnsBuildTaprootTxError(
 	t *testing.T,
 ) {
+	privateKey, unsignedTx, _, _ := buildTaprootTxSubstitutionFixture(t)
+
 	original := buildTaprootTxViaNativeSignerFn
 	t.Cleanup(func() {
 		buildTaprootTxViaNativeSignerFn = original
@@ -31,11 +34,68 @@ func TestWalletTransactionExecutor_SignTransaction_ReturnsBuildTaprootTxError(
 		return "", errors.New("build tx failed")
 	}
 
-	wte := &walletTransactionExecutor{}
+	wte := &walletTransactionExecutor{
+		executingWallet: wallet{
+			publicKey: &privateKey.PublicKey,
+		},
+		signingExecutor: &unexpectedSigningExecutorForBuildTaprootTxError{},
+		waitForBlockFn: func(ctx context.Context, block uint64) error {
+			return nil
+		},
+	}
+	logger := &warningCaptureLogger{}
 
-	_, err := wte.signTransaction(nil, nil, 0, 0)
+	_, err := wte.signTransaction(logger, unsignedTx, 0, 0)
 	if err == nil {
 		t.Fatal("expected signTransaction error")
+	}
+
+	if !strings.Contains(err.Error(), "native tbtc-signer") {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
+func TestWalletTransactionExecutor_SignTransaction_PropagatesBuildTaprootTxBridgeOperationError(
+	t *testing.T,
+) {
+	privateKey, unsignedTx, _, _ := buildTaprootTxSubstitutionFixture(t)
+
+	original := buildTaprootTxViaNativeSignerFn
+	t.Cleanup(func() {
+		buildTaprootTxViaNativeSignerFn = original
+	})
+
+	buildTaprootTxViaNativeSignerFn = func(
+		unsignedTx *bitcoin.TransactionBuilder,
+	) (string, error) {
+		return "", fmt.Errorf(
+			"%w: operation failed",
+			frostsigning.ErrNativeBridgeOperationFailed,
+		)
+	}
+
+	wte := &walletTransactionExecutor{
+		executingWallet: wallet{
+			publicKey: &privateKey.PublicKey,
+		},
+		signingExecutor: &unexpectedSigningExecutorForBuildTaprootTxError{},
+		waitForBlockFn: func(ctx context.Context, block uint64) error {
+			return nil
+		},
+	}
+	logger := &warningCaptureLogger{}
+
+	_, err := wte.signTransaction(logger, unsignedTx, 0, 0)
+	if err == nil {
+		t.Fatal("expected signTransaction error")
+	}
+
+	if !errors.Is(err, frostsigning.ErrNativeBridgeOperationFailed) {
+		t.Fatalf(
+			"expected bridge operation failure error: [%v], got [%v]",
+			frostsigning.ErrNativeBridgeOperationFailed,
+			err,
+		)
 	}
 
 	if !strings.Contains(err.Error(), "native tbtc-signer") {
@@ -1013,4 +1073,14 @@ func (desefbts *deterministicECDSASigningExecutorForBuildTaprootTxSubstitution) 
 	}
 
 	return signatures, nil
+}
+
+type unexpectedSigningExecutorForBuildTaprootTxError struct{}
+
+func (usefbte *unexpectedSigningExecutorForBuildTaprootTxError) signBatch(
+	ctx context.Context,
+	messages []*big.Int,
+	startBlock uint64,
+) ([]*frost.Signature, error) {
+	return nil, errors.New("unexpected signBatch invocation")
 }

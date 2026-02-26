@@ -336,7 +336,7 @@ func (wte *walletTransactionExecutor) signTransaction(
 	nativeUnsignedTxHex, err := buildTaprootTxViaNativeSignerFn(unsignedTx)
 	if err != nil {
 		return nil, fmt.Errorf(
-			"error while building unsigned transaction with native tbtc-signer: [%v]",
+			"error while building unsigned transaction with native tbtc-signer: [%w]",
 			err,
 		)
 	}
