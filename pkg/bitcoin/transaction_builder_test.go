@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -369,6 +370,82 @@ func TestTransactionBuilder_ReplaceUnsignedTransaction_RejectsInputMetadataMisma
 			1,
 		),
 		err.Error(),
+	) {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
+func TestTransactionBuilder_ReplaceUnsignedTransaction_RejectsNonEmptyReplacementSignatureScript(
+	t *testing.T,
+) {
+	builder := NewTransactionBuilder(nil)
+
+	var txHash chainhash.Hash
+	builder.internal.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&txHash, 0), nil, nil))
+	builder.sigHashArgs = append(
+		builder.sigHashArgs,
+		&inputSigHashArgs{value: 1, scriptCode: []byte{0x51}, witness: false},
+	)
+
+	err := builder.ReplaceUnsignedTransaction(
+		&Transaction{
+			Inputs: []*TransactionInput{
+				{
+					Outpoint: &TransactionOutpoint{
+						TransactionHash: Hash(txHash),
+						OutputIndex:     0,
+					},
+					SignatureScript: []byte{0xaa},
+					Sequence:        0xffffffff,
+				},
+			},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected replacement signature script error")
+	}
+
+	if !strings.Contains(
+		err.Error(),
+		"replacement transaction input [0] has unexpected non-empty signature script",
+	) {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
+func TestTransactionBuilder_ReplaceUnsignedTransaction_RejectsNonEmptyReplacementWitness(
+	t *testing.T,
+) {
+	builder := NewTransactionBuilder(nil)
+
+	var txHash chainhash.Hash
+	builder.internal.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&txHash, 0), nil, nil))
+	builder.sigHashArgs = append(
+		builder.sigHashArgs,
+		&inputSigHashArgs{value: 1, scriptCode: []byte{0x51}, witness: true},
+	)
+
+	err := builder.ReplaceUnsignedTransaction(
+		&Transaction{
+			Inputs: []*TransactionInput{
+				{
+					Outpoint: &TransactionOutpoint{
+						TransactionHash: Hash(txHash),
+						OutputIndex:     0,
+					},
+					Witness:  wire.TxWitness{[]byte{0xbb}},
+					Sequence: 0xffffffff,
+				},
+			},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected replacement witness error")
+	}
+
+	if !strings.Contains(
+		err.Error(),
+		"replacement transaction input [0] has unexpected non-empty witness",
 	) {
 		t.Fatalf("unexpected error: [%v]", err)
 	}

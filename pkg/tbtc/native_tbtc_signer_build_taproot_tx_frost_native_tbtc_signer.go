@@ -92,6 +92,8 @@ func buildTaprootTxSessionID(
 ) string {
 	// Session ID is deterministically derived from Go-side transaction I/O using
 	// encoding/json. Rust currently treats this session_id as opaque.
+	// If input/output schema changes in a future migration phase, update this
+	// derivation intentionally to avoid silent cross-version session ID drift.
 	sessionPayload, err := json.Marshal(struct {
 		Inputs  []bitcoin.UnsignedTransactionInput  `json:"inputs"`
 		Outputs []bitcoin.UnsignedTransactionOutput `json:"outputs"`
