@@ -21,6 +21,8 @@ import (
 func TestWalletTransactionExecutor_SignTransaction_ReturnsBuildTaprootTxError(
 	t *testing.T,
 ) {
+	privateKey, unsignedTx, _, _ := buildTaprootTxSubstitutionFixture(t)
+
 	original := buildTaprootTxViaNativeSignerFn
 	t.Cleanup(func() {
 		buildTaprootTxViaNativeSignerFn = original
@@ -32,9 +34,18 @@ func TestWalletTransactionExecutor_SignTransaction_ReturnsBuildTaprootTxError(
 		return "", errors.New("build tx failed")
 	}
 
-	wte := &walletTransactionExecutor{}
+	wte := &walletTransactionExecutor{
+		executingWallet: wallet{
+			publicKey: &privateKey.PublicKey,
+		},
+		signingExecutor: &unexpectedSigningExecutorForBuildTaprootTxError{},
+		waitForBlockFn: func(ctx context.Context, block uint64) error {
+			return nil
+		},
+	}
+	logger := &warningCaptureLogger{}
 
-	_, err := wte.signTransaction(nil, nil, 0, 0)
+	_, err := wte.signTransaction(logger, unsignedTx, 0, 0)
 	if err == nil {
 		t.Fatal("expected signTransaction error")
 	}
@@ -47,6 +58,8 @@ func TestWalletTransactionExecutor_SignTransaction_ReturnsBuildTaprootTxError(
 func TestWalletTransactionExecutor_SignTransaction_PropagatesBuildTaprootTxBridgeOperationError(
 	t *testing.T,
 ) {
+	privateKey, unsignedTx, _, _ := buildTaprootTxSubstitutionFixture(t)
+
 	original := buildTaprootTxViaNativeSignerFn
 	t.Cleanup(func() {
 		buildTaprootTxViaNativeSignerFn = original
@@ -61,9 +74,18 @@ func TestWalletTransactionExecutor_SignTransaction_PropagatesBuildTaprootTxBridg
 		)
 	}
 
-	wte := &walletTransactionExecutor{}
+	wte := &walletTransactionExecutor{
+		executingWallet: wallet{
+			publicKey: &privateKey.PublicKey,
+		},
+		signingExecutor: &unexpectedSigningExecutorForBuildTaprootTxError{},
+		waitForBlockFn: func(ctx context.Context, block uint64) error {
+			return nil
+		},
+	}
+	logger := &warningCaptureLogger{}
 
-	_, err := wte.signTransaction(nil, nil, 0, 0)
+	_, err := wte.signTransaction(logger, unsignedTx, 0, 0)
 	if err == nil {
 		t.Fatal("expected signTransaction error")
 	}
@@ -1051,4 +1073,14 @@ func (desefbts *deterministicECDSASigningExecutorForBuildTaprootTxSubstitution) 
 	}
 
 	return signatures, nil
+}
+
+type unexpectedSigningExecutorForBuildTaprootTxError struct{}
+
+func (usefbte *unexpectedSigningExecutorForBuildTaprootTxError) signBatch(
+	ctx context.Context,
+	messages []*big.Int,
+	startBlock uint64,
+) ([]*frost.Signature, error) {
+	return nil, errors.New("unexpected signBatch invocation")
 }
