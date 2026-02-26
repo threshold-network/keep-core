@@ -337,7 +337,7 @@ func buildTaggedTBTCSignerOperationError(
 ) error {
 	return fmt.Errorf(
 		"%w: tbtc-signer bridge operation [%v] failed: [%s]",
-		ErrNativeCryptographyUnavailable,
+		ErrNativeBridgeOperationFailed,
 		operation,
 		message,
 	)

@@ -268,10 +268,17 @@ func TestBuildTaggedTBTCSignerRunDKGRequestPayload_RejectsInvalidInput(t *testin
 				t.Fatal("expected payload build error")
 			}
 
-			if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+			if !errors.Is(err, ErrNativeBridgeOperationFailed) {
 				t.Fatalf(
-					"expected native cryptography unavailable error: [%v], got [%v]",
-					ErrNativeCryptographyUnavailable,
+					"expected native bridge operation failed error: [%v], got [%v]",
+					ErrNativeBridgeOperationFailed,
+					err,
+				)
+			}
+
+			if errors.Is(err, ErrNativeCryptographyUnavailable) {
+				t.Fatalf(
+					"did not expect native cryptography unavailable error: [%v]",
 					err,
 				)
 			}
@@ -408,10 +415,17 @@ func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload_EmptySessionID(t *tes
 		"key-group-1",
 		nil,
 	)
-	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+	if !errors.Is(err, ErrNativeBridgeOperationFailed) {
 		t.Fatalf(
-			"expected native cryptography unavailable error: [%v], got [%v]",
-			ErrNativeCryptographyUnavailable,
+			"expected native bridge operation failed error: [%v], got [%v]",
+			ErrNativeBridgeOperationFailed,
+			err,
+		)
+	}
+
+	if errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"did not expect native cryptography unavailable error: [%v]",
 			err,
 		)
 	}
@@ -425,10 +439,17 @@ func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload_ZeroMemberID(t *testi
 		"key-group-1",
 		nil,
 	)
-	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+	if !errors.Is(err, ErrNativeBridgeOperationFailed) {
 		t.Fatalf(
-			"expected native cryptography unavailable error: [%v], got [%v]",
-			ErrNativeCryptographyUnavailable,
+			"expected native bridge operation failed error: [%v], got [%v]",
+			ErrNativeBridgeOperationFailed,
+			err,
+		)
+	}
+
+	if errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"did not expect native cryptography unavailable error: [%v]",
 			err,
 		)
 	}
@@ -581,10 +602,17 @@ func TestDecodeBuildTaggedTBTCSignerStartSignRoundResponse_RejectsZeroSigningPar
 		t.Fatal("expected error")
 	}
 
-	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+	if !errors.Is(err, ErrNativeBridgeOperationFailed) {
 		t.Fatalf(
 			"unexpected error\nexpected: [%v]\nactual:   [%v]",
-			ErrNativeCryptographyUnavailable,
+			ErrNativeBridgeOperationFailed,
+			err,
+		)
+	}
+
+	if errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"did not expect native cryptography unavailable error: [%v]",
 			err,
 		)
 	}
@@ -602,10 +630,17 @@ func TestDecodeBuildTaggedTBTCSignerStartSignRoundResponse_RejectsDuplicateSigni
 		t.Fatal("expected error")
 	}
 
-	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+	if !errors.Is(err, ErrNativeBridgeOperationFailed) {
 		t.Fatalf(
 			"unexpected error\nexpected: [%v]\nactual:   [%v]",
-			ErrNativeCryptographyUnavailable,
+			ErrNativeBridgeOperationFailed,
+			err,
+		)
+	}
+
+	if errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"did not expect native cryptography unavailable error: [%v]",
 			err,
 		)
 	}
@@ -623,10 +658,17 @@ func TestDecodeBuildTaggedTBTCSignerStartSignRoundResponse_RejectsZeroOwnContrib
 		t.Fatal("expected error")
 	}
 
-	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+	if !errors.Is(err, ErrNativeBridgeOperationFailed) {
 		t.Fatalf(
 			"unexpected error\nexpected: [%v]\nactual:   [%v]",
-			ErrNativeCryptographyUnavailable,
+			ErrNativeBridgeOperationFailed,
+			err,
+		)
+	}
+
+	if errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"did not expect native cryptography unavailable error: [%v]",
 			err,
 		)
 	}
@@ -818,10 +860,17 @@ func TestBuildTaggedTBTCSignerBuildTaprootTxRequestPayload_RejectsInvalidInput(
 				t.Fatal("expected payload build error")
 			}
 
-			if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+			if !errors.Is(err, ErrNativeBridgeOperationFailed) {
 				t.Fatalf(
-					"expected native cryptography unavailable error: [%v], got [%v]",
-					ErrNativeCryptographyUnavailable,
+					"expected native bridge operation failed error: [%v], got [%v]",
+					ErrNativeBridgeOperationFailed,
+					err,
+				)
+			}
+
+			if errors.Is(err, ErrNativeCryptographyUnavailable) {
+				t.Fatalf(
+					"did not expect native cryptography unavailable error: [%v]",
 					err,
 				)
 			}

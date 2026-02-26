@@ -58,8 +58,6 @@ func buildTaprootTxViaNativeSigner(
 	if err != nil {
 		// Keep legacy fallback behavior for the observational BuildTaprootTx
 		// phase when native bridge support is unavailable.
-		// Note that current bridge error mapping can also classify operational
-		// failures as unavailable; tighten this split before signing-substitution.
 		if errors.Is(err, frostsigning.ErrNativeCryptographyUnavailable) {
 			return "", nil
 		}
