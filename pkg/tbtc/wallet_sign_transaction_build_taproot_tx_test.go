@@ -124,6 +124,10 @@ func TestEvaluateNativeUnsignedTransactionForSigning_ObservationalModeLogsWarnin
 	if !strings.Contains(logger.warningMessages[0], "diverges") {
 		t.Fatalf("unexpected warning message: [%v]", logger.warningMessages[0])
 	}
+
+	if !strings.Contains(logger.warningMessages[0], "output value mismatch") {
+		t.Fatalf("missing divergence detail in warning: [%v]", logger.warningMessages[0])
+	}
 }
 
 func TestEvaluateNativeUnsignedTransactionForSigning_ObservationalModeLogsWarningOnStructuralDivergence(
@@ -207,6 +211,10 @@ func TestEvaluateNativeUnsignedTransactionForSigning_ObservationalModeLogsWarnin
 	if !strings.Contains(logger.warningMessages[0], "diverges") {
 		t.Fatalf("unexpected warning message: [%v]", logger.warningMessages[0])
 	}
+
+	if !strings.Contains(logger.warningMessages[0], "version mismatch") {
+		t.Fatalf("missing divergence detail in warning: [%v]", logger.warningMessages[0])
+	}
 }
 
 func TestEvaluateNativeUnsignedTransactionForSigning_SubstitutionModeRejectsDivergence(
@@ -277,6 +285,10 @@ func TestEvaluateNativeUnsignedTransactionForSigning_SubstitutionModeRejectsDive
 
 	if !strings.Contains(err.Error(), "diverges") {
 		t.Fatalf("unexpected substitution-mode error: [%v]", err)
+	}
+
+	if !strings.Contains(err.Error(), "output value mismatch") {
+		t.Fatalf("missing divergence detail in substitution error: [%v]", err)
 	}
 
 	if nativeUnsignedTx != nil {
@@ -415,6 +427,10 @@ func TestEvaluateNativeUnsignedTransactionForSigning_SubstitutionModeRejectsStru
 
 	if !strings.Contains(err.Error(), "diverges") {
 		t.Fatalf("unexpected substitution-mode error: [%v]", err)
+	}
+
+	if !strings.Contains(err.Error(), "version mismatch") {
+		t.Fatalf("missing divergence detail in substitution error: [%v]", err)
 	}
 
 	if nativeUnsignedTx != nil {
@@ -729,6 +745,10 @@ func TestWalletTransactionExecutor_SignTransaction_RejectsNativeUnsignedTransact
 		t.Fatalf("unexpected signTransaction divergence error: [%v]", err)
 	}
 
+	if !strings.Contains(err.Error(), "output value mismatch") {
+		t.Fatalf("missing divergence detail in signTransaction error: [%v]", err)
+	}
+
 	if len(logger.warningMessages) != 0 {
 		t.Fatalf("unexpected warning logs in substitution mode: [%v]", logger.warningMessages)
 	}
@@ -801,6 +821,10 @@ func TestWalletTransactionExecutor_SignTransaction_RejectsNativeUnsignedTransact
 
 	if !strings.Contains(err.Error(), "diverges") {
 		t.Fatalf("unexpected signTransaction divergence error: [%v]", err)
+	}
+
+	if !strings.Contains(err.Error(), "version mismatch") {
+		t.Fatalf("missing divergence detail in signTransaction error: [%v]", err)
 	}
 
 	if len(logger.warningMessages) != 0 {

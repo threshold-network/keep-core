@@ -461,7 +461,7 @@ func evaluateNativeUnsignedTransactionForSigning(
 		return nil, nil
 	}
 
-	diverges, err := nativeUnsignedTransactionDivergesFromTransaction(
+	diverges, divergenceReason, err := nativeUnsignedTransactionDivergesFromTransaction(
 		nativeUnsignedTx,
 		expectedTransaction,
 	)
@@ -478,15 +478,20 @@ func evaluateNativeUnsignedTransactionForSigning(
 	}
 
 	if diverges {
-		if substitutionEnabled {
-			return nil, fmt.Errorf(
-				"native BuildTaprootTx unsigned transaction diverges from Go builder state",
+		divergenceMessage := "native BuildTaprootTx unsigned transaction diverges from Go builder state"
+		if divergenceReason != "" {
+			divergenceMessage = fmt.Sprintf(
+				"%s: %s",
+				divergenceMessage,
+				divergenceReason,
 			)
 		}
 
-		signTxLogger.Warnf(
-			"native BuildTaprootTx unsigned transaction diverges from Go builder state",
-		)
+		if substitutionEnabled {
+			return nil, fmt.Errorf("%s", divergenceMessage)
+		}
+
+		signTxLogger.Warnf(divergenceMessage)
 	}
 
 	if substitutionEnabled {
@@ -515,32 +520,83 @@ func decodeNativeUnsignedTransactionHex(
 func nativeUnsignedTransactionDivergesFromTransaction(
 	nativeUnsignedTx *bitcoin.Transaction,
 	expectedTransaction *bitcoin.Transaction,
-) (bool, error) {
+) (bool, string, error) {
 	actualShape, err := extractUnsignedTransactionShapeFromTransaction(nativeUnsignedTx)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	expectedShape, err := extractUnsignedTransactionShapeFromTransaction(expectedTransaction)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
-	return actualShape.Version != expectedShape.Version ||
-			actualShape.Locktime != expectedShape.Locktime ||
-			!unsignedTransactionInputReferencesEqual(
-				actualShape.InputReferences,
-				expectedShape.InputReferences,
-			) ||
-			!unsignedTransactionInputSequencesEqual(
-				actualShape.InputSequences,
-				expectedShape.InputSequences,
-			) ||
-			!unsignedTransactionOutputsEqual(
-				actualShape.Outputs,
-				expectedShape.Outputs,
-			),
-		nil
+	if actualShape.Version != expectedShape.Version {
+		return true, fmt.Sprintf(
+			"version mismatch: expected [%d], got [%d]",
+			expectedShape.Version,
+			actualShape.Version,
+		), nil
+	}
+
+	if actualShape.Locktime != expectedShape.Locktime {
+		return true, fmt.Sprintf(
+			"locktime mismatch: expected [%d], got [%d]",
+			expectedShape.Locktime,
+			actualShape.Locktime,
+		), nil
+	}
+
+	if reason, diverges := unsignedTransactionInputReferencesDivergenceReason(
+		actualShape.InputReferences,
+		expectedShape.InputReferences,
+	); diverges {
+		return true, reason, nil
+	}
+
+	if reason, diverges := unsignedTransactionInputSequencesDivergenceReason(
+		actualShape.InputSequences,
+		expectedShape.InputSequences,
+	); diverges {
+		return true, reason, nil
+	}
+
+	if reason, diverges := unsignedTransactionOutputsDivergenceReason(
+		actualShape.Outputs,
+		expectedShape.Outputs,
+	); diverges {
+		return true, reason, nil
+	}
+
+	return false, "", nil
+}
+
+func unsignedTransactionInputReferencesDivergenceReason(
+	actual []unsignedTransactionInputReference,
+	expected []unsignedTransactionInputReference,
+) (string, bool) {
+	if len(actual) != len(expected) {
+		return fmt.Sprintf(
+			"input reference count mismatch: expected [%d], got [%d]",
+			len(expected),
+			len(actual),
+		), true
+	}
+
+	for i := range actual {
+		if actual[i] != expected[i] {
+			return fmt.Sprintf(
+				"input reference mismatch at index [%d]: expected [%s:%d], got [%s:%d]",
+				i,
+				expected[i].TxIDHex,
+				expected[i].Vout,
+				actual[i].TxIDHex,
+				actual[i].Vout,
+			), true
+		}
+	}
+
+	return "", false
 }
 
 type unsignedTransactionShape struct {
@@ -611,55 +667,65 @@ func extractUnsignedTransactionShapeFromTransaction(
 	}, nil
 }
 
-func unsignedTransactionInputReferencesEqual(
-	first []unsignedTransactionInputReference,
-	second []unsignedTransactionInputReference,
-) bool {
-	if len(first) != len(second) {
-		return false
+func unsignedTransactionOutputsDivergenceReason(
+	actual []bitcoin.UnsignedTransactionOutput,
+	expected []bitcoin.UnsignedTransactionOutput,
+) (string, bool) {
+	if len(actual) != len(expected) {
+		return fmt.Sprintf(
+			"output count mismatch: expected [%d], got [%d]",
+			len(expected),
+			len(actual),
+		), true
 	}
 
-	for i := range first {
-		if first[i] != second[i] {
-			return false
+	for i := range actual {
+		if actual[i].ValueSats != expected[i].ValueSats {
+			return fmt.Sprintf(
+				"output value mismatch at index [%d]: expected [%d], got [%d]",
+				i,
+				expected[i].ValueSats,
+				actual[i].ValueSats,
+			), true
+		}
+
+		if actual[i].ScriptPubKeyHex != expected[i].ScriptPubKeyHex {
+			return fmt.Sprintf(
+				"output script mismatch at index [%d]: expected [%s], got [%s]",
+				i,
+				expected[i].ScriptPubKeyHex,
+				actual[i].ScriptPubKeyHex,
+			), true
 		}
 	}
 
-	return true
+	return "", false
 }
 
-func unsignedTransactionOutputsEqual(
-	first []bitcoin.UnsignedTransactionOutput,
-	second []bitcoin.UnsignedTransactionOutput,
-) bool {
-	if len(first) != len(second) {
-		return false
+func unsignedTransactionInputSequencesDivergenceReason(
+	actual []uint32,
+	expected []uint32,
+) (string, bool) {
+	if len(actual) != len(expected) {
+		return fmt.Sprintf(
+			"input sequence count mismatch: expected [%d], got [%d]",
+			len(expected),
+			len(actual),
+		), true
 	}
 
-	for i := range first {
-		if first[i] != second[i] {
-			return false
+	for i := range actual {
+		if actual[i] != expected[i] {
+			return fmt.Sprintf(
+				"input sequence mismatch at index [%d]: expected [%d], got [%d]",
+				i,
+				expected[i],
+				actual[i],
+			), true
 		}
 	}
 
-	return true
-}
-
-func unsignedTransactionInputSequencesEqual(
-	first []uint32,
-	second []uint32,
-) bool {
-	if len(first) != len(second) {
-		return false
-	}
-
-	for i := range first {
-		if first[i] != second[i] {
-			return false
-		}
-	}
-
-	return true
+	return "", false
 }
 
 // broadcastTransaction broadcasts a signed Bitcoin transaction until
