@@ -14,6 +14,7 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/frost"
+	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
 
@@ -36,6 +37,43 @@ func TestWalletTransactionExecutor_SignTransaction_ReturnsBuildTaprootTxError(
 	_, err := wte.signTransaction(nil, nil, 0, 0)
 	if err == nil {
 		t.Fatal("expected signTransaction error")
+	}
+
+	if !strings.Contains(err.Error(), "native tbtc-signer") {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
+func TestWalletTransactionExecutor_SignTransaction_PropagatesBuildTaprootTxBridgeOperationError(
+	t *testing.T,
+) {
+	original := buildTaprootTxViaNativeSignerFn
+	t.Cleanup(func() {
+		buildTaprootTxViaNativeSignerFn = original
+	})
+
+	buildTaprootTxViaNativeSignerFn = func(
+		unsignedTx *bitcoin.TransactionBuilder,
+	) (string, error) {
+		return "", fmt.Errorf(
+			"%w: operation failed",
+			frostsigning.ErrNativeBridgeOperationFailed,
+		)
+	}
+
+	wte := &walletTransactionExecutor{}
+
+	_, err := wte.signTransaction(nil, nil, 0, 0)
+	if err == nil {
+		t.Fatal("expected signTransaction error")
+	}
+
+	if !errors.Is(err, frostsigning.ErrNativeBridgeOperationFailed) {
+		t.Fatalf(
+			"expected bridge operation failure error: [%v], got [%v]",
+			frostsigning.ErrNativeBridgeOperationFailed,
+			err,
+		)
 	}
 
 	if !strings.Contains(err.Error(), "native tbtc-signer") {
