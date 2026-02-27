@@ -598,6 +598,8 @@ func TestBuildTaggedTBTCSignerRunDKGInputs(t *testing.T) {
 			GroupSize:          5,
 			DishonestThreshold: 2,
 			Attempt: &Attempt{
+				Number:                 1,
+				CoordinatorMemberIndex: 1,
 				IncludedMembersIndexes: []group.MemberIndex{1, 3, 5},
 			},
 		},
@@ -672,6 +674,81 @@ func TestBuildTaggedTBTCSignerRunDKGInputs_RejectsInvalidRequest(t *testing.T) {
 			_, _, err := buildTaggedTBTCSignerRunDKGInputs(tc.request)
 			if err == nil {
 				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
+func TestIncludedMembersFromRequest_RejectsInvalidAttemptPolicy(t *testing.T) {
+	testCases := []struct {
+		name        string
+		request     *NativeExecutionFFISigningRequest
+		errFragment string
+	}{
+		{
+			name: "zero attempt number",
+			request: &NativeExecutionFFISigningRequest{
+				GroupSize: 3,
+				Attempt: &Attempt{
+					Number:                 0,
+					CoordinatorMemberIndex: 1,
+					IncludedMembersIndexes: []group.MemberIndex{1, 2},
+				},
+			},
+			errFragment: "attempt number is zero",
+		},
+		{
+			name: "zero coordinator",
+			request: &NativeExecutionFFISigningRequest{
+				GroupSize: 3,
+				Attempt: &Attempt{
+					Number:                 1,
+					CoordinatorMemberIndex: 0,
+					IncludedMembersIndexes: []group.MemberIndex{1, 2},
+				},
+			},
+			errFragment: "attempt coordinator member index is zero",
+		},
+		{
+			name: "coordinator not included",
+			request: &NativeExecutionFFISigningRequest{
+				GroupSize: 3,
+				Attempt: &Attempt{
+					Number:                 1,
+					CoordinatorMemberIndex: 3,
+					IncludedMembersIndexes: []group.MemberIndex{1, 2},
+				},
+			},
+			errFragment: "attempt coordinator [3] is not included",
+		},
+		{
+			name: "member both included and excluded",
+			request: &NativeExecutionFFISigningRequest{
+				GroupSize: 3,
+				Attempt: &Attempt{
+					Number:                 1,
+					CoordinatorMemberIndex: 1,
+					IncludedMembersIndexes: []group.MemberIndex{1, 2},
+					ExcludedMembersIndexes: []group.MemberIndex{2},
+				},
+			},
+			errFragment: "member [2] is both included and excluded in attempt",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := includedMembersFromRequest(tc.request)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+
+			if !strings.Contains(err.Error(), tc.errFragment) {
+				t.Fatalf(
+					"unexpected error\nexpected to contain: [%v]\nactual:              [%v]",
+					tc.errFragment,
+					err,
+				)
 			}
 		})
 	}
@@ -2064,6 +2141,8 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 
 	secondRequest := *baseRequest
 	secondRequest.Attempt = &Attempt{
+		Number:                 2,
+		CoordinatorMemberIndex: 1,
 		ExcludedMembersIndexes: []group.MemberIndex{3},
 	}
 
@@ -2210,6 +2289,8 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 
 	secondRequest := *baseRequest
 	secondRequest.Attempt = &Attempt{
+		Number:                 2,
+		CoordinatorMemberIndex: 1,
 		ExcludedMembersIndexes: []group.MemberIndex{2},
 	}
 

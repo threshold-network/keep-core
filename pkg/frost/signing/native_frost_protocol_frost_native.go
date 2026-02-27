@@ -432,28 +432,46 @@ func includedMembersFromRequest(
 		return nil, nil, fmt.Errorf("group size must be positive")
 	}
 
-	includedMembersSet := make(map[group.MemberIndex]struct{})
+	attempt := request.Attempt
+	if attempt != nil {
+		if attempt.Number == 0 {
+			return nil, nil, fmt.Errorf("attempt number is zero")
+		}
 
-	if request.Attempt != nil && len(request.Attempt.IncludedMembersIndexes) > 0 {
-		for _, memberIndex := range request.Attempt.IncludedMembersIndexes {
+		if attempt.CoordinatorMemberIndex == 0 {
+			return nil, nil, fmt.Errorf("attempt coordinator member index is zero")
+		}
+	}
+
+	includedMembersSet := make(map[group.MemberIndex]struct{})
+	excludedMembersSet := make(map[group.MemberIndex]struct{})
+
+	if attempt != nil {
+		for _, memberIndex := range attempt.ExcludedMembersIndexes {
+			if memberIndex == 0 {
+				continue
+			}
+
+			excludedMembersSet[memberIndex] = struct{}{}
+		}
+	}
+
+	if attempt != nil && len(attempt.IncludedMembersIndexes) > 0 {
+		for _, memberIndex := range attempt.IncludedMembersIndexes {
 			if memberIndex == 0 {
 				return nil, nil, fmt.Errorf("included member index is zero")
+			}
+
+			if _, excluded := excludedMembersSet[memberIndex]; excluded {
+				return nil, nil, fmt.Errorf(
+					"member [%v] is both included and excluded in attempt",
+					memberIndex,
+				)
 			}
 
 			includedMembersSet[memberIndex] = struct{}{}
 		}
 	} else {
-		excludedMembersSet := make(map[group.MemberIndex]struct{})
-		if request.Attempt != nil {
-			for _, memberIndex := range request.Attempt.ExcludedMembersIndexes {
-				if memberIndex == 0 {
-					continue
-				}
-
-				excludedMembersSet[memberIndex] = struct{}{}
-			}
-		}
-
 		for i := 1; i <= request.GroupSize; i++ {
 			memberIndex := group.MemberIndex(i)
 			if _, excluded := excludedMembersSet[memberIndex]; !excluded {
@@ -464,6 +482,15 @@ func includedMembersFromRequest(
 
 	if len(includedMembersSet) == 0 {
 		return nil, nil, fmt.Errorf("included members set is empty")
+	}
+
+	if attempt != nil {
+		if _, included := includedMembersSet[attempt.CoordinatorMemberIndex]; !included {
+			return nil, nil, fmt.Errorf(
+				"attempt coordinator [%v] is not included",
+				attempt.CoordinatorMemberIndex,
+			)
+		}
 	}
 
 	includedMembersIndexes := make([]group.MemberIndex, 0, len(includedMembersSet))
