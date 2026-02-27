@@ -42,6 +42,7 @@ const buildTaggedTBTCSignerVersionPrefix = "tbtc-signer/"
 const buildTaggedTBTCSignerBootstrapVersionPrerelease = "bootstrap"
 const buildTaggedTBTCSignerSyntheticContributionDomain = "tbtc-signer-bootstrap-contribution-v1"
 const buildTaggedTBTCSignerMessageTypePrefix = "frost_signing/native_tbtc_signer/"
+const buildTaggedTBTCSignerConsumedAttemptReplayErrorFragment = "already consumed for sign attempt"
 
 type nativeTBTCSignerVersionedEngine interface {
 	Version() (string, error)
@@ -320,6 +321,15 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 		includedMembersIndexes,
 	)
 	if err != nil {
+		if isBuildTaggedTBTCSignerConsumedAttemptReplayError(err) {
+			return nil, fmt.Errorf(
+				"%w: consumed tbtc-signer attempt replay: %w: %v",
+				ErrNativeBridgeOperationFailed,
+				ErrConsumedSigningAttemptReplay,
+				err,
+			)
+		}
+
 		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
 			ctx,
 			logger,
@@ -357,6 +367,16 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 	)
 
 	return coarseSignature, nil
+}
+
+func isBuildTaggedTBTCSignerConsumedAttemptReplayError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "attempt_id") &&
+		strings.Contains(message, buildTaggedTBTCSignerConsumedAttemptReplayErrorFragment)
 }
 
 func buildTaggedTBTCSignerRunDKGInputs(
