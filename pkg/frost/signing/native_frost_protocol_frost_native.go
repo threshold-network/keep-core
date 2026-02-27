@@ -5,6 +5,7 @@ package signing
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -15,6 +16,12 @@ import (
 )
 
 const nativeFROSTMessageTypePrefix = "frost_signing/native_frost/"
+
+var (
+	// ErrInvalidSigningAttemptPolicy indicates the provided attempt metadata
+	// violates coordinator/cohort policy invariants.
+	ErrInvalidSigningAttemptPolicy = errors.New("invalid signing attempt policy")
+)
 
 type nativeFROSTUniFFIV2SignerMaterial struct {
 	KeyPackage       *NativeFROSTKeyPackage       `json:"keyPackage"`
@@ -435,11 +442,17 @@ func includedMembersFromRequest(
 	attempt := request.Attempt
 	if attempt != nil {
 		if attempt.Number == 0 {
-			return nil, nil, fmt.Errorf("attempt number is zero")
+			return nil, nil, fmt.Errorf(
+				"%w: attempt number is zero",
+				ErrInvalidSigningAttemptPolicy,
+			)
 		}
 
 		if attempt.CoordinatorMemberIndex == 0 {
-			return nil, nil, fmt.Errorf("attempt coordinator member index is zero")
+			return nil, nil, fmt.Errorf(
+				"%w: attempt coordinator member index is zero",
+				ErrInvalidSigningAttemptPolicy,
+			)
 		}
 	}
 
@@ -459,12 +472,16 @@ func includedMembersFromRequest(
 	if attempt != nil && len(attempt.IncludedMembersIndexes) > 0 {
 		for _, memberIndex := range attempt.IncludedMembersIndexes {
 			if memberIndex == 0 {
-				return nil, nil, fmt.Errorf("included member index is zero")
+				return nil, nil, fmt.Errorf(
+					"%w: included member index is zero",
+					ErrInvalidSigningAttemptPolicy,
+				)
 			}
 
 			if _, excluded := excludedMembersSet[memberIndex]; excluded {
 				return nil, nil, fmt.Errorf(
-					"member [%v] is both included and excluded in attempt",
+					"%w: member [%v] is both included and excluded in attempt",
+					ErrInvalidSigningAttemptPolicy,
 					memberIndex,
 				)
 			}
@@ -481,13 +498,21 @@ func includedMembersFromRequest(
 	}
 
 	if len(includedMembersSet) == 0 {
+		if attempt != nil {
+			return nil, nil, fmt.Errorf(
+				"%w: included members set is empty",
+				ErrInvalidSigningAttemptPolicy,
+			)
+		}
+
 		return nil, nil, fmt.Errorf("included members set is empty")
 	}
 
 	if attempt != nil {
 		if _, included := includedMembersSet[attempt.CoordinatorMemberIndex]; !included {
 			return nil, nil, fmt.Errorf(
-				"attempt coordinator [%v] is not included",
+				"%w: attempt coordinator [%v] is not included",
+				ErrInvalidSigningAttemptPolicy,
 				attempt.CoordinatorMemberIndex,
 			)
 		}
