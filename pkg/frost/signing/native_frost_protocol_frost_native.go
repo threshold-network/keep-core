@@ -21,6 +21,9 @@ var (
 	// ErrInvalidSigningAttemptPolicy indicates the provided attempt metadata
 	// violates coordinator/cohort policy invariants.
 	ErrInvalidSigningAttemptPolicy = errors.New("invalid signing attempt policy")
+	// ErrConsumedSigningAttemptReplay indicates signer-side replay protection
+	// rejected a previously consumed signing attempt payload.
+	ErrConsumedSigningAttemptReplay = errors.New("consumed signing attempt replay")
 )
 
 type nativeFROSTUniFFIV2SignerMaterial struct {
