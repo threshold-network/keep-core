@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -174,6 +175,14 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 
 	includedMembersSet, includedMembersIndexes, err := includedMembersFromRequest(request)
 	if err != nil {
+		if errors.Is(err, ErrInvalidSigningAttemptPolicy) {
+			return nil, fmt.Errorf(
+				"%w: invalid tbtc-signer signing attempt policy: [%v]",
+				ErrNativeBridgeOperationFailed,
+				err,
+			)
+		}
+
 		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
 			ctx,
 			logger,
