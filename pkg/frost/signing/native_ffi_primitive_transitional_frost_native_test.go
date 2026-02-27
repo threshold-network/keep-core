@@ -2360,29 +2360,6 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_InvalidAttemptPolicy_DoesNotFallback(
 	t *testing.T,
 ) {
-	engine := &mockBuildTaggedTBTCSignerEngine{
-		version: "tbtc-signer/0.1.0-bootstrap",
-	}
-	UnregisterNativeTBTCSignerEngine()
-	UnregisterNativeTBTCSignerFallbackObserver()
-	t.Cleanup(UnregisterNativeTBTCSignerEngine)
-	t.Cleanup(UnregisterNativeTBTCSignerFallbackObserver)
-
-	err := RegisterNativeTBTCSignerEngine(engine)
-	if err != nil {
-		t.Fatalf("unexpected registration error: [%v]", err)
-	}
-
-	var observedEvents []NativeTBTCSignerFallbackEvent
-	err = RegisterNativeTBTCSignerFallbackObserver(
-		func(event NativeTBTCSignerFallbackEvent) {
-			observedEvents = append(observedEvents, event)
-		},
-	)
-	if err != nil {
-		t.Fatalf("unexpected observer registration error: [%v]", err)
-	}
-
 	fixtures, err := tecdsatest.LoadPrivateKeyShareTestFixtures(3)
 	if err != nil {
 		t.Fatalf("failed loading key share fixtures: [%v]", err)
@@ -2403,53 +2380,130 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 		t.Fatalf("cannot marshal signer material payload: [%v]", err)
 	}
 
-	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
-
-	_, err = primitive.Sign(nil, nil, &NativeExecutionFFISigningRequest{
-		Message:            big.NewInt(123),
-		SessionID:          "session-1",
-		MemberIndex:        1,
-		GroupSize:          3,
-		DishonestThreshold: 1,
-		SignerMaterial: &NativeSignerMaterial{
-			Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
-			Payload: signerMaterialPayload,
+	testCases := []struct {
+		name    string
+		attempt *Attempt
+	}{
+		{
+			name: "zero attempt number",
+			attempt: &Attempt{
+				Number:                 0,
+				CoordinatorMemberIndex: 1,
+				IncludedMembersIndexes: []group.MemberIndex{1, 2},
+			},
 		},
-		Attempt: &Attempt{
-			Number:                 1,
-			CoordinatorMemberIndex: 2,
-			IncludedMembersIndexes: []group.MemberIndex{1, 2},
-			ExcludedMembersIndexes: []group.MemberIndex{2},
+		{
+			name: "zero coordinator",
+			attempt: &Attempt{
+				Number:                 1,
+				CoordinatorMemberIndex: 0,
+				IncludedMembersIndexes: []group.MemberIndex{1, 2},
+			},
 		},
-	})
-	if err == nil {
-		t.Fatal("expected error")
+		{
+			name: "coordinator not included",
+			attempt: &Attempt{
+				Number:                 1,
+				CoordinatorMemberIndex: 3,
+				IncludedMembersIndexes: []group.MemberIndex{1, 2},
+			},
+		},
+		{
+			name: "included members empty after exclusions",
+			attempt: &Attempt{
+				Number:                 1,
+				CoordinatorMemberIndex: 1,
+				ExcludedMembersIndexes: []group.MemberIndex{1, 2, 3},
+			},
+		},
+		{
+			name: "member included and excluded",
+			attempt: &Attempt{
+				Number:                 1,
+				CoordinatorMemberIndex: 2,
+				IncludedMembersIndexes: []group.MemberIndex{1, 2},
+				ExcludedMembersIndexes: []group.MemberIndex{2},
+			},
+		},
 	}
 
-	if !errors.Is(err, ErrNativeBridgeOperationFailed) {
-		t.Fatalf(
-			"unexpected error\nexpected: [%v]\nactual:   [%v]",
-			ErrNativeBridgeOperationFailed,
-			err,
-		)
-	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := &mockBuildTaggedTBTCSignerEngine{
+				version: "tbtc-signer/0.1.0-bootstrap",
+			}
+			UnregisterNativeTBTCSignerEngine()
+			UnregisterNativeTBTCSignerFallbackObserver()
+			t.Cleanup(UnregisterNativeTBTCSignerEngine)
+			t.Cleanup(UnregisterNativeTBTCSignerFallbackObserver)
 
-	if errors.Is(err, ErrNativeCryptographyUnavailable) {
-		t.Fatalf(
-			"unexpected error\nexpected not to include: [%v]\nactual:                 [%v]",
-			ErrNativeCryptographyUnavailable,
-			err,
-		)
-	}
+			err := RegisterNativeTBTCSignerEngine(engine)
+			if err != nil {
+				t.Fatalf("unexpected registration error: [%v]", err)
+			}
 
-	if engine.runDKGCalled {
-		t.Fatal("did not expect RunDKG call for invalid attempt policy")
-	}
+			var observedEvents []NativeTBTCSignerFallbackEvent
+			err = RegisterNativeTBTCSignerFallbackObserver(
+				func(event NativeTBTCSignerFallbackEvent) {
+					observedEvents = append(observedEvents, event)
+				},
+			)
+			if err != nil {
+				t.Fatalf("unexpected observer registration error: [%v]", err)
+			}
 
-	if len(observedEvents) != 0 {
-		t.Fatalf(
-			"did not expect fallback events\nactual: [%v]",
-			observedEvents,
-		)
+			primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
+
+			_, err = primitive.Sign(nil, nil, &NativeExecutionFFISigningRequest{
+				Message:            big.NewInt(123),
+				SessionID:          "session-1",
+				MemberIndex:        1,
+				GroupSize:          3,
+				DishonestThreshold: 1,
+				SignerMaterial: &NativeSignerMaterial{
+					Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
+					Payload: signerMaterialPayload,
+				},
+				Attempt: tc.attempt,
+			})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+
+			if !errors.Is(err, ErrNativeBridgeOperationFailed) {
+				t.Fatalf(
+					"unexpected error\nexpected: [%v]\nactual:   [%v]",
+					ErrNativeBridgeOperationFailed,
+					err,
+				)
+			}
+
+			if !errors.Is(err, ErrInvalidSigningAttemptPolicy) {
+				t.Fatalf(
+					"unexpected error\nexpected: [%v]\nactual:   [%v]",
+					ErrInvalidSigningAttemptPolicy,
+					err,
+				)
+			}
+
+			if errors.Is(err, ErrNativeCryptographyUnavailable) {
+				t.Fatalf(
+					"unexpected error\nexpected not to include: [%v]\nactual:                 [%v]",
+					ErrNativeCryptographyUnavailable,
+					err,
+				)
+			}
+
+			if engine.runDKGCalled {
+				t.Fatal("did not expect RunDKG call for invalid attempt policy")
+			}
+
+			if len(observedEvents) != 0 {
+				t.Fatalf(
+					"did not expect fallback events\nactual: [%v]",
+					observedEvents,
+				)
+			}
+		})
 	}
 }

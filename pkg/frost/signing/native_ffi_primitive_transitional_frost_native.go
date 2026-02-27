@@ -177,7 +177,7 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 	if err != nil {
 		if errors.Is(err, ErrInvalidSigningAttemptPolicy) {
 			return nil, fmt.Errorf(
-				"%w: invalid tbtc-signer signing attempt policy: [%v]",
+				"%w: invalid tbtc-signer signing attempt policy: %w",
 				ErrNativeBridgeOperationFailed,
 				err,
 			)
