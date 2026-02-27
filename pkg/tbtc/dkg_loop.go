@@ -199,6 +199,7 @@ func (drl *dkgRetryLoop) start(
 			drl.memberIndex,
 			fmt.Sprintf("%v-%v", drl.seed, drl.attemptCounter),
 		)
+		cancelAnnounceCtx()
 		if err != nil {
 			drl.logger.Warnf(
 				"[member:%v] announcement for attempt [%v] "+

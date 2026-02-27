@@ -113,9 +113,13 @@ func (s *Scheduler) resume() {
 // workMutex is locked.
 func (s *Scheduler) startWorker(workerFn func(context.Context)) {
 	ctx, cancelFn := context.WithCancel(context.Background())
-	s.stops = append(s.stops, cancelFn)
+	s.stops = append(s.stops, func() {
+		cancelFn()
+	})
 
 	go func() {
+		defer cancelFn()
+
 		for {
 			select {
 			case <-ctx.Done():

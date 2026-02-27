@@ -1518,6 +1518,8 @@ func withCancelOnBlock(
 	block uint64,
 	waitForBlockFn waitForBlockFn,
 ) (context.Context, context.CancelFunc) {
+	// #nosec G118 -- The returned cancel function is intentionally propagated
+	// to the caller and also invoked by the helper goroutine below.
 	blockCtx, cancelBlockCtx := context.WithCancel(ctx)
 
 	go func() {
