@@ -147,6 +147,56 @@ func TestBuildTaggedTBTCSignerResultStatusError_BridgeOperationFailure(t *testin
 	}
 }
 
+func TestBuildTaggedTBTCSignerResultStatusError_BridgeOperationFailure_InvalidPayload(
+	t *testing.T,
+) {
+	err := buildTaggedTBTCSignerResultStatusError(
+		"BuildTaprootTx",
+		2,
+		[]byte("{invalid-json"),
+	)
+	if err == nil {
+		t.Fatal("expected bridge operation failure error")
+	}
+
+	if !errors.Is(err, ErrNativeBridgeOperationFailed) {
+		t.Fatalf(
+			"expected native bridge operation failed error: [%v], got [%v]",
+			ErrNativeBridgeOperationFailed,
+			err,
+		)
+	}
+
+	if !strings.Contains(err.Error(), "cannot decode error payload") {
+		t.Fatalf("unexpected bridge operation error: [%v]", err)
+	}
+}
+
+func TestBuildTaggedTBTCSignerResultStatusError_BridgeOperationFailure_FallbackPayload(
+	t *testing.T,
+) {
+	err := buildTaggedTBTCSignerResultStatusError(
+		"BuildTaprootTx",
+		2,
+		[]byte(`{"code":"internal_error","message":"failed to encode error"}`),
+	)
+	if err == nil {
+		t.Fatal("expected bridge operation failure error")
+	}
+
+	if !errors.Is(err, ErrNativeBridgeOperationFailed) {
+		t.Fatalf(
+			"expected native bridge operation failed error: [%v], got [%v]",
+			ErrNativeBridgeOperationFailed,
+			err,
+		)
+	}
+
+	if !strings.Contains(err.Error(), "internal_error: failed to encode error") {
+		t.Fatalf("unexpected bridge operation error: [%v]", err)
+	}
+}
+
 func TestBuildTaggedTBTCSignerRunDKGRequestPayload(t *testing.T) {
 	payload, err := buildTaggedTBTCSignerRunDKGRequestPayload(
 		"session-1",
