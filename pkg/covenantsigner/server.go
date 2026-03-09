@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 
@@ -23,6 +24,9 @@ func Initialize(ctx context.Context, config Config, handle persistence.BasicHand
 	if config.Port == 0 {
 		return nil, false, nil
 	}
+	if config.Port < 0 || config.Port > 65535 {
+		return nil, false, fmt.Errorf("invalid covenant signer port [%d]", config.Port)
+	}
 
 	service, err := NewService(handle, NewPassiveEngine())
 	if err != nil {
@@ -37,13 +41,18 @@ func Initialize(ctx context.Context, config Config, handle persistence.BasicHand
 		},
 	}
 
+	listener, err := net.Listen("tcp", server.httpServer.Addr)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to bind covenant signer port [%d]: %w", config.Port, err)
+	}
+
 	go func() {
 		<-ctx.Done()
 		_ = server.httpServer.Shutdown(context.Background())
 	}()
 
 	go func() {
-		if err := server.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := server.httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Errorf("covenant signer server failed: [%v]", err)
 		}
 	}()
@@ -76,7 +85,6 @@ func decodeJSON[T any](w http.ResponseWriter, r *http.Request, target *T) bool {
 	defer r.Body.Close()
 
 	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return false
@@ -102,7 +110,8 @@ func handleError(w http.ResponseWriter, err error) {
 		return
 	}
 
-	http.Error(w, err.Error(), http.StatusInternalServerError)
+	logger.Errorf("covenant signer request failed: [%v]", err)
+	http.Error(w, "internal server error", http.StatusInternalServerError)
 }
 
 func submitHandler(service *Service, route TemplateID) http.HandlerFunc {

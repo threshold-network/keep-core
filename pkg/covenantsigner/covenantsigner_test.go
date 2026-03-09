@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/keep-network/keep-common/pkg/persistence"
 )
@@ -223,6 +225,70 @@ func TestServicePollCanTransitionToReady(t *testing.T) {
 	}
 }
 
+func TestServiceTimestampsAdvanceAcrossTransitions(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{
+		submit: func(*Job) (*Transition, error) {
+			return &Transition{State: JobStatePending, Detail: "queued"}, nil
+		},
+		poll: func(*Job) (*Transition, error) {
+			return &Transition{
+				State:          JobStateArtifactReady,
+				Detail:         "artifact ready",
+				PSBTHash:       "0x090a",
+				TransactionHex: "0x0b0c",
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	submitResult, err := service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_timestamps",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	submittedJob, ok, err := service.store.GetByRequestID(submitResult.RequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected submitted job")
+	}
+
+	time.Sleep(5 * time.Millisecond)
+
+	_, err = service.Poll(context.Background(), TemplateSelfV1, SignerPollInput{
+		RouteRequestID: "ors_timestamps",
+		RequestID:      submitResult.RequestID,
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	polledJob, ok, err := service.store.GetByRequestID(submitResult.RequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected polled job")
+	}
+
+	if submittedJob.CreatedAt == polledJob.UpdatedAt {
+		t.Fatalf("expected updated timestamp to advance, got created=%s updated=%s", submittedJob.CreatedAt, polledJob.UpdatedAt)
+	}
+	if polledJob.CompletedAt == "" {
+		t.Fatal("expected completed timestamp to be populated")
+	}
+}
+
 func TestServicePollMapsJobNotFoundToFailed(t *testing.T) {
 	handle := newMemoryHandle()
 	service, err := NewService(handle, &scriptedEngine{
@@ -354,5 +420,74 @@ func TestServerHandlesSubmitAndPathPoll(t *testing.T) {
 	if pollResponse.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(pollResponse.Body)
 		t.Fatalf("unexpected poll status: %d %s", pollResponse.StatusCode, string(body))
+	}
+}
+
+func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{
+		submit: func(*Job) (*Transition, error) {
+			return &Transition{State: JobStatePending, Detail: "queued"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(newHandler(service))
+	defer server.Close()
+
+	payload := bytes.NewBufferString(`{
+		"routeRequestId":"ors_http_unknown",
+		"stage":"SIGNER_COORDINATION",
+		"request":{
+			"facadeRequestId":"rf_123",
+			"idempotencyKey":"idem_123",
+			"route":"self_v1",
+			"strategy":"0x1234",
+			"reserve":"0xabcd",
+			"epoch":12,
+			"maturityHeight":912345,
+			"activeOutpoint":{"txid":"0x0102","vout":1,"scriptHash":"0x0304"},
+			"destinationCommitmentHash":"0x0506",
+			"artifactSignatures":["0x0708"],
+			"artifacts":{},
+			"scriptTemplate":{"template":"self_v1","depositorPublicKey":"0x021111","signerPublicKey":"0x022222","delta2":4320},
+			"signing":{"signerRequired":true,"custodianRequired":false},
+			"futureField":"ignored"
+		},
+		"futureTopLevel":"ignored"
+	}`)
+
+	response, err := http.Post(server.URL+"/v1/self_v1/signer/requests", "application/json", payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("unexpected submit status: %d %s", response.StatusCode, string(body))
+	}
+}
+
+func TestInitializeRejectsInvalidOrUnavailablePort(t *testing.T) {
+	handle := newMemoryHandle()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if _, enabled, err := Initialize(ctx, Config{Port: -1}, handle); err == nil || enabled {
+		t.Fatalf("expected invalid negative port to fail, got enabled=%v err=%v", enabled, err)
+	}
+
+	listener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	if _, enabled, err := Initialize(ctx, Config{Port: port}, handle); err == nil || enabled {
+		t.Fatalf("expected occupied port to fail, got enabled=%v err=%v", enabled, err)
 	}
 }

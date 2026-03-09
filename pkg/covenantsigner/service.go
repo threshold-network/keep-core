@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/keep-network/keep-common/pkg/persistence"
@@ -14,6 +15,7 @@ type Service struct {
 	store  *Store
 	engine Engine
 	now    func() time.Time
+	mutex  sync.Mutex
 }
 
 func NewService(handle persistence.BasicHandle, engine Engine) (*Service, error) {
@@ -29,7 +31,7 @@ func NewService(handle persistence.BasicHandle, engine Engine) (*Service, error)
 	return &Service{
 		store:  store,
 		engine: engine,
-		now:    time.Now().UTC,
+		now:    func() time.Time { return time.Now().UTC() },
 	}, nil
 }
 
@@ -98,6 +100,9 @@ func mapJobResult(job *Job) StepResult {
 }
 
 func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubmitInput) (StepResult, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
 	if err := validateSubmitInput(route, input); err != nil {
 		return StepResult{}, err
 	}
