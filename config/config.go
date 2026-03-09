@@ -21,6 +21,7 @@ import (
 	commonEthereum "github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/bitcoin/electrum"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
+	"github.com/keep-network/keep-core/pkg/covenantsigner"
 	"github.com/keep-network/keep-core/pkg/maintainer"
 	"github.com/keep-network/keep-core/pkg/net/libp2p"
 	"github.com/keep-network/keep-core/pkg/storage"
@@ -45,13 +46,14 @@ const (
 
 // Config is the top level config structure.
 type Config struct {
-	Ethereum   commonEthereum.Config
-	Bitcoin    BitcoinConfig
-	LibP2P     libp2p.Config `mapstructure:"network"`
-	Storage    storage.Config
-	ClientInfo clientinfo.Config
-	Maintainer maintainer.Config
-	Tbtc       tbtc.Config
+	Ethereum       commonEthereum.Config
+	Bitcoin        BitcoinConfig
+	LibP2P         libp2p.Config `mapstructure:"network"`
+	Storage        storage.Config
+	ClientInfo     clientinfo.Config
+	CovenantSigner covenantsigner.Config
+	Maintainer     maintainer.Config
+	Tbtc           tbtc.Config
 }
 
 // BitcoinConfig defines the configuration for Bitcoin.

@@ -9,6 +9,7 @@ const (
 	Network
 	Storage
 	ClientInfo
+	CovenantSigner
 	Tbtc
 	Maintainer
 	Developer
@@ -22,6 +23,7 @@ var StartCmdCategories = []Category{
 	Network,
 	Storage,
 	ClientInfo,
+	CovenantSigner,
 	Tbtc,
 	Developer,
 }
@@ -41,6 +43,7 @@ var AllCategories = []Category{
 	Network,
 	Storage,
 	ClientInfo,
+	CovenantSigner,
 	Tbtc,
 	Maintainer,
 	Developer,

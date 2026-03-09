@@ -39,6 +39,9 @@
         "NetworkMetricsTick": "43s",
         "EthereumMetricsTick": "1m27s"
     },
+    "CovenantSigner": {
+        "Port": 9702
+    },
     "Maintainer": {
         "BitcoinDifficulty": {
             "Enabled": true,

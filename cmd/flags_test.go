@@ -190,6 +190,13 @@ var cmdFlagsTests = map[string]struct {
 		expectedValueFromFlag: 76 * time.Second,
 		defaultValue:          10 * time.Minute,
 	},
+	"covenantSigner.port": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.CovenantSigner.Port },
+		flagName:              "--covenantSigner.port",
+		flagValue:             "9711",
+		expectedValueFromFlag: 9711,
+		defaultValue:          0,
+	},
 	"tbtc.preParamsPoolSize": {
 		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.PreParamsPoolSize },
 		flagName:              "--tbtc.preParamsPoolSize",

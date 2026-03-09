@@ -199,6 +199,10 @@ func TestReadConfigFromFile(t *testing.T) {
 			readValueFunc: func(c *Config) interface{} { return c.ClientInfo.EthereumMetricsTick },
 			expectedValue: 87 * time.Second,
 		},
+		"CovenantSigner.Port": {
+			readValueFunc: func(c *Config) interface{} { return c.CovenantSigner.Port },
+			expectedValue: 9702,
+		},
 		"Maintainer.BitcoinDifficulty.Enabled": {
 			readValueFunc: func(c *Config) interface{} { return c.Maintainer.BitcoinDifficulty.Enabled },
 			expectedValue: true,
