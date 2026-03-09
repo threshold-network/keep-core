@@ -195,6 +195,7 @@ func TestCovenantSignerEngine_SubmitSelfV1Ready(t *testing.T) {
 			CustodianRequired: false,
 		},
 	}
+	applyTestMigrationTransactionPlanCommitment(t, &request)
 
 	result, err := service.Submit(context.Background(), covenantsigner.TemplateSelfV1, covenantsigner.SignerSubmitInput{
 		RouteRequestID: "ors_self_ready",
@@ -423,6 +424,7 @@ func TestCovenantSignerEngine_SubmitQcV1HandoffReady(t *testing.T) {
 			CustodianRequired: true,
 		},
 	}
+	applyTestMigrationTransactionPlanCommitment(t, &request)
 
 	result, err := service.Submit(context.Background(), covenantsigner.TemplateQcV1, covenantsigner.SignerSubmitInput{
 		RouteRequestID: "ors_qc_ready",
@@ -661,6 +663,7 @@ func TestCovenantSignerEngine_SubmitQcV1RejectsInvalidBeta(t *testing.T) {
 	request.MigrationDestination.MigrationExtraData = testMigrationExtraData(revealer)
 	request.MigrationDestination.DestinationCommitmentHash = testDestinationCommitmentHash(t, request.MigrationDestination)
 	request.DestinationCommitmentHash = request.MigrationDestination.DestinationCommitmentHash
+	applyTestMigrationTransactionPlanCommitment(t, &request)
 
 	result, err := service.Submit(context.Background(), covenantsigner.TemplateQcV1, covenantsigner.SignerSubmitInput{
 		RouteRequestID: "ors_qc_bad_beta",
@@ -796,6 +799,7 @@ func TestCovenantSignerEngine_SubmitQcV1RejectsScriptHashMismatch(t *testing.T) 
 			CustodianRequired: true,
 		},
 	}
+	applyTestMigrationTransactionPlanCommitment(t, &request)
 
 	result, err := service.Submit(context.Background(), covenantsigner.TemplateQcV1, covenantsigner.SignerSubmitInput{
 		RouteRequestID: "ors_qc_bad_script_hash",
@@ -898,6 +902,7 @@ func TestCovenantSignerEngine_SubmitSelfV1RejectsZeroMaturityHeight(t *testing.T
 	request.MigrationDestination.MigrationExtraData = testMigrationExtraData(revealer)
 	request.MigrationDestination.DestinationCommitmentHash = testDestinationCommitmentHash(t, request.MigrationDestination)
 	request.DestinationCommitmentHash = request.MigrationDestination.DestinationCommitmentHash
+	applyTestMigrationTransactionPlanCommitment(t, &request)
 
 	result, err := service.Submit(context.Background(), covenantsigner.TemplateSelfV1, covenantsigner.SignerSubmitInput{
 		RouteRequestID: "ors_self_zero",
@@ -1067,4 +1072,66 @@ func testDestinationCommitmentHash(
 
 	sum := sha256.Sum256(payload)
 	return "0x" + hex.EncodeToString(sum[:])
+}
+
+type testMigrationTransactionPlanCommitmentPayload struct {
+	PlanVersion               uint32 `json:"planVersion"`
+	Reserve                   string `json:"reserve"`
+	Epoch                     uint64 `json:"epoch"`
+	ActiveOutpointTxID        string `json:"activeOutpointTxid"`
+	ActiveOutpointVout        uint32 `json:"activeOutpointVout"`
+	DestinationCommitmentHash string `json:"destinationCommitmentHash"`
+	InputValueSats            uint64 `json:"inputValueSats"`
+	DestinationValueSats      uint64 `json:"destinationValueSats"`
+	AnchorValueSats           uint64 `json:"anchorValueSats"`
+	FeeSats                   uint64 `json:"feeSats"`
+	InputSequence             uint32 `json:"inputSequence"`
+	LockTime                  uint64 `json:"lockTime"`
+}
+
+func testMigrationTransactionPlanCommitmentHash(
+	t *testing.T,
+	request covenantsigner.RouteSubmitRequest,
+	plan *covenantsigner.MigrationTransactionPlan,
+) string {
+	t.Helper()
+
+	payload, err := json.Marshal(testMigrationTransactionPlanCommitmentPayload{
+		PlanVersion:               plan.PlanVersion,
+		Reserve:                   strings.ToLower(request.Reserve),
+		Epoch:                     request.Epoch,
+		ActiveOutpointTxID:        strings.ToLower(request.ActiveOutpoint.TxID),
+		ActiveOutpointVout:        request.ActiveOutpoint.Vout,
+		DestinationCommitmentHash: strings.ToLower(request.DestinationCommitmentHash),
+		InputValueSats:            plan.InputValueSats,
+		DestinationValueSats:      plan.DestinationValueSats,
+		AnchorValueSats:           plan.AnchorValueSats,
+		FeeSats:                   plan.FeeSats,
+		InputSequence:             plan.InputSequence,
+		LockTime:                  plan.LockTime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sum := sha256.Sum256(payload)
+	return "0x" + hex.EncodeToString(sum[:])
+}
+
+func applyTestMigrationTransactionPlanCommitment(
+	t *testing.T,
+	request *covenantsigner.RouteSubmitRequest,
+) {
+	t.Helper()
+
+	if request.MigrationTransactionPlan == nil {
+		return
+	}
+
+	request.MigrationTransactionPlan.PlanVersion = 1
+	request.MigrationTransactionPlan.PlanCommitmentHash = testMigrationTransactionPlanCommitmentHash(
+		t,
+		*request,
+		request.MigrationTransactionPlan,
+	)
 }

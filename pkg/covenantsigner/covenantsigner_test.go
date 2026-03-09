@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -132,6 +133,7 @@ func baseRequest(route TemplateID) RouteSubmitRequest {
 		DestinationCommitmentHash: migrationDestination.DestinationCommitmentHash,
 		MigrationDestination:      migrationDestination,
 		MigrationTransactionPlan: &MigrationTransactionPlan{
+			PlanVersion:          migrationTransactionPlanVersion,
 			InputValueSats:       1000000,
 			DestinationValueSats: 998000,
 			AnchorValueSats:      canonicalAnchorValueSats,
@@ -151,6 +153,12 @@ func baseRequest(route TemplateID) RouteSubmitRequest {
 		request.ScriptTemplate = validQcTemplate()
 		request.Signing = SigningRequirements{SignerRequired: true, CustodianRequired: true}
 	}
+
+	request.MigrationTransactionPlan.PlanCommitmentHash, _ =
+		computeMigrationTransactionPlanCommitmentHash(
+			request,
+			request.MigrationTransactionPlan,
+		)
 
 	return request
 }
@@ -581,6 +589,20 @@ func TestServiceRejectsInvalidMigrationTransactionPlanVariants(t *testing.T) {
 			expectErr: "request.migrationTransactionPlan is required",
 		},
 		{
+			name: "missing plan version",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationTransactionPlan.PlanVersion = 0
+			},
+			expectErr: "request.migrationTransactionPlan.planVersion must equal 1",
+		},
+		{
+			name: "wrong commitment hash",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationTransactionPlan.PlanCommitmentHash = ""
+			},
+			expectErr: "request.migrationTransactionPlan.planCommitmentHash must be a 0x-prefixed even-length hex string",
+		},
+		{
 			name: "zero input value",
 			mutate: func(request *RouteSubmitRequest) {
 				request.MigrationTransactionPlan.InputValueSats = 0
@@ -630,6 +652,13 @@ func TestServiceRejectsInvalidMigrationTransactionPlanVariants(t *testing.T) {
 			expectErr: "request.migrationTransactionPlan.inputValueSats must cover anchorValueSats",
 		},
 		{
+			name: "tampered commitment hash",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationTransactionPlan.PlanCommitmentHash = "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+			},
+			expectErr: "request.migrationTransactionPlan.planCommitmentHash does not match canonical migration transaction plan",
+		},
+		{
 			name: "accounting mismatch",
 			mutate: func(request *RouteSubmitRequest) {
 				request.MigrationTransactionPlan.FeeSats++
@@ -652,6 +681,65 @@ func TestServiceRejectsInvalidMigrationTransactionPlanVariants(t *testing.T) {
 				t.Fatalf("expected %q, got %v", testCase.expectErr, err)
 			}
 		})
+	}
+}
+
+func TestServiceRejectsMigrationTransactionPlanBoundToDifferentDestinationCommitment(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := baseRequest(TemplateSelfV1)
+
+	mutatedDestination := validMigrationDestination()
+	mutatedDestination.Revealer = "0x4444444444444444444444444444444444444444"
+	mutatedDestination.MigrationExtraData = computeMigrationExtraData(mutatedDestination.Revealer)
+	mutatedDestination.DestinationCommitmentHash, err = computeDestinationCommitmentHash(mutatedDestination)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request.DestinationCommitmentHash = mutatedDestination.DestinationCommitmentHash
+	request.MigrationDestination = mutatedDestination
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_invalid_plan_destination_binding",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(err.Error(), "request.migrationTransactionPlan.planCommitmentHash does not match canonical migration transaction plan") {
+		t.Fatalf("expected plan binding error, got %v", err)
+	}
+}
+
+func TestMigrationTransactionPlanCommitmentHashMatchesCanonicalVector(t *testing.T) {
+	request := RouteSubmitRequest{
+		Reserve:                   "0x2000000000000000000000000000000000000002",
+		Epoch:                     12,
+		ActiveOutpoint:            CovenantOutpoint{TxID: "0x1111111111111111111111111111111111111111111111111111111111111111", Vout: 1},
+		DestinationCommitmentHash: "0xf1b1739d99ea890ea6d419d6db28f4d5fe0871c32619a0984c1bfdbe4025f768",
+	}
+	plan := &MigrationTransactionPlan{
+		PlanVersion:          migrationTransactionPlanVersion,
+		PlanCommitmentHash:   "0x0000000000000000000000000000000000000000000000000000000000000000",
+		InputValueSats:       1_000_000,
+		DestinationValueSats: 998_000,
+		AnchorValueSats:      canonicalAnchorValueSats,
+		FeeSats:              1_670,
+		InputSequence:        canonicalCovenantInputSequence,
+		LockTime:             950000,
+	}
+
+	actual, err := computeMigrationTransactionPlanCommitmentHash(request, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := "0x8dcafe57b888040d644e80dfd1b8b089dfd5016205d78316549ef71d032070f2"
+	if actual != expected {
+		t.Fatalf("unexpected plan commitment hash: %s", actual)
 	}
 }
 
@@ -765,7 +853,8 @@ func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
 	server := httptest.NewServer(newHandler(service, ""))
 	defer server.Close()
 
-	payload := bytes.NewBufferString(`{
+	base := baseRequest(TemplateSelfV1)
+	payload := bytes.NewBufferString(fmt.Sprintf(`{
 		"routeRequestId":"ors_http_unknown",
 		"stage":"SIGNER_COORDINATION",
 		"request":{
@@ -777,7 +866,7 @@ func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
 			"epoch":12,
 			"maturityHeight":912345,
 			"activeOutpoint":{"txid":"0x0102","vout":1,"scriptHash":"0x0304"},
-			"destinationCommitmentHash":"0x3efc50372759413e0f1900a2340fbb947648c524e5ec3cb4cf8887ea2d7df474",
+			"destinationCommitmentHash":"%s",
 			"migrationDestination":{
 				"reservationId":"cmdr_12345678",
 				"reserve":"0x1111111111111111111111111111111111111111",
@@ -790,9 +879,11 @@ func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
 				"depositScript":"0x0014aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				"depositScriptHash":"0x8532ec6785e391b2af968b5728d574e271c7f46658f5ed10845d9ad5b23ac6d3",
 				"migrationExtraData":"0x41435f4d49475241544556312222222222222222222222222222222222222222",
-				"destinationCommitmentHash":"0x3efc50372759413e0f1900a2340fbb947648c524e5ec3cb4cf8887ea2d7df474"
+				"destinationCommitmentHash":"%s"
 			},
 			"migrationTransactionPlan":{
+				"planVersion":1,
+				"planCommitmentHash":"%s",
 				"inputValueSats":1000000,
 				"destinationValueSats":998000,
 				"anchorValueSats":330,
@@ -807,7 +898,7 @@ func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
 			"futureField":"ignored"
 		},
 		"futureTopLevel":"ignored"
-	}`)
+	}`, base.DestinationCommitmentHash, base.DestinationCommitmentHash, base.MigrationTransactionPlan.PlanCommitmentHash))
 
 	response, err := http.Post(server.URL+"/v1/self_v1/signer/requests", "application/json", payload)
 	if err != nil {
