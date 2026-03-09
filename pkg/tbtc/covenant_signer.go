@@ -85,6 +85,9 @@ func (cse *covenantSignerEngine) submitSelfV1(
 	if err != nil {
 		return failedTransition(covenantsigner.ReasonInvalidInput, err.Error())
 	}
+	if err := validateSelfV1OutputValues(job.Request); err != nil {
+		return failedTransition(covenantsigner.ReasonInvalidInput, err.Error())
+	}
 
 	transaction, err := cse.buildAndSignSelfV1Transaction(
 		ctx,
@@ -145,6 +148,9 @@ func buildSelfV1WitnessScript(
 	template *covenantsigner.SelfV1Template,
 	maturityHeight uint64,
 ) (bitcoin.Script, error) {
+	if maturityHeight == 0 {
+		return nil, fmt.Errorf("maturity height must be greater than zero")
+	}
 	if maturityHeight > math.MaxUint32 {
 		return nil, fmt.Errorf("maturity height exceeds bitcoin locktime range")
 	}
@@ -233,6 +239,8 @@ func (cse *covenantSignerEngine) resolveSelfV1ActiveUtxo(
 	}
 
 	if request.ActiveOutpoint.ScriptHash != "" {
+		// The optional scriptHash convention follows the tBTC-side request
+		// contract: sha256(scriptPubKey) for the active covenant output.
 		scriptHash := sha256.Sum256(expectedScriptPubKey)
 		expectedScriptHash := "0x" + hex.EncodeToString(scriptHash[:])
 		if strings.ToLower(request.ActiveOutpoint.ScriptHash) != expectedScriptHash {
@@ -249,6 +257,22 @@ func (cse *covenantSignerEngine) resolveSelfV1ActiveUtxo(
 	}, nil
 }
 
+func validateSelfV1OutputValues(request covenantsigner.RouteSubmitRequest) error {
+	_, err := toBitcoinOutputValue(
+		request.MigrationTransactionPlan.DestinationValueSats,
+		"migration destination value",
+	)
+	if err != nil {
+		return err
+	}
+
+	_, err = toBitcoinOutputValue(
+		request.MigrationTransactionPlan.AnchorValueSats,
+		"migration anchor value",
+	)
+	return err
+}
+
 func (cse *covenantSignerEngine) buildAndSignSelfV1Transaction(
 	ctx context.Context,
 	signingExecutor *signingExecutor,
@@ -260,6 +284,20 @@ func (cse *covenantSignerEngine) buildAndSignSelfV1Transaction(
 	if err != nil {
 		return nil, fmt.Errorf("migration destination deposit script is invalid")
 	}
+	destinationValue, err := toBitcoinOutputValue(
+		request.MigrationTransactionPlan.DestinationValueSats,
+		"migration destination value",
+	)
+	if err != nil {
+		return nil, err
+	}
+	anchorValue, err := toBitcoinOutputValue(
+		request.MigrationTransactionPlan.AnchorValueSats,
+		"migration anchor value",
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	builder := bitcoin.NewTransactionBuilder(cse.node.btcChain)
 	if err := builder.AddScriptHashInput(activeUtxo, witnessScript); err != nil {
@@ -270,7 +308,7 @@ func (cse *covenantSignerEngine) buildAndSignSelfV1Transaction(
 	}
 	builder.SetLocktime(uint32(request.MigrationTransactionPlan.LockTime))
 	builder.AddOutput(&bitcoin.TransactionOutput{
-		Value:           int64(request.MigrationTransactionPlan.DestinationValueSats),
+		Value:           destinationValue,
 		PublicKeyScript: destinationScript,
 	})
 
@@ -279,7 +317,7 @@ func (cse *covenantSignerEngine) buildAndSignSelfV1Transaction(
 		return nil, err
 	}
 	builder.AddOutput(&bitcoin.TransactionOutput{
-		Value:           int64(request.MigrationTransactionPlan.AnchorValueSats),
+		Value:           anchorValue,
 		PublicKeyScript: anchorScript,
 	})
 
@@ -367,6 +405,14 @@ func canonicalCompressedPublicKeyBytes(encoded string) ([]byte, error) {
 	}
 
 	return parsed.SerializeCompressed(), nil
+}
+
+func toBitcoinOutputValue(value uint64, field string) (int64, error) {
+	if value > math.MaxInt64 {
+		return 0, fmt.Errorf("%s exceeds bitcoin output value range", field)
+	}
+
+	return int64(value), nil
 }
 
 func encodeScriptNumber(value uint32) ([]byte, error) {

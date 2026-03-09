@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 
@@ -296,6 +297,123 @@ func TestCovenantSignerEngine_SubmitSelfV1Ready(t *testing.T) {
 	}
 	if !ecdsa.Verify(walletPublicKey, sighashBytes, parsedSignature.R, parsedSignature.S) {
 		t.Fatal("invalid covenant signature")
+	}
+}
+
+func TestCovenantSignerEngine_SubmitSelfV1RejectsZeroMaturityHeight(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+
+	service, err := covenantsigner.NewService(
+		newCovenantSignerMemoryHandle(),
+		newCovenantSignerEngine(node),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	depositorPrivateKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), bytes.Repeat([]byte{0x42}, 32))
+	depositorPublicKey := depositorPrivateKey.PubKey().SerializeCompressed()
+	signerPublicKey := (*btcec.PublicKey)(walletPublicKey).SerializeCompressed()
+
+	template := &covenantsigner.SelfV1Template{
+		Template:           covenantsigner.TemplateSelfV1,
+		DepositorPublicKey: "0x" + hex.EncodeToString(depositorPublicKey),
+		SignerPublicKey:    "0x" + hex.EncodeToString(signerPublicKey),
+		Delta2:             4320,
+	}
+	templateJSON, err := json.Marshal(template)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	destinationScript, err := bitcoin.PayToWitnessPublicKeyHash([20]byte{
+		0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+		0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+		0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+		0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	revealer := "0x2222222222222222222222222222222222222222"
+	reserve := "0x1111111111111111111111111111111111111111"
+	vault := "0x3333333333333333333333333333333333333333"
+	request := covenantsigner.RouteSubmitRequest{
+		FacadeRequestID: "rf_self_zero",
+		IdempotencyKey:  "idem_self_zero",
+		Route:           covenantsigner.TemplateSelfV1,
+		Strategy:        "0x1234",
+		Reserve:         reserve,
+		Epoch:           12,
+		MaturityHeight:  0,
+		ActiveOutpoint: covenantsigner.CovenantOutpoint{
+			TxID: "0x" + strings.Repeat("11", 32),
+		},
+		MigrationDestination: &covenantsigner.MigrationDestinationReservation{
+			ReservationID:             "cmdr_self_zero",
+			Reserve:                   reserve,
+			Epoch:                     12,
+			Route:                     covenantsigner.ReservationRouteMigration,
+			Revealer:                  revealer,
+			Vault:                     vault,
+			Network:                   "regtest",
+			Status:                    covenantsigner.ReservationStatusReserved,
+			DepositScript:             "0x" + hex.EncodeToString(destinationScript),
+		},
+		MigrationTransactionPlan: &covenantsigner.MigrationTransactionPlan{
+			InputValueSats:       1_000_000,
+			DestinationValueSats: 998_000,
+			AnchorValueSats:      330,
+			FeeSats:              1_670,
+			InputSequence:        0xfffffffd,
+			LockTime:             0,
+		},
+		ArtifactSignatures: []string{"0x0708"},
+		Artifacts:          map[covenantsigner.RecoveryPathID]covenantsigner.ArtifactRecord{},
+		ScriptTemplate:     templateJSON,
+		Signing: covenantsigner.SigningRequirements{
+			SignerRequired:    true,
+			CustodianRequired: false,
+		},
+	}
+	request.MigrationDestination.DepositScriptHash = testDepositScriptHash(t, destinationScript)
+	request.MigrationDestination.MigrationExtraData = testMigrationExtraData(revealer)
+	request.MigrationDestination.DestinationCommitmentHash = testDestinationCommitmentHash(t, request.MigrationDestination)
+	request.DestinationCommitmentHash = request.MigrationDestination.DestinationCommitmentHash
+
+	result, err := service.Submit(context.Background(), covenantsigner.TemplateSelfV1, covenantsigner.SignerSubmitInput{
+		RouteRequestID: "ors_self_zero",
+		Stage:          covenantsigner.StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Status != covenantsigner.StepStatusFailed {
+		t.Fatalf("expected FAILED, got %s", result.Status)
+	}
+	if result.Reason != covenantsigner.ReasonInvalidInput {
+		t.Fatalf("unexpected failure reason: %s", result.Reason)
+	}
+	if !strings.Contains(result.Detail, "maturity height must be greater than zero") {
+		t.Fatalf("unexpected failure detail: %s", result.Detail)
+	}
+}
+
+func TestValidateSelfV1OutputValues_RejectsValuesExceedingInt64(t *testing.T) {
+	err := validateSelfV1OutputValues(covenantsigner.RouteSubmitRequest{
+		MigrationTransactionPlan: &covenantsigner.MigrationTransactionPlan{
+			DestinationValueSats: uint64(math.MaxInt64) + 1,
+			AnchorValueSats:      330,
+		},
+	})
+	if err == nil {
+		t.Fatal("expected output value validation error")
+	}
+	if !strings.Contains(err.Error(), "migration destination value exceeds bitcoin output value range") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
