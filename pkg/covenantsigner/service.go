@@ -100,16 +100,16 @@ func mapJobResult(job *Job) StepResult {
 }
 
 func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubmitInput) (StepResult, error) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
 	if err := validateSubmitInput(route, input); err != nil {
 		return StepResult{}, err
 	}
 
+	s.mutex.Lock()
 	if existing, ok, err := s.store.GetByRouteRequest(route, input.RouteRequestID); err != nil {
+		s.mutex.Unlock()
 		return StepResult{}, err
 	} else if ok {
+		s.mutex.Unlock()
 		return mapJobResult(existing), nil
 	}
 
@@ -122,12 +122,14 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 
 	requestID, err := newRequestID(requestIDPrefix)
 	if err != nil {
+		s.mutex.Unlock()
 		return StepResult{}, err
 	}
 
 	now := s.now()
 	requestDigest, err := requestDigest(input.Request)
 	if err != nil {
+		s.mutex.Unlock()
 		return StepResult{}, err
 	}
 
@@ -146,8 +148,10 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 	}
 
 	if err := s.store.Put(job); err != nil {
+		s.mutex.Unlock()
 		return StepResult{}, err
 	}
+	s.mutex.Unlock()
 
 	transition, err := s.engine.OnSubmit(ctx, job)
 	if err != nil {
@@ -160,6 +164,9 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 			Detail: "accepted for covenant signing",
 		}
 	}
+
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 
 	applyTransition(job, transition, s.now())
 	if err := s.store.Put(job); err != nil {

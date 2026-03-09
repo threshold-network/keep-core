@@ -210,6 +210,87 @@ func TestServiceSubmitDeduplicatesByRouteRequestID(t *testing.T) {
 	}
 }
 
+func TestServiceSubmitReturnsExistingJobWhileInitialEngineCallIsInFlight(t *testing.T) {
+	handle := newMemoryHandle()
+	engineStarted := make(chan struct{})
+	releaseEngine := make(chan struct{})
+
+	service, err := NewService(handle, &scriptedEngine{
+		submit: func(*Job) (*Transition, error) {
+			select {
+			case <-engineStarted:
+			default:
+				close(engineStarted)
+			}
+
+			<-releaseEngine
+			return &Transition{State: JobStatePending, Detail: "queued"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	input := SignerSubmitInput{
+		RouteRequestID: "ors_inflight",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	}
+
+	firstResultChan := make(chan StepResult, 1)
+	firstErrChan := make(chan error, 1)
+	go func() {
+		result, err := service.Submit(context.Background(), TemplateSelfV1, input)
+		if err != nil {
+			firstErrChan <- err
+			return
+		}
+
+		firstResultChan <- result
+	}()
+
+	<-engineStarted
+
+	secondResultChan := make(chan StepResult, 1)
+	secondErrChan := make(chan error, 1)
+	go func() {
+		result, err := service.Submit(context.Background(), TemplateSelfV1, input)
+		if err != nil {
+			secondErrChan <- err
+			return
+		}
+
+		secondResultChan <- result
+	}()
+
+	var secondResult StepResult
+	select {
+	case err := <-secondErrChan:
+		t.Fatal(err)
+	case secondResult = <-secondResultChan:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected deduplicated submit to return while initial engine call is in flight")
+	}
+
+	close(releaseEngine)
+
+	var firstResult StepResult
+	select {
+	case err := <-firstErrChan:
+		t.Fatal(err)
+	case firstResult = <-firstResultChan:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected initial submit to finish after engine release")
+	}
+
+	if firstResult.RequestID == "" {
+		t.Fatal("expected durable request id on initial submit")
+	}
+	if firstResult.RequestID != secondResult.RequestID {
+		t.Fatalf("expected in-flight dedupe to reuse request id, got %s vs %s", firstResult.RequestID, secondResult.RequestID)
+	}
+}
+
 func TestServicePollCanTransitionToReady(t *testing.T) {
 	handle := newMemoryHandle()
 	service, err := NewService(handle, &scriptedEngine{
@@ -627,7 +708,7 @@ func TestServerHandlesSubmitAndPathPoll(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(newHandler(service))
+	server := httptest.NewServer(newHandler(service, ""))
 	defer server.Close()
 
 	submitPayload := mustJSON(t, SignerSubmitInput{
@@ -681,7 +762,7 @@ func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(newHandler(service))
+	server := httptest.NewServer(newHandler(service, ""))
 	defer server.Close()
 
 	payload := bytes.NewBufferString(`{
@@ -748,15 +829,101 @@ func TestInitializeRejectsInvalidOrUnavailablePort(t *testing.T) {
 	if _, enabled, err := Initialize(ctx, Config{Port: -1}, handle, nil); err == nil || enabled {
 		t.Fatalf("expected invalid negative port to fail, got enabled=%v err=%v", enabled, err)
 	}
+	if _, enabled, err := Initialize(
+		ctx,
+		Config{Port: 9711, ListenAddress: "0.0.0.0"},
+		handle,
+		nil,
+	); err == nil || enabled {
+		t.Fatalf("expected non-loopback bind without auth token to fail, got enabled=%v err=%v", enabled, err)
+	}
 
-	listener, err := net.Listen("tcp", ":0")
+	listener, err := net.Listen("tcp", net.JoinHostPort(DefaultListenAddress, "0"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer listener.Close()
 
 	port := listener.Addr().(*net.TCPAddr).Port
-	if _, enabled, err := Initialize(ctx, Config{Port: port}, handle, nil); err == nil || enabled {
+	if _, enabled, err := Initialize(
+		ctx,
+		Config{Port: port, ListenAddress: DefaultListenAddress},
+		handle,
+		nil,
+	); err == nil || enabled {
 		t.Fatalf("expected occupied port to fail, got enabled=%v err=%v", enabled, err)
+	}
+}
+
+func TestServerRequiresBearerTokenWhenConfigured(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{
+		submit: func(*Job) (*Transition, error) {
+			return &Transition{State: JobStatePending, Detail: "queued"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(newHandler(service, "test-token"))
+	defer server.Close()
+
+	submitPayload := mustJSON(t, SignerSubmitInput{
+		RouteRequestID: "ors_http_auth",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	})
+
+	response, err := http.Get(server.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected healthz status: %d", response.StatusCode)
+	}
+
+	request, err := http.NewRequest(
+		http.MethodPost,
+		server.URL+"/v1/self_v1/signer/requests",
+		bytes.NewReader(submitPayload),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusUnauthorized {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("expected unauthorized submit without bearer token, got %d %s", response.StatusCode, string(body))
+	}
+
+	authorizedRequest, err := http.NewRequest(
+		http.MethodPost,
+		server.URL+"/v1/self_v1/signer/requests",
+		bytes.NewReader(submitPayload),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizedRequest.Header.Set("Content-Type", "application/json")
+	authorizedRequest.Header.Set("Authorization", "Bearer test-token")
+
+	authorizedResponse, err := http.DefaultClient.Do(authorizedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authorizedResponse.Body.Close()
+
+	if authorizedResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(authorizedResponse.Body)
+		t.Fatalf("unexpected authorized submit status: %d %s", authorizedResponse.StatusCode, string(body))
 	}
 }

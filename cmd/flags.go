@@ -320,6 +320,18 @@ func initCovenantSignerFlags(cmd *cobra.Command, cfg *config.Config) {
 		covenantsigner.Config{}.Port,
 		"Covenant signer provider HTTP server listening port. Zero disables the service.",
 	)
+	cmd.Flags().StringVar(
+		&cfg.CovenantSigner.ListenAddress,
+		"covenantSigner.listenAddress",
+		covenantsigner.DefaultListenAddress,
+		"Covenant signer provider HTTP listen address. Defaults to loopback-only.",
+	)
+	cmd.Flags().StringVar(
+		&cfg.CovenantSigner.AuthToken,
+		"covenantSigner.authToken",
+		covenantsigner.Config{}.AuthToken,
+		"Covenant signer provider static Bearer auth token. Required for non-loopback binds; prefer config file or env var over CLI in production.",
+	)
 }
 
 // Initialize flags for Maintainer configuration.
