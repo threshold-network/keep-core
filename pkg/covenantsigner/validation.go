@@ -256,6 +256,9 @@ func validateCommonRequest(route TemplateID, request RouteSubmitRequest) error {
 	if err := validateMigrationDestination(request, request.MigrationDestination); err != nil {
 		return err
 	}
+	// This intentionally creates the next deployment ordering constraint: the
+	// orchestrator must supply the canonical migration transaction plan before
+	// this signer version can accept requests.
 	if err := validateMigrationTransactionPlan(request, request.MigrationTransactionPlan); err != nil {
 		return err
 	}
