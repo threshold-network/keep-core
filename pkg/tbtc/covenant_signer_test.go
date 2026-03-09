@@ -300,6 +300,523 @@ func TestCovenantSignerEngine_SubmitSelfV1Ready(t *testing.T) {
 	}
 }
 
+func TestCovenantSignerEngine_SubmitQcV1HandoffReady(t *testing.T) {
+	node, bitcoinChain, walletPublicKey := setupCovenantSignerTestNode(t)
+
+	service, err := covenantsigner.NewService(
+		newCovenantSignerMemoryHandle(),
+		newCovenantSignerEngine(node),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	depositorPrivateKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), bytes.Repeat([]byte{0x42}, 32))
+	depositorPublicKey := depositorPrivateKey.PubKey().SerializeCompressed()
+	custodianPrivateKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), bytes.Repeat([]byte{0x24}, 32))
+	custodianPublicKey := custodianPrivateKey.PubKey().SerializeCompressed()
+	signerPublicKey := (*btcec.PublicKey)(walletPublicKey).SerializeCompressed()
+
+	template := &covenantsigner.QcV1Template{
+		Template:           covenantsigner.TemplateQcV1,
+		DepositorPublicKey: "0x" + hex.EncodeToString(depositorPublicKey),
+		CustodianPublicKey: "0x" + hex.EncodeToString(custodianPublicKey),
+		SignerPublicKey:    "0x" + hex.EncodeToString(signerPublicKey),
+		Beta:               144,
+		Delta2:             4320,
+	}
+	templateJSON, err := json.Marshal(template)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	maturityHeight := uint64(912345)
+	witnessScript, err := buildQcV1WitnessScript(template, maturityHeight)
+	if err != nil {
+		t.Fatal(err)
+	}
+	witnessScriptHash := bitcoin.WitnessScriptHash(witnessScript)
+	activeScriptPubKey, err := bitcoin.PayToWitnessScriptHash(witnessScriptHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	destinationScript, err := bitcoin.PayToWitnessPublicKeyHash([20]byte{
+		0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
+		0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
+		0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
+		0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		inputValueSats       = uint64(2_000_000)
+		destinationValueSats = uint64(1_997_500)
+		anchorValueSats      = uint64(330)
+		feeSats              = uint64(2_170)
+	)
+
+	prevTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           int64(inputValueSats),
+				PublicKeyScript: activeScriptPubKey,
+			},
+		},
+		Locktime: 0,
+	}
+	bitcoinChain.transactions = append(bitcoinChain.transactions, prevTransaction)
+
+	activeScriptHash := sha256.Sum256(activeScriptPubKey)
+	revealer := "0x4444444444444444444444444444444444444444"
+	reserve := "0x1111111111111111111111111111111111111111"
+	vault := "0x3333333333333333333333333333333333333333"
+
+	migrationDestination := &covenantsigner.MigrationDestinationReservation{
+		ReservationID: "cmdr_qc_1",
+		Reserve:       reserve,
+		Epoch:         21,
+		Route:         covenantsigner.ReservationRouteMigration,
+		Revealer:      revealer,
+		Vault:         vault,
+		Network:       "regtest",
+		Status:        covenantsigner.ReservationStatusCommittedToEpoch,
+		DepositScript: "0x" + hex.EncodeToString(destinationScript),
+	}
+	migrationDestination.DepositScriptHash = testDepositScriptHash(t, destinationScript)
+	migrationDestination.MigrationExtraData = testMigrationExtraData(revealer)
+	migrationDestination.DestinationCommitmentHash = testDestinationCommitmentHash(t, migrationDestination)
+
+	request := covenantsigner.RouteSubmitRequest{
+		FacadeRequestID:           "rf_qc_1",
+		IdempotencyKey:            "idem_qc_1",
+		Route:                     covenantsigner.TemplateQcV1,
+		Strategy:                  "0x1234",
+		Reserve:                   reserve,
+		Epoch:                     21,
+		MaturityHeight:            maturityHeight,
+		ActiveOutpoint:            covenantsigner.CovenantOutpoint{TxID: "0x" + prevTransaction.Hash().Hex(bitcoin.ReversedByteOrder), Vout: 0, ScriptHash: "0x" + hex.EncodeToString(activeScriptHash[:])},
+		DestinationCommitmentHash: migrationDestination.DestinationCommitmentHash,
+		MigrationDestination:      migrationDestination,
+		MigrationTransactionPlan: &covenantsigner.MigrationTransactionPlan{
+			InputValueSats:       inputValueSats,
+			DestinationValueSats: destinationValueSats,
+			AnchorValueSats:      anchorValueSats,
+			FeeSats:              feeSats,
+			InputSequence:        0xfffffffd,
+			LockTime:             maturityHeight,
+		},
+		ArtifactSignatures: []string{"0x090a"},
+		Artifacts:          map[covenantsigner.RecoveryPathID]covenantsigner.ArtifactRecord{},
+		ScriptTemplate:     templateJSON,
+		Signing: covenantsigner.SigningRequirements{
+			SignerRequired:    true,
+			CustodianRequired: true,
+		},
+	}
+
+	result, err := service.Submit(context.Background(), covenantsigner.TemplateQcV1, covenantsigner.SignerSubmitInput{
+		RouteRequestID: "ors_qc_ready",
+		Stage:          covenantsigner.StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Status != covenantsigner.StepStatusReady {
+		t.Fatalf("expected READY, got %s", result.Status)
+	}
+	if result.Handoff == nil {
+		t.Fatal("expected handoff payload")
+	}
+	if result.TransactionHex != "" || result.PSBTHash != "" {
+		t.Fatalf("expected handoff-only result, got %#v", result)
+	}
+
+	handoffKind, ok := result.Handoff["kind"].(string)
+	if !ok || handoffKind != qcV1SignerHandoffKind {
+		t.Fatalf("unexpected handoff kind: %#v", result.Handoff["kind"])
+	}
+	if signerRequestID, ok := result.Handoff["signerRequestId"].(string); !ok || signerRequestID != result.RequestID {
+		t.Fatalf("unexpected signerRequestId: %#v", result.Handoff["signerRequestId"])
+	}
+	if requiresDummy, ok := result.Handoff["requiresDummy"].(bool); !ok || !requiresDummy {
+		t.Fatalf("unexpected requiresDummy: %#v", result.Handoff["requiresDummy"])
+	}
+	if sighashType, ok := result.Handoff["sighashType"].(uint32); !ok || sighashType != uint32(txscript.SigHashAll) {
+		t.Fatalf("unexpected sighashType: %#v", result.Handoff["sighashType"])
+	}
+
+	selectorWitnessItems, ok := result.Handoff["selectorWitnessItems"].([]string)
+	if !ok {
+		t.Fatalf("unexpected selector witness items type: %#v", result.Handoff["selectorWitnessItems"])
+	}
+	if len(selectorWitnessItems) != 2 || selectorWitnessItems[0] != "0x01" || selectorWitnessItems[1] != "0x" {
+		t.Fatalf("unexpected selector witness items: %#v", selectorWitnessItems)
+	}
+
+	unsignedTransactionHex, ok := result.Handoff["unsignedTransactionHex"].(string)
+	if !ok || unsignedTransactionHex == "" {
+		t.Fatalf("unexpected unsignedTransactionHex: %#v", result.Handoff["unsignedTransactionHex"])
+	}
+	unsignedTransactionBytes, err := hex.DecodeString(strings.TrimPrefix(unsignedTransactionHex, "0x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsignedTransaction := &bitcoin.Transaction{}
+	if err := unsignedTransaction.Deserialize(unsignedTransactionBytes); err != nil {
+		t.Fatal(err)
+	}
+
+	if unsignedTransaction.Locktime != uint32(maturityHeight) {
+		t.Fatalf("unexpected locktime: %d", unsignedTransaction.Locktime)
+	}
+	if len(unsignedTransaction.Inputs) != 1 {
+		t.Fatalf("unexpected input count: %d", len(unsignedTransaction.Inputs))
+	}
+	if unsignedTransaction.Inputs[0].Sequence != 0xfffffffd {
+		t.Fatalf("unexpected input sequence: %x", unsignedTransaction.Inputs[0].Sequence)
+	}
+	if len(unsignedTransaction.Outputs) != 2 {
+		t.Fatalf("unexpected output count: %d", len(unsignedTransaction.Outputs))
+	}
+	if unsignedTransaction.Outputs[0].Value != int64(destinationValueSats) {
+		t.Fatalf("unexpected destination value: %d", unsignedTransaction.Outputs[0].Value)
+	}
+	if !bytes.Equal(unsignedTransaction.Outputs[0].PublicKeyScript, destinationScript) {
+		t.Fatal("unexpected destination output script")
+	}
+
+	expectedAnchorScript, err := canonicalAnchorScriptPubKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unsignedTransaction.Outputs[1].Value != int64(anchorValueSats) {
+		t.Fatalf("unexpected anchor value: %d", unsignedTransaction.Outputs[1].Value)
+	}
+	if !bytes.Equal(unsignedTransaction.Outputs[1].PublicKeyScript, expectedAnchorScript) {
+		t.Fatal("unexpected anchor output script")
+	}
+
+	witnessScriptHex, ok := result.Handoff["witnessScript"].(string)
+	if !ok || witnessScriptHex == "" {
+		t.Fatalf("unexpected witnessScript: %#v", result.Handoff["witnessScript"])
+	}
+	if witnessScriptHex != "0x"+hex.EncodeToString(witnessScript) {
+		t.Fatalf("unexpected witness script hex: %s", witnessScriptHex)
+	}
+
+	signatureHex, ok := result.Handoff["signerSignature"].(string)
+	if !ok || signatureHex == "" {
+		t.Fatalf("unexpected signerSignature: %#v", result.Handoff["signerSignature"])
+	}
+	signatureBytes, err := hex.DecodeString(strings.TrimPrefix(signatureHex, "0x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(signatureBytes) == 0 || signatureBytes[len(signatureBytes)-1] != byte(txscript.SigHashAll) {
+		t.Fatal("unexpected sighash type in handoff signature")
+	}
+
+	wireTransaction := wire.NewMsgTx(wire.TxVersion)
+	if err := wireTransaction.Deserialize(bytes.NewReader(unsignedTransaction.Serialize(bitcoin.Standard))); err != nil {
+		t.Fatal(err)
+	}
+	sighashBytes, err := txscript.CalcWitnessSigHash(
+		witnessScript,
+		txscript.NewTxSigHashes(wireTransaction),
+		txscript.SigHashAll,
+		wireTransaction,
+		0,
+		int64(inputValueSats),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsedSignature, err := btcec.ParseDERSignature(signatureBytes[:len(signatureBytes)-1], btcec.S256())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ecdsa.Verify(walletPublicKey, sighashBytes, parsedSignature.R, parsedSignature.S) {
+		t.Fatal("invalid qc_v1 signer handoff signature")
+	}
+
+	expectedPayloadHash, err := computeQcV1SignerHandoffPayloadHash(map[string]any{
+		"kind":                      qcV1SignerHandoffKind,
+		"unsignedTransactionHex":    unsignedTransactionHex,
+		"witnessScript":             witnessScriptHex,
+		"signerSignature":           signatureHex,
+		"selectorWitnessItems":      selectorWitnessItems,
+		"requiresDummy":             true,
+		"sighashType":               uint32(txscript.SigHashAll),
+		"destinationCommitmentHash": request.DestinationCommitmentHash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if payloadHash, ok := result.Handoff["payloadHash"].(string); !ok || payloadHash != expectedPayloadHash {
+		t.Fatalf("unexpected payloadHash: %#v", result.Handoff["payloadHash"])
+	}
+	if bundleID, ok := result.Handoff["bundleId"].(string); !ok || bundleID != expectedPayloadHash {
+		t.Fatalf("unexpected bundleId: %#v", result.Handoff["bundleId"])
+	}
+	if destinationCommitmentHash, ok := result.Handoff["destinationCommitmentHash"].(string); !ok || destinationCommitmentHash != request.DestinationCommitmentHash {
+		t.Fatalf("unexpected destinationCommitmentHash: %#v", result.Handoff["destinationCommitmentHash"])
+	}
+}
+
+func TestCovenantSignerEngine_SubmitQcV1RejectsInvalidBeta(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+
+	service, err := covenantsigner.NewService(
+		newCovenantSignerMemoryHandle(),
+		newCovenantSignerEngine(node),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	depositorPrivateKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), bytes.Repeat([]byte{0x42}, 32))
+	depositorPublicKey := depositorPrivateKey.PubKey().SerializeCompressed()
+	custodianPrivateKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), bytes.Repeat([]byte{0x24}, 32))
+	custodianPublicKey := custodianPrivateKey.PubKey().SerializeCompressed()
+	signerPublicKey := (*btcec.PublicKey)(walletPublicKey).SerializeCompressed()
+
+	template := &covenantsigner.QcV1Template{
+		Template:           covenantsigner.TemplateQcV1,
+		DepositorPublicKey: "0x" + hex.EncodeToString(depositorPublicKey),
+		CustodianPublicKey: "0x" + hex.EncodeToString(custodianPublicKey),
+		SignerPublicKey:    "0x" + hex.EncodeToString(signerPublicKey),
+		Beta:               500,
+		Delta2:             4320,
+	}
+	templateJSON, err := json.Marshal(template)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	destinationScript, err := bitcoin.PayToWitnessPublicKeyHash([20]byte{
+		0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
+		0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
+		0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
+		0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	revealer := "0x4444444444444444444444444444444444444444"
+	reserve := "0x1111111111111111111111111111111111111111"
+	vault := "0x3333333333333333333333333333333333333333"
+	request := covenantsigner.RouteSubmitRequest{
+		FacadeRequestID: "rf_qc_bad_beta",
+		IdempotencyKey:  "idem_qc_bad_beta",
+		Route:           covenantsigner.TemplateQcV1,
+		Strategy:        "0x1234",
+		Reserve:         reserve,
+		Epoch:           21,
+		MaturityHeight:  500,
+		ActiveOutpoint: covenantsigner.CovenantOutpoint{
+			TxID: "0x" + strings.Repeat("11", 32),
+		},
+		MigrationDestination: &covenantsigner.MigrationDestinationReservation{
+			ReservationID: "cmdr_qc_bad_beta",
+			Reserve:       reserve,
+			Epoch:         21,
+			Route:         covenantsigner.ReservationRouteMigration,
+			Revealer:      revealer,
+			Vault:         vault,
+			Network:       "regtest",
+			Status:        covenantsigner.ReservationStatusReserved,
+			DepositScript: "0x" + hex.EncodeToString(destinationScript),
+		},
+		MigrationTransactionPlan: &covenantsigner.MigrationTransactionPlan{
+			InputValueSats:       2_000_000,
+			DestinationValueSats: 1_997_500,
+			AnchorValueSats:      330,
+			FeeSats:              2_170,
+			InputSequence:        0xfffffffd,
+			LockTime:             500,
+		},
+		ArtifactSignatures: []string{"0x090a"},
+		Artifacts:          map[covenantsigner.RecoveryPathID]covenantsigner.ArtifactRecord{},
+		ScriptTemplate:     templateJSON,
+		Signing: covenantsigner.SigningRequirements{
+			SignerRequired:    true,
+			CustodianRequired: true,
+		},
+	}
+	request.MigrationDestination.DepositScriptHash = testDepositScriptHash(t, destinationScript)
+	request.MigrationDestination.MigrationExtraData = testMigrationExtraData(revealer)
+	request.MigrationDestination.DestinationCommitmentHash = testDestinationCommitmentHash(t, request.MigrationDestination)
+	request.DestinationCommitmentHash = request.MigrationDestination.DestinationCommitmentHash
+
+	result, err := service.Submit(context.Background(), covenantsigner.TemplateQcV1, covenantsigner.SignerSubmitInput{
+		RouteRequestID: "ors_qc_bad_beta",
+		Stage:          covenantsigner.StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Status != covenantsigner.StepStatusFailed {
+		t.Fatalf("expected FAILED, got %s", result.Status)
+	}
+	if result.Reason != covenantsigner.ReasonInvalidInput {
+		t.Fatalf("unexpected failure reason: %s", result.Reason)
+	}
+	if !strings.Contains(result.Detail, "qc_v1 beta must be below maturity height") {
+		t.Fatalf("unexpected failure detail: %s", result.Detail)
+	}
+}
+
+func TestCovenantSignerEngine_SubmitQcV1RejectsScriptHashMismatch(t *testing.T) {
+	node, bitcoinChain, walletPublicKey := setupCovenantSignerTestNode(t)
+
+	service, err := covenantsigner.NewService(
+		newCovenantSignerMemoryHandle(),
+		newCovenantSignerEngine(node),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	depositorPrivateKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), bytes.Repeat([]byte{0x42}, 32))
+	depositorPublicKey := depositorPrivateKey.PubKey().SerializeCompressed()
+	custodianPrivateKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), bytes.Repeat([]byte{0x24}, 32))
+	custodianPublicKey := custodianPrivateKey.PubKey().SerializeCompressed()
+	signerPublicKey := (*btcec.PublicKey)(walletPublicKey).SerializeCompressed()
+
+	template := &covenantsigner.QcV1Template{
+		Template:           covenantsigner.TemplateQcV1,
+		DepositorPublicKey: "0x" + hex.EncodeToString(depositorPublicKey),
+		CustodianPublicKey: "0x" + hex.EncodeToString(custodianPublicKey),
+		SignerPublicKey:    "0x" + hex.EncodeToString(signerPublicKey),
+		Beta:               144,
+		Delta2:             4320,
+	}
+	templateJSON, err := json.Marshal(template)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	maturityHeight := uint64(912345)
+	witnessScript, err := buildQcV1WitnessScript(template, maturityHeight)
+	if err != nil {
+		t.Fatal(err)
+	}
+	witnessScriptHash := bitcoin.WitnessScriptHash(witnessScript)
+	activeScriptPubKey, err := bitcoin.PayToWitnessScriptHash(witnessScriptHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	destinationScript, err := bitcoin.PayToWitnessPublicKeyHash([20]byte{
+		0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
+		0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
+		0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
+		0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prevTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           2_000_000,
+				PublicKeyScript: activeScriptPubKey,
+			},
+		},
+		Locktime: 0,
+	}
+	bitcoinChain.transactions = append(bitcoinChain.transactions, prevTransaction)
+
+	revealer := "0x4444444444444444444444444444444444444444"
+	reserve := "0x1111111111111111111111111111111111111111"
+	vault := "0x3333333333333333333333333333333333333333"
+	migrationDestination := &covenantsigner.MigrationDestinationReservation{
+		ReservationID: "cmdr_qc_bad_script_hash",
+		Reserve:       reserve,
+		Epoch:         21,
+		Route:         covenantsigner.ReservationRouteMigration,
+		Revealer:      revealer,
+		Vault:         vault,
+		Network:       "regtest",
+		Status:        covenantsigner.ReservationStatusCommittedToEpoch,
+		DepositScript: "0x" + hex.EncodeToString(destinationScript),
+	}
+	migrationDestination.DepositScriptHash = testDepositScriptHash(t, destinationScript)
+	migrationDestination.MigrationExtraData = testMigrationExtraData(revealer)
+	migrationDestination.DestinationCommitmentHash = testDestinationCommitmentHash(t, migrationDestination)
+
+	request := covenantsigner.RouteSubmitRequest{
+		FacadeRequestID:           "rf_qc_bad_script_hash",
+		IdempotencyKey:            "idem_qc_bad_script_hash",
+		Route:                     covenantsigner.TemplateQcV1,
+		Strategy:                  "0x1234",
+		Reserve:                   reserve,
+		Epoch:                     21,
+		MaturityHeight:            maturityHeight,
+		ActiveOutpoint:            covenantsigner.CovenantOutpoint{TxID: "0x" + prevTransaction.Hash().Hex(bitcoin.ReversedByteOrder), Vout: 0, ScriptHash: "0x" + strings.Repeat("aa", 32)},
+		DestinationCommitmentHash: migrationDestination.DestinationCommitmentHash,
+		MigrationDestination:      migrationDestination,
+		MigrationTransactionPlan: &covenantsigner.MigrationTransactionPlan{
+			InputValueSats:       2_000_000,
+			DestinationValueSats: 1_997_500,
+			AnchorValueSats:      330,
+			FeeSats:              2_170,
+			InputSequence:        0xfffffffd,
+			LockTime:             maturityHeight,
+		},
+		ArtifactSignatures: []string{"0x090a"},
+		Artifacts:          map[covenantsigner.RecoveryPathID]covenantsigner.ArtifactRecord{},
+		ScriptTemplate:     templateJSON,
+		Signing: covenantsigner.SigningRequirements{
+			SignerRequired:    true,
+			CustodianRequired: true,
+		},
+	}
+
+	result, err := service.Submit(context.Background(), covenantsigner.TemplateQcV1, covenantsigner.SignerSubmitInput{
+		RouteRequestID: "ors_qc_bad_script_hash",
+		Stage:          covenantsigner.StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Status != covenantsigner.StepStatusFailed {
+		t.Fatalf("expected FAILED, got %s", result.Status)
+	}
+	if result.Reason != covenantsigner.ReasonInvalidInput {
+		t.Fatalf("unexpected failure reason: %s", result.Reason)
+	}
+	if !strings.Contains(result.Detail, "active outpoint script hash does not match qc_v1 template") {
+		t.Fatalf("unexpected failure detail: %s", result.Detail)
+	}
+}
+
 func TestCovenantSignerEngine_SubmitSelfV1RejectsZeroMaturityHeight(t *testing.T) {
 	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
 
@@ -402,8 +919,8 @@ func TestCovenantSignerEngine_SubmitSelfV1RejectsZeroMaturityHeight(t *testing.T
 	}
 }
 
-func TestValidateSelfV1OutputValues_RejectsValuesExceedingInt64(t *testing.T) {
-	err := validateSelfV1OutputValues(covenantsigner.RouteSubmitRequest{
+func TestValidateMigrationOutputValues_RejectsValuesExceedingInt64(t *testing.T) {
+	err := validateMigrationOutputValues(covenantsigner.RouteSubmitRequest{
 		MigrationTransactionPlan: &covenantsigner.MigrationTransactionPlan{
 			DestinationValueSats: uint64(math.MaxInt64) + 1,
 			AnchorValueSats:      330,
