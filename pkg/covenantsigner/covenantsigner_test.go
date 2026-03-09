@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,16 +119,18 @@ func mustTemplate(value any) json.RawMessage {
 }
 
 func baseRequest(route TemplateID) RouteSubmitRequest {
+	migrationDestination := validMigrationDestination()
 	request := RouteSubmitRequest{
 		FacadeRequestID:           "rf_123",
 		IdempotencyKey:            "idem_123",
 		Route:                     route,
 		Strategy:                  "0x1234",
-		Reserve:                   "0xabcd",
+		Reserve:                   migrationDestination.Reserve,
 		Epoch:                     12,
 		MaturityHeight:            912345,
 		ActiveOutpoint:            CovenantOutpoint{TxID: "0x0102", Vout: 1, ScriptHash: "0x0304"},
-		DestinationCommitmentHash: "0x0506",
+		DestinationCommitmentHash: migrationDestination.DestinationCommitmentHash,
+		MigrationDestination:      migrationDestination,
 		ArtifactSignatures:        []string{"0x0708"},
 		Artifacts:                 map[RecoveryPathID]ArtifactRecord{},
 	}
@@ -142,6 +145,26 @@ func baseRequest(route TemplateID) RouteSubmitRequest {
 	}
 
 	return request
+}
+
+func validMigrationDestination() *MigrationDestinationReservation {
+	reservation := &MigrationDestinationReservation{
+		ReservationID: "cmdr_12345678",
+		Reserve:       "0x1111111111111111111111111111111111111111",
+		Epoch:         12,
+		Route:         ReservationRouteMigration,
+		Revealer:      "0x2222222222222222222222222222222222222222",
+		Vault:         "0x3333333333333333333333333333333333333333",
+		Network:       "regtest",
+		Status:        ReservationStatusReserved,
+		DepositScript: "0x0014aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+
+	reservation.DepositScriptHash, _ = computeDepositScriptHash(reservation.DepositScript)
+	reservation.MigrationExtraData = computeMigrationExtraData(reservation.Revealer)
+	reservation.DestinationCommitmentHash, _ = computeDestinationCommitmentHash(reservation)
+
+	return reservation
 }
 
 func TestServiceSubmitDeduplicatesByRouteRequestID(t *testing.T) {
@@ -327,6 +350,128 @@ func TestServicePollMapsJobNotFoundToFailed(t *testing.T) {
 	}
 }
 
+func TestMigrationDestinationMatchesKnownVector(t *testing.T) {
+	reservation := validMigrationDestination()
+
+	if reservation.DepositScriptHash != "0x8532ec6785e391b2af968b5728d574e271c7f46658f5ed10845d9ad5b23ac6d3" {
+		t.Fatalf("unexpected depositScriptHash: %s", reservation.DepositScriptHash)
+	}
+	if reservation.MigrationExtraData != "0x41435f4d49475241544556312222222222222222222222222222222222222222" {
+		t.Fatalf("unexpected migrationExtraData: %s", reservation.MigrationExtraData)
+	}
+	if reservation.DestinationCommitmentHash != "0x3efc50372759413e0f1900a2340fbb947648c524e5ec3cb4cf8887ea2d7df474" {
+		t.Fatalf("unexpected destinationCommitmentHash: %s", reservation.DestinationCommitmentHash)
+	}
+}
+
+func TestServiceRejectsMismatchedMigrationDestinationArtifact(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := baseRequest(TemplateSelfV1)
+	request.MigrationDestination.DepositScriptHash = "0xdeadbeef"
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_bad_reservation",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(err.Error(), "depositScriptHash does not match depositScript") {
+		t.Fatalf("expected depositScriptHash mismatch, got %v", err)
+	}
+}
+
+func TestServiceRejectsInvalidMigrationDestinationVariants(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testCases := []struct {
+		name      string
+		mutate    func(request *RouteSubmitRequest)
+		expectErr string
+	}{
+		{
+			name: "missing reservation artifact",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationDestination = nil
+			},
+			expectErr: "request.migrationDestination is required",
+		},
+		{
+			name: "wrong reservation route",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationDestination.Route = "COOPERATIVE"
+			},
+			expectErr: "request.migrationDestination.route must be MIGRATION",
+		},
+		{
+			name: "retired reservation status",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationDestination.Status = ReservationStatusRetired
+			},
+			expectErr: "request.migrationDestination.status must be RESERVED or COMMITTED_TO_EPOCH",
+		},
+		{
+			name: "epoch mismatch",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationDestination.Epoch = 13
+			},
+			expectErr: "request.migrationDestination.epoch does not match request.epoch",
+		},
+		{
+			name: "reserve mismatch",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationDestination.Reserve = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			},
+			expectErr: "request.migrationDestination.reserve does not match request.reserve",
+		},
+		{
+			name: "request commitment mismatch",
+			mutate: func(request *RouteSubmitRequest) {
+				request.DestinationCommitmentHash = "0xdeadbeef"
+			},
+			expectErr: "request.migrationDestination.destinationCommitmentHash does not match request.destinationCommitmentHash",
+		},
+		{
+			name: "migration extraData mismatch",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationDestination.MigrationExtraData = "0xdeadbeef"
+			},
+			expectErr: "request.migrationDestination.migrationExtraData does not match migration revealer encoding",
+		},
+		{
+			name: "canonical commitment mismatch",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationDestination.DestinationCommitmentHash = "0xdeadbeef"
+				request.DestinationCommitmentHash = "0xdeadbeef"
+			},
+			expectErr: "request.migrationDestination.destinationCommitmentHash does not match canonical reservation artifact",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := baseRequest(TemplateSelfV1)
+			testCase.mutate(&request)
+
+			_, err := service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+				RouteRequestID: "ors_invalid_variant_" + strings.ReplaceAll(testCase.name, " ", "_"),
+				Stage:          StageSignerCoordination,
+				Request:        request,
+			})
+			if err == nil || !strings.Contains(err.Error(), testCase.expectErr) {
+				t.Fatalf("expected %q, got %v", testCase.expectErr, err)
+			}
+		})
+	}
+}
+
 func TestStoreReloadPreservesJobs(t *testing.T) {
 	handle := newMemoryHandle()
 	store, err := NewStore(handle)
@@ -445,11 +590,25 @@ func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
 			"idempotencyKey":"idem_123",
 			"route":"self_v1",
 			"strategy":"0x1234",
-			"reserve":"0xabcd",
+			"reserve":"0x1111111111111111111111111111111111111111",
 			"epoch":12,
 			"maturityHeight":912345,
 			"activeOutpoint":{"txid":"0x0102","vout":1,"scriptHash":"0x0304"},
-			"destinationCommitmentHash":"0x0506",
+			"destinationCommitmentHash":"0x3efc50372759413e0f1900a2340fbb947648c524e5ec3cb4cf8887ea2d7df474",
+			"migrationDestination":{
+				"reservationId":"cmdr_12345678",
+				"reserve":"0x1111111111111111111111111111111111111111",
+				"epoch":12,
+				"route":"MIGRATION",
+				"revealer":"0x2222222222222222222222222222222222222222",
+				"vault":"0x3333333333333333333333333333333333333333",
+				"network":"regtest",
+				"status":"RESERVED",
+				"depositScript":"0x0014aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"depositScriptHash":"0x8532ec6785e391b2af968b5728d574e271c7f46658f5ed10845d9ad5b23ac6d3",
+				"migrationExtraData":"0x41435f4d49475241544556312222222222222222222222222222222222222222",
+				"destinationCommitmentHash":"0x3efc50372759413e0f1900a2340fbb947648c524e5ec3cb4cf8887ea2d7df474"
+			},
 			"artifactSignatures":["0x0708"],
 			"artifacts":{},
 			"scriptTemplate":{"template":"self_v1","depositorPublicKey":"0x021111","signerPublicKey":"0x022222","delta2":4320},
