@@ -16,9 +16,9 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	"github.com/keep-network/keep-common/pkg/persistence"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
-	"github.com/keep-network/keep-core/pkg/covenantsigner"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/local_v1"
+	"github.com/keep-network/keep-core/pkg/covenantsigner"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/internal/tecdsatest"
 	"github.com/keep-network/keep-core/pkg/net/local"
@@ -351,15 +351,15 @@ func TestCovenantSignerEngine_SubmitSelfV1RejectsZeroMaturityHeight(t *testing.T
 			TxID: "0x" + strings.Repeat("11", 32),
 		},
 		MigrationDestination: &covenantsigner.MigrationDestinationReservation{
-			ReservationID:             "cmdr_self_zero",
-			Reserve:                   reserve,
-			Epoch:                     12,
-			Route:                     covenantsigner.ReservationRouteMigration,
-			Revealer:                  revealer,
-			Vault:                     vault,
-			Network:                   "regtest",
-			Status:                    covenantsigner.ReservationStatusReserved,
-			DepositScript:             "0x" + hex.EncodeToString(destinationScript),
+			ReservationID: "cmdr_self_zero",
+			Reserve:       reserve,
+			Epoch:         12,
+			Route:         covenantsigner.ReservationRouteMigration,
+			Revealer:      revealer,
+			Vault:         vault,
+			Network:       "regtest",
+			Status:        covenantsigner.ReservationStatusReserved,
+			DepositScript: "0x" + hex.EncodeToString(destinationScript),
 		},
 		MigrationTransactionPlan: &covenantsigner.MigrationTransactionPlan{
 			InputValueSats:       1_000_000,

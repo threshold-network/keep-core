@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-common/pkg/persistence"
@@ -41,8 +42,9 @@ func Initialize(
 	server := &Server{
 		service: service,
 		httpServer: &http.Server{
-			Addr:    fmt.Sprintf(":%d", config.Port),
-			Handler: newHandler(service),
+			Addr:              fmt.Sprintf(":%d", config.Port),
+			Handler:           newHandler(service),
+			ReadHeaderTimeout: 5 * time.Second,
 		},
 	}
 
