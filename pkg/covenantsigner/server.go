@@ -20,7 +20,12 @@ type Server struct {
 	httpServer *http.Server
 }
 
-func Initialize(ctx context.Context, config Config, handle persistence.BasicHandle) (*Server, bool, error) {
+func Initialize(
+	ctx context.Context,
+	config Config,
+	handle persistence.BasicHandle,
+	engine Engine,
+) (*Server, bool, error) {
 	if config.Port == 0 {
 		return nil, false, nil
 	}
@@ -28,7 +33,7 @@ func Initialize(ctx context.Context, config Config, handle persistence.BasicHand
 		return nil, false, fmt.Errorf("invalid covenant signer port [%d]", config.Port)
 	}
 
-	service, err := NewService(handle, NewPassiveEngine())
+	service, err := NewService(handle, engine)
 	if err != nil {
 		return nil, false, err
 	}
