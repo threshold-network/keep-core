@@ -20,6 +20,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
+	"github.com/keep-network/keep-core/pkg/covenantsigner"
 	"github.com/keep-network/keep-core/pkg/firewall"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
@@ -173,6 +174,15 @@ func start(cmd *cobra.Command) error {
 		)
 		if err != nil {
 			return fmt.Errorf("error initializing TBTC: [%v]", err)
+		}
+
+		_, _, err = covenantsigner.Initialize(
+			ctx,
+			clientConfig.CovenantSigner,
+			tbtcDataPersistence,
+		)
+		if err != nil {
+			return fmt.Errorf("error initializing covenant signer: [%v]", err)
 		}
 	}
 

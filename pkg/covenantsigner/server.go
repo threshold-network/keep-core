@@ -1,0 +1,188 @@
+package covenantsigner
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"strings"
+
+	"github.com/ipfs/go-log/v2"
+	"github.com/keep-network/keep-common/pkg/persistence"
+)
+
+var logger = log.Logger("keep-covenant-signer")
+
+type Server struct {
+	service    *Service
+	httpServer *http.Server
+}
+
+func Initialize(ctx context.Context, config Config, handle persistence.BasicHandle) (*Server, bool, error) {
+	if config.Port == 0 {
+		return nil, false, nil
+	}
+	if config.Port < 0 || config.Port > 65535 {
+		return nil, false, fmt.Errorf("invalid covenant signer port [%d]", config.Port)
+	}
+
+	service, err := NewService(handle, NewPassiveEngine())
+	if err != nil {
+		return nil, false, err
+	}
+
+	server := &Server{
+		service: service,
+		httpServer: &http.Server{
+			Addr:    fmt.Sprintf(":%d", config.Port),
+			Handler: newHandler(service),
+		},
+	}
+
+	listener, err := net.Listen("tcp", server.httpServer.Addr)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to bind covenant signer port [%d]: %w", config.Port, err)
+	}
+
+	go func() {
+		<-ctx.Done()
+		_ = server.httpServer.Shutdown(context.Background())
+	}()
+
+	go func() {
+		if err := server.httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Errorf("covenant signer server failed: [%v]", err)
+		}
+	}()
+
+	logger.Infof("enabled covenant signer provider endpoint on port [%v]", config.Port)
+
+	return server, true, nil
+}
+
+func newHandler(service *Service) http.Handler {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	mux.HandleFunc("POST /v1/self_v1/signer/requests", submitHandler(service, TemplateSelfV1))
+	mux.HandleFunc("POST /v1/qc_v1/signer/requests", submitHandler(service, TemplateQcV1))
+	mux.HandleFunc("POST /v1/self_v1/signer/requests:poll", pollBodyHandler(service, TemplateSelfV1))
+	mux.HandleFunc("POST /v1/qc_v1/signer/requests:poll", pollBodyHandler(service, TemplateQcV1))
+	mux.HandleFunc("/v1/self_v1/signer/requests/", pollPathHandler(service, TemplateSelfV1))
+	mux.HandleFunc("/v1/qc_v1/signer/requests/", pollPathHandler(service, TemplateQcV1))
+
+	return mux
+}
+
+func decodeJSON[T any](w http.ResponseWriter, r *http.Request, target *T) bool {
+	defer r.Body.Close()
+
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(target); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return false
+	}
+
+	return true
+}
+
+func writeJSON(w http.ResponseWriter, statusCode int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func handleError(w http.ResponseWriter, err error) {
+	var inputErr *inputError
+	if errors.As(err, &inputErr) {
+		http.Error(w, inputErr.Error(), http.StatusBadRequest)
+		return
+	}
+	if errors.Is(err, errJobNotFound) {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	logger.Errorf("covenant signer request failed: [%v]", err)
+	http.Error(w, "internal server error", http.StatusInternalServerError)
+}
+
+func submitHandler(service *Service, route TemplateID) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		input := SignerSubmitInput{}
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+
+		result, err := service.Submit(r.Context(), route, input)
+		if err != nil {
+			handleError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+func pollBodyHandler(service *Service, route TemplateID) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		input := SignerPollInput{}
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+
+		result, err := service.Poll(r.Context(), route, input)
+		if err != nil {
+			handleError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+func pollPathHandler(service *Service, route TemplateID) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+
+		prefix := "/v1/" + string(route) + "/signer/requests/"
+		if !strings.HasPrefix(r.URL.Path, prefix) || !strings.HasSuffix(r.URL.Path, ":poll") {
+			http.NotFound(w, r)
+			return
+		}
+
+		pathRequestID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, prefix), ":poll")
+		if pathRequestID == "" || strings.Contains(pathRequestID, "/") {
+			http.NotFound(w, r)
+			return
+		}
+
+		input := SignerPollInput{}
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		if input.RequestID != "" && input.RequestID != pathRequestID {
+			http.Error(w, "requestId in body does not match path", http.StatusBadRequest)
+			return
+		}
+		input.RequestID = pathRequestID
+
+		result, err := service.Poll(r.Context(), route, input)
+		if err != nil {
+			handleError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, result)
+	}
+}

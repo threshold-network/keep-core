@@ -15,6 +15,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/bitcoin/electrum"
 	chainEthereum "github.com/keep-network/keep-core/pkg/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
+	"github.com/keep-network/keep-core/pkg/covenantsigner"
 	"github.com/keep-network/keep-core/pkg/maintainer/spv"
 	"github.com/keep-network/keep-core/pkg/net/libp2p"
 	"github.com/keep-network/keep-core/pkg/tbtc"
@@ -46,6 +47,8 @@ func initFlags(
 			initStorageFlags(cmd, cfg)
 		case config.ClientInfo:
 			initClientInfoFlags(cmd, cfg)
+		case config.CovenantSigner:
+			initCovenantSignerFlags(cmd, cfg)
 		case config.Tbtc:
 			initTbtcFlags(cmd, cfg)
 		case config.Maintainer:
@@ -307,6 +310,15 @@ func initTbtcFlags(cmd *cobra.Command, cfg *config.Config) {
 		"tbtc.keyGenerationConcurrency",
 		tbtc.DefaultKeyGenerationConcurrency,
 		"tECDSA key generation concurrency.",
+	)
+}
+
+func initCovenantSignerFlags(cmd *cobra.Command, cfg *config.Config) {
+	cmd.Flags().IntVar(
+		&cfg.CovenantSigner.Port,
+		"covenantSigner.port",
+		covenantsigner.Config{}.Port,
+		"Covenant signer provider HTTP server listening port. Zero disables the service.",
 	)
 }
 
