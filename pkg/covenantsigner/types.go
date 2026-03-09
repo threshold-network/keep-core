@@ -37,6 +37,22 @@ const (
 	ReasonMalformedArtifact   FailureReason = "MALFORMED_ARTIFACT"
 )
 
+type ReservationRoute string
+
+const (
+	ReservationRouteMigration ReservationRoute = "MIGRATION"
+)
+
+type ReservationStatus string
+
+const (
+	ReservationStatusReserved         ReservationStatus = "RESERVED"
+	ReservationStatusCommittedToEpoch ReservationStatus = "COMMITTED_TO_EPOCH"
+	ReservationStatusRevealed         ReservationStatus = "REVEALED"
+	ReservationStatusRetired          ReservationStatus = "RETIRED"
+	ReservationStatusExpired          ReservationStatus = "EXPIRED"
+)
+
 type StepStatus string
 
 const (
@@ -70,6 +86,21 @@ type ArtifactRecord struct {
 	TransactionID             string `json:"transactionId,omitempty"`
 }
 
+type MigrationDestinationReservation struct {
+	ReservationID             string            `json:"reservationId,omitempty"`
+	Reserve                   string            `json:"reserve"`
+	Epoch                     uint64            `json:"epoch"`
+	Route                     ReservationRoute  `json:"route"`
+	Revealer                  string            `json:"revealer"`
+	Vault                     string            `json:"vault"`
+	Network                   string            `json:"network"`
+	Status                    ReservationStatus `json:"status"`
+	DepositScript             string            `json:"depositScript"`
+	DepositScriptHash         string            `json:"depositScriptHash"`
+	MigrationExtraData        string            `json:"migrationExtraData"`
+	DestinationCommitmentHash string            `json:"destinationCommitmentHash"`
+}
+
 type SigningRequirements struct {
 	SignerRequired    bool `json:"signerRequired"`
 	CustodianRequired bool `json:"custodianRequired"`
@@ -85,6 +116,7 @@ type RouteSubmitRequest struct {
 	MaturityHeight            uint64                            `json:"maturityHeight"`
 	ActiveOutpoint            CovenantOutpoint                  `json:"activeOutpoint"`
 	DestinationCommitmentHash string                            `json:"destinationCommitmentHash"`
+	MigrationDestination      *MigrationDestinationReservation  `json:"migrationDestination,omitempty"`
 	ArtifactSignatures        []string                          `json:"artifactSignatures"`
 	Artifacts                 map[RecoveryPathID]ArtifactRecord `json:"artifacts"`
 	ScriptTemplate            json.RawMessage                   `json:"scriptTemplate"`

@@ -45,6 +45,140 @@ func validateHexString(name string, value string) error {
 	return nil
 }
 
+func validateAddressString(name string, value string) error {
+	if err := validateHexString(name, value); err != nil {
+		return err
+	}
+
+	if len(value) != 42 {
+		return &inputError{fmt.Sprintf("%s must be a 20-byte 0x-prefixed hex address", name)}
+	}
+
+	return nil
+}
+
+func normalizeLowerHex(value string) string {
+	return strings.ToLower(value)
+}
+
+func computeMigrationExtraData(revealer string) string {
+	return "0x" + hex.EncodeToString([]byte("AC_MIGRATEV1")) + strings.TrimPrefix(normalizeLowerHex(revealer), "0x")
+}
+
+func computeDepositScriptHash(depositScript string) (string, error) {
+	rawScript, err := hex.DecodeString(strings.TrimPrefix(depositScript, "0x"))
+	if err != nil {
+		return "", err
+	}
+
+	sum := sha256.Sum256(rawScript)
+	return "0x" + hex.EncodeToString(sum[:]), nil
+}
+
+type destinationCommitmentPayload struct {
+	Reserve            string `json:"reserve"`
+	Epoch              uint64 `json:"epoch"`
+	Route              string `json:"route"`
+	Revealer           string `json:"revealer"`
+	Vault              string `json:"vault"`
+	Network            string `json:"network"`
+	DepositScriptHash  string `json:"depositScriptHash"`
+	MigrationExtraData string `json:"migrationExtraData"`
+}
+
+func computeDestinationCommitmentHash(
+	reservation *MigrationDestinationReservation,
+) (string, error) {
+	payload, err := json.Marshal(destinationCommitmentPayload{
+		Reserve:            normalizeLowerHex(reservation.Reserve),
+		Epoch:              reservation.Epoch,
+		Route:              string(reservation.Route),
+		Revealer:           normalizeLowerHex(reservation.Revealer),
+		Vault:              normalizeLowerHex(reservation.Vault),
+		Network:            strings.TrimSpace(reservation.Network),
+		DepositScriptHash:  normalizeLowerHex(reservation.DepositScriptHash),
+		MigrationExtraData: normalizeLowerHex(reservation.MigrationExtraData),
+	})
+	if err != nil {
+		return "", err
+	}
+
+	sum := sha256.Sum256(payload)
+	return "0x" + hex.EncodeToString(sum[:]), nil
+}
+
+func validateMigrationDestination(
+	request RouteSubmitRequest,
+	reservation *MigrationDestinationReservation,
+) error {
+	if reservation == nil {
+		return &inputError{"request.migrationDestination is required"}
+	}
+	if reservation.Route != ReservationRouteMigration {
+		return &inputError{"request.migrationDestination.route must be MIGRATION"}
+	}
+	if reservation.Status != ReservationStatusReserved &&
+		reservation.Status != ReservationStatusCommittedToEpoch {
+		return &inputError{"request.migrationDestination.status must be RESERVED or COMMITTED_TO_EPOCH"}
+	}
+	if err := validateAddressString("request.migrationDestination.reserve", reservation.Reserve); err != nil {
+		return err
+	}
+	if err := validateAddressString("request.migrationDestination.revealer", reservation.Revealer); err != nil {
+		return err
+	}
+	if err := validateAddressString("request.migrationDestination.vault", reservation.Vault); err != nil {
+		return err
+	}
+	if strings.TrimSpace(reservation.Network) == "" {
+		return &inputError{"request.migrationDestination.network is required"}
+	}
+	if err := validateHexString("request.migrationDestination.depositScript", reservation.DepositScript); err != nil {
+		return err
+	}
+	if err := validateHexString("request.migrationDestination.depositScriptHash", reservation.DepositScriptHash); err != nil {
+		return err
+	}
+	if err := validateHexString("request.migrationDestination.migrationExtraData", reservation.MigrationExtraData); err != nil {
+		return err
+	}
+	if err := validateHexString("request.migrationDestination.destinationCommitmentHash", reservation.DestinationCommitmentHash); err != nil {
+		return err
+	}
+	if request.Epoch != reservation.Epoch {
+		return &inputError{"request.migrationDestination.epoch does not match request.epoch"}
+	}
+	if normalizeLowerHex(request.Reserve) != normalizeLowerHex(reservation.Reserve) {
+		return &inputError{"request.migrationDestination.reserve does not match request.reserve"}
+	}
+	if normalizeLowerHex(request.DestinationCommitmentHash) != normalizeLowerHex(reservation.DestinationCommitmentHash) {
+		return &inputError{"request.migrationDestination.destinationCommitmentHash does not match request.destinationCommitmentHash"}
+	}
+
+	expectedExtraData := computeMigrationExtraData(reservation.Revealer)
+	if normalizeLowerHex(reservation.MigrationExtraData) != expectedExtraData {
+		return &inputError{"request.migrationDestination.migrationExtraData does not match migration revealer encoding"}
+	}
+
+	depositScriptHash, err := computeDepositScriptHash(reservation.DepositScript)
+	if err != nil {
+		return &inputError{"request.migrationDestination.depositScript is not valid hex"}
+	}
+	if normalizeLowerHex(reservation.DepositScriptHash) != depositScriptHash {
+		return &inputError{"request.migrationDestination.depositScriptHash does not match depositScript"}
+	}
+
+	commitmentHash, err := computeDestinationCommitmentHash(reservation)
+	if err != nil {
+		return err
+	}
+	if normalizeLowerHex(reservation.DestinationCommitmentHash) != commitmentHash {
+		return &inputError{"request.migrationDestination.destinationCommitmentHash does not match canonical reservation artifact"}
+	}
+
+	return nil
+}
+
 func validateCommonRequest(route TemplateID, request RouteSubmitRequest) error {
 	if request.FacadeRequestID == "" {
 		return &inputError{"request.facadeRequestId is required"}
@@ -70,6 +204,9 @@ func validateCommonRequest(route TemplateID, request RouteSubmitRequest) error {
 		}
 	}
 	if err := validateHexString("request.destinationCommitmentHash", request.DestinationCommitmentHash); err != nil {
+		return err
+	}
+	if err := validateMigrationDestination(request, request.MigrationDestination); err != nil {
 		return err
 	}
 	if len(request.ArtifactSignatures) == 0 {
