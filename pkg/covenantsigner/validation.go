@@ -76,6 +76,8 @@ func computeDepositScriptHash(depositScript string) (string, error) {
 }
 
 type destinationCommitmentPayload struct {
+	// Field order is hash-significant and must stay aligned with the TypeScript
+	// reservation-service object literal used to compute the same commitment.
 	Reserve            string `json:"reserve"`
 	Epoch              uint64 `json:"epoch"`
 	Route              string `json:"route"`
@@ -206,6 +208,9 @@ func validateCommonRequest(route TemplateID, request RouteSubmitRequest) error {
 	if err := validateHexString("request.destinationCommitmentHash", request.DestinationCommitmentHash); err != nil {
 		return err
 	}
+	// This intentionally creates a deployment ordering constraint: the
+	// orchestrator must supply the concrete migration destination artifact
+	// before this signer version can accept requests.
 	if err := validateMigrationDestination(request, request.MigrationDestination); err != nil {
 		return err
 	}

@@ -384,6 +384,94 @@ func TestServiceRejectsMismatchedMigrationDestinationArtifact(t *testing.T) {
 	}
 }
 
+func TestServiceRejectsInvalidMigrationDestinationVariants(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testCases := []struct {
+		name      string
+		mutate    func(request *RouteSubmitRequest)
+		expectErr string
+	}{
+		{
+			name: "missing reservation artifact",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationDestination = nil
+			},
+			expectErr: "request.migrationDestination is required",
+		},
+		{
+			name: "wrong reservation route",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationDestination.Route = "COOPERATIVE"
+			},
+			expectErr: "request.migrationDestination.route must be MIGRATION",
+		},
+		{
+			name: "retired reservation status",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationDestination.Status = ReservationStatusRetired
+			},
+			expectErr: "request.migrationDestination.status must be RESERVED or COMMITTED_TO_EPOCH",
+		},
+		{
+			name: "epoch mismatch",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationDestination.Epoch = 13
+			},
+			expectErr: "request.migrationDestination.epoch does not match request.epoch",
+		},
+		{
+			name: "reserve mismatch",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationDestination.Reserve = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			},
+			expectErr: "request.migrationDestination.reserve does not match request.reserve",
+		},
+		{
+			name: "request commitment mismatch",
+			mutate: func(request *RouteSubmitRequest) {
+				request.DestinationCommitmentHash = "0xdeadbeef"
+			},
+			expectErr: "request.migrationDestination.destinationCommitmentHash does not match request.destinationCommitmentHash",
+		},
+		{
+			name: "migration extraData mismatch",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationDestination.MigrationExtraData = "0xdeadbeef"
+			},
+			expectErr: "request.migrationDestination.migrationExtraData does not match migration revealer encoding",
+		},
+		{
+			name: "canonical commitment mismatch",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationDestination.DestinationCommitmentHash = "0xdeadbeef"
+				request.DestinationCommitmentHash = "0xdeadbeef"
+			},
+			expectErr: "request.migrationDestination.destinationCommitmentHash does not match canonical reservation artifact",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := baseRequest(TemplateSelfV1)
+			testCase.mutate(&request)
+
+			_, err := service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+				RouteRequestID: "ors_invalid_variant_" + strings.ReplaceAll(testCase.name, " ", "_"),
+				Stage:          StageSignerCoordination,
+				Request:        request,
+			})
+			if err == nil || !strings.Contains(err.Error(), testCase.expectErr) {
+				t.Fatalf("expected %q, got %v", testCase.expectErr, err)
+			}
+		})
+	}
+}
+
 func TestStoreReloadPreservesJobs(t *testing.T) {
 	handle := newMemoryHandle()
 	store, err := NewStore(handle)
