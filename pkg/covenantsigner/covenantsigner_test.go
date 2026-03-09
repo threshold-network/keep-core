@@ -131,8 +131,16 @@ func baseRequest(route TemplateID) RouteSubmitRequest {
 		ActiveOutpoint:            CovenantOutpoint{TxID: "0x0102", Vout: 1, ScriptHash: "0x0304"},
 		DestinationCommitmentHash: migrationDestination.DestinationCommitmentHash,
 		MigrationDestination:      migrationDestination,
-		ArtifactSignatures:        []string{"0x0708"},
-		Artifacts:                 map[RecoveryPathID]ArtifactRecord{},
+		MigrationTransactionPlan: &MigrationTransactionPlan{
+			InputValueSats:       1000000,
+			DestinationValueSats: 998000,
+			AnchorValueSats:      canonicalAnchorValueSats,
+			FeeSats:              1670,
+			InputSequence:        canonicalCovenantInputSequence,
+			LockTime:             912345,
+		},
+		ArtifactSignatures: []string{"0x0708"},
+		Artifacts:          map[RecoveryPathID]ArtifactRecord{},
 	}
 
 	switch route {
@@ -472,6 +480,100 @@ func TestServiceRejectsInvalidMigrationDestinationVariants(t *testing.T) {
 	}
 }
 
+func TestServiceRejectsInvalidMigrationTransactionPlanVariants(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testCases := []struct {
+		name      string
+		mutate    func(request *RouteSubmitRequest)
+		expectErr string
+	}{
+		{
+			name: "missing transaction plan",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationTransactionPlan = nil
+			},
+			expectErr: "request.migrationTransactionPlan is required",
+		},
+		{
+			name: "zero input value",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationTransactionPlan.InputValueSats = 0
+			},
+			expectErr: "request.migrationTransactionPlan.inputValueSats must be greater than zero",
+		},
+		{
+			name: "zero destination value",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationTransactionPlan.DestinationValueSats = 0
+			},
+			expectErr: "request.migrationTransactionPlan.destinationValueSats must be greater than zero",
+		},
+		{
+			name: "wrong anchor value",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationTransactionPlan.AnchorValueSats = 331
+			},
+			expectErr: "request.migrationTransactionPlan.anchorValueSats must equal the canonical 330 sat anchor",
+		},
+		{
+			name: "wrong input sequence",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationTransactionPlan.InputSequence = 0xFFFFFFFF
+			},
+			expectErr: "request.migrationTransactionPlan.inputSequence must equal 0xFFFFFFFD",
+		},
+		{
+			name: "locktime mismatch",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationTransactionPlan.LockTime = request.MaturityHeight + 1
+			},
+			expectErr: "request.migrationTransactionPlan.lockTime must match request.maturityHeight",
+		},
+		{
+			name: "insufficient input for destination",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationTransactionPlan.InputValueSats = request.MigrationTransactionPlan.DestinationValueSats - 1
+			},
+			expectErr: "request.migrationTransactionPlan.inputValueSats must cover destinationValueSats",
+		},
+		{
+			name: "insufficient input for anchor",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationTransactionPlan.InputValueSats = request.MigrationTransactionPlan.DestinationValueSats + canonicalAnchorValueSats - 1
+			},
+			expectErr: "request.migrationTransactionPlan.inputValueSats must cover anchorValueSats",
+		},
+		{
+			name: "accounting mismatch",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationTransactionPlan.FeeSats++
+			},
+			expectErr: "request.migrationTransactionPlan values must satisfy inputValueSats = destinationValueSats + anchorValueSats + feeSats",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := baseRequest(TemplateSelfV1)
+			testCase.mutate(&request)
+
+			_, err := service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+				RouteRequestID: "ors_invalid_plan_" + strings.ReplaceAll(testCase.name, " ", "_"),
+				Stage:          StageSignerCoordination,
+				Request:        request,
+			})
+			if err == nil || !strings.Contains(err.Error(), testCase.expectErr) {
+				t.Fatalf("expected %q, got %v", testCase.expectErr, err)
+			}
+		})
+	}
+}
+
 func TestStoreReloadPreservesJobs(t *testing.T) {
 	handle := newMemoryHandle()
 	store, err := NewStore(handle)
@@ -608,6 +710,14 @@ func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
 				"depositScriptHash":"0x8532ec6785e391b2af968b5728d574e271c7f46658f5ed10845d9ad5b23ac6d3",
 				"migrationExtraData":"0x41435f4d49475241544556312222222222222222222222222222222222222222",
 				"destinationCommitmentHash":"0x3efc50372759413e0f1900a2340fbb947648c524e5ec3cb4cf8887ea2d7df474"
+			},
+			"migrationTransactionPlan":{
+				"inputValueSats":1000000,
+				"destinationValueSats":998000,
+				"anchorValueSats":330,
+				"feeSats":1670,
+				"inputSequence":4294967293,
+				"lockTime":912345
 			},
 			"artifactSignatures":["0x0708"],
 			"artifacts":{},
