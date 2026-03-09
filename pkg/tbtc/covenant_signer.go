@@ -456,6 +456,8 @@ func (cse *covenantSignerEngine) resolveQcV1ActiveUtxo(
 	}
 
 	if request.ActiveOutpoint.ScriptHash != "" {
+		// The optional scriptHash convention follows the tBTC-side request
+		// contract: sha256(scriptPubKey) for the active covenant output.
 		scriptHash := sha256.Sum256(expectedScriptPubKey)
 		expectedScriptHash := "0x" + hex.EncodeToString(scriptHash[:])
 		if strings.ToLower(request.ActiveOutpoint.ScriptHash) != expectedScriptHash {
@@ -717,6 +719,9 @@ func buildWitnessSignatureBytes(signature *tecdsa.Signature) ([]byte, error) {
 }
 
 func computeQcV1SignerHandoffPayloadHash(payload map[string]any) (string, error) {
+	// The handoff bundle ID is content-addressed using Go's stable JSON map-key
+	// ordering. Future non-Go custodian consumers that want to recompute this
+	// hash must preserve the same canonical field set and serialization rules.
 	rawPayload, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
