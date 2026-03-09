@@ -159,7 +159,7 @@ func start(cmd *cobra.Command) error {
 			btcChain,
 		)
 
-		err = tbtc.Initialize(
+		covenantSignerEngine, err := tbtc.Initialize(
 			ctx,
 			tbtcChain,
 			btcChain,
@@ -180,6 +180,7 @@ func start(cmd *cobra.Command) error {
 			ctx,
 			clientConfig.CovenantSigner,
 			tbtcDataPersistence,
+			covenantSignerEngine,
 		)
 		if err != nil {
 			return fmt.Errorf("error initializing covenant signer: [%v]", err)

@@ -745,7 +745,7 @@ func TestInitializeRejectsInvalidOrUnavailablePort(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if _, enabled, err := Initialize(ctx, Config{Port: -1}, handle); err == nil || enabled {
+	if _, enabled, err := Initialize(ctx, Config{Port: -1}, handle, nil); err == nil || enabled {
 		t.Fatalf("expected invalid negative port to fail, got enabled=%v err=%v", enabled, err)
 	}
 
@@ -756,7 +756,7 @@ func TestInitializeRejectsInvalidOrUnavailablePort(t *testing.T) {
 	defer listener.Close()
 
 	port := listener.Addr().(*net.TCPAddr).Port
-	if _, enabled, err := Initialize(ctx, Config{Port: port}, handle); err == nil || enabled {
+	if _, enabled, err := Initialize(ctx, Config{Port: port}, handle, nil); err == nil || enabled {
 		t.Fatalf("expected occupied port to fail, got enabled=%v err=%v", enabled, err)
 	}
 }
