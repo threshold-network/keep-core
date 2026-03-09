@@ -2,5 +2,6 @@
 // durable submit/poll semantics, strict request validation, and a compatible
 // HTTP surface for covenant recovery/presign signer jobs. The current branch
 // also validates the concrete migration destination reservation artifact that
-// later real signing flows will consume.
+// later real signing flows will consume, together with the canonical
+// pre-signed migration transaction plan fields needed before tx construction.
 package covenantsigner

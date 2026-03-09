@@ -101,6 +101,15 @@ type MigrationDestinationReservation struct {
 	DestinationCommitmentHash string            `json:"destinationCommitmentHash"`
 }
 
+type MigrationTransactionPlan struct {
+	InputValueSats       uint64 `json:"inputValueSats"`
+	DestinationValueSats uint64 `json:"destinationValueSats"`
+	AnchorValueSats      uint64 `json:"anchorValueSats"`
+	FeeSats              uint64 `json:"feeSats"`
+	InputSequence        uint32 `json:"inputSequence"`
+	LockTime             uint64 `json:"lockTime"`
+}
+
 type SigningRequirements struct {
 	SignerRequired    bool `json:"signerRequired"`
 	CustodianRequired bool `json:"custodianRequired"`
@@ -117,6 +126,7 @@ type RouteSubmitRequest struct {
 	ActiveOutpoint            CovenantOutpoint                  `json:"activeOutpoint"`
 	DestinationCommitmentHash string                            `json:"destinationCommitmentHash"`
 	MigrationDestination      *MigrationDestinationReservation  `json:"migrationDestination,omitempty"`
+	MigrationTransactionPlan  *MigrationTransactionPlan         `json:"migrationTransactionPlan,omitempty"`
 	ArtifactSignatures        []string                          `json:"artifactSignatures"`
 	Artifacts                 map[RecoveryPathID]ArtifactRecord `json:"artifacts"`
 	ScriptTemplate            json.RawMessage                   `json:"scriptTemplate"`

@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+const (
+	canonicalCovenantInputSequence uint32 = 0xFFFFFFFD
+	canonicalAnchorValueSats       uint64 = 330
+)
+
 type inputError struct {
 	message string
 }
@@ -181,6 +186,43 @@ func validateMigrationDestination(
 	return nil
 }
 
+func validateMigrationTransactionPlan(
+	request RouteSubmitRequest,
+	plan *MigrationTransactionPlan,
+) error {
+	if plan == nil {
+		return &inputError{"request.migrationTransactionPlan is required"}
+	}
+	if plan.InputValueSats == 0 {
+		return &inputError{"request.migrationTransactionPlan.inputValueSats must be greater than zero"}
+	}
+	if plan.DestinationValueSats == 0 {
+		return &inputError{"request.migrationTransactionPlan.destinationValueSats must be greater than zero"}
+	}
+	if plan.AnchorValueSats != canonicalAnchorValueSats {
+		return &inputError{"request.migrationTransactionPlan.anchorValueSats must equal the canonical 330 sat anchor"}
+	}
+	if plan.InputSequence != canonicalCovenantInputSequence {
+		return &inputError{"request.migrationTransactionPlan.inputSequence must equal 0xFFFFFFFD"}
+	}
+	if plan.LockTime != request.MaturityHeight {
+		return &inputError{"request.migrationTransactionPlan.lockTime must match request.maturityHeight"}
+	}
+	if plan.InputValueSats < plan.DestinationValueSats {
+		return &inputError{"request.migrationTransactionPlan.inputValueSats must cover destinationValueSats"}
+	}
+	remainingAfterDestination := plan.InputValueSats - plan.DestinationValueSats
+	if remainingAfterDestination < plan.AnchorValueSats {
+		return &inputError{"request.migrationTransactionPlan.inputValueSats must cover anchorValueSats"}
+	}
+	remainingAfterAnchor := remainingAfterDestination - plan.AnchorValueSats
+	if remainingAfterAnchor != plan.FeeSats {
+		return &inputError{"request.migrationTransactionPlan values must satisfy inputValueSats = destinationValueSats + anchorValueSats + feeSats"}
+	}
+
+	return nil
+}
+
 func validateCommonRequest(route TemplateID, request RouteSubmitRequest) error {
 	if request.FacadeRequestID == "" {
 		return &inputError{"request.facadeRequestId is required"}
@@ -212,6 +254,12 @@ func validateCommonRequest(route TemplateID, request RouteSubmitRequest) error {
 	// orchestrator must supply the concrete migration destination artifact
 	// before this signer version can accept requests.
 	if err := validateMigrationDestination(request, request.MigrationDestination); err != nil {
+		return err
+	}
+	// This intentionally creates the next deployment ordering constraint: the
+	// orchestrator must supply the canonical migration transaction plan before
+	// this signer version can accept requests.
+	if err := validateMigrationTransactionPlan(request, request.MigrationTransactionPlan); err != nil {
 		return err
 	}
 	if len(request.ArtifactSignatures) == 0 {
