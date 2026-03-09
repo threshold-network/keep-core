@@ -662,13 +662,13 @@ func (cse *covenantSignerEngine) buildQcV1SignerHandoff(
 	selectorWitnessItems := []string{"0x01", "0x"}
 
 	payloadHash, err := computeQcV1SignerHandoffPayloadHash(map[string]any{
-		"kind":                     qcV1SignerHandoffKind,
-		"unsignedTransactionHex":   unsignedTransactionHex,
-		"witnessScript":            witnessScriptHex,
-		"signerSignature":          signatureHex,
-		"selectorWitnessItems":     selectorWitnessItems,
-		"requiresDummy":            true,
-		"sighashType":              uint32(txscript.SigHashAll),
+		"kind":                      qcV1SignerHandoffKind,
+		"unsignedTransactionHex":    unsignedTransactionHex,
+		"witnessScript":             witnessScriptHex,
+		"signerSignature":           signatureHex,
+		"selectorWitnessItems":      selectorWitnessItems,
+		"requiresDummy":             true,
+		"sighashType":               uint32(txscript.SigHashAll),
 		"destinationCommitmentHash": request.DestinationCommitmentHash,
 	})
 	if err != nil {
