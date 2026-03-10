@@ -69,7 +69,13 @@ func Initialize(
 
 	go func() {
 		<-ctx.Done()
-		_ = server.httpServer.Shutdown(context.Background())
+		shutdownCtx, cancelShutdown := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			5*time.Second,
+		)
+		defer cancelShutdown()
+
+		_ = server.httpServer.Shutdown(shutdownCtx)
 	}()
 
 	go func() {

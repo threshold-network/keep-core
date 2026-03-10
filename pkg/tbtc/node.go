@@ -1429,6 +1429,8 @@ func withCancelOnBlock(
 	block uint64,
 	waitForBlockFn waitForBlockFn,
 ) (context.Context, context.CancelFunc) {
+	// #nosec G118 -- cancelBlockCtx is returned to the caller and also invoked
+	// by the waiter goroutine when the target block is reached.
 	blockCtx, cancelBlockCtx := context.WithCancel(ctx)
 
 	go func() {
