@@ -424,6 +424,131 @@ func TestServicePollReturnsNewerPersistedStateWhenItsTransitionBecomesStale(t *t
 	}
 }
 
+func TestServiceSubmitReturnsNewerPersistedStateWhenItsTransitionBecomesStale(t *testing.T) {
+	handle := newMemoryHandle()
+	submitStarted := make(chan struct{})
+	releaseSubmit := make(chan struct{})
+	pollStarted := make(chan struct{})
+	releasePoll := make(chan struct{})
+
+	service, err := NewService(handle, &scriptedEngine{
+		submit: func(*Job) (*Transition, error) {
+			select {
+			case <-submitStarted:
+			default:
+				close(submitStarted)
+			}
+
+			<-releaseSubmit
+			return &Transition{State: JobStatePending, Detail: "stale pending"}, nil
+		},
+		poll: func(*Job) (*Transition, error) {
+			select {
+			case <-pollStarted:
+			default:
+				close(pollStarted)
+			}
+
+			<-releasePoll
+			return &Transition{
+				State:          JobStateArtifactReady,
+				Detail:         "artifact ready",
+				PSBTHash:       "0x090a",
+				TransactionHex: "0x0b0c",
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	input := SignerSubmitInput{
+		RouteRequestID: "ors_submit_stale_pending",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	}
+
+	submitResultChan := make(chan StepResult, 1)
+	submitErrChan := make(chan error, 1)
+	go func() {
+		result, err := service.Submit(context.Background(), TemplateSelfV1, input)
+		if err != nil {
+			submitErrChan <- err
+			return
+		}
+
+		submitResultChan <- result
+	}()
+
+	<-submitStarted
+
+	storedJob, ok, err := service.store.GetByRouteRequest(TemplateSelfV1, input.RouteRequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected submitted job to exist while submit engine is in flight")
+	}
+
+	pollResultChan := make(chan StepResult, 1)
+	pollErrChan := make(chan error, 1)
+	go func() {
+		result, err := service.Poll(context.Background(), TemplateSelfV1, SignerPollInput{
+			RouteRequestID: input.RouteRequestID,
+			RequestID:      storedJob.RequestID,
+			Stage:          StageSignerCoordination,
+			Request:        input.Request,
+		})
+		if err != nil {
+			pollErrChan <- err
+			return
+		}
+
+		pollResultChan <- result
+	}()
+
+	<-pollStarted
+	close(releasePoll)
+
+	var pollResult StepResult
+	select {
+	case err := <-pollErrChan:
+		t.Fatal(err)
+	case pollResult = <-pollResultChan:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected poll to finish after release")
+	}
+
+	close(releaseSubmit)
+
+	var submitResult StepResult
+	select {
+	case err := <-submitErrChan:
+		t.Fatal(err)
+	case submitResult = <-submitResultChan:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected submit to finish after release")
+	}
+
+	if submitResult.Status != StepStatusReady {
+		t.Fatalf("expected stale submit to return latest READY state, got %#v", submitResult)
+	}
+	if submitResult.PSBTHash != pollResult.PSBTHash || submitResult.TransactionHex != pollResult.TransactionHex {
+		t.Fatalf("expected submit to return persisted READY payload, got submit=%#v poll=%#v", submitResult, pollResult)
+	}
+
+	persistedJob, ok, err := service.store.GetByRequestID(storedJob.RequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected persisted job after stale submit")
+	}
+	if persistedJob.State != JobStateArtifactReady {
+		t.Fatalf("expected persisted READY state, got %s", persistedJob.State)
+	}
+}
+
 func TestServicePollDoesNotOverwriteNewerPersistedStateWithJobNotFound(t *testing.T) {
 	handle := newMemoryHandle()
 	submitStarted := make(chan struct{})
@@ -856,6 +981,16 @@ func TestServiceRejectsInvalidMigrationTransactionPlanVariants(t *testing.T) {
 			expectErr: "request.migrationTransactionPlan.destinationValueSats must be greater than zero",
 		},
 		{
+			name: "zero fee",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MigrationTransactionPlan.FeeSats = 0
+				request.MigrationTransactionPlan.DestinationValueSats =
+					request.MigrationTransactionPlan.InputValueSats -
+						request.MigrationTransactionPlan.AnchorValueSats
+			},
+			expectErr: "request.migrationTransactionPlan.feeSats must be greater than zero",
+		},
+		{
 			name: "wrong anchor value",
 			mutate: func(request *RouteSubmitRequest) {
 				request.MigrationTransactionPlan.AnchorValueSats = 331
@@ -1096,7 +1231,7 @@ func TestServerHandlesSubmitAndPathPoll(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(newHandler(service, ""))
+	server := httptest.NewServer(newHandler(service, "", true))
 	defer server.Close()
 
 	submitPayload := mustJSON(t, SignerSubmitInput{
@@ -1150,7 +1285,7 @@ func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(newHandler(service, ""))
+	server := httptest.NewServer(newHandler(service, "", true))
 	defer server.Close()
 
 	base := baseRequest(TemplateSelfV1)
@@ -1246,6 +1381,12 @@ func TestInitializeRejectsInvalidOrUnavailablePort(t *testing.T) {
 	}
 }
 
+func TestIsLoopbackListenAddressAcceptsBracketedIPv6Loopback(t *testing.T) {
+	if !isLoopbackListenAddress("[::1]") {
+		t.Fatal("expected bracketed IPv6 loopback address to be recognized")
+	}
+}
+
 func TestServerRequiresBearerTokenWhenConfigured(t *testing.T) {
 	handle := newMemoryHandle()
 	service, err := NewService(handle, &scriptedEngine{
@@ -1257,7 +1398,7 @@ func TestServerRequiresBearerTokenWhenConfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(newHandler(service, "test-token"))
+	server := httptest.NewServer(newHandler(service, "test-token", true))
 	defer server.Close()
 
 	submitPayload := mustJSON(t, SignerSubmitInput{
@@ -1316,5 +1457,58 @@ func TestServerRequiresBearerTokenWhenConfigured(t *testing.T) {
 	if authorizedResponse.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(authorizedResponse.Body)
 		t.Fatalf("unexpected authorized submit status: %d %s", authorizedResponse.StatusCode, string(body))
+	}
+}
+
+func TestServerCanKeepSelfV1RoutesDark(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{
+		submit: func(*Job) (*Transition, error) {
+			return &Transition{State: JobStatePending, Detail: "queued"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(newHandler(service, "", false))
+	defer server.Close()
+
+	response, err := http.Post(
+		server.URL+"/v1/self_v1/signer/requests",
+		"application/json",
+		bytes.NewReader(mustJSON(t, SignerSubmitInput{
+			RouteRequestID: "ors_http_self_dark",
+			Stage:          StageSignerCoordination,
+			Request:        baseRequest(TemplateSelfV1),
+		})),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("expected disabled self_v1 route to return 404, got %d %s", response.StatusCode, string(body))
+	}
+
+	qcResponse, err := http.Post(
+		server.URL+"/v1/qc_v1/signer/requests",
+		"application/json",
+		bytes.NewReader(mustJSON(t, SignerSubmitInput{
+			RouteRequestID: "orq_http_qc",
+			Stage:          StageSignerCoordination,
+			Request:        baseRequest(TemplateQcV1),
+		})),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer qcResponse.Body.Close()
+
+	if qcResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(qcResponse.Body)
+		t.Fatalf("expected qc_v1 route to remain available, got %d %s", qcResponse.StatusCode, string(body))
 	}
 }

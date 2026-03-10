@@ -332,6 +332,12 @@ func initCovenantSignerFlags(cmd *cobra.Command, cfg *config.Config) {
 		covenantsigner.Config{}.AuthToken,
 		"Covenant signer provider static Bearer auth token. Required for non-loopback binds; prefer config file or env var over CLI in production.",
 	)
+	cmd.Flags().BoolVar(
+		&cfg.CovenantSigner.EnableSelfV1,
+		"covenantSigner.enableSelfV1",
+		false,
+		"Expose self_v1 covenant signer HTTP routes. Keep disabled for a qc_v1-first launch unless self_v1 is explicitly approved.",
+	)
 }
 
 // Initialize flags for Maintainer configuration.

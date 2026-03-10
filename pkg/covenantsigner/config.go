@@ -12,4 +12,7 @@ type Config struct {
 	// AuthToken enables static Bearer authentication for signer endpoints.
 	// Non-loopback binds must set this.
 	AuthToken string
+	// EnableSelfV1 exposes the self_v1 signer HTTP routes. Keep this disabled
+	// for a qc_v1-first launch unless self_v1 has cleared its own go-live gate.
+	EnableSelfV1 bool
 }

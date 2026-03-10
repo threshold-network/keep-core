@@ -211,12 +211,27 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	applyTransition(job, transition, s.now())
-	if err := s.store.Put(job); err != nil {
+	currentJob, ok, err := s.store.GetByRequestID(requestID)
+	if err != nil {
+		return StepResult{}, err
+	}
+	if !ok {
+		return StepResult{}, errJobNotFound
+	}
+
+	// Another poll already advanced the stored job while submit was waiting on
+	// signer work. Return the newer durable state instead of overwriting it with
+	// a transition computed from an older snapshot.
+	if !sameJobRevision(currentJob, job) || isTerminalJobState(currentJob.State) {
+		return mapJobResult(currentJob), nil
+	}
+
+	applyTransition(currentJob, transition, s.now())
+	if err := s.store.Put(currentJob); err != nil {
 		return StepResult{}, err
 	}
 
-	return mapJobResult(job), nil
+	return mapJobResult(currentJob), nil
 }
 
 func (s *Service) Poll(ctx context.Context, route TemplateID, input SignerPollInput) (StepResult, error) {

@@ -212,6 +212,13 @@ var cmdFlagsTests = map[string]struct {
 		expectedValueFromFlag: "secret-token",
 		defaultValue:          "",
 	},
+	"covenantSigner.enableSelfV1": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.CovenantSigner.EnableSelfV1 },
+		flagName:              "--covenantSigner.enableSelfV1",
+		flagValue:             "",
+		expectedValueFromFlag: true,
+		defaultValue:          false,
+	},
 	"tbtc.preParamsPoolSize": {
 		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.PreParamsPoolSize },
 		flagName:              "--tbtc.preParamsPoolSize",

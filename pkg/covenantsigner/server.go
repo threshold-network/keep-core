@@ -57,7 +57,7 @@ func Initialize(
 		service: service,
 		httpServer: &http.Server{
 			Addr:              net.JoinHostPort(listenAddress, strconv.Itoa(config.Port)),
-			Handler:           newHandler(service, config.AuthToken),
+			Handler:           newHandler(service, config.AuthToken, config.EnableSelfV1),
 			ReadHeaderTimeout: 5 * time.Second,
 		},
 	}
@@ -85,15 +85,16 @@ func Initialize(
 	}()
 
 	logger.Infof(
-		"enabled covenant signer provider endpoint on [%v] auth=[%v]",
+		"enabled covenant signer provider endpoint on [%v] auth=[%v] self_v1=[%v]",
 		server.httpServer.Addr,
 		strings.TrimSpace(config.AuthToken) != "",
+		config.EnableSelfV1,
 	)
 
 	return server, true, nil
 }
 
-func newHandler(service *Service, authToken string) http.Handler {
+func newHandler(service *Service, authToken string, enableSelfV1 bool) http.Handler {
 	mux := http.NewServeMux()
 	protectedHandler := withBearerAuth(mux, authToken)
 
@@ -103,12 +104,14 @@ func newHandler(service *Service, authToken string) http.Handler {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	mux.HandleFunc("POST /v1/self_v1/signer/requests", submitHandler(service, TemplateSelfV1))
 	mux.HandleFunc("POST /v1/qc_v1/signer/requests", submitHandler(service, TemplateQcV1))
-	mux.HandleFunc("POST /v1/self_v1/signer/requests:poll", pollBodyHandler(service, TemplateSelfV1))
 	mux.HandleFunc("POST /v1/qc_v1/signer/requests:poll", pollBodyHandler(service, TemplateQcV1))
-	mux.HandleFunc("/v1/self_v1/signer/requests/", pollPathHandler(service, TemplateSelfV1))
 	mux.HandleFunc("/v1/qc_v1/signer/requests/", pollPathHandler(service, TemplateQcV1))
+	if enableSelfV1 {
+		mux.HandleFunc("POST /v1/self_v1/signer/requests", submitHandler(service, TemplateSelfV1))
+		mux.HandleFunc("POST /v1/self_v1/signer/requests:poll", pollBodyHandler(service, TemplateSelfV1))
+		mux.HandleFunc("/v1/self_v1/signer/requests/", pollPathHandler(service, TemplateSelfV1))
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" {
@@ -126,7 +129,12 @@ func isLoopbackListenAddress(address string) bool {
 		return true
 	}
 
-	ip := net.ParseIP(trimmedAddress)
+	normalizedAddress := trimmedAddress
+	if strings.HasPrefix(normalizedAddress, "[") && strings.HasSuffix(normalizedAddress, "]") {
+		normalizedAddress = normalizedAddress[1 : len(normalizedAddress)-1]
+	}
+
+	ip := net.ParseIP(normalizedAddress)
 	return ip != nil && ip.IsLoopback()
 }
 

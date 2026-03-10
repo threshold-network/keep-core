@@ -251,6 +251,9 @@ func validateMigrationTransactionPlan(
 	if plan.DestinationValueSats == 0 {
 		return &inputError{"request.migrationTransactionPlan.destinationValueSats must be greater than zero"}
 	}
+	if plan.FeeSats == 0 {
+		return &inputError{"request.migrationTransactionPlan.feeSats must be greater than zero"}
+	}
 	if plan.AnchorValueSats != canonicalAnchorValueSats {
 		return &inputError{"request.migrationTransactionPlan.anchorValueSats must equal the canonical 330 sat anchor"}
 	}
