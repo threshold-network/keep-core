@@ -6,12 +6,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 )
 
 const (
-	canonicalCovenantInputSequence uint32 = 0xFFFFFFFD
-	canonicalAnchorValueSats       uint64 = 330
+	canonicalCovenantInputSequence  uint32 = 0xFFFFFFFD
+	canonicalAnchorValueSats        uint64 = 330
+	migrationTransactionPlanVersion uint32 = 1
 )
 
 type inputError struct {
@@ -93,6 +95,24 @@ type destinationCommitmentPayload struct {
 	MigrationExtraData string `json:"migrationExtraData"`
 }
 
+type migrationPlanCommitmentPayload struct {
+	// Field order is hash-significant and must stay aligned with the TypeScript
+	// migration transaction-plan commitment payload. planCommitmentHash is
+	// intentionally omitted because it is the output of this computation.
+	PlanVersion               uint32 `json:"planVersion"`
+	Reserve                   string `json:"reserve"`
+	Epoch                     uint64 `json:"epoch"`
+	ActiveOutpointTxID        string `json:"activeOutpointTxid"`
+	ActiveOutpointVout        uint32 `json:"activeOutpointVout"`
+	DestinationCommitmentHash string `json:"destinationCommitmentHash"`
+	InputValueSats            uint64 `json:"inputValueSats"`
+	DestinationValueSats      uint64 `json:"destinationValueSats"`
+	AnchorValueSats           uint64 `json:"anchorValueSats"`
+	FeeSats                   uint64 `json:"feeSats"`
+	InputSequence             uint32 `json:"inputSequence"`
+	LockTime                  uint32 `json:"lockTime"`
+}
+
 func computeDestinationCommitmentHash(
 	reservation *MigrationDestinationReservation,
 ) (string, error) {
@@ -105,6 +125,32 @@ func computeDestinationCommitmentHash(
 		Network:            strings.TrimSpace(reservation.Network),
 		DepositScriptHash:  normalizeLowerHex(reservation.DepositScriptHash),
 		MigrationExtraData: normalizeLowerHex(reservation.MigrationExtraData),
+	})
+	if err != nil {
+		return "", err
+	}
+
+	sum := sha256.Sum256(payload)
+	return "0x" + hex.EncodeToString(sum[:]), nil
+}
+
+func computeMigrationTransactionPlanCommitmentHash(
+	request RouteSubmitRequest,
+	plan *MigrationTransactionPlan,
+) (string, error) {
+	payload, err := json.Marshal(migrationPlanCommitmentPayload{
+		PlanVersion:               plan.PlanVersion,
+		Reserve:                   normalizeLowerHex(request.Reserve),
+		Epoch:                     request.Epoch,
+		ActiveOutpointTxID:        normalizeLowerHex(request.ActiveOutpoint.TxID),
+		ActiveOutpointVout:        request.ActiveOutpoint.Vout,
+		DestinationCommitmentHash: normalizeLowerHex(request.DestinationCommitmentHash),
+		InputValueSats:            plan.InputValueSats,
+		DestinationValueSats:      plan.DestinationValueSats,
+		AnchorValueSats:           plan.AnchorValueSats,
+		FeeSats:                   plan.FeeSats,
+		InputSequence:             plan.InputSequence,
+		LockTime:                  plan.LockTime,
 	})
 	if err != nil {
 		return "", err
@@ -193,11 +239,20 @@ func validateMigrationTransactionPlan(
 	if plan == nil {
 		return &inputError{"request.migrationTransactionPlan is required"}
 	}
+	if plan.PlanVersion != migrationTransactionPlanVersion {
+		return &inputError{"request.migrationTransactionPlan.planVersion must equal 1"}
+	}
+	if err := validateHexString("request.migrationTransactionPlan.planCommitmentHash", plan.PlanCommitmentHash); err != nil {
+		return err
+	}
 	if plan.InputValueSats == 0 {
 		return &inputError{"request.migrationTransactionPlan.inputValueSats must be greater than zero"}
 	}
 	if plan.DestinationValueSats == 0 {
 		return &inputError{"request.migrationTransactionPlan.destinationValueSats must be greater than zero"}
+	}
+	if plan.FeeSats == 0 {
+		return &inputError{"request.migrationTransactionPlan.feeSats must be greater than zero"}
 	}
 	if plan.AnchorValueSats != canonicalAnchorValueSats {
 		return &inputError{"request.migrationTransactionPlan.anchorValueSats must equal the canonical 330 sat anchor"}
@@ -205,7 +260,10 @@ func validateMigrationTransactionPlan(
 	if plan.InputSequence != canonicalCovenantInputSequence {
 		return &inputError{"request.migrationTransactionPlan.inputSequence must equal 0xFFFFFFFD"}
 	}
-	if plan.LockTime != request.MaturityHeight {
+	if request.MaturityHeight > math.MaxUint32 {
+		return &inputError{"request.maturityHeight must fit in uint32"}
+	}
+	if uint64(plan.LockTime) != request.MaturityHeight {
 		return &inputError{"request.migrationTransactionPlan.lockTime must match request.maturityHeight"}
 	}
 	if plan.InputValueSats < plan.DestinationValueSats {
@@ -218,6 +276,14 @@ func validateMigrationTransactionPlan(
 	remainingAfterAnchor := remainingAfterDestination - plan.AnchorValueSats
 	if remainingAfterAnchor != plan.FeeSats {
 		return &inputError{"request.migrationTransactionPlan values must satisfy inputValueSats = destinationValueSats + anchorValueSats + feeSats"}
+	}
+
+	expectedCommitmentHash, err := computeMigrationTransactionPlanCommitmentHash(request, plan)
+	if err != nil {
+		return err
+	}
+	if normalizeLowerHex(plan.PlanCommitmentHash) != expectedCommitmentHash {
+		return &inputError{"request.migrationTransactionPlan.planCommitmentHash does not match canonical migration transaction plan"}
 	}
 
 	return nil

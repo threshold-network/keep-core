@@ -2,11 +2,13 @@ package covenantsigner
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +36,18 @@ func Initialize(
 		return nil, false, fmt.Errorf("invalid covenant signer port [%d]", config.Port)
 	}
 
+	listenAddress := config.ListenAddress
+	if strings.TrimSpace(listenAddress) == "" {
+		listenAddress = DefaultListenAddress
+	}
+
+	if !isLoopbackListenAddress(listenAddress) && strings.TrimSpace(config.AuthToken) == "" {
+		return nil, false, fmt.Errorf(
+			"covenant signer authToken is required for non-loopback listenAddress [%s]",
+			listenAddress,
+		)
+	}
+
 	service, err := NewService(handle, engine)
 	if err != nil {
 		return nil, false, err
@@ -42,8 +56,8 @@ func Initialize(
 	server := &Server{
 		service: service,
 		httpServer: &http.Server{
-			Addr:              fmt.Sprintf(":%d", config.Port),
-			Handler:           newHandler(service),
+			Addr:              net.JoinHostPort(listenAddress, strconv.Itoa(config.Port)),
+			Handler:           newHandler(service, config.AuthToken, config.EnableSelfV1),
 			ReadHeaderTimeout: 5 * time.Second,
 		},
 	}
@@ -55,7 +69,13 @@ func Initialize(
 
 	go func() {
 		<-ctx.Done()
-		_ = server.httpServer.Shutdown(context.Background())
+		shutdownCtx, cancelShutdown := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			5*time.Second,
+		)
+		defer cancelShutdown()
+
+		_ = server.httpServer.Shutdown(shutdownCtx)
 	}()
 
 	go func() {
@@ -64,13 +84,19 @@ func Initialize(
 		}
 	}()
 
-	logger.Infof("enabled covenant signer provider endpoint on port [%v]", config.Port)
+	logger.Infof(
+		"enabled covenant signer provider endpoint on [%v] auth=[%v] self_v1=[%v]",
+		server.httpServer.Addr,
+		strings.TrimSpace(config.AuthToken) != "",
+		config.EnableSelfV1,
+	)
 
 	return server, true, nil
 }
 
-func newHandler(service *Service) http.Handler {
+func newHandler(service *Service, authToken string, enableSelfV1 bool) http.Handler {
 	mux := http.NewServeMux()
+	protectedHandler := withBearerAuth(mux, authToken)
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -78,14 +104,64 @@ func newHandler(service *Service) http.Handler {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	mux.HandleFunc("POST /v1/self_v1/signer/requests", submitHandler(service, TemplateSelfV1))
 	mux.HandleFunc("POST /v1/qc_v1/signer/requests", submitHandler(service, TemplateQcV1))
-	mux.HandleFunc("POST /v1/self_v1/signer/requests:poll", pollBodyHandler(service, TemplateSelfV1))
 	mux.HandleFunc("POST /v1/qc_v1/signer/requests:poll", pollBodyHandler(service, TemplateQcV1))
-	mux.HandleFunc("/v1/self_v1/signer/requests/", pollPathHandler(service, TemplateSelfV1))
 	mux.HandleFunc("/v1/qc_v1/signer/requests/", pollPathHandler(service, TemplateQcV1))
+	if enableSelfV1 {
+		mux.HandleFunc("POST /v1/self_v1/signer/requests", submitHandler(service, TemplateSelfV1))
+		mux.HandleFunc("POST /v1/self_v1/signer/requests:poll", pollBodyHandler(service, TemplateSelfV1))
+		mux.HandleFunc("/v1/self_v1/signer/requests/", pollPathHandler(service, TemplateSelfV1))
+	}
 
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			mux.ServeHTTP(w, r)
+			return
+		}
+
+		protectedHandler.ServeHTTP(w, r)
+	})
+}
+
+func isLoopbackListenAddress(address string) bool {
+	trimmedAddress := strings.TrimSpace(address)
+	if trimmedAddress == "" || strings.EqualFold(trimmedAddress, "localhost") {
+		return true
+	}
+
+	normalizedAddress := trimmedAddress
+	if strings.HasPrefix(normalizedAddress, "[") && strings.HasSuffix(normalizedAddress, "]") {
+		normalizedAddress = normalizedAddress[1 : len(normalizedAddress)-1]
+	}
+
+	ip := net.ParseIP(normalizedAddress)
+	return ip != nil && ip.IsLoopback()
+}
+
+func withBearerAuth(next http.Handler, authToken string) http.Handler {
+	trimmedToken := strings.TrimSpace(authToken)
+	if trimmedToken == "" {
+		return next
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizationHeader := r.Header.Get("Authorization")
+		const prefix = "Bearer "
+		if !strings.HasPrefix(authorizationHeader, prefix) {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, "missing bearer token", http.StatusUnauthorized)
+			return
+		}
+
+		presentedToken := strings.TrimSpace(strings.TrimPrefix(authorizationHeader, prefix))
+		if subtle.ConstantTimeCompare([]byte(presentedToken), []byte(trimmedToken)) != 1 {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, "invalid bearer token", http.StatusUnauthorized)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 func decodeJSON[T any](w http.ResponseWriter, r *http.Request, target *T) bool {

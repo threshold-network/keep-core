@@ -102,12 +102,14 @@ type MigrationDestinationReservation struct {
 }
 
 type MigrationTransactionPlan struct {
+	PlanVersion          uint32 `json:"planVersion"`
+	PlanCommitmentHash   string `json:"planCommitmentHash"`
 	InputValueSats       uint64 `json:"inputValueSats"`
 	DestinationValueSats uint64 `json:"destinationValueSats"`
 	AnchorValueSats      uint64 `json:"anchorValueSats"`
 	FeeSats              uint64 `json:"feeSats"`
 	InputSequence        uint32 `json:"inputSequence"`
-	LockTime             uint64 `json:"lockTime"`
+	LockTime             uint32 `json:"lockTime"`
 }
 
 type SigningRequirements struct {

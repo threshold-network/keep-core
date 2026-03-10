@@ -523,7 +523,7 @@ func (cse *covenantSignerEngine) buildAndSignSelfV1Transaction(
 	if err := builder.SetInputSequence(0, request.MigrationTransactionPlan.InputSequence); err != nil {
 		return nil, fmt.Errorf("cannot set covenant input sequence: %v", err)
 	}
-	builder.SetLocktime(uint32(request.MigrationTransactionPlan.LockTime))
+	builder.SetLocktime(request.MigrationTransactionPlan.LockTime)
 	builder.AddOutput(&bitcoin.TransactionOutput{
 		Value:           destinationValue,
 		PublicKeyScript: destinationScript,
@@ -614,7 +614,7 @@ func (cse *covenantSignerEngine) buildQcV1SignerHandoff(
 	if err := builder.SetInputSequence(0, request.MigrationTransactionPlan.InputSequence); err != nil {
 		return nil, fmt.Errorf("cannot set covenant input sequence: %v", err)
 	}
-	builder.SetLocktime(uint32(request.MigrationTransactionPlan.LockTime))
+	builder.SetLocktime(request.MigrationTransactionPlan.LockTime)
 	builder.AddOutput(&bitcoin.TransactionOutput{
 		Value:           destinationValue,
 		PublicKeyScript: destinationScript,
