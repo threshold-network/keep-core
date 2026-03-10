@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -99,6 +100,48 @@ func mapJobResult(job *Job) StepResult {
 	}
 }
 
+func isTerminalJobState(state JobState) bool {
+	return state == JobStateArtifactReady ||
+		state == JobStateHandoffReady ||
+		state == JobStateFailed
+}
+
+func sameJobRevision(current *Job, snapshot *Job) bool {
+	return current.RequestID == snapshot.RequestID &&
+		current.State == snapshot.State &&
+		current.Detail == snapshot.Detail &&
+		current.Reason == snapshot.Reason &&
+		current.PSBTHash == snapshot.PSBTHash &&
+		current.TransactionHex == snapshot.TransactionHex &&
+		current.UpdatedAt == snapshot.UpdatedAt &&
+		current.CompletedAt == snapshot.CompletedAt &&
+		current.FailedAt == snapshot.FailedAt &&
+		reflect.DeepEqual(current.Handoff, snapshot.Handoff)
+}
+
+func (s *Service) loadPollJob(route TemplateID, input SignerPollInput) (*Job, error) {
+	job, ok, err := s.store.GetByRequestID(input.RequestID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || job.Route != route {
+		return nil, errJobNotFound
+	}
+	if job.RouteRequestID != input.RouteRequestID {
+		return nil, &inputError{"routeRequestId does not match stored job"}
+	}
+
+	digest, err := requestDigest(input.Request)
+	if err != nil {
+		return nil, err
+	}
+	if digest != job.RequestDigest {
+		return nil, &inputError{"request does not match stored job payload"}
+	}
+
+	return job, nil
+}
+
 func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubmitInput) (StepResult, error) {
 	if err := validateSubmitInput(route, input); err != nil {
 		return StepResult{}, err
@@ -181,51 +224,59 @@ func (s *Service) Poll(ctx context.Context, route TemplateID, input SignerPollIn
 		return StepResult{}, err
 	}
 
-	job, ok, err := s.store.GetByRequestID(input.RequestID)
+	s.mutex.Lock()
+	job, err := s.loadPollJob(route, input)
 	if err != nil {
+		s.mutex.Unlock()
 		return StepResult{}, err
 	}
-	if !ok || job.Route != route {
-		return StepResult{}, errJobNotFound
+	if isTerminalJobState(job.State) {
+		result := mapJobResult(job)
+		s.mutex.Unlock()
+		return result, nil
 	}
-	if job.RouteRequestID != input.RouteRequestID {
-		return StepResult{}, &inputError{"routeRequestId does not match stored job"}
-	}
+	s.mutex.Unlock()
 
-	digest, err := requestDigest(input.Request)
-	if err != nil {
-		return StepResult{}, err
-	}
-	if digest != job.RequestDigest {
-		return StepResult{}, &inputError{"request does not match stored job payload"}
-	}
-
-	if job.State == JobStateArtifactReady || job.State == JobStateHandoffReady || job.State == JobStateFailed {
-		return mapJobResult(job), nil
-	}
-
-	transition, err := s.engine.OnPoll(ctx, job)
-	if err != nil {
-		if err == errJobNotFound {
-			applyTransition(job, &Transition{
-				State:  JobStateFailed,
-				Reason: ReasonJobNotFound,
-				Detail: "signer job no longer exists",
-			}, s.now())
-			if storeErr := s.store.Put(job); storeErr != nil {
-				return StepResult{}, storeErr
-			}
-			return mapJobResult(job), nil
+	transition, pollErr := s.engine.OnPoll(ctx, job)
+	if pollErr != nil {
+		if pollErr != errJobNotFound {
+			return StepResult{}, pollErr
 		}
+	}
+
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	currentJob, err := s.loadPollJob(route, input)
+	if err != nil {
 		return StepResult{}, err
+	}
+
+	// Another Submit/Poll already advanced the stored job while this poll was
+	// in-flight. Return the newer durable state instead of overwriting it with a
+	// stale transition computed from an older snapshot.
+	if !sameJobRevision(currentJob, job) || isTerminalJobState(currentJob.State) {
+		return mapJobResult(currentJob), nil
+	}
+
+	if pollErr == errJobNotFound {
+		applyTransition(currentJob, &Transition{
+			State:  JobStateFailed,
+			Reason: ReasonJobNotFound,
+			Detail: "signer job no longer exists",
+		}, s.now())
+		if storeErr := s.store.Put(currentJob); storeErr != nil {
+			return StepResult{}, storeErr
+		}
+		return mapJobResult(currentJob), nil
 	}
 
 	if transition != nil {
-		applyTransition(job, transition, s.now())
-		if err := s.store.Put(job); err != nil {
+		applyTransition(currentJob, transition, s.now())
+		if err := s.store.Put(currentJob); err != nil {
 			return StepResult{}, err
 		}
 	}
 
-	return mapJobResult(job), nil
+	return mapJobResult(currentJob), nil
 }

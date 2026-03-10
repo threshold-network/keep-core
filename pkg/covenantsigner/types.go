@@ -109,7 +109,7 @@ type MigrationTransactionPlan struct {
 	AnchorValueSats      uint64 `json:"anchorValueSats"`
 	FeeSats              uint64 `json:"feeSats"`
 	InputSequence        uint32 `json:"inputSequence"`
-	LockTime             uint64 `json:"lockTime"`
+	LockTime             uint32 `json:"lockTime"`
 }
 
 type SigningRequirements struct {

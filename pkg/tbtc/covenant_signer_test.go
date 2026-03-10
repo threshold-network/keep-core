@@ -185,7 +185,7 @@ func TestCovenantSignerEngine_SubmitSelfV1Ready(t *testing.T) {
 			AnchorValueSats:      anchorValueSats,
 			FeeSats:              feeSats,
 			InputSequence:        0xfffffffd,
-			LockTime:             maturityHeight,
+			LockTime:             uint32(maturityHeight),
 		},
 		ArtifactSignatures: []string{"0x0708"},
 		Artifacts:          map[covenantsigner.RecoveryPathID]covenantsigner.ArtifactRecord{},
@@ -414,7 +414,7 @@ func TestCovenantSignerEngine_SubmitQcV1HandoffReady(t *testing.T) {
 			AnchorValueSats:      anchorValueSats,
 			FeeSats:              feeSats,
 			InputSequence:        0xfffffffd,
-			LockTime:             maturityHeight,
+			LockTime:             uint32(maturityHeight),
 		},
 		ArtifactSignatures: []string{"0x090a"},
 		Artifacts:          map[covenantsigner.RecoveryPathID]covenantsigner.ArtifactRecord{},
@@ -789,7 +789,7 @@ func TestCovenantSignerEngine_SubmitQcV1RejectsScriptHashMismatch(t *testing.T) 
 			AnchorValueSats:      330,
 			FeeSats:              2_170,
 			InputSequence:        0xfffffffd,
-			LockTime:             maturityHeight,
+			LockTime:             uint32(maturityHeight),
 		},
 		ArtifactSignatures: []string{"0x090a"},
 		Artifacts:          map[covenantsigner.RecoveryPathID]covenantsigner.ArtifactRecord{},
@@ -1086,7 +1086,7 @@ type testMigrationTransactionPlanCommitmentPayload struct {
 	AnchorValueSats           uint64 `json:"anchorValueSats"`
 	FeeSats                   uint64 `json:"feeSats"`
 	InputSequence             uint32 `json:"inputSequence"`
-	LockTime                  uint64 `json:"lockTime"`
+	LockTime                  uint32 `json:"lockTime"`
 }
 
 func testMigrationTransactionPlanCommitmentHash(

@@ -299,6 +299,245 @@ func TestServiceSubmitReturnsExistingJobWhileInitialEngineCallIsInFlight(t *test
 	}
 }
 
+func TestServicePollReturnsNewerPersistedStateWhenItsTransitionBecomesStale(t *testing.T) {
+	handle := newMemoryHandle()
+	submitStarted := make(chan struct{})
+	releaseSubmit := make(chan struct{})
+	pollStarted := make(chan struct{})
+	releasePoll := make(chan struct{})
+
+	service, err := NewService(handle, &scriptedEngine{
+		submit: func(*Job) (*Transition, error) {
+			select {
+			case <-submitStarted:
+			default:
+				close(submitStarted)
+			}
+
+			<-releaseSubmit
+			return &Transition{
+				State:          JobStateArtifactReady,
+				Detail:         "artifact ready",
+				PSBTHash:       "0x090a",
+				TransactionHex: "0x0b0c",
+			}, nil
+		},
+		poll: func(*Job) (*Transition, error) {
+			select {
+			case <-pollStarted:
+			default:
+				close(pollStarted)
+			}
+
+			<-releasePoll
+			return &Transition{State: JobStatePending, Detail: "stale pending"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	input := SignerSubmitInput{
+		RouteRequestID: "ors_poll_stale_pending",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	}
+
+	submitResultChan := make(chan StepResult, 1)
+	submitErrChan := make(chan error, 1)
+	go func() {
+		result, err := service.Submit(context.Background(), TemplateSelfV1, input)
+		if err != nil {
+			submitErrChan <- err
+			return
+		}
+
+		submitResultChan <- result
+	}()
+
+	<-submitStarted
+
+	storedJob, ok, err := service.store.GetByRouteRequest(TemplateSelfV1, input.RouteRequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected submitted job to exist while submit engine is in flight")
+	}
+
+	pollResultChan := make(chan StepResult, 1)
+	pollErrChan := make(chan error, 1)
+	go func() {
+		result, err := service.Poll(context.Background(), TemplateSelfV1, SignerPollInput{
+			RouteRequestID: input.RouteRequestID,
+			RequestID:      storedJob.RequestID,
+			Stage:          StageSignerCoordination,
+			Request:        input.Request,
+		})
+		if err != nil {
+			pollErrChan <- err
+			return
+		}
+
+		pollResultChan <- result
+	}()
+
+	<-pollStarted
+	close(releaseSubmit)
+
+	var submitResult StepResult
+	select {
+	case err := <-submitErrChan:
+		t.Fatal(err)
+	case submitResult = <-submitResultChan:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected submit to finish after engine release")
+	}
+
+	close(releasePoll)
+
+	var pollResult StepResult
+	select {
+	case err := <-pollErrChan:
+		t.Fatal(err)
+	case pollResult = <-pollResultChan:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected poll to finish after release")
+	}
+
+	if pollResult.Status != StepStatusReady {
+		t.Fatalf("expected stale poll to return latest READY state, got %#v", pollResult)
+	}
+	if pollResult.PSBTHash != submitResult.PSBTHash || pollResult.TransactionHex != submitResult.TransactionHex {
+		t.Fatalf("expected poll to return persisted READY payload, got submit=%#v poll=%#v", submitResult, pollResult)
+	}
+
+	persistedJob, ok, err := service.store.GetByRequestID(storedJob.RequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected persisted job after stale poll")
+	}
+	if persistedJob.State != JobStateArtifactReady {
+		t.Fatalf("expected persisted READY state, got %s", persistedJob.State)
+	}
+}
+
+func TestServicePollDoesNotOverwriteNewerPersistedStateWithJobNotFound(t *testing.T) {
+	handle := newMemoryHandle()
+	submitStarted := make(chan struct{})
+	releaseSubmit := make(chan struct{})
+	pollStarted := make(chan struct{})
+	releasePoll := make(chan struct{})
+
+	service, err := NewService(handle, &scriptedEngine{
+		submit: func(*Job) (*Transition, error) {
+			select {
+			case <-submitStarted:
+			default:
+				close(submitStarted)
+			}
+
+			<-releaseSubmit
+			return &Transition{
+				State:          JobStateArtifactReady,
+				Detail:         "artifact ready",
+				PSBTHash:       "0x0d0e",
+				TransactionHex: "0x0f10",
+			}, nil
+		},
+		poll: func(*Job) (*Transition, error) {
+			select {
+			case <-pollStarted:
+			default:
+				close(pollStarted)
+			}
+
+			<-releasePoll
+			return nil, errJobNotFound
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	input := SignerSubmitInput{
+		RouteRequestID: "ors_poll_stale_missing",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	}
+
+	submitResultChan := make(chan StepResult, 1)
+	submitErrChan := make(chan error, 1)
+	go func() {
+		result, err := service.Submit(context.Background(), TemplateSelfV1, input)
+		if err != nil {
+			submitErrChan <- err
+			return
+		}
+
+		submitResultChan <- result
+	}()
+
+	<-submitStarted
+
+	storedJob, ok, err := service.store.GetByRouteRequest(TemplateSelfV1, input.RouteRequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected submitted job to exist while submit engine is in flight")
+	}
+
+	pollResultChan := make(chan StepResult, 1)
+	pollErrChan := make(chan error, 1)
+	go func() {
+		result, err := service.Poll(context.Background(), TemplateSelfV1, SignerPollInput{
+			RouteRequestID: input.RouteRequestID,
+			RequestID:      storedJob.RequestID,
+			Stage:          StageSignerCoordination,
+			Request:        input.Request,
+		})
+		if err != nil {
+			pollErrChan <- err
+			return
+		}
+
+		pollResultChan <- result
+	}()
+
+	<-pollStarted
+	close(releaseSubmit)
+
+	var submitResult StepResult
+	select {
+	case err := <-submitErrChan:
+		t.Fatal(err)
+	case submitResult = <-submitResultChan:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected submit to finish after engine release")
+	}
+
+	close(releasePoll)
+
+	var pollResult StepResult
+	select {
+	case err := <-pollErrChan:
+		t.Fatal(err)
+	case pollResult = <-pollResultChan:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected poll to finish after release")
+	}
+
+	if pollResult.Status != StepStatusReady {
+		t.Fatalf("expected stale job-not-found poll to return latest READY state, got %#v", pollResult)
+	}
+	if pollResult.PSBTHash != submitResult.PSBTHash || pollResult.TransactionHex != submitResult.TransactionHex {
+		t.Fatalf("expected poll to return persisted READY payload, got submit=%#v poll=%#v", submitResult, pollResult)
+	}
+}
+
 func TestServicePollCanTransitionToReady(t *testing.T) {
 	handle := newMemoryHandle()
 	service, err := NewService(handle, &scriptedEngine{
@@ -633,9 +872,16 @@ func TestServiceRejectsInvalidMigrationTransactionPlanVariants(t *testing.T) {
 		{
 			name: "locktime mismatch",
 			mutate: func(request *RouteSubmitRequest) {
-				request.MigrationTransactionPlan.LockTime = request.MaturityHeight + 1
+				request.MigrationTransactionPlan.LockTime = uint32(request.MaturityHeight + 1)
 			},
 			expectErr: "request.migrationTransactionPlan.lockTime must match request.maturityHeight",
+		},
+		{
+			name: "maturity height exceeds uint32",
+			mutate: func(request *RouteSubmitRequest) {
+				request.MaturityHeight = 0x1_0000_0000
+			},
+			expectErr: "request.maturityHeight must fit in uint32",
 		},
 		{
 			name: "insufficient input for destination",
@@ -714,32 +960,86 @@ func TestServiceRejectsMigrationTransactionPlanBoundToDifferentDestinationCommit
 	}
 }
 
-func TestMigrationTransactionPlanCommitmentHashMatchesCanonicalVector(t *testing.T) {
-	request := RouteSubmitRequest{
-		Reserve:                   "0x2000000000000000000000000000000000000002",
-		Epoch:                     12,
-		ActiveOutpoint:            CovenantOutpoint{TxID: "0x1111111111111111111111111111111111111111111111111111111111111111", Vout: 1},
-		DestinationCommitmentHash: "0xf1b1739d99ea890ea6d419d6db28f4d5fe0871c32619a0984c1bfdbe4025f768",
-	}
-	plan := &MigrationTransactionPlan{
-		PlanVersion:          migrationTransactionPlanVersion,
-		PlanCommitmentHash:   "0x0000000000000000000000000000000000000000000000000000000000000000",
-		InputValueSats:       1_000_000,
-		DestinationValueSats: 998_000,
-		AnchorValueSats:      canonicalAnchorValueSats,
-		FeeSats:              1_670,
-		InputSequence:        canonicalCovenantInputSequence,
-		LockTime:             950000,
+func TestMigrationTransactionPlanCommitmentHashMatchesCanonicalVectors(t *testing.T) {
+	testCases := []struct {
+		name     string
+		request  RouteSubmitRequest
+		plan     *MigrationTransactionPlan
+		expected string
+	}{
+		{
+			name: "canonical cross-stack vector",
+			request: RouteSubmitRequest{
+				Reserve:                   "0x2000000000000000000000000000000000000002",
+				Epoch:                     12,
+				ActiveOutpoint:            CovenantOutpoint{TxID: "0x1111111111111111111111111111111111111111111111111111111111111111", Vout: 1},
+				DestinationCommitmentHash: "0xf1b1739d99ea890ea6d419d6db28f4d5fe0871c32619a0984c1bfdbe4025f768",
+			},
+			plan: &MigrationTransactionPlan{
+				PlanVersion:          migrationTransactionPlanVersion,
+				PlanCommitmentHash:   "0x0000000000000000000000000000000000000000000000000000000000000000",
+				InputValueSats:       1_000_000,
+				DestinationValueSats: 998_000,
+				AnchorValueSats:      canonicalAnchorValueSats,
+				FeeSats:              1_670,
+				InputSequence:        canonicalCovenantInputSequence,
+				LockTime:             950000,
+			},
+			expected: "0x8dcafe57b888040d644e80dfd1b8b089dfd5016205d78316549ef71d032070f2",
+		},
+		{
+			name: "mixed-case hex inputs normalize before hashing",
+			request: RouteSubmitRequest{
+				Reserve:                   "0xAbCd00000000000000000000000000000000Ef01",
+				Epoch:                     0,
+				ActiveOutpoint:            CovenantOutpoint{TxID: "0xAaBbCcDdAaBbCcDdAaBbCcDdAaBbCcDdAaBbCcDdAaBbCcDdAaBbCcDdAaBbCcDd", Vout: 0},
+				DestinationCommitmentHash: "0xFfEeDdCcBbAa00998877665544332211FfEeDdCcBbAa00998877665544332211",
+			},
+			plan: &MigrationTransactionPlan{
+				PlanVersion:          migrationTransactionPlanVersion,
+				PlanCommitmentHash:   "0x0000000000000000000000000000000000000000000000000000000000000000",
+				InputValueSats:       100_000,
+				DestinationValueSats: 99_300,
+				AnchorValueSats:      canonicalAnchorValueSats,
+				FeeSats:              370,
+				InputSequence:        canonicalCovenantInputSequence,
+				LockTime:             1,
+			},
+			expected: "0x626ce76714e04a41a5ec06a96082cac2ebd4d8f687fdc77766ffd9c0d11dac14",
+		},
+		{
+			name: "max uint32 fields and large safe integer amounts remain stable",
+			request: RouteSubmitRequest{
+				Reserve:                   "0x9999999999999999999999999999999999999999",
+				Epoch:                     4294967295,
+				ActiveOutpoint:            CovenantOutpoint{TxID: "0x0000000000000000000000000000000000000000000000000000000000000001", Vout: 4294967295},
+				DestinationCommitmentHash: "0x00000000000000000000000000000000000000000000000000000000000000aa",
+			},
+			plan: &MigrationTransactionPlan{
+				PlanVersion:          migrationTransactionPlanVersion,
+				PlanCommitmentHash:   "0x0000000000000000000000000000000000000000000000000000000000000000",
+				InputValueSats:       9_007_199_254_740_000,
+				DestinationValueSats: 9_007_199_254_737_000,
+				AnchorValueSats:      canonicalAnchorValueSats,
+				FeeSats:              2670,
+				InputSequence:        canonicalCovenantInputSequence,
+				LockTime:             0xffffffff,
+			},
+			expected: "0x42983bef3abb9680093ca0254c780c6ed4e6178405649bf1846ebb381ca89e02",
+		},
 	}
 
-	actual, err := computeMigrationTransactionPlanCommitmentHash(request, plan)
-	if err != nil {
-		t.Fatal(err)
-	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			actual, err := computeMigrationTransactionPlanCommitmentHash(testCase.request, testCase.plan)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	expected := "0x8dcafe57b888040d644e80dfd1b8b089dfd5016205d78316549ef71d032070f2"
-	if actual != expected {
-		t.Fatalf("unexpected plan commitment hash: %s", actual)
+			if actual != testCase.expected {
+				t.Fatalf("unexpected plan commitment hash: %s", actual)
+			}
+		})
 	}
 }
 

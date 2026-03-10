@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -96,7 +97,8 @@ type destinationCommitmentPayload struct {
 
 type migrationPlanCommitmentPayload struct {
 	// Field order is hash-significant and must stay aligned with the TypeScript
-	// migration transaction-plan commitment payload.
+	// migration transaction-plan commitment payload. planCommitmentHash is
+	// intentionally omitted because it is the output of this computation.
 	PlanVersion               uint32 `json:"planVersion"`
 	Reserve                   string `json:"reserve"`
 	Epoch                     uint64 `json:"epoch"`
@@ -108,7 +110,7 @@ type migrationPlanCommitmentPayload struct {
 	AnchorValueSats           uint64 `json:"anchorValueSats"`
 	FeeSats                   uint64 `json:"feeSats"`
 	InputSequence             uint32 `json:"inputSequence"`
-	LockTime                  uint64 `json:"lockTime"`
+	LockTime                  uint32 `json:"lockTime"`
 }
 
 func computeDestinationCommitmentHash(
@@ -255,7 +257,10 @@ func validateMigrationTransactionPlan(
 	if plan.InputSequence != canonicalCovenantInputSequence {
 		return &inputError{"request.migrationTransactionPlan.inputSequence must equal 0xFFFFFFFD"}
 	}
-	if plan.LockTime != request.MaturityHeight {
+	if request.MaturityHeight > math.MaxUint32 {
+		return &inputError{"request.maturityHeight must fit in uint32"}
+	}
+	if uint64(plan.LockTime) != request.MaturityHeight {
 		return &inputError{"request.migrationTransactionPlan.lockTime must match request.maturityHeight"}
 	}
 	if plan.InputValueSats < plan.DestinationValueSats {
