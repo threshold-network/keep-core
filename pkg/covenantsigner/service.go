@@ -175,7 +175,7 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 	}
 
 	now := s.now()
-	requestDigest, err := requestDigest(normalizedRequest)
+	requestDigest, err := requestDigestFromNormalized(normalizedRequest)
 	if err != nil {
 		s.mutex.Unlock()
 		return StepResult{}, err

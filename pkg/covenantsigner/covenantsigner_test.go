@@ -1361,6 +1361,47 @@ func TestRequestDigestNormalizesEquivalentArtifactApprovalVariants(t *testing.T)
 	}
 }
 
+func TestRequestDigestDoesNotEscapeHTMLSensitiveCharacters(t *testing.T) {
+	request := canonicalArtifactApprovalRequest(TemplateSelfV1)
+	request.FacadeRequestID = "rf_<tag>&sink"
+	request.IdempotencyKey = "idem_>bridge"
+
+	normalizedRequest, err := normalizeRouteSubmitRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload, err := marshalCanonicalJSON(normalizedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Contains(payload, []byte(`"facadeRequestId":"rf_<tag>&sink"`)) {
+		t.Fatalf("expected raw HTML-sensitive characters in payload, got %s", payload)
+	}
+	if bytes.Contains(payload, []byte(`\u003c`)) ||
+		bytes.Contains(payload, []byte(`\u003e`)) ||
+		bytes.Contains(payload, []byte(`\u0026`)) {
+		t.Fatalf("expected unescaped HTML-sensitive characters in payload, got %s", payload)
+	}
+
+	digestFromRawRequest, err := requestDigest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digestFromNormalizedRequest, err := requestDigestFromNormalized(normalizedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digestFromRawRequest != digestFromNormalizedRequest {
+		t.Fatalf(
+			"expected matching digests, got %s vs %s",
+			digestFromRawRequest,
+			digestFromNormalizedRequest,
+		)
+	}
+}
+
 func TestServicePollAcceptsEquivalentArtifactApprovalRequestVariants(t *testing.T) {
 	handle := newMemoryHandle()
 	service, err := NewService(handle, &scriptedEngine{
@@ -1425,6 +1466,19 @@ func TestServiceStoresNormalizedArtifactApprovalRequest(t *testing.T) {
 	expected := canonicalArtifactApprovalRequest(TemplateQcV1)
 	if !reflect.DeepEqual(job.Request, expected) {
 		t.Fatalf("expected normalized request %#v, got %#v", expected, job.Request)
+	}
+}
+
+func TestRequestDigestRejectsArtifactApprovalsWithoutMigrationTransactionPlan(t *testing.T) {
+	request := canonicalArtifactApprovalRequest(TemplateSelfV1)
+	request.MigrationTransactionPlan = nil
+
+	_, err := requestDigest(request)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.migrationTransactionPlan is required when request.artifactApprovals is present",
+	) {
+		t.Fatalf("expected missing plan error, got %v", err)
 	}
 }
 

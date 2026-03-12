@@ -31,13 +31,32 @@ func strictUnmarshal(data []byte, target any) error {
 	return decoder.Decode(target)
 }
 
+func marshalCanonicalJSON(value any) ([]byte, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+
+	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), nil
+}
+
+// requestDigest accepts raw requests because Poll validates equivalence against
+// whatever the caller resubmits. Submit should use requestDigestFromNormalized
+// after it has already normalized the request once for storage.
 func requestDigest(request RouteSubmitRequest) (string, error) {
 	normalizedRequest, err := normalizeRouteSubmitRequest(request)
 	if err != nil {
 		return "", err
 	}
 
-	payload, err := json.Marshal(normalizedRequest)
+	return requestDigestFromNormalized(normalizedRequest)
+}
+
+func requestDigestFromNormalized(request RouteSubmitRequest) (string, error) {
+	payload, err := marshalCanonicalJSON(request)
 	if err != nil {
 		return "", err
 	}
@@ -349,6 +368,9 @@ func normalizeArtifactApprovals(
 
 	if request.ArtifactApprovals == nil {
 		return nil, normalizedLegacySignatures, nil
+	}
+	if request.MigrationTransactionPlan == nil {
+		return nil, nil, &inputError{"request.migrationTransactionPlan is required when request.artifactApprovals is present"}
 	}
 
 	if request.ArtifactApprovals.Payload.ApprovalVersion != artifactApprovalVersion {
