@@ -14,6 +14,7 @@ const (
 	canonicalCovenantInputSequence  uint32 = 0xFFFFFFFD
 	canonicalAnchorValueSats        uint64 = 330
 	migrationTransactionPlanVersion uint32 = 1
+	artifactApprovalVersion         uint32 = 1
 )
 
 type inputError struct {
@@ -289,6 +290,149 @@ func validateMigrationTransactionPlan(
 	return nil
 }
 
+func validateArtifactSignatures(signatures []string) ([]string, error) {
+	if len(signatures) == 0 {
+		return nil, &inputError{"request.artifactSignatures must not be empty"}
+	}
+
+	normalizedSignatures := make([]string, len(signatures))
+	for i, signature := range signatures {
+		if err := validateHexString(
+			fmt.Sprintf("request.artifactSignatures[%d]", i),
+			signature,
+		); err != nil {
+			return nil, err
+		}
+
+		normalizedSignatures[i] = normalizeLowerHex(signature)
+	}
+
+	return normalizedSignatures, nil
+}
+
+func requiredArtifactApprovalRoles(route TemplateID) ([]ArtifactApprovalRole, error) {
+	switch route {
+	case TemplateQcV1:
+		return []ArtifactApprovalRole{
+			ArtifactApprovalRoleDepositor,
+			ArtifactApprovalRoleCustodian,
+			ArtifactApprovalRoleSigner,
+		}, nil
+	case TemplateSelfV1:
+		return []ArtifactApprovalRole{
+			ArtifactApprovalRoleDepositor,
+			ArtifactApprovalRoleSigner,
+		}, nil
+	default:
+		return nil, &inputError{"unsupported request.route"}
+	}
+}
+
+func validateArtifactApprovals(route TemplateID, request RouteSubmitRequest) error {
+	normalizedLegacySignatures, err := validateArtifactSignatures(request.ArtifactSignatures)
+	if err != nil {
+		return err
+	}
+
+	if request.ArtifactApprovals == nil {
+		return nil
+	}
+
+	if request.ArtifactApprovals.Payload.ApprovalVersion != artifactApprovalVersion {
+		return &inputError{"request.artifactApprovals.payload.approvalVersion must equal 1"}
+	}
+	if request.ArtifactApprovals.Payload.Route != route {
+		return &inputError{"request.artifactApprovals.payload.route must match request.route"}
+	}
+	if request.ArtifactApprovals.Payload.ScriptTemplateID != route {
+		return &inputError{"request.artifactApprovals.payload.scriptTemplateId must match request.route"}
+	}
+	if err := validateHexString(
+		"request.artifactApprovals.payload.destinationCommitmentHash",
+		request.ArtifactApprovals.Payload.DestinationCommitmentHash,
+	); err != nil {
+		return err
+	}
+	if err := validateHexString(
+		"request.artifactApprovals.payload.planCommitmentHash",
+		request.ArtifactApprovals.Payload.PlanCommitmentHash,
+	); err != nil {
+		return err
+	}
+	if normalizeLowerHex(request.ArtifactApprovals.Payload.DestinationCommitmentHash) !=
+		normalizeLowerHex(request.DestinationCommitmentHash) {
+		return &inputError{"request.artifactApprovals.payload.destinationCommitmentHash must match request.destinationCommitmentHash"}
+	}
+	if normalizeLowerHex(request.ArtifactApprovals.Payload.PlanCommitmentHash) !=
+		normalizeLowerHex(request.MigrationTransactionPlan.PlanCommitmentHash) {
+		return &inputError{"request.artifactApprovals.payload.planCommitmentHash must match request.migrationTransactionPlan.planCommitmentHash"}
+	}
+	if len(request.ArtifactApprovals.Approvals) == 0 {
+		return &inputError{"request.artifactApprovals.approvals must not be empty"}
+	}
+
+	requiredRoles, err := requiredArtifactApprovalRoles(route)
+	if err != nil {
+		return err
+	}
+
+	allowedRoles := make(map[ArtifactApprovalRole]struct{}, len(requiredRoles))
+	for _, role := range requiredRoles {
+		allowedRoles[role] = struct{}{}
+	}
+
+	approvalsByRole := make(map[ArtifactApprovalRole]string, len(requiredRoles))
+	for i, approval := range request.ArtifactApprovals.Approvals {
+		if _, ok := allowedRoles[approval.Role]; !ok {
+			return &inputError{fmt.Sprintf(
+				"request.artifactApprovals.approvals[%d].role is not allowed for %s",
+				i,
+				route,
+			)}
+		}
+		if _, ok := approvalsByRole[approval.Role]; ok {
+			return &inputError{fmt.Sprintf(
+				"request.artifactApprovals.approvals[%d].role duplicates role %s",
+				i,
+				approval.Role,
+			)}
+		}
+		if err := validateHexString(
+			fmt.Sprintf("request.artifactApprovals.approvals[%d].signature", i),
+			approval.Signature,
+		); err != nil {
+			return err
+		}
+
+		approvalsByRole[approval.Role] = normalizeLowerHex(approval.Signature)
+	}
+
+	derivedLegacySignatures := make([]string, len(requiredRoles))
+	for i, role := range requiredRoles {
+		signature, ok := approvalsByRole[role]
+		if !ok {
+			return &inputError{fmt.Sprintf(
+				"request.artifactApprovals.approvals must include role %s for %s",
+				role,
+				route,
+			)}
+		}
+
+		derivedLegacySignatures[i] = signature
+	}
+
+	if len(normalizedLegacySignatures) != len(derivedLegacySignatures) {
+		return &inputError{"request.artifactSignatures must match canonical approval role order derived from request.artifactApprovals"}
+	}
+	for i := range derivedLegacySignatures {
+		if normalizedLegacySignatures[i] != derivedLegacySignatures[i] {
+			return &inputError{"request.artifactSignatures must match canonical approval role order derived from request.artifactApprovals"}
+		}
+	}
+
+	return nil
+}
+
 func validateCommonRequest(route TemplateID, request RouteSubmitRequest) error {
 	if request.FacadeRequestID == "" {
 		return &inputError{"request.facadeRequestId is required"}
@@ -328,13 +472,8 @@ func validateCommonRequest(route TemplateID, request RouteSubmitRequest) error {
 	if err := validateMigrationTransactionPlan(request, request.MigrationTransactionPlan); err != nil {
 		return err
 	}
-	if len(request.ArtifactSignatures) == 0 {
-		return &inputError{"request.artifactSignatures must not be empty"}
-	}
-	for i, signature := range request.ArtifactSignatures {
-		if err := validateHexString(fmt.Sprintf("request.artifactSignatures[%d]", i), signature); err != nil {
-			return err
-		}
+	if err := validateArtifactApprovals(route, request); err != nil {
+		return err
 	}
 
 	switch route {
