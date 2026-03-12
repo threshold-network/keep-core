@@ -3,6 +3,7 @@ package covenantsigner
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec"
 	"github.com/keep-network/keep-common/pkg/persistence"
 )
 
@@ -141,11 +143,106 @@ func loadApprovalContractVector(
 	return request, vector.ExpectedRequestDigest
 }
 
+const (
+	testDepositorPrivateKeyHex = "0x1111111111111111111111111111111111111111111111111111111111111111"
+	testSignerPrivateKeyHex    = "0x2222222222222222222222222222222222222222222222222222222222222222"
+	testCustodianPrivateKeyHex = "0x3333333333333333333333333333333333333333333333333333333333333333"
+)
+
+var (
+	testDepositorPrivateKey = mustDeterministicTestPrivateKey(testDepositorPrivateKeyHex)
+	testSignerPrivateKey    = mustDeterministicTestPrivateKey(testSignerPrivateKeyHex)
+	testCustodianPrivateKey = mustDeterministicTestPrivateKey(testCustodianPrivateKeyHex)
+	testDepositorPublicKey  = mustCompressedPublicKeyHex(testDepositorPrivateKey)
+	testSignerPublicKey     = mustCompressedPublicKeyHex(testSignerPrivateKey)
+	testCustodianPublicKey  = mustCompressedPublicKeyHex(testCustodianPrivateKey)
+)
+
+func mustDeterministicTestPrivateKey(encoded string) *btcec.PrivateKey {
+	rawPrivateKey, err := hex.DecodeString(strings.TrimPrefix(encoded, "0x"))
+	if err != nil {
+		panic(err)
+	}
+
+	privateKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), rawPrivateKey)
+	return privateKey
+}
+
+func mustCompressedPublicKeyHex(privateKey *btcec.PrivateKey) string {
+	return "0x" + hex.EncodeToString(privateKey.PubKey().SerializeCompressed())
+}
+
+func mustArtifactApprovalSignature(
+	privateKey *btcec.PrivateKey,
+	payload ArtifactApprovalPayload,
+) string {
+	digest, err := artifactApprovalDigest(payload)
+	if err != nil {
+		panic(err)
+	}
+
+	signature, err := privateKey.Sign(digest)
+	if err != nil {
+		panic(err)
+	}
+
+	return "0x" + hex.EncodeToString(signature.Serialize())
+}
+
+func artifactApprovalSignatureByRole(
+	artifactApprovals *ArtifactApprovalEnvelope,
+	role ArtifactApprovalRole,
+) string {
+	for _, approval := range artifactApprovals.Approvals {
+		if approval.Role == role {
+			return approval.Signature
+		}
+	}
+
+	panic(fmt.Sprintf("missing approval role %s", role))
+}
+
+func setArtifactApprovalSignature(
+	artifactApprovals *ArtifactApprovalEnvelope,
+	role ArtifactApprovalRole,
+	signature string,
+) {
+	for i, approval := range artifactApprovals.Approvals {
+		if approval.Role == role {
+			artifactApprovals.Approvals[i].Signature = signature
+			return
+		}
+	}
+
+	panic(fmt.Sprintf("missing approval role %s", role))
+}
+
+func canonicalArtifactSignatures(
+	route TemplateID,
+	artifactApprovals *ArtifactApprovalEnvelope,
+) []string {
+	if artifactApprovals == nil {
+		return nil
+	}
+
+	requiredRoles, err := requiredArtifactApprovalRoles(route)
+	if err != nil {
+		panic(err)
+	}
+
+	signatures := make([]string, len(requiredRoles))
+	for i, role := range requiredRoles {
+		signatures[i] = artifactApprovalSignatureByRole(artifactApprovals, role)
+	}
+
+	return signatures
+}
+
 func validSelfTemplate() json.RawMessage {
 	return mustTemplate(SelfV1Template{
 		Template:           TemplateSelfV1,
-		DepositorPublicKey: "0x021111",
-		SignerPublicKey:    "0x022222",
+		DepositorPublicKey: testDepositorPublicKey,
+		SignerPublicKey:    testSignerPublicKey,
 		Delta2:             4320,
 	})
 }
@@ -153,9 +250,9 @@ func validSelfTemplate() json.RawMessage {
 func validQcTemplate() json.RawMessage {
 	return mustTemplate(QcV1Template{
 		Template:           TemplateQcV1,
-		DepositorPublicKey: "0x021111",
-		CustodianPublicKey: "0x023333",
-		SignerPublicKey:    "0x022222",
+		DepositorPublicKey: testDepositorPublicKey,
+		CustodianPublicKey: testCustodianPublicKey,
+		SignerPublicKey:    testSignerPublicKey,
 		Beta:               144,
 		Delta2:             4320,
 	})
@@ -188,8 +285,7 @@ func baseRequest(route TemplateID) RouteSubmitRequest {
 			InputSequence:        canonicalCovenantInputSequence,
 			LockTime:             912345,
 		},
-		ArtifactSignatures: []string{"0x0708"},
-		Artifacts:          map[RecoveryPathID]ArtifactRecord{},
+		Artifacts: map[RecoveryPathID]ArtifactRecord{},
 	}
 
 	switch route {
@@ -206,45 +302,60 @@ func baseRequest(route TemplateID) RouteSubmitRequest {
 			request,
 			request.MigrationTransactionPlan,
 		)
+	request.ArtifactApprovals = validArtifactApprovals(request)
+	request.ArtifactSignatures = canonicalArtifactSignatures(
+		request.Route,
+		request.ArtifactApprovals,
+	)
 
 	return request
 }
 
 func validArtifactApprovals(request RouteSubmitRequest) *ArtifactApprovalEnvelope {
+	payload := ArtifactApprovalPayload{
+		ApprovalVersion:           artifactApprovalVersion,
+		Route:                     request.Route,
+		ScriptTemplateID:          request.Route,
+		DestinationCommitmentHash: request.DestinationCommitmentHash,
+		PlanCommitmentHash:        request.MigrationTransactionPlan.PlanCommitmentHash,
+	}
+
 	approvals := []ArtifactRoleApproval{
-		{Role: ArtifactApprovalRoleDepositor, Signature: "0xd0d0"},
-		{Role: ArtifactApprovalRoleSigner, Signature: "0x5050"},
+		{
+			Role:      ArtifactApprovalRoleDepositor,
+			Signature: mustArtifactApprovalSignature(testDepositorPrivateKey, payload),
+		},
+		{
+			Role:      ArtifactApprovalRoleSigner,
+			Signature: mustArtifactApprovalSignature(testSignerPrivateKey, payload),
+		},
 	}
 
 	if request.Route == TemplateQcV1 {
 		approvals = []ArtifactRoleApproval{
-			{Role: ArtifactApprovalRoleDepositor, Signature: "0xd0d0"},
-			{Role: ArtifactApprovalRoleCustodian, Signature: "0xc0c0"},
-			{Role: ArtifactApprovalRoleSigner, Signature: "0x5050"},
+			{
+				Role:      ArtifactApprovalRoleDepositor,
+				Signature: mustArtifactApprovalSignature(testDepositorPrivateKey, payload),
+			},
+			{
+				Role:      ArtifactApprovalRoleCustodian,
+				Signature: mustArtifactApprovalSignature(testCustodianPrivateKey, payload),
+			},
+			{
+				Role:      ArtifactApprovalRoleSigner,
+				Signature: mustArtifactApprovalSignature(testSignerPrivateKey, payload),
+			},
 		}
 	}
 
 	return &ArtifactApprovalEnvelope{
-		Payload: ArtifactApprovalPayload{
-			ApprovalVersion:           artifactApprovalVersion,
-			Route:                     request.Route,
-			ScriptTemplateID:          request.Route,
-			DestinationCommitmentHash: request.DestinationCommitmentHash,
-			PlanCommitmentHash:        request.MigrationTransactionPlan.PlanCommitmentHash,
-		},
+		Payload:   payload,
 		Approvals: approvals,
 	}
 }
 
 func canonicalArtifactApprovalRequest(route TemplateID) RouteSubmitRequest {
-	request := baseRequest(route)
-	request.ArtifactApprovals = validArtifactApprovals(request)
-	request.ArtifactSignatures = []string{"0xd0d0", "0x5050"}
-	if route == TemplateQcV1 {
-		request.ArtifactSignatures = []string{"0xd0d0", "0xc0c0", "0x5050"}
-	}
-
-	return request
+	return baseRequest(route)
 }
 
 const (
@@ -474,9 +585,9 @@ func equivalentArtifactApprovalVariant(route TemplateID) RouteSubmitRequest {
 	if route == TemplateQcV1 {
 		request.ScriptTemplate = mustTemplate(QcV1Template{
 			Template:           TemplateQcV1,
-			DepositorPublicKey: upperHexBody("0x021111"),
-			CustodianPublicKey: upperHexBody("0x023333"),
-			SignerPublicKey:    upperHexBody("0x022222"),
+			DepositorPublicKey: upperHexBody(testDepositorPublicKey),
+			CustodianPublicKey: upperHexBody(testCustodianPublicKey),
+			SignerPublicKey:    upperHexBody(testSignerPublicKey),
 			Beta:               144,
 			Delta2:             4320,
 		})
@@ -488,23 +599,38 @@ func equivalentArtifactApprovalVariant(route TemplateID) RouteSubmitRequest {
 		)
 		request.ArtifactApprovals.Approvals = []ArtifactRoleApproval{
 			{
-				Role:      ArtifactApprovalRoleSigner,
-				Signature: upperHexBody("0x5050"),
+				Role: ArtifactApprovalRoleSigner,
+				Signature: upperHexBody(
+					artifactApprovalSignatureByRole(
+						request.ArtifactApprovals,
+						ArtifactApprovalRoleSigner,
+					),
+				),
 			},
 			{
-				Role:      ArtifactApprovalRoleDepositor,
-				Signature: upperHexBody("0xd0d0"),
+				Role: ArtifactApprovalRoleDepositor,
+				Signature: upperHexBody(
+					artifactApprovalSignatureByRole(
+						request.ArtifactApprovals,
+						ArtifactApprovalRoleDepositor,
+					),
+				),
 			},
 			{
-				Role:      ArtifactApprovalRoleCustodian,
-				Signature: upperHexBody("0xc0c0"),
+				Role: ArtifactApprovalRoleCustodian,
+				Signature: upperHexBody(
+					artifactApprovalSignatureByRole(
+						request.ArtifactApprovals,
+						ArtifactApprovalRoleCustodian,
+					),
+				),
 			},
 		}
 	} else {
 		request.ScriptTemplate = mustTemplate(SelfV1Template{
 			Template:           TemplateSelfV1,
-			DepositorPublicKey: upperHexBody("0x021111"),
-			SignerPublicKey:    upperHexBody("0x022222"),
+			DepositorPublicKey: upperHexBody(testDepositorPublicKey),
+			SignerPublicKey:    upperHexBody(testSignerPublicKey),
 			Delta2:             4320,
 		})
 		request.ArtifactApprovals.Payload.DestinationCommitmentHash = upperHexBody(
@@ -515,12 +641,22 @@ func equivalentArtifactApprovalVariant(route TemplateID) RouteSubmitRequest {
 		)
 		request.ArtifactApprovals.Approvals = []ArtifactRoleApproval{
 			{
-				Role:      ArtifactApprovalRoleSigner,
-				Signature: upperHexBody("0x5050"),
+				Role: ArtifactApprovalRoleSigner,
+				Signature: upperHexBody(
+					artifactApprovalSignatureByRole(
+						request.ArtifactApprovals,
+						ArtifactApprovalRoleSigner,
+					),
+				),
 			},
 			{
-				Role:      ArtifactApprovalRoleDepositor,
-				Signature: upperHexBody("0xd0d0"),
+				Role: ArtifactApprovalRoleDepositor,
+				Signature: upperHexBody(
+					artifactApprovalSignatureByRole(
+						request.ArtifactApprovals,
+						ArtifactApprovalRoleDepositor,
+					),
+				),
 			},
 		}
 	}
@@ -1468,13 +1604,11 @@ func TestServiceAcceptsArtifactApprovalsWithCanonicalLegacySignatures(t *testing
 	}
 
 	request := baseRequest(TemplateQcV1)
-	request.ArtifactApprovals = validArtifactApprovals(request)
 	request.ArtifactApprovals.Approvals = []ArtifactRoleApproval{
 		request.ArtifactApprovals.Approvals[2],
 		request.ArtifactApprovals.Approvals[0],
 		request.ArtifactApprovals.Approvals[1],
 	}
-	request.ArtifactSignatures = []string{"0xd0d0", "0xc0c0", "0x5050"}
 
 	result, err := service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
 		RouteRequestID: "orq_artifact_approvals",
@@ -1518,12 +1652,14 @@ func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 			name:  "missing qc custodian approval",
 			route: TemplateQcV1,
 			mutate: func(request *RouteSubmitRequest) {
-				request.ArtifactApprovals = validArtifactApprovals(*request)
 				request.ArtifactApprovals.Approvals = []ArtifactRoleApproval{
 					request.ArtifactApprovals.Approvals[0],
 					request.ArtifactApprovals.Approvals[2],
 				}
-				request.ArtifactSignatures = []string{"0xd0d0", "0x5050"}
+				request.ArtifactSignatures = []string{
+					request.ArtifactSignatures[0],
+					request.ArtifactSignatures[2],
+				}
 			},
 			expectErr: "request.artifactApprovals.approvals must include role C for qc_v1",
 		},
@@ -1531,13 +1667,17 @@ func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 			name:  "self route rejects custodian approval role",
 			route: TemplateSelfV1,
 			mutate: func(request *RouteSubmitRequest) {
-				request.ArtifactApprovals = validArtifactApprovals(*request)
 				request.ArtifactApprovals.Approvals = []ArtifactRoleApproval{
 					request.ArtifactApprovals.Approvals[0],
-					{Role: ArtifactApprovalRoleCustodian, Signature: "0xc0c0"},
+					{
+						Role: ArtifactApprovalRoleCustodian,
+						Signature: mustArtifactApprovalSignature(
+							testCustodianPrivateKey,
+							request.ArtifactApprovals.Payload,
+						),
+					},
 					request.ArtifactApprovals.Approvals[1],
 				}
-				request.ArtifactSignatures = []string{"0xd0d0", "0xc0c0", "0x5050"}
 			},
 			expectErr: "request.artifactApprovals.approvals[1].role is not allowed for self_v1",
 		},
@@ -1545,18 +1685,27 @@ func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 			name:  "plan commitment mismatch",
 			route: TemplateQcV1,
 			mutate: func(request *RouteSubmitRequest) {
-				request.ArtifactApprovals = validArtifactApprovals(*request)
 				request.ArtifactApprovals.Payload.PlanCommitmentHash = "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-				request.ArtifactSignatures = []string{"0xd0d0", "0xc0c0", "0x5050"}
 			},
 			expectErr: "request.artifactApprovals.payload.planCommitmentHash must match request.migrationTransactionPlan.planCommitmentHash",
+		},
+		{
+			name:  "artifact approvals required",
+			route: TemplateSelfV1,
+			mutate: func(request *RouteSubmitRequest) {
+				request.ArtifactApprovals = nil
+			},
+			expectErr: "request.artifactApprovals is required",
 		},
 		{
 			name:  "legacy signature mismatch",
 			route: TemplateQcV1,
 			mutate: func(request *RouteSubmitRequest) {
-				request.ArtifactApprovals = validArtifactApprovals(*request)
-				request.ArtifactSignatures = []string{"0x5050", "0xd0d0", "0xc0c0"}
+				request.ArtifactSignatures = []string{
+					request.ArtifactSignatures[2],
+					request.ArtifactSignatures[0],
+					request.ArtifactSignatures[1],
+				}
 			},
 			expectErr: "request.artifactSignatures must match canonical approval role order derived from request.artifactApprovals",
 		},
@@ -1564,10 +1713,47 @@ func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 			name:  "legacy signatures remain required when approvals are present",
 			route: TemplateSelfV1,
 			mutate: func(request *RouteSubmitRequest) {
-				request.ArtifactApprovals = validArtifactApprovals(*request)
 				request.ArtifactSignatures = nil
 			},
 			expectErr: "request.artifactSignatures must not be empty",
+		},
+		{
+			name:  "depositor signature does not verify",
+			route: TemplateSelfV1,
+			mutate: func(request *RouteSubmitRequest) {
+				setArtifactApprovalSignature(
+					request.ArtifactApprovals,
+					ArtifactApprovalRoleDepositor,
+					artifactApprovalSignatureByRole(
+						request.ArtifactApprovals,
+						ArtifactApprovalRoleSigner,
+					),
+				)
+				request.ArtifactSignatures = canonicalArtifactSignatures(
+					request.Route,
+					request.ArtifactApprovals,
+				)
+			},
+			expectErr: "request.artifactApprovals.approvals[0].signature does not verify against the required public key",
+		},
+		{
+			name:  "custodian signature does not verify",
+			route: TemplateQcV1,
+			mutate: func(request *RouteSubmitRequest) {
+				setArtifactApprovalSignature(
+					request.ArtifactApprovals,
+					ArtifactApprovalRoleCustodian,
+					artifactApprovalSignatureByRole(
+						request.ArtifactApprovals,
+						ArtifactApprovalRoleDepositor,
+					),
+				)
+				request.ArtifactSignatures = canonicalArtifactSignatures(
+					request.Route,
+					request.ArtifactApprovals,
+				)
+			},
+			expectErr: "request.artifactApprovals.approvals[1].signature does not verify against the required public key",
 		},
 	}
 
@@ -1722,6 +1908,29 @@ func TestRequestDigestRejectsArtifactApprovalsWithoutMigrationTransactionPlan(t 
 		"request.migrationTransactionPlan is required when request.artifactApprovals is present",
 	) {
 		t.Fatalf("expected missing plan error, got %v", err)
+	}
+}
+
+func TestArtifactApprovalDigestMatchesPhase1Contract(t *testing.T) {
+	expectedDigests := map[TemplateID]string{
+		TemplateQcV1:   "0x4e1c72624e85c41d8d8a050d75704dc881ec6cd2dcfe1d240052887feef87ad8",
+		TemplateSelfV1: "0x960d7082d6eac550d7647d8fbeb90781e6cbd001b4d433e6635aa447dd937e79",
+	}
+
+	for _, route := range []TemplateID{TemplateQcV1, TemplateSelfV1} {
+		t.Run(string(route), func(t *testing.T) {
+			request := canonicalArtifactApprovalRequest(route)
+
+			digest, err := artifactApprovalDigest(request.ArtifactApprovals.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			actualDigest := "0x" + hex.EncodeToString(digest)
+			if actualDigest != expectedDigests[route] {
+				t.Fatalf("expected digest %s, got %s", expectedDigests[route], actualDigest)
+			}
+		})
 	}
 }
 
@@ -2027,6 +2236,10 @@ func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
 	defer server.Close()
 
 	base := baseRequest(TemplateSelfV1)
+	template := &SelfV1Template{}
+	if err := strictUnmarshal(base.ScriptTemplate, template); err != nil {
+		t.Fatal(err)
+	}
 	payload := bytes.NewBufferString(fmt.Sprintf(`{
 		"routeRequestId":"ors_http_unknown",
 		"stage":"SIGNER_COORDINATION",
@@ -2064,14 +2277,39 @@ func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
 				"inputSequence":4294967293,
 				"lockTime":912345
 			},
-			"artifactSignatures":["0x0708"],
+			"artifactApprovals":{
+				"payload":{
+					"approvalVersion":1,
+					"route":"self_v1",
+					"scriptTemplateId":"self_v1",
+					"destinationCommitmentHash":"%s",
+					"planCommitmentHash":"%s"
+				},
+				"approvals":[
+					{"role":"D","signature":"%s"},
+					{"role":"S","signature":"%s"}
+				]
+			},
+			"artifactSignatures":["%s","%s"],
 			"artifacts":{},
-			"scriptTemplate":{"template":"self_v1","depositorPublicKey":"0x021111","signerPublicKey":"0x022222","delta2":4320},
+			"scriptTemplate":{"template":"self_v1","depositorPublicKey":"%s","signerPublicKey":"%s","delta2":4320},
 			"signing":{"signerRequired":true,"custodianRequired":false},
 			"futureField":"ignored"
 		},
 		"futureTopLevel":"ignored"
-	}`, base.DestinationCommitmentHash, base.DestinationCommitmentHash, base.MigrationTransactionPlan.PlanCommitmentHash))
+	}`,
+		base.DestinationCommitmentHash,
+		base.DestinationCommitmentHash,
+		base.MigrationTransactionPlan.PlanCommitmentHash,
+		base.ArtifactApprovals.Payload.DestinationCommitmentHash,
+		base.ArtifactApprovals.Payload.PlanCommitmentHash,
+		base.ArtifactApprovals.Approvals[0].Signature,
+		base.ArtifactApprovals.Approvals[1].Signature,
+		base.ArtifactSignatures[0],
+		base.ArtifactSignatures[1],
+		template.DepositorPublicKey,
+		template.SignerPublicKey,
+	))
 
 	response, err := http.Post(server.URL+"/v1/self_v1/signer/requests", "application/json", payload)
 	if err != nil {
