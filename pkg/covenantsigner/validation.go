@@ -32,7 +32,12 @@ func strictUnmarshal(data []byte, target any) error {
 }
 
 func requestDigest(request RouteSubmitRequest) (string, error) {
-	payload, err := json.Marshal(request)
+	normalizedRequest, err := normalizeRouteSubmitRequest(request)
+	if err != nil {
+		return "", err
+	}
+
+	payload, err := json.Marshal(normalizedRequest)
 	if err != nil {
 		return "", err
 	}
@@ -329,51 +334,65 @@ func requiredArtifactApprovalRoles(route TemplateID) ([]ArtifactApprovalRole, er
 }
 
 func validateArtifactApprovals(route TemplateID, request RouteSubmitRequest) error {
+	_, _, err := normalizeArtifactApprovals(route, request)
+	return err
+}
+
+func normalizeArtifactApprovals(
+	route TemplateID,
+	request RouteSubmitRequest,
+) (*ArtifactApprovalEnvelope, []string, error) {
 	normalizedLegacySignatures, err := validateArtifactSignatures(request.ArtifactSignatures)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	if request.ArtifactApprovals == nil {
-		return nil
+		return nil, normalizedLegacySignatures, nil
 	}
 
 	if request.ArtifactApprovals.Payload.ApprovalVersion != artifactApprovalVersion {
-		return &inputError{"request.artifactApprovals.payload.approvalVersion must equal 1"}
+		return nil, nil, &inputError{"request.artifactApprovals.payload.approvalVersion must equal 1"}
 	}
 	if request.ArtifactApprovals.Payload.Route != route {
-		return &inputError{"request.artifactApprovals.payload.route must match request.route"}
+		return nil, nil, &inputError{"request.artifactApprovals.payload.route must match request.route"}
 	}
 	if request.ArtifactApprovals.Payload.ScriptTemplateID != route {
-		return &inputError{"request.artifactApprovals.payload.scriptTemplateId must match request.route"}
+		return nil, nil, &inputError{"request.artifactApprovals.payload.scriptTemplateId must match request.route"}
 	}
 	if err := validateHexString(
 		"request.artifactApprovals.payload.destinationCommitmentHash",
 		request.ArtifactApprovals.Payload.DestinationCommitmentHash,
 	); err != nil {
-		return err
+		return nil, nil, err
 	}
 	if err := validateHexString(
 		"request.artifactApprovals.payload.planCommitmentHash",
 		request.ArtifactApprovals.Payload.PlanCommitmentHash,
 	); err != nil {
-		return err
+		return nil, nil, err
 	}
-	if normalizeLowerHex(request.ArtifactApprovals.Payload.DestinationCommitmentHash) !=
-		normalizeLowerHex(request.DestinationCommitmentHash) {
-		return &inputError{"request.artifactApprovals.payload.destinationCommitmentHash must match request.destinationCommitmentHash"}
+
+	normalizedDestinationCommitmentHash := normalizeLowerHex(
+		request.ArtifactApprovals.Payload.DestinationCommitmentHash,
+	)
+	if normalizedDestinationCommitmentHash != normalizeLowerHex(request.DestinationCommitmentHash) {
+		return nil, nil, &inputError{"request.artifactApprovals.payload.destinationCommitmentHash must match request.destinationCommitmentHash"}
 	}
-	if normalizeLowerHex(request.ArtifactApprovals.Payload.PlanCommitmentHash) !=
-		normalizeLowerHex(request.MigrationTransactionPlan.PlanCommitmentHash) {
-		return &inputError{"request.artifactApprovals.payload.planCommitmentHash must match request.migrationTransactionPlan.planCommitmentHash"}
+
+	normalizedPlanCommitmentHash := normalizeLowerHex(
+		request.ArtifactApprovals.Payload.PlanCommitmentHash,
+	)
+	if normalizedPlanCommitmentHash != normalizeLowerHex(request.MigrationTransactionPlan.PlanCommitmentHash) {
+		return nil, nil, &inputError{"request.artifactApprovals.payload.planCommitmentHash must match request.migrationTransactionPlan.planCommitmentHash"}
 	}
 	if len(request.ArtifactApprovals.Approvals) == 0 {
-		return &inputError{"request.artifactApprovals.approvals must not be empty"}
+		return nil, nil, &inputError{"request.artifactApprovals.approvals must not be empty"}
 	}
 
 	requiredRoles, err := requiredArtifactApprovalRoles(route)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	allowedRoles := make(map[ArtifactApprovalRole]struct{}, len(requiredRoles))
@@ -384,14 +403,14 @@ func validateArtifactApprovals(route TemplateID, request RouteSubmitRequest) err
 	approvalsByRole := make(map[ArtifactApprovalRole]string, len(requiredRoles))
 	for i, approval := range request.ArtifactApprovals.Approvals {
 		if _, ok := allowedRoles[approval.Role]; !ok {
-			return &inputError{fmt.Sprintf(
+			return nil, nil, &inputError{fmt.Sprintf(
 				"request.artifactApprovals.approvals[%d].role is not allowed for %s",
 				i,
 				route,
 			)}
 		}
 		if _, ok := approvalsByRole[approval.Role]; ok {
-			return &inputError{fmt.Sprintf(
+			return nil, nil, &inputError{fmt.Sprintf(
 				"request.artifactApprovals.approvals[%d].role duplicates role %s",
 				i,
 				approval.Role,
@@ -401,17 +420,27 @@ func validateArtifactApprovals(route TemplateID, request RouteSubmitRequest) err
 			fmt.Sprintf("request.artifactApprovals.approvals[%d].signature", i),
 			approval.Signature,
 		); err != nil {
-			return err
+			return nil, nil, err
 		}
 
 		approvalsByRole[approval.Role] = normalizeLowerHex(approval.Signature)
 	}
 
 	derivedLegacySignatures := make([]string, len(requiredRoles))
+	normalizedApprovals := &ArtifactApprovalEnvelope{
+		Payload: ArtifactApprovalPayload{
+			ApprovalVersion:           artifactApprovalVersion,
+			Route:                     route,
+			ScriptTemplateID:          route,
+			DestinationCommitmentHash: normalizedDestinationCommitmentHash,
+			PlanCommitmentHash:        normalizedPlanCommitmentHash,
+		},
+		Approvals: make([]ArtifactRoleApproval, len(requiredRoles)),
+	}
 	for i, role := range requiredRoles {
 		signature, ok := approvalsByRole[role]
 		if !ok {
-			return &inputError{fmt.Sprintf(
+			return nil, nil, &inputError{fmt.Sprintf(
 				"request.artifactApprovals.approvals must include role %s for %s",
 				role,
 				route,
@@ -419,18 +448,159 @@ func validateArtifactApprovals(route TemplateID, request RouteSubmitRequest) err
 		}
 
 		derivedLegacySignatures[i] = signature
-	}
-
-	if len(normalizedLegacySignatures) != len(derivedLegacySignatures) {
-		return &inputError{"request.artifactSignatures must match canonical approval role order derived from request.artifactApprovals"}
-	}
-	for i := range derivedLegacySignatures {
-		if normalizedLegacySignatures[i] != derivedLegacySignatures[i] {
-			return &inputError{"request.artifactSignatures must match canonical approval role order derived from request.artifactApprovals"}
+		normalizedApprovals.Approvals[i] = ArtifactRoleApproval{
+			Role:      role,
+			Signature: signature,
 		}
 	}
 
-	return nil
+	if len(normalizedLegacySignatures) != len(derivedLegacySignatures) {
+		return nil, nil, &inputError{"request.artifactSignatures must match canonical approval role order derived from request.artifactApprovals"}
+	}
+	for i := range derivedLegacySignatures {
+		if normalizedLegacySignatures[i] != derivedLegacySignatures[i] {
+			return nil, nil, &inputError{"request.artifactSignatures must match canonical approval role order derived from request.artifactApprovals"}
+		}
+	}
+
+	return normalizedApprovals, derivedLegacySignatures, nil
+}
+
+func normalizeArtifactRecord(record ArtifactRecord) ArtifactRecord {
+	normalized := ArtifactRecord{
+		PSBTHash:                  normalizeLowerHex(record.PSBTHash),
+		DestinationCommitmentHash: normalizeLowerHex(record.DestinationCommitmentHash),
+	}
+	if record.TransactionHex != "" {
+		normalized.TransactionHex = normalizeLowerHex(record.TransactionHex)
+	}
+	if record.TransactionID != "" {
+		normalized.TransactionID = normalizeLowerHex(record.TransactionID)
+	}
+
+	return normalized
+}
+
+func normalizeArtifacts(artifacts map[RecoveryPathID]ArtifactRecord) map[RecoveryPathID]ArtifactRecord {
+	if artifacts == nil {
+		return nil
+	}
+
+	normalized := make(map[RecoveryPathID]ArtifactRecord, len(artifacts))
+	for pathID, artifact := range artifacts {
+		normalized[pathID] = normalizeArtifactRecord(artifact)
+	}
+
+	return normalized
+}
+
+func normalizeMigrationDestination(
+	destination *MigrationDestinationReservation,
+) *MigrationDestinationReservation {
+	if destination == nil {
+		return nil
+	}
+
+	return &MigrationDestinationReservation{
+		ReservationID:             destination.ReservationID,
+		Reserve:                   normalizeLowerHex(destination.Reserve),
+		Epoch:                     destination.Epoch,
+		Route:                     destination.Route,
+		Revealer:                  normalizeLowerHex(destination.Revealer),
+		Vault:                     normalizeLowerHex(destination.Vault),
+		Network:                   strings.TrimSpace(destination.Network),
+		Status:                    destination.Status,
+		DepositScript:             normalizeLowerHex(destination.DepositScript),
+		DepositScriptHash:         normalizeLowerHex(destination.DepositScriptHash),
+		MigrationExtraData:        normalizeLowerHex(destination.MigrationExtraData),
+		DestinationCommitmentHash: normalizeLowerHex(destination.DestinationCommitmentHash),
+	}
+}
+
+func normalizeMigrationTransactionPlan(
+	plan *MigrationTransactionPlan,
+) *MigrationTransactionPlan {
+	if plan == nil {
+		return nil
+	}
+
+	return &MigrationTransactionPlan{
+		PlanVersion:          plan.PlanVersion,
+		PlanCommitmentHash:   normalizeLowerHex(plan.PlanCommitmentHash),
+		InputValueSats:       plan.InputValueSats,
+		DestinationValueSats: plan.DestinationValueSats,
+		AnchorValueSats:      plan.AnchorValueSats,
+		FeeSats:              plan.FeeSats,
+		InputSequence:        plan.InputSequence,
+		LockTime:             plan.LockTime,
+	}
+}
+
+func normalizeScriptTemplate(route TemplateID, rawTemplate json.RawMessage) (json.RawMessage, error) {
+	switch route {
+	case TemplateSelfV1:
+		template := &SelfV1Template{}
+		if err := strictUnmarshal(rawTemplate, template); err != nil {
+			return nil, err
+		}
+		template.DepositorPublicKey = normalizeLowerHex(template.DepositorPublicKey)
+		template.SignerPublicKey = normalizeLowerHex(template.SignerPublicKey)
+		return json.Marshal(template)
+	case TemplateQcV1:
+		template := &QcV1Template{}
+		if err := strictUnmarshal(rawTemplate, template); err != nil {
+			return nil, err
+		}
+		template.DepositorPublicKey = normalizeLowerHex(template.DepositorPublicKey)
+		template.CustodianPublicKey = normalizeLowerHex(template.CustodianPublicKey)
+		template.SignerPublicKey = normalizeLowerHex(template.SignerPublicKey)
+		return json.Marshal(template)
+	default:
+		return nil, &inputError{"unsupported request.route"}
+	}
+}
+
+func normalizeRouteSubmitRequest(request RouteSubmitRequest) (RouteSubmitRequest, error) {
+	normalizedArtifactApprovals, normalizedArtifactSignatures, err := normalizeArtifactApprovals(
+		request.Route,
+		request,
+	)
+	if err != nil {
+		return RouteSubmitRequest{}, err
+	}
+
+	normalizedScriptTemplate, err := normalizeScriptTemplate(request.Route, request.ScriptTemplate)
+	if err != nil {
+		return RouteSubmitRequest{}, err
+	}
+
+	return RouteSubmitRequest{
+		FacadeRequestID: request.FacadeRequestID,
+		IdempotencyKey:  request.IdempotencyKey,
+		Route:           request.Route,
+		Strategy:        normalizeLowerHex(request.Strategy),
+		Reserve:         normalizeLowerHex(request.Reserve),
+		Epoch:           request.Epoch,
+		MaturityHeight:  request.MaturityHeight,
+		ActiveOutpoint: CovenantOutpoint{
+			TxID: normalizeLowerHex(request.ActiveOutpoint.TxID),
+			Vout: request.ActiveOutpoint.Vout,
+			ScriptHash: func() string {
+				if request.ActiveOutpoint.ScriptHash == "" {
+					return ""
+				}
+				return normalizeLowerHex(request.ActiveOutpoint.ScriptHash)
+			}(),
+		},
+		DestinationCommitmentHash: normalizeLowerHex(request.DestinationCommitmentHash),
+		MigrationDestination:      normalizeMigrationDestination(request.MigrationDestination),
+		MigrationTransactionPlan:  normalizeMigrationTransactionPlan(request.MigrationTransactionPlan),
+		ArtifactApprovals:         normalizedArtifactApprovals,
+		ArtifactSignatures:        normalizedArtifactSignatures,
+		Artifacts:                 normalizeArtifacts(request.Artifacts),
+		ScriptTemplate:            normalizedScriptTemplate,
+		Signing:                   request.Signing,
+	}, nil
 }
 
 func validateCommonRequest(route TemplateID, request RouteSubmitRequest) error {

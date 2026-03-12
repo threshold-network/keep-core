@@ -147,6 +147,11 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 		return StepResult{}, err
 	}
 
+	normalizedRequest, err := normalizeRouteSubmitRequest(input.Request)
+	if err != nil {
+		return StepResult{}, err
+	}
+
 	s.mutex.Lock()
 	if existing, ok, err := s.store.GetByRouteRequest(route, input.RouteRequestID); err != nil {
 		s.mutex.Unlock()
@@ -170,7 +175,7 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 	}
 
 	now := s.now()
-	requestDigest, err := requestDigest(input.Request)
+	requestDigest, err := requestDigest(normalizedRequest)
 	if err != nil {
 		s.mutex.Unlock()
 		return StepResult{}, err
@@ -187,7 +192,7 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 		Detail:          "accepted for covenant signing",
 		CreatedAt:       now.Format(time.RFC3339Nano),
 		UpdatedAt:       now.Format(time.RFC3339Nano),
-		Request:         input.Request,
+		Request:         normalizedRequest,
 	}
 
 	if err := s.store.Put(job); err != nil {
