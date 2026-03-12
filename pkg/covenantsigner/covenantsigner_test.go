@@ -1831,6 +1831,42 @@ func TestRequestDigestDoesNotEscapeHTMLSensitiveCharacters(t *testing.T) {
 	}
 }
 
+func TestDestinationCommitmentHashDoesNotEscapeHTMLSensitiveCharacters(t *testing.T) {
+	destination := validMigrationDestination()
+	destination.Network = "regtest<v2>&sink"
+
+	payload, err := marshalCanonicalJSON(destinationCommitmentPayload{
+		Reserve:            normalizeLowerHex(destination.Reserve),
+		Epoch:              destination.Epoch,
+		Route:              string(destination.Route),
+		Revealer:           normalizeLowerHex(destination.Revealer),
+		Vault:              normalizeLowerHex(destination.Vault),
+		Network:            strings.TrimSpace(destination.Network),
+		DepositScriptHash:  normalizeLowerHex(destination.DepositScriptHash),
+		MigrationExtraData: normalizeLowerHex(destination.MigrationExtraData),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Contains(payload, []byte(`"network":"regtest<v2>&sink"`)) {
+		t.Fatalf("expected raw HTML-sensitive characters in payload, got %s", payload)
+	}
+	if bytes.Contains(payload, []byte(`\u003c`)) ||
+		bytes.Contains(payload, []byte(`\u003e`)) ||
+		bytes.Contains(payload, []byte(`\u0026`)) {
+		t.Fatalf("expected unescaped HTML-sensitive characters in payload, got %s", payload)
+	}
+
+	hash, err := computeDestinationCommitmentHash(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hash == "" {
+		t.Fatal("expected destination commitment hash")
+	}
+}
+
 func TestServicePollAcceptsEquivalentArtifactApprovalRequestVariants(t *testing.T) {
 	handle := newMemoryHandle()
 	service, err := NewService(handle, &scriptedEngine{

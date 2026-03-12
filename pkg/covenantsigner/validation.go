@@ -312,7 +312,7 @@ type migrationPlanCommitmentPayload struct {
 func computeDestinationCommitmentHash(
 	reservation *MigrationDestinationReservation,
 ) (string, error) {
-	payload, err := json.Marshal(destinationCommitmentPayload{
+	payload, err := marshalCanonicalJSON(destinationCommitmentPayload{
 		Reserve:            normalizeLowerHex(reservation.Reserve),
 		Epoch:              reservation.Epoch,
 		Route:              string(reservation.Route),
@@ -334,7 +334,7 @@ func computeMigrationTransactionPlanCommitmentHash(
 	request RouteSubmitRequest,
 	plan *MigrationTransactionPlan,
 ) (string, error) {
-	payload, err := json.Marshal(migrationPlanCommitmentPayload{
+	payload, err := marshalCanonicalJSON(migrationPlanCommitmentPayload{
 		PlanVersion:               plan.PlanVersion,
 		Reserve:                   normalizeLowerHex(request.Reserve),
 		Epoch:                     request.Epoch,
@@ -718,6 +718,12 @@ func validateArtifactApprovalAuthenticity(
 			); err != nil {
 				return err
 			}
+		case ArtifactApprovalRoleSigner:
+			// Phase 1 keeps S structurally required but not cryptographically
+			// verified. Signer approval must eventually bind to quorum or
+			// signer-service trust roots rather than the single signer key in the
+			// script template.
+			continue
 		}
 	}
 
