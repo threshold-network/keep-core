@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/bitcoin"
 )
 
 func TestSigningExecutorCanIssueSignerApprovalCertificateForArbitraryDigest(t *testing.T) {
@@ -38,8 +38,16 @@ func TestSigningExecutorCanIssueSignerApprovalCertificateForArbitraryDigest(t *t
 		t.Fatal(err)
 	}
 
+	walletChainData, err := executor.chain.GetWallet(
+		bitcoin.PublicKeyHash(executor.wallet().publicKey),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	expectedSignerSetHash, err := computeSignerApprovalCertificateSignerSetHash(
 		executor.wallet(),
+		walletChainData,
 		executor.groupParameters,
 	)
 	if err != nil {
@@ -105,8 +113,16 @@ func TestSignerApprovalCertificateVerificationRejectsTamperedDigest(t *testing.T
 		t.Fatal(err)
 	}
 
+	walletChainData, err := executor.chain.GetWallet(
+		bitcoin.PublicKeyHash(executor.wallet().publicKey),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	expectedSignerSetHash, err := computeSignerApprovalCertificateSignerSetHash(
 		executor.wallet(),
+		walletChainData,
 		executor.groupParameters,
 	)
 	if err != nil {
@@ -121,16 +137,15 @@ func TestSignerApprovalCertificateVerificationRejectsTamperedDigest(t *testing.T
 	}
 }
 
-func TestSignerApprovalCertificateSignerSetHashBindsRosterAndThreshold(t *testing.T) {
+func TestSignerApprovalCertificateSignerSetHashBindsOnChainWalletIdentityAndThreshold(t *testing.T) {
 	_, _, walletPublicKey := setupCovenantSignerTestNode(t)
 
 	baseWallet := wallet{
 		publicKey: walletPublicKey,
-		signingGroupOperators: []chain.Address{
-			"operator-1",
-			"operator-2",
-			"operator-3",
-		},
+	}
+	baseWalletChainData := &WalletChainData{
+		EcdsaWalletID:  sha256.Sum256([]byte("wallet-id-base")),
+		MembersIDsHash: sha256.Sum256([]byte("members-hash-base")),
 	}
 	baseGroupParameters := &GroupParameters{
 		GroupSize:       3,
@@ -140,31 +155,46 @@ func TestSignerApprovalCertificateSignerSetHashBindsRosterAndThreshold(t *testin
 
 	baseHash, err := computeSignerApprovalCertificateSignerSetHash(
 		baseWallet,
+		baseWalletChainData,
 		baseGroupParameters,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	reorderedWallet := baseWallet
-	reorderedWallet.signingGroupOperators = []chain.Address{
-		"operator-2",
-		"operator-1",
-		"operator-3",
-	}
-	reorderedHash, err := computeSignerApprovalCertificateSignerSetHash(
-		reorderedWallet,
+	changedMembersHash, err := computeSignerApprovalCertificateSignerSetHash(
+		baseWallet,
+		&WalletChainData{
+			EcdsaWalletID:  baseWalletChainData.EcdsaWalletID,
+			MembersIDsHash: sha256.Sum256([]byte("members-hash-changed")),
+		},
 		baseGroupParameters,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reorderedHash == baseHash {
-		t.Fatal("expected signer set hash to change when operator seat order changes")
+	if changedMembersHash == baseHash {
+		t.Fatal("expected signer set hash to change when members IDs hash changes")
+	}
+
+	changedWalletIDHash, err := computeSignerApprovalCertificateSignerSetHash(
+		baseWallet,
+		&WalletChainData{
+			EcdsaWalletID:  sha256.Sum256([]byte("wallet-id-changed")),
+			MembersIDsHash: baseWalletChainData.MembersIDsHash,
+		},
+		baseGroupParameters,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedWalletIDHash == baseHash {
+		t.Fatal("expected signer set hash to change when wallet ID changes")
 	}
 
 	thresholdChangedHash, err := computeSignerApprovalCertificateSignerSetHash(
 		baseWallet,
+		baseWalletChainData,
 		&GroupParameters{
 			GroupSize:       3,
 			GroupQuorum:     2,

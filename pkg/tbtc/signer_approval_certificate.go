@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/btcsuite/btcd/btcec"
+	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
@@ -38,9 +39,10 @@ type signerApprovalCertificate struct {
 }
 
 type signerApprovalCertificateSignerSetPayload struct {
-	WalletPublicKey       string   `json:"walletPublicKey"`
-	SigningGroupOperators []string `json:"signingGroupOperators"`
-	HonestThreshold       int      `json:"honestThreshold"`
+	WalletID        string `json:"walletId"`
+	WalletPublicKey string `json:"walletPublicKey"`
+	MembersIDsHash  string `json:"membersIdsHash"`
+	HonestThreshold int    `json:"honestThreshold"`
 }
 
 func (se *signingExecutor) issueSignerApprovalCertificate(
@@ -55,6 +57,15 @@ func (se *signingExecutor) issueSignerApprovalCertificate(
 		)
 	}
 
+	wallet := se.wallet()
+	walletChainData, err := se.chain.GetWallet(bitcoin.PublicKeyHash(wallet.publicKey))
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot get on-chain wallet data for signer approval certificate: %w",
+			err,
+		)
+	}
+
 	signature, activityReport, endBlock, err := se.sign(
 		ctx,
 		new(big.Int).SetBytes(approvalDigest),
@@ -65,7 +76,8 @@ func (se *signingExecutor) issueSignerApprovalCertificate(
 	}
 
 	return buildSignerApprovalCertificate(
-		se.wallet(),
+		wallet,
+		walletChainData,
 		se.groupParameters,
 		approvalDigest,
 		signature,
@@ -76,6 +88,7 @@ func (se *signingExecutor) issueSignerApprovalCertificate(
 
 func buildSignerApprovalCertificate(
 	wallet wallet,
+	walletChainData *WalletChainData,
 	groupParameters *GroupParameters,
 	approvalDigest []byte,
 	signature *tecdsa.Signature,
@@ -91,6 +104,9 @@ func buildSignerApprovalCertificate(
 	if groupParameters == nil {
 		return nil, fmt.Errorf("group parameters are required")
 	}
+	if walletChainData == nil {
+		return nil, fmt.Errorf("wallet chain data is required")
+	}
 	if signature == nil || signature.R == nil || signature.S == nil {
 		return nil, fmt.Errorf("threshold signature is required")
 	}
@@ -102,6 +118,7 @@ func buildSignerApprovalCertificate(
 
 	signerSetHash, err := computeSignerApprovalCertificateSignerSetHash(
 		wallet,
+		walletChainData,
 		groupParameters,
 	)
 	if err != nil {
@@ -137,10 +154,20 @@ func buildSignerApprovalCertificate(
 
 func computeSignerApprovalCertificateSignerSetHash(
 	wallet wallet,
+	walletChainData *WalletChainData,
 	groupParameters *GroupParameters,
 ) (string, error) {
 	if groupParameters == nil {
 		return "", fmt.Errorf("group parameters are required")
+	}
+	if walletChainData == nil {
+		return "", fmt.Errorf("wallet chain data is required")
+	}
+	if walletChainData.EcdsaWalletID == ([32]byte{}) {
+		return "", fmt.Errorf("wallet chain data must include wallet ID")
+	}
+	if walletChainData.MembersIDsHash == ([32]byte{}) {
+		return "", fmt.Errorf("wallet chain data must include members IDs hash")
 	}
 
 	walletPublicKeyBytes, err := marshalPublicKey(wallet.publicKey)
@@ -148,15 +175,11 @@ func computeSignerApprovalCertificateSignerSetHash(
 		return "", err
 	}
 
-	signingGroupOperators := make([]string, len(wallet.signingGroupOperators))
-	for i, operator := range wallet.signingGroupOperators {
-		signingGroupOperators[i] = operator.String()
-	}
-
 	payload, err := json.Marshal(signerApprovalCertificateSignerSetPayload{
-		WalletPublicKey:       "0x" + hex.EncodeToString(walletPublicKeyBytes),
-		SigningGroupOperators: signingGroupOperators,
-		HonestThreshold:       groupParameters.HonestThreshold,
+		WalletID:        "0x" + hex.EncodeToString(walletChainData.EcdsaWalletID[:]),
+		WalletPublicKey: "0x" + hex.EncodeToString(walletPublicKeyBytes),
+		MembersIDsHash:  "0x" + hex.EncodeToString(walletChainData.MembersIDsHash[:]),
+		HonestThreshold: groupParameters.HonestThreshold,
 	})
 	if err != nil {
 		return "", err
