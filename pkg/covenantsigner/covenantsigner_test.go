@@ -129,7 +129,7 @@ type migrationPlanQuoteSigningVectorsFile struct {
 
 func loadApprovalContractVector(
 	t *testing.T,
-	route TemplateID,
+	key string,
 ) (RouteSubmitRequest, string, string) {
 	t.Helper()
 
@@ -149,9 +149,9 @@ func loadApprovalContractVector(
 		t.Fatalf("unexpected vector scope: %s", vectors.Scope)
 	}
 
-	vector, ok := vectors.Vectors[string(route)]
+	vector, ok := vectors.Vectors[key]
 	if !ok {
-		t.Fatalf("missing vector for route %s", route)
+		t.Fatalf("missing vector %s", key)
 	}
 
 	request := RouteSubmitRequest{}
@@ -2846,9 +2846,9 @@ func TestArtifactApprovalDigestMatchesPhase1Contract(t *testing.T) {
 }
 
 func TestApprovalContractVectorsMatchExpectedRequestDigests(t *testing.T) {
-	for _, route := range []TemplateID{TemplateQcV1, TemplateSelfV1} {
-		t.Run(string(route), func(t *testing.T) {
-			request, expectedApprovalDigest, expectedDigest := loadApprovalContractVector(t, route)
+	for _, vectorKey := range []string{"qc_v1", "self_v1", "self_v1_presign"} {
+		t.Run(vectorKey, func(t *testing.T) {
+			request, expectedApprovalDigest, expectedDigest := loadApprovalContractVector(t, vectorKey)
 
 			digestBytes, err := artifactApprovalDigest(request.ArtifactApprovals.Payload)
 			if err != nil {
@@ -2875,9 +2875,9 @@ func TestApprovalContractVectorsMatchExpectedRequestDigests(t *testing.T) {
 }
 
 func TestApprovalContractVectorsNormalizeEquivalentVariants(t *testing.T) {
-	for _, route := range []TemplateID{TemplateQcV1, TemplateSelfV1} {
-		t.Run(string(route), func(t *testing.T) {
-			canonicalRequest, _, expectedDigest := loadApprovalContractVector(t, route)
+	for _, vectorKey := range []string{"qc_v1", "self_v1", "self_v1_presign"} {
+		t.Run(vectorKey, func(t *testing.T) {
+			canonicalRequest, _, expectedDigest := loadApprovalContractVector(t, vectorKey)
 
 			normalizedCanonical, err := normalizeRouteSubmitRequest(canonicalRequest)
 			if err != nil {
