@@ -1324,10 +1324,10 @@ func validateArtifactApprovalAuthenticity(
 				return err
 			}
 		case ArtifactApprovalRoleSigner:
-			// Phase 1 keeps S structurally required but not cryptographically
-			// verified. Signer approval must eventually bind to quorum or
-			// signer-service trust roots rather than the single signer key in the
-			// script template.
+			// Temporary cutover debt for passive/non-verifier deployments only.
+			// Production engine-backed deployments require request.signerApproval
+			// and do not reach this legacy S branch. Remove this fallback once
+			// non-verifier paths are deleted.
 			continue
 		}
 	}
