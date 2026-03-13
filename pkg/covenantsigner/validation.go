@@ -1106,76 +1106,79 @@ func requiredArtifactApprovalRoles(route TemplateID) ([]ArtifactApprovalRole, er
 }
 
 func validateArtifactApprovals(route TemplateID, request RouteSubmitRequest) error {
-	_, _, err := normalizeArtifactApprovals(route, request)
+	_, _, _, err := normalizeArtifactApprovals(route, request)
 	return err
 }
 
 func normalizeArtifactApprovals(
 	route TemplateID,
 	request RouteSubmitRequest,
-) (*ArtifactApprovalEnvelope, []string, error) {
+) (*ArtifactApprovalEnvelope, *SignerApprovalCertificate, []string, error) {
 	normalizedSignerApproval, err := normalizeSignerApprovalCertificate(request)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	normalizedLegacySignatures, err := validateArtifactSignatures(request.ArtifactSignatures)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if request.ArtifactApprovals == nil {
-		return nil, normalizedLegacySignatures, nil
+		return nil, normalizedSignerApproval, normalizedLegacySignatures, nil
 	}
 	if request.MigrationTransactionPlan == nil {
-		return nil, nil, &inputError{"request.migrationTransactionPlan is required when request.artifactApprovals is present"}
+		return nil, nil, nil, &inputError{"request.migrationTransactionPlan is required when request.artifactApprovals is present"}
 	}
 
 	if request.ArtifactApprovals.Payload.ApprovalVersion != artifactApprovalVersion {
-		return nil, nil, &inputError{"request.artifactApprovals.payload.approvalVersion must equal 1"}
+		return nil, nil, nil, &inputError{"request.artifactApprovals.payload.approvalVersion must equal 1"}
 	}
 	if request.ArtifactApprovals.Payload.Route != route {
-		return nil, nil, &inputError{"request.artifactApprovals.payload.route must match request.route"}
+		return nil, nil, nil, &inputError{"request.artifactApprovals.payload.route must match request.route"}
 	}
 	if request.ArtifactApprovals.Payload.ScriptTemplateID != route {
-		return nil, nil, &inputError{"request.artifactApprovals.payload.scriptTemplateId must match request.route"}
+		return nil, nil, nil, &inputError{"request.artifactApprovals.payload.scriptTemplateId must match request.route"}
 	}
 	if err := validateBytes32HexString(
 		"request.artifactApprovals.payload.destinationCommitmentHash",
 		request.ArtifactApprovals.Payload.DestinationCommitmentHash,
 	); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := validateBytes32HexString(
 		"request.artifactApprovals.payload.planCommitmentHash",
 		request.ArtifactApprovals.Payload.PlanCommitmentHash,
 	); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	normalizedDestinationCommitmentHash := normalizeLowerHex(
 		request.ArtifactApprovals.Payload.DestinationCommitmentHash,
 	)
 	if normalizedDestinationCommitmentHash != normalizeLowerHex(request.DestinationCommitmentHash) {
-		return nil, nil, &inputError{"request.artifactApprovals.payload.destinationCommitmentHash must match request.destinationCommitmentHash"}
+		return nil, nil, nil, &inputError{"request.artifactApprovals.payload.destinationCommitmentHash must match request.destinationCommitmentHash"}
 	}
 
 	normalizedPlanCommitmentHash := normalizeLowerHex(
 		request.ArtifactApprovals.Payload.PlanCommitmentHash,
 	)
 	if normalizedPlanCommitmentHash != normalizeLowerHex(request.MigrationTransactionPlan.PlanCommitmentHash) {
-		return nil, nil, &inputError{"request.artifactApprovals.payload.planCommitmentHash must match request.migrationTransactionPlan.planCommitmentHash"}
+		return nil, nil, nil, &inputError{"request.artifactApprovals.payload.planCommitmentHash must match request.migrationTransactionPlan.planCommitmentHash"}
 	}
 	if len(request.ArtifactApprovals.Approvals) == 0 {
-		return nil, nil, &inputError{"request.artifactApprovals.approvals must not be empty"}
+		return nil, nil, nil, &inputError{"request.artifactApprovals.approvals must not be empty"}
 	}
 
 	requiredRoles, err := requiredArtifactApprovalRoles(route)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	if normalizedSignerApproval != nil {
 		requiredRoles, err = requiredStructuredArtifactApprovalRoles(route)
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	allowedRoles := make(map[ArtifactApprovalRole]struct{}, len(requiredRoles))
@@ -1186,14 +1189,14 @@ func normalizeArtifactApprovals(
 	approvalsByRole := make(map[ArtifactApprovalRole]string, len(requiredRoles))
 	for i, approval := range request.ArtifactApprovals.Approvals {
 		if _, ok := allowedRoles[approval.Role]; !ok {
-			return nil, nil, &inputError{fmt.Sprintf(
+			return nil, nil, nil, &inputError{fmt.Sprintf(
 				"request.artifactApprovals.approvals[%d].role is not allowed for %s",
 				i,
 				route,
 			)}
 		}
 		if _, ok := approvalsByRole[approval.Role]; ok {
-			return nil, nil, &inputError{fmt.Sprintf(
+			return nil, nil, nil, &inputError{fmt.Sprintf(
 				"request.artifactApprovals.approvals[%d].role duplicates role %s",
 				i,
 				approval.Role,
@@ -1203,7 +1206,7 @@ func normalizeArtifactApprovals(
 			fmt.Sprintf("request.artifactApprovals.approvals[%d].signature", i),
 			approval.Signature,
 		); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 
 		approvalsByRole[approval.Role] = normalizeLowerHex(approval.Signature)
@@ -1223,7 +1226,7 @@ func normalizeArtifactApprovals(
 	for i, role := range requiredRoles {
 		signature, ok := approvalsByRole[role]
 		if !ok {
-			return nil, nil, &inputError{fmt.Sprintf(
+			return nil, nil, nil, &inputError{fmt.Sprintf(
 				"request.artifactApprovals.approvals must include role %s for %s",
 				role,
 				route,
@@ -1250,15 +1253,15 @@ func normalizeArtifactApprovals(
 	}
 
 	if len(normalizedLegacySignatures) != len(derivedLegacySignatures) {
-		return nil, nil, &inputError{canonicalSignatureError}
+		return nil, nil, nil, &inputError{canonicalSignatureError}
 	}
 	for i := range derivedLegacySignatures {
 		if normalizedLegacySignatures[i] != derivedLegacySignatures[i] {
-			return nil, nil, &inputError{canonicalSignatureError}
+			return nil, nil, nil, &inputError{canonicalSignatureError}
 		}
 	}
 
-	return normalizedApprovals, derivedLegacySignatures, nil
+	return normalizedApprovals, normalizedSignerApproval, derivedLegacySignatures, nil
 }
 
 func validateArtifactApprovalAuthenticity(
@@ -1431,14 +1434,10 @@ func normalizeRouteSubmitRequest(
 	options ...validationOptions,
 ) (RouteSubmitRequest, error) {
 	resolvedOptions := resolveValidationOptions(options)
-	normalizedArtifactApprovals, normalizedArtifactSignatures, err := normalizeArtifactApprovals(
+	normalizedArtifactApprovals, normalizedSignerApproval, normalizedArtifactSignatures, err := normalizeArtifactApprovals(
 		request.Route,
 		request,
 	)
-	if err != nil {
-		return RouteSubmitRequest{}, err
-	}
-	normalizedSignerApproval, err := normalizeSignerApprovalCertificate(request)
 	if err != nil {
 		return RouteSubmitRequest{}, err
 	}
@@ -1539,7 +1538,7 @@ func validateCommonRequest(
 	}
 	if resolvedOptions.signerApprovalVerifier != nil && request.SignerApproval == nil {
 		return &inputError{
-			"request.signerApproval is required when request.artifactApprovals is present",
+			"request.signerApproval is required when the signer approval verifier is configured",
 		}
 	}
 	if err := validateArtifactApprovals(route, request); err != nil {

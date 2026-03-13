@@ -1993,12 +1993,40 @@ func TestServiceRejectsLegacySignerApprovalPathWhenVerifierConfigured(t *testing
 	})
 	if err == nil || !strings.Contains(
 		err.Error(),
-		"request.signerApproval is required when request.artifactApprovals is present",
+		"request.signerApproval is required when the signer approval verifier is configured",
 	) {
 		t.Fatalf("expected missing signer approval error, got %v", err)
 	}
 }
 
+func TestServiceRejectsStructuredSignerApprovalWithMismatchedApprovalDigest(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithSignerApprovalVerifier(SignerApprovalVerifierFunc(func(RouteSubmitRequest) error {
+			return nil
+		})),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := structuredSignerApprovalRequest(TemplateSelfV1)
+	request.SignerApproval.ApprovalDigest = "0x" + strings.Repeat("11", 32)
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_structured_signer_approval_bad_digest",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.signerApproval.approvalDigest must match the canonical artifactApprovals payload digest",
+	) {
+		t.Fatalf("expected signer approval digest mismatch error, got %v", err)
+	}
+}
 func TestServiceRejectsStructuredSignerApprovalWithLegacySignerRole(t *testing.T) {
 	handle := newMemoryHandle()
 	service, err := NewService(
