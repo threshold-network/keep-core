@@ -189,6 +189,102 @@ func validArtifactApprovals(request RouteSubmitRequest) *ArtifactApprovalEnvelop
 	}
 }
 
+func canonicalArtifactApprovalRequest(route TemplateID) RouteSubmitRequest {
+	request := baseRequest(route)
+	request.ArtifactApprovals = validArtifactApprovals(request)
+	request.ArtifactSignatures = []string{"0xd0d0", "0x5050"}
+	if route == TemplateQcV1 {
+		request.ArtifactSignatures = []string{"0xd0d0", "0xc0c0", "0x5050"}
+	}
+
+	return request
+}
+
+func upperHexBody(value string) string {
+	if !strings.HasPrefix(value, "0x") {
+		return strings.ToUpper(value)
+	}
+
+	return "0x" + strings.ToUpper(strings.TrimPrefix(value, "0x"))
+}
+
+func equivalentArtifactApprovalVariant(route TemplateID) RouteSubmitRequest {
+	request := canonicalArtifactApprovalRequest(route)
+
+	request.Strategy = upperHexBody(request.Strategy)
+	request.Reserve = upperHexBody(request.Reserve)
+	request.ActiveOutpoint.TxID = upperHexBody(request.ActiveOutpoint.TxID)
+	request.ActiveOutpoint.ScriptHash = upperHexBody(request.ActiveOutpoint.ScriptHash)
+	request.DestinationCommitmentHash = upperHexBody(request.DestinationCommitmentHash)
+	request.MigrationDestination.Reserve = upperHexBody(request.MigrationDestination.Reserve)
+	request.MigrationDestination.Revealer = upperHexBody(request.MigrationDestination.Revealer)
+	request.MigrationDestination.Vault = upperHexBody(request.MigrationDestination.Vault)
+	request.MigrationDestination.DepositScript = upperHexBody(request.MigrationDestination.DepositScript)
+	request.MigrationDestination.DepositScriptHash = upperHexBody(request.MigrationDestination.DepositScriptHash)
+	request.MigrationDestination.MigrationExtraData = upperHexBody(request.MigrationDestination.MigrationExtraData)
+	request.MigrationDestination.DestinationCommitmentHash = upperHexBody(request.MigrationDestination.DestinationCommitmentHash)
+	request.MigrationTransactionPlan.PlanCommitmentHash = upperHexBody(request.MigrationTransactionPlan.PlanCommitmentHash)
+	for i := range request.ArtifactSignatures {
+		request.ArtifactSignatures[i] = upperHexBody(request.ArtifactSignatures[i])
+	}
+
+	if route == TemplateQcV1 {
+		request.ScriptTemplate = mustTemplate(QcV1Template{
+			Template:           TemplateQcV1,
+			DepositorPublicKey: upperHexBody("0x021111"),
+			CustodianPublicKey: upperHexBody("0x023333"),
+			SignerPublicKey:    upperHexBody("0x022222"),
+			Beta:               144,
+			Delta2:             4320,
+		})
+		request.ArtifactApprovals.Payload.DestinationCommitmentHash = upperHexBody(
+			request.ArtifactApprovals.Payload.DestinationCommitmentHash,
+		)
+		request.ArtifactApprovals.Payload.PlanCommitmentHash = upperHexBody(
+			request.ArtifactApprovals.Payload.PlanCommitmentHash,
+		)
+		request.ArtifactApprovals.Approvals = []ArtifactRoleApproval{
+			{
+				Role:      ArtifactApprovalRoleSigner,
+				Signature: upperHexBody("0x5050"),
+			},
+			{
+				Role:      ArtifactApprovalRoleDepositor,
+				Signature: upperHexBody("0xd0d0"),
+			},
+			{
+				Role:      ArtifactApprovalRoleCustodian,
+				Signature: upperHexBody("0xc0c0"),
+			},
+		}
+	} else {
+		request.ScriptTemplate = mustTemplate(SelfV1Template{
+			Template:           TemplateSelfV1,
+			DepositorPublicKey: upperHexBody("0x021111"),
+			SignerPublicKey:    upperHexBody("0x022222"),
+			Delta2:             4320,
+		})
+		request.ArtifactApprovals.Payload.DestinationCommitmentHash = upperHexBody(
+			request.ArtifactApprovals.Payload.DestinationCommitmentHash,
+		)
+		request.ArtifactApprovals.Payload.PlanCommitmentHash = upperHexBody(
+			request.ArtifactApprovals.Payload.PlanCommitmentHash,
+		)
+		request.ArtifactApprovals.Approvals = []ArtifactRoleApproval{
+			{
+				Role:      ArtifactApprovalRoleSigner,
+				Signature: upperHexBody("0x5050"),
+			},
+			{
+				Role:      ArtifactApprovalRoleDepositor,
+				Signature: upperHexBody("0xd0d0"),
+			},
+		}
+	}
+
+	return request
+}
+
 func validMigrationDestination() *MigrationDestinationReservation {
 	reservation := &MigrationDestinationReservation{
 		ReservationID: "cmdr_12345678",
@@ -1246,6 +1342,143 @@ func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 				t.Fatalf("expected %q, got %v", testCase.expectErr, err)
 			}
 		})
+	}
+}
+
+func TestRequestDigestNormalizesEquivalentArtifactApprovalVariants(t *testing.T) {
+	canonicalDigest, err := requestDigest(canonicalArtifactApprovalRequest(TemplateQcV1))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	variantDigest, err := requestDigest(equivalentArtifactApprovalVariant(TemplateQcV1))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if canonicalDigest != variantDigest {
+		t.Fatalf("expected matching request digest, got %s vs %s", canonicalDigest, variantDigest)
+	}
+}
+
+func TestRequestDigestDoesNotEscapeHTMLSensitiveCharacters(t *testing.T) {
+	request := canonicalArtifactApprovalRequest(TemplateSelfV1)
+	request.FacadeRequestID = "rf_<tag>&sink"
+	request.IdempotencyKey = "idem_>bridge"
+
+	normalizedRequest, err := normalizeRouteSubmitRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload, err := marshalCanonicalJSON(normalizedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Contains(payload, []byte(`"facadeRequestId":"rf_<tag>&sink"`)) {
+		t.Fatalf("expected raw HTML-sensitive characters in payload, got %s", payload)
+	}
+	if bytes.Contains(payload, []byte(`\u003c`)) ||
+		bytes.Contains(payload, []byte(`\u003e`)) ||
+		bytes.Contains(payload, []byte(`\u0026`)) {
+		t.Fatalf("expected unescaped HTML-sensitive characters in payload, got %s", payload)
+	}
+
+	digestFromRawRequest, err := requestDigest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digestFromNormalizedRequest, err := requestDigestFromNormalized(normalizedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digestFromRawRequest != digestFromNormalizedRequest {
+		t.Fatalf(
+			"expected matching digests, got %s vs %s",
+			digestFromRawRequest,
+			digestFromNormalizedRequest,
+		)
+	}
+}
+
+func TestServicePollAcceptsEquivalentArtifactApprovalRequestVariants(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{
+		submit: func(*Job) (*Transition, error) {
+			return &Transition{State: JobStatePending, Detail: "queued"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	submitRequest := equivalentArtifactApprovalVariant(TemplateQcV1)
+	submitResult, err := service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
+		RouteRequestID: "orq_equivalent_digest",
+		Stage:          StageSignerCoordination,
+		Request:        submitRequest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pollResult, err := service.Poll(context.Background(), TemplateQcV1, SignerPollInput{
+		RouteRequestID: "orq_equivalent_digest",
+		RequestID:      submitResult.RequestID,
+		Stage:          StageSignerCoordination,
+		Request:        canonicalArtifactApprovalRequest(TemplateQcV1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if pollResult.Status != StepStatusPending {
+		t.Fatalf("expected PENDING, got %#v", pollResult)
+	}
+}
+
+func TestServiceStoresNormalizedArtifactApprovalRequest(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := equivalentArtifactApprovalVariant(TemplateQcV1)
+	_, err = service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
+		RouteRequestID: "orq_normalized_store",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	job, ok, err := service.store.GetByRouteRequest(TemplateQcV1, "orq_normalized_store")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected stored job")
+	}
+
+	expected := canonicalArtifactApprovalRequest(TemplateQcV1)
+	if !reflect.DeepEqual(job.Request, expected) {
+		t.Fatalf("expected normalized request %#v, got %#v", expected, job.Request)
+	}
+}
+
+func TestRequestDigestRejectsArtifactApprovalsWithoutMigrationTransactionPlan(t *testing.T) {
+	request := canonicalArtifactApprovalRequest(TemplateSelfV1)
+	request.MigrationTransactionPlan = nil
+
+	_, err := requestDigest(request)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.migrationTransactionPlan is required when request.artifactApprovals is present",
+	) {
+		t.Fatalf("expected missing plan error, got %v", err)
 	}
 }
 
