@@ -247,6 +247,52 @@ func canonicalArtifactApprovalRequest(route TemplateID) RouteSubmitRequest {
 	return request
 }
 
+const (
+	mixedCaseCoverageStrategy = "0xaabbccddeeff00112233445566778899aabbccdd"
+	mixedCaseCoverageReserve  = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+	mixedCaseCoverageRevealer = "0xdecafbaddecafbaddecafbaddecafbaddecafbad"
+	mixedCaseCoverageVault    = "0xbeadfeedbeadfeedbeadfeedbeadfeedbeadfeed"
+)
+
+func canonicalMixedCaseCoverageArtifactApprovalRequest(
+	t *testing.T,
+	route TemplateID,
+) RouteSubmitRequest {
+	t.Helper()
+
+	request := canonicalArtifactApprovalRequest(route)
+	request.Strategy = mixedCaseCoverageStrategy
+	request.Reserve = mixedCaseCoverageReserve
+	request.MigrationDestination.Reserve = mixedCaseCoverageReserve
+	request.MigrationDestination.Revealer = mixedCaseCoverageRevealer
+	request.MigrationDestination.Vault = mixedCaseCoverageVault
+	request.MigrationDestination.MigrationExtraData = computeMigrationExtraData(
+		request.MigrationDestination.Revealer,
+	)
+
+	destinationCommitmentHash, err := computeDestinationCommitmentHash(
+		request.MigrationDestination,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.MigrationDestination.DestinationCommitmentHash = destinationCommitmentHash
+	request.DestinationCommitmentHash = destinationCommitmentHash
+
+	planCommitmentHash, err := computeMigrationTransactionPlanCommitmentHash(
+		request,
+		request.MigrationTransactionPlan,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.MigrationTransactionPlan.PlanCommitmentHash = planCommitmentHash
+	request.ArtifactApprovals.Payload.DestinationCommitmentHash = destinationCommitmentHash
+	request.ArtifactApprovals.Payload.PlanCommitmentHash = planCommitmentHash
+
+	return request
+}
+
 func cloneRouteSubmitRequest(
 	t *testing.T,
 	request RouteSubmitRequest,
@@ -261,60 +307,61 @@ func cloneRouteSubmitRequest(
 	return cloned
 }
 
-func equivalentArtifactApprovalVariantFromRequest(
+func artifactApprovalVariantFromRequest(
 	t *testing.T,
 	request RouteSubmitRequest,
+	transformHex func(string) string,
 ) RouteSubmitRequest {
 	t.Helper()
 
 	variant := cloneRouteSubmitRequest(t, request)
-	variant.Strategy = upperHexBody(variant.Strategy)
-	variant.Reserve = upperHexBody(variant.Reserve)
-	variant.ActiveOutpoint.TxID = upperHexBody(variant.ActiveOutpoint.TxID)
+	variant.Strategy = transformHex(variant.Strategy)
+	variant.Reserve = transformHex(variant.Reserve)
+	variant.ActiveOutpoint.TxID = transformHex(variant.ActiveOutpoint.TxID)
 	if variant.ActiveOutpoint.ScriptHash != "" {
-		variant.ActiveOutpoint.ScriptHash = upperHexBody(variant.ActiveOutpoint.ScriptHash)
+		variant.ActiveOutpoint.ScriptHash = transformHex(variant.ActiveOutpoint.ScriptHash)
 	}
-	variant.DestinationCommitmentHash = upperHexBody(variant.DestinationCommitmentHash)
+	variant.DestinationCommitmentHash = transformHex(variant.DestinationCommitmentHash)
 
 	if variant.MigrationDestination != nil {
-		variant.MigrationDestination.Reserve = upperHexBody(variant.MigrationDestination.Reserve)
-		variant.MigrationDestination.Revealer = upperHexBody(variant.MigrationDestination.Revealer)
-		variant.MigrationDestination.Vault = upperHexBody(variant.MigrationDestination.Vault)
-		variant.MigrationDestination.DepositScript = upperHexBody(variant.MigrationDestination.DepositScript)
-		variant.MigrationDestination.DepositScriptHash = upperHexBody(variant.MigrationDestination.DepositScriptHash)
-		variant.MigrationDestination.MigrationExtraData = upperHexBody(variant.MigrationDestination.MigrationExtraData)
-		variant.MigrationDestination.DestinationCommitmentHash = upperHexBody(
+		variant.MigrationDestination.Reserve = transformHex(variant.MigrationDestination.Reserve)
+		variant.MigrationDestination.Revealer = transformHex(variant.MigrationDestination.Revealer)
+		variant.MigrationDestination.Vault = transformHex(variant.MigrationDestination.Vault)
+		variant.MigrationDestination.DepositScript = transformHex(variant.MigrationDestination.DepositScript)
+		variant.MigrationDestination.DepositScriptHash = transformHex(variant.MigrationDestination.DepositScriptHash)
+		variant.MigrationDestination.MigrationExtraData = transformHex(variant.MigrationDestination.MigrationExtraData)
+		variant.MigrationDestination.DestinationCommitmentHash = transformHex(
 			variant.MigrationDestination.DestinationCommitmentHash,
 		)
 	}
 
 	if variant.MigrationTransactionPlan != nil {
-		variant.MigrationTransactionPlan.PlanCommitmentHash = upperHexBody(
+		variant.MigrationTransactionPlan.PlanCommitmentHash = transformHex(
 			variant.MigrationTransactionPlan.PlanCommitmentHash,
 		)
 	}
 
 	for i := range variant.ArtifactSignatures {
-		variant.ArtifactSignatures[i] = upperHexBody(variant.ArtifactSignatures[i])
+		variant.ArtifactSignatures[i] = transformHex(variant.ArtifactSignatures[i])
 	}
 
 	for pathID, artifact := range variant.Artifacts {
-		artifact.PSBTHash = upperHexBody(artifact.PSBTHash)
-		artifact.DestinationCommitmentHash = upperHexBody(artifact.DestinationCommitmentHash)
+		artifact.PSBTHash = transformHex(artifact.PSBTHash)
+		artifact.DestinationCommitmentHash = transformHex(artifact.DestinationCommitmentHash)
 		if artifact.TransactionHex != "" {
-			artifact.TransactionHex = upperHexBody(artifact.TransactionHex)
+			artifact.TransactionHex = transformHex(artifact.TransactionHex)
 		}
 		if artifact.TransactionID != "" {
-			artifact.TransactionID = upperHexBody(artifact.TransactionID)
+			artifact.TransactionID = transformHex(artifact.TransactionID)
 		}
 		variant.Artifacts[pathID] = artifact
 	}
 
 	if variant.ArtifactApprovals != nil {
-		variant.ArtifactApprovals.Payload.DestinationCommitmentHash = upperHexBody(
+		variant.ArtifactApprovals.Payload.DestinationCommitmentHash = transformHex(
 			variant.ArtifactApprovals.Payload.DestinationCommitmentHash,
 		)
-		variant.ArtifactApprovals.Payload.PlanCommitmentHash = upperHexBody(
+		variant.ArtifactApprovals.Payload.PlanCommitmentHash = transformHex(
 			variant.ArtifactApprovals.Payload.PlanCommitmentHash,
 		)
 
@@ -326,7 +373,7 @@ func equivalentArtifactApprovalVariantFromRequest(
 			approval := variant.ArtifactApprovals.Approvals[len(variant.ArtifactApprovals.Approvals)-1-i]
 			reorderedApprovals[i] = ArtifactRoleApproval{
 				Role:      approval.Role,
-				Signature: upperHexBody(approval.Signature),
+				Signature: transformHex(approval.Signature),
 			}
 		}
 		variant.ArtifactApprovals.Approvals = reorderedApprovals
@@ -338,17 +385,17 @@ func equivalentArtifactApprovalVariantFromRequest(
 		if err := strictUnmarshal(variant.ScriptTemplate, template); err != nil {
 			t.Fatal(err)
 		}
-		template.DepositorPublicKey = upperHexBody(template.DepositorPublicKey)
-		template.CustodianPublicKey = upperHexBody(template.CustodianPublicKey)
-		template.SignerPublicKey = upperHexBody(template.SignerPublicKey)
+		template.DepositorPublicKey = transformHex(template.DepositorPublicKey)
+		template.CustodianPublicKey = transformHex(template.CustodianPublicKey)
+		template.SignerPublicKey = transformHex(template.SignerPublicKey)
 		variant.ScriptTemplate = mustTemplate(template)
 	case TemplateSelfV1:
 		template := &SelfV1Template{}
 		if err := strictUnmarshal(variant.ScriptTemplate, template); err != nil {
 			t.Fatal(err)
 		}
-		template.DepositorPublicKey = upperHexBody(template.DepositorPublicKey)
-		template.SignerPublicKey = upperHexBody(template.SignerPublicKey)
+		template.DepositorPublicKey = transformHex(template.DepositorPublicKey)
+		template.SignerPublicKey = transformHex(template.SignerPublicKey)
 		variant.ScriptTemplate = mustTemplate(template)
 	default:
 		t.Fatalf("unsupported route %s", variant.Route)
@@ -357,12 +404,51 @@ func equivalentArtifactApprovalVariantFromRequest(
 	return variant
 }
 
+func equivalentArtifactApprovalVariantFromRequest(
+	t *testing.T,
+	request RouteSubmitRequest,
+) RouteSubmitRequest {
+	t.Helper()
+	return artifactApprovalVariantFromRequest(t, request, upperHexBody)
+}
+
 func upperHexBody(value string) string {
 	if !strings.HasPrefix(value, "0x") {
 		return strings.ToUpper(value)
 	}
 
 	return "0x" + strings.ToUpper(strings.TrimPrefix(value, "0x"))
+}
+
+func mixedCaseHexBody(value string) string {
+	if !strings.HasPrefix(value, "0x") {
+		return value
+	}
+
+	body := strings.ToLower(strings.TrimPrefix(value, "0x"))
+	lettersSeen := 0
+	variant := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'f' {
+			if lettersSeen%2 == 0 {
+				lettersSeen++
+				return r - ('a' - 'A')
+			}
+
+			lettersSeen++
+		}
+
+		return r
+	}, body)
+
+	return "0x" + variant
+}
+
+func mixedCaseArtifactApprovalVariantFromRequest(
+	t *testing.T,
+	request RouteSubmitRequest,
+) RouteSubmitRequest {
+	t.Helper()
+	return artifactApprovalVariantFromRequest(t, request, mixedCaseHexBody)
 }
 
 func equivalentArtifactApprovalVariant(route TemplateID) RouteSubmitRequest {
@@ -1689,6 +1775,59 @@ func TestApprovalContractVectorsNormalizeEquivalentVariants(t *testing.T) {
 			}
 			if digest != expectedDigest {
 				t.Fatalf("expected digest %s, got %s", expectedDigest, digest)
+			}
+		})
+	}
+}
+
+func TestRequestDigestNormalizesMixedCaseArtifactApprovalVariants(t *testing.T) {
+	for _, route := range []TemplateID{TemplateQcV1, TemplateSelfV1} {
+		t.Run(string(route), func(t *testing.T) {
+			canonicalRequest := canonicalMixedCaseCoverageArtifactApprovalRequest(t, route)
+			mixedCaseRequest := mixedCaseArtifactApprovalVariantFromRequest(
+				t,
+				canonicalRequest,
+			)
+
+			if mixedCaseRequest.Reserve == canonicalRequest.Reserve {
+				t.Fatalf(
+					"expected mixed-case reserve variant, got %s",
+					mixedCaseRequest.Reserve,
+				)
+			}
+
+			normalizedCanonical, err := normalizeRouteSubmitRequest(canonicalRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			normalizedMixedCase, err := normalizeRouteSubmitRequest(mixedCaseRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if !reflect.DeepEqual(normalizedMixedCase, normalizedCanonical) {
+				t.Fatalf(
+					"expected normalized mixed-case request %#v, got %#v",
+					normalizedCanonical,
+					normalizedMixedCase,
+				)
+			}
+
+			canonicalDigest, err := requestDigest(canonicalRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mixedCaseDigest, err := requestDigest(mixedCaseRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if mixedCaseDigest != canonicalDigest {
+				t.Fatalf(
+					"expected matching digest %s, got %s",
+					canonicalDigest,
+					mixedCaseDigest,
+				)
 			}
 		})
 	}
