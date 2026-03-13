@@ -15,6 +15,7 @@ import (
 type Service struct {
 	store                        *Store
 	engine                       Engine
+	signerApprovalVerifier       SignerApprovalVerifier
 	now                          func() time.Time
 	mutex                        sync.Mutex
 	migrationPlanQuoteTrustRoots []MigrationPlanQuoteTrustRoot
@@ -29,6 +30,14 @@ func WithMigrationPlanQuoteTrustRoots(
 
 	return func(service *Service) {
 		service.migrationPlanQuoteTrustRoots = cloned
+	}
+}
+
+func WithSignerApprovalVerifier(
+	verifier SignerApprovalVerifier,
+) ServiceOption {
+	return func(service *Service) {
+		service.signerApprovalVerifier = verifier
 	}
 }
 
@@ -50,6 +59,9 @@ func NewService(
 		store:  store,
 		engine: engine,
 		now:    func() time.Time { return time.Now().UTC() },
+	}
+	if verifier, ok := engine.(SignerApprovalVerifier); ok {
+		service.signerApprovalVerifier = verifier
 	}
 	for _, option := range options {
 		option(service)
@@ -157,6 +169,7 @@ func (s *Service) loadPollJob(route TemplateID, input SignerPollInput) (*Job, er
 		input.Request,
 		validationOptions{
 			migrationPlanQuoteTrustRoots: s.migrationPlanQuoteTrustRoots,
+			signerApprovalVerifier:       s.signerApprovalVerifier,
 		},
 	)
 	if err != nil {
@@ -174,6 +187,7 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 		migrationPlanQuoteTrustRoots:      s.migrationPlanQuoteTrustRoots,
 		requireFreshMigrationPlanQuote:    true,
 		migrationPlanQuoteVerificationNow: s.now(),
+		signerApprovalVerifier:            s.signerApprovalVerifier,
 	}
 	if err := validateSubmitInput(route, input, submitValidationOptions); err != nil {
 		return StepResult{}, err
@@ -183,6 +197,7 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 		input.Request,
 		validationOptions{
 			migrationPlanQuoteTrustRoots: s.migrationPlanQuoteTrustRoots,
+			signerApprovalVerifier:       s.signerApprovalVerifier,
 		},
 	)
 	if err != nil {
@@ -282,6 +297,7 @@ func (s *Service) Poll(ctx context.Context, route TemplateID, input SignerPollIn
 		input,
 		validationOptions{
 			migrationPlanQuoteTrustRoots: s.migrationPlanQuoteTrustRoots,
+			signerApprovalVerifier:       s.signerApprovalVerifier,
 		},
 	); err != nil {
 		return StepResult{}, err
