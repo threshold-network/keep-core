@@ -1,13 +1,132 @@
 package tbtc
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"strings"
 	"testing"
 
+	"github.com/btcsuite/btcd/btcec"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/covenantsigner"
 )
+
+func validStructuredSignerApprovalVerificationRequest(
+	t *testing.T,
+	node *node,
+	walletPublicKey *ecdsa.PublicKey,
+	route covenantsigner.TemplateID,
+) covenantsigner.RouteSubmitRequest {
+	t.Helper()
+
+	executor, ok, err := node.getSigningExecutor(walletPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("node is supposed to control wallet signers")
+	}
+
+	startBlock, err := executor.getCurrentBlockFn()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	depositorPrivateKey, _ := btcec.PrivKeyFromBytes(
+		btcec.S256(),
+		bytes.Repeat([]byte{0xaa}, 32),
+	)
+
+	request := covenantsigner.RouteSubmitRequest{
+		Route: route,
+		ArtifactApprovals: &covenantsigner.ArtifactApprovalEnvelope{
+			Payload: covenantsigner.ArtifactApprovalPayload{
+				ApprovalVersion:           1,
+				Route:                     route,
+				ScriptTemplateID:          route,
+				DestinationCommitmentHash: "0x" + strings.Repeat("11", 32),
+				PlanCommitmentHash:        "0x" + strings.Repeat("22", 32),
+			},
+		},
+	}
+
+	switch route {
+	case covenantsigner.TemplateSelfV1:
+		templateJSON, err := json.Marshal(&covenantsigner.SelfV1Template{
+			Template:           covenantsigner.TemplateSelfV1,
+			DepositorPublicKey: "0x" + hex.EncodeToString(depositorPrivateKey.PubKey().SerializeCompressed()),
+			SignerPublicKey:    "0x" + hex.EncodeToString((*btcec.PublicKey)(walletPublicKey).SerializeCompressed()),
+			Delta2:             4320,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.ScriptTemplate = templateJSON
+		request.ArtifactApprovals.Approvals = []covenantsigner.ArtifactRoleApproval{
+			{
+				Role: covenantsigner.ArtifactApprovalRoleDepositor,
+				Signature: testSignArtifactApproval(
+					t,
+					depositorPrivateKey,
+					request.ArtifactApprovals.Payload,
+				),
+			},
+		}
+	case covenantsigner.TemplateQcV1:
+		custodianPrivateKey, _ := btcec.PrivKeyFromBytes(
+			btcec.S256(),
+			bytes.Repeat([]byte{0xbb}, 32),
+		)
+		templateJSON, err := json.Marshal(&covenantsigner.QcV1Template{
+			Template:           covenantsigner.TemplateQcV1,
+			DepositorPublicKey: "0x" + hex.EncodeToString(depositorPrivateKey.PubKey().SerializeCompressed()),
+			CustodianPublicKey: "0x" + hex.EncodeToString(custodianPrivateKey.PubKey().SerializeCompressed()),
+			SignerPublicKey:    "0x" + hex.EncodeToString((*btcec.PublicKey)(walletPublicKey).SerializeCompressed()),
+			Beta:               144,
+			Delta2:             4320,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.ScriptTemplate = templateJSON
+		request.ArtifactApprovals.Approvals = []covenantsigner.ArtifactRoleApproval{
+			{
+				Role: covenantsigner.ArtifactApprovalRoleDepositor,
+				Signature: testSignArtifactApproval(
+					t,
+					depositorPrivateKey,
+					request.ArtifactApprovals.Payload,
+				),
+			},
+			{
+				Role: covenantsigner.ArtifactApprovalRoleCustodian,
+				Signature: testSignArtifactApproval(
+					t,
+					custodianPrivateKey,
+					request.ArtifactApprovals.Payload,
+				),
+			},
+		}
+	default:
+		t.Fatalf("unsupported route %s", route)
+	}
+
+	certificate, err := executor.issueSignerApprovalCertificate(
+		context.Background(),
+		testArtifactApprovalDigest(t, request.ArtifactApprovals.Payload),
+		startBlock,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.SignerApproval = certificate
+
+	return request
+}
 
 func TestSigningExecutorCanIssueSignerApprovalCertificateForArbitraryDigest(t *testing.T) {
 	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
@@ -46,7 +165,7 @@ func TestSigningExecutorCanIssueSignerApprovalCertificateForArbitraryDigest(t *t
 	}
 
 	expectedSignerSetHash, err := computeSignerApprovalCertificateSignerSetHash(
-		executor.wallet(),
+		executor.wallet().publicKey,
 		walletChainData,
 		executor.groupParameters,
 	)
@@ -78,7 +197,7 @@ func TestSigningExecutorCanIssueSignerApprovalCertificateForArbitraryDigest(t *t
 			certificate.ActiveMembers,
 		)
 	}
-	if certificate.EndBlock < startBlock {
+	if certificate.EndBlock == nil || *certificate.EndBlock < startBlock {
 		t.Fatalf(
 			"expected end block [%v] to be >= start block [%v]",
 			certificate.EndBlock,
@@ -121,7 +240,7 @@ func TestSignerApprovalCertificateVerificationRejectsTamperedDigest(t *testing.T
 	}
 
 	expectedSignerSetHash, err := computeSignerApprovalCertificateSignerSetHash(
-		executor.wallet(),
+		executor.wallet().publicKey,
 		walletChainData,
 		executor.groupParameters,
 	)
@@ -140,9 +259,6 @@ func TestSignerApprovalCertificateVerificationRejectsTamperedDigest(t *testing.T
 func TestSignerApprovalCertificateSignerSetHashBindsOnChainWalletIdentityAndThreshold(t *testing.T) {
 	_, _, walletPublicKey := setupCovenantSignerTestNode(t)
 
-	baseWallet := wallet{
-		publicKey: walletPublicKey,
-	}
 	baseWalletChainData := &WalletChainData{
 		EcdsaWalletID:  sha256.Sum256([]byte("wallet-id-base")),
 		MembersIDsHash: sha256.Sum256([]byte("members-hash-base")),
@@ -154,7 +270,7 @@ func TestSignerApprovalCertificateSignerSetHashBindsOnChainWalletIdentityAndThre
 	}
 
 	baseHash, err := computeSignerApprovalCertificateSignerSetHash(
-		baseWallet,
+		walletPublicKey,
 		baseWalletChainData,
 		baseGroupParameters,
 	)
@@ -163,7 +279,7 @@ func TestSignerApprovalCertificateSignerSetHashBindsOnChainWalletIdentityAndThre
 	}
 
 	changedMembersHash, err := computeSignerApprovalCertificateSignerSetHash(
-		baseWallet,
+		walletPublicKey,
 		&WalletChainData{
 			EcdsaWalletID:  baseWalletChainData.EcdsaWalletID,
 			MembersIDsHash: sha256.Sum256([]byte("members-hash-changed")),
@@ -178,7 +294,7 @@ func TestSignerApprovalCertificateSignerSetHashBindsOnChainWalletIdentityAndThre
 	}
 
 	changedWalletIDHash, err := computeSignerApprovalCertificateSignerSetHash(
-		baseWallet,
+		walletPublicKey,
 		&WalletChainData{
 			EcdsaWalletID:  sha256.Sum256([]byte("wallet-id-changed")),
 			MembersIDsHash: baseWalletChainData.MembersIDsHash,
@@ -193,7 +309,7 @@ func TestSignerApprovalCertificateSignerSetHashBindsOnChainWalletIdentityAndThre
 	}
 
 	thresholdChangedHash, err := computeSignerApprovalCertificateSignerSetHash(
-		baseWallet,
+		walletPublicKey,
 		baseWalletChainData,
 		&GroupParameters{
 			GroupSize:       3,
@@ -206,5 +322,38 @@ func TestSignerApprovalCertificateSignerSetHashBindsOnChainWalletIdentityAndThre
 	}
 	if thresholdChangedHash == baseHash {
 		t.Fatal("expected signer set hash to change when honest threshold changes")
+	}
+}
+
+func TestCovenantSignerEngineVerifySignerApprovalAcceptsValidCertificate(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+
+	if err := (&covenantSignerEngine{node: node}).VerifySignerApproval(request); err != nil {
+		t.Fatalf("expected signer approval verification to succeed: %v", err)
+	}
+}
+
+func TestCovenantSignerEngineVerifySignerApprovalRejectsWalletPublicKeyMismatch(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+	request.SignerApproval.WalletPublicKey = "0x04" + strings.Repeat("55", 64)
+
+	err := (&covenantSignerEngine{node: node}).VerifySignerApproval(request)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.signerApproval.walletPublicKey must match request.scriptTemplate.signerPublicKey",
+	) {
+		t.Fatalf("expected wallet public key mismatch error, got %v", err)
 	}
 }

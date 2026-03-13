@@ -13,6 +13,7 @@ import (
 
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/covenantsigner"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
@@ -22,21 +23,6 @@ const (
 	signerApprovalCertificateSignatureAlgorithm        = "tecdsa-secp256k1"
 	signerApprovalCertificateSignerSetDomain           = "covenant-signer-set-v1:"
 )
-
-// signerApprovalCertificate is a spike artifact for evaluating whether the
-// current tECDSA signer stack can emit a single offline-verifiable `S`
-// approval over an arbitrary approval digest.
-type signerApprovalCertificate struct {
-	CertificateVersion uint32   `json:"certificateVersion"`
-	SignatureAlgorithm string   `json:"signatureAlgorithm"`
-	WalletPublicKey    string   `json:"walletPublicKey"`
-	SignerSetHash      string   `json:"signerSetHash"`
-	ApprovalDigest     string   `json:"approvalDigest"`
-	Signature          string   `json:"signature"`
-	ActiveMembers      []uint32 `json:"activeMembers,omitempty"`
-	InactiveMembers    []uint32 `json:"inactiveMembers,omitempty"`
-	EndBlock           uint64   `json:"endBlock"`
-}
 
 type signerApprovalCertificateSignerSetPayload struct {
 	WalletID        string `json:"walletId"`
@@ -49,7 +35,7 @@ func (se *signingExecutor) issueSignerApprovalCertificate(
 	ctx context.Context,
 	approvalDigest []byte,
 	startBlock uint64,
-) (*signerApprovalCertificate, error) {
+) (*covenantsigner.SignerApprovalCertificate, error) {
 	if len(approvalDigest) != sha256.Size {
 		return nil, fmt.Errorf(
 			"approval digest must be exactly %d bytes",
@@ -94,7 +80,7 @@ func buildSignerApprovalCertificate(
 	signature *tecdsa.Signature,
 	activityReport *signingActivityReport,
 	endBlock uint64,
-) (*signerApprovalCertificate, error) {
+) (*covenantsigner.SignerApprovalCertificate, error) {
 	if len(approvalDigest) != sha256.Size {
 		return nil, fmt.Errorf(
 			"approval digest must be exactly %d bytes",
@@ -117,7 +103,7 @@ func buildSignerApprovalCertificate(
 	}
 
 	signerSetHash, err := computeSignerApprovalCertificateSignerSetHash(
-		wallet,
+		wallet.publicKey,
 		walletChainData,
 		groupParameters,
 	)
@@ -130,15 +116,15 @@ func buildSignerApprovalCertificate(
 		S: signature.S,
 	}).Serialize()
 
-	certificate := &signerApprovalCertificate{
+	certificate := &covenantsigner.SignerApprovalCertificate{
 		CertificateVersion: signerApprovalCertificateVersion,
 		SignatureAlgorithm: signerApprovalCertificateSignatureAlgorithm,
 		WalletPublicKey:    "0x" + hex.EncodeToString(walletPublicKeyBytes),
 		SignerSetHash:      signerSetHash,
 		ApprovalDigest:     "0x" + hex.EncodeToString(approvalDigest),
 		Signature:          "0x" + hex.EncodeToString(signatureBytes),
-		EndBlock:           endBlock,
 	}
+	certificate.EndBlock = &endBlock
 
 	if activityReport != nil {
 		certificate.ActiveMembers = normalizeSignerApprovalMemberIndexes(
@@ -153,7 +139,7 @@ func buildSignerApprovalCertificate(
 }
 
 func computeSignerApprovalCertificateSignerSetHash(
-	wallet wallet,
+	walletPublicKey *ecdsa.PublicKey,
 	walletChainData *WalletChainData,
 	groupParameters *GroupParameters,
 ) (string, error) {
@@ -170,7 +156,7 @@ func computeSignerApprovalCertificateSignerSetHash(
 		return "", fmt.Errorf("wallet chain data must include members IDs hash")
 	}
 
-	walletPublicKeyBytes, err := marshalPublicKey(wallet.publicKey)
+	walletPublicKeyBytes, err := marshalPublicKey(walletPublicKey)
 	if err != nil {
 		return "", err
 	}
@@ -193,7 +179,7 @@ func computeSignerApprovalCertificateSignerSetHash(
 }
 
 func verifySignerApprovalCertificate(
-	certificate *signerApprovalCertificate,
+	certificate *covenantsigner.SignerApprovalCertificate,
 	expectedSignerSetHash string,
 ) error {
 	if certificate == nil {

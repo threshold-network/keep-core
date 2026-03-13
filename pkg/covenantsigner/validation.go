@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ const (
 	canonicalAnchorValueSats           uint64 = 330
 	migrationTransactionPlanVersion    uint32 = 1
 	artifactApprovalVersion            uint32 = 1
+	signerApprovalCertificateVersion   uint32 = 1
 	migrationPlanQuoteVersion          uint32 = 1
 	migrationPlanQuoteSignatureVersion uint32 = 1
 )
@@ -34,6 +36,7 @@ const (
 const (
 	migrationPlanQuoteSignatureAlgorithm = "ed25519"
 	migrationPlanQuoteSigningDomain      = "migration-plan-quote-v1:"
+	signerApprovalSignatureAlgorithm     = "tecdsa-secp256k1"
 )
 
 var artifactApprovalTypeHash = crypto.Keccak256Hash([]byte(
@@ -55,6 +58,10 @@ type inputError struct {
 
 func (ie *inputError) Error() string {
 	return ie.message
+}
+
+func NewInputError(message string) error {
+	return &inputError{message: message}
 }
 
 func strictUnmarshal(data []byte, target any) error {
@@ -79,6 +86,7 @@ type validationOptions struct {
 	migrationPlanQuoteTrustRoots      []MigrationPlanQuoteTrustRoot
 	requireFreshMigrationPlanQuote    bool
 	migrationPlanQuoteVerificationNow time.Time
+	signerApprovalVerifier            SignerApprovalVerifier
 }
 
 func resolveValidationOptions(options []validationOptions) validationOptions {
@@ -153,6 +161,14 @@ func validateBytes32HexString(name string, value string) error {
 	return nil
 }
 
+func validateUint32Range(name string, value uint64) error {
+	if value > math.MaxUint32 {
+		return &inputError{fmt.Sprintf("%s must fit in uint32", name)}
+	}
+
+	return nil
+}
+
 func decodeBytes32HexString(name string, value string) ([32]byte, error) {
 	var decoded [32]byte
 
@@ -167,6 +183,176 @@ func decodeBytes32HexString(name string, value string) ([32]byte, error) {
 
 	copy(decoded[:], rawValue)
 	return decoded, nil
+}
+
+func normalizeSignerApprovalMemberIndexes(
+	name string,
+	values []uint32,
+) ([]uint32, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+
+	normalized := append([]uint32{}, values...)
+	seen := make(map[uint32]struct{}, len(normalized))
+	for i, value := range normalized {
+		if value == 0 {
+			return nil, &inputError{
+				fmt.Sprintf("%s[%d] must be greater than zero", name, i),
+			}
+		}
+		if err := validateUint32Range(name, uint64(value)); err != nil {
+			return nil, err
+		}
+		if _, ok := seen[value]; ok {
+			return nil, &inputError{
+				fmt.Sprintf("%s[%d] duplicates member %d", name, i, value),
+			}
+		}
+		seen[value] = struct{}{}
+	}
+
+	sort.Slice(normalized, func(i, j int) bool {
+		return normalized[i] < normalized[j]
+	})
+
+	return normalized, nil
+}
+
+func normalizeSignerApprovalCertificate(
+	request RouteSubmitRequest,
+) (*SignerApprovalCertificate, error) {
+	if request.SignerApproval == nil {
+		return nil, nil
+	}
+	if request.ArtifactApprovals == nil {
+		return nil, &inputError{
+			"request.artifactApprovals is required when request.signerApproval is present",
+		}
+	}
+
+	signerApproval := request.SignerApproval
+	if signerApproval.CertificateVersion != signerApprovalCertificateVersion {
+		return nil, &inputError{
+			fmt.Sprintf(
+				"request.signerApproval.certificateVersion must equal %d",
+				signerApprovalCertificateVersion,
+			),
+		}
+	}
+	if signerApproval.SignatureAlgorithm != signerApprovalSignatureAlgorithm {
+		return nil, &inputError{
+			fmt.Sprintf(
+				"request.signerApproval.signatureAlgorithm must equal %s",
+				signerApprovalSignatureAlgorithm,
+			),
+		}
+	}
+	if err := validateBytes32HexString(
+		"request.signerApproval.approvalDigest",
+		signerApproval.ApprovalDigest,
+	); err != nil {
+		return nil, err
+	}
+	if err := validateHexString(
+		"request.signerApproval.walletPublicKey",
+		signerApproval.WalletPublicKey,
+	); err != nil {
+		return nil, err
+	}
+	if len(signerApproval.WalletPublicKey) != 132 {
+		return nil, &inputError{
+			"request.signerApproval.walletPublicKey must be a 65-byte uncompressed secp256k1 public key",
+		}
+	}
+	normalizedWalletPublicKey := normalizeLowerHex(signerApproval.WalletPublicKey)
+	if !strings.HasPrefix(normalizedWalletPublicKey, "0x04") {
+		return nil, &inputError{
+			"request.signerApproval.walletPublicKey must be a 65-byte uncompressed secp256k1 public key",
+		}
+	}
+	if err := validateBytes32HexString(
+		"request.signerApproval.signerSetHash",
+		signerApproval.SignerSetHash,
+	); err != nil {
+		return nil, err
+	}
+	if err := validateHexString(
+		"request.signerApproval.signature",
+		signerApproval.Signature,
+	); err != nil {
+		return nil, err
+	}
+
+	expectedApprovalDigest, err := artifactApprovalDigest(request.ArtifactApprovals.Payload)
+	if err != nil {
+		return nil, err
+	}
+
+	normalizedApprovalDigest := normalizeLowerHex(signerApproval.ApprovalDigest)
+	if normalizedApprovalDigest != "0x"+hex.EncodeToString(expectedApprovalDigest) {
+		return nil, &inputError{
+			"request.signerApproval.approvalDigest must match the canonical artifactApprovals payload digest",
+		}
+	}
+
+	normalizedSignerApproval := &SignerApprovalCertificate{
+		CertificateVersion: signerApprovalCertificateVersion,
+		SignatureAlgorithm: signerApprovalSignatureAlgorithm,
+		ApprovalDigest:     normalizedApprovalDigest,
+		WalletPublicKey:    normalizedWalletPublicKey,
+		SignerSetHash:      normalizeLowerHex(signerApproval.SignerSetHash),
+		Signature:          normalizeLowerHex(signerApproval.Signature),
+	}
+
+	activeMembers, err := normalizeSignerApprovalMemberIndexes(
+		"request.signerApproval.activeMembers",
+		signerApproval.ActiveMembers,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(activeMembers) > 0 {
+		normalizedSignerApproval.ActiveMembers = activeMembers
+	}
+
+	inactiveMembers, err := normalizeSignerApprovalMemberIndexes(
+		"request.signerApproval.inactiveMembers",
+		signerApproval.InactiveMembers,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(inactiveMembers) > 0 {
+		normalizedSignerApproval.InactiveMembers = inactiveMembers
+	}
+
+	if len(activeMembers) > 0 && len(inactiveMembers) > 0 {
+		activeSet := make(map[uint32]struct{}, len(activeMembers))
+		for _, value := range activeMembers {
+			activeSet[value] = struct{}{}
+		}
+		for _, value := range inactiveMembers {
+			if _, ok := activeSet[value]; ok {
+				return nil, &inputError{
+					"request.signerApproval.activeMembers and request.signerApproval.inactiveMembers must not overlap",
+				}
+			}
+		}
+	}
+
+	if signerApproval.EndBlock != nil {
+		if err := validateUint32Range(
+			"request.signerApproval.endBlock",
+			*signerApproval.EndBlock,
+		); err != nil {
+			return nil, err
+		}
+		endBlock := *signerApproval.EndBlock
+		normalizedSignerApproval.EndBlock = &endBlock
+	}
+
+	return normalizedSignerApproval, nil
 }
 
 func normalizeLowerHex(value string) string {
@@ -885,6 +1071,22 @@ func validateArtifactSignatures(signatures []string) ([]string, error) {
 	return normalizedSignatures, nil
 }
 
+func requiredStructuredArtifactApprovalRoles(route TemplateID) ([]ArtifactApprovalRole, error) {
+	switch route {
+	case TemplateQcV1:
+		return []ArtifactApprovalRole{
+			ArtifactApprovalRoleDepositor,
+			ArtifactApprovalRoleCustodian,
+		}, nil
+	case TemplateSelfV1:
+		return []ArtifactApprovalRole{
+			ArtifactApprovalRoleDepositor,
+		}, nil
+	default:
+		return nil, &inputError{"unsupported request.route"}
+	}
+}
+
 func requiredArtifactApprovalRoles(route TemplateID) ([]ArtifactApprovalRole, error) {
 	switch route {
 	case TemplateQcV1:
@@ -912,6 +1114,11 @@ func normalizeArtifactApprovals(
 	route TemplateID,
 	request RouteSubmitRequest,
 ) (*ArtifactApprovalEnvelope, []string, error) {
+	normalizedSignerApproval, err := normalizeSignerApprovalCertificate(request)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	normalizedLegacySignatures, err := validateArtifactSignatures(request.ArtifactSignatures)
 	if err != nil {
 		return nil, nil, err
@@ -964,6 +1171,9 @@ func normalizeArtifactApprovals(
 	}
 
 	requiredRoles, err := requiredArtifactApprovalRoles(route)
+	if normalizedSignerApproval != nil {
+		requiredRoles, err = requiredStructuredArtifactApprovalRoles(route)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -999,7 +1209,7 @@ func normalizeArtifactApprovals(
 		approvalsByRole[approval.Role] = normalizeLowerHex(approval.Signature)
 	}
 
-	derivedLegacySignatures := make([]string, len(requiredRoles))
+	derivedLegacySignatures := make([]string, 0, len(requiredRoles)+1)
 	normalizedApprovals := &ArtifactApprovalEnvelope{
 		Payload: ArtifactApprovalPayload{
 			ApprovalVersion:           artifactApprovalVersion,
@@ -1020,19 +1230,31 @@ func normalizeArtifactApprovals(
 			)}
 		}
 
-		derivedLegacySignatures[i] = signature
+		derivedLegacySignatures = append(derivedLegacySignatures, signature)
 		normalizedApprovals.Approvals[i] = ArtifactRoleApproval{
 			Role:      role,
 			Signature: signature,
 		}
 	}
 
+	if normalizedSignerApproval != nil {
+		derivedLegacySignatures = append(
+			derivedLegacySignatures,
+			normalizedSignerApproval.Signature,
+		)
+	}
+
+	canonicalSignatureError := "request.artifactSignatures must match canonical approval role order derived from request.artifactApprovals"
+	if normalizedSignerApproval != nil {
+		canonicalSignatureError = "request.artifactSignatures must match canonical approval role order derived from request.artifactApprovals and request.signerApproval"
+	}
+
 	if len(normalizedLegacySignatures) != len(derivedLegacySignatures) {
-		return nil, nil, &inputError{"request.artifactSignatures must match canonical approval role order derived from request.artifactApprovals"}
+		return nil, nil, &inputError{canonicalSignatureError}
 	}
 	for i := range derivedLegacySignatures {
 		if normalizedLegacySignatures[i] != derivedLegacySignatures[i] {
-			return nil, nil, &inputError{"request.artifactSignatures must match canonical approval role order derived from request.artifactApprovals"}
+			return nil, nil, &inputError{canonicalSignatureError}
 		}
 	}
 
@@ -1216,6 +1438,10 @@ func normalizeRouteSubmitRequest(
 	if err != nil {
 		return RouteSubmitRequest{}, err
 	}
+	normalizedSignerApproval, err := normalizeSignerApprovalCertificate(request)
+	if err != nil {
+		return RouteSubmitRequest{}, err
+	}
 
 	normalizedScriptTemplate, err := normalizeScriptTemplate(request.Route, request.ScriptTemplate)
 	if err != nil {
@@ -1253,6 +1479,7 @@ func normalizeRouteSubmitRequest(
 		MigrationPlanQuote:        normalizedMigrationPlanQuote,
 		MigrationTransactionPlan:  normalizeMigrationTransactionPlan(request.MigrationTransactionPlan),
 		ArtifactApprovals:         normalizedArtifactApprovals,
+		SignerApproval:            normalizedSignerApproval,
 		ArtifactSignatures:        normalizedArtifactSignatures,
 		Artifacts:                 normalizeArtifacts(request.Artifacts),
 		ScriptTemplate:            normalizedScriptTemplate,
@@ -1368,6 +1595,25 @@ func validateCommonRequest(
 		}
 	default:
 		return &inputError{"unsupported request.route"}
+	}
+
+	if request.SignerApproval != nil {
+		if resolvedOptions.signerApprovalVerifier == nil {
+			return &inputError{
+				"request.signerApproval cannot be verified by this signer deployment",
+			}
+		}
+
+		normalizedRequest, err := normalizeRouteSubmitRequest(request, resolvedOptions)
+		if err != nil {
+			return err
+		}
+
+		if err := resolvedOptions.signerApprovalVerifier.VerifySignerApproval(
+			normalizedRequest,
+		); err != nil {
+			return err
+		}
 	}
 
 	return nil

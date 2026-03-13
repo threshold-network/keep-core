@@ -172,6 +172,18 @@ type ArtifactApprovalEnvelope struct {
 	Approvals []ArtifactRoleApproval  `json:"approvals"`
 }
 
+type SignerApprovalCertificate struct {
+	CertificateVersion uint32   `json:"certificateVersion"`
+	SignatureAlgorithm string   `json:"signatureAlgorithm"`
+	ApprovalDigest     string   `json:"approvalDigest"`
+	WalletPublicKey    string   `json:"walletPublicKey"`
+	SignerSetHash      string   `json:"signerSetHash"`
+	Signature          string   `json:"signature"`
+	ActiveMembers      []uint32 `json:"activeMembers,omitempty"`
+	InactiveMembers    []uint32 `json:"inactiveMembers,omitempty"`
+	EndBlock           *uint64  `json:"endBlock,omitempty"`
+}
+
 type SigningRequirements struct {
 	SignerRequired    bool `json:"signerRequired"`
 	CustodianRequired bool `json:"custodianRequired"`
@@ -191,6 +203,7 @@ type RouteSubmitRequest struct {
 	MigrationPlanQuote        *MigrationDestinationPlanQuote    `json:"migrationPlanQuote,omitempty"`
 	MigrationTransactionPlan  *MigrationTransactionPlan         `json:"migrationTransactionPlan,omitempty"`
 	ArtifactApprovals         *ArtifactApprovalEnvelope         `json:"artifactApprovals,omitempty"`
+	SignerApproval            *SignerApprovalCertificate        `json:"signerApproval,omitempty"`
 	ArtifactSignatures        []string                          `json:"artifactSignatures"`
 	Artifacts                 map[RecoveryPathID]ArtifactRecord `json:"artifacts"`
 	ScriptTemplate            json.RawMessage                   `json:"scriptTemplate"`

@@ -21,6 +21,18 @@ type Engine interface {
 	OnPoll(ctx context.Context, job *Job) (*Transition, error)
 }
 
+type SignerApprovalVerifier interface {
+	VerifySignerApproval(request RouteSubmitRequest) error
+}
+
+type SignerApprovalVerifierFunc func(request RouteSubmitRequest) error
+
+func (savf SignerApprovalVerifierFunc) VerifySignerApproval(
+	request RouteSubmitRequest,
+) error {
+	return savf(request)
+}
+
 type passiveEngine struct{}
 
 func NewPassiveEngine() Engine {
