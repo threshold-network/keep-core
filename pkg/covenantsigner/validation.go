@@ -632,6 +632,10 @@ func normalizeMigrationPlanQuote(
 		if verificationNow.IsZero() {
 			verificationNow = time.Now().UTC()
 		}
+		// Submit freshness is intentionally strict. Poll omits this check so
+		// already-accepted jobs remain addressable after quote expiry; operators
+		// must keep the destination service and keep-core on synchronized UTC
+		// time when enforcing quote freshness.
 		if expiresAt.Before(verificationNow) {
 			return nil, &inputError{"request.migrationPlanQuote is expired"}
 		}

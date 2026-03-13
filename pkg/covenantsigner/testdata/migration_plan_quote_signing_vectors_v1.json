@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "scope": "migration_plan_quote_signing_contract_v1",
+  "trustRoot": {
+    "keyId": "test-plan-quote-key",
+    "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAbp6B4Eys+80lvGkOsR8p2QQPadm+ocqA4/V7bhQBHBc=\n-----END PUBLIC KEY-----\n"
+  },
+  "vectors": {
+    "base": {
+      "unsignedQuote": {
+        "quoteId": "cmdq_testvector",
+        "quoteVersion": 1,
+        "reservationId": "cmdr_testvector",
+        "reserve": "0x1111111111111111111111111111111111111111",
+        "epoch": 7,
+        "route": "MIGRATION",
+        "revealer": "0x2222222222222222222222222222222222222222",
+        "vault": "0x3333333333333333333333333333333333333333",
+        "network": "regtest",
+        "destinationCommitmentHash": "0x10f6ea91bee183fc004591fb6a93495d166ff646df25eb6a3c6324b40d51ebc7",
+        "activeOutpointTxid": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "activeOutpointVout": 1,
+        "planCommitmentHash": "0x9ef0621c394dea9e399b4d7a44e41814a2f1bcc163abb18ec897d3f77f144b09",
+        "migrationTransactionPlan": {
+          "planVersion": 1,
+          "planCommitmentHash": "0x9ef0621c394dea9e399b4d7a44e41814a2f1bcc163abb18ec897d3f77f144b09",
+          "inputValueSats": 100000,
+          "destinationValueSats": 99250,
+          "anchorValueSats": 330,
+          "feeSats": 420,
+          "inputSequence": 4294967293,
+          "lockTime": 950000
+        },
+        "idempotencyKey": "0x75a998ac6951c2776f3a85f6430fb41321c28c1113a71a52c754806c7a3de9c9",
+        "expiresInSeconds": 900,
+        "issuedAt": "2026-03-09T00:00:00.000Z",
+        "expiresAt": "2026-03-09T00:15:00.000Z"
+      },
+      "expectedPayload": "{\"quoteVersion\":1,\"quoteId\":\"cmdq_testvector\",\"reservationId\":\"cmdr_testvector\",\"reserve\":\"0x1111111111111111111111111111111111111111\",\"epoch\":7,\"route\":\"MIGRATION\",\"revealer\":\"0x2222222222222222222222222222222222222222\",\"vault\":\"0x3333333333333333333333333333333333333333\",\"network\":\"regtest\",\"destinationCommitmentHash\":\"0x10f6ea91bee183fc004591fb6a93495d166ff646df25eb6a3c6324b40d51ebc7\",\"activeOutpointTxid\":\"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"activeOutpointVout\":1,\"planCommitmentHash\":\"0x9ef0621c394dea9e399b4d7a44e41814a2f1bcc163abb18ec897d3f77f144b09\",\"issuedAt\":\"2026-03-09T00:00:00.000Z\",\"expiresAt\":\"2026-03-09T00:15:00.000Z\",\"expiresInSeconds\":900}",
+      "expectedPreimage": "migration-plan-quote-v1:{\"quoteVersion\":1,\"quoteId\":\"cmdq_testvector\",\"reservationId\":\"cmdr_testvector\",\"reserve\":\"0x1111111111111111111111111111111111111111\",\"epoch\":7,\"route\":\"MIGRATION\",\"revealer\":\"0x2222222222222222222222222222222222222222\",\"vault\":\"0x3333333333333333333333333333333333333333\",\"network\":\"regtest\",\"destinationCommitmentHash\":\"0x10f6ea91bee183fc004591fb6a93495d166ff646df25eb6a3c6324b40d51ebc7\",\"activeOutpointTxid\":\"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"activeOutpointVout\":1,\"planCommitmentHash\":\"0x9ef0621c394dea9e399b4d7a44e41814a2f1bcc163abb18ec897d3f77f144b09\",\"issuedAt\":\"2026-03-09T00:00:00.000Z\",\"expiresAt\":\"2026-03-09T00:15:00.000Z\",\"expiresInSeconds\":900}",
+      "expectedHash": "0x4707935286fa15edf3f95485297307734b122f7dc1761e6fc023e9d5cc7a935a",
+      "expectedSignature": "0xaae307e9daa2f42f718e8a247c59002a3af7c63f7dd3c67aaa7643d470e787315a5e8f7e330d41c311def8dbf9892bee7d4b86992b81d62a3c194b68c3f0cd03"
+    },
+    "mixed_case": {
+      "unsignedQuote": {
+        "quoteId": "cmdq_testvector",
+        "quoteVersion": 1,
+        "reservationId": "cmdr_testvector",
+        "reserve": "0xAaBbCcDdEeFf00112233445566778899AaBbCcDd",
+        "epoch": 7,
+        "route": "MIGRATION",
+        "revealer": "0xAbCdEfAbCdEfAbCdEfAbCdEfAbCdEfAbCdEfAbCd",
+        "vault": "0x0011AaBbCcDdEeFf0011AaBbCcDdEeFf0011AaBb",
+        "network": "regtest",
+        "destinationCommitmentHash": "0x10f6ea91bee183fc004591fb6a93495d166ff646df25eb6a3c6324b40d51ebc7",
+        "activeOutpointTxid": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "activeOutpointVout": 1,
+        "planCommitmentHash": "0x9ef0621c394dea9e399b4d7a44e41814a2f1bcc163abb18ec897d3f77f144b09",
+        "migrationTransactionPlan": {
+          "planVersion": 1,
+          "planCommitmentHash": "0x9ef0621c394dea9e399b4d7a44e41814a2f1bcc163abb18ec897d3f77f144b09",
+          "inputValueSats": 100000,
+          "destinationValueSats": 99250,
+          "anchorValueSats": 330,
+          "feeSats": 420,
+          "inputSequence": 4294967293,
+          "lockTime": 950000
+        },
+        "idempotencyKey": "0x75a998ac6951c2776f3a85f6430fb41321c28c1113a71a52c754806c7a3de9c9",
+        "expiresInSeconds": 900,
+        "issuedAt": "2026-03-09T00:00:00.000Z",
+        "expiresAt": "2026-03-09T00:15:00.000Z"
+      },
+      "expectedPayload": "{\"quoteVersion\":1,\"quoteId\":\"cmdq_testvector\",\"reservationId\":\"cmdr_testvector\",\"reserve\":\"0xaabbccddeeff00112233445566778899aabbccdd\",\"epoch\":7,\"route\":\"MIGRATION\",\"revealer\":\"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd\",\"vault\":\"0x0011aabbccddeeff0011aabbccddeeff0011aabb\",\"network\":\"regtest\",\"destinationCommitmentHash\":\"0x10f6ea91bee183fc004591fb6a93495d166ff646df25eb6a3c6324b40d51ebc7\",\"activeOutpointTxid\":\"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"activeOutpointVout\":1,\"planCommitmentHash\":\"0x9ef0621c394dea9e399b4d7a44e41814a2f1bcc163abb18ec897d3f77f144b09\",\"issuedAt\":\"2026-03-09T00:00:00.000Z\",\"expiresAt\":\"2026-03-09T00:15:00.000Z\",\"expiresInSeconds\":900}",
+      "expectedPreimage": "migration-plan-quote-v1:{\"quoteVersion\":1,\"quoteId\":\"cmdq_testvector\",\"reservationId\":\"cmdr_testvector\",\"reserve\":\"0xaabbccddeeff00112233445566778899aabbccdd\",\"epoch\":7,\"route\":\"MIGRATION\",\"revealer\":\"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd\",\"vault\":\"0x0011aabbccddeeff0011aabbccddeeff0011aabb\",\"network\":\"regtest\",\"destinationCommitmentHash\":\"0x10f6ea91bee183fc004591fb6a93495d166ff646df25eb6a3c6324b40d51ebc7\",\"activeOutpointTxid\":\"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"activeOutpointVout\":1,\"planCommitmentHash\":\"0x9ef0621c394dea9e399b4d7a44e41814a2f1bcc163abb18ec897d3f77f144b09\",\"issuedAt\":\"2026-03-09T00:00:00.000Z\",\"expiresAt\":\"2026-03-09T00:15:00.000Z\",\"expiresInSeconds\":900}",
+      "expectedHash": "0x13a05f7e9caa244c446b65c2812095210cb321451d9eb9b735e60ffdd76e693d",
+      "expectedSignature": "0x99ece768accfd8ae222ae2ecba80585fc3664cd84277e53248a4d5d37c48961e20547d66d8acc511ada8b5c0a76d2e22477402f6649d6e2193165f078f6cfe02"
+    }
+  }
+}
