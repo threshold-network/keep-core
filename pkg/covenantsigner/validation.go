@@ -221,6 +221,23 @@ func normalizeSignerApprovalMemberIndexes(
 	return normalized, nil
 }
 
+func normalizeRequestType(
+	route TemplateID,
+	requestType RequestType,
+) (RequestType, error) {
+	switch requestType {
+	case RequestTypeReconstruct:
+		return requestType, nil
+	case RequestTypePresignSelfV1:
+		if route != TemplateSelfV1 {
+			return "", &inputError{"request.requestType must be reconstruct for qc_v1"}
+		}
+		return requestType, nil
+	default:
+		return "", &inputError{"request.requestType must be reconstruct or presign_self_v1"}
+	}
+}
+
 func normalizeSignerApprovalCertificate(
 	request RouteSubmitRequest,
 ) (*SignerApprovalCertificate, error) {
@@ -1613,10 +1630,15 @@ func normalizeRouteSubmitRequest(
 	if err != nil {
 		return RouteSubmitRequest{}, err
 	}
+	normalizedRequestType, err := normalizeRequestType(request.Route, request.RequestType)
+	if err != nil {
+		return RouteSubmitRequest{}, err
+	}
 
 	return RouteSubmitRequest{
 		FacadeRequestID: request.FacadeRequestID,
 		IdempotencyKey:  request.IdempotencyKey,
+		RequestType:     normalizedRequestType,
 		Route:           request.Route,
 		Strategy:        normalizeLowerHex(request.Strategy),
 		Reserve:         normalizeLowerHex(request.Reserve),
@@ -1659,6 +1681,9 @@ func validateCommonRequest(
 	}
 	if request.Route != route {
 		return &inputError{"request.route does not match endpoint route"}
+	}
+	if _, err := normalizeRequestType(route, request.RequestType); err != nil {
+		return err
 	}
 	if err := validateHexString("request.strategy", request.Strategy); err != nil {
 		return err

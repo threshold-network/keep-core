@@ -42,7 +42,8 @@ func validStructuredSignerApprovalVerificationRequest(
 	)
 
 	request := covenantsigner.RouteSubmitRequest{
-		Route: route,
+		RequestType: covenantsigner.RequestTypeReconstruct,
+		Route:       route,
 		ArtifactApprovals: &covenantsigner.ArtifactApprovalEnvelope{
 			Payload: covenantsigner.ArtifactApprovalPayload{
 				ApprovalVersion:           1,

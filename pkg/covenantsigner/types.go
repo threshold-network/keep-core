@@ -9,6 +9,13 @@ const (
 	TemplateSelfV1 TemplateID = "self_v1"
 )
 
+type RequestType string
+
+const (
+	RequestTypeReconstruct   RequestType = "reconstruct"
+	RequestTypePresignSelfV1 RequestType = "presign_self_v1"
+)
+
 type RecoveryPathID string
 
 const (
@@ -205,6 +212,7 @@ type SigningRequirements struct {
 type RouteSubmitRequest struct {
 	FacadeRequestID           string                            `json:"facadeRequestId"`
 	IdempotencyKey            string                            `json:"idempotencyKey"`
+	RequestType               RequestType                       `json:"requestType"`
 	Route                     TemplateID                        `json:"route"`
 	Strategy                  string                            `json:"strategy"`
 	Reserve                   string                            `json:"reserve"`

@@ -239,8 +239,13 @@ func (cse *covenantSignerEngine) submitSelfV1(
 	psbtHash := "0x" + transaction.WitnessHash().Hex(bitcoin.InternalByteOrder)
 
 	return &covenantsigner.Transition{
-		State:          covenantsigner.JobStateArtifactReady,
-		Detail:         "self_v1 artifact ready",
+		State: covenantsigner.JobStateArtifactReady,
+		Detail: func() string {
+			if job.Request.RequestType == covenantsigner.RequestTypePresignSelfV1 {
+				return "self_v1 presign artifact ready"
+			}
+			return "self_v1 artifact ready"
+		}(),
 		PSBTHash:       psbtHash,
 		TransactionHex: transactionHex,
 	}

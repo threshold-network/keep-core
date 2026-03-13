@@ -8,6 +8,7 @@
         "facadeRequestId": "rf_vector_qc_v1",
         "idempotencyKey": "idem-qc-vector-v1",
         "route": "qc_v1",
+        "requestType": "reconstruct",
         "strategy": "0x1111111111111111111111111111111111111111",
         "reserve": "0x2222222222222222222222222222222222222222",
         "epoch": 12,
@@ -91,7 +92,7 @@
           "custodianRequired": true
         }
       },
-      "expectedRequestDigest": "0x1a435b7fda4d048b8b4b9fb1448c14f581d4b3e38ddfe526b17b3c5ef719498c"
+      "expectedRequestDigest": "0x5cdfdc1861efd8ed59b0ee9b3b2a8583fc787321900fd36f4198db311a22fbcc"
     },
     "self_v1": {
       "expectedApprovalDigest": "0x4820468d065bc627dabac7860ef473ed28806d6352ba3459ff4edfb81e6bb752",
@@ -99,6 +100,7 @@
         "facadeRequestId": "rf_vector_self_v1",
         "idempotencyKey": "idem-self-vector-v1",
         "route": "self_v1",
+        "requestType": "reconstruct",
         "strategy": "0x1111111111111111111111111111111111111111",
         "reserve": "0x2222222222222222222222222222222222222222",
         "epoch": 12,
@@ -175,7 +177,92 @@
           "custodianRequired": false
         }
       },
-      "expectedRequestDigest": "0xb5cd6a894a8e6bb5e68310e9c43560e91de1fc62bf0acf73b63e882332b2138a"
+      "expectedRequestDigest": "0x238153ab33ce630fe44c59da2a42ef3a0eeb106df86c59c893c0047648589e05"
+    },
+    "self_v1_presign": {
+      "expectedApprovalDigest": "0x4820468d065bc627dabac7860ef473ed28806d6352ba3459ff4edfb81e6bb752",
+      "canonicalSubmitRequest": {
+        "facadeRequestId": "rf_vector_self_v1_presign",
+        "idempotencyKey": "idem-self-presign-vector-v1",
+        "route": "self_v1",
+        "requestType": "presign_self_v1",
+        "strategy": "0x1111111111111111111111111111111111111111",
+        "reserve": "0x2222222222222222222222222222222222222222",
+        "epoch": 12,
+        "maturityHeight": 950000,
+        "activeOutpoint": {
+          "txid": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "vout": 1,
+          "scriptHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "destinationCommitmentHash": "0x913b832b3736a29966fd53f8a733a7587b150d3dfacb1c2d54994c1d3e56cdf9",
+        "migrationDestination": {
+          "reservationId": "cmdr_12345678",
+          "reserve": "0x2222222222222222222222222222222222222222",
+          "epoch": 12,
+          "route": "MIGRATION",
+          "revealer": "0x2222222222222222222222222222222222222222",
+          "vault": "0x3333333333333333333333333333333333333333",
+          "network": "regtest",
+          "status": "RESERVED",
+          "depositScript": "0x0014aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "depositScriptHash": "0x8532ec6785e391b2af968b5728d574e271c7f46658f5ed10845d9ad5b23ac6d3",
+          "migrationExtraData": "0x41435f4d49475241544556312222222222222222222222222222222222222222",
+          "destinationCommitmentHash": "0x913b832b3736a29966fd53f8a733a7587b150d3dfacb1c2d54994c1d3e56cdf9"
+        },
+        "migrationTransactionPlan": {
+          "planVersion": 1,
+          "planCommitmentHash": "0xc14b6b7c58211ceaee8f57a39c07481d9835ef959dbd6a02908312db4cf3c969",
+          "inputValueSats": 1000000,
+          "destinationValueSats": 998000,
+          "anchorValueSats": 330,
+          "feeSats": 1670,
+          "inputSequence": 4294967293,
+          "lockTime": 950000
+        },
+        "artifactApprovals": {
+          "payload": {
+            "approvalVersion": 1,
+            "route": "self_v1",
+            "scriptTemplateId": "self_v1",
+            "destinationCommitmentHash": "0x913b832b3736a29966fd53f8a733a7587b150d3dfacb1c2d54994c1d3e56cdf9",
+            "planCommitmentHash": "0xc14b6b7c58211ceaee8f57a39c07481d9835ef959dbd6a02908312db4cf3c969"
+          },
+          "approvals": [
+            {
+              "role": "D",
+              "signature": "0xd0d0"
+            }
+          ]
+        },
+        "signerApproval": {
+          "certificateVersion": 1,
+          "signatureAlgorithm": "tecdsa-secp256k1",
+          "approvalDigest": "0x4820468d065bc627dabac7860ef473ed28806d6352ba3459ff4edfb81e6bb752",
+          "walletPublicKey": "0x04d140d1eedb94f53ce43e0f4d68e8e0de6d6f2a444ef98f2a0e6c0f7fca02ef7dc4cb14e7b0f7c23787c93ca4d978f312c64379f38d9f52f86d1a89f0f8572f9f",
+          "signerSetHash": "0xabababababababababababababababababababababababababababababababab",
+          "signature": "0x5050",
+          "activeMembers": [1, 2, 3],
+          "inactiveMembers": [4, 5],
+          "endBlock": 123
+        },
+        "artifactSignatures": [
+          "0xd0d0",
+          "0x5050"
+        ],
+        "artifacts": {},
+        "scriptTemplate": {
+          "template": "self_v1",
+          "depositorPublicKey": "0x02cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "signerPublicKey": "0x02eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "delta2": 4320
+        },
+        "signing": {
+          "signerRequired": true,
+          "custodianRequired": false
+        }
+      },
+      "expectedRequestDigest": "0xb44ea2821d1734a8af7a71cb9cf70712f989ac11404222a5315d0db15b248de1"
     }
   }
 }
