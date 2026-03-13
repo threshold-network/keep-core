@@ -410,6 +410,13 @@ func artifactApprovalDigest(payload ArtifactApprovalPayload) ([]byte, error) {
 	return digest.Bytes(), nil
 }
 
+// ComputeArtifactApprovalDigest exposes the current phase-1 approval payload
+// digest contract to cross-package verifiers that need to bind
+// signerApproval.approvalDigest to request.artifactApprovals.payload.
+func ComputeArtifactApprovalDigest(payload ArtifactApprovalPayload) ([]byte, error) {
+	return artifactApprovalDigest(payload)
+}
+
 func parseCompressedSecp256k1PublicKey(
 	name string,
 	value string,

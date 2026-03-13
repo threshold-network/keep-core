@@ -46,7 +46,34 @@ func (cse *covenantSignerEngine) VerifySignerApproval(
 	request covenantsigner.RouteSubmitRequest,
 ) error {
 	if request.SignerApproval == nil {
-		return nil
+		return covenantsigner.NewInputError(
+			"request.signerApproval is required for signer approval verification",
+		)
+	}
+	if request.ArtifactApprovals == nil {
+		return covenantsigner.NewInputError(
+			"request.artifactApprovals is required for signer approval verification",
+		)
+	}
+
+	expectedApprovalDigest, err := covenantsigner.ComputeArtifactApprovalDigest(
+		request.ArtifactApprovals.Payload,
+	)
+	if err != nil {
+		return covenantsigner.NewInputError(
+			fmt.Sprintf(
+				"request.artifactApprovals.payload is invalid for signer approval verification: %v",
+				err,
+			),
+		)
+	}
+	if !strings.EqualFold(
+		request.SignerApproval.ApprovalDigest,
+		"0x"+hex.EncodeToString(expectedApprovalDigest),
+	) {
+		return covenantsigner.NewInputError(
+			"request.signerApproval.approvalDigest must match request.artifactApprovals.payload",
+		)
 	}
 
 	signerPublicKey, err := cse.resolveSignerApprovalTemplatePublicKey(request)
