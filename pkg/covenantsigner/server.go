@@ -56,6 +56,13 @@ func Initialize(
 	if err != nil {
 		return nil, false, err
 	}
+	if service.signerApprovalVerifier == nil {
+		logger.Warn(
+			"covenant signer started without a signer approval verifier; " +
+				"structured signerApproval certificates will not be verified and " +
+				"requests without signerApproval will be accepted",
+		)
+	}
 
 	server := &Server{
 		service: service,

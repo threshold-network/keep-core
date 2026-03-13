@@ -102,6 +102,7 @@ func mustJSON(t *testing.T, value any) []byte {
 
 type approvalContractVector struct {
 	CanonicalSubmitRequest json.RawMessage `json:"canonicalSubmitRequest"`
+	ExpectedApprovalDigest string          `json:"expectedApprovalDigest"`
 	ExpectedRequestDigest  string          `json:"expectedRequestDigest"`
 }
 
@@ -129,7 +130,7 @@ type migrationPlanQuoteSigningVectorsFile struct {
 func loadApprovalContractVector(
 	t *testing.T,
 	route TemplateID,
-) (RouteSubmitRequest, string) {
+) (RouteSubmitRequest, string, string) {
 	t.Helper()
 
 	data, err := os.ReadFile("testdata/covenant_recovery_approval_vectors_v1.json")
@@ -158,7 +159,7 @@ func loadApprovalContractVector(
 		t.Fatal(err)
 	}
 
-	return request, vector.ExpectedRequestDigest
+	return request, vector.ExpectedApprovalDigest, vector.ExpectedRequestDigest
 }
 
 func loadMigrationPlanQuoteSigningVectors(
@@ -284,7 +285,7 @@ func canonicalArtifactSignatures(
 		return nil
 	}
 
-	requiredRoles, err := requiredArtifactApprovalRoles(route)
+	requiredRoles, err := requiredStructuredArtifactApprovalRoles(route)
 	if err != nil {
 		panic(err)
 	}
@@ -408,10 +409,6 @@ func validArtifactApprovals(request RouteSubmitRequest) *ArtifactApprovalEnvelop
 			Role:      ArtifactApprovalRoleDepositor,
 			Signature: mustArtifactApprovalSignature(testDepositorPrivateKey, payload),
 		},
-		{
-			Role:      ArtifactApprovalRoleSigner,
-			Signature: mustArtifactApprovalSignature(testSignerPrivateKey, payload),
-		},
 	}
 
 	if request.Route == TemplateQcV1 {
@@ -424,42 +421,7 @@ func validArtifactApprovals(request RouteSubmitRequest) *ArtifactApprovalEnvelop
 				Role:      ArtifactApprovalRoleCustodian,
 				Signature: mustArtifactApprovalSignature(testCustodianPrivateKey, payload),
 			},
-			{
-				Role:      ArtifactApprovalRoleSigner,
-				Signature: mustArtifactApprovalSignature(testSignerPrivateKey, payload),
-			},
 		}
-	}
-
-	return &ArtifactApprovalEnvelope{
-		Payload:   payload,
-		Approvals: approvals,
-	}
-}
-
-func validStructuredArtifactApprovals(
-	request RouteSubmitRequest,
-) *ArtifactApprovalEnvelope {
-	payload := ArtifactApprovalPayload{
-		ApprovalVersion:           artifactApprovalVersion,
-		Route:                     request.Route,
-		ScriptTemplateID:          request.Route,
-		DestinationCommitmentHash: request.DestinationCommitmentHash,
-		PlanCommitmentHash:        request.MigrationTransactionPlan.PlanCommitmentHash,
-	}
-
-	approvals := []ArtifactRoleApproval{
-		{
-			Role:      ArtifactApprovalRoleDepositor,
-			Signature: mustArtifactApprovalSignature(testDepositorPrivateKey, payload),
-		},
-	}
-
-	if request.Route == TemplateQcV1 {
-		approvals = append(approvals, ArtifactRoleApproval{
-			Role:      ArtifactApprovalRoleCustodian,
-			Signature: mustArtifactApprovalSignature(testCustodianPrivateKey, payload),
-		})
 	}
 
 	return &ArtifactApprovalEnvelope{
@@ -496,7 +458,6 @@ func validSignerApproval(
 
 func structuredSignerApprovalRequest(route TemplateID) RouteSubmitRequest {
 	request := baseRequest(route)
-	request.ArtifactApprovals = validStructuredArtifactApprovals(request)
 	request.SignerApproval = validSignerApproval(request.ArtifactApprovals)
 	request.ArtifactSignatures = canonicalArtifactSignaturesWithSignerApproval(
 		request.Route,
@@ -744,108 +705,6 @@ func mixedCaseArtifactApprovalVariantFromRequest(
 ) RouteSubmitRequest {
 	t.Helper()
 	return artifactApprovalVariantFromRequest(t, request, mixedCaseHexBody)
-}
-
-func equivalentArtifactApprovalVariant(route TemplateID) RouteSubmitRequest {
-	request := canonicalArtifactApprovalRequest(route)
-
-	request.Strategy = upperHexBody(request.Strategy)
-	request.Reserve = upperHexBody(request.Reserve)
-	request.ActiveOutpoint.TxID = upperHexBody(request.ActiveOutpoint.TxID)
-	request.ActiveOutpoint.ScriptHash = upperHexBody(request.ActiveOutpoint.ScriptHash)
-	request.DestinationCommitmentHash = upperHexBody(request.DestinationCommitmentHash)
-	request.MigrationDestination.Reserve = upperHexBody(request.MigrationDestination.Reserve)
-	request.MigrationDestination.Revealer = upperHexBody(request.MigrationDestination.Revealer)
-	request.MigrationDestination.Vault = upperHexBody(request.MigrationDestination.Vault)
-	request.MigrationDestination.DepositScript = upperHexBody(request.MigrationDestination.DepositScript)
-	request.MigrationDestination.DepositScriptHash = upperHexBody(request.MigrationDestination.DepositScriptHash)
-	request.MigrationDestination.MigrationExtraData = upperHexBody(request.MigrationDestination.MigrationExtraData)
-	request.MigrationDestination.DestinationCommitmentHash = upperHexBody(request.MigrationDestination.DestinationCommitmentHash)
-	request.MigrationTransactionPlan.PlanCommitmentHash = upperHexBody(request.MigrationTransactionPlan.PlanCommitmentHash)
-	for i := range request.ArtifactSignatures {
-		request.ArtifactSignatures[i] = upperHexBody(request.ArtifactSignatures[i])
-	}
-
-	if route == TemplateQcV1 {
-		request.ScriptTemplate = mustTemplate(QcV1Template{
-			Template:           TemplateQcV1,
-			DepositorPublicKey: upperHexBody(testDepositorPublicKey),
-			CustodianPublicKey: upperHexBody(testCustodianPublicKey),
-			SignerPublicKey:    upperHexBody(testSignerPublicKey),
-			Beta:               144,
-			Delta2:             4320,
-		})
-		request.ArtifactApprovals.Payload.DestinationCommitmentHash = upperHexBody(
-			request.ArtifactApprovals.Payload.DestinationCommitmentHash,
-		)
-		request.ArtifactApprovals.Payload.PlanCommitmentHash = upperHexBody(
-			request.ArtifactApprovals.Payload.PlanCommitmentHash,
-		)
-		request.ArtifactApprovals.Approvals = []ArtifactRoleApproval{
-			{
-				Role: ArtifactApprovalRoleSigner,
-				Signature: upperHexBody(
-					artifactApprovalSignatureByRole(
-						request.ArtifactApprovals,
-						ArtifactApprovalRoleSigner,
-					),
-				),
-			},
-			{
-				Role: ArtifactApprovalRoleDepositor,
-				Signature: upperHexBody(
-					artifactApprovalSignatureByRole(
-						request.ArtifactApprovals,
-						ArtifactApprovalRoleDepositor,
-					),
-				),
-			},
-			{
-				Role: ArtifactApprovalRoleCustodian,
-				Signature: upperHexBody(
-					artifactApprovalSignatureByRole(
-						request.ArtifactApprovals,
-						ArtifactApprovalRoleCustodian,
-					),
-				),
-			},
-		}
-	} else {
-		request.ScriptTemplate = mustTemplate(SelfV1Template{
-			Template:           TemplateSelfV1,
-			DepositorPublicKey: upperHexBody(testDepositorPublicKey),
-			SignerPublicKey:    upperHexBody(testSignerPublicKey),
-			Delta2:             4320,
-		})
-		request.ArtifactApprovals.Payload.DestinationCommitmentHash = upperHexBody(
-			request.ArtifactApprovals.Payload.DestinationCommitmentHash,
-		)
-		request.ArtifactApprovals.Payload.PlanCommitmentHash = upperHexBody(
-			request.ArtifactApprovals.Payload.PlanCommitmentHash,
-		)
-		request.ArtifactApprovals.Approvals = []ArtifactRoleApproval{
-			{
-				Role: ArtifactApprovalRoleSigner,
-				Signature: upperHexBody(
-					artifactApprovalSignatureByRole(
-						request.ArtifactApprovals,
-						ArtifactApprovalRoleSigner,
-					),
-				),
-			},
-			{
-				Role: ArtifactApprovalRoleDepositor,
-				Signature: upperHexBody(
-					artifactApprovalSignatureByRole(
-						request.ArtifactApprovals,
-						ArtifactApprovalRoleDepositor,
-					),
-				),
-			},
-		}
-	}
-
-	return request
 }
 
 func validMigrationDestination() *MigrationDestinationReservation {
@@ -1839,19 +1698,29 @@ func TestServiceRejectsMigrationTransactionPlanBoundToDifferentDestinationCommit
 	}
 }
 
-func TestServiceAcceptsArtifactApprovalsWithCanonicalLegacySignatures(t *testing.T) {
+func TestServiceAcceptsStructuredSignerApprovalWithCanonicalLegacySignatures(t *testing.T) {
 	handle := newMemoryHandle()
-	service, err := NewService(handle, &scriptedEngine{})
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithSignerApprovalVerifier(SignerApprovalVerifierFunc(func(RouteSubmitRequest) error {
+			return nil
+		})),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	request := baseRequest(TemplateQcV1)
+	request := structuredSignerApprovalRequest(TemplateQcV1)
 	request.ArtifactApprovals.Approvals = []ArtifactRoleApproval{
-		request.ArtifactApprovals.Approvals[2],
 		request.ArtifactApprovals.Approvals[0],
 		request.ArtifactApprovals.Approvals[1],
 	}
+	request.ArtifactSignatures = canonicalArtifactSignaturesWithSignerApproval(
+		request.Route,
+		request.ArtifactApprovals,
+		request.SignerApproval,
+	)
 
 	result, err := service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
 		RouteRequestID: "orq_artifact_approvals",
@@ -1960,6 +1829,62 @@ func TestServiceRejectsStructuredSignerApprovalWithoutVerifier(t *testing.T) {
 	}
 }
 
+func TestServiceRejectsMissingSignerApprovalWhenVerifierConfigured(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithSignerApprovalVerifier(SignerApprovalVerifierFunc(func(RouteSubmitRequest) error {
+			return nil
+		})),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := baseRequest(TemplateSelfV1)
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_legacy_signer_approval_path",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.signerApproval is required when the signer approval verifier is configured",
+	) {
+		t.Fatalf("expected missing signer approval error, got %v", err)
+	}
+}
+
+func TestServiceRejectsStructuredSignerApprovalWithMismatchedApprovalDigest(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithSignerApprovalVerifier(SignerApprovalVerifierFunc(func(RouteSubmitRequest) error {
+			return nil
+		})),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := structuredSignerApprovalRequest(TemplateSelfV1)
+	request.SignerApproval.ApprovalDigest = "0x" + strings.Repeat("11", 32)
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_structured_signer_approval_bad_digest",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.signerApproval.approvalDigest must match the canonical artifactApprovals payload digest",
+	) {
+		t.Fatalf("expected signer approval digest mismatch error, got %v", err)
+	}
+}
 func TestServiceRejectsStructuredSignerApprovalWithLegacySignerRole(t *testing.T) {
 	handle := newMemoryHandle()
 	service, err := NewService(
@@ -1977,7 +1902,7 @@ func TestServiceRejectsStructuredSignerApprovalWithLegacySignerRole(t *testing.T
 	request.ArtifactApprovals.Approvals = append(
 		request.ArtifactApprovals.Approvals,
 		ArtifactRoleApproval{
-			Role:      ArtifactApprovalRoleSigner,
+			Role:      ArtifactApprovalRole("S"),
 			Signature: "0x5151",
 		},
 	)
@@ -2019,11 +1944,9 @@ func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 			mutate: func(request *RouteSubmitRequest) {
 				request.ArtifactApprovals.Approvals = []ArtifactRoleApproval{
 					request.ArtifactApprovals.Approvals[0],
-					request.ArtifactApprovals.Approvals[2],
 				}
 				request.ArtifactSignatures = []string{
 					request.ArtifactSignatures[0],
-					request.ArtifactSignatures[2],
 				}
 			},
 			expectErr: "request.artifactApprovals.approvals must include role C for qc_v1",
@@ -2041,7 +1964,6 @@ func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 							request.ArtifactApprovals.Payload,
 						),
 					},
-					request.ArtifactApprovals.Approvals[1],
 				}
 			},
 			expectErr: "request.artifactApprovals.approvals[1].role is not allowed for self_v1",
@@ -2067,9 +1989,8 @@ func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 			route: TemplateQcV1,
 			mutate: func(request *RouteSubmitRequest) {
 				request.ArtifactSignatures = []string{
-					request.ArtifactSignatures[2],
-					request.ArtifactSignatures[0],
 					request.ArtifactSignatures[1],
+					request.ArtifactSignatures[0],
 				}
 			},
 			expectErr: "request.artifactSignatures must match canonical approval role order derived from request.artifactApprovals",
@@ -2089,9 +2010,9 @@ func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 				setArtifactApprovalSignature(
 					request.ArtifactApprovals,
 					ArtifactApprovalRoleDepositor,
-					artifactApprovalSignatureByRole(
-						request.ArtifactApprovals,
-						ArtifactApprovalRoleSigner,
+					mustArtifactApprovalSignature(
+						testCustodianPrivateKey,
+						request.ArtifactApprovals.Payload,
 					),
 				)
 				request.ArtifactSignatures = canonicalArtifactSignatures(
@@ -2145,7 +2066,12 @@ func TestRequestDigestNormalizesEquivalentArtifactApprovalVariants(t *testing.T)
 		t.Fatal(err)
 	}
 
-	variantDigest, err := requestDigest(equivalentArtifactApprovalVariant(TemplateQcV1))
+	variantDigest, err := requestDigest(
+		equivalentArtifactApprovalVariantFromRequest(
+			t,
+			canonicalArtifactApprovalRequest(TemplateQcV1),
+		),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2444,40 +2370,6 @@ func TestServicePollAcceptsStoredMigrationPlanQuoteAfterQuoteExpiry(t *testing.T
 	}
 }
 
-func TestServiceAcceptsKnownBadSignerApprovalSignatureInPhase1(t *testing.T) {
-	handle := newMemoryHandle()
-	service, err := NewService(
-		handle,
-		&scriptedEngine{},
-		WithMigrationPlanQuoteTrustRoots([]MigrationPlanQuoteTrustRoot{
-			testMigrationPlanQuoteTrustRoot,
-		}),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	request := requestWithValidMigrationPlanQuote(TemplateSelfV1)
-	for i := range request.ArtifactApprovals.Approvals {
-		if request.ArtifactApprovals.Approvals[i].Role == ArtifactApprovalRoleSigner {
-			request.ArtifactApprovals.Approvals[i].Signature = "0xdeadbeef"
-		}
-	}
-	request.ArtifactSignatures = canonicalArtifactSignatures(
-		request.Route,
-		request.ArtifactApprovals,
-	)
-
-	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
-		RouteRequestID: "ors_signer_gap",
-		Stage:          StageSignerCoordination,
-		Request:        request,
-	})
-	if err != nil {
-		t.Fatalf("expected phase-1 signer approval gap to remain non-fatal, got %v", err)
-	}
-}
-
 func TestServicePollAcceptsEquivalentArtifactApprovalRequestVariants(t *testing.T) {
 	handle := newMemoryHandle()
 	service, err := NewService(handle, &scriptedEngine{
@@ -2489,7 +2381,10 @@ func TestServicePollAcceptsEquivalentArtifactApprovalRequestVariants(t *testing.
 		t.Fatal(err)
 	}
 
-	submitRequest := equivalentArtifactApprovalVariant(TemplateQcV1)
+	submitRequest := equivalentArtifactApprovalVariantFromRequest(
+		t,
+		canonicalArtifactApprovalRequest(TemplateQcV1),
+	)
 	submitResult, err := service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
 		RouteRequestID: "orq_equivalent_digest",
 		Stage:          StageSignerCoordination,
@@ -2521,7 +2416,10 @@ func TestServiceStoresNormalizedArtifactApprovalRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := equivalentArtifactApprovalVariant(TemplateQcV1)
+	request := equivalentArtifactApprovalVariantFromRequest(
+		t,
+		canonicalArtifactApprovalRequest(TemplateQcV1),
+	)
 	_, err = service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
 		RouteRequestID: "orq_normalized_store",
 		Stage:          StageSignerCoordination,
@@ -2584,7 +2482,19 @@ func TestArtifactApprovalDigestMatchesPhase1Contract(t *testing.T) {
 func TestApprovalContractVectorsMatchExpectedRequestDigests(t *testing.T) {
 	for _, route := range []TemplateID{TemplateQcV1, TemplateSelfV1} {
 		t.Run(string(route), func(t *testing.T) {
-			request, expectedDigest := loadApprovalContractVector(t, route)
+			request, expectedApprovalDigest, expectedDigest := loadApprovalContractVector(t, route)
+
+			digestBytes, err := artifactApprovalDigest(request.ArtifactApprovals.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if actualApprovalDigest := "0x" + hex.EncodeToString(digestBytes); actualApprovalDigest != expectedApprovalDigest {
+				t.Fatalf(
+					"expected approval digest %s, got %s",
+					expectedApprovalDigest,
+					actualApprovalDigest,
+				)
+			}
 
 			digest, err := requestDigest(request)
 			if err != nil {
@@ -2601,7 +2511,7 @@ func TestApprovalContractVectorsMatchExpectedRequestDigests(t *testing.T) {
 func TestApprovalContractVectorsNormalizeEquivalentVariants(t *testing.T) {
 	for _, route := range []TemplateID{TemplateQcV1, TemplateSelfV1} {
 		t.Run(string(route), func(t *testing.T) {
-			canonicalRequest, expectedDigest := loadApprovalContractVector(t, route)
+			canonicalRequest, _, expectedDigest := loadApprovalContractVector(t, route)
 
 			normalizedCanonical, err := normalizeRouteSubmitRequest(canonicalRequest)
 			if err != nil {
@@ -2933,11 +2843,10 @@ func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
 					"planCommitmentHash":"%s"
 				},
 				"approvals":[
-					{"role":"D","signature":"%s"},
-					{"role":"S","signature":"%s"}
+					{"role":"D","signature":"%s"}
 				]
 			},
-			"artifactSignatures":["%s","%s"],
+			"artifactSignatures":["%s"],
 			"artifacts":{},
 			"scriptTemplate":{"template":"self_v1","depositorPublicKey":"%s","signerPublicKey":"%s","delta2":4320},
 			"signing":{"signerRequired":true,"custodianRequired":false},
@@ -2951,9 +2860,7 @@ func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
 		base.ArtifactApprovals.Payload.DestinationCommitmentHash,
 		base.ArtifactApprovals.Payload.PlanCommitmentHash,
 		base.ArtifactApprovals.Approvals[0].Signature,
-		base.ArtifactApprovals.Approvals[1].Signature,
 		base.ArtifactSignatures[0],
-		base.ArtifactSignatures[1],
 		template.DepositorPublicKey,
 		template.SignerPublicKey,
 	))

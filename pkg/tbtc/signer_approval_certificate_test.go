@@ -357,3 +357,41 @@ func TestCovenantSignerEngineVerifySignerApprovalRejectsWalletPublicKeyMismatch(
 		t.Fatalf("expected wallet public key mismatch error, got %v", err)
 	}
 }
+
+func TestCovenantSignerEngineVerifySignerApprovalRejectsMissingCertificate(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+	request.SignerApproval = nil
+
+	err := (&covenantSignerEngine{node: node}).VerifySignerApproval(request)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.signerApproval is required for signer approval verification",
+	) {
+		t.Fatalf("expected missing signer approval error, got %v", err)
+	}
+}
+
+func TestCovenantSignerEngineVerifySignerApprovalRejectsApprovalDigestMismatch(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+	request.SignerApproval.ApprovalDigest = "0x" + strings.Repeat("11", 32)
+
+	err := (&covenantSignerEngine{node: node}).VerifySignerApproval(request)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.signerApproval.approvalDigest must match request.artifactApprovals.payload",
+	) {
+		t.Fatalf("expected signer approval digest mismatch error, got %v", err)
+	}
+}

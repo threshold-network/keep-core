@@ -198,7 +198,14 @@ func TestCovenantSignerEngine_SubmitSelfV1Ready(t *testing.T) {
 		},
 	}
 	applyTestMigrationTransactionPlanCommitment(t, &request)
-	applyTestArtifactApprovals(t, &request, depositorPrivateKey, nil)
+	applyTestArtifactApprovals(
+		t,
+		node,
+		walletPublicKey,
+		&request,
+		depositorPrivateKey,
+		nil,
+	)
 
 	result, err := service.Submit(context.Background(), covenantsigner.TemplateSelfV1, covenantsigner.SignerSubmitInput{
 		RouteRequestID: "ors_self_ready",
@@ -428,7 +435,14 @@ func TestCovenantSignerEngine_SubmitQcV1HandoffReady(t *testing.T) {
 		},
 	}
 	applyTestMigrationTransactionPlanCommitment(t, &request)
-	applyTestArtifactApprovals(t, &request, depositorPrivateKey, custodianPrivateKey)
+	applyTestArtifactApprovals(
+		t,
+		node,
+		walletPublicKey,
+		&request,
+		depositorPrivateKey,
+		custodianPrivateKey,
+	)
 
 	result, err := service.Submit(context.Background(), covenantsigner.TemplateQcV1, covenantsigner.SignerSubmitInput{
 		RouteRequestID: "ors_qc_ready",
@@ -668,7 +682,14 @@ func TestCovenantSignerEngine_SubmitQcV1RejectsInvalidBeta(t *testing.T) {
 	request.MigrationDestination.DestinationCommitmentHash = testDestinationCommitmentHash(t, request.MigrationDestination)
 	request.DestinationCommitmentHash = request.MigrationDestination.DestinationCommitmentHash
 	applyTestMigrationTransactionPlanCommitment(t, &request)
-	applyTestArtifactApprovals(t, &request, depositorPrivateKey, custodianPrivateKey)
+	applyTestArtifactApprovals(
+		t,
+		node,
+		walletPublicKey,
+		&request,
+		depositorPrivateKey,
+		custodianPrivateKey,
+	)
 
 	result, err := service.Submit(context.Background(), covenantsigner.TemplateQcV1, covenantsigner.SignerSubmitInput{
 		RouteRequestID: "ors_qc_bad_beta",
@@ -805,7 +826,14 @@ func TestCovenantSignerEngine_SubmitQcV1RejectsScriptHashMismatch(t *testing.T) 
 		},
 	}
 	applyTestMigrationTransactionPlanCommitment(t, &request)
-	applyTestArtifactApprovals(t, &request, depositorPrivateKey, custodianPrivateKey)
+	applyTestArtifactApprovals(
+		t,
+		node,
+		walletPublicKey,
+		&request,
+		depositorPrivateKey,
+		custodianPrivateKey,
+	)
 
 	result, err := service.Submit(context.Background(), covenantsigner.TemplateQcV1, covenantsigner.SignerSubmitInput{
 		RouteRequestID: "ors_qc_bad_script_hash",
@@ -909,7 +937,14 @@ func TestCovenantSignerEngine_SubmitSelfV1RejectsZeroMaturityHeight(t *testing.T
 	request.MigrationDestination.DestinationCommitmentHash = testDestinationCommitmentHash(t, request.MigrationDestination)
 	request.DestinationCommitmentHash = request.MigrationDestination.DestinationCommitmentHash
 	applyTestMigrationTransactionPlanCommitment(t, &request)
-	applyTestArtifactApprovals(t, &request, depositorPrivateKey, nil)
+	applyTestArtifactApprovals(
+		t,
+		node,
+		walletPublicKey,
+		&request,
+		depositorPrivateKey,
+		nil,
+	)
 
 	result, err := service.Submit(context.Background(), covenantsigner.TemplateSelfV1, covenantsigner.SignerSubmitInput{
 		RouteRequestID: "ors_self_zero",
@@ -1212,6 +1247,8 @@ func testSignArtifactApproval(
 
 func applyTestArtifactApprovals(
 	t *testing.T,
+	node *node,
+	walletPublicKey *ecdsa.PublicKey,
 	request *covenantsigner.RouteSubmitRequest,
 	depositorPrivateKey *btcec.PrivateKey,
 	custodianPrivateKey *btcec.PrivateKey,
@@ -1231,10 +1268,6 @@ func applyTestArtifactApprovals(
 			Role:      covenantsigner.ArtifactApprovalRoleDepositor,
 			Signature: testSignArtifactApproval(t, depositorPrivateKey, payload),
 		},
-		{
-			Role:      covenantsigner.ArtifactApprovalRoleSigner,
-			Signature: "0x5151",
-		},
 	}
 
 	if request.Route == covenantsigner.TemplateQcV1 {
@@ -1247,10 +1280,6 @@ func applyTestArtifactApprovals(
 				Role:      covenantsigner.ArtifactApprovalRoleCustodian,
 				Signature: testSignArtifactApproval(t, custodianPrivateKey, payload),
 			},
-			{
-				Role:      covenantsigner.ArtifactApprovalRoleSigner,
-				Signature: "0x5151",
-			},
 		}
 	}
 
@@ -1258,10 +1287,37 @@ func applyTestArtifactApprovals(
 		Payload:   payload,
 		Approvals: approvals,
 	}
-	request.ArtifactSignatures = make([]string, len(approvals))
-	for i, approval := range approvals {
-		request.ArtifactSignatures[i] = approval.Signature
+
+	executor, ok, err := node.getSigningExecutor(walletPublicKey)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if !ok {
+		t.Fatal("expected node to control wallet signers")
+	}
+
+	startBlock, err := executor.getCurrentBlockFn()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	signerApproval, err := executor.issueSignerApprovalCertificate(
+		context.Background(),
+		testArtifactApprovalDigest(t, payload),
+		startBlock,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.SignerApproval = signerApproval
+	request.ArtifactSignatures = make([]string, 0, len(approvals)+1)
+	for _, approval := range approvals {
+		request.ArtifactSignatures = append(request.ArtifactSignatures, approval.Signature)
+	}
+	request.ArtifactSignatures = append(
+		request.ArtifactSignatures,
+		signerApproval.Signature,
+	)
 }
 
 func applyTestMigrationTransactionPlanCommitment(
