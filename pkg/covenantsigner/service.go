@@ -13,13 +13,30 @@ import (
 )
 
 type Service struct {
-	store  *Store
-	engine Engine
-	now    func() time.Time
-	mutex  sync.Mutex
+	store                        *Store
+	engine                       Engine
+	now                          func() time.Time
+	mutex                        sync.Mutex
+	migrationPlanQuoteTrustRoots []MigrationPlanQuoteTrustRoot
 }
 
-func NewService(handle persistence.BasicHandle, engine Engine) (*Service, error) {
+type ServiceOption func(*Service)
+
+func WithMigrationPlanQuoteTrustRoots(
+	trustRoots []MigrationPlanQuoteTrustRoot,
+) ServiceOption {
+	cloned := append([]MigrationPlanQuoteTrustRoot{}, trustRoots...)
+
+	return func(service *Service) {
+		service.migrationPlanQuoteTrustRoots = cloned
+	}
+}
+
+func NewService(
+	handle persistence.BasicHandle,
+	engine Engine,
+	options ...ServiceOption,
+) (*Service, error) {
 	if engine == nil {
 		engine = NewPassiveEngine()
 	}
@@ -29,11 +46,16 @@ func NewService(handle persistence.BasicHandle, engine Engine) (*Service, error)
 		return nil, err
 	}
 
-	return &Service{
+	service := &Service{
 		store:  store,
 		engine: engine,
 		now:    func() time.Time { return time.Now().UTC() },
-	}, nil
+	}
+	for _, option := range options {
+		option(service)
+	}
+
+	return service, nil
 }
 
 func newRequestID(prefix string) (string, error) {
@@ -131,7 +153,12 @@ func (s *Service) loadPollJob(route TemplateID, input SignerPollInput) (*Job, er
 		return nil, &inputError{"routeRequestId does not match stored job"}
 	}
 
-	digest, err := requestDigest(input.Request)
+	digest, err := requestDigest(
+		input.Request,
+		validationOptions{
+			migrationPlanQuoteTrustRoots: s.migrationPlanQuoteTrustRoots,
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -143,11 +170,21 @@ func (s *Service) loadPollJob(route TemplateID, input SignerPollInput) (*Job, er
 }
 
 func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubmitInput) (StepResult, error) {
-	if err := validateSubmitInput(route, input); err != nil {
+	submitValidationOptions := validationOptions{
+		migrationPlanQuoteTrustRoots:      s.migrationPlanQuoteTrustRoots,
+		requireFreshMigrationPlanQuote:    true,
+		migrationPlanQuoteVerificationNow: s.now(),
+	}
+	if err := validateSubmitInput(route, input, submitValidationOptions); err != nil {
 		return StepResult{}, err
 	}
 
-	normalizedRequest, err := normalizeRouteSubmitRequest(input.Request)
+	normalizedRequest, err := normalizeRouteSubmitRequest(
+		input.Request,
+		validationOptions{
+			migrationPlanQuoteTrustRoots: s.migrationPlanQuoteTrustRoots,
+		},
+	)
 	if err != nil {
 		return StepResult{}, err
 	}
@@ -240,7 +277,13 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 }
 
 func (s *Service) Poll(ctx context.Context, route TemplateID, input SignerPollInput) (StepResult, error) {
-	if err := validatePollInput(route, input); err != nil {
+	if err := validatePollInput(
+		route,
+		input,
+		validationOptions{
+			migrationPlanQuoteTrustRoots: s.migrationPlanQuoteTrustRoots,
+		},
+	); err != nil {
 		return StepResult{}, err
 	}
 

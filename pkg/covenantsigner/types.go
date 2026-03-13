@@ -112,6 +112,40 @@ type MigrationTransactionPlan struct {
 	LockTime             uint32 `json:"lockTime"`
 }
 
+type MigrationDestinationPlanQuoteSignature struct {
+	SignatureVersion uint32 `json:"signatureVersion"`
+	Algorithm        string `json:"algorithm"`
+	KeyID            string `json:"keyId"`
+	Signature        string `json:"signature"`
+}
+
+type MigrationDestinationPlanQuote struct {
+	QuoteID                   string                                 `json:"quoteId"`
+	QuoteVersion              uint32                                 `json:"quoteVersion"`
+	ReservationID             string                                 `json:"reservationId"`
+	Reserve                   string                                 `json:"reserve"`
+	Epoch                     uint64                                 `json:"epoch"`
+	Route                     ReservationRoute                       `json:"route"`
+	Revealer                  string                                 `json:"revealer"`
+	Vault                     string                                 `json:"vault"`
+	Network                   string                                 `json:"network"`
+	DestinationCommitmentHash string                                 `json:"destinationCommitmentHash"`
+	ActiveOutpointTxID        string                                 `json:"activeOutpointTxid"`
+	ActiveOutpointVout        uint32                                 `json:"activeOutpointVout"`
+	PlanCommitmentHash        string                                 `json:"planCommitmentHash"`
+	MigrationTransactionPlan  *MigrationTransactionPlan              `json:"migrationTransactionPlan"`
+	IdempotencyKey            string                                 `json:"idempotencyKey"`
+	ExpiresInSeconds          uint64                                 `json:"expiresInSeconds"`
+	IssuedAt                  string                                 `json:"issuedAt"`
+	ExpiresAt                 string                                 `json:"expiresAt"`
+	Signature                 MigrationDestinationPlanQuoteSignature `json:"signature"`
+}
+
+type MigrationPlanQuoteTrustRoot struct {
+	KeyID        string `json:"keyId" mapstructure:"keyId"`
+	PublicKeyPEM string `json:"publicKeyPem" mapstructure:"publicKeyPem"`
+}
+
 type ArtifactApprovalRole string
 
 const (
@@ -154,6 +188,7 @@ type RouteSubmitRequest struct {
 	ActiveOutpoint            CovenantOutpoint                  `json:"activeOutpoint"`
 	DestinationCommitmentHash string                            `json:"destinationCommitmentHash"`
 	MigrationDestination      *MigrationDestinationReservation  `json:"migrationDestination,omitempty"`
+	MigrationPlanQuote        *MigrationDestinationPlanQuote    `json:"migrationPlanQuote,omitempty"`
 	MigrationTransactionPlan  *MigrationTransactionPlan         `json:"migrationTransactionPlan,omitempty"`
 	ArtifactApprovals         *ArtifactApprovalEnvelope         `json:"artifactApprovals,omitempty"`
 	ArtifactSignatures        []string                          `json:"artifactSignatures"`
