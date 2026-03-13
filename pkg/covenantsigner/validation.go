@@ -2,12 +2,18 @@ package covenantsigner
 
 import (
 	"bytes"
+	"crypto/ecdsa"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"strings"
+
+	"github.com/btcsuite/btcd/btcec"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 const (
@@ -16,6 +22,15 @@ const (
 	migrationTransactionPlanVersion uint32 = 1
 	artifactApprovalVersion         uint32 = 1
 )
+
+var artifactApprovalTypeHash = crypto.Keccak256Hash([]byte(
+	"ArtifactApproval(" +
+		"uint8 approvalVersion," +
+		"bytes32 route," +
+		"bytes32 scriptTemplateId," +
+		"bytes32 destinationCommitmentHash," +
+		"bytes32 planCommitmentHash)",
+))
 
 type inputError struct {
 	message string
@@ -89,8 +104,164 @@ func validateAddressString(name string, value string) error {
 	return nil
 }
 
+func validateBytes32HexString(name string, value string) error {
+	if err := validateHexString(name, value); err != nil {
+		return err
+	}
+
+	if len(value) != 66 {
+		return &inputError{fmt.Sprintf("%s must be a 32-byte 0x-prefixed hex string", name)}
+	}
+
+	return nil
+}
+
+func decodeBytes32HexString(name string, value string) ([32]byte, error) {
+	var decoded [32]byte
+
+	if err := validateBytes32HexString(name, value); err != nil {
+		return decoded, err
+	}
+
+	rawValue, err := hex.DecodeString(strings.TrimPrefix(value, "0x"))
+	if err != nil {
+		return decoded, &inputError{fmt.Sprintf("%s must be valid hex", name)}
+	}
+
+	copy(decoded[:], rawValue)
+	return decoded, nil
+}
+
 func normalizeLowerHex(value string) string {
 	return strings.ToLower(value)
+}
+
+func abiEncodeUint32Word(value uint32) [32]byte {
+	var encoded [32]byte
+	binary.BigEndian.PutUint32(encoded[28:], value)
+	return encoded
+}
+
+func keccakTemplateIdentifier(id TemplateID) [32]byte {
+	hash := crypto.Keccak256Hash([]byte(id))
+
+	var encoded [32]byte
+	copy(encoded[:], hash.Bytes())
+
+	return encoded
+}
+
+// artifactApprovalDigest pins the current phase-1 approval payload contract to
+// a deterministic EIP-712-compatible struct hash, without yet committing to a
+// chain-specific domain separator.
+func artifactApprovalDigest(payload ArtifactApprovalPayload) ([]byte, error) {
+	destinationCommitmentHash, err := decodeBytes32HexString(
+		"request.artifactApprovals.payload.destinationCommitmentHash",
+		payload.DestinationCommitmentHash,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	planCommitmentHash, err := decodeBytes32HexString(
+		"request.artifactApprovals.payload.planCommitmentHash",
+		payload.PlanCommitmentHash,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	encoded := make([]byte, 32*6)
+	approvalVersionWord := abiEncodeUint32Word(payload.ApprovalVersion)
+	routeIdentifier := keccakTemplateIdentifier(payload.Route)
+	scriptTemplateIdentifier := keccakTemplateIdentifier(payload.ScriptTemplateID)
+
+	copy(encoded[0:32], artifactApprovalTypeHash.Bytes())
+	copy(encoded[32:64], approvalVersionWord[:])
+	copy(encoded[64:96], routeIdentifier[:])
+	copy(encoded[96:128], scriptTemplateIdentifier[:])
+	copy(encoded[128:160], destinationCommitmentHash[:])
+	copy(encoded[160:192], planCommitmentHash[:])
+
+	digest := crypto.Keccak256Hash(encoded)
+	return digest.Bytes(), nil
+}
+
+func parseCompressedSecp256k1PublicKey(
+	name string,
+	value string,
+) (*btcec.PublicKey, error) {
+	if err := validateHexString(name, value); err != nil {
+		return nil, err
+	}
+
+	rawValue, err := hex.DecodeString(strings.TrimPrefix(value, "0x"))
+	if err != nil {
+		return nil, &inputError{fmt.Sprintf("%s must be valid hex", name)}
+	}
+
+	if len(rawValue) != 33 || (rawValue[0] != 0x02 && rawValue[0] != 0x03) {
+		return nil, &inputError{fmt.Sprintf("%s must be a compressed secp256k1 public key", name)}
+	}
+
+	publicKey, err := btcec.ParsePubKey(rawValue, btcec.S256())
+	if err != nil {
+		return nil, &inputError{fmt.Sprintf("%s must be a compressed secp256k1 public key", name)}
+	}
+
+	return publicKey, nil
+}
+
+func verifyCompactSecp256k1Signature(
+	publicKey *btcec.PublicKey,
+	digest []byte,
+	signature []byte,
+) bool {
+	return ecdsa.Verify(
+		publicKey.ToECDSA(),
+		digest,
+		new(big.Int).SetBytes(signature[:32]),
+		new(big.Int).SetBytes(signature[32:]),
+	)
+}
+
+func verifySecp256k1Signature(
+	name string,
+	publicKey *btcec.PublicKey,
+	digest []byte,
+	signature string,
+) error {
+	rawSignature, err := hex.DecodeString(strings.TrimPrefix(signature, "0x"))
+	if err != nil {
+		return &inputError{fmt.Sprintf("%s must be valid hex", name)}
+	}
+
+	switch {
+	case len(rawSignature) == 64:
+		if verifyCompactSecp256k1Signature(publicKey, digest, rawSignature) {
+			return nil
+		}
+	case len(rawSignature) == 65 &&
+		(rawSignature[64] == 0 || rawSignature[64] == 1 || rawSignature[64] == 27 || rawSignature[64] == 28):
+		if verifyCompactSecp256k1Signature(publicKey, digest, rawSignature[:64]) {
+			return nil
+		}
+	default:
+		parsedSignature, err := btcec.ParseDERSignature(rawSignature, btcec.S256())
+		if err != nil {
+			return &inputError{
+				fmt.Sprintf(
+					"%s must be a DER or 64/65-byte secp256k1 signature",
+					name,
+				),
+			}
+		}
+		if parsedSignature.Verify(digest, publicKey) {
+			return nil
+		}
+	}
+
+	return &inputError{fmt.Sprintf("%s does not verify against the required public key", name)}
 }
 
 func computeMigrationExtraData(revealer string) string {
@@ -141,7 +312,7 @@ type migrationPlanCommitmentPayload struct {
 func computeDestinationCommitmentHash(
 	reservation *MigrationDestinationReservation,
 ) (string, error) {
-	payload, err := json.Marshal(destinationCommitmentPayload{
+	payload, err := marshalCanonicalJSON(destinationCommitmentPayload{
 		Reserve:            normalizeLowerHex(reservation.Reserve),
 		Epoch:              reservation.Epoch,
 		Route:              string(reservation.Route),
@@ -163,7 +334,7 @@ func computeMigrationTransactionPlanCommitmentHash(
 	request RouteSubmitRequest,
 	plan *MigrationTransactionPlan,
 ) (string, error) {
-	payload, err := json.Marshal(migrationPlanCommitmentPayload{
+	payload, err := marshalCanonicalJSON(migrationPlanCommitmentPayload{
 		PlanVersion:               plan.PlanVersion,
 		Reserve:                   normalizeLowerHex(request.Reserve),
 		Epoch:                     request.Epoch,
@@ -382,13 +553,13 @@ func normalizeArtifactApprovals(
 	if request.ArtifactApprovals.Payload.ScriptTemplateID != route {
 		return nil, nil, &inputError{"request.artifactApprovals.payload.scriptTemplateId must match request.route"}
 	}
-	if err := validateHexString(
+	if err := validateBytes32HexString(
 		"request.artifactApprovals.payload.destinationCommitmentHash",
 		request.ArtifactApprovals.Payload.DestinationCommitmentHash,
 	); err != nil {
 		return nil, nil, err
 	}
-	if err := validateHexString(
+	if err := validateBytes32HexString(
 		"request.artifactApprovals.payload.planCommitmentHash",
 		request.ArtifactApprovals.Payload.PlanCommitmentHash,
 	); err != nil {
@@ -486,6 +657,77 @@ func normalizeArtifactApprovals(
 	}
 
 	return normalizedApprovals, derivedLegacySignatures, nil
+}
+
+func validateArtifactApprovalAuthenticity(
+	request RouteSubmitRequest,
+	depositorPublicKey string,
+	custodianPublicKey string,
+) error {
+	payloadDigest, err := artifactApprovalDigest(request.ArtifactApprovals.Payload)
+	if err != nil {
+		return err
+	}
+
+	depositorKey, err := parseCompressedSecp256k1PublicKey(
+		"request.scriptTemplate.depositorPublicKey",
+		depositorPublicKey,
+	)
+	if err != nil {
+		return err
+	}
+
+	var custodianKey *btcec.PublicKey
+	if custodianPublicKey != "" {
+		custodianKey, err = parseCompressedSecp256k1PublicKey(
+			"request.scriptTemplate.custodianPublicKey",
+			custodianPublicKey,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	for i, approval := range request.ArtifactApprovals.Approvals {
+		signaturePath := fmt.Sprintf(
+			"request.artifactApprovals.approvals[%d].signature",
+			i,
+		)
+
+		switch approval.Role {
+		case ArtifactApprovalRoleDepositor:
+			if err := verifySecp256k1Signature(
+				signaturePath,
+				depositorKey,
+				payloadDigest,
+				approval.Signature,
+			); err != nil {
+				return err
+			}
+		case ArtifactApprovalRoleCustodian:
+			if custodianKey == nil {
+				return &inputError{
+					"request.artifactApprovals.approvals includes unexpected custodian role",
+				}
+			}
+			if err := verifySecp256k1Signature(
+				signaturePath,
+				custodianKey,
+				payloadDigest,
+				approval.Signature,
+			); err != nil {
+				return err
+			}
+		case ArtifactApprovalRoleSigner:
+			// Phase 1 keeps S structurally required but not cryptographically
+			// verified. Signer approval must eventually bind to quorum or
+			// signer-service trust roots rather than the single signer key in the
+			// script template.
+			continue
+		}
+	}
+
+	return nil
 }
 
 func normalizeArtifactRecord(record ArtifactRecord) ArtifactRecord {
@@ -664,6 +906,9 @@ func validateCommonRequest(route TemplateID, request RouteSubmitRequest) error {
 	if err := validateMigrationTransactionPlan(request, request.MigrationTransactionPlan); err != nil {
 		return err
 	}
+	if request.ArtifactApprovals == nil {
+		return &inputError{"request.artifactApprovals is required"}
+	}
 	if err := validateArtifactApprovals(route, request); err != nil {
 		return err
 	}
@@ -686,6 +931,13 @@ func validateCommonRequest(route TemplateID, request RouteSubmitRequest) error {
 		if err := validateHexString("request.scriptTemplate.signerPublicKey", template.SignerPublicKey); err != nil {
 			return err
 		}
+		if err := validateArtifactApprovalAuthenticity(
+			request,
+			template.DepositorPublicKey,
+			"",
+		); err != nil {
+			return err
+		}
 	case TemplateQcV1:
 		if !request.Signing.SignerRequired || !request.Signing.CustodianRequired {
 			return &inputError{"request.signing must set signerRequired=true and custodianRequired=true for qc_v1"}
@@ -704,6 +956,13 @@ func validateCommonRequest(route TemplateID, request RouteSubmitRequest) error {
 			return err
 		}
 		if err := validateHexString("request.scriptTemplate.signerPublicKey", template.SignerPublicKey); err != nil {
+			return err
+		}
+		if err := validateArtifactApprovalAuthenticity(
+			request,
+			template.DepositorPublicKey,
+			template.CustodianPublicKey,
+		); err != nil {
 			return err
 		}
 	default:

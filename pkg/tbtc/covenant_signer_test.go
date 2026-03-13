@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"math"
@@ -14,6 +15,7 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/keep-network/keep-common/pkg/persistence"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -196,6 +198,7 @@ func TestCovenantSignerEngine_SubmitSelfV1Ready(t *testing.T) {
 		},
 	}
 	applyTestMigrationTransactionPlanCommitment(t, &request)
+	applyTestArtifactApprovals(t, &request, depositorPrivateKey, nil)
 
 	result, err := service.Submit(context.Background(), covenantsigner.TemplateSelfV1, covenantsigner.SignerSubmitInput{
 		RouteRequestID: "ors_self_ready",
@@ -425,6 +428,7 @@ func TestCovenantSignerEngine_SubmitQcV1HandoffReady(t *testing.T) {
 		},
 	}
 	applyTestMigrationTransactionPlanCommitment(t, &request)
+	applyTestArtifactApprovals(t, &request, depositorPrivateKey, custodianPrivateKey)
 
 	result, err := service.Submit(context.Background(), covenantsigner.TemplateQcV1, covenantsigner.SignerSubmitInput{
 		RouteRequestID: "ors_qc_ready",
@@ -664,6 +668,7 @@ func TestCovenantSignerEngine_SubmitQcV1RejectsInvalidBeta(t *testing.T) {
 	request.MigrationDestination.DestinationCommitmentHash = testDestinationCommitmentHash(t, request.MigrationDestination)
 	request.DestinationCommitmentHash = request.MigrationDestination.DestinationCommitmentHash
 	applyTestMigrationTransactionPlanCommitment(t, &request)
+	applyTestArtifactApprovals(t, &request, depositorPrivateKey, custodianPrivateKey)
 
 	result, err := service.Submit(context.Background(), covenantsigner.TemplateQcV1, covenantsigner.SignerSubmitInput{
 		RouteRequestID: "ors_qc_bad_beta",
@@ -800,6 +805,7 @@ func TestCovenantSignerEngine_SubmitQcV1RejectsScriptHashMismatch(t *testing.T) 
 		},
 	}
 	applyTestMigrationTransactionPlanCommitment(t, &request)
+	applyTestArtifactApprovals(t, &request, depositorPrivateKey, custodianPrivateKey)
 
 	result, err := service.Submit(context.Background(), covenantsigner.TemplateQcV1, covenantsigner.SignerSubmitInput{
 		RouteRequestID: "ors_qc_bad_script_hash",
@@ -903,6 +909,7 @@ func TestCovenantSignerEngine_SubmitSelfV1RejectsZeroMaturityHeight(t *testing.T
 	request.MigrationDestination.DestinationCommitmentHash = testDestinationCommitmentHash(t, request.MigrationDestination)
 	request.DestinationCommitmentHash = request.MigrationDestination.DestinationCommitmentHash
 	applyTestMigrationTransactionPlanCommitment(t, &request)
+	applyTestArtifactApprovals(t, &request, depositorPrivateKey, nil)
 
 	result, err := service.Submit(context.Background(), covenantsigner.TemplateSelfV1, covenantsigner.SignerSubmitInput{
 		RouteRequestID: "ors_self_zero",
@@ -1116,6 +1123,143 @@ func testMigrationTransactionPlanCommitmentHash(
 
 	sum := sha256.Sum256(payload)
 	return "0x" + hex.EncodeToString(sum[:])
+}
+
+var testArtifactApprovalTypeHash = crypto.Keccak256Hash([]byte(
+	"ArtifactApproval(" +
+		"uint8 approvalVersion," +
+		"bytes32 route," +
+		"bytes32 scriptTemplateId," +
+		"bytes32 destinationCommitmentHash," +
+		"bytes32 planCommitmentHash)",
+))
+
+func testArtifactApprovalDigest(
+	t *testing.T,
+	payload covenantsigner.ArtifactApprovalPayload,
+) []byte {
+	t.Helper()
+
+	decodeBytes32 := func(name string, value string) [32]byte {
+		t.Helper()
+
+		rawValue, err := hex.DecodeString(strings.TrimPrefix(value, "0x"))
+		if err != nil {
+			t.Fatalf("cannot decode %s: %v", name, err)
+		}
+		if len(rawValue) != 32 {
+			t.Fatalf("expected %s to be 32 bytes, got %d", name, len(rawValue))
+		}
+
+		var decoded [32]byte
+		copy(decoded[:], rawValue)
+		return decoded
+	}
+
+	encodeUint32 := func(value uint32) [32]byte {
+		var encoded [32]byte
+		binary.BigEndian.PutUint32(encoded[28:], value)
+		return encoded
+	}
+
+	keccakTemplateIdentifier := func(value covenantsigner.TemplateID) [32]byte {
+		hash := crypto.Keccak256Hash([]byte(value))
+		var encoded [32]byte
+		copy(encoded[:], hash.Bytes())
+		return encoded
+	}
+
+	destinationCommitmentHash := decodeBytes32(
+		"destinationCommitmentHash",
+		payload.DestinationCommitmentHash,
+	)
+	planCommitmentHash := decodeBytes32(
+		"planCommitmentHash",
+		payload.PlanCommitmentHash,
+	)
+	approvalVersionWord := encodeUint32(payload.ApprovalVersion)
+	routeIdentifier := keccakTemplateIdentifier(payload.Route)
+	scriptTemplateIdentifier := keccakTemplateIdentifier(payload.ScriptTemplateID)
+
+	encoded := make([]byte, 32*6)
+	copy(encoded[0:32], testArtifactApprovalTypeHash.Bytes())
+	copy(encoded[32:64], approvalVersionWord[:])
+	copy(encoded[64:96], routeIdentifier[:])
+	copy(encoded[96:128], scriptTemplateIdentifier[:])
+	copy(encoded[128:160], destinationCommitmentHash[:])
+	copy(encoded[160:192], planCommitmentHash[:])
+
+	digest := crypto.Keccak256Hash(encoded)
+	return digest.Bytes()
+}
+
+func testSignArtifactApproval(
+	t *testing.T,
+	privateKey *btcec.PrivateKey,
+	payload covenantsigner.ArtifactApprovalPayload,
+) string {
+	t.Helper()
+
+	signature, err := privateKey.Sign(testArtifactApprovalDigest(t, payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return "0x" + hex.EncodeToString(signature.Serialize())
+}
+
+func applyTestArtifactApprovals(
+	t *testing.T,
+	request *covenantsigner.RouteSubmitRequest,
+	depositorPrivateKey *btcec.PrivateKey,
+	custodianPrivateKey *btcec.PrivateKey,
+) {
+	t.Helper()
+
+	payload := covenantsigner.ArtifactApprovalPayload{
+		ApprovalVersion:           1,
+		Route:                     request.Route,
+		ScriptTemplateID:          request.Route,
+		DestinationCommitmentHash: request.DestinationCommitmentHash,
+		PlanCommitmentHash:        request.MigrationTransactionPlan.PlanCommitmentHash,
+	}
+
+	approvals := []covenantsigner.ArtifactRoleApproval{
+		{
+			Role:      covenantsigner.ArtifactApprovalRoleDepositor,
+			Signature: testSignArtifactApproval(t, depositorPrivateKey, payload),
+		},
+		{
+			Role:      covenantsigner.ArtifactApprovalRoleSigner,
+			Signature: "0x5151",
+		},
+	}
+
+	if request.Route == covenantsigner.TemplateQcV1 {
+		approvals = []covenantsigner.ArtifactRoleApproval{
+			{
+				Role:      covenantsigner.ArtifactApprovalRoleDepositor,
+				Signature: testSignArtifactApproval(t, depositorPrivateKey, payload),
+			},
+			{
+				Role:      covenantsigner.ArtifactApprovalRoleCustodian,
+				Signature: testSignArtifactApproval(t, custodianPrivateKey, payload),
+			},
+			{
+				Role:      covenantsigner.ArtifactApprovalRoleSigner,
+				Signature: "0x5151",
+			},
+		}
+	}
+
+	request.ArtifactApprovals = &covenantsigner.ArtifactApprovalEnvelope{
+		Payload:   payload,
+		Approvals: approvals,
+	}
+	request.ArtifactSignatures = make([]string, len(approvals))
+	for i, approval := range approvals {
+		request.ArtifactSignatures[i] = approval.Signature
+	}
 }
 
 func applyTestMigrationTransactionPlanCommitment(
