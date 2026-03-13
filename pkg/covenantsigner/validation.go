@@ -1087,24 +1087,6 @@ func requiredStructuredArtifactApprovalRoles(route TemplateID) ([]ArtifactApprov
 	}
 }
 
-func requiredArtifactApprovalRoles(route TemplateID) ([]ArtifactApprovalRole, error) {
-	switch route {
-	case TemplateQcV1:
-		return []ArtifactApprovalRole{
-			ArtifactApprovalRoleDepositor,
-			ArtifactApprovalRoleCustodian,
-			ArtifactApprovalRoleSigner,
-		}, nil
-	case TemplateSelfV1:
-		return []ArtifactApprovalRole{
-			ArtifactApprovalRoleDepositor,
-			ArtifactApprovalRoleSigner,
-		}, nil
-	default:
-		return nil, &inputError{"unsupported request.route"}
-	}
-}
-
 func validateArtifactApprovals(route TemplateID, request RouteSubmitRequest) error {
 	_, _, _, err := normalizeArtifactApprovals(route, request)
 	return err
@@ -1170,13 +1152,7 @@ func normalizeArtifactApprovals(
 		return nil, nil, nil, &inputError{"request.artifactApprovals.approvals must not be empty"}
 	}
 
-	requiredRoles, err := requiredArtifactApprovalRoles(route)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if normalizedSignerApproval != nil {
-		requiredRoles, err = requiredStructuredArtifactApprovalRoles(route)
-	}
+	requiredRoles, err := requiredStructuredArtifactApprovalRoles(route)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -1323,12 +1299,6 @@ func validateArtifactApprovalAuthenticity(
 			); err != nil {
 				return err
 			}
-		case ArtifactApprovalRoleSigner:
-			// Temporary cutover debt for passive/non-verifier deployments only.
-			// Production engine-backed deployments require request.signerApproval
-			// and do not reach this legacy S branch. Remove this fallback once
-			// non-verifier paths are deleted.
-			continue
 		}
 	}
 

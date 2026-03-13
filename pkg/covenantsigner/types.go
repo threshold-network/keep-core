@@ -151,7 +151,6 @@ type ArtifactApprovalRole string
 const (
 	ArtifactApprovalRoleDepositor ArtifactApprovalRole = "D"
 	ArtifactApprovalRoleCustodian ArtifactApprovalRole = "C"
-	ArtifactApprovalRoleSigner    ArtifactApprovalRole = "S"
 )
 
 type ArtifactApprovalPayload struct {
