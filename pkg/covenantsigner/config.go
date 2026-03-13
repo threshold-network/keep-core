@@ -19,4 +19,10 @@ type Config struct {
 	// trust roots used to verify migration plan quotes when the quote authority
 	// path is enabled.
 	MigrationPlanQuoteTrustRoots []MigrationPlanQuoteTrustRoot `mapstructure:"migrationPlanQuoteTrustRoots"`
+	// DepositorTrustRoots configures independently pinned depositor public keys
+	// by route/reserve/network for self_v1 approval verification.
+	DepositorTrustRoots []DepositorTrustRoot `mapstructure:"depositorTrustRoots"`
+	// CustodianTrustRoots configures independently pinned custodian public keys
+	// by route/reserve/network for qc_v1 approval verification.
+	CustodianTrustRoots []CustodianTrustRoot `mapstructure:"custodianTrustRoots"`
 }

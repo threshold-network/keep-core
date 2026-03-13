@@ -19,6 +19,8 @@ type Service struct {
 	now                          func() time.Time
 	mutex                        sync.Mutex
 	migrationPlanQuoteTrustRoots []MigrationPlanQuoteTrustRoot
+	depositorTrustRoots          []DepositorTrustRoot
+	custodianTrustRoots          []CustodianTrustRoot
 }
 
 type ServiceOption func(*Service)
@@ -30,6 +32,26 @@ func WithMigrationPlanQuoteTrustRoots(
 
 	return func(service *Service) {
 		service.migrationPlanQuoteTrustRoots = cloned
+	}
+}
+
+func WithDepositorTrustRoots(
+	trustRoots []DepositorTrustRoot,
+) ServiceOption {
+	cloned := append([]DepositorTrustRoot{}, trustRoots...)
+
+	return func(service *Service) {
+		service.depositorTrustRoots = cloned
+	}
+}
+
+func WithCustodianTrustRoots(
+	trustRoots []CustodianTrustRoot,
+) ServiceOption {
+	cloned := append([]CustodianTrustRoot{}, trustRoots...)
+
+	return func(service *Service) {
+		service.custodianTrustRoots = cloned
 	}
 }
 
@@ -66,6 +88,22 @@ func NewService(
 	for _, option := range options {
 		option(service)
 	}
+
+	normalizedDepositorTrustRoots, err := normalizeDepositorTrustRoots(
+		service.depositorTrustRoots,
+	)
+	if err != nil {
+		return nil, err
+	}
+	service.depositorTrustRoots = normalizedDepositorTrustRoots
+
+	normalizedCustodianTrustRoots, err := normalizeCustodianTrustRoots(
+		service.custodianTrustRoots,
+	)
+	if err != nil {
+		return nil, err
+	}
+	service.custodianTrustRoots = normalizedCustodianTrustRoots
 
 	return service, nil
 }
@@ -169,6 +207,8 @@ func (s *Service) loadPollJob(route TemplateID, input SignerPollInput) (*Job, er
 		input.Request,
 		validationOptions{
 			migrationPlanQuoteTrustRoots: s.migrationPlanQuoteTrustRoots,
+			depositorTrustRoots:          s.depositorTrustRoots,
+			custodianTrustRoots:          s.custodianTrustRoots,
 			signerApprovalVerifier:       s.signerApprovalVerifier,
 		},
 	)
@@ -185,6 +225,8 @@ func (s *Service) loadPollJob(route TemplateID, input SignerPollInput) (*Job, er
 func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubmitInput) (StepResult, error) {
 	submitValidationOptions := validationOptions{
 		migrationPlanQuoteTrustRoots:      s.migrationPlanQuoteTrustRoots,
+		depositorTrustRoots:               s.depositorTrustRoots,
+		custodianTrustRoots:               s.custodianTrustRoots,
 		requireFreshMigrationPlanQuote:    true,
 		migrationPlanQuoteVerificationNow: s.now(),
 		signerApprovalVerifier:            s.signerApprovalVerifier,
@@ -197,6 +239,8 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 		input.Request,
 		validationOptions{
 			migrationPlanQuoteTrustRoots: s.migrationPlanQuoteTrustRoots,
+			depositorTrustRoots:          s.depositorTrustRoots,
+			custodianTrustRoots:          s.custodianTrustRoots,
 			signerApprovalVerifier:       s.signerApprovalVerifier,
 		},
 	)
@@ -297,6 +341,8 @@ func (s *Service) Poll(ctx context.Context, route TemplateID, input SignerPollIn
 		input,
 		validationOptions{
 			migrationPlanQuoteTrustRoots: s.migrationPlanQuoteTrustRoots,
+			depositorTrustRoots:          s.depositorTrustRoots,
+			custodianTrustRoots:          s.custodianTrustRoots,
 			signerApprovalVerifier:       s.signerApprovalVerifier,
 		},
 	); err != nil {

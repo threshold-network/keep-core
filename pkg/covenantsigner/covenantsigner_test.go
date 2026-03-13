@@ -202,6 +202,28 @@ var (
 	}
 )
 
+func testDepositorTrustRoot(route TemplateID) DepositorTrustRoot {
+	migrationDestination := validMigrationDestination()
+
+	return DepositorTrustRoot{
+		Route:     route,
+		Reserve:   migrationDestination.Reserve,
+		Network:   migrationDestination.Network,
+		PublicKey: testDepositorPublicKey,
+	}
+}
+
+func testCustodianTrustRoot(route TemplateID) CustodianTrustRoot {
+	migrationDestination := validMigrationDestination()
+
+	return CustodianTrustRoot{
+		Route:     route,
+		Reserve:   migrationDestination.Reserve,
+		Network:   migrationDestination.Network,
+		PublicKey: testCustodianPublicKey,
+	}
+}
+
 func mustDeterministicTestPrivateKey(encoded string) *btcec.PrivateKey {
 	rawPrivateKey, err := hex.DecodeString(strings.TrimPrefix(encoded, "0x"))
 	if err != nil {
@@ -2367,6 +2389,184 @@ func TestServicePollAcceptsStoredMigrationPlanQuoteAfterQuoteExpiry(t *testing.T
 	}
 	if pollResult.Status != StepStatusPending {
 		t.Fatalf("expected pending poll result, got %#v", pollResult)
+	}
+}
+
+func TestServiceAcceptsSelfV1WithMatchingDepositorTrustRoot(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithDepositorTrustRoots([]DepositorTrustRoot{
+			testDepositorTrustRoot(TemplateSelfV1),
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_self_trust_root_match",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServiceRejectsSelfV1WithoutMatchingDepositorTrustRoot(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithDepositorTrustRoots([]DepositorTrustRoot{
+			testDepositorTrustRoot(TemplateSelfV1),
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := baseRequest(TemplateSelfV1)
+	request.ScriptTemplate = mustTemplate(SelfV1Template{
+		Template:           TemplateSelfV1,
+		DepositorPublicKey: testSignerPublicKey,
+		SignerPublicKey:    testSignerPublicKey,
+		Delta2:             4320,
+	})
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_self_trust_root_mismatch",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.scriptTemplate.depositorPublicKey must match the configured depositorTrustRoots publicKey for self_v1",
+	) {
+		t.Fatalf("expected self_v1 depositor trust-root mismatch, got %v", err)
+	}
+}
+
+func TestServiceRejectsSelfV1WithoutConfiguredDepositorTrustRootMatch(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithDepositorTrustRoots([]DepositorTrustRoot{
+			{
+				Route:     TemplateSelfV1,
+				Reserve:   "0x9999999999999999999999999999999999999999",
+				Network:   "regtest",
+				PublicKey: testDepositorPublicKey,
+			},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_self_trust_root_missing",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.scriptTemplate.depositorPublicKey requires a matching configured depositorTrustRoots entry for self_v1",
+	) {
+		t.Fatalf("expected missing self_v1 depositor trust-root error, got %v", err)
+	}
+}
+
+func TestServiceAcceptsQcV1WithMatchingCustodianTrustRoot(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithCustodianTrustRoots([]CustodianTrustRoot{
+			testCustodianTrustRoot(TemplateQcV1),
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
+		RouteRequestID: "orq_qc_trust_root_match",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateQcV1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServiceRejectsQcV1WithoutMatchingCustodianTrustRoot(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithCustodianTrustRoots([]CustodianTrustRoot{
+			testCustodianTrustRoot(TemplateQcV1),
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := baseRequest(TemplateQcV1)
+	request.ScriptTemplate = mustTemplate(QcV1Template{
+		Template:           TemplateQcV1,
+		DepositorPublicKey: testDepositorPublicKey,
+		CustodianPublicKey: testSignerPublicKey,
+		SignerPublicKey:    testSignerPublicKey,
+		Beta:               144,
+		Delta2:             4320,
+	})
+
+	_, err = service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
+		RouteRequestID: "orq_qc_trust_root_mismatch",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.scriptTemplate.custodianPublicKey must match the configured custodianTrustRoots publicKey for qc_v1",
+	) {
+		t.Fatalf("expected qc_v1 custodian trust-root mismatch, got %v", err)
+	}
+}
+
+func TestServiceRejectsQcV1WithoutConfiguredCustodianTrustRootMatch(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithCustodianTrustRoots([]CustodianTrustRoot{
+			{
+				Route:     TemplateQcV1,
+				Reserve:   "0x9999999999999999999999999999999999999999",
+				Network:   "regtest",
+				PublicKey: testCustodianPublicKey,
+			},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
+		RouteRequestID: "orq_qc_trust_root_missing",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateQcV1),
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.scriptTemplate.custodianPublicKey requires a matching configured custodianTrustRoots entry for qc_v1",
+	) {
+		t.Fatalf("expected missing qc_v1 custodian trust-root error, got %v", err)
 	}
 }
 

@@ -146,6 +146,20 @@ type MigrationPlanQuoteTrustRoot struct {
 	PublicKeyPEM string `json:"publicKeyPem" mapstructure:"publicKeyPem"`
 }
 
+type DepositorTrustRoot struct {
+	Route     TemplateID `json:"route" mapstructure:"route"`
+	Reserve   string     `json:"reserve" mapstructure:"reserve"`
+	Network   string     `json:"network" mapstructure:"network"`
+	PublicKey string     `json:"publicKey" mapstructure:"publicKey"`
+}
+
+type CustodianTrustRoot struct {
+	Route     TemplateID `json:"route" mapstructure:"route"`
+	Reserve   string     `json:"reserve" mapstructure:"reserve"`
+	Network   string     `json:"network" mapstructure:"network"`
+	PublicKey string     `json:"publicKey" mapstructure:"publicKey"`
+}
+
 type ArtifactApprovalRole string
 
 const (

@@ -84,6 +84,8 @@ func marshalCanonicalJSON(value any) ([]byte, error) {
 
 type validationOptions struct {
 	migrationPlanQuoteTrustRoots      []MigrationPlanQuoteTrustRoot
+	depositorTrustRoots               []DepositorTrustRoot
+	custodianTrustRoots               []CustodianTrustRoot
 	requireFreshMigrationPlanQuote    bool
 	migrationPlanQuoteVerificationNow time.Time
 	signerApprovalVerifier            SignerApprovalVerifier
@@ -550,6 +552,186 @@ func parseMigrationPlanQuoteTrustRoot(
 	}
 
 	return publicKey, nil
+}
+
+func normalizeScopedApprovalTrustRoot(
+	name string,
+	route TemplateID,
+	reserve string,
+	network string,
+	publicKey string,
+) (TemplateID, string, string, string, error) {
+	switch route {
+	case TemplateSelfV1, TemplateQcV1:
+	default:
+		return "", "", "", "", &inputError{
+			fmt.Sprintf("%s.route must be self_v1 or qc_v1", name),
+		}
+	}
+
+	if err := validateHexString(name+".reserve", reserve); err != nil {
+		return "", "", "", "", err
+	}
+
+	trimmedNetwork := strings.TrimSpace(network)
+	if trimmedNetwork == "" {
+		return "", "", "", "", &inputError{
+			fmt.Sprintf("%s.network is required", name),
+		}
+	}
+
+	normalizedPublicKey := normalizeLowerHex(publicKey)
+	if _, err := parseCompressedSecp256k1PublicKey(
+		name+".publicKey",
+		normalizedPublicKey,
+	); err != nil {
+		return "", "", "", "", err
+	}
+
+	return route,
+		normalizeLowerHex(reserve),
+		strings.ToLower(trimmedNetwork),
+		normalizedPublicKey,
+		nil
+}
+
+func normalizeDepositorTrustRoots(
+	trustRoots []DepositorTrustRoot,
+) ([]DepositorTrustRoot, error) {
+	if len(trustRoots) == 0 {
+		return nil, nil
+	}
+
+	normalized := make([]DepositorTrustRoot, len(trustRoots))
+	seen := make(map[string]int, len(trustRoots))
+
+	for i, trustRoot := range trustRoots {
+		name := fmt.Sprintf("depositorTrustRoots[%d]", i)
+		route, reserve, network, publicKey, err := normalizeScopedApprovalTrustRoot(
+			name,
+			trustRoot.Route,
+			trustRoot.Reserve,
+			trustRoot.Network,
+			trustRoot.PublicKey,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		scopeKey := string(route) + "|" + reserve + "|" + network
+		if previousIndex, ok := seen[scopeKey]; ok {
+			return nil, &inputError{
+				fmt.Sprintf(
+					"%s duplicates depositorTrustRoots[%d] for route %s reserve %s network %s",
+					name,
+					previousIndex,
+					route,
+					reserve,
+					network,
+				),
+			}
+		}
+		seen[scopeKey] = i
+
+		normalized[i] = DepositorTrustRoot{
+			Route:     route,
+			Reserve:   reserve,
+			Network:   network,
+			PublicKey: publicKey,
+		}
+	}
+
+	return normalized, nil
+}
+
+func normalizeCustodianTrustRoots(
+	trustRoots []CustodianTrustRoot,
+) ([]CustodianTrustRoot, error) {
+	if len(trustRoots) == 0 {
+		return nil, nil
+	}
+
+	normalized := make([]CustodianTrustRoot, len(trustRoots))
+	seen := make(map[string]int, len(trustRoots))
+
+	for i, trustRoot := range trustRoots {
+		name := fmt.Sprintf("custodianTrustRoots[%d]", i)
+		route, reserve, network, publicKey, err := normalizeScopedApprovalTrustRoot(
+			name,
+			trustRoot.Route,
+			trustRoot.Reserve,
+			trustRoot.Network,
+			trustRoot.PublicKey,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		scopeKey := string(route) + "|" + reserve + "|" + network
+		if previousIndex, ok := seen[scopeKey]; ok {
+			return nil, &inputError{
+				fmt.Sprintf(
+					"%s duplicates custodianTrustRoots[%d] for route %s reserve %s network %s",
+					name,
+					previousIndex,
+					route,
+					reserve,
+					network,
+				),
+			}
+		}
+		seen[scopeKey] = i
+
+		normalized[i] = CustodianTrustRoot{
+			Route:     route,
+			Reserve:   reserve,
+			Network:   network,
+			PublicKey: publicKey,
+		}
+	}
+
+	return normalized, nil
+}
+
+func trustRootLookupScope(request RouteSubmitRequest) (TemplateID, string, string) {
+	network := ""
+	if request.MigrationDestination != nil {
+		network = strings.ToLower(strings.TrimSpace(request.MigrationDestination.Network))
+	}
+
+	return request.Route, normalizeLowerHex(request.Reserve), network
+}
+
+func resolveExpectedDepositorPublicKey(
+	request RouteSubmitRequest,
+	trustRoots []DepositorTrustRoot,
+) (string, bool) {
+	route, reserve, network := trustRootLookupScope(request)
+	for _, trustRoot := range trustRoots {
+		if trustRoot.Route == route &&
+			trustRoot.Reserve == reserve &&
+			trustRoot.Network == network {
+			return trustRoot.PublicKey, true
+		}
+	}
+
+	return "", false
+}
+
+func resolveExpectedCustodianPublicKey(
+	request RouteSubmitRequest,
+	trustRoots []CustodianTrustRoot,
+) (string, bool) {
+	route, reserve, network := trustRootLookupScope(request)
+	for _, trustRoot := range trustRoots {
+		if trustRoot.Route == route &&
+			trustRoot.Reserve == reserve &&
+			trustRoot.Network == network {
+			return trustRoot.PublicKey, true
+		}
+	}
+
+	return "", false
 }
 
 func migrationPlanQuoteSigningPayloadBytes(
@@ -1540,9 +1722,29 @@ func validateCommonRequest(
 		if err := validateHexString("request.scriptTemplate.signerPublicKey", template.SignerPublicKey); err != nil {
 			return err
 		}
+
+		depositorPublicKey := template.DepositorPublicKey
+		if len(resolvedOptions.depositorTrustRoots) > 0 {
+			expectedDepositorPublicKey, ok := resolveExpectedDepositorPublicKey(
+				request,
+				resolvedOptions.depositorTrustRoots,
+			)
+			if !ok {
+				return &inputError{
+					"request.scriptTemplate.depositorPublicKey requires a matching configured depositorTrustRoots entry for self_v1",
+				}
+			}
+			if normalizeLowerHex(template.DepositorPublicKey) != expectedDepositorPublicKey {
+				return &inputError{
+					"request.scriptTemplate.depositorPublicKey must match the configured depositorTrustRoots publicKey for self_v1",
+				}
+			}
+			depositorPublicKey = expectedDepositorPublicKey
+		}
+
 		if err := validateArtifactApprovalAuthenticity(
 			request,
-			template.DepositorPublicKey,
+			depositorPublicKey,
 			"",
 		); err != nil {
 			return err
@@ -1567,10 +1769,30 @@ func validateCommonRequest(
 		if err := validateHexString("request.scriptTemplate.signerPublicKey", template.SignerPublicKey); err != nil {
 			return err
 		}
+
+		custodianPublicKey := template.CustodianPublicKey
+		if len(resolvedOptions.custodianTrustRoots) > 0 {
+			expectedCustodianPublicKey, ok := resolveExpectedCustodianPublicKey(
+				request,
+				resolvedOptions.custodianTrustRoots,
+			)
+			if !ok {
+				return &inputError{
+					"request.scriptTemplate.custodianPublicKey requires a matching configured custodianTrustRoots entry for qc_v1",
+				}
+			}
+			if normalizeLowerHex(template.CustodianPublicKey) != expectedCustodianPublicKey {
+				return &inputError{
+					"request.scriptTemplate.custodianPublicKey must match the configured custodianTrustRoots publicKey for qc_v1",
+				}
+			}
+			custodianPublicKey = expectedCustodianPublicKey
+		}
+
 		if err := validateArtifactApprovalAuthenticity(
 			request,
 			template.DepositorPublicKey,
-			template.CustodianPublicKey,
+			custodianPublicKey,
 		); err != nil {
 			return err
 		}
