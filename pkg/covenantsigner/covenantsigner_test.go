@@ -3,17 +3,23 @@ package covenantsigner
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec"
 	"github.com/keep-network/keep-common/pkg/persistence"
 )
 
@@ -94,11 +100,255 @@ func mustJSON(t *testing.T, value any) []byte {
 	return data
 }
 
+type approvalContractVector struct {
+	CanonicalSubmitRequest json.RawMessage `json:"canonicalSubmitRequest"`
+	ExpectedApprovalDigest string          `json:"expectedApprovalDigest"`
+	ExpectedRequestDigest  string          `json:"expectedRequestDigest"`
+}
+
+type approvalContractVectorsFile struct {
+	Version int                               `json:"version"`
+	Scope   string                            `json:"scope"`
+	Vectors map[string]approvalContractVector `json:"vectors"`
+}
+
+type migrationPlanQuoteSigningVector struct {
+	UnsignedQuote     MigrationDestinationPlanQuote `json:"unsignedQuote"`
+	ExpectedPayload   string                        `json:"expectedPayload"`
+	ExpectedPreimage  string                        `json:"expectedPreimage"`
+	ExpectedHash      string                        `json:"expectedHash"`
+	ExpectedSignature string                        `json:"expectedSignature"`
+}
+
+type migrationPlanQuoteSigningVectorsFile struct {
+	Version   int                                        `json:"version"`
+	Scope     string                                     `json:"scope"`
+	TrustRoot MigrationPlanQuoteTrustRoot                `json:"trustRoot"`
+	Vectors   map[string]migrationPlanQuoteSigningVector `json:"vectors"`
+}
+
+func loadApprovalContractVector(
+	t *testing.T,
+	route TemplateID,
+) (RouteSubmitRequest, string, string) {
+	t.Helper()
+
+	data, err := os.ReadFile("testdata/covenant_recovery_approval_vectors_v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	vectors := approvalContractVectorsFile{}
+	if err := strictUnmarshal(data, &vectors); err != nil {
+		t.Fatal(err)
+	}
+	if vectors.Version != 1 {
+		t.Fatalf("unexpected vector version: %d", vectors.Version)
+	}
+	if vectors.Scope != "covenant_recovery_approval_contract_v1" {
+		t.Fatalf("unexpected vector scope: %s", vectors.Scope)
+	}
+
+	vector, ok := vectors.Vectors[string(route)]
+	if !ok {
+		t.Fatalf("missing vector for route %s", route)
+	}
+
+	request := RouteSubmitRequest{}
+	if err := strictUnmarshal(vector.CanonicalSubmitRequest, &request); err != nil {
+		t.Fatal(err)
+	}
+
+	return request, vector.ExpectedApprovalDigest, vector.ExpectedRequestDigest
+}
+
+func loadMigrationPlanQuoteSigningVectors(
+	t *testing.T,
+) migrationPlanQuoteSigningVectorsFile {
+	t.Helper()
+
+	data, err := os.ReadFile("testdata/migration_plan_quote_signing_vectors_v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	vectors := migrationPlanQuoteSigningVectorsFile{}
+	if err := strictUnmarshal(data, &vectors); err != nil {
+		t.Fatal(err)
+	}
+
+	return vectors
+}
+
+const (
+	testDepositorPrivateKeyHex = "0x1111111111111111111111111111111111111111111111111111111111111111"
+	testSignerPrivateKeyHex    = "0x2222222222222222222222222222222222222222222222222222222222222222"
+	testCustodianPrivateKeyHex = "0x3333333333333333333333333333333333333333333333333333333333333333"
+)
+
+var (
+	testDepositorPrivateKey          = mustDeterministicTestPrivateKey(testDepositorPrivateKeyHex)
+	testSignerPrivateKey             = mustDeterministicTestPrivateKey(testSignerPrivateKeyHex)
+	testCustodianPrivateKey          = mustDeterministicTestPrivateKey(testCustodianPrivateKeyHex)
+	testDepositorPublicKey           = mustCompressedPublicKeyHex(testDepositorPrivateKey)
+	testSignerPublicKey              = mustCompressedPublicKeyHex(testSignerPrivateKey)
+	testSignerUncompressedPublicKey  = mustUncompressedPublicKeyHex(testSignerPrivateKey)
+	testCustodianPublicKey           = mustCompressedPublicKeyHex(testCustodianPrivateKey)
+	testMigrationPlanQuoteSeed       = bytes.Repeat([]byte{0x44}, ed25519.SeedSize)
+	testMigrationPlanQuotePrivateKey = ed25519.NewKeyFromSeed(testMigrationPlanQuoteSeed)
+	testMigrationPlanQuoteTrustRoot  = MigrationPlanQuoteTrustRoot{
+		KeyID:        "test-plan-quote-key",
+		PublicKeyPEM: mustMigrationPlanQuoteTrustRootPEM(testMigrationPlanQuotePrivateKey.Public().(ed25519.PublicKey)),
+	}
+)
+
+func testDepositorTrustRoot(route TemplateID) DepositorTrustRoot {
+	migrationDestination := validMigrationDestination()
+
+	return DepositorTrustRoot{
+		Route:     route,
+		Reserve:   migrationDestination.Reserve,
+		Network:   migrationDestination.Network,
+		PublicKey: testDepositorPublicKey,
+	}
+}
+
+func testCustodianTrustRoot(route TemplateID) CustodianTrustRoot {
+	migrationDestination := validMigrationDestination()
+
+	return CustodianTrustRoot{
+		Route:     route,
+		Reserve:   migrationDestination.Reserve,
+		Network:   migrationDestination.Network,
+		PublicKey: testCustodianPublicKey,
+	}
+}
+
+func mustDeterministicTestPrivateKey(encoded string) *btcec.PrivateKey {
+	rawPrivateKey, err := hex.DecodeString(strings.TrimPrefix(encoded, "0x"))
+	if err != nil {
+		panic(err)
+	}
+
+	privateKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), rawPrivateKey)
+	return privateKey
+}
+
+func mustCompressedPublicKeyHex(privateKey *btcec.PrivateKey) string {
+	return "0x" + hex.EncodeToString(privateKey.PubKey().SerializeCompressed())
+}
+
+func mustUncompressedPublicKeyHex(privateKey *btcec.PrivateKey) string {
+	return "0x" + hex.EncodeToString(privateKey.PubKey().SerializeUncompressed())
+}
+
+func mustMigrationPlanQuoteTrustRootPEM(publicKey ed25519.PublicKey) string {
+	encodedPublicKey, err := x509.MarshalPKIXPublicKey(publicKey)
+	if err != nil {
+		panic(err)
+	}
+
+	return string(pem.EncodeToMemory(&pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: encodedPublicKey,
+	}))
+}
+
+func mustArtifactApprovalSignature(
+	privateKey *btcec.PrivateKey,
+	payload ArtifactApprovalPayload,
+) string {
+	digest, err := artifactApprovalDigest(payload)
+	if err != nil {
+		panic(err)
+	}
+
+	signature, err := privateKey.Sign(digest)
+	if err != nil {
+		panic(err)
+	}
+
+	return "0x" + hex.EncodeToString(signature.Serialize())
+}
+
+func artifactApprovalSignatureByRole(
+	artifactApprovals *ArtifactApprovalEnvelope,
+	role ArtifactApprovalRole,
+) string {
+	for _, approval := range artifactApprovals.Approvals {
+		if approval.Role == role {
+			return approval.Signature
+		}
+	}
+
+	panic(fmt.Sprintf("missing approval role %s", role))
+}
+
+func setArtifactApprovalSignature(
+	artifactApprovals *ArtifactApprovalEnvelope,
+	role ArtifactApprovalRole,
+	signature string,
+) {
+	for i, approval := range artifactApprovals.Approvals {
+		if approval.Role == role {
+			artifactApprovals.Approvals[i].Signature = signature
+			return
+		}
+	}
+
+	panic(fmt.Sprintf("missing approval role %s", role))
+}
+
+func canonicalArtifactSignatures(
+	route TemplateID,
+	artifactApprovals *ArtifactApprovalEnvelope,
+) []string {
+	if artifactApprovals == nil {
+		return nil
+	}
+
+	requiredRoles, err := requiredStructuredArtifactApprovalRoles(route)
+	if err != nil {
+		panic(err)
+	}
+
+	signatures := make([]string, len(requiredRoles))
+	for i, role := range requiredRoles {
+		signatures[i] = artifactApprovalSignatureByRole(artifactApprovals, role)
+	}
+
+	return signatures
+}
+
+func canonicalArtifactSignaturesWithSignerApproval(
+	route TemplateID,
+	artifactApprovals *ArtifactApprovalEnvelope,
+	signerApproval *SignerApprovalCertificate,
+) []string {
+	requiredRoles, err := requiredStructuredArtifactApprovalRoles(route)
+	if err != nil {
+		panic(err)
+	}
+
+	signatures := make([]string, 0, len(requiredRoles)+1)
+	for _, role := range requiredRoles {
+		signatures = append(
+			signatures,
+			artifactApprovalSignatureByRole(artifactApprovals, role),
+		)
+	}
+	if signerApproval == nil {
+		return signatures
+	}
+
+	return append(signatures, signerApproval.Signature)
+}
+
 func validSelfTemplate() json.RawMessage {
 	return mustTemplate(SelfV1Template{
 		Template:           TemplateSelfV1,
-		DepositorPublicKey: "0x021111",
-		SignerPublicKey:    "0x022222",
+		DepositorPublicKey: testDepositorPublicKey,
+		SignerPublicKey:    testSignerPublicKey,
 		Delta2:             4320,
 	})
 }
@@ -106,9 +356,9 @@ func validSelfTemplate() json.RawMessage {
 func validQcTemplate() json.RawMessage {
 	return mustTemplate(QcV1Template{
 		Template:           TemplateQcV1,
-		DepositorPublicKey: "0x021111",
-		CustodianPublicKey: "0x023333",
-		SignerPublicKey:    "0x022222",
+		DepositorPublicKey: testDepositorPublicKey,
+		CustodianPublicKey: testCustodianPublicKey,
+		SignerPublicKey:    testSignerPublicKey,
 		Beta:               144,
 		Delta2:             4320,
 	})
@@ -141,8 +391,7 @@ func baseRequest(route TemplateID) RouteSubmitRequest {
 			InputSequence:        canonicalCovenantInputSequence,
 			LockTime:             912345,
 		},
-		ArtifactSignatures: []string{"0x0708"},
-		Artifacts:          map[RecoveryPathID]ArtifactRecord{},
+		Artifacts: map[RecoveryPathID]ArtifactRecord{},
 	}
 
 	switch route {
@@ -159,34 +408,325 @@ func baseRequest(route TemplateID) RouteSubmitRequest {
 			request,
 			request.MigrationTransactionPlan,
 		)
+	request.ArtifactApprovals = validArtifactApprovals(request)
+	request.ArtifactSignatures = canonicalArtifactSignatures(
+		request.Route,
+		request.ArtifactApprovals,
+	)
 
 	return request
 }
 
 func validArtifactApprovals(request RouteSubmitRequest) *ArtifactApprovalEnvelope {
+	payload := ArtifactApprovalPayload{
+		ApprovalVersion:           artifactApprovalVersion,
+		Route:                     request.Route,
+		ScriptTemplateID:          request.Route,
+		DestinationCommitmentHash: request.DestinationCommitmentHash,
+		PlanCommitmentHash:        request.MigrationTransactionPlan.PlanCommitmentHash,
+	}
+
 	approvals := []ArtifactRoleApproval{
-		{Role: ArtifactApprovalRoleDepositor, Signature: "0xd0d0"},
-		{Role: ArtifactApprovalRoleSigner, Signature: "0x5050"},
+		{
+			Role:      ArtifactApprovalRoleDepositor,
+			Signature: mustArtifactApprovalSignature(testDepositorPrivateKey, payload),
+		},
 	}
 
 	if request.Route == TemplateQcV1 {
 		approvals = []ArtifactRoleApproval{
-			{Role: ArtifactApprovalRoleDepositor, Signature: "0xd0d0"},
-			{Role: ArtifactApprovalRoleCustodian, Signature: "0xc0c0"},
-			{Role: ArtifactApprovalRoleSigner, Signature: "0x5050"},
+			{
+				Role:      ArtifactApprovalRoleDepositor,
+				Signature: mustArtifactApprovalSignature(testDepositorPrivateKey, payload),
+			},
+			{
+				Role:      ArtifactApprovalRoleCustodian,
+				Signature: mustArtifactApprovalSignature(testCustodianPrivateKey, payload),
+			},
 		}
 	}
 
 	return &ArtifactApprovalEnvelope{
-		Payload: ArtifactApprovalPayload{
-			ApprovalVersion:           artifactApprovalVersion,
-			Route:                     request.Route,
-			ScriptTemplateID:          request.Route,
-			DestinationCommitmentHash: request.DestinationCommitmentHash,
-			PlanCommitmentHash:        request.MigrationTransactionPlan.PlanCommitmentHash,
-		},
+		Payload:   payload,
 		Approvals: approvals,
 	}
+}
+
+func validSignerApproval(
+	artifactApprovals *ArtifactApprovalEnvelope,
+) *SignerApprovalCertificate {
+	if artifactApprovals == nil {
+		panic("artifact approvals are required")
+	}
+
+	digest, err := artifactApprovalDigest(artifactApprovals.Payload)
+	if err != nil {
+		panic(err)
+	}
+
+	endBlock := uint64(123456)
+	return &SignerApprovalCertificate{
+		CertificateVersion: signerApprovalCertificateVersion,
+		SignatureAlgorithm: signerApprovalSignatureAlgorithm,
+		ApprovalDigest:     "0x" + hex.EncodeToString(digest),
+		WalletPublicKey:    testSignerUncompressedPublicKey,
+		SignerSetHash:      "0x" + strings.Repeat("ab", 32),
+		Signature:          "0x304402200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2002202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40",
+		ActiveMembers:      []uint32{2, 1},
+		InactiveMembers:    []uint32{4, 3},
+		EndBlock:           &endBlock,
+	}
+}
+
+func structuredSignerApprovalRequest(route TemplateID) RouteSubmitRequest {
+	request := baseRequest(route)
+	request.SignerApproval = validSignerApproval(request.ArtifactApprovals)
+	request.ArtifactSignatures = canonicalArtifactSignaturesWithSignerApproval(
+		request.Route,
+		request.ArtifactApprovals,
+		request.SignerApproval,
+	)
+
+	return request
+}
+
+func canonicalArtifactApprovalRequest(route TemplateID) RouteSubmitRequest {
+	return baseRequest(route)
+}
+
+const (
+	mixedCaseCoverageStrategy = "0xaabbccddeeff00112233445566778899aabbccdd"
+	mixedCaseCoverageReserve  = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+	mixedCaseCoverageRevealer = "0xdecafbaddecafbaddecafbaddecafbaddecafbad"
+	mixedCaseCoverageVault    = "0xbeadfeedbeadfeedbeadfeedbeadfeedbeadfeed"
+)
+
+func canonicalMixedCaseCoverageArtifactApprovalRequest(
+	t *testing.T,
+	route TemplateID,
+) RouteSubmitRequest {
+	t.Helper()
+
+	request := canonicalArtifactApprovalRequest(route)
+	request.Strategy = mixedCaseCoverageStrategy
+	request.Reserve = mixedCaseCoverageReserve
+	request.MigrationDestination.Reserve = mixedCaseCoverageReserve
+	request.MigrationDestination.Revealer = mixedCaseCoverageRevealer
+	request.MigrationDestination.Vault = mixedCaseCoverageVault
+	request.MigrationDestination.MigrationExtraData = computeMigrationExtraData(
+		request.MigrationDestination.Revealer,
+	)
+
+	destinationCommitmentHash, err := computeDestinationCommitmentHash(
+		request.MigrationDestination,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.MigrationDestination.DestinationCommitmentHash = destinationCommitmentHash
+	request.DestinationCommitmentHash = destinationCommitmentHash
+
+	planCommitmentHash, err := computeMigrationTransactionPlanCommitmentHash(
+		request,
+		request.MigrationTransactionPlan,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.MigrationTransactionPlan.PlanCommitmentHash = planCommitmentHash
+	request.ArtifactApprovals.Payload.DestinationCommitmentHash = destinationCommitmentHash
+	request.ArtifactApprovals.Payload.PlanCommitmentHash = planCommitmentHash
+
+	return request
+}
+
+func cloneRouteSubmitRequest(
+	t *testing.T,
+	request RouteSubmitRequest,
+) RouteSubmitRequest {
+	t.Helper()
+
+	cloned := RouteSubmitRequest{}
+	if err := strictUnmarshal(mustJSON(t, request), &cloned); err != nil {
+		t.Fatal(err)
+	}
+
+	return cloned
+}
+
+func artifactApprovalVariantFromRequest(
+	t *testing.T,
+	request RouteSubmitRequest,
+	transformHex func(string) string,
+) RouteSubmitRequest {
+	t.Helper()
+
+	variant := cloneRouteSubmitRequest(t, request)
+	variant.Strategy = transformHex(variant.Strategy)
+	variant.Reserve = transformHex(variant.Reserve)
+	variant.ActiveOutpoint.TxID = transformHex(variant.ActiveOutpoint.TxID)
+	if variant.ActiveOutpoint.ScriptHash != "" {
+		variant.ActiveOutpoint.ScriptHash = transformHex(variant.ActiveOutpoint.ScriptHash)
+	}
+	variant.DestinationCommitmentHash = transformHex(variant.DestinationCommitmentHash)
+
+	if variant.MigrationDestination != nil {
+		variant.MigrationDestination.Reserve = transformHex(variant.MigrationDestination.Reserve)
+		variant.MigrationDestination.Revealer = transformHex(variant.MigrationDestination.Revealer)
+		variant.MigrationDestination.Vault = transformHex(variant.MigrationDestination.Vault)
+		variant.MigrationDestination.DepositScript = transformHex(variant.MigrationDestination.DepositScript)
+		variant.MigrationDestination.DepositScriptHash = transformHex(variant.MigrationDestination.DepositScriptHash)
+		variant.MigrationDestination.MigrationExtraData = transformHex(variant.MigrationDestination.MigrationExtraData)
+		variant.MigrationDestination.DestinationCommitmentHash = transformHex(
+			variant.MigrationDestination.DestinationCommitmentHash,
+		)
+	}
+
+	if variant.MigrationTransactionPlan != nil {
+		variant.MigrationTransactionPlan.PlanCommitmentHash = transformHex(
+			variant.MigrationTransactionPlan.PlanCommitmentHash,
+		)
+	}
+
+	for i := range variant.ArtifactSignatures {
+		variant.ArtifactSignatures[i] = transformHex(variant.ArtifactSignatures[i])
+	}
+
+	if variant.SignerApproval != nil {
+		variant.SignerApproval.ApprovalDigest = transformHex(
+			variant.SignerApproval.ApprovalDigest,
+		)
+		variant.SignerApproval.WalletPublicKey = transformHex(
+			variant.SignerApproval.WalletPublicKey,
+		)
+		variant.SignerApproval.SignerSetHash = transformHex(
+			variant.SignerApproval.SignerSetHash,
+		)
+		variant.SignerApproval.Signature = transformHex(
+			variant.SignerApproval.Signature,
+		)
+		if len(variant.SignerApproval.ActiveMembers) > 1 {
+			variant.SignerApproval.ActiveMembers = append(
+				[]uint32{
+					variant.SignerApproval.ActiveMembers[len(variant.SignerApproval.ActiveMembers)-1],
+				},
+				variant.SignerApproval.ActiveMembers[:len(variant.SignerApproval.ActiveMembers)-1]...,
+			)
+		}
+		if len(variant.SignerApproval.InactiveMembers) > 1 {
+			variant.SignerApproval.InactiveMembers = append(
+				[]uint32{
+					variant.SignerApproval.InactiveMembers[len(variant.SignerApproval.InactiveMembers)-1],
+				},
+				variant.SignerApproval.InactiveMembers[:len(variant.SignerApproval.InactiveMembers)-1]...,
+			)
+		}
+	}
+
+	for pathID, artifact := range variant.Artifacts {
+		artifact.PSBTHash = transformHex(artifact.PSBTHash)
+		artifact.DestinationCommitmentHash = transformHex(artifact.DestinationCommitmentHash)
+		if artifact.TransactionHex != "" {
+			artifact.TransactionHex = transformHex(artifact.TransactionHex)
+		}
+		if artifact.TransactionID != "" {
+			artifact.TransactionID = transformHex(artifact.TransactionID)
+		}
+		variant.Artifacts[pathID] = artifact
+	}
+
+	if variant.ArtifactApprovals != nil {
+		variant.ArtifactApprovals.Payload.DestinationCommitmentHash = transformHex(
+			variant.ArtifactApprovals.Payload.DestinationCommitmentHash,
+		)
+		variant.ArtifactApprovals.Payload.PlanCommitmentHash = transformHex(
+			variant.ArtifactApprovals.Payload.PlanCommitmentHash,
+		)
+
+		reorderedApprovals := make(
+			[]ArtifactRoleApproval,
+			len(variant.ArtifactApprovals.Approvals),
+		)
+		for i := range variant.ArtifactApprovals.Approvals {
+			approval := variant.ArtifactApprovals.Approvals[len(variant.ArtifactApprovals.Approvals)-1-i]
+			reorderedApprovals[i] = ArtifactRoleApproval{
+				Role:      approval.Role,
+				Signature: transformHex(approval.Signature),
+			}
+		}
+		variant.ArtifactApprovals.Approvals = reorderedApprovals
+	}
+
+	switch variant.Route {
+	case TemplateQcV1:
+		template := &QcV1Template{}
+		if err := strictUnmarshal(variant.ScriptTemplate, template); err != nil {
+			t.Fatal(err)
+		}
+		template.DepositorPublicKey = transformHex(template.DepositorPublicKey)
+		template.CustodianPublicKey = transformHex(template.CustodianPublicKey)
+		template.SignerPublicKey = transformHex(template.SignerPublicKey)
+		variant.ScriptTemplate = mustTemplate(template)
+	case TemplateSelfV1:
+		template := &SelfV1Template{}
+		if err := strictUnmarshal(variant.ScriptTemplate, template); err != nil {
+			t.Fatal(err)
+		}
+		template.DepositorPublicKey = transformHex(template.DepositorPublicKey)
+		template.SignerPublicKey = transformHex(template.SignerPublicKey)
+		variant.ScriptTemplate = mustTemplate(template)
+	default:
+		t.Fatalf("unsupported route %s", variant.Route)
+	}
+
+	return variant
+}
+
+func equivalentArtifactApprovalVariantFromRequest(
+	t *testing.T,
+	request RouteSubmitRequest,
+) RouteSubmitRequest {
+	t.Helper()
+	return artifactApprovalVariantFromRequest(t, request, upperHexBody)
+}
+
+func upperHexBody(value string) string {
+	if !strings.HasPrefix(value, "0x") {
+		return strings.ToUpper(value)
+	}
+
+	return "0x" + strings.ToUpper(strings.TrimPrefix(value, "0x"))
+}
+
+func mixedCaseHexBody(value string) string {
+	if !strings.HasPrefix(value, "0x") {
+		return value
+	}
+
+	body := strings.ToLower(strings.TrimPrefix(value, "0x"))
+	lettersSeen := 0
+	variant := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'f' {
+			if lettersSeen%2 == 0 {
+				lettersSeen++
+				return r - ('a' - 'A')
+			}
+
+			lettersSeen++
+		}
+
+		return r
+	}, body)
+
+	return "0x" + variant
+}
+
+func mixedCaseArtifactApprovalVariantFromRequest(
+	t *testing.T,
+	request RouteSubmitRequest,
+) RouteSubmitRequest {
+	t.Helper()
+	return artifactApprovalVariantFromRequest(t, request, mixedCaseHexBody)
 }
 
 func validMigrationDestination() *MigrationDestinationReservation {
@@ -207,6 +747,65 @@ func validMigrationDestination() *MigrationDestinationReservation {
 	reservation.DestinationCommitmentHash, _ = computeDestinationCommitmentHash(reservation)
 
 	return reservation
+}
+
+func validMigrationPlanQuote(
+	request RouteSubmitRequest,
+) *MigrationDestinationPlanQuote {
+	quote := &MigrationDestinationPlanQuote{
+		QuoteID:                   "cmdq_12345678",
+		QuoteVersion:              migrationPlanQuoteVersion,
+		ReservationID:             request.MigrationDestination.ReservationID,
+		Reserve:                   request.Reserve,
+		Epoch:                     request.Epoch,
+		Route:                     ReservationRouteMigration,
+		Revealer:                  request.MigrationDestination.Revealer,
+		Vault:                     request.MigrationDestination.Vault,
+		Network:                   request.MigrationDestination.Network,
+		DestinationCommitmentHash: request.DestinationCommitmentHash,
+		ActiveOutpointTxID:        request.ActiveOutpoint.TxID,
+		ActiveOutpointVout:        request.ActiveOutpoint.Vout,
+		PlanCommitmentHash:        request.MigrationTransactionPlan.PlanCommitmentHash,
+		MigrationTransactionPlan:  normalizeMigrationTransactionPlan(request.MigrationTransactionPlan),
+		IdempotencyKey:            "0x75a998ac6951c2776f3a85f6430fb41321c28c1113a71a52c754806c7a3de9c9",
+		ExpiresInSeconds:          900,
+		IssuedAt:                  "2099-03-09T00:00:00.000Z",
+		ExpiresAt:                 "2099-03-09T00:15:00.000Z",
+		Signature: MigrationDestinationPlanQuoteSignature{
+			SignatureVersion: migrationPlanQuoteSignatureVersion,
+			Algorithm:        migrationPlanQuoteSignatureAlgorithm,
+			KeyID:            testMigrationPlanQuoteTrustRoot.KeyID,
+		},
+	}
+
+	signingHash, err := migrationPlanQuoteSigningHash(quote)
+	if err != nil {
+		panic(err)
+	}
+	quote.Signature.Signature = "0x" + hex.EncodeToString(
+		ed25519.Sign(testMigrationPlanQuotePrivateKey, signingHash),
+	)
+
+	return quote
+}
+
+func requestWithValidMigrationPlanQuote(route TemplateID) RouteSubmitRequest {
+	request := baseRequest(route)
+	request.ActiveOutpoint.TxID = "0x" + strings.Repeat("aa", 32)
+	request.ActiveOutpoint.ScriptHash = "0x" + strings.Repeat("bb", 32)
+	request.MigrationTransactionPlan.PlanCommitmentHash, _ =
+		computeMigrationTransactionPlanCommitmentHash(
+			request,
+			request.MigrationTransactionPlan,
+		)
+	request.ArtifactApprovals = validArtifactApprovals(request)
+	request.ArtifactSignatures = canonicalArtifactSignatures(
+		request.Route,
+		request.ArtifactApprovals,
+	)
+	request.MigrationPlanQuote = validMigrationPlanQuote(request)
+
+	return request
 }
 
 func TestServiceSubmitDeduplicatesByRouteRequestID(t *testing.T) {
@@ -1121,21 +1720,29 @@ func TestServiceRejectsMigrationTransactionPlanBoundToDifferentDestinationCommit
 	}
 }
 
-func TestServiceAcceptsArtifactApprovalsWithCanonicalLegacySignatures(t *testing.T) {
+func TestServiceAcceptsStructuredSignerApprovalWithCanonicalLegacySignatures(t *testing.T) {
 	handle := newMemoryHandle()
-	service, err := NewService(handle, &scriptedEngine{})
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithSignerApprovalVerifier(SignerApprovalVerifierFunc(func(RouteSubmitRequest) error {
+			return nil
+		})),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	request := baseRequest(TemplateQcV1)
-	request.ArtifactApprovals = validArtifactApprovals(request)
+	request := structuredSignerApprovalRequest(TemplateQcV1)
 	request.ArtifactApprovals.Approvals = []ArtifactRoleApproval{
-		request.ArtifactApprovals.Approvals[2],
 		request.ArtifactApprovals.Approvals[0],
 		request.ArtifactApprovals.Approvals[1],
 	}
-	request.ArtifactSignatures = []string{"0xd0d0", "0xc0c0", "0x5050"}
+	request.ArtifactSignatures = canonicalArtifactSignaturesWithSignerApproval(
+		request.Route,
+		request.ArtifactApprovals,
+		request.SignerApproval,
+	)
 
 	result, err := service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
 		RouteRequestID: "orq_artifact_approvals",
@@ -1162,6 +1769,184 @@ func TestServiceAcceptsArtifactApprovalsWithCanonicalLegacySignatures(t *testing
 	}
 }
 
+func TestServiceAcceptsStructuredSignerApprovalWhenVerifierConfigured(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithSignerApprovalVerifier(SignerApprovalVerifierFunc(func(request RouteSubmitRequest) error {
+			if request.SignerApproval == nil {
+				t.Fatal("expected signer approval")
+			}
+			return nil
+		})),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := structuredSignerApprovalRequest(TemplateQcV1)
+
+	_, err = service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
+		RouteRequestID: "orq_structured_signer_approval",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	job, ok, err := service.store.GetByRouteRequest(
+		TemplateQcV1,
+		"orq_structured_signer_approval",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected stored job")
+	}
+	if job.Request.SignerApproval == nil {
+		t.Fatal("expected stored signer approval")
+	}
+	if !reflect.DeepEqual(
+		job.Request.SignerApproval.ActiveMembers,
+		[]uint32{1, 2},
+	) {
+		t.Fatalf(
+			"unexpected active members: %#v",
+			job.Request.SignerApproval.ActiveMembers,
+		)
+	}
+	if !reflect.DeepEqual(
+		job.Request.SignerApproval.InactiveMembers,
+		[]uint32{3, 4},
+	) {
+		t.Fatalf(
+			"unexpected inactive members: %#v",
+			job.Request.SignerApproval.InactiveMembers,
+		)
+	}
+}
+
+func TestServiceRejectsStructuredSignerApprovalWithoutVerifier(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := structuredSignerApprovalRequest(TemplateSelfV1)
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_structured_signer_approval_unsupported",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.signerApproval cannot be verified by this signer deployment",
+	) {
+		t.Fatalf("expected unsupported signer approval error, got %v", err)
+	}
+}
+
+func TestServiceRejectsMissingSignerApprovalWhenVerifierConfigured(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithSignerApprovalVerifier(SignerApprovalVerifierFunc(func(RouteSubmitRequest) error {
+			return nil
+		})),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := baseRequest(TemplateSelfV1)
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_legacy_signer_approval_path",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.signerApproval is required when the signer approval verifier is configured",
+	) {
+		t.Fatalf("expected missing signer approval error, got %v", err)
+	}
+}
+
+func TestServiceRejectsStructuredSignerApprovalWithMismatchedApprovalDigest(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithSignerApprovalVerifier(SignerApprovalVerifierFunc(func(RouteSubmitRequest) error {
+			return nil
+		})),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := structuredSignerApprovalRequest(TemplateSelfV1)
+	request.SignerApproval.ApprovalDigest = "0x" + strings.Repeat("11", 32)
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_structured_signer_approval_bad_digest",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.signerApproval.approvalDigest must match the canonical artifactApprovals payload digest",
+	) {
+		t.Fatalf("expected signer approval digest mismatch error, got %v", err)
+	}
+}
+func TestServiceRejectsStructuredSignerApprovalWithLegacySignerRole(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithSignerApprovalVerifier(SignerApprovalVerifierFunc(func(RouteSubmitRequest) error {
+			return nil
+		})),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := structuredSignerApprovalRequest(TemplateSelfV1)
+	request.ArtifactApprovals.Approvals = append(
+		request.ArtifactApprovals.Approvals,
+		ArtifactRoleApproval{
+			Role:      ArtifactApprovalRole("S"),
+			Signature: "0x5151",
+		},
+	)
+	request.ArtifactSignatures = append(
+		request.ArtifactSignatures[:len(request.ArtifactSignatures)-1],
+		"0x5151",
+		request.ArtifactSignatures[len(request.ArtifactSignatures)-1],
+	)
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_structured_signer_approval_legacy_role",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.artifactApprovals.approvals[1].role is not allowed for self_v1",
+	) {
+		t.Fatalf("expected structured signer-role rejection, got %v", err)
+	}
+}
+
 func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 	handle := newMemoryHandle()
 	service, err := NewService(handle, &scriptedEngine{})
@@ -1179,12 +1964,12 @@ func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 			name:  "missing qc custodian approval",
 			route: TemplateQcV1,
 			mutate: func(request *RouteSubmitRequest) {
-				request.ArtifactApprovals = validArtifactApprovals(*request)
 				request.ArtifactApprovals.Approvals = []ArtifactRoleApproval{
 					request.ArtifactApprovals.Approvals[0],
-					request.ArtifactApprovals.Approvals[2],
 				}
-				request.ArtifactSignatures = []string{"0xd0d0", "0x5050"}
+				request.ArtifactSignatures = []string{
+					request.ArtifactSignatures[0],
+				}
 			},
 			expectErr: "request.artifactApprovals.approvals must include role C for qc_v1",
 		},
@@ -1192,13 +1977,16 @@ func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 			name:  "self route rejects custodian approval role",
 			route: TemplateSelfV1,
 			mutate: func(request *RouteSubmitRequest) {
-				request.ArtifactApprovals = validArtifactApprovals(*request)
 				request.ArtifactApprovals.Approvals = []ArtifactRoleApproval{
 					request.ArtifactApprovals.Approvals[0],
-					{Role: ArtifactApprovalRoleCustodian, Signature: "0xc0c0"},
-					request.ArtifactApprovals.Approvals[1],
+					{
+						Role: ArtifactApprovalRoleCustodian,
+						Signature: mustArtifactApprovalSignature(
+							testCustodianPrivateKey,
+							request.ArtifactApprovals.Payload,
+						),
+					},
 				}
-				request.ArtifactSignatures = []string{"0xd0d0", "0xc0c0", "0x5050"}
 			},
 			expectErr: "request.artifactApprovals.approvals[1].role is not allowed for self_v1",
 		},
@@ -1206,18 +1994,26 @@ func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 			name:  "plan commitment mismatch",
 			route: TemplateQcV1,
 			mutate: func(request *RouteSubmitRequest) {
-				request.ArtifactApprovals = validArtifactApprovals(*request)
 				request.ArtifactApprovals.Payload.PlanCommitmentHash = "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-				request.ArtifactSignatures = []string{"0xd0d0", "0xc0c0", "0x5050"}
 			},
 			expectErr: "request.artifactApprovals.payload.planCommitmentHash must match request.migrationTransactionPlan.planCommitmentHash",
+		},
+		{
+			name:  "artifact approvals required",
+			route: TemplateSelfV1,
+			mutate: func(request *RouteSubmitRequest) {
+				request.ArtifactApprovals = nil
+			},
+			expectErr: "request.artifactApprovals is required",
 		},
 		{
 			name:  "legacy signature mismatch",
 			route: TemplateQcV1,
 			mutate: func(request *RouteSubmitRequest) {
-				request.ArtifactApprovals = validArtifactApprovals(*request)
-				request.ArtifactSignatures = []string{"0x5050", "0xd0d0", "0xc0c0"}
+				request.ArtifactSignatures = []string{
+					request.ArtifactSignatures[1],
+					request.ArtifactSignatures[0],
+				}
 			},
 			expectErr: "request.artifactSignatures must match canonical approval role order derived from request.artifactApprovals",
 		},
@@ -1225,10 +2021,47 @@ func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 			name:  "legacy signatures remain required when approvals are present",
 			route: TemplateSelfV1,
 			mutate: func(request *RouteSubmitRequest) {
-				request.ArtifactApprovals = validArtifactApprovals(*request)
 				request.ArtifactSignatures = nil
 			},
 			expectErr: "request.artifactSignatures must not be empty",
+		},
+		{
+			name:  "depositor signature does not verify",
+			route: TemplateSelfV1,
+			mutate: func(request *RouteSubmitRequest) {
+				setArtifactApprovalSignature(
+					request.ArtifactApprovals,
+					ArtifactApprovalRoleDepositor,
+					mustArtifactApprovalSignature(
+						testCustodianPrivateKey,
+						request.ArtifactApprovals.Payload,
+					),
+				)
+				request.ArtifactSignatures = canonicalArtifactSignatures(
+					request.Route,
+					request.ArtifactApprovals,
+				)
+			},
+			expectErr: "request.artifactApprovals.approvals[0].signature does not verify against the required public key",
+		},
+		{
+			name:  "custodian signature does not verify",
+			route: TemplateQcV1,
+			mutate: func(request *RouteSubmitRequest) {
+				setArtifactApprovalSignature(
+					request.ArtifactApprovals,
+					ArtifactApprovalRoleCustodian,
+					artifactApprovalSignatureByRole(
+						request.ArtifactApprovals,
+						ArtifactApprovalRoleDepositor,
+					),
+				)
+				request.ArtifactSignatures = canonicalArtifactSignatures(
+					request.Route,
+					request.ArtifactApprovals,
+				)
+			},
+			expectErr: "request.artifactApprovals.approvals[1].signature does not verify against the required public key",
 		},
 	}
 
@@ -1244,6 +2077,888 @@ func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 			})
 			if err == nil || !strings.Contains(err.Error(), testCase.expectErr) {
 				t.Fatalf("expected %q, got %v", testCase.expectErr, err)
+			}
+		})
+	}
+}
+
+func TestRequestDigestNormalizesEquivalentArtifactApprovalVariants(t *testing.T) {
+	canonicalDigest, err := requestDigest(canonicalArtifactApprovalRequest(TemplateQcV1))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	variantDigest, err := requestDigest(
+		equivalentArtifactApprovalVariantFromRequest(
+			t,
+			canonicalArtifactApprovalRequest(TemplateQcV1),
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if canonicalDigest != variantDigest {
+		t.Fatalf("expected matching request digest, got %s vs %s", canonicalDigest, variantDigest)
+	}
+}
+
+func TestRequestDigestNormalizesEquivalentStructuredSignerApprovalVariants(t *testing.T) {
+	canonicalDigest, err := requestDigest(structuredSignerApprovalRequest(TemplateQcV1))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	variantDigest, err := requestDigest(
+		equivalentArtifactApprovalVariantFromRequest(
+			t,
+			structuredSignerApprovalRequest(TemplateQcV1),
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if canonicalDigest != variantDigest {
+		t.Fatalf(
+			"expected matching structured request digest, got %s vs %s",
+			canonicalDigest,
+			variantDigest,
+		)
+	}
+}
+
+func TestRequestDigestDoesNotEscapeHTMLSensitiveCharacters(t *testing.T) {
+	request := canonicalArtifactApprovalRequest(TemplateSelfV1)
+	request.FacadeRequestID = "rf_<tag>&sink"
+	request.IdempotencyKey = "idem_>bridge"
+
+	normalizedRequest, err := normalizeRouteSubmitRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload, err := marshalCanonicalJSON(normalizedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Contains(payload, []byte(`"facadeRequestId":"rf_<tag>&sink"`)) {
+		t.Fatalf("expected raw HTML-sensitive characters in payload, got %s", payload)
+	}
+	if bytes.Contains(payload, []byte(`\u003c`)) ||
+		bytes.Contains(payload, []byte(`\u003e`)) ||
+		bytes.Contains(payload, []byte(`\u0026`)) {
+		t.Fatalf("expected unescaped HTML-sensitive characters in payload, got %s", payload)
+	}
+
+	digestFromRawRequest, err := requestDigest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digestFromNormalizedRequest, err := requestDigestFromNormalized(normalizedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digestFromRawRequest != digestFromNormalizedRequest {
+		t.Fatalf(
+			"expected matching digests, got %s vs %s",
+			digestFromRawRequest,
+			digestFromNormalizedRequest,
+		)
+	}
+}
+
+func TestDestinationCommitmentHashDoesNotEscapeHTMLSensitiveCharacters(t *testing.T) {
+	destination := validMigrationDestination()
+	destination.Network = "regtest<v2>&sink"
+
+	payload, err := marshalCanonicalJSON(destinationCommitmentPayload{
+		Reserve:            normalizeLowerHex(destination.Reserve),
+		Epoch:              destination.Epoch,
+		Route:              string(destination.Route),
+		Revealer:           normalizeLowerHex(destination.Revealer),
+		Vault:              normalizeLowerHex(destination.Vault),
+		Network:            strings.TrimSpace(destination.Network),
+		DepositScriptHash:  normalizeLowerHex(destination.DepositScriptHash),
+		MigrationExtraData: normalizeLowerHex(destination.MigrationExtraData),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Contains(payload, []byte(`"network":"regtest<v2>&sink"`)) {
+		t.Fatalf("expected raw HTML-sensitive characters in payload, got %s", payload)
+	}
+	if bytes.Contains(payload, []byte(`\u003c`)) ||
+		bytes.Contains(payload, []byte(`\u003e`)) ||
+		bytes.Contains(payload, []byte(`\u0026`)) {
+		t.Fatalf("expected unescaped HTML-sensitive characters in payload, got %s", payload)
+	}
+
+	hash, err := computeDestinationCommitmentHash(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hash == "" {
+		t.Fatal("expected destination commitment hash")
+	}
+}
+
+func TestMigrationPlanQuoteSigningVectorsMatchFixture(t *testing.T) {
+	vectors := loadMigrationPlanQuoteSigningVectors(t)
+	if vectors.Version != 1 {
+		t.Fatalf("unexpected vector version: %d", vectors.Version)
+	}
+	if vectors.Scope != "migration_plan_quote_signing_contract_v1" {
+		t.Fatalf("unexpected vector scope: %s", vectors.Scope)
+	}
+
+	block, _ := pem.Decode([]byte(vectors.TrustRoot.PublicKeyPEM))
+	if block == nil {
+		t.Fatal("expected migration plan quote fixture to contain a PEM public key")
+	}
+	parsedPublicKey, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, ok := parsedPublicKey.(ed25519.PublicKey)
+	if !ok {
+		t.Fatalf("expected Ed25519 public key, got %T", parsedPublicKey)
+	}
+
+	for name, vector := range vectors.Vectors {
+		t.Run(name, func(t *testing.T) {
+			payload, err := migrationPlanQuoteSigningPayloadBytes(&vector.UnsignedQuote)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(payload) != vector.ExpectedPayload {
+				t.Fatalf("unexpected signing payload: %s", payload)
+			}
+
+			preimage, err := migrationPlanQuoteSigningPreimage(&vector.UnsignedQuote)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(preimage) != vector.ExpectedPreimage {
+				t.Fatalf("unexpected signing preimage: %s", preimage)
+			}
+
+			signingHash, err := migrationPlanQuoteSigningHash(&vector.UnsignedQuote)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if "0x"+hex.EncodeToString(signingHash) != vector.ExpectedHash {
+				t.Fatalf("unexpected signing hash: 0x%s", hex.EncodeToString(signingHash))
+			}
+
+			rawSignature, err := hex.DecodeString(strings.TrimPrefix(vector.ExpectedSignature, "0x"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ed25519.Verify(publicKey, signingHash, rawSignature) {
+				t.Fatal("expected fixture signature to verify against the fixture trust root")
+			}
+		})
+	}
+}
+
+func TestServiceRequiresMigrationPlanQuoteWhenTrustRootsConfigured(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithMigrationPlanQuoteTrustRoots([]MigrationPlanQuoteTrustRoot{
+			testMigrationPlanQuoteTrustRoot,
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_quote_required",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.migrationPlanQuote is required when migrationPlanQuoteTrustRoots are configured",
+	) {
+		t.Fatalf("expected missing quote error, got %v", err)
+	}
+}
+
+func TestServiceAcceptsValidMigrationPlanQuoteWhenTrustRootsConfigured(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithMigrationPlanQuoteTrustRoots([]MigrationPlanQuoteTrustRoot{
+			testMigrationPlanQuoteTrustRoot,
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := requestWithValidMigrationPlanQuote(TemplateSelfV1)
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_quote_valid",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServiceRejectsExpiredMigrationPlanQuoteOnSubmit(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithMigrationPlanQuoteTrustRoots([]MigrationPlanQuoteTrustRoot{
+			testMigrationPlanQuoteTrustRoot,
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time {
+		return time.Date(2099, time.March, 9, 0, 16, 0, 0, time.UTC)
+	}
+
+	request := requestWithValidMigrationPlanQuote(TemplateSelfV1)
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_quote_expired",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(err.Error(), "request.migrationPlanQuote is expired") {
+		t.Fatalf("expected expired quote error, got %v", err)
+	}
+}
+
+func TestServicePollAcceptsStoredMigrationPlanQuoteAfterQuoteExpiry(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{
+			submit: func(*Job) (*Transition, error) {
+				return &Transition{State: JobStatePending, Detail: "queued"}, nil
+			},
+		},
+		WithMigrationPlanQuoteTrustRoots([]MigrationPlanQuoteTrustRoot{
+			testMigrationPlanQuoteTrustRoot,
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time {
+		return time.Date(2099, time.March, 9, 0, 10, 0, 0, time.UTC)
+	}
+
+	request := requestWithValidMigrationPlanQuote(TemplateSelfV1)
+
+	submitResult, err := service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_quote_poll",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	service.now = func() time.Time {
+		return time.Date(2099, time.March, 9, 0, 16, 0, 0, time.UTC)
+	}
+
+	pollResult, err := service.Poll(context.Background(), TemplateSelfV1, SignerPollInput{
+		RouteRequestID: "ors_quote_poll",
+		RequestID:      submitResult.RequestID,
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pollResult.Status != StepStatusPending {
+		t.Fatalf("expected pending poll result, got %#v", pollResult)
+	}
+}
+
+func TestServiceAcceptsSelfV1WithMatchingDepositorTrustRoot(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithDepositorTrustRoots([]DepositorTrustRoot{
+			testDepositorTrustRoot(TemplateSelfV1),
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_self_trust_root_match",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServiceRejectsSelfV1WithoutMatchingDepositorTrustRoot(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithDepositorTrustRoots([]DepositorTrustRoot{
+			testDepositorTrustRoot(TemplateSelfV1),
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := baseRequest(TemplateSelfV1)
+	request.ScriptTemplate = mustTemplate(SelfV1Template{
+		Template:           TemplateSelfV1,
+		DepositorPublicKey: testSignerPublicKey,
+		SignerPublicKey:    testSignerPublicKey,
+		Delta2:             4320,
+	})
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_self_trust_root_mismatch",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.scriptTemplate.depositorPublicKey must match the configured depositorTrustRoots publicKey for self_v1",
+	) {
+		t.Fatalf("expected self_v1 depositor trust-root mismatch, got %v", err)
+	}
+}
+
+func TestServiceRejectsSelfV1WithoutConfiguredDepositorTrustRootMatch(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithDepositorTrustRoots([]DepositorTrustRoot{
+			{
+				Route:     TemplateSelfV1,
+				Reserve:   "0x9999999999999999999999999999999999999999",
+				Network:   "regtest",
+				PublicKey: testDepositorPublicKey,
+			},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_self_trust_root_missing",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.scriptTemplate.depositorPublicKey requires a matching configured depositorTrustRoots entry for self_v1",
+	) {
+		t.Fatalf("expected missing self_v1 depositor trust-root error, got %v", err)
+	}
+}
+
+func TestServiceAcceptsQcV1WithMatchingCustodianTrustRoot(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithCustodianTrustRoots([]CustodianTrustRoot{
+			testCustodianTrustRoot(TemplateQcV1),
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
+		RouteRequestID: "orq_qc_trust_root_match",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateQcV1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServiceAcceptsQcV1WithMatchingDepositorAndCustodianTrustRoots(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithDepositorTrustRoots([]DepositorTrustRoot{
+			testDepositorTrustRoot(TemplateQcV1),
+		}),
+		WithCustodianTrustRoots([]CustodianTrustRoot{
+			testCustodianTrustRoot(TemplateQcV1),
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
+		RouteRequestID: "orq_qc_depositor_and_custodian_trust_root_match",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateQcV1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServiceRejectsQcV1WithoutMatchingCustodianTrustRoot(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithCustodianTrustRoots([]CustodianTrustRoot{
+			testCustodianTrustRoot(TemplateQcV1),
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := baseRequest(TemplateQcV1)
+	request.ScriptTemplate = mustTemplate(QcV1Template{
+		Template:           TemplateQcV1,
+		DepositorPublicKey: testDepositorPublicKey,
+		CustodianPublicKey: testSignerPublicKey,
+		SignerPublicKey:    testSignerPublicKey,
+		Beta:               144,
+		Delta2:             4320,
+	})
+
+	_, err = service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
+		RouteRequestID: "orq_qc_trust_root_mismatch",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.scriptTemplate.custodianPublicKey must match the configured custodianTrustRoots publicKey for qc_v1",
+	) {
+		t.Fatalf("expected qc_v1 custodian trust-root mismatch, got %v", err)
+	}
+}
+
+func TestServiceRejectsQcV1WithoutMatchingDepositorTrustRoot(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithDepositorTrustRoots([]DepositorTrustRoot{
+			testDepositorTrustRoot(TemplateQcV1),
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := baseRequest(TemplateQcV1)
+	request.ScriptTemplate = mustTemplate(QcV1Template{
+		Template:           TemplateQcV1,
+		DepositorPublicKey: testSignerPublicKey,
+		CustodianPublicKey: testCustodianPublicKey,
+		SignerPublicKey:    testSignerPublicKey,
+		Beta:               144,
+		Delta2:             4320,
+	})
+
+	_, err = service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
+		RouteRequestID: "orq_qc_depositor_trust_root_mismatch",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.scriptTemplate.depositorPublicKey must match the configured depositorTrustRoots publicKey for qc_v1",
+	) {
+		t.Fatalf("expected qc_v1 depositor trust-root mismatch, got %v", err)
+	}
+}
+
+func TestServiceRejectsQcV1WithoutConfiguredDepositorTrustRootMatch(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithDepositorTrustRoots([]DepositorTrustRoot{
+			{
+				Route:     TemplateQcV1,
+				Reserve:   "0x9999999999999999999999999999999999999999",
+				Network:   "regtest",
+				PublicKey: testDepositorPublicKey,
+			},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
+		RouteRequestID: "orq_qc_depositor_trust_root_missing",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateQcV1),
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.scriptTemplate.depositorPublicKey requires a matching configured depositorTrustRoots entry for qc_v1",
+	) {
+		t.Fatalf("expected missing qc_v1 depositor trust-root error, got %v", err)
+	}
+}
+
+func TestServiceRejectsQcV1WithoutConfiguredCustodianTrustRootMatch(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithCustodianTrustRoots([]CustodianTrustRoot{
+			{
+				Route:     TemplateQcV1,
+				Reserve:   "0x9999999999999999999999999999999999999999",
+				Network:   "regtest",
+				PublicKey: testCustodianPublicKey,
+			},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
+		RouteRequestID: "orq_qc_trust_root_missing",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateQcV1),
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.scriptTemplate.custodianPublicKey requires a matching configured custodianTrustRoots entry for qc_v1",
+	) {
+		t.Fatalf("expected missing qc_v1 custodian trust-root error, got %v", err)
+	}
+}
+
+func TestNewServiceRejectsDuplicateDepositorTrustRootScope(t *testing.T) {
+	handle := newMemoryHandle()
+
+	_, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithDepositorTrustRoots([]DepositorTrustRoot{
+			testDepositorTrustRoot(TemplateSelfV1),
+			testDepositorTrustRoot(TemplateSelfV1),
+		}),
+	)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"duplicates depositorTrustRoots[0]",
+	) {
+		t.Fatalf("expected duplicate depositor trust-root error, got %v", err)
+	}
+}
+
+func TestNewServiceRejectsInvalidCustodianTrustRootPublicKey(t *testing.T) {
+	handle := newMemoryHandle()
+
+	_, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithCustodianTrustRoots([]CustodianTrustRoot{
+			{
+				Route:     TemplateQcV1,
+				Reserve:   validMigrationDestination().Reserve,
+				Network:   validMigrationDestination().Network,
+				PublicKey: "0x1234",
+			},
+		}),
+	)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"custodianTrustRoots[0].publicKey must be a compressed secp256k1 public key",
+	) {
+		t.Fatalf("expected invalid custodian trust-root public key error, got %v", err)
+	}
+}
+
+func TestServiceAcceptsMixedCaseDepositorTrustRootConfig(t *testing.T) {
+	handle := newMemoryHandle()
+	migrationDestination := validMigrationDestination()
+
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithDepositorTrustRoots([]DepositorTrustRoot{
+			{
+				Route:     TemplateSelfV1,
+				Reserve:   mixedCaseHexBody(migrationDestination.Reserve),
+				Network:   strings.ToUpper(migrationDestination.Network),
+				PublicKey: mixedCaseHexBody(testDepositorPublicKey),
+			},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_self_trust_root_mixed_case_config",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServicePollAcceptsEquivalentArtifactApprovalRequestVariants(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{
+		submit: func(*Job) (*Transition, error) {
+			return &Transition{State: JobStatePending, Detail: "queued"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	submitRequest := equivalentArtifactApprovalVariantFromRequest(
+		t,
+		canonicalArtifactApprovalRequest(TemplateQcV1),
+	)
+	submitResult, err := service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
+		RouteRequestID: "orq_equivalent_digest",
+		Stage:          StageSignerCoordination,
+		Request:        submitRequest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pollResult, err := service.Poll(context.Background(), TemplateQcV1, SignerPollInput{
+		RouteRequestID: "orq_equivalent_digest",
+		RequestID:      submitResult.RequestID,
+		Stage:          StageSignerCoordination,
+		Request:        canonicalArtifactApprovalRequest(TemplateQcV1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if pollResult.Status != StepStatusPending {
+		t.Fatalf("expected PENDING, got %#v", pollResult)
+	}
+}
+
+func TestServiceStoresNormalizedArtifactApprovalRequest(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := equivalentArtifactApprovalVariantFromRequest(
+		t,
+		canonicalArtifactApprovalRequest(TemplateQcV1),
+	)
+	_, err = service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
+		RouteRequestID: "orq_normalized_store",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	job, ok, err := service.store.GetByRouteRequest(TemplateQcV1, "orq_normalized_store")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected stored job")
+	}
+
+	expected := canonicalArtifactApprovalRequest(TemplateQcV1)
+	if !reflect.DeepEqual(job.Request, expected) {
+		t.Fatalf("expected normalized request %#v, got %#v", expected, job.Request)
+	}
+}
+
+func TestRequestDigestRejectsArtifactApprovalsWithoutMigrationTransactionPlan(t *testing.T) {
+	request := canonicalArtifactApprovalRequest(TemplateSelfV1)
+	request.MigrationTransactionPlan = nil
+
+	_, err := requestDigest(request)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.migrationTransactionPlan is required when request.artifactApprovals is present",
+	) {
+		t.Fatalf("expected missing plan error, got %v", err)
+	}
+}
+
+func TestArtifactApprovalDigestMatchesPhase1Contract(t *testing.T) {
+	expectedDigests := map[TemplateID]string{
+		TemplateQcV1:   "0x4e1c72624e85c41d8d8a050d75704dc881ec6cd2dcfe1d240052887feef87ad8",
+		TemplateSelfV1: "0x960d7082d6eac550d7647d8fbeb90781e6cbd001b4d433e6635aa447dd937e79",
+	}
+
+	for _, route := range []TemplateID{TemplateQcV1, TemplateSelfV1} {
+		t.Run(string(route), func(t *testing.T) {
+			request := canonicalArtifactApprovalRequest(route)
+
+			digest, err := artifactApprovalDigest(request.ArtifactApprovals.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			actualDigest := "0x" + hex.EncodeToString(digest)
+			if actualDigest != expectedDigests[route] {
+				t.Fatalf("expected digest %s, got %s", expectedDigests[route], actualDigest)
+			}
+		})
+	}
+}
+
+func TestApprovalContractVectorsMatchExpectedRequestDigests(t *testing.T) {
+	for _, route := range []TemplateID{TemplateQcV1, TemplateSelfV1} {
+		t.Run(string(route), func(t *testing.T) {
+			request, expectedApprovalDigest, expectedDigest := loadApprovalContractVector(t, route)
+
+			digestBytes, err := artifactApprovalDigest(request.ArtifactApprovals.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if actualApprovalDigest := "0x" + hex.EncodeToString(digestBytes); actualApprovalDigest != expectedApprovalDigest {
+				t.Fatalf(
+					"expected approval digest %s, got %s",
+					expectedApprovalDigest,
+					actualApprovalDigest,
+				)
+			}
+
+			digest, err := requestDigest(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if digest != expectedDigest {
+				t.Fatalf("expected digest %s, got %s", expectedDigest, digest)
+			}
+		})
+	}
+}
+
+func TestApprovalContractVectorsNormalizeEquivalentVariants(t *testing.T) {
+	for _, route := range []TemplateID{TemplateQcV1, TemplateSelfV1} {
+		t.Run(string(route), func(t *testing.T) {
+			canonicalRequest, _, expectedDigest := loadApprovalContractVector(t, route)
+
+			normalizedCanonical, err := normalizeRouteSubmitRequest(canonicalRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			variantRequest := equivalentArtifactApprovalVariantFromRequest(
+				t,
+				canonicalRequest,
+			)
+			normalizedVariant, err := normalizeRouteSubmitRequest(variantRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if !reflect.DeepEqual(normalizedVariant, normalizedCanonical) {
+				t.Fatalf(
+					"expected normalized variant %#v, got %#v",
+					normalizedCanonical,
+					normalizedVariant,
+				)
+			}
+
+			digest, err := requestDigest(variantRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if digest != expectedDigest {
+				t.Fatalf("expected digest %s, got %s", expectedDigest, digest)
+			}
+		})
+	}
+}
+
+func TestRequestDigestNormalizesMixedCaseArtifactApprovalVariants(t *testing.T) {
+	for _, route := range []TemplateID{TemplateQcV1, TemplateSelfV1} {
+		t.Run(string(route), func(t *testing.T) {
+			canonicalRequest := canonicalMixedCaseCoverageArtifactApprovalRequest(t, route)
+			mixedCaseRequest := mixedCaseArtifactApprovalVariantFromRequest(
+				t,
+				canonicalRequest,
+			)
+
+			if mixedCaseRequest.Reserve == canonicalRequest.Reserve {
+				t.Fatalf(
+					"expected mixed-case reserve variant, got %s",
+					mixedCaseRequest.Reserve,
+				)
+			}
+
+			normalizedCanonical, err := normalizeRouteSubmitRequest(canonicalRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			normalizedMixedCase, err := normalizeRouteSubmitRequest(mixedCaseRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if !reflect.DeepEqual(normalizedMixedCase, normalizedCanonical) {
+				t.Fatalf(
+					"expected normalized mixed-case request %#v, got %#v",
+					normalizedCanonical,
+					normalizedMixedCase,
+				)
+			}
+
+			canonicalDigest, err := requestDigest(canonicalRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mixedCaseDigest, err := requestDigest(mixedCaseRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if mixedCaseDigest != canonicalDigest {
+				t.Fatalf(
+					"expected matching digest %s, got %s",
+					canonicalDigest,
+					mixedCaseDigest,
+				)
 			}
 		})
 	}
@@ -1443,6 +3158,10 @@ func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
 	defer server.Close()
 
 	base := baseRequest(TemplateSelfV1)
+	template := &SelfV1Template{}
+	if err := strictUnmarshal(base.ScriptTemplate, template); err != nil {
+		t.Fatal(err)
+	}
 	payload := bytes.NewBufferString(fmt.Sprintf(`{
 		"routeRequestId":"ors_http_unknown",
 		"stage":"SIGNER_COORDINATION",
@@ -1480,14 +3199,36 @@ func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
 				"inputSequence":4294967293,
 				"lockTime":912345
 			},
-			"artifactSignatures":["0x0708"],
+			"artifactApprovals":{
+				"payload":{
+					"approvalVersion":1,
+					"route":"self_v1",
+					"scriptTemplateId":"self_v1",
+					"destinationCommitmentHash":"%s",
+					"planCommitmentHash":"%s"
+				},
+				"approvals":[
+					{"role":"D","signature":"%s"}
+				]
+			},
+			"artifactSignatures":["%s"],
 			"artifacts":{},
-			"scriptTemplate":{"template":"self_v1","depositorPublicKey":"0x021111","signerPublicKey":"0x022222","delta2":4320},
+			"scriptTemplate":{"template":"self_v1","depositorPublicKey":"%s","signerPublicKey":"%s","delta2":4320},
 			"signing":{"signerRequired":true,"custodianRequired":false},
 			"futureField":"ignored"
 		},
 		"futureTopLevel":"ignored"
-	}`, base.DestinationCommitmentHash, base.DestinationCommitmentHash, base.MigrationTransactionPlan.PlanCommitmentHash))
+	}`,
+		base.DestinationCommitmentHash,
+		base.DestinationCommitmentHash,
+		base.MigrationTransactionPlan.PlanCommitmentHash,
+		base.ArtifactApprovals.Payload.DestinationCommitmentHash,
+		base.ArtifactApprovals.Payload.PlanCommitmentHash,
+		base.ArtifactApprovals.Approvals[0].Signature,
+		base.ArtifactSignatures[0],
+		template.DepositorPublicKey,
+		template.SignerPublicKey,
+	))
 
 	response, err := http.Post(server.URL+"/v1/self_v1/signer/requests", "application/json", payload)
 	if err != nil {

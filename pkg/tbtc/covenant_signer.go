@@ -42,6 +42,124 @@ func newCovenantSignerEngine(node *node) covenantsigner.Engine {
 	return &covenantSignerEngine{node: node}
 }
 
+func (cse *covenantSignerEngine) VerifySignerApproval(
+	request covenantsigner.RouteSubmitRequest,
+) error {
+	if request.SignerApproval == nil {
+		return covenantsigner.NewInputError(
+			"request.signerApproval is required for signer approval verification",
+		)
+	}
+	if request.ArtifactApprovals == nil {
+		return covenantsigner.NewInputError(
+			"request.artifactApprovals is required for signer approval verification",
+		)
+	}
+
+	expectedApprovalDigest, err := covenantsigner.ComputeArtifactApprovalDigest(
+		request.ArtifactApprovals.Payload,
+	)
+	if err != nil {
+		return covenantsigner.NewInputError(
+			fmt.Sprintf(
+				"request.artifactApprovals.payload is invalid for signer approval verification: %v",
+				err,
+			),
+		)
+	}
+	if !strings.EqualFold(
+		request.SignerApproval.ApprovalDigest,
+		"0x"+hex.EncodeToString(expectedApprovalDigest),
+	) {
+		return covenantsigner.NewInputError(
+			"request.signerApproval.approvalDigest must match request.artifactApprovals.payload",
+		)
+	}
+
+	signerPublicKey, err := cse.resolveSignerApprovalTemplatePublicKey(request)
+	if err != nil {
+		return covenantsigner.NewInputError(err.Error())
+	}
+
+	expectedWalletPublicKeyBytes, err := marshalPublicKey(signerPublicKey)
+	if err != nil {
+		return fmt.Errorf(
+			"cannot marshal signer public key for signer approval verification: %w",
+			err,
+		)
+	}
+
+	expectedWalletPublicKey := "0x" + hex.EncodeToString(expectedWalletPublicKeyBytes)
+	if !strings.EqualFold(
+		request.SignerApproval.WalletPublicKey,
+		expectedWalletPublicKey,
+	) {
+		return covenantsigner.NewInputError(
+			"request.signerApproval.walletPublicKey must match request.scriptTemplate.signerPublicKey",
+		)
+	}
+
+	walletChainData, err := cse.node.chain.GetWallet(
+		bitcoin.PublicKeyHash(signerPublicKey),
+	)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no wallet") {
+			return covenantsigner.NewInputError(
+				"request.signerApproval.walletPublicKey must resolve to a registered on-chain wallet",
+			)
+		}
+
+		return fmt.Errorf(
+			"cannot resolve on-chain wallet for signer approval verification: %w",
+			err,
+		)
+	}
+
+	expectedSignerSetHash, err := computeSignerApprovalCertificateSignerSetHash(
+		signerPublicKey,
+		walletChainData,
+		cse.node.groupParameters,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"cannot compute signer approval signer set hash: %w",
+			err,
+		)
+	}
+
+	if err := verifySignerApprovalCertificate(
+		request.SignerApproval,
+		expectedSignerSetHash,
+	); err != nil {
+		return covenantsigner.NewInputError(
+			fmt.Sprintf("request.signerApproval is invalid: %v", err),
+		)
+	}
+
+	return nil
+}
+
+func (cse *covenantSignerEngine) resolveSignerApprovalTemplatePublicKey(
+	request covenantsigner.RouteSubmitRequest,
+) (*ecdsa.PublicKey, error) {
+	switch request.Route {
+	case covenantsigner.TemplateSelfV1:
+		template, err := decodeSelfV1Template(request.ScriptTemplate)
+		if err != nil {
+			return nil, err
+		}
+		return parseCompressedPublicKey(template.SignerPublicKey)
+	case covenantsigner.TemplateQcV1:
+		template, err := decodeQcV1Template(request.ScriptTemplate)
+		if err != nil {
+			return nil, err
+		}
+		return parseCompressedPublicKey(template.SignerPublicKey)
+	default:
+		return nil, fmt.Errorf("unsupported covenant route")
+	}
+}
+
 func (cse *covenantSignerEngine) OnSubmit(
 	ctx context.Context,
 	job *covenantsigner.Job,

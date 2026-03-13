@@ -414,6 +414,7 @@ type DepositChainRequest struct {
 // WalletChainData represents wallet data stored on-chain.
 type WalletChainData struct {
 	EcdsaWalletID                          [32]byte
+	MembersIDsHash                         [32]byte
 	MainUtxoHash                           [32]byte
 	PendingRedemptionsValue                uint64
 	CreatedAt                              time.Time

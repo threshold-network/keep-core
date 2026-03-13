@@ -112,12 +112,59 @@ type MigrationTransactionPlan struct {
 	LockTime             uint32 `json:"lockTime"`
 }
 
+type MigrationDestinationPlanQuoteSignature struct {
+	SignatureVersion uint32 `json:"signatureVersion"`
+	Algorithm        string `json:"algorithm"`
+	KeyID            string `json:"keyId"`
+	Signature        string `json:"signature"`
+}
+
+type MigrationDestinationPlanQuote struct {
+	QuoteID                   string                                 `json:"quoteId"`
+	QuoteVersion              uint32                                 `json:"quoteVersion"`
+	ReservationID             string                                 `json:"reservationId"`
+	Reserve                   string                                 `json:"reserve"`
+	Epoch                     uint64                                 `json:"epoch"`
+	Route                     ReservationRoute                       `json:"route"`
+	Revealer                  string                                 `json:"revealer"`
+	Vault                     string                                 `json:"vault"`
+	Network                   string                                 `json:"network"`
+	DestinationCommitmentHash string                                 `json:"destinationCommitmentHash"`
+	ActiveOutpointTxID        string                                 `json:"activeOutpointTxid"`
+	ActiveOutpointVout        uint32                                 `json:"activeOutpointVout"`
+	PlanCommitmentHash        string                                 `json:"planCommitmentHash"`
+	MigrationTransactionPlan  *MigrationTransactionPlan              `json:"migrationTransactionPlan"`
+	IdempotencyKey            string                                 `json:"idempotencyKey"`
+	ExpiresInSeconds          uint64                                 `json:"expiresInSeconds"`
+	IssuedAt                  string                                 `json:"issuedAt"`
+	ExpiresAt                 string                                 `json:"expiresAt"`
+	Signature                 MigrationDestinationPlanQuoteSignature `json:"signature"`
+}
+
+type MigrationPlanQuoteTrustRoot struct {
+	KeyID        string `json:"keyId" mapstructure:"keyId"`
+	PublicKeyPEM string `json:"publicKeyPem" mapstructure:"publicKeyPem"`
+}
+
+type DepositorTrustRoot struct {
+	Route     TemplateID `json:"route" mapstructure:"route"`
+	Reserve   string     `json:"reserve" mapstructure:"reserve"`
+	Network   string     `json:"network" mapstructure:"network"`
+	PublicKey string     `json:"publicKey" mapstructure:"publicKey"`
+}
+
+type CustodianTrustRoot struct {
+	Route     TemplateID `json:"route" mapstructure:"route"`
+	Reserve   string     `json:"reserve" mapstructure:"reserve"`
+	Network   string     `json:"network" mapstructure:"network"`
+	PublicKey string     `json:"publicKey" mapstructure:"publicKey"`
+}
+
 type ArtifactApprovalRole string
 
 const (
 	ArtifactApprovalRoleDepositor ArtifactApprovalRole = "D"
 	ArtifactApprovalRoleCustodian ArtifactApprovalRole = "C"
-	ArtifactApprovalRoleSigner    ArtifactApprovalRole = "S"
 )
 
 type ArtifactApprovalPayload struct {
@@ -138,6 +185,18 @@ type ArtifactApprovalEnvelope struct {
 	Approvals []ArtifactRoleApproval  `json:"approvals"`
 }
 
+type SignerApprovalCertificate struct {
+	CertificateVersion uint32   `json:"certificateVersion"`
+	SignatureAlgorithm string   `json:"signatureAlgorithm"`
+	ApprovalDigest     string   `json:"approvalDigest"`
+	WalletPublicKey    string   `json:"walletPublicKey"`
+	SignerSetHash      string   `json:"signerSetHash"`
+	Signature          string   `json:"signature"`
+	ActiveMembers      []uint32 `json:"activeMembers,omitempty"`
+	InactiveMembers    []uint32 `json:"inactiveMembers,omitempty"`
+	EndBlock           *uint64  `json:"endBlock,omitempty"`
+}
+
 type SigningRequirements struct {
 	SignerRequired    bool `json:"signerRequired"`
 	CustodianRequired bool `json:"custodianRequired"`
@@ -154,8 +213,10 @@ type RouteSubmitRequest struct {
 	ActiveOutpoint            CovenantOutpoint                  `json:"activeOutpoint"`
 	DestinationCommitmentHash string                            `json:"destinationCommitmentHash"`
 	MigrationDestination      *MigrationDestinationReservation  `json:"migrationDestination,omitempty"`
+	MigrationPlanQuote        *MigrationDestinationPlanQuote    `json:"migrationPlanQuote,omitempty"`
 	MigrationTransactionPlan  *MigrationTransactionPlan         `json:"migrationTransactionPlan,omitempty"`
 	ArtifactApprovals         *ArtifactApprovalEnvelope         `json:"artifactApprovals,omitempty"`
+	SignerApproval            *SignerApprovalCertificate        `json:"signerApproval,omitempty"`
 	ArtifactSignatures        []string                          `json:"artifactSignatures"`
 	Artifacts                 map[RecoveryPathID]ArtifactRecord `json:"artifacts"`
 	ScriptTemplate            json.RawMessage                   `json:"scriptTemplate"`

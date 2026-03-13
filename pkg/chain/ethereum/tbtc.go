@@ -1464,7 +1464,16 @@ func (tc *TbtcChain) GetWallet(
 	if wallet.CreatedAt == 0 {
 		return nil, fmt.Errorf(
 			"no wallet for public key hash [0x%x]",
-			wallet,
+			walletPublicKeyHash,
+		)
+	}
+
+	walletRegistryWallet, err := tc.walletRegistry.GetWallet(wallet.EcdsaWalletID)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot get wallet registry data for wallet [0x%x]: [%v]",
+			wallet.EcdsaWalletID,
+			err,
 		)
 	}
 
@@ -1475,6 +1484,7 @@ func (tc *TbtcChain) GetWallet(
 
 	return &tbtc.WalletChainData{
 		EcdsaWalletID:                          wallet.EcdsaWalletID,
+		MembersIDsHash:                         walletRegistryWallet.MembersIdsHash,
 		MainUtxoHash:                           wallet.MainUtxoHash,
 		PendingRedemptionsValue:                wallet.PendingRedemptionsValue,
 		CreatedAt:                              time.Unix(int64(wallet.CreatedAt), 0),

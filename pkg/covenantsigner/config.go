@@ -15,4 +15,14 @@ type Config struct {
 	// EnableSelfV1 exposes the self_v1 signer HTTP routes. Keep this disabled
 	// for a qc_v1-first launch unless self_v1 has cleared its own go-live gate.
 	EnableSelfV1 bool
+	// MigrationPlanQuoteTrustRoots configures the destination-service plan-quote
+	// trust roots used to verify migration plan quotes when the quote authority
+	// path is enabled.
+	MigrationPlanQuoteTrustRoots []MigrationPlanQuoteTrustRoot `mapstructure:"migrationPlanQuoteTrustRoots"`
+	// DepositorTrustRoots configures independently pinned depositor public keys
+	// by route/reserve/network for self_v1 approval verification.
+	DepositorTrustRoots []DepositorTrustRoot `mapstructure:"depositorTrustRoots"`
+	// CustodianTrustRoots configures independently pinned custodian public keys
+	// by route/reserve/network for qc_v1 approval verification.
+	CustodianTrustRoots []CustodianTrustRoot `mapstructure:"custodianTrustRoots"`
 }

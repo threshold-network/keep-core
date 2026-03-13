@@ -48,9 +48,50 @@ func Initialize(
 		)
 	}
 
-	service, err := NewService(handle, engine)
+	service, err := NewService(
+		handle,
+		engine,
+		WithMigrationPlanQuoteTrustRoots(config.MigrationPlanQuoteTrustRoots),
+		WithDepositorTrustRoots(config.DepositorTrustRoots),
+		WithCustodianTrustRoots(config.CustodianTrustRoots),
+	)
 	if err != nil {
 		return nil, false, err
+	}
+	if service.signerApprovalVerifier == nil {
+		logger.Warn(
+			"covenant signer started without a signer approval verifier; " +
+				"structured signerApproval certificates will not be verified and " +
+				"requests without signerApproval will be accepted",
+		)
+	}
+	if config.EnableSelfV1 &&
+		!hasDepositorTrustRootForRoute(
+			service.depositorTrustRoots,
+			TemplateSelfV1,
+		) {
+		logger.Warn(
+			"covenant signer self_v1 routes are enabled without depositorTrustRoots; " +
+				"self_v1 depositor approvals still rely on request-supplied scriptTemplate keys",
+		)
+	}
+	if !hasDepositorTrustRootForRoute(
+		service.depositorTrustRoots,
+		TemplateQcV1,
+	) {
+		logger.Warn(
+			"covenant signer started without qc_v1 depositorTrustRoots; " +
+				"qc_v1 depositor approvals still rely on request-supplied scriptTemplate keys",
+		)
+	}
+	if !hasCustodianTrustRootForRoute(
+		service.custodianTrustRoots,
+		TemplateQcV1,
+	) {
+		logger.Warn(
+			"covenant signer started without custodianTrustRoots; " +
+				"qc_v1 custodian approvals still rely on request-supplied scriptTemplate keys",
+		)
 	}
 
 	server := &Server{
@@ -92,6 +133,32 @@ func Initialize(
 	)
 
 	return server, true, nil
+}
+
+func hasDepositorTrustRootForRoute(
+	trustRoots []DepositorTrustRoot,
+	route TemplateID,
+) bool {
+	for _, trustRoot := range trustRoots {
+		if trustRoot.Route == route {
+			return true
+		}
+	}
+
+	return false
+}
+
+func hasCustodianTrustRootForRoute(
+	trustRoots []CustodianTrustRoot,
+	route TemplateID,
+) bool {
+	for _, trustRoot := range trustRoots {
+		if trustRoot.Route == route {
+			return true
+		}
+	}
+
+	return false
 }
 
 func newHandler(service *Service, authToken string, enableSelfV1 bool) http.Handler {
