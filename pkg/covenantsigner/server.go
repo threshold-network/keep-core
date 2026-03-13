@@ -75,6 +75,15 @@ func Initialize(
 				"self_v1 depositor approvals still rely on request-supplied scriptTemplate keys",
 		)
 	}
+	if !hasDepositorTrustRootForRoute(
+		service.depositorTrustRoots,
+		TemplateQcV1,
+	) {
+		logger.Warn(
+			"covenant signer started without qc_v1 depositorTrustRoots; " +
+				"qc_v1 depositor approvals still rely on request-supplied scriptTemplate keys",
+		)
+	}
 	if !hasCustodianTrustRootForRoute(
 		service.custodianTrustRoots,
 		TemplateQcV1,

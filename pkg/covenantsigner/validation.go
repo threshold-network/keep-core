@@ -1770,6 +1770,25 @@ func validateCommonRequest(
 			return err
 		}
 
+		depositorPublicKey := template.DepositorPublicKey
+		if len(resolvedOptions.depositorTrustRoots) > 0 {
+			expectedDepositorPublicKey, ok := resolveExpectedDepositorPublicKey(
+				request,
+				resolvedOptions.depositorTrustRoots,
+			)
+			if !ok {
+				return &inputError{
+					"request.scriptTemplate.depositorPublicKey requires a matching configured depositorTrustRoots entry for qc_v1",
+				}
+			}
+			if normalizeLowerHex(template.DepositorPublicKey) != expectedDepositorPublicKey {
+				return &inputError{
+					"request.scriptTemplate.depositorPublicKey must match the configured depositorTrustRoots publicKey for qc_v1",
+				}
+			}
+			depositorPublicKey = expectedDepositorPublicKey
+		}
+
 		custodianPublicKey := template.CustodianPublicKey
 		if len(resolvedOptions.custodianTrustRoots) > 0 {
 			expectedCustodianPublicKey, ok := resolveExpectedCustodianPublicKey(
@@ -1791,7 +1810,7 @@ func validateCommonRequest(
 
 		if err := validateArtifactApprovalAuthenticity(
 			request,
-			template.DepositorPublicKey,
+			depositorPublicKey,
 			custodianPublicKey,
 		); err != nil {
 			return err
