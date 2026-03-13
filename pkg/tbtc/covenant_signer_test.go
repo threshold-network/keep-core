@@ -999,12 +999,14 @@ func setupCovenantSignerTestNode(
 	if err != nil {
 		t.Fatal(err)
 	}
+	membersIDsHash := sha256.Sum256([]byte("covenant-signer-test-members"))
 
 	localChain.setWallet(
 		walletPublicKeyHash,
 		&WalletChainData{
-			EcdsaWalletID: walletID,
-			State:         StateLive,
+			EcdsaWalletID:  walletID,
+			MembersIDsHash: membersIDsHash,
+			State:          StateLive,
 		},
 	)
 

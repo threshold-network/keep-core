@@ -394,6 +394,7 @@ func (n *node) getSigningExecutor(
 	}
 
 	executor := newSigningExecutor(
+		n.chain,
 		signers,
 		broadcastChannel,
 		membershipValidator,
