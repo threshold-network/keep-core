@@ -3,6 +3,7 @@
   "scope": "covenant_recovery_approval_contract_v1",
   "vectors": {
     "qc_v1": {
+      "expectedApprovalDigest": "0xa6ffb42318a8e8b3b9669324ee5ad393133afcc9cc81044739cbaa77d5fa34c9",
       "canonicalSubmitRequest": {
         "facadeRequestId": "rf_vector_qc_v1",
         "idempotencyKey": "idem-qc-vector-v1",
@@ -57,12 +58,19 @@
             {
               "role": "C",
               "signature": "0xc0c0"
-            },
-            {
-              "role": "S",
-              "signature": "0x5050"
             }
           ]
+        },
+        "signerApproval": {
+          "certificateVersion": 1,
+          "signatureAlgorithm": "tecdsa-secp256k1",
+          "approvalDigest": "0xa6ffb42318a8e8b3b9669324ee5ad393133afcc9cc81044739cbaa77d5fa34c9",
+          "walletPublicKey": "0x04d140d1eedb94f53ce43e0f4d68e8e0de6d6f2a444ef98f2a0e6c0f7fca02ef7dc4cb14e7b0f7c23787c93ca4d978f312c64379f38d9f52f86d1a89f0f8572f9f",
+          "signerSetHash": "0xabababababababababababababababababababababababababababababababab",
+          "signature": "0x5050",
+          "activeMembers": [1, 2, 3],
+          "inactiveMembers": [4, 5],
+          "endBlock": 123
         },
         "artifactSignatures": [
           "0xd0d0",
@@ -83,9 +91,10 @@
           "custodianRequired": true
         }
       },
-      "expectedRequestDigest": "0x4bb14155042065021708e80e35470a27640d68fc3e2a642c3cb2823595ea66b1"
+      "expectedRequestDigest": "0x1a435b7fda4d048b8b4b9fb1448c14f581d4b3e38ddfe526b17b3c5ef719498c"
     },
     "self_v1": {
+      "expectedApprovalDigest": "0x4820468d065bc627dabac7860ef473ed28806d6352ba3459ff4edfb81e6bb752",
       "canonicalSubmitRequest": {
         "facadeRequestId": "rf_vector_self_v1",
         "idempotencyKey": "idem-self-vector-v1",
@@ -136,12 +145,19 @@
             {
               "role": "D",
               "signature": "0xd0d0"
-            },
-            {
-              "role": "S",
-              "signature": "0x5050"
             }
           ]
+        },
+        "signerApproval": {
+          "certificateVersion": 1,
+          "signatureAlgorithm": "tecdsa-secp256k1",
+          "approvalDigest": "0x4820468d065bc627dabac7860ef473ed28806d6352ba3459ff4edfb81e6bb752",
+          "walletPublicKey": "0x04d140d1eedb94f53ce43e0f4d68e8e0de6d6f2a444ef98f2a0e6c0f7fca02ef7dc4cb14e7b0f7c23787c93ca4d978f312c64379f38d9f52f86d1a89f0f8572f9f",
+          "signerSetHash": "0xabababababababababababababababababababababababababababababababab",
+          "signature": "0x5050",
+          "activeMembers": [1, 2, 3],
+          "inactiveMembers": [4, 5],
+          "endBlock": 123
         },
         "artifactSignatures": [
           "0xd0d0",
@@ -159,7 +175,7 @@
           "custodianRequired": false
         }
       },
-      "expectedRequestDigest": "0x38c86be37817a1d4ec87bf5ec41a9022f44a03e08d7195c4280b7b91eae5bce2"
+      "expectedRequestDigest": "0xb5cd6a894a8e6bb5e68310e9c43560e91de1fc62bf0acf73b63e882332b2138a"
     }
   }
 }

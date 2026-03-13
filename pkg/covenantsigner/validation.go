@@ -1537,6 +1537,11 @@ func validateCommonRequest(
 	if request.ArtifactApprovals == nil {
 		return &inputError{"request.artifactApprovals is required"}
 	}
+	if resolvedOptions.signerApprovalVerifier != nil && request.SignerApproval == nil {
+		return &inputError{
+			"request.signerApproval is required when request.artifactApprovals is present",
+		}
+	}
 	if err := validateArtifactApprovals(route, request); err != nil {
 		return err
 	}

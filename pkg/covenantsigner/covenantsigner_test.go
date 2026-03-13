@@ -102,6 +102,7 @@ func mustJSON(t *testing.T, value any) []byte {
 
 type approvalContractVector struct {
 	CanonicalSubmitRequest json.RawMessage `json:"canonicalSubmitRequest"`
+	ExpectedApprovalDigest string          `json:"expectedApprovalDigest"`
 	ExpectedRequestDigest  string          `json:"expectedRequestDigest"`
 }
 
@@ -129,7 +130,7 @@ type migrationPlanQuoteSigningVectorsFile struct {
 func loadApprovalContractVector(
 	t *testing.T,
 	route TemplateID,
-) (RouteSubmitRequest, string) {
+) (RouteSubmitRequest, string, string) {
 	t.Helper()
 
 	data, err := os.ReadFile("testdata/covenant_recovery_approval_vectors_v1.json")
@@ -158,7 +159,7 @@ func loadApprovalContractVector(
 		t.Fatal(err)
 	}
 
-	return request, vector.ExpectedRequestDigest
+	return request, vector.ExpectedApprovalDigest, vector.ExpectedRequestDigest
 }
 
 func loadMigrationPlanQuoteSigningVectors(
@@ -1839,19 +1840,29 @@ func TestServiceRejectsMigrationTransactionPlanBoundToDifferentDestinationCommit
 	}
 }
 
-func TestServiceAcceptsArtifactApprovalsWithCanonicalLegacySignatures(t *testing.T) {
+func TestServiceAcceptsStructuredSignerApprovalWithCanonicalLegacySignatures(t *testing.T) {
 	handle := newMemoryHandle()
-	service, err := NewService(handle, &scriptedEngine{})
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithSignerApprovalVerifier(SignerApprovalVerifierFunc(func(RouteSubmitRequest) error {
+			return nil
+		})),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	request := baseRequest(TemplateQcV1)
+	request := structuredSignerApprovalRequest(TemplateQcV1)
 	request.ArtifactApprovals.Approvals = []ArtifactRoleApproval{
-		request.ArtifactApprovals.Approvals[2],
 		request.ArtifactApprovals.Approvals[0],
 		request.ArtifactApprovals.Approvals[1],
 	}
+	request.ArtifactSignatures = canonicalArtifactSignaturesWithSignerApproval(
+		request.Route,
+		request.ArtifactApprovals,
+		request.SignerApproval,
+	)
 
 	result, err := service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
 		RouteRequestID: "orq_artifact_approvals",
@@ -1957,6 +1968,34 @@ func TestServiceRejectsStructuredSignerApprovalWithoutVerifier(t *testing.T) {
 		"request.signerApproval cannot be verified by this signer deployment",
 	) {
 		t.Fatalf("expected unsupported signer approval error, got %v", err)
+	}
+}
+
+func TestServiceRejectsLegacySignerApprovalPathWhenVerifierConfigured(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithSignerApprovalVerifier(SignerApprovalVerifierFunc(func(RouteSubmitRequest) error {
+			return nil
+		})),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := baseRequest(TemplateSelfV1)
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_legacy_signer_approval_path",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.signerApproval is required when request.artifactApprovals is present",
+	) {
+		t.Fatalf("expected missing signer approval error, got %v", err)
 	}
 }
 
@@ -2444,40 +2483,6 @@ func TestServicePollAcceptsStoredMigrationPlanQuoteAfterQuoteExpiry(t *testing.T
 	}
 }
 
-func TestServiceAcceptsKnownBadSignerApprovalSignatureInPhase1(t *testing.T) {
-	handle := newMemoryHandle()
-	service, err := NewService(
-		handle,
-		&scriptedEngine{},
-		WithMigrationPlanQuoteTrustRoots([]MigrationPlanQuoteTrustRoot{
-			testMigrationPlanQuoteTrustRoot,
-		}),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	request := requestWithValidMigrationPlanQuote(TemplateSelfV1)
-	for i := range request.ArtifactApprovals.Approvals {
-		if request.ArtifactApprovals.Approvals[i].Role == ArtifactApprovalRoleSigner {
-			request.ArtifactApprovals.Approvals[i].Signature = "0xdeadbeef"
-		}
-	}
-	request.ArtifactSignatures = canonicalArtifactSignatures(
-		request.Route,
-		request.ArtifactApprovals,
-	)
-
-	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
-		RouteRequestID: "ors_signer_gap",
-		Stage:          StageSignerCoordination,
-		Request:        request,
-	})
-	if err != nil {
-		t.Fatalf("expected phase-1 signer approval gap to remain non-fatal, got %v", err)
-	}
-}
-
 func TestServicePollAcceptsEquivalentArtifactApprovalRequestVariants(t *testing.T) {
 	handle := newMemoryHandle()
 	service, err := NewService(handle, &scriptedEngine{
@@ -2584,7 +2589,19 @@ func TestArtifactApprovalDigestMatchesPhase1Contract(t *testing.T) {
 func TestApprovalContractVectorsMatchExpectedRequestDigests(t *testing.T) {
 	for _, route := range []TemplateID{TemplateQcV1, TemplateSelfV1} {
 		t.Run(string(route), func(t *testing.T) {
-			request, expectedDigest := loadApprovalContractVector(t, route)
+			request, expectedApprovalDigest, expectedDigest := loadApprovalContractVector(t, route)
+
+			digestBytes, err := artifactApprovalDigest(request.ArtifactApprovals.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if actualApprovalDigest := "0x" + hex.EncodeToString(digestBytes); actualApprovalDigest != expectedApprovalDigest {
+				t.Fatalf(
+					"expected approval digest %s, got %s",
+					expectedApprovalDigest,
+					actualApprovalDigest,
+				)
+			}
 
 			digest, err := requestDigest(request)
 			if err != nil {
@@ -2601,7 +2618,7 @@ func TestApprovalContractVectorsMatchExpectedRequestDigests(t *testing.T) {
 func TestApprovalContractVectorsNormalizeEquivalentVariants(t *testing.T) {
 	for _, route := range []TemplateID{TemplateQcV1, TemplateSelfV1} {
 		t.Run(string(route), func(t *testing.T) {
-			canonicalRequest, expectedDigest := loadApprovalContractVector(t, route)
+			canonicalRequest, _, expectedDigest := loadApprovalContractVector(t, route)
 
 			normalizedCanonical, err := normalizeRouteSubmitRequest(canonicalRequest)
 			if err != nil {
