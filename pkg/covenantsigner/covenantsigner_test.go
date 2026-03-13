@@ -163,6 +163,32 @@ func baseRequest(route TemplateID) RouteSubmitRequest {
 	return request
 }
 
+func validArtifactApprovals(request RouteSubmitRequest) *ArtifactApprovalEnvelope {
+	approvals := []ArtifactRoleApproval{
+		{Role: ArtifactApprovalRoleDepositor, Signature: "0xd0d0"},
+		{Role: ArtifactApprovalRoleSigner, Signature: "0x5050"},
+	}
+
+	if request.Route == TemplateQcV1 {
+		approvals = []ArtifactRoleApproval{
+			{Role: ArtifactApprovalRoleDepositor, Signature: "0xd0d0"},
+			{Role: ArtifactApprovalRoleCustodian, Signature: "0xc0c0"},
+			{Role: ArtifactApprovalRoleSigner, Signature: "0x5050"},
+		}
+	}
+
+	return &ArtifactApprovalEnvelope{
+		Payload: ArtifactApprovalPayload{
+			ApprovalVersion:           artifactApprovalVersion,
+			Route:                     request.Route,
+			ScriptTemplateID:          request.Route,
+			DestinationCommitmentHash: request.DestinationCommitmentHash,
+			PlanCommitmentHash:        request.MigrationTransactionPlan.PlanCommitmentHash,
+		},
+		Approvals: approvals,
+	}
+}
+
 func validMigrationDestination() *MigrationDestinationReservation {
 	reservation := &MigrationDestinationReservation{
 		ReservationID: "cmdr_12345678",
@@ -1092,6 +1118,134 @@ func TestServiceRejectsMigrationTransactionPlanBoundToDifferentDestinationCommit
 	})
 	if err == nil || !strings.Contains(err.Error(), "request.migrationTransactionPlan.planCommitmentHash does not match canonical migration transaction plan") {
 		t.Fatalf("expected plan binding error, got %v", err)
+	}
+}
+
+func TestServiceAcceptsArtifactApprovalsWithCanonicalLegacySignatures(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := baseRequest(TemplateQcV1)
+	request.ArtifactApprovals = validArtifactApprovals(request)
+	request.ArtifactApprovals.Approvals = []ArtifactRoleApproval{
+		request.ArtifactApprovals.Approvals[2],
+		request.ArtifactApprovals.Approvals[0],
+		request.ArtifactApprovals.Approvals[1],
+	}
+	request.ArtifactSignatures = []string{"0xd0d0", "0xc0c0", "0x5050"}
+
+	result, err := service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
+		RouteRequestID: "orq_artifact_approvals",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Status != StepStatusPending {
+		t.Fatalf("expected PENDING, got %#v", result)
+	}
+
+	job, ok, err := service.store.GetByRouteRequest(TemplateQcV1, "orq_artifact_approvals")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected stored job")
+	}
+	if job.Request.ArtifactApprovals == nil {
+		t.Fatal("expected stored artifact approvals")
+	}
+}
+
+func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testCases := []struct {
+		name      string
+		route     TemplateID
+		mutate    func(request *RouteSubmitRequest)
+		expectErr string
+	}{
+		{
+			name:  "missing qc custodian approval",
+			route: TemplateQcV1,
+			mutate: func(request *RouteSubmitRequest) {
+				request.ArtifactApprovals = validArtifactApprovals(*request)
+				request.ArtifactApprovals.Approvals = []ArtifactRoleApproval{
+					request.ArtifactApprovals.Approvals[0],
+					request.ArtifactApprovals.Approvals[2],
+				}
+				request.ArtifactSignatures = []string{"0xd0d0", "0x5050"}
+			},
+			expectErr: "request.artifactApprovals.approvals must include role C for qc_v1",
+		},
+		{
+			name:  "self route rejects custodian approval role",
+			route: TemplateSelfV1,
+			mutate: func(request *RouteSubmitRequest) {
+				request.ArtifactApprovals = validArtifactApprovals(*request)
+				request.ArtifactApprovals.Approvals = []ArtifactRoleApproval{
+					request.ArtifactApprovals.Approvals[0],
+					{Role: ArtifactApprovalRoleCustodian, Signature: "0xc0c0"},
+					request.ArtifactApprovals.Approvals[1],
+				}
+				request.ArtifactSignatures = []string{"0xd0d0", "0xc0c0", "0x5050"}
+			},
+			expectErr: "request.artifactApprovals.approvals[1].role is not allowed for self_v1",
+		},
+		{
+			name:  "plan commitment mismatch",
+			route: TemplateQcV1,
+			mutate: func(request *RouteSubmitRequest) {
+				request.ArtifactApprovals = validArtifactApprovals(*request)
+				request.ArtifactApprovals.Payload.PlanCommitmentHash = "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+				request.ArtifactSignatures = []string{"0xd0d0", "0xc0c0", "0x5050"}
+			},
+			expectErr: "request.artifactApprovals.payload.planCommitmentHash must match request.migrationTransactionPlan.planCommitmentHash",
+		},
+		{
+			name:  "legacy signature mismatch",
+			route: TemplateQcV1,
+			mutate: func(request *RouteSubmitRequest) {
+				request.ArtifactApprovals = validArtifactApprovals(*request)
+				request.ArtifactSignatures = []string{"0x5050", "0xd0d0", "0xc0c0"}
+			},
+			expectErr: "request.artifactSignatures must match canonical approval role order derived from request.artifactApprovals",
+		},
+		{
+			name:  "legacy signatures remain required when approvals are present",
+			route: TemplateSelfV1,
+			mutate: func(request *RouteSubmitRequest) {
+				request.ArtifactApprovals = validArtifactApprovals(*request)
+				request.ArtifactSignatures = nil
+			},
+			expectErr: "request.artifactSignatures must not be empty",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := baseRequest(testCase.route)
+			testCase.mutate(&request)
+
+			_, err := service.Submit(context.Background(), testCase.route, SignerSubmitInput{
+				RouteRequestID: "ors_invalid_artifact_approval_" + strings.ReplaceAll(testCase.name, " ", "_"),
+				Stage:          StageSignerCoordination,
+				Request:        request,
+			})
+			if err == nil || !strings.Contains(err.Error(), testCase.expectErr) {
+				t.Fatalf("expected %q, got %v", testCase.expectErr, err)
+			}
+		})
 	}
 }
 

@@ -112,6 +112,32 @@ type MigrationTransactionPlan struct {
 	LockTime             uint32 `json:"lockTime"`
 }
 
+type ArtifactApprovalRole string
+
+const (
+	ArtifactApprovalRoleDepositor ArtifactApprovalRole = "D"
+	ArtifactApprovalRoleCustodian ArtifactApprovalRole = "C"
+	ArtifactApprovalRoleSigner    ArtifactApprovalRole = "S"
+)
+
+type ArtifactApprovalPayload struct {
+	ApprovalVersion           uint32     `json:"approvalVersion"`
+	Route                     TemplateID `json:"route"`
+	ScriptTemplateID          TemplateID `json:"scriptTemplateId"`
+	DestinationCommitmentHash string     `json:"destinationCommitmentHash"`
+	PlanCommitmentHash        string     `json:"planCommitmentHash"`
+}
+
+type ArtifactRoleApproval struct {
+	Role      ArtifactApprovalRole `json:"role"`
+	Signature string               `json:"signature"`
+}
+
+type ArtifactApprovalEnvelope struct {
+	Payload   ArtifactApprovalPayload `json:"payload"`
+	Approvals []ArtifactRoleApproval  `json:"approvals"`
+}
+
 type SigningRequirements struct {
 	SignerRequired    bool `json:"signerRequired"`
 	CustodianRequired bool `json:"custodianRequired"`
@@ -129,6 +155,7 @@ type RouteSubmitRequest struct {
 	DestinationCommitmentHash string                            `json:"destinationCommitmentHash"`
 	MigrationDestination      *MigrationDestinationReservation  `json:"migrationDestination,omitempty"`
 	MigrationTransactionPlan  *MigrationTransactionPlan         `json:"migrationTransactionPlan,omitempty"`
+	ArtifactApprovals         *ArtifactApprovalEnvelope         `json:"artifactApprovals,omitempty"`
 	ArtifactSignatures        []string                          `json:"artifactSignatures"`
 	Artifacts                 map[RecoveryPathID]ArtifactRecord `json:"artifacts"`
 	ScriptTemplate            json.RawMessage                   `json:"scriptTemplate"`
