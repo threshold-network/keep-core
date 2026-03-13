@@ -3,24 +3,37 @@ package covenantsigner
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"math"
 	"math/big"
+	"reflect"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
 const (
-	canonicalCovenantInputSequence  uint32 = 0xFFFFFFFD
-	canonicalAnchorValueSats        uint64 = 330
-	migrationTransactionPlanVersion uint32 = 1
-	artifactApprovalVersion         uint32 = 1
+	canonicalCovenantInputSequence     uint32 = 0xFFFFFFFD
+	canonicalAnchorValueSats           uint64 = 330
+	migrationTransactionPlanVersion    uint32 = 1
+	artifactApprovalVersion            uint32 = 1
+	migrationPlanQuoteVersion          uint32 = 1
+	migrationPlanQuoteSignatureVersion uint32 = 1
+)
+
+const (
+	migrationPlanQuoteSignatureAlgorithm = "ed25519"
+	migrationPlanQuoteSigningDomain      = "migration-plan-quote-v1:"
 )
 
 var artifactApprovalTypeHash = crypto.Keccak256Hash([]byte(
@@ -31,6 +44,10 @@ var artifactApprovalTypeHash = crypto.Keccak256Hash([]byte(
 		"bytes32 destinationCommitmentHash," +
 		"bytes32 planCommitmentHash)",
 ))
+
+var canonicalTimestampPattern = regexp.MustCompile(
+	`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`,
+)
 
 type inputError struct {
 	message string
@@ -58,11 +75,31 @@ func marshalCanonicalJSON(value any) ([]byte, error) {
 	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), nil
 }
 
+type validationOptions struct {
+	migrationPlanQuoteTrustRoots      []MigrationPlanQuoteTrustRoot
+	requireFreshMigrationPlanQuote    bool
+	migrationPlanQuoteVerificationNow time.Time
+}
+
+func resolveValidationOptions(options []validationOptions) validationOptions {
+	if len(options) == 0 {
+		return validationOptions{}
+	}
+
+	return options[0]
+}
+
 // requestDigest accepts raw requests because Poll validates equivalence against
 // whatever the caller resubmits. Submit should use requestDigestFromNormalized
 // after it has already normalized the request once for storage.
-func requestDigest(request RouteSubmitRequest) (string, error) {
-	normalizedRequest, err := normalizeRouteSubmitRequest(request)
+func requestDigest(
+	request RouteSubmitRequest,
+	options ...validationOptions,
+) (string, error) {
+	normalizedRequest, err := normalizeRouteSubmitRequest(
+		request,
+		resolveValidationOptions(options),
+	)
 	if err != nil {
 		return "", err
 	}
@@ -262,6 +299,345 @@ func verifySecp256k1Signature(
 	}
 
 	return &inputError{fmt.Sprintf("%s does not verify against the required public key", name)}
+}
+
+type migrationPlanQuoteSigningPayload struct {
+	QuoteVersion              uint32 `json:"quoteVersion"`
+	QuoteID                   string `json:"quoteId"`
+	ReservationID             string `json:"reservationId"`
+	Reserve                   string `json:"reserve"`
+	Epoch                     uint64 `json:"epoch"`
+	Route                     string `json:"route"`
+	Revealer                  string `json:"revealer"`
+	Vault                     string `json:"vault"`
+	Network                   string `json:"network"`
+	DestinationCommitmentHash string `json:"destinationCommitmentHash"`
+	ActiveOutpointTxID        string `json:"activeOutpointTxid"`
+	ActiveOutpointVout        uint32 `json:"activeOutpointVout"`
+	PlanCommitmentHash        string `json:"planCommitmentHash"`
+	IssuedAt                  string `json:"issuedAt"`
+	ExpiresAt                 string `json:"expiresAt"`
+	ExpiresInSeconds          uint64 `json:"expiresInSeconds"`
+}
+
+func normalizeCanonicalTimestamp(name string, value string) (string, error) {
+	if !canonicalTimestampPattern.MatchString(value) {
+		return "", &inputError{
+			fmt.Sprintf(
+				"%s must be a UTC ISO-8601 timestamp from Date.toISOString()",
+				name,
+			),
+		}
+	}
+
+	return value, nil
+}
+
+func normalizeMigrationPlanQuotePublicKeyPEM(value string) string {
+	return strings.TrimSpace(strings.ReplaceAll(value, "\\n", "\n"))
+}
+
+func parseMigrationPlanQuoteTrustRoot(
+	name string,
+	trustRoot MigrationPlanQuoteTrustRoot,
+) (ed25519.PublicKey, error) {
+	block, _ := pem.Decode([]byte(normalizeMigrationPlanQuotePublicKeyPEM(trustRoot.PublicKeyPEM)))
+	if block == nil {
+		return nil, &inputError{fmt.Sprintf("%s.publicKeyPem must be a PEM-encoded public key", name)}
+	}
+
+	publicKeyValue, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, &inputError{fmt.Sprintf("%s.publicKeyPem must be a PEM-encoded Ed25519 public key", name)}
+	}
+
+	publicKey, ok := publicKeyValue.(ed25519.PublicKey)
+	if !ok {
+		return nil, &inputError{fmt.Sprintf("%s.publicKeyPem must be a PEM-encoded Ed25519 public key", name)}
+	}
+
+	return publicKey, nil
+}
+
+func migrationPlanQuoteSigningPayloadBytes(
+	quote *MigrationDestinationPlanQuote,
+) ([]byte, error) {
+	return marshalCanonicalJSON(migrationPlanQuoteSigningPayload{
+		QuoteVersion:              quote.QuoteVersion,
+		QuoteID:                   quote.QuoteID,
+		ReservationID:             quote.ReservationID,
+		Reserve:                   normalizeLowerHex(quote.Reserve),
+		Epoch:                     quote.Epoch,
+		Route:                     string(quote.Route),
+		Revealer:                  normalizeLowerHex(quote.Revealer),
+		Vault:                     normalizeLowerHex(quote.Vault),
+		Network:                   quote.Network,
+		DestinationCommitmentHash: normalizeLowerHex(quote.DestinationCommitmentHash),
+		ActiveOutpointTxID:        normalizeLowerHex(quote.ActiveOutpointTxID),
+		ActiveOutpointVout:        quote.ActiveOutpointVout,
+		PlanCommitmentHash:        normalizeLowerHex(quote.PlanCommitmentHash),
+		IssuedAt:                  quote.IssuedAt,
+		ExpiresAt:                 quote.ExpiresAt,
+		ExpiresInSeconds:          quote.ExpiresInSeconds,
+	})
+}
+
+func migrationPlanQuoteSigningPreimage(
+	quote *MigrationDestinationPlanQuote,
+) ([]byte, error) {
+	payload, err := migrationPlanQuoteSigningPayloadBytes(quote)
+	if err != nil {
+		return nil, err
+	}
+
+	return []byte(migrationPlanQuoteSigningDomain + string(payload)), nil
+}
+
+func migrationPlanQuoteSigningHash(
+	quote *MigrationDestinationPlanQuote,
+) ([]byte, error) {
+	preimage, err := migrationPlanQuoteSigningPreimage(quote)
+	if err != nil {
+		return nil, err
+	}
+
+	sum := sha256.Sum256(preimage)
+	return sum[:], nil
+}
+
+func normalizeMigrationPlanQuote(
+	request RouteSubmitRequest,
+	options validationOptions,
+) (*MigrationDestinationPlanQuote, error) {
+	quote := request.MigrationPlanQuote
+	if quote == nil {
+		if len(options.migrationPlanQuoteTrustRoots) > 0 {
+			return nil, &inputError{
+				"request.migrationPlanQuote is required when migrationPlanQuoteTrustRoots are configured",
+			}
+		}
+
+		return nil, nil
+	}
+	if len(options.migrationPlanQuoteTrustRoots) == 0 {
+		return nil, &inputError{"request.migrationPlanQuote verification requires configured trust roots"}
+	}
+	if request.MigrationDestination == nil {
+		return nil, &inputError{"request.migrationDestination is required when request.migrationPlanQuote is present"}
+	}
+	if request.MigrationTransactionPlan == nil {
+		return nil, &inputError{"request.migrationTransactionPlan is required when request.migrationPlanQuote is present"}
+	}
+	if quote.QuoteVersion != migrationPlanQuoteVersion {
+		return nil, &inputError{"request.migrationPlanQuote.quoteVersion must equal 1"}
+	}
+	if strings.TrimSpace(quote.QuoteID) == "" {
+		return nil, &inputError{"request.migrationPlanQuote.quoteId is required"}
+	}
+	if strings.TrimSpace(quote.ReservationID) == "" {
+		return nil, &inputError{"request.migrationPlanQuote.reservationId is required"}
+	}
+	if strings.TrimSpace(quote.IdempotencyKey) == "" {
+		return nil, &inputError{"request.migrationPlanQuote.idempotencyKey is required"}
+	}
+	if quote.Route != ReservationRouteMigration {
+		return nil, &inputError{"request.migrationPlanQuote.route must be MIGRATION"}
+	}
+	if err := validateAddressString("request.migrationPlanQuote.reserve", quote.Reserve); err != nil {
+		return nil, err
+	}
+	if err := validateAddressString("request.migrationPlanQuote.revealer", quote.Revealer); err != nil {
+		return nil, err
+	}
+	if err := validateAddressString("request.migrationPlanQuote.vault", quote.Vault); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(quote.Network) == "" {
+		return nil, &inputError{"request.migrationPlanQuote.network is required"}
+	}
+	if err := validateBytes32HexString(
+		"request.migrationPlanQuote.destinationCommitmentHash",
+		quote.DestinationCommitmentHash,
+	); err != nil {
+		return nil, err
+	}
+	if err := validateBytes32HexString(
+		"request.migrationPlanQuote.activeOutpointTxid",
+		quote.ActiveOutpointTxID,
+	); err != nil {
+		return nil, err
+	}
+	if err := validateBytes32HexString(
+		"request.migrationPlanQuote.planCommitmentHash",
+		quote.PlanCommitmentHash,
+	); err != nil {
+		return nil, err
+	}
+	if quote.ExpiresInSeconds == 0 {
+		return nil, &inputError{"request.migrationPlanQuote.expiresInSeconds must be greater than zero"}
+	}
+	if quote.Signature.SignatureVersion != migrationPlanQuoteSignatureVersion {
+		return nil, &inputError{"request.migrationPlanQuote.signature.signatureVersion must equal 1"}
+	}
+	if quote.Signature.Algorithm != migrationPlanQuoteSignatureAlgorithm {
+		return nil, &inputError{"request.migrationPlanQuote.signature.algorithm must equal ed25519"}
+	}
+	if strings.TrimSpace(quote.Signature.KeyID) == "" {
+		return nil, &inputError{"request.migrationPlanQuote.signature.keyId is required"}
+	}
+	if err := validateHexString("request.migrationPlanQuote.signature.signature", quote.Signature.Signature); err != nil {
+		return nil, err
+	}
+
+	normalizedIssuedAt, err := normalizeCanonicalTimestamp(
+		"request.migrationPlanQuote.issuedAt",
+		quote.IssuedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	issuedAt, err := time.Parse(time.RFC3339Nano, normalizedIssuedAt)
+	if err != nil {
+		return nil, &inputError{
+			"request.migrationPlanQuote.issuedAt must be a parseable UTC ISO-8601 timestamp",
+		}
+	}
+	normalizedExpiresAt, err := normalizeCanonicalTimestamp(
+		"request.migrationPlanQuote.expiresAt",
+		quote.ExpiresAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, normalizedExpiresAt)
+	if err != nil {
+		return nil, &inputError{
+			"request.migrationPlanQuote.expiresAt must be a parseable UTC ISO-8601 timestamp",
+		}
+	}
+	if !expiresAt.After(issuedAt) {
+		return nil, &inputError{"request.migrationPlanQuote.expiresAt must be after request.migrationPlanQuote.issuedAt"}
+	}
+	if expiresAt.Sub(issuedAt) != time.Duration(quote.ExpiresInSeconds)*time.Second {
+		return nil, &inputError{"request.migrationPlanQuote.expiresAt must equal request.migrationPlanQuote.issuedAt + expiresInSeconds"}
+	}
+	if quote.Epoch != request.Epoch {
+		return nil, &inputError{"request.migrationPlanQuote.epoch must match request.epoch"}
+	}
+	if normalizeLowerHex(quote.Reserve) != normalizeLowerHex(request.Reserve) {
+		return nil, &inputError{"request.migrationPlanQuote.reserve must match request.reserve"}
+	}
+	if quote.ReservationID != request.MigrationDestination.ReservationID {
+		return nil, &inputError{"request.migrationPlanQuote.reservationId must match request.migrationDestination.reservationId"}
+	}
+	if normalizeLowerHex(quote.Revealer) != normalizeLowerHex(request.MigrationDestination.Revealer) {
+		return nil, &inputError{"request.migrationPlanQuote.revealer must match request.migrationDestination.revealer"}
+	}
+	if normalizeLowerHex(quote.Vault) != normalizeLowerHex(request.MigrationDestination.Vault) {
+		return nil, &inputError{"request.migrationPlanQuote.vault must match request.migrationDestination.vault"}
+	}
+	if strings.TrimSpace(quote.Network) != strings.TrimSpace(request.MigrationDestination.Network) {
+		return nil, &inputError{"request.migrationPlanQuote.network must match request.migrationDestination.network"}
+	}
+	if normalizeLowerHex(quote.DestinationCommitmentHash) != normalizeLowerHex(request.DestinationCommitmentHash) {
+		return nil, &inputError{"request.migrationPlanQuote.destinationCommitmentHash must match request.destinationCommitmentHash"}
+	}
+	if normalizeLowerHex(quote.DestinationCommitmentHash) != normalizeLowerHex(request.MigrationDestination.DestinationCommitmentHash) {
+		return nil, &inputError{"request.migrationPlanQuote.destinationCommitmentHash must match request.migrationDestination.destinationCommitmentHash"}
+	}
+	if normalizeLowerHex(quote.ActiveOutpointTxID) != normalizeLowerHex(request.ActiveOutpoint.TxID) {
+		return nil, &inputError{"request.migrationPlanQuote.activeOutpointTxid must match request.activeOutpoint.txid"}
+	}
+	if quote.ActiveOutpointVout != request.ActiveOutpoint.Vout {
+		return nil, &inputError{"request.migrationPlanQuote.activeOutpointVout must match request.activeOutpoint.vout"}
+	}
+	if normalizeLowerHex(quote.PlanCommitmentHash) != normalizeLowerHex(request.MigrationTransactionPlan.PlanCommitmentHash) {
+		return nil, &inputError{"request.migrationPlanQuote.planCommitmentHash must match request.migrationTransactionPlan.planCommitmentHash"}
+	}
+
+	normalizedQuotePlan := normalizeMigrationTransactionPlan(quote.MigrationTransactionPlan)
+	if normalizedQuotePlan == nil {
+		return nil, &inputError{"request.migrationPlanQuote.migrationTransactionPlan is required"}
+	}
+	if err := validateMigrationTransactionPlan(request, quote.MigrationTransactionPlan); err != nil {
+		return nil, err
+	}
+	if !reflect.DeepEqual(normalizedQuotePlan, normalizeMigrationTransactionPlan(request.MigrationTransactionPlan)) {
+		return nil, &inputError{"request.migrationPlanQuote.migrationTransactionPlan must match request.migrationTransactionPlan"}
+	}
+
+	var publicKey ed25519.PublicKey
+	foundTrustRoot := false
+	for i, trustRoot := range options.migrationPlanQuoteTrustRoots {
+		if trustRoot.KeyID != quote.Signature.KeyID {
+			continue
+		}
+
+		publicKey, err = parseMigrationPlanQuoteTrustRoot(
+			fmt.Sprintf("migrationPlanQuoteTrustRoots[%d]", i),
+			trustRoot,
+		)
+		if err != nil {
+			return nil, err
+		}
+		foundTrustRoot = true
+		break
+	}
+	if !foundTrustRoot {
+		return nil, &inputError{"request.migrationPlanQuote.signature.keyId does not match a configured trust root"}
+	}
+
+	normalizedQuote := &MigrationDestinationPlanQuote{
+		QuoteID:                   strings.TrimSpace(quote.QuoteID),
+		QuoteVersion:              migrationPlanQuoteVersion,
+		ReservationID:             strings.TrimSpace(quote.ReservationID),
+		Reserve:                   normalizeLowerHex(quote.Reserve),
+		Epoch:                     quote.Epoch,
+		Route:                     ReservationRouteMigration,
+		Revealer:                  normalizeLowerHex(quote.Revealer),
+		Vault:                     normalizeLowerHex(quote.Vault),
+		Network:                   strings.TrimSpace(quote.Network),
+		DestinationCommitmentHash: normalizeLowerHex(quote.DestinationCommitmentHash),
+		ActiveOutpointTxID:        normalizeLowerHex(quote.ActiveOutpointTxID),
+		ActiveOutpointVout:        quote.ActiveOutpointVout,
+		PlanCommitmentHash:        normalizeLowerHex(quote.PlanCommitmentHash),
+		MigrationTransactionPlan:  normalizedQuotePlan,
+		IdempotencyKey:            strings.TrimSpace(quote.IdempotencyKey),
+		ExpiresInSeconds:          quote.ExpiresInSeconds,
+		IssuedAt:                  normalizedIssuedAt,
+		ExpiresAt:                 normalizedExpiresAt,
+		Signature: MigrationDestinationPlanQuoteSignature{
+			SignatureVersion: migrationPlanQuoteSignatureVersion,
+			Algorithm:        migrationPlanQuoteSignatureAlgorithm,
+			KeyID:            strings.TrimSpace(quote.Signature.KeyID),
+			Signature:        normalizeLowerHex(quote.Signature.Signature),
+		},
+	}
+
+	signingHash, err := migrationPlanQuoteSigningHash(normalizedQuote)
+	if err != nil {
+		return nil, err
+	}
+
+	rawSignature, err := hex.DecodeString(strings.TrimPrefix(normalizedQuote.Signature.Signature, "0x"))
+	if err != nil {
+		return nil, &inputError{"request.migrationPlanQuote.signature.signature must be valid hex"}
+	}
+	if !ed25519.Verify(publicKey, signingHash, rawSignature) {
+		return nil, &inputError{"request.migrationPlanQuote.signature does not verify against the configured trust root"}
+	}
+
+	if options.requireFreshMigrationPlanQuote {
+		verificationNow := options.migrationPlanQuoteVerificationNow
+		if verificationNow.IsZero() {
+			verificationNow = time.Now().UTC()
+		}
+		if expiresAt.Before(verificationNow) {
+			return nil, &inputError{"request.migrationPlanQuote is expired"}
+		}
+	}
+
+	return normalizedQuote, nil
 }
 
 func computeMigrationExtraData(revealer string) string {
@@ -824,7 +1200,11 @@ func normalizeScriptTemplate(route TemplateID, rawTemplate json.RawMessage) (jso
 	}
 }
 
-func normalizeRouteSubmitRequest(request RouteSubmitRequest) (RouteSubmitRequest, error) {
+func normalizeRouteSubmitRequest(
+	request RouteSubmitRequest,
+	options ...validationOptions,
+) (RouteSubmitRequest, error) {
+	resolvedOptions := resolveValidationOptions(options)
 	normalizedArtifactApprovals, normalizedArtifactSignatures, err := normalizeArtifactApprovals(
 		request.Route,
 		request,
@@ -834,6 +1214,14 @@ func normalizeRouteSubmitRequest(request RouteSubmitRequest) (RouteSubmitRequest
 	}
 
 	normalizedScriptTemplate, err := normalizeScriptTemplate(request.Route, request.ScriptTemplate)
+	if err != nil {
+		return RouteSubmitRequest{}, err
+	}
+
+	normalizedMigrationPlanQuote, err := normalizeMigrationPlanQuote(
+		request,
+		resolvedOptions,
+	)
 	if err != nil {
 		return RouteSubmitRequest{}, err
 	}
@@ -858,6 +1246,7 @@ func normalizeRouteSubmitRequest(request RouteSubmitRequest) (RouteSubmitRequest
 		},
 		DestinationCommitmentHash: normalizeLowerHex(request.DestinationCommitmentHash),
 		MigrationDestination:      normalizeMigrationDestination(request.MigrationDestination),
+		MigrationPlanQuote:        normalizedMigrationPlanQuote,
 		MigrationTransactionPlan:  normalizeMigrationTransactionPlan(request.MigrationTransactionPlan),
 		ArtifactApprovals:         normalizedArtifactApprovals,
 		ArtifactSignatures:        normalizedArtifactSignatures,
@@ -867,7 +1256,12 @@ func normalizeRouteSubmitRequest(request RouteSubmitRequest) (RouteSubmitRequest
 	}, nil
 }
 
-func validateCommonRequest(route TemplateID, request RouteSubmitRequest) error {
+func validateCommonRequest(
+	route TemplateID,
+	request RouteSubmitRequest,
+	options ...validationOptions,
+) error {
+	resolvedOptions := resolveValidationOptions(options)
 	if request.FacadeRequestID == "" {
 		return &inputError{"request.facadeRequestId is required"}
 	}
@@ -904,6 +1298,9 @@ func validateCommonRequest(route TemplateID, request RouteSubmitRequest) error {
 	// orchestrator must supply the canonical migration transaction plan before
 	// this signer version can accept requests.
 	if err := validateMigrationTransactionPlan(request, request.MigrationTransactionPlan); err != nil {
+		return err
+	}
+	if _, err := normalizeMigrationPlanQuote(request, resolvedOptions); err != nil {
 		return err
 	}
 	if request.ArtifactApprovals == nil {
@@ -972,17 +1369,25 @@ func validateCommonRequest(route TemplateID, request RouteSubmitRequest) error {
 	return nil
 }
 
-func validateSubmitInput(route TemplateID, input SignerSubmitInput) error {
+func validateSubmitInput(
+	route TemplateID,
+	input SignerSubmitInput,
+	options ...validationOptions,
+) error {
 	if input.RouteRequestID == "" {
 		return &inputError{"routeRequestId is required"}
 	}
 	if input.Stage != StageSignerCoordination {
 		return &inputError{"stage must be SIGNER_COORDINATION"}
 	}
-	return validateCommonRequest(route, input.Request)
+	return validateCommonRequest(route, input.Request, resolveValidationOptions(options))
 }
 
-func validatePollInput(route TemplateID, input SignerPollInput) error {
+func validatePollInput(
+	route TemplateID,
+	input SignerPollInput,
+	options ...validationOptions,
+) error {
 	if input.RequestID == "" {
 		return &inputError{"requestId is required"}
 	}
@@ -990,7 +1395,7 @@ func validatePollInput(route TemplateID, input SignerPollInput) error {
 		RouteRequestID: input.RouteRequestID,
 		Request:        input.Request,
 		Stage:          input.Stage,
-	}); err != nil {
+	}, resolveValidationOptions(options)); err != nil {
 		return err
 	}
 	return nil

@@ -48,7 +48,11 @@ func Initialize(
 		)
 	}
 
-	service, err := NewService(handle, engine)
+	service, err := NewService(
+		handle,
+		engine,
+		WithMigrationPlanQuoteTrustRoots(config.MigrationPlanQuoteTrustRoots),
+	)
 	if err != nil {
 		return nil, false, err
 	}

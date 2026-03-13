@@ -3,8 +3,11 @@ package covenantsigner
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
@@ -150,12 +153,18 @@ const (
 )
 
 var (
-	testDepositorPrivateKey = mustDeterministicTestPrivateKey(testDepositorPrivateKeyHex)
-	testSignerPrivateKey    = mustDeterministicTestPrivateKey(testSignerPrivateKeyHex)
-	testCustodianPrivateKey = mustDeterministicTestPrivateKey(testCustodianPrivateKeyHex)
-	testDepositorPublicKey  = mustCompressedPublicKeyHex(testDepositorPrivateKey)
-	testSignerPublicKey     = mustCompressedPublicKeyHex(testSignerPrivateKey)
-	testCustodianPublicKey  = mustCompressedPublicKeyHex(testCustodianPrivateKey)
+	testDepositorPrivateKey          = mustDeterministicTestPrivateKey(testDepositorPrivateKeyHex)
+	testSignerPrivateKey             = mustDeterministicTestPrivateKey(testSignerPrivateKeyHex)
+	testCustodianPrivateKey          = mustDeterministicTestPrivateKey(testCustodianPrivateKeyHex)
+	testDepositorPublicKey           = mustCompressedPublicKeyHex(testDepositorPrivateKey)
+	testSignerPublicKey              = mustCompressedPublicKeyHex(testSignerPrivateKey)
+	testCustodianPublicKey           = mustCompressedPublicKeyHex(testCustodianPrivateKey)
+	testMigrationPlanQuoteSeed       = bytes.Repeat([]byte{0x44}, ed25519.SeedSize)
+	testMigrationPlanQuotePrivateKey = ed25519.NewKeyFromSeed(testMigrationPlanQuoteSeed)
+	testMigrationPlanQuoteTrustRoot  = MigrationPlanQuoteTrustRoot{
+		KeyID:        "test-plan-quote-key",
+		PublicKeyPEM: mustMigrationPlanQuoteTrustRootPEM(testMigrationPlanQuotePrivateKey.Public().(ed25519.PublicKey)),
+	}
 )
 
 func mustDeterministicTestPrivateKey(encoded string) *btcec.PrivateKey {
@@ -170,6 +179,18 @@ func mustDeterministicTestPrivateKey(encoded string) *btcec.PrivateKey {
 
 func mustCompressedPublicKeyHex(privateKey *btcec.PrivateKey) string {
 	return "0x" + hex.EncodeToString(privateKey.PubKey().SerializeCompressed())
+}
+
+func mustMigrationPlanQuoteTrustRootPEM(publicKey ed25519.PublicKey) string {
+	encodedPublicKey, err := x509.MarshalPKIXPublicKey(publicKey)
+	if err != nil {
+		panic(err)
+	}
+
+	return string(pem.EncodeToMemory(&pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: encodedPublicKey,
+	}))
 }
 
 func mustArtifactApprovalSignature(
@@ -682,6 +703,65 @@ func validMigrationDestination() *MigrationDestinationReservation {
 	reservation.DestinationCommitmentHash, _ = computeDestinationCommitmentHash(reservation)
 
 	return reservation
+}
+
+func validMigrationPlanQuote(
+	request RouteSubmitRequest,
+) *MigrationDestinationPlanQuote {
+	quote := &MigrationDestinationPlanQuote{
+		QuoteID:                   "cmdq_12345678",
+		QuoteVersion:              migrationPlanQuoteVersion,
+		ReservationID:             request.MigrationDestination.ReservationID,
+		Reserve:                   request.Reserve,
+		Epoch:                     request.Epoch,
+		Route:                     ReservationRouteMigration,
+		Revealer:                  request.MigrationDestination.Revealer,
+		Vault:                     request.MigrationDestination.Vault,
+		Network:                   request.MigrationDestination.Network,
+		DestinationCommitmentHash: request.DestinationCommitmentHash,
+		ActiveOutpointTxID:        request.ActiveOutpoint.TxID,
+		ActiveOutpointVout:        request.ActiveOutpoint.Vout,
+		PlanCommitmentHash:        request.MigrationTransactionPlan.PlanCommitmentHash,
+		MigrationTransactionPlan:  normalizeMigrationTransactionPlan(request.MigrationTransactionPlan),
+		IdempotencyKey:            "0x75a998ac6951c2776f3a85f6430fb41321c28c1113a71a52c754806c7a3de9c9",
+		ExpiresInSeconds:          900,
+		IssuedAt:                  "2099-03-09T00:00:00.000Z",
+		ExpiresAt:                 "2099-03-09T00:15:00.000Z",
+		Signature: MigrationDestinationPlanQuoteSignature{
+			SignatureVersion: migrationPlanQuoteSignatureVersion,
+			Algorithm:        migrationPlanQuoteSignatureAlgorithm,
+			KeyID:            testMigrationPlanQuoteTrustRoot.KeyID,
+		},
+	}
+
+	signingHash, err := migrationPlanQuoteSigningHash(quote)
+	if err != nil {
+		panic(err)
+	}
+	quote.Signature.Signature = "0x" + hex.EncodeToString(
+		ed25519.Sign(testMigrationPlanQuotePrivateKey, signingHash),
+	)
+
+	return quote
+}
+
+func requestWithValidMigrationPlanQuote(route TemplateID) RouteSubmitRequest {
+	request := baseRequest(route)
+	request.ActiveOutpoint.TxID = "0x" + strings.Repeat("aa", 32)
+	request.ActiveOutpoint.ScriptHash = "0x" + strings.Repeat("bb", 32)
+	request.MigrationTransactionPlan.PlanCommitmentHash, _ =
+		computeMigrationTransactionPlanCommitmentHash(
+			request,
+			request.MigrationTransactionPlan,
+		)
+	request.ArtifactApprovals = validArtifactApprovals(request)
+	request.ArtifactSignatures = canonicalArtifactSignatures(
+		request.Route,
+		request.ArtifactApprovals,
+	)
+	request.MigrationPlanQuote = validMigrationPlanQuote(request)
+
+	return request
 }
 
 func TestServiceSubmitDeduplicatesByRouteRequestID(t *testing.T) {
@@ -1864,6 +1944,174 @@ func TestDestinationCommitmentHashDoesNotEscapeHTMLSensitiveCharacters(t *testin
 	}
 	if hash == "" {
 		t.Fatal("expected destination commitment hash")
+	}
+}
+
+func TestMigrationPlanQuoteSigningHashMatchesTbtcVectors(t *testing.T) {
+	baseRequest := canonicalArtifactApprovalRequest(TemplateSelfV1)
+	baseRequest.MigrationPlanQuote = &MigrationDestinationPlanQuote{
+		QuoteID:                   "cmdq_testvector",
+		QuoteVersion:              migrationPlanQuoteVersion,
+		ReservationID:             "cmdr_testvector",
+		Reserve:                   "0x1111111111111111111111111111111111111111",
+		Epoch:                     7,
+		Route:                     ReservationRouteMigration,
+		Revealer:                  "0x2222222222222222222222222222222222222222",
+		Vault:                     "0x3333333333333333333333333333333333333333",
+		Network:                   "regtest",
+		DestinationCommitmentHash: "0x10f6ea91bee183fc004591fb6a93495d166ff646df25eb6a3c6324b40d51ebc7",
+		ActiveOutpointTxID:        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ActiveOutpointVout:        1,
+		PlanCommitmentHash:        "0x9ef0621c394dea9e399b4d7a44e41814a2f1bcc163abb18ec897d3f77f144b09",
+		MigrationTransactionPlan: &MigrationTransactionPlan{
+			PlanVersion:          migrationTransactionPlanVersion,
+			PlanCommitmentHash:   "0x9ef0621c394dea9e399b4d7a44e41814a2f1bcc163abb18ec897d3f77f144b09",
+			InputValueSats:       100000,
+			DestinationValueSats: 99250,
+			AnchorValueSats:      canonicalAnchorValueSats,
+			FeeSats:              420,
+			InputSequence:        canonicalCovenantInputSequence,
+			LockTime:             950000,
+		},
+		IdempotencyKey:   "0x75a998ac6951c2776f3a85f6430fb41321c28c1113a71a52c754806c7a3de9c9",
+		ExpiresInSeconds: 900,
+		IssuedAt:         "2026-03-09T00:00:00.000Z",
+		ExpiresAt:        "2026-03-09T00:15:00.000Z",
+		Signature: MigrationDestinationPlanQuoteSignature{
+			SignatureVersion: migrationPlanQuoteSignatureVersion,
+			Algorithm:        migrationPlanQuoteSignatureAlgorithm,
+			KeyID:            testMigrationPlanQuoteTrustRoot.KeyID,
+			Signature:        "0x00",
+		},
+	}
+
+	payload, err := migrationPlanQuoteSigningPayloadBytes(baseRequest.MigrationPlanQuote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(payload) != "{\"quoteVersion\":1,\"quoteId\":\"cmdq_testvector\",\"reservationId\":\"cmdr_testvector\",\"reserve\":\"0x1111111111111111111111111111111111111111\",\"epoch\":7,\"route\":\"MIGRATION\",\"revealer\":\"0x2222222222222222222222222222222222222222\",\"vault\":\"0x3333333333333333333333333333333333333333\",\"network\":\"regtest\",\"destinationCommitmentHash\":\"0x10f6ea91bee183fc004591fb6a93495d166ff646df25eb6a3c6324b40d51ebc7\",\"activeOutpointTxid\":\"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"activeOutpointVout\":1,\"planCommitmentHash\":\"0x9ef0621c394dea9e399b4d7a44e41814a2f1bcc163abb18ec897d3f77f144b09\",\"issuedAt\":\"2026-03-09T00:00:00.000Z\",\"expiresAt\":\"2026-03-09T00:15:00.000Z\",\"expiresInSeconds\":900}" {
+		t.Fatalf("unexpected signing payload: %s", payload)
+	}
+
+	signingHash, err := migrationPlanQuoteSigningHash(baseRequest.MigrationPlanQuote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if "0x"+hex.EncodeToString(signingHash) != "0x4707935286fa15edf3f95485297307734b122f7dc1761e6fc023e9d5cc7a935a" {
+		t.Fatalf("unexpected signing hash: 0x%s", hex.EncodeToString(signingHash))
+	}
+
+	mixedCaseQuote := *baseRequest.MigrationPlanQuote
+	mixedCaseQuote.Reserve = "0xAaBbCcDdEeFf00112233445566778899AaBbCcDd"
+	mixedCaseQuote.Revealer = "0xAbCdEfAbCdEfAbCdEfAbCdEfAbCdEfAbCdEfAbCd"
+	mixedCaseQuote.Vault = "0x0011AaBbCcDdEeFf0011AaBbCcDdEeFf0011AaBb"
+
+	mixedCaseHash, err := migrationPlanQuoteSigningHash(&mixedCaseQuote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if "0x"+hex.EncodeToString(mixedCaseHash) != "0x13a05f7e9caa244c446b65c2812095210cb321451d9eb9b735e60ffdd76e693d" {
+		t.Fatalf("unexpected mixed-case signing hash: 0x%s", hex.EncodeToString(mixedCaseHash))
+	}
+}
+
+func TestServiceRequiresMigrationPlanQuoteWhenTrustRootsConfigured(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithMigrationPlanQuoteTrustRoots([]MigrationPlanQuoteTrustRoot{
+			testMigrationPlanQuoteTrustRoot,
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_quote_required",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.migrationPlanQuote is required when migrationPlanQuoteTrustRoots are configured",
+	) {
+		t.Fatalf("expected missing quote error, got %v", err)
+	}
+}
+
+func TestServiceAcceptsValidMigrationPlanQuoteWhenTrustRootsConfigured(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{},
+		WithMigrationPlanQuoteTrustRoots([]MigrationPlanQuoteTrustRoot{
+			testMigrationPlanQuoteTrustRoot,
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := requestWithValidMigrationPlanQuote(TemplateSelfV1)
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_quote_valid",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServicePollAcceptsStoredMigrationPlanQuoteAfterQuoteExpiry(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{
+			submit: func(*Job) (*Transition, error) {
+				return &Transition{State: JobStatePending, Detail: "queued"}, nil
+			},
+		},
+		WithMigrationPlanQuoteTrustRoots([]MigrationPlanQuoteTrustRoot{
+			testMigrationPlanQuoteTrustRoot,
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time {
+		return time.Date(2099, time.March, 9, 0, 10, 0, 0, time.UTC)
+	}
+
+	request := requestWithValidMigrationPlanQuote(TemplateSelfV1)
+
+	submitResult, err := service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_quote_poll",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	service.now = func() time.Time {
+		return time.Date(2099, time.March, 9, 0, 16, 0, 0, time.UTC)
+	}
+
+	pollResult, err := service.Poll(context.Background(), TemplateSelfV1, SignerPollInput{
+		RouteRequestID: "ors_quote_poll",
+		RequestID:      submitResult.RequestID,
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pollResult.Status != StepStatusPending {
+		t.Fatalf("expected pending poll result, got %#v", pollResult)
 	}
 }
 
