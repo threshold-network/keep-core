@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -92,6 +93,52 @@ func mustJSON(t *testing.T, value any) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+type approvalContractVector struct {
+	CanonicalSubmitRequest json.RawMessage `json:"canonicalSubmitRequest"`
+	ExpectedRequestDigest  string          `json:"expectedRequestDigest"`
+}
+
+type approvalContractVectorsFile struct {
+	Version int                               `json:"version"`
+	Scope   string                            `json:"scope"`
+	Vectors map[string]approvalContractVector `json:"vectors"`
+}
+
+func loadApprovalContractVector(
+	t *testing.T,
+	route TemplateID,
+) (RouteSubmitRequest, string) {
+	t.Helper()
+
+	data, err := os.ReadFile("testdata/covenant_recovery_approval_vectors_v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	vectors := approvalContractVectorsFile{}
+	if err := strictUnmarshal(data, &vectors); err != nil {
+		t.Fatal(err)
+	}
+	if vectors.Version != 1 {
+		t.Fatalf("unexpected vector version: %d", vectors.Version)
+	}
+	if vectors.Scope != "covenant_recovery_approval_contract_v1" {
+		t.Fatalf("unexpected vector scope: %s", vectors.Scope)
+	}
+
+	vector, ok := vectors.Vectors[string(route)]
+	if !ok {
+		t.Fatalf("missing vector for route %s", route)
+	}
+
+	request := RouteSubmitRequest{}
+	if err := strictUnmarshal(vector.CanonicalSubmitRequest, &request); err != nil {
+		t.Fatal(err)
+	}
+
+	return request, vector.ExpectedRequestDigest
 }
 
 func validSelfTemplate() json.RawMessage {
@@ -198,6 +245,116 @@ func canonicalArtifactApprovalRequest(route TemplateID) RouteSubmitRequest {
 	}
 
 	return request
+}
+
+func cloneRouteSubmitRequest(
+	t *testing.T,
+	request RouteSubmitRequest,
+) RouteSubmitRequest {
+	t.Helper()
+
+	cloned := RouteSubmitRequest{}
+	if err := strictUnmarshal(mustJSON(t, request), &cloned); err != nil {
+		t.Fatal(err)
+	}
+
+	return cloned
+}
+
+func equivalentArtifactApprovalVariantFromRequest(
+	t *testing.T,
+	request RouteSubmitRequest,
+) RouteSubmitRequest {
+	t.Helper()
+
+	variant := cloneRouteSubmitRequest(t, request)
+	variant.Strategy = upperHexBody(variant.Strategy)
+	variant.Reserve = upperHexBody(variant.Reserve)
+	variant.ActiveOutpoint.TxID = upperHexBody(variant.ActiveOutpoint.TxID)
+	if variant.ActiveOutpoint.ScriptHash != "" {
+		variant.ActiveOutpoint.ScriptHash = upperHexBody(variant.ActiveOutpoint.ScriptHash)
+	}
+	variant.DestinationCommitmentHash = upperHexBody(variant.DestinationCommitmentHash)
+
+	if variant.MigrationDestination != nil {
+		variant.MigrationDestination.Reserve = upperHexBody(variant.MigrationDestination.Reserve)
+		variant.MigrationDestination.Revealer = upperHexBody(variant.MigrationDestination.Revealer)
+		variant.MigrationDestination.Vault = upperHexBody(variant.MigrationDestination.Vault)
+		variant.MigrationDestination.DepositScript = upperHexBody(variant.MigrationDestination.DepositScript)
+		variant.MigrationDestination.DepositScriptHash = upperHexBody(variant.MigrationDestination.DepositScriptHash)
+		variant.MigrationDestination.MigrationExtraData = upperHexBody(variant.MigrationDestination.MigrationExtraData)
+		variant.MigrationDestination.DestinationCommitmentHash = upperHexBody(
+			variant.MigrationDestination.DestinationCommitmentHash,
+		)
+	}
+
+	if variant.MigrationTransactionPlan != nil {
+		variant.MigrationTransactionPlan.PlanCommitmentHash = upperHexBody(
+			variant.MigrationTransactionPlan.PlanCommitmentHash,
+		)
+	}
+
+	for i := range variant.ArtifactSignatures {
+		variant.ArtifactSignatures[i] = upperHexBody(variant.ArtifactSignatures[i])
+	}
+
+	for pathID, artifact := range variant.Artifacts {
+		artifact.PSBTHash = upperHexBody(artifact.PSBTHash)
+		artifact.DestinationCommitmentHash = upperHexBody(artifact.DestinationCommitmentHash)
+		if artifact.TransactionHex != "" {
+			artifact.TransactionHex = upperHexBody(artifact.TransactionHex)
+		}
+		if artifact.TransactionID != "" {
+			artifact.TransactionID = upperHexBody(artifact.TransactionID)
+		}
+		variant.Artifacts[pathID] = artifact
+	}
+
+	if variant.ArtifactApprovals != nil {
+		variant.ArtifactApprovals.Payload.DestinationCommitmentHash = upperHexBody(
+			variant.ArtifactApprovals.Payload.DestinationCommitmentHash,
+		)
+		variant.ArtifactApprovals.Payload.PlanCommitmentHash = upperHexBody(
+			variant.ArtifactApprovals.Payload.PlanCommitmentHash,
+		)
+
+		reorderedApprovals := make(
+			[]ArtifactRoleApproval,
+			len(variant.ArtifactApprovals.Approvals),
+		)
+		for i := range variant.ArtifactApprovals.Approvals {
+			approval := variant.ArtifactApprovals.Approvals[len(variant.ArtifactApprovals.Approvals)-1-i]
+			reorderedApprovals[i] = ArtifactRoleApproval{
+				Role:      approval.Role,
+				Signature: upperHexBody(approval.Signature),
+			}
+		}
+		variant.ArtifactApprovals.Approvals = reorderedApprovals
+	}
+
+	switch variant.Route {
+	case TemplateQcV1:
+		template := &QcV1Template{}
+		if err := strictUnmarshal(variant.ScriptTemplate, template); err != nil {
+			t.Fatal(err)
+		}
+		template.DepositorPublicKey = upperHexBody(template.DepositorPublicKey)
+		template.CustodianPublicKey = upperHexBody(template.CustodianPublicKey)
+		template.SignerPublicKey = upperHexBody(template.SignerPublicKey)
+		variant.ScriptTemplate = mustTemplate(template)
+	case TemplateSelfV1:
+		template := &SelfV1Template{}
+		if err := strictUnmarshal(variant.ScriptTemplate, template); err != nil {
+			t.Fatal(err)
+		}
+		template.DepositorPublicKey = upperHexBody(template.DepositorPublicKey)
+		template.SignerPublicKey = upperHexBody(template.SignerPublicKey)
+		variant.ScriptTemplate = mustTemplate(template)
+	default:
+		t.Fatalf("unsupported route %s", variant.Route)
+	}
+
+	return variant
 }
 
 func upperHexBody(value string) string {
@@ -1479,6 +1636,61 @@ func TestRequestDigestRejectsArtifactApprovalsWithoutMigrationTransactionPlan(t 
 		"request.migrationTransactionPlan is required when request.artifactApprovals is present",
 	) {
 		t.Fatalf("expected missing plan error, got %v", err)
+	}
+}
+
+func TestApprovalContractVectorsMatchExpectedRequestDigests(t *testing.T) {
+	for _, route := range []TemplateID{TemplateQcV1, TemplateSelfV1} {
+		t.Run(string(route), func(t *testing.T) {
+			request, expectedDigest := loadApprovalContractVector(t, route)
+
+			digest, err := requestDigest(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if digest != expectedDigest {
+				t.Fatalf("expected digest %s, got %s", expectedDigest, digest)
+			}
+		})
+	}
+}
+
+func TestApprovalContractVectorsNormalizeEquivalentVariants(t *testing.T) {
+	for _, route := range []TemplateID{TemplateQcV1, TemplateSelfV1} {
+		t.Run(string(route), func(t *testing.T) {
+			canonicalRequest, expectedDigest := loadApprovalContractVector(t, route)
+
+			normalizedCanonical, err := normalizeRouteSubmitRequest(canonicalRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			variantRequest := equivalentArtifactApprovalVariantFromRequest(
+				t,
+				canonicalRequest,
+			)
+			normalizedVariant, err := normalizeRouteSubmitRequest(variantRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if !reflect.DeepEqual(normalizedVariant, normalizedCanonical) {
+				t.Fatalf(
+					"expected normalized variant %#v, got %#v",
+					normalizedCanonical,
+					normalizedVariant,
+				)
+			}
+
+			digest, err := requestDigest(variantRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if digest != expectedDigest {
+				t.Fatalf("expected digest %s, got %s", expectedDigest, digest)
+			}
+		})
 	}
 }
 
