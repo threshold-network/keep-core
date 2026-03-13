@@ -173,6 +173,7 @@ func TestCovenantSignerEngine_SubmitSelfV1Ready(t *testing.T) {
 	request := covenantsigner.RouteSubmitRequest{
 		FacadeRequestID:           "rf_self_1",
 		IdempotencyKey:            "idem_self_1",
+		RequestType:               covenantsigner.RequestTypeReconstruct,
 		Route:                     covenantsigner.TemplateSelfV1,
 		Strategy:                  "0x1234",
 		Reserve:                   reserve,
@@ -410,6 +411,7 @@ func TestCovenantSignerEngine_SubmitQcV1HandoffReady(t *testing.T) {
 	request := covenantsigner.RouteSubmitRequest{
 		FacadeRequestID:           "rf_qc_1",
 		IdempotencyKey:            "idem_qc_1",
+		RequestType:               covenantsigner.RequestTypeReconstruct,
 		Route:                     covenantsigner.TemplateQcV1,
 		Strategy:                  "0x1234",
 		Reserve:                   reserve,
@@ -642,6 +644,7 @@ func TestCovenantSignerEngine_SubmitQcV1RejectsInvalidBeta(t *testing.T) {
 	request := covenantsigner.RouteSubmitRequest{
 		FacadeRequestID: "rf_qc_bad_beta",
 		IdempotencyKey:  "idem_qc_bad_beta",
+		RequestType:     covenantsigner.RequestTypeReconstruct,
 		Route:           covenantsigner.TemplateQcV1,
 		Strategy:        "0x1234",
 		Reserve:         reserve,
@@ -801,6 +804,7 @@ func TestCovenantSignerEngine_SubmitQcV1RejectsScriptHashMismatch(t *testing.T) 
 	request := covenantsigner.RouteSubmitRequest{
 		FacadeRequestID:           "rf_qc_bad_script_hash",
 		IdempotencyKey:            "idem_qc_bad_script_hash",
+		RequestType:               covenantsigner.RequestTypeReconstruct,
 		Route:                     covenantsigner.TemplateQcV1,
 		Strategy:                  "0x1234",
 		Reserve:                   reserve,
@@ -897,6 +901,7 @@ func TestCovenantSignerEngine_SubmitSelfV1RejectsZeroMaturityHeight(t *testing.T
 	request := covenantsigner.RouteSubmitRequest{
 		FacadeRequestID: "rf_self_zero",
 		IdempotencyKey:  "idem_self_zero",
+		RequestType:     covenantsigner.RequestTypeReconstruct,
 		Route:           covenantsigner.TemplateSelfV1,
 		Strategy:        "0x1234",
 		Reserve:         reserve,

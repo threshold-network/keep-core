@@ -240,7 +240,12 @@ func (cse *covenantSignerEngine) submitSelfV1(
 
 	return &covenantsigner.Transition{
 		State:          covenantsigner.JobStateArtifactReady,
-		Detail:         "self_v1 artifact ready",
+		Detail: func() string {
+			if job.Request.RequestType == covenantsigner.RequestTypePresignSelfV1 {
+				return "self_v1 presign artifact ready"
+			}
+			return "self_v1 artifact ready"
+		}(),
 		PSBTHash:       psbtHash,
 		TransactionHex: transactionHex,
 	}

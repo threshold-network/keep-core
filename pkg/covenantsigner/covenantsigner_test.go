@@ -374,6 +374,7 @@ func baseRequest(route TemplateID) RouteSubmitRequest {
 	request := RouteSubmitRequest{
 		FacadeRequestID:           "rf_123",
 		IdempotencyKey:            "idem_123",
+		RequestType:               RequestTypeReconstruct,
 		Route:                     route,
 		Strategy:                  "0x1234",
 		Reserve:                   migrationDestination.Reserve,
@@ -2911,6 +2912,65 @@ func TestApprovalContractVectorsNormalizeEquivalentVariants(t *testing.T) {
 	}
 }
 
+func TestRequestDigestDistinguishesSelfV1PresignFromReconstruct(t *testing.T) {
+	reconstructRequest := structuredSignerApprovalRequest(TemplateSelfV1)
+	reconstructRequest.RequestType = RequestTypeReconstruct
+
+	presignRequest := cloneRouteSubmitRequest(t, reconstructRequest)
+	presignRequest.RequestType = RequestTypePresignSelfV1
+
+	reconstructDigest, err := requestDigest(reconstructRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	presignDigest, err := requestDigest(presignRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if reconstructDigest == presignDigest {
+		t.Fatalf("expected distinct self_v1 digests, got %s", reconstructDigest)
+	}
+
+	normalizedReconstruct, err := normalizeRouteSubmitRequest(reconstructRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalizedPresign, err := normalizeRouteSubmitRequest(presignRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if normalizedReconstruct.RequestType != RequestTypeReconstruct {
+		t.Fatalf("expected reconstruct requestType, got %s", normalizedReconstruct.RequestType)
+	}
+	if normalizedPresign.RequestType != RequestTypePresignSelfV1 {
+		t.Fatalf("expected presign requestType, got %s", normalizedPresign.RequestType)
+	}
+}
+
+func TestServiceRejectsQcV1PresignRequestType(t *testing.T) {
+	service, err := NewService(newMemoryHandle(), &scriptedEngine{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := baseRequest(TemplateQcV1)
+	request.RequestType = RequestTypePresignSelfV1
+
+	_, err = service.Submit(context.Background(), TemplateQcV1, SignerSubmitInput{
+		RouteRequestID: "route_qc_invalid_presign",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil {
+		t.Fatal("expected requestType validation error")
+	}
+	if !strings.Contains(err.Error(), "request.requestType must be reconstruct for qc_v1") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRequestDigestNormalizesMixedCaseArtifactApprovalVariants(t *testing.T) {
 	for _, route := range []TemplateID{TemplateQcV1, TemplateSelfV1} {
 		t.Run(string(route), func(t *testing.T) {
@@ -3169,6 +3229,7 @@ func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
 			"facadeRequestId":"rf_123",
 			"idempotencyKey":"idem_123",
 			"route":"self_v1",
+			"requestType":"reconstruct",
 			"strategy":"0x1234",
 			"reserve":"0x1111111111111111111111111111111111111111",
 			"epoch":12,

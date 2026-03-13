@@ -8,6 +8,7 @@
         "facadeRequestId": "rf_vector_qc_v1",
         "idempotencyKey": "idem-qc-vector-v1",
         "route": "qc_v1",
+        "requestType": "reconstruct",
         "strategy": "0x1111111111111111111111111111111111111111",
         "reserve": "0x2222222222222222222222222222222222222222",
         "epoch": 12,
@@ -91,7 +92,7 @@
           "custodianRequired": true
         }
       },
-      "expectedRequestDigest": "0x1a435b7fda4d048b8b4b9fb1448c14f581d4b3e38ddfe526b17b3c5ef719498c"
+      "expectedRequestDigest": "0x5cdfdc1861efd8ed59b0ee9b3b2a8583fc787321900fd36f4198db311a22fbcc"
     },
     "self_v1": {
       "expectedApprovalDigest": "0x4820468d065bc627dabac7860ef473ed28806d6352ba3459ff4edfb81e6bb752",
@@ -99,6 +100,7 @@
         "facadeRequestId": "rf_vector_self_v1",
         "idempotencyKey": "idem-self-vector-v1",
         "route": "self_v1",
+        "requestType": "reconstruct",
         "strategy": "0x1111111111111111111111111111111111111111",
         "reserve": "0x2222222222222222222222222222222222222222",
         "epoch": 12,
@@ -175,7 +177,7 @@
           "custodianRequired": false
         }
       },
-      "expectedRequestDigest": "0xb5cd6a894a8e6bb5e68310e9c43560e91de1fc62bf0acf73b63e882332b2138a"
+      "expectedRequestDigest": "0x238153ab33ce630fe44c59da2a42ef3a0eeb106df86c59c893c0047648589e05"
     }
   }
 }
