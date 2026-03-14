@@ -3337,6 +3337,130 @@ func TestInitializeRejectsInvalidOrUnavailablePort(t *testing.T) {
 	}
 }
 
+func availableLoopbackPort(t *testing.T) int {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", net.JoinHostPort(DefaultListenAddress, "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	return listener.Addr().(*net.TCPAddr).Port
+}
+
+func TestInitializeRequiresQcV1DepositorTrustRootsWhenConfigured(t *testing.T) {
+	handle := newMemoryHandle()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, enabled, err := Initialize(
+		ctx,
+		Config{
+			Port:                      availableLoopbackPort(t),
+			RequireApprovalTrustRoots: true,
+		},
+		handle,
+		&scriptedEngine{},
+	)
+	if err == nil || enabled {
+		t.Fatalf("expected missing qc_v1 depositor trust roots to fail, got enabled=%v err=%v", enabled, err)
+	}
+	if !strings.Contains(
+		err.Error(),
+		"covenant signer qc_v1 routes require depositorTrustRoots when covenantSigner.requireApprovalTrustRoots=true",
+	) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInitializeRequiresQcV1CustodianTrustRootsWhenConfigured(t *testing.T) {
+	handle := newMemoryHandle()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, enabled, err := Initialize(
+		ctx,
+		Config{
+			Port:                      availableLoopbackPort(t),
+			RequireApprovalTrustRoots: true,
+			DepositorTrustRoots: []DepositorTrustRoot{
+				testDepositorTrustRoot(TemplateQcV1),
+			},
+		},
+		handle,
+		&scriptedEngine{},
+	)
+	if err == nil || enabled {
+		t.Fatalf("expected missing qc_v1 custodian trust roots to fail, got enabled=%v err=%v", enabled, err)
+	}
+	if !strings.Contains(
+		err.Error(),
+		"covenant signer qc_v1 routes require custodianTrustRoots when covenantSigner.requireApprovalTrustRoots=true",
+	) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInitializeRequiresSelfV1DepositorTrustRootsWhenConfigured(t *testing.T) {
+	handle := newMemoryHandle()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, enabled, err := Initialize(
+		ctx,
+		Config{
+			Port:                      availableLoopbackPort(t),
+			EnableSelfV1:              true,
+			RequireApprovalTrustRoots: true,
+			DepositorTrustRoots: []DepositorTrustRoot{
+				testDepositorTrustRoot(TemplateQcV1),
+			},
+			CustodianTrustRoots: []CustodianTrustRoot{
+				testCustodianTrustRoot(TemplateQcV1),
+			},
+		},
+		handle,
+		&scriptedEngine{},
+	)
+	if err == nil || enabled {
+		t.Fatalf("expected missing self_v1 depositor trust roots to fail, got enabled=%v err=%v", enabled, err)
+	}
+	if !strings.Contains(
+		err.Error(),
+		"covenant signer self_v1 routes require depositorTrustRoots when covenantSigner.requireApprovalTrustRoots=true",
+	) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInitializeAcceptsRequiredApprovalTrustRootsWhenConfigured(t *testing.T) {
+	handle := newMemoryHandle()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server, enabled, err := Initialize(
+		ctx,
+		Config{
+			Port:                      availableLoopbackPort(t),
+			EnableSelfV1:              true,
+			RequireApprovalTrustRoots: true,
+			DepositorTrustRoots: []DepositorTrustRoot{
+				testDepositorTrustRoot(TemplateQcV1),
+				testDepositorTrustRoot(TemplateSelfV1),
+			},
+			CustodianTrustRoots: []CustodianTrustRoot{
+				testCustodianTrustRoot(TemplateQcV1),
+			},
+		},
+		handle,
+		&scriptedEngine{},
+	)
+	if err != nil || !enabled || server == nil {
+		t.Fatalf("expected startup to succeed with required trust roots, got enabled=%v server=%v err=%v", enabled, server != nil, err)
+	}
+}
+
 func TestIsLoopbackListenAddressAcceptsBracketedIPv6Loopback(t *testing.T) {
 	if !isLoopbackListenAddress("[::1]") {
 		t.Fatal("expected bracketed IPv6 loopback address to be recognized")

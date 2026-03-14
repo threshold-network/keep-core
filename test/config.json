@@ -40,7 +40,8 @@
         "EthereumMetricsTick": "1m27s"
     },
     "CovenantSigner": {
-        "Port": 9702
+        "Port": 9702,
+        "RequireApprovalTrustRoots": true
     },
     "Maintainer": {
         "BitcoinDifficulty": {
