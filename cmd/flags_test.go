@@ -219,6 +219,13 @@ var cmdFlagsTests = map[string]struct {
 		expectedValueFromFlag: true,
 		defaultValue:          false,
 	},
+	"covenantSigner.requireApprovalTrustRoots": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.CovenantSigner.RequireApprovalTrustRoots },
+		flagName:              "--covenantSigner.requireApprovalTrustRoots",
+		flagValue:             "",
+		expectedValueFromFlag: true,
+		defaultValue:          false,
+	},
 	"tbtc.preParamsPoolSize": {
 		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.PreParamsPoolSize },
 		flagName:              "--tbtc.preParamsPoolSize",

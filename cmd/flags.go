@@ -338,6 +338,12 @@ func initCovenantSignerFlags(cmd *cobra.Command, cfg *config.Config) {
 		false,
 		"Expose self_v1 covenant signer HTTP routes. Keep disabled for a qc_v1-first launch unless self_v1 is explicitly approved.",
 	)
+	cmd.Flags().BoolVar(
+		&cfg.CovenantSigner.RequireApprovalTrustRoots,
+		"covenantSigner.requireApprovalTrustRoots",
+		false,
+		"Fail startup when enabled covenant routes are missing route-level approval trust roots. Request-time validation still enforces exact reserve/network trust-root matches.",
+	)
 }
 
 // Initialize flags for Maintainer configuration.

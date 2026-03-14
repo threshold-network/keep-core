@@ -58,6 +58,9 @@ func Initialize(
 	if err != nil {
 		return nil, false, err
 	}
+	if err := validateRequiredApprovalTrustRoots(config, service); err != nil {
+		return nil, false, err
+	}
 	if service.signerApprovalVerifier == nil {
 		logger.Warn(
 			"covenant signer started without a signer approval verifier; " +
@@ -133,6 +136,45 @@ func Initialize(
 	)
 
 	return server, true, nil
+}
+
+func validateRequiredApprovalTrustRoots(
+	config Config,
+	service *Service,
+) error {
+	if !config.RequireApprovalTrustRoots {
+		return nil
+	}
+
+	if config.EnableSelfV1 &&
+		!hasDepositorTrustRootForRoute(
+			service.depositorTrustRoots,
+			TemplateSelfV1,
+		) {
+		return fmt.Errorf(
+			"covenant signer self_v1 routes require depositorTrustRoots when covenantSigner.requireApprovalTrustRoots=true",
+		)
+	}
+
+	if !hasDepositorTrustRootForRoute(
+		service.depositorTrustRoots,
+		TemplateQcV1,
+	) {
+		return fmt.Errorf(
+			"covenant signer qc_v1 routes require depositorTrustRoots when covenantSigner.requireApprovalTrustRoots=true",
+		)
+	}
+
+	if !hasCustodianTrustRootForRoute(
+		service.custodianTrustRoots,
+		TemplateQcV1,
+	) {
+		return fmt.Errorf(
+			"covenant signer qc_v1 routes require custodianTrustRoots when covenantSigner.requireApprovalTrustRoots=true",
+		)
+	}
+
+	return nil
 }
 
 func hasDepositorTrustRootForRoute(
