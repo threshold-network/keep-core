@@ -191,8 +191,10 @@ func verifySignerApprovalCertificate(
 	if certificate.SignatureAlgorithm != signerApprovalCertificateSignatureAlgorithm {
 		return fmt.Errorf("unsupported signature algorithm: %s", certificate.SignatureAlgorithm)
 	}
-	if expectedSignerSetHash != "" &&
-		strings.ToLower(expectedSignerSetHash) != strings.ToLower(certificate.SignerSetHash) {
+	if strings.TrimSpace(expectedSignerSetHash) == "" {
+		return fmt.Errorf("expected signer set hash must not be empty")
+	}
+	if strings.ToLower(expectedSignerSetHash) != strings.ToLower(certificate.SignerSetHash) {
 		return fmt.Errorf("signer set hash does not match the expected signer set")
 	}
 
