@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -14,6 +15,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/chain"
 
 	"github.com/ethereum/go-ethereum/common"
+	commonEthereum "github.com/keep-network/keep-common/pkg/chain/ethereum"
 
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/chain/local_v1"
@@ -532,4 +534,35 @@ func TestBuildMovedFundsKey(t *testing.T) {
 		expectedMovedFundsKey,
 		movedFundsKey.Text(16),
 	)
+}
+
+func TestNewTbtcChainRejectsMissingBridgeContractAddress(t *testing.T) {
+	_, err := newTbtcChain(
+		commonEthereum.Config{
+			ContractAddresses: map[string]string{},
+		},
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "failed to resolve Bridge contract address") {
+		t.Fatalf("expected bridge contract address resolution error, got: %v", err)
+	}
+}
+
+func TestNewTbtcChainRejectsMalformedBridgeContractAddress(t *testing.T) {
+	config := commonEthereum.Config{
+		ContractAddresses: map[string]string{},
+	}
+	config.SetContractAddress(BridgeContractName, "not-a-hex-address")
+
+	_, err := newTbtcChain(config, nil)
+	if err == nil || !strings.Contains(err.Error(), "failed to resolve Bridge contract address") {
+		t.Fatalf("expected malformed bridge contract address error, got: %v", err)
+	}
+}
+
+func TestParseWalletStateRejectsUnsupportedValue(t *testing.T) {
+	_, err := parseWalletState(255)
+	if err == nil || !strings.Contains(err.Error(), "unexpected wallet state value") {
+		t.Fatalf("expected unsupported wallet state error, got: %v", err)
+	}
 }
