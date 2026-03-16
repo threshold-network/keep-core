@@ -1,6 +1,7 @@
 package tbtc
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/sha256"
@@ -161,7 +162,7 @@ func computeSignerApprovalCertificateSignerSetHash(
 		return "", err
 	}
 
-	payload, err := json.Marshal(signerApprovalCertificateSignerSetPayload{
+	payload, err := marshalCanonicalJSON(signerApprovalCertificateSignerSetPayload{
 		WalletID:        "0x" + hex.EncodeToString(walletChainData.EcdsaWalletID[:]),
 		WalletPublicKey: "0x" + hex.EncodeToString(walletPublicKeyBytes),
 		MembersIDsHash:  "0x" + hex.EncodeToString(walletChainData.MembersIDsHash[:]),
@@ -176,6 +177,17 @@ func computeSignerApprovalCertificateSignerSetHash(
 	)
 
 	return "0x" + hex.EncodeToString(sum[:]), nil
+}
+
+func marshalCanonicalJSON(value any) ([]byte, error) {
+	buffer := bytes.NewBuffer(make([]byte, 0))
+	encoder := json.NewEncoder(buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+
+	return bytes.TrimSpace(buffer.Bytes()), nil
 }
 
 func verifySignerApprovalCertificate(
