@@ -350,7 +350,8 @@ func pollBodyHandler(service *Service, route TemplateID) http.HandlerFunc {
 func pollPathHandler(service *Service, route TemplateID) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			http.NotFound(w, r)
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
