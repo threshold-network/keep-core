@@ -65,6 +65,25 @@ jobs:
               - './config/_electrum_urls/**'
               - './pkg/bitcoin/electrum/**'
 
+  client-risk-detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      path-filter: ${{ steps.filter.outputs.path-filter }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request'
+
+      - uses: dorny/paths-filter@v2
+        if: github.event_name == 'pull_request'
+        id: filter
+        with:
+          filters: |
+            path-filter:
+              - './pkg/covenantsigner/**'
+              - './pkg/tbtc/**'
+              - './pkg/chain/ethereum/**'
+              - './cmd/start.go'
+
   client-build-test-publish:
     needs: client-detect-changes
     if: |
@@ -302,10 +321,10 @@ jobs:
           checks: "-SA1019"
 
   client-race:
-    needs: client-detect-changes
+    needs: client-risk-detect-changes
     if: |
       github.event_name == 'push'
-        || needs.client-detect-changes.outputs.path-filter == 'true'
+        || needs.client-risk-detect-changes.outputs.path-filter == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
