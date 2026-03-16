@@ -93,24 +93,16 @@ type validationOptions struct {
 	signerApprovalVerifier            SignerApprovalVerifier
 }
 
-func resolveValidationOptions(options []validationOptions) validationOptions {
-	if len(options) == 0 {
-		return validationOptions{}
-	}
-
-	return options[0]
-}
-
 // requestDigest accepts raw requests because Poll validates equivalence against
 // whatever the caller resubmits. Submit should use requestDigestFromNormalized
 // after it has already normalized the request once for storage.
 func requestDigest(
 	request RouteSubmitRequest,
-	options ...validationOptions,
+	options validationOptions,
 ) (string, error) {
 	normalizedRequest, err := normalizeRouteSubmitRequest(
 		request,
-		resolveValidationOptions(options),
+		options,
 	)
 	if err != nil {
 		return "", err
@@ -1617,9 +1609,8 @@ func normalizeScriptTemplate(route TemplateID, rawTemplate json.RawMessage) (jso
 
 func normalizeRouteSubmitRequest(
 	request RouteSubmitRequest,
-	options ...validationOptions,
+	options validationOptions,
 ) (RouteSubmitRequest, error) {
-	resolvedOptions := resolveValidationOptions(options)
 	normalizedArtifactApprovals, normalizedSignerApproval, normalizedArtifactSignatures, err := normalizeArtifactApprovals(
 		request.Route,
 		request,
@@ -1635,7 +1626,7 @@ func normalizeRouteSubmitRequest(
 
 	normalizedMigrationPlanQuote, err := normalizeMigrationPlanQuote(
 		request,
-		resolvedOptions,
+		options,
 	)
 	if err != nil {
 		return RouteSubmitRequest{}, err
@@ -1680,9 +1671,8 @@ func normalizeRouteSubmitRequest(
 func validateCommonRequest(
 	route TemplateID,
 	request RouteSubmitRequest,
-	options ...validationOptions,
+	options validationOptions,
 ) error {
-	resolvedOptions := resolveValidationOptions(options)
 	if request.FacadeRequestID == "" {
 		return &inputError{"request.facadeRequestId is required"}
 	}
@@ -1730,13 +1720,13 @@ func validateCommonRequest(
 	if err := validateMigrationTransactionPlan(request, request.MigrationTransactionPlan); err != nil {
 		return err
 	}
-	if _, err := normalizeMigrationPlanQuote(request, resolvedOptions); err != nil {
+	if _, err := normalizeMigrationPlanQuote(request, options); err != nil {
 		return err
 	}
 	if request.ArtifactApprovals == nil {
 		return &inputError{"request.artifactApprovals is required"}
 	}
-	if resolvedOptions.signerApprovalVerifier != nil && request.SignerApproval == nil {
+	if options.signerApprovalVerifier != nil && request.SignerApproval == nil {
 		return &inputError{
 			"request.signerApproval is required when the signer approval verifier is configured",
 		}
@@ -1765,10 +1755,10 @@ func validateCommonRequest(
 		}
 
 		depositorPublicKey := template.DepositorPublicKey
-		if len(resolvedOptions.depositorTrustRoots) > 0 {
+		if len(options.depositorTrustRoots) > 0 {
 			expectedDepositorPublicKey, ok := resolveExpectedDepositorPublicKey(
 				request,
-				resolvedOptions.depositorTrustRoots,
+				options.depositorTrustRoots,
 			)
 			if !ok {
 				return &inputError{
@@ -1812,10 +1802,10 @@ func validateCommonRequest(
 		}
 
 		depositorPublicKey := template.DepositorPublicKey
-		if len(resolvedOptions.depositorTrustRoots) > 0 {
+		if len(options.depositorTrustRoots) > 0 {
 			expectedDepositorPublicKey, ok := resolveExpectedDepositorPublicKey(
 				request,
-				resolvedOptions.depositorTrustRoots,
+				options.depositorTrustRoots,
 			)
 			if !ok {
 				return &inputError{
@@ -1831,10 +1821,10 @@ func validateCommonRequest(
 		}
 
 		custodianPublicKey := template.CustodianPublicKey
-		if len(resolvedOptions.custodianTrustRoots) > 0 {
+		if len(options.custodianTrustRoots) > 0 {
 			expectedCustodianPublicKey, ok := resolveExpectedCustodianPublicKey(
 				request,
-				resolvedOptions.custodianTrustRoots,
+				options.custodianTrustRoots,
 			)
 			if !ok {
 				return &inputError{
@@ -1861,18 +1851,18 @@ func validateCommonRequest(
 	}
 
 	if request.SignerApproval != nil {
-		if resolvedOptions.signerApprovalVerifier == nil {
+		if options.signerApprovalVerifier == nil {
 			return &inputError{
 				"request.signerApproval cannot be verified by this signer deployment",
 			}
 		}
 
-		normalizedRequest, err := normalizeRouteSubmitRequest(request, resolvedOptions)
+		normalizedRequest, err := normalizeRouteSubmitRequest(request, options)
 		if err != nil {
 			return err
 		}
 
-		if err := resolvedOptions.signerApprovalVerifier.VerifySignerApproval(
+		if err := options.signerApprovalVerifier.VerifySignerApproval(
 			normalizedRequest,
 		); err != nil {
 			return err
@@ -1885,7 +1875,7 @@ func validateCommonRequest(
 func validateSubmitInput(
 	route TemplateID,
 	input SignerSubmitInput,
-	options ...validationOptions,
+	options validationOptions,
 ) error {
 	if input.RouteRequestID == "" {
 		return &inputError{"routeRequestId is required"}
@@ -1893,13 +1883,13 @@ func validateSubmitInput(
 	if input.Stage != StageSignerCoordination {
 		return &inputError{"stage must be SIGNER_COORDINATION"}
 	}
-	return validateCommonRequest(route, input.Request, resolveValidationOptions(options))
+	return validateCommonRequest(route, input.Request, options)
 }
 
 func validatePollInput(
 	route TemplateID,
 	input SignerPollInput,
-	options ...validationOptions,
+	options validationOptions,
 ) error {
 	if input.RequestID == "" {
 		return &inputError{"requestId is required"}
@@ -1908,7 +1898,7 @@ func validatePollInput(
 		RouteRequestID: input.RouteRequestID,
 		Request:        input.Request,
 		Stage:          input.Stage,
-	}, resolveValidationOptions(options)); err != nil {
+	}, options); err != nil {
 		return err
 	}
 	return nil

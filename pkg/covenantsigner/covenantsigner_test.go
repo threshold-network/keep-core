@@ -2084,7 +2084,7 @@ func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 }
 
 func TestRequestDigestNormalizesEquivalentArtifactApprovalVariants(t *testing.T) {
-	canonicalDigest, err := requestDigest(canonicalArtifactApprovalRequest(TemplateQcV1))
+	canonicalDigest, err := requestDigest(canonicalArtifactApprovalRequest(TemplateQcV1), validationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2094,6 +2094,7 @@ func TestRequestDigestNormalizesEquivalentArtifactApprovalVariants(t *testing.T)
 			t,
 			canonicalArtifactApprovalRequest(TemplateQcV1),
 		),
+		validationOptions{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -2105,7 +2106,7 @@ func TestRequestDigestNormalizesEquivalentArtifactApprovalVariants(t *testing.T)
 }
 
 func TestRequestDigestNormalizesEquivalentStructuredSignerApprovalVariants(t *testing.T) {
-	canonicalDigest, err := requestDigest(structuredSignerApprovalRequest(TemplateQcV1))
+	canonicalDigest, err := requestDigest(structuredSignerApprovalRequest(TemplateQcV1), validationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2115,6 +2116,7 @@ func TestRequestDigestNormalizesEquivalentStructuredSignerApprovalVariants(t *te
 			t,
 			structuredSignerApprovalRequest(TemplateQcV1),
 		),
+		validationOptions{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -2134,7 +2136,7 @@ func TestRequestDigestDoesNotEscapeHTMLSensitiveCharacters(t *testing.T) {
 	request.FacadeRequestID = "rf_<tag>&sink"
 	request.IdempotencyKey = "idem_>bridge"
 
-	normalizedRequest, err := normalizeRouteSubmitRequest(request)
+	normalizedRequest, err := normalizeRouteSubmitRequest(request, validationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2153,7 +2155,7 @@ func TestRequestDigestDoesNotEscapeHTMLSensitiveCharacters(t *testing.T) {
 		t.Fatalf("expected unescaped HTML-sensitive characters in payload, got %s", payload)
 	}
 
-	digestFromRawRequest, err := requestDigest(request)
+	digestFromRawRequest, err := requestDigest(request, validationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2813,7 +2815,7 @@ func TestRequestDigestRejectsArtifactApprovalsWithoutMigrationTransactionPlan(t 
 	request := canonicalArtifactApprovalRequest(TemplateSelfV1)
 	request.MigrationTransactionPlan = nil
 
-	_, err := requestDigest(request)
+	_, err := requestDigest(request, validationOptions{})
 	if err == nil || !strings.Contains(
 		err.Error(),
 		"request.migrationTransactionPlan is required when request.artifactApprovals is present",
@@ -2862,7 +2864,7 @@ func TestApprovalContractVectorsMatchExpectedRequestDigests(t *testing.T) {
 				)
 			}
 
-			digest, err := requestDigest(request)
+			digest, err := requestDigest(request, validationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2879,7 +2881,7 @@ func TestApprovalContractVectorsNormalizeEquivalentVariants(t *testing.T) {
 		t.Run(vectorKey, func(t *testing.T) {
 			canonicalRequest, _, expectedDigest := loadApprovalContractVector(t, vectorKey)
 
-			normalizedCanonical, err := normalizeRouteSubmitRequest(canonicalRequest)
+			normalizedCanonical, err := normalizeRouteSubmitRequest(canonicalRequest, validationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2888,7 +2890,7 @@ func TestApprovalContractVectorsNormalizeEquivalentVariants(t *testing.T) {
 				t,
 				canonicalRequest,
 			)
-			normalizedVariant, err := normalizeRouteSubmitRequest(variantRequest)
+			normalizedVariant, err := normalizeRouteSubmitRequest(variantRequest, validationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2901,7 +2903,7 @@ func TestApprovalContractVectorsNormalizeEquivalentVariants(t *testing.T) {
 				)
 			}
 
-			digest, err := requestDigest(variantRequest)
+			digest, err := requestDigest(variantRequest, validationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2919,11 +2921,11 @@ func TestRequestDigestDistinguishesSelfV1PresignFromReconstruct(t *testing.T) {
 	presignRequest := cloneRouteSubmitRequest(t, reconstructRequest)
 	presignRequest.RequestType = RequestTypePresignSelfV1
 
-	reconstructDigest, err := requestDigest(reconstructRequest)
+	reconstructDigest, err := requestDigest(reconstructRequest, validationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	presignDigest, err := requestDigest(presignRequest)
+	presignDigest, err := requestDigest(presignRequest, validationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2932,11 +2934,11 @@ func TestRequestDigestDistinguishesSelfV1PresignFromReconstruct(t *testing.T) {
 		t.Fatalf("expected distinct self_v1 digests, got %s", reconstructDigest)
 	}
 
-	normalizedReconstruct, err := normalizeRouteSubmitRequest(reconstructRequest)
+	normalizedReconstruct, err := normalizeRouteSubmitRequest(reconstructRequest, validationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	normalizedPresign, err := normalizeRouteSubmitRequest(presignRequest)
+	normalizedPresign, err := normalizeRouteSubmitRequest(presignRequest, validationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2987,11 +2989,11 @@ func TestRequestDigestNormalizesMixedCaseArtifactApprovalVariants(t *testing.T) 
 				)
 			}
 
-			normalizedCanonical, err := normalizeRouteSubmitRequest(canonicalRequest)
+			normalizedCanonical, err := normalizeRouteSubmitRequest(canonicalRequest, validationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
-			normalizedMixedCase, err := normalizeRouteSubmitRequest(mixedCaseRequest)
+			normalizedMixedCase, err := normalizeRouteSubmitRequest(mixedCaseRequest, validationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3004,11 +3006,11 @@ func TestRequestDigestNormalizesMixedCaseArtifactApprovalVariants(t *testing.T) 
 				)
 			}
 
-			canonicalDigest, err := requestDigest(canonicalRequest)
+			canonicalDigest, err := requestDigest(canonicalRequest, validationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
-			mixedCaseDigest, err := requestDigest(mixedCaseRequest)
+			mixedCaseDigest, err := requestDigest(mixedCaseRequest, validationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
