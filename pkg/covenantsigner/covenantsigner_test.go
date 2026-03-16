@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -70,6 +71,36 @@ func (mh *memoryHandle) ReadAll() (<-chan persistence.DataDescriptor, <-chan err
 	close(dataChan)
 	close(errorChan)
 	return dataChan, errorChan
+}
+
+type faultingMemoryHandle struct {
+	*memoryHandle
+	saveErrByName   map[string]error
+	deleteErrByName map[string]error
+}
+
+func newFaultingMemoryHandle() *faultingMemoryHandle {
+	return &faultingMemoryHandle{
+		memoryHandle:    newMemoryHandle(),
+		saveErrByName:   make(map[string]error),
+		deleteErrByName: make(map[string]error),
+	}
+}
+
+func (fmh *faultingMemoryHandle) Save(data []byte, directory string, name string) error {
+	if err, ok := fmh.saveErrByName[name]; ok {
+		return err
+	}
+
+	return fmh.memoryHandle.Save(data, directory, name)
+}
+
+func (fmh *faultingMemoryHandle) Delete(directory string, name string) error {
+	if err, ok := fmh.deleteErrByName[name]; ok {
+		return err
+	}
+
+	return fmh.memoryHandle.Delete(directory, name)
 }
 
 type scriptedEngine struct {
@@ -3148,6 +3179,161 @@ func TestStoreReloadPreservesJobs(t *testing.T) {
 	}
 	if !reflect.DeepEqual(job.Request, loadedJob.Request) {
 		t.Fatalf("unexpected reloaded request: %#v", loadedJob.Request)
+	}
+}
+
+func TestStorePutReturnsErrorWhenSaveFails(t *testing.T) {
+	handle := newFaultingMemoryHandle()
+	handle.saveErrByName["kcs_self_fail_save.json"] = errors.New("injected save failure")
+
+	store, err := NewStore(handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = store.Put(&Job{
+		RequestID:       "kcs_self_fail_save",
+		RouteRequestID:  "ors_fail_save",
+		Route:           TemplateSelfV1,
+		IdempotencyKey:  "idem_fail_save",
+		FacadeRequestID: "rf_fail_save",
+		RequestDigest:   "0xdeadbeef",
+		State:           JobStatePending,
+		Detail:          "queued",
+		CreatedAt:       "2026-03-09T00:00:00Z",
+		UpdatedAt:       "2026-03-09T00:00:00Z",
+		Request:         baseRequest(TemplateSelfV1),
+	})
+	if err == nil || !strings.Contains(err.Error(), "injected save failure") {
+		t.Fatalf("expected injected save failure, got: %v", err)
+	}
+
+	_, ok, err := store.GetByRouteRequest(TemplateSelfV1, "ors_fail_save")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("expected no route mapping after failed save")
+	}
+}
+
+func TestStorePutKeepsNewRouteMappingWhenOldDeleteFails(t *testing.T) {
+	handle := newFaultingMemoryHandle()
+	store, err := NewStore(handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	initial := &Job{
+		RequestID:       "kcs_self_old",
+		RouteRequestID:  "ors_replace",
+		Route:           TemplateSelfV1,
+		IdempotencyKey:  "idem_old",
+		FacadeRequestID: "rf_old",
+		RequestDigest:   "0x1111",
+		State:           JobStatePending,
+		Detail:          "queued",
+		CreatedAt:       "2026-03-09T00:00:00Z",
+		UpdatedAt:       "2026-03-09T00:00:00Z",
+		Request:         baseRequest(TemplateSelfV1),
+	}
+
+	if err := store.Put(initial); err != nil {
+		t.Fatal(err)
+	}
+
+	handle.deleteErrByName["kcs_self_old.json"] = errors.New("injected delete failure")
+
+	replacement := &Job{
+		RequestID:       "kcs_self_new",
+		RouteRequestID:  "ors_replace",
+		Route:           TemplateSelfV1,
+		IdempotencyKey:  "idem_new",
+		FacadeRequestID: "rf_new",
+		RequestDigest:   "0x2222",
+		State:           JobStatePending,
+		Detail:          "queued",
+		CreatedAt:       "2026-03-10T00:00:00Z",
+		UpdatedAt:       "2026-03-10T00:00:00Z",
+		Request:         baseRequest(TemplateSelfV1),
+	}
+
+	if err := store.Put(replacement); err != nil {
+		t.Fatalf("expected replacement put to succeed, got: %v", err)
+	}
+
+	loaded, ok, err := store.GetByRouteRequest(TemplateSelfV1, "ors_replace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected route mapping to exist")
+	}
+	if loaded.RequestID != "kcs_self_new" {
+		t.Fatalf("expected route key to map to replacement job, got: %s", loaded.RequestID)
+	}
+}
+
+func TestStoreLoadSelectsNewestJobForDuplicateRouteKeys(t *testing.T) {
+	handle := newMemoryHandle()
+
+	oldJob := &Job{
+		RequestID:       "kcs_self_old_load",
+		RouteRequestID:  "ors_load_dupe",
+		Route:           TemplateSelfV1,
+		IdempotencyKey:  "idem_old_load",
+		FacadeRequestID: "rf_old_load",
+		RequestDigest:   "0xaaa",
+		State:           JobStatePending,
+		Detail:          "queued",
+		CreatedAt:       "2026-03-09T00:00:00Z",
+		UpdatedAt:       "2026-03-09T00:00:00Z",
+		Request:         baseRequest(TemplateSelfV1),
+	}
+	newJob := &Job{
+		RequestID:       "kcs_self_new_load",
+		RouteRequestID:  "ors_load_dupe",
+		Route:           TemplateSelfV1,
+		IdempotencyKey:  "idem_new_load",
+		FacadeRequestID: "rf_new_load",
+		RequestDigest:   "0xbbb",
+		State:           JobStatePending,
+		Detail:          "queued",
+		CreatedAt:       "2026-03-10T00:00:00Z",
+		UpdatedAt:       "2026-03-10T00:00:00Z",
+		Request:         baseRequest(TemplateSelfV1),
+	}
+
+	oldPayload, err := json.Marshal(oldJob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newPayload, err := json.Marshal(newJob)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := handle.Save(oldPayload, jobsDirectory, oldJob.RequestID+".json"); err != nil {
+		t.Fatal(err)
+	}
+	if err := handle.Save(newPayload, jobsDirectory, newJob.RequestID+".json"); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewStore(handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, ok, err := store.GetByRouteRequest(TemplateSelfV1, "ors_load_dupe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected loaded route mapping")
+	}
+	if loaded.RequestID != newJob.RequestID {
+		t.Fatalf("expected newest request ID %s, got %s", newJob.RequestID, loaded.RequestID)
 	}
 }
 
