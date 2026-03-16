@@ -1,9 +1,7 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
 
 library UnlockingSchedule {
-    using SafeMath for uint256;
 
     function getUnlockedAmount(
         uint256 _now,
@@ -17,13 +15,13 @@ library UnlockingSchedule {
             return 0;
         }
 
-        uint256 timeElapsed = _now.sub(start);
+        uint256 timeElapsed = _now - start;
 
         bool unlockingPeriodFinished = timeElapsed >= duration;
         if (unlockingPeriodFinished) {
             return grantedAmount;
         }
 
-        return grantedAmount.mul(timeElapsed).div(duration);
+        return grantedAmount * timeElapsed / duration;
     }
 }

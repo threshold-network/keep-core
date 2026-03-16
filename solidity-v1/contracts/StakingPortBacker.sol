@@ -12,11 +12,10 @@
                            Trust math, not hardware.
 */
 
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/ownership/Ownable.sol";
-import "openzeppelin-solidity/contracts/token/ERC20/SafeERC20.sol";
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import "./KeepToken.sol";
 import "./TokenGrant.sol";
@@ -49,7 +48,6 @@ import "./TokenSender.sol";
 /// StakingPortBacker contract.
 contract StakingPortBacker is Ownable {
     using SafeERC20 for IERC20;
-    using SafeMath for uint256;
     using BytesLib for bytes;
     using RolesLookup for address payable;
 
@@ -235,7 +233,7 @@ contract StakingPortBacker is Ownable {
     function forceUndelegate(address operator) public onlyOwner {
         CopiedStake memory stake = copiedStakes[operator];
         require(
-            stake.timestamp.add(maxAllowedBackingDuration) < block.timestamp,
+            stake.timestamp + maxAllowedBackingDuration < block.timestamp,
             "Maximum allowed backing duration not exceeded yet"
         );
         newStakingContract.undelegate(operator);

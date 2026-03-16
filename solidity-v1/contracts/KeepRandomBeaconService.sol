@@ -12,16 +12,14 @@
                            Trust math, not hardware.
 */
 
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
-import "@openzeppelin/upgrades/contracts/upgradeability/Proxy.sol";
+import "@openzeppelin/contracts/proxy/Proxy.sol";
 
 /// @title Keep Random Beacon service
 /// @notice A proxy contract to provide upgradable Random Beacon functionality.
 /// All calls to this proxy contract are delegated to the implementation contract.
 contract KeepRandomBeaconService is Proxy {
-    using SafeMath for uint256;
 
     /// @dev Storage slot with the admin of the contract.
     /// This is the keccak-256 hash of "eip1967.proxy.admin" subtracted by 1.
@@ -64,7 +62,7 @@ contract KeepRandomBeaconService is Proxy {
     event UpgradeStarted(address implementation, uint256 timestamp);
     event UpgradeCompleted(address implementation);
 
-    constructor(address _implementation, bytes memory _data) public {
+    constructor(address _implementation, bytes memory _data) {
         assertSlot(IMPLEMENTATION_SLOT, "eip1967.proxy.implementation");
         assertSlot(ADMIN_SLOT, "eip1967.proxy.admin");
         assertSlot(
@@ -137,7 +135,7 @@ contract KeepRandomBeaconService is Proxy {
 
         require(
             /* solium-disable-next-line security/no-block-members */
-            block.timestamp.sub(upgradeInitiatedTimestamp()) >=
+            block.timestamp - upgradeInitiatedTimestamp() >=
                 upgradeTimeDelay(),
             "Timer not elapsed"
         );
@@ -163,7 +161,7 @@ contract KeepRandomBeaconService is Proxy {
     }
 
     /// @notice The admin slot.
-    /// @return The contract owner's address.
+    /// @return adm The contract owner's address.
     function admin() public view returns (address adm) {
         bytes32 slot = ADMIN_SLOT;
         /* solium-disable-next-line */
@@ -241,8 +239,8 @@ contract KeepRandomBeaconService is Proxy {
 
     /// @notice Returns the current implementation. Implements function from `Proxy`
     /// contract.
-    /// @return Address of the current implementation
-    function _implementation() internal view returns (address impl) {
+    /// @return impl Address of the current implementation
+    function _implementation() internal view override returns (address impl) {
         bytes32 slot = IMPLEMENTATION_SLOT;
         /* solium-disable-next-line */
         assembly {

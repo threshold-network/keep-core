@@ -1,8 +1,7 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/token/ERC20/ERC20Burnable.sol";
-import "openzeppelin-solidity/contracts/token/ERC20/SafeERC20.sol";
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./TokenStaking.sol";
 import "./TokenSender.sol";
 import "./utils/BytesLib.sol";
@@ -17,7 +16,6 @@ interface tokenSender {
 }
 
 contract TokenGrantStake {
-    using SafeMath for uint256;
     using BytesLib for bytes;
 
     ERC20Burnable token;

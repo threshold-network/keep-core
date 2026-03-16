@@ -1,6 +1,6 @@
-pragma solidity ^0.5.4;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/token/ERC20/SafeERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import "./utils/BytesLib.sol";
 
@@ -33,7 +33,7 @@ contract ManagedGrantFactory {
 
     event ManagedGrantCreated(address grantAddress, address indexed grantee);
 
-    constructor(address _tokenAddress, address _tokenGrant) public {
+    constructor(address _tokenAddress, address _tokenGrant) {
         token = KeepToken(_tokenAddress);
         tokenGrant = TokenGrant(_tokenGrant);
     }
@@ -100,7 +100,7 @@ contract ManagedGrantFactory {
     /// @param cliffDuration Duration in seconds of the cliff before which no tokens will unlock.
     /// @param revocable Whether the token grant is revocable or not.
     /// @param policy Address of the staking policy to be used.
-    /// @return The address of the managed grant.
+    /// @return _managedGrant The address of the managed grant.
     function createManagedGrant(
         address grantee,
         uint256 amount,

@@ -12,13 +12,12 @@
                            Trust math, not hardware.
 */
 
-pragma solidity ^0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/ownership/Ownable.sol";
-import "openzeppelin-solidity/contracts/token/ERC20/IERC20.sol";
-import "openzeppelin-solidity/contracts/token/ERC20/SafeERC20.sol";
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
-import "openzeppelin-solidity/contracts/math/Math.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
 
 import "./KeepToken.sol";
 
@@ -67,8 +66,7 @@ import "./KeepToken.sol";
 /// functions for accessing information about keeps and paying out rewards.
 /// For the purpose of rewards, Random Beacon signing groups count as "keeps"
 /// and the beacon operator contract acts as the "factory".
-contract Rewards is Ownable {
-    using SafeMath for uint256;
+abstract contract Rewards is Ownable {
     using SafeERC20 for KeepToken;
 
     KeepToken public token;
@@ -89,10 +87,10 @@ contract Rewards is Ownable {
     uint256 public unallocatedRewards;
     // Rewards that have been dispensed from this contract as signer rewards.
     // `token.balanceOf(address(this))` should always equal
-    // `totalRewards.sub(dispensedRewards)`
+    // `totalRewards - dispensedRewards`
     uint256 public dispensedRewards;
     // The following invariant should always hold:
-    // token.balanceOf(address(this)) >= totalRewards.sub(dispensedRewards)
+    // token.balanceOf(address(this)) >= totalRewards - dispensedRewards
 
     // Timestamp of first interval beginning.
     // Interval 0 covers everything before `firstIntervalStart`
@@ -152,7 +150,7 @@ contract Rewards is Ownable {
     /// If the reward contract has received tokens outside `approveAndCall`,
     /// this collects them as well.
     /// The following invariant should hold right after calling this function:
-    /// token.balanceOf(address(this)) == totalRewards.sub(dispensedRewards).
+    /// token.balanceOf(address(this)) == totalRewards - dispensedRewards.
     /// @param _from The original sender of the tokens.
     /// Must have approved at least `_value` tokens for the rewards contract.
     /// @param _value The amount of tokens to fund.
@@ -169,15 +167,15 @@ contract Rewards is Ownable {
         token.safeTransferFrom(_from, address(this), _value);
 
         uint256 currentBalance = token.balanceOf(address(this));
-        uint256 beforeBalance = totalRewards.sub(dispensedRewards);
+        uint256 beforeBalance = totalRewards - dispensedRewards;
         require(
             currentBalance >= beforeBalance,
             "Reward contract has lost tokens"
         );
 
-        uint256 addedBalance = currentBalance.sub(beforeBalance);
+        uint256 addedBalance = currentBalance - beforeBalance;
 
-        totalRewards = totalRewards.add(addedBalance);
+        totalRewards = totalRewards + addedBalance;
         deallocate(addedBalance);
     }
 
@@ -260,8 +258,8 @@ contract Rewards is Ownable {
             return 0;
         }
 
-        uint256 difference = timestamp.sub(_firstIntervalStart);
-        uint256 interval = difference.div(_termLength);
+        uint256 difference = timestamp - _firstIntervalStart;
+        uint256 interval = difference / _termLength;
 
         return interval;
     }
@@ -272,7 +270,7 @@ contract Rewards is Ownable {
     /// @param interval The interval whose start is queried.
     /// @return The start timestamp of the interval.
     function startOf(uint256 interval) public view returns (uint256) {
-        return firstIntervalStart.add(interval.mul(termLength));
+        return firstIntervalStart + interval * termLength;
     }
 
     /// @notice Return the timestamp corresponding to the end of the interval.
@@ -281,7 +279,7 @@ contract Rewards is Ownable {
     /// @param interval The interval whose end is queried.
     /// @return The end timestamp of the interval.
     function endOf(uint256 interval) public view returns (uint256) {
-        return startOf(interval.add(1));
+        return startOf(interval + 1);
     }
 
     /// @notice Return whether the given interval is finished.
@@ -305,7 +303,7 @@ contract Rewards is Ownable {
     /// @param interval The interval.
     /// @return Number of keeps created in the interval.
     function keepsInInterval(uint256 interval) public returns (uint256) {
-        return (_getEndpoint(interval).sub(_getPreviousEndpoint(interval)));
+        return (_getEndpoint(interval) - _getPreviousEndpoint(interval));
     }
 
     /// @notice Return the percentage of remaining unallocated rewards
@@ -345,10 +343,10 @@ contract Rewards is Ownable {
         require(!(interval < allocatedIntervals), "Interval already allocated");
         // Allocate previous intervals first
         if (interval > allocatedIntervals) {
-            allocateRewards(interval.sub(1));
+            allocateRewards(interval - 1);
         }
         uint256 totalAllocation = _adjustedAllocation(interval);
-        unallocatedRewards = unallocatedRewards.sub(totalAllocation);
+        unallocatedRewards = unallocatedRewards - totalAllocation;
         intervalAllocations.push(totalAllocation);
     }
 
@@ -413,15 +411,15 @@ contract Rewards is Ownable {
         );
 
         // ensure all past intervals are allocated
-        if (!isAllocated(currentInterval.sub(1))) {
-            allocateRewards(currentInterval.sub(1));
+        if (!isAllocated(currentInterval - 1)) {
+            allocateRewards(currentInterval - 1);
         }
 
         // transfer the unallocated KEEP to the new rewards contract and update
         // this contract's balances
         uint256 amountToTransfer = unallocatedRewards;
 
-        totalRewards = totalRewards.sub(amountToTransfer);
+        totalRewards = totalRewards - amountToTransfer;
         unallocatedRewards = 0;
 
         emit UpgradeFinalized(amountToTransfer);
@@ -463,7 +461,7 @@ contract Rewards is Ownable {
             return 0;
         }
 
-        uint256 ub = keepCount.sub(1); // upper bound, inclusive
+        uint256 ub = keepCount - 1; // upper bound, inclusive
         uint256 timestampUB = _getCreationTime(_getKeepAtIndex(ub));
         // all keeps created in or before the interval -> return keep count
         if (timestampUB < intervalEndpoint) {
@@ -500,11 +498,11 @@ contract Rewards is Ownable {
         uint256 lbTime = _lbTime;
         uint256 ub = _ub;
         uint256 ubTime = _ubTime;
-        uint256 len = ub.sub(lb);
+        uint256 len = ub - lb;
         while (len > 1) {
             // upper bound >= lower bound + 2
             // mid > lower bound
-            uint256 mid = lb.add(len.div(2));
+            uint256 mid = lb + len / 2;
             uint256 midTime = _getCreationTime(_getKeepAtIndex(mid));
 
             if (midTime >= targetTime) {
@@ -514,7 +512,7 @@ contract Rewards is Ownable {
                 lb = mid;
                 lbTime = midTime;
             }
-            len = ub.sub(lb);
+            len = ub - lb;
         }
         return ub;
     }
@@ -564,7 +562,7 @@ contract Rewards is Ownable {
         if (interval == 0) {
             return 0;
         } else {
-            return _getEndpoint(interval.sub(1));
+            return _getEndpoint(interval - 1);
         }
     }
 
@@ -576,7 +574,7 @@ contract Rewards is Ownable {
     function _baseAllocation(uint256 interval) internal view returns (uint256) {
         uint256 _unallocatedRewards = unallocatedRewards;
         uint256 weightPercentage = getIntervalWeight(interval);
-        return _unallocatedRewards.mul(weightPercentage).div(100);
+        return _unallocatedRewards * weightPercentage / 100;
     }
 
     /// @notice Calculate the reward allocation for an interval
@@ -607,7 +605,7 @@ contract Rewards is Ownable {
             return 0;
         }
         // Rewards divide equally among keeps
-        return __baseAllocation.mul(keepCount).div(adjustmentCount);
+        return __baseAllocation * keepCount / adjustmentCount;
     }
 
     /// @notice Process the rewards for the given keep, allocating finished
@@ -624,14 +622,14 @@ contract Rewards is Ownable {
         }
         uint256 allocation = intervalAllocations[interval];
         uint256 _keepsInInterval = keepsInInterval(interval);
-        uint256 perKeepReward = allocation.div(_keepsInInterval);
+        uint256 perKeepReward = allocation / _keepsInInterval;
         claimed[keepIdentifier] = true;
         intervalKeepsProcessed[interval] = intervalKeepsProcessed[interval].add(
             1
         );
 
         if (eligible) {
-            dispensedRewards = dispensedRewards.add(perKeepReward);
+            dispensedRewards = dispensedRewards + perKeepReward;
             _distributeReward(keepIdentifier, perKeepReward);
             emit RewardReceived(keepIdentifier, perKeepReward);
         } else {
@@ -649,17 +647,17 @@ contract Rewards is Ownable {
             bool success =
                 token.approveAndCall(newRewardsContract, amount, bytes(""));
             if (!success) {
-                unallocatedRewards = unallocatedRewards.add(amount);
+                unallocatedRewards = unallocatedRewards + amount;
             }
         } else {
-            unallocatedRewards = unallocatedRewards.add(amount);
+            unallocatedRewards = unallocatedRewards + amount;
         }
     }
 
     /// @notice Get the total number of keeps ever created by the factory,
     /// including closed and terminated keeps.
     /// @return The number of keeps.
-    function _getKeepCount() internal view returns (uint256);
+    function _getKeepCount() internal view virtual returns (uint256);
 
     /// @notice Get the identifier of the keep at the given index,
     /// when all keeps created by the factory are ordered by creation time.
@@ -667,37 +665,37 @@ contract Rewards is Ownable {
     /// @return The `bytes32` identifier of the keep at the given index.
     /// @dev Implementation is not required to check if a keep with the given
     /// index exists.
-    function _getKeepAtIndex(uint256 index) internal view returns (bytes32);
+    function _getKeepAtIndex(uint256 index) internal view virtual returns (bytes32);
 
     /// @notice Get the creation time of the given keep.
     /// @param _keep The identifier of the keep.
     /// @return The creation timestamp of the keep.
     /// @dev If the idenfifier is invalid or not recognized by factory, function
     /// may revert or return 0.
-    function _getCreationTime(bytes32 _keep) internal view returns (uint256);
+    function _getCreationTime(bytes32 _keep) internal view virtual returns (uint256);
 
     /// @notice Is the given keep closed.
     /// @param _keep The identifier of the keep.
     /// @return True if the keep is closed, false otherwise.
     /// If the identifier is invalid, may return false or an error.
-    function _isClosed(bytes32 _keep) internal view returns (bool);
+    function _isClosed(bytes32 _keep) internal view virtual returns (bool);
 
     /// @notice Is the given keep terminated.
     /// @param _keep The identifier of the keep.
     /// @return True if the keep is terminated, false otherwise.
     /// If the identifier is invalid, may return false or an error.
-    function _isTerminated(bytes32 _keep) internal view returns (bool);
+    function _isTerminated(bytes32 _keep) internal view virtual returns (bool);
 
     /// @notice Does the given `bytes32` identifier match a valid keep.
     /// @param _keep A possible keep identifier.
     /// @return True if the identifier matches a keep created by the factory.
     /// For any other identifier, must return false and not an error.
-    function _recognizedByFactory(bytes32 _keep) internal view returns (bool);
+    function _recognizedByFactory(bytes32 _keep) internal view virtual returns (bool);
 
     /// @notice Pay the given amount of tokens to members of the keep.
     /// @param _keep The keep whose members to reward.
     /// @param amount The total amount of tokens to distribute to the members.
-    function _distributeReward(bytes32 _keep, uint256 amount) internal;
+    function _distributeReward(bytes32 _keep, uint256 amount) internal virtual;
 
     modifier rewardsNotClaimed(bytes32 _keep) {
         require(!rewardClaimed(_keep), "Rewards already claimed");

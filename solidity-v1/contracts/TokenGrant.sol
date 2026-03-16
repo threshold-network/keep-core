@@ -1,8 +1,7 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/token/ERC20/ERC20Burnable.sol";
-import "openzeppelin-solidity/contracts/token/ERC20/SafeERC20.sol";
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./libraries/grant/UnlockingSchedule.sol";
 import "./utils/BytesLib.sol";
 import "./utils/AddressArrayUtils.sol";
@@ -17,7 +16,6 @@ import "./GrantStakingPolicy.sol";
 /// withdrawn gradually based on the unlocking schedule cliff and unlocking duration.
 /// Optionally grant can be revoked by the token grant manager.
 contract TokenGrant {
-    using SafeMath for uint256;
     using UnlockingSchedule for uint256;
     using SafeERC20 for ERC20Burnable;
     using BytesLib for bytes;
@@ -81,7 +79,7 @@ contract TokenGrant {
 
     /// @notice Creates a token grant contract for a provided Standard ERC20Burnable token.
     /// @param _tokenAddress address of a token that will be linked to this contract.
-    constructor(address _tokenAddress) public {
+    constructor(address _tokenAddress) {
         require(_tokenAddress != address(0x0), "Token address can't be zero.");
         token = ERC20Burnable(_tokenAddress);
     }
@@ -99,14 +97,14 @@ contract TokenGrant {
 
     /// @notice Gets the amount of granted tokens to the specified address.
     /// @param _owner The address to query the grants balance of.
-    /// @return An uint256 representing the grants balance owned by the passed address.
+    /// @return balance An uint256 representing the grants balance owned by the passed address.
     function balanceOf(address _owner) public view returns (uint256 balance) {
         return balances[_owner];
     }
 
     /// @notice Gets the stake balance of the specified address.
     /// @param _address The address to query the balance of.
-    /// @return An uint256 representing the amount staked by the passed address.
+    /// @return balance An uint256 representing the amount staked by the passed address.
     function stakeBalanceOf(address _address)
         public
         view
@@ -117,40 +115,6 @@ contract TokenGrant {
             balance += grants[id].staked;
         }
         return balance;
-    }
-
-    /// @notice Gets grant by ID. Returns only basic grant data.
-    /// If you need unlocking schedule for the grant you must call `getGrantUnlockingSchedule()`
-    /// This is to avoid Ethereum `Stack too deep` issue described here:
-    /// https://forum.ethereum.org/discussion/2400/error-stack-too-deep-try-removing-local-variables
-    /// @param _id ID of the token grant.
-    /// @return amount The amount of tokens the grant provides.
-    /// @return withdrawn The amount of tokens that have already been withdrawn
-    ///                   from the grant.
-    /// @return staked The amount of tokens that have been staked from the grant.
-    /// @return revoked A boolean indicating whether the grant has been revoked,
-    ///                 which is to say that it is no longer unlocking.
-    /// @return grantee The grantee of grant.
-    function getGrant(uint256 _id)
-        public
-        view
-        returns (
-            uint256 amount,
-            uint256 withdrawn,
-            uint256 staked,
-            uint256 revokedAmount,
-            uint256 revokedAt,
-            address grantee
-        )
-    {
-        return (
-            grants[_id].amount,
-            grants[_id].withdrawn,
-            grants[_id].staked,
-            grants[_id].revokedAmount,
-            grants[_id].revokedAt,
-            grants[_id].grantee
-        );
     }
 
     /// @notice Gets grant unlocking schedule by grant ID.
@@ -285,7 +249,7 @@ contract TokenGrant {
             _amount,
             _duration,
             _start,
-            _start.add(_cliffDuration),
+            _start + _cliffDuration,
             0,
             0,
             GrantStakingPolicy(_stakingPolicy)
@@ -300,7 +264,7 @@ contract TokenGrant {
         token.safeTransferFrom(_from, address(this), _amount);
 
         // Maintain a record of the unlocked amount
-        balances[_grantee] = balances[_grantee].add(_amount);
+        balances[_grantee] = balances[_grantee] + _amount;
         emit TokenGrantCreated(id);
     }
 
@@ -315,12 +279,10 @@ contract TokenGrant {
         );
 
         // Update withdrawn amount.
-        grants[_id].withdrawn = grants[_id].withdrawn.add(amount);
+        grants[_id].withdrawn = grants[_id].withdrawn + amount;
 
         // Update grantee grants balance.
-        balances[grants[_id].grantee] = balances[grants[_id].grantee].sub(
-            amount
-        );
+        balances[grants[_id].grantee] = balances[grants[_id].grantee] - amount;
 
         // Transfer tokens from this contract balance to the grantee token balance.
         token.safeTransfer(grants[_id].grantee, amount);
@@ -337,8 +299,8 @@ contract TokenGrant {
         Grant storage grant = grants[_id];
         return
             (grant.revokedAt != 0) // Grant revoked -> return what is remaining
-                ? grant.amount.sub(grant.revokedAmount) // Not revoked -> calculate the unlocked amount normally
-                : now.getUnlockedAmount(
+                ? grant.amount - grant.revokedAmount // Not revoked -> calculate the unlocked amount normally
+                : block.timestamp.getUnlockedAmount(
                     grant.amount,
                     grant.duration,
                     grant.start,
@@ -354,10 +316,10 @@ contract TokenGrant {
         uint256 withdrawn = grants[_id].withdrawn;
         uint256 staked = grants[_id].staked;
 
-        if (withdrawn.add(staked) >= unlocked) {
+        if (withdrawn + staked >= unlocked) {
             return 0;
         } else {
-            return unlocked.sub(withdrawn).sub(staked);
+            return unlocked - withdrawn - staked;
         }
     }
 
@@ -381,14 +343,12 @@ contract TokenGrant {
         );
 
         uint256 unlockedAmount = unlockedAmount(_id);
-        uint256 revokedAmount = grants[_id].amount.sub(unlockedAmount);
-        grants[_id].revokedAt = now;
+        uint256 revokedAmount = grants[_id].amount - unlockedAmount;
+        grants[_id].revokedAt = block.timestamp;
         grants[_id].revokedAmount = revokedAmount;
 
         // Update grantee's grants balance.
-        balances[grants[_id].grantee] = balances[grants[_id].grantee].sub(
-            revokedAmount
-        );
+        balances[grants[_id].grantee] = balances[grants[_id].grantee] - revokedAmount;
         emit TokenGrantRevoked(_id);
     }
 
@@ -409,13 +369,13 @@ contract TokenGrant {
         uint256 revokedWithdrawn = grant.revokedWithdrawn;
         require(revokedWithdrawn < revoked, "All revoked tokens withdrawn.");
 
-        uint256 revokedRemaining = revoked.sub(revokedWithdrawn);
+        uint256 revokedRemaining = revoked - revokedWithdrawn;
 
         uint256 totalAmount = grant.amount;
         uint256 staked = grant.staked;
         uint256 granteeWithdrawn = grant.withdrawn;
         uint256 remainingPresentInGrant =
-            totalAmount.sub(staked).sub(revokedWithdrawn).sub(granteeWithdrawn);
+            totalAmount - staked - revokedWithdrawn - granteeWithdrawn;
 
         require(remainingPresentInGrant > 0, "No revoked tokens withdrawable.");
 
@@ -497,10 +457,10 @@ contract TokenGrant {
         }
         uint256 amount = grant.amount;
         uint256 withdrawn = grant.withdrawn;
-        uint256 remaining = amount.sub(withdrawn);
+        uint256 remaining = amount - withdrawn;
         uint256 stakeable =
             grant.stakingPolicy.getStakeableAmount(
-                now,
+                block.timestamp,
                 amount,
                 grant.duration,
                 grant.start,
@@ -513,7 +473,7 @@ contract TokenGrant {
             stakeable = remaining;
         }
 
-        return stakeable.sub(grant.staked);
+        return stakeable - grant.staked;
     }
 
     /// @notice Cancels delegation within the operator initialization period
@@ -529,7 +489,7 @@ contract TokenGrant {
         );
 
         uint256 returned = grantStake.cancelStake();
-        grants[grantId].staked = grants[grantId].staked.sub(returned);
+        grants[grantId].staked = grants[grantId].staked - returned;
     }
 
     /// @notice Undelegate the token grant.
@@ -561,7 +521,7 @@ contract TokenGrant {
         );
 
         uint256 returned = grantStake.cancelStake();
-        grants[grantId].staked = grants[grantId].staked.sub(returned);
+        grants[grantId].staked = grants[grantId].staked - returned;
     }
 
     /// @notice Force undelegation of a revoked grant's stake.
@@ -589,7 +549,7 @@ contract TokenGrant {
         TokenGrantStake grantStake = grantStakes[_operator];
         uint256 returned = grantStake.recoverStake();
         uint256 grantId = grantStake.getGrantId();
-        grants[grantId].staked = grants[grantId].staked.sub(returned);
+        grants[grantId].staked = grants[grantId].staked - returned;
 
         delete grantStakes[_operator];
     }

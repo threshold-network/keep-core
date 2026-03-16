@@ -1,11 +1,11 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 import "../libraries/operator/Groups.sol";
 
 contract GroupsExpirationStub {
     using Groups for Groups.Storage;
     Groups.Storage groups;
 
-    constructor() public {
+    constructor() {
         groups.groupActiveTime = 20;
         groups.relayEntryTimeout = 10;
     }

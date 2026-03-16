@@ -12,11 +12,10 @@
                            Trust math, not hardware.
 */
 
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
 
-import "openzeppelin-solidity/contracts/ownership/Ownable.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @dev Interface expected to be implemented by contracts added as a gas price
 /// oracle consumers. Consumers are notified by GasPriceOracle every time gas
@@ -32,7 +31,6 @@ interface GasPriceOracleConsumer {
 /// @notice Oracle presenting the current gas price. The oracle is manually
 /// updated by its owner.
 contract GasPriceOracle is Ownable {
-    using SafeMath for uint256;
 
     event GasPriceUpdated(uint256 newValue);
 
@@ -48,7 +46,7 @@ contract GasPriceOracle is Ownable {
     modifier onlyAfterGovernanceDelay {
         require(gasPriceChangeInitiated > 0, "Change not initiated");
         require(
-            block.timestamp.sub(gasPriceChangeInitiated) >= governanceDelay,
+            block.timestamp - gasPriceChangeInitiated >= governanceDelay,
             "Governance delay has not elapsed"
         );
         _;

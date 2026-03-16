@@ -68,7 +68,7 @@ module.exports = {
 
   compilers: {
     solc: {
-      version: "0.5.17",
+      version: "0.8.20",
       optimizer: {
         enabled: true,
         runs: 200,

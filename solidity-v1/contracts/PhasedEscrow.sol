@@ -1,8 +1,8 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/ownership/Ownable.sol";
-import "openzeppelin-solidity/contracts/token/ERC20/IERC20.sol";
-import "openzeppelin-solidity/contracts/token/ERC20/SafeERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import "./Escrow.sol";
 
@@ -23,7 +23,7 @@ contract PhasedEscrow is Ownable {
     IERC20 public token;
     IBeneficiaryContract public beneficiary;
 
-    constructor(IERC20 _token) public {
+    constructor(IERC20 _token) {
         token = _token;
     }
 
@@ -94,7 +94,7 @@ contract BatchedPhasedEscrow is Ownable {
         _;
     }
 
-    constructor(IERC20 _token) public {
+    constructor(IERC20 _token) {
         token = _token;
         drawee = msg.sender;
     }
@@ -197,7 +197,7 @@ contract PlainTransferEscrowBeneficiary is Ownable, IBeneficiaryContract {
     IERC20 public token;
     address public recipient;
 
-    constructor(IERC20 _token, address _recipient) public {
+    constructor(IERC20 _token, address _recipient) {
         token = _token;
         recipient = _recipient;
     }
@@ -215,7 +215,7 @@ contract StakingPoolRewardsEscrowBeneficiary is Ownable, IBeneficiaryContract {
     IERC20 public token;
     IStakingPoolRewards public rewards;
 
-    constructor(IERC20 _token, IStakingPoolRewards _rewards) public {
+    constructor(IERC20 _token, IStakingPoolRewards _rewards) {
         token = _token;
         rewards = _rewards;
     }
@@ -244,7 +244,7 @@ contract StakerRewardsBeneficiary is Ownable {
     IERC20 public token;
     IStakerRewards public stakerRewards;
 
-    constructor(IERC20 _token, IStakerRewards _stakerRewards) public {
+    constructor(IERC20 _token, IStakerRewards _stakerRewards) {
         token = _token;
         stakerRewards = _stakerRewards;
     }

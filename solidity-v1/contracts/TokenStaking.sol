@@ -12,11 +12,10 @@
                            Trust math, not hardware.
 */
 
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/token/ERC20/ERC20Burnable.sol";
-import "openzeppelin-solidity/contracts/token/ERC20/SafeERC20.sol";
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./StakeDelegatable.sol";
 import "./libraries/staking/MinimumStakeSchedule.sol";
 import "./libraries/staking/GrantStaking.sol";
@@ -34,7 +33,6 @@ import "./TokenSender.sol";
 /// and recover the stake after undelegation period is over.
 contract TokenStaking is Authorizations, StakeDelegatable {
     using BytesLib for bytes;
-    using SafeMath for uint256;
     using PercentUtils for uint256;
     using SafeERC20 for ERC20Burnable;
     using GrantStaking for GrantStaking.Storage;
@@ -110,7 +108,7 @@ contract TokenStaking is Authorizations, StakeDelegatable {
     /// participate in the Keep network. Expressed as number with 18-decimal places.
     /// Initial minimum stake is higher than the final and lowered periodically based
     /// on the amount of steps and the length of the minimum stake schedule in seconds.
-    function minimumStake() public view returns (uint256) {
+    function minimumStake() public view virtual returns (uint256) {
         return MinimumStakeSchedule.current(minimumStakeScheduleStart);
     }
 
@@ -122,7 +120,7 @@ contract TokenStaking is Authorizations, StakeDelegatable {
     /// two months after that.
     function undelegationPeriod() public view returns (uint256) {
         return
-            block.timestamp < deployedAt.add(twoMonths) ? twoWeeks : twoMonths;
+            block.timestamp < deployedAt + twoMonths ? twoWeeks : twoMonths;
     }
 
     /// @notice Receives approval of token transfer and stakes the approved
@@ -230,7 +228,7 @@ contract TokenStaking is Authorizations, StakeDelegatable {
         require(
             _undelegationTimestamp >= block.timestamp &&
                 _undelegationTimestamp >
-                oldParams.getCreationTimestamp().add(initializationPeriod),
+                oldParams.getCreationTimestamp() + initializationPeriod,
             "Invalid timestamp"
         );
         uint256 existingUndelegationTimestamp =
@@ -268,7 +266,7 @@ contract TokenStaking is Authorizations, StakeDelegatable {
         uint256 amount = operatorParams.getAmount();
 
         // If there is a pending top-up, force-commit it before returning tokens.
-        amount = amount.add(topUps.cancel(_operator));
+        amount = amount + topUps.cancel(_operator);
 
         operators[_operator].packedParams = operatorParams.setAmount(0);
         transferOrDeposit(operators[_operator].owner, _operator, amount);
@@ -373,6 +371,7 @@ contract TokenStaking is Authorizations, StakeDelegatable {
     /// @param misbehavedOperators Array of addresses to seize the tokens from.
     function slash(uint256 amountToSlash, address[] memory misbehavedOperators)
         public
+        virtual
         onlyApprovedOperatorContract(msg.sender)
     {
         uint256 totalAmountToBurn;
@@ -395,13 +394,13 @@ contract TokenStaking is Authorizations, StakeDelegatable {
             uint256 currentAmount = operatorParams.getAmount();
 
             if (currentAmount < amountToSlash) {
-                totalAmountToBurn = totalAmountToBurn.add(currentAmount);
+                totalAmountToBurn = totalAmountToBurn + currentAmount;
                 operators[operator].packedParams = operatorParams.setAmount(0);
                 emit TokensSlashed(operator, currentAmount);
             } else {
-                totalAmountToBurn = totalAmountToBurn.add(amountToSlash);
+                totalAmountToBurn = totalAmountToBurn + amountToSlash;
                 operators[operator].packedParams = operatorParams.setAmount(
-                    currentAmount.sub(amountToSlash)
+                    currentAmount - amountToSlash
                 );
                 emit TokensSlashed(operator, amountToSlash);
             }
@@ -422,7 +421,7 @@ contract TokenStaking is Authorizations, StakeDelegatable {
         uint256 rewardMultiplier,
         address tattletale,
         address[] memory misbehavedOperators
-    ) public onlyApprovedOperatorContract(msg.sender) {
+    ) public virtual onlyApprovedOperatorContract(msg.sender) {
         uint256 totalAmountToBurn;
         address authoritySource = getAuthoritySource(msg.sender);
         for (uint256 i = 0; i < misbehavedOperators.length; i++) {
@@ -443,13 +442,13 @@ contract TokenStaking is Authorizations, StakeDelegatable {
             uint256 currentAmount = operatorParams.getAmount();
 
             if (currentAmount < amountToSeize) {
-                totalAmountToBurn = totalAmountToBurn.add(currentAmount);
+                totalAmountToBurn = totalAmountToBurn + currentAmount;
                 operators[operator].packedParams = operatorParams.setAmount(0);
                 emit TokensSeized(operator, currentAmount);
             } else {
-                totalAmountToBurn = totalAmountToBurn.add(amountToSeize);
+                totalAmountToBurn = totalAmountToBurn + amountToSeize;
                 operators[operator].packedParams = operatorParams.setAmount(
-                    currentAmount.sub(amountToSeize)
+                    currentAmount - amountToSeize
                 );
                 emit TokensSeized(operator, amountToSeize);
             }
@@ -459,7 +458,7 @@ contract TokenStaking is Authorizations, StakeDelegatable {
             (totalAmountToBurn.percent(5)).percent(rewardMultiplier);
 
         token.safeTransfer(tattletale, tattletaleReward);
-        token.burn(totalAmountToBurn.sub(tattletaleReward));
+        token.burn(totalAmountToBurn - tattletaleReward);
     }
 
     /// @notice Allows the current staking relationship owner to transfer the
@@ -482,7 +481,7 @@ contract TokenStaking is Authorizations, StakeDelegatable {
     ///
     /// @param _operator address of stake operator.
     /// @param _operatorContract address of operator contract.
-    /// @return an uint256 representing the eligible stake balance.
+    /// @return balance an uint256 representing the eligible stake balance.
     function eligibleStake(address _operator, address _operatorContract)
         public
         view
@@ -522,7 +521,7 @@ contract TokenStaking is Authorizations, StakeDelegatable {
     ///
     /// @param _operator address of stake operator.
     /// @param _operatorContract address of operator contract.
-    /// @return an uint256 representing the eligible stake balance.
+    /// @return balance an uint256 representing the eligible stake balance.
     function activeStake(address _operator, address _operatorContract)
         public
         view
@@ -676,7 +675,7 @@ contract TokenStaking is Authorizations, StakeDelegatable {
     {
         return
             block.timestamp >
-            _operatorParams.getCreationTimestamp().add(initializationPeriod);
+            _operatorParams.getCreationTimestamp() + initializationPeriod;
     }
 
     /// @notice Is the operator with the given params undelegating
@@ -698,7 +697,7 @@ contract TokenStaking is Authorizations, StakeDelegatable {
         uint256 undelegatedAt = _operatorParams.getUndelegationTimestamp();
         return
             (undelegatedAt != 0) &&
-            (block.timestamp > undelegatedAt.add(undelegationPeriod()));
+            (block.timestamp > undelegatedAt + undelegationPeriod());
     }
 
     /// @notice Get whether the operator's stake is released
@@ -735,5 +734,17 @@ contract TokenStaking is Authorizations, StakeDelegatable {
             // For liquid tokens staked, transfer them straight to the owner.
             token.safeTransfer(_owner, _amount);
         }
+    }
+
+    /// @notice Gets the authorizer for the specified operator address.
+    /// @param _operator The operator address.
+    /// @return authorizer Authorizer address.
+    function authorizerOf(address _operator)
+        public
+        view
+        override(Authorizations, StakeDelegatable)
+        returns (address)
+    {
+        return super.authorizerOf(_operator);
     }
 }

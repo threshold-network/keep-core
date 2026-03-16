@@ -12,10 +12,9 @@
                            Trust math, not hardware.
 */
 
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
-import "openzeppelin-solidity/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "./utils/AddressArrayUtils.sol";
 import "./utils/PercentUtils.sol";
 import "./KeepRegistry.sol";
@@ -53,7 +52,6 @@ interface OperatorContract {
 /// initialize() please see openzeppelin upgradeable contracts approach for more
 /// info.
 contract KeepRandomBeaconServiceImplV1 is ReentrancyGuard, IRandomBeacon {
-    using SafeMath for uint256;
     using PercentUtils for uint256;
     using AddressArrayUtils for address[];
 
@@ -125,7 +123,7 @@ contract KeepRandomBeaconServiceImplV1 is ReentrancyGuard, IRandomBeacon {
         _;
     }
 
-    constructor() public {
+    constructor() {
         _initialized["KeepRandomBeaconServiceImplV1"] = true;
     }
 
@@ -135,6 +133,7 @@ contract KeepRandomBeaconServiceImplV1 is ReentrancyGuard, IRandomBeacon {
     /// @param registry KeepRegistry contract linked to this contract.
     function initialize(uint256 dkgContributionMargin, address registry)
         public
+        virtual
     {
         require(!initialized(), "Contract is already initialized.");
         require(registry != address(0), "Incorrect registry address");
@@ -147,7 +146,7 @@ contract KeepRandomBeaconServiceImplV1 is ReentrancyGuard, IRandomBeacon {
     }
 
     /// @notice Checks if this contract is initialized.
-    function initialized() public view returns (bool) {
+    function initialized() public view virtual returns (bool) {
         return _initialized["KeepRandomBeaconServiceImplV1"];
     }
 
@@ -281,7 +280,7 @@ contract KeepRandomBeaconServiceImplV1 is ReentrancyGuard, IRandomBeacon {
         ) = entryFeeBreakdown();
 
         uint256 callbackFee =
-            msg.value.sub(entryVerificationFee).sub(dkgContributionFee).sub(
+            msg.value - entryVerificationFee - dkgContributionFee.sub(
                 groupProfitFee
             );
 
@@ -301,7 +300,7 @@ contract KeepRandomBeaconServiceImplV1 is ReentrancyGuard, IRandomBeacon {
         uint256 requestId = _requestCounter;
 
         operatorContract.sign.value(
-            selectedOperatorContractFee.add(callbackFee)
+            selectedOperatorContractFee + callbackFee
         )(requestId, _previousEntry);
 
         // If selected operator contract is cheaper than expected return the
@@ -310,10 +309,10 @@ contract KeepRandomBeaconServiceImplV1 is ReentrancyGuard, IRandomBeacon {
         // a consistent beacon pricing for customers without fluctuations caused
         // by different operator contracts being selected.
         uint256 surplus =
-            entryVerificationFee.add(groupProfitFee).sub(
+            entryVerificationFee + groupProfitFee.sub(
                 selectedOperatorContractFee
             );
-        _requestSubsidyFeePool = _requestSubsidyFeePool.add(surplus);
+        _requestSubsidyFeePool = _requestSubsidyFeePool + surplus;
 
         if (callbackContract != address(0)) {
             _callbacks[requestId] = Callback(
@@ -405,9 +404,9 @@ contract KeepRandomBeaconServiceImplV1 is ReentrancyGuard, IRandomBeacon {
 
         return
             entryVerificationFee
-                .add(dkgContributionFee)
-                .add(groupProfitFee)
-                .add(callbackFee(callbackGas, gasPriceCeiling));
+                 + dkgContributionFee
+                 + groupProfitFee
+                 + callbackFee(callbackGas, gasPriceCeiling);
     }
 
     /// @notice Get the entry fee breakdown in wei for relay entry request.
@@ -450,7 +449,7 @@ contract KeepRandomBeaconServiceImplV1 is ReentrancyGuard, IRandomBeacon {
 
         // Use DKG gas estimate from the latest operator contract since it will be used for the next group creation.
         address latestOperatorContract =
-            _operatorContracts[_operatorContracts.length.sub(1)];
+            _operatorContracts[_operatorContracts.length - 1];
         uint256 groupCreationFee =
             OperatorContract(latestOperatorContract).groupCreationFee();
 
@@ -494,7 +493,7 @@ contract KeepRandomBeaconServiceImplV1 is ReentrancyGuard, IRandomBeacon {
     }
 
     /// @notice Gets version of the current implementation.
-    function version() public pure returns (string memory) {
+    function version() public pure virtual returns (string memory) {
         return "V1";
     }
 
@@ -506,7 +505,7 @@ contract KeepRandomBeaconServiceImplV1 is ReentrancyGuard, IRandomBeacon {
         internal
     {
         address latestOperatorContract =
-            _operatorContracts[_operatorContracts.length.sub(1)];
+            _operatorContracts[_operatorContracts.length - 1];
         uint256 groupCreationFee =
             OperatorContract(latestOperatorContract).groupCreationFee();
 
@@ -517,7 +516,7 @@ contract KeepRandomBeaconServiceImplV1 is ReentrancyGuard, IRandomBeacon {
             OperatorContract(latestOperatorContract).createGroup.value(
                 groupCreationFee
             )(entry, submitter);
-            _dkgFeePool = _dkgFeePool.sub(groupCreationFee);
+            _dkgFeePool = _dkgFeePool - groupCreationFee;
         }
     }
 
@@ -531,10 +530,10 @@ contract KeepRandomBeaconServiceImplV1 is ReentrancyGuard, IRandomBeacon {
         // gas for the callback itself plus additional operational costs of
         // executing the callback
         uint256 callbackGas =
-            _callbackGas == 0 ? 0 : _callbackGas.add(_baseCallbackGas);
+            _callbackGas == 0 ? 0 : _callbackGas + _baseCallbackGas;
         // We take the gas price from the price feed to not let malicious
         // miner-requestors manipulate the gas price when requesting relay entry
         // and underpricing expensive callbacks.
-        return callbackGas.mul(_gasPriceCeiling);
+        return callbackGas * _gasPriceCeiling;
     }
 }

@@ -1,4 +1,4 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 import "../GasPriceOracle.sol";
 
@@ -7,7 +7,7 @@ contract GasPriceOracleConsumerStub is GasPriceOracleConsumer {
 
     uint256 public gasPrice;
 
-    constructor(GasPriceOracle _gasPriceOracle) public {
+    constructor(GasPriceOracle _gasPriceOracle) {
         gasPriceOracle = _gasPriceOracle;
     }
 

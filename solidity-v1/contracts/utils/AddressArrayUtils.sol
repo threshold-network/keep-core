@@ -1,4 +1,4 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 library AddressArrayUtils {
     function contains(address[] memory self, address _address)
@@ -25,7 +25,7 @@ library AddressArrayUtils {
                 for (uint256 j = i; j < self.length - 1; j++) {
                     self[j] = self[j + 1];
                 }
-                self.length--;
+                self.pop();
                 i--;
             }
         }

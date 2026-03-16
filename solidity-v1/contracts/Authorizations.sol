@@ -12,7 +12,7 @@
                            Trust math, not hardware.
 */
 
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 import "./KeepRegistry.sol";
 
@@ -52,7 +52,7 @@ interface AuthorityVerifier {
         returns (bool);
 }
 
-contract Authorizations is AuthorityVerifier {
+abstract contract Authorizations is AuthorityVerifier {
     // Authorized operator contracts.
     mapping(address => mapping(address => bool)) internal authorizations;
 
@@ -72,13 +72,13 @@ contract Authorizations is AuthorityVerifier {
         _;
     }
 
-    constructor(KeepRegistry _registry) public {
+    constructor(KeepRegistry _registry) {
         registry = _registry;
     }
 
     /// @notice Gets the authorizer for the specified operator address.
     /// @return Authorizer address.
-    function authorizerOf(address _operator) public view returns (address);
+    function authorizerOf(address _operator) public view virtual returns (address);
 
     /// @notice Authorizes operator contract to access staked token balance of
     /// the provided operator. Can only be executed by stake operator authorizer.

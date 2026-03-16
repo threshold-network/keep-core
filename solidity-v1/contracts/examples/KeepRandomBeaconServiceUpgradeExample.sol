@@ -1,4 +1,4 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 import "../KeepRandomBeaconServiceImplV1.sol";
 
@@ -12,7 +12,7 @@ contract KeepRandomBeaconServiceUpgradeExample is
 {
     uint256 internal _newVar;
 
-    constructor() public {
+    constructor() {
         _initialized["KeepRandomBeaconImplV2"] = true;
     }
 
@@ -24,6 +24,7 @@ contract KeepRandomBeaconServiceUpgradeExample is
      */
     function initialize(uint256 dkgContributionMargin, address registry)
         public
+        override
     {
         require(!initialized(), "Contract is already initialized.");
         require(registry != address(0), "Incorrect registry address");
@@ -39,7 +40,7 @@ contract KeepRandomBeaconServiceUpgradeExample is
     /**
      * @dev Example of overriding initialized function.
      */
-    function initialized() public view returns (bool) {
+    function initialized() public view override returns (bool) {
         return _initialized["KeepRandomBeaconImplV2"];
     }
 
@@ -50,7 +51,7 @@ contract KeepRandomBeaconServiceUpgradeExample is
         return _newVar;
     }
 
-    function version() public pure returns (string memory) {
+    function version() public pure override returns (string memory) {
         return "V2";
     }
 }

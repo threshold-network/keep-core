@@ -1,6 +1,5 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
 import "../../utils/BytesLib.sol";
 
 /// @title Group Selection
@@ -24,7 +23,6 @@ import "../../utils/BytesLib.sol";
 /// submitted, equal to the candidate group size so that the protocol can
 /// complete successfully.
 library GroupSelection {
-    using SafeMath for uint256;
     using BytesLib for bytes;
 
     struct Storage {
@@ -152,7 +150,7 @@ library GroupSelection {
     ) public {
         if (
             block.number >
-            self.ticketSubmissionStartBlock.add(self.ticketSubmissionTimeout)
+            self.ticketSubmissionStartBlock + self.ticketSubmissionTimeout
         ) {
             revert("Ticket submission is over");
         }

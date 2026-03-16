@@ -1,10 +1,10 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 import "./TokenGeyser.sol";
 import "../KeepToken.sol";
 import {IStakerRewards, StakerRewardsBeneficiary} from "../PhasedEscrow.sol";
 
-import "openzeppelin-solidity/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @title KEEP Token Geyser
 /// @dev A smart-contract based mechanism to distribute tokens over time, based

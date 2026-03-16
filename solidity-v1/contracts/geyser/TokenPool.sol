@@ -2,10 +2,10 @@
  This code is copied from:
  https://github.com/ampleforth/token-geyser/tree/d8352f62a0432494c39416d090e68582e13b2b22/contracts
  */
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/ownership/Ownable.sol";
-import "openzeppelin-solidity/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
  * @title A simple holder of tokens.
@@ -15,7 +15,7 @@ import "openzeppelin-solidity/contracts/token/ERC20/IERC20.sol";
 contract TokenPool is Ownable {
     IERC20 public token;
 
-    constructor(IERC20 _token) public {
+    constructor(IERC20 _token) {
         token = _token;
     }
 

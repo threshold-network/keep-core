@@ -1,4 +1,4 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 import "../TokenStaking.sol";
 import "../TokenStakingEscrow.sol";
@@ -29,7 +29,7 @@ contract TokenStakingStub is TokenStaking {
         )
     {}
 
-    function minimumStake() public view returns (uint256) {
+    function minimumStake() public view override returns (uint256) {
         return 100000 * 1e18;
     }
 }

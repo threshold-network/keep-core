@@ -1,4 +1,4 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 import "../KeepRandomBeaconOperator.sol";
 
@@ -45,6 +45,7 @@ contract KeepRandomBeaconOperatorServicePricingStub is
     function getGroupPublicKey(uint256 groupIndex)
         public
         view
+        override
         returns (bytes memory)
     {
         return groups.groups[groupIndex].groupPubKey;

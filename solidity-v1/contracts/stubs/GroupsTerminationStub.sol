@@ -1,11 +1,11 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 import "../libraries/operator/Groups.sol";
 
 contract GroupsTerminationStub {
     using Groups for Groups.Storage;
     Groups.Storage groups;
 
-    constructor() public {
+    constructor() {
         groups.groupActiveTime = 5;
     }
 

@@ -1,6 +1,5 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
 import "./libraries/grant/UnlockingSchedule.sol";
 import "./GrantStakingPolicy.sol";
 import "./TokenStaking.sol";
@@ -25,11 +24,10 @@ import "./TokenStaking.sol";
 /// the policy defines a minimum which can always be staked
 /// even if the grant doesn't have enough unlocked tokens.
 contract GuaranteedMinimumStakingPolicy is GrantStakingPolicy {
-    using SafeMath for uint256;
     using UnlockingSchedule for uint256;
     uint256 minimumStake;
 
-    constructor(address _stakingContract) public {
+    constructor(address _stakingContract) {
         minimumStake = TokenStaking(_stakingContract).minimumStake();
     }
 
@@ -40,11 +38,11 @@ contract GuaranteedMinimumStakingPolicy is GrantStakingPolicy {
         uint256 start,
         uint256 cliff,
         uint256 withdrawn
-    ) public view returns (uint256) {
+    ) public view override returns (uint256) {
         uint256 unlocked =
             _now.getUnlockedAmount(grantedAmount, duration, start, cliff);
-        uint256 remainingInGrant = grantedAmount.sub(withdrawn);
-        uint256 unlockedInGrant = unlocked.sub(withdrawn);
+        uint256 remainingInGrant = grantedAmount - withdrawn;
+        uint256 unlockedInGrant = unlocked - withdrawn;
 
         // Less than minimum stake remaining
         //   -> may stake what is remaining in grant

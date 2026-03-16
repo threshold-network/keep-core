@@ -12,7 +12,7 @@
                            Trust math, not hardware.
 */
 
-pragma solidity ^0.5.17;
+pragma solidity ^0.8.0;
 
 import "./Rewards.sol";
 import "./KeepRandomBeaconOperator.sol";
@@ -82,20 +82,20 @@ contract BeaconBackportRewards is Rewards {
         receiveReward(bytes32(groupIndex));
     }
 
-    function _getKeepCount() internal view returns (uint256) {
+    function _getKeepCount() internal view override returns (uint256) {
         return numberOfCreatedGroups;
     }
 
-    function _getKeepAtIndex(uint256 i) internal view returns (bytes32) {
+    function _getKeepAtIndex(uint256 i) internal view override returns (bytes32) {
         return bytes32(i);
     }
 
-    function _getCreationTime(bytes32) internal view returns (uint256) {
+    function _getCreationTime(bytes32) internal view override returns (uint256) {
         // Assign each group to the starting timestamp of its interval
         return startOf(0);
     }
 
-    function _isClosed(bytes32) internal view returns (bool) {
+    function _isClosed(bytes32) internal view override returns (bool) {
         // All groups within the eligible range are considered happily closed.
         return true;
     }
@@ -103,6 +103,7 @@ contract BeaconBackportRewards is Rewards {
     function _isTerminated(bytes32 groupIndexBytes)
         internal
         view
+        override
         returns (bool)
     {
         return false;
@@ -111,6 +112,7 @@ contract BeaconBackportRewards is Rewards {
     function _recognizedByFactory(bytes32 groupIndexBytes)
         internal
         view
+        override
         returns (bool)
     {
         return numberOfCreatedGroups > uint256(groupIndexBytes);
@@ -118,6 +120,7 @@ contract BeaconBackportRewards is Rewards {
 
     function _distributeReward(bytes32 groupIndexBytes, uint256 _value)
         internal
+        override
     {
         bytes memory groupPubkey =
             operatorContract.getGroupPublicKey(uint256(groupIndexBytes));
@@ -125,7 +128,7 @@ contract BeaconBackportRewards is Rewards {
             operatorContract.getGroupMembers(groupPubkey);
 
         uint256 memberCount = members.length;
-        uint256 dividend = _value.div(memberCount);
+        uint256 dividend = _value / memberCount;
 
         // Only pay other members if dividend is nonzero.
         if (dividend > 0) {
@@ -142,7 +145,7 @@ contract BeaconBackportRewards is Rewards {
         uint256 remainder = _value.mod(memberCount);
         token.safeTransfer(
             tokenStaking.beneficiaryOf(members[memberCount - 1]),
-            dividend.add(remainder)
+            dividend + remainder
         );
     }
 }

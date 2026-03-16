@@ -1,6 +1,5 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
 
 import "../../TokenStakingEscrow.sol";
 import "../../utils/OperatorParams.sol";
@@ -11,7 +10,6 @@ import "../../utils/OperatorParams.sol";
 /// and after waiting for at least the initialization period it can be
 /// committed.
 library TopUps {
-    using SafeMath for uint256;
     using OperatorParams for uint256;
 
     event TopUpInitiated(address indexed operator, uint256 topUp);
@@ -37,7 +35,7 @@ library TopUps {
     /// @param operatorParams Parameters of that operator, as stored in the
     /// staking contract.
     /// @param escrow Reference to TokenStakingEscrow contract.
-    /// @return New value of parameters. It should be updated for the operator
+    /// @return newParams New value of parameters. It should be updated for the operator
     /// in the staking contract.
     function instantComplete(
         Storage storage self,
@@ -58,7 +56,7 @@ library TopUps {
         );
         require(value > 0, "Top-up value must be greater than zero");
 
-        uint256 newAmount = operatorParams.getAmount().add(value);
+        uint256 newAmount = operatorParams.getAmount() + value;
         newParams = operatorParams.setAmountAndCreationTimestamp(
             newAmount,
             block.timestamp
@@ -98,7 +96,7 @@ library TopUps {
         require(value > 0, "Top-up value must be greater than zero");
 
         TopUp memory awaiting = self.topUps[operator];
-        self.topUps[operator] = TopUp(awaiting.amount.add(value), now);
+        self.topUps[operator] = TopUp(awaiting.amount + value, now);
         emit TopUpInitiated(operator, value);
     }
 
@@ -115,11 +113,11 @@ library TopUps {
         TopUp memory topUp = self.topUps[operator];
         require(topUp.amount > 0, "No top up to commit");
         require(
-            now > topUp.createdAt.add(initializationPeriod),
+            now > topUp.createdAt + initializationPeriod,
             "Stake is initializing"
         );
 
-        uint256 newAmount = operatorParams.getAmount().add(topUp.amount);
+        uint256 newAmount = operatorParams.getAmount() + topUp.amount;
         newParams = operatorParams.setAmount(newAmount);
 
         delete self.topUps[operator];

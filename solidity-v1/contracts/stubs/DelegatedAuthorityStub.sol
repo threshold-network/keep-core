@@ -1,11 +1,11 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 import "../TokenStaking.sol";
 
 contract DelegatedAuthorityStub {
     address recognizedContract;
 
-    constructor(address _recognizedContract) public {
+    constructor(address _recognizedContract) {
         recognizedContract = _recognizedContract;
     }
 

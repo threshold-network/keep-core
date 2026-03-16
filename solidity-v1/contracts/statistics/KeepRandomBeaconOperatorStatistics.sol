@@ -1,14 +1,12 @@
-pragma solidity ^0.5.4;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
 import "../KeepRandomBeaconOperator.sol";
 
 contract KeepRandomBeaconOperatorStatistics {
-    using SafeMath for uint256;
 
     KeepRandomBeaconOperator public operatorContract;
 
-    constructor(address _operatorContract) public {
+    constructor(address _operatorContract) {
         operatorContract = KeepRandomBeaconOperator(_operatorContract);
     }
 
@@ -58,7 +56,7 @@ contract KeepRandomBeaconOperatorStatistics {
     /// The rewards may or may not be withdrawable.
     /// @param operator Address of the operator.
     /// @param groupIndex Index of the group.
-    /// @return The total allocated rewards.
+    /// @return rewards The total allocated rewards.
     function awaitingRewards(address operator, uint256 groupIndex)
         public
         view
@@ -74,7 +72,7 @@ contract KeepRandomBeaconOperatorStatistics {
 
         uint256 memberCount = countGroupMembership(groupPubKey, operator);
 
-        return memberRewards.mul(memberCount);
+        return memberRewards * memberCount;
     }
 
     /// @notice Get the amount of group rewards
@@ -82,7 +80,7 @@ contract KeepRandomBeaconOperatorStatistics {
     /// The group must be stale for any group rewards to be withdrawn.
     /// @param operator Address of the operator.
     /// @param groupIndex Index of the group.
-    /// @return The total withdrawable rewards.
+    /// @return rewards The total withdrawable rewards.
     function withdrawableRewards(address operator, uint256 groupIndex)
         public
         view

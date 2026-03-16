@@ -12,10 +12,9 @@
                            Trust math, not hardware.
 */
 
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
-import "openzeppelin-solidity/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "./TokenStaking.sol";
 import "./KeepRegistry.sol";
 import "./GasPriceOracle.sol";
@@ -51,7 +50,6 @@ interface ServiceContract {
 /// The contract is not upgradeable. New functionality can be implemented by deploying
 /// new versions following Keep client update and re-authorization by the stakers.
 contract KeepRandomBeaconOperator is ReentrancyGuard, GasPriceOracleConsumer {
-    using SafeMath for uint256;
     using PercentUtils for uint256;
     using AddressArrayUtils for address[];
     using GroupSelection for GroupSelection.Storage;
@@ -115,7 +113,7 @@ contract KeepRandomBeaconOperator is ReentrancyGuard, GasPriceOracleConsumer {
     /// relay entry and the time it takes for the last group member to become
     /// eligible to submit the result plus at least one block to submit it.
     uint256 public relayEntryTimeout =
-        groupSize.mul(resultPublicationBlockStep);
+        groupSize * resultPublicationBlockStep;
 
     /// @dev Gas required to verify BLS signature and produce successful relay
     /// entry. Excludes callback and DKG gas. The worst case (most expensive)
@@ -217,7 +215,7 @@ contract KeepRandomBeaconOperator is ReentrancyGuard, GasPriceOracleConsumer {
         groupSelection.finish();
         // Set latest added service contract as a group selection starter to receive any DKG fee surplus.
         groupSelectionStarterContract = ServiceContract(
-            serviceContracts[serviceContracts.length.sub(1)]
+            serviceContracts[serviceContracts.length - 1]
         );
         startGroupSelection(_genesisGroupSeed, msg.value);
     }
@@ -256,10 +254,10 @@ contract KeepRandomBeaconOperator is ReentrancyGuard, GasPriceOracleConsumer {
         onlyServiceContract
     {
         uint256 groupSelectionStartFee =
-            groupSelectionGasEstimate.mul(gasPriceCeiling);
+            groupSelectionGasEstimate * gasPriceCeiling;
 
         groupSelectionStarterContract = ServiceContract(msg.sender);
-        startGroupSelection(_newEntry, msg.value.sub(groupSelectionStartFee));
+        startGroupSelection(_newEntry, msg.value - groupSelectionStartFee);
 
         // reimbursing a submitter that triggered group selection
         (bool success, ) =
@@ -374,12 +372,12 @@ contract KeepRandomBeaconOperator is ReentrancyGuard, GasPriceOracleConsumer {
         onlyServiceContract
     {
         uint256 entryVerificationAndProfitFee =
-            groupProfitFee().add(entryVerificationFee());
+            groupProfitFee() + entryVerificationFee();
         require(
             msg.value >= entryVerificationAndProfitFee,
             "Insufficient new entry fee"
         );
-        uint256 callbackFee = msg.value.sub(entryVerificationAndProfitFee);
+        uint256 callbackFee = msg.value - entryVerificationAndProfitFee;
         signRelayEntry(
             requestId,
             previousEntry,
@@ -413,7 +411,7 @@ contract KeepRandomBeaconOperator is ReentrancyGuard, GasPriceOracleConsumer {
         // Spend no more than groupSelectionGasEstimate + 40000 gas max
         // This will prevent relayEntry failure in case the service contract is compromised
         currentRequestServiceContract.call.gas(
-            groupSelectionGasEstimate.add(40000)
+            groupSelectionGasEstimate + 40000
         )(
             abi.encodeWithSignature(
                 "entryCreated(uint256,bytes,address)",
@@ -481,7 +479,7 @@ contract KeepRandomBeaconOperator is ReentrancyGuard, GasPriceOracleConsumer {
 
     /// @notice Gets group profit fee expressed in wei.
     function groupProfitFee() public view returns (uint256) {
-        return groupMemberBaseReward.mul(groupSize);
+        return groupMemberBaseReward * groupSize;
     }
 
     /// @notice Checks if the specified account has enough active stake to become
@@ -588,6 +586,7 @@ contract KeepRandomBeaconOperator is ReentrancyGuard, GasPriceOracleConsumer {
     function getGroupPublicKey(uint256 groupIndex)
         public
         view
+        virtual
         returns (bytes memory)
     {
         return groups.getGroupPublicKey(groupIndex);
@@ -596,14 +595,14 @@ contract KeepRandomBeaconOperator is ReentrancyGuard, GasPriceOracleConsumer {
     /// @notice Returns fee for entry verification in wei. Does not include group
     /// profit fee, DKG contribution or callback fee.
     function entryVerificationFee() public view returns (uint256) {
-        return entryVerificationGasEstimate.mul(gasPriceCeiling);
+        return entryVerificationGasEstimate * gasPriceCeiling;
     }
 
     /// @notice Returns fee for group creation in wei. Includes the cost of DKG
     /// and the cost of triggering group selection.
     function groupCreationFee() public view returns (uint256) {
         return
-            dkgGasEstimate.add(groupSelectionGasEstimate).mul(gasPriceCeiling);
+            dkgGasEstimate + groupSelectionGasEstimate * gasPriceCeiling;
     }
 
     /// @notice Returns members of the given group by group public key.
@@ -627,7 +626,7 @@ contract KeepRandomBeaconOperator is ReentrancyGuard, GasPriceOracleConsumer {
         return groups.getGroupRegistrationTime(groupIndex);
     }
 
-    function isGroupTerminated(uint256 groupIndex) public view returns (bool) {
+    function isGroupTerminated(uint256 groupIndex) public view virtual returns (bool) {
         return groups.isGroupTerminated(groupIndex);
     }
 
@@ -651,7 +650,7 @@ contract KeepRandomBeaconOperator is ReentrancyGuard, GasPriceOracleConsumer {
 
     function startGroupSelection(uint256 _newEntry, uint256 _payment) internal {
         require(
-            _payment >= gasPriceCeiling.mul(dkgGasEstimate),
+            _payment >= gasPriceCeiling * dkgGasEstimate,
             "Insufficient DKG fee"
         );
 
@@ -687,12 +686,12 @@ contract KeepRandomBeaconOperator is ReentrancyGuard, GasPriceOracleConsumer {
             gasPrice = tx.gasprice;
         }
 
-        uint256 reimbursementFee = dkgGasEstimate.mul(gasPrice);
+        uint256 reimbursementFee = dkgGasEstimate * gasPrice;
         address payable beneficiary = stakingContract.beneficiaryOf(msg.sender);
 
         if (reimbursementFee < dkgSubmitterReimbursementFee) {
             uint256 surplus =
-                dkgSubmitterReimbursementFee.sub(reimbursementFee);
+                dkgSubmitterReimbursementFee - reimbursementFee;
             dkgSubmitterReimbursementFee = 0;
             // Reimburse submitter with actual DKG cost.
             beneficiary.call.value(reimbursementFee)("");
@@ -737,7 +736,7 @@ contract KeepRandomBeaconOperator is ReentrancyGuard, GasPriceOracleConsumer {
     function executeCallback(uint256 entry) internal {
         // Make sure not to spend more than what was received from the service
         // contract for the callback
-        uint256 gasLimit = currentRequestCallbackFee.div(gasPriceCeiling);
+        uint256 gasLimit = currentRequestCallbackFee / gasPriceCeiling;
 
         // Make sure not to spend more than 2 million gas on a callback.
         // This is to protect members from relay entry failure and potential
@@ -764,7 +763,7 @@ contract KeepRandomBeaconOperator is ReentrancyGuard, GasPriceOracleConsumer {
         );
 
         uint256 gasAfterCallback = gasleft();
-        uint256 gasSpent = gasBeforeCallback.sub(gasAfterCallback);
+        uint256 gasSpent = gasBeforeCallback - gasAfterCallback;
 
         Reimbursements.reimburseCallback(
             stakingContract,
@@ -791,13 +790,13 @@ contract KeepRandomBeaconOperator is ReentrancyGuard, GasPriceOracleConsumer {
 
         uint256 delayFactor =
             DelayFactor.calculate(currentRequestStartBlock, relayEntryTimeout);
-        groupMemberReward = groupMemberBaseReward.mul(delayFactor).div(
+        groupMemberReward = groupMemberBaseReward * delayFactor.div(
             decimals
         );
 
         // delay penalty = base reward * (1 - delay factor)
         uint256 groupMemberDelayPenalty =
-            groupMemberBaseReward.mul(decimals.sub(delayFactor));
+            groupMemberBaseReward * decimals - delayFactor;
 
         // The submitter reward consists of:
         // The callback gas expenditure (reimbursed by the service contract)
@@ -805,13 +804,13 @@ contract KeepRandomBeaconOperator is ReentrancyGuard, GasPriceOracleConsumer {
         // paid regardless of their gas expenditure
         // Submitter extra reward - 5% of the delay penalties of the entire group
         uint256 submitterExtraReward =
-            groupMemberDelayPenalty.mul(groupSize).percent(5).div(decimals);
+            groupMemberDelayPenalty * groupSize.percent(5) / decimals;
         uint256 entryVerificationFee =
-            currentRequestEntryVerificationAndProfitFee.sub(groupProfitFee());
-        submitterReward = entryVerificationFee.add(submitterExtraReward);
+            currentRequestEntryVerificationAndProfitFee - groupProfitFee();
+        submitterReward = entryVerificationFee + submitterExtraReward;
 
         // Rewards not paid out to the operators are paid out to requesters to subsidize new requests.
-        subsidy = groupProfitFee().sub(groupMemberReward.mul(groupSize)).sub(
+        subsidy = groupProfitFee() - groupMemberReward * groupSize.sub(
             submitterExtraReward
         );
     }

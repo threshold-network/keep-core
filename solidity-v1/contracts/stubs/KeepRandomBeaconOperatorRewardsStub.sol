@@ -1,4 +1,4 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 import "../KeepRandomBeaconOperator.sol";
 
@@ -49,7 +49,7 @@ contract KeepRandomBeaconOperatorRewardsStub is KeepRandomBeaconOperator {
         emit RelayEntryTimeoutReported(groupIndex);
     }
 
-    function isGroupTerminated(uint256 groupIndex) public view returns (bool) {
+    function isGroupTerminated(uint256 groupIndex) public view override returns (bool) {
         return groups.isGroupTerminated(groupIndex);
     }
 }

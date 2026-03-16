@@ -1,4 +1,4 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 /// @dev Stub used in TokenStakingEscrow to test migration of tokens between
 /// escrows.

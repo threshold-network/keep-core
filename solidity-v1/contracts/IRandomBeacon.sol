@@ -12,7 +12,7 @@
                            Trust math, not hardware.
 */
 
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 /// @title Keep Random Beacon
 ///

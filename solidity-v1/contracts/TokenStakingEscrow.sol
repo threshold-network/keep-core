@@ -12,11 +12,10 @@
                            Trust math, not hardware.
 */
 
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/ownership/Ownable.sol";
-import "openzeppelin-solidity/contracts/token/ERC20/SafeERC20.sol";
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import "./libraries/grant/UnlockingSchedule.sol";
 import "./utils/BytesLib.sol";
@@ -37,7 +36,6 @@ import "./TokenSender.sol";
 /// delegation ended, operator address cannot be reused.
 contract TokenStakingEscrow is Ownable {
     using SafeERC20 for IERC20;
-    using SafeMath for uint256;
     using BytesLib for bytes;
     using UnlockingSchedule for uint256;
 
@@ -82,7 +80,7 @@ contract TokenStakingEscrow is Ownable {
     // grant manager -> escrow -> authorized?
     mapping(address => mapping(address => bool)) internal authorizedEscrows;
 
-    constructor(KeepToken _keepToken, TokenGrant _tokenGrant) public {
+    constructor(KeepToken _keepToken, TokenGrant _tokenGrant) {
         keepToken = _keepToken;
         tokenGrant = _tokenGrant;
     }
@@ -147,9 +145,7 @@ contract TokenStakingEscrow is Ownable {
             "Redelegating to previously used operator is not allowed"
         );
 
-        deposits[previousOperator].redelegated = deposit.redelegated.add(
-            amount
-        );
+        deposits[previousOperator].redelegated = deposit.redelegated + amount;
 
         TokenSender(address(keepToken)).approveAndCall(
             owner(), // TokenStaking contract associated with the escrow
@@ -176,7 +172,7 @@ contract TokenStakingEscrow is Ownable {
     /// delegation from which tokens were deposited.
     function availableAmount(address operator) public view returns (uint256) {
         Deposit memory deposit = deposits[operator];
-        return deposit.amount.sub(deposit.withdrawn).sub(deposit.redelegated);
+        return deposit.amount - deposit.withdrawn - deposit.redelegated;
     }
 
     /// @notice Returns the total amount deposited in the escrow after
@@ -247,8 +243,8 @@ contract TokenStakingEscrow is Ownable {
             uint256 unlocked =
                 now.getUnlockedAmount(deposit.amount, duration, start, cliff);
 
-            if (deposit.withdrawn.add(deposit.redelegated) < unlocked) {
-                return unlocked.sub(deposit.withdrawn).sub(deposit.redelegated);
+            if (deposit.withdrawn + deposit.redelegated < unlocked) {
+                return unlocked - deposit.withdrawn - deposit.redelegated;
             }
         }
 
@@ -321,7 +317,7 @@ contract TokenStakingEscrow is Ownable {
         );
 
         uint256 amountLeft = availableAmount(operator);
-        deposits[operator].withdrawn = deposit.withdrawn.add(amountLeft);
+        deposits[operator].withdrawn = deposit.withdrawn + amountLeft;
         TokenSender(address(keepToken)).approveAndCall(
             receivingEscrow,
             amountLeft,
@@ -430,7 +426,7 @@ contract TokenStakingEscrow is Ownable {
     ) internal {
         uint256 amount = withdrawable(operator);
 
-        deposits[operator].withdrawn = deposit.withdrawn.add(amount);
+        deposits[operator].withdrawn = deposit.withdrawn + amount;
         keepToken.safeTransfer(grantee, amount);
 
         emit DepositWithdrawn(operator, grantee, amount);

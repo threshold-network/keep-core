@@ -1,6 +1,5 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
 import "./libraries/grant/UnlockingSchedule.sol";
 import "./GrantStakingPolicy.sol";
 import "./TokenStaking.sol";
@@ -16,7 +15,6 @@ import "./TokenStaking.sol";
 /// and whether the cliff is considered in the stakeahead
 /// can also be chosen.
 contract AdaptiveStakingPolicy is GrantStakingPolicy {
-    using SafeMath for uint256;
     using UnlockingSchedule for uint256;
     uint256 minimumStake;
     uint256 stakeaheadTime;
@@ -69,16 +67,16 @@ contract AdaptiveStakingPolicy is GrantStakingPolicy {
         uint256 start,
         uint256 cliff,
         uint256 withdrawn
-    ) public view returns (uint256) {
+    ) public view override returns (uint256) {
         uint256 unlocked =
-            _now.add(stakeaheadTime).getUnlockedAmount(
+            _now + stakeaheadTime.getUnlockedAmount(
                 grantedAmount,
                 duration,
                 start,
                 (useCliff ? cliff : 0)
             );
-        uint256 remainingInGrant = grantedAmount.sub(withdrawn);
-        uint256 unlockedInGrant = unlocked.sub(withdrawn);
+        uint256 remainingInGrant = grantedAmount - withdrawn;
+        uint256 unlockedInGrant = unlocked - withdrawn;
 
         // Less than minimum stake remaining
         //   -> may stake what is remaining in grant

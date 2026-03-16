@@ -1,4 +1,4 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 import "../TokenStaking.sol";
 import "../TokenStakingEscrow.sol";
@@ -25,6 +25,7 @@ contract TokenStakingSlashingStub is TokenStaking {
 
     function slash(uint256 amountToSlash, address[] memory misbehavedOperators)
         public
+        override
     {
         for (uint256 i = 0; i < misbehavedOperators.length; i++) {
             address operator = misbehavedOperators[i];
@@ -37,7 +38,7 @@ contract TokenStakingSlashingStub is TokenStaking {
         uint256 rewardMultiplier,
         address tattletale,
         address[] memory misbehavedOperators
-    ) public {
+    ) public override {
         for (uint256 i = 0; i < misbehavedOperators.length; i++) {
             address operator = misbehavedOperators[i];
             emit TokensSeized(operator, 1 ether);

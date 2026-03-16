@@ -1,4 +1,4 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 library UintArrayUtils {
     function removeValue(uint256[] storage self, uint256 _value)

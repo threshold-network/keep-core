@@ -1,9 +1,9 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 /// @title GrantStakingPolicy
 /// @notice A staking policy defines the function `getStakeableAmount`
 /// which calculates how many tokens may be staked from a token grant.
-contract GrantStakingPolicy {
+abstract contract GrantStakingPolicy {
     function getStakeableAmount(
         uint256 _now,
         uint256 grantedAmount,
@@ -11,5 +11,5 @@ contract GrantStakingPolicy {
         uint256 start,
         uint256 cliff,
         uint256 withdrawn
-    ) public view returns (uint256);
+    ) public view virtual returns (uint256);
 }

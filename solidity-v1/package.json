@@ -31,8 +31,8 @@
   },
   "homepage": "https://github.com/keep-network/keep-core/contracts/solidity-v1",
   "dependencies": {
-    "@openzeppelin/upgrades": "^2.7.2",
-    "openzeppelin-solidity": "2.4.0"
+    "@openzeppelin/contracts": "^4.9.6",
+    "web3-eth-contract": "^1.10.4"
   },
   "devDependencies": {
     "@celo/contractkit": "^1.0.1",
@@ -50,11 +50,11 @@
     "eslint-config-keep": "github:keep-network/eslint-config-keep#0.3.0",
     "eth-gas-reporter": "^0.2.14",
     "ethereumjs-abi": "^0.6.5",
-    "mocha": "^7.1.1",
+    "mocha": "^11.1.0",
     "mocha-junit-reporter": "^1.23.1",
     "prettier": "^2.2.1",
     "prettier-plugin-solidity": "^1.0.0-beta.2 ",
-    "solc": "0.5.17",
+    "solc": "0.8.20",
     "solium": "^1.2.5",
     "solium-config-keep": "github:keep-network/solium-config-keep#0.1.2",
     "toml": "^3.0.0",

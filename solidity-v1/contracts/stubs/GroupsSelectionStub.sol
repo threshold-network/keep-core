@@ -1,11 +1,11 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 import "../libraries/operator/GroupSelection.sol";
 
 contract GroupSelectionStub {
     using GroupSelection for GroupSelection.Storage;
     GroupSelection.Storage groupSelection;
 
-    constructor(uint256 groupSize) public {
+    constructor(uint256 groupSize) {
         groupSelection.groupSize = groupSize;
     }
 

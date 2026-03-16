@@ -1,4 +1,4 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 library OperatorParams {
     // OperatorParams packs values that are commonly used together

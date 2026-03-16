@@ -1,4 +1,4 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 /// @title KeepRegistry
 /// @notice Governance owned registry of approved contracts and roles.
@@ -103,7 +103,7 @@ contract KeepRegistry {
         _;
     }
 
-    constructor() public {
+    constructor() {
         governance = msg.sender;
         registryKeeper = msg.sender;
         defaultPanicButton = msg.sender;

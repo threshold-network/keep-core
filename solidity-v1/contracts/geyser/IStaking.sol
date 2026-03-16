@@ -2,13 +2,13 @@
  This code is copied from:
  https://github.com/ampleforth/token-geyser/tree/d8352f62a0432494c39416d090e68582e13b2b22/contracts
  */
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 /**
  * @title Staking interface, as defined by EIP-900.
  * @dev https://github.com/ethereum/EIPs/blob/master/EIPS/eip-900.md
  */
-contract IStaking {
+abstract contract IStaking {
     event Staked(
         address indexed user,
         uint256 amount,
@@ -22,17 +22,17 @@ contract IStaking {
         bytes data
     );
 
-    function stake(uint256 amount, bytes calldata data) external;
+    function stake(uint256 amount, bytes calldata data) external virtual;
 
     function stakeFor(
         address user,
         uint256 amount,
         bytes calldata data
-    ) external;
+    ) external virtual;
 
-    function unstake(uint256 amount, bytes calldata data) external;
+    function unstake(uint256 amount, bytes calldata data) external virtual;
 
-    function token() external view returns (address);
+    function token() external view virtual returns (address);
 
     /**
      * @return False. This application does not support staking history.
@@ -41,7 +41,7 @@ contract IStaking {
         return false;
     }
 
-    function totalStakedFor(address addr) public view returns (uint256);
+    function totalStakedFor(address addr) public view virtual returns (uint256);
 
-    function totalStaked() public view returns (uint256);
+    function totalStaked() public view virtual returns (uint256);
 }

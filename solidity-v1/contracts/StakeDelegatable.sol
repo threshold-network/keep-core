@@ -12,7 +12,7 @@
                            Trust math, not hardware.
 */
 
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 import "./utils/OperatorParams.sol";
 
@@ -32,7 +32,7 @@ contract StakeDelegatable {
 
     /// @notice Gets the stake balance of the specified address.
     /// @param _address The address to query the balance of.
-    /// @return An uint256 representing the amount staked by the passed address.
+    /// @return balance An uint256 representing the amount staked by the passed address.
     function balanceOf(address _address) public view returns (uint256 balance) {
         return operators[_address].packedParams.getAmount();
     }
@@ -54,8 +54,8 @@ contract StakeDelegatable {
     }
 
     /// @notice Gets the authorizer for the specified operator address.
-    /// @return Authorizer address.
-    function authorizerOf(address _operator) public view returns (address) {
+    /// @return authorizer Authorizer address.
+    function authorizerOf(address _operator) public view virtual returns (address) {
         return operators[_operator].authorizer;
     }
 }

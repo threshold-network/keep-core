@@ -1,4 +1,4 @@
-pragma solidity ^0.5.17;
+pragma solidity ^0.8.0;
 
 import "../Rewards.sol";
 
@@ -93,7 +93,7 @@ contract RewardsStub is Rewards {
         uint256 keepCount = keepsInInterval(interval);
         // Adjusted allocation would be zero if keep count was zero
         assert(keepCount > 0);
-        return __adjustedAllocation.div(keepCount);
+        return __adjustedAllocation / keepCount;
     }
 
     function terminate(uint256 i) public {
@@ -104,29 +104,31 @@ contract RewardsStub is Rewards {
         closedTime = i;
     }
 
-    function _getKeepCount() internal view returns (uint256) {
+    function _getKeepCount() internal view override returns (uint256) {
         return creationTimes.length;
     }
 
-    function _getKeepAtIndex(uint256 i) internal view returns (bytes32) {
+    function _getKeepAtIndex(uint256 i) internal view override returns (bytes32) {
         return bytes32(i);
     }
 
     function _getCreationTime(bytes32 groupIndexBytes)
         internal
         view
+        override
         returns (uint256)
     {
         return creationTimes[uint256(groupIndexBytes)];
     }
 
-    function _isClosed(bytes32 groupIndexBytes) internal view returns (bool) {
+    function _isClosed(bytes32 groupIndexBytes) internal view override returns (bool) {
         return _getCreationTime(groupIndexBytes) <= closedTime;
     }
 
     function _isTerminated(bytes32 groupIndexBytes)
         internal
         view
+        override
         returns (bool)
     {
         return terminated[uint256(groupIndexBytes)];
@@ -135,6 +137,7 @@ contract RewardsStub is Rewards {
     function _recognizedByFactory(bytes32 groupIndexBytes)
         internal
         view
+        override
         returns (bool)
     {
         return _getKeepCount() > uint256(groupIndexBytes);
@@ -142,6 +145,7 @@ contract RewardsStub is Rewards {
 
     function _distributeReward(bytes32 groupIndexBytes, uint256 _value)
         internal
+        override
     {
         token.safeTransfer(msg.sender, _value);
     }

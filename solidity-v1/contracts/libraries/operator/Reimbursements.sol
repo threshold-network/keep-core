@@ -1,11 +1,9 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
 import "../../utils/BytesLib.sol";
 import "../../TokenStaking.sol";
 
 library Reimbursements {
-    using SafeMath for uint256;
     using BytesLib for bytes;
 
     /// @notice Reimburses callback execution cost and surplus based on actual gas
@@ -40,7 +38,7 @@ library Reimbursements {
         // The worst scenario cost is included in entry verification fee.
         // If this happens we return just the gasLimit here.
         uint256 actualCallbackGas = gasSpent < gasLimit ? gasSpent : gasLimit;
-        uint256 actualCallbackFee = actualCallbackGas.mul(gasPrice);
+        uint256 actualCallbackFee = actualCallbackGas * gasPrice;
 
         // Get the beneficiary.
         address payable beneficiary = stakingContract.beneficiaryOf(msg.sender);
@@ -48,7 +46,7 @@ library Reimbursements {
         // If we spent less on the callback than the customer transferred for the
         // callback execution, we need to reimburse the difference.
         if (actualCallbackFee < callbackFee) {
-            uint256 callbackSurplus = callbackFee.sub(actualCallbackFee);
+            uint256 callbackSurplus = callbackFee - actualCallbackFee;
             // Reimburse submitter with his actual callback cost.
             beneficiary.call.value(actualCallbackFee)("");
 

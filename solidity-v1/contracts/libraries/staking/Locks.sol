@@ -1,11 +1,9 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
 import {AuthorityVerifier} from "../../Authorizations.sol";
 import "./LockUtils.sol";
 
 library Locks {
-    using SafeMath for uint256;
     using LockUtils for LockUtils.LockSet;
 
     event StakeLocked(
@@ -33,9 +31,9 @@ library Locks {
         require(duration <= maximumLockDuration, "Lock duration too long");
         self.operatorLocks[operator].setLock(
             msg.sender,
-            uint96(block.timestamp.add(duration))
+            uint96(block.timestamp + duration)
         );
-        emit StakeLocked(operator, msg.sender, block.timestamp.add(duration));
+        emit StakeLocked(operator, msg.sender, block.timestamp + duration);
     }
 
     function releaseLock(Storage storage self, address operator) public {

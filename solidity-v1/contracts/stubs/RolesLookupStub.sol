@@ -1,4 +1,4 @@
-pragma solidity 0.5.17;
+pragma solidity ^0.8.0;
 
 import "../libraries/RolesLookup.sol";
 
@@ -6,7 +6,7 @@ contract RolesLookupStub {
     TokenStaking internal tokenStaking;
     TokenGrant internal tokenGrant;
 
-    constructor(TokenStaking _tokenStaking, TokenGrant _tokenGrant) public {
+    constructor(TokenStaking _tokenStaking, TokenGrant _tokenGrant) {
         tokenStaking = _tokenStaking;
         tokenGrant = _tokenGrant;
     }

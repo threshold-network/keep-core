@@ -1,5 +1,4 @@
-pragma solidity 0.5.17;
-import "openzeppelin-solidity/contracts/math/SafeMath.sol";
+pragma solidity ^0.8.0;
 import "../../utils/BytesLib.sol";
 import "../../utils/PercentUtils.sol";
 import "../../cryptography/AltBn128.sol";
@@ -7,7 +6,6 @@ import "../../cryptography/BLS.sol";
 import "../../TokenStaking.sol";
 
 library Groups {
-    using SafeMath for uint256;
     using PercentUtils for uint256;
     using BytesLib for bytes;
 
@@ -107,7 +105,7 @@ library Groups {
         self.groupMemberRewards[groupPubKey] = self.groupMemberRewards[
             groupPubKey
         ]
-            .add(amount);
+             + amount;
     }
 
     /// @notice Returns accumulated group member rewards for provided group.
@@ -186,7 +184,7 @@ library Groups {
         view
         returns (uint256)
     {
-        return uint256(group.registrationBlockHeight).add(self.groupActiveTime);
+        return uint256(group.registrationBlockHeight) + self.groupActiveTime;
     }
 
     /// @notice Gets the cutoff time in blocks after which the given group is
@@ -197,7 +195,7 @@ library Groups {
         view
         returns (uint256)
     {
-        return groupActiveTimeOf(self, group).add(self.relayEntryTimeout);
+        return groupActiveTimeOf(self, group) + self.relayEntryTimeout;
     }
 
     /// @notice Checks if a group with the given public key is a stale group.
@@ -243,7 +241,7 @@ library Groups {
         returns (uint256)
     {
         return
-            self.groups.length.sub(self.expiredGroupOffset).sub(
+            self.groups.length - self.expiredGroupOffset.sub(
                 self.activeTerminatedGroups.length
             );
     }
@@ -309,7 +307,7 @@ library Groups {
         view
         returns (uint256)
     {
-        return self.expiredGroupOffset.add(selectedIndex);
+        return self.expiredGroupOffset + selectedIndex;
     }
 
     /// @notice Evaluates the shift of selected group index based on the number of
@@ -351,7 +349,7 @@ library Groups {
         self.withdrawn[groupPublicKey][operator] = true;
         for (uint256 i = 0; i < self.groupMembers[groupPublicKey].length; i++) {
             if (operator == self.groupMembers[groupPublicKey][i]) {
-                rewards = rewards.add(self.groupMemberRewards[groupPublicKey]);
+                rewards = rewards + self.groupMemberRewards[groupPublicKey];
             }
         }
     }
@@ -428,7 +426,7 @@ library Groups {
         uint256 punishment = relayEntryTimeoutPunishment(self);
         terminateGroup(self, groupIndex);
         // Reward is limited to min(1, 20 / group_size) of the maximum tattletale reward, see the Yellow Paper for more details.
-        uint256 rewardAdjustment = uint256(20 * 100).div(groupSize); // Reward adjustment in percentage
+        uint256 rewardAdjustment = uint256(20 * 100) / groupSize; // Reward adjustment in percentage
         rewardAdjustment = rewardAdjustment > 100 ? 100 : rewardAdjustment; // Reward adjustment can be 100% max
         self.stakingContract.seize(
             punishment,
