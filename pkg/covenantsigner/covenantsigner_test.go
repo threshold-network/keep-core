@@ -3205,7 +3205,7 @@ func TestServerHandlesSubmitAndPathPoll(t *testing.T) {
 	}
 }
 
-func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
+func TestServerRejectsUnknownFieldsOnSubmit(t *testing.T) {
 	handle := newMemoryHandle()
 	service, err := NewService(handle, &scriptedEngine{
 		submit: func(*Job) (*Transition, error) {
@@ -3299,9 +3299,14 @@ func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode != http.StatusOK {
+	if response.StatusCode != http.StatusBadRequest {
 		body, _ := io.ReadAll(response.Body)
 		t.Fatalf("unexpected submit status: %d %s", response.StatusCode, string(body))
+	}
+
+	body, _ := io.ReadAll(response.Body)
+	if !strings.Contains(string(body), "malformed request body") {
+		t.Fatalf("unexpected response body: %s", string(body))
 	}
 }
 
