@@ -284,6 +284,7 @@ func decodeJSON[T any](w http.ResponseWriter, r *http.Request, target *T) bool {
 	defer r.Body.Close()
 
 	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		http.Error(w, "malformed request body", http.StatusBadRequest)
 		return false
