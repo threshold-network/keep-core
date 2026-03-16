@@ -52,6 +52,8 @@ var canonicalTimestampPattern = regexp.MustCompile(
 	`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`,
 )
 
+var requestIdentifierPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,255}$`)
+
 type inputError struct {
 	message string
 }
@@ -134,6 +136,14 @@ func validateHexString(name string, value string) error {
 
 	if _, err := hex.DecodeString(strings.TrimPrefix(value, "0x")); err != nil {
 		return &inputError{fmt.Sprintf("%s must be valid hex", name)}
+	}
+
+	return nil
+}
+
+func validateRequestIdentifier(name string, value string) error {
+	if !requestIdentifierPattern.MatchString(value) {
+		return &inputError{fmt.Sprintf("%s must match [a-zA-Z0-9_-] and be at most 255 chars", name)}
 	}
 
 	return nil
@@ -1676,8 +1686,14 @@ func validateCommonRequest(
 	if request.FacadeRequestID == "" {
 		return &inputError{"request.facadeRequestId is required"}
 	}
+	if err := validateRequestIdentifier("request.facadeRequestId", request.FacadeRequestID); err != nil {
+		return err
+	}
 	if request.IdempotencyKey == "" {
 		return &inputError{"request.idempotencyKey is required"}
+	}
+	if err := validateRequestIdentifier("request.idempotencyKey", request.IdempotencyKey); err != nil {
+		return err
 	}
 	if request.Route != route {
 		return &inputError{"request.route does not match endpoint route"}
