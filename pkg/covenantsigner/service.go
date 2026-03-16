@@ -257,11 +257,15 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 		return mapJobResult(existing), nil
 	}
 
-	requestIDPrefix := "kcs"
-	if route == TemplateQcV1 {
+	requestIDPrefix := ""
+	switch route {
+	case TemplateQcV1:
 		requestIDPrefix = "kcs_qc"
-	} else if route == TemplateSelfV1 {
+	case TemplateSelfV1:
 		requestIDPrefix = "kcs_self"
+	default:
+		s.mutex.Unlock()
+		return StepResult{}, fmt.Errorf("unsupported route: %s", route)
 	}
 
 	requestID, err := newRequestID(requestIDPrefix)
