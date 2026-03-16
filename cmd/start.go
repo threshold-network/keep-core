@@ -46,6 +46,17 @@ var StartCommand = &cobra.Command{
 	},
 }
 
+var (
+	connectEthereum         = ethereum.Connect
+	connectElectrum         = electrum.Connect
+	initializeNetworkHandle = initializeNetwork
+	initializePersistenceFn = initializePersistence
+	initializeBeaconFn      = beacon.Initialize
+	initializeTbtcFn        = tbtc.Initialize
+	initializeSignerFn      = covenantsigner.Initialize
+	startSchedulerFn        = generator.StartScheduler
+)
+
 func init() {
 	initFlags(StartCommand, &configFilePath, clientConfig, config.StartCmdCategories...)
 
@@ -67,12 +78,12 @@ func start(cmd *cobra.Command) error {
 	ctx := context.Background()
 
 	beaconChain, tbtcChain, blockCounter, signing, operatorPrivateKey, err :=
-		ethereum.Connect(ctx, clientConfig.Ethereum)
+		connectEthereum(ctx, clientConfig.Ethereum)
 	if err != nil {
 		return fmt.Errorf("error connecting to Ethereum node: [%v]", err)
 	}
 
-	netProvider, err := initializeNetwork(
+	netProvider, err := initializeNetworkHandle(
 		ctx,
 		[]firewall.Application{beaconChain, tbtcChain},
 		operatorPrivateKey,
@@ -111,7 +122,7 @@ func start(cmd *cobra.Command) error {
 	// Skip initialization for bootstrap nodes as they are only used for network
 	// discovery.
 	if !isBootstrap() {
-		btcChain, err := electrum.Connect(ctx, clientConfig.Bitcoin.Electrum)
+		btcChain, err := connectElectrum(ctx, clientConfig.Bitcoin.Electrum)
 		if err != nil {
 			return fmt.Errorf("could not connect to Electrum chain: [%v]", err)
 		}
@@ -119,12 +130,12 @@ func start(cmd *cobra.Command) error {
 		beaconKeyStorePersistence,
 			tbtcKeyStorePersistence,
 			tbtcDataPersistence,
-			err := initializePersistence()
+			err := initializePersistenceFn()
 		if err != nil {
 			return fmt.Errorf("cannot initialize persistence: [%w]", err)
 		}
 
-		scheduler := generator.StartScheduler()
+		scheduler := startSchedulerFn()
 
 		if clientInfoRegistry != nil {
 			clientInfoRegistry.ObserveBtcConnectivity(
@@ -143,7 +154,7 @@ func start(cmd *cobra.Command) error {
 			rpcHealthChecker.Start(ctx)
 		}
 
-		err = beacon.Initialize(
+		err = initializeBeaconFn(
 			ctx,
 			beaconChain,
 			netProvider,
@@ -159,7 +170,7 @@ func start(cmd *cobra.Command) error {
 			btcChain,
 		)
 
-		covenantSignerEngine, err := tbtc.Initialize(
+		covenantSignerEngine, err := initializeTbtcFn(
 			ctx,
 			tbtcChain,
 			btcChain,
@@ -176,7 +187,7 @@ func start(cmd *cobra.Command) error {
 			return fmt.Errorf("error initializing TBTC: [%v]", err)
 		}
 
-		_, _, err = covenantsigner.Initialize(
+		_, _, err = initializeSignerFn(
 			ctx,
 			clientConfig.CovenantSigner,
 			tbtcDataPersistence,
