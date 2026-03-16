@@ -23,6 +23,8 @@ type Server struct {
 	httpServer *http.Server
 }
 
+const maxRequestBodyBytes = 2 << 20
+
 func Initialize(
 	ctx context.Context,
 	config Config,
@@ -103,6 +105,9 @@ func Initialize(
 			Addr:              net.JoinHostPort(listenAddress, strconv.Itoa(config.Port)),
 			Handler:           newHandler(service, config.AuthToken, config.EnableSelfV1),
 			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       60 * time.Second,
 		},
 	}
 
@@ -274,6 +279,7 @@ func withBearerAuth(next http.Handler, authToken string) http.Handler {
 }
 
 func decodeJSON[T any](w http.ResponseWriter, r *http.Request, target *T) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	defer r.Body.Close()
 
 	decoder := json.NewDecoder(r.Body)
