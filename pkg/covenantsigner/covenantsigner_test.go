@@ -3599,3 +3599,138 @@ func TestServerCanKeepSelfV1RoutesDark(t *testing.T) {
 		t.Fatalf("expected qc_v1 route to remain available, got %d %s", qcResponse.StatusCode, string(body))
 	}
 }
+
+func TestServerBoundaryErrorMatrix(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{
+		submit: func(*Job) (*Transition, error) {
+			return &Transition{State: JobStatePending, Detail: "queued"}, nil
+		},
+		poll: func(*Job) (*Transition, error) {
+			return &Transition{State: JobStatePending, Detail: "queued"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(newHandler(service, "test-token", true))
+	defer server.Close()
+
+	submitPayload := mustJSON(t, SignerSubmitInput{
+		RouteRequestID: "ors_http_matrix",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	})
+
+	mismatchedPollPayload := mustJSON(t, SignerPollInput{
+		RequestID:      "different_id",
+		RouteRequestID: "ors_http_matrix",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	})
+
+	oversizedBody := []byte(
+		`{"routeRequestId":"ors_big","stage":"SIGNER_COORDINATION","request":{"facadeRequestId":"` +
+			strings.Repeat("a", maxRequestBodyBytes+1) + `"}}`,
+	)
+
+	testCases := []struct {
+		name             string
+		method           string
+		path             string
+		body             []byte
+		authHeader       string
+		wantStatus       int
+		wantBodyContains string
+		wantAllow        string
+	}{
+		{
+			name:             "invalid bearer token",
+			method:           http.MethodPost,
+			path:             "/v1/self_v1/signer/requests",
+			body:             submitPayload,
+			authHeader:       "Bearer wrong-token",
+			wantStatus:       http.StatusUnauthorized,
+			wantBodyContains: "invalid bearer token",
+		},
+		{
+			name:             "method mismatch on poll path returns 405",
+			method:           http.MethodGet,
+			path:             "/v1/self_v1/signer/requests/request_1:poll",
+			authHeader:       "Bearer test-token",
+			wantStatus:       http.StatusMethodNotAllowed,
+			wantBodyContains: "method not allowed",
+			wantAllow:        http.MethodPost,
+		},
+		{
+			name:             "unknown fields in envelope rejected",
+			method:           http.MethodPost,
+			path:             "/v1/self_v1/signer/requests",
+			body:             []byte(`{"routeRequestId":"ors_http_unknown","stage":"SIGNER_COORDINATION","request":{},"futureTopLevel":"ignored"}`),
+			authHeader:       "Bearer test-token",
+			wantStatus:       http.StatusBadRequest,
+			wantBodyContains: "malformed request body",
+		},
+		{
+			name:             "oversized body rejected",
+			method:           http.MethodPost,
+			path:             "/v1/self_v1/signer/requests",
+			body:             oversizedBody,
+			authHeader:       "Bearer test-token",
+			wantStatus:       http.StatusBadRequest,
+			wantBodyContains: "malformed request body",
+		},
+		{
+			name:             "poll path and body request id mismatch rejected",
+			method:           http.MethodPost,
+			path:             "/v1/self_v1/signer/requests/request_from_path:poll",
+			body:             mismatchedPollPayload,
+			authHeader:       "Bearer test-token",
+			wantStatus:       http.StatusBadRequest,
+			wantBodyContains: "requestId in body does not match path",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			request, err := http.NewRequest(
+				tc.method,
+				server.URL+tc.path,
+				bytes.NewReader(tc.body),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if tc.body != nil {
+				request.Header.Set("Content-Type", "application/json")
+			}
+			if tc.authHeader != "" {
+				request.Header.Set("Authorization", tc.authHeader)
+			}
+
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+
+			if response.StatusCode != tc.wantStatus {
+				body, _ := io.ReadAll(response.Body)
+				t.Fatalf("unexpected status: %d body: %s", response.StatusCode, string(body))
+			}
+
+			if tc.wantAllow != "" && response.Header.Get("Allow") != tc.wantAllow {
+				t.Fatalf("unexpected Allow header: %q", response.Header.Get("Allow"))
+			}
+
+			if tc.wantBodyContains != "" {
+				body, _ := io.ReadAll(response.Body)
+				if !strings.Contains(string(body), tc.wantBodyContains) {
+					t.Fatalf("expected body to contain %q, got %q", tc.wantBodyContains, string(body))
+				}
+			}
+		})
+	}
+}
