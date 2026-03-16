@@ -150,13 +150,7 @@ func (s *Store) Put(job *Job) error {
 	}
 
 	key := routeKey(job.Route, job.RouteRequestID)
-	if existingRequestID, ok := s.byRouteKey[key]; ok && existingRequestID != job.RequestID {
-		if err := s.handle.Delete(jobsDirectory, existingRequestID+".json"); err != nil {
-			return err
-		}
-		delete(s.byRequestID, existingRequestID)
-	}
-
+	existingRequestID, hasExisting := s.byRouteKey[key]
 	if err := s.handle.Save(payload, jobsDirectory, job.RequestID+".json"); err != nil {
 		return err
 	}
@@ -168,6 +162,18 @@ func (s *Store) Put(job *Job) error {
 
 	s.byRequestID[job.RequestID] = cloned
 	s.byRouteKey[key] = job.RequestID
+
+	if hasExisting && existingRequestID != job.RequestID {
+		if err := s.handle.Delete(jobsDirectory, existingRequestID+".json"); err != nil {
+			logger.Warnf(
+				"failed to delete stale covenant signer job file [%s]: [%v]",
+				existingRequestID+".json",
+				err,
+			)
+		} else {
+			delete(s.byRequestID, existingRequestID)
+		}
+	}
 
 	return nil
 }
