@@ -73,5 +73,9 @@
   },
   "engines": {
     "node": ">= 14.0.0"
+  },
+  "resolutions": {
+    "axios": "0.21.4",
+    "@openzeppelin/upgrades/axios": "0.21.4"
   }
 }

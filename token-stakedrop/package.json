@@ -23,6 +23,12 @@
   "engines": {
     "node": ">=14"
   },
+  "overrides": {
+    "axios": "^0.21.1",
+    "@openzeppelin/upgrades": {
+      "axios": "^0.21.1"
+    }
+  },
   "devDependencies": {
     "babel-eslint": "^10.1.0",
     "eslint": "^7.20.0",

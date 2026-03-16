@@ -15,5 +15,11 @@
     "start": "functions-framework --target=issueGrant",
     "lint:js": "eslint issue-grant.js",
     "lint:fix:js": "eslint --fix issue-grant.js"
+  },
+  "overrides": {
+    "axios": "^0.21.1",
+    "@openzeppelin/upgrades": {
+      "axios": "^0.21.1"
+    }
   }
 }

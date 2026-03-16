@@ -62,5 +62,11 @@
     "truffle": "^5.5.20",
     "truffle-plugin-verify": "^0.5.26",
     "websocket": "^1.0.28"
+  },
+  "overrides": {
+    "axios": "^0.21.1",
+    "@openzeppelin/upgrades": {
+      "axios": "^0.21.1"
+    }
   }
 }
