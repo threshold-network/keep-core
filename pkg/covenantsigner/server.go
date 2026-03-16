@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -362,7 +363,12 @@ func pollPathHandler(service *Service, route TemplateID) http.HandlerFunc {
 			return
 		}
 
-		pathRequestID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, prefix), ":poll")
+		rawPathRequestID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, prefix), ":poll")
+		pathRequestID, err := url.PathUnescape(rawPathRequestID)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
 		if pathRequestID == "" || strings.Contains(pathRequestID, "/") {
 			http.NotFound(w, r)
 			return
