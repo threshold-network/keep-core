@@ -694,6 +694,9 @@ func (cse *covenantSignerEngine) buildAndSignSelfV1Transaction(
 	if len(transaction.Inputs) != 1 {
 		return nil, fmt.Errorf("unexpected covenant input count")
 	}
+	if len(transaction.Inputs[0].Witness) == 0 {
+		return nil, fmt.Errorf("unexpected empty covenant witness stack")
+	}
 	if !bytes.Equal(transaction.Inputs[0].Witness[len(transaction.Inputs[0].Witness)-1], witnessScript) {
 		// This can never happen with the current builder path, but keeping the
 		// explicit comparison helps catch future witness-shape regressions.
