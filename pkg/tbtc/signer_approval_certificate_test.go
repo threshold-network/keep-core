@@ -396,3 +396,112 @@ func TestCovenantSignerEngineVerifySignerApprovalRejectsApprovalDigestMismatch(t
 		t.Fatalf("expected signer approval digest mismatch error, got %v", err)
 	}
 }
+
+func TestVerifySignerApprovalCertificateRejectsEmptyExpectedSignerSetHash(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+
+	err := verifySignerApprovalCertificate(request.SignerApproval, "")
+	if err == nil || !strings.Contains(err.Error(), "expected signer set hash must not be empty") {
+		t.Fatalf("expected empty signer set hash error, got %v", err)
+	}
+}
+
+func TestVerifySignerApprovalCertificateRejectsSignerSetMismatch(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+
+	err := verifySignerApprovalCertificate(
+		request.SignerApproval,
+		"0x"+strings.Repeat("ab", 32),
+	)
+	if err == nil || !strings.Contains(err.Error(), "signer set hash does not match the expected signer set") {
+		t.Fatalf("expected signer set mismatch error, got %v", err)
+	}
+}
+
+func TestVerifySignerApprovalCertificateRejectsMalformedDERSignature(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+
+	certificate := *request.SignerApproval
+	certificate.Signature = "0xdeadbeef"
+
+	walletExecutor, ok, err := node.getSigningExecutor(walletPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("node is supposed to control wallet signers")
+	}
+	walletChainData, err := walletExecutor.chain.GetWallet(bitcoin.PublicKeyHash(walletPublicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedSignerSetHash, err := computeSignerApprovalCertificateSignerSetHash(
+		walletPublicKey,
+		walletChainData,
+		walletExecutor.groupParameters,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = verifySignerApprovalCertificate(&certificate, expectedSignerSetHash)
+	if err == nil || !strings.Contains(err.Error(), "cannot parse threshold signature") {
+		t.Fatalf("expected malformed DER signature error, got %v", err)
+	}
+}
+
+func TestVerifySignerApprovalCertificateRejectsMalformedWalletPublicKey(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+
+	certificate := *request.SignerApproval
+	certificate.WalletPublicKey = "0x02" + strings.Repeat("11", 32)
+
+	walletExecutor, ok, err := node.getSigningExecutor(walletPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("node is supposed to control wallet signers")
+	}
+	walletChainData, err := walletExecutor.chain.GetWallet(bitcoin.PublicKeyHash(walletPublicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedSignerSetHash, err := computeSignerApprovalCertificateSignerSetHash(
+		walletPublicKey,
+		walletChainData,
+		walletExecutor.groupParameters,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = verifySignerApprovalCertificate(&certificate, expectedSignerSetHash)
+	if err == nil || !strings.Contains(err.Error(), "wallet public key is not a valid uncompressed secp256k1 key") {
+		t.Fatalf("expected malformed wallet public key error, got %v", err)
+	}
+}

@@ -3,7 +3,10 @@ package covenantsigner
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
@@ -2423,6 +2426,39 @@ func TestServicePollAcceptsStoredMigrationPlanQuoteAfterQuoteExpiry(t *testing.T
 	}
 	if pollResult.Status != StepStatusPending {
 		t.Fatalf("expected pending poll result, got %#v", pollResult)
+	}
+}
+
+func TestParseMigrationPlanQuoteTrustRootRejectsInvalidPEM(t *testing.T) {
+	_, err := parseMigrationPlanQuoteTrustRoot("trustRoot", MigrationPlanQuoteTrustRoot{
+		PublicKeyPEM: "not a PEM value",
+	})
+	if err == nil || !strings.Contains(err.Error(), "trustRoot.publicKeyPem must be a PEM-encoded public key") {
+		t.Fatalf("expected invalid PEM error, got: %v", err)
+	}
+}
+
+func TestParseMigrationPlanQuoteTrustRootRejectsNonEd25519Key(t *testing.T) {
+	secpKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	publicKeyDER, err := x509.MarshalPKIXPublicKey(&secpKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = parseMigrationPlanQuoteTrustRoot("trustRoot", MigrationPlanQuoteTrustRoot{
+		PublicKeyPEM: string(
+			pem.EncodeToMemory(&pem.Block{
+				Type:  "PUBLIC KEY",
+				Bytes: publicKeyDER,
+			}),
+		),
+	})
+	if err == nil || !strings.Contains(err.Error(), "trustRoot.publicKeyPem must be a PEM-encoded Ed25519 public key") {
+		t.Fatalf("expected non-ed25519 key error, got: %v", err)
 	}
 }
 
