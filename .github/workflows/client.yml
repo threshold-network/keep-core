@@ -301,6 +301,21 @@ jobs:
           install-go: false
           checks: "-SA1019"
 
+  client-race:
+    needs: client-detect-changes
+    if: |
+      github.event_name == 'push'
+        || needs.client-detect-changes.outputs.path-filter == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+      - name: Race detector (high-risk packages)
+        run: |
+          go test -race -timeout 20m ./pkg/covenantsigner ./pkg/tbtc
+
   client-integration-test:
     needs: [electrum-integration-detect-changes, client-build-test-publish]
     if: |
