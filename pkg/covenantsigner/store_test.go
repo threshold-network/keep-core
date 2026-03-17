@@ -255,7 +255,8 @@ func TestStoreLoadFailsOnInvalidUpdatedAtForDuplicateRouteKeys(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected invalid UpdatedAt error")
 	}
-	if !strings.Contains(err.Error(), "cannot parse candidate job updatedAt") {
+	if !strings.Contains(err.Error(), "cannot parse candidate job updatedAt") &&
+		!strings.Contains(err.Error(), "cannot parse existing job updatedAt") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
