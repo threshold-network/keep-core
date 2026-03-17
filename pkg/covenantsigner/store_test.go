@@ -204,3 +204,58 @@ func TestStoreLoadSelectsNewestJobForDuplicateRouteKeys(t *testing.T) {
 		t.Fatalf("expected newest request ID %s, got %s", newJob.RequestID, loaded.RequestID)
 	}
 }
+
+func TestStoreLoadFailsOnInvalidUpdatedAtForDuplicateRouteKeys(t *testing.T) {
+	handle := newMemoryHandle()
+
+	first := &Job{
+		RequestID:       "kcs_self_first_load",
+		RouteRequestID:  "ors_load_invalid_updated_at",
+		Route:           TemplateSelfV1,
+		IdempotencyKey:  "idem_first_load",
+		FacadeRequestID: "rf_first_load",
+		RequestDigest:   "0xaaa",
+		State:           JobStatePending,
+		Detail:          "queued",
+		CreatedAt:       "2026-03-09T00:00:00Z",
+		UpdatedAt:       "2026-03-09T00:00:00Z",
+		Request:         baseRequest(TemplateSelfV1),
+	}
+	second := &Job{
+		RequestID:       "kcs_self_second_load",
+		RouteRequestID:  "ors_load_invalid_updated_at",
+		Route:           TemplateSelfV1,
+		IdempotencyKey:  "idem_second_load",
+		FacadeRequestID: "rf_second_load",
+		RequestDigest:   "0xbbb",
+		State:           JobStatePending,
+		Detail:          "queued",
+		CreatedAt:       "2026-03-10T00:00:00Z",
+		UpdatedAt:       "invalid-timestamp",
+		Request:         baseRequest(TemplateSelfV1),
+	}
+
+	firstPayload, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPayload, err := json.Marshal(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := handle.Save(firstPayload, jobsDirectory, first.RequestID+".json"); err != nil {
+		t.Fatal(err)
+	}
+	if err := handle.Save(secondPayload, jobsDirectory, second.RequestID+".json"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = NewStore(handle)
+	if err == nil {
+		t.Fatal("expected invalid UpdatedAt error")
+	}
+	if !strings.Contains(err.Error(), "cannot parse candidate job updatedAt") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/keep-network/keep-common/pkg/persistence"
 )
@@ -49,6 +50,30 @@ func cloneJob(job *Job) (*Job, error) {
 	return cloned, nil
 }
 
+func isNewerOrSameJobRevision(existing *Job, candidate *Job) (bool, error) {
+	existingUpdatedAt, err := time.Parse(time.RFC3339Nano, existing.UpdatedAt)
+	if err != nil {
+		return false, fmt.Errorf(
+			"cannot parse existing job updatedAt [%s] for request [%s]: %w",
+			existing.UpdatedAt,
+			existing.RequestID,
+			err,
+		)
+	}
+
+	candidateUpdatedAt, err := time.Parse(time.RFC3339Nano, candidate.UpdatedAt)
+	if err != nil {
+		return false, fmt.Errorf(
+			"cannot parse candidate job updatedAt [%s] for request [%s]: %w",
+			candidate.UpdatedAt,
+			candidate.RequestID,
+			err,
+		)
+	}
+
+	return !existingUpdatedAt.Before(candidateUpdatedAt), nil
+}
+
 func (s *Store) load() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -80,8 +105,14 @@ func (s *Store) load() error {
 			existingID, ok := s.byRouteKey[routeKey(job.Route, job.RouteRequestID)]
 			if ok {
 				existing := s.byRequestID[existingID]
-				if existing != nil && existing.UpdatedAt >= job.UpdatedAt {
-					continue
+				if existing != nil {
+					existingIsNewerOrSame, err := isNewerOrSameJobRevision(existing, job)
+					if err != nil {
+						return err
+					}
+					if existingIsNewerOrSame {
+						continue
+					}
 				}
 			}
 
