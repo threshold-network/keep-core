@@ -986,6 +986,23 @@ func TestValidateMigrationOutputValues_RejectsValuesExceedingInt64(t *testing.T)
 	}
 }
 
+func TestCovenantSignerEngine_EnsureActiveOutpointFinalityRejectsUnconfirmed(t *testing.T) {
+	node, bitcoinChain, _ := setupCovenantSignerTestNode(t)
+	if len(bitcoinChain.transactions) == 0 {
+		bitcoinChain.transactions = append(bitcoinChain.transactions, &bitcoin.Transaction{
+			Version: 1,
+		})
+	}
+
+	activeTransactionHash := bitcoinChain.transactions[0].Hash()
+	bitcoinChain.setTransactionConfirmations(activeTransactionHash, 0)
+
+	err := (&covenantSignerEngine{node: node}).ensureActiveOutpointFinality(activeTransactionHash)
+	if err == nil || !strings.Contains(err.Error(), "active outpoint transaction must have at least 1 confirmation") {
+		t.Fatalf("expected confirmation error, got %v", err)
+	}
+}
+
 func setupCovenantSignerTestNode(
 	t *testing.T,
 ) (*node, *localBitcoinChain, *ecdsa.PublicKey) {

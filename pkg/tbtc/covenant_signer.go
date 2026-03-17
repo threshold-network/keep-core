@@ -24,6 +24,7 @@ type covenantSignerEngine struct {
 }
 
 const qcV1SignerHandoffKind = "qc_v1_signer_handoff_v1"
+const minimumActiveOutpointConfirmations = 1
 
 type qcV1SignerHandoff struct {
 	Kind                      string
@@ -502,6 +503,9 @@ func (cse *covenantSignerEngine) resolveSelfV1ActiveUtxo(
 	if err != nil {
 		return nil, fmt.Errorf("active outpoint transaction not found")
 	}
+	if err := cse.ensureActiveOutpointFinality(activeTxHash); err != nil {
+		return nil, err
+	}
 	if int(request.ActiveOutpoint.Vout) >= len(transaction.Outputs) {
 		return nil, fmt.Errorf("active outpoint output index is out of range")
 	}
@@ -558,6 +562,9 @@ func (cse *covenantSignerEngine) resolveQcV1ActiveUtxo(
 	if err != nil {
 		return nil, fmt.Errorf("active outpoint transaction not found")
 	}
+	if err := cse.ensureActiveOutpointFinality(activeTxHash); err != nil {
+		return nil, err
+	}
 	if int(request.ActiveOutpoint.Vout) >= len(transaction.Outputs) {
 		return nil, fmt.Errorf("active outpoint output index is out of range")
 	}
@@ -596,6 +603,23 @@ func (cse *covenantSignerEngine) resolveQcV1ActiveUtxo(
 		},
 		Value: actualOutput.Value,
 	}, nil
+}
+
+func (cse *covenantSignerEngine) ensureActiveOutpointFinality(
+	activeTxHash bitcoin.Hash,
+) error {
+	confirmations, err := cse.node.btcChain.GetTransactionConfirmations(activeTxHash)
+	if err != nil {
+		return fmt.Errorf("cannot determine active outpoint transaction confirmations: %v", err)
+	}
+	if confirmations < minimumActiveOutpointConfirmations {
+		return fmt.Errorf(
+			"active outpoint transaction must have at least %d confirmation",
+			minimumActiveOutpointConfirmations,
+		)
+	}
+
+	return nil
 }
 
 func validateMigrationOutputValues(request covenantsigner.RouteSubmitRequest) error {
