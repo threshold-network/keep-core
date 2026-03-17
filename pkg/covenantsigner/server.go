@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -287,6 +288,10 @@ func decodeJSON[T any](w http.ResponseWriter, r *http.Request, target *T) bool {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
+		http.Error(w, "malformed request body", http.StatusBadRequest)
+		return false
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		http.Error(w, "malformed request body", http.StatusBadRequest)
 		return false
 	}

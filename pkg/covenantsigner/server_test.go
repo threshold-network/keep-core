@@ -172,6 +172,48 @@ func TestServerRejectsUnknownFieldsOnSubmit(t *testing.T) {
 	}
 }
 
+func TestServerRejectsTrailingJSONOnSubmit(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{
+		submit: func(*Job) (*Transition, error) {
+			return &Transition{State: JobStatePending, Detail: "queued"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(newHandler(service, "", true))
+	defer server.Close()
+
+	validPayload := mustJSON(t, SignerSubmitInput{
+		RouteRequestID: "ors_http_trailing",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	})
+	payload := append(validPayload, []byte(`{"unexpected":"trailing"}`)...)
+
+	response, err := http.Post(
+		server.URL+"/v1/self_v1/signer/requests",
+		"application/json",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("unexpected submit status: %d %s", response.StatusCode, string(body))
+	}
+
+	body, _ := io.ReadAll(response.Body)
+	if !strings.Contains(string(body), "malformed request body") {
+		t.Fatalf("unexpected response body: %s", string(body))
+	}
+}
+
 func TestInitializeRejectsInvalidOrUnavailablePort(t *testing.T) {
 	handle := newMemoryHandle()
 	ctx, cancel := context.WithCancel(context.Background())
