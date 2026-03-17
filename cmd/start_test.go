@@ -18,19 +18,16 @@ import (
 
 func TestStartFailsFastWhenEthereumConnectFails(t *testing.T) {
 	originalConfig := *clientConfig
-	originalConnectEthereum := connectEthereum
-	originalInitializeNetwork := initializeNetworkHandle
 
 	t.Cleanup(func() {
 		*clientConfig = originalConfig
-		connectEthereum = originalConnectEthereum
-		initializeNetworkHandle = originalInitializeNetwork
 	})
 
 	*clientConfig = config.Config{}
 	networkInitCalled := false
 
-	connectEthereum = func(
+	deps := defaultStartDeps()
+	deps.connectEthereum = func(
 		_ context.Context,
 		_ commonEthereum.Config,
 	) (
@@ -43,8 +40,7 @@ func TestStartFailsFastWhenEthereumConnectFails(t *testing.T) {
 	) {
 		return nil, nil, nil, nil, nil, errors.New("injected ethereum failure")
 	}
-
-	initializeNetworkHandle = func(
+	deps.initializeNetwork = func(
 		_ context.Context,
 		_ []firewall.Application,
 		_ *operator.PrivateKey,
@@ -54,7 +50,7 @@ func TestStartFailsFastWhenEthereumConnectFails(t *testing.T) {
 		return nil, nil
 	}
 
-	err := start(&cobra.Command{})
+	err := startWithDeps(&cobra.Command{}, deps)
 	if err == nil || !strings.Contains(err.Error(), "error connecting to Ethereum node") {
 		t.Fatalf("expected ethereum connection failure, got: %v", err)
 	}
@@ -65,17 +61,14 @@ func TestStartFailsFastWhenEthereumConnectFails(t *testing.T) {
 
 func TestStartFailsFastWhenNetworkInitializationFails(t *testing.T) {
 	originalConfig := *clientConfig
-	originalConnectEthereum := connectEthereum
-	originalInitializeNetwork := initializeNetworkHandle
 
 	t.Cleanup(func() {
 		*clientConfig = originalConfig
-		connectEthereum = originalConnectEthereum
-		initializeNetworkHandle = originalInitializeNetwork
 	})
 
 	*clientConfig = config.Config{}
-	connectEthereum = func(
+	deps := defaultStartDeps()
+	deps.connectEthereum = func(
 		_ context.Context,
 		_ commonEthereum.Config,
 	) (
@@ -89,7 +82,7 @@ func TestStartFailsFastWhenNetworkInitializationFails(t *testing.T) {
 		return nil, nil, nil, nil, nil, nil
 	}
 
-	initializeNetworkHandle = func(
+	deps.initializeNetwork = func(
 		_ context.Context,
 		_ []firewall.Application,
 		_ *operator.PrivateKey,
@@ -98,7 +91,7 @@ func TestStartFailsFastWhenNetworkInitializationFails(t *testing.T) {
 		return nil, errors.New("injected network initialization failure")
 	}
 
-	err := start(&cobra.Command{})
+	err := startWithDeps(&cobra.Command{}, deps)
 	if err == nil || !strings.Contains(err.Error(), "cannot initialize network") {
 		t.Fatalf("expected network initialization failure, got: %v", err)
 	}
