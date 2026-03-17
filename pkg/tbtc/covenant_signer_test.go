@@ -986,6 +986,23 @@ func TestValidateMigrationOutputValues_RejectsValuesExceedingInt64(t *testing.T)
 	}
 }
 
+func TestCovenantSignerEngine_EnsureActiveOutpointFinalityRejectsUnconfirmed(t *testing.T) {
+	node, bitcoinChain, _ := setupCovenantSignerTestNode(t)
+	if len(bitcoinChain.transactions) == 0 {
+		bitcoinChain.transactions = append(bitcoinChain.transactions, &bitcoin.Transaction{
+			Version: 1,
+		})
+	}
+
+	activeTransactionHash := bitcoinChain.transactions[0].Hash()
+	bitcoinChain.setTransactionConfirmations(activeTransactionHash, 0)
+
+	err := (&covenantSignerEngine{node: node}).ensureActiveOutpointFinality(activeTransactionHash)
+	if err == nil || !strings.Contains(err.Error(), "active outpoint transaction must have at least 1 confirmation") {
+		t.Fatalf("expected confirmation error, got %v", err)
+	}
+}
+
 func setupCovenantSignerTestNode(
 	t *testing.T,
 ) (*node, *localBitcoinChain, *ecdsa.PublicKey) {
@@ -1341,4 +1358,41 @@ func applyTestMigrationTransactionPlanCommitment(
 		*request,
 		request.MigrationTransactionPlan,
 	)
+}
+
+func TestCovenantSignerEngine_OnPollReturnsNoTransition(t *testing.T) {
+	transition, err := (&covenantSignerEngine{}).OnPoll(
+		context.Background(),
+		&covenantsigner.Job{},
+	)
+	if err != nil {
+		t.Fatalf("expected nil error from OnPoll, got %v", err)
+	}
+	if transition != nil {
+		t.Fatalf("expected no transition from OnPoll, got %#v", transition)
+	}
+}
+
+func TestCovenantSignerEngine_SubmitRejectsUnsupportedRoute(t *testing.T) {
+	transition, err := (&covenantSignerEngine{}).OnSubmit(
+		context.Background(),
+		&covenantsigner.Job{
+			Route: covenantsigner.TemplateID("unsupported_route"),
+		},
+	)
+	if err != nil {
+		t.Fatalf("expected nil error from OnSubmit unsupported route, got %v", err)
+	}
+	if transition == nil {
+		t.Fatal("expected failed transition for unsupported route")
+	}
+	if transition.State != covenantsigner.JobStateFailed {
+		t.Fatalf("expected failed state, got %s", transition.State)
+	}
+	if transition.Reason != covenantsigner.ReasonInvalidInput {
+		t.Fatalf("expected invalid-input reason, got %s", transition.Reason)
+	}
+	if !strings.Contains(transition.Detail, "unsupported covenant route") {
+		t.Fatalf("expected unsupported route detail, got %q", transition.Detail)
+	}
 }

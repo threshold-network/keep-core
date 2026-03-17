@@ -886,7 +886,7 @@ func (lc *localChain) GetWallet(walletPublicKeyHash [20]byte) (
 
 	walletChainData, ok := lc.wallets[walletPublicKeyHash]
 	if !ok {
-		return nil, fmt.Errorf("no wallet for given PKH")
+		return nil, fmt.Errorf("%w for given PKH", ErrWalletNotFound)
 	}
 
 	return walletChainData, nil

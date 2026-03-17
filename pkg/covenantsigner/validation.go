@@ -52,6 +52,8 @@ var canonicalTimestampPattern = regexp.MustCompile(
 	`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`,
 )
 
+var requestIdentifierPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,255}$`)
+
 type inputError struct {
 	message string
 }
@@ -89,14 +91,7 @@ type validationOptions struct {
 	requireFreshMigrationPlanQuote    bool
 	migrationPlanQuoteVerificationNow time.Time
 	signerApprovalVerifier            SignerApprovalVerifier
-}
-
-func resolveValidationOptions(options []validationOptions) validationOptions {
-	if len(options) == 0 {
-		return validationOptions{}
-	}
-
-	return options[0]
+	policyIndependentDigest           bool
 }
 
 // requestDigest accepts raw requests because Poll validates equivalence against
@@ -104,11 +99,11 @@ func resolveValidationOptions(options []validationOptions) validationOptions {
 // after it has already normalized the request once for storage.
 func requestDigest(
 	request RouteSubmitRequest,
-	options ...validationOptions,
+	options validationOptions,
 ) (string, error) {
 	normalizedRequest, err := normalizeRouteSubmitRequest(
 		request,
-		resolveValidationOptions(options),
+		options,
 	)
 	if err != nil {
 		return "", err
@@ -134,6 +129,14 @@ func validateHexString(name string, value string) error {
 
 	if _, err := hex.DecodeString(strings.TrimPrefix(value, "0x")); err != nil {
 		return &inputError{fmt.Sprintf("%s must be valid hex", name)}
+	}
+
+	return nil
+}
+
+func validateRequestIdentifier(name string, value string) error {
+	if !requestIdentifierPattern.MatchString(value) {
+		return &inputError{fmt.Sprintf("%s must match [a-zA-Z0-9_-] and be at most 255 chars", name)}
 	}
 
 	return nil
@@ -280,6 +283,8 @@ func normalizeSignerApprovalCertificate(
 		return nil, err
 	}
 	if len(signerApproval.WalletPublicKey) != 132 {
+		// This must match tbtc marshalPublicKey/unmarshalPublicKey:
+		// uncompressed SEC1 public key (0x04 + 64-byte coordinates).
 		return nil, &inputError{
 			"request.signerApproval.walletPublicKey must be a 65-byte uncompressed secp256k1 public key",
 		}
@@ -474,6 +479,11 @@ func verifyCompactSecp256k1Signature(
 	)
 }
 
+func isLowSSecp256k1(s *big.Int) bool {
+	halfOrder := new(big.Int).Rsh(new(big.Int).Set(btcec.S256().N), 1)
+	return s.Cmp(halfOrder) <= 0
+}
+
 func verifySecp256k1Signature(
 	name string,
 	publicKey *btcec.PublicKey,
@@ -487,11 +497,17 @@ func verifySecp256k1Signature(
 
 	switch {
 	case len(rawSignature) == 64:
+		if !isLowSSecp256k1(new(big.Int).SetBytes(rawSignature[32:])) {
+			return &inputError{fmt.Sprintf("%s must be a low-S secp256k1 signature", name)}
+		}
 		if verifyCompactSecp256k1Signature(publicKey, digest, rawSignature) {
 			return nil
 		}
 	case len(rawSignature) == 65 &&
 		(rawSignature[64] == 0 || rawSignature[64] == 1 || rawSignature[64] == 27 || rawSignature[64] == 28):
+		if !isLowSSecp256k1(new(big.Int).SetBytes(rawSignature[32:64])) {
+			return &inputError{fmt.Sprintf("%s must be a low-S secp256k1 signature", name)}
+		}
 		if verifyCompactSecp256k1Signature(publicKey, digest, rawSignature[:64]) {
 			return nil
 		}
@@ -504,6 +520,9 @@ func verifySecp256k1Signature(
 					name,
 				),
 			}
+		}
+		if !isLowSSecp256k1(parsedSignature.S) {
+			return &inputError{fmt.Sprintf("%s must be a low-S secp256k1 signature", name)}
 		}
 		if parsedSignature.Verify(digest, publicKey) {
 			return nil
@@ -803,7 +822,7 @@ func normalizeMigrationPlanQuote(
 ) (*MigrationDestinationPlanQuote, error) {
 	quote := request.MigrationPlanQuote
 	if quote == nil {
-		if len(options.migrationPlanQuoteTrustRoots) > 0 {
+		if len(options.migrationPlanQuoteTrustRoots) > 0 && !options.policyIndependentDigest {
 			return nil, &inputError{
 				"request.migrationPlanQuote is required when migrationPlanQuoteTrustRoots are configured",
 			}
@@ -811,7 +830,7 @@ func normalizeMigrationPlanQuote(
 
 		return nil, nil
 	}
-	if len(options.migrationPlanQuoteTrustRoots) == 0 {
+	if len(options.migrationPlanQuoteTrustRoots) == 0 && !options.policyIndependentDigest {
 		return nil, &inputError{"request.migrationPlanQuote verification requires configured trust roots"}
 	}
 	if request.MigrationDestination == nil {
@@ -958,27 +977,6 @@ func normalizeMigrationPlanQuote(
 		return nil, &inputError{"request.migrationPlanQuote.migrationTransactionPlan must match request.migrationTransactionPlan"}
 	}
 
-	var publicKey ed25519.PublicKey
-	foundTrustRoot := false
-	for i, trustRoot := range options.migrationPlanQuoteTrustRoots {
-		if trustRoot.KeyID != quote.Signature.KeyID {
-			continue
-		}
-
-		publicKey, err = parseMigrationPlanQuoteTrustRoot(
-			fmt.Sprintf("migrationPlanQuoteTrustRoots[%d]", i),
-			trustRoot,
-		)
-		if err != nil {
-			return nil, err
-		}
-		foundTrustRoot = true
-		break
-	}
-	if !foundTrustRoot {
-		return nil, &inputError{"request.migrationPlanQuote.signature.keyId does not match a configured trust root"}
-	}
-
 	normalizedQuote := &MigrationDestinationPlanQuote{
 		QuoteID:                   strings.TrimSpace(quote.QuoteID),
 		QuoteVersion:              migrationPlanQuoteVersion,
@@ -1004,6 +1002,30 @@ func normalizeMigrationPlanQuote(
 			KeyID:            strings.TrimSpace(quote.Signature.KeyID),
 			Signature:        normalizeLowerHex(quote.Signature.Signature),
 		},
+	}
+	if options.policyIndependentDigest {
+		return normalizedQuote, nil
+	}
+
+	var publicKey ed25519.PublicKey
+	foundTrustRoot := false
+	for i, trustRoot := range options.migrationPlanQuoteTrustRoots {
+		if trustRoot.KeyID != quote.Signature.KeyID {
+			continue
+		}
+
+		publicKey, err = parseMigrationPlanQuoteTrustRoot(
+			fmt.Sprintf("migrationPlanQuoteTrustRoots[%d]", i),
+			trustRoot,
+		)
+		if err != nil {
+			return nil, err
+		}
+		foundTrustRoot = true
+		break
+	}
+	if !foundTrustRoot {
+		return nil, &inputError{"request.migrationPlanQuote.signature.keyId does not match a configured trust root"}
 	}
 
 	signingHash, err := migrationPlanQuoteSigningHash(normalizedQuote)
@@ -1607,9 +1629,8 @@ func normalizeScriptTemplate(route TemplateID, rawTemplate json.RawMessage) (jso
 
 func normalizeRouteSubmitRequest(
 	request RouteSubmitRequest,
-	options ...validationOptions,
+	options validationOptions,
 ) (RouteSubmitRequest, error) {
-	resolvedOptions := resolveValidationOptions(options)
 	normalizedArtifactApprovals, normalizedSignerApproval, normalizedArtifactSignatures, err := normalizeArtifactApprovals(
 		request.Route,
 		request,
@@ -1625,7 +1646,7 @@ func normalizeRouteSubmitRequest(
 
 	normalizedMigrationPlanQuote, err := normalizeMigrationPlanQuote(
 		request,
-		resolvedOptions,
+		options,
 	)
 	if err != nil {
 		return RouteSubmitRequest{}, err
@@ -1670,14 +1691,19 @@ func normalizeRouteSubmitRequest(
 func validateCommonRequest(
 	route TemplateID,
 	request RouteSubmitRequest,
-	options ...validationOptions,
+	options validationOptions,
 ) error {
-	resolvedOptions := resolveValidationOptions(options)
 	if request.FacadeRequestID == "" {
 		return &inputError{"request.facadeRequestId is required"}
 	}
+	if err := validateRequestIdentifier("request.facadeRequestId", request.FacadeRequestID); err != nil {
+		return err
+	}
 	if request.IdempotencyKey == "" {
 		return &inputError{"request.idempotencyKey is required"}
+	}
+	if err := validateRequestIdentifier("request.idempotencyKey", request.IdempotencyKey); err != nil {
+		return err
 	}
 	if request.Route != route {
 		return &inputError{"request.route does not match endpoint route"}
@@ -1714,13 +1740,13 @@ func validateCommonRequest(
 	if err := validateMigrationTransactionPlan(request, request.MigrationTransactionPlan); err != nil {
 		return err
 	}
-	if _, err := normalizeMigrationPlanQuote(request, resolvedOptions); err != nil {
+	if _, err := normalizeMigrationPlanQuote(request, options); err != nil {
 		return err
 	}
 	if request.ArtifactApprovals == nil {
 		return &inputError{"request.artifactApprovals is required"}
 	}
-	if resolvedOptions.signerApprovalVerifier != nil && request.SignerApproval == nil {
+	if options.signerApprovalVerifier != nil && request.SignerApproval == nil {
 		return &inputError{
 			"request.signerApproval is required when the signer approval verifier is configured",
 		}
@@ -1749,10 +1775,10 @@ func validateCommonRequest(
 		}
 
 		depositorPublicKey := template.DepositorPublicKey
-		if len(resolvedOptions.depositorTrustRoots) > 0 {
+		if len(options.depositorTrustRoots) > 0 && !options.policyIndependentDigest {
 			expectedDepositorPublicKey, ok := resolveExpectedDepositorPublicKey(
 				request,
-				resolvedOptions.depositorTrustRoots,
+				options.depositorTrustRoots,
 			)
 			if !ok {
 				return &inputError{
@@ -1796,10 +1822,10 @@ func validateCommonRequest(
 		}
 
 		depositorPublicKey := template.DepositorPublicKey
-		if len(resolvedOptions.depositorTrustRoots) > 0 {
+		if len(options.depositorTrustRoots) > 0 && !options.policyIndependentDigest {
 			expectedDepositorPublicKey, ok := resolveExpectedDepositorPublicKey(
 				request,
-				resolvedOptions.depositorTrustRoots,
+				options.depositorTrustRoots,
 			)
 			if !ok {
 				return &inputError{
@@ -1815,10 +1841,10 @@ func validateCommonRequest(
 		}
 
 		custodianPublicKey := template.CustodianPublicKey
-		if len(resolvedOptions.custodianTrustRoots) > 0 {
+		if len(options.custodianTrustRoots) > 0 && !options.policyIndependentDigest {
 			expectedCustodianPublicKey, ok := resolveExpectedCustodianPublicKey(
 				request,
-				resolvedOptions.custodianTrustRoots,
+				options.custodianTrustRoots,
 			)
 			if !ok {
 				return &inputError{
@@ -1845,18 +1871,21 @@ func validateCommonRequest(
 	}
 
 	if request.SignerApproval != nil {
-		if resolvedOptions.signerApprovalVerifier == nil {
+		if options.policyIndependentDigest {
+			return nil
+		}
+		if options.signerApprovalVerifier == nil {
 			return &inputError{
 				"request.signerApproval cannot be verified by this signer deployment",
 			}
 		}
 
-		normalizedRequest, err := normalizeRouteSubmitRequest(request, resolvedOptions)
+		normalizedRequest, err := normalizeRouteSubmitRequest(request, options)
 		if err != nil {
 			return err
 		}
 
-		if err := resolvedOptions.signerApprovalVerifier.VerifySignerApproval(
+		if err := options.signerApprovalVerifier.VerifySignerApproval(
 			normalizedRequest,
 		); err != nil {
 			return err
@@ -1869,7 +1898,7 @@ func validateCommonRequest(
 func validateSubmitInput(
 	route TemplateID,
 	input SignerSubmitInput,
-	options ...validationOptions,
+	options validationOptions,
 ) error {
 	if input.RouteRequestID == "" {
 		return &inputError{"routeRequestId is required"}
@@ -1877,13 +1906,13 @@ func validateSubmitInput(
 	if input.Stage != StageSignerCoordination {
 		return &inputError{"stage must be SIGNER_COORDINATION"}
 	}
-	return validateCommonRequest(route, input.Request, resolveValidationOptions(options))
+	return validateCommonRequest(route, input.Request, options)
 }
 
 func validatePollInput(
 	route TemplateID,
 	input SignerPollInput,
-	options ...validationOptions,
+	options validationOptions,
 ) error {
 	if input.RequestID == "" {
 		return &inputError{"requestId is required"}
@@ -1892,7 +1921,7 @@ func validatePollInput(
 		RouteRequestID: input.RouteRequestID,
 		Request:        input.Request,
 		Stage:          input.Stage,
-	}, resolveValidationOptions(options)); err != nil {
+	}, options); err != nil {
 		return err
 	}
 	return nil

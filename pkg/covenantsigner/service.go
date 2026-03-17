@@ -206,10 +206,7 @@ func (s *Service) loadPollJob(route TemplateID, input SignerPollInput) (*Job, er
 	digest, err := requestDigest(
 		input.Request,
 		validationOptions{
-			migrationPlanQuoteTrustRoots: s.migrationPlanQuoteTrustRoots,
-			depositorTrustRoots:          s.depositorTrustRoots,
-			custodianTrustRoots:          s.custodianTrustRoots,
-			signerApprovalVerifier:       s.signerApprovalVerifier,
+			policyIndependentDigest: true,
 		},
 	)
 	if err != nil {
@@ -248,20 +245,35 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 		return StepResult{}, err
 	}
 
+	requestDigest, err := requestDigestFromNormalized(normalizedRequest)
+	if err != nil {
+		return StepResult{}, err
+	}
+
 	s.mutex.Lock()
 	if existing, ok, err := s.store.GetByRouteRequest(route, input.RouteRequestID); err != nil {
 		s.mutex.Unlock()
 		return StepResult{}, err
 	} else if ok {
+		if existing.RequestDigest != requestDigest {
+			s.mutex.Unlock()
+			return StepResult{}, &inputError{
+				"routeRequestId already exists with a different request payload",
+			}
+		}
 		s.mutex.Unlock()
 		return mapJobResult(existing), nil
 	}
 
-	requestIDPrefix := "kcs"
-	if route == TemplateQcV1 {
+	requestIDPrefix := ""
+	switch route {
+	case TemplateQcV1:
 		requestIDPrefix = "kcs_qc"
-	} else if route == TemplateSelfV1 {
+	case TemplateSelfV1:
 		requestIDPrefix = "kcs_self"
+	default:
+		s.mutex.Unlock()
+		return StepResult{}, fmt.Errorf("unsupported route: %s", route)
 	}
 
 	requestID, err := newRequestID(requestIDPrefix)
@@ -271,11 +283,6 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 	}
 
 	now := s.now()
-	requestDigest, err := requestDigestFromNormalized(normalizedRequest)
-	if err != nil {
-		s.mutex.Unlock()
-		return StepResult{}, err
-	}
 
 	job := &Job{
 		RequestID:       requestID,
@@ -340,10 +347,7 @@ func (s *Service) Poll(ctx context.Context, route TemplateID, input SignerPollIn
 		route,
 		input,
 		validationOptions{
-			migrationPlanQuoteTrustRoots: s.migrationPlanQuoteTrustRoots,
-			depositorTrustRoots:          s.depositorTrustRoots,
-			custodianTrustRoots:          s.custodianTrustRoots,
-			signerApprovalVerifier:       s.signerApprovalVerifier,
+			policyIndependentDigest: true,
 		},
 	); err != nil {
 		return StepResult{}, err

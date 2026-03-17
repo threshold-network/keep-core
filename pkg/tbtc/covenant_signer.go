@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -23,6 +24,7 @@ type covenantSignerEngine struct {
 }
 
 const qcV1SignerHandoffKind = "qc_v1_signer_handoff_v1"
+const minimumActiveOutpointConfirmations = 1
 
 type qcV1SignerHandoff struct {
 	Kind                      string
@@ -103,7 +105,7 @@ func (cse *covenantSignerEngine) VerifySignerApproval(
 		bitcoin.PublicKeyHash(signerPublicKey),
 	)
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "no wallet") {
+		if errors.Is(err, ErrWalletNotFound) {
 			return covenantsigner.NewInputError(
 				"request.signerApproval.walletPublicKey must resolve to a registered on-chain wallet",
 			)
@@ -501,6 +503,9 @@ func (cse *covenantSignerEngine) resolveSelfV1ActiveUtxo(
 	if err != nil {
 		return nil, fmt.Errorf("active outpoint transaction not found")
 	}
+	if err := cse.ensureActiveOutpointFinality(activeTxHash); err != nil {
+		return nil, err
+	}
 	if int(request.ActiveOutpoint.Vout) >= len(transaction.Outputs) {
 		return nil, fmt.Errorf("active outpoint output index is out of range")
 	}
@@ -557,6 +562,9 @@ func (cse *covenantSignerEngine) resolveQcV1ActiveUtxo(
 	if err != nil {
 		return nil, fmt.Errorf("active outpoint transaction not found")
 	}
+	if err := cse.ensureActiveOutpointFinality(activeTxHash); err != nil {
+		return nil, err
+	}
 	if int(request.ActiveOutpoint.Vout) >= len(transaction.Outputs) {
 		return nil, fmt.Errorf("active outpoint output index is out of range")
 	}
@@ -597,6 +605,23 @@ func (cse *covenantSignerEngine) resolveQcV1ActiveUtxo(
 	}, nil
 }
 
+func (cse *covenantSignerEngine) ensureActiveOutpointFinality(
+	activeTxHash bitcoin.Hash,
+) error {
+	confirmations, err := cse.node.btcChain.GetTransactionConfirmations(activeTxHash)
+	if err != nil {
+		return fmt.Errorf("cannot determine active outpoint transaction confirmations: %v", err)
+	}
+	if confirmations < minimumActiveOutpointConfirmations {
+		return fmt.Errorf(
+			"active outpoint transaction must have at least %d confirmation",
+			minimumActiveOutpointConfirmations,
+		)
+	}
+
+	return nil
+}
+
 func validateMigrationOutputValues(request covenantsigner.RouteSubmitRequest) error {
 	_, err := toBitcoinOutputValue(
 		request.MigrationTransactionPlan.DestinationValueSats,
@@ -620,69 +645,20 @@ func (cse *covenantSignerEngine) buildAndSignSelfV1Transaction(
 	activeUtxo *bitcoin.UnspentTransactionOutput,
 	witnessScript bitcoin.Script,
 ) (*bitcoin.Transaction, error) {
-	destinationScript, err := decodePrefixedHex(request.MigrationDestination.DepositScript)
-	if err != nil {
-		return nil, fmt.Errorf("migration destination deposit script is invalid")
-	}
-	destinationValue, err := toBitcoinOutputValue(
-		request.MigrationTransactionPlan.DestinationValueSats,
-		"migration destination value",
+	builder, err := cse.buildCovenantTransactionBuilder(
+		request,
+		activeUtxo,
+		witnessScript,
 	)
 	if err != nil {
 		return nil, err
 	}
-	anchorValue, err := toBitcoinOutputValue(
-		request.MigrationTransactionPlan.AnchorValueSats,
-		"migration anchor value",
-	)
+	signature, err := signCovenantTransactionInput(ctx, signingExecutor, builder)
 	if err != nil {
 		return nil, err
 	}
 
-	builder := bitcoin.NewTransactionBuilder(cse.node.btcChain)
-	if err := builder.AddScriptHashInput(activeUtxo, witnessScript); err != nil {
-		return nil, fmt.Errorf("cannot add covenant input: %v", err)
-	}
-	if err := builder.SetInputSequence(0, request.MigrationTransactionPlan.InputSequence); err != nil {
-		return nil, fmt.Errorf("cannot set covenant input sequence: %v", err)
-	}
-	builder.SetLocktime(request.MigrationTransactionPlan.LockTime)
-	builder.AddOutput(&bitcoin.TransactionOutput{
-		Value:           destinationValue,
-		PublicKeyScript: destinationScript,
-	})
-
-	anchorScript, err := canonicalAnchorScriptPubKey()
-	if err != nil {
-		return nil, err
-	}
-	builder.AddOutput(&bitcoin.TransactionOutput{
-		Value:           anchorValue,
-		PublicKeyScript: anchorScript,
-	})
-
-	sigHashes, err := builder.ComputeSignatureHashes()
-	if err != nil {
-		return nil, fmt.Errorf("cannot compute covenant sighash: %v", err)
-	}
-	if len(sigHashes) != 1 {
-		return nil, fmt.Errorf("unexpected covenant sighash count")
-	}
-
-	startBlock, err := signingExecutor.getCurrentBlockFn()
-	if err != nil {
-		return nil, fmt.Errorf("cannot determine signing start block: %v", err)
-	}
-
-	signatures, err := signingExecutor.signBatch(ctx, sigHashes, startBlock)
-	if err != nil {
-		return nil, fmt.Errorf("cannot sign covenant transaction: %v", err)
-	}
-	if len(signatures) != 1 {
-		return nil, fmt.Errorf("unexpected covenant signature count")
-	}
-
-	witness, err := buildSelfV1MigrationWitness(signatures[0], witnessScript)
+	witness, err := buildSelfV1MigrationWitness(signature, witnessScript)
 	if err != nil {
 		return nil, err
 	}
@@ -693,6 +669,9 @@ func (cse *covenantSignerEngine) buildAndSignSelfV1Transaction(
 	transaction := builder.Build()
 	if len(transaction.Inputs) != 1 {
 		return nil, fmt.Errorf("unexpected covenant input count")
+	}
+	if len(transaction.Inputs[0].Witness) == 0 {
+		return nil, fmt.Errorf("unexpected empty covenant witness stack")
 	}
 	if !bytes.Equal(transaction.Inputs[0].Witness[len(transaction.Inputs[0].Witness)-1], witnessScript) {
 		// This can never happen with the current builder path, but keeping the
@@ -711,69 +690,19 @@ func (cse *covenantSignerEngine) buildQcV1SignerHandoff(
 	activeUtxo *bitcoin.UnspentTransactionOutput,
 	witnessScript bitcoin.Script,
 ) (*qcV1SignerHandoff, error) {
-	destinationScript, err := decodePrefixedHex(request.MigrationDestination.DepositScript)
-	if err != nil {
-		return nil, fmt.Errorf("migration destination deposit script is invalid")
-	}
-	destinationValue, err := toBitcoinOutputValue(
-		request.MigrationTransactionPlan.DestinationValueSats,
-		"migration destination value",
+	builder, err := cse.buildCovenantTransactionBuilder(
+		request,
+		activeUtxo,
+		witnessScript,
 	)
 	if err != nil {
 		return nil, err
 	}
-	anchorValue, err := toBitcoinOutputValue(
-		request.MigrationTransactionPlan.AnchorValueSats,
-		"migration anchor value",
-	)
+	signature, err := signCovenantTransactionInput(ctx, signingExecutor, builder)
 	if err != nil {
 		return nil, err
 	}
-
-	builder := bitcoin.NewTransactionBuilder(cse.node.btcChain)
-	if err := builder.AddScriptHashInput(activeUtxo, witnessScript); err != nil {
-		return nil, fmt.Errorf("cannot add covenant input: %v", err)
-	}
-	if err := builder.SetInputSequence(0, request.MigrationTransactionPlan.InputSequence); err != nil {
-		return nil, fmt.Errorf("cannot set covenant input sequence: %v", err)
-	}
-	builder.SetLocktime(request.MigrationTransactionPlan.LockTime)
-	builder.AddOutput(&bitcoin.TransactionOutput{
-		Value:           destinationValue,
-		PublicKeyScript: destinationScript,
-	})
-
-	anchorScript, err := canonicalAnchorScriptPubKey()
-	if err != nil {
-		return nil, err
-	}
-	builder.AddOutput(&bitcoin.TransactionOutput{
-		Value:           anchorValue,
-		PublicKeyScript: anchorScript,
-	})
-
-	sigHashes, err := builder.ComputeSignatureHashes()
-	if err != nil {
-		return nil, fmt.Errorf("cannot compute covenant sighash: %v", err)
-	}
-	if len(sigHashes) != 1 {
-		return nil, fmt.Errorf("unexpected covenant sighash count")
-	}
-
-	startBlock, err := signingExecutor.getCurrentBlockFn()
-	if err != nil {
-		return nil, fmt.Errorf("cannot determine signing start block: %v", err)
-	}
-
-	signatures, err := signingExecutor.signBatch(ctx, sigHashes, startBlock)
-	if err != nil {
-		return nil, fmt.Errorf("cannot sign covenant transaction: %v", err)
-	}
-	if len(signatures) != 1 {
-		return nil, fmt.Errorf("unexpected covenant signature count")
-	}
-
-	signatureBytes, err := buildWitnessSignatureBytes(signatures[0])
+	signatureBytes, err := buildWitnessSignatureBytes(signature)
 	if err != nil {
 		return nil, err
 	}
@@ -811,6 +740,83 @@ func (cse *covenantSignerEngine) buildQcV1SignerHandoff(
 		RequiresDummy:             true,
 		SighashType:               uint32(txscript.SigHashAll),
 	}, nil
+}
+
+func (cse *covenantSignerEngine) buildCovenantTransactionBuilder(
+	request covenantsigner.RouteSubmitRequest,
+	activeUtxo *bitcoin.UnspentTransactionOutput,
+	witnessScript bitcoin.Script,
+) (*bitcoin.TransactionBuilder, error) {
+	destinationScript, err := decodePrefixedHex(request.MigrationDestination.DepositScript)
+	if err != nil {
+		return nil, fmt.Errorf("migration destination deposit script is invalid")
+	}
+	destinationValue, err := toBitcoinOutputValue(
+		request.MigrationTransactionPlan.DestinationValueSats,
+		"migration destination value",
+	)
+	if err != nil {
+		return nil, err
+	}
+	anchorValue, err := toBitcoinOutputValue(
+		request.MigrationTransactionPlan.AnchorValueSats,
+		"migration anchor value",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	builder := bitcoin.NewTransactionBuilder(cse.node.btcChain)
+	if err := builder.AddScriptHashInput(activeUtxo, witnessScript); err != nil {
+		return nil, fmt.Errorf("cannot add covenant input: %v", err)
+	}
+	if err := builder.SetInputSequence(0, request.MigrationTransactionPlan.InputSequence); err != nil {
+		return nil, fmt.Errorf("cannot set covenant input sequence: %v", err)
+	}
+	builder.SetLocktime(request.MigrationTransactionPlan.LockTime)
+	builder.AddOutput(&bitcoin.TransactionOutput{
+		Value:           destinationValue,
+		PublicKeyScript: destinationScript,
+	})
+
+	anchorScript, err := canonicalAnchorScriptPubKey()
+	if err != nil {
+		return nil, err
+	}
+	builder.AddOutput(&bitcoin.TransactionOutput{
+		Value:           anchorValue,
+		PublicKeyScript: anchorScript,
+	})
+
+	return builder, nil
+}
+
+func signCovenantTransactionInput(
+	ctx context.Context,
+	signingExecutor *signingExecutor,
+	builder *bitcoin.TransactionBuilder,
+) (*tecdsa.Signature, error) {
+	sigHashes, err := builder.ComputeSignatureHashes()
+	if err != nil {
+		return nil, fmt.Errorf("cannot compute covenant sighash: %v", err)
+	}
+	if len(sigHashes) != 1 {
+		return nil, fmt.Errorf("unexpected covenant sighash count")
+	}
+
+	startBlock, err := signingExecutor.getCurrentBlockFn()
+	if err != nil {
+		return nil, fmt.Errorf("cannot determine signing start block: %v", err)
+	}
+
+	signatures, err := signingExecutor.signBatch(ctx, sigHashes, startBlock)
+	if err != nil {
+		return nil, fmt.Errorf("cannot sign covenant transaction: %v", err)
+	}
+	if len(signatures) != 1 {
+		return nil, fmt.Errorf("unexpected covenant signature count")
+	}
+	return signatures[0], nil
 }
 
 func buildSelfV1MigrationWitness(

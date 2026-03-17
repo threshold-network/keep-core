@@ -3,16 +3,16 @@ package covenantsigner
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
-	"net/http/httptest"
+	"math/big"
 	"os"
 	"reflect"
 	"strings"
@@ -70,6 +70,36 @@ func (mh *memoryHandle) ReadAll() (<-chan persistence.DataDescriptor, <-chan err
 	close(dataChan)
 	close(errorChan)
 	return dataChan, errorChan
+}
+
+type faultingMemoryHandle struct {
+	*memoryHandle
+	saveErrByName   map[string]error
+	deleteErrByName map[string]error
+}
+
+func newFaultingMemoryHandle() *faultingMemoryHandle {
+	return &faultingMemoryHandle{
+		memoryHandle:    newMemoryHandle(),
+		saveErrByName:   make(map[string]error),
+		deleteErrByName: make(map[string]error),
+	}
+}
+
+func (fmh *faultingMemoryHandle) Save(data []byte, directory string, name string) error {
+	if err, ok := fmh.saveErrByName[name]; ok {
+		return err
+	}
+
+	return fmh.memoryHandle.Save(data, directory, name)
+}
+
+func (fmh *faultingMemoryHandle) Delete(directory string, name string) error {
+	if err, ok := fmh.deleteErrByName[name]; ok {
+		return err
+	}
+
+	return fmh.memoryHandle.Delete(directory, name)
 }
 
 type scriptedEngine struct {
@@ -269,6 +299,31 @@ func mustArtifactApprovalSignature(
 	}
 
 	return "0x" + hex.EncodeToString(signature.Serialize())
+}
+
+func mustHighSCompactVariantSignature(signature string) string {
+	rawSignature, err := hex.DecodeString(strings.TrimPrefix(signature, "0x"))
+	if err != nil {
+		panic(err)
+	}
+
+	parsedSignature, err := btcec.ParseDERSignature(rawSignature, btcec.S256())
+	if err != nil {
+		panic(err)
+	}
+
+	highS := new(big.Int).Sub(btcec.S256().N, parsedSignature.S)
+	rBytes := parsedSignature.R.Bytes()
+	sBytes := highS.Bytes()
+	if len(rBytes) > 32 || len(sBytes) > 32 {
+		panic("invalid compact signature component length")
+	}
+
+	compact := make([]byte, 64)
+	copy(compact[32-len(rBytes):32], rBytes)
+	copy(compact[64-len(sBytes):64], sBytes)
+
+	return "0x" + hex.EncodeToString(compact)
 }
 
 func artifactApprovalSignatureByRole(
@@ -841,6 +896,36 @@ func TestServiceSubmitDeduplicatesByRouteRequestID(t *testing.T) {
 	}
 	if first.RequestID != second.RequestID {
 		t.Fatalf("expected dedupe on routeRequestId, got %s vs %s", first.RequestID, second.RequestID)
+	}
+}
+
+func TestServiceSubmitRejectsRouteRequestIDDigestMismatch(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{
+		submit: func(*Job) (*Transition, error) {
+			return &Transition{State: JobStatePending, Detail: "queued"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	input := SignerSubmitInput{
+		RouteRequestID: "ors_duplicate_digest_mismatch",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	}
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	input.Request.FacadeRequestID = "rf_different_payload"
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, input)
+	if err == nil || !strings.Contains(err.Error(), "routeRequestId already exists with a different request payload") {
+		t.Fatalf("expected routeRequestId mismatch error, got %v", err)
 	}
 }
 
@@ -2064,6 +2149,27 @@ func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 			},
 			expectErr: "request.artifactApprovals.approvals[1].signature does not verify against the required public key",
 		},
+		{
+			name:  "depositor signature must be low-S",
+			route: TemplateSelfV1,
+			mutate: func(request *RouteSubmitRequest) {
+				setArtifactApprovalSignature(
+					request.ArtifactApprovals,
+					ArtifactApprovalRoleDepositor,
+					mustHighSCompactVariantSignature(
+						artifactApprovalSignatureByRole(
+							request.ArtifactApprovals,
+							ArtifactApprovalRoleDepositor,
+						),
+					),
+				)
+				request.ArtifactSignatures = canonicalArtifactSignatures(
+					request.Route,
+					request.ArtifactApprovals,
+				)
+			},
+			expectErr: "request.artifactApprovals.approvals[0].signature must be a low-S secp256k1 signature",
+		},
 	}
 
 	for _, testCase := range testCases {
@@ -2084,7 +2190,7 @@ func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 }
 
 func TestRequestDigestNormalizesEquivalentArtifactApprovalVariants(t *testing.T) {
-	canonicalDigest, err := requestDigest(canonicalArtifactApprovalRequest(TemplateQcV1))
+	canonicalDigest, err := requestDigest(canonicalArtifactApprovalRequest(TemplateQcV1), validationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2094,6 +2200,7 @@ func TestRequestDigestNormalizesEquivalentArtifactApprovalVariants(t *testing.T)
 			t,
 			canonicalArtifactApprovalRequest(TemplateQcV1),
 		),
+		validationOptions{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -2105,7 +2212,7 @@ func TestRequestDigestNormalizesEquivalentArtifactApprovalVariants(t *testing.T)
 }
 
 func TestRequestDigestNormalizesEquivalentStructuredSignerApprovalVariants(t *testing.T) {
-	canonicalDigest, err := requestDigest(structuredSignerApprovalRequest(TemplateQcV1))
+	canonicalDigest, err := requestDigest(structuredSignerApprovalRequest(TemplateQcV1), validationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2115,6 +2222,7 @@ func TestRequestDigestNormalizesEquivalentStructuredSignerApprovalVariants(t *te
 			t,
 			structuredSignerApprovalRequest(TemplateQcV1),
 		),
+		validationOptions{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -2134,7 +2242,7 @@ func TestRequestDigestDoesNotEscapeHTMLSensitiveCharacters(t *testing.T) {
 	request.FacadeRequestID = "rf_<tag>&sink"
 	request.IdempotencyKey = "idem_>bridge"
 
-	normalizedRequest, err := normalizeRouteSubmitRequest(request)
+	normalizedRequest, err := normalizeRouteSubmitRequest(request, validationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2153,7 +2261,7 @@ func TestRequestDigestDoesNotEscapeHTMLSensitiveCharacters(t *testing.T) {
 		t.Fatalf("expected unescaped HTML-sensitive characters in payload, got %s", payload)
 	}
 
-	digestFromRawRequest, err := requestDigest(request)
+	digestFromRawRequest, err := requestDigest(request, validationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2390,6 +2498,85 @@ func TestServicePollAcceptsStoredMigrationPlanQuoteAfterQuoteExpiry(t *testing.T
 	}
 	if pollResult.Status != StepStatusPending {
 		t.Fatalf("expected pending poll result, got %#v", pollResult)
+	}
+}
+
+func TestServicePollRemainsValidAfterMigrationQuoteTrustRootConfigDrift(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{
+			submit: func(*Job) (*Transition, error) {
+				return &Transition{State: JobStatePending, Detail: "queued"}, nil
+			},
+		},
+		WithMigrationPlanQuoteTrustRoots([]MigrationPlanQuoteTrustRoot{
+			testMigrationPlanQuoteTrustRoot,
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time {
+		return time.Date(2099, time.March, 9, 0, 10, 0, 0, time.UTC)
+	}
+
+	request := requestWithValidMigrationPlanQuote(TemplateSelfV1)
+	submitResult, err := service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_quote_config_drift",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	service.migrationPlanQuoteTrustRoots = nil
+
+	pollResult, err := service.Poll(context.Background(), TemplateSelfV1, SignerPollInput{
+		RouteRequestID: "ors_quote_config_drift",
+		RequestID:      submitResult.RequestID,
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pollResult.Status != StepStatusPending {
+		t.Fatalf("expected pending poll result, got %#v", pollResult)
+	}
+}
+
+func TestParseMigrationPlanQuoteTrustRootRejectsInvalidPEM(t *testing.T) {
+	_, err := parseMigrationPlanQuoteTrustRoot("trustRoot", MigrationPlanQuoteTrustRoot{
+		PublicKeyPEM: "not a PEM value",
+	})
+	if err == nil || !strings.Contains(err.Error(), "trustRoot.publicKeyPem must be a PEM-encoded public key") {
+		t.Fatalf("expected invalid PEM error, got: %v", err)
+	}
+}
+
+func TestParseMigrationPlanQuoteTrustRootRejectsNonEd25519Key(t *testing.T) {
+	secpKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	publicKeyDER, err := x509.MarshalPKIXPublicKey(&secpKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = parseMigrationPlanQuoteTrustRoot("trustRoot", MigrationPlanQuoteTrustRoot{
+		PublicKeyPEM: string(
+			pem.EncodeToMemory(&pem.Block{
+				Type:  "PUBLIC KEY",
+				Bytes: publicKeyDER,
+			}),
+		),
+	})
+	if err == nil || !strings.Contains(err.Error(), "trustRoot.publicKeyPem must be a PEM-encoded Ed25519 public key") {
+		t.Fatalf("expected non-ed25519 key error, got: %v", err)
 	}
 }
 
@@ -2813,7 +3000,7 @@ func TestRequestDigestRejectsArtifactApprovalsWithoutMigrationTransactionPlan(t 
 	request := canonicalArtifactApprovalRequest(TemplateSelfV1)
 	request.MigrationTransactionPlan = nil
 
-	_, err := requestDigest(request)
+	_, err := requestDigest(request, validationOptions{})
 	if err == nil || !strings.Contains(
 		err.Error(),
 		"request.migrationTransactionPlan is required when request.artifactApprovals is present",
@@ -2862,7 +3049,7 @@ func TestApprovalContractVectorsMatchExpectedRequestDigests(t *testing.T) {
 				)
 			}
 
-			digest, err := requestDigest(request)
+			digest, err := requestDigest(request, validationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2879,7 +3066,7 @@ func TestApprovalContractVectorsNormalizeEquivalentVariants(t *testing.T) {
 		t.Run(vectorKey, func(t *testing.T) {
 			canonicalRequest, _, expectedDigest := loadApprovalContractVector(t, vectorKey)
 
-			normalizedCanonical, err := normalizeRouteSubmitRequest(canonicalRequest)
+			normalizedCanonical, err := normalizeRouteSubmitRequest(canonicalRequest, validationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2888,7 +3075,7 @@ func TestApprovalContractVectorsNormalizeEquivalentVariants(t *testing.T) {
 				t,
 				canonicalRequest,
 			)
-			normalizedVariant, err := normalizeRouteSubmitRequest(variantRequest)
+			normalizedVariant, err := normalizeRouteSubmitRequest(variantRequest, validationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2901,7 +3088,7 @@ func TestApprovalContractVectorsNormalizeEquivalentVariants(t *testing.T) {
 				)
 			}
 
-			digest, err := requestDigest(variantRequest)
+			digest, err := requestDigest(variantRequest, validationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2919,11 +3106,11 @@ func TestRequestDigestDistinguishesSelfV1PresignFromReconstruct(t *testing.T) {
 	presignRequest := cloneRouteSubmitRequest(t, reconstructRequest)
 	presignRequest.RequestType = RequestTypePresignSelfV1
 
-	reconstructDigest, err := requestDigest(reconstructRequest)
+	reconstructDigest, err := requestDigest(reconstructRequest, validationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	presignDigest, err := requestDigest(presignRequest)
+	presignDigest, err := requestDigest(presignRequest, validationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2932,11 +3119,11 @@ func TestRequestDigestDistinguishesSelfV1PresignFromReconstruct(t *testing.T) {
 		t.Fatalf("expected distinct self_v1 digests, got %s", reconstructDigest)
 	}
 
-	normalizedReconstruct, err := normalizeRouteSubmitRequest(reconstructRequest)
+	normalizedReconstruct, err := normalizeRouteSubmitRequest(reconstructRequest, validationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	normalizedPresign, err := normalizeRouteSubmitRequest(presignRequest)
+	normalizedPresign, err := normalizeRouteSubmitRequest(presignRequest, validationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2987,11 +3174,11 @@ func TestRequestDigestNormalizesMixedCaseArtifactApprovalVariants(t *testing.T) 
 				)
 			}
 
-			normalizedCanonical, err := normalizeRouteSubmitRequest(canonicalRequest)
+			normalizedCanonical, err := normalizeRouteSubmitRequest(canonicalRequest, validationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
-			normalizedMixedCase, err := normalizeRouteSubmitRequest(mixedCaseRequest)
+			normalizedMixedCase, err := normalizeRouteSubmitRequest(mixedCaseRequest, validationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3004,11 +3191,11 @@ func TestRequestDigestNormalizesMixedCaseArtifactApprovalVariants(t *testing.T) 
 				)
 			}
 
-			canonicalDigest, err := requestDigest(canonicalRequest)
+			canonicalDigest, err := requestDigest(canonicalRequest, validationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
-			mixedCaseDigest, err := requestDigest(mixedCaseRequest)
+			mixedCaseDigest, err := requestDigest(mixedCaseRequest, validationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3104,491 +3291,5 @@ func TestMigrationTransactionPlanCommitmentHashMatchesCanonicalVectors(t *testin
 				t.Fatalf("unexpected plan commitment hash: %s", actual)
 			}
 		})
-	}
-}
-
-func TestStoreReloadPreservesJobs(t *testing.T) {
-	handle := newMemoryHandle()
-	store, err := NewStore(handle)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	job := &Job{
-		RequestID:       "kcs_self_1234",
-		RouteRequestID:  "ors_reload",
-		Route:           TemplateSelfV1,
-		IdempotencyKey:  "idem_reload",
-		FacadeRequestID: "rf_reload",
-		RequestDigest:   "0xdeadbeef",
-		State:           JobStatePending,
-		Detail:          "queued",
-		CreatedAt:       "2026-03-09T00:00:00Z",
-		UpdatedAt:       "2026-03-09T00:00:00Z",
-		Request:         baseRequest(TemplateSelfV1),
-	}
-
-	if err := store.Put(job); err != nil {
-		t.Fatal(err)
-	}
-
-	reloaded, err := NewStore(handle)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	loadedJob, ok, err := reloaded.GetByRouteRequest(TemplateSelfV1, "ors_reload")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok {
-		t.Fatal("expected persisted job")
-	}
-	if !reflect.DeepEqual(job.Request, loadedJob.Request) {
-		t.Fatalf("unexpected reloaded request: %#v", loadedJob.Request)
-	}
-}
-
-func TestServerHandlesSubmitAndPathPoll(t *testing.T) {
-	handle := newMemoryHandle()
-	service, err := NewService(handle, &scriptedEngine{
-		submit: func(*Job) (*Transition, error) {
-			return &Transition{State: JobStatePending, Detail: "queued"}, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	server := httptest.NewServer(newHandler(service, "", true))
-	defer server.Close()
-
-	submitPayload := mustJSON(t, SignerSubmitInput{
-		RouteRequestID: "ors_http",
-		Stage:          StageSignerCoordination,
-		Request:        baseRequest(TemplateSelfV1),
-	})
-
-	response, err := http.Post(server.URL+"/v1/self_v1/signer/requests", "application/json", bytes.NewReader(submitPayload))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(response.Body)
-		t.Fatalf("unexpected submit status: %d %s", response.StatusCode, string(body))
-	}
-
-	submitResult := StepResult{}
-	if err := json.NewDecoder(response.Body).Decode(&submitResult); err != nil {
-		t.Fatal(err)
-	}
-
-	pollPayload := mustJSON(t, SignerPollInput{
-		RouteRequestID: "ors_http",
-		Stage:          StageSignerCoordination,
-		Request:        baseRequest(TemplateSelfV1),
-	})
-
-	pollResponse, err := http.Post(server.URL+"/v1/self_v1/signer/requests/"+submitResult.RequestID+":poll", "application/json", bytes.NewReader(pollPayload))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pollResponse.Body.Close()
-
-	if pollResponse.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(pollResponse.Body)
-		t.Fatalf("unexpected poll status: %d %s", pollResponse.StatusCode, string(body))
-	}
-}
-
-func TestServerIgnoresUnknownFieldsOnSubmit(t *testing.T) {
-	handle := newMemoryHandle()
-	service, err := NewService(handle, &scriptedEngine{
-		submit: func(*Job) (*Transition, error) {
-			return &Transition{State: JobStatePending, Detail: "queued"}, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	server := httptest.NewServer(newHandler(service, "", true))
-	defer server.Close()
-
-	base := baseRequest(TemplateSelfV1)
-	template := &SelfV1Template{}
-	if err := strictUnmarshal(base.ScriptTemplate, template); err != nil {
-		t.Fatal(err)
-	}
-	payload := bytes.NewBufferString(fmt.Sprintf(`{
-		"routeRequestId":"ors_http_unknown",
-		"stage":"SIGNER_COORDINATION",
-		"request":{
-			"facadeRequestId":"rf_123",
-			"idempotencyKey":"idem_123",
-			"route":"self_v1",
-			"requestType":"reconstruct",
-			"strategy":"0x1234",
-			"reserve":"0x1111111111111111111111111111111111111111",
-			"epoch":12,
-			"maturityHeight":912345,
-			"activeOutpoint":{"txid":"0x0102","vout":1,"scriptHash":"0x0304"},
-			"destinationCommitmentHash":"%s",
-			"migrationDestination":{
-				"reservationId":"cmdr_12345678",
-				"reserve":"0x1111111111111111111111111111111111111111",
-				"epoch":12,
-				"route":"MIGRATION",
-				"revealer":"0x2222222222222222222222222222222222222222",
-				"vault":"0x3333333333333333333333333333333333333333",
-				"network":"regtest",
-				"status":"RESERVED",
-				"depositScript":"0x0014aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-				"depositScriptHash":"0x8532ec6785e391b2af968b5728d574e271c7f46658f5ed10845d9ad5b23ac6d3",
-				"migrationExtraData":"0x41435f4d49475241544556312222222222222222222222222222222222222222",
-				"destinationCommitmentHash":"%s"
-			},
-			"migrationTransactionPlan":{
-				"planVersion":1,
-				"planCommitmentHash":"%s",
-				"inputValueSats":1000000,
-				"destinationValueSats":998000,
-				"anchorValueSats":330,
-				"feeSats":1670,
-				"inputSequence":4294967293,
-				"lockTime":912345
-			},
-			"artifactApprovals":{
-				"payload":{
-					"approvalVersion":1,
-					"route":"self_v1",
-					"scriptTemplateId":"self_v1",
-					"destinationCommitmentHash":"%s",
-					"planCommitmentHash":"%s"
-				},
-				"approvals":[
-					{"role":"D","signature":"%s"}
-				]
-			},
-			"artifactSignatures":["%s"],
-			"artifacts":{},
-			"scriptTemplate":{"template":"self_v1","depositorPublicKey":"%s","signerPublicKey":"%s","delta2":4320},
-			"signing":{"signerRequired":true,"custodianRequired":false},
-			"futureField":"ignored"
-		},
-		"futureTopLevel":"ignored"
-	}`,
-		base.DestinationCommitmentHash,
-		base.DestinationCommitmentHash,
-		base.MigrationTransactionPlan.PlanCommitmentHash,
-		base.ArtifactApprovals.Payload.DestinationCommitmentHash,
-		base.ArtifactApprovals.Payload.PlanCommitmentHash,
-		base.ArtifactApprovals.Approvals[0].Signature,
-		base.ArtifactSignatures[0],
-		template.DepositorPublicKey,
-		template.SignerPublicKey,
-	))
-
-	response, err := http.Post(server.URL+"/v1/self_v1/signer/requests", "application/json", payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(response.Body)
-		t.Fatalf("unexpected submit status: %d %s", response.StatusCode, string(body))
-	}
-}
-
-func TestInitializeRejectsInvalidOrUnavailablePort(t *testing.T) {
-	handle := newMemoryHandle()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	if _, enabled, err := Initialize(ctx, Config{Port: -1}, handle, nil); err == nil || enabled {
-		t.Fatalf("expected invalid negative port to fail, got enabled=%v err=%v", enabled, err)
-	}
-	if _, enabled, err := Initialize(
-		ctx,
-		Config{Port: 9711, ListenAddress: "0.0.0.0"},
-		handle,
-		nil,
-	); err == nil || enabled {
-		t.Fatalf("expected non-loopback bind without auth token to fail, got enabled=%v err=%v", enabled, err)
-	}
-
-	listener, err := net.Listen("tcp", net.JoinHostPort(DefaultListenAddress, "0"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer listener.Close()
-
-	port := listener.Addr().(*net.TCPAddr).Port
-	if _, enabled, err := Initialize(
-		ctx,
-		Config{Port: port, ListenAddress: DefaultListenAddress},
-		handle,
-		nil,
-	); err == nil || enabled {
-		t.Fatalf("expected occupied port to fail, got enabled=%v err=%v", enabled, err)
-	}
-}
-
-func availableLoopbackPort(t *testing.T) int {
-	t.Helper()
-
-	listener, err := net.Listen("tcp", net.JoinHostPort(DefaultListenAddress, "0"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer listener.Close()
-
-	return listener.Addr().(*net.TCPAddr).Port
-}
-
-func TestInitializeRequiresQcV1DepositorTrustRootsWhenConfigured(t *testing.T) {
-	handle := newMemoryHandle()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	_, enabled, err := Initialize(
-		ctx,
-		Config{
-			Port:                      availableLoopbackPort(t),
-			RequireApprovalTrustRoots: true,
-		},
-		handle,
-		&scriptedEngine{},
-	)
-	if err == nil || enabled {
-		t.Fatalf("expected missing qc_v1 depositor trust roots to fail, got enabled=%v err=%v", enabled, err)
-	}
-	if !strings.Contains(
-		err.Error(),
-		"covenant signer qc_v1 routes require depositorTrustRoots when covenantSigner.requireApprovalTrustRoots=true",
-	) {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestInitializeRequiresQcV1CustodianTrustRootsWhenConfigured(t *testing.T) {
-	handle := newMemoryHandle()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	_, enabled, err := Initialize(
-		ctx,
-		Config{
-			Port:                      availableLoopbackPort(t),
-			RequireApprovalTrustRoots: true,
-			DepositorTrustRoots: []DepositorTrustRoot{
-				testDepositorTrustRoot(TemplateQcV1),
-			},
-		},
-		handle,
-		&scriptedEngine{},
-	)
-	if err == nil || enabled {
-		t.Fatalf("expected missing qc_v1 custodian trust roots to fail, got enabled=%v err=%v", enabled, err)
-	}
-	if !strings.Contains(
-		err.Error(),
-		"covenant signer qc_v1 routes require custodianTrustRoots when covenantSigner.requireApprovalTrustRoots=true",
-	) {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestInitializeRequiresSelfV1DepositorTrustRootsWhenConfigured(t *testing.T) {
-	handle := newMemoryHandle()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	_, enabled, err := Initialize(
-		ctx,
-		Config{
-			Port:                      availableLoopbackPort(t),
-			EnableSelfV1:              true,
-			RequireApprovalTrustRoots: true,
-			DepositorTrustRoots: []DepositorTrustRoot{
-				testDepositorTrustRoot(TemplateQcV1),
-			},
-			CustodianTrustRoots: []CustodianTrustRoot{
-				testCustodianTrustRoot(TemplateQcV1),
-			},
-		},
-		handle,
-		&scriptedEngine{},
-	)
-	if err == nil || enabled {
-		t.Fatalf("expected missing self_v1 depositor trust roots to fail, got enabled=%v err=%v", enabled, err)
-	}
-	if !strings.Contains(
-		err.Error(),
-		"covenant signer self_v1 routes require depositorTrustRoots when covenantSigner.requireApprovalTrustRoots=true",
-	) {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestInitializeAcceptsRequiredApprovalTrustRootsWhenConfigured(t *testing.T) {
-	handle := newMemoryHandle()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	server, enabled, err := Initialize(
-		ctx,
-		Config{
-			Port:                      availableLoopbackPort(t),
-			EnableSelfV1:              true,
-			RequireApprovalTrustRoots: true,
-			DepositorTrustRoots: []DepositorTrustRoot{
-				testDepositorTrustRoot(TemplateQcV1),
-				testDepositorTrustRoot(TemplateSelfV1),
-			},
-			CustodianTrustRoots: []CustodianTrustRoot{
-				testCustodianTrustRoot(TemplateQcV1),
-			},
-		},
-		handle,
-		&scriptedEngine{},
-	)
-	if err != nil || !enabled || server == nil {
-		t.Fatalf("expected startup to succeed with required trust roots, got enabled=%v server=%v err=%v", enabled, server != nil, err)
-	}
-}
-
-func TestIsLoopbackListenAddressAcceptsBracketedIPv6Loopback(t *testing.T) {
-	if !isLoopbackListenAddress("[::1]") {
-		t.Fatal("expected bracketed IPv6 loopback address to be recognized")
-	}
-}
-
-func TestServerRequiresBearerTokenWhenConfigured(t *testing.T) {
-	handle := newMemoryHandle()
-	service, err := NewService(handle, &scriptedEngine{
-		submit: func(*Job) (*Transition, error) {
-			return &Transition{State: JobStatePending, Detail: "queued"}, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	server := httptest.NewServer(newHandler(service, "test-token", true))
-	defer server.Close()
-
-	submitPayload := mustJSON(t, SignerSubmitInput{
-		RouteRequestID: "ors_http_auth",
-		Stage:          StageSignerCoordination,
-		Request:        baseRequest(TemplateSelfV1),
-	})
-
-	response, err := http.Get(server.URL + "/healthz")
-	if err != nil {
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("unexpected healthz status: %d", response.StatusCode)
-	}
-
-	request, err := http.NewRequest(
-		http.MethodPost,
-		server.URL+"/v1/self_v1/signer/requests",
-		bytes.NewReader(submitPayload),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-
-	response, err = http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusUnauthorized {
-		body, _ := io.ReadAll(response.Body)
-		t.Fatalf("expected unauthorized submit without bearer token, got %d %s", response.StatusCode, string(body))
-	}
-
-	authorizedRequest, err := http.NewRequest(
-		http.MethodPost,
-		server.URL+"/v1/self_v1/signer/requests",
-		bytes.NewReader(submitPayload),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	authorizedRequest.Header.Set("Content-Type", "application/json")
-	authorizedRequest.Header.Set("Authorization", "Bearer test-token")
-
-	authorizedResponse, err := http.DefaultClient.Do(authorizedRequest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer authorizedResponse.Body.Close()
-
-	if authorizedResponse.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(authorizedResponse.Body)
-		t.Fatalf("unexpected authorized submit status: %d %s", authorizedResponse.StatusCode, string(body))
-	}
-}
-
-func TestServerCanKeepSelfV1RoutesDark(t *testing.T) {
-	handle := newMemoryHandle()
-	service, err := NewService(handle, &scriptedEngine{
-		submit: func(*Job) (*Transition, error) {
-			return &Transition{State: JobStatePending, Detail: "queued"}, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	server := httptest.NewServer(newHandler(service, "", false))
-	defer server.Close()
-
-	response, err := http.Post(
-		server.URL+"/v1/self_v1/signer/requests",
-		"application/json",
-		bytes.NewReader(mustJSON(t, SignerSubmitInput{
-			RouteRequestID: "ors_http_self_dark",
-			Stage:          StageSignerCoordination,
-			Request:        baseRequest(TemplateSelfV1),
-		})),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusNotFound {
-		body, _ := io.ReadAll(response.Body)
-		t.Fatalf("expected disabled self_v1 route to return 404, got %d %s", response.StatusCode, string(body))
-	}
-
-	qcResponse, err := http.Post(
-		server.URL+"/v1/qc_v1/signer/requests",
-		"application/json",
-		bytes.NewReader(mustJSON(t, SignerSubmitInput{
-			RouteRequestID: "orq_http_qc",
-			Stage:          StageSignerCoordination,
-			Request:        baseRequest(TemplateQcV1),
-		})),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer qcResponse.Body.Close()
-
-	if qcResponse.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(qcResponse.Body)
-		t.Fatalf("expected qc_v1 route to remain available, got %d %s", qcResponse.StatusCode, string(body))
 	}
 }

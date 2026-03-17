@@ -1463,7 +1463,8 @@ func (tc *TbtcChain) GetWallet(
 	// Wallet not found.
 	if wallet.CreatedAt == 0 {
 		return nil, fmt.Errorf(
-			"no wallet for public key hash [0x%x]",
+			"%w for public key hash [0x%x]",
+			tbtc.ErrWalletNotFound,
 			walletPublicKeyHash,
 		)
 	}

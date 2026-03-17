@@ -1,6 +1,7 @@
 package tbtc
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/sha256"
@@ -97,6 +98,9 @@ func buildSignerApprovalCertificate(
 		return nil, fmt.Errorf("threshold signature is required")
 	}
 
+	// signerApproval.walletPublicKey intentionally uses uncompressed SEC1
+	// encoding (65 bytes, 0x04 prefix) to match wallet-ID derivation and
+	// signer-set hash payloads across the signer approval pipeline.
 	walletPublicKeyBytes, err := marshalPublicKey(wallet.publicKey)
 	if err != nil {
 		return nil, err
@@ -156,12 +160,14 @@ func computeSignerApprovalCertificateSignerSetHash(
 		return "", fmt.Errorf("wallet chain data must include members IDs hash")
 	}
 
+	// Keep signer-set payload key encoding aligned with certificate issuance:
+	// uncompressed SEC1 (65-byte, 0x04-prefixed) wallet public key.
 	walletPublicKeyBytes, err := marshalPublicKey(walletPublicKey)
 	if err != nil {
 		return "", err
 	}
 
-	payload, err := json.Marshal(signerApprovalCertificateSignerSetPayload{
+	payload, err := marshalCanonicalJSON(signerApprovalCertificateSignerSetPayload{
 		WalletID:        "0x" + hex.EncodeToString(walletChainData.EcdsaWalletID[:]),
 		WalletPublicKey: "0x" + hex.EncodeToString(walletPublicKeyBytes),
 		MembersIDsHash:  "0x" + hex.EncodeToString(walletChainData.MembersIDsHash[:]),
@@ -178,6 +184,17 @@ func computeSignerApprovalCertificateSignerSetHash(
 	return "0x" + hex.EncodeToString(sum[:]), nil
 }
 
+func marshalCanonicalJSON(value any) ([]byte, error) {
+	buffer := bytes.NewBuffer(make([]byte, 0))
+	encoder := json.NewEncoder(buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+
+	return bytes.TrimSpace(buffer.Bytes()), nil
+}
+
 func verifySignerApprovalCertificate(
 	certificate *covenantsigner.SignerApprovalCertificate,
 	expectedSignerSetHash string,
@@ -191,8 +208,10 @@ func verifySignerApprovalCertificate(
 	if certificate.SignatureAlgorithm != signerApprovalCertificateSignatureAlgorithm {
 		return fmt.Errorf("unsupported signature algorithm: %s", certificate.SignatureAlgorithm)
 	}
-	if expectedSignerSetHash != "" &&
-		strings.ToLower(expectedSignerSetHash) != strings.ToLower(certificate.SignerSetHash) {
+	if strings.TrimSpace(expectedSignerSetHash) == "" {
+		return fmt.Errorf("expected signer set hash must not be empty")
+	}
+	if strings.ToLower(expectedSignerSetHash) != strings.ToLower(certificate.SignerSetHash) {
 		return fmt.Errorf("signer set hash does not match the expected signer set")
 	}
 

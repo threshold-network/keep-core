@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +24,8 @@ type Server struct {
 	service    *Service
 	httpServer *http.Server
 }
+
+const maxRequestBodyBytes = 2 << 20
 
 func Initialize(
 	ctx context.Context,
@@ -103,6 +107,10 @@ func Initialize(
 			Addr:              net.JoinHostPort(listenAddress, strconv.Itoa(config.Port)),
 			Handler:           newHandler(service, config.AuthToken, config.EnableSelfV1),
 			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       60 * time.Second,
+			MaxHeaderBytes:    1 << 13,
 		},
 	}
 
@@ -171,6 +179,12 @@ func validateRequiredApprovalTrustRoots(
 	) {
 		return fmt.Errorf(
 			"covenant signer qc_v1 routes require custodianTrustRoots when covenantSigner.requireApprovalTrustRoots=true",
+		)
+	}
+
+	if service.signerApprovalVerifier == nil {
+		return fmt.Errorf(
+			"covenant signer requires a signerApprovalVerifier when covenantSigner.requireApprovalTrustRoots=true",
 		)
 	}
 
@@ -274,11 +288,17 @@ func withBearerAuth(next http.Handler, authToken string) http.Handler {
 }
 
 func decodeJSON[T any](w http.ResponseWriter, r *http.Request, target *T) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	defer r.Body.Close()
 
 	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "malformed request body", http.StatusBadRequest)
+		return false
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		http.Error(w, "malformed request body", http.StatusBadRequest)
 		return false
 	}
 
@@ -343,7 +363,8 @@ func pollBodyHandler(service *Service, route TemplateID) http.HandlerFunc {
 func pollPathHandler(service *Service, route TemplateID) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			http.NotFound(w, r)
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
@@ -353,7 +374,12 @@ func pollPathHandler(service *Service, route TemplateID) http.HandlerFunc {
 			return
 		}
 
-		pathRequestID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, prefix), ":poll")
+		rawPathRequestID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, prefix), ":poll")
+		pathRequestID, err := url.PathUnescape(rawPathRequestID)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
 		if pathRequestID == "" || strings.Contains(pathRequestID, "/") {
 			http.NotFound(w, r)
 			return

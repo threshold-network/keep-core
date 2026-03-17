@@ -147,6 +147,13 @@ func (tb *TransactionBuilder) getScript(
 			err,
 		)
 	}
+	if int(utxo.Outpoint.OutputIndex) >= len(transaction.Outputs) {
+		return nil, fmt.Errorf(
+			"output index [%d] out of bounds for transaction with [%d] outputs",
+			utxo.Outpoint.OutputIndex,
+			len(transaction.Outputs),
+		)
+	}
 
 	return transaction.Outputs[utxo.Outpoint.OutputIndex].PublicKeyScript, nil
 }
