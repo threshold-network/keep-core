@@ -98,6 +98,9 @@ func buildSignerApprovalCertificate(
 		return nil, fmt.Errorf("threshold signature is required")
 	}
 
+	// signerApproval.walletPublicKey intentionally uses uncompressed SEC1
+	// encoding (65 bytes, 0x04 prefix) to match wallet-ID derivation and
+	// signer-set hash payloads across the signer approval pipeline.
 	walletPublicKeyBytes, err := marshalPublicKey(wallet.publicKey)
 	if err != nil {
 		return nil, err
@@ -157,6 +160,8 @@ func computeSignerApprovalCertificateSignerSetHash(
 		return "", fmt.Errorf("wallet chain data must include members IDs hash")
 	}
 
+	// Keep signer-set payload key encoding aligned with certificate issuance:
+	// uncompressed SEC1 (65-byte, 0x04-prefixed) wallet public key.
 	walletPublicKeyBytes, err := marshalPublicKey(walletPublicKey)
 	if err != nil {
 		return "", err

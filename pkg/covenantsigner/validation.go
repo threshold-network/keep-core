@@ -283,6 +283,8 @@ func normalizeSignerApprovalCertificate(
 		return nil, err
 	}
 	if len(signerApproval.WalletPublicKey) != 132 {
+		// This must match tbtc marshalPublicKey/unmarshalPublicKey:
+		// uncompressed SEC1 public key (0x04 + 64-byte coordinates).
 		return nil, &inputError{
 			"request.signerApproval.walletPublicKey must be a 65-byte uncompressed secp256k1 public key",
 		}
