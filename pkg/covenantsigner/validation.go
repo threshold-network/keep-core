@@ -479,6 +479,11 @@ func verifyCompactSecp256k1Signature(
 	)
 }
 
+func isLowSSecp256k1(s *big.Int) bool {
+	halfOrder := new(big.Int).Rsh(new(big.Int).Set(btcec.S256().N), 1)
+	return s.Cmp(halfOrder) <= 0
+}
+
 func verifySecp256k1Signature(
 	name string,
 	publicKey *btcec.PublicKey,
@@ -492,11 +497,17 @@ func verifySecp256k1Signature(
 
 	switch {
 	case len(rawSignature) == 64:
+		if !isLowSSecp256k1(new(big.Int).SetBytes(rawSignature[32:])) {
+			return &inputError{fmt.Sprintf("%s must be a low-S secp256k1 signature", name)}
+		}
 		if verifyCompactSecp256k1Signature(publicKey, digest, rawSignature) {
 			return nil
 		}
 	case len(rawSignature) == 65 &&
 		(rawSignature[64] == 0 || rawSignature[64] == 1 || rawSignature[64] == 27 || rawSignature[64] == 28):
+		if !isLowSSecp256k1(new(big.Int).SetBytes(rawSignature[32:64])) {
+			return &inputError{fmt.Sprintf("%s must be a low-S secp256k1 signature", name)}
+		}
 		if verifyCompactSecp256k1Signature(publicKey, digest, rawSignature[:64]) {
 			return nil
 		}
@@ -509,6 +520,9 @@ func verifySecp256k1Signature(
 					name,
 				),
 			}
+		}
+		if !isLowSSecp256k1(parsedSignature.S) {
+			return &inputError{fmt.Sprintf("%s must be a low-S secp256k1 signature", name)}
 		}
 		if parsedSignature.Verify(digest, publicKey) {
 			return nil

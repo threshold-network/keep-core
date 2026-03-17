@@ -245,11 +245,22 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 		return StepResult{}, err
 	}
 
+	requestDigest, err := requestDigestFromNormalized(normalizedRequest)
+	if err != nil {
+		return StepResult{}, err
+	}
+
 	s.mutex.Lock()
 	if existing, ok, err := s.store.GetByRouteRequest(route, input.RouteRequestID); err != nil {
 		s.mutex.Unlock()
 		return StepResult{}, err
 	} else if ok {
+		if existing.RequestDigest != requestDigest {
+			s.mutex.Unlock()
+			return StepResult{}, &inputError{
+				"routeRequestId already exists with a different request payload",
+			}
+		}
 		s.mutex.Unlock()
 		return mapJobResult(existing), nil
 	}
@@ -272,11 +283,6 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 	}
 
 	now := s.now()
-	requestDigest, err := requestDigestFromNormalized(normalizedRequest)
-	if err != nil {
-		s.mutex.Unlock()
-		return StepResult{}, err
-	}
 
 	job := &Job{
 		RequestID:       requestID,

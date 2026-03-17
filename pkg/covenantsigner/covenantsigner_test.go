@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 	"os"
 	"reflect"
 	"strings"
@@ -298,6 +299,31 @@ func mustArtifactApprovalSignature(
 	}
 
 	return "0x" + hex.EncodeToString(signature.Serialize())
+}
+
+func mustHighSCompactVariantSignature(signature string) string {
+	rawSignature, err := hex.DecodeString(strings.TrimPrefix(signature, "0x"))
+	if err != nil {
+		panic(err)
+	}
+
+	parsedSignature, err := btcec.ParseDERSignature(rawSignature, btcec.S256())
+	if err != nil {
+		panic(err)
+	}
+
+	highS := new(big.Int).Sub(btcec.S256().N, parsedSignature.S)
+	rBytes := parsedSignature.R.Bytes()
+	sBytes := highS.Bytes()
+	if len(rBytes) > 32 || len(sBytes) > 32 {
+		panic("invalid compact signature component length")
+	}
+
+	compact := make([]byte, 64)
+	copy(compact[32-len(rBytes):32], rBytes)
+	copy(compact[64-len(sBytes):64], sBytes)
+
+	return "0x" + hex.EncodeToString(compact)
 }
 
 func artifactApprovalSignatureByRole(
@@ -870,6 +896,36 @@ func TestServiceSubmitDeduplicatesByRouteRequestID(t *testing.T) {
 	}
 	if first.RequestID != second.RequestID {
 		t.Fatalf("expected dedupe on routeRequestId, got %s vs %s", first.RequestID, second.RequestID)
+	}
+}
+
+func TestServiceSubmitRejectsRouteRequestIDDigestMismatch(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{
+		submit: func(*Job) (*Transition, error) {
+			return &Transition{State: JobStatePending, Detail: "queued"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	input := SignerSubmitInput{
+		RouteRequestID: "ors_duplicate_digest_mismatch",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	}
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	input.Request.FacadeRequestID = "rf_different_payload"
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, input)
+	if err == nil || !strings.Contains(err.Error(), "routeRequestId already exists with a different request payload") {
+		t.Fatalf("expected routeRequestId mismatch error, got %v", err)
 	}
 }
 
@@ -2092,6 +2148,27 @@ func TestServiceRejectsInvalidArtifactApprovalVariants(t *testing.T) {
 				)
 			},
 			expectErr: "request.artifactApprovals.approvals[1].signature does not verify against the required public key",
+		},
+		{
+			name:  "depositor signature must be low-S",
+			route: TemplateSelfV1,
+			mutate: func(request *RouteSubmitRequest) {
+				setArtifactApprovalSignature(
+					request.ArtifactApprovals,
+					ArtifactApprovalRoleDepositor,
+					mustHighSCompactVariantSignature(
+						artifactApprovalSignatureByRole(
+							request.ArtifactApprovals,
+							ArtifactApprovalRoleDepositor,
+						),
+					),
+				)
+				request.ArtifactSignatures = canonicalArtifactSignatures(
+					request.Route,
+					request.ArtifactApprovals,
+				)
+			},
+			expectErr: "request.artifactApprovals.approvals[0].signature must be a low-S secp256k1 signature",
 		},
 	}
 
