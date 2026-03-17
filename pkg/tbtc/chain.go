@@ -2,6 +2,7 @@ package tbtc
 
 import (
 	"crypto/ecdsa"
+	"errors"
 	"math/big"
 	"time"
 
@@ -16,6 +17,8 @@ import (
 )
 
 type DKGState int
+
+var ErrWalletNotFound = errors.New("wallet not found")
 
 const (
 	Idle DKGState = iota

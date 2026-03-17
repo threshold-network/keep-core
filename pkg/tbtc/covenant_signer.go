@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -103,7 +104,7 @@ func (cse *covenantSignerEngine) VerifySignerApproval(
 		bitcoin.PublicKeyHash(signerPublicKey),
 	)
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "no wallet") {
+		if errors.Is(err, ErrWalletNotFound) {
 			return covenantsigner.NewInputError(
 				"request.signerApproval.walletPublicKey must resolve to a registered on-chain wallet",
 			)

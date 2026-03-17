@@ -397,6 +397,33 @@ func TestCovenantSignerEngineVerifySignerApprovalRejectsApprovalDigestMismatch(t
 	}
 }
 
+func TestCovenantSignerEngineVerifySignerApprovalRejectsMissingOnChainWallet(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+
+	localChain, ok := node.chain.(*localChain)
+	if !ok {
+		t.Fatal("expected local chain implementation")
+	}
+	walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
+	localChain.walletsMutex.Lock()
+	delete(localChain.wallets, walletPublicKeyHash)
+	localChain.walletsMutex.Unlock()
+
+	err := (&covenantSignerEngine{node: node}).VerifySignerApproval(request)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"request.signerApproval.walletPublicKey must resolve to a registered on-chain wallet",
+	) {
+		t.Fatalf("expected missing wallet input error, got %v", err)
+	}
+}
+
 func TestVerifySignerApprovalCertificateRejectsEmptyExpectedSignerSetHash(t *testing.T) {
 	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
 	request := validStructuredSignerApprovalVerificationRequest(
