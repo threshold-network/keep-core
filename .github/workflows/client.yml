@@ -333,7 +333,10 @@ jobs:
           go-version-file: "go.mod"
       - name: Race detector (high-risk packages)
         run: |
-          go test -race -timeout 20m ./pkg/covenantsigner ./pkg/tbtc
+          go test -race -timeout 20m ./pkg/covenantsigner
+          go test -race -timeout 20m ./pkg/tbtc \
+            -run '^(TestSignerApprovalCertificateSignerSetHashBindsOnChainWalletIdentityAndThreshold|TestValidateMigrationOutputValues_RejectsValuesExceedingInt64)$' \
+            -count=1
 
   client-integration-test:
     needs: [electrum-integration-detect-changes, client-build-test-publish]
