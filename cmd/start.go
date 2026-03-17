@@ -108,14 +108,14 @@ type startDeps struct {
 
 func defaultStartDeps() startDeps {
 	return startDeps{
-		connectEthereum:      ethereum.Connect,
-		connectElectrum:      electrum.Connect,
-		initializeNetwork:    initializeNetwork,
+		connectEthereum:       ethereum.Connect,
+		connectElectrum:       electrum.Connect,
+		initializeNetwork:     initializeNetwork,
 		initializePersistence: initializePersistence,
-		initializeBeacon:     beacon.Initialize,
-		initializeTbtc:       tbtc.Initialize,
-		initializeSigner:     covenantsigner.Initialize,
-		startScheduler:       generator.StartScheduler,
+		initializeBeacon:      beacon.Initialize,
+		initializeTbtc:        tbtc.Initialize,
+		initializeSigner:      covenantsigner.Initialize,
+		startScheduler:        generator.StartScheduler,
 	}
 }
 
