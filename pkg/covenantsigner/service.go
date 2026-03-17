@@ -206,10 +206,7 @@ func (s *Service) loadPollJob(route TemplateID, input SignerPollInput) (*Job, er
 	digest, err := requestDigest(
 		input.Request,
 		validationOptions{
-			migrationPlanQuoteTrustRoots: s.migrationPlanQuoteTrustRoots,
-			depositorTrustRoots:          s.depositorTrustRoots,
-			custodianTrustRoots:          s.custodianTrustRoots,
-			signerApprovalVerifier:       s.signerApprovalVerifier,
+			policyIndependentDigest: true,
 		},
 	)
 	if err != nil {
@@ -344,10 +341,7 @@ func (s *Service) Poll(ctx context.Context, route TemplateID, input SignerPollIn
 		route,
 		input,
 		validationOptions{
-			migrationPlanQuoteTrustRoots: s.migrationPlanQuoteTrustRoots,
-			depositorTrustRoots:          s.depositorTrustRoots,
-			custodianTrustRoots:          s.custodianTrustRoots,
-			signerApprovalVerifier:       s.signerApprovalVerifier,
+			policyIndependentDigest: true,
 		},
 	); err != nil {
 		return StepResult{}, err

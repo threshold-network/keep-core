@@ -91,6 +91,7 @@ type validationOptions struct {
 	requireFreshMigrationPlanQuote    bool
 	migrationPlanQuoteVerificationNow time.Time
 	signerApprovalVerifier            SignerApprovalVerifier
+	policyIndependentDigest           bool
 }
 
 // requestDigest accepts raw requests because Poll validates equivalence against
@@ -805,7 +806,7 @@ func normalizeMigrationPlanQuote(
 ) (*MigrationDestinationPlanQuote, error) {
 	quote := request.MigrationPlanQuote
 	if quote == nil {
-		if len(options.migrationPlanQuoteTrustRoots) > 0 {
+		if len(options.migrationPlanQuoteTrustRoots) > 0 && !options.policyIndependentDigest {
 			return nil, &inputError{
 				"request.migrationPlanQuote is required when migrationPlanQuoteTrustRoots are configured",
 			}
@@ -813,7 +814,7 @@ func normalizeMigrationPlanQuote(
 
 		return nil, nil
 	}
-	if len(options.migrationPlanQuoteTrustRoots) == 0 {
+	if len(options.migrationPlanQuoteTrustRoots) == 0 && !options.policyIndependentDigest {
 		return nil, &inputError{"request.migrationPlanQuote verification requires configured trust roots"}
 	}
 	if request.MigrationDestination == nil {
@@ -960,27 +961,6 @@ func normalizeMigrationPlanQuote(
 		return nil, &inputError{"request.migrationPlanQuote.migrationTransactionPlan must match request.migrationTransactionPlan"}
 	}
 
-	var publicKey ed25519.PublicKey
-	foundTrustRoot := false
-	for i, trustRoot := range options.migrationPlanQuoteTrustRoots {
-		if trustRoot.KeyID != quote.Signature.KeyID {
-			continue
-		}
-
-		publicKey, err = parseMigrationPlanQuoteTrustRoot(
-			fmt.Sprintf("migrationPlanQuoteTrustRoots[%d]", i),
-			trustRoot,
-		)
-		if err != nil {
-			return nil, err
-		}
-		foundTrustRoot = true
-		break
-	}
-	if !foundTrustRoot {
-		return nil, &inputError{"request.migrationPlanQuote.signature.keyId does not match a configured trust root"}
-	}
-
 	normalizedQuote := &MigrationDestinationPlanQuote{
 		QuoteID:                   strings.TrimSpace(quote.QuoteID),
 		QuoteVersion:              migrationPlanQuoteVersion,
@@ -1006,6 +986,30 @@ func normalizeMigrationPlanQuote(
 			KeyID:            strings.TrimSpace(quote.Signature.KeyID),
 			Signature:        normalizeLowerHex(quote.Signature.Signature),
 		},
+	}
+	if options.policyIndependentDigest {
+		return normalizedQuote, nil
+	}
+
+	var publicKey ed25519.PublicKey
+	foundTrustRoot := false
+	for i, trustRoot := range options.migrationPlanQuoteTrustRoots {
+		if trustRoot.KeyID != quote.Signature.KeyID {
+			continue
+		}
+
+		publicKey, err = parseMigrationPlanQuoteTrustRoot(
+			fmt.Sprintf("migrationPlanQuoteTrustRoots[%d]", i),
+			trustRoot,
+		)
+		if err != nil {
+			return nil, err
+		}
+		foundTrustRoot = true
+		break
+	}
+	if !foundTrustRoot {
+		return nil, &inputError{"request.migrationPlanQuote.signature.keyId does not match a configured trust root"}
 	}
 
 	signingHash, err := migrationPlanQuoteSigningHash(normalizedQuote)
@@ -1755,7 +1759,7 @@ func validateCommonRequest(
 		}
 
 		depositorPublicKey := template.DepositorPublicKey
-		if len(options.depositorTrustRoots) > 0 {
+		if len(options.depositorTrustRoots) > 0 && !options.policyIndependentDigest {
 			expectedDepositorPublicKey, ok := resolveExpectedDepositorPublicKey(
 				request,
 				options.depositorTrustRoots,
@@ -1802,7 +1806,7 @@ func validateCommonRequest(
 		}
 
 		depositorPublicKey := template.DepositorPublicKey
-		if len(options.depositorTrustRoots) > 0 {
+		if len(options.depositorTrustRoots) > 0 && !options.policyIndependentDigest {
 			expectedDepositorPublicKey, ok := resolveExpectedDepositorPublicKey(
 				request,
 				options.depositorTrustRoots,
@@ -1821,7 +1825,7 @@ func validateCommonRequest(
 		}
 
 		custodianPublicKey := template.CustodianPublicKey
-		if len(options.custodianTrustRoots) > 0 {
+		if len(options.custodianTrustRoots) > 0 && !options.policyIndependentDigest {
 			expectedCustodianPublicKey, ok := resolveExpectedCustodianPublicKey(
 				request,
 				options.custodianTrustRoots,
@@ -1851,6 +1855,9 @@ func validateCommonRequest(
 	}
 
 	if request.SignerApproval != nil {
+		if options.policyIndependentDigest {
+			return nil
+		}
 		if options.signerApprovalVerifier == nil {
 			return &inputError{
 				"request.signerApproval cannot be verified by this signer deployment",

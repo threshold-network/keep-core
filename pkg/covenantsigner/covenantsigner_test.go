@@ -2424,6 +2424,52 @@ func TestServicePollAcceptsStoredMigrationPlanQuoteAfterQuoteExpiry(t *testing.T
 	}
 }
 
+func TestServicePollRemainsValidAfterMigrationQuoteTrustRootConfigDrift(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(
+		handle,
+		&scriptedEngine{
+			submit: func(*Job) (*Transition, error) {
+				return &Transition{State: JobStatePending, Detail: "queued"}, nil
+			},
+		},
+		WithMigrationPlanQuoteTrustRoots([]MigrationPlanQuoteTrustRoot{
+			testMigrationPlanQuoteTrustRoot,
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time {
+		return time.Date(2099, time.March, 9, 0, 10, 0, 0, time.UTC)
+	}
+
+	request := requestWithValidMigrationPlanQuote(TemplateSelfV1)
+	submitResult, err := service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "ors_quote_config_drift",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	service.migrationPlanQuoteTrustRoots = nil
+
+	pollResult, err := service.Poll(context.Background(), TemplateSelfV1, SignerPollInput{
+		RouteRequestID: "ors_quote_config_drift",
+		RequestID:      submitResult.RequestID,
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pollResult.Status != StepStatusPending {
+		t.Fatalf("expected pending poll result, got %#v", pollResult)
+	}
+}
+
 func TestParseMigrationPlanQuoteTrustRootRejectsInvalidPEM(t *testing.T) {
 	_, err := parseMigrationPlanQuoteTrustRoot("trustRoot", MigrationPlanQuoteTrustRoot{
 		PublicKeyPEM: "not a PEM value",
