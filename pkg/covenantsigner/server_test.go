@@ -13,6 +13,14 @@ import (
 	"testing"
 )
 
+type scriptedVerifierEngine struct {
+	scriptedEngine
+}
+
+func (sve *scriptedVerifierEngine) VerifySignerApproval(RouteSubmitRequest) error {
+	return nil
+}
+
 func TestServerHandlesSubmitAndPathPoll(t *testing.T) {
 	handle := newMemoryHandle()
 	service, err := NewService(handle, &scriptedEngine{
@@ -365,10 +373,43 @@ func TestInitializeAcceptsRequiredApprovalTrustRootsWhenConfigured(t *testing.T)
 			},
 		},
 		handle,
-		&scriptedEngine{},
+		&scriptedVerifierEngine{},
 	)
 	if err != nil || !enabled || server == nil {
 		t.Fatalf("expected startup to succeed with required trust roots, got enabled=%v server=%v err=%v", enabled, server != nil, err)
+	}
+}
+
+func TestInitializeRequiresSignerApprovalVerifierWhenConfigured(t *testing.T) {
+	handle := newMemoryHandle()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, enabled, err := Initialize(
+		ctx,
+		Config{
+			Port:                      availableLoopbackPort(t),
+			EnableSelfV1:              true,
+			RequireApprovalTrustRoots: true,
+			DepositorTrustRoots: []DepositorTrustRoot{
+				testDepositorTrustRoot(TemplateQcV1),
+				testDepositorTrustRoot(TemplateSelfV1),
+			},
+			CustodianTrustRoots: []CustodianTrustRoot{
+				testCustodianTrustRoot(TemplateQcV1),
+			},
+		},
+		handle,
+		&scriptedEngine{},
+	)
+	if err == nil || enabled {
+		t.Fatalf("expected startup to fail without signer approval verifier, got enabled=%v err=%v", enabled, err)
+	}
+	if !strings.Contains(
+		err.Error(),
+		"requires a signerApprovalVerifier when covenantSigner.requireApprovalTrustRoots=true",
+	) {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

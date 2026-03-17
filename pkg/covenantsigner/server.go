@@ -182,6 +182,12 @@ func validateRequiredApprovalTrustRoots(
 		)
 	}
 
+	if service.signerApprovalVerifier == nil {
+		return fmt.Errorf(
+			"covenant signer requires a signerApprovalVerifier when covenantSigner.requireApprovalTrustRoots=true",
+		)
+	}
+
 	return nil
 }
 
