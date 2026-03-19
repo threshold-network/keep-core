@@ -10,7 +10,7 @@ import (
 
 func TestStoreReloadPreservesJobs(t *testing.T) {
 	handle := newMemoryHandle()
-	store, err := NewStore(handle)
+	store, err := NewStore(handle, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestStoreReloadPreservesJobs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reloaded, err := NewStore(handle)
+	reloaded, err := NewStore(handle, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestStorePutReturnsErrorWhenSaveFails(t *testing.T) {
 	handle := newFaultingMemoryHandle()
 	handle.saveErrByName["kcs_self_fail_save.json"] = errors.New("injected save failure")
 
-	store, err := NewStore(handle)
+	store, err := NewStore(handle, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestStorePutReturnsErrorWhenSaveFails(t *testing.T) {
 
 func TestStorePutKeepsNewRouteMappingWhenOldDeleteFails(t *testing.T) {
 	handle := newFaultingMemoryHandle()
-	store, err := NewStore(handle)
+	store, err := NewStore(handle, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestStoreLoadSelectsNewestJobForDuplicateRouteKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err := NewStore(handle)
+	store, err := NewStore(handle, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestStoreLoadFailsOnInvalidUpdatedAtForDuplicateRouteKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = NewStore(handle)
+	_, err = NewStore(handle, "")
 	if err == nil {
 		t.Fatal("expected invalid UpdatedAt error")
 	}

@@ -35,4 +35,8 @@ type Config struct {
 	// covenant signer accepts it. When zero (unset), the system defaults to 6
 	// to align with the deposit sweep finality threshold.
 	MinActiveOutpointConfirmations uint `mapstructure:"minActiveOutpointConfirmations"`
+	// DataDir is the base directory path used by the disk persistence handle.
+	// When set, the store acquires an exclusive file lock to prevent concurrent
+	// process corruption. When empty, file locking is skipped.
+	DataDir string `mapstructure:"dataDir"`
 }

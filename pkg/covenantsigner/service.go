@@ -18,6 +18,7 @@ type Service struct {
 	signerApprovalVerifier       SignerApprovalVerifier
 	now                          func() time.Time
 	mutex                        sync.Mutex
+	dataDir                      string
 	migrationPlanQuoteTrustRoots []MigrationPlanQuoteTrustRoot
 	depositorTrustRoots          []DepositorTrustRoot
 	custodianTrustRoots          []CustodianTrustRoot
@@ -63,6 +64,15 @@ func WithSignerApprovalVerifier(
 	}
 }
 
+// WithDataDir sets the data directory path for file-level locking. When
+// provided, the store acquires an exclusive advisory lock to prevent
+// concurrent process corruption. When empty, file locking is skipped.
+func WithDataDir(dataDir string) ServiceOption {
+	return func(service *Service) {
+		service.dataDir = dataDir
+	}
+}
+
 func NewService(
 	handle persistence.BasicHandle,
 	engine Engine,
@@ -72,13 +82,7 @@ func NewService(
 		engine = NewPassiveEngine()
 	}
 
-	store, err := NewStore(handle)
-	if err != nil {
-		return nil, err
-	}
-
 	service := &Service{
-		store:  store,
 		engine: engine,
 		now:    func() time.Time { return time.Now().UTC() },
 	}
@@ -88,6 +92,12 @@ func NewService(
 	for _, option := range options {
 		option(service)
 	}
+
+	store, err := NewStore(handle, service.dataDir)
+	if err != nil {
+		return nil, err
+	}
+	service.store = store
 
 	normalizedDepositorTrustRoots, err := normalizeDepositorTrustRoots(
 		service.depositorTrustRoots,
@@ -408,4 +418,14 @@ func (s *Service) Poll(ctx context.Context, route TemplateID, input SignerPollIn
 	}
 
 	return mapJobResult(currentJob), nil
+}
+
+// Close releases the resources held by the service, including the store's
+// exclusive file lock when one was acquired.
+func (s *Service) Close() error {
+	if s.store != nil {
+		return s.store.Close()
+	}
+
+	return nil
 }

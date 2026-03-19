@@ -55,6 +55,7 @@ func Initialize(
 	service, err := NewService(
 		handle,
 		engine,
+		WithDataDir(config.DataDir),
 		WithMigrationPlanQuoteTrustRoots(config.MigrationPlanQuoteTrustRoots),
 		WithDepositorTrustRoots(config.DepositorTrustRoots),
 		WithCustodianTrustRoots(config.CustodianTrustRoots),
@@ -128,6 +129,7 @@ func Initialize(
 		defer cancelShutdown()
 
 		_ = server.httpServer.Shutdown(shutdownCtx)
+		_ = server.service.Close()
 	}()
 
 	go func() {

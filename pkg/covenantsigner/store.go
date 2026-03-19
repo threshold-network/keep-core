@@ -3,33 +3,108 @@ package covenantsigner
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/keep-network/keep-common/pkg/persistence"
 )
 
 const jobsDirectory = "covenant-signer/jobs"
+const lockFileName = ".lock"
 
 type Store struct {
 	handle      persistence.BasicHandle
 	mutex       sync.Mutex
+	lockFile    *os.File
 	byRequestID map[string]*Job
 	byRouteKey  map[string]string
 }
 
-func NewStore(handle persistence.BasicHandle) (*Store, error) {
+// NewStore creates a new Store backed by the given persistence handle. When
+// dataDir is non-empty, an exclusive advisory file lock is acquired on a lock
+// file inside the jobs directory to prevent concurrent process corruption. If
+// the lock cannot be acquired (another process holds it), NewStore returns an
+// error. When dataDir is empty (in-memory handles), file locking is skipped.
+func NewStore(handle persistence.BasicHandle, dataDir string) (*Store, error) {
 	store := &Store{
 		handle:      handle,
 		byRequestID: make(map[string]*Job),
 		byRouteKey:  make(map[string]string),
 	}
 
+	if dataDir != "" {
+		lockFile, err := acquireFileLock(dataDir)
+		if err != nil {
+			return nil, err
+		}
+		store.lockFile = lockFile
+	}
+
 	if err := store.load(); err != nil {
+		// Release the lock if loading fails after successful acquisition.
+		store.Close()
 		return nil, err
 	}
 
 	return store, nil
+}
+
+// acquireFileLock creates and acquires an exclusive non-blocking advisory lock
+// on a lock file inside the jobs directory. The returned file handle must be
+// kept open for the lifetime of the lock; closing it releases the lock.
+func acquireFileLock(dataDir string) (*os.File, error) {
+	lockPath := filepath.Join(dataDir, jobsDirectory, lockFileName)
+
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0700); err != nil {
+		return nil, fmt.Errorf(
+			"cannot create lock directory [%s]: %w",
+			filepath.Dir(lockPath),
+			err,
+		)
+	}
+
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot open lock file [%s]: %w",
+			lockPath,
+			err,
+		)
+	}
+
+	if err := syscall.Flock(
+		int(lockFile.Fd()),
+		syscall.LOCK_EX|syscall.LOCK_NB,
+	); err != nil {
+		lockFile.Close()
+		return nil, fmt.Errorf(
+			"cannot acquire exclusive lock on [%s]: "+
+				"another process may already own the store: %w",
+			lockPath,
+			err,
+		)
+	}
+
+	return lockFile, nil
+}
+
+// Close releases the exclusive file lock and closes the underlying lock file
+// descriptor. For stores created without a dataDir (in-memory handles), Close
+// is a safe no-op. Close is idempotent.
+func (s *Store) Close() error {
+	if s.lockFile == nil {
+		return nil
+	}
+
+	// Release the advisory lock before closing the file descriptor.
+	_ = syscall.Flock(int(s.lockFile.Fd()), syscall.LOCK_UN)
+	err := s.lockFile.Close()
+	s.lockFile = nil
+
+	return err
 }
 
 func routeKey(route TemplateID, routeRequestID string) string {
