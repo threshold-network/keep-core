@@ -84,6 +84,7 @@ func Initialize(
 	config Config,
 	clientInfo *clientinfo.Registry,
 	perfMetrics *clientinfo.PerformanceMetrics,
+	minActiveOutpointConfirmations uint,
 ) (covenantsigner.Engine, error) {
 	groupParameters := &GroupParameters{
 		GroupSize:       100,
@@ -325,7 +326,7 @@ func Initialize(
 		}()
 	})
 
-	return newCovenantSignerEngine(node), nil
+	return newCovenantSignerEngine(node, minActiveOutpointConfirmations), nil
 }
 
 // enoughPreParamsInPoolPolicy is a policy that enforces the sufficient size

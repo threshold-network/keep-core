@@ -30,4 +30,9 @@ type Config struct {
 	// CustodianTrustRoots configures independently pinned custodian public keys
 	// by route/reserve/network for qc_v1 approval verification.
 	CustodianTrustRoots []CustodianTrustRoot `mapstructure:"custodianTrustRoots"`
+	// MinActiveOutpointConfirmations sets the minimum number of Bitcoin
+	// confirmations required for an active outpoint transaction before the
+	// covenant signer accepts it. When zero (unset), the system defaults to 6
+	// to align with the deposit sweep finality threshold.
+	MinActiveOutpointConfirmations uint `mapstructure:"minActiveOutpointConfirmations"`
 }

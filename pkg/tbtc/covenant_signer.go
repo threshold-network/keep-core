@@ -20,11 +20,17 @@ import (
 )
 
 type covenantSignerEngine struct {
-	node *node
+	node                               *node
+	minimumActiveOutpointConfirmations uint
 }
 
+// defaultMinActiveOutpointConfirmations is the confirmation threshold applied
+// when the operator config does not specify a custom value. It aligns with
+// DepositSweepRequiredFundingTxConfirmations to ensure consistent reorg safety
+// across the tBTC subsystem.
+const defaultMinActiveOutpointConfirmations uint = 6
+
 const qcV1SignerHandoffKind = "qc_v1_signer_handoff_v1"
-const minimumActiveOutpointConfirmations = 1
 
 type qcV1SignerHandoff struct {
 	Kind                      string
@@ -40,8 +46,18 @@ type qcV1SignerHandoff struct {
 	SighashType               uint32
 }
 
-func newCovenantSignerEngine(node *node) covenantsigner.Engine {
-	return &covenantSignerEngine{node: node}
+// newCovenantSignerEngine creates a covenant signer engine bound to the given
+// node. When minConfirmations is zero (the Go zero-value produced by an unset
+// config field), defaultMinActiveOutpointConfirmations is used.
+func newCovenantSignerEngine(node *node, minConfirmations uint) covenantsigner.Engine {
+	if minConfirmations == 0 {
+		minConfirmations = defaultMinActiveOutpointConfirmations
+	}
+
+	return &covenantSignerEngine{
+		node:                               node,
+		minimumActiveOutpointConfirmations: minConfirmations,
+	}
 }
 
 func (cse *covenantSignerEngine) VerifySignerApproval(
@@ -612,10 +628,10 @@ func (cse *covenantSignerEngine) ensureActiveOutpointFinality(
 	if err != nil {
 		return fmt.Errorf("cannot determine active outpoint transaction confirmations: %v", err)
 	}
-	if confirmations < minimumActiveOutpointConfirmations {
+	if confirmations < cse.minimumActiveOutpointConfirmations {
 		return fmt.Errorf(
-			"active outpoint transaction must have at least %d confirmation",
-			minimumActiveOutpointConfirmations,
+			"active outpoint transaction must have at least %d confirmations",
+			cse.minimumActiveOutpointConfirmations,
 		)
 	}
 

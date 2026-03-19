@@ -83,7 +83,7 @@ func TestCovenantSignerEngine_SubmitSelfV1Ready(t *testing.T) {
 
 	service, err := covenantsigner.NewService(
 		newCovenantSignerMemoryHandle(),
-		newCovenantSignerEngine(node),
+		newCovenantSignerEngine(node, 0),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -149,6 +149,7 @@ func TestCovenantSignerEngine_SubmitSelfV1Ready(t *testing.T) {
 		Locktime: 0,
 	}
 	bitcoinChain.transactions = append(bitcoinChain.transactions, prevTransaction)
+	bitcoinChain.setTransactionConfirmations(prevTransaction.Hash(), 6)
 
 	activeScriptHash := sha256.Sum256(activeScriptPubKey)
 	revealer := "0x2222222222222222222222222222222222222222"
@@ -317,7 +318,7 @@ func TestCovenantSignerEngine_SubmitQcV1HandoffReady(t *testing.T) {
 
 	service, err := covenantsigner.NewService(
 		newCovenantSignerMemoryHandle(),
-		newCovenantSignerEngine(node),
+		newCovenantSignerEngine(node, 0),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -387,6 +388,7 @@ func TestCovenantSignerEngine_SubmitQcV1HandoffReady(t *testing.T) {
 		Locktime: 0,
 	}
 	bitcoinChain.transactions = append(bitcoinChain.transactions, prevTransaction)
+	bitcoinChain.setTransactionConfirmations(prevTransaction.Hash(), 6)
 
 	activeScriptHash := sha256.Sum256(activeScriptPubKey)
 	revealer := "0x4444444444444444444444444444444444444444"
@@ -603,7 +605,7 @@ func TestCovenantSignerEngine_SubmitQcV1RejectsInvalidBeta(t *testing.T) {
 
 	service, err := covenantsigner.NewService(
 		newCovenantSignerMemoryHandle(),
-		newCovenantSignerEngine(node),
+		newCovenantSignerEngine(node, 0),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -719,7 +721,7 @@ func TestCovenantSignerEngine_SubmitQcV1RejectsScriptHashMismatch(t *testing.T) 
 
 	service, err := covenantsigner.NewService(
 		newCovenantSignerMemoryHandle(),
-		newCovenantSignerEngine(node),
+		newCovenantSignerEngine(node, 0),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -782,6 +784,7 @@ func TestCovenantSignerEngine_SubmitQcV1RejectsScriptHashMismatch(t *testing.T) 
 		Locktime: 0,
 	}
 	bitcoinChain.transactions = append(bitcoinChain.transactions, prevTransaction)
+	bitcoinChain.setTransactionConfirmations(prevTransaction.Hash(), 6)
 
 	revealer := "0x4444444444444444444444444444444444444444"
 	reserve := "0x1111111111111111111111111111111111111111"
@@ -864,7 +867,7 @@ func TestCovenantSignerEngine_SubmitSelfV1RejectsZeroMaturityHeight(t *testing.T
 
 	service, err := covenantsigner.NewService(
 		newCovenantSignerMemoryHandle(),
-		newCovenantSignerEngine(node),
+		newCovenantSignerEngine(node, 0),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -997,8 +1000,11 @@ func TestCovenantSignerEngine_EnsureActiveOutpointFinalityRejectsUnconfirmed(t *
 	activeTransactionHash := bitcoinChain.transactions[0].Hash()
 	bitcoinChain.setTransactionConfirmations(activeTransactionHash, 0)
 
-	err := (&covenantSignerEngine{node: node}).ensureActiveOutpointFinality(activeTransactionHash)
-	if err == nil || !strings.Contains(err.Error(), "active outpoint transaction must have at least 1 confirmation") {
+	err := (&covenantSignerEngine{
+		node:                               node,
+		minimumActiveOutpointConfirmations: 6,
+	}).ensureActiveOutpointFinality(activeTransactionHash)
+	if err == nil || !strings.Contains(err.Error(), "active outpoint transaction must have at least 6 confirmations") {
 		t.Fatalf("expected confirmation error, got %v", err)
 	}
 }
@@ -1394,5 +1400,139 @@ func TestCovenantSignerEngine_SubmitRejectsUnsupportedRoute(t *testing.T) {
 	}
 	if !strings.Contains(transition.Detail, "unsupported covenant route") {
 		t.Fatalf("expected unsupported route detail, got %q", transition.Detail)
+	}
+}
+
+func TestNewCovenantSignerEngine_DefaultMinConfirmations(t *testing.T) {
+	node, _, _ := setupCovenantSignerTestNode(t)
+
+	engine := newCovenantSignerEngine(node, 0)
+
+	cse, ok := engine.(*covenantSignerEngine)
+	if !ok {
+		t.Fatal("expected engine to be *covenantSignerEngine")
+	}
+
+	if cse.minimumActiveOutpointConfirmations != 6 {
+		t.Fatalf(
+			"expected default minimum confirmations to be 6, got %d",
+			cse.minimumActiveOutpointConfirmations,
+		)
+	}
+}
+
+func TestNewCovenantSignerEngine_ExplicitMinConfirmations(t *testing.T) {
+	node, _, _ := setupCovenantSignerTestNode(t)
+
+	engine := newCovenantSignerEngine(node, 3)
+
+	cse, ok := engine.(*covenantSignerEngine)
+	if !ok {
+		t.Fatal("expected engine to be *covenantSignerEngine")
+	}
+
+	if cse.minimumActiveOutpointConfirmations != 3 {
+		t.Fatalf(
+			"expected minimum confirmations to be 3, got %d",
+			cse.minimumActiveOutpointConfirmations,
+		)
+	}
+}
+
+func TestEnsureActiveOutpointFinality_RejectsBelowDefaultThreshold(t *testing.T) {
+	node, bitcoinChain, _ := setupCovenantSignerTestNode(t)
+
+	if len(bitcoinChain.transactions) == 0 {
+		bitcoinChain.transactions = append(bitcoinChain.transactions, &bitcoin.Transaction{
+			Version: 1,
+		})
+	}
+
+	activeTransactionHash := bitcoinChain.transactions[0].Hash()
+	bitcoinChain.setTransactionConfirmations(activeTransactionHash, 5)
+
+	cse := &covenantSignerEngine{
+		node:                               node,
+		minimumActiveOutpointConfirmations: 6,
+	}
+
+	err := cse.ensureActiveOutpointFinality(activeTransactionHash)
+	if err == nil {
+		t.Fatal("expected finality error for 5 confirmations with threshold 6")
+	}
+	if !strings.Contains(err.Error(), "at least 6 confirmations") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestEnsureActiveOutpointFinality_AcceptsAtDefaultThreshold(t *testing.T) {
+	node, bitcoinChain, _ := setupCovenantSignerTestNode(t)
+
+	if len(bitcoinChain.transactions) == 0 {
+		bitcoinChain.transactions = append(bitcoinChain.transactions, &bitcoin.Transaction{
+			Version: 1,
+		})
+	}
+
+	activeTransactionHash := bitcoinChain.transactions[0].Hash()
+	bitcoinChain.setTransactionConfirmations(activeTransactionHash, 6)
+
+	cse := &covenantSignerEngine{
+		node:                               node,
+		minimumActiveOutpointConfirmations: 6,
+	}
+
+	err := cse.ensureActiveOutpointFinality(activeTransactionHash)
+	if err != nil {
+		t.Fatalf("expected no error for 6 confirmations with threshold 6, got %v", err)
+	}
+}
+
+func TestEnsureActiveOutpointFinality_RejectsBelowCustomThreshold(t *testing.T) {
+	node, bitcoinChain, _ := setupCovenantSignerTestNode(t)
+
+	if len(bitcoinChain.transactions) == 0 {
+		bitcoinChain.transactions = append(bitcoinChain.transactions, &bitcoin.Transaction{
+			Version: 1,
+		})
+	}
+
+	activeTransactionHash := bitcoinChain.transactions[0].Hash()
+	bitcoinChain.setTransactionConfirmations(activeTransactionHash, 2)
+
+	cse := &covenantSignerEngine{
+		node:                               node,
+		minimumActiveOutpointConfirmations: 3,
+	}
+
+	err := cse.ensureActiveOutpointFinality(activeTransactionHash)
+	if err == nil {
+		t.Fatal("expected finality error for 2 confirmations with threshold 3")
+	}
+	if !strings.Contains(err.Error(), "at least 3 confirmations") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestEnsureActiveOutpointFinality_AcceptsAboveCustomThreshold(t *testing.T) {
+	node, bitcoinChain, _ := setupCovenantSignerTestNode(t)
+
+	if len(bitcoinChain.transactions) == 0 {
+		bitcoinChain.transactions = append(bitcoinChain.transactions, &bitcoin.Transaction{
+			Version: 1,
+		})
+	}
+
+	activeTransactionHash := bitcoinChain.transactions[0].Hash()
+	bitcoinChain.setTransactionConfirmations(activeTransactionHash, 10)
+
+	cse := &covenantSignerEngine{
+		node:                               node,
+		minimumActiveOutpointConfirmations: 3,
+	}
+
+	err := cse.ensureActiveOutpointFinality(activeTransactionHash)
+	if err != nil {
+		t.Fatalf("expected no error for 10 confirmations with threshold 3, got %v", err)
 	}
 }
