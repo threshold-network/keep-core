@@ -38,6 +38,7 @@ const (
 	migrationPlanQuoteSignatureAlgorithm = "ed25519"
 	migrationPlanQuoteSigningDomain      = "migration-plan-quote-v1:"
 	signerApprovalSignatureAlgorithm     = "tecdsa-secp256k1"
+	covenantSignerRequestDigestDomain    = "covenant-signer-request-v1:"
 )
 
 var artifactApprovalTypeHash = crypto.Keccak256Hash([]byte(
@@ -101,13 +102,17 @@ func requestDigest(
 	return requestDigestFromNormalized(normalizedRequest)
 }
 
+// requestDigestFromNormalized computes a domain-separated SHA256 digest of
+// the canonical JSON encoding of the already-normalized request. The domain
+// prefix prevents cross-context hash collisions with other SHA256-based
+// identifiers in the protocol.
 func requestDigestFromNormalized(request RouteSubmitRequest) (string, error) {
 	payload, err := canonicaljson.Marshal(request)
 	if err != nil {
 		return "", err
 	}
 
-	sum := sha256.Sum256(payload)
+	sum := sha256.Sum256(append([]byte(covenantSignerRequestDigestDomain), payload...))
 	return "0x" + hex.EncodeToString(sum[:]), nil
 }
 

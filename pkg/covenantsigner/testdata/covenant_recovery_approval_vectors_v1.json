@@ -92,7 +92,7 @@
           "custodianRequired": true
         }
       },
-      "expectedRequestDigest": "0x5cdfdc1861efd8ed59b0ee9b3b2a8583fc787321900fd36f4198db311a22fbcc"
+      "expectedRequestDigest": "0x8538a608ffbc3264655f9d87e334bfb7fa0d46e37cb6ffdb7c98b803eec900c8"
     },
     "self_v1": {
       "expectedApprovalDigest": "0x4820468d065bc627dabac7860ef473ed28806d6352ba3459ff4edfb81e6bb752",
@@ -177,7 +177,7 @@
           "custodianRequired": false
         }
       },
-      "expectedRequestDigest": "0x238153ab33ce630fe44c59da2a42ef3a0eeb106df86c59c893c0047648589e05"
+      "expectedRequestDigest": "0x2da9d108af3d175865ee0654843a2c61eaf7fcbcf5d48afd807044725f310d17"
     },
     "self_v1_presign": {
       "expectedApprovalDigest": "0x4820468d065bc627dabac7860ef473ed28806d6352ba3459ff4edfb81e6bb752",
@@ -262,7 +262,7 @@
           "custodianRequired": false
         }
       },
-      "expectedRequestDigest": "0xb44ea2821d1734a8af7a71cb9cf70712f989ac11404222a5315d0db15b248de1"
+      "expectedRequestDigest": "0x4399f8651fea31ab227bffd3db96daa969612e9e5195394df3f349af4713cf03"
     }
   }
 }

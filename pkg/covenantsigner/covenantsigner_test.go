@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
@@ -3134,6 +3135,53 @@ func TestRequestDigestDistinguishesSelfV1PresignFromReconstruct(t *testing.T) {
 	}
 	if normalizedPresign.RequestType != RequestTypePresignSelfV1 {
 		t.Fatalf("expected presign requestType, got %s", normalizedPresign.RequestType)
+	}
+}
+
+func TestRequestDigestUsesDomainSeparation(t *testing.T) {
+	request := canonicalArtifactApprovalRequest(TemplateQcV1)
+
+	normalizedRequest, err := normalizeRouteSubmitRequest(request, validationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload, err := canonicaljson.Marshal(normalizedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Manually compute the domain-prefixed digest using the expected domain
+	// separator constant value. This verifies that the function prepends
+	// the domain before hashing, preventing cross-context hash collisions.
+	domainPrefix := "covenant-signer-request-v1:"
+	prefixedInput := append([]byte(domainPrefix), payload...)
+	expectedSum := sha256.Sum256(prefixedInput)
+	expectedDigest := "0x" + hex.EncodeToString(expectedSum[:])
+
+	// Compute the unprefixed digest to prove domain prefix has effect.
+	unprefixedSum := sha256.Sum256(payload)
+	unprefixedDigest := "0x" + hex.EncodeToString(unprefixedSum[:])
+
+	if expectedDigest == unprefixedDigest {
+		t.Fatal("domain-prefixed and unprefixed digests should differ")
+	}
+
+	actualDigest, err := requestDigestFromNormalized(normalizedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if actualDigest != expectedDigest {
+		t.Fatalf(
+			"expected domain-prefixed digest %s, got %s",
+			expectedDigest,
+			actualDigest,
+		)
+	}
+
+	if actualDigest == unprefixedDigest {
+		t.Fatal("requestDigestFromNormalized should not produce unprefixed digest")
 	}
 }
 
