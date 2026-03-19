@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 type scriptedVerifierEngine struct {
@@ -677,5 +679,256 @@ func TestServerBoundaryErrorMatrix(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// contextCapturingEngine is a test engine that passes the context through
+// to its submit function, unlike scriptedEngine which drops it. This allows
+// tests to verify context propagation behavior in the submit handler.
+type contextCapturingEngine struct {
+	submit func(ctx context.Context, job *Job) (*Transition, error)
+}
+
+func (cce *contextCapturingEngine) OnSubmit(ctx context.Context, job *Job) (*Transition, error) {
+	if cce.submit == nil {
+		return nil, nil
+	}
+	return cce.submit(ctx, job)
+}
+
+func (cce *contextCapturingEngine) OnPoll(context.Context, *Job) (*Transition, error) {
+	return nil, nil
+}
+
+func TestSubmitHandlerDetachesContextFromHTTPLifecycle(t *testing.T) {
+	// Channels for synchronizing the engine mock with the test goroutine.
+	engineStarted := make(chan struct{})
+	proceedCh := make(chan struct{})
+
+	var capturedCtxErr error
+	var mu sync.Mutex
+
+	handle := newMemoryHandle()
+	engine := &contextCapturingEngine{
+		submit: func(ctx context.Context, job *Job) (*Transition, error) {
+			// Signal that OnSubmit has started executing.
+			close(engineStarted)
+			// Wait for the test to cancel the HTTP request context.
+			<-proceedCh
+			// Capture whether the context received by OnSubmit was cancelled.
+			mu.Lock()
+			capturedCtxErr = ctx.Err()
+			mu.Unlock()
+			return &Transition{State: JobStatePending, Detail: "queued"}, nil
+		},
+	}
+
+	service, err := NewService(handle, engine)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler := newHandler(service, "", true)
+
+	submitPayload := mustJSON(t, SignerSubmitInput{
+		RouteRequestID: "ors_detach_cancel",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	})
+
+	// Use a cancellable context for the HTTP request to simulate the HTTP
+	// write timeout or client disconnect that cancels r.Context().
+	reqCtx, reqCancel := context.WithCancel(context.Background())
+	defer reqCancel()
+
+	req, err := http.NewRequestWithContext(
+		reqCtx,
+		http.MethodPost,
+		"/v1/self_v1/signer/requests",
+		bytes.NewReader(submitPayload),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	recorder := httptest.NewRecorder()
+
+	// Serve the request in a goroutine because the engine will block inside
+	// OnSubmit until we signal proceedCh.
+	serveDone := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(recorder, req)
+		close(serveDone)
+	}()
+
+	// Wait for the engine to start processing the submit.
+	select {
+	case <-engineStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for engine to start")
+	}
+
+	// Cancel the request context, simulating a client disconnect or HTTP
+	// write timeout expiring while signing is in progress.
+	reqCancel()
+
+	// Allow the engine to proceed and check the context it received.
+	close(proceedCh)
+
+	// Wait for the handler to finish.
+	select {
+	case <-serveDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for handler to finish")
+	}
+
+	// The critical assertion: the context received by OnSubmit must NOT have
+	// been cancelled even though the HTTP request context was.
+	mu.Lock()
+	defer mu.Unlock()
+	if capturedCtxErr != nil {
+		t.Fatalf(
+			"expected OnSubmit context to be non-cancelled after HTTP "+
+				"request cancellation, but got: %v",
+			capturedCtxErr,
+		)
+	}
+}
+
+func TestSubmitHandlerPreCancelledContextStillSucceeds(t *testing.T) {
+	var capturedCtxErr error
+	var mu sync.Mutex
+
+	handle := newMemoryHandle()
+	engine := &contextCapturingEngine{
+		submit: func(ctx context.Context, job *Job) (*Transition, error) {
+			mu.Lock()
+			capturedCtxErr = ctx.Err()
+			mu.Unlock()
+			return &Transition{State: JobStatePending, Detail: "queued"}, nil
+		},
+	}
+
+	service, err := NewService(handle, engine)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Test through the handler directly using httptest.ResponseRecorder
+	// because an HTTP client would fail to send a request with a
+	// pre-cancelled context.
+	handler := newHandler(service, "", true)
+
+	submitPayload := mustJSON(t, SignerSubmitInput{
+		RouteRequestID: "ors_detach_precancel",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	})
+
+	// Create a pre-cancelled context.
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	req, err := http.NewRequestWithContext(
+		cancelledCtx,
+		http.MethodPost,
+		"/v1/self_v1/signer/requests",
+		bytes.NewReader(submitPayload),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	// The handler should still succeed because the context passed to
+	// service.Submit is detached from the HTTP request context.
+	if recorder.Code != http.StatusOK {
+		t.Fatalf(
+			"expected 200 OK with pre-cancelled context, got %d: %s",
+			recorder.Code,
+			recorder.Body.String(),
+		)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if capturedCtxErr != nil {
+		t.Fatalf(
+			"expected OnSubmit context to be non-cancelled with pre-cancelled "+
+				"HTTP context, but got: %v",
+			capturedCtxErr,
+		)
+	}
+}
+
+type contextKey string
+
+func TestSubmitHandlerPreservesContextValues(t *testing.T) {
+	const testKey contextKey = "test-trace-id"
+	const testValue = "trace-abc-123"
+
+	var capturedValue any
+	var mu sync.Mutex
+
+	handle := newMemoryHandle()
+	engine := &contextCapturingEngine{
+		submit: func(ctx context.Context, job *Job) (*Transition, error) {
+			mu.Lock()
+			capturedValue = ctx.Value(testKey)
+			mu.Unlock()
+			return &Transition{State: JobStatePending, Detail: "queued"}, nil
+		},
+	}
+
+	service, err := NewService(handle, engine)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wrap the handler with middleware that injects a value into the request
+	// context. The detached context should preserve this value.
+	innerHandler := newHandler(service, "", true)
+	wrappedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		enrichedCtx := context.WithValue(r.Context(), testKey, testValue)
+		innerHandler.ServeHTTP(w, r.WithContext(enrichedCtx))
+	})
+
+	server := httptest.NewServer(wrappedHandler)
+	defer server.Close()
+
+	submitPayload := mustJSON(t, SignerSubmitInput{
+		RouteRequestID: "ors_detach_values",
+		Stage:          StageSignerCoordination,
+		Request:        baseRequest(TemplateSelfV1),
+	})
+
+	response, err := http.Post(
+		server.URL+"/v1/self_v1/signer/requests",
+		"application/json",
+		bytes.NewReader(submitPayload),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("unexpected submit status: %d %s", response.StatusCode, string(body))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if capturedValue != testValue {
+		t.Fatalf(
+			"expected context value %q to be preserved through detachment, "+
+				"got %v",
+			testValue,
+			capturedValue,
+		)
 	}
 }

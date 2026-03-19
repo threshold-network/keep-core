@@ -335,7 +335,9 @@ func submitHandler(service *Service, route TemplateID) http.HandlerFunc {
 			return
 		}
 
-		result, err := service.Submit(r.Context(), route, input)
+		// Detach from the HTTP request lifetime so that threshold signing
+		// survives write-timeout and client disconnects.
+		result, err := service.Submit(context.WithoutCancel(r.Context()), route, input)
 		if err != nil {
 			handleError(w, err)
 			return
