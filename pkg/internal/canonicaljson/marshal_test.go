@@ -1,28 +1,65 @@
 package canonicaljson
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
 
-// Verify Marshal function exists with correct signature and produces
-// deterministic JSON without trailing newlines or HTML escaping.
+// testPayload mirrors the signerApprovalCertificateSignerSetPayload struct
+// pattern used in production code, with string and int fields using camelCase
+// JSON tags.
+type testPayload struct {
+	WalletID  string `json:"walletId"`
+	Threshold int    `json:"threshold"`
+}
 
-func TestMarshalProducesValidJSON(t *testing.T) {
-	input := map[string]string{"key": "value"}
+func TestMarshal_MapInput(t *testing.T) {
+	input := map[string]any{
+		"name":   "test",
+		"active": true,
+		"count":  3,
+	}
 
 	result, err := Marshal(input)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := `{"key":"value"}`
+	// Keys must be alphabetically sorted by json.Encoder.
+	expected := `{"active":true,"count":3,"name":"test"}`
 	if string(result) != expected {
-		t.Fatalf("expected %s, got %s", expected, string(result))
+		t.Fatalf(
+			"unexpected result\nexpected: %s\nactual:   %s",
+			expected,
+			string(result),
+		)
 	}
 }
 
-func TestMarshalNoTrailingNewline(t *testing.T) {
+func TestMarshal_StructInput(t *testing.T) {
+	input := testPayload{
+		WalletID:  "0xabc",
+		Threshold: 51,
+	}
+
+	result, err := Marshal(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// JSON tags determine field names; struct declaration order is preserved.
+	expected := `{"walletId":"0xabc","threshold":51}`
+	if string(result) != expected {
+		t.Fatalf(
+			"unexpected result\nexpected: %s\nactual:   %s",
+			expected,
+			string(result),
+		)
+	}
+}
+
+func TestMarshal_NoTrailingNewline(t *testing.T) {
 	input := map[string]int{"count": 42}
 
 	result, err := Marshal(input)
@@ -30,43 +67,69 @@ func TestMarshalNoTrailingNewline(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(result) > 0 && result[len(result)-1] == '\n' {
-		t.Fatal("output should not end with a newline")
+	if bytes.HasSuffix(result, []byte("\n")) {
+		t.Fatalf("output ends with trailing newline: %q", result)
 	}
 }
 
-func TestMarshalDoesNotEscapeHTML(t *testing.T) {
-	input := map[string]string{"url": "https://example.com?a=1&b=2<tag>"}
+func TestMarshal_HTMLNotEscaped(t *testing.T) {
+	input := map[string]string{"html": "<b>bold</b> & fun > safe"}
 
 	result, err := Marshal(input)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	resultStr := string(result)
+	output := string(result)
 
-	// Verify raw HTML characters are preserved, not escaped
-	if strings.Contains(resultStr, `\u003c`) || strings.Contains(resultStr, `\u003e`) || strings.Contains(resultStr, `\u0026`) {
-		t.Fatalf("HTML characters should not be escaped, got %s", resultStr)
+	// Verify Unicode escape sequences are absent.
+	for _, escaped := range []string{`\u003c`, `\u003e`, `\u0026`} {
+		if strings.Contains(output, escaped) {
+			t.Fatalf("found unwanted escape %s in output: %s", escaped, output)
+		}
 	}
-	if !strings.Contains(resultStr, "&") || !strings.Contains(resultStr, "<") || !strings.Contains(resultStr, ">") {
-		t.Fatalf("expected raw HTML characters in output, got %s", resultStr)
+
+	// Verify raw HTML characters are present.
+	for _, raw := range []string{"<", ">", "&"} {
+		if !strings.Contains(output, raw) {
+			t.Fatalf("missing raw character %q in output: %s", raw, output)
+		}
 	}
 }
 
-func TestMarshalUsesTrimSuffixNotTrimSpace(t *testing.T) {
-	// Verify the function uses TrimSuffix (removes only trailing \n)
-	// not TrimSpace (which would remove all whitespace).
-	// A value with leading space in a string field should be preserved.
-	input := map[string]string{"data": " leading-space"}
+func TestMarshal_DeterministicMapOrder(t *testing.T) {
+	input := map[string]string{
+		"zebra":  "last",
+		"alpha":  "first",
+		"middle": "center",
+	}
 
-	result, err := Marshal(input)
+	first, err := Marshal(input)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := `{"data":" leading-space"}`
-	if string(result) != expected {
-		t.Fatalf("expected %s, got %s", expected, string(result))
+	// Verify alphabetical key ordering.
+	expected := `{"alpha":"first","middle":"center","zebra":"last"}`
+	if string(first) != expected {
+		t.Fatalf(
+			"unexpected key order\nexpected: %s\nactual:   %s",
+			expected,
+			string(first),
+		)
+	}
+
+	// Verify repeated calls produce byte-identical output.
+	for i := 0; i < 10; i++ {
+		result, err := Marshal(input)
+		if err != nil {
+			t.Fatalf("iteration %d: unexpected error: %v", i, err)
+		}
+		if !bytes.Equal(first, result) {
+			t.Fatalf(
+				"iteration %d: output differs\nexpected: %s\nactual:   %s",
+				i, first, result,
+			)
+		}
 	}
 }
