@@ -21,6 +21,7 @@ import (
 
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/keep-network/keep-common/pkg/persistence"
+	"github.com/keep-network/keep-core/pkg/internal/canonicaljson"
 )
 
 type memoryDescriptor struct {
@@ -2247,7 +2248,7 @@ func TestRequestDigestDoesNotEscapeHTMLSensitiveCharacters(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	payload, err := marshalCanonicalJSON(normalizedRequest)
+	payload, err := canonicaljson.Marshal(normalizedRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2282,7 +2283,7 @@ func TestDestinationCommitmentHashDoesNotEscapeHTMLSensitiveCharacters(t *testin
 	destination := validMigrationDestination()
 	destination.Network = "regtest<v2>&sink"
 
-	payload, err := marshalCanonicalJSON(destinationCommitmentPayload{
+	payload, err := canonicaljson.Marshal(destinationCommitmentPayload{
 		Reserve:            normalizeLowerHex(destination.Reserve),
 		Epoch:              destination.Epoch,
 		Route:              string(destination.Route),

@@ -21,6 +21,7 @@ import (
 
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/keep-network/keep-core/pkg/internal/canonicaljson"
 )
 
 const (
@@ -72,18 +73,6 @@ func strictUnmarshal(data []byte, target any) error {
 	return decoder.Decode(target)
 }
 
-func marshalCanonicalJSON(value any) ([]byte, error) {
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
-
-	if err := encoder.Encode(value); err != nil {
-		return nil, err
-	}
-
-	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), nil
-}
-
 type validationOptions struct {
 	migrationPlanQuoteTrustRoots      []MigrationPlanQuoteTrustRoot
 	depositorTrustRoots               []DepositorTrustRoot
@@ -113,7 +102,7 @@ func requestDigest(
 }
 
 func requestDigestFromNormalized(request RouteSubmitRequest) (string, error) {
-	payload, err := marshalCanonicalJSON(request)
+	payload, err := canonicaljson.Marshal(request)
 	if err != nil {
 		return "", err
 	}
@@ -773,7 +762,7 @@ func resolveExpectedCustodianPublicKey(
 func migrationPlanQuoteSigningPayloadBytes(
 	quote *MigrationDestinationPlanQuote,
 ) ([]byte, error) {
-	return marshalCanonicalJSON(migrationPlanQuoteSigningPayload{
+	return canonicaljson.Marshal(migrationPlanQuoteSigningPayload{
 		QuoteVersion:              quote.QuoteVersion,
 		QuoteID:                   quote.QuoteID,
 		ReservationID:             quote.ReservationID,
@@ -1106,7 +1095,7 @@ type migrationPlanCommitmentPayload struct {
 func computeDestinationCommitmentHash(
 	reservation *MigrationDestinationReservation,
 ) (string, error) {
-	payload, err := marshalCanonicalJSON(destinationCommitmentPayload{
+	payload, err := canonicaljson.Marshal(destinationCommitmentPayload{
 		Reserve:            normalizeLowerHex(reservation.Reserve),
 		Epoch:              reservation.Epoch,
 		Route:              string(reservation.Route),
@@ -1128,7 +1117,7 @@ func computeMigrationTransactionPlanCommitmentHash(
 	request RouteSubmitRequest,
 	plan *MigrationTransactionPlan,
 ) (string, error) {
-	payload, err := marshalCanonicalJSON(migrationPlanCommitmentPayload{
+	payload, err := canonicaljson.Marshal(migrationPlanCommitmentPayload{
 		PlanVersion:               plan.PlanVersion,
 		Reserve:                   normalizeLowerHex(request.Reserve),
 		Epoch:                     request.Epoch,

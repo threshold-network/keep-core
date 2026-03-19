@@ -1,12 +1,10 @@
 package tbtc
 
 import (
-	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math/big"
 	"sort"
@@ -15,6 +13,7 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/covenantsigner"
+	"github.com/keep-network/keep-core/pkg/internal/canonicaljson"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
@@ -167,7 +166,7 @@ func computeSignerApprovalCertificateSignerSetHash(
 		return "", err
 	}
 
-	payload, err := marshalCanonicalJSON(signerApprovalCertificateSignerSetPayload{
+	payload, err := canonicaljson.Marshal(signerApprovalCertificateSignerSetPayload{
 		WalletID:        "0x" + hex.EncodeToString(walletChainData.EcdsaWalletID[:]),
 		WalletPublicKey: "0x" + hex.EncodeToString(walletPublicKeyBytes),
 		MembersIDsHash:  "0x" + hex.EncodeToString(walletChainData.MembersIDsHash[:]),
@@ -182,17 +181,6 @@ func computeSignerApprovalCertificateSignerSetHash(
 	)
 
 	return "0x" + hex.EncodeToString(sum[:]), nil
-}
-
-func marshalCanonicalJSON(value any) ([]byte, error) {
-	buffer := bytes.NewBuffer(make([]byte, 0))
-	encoder := json.NewEncoder(buffer)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
-		return nil, err
-	}
-
-	return bytes.TrimSpace(buffer.Bytes()), nil
 }
 
 func verifySignerApprovalCertificate(
