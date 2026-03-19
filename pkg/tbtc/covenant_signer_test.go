@@ -1536,3 +1536,65 @@ func TestEnsureActiveOutpointFinality_AcceptsAboveCustomThreshold(t *testing.T) 
 		t.Fatalf("expected no error for 10 confirmations with threshold 3, got %v", err)
 	}
 }
+
+func TestComputeQcV1SignerHandoffPayloadHash_DeterministicKeyOrdering(t *testing.T) {
+	payload := map[string]any{
+		"kind":                      qcV1SignerHandoffKind,
+		"unsignedTransactionHex":    "0xdeadbeef",
+		"witnessScript":             "0xcafebabe",
+		"signerSignature":           "0x0102030405",
+		"selectorWitnessItems":      []string{"0x01", "0x"},
+		"requiresDummy":             true,
+		"sighashType":               uint32(1),
+		"destinationCommitmentHash": "0xabcdef1234567890",
+	}
+
+	// Verify the hash matches a pinned expected value. If this test
+	// breaks, it means the serialization or hashing behavior changed
+	// and downstream consumers relying on content-addressed bundle
+	// IDs will be affected.
+	expectedHash := "0x2785f99f276b0d56710fcdd76fa22cb7081018b847b7b8b9ba85ecd8e4c0189c"
+
+	hash, err := computeQcV1SignerHandoffPayloadHash(payload)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if hash != expectedHash {
+		t.Fatalf("expected hash %s, got %s", expectedHash, hash)
+	}
+
+	// Verify idempotency: calling the function twice with the same
+	// map must produce the same hash.
+	hash2, err := computeQcV1SignerHandoffPayloadHash(payload)
+	if err != nil {
+		t.Fatalf("expected nil error on second call, got %v", err)
+	}
+	if hash != hash2 {
+		t.Fatalf("expected idempotent hash, got %s and %s", hash, hash2)
+	}
+
+	// Verify json.Marshal produces alphabetically ordered keys.
+	// This is the Go encoding/json guarantee (since Go 1.12) that
+	// the payload hash computation depends on.
+	rawJSON, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("expected nil error from json.Marshal, got %v", err)
+	}
+	expectedJSON := `{` +
+		`"destinationCommitmentHash":"0xabcdef1234567890",` +
+		`"kind":"qc_v1_signer_handoff_v1",` +
+		`"requiresDummy":true,` +
+		`"selectorWitnessItems":["0x01","0x"],` +
+		`"sighashType":1,` +
+		`"signerSignature":"0x0102030405",` +
+		`"unsignedTransactionHex":"0xdeadbeef",` +
+		`"witnessScript":"0xcafebabe"` +
+		`}`
+	if string(rawJSON) != expectedJSON {
+		t.Fatalf(
+			"expected alphabetically ordered JSON:\n%s\ngot:\n%s",
+			expectedJSON,
+			rawJSON,
+		)
+	}
+}
