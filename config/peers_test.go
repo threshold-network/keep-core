@@ -18,17 +18,13 @@ func TestResolvePeers(t *testing.T) {
 		"mainnet network": {
 			network: network.Mainnet,
 			expectedPeers: []string{
-				"/dns4/keep-operator-1.keep-nodes.io/tcp/3919/ipfs/16Uiu2HAmVUxCz2YjBpGaGirVLx6RGtHbPg5rygEWMPoUFE4bHTkr",
-				"/dns4/keep-operator-2.keep-nodes.io/tcp/3919/ipfs/16Uiu2HAm8bLqTcGMDFaNPGPC6gxStKCnJr2DaVsMbce1ZEyaKo9S",
-				"/dns4/keep-operator-3.keep-nodes.io/tcp/3919/ipfs/16Uiu2HAmQLCwPnNmFMDQkc5hLfapGKtXPvFJQKB3rUFYa1wjVnfi",
-				"/dns4/keep-operator-4.keep-nodes.io/tcp/3919/ipfs/16Uiu2HAmTv4atEFadTVPz7BWhE3gRFMeJ5Kk4LQfgN2V8ViWYFRx",
-				"/dns4/keep-operator-5.keep-nodes.io/tcp/3919/ipfs/16Uiu2HAmPwQuywYq9qFRn8gLCtiKaDZwg2u3JQhWia7RYHRdfk1r",
+				"/ip4/143.198.18.229/tcp/3919/ipfs/16Uiu2HAmDP4Z6LCogRMictJ6deGs4DRo99A5JTz5u3CLMg7URxC6",
 			}},
 		"sepolia network": {
 			network: network.Testnet,
 			expectedPeers: []string{
-				"/dns4/keep-operator-1.test.keep-nodes.io/tcp/3920/ipfs/16Uiu2HAmDrk2Bh4VNPUJfKRHTE2CvH9xfKzN4KFnmRJbGLkJFDqL",
-				"/dns4/keep-operator-2.test.keep-nodes.io/tcp/3920/ipfs/16Uiu2HAm3ex8rGzwFpWYbRreRUiX9JEYCKxp7KDMzB8RZ6fQWnMa",
+				"/dns4/PLACEHOLDER-operator-1.test.example.com/tcp/3920/ipfs/16Uiu2HAmDrk2Bh4VNPUJfKRHTE2CvH9xfKzN4KFnmRJbGLkJFDqL",
+				"/dns4/PLACEHOLDER-operator-2.test.example.com/tcp/3920/ipfs/16Uiu2HAm3ex8rGzwFpWYbRreRUiX9JEYCKxp7KDMzB8RZ6fQWnMa",
 			},
 		},
 		"developer network": {
