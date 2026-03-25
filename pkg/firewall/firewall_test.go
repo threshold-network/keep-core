@@ -16,7 +16,7 @@ const cachingPeriod = time.Second
 func TestValidate_PeerNotRecognized_NoApplications(t *testing.T) {
 	policy := &anyApplicationPolicy{
 		applications:        []Application{},
-		allowList:           EmptyAllowList,
+		allowList:           EmptyAllowList(),
 		positiveResultCache: cache.NewTimeCache(cachingPeriod),
 		negativeResultCache: cache.NewTimeCache(cachingPeriod),
 	}
@@ -44,7 +44,7 @@ func TestValidate_PeerNotRecognized_MultipleApplications(t *testing.T) {
 		applications: []Application{
 			newMockApplication(),
 			newMockApplication()},
-		allowList:           EmptyAllowList,
+		allowList:           EmptyAllowList(),
 		positiveResultCache: cache.NewTimeCache(cachingPeriod),
 		negativeResultCache: cache.NewTimeCache(cachingPeriod),
 	}
@@ -71,7 +71,7 @@ func TestValidate_PeerRecognized_FirstApplicationRecognizes(t *testing.T) {
 		applications: []Application{
 			application,
 			newMockApplication()},
-		allowList:           EmptyAllowList,
+		allowList:           EmptyAllowList(),
 		positiveResultCache: cache.NewTimeCache(cachingPeriod),
 		negativeResultCache: cache.NewTimeCache(cachingPeriod),
 	}
@@ -100,7 +100,7 @@ func TestValidate_PeerRecognized_SecondApplicationRecognizes(t *testing.T) {
 		applications: []Application{
 			newMockApplication(),
 			application},
-		allowList:           EmptyAllowList,
+		allowList:           EmptyAllowList(),
 		positiveResultCache: cache.NewTimeCache(cachingPeriod),
 		negativeResultCache: cache.NewTimeCache(cachingPeriod),
 	}
@@ -139,7 +139,7 @@ func TestValidate_PeerNotRecognized_FirstApplicationReturnedError(t *testing.T) 
 		applications: []Application{
 			application1,
 			application2},
-		allowList:           EmptyAllowList,
+		allowList:           EmptyAllowList(),
 		positiveResultCache: cache.NewTimeCache(cachingPeriod),
 		negativeResultCache: cache.NewTimeCache(cachingPeriod),
 	}
@@ -164,7 +164,7 @@ func TestValidate_PeerRecognized_Cached(t *testing.T) {
 
 	policy := &anyApplicationPolicy{
 		applications:        []Application{application},
-		allowList:           EmptyAllowList,
+		allowList:           EmptyAllowList(),
 		positiveResultCache: cache.NewTimeCache(cachingPeriod),
 		negativeResultCache: cache.NewTimeCache(cachingPeriod),
 	}
@@ -203,7 +203,7 @@ func TestValidate_PeerNotRecognized_CacheEmptied(t *testing.T) {
 
 	policy := &anyApplicationPolicy{
 		applications:        []Application{application},
-		allowList:           EmptyAllowList,
+		allowList:           EmptyAllowList(),
 		positiveResultCache: cache.NewTimeCache(cachingPeriod),
 		negativeResultCache: cache.NewTimeCache(cachingPeriod),
 	}
@@ -238,7 +238,7 @@ func TestValidate_PeerNotRecognized_Cached(t *testing.T) {
 	application := newMockApplication()
 	policy := &anyApplicationPolicy{
 		applications:        []Application{application},
-		allowList:           EmptyAllowList,
+		allowList:           EmptyAllowList(),
 		positiveResultCache: cache.NewTimeCache(cachingPeriod),
 		negativeResultCache: cache.NewTimeCache(cachingPeriod),
 	}
@@ -273,7 +273,7 @@ func TestValidate_PeerRecognized_CacheEmptied(t *testing.T) {
 
 	policy := &anyApplicationPolicy{
 		applications:        []Application{application},
-		allowList:           EmptyAllowList,
+		allowList:           EmptyAllowList(),
 		positiveResultCache: cache.NewTimeCache(cachingPeriod),
 		negativeResultCache: cache.NewTimeCache(cachingPeriod),
 	}
@@ -338,11 +338,11 @@ func TestValidate_EmptyAllowList_RecognizedPeerAccepted(t *testing.T) {
 		err:          nil,
 	})
 
-	// With EmptyAllowList, a recognized peer must pass validation through
+	// With EmptyAllowList(), a recognized peer must pass validation through
 	// the IsRecognized path, not through an AllowList bypass.
 	policy := &anyApplicationPolicy{
 		applications:        []Application{application},
-		allowList:           EmptyAllowList,
+		allowList:           EmptyAllowList(),
 		positiveResultCache: cache.NewTimeCache(cachingPeriod),
 		negativeResultCache: cache.NewTimeCache(cachingPeriod),
 	}
@@ -361,11 +361,11 @@ func TestValidate_EmptyAllowList_UnrecognizedPeerRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// With EmptyAllowList, a peer not recognized by any application must
+	// With EmptyAllowList(), a peer not recognized by any application must
 	// be rejected. No AllowList bypass is available.
 	policy := &anyApplicationPolicy{
 		applications:        []Application{newMockApplication()},
-		allowList:           EmptyAllowList,
+		allowList:           EmptyAllowList(),
 		positiveResultCache: cache.NewTimeCache(cachingPeriod),
 		negativeResultCache: cache.NewTimeCache(cachingPeriod),
 	}
@@ -388,7 +388,7 @@ func TestValidate_EmptyAllowList_PreviouslyAllowlistedPeerMustPassIsRecognized(t
 	// The peer is not recognized by the application and must be rejected.
 	policy := &anyApplicationPolicy{
 		applications:        []Application{newMockApplication()},
-		allowList:           EmptyAllowList,
+		allowList:           EmptyAllowList(),
 		positiveResultCache: cache.NewTimeCache(cachingPeriod),
 		negativeResultCache: cache.NewTimeCache(cachingPeriod),
 	}
