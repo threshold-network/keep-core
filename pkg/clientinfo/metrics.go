@@ -15,11 +15,11 @@ type Source func() float64
 
 // Names under which metrics are exposed.
 const (
-	ConnectedPeersCountMetricName     = "connected_peers_count"
-	ConnectedBootstrapCountMetricName = "connected_bootstrap_count"
-	EthConnectivityMetricName         = "eth_connectivity"
-	BtcConnectivityMetricName         = "btc_connectivity"
-	ClientInfoMetricName              = "client_info"
+	ConnectedPeersCountMetricName          = "connected_peers_count"
+	ConnectedWellknownPeersCountMetricName = "connected_wellknown_peers_count"
+	EthConnectivityMetricName              = "eth_connectivity"
+	BtcConnectivityMetricName              = "btc_connectivity"
+	ClientInfoMetricName                   = "client_info"
 )
 
 const (
@@ -55,17 +55,17 @@ func (r *Registry) ObserveConnectedPeersCount(
 	)
 }
 
-// ObserveConnectedBootstrapCount triggers an observation process of the
-// connected_bootstrap_count metric.
-func (r *Registry) ObserveConnectedBootstrapCount(
+// ObserveConnectedWellknownPeersCount triggers an observation process of the
+// connected_wellknown_peers_count metric.
+func (r *Registry) ObserveConnectedWellknownPeersCount(
 	netProvider net.Provider,
-	bootstraps []string,
+	wellknownPeers []string,
 	tick time.Duration,
 ) {
 	input := func() float64 {
 		currentCount := 0
 
-		for _, address := range bootstraps {
+		for _, address := range wellknownPeers {
 			if netProvider.ConnectionManager().IsConnected(address) {
 				currentCount++
 			}
@@ -75,7 +75,7 @@ func (r *Registry) ObserveConnectedBootstrapCount(
 	}
 
 	r.observe(
-		ConnectedBootstrapCountMetricName,
+		ConnectedWellknownPeersCountMetricName,
 		input,
 		validateTick(tick, DefaultNetworkMetricsTick),
 	)

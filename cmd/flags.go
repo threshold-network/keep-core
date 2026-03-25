@@ -206,7 +206,7 @@ func initNetworkFlags(cmd *cobra.Command, cfg *config.Config) {
 		&cfg.LibP2P.Bootstrap,
 		"network.bootstrap",
 		false,
-		"Run the client in bootstrap mode.",
+		"[DEPRECATED] Run the client in bootstrap mode. This flag is deprecated and will be removed in a future release.",
 	)
 
 	cmd.Flags().StringSliceVar(

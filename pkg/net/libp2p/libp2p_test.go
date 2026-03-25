@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -200,103 +199,6 @@ func TestProviderSetAnnouncedAddresses(t *testing.T) {
 			"expected: provider addresses [%v]\nactual: provider addresses [%v]",
 			expectedAddresses,
 			providerAddresses,
-		)
-	}
-}
-
-func TestExtractPeersPublicKeys_EmptyList(t *testing.T) {
-	peerAddresses := []string{}
-	peerOperatorPublicKeys, err := ExtractPeersPublicKeys(peerAddresses)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(peerOperatorPublicKeys) != len(peerAddresses) {
-		t.Errorf(
-			"unexpected peer operator public keys length\nexpected: %v\n"+
-				"actual:   %v\n",
-			len(peerAddresses),
-			len(peerOperatorPublicKeys),
-		)
-	}
-}
-
-func TestExtractPeersPublicKeys_CorrectPeerAddresses(t *testing.T) {
-	peerAddresses := []string{
-		"/ip4/127.0.0.1/tcp/3919/ipfs/" +
-			"16Uiu2HAmNpUbaz8UptSL1aWTNnR1GmcV6Pw1kSV5xkep3N44zi3m",
-		"/ip4/127.0.0.1/tcp/3920/ipfs/" +
-			"16Uiu2HAmQA19uJUtvMp7ZGCED7maXjQZCpdkLnEGCmxPRJRCvwJt",
-		"/ip4/127.0.0.1/tcp/3921/ipfs/" +
-			"16Uiu2HAm5N75v5gmMiSaR422q6RH2QfPxWVJkRjySonG3UbnmnnQ",
-	}
-
-	peerOperatorPublicKeys, err := ExtractPeersPublicKeys(peerAddresses)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(peerOperatorPublicKeys) != len(peerAddresses) {
-		t.Errorf(
-			"unexpected peer operator public keys length\nexpected: %v\n"+
-				"actual:   %v\n",
-			len(peerAddresses),
-			len(peerOperatorPublicKeys),
-		)
-	}
-
-	// Convert to strings for easier testing
-	actualPeerOperatorPublicKeys := make([]string, len(peerOperatorPublicKeys))
-	for i, key := range peerOperatorPublicKeys {
-		actualPeerOperatorPublicKeys[i] = key.String()
-	}
-
-	expectedPeerOperatorPublicKeys := []string{
-		"03970308f34ba0397e4a54713c126e63b8e42effcce9766d30776f24571796c39c",
-		"03aadf4ef0d4836404e5f06de50b05b9273e6b6b52b8c8726dae2735882d9354dd",
-		"0293aaeed76b0636b1c464f1c20a2f73936c175bae01a469f89c66f0e963fdc24d",
-	}
-
-	if !reflect.DeepEqual(
-		expectedPeerOperatorPublicKeys,
-		actualPeerOperatorPublicKeys,
-	) {
-		t.Errorf(
-			"unexpected peer operator public keys\nexpected: %v\nactual:   %v\n",
-			expectedPeerOperatorPublicKeys,
-			actualPeerOperatorPublicKeys,
-		)
-	}
-}
-
-func TestExtractPeersPublicKeys_IncorrectPeerAddresses(t *testing.T) {
-	// Make the second address too short to cause an error
-	peerAddresses := []string{
-		"/ip4/127.0.0.1/tcp/3919/ipfs/" +
-			"16Uiu2HAmNpUbaz8UptSL1aWTNnR1GmcV6Pw1kSV5xkep3N44zi3m",
-		"/ip4/127.0.0.1/tcp/3920/ipfs/" +
-			"16Uiu2HAmQA19uJUtvMp7ZGCED7maXjQZCpdkLnEGCmxPRJRCvwJ",
-		"/ip4/127.0.0.1/tcp/3921/ipfs/" +
-			"16Uiu2HAm5N75v5gmMiSaR422q6RH2QfPxWVJkRjySonG3UbnmnnQ",
-	}
-
-	_, err := ExtractPeersPublicKeys(peerAddresses)
-
-	expectedError := fmt.Errorf(
-		"failed to extract multiaddress from peer addresses: " +
-			"[failed to parse multiaddr \"/ip4/127.0.0.1/tcp/3920/ipfs/" +
-			"16Uiu2HAmQA19uJUtvMp7ZGCED7maXjQZCpdkLnEGCmxPRJRCvwJ\": " +
-			"invalid value " +
-			"\"16Uiu2HAmQA19uJUtvMp7ZGCED7maXjQZCpdkLnEGCmxPRJRCvwJ\" " +
-			"for protocol p2p: failed to parse p2p addr: " +
-			"16Uiu2HAmQA19uJUtvMp7ZGCED7maXjQZCpdkLnEGCmxPRJRCvwJ " +
-			"length greater than remaining number of bytes in buffer]",
-	)
-	if !reflect.DeepEqual(expectedError, err) {
-		t.Errorf(
-			"unexpected error\nexpected: %v\nactual:   %v\n",
-			expectedError,
-			err,
 		)
 	}
 }

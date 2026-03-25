@@ -188,6 +188,9 @@ func start(cmd *cobra.Command) error {
 }
 
 func isBootstrap() bool {
+	if clientConfig.LibP2P.Bootstrap {
+		logger.Warnf("--network.bootstrap is deprecated and will be removed in a future release")
+	}
 	return clientConfig.LibP2P.Bootstrap
 }
 
@@ -197,19 +200,9 @@ func initializeNetwork(
 	operatorPrivateKey *operator.PrivateKey,
 	blockCounter chain.BlockCounter,
 ) (net.Provider, error) {
-	bootstrapPeersPublicKeys, err := libp2p.ExtractPeersPublicKeys(
-		clientConfig.LibP2P.Peers,
-	)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"error extracting bootstrap peers public keys: [%v]",
-			err,
-		)
-	}
-
 	firewall := firewall.AnyApplicationPolicy(
 		applications,
-		firewall.NewAllowList(bootstrapPeersPublicKeys),
+		firewall.EmptyAllowList,
 	)
 
 	netProvider, err := libp2p.Connect(
@@ -244,7 +237,7 @@ func initializeClientInfo(
 		config.ClientInfo.NetworkMetricsTick,
 	)
 
-	registry.ObserveConnectedBootstrapCount(
+	registry.ObserveConnectedWellknownPeersCount(
 		netProvider,
 		config.LibP2P.Peers,
 		config.ClientInfo.NetworkMetricsTick,
