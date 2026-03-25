@@ -202,11 +202,13 @@ func initBitcoinElectrumFlags(cmd *cobra.Command, cfg *config.Config) {
 
 // Initialize flags for Network configuration.
 func initNetworkFlags(cmd *cobra.Command, cfg *config.Config) {
+	// TODO: Remove in v3.0.0 along with isBootstrap() in start.go and
+	// the LibP2P.Bootstrap config field.
 	cmd.Flags().BoolVar(
 		&cfg.LibP2P.Bootstrap,
 		"network.bootstrap",
 		false,
-		"[DEPRECATED] Run the client in bootstrap mode. This flag is deprecated and will be removed in a future release.",
+		"[DEPRECATED: remove in v3.0] Run the client in bootstrap mode. This flag is deprecated and will be removed in v3.0.",
 	)
 
 	cmd.Flags().StringSliceVar(
