@@ -344,22 +344,27 @@ func TestNode_RunCoordinationLayer(t *testing.T) {
 		if signer.wallet.publicKey.Equal(walletPublicKey) {
 			result, ok := map[uint64]*coordinationResult{
 				900: {
+					window:   window,
 					proposal: &mockCoordinationProposal{ActionDepositSweep},
 				},
 				// Omit window at block 1800 to make sure the layer doesn't
 				// crash if no result is produced.
 				2700: {
+					window:   window,
 					proposal: &mockCoordinationProposal{ActionRedemption},
 				},
 				// Put some trash value to make sure coordination windows
 				// are distributed correctly.
 				2705: {
+					window:   window,
 					proposal: &mockCoordinationProposal{ActionMovingFunds},
 				},
 				3600: {
+					window:   window,
 					proposal: &mockCoordinationProposal{ActionNoop},
 				},
 				4500: {
+					window:   window,
 					proposal: &mockCoordinationProposal{ActionMovedFundsSweep},
 				},
 			}[window.coordinationBlock]
@@ -405,6 +410,10 @@ loop:
 	for {
 		select {
 		case result := <-processedResultsChan:
+			if result == nil {
+				continue
+			}
+
 			processedResults = append(processedResults, result)
 
 			// Once the second-last coordination window is processed, stop the
@@ -425,24 +434,68 @@ loop:
 		3,
 		len(processedResults),
 	)
+
+	resultActionsByWindow := make(map[uint64]WalletActionType, len(processedResults))
+	for _, result := range processedResults {
+		resultActionsByWindow[result.window.coordinationBlock] =
+			result.proposal.ActionType()
+	}
+
+	testutils.AssertIntsEqual(
+		t,
+		"processed coordination windows count",
+		3,
+		len(resultActionsByWindow),
+	)
+
+	firstAction, ok := resultActionsByWindow[900]
+	if !ok {
+		t.Fatal("expected coordination result for window at block 900")
+	}
 	testutils.AssertStringsEqual(
 		t,
-		"first result",
+		"result for block 900",
 		ActionDepositSweep.String(),
-		processedResults[0].proposal.ActionType().String(),
+		firstAction.String(),
 	)
+
+	secondAction, ok := resultActionsByWindow[2700]
+	if !ok {
+		t.Fatal("expected coordination result for window at block 2700")
+	}
 	testutils.AssertStringsEqual(
 		t,
-		"second result",
+		"result for block 2700",
 		ActionRedemption.String(),
-		processedResults[1].proposal.ActionType().String(),
+		secondAction.String(),
 	)
-	testutils.AssertStringsEqual(
-		t,
-		"third result",
-		ActionNoop.String(),
-		processedResults[2].proposal.ActionType().String(),
-	)
+
+	if _, ok := resultActionsByWindow[2705]; ok {
+		t.Fatal("unexpected coordination result for non-window block 2705")
+	}
+
+	// Result processing is asynchronous, so by the time the test cancels the
+	// coordination layer after the third processed result, either the 3600
+	// window or the subsequent 4500 window may already be in flight.
+	if thirdAction, ok := resultActionsByWindow[3600]; ok {
+		testutils.AssertStringsEqual(
+			t,
+			"result for block 3600",
+			ActionNoop.String(),
+			thirdAction.String(),
+		)
+	} else {
+		fourthAction, ok := resultActionsByWindow[4500]
+		if !ok {
+			t.Fatal("expected coordination result for block 3600 or 4500")
+		}
+		testutils.AssertStringsEqual(
+			t,
+			"result for block 4500",
+			ActionMovedFundsSweep.String(),
+			fourthAction.String(),
+		)
+	}
 }
 
 type mockCoordinationProposal struct {
