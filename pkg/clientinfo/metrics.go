@@ -14,6 +14,10 @@ import (
 type Source func() float64
 
 // Names under which metrics are exposed.
+//
+// NOTE: ConnectedWellknownPeersCountMetricName was renamed from
+// "connected_bootstrap_count" in v2.6.0. Update any Prometheus queries or
+// Grafana dashboards that reference the old name.
 const (
 	ConnectedPeersCountMetricName          = "connected_peers_count"
 	ConnectedWellknownPeersCountMetricName = "connected_wellknown_peers_count"

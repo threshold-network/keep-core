@@ -273,7 +273,7 @@ func (psts *ProposeSweepTestScenario) UnmarshalJSON(data []byte) error {
 
 	// Unmarshal expected error
 	if len(unmarshaled.ExpectedErr) > 0 {
-		psts.ExpectedErr = fmt.Errorf(unmarshaled.ExpectedErr)
+		psts.ExpectedErr = fmt.Errorf("%s", unmarshaled.ExpectedErr)
 	}
 
 	return nil
