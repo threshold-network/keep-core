@@ -202,7 +202,7 @@ func initializeNetwork(
 ) (net.Provider, error) {
 	firewall := firewall.AnyApplicationPolicy(
 		applications,
-		firewall.EmptyAllowList,
+		firewall.EmptyAllowList(),
 	)
 
 	netProvider, err := libp2p.Connect(

@@ -1,1 +1,4 @@
+# TODO: Add at least one additional mainnet peer across a different
+# operator/ASN before production rollout. A single peer is a SPOF for
+# initial peer discovery of fresh nodes.
 /ip4/143.198.18.229/tcp/3919/ipfs/16Uiu2HAmDP4Z6LCogRMictJ6deGs4DRo99A5JTz5u3CLMg7URxC6
