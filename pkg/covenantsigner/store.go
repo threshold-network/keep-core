@@ -16,11 +16,13 @@ const jobsDirectory = "covenant-signer/jobs"
 const lockFileName = ".lock"
 
 type Store struct {
-	handle      persistence.BasicHandle
-	mutex       sync.Mutex
-	lockFile    *os.File
-	byRequestID map[string]*Job
-	byRouteKey  map[string]string
+	handle          persistence.BasicHandle
+	mutex           sync.Mutex
+	lockFile        *os.File
+	byRequestID     map[string]*Job
+	byRouteKey      map[string]string
+	poisonedRoutes  map[string]bool
+	skippedJobFiles []string
 }
 
 // NewStore creates a new Store backed by the given persistence handle. When
@@ -30,9 +32,10 @@ type Store struct {
 // error. When dataDir is empty (in-memory handles), file locking is skipped.
 func NewStore(handle persistence.BasicHandle, dataDir string) (*Store, error) {
 	store := &Store{
-		handle:      handle,
-		byRequestID: make(map[string]*Job),
-		byRouteKey:  make(map[string]string),
+		handle:         handle,
+		byRequestID:    make(map[string]*Job),
+		byRouteKey:     make(map[string]string),
+		poisonedRoutes: make(map[string]bool),
 	}
 
 	if dataDir != "" {
@@ -107,8 +110,48 @@ func (s *Store) Close() error {
 	return err
 }
 
+var errPoisonedRouteKey = fmt.Errorf(
+	"route key belongs to a job that could not be loaded; " +
+		"manual recovery of the corrupt job file is required",
+)
+
 func routeKey(route TemplateID, routeRequestID string) string {
 	return fmt.Sprintf("%s:%s", route, routeRequestID)
+}
+
+// poisonRouteFromPartialJob attempts a lenient parse of content to extract
+// Route and RouteRequestID. If successful, the route key is marked as
+// poisoned so that future submissions are rejected rather than silently
+// creating a duplicate job.
+func (s *Store) poisonRouteFromPartialJob(content []byte, fileName string) {
+	var partial struct {
+		Route          TemplateID `json:"Route"`
+		RouteRequestID string     `json:"RouteRequestID"`
+	}
+	if err := json.Unmarshal(content, &partial); err != nil {
+		return
+	}
+	if partial.Route == "" || partial.RouteRequestID == "" {
+		return
+	}
+	key := routeKey(partial.Route, partial.RouteRequestID)
+	s.poisonedRoutes[key] = true
+	logger.Warnf(
+		"poisoned route key [%s] from skipped job file [%s]",
+		key,
+		fileName,
+	)
+}
+
+// SkippedJobFiles returns the file names of job files that could not be
+// loaded during startup. Operators should investigate and repair or remove
+// these files.
+func (s *Store) SkippedJobFiles() []string {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	result := make([]string, len(s.skippedJobFiles))
+	copy(result, s.skippedJobFiles)
+	return result
 }
 
 func cloneJob(job *Job) (*Job, error) {
@@ -176,6 +219,7 @@ func (s *Store) load() error {
 					descriptor.Name(),
 					err,
 				)
+				s.skippedJobFiles = append(s.skippedJobFiles, descriptor.Name())
 				skipped++
 				continue
 			}
@@ -187,6 +231,11 @@ func (s *Store) load() error {
 					descriptor.Name(),
 					err,
 				)
+				// Attempt partial parse to extract route info for
+				// poisoning. If the route key is recoverable, block
+				// future submissions for this route to preserve dedupe.
+				s.poisonRouteFromPartialJob(content, descriptor.Name())
+				s.skippedJobFiles = append(s.skippedJobFiles, descriptor.Name())
 				skipped++
 				continue
 			}
@@ -295,7 +344,13 @@ func (s *Store) GetByRouteRequest(route TemplateID, routeRequestID string) (*Job
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	requestID, ok := s.byRouteKey[routeKey(route, routeRequestID)]
+	key := routeKey(route, routeRequestID)
+
+	if s.poisonedRoutes[key] {
+		return nil, false, errPoisonedRouteKey
+	}
+
+	requestID, ok := s.byRouteKey[key]
 	if !ok {
 		return nil, false, nil
 	}
