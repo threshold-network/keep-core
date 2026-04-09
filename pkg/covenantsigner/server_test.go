@@ -867,7 +867,7 @@ func TestSubmitHandlerPreCancelledContextStillSucceeds(t *testing.T) {
 
 type contextKey string
 
-func TestSubmitHandlerPreservesContextValues(t *testing.T) {
+func TestSubmitHandlerPreservesServiceContextValues(t *testing.T) {
 	const testKey contextKey = "test-trace-id"
 	const testValue = "trace-abc-123"
 
@@ -889,15 +889,13 @@ func TestSubmitHandlerPreservesContextValues(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Wrap the handler with middleware that injects a value into the request
-	// context. The detached context should preserve this value.
-	innerHandler := newHandler(service, context.Background(), "", true)
-	wrappedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		enrichedCtx := context.WithValue(r.Context(), testKey, testValue)
-		innerHandler.ServeHTTP(w, r.WithContext(enrichedCtx))
-	})
+	// Inject a value into the service context. The submit handler derives
+	// its timeout context from serviceCtx (not from the HTTP request), so
+	// values on the service context must be visible to the engine.
+	serviceCtx := context.WithValue(context.Background(), testKey, testValue)
+	handler := newHandler(service, serviceCtx, "", true)
 
-	server := httptest.NewServer(wrappedHandler)
+	server := httptest.NewServer(handler)
 	defer server.Close()
 
 	submitPayload := mustJSON(t, SignerSubmitInput{
@@ -925,7 +923,7 @@ func TestSubmitHandlerPreservesContextValues(t *testing.T) {
 	defer mu.Unlock()
 	if capturedValue != testValue {
 		t.Fatalf(
-			"expected context value %q to be preserved through detachment, "+
+			"expected service context value %q to be visible in engine, "+
 				"got %v",
 			testValue,
 			capturedValue,
