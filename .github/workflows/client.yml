@@ -334,9 +334,14 @@ jobs:
       - name: Race detector (high-risk packages)
         run: |
           go test -race -timeout 20m ./pkg/covenantsigner
-          go test -race -timeout 20m ./pkg/tbtc \
+          go test -race -timeout 20m -v ./pkg/tbtc \
             -run '^(TestSignerApprovalCertificateSignerSetHashBindsOnChainWalletIdentityAndThreshold|TestValidateMigrationOutputValues_RejectsValuesExceedingInt64)$' \
-            -count=1
+            -count=1 2>&1 | tee /tmp/race-output.txt
+          # Fail if the -run filter matched no tests (silent pass).
+          if ! grep -q '=== RUN' /tmp/race-output.txt; then
+            echo "ERROR: race detector -run filter matched no tests" >&2
+            exit 1
+          fi
 
   client-integration-test:
     needs: [electrum-integration-detect-changes, client-build-test-publish]
