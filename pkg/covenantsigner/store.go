@@ -206,22 +206,37 @@ func (s *Store) load() error {
 						// the existing job -- replace it. Otherwise skip the
 						// candidate.
 						if _, parseErr := time.Parse(time.RFC3339Nano, job.UpdatedAt); parseErr != nil {
+							// Both timestamps are unparseable. Use
+							// lexicographic RequestID as a deterministic
+							// tiebreaker so the outcome does not depend on
+							// file iteration order.
+							if existing.RequestID <= job.RequestID {
+								logger.Warnf(
+									"skipping job [%s] with invalid timestamp on duplicate route key [%s/%s] (keeping [%s]): [%v]",
+									job.RequestID,
+									job.Route,
+									job.RouteRequestID,
+									existing.RequestID,
+									err,
+								)
+								continue
+							}
 							logger.Warnf(
-								"skipping job [%s] with invalid timestamp on duplicate route key [%s/%s]: [%v]",
-								job.RequestID,
+								"replacing job [%s] with invalid timestamp on duplicate route key [%s/%s] (both unparseable, lexicographic tiebreak): [%v]",
+								existing.RequestID,
 								job.Route,
 								job.RouteRequestID,
 								err,
 							)
-							continue
+						} else {
+							logger.Warnf(
+								"replacing job [%s] with invalid timestamp on duplicate route key [%s/%s]: [%v]",
+								existing.RequestID,
+								job.Route,
+								job.RouteRequestID,
+								err,
+							)
 						}
-						logger.Warnf(
-							"replacing job [%s] with invalid timestamp on duplicate route key [%s/%s]: [%v]",
-							existing.RequestID,
-							job.Route,
-							job.RouteRequestID,
-							err,
-						)
 					} else if existingIsNewerOrSame {
 						continue
 					}
