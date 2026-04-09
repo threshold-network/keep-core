@@ -260,14 +260,38 @@ func (s *Store) load() error {
 						// candidate's timestamp is valid, the failure is on
 						// the existing job -- replace it. Otherwise skip the
 						// candidate.
-						if _, parseErr := time.Parse(time.RFC3339Nano, job.UpdatedAt); parseErr != nil {
+						_, existingParseErr := time.Parse(time.RFC3339Nano, existing.UpdatedAt)
+						_, candidateParseErr := time.Parse(time.RFC3339Nano, job.UpdatedAt)
+
+						switch {
+						case candidateParseErr != nil && existingParseErr == nil:
+							// Only the candidate is unparseable; keep existing.
+							logger.Warnf(
+								"skipping job [%s] with invalid timestamp on duplicate route key [%s/%s] (keeping [%s]): [%v]",
+								job.RequestID,
+								job.Route,
+								job.RouteRequestID,
+								existing.RequestID,
+								err,
+							)
+							continue
+						case candidateParseErr == nil && existingParseErr != nil:
+							// Only the existing is unparseable; replace with candidate.
+							logger.Warnf(
+								"replacing job [%s] with invalid timestamp on duplicate route key [%s/%s]: [%v]",
+								existing.RequestID,
+								job.Route,
+								job.RouteRequestID,
+								err,
+							)
+						default:
 							// Both timestamps are unparseable. Use
 							// lexicographic RequestID as a deterministic
-							// tiebreaker so the outcome does not depend on
-							// file iteration order.
+							// tiebreaker so the outcome does not depend
+							// on file iteration order.
 							if existing.RequestID <= job.RequestID {
 								logger.Warnf(
-									"skipping job [%s] with invalid timestamp on duplicate route key [%s/%s] (keeping [%s]): [%v]",
+									"skipping job [%s] on duplicate route key [%s/%s] (keeping [%s], lexicographic tiebreak): [%v]",
 									job.RequestID,
 									job.Route,
 									job.RouteRequestID,
@@ -277,15 +301,7 @@ func (s *Store) load() error {
 								continue
 							}
 							logger.Warnf(
-								"replacing job [%s] with invalid timestamp on duplicate route key [%s/%s] (both unparseable, lexicographic tiebreak): [%v]",
-								existing.RequestID,
-								job.Route,
-								job.RouteRequestID,
-								err,
-							)
-						} else {
-							logger.Warnf(
-								"replacing job [%s] with invalid timestamp on duplicate route key [%s/%s]: [%v]",
+								"replacing job [%s] on duplicate route key [%s/%s] (lexicographic tiebreak): [%v]",
 								existing.RequestID,
 								job.Route,
 								job.RouteRequestID,
