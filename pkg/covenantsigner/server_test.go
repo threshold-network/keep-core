@@ -34,7 +34,7 @@ func TestServerHandlesSubmitAndPathPoll(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(newHandler(service, "", true))
+	server := httptest.NewServer(newHandler(service, context.Background(), "", true))
 	defer server.Close()
 
 	submitPayload := mustJSON(t, SignerSubmitInput{
@@ -88,7 +88,7 @@ func TestServerRejectsUnknownFieldsOnSubmit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(newHandler(service, "", true))
+	server := httptest.NewServer(newHandler(service, context.Background(), "", true))
 	defer server.Close()
 
 	base := baseRequest(TemplateSelfV1)
@@ -193,7 +193,7 @@ func TestServerRejectsTrailingJSONOnSubmit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(newHandler(service, "", true))
+	server := httptest.NewServer(newHandler(service, context.Background(), "", true))
 	defer server.Close()
 
 	validPayload := mustJSON(t, SignerSubmitInput{
@@ -432,7 +432,7 @@ func TestServerRequiresBearerTokenWhenConfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(newHandler(service, "test-token", true))
+	server := httptest.NewServer(newHandler(service, context.Background(), "test-token", true))
 	defer server.Close()
 
 	submitPayload := mustJSON(t, SignerSubmitInput{
@@ -505,7 +505,7 @@ func TestServerCanKeepSelfV1RoutesDark(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(newHandler(service, "", false))
+	server := httptest.NewServer(newHandler(service, context.Background(), "", false))
 	defer server.Close()
 
 	response, err := http.Post(
@@ -561,7 +561,7 @@ func TestServerBoundaryErrorMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(newHandler(service, "test-token", true))
+	server := httptest.NewServer(newHandler(service, context.Background(), "test-token", true))
 	defer server.Close()
 
 	submitPayload := mustJSON(t, SignerSubmitInput{
@@ -728,7 +728,7 @@ func TestSubmitHandlerDetachesContextFromHTTPLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler := newHandler(service, "", true)
+	handler := newHandler(service, context.Background(), "", true)
 
 	submitPayload := mustJSON(t, SignerSubmitInput{
 		RouteRequestID: "ors_detach_cancel",
@@ -818,7 +818,7 @@ func TestSubmitHandlerPreCancelledContextStillSucceeds(t *testing.T) {
 	// Test through the handler directly using httptest.ResponseRecorder
 	// because an HTTP client would fail to send a request with a
 	// pre-cancelled context.
-	handler := newHandler(service, "", true)
+	handler := newHandler(service, context.Background(), "", true)
 
 	submitPayload := mustJSON(t, SignerSubmitInput{
 		RouteRequestID: "ors_detach_precancel",
@@ -891,7 +891,7 @@ func TestSubmitHandlerPreservesContextValues(t *testing.T) {
 
 	// Wrap the handler with middleware that injects a value into the request
 	// context. The detached context should preserve this value.
-	innerHandler := newHandler(service, "", true)
+	innerHandler := newHandler(service, context.Background(), "", true)
 	wrappedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		enrichedCtx := context.WithValue(r.Context(), testKey, testValue)
 		innerHandler.ServeHTTP(w, r.WithContext(enrichedCtx))

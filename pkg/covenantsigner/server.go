@@ -21,8 +21,9 @@ import (
 var logger = log.Logger("keep-covenant-signer")
 
 type Server struct {
-	service    *Service
-	httpServer *http.Server
+	service       *Service
+	cancelService context.CancelFunc
+	httpServer    *http.Server
 }
 
 const maxRequestBodyBytes = 2 << 20
@@ -102,11 +103,17 @@ func Initialize(
 		)
 	}
 
+	// Create a service-level context that outlives individual HTTP requests
+	// but is cancelled on process shutdown, so in-flight threshold signing
+	// operations are cancelled cleanly rather than killed mid-operation.
+	serviceCtx, cancelService := context.WithCancel(context.WithoutCancel(ctx))
+
 	server := &Server{
-		service: service,
+		service:       service,
+		cancelService: cancelService,
 		httpServer: &http.Server{
 			Addr:              net.JoinHostPort(listenAddress, strconv.Itoa(config.Port)),
-			Handler:           newHandler(service, config.AuthToken, config.EnableSelfV1),
+			Handler:           newHandler(service, serviceCtx, config.AuthToken, config.EnableSelfV1),
 			ReadHeaderTimeout: 5 * time.Second,
 			ReadTimeout:       30 * time.Second,
 			WriteTimeout:      30 * time.Second,
@@ -122,8 +129,13 @@ func Initialize(
 
 	go func() {
 		<-ctx.Done()
+
+		// Cancel the service context so in-flight threshold signing
+		// operations observe shutdown and terminate promptly.
+		cancelService()
+
 		shutdownCtx, cancelShutdown := context.WithTimeout(
-			context.WithoutCancel(ctx),
+			context.Background(),
 			5*time.Second,
 		)
 		defer cancelShutdown()
@@ -219,7 +231,7 @@ func hasCustodianTrustRootForRoute(
 	return false
 }
 
-func newHandler(service *Service, authToken string, enableSelfV1 bool) http.Handler {
+func newHandler(service *Service, serviceCtx context.Context, authToken string, enableSelfV1 bool) http.Handler {
 	mux := http.NewServeMux()
 	protectedHandler := withBearerAuth(mux, authToken)
 
@@ -229,11 +241,11 @@ func newHandler(service *Service, authToken string, enableSelfV1 bool) http.Hand
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	mux.HandleFunc("POST /v1/qc_v1/signer/requests", submitHandler(service, TemplateQcV1))
+	mux.HandleFunc("POST /v1/qc_v1/signer/requests", submitHandler(service, serviceCtx, TemplateQcV1))
 	mux.HandleFunc("POST /v1/qc_v1/signer/requests:poll", pollBodyHandler(service, TemplateQcV1))
 	mux.HandleFunc("/v1/qc_v1/signer/requests/", pollPathHandler(service, TemplateQcV1))
 	if enableSelfV1 {
-		mux.HandleFunc("POST /v1/self_v1/signer/requests", submitHandler(service, TemplateSelfV1))
+		mux.HandleFunc("POST /v1/self_v1/signer/requests", submitHandler(service, serviceCtx, TemplateSelfV1))
 		mux.HandleFunc("POST /v1/self_v1/signer/requests:poll", pollBodyHandler(service, TemplateSelfV1))
 		mux.HandleFunc("/v1/self_v1/signer/requests/", pollPathHandler(service, TemplateSelfV1))
 	}
@@ -328,16 +340,23 @@ func handleError(w http.ResponseWriter, err error) {
 	http.Error(w, "internal server error", http.StatusInternalServerError)
 }
 
-func submitHandler(service *Service, route TemplateID) http.HandlerFunc {
+const submitTimeout = 5 * time.Minute
+
+func submitHandler(service *Service, serviceCtx context.Context, route TemplateID) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		input := SignerSubmitInput{}
 		if !decodeJSON(w, r, &input) {
 			return
 		}
 
-		// Detach from the HTTP request lifetime so that threshold signing
-		// survives write-timeout and client disconnects.
-		result, err := service.Submit(context.WithoutCancel(r.Context()), route, input)
+		// Use the service-level context (cancelled on process shutdown)
+		// with a bounded timeout so threshold signing cannot hang
+		// indefinitely. This detaches from the HTTP request lifetime so
+		// signing survives write-timeout and client disconnects.
+		submitCtx, cancelSubmit := context.WithTimeout(serviceCtx, submitTimeout)
+		defer cancelSubmit()
+
+		result, err := service.Submit(submitCtx, route, input)
 		if err != nil {
 			handleError(w, err)
 			return
