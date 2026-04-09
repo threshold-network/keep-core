@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -378,7 +379,7 @@ func (s *Service) Poll(ctx context.Context, route TemplateID, input SignerPollIn
 
 	transition, pollErr := s.engine.OnPoll(ctx, job)
 	if pollErr != nil {
-		if pollErr != errJobNotFound {
+		if !errors.Is(pollErr, errJobNotFound) {
 			return StepResult{}, pollErr
 		}
 	}
@@ -398,7 +399,7 @@ func (s *Service) Poll(ctx context.Context, route TemplateID, input SignerPollIn
 		return mapJobResult(currentJob), nil
 	}
 
-	if pollErr == errJobNotFound {
+	if errors.Is(pollErr, errJobNotFound) {
 		applyTransition(currentJob, &Transition{
 			State:  JobStateFailed,
 			Reason: ReasonJobNotFound,
