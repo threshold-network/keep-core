@@ -205,7 +205,7 @@ func TestStoreLoadSelectsNewestJobForDuplicateRouteKeys(t *testing.T) {
 	}
 }
 
-func TestStoreLoadFailsOnInvalidUpdatedAtForDuplicateRouteKeys(t *testing.T) {
+func TestStoreLoadResolvesInvalidUpdatedAtForDuplicateRouteKeys(t *testing.T) {
 	handle := newMemoryHandle()
 
 	first := &Job{
