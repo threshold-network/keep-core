@@ -189,6 +189,9 @@ func (s *Store) load() error {
 
 			key := routeKey(job.Route, job.RouteRequestID)
 
+			// Deduplication: when multiple files share the same route key,
+			// keep the job with the newest UpdatedAt timestamp. If timestamps
+			// cannot be compared, prefer whichever has a valid timestamp.
 			if existingID, ok := s.byRouteKey[key]; ok {
 				if existing := s.byRequestID[existingID]; existing != nil {
 					existingIsNewerOrSame, err := isNewerOrSameJobRevision(existing, job)
