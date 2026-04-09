@@ -416,7 +416,10 @@ type DepositChainRequest struct {
 
 // WalletChainData represents wallet data stored on-chain.
 type WalletChainData struct {
-	EcdsaWalletID                          [32]byte
+	EcdsaWalletID [32]byte
+	// MembersIDsHash is populated from the wallet registry rather than the
+	// Bridge. A zero value indicates GetWallet returned Bridge data while the
+	// wallet registry lookup was unavailable.
 	MembersIDsHash                         [32]byte
 	MainUtxoHash                           [32]byte
 	PendingRedemptionsValue                uint64

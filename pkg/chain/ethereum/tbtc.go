@@ -1492,6 +1492,14 @@ func (tc *TbtcChain) GetWallet(
 		return nil, fmt.Errorf("cannot parse wallet state: [%v]", err)
 	}
 
+	return makeWalletChainData(wallet, membersIDsHash, walletState), nil
+}
+
+func makeWalletChainData(
+	wallet tbtcabi.WalletsWallet,
+	membersIDsHash [32]byte,
+	walletState tbtc.WalletState,
+) *tbtc.WalletChainData {
 	return &tbtc.WalletChainData{
 		EcdsaWalletID:                          wallet.EcdsaWalletID,
 		MembersIDsHash:                         membersIDsHash,
@@ -1503,7 +1511,7 @@ func (tc *TbtcChain) GetWallet(
 		PendingMovedFundsSweepRequestsCount:    wallet.PendingMovedFundsSweepRequestsCount,
 		State:                                  walletState,
 		MovingFundsTargetWalletsCommitmentHash: wallet.MovingFundsTargetWalletsCommitmentHash,
-	}, nil
+	}
 }
 
 func (tc *TbtcChain) OnWalletClosed(

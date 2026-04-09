@@ -169,22 +169,20 @@ func (s *Store) load() error {
 
 			content, err := descriptor.Content()
 			if err != nil {
-				logger.Warnf(
-					"skipping unreadable job file [%s]: [%v]",
+				return fmt.Errorf(
+					"cannot read persisted covenant signer job file [%s]: %w",
 					descriptor.Name(),
 					err,
 				)
-				continue
 			}
 
 			job := &Job{}
 			if err := json.Unmarshal(content, job); err != nil {
-				logger.Warnf(
-					"skipping malformed job file [%s]: [%v]",
+				return fmt.Errorf(
+					"cannot parse persisted covenant signer job file [%s]: %w",
 					descriptor.Name(),
 					err,
 				)
-				continue
 			}
 
 			key := routeKey(job.Route, job.RouteRequestID)
@@ -218,6 +216,10 @@ func (s *Store) load() error {
 					} else if existingIsNewerOrSame {
 						continue
 					}
+				}
+
+				if existingID != job.RequestID {
+					delete(s.byRequestID, existingID)
 				}
 			}
 
