@@ -89,7 +89,7 @@ type startDeps struct {
 		chain tbtc.Chain,
 		btcChain bitcoin.Chain,
 		netProvider net.Provider,
-		keyStorePersistance persistence.ProtectedHandle,
+		keyStorePersistence persistence.ProtectedHandle,
 		workPersistence persistence.BasicHandle,
 		scheduler *generator.Scheduler,
 		proposalGenerator tbtc.CoordinationProposalGenerator,

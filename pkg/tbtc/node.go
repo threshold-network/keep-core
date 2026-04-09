@@ -130,14 +130,14 @@ func newNode(
 	chain Chain,
 	btcChain bitcoin.Chain,
 	netProvider net.Provider,
-	keyStorePersistance persistence.ProtectedHandle,
+	keyStorePersistence persistence.ProtectedHandle,
 	workPersistence persistence.BasicHandle,
 	scheduler *generator.Scheduler,
 	proposalGenerator CoordinationProposalGenerator,
 	config Config,
 ) (*node, error) {
 	walletRegistry, err := newWalletRegistry(
-		keyStorePersistance,
+		keyStorePersistence,
 		chain.CalculateWalletID,
 	)
 	if err != nil {
