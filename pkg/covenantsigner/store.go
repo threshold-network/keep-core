@@ -320,6 +320,9 @@ func (s *Store) load() error {
 
 			s.byRequestID[job.RequestID] = job
 			s.byRouteKey[key] = job.RequestID
+			// A valid job for this route supersedes any earlier poison
+			// from a malformed sibling file for the same route key.
+			delete(s.poisonedRoutes, key)
 			loaded++
 		case err, ok := <-errorChan:
 			if !ok {
