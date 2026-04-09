@@ -225,6 +225,10 @@ func (s *Store) load() error {
 					} else if existingIsNewerOrSame {
 						continue
 					}
+
+					// Remove the superseded job from the primary index
+					// so stale entries do not leak in byRequestID.
+					delete(s.byRequestID, existingID)
 				}
 			}
 
