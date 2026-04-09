@@ -10,8 +10,10 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ipfs/go-log/v2"
@@ -124,11 +126,25 @@ func Initialize(
 
 	listener, err := net.Listen("tcp", server.httpServer.Addr)
 	if err != nil {
+		cancelService()
 		return nil, false, fmt.Errorf("failed to bind covenant signer port [%d]: %w", config.Port, err)
 	}
 
+	// Listen for both the parent context cancellation and OS signals so
+	// that in-flight signing operations are cancelled promptly on any
+	// shutdown path, including SIGINT/SIGTERM.
+	signalCtx, stopSignal := signal.NotifyContext(
+		context.Background(),
+		syscall.SIGINT,
+		syscall.SIGTERM,
+	)
+
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-signalCtx.Done():
+		}
+		stopSignal()
 
 		// Cancel the service context so in-flight threshold signing
 		// operations observe shutdown and terminate promptly.
