@@ -169,30 +169,60 @@ func (s *Store) load() error {
 
 			content, err := descriptor.Content()
 			if err != nil {
-				return err
+				logger.Warnf(
+					"skipping unreadable job file [%s]: [%v]",
+					descriptor.Name(),
+					err,
+				)
+				continue
 			}
 
 			job := &Job{}
 			if err := json.Unmarshal(content, job); err != nil {
-				return err
+				logger.Warnf(
+					"skipping malformed job file [%s]: [%v]",
+					descriptor.Name(),
+					err,
+				)
+				continue
 			}
 
-			existingID, ok := s.byRouteKey[routeKey(job.Route, job.RouteRequestID)]
-			if ok {
-				existing := s.byRequestID[existingID]
-				if existing != nil {
+			key := routeKey(job.Route, job.RouteRequestID)
+
+			if existingID, ok := s.byRouteKey[key]; ok {
+				if existing := s.byRequestID[existingID]; existing != nil {
 					existingIsNewerOrSame, err := isNewerOrSameJobRevision(existing, job)
 					if err != nil {
-						return err
-					}
-					if existingIsNewerOrSame {
+						// When the timestamp comparison fails, prefer
+						// whichever job has a parseable timestamp. If the
+						// candidate's timestamp is valid, the failure is on
+						// the existing job -- replace it. Otherwise skip the
+						// candidate.
+						if _, parseErr := time.Parse(time.RFC3339Nano, job.UpdatedAt); parseErr != nil {
+							logger.Warnf(
+								"skipping job [%s] with invalid timestamp on duplicate route key [%s/%s]: [%v]",
+								job.RequestID,
+								job.Route,
+								job.RouteRequestID,
+								err,
+							)
+							continue
+						}
+						logger.Warnf(
+							"replacing job [%s] with invalid timestamp on duplicate route key [%s/%s]: [%v]",
+							existing.RequestID,
+							job.Route,
+							job.RouteRequestID,
+							err,
+						)
+					} else if existingIsNewerOrSame {
 						continue
 					}
 				}
 			}
 
 			s.byRequestID[job.RequestID] = job
-			s.byRouteKey[routeKey(job.Route, job.RouteRequestID)] = job.RequestID
+			s.byRouteKey[key] = job.RequestID
 		case err, ok := <-errorChan:
 			if !ok {
 				errorChan = nil
