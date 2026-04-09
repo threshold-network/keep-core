@@ -155,6 +155,8 @@ func (s *Store) load() error {
 
 	dataChan, errorChan := s.handle.ReadAll()
 
+	var loaded, skipped int
+
 	for dataChan != nil || errorChan != nil {
 		select {
 		case descriptor, ok := <-dataChan:
@@ -174,6 +176,7 @@ func (s *Store) load() error {
 					descriptor.Name(),
 					err,
 				)
+				skipped++
 				continue
 			}
 
@@ -184,6 +187,7 @@ func (s *Store) load() error {
 					descriptor.Name(),
 					err,
 				)
+				skipped++
 				continue
 			}
 
@@ -226,6 +230,7 @@ func (s *Store) load() error {
 
 			s.byRequestID[job.RequestID] = job
 			s.byRouteKey[key] = job.RequestID
+			loaded++
 		case err, ok := <-errorChan:
 			if !ok {
 				errorChan = nil
@@ -235,6 +240,16 @@ func (s *Store) load() error {
 				return err
 			}
 		}
+	}
+
+	if skipped > 0 {
+		logger.Warnf(
+			"store load complete: loaded [%d] jobs, skipped [%d] unreadable or malformed files",
+			loaded,
+			skipped,
+		)
+	} else if loaded > 0 {
+		logger.Infof("store load complete: loaded [%d] jobs", loaded)
 	}
 
 	return nil
