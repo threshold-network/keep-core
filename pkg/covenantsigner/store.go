@@ -58,6 +58,12 @@ func NewStore(handle persistence.BasicHandle, dataDir string) (*Store, error) {
 // acquireFileLock creates and acquires an exclusive non-blocking advisory lock
 // on a lock file inside the jobs directory. The returned file handle must be
 // kept open for the lifetime of the lock; closing it releases the lock.
+//
+// IMPORTANT: This uses POSIX flock(2), which is advisory and Linux-specific.
+// It protects against concurrent processes on the same host but does NOT
+// protect against concurrent access over network filesystems (NFS, EFS,
+// CIFS). The data directory MUST reside on local or block-level storage
+// with single-writer access (e.g., Kubernetes ReadWriteOnce PV).
 func acquireFileLock(dataDir string) (*os.File, error) {
 	lockPath := filepath.Join(dataDir, jobsDirectory, lockFileName)
 
