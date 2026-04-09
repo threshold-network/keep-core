@@ -230,6 +230,68 @@ func (s *Service) loadPollJob(route TemplateID, input SignerPollInput) (*Job, er
 	return job, nil
 }
 
+// createOrDedup creates a new job under the service mutex, or returns the
+// existing job result if the route request is already known. Returns
+// (job, nil, nil) for a new job, or (nil, result, nil) for a dedup hit.
+func (s *Service) createOrDedup(
+	route TemplateID,
+	input SignerSubmitInput,
+	normalizedRequest RouteSubmitRequest,
+	requestDigest string,
+) (*Job, *StepResult, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	if existing, ok, err := s.store.GetByRouteRequest(route, input.RouteRequestID); err != nil {
+		return nil, nil, err
+	} else if ok {
+		if existing.RequestDigest != requestDigest {
+			return nil, nil, &inputError{
+				"routeRequestId already exists with a different request payload",
+			}
+		}
+		result := mapJobResult(existing)
+		return nil, &result, nil
+	}
+
+	requestIDPrefix := ""
+	switch route {
+	case TemplateQcV1:
+		requestIDPrefix = "kcs_qc"
+	case TemplateSelfV1:
+		requestIDPrefix = "kcs_self"
+	default:
+		return nil, nil, fmt.Errorf("unsupported route: %s", route)
+	}
+
+	requestID, err := newRequestID(requestIDPrefix)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	now := s.now()
+
+	job := &Job{
+		RequestID:       requestID,
+		RouteRequestID:  input.RouteRequestID,
+		Route:           route,
+		IdempotencyKey:  input.Request.IdempotencyKey,
+		FacadeRequestID: input.Request.FacadeRequestID,
+		RequestDigest:   requestDigest,
+		State:           JobStateSubmitted,
+		Detail:          "accepted for covenant signing",
+		CreatedAt:       now.Format(time.RFC3339Nano),
+		UpdatedAt:       now.Format(time.RFC3339Nano),
+		Request:         normalizedRequest,
+	}
+
+	if err := s.store.Put(job); err != nil {
+		return nil, nil, err
+	}
+
+	return job, nil, nil
+}
+
 func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubmitInput) (StepResult, error) {
 	submitValidationOptions := validationOptions{
 		migrationPlanQuoteTrustRoots:      s.migrationPlanQuoteTrustRoots,
@@ -261,59 +323,13 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 		return StepResult{}, err
 	}
 
-	s.mutex.Lock()
-	if existing, ok, err := s.store.GetByRouteRequest(route, input.RouteRequestID); err != nil {
-		s.mutex.Unlock()
-		return StepResult{}, err
-	} else if ok {
-		if existing.RequestDigest != requestDigest {
-			s.mutex.Unlock()
-			return StepResult{}, &inputError{
-				"routeRequestId already exists with a different request payload",
-			}
-		}
-		s.mutex.Unlock()
-		return mapJobResult(existing), nil
-	}
-
-	requestIDPrefix := ""
-	switch route {
-	case TemplateQcV1:
-		requestIDPrefix = "kcs_qc"
-	case TemplateSelfV1:
-		requestIDPrefix = "kcs_self"
-	default:
-		s.mutex.Unlock()
-		return StepResult{}, fmt.Errorf("unsupported route: %s", route)
-	}
-
-	requestID, err := newRequestID(requestIDPrefix)
+	job, existingResult, err := s.createOrDedup(route, input, normalizedRequest, requestDigest)
 	if err != nil {
-		s.mutex.Unlock()
 		return StepResult{}, err
 	}
-
-	now := s.now()
-
-	job := &Job{
-		RequestID:       requestID,
-		RouteRequestID:  input.RouteRequestID,
-		Route:           route,
-		IdempotencyKey:  input.Request.IdempotencyKey,
-		FacadeRequestID: input.Request.FacadeRequestID,
-		RequestDigest:   requestDigest,
-		State:           JobStateSubmitted,
-		Detail:          "accepted for covenant signing",
-		CreatedAt:       now.Format(time.RFC3339Nano),
-		UpdatedAt:       now.Format(time.RFC3339Nano),
-		Request:         normalizedRequest,
+	if existingResult != nil {
+		return *existingResult, nil
 	}
-
-	if err := s.store.Put(job); err != nil {
-		s.mutex.Unlock()
-		return StepResult{}, err
-	}
-	s.mutex.Unlock()
 
 	transition, err := s.engine.OnSubmit(ctx, job)
 	if err != nil {
@@ -330,7 +346,7 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	currentJob, ok, err := s.store.GetByRequestID(requestID)
+	currentJob, ok, err := s.store.GetByRequestID(job.RequestID)
 	if err != nil {
 		return StepResult{}, err
 	}
