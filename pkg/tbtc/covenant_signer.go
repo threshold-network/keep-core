@@ -139,6 +139,12 @@ func (cse *covenantSignerEngine) VerifySignerApproval(
 		cse.node.groupParameters,
 	)
 	if err != nil {
+		if errors.Is(err, ErrMissingWalletID) || errors.Is(err, ErrMissingMembersIDsHash) {
+			return fmt.Errorf(
+				"wallet registry unavailable; signer approval verification requires registry data: %w",
+				err,
+			)
+		}
 		return fmt.Errorf(
 			"cannot compute signer approval signer set hash: %w",
 			err,
