@@ -203,6 +203,12 @@ func TestStoreLoadSelectsNewestJobForDuplicateRouteKeys(t *testing.T) {
 	if loaded.RequestID != newJob.RequestID {
 		t.Fatalf("expected newest request ID %s, got %s", newJob.RequestID, loaded.RequestID)
 	}
+
+	if _, ok, err := store.GetByRequestID(oldJob.RequestID); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatalf("expected superseded request ID %s to be removed", oldJob.RequestID)
+	}
 }
 
 func TestStoreLoadResolvesInvalidUpdatedAtForDuplicateRouteKeys(t *testing.T) {
@@ -269,9 +275,15 @@ func TestStoreLoadResolvesInvalidUpdatedAtForDuplicateRouteKeys(t *testing.T) {
 	if loaded.RequestID != first.RequestID {
 		t.Fatalf("expected request ID %s, got %s", first.RequestID, loaded.RequestID)
 	}
+
+	if _, ok, err := store.GetByRequestID(second.RequestID); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatalf("expected invalid duplicate request ID %s to be removed", second.RequestID)
+	}
 }
 
-func TestStoreLoadSkipsUnreadableFile(t *testing.T) {
+func TestStoreLoadRejectsUnreadablePersistedJobFile(t *testing.T) {
 	handle := newContentFaultingHandle()
 
 	validJob := &Job{
@@ -302,24 +314,16 @@ func TestStoreLoadSkipsUnreadableFile(t *testing.T) {
 		errors.New("simulated disk read error"),
 	)
 
-	store, err := NewStore(handle, "")
-	if err != nil {
-		t.Fatalf("expected store to load despite unreadable file, got error: %v", err)
+	_, err = NewStore(handle, "")
+	if err == nil {
+		t.Fatal("expected unreadable persisted job file to fail store load")
 	}
-
-	loaded, ok, err := store.GetByRouteRequest(TemplateSelfV1, "ors_readable")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok {
-		t.Fatal("expected valid job to be loaded despite corrupted sibling")
-	}
-	if loaded.RequestID != validJob.RequestID {
-		t.Fatalf("expected request ID %s, got %s", validJob.RequestID, loaded.RequestID)
+	if !strings.Contains(err.Error(), "cannot read persisted covenant signer job file [corrupted_file.json]") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestStoreLoadSkipsMalformedJSON(t *testing.T) {
+func TestStoreLoadRejectsMalformedPersistedJobFile(t *testing.T) {
 	handle := newMemoryHandle()
 
 	validJob := &Job{
@@ -348,20 +352,12 @@ func TestStoreLoadSkipsMalformedJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err := NewStore(handle, "")
-	if err != nil {
-		t.Fatalf("expected store to load despite malformed JSON file, got error: %v", err)
+	_, err = NewStore(handle, "")
+	if err == nil {
+		t.Fatal("expected malformed persisted job file to fail store load")
 	}
-
-	loaded, ok, err := store.GetByRouteRequest(TemplateSelfV1, "ors_valid_json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok {
-		t.Fatal("expected valid job to be loaded despite malformed sibling")
-	}
-	if loaded.RequestID != validJob.RequestID {
-		t.Fatalf("expected request ID %s, got %s", validJob.RequestID, loaded.RequestID)
+	if !strings.Contains(err.Error(), "cannot parse persisted covenant signer job file [malformed.json]") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -426,5 +422,11 @@ func TestStoreLoadSkipsInvalidTimestampOnDuplicateRouteKey(t *testing.T) {
 	}
 	if loaded.RequestID != validJob.RequestID {
 		t.Fatalf("expected request ID %s, got %s", validJob.RequestID, loaded.RequestID)
+	}
+
+	if _, ok, err := store.GetByRequestID(badTimestampJob.RequestID); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatalf("expected invalid duplicate request ID %s to be removed", badTimestampJob.RequestID)
 	}
 }
