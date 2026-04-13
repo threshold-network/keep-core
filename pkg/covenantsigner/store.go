@@ -45,7 +45,7 @@ func NewStore(handle persistence.BasicHandle, dataDir string) (*Store, error) {
 
 	if err := store.load(); err != nil {
 		// Release the lock if loading fails after successful acquisition.
-		store.Close()
+		store.Close() // #nosec G104 -- best-effort cleanup; original err is returned
 		return nil, err
 	}
 
@@ -72,7 +72,7 @@ func acquireFileLock(dataDir string) (*os.File, error) {
 		)
 	}
 
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600) // #nosec G304 -- lockPath is built from operator config + constants
 	if err != nil {
 		return nil, fmt.Errorf(
 			"cannot open lock file [%s]: %w",
@@ -85,7 +85,7 @@ func acquireFileLock(dataDir string) (*os.File, error) {
 		int(lockFile.Fd()),
 		syscall.LOCK_EX|syscall.LOCK_NB,
 	); err != nil {
-		lockFile.Close()
+		lockFile.Close() // #nosec G104 -- best-effort cleanup; lock err is returned
 		return nil, fmt.Errorf(
 			"cannot acquire exclusive lock on [%s]: "+
 				"another process may already own the store: %w",

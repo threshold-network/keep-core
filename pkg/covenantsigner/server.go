@@ -136,7 +136,7 @@ func Initialize(
 		cancelService()
 
 		shutdownCtx, cancelShutdown := context.WithTimeout(
-			context.Background(),
+			context.Background(), // #nosec G118 -- parent ctx is already cancelled; shutdown needs a fresh deadline
 			5*time.Second,
 		)
 		defer cancelShutdown()
