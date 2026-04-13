@@ -2,7 +2,6 @@ package covenantsigner
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -46,9 +45,7 @@ func NewStore(handle persistence.BasicHandle, dataDir string) (*Store, error) {
 
 	if err := store.load(); err != nil {
 		// Release the lock if loading fails after successful acquisition.
-		if closeErr := store.Close(); closeErr != nil {
-			return nil, errors.Join(err, fmt.Errorf("failed to release store lock: %w", closeErr))
-		}
+		store.Close()
 		return nil, err
 	}
 
@@ -60,17 +57,8 @@ func NewStore(handle persistence.BasicHandle, dataDir string) (*Store, error) {
 // kept open for the lifetime of the lock; closing it releases the lock.
 func acquireFileLock(dataDir string) (*os.File, error) {
 	lockPath := filepath.Join(dataDir, jobsDirectory, lockFileName)
-	root, err := os.OpenRoot(dataDir)
-	if err != nil {
-		return nil, fmt.Errorf("cannot open data directory root [%s]: %w", dataDir, err)
-	}
-	defer func() {
-		if closeErr := root.Close(); closeErr != nil {
-			logger.Warnf("failed to close store root [%s]: [%v]", dataDir, closeErr)
-		}
-	}()
 
-	if err := root.MkdirAll(jobsDirectory, 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0700); err != nil {
 		return nil, fmt.Errorf(
 			"cannot create lock directory [%s]: %w",
 			filepath.Dir(lockPath),
@@ -78,7 +66,7 @@ func acquireFileLock(dataDir string) (*os.File, error) {
 		)
 	}
 
-	lockFile, err := root.OpenFile(filepath.Join(jobsDirectory, lockFileName), os.O_CREATE|os.O_RDWR, 0600)
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"cannot open lock file [%s]: %w",
@@ -91,9 +79,7 @@ func acquireFileLock(dataDir string) (*os.File, error) {
 		int(lockFile.Fd()),
 		syscall.LOCK_EX|syscall.LOCK_NB,
 	); err != nil {
-		if closeErr := lockFile.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("failed to close lock file [%s]: %w", lockPath, closeErr))
-		}
+		lockFile.Close()
 		return nil, fmt.Errorf(
 			"cannot acquire exclusive lock on [%s]: "+
 				"another process may already own the store: %w",
