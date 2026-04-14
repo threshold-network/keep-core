@@ -128,7 +128,7 @@ func Initialize(
 		return nil, false, fmt.Errorf("failed to bind covenant signer port [%d]: %w", config.Port, err)
 	}
 
-	go func() {
+	go func() { // #nosec G118 -- parent ctx is already cancelled; shutdown needs a fresh deadline
 		<-ctx.Done()
 
 		// Cancel the service context so in-flight threshold signing
@@ -136,7 +136,7 @@ func Initialize(
 		cancelService()
 
 		shutdownCtx, cancelShutdown := context.WithTimeout(
-			context.Background(), // #nosec G118 -- parent ctx is already cancelled; shutdown needs a fresh deadline
+			context.Background(),
 			5*time.Second,
 		)
 		defer cancelShutdown()
