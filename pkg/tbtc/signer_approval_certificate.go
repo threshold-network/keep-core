@@ -22,12 +22,18 @@ var (
 	// ErrMissingWalletID is returned when wallet chain data does not
 	// include a wallet ID, typically because the wallet registry was
 	// unavailable during a fault-isolated GetWallet call.
-	ErrMissingWalletID = fmt.Errorf("wallet chain data must include wallet ID")
+	ErrMissingWalletID = fmt.Errorf(
+		"wallet chain data must include wallet ID; " +
+			"the wallet registry may be unavailable",
+	)
 
 	// ErrMissingMembersIDsHash is returned when wallet chain data does
 	// not include a members IDs hash, typically because the wallet
 	// registry was unavailable during a fault-isolated GetWallet call.
-	ErrMissingMembersIDsHash = fmt.Errorf("wallet chain data must include members IDs hash")
+	ErrMissingMembersIDsHash = fmt.Errorf(
+		"wallet chain data must include members IDs hash; " +
+			"the wallet registry may be unavailable",
+	)
 )
 
 const (

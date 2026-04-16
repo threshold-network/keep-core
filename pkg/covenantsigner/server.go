@@ -124,10 +124,11 @@ func Initialize(
 
 	listener, err := net.Listen("tcp", server.httpServer.Addr)
 	if err != nil {
+		cancelService()
 		return nil, false, fmt.Errorf("failed to bind covenant signer port [%d]: %w", config.Port, err)
 	}
 
-	go func() {
+	go func() { // #nosec G118 -- parent ctx is already cancelled; shutdown needs a fresh deadline
 		<-ctx.Done()
 
 		// Cancel the service context so in-flight threshold signing
@@ -251,7 +252,7 @@ func newHandler(service *Service, serviceCtx context.Context, authToken string, 
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" {
+		if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
 			mux.ServeHTTP(w, r)
 			return
 		}
