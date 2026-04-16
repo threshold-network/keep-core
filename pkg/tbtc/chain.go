@@ -415,6 +415,12 @@ type DepositChainRequest struct {
 }
 
 // WalletChainData represents wallet data stored on-chain.
+//
+// EcdsaWalletID and MembersIDsHash are sourced from the wallet registry.
+// When the registry is unavailable during a fault-isolated GetWallet call,
+// these fields contain their zero values. Consumers that require registry
+// data (e.g. signer approval certificate computation) must guard against
+// zero values via ensureWalletRegistryDataAvailable.
 type WalletChainData struct {
 	EcdsaWalletID [32]byte
 	// MembersIDsHash is populated from the wallet registry rather than the

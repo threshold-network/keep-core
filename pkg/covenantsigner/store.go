@@ -55,6 +55,12 @@ func NewStore(handle persistence.BasicHandle, dataDir string) (*Store, error) {
 // acquireFileLock creates and acquires an exclusive non-blocking advisory lock
 // on a lock file inside the jobs directory. The returned file handle must be
 // kept open for the lifetime of the lock; closing it releases the lock.
+//
+// IMPORTANT: This uses POSIX flock(2), which is advisory and Linux-specific.
+// It protects against concurrent processes on the same host but does NOT
+// protect against concurrent access over network filesystems (NFS, EFS,
+// CIFS). The data directory MUST reside on local or block-level storage
+// with single-writer access (e.g., Kubernetes ReadWriteOnce PV).
 func acquireFileLock(dataDir string) (*os.File, error) {
 	lockPath := filepath.Join(dataDir, jobsDirectory, lockFileName)
 
@@ -155,6 +161,8 @@ func (s *Store) load() error {
 
 	dataChan, errorChan := s.handle.ReadAll()
 
+	var loaded int
+
 	for dataChan != nil || errorChan != nil {
 		select {
 		case descriptor, ok := <-dataChan:
@@ -196,28 +204,61 @@ func (s *Store) load() error {
 						// candidate's timestamp is valid, the failure is on
 						// the existing job -- replace it. Otherwise skip the
 						// candidate.
-						if _, parseErr := time.Parse(time.RFC3339Nano, job.UpdatedAt); parseErr != nil {
+						_, existingParseErr := time.Parse(time.RFC3339Nano, existing.UpdatedAt)
+						_, candidateParseErr := time.Parse(time.RFC3339Nano, job.UpdatedAt)
+
+						switch {
+						case candidateParseErr != nil && existingParseErr == nil:
+							// Only the candidate is unparseable; keep existing.
 							logger.Warnf(
-								"skipping job [%s] with invalid timestamp on duplicate route key [%s/%s]: [%v]",
+								"skipping job [%s] with invalid timestamp on duplicate route key [%s/%s] (keeping [%s]): [%v]",
 								job.RequestID,
+								job.Route,
+								job.RouteRequestID,
+								existing.RequestID,
+								err,
+							)
+							continue
+						case candidateParseErr == nil && existingParseErr != nil:
+							// Only the existing is unparseable; replace with candidate.
+							logger.Warnf(
+								"replacing job [%s] with invalid timestamp on duplicate route key [%s/%s]: [%v]",
+								existing.RequestID,
 								job.Route,
 								job.RouteRequestID,
 								err,
 							)
-							continue
+						default:
+							// Both timestamps are unparseable. Use
+							// lexicographic RequestID as a deterministic
+							// tiebreaker so the outcome does not depend
+							// on file iteration order.
+							if existing.RequestID <= job.RequestID {
+								logger.Warnf(
+									"skipping job [%s] on duplicate route key [%s/%s] (keeping [%s], lexicographic tiebreak): [%v]",
+									job.RequestID,
+									job.Route,
+									job.RouteRequestID,
+									existing.RequestID,
+									err,
+								)
+								continue
+							}
+							logger.Warnf(
+								"replacing job [%s] on duplicate route key [%s/%s] (lexicographic tiebreak): [%v]",
+								existing.RequestID,
+								job.Route,
+								job.RouteRequestID,
+								err,
+							)
 						}
-						logger.Warnf(
-							"replacing job [%s] with invalid timestamp on duplicate route key [%s/%s]: [%v]",
-							existing.RequestID,
-							job.Route,
-							job.RouteRequestID,
-							err,
-						)
 					} else if existingIsNewerOrSame {
 						continue
 					}
 				}
 
+				// Remove the superseded job from the primary index so stale
+				// entries do not leak in byRequestID.
 				if existingID != job.RequestID {
 					delete(s.byRequestID, existingID)
 				}
@@ -225,6 +266,7 @@ func (s *Store) load() error {
 
 			s.byRequestID[job.RequestID] = job
 			s.byRouteKey[key] = job.RequestID
+			loaded++
 		case err, ok := <-errorChan:
 			if !ok {
 				errorChan = nil
@@ -234,6 +276,10 @@ func (s *Store) load() error {
 				return err
 			}
 		}
+	}
+
+	if loaded > 0 {
+		logger.Infof("store load complete: loaded [%d] jobs", loaded)
 	}
 
 	return nil
@@ -260,7 +306,9 @@ func (s *Store) GetByRouteRequest(route TemplateID, routeRequestID string) (*Job
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	requestID, ok := s.byRouteKey[routeKey(route, routeRequestID)]
+	key := routeKey(route, routeRequestID)
+
+	requestID, ok := s.byRouteKey[key]
 	if !ok {
 		return nil, false, nil
 	}

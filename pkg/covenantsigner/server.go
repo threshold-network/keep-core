@@ -120,7 +120,7 @@ func Initialize(
 		return nil, false, fmt.Errorf("failed to bind covenant signer port [%d]: %w", config.Port, err)
 	}
 
-	go func() {
+	go func() { // #nosec G118 -- parent ctx is already cancelled; shutdown needs a fresh deadline
 		<-ctx.Done()
 		shutdownCtx, cancelShutdown := context.WithTimeout(
 			context.WithoutCancel(ctx),
@@ -239,7 +239,7 @@ func newHandler(service *Service, authToken string, enableSelfV1 bool) http.Hand
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" {
+		if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
 			mux.ServeHTTP(w, r)
 			return
 		}

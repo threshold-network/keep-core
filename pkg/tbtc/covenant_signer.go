@@ -16,6 +16,7 @@ import (
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/covenantsigner"
+	"github.com/keep-network/keep-core/pkg/internal/canonicaljson"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
 
@@ -870,10 +871,14 @@ func buildWitnessSignatureBytes(signature *tecdsa.Signature) ([]byte, error) {
 }
 
 func computeQcV1SignerHandoffPayloadHash(payload map[string]any) (string, error) {
-	// The handoff bundle ID is content-addressed using Go's stable JSON map-key
-	// ordering. Future non-Go custodian consumers that want to recompute this
-	// hash must preserve the same canonical field set and serialization rules.
-	rawPayload, err := json.Marshal(payload)
+	// The handoff bundle ID is content-addressed using canonical JSON
+	// (alphabetical key ordering, no HTML escaping, no trailing newline).
+	// Go's encoding/json.Marshal already sorts map keys alphabetically
+	// (since Go 1.12), so using canonicaljson.Marshal produces identical
+	// output for non-HTML content while also disabling HTML escaping for
+	// safety. Non-Go custodian consumers that recompute this hash must
+	// use the same canonical serialization rules.
+	rawPayload, err := canonicaljson.Marshal(payload)
 	if err != nil {
 		return "", err
 	}

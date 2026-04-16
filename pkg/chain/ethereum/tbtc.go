@@ -1478,8 +1478,10 @@ func (tc *TbtcChain) GetWallet(
 
 	walletRegistryWallet, err := tc.walletRegistry.GetWallet(wallet.EcdsaWalletID)
 	if err != nil {
-		logger.Warnf(
-			"cannot get wallet registry data for wallet [0x%x]: [%v]",
+		logger.Errorf(
+			"wallet registry unavailable for wallet [0x%x]; "+
+				"MembersIDsHash will be zero -- signer approval "+
+				"operations will fail until the registry recovers: [%v]",
 			wallet.EcdsaWalletID,
 			err,
 		)
