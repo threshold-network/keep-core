@@ -132,6 +132,12 @@ func (cse *covenantSignerEngine) VerifySignerApproval(
 			err,
 		)
 	}
+	if err := ensureWalletRegistryDataAvailable(
+		walletChainData,
+		"verify signer approval",
+	); err != nil {
+		return err
+	}
 
 	expectedSignerSetHash, err := computeSignerApprovalCertificateSignerSetHash(
 		signerPublicKey,

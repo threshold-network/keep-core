@@ -1469,13 +1469,22 @@ func (tc *TbtcChain) GetWallet(
 		)
 	}
 
+	// Fetch wallet registry data on a best-effort basis. Legacy callers
+	// only use Bridge-sourced fields and never access MembersIDsHash, so a
+	// registry outage must not block them. The zero value signals that
+	// registry data is unavailable; downstream consumers that need it
+	// (e.g. signer_approval_certificate) already guard against this.
+	var membersIDsHash [32]byte
+
 	walletRegistryWallet, err := tc.walletRegistry.GetWallet(wallet.EcdsaWalletID)
 	if err != nil {
-		return nil, fmt.Errorf(
+		logger.Warnf(
 			"cannot get wallet registry data for wallet [0x%x]: [%v]",
 			wallet.EcdsaWalletID,
 			err,
 		)
+	} else {
+		membersIDsHash = walletRegistryWallet.MembersIdsHash
 	}
 
 	walletState, err := parseWalletState(wallet.State)
@@ -1483,9 +1492,17 @@ func (tc *TbtcChain) GetWallet(
 		return nil, fmt.Errorf("cannot parse wallet state: [%v]", err)
 	}
 
+	return makeWalletChainData(wallet, membersIDsHash, walletState), nil
+}
+
+func makeWalletChainData(
+	wallet tbtcabi.WalletsWallet,
+	membersIDsHash [32]byte,
+	walletState tbtc.WalletState,
+) *tbtc.WalletChainData {
 	return &tbtc.WalletChainData{
 		EcdsaWalletID:                          wallet.EcdsaWalletID,
-		MembersIDsHash:                         walletRegistryWallet.MembersIdsHash,
+		MembersIDsHash:                         membersIDsHash,
 		MainUtxoHash:                           wallet.MainUtxoHash,
 		PendingRedemptionsValue:                wallet.PendingRedemptionsValue,
 		CreatedAt:                              time.Unix(int64(wallet.CreatedAt), 0),
@@ -1494,7 +1511,7 @@ func (tc *TbtcChain) GetWallet(
 		PendingMovedFundsSweepRequestsCount:    wallet.PendingMovedFundsSweepRequestsCount,
 		State:                                  walletState,
 		MovingFundsTargetWalletsCommitmentHash: wallet.MovingFundsTargetWalletsCommitmentHash,
-	}, nil
+	}
 }
 
 func (tc *TbtcChain) OnWalletClosed(

@@ -5,9 +5,9 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
@@ -102,6 +102,54 @@ func (fmh *faultingMemoryHandle) Delete(directory string, name string) error {
 	}
 
 	return fmh.memoryHandle.Delete(directory, name)
+}
+
+// faultingDescriptor wraps a memoryDescriptor and returns an injected error
+// from Content(), allowing tests to simulate unreadable job files.
+type faultingDescriptor struct {
+	name      string
+	directory string
+	err       error
+}
+
+func (fd *faultingDescriptor) Name() string             { return fd.name }
+func (fd *faultingDescriptor) Directory() string        { return fd.directory }
+func (fd *faultingDescriptor) Content() ([]byte, error) { return nil, fd.err }
+
+// contentFaultingHandle extends memoryHandle by injecting faulting descriptors
+// into the ReadAll channel alongside normal descriptors. This enables testing
+// of load() behavior when individual file reads fail.
+type contentFaultingHandle struct {
+	*memoryHandle
+	faultingDescriptors []*faultingDescriptor
+}
+
+func newContentFaultingHandle() *contentFaultingHandle {
+	return &contentFaultingHandle{
+		memoryHandle: newMemoryHandle(),
+	}
+}
+
+func (cfh *contentFaultingHandle) AddFaultingDescriptor(name, directory string, err error) {
+	cfh.faultingDescriptors = append(cfh.faultingDescriptors, &faultingDescriptor{
+		name:      name,
+		directory: directory,
+		err:       err,
+	})
+}
+
+func (cfh *contentFaultingHandle) ReadAll() (<-chan persistence.DataDescriptor, <-chan error) {
+	dataChan := make(chan persistence.DataDescriptor, len(cfh.items)+len(cfh.faultingDescriptors))
+	errorChan := make(chan error)
+	for _, item := range cfh.items {
+		dataChan <- item
+	}
+	for _, fd := range cfh.faultingDescriptors {
+		dataChan <- fd
+	}
+	close(dataChan)
+	close(errorChan)
+	return dataChan, errorChan
 }
 
 type scriptedEngine struct {

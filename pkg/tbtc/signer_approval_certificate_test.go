@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -204,6 +205,45 @@ func TestSigningExecutorCanIssueSignerApprovalCertificateForArbitraryDigest(t *t
 			certificate.EndBlock,
 			startBlock,
 		)
+	}
+}
+
+func TestSigningExecutorIssueSignerApprovalCertificateFailsWhenWalletRegistryUnavailable(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+
+	executor, ok, err := node.getSigningExecutor(walletPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("node is supposed to control wallet signers")
+	}
+
+	startBlock, err := executor.getCurrentBlockFn()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	localChain, ok := executor.chain.(*localChain)
+	if !ok {
+		t.Fatal("expected local chain implementation")
+	}
+	localChain.setWalletRegistryErr(
+		bitcoin.PublicKeyHash(executor.wallet().publicKey),
+		errors.New("wallet registry unavailable"),
+	)
+
+	approvalDigest := sha256.Sum256([]byte("registry-unavailable"))
+	_, err = executor.issueSignerApprovalCertificate(
+		context.Background(),
+		approvalDigest[:],
+		startBlock,
+	)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"cannot issue signer approval certificate while wallet registry data is unavailable",
+	) {
+		t.Fatalf("expected wallet registry unavailable error, got %v", err)
 	}
 }
 
@@ -421,6 +461,33 @@ func TestCovenantSignerEngineVerifySignerApprovalRejectsMissingOnChainWallet(t *
 		"request.signerApproval.walletPublicKey must resolve to a registered on-chain wallet",
 	) {
 		t.Fatalf("expected missing wallet input error, got %v", err)
+	}
+}
+
+func TestCovenantSignerEngineVerifySignerApprovalFailsWhenWalletRegistryUnavailable(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+
+	localChain, ok := node.chain.(*localChain)
+	if !ok {
+		t.Fatal("expected local chain implementation")
+	}
+	localChain.setWalletRegistryErr(
+		bitcoin.PublicKeyHash(walletPublicKey),
+		errors.New("wallet registry unavailable"),
+	)
+
+	err := (&covenantSignerEngine{node: node}).VerifySignerApproval(request)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"cannot verify signer approval while wallet registry data is unavailable",
+	) {
+		t.Fatalf("expected wallet registry unavailable error, got %v", err)
 	}
 }
 

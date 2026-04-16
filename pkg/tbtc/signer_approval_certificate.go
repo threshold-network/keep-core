@@ -31,6 +31,25 @@ type signerApprovalCertificateSignerSetPayload struct {
 	HonestThreshold int    `json:"honestThreshold"`
 }
 
+func ensureWalletRegistryDataAvailable(
+	walletChainData *WalletChainData,
+	action string,
+) error {
+	if walletChainData == nil {
+		return fmt.Errorf("cannot %s: wallet chain data is required", action)
+	}
+
+	if walletChainData.MembersIDsHash == ([32]byte{}) {
+		return fmt.Errorf(
+			"cannot %s while wallet registry data is unavailable for wallet [0x%x]",
+			action,
+			walletChainData.EcdsaWalletID,
+		)
+	}
+
+	return nil
+}
+
 func (se *signingExecutor) issueSignerApprovalCertificate(
 	ctx context.Context,
 	approvalDigest []byte,
@@ -50,6 +69,12 @@ func (se *signingExecutor) issueSignerApprovalCertificate(
 			"cannot get on-chain wallet data for signer approval certificate: %w",
 			err,
 		)
+	}
+	if err := ensureWalletRegistryDataAvailable(
+		walletChainData,
+		"issue signer approval certificate",
+	); err != nil {
+		return nil, err
 	}
 
 	signature, activityReport, endBlock, err := se.sign(

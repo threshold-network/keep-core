@@ -45,7 +45,7 @@ func NewStore(handle persistence.BasicHandle, dataDir string) (*Store, error) {
 
 	if err := store.load(); err != nil {
 		// Release the lock if loading fails after successful acquisition.
-		store.Close()
+		store.Close() // #nosec G104 -- best-effort cleanup; original err is returned
 		return nil, err
 	}
 
@@ -66,7 +66,7 @@ func acquireFileLock(dataDir string) (*os.File, error) {
 		)
 	}
 
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600) // #nosec G304 -- lockPath is built from operator config + constants
 	if err != nil {
 		return nil, fmt.Errorf(
 			"cannot open lock file [%s]: %w",
@@ -79,7 +79,7 @@ func acquireFileLock(dataDir string) (*os.File, error) {
 		int(lockFile.Fd()),
 		syscall.LOCK_EX|syscall.LOCK_NB,
 	); err != nil {
-		lockFile.Close()
+		lockFile.Close() // #nosec G104 -- best-effort cleanup; lock err is returned
 		return nil, fmt.Errorf(
 			"cannot acquire exclusive lock on [%s]: "+
 				"another process may already own the store: %w",
@@ -169,30 +169,62 @@ func (s *Store) load() error {
 
 			content, err := descriptor.Content()
 			if err != nil {
-				return err
+				return fmt.Errorf(
+					"cannot read persisted covenant signer job file [%s]: %w",
+					descriptor.Name(),
+					err,
+				)
 			}
 
 			job := &Job{}
 			if err := json.Unmarshal(content, job); err != nil {
-				return err
+				return fmt.Errorf(
+					"cannot parse persisted covenant signer job file [%s]: %w",
+					descriptor.Name(),
+					err,
+				)
 			}
 
-			existingID, ok := s.byRouteKey[routeKey(job.Route, job.RouteRequestID)]
-			if ok {
-				existing := s.byRequestID[existingID]
-				if existing != nil {
+			key := routeKey(job.Route, job.RouteRequestID)
+
+			if existingID, ok := s.byRouteKey[key]; ok {
+				if existing := s.byRequestID[existingID]; existing != nil {
 					existingIsNewerOrSame, err := isNewerOrSameJobRevision(existing, job)
 					if err != nil {
-						return err
-					}
-					if existingIsNewerOrSame {
+						// When the timestamp comparison fails, prefer
+						// whichever job has a parseable timestamp. If the
+						// candidate's timestamp is valid, the failure is on
+						// the existing job -- replace it. Otherwise skip the
+						// candidate.
+						if _, parseErr := time.Parse(time.RFC3339Nano, job.UpdatedAt); parseErr != nil {
+							logger.Warnf(
+								"skipping job [%s] with invalid timestamp on duplicate route key [%s/%s]: [%v]",
+								job.RequestID,
+								job.Route,
+								job.RouteRequestID,
+								err,
+							)
+							continue
+						}
+						logger.Warnf(
+							"replacing job [%s] with invalid timestamp on duplicate route key [%s/%s]: [%v]",
+							existing.RequestID,
+							job.Route,
+							job.RouteRequestID,
+							err,
+						)
+					} else if existingIsNewerOrSame {
 						continue
 					}
+				}
+
+				if existingID != job.RequestID {
+					delete(s.byRequestID, existingID)
 				}
 			}
 
 			s.byRequestID[job.RequestID] = job
-			s.byRouteKey[routeKey(job.Route, job.RouteRequestID)] = job.RequestID
+			s.byRouteKey[key] = job.RequestID
 		case err, ok := <-errorChan:
 			if !ok {
 				errorChan = nil
