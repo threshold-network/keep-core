@@ -4,7 +4,7 @@
   "private": true,
   "license": "MIT",
   "dependencies": {
-    "@0x/subproviders": "^6.0.8",
+    "@0x/subproviders": "^8.0.1",
     "@keep-network/coverage-pools": "1.1.0-dev.2",
     "@keep-network/keep-core": ">1.8.0-dev <1.8.0-pre",
     "@keep-network/keep-ecdsa": ">1.9.0-dev <1.9.0-ropsten",
@@ -37,7 +37,7 @@
     "react-scripts": "^3.4.1",
     "react-tooltip": "^4.2.21",
     "react-transition-group": "^4.3.0",
-    "recharts": "^1.8.5",
+    "recharts": "^3.8.1",
     "redux": "^4.0.5",
     "redux-devtools-extension": "^2.13.8",
     "redux-saga": "^1.1.3",
