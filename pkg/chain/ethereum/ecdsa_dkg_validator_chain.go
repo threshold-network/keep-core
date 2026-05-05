@@ -133,6 +133,13 @@ func ecdsaWalletGroupParametersFromValidator(
 			groupSize,
 		)
 	}
+	if groupQuorum < honestThreshold {
+		return nil, fmt.Errorf(
+			"activeThreshold/groupQuorum [%d] is less than groupThreshold/honestThreshold [%d]",
+			groupQuorum,
+			honestThreshold,
+		)
+	}
 
 	return &tbtc.GroupParameters{
 		GroupSize:       groupSize,
