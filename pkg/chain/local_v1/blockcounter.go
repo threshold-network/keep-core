@@ -59,6 +59,13 @@ func (lbc *localBlockCounter) CurrentBlock() (uint64, error) {
 	return lbc.blockHeight, nil
 }
 
+// WatchBlocks returns a channel that receives each new block height. Cleanup of
+// cancelled watchers is lazy: a cancelled watcher is removed and its channel
+// closed on the next call to count(). If no new blocks are produced after
+// cancellation (e.g., test teardown with no ticker ticks), the channel is
+// never explicitly closed and callers blocked on it will not be unblocked.
+// The 16-element buffer makes this acceptable in practice for tests and local
+// coordination flows.
 func (lbc *localBlockCounter) WatchBlocks(ctx context.Context) <-chan uint64 {
 	watcher := &watcher{
 		ctx: ctx,
@@ -86,6 +93,7 @@ func (lbc *localBlockCounter) count(blockTime ...time.Duration) {
 	}
 
 	ticker := time.NewTicker(resolvedBlockTime)
+	defer ticker.Stop()
 
 	for range ticker.C {
 		lbc.structMutex.Lock()
