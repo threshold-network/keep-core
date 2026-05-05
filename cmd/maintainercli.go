@@ -86,7 +86,7 @@ var listDepositsCommand = cobra.Command{
 			)
 		}
 
-		btcChain, err := electrum.Connect(ctx, clientConfig.Bitcoin.Electrum)
+		btcChain, err := electrum.Connect(ctx, clientConfig.Bitcoin.Network, clientConfig.Bitcoin.Electrum)
 		if err != nil {
 			return fmt.Errorf("could not connect to Electrum chain: [%v]", err)
 		}
@@ -179,7 +179,7 @@ var estimateDepositsSweepFeeCommand = cobra.Command{
 			)
 		}
 
-		btcChain, err := electrum.Connect(ctx, clientConfig.Bitcoin.Electrum)
+		btcChain, err := electrum.Connect(ctx, clientConfig.Bitcoin.Network, clientConfig.Bitcoin.Electrum)
 		if err != nil {
 			return fmt.Errorf("could not connect to Electrum chain: [%v]", err)
 		}
@@ -296,7 +296,7 @@ var submitDepositSweepProofCommand = cobra.Command{
 			)
 		}
 
-		btcChain, err := electrum.Connect(ctx, clientConfig.Bitcoin.Electrum)
+		btcChain, err := electrum.Connect(ctx, clientConfig.Bitcoin.Network, clientConfig.Bitcoin.Electrum)
 		if err != nil {
 			return fmt.Errorf("could not connect to Electrum chain: [%v]", err)
 		}
@@ -386,7 +386,7 @@ var submitRedemptionProofCommand = cobra.Command{
 			)
 		}
 
-		btcChain, err := electrum.Connect(ctx, clientConfig.Bitcoin.Electrum)
+		btcChain, err := electrum.Connect(ctx, clientConfig.Bitcoin.Network, clientConfig.Bitcoin.Electrum)
 		if err != nil {
 			return fmt.Errorf("could not connect to Electrum chain: [%v]", err)
 		}

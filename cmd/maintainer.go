@@ -44,7 +44,7 @@ func init() {
 func maintainers(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	btcChain, err := electrum.Connect(ctx, clientConfig.Bitcoin.Electrum)
+	btcChain, err := electrum.Connect(ctx, clientConfig.Bitcoin.Network, clientConfig.Bitcoin.Electrum)
 	if err != nil {
 		return fmt.Errorf("could not connect to Electrum chain: [%v]", err)
 	}

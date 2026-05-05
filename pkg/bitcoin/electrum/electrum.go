@@ -33,10 +33,11 @@ type Connection struct {
 	client      *electrum.Client
 	clientMutex *sync.Mutex
 	config      Config
+	network     bitcoin.Network
 }
 
 // Connect initializes handle with provided Config.
-func Connect(parentCtx context.Context, config Config) (bitcoin.Chain, error) {
+func Connect(parentCtx context.Context, network bitcoin.Network, config Config) (bitcoin.Chain, error) {
 	if config.ConnectTimeout == 0 {
 		config.ConnectTimeout = DefaultConnectTimeout
 	}
@@ -57,6 +58,7 @@ func Connect(parentCtx context.Context, config Config) (bitcoin.Chain, error) {
 		parentCtx:   parentCtx,
 		config:      config,
 		clientMutex: &sync.Mutex{},
+		network:     network,
 	}
 
 	if err := c.electrumConnect(); err != nil {
@@ -1075,6 +1077,14 @@ func (c *Connection) EstimateSatPerVByteFee(blocks uint32) (int64, error) {
 	}
 
 	if sawFeeOracleFailure {
+		if c.network == bitcoin.Mainnet {
+			return 0, fmt.Errorf(
+				"Electrum fee oracle returned no estimate for any target %v "+
+					"(last error: [%v]); refusing static fallback on mainnet",
+				targets,
+				lastErr,
+			)
+		}
 		logger.Warnf(
 			"Electrum returned no fee estimate for any target %v; using "+
 				"fallback [%d] sat/vbyte (last error: [%v])",

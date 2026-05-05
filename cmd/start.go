@@ -110,7 +110,7 @@ func start(cmd *cobra.Command) error {
 	// Skip initialization for bootstrap nodes as they are only used for network
 	// discovery.
 	if !isBootstrap() {
-		btcChain, err := electrum.Connect(ctx, clientConfig.Bitcoin.Electrum)
+		btcChain, err := electrum.Connect(ctx, clientConfig.Bitcoin.Network, clientConfig.Bitcoin.Electrum)
 		if err != nil {
 			return fmt.Errorf("could not connect to Electrum chain: [%v]", err)
 		}

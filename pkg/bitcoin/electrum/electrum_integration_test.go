@@ -147,14 +147,14 @@ func init() {
 
 func TestConnect_Integration(t *testing.T) {
 	runParallel(t, func(t *testing.T, testConfig testConfig) {
-		_, cancelCtx := newTestConnection(t, testConfig.clientConfig)
+		_, cancelCtx := newTestConnection(t, testConfig)
 		defer cancelCtx()
 	})
 }
 
 func TestGetTransaction_Integration(t *testing.T) {
 	runParallel(t, func(t *testing.T, testConfig testConfig) {
-		electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
+		electrum, cancelCtx := newTestConnection(t, testConfig)
 		defer cancelCtx()
 
 		for txName, tx := range testData.Transactions[testConfig.network] {
@@ -180,7 +180,7 @@ func TestGetTransaction_Integration(t *testing.T) {
 
 func TestGetTransaction_Negative_Integration(t *testing.T) {
 	runParallel(t, func(t *testing.T, testConfig testConfig) {
-		electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
+		electrum, cancelCtx := newTestConnection(t, testConfig)
 		defer cancelCtx()
 
 		_, err := electrum.GetTransaction(invalidTxID)
@@ -206,7 +206,7 @@ func TestGetTransaction_Negative_Integration(t *testing.T) {
 
 func TestGetTransactionConfirmations_Integration(t *testing.T) {
 	runParallel(t, func(t *testing.T, testConfig testConfig) {
-		electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
+		electrum, cancelCtx := newTestConnection(t, testConfig)
 		defer cancelCtx()
 
 		for txName, tx := range testData.Transactions[testConfig.network] {
@@ -233,7 +233,7 @@ func TestGetTransactionConfirmations_Integration(t *testing.T) {
 
 func TestGetTransactionConfirmations_Negative_Integration(t *testing.T) {
 	runParallel(t, func(t *testing.T, testConfig testConfig) {
-		electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
+		electrum, cancelCtx := newTestConnection(t, testConfig)
 		defer cancelCtx()
 
 		_, err := electrum.GetTransactionConfirmations(invalidTxID)
@@ -268,7 +268,7 @@ func TestGetTransactionConfirmations_Negative_Integration(t *testing.T) {
 
 // 	for testName, testConfig := range testConfigs {
 // 		t.Run(testName+"_get", func(t *testing.T) {
-// 			electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
+// 			electrum, cancelCtx := newTestConnection(t, testConfig)
 // 			defer cancelCtx()
 
 // 			var wg sync.WaitGroup
@@ -306,7 +306,7 @@ func TestGetLatestBlockHeight_Integration(t *testing.T) {
 
 	for testName, testConfig := range testConfigs {
 		t.Run(testName+"_get", func(t *testing.T) {
-			electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
+			electrum, cancelCtx := newTestConnection(t, testConfig)
 			defer cancelCtx()
 
 			result, err := electrum.GetLatestBlockHeight()
@@ -357,7 +357,7 @@ func TestGetLatestBlockHeight_Integration(t *testing.T) {
 
 func TestGetBlockHeader_Integration(t *testing.T) {
 	runParallel(t, func(t *testing.T, testConfig testConfig) {
-		electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
+		electrum, cancelCtx := newTestConnection(t, testConfig)
 		defer cancelCtx()
 
 		blockData, ok := testData.Blocks[testConfig.network]
@@ -380,7 +380,7 @@ func TestGetBlockHeader_Negative_Integration(t *testing.T) {
 	blockHeight := uint(math.MaxUint32)
 
 	runParallel(t, func(t *testing.T, testConfig testConfig) {
-		electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
+		electrum, cancelCtx := newTestConnection(t, testConfig)
 		defer cancelCtx()
 
 		_, err := electrum.GetBlockHeader(blockHeight)
@@ -396,7 +396,7 @@ func TestGetBlockHeader_Negative_Integration(t *testing.T) {
 
 func TestGetTransactionMerkleProof_Integration(t *testing.T) {
 	runParallel(t, func(t *testing.T, testConfig testConfig) {
-		electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
+		electrum, cancelCtx := newTestConnection(t, testConfig)
 		defer cancelCtx()
 
 		txMerkleProofData, ok := testData.TxMerkleProofs[testConfig.network]
@@ -427,7 +427,7 @@ func TestGetTransactionMerkleProof_Negative_Integration(t *testing.T) {
 	blockHeight := uint(123456)
 
 	runParallel(t, func(t *testing.T, testConfig testConfig) {
-		electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
+		electrum, cancelCtx := newTestConnection(t, testConfig)
 		defer cancelCtx()
 
 		_, err := electrum.GetTransactionMerkleProof(
@@ -446,7 +446,7 @@ func TestGetTransactionMerkleProof_Negative_Integration(t *testing.T) {
 
 func TestGetTransactionsForPublicKeyHash_Integration(t *testing.T) {
 	runParallel(t, func(t *testing.T, testConfig testConfig) {
-		electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
+		electrum, cancelCtx := newTestConnection(t, testConfig)
 		defer cancelCtx()
 
 		txMerkleProofData, ok := testData.TransactionsForPublicKeyHash[testConfig.network]
@@ -475,7 +475,7 @@ func TestGetTransactionsForPublicKeyHash_Integration(t *testing.T) {
 
 func TestGetTxHashesForPublicKeyHash_Integration(t *testing.T) {
 	runParallel(t, func(t *testing.T, testConfig testConfig) {
-		electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
+		electrum, cancelCtx := newTestConnection(t, testConfig)
 		defer cancelCtx()
 
 		data, ok := testData.TransactionsForPublicKeyHash[testConfig.network]
@@ -505,7 +505,7 @@ func TestGetTxHashesForPublicKeyHash_Integration(t *testing.T) {
 
 func TestGetUtxosForPublicKeyHash_Integration(t *testing.T) {
 	runParallel(t, func(t *testing.T, testConfig testConfig) {
-		electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
+		electrum, cancelCtx := newTestConnection(t, testConfig)
 		defer cancelCtx()
 
 		data, ok := testData.TransactionsForPublicKeyHash[testConfig.network]
@@ -549,7 +549,7 @@ func TestGetUtxosForPublicKeyHash_Integration(t *testing.T) {
 
 func TestEstimateSatPerVByteFee_Integration(t *testing.T) {
 	runParallel(t, func(t *testing.T, testConfig testConfig) {
-		electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
+		electrum, cancelCtx := newTestConnection(t, testConfig)
 		defer cancelCtx()
 
 		// A 1-block target often returns no estimate on public testnets; 25 is
@@ -588,7 +588,7 @@ func isFeeEstimateUnavailable(err error) bool {
 
 func TestGetCoinbaseTxHash_Integration(t *testing.T) {
 	runParallel(t, func(t *testing.T, testConfig testConfig) {
-		electrum, cancelCtx := newTestConnection(t, testConfig.clientConfig)
+		electrum, cancelCtx := newTestConnection(t, testConfig)
 		defer cancelCtx()
 
 		blockData, ok := testData.Blocks[testConfig.network]
@@ -628,9 +628,9 @@ func runParallel(t *testing.T, runFunc func(t *testing.T, testConfig testConfig)
 	}
 }
 
-func newTestConnection(t *testing.T, config electrum.Config) (bitcoin.Chain, context.CancelFunc) {
+func newTestConnection(t *testing.T, testConfig testConfig) (bitcoin.Chain, context.CancelFunc) {
 	ctx, cancelCtx := context.WithCancel(context.Background())
-	electrum, err := electrum.Connect(ctx, config)
+	electrum, err := electrum.Connect(ctx, testConfig.network, testConfig.clientConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
