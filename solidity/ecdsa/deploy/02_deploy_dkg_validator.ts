@@ -26,7 +26,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     hre.deployments.log(
       `WARNING: redeploying EcdsaDkgValidator on ${hre.network.name} ` +
         `(previous address ${existingDeployment.address}). ` +
-        `Ensure WalletRegistry is updated to point to the new address.`
+        "Ensure WalletRegistry is updated to point to the new address."
     )
   }
 

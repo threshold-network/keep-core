@@ -10,9 +10,9 @@ import (
 func TestFeeEstimateWithFallbackTargets(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name   string
+		name    string
 		primary uint32
-		want   []uint32
+		want    []uint32
 	}{
 		{
 			name:    "primary 1 tries common confirmation horizons",

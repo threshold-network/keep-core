@@ -263,15 +263,15 @@ func newTbtcChain(
 	}
 
 	return &TbtcChain{
-		baseChain:               baseChain,
-		bridge:                  bridge,
-		maintainerProxy:         maintainerProxy,
-		walletRegistry:          walletRegistry,
-		sortitionPool:           sortitionPool,
-		walletProposalValidator: walletProposalValidator,
-		redemptionWatchtower:    redemptionWatchtower,
+		baseChain:                baseChain,
+		bridge:                   bridge,
+		maintainerProxy:          maintainerProxy,
+		walletRegistry:           walletRegistry,
+		sortitionPool:            sortitionPool,
+		walletProposalValidator:  walletProposalValidator,
+		redemptionWatchtower:     redemptionWatchtower,
 		ecdsaDkgValidatorAddress: ecdsaDkgValidatorAddress,
-		sweptDepositsCache:      cache.NewGenericTimeCache[*tbtc.DepositChainRequest](sweptDepositsCachePeriod),
+		sweptDepositsCache:       cache.NewGenericTimeCache[*tbtc.DepositChainRequest](sweptDepositsCachePeriod),
 	}, nil
 }
 
