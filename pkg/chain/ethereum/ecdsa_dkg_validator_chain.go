@@ -89,6 +89,17 @@ func ecdsaWalletGroupParametersFromValidator(
 	if addr == (common.Address{}) {
 		return nil, fmt.Errorf("EcdsaDkgValidator address is zero")
 	}
+	code, err := client.CodeAt(ctx, addr, nil)
+	if err != nil {
+		return nil, fmt.Errorf("checking code at EcdsaDkgValidator [%s]: %w", addr.Hex(), err)
+	}
+	if len(code) == 0 {
+		return nil, fmt.Errorf(
+			"EcdsaDkgValidator address [%s] has no contract code; "+
+				"verify the address is correct and the contract is deployed",
+			addr.Hex(),
+		)
+	}
 	gsBig, err := readEcdsaDkgValidatorUint256(ctx, client, addr, "groupSize")
 	if err != nil {
 		return nil, err
