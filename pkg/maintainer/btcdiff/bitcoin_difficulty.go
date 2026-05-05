@@ -68,12 +68,18 @@ func Initialize(
 	go bitcoinDifficultyMaintainer.startControlLoop(ctx)
 }
 
+// idleEscalationThreshold is the number of consecutive idle ticks (each
+// lasting IdleBackOffTime, default 60s) after which the maintainer emits an
+// Errorf to indicate the LightRelay may be falling behind.
+const idleEscalationThreshold = 20
+
 // bitcoinDifficultyMaintainer is the part of maintainer responsible for
 // maintaining the state of the Bitcoin difficulty on-chain contract.
 type bitcoinDifficultyMaintainer struct {
-	config   Config
-	btcChain bitcoin.Chain
-	chain    Chain
+	config           Config
+	btcChain         bitcoin.Chain
+	chain            Chain
+	consecutiveIdles int
 }
 
 // startControlLoop starts the loop responsible for controlling the Bitcoin
@@ -125,11 +131,23 @@ func (bdm *bitcoinDifficultyMaintainer) proveEpochs(ctx context.Context) error {
 		// in the new epoch). Do not sleep if a Bitcoin epoch was proven as
 		// there are likely more Bitcoin epochs to prove.
 		if !epochProven {
+			bdm.consecutiveIdles++
+			if bdm.consecutiveIdles >= idleEscalationThreshold {
+				logger.Errorf(
+					"bitcoin difficulty maintainer has been idle for [%d] "+
+						"consecutive ticks (~%s); the LightRelay may be falling "+
+						"behind the Bitcoin chain",
+					bdm.consecutiveIdles,
+					time.Duration(bdm.consecutiveIdles)*bdm.config.IdleBackOffTime,
+				)
+			}
 			select {
 			case <-time.After(bdm.config.IdleBackOffTime):
 			case <-ctx.Done():
 				return ctx.Err()
 			}
+		} else {
+			bdm.consecutiveIdles = 0
 		}
 	}
 }
