@@ -98,6 +98,12 @@ type Config struct {
 	KeyGenerationConcurrency int
 }
 
+// groupParametersProvider is implemented by chain handles that can supply
+// ECDSA wallet group parameters from the on-chain EcdsaDkgValidator contract.
+type groupParametersProvider interface {
+	EcdsaWalletGroupParametersFromChain(context.Context) (*GroupParameters, error)
+}
+
 // Initialize kicks off the TBTC by initializing internal state, ensuring
 // preconditions like staking are met, and then kicking off the internal TBTC
 // implementation. Returns an error if this failed.
@@ -117,9 +123,7 @@ func Initialize(
 ) error {
 	groupParameters := defaultGroupParameters(ethereumNetwork)
 
-	if ethChain, ok := chain.(interface {
-		EcdsaWalletGroupParametersFromChain(context.Context) (*GroupParameters, error)
-	}); ok {
+	if ethChain, ok := chain.(groupParametersProvider); ok {
 		gp, err := ethChain.EcdsaWalletGroupParametersFromChain(ctx)
 		if err != nil {
 			return fmt.Errorf(
