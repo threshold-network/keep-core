@@ -8,8 +8,8 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -30,7 +30,7 @@ func mustParseABI(raw string) abi.ABI {
 
 func readEcdsaDkgValidatorUint256(
 	ctx context.Context,
-	client ethutil.EthereumClient,
+	client bind.ContractCaller,
 	addr common.Address,
 	method string,
 ) (*big.Int, error) {
@@ -83,7 +83,7 @@ func bigIntPositiveIntLimited(name string, v *big.Int, limit int) (int, error) {
 //   - HonestThreshold <- groupThreshold() (threshold signing parameter)
 func ecdsaWalletGroupParametersFromValidator(
 	ctx context.Context,
-	client ethutil.EthereumClient,
+	client bind.ContractCaller,
 	addr common.Address,
 ) (*tbtc.GroupParameters, error) {
 	if addr == (common.Address{}) {

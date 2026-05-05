@@ -980,3 +980,53 @@ func TestProveNextEpoch_PreflightAcceptsMinDifficultyPreRetarget(t *testing.T) {
 		t.Fatalf("unexpected old difficulty bits in event: %#x", retargetEvents[0].oldDifficulty)
 	}
 }
+
+func TestRecordIdleTick_EscalatesAtThreshold(t *testing.T) {
+	bdm := &bitcoinDifficultyMaintainer{}
+
+	for i := 1; i < idleEscalationThreshold; i++ {
+		if bdm.recordIdleTick() {
+			t.Fatalf("expected false before threshold (tick %d)", i)
+		}
+	}
+	if !bdm.recordIdleTick() {
+		t.Fatalf("expected true at threshold tick %d", idleEscalationThreshold)
+	}
+	if bdm.consecutiveIdles != idleEscalationThreshold {
+		t.Fatalf(
+			"unexpected consecutiveIdles: expected %d, got %d",
+			idleEscalationThreshold,
+			bdm.consecutiveIdles,
+		)
+	}
+}
+
+func TestResetIdleTicks_ZerosCounter(t *testing.T) {
+	bdm := &bitcoinDifficultyMaintainer{consecutiveIdles: 15}
+	bdm.resetIdleTicks()
+	if bdm.consecutiveIdles != 0 {
+		t.Fatalf("expected consecutiveIdles=0, got %d", bdm.consecutiveIdles)
+	}
+}
+
+func TestRecordIdleTick_ResetAndReescalates(t *testing.T) {
+	bdm := &bitcoinDifficultyMaintainer{}
+
+	for i := 0; i < idleEscalationThreshold; i++ {
+		bdm.recordIdleTick()
+	}
+	bdm.resetIdleTicks()
+	if bdm.consecutiveIdles != 0 {
+		t.Fatalf("counter should be zero after reset, got %d", bdm.consecutiveIdles)
+	}
+
+	// After reset, next idleEscalationThreshold ticks should escalate again.
+	for i := 1; i < idleEscalationThreshold; i++ {
+		if bdm.recordIdleTick() {
+			t.Fatalf("expected false before threshold after reset (tick %d)", i)
+		}
+	}
+	if !bdm.recordIdleTick() {
+		t.Fatal("expected true at threshold tick after reset")
+	}
+}

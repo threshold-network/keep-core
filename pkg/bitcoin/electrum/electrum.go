@@ -1077,22 +1077,7 @@ func (c *Connection) EstimateSatPerVByteFee(blocks uint32) (int64, error) {
 	}
 
 	if sawFeeOracleFailure {
-		if c.network == bitcoin.Mainnet {
-			return 0, fmt.Errorf(
-				"Electrum fee oracle returned no estimate for any target %v "+
-					"(last error: [%v]); refusing static fallback on mainnet",
-				targets,
-				lastErr,
-			)
-		}
-		logger.Warnf(
-			"Electrum returned no fee estimate for any target %v; using "+
-				"fallback [%d] sat/vbyte (last error: [%v])",
-			targets,
-			defaultFallbackSatPerVByteWhenEstimateFails,
-			lastErr,
-		)
-		return defaultFallbackSatPerVByteWhenEstimateFails, nil
+		return feeOracleFallback(c.network, targets, lastErr)
 	}
 
 	if lastErr != nil {
@@ -1102,6 +1087,32 @@ func (c *Connection) EstimateSatPerVByteFee(blocks uint32) (int64, error) {
 		"failed to get fee from Electrum after trying confirmation targets %v",
 		targets,
 	)
+}
+
+// feeOracleFallback decides what to return when all Electrum fee oracle calls
+// failed. On mainnet it refuses to invent a feerate; on other networks it
+// returns the static fallback so testnet4 deposits can still be swept.
+func feeOracleFallback(
+	network bitcoin.Network,
+	targets []uint32,
+	lastErr error,
+) (int64, error) {
+	if network == bitcoin.Mainnet {
+		return 0, fmt.Errorf(
+			"Electrum fee oracle returned no estimate for any target %v "+
+				"(last error: [%v]); refusing static fallback on mainnet",
+			targets,
+			lastErr,
+		)
+	}
+	logger.Warnf(
+		"Electrum returned no fee estimate for any target %v; using "+
+			"fallback [%d] sat/vbyte (last error: [%v])",
+		targets,
+		defaultFallbackSatPerVByteWhenEstimateFails,
+		lastErr,
+	)
+	return defaultFallbackSatPerVByteWhenEstimateFails, nil
 }
 
 func convertBtcKbToSatVByte(btcPerKbFee float32) int64 {

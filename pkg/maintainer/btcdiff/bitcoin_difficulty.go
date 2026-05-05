@@ -131,8 +131,7 @@ func (bdm *bitcoinDifficultyMaintainer) proveEpochs(ctx context.Context) error {
 		// in the new epoch). Do not sleep if a Bitcoin epoch was proven as
 		// there are likely more Bitcoin epochs to prove.
 		if !epochProven {
-			bdm.consecutiveIdles++
-			if bdm.consecutiveIdles >= idleEscalationThreshold {
+			if bdm.recordIdleTick() {
 				logger.Errorf(
 					"bitcoin difficulty maintainer has been idle for [%d] "+
 						"consecutive ticks (~%s); the LightRelay may be falling "+
@@ -147,9 +146,21 @@ func (bdm *bitcoinDifficultyMaintainer) proveEpochs(ctx context.Context) error {
 				return ctx.Err()
 			}
 		} else {
-			bdm.consecutiveIdles = 0
+			bdm.resetIdleTicks()
 		}
 	}
+}
+
+// recordIdleTick increments the consecutive-idle counter and returns true once
+// the escalation threshold is reached, signaling the caller to emit a warning.
+func (bdm *bitcoinDifficultyMaintainer) recordIdleTick() bool {
+	bdm.consecutiveIdles++
+	return bdm.consecutiveIdles >= idleEscalationThreshold
+}
+
+// resetIdleTicks zeroes the consecutive-idle counter after a successful epoch proof.
+func (bdm *bitcoinDifficultyMaintainer) resetIdleTicks() {
+	bdm.consecutiveIdles = 0
 }
 
 // verifySubmissionEligibility verifies whether a maintainer is eligible to
