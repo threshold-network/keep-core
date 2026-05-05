@@ -21,6 +21,15 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   // still points at the old on-chain validator (THRESHOLD_FORCE_DKG_COMPILE only forces compile).
   const skipIfAlreadyDeployed = hre.network.name === "mainnet"
 
+  const existingDeployment = await deployments.getOrNull("EcdsaDkgValidator")
+  if (existingDeployment && !skipIfAlreadyDeployed) {
+    hre.deployments.log(
+      `WARNING: redeploying EcdsaDkgValidator on ${hre.network.name} ` +
+        `(previous address ${existingDeployment.address}). ` +
+        `Ensure WalletRegistry is updated to point to the new address.`
+    )
+  }
+
   const EcdsaDkgValidator = await deployments.deploy("EcdsaDkgValidator", {
     from: deployer,
     args: [EcdsaSortitionPool.address],
