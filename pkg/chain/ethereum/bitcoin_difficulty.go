@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -138,7 +139,9 @@ func (bdc *BitcoinDifficultyChain) waitDeployBackendTransactionMined(
 	if tx == nil {
 		return fmt.Errorf("nil transaction waiting for [%s]", method)
 	}
-	receipt, err := bind.WaitMined(context.Background(), bdc.client, tx)
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer waitCancel()
+	receipt, err := bind.WaitMined(waitCtx, bdc.client, tx)
 	if err != nil {
 		return fmt.Errorf("waiting for transaction [%s] [%s]: [%w]", method, tx.Hash().Hex(), err)
 	}
