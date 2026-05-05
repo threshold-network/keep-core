@@ -63,6 +63,10 @@ func defaultGroupParameters(n ethereum.Network) *GroupParameters {
 			HonestThreshold: 2,
 		}
 	default:
+		logger.Infof(
+			"TBTC group parameters: mainnet defaults (size=100, quorum=90, honest=51) for %s",
+			n,
+		)
 		return &GroupParameters{
 			GroupSize:       100,
 			GroupQuorum:     90,
