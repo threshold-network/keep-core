@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -988,21 +989,28 @@ func feeEstimateWithFallbackTargets(primary uint32) []uint32 {
 // deposit sweep max-fee checks on the Bridge bound the total fee.
 const defaultFallbackSatPerVByteWhenEstimateFails int64 = 2
 
-// isElectrumFeeOracleFailure reports whether the error is the usual
-// "no fee data" / JSON-RPC -32603 from estimatefee, as opposed to transport
-// or auth failures where we should not invent a feerate.
+// feeOracleFailure wraps errors that indicate the Electrum server could not
+// produce a fee estimate (as opposed to transport or auth failures). Using a
+// typed sentinel allows EstimateSatPerVByteFee to distinguish oracle failures
+// from general connectivity failures without string matching at the call site.
+type feeOracleFailure struct{ cause error }
+
+func (f feeOracleFailure) Error() string { return f.cause.Error() }
+func (f feeOracleFailure) Unwrap() error { return f.cause }
+
+// isElectrumFeeOracleFailure reports whether err originated from the fee
+// estimation oracle (i.e. the server responded but had no fee data), as
+// opposed to a transport or auth failure where inventing a feerate is wrong.
 func isElectrumFeeOracleFailure(err error) bool {
-	if err == nil {
-		return false
-	}
-	s := err.Error()
-	return strings.Contains(s, "cannot estimate fee") ||
-		strings.Contains(s, "-32603")
+	var f feeOracleFailure
+	return errors.As(err, &f)
 }
 
 // getFeeBtcPerKbOnce issues a single blockchain.estimatefee call (no multi-minute
 // retry loop). Persistent RPC errors for one confirmation target should not
 // exhaust RequestRetryTimeout; EstimateSatPerVByteFee tries looser targets next.
+// Errors that indicate the server processed the request but has no fee data are
+// wrapped in feeOracleFailure so callers can distinguish them from transport errors.
 func (c *Connection) getFeeBtcPerKbOnce(blocks uint32) (float32, error) {
 	if err := c.reconnectIfShutdown(); err != nil {
 		return 0, err
@@ -1016,7 +1024,12 @@ func (c *Connection) getFeeBtcPerKbOnce(blocks uint32) (float32, error) {
 	fee, err := c.client.GetFee(requestCtx, blocks)
 	c.clientMutex.Unlock()
 	if err != nil {
-		return 0, fmt.Errorf("request failed: [%w]", err)
+		wrapped := fmt.Errorf("request failed: [%w]", err)
+		s := wrapped.Error()
+		if strings.Contains(s, "cannot estimate fee") || strings.Contains(s, "-32603") {
+			return 0, feeOracleFailure{wrapped}
+		}
+		return 0, wrapped
 	}
 	return fee, nil
 }
@@ -1170,6 +1183,9 @@ func (c *Connection) keepAlive() {
 				)
 			} else {
 				// Adjust ticker starting at the time of the latest successful ping.
+				// Stop the current ticker before replacing it to avoid leaking the
+				// internal goroutine and timer resource.
+				ticker.Stop()
 				ticker = time.NewTicker(c.config.KeepAliveInterval)
 			}
 		case <-c.parentCtx.Done():
