@@ -255,6 +255,58 @@ func TestGenerateSymmetricKeys_InvalidEphemeralPublicKeyMessage(t *testing.T) {
 	}
 }
 
+func TestGenerateSymmetricKeys_CorruptEphemeralPublicKeyBytes(t *testing.T) {
+	members, messages, err := initializeSymmetricKeyGeneratingMembersGroup(
+		dishonestThreshold,
+		groupSize,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Replace member 2's ephemeral public key for member 1 with garbage.
+	// The key is still present so isValidEphemeralPublicKeyMessage passes;
+	// only member 1 encounters the parse error during ECDH.
+	misbehavingMemberID := group.MemberIndex(2)
+	victimMemberID := group.MemberIndex(1)
+	messages[misbehavingMemberID-1].ephemeralPublicKeys[victimMemberID] = []byte{0x00, 0x01, 0x02}
+
+	for _, member := range members {
+		var receivedMessages []*ephemeralPublicKeyMessage
+		for _, message := range messages {
+			if message.senderID != member.id {
+				receivedMessages = append(receivedMessages, message)
+			}
+		}
+
+		err := member.generateSymmetricKeys(receivedMessages)
+
+		if member.id == victimMemberID {
+			expectedErrPrefix := fmt.Sprintf(
+				"could not unmarshal ephemeral public key from member [%v]:",
+				misbehavingMemberID,
+			)
+			if err == nil {
+				t.Errorf(
+					"[member:%v] expected error, got nil",
+					member.id,
+				)
+			} else if !strings.HasPrefix(err.Error(), expectedErrPrefix) {
+				t.Errorf(
+					"[member:%v] unexpected error\nexpected prefix: %v\nactual:          %v",
+					member.id,
+					expectedErrPrefix,
+					err.Error(),
+				)
+			}
+		} else {
+			if err != nil {
+				t.Errorf("[member:%v] unexpected error: %v", member.id, err)
+			}
+		}
+	}
+}
+
 func TestTssRoundOne(t *testing.T) {
 	members, err := initializeTssRoundOneMembersGroup(
 		dishonestThreshold,
