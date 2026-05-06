@@ -2,8 +2,7 @@ package clientinfo
 
 import (
 	"context"
-	"net/http"
-	nhpprof "net/http/pprof"
+	_ "net/http/pprof" // registers /debug/pprof/* on http.DefaultServeMux
 	"time"
 
 	"github.com/ipfs/go-log"
@@ -47,12 +46,7 @@ func Initialize(
 	registry := &Registry{clientinfo.NewRegistry(), ctx}
 
 	if cfg.EnablePprof {
-		http.HandleFunc("/debug/pprof/", nhpprof.Index)
-		http.HandleFunc("/debug/pprof/cmdline", nhpprof.Cmdline)
-		http.HandleFunc("/debug/pprof/profile", nhpprof.Profile)
-		http.HandleFunc("/debug/pprof/symbol", nhpprof.Symbol)
-		http.HandleFunc("/debug/pprof/trace", nhpprof.Trace)
-		logger.Infof("pprof profiling endpoints registered at /debug/pprof/")
+		logger.Infof("pprof profiling endpoints enabled at /debug/pprof/")
 	}
 
 	registry.EnableServer(cfg.Port)
