@@ -2,7 +2,7 @@ package clientinfo
 
 import (
 	"context"
-	_ "net/http/pprof" // registers /debug/pprof/* on http.DefaultServeMux
+	_ "net/http/pprof" // #nosec G108 -- opt-in profiling; registered on DefaultServeMux intentionally
 	"time"
 
 	"github.com/ipfs/go-log"
