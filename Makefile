@@ -146,4 +146,7 @@ cmd-help: build
 	@echo '$$ $(app_name) start --help' > docs/resources/client-start-help
 	./$(app_name) start --help >> docs/resources/client-start-help
 
-.PHONY: all development sepolia download_artifacts generate gen_proto build cmd-help release build_multi
+bench:
+	go test -bench=. -benchmem -count=10 -run='^$$' ./pkg/...
+
+.PHONY: all development sepolia download_artifacts generate gen_proto build cmd-help release build_multi bench

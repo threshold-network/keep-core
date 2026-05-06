@@ -512,3 +512,118 @@ func TestFuzzTssRoundNineMessage_MarshalingRoundtrip(t *testing.T) {
 func TestFuzzTssRoundNineMessage_Unmarshaler(t *testing.T) {
 	pbutils.FuzzUnmarshaler(&tssRoundNineMessage{})
 }
+
+// --- Benchmarks ---
+
+func BenchmarkMarshalEphemeralPublicKeyMessage(b *testing.B) {
+	kp1, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	kp2, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	msg := &ephemeralPublicKeyMessage{
+		senderID: group.MemberIndex(38),
+		ephemeralPublicKeys: map[group.MemberIndex]*ephemeral.PublicKey{
+			group.MemberIndex(211): kp1.PublicKey,
+			group.MemberIndex(19):  kp2.PublicKey,
+		},
+		sessionID: "session-1",
+	}
+	b.ResetTimer()
+	for range b.N {
+		_, _ = msg.Marshal()
+	}
+}
+
+func BenchmarkUnmarshalEphemeralPublicKeyMessage(b *testing.B) {
+	kp1, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	kp2, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	msg := &ephemeralPublicKeyMessage{
+		senderID: group.MemberIndex(38),
+		ephemeralPublicKeys: map[group.MemberIndex]*ephemeral.PublicKey{
+			group.MemberIndex(211): kp1.PublicKey,
+			group.MemberIndex(19):  kp2.PublicKey,
+		},
+		sessionID: "session-1",
+	}
+	data, err := msg.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		_ = new(ephemeralPublicKeyMessage).Unmarshal(data)
+	}
+}
+
+// BenchmarkMarshalSigningShareMessage benchmarks the heaviest per-member
+// message in a signing round: round-one carries both broadcast and peer
+// payloads.
+func BenchmarkMarshalSigningShareMessage(b *testing.B) {
+	msg := &tssRoundOneMessage{
+		senderID:         group.MemberIndex(50),
+		broadcastPayload: []byte{1, 2, 3, 4, 5},
+		peersPayload: map[group.MemberIndex][]byte{
+			1: {6, 7, 8, 9, 10},
+			2: {11, 12, 13, 14, 15},
+		},
+		sessionID: "session-1",
+	}
+	b.ResetTimer()
+	for range b.N {
+		_, _ = msg.Marshal()
+	}
+}
+
+func BenchmarkUnmarshalSigningShareMessage(b *testing.B) {
+	msg := &tssRoundOneMessage{
+		senderID:         group.MemberIndex(50),
+		broadcastPayload: []byte{1, 2, 3, 4, 5},
+		peersPayload: map[group.MemberIndex][]byte{
+			1: {6, 7, 8, 9, 10},
+			2: {11, 12, 13, 14, 15},
+		},
+		sessionID: "session-1",
+	}
+	data, err := msg.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		_ = new(tssRoundOneMessage).Unmarshal(data)
+	}
+}
+
+func BenchmarkRoundTripEphemeralKey(b *testing.B) {
+	kp1, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	kp2, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		b.Fatal(err)
+	}
+	msg := &ephemeralPublicKeyMessage{
+		senderID: group.MemberIndex(38),
+		ephemeralPublicKeys: map[group.MemberIndex]*ephemeral.PublicKey{
+			group.MemberIndex(211): kp1.PublicKey,
+			group.MemberIndex(19):  kp2.PublicKey,
+		},
+		sessionID: "session-1",
+	}
+	b.ResetTimer()
+	for range b.N {
+		data, _ := msg.Marshal()
+		_ = new(ephemeralPublicKeyMessage).Unmarshal(data)
+	}
+}

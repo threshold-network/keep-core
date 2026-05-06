@@ -157,3 +157,23 @@ func TestBackoffStrategy_ConcurrentTick(t *testing.T) {
 		)
 	}
 }
+
+// --- Benchmarks ---
+
+func BenchmarkBackoffStrategyTick(b *testing.B) {
+	strategy := WithBackoffStrategy()
+	noop := func() error { return nil }
+	b.ResetTimer()
+	for range b.N {
+		_ = strategy.Tick(noop)
+	}
+}
+
+func BenchmarkStandardStrategyTick(b *testing.B) {
+	strategy := WithStandardStrategy()
+	noop := func() error { return nil }
+	b.ResetTimer()
+	for range b.N {
+		_ = strategy.Tick(noop)
+	}
+}
