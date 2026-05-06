@@ -171,9 +171,11 @@ func BenchmarkBackoffStrategyTick(b *testing.B) {
 
 func BenchmarkStandardStrategyTick(b *testing.B) {
 	strategy := WithStandardStrategy()
-	noop := func() error { return nil }
+	var calls int
+	fn := func() error { calls++; return nil }
 	b.ResetTimer()
 	for range b.N {
-		_ = strategy.Tick(noop)
+		_ = strategy.Tick(fn)
 	}
+	_ = calls
 }

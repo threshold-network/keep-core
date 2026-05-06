@@ -404,6 +404,54 @@ func BenchmarkUnmarshalEphemeralPublicKeyMessage(b *testing.B) {
 	}
 }
 
+// buildEphemeralKeyMap generates n key pairs and returns the public key map as
+// it would appear in a real EphemeralPublicKeyMessage (one entry per peer).
+func buildEphemeralKeyMap(b *testing.B, n int) map[group.MemberIndex]*ephemeral.PublicKey {
+	b.Helper()
+	m := make(map[group.MemberIndex]*ephemeral.PublicKey, n)
+	for i := 0; i < n; i++ {
+		kp, err := ephemeral.GenerateKeyPair()
+		if err != nil {
+			b.Fatal(err)
+		}
+		m[group.MemberIndex(i+1)] = kp.PublicKey
+	}
+	return m
+}
+
+// BenchmarkMarshalEphemeralPublicKeyMessage_100Keys benchmarks marshaling with
+// a realistic group size (100 members = 99 peer keys per message).
+func BenchmarkMarshalEphemeralPublicKeyMessage_100Keys(b *testing.B) {
+	msg := &ephemeralPublicKeyMessage{
+		senderID:            group.MemberIndex(1),
+		ephemeralPublicKeys: buildEphemeralKeyMap(b, 99),
+		sessionID:           "session-1",
+	}
+	b.ResetTimer()
+	for range b.N {
+		_, _ = msg.Marshal()
+	}
+}
+
+// BenchmarkUnmarshalEphemeralPublicKeyMessage_100Keys benchmarks unmarshaling
+// with a realistic group size. Each btcec.ParsePubKey call dominates; with 99
+// peers this represents the real per-participant DKG cost.
+func BenchmarkUnmarshalEphemeralPublicKeyMessage_100Keys(b *testing.B) {
+	msg := &ephemeralPublicKeyMessage{
+		senderID:            group.MemberIndex(1),
+		ephemeralPublicKeys: buildEphemeralKeyMap(b, 99),
+		sessionID:           "session-1",
+	}
+	data, err := msg.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		_ = new(ephemeralPublicKeyMessage).Unmarshal(data)
+	}
+}
+
 func BenchmarkRoundTripDKGMessage(b *testing.B) {
 	msg := &tssRoundTwoMessage{
 		senderID:         group.MemberIndex(50),
