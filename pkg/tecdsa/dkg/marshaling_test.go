@@ -23,9 +23,10 @@ func TestEphemeralPublicKeyMessage_MarshalingRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	publicKeys := make(map[group.MemberIndex]*ephemeral.PublicKey)
-	publicKeys[group.MemberIndex(211)] = keyPair1.PublicKey
-	publicKeys[group.MemberIndex(19)] = keyPair2.PublicKey
+	publicKeys := map[group.MemberIndex][]byte{
+		group.MemberIndex(211): keyPair1.PublicKey.Marshal(),
+		group.MemberIndex(19):  keyPair2.PublicKey.Marshal(),
+	}
 
 	msg := &ephemeralPublicKeyMessage{
 		senderID:            group.MemberIndex(38),
@@ -48,7 +49,7 @@ func TestFuzzEphemeralPublicKeyMessage_MarshalingRoundtrip(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		var (
 			senderID            group.MemberIndex
-			ephemeralPublicKeys map[group.MemberIndex]*ephemeral.PublicKey
+			ephemeralPublicKeys map[group.MemberIndex][]byte
 			sessionID           string
 		)
 
@@ -365,9 +366,9 @@ func BenchmarkMarshalEphemeralPublicKeyMessage(b *testing.B) {
 	}
 	msg := &ephemeralPublicKeyMessage{
 		senderID: group.MemberIndex(38),
-		ephemeralPublicKeys: map[group.MemberIndex]*ephemeral.PublicKey{
-			group.MemberIndex(211): kp1.PublicKey,
-			group.MemberIndex(19):  kp2.PublicKey,
+		ephemeralPublicKeys: map[group.MemberIndex][]byte{
+			group.MemberIndex(211): kp1.PublicKey.Marshal(),
+			group.MemberIndex(19):  kp2.PublicKey.Marshal(),
 		},
 		sessionID: "session-1",
 	}
@@ -388,9 +389,9 @@ func BenchmarkUnmarshalEphemeralPublicKeyMessage(b *testing.B) {
 	}
 	msg := &ephemeralPublicKeyMessage{
 		senderID: group.MemberIndex(38),
-		ephemeralPublicKeys: map[group.MemberIndex]*ephemeral.PublicKey{
-			group.MemberIndex(211): kp1.PublicKey,
-			group.MemberIndex(19):  kp2.PublicKey,
+		ephemeralPublicKeys: map[group.MemberIndex][]byte{
+			group.MemberIndex(211): kp1.PublicKey.Marshal(),
+			group.MemberIndex(19):  kp2.PublicKey.Marshal(),
 		},
 		sessionID: "session-1",
 	}
@@ -404,17 +405,17 @@ func BenchmarkUnmarshalEphemeralPublicKeyMessage(b *testing.B) {
 	}
 }
 
-// buildEphemeralKeyMap generates n key pairs and returns the public key map as
-// it would appear in a real EphemeralPublicKeyMessage (one entry per peer).
-func buildEphemeralKeyMap(b *testing.B, n int) map[group.MemberIndex]*ephemeral.PublicKey {
+// buildEphemeralKeyMap generates n key pairs and returns the serialized public
+// key map as it would appear in a real EphemeralPublicKeyMessage (one entry per peer).
+func buildEphemeralKeyMap(b *testing.B, n int) map[group.MemberIndex][]byte {
 	b.Helper()
-	m := make(map[group.MemberIndex]*ephemeral.PublicKey, n)
+	m := make(map[group.MemberIndex][]byte, n)
 	for i := 0; i < n; i++ {
 		kp, err := ephemeral.GenerateKeyPair()
 		if err != nil {
 			b.Fatal(err)
 		}
-		m[group.MemberIndex(i+1)] = kp.PublicKey
+		m[group.MemberIndex(i+1)] = kp.PublicKey.Marshal()
 	}
 	return m
 }

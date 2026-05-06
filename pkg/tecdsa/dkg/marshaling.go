@@ -9,7 +9,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/keep-network/keep-core/pkg/crypto/ephemeral"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa/dkg/gen/pb"
 )
@@ -17,14 +16,9 @@ import (
 // Marshal converts this ephemeralPublicKeyMessage to a byte array suitable for
 // network communication.
 func (epkm *ephemeralPublicKeyMessage) Marshal() ([]byte, error) {
-	ephemeralPublicKeys, err := marshalPublicKeyMap(epkm.ephemeralPublicKeys)
-	if err != nil {
-		return nil, err
-	}
-
 	return proto.Marshal(&pb.EphemeralPublicKeyMessage{
 		SenderID:            uint32(epkm.senderID),
-		EphemeralPublicKeys: ephemeralPublicKeys,
+		EphemeralPublicKeys: marshalPublicKeyMap(epkm.ephemeralPublicKeys),
 		SessionID:           epkm.sessionID,
 	})
 }
@@ -190,37 +184,28 @@ func validateMemberIndex(protoIndex uint32) error {
 }
 
 func marshalPublicKeyMap(
-	publicKeys map[group.MemberIndex]*ephemeral.PublicKey,
-) (map[uint32][]byte, error) {
+	publicKeys map[group.MemberIndex][]byte,
+) map[uint32][]byte {
 	marshalled := make(map[uint32][]byte, len(publicKeys))
-	for id, publicKey := range publicKeys {
-		if publicKey == nil {
-			return nil, fmt.Errorf("nil public key for member [%v]", id)
-		}
-
-		marshalled[uint32(id)] = publicKey.Marshal()
+	for id, keyBytes := range publicKeys {
+		marshalled[uint32(id)] = keyBytes
 	}
-	return marshalled, nil
+	return marshalled
 }
 
+// unmarshalPublicKeyMap converts the wire-format map to an internal byte map,
+// validating member indices but deferring EC point parsing to use-time so that
+// only the one key per message actually needed for ECDH is ever parsed.
 func unmarshalPublicKeyMap(
 	publicKeys map[uint32][]byte,
-) (map[group.MemberIndex]*ephemeral.PublicKey, error) {
-	var unmarshalled = make(map[group.MemberIndex]*ephemeral.PublicKey, len(publicKeys))
+) (map[group.MemberIndex][]byte, error) {
+	unmarshalled := make(map[group.MemberIndex][]byte, len(publicKeys))
 	for memberID, publicKeyBytes := range publicKeys {
 		if err := validateMemberIndex(memberID); err != nil {
 			return nil, err
 		}
-
-		publicKey, err := ephemeral.UnmarshalPublicKey(publicKeyBytes)
-		if err != nil {
-			return nil, fmt.Errorf("could not unmarshal public key [%v]", err)
-		}
-
-		unmarshalled[group.MemberIndex(memberID)] = publicKey
-
+		unmarshalled[group.MemberIndex(memberID)] = publicKeyBytes
 	}
-
 	return unmarshalled, nil
 }
 

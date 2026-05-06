@@ -179,21 +179,28 @@ func TestGenerateSymmetricKeys(t *testing.T) {
 
 		// Assert all symmetric keys stored by this member are correct.
 		for otherMemberID, actualKey := range member.symmetricKeys {
-			var otherMemberEphemeralPublicKey *ephemeral.PublicKey
+			var otherMemberEphemeralPublicKeyBytes []byte
 			for _, message := range messages {
 				if message.senderID == otherMemberID {
-					if ephemeralPublicKey, ok := message.ephemeralPublicKeys[member.id]; ok {
-						otherMemberEphemeralPublicKey = ephemeralPublicKey
+					if keyBytes, ok := message.ephemeralPublicKeys[member.id]; ok {
+						otherMemberEphemeralPublicKeyBytes = keyBytes
 					}
 				}
 			}
 
-			if otherMemberEphemeralPublicKey == nil {
+			if otherMemberEphemeralPublicKeyBytes == nil {
 				t.Errorf(
 					"[member:%v] no ephemeral public key from member [%v]",
 					member.id,
 					otherMemberID,
 				)
+			}
+
+			otherMemberEphemeralPublicKey, err := ephemeral.UnmarshalPublicKey(
+				otherMemberEphemeralPublicKeyBytes,
+			)
+			if err != nil {
+				t.Fatalf("could not unmarshal ephemeral public key: %v", err)
 			}
 
 			expectedKey := ephemeral.SymmetricKey(
