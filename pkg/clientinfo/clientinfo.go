@@ -2,6 +2,8 @@ package clientinfo
 
 import (
 	"context"
+	"net/http"
+	nhpprof "net/http/pprof"
 	"time"
 
 	"github.com/ipfs/go-log"
@@ -18,6 +20,10 @@ type Config struct {
 	EthereumMetricsTick    time.Duration
 	BitcoinMetricsTick     time.Duration
 	RPCHealthCheckInterval time.Duration
+	// EnablePprof exposes Go runtime profiling endpoints at /debug/pprof/ on
+	// the clientinfo port. Requires Port != 0. Never expose to untrusted
+	// networks; bind behind a firewall or restrict with an SSH tunnel.
+	EnablePprof bool
 }
 
 // Registry wraps keep-common clientinfo registry and exposes additional
@@ -32,15 +38,24 @@ type Registry struct {
 // diagnostics server.
 func Initialize(
 	ctx context.Context,
-	port int,
+	cfg Config,
 ) (*Registry, bool) {
-	if port == 0 {
+	if cfg.Port == 0 {
 		return nil, false
 	}
 
 	registry := &Registry{clientinfo.NewRegistry(), ctx}
 
-	registry.EnableServer(port)
+	if cfg.EnablePprof {
+		http.HandleFunc("/debug/pprof/", nhpprof.Index)
+		http.HandleFunc("/debug/pprof/cmdline", nhpprof.Cmdline)
+		http.HandleFunc("/debug/pprof/profile", nhpprof.Profile)
+		http.HandleFunc("/debug/pprof/symbol", nhpprof.Symbol)
+		http.HandleFunc("/debug/pprof/trace", nhpprof.Trace)
+		logger.Infof("pprof profiling endpoints registered at /debug/pprof/")
+	}
+
+	registry.EnableServer(cfg.Port)
 
 	return registry, true
 }
