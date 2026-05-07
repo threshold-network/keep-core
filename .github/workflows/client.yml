@@ -192,6 +192,19 @@ jobs:
           path: coverage/coverage.out
           if-no-files-found: warn
 
+      - name: Check coverage gate
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/coverage:/coverage" \
+            go-build-env \
+            go tool cover -func /coverage/coverage.out > /tmp/cover-func.txt
+          TOTAL=$(grep '^total:' /tmp/cover-func.txt | awk '{print $3}' | tr -d '%')
+          echo "Total coverage: ${TOTAL}%"
+          PASS=$(awk -v t="$TOTAL" 'BEGIN { print (t+0 >= 14) ? "yes" : "no" }')
+          if [ "$PASS" != "yes" ]; then
+            echo "::error::Coverage ${TOTAL}% is below the 14% minimum threshold"
+            exit 1
+          fi
 
       - name: Build Docker Runtime Image
         if: github.event_name != 'workflow_dispatch'
