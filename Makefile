@@ -149,4 +149,4 @@ cmd-help: build
 bench:
 	go test -bench=. -benchmem -count=10 -run='^$$' ./pkg/...
 
-.PHONY: all development sepolia download_artifacts generate gen_proto build cmd-help release build_multi bench
+.PHONY: all development sepolia mainnet local get_artifacts generate gen_proto build cmd-help release build_multi bench
