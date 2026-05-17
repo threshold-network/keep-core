@@ -373,7 +373,7 @@ $ curl localhost:9601/diagnostics
 [#testnet]
 == icon:flask[] Testnet
 
-The Keep Network Testnet environment is running against Ethereum Görli Testnet.
+The Keep Network Testnet environment is running against Ethereum Sepolia Testnet.
 To run the client connected to the Testnet add `--testnet` flag to the start command.
 
 A Docker image for Testnet is published under:

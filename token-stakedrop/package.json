@@ -28,5 +28,10 @@
     "eslint": "^7.20.0",
     "eslint-config-keep": "github:keep-network/eslint-config-keep",
     "prettier": "^2.2.1"
+  },
+  "overrides": {
+    "bsock": "^0.1.10",
+    "http-cache-semantics": "^4.1.1",
+    "get-func-name": "^2.0.2"
   }
 }

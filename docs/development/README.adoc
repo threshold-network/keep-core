@@ -29,7 +29,7 @@ To quickly setup and start a client use the following scripts from the project r
 
 * `./scripts/install.sh`
 * `./scripts/initialize.sh`
-* `./scrtips/start.sh`
+* `./scripts/start.sh`
 
 == Installation scripts explained
 
@@ -216,7 +216,7 @@ There are two primary languages in the T code right now:
 
 Go::
   Go code largely adheres to community practices where they have been decided.
-  Divergences and additional tidbits are listed in the link:go-guidelines.adoc[Go
+  Divergences and additional tidbits are listed in the link:../../docs-v1/development/go-guidelines.adoc[Go
   Guidelines] document.
 
 Solidity::

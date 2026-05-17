@@ -19,25 +19,17 @@ func TestResolveElectrum(t *testing.T) {
 		bitcoin.Mainnet: {
 			expectedConfig: []electrum.Config{
 				{
-					URL: "wss://electrumx-server.tbtc.network:8443",
-				},
-				{
 					URL: "wss://electrum.boar.network:2083",
-				},
-				{
-					URL: "wss://bitcoin.threshold.p2p.org:50004",
-				},
-				{
-					URL: "wss://electrumx.prod-utility-eks-us-west-2.staked.cloud:443",
 				},
 			},
 		},
 		bitcoin.Testnet: {
 			expectedConfig: []electrum.Config{
 				{
-					URL: "wss://electrumx-server.test.tbtc.network:8443",
+					URL: "wss://electrum.testnet.boar.network:443/QxbJgaSLUHqrgAa9BW7bDpnGPxrlhnCa",
 				},
-			}},
+			},
+		},
 		bitcoin.Regtest: {
 			expectedConfig: []electrum.Config{
 				{

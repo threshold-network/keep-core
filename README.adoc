@@ -26,11 +26,11 @@ link:https://en.wikipedia.org/wiki/Sortition[sortition].
 The first type of keep launching with the network is the `BondedECDSAKeep`,
 allowing smart contracts to generate private keys and sign messages without
 endangering key material. ECDSA keeps mean decentralized signing, cross-chain
-applications, and new tools for custodial applications — from Solidity. This
+applications, and new tools for custodial applications -- from Solidity. This
 capability is used heavily by https://tbtc.network/[tBTC].
 
-To learn more about ECDSA keeps, check out
-https://github.com/keep-network/keep-ecdsa[keep-ecdsa].
+To learn more about ECDSA keeps, check out the
+link:solidity/ecdsa/[`solidity/ecdsa/`] contracts in this repository.
 
 == Getting Started
 
@@ -39,7 +39,7 @@ A good place to start is link:docs/[the docs directory].
 === Running a Node
 
 To run your own node in the Keep Network, follow the
-link:https://docs.keep.network/run-keep-node.html[Run Keep Node] doc. Feedback
+link:docs/run-keep-node.adoc[Run Keep Node] doc. Feedback
 on this process and the documentation
 https://github.com/keep-network/keep-core/issues[is appreciated!]
 
@@ -62,7 +62,7 @@ directory. They can be used to request
 link:solidity-v1/contracts/IRandomBeacon.sol[miner-resistant random numbers], as
 well as creating and managing keeps. To generate new ECDSA key material and
 request signatures, the contracts can be found in
-link:https://github.com/keep-network/keep-ecdsa/blob/main/solidity/contracts/api/IBondedECDSAKeep.sol[`keep-ecdsa`].
+link:solidity/ecdsa/contracts/[`solidity/ecdsa/contracts/`].
 
 === Client Developers
 

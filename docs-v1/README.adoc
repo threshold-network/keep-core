@@ -1,0 +1,7 @@
+= Keep Network v1 Documentation (Legacy)
+
+WARNING: This directory contains historical specifications and design documents
+for the *v1 random beacon*. They are preserved for reference only and do not
+reflect the current protocol.
+
+For current documentation, see the link:../docs/[`docs/`] directory.

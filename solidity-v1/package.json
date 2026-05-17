@@ -62,5 +62,9 @@
     "truffle": "^5.5.20",
     "truffle-plugin-verify": "^0.5.26",
     "websocket": "^1.0.28"
+  },
+  "overrides": {
+    "http-cache-semantics": "^4.1.1",
+    "get-func-name": "^2.0.2"
   }
 }

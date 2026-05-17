@@ -58,7 +58,7 @@ var testConfigs = map[string]testConfig{
 	},
 	"electrumx wss": {
 		clientConfig: electrum.Config{
-			URL:                 "wss://electrumx-server.test.tbtc.network:8443",
+			URL:                 "wss://electrum.testnet.boar.network:443/QxbJgaSLUHqrgAa9BW7bDpnGPxrlhnCa",
 			RequestTimeout:      requestTimeout,
 			RequestRetryTimeout: requestRetryTimeout,
 		},
