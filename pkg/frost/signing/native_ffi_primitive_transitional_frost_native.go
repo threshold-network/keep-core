@@ -45,6 +45,21 @@ const buildTaggedTBTCSignerSyntheticContributionDomain = "tbtc-signer-bootstrap-
 const buildTaggedTBTCSignerMessageTypePrefix = "frost_signing/native_tbtc_signer/"
 const buildTaggedTBTCSignerConsumedAttemptReplayErrorFragment = "already consumed for sign attempt"
 
+// buildTaggedTBTCSignerConsumedAttemptReplayErrorCode is the structured Rust
+// `ErrorResponse.code` value emitted by tbtc-signer when an `attempt_id` is
+// reused after consumption. Preferred over substring matching on the message
+// because the code is contract-stable: see `EngineError::code()` in the
+// `tbtc-signer` crate.
+const buildTaggedTBTCSignerConsumedAttemptReplayErrorCode = "consumed_attempt_replay"
+
+// buildTaggedTBTCSignerLegacyValidationErrorCode is the structured code
+// emitted by tbtc-signer builds that pre-date the dedicated replay variant.
+// Those builds route the replay path through `EngineError::Validation`, so
+// the code on the wire is `validation_error` and the substring check on the
+// message is the only signal callers have. Once the rolling upgrade is past
+// the minimum-supported signer version, this code can be retired.
+const buildTaggedTBTCSignerLegacyValidationErrorCode = "validation_error"
+
 type nativeTBTCSignerVersionedEngine interface {
 	Version() (string, error)
 }
@@ -397,9 +412,40 @@ func isBuildTaggedTBTCSignerConsumedAttemptReplayError(err error) bool {
 		return false
 	}
 
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "attempt_id") &&
-		strings.Contains(message, buildTaggedTBTCSignerConsumedAttemptReplayErrorFragment)
+	// Prefer the structured `code` field from the FFI error envelope when it
+	// is reachable through the error chain. The Rust signer's
+	// `EngineError::code()` value `"consumed_attempt_replay"` is a
+	// contract-stable identifier; this check survives any cosmetic rewording
+	// of the human-readable message on either side.
+	//
+	// Older signer builds emit `validation_error` for the replay path with
+	// the legacy wording in the message. For those, fall through to the
+	// substring check restricted to the structured message field so a
+	// `validation_error` carrying an unrelated error chain string cannot be
+	// mistaken for a replay. Any other recognized code is authoritative.
+	var structured *buildTaggedTBTCSignerStructuredError
+	if errors.As(err, &structured) && structured.Code != "" {
+		switch structured.Code {
+		case buildTaggedTBTCSignerConsumedAttemptReplayErrorCode:
+			return true
+		case buildTaggedTBTCSignerLegacyValidationErrorCode:
+			return messageMatchesLegacyConsumedAttemptReplay(structured.Message)
+		default:
+			return false
+		}
+	}
+
+	// No structured code reachable — the error chain pre-dates the FFI
+	// envelope. The legacy wording is preserved by the current tbtc-signer
+	// release so this branch continues to work during the rolling upgrade
+	// window. Match on the whole rendered string for maximum compatibility.
+	return messageMatchesLegacyConsumedAttemptReplay(err.Error())
+}
+
+func messageMatchesLegacyConsumedAttemptReplay(message string) bool {
+	lower := strings.ToLower(message)
+	return strings.Contains(lower, "attempt_id") &&
+		strings.Contains(lower, buildTaggedTBTCSignerConsumedAttemptReplayErrorFragment)
 }
 
 func buildTaggedTBTCSignerRunDKGInputs(

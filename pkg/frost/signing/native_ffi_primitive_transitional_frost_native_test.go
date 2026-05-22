@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
 	"reflect"
 	"strings"
@@ -2649,6 +2650,190 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 				t.Fatalf(
 					"did not expect fallback events\nactual: [%v]",
 					observedEvents,
+				)
+			}
+		})
+	}
+}
+
+func TestIsBuildTaggedTBTCSignerConsumedAttemptReplayError(t *testing.T) {
+	// Locking-mutex-free unit-coverage for the replay detector. Each case
+	// constructs an error in the shape that flows out of the FFI bridge today
+	// and asserts the detector's decision.
+	cases := []struct {
+		name  string
+		err   error
+		match bool
+	}{
+		{
+			name:  "nil error is not a replay",
+			err:   nil,
+			match: false,
+		},
+		{
+			name: "structured code wins over message wording",
+			err: fmt.Errorf(
+				"%w: tbtc-signer bridge operation [StartSignRound] failed: [%w]",
+				ErrNativeBridgeOperationFailed,
+				&buildTaggedTBTCSignerStructuredError{
+					Code:    buildTaggedTBTCSignerConsumedAttemptReplayErrorCode,
+					Message: "rust message wording is not load-bearing here",
+				},
+			),
+			match: true,
+		},
+		{
+			name: "structured but different code does not match",
+			err: fmt.Errorf(
+				"%w: tbtc-signer bridge operation [StartSignRound] failed: [%w]",
+				ErrNativeBridgeOperationFailed,
+				&buildTaggedTBTCSignerStructuredError{
+					Code:    "session_conflict",
+					Message: "attempt_id [x] already consumed for sign attempt in session [y]",
+				},
+			),
+			match: false,
+		},
+		{
+			name: "legacy substring still matches when code is missing",
+			err: fmt.Errorf(
+				"%w: tbtc-signer bridge operation [StartSignRound] failed: [%w]",
+				ErrNativeBridgeOperationFailed,
+				&buildTaggedTBTCSignerStructuredError{
+					Code:    "",
+					Message: "attempt_id [att-1] already consumed for sign attempt in session [sess-1]",
+				},
+			),
+			match: true,
+		},
+		{
+			// Pre-dedicated-variant signer builds route the replay path
+			// through Validation, so the code on the wire is
+			// validation_error and only the message identifies replay.
+			name: "validation_error code with legacy wording is a replay",
+			err: fmt.Errorf(
+				"%w: tbtc-signer bridge operation [StartSignRound] failed: [%w]",
+				ErrNativeBridgeOperationFailed,
+				&buildTaggedTBTCSignerStructuredError{
+					Code:    "validation_error",
+					Message: "attempt_id [att-1] already consumed for sign attempt in session [sess-1]",
+				},
+			),
+			match: true,
+		},
+		{
+			// A validation_error that is NOT the replay path must not be
+			// flagged as a replay even if surrounding error chain noise
+			// happens to mention attempt_id elsewhere.
+			name: "validation_error without legacy wording is not a replay",
+			err: fmt.Errorf(
+				"%w: tbtc-signer bridge operation [StartSignRound] failed: [%w]",
+				ErrNativeBridgeOperationFailed,
+				&buildTaggedTBTCSignerStructuredError{
+					Code:    "validation_error",
+					Message: "session_id is empty",
+				},
+			),
+			match: false,
+		},
+		{
+			name: "legacy substring still matches when error is a plain wrapper",
+			err: fmt.Errorf(
+				"native FROST bridge operation failed: tbtc-signer bridge " +
+					"operation [StartSignRound] failed: [validation_error: " +
+					"attempt_id [att-1] already consumed for sign attempt in " +
+					"session [sess-1]]",
+			),
+			match: true,
+		},
+		{
+			name: "unrelated error is not a replay",
+			err: fmt.Errorf(
+				"%w: tbtc-signer bridge operation [StartSignRound] failed: [%w]",
+				ErrNativeBridgeOperationFailed,
+				&buildTaggedTBTCSignerStructuredError{
+					Code:    "validation_error",
+					Message: "session_id is empty",
+				},
+			),
+			match: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isBuildTaggedTBTCSignerConsumedAttemptReplayError(tc.err); got != tc.match {
+				t.Fatalf(
+					"detector returned [%v]; expected [%v] for error [%v]",
+					got,
+					tc.match,
+					tc.err,
+				)
+			}
+		})
+	}
+}
+
+func TestBuildTaggedTBTCSignerErrorPayload(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload []byte
+		code    string
+		// Substring expected in the rendered Message. Empty means we don't
+		// assert beyond Code presence.
+		messageSubstring string
+	}{
+		{
+			name:             "decodes structured envelope",
+			payload:          []byte(`{"code":"consumed_attempt_replay","message":"attempt_id [a] already consumed"}`),
+			code:             "consumed_attempt_replay",
+			messageSubstring: "already consumed",
+		},
+		{
+			name:             "legacy validation_error code is preserved",
+			payload:          []byte(`{"code":"validation_error","message":"session_id is empty"}`),
+			code:             "validation_error",
+			messageSubstring: "session_id is empty",
+		},
+		{
+			name:             "message-only payload leaves Code empty",
+			payload:          []byte(`{"message":"opaque message"}`),
+			code:             "",
+			messageSubstring: "opaque message",
+		},
+		{
+			name:             "completely empty envelope surfaces the raw payload",
+			payload:          []byte(`{}`),
+			code:             "",
+			messageSubstring: "empty error payload",
+		},
+		{
+			name:             "non-JSON payload is reported as a decode failure",
+			payload:          []byte(`not json`),
+			code:             "",
+			messageSubstring: "cannot decode error payload",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			structured := buildTaggedTBTCSignerErrorPayload(tc.payload)
+			if structured == nil {
+				t.Fatal("expected non-nil structured error")
+			}
+			if structured.Code != tc.code {
+				t.Fatalf(
+					"unexpected Code\nexpected: [%s]\nactual:   [%s]",
+					tc.code,
+					structured.Code,
+				)
+			}
+			if tc.messageSubstring != "" &&
+				!strings.Contains(structured.Message, tc.messageSubstring) {
+				t.Fatalf(
+					"Message missing expected substring\nexpected substring: [%s]\nactual:             [%s]",
+					tc.messageSubstring,
+					structured.Message,
 				)
 			}
 		})
