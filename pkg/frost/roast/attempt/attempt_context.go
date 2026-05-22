@@ -212,6 +212,11 @@ func hasOverlap(a, b []group.MemberIndex) bool {
 	return false
 }
 
+// byteWriter is the subset of io.Writer the canonical-encoding helpers
+// need. Hash.Write (the only production implementation) is documented to
+// never return an error, so the helpers discard the (int, error) result
+// explicitly to make that contract reader-visible (and to satisfy gosec
+// G104).
 type byteWriter interface {
 	Write(p []byte) (n int, err error)
 }
@@ -219,15 +224,15 @@ type byteWriter interface {
 func writeLenPrefixed(w byteWriter, data []byte) {
 	var lenBuf [4]byte
 	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(data)))
-	w.Write(lenBuf[:])
-	w.Write(data)
+	_, _ = w.Write(lenBuf[:])
+	_, _ = w.Write(data)
 }
 
 func writeMemberSet(w byteWriter, members []group.MemberIndex) {
 	var lenBuf [4]byte
 	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(members)))
-	w.Write(lenBuf[:])
+	_, _ = w.Write(lenBuf[:])
 	for _, m := range members {
-		w.Write([]byte{byte(m)})
+		_, _ = w.Write([]byte{byte(m)})
 	}
 }
