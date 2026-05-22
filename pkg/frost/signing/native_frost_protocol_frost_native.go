@@ -12,6 +12,7 @@ import (
 
 	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-core/pkg/frost"
+	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
@@ -349,11 +350,16 @@ func executeNativeFROSTSigning(
 		return nil, fmt.Errorf("cannot send native FROST round one message: [%w]", err)
 	}
 
+	// Phase 2 default: NoOp recorder preserves pre-RFC-21 behaviour.
+	// A coordinator-aware caller in a later phase will inject a real
+	// recorder via the request (or a sibling parameter) so overflow
+	// drops at the receive callback feed into NextAttempt evidence.
 	roundOneMessages, err := collectNativeFROSTRoundOneMessages(
 		ctx,
 		request,
 		includedMembersSet,
 		includedMembersIndexes,
+		attempt.NoOpRecorder(),
 	)
 	if err != nil {
 		return nil, err
@@ -429,11 +435,13 @@ func executeNativeFROSTSigning(
 		return nil, fmt.Errorf("cannot send native FROST round two message: [%w]", err)
 	}
 
+	// Phase 2 default: NoOp recorder. See round-one caller above.
 	roundTwoMessages, err := collectNativeFROSTRoundTwoMessages(
 		ctx,
 		request,
 		includedMembersSet,
 		includedMembersIndexes,
+		attempt.NoOpRecorder(),
 	)
 	if err != nil {
 		return nil, err
@@ -593,6 +601,7 @@ func collectNativeFROSTRoundOneMessages(
 	request *NativeExecutionFFISigningRequest,
 	includedMembersSet map[group.MemberIndex]struct{},
 	includedMembersIndexes []group.MemberIndex,
+	evidence attempt.EvidenceRecorder,
 ) (map[group.MemberIndex]*nativeFROSTRoundOneCommitmentMessage, error) {
 	expectedMessagesCount := len(includedMembersIndexes) - 1
 	if expectedMessagesCount <= 0 {
@@ -620,10 +629,7 @@ func collectNativeFROSTRoundOneMessages(
 			return
 		}
 
-		select {
-		case messageChan <- payload:
-		default:
-		}
+		_ = enqueueOrRecordOverflow(payload, messageChan, evidence)
 	})
 
 	receivedMessages := make(map[group.MemberIndex]*nativeFROSTRoundOneCommitmentMessage)
@@ -675,6 +681,7 @@ func collectNativeFROSTRoundTwoMessages(
 	request *NativeExecutionFFISigningRequest,
 	includedMembersSet map[group.MemberIndex]struct{},
 	includedMembersIndexes []group.MemberIndex,
+	evidence attempt.EvidenceRecorder,
 ) (map[group.MemberIndex]*nativeFROSTRoundTwoSignatureShareMessage, error) {
 	expectedMessagesCount := len(includedMembersIndexes) - 1
 	if expectedMessagesCount <= 0 {
@@ -702,10 +709,7 @@ func collectNativeFROSTRoundTwoMessages(
 			return
 		}
 
-		select {
-		case messageChan <- payload:
-		default:
-		}
+		_ = enqueueOrRecordOverflow(payload, messageChan, evidence)
 	})
 
 	receivedMessages := make(map[group.MemberIndex]*nativeFROSTRoundTwoSignatureShareMessage)
