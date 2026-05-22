@@ -2,6 +2,7 @@ package tbtc
 
 import (
 	"bytes"
+	"encoding/binary"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,6 +14,16 @@ import (
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 	"google.golang.org/protobuf/proto"
 )
+
+// appendUvarintForTest emits a uvarint matching the format
+// `unmarshalSignerMaterialFromPersistence` expects. It is duplicated in the
+// test package rather than exported so test-only construction of corrupted
+// envelopes cannot accidentally be reused by production code.
+func appendUvarintForTest(buf []byte, value uint64) []byte {
+	var scratch [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(scratch[:], value)
+	return append(buf, scratch[:n]...)
+}
 
 func TestMarshalSignerMaterialForPersistence_LegacyPrivateKeyShare(t *testing.T) {
 	signer := createMockSigner(t)
@@ -166,6 +177,54 @@ func TestUnmarshalSignerMaterialFromPersistence_CorruptedNativeEnvelope(t *testi
 		t.Fatalf(
 			"unexpected unmarshal error\nexpected substring: [%s]\nactual:             [%v]",
 			"signer material payload length exceeds payload",
+			err,
+		)
+	}
+}
+
+func TestUnmarshalSignerMaterialFromPersistence_RejectsOversizedFormatLength(
+	t *testing.T,
+) {
+	// Build an envelope that claims a format length one byte above the cap.
+	// The body itself is short, so without the length cap the bounds check
+	// would still catch this, but the cap rejects the claim earlier and with
+	// a clear error before any allocation.
+	encoded := append([]byte{}, signerMaterialEnvelopePrefix...)
+	encoded = appendUvarintForTest(encoded, signerMaterialMaxFormatLength+1)
+	encoded = append(encoded, []byte("ignored")...)
+
+	_, err := unmarshalSignerMaterialFromPersistence(encoded)
+	if err == nil {
+		t.Fatal("expected unmarshal error")
+	}
+
+	if !strings.Contains(err.Error(), "format length") ||
+		!strings.Contains(err.Error(), "exceeds maximum") {
+		t.Fatalf(
+			"unexpected unmarshal error\nexpected substrings: [format length], [exceeds maximum]\nactual: [%v]",
+			err,
+		)
+	}
+}
+
+func TestUnmarshalSignerMaterialFromPersistence_RejectsOversizedPayloadLength(
+	t *testing.T,
+) {
+	encoded := append([]byte{}, signerMaterialEnvelopePrefix...)
+	format := []byte(frostsigning.NativeSignerMaterialFormatFrostUniFFIV1)
+	encoded = appendUvarintForTest(encoded, uint64(len(format)))
+	encoded = append(encoded, format...)
+	encoded = appendUvarintForTest(encoded, signerMaterialMaxPayloadLength+1)
+
+	_, err := unmarshalSignerMaterialFromPersistence(encoded)
+	if err == nil {
+		t.Fatal("expected unmarshal error")
+	}
+
+	if !strings.Contains(err.Error(), "payload length") ||
+		!strings.Contains(err.Error(), "exceeds maximum") {
+		t.Fatalf(
+			"unexpected unmarshal error\nexpected substrings: [payload length], [exceeds maximum]\nactual: [%v]",
 			err,
 		)
 	}
