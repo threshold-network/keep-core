@@ -110,6 +110,13 @@ type nativeFROSTRoundOneCommitmentMessage struct {
 	SessionIDValue        string `json:"sessionID"`
 	ParticipantIdentifier string `json:"participantIdentifier"`
 	CommitmentData        []byte `json:"commitmentData"`
+	// AttemptContextHash binds this message to a specific RFC-21
+	// AttemptContext. Optional during the Phase 1 migration: an absent
+	// field is accepted, a present field must be exactly
+	// AttemptContextHashFieldLength bytes. Higher-level validation
+	// against the locally-computed context lands in a later RFC-21
+	// phase.
+	AttemptContextHash []byte `json:"attemptContextHash,omitempty"`
 }
 
 func (nfr1cm *nativeFROSTRoundOneCommitmentMessage) SenderID() group.MemberIndex {
@@ -149,7 +156,33 @@ func (nfr1cm *nativeFROSTRoundOneCommitmentMessage) Unmarshal(data []byte) error
 		return fmt.Errorf("commitment data is empty")
 	}
 
+	if err := validateAttemptContextHashField(
+		nfr1cm.AttemptContextHash,
+	); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// SetAttemptContextHash records the canonical RFC-21 attempt context
+// hash on the message. Senders that wish to bind their contribution to
+// an attempt context must call this before Marshal; senders that do not
+// leave the field absent on the wire.
+func (nfr1cm *nativeFROSTRoundOneCommitmentMessage) SetAttemptContextHash(
+	hash [AttemptContextHashFieldLength]byte,
+) {
+	nfr1cm.AttemptContextHash = attemptContextHashFieldFromArray(hash)
+}
+
+// GetAttemptContextHash returns the recorded attempt context hash and a
+// presence flag. A receiver that requires the binding should reject
+// messages where the flag is false; a receiver that does not yet
+// require the binding can ignore the flag without breaking back-compat.
+func (nfr1cm *nativeFROSTRoundOneCommitmentMessage) GetAttemptContextHash() (
+	[AttemptContextHashFieldLength]byte, bool,
+) {
+	return attemptContextHashFieldToArray(nfr1cm.AttemptContextHash)
 }
 
 type nativeFROSTRoundTwoSignatureShareMessage struct {
@@ -157,6 +190,9 @@ type nativeFROSTRoundTwoSignatureShareMessage struct {
 	SessionIDValue        string `json:"sessionID"`
 	ParticipantIdentifier string `json:"participantIdentifier"`
 	SignatureShareData    []byte `json:"signatureShareData"`
+	// AttemptContextHash -- see nativeFROSTRoundOneCommitmentMessage
+	// for the migration contract.
+	AttemptContextHash []byte `json:"attemptContextHash,omitempty"`
 }
 
 func (nfr2ssm *nativeFROSTRoundTwoSignatureShareMessage) SenderID() group.MemberIndex {
@@ -196,7 +232,25 @@ func (nfr2ssm *nativeFROSTRoundTwoSignatureShareMessage) Unmarshal(data []byte) 
 		return fmt.Errorf("signature share data is empty")
 	}
 
+	if err := validateAttemptContextHashField(
+		nfr2ssm.AttemptContextHash,
+	); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func (nfr2ssm *nativeFROSTRoundTwoSignatureShareMessage) SetAttemptContextHash(
+	hash [AttemptContextHashFieldLength]byte,
+) {
+	nfr2ssm.AttemptContextHash = attemptContextHashFieldFromArray(hash)
+}
+
+func (nfr2ssm *nativeFROSTRoundTwoSignatureShareMessage) GetAttemptContextHash() (
+	[AttemptContextHashFieldLength]byte, bool,
+) {
+	return attemptContextHashFieldToArray(nfr2ssm.AttemptContextHash)
 }
 
 func registerNativeFROSTSigningUnmarshallers(channel net.BroadcastChannel) {

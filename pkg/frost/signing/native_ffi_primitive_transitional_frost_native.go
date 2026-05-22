@@ -69,6 +69,9 @@ type buildTaggedTBTCSignerRoundContributionMessage struct {
 	SessionIDValue         string `json:"sessionID"`
 	ContributionIdentifier uint16 `json:"contributionIdentifier"`
 	ContributionData       []byte `json:"contributionData"`
+	// AttemptContextHash -- see nativeFROSTRoundOneCommitmentMessage
+	// for the RFC-21 Phase 1 migration contract.
+	AttemptContextHash []byte `json:"attemptContextHash,omitempty"`
 }
 
 func (bttsrcm *buildTaggedTBTCSignerRoundContributionMessage) SenderID() group.MemberIndex {
@@ -108,7 +111,25 @@ func (bttsrcm *buildTaggedTBTCSignerRoundContributionMessage) Unmarshal(data []b
 		return fmt.Errorf("contribution data is empty")
 	}
 
+	if err := validateAttemptContextHashField(
+		bttsrcm.AttemptContextHash,
+	); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func (bttsrcm *buildTaggedTBTCSignerRoundContributionMessage) SetAttemptContextHash(
+	hash [AttemptContextHashFieldLength]byte,
+) {
+	bttsrcm.AttemptContextHash = attemptContextHashFieldFromArray(hash)
+}
+
+func (bttsrcm *buildTaggedTBTCSignerRoundContributionMessage) GetAttemptContextHash() (
+	[AttemptContextHashFieldLength]byte, bool,
+) {
+	return attemptContextHashFieldToArray(bttsrcm.AttemptContextHash)
 }
 
 func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive) Sign(
@@ -1023,7 +1044,8 @@ func buildTaggedTBTCSignerRoundContributionMessagesEqual(
 	return left.SenderIDValue == right.SenderIDValue &&
 		left.SessionIDValue == right.SessionIDValue &&
 		left.ContributionIdentifier == right.ContributionIdentifier &&
-		bytes.Equal(left.ContributionData, right.ContributionData)
+		bytes.Equal(left.ContributionData, right.ContributionData) &&
+		bytes.Equal(left.AttemptContextHash, right.AttemptContextHash)
 }
 
 func buildTaggedTBTCSignerSyntheticRoundContributions(
