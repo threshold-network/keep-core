@@ -1,3 +1,5 @@
+//go:build frost_native
+
 package signing
 
 import (
