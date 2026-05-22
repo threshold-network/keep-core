@@ -158,6 +158,28 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 		return nil, err
 	}
 
+	// Scaffold persistence-vs-execution gate. The resolver in #3959 refuses to
+	// BUILD scaffold-era signer material without the env opt-in, but material
+	// persisted from a previous opted-in session can still drive this signing
+	// path on later runs after the operator has unset the flag. Refuse to
+	// enter the FFI scaffold path (which feeds placeholder participant
+	// pubkeys into RunDKG) when the payload is scaffold-era and the operator
+	// has not actively opted in for this process. The check is per-call (not
+	// cached) so flipping the env back unset recovers fail-closed behavior
+	// without a restart, matching the contract documented on
+	// AcceptScaffoldKeyGroupEnvVar.
+	if payload.KeyGroupSource == NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey &&
+		!AcceptScaffoldKeyGroupEnabled() {
+		return nil, fmt.Errorf(
+			"%w: refusing to drive the tbtc-signer FFI signing path with "+
+				"scaffold-era %q signer material; set %s=true to opt in for "+
+				"local/CI use only, never in production",
+			ErrNativeCryptographyUnavailable,
+			NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey,
+			AcceptScaffoldKeyGroupEnvVar,
+		)
+	}
+
 	legacyPrivateKeyShare, err := decodeBuildTaggedTBTCSignerLegacyPrivateKeyShare(payload)
 	if err != nil {
 		return nil, err
