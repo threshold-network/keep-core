@@ -451,6 +451,58 @@ func TestTransactionBuilder_ReplaceUnsignedTransaction_RejectsNonEmptyReplacemen
 	}
 }
 
+func TestTransactionBuilder_ReplaceUnsignedTransaction_RejectsMultiElementPreviousWitness(
+	t *testing.T,
+) {
+	builder := NewTransactionBuilder(nil)
+
+	var txHash chainhash.Hash
+	previousInput := wire.NewTxIn(wire.NewOutPoint(&txHash, 0), nil, nil)
+	// Pre-signing witness that mimics a P2TR script-path spend: [script,
+	// controlBlock]. The restoration path supports only zero- or
+	// single-element previous witnesses today; the multi-element case must
+	// fail loudly rather than silently dropping data later in signing.
+	previousInput.Witness = wire.TxWitness{
+		[]byte{0x51, 0x52},
+		[]byte{0xc0, 0xab, 0xcd},
+	}
+	builder.internal.AddTxIn(previousInput)
+	builder.sigHashArgs = append(
+		builder.sigHashArgs,
+		&inputSigHashArgs{value: 1, scriptCode: []byte{0x51}, witness: true},
+	)
+
+	err := builder.ReplaceUnsignedTransaction(
+		&Transaction{
+			Inputs: []*TransactionInput{
+				{
+					Outpoint: &TransactionOutpoint{
+						TransactionHash: Hash(txHash),
+						OutputIndex:     0,
+					},
+					Sequence: 0xffffffff,
+				},
+			},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected multi-element witness restoration error")
+	}
+
+	if !strings.Contains(
+		err.Error(),
+		"previous witness has [2] elements",
+	) {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+	if !strings.Contains(
+		err.Error(),
+		"only zero- or single-element",
+	) {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
 func TestTransactionBuilder_UnsignedTransactionIO(t *testing.T) {
 	builder := NewTransactionBuilder(nil)
 

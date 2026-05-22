@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
@@ -16,6 +17,10 @@ import (
 func TestRegisterSignerMaterialResolverForBuild_UsesDefaultProvider(
 	t *testing.T,
 ) {
+	// Default scaffold-era resolver builds legacy-wallet-pubkey signer
+	// material; production refuses it but local/CI tests can opt in.
+	t.Setenv(frostsigning.AcceptScaffoldKeyGroupEnvVar, "true")
+
 	UnregisterSignerMaterialResolver()
 	UnregisterSignerMaterialResolverProviderForBuild()
 	t.Cleanup(UnregisterSignerMaterialResolver)
@@ -192,5 +197,46 @@ func TestRegisterSignerMaterialResolverForBuild_ProviderReturnsNilResolver(
 	err = RegisterSignerMaterialResolverForBuild()
 	if err == nil {
 		t.Fatal("expected build resolver registration error")
+	}
+}
+
+func TestRegisterSignerMaterialResolverForBuild_DefaultProviderRefusesScaffoldWithoutOptIn(
+	t *testing.T,
+) {
+	// Force the env var to "" so a stray external value cannot suppress the
+	// scaffold refusal during this regression test.
+	t.Setenv(frostsigning.AcceptScaffoldKeyGroupEnvVar, "")
+
+	UnregisterSignerMaterialResolver()
+	UnregisterSignerMaterialResolverProviderForBuild()
+	t.Cleanup(UnregisterSignerMaterialResolver)
+	t.Cleanup(UnregisterSignerMaterialResolverProviderForBuild)
+
+	err := RegisterSignerMaterialResolverForBuild()
+	if err != nil {
+		t.Fatalf("unexpected build resolver registration error: [%v]", err)
+	}
+
+	privateKeyShare := createMockSigner(t).privateKeyShare
+	_, err = resolveSignerMaterial(privateKeyShare)
+	if err == nil {
+		t.Fatal(
+			"expected scaffold-refusal error from default resolver without opt-in",
+		)
+	}
+
+	if !strings.Contains(err.Error(), frostsigning.AcceptScaffoldKeyGroupEnvVar) {
+		t.Fatalf(
+			"expected scaffold-refusal error to reference %s; got: [%v]",
+			frostsigning.AcceptScaffoldKeyGroupEnvVar,
+			err,
+		)
+	}
+	if !strings.Contains(err.Error(), frostsigning.NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey) {
+		t.Fatalf(
+			"expected scaffold-refusal error to reference %s; got: [%v]",
+			frostsigning.NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey,
+			err,
+		)
 	}
 }

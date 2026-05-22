@@ -354,18 +354,40 @@ func (tb *TransactionBuilder) ReplaceUnsignedTransaction(
 			)
 		}
 
+		// The replacement's SignatureScript and Witness are both empty here
+		// because of the two refusals above, so the per-input restore below
+		// only has to decide what to copy *from* the previous input.
 		if tb.sigHashArgs[i].witness {
-			if len(replacedInput.Witness) == 0 && len(previousInput.Witness) == 1 {
+			// Witness inputs may carry a single-element pre-signing witness
+			// that holds a P2WSH-style redeem script. Multi-element witnesses
+			// belong to P2TR script-path spends or other workflows that are
+			// not in scope for the current FROST migration, and silently
+			// dropping them produced malformed transactions later — refuse
+			// instead so the unsupported case fails loudly. Lifting this to
+			// support multi-element witnesses requires a per-input policy
+			// rather than a blanket copy because the replacement could
+			// legitimately differ in witness shape from the previous input.
+			switch len(previousInput.Witness) {
+			case 0:
+				// Nothing to restore (typical P2TR key-path or P2WPKH).
+			case 1:
 				redeemScript := append([]byte{}, previousInput.Witness[0]...)
 				replacedInput.Witness = wire.TxWitness{redeemScript}
-			}
-		} else {
-			if len(replacedInput.SignatureScript) == 0 && len(previousInput.SignatureScript) > 0 {
-				replacedInput.SignatureScript = append(
-					[]byte{},
-					previousInput.SignatureScript...,
+			default:
+				return fmt.Errorf(
+					"replacement transaction input [%d] previous witness has "+
+						"[%d] elements; only zero- or single-element "+
+						"pre-signing witnesses are currently supported for "+
+						"restoration",
+					i,
+					len(previousInput.Witness),
 				)
 			}
+		} else if len(previousInput.SignatureScript) > 0 {
+			replacedInput.SignatureScript = append(
+				[]byte{},
+				previousInput.SignatureScript...,
+			)
 		}
 	}
 

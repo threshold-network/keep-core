@@ -3,6 +3,7 @@
 package signing
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -582,11 +583,37 @@ func collectNativeFROSTRoundOneMessages(
 			)
 
 		case message := <-messageChan:
-			receivedMessages[message.SenderID()] = message
+			// First-write-wins / equal-or-reject. See the matching comment in
+			// native_ffi_primitive_transitional_frost_native.go.
+			senderID := message.SenderID()
+			if existing, ok := receivedMessages[senderID]; ok {
+				if !nativeFROSTRoundOneCommitmentMessagesEqual(existing, message) {
+					protocolLogger.Warnf(
+						"dropping conflicting native FROST round one "+
+							"commitment from sender [%d]; first-write-wins "+
+							"keeps the originally accepted commitment",
+						senderID,
+					)
+				}
+				continue
+			}
+			receivedMessages[senderID] = message
 		}
 	}
 
 	return receivedMessages, nil
+}
+
+func nativeFROSTRoundOneCommitmentMessagesEqual(
+	left, right *nativeFROSTRoundOneCommitmentMessage,
+) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.SenderIDValue == right.SenderIDValue &&
+		left.SessionIDValue == right.SessionIDValue &&
+		left.ParticipantIdentifier == right.ParticipantIdentifier &&
+		bytes.Equal(left.CommitmentData, right.CommitmentData)
 }
 
 func collectNativeFROSTRoundTwoMessages(
@@ -638,11 +665,39 @@ func collectNativeFROSTRoundTwoMessages(
 			)
 
 		case message := <-messageChan:
-			receivedMessages[message.SenderID()] = message
+			// First-write-wins / equal-or-reject. See round one above.
+			senderID := message.SenderID()
+			if existing, ok := receivedMessages[senderID]; ok {
+				if !nativeFROSTRoundTwoSignatureShareMessagesEqual(
+					existing,
+					message,
+				) {
+					protocolLogger.Warnf(
+						"dropping conflicting native FROST round two "+
+							"signature share from sender [%d]; first-write-wins "+
+							"keeps the originally accepted share",
+						senderID,
+					)
+				}
+				continue
+			}
+			receivedMessages[senderID] = message
 		}
 	}
 
 	return receivedMessages, nil
+}
+
+func nativeFROSTRoundTwoSignatureShareMessagesEqual(
+	left, right *nativeFROSTRoundTwoSignatureShareMessage,
+) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.SenderIDValue == right.SenderIDValue &&
+		left.SessionIDValue == right.SessionIDValue &&
+		left.ParticipantIdentifier == right.ParticipantIdentifier &&
+		bytes.Equal(left.SignatureShareData, right.SignatureShareData)
 }
 
 func shouldAcceptNativeFROSTMessage(

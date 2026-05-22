@@ -3,6 +3,7 @@
 package signing
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -466,6 +467,23 @@ func buildTaggedTBTCSignerRoundKeyGroup(
 	if payload.KeyGroupSource == NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey {
 		// Scaffold compatibility: legacy-wallet-pubkey key groups are
 		// placeholder-only and expected to diverge from coarse RunDKG output.
+		// Refuse the substitution by default so a production deployment that
+		// somehow ended up with placeholder material does not silently route
+		// signing through whatever key group the Rust side happens to return.
+		// The operator must explicitly opt into the scaffold path via
+		// AcceptScaffoldKeyGroupEnvVar; the env-var check is per-call (not
+		// cached) so flipping it off recovers fail-closed behavior without a
+		// restart.
+		if !AcceptScaffoldKeyGroupEnabled() {
+			return "", false, fmt.Errorf(
+				"tbtc-signer key group source %q is scaffold-era placeholder "+
+					"material and may not be silently substituted with the "+
+					"RunDKG output; set %s=true to opt in for local/CI use "+
+					"only, never in production",
+				NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey,
+				AcceptScaffoldKeyGroupEnvVar,
+			)
+		}
 		return dkgResult.KeyGroup, true, nil
 	}
 
@@ -902,11 +920,42 @@ func collectBuildTaggedTBTCSignerRoundContributionMessages(
 			)
 
 		case message := <-messageChan:
-			receivedMessages[message.SenderID()] = message
+			// First-write-wins / equal-or-reject. A peer that retransmits the
+			// same contribution is idempotent; a peer that mutates its own
+			// contribution after the first send is a ROAST evidence concern
+			// and must not be allowed to overwrite the persisted view.
+			senderID := message.SenderID()
+			if existing, ok := receivedMessages[senderID]; ok {
+				if !buildTaggedTBTCSignerRoundContributionMessagesEqual(
+					existing,
+					message,
+				) {
+					protocolLogger.Warnf(
+						"dropping conflicting tbtc-signer round contribution "+
+							"from sender [%d]; first-write-wins keeps the "+
+							"originally accepted contribution",
+						senderID,
+					)
+				}
+				continue
+			}
+			receivedMessages[senderID] = message
 		}
 	}
 
 	return receivedMessages, nil
+}
+
+func buildTaggedTBTCSignerRoundContributionMessagesEqual(
+	left, right *buildTaggedTBTCSignerRoundContributionMessage,
+) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.SenderIDValue == right.SenderIDValue &&
+		left.SessionIDValue == right.SessionIDValue &&
+		left.ContributionIdentifier == right.ContributionIdentifier &&
+		bytes.Equal(left.ContributionData, right.ContributionData)
 }
 
 func buildTaggedTBTCSignerSyntheticRoundContributions(

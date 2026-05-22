@@ -110,6 +110,14 @@ func TestSigningExecutor_SignBatch(t *testing.T) {
 // setupSigningExecutor sets up an instance of the signing executor ready
 // to perform test signing.
 func setupSigningExecutor(t *testing.T) *signingExecutor {
+	// Tests in this suite exercise the keep-tbtc signing executor against
+	// in-process tECDSA fixtures. Under the `frost_native frost_tbtc_signer`
+	// build tags, the signer-material resolver refuses scaffold-era
+	// (legacy-wallet-pubkey) material by default; the fixtures here are
+	// inherently scaffold-era so the executor needs the operator opt-in to
+	// continue running. Production deployments must never set this env var.
+	t.Setenv("KEEP_CORE_FROST_TBTC_SIGNER_ACCEPT_SCAFFOLD_KEY_GROUP", "true")
+
 	groupParameters := &GroupParameters{
 		GroupSize:       5,
 		GroupQuorum:     4,
