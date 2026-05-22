@@ -1289,12 +1289,14 @@ func TestExecuteBuildTaggedTBTCSignerBootstrapCoarseRound_FailsWhenRoundStateSig
 
 func TestBuildTaggedTBTCSignerRoundKeyGroup(t *testing.T) {
 	testCases := []struct {
-		name        string
-		payload     *NativeTBTCSignerMaterialPayload
-		dkgResult   *NativeTBTCSignerDKGResult
-		expected    string
-		substituted bool
-		expectError bool
+		name                 string
+		payload              *NativeTBTCSignerMaterialPayload
+		dkgResult            *NativeTBTCSignerDKGResult
+		acceptScaffoldOptIn  bool
+		expected             string
+		substituted          bool
+		expectError          bool
+		expectScaffoldRefuse bool
 	}{
 		{
 			name: "exact match",
@@ -1308,7 +1310,7 @@ func TestBuildTaggedTBTCSignerRoundKeyGroup(t *testing.T) {
 			substituted: false,
 		},
 		{
-			name: "legacy source mismatch uses dkg key group",
+			name: "legacy source mismatch refused without opt-in",
 			payload: &NativeTBTCSignerMaterialPayload{
 				KeyGroup:       "legacy-group",
 				KeyGroupSource: NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey,
@@ -1316,8 +1318,21 @@ func TestBuildTaggedTBTCSignerRoundKeyGroup(t *testing.T) {
 			dkgResult: &NativeTBTCSignerDKGResult{
 				KeyGroup: "dkg-group",
 			},
-			expected:    "dkg-group",
-			substituted: true,
+			expectError:          true,
+			expectScaffoldRefuse: true,
+		},
+		{
+			name: "legacy source mismatch uses dkg key group with opt-in",
+			payload: &NativeTBTCSignerMaterialPayload{
+				KeyGroup:       "legacy-group",
+				KeyGroupSource: NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey,
+			},
+			dkgResult: &NativeTBTCSignerDKGResult{
+				KeyGroup: "dkg-group",
+			},
+			acceptScaffoldOptIn: true,
+			expected:            "dkg-group",
+			substituted:         true,
 		},
 		{
 			name: "non-legacy source mismatch rejects",
@@ -1334,10 +1349,28 @@ func TestBuildTaggedTBTCSignerRoundKeyGroup(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.acceptScaffoldOptIn {
+				t.Setenv(AcceptScaffoldKeyGroupEnvVar, "true")
+			} else {
+				// Force the env to "" so a stray external value from a
+				// containing process cannot suppress the scaffold refusal
+				// during this test case.
+				t.Setenv(AcceptScaffoldKeyGroupEnvVar, "")
+			}
+
 			actual, substituted, err := buildTaggedTBTCSignerRoundKeyGroup(tc.payload, tc.dkgResult)
 			if tc.expectError {
 				if err == nil {
 					t.Fatal("expected error")
+				}
+
+				if tc.expectScaffoldRefuse &&
+					!strings.Contains(err.Error(), AcceptScaffoldKeyGroupEnvVar) {
+					t.Fatalf(
+						"expected scaffold-refusal error referencing %s; got: [%v]",
+						AcceptScaffoldKeyGroupEnvVar,
+						err,
+					)
 				}
 
 				return
@@ -1802,6 +1835,12 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_BootstrapVersion_LegacyKeyGroupSourceUsesRunDKGResult(
 	t *testing.T,
 ) {
+	// Scaffold-era path: legacy-wallet-pubkey signer material is refused by
+	// default; the operator opt-in via AcceptScaffoldKeyGroupEnvVar is what
+	// lets this test exercise the substitution. Production deployments must
+	// never set this.
+	t.Setenv(AcceptScaffoldKeyGroupEnvVar, "true")
+
 	engine := &mockBuildTaggedTBTCSignerEngine{
 		version: "tbtc-signer/0.1.0-bootstrap",
 		runDKGResult: &NativeTBTCSignerDKGResult{

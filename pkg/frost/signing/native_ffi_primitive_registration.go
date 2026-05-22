@@ -9,6 +9,7 @@ import (
 
 var (
 	registrationLogger    = log.Logger("keep-frost-signing-registration")
+	protocolLogger        = log.Logger("keep-frost-signing-protocol")
 	registrationErrorMu   sync.RWMutex
 	lastRegistrationError error
 )
