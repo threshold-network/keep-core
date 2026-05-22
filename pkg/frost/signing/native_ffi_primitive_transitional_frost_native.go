@@ -14,6 +14,7 @@ import (
 
 	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-core/pkg/frost"
+	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
@@ -860,11 +861,15 @@ func buildTaggedTBTCSignerRoundContributions(
 		return nil, fmt.Errorf("cannot send round contribution message: [%w]", err)
 	}
 
+	// Phase 2 default: NoOp recorder preserves pre-RFC-21 behaviour.
+	// A coordinator-aware caller in a later phase injects a real
+	// recorder so overflow drops feed into NextAttempt evidence.
 	peerMessages, err := collectBuildTaggedTBTCSignerRoundContributionMessages(
 		ctx,
 		request,
 		includedMembersSet,
 		includedMembersIndexes,
+		attempt.NoOpRecorder(),
 	)
 	if err != nil {
 		return nil, err
@@ -961,6 +966,7 @@ func collectBuildTaggedTBTCSignerRoundContributionMessages(
 	request *NativeExecutionFFISigningRequest,
 	includedMembersSet map[group.MemberIndex]struct{},
 	includedMembersIndexes []group.MemberIndex,
+	evidence attempt.EvidenceRecorder,
 ) (map[group.MemberIndex]*buildTaggedTBTCSignerRoundContributionMessage, error) {
 	expectedMessagesCount := len(includedMembersIndexes) - 1
 	if expectedMessagesCount <= 0 {
@@ -991,10 +997,7 @@ func collectBuildTaggedTBTCSignerRoundContributionMessages(
 			return
 		}
 
-		select {
-		case messageChan <- payload:
-		default:
-		}
+		_ = enqueueOrRecordOverflow(payload, messageChan, evidence)
 	})
 
 	receivedMessages := make(
