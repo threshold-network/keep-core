@@ -170,7 +170,7 @@ type AttemptContext struct {
     AttemptNumber  uint
     IncludedSet    []group.MemberIndex
     ExcludedSet    []group.MemberIndex
-    AttemptSeed    int64
+    AttemptSeed    [32]byte
 }
 
 func (AttemptContext) Hash() [32]byte
@@ -181,6 +181,22 @@ message emitted in the attempt -- contribution messages already carry a
 `SessionIDValue`; we extend them with an `AttemptContextHash` field so
 the receiver can reject stale-attempt messages structurally instead of
 relying on session ID alone.
+
+`AttemptSeed` is widened from `int64` to `[32]byte` and *must* be
+derived from inputs the group already agrees on -- specifically:
+
+[source,go]
+----
+AttemptSeed = SHA256(
+    DkgGroupPublicKey || SessionID || MessageDigest,
+)
+----
+
+This binding prevents a malicious coordinator from picking a seed that
+shapes the included set in its favour. The seed is a pure function of
+session inputs; it is never chosen, only derived. Any signer can
+recompute it from the session header and verify the coordinator's
+participant selection.
 
 === Layer A: Receiver transition evidence (M4)
 
@@ -214,9 +230,26 @@ completes (either by signature aggregation or by timeout), which the
 coordinator consumes. The recorder itself never decides who is excluded;
 it only collects.
 
-Bounded means bounded: the recorder has a fixed-size ring per sender
-(configurable, default 16 overflow events). The point is to produce a
-fixed-size attestation, not to log everything forever.
+Bounded means bounded: the recorder has a fixed-size ring *per sender,
+per blame category*. The categories are tracked with separate quotas so
+one category cannot mask another -- a peer cannot spam overflow events
+to drown out reject evidence or vice-versa:
+
+[source,go]
+----
+type categoryQuota struct {
+    Overflow uint8 // default 8
+    Reject   uint8 // default 8
+    Conflict uint8 // default 4
+    Silence  uint8 // default 1 (single bit per attempt deadline)
+}
+----
+
+The point is to produce a fixed-size attestation, not to log
+everything forever. Per-attempt evidence is at most
+`O(|IncludedSet| * sum(quotas))` bytes -- bounded, predictable, and
+small enough to be signed and broadcast as a single message
+(see open question 1).
 
 === Layer B: Coordinator state (joining M4 and M7)
 
@@ -244,19 +277,38 @@ type Coordinator interface {
 `NextAttempt` is the policy function that produces the next attempt's
 context from the previous attempt's evidence. It is deterministic given
 `(AttemptContext, TransitionEvidence)` -- two coordinators with the same
-inputs agree on the next attempt without further coordination. The
-exclusion policy is:
+verified inputs agree on the next attempt without further coordination.
+The exclusion policy is:
 
-. Senders with overflow count above threshold during the attempt window
-  are moved to `ExcludedSet` (transport blamable).
-. Senders with confirmed reject events for non-transport reasons are
-  moved to `ExcludedSet` (validation blamable).
+. Senders with `OverflowCount >= overflowExclusionThreshold` during the
+  attempt window are moved to `ExcludedSet` (transport blamable).
+. Senders with at least one confirmed reject event for non-transport
+  reasons are moved to `ExcludedSet` (validation blamable).
 . Senders with deadline-expiry only -- silent peers -- are moved to a
   *parked* set that the next attempt skips but the attempt after that
   retries (to tolerate transient outages).
-. If `IncludedSet` minus exclusions drops below the threshold, the
+. If `IncludedSet` minus exclusions drops below the threshold `t`, the
   coordinator returns `ErrAttemptInfeasible` and the session is
   declared failed for this signer set.
+
+The thresholds are *fixed constants* in the initial design, picked to
+be evidently small relative to the per-attempt deadline and the
+`expectedMessagesCount*4+1` channel capacity:
+
+[source,go]
+----
+const (
+    overflowExclusionThreshold = 4 // overflow events per attempt window
+    rejectExclusionThreshold   = 1 // any confirmed non-transport reject
+    silenceParkingThreshold    = 1 // any deadline expiry parks for 1 attempt
+)
+----
+
+Making them constants up-front means honest signers do not need to
+negotiate them. If production telemetry indicates a constant is wrong
+for the attempt's wall-clock bound, the change is a routine code
+update that ships through Phase 7's manifest gate -- not a runtime
+parameter that drift can desynchronise.
 
 === Layer C: Retry orchestration (M7)
 
@@ -357,24 +409,51 @@ choices in their PR descriptions and reviews.
 . *Cross-process coordinator agreement.* Today each signer runs its own
   process; the coordinator state machine is per-process. We assume
   that two honest signers, fed the same `TransitionEvidence` from a
-  shared gossip layer, produce the same `NextAttempt`. The gossip
-  layer for transition evidence is not yet designed. Options:
+  shared gossip layer, produce the same `NextAttempt`. Without
+  agreement on the evidence input, the deterministic function still
+  produces divergent outputs -- node A excludes peer X (saw overflow),
+  node B does not (didn't), and the next-attempt sets disagree. This
+  defeats the whole point of the layered design.
++
+*Recommended path (signed-evidence gossip):* every observer signs the
+evidence it produced with its operator key and broadcasts the
+attestation on a dedicated evidence topic. Honest signers feed only
+*verified attestations* into the deterministic
+`NextAttempt`, taking the union over signed observations and applying
+the same exclusion thresholds. Two honest signers thus consume the
+same input set and produce the same output. A peer that signs
+conflicting evidence is itself slashable -- the signature is the
+binding.
++
+Options considered:
 .. Piggy-back on existing FROST broadcast channel -- simplest but
-   couples evidence to protocol round-trips.
-.. Dedicated evidence broadcast topic -- cleaner separation, more
-   wiring.
+   couples evidence to protocol round-trips and re-uses a topic with
+   different rate-limit characteristics.
+.. *Dedicated evidence broadcast topic with signed attestations
+   (recommended).* Cleaner separation, more wiring; the wiring is
+   what the design owes the protocol.
 .. Coordinator-only authoritative -- only the elected coordinator
    produces evidence and other signers verify but don't recompute.
    Closest to the paper but loses redundancy.
 +
-This is the question that most needs design-time review with
-threshold-network/keep-core protocol owners before Phase 3 lands.
+The recommendation is the recommended *entering* Phase 3. The final
+decision is still owed and is the question that most needs
+design-time review with threshold-network/keep-core protocol owners
+before Phase 3 lands.
 
 . *Persistence across signer restart.* If a signer crashes mid-attempt,
   does it lose its evidence? The paper assumes persistent state. For
   keep-core we likely accept evidence loss on restart at first (the
   attempt times out and a new attempt is started fresh) and revisit
   persistence in a follow-up RFC once we have wire-level evidence.
++
+*Sketch for Phase 5+:* introduce a `SyncState` gossip message. A
+restarting node broadcasts
+`(LastKnownAttemptContextHash, KeyGroupID)`; peers reply with their
+current attempt and the set of signed attestations they hold for
+that attempt. This avoids the timeout-and-restart cost on graceful
+redeploys without requiring on-disk persistence -- the peers'
+gossiped attestations *are* the persistent record.
 . *FFI surface.* `tbtc-signer` (the Rust engine) does not need to know
   about ROAST coordinator state -- it remains a pure signing engine.
   But it does need to surface structured errors that the coordinator
