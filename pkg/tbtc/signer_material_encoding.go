@@ -13,6 +13,21 @@ import (
 
 var signerMaterialEnvelopePrefix = []byte("tbtc-signer-material-v1:")
 
+// signerMaterialMaxFormatLength bounds the length of the format identifier in
+// a serialized signer-material envelope. Real format identifiers are short
+// labels like "frost-tbtc-signer-v1", so 256 bytes is generous; the cap exists
+// to refuse a uvarint-claimed length that would allocate a huge string from a
+// hostile or corrupted payload before the existing `offset+int(formatLength) >
+// len(data)` bounds check runs.
+const signerMaterialMaxFormatLength uint64 = 256
+
+// signerMaterialMaxPayloadLength bounds the length of the payload body. JSON
+// envelopes for FROST and the tBTC-signer key material carry tens of KiB of
+// hex; 256 KiB is comfortably above that and refuses a uvarint-claimed length
+// that would allocate hundreds of MiB from a corrupted state file or a
+// hostile peer.
+const signerMaterialMaxPayloadLength uint64 = 256 * 1024
+
 type unmarshaledSignerMaterial struct {
 	signerMaterial  any
 	privateKeyShare *tecdsa.PrivateKeyShare
@@ -154,6 +169,13 @@ func decodeNativeSignerMaterialFromPersistence(
 	if err != nil {
 		return nil, true, fmt.Errorf("invalid signer material format length: [%w]", err)
 	}
+	if formatLength > signerMaterialMaxFormatLength {
+		return nil, true, fmt.Errorf(
+			"signer material format length %d exceeds maximum %d",
+			formatLength,
+			signerMaterialMaxFormatLength,
+		)
+	}
 	offset += lengthBytes
 
 	if offset+int(formatLength) > len(data) {
@@ -166,6 +188,13 @@ func decodeNativeSignerMaterialFromPersistence(
 	payloadLength, lengthBytes, err := readPersistenceUvarint(data, offset)
 	if err != nil {
 		return nil, true, fmt.Errorf("invalid signer material payload length: [%w]", err)
+	}
+	if payloadLength > signerMaterialMaxPayloadLength {
+		return nil, true, fmt.Errorf(
+			"signer material payload length %d exceeds maximum %d",
+			payloadLength,
+			signerMaterialMaxPayloadLength,
+		)
 	}
 	offset += lengthBytes
 

@@ -25,14 +25,40 @@ type buildTaggedNativeExecutionAdapter struct {
 }
 
 func registerNativeExecutionAdapterForBuild() {
+	// Registration errors are surfaced via `LastNativeRegistrationError()`
+	// rather than panicking, so a transient registration failure at init time
+	// does not crash the binary. `currentNativeExecutionBackend()` already
+	// reports `ErrNativeCryptographyUnavailable` when no native adapter is
+	// registered, which keeps the legacy execution backend as the safe-by-
+	// default fallback.
 	err := RegisterNativeExecutionBridge(newBuildTaggedNativeExecutionBridge())
 	if err != nil {
-		panic(fmt.Sprintf("failed to register build-tagged native bridge: [%v]", err))
+		registrationLogger.Warnf(
+			"failed to register build-tagged native bridge: [%v]; "+
+				"native execution will report unavailable and the legacy "+
+				"execution backend remains the safe-by-default path",
+			err,
+		)
+		setLastRegistrationError(fmt.Errorf(
+			"failed to register build-tagged native bridge: [%w]",
+			err,
+		))
+		return
 	}
 
 	err = RegisterNativeExecutionAdapter(newBuildTaggedNativeExecutionAdapter())
 	if err != nil {
-		panic(fmt.Sprintf("failed to register build-tagged native adapter: [%v]", err))
+		registrationLogger.Warnf(
+			"failed to register build-tagged native adapter: [%v]; "+
+				"native execution will report unavailable and the legacy "+
+				"execution backend remains the safe-by-default path",
+			err,
+		)
+		setLastRegistrationError(fmt.Errorf(
+			"failed to register build-tagged native adapter: [%w]",
+			err,
+		))
+		return
 	}
 }
 

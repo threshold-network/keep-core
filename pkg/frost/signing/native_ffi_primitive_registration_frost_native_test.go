@@ -51,13 +51,14 @@ func TestRegisterNativeExecutionFFISigningPrimitiveForBuild_UsesDefaultProvider(
 	}
 }
 
-func TestRegisterNativeExecutionFFISigningPrimitiveForBuild_ProviderErrorPanics(
+func TestRegisterNativeExecutionFFISigningPrimitiveForBuild_ProviderErrorIsRecordedNotPanicked(
 	t *testing.T,
 ) {
 	UnregisterNativeExecutionFFISigningPrimitiveProviderForBuild()
 	UnregisterNativeExecutionFFIExecutor()
 	t.Cleanup(UnregisterNativeExecutionFFISigningPrimitiveProviderForBuild)
 	t.Cleanup(UnregisterNativeExecutionFFIExecutor)
+	t.Cleanup(func() { setLastRegistrationError(nil) })
 
 	expectedErr := errors.New("provider error")
 
@@ -71,24 +72,35 @@ func TestRegisterNativeExecutionFFISigningPrimitiveForBuild_ProviderErrorPanics(
 	}
 
 	defer func() {
-		recovered := recover()
-		if recovered == nil {
-			t.Fatal("expected panic")
-		}
-
-		recoveredError, ok := recovered.(string)
-		if !ok {
-			t.Fatalf("unexpected panic type: [%T]", recovered)
-		}
-
-		if !strings.Contains(recoveredError, expectedErr.Error()) {
+		if recovered := recover(); recovered != nil {
 			t.Fatalf(
-				"unexpected panic value\nexpected substring: [%s]\nactual:             [%v]",
-				expectedErr.Error(),
+				"registration must not panic; recovered: [%v]",
 				recovered,
 			)
 		}
 	}()
 
+	// Pre-condition: the registration error slot is clear before invoking the
+	// helper, so any non-nil error after the call is from this attempt.
+	setLastRegistrationError(nil)
+
 	RegisterNativeExecutionFFISigningPrimitiveForBuild()
+
+	registered := LastNativeRegistrationError()
+	if registered == nil {
+		t.Fatal("expected LastNativeRegistrationError to surface the provider error")
+	}
+	if !strings.Contains(registered.Error(), expectedErr.Error()) {
+		t.Fatalf(
+			"LastNativeRegistrationError missing expected substring\nexpected: [%s]\nactual:   [%v]",
+			expectedErr.Error(),
+			registered,
+		)
+	}
+
+	if currentNativeExecutionFFIExecutor() != nil {
+		t.Fatal(
+			"FFI executor must not be registered when the provider returned an error",
+		)
+	}
 }

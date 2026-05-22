@@ -927,7 +927,14 @@ func parseBuildTaggedTBTCSignerResult(
 	operation string,
 	result C.TbtcSignerResult,
 ) ([]byte, error) {
-	defer C.tbtc_signer_free_buffer(result.buffer.ptr, result.buffer.len)
+	// The C wrapper guards against a missing `frost_tbtc_free_buffer` symbol
+	// but not against a NULL buffer pointer. Status code -1 paths (FFI lib
+	// unavailable) and any future path that returns an empty buffer can leave
+	// `result.buffer.ptr == nil`, so skip the deferred free in that case to
+	// avoid handing a NULL pointer to Rust's `frost_tbtc_free_buffer`.
+	if result.buffer.ptr != nil {
+		defer C.tbtc_signer_free_buffer(result.buffer.ptr, result.buffer.len)
+	}
 
 	statusCode := int32(result.status_code)
 
