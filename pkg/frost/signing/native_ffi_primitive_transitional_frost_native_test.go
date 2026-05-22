@@ -1730,6 +1730,8 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_BootstrapVersion_InvalidCoarseSignatureFallsBack(
 	t *testing.T,
 ) {
+	t.Setenv(AcceptScaffoldKeyGroupEnvVar, "true")
+
 	engine := &mockBuildTaggedTBTCSignerEngine{
 		version:           "tbtc-signer/0.1.0-bootstrap",
 		finalizeSignature: []byte{0xaa},
@@ -1828,6 +1830,98 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 		t.Fatalf(
 			"did not expect coarse signature events\nactual: [%v]",
 			observedCoarseSignatureEvents,
+		)
+	}
+}
+
+func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_RefusesScaffoldMaterialWithoutOptIn(
+	t *testing.T,
+) {
+	// Closes the persistence-vs-execution gap: even when the native
+	// tbtc-signer engine is registered (scaffold material on disk from a
+	// previous opted-in session is enough to reach this point), the FFI
+	// signing path must refuse to feed RunDKG placeholder participant
+	// pubkeys without an active operator opt-in. Force the env var off so
+	// any value inherited from the test runner's containing process cannot
+	// suppress the refusal.
+	t.Setenv(AcceptScaffoldKeyGroupEnvVar, "")
+
+	engine := &mockBuildTaggedTBTCSignerEngine{
+		version: "tbtc-signer/0.1.0-bootstrap",
+		runDKGResult: &NativeTBTCSignerDKGResult{
+			SessionID:        "session-scaffold-refused",
+			KeyGroup:         "group-from-dkg",
+			ParticipantCount: 3,
+			Threshold:        2,
+			CreatedAtUnix:    1,
+		},
+		finalizeSignature: buildTaggedTBTCSignerValidTestSignature(0x22),
+	}
+	UnregisterNativeTBTCSignerEngine()
+	UnregisterNativeTBTCSignerCoarseSignatureObserver()
+	t.Cleanup(UnregisterNativeTBTCSignerEngine)
+	t.Cleanup(UnregisterNativeTBTCSignerCoarseSignatureObserver)
+
+	if err := RegisterNativeTBTCSignerEngine(engine); err != nil {
+		t.Fatalf("unexpected registration error: [%v]", err)
+	}
+
+	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
+
+	signature, err := primitive.Sign(nil, nil, &NativeExecutionFFISigningRequest{
+		Message:            big.NewInt(123),
+		SessionID:          "session-scaffold-refused",
+		MemberIndex:        1,
+		GroupSize:          3,
+		DishonestThreshold: 1,
+		SignerMaterial: &NativeSignerMaterial{
+			Format: NativeSignerMaterialFormatFrostTBTCSignerV1,
+			Payload: []byte(
+				`{"keyGroup":"legacy-wallet-derived","keyGroupSource":"legacy-wallet-pubkey"}`,
+			),
+		},
+	})
+	if err == nil {
+		t.Fatal("expected scaffold-refusal error from FFI signing path")
+	}
+	if signature != nil {
+		t.Fatal("expected nil signature when scaffold path is refused")
+	}
+
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"expected ErrNativeCryptographyUnavailable wrap; got: [%v]",
+			err,
+		)
+	}
+	if !strings.Contains(err.Error(), AcceptScaffoldKeyGroupEnvVar) {
+		t.Fatalf(
+			"expected scaffold-refusal error to reference %s; got: [%v]",
+			AcceptScaffoldKeyGroupEnvVar,
+			err,
+		)
+	}
+	if !strings.Contains(err.Error(), NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey) {
+		t.Fatalf(
+			"expected scaffold-refusal error to reference %s; got: [%v]",
+			NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey,
+			err,
+		)
+	}
+
+	if engine.runDKGCalled {
+		t.Fatal(
+			"RunDKG must not be called when the scaffold opt-in flag is unset; " +
+				"refusing before the placeholder participant pubkeys are built " +
+				"is the whole point of the fence",
+		)
+	}
+	if engine.startCalled {
+		t.Fatal("StartSignRound must not be called when the scaffold path is refused")
+	}
+	if engine.finalizeCalled {
+		t.Fatal(
+			"FinalizeSignRound must not be called when the scaffold path is refused",
 		)
 	}
 }
@@ -2022,6 +2116,11 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_NoEngineNoLegacyShare(
 	t *testing.T,
 ) {
+	// Scaffold-era signing path requires explicit operator opt-in; this test
+	// exercises the engine-unavailable + no-legacy-share branch which lives
+	// past the scaffold fence.
+	t.Setenv(AcceptScaffoldKeyGroupEnvVar, "true")
+
 	UnregisterNativeTBTCSignerEngine()
 	UnregisterNativeTBTCSignerFallbackObserver()
 	UnregisterNativeTBTCSignerCoarseSignatureObserver()
@@ -2094,6 +2193,8 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_AttemptVariationRunDKGConflictFallsBack(
 	t *testing.T,
 ) {
+	t.Setenv(AcceptScaffoldKeyGroupEnvVar, "true")
+
 	UnregisterNativeTBTCSignerEngine()
 	UnregisterNativeTBTCSignerFallbackObserver()
 	UnregisterNativeTBTCSignerCoarseSignatureObserver()
@@ -2217,6 +2318,8 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_BootstrapVersion_AttemptVariationStartSignRoundConflictFallsBack(
 	t *testing.T,
 ) {
+	t.Setenv(AcceptScaffoldKeyGroupEnvVar, "true")
+
 	UnregisterNativeTBTCSignerEngine()
 	UnregisterNativeTBTCSignerFallbackObserver()
 	UnregisterNativeTBTCSignerCoarseSignatureObserver()
@@ -2399,6 +2502,11 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_InvalidAttemptPolicy_DoesNotFallback(
 	t *testing.T,
 ) {
+	// Scaffold-era signing path requires explicit operator opt-in; this test
+	// exercises the FFI flow's invalid-attempt-policy branch, which lives
+	// past the scaffold fence.
+	t.Setenv(AcceptScaffoldKeyGroupEnvVar, "true")
+
 	fixtures, err := tecdsatest.LoadPrivateKeyShareTestFixtures(3)
 	if err != nil {
 		t.Fatalf("failed loading key share fixtures: [%v]", err)
@@ -2550,6 +2658,11 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_ConsumedAttemptReplay_DoesNotFallback(
 	t *testing.T,
 ) {
+	// Scaffold-era signing path requires explicit operator opt-in; this test
+	// exercises the FFI flow's consumed-attempt-replay branch, which lives
+	// past the scaffold fence.
+	t.Setenv(AcceptScaffoldKeyGroupEnvVar, "true")
+
 	fixtures, err := tecdsatest.LoadPrivateKeyShareTestFixtures(3)
 	if err != nil {
 		t.Fatalf("failed loading key share fixtures: [%v]", err)
