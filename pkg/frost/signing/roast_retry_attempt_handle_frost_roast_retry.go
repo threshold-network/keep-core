@@ -166,3 +166,12 @@ func currentAttemptHandleForCollect(
 	}
 	return binding.handle, binding.context, true
 }
+
+// CurrentAttemptHandleForSession is the exported alias for callers
+// outside the package (e.g. the ROAST-driven signing selector in
+// pkg/tbtc). It is identical to currentAttemptHandleForCollect.
+func CurrentAttemptHandleForSession(
+	sessionID string,
+) (roast.AttemptHandle, attempt.AttemptContext, bool) {
+	return currentAttemptHandleForCollect(sessionID)
+}

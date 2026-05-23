@@ -8,6 +8,11 @@ import (
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
+// Note: TestDefaultSigningParticipantSelector_IsLegacy below is
+// build-tag-conditional (see _default_build_test.go); under
+// frost_roast_retry the default is the ROAST selector and a
+// dedicated test verifies that.
+
 // recordingSelector counts how often Select was called and returns
 // a fixed result. Tests use it to assert the dispatcher routes
 // participant selection through the configured selector rather
@@ -33,16 +38,6 @@ func (r *recordingSelector) Select(
 		return r.result, nil
 	}
 	return members, nil
-}
-
-func TestDefaultSigningParticipantSelector_IsLegacy(t *testing.T) {
-	sel := defaultSigningParticipantSelector()
-	if _, ok := sel.(legacySigningParticipantSelector); !ok {
-		t.Fatalf(
-			"defaultSigningParticipantSelector must return legacy implementation; got %T",
-			sel,
-		)
-	}
 }
 
 func TestLegacySigningParticipantSelector_DelegatesToRetryShuffle(t *testing.T) {

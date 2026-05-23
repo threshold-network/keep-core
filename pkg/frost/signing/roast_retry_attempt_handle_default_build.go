@@ -38,3 +38,13 @@ func currentAttemptHandleForCollect(
 ) (roast.AttemptHandle, attempt.AttemptContext, bool) {
 	return roast.AttemptHandle{}, attempt.AttemptContext{}, false
 }
+
+// CurrentAttemptHandleForSession is the exported alias for
+// callers outside the package (e.g. the ROAST-driven signing
+// selector in pkg/tbtc). In the default build it is a no-op that
+// always returns ok=false.
+func CurrentAttemptHandleForSession(
+	sessionID string,
+) (roast.AttemptHandle, attempt.AttemptContext, bool) {
+	return currentAttemptHandleForCollect(sessionID)
+}
