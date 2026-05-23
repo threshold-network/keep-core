@@ -6,6 +6,7 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/frost/roast"
 	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
 // ErrNoRoastRetryCoordinatorRegistered is returned by
@@ -71,9 +72,73 @@ func BeginOrchestrationForSession(
 	}
 	SetCurrentAttemptHandleForSession(sessionID, handle, ctx)
 	cleanup := func() {
+		// RFC-21 Phase 7.1: if this node is the elected
+		// coordinator and the attempt is still in the Collecting
+		// state at cleanup time (i.e. it did not succeed via
+		// signature aggregation), produce the TransitionMessage
+		// and stash it in the per-session bundle registry. Phase
+		// 7.2's ROAST signingParticipantSelector consumes the
+		// stashed bundle to compute the next attempt's
+		// IncludedSet via EvaluateRoastRetryForSigning.
+		//
+		// Failures are best-effort and silent: a panic in the
+		// deferred cleanup is materially worse than a missing
+		// transition bundle (the next attempt's selector falls
+		// back to the legacy retry shuffle), so we swallow errors
+		// rather than propagate them.
+		maybeProduceTransitionBundle(sessionID, handle, deps)
 		ClearCurrentAttemptHandleForSession(sessionID)
 	}
 	return handle, cleanup, nil
+}
+
+// maybeProduceTransitionBundle attempts to call AggregateBundle on
+// the registered Coordinator when (a) the local node is the
+// elected coordinator for the attempt and (b) the attempt has not
+// already transitioned. The result is stashed via
+// RecordTransitionBundleForSession (a no-op in default build); on
+// any error path the function returns silently because cleanup
+// must not break the signing-flow contract.
+//
+// In the default build this still compiles because
+// RecordTransitionBundleForSession is a no-op stub; calls to
+// roast.Coordinator methods compile because pkg/frost/roast is
+// not build-tagged.
+func maybeProduceTransitionBundle(
+	sessionID string,
+	handle roast.AttemptHandle,
+	deps RoastRetryDeps,
+) {
+	if deps.Coordinator == nil {
+		return
+	}
+	if deps.SelfMember == 0 {
+		// Without a known self-member, we cannot determine
+		// whether to aggregate. Skip.
+		return
+	}
+	elected, err := deps.Coordinator.SelectedCoordinator(handle)
+	if err != nil {
+		return
+	}
+	if elected != group.MemberIndex(deps.SelfMember) {
+		return
+	}
+	state, err := deps.Coordinator.State(handle)
+	if err != nil {
+		return
+	}
+	if state != roast.AttemptStateCollecting {
+		// Already transitioned or succeeded -- nothing to do.
+		return
+	}
+	bundle, err := deps.Coordinator.AggregateBundle(handle)
+	if err != nil {
+		// Best-effort; the next attempt's selector will fall
+		// back to the legacy retry shuffle.
+		return
+	}
+	RecordTransitionBundleForSession(sessionID, bundle)
 }
 
 // EndOrchestrationForSession is a convenience for callers that
