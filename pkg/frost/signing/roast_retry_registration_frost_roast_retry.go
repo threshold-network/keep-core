@@ -34,11 +34,17 @@ var (
 // Safe for concurrent registration / lookup; a later registration
 // fully replaces an earlier one (this is the documented behaviour --
 // reconfiguring at runtime is intentional).
+//
+// As a side effect, the first registration starts the
+// session-handle sweeper goroutine that evicts orphaned bindings
+// (RFC-21 Phase 5.2 defence-in-depth backstop). Subsequent
+// registrations do not restart the sweeper.
 func RegisterRoastRetryCoordinator(deps RoastRetryDeps) {
 	roastRetryRegistrationMu.Lock()
-	defer roastRetryRegistrationMu.Unlock()
 	roastRetryRegistration = deps
 	roastRetryRegistered = true
+	roastRetryRegistrationMu.Unlock()
+	StartSessionHandleSweeper()
 }
 
 // RegisteredRoastRetryCoordinator returns the currently-registered

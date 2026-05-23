@@ -26,6 +26,10 @@ func ClearCurrentAttemptHandleForSession(_ string) {}
 // build.
 func ResetSessionHandleRegistryForTest() {}
 
+// StartSessionHandleSweeper is a no-op in the default build: with
+// no real registry there is nothing to sweep.
+func StartSessionHandleSweeper() {}
+
 // currentAttemptHandleForCollect always returns ok=false in the
 // default build, so submitSnapshotIfActive exits without attempting
 // the RecordEvidence call.
