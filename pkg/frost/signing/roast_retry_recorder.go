@@ -30,5 +30,9 @@ func roastRetryRecorderForCollect() attempt.EvidenceRecorder {
 	if _, ok := RegisteredRoastRetryCoordinator(); !ok {
 		return attempt.NoOpRecorder()
 	}
-	return attempt.NewBoundedRecorder()
+	// Wrap the bounded recorder with the metrics-emitting
+	// decorator so RecordOverflow/Reject/Conflict bump the
+	// process-wide cumulative counters that
+	// RegisterRoastRetryMetrics exposes to clientinfo.
+	return newMetricsEmittingRecorder(attempt.NewBoundedRecorder())
 }
