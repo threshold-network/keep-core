@@ -1,10 +1,25 @@
 package signing
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/keep-network/keep-core/pkg/frost/roast"
 	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
+)
+
+// ErrNoRoastRetryCoordinatorRegistered is returned by
+// BeginOrchestrationForSession when the package-level ROAST-retry
+// registry has not been populated by a caller. The error is the
+// "static configuration" class per the RFC-21 Phase-6 Resolved
+// Decision on orchestration error taxonomy: it is safe to fall
+// back to the legacy retry path because every honest signer
+// observes the same registry state at the same node startup, so
+// the fallback decision is deterministic across the group.
+//
+// Use errors.Is to detect.
+var ErrNoRoastRetryCoordinatorRegistered = errors.New(
+	"roast orchestration: no coordinator registered",
 )
 
 // BeginOrchestrationForSession encapsulates the per-session
@@ -37,7 +52,8 @@ func BeginOrchestrationForSession(
 	deps, ok := RegisteredRoastRetryCoordinator()
 	if !ok {
 		return roast.AttemptHandle{}, nil, fmt.Errorf(
-			"roast orchestration: no coordinator registered; caller should fall back to legacy behaviour",
+			"%w: caller should fall back to legacy behaviour",
+			ErrNoRoastRetryCoordinatorRegistered,
 		)
 	}
 	if deps.Coordinator == nil {
