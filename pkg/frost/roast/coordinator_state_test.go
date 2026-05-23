@@ -248,12 +248,12 @@ func TestInMemoryCoordinator_ConcurrentBeginAttemptsAreRaceSafe(t *testing.T) {
 
 func TestAttemptState_String(t *testing.T) {
 	cases := map[AttemptState]string{
-		AttemptStatePending:       "pending",
-		AttemptStateCollecting:    "collecting",
-		AttemptStateAggregating:   "aggregating",
-		AttemptStateSucceeded:     "succeeded",
-		AttemptStateTransitioned:  "transitioned",
-		AttemptState(99):          "unknown(99)",
+		AttemptStatePending:      "pending",
+		AttemptStateCollecting:   "collecting",
+		AttemptStateAggregating:  "aggregating",
+		AttemptStateSucceeded:    "succeeded",
+		AttemptStateTransitioned: "transitioned",
+		AttemptState(99):         "unknown(99)",
 	}
 	for state, want := range cases {
 		if got := state.String(); got != want {
