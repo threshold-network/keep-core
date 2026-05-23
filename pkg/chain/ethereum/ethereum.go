@@ -452,6 +452,8 @@ func (bc *baseChain) blockByNumber(number uint64) (*types.Block, error) {
 
 	// Fetch the header to avoid decoding full transactions (some providers
 	// may return transaction types the client library does not support yet).
+	// The returned *types.Block carries only header fields; transactions and
+	// uncles are empty. Callers that need tx data must fetch the full block.
 	header, err := bc.client.HeaderByNumber(ctx, big.NewInt(int64(number)))
 	if err != nil {
 		return nil, err
