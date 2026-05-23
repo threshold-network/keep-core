@@ -13,7 +13,6 @@ import (
 
 	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-core/pkg/chain"
-	"github.com/keep-network/keep-core/pkg/frost/retry"
 	"github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"golang.org/x/exp/slices"
@@ -107,6 +106,12 @@ type signingRetryLoop struct {
 	attemptSeed       int64
 
 	doneCheck signingDoneCheckStrategy
+
+	// participantSelector dispatches qualified-operator selection.
+	// Default: legacy retry shuffle. Phase 7 may install a
+	// ROAST-driven implementation behind the frost_roast_retry
+	// build tag once AggregateBundle production is wired upstream.
+	participantSelector signingParticipantSelector
 }
 
 func newSigningRetryLoop(
@@ -130,6 +135,7 @@ func newSigningRetryLoop(
 		attemptStartBlock:       initialStartBlock,
 		attemptSeed:             signingAttemptSeed(message),
 		doneCheck:               doneCheck,
+		participantSelector:     defaultSigningParticipantSelector(),
 	}
 }
 
@@ -492,11 +498,16 @@ func (srl *signingRetryLoop) qualifiedOperatorsSet(
 		)
 	}
 
-	qualifiedOperators, err := retry.EvaluateRetryParticipantsForSigning(
+	// RFC-21 Phase 6.4: dispatch through participantSelector so a
+	// future ROAST-driven implementation can be installed behind
+	// the frost_roast_retry build tag without touching this call
+	// site. Default and current behaviour: legacy retry shuffle.
+	qualifiedOperators, err := srl.participantSelector.Select(
 		readySigningGroupOperators,
 		srl.attemptSeed,
 		retryCount,
 		uint(srl.groupParameters.HonestThreshold),
+		fmt.Sprintf("%v", srl.message),
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
