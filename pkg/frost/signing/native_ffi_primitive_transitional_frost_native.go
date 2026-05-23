@@ -861,15 +861,19 @@ func buildTaggedTBTCSignerRoundContributions(
 		return nil, fmt.Errorf("cannot send round contribution message: [%w]", err)
 	}
 
-	// RFC-21 Phase 4.2: recorder comes from the roast-retry
-	// registry. NoOp fallback when nothing is registered preserves
-	// Phase 2 receive semantics.
+	// RFC-21 Phase 4.2/4.3: recorder comes from the roast-retry
+	// registry; deferred submission pushes the snapshot into
+	// Coordinator.RecordEvidence at end-of-collect. NoOp fallback
+	// when nothing is registered preserves Phase 2 receive
+	// semantics.
+	contributionsRecorder := roastRetryRecorderForCollect()
+	defer submitSnapshotIfActive(request.SessionID, contributionsRecorder)
 	peerMessages, err := collectBuildTaggedTBTCSignerRoundContributionMessages(
 		ctx,
 		request,
 		includedMembersSet,
 		includedMembersIndexes,
-		roastRetryRecorderForCollect(),
+		contributionsRecorder,
 	)
 	if err != nil {
 		return nil, err

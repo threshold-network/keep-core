@@ -350,21 +350,23 @@ func executeNativeFROSTSigning(
 		return nil, fmt.Errorf("cannot send native FROST round one message: [%w]", err)
 	}
 
-	// RFC-21 Phase 4.2: the recorder comes from the per-process
+	// RFC-21 Phase 4.2/4.3: the recorder comes from the per-process
 	// roast-retry registry. When the registry is empty (default
 	// build, or no caller has registered a coordinator), the helper
 	// returns attempt.NoOpRecorder() and behaviour matches Phase 2.
 	// When the registry has a coordinator, the helper returns a
 	// fresh BoundedRecorder so overflow drops at the receive
-	// callback are captured. PR 4.3 will read this recorder's
-	// Snapshot at end-of-collect and submit the result via
-	// Coordinator.RecordEvidence.
+	// callback are captured. The deferred submitSnapshotIfActive
+	// reads the recorder's Snapshot at end-of-collect and submits
+	// the result via Coordinator.RecordEvidence.
+	roundOneRecorder := roastRetryRecorderForCollect()
+	defer submitSnapshotIfActive(request.SessionID, roundOneRecorder)
 	roundOneMessages, err := collectNativeFROSTRoundOneMessages(
 		ctx,
 		request,
 		includedMembersSet,
 		includedMembersIndexes,
-		roastRetryRecorderForCollect(),
+		roundOneRecorder,
 	)
 	if err != nil {
 		return nil, err
@@ -440,13 +442,16 @@ func executeNativeFROSTSigning(
 		return nil, fmt.Errorf("cannot send native FROST round two message: [%w]", err)
 	}
 
-	// RFC-21 Phase 4.2 recorder source -- see round-one caller above.
+	// RFC-21 Phase 4.2/4.3 recorder source + deferred submission --
+	// see round-one caller above.
+	roundTwoRecorder := roastRetryRecorderForCollect()
+	defer submitSnapshotIfActive(request.SessionID, roundTwoRecorder)
 	roundTwoMessages, err := collectNativeFROSTRoundTwoMessages(
 		ctx,
 		request,
 		includedMembersSet,
 		includedMembersIndexes,
-		roastRetryRecorderForCollect(),
+		roundTwoRecorder,
 	)
 	if err != nil {
 		return nil, err
