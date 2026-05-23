@@ -634,6 +634,65 @@ field on `sessionAttemptBinding`. The eviction does not depend
 on session-completion correctness; it only catches the
 panic-before-defer pathological case.
 
+=== Orchestration error taxonomy
+
+*Decision: orchestration errors are bucketed into two classes, with
+fundamentally different handling.*
+
+When the executor adapter calls `BeginOrchestrationForSession`,
+the call can fail for two distinct reasons that the receiver MUST
+distinguish:
+
+. *Static-configuration errors* -- the build was deployed without
+  the readiness env var, or no caller has registered a coordinator.
+  These errors are fully deterministic: every honest signer
+  observes the same error from the same configuration at the same
+  startup state. Safe to log at INFO and fall back to the legacy
+  retry path. Sentinel errors `ErrRoastRetryReadinessOptOut` and
+  `ErrNoRoastRetryCoordinatorRegistered` (introduced in Phase 6.3)
+  signal this class; `errors.Is` checks identify them.
+
+. *Runtime state-machine errors* -- `Coordinator.BeginAttempt`
+  returned an error (out-of-memory, malformed AttemptContext,
+  internal invariant violated, etc.). These errors are
+  non-deterministic across nodes: node A may experience a runtime
+  failure while node B succeeds. Treat them as hard failures:
+  return an error from the executor adapter, declare the session
+  failed.
+
+The safety reason is load-bearing. If node A falls back to the
+legacy retry shuffle while node B proceeds with the ROAST state
+machine, the two nodes compute different `NextAttempt` participant
+sets, and the signing group fractures permanently. The legacy
+fallback is only acceptable when every honest signer would make
+the same choice, which is true for static configuration and false
+for runtime errors.
+
+This decision applies to Phase 6.3 (orchestration wiring at the
+executor adapter) and Phase 6.4 (call-site migration). Phase 5
+deliberately ships orchestration as best-effort because it has no
+production consumer; Phase 6 is where the safety distinction
+matters.
+
+=== `FrostUniFFIV1` signer-material prerequisite
+
+*Decision: Phase 7's manifest flip is gated on verified migration
+away from `FrostUniFFIV1` signer material across all production
+signers.*
+
+Phase 6.1's `ExtractDkgGroupPublicKeyFromMaterial` switches on
+`NativeSignerMaterial.Format`. The two production-relevant formats
+(`FrostUniFFIV2` and `FrostTBTCSignerV1`) expose the DKG group
+public key on the material directly. The legacy `FrostUniFFIV1`
+format does not include the group key in a form Phase 6.1 can
+extract; the helper returns a descriptive error directing
+operators to migrate.
+
+Until the network has fully migrated off V1, the Phase 7 readiness
+manifest cannot flip to `present`. The migration tracking
+mechanism is out of scope for this RFC; the prerequisite is
+documented here as a hard dependency of Phase 7.
+
 == Open questions
 
 . *Persistence across signer restart.* If a signer crashes mid-attempt,
