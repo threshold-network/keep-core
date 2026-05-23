@@ -413,22 +413,50 @@ choices in their PR descriptions and reviews.
   next-attempt loop under fault injection (synthetic overflow,
   synthetic reject, synthetic silence).
 
-=== Phase 5: Retry adapter
+=== Phase 5: Retry adapter, session orchestration, readiness gate
 
-* Add `EvaluateRoastRetryForSigning` and
-  `roast.SigningRetryAdapter`.
-* Migrate one signing call site behind the `frost_roast_retry` build
-  tag, leaving the other call sites on the legacy shuffle.
-* Wire a feature-flagged readiness gate (analogous to the existing
-  ROAST strict-mode guard) so production builds refuse to enable the
-  build tag without explicit operator opt-in.
+* Add `EvaluateRoastRetryForSigning` and `roast.SigningRetryAdapter`
+  with a `ChainAddressResolver` interface to bridge
+  `group.MemberIndex` (ROAST namespace) to `chain.Address` (legacy
+  namespace).
+* Wire session orchestration at the layer that constructs
+  `NativeExecutionFFISigningRequest`: at session start call
+  `Coordinator.BeginAttempt` and `SetCurrentAttemptHandleForSession`;
+  on session end call `ClearCurrentAttemptHandleForSession` from a
+  deferred cleanup so success and failure paths converge.
+* Add a TTL eviction sweep over `sessionAttemptBindings` (default
+  two hours) so a goroutine panic before the deferred clear cannot
+  leak bindings indefinitely (see Resolved decisions).
+* Wire a feature-flagged readiness gate
+  (`KEEP_CORE_FROST_ROAST_RETRY_ENABLED=true`) so production builds
+  with the `frost_roast_retry` tag still refuse to wire orchestration
+  without explicit operator opt-in. The gate matches the precedent
+  set by `KEEP_CORE_FROST_TBTC_SIGNER_ACCEPT_SCAFFOLD_KEY_GROUP`.
 
-=== Phase 6: Migrate remaining call sites
+*Important:* Phase 5 ships *no* signing-call-site migrations. The
+adapter exists and is fully wired, but no production receive loop
+calls it yet. A partial migration (round-one on ROAST, round-two on
+legacy shuffle within the same session) would fracture the
+attempt-context binding across the two rounds and disconnect the
+evidence captured in round-one from the participant selection in
+round-two. The readiness gate -- not partial migration -- is the
+risk-management mechanism.
 
-* Move remaining signing call sites onto the adapter.
+=== Phase 6: Migrate all signing call sites
+
+* Migrate *all three* signing call sites onto the adapter in a single
+  coordinated change:
+** `collectNativeFROSTRoundOneMessages`
+** `collectNativeFROSTRoundTwoMessages`
+** `collectBuildTaggedTBTCSignerRoundContributionMessages`
++
+The three flows share one attempt context per session; migrating
+them together preserves the round-to-round evidence binding within a
+session.
 * Once the legacy `EvaluateRetryParticipantsForSigning` has no
   callers, delete it. (Key-generation legacy retry stays.)
-* Remove the build tag; the new retry path is unconditional.
+* Remove the `frost_roast_retry` build tag; the new retry path is
+  unconditional once Phase 7's manifest gate flips.
 
 === Phase 7: Readiness manifest evidence
 
@@ -580,6 +608,31 @@ Under coordinator-aggregation, the per-transition payload is
 `O(N)` not `O(N^2)`. At a 100-signer group with all four
 quotas saturated the JSON-encoded bundle is ~10-20 KiB,
 comfortably within libp2p's per-message limits.
+
+=== Session-handle binding TTL eviction
+
+*Decision: a periodic sweep over `sessionAttemptBindings`
+(introduced by Phase 4.3) evicts entries older than a fixed TTL
+(default two hours).*
+
+Phase 4.3's session-handle registry expects the orchestration
+layer (Phase 5) to call `ClearCurrentAttemptHandleForSession`
+from a deferred cleanup when the session ends. A goroutine
+panic before the deferred clear runs would leak the binding
+permanently, since nothing else removes it.
+
+The two-hour TTL is a defence-in-depth backstop. It is long
+enough that no real signing session reaches it (typical sessions
+complete in seconds; a multi-attempt session under ROAST retry
+should not exceed minutes), and short enough that a leaked
+binding does not accumulate across days of node uptime. The
+sweep itself runs on a background goroutine; entries are evicted
+in batches under the registry's existing write lock.
+
+Phase 5.2 introduces both the sweep goroutine and the timestamp
+field on `sessionAttemptBinding`. The eviction does not depend
+on session-completion correctness; it only catches the
+panic-before-defer pathological case.
 
 == Open questions
 
