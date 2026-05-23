@@ -1002,6 +1002,11 @@ func collectBuildTaggedTBTCSignerRoundContributionMessages(
 			return
 		}
 
+		if err := verifyMessageAttemptContextHash(payload, request.SessionID); err != nil {
+			evidence.RecordReject(payload.SenderID(), "attempt_context_hash_mismatch")
+			return
+		}
+
 		_ = enqueueOrRecordOverflow(payload, messageChan, evidence)
 	})
 
