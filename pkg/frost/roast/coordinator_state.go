@@ -1,8 +1,10 @@
 package roast
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -82,18 +84,13 @@ func (h AttemptHandle) ContextHash() [attempt.MessageDigestLength]byte {
 // Coordinator is the ROAST coordinator state machine introduced by
 // RFC-21 Phase 3. It owns per-attempt state, the deterministic
 // participant selection (via the existing SelectCoordinator helper),
-// and -- in later Phase-3 PRs -- signed-evidence aggregation,
-// transition-message construction, and the NextAttempt policy.
+// signed-evidence aggregation, transition-message construction, and
+// -- in Phase 3.4 -- the NextAttempt policy.
 //
-// Phase 3.1 (this file) introduces only:
-//   - BeginAttempt: initialise tracking for a new attempt.
-//   - State: read the current AttemptState for a handle.
-//   - SelectedCoordinator: report the member elected as coordinator
-//     for the attempt.
-//
-// Phase 3.2 adds the TransitionMessage / LocalEvidenceSnapshot types.
-// Phase 3.3 adds AggregateBundle and VerifyBundle. Phase 3.4 adds the
-// NextAttempt policy function.
+// Phase 3.1 introduced BeginAttempt, State, and SelectedCoordinator.
+// Phase 3.3 (this commit) adds RecordEvidence, AggregateBundle, and
+// VerifyBundle.
+// Phase 3.4 will add NextAttempt.
 //
 // Implementations must be safe for concurrent calls from multiple
 // goroutines; production keep-core code paths are network-driven.
@@ -112,7 +109,65 @@ type Coordinator interface {
 	// for the attempt identified by the handle. Returns
 	// ErrUnknownAttempt if the handle is not tracked.
 	SelectedCoordinator(handle AttemptHandle) (group.MemberIndex, error)
+	// RecordEvidence stores a peer's signed LocalEvidenceSnapshot
+	// against the named attempt. The snapshot is validated for
+	// structural correctness, its OperatorSignature is verified
+	// against the configured SignatureVerifier, and its
+	// AttemptContextHash is checked to match the handle's bound
+	// context. First-write-wins / equal-or-reject semantics apply:
+	// a peer that re-submits the same byte-identical snapshot is
+	// idempotent; a peer that mutates its snapshot returns an error
+	// without overwriting the originally accepted one.
+	RecordEvidence(handle AttemptHandle, snapshot *LocalEvidenceSnapshot) error
+	// AggregateBundle is called by the elected coordinator's node
+	// to produce a TransitionMessage from the accumulated evidence
+	// snapshots. The bundle is sorted ascending by SenderID, signed
+	// with the coordinator's Signer, and the attempt state is
+	// transitioned to AttemptStateAggregating then
+	// AttemptStateTransitioned.
+	//
+	// Returns ErrNotAggregator if the caller is not the elected
+	// coordinator for the attempt (the Coordinator's selfMember
+	// must equal SelectedCoordinator(handle)).
+	AggregateBundle(handle AttemptHandle) (*TransitionMessage, error)
+	// VerifyBundle is called by every receiver of a
+	// TransitionMessage. It validates the structural invariants of
+	// the bundle, verifies the coordinator-level signature against
+	// the attempt's elected coordinator, verifies each contained
+	// snapshot's operator signature, and -- if the receiver has
+	// already submitted its own snapshot via RecordEvidence with
+	// the local Signer applied -- verifies that the receiver's own
+	// snapshot is present and byte-identical in the bundle
+	// (censorship detection).
+	//
+	// Returns ErrCensorshipDetected when the receiver's own
+	// submitted snapshot is missing or mutated. Returns
+	// ErrSignatureInvalid when any signature fails verification.
+	VerifyBundle(handle AttemptHandle, msg *TransitionMessage) error
 }
+
+// ErrNotAggregator is returned by AggregateBundle when the caller
+// is not the elected coordinator for the named attempt.
+var ErrNotAggregator = errors.New(
+	"coordinator: caller is not the elected coordinator for this attempt",
+)
+
+// ErrAttemptStateInvalid is returned when an operation is requested
+// against an attempt in a state that does not permit it (e.g.
+// AggregateBundle on an attempt already transitioned, or
+// RecordEvidence on an attempt past Collecting).
+var ErrAttemptStateInvalid = errors.New("coordinator: attempt state does not permit operation")
+
+// ErrAttemptContextMismatch is returned when a snapshot's
+// AttemptContextHash does not match the handle's bound context.
+var ErrAttemptContextMismatch = errors.New("coordinator: snapshot attempt context hash does not match attempt")
+
+// ErrSnapshotConflict is returned by RecordEvidence when a peer
+// re-submits a snapshot whose canonical bytes differ from the
+// previously-accepted snapshot for that peer in this attempt. The
+// originally accepted snapshot is retained; the new submission is
+// rejected (first-write-wins).
+var ErrSnapshotConflict = errors.New("coordinator: snapshot conflicts with previously recorded one (first-write-wins)")
 
 // ErrUnknownAttempt indicates an AttemptHandle does not correspond to
 // any attempt tracked by this Coordinator. Either the handle was
@@ -121,26 +176,58 @@ type Coordinator interface {
 var ErrUnknownAttempt = errors.New("coordinator: unknown attempt handle")
 
 // NewInMemoryCoordinator returns a Coordinator that tracks attempts
-// in-process. Phase 3 production paths use this implementation.
-// Later phases may add persistent variants once persistence is
-// designed (RFC-21 Open question on signer restart).
+// in-process with no operator-key signing wired in (NoOpSigner +
+// NoOpSignatureVerifier). Suitable for tests that exercise only the
+// structural state-machine surface; bundle verification will accept
+// any signature.
+//
+// Production Phase-4 callers should use
+// NewInMemoryCoordinatorWithSigning to inject the node's real
+// operator-key signer and the network's member-key-resolving
+// verifier.
 func NewInMemoryCoordinator() Coordinator {
+	return NewInMemoryCoordinatorWithSigning(
+		0,
+		NoOpSigner(),
+		NoOpSignatureVerifier(),
+	)
+}
+
+// NewInMemoryCoordinatorWithSigning returns an in-memory Coordinator
+// bound to the node's own member index, the node's operator-key
+// Signer, and a SignatureVerifier capable of resolving every member's
+// operator key. selfMember = 0 disables the censorship-detection
+// check in VerifyBundle (Phase 3.3 default for unit tests; Phase 4
+// always supplies a non-zero value).
+func NewInMemoryCoordinatorWithSigning(
+	selfMember group.MemberIndex,
+	signer Signer,
+	verifier SignatureVerifier,
+) Coordinator {
 	return &inMemoryCoordinator{
-		attempts: map[uint64]*attemptRecord{},
+		attempts:   map[uint64]*attemptRecord{},
+		selfMember: selfMember,
+		signer:     signer,
+		verifier:   verifier,
 	}
 }
 
 type attemptRecord struct {
-	handle      AttemptHandle
-	context     attempt.AttemptContext
-	coordinator group.MemberIndex
-	state       AttemptState
+	handle         AttemptHandle
+	context        attempt.AttemptContext
+	coordinator    group.MemberIndex
+	state          AttemptState
+	snapshots      map[group.MemberIndex]*LocalEvidenceSnapshot
+	selfSubmission *LocalEvidenceSnapshot
 }
 
 type inMemoryCoordinator struct {
-	mu       sync.Mutex
-	nextID   atomic.Uint64
-	attempts map[uint64]*attemptRecord
+	mu         sync.Mutex
+	nextID     atomic.Uint64
+	attempts   map[uint64]*attemptRecord
+	selfMember group.MemberIndex
+	signer     Signer
+	verifier   SignatureVerifier
 }
 
 func (c *inMemoryCoordinator) BeginAttempt(
@@ -171,6 +258,7 @@ func (c *inMemoryCoordinator) BeginAttempt(
 		context:     ctx,
 		coordinator: coord,
 		state:       AttemptStateCollecting,
+		snapshots:   map[group.MemberIndex]*LocalEvidenceSnapshot{},
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -200,4 +288,172 @@ func (c *inMemoryCoordinator) SelectedCoordinator(
 		return 0, ErrUnknownAttempt
 	}
 	return record.coordinator, nil
+}
+
+func (c *inMemoryCoordinator) RecordEvidence(
+	handle AttemptHandle,
+	snapshot *LocalEvidenceSnapshot,
+) error {
+	if snapshot == nil {
+		return errors.New("coordinator: snapshot is nil")
+	}
+	if err := snapshot.Validate(); err != nil {
+		return fmt.Errorf("coordinator: snapshot invalid: %w", err)
+	}
+	if err := verifySnapshotSignature(c.verifier, snapshot); err != nil {
+		return fmt.Errorf("coordinator: %w", err)
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	record, ok := c.attempts[handle.id]
+	if !ok {
+		return ErrUnknownAttempt
+	}
+	if record.state != AttemptStateCollecting {
+		return fmt.Errorf(
+			"%w: state is %v, want %v",
+			ErrAttemptStateInvalid,
+			record.state,
+			AttemptStateCollecting,
+		)
+	}
+	if !bytes.Equal(
+		snapshot.AttemptContextHash,
+		record.handle.contextHash[:],
+	) {
+		return ErrAttemptContextMismatch
+	}
+
+	if existing, present := record.snapshots[snapshot.SenderID()]; present {
+		existingBytes, err := CanonicalSnapshotBytes(existing)
+		if err != nil {
+			return fmt.Errorf("coordinator: canonical existing: %w", err)
+		}
+		newBytes, err := CanonicalSnapshotBytes(snapshot)
+		if err != nil {
+			return fmt.Errorf("coordinator: canonical new: %w", err)
+		}
+		if !bytes.Equal(existingBytes, newBytes) ||
+			!bytes.Equal(existing.OperatorSignature, snapshot.OperatorSignature) {
+			return ErrSnapshotConflict
+		}
+		// Identical re-submission: idempotent no-op.
+		return nil
+	}
+	record.snapshots[snapshot.SenderID()] = snapshot
+	if c.selfMember != 0 && snapshot.SenderID() == c.selfMember {
+		record.selfSubmission = snapshot
+	}
+	return nil
+}
+
+func (c *inMemoryCoordinator) AggregateBundle(
+	handle AttemptHandle,
+) (*TransitionMessage, error) {
+	c.mu.Lock()
+	record, ok := c.attempts[handle.id]
+	if !ok {
+		c.mu.Unlock()
+		return nil, ErrUnknownAttempt
+	}
+	if c.selfMember == 0 || record.coordinator != c.selfMember {
+		c.mu.Unlock()
+		return nil, ErrNotAggregator
+	}
+	if record.state != AttemptStateCollecting {
+		c.mu.Unlock()
+		return nil, fmt.Errorf(
+			"%w: state is %v, want %v",
+			ErrAttemptStateInvalid,
+			record.state,
+			AttemptStateCollecting,
+		)
+	}
+
+	senders := make([]group.MemberIndex, 0, len(record.snapshots))
+	for s := range record.snapshots {
+		senders = append(senders, s)
+	}
+	sort.Slice(senders, func(i, j int) bool { return senders[i] < senders[j] })
+
+	bundle := make([]LocalEvidenceSnapshot, 0, len(senders))
+	for _, s := range senders {
+		bundle = append(bundle, *record.snapshots[s])
+	}
+
+	record.state = AttemptStateAggregating
+	hash := record.handle.contextHash
+	coord := record.coordinator
+	c.mu.Unlock()
+
+	msg := &TransitionMessage{
+		AttemptContextHash: append([]byte{}, hash[:]...),
+		CoordinatorIDValue: uint32(coord),
+		Bundle:             bundle,
+	}
+	payload, err := CanonicalBundleBytes(msg)
+	if err != nil {
+		c.markTransitionedLocked(handle.id)
+		return nil, fmt.Errorf("coordinator: canonical bundle: %w", err)
+	}
+	sig, err := c.signer.Sign(payload)
+	if err != nil {
+		c.markTransitionedLocked(handle.id)
+		return nil, fmt.Errorf("coordinator: sign bundle: %w", err)
+	}
+	msg.CoordinatorSignature = sig
+	if err := msg.Validate(); err != nil {
+		c.markTransitionedLocked(handle.id)
+		return nil, fmt.Errorf("coordinator: aggregated bundle invalid: %w", err)
+	}
+	c.markTransitionedLocked(handle.id)
+	return msg, nil
+}
+
+func (c *inMemoryCoordinator) markTransitionedLocked(id uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if record, ok := c.attempts[id]; ok {
+		record.state = AttemptStateTransitioned
+	}
+}
+
+func (c *inMemoryCoordinator) VerifyBundle(
+	handle AttemptHandle,
+	msg *TransitionMessage,
+) error {
+	if msg == nil {
+		return errors.New("coordinator: transition message is nil")
+	}
+	if err := msg.Validate(); err != nil {
+		return fmt.Errorf("coordinator: transition message invalid: %w", err)
+	}
+
+	c.mu.Lock()
+	record, ok := c.attempts[handle.id]
+	if !ok {
+		c.mu.Unlock()
+		return ErrUnknownAttempt
+	}
+	expectedCoordinator := record.coordinator
+	expectedHash := record.handle.contextHash
+	selfSubmission := record.selfSubmission
+	c.mu.Unlock()
+
+	if !bytes.Equal(msg.AttemptContextHash, expectedHash[:]) {
+		return ErrAttemptContextMismatch
+	}
+	if err := verifyBundleSignature(c.verifier, msg, expectedCoordinator); err != nil {
+		return fmt.Errorf("coordinator: %w", err)
+	}
+	for i := range msg.Bundle {
+		if err := verifySnapshotSignature(c.verifier, &msg.Bundle[i]); err != nil {
+			return fmt.Errorf("coordinator: bundle[%d]: %w", i, err)
+		}
+	}
+	if err := verifyOwnObservationsPresent(msg, c.selfMember, selfSubmission); err != nil {
+		return err
+	}
+	return nil
 }

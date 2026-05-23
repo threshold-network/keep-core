@@ -148,10 +148,14 @@ func (s *LocalEvidenceSnapshot) Unmarshal(data []byte) error {
 	if err := json.Unmarshal(data, s); err != nil {
 		return err
 	}
-	return s.validate()
+	return s.Validate()
 }
 
-func (s *LocalEvidenceSnapshot) validate() error {
+// Validate runs the structural checks Unmarshal applies after a JSON
+// decode. Exposed publicly so callers that construct snapshots in
+// memory (e.g. the Coordinator state machine) can validate without
+// a marshal/unmarshal round-trip.
+func (s *LocalEvidenceSnapshot) Validate() error {
 	if s.SenderIDValue == 0 {
 		return errors.New("local evidence snapshot: senderID is zero")
 	}
@@ -242,10 +246,15 @@ func (m *TransitionMessage) Unmarshal(data []byte) error {
 	if err := json.Unmarshal(data, m); err != nil {
 		return err
 	}
-	return m.validate()
+	return m.Validate()
 }
 
-func (m *TransitionMessage) validate() error {
+// Validate runs the structural checks Unmarshal applies after a JSON
+// decode: bundle hash length, bundle size cap, coordinator id, every
+// snapshot's validity, bundle ordering, and intra-bundle hash
+// consistency. Exposed publicly so callers that construct messages
+// in memory can validate without a marshal/unmarshal round-trip.
+func (m *TransitionMessage) Validate() error {
 	if len(m.AttemptContextHash) != attempt.MessageDigestLength {
 		return fmt.Errorf(
 			"transition message: attemptContextHash length [%d], expected [%d]",
@@ -274,7 +283,7 @@ func (m *TransitionMessage) validate() error {
 		)
 	}
 	for i := range m.Bundle {
-		if err := m.Bundle[i].validate(); err != nil {
+		if err := m.Bundle[i].Validate(); err != nil {
 			return fmt.Errorf(
 				"transition message: bundle[%d] invalid: %w",
 				i, err,
