@@ -53,6 +53,24 @@ type OverflowEntry struct {
 	Count  uint              `json:"count"`
 }
 
+// RejectEntry carries one per-(sender, reason) reject count from an
+// attempt.Evidence map. The bundle's Rejects field is sorted
+// ascending first by Sender, then by Reason, so two honest signers
+// produce byte-identical canonical encodings.
+type RejectEntry struct {
+	Sender group.MemberIndex `json:"sender"`
+	Reason string            `json:"reason"`
+	Count  uint              `json:"count"`
+}
+
+// ConflictEntry carries one per-sender conflict count -- the number
+// of first-write-wins disagreements detected during the attempt.
+// Sorted ascending by Sender for canonical encoding.
+type ConflictEntry struct {
+	Sender group.MemberIndex `json:"sender"`
+	Count  uint              `json:"count"`
+}
+
 // LocalEvidenceSnapshot is the per-signer signed evidence produced
 // during a single attempt. It is the input to the coordinator's
 // aggregation and to the receiver-side bundle verification.
@@ -68,11 +86,22 @@ type LocalEvidenceSnapshot struct {
 	// attempt.Evidence.Overflows map; sorted ascending by Sender.
 	// Omitted when no overflow events were observed.
 	Overflows []OverflowEntry `json:"overflows,omitempty"`
+	// Rejects is the canonical sorted form of the
+	// attempt.Evidence.Rejects map; sorted ascending first by Sender,
+	// then by Reason. Omitted when no validation-reject events were
+	// observed. Each entry counts the number of rejects observed
+	// for one (sender, reason) pair, saturated at the recorder's
+	// reject quota.
+	Rejects []RejectEntry `json:"rejects,omitempty"`
+	// Conflicts is the canonical sorted form of the
+	// attempt.Evidence.Conflicts map; sorted ascending by Sender.
+	// Omitted when no first-write-wins-conflict events were
+	// observed.
+	Conflicts []ConflictEntry `json:"conflicts,omitempty"`
 	// OperatorSignature is the signer's operator-key signature over
 	// the canonical encoding of (senderID, attemptContextHash,
-	// overflows). Phase 3.3 defines the canonical-encoding
-	// algorithm and the verification routine. Phase 3.2 treats this
-	// field as opaque bytes with a length cap.
+	// overflows, rejects, conflicts). Phase 3.3 defines the
+	// canonical-encoding algorithm and the verification routine.
 	OperatorSignature []byte `json:"operatorSignature,omitempty"`
 }
 
@@ -93,11 +122,44 @@ func NewLocalEvidenceSnapshot(
 	sort.Slice(overflows, func(i, j int) bool {
 		return overflows[i].Sender < overflows[j].Sender
 	})
-	return &LocalEvidenceSnapshot{
+
+	rejects := make([]RejectEntry, 0)
+	for s, entries := range evidence.Rejects {
+		for _, e := range entries {
+			rejects = append(rejects, RejectEntry{
+				Sender: s,
+				Reason: e.Reason,
+				Count:  e.Count,
+			})
+		}
+	}
+	sort.Slice(rejects, func(i, j int) bool {
+		if rejects[i].Sender != rejects[j].Sender {
+			return rejects[i].Sender < rejects[j].Sender
+		}
+		return rejects[i].Reason < rejects[j].Reason
+	})
+
+	conflicts := make([]ConflictEntry, 0, len(evidence.Conflicts))
+	for s, c := range evidence.Conflicts {
+		conflicts = append(conflicts, ConflictEntry{Sender: s, Count: c})
+	}
+	sort.Slice(conflicts, func(i, j int) bool {
+		return conflicts[i].Sender < conflicts[j].Sender
+	})
+
+	snap := &LocalEvidenceSnapshot{
 		SenderIDValue:      uint32(sender),
 		AttemptContextHash: append([]byte{}, attemptContextHash[:]...),
 		Overflows:          overflows,
 	}
+	if len(rejects) > 0 {
+		snap.Rejects = rejects
+	}
+	if len(conflicts) > 0 {
+		snap.Conflicts = conflicts
+	}
+	return snap
 }
 
 // SenderID returns the snapshot's sender as a group.MemberIndex.
@@ -122,9 +184,20 @@ func (s *LocalEvidenceSnapshot) AttemptContextHashArray() [attempt.MessageDigest
 func (s *LocalEvidenceSnapshot) Evidence() attempt.Evidence {
 	out := attempt.Evidence{
 		Overflows: make(map[group.MemberIndex]uint, len(s.Overflows)),
+		Rejects:   make(map[group.MemberIndex][]attempt.RejectEntry, 0),
+		Conflicts: make(map[group.MemberIndex]uint, len(s.Conflicts)),
 	}
 	for _, e := range s.Overflows {
 		out.Overflows[e.Sender] = e.Count
+	}
+	for _, e := range s.Rejects {
+		out.Rejects[e.Sender] = append(out.Rejects[e.Sender], attempt.RejectEntry{
+			Reason: e.Reason,
+			Count:  e.Count,
+		})
+	}
+	for _, e := range s.Conflicts {
+		out.Conflicts[e.Sender] = e.Count
 	}
 	return out
 }
@@ -177,6 +250,30 @@ func (s *LocalEvidenceSnapshot) Validate() error {
 		if s.Overflows[i].Sender <= s.Overflows[i-1].Sender {
 			return fmt.Errorf(
 				"local evidence snapshot: overflows not sorted ascending or contain duplicate at index %d",
+				i,
+			)
+		}
+	}
+	for i := 1; i < len(s.Rejects); i++ {
+		prev := s.Rejects[i-1]
+		cur := s.Rejects[i]
+		if cur.Sender < prev.Sender {
+			return fmt.Errorf(
+				"local evidence snapshot: rejects not sorted ascending by sender at index %d",
+				i,
+			)
+		}
+		if cur.Sender == prev.Sender && cur.Reason <= prev.Reason {
+			return fmt.Errorf(
+				"local evidence snapshot: rejects not sorted ascending by reason or contain duplicate at index %d",
+				i,
+			)
+		}
+	}
+	for i := 1; i < len(s.Conflicts); i++ {
+		if s.Conflicts[i].Sender <= s.Conflicts[i-1].Sender {
+			return fmt.Errorf(
+				"local evidence snapshot: conflicts not sorted ascending or contain duplicate at index %d",
 				i,
 			)
 		}

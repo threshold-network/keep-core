@@ -15,6 +15,22 @@ import (
 // RFC-21 Layer B.
 const OverflowExclusionThreshold uint = 4
 
+// RejectExclusionThreshold is the per-sender summed-reject-count
+// threshold above which the NextAttempt policy permanently
+// excludes the sender (validation-blamable). RFC-21 Layer B
+// specifies any non-transport reject as sufficient cause, so the
+// constant is 1. Reasons are not differentiated by the policy
+// today; every reject category counts equally.
+const RejectExclusionThreshold uint = 1
+
+// ConflictExclusionThreshold is the per-sender summed-conflict-
+// count threshold above which the NextAttempt policy permanently
+// excludes the sender (equivocation-blamable). A single
+// first-write-wins conflict is sufficient evidence: an honest
+// peer retransmitting a contribution sends byte-identical bytes,
+// so a conflict implies the peer changed its claim mid-attempt.
+const ConflictExclusionThreshold uint = 1
+
 // ErrAttemptInfeasible is returned by NextAttempt when the next
 // attempt's IncludedSet would drop below the signing threshold t and
 // the session can no longer make progress with the original signer
@@ -104,16 +120,26 @@ func computeNextAttempt(
 	threshold uint,
 	dkgGroupPublicKey []byte,
 ) (attempt.AttemptContext, error) {
-	// (1) Permanent exclusion from overflow evidence.
+	// (1) Permanent exclusion from overflow evidence (transport
+	// blamable).
 	overflowBlamed := overflowBlamedSenders(bundle, OverflowExclusionThreshold)
 
-	// (2) Reject blame -- Phase 3.4 has no reject category to read.
-	// rejectBlamed := <future>
+	// (2) Permanent exclusion from reject evidence (validation
+	// blamable). Counts across reasons are summed per-sender.
+	rejectBlamed := rejectBlamedSenders(bundle, RejectExclusionThreshold)
+
+	// (3) Permanent exclusion from conflict evidence (equivocation
+	// blamable). First-write-wins disagreements by the same
+	// sender within an attempt are taken as proof of byzantine
+	// behaviour.
+	conflictBlamed := conflictBlamedSenders(bundle, ConflictExclusionThreshold)
 
 	// Merge into permanent exclusion.
 	exclSet := newMemberSet()
 	exclSet.addAll(prev.ExcludedSet)
 	exclSet.addAll(overflowBlamed)
+	exclSet.addAll(rejectBlamed)
+	exclSet.addAll(conflictBlamed)
 
 	// (3) Silence parking: senders in prev.IncludedSet but not in
 	// bundle, that we are not now permanently excluding.
@@ -191,6 +217,52 @@ func overflowBlamedSenders(
 			counts[entry.Sender] += entry.Count
 		}
 	}
+	return blamedSenders(counts, threshold)
+}
+
+// rejectBlamedSenders returns the senders whose total reject count
+// (summed across all observers AND across all rejection reasons)
+// meets the supplied threshold. Reasons are not differentiated at
+// the policy layer; the recorder bounds per-reason quotas
+// separately so a peer cannot spam one reason to mask another.
+func rejectBlamedSenders(
+	bundle *TransitionMessage,
+	threshold uint,
+) []group.MemberIndex {
+	counts := map[group.MemberIndex]uint{}
+	for i := range bundle.Bundle {
+		for _, entry := range bundle.Bundle[i].Rejects {
+			counts[entry.Sender] += entry.Count
+		}
+	}
+	return blamedSenders(counts, threshold)
+}
+
+// conflictBlamedSenders returns the senders whose total
+// first-write-wins-conflict count across the bundle meets the
+// supplied threshold. A single conflict suffices under the
+// default ConflictExclusionThreshold (= 1) because an honest peer
+// retransmitting always sends byte-identical bytes.
+func conflictBlamedSenders(
+	bundle *TransitionMessage,
+	threshold uint,
+) []group.MemberIndex {
+	counts := map[group.MemberIndex]uint{}
+	for i := range bundle.Bundle {
+		for _, entry := range bundle.Bundle[i].Conflicts {
+			counts[entry.Sender] += entry.Count
+		}
+	}
+	return blamedSenders(counts, threshold)
+}
+
+// blamedSenders extracts the deterministically-sorted list of
+// senders whose accumulated count meets the threshold. Factored
+// out so the three category helpers share the same canonicalisation.
+func blamedSenders(
+	counts map[group.MemberIndex]uint,
+	threshold uint,
+) []group.MemberIndex {
 	out := make([]group.MemberIndex, 0)
 	for sender, count := range counts {
 		if count >= threshold {

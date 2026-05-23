@@ -636,6 +636,7 @@ func collectNativeFROSTRoundOneMessages(
 			payload.SessionID(),
 			message.SenderPublicKey(),
 		) {
+			evidence.RecordReject(payload.SenderID(), "validation_gate_rejected")
 			return
 		}
 
@@ -658,6 +659,7 @@ func collectNativeFROSTRoundOneMessages(
 			senderID := message.SenderID()
 			if existing, ok := receivedMessages[senderID]; ok {
 				if !nativeFROSTRoundOneCommitmentMessagesEqual(existing, message) {
+					evidence.RecordConflict(senderID)
 					protocolLogger.Warnf(
 						"dropping conflicting native FROST round one "+
 							"commitment from sender [%d]; first-write-wins "+
@@ -716,6 +718,7 @@ func collectNativeFROSTRoundTwoMessages(
 			payload.SessionID(),
 			message.SenderPublicKey(),
 		) {
+			evidence.RecordReject(payload.SenderID(), "validation_gate_rejected")
 			return
 		}
 
@@ -740,6 +743,7 @@ func collectNativeFROSTRoundTwoMessages(
 					existing,
 					message,
 				) {
+					evidence.RecordConflict(senderID)
 					protocolLogger.Warnf(
 						"dropping conflicting native FROST round two "+
 							"signature share from sender [%d]; first-write-wins "+
