@@ -198,6 +198,14 @@ session inputs; it is never chosen, only derived. Any signer can
 recompute it from the session header and verify the coordinator's
 participant selection.
 
+*`DkgGroupPublicKey` source.* The runtime extracts `DkgGroupPublicKey`
+from the FFI signer material at attempt construction time -- the same
+material that already carries the DKG-validated group public key and is
+required at signature-verification time anyway. Do not re-read it from
+the wallet registry: the FFI material is the canonical hot-path source,
+removes async/DB lookup latency, and preserves separation between the
+core signing protocol and application state.
+
 === Layer A: Receiver transition evidence (M4)
 
 The three `select { default }` drops become:
@@ -248,8 +256,9 @@ type categoryQuota struct {
 The point is to produce a fixed-size attestation, not to log
 everything forever. Per-attempt evidence is at most
 `O(|IncludedSet| * sum(quotas))` bytes -- bounded, predictable, and
-small enough to be signed and broadcast as a single message
-(see open question 1).
+small enough to be signed and broadcast as a single message. The
+broadcast mechanism is the coordinator-aggregated `TransitionMessage`
+defined in the Resolved decisions section.
 
 === Layer B: Coordinator state (joining M4 and M7)
 
@@ -278,6 +287,26 @@ type Coordinator interface {
 context from the previous attempt's evidence. It is deterministic given
 `(AttemptContext, TransitionEvidence)` -- two coordinators with the same
 verified inputs agree on the next attempt without further coordination.
+
+The verified-inputs requirement is critical: gossip is eventually
+consistent, but `NextAttempt` is a synchronous state transition. Two
+honest signers fed differently-timed evidence sets produce divergent
+contexts. To prevent that, the *evidence input itself* is an
+authoritative `TransitionMessage` produced by the current attempt's
+coordinator (the "coordinator-aggregation" model defined in the
+Resolved decisions section); see that section for the full
+agreement-flow specification.
+
+*Seed-bridging.* The legacy `pkg/frost/roast/coordinator.go::SelectCoordinator`
+helper accepts an `int64` seed plus an attempt number. `BeginAttempt`
+wraps it with a sterile bridge that folds the new `[32]byte`
+`AttemptSeed` into the legacy parameter shape -- for example, taking
+the first 8 bytes as a big-endian `int64`. The bridge is a
+non-cryptographic adapter for the deterministic shuffle: equivalent
+seed bytes must produce the same legacy `int64` on every honest
+signer. The bridge is named, isolated, and exhaustively tested so
+later edits cannot accidentally desynchronise it.
+
 The exclusion policy is:
 
 . Senders with `OverflowCount >= overflowExclusionThreshold` during the
@@ -286,7 +315,14 @@ The exclusion policy is:
   reasons are moved to `ExcludedSet` (validation blamable).
 . Senders with deadline-expiry only -- silent peers -- are moved to a
   *parked* set that the next attempt skips but the attempt after that
-  retries (to tolerate transient outages).
+  retries (to tolerate transient outages). Silence parking is
+  *strictly transient*: a single attempt's worth of skip, no escalation.
+  A peer falsely labelled silent because their contribution arrived
+  late (or because a malicious coordinator censored it) is not
+  permanently penalised -- they are reinstated by the very next
+  attempt. Permanent exclusion only follows from overflow or non-
+  transport reject events, neither of which can fire on a slow-but-
+  honest peer.
 . If `IncludedSet` minus exclusions drops below the threshold `t`, the
   coordinator returns `ErrAttemptInfeasible` and the session is
   declared failed for this signer set.
@@ -404,42 +440,148 @@ choices in their PR descriptions and reviews.
   only when the supporting evidence is attached. The RFC does not
   promise an early flip.
 
-== Open questions
+== Resolved decisions
 
-. *Cross-process coordinator agreement.* Today each signer runs its own
-  process; the coordinator state machine is per-process. We assume
-  that two honest signers, fed the same `TransitionEvidence` from a
-  shared gossip layer, produce the same `NextAttempt`. Without
-  agreement on the evidence input, the deterministic function still
-  produces divergent outputs -- node A excludes peer X (saw overflow),
-  node B does not (didn't), and the next-attempt sets disagree. This
-  defeats the whole point of the layered design.
-+
-*Recommended path (signed-evidence gossip):* every observer signs the
-evidence it produced with its operator key and broadcasts the
-attestation on a dedicated evidence topic. Honest signers feed only
-*verified attestations* into the deterministic
-`NextAttempt`, taking the union over signed observations and applying
-the same exclusion thresholds. Two honest signers thus consume the
-same input set and produce the same output. A peer that signs
-conflicting evidence is itself slashable -- the signature is the
-binding.
-+
-Options considered:
-.. Piggy-back on existing FROST broadcast channel -- simplest but
-   couples evidence to protocol round-trips and re-uses a topic with
-   different rate-limit characteristics.
-.. *Dedicated evidence broadcast topic with signed attestations
-   (recommended).* Cleaner separation, more wiring; the wiring is
-   what the design owes the protocol.
-.. Coordinator-only authoritative -- only the elected coordinator
-   produces evidence and other signers verify but don't recompute.
-   Closest to the paper but loses redundancy.
-+
-The recommendation is the recommended *entering* Phase 3. The final
-decision is still owed and is the question that most needs
-design-time review with threshold-network/keep-core protocol owners
-before Phase 3 lands.
+The decisions in this section were settled in a Phase-3 design review
+(2026-05-22) with cross-team protocol-owner input. They are listed
+here so subsequent implementation PRs can reference them.
+
+=== Cross-process coordinator agreement
+
+*Decision: coordinator-proposed aggregation on a dedicated topic,
+signed with the operator key, with receiver-side bundle verification
+for censorship detection.*
+
+The earlier draft of this RFC carried "all-to-all signed-evidence
+gossip with local union" as the recommended path. That recommendation
+silently assumed gossip is synchronously consistent across the signer
+set; in practice gossip is eventually consistent, so two honest
+signers can hold divergent evidence sets at the moment the attempt
+times out. Applying the deterministic `NextAttempt` function to
+divergent inputs produces divergent next-attempt contexts and
+fractures the signing group.
+
+The replacement flow is:
+
+. *Observation.* Each signer's `EvidenceRecorder` (Phase 2)
+  produces a per-attempt local-evidence snapshot.
+. *Submission.* Each signer signs its snapshot with its operator
+  key (the same key `pkg/net` already uses to attribute network
+  messages) and broadcasts it on a dedicated evidence topic.
+. *Aggregation.* The current attempt's elected coordinator
+  (the deterministic `SelectCoordinator` output) collects the
+  signed snapshots, builds a canonical bundle, signs the bundle,
+  and broadcasts it as a `TransitionMessage`.
+. *Verification.* Every receiver validates the bundle's
+  coordinator signature, validates each contained snapshot's
+  operator signature, *and verifies that its own observations
+  appear in the bundle*. A coordinator that omits an honest
+  peer's signed snapshot is caught here.
+. *Transition.* Receivers feed the verified bundle into
+  `NextAttempt`. Because the bundle is the authoritative input,
+  all honest receivers compute the same next-attempt context.
+
+A peer that signs conflicting snapshots is slashable -- the
+signature is the binding. A coordinator that signs an inconsistent
+bundle (omits observations, alters counts, etc.) is detected at
+verification step (4) and the next-attempt coordinator handles the
+exclusion.
+
+Alternatives considered (rejected):
+
+. *All-to-all signed-evidence gossip with local union.* Original
+  recommendation. Rejected because gossip's eventual-consistency
+  semantics let honest signers reach the deterministic
+  `NextAttempt` boundary with divergent inputs, producing
+  divergent outputs.
+. *Piggy-back on existing FROST broadcast channel.* Rejected
+  because it couples evidence rate limits to protocol round-trip
+  rate limits, and re-uses a topic with different traffic
+  characteristics.
+. *Coordinator-only authoritative without aggregation.* Rejected
+  because losing the all-signer signed attestations also loses
+  the audit trail. The aggregation model keeps the per-signer
+  signatures inside the bundle, so the audit trail survives.
+
+Liveness: a malicious coordinator can withhold the
+`TransitionMessage`, stalling the transition. ROAST handles this
+the same way it handles a malicious signer: the attempt times
+out, the next attempt elects a different coordinator (the
+`SelectCoordinator` output is deterministic but rotates with the
+attempt number), and the new coordinator drives the transition.
+The malicious coordinator's evidence is itself parked or
+excluded by the new coordinator's bundle, ending the loop.
+
+Safety: any honest signer that verifies a bundle and computes
+`NextAttempt(ctx, bundle)` produces the same context as any other
+honest signer that verifies the same bundle. Safety reduces to
+"is the bundle correctly verified" -- a local check, not a
+network-consistency requirement.
+
+This design satisfies the formal verified-inputs requirement of
+the deterministic `NextAttempt` policy specified in Layer B.
+
+=== Source of `DkgGroupPublicKey` for the seed
+
+*Decision: extract from FFI signer material at attempt construction.*
+
+The DKG-validated group public key is already present in the FFI
+signer material (it is required at signature-verification time
+anyway), so the seed derivation can take it from there. The
+wallet registry is *not* consulted on the hot path; doing so
+would introduce async lookup latency and entangle the core
+signing protocol with application state. See Shared types above
+for the derivation contract.
+
+=== `AttemptContext` ↔ `NativeExecutionFFISigningRequest` binding
+
+*Decision: extend the request struct with an `AttemptContext`
+field; the context is Go-side orchestration only.*
+
+The context does not cross the CGO/Rust boundary into the
+`tbtc-signer` engine -- the engine remains a pure signing
+primitive. Go-side coordinator wiring populates the context;
+existing call sites construct attempt-zero contexts inline
+during Phase 4.
+
+=== `SelectCoordinator` retention
+
+*Decision: keep the existing helper; bridge the seed type inside
+`BeginAttempt`.*
+
+The deterministic shuffle is correct in isolation. The bridge
+folds the new `[32]byte` `AttemptSeed` into the legacy `int64`
+parameter shape with a sterile, named adapter (see Layer B).
+
+=== Evidence-signing key
+
+*Decision: reuse the existing operator key.*
+
+The operator key already binds every other gossip message a
+keep-core node emits via `pkg/net`. Layering a second key
+surface specifically for evidence signing is premature
+optimization given the current key model.
+
+=== Evidence message format
+
+*Decision: JSON payload wrapped in the existing `pkg/net/gen/pb`
+envelope, routed via the `net.Message` interface.*
+
+This matches the FROST/tbtc-signer protocol messages (Phase 1B)
+and inherits the network layer's operator-key signing
+automatically. Raw JSON does not appear on the wire.
+
+=== Maximum evidence-message size
+
+*Decision: single `TransitionMessage` per transition; no
+chunking.*
+
+Under coordinator-aggregation, the per-transition payload is
+`O(N)` not `O(N^2)`. At a 100-signer group with all four
+quotas saturated the JSON-encoded bundle is ~10-20 KiB,
+comfortably within libp2p's per-message limits.
+
+== Open questions
 
 . *Persistence across signer restart.* If a signer crashes mid-attempt,
   does it lose its evidence? The paper assumes persistent state. For
