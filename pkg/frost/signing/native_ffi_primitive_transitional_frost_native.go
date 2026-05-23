@@ -861,15 +861,15 @@ func buildTaggedTBTCSignerRoundContributions(
 		return nil, fmt.Errorf("cannot send round contribution message: [%w]", err)
 	}
 
-	// Phase 2 default: NoOp recorder preserves pre-RFC-21 behaviour.
-	// A coordinator-aware caller in a later phase injects a real
-	// recorder so overflow drops feed into NextAttempt evidence.
+	// RFC-21 Phase 4.2: recorder comes from the roast-retry
+	// registry. NoOp fallback when nothing is registered preserves
+	// Phase 2 receive semantics.
 	peerMessages, err := collectBuildTaggedTBTCSignerRoundContributionMessages(
 		ctx,
 		request,
 		includedMembersSet,
 		includedMembersIndexes,
-		attempt.NoOpRecorder(),
+		roastRetryRecorderForCollect(),
 	)
 	if err != nil {
 		return nil, err

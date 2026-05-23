@@ -350,16 +350,21 @@ func executeNativeFROSTSigning(
 		return nil, fmt.Errorf("cannot send native FROST round one message: [%w]", err)
 	}
 
-	// Phase 2 default: NoOp recorder preserves pre-RFC-21 behaviour.
-	// A coordinator-aware caller in a later phase will inject a real
-	// recorder via the request (or a sibling parameter) so overflow
-	// drops at the receive callback feed into NextAttempt evidence.
+	// RFC-21 Phase 4.2: the recorder comes from the per-process
+	// roast-retry registry. When the registry is empty (default
+	// build, or no caller has registered a coordinator), the helper
+	// returns attempt.NoOpRecorder() and behaviour matches Phase 2.
+	// When the registry has a coordinator, the helper returns a
+	// fresh BoundedRecorder so overflow drops at the receive
+	// callback are captured. PR 4.3 will read this recorder's
+	// Snapshot at end-of-collect and submit the result via
+	// Coordinator.RecordEvidence.
 	roundOneMessages, err := collectNativeFROSTRoundOneMessages(
 		ctx,
 		request,
 		includedMembersSet,
 		includedMembersIndexes,
-		attempt.NoOpRecorder(),
+		roastRetryRecorderForCollect(),
 	)
 	if err != nil {
 		return nil, err
@@ -435,13 +440,13 @@ func executeNativeFROSTSigning(
 		return nil, fmt.Errorf("cannot send native FROST round two message: [%w]", err)
 	}
 
-	// Phase 2 default: NoOp recorder. See round-one caller above.
+	// RFC-21 Phase 4.2 recorder source -- see round-one caller above.
 	roundTwoMessages, err := collectNativeFROSTRoundTwoMessages(
 		ctx,
 		request,
 		includedMembersSet,
 		includedMembersIndexes,
-		attempt.NoOpRecorder(),
+		roastRetryRecorderForCollect(),
 	)
 	if err != nil {
 		return nil, err
