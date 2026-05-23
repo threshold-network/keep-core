@@ -427,6 +427,7 @@ func referenceHashForFixture(ctx AttemptContext) [MessageDigestLength]byte {
 	h.Write(a[:])
 	writeMS(ctx.IncludedSet)
 	writeMS(ctx.ExcludedSet)
+	writeMS(ctx.TransientlyParked)
 	h.Write(ctx.AttemptSeed[:])
 	var out [MessageDigestLength]byte
 	copy(out[:], h.Sum(nil))

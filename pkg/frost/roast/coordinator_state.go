@@ -144,6 +144,28 @@ type Coordinator interface {
 	// submitted snapshot is missing or mutated. Returns
 	// ErrSignatureInvalid when any signature fails verification.
 	VerifyBundle(handle AttemptHandle, msg *TransitionMessage) error
+	// NextAttempt computes the deterministic next AttemptContext
+	// from a verified TransitionMessage. Callers MUST call
+	// VerifyBundle before NextAttempt; NextAttempt does not
+	// re-verify signatures.
+	//
+	// threshold is the FROST signing threshold t for the key group;
+	// it is constant across attempts within a session. A threshold
+	// of zero disables the infeasibility check (test seam).
+	//
+	// dkgGroupPublicKey is the DKG-validated group public key from
+	// the FFI signer material (RFC-21 Decision 2). It is passed
+	// here so two honest signers derive the same AttemptSeed for
+	// the next attempt.
+	//
+	// Returns ErrAttemptInfeasible when the next IncludedSet would
+	// drop below threshold.
+	NextAttempt(
+		handle AttemptHandle,
+		bundle *TransitionMessage,
+		threshold uint,
+		dkgGroupPublicKey []byte,
+	) (attempt.AttemptContext, error)
 }
 
 // ErrNotAggregator is returned by AggregateBundle when the caller
