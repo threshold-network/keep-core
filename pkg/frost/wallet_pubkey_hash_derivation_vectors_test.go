@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -20,7 +21,26 @@ import (
 // wallet identity contract for any wallet whose canonical identity is
 // established cross-repo (in particular, FROST wallets registered via
 // the FROST WalletRegistry will use this derivation).
-const walletPubKeyHashDerivationVectorsPath = "testdata/wallet-pubkey-hash-derivation-vectors-v1.json"
+//
+// Path constants follow two different conventions intentionally:
+//
+//   - walletPubKeyHashDerivationVectorsTestPath: package-relative,
+//     used by os.ReadFile() because `go test ./pkg/frost` runs with
+//     pkg/frost as the working directory. This is the standard Go
+//     testdata convention.
+//
+//   - walletPubKeyHashDerivationVectorsRepoPath: repo-root-relative,
+//     used to compare against fixture.DriftCheck.KeepCorePath
+//     (which declares the canonical location for cross-repo sync
+//     tooling). This is what a cross-repo diff tool would use.
+//
+// The two MUST refer to the same file; the TestDriftCheckMetadata
+// assertions verify the fixture's self-declared path matches the
+// repo-relative constant exactly.
+const (
+	walletPubKeyHashDerivationVectorsTestPath = "testdata/wallet-pubkey-hash-derivation-vectors-v1.json"
+	walletPubKeyHashDerivationVectorsRepoPath = "pkg/frost/testdata/wallet-pubkey-hash-derivation-vectors-v1.json"
+)
 
 type ecdsaVector struct {
 	Name  string `json:"name"`
@@ -60,7 +80,7 @@ type derivationFixture struct {
 func loadDerivationFixture(t *testing.T) derivationFixture {
 	t.Helper()
 
-	data, err := os.ReadFile(walletPubKeyHashDerivationVectorsPath)
+	data, err := os.ReadFile(walletPubKeyHashDerivationVectorsTestPath)
 	if err != nil {
 		t.Fatalf("fixture read: %v", err)
 	}
@@ -176,7 +196,10 @@ func TestEcdsaCompressedPubKeyHash160Vectors(t *testing.T) {
 
 // TestDriftCheckMetadata asserts the fixture declares the tbtc mirror
 // path and a non-empty drift rule. A future CI sync check can use
-// these fields to compare files between repos.
+// these fields to compare files between repos. The fixture's
+// keep_core_path is repo-root-relative by convention; the package-
+// relative testdata constant used by os.ReadFile() is a separate
+// representation of the same file.
 func TestDriftCheckMetadata(t *testing.T) {
 	fixture := loadDerivationFixture(t)
 
@@ -186,11 +209,11 @@ func TestDriftCheckMetadata(t *testing.T) {
 			fixture.DriftCheck.TbtcPath,
 		)
 	}
-	if fixture.DriftCheck.KeepCorePath != walletPubKeyHashDerivationVectorsPath {
+	if fixture.DriftCheck.KeepCorePath != walletPubKeyHashDerivationVectorsRepoPath {
 		t.Errorf(
-			"drift_check.keep_core_path inconsistency: fixture says %q, this test reads from %q",
+			"drift_check.keep_core_path drift: fixture says %q, repo convention is %q",
 			fixture.DriftCheck.KeepCorePath,
-			walletPubKeyHashDerivationVectorsPath,
+			walletPubKeyHashDerivationVectorsRepoPath,
 		)
 	}
 	if fixture.DriftCheck.Rule == "" {
@@ -199,20 +222,29 @@ func TestDriftCheckMetadata(t *testing.T) {
 }
 
 // TestFixtureFileShouldExistAtMirrorPath documents the convention that
-// the file lives at the path the fixture self-declares. Mostly a
-// nudge for anyone moving the file: update the constant AND the
-// fixture metadata together.
+// the file lives at the path the fixture self-declares. Since the
+// fixture's keep_core_path is repo-root-relative but `go test
+// ./pkg/frost` runs with pkg/frost as the working directory, the path
+// is resolved relative to the repo root by walking up from this test
+// file's location.
 func TestFixtureFileShouldExistAtMirrorPath(t *testing.T) {
 	fixture := loadDerivationFixture(t)
 
-	abs, err := filepath.Abs(fixture.DriftCheck.KeepCorePath)
-	if err != nil {
-		t.Fatalf("abs path: %v", err)
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller: cannot locate test source file")
 	}
+	// thisFile points at pkg/frost/wallet_pubkey_hash_derivation_vectors_test.go
+	// repo root is two directories up.
+	repoRoot := filepath.Clean(
+		filepath.Join(filepath.Dir(thisFile), "..", ".."),
+	)
+	abs := filepath.Join(repoRoot, fixture.DriftCheck.KeepCorePath)
 	if _, err := os.Stat(abs); err != nil {
 		t.Fatalf(
-			"fixture self-declares it lives at %q but the file is not there: %v",
+			"fixture self-declares it lives at %q (resolved to %q) but the file is not there: %v",
 			fixture.DriftCheck.KeepCorePath,
+			abs,
 			err,
 		)
 	}
