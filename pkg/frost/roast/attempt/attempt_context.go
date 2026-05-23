@@ -59,10 +59,21 @@ type AttemptContext struct {
 	// participate in this attempt. Must be sorted ascending. Must not
 	// be empty.
 	IncludedSet []group.MemberIndex
-	// ExcludedSet is the set of member indices that have been excluded
+	// ExcludedSet is the set of member indices permanently excluded
 	// from this attempt by the coordinator's transition-evidence
-	// policy. Must be sorted ascending. May be empty.
+	// policy. Must be sorted ascending. May be empty. Permanent
+	// exclusion follows from transport-blamable (overflow) or
+	// validation-blamable (non-transport reject) evidence, never
+	// from silence alone.
 	ExcludedSet []group.MemberIndex
+	// TransientlyParked is the set of member indices skipped from
+	// THIS attempt only because they were silent (deadline expiry)
+	// at the previous attempt. Parking is strictly transient: a
+	// peer is unparked at the attempt after the one that skipped
+	// them, so a falsely-silenced honest peer (network blip,
+	// coordinator censorship caught at VerifyBundle) is reinstated
+	// without intervention. Must be sorted ascending. May be empty.
+	TransientlyParked []group.MemberIndex
 	// AttemptSeed is derived from group-agreed inputs and binds the
 	// attempt to inputs that no coordinator can manipulate. See
 	// DeriveAttemptSeed.
@@ -105,6 +116,11 @@ func DeriveAttemptSeed(
 //
 // Returns an error if the included set is empty, if any member appears
 // in both sets, or if either set contains duplicates.
+//
+// This is the seven-argument convenience that initialises an attempt
+// with no TransientlyParked entries (the attempt-zero shape). For
+// later attempts produced by the coordinator's NextAttempt policy,
+// use NewAttemptContextWithParking.
 func NewAttemptContext(
 	sessionID string,
 	keyGroupID string,
@@ -113,6 +129,35 @@ func NewAttemptContext(
 	attemptNumber uint32,
 	includedSet []group.MemberIndex,
 	excludedSet []group.MemberIndex,
+) (AttemptContext, error) {
+	return NewAttemptContextWithParking(
+		sessionID,
+		keyGroupID,
+		dkgGroupPublicKey,
+		messageDigest,
+		attemptNumber,
+		includedSet,
+		excludedSet,
+		nil,
+	)
+}
+
+// NewAttemptContextWithParking is the full constructor used by the
+// coordinator's NextAttempt policy. It accepts a transientlyParked
+// set in addition to the inputs of NewAttemptContext.
+//
+// Validation: included set non-empty; no duplicates in any set;
+// included/excluded sets disjoint; included/parked sets disjoint;
+// excluded/parked sets disjoint.
+func NewAttemptContextWithParking(
+	sessionID string,
+	keyGroupID string,
+	dkgGroupPublicKey []byte,
+	messageDigest [MessageDigestLength]byte,
+	attemptNumber uint32,
+	includedSet []group.MemberIndex,
+	excludedSet []group.MemberIndex,
+	transientlyParked []group.MemberIndex,
 ) (AttemptContext, error) {
 	if len(includedSet) == 0 {
 		return AttemptContext{}, errors.New(
@@ -127,18 +172,33 @@ func NewAttemptContext(
 	if err != nil {
 		return AttemptContext{}, err
 	}
+	parked, err := canonicalMemberSet(transientlyParked, "transiently parked")
+	if err != nil {
+		return AttemptContext{}, err
+	}
 	if hasOverlap(included, excluded) {
 		return AttemptContext{}, errors.New(
 			"attempt context: included and excluded sets overlap",
 		)
 	}
+	if hasOverlap(included, parked) {
+		return AttemptContext{}, errors.New(
+			"attempt context: included and transiently-parked sets overlap",
+		)
+	}
+	if hasOverlap(excluded, parked) {
+		return AttemptContext{}, errors.New(
+			"attempt context: excluded and transiently-parked sets overlap",
+		)
+	}
 	return AttemptContext{
-		SessionID:     sessionID,
-		KeyGroupID:    keyGroupID,
-		MessageDigest: messageDigest,
-		AttemptNumber: attemptNumber,
-		IncludedSet:   included,
-		ExcludedSet:   excluded,
+		SessionID:         sessionID,
+		KeyGroupID:        keyGroupID,
+		MessageDigest:     messageDigest,
+		AttemptNumber:     attemptNumber,
+		IncludedSet:       included,
+		ExcludedSet:       excluded,
+		TransientlyParked: parked,
 		AttemptSeed: DeriveAttemptSeed(
 			dkgGroupPublicKey,
 			sessionID,
@@ -167,6 +227,7 @@ func (c AttemptContext) Hash() [MessageDigestLength]byte {
 	h.Write(attemptNumberBuf[:])
 	writeMemberSet(h, c.IncludedSet)
 	writeMemberSet(h, c.ExcludedSet)
+	writeMemberSet(h, c.TransientlyParked)
 	h.Write(c.AttemptSeed[:])
 	var out [MessageDigestLength]byte
 	copy(out[:], h.Sum(nil))
