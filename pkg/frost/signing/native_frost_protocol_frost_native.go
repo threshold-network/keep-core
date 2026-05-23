@@ -640,6 +640,11 @@ func collectNativeFROSTRoundOneMessages(
 			return
 		}
 
+		if err := verifyMessageAttemptContextHash(payload, request.SessionID); err != nil {
+			evidence.RecordReject(payload.SenderID(), "attempt_context_hash_mismatch")
+			return
+		}
+
 		_ = enqueueOrRecordOverflow(payload, messageChan, evidence)
 	})
 
@@ -719,6 +724,11 @@ func collectNativeFROSTRoundTwoMessages(
 			message.SenderPublicKey(),
 		) {
 			evidence.RecordReject(payload.SenderID(), "validation_gate_rejected")
+			return
+		}
+
+		if err := verifyMessageAttemptContextHash(payload, request.SessionID); err != nil {
+			evidence.RecordReject(payload.SenderID(), "attempt_context_hash_mismatch")
 			return
 		}
 
