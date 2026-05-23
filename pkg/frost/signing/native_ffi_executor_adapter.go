@@ -85,21 +85,39 @@ func (nefea *nativeExecutionFFIExecutorAdapter) Execute(
 		return nil, fmt.Errorf("%w: [%v]", ErrNativeCryptographyUnavailable, err)
 	}
 
-	signature, err := nefea.primitive.Sign(
-		ctx,
-		logger,
-		&NativeExecutionFFISigningRequest{
-			Message:             request.Message,
-			SessionID:           request.SessionID,
-			MemberIndex:         request.MemberIndex,
-			GroupSize:           request.GroupSize,
-			DishonestThreshold:  request.DishonestThreshold,
-			Channel:             request.Channel,
-			MembershipValidator: request.MembershipValidator,
-			SignerMaterial:      signerMaterial,
-			Attempt:             cloneAttempt(request.Attempt),
-		},
-	)
+	ffiRequest := &NativeExecutionFFISigningRequest{
+		Message:             request.Message,
+		SessionID:           request.SessionID,
+		MemberIndex:         request.MemberIndex,
+		GroupSize:           request.GroupSize,
+		DishonestThreshold:  request.DishonestThreshold,
+		Channel:             request.Channel,
+		MembershipValidator: request.MembershipValidator,
+		SignerMaterial:      signerMaterial,
+		Attempt:             cloneAttempt(request.Attempt),
+	}
+
+	// RFC-21 Phase 6.3: ROAST orchestration entry. The helper
+	// returns (cleanup, error):
+	//   - cleanup non-nil, error nil -> orchestration active;
+	//     defer cleanup so success and failure return paths converge.
+	//   - cleanup nil, error nil     -> static-configuration fallback
+	//     (env var unset, no coordinator registered, or material
+	//     format not extractable). Proceed without orchestration; the
+	//     receive loops use NoOp recorder semantics (Phase 5 behaviour).
+	//   - cleanup nil, error non-nil -> RUNTIME orchestration failure.
+	//     HARD FAIL to prevent group fracture across honest signers.
+	// In the default build (no frost_native tag) the helper is a
+	// permanent no-op returning (nil, nil).
+	orchCleanup, orchErr := attemptRoastRetryOrchestrationFromRequest(ffiRequest, logger)
+	if orchErr != nil {
+		return nil, orchErr
+	}
+	if orchCleanup != nil {
+		defer orchCleanup()
+	}
+
+	signature, err := nefea.primitive.Sign(ctx, logger, ffiRequest)
 	if err != nil {
 		return nil, err
 	}
