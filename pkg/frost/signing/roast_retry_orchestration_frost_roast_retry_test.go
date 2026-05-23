@@ -31,6 +31,7 @@ func newOrchestrationTestContext(t *testing.T) attempt.AttemptContext {
 }
 
 func TestBeginOrchestrationForSession_HappyPath(t *testing.T) {
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
 	ResetRoastRetryRegistrationForTest()
 	ResetSessionHandleRegistryForTest()
 	t.Cleanup(ResetRoastRetryRegistrationForTest)
@@ -71,11 +72,14 @@ func TestBeginOrchestrationForSession_HappyPath(t *testing.T) {
 }
 
 func TestBeginOrchestrationForSession_ErrorsWhenRegistryEmpty(t *testing.T) {
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
 	ResetRoastRetryRegistrationForTest()
 	ResetSessionHandleRegistryForTest()
 	t.Cleanup(ResetRoastRetryRegistrationForTest)
 	t.Cleanup(ResetSessionHandleRegistryForTest)
 
+	// Readiness env var is set; the registry is empty -- we expect
+	// the registry-empty error, not the env-var error.
 	_, _, err := BeginOrchestrationForSession("session-X", newOrchestrationTestContext(t))
 	if err == nil {
 		t.Fatal("expected error when registry is empty")
@@ -85,7 +89,35 @@ func TestBeginOrchestrationForSession_ErrorsWhenRegistryEmpty(t *testing.T) {
 	}
 }
 
+func TestBeginOrchestrationForSession_ErrorsWhenReadinessOptInUnset(t *testing.T) {
+	// Explicitly unset, in case the test runner inherits the env var
+	// from outside.
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "")
+	ResetRoastRetryRegistrationForTest()
+	ResetSessionHandleRegistryForTest()
+	t.Cleanup(ResetRoastRetryRegistrationForTest)
+	t.Cleanup(ResetSessionHandleRegistryForTest)
+
+	// Even with a registered coordinator, the readiness env var
+	// short-circuits orchestration. This is the load-bearing safety
+	// property: production builds with the frost_roast_retry tag
+	// still cannot enter the orchestration path without an explicit
+	// operator decision.
+	RegisterRoastRetryCoordinator(RoastRetryDeps{
+		Coordinator: roast.NewInMemoryCoordinator(),
+		Signer:      roast.NoOpSigner(),
+		Verifier:    roast.NoOpSignatureVerifier(),
+		SelfMember:  1,
+	})
+
+	_, _, err := BeginOrchestrationForSession("session-no-optin", newOrchestrationTestContext(t))
+	if !errors.Is(err, ErrRoastRetryReadinessOptOut) {
+		t.Fatalf("expected ErrRoastRetryReadinessOptOut, got %v", err)
+	}
+}
+
 func TestBeginOrchestrationForSession_ErrorsWhenCoordinatorNil(t *testing.T) {
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
 	ResetRoastRetryRegistrationForTest()
 	ResetSessionHandleRegistryForTest()
 	t.Cleanup(ResetRoastRetryRegistrationForTest)
@@ -108,6 +140,7 @@ func TestBeginOrchestrationForSession_ErrorsWhenCoordinatorNil(t *testing.T) {
 }
 
 func TestBeginOrchestrationForSession_PropagatesBeginAttemptError(t *testing.T) {
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
 	ResetRoastRetryRegistrationForTest()
 	ResetSessionHandleRegistryForTest()
 	t.Cleanup(ResetRoastRetryRegistrationForTest)
@@ -213,6 +246,7 @@ func TestStartSessionHandleSweeper_IsIdempotent(t *testing.T) {
 }
 
 func TestRegisterRoastRetryCoordinator_StartsSweeper(t *testing.T) {
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
 	ResetRoastRetryRegistrationForTest()
 	ResetSessionHandleRegistryForTest()
 	t.Cleanup(ResetRoastRetryRegistrationForTest)

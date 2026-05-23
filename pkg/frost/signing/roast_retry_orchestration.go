@@ -28,6 +28,12 @@ func BeginOrchestrationForSession(
 	sessionID string,
 	ctx attempt.AttemptContext,
 ) (roast.AttemptHandle, func(), error) {
+	if err := EnsureRoastRetryReadinessOptIn(); err != nil {
+		return roast.AttemptHandle{}, nil, fmt.Errorf(
+			"roast orchestration: %w",
+			err,
+		)
+	}
 	deps, ok := RegisteredRoastRetryCoordinator()
 	if !ok {
 		return roast.AttemptHandle{}, nil, fmt.Errorf(
