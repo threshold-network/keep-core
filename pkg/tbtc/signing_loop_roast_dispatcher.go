@@ -32,10 +32,12 @@ type signingParticipantSelector interface {
 	) ([]chain.Address, error)
 }
 
-// defaultSigningParticipantSelector returns the legacy implementation
-// installed by every Phase-6 build (default + frost_roast_retry).
-// Phase 7 will install a ROAST-driven implementation in a follow-up
-// PR that also wires AggregateBundle production.
-func defaultSigningParticipantSelector() signingParticipantSelector {
-	return legacySigningParticipantSelector{}
-}
+// defaultSigningParticipantSelector returns the build-default
+// implementation. Default build: the legacy retry shuffle. Tagged
+// build (frost_roast_retry, Phase 7.2): a ROAST-driven selector
+// that consults the per-session TransitionMessage registry and
+// falls back to the legacy selector when no bundle is available.
+//
+// Defined in build-tagged sibling files
+// (signing_loop_selector_*.go) so the right implementation is
+// chosen at compile time without runtime branching.
