@@ -998,6 +998,7 @@ func collectBuildTaggedTBTCSignerRoundContributionMessages(
 			payload.SessionID(),
 			message.SenderPublicKey(),
 		) {
+			evidence.RecordReject(payload.SenderID(), "validation_gate_rejected")
 			return
 		}
 
@@ -1026,6 +1027,7 @@ func collectBuildTaggedTBTCSignerRoundContributionMessages(
 					existing,
 					message,
 				) {
+					evidence.RecordConflict(senderID)
 					protocolLogger.Warnf(
 						"dropping conflicting tbtc-signer round contribution "+
 							"from sender [%d]; first-write-wins keeps the "+
