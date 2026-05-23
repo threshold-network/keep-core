@@ -45,12 +45,12 @@ type frostVector struct {
 }
 
 type derivationFixture struct {
-	Name         string        `json:"name"`
-	Version      string        `json:"version"`
-	Description  string        `json:"description"`
-	EcdsaLegacy  []ecdsaVector `json:"ecdsa_legacy"`
-	FrostP2tr    []frostVector `json:"frost_p2tr"`
-	DriftCheck   struct {
+	Name        string        `json:"name"`
+	Version     string        `json:"version"`
+	Description string        `json:"description"`
+	EcdsaLegacy []ecdsaVector `json:"ecdsa_legacy"`
+	FrostP2tr   []frostVector `json:"frost_p2tr"`
+	DriftCheck  struct {
 		TbtcPath     string `json:"tbtc_path"`
 		KeepCorePath string `json:"keep_core_path"`
 		Rule         string `json:"rule"`
