@@ -1,5 +1,54 @@
 package signing
 
+// Static-vs-runtime error taxonomy (RFC-21 Phase 6 — Resolved Decision).
+//
+// The orchestration layer in this file participates in a load-bearing
+// decision that prevents split-brain group fracture in the ROAST retry
+// path. Errors returned through the orchestration boundary are
+// classified into one of two categories, and the consumer (the
+// signing-loop dispatcher) routes them accordingly:
+//
+//   STATIC errors  -> safe to fall back to the legacy retry path.
+//                     Every honest signer observes the same node-local
+//                     configuration state (registry population, build
+//                     tags) at the same startup, so a fallback decision
+//                     is deterministic across the group. No participant
+//                     fork can arise from a static-error fallback.
+//                     Sentinel: ErrNoRoastRetryCoordinatorRegistered.
+//                     Detected via errors.Is in
+//                     signing_loop_roast_dispatcher.go.
+//
+//   RUNTIME errors -> HARD FAIL. No fallback. Any error that arises
+//                     from per-attempt protocol state (BeginAttempt
+//                     internals, AttemptContext binding mismatches,
+//                     transition-bundle verification failures, etc.)
+//                     can be observed by some participants and not
+//                     others within the same attempt. Falling back to
+//                     legacy under those conditions would leave some
+//                     operators running the new code path and others
+//                     running legacy on the same attempt -- the canonical
+//                     definition of split-brain fracture. The
+//                     orchestration layer therefore returns these as
+//                     bare (non-sentinel) errors that the dispatcher
+//                     treats as terminal.
+//
+// The classification is enforced at this file's boundary: any error
+// surfaced from this package that is intended to permit fallback MUST
+// be the ErrNoRoastRetryCoordinatorRegistered sentinel (or wrap it for
+// errors.Is matching). Wrapping ANY runtime error in the sentinel is a
+// safety regression that re-enables split-brain risk; PR reviewers
+// should reject it.
+//
+// Background: this decision was redirected during Phase 5/6 review.
+// The earlier design had Coordinator.BeginAttempt failures fall back to
+// the legacy retry path on the assumption that BeginAttempt was a
+// cheap idempotent setup. Review identified that BeginAttempt mutates
+// per-attempt state (session bindings, evidence recorder) and can fail
+// from races with concurrent receives or from peer-supplied protocol
+// messages -- both of which produce non-deterministic per-participant
+// outcomes. The taxonomy was tightened so only true configuration
+// errors are fallback-eligible.
+
 import (
 	"errors"
 	"fmt"
