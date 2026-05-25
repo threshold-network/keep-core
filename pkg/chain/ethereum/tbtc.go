@@ -13,6 +13,7 @@ import (
 	"github.com/keep-network/keep-common/pkg/cache"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
@@ -22,6 +23,8 @@ import (
 	"github.com/keep-network/keep-core/pkg/chain"
 	ecdsaabi "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen/abi"
 	ecdsacontract "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen/contract"
+	frostabi "github.com/keep-network/keep-core/pkg/chain/ethereum/frost/gen/abi"
+	frostvalidatorabi "github.com/keep-network/keep-core/pkg/chain/ethereum/frost/gen/validatorabi"
 	tbtcabi "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
 	tbtccontract "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/contract"
 	"github.com/keep-network/keep-core/pkg/internal/byteutils"
@@ -38,6 +41,8 @@ const (
 	// TODO: The WalletRegistry address is taken from the Bridge contract.
 	//       Remove the possibility of passing it through the config.
 	WalletRegistryContractName          = "WalletRegistry"
+	FrostWalletRegistryContractName     = "FrostWalletRegistry"
+	FrostDkgValidatorContractName       = "FrostDkgValidator"
 	BridgeContractName                  = "Bridge"
 	MaintainerProxyContractName         = "MaintainerProxy"
 	WalletProposalValidatorContractName = "WalletProposalValidator"
@@ -52,9 +57,14 @@ type TbtcChain struct {
 	*baseChain
 
 	bridge                  *tbtccontract.Bridge
+	bridgeAddress           common.Address
 	maintainerProxy         *tbtccontract.MaintainerProxy
 	walletRegistry          *ecdsacontract.WalletRegistry
 	sortitionPool           *ecdsacontract.EcdsaSortitionPool
+	frostWalletRegistry     *frostabi.FrostWalletRegistry
+	frostWalletRegistryAddr common.Address
+	frostDkgValidator       *frostvalidatorabi.FrostDkgValidator
+	frostSortitionPool      *ecdsacontract.EcdsaSortitionPool
 	walletProposalValidator *tbtccontract.WalletProposalValidator
 	redemptionWatchtower    *tbtccontract.RedemptionWatchtower
 
@@ -175,6 +185,19 @@ func newTbtcChain(
 		)
 	}
 
+	frostWalletRegistry, frostWalletRegistryAddr, frostSortitionPool, err := connectFrostWalletRegistry(
+		config,
+		baseChain,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	frostDkgValidator, err := connectFrostDkgValidator(config, baseChain)
+	if err != nil {
+		return nil, err
+	}
+
 	walletProposalValidatorAddress, err := config.ContractAddress(
 		WalletProposalValidatorContractName,
 	)
@@ -241,13 +264,127 @@ func newTbtcChain(
 	return &TbtcChain{
 		baseChain:               baseChain,
 		bridge:                  bridge,
+		bridgeAddress:           bridgeAddress,
 		maintainerProxy:         maintainerProxy,
 		walletRegistry:          walletRegistry,
 		sortitionPool:           sortitionPool,
+		frostWalletRegistry:     frostWalletRegistry,
+		frostWalletRegistryAddr: frostWalletRegistryAddr,
+		frostDkgValidator:       frostDkgValidator,
+		frostSortitionPool:      frostSortitionPool,
 		walletProposalValidator: walletProposalValidator,
 		redemptionWatchtower:    redemptionWatchtower,
 		sweptDepositsCache:      cache.NewGenericTimeCache[*tbtc.DepositChainRequest](sweptDepositsCachePeriod),
 	}, nil
+}
+
+func connectFrostWalletRegistry(
+	config ethereum.Config,
+	baseChain *baseChain,
+) (
+	*frostabi.FrostWalletRegistry,
+	common.Address,
+	*ecdsacontract.EcdsaSortitionPool,
+	error,
+) {
+	frostWalletRegistryAddress, err := config.ContractAddress(
+		FrostWalletRegistryContractName,
+	)
+	if err != nil {
+		return nil, common.Address{}, nil, fmt.Errorf(
+			"failed to resolve %s contract address: [%v]",
+			FrostWalletRegistryContractName,
+			err,
+		)
+	}
+
+	if frostWalletRegistryAddress == (common.Address{}) {
+		logger.Infof(
+			"%s contract address not configured; FROST DKG coordinator disabled",
+			FrostWalletRegistryContractName,
+		)
+		return nil, common.Address{}, nil, nil
+	}
+
+	frostWalletRegistry, err := frostabi.NewFrostWalletRegistry(
+		frostWalletRegistryAddress,
+		baseChain.client,
+	)
+	if err != nil {
+		return nil, common.Address{}, nil, fmt.Errorf(
+			"failed to attach to FrostWalletRegistry contract: [%v]",
+			err,
+		)
+	}
+
+	frostSortitionPoolAddress, err := frostWalletRegistry.SortitionPool(
+		&bind.CallOpts{From: baseChain.key.Address},
+	)
+	if err != nil {
+		return nil, common.Address{}, nil, fmt.Errorf(
+			"failed to get FROST sortition pool address: [%v]",
+			err,
+		)
+	}
+
+	// The FROST deployment uses a dedicated sortition pool instance but the
+	// SortitionPool ABI is the same shape as the ECDSA pool binding.
+	frostSortitionPool, err := ecdsacontract.NewEcdsaSortitionPool(
+		frostSortitionPoolAddress,
+		baseChain.chainID,
+		baseChain.key,
+		baseChain.client,
+		baseChain.nonceManager,
+		baseChain.miningWaiter,
+		baseChain.blockCounter,
+		baseChain.transactionMutex,
+	)
+	if err != nil {
+		return nil, common.Address{}, nil, fmt.Errorf(
+			"failed to attach to FrostSortitionPool contract: [%v]",
+			err,
+		)
+	}
+
+	return frostWalletRegistry, frostWalletRegistryAddress, frostSortitionPool, nil
+}
+
+func connectFrostDkgValidator(
+	config ethereum.Config,
+	baseChain *baseChain,
+) (*frostvalidatorabi.FrostDkgValidator, error) {
+	frostDkgValidatorAddress, err := config.ContractAddress(
+		FrostDkgValidatorContractName,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to resolve %s contract address: [%v]",
+			FrostDkgValidatorContractName,
+			err,
+		)
+	}
+
+	if frostDkgValidatorAddress == (common.Address{}) {
+		logger.Infof(
+			"%s contract address not configured; pre-submit FROST digest "+
+				"view checks disabled",
+			FrostDkgValidatorContractName,
+		)
+		return nil, nil
+	}
+
+	frostDkgValidator, err := frostvalidatorabi.NewFrostDkgValidator(
+		frostDkgValidatorAddress,
+		baseChain.client,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to attach to FrostDkgValidator contract: [%v]",
+			err,
+		)
+	}
+
+	return frostDkgValidator, nil
 }
 
 // Staking returns address of the TokenStaking contract the WalletRegistry is

@@ -394,5 +394,7 @@ func initDeveloperFlags(command *cobra.Command) {
 	initContractAddressFlag(chainEthereum.RandomBeaconContractName)
 	initContractAddressFlag(chainEthereum.TokenStakingContractName)
 	initContractAddressFlag(chainEthereum.WalletRegistryContractName)
+	initContractAddressFlag(chainEthereum.FrostWalletRegistryContractName)
+	initContractAddressFlag(chainEthereum.FrostDkgValidatorContractName)
 	initContractAddressFlag(chainEthereum.WalletProposalValidatorContractName)
 }

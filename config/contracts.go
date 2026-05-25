@@ -12,6 +12,7 @@ import (
 
 	ethereumBeacon "github.com/keep-network/keep-core/pkg/chain/ethereum/beacon/gen"
 	ethereumEcdsa "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen"
+	ethereumFrost "github.com/keep-network/keep-core/pkg/chain/ethereum/frost/gen"
 	ethereumTbtc "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen"
 	ethereumThreshold "github.com/keep-network/keep-core/pkg/chain/ethereum/threshold/gen"
 )
@@ -39,6 +40,8 @@ func initializeContractAddressesAliases() {
 	aliasEthereumContract(chainEthereum.RandomBeaconContractName)
 	aliasEthereumContract(chainEthereum.TokenStakingContractName)
 	aliasEthereumContract(chainEthereum.WalletRegistryContractName)
+	aliasEthereumContract(chainEthereum.FrostWalletRegistryContractName)
+	aliasEthereumContract(chainEthereum.FrostDkgValidatorContractName)
 	aliasEthereumContract(chainEthereum.BridgeContractName)
 	aliasEthereumContract(chainEthereum.MaintainerProxyContractName)
 	aliasEthereumContract(chainEthereum.LightRelayContractName)
@@ -71,6 +74,14 @@ func (c *Config) resolveContractsAddresses() {
 	resolveContractAddress(
 		chainEthereum.WalletRegistryContractName,
 		ethereumEcdsa.WalletRegistryAddress,
+	)
+	resolveContractAddress(
+		chainEthereum.FrostWalletRegistryContractName,
+		ethereumFrost.FrostWalletRegistryAddress,
+	)
+	resolveContractAddress(
+		chainEthereum.FrostDkgValidatorContractName,
+		ethereumFrost.FrostDkgValidatorAddress,
 	)
 	resolveContractAddress(
 		chainEthereum.BridgeContractName,
