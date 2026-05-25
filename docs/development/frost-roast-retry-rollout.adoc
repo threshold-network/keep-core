@@ -118,6 +118,20 @@ RFC-21 design and is enforced in
   paths are retained through Phase 6 and 7 deliberately to make
   this rollback bit-for-bit safe.
 
+== FROST DKG digest format coupling
+
+The FROST DKG result digest is a cross-repo wire-format contract
+shared by keep-core, the tBTC TypeScript test vectors, and the
+on-chain `FrostDkgValidator.resultDigest(...)` implementation.
+The current tag is `tbtc-frost-dkg-result-v1`.
+
+Treat that string, the ABI field order, and the field types as a
+single coupled interface. A future wire-format migration, for
+example changing the digest fields or their order, must update
+keep-core, the tBTC fixture/emitter, and the on-chain validator
+together. Do not change the string on one side as an isolated
+cleanup.
+
 == Cross-references
 
 * RFC-21: `docs/rfc/rfc-21-roast-coordinator-retry-and-transition-evidence.adoc`

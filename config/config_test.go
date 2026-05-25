@@ -16,6 +16,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/chain/ethereum"
 	ethereumBeacon "github.com/keep-network/keep-core/pkg/chain/ethereum/beacon/gen"
 	ethereumEcdsa "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen"
+	ethereumFrost "github.com/keep-network/keep-core/pkg/chain/ethereum/frost/gen"
 	ethereumTbtc "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen"
 	ethereumThreshold "github.com/keep-network/keep-core/pkg/chain/ethereum/threshold/gen"
 )
@@ -68,6 +69,8 @@ func TestReadConfigFromFile(t *testing.T) {
 			expectedValue: map[string]string{
 				"randombeacon":              "0xcf64c2a367341170cb4e09cf8c0ed137d8473ceb",
 				"walletregistry":            "0x143ba24e66fce8bca22f7d739f9a932c519b1c76",
+				"frostwalletregistry":       "0x0000000000000000000000000000000000000000",
+				"frostdkgvalidator":         "0x0000000000000000000000000000000000000000",
 				"tokenstaking":              "0xa363a197f1bbb8877f50350234e3f15fb4175457",
 				"bridge":                    "0x138D2a0c87BA9f6BE1DCc13D6224A6aCE9B6b6F0",
 				"maintainerproxy":           "0xC6D21c2871586A2B098c0ad043fF0D47a3c7e7ae",
@@ -331,6 +334,8 @@ func TestReadConfig_ReadContracts(t *testing.T) {
 
 	ethereumBeacon.RandomBeaconAddress = "0xd1640b381327c2d5425d6d3d605539a3db72f857"
 	ethereumEcdsa.WalletRegistryAddress = "0xdb3dd6d4f43d39c996d0afeb6fbabc284f9ffb1a"
+	ethereumFrost.FrostWalletRegistryAddress = "0x0000000000000000000000000000000000000000"
+	ethereumFrost.FrostDkgValidatorAddress = "0x0000000000000000000000000000000000000000"
 	ethereumThreshold.TokenStakingAddress = "0xaa7b41039ea8f9ec2d89bbe96e19f97b6c267a27"
 	ethereumTbtc.BridgeAddress = "0x9490165195503fcf6a0fd20ac113223fefb66ed5"
 	ethereumTbtc.WalletProposalValidatorAddress = "0xE7d33d8AA55B73a93059a24b900366894684a497"
@@ -340,6 +345,8 @@ func TestReadConfig_ReadContracts(t *testing.T) {
 
 		expectedRandomBeaconAddress            string
 		expectedWalletRegistryAddress          string
+		expectedFrostWalletRegistryAddress     string
+		expectedFrostDkgValidatorAddress       string
 		expectedTokenStakingAddress            string
 		expectedBridgeAddress                  string
 		expectedWalletProposalValidatorAddress string
@@ -348,6 +355,8 @@ func TestReadConfig_ReadContracts(t *testing.T) {
 			configFilePath:                         "../test/config_no_contracts.toml",
 			expectedRandomBeaconAddress:            "0xd1640b381327c2d5425d6d3d605539a3db72f857",
 			expectedWalletRegistryAddress:          "0xdb3dd6d4f43d39c996d0afeb6fbabc284f9ffb1a",
+			expectedFrostWalletRegistryAddress:     "0x0000000000000000000000000000000000000000",
+			expectedFrostDkgValidatorAddress:       "0x0000000000000000000000000000000000000000",
 			expectedTokenStakingAddress:            "0xaa7b41039ea8f9ec2d89bbe96e19f97b6c267a27",
 			expectedBridgeAddress:                  "0x9490165195503fcf6a0fd20ac113223fefb66ed5",
 			expectedWalletProposalValidatorAddress: "0xE7d33d8AA55B73a93059a24b900366894684a497",
@@ -356,6 +365,8 @@ func TestReadConfig_ReadContracts(t *testing.T) {
 			configFilePath:                         "../test/config.toml",
 			expectedRandomBeaconAddress:            "0xcf64c2a367341170cb4e09cf8c0ed137d8473ceb",
 			expectedWalletRegistryAddress:          "0x143ba24e66fce8bca22f7d739f9a932c519b1c76",
+			expectedFrostWalletRegistryAddress:     "0x0000000000000000000000000000000000000000",
+			expectedFrostDkgValidatorAddress:       "0x0000000000000000000000000000000000000000",
 			expectedTokenStakingAddress:            "0xa363a197f1bbb8877f50350234e3f15fb4175457",
 			expectedBridgeAddress:                  "0x138D2a0c87BA9f6BE1DCc13D6224A6aCE9B6b6F0",
 			expectedWalletProposalValidatorAddress: "0xfdc315b0e608b7cDE9166D9D69a1506779e3E0CA",
@@ -364,6 +375,8 @@ func TestReadConfig_ReadContracts(t *testing.T) {
 			configFilePath:                         "../test/config_mixed_contracts.toml",
 			expectedRandomBeaconAddress:            "0xd1640b381327c2d5425d6d3d605539a3db72f857",
 			expectedWalletRegistryAddress:          "0x143ba24e66fce8bca22f7d739f9a932c519b1c76",
+			expectedFrostWalletRegistryAddress:     "0x0000000000000000000000000000000000000000",
+			expectedFrostDkgValidatorAddress:       "0x0000000000000000000000000000000000000000",
 			expectedTokenStakingAddress:            "0xaa7b41039ea8f9ec2d89bbe96e19f97b6c267a27",
 			expectedBridgeAddress:                  "0x9490165195503fcf6a0fd20ac113223fefb66ed5",
 			expectedWalletProposalValidatorAddress: "0xE7d33d8AA55B73a93059a24b900366894684a497",
@@ -398,6 +411,14 @@ func TestReadConfig_ReadContracts(t *testing.T) {
 
 			validate(ethereum.RandomBeaconContractName, test.expectedRandomBeaconAddress)
 			validate(ethereum.WalletRegistryContractName, test.expectedWalletRegistryAddress)
+			validate(
+				ethereum.FrostWalletRegistryContractName,
+				test.expectedFrostWalletRegistryAddress,
+			)
+			validate(
+				ethereum.FrostDkgValidatorContractName,
+				test.expectedFrostDkgValidatorAddress,
+			)
 			validate(ethereum.TokenStakingContractName, test.expectedTokenStakingAddress)
 			validate(ethereum.BridgeContractName, test.expectedBridgeAddress)
 			validate(ethereum.WalletProposalValidatorContractName, test.expectedWalletProposalValidatorAddress)

@@ -118,6 +118,10 @@ func Initialize(
 
 	deduplicator := newDeduplicator()
 
+	if frostChain, ok := chain.(FrostDKGChain); ok {
+		initializeFrostDKGCoordinator(ctx, node, frostChain)
+	}
+
 	if clientInfo != nil {
 		// only if client info endpoint is configured
 		clientInfo.ObserveApplicationSource(
