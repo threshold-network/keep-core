@@ -22,14 +22,14 @@ type FrostDKGChain interface {
 		func(event *FrostDKGStartedEvent),
 	) subscription.EventSubscription
 	PastFrostDKGStartedEvents(
-		filter *DKGStartedEventFilter,
+		filter *FrostDKGStartedEventFilter,
 	) ([]*FrostDKGStartedEvent, error)
 
 	OnFrostDKGResultSubmitted(
 		func(event *FrostDKGResultSubmittedEvent),
 	) subscription.EventSubscription
 	PastFrostDKGResultSubmittedEvents(
-		filter *DKGStartedEventFilter,
+		filter *FrostDKGResultSubmittedEventFilter,
 	) ([]*FrostDKGResultSubmittedEvent, error)
 	OnFrostDKGResultChallenged(
 		func(event *FrostDKGResultChallengedEvent),
@@ -62,12 +62,29 @@ type FrostDKGStartedEvent struct {
 	BlockNumber uint64
 }
 
+// FrostDKGStartedEventFilter is a component allowing to filter FROST
+// DkgStarted events.
+type FrostDKGStartedEventFilter struct {
+	StartBlock uint64
+	EndBlock   *uint64
+	Seed       []*big.Int
+}
+
 // FrostDKGResultSubmittedEvent represents a FROST DKG result submission.
 type FrostDKGResultSubmittedEvent struct {
 	Seed        *big.Int
 	ResultHash  DKGChainResultHash
 	Result      *registry.Result
 	BlockNumber uint64
+}
+
+// FrostDKGResultSubmittedEventFilter is a component allowing to filter FROST
+// DkgResultSubmitted events.
+type FrostDKGResultSubmittedEventFilter struct {
+	StartBlock uint64
+	EndBlock   *uint64
+	ResultHash []DKGChainResultHash
+	Seed       []*big.Int
 }
 
 // FrostDKGResultChallengedEvent represents a successful FROST DKG challenge.

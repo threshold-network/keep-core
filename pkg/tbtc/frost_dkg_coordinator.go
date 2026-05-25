@@ -7,6 +7,11 @@ import (
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
+// frostDKGRecoveryLookBackBlocks bounds cold-start eth_getLogs queries.
+// FROST DKG recovery only needs recent AwaitingResult/Challenge events, and
+// keeping the range at 10k blocks stays inside common RPC provider limits.
+const frostDKGRecoveryLookBackBlocks = 10000
+
 func initializeFrostDKGCoordinator(
 	ctx context.Context,
 	node *node,
@@ -107,7 +112,7 @@ func handleFrostDKGStarted(
 	}
 
 	pastEvents, err := frostChain.PastFrostDKGStartedEvents(
-		&DKGStartedEventFilter{
+		&FrostDKGStartedEventFilter{
 			StartBlock: startBlock,
 		},
 	)
@@ -164,8 +169,14 @@ func recoverFrostDKGCoordinatorState(
 
 	switch state {
 	case AwaitingResult:
+		startBlock, err := frostDKGRecoveryStartBlock(node)
+		if err != nil {
+			logger.Errorf("failed to resolve FROST DKG recovery start block: [%v]", err)
+			return
+		}
+
 		events, err := frostChain.PastFrostDKGStartedEvents(
-			&DKGStartedEventFilter{StartBlock: 0},
+			&FrostDKGStartedEventFilter{StartBlock: startBlock},
 		)
 		if err != nil {
 			logger.Errorf("failed to recover past FROST DKG started events: [%v]", err)
@@ -186,8 +197,14 @@ func recoverFrostDKGCoordinatorState(
 		)
 
 	case Challenge:
+		startBlock, err := frostDKGRecoveryStartBlock(node)
+		if err != nil {
+			logger.Errorf("failed to resolve FROST DKG recovery start block: [%v]", err)
+			return
+		}
+
 		events, err := frostChain.PastFrostDKGResultSubmittedEvents(
-			&DKGStartedEventFilter{StartBlock: 0},
+			&FrostDKGResultSubmittedEventFilter{StartBlock: startBlock},
 		)
 		if err != nil {
 			logger.Errorf("failed to recover past FROST DKG result submissions: [%v]", err)
@@ -392,4 +409,26 @@ func localFrostMembership(
 	}
 
 	return memberIndexes, groupSelectionResult, nil
+}
+
+func frostDKGRecoveryStartBlock(node *node) (uint64, error) {
+	blockCounter, err := node.chain.BlockCounter()
+	if err != nil {
+		return 0, err
+	}
+
+	currentBlock, err := blockCounter.CurrentBlock()
+	if err != nil {
+		return 0, err
+	}
+
+	return boundedFrostDKGRecoveryStartBlock(currentBlock), nil
+}
+
+func boundedFrostDKGRecoveryStartBlock(currentBlock uint64) uint64 {
+	if currentBlock <= frostDKGRecoveryLookBackBlocks {
+		return 0
+	}
+
+	return currentBlock - frostDKGRecoveryLookBackBlocks
 }

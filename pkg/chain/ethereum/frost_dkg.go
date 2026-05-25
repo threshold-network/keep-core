@@ -88,7 +88,7 @@ func (tc *TbtcChain) OnFrostDKGStarted(
 
 // PastFrostDKGStartedEvents fetches past FROST DKG started events.
 func (tc *TbtcChain) PastFrostDKGStartedEvents(
-	filter *tbtc.DKGStartedEventFilter,
+	filter *tbtc.FrostDKGStartedEventFilter,
 ) ([]*tbtc.FrostDKGStartedEvent, error) {
 	if tc.frostWalletRegistry == nil {
 		return nil, fmt.Errorf("FrostWalletRegistry is not configured")
@@ -195,7 +195,7 @@ func (tc *TbtcChain) OnFrostDKGResultSubmitted(
 
 // PastFrostDKGResultSubmittedEvents fetches past FROST DKG submitted events.
 func (tc *TbtcChain) PastFrostDKGResultSubmittedEvents(
-	filter *tbtc.DKGStartedEventFilter,
+	filter *tbtc.FrostDKGResultSubmittedEventFilter,
 ) ([]*tbtc.FrostDKGResultSubmittedEvent, error) {
 	if tc.frostWalletRegistry == nil {
 		return nil, fmt.Errorf("FrostWalletRegistry is not configured")
@@ -209,6 +209,9 @@ func (tc *TbtcChain) PastFrostDKGResultSubmittedEvents(
 	if filter != nil {
 		startBlock = filter.StartBlock
 		endBlock = filter.EndBlock
+		for _, hash := range filter.ResultHash {
+			resultHash = append(resultHash, [32]byte(hash))
+		}
 		seed = filter.Seed
 	}
 

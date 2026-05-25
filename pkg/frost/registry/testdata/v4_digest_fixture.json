@@ -1,5 +1,11 @@
 {
-  "description": "FROST DKG resultDigest v4 fixture generated from the tBTC TypeScript reference flow.",
+  "name": "frost-dkg-result-digest-vectors",
+  "version": "v1",
+  "description": "FROST DKG resultDigest v4 fixture generated from the tBTC TypeScript reference flow. The tBTC bridge-side reference is contracts/tbtc-v2/test/integration/utils/frost-wallet-registry.ts:computeFrostResultDigest.",
+  "generator": {
+    "source": "tlabs-xyz/tbtc/contracts/tbtc-v2/test/integration/utils/frost-wallet-registry.ts:computeFrostResultDigest",
+    "command": "See pkg/frost/registry/testdata/README.md for the verified pnpm exec ts-node command."
+  },
   "chainID": "31337",
   "bridge": "0x1111111111111111111111111111111111111111",
   "registry": "0x2222222222222222222222222222222222222222",
@@ -10,5 +16,10 @@
   "fullMembersHash": "0x048553822a9f886e64193ef9da3f71732a9708edb45cff48e68466e635f6dbf7",
   "activeMembersHash": "0x4c78efa0361537bf6929c6e824b152e9b9be9140da28cbd9e1e569e483c4a16f",
   "digest": "0x45c93e369c6e4b43cbeebf09c7c639526ea0b826d3e89d87c1cd137a08dfc1d9",
-  "ethereumSignedMessageHash": "0xd70747a38b3969e9d95700a9fc7eae13883f9ee960290d7aee8114623fb9d6c9"
+  "ethereumSignedMessageHash": "0xd70747a38b3969e9d95700a9fc7eae13883f9ee960290d7aee8114623fb9d6c9",
+  "drift_check": {
+    "tbtc_path": "docs/test-vectors/frost-dkg-result-digest-v1.json",
+    "keep_core_path": "pkg/frost/registry/testdata/v4_digest_fixture.json",
+    "rule": "The tBTC-side test must produce the same digest, members hashes, and EIP-191 hash for these inputs using computeFrostResultDigest. If the digest format changes, update the tBTC emitter and this keep-core fixture together."
+  }
 }

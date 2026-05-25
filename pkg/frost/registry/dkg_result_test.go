@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"math/big"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -12,7 +14,14 @@ import (
 	"github.com/keep-network/keep-core/pkg/frost"
 )
 
+const (
+	v4DigestFixtureTestPath = "testdata/v4_digest_fixture.json"
+	v4DigestFixtureRepoPath = "pkg/frost/registry/testdata/v4_digest_fixture.json"
+)
+
 type v4DigestFixture struct {
+	Name                      string   `json:"name"`
+	Version                   string   `json:"version"`
 	ChainID                   string   `json:"chainID"`
 	Bridge                    string   `json:"bridge"`
 	Registry                  string   `json:"registry"`
@@ -24,6 +33,15 @@ type v4DigestFixture struct {
 	ActiveMembersHash         string   `json:"activeMembersHash"`
 	Digest                    string   `json:"digest"`
 	EthereumSignedMessageHash string   `json:"ethereumSignedMessageHash"`
+	Generator                 struct {
+		Source  string `json:"source"`
+		Command string `json:"command"`
+	} `json:"generator"`
+	DriftCheck struct {
+		TbtcPath     string `json:"tbtc_path"`
+		KeepCorePath string `json:"keep_core_path"`
+		Rule         string `json:"rule"`
+	} `json:"drift_check"`
 }
 
 func TestResultDigestMatchesCrossRepoFixture(t *testing.T) {
@@ -163,6 +181,58 @@ func TestEthereumSignedMessageHash(t *testing.T) {
 	}
 }
 
+func TestV4DigestFixtureMetadata(t *testing.T) {
+	fixture := loadV4DigestFixture(t)
+
+	if fixture.Name != "frost-dkg-result-digest-vectors" {
+		t.Errorf("unexpected fixture name: [%s]", fixture.Name)
+	}
+	if fixture.Version != "v1" {
+		t.Errorf("unexpected fixture version: [%s]", fixture.Version)
+	}
+	if fixture.Generator.Source != "tlabs-xyz/tbtc/contracts/tbtc-v2/test/integration/utils/frost-wallet-registry.ts:computeFrostResultDigest" {
+		t.Errorf("unexpected generator source: [%s]", fixture.Generator.Source)
+	}
+	if fixture.Generator.Command == "" {
+		t.Error("generator command must be documented")
+	}
+	if fixture.DriftCheck.TbtcPath != "docs/test-vectors/frost-dkg-result-digest-v1.json" {
+		t.Errorf("unexpected tbtc drift-check path: [%s]", fixture.DriftCheck.TbtcPath)
+	}
+	if fixture.DriftCheck.KeepCorePath != v4DigestFixtureRepoPath {
+		t.Errorf(
+			"unexpected keep-core drift-check path\nexpected: [%s]\nactual:   [%s]",
+			v4DigestFixtureRepoPath,
+			fixture.DriftCheck.KeepCorePath,
+		)
+	}
+	if fixture.DriftCheck.Rule == "" {
+		t.Error("drift-check rule must be documented")
+	}
+}
+
+func TestV4DigestFixtureFileShouldExistAtMirrorPath(t *testing.T) {
+	fixture := loadV4DigestFixture(t)
+
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller: cannot locate test source file")
+	}
+
+	repoRoot := filepath.Clean(
+		filepath.Join(filepath.Dir(thisFile), "..", "..", ".."),
+	)
+	abs := filepath.Join(repoRoot, fixture.DriftCheck.KeepCorePath)
+	if _, err := os.Stat(abs); err != nil {
+		t.Fatalf(
+			"fixture self-declares it lives at [%s] resolved to [%s] but the file is not there: [%v]",
+			fixture.DriftCheck.KeepCorePath,
+			abs,
+			err,
+		)
+	}
+}
+
 func TestActiveMembersFromMisbehavedRejectsInvalidIndices(t *testing.T) {
 	testCases := map[string]MisbehavedMemberIndices{
 		"zero":      {0},
@@ -187,7 +257,7 @@ func TestActiveMembersFromMisbehavedRejectsInvalidIndices(t *testing.T) {
 func loadV4DigestFixture(t *testing.T) *v4DigestFixture {
 	t.Helper()
 
-	data, err := os.ReadFile("testdata/v4_digest_fixture.json")
+	data, err := os.ReadFile(v4DigestFixtureTestPath)
 	if err != nil {
 		t.Fatalf("cannot read fixture: [%v]", err)
 	}

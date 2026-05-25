@@ -19,6 +19,8 @@ import (
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
 
+const frostDKGResultSubmissionDelayStepBlocks = 30
+
 func executeFrostDKGIfPossible(
 	ctx context.Context,
 	node *node,
@@ -66,8 +68,15 @@ func executeFrostDKGIfPossible(
 		return
 	}
 
+	signatureThreshold, err := frostDKGSignatureThreshold(node.groupParameters)
+	if err != nil {
+		logger.Errorf("invalid FROST DKG group parameters: [%v]", err)
+		return
+	}
+
 	fullMembers := frostFullMembers(groupSelectionResult)
 	dkgTimeoutBlock := event.BlockNumber + params.SubmissionTimeoutBlocks
+	submitterMemberIndex := lowestMemberIndex(memberIndexes)
 
 	for _, currentMemberIndex := range memberIndexes {
 		memberIndex := currentMemberIndex
@@ -111,7 +120,7 @@ func executeFrostDKGIfPossible(
 				&frostsigning.NativeFROSTDKGRequest{
 					MemberIndex:            memberIndex,
 					GroupSize:              len(groupSelectionResult.OperatorsIDs),
-					Threshold:              node.groupParameters.GroupQuorum,
+					Threshold:              signatureThreshold,
 					SessionID:              sessionID,
 					IncludedMembersIndexes: activeMemberIndexes,
 					Channel:                channel,
@@ -142,7 +151,7 @@ func executeFrostDKGIfPossible(
 			}
 
 			unsignedResult, err := registry.AssembleResult(
-				uint64(memberIndex),
+				uint64(submitterMemberIndex),
 				outputKey,
 				fullMembers,
 				misbehavedMembersIndices,
@@ -182,11 +191,20 @@ func executeFrostDKGIfPossible(
 				return
 			}
 
+			if memberIndex != submitterMemberIndex {
+				dkgLogger.Infof(
+					"skipping FROST DKG result submission; member [%d] is "+
+						"the designated local submitter",
+					submitterMemberIndex,
+				)
+				return
+			}
+
 			if err := submitFrostDKGResultWithDelay(
 				dkgCtx,
 				node,
 				frostChain,
-				memberIndex,
+				submitterMemberIndex,
 				activeMemberIndexes,
 				signedResult,
 			); err != nil {
@@ -310,12 +328,19 @@ func submitFrostDKGResultWithDelay(
 	activeMemberIndexes []group.MemberIndex,
 	result *registry.Result,
 ) error {
-	rank := 0
+	rank := -1
 	for i, activeMemberIndex := range activeMemberIndexes {
 		if activeMemberIndex == memberIndex {
 			rank = i
 			break
 		}
+	}
+	if rank < 0 {
+		return fmt.Errorf(
+			"FROST DKG submitter member [%d] is not in active members [%v]",
+			memberIndex,
+			activeMemberIndexes,
+		)
 	}
 
 	blockCounter, err := node.chain.BlockCounter()
@@ -328,7 +353,8 @@ func submitFrostDKGResultWithDelay(
 		return err
 	}
 
-	submissionBlock := currentBlock + uint64(rank)*dkgResultSubmissionDelayStepBlocks
+	submissionBlock := currentBlock +
+		uint64(rank)*frostDKGResultSubmissionDelayStepBlocks
 	if err := node.waitForBlockHeight(ctx, submissionBlock); err != nil {
 		return err
 	}
@@ -407,6 +433,21 @@ func frostFullMembers(
 	}
 
 	return members
+}
+
+func lowestMemberIndex(memberIndexes []group.MemberIndex) group.MemberIndex {
+	if len(memberIndexes) == 0 {
+		return 0
+	}
+
+	lowest := memberIndexes[0]
+	for _, memberIndex := range memberIndexes[1:] {
+		if memberIndex < lowest {
+			lowest = memberIndex
+		}
+	}
+
+	return lowest
 }
 
 func frostMisbehavedMemberIndices(

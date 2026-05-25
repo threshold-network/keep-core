@@ -117,10 +117,13 @@ func signAndCollectFrostDKGResultSignatures(
 		memberIndex: ownSignature,
 	}
 
-	expectedSignaturesCount := node.groupParameters.GroupQuorum
+	expectedSignaturesCount, err := frostDKGSignatureThreshold(node.groupParameters)
+	if err != nil {
+		return nil, err
+	}
 	if expectedSignaturesCount > len(includedMembersIndexes) {
 		return nil, fmt.Errorf(
-			"FROST DKG included members count [%d] is below quorum [%d]",
+			"FROST DKG included members count [%d] is below signature threshold [%d]",
 			len(includedMembersIndexes),
 			expectedSignaturesCount,
 		)
@@ -129,7 +132,12 @@ func signAndCollectFrostDKGResultSignatures(
 	recvCtx, cancelRecvCtx := context.WithCancel(ctx)
 	defer cancelRecvCtx()
 
-	messageChan := make(chan *frostDKGResultSignatureMessage, len(includedMembersIndexes)*4+1)
+	// Allow a few rounds of duplicate/replayed signatures without blocking the
+	// network callback while the collector validates and deduplicates messages.
+	messageChan := make(
+		chan *frostDKGResultSignatureMessage,
+		len(includedMembersIndexes)*4+1,
+	)
 	channel.Recv(recvCtx, func(message net.Message) {
 		payload, ok := message.Payload().(*frostDKGResultSignatureMessage)
 		if !ok {
