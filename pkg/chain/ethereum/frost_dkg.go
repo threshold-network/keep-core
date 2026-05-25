@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/event"
+	chainutil "github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
 	"github.com/keep-network/keep-core/pkg/chain"
 	frostabi "github.com/keep-network/keep-core/pkg/chain/ethereum/frost/gen/abi"
 	frostvalidatorabi "github.com/keep-network/keep-core/pkg/chain/ethereum/frost/gen/validatorabi"
@@ -45,40 +48,47 @@ func (tc *TbtcChain) OnFrostDKGStarted(
 	}
 
 	ctx, cancelCtx := context.WithCancel(context.Background())
-	sink := make(chan *frostabi.FrostWalletRegistryDkgStarted)
-
-	sub, err := tc.frostWalletRegistry.WatchDkgStarted(
-		&bind.WatchOpts{Context: ctx},
-		sink,
-		nil,
-	)
-	if err != nil {
-		cancelCtx()
-		logger.Errorf("failed to watch FROST DKG started events: [%v]", err)
-		return subscription.NewEventSubscription(func() {})
-	}
+	events := make(chan *tbtc.FrostDKGStartedEvent)
+	watchSink := make(chan *frostabi.FrostWalletRegistryDkgStarted)
 
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case err, ok := <-sub.Err():
+			case event, ok := <-events:
 				if !ok {
 					return
 				}
-				logger.Errorf("FROST DKG started subscription error: [%v]", err)
-			case event, ok := <-sink:
-				if !ok {
-					return
-				}
-				handler(&tbtc.FrostDKGStartedEvent{
-					Seed:        event.Seed,
-					BlockNumber: event.Raw.BlockNumber,
-				})
+				handler(event)
 			}
 		}
 	}()
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-watchSink:
+				if !ok {
+					return
+				}
+				emitFrostDKGStartedEvent(
+					ctx,
+					events,
+					&tbtc.FrostDKGStartedEvent{
+						Seed:        event.Seed,
+						BlockNumber: event.Raw.BlockNumber,
+					},
+				)
+			}
+		}
+	}()
+
+	go tc.monitorPastFrostDKGStartedEvents(ctx, events)
+
+	sub := tc.watchFrostDKGStarted(watchSink, nil)
 
 	return subscription.NewEventSubscription(func() {
 		sub.Unsubscribe()
@@ -143,31 +153,29 @@ func (tc *TbtcChain) OnFrostDKGResultSubmitted(
 	}
 
 	ctx, cancelCtx := context.WithCancel(context.Background())
-	sink := make(chan *frostabi.FrostWalletRegistryDkgResultSubmitted)
-
-	sub, err := tc.frostWalletRegistry.WatchDkgResultSubmitted(
-		&bind.WatchOpts{Context: ctx},
-		sink,
-		nil,
-		nil,
-	)
-	if err != nil {
-		cancelCtx()
-		logger.Errorf("failed to watch FROST DKG result submitted events: [%v]", err)
-		return subscription.NewEventSubscription(func() {})
-	}
+	events := make(chan *tbtc.FrostDKGResultSubmittedEvent)
+	watchSink := make(chan *frostabi.FrostWalletRegistryDkgResultSubmitted)
 
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case err, ok := <-sub.Err():
+			case event, ok := <-events:
 				if !ok {
 					return
 				}
-				logger.Errorf("FROST DKG result submitted subscription error: [%v]", err)
-			case event, ok := <-sink:
+				handler(event)
+			}
+		}
+	}()
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-watchSink:
 				if !ok {
 					return
 				}
@@ -177,15 +185,23 @@ func (tc *TbtcChain) OnFrostDKGResultSubmitted(
 					continue
 				}
 
-				handler(&tbtc.FrostDKGResultSubmittedEvent{
-					Seed:        event.Seed,
-					ResultHash:  event.ResultHash,
-					Result:      result,
-					BlockNumber: event.Raw.BlockNumber,
-				})
+				emitFrostDKGResultSubmittedEvent(
+					ctx,
+					events,
+					&tbtc.FrostDKGResultSubmittedEvent{
+						Seed:        event.Seed,
+						ResultHash:  event.ResultHash,
+						Result:      result,
+						BlockNumber: event.Raw.BlockNumber,
+					},
+				)
 			}
 		}
 	}()
+
+	go tc.monitorPastFrostDKGResultSubmittedEvents(ctx, events)
+
+	sub := tc.watchFrostDKGResultSubmitted(watchSink, nil, nil)
 
 	return subscription.NewEventSubscription(func() {
 		sub.Unsubscribe()
@@ -251,6 +267,215 @@ func (tc *TbtcChain) PastFrostDKGResultSubmittedEvents(
 	})
 
 	return events, nil
+}
+
+func (tc *TbtcChain) watchFrostDKGStarted(
+	sink chan<- *frostabi.FrostWalletRegistryDkgStarted,
+	seed []*big.Int,
+) event.Subscription {
+	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
+		return tc.frostWalletRegistry.WatchDkgStarted(
+			&bind.WatchOpts{Context: ctx},
+			sink,
+			seed,
+		)
+	}
+
+	thresholdViolatedFn := func(elapsed time.Duration) {
+		logger.Warnf(
+			"subscription to FROST DkgStarted had to be retried [%s] "+
+				"since the last attempt; please inspect host chain connectivity",
+			elapsed,
+		)
+	}
+
+	subscriptionFailedFn := func(err error) {
+		logger.Errorf(
+			"subscription to FROST DkgStarted failed with error: [%v]; "+
+				"resubscription attempt will be performed",
+			err,
+		)
+	}
+
+	return chainutil.WithResubscription(
+		chainutil.SubscriptionBackoffMax,
+		subscribeFn,
+		chainutil.SubscriptionAlertThreshold,
+		thresholdViolatedFn,
+		subscriptionFailedFn,
+	)
+}
+
+func (tc *TbtcChain) watchFrostDKGResultSubmitted(
+	sink chan<- *frostabi.FrostWalletRegistryDkgResultSubmitted,
+	resultHash [][32]byte,
+	seed []*big.Int,
+) event.Subscription {
+	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
+		return tc.frostWalletRegistry.WatchDkgResultSubmitted(
+			&bind.WatchOpts{Context: ctx},
+			sink,
+			resultHash,
+			seed,
+		)
+	}
+
+	thresholdViolatedFn := func(elapsed time.Duration) {
+		logger.Warnf(
+			"subscription to FROST DkgResultSubmitted had to be retried [%s] "+
+				"since the last attempt; please inspect host chain connectivity",
+			elapsed,
+		)
+	}
+
+	subscriptionFailedFn := func(err error) {
+		logger.Errorf(
+			"subscription to FROST DkgResultSubmitted failed with error: [%v]; "+
+				"resubscription attempt will be performed",
+			err,
+		)
+	}
+
+	return chainutil.WithResubscription(
+		chainutil.SubscriptionBackoffMax,
+		subscribeFn,
+		chainutil.SubscriptionAlertThreshold,
+		thresholdViolatedFn,
+		subscriptionFailedFn,
+	)
+}
+
+func (tc *TbtcChain) monitorPastFrostDKGStartedEvents(
+	ctx context.Context,
+	events chan<- *tbtc.FrostDKGStartedEvent,
+) {
+	ticker := time.NewTicker(chainutil.DefaultSubscribeOptsTick)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			lastBlock, err := tc.blockCounter.CurrentBlock()
+			if err != nil {
+				logger.Errorf(
+					"FROST DkgStarted subscription failed to pull events: [%v]",
+					err,
+				)
+				continue
+			}
+
+			fromBlock := frostSubscriptionMonitoringStartBlock(lastBlock)
+			logger.Infof(
+				"FROST DkgStarted subscription monitoring fetching past "+
+					"events starting from block [%v]",
+				fromBlock,
+			)
+
+			pastEvents, err := tc.PastFrostDKGStartedEvents(
+				&tbtc.FrostDKGStartedEventFilter{StartBlock: fromBlock},
+			)
+			if err != nil {
+				logger.Errorf(
+					"FROST DkgStarted subscription failed to pull events: [%v]",
+					err,
+				)
+				continue
+			}
+
+			logger.Infof(
+				"FROST DkgStarted subscription monitoring fetched [%v] past events",
+				len(pastEvents),
+			)
+
+			for _, event := range pastEvents {
+				emitFrostDKGStartedEvent(ctx, events, event)
+			}
+		}
+	}
+}
+
+func (tc *TbtcChain) monitorPastFrostDKGResultSubmittedEvents(
+	ctx context.Context,
+	events chan<- *tbtc.FrostDKGResultSubmittedEvent,
+) {
+	ticker := time.NewTicker(chainutil.DefaultSubscribeOptsTick)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			lastBlock, err := tc.blockCounter.CurrentBlock()
+			if err != nil {
+				logger.Errorf(
+					"FROST DkgResultSubmitted subscription failed to pull events: [%v]",
+					err,
+				)
+				continue
+			}
+
+			fromBlock := frostSubscriptionMonitoringStartBlock(lastBlock)
+			logger.Infof(
+				"FROST DkgResultSubmitted subscription monitoring fetching past "+
+					"events starting from block [%v]",
+				fromBlock,
+			)
+
+			pastEvents, err := tc.PastFrostDKGResultSubmittedEvents(
+				&tbtc.FrostDKGResultSubmittedEventFilter{StartBlock: fromBlock},
+			)
+			if err != nil {
+				logger.Errorf(
+					"FROST DkgResultSubmitted subscription failed to pull events: [%v]",
+					err,
+				)
+				continue
+			}
+
+			logger.Infof(
+				"FROST DkgResultSubmitted subscription monitoring fetched [%v] past events",
+				len(pastEvents),
+			)
+
+			for _, event := range pastEvents {
+				emitFrostDKGResultSubmittedEvent(ctx, events, event)
+			}
+		}
+	}
+}
+
+func frostSubscriptionMonitoringStartBlock(lastBlock uint64) uint64 {
+	pastBlocks := uint64(chainutil.DefaultSubscribeOptsPastBlocks)
+	if lastBlock <= pastBlocks {
+		return 0
+	}
+
+	return lastBlock - pastBlocks
+}
+
+func emitFrostDKGStartedEvent(
+	ctx context.Context,
+	events chan<- *tbtc.FrostDKGStartedEvent,
+	event *tbtc.FrostDKGStartedEvent,
+) {
+	select {
+	case <-ctx.Done():
+	case events <- event:
+	}
+}
+
+func emitFrostDKGResultSubmittedEvent(
+	ctx context.Context,
+	events chan<- *tbtc.FrostDKGResultSubmittedEvent,
+	event *tbtc.FrostDKGResultSubmittedEvent,
+) {
+	select {
+	case <-ctx.Done():
+	case events <- event:
+	}
 }
 
 // OnFrostDKGResultChallenged registers a callback for FROST DKG challenges.

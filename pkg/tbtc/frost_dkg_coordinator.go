@@ -258,13 +258,7 @@ func handleFrostDKGResultSubmitted(
 			event.ResultHash,
 			reason,
 		)
-		if err := frostChain.ChallengeFrostDKGResult(event.Result); err != nil {
-			logger.Errorf(
-				"failed to challenge FROST DKG result [0x%x]: [%v]",
-				event.ResultHash,
-				err,
-			)
-		}
+		challengeInvalidFrostDKGResult(ctx, node, frostChain, event)
 		return
 	}
 
@@ -310,6 +304,114 @@ func handleFrostDKGResultSubmitted(
 			event,
 			memberIndex,
 			approvalBlock,
+		)
+	}
+}
+
+func challengeInvalidFrostDKGResult(
+	ctx context.Context,
+	node *node,
+	frostChain FrostDKGChain,
+	event *FrostDKGResultSubmittedEvent,
+) {
+	for attempt := uint64(1); ; attempt++ {
+		select {
+		case <-ctx.Done():
+			logger.Errorf(
+				"stopping FROST DKG challenge confirmation: [%v]",
+				ctx.Err(),
+			)
+			return
+		default:
+		}
+
+		state, err := frostChain.GetFrostDKGState()
+		if err != nil {
+			logger.Errorf("failed to check FROST DKG state before challenge: [%v]", err)
+			return
+		}
+		if state != Challenge {
+			logger.Infof(
+				"invalid FROST DKG result [0x%x] challenged successfully",
+				event.ResultHash,
+			)
+			return
+		}
+
+		if err := frostChain.ChallengeFrostDKGResult(event.Result); err != nil {
+			state, stateErr := frostChain.GetFrostDKGState()
+			if stateErr == nil && state != Challenge {
+				logger.Infof(
+					"invalid FROST DKG result [0x%x] was challenged by another "+
+						"operator",
+					event.ResultHash,
+				)
+				return
+			}
+
+			logger.Errorf(
+				"failed to challenge FROST DKG result [0x%x]: [%v]",
+				event.ResultHash,
+				err,
+			)
+			if stateErr != nil {
+				logger.Errorf(
+					"failed to check FROST DKG state after challenge error: [%v]",
+					stateErr,
+				)
+			}
+			return
+		}
+
+		currentBlock, err := currentFrostDKGBlock(node)
+		if err != nil {
+			logger.Errorf(
+				"failed to get current block after FROST DKG challenge: [%v]",
+				err,
+			)
+			return
+		}
+
+		confirmationBlock := currentBlock + dkgResultChallengeConfirmationBlocks
+		logger.Infof(
+			"challenging invalid FROST DKG result [0x%x], attempt [%v]; "+
+				"waiting for block [%v] to confirm DKG state",
+			event.ResultHash,
+			attempt,
+			confirmationBlock,
+		)
+
+		if err := node.waitForBlockHeight(ctx, confirmationBlock); err != nil {
+			logger.Errorf(
+				"failed to wait for FROST DKG challenge confirmation: [%v]",
+				err,
+			)
+			return
+		}
+		if ctx.Err() != nil {
+			logger.Errorf(
+				"stopping FROST DKG challenge confirmation: [%v]",
+				ctx.Err(),
+			)
+			return
+		}
+
+		state, err = frostChain.GetFrostDKGState()
+		if err != nil {
+			logger.Errorf("failed to check FROST DKG state after challenge: [%v]", err)
+			return
+		}
+		if state != Challenge {
+			logger.Infof(
+				"invalid FROST DKG result [0x%x] challenged successfully",
+				event.ResultHash,
+			)
+			return
+		}
+
+		logger.Infof(
+			"invalid FROST DKG result [0x%x] still not challenged; retrying",
+			event.ResultHash,
 		)
 	}
 }
@@ -406,16 +508,20 @@ func localFrostMembership(
 	return memberIndexes, groupSelectionResult, nil
 }
 
-func frostDKGRecoveryStartBlock(
-	node *node,
-	frostChain FrostDKGChain,
-) (uint64, error) {
+func currentFrostDKGBlock(node *node) (uint64, error) {
 	blockCounter, err := node.chain.BlockCounter()
 	if err != nil {
 		return 0, err
 	}
 
-	currentBlock, err := blockCounter.CurrentBlock()
+	return blockCounter.CurrentBlock()
+}
+
+func frostDKGRecoveryStartBlock(
+	node *node,
+	frostChain FrostDKGChain,
+) (uint64, error) {
+	currentBlock, err := currentFrostDKGBlock(node)
 	if err != nil {
 		return 0, err
 	}
