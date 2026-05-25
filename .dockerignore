@@ -31,6 +31,8 @@ token-tracker/
 **/gen/**/*.go
 !**/gen/gen.go
 !**/gen/cmd/cmd.go
+!pkg/chain/ethereum/frost/gen/abi/*.go
+!pkg/chain/ethereum/frost/gen/validatorabi/*.go
 
 # Legacy V1 contracts bindings.
 # We won't generate new bindings in the docker build process, but use the existing ones.
