@@ -1,6 +1,0 @@
-build/
-external/
-node_modules/
-public/
-# This is an auto-generated file and is not included in repo.
-src/css/app.css

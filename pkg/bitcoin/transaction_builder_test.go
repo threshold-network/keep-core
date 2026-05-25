@@ -113,6 +113,35 @@ func TestTransactionBuilder_AddPublicKeyHashInput(t *testing.T) {
 	}
 }
 
+func TestTransactionBuilder_AddInputReturnsErrorForOutOfRangeOutputIndex(
+	t *testing.T,
+) {
+	localChain := newLocalChain()
+	builder := NewTransactionBuilder(localChain)
+
+	inputTransaction := transactionFrom(
+		t,
+		"01000000012d4e0b1ef0bf21eed32f6e2f11353b78534dcf21852d506f6f53b64bb5c6b4c500000000c84730440220590e998a5c28965fd442e700445a60c494124fdbb8aa39cc20c04f2aedadb1a602206acb2f852cd7adea65fe9209024e18d2d6ccac0b1e45c61d80c9bcd62f3e5a12012103989d253b17a6a0f41838b84ff0d20e8898f9d7b1a98f2564da4cc29dcf8581d94c5c14934b98637ca318a4d6e7ca6ffd1690b8e77df6377508f9f0c90d000395237576a9148db50eb52063ea9d98b3eac91489a90f738986f68763ac6776a914e257eccafbc07c381642ce6e7e55120fb077fbed880448f2b262b175ac68ffffffff0110400000000000001976a9148db50eb52063ea9d98b3eac91489a90f738986f688ac00000000",
+	)
+	if err := localChain.addTransaction(inputTransaction); err != nil {
+		t.Fatal(err)
+	}
+
+	err := builder.AddPublicKeyHashInput(&UnspentTransactionOutput{
+		Outpoint: &TransactionOutpoint{
+			TransactionHash: inputTransaction.Hash(),
+			OutputIndex:     3,
+		},
+		Value: 16400,
+	})
+	if err == nil {
+		t.Fatal("expected out-of-range output index error")
+	}
+	if !strings.Contains(err.Error(), "output index [3] out of range") {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
 func TestTransactionBuilder_AddScriptHashInput(t *testing.T) {
 	var tests = map[string]struct {
 		inputTransactionHex string

@@ -3714,7 +3714,7 @@ describe("WalletRegistry - Authorization", () => {
  * Test Coverage:
  * - Pre-upgrade mode: Authorization routes to TokenStaking (allowlist = address(0))
  * - Post-upgrade mode: Authorization routes to Allowlist (allowlist != address(0))
- * - NOT MIGRATED touchpoints: Slashing and beneficiary queries stay on TokenStaking
+ * - NOT MIGRATED touchpoints: Slashing stays on TokenStaking
  * - Upgrade flow: Transition from TokenStaking to Allowlist via initializeV2()
  * - Edge cases: Zero address validation, re-initialization prevention
  *
@@ -3972,74 +3972,6 @@ describe("WalletRegistry - Migration Scenario Tests (TIP-092)", () => {
           minimumAuthorization
         )
       ).to.not.be.reverted
-    })
-  })
-
-  /**
-   * NOT MIGRATED Touchpoint Tests
-   *
-   * Context: Some functions do NOT use _currentAuthorizationSource().
-   * Expected: These functions always use staking contract, even after initializeV2().
-   *
-   * Rationale:
-   * - withdrawRewards: Beneficiary roles remain in TokenStaking (WalletRegistry.sol:440-452)
-   * - challengeDkgResult: Stake custody and slashing remain in TokenStaking (WalletRegistry.sol:950-966)
-   */
-  describe("NOT MIGRATED Touchpoints", () => {
-    let allowlist: FakeContract<IStaking>
-
-    before(async () => {
-      await createSnapshot()
-
-      // Setup: Use real TokenStaking for beneficiary roles (NOT migrated to Allowlist)
-      await setupRealStaking(
-        t,
-        staking,
-        walletRegistry,
-        deployer,
-        stakingProvider,
-        beneficiary,
-        minimumAuthorization
-      )
-
-      // Setup: Create allowlist fake and upgrade (but beneficiary still in TokenStaking)
-      allowlist = await smock.fake<IStaking>("IStaking")
-      allowlist.authorizedStake.returns(minimumAuthorization)
-      await walletRegistry.initializeV2(allowlist.address)
-
-      // Setup: Trigger authorization callback from allowlist (post-upgrade)
-      await triggerAuthorizationCallback(
-        walletRegistry,
-        allowlist.address,
-        stakingProvider.address,
-        ethers.BigNumber.from(0),
-        minimumAuthorization
-      )
-
-      // Setup: Register operator with allowlist authorization
-      await walletRegistry
-        .connect(stakingProvider)
-        .registerOperator(operator.address)
-    })
-
-    after(async () => {
-      await restoreSnapshot()
-    })
-
-    /**
-     * Test: withdrawRewards always uses staking.rolesOf() for beneficiary lookup
-     * NOT using _currentAuthorizationSource()
-     * Direct call: staking.rolesOf() at line 456
-     */
-    it("should query TokenStaking for beneficiary in withdrawRewards (post-upgrade)", async () => {
-      // This test verifies that even after initializeV2, beneficiary lookup
-      // goes to TokenStaking, not Allowlist
-      expect(await walletRegistry.allowlist()).to.equal(allowlist.address)
-
-      // Note: withdrawRewards requires actual rewards to test fully
-      // This test validates the pattern - beneficiary lookup stays on TokenStaking
-      const roles = await staking.rolesOf(stakingProvider.address)
-      expect(roles.beneficiary).to.equal(beneficiary.address)
     })
   })
 

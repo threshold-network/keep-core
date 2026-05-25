@@ -9,7 +9,6 @@ const KeepRandomBeaconOperator = artifacts.require(
 )
 const KeepRegistry = artifacts.require("./KeepRegistry.sol")
 const TokenStaking = artifacts.require("./TokenStaking.sol")
-const TokenStakingEscrow = artifacts.require("./TokenStakingEscrow.sol")
 const TokenGrant = artifacts.require("./TokenGrant.sol")
 const GasPriceOracle = artifacts.require("./GasPriceOracle.sol")
 const OldTokenStaking = artifacts.require("../stubs/OldTokenStaking.sol")
@@ -23,15 +22,12 @@ module.exports = async function (deployer, network) {
   const keepRegistry = await KeepRegistry.deployed()
   const tokenStaking = await TokenStaking.deployed()
   const oldTokenStaking = await OldTokenStaking.deployed()
-  const tokenStakingEscrow = await TokenStakingEscrow.deployed()
   const tokenGrant = await TokenGrant.deployed()
   const gasPriceOracle = await GasPriceOracle.deployed()
 
   if (!(await keepRandomBeaconServiceImplV1.initialized())) {
     throw Error("keep random beacon service not initialized")
   }
-
-  await tokenStakingEscrow.transferOwnership(tokenStaking.address)
 
   await tokenGrant.authorizeStakingContract(tokenStaking.address)
   if (network === "local") {

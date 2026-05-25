@@ -52,11 +52,6 @@ func (al *AllowList) Contains(operatorPublicKey *operator.PublicKey) bool {
 var EmptyAllowList = NewAllowList([]*operator.PublicKey{})
 
 const (
-	// PositiveIsRecognizedCachePeriod is the time period the cache maintains
-	// the positive result of the last `IsRecognized` checks.
-	// We use the cache to minimize calls to the on-chain client.
-	PositiveIsRecognizedCachePeriod = 12 * time.Hour
-
 	// NegativeIsRecognizedCachePeriod is the time period the cache maintains
 	// the negative result of the last `IsRecognized` checks.
 	// We use the cache to minimize calls to the on-chain client.
@@ -74,7 +69,6 @@ func AnyApplicationPolicy(
 	return &anyApplicationPolicy{
 		applications:        applications,
 		allowList:           allowList,
-		positiveResultCache: cache.NewTimeCache(PositiveIsRecognizedCachePeriod),
 		negativeResultCache: cache.NewTimeCache(NegativeIsRecognizedCachePeriod),
 	}
 }
@@ -82,7 +76,6 @@ func AnyApplicationPolicy(
 type anyApplicationPolicy struct {
 	applications        []Application
 	allowList           *AllowList
-	positiveResultCache *cache.TimeCache
 	negativeResultCache *cache.TimeCache
 }
 
@@ -90,8 +83,10 @@ type anyApplicationPolicy struct {
 // the network. The operator can join the network if it is an allowlisted node
 // or it is a non-allowlisted node but it is recognized as eligible by any of
 // the applications. Nil is returned on a successful validation, error otherwise.
-// Due to performance reasons, the results of validations for non-allowlisted
-// nodes are stored in a cache for a certain amount of time.
+// Due to performance reasons, negative validation results for non-allowlisted
+// nodes are stored in a cache for a certain amount of time. Positive results
+// are intentionally not cached so that operator revocations take effect on the
+// next Validate call rather than after a cache TTL.
 func (aap *anyApplicationPolicy) Validate(
 	remotePeerPublicKey *operator.PublicKey,
 ) error {
@@ -100,22 +95,16 @@ func (aap *anyApplicationPolicy) Validate(
 		return nil
 	}
 
-	// First, check in the in-memory time caches to minimize hits to the ETH client.
-	// If the Keep client with the given chain address is in the positive result
-	// cache it means it has been recognized when the last `IsRecognized` was
-	// executed and caching period has not elapsed yet. Similarly, if the client
-	// is in the negative result cache it means it hasn't been recognized.
+	// First, check in the in-memory time cache to minimize hits to the ETH client.
+	// If the client is in the negative result cache it means it hasn't been
+	// recognized when the last `IsRecognized` was executed and caching period
+	// has not elapsed yet.
 	//
 	// If the caching period elapsed, cache checks will return false and we
 	// have to ask the chain about the current status.
-	aap.positiveResultCache.Sweep()
 	aap.negativeResultCache.Sweep()
 
 	remotePeerPublicKeyHex := remotePeerPublicKey.String()
-
-	if aap.positiveResultCache.Has(remotePeerPublicKeyHex) {
-		return nil
-	}
 
 	if aap.negativeResultCache.Has(remotePeerPublicKeyHex) {
 		return errNotRecognized
@@ -142,10 +131,6 @@ func (aap *anyApplicationPolicy) Validate(
 		aap.negativeResultCache.Add(remotePeerPublicKeyHex)
 		return errNotRecognized
 	}
-
-	// Add this address to the positive result cache.
-	// `IsRecognized` will not be called again for the entire caching period.
-	aap.positiveResultCache.Add(remotePeerPublicKeyHex)
 
 	return nil
 }

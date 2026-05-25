@@ -856,6 +856,16 @@ describe("WalletRegistryGovernance", async () => {
 
           await walletRegistryGovernance
             .connect(governance)
+            .beginAuthorizationDecreaseChangePeriodUpdate(456)
+
+          await helpers.time.increaseTime(constants.governanceDelay)
+
+          await walletRegistryGovernance
+            .connect(governance)
+            .finalizeAuthorizationDecreaseChangePeriodUpdate()
+
+          await walletRegistryGovernance
+            .connect(governance)
             .beginAuthorizationDecreaseDelayUpdate(123)
 
           await helpers.time.increaseTime(constants.governanceDelay)
@@ -873,6 +883,12 @@ describe("WalletRegistryGovernance", async () => {
           const { authorizationDecreaseDelay } =
             await walletRegistry.authorizationParameters()
           expect(authorizationDecreaseDelay).to.be.equal(123)
+        })
+
+        it("should preserve the authorization decrease change period", async () => {
+          const { authorizationDecreaseChangePeriod } =
+            await walletRegistry.authorizationParameters()
+          expect(authorizationDecreaseChangePeriod).to.be.equal(456)
         })
 
         it("should emit AuthorizationDecreaseDelayUpdated event", async () => {

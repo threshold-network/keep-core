@@ -23,6 +23,7 @@ const KeepRegistry = contract.fromArtifact("KeepRegistry")
 
 describe("TokenStaking", function () {
   let token
+  let tokenGrant
   let registry
   let stakingContract
   let stakingAmount
@@ -48,7 +49,6 @@ describe("TokenStaking", function () {
       tokenGrant.address,
       registry.address,
       initializationPeriod,
-      contract.fromArtifact("TokenStakingEscrow"),
       contract.fromArtifact("TokenStaking")
     )
     stakingContract = stakingContracts.tokenStaking
@@ -320,6 +320,36 @@ describe("TokenStaking", function () {
       expect(delegationInfoAfter.undelegatedAt).to.eq.BN(
         0,
         "Unexpected undelegation time"
+      )
+    })
+
+    it("should not allow top-up on a cancelled stake within initialization period", async () => {
+      await delegate(operatorOne, stakingAmount)
+      await stakingContract.cancelStake(operatorOne, { from: owner })
+
+      // createdAt is preserved after cancel, so receiveApproval routes to topUp
+      // (not a new delegation). instantComplete must reject the cancelled operator.
+      await expectRevert(
+        delegate(operatorOne, stakingAmount),
+        "Operator stake already cancelled"
+      )
+    })
+
+    it("should not allow top-up on a cancelled stake after initialization period passes", async () => {
+      const tx = await delegate(operatorOne, stakingAmount)
+      const createdAt = web3.utils.toBN(
+        (await web3.eth.getBlock(tx.receipt.blockNumber)).timestamp
+      )
+
+      await stakingContract.cancelStake(operatorOne, { from: owner })
+
+      // Advance past init period so the topUp path hits initiate() instead of
+      // instantComplete(). Both must reject the cancelled operator.
+      await time.increaseTo(createdAt.add(initializationPeriod).addn(1))
+
+      await expectRevert(
+        delegate(operatorOne, stakingAmount),
+        "Operator stake already cancelled"
       )
     })
   })

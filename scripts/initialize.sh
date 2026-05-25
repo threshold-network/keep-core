@@ -132,30 +132,30 @@ if [ -z "$authorizer" ]; then
    authorizer=${stake_owner}
 fi
 
-stake_amount_opt=""
+initialize=(
+   npx hardhat initialize
+   --network "$NETWORK"
+   --owner "$stake_owner"
+   --provider "$staking_provider"
+   --operator "$operator"
+   --beneficiary "$beneficiary"
+   --authorizer "$authorizer"
+)
+
 if [ ! -z "$stake_amount" ]; then
-   stake_amount_opt="--amount ${stake_amount}"
+   initialize+=(--amount "$stake_amount")
 fi
 
-authorization_amount_opt=""
 if [ ! -z "$authorization_amount" ]; then
-   authorization_amount_opt="--authorization ${authorization_amount}"
+   initialize+=(--authorization "$authorization_amount")
 fi
-
-initialize="npx hardhat initialize 
-   --network $NETWORK \
-   --owner ${stake_owner} \
-   --provider ${staking_provider} \
-   --operator ${operator} \
-   --beneficiary ${beneficiary} \
-   --authorizer ${authorizer}"
 
 printf "${LOG_START}Initializing beacon...${LOG_END}"
-cd $KEEP_BEACON_SOL_PATH
-eval ${initialize} ${stake_amount_opt} ${authorization_amount_opt}
+cd "$KEEP_BEACON_SOL_PATH"
+"${initialize[@]}"
 
 printf "${LOG_START}Initializing ecdsa...${LOG_END}"
-cd $KEEP_ECDSA_SOL_PATH
-eval ${initialize} ${stake_amount_opt} ${authorization_amount_opt}
+cd "$KEEP_ECDSA_SOL_PATH"
+"${initialize[@]}"
 
 printf "${DONE_START}Initialization completed!${DONE_END}"

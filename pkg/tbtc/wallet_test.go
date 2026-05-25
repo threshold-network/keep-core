@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -168,6 +169,42 @@ func TestWalletDispatcher_Dispatch(t *testing.T) {
 	err = walletDispatcher.dispatch(wallet2Action2)
 	if err != nil {
 		t.Errorf("unexpected error: [%v]", err)
+	}
+}
+
+func TestEnsureWalletSyncedBetweenChains_TransactionWithoutInputs(t *testing.T) {
+	walletPublicKeyHash := [20]byte{}
+	outputScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	malformedTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           1000,
+				PublicKeyScript: outputScript,
+			},
+		},
+	}
+
+	btcChain := newLocalBitcoinChain()
+	if err := btcChain.BroadcastTransaction(malformedTransaction); err != nil {
+		t.Fatal(err)
+	}
+
+	err = EnsureWalletSyncedBetweenChains(
+		walletPublicKeyHash,
+		nil,
+		Connect(),
+		btcChain,
+	)
+	if err == nil {
+		t.Fatal("expected transaction-without-inputs error")
+	}
+	if !strings.Contains(err.Error(), "has no inputs") {
+		t.Fatalf("unexpected error: [%v]", err)
 	}
 }
 

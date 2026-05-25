@@ -49,7 +49,6 @@ describe("TokenGrant/Withdraw", function () {
       grantContract.address,
       registryContract.address,
       initializationPeriod,
-      contract.fromArtifact("TokenStakingEscrow"),
       contract.fromArtifact("TokenStaking")
     )
     stakingContract = stakingContracts.tokenStaking

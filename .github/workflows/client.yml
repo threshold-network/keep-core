@@ -13,7 +13,6 @@ on:
       - "scripts/**"
       - "solidity/**"
       - "solidity-v1/**"
-      - "token-stakedrop/**"
   pull_request:
   workflow_dispatch:
     inputs:
@@ -46,7 +45,7 @@ jobs:
         with:
           filters: |
             path-filter:
-              - './!((docs-v1|docs|infrastructure|scripts|solidity|solidity-v1|token-stakedrop)/**)'
+              - './!((docs-v1|docs|infrastructure|scripts|solidity|solidity-v1)/**)'
 
   electrum-integration-detect-changes:
     runs-on: ubuntu-latest

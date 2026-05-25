@@ -450,36 +450,30 @@ contract WalletRegistry is
     }
 
     /// @notice Withdraws application rewards for the given staking provider.
-    ///         Rewards are withdrawn to the staking provider's beneficiary
-    ///         address set in the staking contract. Reverts if staking provider
-    ///         has not registered the operator address.
+    ///         Rewards are sent to the beneficiary returned by
+    ///         `_currentAuthorizationSource().rolesOf(stakingProvider)` — the
+    ///         same authorization source used elsewhere after TIP-092 (Allowlist
+    ///         when `allowlist != address(0)`, otherwise TokenStaking). Reverts
+    ///         if the staking provider has not registered an operator address.
     /// @dev Emits `RewardsWithdrawn` event.
     ///
-    /// NOT MIGRATED: Beneficiary lookup remains on TokenStaking because
-    /// migrating dead code costs 50-100 bytes with zero benefit.
+    /// Allowlist vs TokenStaking: `Allowlist.rolesOf` follows TIP-092 semantics
+    /// (beneficiary is the staking provider address), while `TokenStaking.rolesOf`
+    /// can return a distinct delegated beneficiary. After `initializeV2(allowlist)`,
+    /// reward payout follows Allowlist, not legacy TokenStaking role resolution.
     ///
     /// Historical Context (TIP-092/100 - February 15, 2025):
     /// - Sortition pool DKG participation rewards HALTED Feb 15, 2025
     /// - TokenStaking notification rewards HALTED for ECDSA/RandomBeacon
     /// - Only TACo application rewards continue (6-month transition)
-    /// - This function now returns 0 for all ECDSA operators (no rewards)
-    ///
-    /// Migration Decision Rationale:
-    /// - Bytecode cost: 50-100 bytes to migrate beneficiary lookup to Allowlist
-    /// - Benefit: Zero (function returns 0 - no rewards to withdraw)
-    /// - Preserved for historical compatibility and potential future reactivation
-    ///
-    /// Technical Note: If rewards are reactivated, Allowlist migration would
-    /// be required as Allowlist.rolesOf() always returns stakingProvider as
-    /// beneficiary (no delegation support), while TokenStaking.rolesOf()
-    /// returns configured beneficiary (supports owner != beneficiary delegation).
-    ///
-    /// Stakeholder Decision: Pragmatic choice to avoid bytecode cost for
-    /// dead code, predating TIP-092/100 implementation.
+    /// - For ECDSA, expect zero withdrawable amount unless application rewards
+    ///   are reactivated.
     function withdrawRewards(address stakingProvider) external {
         address operator = stakingProviderToOperator(stakingProvider);
         if (operator == address(0)) revert UnknownOperator();
-        (, address beneficiary, ) = staking.rolesOf(stakingProvider);
+        (, address beneficiary, ) = _currentAuthorizationSource().rolesOf(
+            stakingProvider
+        );
         uint96 amount = sortitionPool.withdrawRewards(operator, beneficiary);
         // slither-disable-next-line reentrancy-events
         emit RewardsWithdrawn(stakingProvider, amount);

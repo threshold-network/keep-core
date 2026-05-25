@@ -1,7 +1,0 @@
-export * from "./ExplorerModeModal"
-export * from "./LedgerModal"
-export * from "./MetaMaskModal"
-export * from "./TallyModal"
-export * from "./TrezorModal"
-export * from "./WalletConnectModal"
-export * from "./WalletSelectionModal"

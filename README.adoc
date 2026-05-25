@@ -51,6 +51,8 @@ newest "v2" random beacon contracts can be found in
 link:solidity/random-beacon/[`solidity/random-beacon`] directory. The full
 specification of the "v2" random beacon is written in
 link:/docs/rfc/rfc-19-random-beacon-v2.adoc[`rfc-19-random-beacon-v2.adoc`].
+Retired KEEP-era packages and operational tooling are listed in
+link:docs/retired-components.md[`docs/retired-components.md`].
 
 === dApp Developers
 

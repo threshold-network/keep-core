@@ -33,7 +33,6 @@ describe("TokenGrant", function () {
       grantContract.address,
       registry.address,
       time.duration.days(1),
-      contract.fromArtifact("TokenStakingEscrow"),
       contract.fromArtifact("TokenStaking")
     )
     stakingContract = contracts.tokenStaking

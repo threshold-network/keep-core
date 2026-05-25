@@ -56,7 +56,6 @@ describe("RolesLookup", () => {
       tokenGrant.address,
       registry.address,
       initializationPeriod,
-      contract.fromArtifact("TokenStakingEscrow"),
       contract.fromArtifact("TokenStaking")
     )
     tokenStaking = stakingContracts.tokenStaking

@@ -2,7 +2,6 @@ pragma solidity 0.5.17;
 
 import "openzeppelin-solidity/contracts/math/SafeMath.sol";
 
-import "../../TokenStakingEscrow.sol";
 import "../../utils/OperatorParams.sol";
 
 /// @notice TokenStaking contract library allowing to perform two-step stake
@@ -36,25 +35,20 @@ library TopUps {
     /// the tokens should be added to.
     /// @param operatorParams Parameters of that operator, as stored in the
     /// staking contract.
-    /// @param escrow Reference to TokenStakingEscrow contract.
     /// @return New value of parameters. It should be updated for the operator
     /// in the staking contract.
     function instantComplete(
-        Storage storage self,
+        Storage storage,
         uint256 value,
         address operator,
-        uint256 operatorParams,
-        TokenStakingEscrow escrow
+        uint256 operatorParams
     ) public returns (uint256 newParams) {
         // Stake is not yet initialized so we don't need to check if the
         // operator is not undelegating - initializing and undelegating at the
-        // same time is not possible. We do however, need to check whether the
-        // operator has not canceled its previous stake for that operator,
-        // depositing the stake it in the escrow. We do not want to allow
-        // resurrecting operators with cancelled stake by top-ups.
+        // same time is not possible.
         require(
-            !escrow.hasDeposit(operator),
-            "Stake for the operator already deposited in the escrow"
+            operatorParams.getAmount() > 0,
+            "Operator stake already cancelled"
         );
         require(value > 0, "Top-up value must be greater than zero");
 
@@ -78,23 +72,19 @@ library TopUps {
     /// the tokens should be added to.
     /// @param operatorParams Parameters of that operator, as stored in the
     /// staking contract.
-    /// @param escrow Reference to TokenStakingEscrow contract.
     function initiate(
         Storage storage self,
         uint256 value,
         address operator,
-        uint256 operatorParams,
-        TokenStakingEscrow escrow
+        uint256 operatorParams
     ) public {
         // Stake is initialized, the operator is still active so we need
         // to check if it's not undelegating.
-        require(!isUndelegating(operatorParams), "Stake undelegated");
-        // We also need to check if the stake for the operator is not already
-        // in the escrow because it's been previously cancelled.
         require(
-            !escrow.hasDeposit(operator),
-            "Stake for the operator already deposited in the escrow"
+            operatorParams.getAmount() > 0,
+            "Operator stake already cancelled"
         );
+        require(!isUndelegating(operatorParams), "Stake undelegated");
         require(value > 0, "Top-up value must be greater than zero");
 
         TopUp memory awaiting = self.topUps[operator];

@@ -25,8 +25,6 @@ import "./libraries/staking/TopUps.sol";
 import "./utils/PercentUtils.sol";
 import "./utils/BytesLib.sol";
 import "./Authorizations.sol";
-import "./TokenStakingEscrow.sol";
-import "./TokenSender.sol";
 
 /// @title TokenStaking
 /// @notice A token staking contract for a specified standard ERC20Burnable token.
@@ -71,7 +69,6 @@ contract TokenStaking is Authorizations, StakeDelegatable {
 
     ERC20Burnable internal token;
     TokenGrant internal tokenGrant;
-    TokenStakingEscrow internal escrow;
 
     GrantStaking.Storage internal grantStaking;
     Locks.Storage internal locks;
@@ -87,20 +84,17 @@ contract TokenStaking is Authorizations, StakeDelegatable {
     /// @notice Creates a token staking contract for a provided Standard ERC20Burnable token.
     /// @param _token KEEP token contract.
     /// @param _tokenGrant KEEP token grant contract.
-    /// @param _escrow Escrow dedicated for this staking contract.
     /// @param _registry Keep contract registry contract.
     /// @param _initializationPeriod To avoid certain attacks on work selection, recently created
     /// operators must wait for a specific period of time before being eligible for work selection.
     constructor(
         ERC20Burnable _token,
         TokenGrant _tokenGrant,
-        TokenStakingEscrow _escrow,
         KeepRegistry _registry,
         uint256 _initializationPeriod
     ) public Authorizations(_registry) {
         token = _token;
         tokenGrant = _tokenGrant;
-        escrow = _escrow;
         registry = _registry;
         initializationPeriod = _initializationPeriod;
         deployedAt = block.timestamp;
@@ -145,7 +139,6 @@ contract TokenStaking is Authorizations, StakeDelegatable {
     /// - Beneficiary address (20 bytes), ignored for a top-up
     /// - Operator address (20 bytes)
     /// - Authorizer address (20 bytes), ignored for a top-up
-    /// - Grant ID (32 bytes) - required only when called by TokenStakingEscrow
     function receiveApproval(
         address _from,
         uint256 _value,
@@ -166,7 +159,7 @@ contract TokenStaking is Authorizations, StakeDelegatable {
             delegate(_from, _value, operator, _extraData);
         } else {
             // If there is an existing delegation, top-up the stake.
-            topUp(_from, _value, operator, _extraData);
+            topUp(_from, _value, operator);
         }
     }
 
@@ -201,7 +194,7 @@ contract TokenStaking is Authorizations, StakeDelegatable {
         uint256 amount = operatorParams.getAmount();
         operators[_operator].packedParams = operatorParams.setAmount(0);
 
-        transferOrDeposit(owner, _operator, amount);
+        transferOrDeposit(owner, amount);
     }
 
     /// @notice Undelegates staked tokens. You will be able to recover your stake by calling
@@ -271,7 +264,7 @@ contract TokenStaking is Authorizations, StakeDelegatable {
         amount = amount.add(topUps.cancel(_operator));
 
         operators[_operator].packedParams = operatorParams.setAmount(0);
-        transferOrDeposit(operators[_operator].owner, _operator, amount);
+        transferOrDeposit(operators[_operator].owner, amount);
 
         emit RecoveredStake(_operator);
     }
@@ -584,10 +577,7 @@ contract TokenStaking is Authorizations, StakeDelegatable {
 
         grantStaking.tryCapturingDelegationData(
             tokenGrant,
-            address(escrow),
-            _from,
-            _operator,
-            _extraData
+            _operator
         );
 
         emit StakeDelegated(_from, _operator);
@@ -611,19 +601,13 @@ contract TokenStaking is Authorizations, StakeDelegatable {
     /// @param _value Approved amount for the transfer and top-up to
     /// an existing stake.
     /// @param _operator The new operator address.
-    /// @param _extraData Data for stake delegation as passed to receiveApproval
     function topUp(
         address _from,
         uint256 _value,
-        address _operator,
-        bytes memory _extraData
+        address _operator
     ) internal {
-        // Top-up comes from a grant if it's been initiated from TokenGrantStake
-        // contract or if it's been initiated from TokenStakingEscrow by
-        // redelegation.
-        bool isFromGrant =
-            address(tokenGrant.grantStakes(_operator)) == _from ||
-                address(escrow) == _from;
+        // Top-up comes from a grant if it's been initiated from TokenGrantStake.
+        bool isFromGrant = address(tokenGrant.grantStakes(_operator)) == _from;
 
         if (grantStaking.hasGrantDelegated(_operator)) {
             // Operator has grant delegated. We need to see if the top-up
@@ -637,10 +621,7 @@ contract TokenStaking is Authorizations, StakeDelegatable {
             (, uint256 grantId) =
                 grantStaking.tryCapturingDelegationData(
                     tokenGrant,
-                    address(escrow),
-                    _from,
-                    _operator,
-                    _extraData
+                    _operator
                 );
             require(grantId == previousGrantId, "Not the same grant");
         } else {
@@ -657,14 +638,13 @@ contract TokenStaking is Authorizations, StakeDelegatable {
             operators[_operator].packedParams = topUps.instantComplete(
                 _value,
                 _operator,
-                operatorParams,
-                escrow
+                operatorParams
             );
         } else {
             // If the stake is initialized, we do NOT add tokens immediately.
             // We initiate the top-up and will add tokens to the stake only
             // after the initialization period for a top-up passes.
-            topUps.initiate(_value, _operator, operatorParams, escrow);
+            topUps.initiate(_value, _operator, operatorParams);
         }
     }
 
@@ -716,24 +696,7 @@ contract TokenStaking is Authorizations, StakeDelegatable {
             locks.isStakeReleased(_operator, _operatorContract);
     }
 
-    function transferOrDeposit(
-        address _owner,
-        address _operator,
-        uint256 _amount
-    ) internal {
-        if (grantStaking.hasGrantDelegated(_operator)) {
-            // For tokens staked from a grant, transfer them to the escrow.
-            TokenSender(address(token)).approveAndCall(
-                address(escrow),
-                _amount,
-                abi.encode(
-                    _operator,
-                    grantStaking.getGrantForOperator(_operator)
-                )
-            );
-        } else {
-            // For liquid tokens staked, transfer them straight to the owner.
-            token.safeTransfer(_owner, _amount);
-        }
+    function transferOrDeposit(address _owner, uint256 _amount) internal {
+        token.safeTransfer(_owner, _amount);
     }
 }

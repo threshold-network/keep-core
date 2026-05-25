@@ -272,6 +272,15 @@ func isInputCurrentWalletsMainUTXO(
 	if err != nil {
 		return false, fmt.Errorf("failed to get previous transaction: [%v]", err)
 	}
+	if fundingOutputIndex >= uint32(len(previousTransaction.Outputs)) {
+		return false, fmt.Errorf(
+			"funding output index [%d] out of range for transaction [%s] "+
+				"with [%d] outputs",
+			fundingOutputIndex,
+			fundingTxHash.String(),
+			len(previousTransaction.Outputs),
+		)
+	}
 	fundingOutputValue := previousTransaction.Outputs[fundingOutputIndex].Value
 
 	// Assume the input is the main UTXO and calculate hash.
