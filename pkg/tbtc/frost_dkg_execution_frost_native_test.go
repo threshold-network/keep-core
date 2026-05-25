@@ -9,10 +9,40 @@ import (
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
-func TestLowestMemberIndex(t *testing.T) {
-	actual := lowestMemberIndex([]group.MemberIndex{9, 3, 7})
-	if actual != 3 {
-		t.Fatalf("unexpected lowest member index\nexpected: [3]\nactual:   [%d]", actual)
+func TestLowestLocalActiveMemberIndex(t *testing.T) {
+	testCases := map[string]struct {
+		local    []group.MemberIndex
+		active   []group.MemberIndex
+		expected group.MemberIndex
+	}{
+		"lowest local slot active": {
+			local:    []group.MemberIndex{2, 4, 6},
+			active:   []group.MemberIndex{1, 2, 3, 4},
+			expected: 2,
+		},
+		"lowest local slot dropped out": {
+			local:    []group.MemberIndex{2, 4, 6},
+			active:   []group.MemberIndex{1, 3, 4, 6},
+			expected: 4,
+		},
+		"no local slot active": {
+			local:    []group.MemberIndex{2, 4},
+			active:   []group.MemberIndex{1, 3, 5},
+			expected: 0,
+		},
+	}
+
+	for name, test := range testCases {
+		t.Run(name, func(t *testing.T) {
+			actual := lowestLocalActiveMemberIndex(test.local, test.active)
+			if actual != test.expected {
+				t.Fatalf(
+					"unexpected lowest local active member index\nexpected: [%d]\nactual:   [%d]",
+					test.expected,
+					actual,
+				)
+			}
+		})
 	}
 }
 

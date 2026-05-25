@@ -7,11 +7,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
-// frostDKGRecoveryLookBackBlocks bounds cold-start eth_getLogs queries.
-// FROST DKG recovery only needs recent AwaitingResult/Challenge events, and
-// keeping the range at 10k blocks stays inside common RPC provider limits.
-const frostDKGRecoveryLookBackBlocks = 10000
-
 func initializeFrostDKGCoordinator(
 	ctx context.Context,
 	node *node,
@@ -169,7 +164,7 @@ func recoverFrostDKGCoordinatorState(
 
 	switch state {
 	case AwaitingResult:
-		startBlock, err := frostDKGRecoveryStartBlock(node)
+		startBlock, err := frostDKGRecoveryStartBlock(node, frostChain)
 		if err != nil {
 			logger.Errorf("failed to resolve FROST DKG recovery start block: [%v]", err)
 			return
@@ -197,7 +192,7 @@ func recoverFrostDKGCoordinatorState(
 		)
 
 	case Challenge:
-		startBlock, err := frostDKGRecoveryStartBlock(node)
+		startBlock, err := frostDKGRecoveryStartBlock(node, frostChain)
 		if err != nil {
 			logger.Errorf("failed to resolve FROST DKG recovery start block: [%v]", err)
 			return
@@ -411,7 +406,10 @@ func localFrostMembership(
 	return memberIndexes, groupSelectionResult, nil
 }
 
-func frostDKGRecoveryStartBlock(node *node) (uint64, error) {
+func frostDKGRecoveryStartBlock(
+	node *node,
+	frostChain FrostDKGChain,
+) (uint64, error) {
 	blockCounter, err := node.chain.BlockCounter()
 	if err != nil {
 		return 0, err
@@ -422,13 +420,52 @@ func frostDKGRecoveryStartBlock(node *node) (uint64, error) {
 		return 0, err
 	}
 
-	return boundedFrostDKGRecoveryStartBlock(currentBlock), nil
+	params, err := frostChain.FrostDKGParameters()
+	if err != nil {
+		return 0, err
+	}
+
+	lookBackBlocks, err := frostDKGRecoveryLookBackBlocks(
+		params,
+		node.groupParameters,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return boundedFrostDKGRecoveryStartBlock(currentBlock, lookBackBlocks), nil
 }
 
-func boundedFrostDKGRecoveryStartBlock(currentBlock uint64) uint64 {
-	if currentBlock <= frostDKGRecoveryLookBackBlocks {
+func frostDKGRecoveryLookBackBlocks(
+	params *DKGParameters,
+	groupParameters *GroupParameters,
+) (uint64, error) {
+	if params == nil {
+		return 0, fmt.Errorf("FROST DKG parameters are nil")
+	}
+	if groupParameters == nil {
+		return 0, fmt.Errorf("group parameters are nil")
+	}
+
+	// Bound cold-start eth_getLogs by the live on-chain timing parameters while
+	// still covering the full lifecycle that may require local action after a
+	// restart: result submission, challenge, submitter precedence, and delayed
+	// approval fallback across the full group.
+	return params.SubmissionTimeoutBlocks +
+			params.ChallengePeriodBlocks +
+			params.ApprovePrecedencePeriodBlocks +
+			uint64(groupParameters.GroupSize)*dkgResultApprovalDelayStepBlocks +
+			dkgStartedConfirmationBlocks,
+		nil
+}
+
+func boundedFrostDKGRecoveryStartBlock(
+	currentBlock uint64,
+	lookBackBlocks uint64,
+) uint64 {
+	if currentBlock <= lookBackBlocks {
 		return 0
 	}
 
-	return currentBlock - frostDKGRecoveryLookBackBlocks
+	return currentBlock - lookBackBlocks
 }

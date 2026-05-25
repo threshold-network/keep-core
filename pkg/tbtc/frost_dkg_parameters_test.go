@@ -36,6 +36,8 @@ func TestFrostDKGSignatureThresholdRejectsInvalidParameters(t *testing.T) {
 }
 
 func TestBoundedFrostDKGRecoveryStartBlock(t *testing.T) {
+	lookBackBlocks := uint64(13560)
+
 	testCases := map[string]struct {
 		currentBlock uint64
 		expected     uint64
@@ -45,18 +47,25 @@ func TestBoundedFrostDKGRecoveryStartBlock(t *testing.T) {
 			expected:     0,
 		},
 		"equal lookback": {
-			currentBlock: frostDKGRecoveryLookBackBlocks,
+			currentBlock: lookBackBlocks,
 			expected:     0,
 		},
+		"one block above lookback": {
+			currentBlock: lookBackBlocks + 1,
+			expected:     1,
+		},
 		"above lookback": {
-			currentBlock: frostDKGRecoveryLookBackBlocks + 123,
+			currentBlock: lookBackBlocks + 123,
 			expected:     123,
 		},
 	}
 
 	for name, test := range testCases {
 		t.Run(name, func(t *testing.T) {
-			actual := boundedFrostDKGRecoveryStartBlock(test.currentBlock)
+			actual := boundedFrostDKGRecoveryStartBlock(
+				test.currentBlock,
+				lookBackBlocks,
+			)
 			if actual != test.expected {
 				t.Fatalf(
 					"unexpected start block\nexpected: [%d]\nactual:   [%d]",
@@ -65,5 +74,32 @@ func TestBoundedFrostDKGRecoveryStartBlock(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestFrostDKGRecoveryLookBackBlocksCoversFullLifecycle(t *testing.T) {
+	params := &DKGParameters{
+		SubmissionTimeoutBlocks:       500,
+		ChallengePeriodBlocks:         11520,
+		ApprovePrecedencePeriodBlocks: 20,
+	}
+	groupParameters := &GroupParameters{
+		GroupSize:       100,
+		GroupQuorum:     90,
+		HonestThreshold: 51,
+	}
+
+	actual, err := frostDKGRecoveryLookBackBlocks(params, groupParameters)
+	if err != nil {
+		t.Fatalf("unexpected lookback error: [%v]", err)
+	}
+
+	expected := uint64(500 + 11520 + 20 + 100*dkgResultApprovalDelayStepBlocks + dkgStartedConfirmationBlocks)
+	if actual != expected {
+		t.Fatalf(
+			"unexpected lookback\nexpected: [%d]\nactual:   [%d]",
+			expected,
+			actual,
+		)
 	}
 }

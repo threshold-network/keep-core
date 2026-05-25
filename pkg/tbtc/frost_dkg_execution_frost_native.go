@@ -76,7 +76,6 @@ func executeFrostDKGIfPossible(
 
 	fullMembers := frostFullMembers(groupSelectionResult)
 	dkgTimeoutBlock := event.BlockNumber + params.SubmissionTimeoutBlocks
-	submitterMemberIndex := lowestMemberIndex(memberIndexes)
 
 	for _, currentMemberIndex := range memberIndexes {
 		memberIndex := currentMemberIndex
@@ -111,6 +110,19 @@ func executeFrostDKGIfPossible(
 				)
 			if err != nil {
 				dkgLogger.Errorf("FROST DKG readiness announcement failed: [%v]", err)
+				return
+			}
+
+			submitterMemberIndex := lowestLocalActiveMemberIndex(
+				memberIndexes,
+				activeMemberIndexes,
+			)
+			if submitterMemberIndex == 0 {
+				dkgLogger.Infof(
+					"skipping FROST DKG result assembly; no local member "+
+						"index is active in [%v]",
+					activeMemberIndexes,
+				)
 				return
 			}
 
@@ -435,15 +447,26 @@ func frostFullMembers(
 	return members
 }
 
-func lowestMemberIndex(memberIndexes []group.MemberIndex) group.MemberIndex {
-	if len(memberIndexes) == 0 {
-		return 0
+func lowestLocalActiveMemberIndex(
+	localMemberIndexes []group.MemberIndex,
+	activeMemberIndexes []group.MemberIndex,
+) group.MemberIndex {
+	activeMembersSet := make(
+		map[group.MemberIndex]struct{},
+		len(activeMemberIndexes),
+	)
+	for _, activeMemberIndex := range activeMemberIndexes {
+		activeMembersSet[activeMemberIndex] = struct{}{}
 	}
 
-	lowest := memberIndexes[0]
-	for _, memberIndex := range memberIndexes[1:] {
-		if memberIndex < lowest {
-			lowest = memberIndex
+	var lowest group.MemberIndex
+	for _, localMemberIndex := range localMemberIndexes {
+		if _, ok := activeMembersSet[localMemberIndex]; !ok {
+			continue
+		}
+
+		if lowest == 0 || localMemberIndex < lowest {
+			lowest = localMemberIndex
 		}
 	}
 
