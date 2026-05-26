@@ -1,0 +1,598 @@
+{
+  "name": "p2tr-signature-fraud-v0",
+  "status": "draft",
+  "purpose": "Draft BIP-341 key-path sighash, BIP-340 verification, and structured Bridge challenge-identity vectors for the P2TR signature-fraud model feasibility gate. These vectors are not production activation evidence.",
+  "generatedAt": "2026-05-20",
+  "generatedWith": {
+    "package": "threshold-tbtc",
+    "bitcoinjs-lib": "6.1.x workspace dependency",
+    "tiny-secp256k1": "2.2.x workspace dependency",
+    "customFixtureGenerator": "dependency-free BIP-340 signing fixture generator for the draft SIGHASH_ALL and flow-shaped cases"
+  },
+  "policy": {
+    "taprootSpendPath": "key-path",
+    "sighashType": "SIGHASH_DEFAULT and SIGHASH_ALL",
+    "annex": "absent",
+    "scriptPath": "unsupported"
+  },
+  "cases": [
+    {
+      "id": "bip341-keypath-sighash-default-single-input",
+      "description": "Single-input P2TR key-path spend using SIGHASH_DEFAULT. The x-only wallet key is the canonical wallet ID for this draft vector.",
+      "privateKeyHex": "0000000000000000000000000000000000000000000000000000000000000003",
+      "walletIDHex": "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
+      "walletP2trScriptPubKeyHex": "5120f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
+      "unsignedTransactionHex": "020000000111111111111111111111111111111111111111111111111111111111111111110000000000fdffffff01606b042a01000000225120222222222222222222222222222222222222222222222222222222222222222200000000",
+      "signedInputIndex": 0,
+      "prevouts": [
+        {
+          "txidHex": "1111111111111111111111111111111111111111111111111111111111111111",
+          "vout": 0,
+          "valueSats": 5000000000,
+          "scriptPubKeyHex": "5120f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+        }
+      ],
+      "outputs": [
+        {
+          "valueSats": 4999900000,
+          "scriptPubKeyHex": "51202222222222222222222222222222222222222222222222222222222222222222"
+        }
+      ],
+      "sighashType": 0,
+      "expectedBip341SighashHex": "c7d0470735e6de6626801d2a0f9c1114fdb4c1861e9da13f3b879cc6bbbd006c",
+      "bip340SignatureHex": "ca8083af26f885b1dc0de3dad7b12785a314cc2eeb74c4386bdc7aeb26d520af7316342e6c0cbffee41362f1f5345d8c54b7e17c4ac034cbaf31f9c737229545",
+      "witnessSignatureHex": "ca8083af26f885b1dc0de3dad7b12785a314cc2eeb74c4386bdc7aeb26d520af7316342e6c0cbffee41362f1f5345d8c54b7e17c4ac034cbaf31f9c737229545",
+      "expectedDraftChallengeIdentityHex": "4a216640966a85e119963b0503d52c356b8f0d672937ae2c2bb72222834d2892",
+      "expectedBridgeChallengeIdentityHex": "35ca366c7d414fe611757529598a443683016078c3da6b7cbd602e278b7d0765",
+      "expectedVerify": true,
+      "negativeVerificationCases": [
+        {
+          "id": "wrong-wallet-id",
+          "walletIDHex": "3333333333333333333333333333333333333333333333333333333333333333",
+          "expectedVerify": false
+        },
+        {
+          "id": "wrong-message",
+          "bip341SighashHex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "expectedVerify": false
+        },
+        {
+          "id": "wrong-signature",
+          "bip340SignatureHex": "ca8083af26f885b1dc0de3dad7b12785a314cc2eeb74c4386bdc7aeb26d520af7316342e6c0cbffee41362f1f5345d8c54b7e17c4ac034cbaf31f9c737229544",
+          "expectedVerify": false
+        }
+      ]
+    },
+    {
+      "id": "bip341-keypath-sighash-default-nonuniform-txid",
+      "description": "Single-input P2TR key-path spend using SIGHASH_DEFAULT with a non-uniform previous transaction ID. The serialized transaction commits to the little-endian outpoint while prevout metadata records the display-order txid.",
+      "privateKeyHex": "0000000000000000000000000000000000000000000000000000000000000006",
+      "walletIDHex": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+      "walletP2trScriptPubKeyHex": "5120fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+      "unsignedTransactionHex": "0200000001ffeeddccbbaa998877665544332211001032547698badcfeefcdab89674523010300000000fdffffff010070991400000000225120999999999999999999999999999999999999999999999999999999999999999900000000",
+      "signedInputIndex": 0,
+      "prevouts": [
+        {
+          "txidHex": "0123456789abcdeffedcba987654321000112233445566778899aabbccddeeff",
+          "vout": 3,
+          "valueSats": 345678901,
+          "scriptPubKeyHex": "5120fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556"
+        }
+      ],
+      "outputs": [
+        {
+          "valueSats": 345600000,
+          "scriptPubKeyHex": "51209999999999999999999999999999999999999999999999999999999999999999"
+        }
+      ],
+      "sighashType": 0,
+      "expectedBip341SighashHex": "adb4b8782ac45dd6a72e0c8b2334e336dbf90c339a937c7157ac54bbc9157413",
+      "bip340SignatureHex": "774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cbc4e7182012ab0ca2f7f171bdf5d837c49f359b001555b8d39b5764a7039d602b",
+      "witnessSignatureHex": "774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cbc4e7182012ab0ca2f7f171bdf5d837c49f359b001555b8d39b5764a7039d602b",
+      "expectedDraftChallengeIdentityHex": "9c760526b55cec37ec64dda1acb4b79828ed49dc4405e85c5c57d296d87d8a92",
+      "expectedBridgeChallengeIdentityHex": "ea5c8e6011d817eb68a0c32c1932e121bf5d7192fc56c16336f694ea63aedd21",
+      "expectedVerify": true,
+      "negativeVerificationCases": [
+        {
+          "id": "wrong-message",
+          "bip341SighashHex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "expectedVerify": false
+        }
+      ],
+      "negativeSighashCases": [
+        {
+          "id": "wrong-outpoint-byte-order",
+          "description": "Reversing the serialized transaction outpoint byte order changes the BIP-341 key-path sighash and invalidates the signature.",
+          "unsignedTransactionHex": "02000000010123456789abcdeffedcba987654321000112233445566778899aabbccddeeff0300000000fdffffff010070991400000000225120999999999999999999999999999999999999999999999999999999999999999900000000",
+          "prevouts": [
+            {
+              "txidHex": "ffeeddccbbaa998877665544332211001032547698badcfeefcdab8967452301",
+              "vout": 3,
+              "valueSats": 345678901,
+              "scriptPubKeyHex": "5120fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556"
+            }
+          ],
+          "expectedVerify": false
+        }
+      ]
+    },
+    {
+      "id": "bip341-keypath-sighash-default-multi-input-multi-output",
+      "description": "Two-input, two-output P2TR key-path spend using SIGHASH_DEFAULT. The challenged signature signs input index 1 while committing to all input amounts, scripts, sequences, and output ordering.",
+      "privateKeyHex": "0000000000000000000000000000000000000000000000000000000000000004",
+      "walletIDHex": "e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13",
+      "walletP2trScriptPubKeyHex": "5120e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13",
+      "unsignedTransactionHex": "0200000002aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000000000feffffffbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0200000000fdffffff028098cf580000000022512044444444444444444444444444444444444444444444444444444444444444444054890000000000225120555555555555555555555555555555555555555555555555555555555555555500000000",
+      "signedInputIndex": 1,
+      "prevouts": [
+        {
+          "txidHex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "vout": 0,
+          "valueSats": 600000000,
+          "scriptPubKeyHex": "5120e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13"
+        },
+        {
+          "txidHex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "vout": 2,
+          "valueSats": 900000000,
+          "scriptPubKeyHex": "5120e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13"
+        }
+      ],
+      "outputs": [
+        {
+          "valueSats": 1490000000,
+          "scriptPubKeyHex": "51204444444444444444444444444444444444444444444444444444444444444444"
+        },
+        {
+          "valueSats": 9000000,
+          "scriptPubKeyHex": "51205555555555555555555555555555555555555555555555555555555555555555"
+        }
+      ],
+      "sighashType": 0,
+      "expectedBip341SighashHex": "65e6481b762e48d1dba2f006db532382bd31303970d7c7737356f2c0535ebbae",
+      "bip340SignatureHex": "a470b987366ad6a5f9e7a5da7a00059ceae7a88a32e21309d8cbd2ef45cb05726d296c050d75bd7a212aee42b008a30df156bb7001be8e128c7f15805069a473",
+      "witnessSignatureHex": "a470b987366ad6a5f9e7a5da7a00059ceae7a88a32e21309d8cbd2ef45cb05726d296c050d75bd7a212aee42b008a30df156bb7001be8e128c7f15805069a473",
+      "expectedDraftChallengeIdentityHex": "2c8cfefbe7c6deb101322d5be2adac1ea6515280fb8fd83a11f616b14fb5c52d",
+      "expectedBridgeChallengeIdentityHex": "bd9cf3ba8341c2d728d748ff1971c4a81e985d4c54698e01652dda9621bb0d24",
+      "expectedVerify": true,
+      "negativeVerificationCases": [
+        {
+          "id": "wrong-wallet-id",
+          "walletIDHex": "6666666666666666666666666666666666666666666666666666666666666666",
+          "expectedVerify": false
+        },
+        {
+          "id": "invalid-x-only-wallet-id",
+          "walletIDHex": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f",
+          "expectedVerify": false
+        },
+        {
+          "id": "wrong-message",
+          "bip341SighashHex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "expectedVerify": false
+        },
+        {
+          "id": "wrong-signature",
+          "bip340SignatureHex": "a470b987366ad6a5f9e7a5da7a00059ceae7a88a32e21309d8cbd2ef45cb05726d296c050d75bd7a212aee42b008a30df156bb7001be8e128c7f15805069a400",
+          "expectedVerify": false
+        },
+        {
+          "id": "invalid-nonce-parity",
+          "bip340SignatureHex": "a470b987366ad6a5f9e7a5da7a00059ceae7a88a32e21309d8cbd2ef45cb0572568006e920adc0be9235ec14c1a5167842ca33fb40d772b60ca3176e525c406d",
+          "expectedVerify": false
+        },
+        {
+          "id": "wrong-challenge-tag",
+          "bip340SignatureHex": "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4e682c2d444513072c08d032135c0af46ccd28747267376e787ad862b2c940c31",
+          "expectedVerify": false
+        },
+        {
+          "id": "s-scalar-overflow",
+          "bip340SignatureHex": "a470b987366ad6a5f9e7a5da7a00059ceae7a88a32e21309d8cbd2ef45cb0572fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141",
+          "expectedVerify": false
+        },
+        {
+          "id": "s-scalar-zero",
+          "bip340SignatureHex": "a470b987366ad6a5f9e7a5da7a00059ceae7a88a32e21309d8cbd2ef45cb05720000000000000000000000000000000000000000000000000000000000000000",
+          "expectedVerify": false
+        },
+        {
+          "id": "r-field-overflow",
+          "bip340SignatureHex": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f0000000000000000000000000000000000000000000000000000000000000001",
+          "expectedVerify": false
+        }
+      ],
+      "negativeSighashCases": [
+        {
+          "id": "wrong-input-amount",
+          "description": "Changing a previous-output amount changes the BIP-341 key-path sighash and invalidates the signature.",
+          "prevouts": [
+            {
+              "txidHex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "vout": 0,
+              "valueSats": 600000001,
+              "scriptPubKeyHex": "5120e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13"
+            },
+            {
+              "txidHex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "vout": 2,
+              "valueSats": 900000000,
+              "scriptPubKeyHex": "5120e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13"
+            }
+          ],
+          "expectedVerify": false
+        },
+        {
+          "id": "wrong-input-script-pubkey",
+          "description": "Changing a previous-output scriptPubKey changes the BIP-341 key-path sighash and invalidates the signature.",
+          "prevouts": [
+            {
+              "txidHex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "vout": 0,
+              "valueSats": 600000000,
+              "scriptPubKeyHex": "51207777777777777777777777777777777777777777777777777777777777777777"
+            },
+            {
+              "txidHex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "vout": 2,
+              "valueSats": 900000000,
+              "scriptPubKeyHex": "5120e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13"
+            }
+          ],
+          "expectedVerify": false
+        },
+        {
+          "id": "wrong-sequence",
+          "description": "Changing an input sequence changes the BIP-341 key-path sighash and invalidates the signature.",
+          "unsignedTransactionHex": "0200000002aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000000000fcffffffbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0200000000fdffffff028098cf580000000022512044444444444444444444444444444444444444444444444444444444444444444054890000000000225120555555555555555555555555555555555555555555555555555555555555555500000000",
+          "expectedVerify": false
+        },
+        {
+          "id": "wrong-output-order",
+          "description": "Changing output ordering changes the BIP-341 key-path sighash and invalidates the signature.",
+          "unsignedTransactionHex": "0200000002aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000000000feffffffbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0200000000fdffffff02405489000000000022512055555555555555555555555555555555555555555555555555555555555555558098cf5800000000225120444444444444444444444444444444444444444444444444444444444444444400000000",
+          "outputs": [
+            {
+              "valueSats": 9000000,
+              "scriptPubKeyHex": "51205555555555555555555555555555555555555555555555555555555555555555"
+            },
+            {
+              "valueSats": 1490000000,
+              "scriptPubKeyHex": "51204444444444444444444444444444444444444444444444444444444444444444"
+            }
+          ],
+          "expectedVerify": false
+        }
+      ]
+    },
+    {
+      "id": "bip341-keypath-sighash-all-single-input",
+      "description": "Single-input P2TR key-path spend using SIGHASH_ALL. The x-only wallet key is the canonical wallet ID for this draft vector.",
+      "privateKeyHex": "0000000000000000000000000000000000000000000000000000000000000005",
+      "walletIDHex": "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4",
+      "walletP2trScriptPubKeyHex": "51202f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4",
+      "unsignedTransactionHex": "0200000001cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc0100000000ffffffff0260ee297d00000000225120777777777777777777777777777777777777777777777777777777777777777750c3000000000000225120888888888888888888888888888888888888888888888888888888888888888800000000",
+      "signedInputIndex": 0,
+      "prevouts": [
+        {
+          "txidHex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "vout": 1,
+          "valueSats": 2100000000,
+          "scriptPubKeyHex": "51202f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+        }
+      ],
+      "outputs": [
+        {
+          "valueSats": 2099900000,
+          "scriptPubKeyHex": "51207777777777777777777777777777777777777777777777777777777777777777"
+        },
+        {
+          "valueSats": 50000,
+          "scriptPubKeyHex": "51208888888888888888888888888888888888888888888888888888888888888888"
+        }
+      ],
+      "sighashType": 1,
+      "expectedBip341SighashHex": "5f21427e8c77e1ab5e6f5d866e9f27963ff59e12ca3691ac3a9b8b9f64ff7fd6",
+      "bip340SignatureHex": "5edb4c17e5b201b76807acf8aca97ceed15ed6f71df48af4d44eca038358228b7a35ccc1043903dab814beec096f19bd34e9529604260988e9cab3d3e3689937",
+      "witnessSignatureHex": "5edb4c17e5b201b76807acf8aca97ceed15ed6f71df48af4d44eca038358228b7a35ccc1043903dab814beec096f19bd34e9529604260988e9cab3d3e368993701",
+      "expectedDraftChallengeIdentityHex": "991133e668bfd61c1a9d3383ec395aae1bdbe2dbef03733b9b3f1e4e8950672c",
+      "expectedBridgeChallengeIdentityHex": "45c94f0cb0537026a7e504d0d6d4bc9c8d2e875fdfab4538ea6f3fd0d9c5a289",
+      "expectedVerify": true,
+      "negativeVerificationCases": [
+        {
+          "id": "wrong-message",
+          "bip341SighashHex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "expectedVerify": false
+        }
+      ],
+      "negativeSighashCases": [
+        {
+          "id": "wrong-output-ordering",
+          "unsignedTransactionHex": "0200000001cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc0100000000ffffffff0250c3000000000000225120888888888888888888888888888888888888888888888888888888888888888860ee297d00000000225120777777777777777777777777777777777777777777777777777777777777777700000000",
+          "outputs": [
+            {
+              "valueSats": 50000,
+              "scriptPubKeyHex": "51208888888888888888888888888888888888888888888888888888888888888888"
+            },
+            {
+              "valueSats": 2099900000,
+              "scriptPubKeyHex": "51207777777777777777777777777777777777777777777777777777777777777777"
+            }
+          ],
+          "expectedVerify": false
+        }
+      ]
+    },
+    {
+      "id": "bip341-keypath-sighash-default-moving-funds-flow",
+      "description": "Draft moving-funds-shaped P2TR key-path spend using SIGHASH_DEFAULT. The source wallet input spends to an ordered target-wallet P2TR output set; Bridge proof-event correlation remains required before production approval.",
+      "privateKeyHex": "0000000000000000000000000000000000000000000000000000000000000007",
+      "walletIDHex": "5cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc",
+      "walletP2trScriptPubKeyHex": "51205cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc",
+      "unsignedTransactionHex": "02000000011032547698badcfeefcdab89674523011032547698badcfeefcdab89674523010500000000fdffffff020027b92900000000225120111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000e0cec6200000000022512022223333444455556666777788889999aaaabbbbccccddddeeeeffff0000111100000000",
+      "signedInputIndex": 0,
+      "prevouts": [
+        {
+          "txidHex": "0123456789abcdeffedcba98765432100123456789abcdeffedcba9876543210",
+          "vout": 5,
+          "valueSats": 1250000000,
+          "scriptPubKeyHex": "51205cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc"
+        }
+      ],
+      "outputs": [
+        {
+          "valueSats": 700000000,
+          "scriptPubKeyHex": "5120111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000"
+        },
+        {
+          "valueSats": 549900000,
+          "scriptPubKeyHex": "512022223333444455556666777788889999aaaabbbbccccddddeeeeffff00001111"
+        }
+      ],
+      "sighashType": 0,
+      "flowMetadata": {
+        "spendType": "moving-funds",
+        "evidenceLevel": "flow-shaped-draft-vector-seed",
+        "sourceWalletInput": 0,
+        "requiredBridgeEvent": "Bridge.submitMovingFundsProof acceptance",
+        "proofEventCorrelation": "required-not-present",
+        "positiveAssertions": [
+          "source wallet input spends through key-path witness",
+          "ordered target wallet P2TR output set is committed by the sighash"
+        ],
+        "knownLimits": [
+          "does not prove Bridge proof acceptance",
+          "does not prove target-wallet commitment/event correlation"
+        ]
+      },
+      "expectedBip341SighashHex": "3ccc3a5ccefa3224ec203de64da8c235256b9ea251ab796e21831a0871337296",
+      "bip340SignatureHex": "53da6538a659e06eade9fe7b8b1203d8b191ce577b9cbb73108264a1c706e51e66f4f6e8e39546a0fb71598f5af023040dfddea51d05bc1e38adf10f3dcdd46e",
+      "witnessSignatureHex": "53da6538a659e06eade9fe7b8b1203d8b191ce577b9cbb73108264a1c706e51e66f4f6e8e39546a0fb71598f5af023040dfddea51d05bc1e38adf10f3dcdd46e",
+      "expectedDraftChallengeIdentityHex": "8cdef1d24e332d1251946af6a05e675431ad35ab30f6abf8852c7c9dff34e861",
+      "expectedBridgeChallengeIdentityHex": "ab10e4df27a990932c3f5d48d3f9e3c48541e7b6b0bf4746a34bebf2f34eda5d",
+      "expectedVerify": true,
+      "negativeVerificationCases": [
+        {
+          "id": "wrong-message",
+          "bip341SighashHex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "expectedVerify": false
+        }
+      ],
+      "negativeSighashCases": [
+        {
+          "id": "wrong-target-wallet-order",
+          "description": "Swapping target wallet outputs changes the BIP-341 key-path sighash and invalidates the source-wallet signature.",
+          "outputs": [
+            {
+              "valueSats": 549900000,
+              "scriptPubKeyHex": "512022223333444455556666777788889999aaaabbbbccccddddeeeeffff00001111"
+            },
+            {
+              "valueSats": 700000000,
+              "scriptPubKeyHex": "5120111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000"
+            }
+          ],
+          "unsignedTransactionHex": "02000000011032547698badcfeefcdab89674523011032547698badcfeefcdab89674523010500000000fdffffff02e0cec6200000000022512022223333444455556666777788889999aaaabbbbccccddddeeeeffff000011110027b92900000000225120111122223333444455556666777788889999aaaabbbbccccddddeeeeffff000000000000",
+          "expectedVerify": false
+        },
+        {
+          "id": "below-dust-target-output",
+          "description": "Mutating a target output below dust changes the BIP-341 key-path sighash and invalidates the source-wallet signature.",
+          "outputs": [
+            {
+              "valueSats": 545,
+              "scriptPubKeyHex": "5120111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000"
+            },
+            {
+              "valueSats": 549900000,
+              "scriptPubKeyHex": "512022223333444455556666777788889999aaaabbbbccccddddeeeeffff00001111"
+            }
+          ],
+          "unsignedTransactionHex": "02000000011032547698badcfeefcdab89674523011032547698badcfeefcdab89674523010500000000fdffffff022102000000000000225120111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000e0cec6200000000022512022223333444455556666777788889999aaaabbbbccccddddeeeeffff0000111100000000",
+          "expectedVerify": false
+        }
+      ]
+    },
+    {
+      "id": "bip341-keypath-sighash-all-redemption-flow",
+      "description": "Draft redemption-shaped P2TR key-path spend using SIGHASH_ALL. The transaction commits to a redeemer P2TR output plus wallet change; Bridge redemption proof-event correlation remains required before production approval.",
+      "privateKeyHex": "0000000000000000000000000000000000000000000000000000000000000008",
+      "walletIDHex": "2f01e5e15cca351daff3843fb70f3c2f0a1bdd05e5af888a67784ef3e10a2a01",
+      "walletP2trScriptPubKeyHex": "51202f01e5e15cca351daff3843fb70f3c2f0a1bdd05e5af888a67784ef3e10a2a01",
+      "unsignedTransactionHex": "020000000198badcfe1032547667452301efcdab8998badcfe1032547667452301efcdab890100000000fdffffff020084d717000000002251203333444455556666777788889999aaaabbbbccccddddeeeeffff0000111122221097f305000000002251202f01e5e15cca351daff3843fb70f3c2f0a1bdd05e5af888a67784ef3e10a2a0100000000",
+      "signedInputIndex": 0,
+      "prevouts": [
+        {
+          "txidHex": "89abcdef0123456776543210fedcba9889abcdef0123456776543210fedcba98",
+          "vout": 1,
+          "valueSats": 500000000,
+          "scriptPubKeyHex": "51202f01e5e15cca351daff3843fb70f3c2f0a1bdd05e5af888a67784ef3e10a2a01"
+        }
+      ],
+      "outputs": [
+        {
+          "valueSats": 400000000,
+          "scriptPubKeyHex": "51203333444455556666777788889999aaaabbbbccccddddeeeeffff000011112222"
+        },
+        {
+          "valueSats": 99850000,
+          "scriptPubKeyHex": "51202f01e5e15cca351daff3843fb70f3c2f0a1bdd05e5af888a67784ef3e10a2a01"
+        }
+      ],
+      "sighashType": 1,
+      "flowMetadata": {
+        "spendType": "redemption",
+        "evidenceLevel": "flow-shaped-draft-vector-seed",
+        "sourceWalletInput": 0,
+        "requiredBridgeEvent": "Bridge.submitRedemptionProof acceptance",
+        "proofEventCorrelation": "required-not-present",
+        "positiveAssertions": [
+          "source wallet input spends through key-path witness",
+          "redeemer output script and wallet change output are committed by the sighash"
+        ],
+        "knownLimits": [
+          "does not prove Bridge redemption proof acceptance",
+          "does not prove redeemer request/event correlation"
+        ]
+      },
+      "expectedBip341SighashHex": "344644f591cfd3e031af88c745d9d6edd96baabdf15067a374c20e9c5f749064",
+      "bip340SignatureHex": "6d3a6f20b1715c3171f886f4dca338fd1d9dfe42ba38a522cbd6f923865323e8e233df766a3dc46c2763f3d3cc09f6c270d44485ed775a9b61ec95bfd27d3f78",
+      "witnessSignatureHex": "6d3a6f20b1715c3171f886f4dca338fd1d9dfe42ba38a522cbd6f923865323e8e233df766a3dc46c2763f3d3cc09f6c270d44485ed775a9b61ec95bfd27d3f7801",
+      "expectedDraftChallengeIdentityHex": "2ebe51dc76ae45beb0d6dfcd7f0a8a8ed9e1e8992025e5196629526c155797ae",
+      "expectedBridgeChallengeIdentityHex": "d054052f51e337ed9f1e3de85e3bc49b8a47c44e3ada67e7806f883266a51c74",
+      "expectedVerify": true,
+      "negativeVerificationCases": [
+        {
+          "id": "wrong-message",
+          "bip341SighashHex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "expectedVerify": false
+        }
+      ],
+      "negativeSighashCases": [
+        {
+          "id": "wrong-redeemer-output-script",
+          "description": "Changing the redeemer output script changes the BIP-341 key-path sighash and invalidates the source-wallet signature.",
+          "outputs": [
+            {
+              "valueSats": 400000000,
+              "scriptPubKeyHex": "5120444455556666777788889999aaaabbbbccccddddeeeeffff0000111122223333"
+            },
+            {
+              "valueSats": 99850000,
+              "scriptPubKeyHex": "51202f01e5e15cca351daff3843fb70f3c2f0a1bdd05e5af888a67784ef3e10a2a01"
+            }
+          ],
+          "unsignedTransactionHex": "020000000198badcfe1032547667452301efcdab8998badcfe1032547667452301efcdab890100000000fdffffff020084d71700000000225120444455556666777788889999aaaabbbbccccddddeeeeffff00001111222233331097f305000000002251202f01e5e15cca351daff3843fb70f3c2f0a1bdd05e5af888a67784ef3e10a2a0100000000",
+          "expectedVerify": false
+        },
+        {
+          "id": "fee-boundary-mutation",
+          "description": "Changing the redeemer value at the fee boundary changes the BIP-341 key-path sighash and invalidates the source-wallet signature.",
+          "outputs": [
+            {
+              "valueSats": 399999999,
+              "scriptPubKeyHex": "51203333444455556666777788889999aaaabbbbccccddddeeeeffff000011112222"
+            },
+            {
+              "valueSats": 99850000,
+              "scriptPubKeyHex": "51202f01e5e15cca351daff3843fb70f3c2f0a1bdd05e5af888a67784ef3e10a2a01"
+            }
+          ],
+          "unsignedTransactionHex": "020000000198badcfe1032547667452301efcdab8998badcfe1032547667452301efcdab890100000000fdffffff02ff83d717000000002251203333444455556666777788889999aaaabbbbccccddddeeeeffff0000111122221097f305000000002251202f01e5e15cca351daff3843fb70f3c2f0a1bdd05e5af888a67784ef3e10a2a0100000000",
+          "expectedVerify": false
+        }
+      ]
+    }
+  ],
+  "negativeWitnessCases": [
+    {
+      "id": "explicit-default-sighash-byte",
+      "baseCaseId": "bip341-keypath-sighash-default-single-input",
+      "witnessSignatureHex": "ca8083af26f885b1dc0de3dad7b12785a314cc2eeb74c4386bdc7aeb26d520af7316342e6c0cbffee41362f1f5345d8c54b7e17c4ac034cbaf31f9c73722954500",
+      "expectedError": "unsupported-sighash"
+    },
+    {
+      "id": "unsupported-sighash-single",
+      "baseCaseId": "bip341-keypath-sighash-all-single-input",
+      "witnessSignatureHex": "5edb4c17e5b201b76807acf8aca97ceed15ed6f71df48af4d44eca038358228b7a35ccc1043903dab814beec096f19bd34e9529604260988e9cab3d3e368993702",
+      "expectedError": "unsupported-sighash"
+    },
+    {
+      "id": "short-signature",
+      "baseCaseId": "bip341-keypath-sighash-default-single-input",
+      "witnessSignatureHex": "ca8083af26f885b1dc0de3dad7b12785a314cc2eeb74c4386bdc7aeb26d520af7316342e6c0cbffee41362f1f5345d8c54b7e17c4ac034cbaf31f9c7372295",
+      "expectedError": "invalid-length"
+    },
+    {
+      "id": "long-signature",
+      "baseCaseId": "bip341-keypath-sighash-all-single-input",
+      "witnessSignatureHex": "5edb4c17e5b201b76807acf8aca97ceed15ed6f71df48af4d44eca038358228b7a35ccc1043903dab814beec096f19bd34e9529604260988e9cab3d3e36899370100",
+      "expectedError": "invalid-length"
+    }
+  ],
+  "spendTypeCoverage": [
+    {
+      "id": "moving-funds",
+      "status": "open",
+      "evidenceLevel": "flow-shaped-draft-vector-seed",
+      "sharedGate": "spentMainUTXOs[utxoKey]",
+      "currentDraftCaseIds": [
+        "bip341-keypath-sighash-default-moving-funds-flow"
+      ],
+      "requiredPositiveVectors": [
+        "source wallet input spent by accepted moving-funds proof",
+        "target wallet output set and ordering",
+        "moving-funds proof event correlated to the exact Bridge challenge identity"
+      ],
+      "requiredNegativeVectors": [
+        "wrong target wallet ordering",
+        "below-dust target output",
+        "timeout or expired moving-funds proof state"
+      ],
+      "bridgeCorrelationRequired": [
+        "Bridge.submitMovingFundsProof acceptance",
+        "target wallet commitment ordering",
+        "challenge identity for the signed source-wallet input"
+      ],
+      "draftEvidenceLimits": [
+        "current draft vector proves only Bitcoin sighash/signature commitment to the moving-funds-shaped transaction",
+        "production approval still requires Bridge proof-event correlation"
+      ]
+    },
+    {
+      "id": "redemption",
+      "status": "open",
+      "evidenceLevel": "flow-shaped-draft-vector-seed",
+      "sharedGate": "spentMainUTXOs[utxoKey]",
+      "currentDraftCaseIds": ["bip341-keypath-sighash-all-redemption-flow"],
+      "requiredPositiveVectors": [
+        "one redemption output paid to the requested redeemer script",
+        "multiple redemption outputs plus optional wallet change",
+        "redemption proof event correlated to the exact Bridge challenge identity"
+      ],
+      "requiredNegativeVectors": [
+        "wrong redeemer output script",
+        "fee-boundary mutation",
+        "timed-out redemption request"
+      ],
+      "bridgeCorrelationRequired": [
+        "Bridge.submitRedemptionProof acceptance",
+        "redeemer output script matching",
+        "challenge identity for the signed wallet input"
+      ],
+      "draftEvidenceLimits": [
+        "current draft vector proves only Bitcoin sighash/signature commitment to the redemption-shaped transaction",
+        "production approval still requires Bridge proof-event correlation"
+      ]
+    }
+  ],
+  "openCoverageGaps": [
+    "independent Rust or Go generator",
+    "independent TypeScript verifier checked into CI",
+    "production watchtower service, idempotency storage, and Bridge submission integration",
+    "all tBTC spend-type vectors",
+    "additional SIGHASH_ALL vectors for each tBTC spend type before SIGHASH_ALL can be frozen into the final supported set",
+    "malformed annex and script-path rejection vectors",
+    "Bridge challenge/defeat/timeout/slashing lifecycle vectors"
+  ]
+}

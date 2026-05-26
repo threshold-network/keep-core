@@ -373,7 +373,7 @@ fn with_negative_sighash_case(base: &VectorCase, negative: &NegativeSighashCase)
 #[test]
 fn formal_verification_p2tr_signature_fraud_vectors_match_bitcoin_crate() {
     let vectors_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/frost-migration/test-vectors/p2tr-signature-fraud-v0.json");
+        .join("test/vectors/p2tr-signature-fraud-v0.json");
     let vectors_bytes =
         std::fs::read(&vectors_path).unwrap_or_else(|e| panic!("read {vectors_path:?}: {e}"));
     let vectors: P2trSignatureFraudVectors =
