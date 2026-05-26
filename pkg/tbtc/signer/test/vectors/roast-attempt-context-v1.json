@@ -1,0 +1,70 @@
+{
+  "schema_version": "roast-attempt-context-v1",
+  "description": "Shared cross-language conformance vectors for ROAST attempt-context fingerprint and attempt-id derivation.",
+  "hash_domains": {
+    "included_participants_fingerprint": "FROST-ROAST-INCLUDED-FPR-v1",
+    "attempt_id": "FROST-ROAST-ATTEMPT-ID-v1"
+  },
+  "vectors": [
+    {
+      "id": "vector-session-1",
+      "session_id": "vector-session-1",
+      "message_digest_hex": "5f78c33274e43fa9de5659265c1d917e25c03722dcb0b8d27db8d5feaa813953",
+      "attempt_number": 7,
+      "coordinator_identifier": 3,
+      "included_participants": [1, 3, 5],
+      "expected_included_participants_fingerprint": "0c9258935f0a30c065befcd746cb1564e9f3c91936c0f0f1c78853fa2d6713dc",
+      "expected_attempt_id": "dbc7a4df9bc3ef8dee3a9f5a47ff519e22e8d6f9b0461dd415077176e4e6ee95"
+    },
+    {
+      "id": "vector-session-2",
+      "session_id": "vector-session-2",
+      "message_digest_hex": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+      "attempt_number": 2,
+      "coordinator_identifier": 2,
+      "included_participants": [1, 2, 4, 8],
+      "expected_included_participants_fingerprint": "40bee0d2446b4e50537c96440650f2a8d3bd7e83c01a49c636b183b8615ac0dd",
+      "expected_attempt_id": "5e31103617ae3d9b1e86ceaa0e800e0aeb271ee905a1656a17667eb14f94d20e"
+    },
+    {
+      "id": "vector-session-3",
+      "session_id": "vector-session-3",
+      "message_digest_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "attempt_number": 11,
+      "coordinator_identifier": 34,
+      "included_participants": [21, 34, 55, 89, 144],
+      "expected_included_participants_fingerprint": "cfacf6673c778c95facec3c8ac555c07b73ed96bf55a0b169f3cd58d5f29dd03",
+      "expected_attempt_id": "d543e3acea05e045fd5eff2e604dd5bf0772728e00e6dc0cf668d6d9a5071f4d"
+    },
+    {
+      "id": "vector-session-4-unsorted-participants",
+      "session_id": "vector-session-4",
+      "message_digest_hex": "8d4f5c4e8ab8336f785f9cd00d8b15696f44fbb4c3e9d1d651d4d77ca04ca31e",
+      "attempt_number": 4,
+      "coordinator_identifier": 55,
+      "included_participants": [144, 89, 55, 34, 21],
+      "expected_included_participants_fingerprint": "cfacf6673c778c95facec3c8ac555c07b73ed96bf55a0b169f3cd58d5f29dd03",
+      "expected_attempt_id": "9b59a1a8f47e3f086a80fd591beaea6d265d7f64d82b8f2dac9a0e32983e12f1"
+    },
+    {
+      "id": "vector-session-5-minimum-bounds",
+      "session_id": "vector-session-5",
+      "message_digest_hex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "attempt_number": 1,
+      "coordinator_identifier": 1,
+      "included_participants": [1],
+      "expected_included_participants_fingerprint": "057a6aa1767f9345ce9232b7153c86a3ab6cac5b84dd4568b3bf4a467d76fb68",
+      "expected_attempt_id": "22bcc78202d52ebbd6a986cca7d8006b8e4636dc3c48cd946260a3125dbd2957"
+    },
+    {
+      "id": "vector-session-6-max-identifier-boundary",
+      "session_id": "vector-session-6-max-id",
+      "message_digest_hex": "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      "attempt_number": 1,
+      "coordinator_identifier": 65535,
+      "included_participants": [1, 65535],
+      "expected_included_participants_fingerprint": "12a15f86ef5412385aa5a6663b4ea9f50d14f70a0397b67efdb6e1132eb1ddf9",
+      "expected_attempt_id": "c798a895b5a5405898c478965f1e834aec6af4458a4104fdc6bfb8436647b94f"
+    }
+  ]
+}
