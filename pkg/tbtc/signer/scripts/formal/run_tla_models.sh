@@ -2,7 +2,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-MODEL_DIR="$ROOT_DIR/docs/frost-migration/formal-verification/models"
+# Path normalization (allowlisted-divergence per source manifest):
+# canonical signer layout places TLA+ models at
+# `<ROOT_DIR>/docs/formal/models` (where ROOT_DIR = pkg/tbtc/signer/).
+# Monorepo source path was `docs/frost-migration/formal-verification/models`
+# relative to monorepo root. Override via MODELS_PATH env var for
+# alternate environments.
+MODEL_DIR="${MODELS_PATH:-$ROOT_DIR/docs/formal/models}"
 TLA_TOOLS_VERSION="${TLA_TOOLS_VERSION:-v1.8.0}"
 TLA_TOOLS_JAR="${TLA_TOOLS_JAR:-/tmp/tla2tools-${TLA_TOOLS_VERSION}.jar}"
 TLA_TOOLS_URL="${TLA_TOOLS_URL:-https://github.com/tlaplus/tlaplus/releases/download/${TLA_TOOLS_VERSION}/tla2tools.jar}"

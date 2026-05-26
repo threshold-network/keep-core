@@ -12,9 +12,15 @@ const VECTOR_SCHEMA_VERSION = "roast-attempt-context-v1"
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(scriptDir, "../..")
+// Path normalization (allowlisted-divergence per source manifest):
+// canonical signer layout places the ROAST attempt context vector at
+// `<rootDir>/test/vectors/roast-attempt-context-v1.json` where rootDir
+// is `pkg/tbtc/signer/`. Monorepo source path was
+// `docs/frost-migration/test-vectors/roast-attempt-context-v1.json`
+// relative to monorepo root.
 const vectorsPath = path.join(
   rootDir,
-  "docs/frost-migration/test-vectors/roast-attempt-context-v1.json"
+  "test/vectors/roast-attempt-context-v1.json"
 )
 
 const fail = (message) => {
