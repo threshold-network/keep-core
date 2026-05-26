@@ -1,0 +1,17 @@
+{
+  "session_id": "phase-d-monitor-session-1",
+  "canary_session": true,
+  "selected_operator_ids": ["operator-aws-us-east-1-1", "operator-gcp-europe-west1-1"],
+  "runtime_decision": {
+    "decision": "reject",
+    "reasons": [
+      {
+        "code": "vendor_diversity_cap_exceeded",
+        "detail": "vendor [vendor-a] share [50%] exceeds cap [40%]"
+      }
+    ],
+    "validated_at_unix": 1700100000
+  },
+  "enforcement_mode": "monitor_only",
+  "break_glass_history": []
+}

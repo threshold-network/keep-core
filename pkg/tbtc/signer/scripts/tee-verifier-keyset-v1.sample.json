@@ -1,0 +1,31 @@
+{
+  "keyset_version": 1,
+  "threshold_m": 2,
+  "max_key_age_seconds": 2592000,
+  "keys": [
+    {
+      "key_id": "verifier-key-1",
+      "verifier_instance_id": "verifier-a",
+      "trust_root_id": "trust-root-a",
+      "pubkey_hex": "REPLACE_WITH_XONLY_PUBKEY_HEX",
+      "valid_from_unix": 1700000000,
+      "valid_until_unix": 1702592000
+    },
+    {
+      "key_id": "verifier-key-2",
+      "verifier_instance_id": "verifier-b",
+      "trust_root_id": "trust-root-b",
+      "pubkey_hex": "REPLACE_WITH_XONLY_PUBKEY_HEX",
+      "valid_from_unix": 1700000000,
+      "valid_until_unix": 1702592000
+    },
+    {
+      "key_id": "verifier-key-3",
+      "verifier_instance_id": "verifier-c",
+      "trust_root_id": "trust-root-c",
+      "pubkey_hex": "REPLACE_WITH_XONLY_PUBKEY_HEX",
+      "valid_from_unix": 1700000000,
+      "valid_until_unix": 1702592000
+    }
+  ]
+}

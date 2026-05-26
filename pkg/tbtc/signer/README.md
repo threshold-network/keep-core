@@ -1,7 +1,7 @@
 # tbtc-signer (bootstrap)
 
-This crate is the first implementation slice of the Rust rewrite plan tracked
-in `../../docs/frost-migration/rust-rewrite-bootstrap.md`.
+This crate is the first implementation slice of the Rust rewrite plan in
+`../tbtc-rust-rewrite-consensus-plan.md`.
 
 ## Current scope
 
@@ -33,10 +33,7 @@ in `../../docs/frost-migration/rust-rewrite-bootstrap.md`.
 - Uses deterministic JSON request/response envelopes across the FFI boundary.
 - Provides explicit, typed error codes for retry-safe orchestration.
 - Keeps bootstrap synthetic finalize behavior fail-closed by default; enable it
-  explicitly with `TBTC_SIGNER_ALLOW_BOOTSTRAP=true` in non-production profiles
-  only.
-- Rejects bootstrap dealer DKG when `TBTC_SIGNER_PROFILE=production`; production
-  requires distributed DKG wiring before this path can be enabled.
+  explicitly with `TBTC_SIGNER_ALLOW_BOOTSTRAP=true`.
 
 ## Not yet implemented
 
@@ -106,6 +103,205 @@ Sample input schemas are provided in:
 - `tools/tbtc-signer/scripts/admission-override.sample.json`
 - `tools/tbtc-signer/scripts/admission-override-registry.sample.json`
 
+## TEE Governance Registry Checker (Phase A)
+
+Run the governance registry validator for TEE-required signer policy artifacts:
+
+```bash
+cd tools/tbtc-signer
+cargo run --bin tee_registry_checker -- \
+  --registry scripts/tee-governance-registry-v1.sample.json \
+  --events scripts/tee-governance-audit-events-v1.sample.json \
+  --now-unix 1700100000
+```
+
+Flags:
+
+- `--registry <path>` (required): path to governance registry JSON
+- `--events <path>` (optional): path to governance audit events JSON
+- `--now-unix <seconds>` (optional): override current Unix timestamp for
+  deterministic validation (useful for CI and testing)
+
+Exit codes:
+
+- `0`: registry/events satisfy Phase A schema and workflow checks
+- `1`: policy or workflow violations were detected (see JSON reason codes)
+- `2`: checker input/config error
+
+Output schema (exit codes 0 and 1):
+
+```json
+{
+  "decision": "allow | reject",
+  "reasons": [{ "code": "reason_code", "detail": "human-readable detail" }],
+  "validated_at_unix": 1700100000
+}
+```
+
+Sample input schemas are provided in:
+
+- `tools/tbtc-signer/scripts/tee-governance-registry-v1.sample.json`
+- `tools/tbtc-signer/scripts/tee-governance-audit-events-v1.sample.json`
+
+## TEE Admission Token Checker (Phase B)
+
+Run the verifier/token checker for threshold-signed admission tokens:
+
+```bash
+cd tools/tbtc-signer
+cargo run --bin tee_token_checker -- \
+  --registry scripts/tee-governance-registry-v1.sample.json \
+  --keyset scripts/tee-verifier-keyset-v1.sample.json \
+  --token scripts/tee-admission-token.sample.json \
+  --revocation-registry scripts/tee-token-revocation-registry-v1.sample.json \
+  --now-unix 1700100000
+```
+
+Flags:
+
+- `--registry <path>` (required): governance registry JSON
+- `--keyset <path>` (required): verifier keyset JSON (`m-of-n` threshold config)
+- `--token <path>` (required): admission token artifact JSON (`payload_json` + signatures)
+- `--revocation-registry <path>` (required): token/key revocation registry JSON
+- `--now-unix <seconds>` (optional): deterministic time override for CI/testing
+
+The checker requires `profile_status = mandatory` in the governance registry.
+
+Exit codes:
+
+- `0`: token satisfies Phase B checks
+- `1`: token/keyset/revocation violations detected (see JSON reason codes)
+- `2`: checker input/config error
+
+Output schema (exit codes 0 and 1):
+
+```json
+{
+  "decision": "allow | reject",
+  "reasons": [{ "code": "reason_code", "detail": "human-readable detail" }],
+  "validated_at_unix": 1700100000
+}
+```
+
+Sample input schemas are provided in:
+
+- `tools/tbtc-signer/scripts/tee-verifier-keyset-v1.sample.json`
+- `tools/tbtc-signer/scripts/tee-admission-token.sample.json`
+- `tools/tbtc-signer/scripts/tee-token-revocation-registry-v1.sample.json`
+
+`tee-admission-token.sample.json` and `tee-verifier-keyset-v1.sample.json` are
+schema-only examples and require real verifier keys/signatures to pass.
+
+## TEE Runtime Enforcement Checker (Phase C)
+
+Run the runtime selection/session checker for attestation-token and denylist
+enforcement:
+
+```bash
+cd tools/tbtc-signer
+cargo run --bin tee_runtime_checker -- \
+  --registry scripts/tee-runtime-governance-registry-v1.sample.json \
+  --session scripts/tee-runtime-session-start-v1.sample.json \
+  --now-unix 1700100000
+```
+
+Flags:
+
+- `--registry <path>` (required): governance registry JSON for runtime checks
+- `--session <path>` (required): runtime session/cohort snapshot JSON
+- `--now-unix <seconds>` (optional): deterministic time override for CI/testing
+
+Runtime session phase values:
+
+- `session_start`: strict token validity required
+- `mid_session`: expired tokens tolerated only within `grace_period_seconds`
+
+Hard safety ceilings enforced by the checker:
+
+- `grace_period_seconds <= 3600`
+- `attestation_max_age_seconds <= 86400`
+- `denylist_max_staleness_seconds` in `1..=300`
+- `max_single_vendor_share_percent` in `1..=60`
+
+Exit codes:
+
+- `0`: runtime session satisfies Phase C checks
+- `1`: runtime policy violations detected (see JSON reason codes)
+- `2`: checker input/config error
+
+Output schema (exit codes 0 and 1):
+
+```json
+{
+  "decision": "allow | reject",
+  "reasons": [{ "code": "reason_code", "detail": "human-readable detail" }],
+  "validated_at_unix": 1700100000
+}
+```
+
+Sample input schemas are provided in:
+
+- `tools/tbtc-signer/scripts/tee-runtime-governance-registry-v1.sample.json`
+- `tools/tbtc-signer/scripts/tee-runtime-session-start-v1.sample.json`
+- `tools/tbtc-signer/scripts/tee-runtime-session-mid-session-grace-v1.sample.json`
+- `tools/tbtc-signer/scripts/tee-runtime-session-vendor-outage-v1.sample.json`
+
+## TEE Phase D Enforcement Checker (Phase D)
+
+Run the Phase D mode/waiver checker that applies canary and full-enforcement
+policy over a Phase C runtime decision:
+
+```bash
+cd tools/tbtc-signer
+cargo run --bin tee_enforcement_checker -- \
+  --registry scripts/tee-governance-registry-v1.sample.json \
+  --context scripts/tee-enforcement-context-monitor-v1.sample.json \
+  --now-unix 1700100000
+```
+
+Flags:
+
+- `--registry <path>` (required): governance registry JSON with break-glass policy
+- `--context <path>` (required): Phase D session context JSON
+- `--now-unix <seconds>` (optional): deterministic time override for CI/testing
+
+Supported `enforcement_mode` values:
+
+- `monitor_only`: record runtime violations without blocking
+- `soft_enforcement`: warnings + exclusion preference without blocking
+- `hard_enforcement_canary`: blocking applies to canary sessions only
+- `full_enforcement`: blocking applies to all sessions
+
+Break-glass enforcement controls:
+
+- scope coverage for selected operators
+- required quorum (`break_glass_quorum_bps`)
+- waiver TTL bounded by policy (`break_glass_ttl_seconds`) and hard maximum (7 days)
+- activation cap per 7 days (`break_glass_max_activations_per_7d`) for new activations
+- minimum cooldown (`break_glass_cooldown_seconds`) for new activations
+
+Exit codes:
+
+- `0`: `allow` or `allow_with_warnings`
+- `1`: `reject`
+- `2`: checker input/config error
+
+Output schema (exit codes 0 and 1):
+
+```json
+{
+  "decision": "allow | allow_with_warnings | reject",
+  "reasons": [{ "code": "reason_code", "detail": "human-readable detail" }],
+  "validated_at_unix": 1700100000
+}
+```
+
+Sample input schemas are provided in:
+
+- `tools/tbtc-signer/scripts/tee-enforcement-context-monitor-v1.sample.json`
+- `tools/tbtc-signer/scripts/tee-enforcement-context-hard-canary-v1.sample.json`
+- `tools/tbtc-signer/scripts/tee-enforcement-context-full-break-glass-v1.sample.json`
+
 ## Encrypted State Key Providers
 
 Signer state persistence is encrypted at rest. Key-provider behavior is controlled
@@ -120,19 +316,8 @@ by the following environment variables:
   - shell command executed via `/bin/sh -lc` when provider is `command`.
 - `TBTC_SIGNER_STATE_KEY_COMMAND_TIMEOUT_SECS`:
   - timeout for command-provider execution in seconds (default `30`, range `1..300`).
-- `TBTC_SIGNER_STATE_PATH`:
-  - signer state file path. Required when `TBTC_SIGNER_PROFILE=production`;
-    non-production profiles default to a temp-dir state file if omitted.
 - `TBTC_SIGNER_PROFILE`:
-  - when set to `production`, provider `env` is rejected fail-closed,
-    `TBTC_SIGNER_STATE_PATH` is required, bootstrap dealer DKG is rejected, and
-    `TBTC_SIGNER_ALLOW_BOOTSTRAP` cannot enable synthetic finalize payloads.
-    The production profile also forces ROAST strict attempt-context enforcement
-    even if `TBTC_SIGNER_ENABLE_ROAST_STRICT` is unset or false.
-
-Set these environment variables before the first FFI call in the process. The
-engine state handle is initialized once per process from the settled
-`TBTC_SIGNER_STATE_PATH` and key-provider configuration.
+  - when set to `production`, provider `env` is rejected fail-closed.
 
 Command-provider contract (`TBTC_SIGNER_STATE_KEY_COMMAND`):
 

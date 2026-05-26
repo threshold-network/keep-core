@@ -1,0 +1,58 @@
+{
+  "session_id": "session-runtime-start-1",
+  "phase": "session_start",
+  "threshold": 3,
+  "selected_signers": [
+    {
+      "operator_id": "operator-a",
+      "signer_identifier": "signer-a",
+      "vendor_id": "vendor-1",
+      "token": {
+        "token_id": "token-a-001",
+        "issued_at_unix": 1700099700,
+        "expires_at_unix": 1700100300,
+        "token_revocation_epoch": 7
+      }
+    },
+    {
+      "operator_id": "operator-b",
+      "signer_identifier": "signer-b",
+      "vendor_id": "vendor-2",
+      "token": {
+        "token_id": "token-b-001",
+        "issued_at_unix": 1700099700,
+        "expires_at_unix": 1700100300,
+        "token_revocation_epoch": 7
+      }
+    },
+    {
+      "operator_id": "operator-c",
+      "signer_identifier": "signer-c",
+      "vendor_id": "vendor-3",
+      "token": {
+        "token_id": "token-c-001",
+        "issued_at_unix": 1700099700,
+        "expires_at_unix": 1700100300,
+        "token_revocation_epoch": 7
+      }
+    },
+    {
+      "operator_id": "operator-d",
+      "signer_identifier": "signer-d",
+      "vendor_id": "vendor-4",
+      "token": {
+        "token_id": "token-d-001",
+        "issued_at_unix": 1700099700,
+        "expires_at_unix": 1700100300,
+        "token_revocation_epoch": 7
+      }
+    }
+  ],
+  "denylist": {
+    "refreshed_at_unix": 1700099970,
+    "revoked_operator_ids": [],
+    "revoked_signer_identifiers": [],
+    "revoked_token_ids": [],
+    "min_token_revocation_epoch": 7
+  }
+}
