@@ -6379,7 +6379,7 @@ mod tests {
 
     fn load_attempt_context_vector_suite() -> AttemptContextVectorSuite {
         let vectors_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../docs/frost-migration/test-vectors/roast-attempt-context-v1.json");
+            .join("test/vectors/roast-attempt-context-v1.json");
         let vector_bytes = std::fs::read(&vectors_path).unwrap_or_else(|err| {
             panic!(
                 "failed to read attempt-context vector file [{}]: {err}",
