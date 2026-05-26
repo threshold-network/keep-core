@@ -1,0 +1,57 @@
+name: tBTC Signer Formal Verification
+
+on:
+  pull_request:
+    paths:
+      - pkg/tbtc/signer/**
+      - .github/workflows/tbtc-signer-formal.yml
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tbtc-signer-formal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  signer-formal-invariants:
+    name: Signer formal invariants
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run signer formal invariant tests
+        # Filters cargo test by the formal_verification_ prefix so only
+        # the formal-invariant test cases run (faster + clearer signal
+        # than the full suite). Matches the convention used in the
+        # source monorepo's ci-formal-verification.yml.
+        run: cargo test --manifest-path pkg/tbtc/signer/Cargo.toml formal_verification_
+
+  tla-model-checks:
+    name: TLA model checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Run TLA model checks
+        # Iterates over every .cfg under pkg/tbtc/signer/docs/formal/models/
+        # and runs TLC against the matching .tla module. MODELS_PATH defaults
+        # to the canonical signer-relative path; override via env var for
+        # alternate environments (set in extraction/frost-signer-mirror PR).
+        run: pkg/tbtc/signer/scripts/formal/run_tla_models.sh
