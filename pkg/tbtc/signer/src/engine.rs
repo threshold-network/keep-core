@@ -76,24 +76,13 @@ struct SessionState {
     emergency_rekey_event: Option<EmergencyRekeyEvent>,
 }
 
+#[derive(Default)]
 struct EngineState {
     sessions: HashMap<String, SessionState>,
     refresh_epoch_counter: u64,
     operator_fault_scores: BTreeMap<u16, u64>,
     quarantined_operator_identifiers: HashSet<u16>,
     canary_rollout: CanaryRolloutState,
-}
-
-impl Default for EngineState {
-    fn default() -> Self {
-        Self {
-            sessions: HashMap::new(),
-            refresh_epoch_counter: 0,
-            operator_fault_scores: BTreeMap::new(),
-            quarantined_operator_identifiers: HashSet::new(),
-            canary_rollout: CanaryRolloutState::default(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -357,7 +346,7 @@ impl HardeningLatencyTracker {
 
         let mut sorted_samples = self.samples_ms.iter().copied().collect::<Vec<_>>();
         sorted_samples.sort_unstable();
-        let p95_index = ((sorted_samples.len() * 95 + 99) / 100).saturating_sub(1);
+        let p95_index = (sorted_samples.len() * 95).div_ceil(100).saturating_sub(1);
         sorted_samples[p95_index]
     }
 
@@ -428,7 +417,7 @@ impl Drop for HardeningOperationLatencyGuard {
         // Record latency with millisecond precision and ceil semantics so
         // sub-millisecond calls still contribute non-zero samples.
         let elapsed_micros = self.started_at.elapsed().as_micros();
-        let elapsed_ms = ((elapsed_micros + 999) / 1000).clamp(1, u64::MAX as u128) as u64;
+        let elapsed_ms = elapsed_micros.div_ceil(1000).clamp(1, u64::MAX as u128) as u64;
         record_hardening_operation_latency(self.operation, elapsed_ms);
     }
 }
@@ -3123,7 +3112,7 @@ fn state_encryption_key_material() -> Result<StateEncryptionKeyMaterial, EngineE
                 raw_key_hex,
                 TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX_ENV,
             )?;
-            let key_id = state_key_identifier(&*key);
+            let key_id = state_key_identifier(&key);
             Ok(StateEncryptionKeyMaterial {
                 key,
                 key_provider: TBTC_SIGNER_STATE_KEY_PROVIDER_ENV_DEFAULT,
@@ -3170,7 +3159,7 @@ fn state_encryption_key_material() -> Result<StateEncryptionKeyMaterial, EngineE
                 TBTC_SIGNER_STATE_KEY_COMMAND_ENV,
             )?;
             command_stdout.zeroize();
-            let key_id = state_key_identifier(&*key);
+            let key_id = state_key_identifier(&key);
             Ok(StateEncryptionKeyMaterial {
                 key,
                 key_provider: TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND,

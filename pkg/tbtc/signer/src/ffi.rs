@@ -61,7 +61,7 @@ pub fn free_buffer(ptr: *mut u8, len: usize) {
     }
 
     unsafe {
-        drop(Box::from_raw(std::slice::from_raw_parts_mut(ptr, len)));
+        drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)));
     }
 }
 

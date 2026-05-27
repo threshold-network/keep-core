@@ -1,7 +1,7 @@
 # tbtc-signer (bootstrap)
 
 This crate is the first implementation slice of the Rust rewrite plan tracked
-in `../../docs/frost-migration/rust-rewrite-bootstrap.md`.
+in `docs/rust-rewrite-bootstrap.md`.
 
 ## Current scope
 
@@ -50,14 +50,14 @@ in `../../docs/frost-migration/rust-rewrite-bootstrap.md`.
 ## Build
 
 ```bash
-cd tools/tbtc-signer
+cd pkg/tbtc/signer
 cargo build
 ```
 
 For a dynamic library artifact:
 
 ```bash
-cd tools/tbtc-signer
+cd pkg/tbtc/signer
 cargo build --release
 # target/release/libfrost_tbtc.{so,dylib,dll}
 ```
@@ -65,7 +65,7 @@ cargo build --release
 ## Test
 
 ```bash
-cd tools/tbtc-signer
+cd pkg/tbtc/signer
 cargo test
 ```
 
@@ -74,7 +74,7 @@ cargo test
 Run the pre-admission checker for operator onboarding policy:
 
 ```bash
-cd tools/tbtc-signer
+cd pkg/tbtc/signer
 cargo run --bin admission_checker -- \
   --policy scripts/admission-policy-v1.sample.json \
   --candidate scripts/admission-candidate.sample.json \
@@ -100,11 +100,11 @@ requires a real Schnorr signature over `payload_json`.
 
 Sample input schemas are provided in:
 
-- `tools/tbtc-signer/scripts/admission-policy-v1.sample.json`
-- `tools/tbtc-signer/scripts/admission-candidate.sample.json`
-- `tools/tbtc-signer/scripts/admission-existing.sample.json`
-- `tools/tbtc-signer/scripts/admission-override.sample.json`
-- `tools/tbtc-signer/scripts/admission-override-registry.sample.json`
+- `pkg/tbtc/signer/scripts/admission-policy-v1.sample.json`
+- `pkg/tbtc/signer/scripts/admission-candidate.sample.json`
+- `pkg/tbtc/signer/scripts/admission-existing.sample.json`
+- `pkg/tbtc/signer/scripts/admission-override.sample.json`
+- `pkg/tbtc/signer/scripts/admission-override-registry.sample.json`
 
 ## Encrypted State Key Providers
 
@@ -230,7 +230,7 @@ Failure-mode responses:
 Run the Phase 5 benchmark harness:
 
 ```bash
-cd tools/tbtc-signer
+cd pkg/tbtc/signer
 cargo bench --features bench-restart-hook --bench phase5_roast
 ```
 
@@ -253,7 +253,7 @@ Current benchmark groups:
 Run the Phase 5 chaos/failure-injection suite:
 
 ```bash
-cd tools/tbtc-signer
+cd pkg/tbtc/signer
 ./scripts/run_phase5_chaos_suite.sh
 ```
 
@@ -272,7 +272,7 @@ Scenario coverage and pass criteria:
 
 ## FFI contract
 
-- Header: `tools/tbtc-signer/include/frost_tbtc.h`
+- Header: `pkg/tbtc/signer/include/frost_tbtc.h`
 - All API payloads are JSON bytes.
 - Success: `status_code = 0`, response envelope in `buffer`.
 - Error: `status_code = 1`,

@@ -17,6 +17,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  signer-rust-checks:
+    name: Signer Rust checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path pkg/tbtc/signer/Cargo.toml -- --check
+
+      - name: Run clippy
+        run: cargo clippy --manifest-path pkg/tbtc/signer/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run signer tests
+        env:
+          TBTC_SIGNER_STATE_PATH: /tmp/tbtc-signer-ci-state-${{ github.run_id }}-${{ github.run_attempt }}.json
+        run: cargo test --manifest-path pkg/tbtc/signer/Cargo.toml
+
   signer-formal-invariants:
     name: Signer formal invariants
     runs-on: ubuntu-latest
