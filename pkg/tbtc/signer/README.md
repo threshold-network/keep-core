@@ -33,7 +33,10 @@ in `docs/rust-rewrite-bootstrap.md`.
 - Uses deterministic JSON request/response envelopes across the FFI boundary.
 - Provides explicit, typed error codes for retry-safe orchestration.
 - Keeps bootstrap synthetic finalize behavior fail-closed by default; enable it
-  explicitly with `TBTC_SIGNER_ALLOW_BOOTSTRAP=true`.
+  explicitly with `TBTC_SIGNER_ALLOW_BOOTSTRAP=true` in non-production profiles
+  only.
+- Rejects bootstrap dealer DKG when `TBTC_SIGNER_PROFILE=production`; production
+  requires distributed DKG wiring before this path can be enabled.
 
 ## Not yet implemented
 
@@ -167,8 +170,8 @@ Flags:
 
 The checker requires `profile_status = mandatory` in the governance registry.
 Token signatures cover the exact `payload_json` byte string in the token
-artifact; issuers and verifiers must not deserialize and reserialize that value
-before signature verification. The token checker enforces a two-trust-root and
+artifact. Do not deserialize and reserialize that value before signature
+verification. The token checker enforces a two-trust-root and
 two-verifier-instance floor for quorum diversity; broader vendor concentration
 limits are enforced by the runtime checker.
 
@@ -322,8 +325,19 @@ by the following environment variables:
   - shell command executed via `/bin/sh -lc` when provider is `command`.
 - `TBTC_SIGNER_STATE_KEY_COMMAND_TIMEOUT_SECS`:
   - timeout for command-provider execution in seconds (default `30`, range `1..300`).
+- `TBTC_SIGNER_STATE_PATH`:
+  - signer state file path. Required when `TBTC_SIGNER_PROFILE=production`;
+    non-production profiles default to a temp-dir state file if omitted.
 - `TBTC_SIGNER_PROFILE`:
-  - when set to `production`, provider `env` is rejected fail-closed.
+  - when set to `production`, provider `env` is rejected fail-closed,
+    `TBTC_SIGNER_STATE_PATH` is required, bootstrap dealer DKG is rejected, and
+    `TBTC_SIGNER_ALLOW_BOOTSTRAP` cannot enable synthetic finalize payloads.
+    The production profile also forces ROAST strict attempt-context enforcement
+    even if `TBTC_SIGNER_ENABLE_ROAST_STRICT` is unset or false.
+
+Set these environment variables before the first FFI call in the process. The
+engine state handle is initialized once per process from the settled
+`TBTC_SIGNER_STATE_PATH` and key-provider configuration.
 
 Command-provider contract (`TBTC_SIGNER_STATE_KEY_COMMAND`):
 

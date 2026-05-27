@@ -1052,6 +1052,25 @@ mod tests {
     }
 
     #[test]
+    fn validate_enforcement_rejects_break_glass_with_empty_scope_operator_id() {
+        let registry = baseline_registry();
+        let mut context = baseline_context();
+        context.runtime_decision = runtime_reject();
+        context.selected_operator_ids = vec!["operator-1".to_string()];
+        context.break_glass = Some(BreakGlassActivation {
+            scope_operator_ids: vec!["operator-1".to_string(), " ".to_string()],
+            ..valid_break_glass()
+        });
+
+        let decision = validate_enforcement(&registry, &context, 1_700_100_000);
+        assert_eq!(decision.decision, "reject");
+        assert!(decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "break_glass_scope_operator_missing"));
+    }
+
+    #[test]
     fn validate_enforcement_rejects_break_glass_when_activation_limit_exceeded() {
         let registry = baseline_registry();
         let mut context = baseline_context();
