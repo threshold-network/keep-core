@@ -17,11 +17,12 @@ use std::fs;
 use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 use std::str::FromStr;
-use std::sync::{Mutex, OnceLock};
-use std::thread::JoinHandle;
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use frost_secp256k1_tr as frost;
@@ -75,24 +76,13 @@ struct SessionState {
     emergency_rekey_event: Option<EmergencyRekeyEvent>,
 }
 
+#[derive(Default)]
 struct EngineState {
     sessions: HashMap<String, SessionState>,
     refresh_epoch_counter: u64,
     operator_fault_scores: BTreeMap<u16, u64>,
     quarantined_operator_identifiers: HashSet<u16>,
     canary_rollout: CanaryRolloutState,
-}
-
-impl Default for EngineState {
-    fn default() -> Self {
-        Self {
-            sessions: HashMap::new(),
-            refresh_epoch_counter: 0,
-            operator_fault_scores: BTreeMap::new(),
-            quarantined_operator_identifiers: HashSet::new(),
-            canary_rollout: CanaryRolloutState::default(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -356,7 +346,7 @@ impl HardeningLatencyTracker {
 
         let mut sorted_samples = self.samples_ms.iter().copied().collect::<Vec<_>>();
         sorted_samples.sort_unstable();
-        let p95_index = ((sorted_samples.len() * 95 + 99) / 100).saturating_sub(1);
+        let p95_index = (sorted_samples.len() * 95).div_ceil(100).saturating_sub(1);
         sorted_samples[p95_index]
     }
 
@@ -427,7 +417,7 @@ impl Drop for HardeningOperationLatencyGuard {
         // Record latency with millisecond precision and ceil semantics so
         // sub-millisecond calls still contribute non-zero samples.
         let elapsed_micros = self.started_at.elapsed().as_micros();
-        let elapsed_ms = ((elapsed_micros + 999) / 1000).clamp(1, u64::MAX as u128) as u64;
+        let elapsed_ms = elapsed_micros.div_ceil(1000).clamp(1, u64::MAX as u128) as u64;
         record_hardening_operation_latency(self.operation, elapsed_ms);
     }
 }
@@ -2928,40 +2918,102 @@ fn encrypted_state_envelope_aad(
     aad
 }
 
-fn drain_command_pipe<R>(mut pipe: R) -> JoinHandle<std::io::Result<Vec<u8>>>
+fn drain_command_pipe<R>(mut pipe: R) -> mpsc::Receiver<std::io::Result<Vec<u8>>>
 where
     R: Read + Send + 'static,
 {
+    let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
-        pipe.read_to_end(&mut bytes)?;
-        Ok(bytes)
-    })
+        let result = match pipe.read_to_end(&mut bytes) {
+            Ok(_) => Ok(bytes),
+            Err(err) => {
+                bytes.zeroize();
+                Err(err)
+            }
+        };
+        if let Err(mpsc::SendError(Ok(mut bytes))) = sender.send(result) {
+            bytes.zeroize();
+        }
+    });
+    receiver
 }
 
-fn join_command_pipe(
-    handle: JoinHandle<std::io::Result<Vec<u8>>>,
+fn read_command_pipe(
+    receiver: mpsc::Receiver<std::io::Result<Vec<u8>>>,
     stream_name: &str,
+    timeout: Duration,
 ) -> Result<Vec<u8>, EngineError> {
-    match handle.join() {
+    match receiver.recv_timeout(timeout) {
         Ok(Ok(bytes)) => Ok(bytes),
         Ok(Err(e)) => Err(EngineError::Internal(format!(
             "failed to read state key command {stream_name}: {e}"
         ))),
-        Err(_) => Err(EngineError::Internal(format!(
-            "state key command {stream_name} reader panicked"
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(EngineError::Internal(format!(
+            "state key command {stream_name} pipe timed out waiting for EOF"
+        ))),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(EngineError::Internal(format!(
+            "state key command {stream_name} reader exited without a result"
         ))),
     }
 }
 
+fn zeroize_command_pipe_if_ready(receiver: mpsc::Receiver<std::io::Result<Vec<u8>>>) {
+    if let Ok(Ok(mut bytes)) = receiver.try_recv() {
+        bytes.zeroize();
+    }
+}
+
+#[cfg(unix)]
+fn configure_state_key_command_process_group(command: &mut std::process::Command) {
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn configure_state_key_command_process_group(_command: &mut std::process::Command) {}
+
+#[cfg(unix)]
+fn kill_state_key_command_process_group(child_id: u32) {
+    let pgid = -(child_id as i32);
+    unsafe {
+        let _ = libc::kill(pgid, libc::SIGKILL);
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_state_key_command_process_group(_child_id: u32) {}
+
+fn terminate_state_key_command(child: &mut std::process::Child, child_id: u32) {
+    kill_state_key_command_process_group(child_id);
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn remaining_timeout(deadline: Instant) -> Duration {
+    deadline
+        .checked_duration_since(Instant::now())
+        .unwrap_or(Duration::ZERO)
+}
+
 fn execute_state_key_command(command_spec: &str) -> Result<Output, EngineError> {
     let timeout_secs = state_key_command_timeout_secs();
+    let timeout = Duration::from_secs(timeout_secs);
+    let deadline = Instant::now() + timeout;
     let mut command = std::process::Command::new("/bin/sh");
     command
         .arg("-c")
         .arg(command_spec)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    configure_state_key_command_process_group(&mut command);
 
     let mut child = command.spawn().map_err(|e| {
         EngineError::Internal(format!(
@@ -2969,14 +3021,15 @@ fn execute_state_key_command(command_spec: &str) -> Result<Output, EngineError> 
             TBTC_SIGNER_STATE_KEY_COMMAND_ENV
         ))
     })?;
+    let child_id = child.id();
     let stdout = child.stdout.take().ok_or_else(|| {
         EngineError::Internal("state key command stdout pipe unavailable".to_string())
     })?;
     let stderr = child.stderr.take().ok_or_else(|| {
         EngineError::Internal("state key command stderr pipe unavailable".to_string())
     })?;
-    let stdout_handle = drain_command_pipe(stdout);
-    let stderr_handle = drain_command_pipe(stderr);
+    let stdout_receiver = drain_command_pipe(stdout);
+    let stderr_receiver = drain_command_pipe(stderr);
     let started_at = Instant::now();
 
     loop {
@@ -2987,10 +3040,27 @@ fn execute_state_key_command(command_spec: &str) -> Result<Output, EngineError> 
             ))
         })? {
             Some(status) => {
-                let stdout_result = join_command_pipe(stdout_handle, "stdout");
-                let stderr_result = join_command_pipe(stderr_handle, "stderr");
-                let stdout = stdout_result?;
-                let stderr = stderr_result?;
+                let stdout_result =
+                    read_command_pipe(stdout_receiver, "stdout", remaining_timeout(deadline));
+                let stdout = match stdout_result {
+                    Ok(stdout) => stdout,
+                    Err(err) => {
+                        terminate_state_key_command(&mut child, child_id);
+                        zeroize_command_pipe_if_ready(stderr_receiver);
+                        return Err(err);
+                    }
+                };
+                let stderr_result =
+                    read_command_pipe(stderr_receiver, "stderr", remaining_timeout(deadline));
+                let stderr = match stderr_result {
+                    Ok(stderr) => stderr,
+                    Err(err) => {
+                        let mut stdout = stdout;
+                        stdout.zeroize();
+                        terminate_state_key_command(&mut child, child_id);
+                        return Err(err);
+                    }
+                };
                 return Ok(Output {
                     status,
                     stdout,
@@ -2999,14 +3069,9 @@ fn execute_state_key_command(command_spec: &str) -> Result<Output, EngineError> 
             }
             None => {
                 if started_at.elapsed() >= Duration::from_secs(timeout_secs) {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    if let Ok(mut stdout) = join_command_pipe(stdout_handle, "stdout") {
-                        stdout.zeroize();
-                    }
-                    if let Ok(mut stderr) = join_command_pipe(stderr_handle, "stderr") {
-                        stderr.zeroize();
-                    }
+                    terminate_state_key_command(&mut child, child_id);
+                    zeroize_command_pipe_if_ready(stdout_receiver);
+                    zeroize_command_pipe_if_ready(stderr_receiver);
                     return Err(EngineError::Internal(format!(
                         "state key command from [{}] timed out after [{}] seconds",
                         TBTC_SIGNER_STATE_KEY_COMMAND_ENV, timeout_secs
@@ -3047,7 +3112,7 @@ fn state_encryption_key_material() -> Result<StateEncryptionKeyMaterial, EngineE
                 raw_key_hex,
                 TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX_ENV,
             )?;
-            let key_id = state_key_identifier(&*key);
+            let key_id = state_key_identifier(&key);
             Ok(StateEncryptionKeyMaterial {
                 key,
                 key_provider: TBTC_SIGNER_STATE_KEY_PROVIDER_ENV_DEFAULT,
@@ -3094,7 +3159,7 @@ fn state_encryption_key_material() -> Result<StateEncryptionKeyMaterial, EngineE
                 TBTC_SIGNER_STATE_KEY_COMMAND_ENV,
             )?;
             command_stdout.zeroize();
-            let key_id = state_key_identifier(&*key);
+            let key_id = state_key_identifier(&key);
             Ok(StateEncryptionKeyMaterial {
                 key,
                 key_provider: TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND,
@@ -4100,6 +4165,32 @@ fn fingerprint<T: serde::Serialize>(value: &T) -> Result<String, EngineError> {
     Ok(value_fingerprint)
 }
 
+fn canonicalize_dkg_request_for_fingerprint(request: &RunDkgRequest) -> RunDkgRequest {
+    let mut canonical_request = request.clone();
+    canonical_request
+        .participants
+        .sort_unstable_by(|left, right| {
+            left.identifier
+                .cmp(&right.identifier)
+                .then_with(|| left.public_key_hex.cmp(&right.public_key_hex))
+        });
+    canonical_request
+}
+
+fn canonicalize_refresh_shares_request_for_fingerprint(
+    request: &RefreshSharesRequest,
+) -> RefreshSharesRequest {
+    let mut canonical_request = request.clone();
+    canonical_request
+        .current_shares
+        .sort_unstable_by(|left, right| {
+            left.identifier
+                .cmp(&right.identifier)
+                .then_with(|| left.encrypted_share_hex.cmp(&right.encrypted_share_hex))
+        });
+    canonical_request
+}
+
 fn truthy_env_flag(raw_value: &str) -> bool {
     matches!(
         raw_value.trim().to_ascii_lowercase().as_str(),
@@ -4966,7 +5057,7 @@ pub fn run_dkg(request: RunDkgRequest) -> Result<DkgResult, EngineError> {
         }
     }
 
-    let request_fingerprint = fingerprint(&request)?;
+    let request_fingerprint = fingerprint(&canonicalize_dkg_request_for_fingerprint(&request))?;
 
     {
         let guard = state()?
@@ -6015,6 +6106,13 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
                             )
                         })
                     })?;
+                if total_output_value_sats > BITCOIN_MAX_MONEY_SATS {
+                    return Err(EngineError::Internal(format!(
+                        "cached build tx output total [{}] exceeds Bitcoin max money [{}]",
+                        total_output_value_sats, BITCOIN_MAX_MONEY_SATS
+                    )));
+                }
+
                 enforce_signing_policy_firewall(
                     &request.session_id,
                     &cached_tx.output,
@@ -6048,6 +6146,13 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
             .ok_or_else(|| {
                 EngineError::Validation("input value_sats total overflowed u64 bounds".to_string())
             })?;
+        if total_input_value_sats > BITCOIN_MAX_MONEY_SATS {
+            return Err(EngineError::Validation(format!(
+                "input value_sats total [{}] exceeds Bitcoin max money [{}]",
+                total_input_value_sats, BITCOIN_MAX_MONEY_SATS
+            )));
+        }
+
         let txid = Txid::from_str(&input.txid_hex).map_err(|_| {
             EngineError::Validation(format!("invalid input txid_hex [{}]", input.txid_hex))
         })?;
@@ -6088,6 +6193,13 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
             .ok_or_else(|| {
                 EngineError::Validation("output value_sats total overflowed u64 bounds".to_string())
             })?;
+        if total_output_value_sats > BITCOIN_MAX_MONEY_SATS {
+            return Err(EngineError::Validation(format!(
+                "output value_sats total [{}] exceeds Bitcoin max money [{}]",
+                total_output_value_sats, BITCOIN_MAX_MONEY_SATS
+            )));
+        }
+
         let script_pubkey_bytes = hex::decode(&output.script_pubkey_hex).map_err(|_| {
             EngineError::Validation(format!(
                 "invalid output script_pubkey_hex [{}]",
@@ -6164,7 +6276,9 @@ pub fn refresh_shares(request: RefreshSharesRequest) -> Result<RefreshSharesResu
         ));
     }
 
-    let request_fingerprint = fingerprint(&request)?;
+    let request_fingerprint = fingerprint(&canonicalize_refresh_shares_request_for_fingerprint(
+        &request,
+    ))?;
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -7487,6 +7601,91 @@ mod tests {
         };
         assert_eq!(reason_code, "total_output_value_exceeds_policy_limit");
 
+        clear_state_storage_policy_overrides();
+    }
+
+    #[test]
+    fn build_taproot_tx_rejects_total_input_value_above_bitcoin_max_money() {
+        let _guard = lock_test_state();
+        let state_path = configure_test_state_path("build_taproot_tx_max_input_total");
+        reset_for_tests();
+        clear_state_storage_policy_overrides();
+
+        let request = BuildTaprootTxRequest {
+            session_id: "session-build-tx-max-input-total".to_string(),
+            inputs: vec![
+                crate::api::TxInput {
+                    txid_hex: "11".repeat(32),
+                    vout: 0,
+                    value_sats: BITCOIN_MAX_MONEY_SATS,
+                },
+                crate::api::TxInput {
+                    txid_hex: "22".repeat(32),
+                    vout: 0,
+                    value_sats: 1,
+                },
+            ],
+            outputs: vec![crate::api::TxOutput {
+                script_pubkey_hex: format!("5120{}", "33".repeat(32)),
+                value_sats: 1,
+            }],
+            script_tree_hex: None,
+        };
+
+        let err = build_taproot_tx(request).expect_err("expected max money rejection");
+        let EngineError::Validation(message) = err else {
+            panic!("unexpected error variant: {err:?}");
+        };
+        assert!(
+            message.contains("input value_sats total")
+                && message.contains("exceeds Bitcoin max money"),
+            "unexpected validation message: {message}"
+        );
+
+        reset_for_tests();
+        cleanup_test_state_artifacts(&state_path);
+        clear_state_storage_policy_overrides();
+    }
+
+    #[test]
+    fn build_taproot_tx_rejects_total_output_value_above_bitcoin_max_money() {
+        let _guard = lock_test_state();
+        let state_path = configure_test_state_path("build_taproot_tx_max_output_total");
+        reset_for_tests();
+        clear_state_storage_policy_overrides();
+
+        let request = BuildTaprootTxRequest {
+            session_id: "session-build-tx-max-output-total".to_string(),
+            inputs: vec![crate::api::TxInput {
+                txid_hex: "11".repeat(32),
+                vout: 0,
+                value_sats: BITCOIN_MAX_MONEY_SATS,
+            }],
+            outputs: vec![
+                crate::api::TxOutput {
+                    script_pubkey_hex: format!("5120{}", "22".repeat(32)),
+                    value_sats: BITCOIN_MAX_MONEY_SATS / 2 + 1,
+                },
+                crate::api::TxOutput {
+                    script_pubkey_hex: format!("5120{}", "33".repeat(32)),
+                    value_sats: BITCOIN_MAX_MONEY_SATS / 2 + 1,
+                },
+            ],
+            script_tree_hex: None,
+        };
+
+        let err = build_taproot_tx(request).expect_err("expected max money rejection");
+        let EngineError::Validation(message) = err else {
+            panic!("unexpected error variant: {err:?}");
+        };
+        assert!(
+            message.contains("output value_sats total")
+                && message.contains("exceeds Bitcoin max money"),
+            "unexpected validation message: {message}"
+        );
+
+        reset_for_tests();
+        cleanup_test_state_artifacts(&state_path);
         clear_state_storage_policy_overrides();
     }
 
@@ -11820,6 +12019,43 @@ mod tests {
     }
 
     #[test]
+    fn run_dkg_retry_is_participant_order_insensitive() {
+        let _guard = lock_test_state();
+        let state_path = configure_test_state_path("run_dkg_participant_order_retry");
+        reset_for_tests();
+
+        let request = RunDkgRequest {
+            session_id: "session-dkg-participant-order-retry".to_string(),
+            participants: vec![
+                crate::api::DkgParticipant {
+                    identifier: 3,
+                    public_key_hex: "02cc".to_string(),
+                },
+                crate::api::DkgParticipant {
+                    identifier: 1,
+                    public_key_hex: "02aa".to_string(),
+                },
+                crate::api::DkgParticipant {
+                    identifier: 2,
+                    public_key_hex: "02bb".to_string(),
+                },
+            ],
+            threshold: 2,
+        };
+        let mut retry_request = request.clone();
+        retry_request.participants.reverse();
+
+        let first_result = run_dkg(request).expect("initial DKG");
+        let retry_result = run_dkg(retry_request).expect("equivalent DKG retry");
+
+        assert_eq!(first_result, retry_result);
+
+        reset_for_tests();
+        cleanup_test_state_artifacts(&state_path);
+        clear_state_storage_policy_overrides();
+    }
+
+    #[test]
     fn build_taproot_tx_rejects_new_session_when_session_registry_is_at_capacity() {
         let _guard = lock_test_state();
         let state_path = configure_test_state_path("build_taproot_tx_session_capacity");
@@ -11901,6 +12137,42 @@ mod tests {
             message.contains("session registry size [1] reached max [1]"),
             "unexpected internal message: {message}"
         );
+
+        reset_for_tests();
+        cleanup_test_state_artifacts(&state_path);
+        clear_state_storage_policy_overrides();
+    }
+
+    #[test]
+    fn refresh_shares_retry_is_share_order_insensitive() {
+        let _guard = lock_test_state();
+        let state_path = configure_test_state_path("refresh_share_order_retry");
+        reset_for_tests();
+
+        let request = RefreshSharesRequest {
+            session_id: "session-refresh-share-order-retry".to_string(),
+            current_shares: vec![
+                ShareMaterial {
+                    identifier: 3,
+                    encrypted_share_hex: "cccc".to_string(),
+                },
+                ShareMaterial {
+                    identifier: 1,
+                    encrypted_share_hex: "aaaa".to_string(),
+                },
+                ShareMaterial {
+                    identifier: 2,
+                    encrypted_share_hex: "bbbb".to_string(),
+                },
+            ],
+        };
+        let mut retry_request = request.clone();
+        retry_request.current_shares.reverse();
+
+        let first_result = refresh_shares(request).expect("initial refresh");
+        let retry_result = refresh_shares(retry_request).expect("equivalent refresh retry");
+
+        assert_eq!(first_result, retry_result);
 
         reset_for_tests();
         cleanup_test_state_artifacts(&state_path);
@@ -14896,6 +15168,40 @@ mod tests {
 
         let err = mutate_state_for_key_provider_test("session-production-command-provider-timeout")
             .expect_err("state key command timeout should fail closed");
+        expect_internal_error_contains(err, "timed out");
+
+        reset_for_tests();
+        cleanup_test_state_artifacts(&state_path);
+        clear_state_storage_policy_overrides();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn command_key_provider_times_out_when_background_descendant_keeps_pipe_open() {
+        let _guard = lock_test_state();
+        let state_path = configure_test_state_path("production_command_provider_background_pipe");
+        reset_for_tests();
+
+        std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_PRODUCTION);
+        std::env::set_var(
+            TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
+            TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND,
+        );
+        std::env::set_var(TBTC_SIGNER_STATE_KEY_COMMAND_TIMEOUT_SECS_ENV, "1");
+        std::env::set_var(
+            TBTC_SIGNER_STATE_KEY_COMMAND_ENV,
+            format!("sleep 5 & printf '{}\\n'", TEST_STATE_ENCRYPTION_KEY_HEX),
+        );
+
+        let started_at = Instant::now();
+        let err = mutate_state_for_key_provider_test(
+            "session-production-command-provider-background-pipe",
+        )
+        .expect_err("state key command pipe timeout should fail closed");
+        assert!(
+            started_at.elapsed() < Duration::from_secs(4),
+            "state key command should not wait for background descendant pipe EOF"
+        );
         expect_internal_error_contains(err, "timed out");
 
         reset_for_tests();

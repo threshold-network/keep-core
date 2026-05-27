@@ -12,7 +12,7 @@ MODEL_DIR="${MODELS_PATH:-$ROOT_DIR/docs/formal/models}"
 TLA_TOOLS_VERSION="${TLA_TOOLS_VERSION:-v1.8.0}"
 TLA_TOOLS_JAR="${TLA_TOOLS_JAR:-/tmp/tla2tools-${TLA_TOOLS_VERSION}.jar}"
 TLA_TOOLS_URL="${TLA_TOOLS_URL:-https://github.com/tlaplus/tlaplus/releases/download/${TLA_TOOLS_VERSION}/tla2tools.jar}"
-TLA_TOOLS_SHA256="${TLA_TOOLS_SHA256:-71546dff3897a01b0ee4fa64135d9f5e9384d2b7e47b3cc20a16b655b0eb4f86}"
+TLA_TOOLS_SHA256="${TLA_TOOLS_SHA256:-237332bdcc79a35c7d26efa7b82c77c85c2744591c5598673a8a45085ff2a4fb}"
 
 if ! command -v java >/dev/null 2>&1; then
   echo "java is required to run TLC model checks" >&2

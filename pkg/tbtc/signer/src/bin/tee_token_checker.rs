@@ -11,6 +11,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const SECONDS_PER_DAY: u64 = 86_400;
 const MAX_VERIFIER_KEY_ROTATION_SECONDS: u64 = 30 * SECONDS_PER_DAY;
+const MAX_ATTESTATION_MAX_AGE_SECONDS: u64 = SECONDS_PER_DAY;
+const MAX_DENYLIST_STALENESS_SECONDS: u64 = 300;
 
 #[derive(Clone, Debug, Deserialize)]
 struct TeeGovernanceRegistryV1 {
@@ -233,11 +235,11 @@ fn parse_args(args: &[String]) -> Result<CliArgs, String> {
     })
 }
 
-fn now_unix() -> u64 {
+fn now_unix() -> Result<u64, String> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
-        .unwrap_or(0)
+        .map_err(|error| format!("system clock must be after UNIX epoch: {error}"))
 }
 
 fn load_json_file<T: for<'de> Deserialize<'de>>(path: &PathBuf) -> Result<T, String> {
@@ -345,6 +347,7 @@ fn verify_schnorr_signature(
         .map_err(|_| "token signature must be valid hex".to_string())?;
     let signature = SchnorrSignature::from_slice(&signature_bytes)
         .map_err(|_| "token signature must be valid schnorr bytes".to_string())?;
+    // Admission tokens commit to the exact payload_json bytes supplied by the issuer.
     let payload_digest = Sha256::digest(payload_json.as_bytes());
     let message = SecpMessage::from_digest_slice(&payload_digest)
         .map_err(|_| "failed to construct token signature digest".to_string())?;
@@ -404,6 +407,7 @@ fn validate_verifier_keyset(
     }
 
     let mut seen_key_ids: HashSet<String> = HashSet::new();
+    let mut seen_pubkeys: HashSet<String> = HashSet::new();
     let mut resolved_keys = HashMap::new();
     let mut active_key_count = 0usize;
     let mut active_trust_roots: HashSet<String> = HashSet::new();
@@ -499,6 +503,18 @@ fn validate_verifier_keyset(
                 continue;
             }
         };
+        let pubkey_normalized = parsed_pubkey.to_string();
+        if !seen_pubkeys.insert(pubkey_normalized.clone()) {
+            push_rejection_reason(
+                reasons,
+                "verifier_pubkey_duplicate",
+                format!(
+                    "verifier key [{}] reuses pubkey [{}] already present in keyset",
+                    key.key_id, pubkey_normalized
+                ),
+            );
+            continue;
+        }
 
         let active_now = key.valid_from_unix <= now_unix_seconds
             && now_unix_seconds <= key.valid_until_unix
@@ -590,6 +606,34 @@ fn validate_token(
             format!(
                 "governance registry profile_status [{}] is not mandatory",
                 registry.profile_status
+            ),
+        );
+    }
+
+    if registry.enforcement.attestation_max_age_seconds > MAX_ATTESTATION_MAX_AGE_SECONDS {
+        push_rejection_reason(
+            &mut reasons,
+            "attestation_max_age_exceeds_hard_ceiling",
+            format!(
+                "attestation_max_age_seconds [{}] exceeds hard ceiling [{}]",
+                registry.enforcement.attestation_max_age_seconds, MAX_ATTESTATION_MAX_AGE_SECONDS
+            ),
+        );
+    }
+
+    if registry.enforcement.denylist_max_staleness_seconds == 0 {
+        push_rejection_reason(
+            &mut reasons,
+            "denylist_max_staleness_invalid_zero",
+            "denylist_max_staleness_seconds must be > 0".to_string(),
+        );
+    } else if registry.enforcement.denylist_max_staleness_seconds > MAX_DENYLIST_STALENESS_SECONDS {
+        push_rejection_reason(
+            &mut reasons,
+            "denylist_max_staleness_exceeds_hard_ceiling",
+            format!(
+                "denylist_max_staleness_seconds [{}] exceeds hard ceiling [{}]",
+                registry.enforcement.denylist_max_staleness_seconds, MAX_DENYLIST_STALENESS_SECONDS
             ),
         );
     }
@@ -1123,7 +1167,10 @@ fn run() -> Result<ValidationDecision, String> {
     let token_artifact: AdmissionTokenArtifact = load_json_file(&cli.token_path)?;
     let revocation_registry: TokenRevocationRegistryV1 =
         normalize_revocation_registry(load_json_file(&cli.revocation_registry_path)?);
-    let now_unix_seconds = cli.now_unix_override.unwrap_or_else(now_unix);
+    let now_unix_seconds = match cli.now_unix_override {
+        Some(now_unix_override) => now_unix_override,
+        None => now_unix()?,
+    };
 
     Ok(validate_token(
         &registry,
@@ -1352,6 +1399,64 @@ mod tests {
     }
 
     #[test]
+    fn validate_token_rejects_denylist_max_staleness_above_hard_ceiling() {
+        let now_unix_seconds = 1_700_100_000u64;
+        let signing_keys = baseline_signing_keys();
+        let mut registry = baseline_registry();
+        registry.enforcement.denylist_max_staleness_seconds = MAX_DENYLIST_STALENESS_SECONDS + 1;
+        let keyset = baseline_keyset(&signing_keys);
+        let revocation_registry = baseline_revocation_registry(now_unix_seconds);
+        let payload = baseline_token_payload(now_unix_seconds);
+        let artifact = build_signed_artifact(
+            &payload,
+            &signing_keys,
+            &["verifier-key-1", "verifier-key-2"],
+        );
+
+        let decision = validate_token(
+            &registry,
+            &keyset,
+            &artifact,
+            &revocation_registry,
+            now_unix_seconds,
+        );
+        assert_eq!(decision.decision, "reject");
+        assert!(decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "denylist_max_staleness_exceeds_hard_ceiling"));
+    }
+
+    #[test]
+    fn validate_token_rejects_attestation_max_age_above_hard_ceiling() {
+        let now_unix_seconds = 1_700_100_000u64;
+        let signing_keys = baseline_signing_keys();
+        let mut registry = baseline_registry();
+        registry.enforcement.attestation_max_age_seconds = MAX_ATTESTATION_MAX_AGE_SECONDS + 1;
+        let keyset = baseline_keyset(&signing_keys);
+        let revocation_registry = baseline_revocation_registry(now_unix_seconds);
+        let payload = baseline_token_payload(now_unix_seconds);
+        let artifact = build_signed_artifact(
+            &payload,
+            &signing_keys,
+            &["verifier-key-1", "verifier-key-2"],
+        );
+
+        let decision = validate_token(
+            &registry,
+            &keyset,
+            &artifact,
+            &revocation_registry,
+            now_unix_seconds,
+        );
+        assert_eq!(decision.decision, "reject");
+        assert!(decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "attestation_max_age_exceeds_hard_ceiling"));
+    }
+
+    #[test]
     fn validate_token_rejects_revoked_token_id() {
         let now_unix_seconds = 1_700_100_000u64;
         let signing_keys = baseline_signing_keys();
@@ -1434,6 +1539,49 @@ mod tests {
             now_unix_seconds,
         );
         assert_eq!(decision.decision, "reject");
+        assert!(decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "token_signature_quorum_not_met"));
+    }
+
+    #[test]
+    fn validate_token_rejects_duplicate_verifier_pubkeys_under_distinct_key_ids() {
+        let now_unix_seconds = 1_700_100_000u64;
+        let signing_keys = baseline_signing_keys();
+        let registry = baseline_registry();
+        let mut keyset = baseline_keyset(&signing_keys);
+        keyset.keys[1].pubkey_hex = keyset.keys[0].pubkey_hex.clone();
+        let revocation_registry = baseline_revocation_registry(now_unix_seconds);
+        let payload = baseline_token_payload(now_unix_seconds);
+        let payload_json = serde_json::to_string(&payload).expect("payload json");
+        let duplicated_key_signature = sign_payload(&payload_json, &signing_keys[0].keypair);
+        let artifact = AdmissionTokenArtifact {
+            payload_json,
+            signatures: vec![
+                TokenSignature {
+                    verifier_key_id: "verifier-key-1".to_string(),
+                    signature_hex: duplicated_key_signature.clone(),
+                },
+                TokenSignature {
+                    verifier_key_id: "verifier-key-2".to_string(),
+                    signature_hex: duplicated_key_signature,
+                },
+            ],
+        };
+
+        let decision = validate_token(
+            &registry,
+            &keyset,
+            &artifact,
+            &revocation_registry,
+            now_unix_seconds,
+        );
+        assert_eq!(decision.decision, "reject");
+        assert!(decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "verifier_pubkey_duplicate"));
         assert!(decision
             .reasons
             .iter()

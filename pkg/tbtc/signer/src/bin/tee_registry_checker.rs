@@ -7,6 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const SECONDS_PER_DAY: u64 = 86_400;
 const SECONDS_PER_7_DAYS: u64 = 7 * SECONDS_PER_DAY;
+const MAX_ATTESTATION_MAX_AGE_SECONDS: u64 = SECONDS_PER_DAY;
+const MAX_DENYLIST_STALENESS_SECONDS: u64 = 300;
 
 #[derive(Clone, Debug, Deserialize)]
 struct TeeGovernanceRegistryV1 {
@@ -203,11 +205,11 @@ fn parse_args(args: &[String]) -> Result<CliArgs, String> {
     })
 }
 
-fn now_unix() -> u64 {
+fn now_unix() -> Result<u64, String> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
-        .unwrap_or(0)
+        .map_err(|error| format!("system clock must be after UNIX epoch: {error}"))
 }
 
 fn load_json_file<T: for<'de> Deserialize<'de>>(path: &PathBuf) -> Result<T, String> {
@@ -319,6 +321,15 @@ fn validate_enforcement(
             "attestation_max_age_invalid",
             "enforcement.attestation_max_age_seconds must be > 0".to_string(),
         );
+    } else if enforcement.attestation_max_age_seconds > MAX_ATTESTATION_MAX_AGE_SECONDS {
+        push_rejection_reason(
+            reasons,
+            "attestation_max_age_exceeds_hard_ceiling",
+            format!(
+                "enforcement.attestation_max_age_seconds [{}] exceeds hard ceiling [{}]",
+                enforcement.attestation_max_age_seconds, MAX_ATTESTATION_MAX_AGE_SECONDS
+            ),
+        );
     }
 
     if enforcement.grace_period_seconds > enforcement.attestation_max_age_seconds {
@@ -352,14 +363,14 @@ fn validate_enforcement(
     }
 
     if enforcement.denylist_max_staleness_seconds == 0
-        || enforcement.denylist_max_staleness_seconds > 60
+        || enforcement.denylist_max_staleness_seconds > MAX_DENYLIST_STALENESS_SECONDS
     {
         push_rejection_reason(
             reasons,
             "denylist_max_staleness_out_of_bounds",
             format!(
-                "enforcement.denylist_max_staleness_seconds [{}] must be within [1, 60]",
-                enforcement.denylist_max_staleness_seconds
+                "enforcement.denylist_max_staleness_seconds [{}] must be within [1, {}]",
+                enforcement.denylist_max_staleness_seconds, MAX_DENYLIST_STALENESS_SECONDS
             ),
         );
     }
@@ -1386,7 +1397,10 @@ fn run() -> Result<ValidationDecision, String> {
         }
         None => None,
     };
-    let now_unix_seconds = cli.now_unix_override.unwrap_or_else(now_unix);
+    let now_unix_seconds = match cli.now_unix_override {
+        Some(now_unix_override) => now_unix_override,
+        None => now_unix()?,
+    };
 
     Ok(validate_registry(
         &registry,
@@ -1738,7 +1752,7 @@ mod tests {
     #[test]
     fn validate_registry_rejects_invalid_enforcement_bounds() {
         let mut registry = baseline_registry();
-        registry.enforcement.denylist_max_staleness_seconds = 120;
+        registry.enforcement.denylist_max_staleness_seconds = MAX_DENYLIST_STALENESS_SECONDS + 1;
         registry.enforcement.break_glass_scope = "global".to_string();
 
         let decision = validate_registry(&registry, None, 1_700_100_000);
@@ -1751,6 +1765,19 @@ mod tests {
             .reasons
             .iter()
             .any(|reason| reason.code == "break_glass_scope_not_supported"));
+    }
+
+    #[test]
+    fn validate_registry_rejects_attestation_max_age_above_hard_ceiling() {
+        let mut registry = baseline_registry();
+        registry.enforcement.attestation_max_age_seconds = MAX_ATTESTATION_MAX_AGE_SECONDS + 1;
+
+        let decision = validate_registry(&registry, None, 1_700_100_000);
+        assert_eq!(decision.decision, "reject");
+        assert!(decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "attestation_max_age_exceeds_hard_ceiling"));
     }
 
     #[test]

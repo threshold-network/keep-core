@@ -1158,11 +1158,11 @@ mod tests {
     }
 
     #[test]
-    fn build_taproot_tx_rejects_output_value_overflow() {
+    fn build_taproot_tx_rejects_output_total_above_bitcoin_max_money() {
         let _guard = crate::engine::lock_test_state();
         crate::engine::reset_for_tests();
 
-        let overflow_outputs: Vec<crate::api::TxOutput> = (0..9_000)
+        let max_money_outputs: Vec<crate::api::TxOutput> = (0..9_000)
             .map(|index| crate::api::TxOutput {
                 script_pubkey_hex: format!("5120{:064x}", index + 1),
                 value_sats: 2_100_000_000_000_000,
@@ -1170,13 +1170,13 @@ mod tests {
             .collect();
 
         let request = BuildTaprootTxRequest {
-            session_id: "session-tx-overflow-output-sum".to_string(),
+            session_id: "session-tx-max-money-output-sum".to_string(),
             inputs: vec![crate::api::TxInput {
                 txid_hex: "11".repeat(32),
                 vout: 1,
                 value_sats: 2_100_000_000_000_000,
             }],
-            outputs: overflow_outputs,
+            outputs: max_money_outputs,
             script_tree_hex: None,
         };
 
@@ -1187,15 +1187,15 @@ mod tests {
         assert_eq!(error.code, "validation_error");
         assert!(error
             .message
-            .contains("output value_sats total overflowed u64 bounds"));
+            .contains("output value_sats total [4200000000000000] exceeds Bitcoin max money"));
     }
 
     #[test]
-    fn build_taproot_tx_rejects_input_value_overflow() {
+    fn build_taproot_tx_rejects_input_total_above_bitcoin_max_money() {
         let _guard = crate::engine::lock_test_state();
         crate::engine::reset_for_tests();
 
-        let overflow_inputs: Vec<crate::api::TxInput> = (0..9_000)
+        let max_money_inputs: Vec<crate::api::TxInput> = (0..9_000)
             .map(|index| crate::api::TxInput {
                 txid_hex: format!("{:064x}", index + 1),
                 vout: 0,
@@ -1204,8 +1204,8 @@ mod tests {
             .collect();
 
         let request = BuildTaprootTxRequest {
-            session_id: "session-tx-overflow-input-sum".to_string(),
-            inputs: overflow_inputs,
+            session_id: "session-tx-max-money-input-sum".to_string(),
+            inputs: max_money_inputs,
             outputs: vec![crate::api::TxOutput {
                 script_pubkey_hex: format!("5120{}", "22".repeat(32)),
                 value_sats: 1,
@@ -1220,7 +1220,7 @@ mod tests {
         assert_eq!(error.code, "validation_error");
         assert!(error
             .message
-            .contains("input value_sats total overflowed u64 bounds"));
+            .contains("input value_sats total [4200000000000000] exceeds Bitcoin max money"));
     }
 
     #[test]

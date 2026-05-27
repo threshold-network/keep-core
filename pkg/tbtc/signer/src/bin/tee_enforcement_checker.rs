@@ -477,6 +477,7 @@ fn evaluate_break_glass(
     let mut history_incident_tickets = HashSet::new();
     let mut recent_activation_incident_tickets = HashSet::new();
     let mut latest_activation_unix: Option<u64> = None;
+    let mut reused_incident_activated_at_unix: Option<u64> = None;
     let recent_window_start = now_unix_seconds.saturating_sub(SECONDS_PER_7_DAYS);
     for history_record in &context.break_glass_history {
         let history_incident_ticket_normalized = trimmed_lowercase(&history_record.incident_ticket);
@@ -500,6 +501,12 @@ fn evaluate_break_glass(
                 ),
             );
             valid = false;
+        }
+
+        if history_incident_ticket_normalized == current_incident_ticket_normalized
+            && reused_incident_activated_at_unix.is_none()
+        {
+            reused_incident_activated_at_unix = Some(history_record.activated_at_unix);
         }
 
         if history_record.activated_at_unix > now_unix_seconds {
@@ -538,6 +545,55 @@ fn evaluate_break_glass(
                 break_glass.is_new_activation, inferred_new_activation
             ),
         );
+    }
+
+    if let Some(activated_at_unix) =
+        reused_incident_activated_at_unix.filter(|_| !inferred_new_activation)
+    {
+        if break_glass.declared_at_unix != activated_at_unix {
+            push_reason(
+                &mut reasons,
+                "break_glass_reused_incident_declared_at_mismatch",
+                format!(
+                    "reused incident_ticket [{}] declared_at_unix [{}] must match history activated_at_unix [{}]",
+                    break_glass.incident_ticket, break_glass.declared_at_unix, activated_at_unix
+                ),
+            );
+            valid = false;
+        }
+
+        if ttl_policy_valid {
+            let historical_expires_at_unix =
+                activated_at_unix.saturating_add(registry.enforcement.break_glass_ttl_seconds);
+            if historical_expires_at_unix <= now_unix_seconds {
+                push_reason(
+                    &mut reasons,
+                    "break_glass_reused_incident_expired",
+                    format!(
+                        "reused incident_ticket [{}] expired at [{}] based on history activated_at_unix [{}] and policy ttl [{}]",
+                        break_glass.incident_ticket,
+                        historical_expires_at_unix,
+                        activated_at_unix,
+                        registry.enforcement.break_glass_ttl_seconds
+                    ),
+                );
+                valid = false;
+            }
+
+            if break_glass.expires_at_unix > historical_expires_at_unix {
+                push_reason(
+                    &mut reasons,
+                    "break_glass_reused_incident_extends_ttl",
+                    format!(
+                        "reused incident_ticket [{}] expires_at_unix [{}] exceeds history-derived expiry [{}]",
+                        break_glass.incident_ticket,
+                        break_glass.expires_at_unix,
+                        historical_expires_at_unix
+                    ),
+                );
+                valid = false;
+            }
+        }
     }
 
     if inferred_new_activation {
@@ -1110,7 +1166,7 @@ mod tests {
         });
         context.break_glass_history = vec![BreakGlassActivationHistoryRecord {
             incident_ticket: "INC-123".to_string(),
-            activated_at_unix: 1_700_099_999,
+            activated_at_unix: 1_700_099_000,
         }];
 
         let decision = validate_enforcement(&registry, &context, 1_700_100_000);
@@ -1123,6 +1179,39 @@ mod tests {
             .reasons
             .iter()
             .any(|reason| reason.code == "break_glass_cooldown_violation"));
+    }
+
+    #[test]
+    fn validate_enforcement_rejects_reused_incident_with_refreshed_window() {
+        let registry = baseline_registry();
+        let mut context = baseline_context();
+        context.runtime_decision = runtime_reject();
+        context.break_glass = Some(BreakGlassActivation {
+            incident_ticket: "INC-123".to_string(),
+            declared_at_unix: 1_700_199_000,
+            expires_at_unix: 1_700_203_600,
+            is_new_activation: false,
+            ..valid_break_glass()
+        });
+        context.break_glass_history = vec![BreakGlassActivationHistoryRecord {
+            incident_ticket: "INC-123".to_string(),
+            activated_at_unix: 1_700_000_000,
+        }];
+
+        let decision = validate_enforcement(&registry, &context, 1_700_200_000);
+        assert_eq!(decision.decision, "reject");
+        assert!(decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "break_glass_reused_incident_declared_at_mismatch"));
+        assert!(decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "break_glass_reused_incident_expired"));
+        assert!(decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "break_glass_reused_incident_extends_ttl"));
     }
 
     #[test]

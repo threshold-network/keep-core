@@ -1,7 +1,7 @@
 # tbtc-signer (bootstrap)
 
-This crate is the first implementation slice of the Rust rewrite plan in
-`../tbtc-rust-rewrite-consensus-plan.md`.
+This crate is the first implementation slice of the Rust rewrite plan tracked
+in `docs/rust-rewrite-bootstrap.md`.
 
 ## Current scope
 
@@ -47,14 +47,14 @@ This crate is the first implementation slice of the Rust rewrite plan in
 ## Build
 
 ```bash
-cd tools/tbtc-signer
+cd pkg/tbtc/signer
 cargo build
 ```
 
 For a dynamic library artifact:
 
 ```bash
-cd tools/tbtc-signer
+cd pkg/tbtc/signer
 cargo build --release
 # target/release/libfrost_tbtc.{so,dylib,dll}
 ```
@@ -62,7 +62,7 @@ cargo build --release
 ## Test
 
 ```bash
-cd tools/tbtc-signer
+cd pkg/tbtc/signer
 cargo test
 ```
 
@@ -71,7 +71,7 @@ cargo test
 Run the pre-admission checker for operator onboarding policy:
 
 ```bash
-cd tools/tbtc-signer
+cd pkg/tbtc/signer
 cargo run --bin admission_checker -- \
   --policy scripts/admission-policy-v1.sample.json \
   --candidate scripts/admission-candidate.sample.json \
@@ -97,18 +97,18 @@ requires a real Schnorr signature over `payload_json`.
 
 Sample input schemas are provided in:
 
-- `tools/tbtc-signer/scripts/admission-policy-v1.sample.json`
-- `tools/tbtc-signer/scripts/admission-candidate.sample.json`
-- `tools/tbtc-signer/scripts/admission-existing.sample.json`
-- `tools/tbtc-signer/scripts/admission-override.sample.json`
-- `tools/tbtc-signer/scripts/admission-override-registry.sample.json`
+- `pkg/tbtc/signer/scripts/admission-policy-v1.sample.json`
+- `pkg/tbtc/signer/scripts/admission-candidate.sample.json`
+- `pkg/tbtc/signer/scripts/admission-existing.sample.json`
+- `pkg/tbtc/signer/scripts/admission-override.sample.json`
+- `pkg/tbtc/signer/scripts/admission-override-registry.sample.json`
 
 ## TEE Governance Registry Checker (Phase A)
 
 Run the governance registry validator for TEE-required signer policy artifacts:
 
 ```bash
-cd tools/tbtc-signer
+cd pkg/tbtc/signer
 cargo run --bin tee_registry_checker -- \
   --registry scripts/tee-governance-registry-v1.sample.json \
   --events scripts/tee-governance-audit-events-v1.sample.json \
@@ -140,15 +140,15 @@ Output schema (exit codes 0 and 1):
 
 Sample input schemas are provided in:
 
-- `tools/tbtc-signer/scripts/tee-governance-registry-v1.sample.json`
-- `tools/tbtc-signer/scripts/tee-governance-audit-events-v1.sample.json`
+- `pkg/tbtc/signer/scripts/tee-governance-registry-v1.sample.json`
+- `pkg/tbtc/signer/scripts/tee-governance-audit-events-v1.sample.json`
 
 ## TEE Admission Token Checker (Phase B)
 
 Run the verifier/token checker for threshold-signed admission tokens:
 
 ```bash
-cd tools/tbtc-signer
+cd pkg/tbtc/signer
 cargo run --bin tee_token_checker -- \
   --registry scripts/tee-governance-registry-v1.sample.json \
   --keyset scripts/tee-verifier-keyset-v1.sample.json \
@@ -166,6 +166,11 @@ Flags:
 - `--now-unix <seconds>` (optional): deterministic time override for CI/testing
 
 The checker requires `profile_status = mandatory` in the governance registry.
+Token signatures cover the exact `payload_json` byte string in the token
+artifact; issuers and verifiers must not deserialize and reserialize that value
+before signature verification. The token checker enforces a two-trust-root and
+two-verifier-instance floor for quorum diversity; broader vendor concentration
+limits are enforced by the runtime checker.
 
 Exit codes:
 
@@ -185,9 +190,9 @@ Output schema (exit codes 0 and 1):
 
 Sample input schemas are provided in:
 
-- `tools/tbtc-signer/scripts/tee-verifier-keyset-v1.sample.json`
-- `tools/tbtc-signer/scripts/tee-admission-token.sample.json`
-- `tools/tbtc-signer/scripts/tee-token-revocation-registry-v1.sample.json`
+- `pkg/tbtc/signer/scripts/tee-verifier-keyset-v1.sample.json`
+- `pkg/tbtc/signer/scripts/tee-admission-token.sample.json`
+- `pkg/tbtc/signer/scripts/tee-token-revocation-registry-v1.sample.json`
 
 `tee-admission-token.sample.json` and `tee-verifier-keyset-v1.sample.json` are
 schema-only examples and require real verifier keys/signatures to pass.
@@ -198,7 +203,7 @@ Run the runtime selection/session checker for attestation-token and denylist
 enforcement:
 
 ```bash
-cd tools/tbtc-signer
+cd pkg/tbtc/signer
 cargo run --bin tee_runtime_checker -- \
   --registry scripts/tee-runtime-governance-registry-v1.sample.json \
   --session scripts/tee-runtime-session-start-v1.sample.json \
@@ -241,10 +246,10 @@ Output schema (exit codes 0 and 1):
 
 Sample input schemas are provided in:
 
-- `tools/tbtc-signer/scripts/tee-runtime-governance-registry-v1.sample.json`
-- `tools/tbtc-signer/scripts/tee-runtime-session-start-v1.sample.json`
-- `tools/tbtc-signer/scripts/tee-runtime-session-mid-session-grace-v1.sample.json`
-- `tools/tbtc-signer/scripts/tee-runtime-session-vendor-outage-v1.sample.json`
+- `pkg/tbtc/signer/scripts/tee-runtime-governance-registry-v1.sample.json`
+- `pkg/tbtc/signer/scripts/tee-runtime-session-start-v1.sample.json`
+- `pkg/tbtc/signer/scripts/tee-runtime-session-mid-session-grace-v1.sample.json`
+- `pkg/tbtc/signer/scripts/tee-runtime-session-vendor-outage-v1.sample.json`
 
 ## TEE Phase D Enforcement Checker (Phase D)
 
@@ -252,7 +257,7 @@ Run the Phase D mode/waiver checker that applies canary and full-enforcement
 policy over a Phase C runtime decision:
 
 ```bash
-cd tools/tbtc-signer
+cd pkg/tbtc/signer
 cargo run --bin tee_enforcement_checker -- \
   --registry scripts/tee-governance-registry-v1.sample.json \
   --context scripts/tee-enforcement-context-monitor-v1.sample.json \
@@ -279,6 +284,7 @@ Break-glass enforcement controls:
 - waiver TTL bounded by policy (`break_glass_ttl_seconds`) and hard maximum (7 days)
 - activation cap per 7 days (`break_glass_max_activations_per_7d`) for new activations
 - minimum cooldown (`break_glass_cooldown_seconds`) for new activations
+- reused incident tickets bounded by their history-derived activation time and TTL
 
 Exit codes:
 
@@ -298,9 +304,9 @@ Output schema (exit codes 0 and 1):
 
 Sample input schemas are provided in:
 
-- `tools/tbtc-signer/scripts/tee-enforcement-context-monitor-v1.sample.json`
-- `tools/tbtc-signer/scripts/tee-enforcement-context-hard-canary-v1.sample.json`
-- `tools/tbtc-signer/scripts/tee-enforcement-context-full-break-glass-v1.sample.json`
+- `pkg/tbtc/signer/scripts/tee-enforcement-context-monitor-v1.sample.json`
+- `pkg/tbtc/signer/scripts/tee-enforcement-context-hard-canary-v1.sample.json`
+- `pkg/tbtc/signer/scripts/tee-enforcement-context-full-break-glass-v1.sample.json`
 
 ## Encrypted State Key Providers
 
@@ -415,7 +421,7 @@ Failure-mode responses:
 Run the Phase 5 benchmark harness:
 
 ```bash
-cd tools/tbtc-signer
+cd pkg/tbtc/signer
 cargo bench --features bench-restart-hook --bench phase5_roast
 ```
 
@@ -438,7 +444,7 @@ Current benchmark groups:
 Run the Phase 5 chaos/failure-injection suite:
 
 ```bash
-cd tools/tbtc-signer
+cd pkg/tbtc/signer
 ./scripts/run_phase5_chaos_suite.sh
 ```
 
@@ -457,7 +463,7 @@ Scenario coverage and pass criteria:
 
 ## FFI contract
 
-- Header: `tools/tbtc-signer/include/frost_tbtc.h`
+- Header: `pkg/tbtc/signer/include/frost_tbtc.h`
 - All API payloads are JSON bytes.
 - Success: `status_code = 0`, response envelope in `buffer`.
 - Error: `status_code = 1`,
