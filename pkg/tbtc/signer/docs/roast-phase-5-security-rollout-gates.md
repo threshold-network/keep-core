@@ -93,9 +93,9 @@ Before final sign-off, collect and archive:
 
 ## Initial Benchmark Scaffold (Implemented)
 
-- Benchmark harness added at `tools/tbtc-signer/benches/phase5_roast.rs`.
+- Benchmark harness added at `pkg/tbtc/signer/benches/phase5_roast.rs`.
 - Run command:
-  `cd tools/tbtc-signer && cargo bench --features bench-restart-hook --bench phase5_roast`
+  `cd pkg/tbtc/signer && cargo bench --features bench-restart-hook --bench phase5_roast`
 - Current benchmark groups:
   - `phase5/ffi_run_dkg`
   - `phase5/ffi_start_sign_round`
@@ -114,9 +114,9 @@ Before final sign-off, collect and archive:
 ## Chaos/Failure Injection Suite (Implemented)
 
 - Suite runner:
-  `tools/tbtc-signer/scripts/run_phase5_chaos_suite.sh`
+  `pkg/tbtc/signer/scripts/run_phase5_chaos_suite.sh`
 - Run command:
-  `cd tools/tbtc-signer && ./scripts/run_phase5_chaos_suite.sh`
+  `cd pkg/tbtc/signer && ./scripts/run_phase5_chaos_suite.sh`
 - Scenario pass/fail criteria:
   - `stale_payload_replay_or_duplication`:
     stale attempt payloads remain fail-closed after authorized advancement and

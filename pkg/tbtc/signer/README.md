@@ -333,6 +333,10 @@ Scenario coverage and pass criteria:
   - Signing-path binding: when the firewall is enabled, `StartSignRound.message_hex`
     must equal `sha256(tx_hex_bytes)` from the same-session `BuildTaprootTx`
     result; `FinalizeSignRound` re-validates the same binding.
+  - `BuildTaprootTx` currently accepts caller-derived `script_pubkey_hex`
+    outputs; until full script-tree construction lands, keep the firewall
+    enabled and restrict `TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES` to the
+    intended output classes, such as `p2tr`.
 - Transcript accountability / quarantine config:
   - `TBTC_SIGNER_ENABLE_AUTO_QUARANTINE`
   - `TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD`

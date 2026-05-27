@@ -1685,10 +1685,11 @@ fn classify_script_pubkey(script_pubkey: &ScriptBuf) -> &'static str {
     }
 }
 
-fn enforce_signing_policy_firewall(
+fn enforce_signing_policy_firewall_inner(
     session_id: &str,
     outputs: &[TxOut],
     total_output_value_sats: u64,
+    charge_rate_limit: bool,
 ) -> Result<(), EngineError> {
     let policy = match load_signing_policy_firewall_config() {
         Ok(Some(policy)) => policy,
@@ -1767,9 +1768,27 @@ fn enforce_signing_policy_firewall(
         }
     }
 
-    enforce_build_tx_rate_limit(session_id, policy.rate_limit_per_minute)?;
+    if charge_rate_limit {
+        enforce_build_tx_rate_limit(session_id, policy.rate_limit_per_minute)?;
+    }
     log_policy_decision("signing_policy_firewall", session_id, "allow", "ok");
     Ok(())
+}
+
+fn enforce_signing_policy_firewall(
+    session_id: &str,
+    outputs: &[TxOut],
+    total_output_value_sats: u64,
+) -> Result<(), EngineError> {
+    enforce_signing_policy_firewall_inner(session_id, outputs, total_output_value_sats, true)
+}
+
+fn recheck_signing_policy_firewall_without_rate_limit(
+    session_id: &str,
+    outputs: &[TxOut],
+    total_output_value_sats: u64,
+) -> Result<(), EngineError> {
+    enforce_signing_policy_firewall_inner(session_id, outputs, total_output_value_sats, false)
 }
 
 fn policy_bound_signing_message_hex(tx_hex: &str) -> Result<String, EngineError> {
@@ -6113,7 +6132,9 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
                     )));
                 }
 
-                enforce_signing_policy_firewall(
+                // Idempotent retries return the cached transaction without consuming a
+                // new rate-limit token, but still re-check current non-rate policy gates.
+                recheck_signing_policy_firewall_without_rate_limit(
                     &request.session_id,
                     &cached_tx.output,
                     total_output_value_sats,
@@ -6274,6 +6295,20 @@ pub fn refresh_shares(request: RefreshSharesRequest) -> Result<RefreshSharesResu
         return Err(EngineError::Validation(
             "current_shares must not be empty".to_string(),
         ));
+    }
+    let mut unique_share_identifiers = HashSet::new();
+    for share in &request.current_shares {
+        if share.identifier == 0 {
+            return Err(EngineError::Validation(
+                "current_shares identifiers must be non-zero".to_string(),
+            ));
+        }
+        if !unique_share_identifiers.insert(share.identifier) {
+            return Err(EngineError::Validation(format!(
+                "current_shares contains duplicate identifier [{}]",
+                share.identifier
+            )));
+        }
     }
 
     let request_fingerprint = fingerprint(&canonicalize_refresh_shares_request_for_fingerprint(
@@ -8628,6 +8663,45 @@ mod tests {
         assert_eq!(metrics.build_taproot_tx_calls_total, 2);
         assert_eq!(metrics.build_taproot_tx_success_total, 1);
         assert_eq!(metrics.build_taproot_tx_policy_reject_total, 1);
+
+        clear_state_storage_policy_overrides();
+    }
+
+    #[test]
+    fn build_taproot_tx_cached_retry_does_not_charge_rate_limit() {
+        let _guard = lock_test_state();
+        reset_for_tests();
+        clear_state_storage_policy_overrides();
+
+        std::env::set_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV, "true");
+        std::env::set_var(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV, "p2tr,p2wpkh");
+        std::env::set_var(TBTC_SIGNER_POLICY_RATE_LIMIT_PER_MINUTE_ENV, "1");
+        configure_required_signing_policy_limits_for_tests();
+
+        let request = build_policy_test_request("session-build-tx-cache-rate-limit");
+
+        let first_result = build_taproot_tx(request.clone()).expect("first build tx");
+        assert!(!first_result.tx_hex.is_empty());
+
+        {
+            let mut limiter = build_tx_rate_limiter_state()
+                .lock()
+                .expect("build tx rate limiter lock");
+            limiter.last_refill_unix = now_unix();
+            limiter.token_microunits = 0;
+            limiter.configured_rate_limit_per_minute = 1;
+        }
+
+        let retry_result = build_taproot_tx(request).expect("cached retry must not rate-limit");
+        assert_eq!(first_result, retry_result);
+
+        let rejected =
+            build_taproot_tx(build_policy_test_request("session-build-tx-rate-limit-new"))
+                .expect_err("new build tx should still be rate-limited");
+        let EngineError::SigningPolicyRejected { reason_code, .. } = rejected else {
+            panic!("unexpected error variant");
+        };
+        assert_eq!(reason_code, "rate_limit_per_minute_exceeded");
 
         clear_state_storage_policy_overrides();
     }
@@ -12173,6 +12247,66 @@ mod tests {
         let retry_result = refresh_shares(retry_request).expect("equivalent refresh retry");
 
         assert_eq!(first_result, retry_result);
+
+        reset_for_tests();
+        cleanup_test_state_artifacts(&state_path);
+        clear_state_storage_policy_overrides();
+    }
+
+    #[test]
+    fn refresh_shares_rejects_duplicate_current_share_identifiers() {
+        let _guard = lock_test_state();
+        let state_path = configure_test_state_path("refresh_duplicate_share_identifier");
+        reset_for_tests();
+
+        let err = refresh_shares(RefreshSharesRequest {
+            session_id: "session-refresh-duplicate-share-id".to_string(),
+            current_shares: vec![
+                ShareMaterial {
+                    identifier: 1,
+                    encrypted_share_hex: "aaaa".to_string(),
+                },
+                ShareMaterial {
+                    identifier: 1,
+                    encrypted_share_hex: "bbbb".to_string(),
+                },
+            ],
+        })
+        .expect_err("expected duplicate share identifier rejection");
+        let EngineError::Validation(message) = err else {
+            panic!("unexpected error variant");
+        };
+        assert!(
+            message.contains("current_shares contains duplicate identifier [1]"),
+            "unexpected validation message: {message}"
+        );
+
+        reset_for_tests();
+        cleanup_test_state_artifacts(&state_path);
+        clear_state_storage_policy_overrides();
+    }
+
+    #[test]
+    fn refresh_shares_rejects_zero_current_share_identifier() {
+        let _guard = lock_test_state();
+        let state_path = configure_test_state_path("refresh_zero_share_identifier");
+        reset_for_tests();
+
+        let err = refresh_shares(RefreshSharesRequest {
+            session_id: "session-refresh-zero-share-id".to_string(),
+            current_shares: vec![ShareMaterial {
+                identifier: 0,
+                encrypted_share_hex: "aaaa".to_string(),
+            }],
+        })
+        .expect_err("expected zero share identifier rejection");
+        let EngineError::Validation(message) = err else {
+            panic!("unexpected error variant");
+        };
+        assert!(
+            message.contains("current_shares identifiers must be non-zero"),
+            "unexpected validation message: {message}"
+        );
 
         reset_for_tests();
         cleanup_test_state_artifacts(&state_path);

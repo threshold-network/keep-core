@@ -23,9 +23,9 @@ Before Stage 1 canary:
 
 1. Security/correctness gate checks are green.
 2. Benchmark suite is current:
-   - `cd tools/tbtc-signer && cargo bench --features bench-restart-hook --bench phase5_roast`
+   - `cd pkg/tbtc/signer && cargo bench --features bench-restart-hook --bench phase5_roast`
 3. Chaos/failure suite is green:
-   - `cd tools/tbtc-signer && ./scripts/run_phase5_chaos_suite.sh`
+   - `cd pkg/tbtc/signer && ./scripts/run_phase5_chaos_suite.sh`
 4. Pre-ROAST baseline window captured for:
    - attempt success rate
    - coordinator rotations per signing request
