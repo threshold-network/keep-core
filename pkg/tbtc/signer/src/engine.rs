@@ -7,7 +7,6 @@ use bitcoin::{
     transaction::Version,
     Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness,
 };
-use chacha20poly1305::aead::rand_core::RngCore;
 use chacha20poly1305::aead::{Aead, KeyInit, OsRng, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 #[cfg(unix)]
@@ -26,7 +25,7 @@ use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use frost_secp256k1_tr as frost;
-use rand_chacha::rand_core::SeedableRng;
+use rand_chacha::rand_core::{CryptoRng, Error as RandCoreError, RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -50,6 +49,52 @@ use crate::go_math_rand::select_coordinator_identifier;
 
 type SecretString = Zeroizing<String>;
 type SecretBytes = Zeroizing<Vec<u8>>;
+
+struct ZeroizingChaCha20Rng {
+    inner: ChaCha20Rng,
+}
+
+impl ZeroizingChaCha20Rng {
+    fn from_seed(seed: [u8; 32]) -> Self {
+        Self {
+            inner: ChaCha20Rng::from_seed(seed),
+        }
+    }
+}
+
+impl RngCore for ZeroizingChaCha20Rng {
+    fn next_u32(&mut self) -> u32 {
+        self.inner.next_u32()
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.inner.next_u64()
+    }
+
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        self.inner.fill_bytes(dest)
+    }
+
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), RandCoreError> {
+        self.inner.try_fill_bytes(dest)
+    }
+}
+
+impl CryptoRng for ZeroizingChaCha20Rng {}
+
+impl Drop for ZeroizingChaCha20Rng {
+    fn drop(&mut self) {
+        // ChaCha20Rng does not expose a zeroizing Drop. Wipe its in-memory
+        // state once the cryptographic operation consuming it has returned.
+        unsafe {
+            let rng_bytes = std::slice::from_raw_parts_mut(
+                (&mut self.inner as *mut ChaCha20Rng).cast::<u8>(),
+                std::mem::size_of::<ChaCha20Rng>(),
+            );
+            rng_bytes.zeroize();
+        }
+    }
+}
 
 #[derive(Default)]
 struct SessionState {
@@ -4156,7 +4201,7 @@ fn build_deterministic_round_nonce_and_commitment(
     // Defense-in-depth: bind nonces directly to message bytes in addition to
     // `round_id` so future round ID schema changes cannot weaken nonce safety.
     let mut signing_share_bytes = key_package.signing_share().serialize();
-    let nonce_seed = deterministic_seed(&[
+    let mut nonce_seed = deterministic_seed(&[
         b"round-nonce",
         &signing_share_bytes,
         session_id.as_bytes(),
@@ -4165,7 +4210,8 @@ fn build_deterministic_round_nonce_and_commitment(
         &participant_identifier.to_le_bytes(),
     ]);
     signing_share_bytes.zeroize();
-    let mut nonce_rng = ChaCha20Rng::from_seed(nonce_seed);
+    let mut nonce_rng = ZeroizingChaCha20Rng::from_seed(nonce_seed);
+    nonce_seed.zeroize();
 
     frost::round1::commit(key_package.signing_share(), &mut nonce_rng)
 }
@@ -5121,7 +5167,7 @@ pub fn run_dkg(request: RunDkgRequest) -> Result<DkgResult, EngineError> {
 
     let mut keygen_rng_seed = [0u8; 32];
     OsRng.fill_bytes(&mut keygen_rng_seed);
-    let keygen_rng = ChaCha20Rng::from_seed(keygen_rng_seed);
+    let keygen_rng = ZeroizingChaCha20Rng::from_seed(keygen_rng_seed);
     keygen_rng_seed.zeroize();
 
     let (secret_shares, public_key_package) = frost::keys::generate_with_dealer(

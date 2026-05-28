@@ -50,9 +50,10 @@ where
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(Ok(bytes)) => success_from_serialized(bytes),
         Ok(Err(err)) => error_result(err),
-        Err(_) => error_result(EngineError::Internal(
-            "panic crossed FFI boundary".to_string(),
-        )),
+        Err(payload) => error_result(EngineError::Internal(format!(
+            "panic crossed FFI boundary: {}",
+            panic_payload_message(payload)
+        ))),
     }
 }
 
@@ -81,6 +82,17 @@ fn error_result(error: EngineError) -> TbtcSignerResult {
         status_code: STATUS_ERROR,
         buffer: to_ffi_buffer(bytes),
     }
+}
+
+fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return (*message).to_string();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+
+    "non-string panic payload".to_string()
 }
 
 fn request_bytes<'a>(ptr: *const u8, len: usize) -> Result<&'a [u8], EngineError> {
@@ -150,5 +162,26 @@ mod tests {
             message.contains("exceeds maximum"),
             "unexpected validation message: {message}"
         );
+    }
+
+    #[test]
+    fn ffi_entry_preserves_string_panic_payload() {
+        let result = ffi_entry(|| -> Result<Vec<u8>, EngineError> {
+            panic!("TBTC_SIGNER_PROFILE must be production or development");
+        });
+        assert_eq!(result.status_code, STATUS_ERROR);
+
+        let bytes = unsafe { std::slice::from_raw_parts(result.buffer.ptr, result.buffer.len) };
+        let response: ErrorResponse = serde_json::from_slice(bytes).expect("decode error response");
+        assert_eq!(response.code, "internal_error");
+        assert!(
+            response
+                .message
+                .contains("TBTC_SIGNER_PROFILE must be production or development"),
+            "panic payload was not preserved: {}",
+            response.message
+        );
+
+        free_buffer(result.buffer.ptr, result.buffer.len);
     }
 }
