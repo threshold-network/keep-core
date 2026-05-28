@@ -153,6 +153,12 @@ func ResultDigest(
 	if chainID == nil {
 		return [32]byte{}, fmt.Errorf("chain ID is nil")
 	}
+	if bridge == (common.Address{}) {
+		return [32]byte{}, fmt.Errorf("bridge address is zero")
+	}
+	if registry == (common.Address{}) {
+		return [32]byte{}, fmt.Errorf("registry address is zero")
+	}
 	if seed == nil {
 		return [32]byte{}, fmt.Errorf("seed is nil")
 	}

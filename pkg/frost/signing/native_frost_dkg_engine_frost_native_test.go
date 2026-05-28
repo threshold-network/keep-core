@@ -5,11 +5,16 @@ package signing
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/keep-network/keep-core/internal/testutils"
+	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/chain/local_v1"
 	"github.com/keep-network/keep-core/pkg/net/local"
+	"github.com/keep-network/keep-core/pkg/operator"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
@@ -249,6 +254,10 @@ func TestExecuteNativeFROSTDKG(t *testing.T) {
 
 	engine := &deterministicNativeFROSTDKGEngine{}
 	includedMembers := []group.MemberIndex{1, 2, 3}
+	operatorPublicKeys, membershipValidator := nativeFROSTDKGTestMembership(
+		t,
+		includedMembers,
+	)
 
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(includedMembers))
@@ -259,7 +268,7 @@ func TestExecuteNativeFROSTDKG(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			provider := local.Connect()
+			provider := local.ConnectWithKey(operatorPublicKeys[memberIndex])
 			channel, err := provider.BroadcastChannelFor(channelName)
 			if err != nil {
 				errChan <- err
@@ -277,6 +286,7 @@ func TestExecuteNativeFROSTDKG(t *testing.T) {
 					SessionID:              "session-1",
 					IncludedMembersIndexes: includedMembers,
 					Channel:                channel,
+					MembershipValidator:    membershipValidator,
 				},
 				engine,
 			)
@@ -298,6 +308,96 @@ func TestExecuteNativeFROSTDKG(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func TestExecuteNativeFROSTDKGRejectsNilMembershipValidator(t *testing.T) {
+	channel, err := local.Connect().BroadcastChannelFor(
+		"native-frost-dkg-nil-membership-validator-test",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = ExecuteNativeFROSTDKG(
+		context.Background(),
+		nil,
+		&NativeFROSTDKGRequest{
+			MemberIndex:            1,
+			GroupSize:              2,
+			Threshold:              2,
+			SessionID:              "session-nil-membership-validator",
+			IncludedMembersIndexes: []group.MemberIndex{1, 2},
+			Channel:                channel,
+		},
+		&deterministicNativeFROSTDKGEngine{},
+	)
+	if err == nil {
+		t.Fatal("expected nil membership validator rejection")
+	}
+	if !strings.Contains(err.Error(), "membership validator is nil") {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
+func TestValidateNativeFROSTDKGParticipantIdentifier(t *testing.T) {
+	identifiersByMemberIndex, _, err := nativeFROSTDKGParticipantIdentifiers(
+		[]group.MemberIndex{1, 2},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := validateNativeFROSTDKGParticipantIdentifier(
+		identifiersByMemberIndex,
+		2,
+		identifiersByMemberIndex[2],
+	); err != nil {
+		t.Fatalf("expected participant identifier to match: [%v]", err)
+	}
+
+	err = validateNativeFROSTDKGParticipantIdentifier(
+		identifiersByMemberIndex,
+		2,
+		identifiersByMemberIndex[1],
+	)
+	if err == nil {
+		t.Fatal("expected mismatched participant identifier rejection")
+	}
+	if !strings.Contains(err.Error(), "participant identifier mismatch") {
+		t.Fatalf("unexpected mismatch error: [%v]", err)
+	}
+}
+
+func nativeFROSTDKGTestMembership(
+	t *testing.T,
+	memberIndexes []group.MemberIndex,
+) (map[group.MemberIndex]*operator.PublicKey, *group.MembershipValidator) {
+	t.Helper()
+
+	localChain := local_v1.Connect(3, 3)
+	signing := localChain.Signing()
+	operatorPublicKeys := make(map[group.MemberIndex]*operator.PublicKey, len(memberIndexes))
+	operatorAddresses := make([]chain.Address, len(memberIndexes))
+
+	for i, memberIndex := range memberIndexes {
+		_, operatorPublicKey, err := operator.GenerateKeyPair(local.DefaultCurve)
+		if err != nil {
+			t.Fatal(err)
+		}
+		operatorPublicKeys[memberIndex] = operatorPublicKey
+
+		operatorAddress, err := signing.PublicKeyToAddress(operatorPublicKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		operatorAddresses[i] = operatorAddress
+	}
+
+	return operatorPublicKeys, group.NewMembershipValidator(
+		&testutils.MockLogger{},
+		operatorAddresses,
+		signing,
+	)
 }
 
 func TestNativeFROSTDKGResultSignerMaterial(t *testing.T) {

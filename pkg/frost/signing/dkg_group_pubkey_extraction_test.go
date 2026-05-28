@@ -98,6 +98,29 @@ func TestExtractDkgGroupPublicKey_FrostUniFFIV2_RejectsNonHexVerifyingKey(t *tes
 	}
 }
 
+func TestExtractDkgGroupPublicKey_FrostUniFFIV2_RejectsWrongLength(t *testing.T) {
+	payload, _ := json.Marshal(&nativeFROSTUniFFIV2SignerMaterial{
+		KeyPackage: &NativeFROSTKeyPackage{
+			Identifier: "id-1",
+			Data:       []byte{0x01},
+		},
+		PublicKeyPackage: &NativeFROSTPublicKeyPackage{
+			VerifyingKey: strings.Repeat("11", 31),
+		},
+	})
+	mat := &NativeSignerMaterial{
+		Format:  NativeSignerMaterialFormatFrostUniFFIV2,
+		Payload: payload,
+	}
+	_, err := ExtractDkgGroupPublicKeyFromMaterial(mat)
+	if err == nil {
+		t.Fatal("expected error for wrong-length VerifyingKey")
+	}
+	if !strings.Contains(err.Error(), "must be 32 bytes") {
+		t.Fatalf("error must mention length problem; got %v", err)
+	}
+}
+
 func TestExtractDkgGroupPublicKey_FrostTBTCSignerV1_ReturnsKeyGroupBytes(t *testing.T) {
 	const keyGroup = "group-A"
 	payload, _ := json.Marshal(&NativeTBTCSignerMaterialPayload{

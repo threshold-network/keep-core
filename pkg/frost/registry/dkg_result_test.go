@@ -79,6 +79,39 @@ func TestResultDigestMatchesCrossRepoFixture(t *testing.T) {
 	}
 }
 
+func TestResultDigestRejectsZeroBindingAddresses(t *testing.T) {
+	fixture := loadV4DigestFixture(t)
+	chainID := mustBigInt(t, fixture.ChainID)
+	seed := mustBigInt(t, fixture.Seed)
+	outputKey := mustOutputKey(t, fixture.XOnlyOutputKey)
+
+	_, err := ResultDigest(
+		chainID,
+		common.Address{},
+		common.HexToAddress(fixture.Registry),
+		seed,
+		outputKey,
+		FullMembers(fixture.Members),
+		MisbehavedMemberIndices(fixture.MisbehavedMembersIndices),
+	)
+	if err == nil || !strings.Contains(err.Error(), "bridge address is zero") {
+		t.Fatalf("expected zero bridge rejection, got [%v]", err)
+	}
+
+	_, err = ResultDigest(
+		chainID,
+		common.HexToAddress(fixture.Bridge),
+		common.Address{},
+		seed,
+		outputKey,
+		FullMembers(fixture.Members),
+		MisbehavedMemberIndices(fixture.MisbehavedMembersIndices),
+	)
+	if err == nil || !strings.Contains(err.Error(), "registry address is zero") {
+		t.Fatalf("expected zero registry rejection, got [%v]", err)
+	}
+}
+
 func TestMembersHashesKeepFullAndActiveSetsDistinct(t *testing.T) {
 	fixture := loadV4DigestFixture(t)
 	fullMembers := FullMembers(fixture.Members)

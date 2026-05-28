@@ -222,6 +222,7 @@ func ExecuteNativeFROSTDKG(
 		request,
 		includedMembersSet,
 		includedMembersIndexes,
+		identifiersByMemberIndex,
 	)
 	if err != nil {
 		return nil, err
@@ -288,6 +289,7 @@ func ExecuteNativeFROSTDKG(
 		request,
 		includedMembersSet,
 		includedMembersIndexes,
+		identifiersByMemberIndex,
 	)
 	if err != nil {
 		return nil, err
@@ -350,6 +352,9 @@ func includedMembersFromDKGRequest(
 	}
 	if request.Channel == nil {
 		return nil, nil, fmt.Errorf("broadcast channel is nil")
+	}
+	if request.MembershipValidator == nil {
+		return nil, nil, fmt.Errorf("membership validator is nil")
 	}
 	if request.GroupSize > int(group.MaxMemberIndex) {
 		return nil, nil, fmt.Errorf("group size [%d] exceeds maximum", request.GroupSize)
@@ -435,6 +440,7 @@ func collectNativeFROSTDKGRoundOnePackageMessages(
 	request *NativeFROSTDKGRequest,
 	includedMembersSet map[group.MemberIndex]struct{},
 	includedMembersIndexes []group.MemberIndex,
+	identifiersByMemberIndex map[group.MemberIndex]string,
 ) (map[group.MemberIndex]*nativeFROSTDKGRoundOnePackageMessage, error) {
 	expectedMessagesCount := len(includedMembersIndexes) - 1
 	if expectedMessagesCount <= 0 {
@@ -458,6 +464,18 @@ func collectNativeFROSTDKGRoundOnePackageMessages(
 			payload.SessionID(),
 			message.SenderPublicKey(),
 		) {
+			return
+		}
+		if err := validateNativeFROSTDKGParticipantIdentifier(
+			identifiersByMemberIndex,
+			payload.SenderID(),
+			payload.ParticipantIdentifier,
+		); err != nil {
+			protocolLogger.Warnf(
+				"dropping native FROST DKG round-one package from sender [%d]: [%v]",
+				payload.SenderID(),
+				err,
+			)
 			return
 		}
 
@@ -502,6 +520,7 @@ func collectNativeFROSTDKGRoundTwoPackageMessages(
 	request *NativeFROSTDKGRequest,
 	includedMembersSet map[group.MemberIndex]struct{},
 	includedMembersIndexes []group.MemberIndex,
+	identifiersByMemberIndex map[group.MemberIndex]string,
 ) (map[group.MemberIndex]*nativeFROSTDKGRoundTwoPackageMessage, error) {
 	expectedMessagesCount := len(includedMembersIndexes) - 1
 	if expectedMessagesCount <= 0 {
@@ -529,6 +548,31 @@ func collectNativeFROSTDKGRoundTwoPackageMessages(
 			payload.SessionID(),
 			message.SenderPublicKey(),
 		) {
+			return
+		}
+		if err := validateNativeFROSTDKGParticipantIdentifier(
+			identifiersByMemberIndex,
+			payload.SenderID(),
+			payload.SenderParticipantIdentifier,
+		); err != nil {
+			protocolLogger.Warnf(
+				"dropping native FROST DKG round-two package from sender [%d]: [%v]",
+				payload.SenderID(),
+				err,
+			)
+			return
+		}
+		if err := validateNativeFROSTDKGParticipantIdentifier(
+			identifiersByMemberIndex,
+			request.MemberIndex,
+			payload.PackageParticipantIdentifier,
+		); err != nil {
+			protocolLogger.Warnf(
+				"dropping native FROST DKG round-two package from sender [%d] for receiver [%d]: [%v]",
+				payload.SenderID(),
+				request.MemberIndex,
+				err,
+			)
 			return
 		}
 
@@ -588,10 +632,31 @@ func shouldAcceptNativeFROSTDKGMessage(
 		return false
 	}
 	if request.MembershipValidator == nil {
-		return true
+		return false
 	}
 
 	return request.MembershipValidator.IsValidMembership(senderID, senderPublicKey)
+}
+
+func validateNativeFROSTDKGParticipantIdentifier(
+	identifiersByMemberIndex map[group.MemberIndex]string,
+	memberIndex group.MemberIndex,
+	participantIdentifier string,
+) error {
+	expectedIdentifier, ok := identifiersByMemberIndex[memberIndex]
+	if !ok {
+		return fmt.Errorf("no expected participant identifier for member [%d]", memberIndex)
+	}
+	if participantIdentifier != expectedIdentifier {
+		return fmt.Errorf(
+			"participant identifier mismatch for member [%d]: expected [%s], got [%s]",
+			memberIndex,
+			expectedIdentifier,
+			participantIdentifier,
+		)
+	}
+
+	return nil
 }
 
 func nativeFROSTDKGRoundOnePackageMessagesEqual(

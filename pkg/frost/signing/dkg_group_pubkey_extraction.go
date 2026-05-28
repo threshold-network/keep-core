@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+
+	"github.com/keep-network/keep-core/pkg/frost"
 )
 
 // ErrUnsupportedSignerMaterialFormat is returned by
@@ -107,6 +109,13 @@ func extractDkgGroupPublicKeyFromUniFFIV2(
 		return nil, fmt.Errorf(
 			"dkg group public key: FrostUniFFIV2 verifying key is not hex: %w",
 			err,
+		)
+	}
+	if len(raw) != frost.OutputKeySize {
+		return nil, fmt.Errorf(
+			"dkg group public key: FrostUniFFIV2 verifying key must be %d bytes, got %d",
+			frost.OutputKeySize,
+			len(raw),
 		)
 	}
 	return raw, nil
