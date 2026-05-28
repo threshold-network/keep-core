@@ -20,6 +20,13 @@ type attemptContextHashCarrier interface {
 	GetAttemptContextHash() ([AttemptContextHashFieldLength]byte, bool)
 }
 
+// outboundAttemptContextHashCarrier is implemented by every protocol
+// message type that can carry the optional AttemptContextHash field
+// on outbound sends.
+type outboundAttemptContextHashCarrier interface {
+	SetAttemptContextHash([AttemptContextHashFieldLength]byte)
+}
+
 // ErrAttemptContextHashMissing is returned when a message lacks
 // the AttemptContextHash field while the session is bound to a
 // ROAST attempt that requires it. Distinct sentinel so callers
@@ -79,4 +86,20 @@ func verifyMessageAttemptContextHash(
 		)
 	}
 	return nil
+}
+
+// setMessageAttemptContextHashIfBound attaches the current ROAST
+// attempt binding to an outbound message. Default/non-ROAST sessions
+// have no binding, so the field stays absent for backward
+// compatibility.
+func setMessageAttemptContextHashIfBound(
+	msg outboundAttemptContextHashCarrier,
+	sessionID string,
+) {
+	_, ctx, ok := currentAttemptHandleForCollect(sessionID)
+	if !ok {
+		return
+	}
+
+	msg.SetAttemptContextHash(ctx.Hash())
 }

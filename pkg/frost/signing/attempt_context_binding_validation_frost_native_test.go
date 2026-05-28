@@ -26,6 +26,13 @@ func (s stubMessage) GetAttemptContextHash() (
 	return s.hash, s.present
 }
 
+func (s *stubMessage) SetAttemptContextHash(
+	hash [AttemptContextHashFieldLength]byte,
+) {
+	s.hash = hash
+	s.present = true
+}
+
 func newOrchestrationTestContextForValidation(t *testing.T) attempt.AttemptContext {
 	t.Helper()
 	ctx, err := attempt.NewAttemptContext(
@@ -155,5 +162,68 @@ func TestVerifyMessageAttemptContextHash_RealMessageTypeIntegration(t *testing.T
 	err := verifyMessageAttemptContextHash(msg, "session-real-msg")
 	if !errors.Is(err, ErrAttemptContextHashMismatch) {
 		t.Fatalf("rebinding must cause mismatch; got %v", err)
+	}
+}
+
+func TestSetMessageAttemptContextHashIfBound_AttachesBoundHash(t *testing.T) {
+	ResetSessionHandleRegistryForTest()
+	t.Cleanup(ResetSessionHandleRegistryForTest)
+
+	ctx := newOrchestrationTestContextForValidation(t)
+	SetCurrentAttemptHandleForSession("session-outbound", roast.AttemptHandle{}, ctx)
+
+	msg := &stubMessage{}
+	setMessageAttemptContextHashIfBound(msg, "session-outbound")
+
+	got, present := msg.GetAttemptContextHash()
+	if !present {
+		t.Fatal("expected outbound message to carry attempt context hash")
+	}
+	if got != ctx.Hash() {
+		t.Fatalf("unexpected attempt context hash: got %x want %x", got, ctx.Hash())
+	}
+}
+
+func TestSetMessageAttemptContextHashIfBound_NoBindingLeavesAbsent(t *testing.T) {
+	ResetSessionHandleRegistryForTest()
+	t.Cleanup(ResetSessionHandleRegistryForTest)
+
+	msg := &stubMessage{}
+	setMessageAttemptContextHashIfBound(msg, "session-no-binding")
+
+	if _, present := msg.GetAttemptContextHash(); present {
+		t.Fatal("expected no attempt context hash without a session binding")
+	}
+}
+
+func TestSetMessageAttemptContextHashIfBound_AllOutboundMessageTypes(t *testing.T) {
+	ResetSessionHandleRegistryForTest()
+	t.Cleanup(ResetSessionHandleRegistryForTest)
+
+	ctx := newOrchestrationTestContextForValidation(t)
+	SetCurrentAttemptHandleForSession("session-all-types", roast.AttemptHandle{}, ctx)
+	expected := ctx.Hash()
+
+	messages := []attemptContextHashCarrier{
+		&nativeFROSTRoundOneCommitmentMessage{},
+		&nativeFROSTRoundTwoSignatureShareMessage{},
+		&buildTaggedTBTCSignerRoundContributionMessage{},
+	}
+
+	for _, msg := range messages {
+		outbound, ok := msg.(outboundAttemptContextHashCarrier)
+		if !ok {
+			t.Fatalf("%T does not implement outbound carrier", msg)
+		}
+
+		setMessageAttemptContextHashIfBound(outbound, "session-all-types")
+
+		got, present := msg.GetAttemptContextHash()
+		if !present {
+			t.Fatalf("%T did not get attempt context hash", msg)
+		}
+		if got != expected {
+			t.Fatalf("%T hash mismatch: got %x want %x", msg, got, expected)
+		}
 	}
 }

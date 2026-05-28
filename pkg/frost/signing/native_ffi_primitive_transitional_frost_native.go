@@ -852,6 +852,7 @@ func buildTaggedTBTCSignerRoundContributions(
 		ContributionIdentifier: ownContribution.Identifier,
 		ContributionData:       append([]byte{}, ownContribution.Data...),
 	}
+	setMessageAttemptContextHashIfBound(roundContributionMessage, request.SessionID)
 
 	if err := request.Channel.Send(
 		ctx,

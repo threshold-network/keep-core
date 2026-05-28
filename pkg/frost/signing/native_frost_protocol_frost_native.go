@@ -341,6 +341,7 @@ func executeNativeFROSTSigning(
 		ParticipantIdentifier: ownCommitment.Identifier,
 		CommitmentData:        append([]byte{}, ownCommitment.Data...),
 	}
+	setMessageAttemptContextHashIfBound(roundOneMessage, request.SessionID)
 
 	if err := request.Channel.Send(
 		ctx,
@@ -433,6 +434,7 @@ func executeNativeFROSTSigning(
 		ParticipantIdentifier: ownSignatureShare.Identifier,
 		SignatureShareData:    append([]byte{}, ownSignatureShare.Data...),
 	}
+	setMessageAttemptContextHashIfBound(roundTwoMessage, request.SessionID)
 
 	if err := request.Channel.Send(
 		ctx,
