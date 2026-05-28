@@ -19,6 +19,7 @@ pub struct TbtcSignerResult {
 
 const STATUS_OK: i32 = 0;
 const STATUS_ERROR: i32 = 1;
+const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn success_from_serialized(payload: Vec<u8>) -> TbtcSignerResult {
     TbtcSignerResult {
@@ -83,6 +84,13 @@ fn error_result(error: EngineError) -> TbtcSignerResult {
 }
 
 fn request_bytes<'a>(ptr: *const u8, len: usize) -> Result<&'a [u8], EngineError> {
+    if len > MAX_REQUEST_BYTES {
+        return Err(EngineError::Validation(format!(
+            "request buffer length [{}] exceeds maximum [{}]",
+            len, MAX_REQUEST_BYTES
+        )));
+    }
+
     if ptr.is_null() {
         return Err(EngineError::Validation(
             "request buffer pointer must be non-null".to_string(),
@@ -125,5 +133,22 @@ mod tests {
         assert_eq!(bytes, b"ok");
 
         free_buffer(result.buffer.ptr, result.buffer.len);
+    }
+
+    #[test]
+    fn request_bytes_rejects_payloads_above_max_without_dereferencing() {
+        let err = request_bytes(
+            std::ptr::NonNull::<u8>::dangling().as_ptr(),
+            MAX_REQUEST_BYTES + 1,
+        )
+        .expect_err("oversized request should be rejected");
+
+        let EngineError::Validation(message) = err else {
+            panic!("unexpected error variant");
+        };
+        assert!(
+            message.contains("exceeds maximum"),
+            "unexpected validation message: {message}"
+        );
     }
 }

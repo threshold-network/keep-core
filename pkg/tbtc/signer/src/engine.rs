@@ -783,6 +783,10 @@ fn record_hardening_operation_latency(operation: HardeningOperation, duration_ms
 }
 
 fn provenance_gate_enforced() -> bool {
+    if signer_profile_is_production() {
+        return true;
+    }
+
     std::env::var(TBTC_SIGNER_ENFORCE_PROVENANCE_GATE_ENV)
         .map(|raw_value| truthy_env_flag(&raw_value))
         .unwrap_or(false)
@@ -2834,18 +2838,8 @@ fn signer_profile_is_production() -> bool {
     let raw = std::env::var(TBTC_SIGNER_PROFILE_ENV).unwrap_or_default();
     let normalized = raw.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        TBTC_SIGNER_PROFILE_PRODUCTION => true,
-        // Missing/empty defaults to development. The earlier strict variant
-        // panicked on missing env, but parallel `cargo test` runs race on
-        // `set_var`/`remove_var` across tests that don't all serialize via
-        // `lock_test_state`, so a non-production test could observe an empty
-        // window between another test's set and read and abort the binary.
-        // Typos and unrecognized values still fail closed so an operator
-        // cannot silently bypass production-mode gates via
-        // `TBTC_SIGNER_PROFILE=prod` or similar; the typo path is the
-        // realistic operator failure mode the strict missing-→-panic was
-        // meant to defend against.
-        TBTC_SIGNER_PROFILE_DEVELOPMENT | "" => false,
+        TBTC_SIGNER_PROFILE_PRODUCTION | "" => true,
+        TBTC_SIGNER_PROFILE_DEVELOPMENT => false,
         other => panic!(
             "{} must be '{}' or '{}'; got {:?}",
             TBTC_SIGNER_PROFILE_ENV,
@@ -6430,9 +6424,9 @@ pub fn reset_for_tests() {
     );
     std::env::remove_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV);
     std::env::remove_var(TBTC_SIGNER_STATE_KEY_COMMAND_TIMEOUT_SECS_ENV);
-    // Tests default to the explicit development profile so missing-env paths
-    // panic in production code while existing tests continue to run under
-    // development behavior.
+    // Tests default to the explicit development profile so the production-safe
+    // missing-env default does not route unrelated tests through production
+    // policy gates.
     std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_DEVELOPMENT);
     std::env::set_var(
         TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX_ENV,
@@ -6672,6 +6666,30 @@ mod tests {
         )
     }
 
+    fn configure_valid_provenance_attestation_for_tests() {
+        let (trust_root, attestation_payload, attestation_signature) =
+            build_signed_provenance_attestation(
+                TBTC_SIGNER_REQUIRED_ATTESTATION_STATUS_APPROVED,
+                TBTC_SIGNER_RUNTIME_VERSION,
+                Some(now_unix() + 3600),
+            );
+
+        std::env::set_var(
+            TBTC_SIGNER_PROVENANCE_ATTESTATION_STATUS_ENV,
+            TBTC_SIGNER_REQUIRED_ATTESTATION_STATUS_APPROVED,
+        );
+        std::env::set_var(TBTC_SIGNER_PROVENANCE_TRUST_ROOT_ENV, trust_root);
+        std::env::set_var(
+            TBTC_SIGNER_PROVENANCE_ATTESTATION_PAYLOAD_ENV,
+            attestation_payload,
+        );
+        std::env::set_var(
+            TBTC_SIGNER_PROVENANCE_ATTESTATION_SIGNATURE_HEX_ENV,
+            attestation_signature,
+        );
+        std::env::set_var(TBTC_SIGNER_MIN_APPROVED_VERSION_ENV, "0.1.0");
+    }
+
     fn cleanup_test_state_artifacts(path: &Path) {
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(state_lock_file_path(path));
@@ -6764,6 +6782,61 @@ mod tests {
             panic!("unexpected error variant");
         };
         assert_eq!(reason_code, "bootstrap_dealer_dkg_disabled_in_production");
+    }
+
+    #[test]
+    fn run_dkg_rejects_bootstrap_dealer_dkg_when_profile_is_missing_or_empty() {
+        let _guard = lock_test_state();
+        reset_for_tests();
+        clear_state_storage_policy_overrides();
+
+        for profile_value in [None, Some(" ")] {
+            match profile_value {
+                Some(value) => std::env::set_var(TBTC_SIGNER_PROFILE_ENV, value),
+                None => std::env::remove_var(TBTC_SIGNER_PROFILE_ENV),
+            }
+
+            let err = run_dkg(RunDkgRequest {
+                session_id: format!(
+                    "session-default-production-bootstrap-dkg-{}",
+                    profile_value.unwrap_or("missing").trim()
+                ),
+                participants: vec![
+                    crate::api::DkgParticipant {
+                        identifier: 1,
+                        public_key_hex: "02aa".to_string(),
+                    },
+                    crate::api::DkgParticipant {
+                        identifier: 2,
+                        public_key_hex: "02bb".to_string(),
+                    },
+                ],
+                threshold: 2,
+            })
+            .expect_err("missing/empty profile should reject bootstrap dealer DKG");
+
+            let EngineError::LifecyclePolicyRejected { reason_code, .. } = err else {
+                panic!("unexpected error variant");
+            };
+            assert_eq!(reason_code, "bootstrap_dealer_dkg_disabled_in_production");
+        }
+    }
+
+    #[test]
+    fn production_profile_forces_provenance_gate_without_env_flag() {
+        let _guard = lock_test_state();
+        reset_for_tests();
+        clear_state_storage_policy_overrides();
+
+        std::env::remove_var(TBTC_SIGNER_ENFORCE_PROVENANCE_GATE_ENV);
+        std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_PRODUCTION);
+        assert!(provenance_gate_enforced());
+
+        std::env::remove_var(TBTC_SIGNER_PROFILE_ENV);
+        assert!(provenance_gate_enforced());
+
+        std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_DEVELOPMENT);
+        assert!(!provenance_gate_enforced());
     }
 
     #[test]
@@ -9596,6 +9669,7 @@ mod tests {
 
         // RAII guards restore the prior env on Drop so a panic or early return
         // does not leak production-profile state into subsequent tests.
+        configure_valid_provenance_attestation_for_tests();
         let _signer_profile = SignerProfileGuard::production();
         let _roast_strict_mode = RoastStrictModeGuard::set(Some("false"));
 
@@ -15109,6 +15183,7 @@ mod tests {
         reset_for_tests();
 
         std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_PRODUCTION);
+        configure_valid_provenance_attestation_for_tests();
         std::env::set_var(
             TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
             TBTC_SIGNER_STATE_KEY_PROVIDER_ENV_DEFAULT,
@@ -15131,6 +15206,7 @@ mod tests {
 
         std::env::remove_var(TBTC_SIGNER_STATE_PATH_ENV);
         std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_PRODUCTION);
+        configure_valid_provenance_attestation_for_tests();
         std::env::set_var(
             TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
             TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND,
@@ -15176,6 +15252,7 @@ mod tests {
         reset_for_tests();
 
         std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_PRODUCTION);
+        configure_valid_provenance_attestation_for_tests();
         std::env::set_var(
             TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
             TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND,
@@ -15199,6 +15276,7 @@ mod tests {
         reset_for_tests();
 
         std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_PRODUCTION);
+        configure_valid_provenance_attestation_for_tests();
         std::env::set_var(
             TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
             TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND,
@@ -15225,6 +15303,7 @@ mod tests {
         reset_for_tests();
 
         std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_PRODUCTION);
+        configure_valid_provenance_attestation_for_tests();
         std::env::set_var(
             TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
             TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND,
@@ -15290,6 +15369,7 @@ mod tests {
         reset_for_tests();
 
         std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_PRODUCTION);
+        configure_valid_provenance_attestation_for_tests();
         std::env::set_var(
             TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
             TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND,
@@ -15317,6 +15397,7 @@ mod tests {
         reset_for_tests();
 
         std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_PRODUCTION);
+        configure_valid_provenance_attestation_for_tests();
         std::env::set_var(
             TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
             TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND,
@@ -15350,6 +15431,7 @@ mod tests {
         reset_for_tests();
 
         std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_PRODUCTION);
+        configure_valid_provenance_attestation_for_tests();
         std::env::set_var(
             TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
             TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND,

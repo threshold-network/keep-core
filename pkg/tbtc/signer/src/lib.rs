@@ -49,12 +49,8 @@ fn signer_profile_is_production() -> bool {
     let raw = std::env::var(TBTC_SIGNER_PROFILE_ENV).unwrap_or_default();
     let normalized = raw.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        TBTC_SIGNER_PROFILE_PRODUCTION => true,
-        // See engine::signer_profile_is_production for the rationale: missing
-        // is tolerated as development so parallel cargo test runs don't race
-        // on env mutation, but typos still panic so operators cannot silently
-        // bypass production-mode gates via `TBTC_SIGNER_PROFILE=prod`.
-        TBTC_SIGNER_PROFILE_DEVELOPMENT | "" => false,
+        TBTC_SIGNER_PROFILE_PRODUCTION | "" => true,
+        TBTC_SIGNER_PROFILE_DEVELOPMENT => false,
         other => panic!(
             "{} must be '{}' or '{}'; got {:?}",
             TBTC_SIGNER_PROFILE_ENV,
@@ -1471,6 +1467,22 @@ mod tests {
         let _allow_bootstrap_env = EnvVarGuard::set(super::TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV, "true");
         let _profile_env = EnvVarGuard::set(super::TBTC_SIGNER_PROFILE_ENV, "production");
 
+        assert!(!super::bootstrap_mode_enabled_from_env());
+    }
+
+    #[test]
+    fn bootstrap_mode_env_is_ignored_when_profile_is_missing_or_empty() {
+        let _guard = crate::engine::lock_test_state();
+        let _bootstrap_mode_guard = BootstrapModeGuard::set(None);
+        let _allow_bootstrap_env = EnvVarGuard::set(super::TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV, "true");
+        let _profile_env = EnvVarGuard::unset(super::TBTC_SIGNER_PROFILE_ENV);
+
+        assert!(super::signer_profile_is_production());
+        assert!(!super::bootstrap_mode_enabled_from_env());
+
+        std::env::set_var(super::TBTC_SIGNER_PROFILE_ENV, " ");
+
+        assert!(super::signer_profile_is_production());
         assert!(!super::bootstrap_mode_enabled_from_env());
     }
 
