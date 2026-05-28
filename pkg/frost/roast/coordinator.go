@@ -13,6 +13,11 @@ import (
 //
 // Selection is pseudo-random but stable across all participants that use the
 // same attempt seed and attempt number.
+//
+// The RNG is intentionally deterministic and non-cryptographic. Callers must
+// derive attemptSeed from group-agreed, non-grindable session inputs; if an
+// adversary can choose or repeatedly grind those inputs, they can bias the
+// coordinator selection by searching for a favorable shuffle.
 func SelectCoordinator(
 	includedMembersIndexes []group.MemberIndex,
 	attemptSeed int64,

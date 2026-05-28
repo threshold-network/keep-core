@@ -4,10 +4,13 @@ package signing
 
 import (
 	"encoding/json"
+	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ipfs/go-log/v2"
+	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
@@ -63,6 +66,26 @@ func TestEntry_StaticFallback_NoCoordinatorRegistered_TaggedBuild(t *testing.T) 
 	}
 }
 
+func TestEntry_LogsSignerMaterialFormatTelemetry(t *testing.T) {
+	logger := &captureInfoLogger{}
+	cleanup, err := attemptRoastRetryOrchestrationFromRequest(
+		newEntryTestRequest(t), logger,
+	)
+	if err != nil {
+		t.Fatalf("static fallback must not surface an error: %v", err)
+	}
+	if cleanup != nil {
+		t.Fatal("static fallback must not return a cleanup function")
+	}
+
+	joined := strings.Join(logger.infoMessages, "\n")
+	if !strings.Contains(joined, "signer_material_format") ||
+		!strings.Contains(joined, NativeSignerMaterialFormatFrostUniFFIV2) ||
+		!strings.Contains(joined, "key_group_id") {
+		t.Fatalf("missing signer-material telemetry in logs: [%s]", joined)
+	}
+}
+
 func TestEntry_StaticFallback_UnsupportedSignerFormat(t *testing.T) {
 	// FrostUniFFIV1 material -> ExtractDkgGroupPublicKeyFromMaterial
 	// returns ErrUnsupportedSignerMaterialFormat. The helper must
@@ -102,6 +125,15 @@ func TestEntry_StaticFallback_OnNilSignerMaterial(t *testing.T) {
 	if cleanup != nil {
 		t.Fatal("static fallback must not return cleanup")
 	}
+}
+
+type captureInfoLogger struct {
+	testutils.MockLogger
+	infoMessages []string
+}
+
+func (cil *captureInfoLogger) Infof(format string, args ...interface{}) {
+	cil.infoMessages = append(cil.infoMessages, fmt.Sprintf(format, args...))
 }
 
 func TestEntry_StaticFallback_OnZeroAttemptNumber(t *testing.T) {

@@ -69,6 +69,12 @@ func attemptRoastRetryOrchestrationFromRequest(
 		)
 		return nil, nil
 	}
+	logger.Infof(
+		"ROAST signer-material telemetry: session=%q key_group_id=%q signer_material_format=%q",
+		request.SessionID,
+		ctx.KeyGroupID,
+		request.SignerMaterial.Format,
+	)
 
 	handle, cleanup, err := BeginOrchestrationForSession(request.SessionID, ctx)
 	if err != nil {

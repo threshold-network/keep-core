@@ -22,7 +22,9 @@ type OutputKey [OutputKeySize]byte
 // WalletPublicKeyHashCompatibilityAlias computes the 20-byte compatibility
 // alias from a Taproot output key:
 // HASH160(0x02 || xOnlyOutputKey).
-// The x-only output key is assumed to already use BIP-340's even-Y convention.
+// The x-only output key is assumed to already use BIP-340's even-Y convention;
+// callers must not strip a compressed odd-Y key without first applying the
+// BIP-340 negation rule upstream.
 func WalletPublicKeyHashCompatibilityAlias(outputKey OutputKey) [20]byte {
 	serialized := make([]byte, 0, 1+OutputKeySize)
 	serialized = append(serialized, byte(0x02))
