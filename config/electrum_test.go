@@ -26,7 +26,7 @@ func TestResolveElectrum(t *testing.T) {
 		bitcoin.Testnet: {
 			expectedConfig: []electrum.Config{
 				{
-					URL: "wss://electrum.testnet.boar.network:443/QxbJgaSLUHqrgAa9BW7bDpnGPxrlhnCa",
+					URL: "tcp://134.199.227.217:50001",
 				},
 			},
 		},
