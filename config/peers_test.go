@@ -23,8 +23,8 @@ func TestResolvePeers(t *testing.T) {
 		"sepolia network": {
 			network: network.Testnet,
 			expectedPeers: []string{
-				"/dns4/keep-operator-1.test.keep-nodes.io/tcp/3920/ipfs/16Uiu2HAmDrk2Bh4VNPUJfKRHTE2CvH9xfKzN4KFnmRJbGLkJFDqL",
-				"/dns4/keep-operator-2.test.keep-nodes.io/tcp/3920/ipfs/16Uiu2HAm3ex8rGzwFpWYbRreRUiX9JEYCKxp7KDMzB8RZ6fQWnMa",
+				"/ip4/143.198.69.177/tcp/3919/ipfs/16Uiu2HAkvjus5MH3y2tJBC6Bt1Ff9tiSowxGCw8J4FzLonnfDeG2",
+				"/ip4/143.198.69.177/tcp/3920/ipfs/16Uiu2HAmSBn6CgZ4r7HnC4RVMMFMe5vfkLvykUUfS3MnKiHLSuPD",
 			},
 		},
 		"developer network": {
