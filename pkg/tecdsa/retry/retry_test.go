@@ -2,6 +2,7 @@ package retry
 
 import (
 	"fmt"
+	"math/rand"
 	"reflect"
 	"strings"
 	"testing"
@@ -114,6 +115,48 @@ func TestEvaluateRetryParticipantsForKeyGeneration_NotEnoughOperators(t *testing
 			"unexpected error\nexpected: [%s]\nactual:   [%s]",
 			fmt.Sprintf("%s...", expectation),
 			err.Error(),
+		)
+	}
+}
+
+func TestExcludeOperatorTripletsCountsRightOperatorSeats(t *testing.T) {
+	leftOperator := chain.Address("operator-left")
+	middleOperator := chain.Address("operator-middle")
+	rightOperator := chain.Address("operator-right")
+
+	groupMembers := []chain.Address{
+		leftOperator,
+		middleOperator,
+		rightOperator,
+		rightOperator,
+		rightOperator,
+		rightOperator,
+		rightOperator,
+		rightOperator,
+		rightOperator,
+		rightOperator,
+	}
+
+	_, eligibleTripletsCount, selected := excludeOperatorTriplets(
+		rand.New(rand.NewSource(1)),
+		groupMembers,
+		0,
+		map[chain.Address]uint{
+			leftOperator:   1,
+			middleOperator: 1,
+			rightOperator:  8,
+		},
+		[]chain.Address{leftOperator, middleOperator, rightOperator},
+		3,
+	)
+
+	if selected {
+		t.Fatal("expected no eligible triplet to be selected")
+	}
+	if eligibleTripletsCount != 0 {
+		t.Fatalf(
+			"unexpected eligible triplets count\nexpected: [0]\nactual:   [%v]",
+			eligibleTripletsCount,
 		)
 	}
 }

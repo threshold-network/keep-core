@@ -50,7 +50,6 @@ describe("TokenGrant/ManagedGrantFactory", () => {
       tokenGrant.address,
       registry.address,
       initializationPeriod,
-      contract.fromArtifact("TokenStakingEscrow"),
       contract.fromArtifact("TokenStaking")
     )
     staking = contracts.tokenStaking

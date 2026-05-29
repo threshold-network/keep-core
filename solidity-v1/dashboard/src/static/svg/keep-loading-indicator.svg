@@ -1,6 +1,0 @@
-<svg class="keep-loading-indicator-icon" width="140" height="140" viewBox="0 0 140 140" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M70 50C58.958 50 50 58.958 50 70C50 81.042 58.958 90 70 90C81.042 90 90 81.042 90 70C89.9832 58.958 81.0252 50 70 50ZM78.3697 65.5294H77.1261L73.3109 69.9832L77.1261 74.437H78.3866V78.0168H70.2857V74.4706H71.5462L69.042 71.5462H68.0168V74.4706H69.4454V78.0168H61.5966V74.437H63.2941V70V65.5294H61.5966V61.9496H63.5294V63.2773H64.5714V61.9496H66.4706V63.2773H67.5126V61.9496H69.4286V65.479H68V68.4034H69.0252L71.5294 65.479H70.2689V61.9496H78.3697V65.5294Z" fill="#48DBB4"/>
-<circle class="first-circle" stroke-width="1" cx="70" cy="70" r="15" stroke="#48DBB4"/>
-<circle class="second-circle" stroke-width="1" cx="70" cy="70" r="15" stroke="#48DBB4"/>
-<circle class="third-circle" stroke-width="1" cx="70" cy="70" r="15" stroke="#48DBB4"/>
-</svg>

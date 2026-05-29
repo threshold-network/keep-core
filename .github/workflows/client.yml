@@ -13,7 +13,6 @@ on:
       - "scripts/**"
       - "solidity/**"
       - "solidity-v1/**"
-      - "token-stakedrop/**"
   pull_request:
   workflow_dispatch:
     inputs:
@@ -46,7 +45,7 @@ jobs:
         with:
           filters: |
             path-filter:
-              - './!((docs-v1|docs|infrastructure|scripts|solidity|solidity-v1|token-stakedrop)/**)'
+              - './!((docs-v1|docs|infrastructure|scripts|solidity|solidity-v1)/**)'
 
   electrum-integration-detect-changes:
     runs-on: ubuntu-latest
@@ -131,10 +130,20 @@ jobs:
 
       - name: Run Go tests
         run: |
+          mkdir -p ${{ github.workspace }}/coverage
           docker run \
             --workdir /go/src/github.com/keep-network/keep-core \
+            -v ${{ github.workspace }}/coverage:/coverage \
             go-build-env \
-            gotestsum -- -timeout 15m ./...
+            gotestsum -- -timeout 15m -coverprofile=/coverage/coverage.out ./...
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: coverage/coverage.out
+          if-no-files-found: warn
+
 
       - name: Build Docker Runtime Image
         if: github.event_name != 'workflow_dispatch'
@@ -302,10 +311,10 @@ jobs:
           checks: "-SA1019"
 
   client-integration-test:
-    needs: [electrum-integration-detect-changes, client-build-test-publish]
+    needs: [client-detect-changes, electrum-integration-detect-changes, client-build-test-publish]
     if: |
       github.event_name != 'pull_request'
-        || needs.electrum-integration-detect-changes.outputs.path-filter == 'true'
+        || needs.client-detect-changes.outputs.path-filter == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Set up Docker Buildx

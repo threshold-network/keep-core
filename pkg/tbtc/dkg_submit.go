@@ -203,6 +203,24 @@ func (drs *dkgResultSubmitter) SubmitResult(
 		return nil
 	}
 
+	// Re-check the DKG state after the delay wait. Another member may have
+	// submitted the result while we were waiting; in that case the chain has
+	// already transitioned away from AwaitingResult and our submission would
+	// be rejected on-chain.
+	dkgState, err = drs.chain.GetDKGState()
+	if err != nil {
+		return fmt.Errorf("could not check DKG state: [%w]", err)
+	}
+
+	if dkgState != AwaitingResult {
+		drs.dkgLogger.Infof(
+			"[member:%v] DKG is no longer awaiting the result; "+
+				"aborting DKG result on-chain submission",
+			memberIndex,
+		)
+		return nil
+	}
+
 	drs.dkgLogger.Infof(
 		"[member:%v] submitting DKG result with [%v] supporting "+
 			"member signatures",

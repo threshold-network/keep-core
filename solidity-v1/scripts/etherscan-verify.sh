@@ -33,6 +33,5 @@ npx truffle run verify \
     StakingPortBacker \
     TokenGrant \
     TokenStaking \
-    TokenStakingEscrow \
     TopUps \
     --network $TRUFFLE_NETWORK

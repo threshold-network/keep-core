@@ -21,15 +21,8 @@ async function initTokenStaking(
   tokenGrantAddress,
   keepRegistryAddress,
   stakeInitializationPeriod,
-  TokenStakingEscrow,
   TokenStaking
 ) {
-  const tokenStakingEscrow = await TokenStakingEscrow.new(
-    tokenAddress,
-    tokenGrantAddress,
-    { from: accounts[0] }
-  )
-
   await TokenStaking.detectNetwork()
   await TokenStaking.link(
     "MinimumStakeSchedule",
@@ -51,17 +44,12 @@ async function initTokenStaking(
   const tokenStaking = await TokenStaking.new(
     tokenAddress,
     tokenGrantAddress,
-    tokenStakingEscrow.address,
     keepRegistryAddress,
     stakeInitializationPeriod,
     { from: accounts[0] }
   )
-  await tokenStakingEscrow.transferOwnership(tokenStaking.address, {
-    from: accounts[0],
-  })
 
   return {
-    tokenStakingEscrow: tokenStakingEscrow,
     tokenStaking: tokenStaking,
   }
 }
@@ -85,7 +73,6 @@ async function initContracts(
     tokenGrant.address,
     registry.address,
     stakeInitializationPeriod,
-    contract.fromArtifact("TokenStakingEscrow"),
     TokenStaking
   )
   const stakingContract = stakingContracts.tokenStaking

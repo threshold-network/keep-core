@@ -79,5 +79,8 @@
   },
   "engines": {
     "node": ">= 14.0.0"
+  },
+  "overrides": {
+    "get-func-name": "^2.0.2"
   }
 }

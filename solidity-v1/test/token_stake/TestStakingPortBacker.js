@@ -101,7 +101,6 @@ describe("TokenStaking/StakingPortBacker", () => {
       tokenGrant.address,
       registry.address,
       initializationPeriod,
-      contract.fromArtifact("TokenStakingEscrow"),
       contract.fromArtifact("TokenStaking")
     )
     oldTokenStaking = oldStakingContracts.tokenStaking
@@ -118,7 +117,6 @@ describe("TokenStaking/StakingPortBacker", () => {
       tokenGrant.address,
       registry.address,
       initializationPeriod,
-      contract.fromArtifact("TokenStakingEscrow"),
       contract.fromArtifact("TokenStaking")
     )
     newTokenStaking = newStakingContracts.tokenStaking

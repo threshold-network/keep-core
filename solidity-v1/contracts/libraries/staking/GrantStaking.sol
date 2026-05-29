@@ -1,15 +1,12 @@
 pragma solidity 0.5.17;
 
 import "../../TokenGrant.sol";
-import "../../TokenStakingEscrow.sol";
-import "../..//utils/BytesLib.sol";
 import "../RolesLookup.sol";
 
 /// @notice TokenStaking contract library allowing to capture the details of
 /// delegated grants and offering functions allowing to check grantee
 /// authentication for stake delegation management.
 library GrantStaking {
-    using BytesLib for bytes;
     using RolesLookup for address payable;
 
     /// @dev Grant ID is flagged with the most significant bit set, to
@@ -28,39 +25,17 @@ library GrantStaking {
     }
 
     /// @notice Tries to capture delegation data if the pending delegation has
-    /// been created from a grant. There are only two possibilities and they
-    /// need to be handled differently: delegation comes from the TokenGrant
-    /// contract or delegation comes from TokenStakingEscrow. In those two cases
-    /// grant ID has to be captured in a different way.
-    /// @dev In case of a delegation from the escrow, it is expected that grant
-    /// ID is passed in extraData bytes array. When the delegation comes from
-    /// the TokenGrant contract, delegation data are obtained directly from that
-    /// contract using `tryCapturingGrantId` function.
+    /// been created from a grant.
+    /// @dev Delegation data are obtained directly from the TokenGrant contract
+    /// using `tryCapturingGrantId` function.
     /// @param tokenGrant KEEP token grant contract reference.
-    /// @param escrow TokenStakingEscrow contract address.
-    /// @param from The owner of the tokens who approved them to transfer.
     /// @param operator The operator tokens are delegated to.
-    /// @param extraData Data for stake delegation, as passed to
-    /// `receiveApproval` of `TokenStaking`.
     function tryCapturingDelegationData(
         Storage storage self,
         TokenGrant tokenGrant,
-        address escrow,
-        address from,
-        address operator,
-        bytes memory extraData
+        address operator
     ) public returns (bool, uint256) {
-        if (from == escrow) {
-            require(
-                extraData.length == 92,
-                "Corrupted delegation data from escrow"
-            );
-            uint256 grantId = extraData.toUint(60);
-            setGrantForOperator(self, operator, grantId);
-            return (true, grantId);
-        } else {
-            return tryCapturingGrantId(self, tokenGrant, operator);
-        }
+        return tryCapturingGrantId(self, tokenGrant, operator);
     }
 
     /// @notice Checks if the delegation for the given operator has been created
@@ -68,7 +43,7 @@ library GrantStaking {
     /// captures the grant ID for that delegation.
     /// Grant ID can be later retrieved based on the operator address and used
     /// to authenticate grantee or to fetch the information about grant
-    /// unlocking schedule for escrow.
+    /// unlocking schedule.
     /// @param tokenGrant KEEP token grant contract reference.
     /// @param operator The operator tokens are delegated to.
     function tryCapturingGrantId(

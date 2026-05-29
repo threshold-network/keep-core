@@ -9,7 +9,6 @@ const GrantStaking = artifacts.require("./libraries/staking/GrantStaking.sol")
 const Locks = artifacts.require("./libraries/staking/Locks.sol")
 const TopUps = artifacts.require("./libraries/staking/TopUps.sol")
 const TokenStaking = artifacts.require("./TokenStaking.sol")
-const TokenStakingEscrow = artifacts.require("./TokenStakingEscrow.sol")
 const PermissiveStakingPolicy = artifacts.require(
   "./PermissiveStakingPolicy.sol"
 )
@@ -72,11 +71,6 @@ module.exports = async function (deployer, network) {
   await deployer.deploy(KeepToken)
   await deployer.deploy(TokenGrant, KeepToken.address)
   await deployer.deploy(KeepRegistry)
-  await deployer.deploy(
-    TokenStakingEscrow,
-    KeepToken.address,
-    TokenGrant.address
-  )
   await deployer.deploy(MinimumStakeSchedule)
   await deployer.deploy(GrantStaking)
   await deployer.deploy(Locks)
@@ -89,7 +83,6 @@ module.exports = async function (deployer, network) {
     TokenStaking,
     KeepToken.address,
     TokenGrant.address,
-    TokenStakingEscrow.address,
     KeepRegistry.address,
     initializationPeriod
   )

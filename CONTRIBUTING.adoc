@@ -20,7 +20,8 @@ propose changes to this document in a pull request.
 
 Before marking the PR as ready for review, make sure:
 
-* It passes the linter checks (`npm run lint`) (see <<Pre-commit>> to make this
+* It passes the linter checks (run `npm run lint` from `solidity/ecdsa` or
+  `solidity/random-beacon` as appropriate; see <<Pre-commit>> to make this
   automatic).
 * It passes the https://github.com/keep-network/keep-core/actions[continuous
   integration tests].
@@ -55,6 +56,6 @@ to ensure they have been run and are passing.
 
 If you want to change a rule, or add a custom rule, to the JavaScript or
 Solidity linting, please propose these changes to our
-https://github.com/keep-network/solium-config-keep[solium-config-keep] and
+https://github.com/keep-network/solhint-config-keep[solhint-config-keep] and
 https://github.com/keep-network/eslint-config-keep[eslint-config-keep] packages.
-All other packages have it as a dependency.
+All other packages have them as a dependency.

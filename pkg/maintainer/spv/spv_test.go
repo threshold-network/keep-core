@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/keep-network/keep-core/internal/testutils"
@@ -214,6 +215,55 @@ func TestUniqueWalletPublicKeyHashes(t *testing.T) {
 			expectedWalletKeyHashes,
 			walletKeyHashes,
 		)
+	}
+}
+
+func TestIsInputCurrentWalletsMainUTXO_OutOfRangeFundingOutput(t *testing.T) {
+	bytesFromHex := func(str string) []byte {
+		value, err := hex.DecodeString(str)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return value
+	}
+
+	txFromHex := func(str string) *bitcoin.Transaction {
+		transaction := new(bitcoin.Transaction)
+		err := transaction.Deserialize(bytesFromHex(str))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return transaction
+	}
+
+	btcChain := newLocalBitcoinChain()
+	fundingTransaction := txFromHex(
+		"0100000000010110a15e879b7e8b07df62772579a64bf2b409409bbcc8bc2c7f6e39" +
+			"31dc615e920100000000ffffffff02042900000000000017a9143ec459d0f3c29286" +
+			"ae5df5fcc421e2786024277e87b4121600000000001600148db50eb52063ea9d98b3" +
+			"eac91489a90f738986f6024830450221009740ad12d2e74c00ccb4741d533d2ecd69" +
+			"02289144c4626508afb61eed790c97022006e67179e8e2a63dc4f1ab758867d8bbfe" +
+			"0a2b67682be6dadfa8e07d3b7ba04d012103989d253b17a6a0f41838b84ff0d20e88" +
+			"98f9d7b1a98f2564da4cc29dcf8581d900000000",
+	)
+	if err := btcChain.BroadcastTransaction(fundingTransaction); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := isInputCurrentWalletsMainUTXO(
+		fundingTransaction.Hash(),
+		2,
+		[20]byte{},
+		btcChain,
+		newLocalChain(),
+	)
+	if err == nil {
+		t.Fatal("expected out-of-range funding output error")
+	}
+	if !strings.Contains(err.Error(), "funding output index [2] out of range") {
+		t.Fatalf("unexpected error: [%v]", err)
 	}
 }
 

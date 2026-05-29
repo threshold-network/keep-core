@@ -38,7 +38,6 @@ describe("TokenStaking/Lock", () => {
       grant.address,
       registry.address,
       initializationPeriod,
-      contract.fromArtifact("TokenStakingEscrow"),
       contract.fromArtifact("TokenStaking")
     )
     stakingContract = stakingContracts.tokenStaking

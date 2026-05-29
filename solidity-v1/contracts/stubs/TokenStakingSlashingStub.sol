@@ -1,7 +1,6 @@
 pragma solidity 0.5.17;
 
 import "../TokenStaking.sol";
-import "../TokenStakingEscrow.sol";
 import "../TokenGrant.sol";
 import "../KeepRegistry.sol";
 
@@ -9,7 +8,6 @@ contract TokenStakingSlashingStub is TokenStaking {
     constructor(
         ERC20Burnable _token,
         TokenGrant _tokenGrant,
-        TokenStakingEscrow _escrow,
         KeepRegistry _registry,
         uint256 _initializationPeriod
     )
@@ -17,7 +15,6 @@ contract TokenStakingSlashingStub is TokenStaking {
         TokenStaking(
             _token,
             _tokenGrant,
-            _escrow,
             _registry,
             _initializationPeriod
         )

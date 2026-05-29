@@ -19,8 +19,8 @@
     "test:quick:watch": "mocha --watch --exit --recursive --timeout 45000",
     "demo": "truffle migrate --reset && truffle exec ./scripts/delegate-tokens.js",
     "lint": "npm run lint:js && npm run lint:sol",
-    "lint:js": "eslint . --ignore-pattern 'dashboard/'",
-    "lint:fix:js": "eslint . --fix --ignore-pattern 'dashboard/'",
+    "lint:js": "eslint .",
+    "lint:fix:js": "eslint . --fix",
     "lint:sol": "solium -d contracts/ && prettier --check '**/*.sol'",
     "lint:fix:sol": "solium -d contracts/ --fix && prettier --write '**/*.sol'"
   },
@@ -62,5 +62,9 @@
     "truffle": "^5.5.20",
     "truffle-plugin-verify": "^0.5.26",
     "websocket": "^1.0.28"
+  },
+  "overrides": {
+    "http-cache-semantics": "^4.1.1",
+    "get-func-name": "^2.0.2"
   }
 }

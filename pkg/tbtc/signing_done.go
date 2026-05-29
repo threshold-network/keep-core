@@ -169,7 +169,19 @@ func (sdc *signingDoneCheck) waitUntilAllDone(ctx context.Context) (
 			return nil, 0, errWaitDoneTimedOut
 
 		case <-ticker.C:
-			if sdc.expectedSignersCount == len(sdc.doneSigners) {
+			result, endBlock, done, err := func() (
+				*signing.Result,
+				uint64,
+				bool,
+				error,
+			) {
+				sdc.doneSignersMutex.Lock()
+				defer sdc.doneSignersMutex.Unlock()
+
+				if sdc.expectedSignersCount != len(sdc.doneSigners) {
+					return nil, 0, false, nil
+				}
+
 				var signature *tecdsa.Signature
 				var latestEndBlock uint64
 
@@ -178,7 +190,7 @@ func (sdc *signingDoneCheck) waitUntilAllDone(ctx context.Context) (
 						signature = doneMessage.signature
 					} else {
 						if !signature.Equals(doneMessage.signature) {
-							return nil, 0, fmt.Errorf(
+							return nil, 0, true, fmt.Errorf(
 								"not matching signatures detected: [%v] and [%v]",
 								signature,
 								doneMessage.signature,
@@ -191,7 +203,11 @@ func (sdc *signingDoneCheck) waitUntilAllDone(ctx context.Context) (
 					}
 				}
 
-				return &signing.Result{Signature: signature}, latestEndBlock, nil
+				return &signing.Result{Signature: signature}, latestEndBlock, true, nil
+			}()
+
+			if done {
+				return result, endBlock, err
 			}
 		}
 	}

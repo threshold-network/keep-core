@@ -43,4 +43,4 @@ The following activities are prohibited by this bug bounty program:
 
 Rewards are distributed according to the impact of the vulnerability based on the https://immunefi.com/immunefi-vulnerability-severity-classification-system-v2-2/[Immunefi Vulnerability Severity Classification System V2.2]. This is a simplified 5-level scale, with separate scales for websites/apps, smart contracts, and blockchains/DLTs, focusing on the impact of the vulnerability reported.
 
-Threshold DAO is currently in the process of establishing a Bug Bounty program on Immunefi.
+Threshold DAO runs a Bug Bounty program on Immunefi.

@@ -1,6 +1,10 @@
 package retransmission
 
-import "github.com/keep-network/keep-core/pkg/net"
+import (
+	"sync"
+
+	"github.com/keep-network/keep-core/pkg/net"
+)
 
 // Strategy represents a specific retransmission strategy.
 type Strategy interface {
@@ -43,7 +47,12 @@ func (ss *StandardStrategy) Tick(retransmitFn RetransmitFn) error {
 // first and second retransmission is 1 tick, between second and third is 2
 // ticks, between third and fourth is 4 ticks and so on. Graphically, the
 // schedule looks as follows: R _ R _ _ R _ _ _ _  R _ _ _ _ _ _ _ _ R
+//
+// BackoffStrategy is safe for concurrent use: ScheduleRetransmissions spawns
+// one goroutine per ticker callback, so consecutive ticks can overlap if the
+// retransmit function is slow. The mutex serialises access to the counters.
 type BackoffStrategy struct {
+	mu             sync.Mutex
 	tickCounter    uint64
 	delay          uint64
 	retransmitTick uint64
@@ -61,12 +70,17 @@ func WithBackoffStrategy() *BackoffStrategy {
 
 // Tick implements the Strategy.Tick function.
 func (bos *BackoffStrategy) Tick(retransmitFn RetransmitFn) error {
+	bos.mu.Lock()
 	bos.tickCounter++
 
-	if bos.tickCounter == bos.retransmitTick {
+	fire := bos.tickCounter == bos.retransmitTick
+	if fire {
 		bos.retransmitTick += bos.delay + 1
 		bos.delay *= 2
+	}
+	bos.mu.Unlock()
 
+	if fire {
 		return retransmitFn()
 	}
 

@@ -1,8 +1,0 @@
-<svg class="beneficiary-form-icon" width="45" height="45" viewBox="0 0 45 45" fill="none" xmlns="http://www.w3.org/2000/svg">
-<circle cx="22.5" cy="22.5" r="22.25" fill="white" stroke="#0A0806" stroke-width="0.5"/>
-<path fill-rule="evenodd" clip-rule="evenodd" d="M27.8999 15.4509C27.6973 15.1671 27.3794 15 27.0417 15H18.4598C18.1221 15 17.8042 15.1671 17.6016 15.4509L15.2151 18.796C14.9169 19.214 14.9311 19.7925 15.2494 20.1939L21.9276 28.6862C22.1314 28.9419 22.4326 29.0897 22.75 29.0897C23.0675 29.0897 23.3687 28.9419 23.5725 28.6862L30.2507 20.1939C30.569 19.7925 30.5832 19.214 30.285 18.796L27.8999 15.4509Z" fill="white" stroke="#0A0806" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-<path fill-rule="evenodd" clip-rule="evenodd" d="M22.7523 15L20.8125 19.7508L22.7523 29.0912" fill="white"/>
-<path d="M22.7523 15L20.8125 19.7508L22.7523 29.0912" stroke="#0A0806" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-<path fill-rule="evenodd" clip-rule="evenodd" d="M15 19.5093H30.4997H15Z" fill="white"/>
-<path d="M15 19.5093H30.4997" stroke="#0A0806" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>

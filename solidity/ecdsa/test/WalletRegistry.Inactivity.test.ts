@@ -272,7 +272,7 @@ describe("WalletRegistry - Inactivity", () => {
                         100,
                         modifySignatures,
                         () => newSigningMembersIndices,
-                        1_240_000
+                        1_175_000
                       )
                     }
                   )

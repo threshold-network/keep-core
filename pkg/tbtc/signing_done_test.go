@@ -30,9 +30,12 @@ func TestSigningDoneCheck(t *testing.T) {
 		HonestThreshold: 3,
 	}
 
-	doneCheck := setupSigningDoneCheck(t, groupParameters)
+	// Use components (shared channel + validator) so each goroutine below
+	// gets its own signingDoneCheck instance. In production every operator
+	// runs their own instance; sharing one here would race on its fields.
+	components := setupSigningDoneCheckComponents(t, groupParameters)
 
-	memberIndexes := make([]group.MemberIndex, doneCheck.groupSize)
+	memberIndexes := make([]group.MemberIndex, components.groupSize)
 	for i := range memberIndexes {
 		memberIndex := group.MemberIndex(i + 1)
 		memberIndexes[i] = memberIndex
@@ -67,6 +70,8 @@ func TestSigningDoneCheck(t *testing.T) {
 	for _, memberIndex := range memberIndexes {
 		go func(memberIndex group.MemberIndex) {
 			defer wg.Done()
+
+			doneCheck := components.newCheck()
 
 			doneCheck.listen(
 				ctx,
@@ -293,12 +298,26 @@ func TestSigningDoneCheck_AnotherSignature(t *testing.T) {
 	}
 }
 
-// setupSigningDoneCheck sets up an instance of the signing done check ready
-// to perform test checks.
-func setupSigningDoneCheck(
+// signingDoneCheckComponents holds the shared state used to construct one or
+// more signingDoneCheck instances that communicate over the same channel.
+type signingDoneCheckComponents struct {
+	groupSize           int
+	broadcastChannel    net.BroadcastChannel
+	membershipValidator *group.MembershipValidator
+}
+
+func (c *signingDoneCheckComponents) newCheck() *signingDoneCheck {
+	return newSigningDoneCheck(c.groupSize, c.broadcastChannel, c.membershipValidator)
+}
+
+// setupSigningDoneCheckComponents builds the shared channel and validator
+// without constructing the signingDoneCheck itself, so callers that need
+// multiple independent instances (e.g. simulating N operators) can each
+// call newCheck() separately.
+func setupSigningDoneCheckComponents(
 	t *testing.T,
 	groupParameters *GroupParameters,
-) *signingDoneCheck {
+) *signingDoneCheckComponents {
 	operatorPrivateKey, operatorPublicKey, err := operator.GenerateKeyPair(
 		local_v1.DefaultCurve,
 	)
@@ -337,9 +356,18 @@ func setupSigningDoneCheck(
 		localChain.Signing(),
 	)
 
-	return newSigningDoneCheck(
-		groupParameters.GroupSize,
-		broadcastChannel,
-		membershipValidator,
-	)
+	return &signingDoneCheckComponents{
+		groupSize:           groupParameters.GroupSize,
+		broadcastChannel:    broadcastChannel,
+		membershipValidator: membershipValidator,
+	}
+}
+
+// setupSigningDoneCheck sets up an instance of the signing done check ready
+// to perform test checks.
+func setupSigningDoneCheck(
+	t *testing.T,
+	groupParameters *GroupParameters,
+) *signingDoneCheck {
+	return setupSigningDoneCheckComponents(t, groupParameters).newCheck()
 }

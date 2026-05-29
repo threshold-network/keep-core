@@ -440,8 +440,8 @@ contract WalletRegistryGovernance is Ownable {
         emit AuthorizationDecreaseDelayUpdated(newAuthorizationDecreaseDelay);
         (
             uint96 minimumAuthorization,
-            uint64 authorizationDecreaseChangePeriod,
-
+            ,
+            uint64 authorizationDecreaseChangePeriod
         ) = walletRegistry.authorizationParameters();
         // slither-disable-next-line reentrancy-no-eth
         walletRegistry.updateAuthorizationParameters(
