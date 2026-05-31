@@ -3,12 +3,17 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os/signal"
+	"path/filepath"
+	"syscall"
 	"time"
 
+	commonEthereum "github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/tbtcpg"
 
 	"github.com/keep-network/keep-common/pkg/persistence"
 	"github.com/keep-network/keep-core/build"
+	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/bitcoin/electrum"
 	"github.com/keep-network/keep-core/pkg/operator"
 	"github.com/keep-network/keep-core/pkg/storage"
@@ -17,9 +22,11 @@ import (
 
 	"github.com/keep-network/keep-core/config"
 	"github.com/keep-network/keep-core/pkg/beacon"
+	beaconchain "github.com/keep-network/keep-core/pkg/beacon/chain"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
+	"github.com/keep-network/keep-core/pkg/covenantsigner"
 	"github.com/keep-network/keep-core/pkg/firewall"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
@@ -45,6 +52,77 @@ var StartCommand = &cobra.Command{
 	},
 }
 
+type startDeps struct {
+	connectEthereum func(
+		ctx context.Context,
+		config commonEthereum.Config,
+	) (
+		*ethereum.BeaconChain,
+		*ethereum.TbtcChain,
+		chain.BlockCounter,
+		chain.Signing,
+		*operator.PrivateKey,
+		error,
+	)
+	connectElectrum func(
+		ctx context.Context,
+		config electrum.Config,
+	) (bitcoin.Chain, error)
+	initializeNetwork func(
+		ctx context.Context,
+		applications []firewall.Application,
+		operatorPrivateKey *operator.PrivateKey,
+		blockCounter chain.BlockCounter,
+	) (net.Provider, error)
+	initializePersistence func() (
+		beaconKeyStorePersistence persistence.ProtectedHandle,
+		tbtcKeyStorePersistence persistence.ProtectedHandle,
+		tbtcDataPersistence persistence.BasicHandle,
+		err error,
+	)
+	initializeBeacon func(
+		ctx context.Context,
+		chain beaconchain.Interface,
+		netProvider net.Provider,
+		keyStorePersistence persistence.ProtectedHandle,
+		scheduler *generator.Scheduler,
+	) error
+	initializeTbtc func(
+		ctx context.Context,
+		chain tbtc.Chain,
+		btcChain bitcoin.Chain,
+		netProvider net.Provider,
+		keyStorePersistence persistence.ProtectedHandle,
+		workPersistence persistence.BasicHandle,
+		scheduler *generator.Scheduler,
+		proposalGenerator tbtc.CoordinationProposalGenerator,
+		config tbtc.Config,
+		clientInfoRegistry *clientinfo.Registry,
+		perfMetrics *clientinfo.PerformanceMetrics,
+		minActiveOutpointConfirmations uint,
+	) (covenantsigner.Engine, error)
+	initializeSigner func(
+		ctx context.Context,
+		config covenantsigner.Config,
+		handle persistence.BasicHandle,
+		engine covenantsigner.Engine,
+	) (*covenantsigner.Server, bool, error)
+	startScheduler func() *generator.Scheduler
+}
+
+func defaultStartDeps() startDeps {
+	return startDeps{
+		connectEthereum:       ethereum.Connect,
+		connectElectrum:       electrum.Connect,
+		initializeNetwork:     initializeNetwork,
+		initializePersistence: initializePersistence,
+		initializeBeacon:      beacon.Initialize,
+		initializeTbtc:        tbtc.Initialize,
+		initializeSigner:      covenantsigner.Initialize,
+		startScheduler:        generator.StartScheduler,
+	}
+}
+
 func init() {
 	initFlags(StartCommand, &configFilePath, clientConfig, config.StartCmdCategories...)
 
@@ -63,15 +141,20 @@ Environment variables:
 
 // start starts a node
 func start(cmd *cobra.Command) error {
-	ctx := context.Background()
+	return startWithDeps(cmd, defaultStartDeps())
+}
+
+func startWithDeps(cmd *cobra.Command, deps startDeps) error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	beaconChain, tbtcChain, blockCounter, signing, operatorPrivateKey, err :=
-		ethereum.Connect(ctx, clientConfig.Ethereum)
+		deps.connectEthereum(ctx, clientConfig.Ethereum)
 	if err != nil {
 		return fmt.Errorf("error connecting to Ethereum node: [%v]", err)
 	}
 
-	netProvider, err := initializeNetwork(
+	netProvider, err := deps.initializeNetwork(
 		ctx,
 		[]firewall.Application{beaconChain, tbtcChain},
 		operatorPrivateKey,
@@ -110,7 +193,7 @@ func start(cmd *cobra.Command) error {
 	// Skip initialization for bootstrap nodes as they are only used for network
 	// discovery.
 	if !isBootstrap() {
-		btcChain, err := electrum.Connect(ctx, clientConfig.Bitcoin.Electrum)
+		btcChain, err := deps.connectElectrum(ctx, clientConfig.Bitcoin.Electrum)
 		if err != nil {
 			return fmt.Errorf("could not connect to Electrum chain: [%v]", err)
 		}
@@ -118,12 +201,12 @@ func start(cmd *cobra.Command) error {
 		beaconKeyStorePersistence,
 			tbtcKeyStorePersistence,
 			tbtcDataPersistence,
-			err := initializePersistence()
+			err := deps.initializePersistence()
 		if err != nil {
 			return fmt.Errorf("cannot initialize persistence: [%w]", err)
 		}
 
-		scheduler := generator.StartScheduler()
+		scheduler := deps.startScheduler()
 
 		if clientInfoRegistry != nil {
 			clientInfoRegistry.ObserveBtcConnectivity(
@@ -142,7 +225,7 @@ func start(cmd *cobra.Command) error {
 			rpcHealthChecker.Start(ctx)
 		}
 
-		err = beacon.Initialize(
+		err = deps.initializeBeacon(
 			ctx,
 			beaconChain,
 			netProvider,
@@ -158,7 +241,7 @@ func start(cmd *cobra.Command) error {
 			btcChain,
 		)
 
-		err = tbtc.Initialize(
+		covenantSignerEngine, err := deps.initializeTbtc(
 			ctx,
 			tbtcChain,
 			btcChain,
@@ -170,9 +253,27 @@ func start(cmd *cobra.Command) error {
 			clientConfig.Tbtc,
 			clientInfoRegistry,
 			perfMetrics, // Pass the existing performance metrics instance to avoid duplicate registrations
+			clientConfig.CovenantSigner.MinActiveOutpointConfirmations,
 		)
 		if err != nil {
 			return fmt.Errorf("error initializing TBTC: [%v]", err)
+		}
+
+		signerConfig := clientConfig.CovenantSigner
+		if signerConfig.DataDir == "" && signerConfig.Port != 0 {
+			signerConfig.DataDir = filepath.Join(
+				filepath.Clean(clientConfig.Storage.Dir), "work", "tbtc",
+			)
+		}
+
+		_, _, err = deps.initializeSigner(
+			ctx,
+			signerConfig,
+			tbtcDataPersistence,
+			covenantSignerEngine,
+		)
+		if err != nil {
+			return fmt.Errorf("error initializing covenant signer: [%v]", err)
 		}
 	}
 

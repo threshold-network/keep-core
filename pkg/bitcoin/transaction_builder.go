@@ -147,6 +147,13 @@ func (tb *TransactionBuilder) getScript(
 			err,
 		)
 	}
+	if int(utxo.Outpoint.OutputIndex) >= len(transaction.Outputs) {
+		return nil, fmt.Errorf(
+			"output index [%d] out of bounds for transaction with [%d] outputs",
+			utxo.Outpoint.OutputIndex,
+			len(transaction.Outputs),
+		)
+	}
 
 	outputIndex := utxo.Outpoint.OutputIndex
 	if outputIndex >= uint32(len(transaction.Outputs)) {
@@ -165,6 +172,41 @@ func (tb *TransactionBuilder) getScript(
 // AddOutput adds a new transaction's output.
 func (tb *TransactionBuilder) AddOutput(output *TransactionOutput) {
 	tb.internal.AddTxOut(wire.NewTxOut(output.Value, output.PublicKeyScript))
+}
+
+// SetInputSequence overrides the sequence number for the input at the given
+// index.
+func (tb *TransactionBuilder) SetInputSequence(index int, sequence uint32) error {
+	if index < 0 || index >= len(tb.internal.TxIn) {
+		return fmt.Errorf("wrong input index")
+	}
+
+	tb.internal.TxIn[index].Sequence = sequence
+
+	return nil
+}
+
+// SetInputWitness overrides the witness stack for the input at the given
+// index.
+func (tb *TransactionBuilder) SetInputWitness(index int, witness [][]byte) error {
+	if index < 0 || index >= len(tb.internal.TxIn) {
+		return fmt.Errorf("wrong input index")
+	}
+
+	tb.internal.TxIn[index].Witness = witness
+	tb.internal.TxIn[index].SignatureScript = nil
+
+	return nil
+}
+
+// SetLocktime overrides the transaction locktime.
+func (tb *TransactionBuilder) SetLocktime(locktime uint32) {
+	tb.internal.LockTime = locktime
+}
+
+// Build returns the transaction in its current state.
+func (tb *TransactionBuilder) Build() *Transaction {
+	return tb.internal.toTransaction()
 }
 
 // ComputeSignatureHashes computes the signature hashes for all transaction

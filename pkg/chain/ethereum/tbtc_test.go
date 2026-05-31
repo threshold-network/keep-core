@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -14,10 +15,13 @@ import (
 	"github.com/keep-network/keep-core/pkg/chain"
 
 	"github.com/ethereum/go-ethereum/common"
+	commonEthereum "github.com/keep-network/keep-common/pkg/chain/ethereum"
 
 	"github.com/keep-network/keep-core/internal/testutils"
+	tbtcabi "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
 	"github.com/keep-network/keep-core/pkg/chain/local_v1"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
+	tbtcpkg "github.com/keep-network/keep-core/pkg/tbtc"
 )
 
 func TestComputeOperatorsIDsHash(t *testing.T) {
@@ -127,6 +131,68 @@ func TestConvertSignaturesToChainFormat(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMakeWalletChainDataPreservesBridgeFieldsWhenRegistryDataUnavailable(t *testing.T) {
+	bridgeWallet := tbtcabi.WalletsWallet{
+		EcdsaWalletID:                          [32]byte{0xaa},
+		MainUtxoHash:                           [32]byte{0xbb},
+		PendingRedemptionsValue:                12345,
+		CreatedAt:                              1700000000,
+		MovingFundsRequestedAt:                 1700000100,
+		ClosingStartedAt:                       1700000200,
+		PendingMovedFundsSweepRequestsCount:    7,
+		MovingFundsTargetWalletsCommitmentHash: [32]byte{0xcc},
+	}
+
+	walletChainData := makeWalletChainData(
+		bridgeWallet,
+		[32]byte{},
+		tbtcpkg.StateLive,
+	)
+
+	if walletChainData.MembersIDsHash != ([32]byte{}) {
+		t.Fatalf("expected zero members IDs hash, got [0x%x]", walletChainData.MembersIDsHash)
+	}
+	if walletChainData.EcdsaWalletID != bridgeWallet.EcdsaWalletID {
+		t.Fatalf("expected wallet ID [0x%x], got [0x%x]", bridgeWallet.EcdsaWalletID, walletChainData.EcdsaWalletID)
+	}
+	if walletChainData.MainUtxoHash != bridgeWallet.MainUtxoHash {
+		t.Fatalf("expected main UTXO hash [0x%x], got [0x%x]", bridgeWallet.MainUtxoHash, walletChainData.MainUtxoHash)
+	}
+	if walletChainData.PendingRedemptionsValue != bridgeWallet.PendingRedemptionsValue {
+		t.Fatalf(
+			"expected pending redemptions value [%v], got [%v]",
+			bridgeWallet.PendingRedemptionsValue,
+			walletChainData.PendingRedemptionsValue,
+		)
+	}
+	if walletChainData.State != tbtcpkg.StateLive {
+		t.Fatalf("expected wallet state [%v], got [%v]", tbtcpkg.StateLive, walletChainData.State)
+	}
+}
+
+func TestMakeWalletChainDataUsesWalletRegistryMembersIDsHashWhenAvailable(t *testing.T) {
+	membersIDsHash := [32]byte{0xdd}
+
+	walletChainData := makeWalletChainData(
+		tbtcabi.WalletsWallet{
+			EcdsaWalletID: [32]byte{0xee},
+		},
+		membersIDsHash,
+		tbtcpkg.StateMovingFunds,
+	)
+
+	if walletChainData.MembersIDsHash != membersIDsHash {
+		t.Fatalf("expected members IDs hash [0x%x], got [0x%x]", membersIDsHash, walletChainData.MembersIDsHash)
+	}
+	if walletChainData.State != tbtcpkg.StateMovingFunds {
+		t.Fatalf(
+			"expected wallet state [%v], got [%v]",
+			tbtcpkg.StateMovingFunds,
+			walletChainData.State,
+		)
 	}
 }
 
@@ -532,4 +598,35 @@ func TestBuildMovedFundsKey(t *testing.T) {
 		expectedMovedFundsKey,
 		movedFundsKey.Text(16),
 	)
+}
+
+func TestNewTbtcChainRejectsMissingBridgeContractAddress(t *testing.T) {
+	_, err := newTbtcChain(
+		commonEthereum.Config{
+			ContractAddresses: map[string]string{},
+		},
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "failed to resolve Bridge contract address") {
+		t.Fatalf("expected bridge contract address resolution error, got: %v", err)
+	}
+}
+
+func TestNewTbtcChainRejectsMalformedBridgeContractAddress(t *testing.T) {
+	config := commonEthereum.Config{
+		ContractAddresses: map[string]string{},
+	}
+	config.SetContractAddress(BridgeContractName, "not-a-hex-address")
+
+	_, err := newTbtcChain(config, nil)
+	if err == nil || !strings.Contains(err.Error(), "failed to resolve Bridge contract address") {
+		t.Fatalf("expected malformed bridge contract address error, got: %v", err)
+	}
+}
+
+func TestParseWalletStateRejectsUnsupportedValue(t *testing.T) {
+	_, err := parseWalletState(255)
+	if err == nil || !strings.Contains(err.Error(), "unexpected wallet state value") {
+		t.Fatalf("expected unsupported wallet state error, got: %v", err)
+	}
 }

@@ -130,14 +130,14 @@ func newNode(
 	chain Chain,
 	btcChain bitcoin.Chain,
 	netProvider net.Provider,
-	keyStorePersistance persistence.ProtectedHandle,
+	keyStorePersistence persistence.ProtectedHandle,
 	workPersistence persistence.BasicHandle,
 	scheduler *generator.Scheduler,
 	proposalGenerator CoordinationProposalGenerator,
 	config Config,
 ) (*node, error) {
 	walletRegistry, err := newWalletRegistry(
-		keyStorePersistance,
+		keyStorePersistence,
 		chain.CalculateWalletID,
 	)
 	if err != nil {
@@ -394,6 +394,7 @@ func (n *node) getSigningExecutor(
 	}
 
 	executor := newSigningExecutor(
+		n.chain,
 		signers,
 		broadcastChannel,
 		membershipValidator,
@@ -1429,6 +1430,8 @@ func withCancelOnBlock(
 	block uint64,
 	waitForBlockFn waitForBlockFn,
 ) (context.Context, context.CancelFunc) {
+	// #nosec G118 -- cancelBlockCtx is returned to the caller and also invoked
+	// by the waiter goroutine when the target block is reached.
 	blockCtx, cancelBlockCtx := context.WithCancel(ctx)
 
 	go func() {

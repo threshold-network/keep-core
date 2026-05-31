@@ -22,6 +22,7 @@ import (
 	ethereumEcdsa "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen"
 	ethereumTbtc "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen"
 	ethereumThreshold "github.com/keep-network/keep-core/pkg/chain/ethereum/threshold/gen"
+	"github.com/keep-network/keep-core/pkg/covenantsigner"
 )
 
 var cmdFlagsTests = map[string]struct {
@@ -189,6 +190,41 @@ var cmdFlagsTests = map[string]struct {
 		flagValue:             "1m16s",
 		expectedValueFromFlag: 76 * time.Second,
 		defaultValue:          10 * time.Minute,
+	},
+	"covenantSigner.port": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.CovenantSigner.Port },
+		flagName:              "--covenantSigner.port",
+		flagValue:             "9711",
+		expectedValueFromFlag: 9711,
+		defaultValue:          0,
+	},
+	"covenantSigner.listenAddress": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.CovenantSigner.ListenAddress },
+		flagName:              "--covenantSigner.listenAddress",
+		flagValue:             "0.0.0.0",
+		expectedValueFromFlag: "0.0.0.0",
+		defaultValue:          covenantsigner.DefaultListenAddress,
+	},
+	"covenantSigner.authToken": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.CovenantSigner.AuthToken },
+		flagName:              "--covenantSigner.authToken",
+		flagValue:             "secret-token",
+		expectedValueFromFlag: "secret-token",
+		defaultValue:          "",
+	},
+	"covenantSigner.enableSelfV1": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.CovenantSigner.EnableSelfV1 },
+		flagName:              "--covenantSigner.enableSelfV1",
+		flagValue:             "",
+		expectedValueFromFlag: true,
+		defaultValue:          false,
+	},
+	"covenantSigner.requireApprovalTrustRoots": {
+		readValueFunc:         func(c *config.Config) interface{} { return c.CovenantSigner.RequireApprovalTrustRoots },
+		flagName:              "--covenantSigner.requireApprovalTrustRoots",
+		flagValue:             "",
+		expectedValueFromFlag: true,
+		defaultValue:          false,
 	},
 	"tbtc.preParamsPoolSize": {
 		readValueFunc:         func(c *config.Config) interface{} { return c.Tbtc.PreParamsPoolSize },

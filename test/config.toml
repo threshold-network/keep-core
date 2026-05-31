@@ -35,6 +35,10 @@ Port = 3498
 NetworkMetricsTick = "43s"
 EthereumMetricsTick = "1m27s"
 
+[covenantsigner]
+Port = 9702
+RequireApprovalTrustRoots = true
+
 [maintainer.BitcoinDifficulty]
 Enabled = true
 DisableProxy = true

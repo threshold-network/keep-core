@@ -112,6 +112,7 @@ func (s *Scheduler) resume() {
 // This function should be executed only be the Scheduler and when the
 // workMutex is locked.
 func (s *Scheduler) startWorker(workerFn func(context.Context)) {
+	// #nosec G118 -- cancelFn is stored in s.stops and invoked by stop().
 	ctx, cancelFn := context.WithCancel(context.Background())
 	s.stops = append(s.stops, cancelFn)
 

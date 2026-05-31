@@ -15,6 +15,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/bitcoin/electrum"
 	chainEthereum "github.com/keep-network/keep-core/pkg/chain/ethereum"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
+	"github.com/keep-network/keep-core/pkg/covenantsigner"
 	"github.com/keep-network/keep-core/pkg/maintainer/spv"
 	"github.com/keep-network/keep-core/pkg/net/libp2p"
 	"github.com/keep-network/keep-core/pkg/tbtc"
@@ -46,6 +47,8 @@ func initFlags(
 			initStorageFlags(cmd, cfg)
 		case config.ClientInfo:
 			initClientInfoFlags(cmd, cfg)
+		case config.CovenantSigner:
+			initCovenantSignerFlags(cmd, cfg)
 		case config.Tbtc:
 			initTbtcFlags(cmd, cfg)
 		case config.Maintainer:
@@ -307,6 +310,39 @@ func initTbtcFlags(cmd *cobra.Command, cfg *config.Config) {
 		"tbtc.keyGenerationConcurrency",
 		tbtc.DefaultKeyGenerationConcurrency,
 		"tECDSA key generation concurrency.",
+	)
+}
+
+func initCovenantSignerFlags(cmd *cobra.Command, cfg *config.Config) {
+	cmd.Flags().IntVar(
+		&cfg.CovenantSigner.Port,
+		"covenantSigner.port",
+		covenantsigner.Config{}.Port,
+		"Covenant signer provider HTTP server listening port. Zero disables the service.",
+	)
+	cmd.Flags().StringVar(
+		&cfg.CovenantSigner.ListenAddress,
+		"covenantSigner.listenAddress",
+		covenantsigner.DefaultListenAddress,
+		"Covenant signer provider HTTP listen address. Defaults to loopback-only.",
+	)
+	cmd.Flags().StringVar(
+		&cfg.CovenantSigner.AuthToken,
+		"covenantSigner.authToken",
+		covenantsigner.Config{}.AuthToken,
+		"Covenant signer provider static Bearer auth token. Required for non-loopback binds; prefer config file or env var over CLI in production.",
+	)
+	cmd.Flags().BoolVar(
+		&cfg.CovenantSigner.EnableSelfV1,
+		"covenantSigner.enableSelfV1",
+		false,
+		"Expose self_v1 covenant signer HTTP routes. Keep disabled for a qc_v1-first launch unless self_v1 is explicitly approved.",
+	)
+	cmd.Flags().BoolVar(
+		&cfg.CovenantSigner.RequireApprovalTrustRoots,
+		"covenantSigner.requireApprovalTrustRoots",
+		false,
+		"Fail startup when enabled covenant routes are missing route-level approval trust roots. Request-time validation still enforces exact reserve/network trust-root matches.",
 	)
 }
 

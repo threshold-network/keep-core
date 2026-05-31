@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/covenantsigner"
 
 	"github.com/ipfs/go-log"
 
@@ -69,7 +70,8 @@ type Config struct {
 
 // Initialize kicks off the TBTC by initializing internal state, ensuring
 // preconditions like staking are met, and then kicking off the internal TBTC
-// implementation. Returns an error if this failed.
+// implementation. Returns the covenant signer engine bound to the initialized
+// node together with an error if initialization failed.
 func Initialize(
 	ctx context.Context,
 	chain Chain,
@@ -82,7 +84,8 @@ func Initialize(
 	config Config,
 	clientInfo *clientinfo.Registry,
 	perfMetrics *clientinfo.PerformanceMetrics,
-) error {
+	minActiveOutpointConfirmations uint,
+) (covenantsigner.Engine, error) {
 	groupParameters := &GroupParameters{
 		GroupSize:       100,
 		GroupQuorum:     90,
@@ -101,12 +104,12 @@ func Initialize(
 		config,
 	)
 	if err != nil {
-		return fmt.Errorf("cannot set up TBTC node: [%v]", err)
+		return nil, fmt.Errorf("cannot set up TBTC node: [%v]", err)
 	}
 
 	err = node.runCoordinationLayer(ctx)
 	if err != nil {
-		return fmt.Errorf("cannot run coordination layer: [%w]", err)
+		return nil, fmt.Errorf("cannot run coordination layer: [%w]", err)
 	}
 
 	deduplicator := newDeduplicator()
@@ -161,7 +164,7 @@ func Initialize(
 		),
 	)
 	if err != nil {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"could not set up sortition pool monitoring: [%v]",
 			err,
 		)
@@ -323,7 +326,7 @@ func Initialize(
 		}()
 	})
 
-	return nil
+	return newCovenantSignerEngine(node, minActiveOutpointConfirmations), nil
 }
 
 // enoughPreParamsInPoolPolicy is a policy that enforces the sufficient size

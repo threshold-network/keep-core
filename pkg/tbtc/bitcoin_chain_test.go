@@ -11,6 +11,7 @@ import (
 type localBitcoinChain struct {
 	transactionsMutex sync.Mutex
 	transactions      []*bitcoin.Transaction
+	confirmations     map[bitcoin.Hash]uint
 
 	mempoolMutex sync.Mutex
 	mempool      []*bitcoin.Transaction
@@ -18,8 +19,9 @@ type localBitcoinChain struct {
 
 func newLocalBitcoinChain() *localBitcoinChain {
 	return &localBitcoinChain{
-		transactions: make([]*bitcoin.Transaction, 0),
-		mempool:      make([]*bitcoin.Transaction, 0),
+		transactions:  make([]*bitcoin.Transaction, 0),
+		confirmations: make(map[bitcoin.Hash]uint),
+		mempool:       make([]*bitcoin.Transaction, 0),
 	}
 }
 
@@ -41,6 +43,10 @@ func (lbc *localBitcoinChain) GetTransaction(
 func (lbc *localBitcoinChain) GetTransactionConfirmations(
 	transactionHash bitcoin.Hash,
 ) (uint, error) {
+	if confirmations, ok := lbc.confirmations[transactionHash]; ok {
+		return confirmations, nil
+	}
+
 	for index, transaction := range lbc.transactions {
 		if transaction.Hash() == transactionHash {
 			confirmations := len(lbc.transactions) - index
@@ -49,6 +55,13 @@ func (lbc *localBitcoinChain) GetTransactionConfirmations(
 	}
 
 	return 0, fmt.Errorf("transaction not found")
+}
+
+func (lbc *localBitcoinChain) setTransactionConfirmations(
+	transactionHash bitcoin.Hash,
+	confirmations uint,
+) {
+	lbc.confirmations[transactionHash] = confirmations
 }
 
 func (lbc *localBitcoinChain) BroadcastTransaction(

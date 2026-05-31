@@ -64,6 +64,25 @@ jobs:
               - './config/_electrum_urls/**'
               - './pkg/bitcoin/electrum/**'
 
+  client-risk-detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      path-filter: ${{ steps.filter.outputs.path-filter }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request'
+
+      - uses: dorny/paths-filter@v2
+        if: github.event_name == 'pull_request'
+        id: filter
+        with:
+          filters: |
+            path-filter:
+              - './pkg/covenantsigner/**'
+              - './pkg/tbtc/**'
+              - './pkg/chain/ethereum/**'
+              - './cmd/start.go'
+
   client-build-test-publish:
     needs: client-detect-changes
     if: |
@@ -309,6 +328,29 @@ jobs:
           version: "2025.1.1"
           install-go: false
           checks: "-SA1019"
+
+  client-race:
+    needs: client-risk-detect-changes
+    if: |
+      github.event_name == 'push'
+        || needs.client-risk-detect-changes.outputs.path-filter == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+      - name: Race detector (high-risk packages)
+        run: |
+          go test -race -timeout 20m ./pkg/covenantsigner
+          go test -race -timeout 20m -v ./pkg/tbtc \
+            -run '^(TestSignerApprovalCertificateSignerSetHashBindsOnChainWalletIdentityAndThreshold|TestValidateMigrationOutputValues_RejectsValuesExceedingInt64)$' \
+            -count=1 2>&1 | tee /tmp/race-output.txt
+          # Fail if the -run filter matched no tests (silent pass).
+          if ! grep -q '=== RUN' /tmp/race-output.txt; then
+            echo "ERROR: race detector -run filter matched no tests" >&2
+            exit 1
+          fi
 
   client-integration-test:
     needs: [client-detect-changes, electrum-integration-detect-changes, client-build-test-publish]

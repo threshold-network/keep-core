@@ -45,6 +45,7 @@ var errSigningExecutorBusy = fmt.Errorf("signing executor is busy")
 type signingExecutor struct {
 	lock *semaphore.Weighted
 
+	chain               Chain
 	signers             []*signer
 	broadcastChannel    net.BroadcastChannel
 	membershipValidator *group.MembershipValidator
@@ -70,6 +71,7 @@ type signingExecutor struct {
 }
 
 func newSigningExecutor(
+	chain Chain,
 	signers []*signer,
 	broadcastChannel net.BroadcastChannel,
 	membershipValidator *group.MembershipValidator,
@@ -81,6 +83,7 @@ func newSigningExecutor(
 ) *signingExecutor {
 	return &signingExecutor{
 		lock:                 semaphore.NewWeighted(1),
+		chain:                chain,
 		signers:              signers,
 		broadcastChannel:     broadcastChannel,
 		membershipValidator:  membershipValidator,

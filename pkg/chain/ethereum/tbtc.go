@@ -1463,9 +1463,30 @@ func (tc *TbtcChain) GetWallet(
 	// Wallet not found.
 	if wallet.CreatedAt == 0 {
 		return nil, fmt.Errorf(
-			"no wallet for public key hash [0x%x]",
-			wallet,
+			"%w for public key hash [0x%x]",
+			tbtc.ErrWalletNotFound,
+			walletPublicKeyHash,
 		)
+	}
+
+	// Fetch wallet registry data on a best-effort basis. Legacy callers
+	// only use Bridge-sourced fields and never access MembersIDsHash, so a
+	// registry outage must not block them. The zero value signals that
+	// registry data is unavailable; downstream consumers that need it
+	// (e.g. signer_approval_certificate) already guard against this.
+	var membersIDsHash [32]byte
+
+	walletRegistryWallet, err := tc.walletRegistry.GetWallet(wallet.EcdsaWalletID)
+	if err != nil {
+		logger.Errorf(
+			"wallet registry unavailable for wallet [0x%x]; "+
+				"MembersIDsHash will be zero -- signer approval "+
+				"operations will fail until the registry recovers: [%v]",
+			wallet.EcdsaWalletID,
+			err,
+		)
+	} else {
+		membersIDsHash = walletRegistryWallet.MembersIdsHash
 	}
 
 	walletState, err := parseWalletState(wallet.State)
@@ -1473,8 +1494,17 @@ func (tc *TbtcChain) GetWallet(
 		return nil, fmt.Errorf("cannot parse wallet state: [%v]", err)
 	}
 
+	return makeWalletChainData(wallet, membersIDsHash, walletState), nil
+}
+
+func makeWalletChainData(
+	wallet tbtcabi.WalletsWallet,
+	membersIDsHash [32]byte,
+	walletState tbtc.WalletState,
+) *tbtc.WalletChainData {
 	return &tbtc.WalletChainData{
 		EcdsaWalletID:                          wallet.EcdsaWalletID,
+		MembersIDsHash:                         membersIDsHash,
 		MainUtxoHash:                           wallet.MainUtxoHash,
 		PendingRedemptionsValue:                wallet.PendingRedemptionsValue,
 		CreatedAt:                              time.Unix(int64(wallet.CreatedAt), 0),
@@ -1483,7 +1513,7 @@ func (tc *TbtcChain) GetWallet(
 		PendingMovedFundsSweepRequestsCount:    wallet.PendingMovedFundsSweepRequestsCount,
 		State:                                  walletState,
 		MovingFundsTargetWalletsCommitmentHash: wallet.MovingFundsTargetWalletsCommitmentHash,
-	}, nil
+	}
 }
 
 func (tc *TbtcChain) OnWalletClosed(

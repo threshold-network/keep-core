@@ -245,6 +245,49 @@ func TestTransactionBuilder_AddOutput(t *testing.T) {
 	assertInternalOutput(t, builder, 0, output)
 }
 
+func TestTransactionBuilder_SetInputSequenceWitnessAndLocktime(t *testing.T) {
+	localChain := newLocalChain()
+	builder := NewTransactionBuilder(localChain)
+
+	inputTransaction := transactionFrom(t, "01000000000101a0367a0790e3dfc199df34ca9ce5c35591510b6525d2d5869166728a5ed554be0100000000ffffffff02e02e00000000000022002086a303cdd2e2eab1d1679f1a813835dc5a1b65321077cdccaf08f98cbf04ca962cff100000000000160014e257eccafbc07c381642ce6e7e55120fb077fbed02473044022050759dde2c84bccf3c1502b0e33a6acb570117fd27a982c0c2991c9f9737508e02201fcba5d6f6c0ab780042138a9110418b3f589d8d09a900f20ee28cfcdb14d2970121039d61d62dcd048d3f8550d22eb90b4af908db60231d117aeede04e7bc11907bfa00000000")
+	if err := localChain.addTransaction(inputTransaction); err != nil {
+		t.Fatal(err)
+	}
+
+	utxo := &UnspentTransactionOutput{
+		Outpoint: &TransactionOutpoint{
+			TransactionHash: inputTransaction.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 12000,
+	}
+	redeemScript := hexToSlice(t, "14934b98637ca318a4d6e7ca6ffd1690b8e77df6377508f9f0c90d000395237576a9148db50eb52063ea9d98b3eac91489a90f738986f68763ac6776a914e257eccafbc07c381642ce6e7e55120fb077fbed8804e0250162b175ac68")
+
+	if err := builder.AddScriptHashInput(utxo, redeemScript); err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.SetInputSequence(0, 0xfffffffd); err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.SetInputWitness(0, [][]byte{{0x01}, {0x02}, redeemScript}); err != nil {
+		t.Fatal(err)
+	}
+	builder.SetLocktime(12345)
+
+	assertInternalInput(t, builder, 0, &TransactionInput{
+		Outpoint:        utxo.Outpoint,
+		SignatureScript: nil,
+		Witness:         [][]byte{{0x01}, {0x02}, redeemScript},
+		Sequence:        0xfffffffd,
+	})
+
+	transaction := builder.Build()
+	testutils.AssertIntsEqual(t, "locktime", 12345, int(transaction.Locktime))
+	if !reflect.DeepEqual(transaction.Inputs[0].Witness, [][]byte{{0x01}, {0x02}, redeemScript}) {
+		t.Fatal("unexpected built transaction witness")
+	}
+}
+
 // The goal of this test is making sure that the TransactionBuilder can
 // produce proper signature hashes and apply signatures for all input types,
 // i.e. P2PKH, P2WPKH, P2SH, and P2WSH. This test uses transactions that

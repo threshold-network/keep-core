@@ -66,8 +66,9 @@ type localChain struct {
 	dkgResult      *DKGChainResult
 	dkgResultValid bool
 
-	walletsMutex sync.Mutex
-	wallets      map[[20]byte]*WalletChainData
+	walletsMutex       sync.Mutex
+	wallets            map[[20]byte]*WalletChainData
+	walletRegistryErrs map[[20]byte]error
 
 	inactivityNonceMutex sync.Mutex
 	inactivityNonces     map[[32]byte]uint64
@@ -886,7 +887,16 @@ func (lc *localChain) GetWallet(walletPublicKeyHash [20]byte) (
 
 	walletChainData, ok := lc.wallets[walletPublicKeyHash]
 	if !ok {
-		return nil, fmt.Errorf("no wallet for given PKH")
+		return nil, fmt.Errorf("%w for given PKH", ErrWalletNotFound)
+	}
+
+	// When a registry error is configured for this wallet, return
+	// Bridge-sourced data with a zero MembersIDsHash -- mirroring the
+	// fault-isolation behavior of the real Ethereum adapter.
+	if _, hasErr := lc.walletRegistryErrs[walletPublicKeyHash]; hasErr {
+		degraded := *walletChainData
+		degraded.MembersIDsHash = [32]byte{}
+		return &degraded, nil
 	}
 
 	return walletChainData, nil
@@ -917,6 +927,16 @@ func (lc *localChain) setWallet(
 	defer lc.walletsMutex.Unlock()
 
 	lc.wallets[walletPublicKeyHash] = walletChainData
+}
+
+func (lc *localChain) setWalletRegistryErr(
+	walletPublicKeyHash [20]byte,
+	err error,
+) {
+	lc.walletsMutex.Lock()
+	defer lc.walletsMutex.Unlock()
+
+	lc.walletRegistryErrs[walletPublicKeyHash] = err
 }
 
 func (lc *localChain) OnWalletClosed(
@@ -1463,6 +1483,7 @@ func ConnectWithKey(
 			map[int]func(submission *InactivityClaimedEvent),
 		),
 		wallets:                                  make(map[[20]byte]*WalletChainData),
+		walletRegistryErrs:                       make(map[[20]byte]error),
 		inactivityNonces:                         make(map[[32]byte]uint64),
 		blocksByTimestamp:                        make(map[uint64]uint64),
 		blocksHashesByNumber:                     make(map[uint64][32]byte),
