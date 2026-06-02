@@ -283,6 +283,18 @@ func buildTaggedTBTCSignerValidTestSignature(seed byte) []byte {
 	return signature
 }
 
+func TestDecodeBuildTaggedTBTCSignerSignatureRejectsNonCanonicalBIP340(
+	t *testing.T,
+) {
+	_, err := decodeBuildTaggedTBTCSignerSignature(bytes.Repeat([]byte{0xff}, 64))
+	if err == nil {
+		t.Fatal("expected non-canonical BIP-340 signature bytes to be rejected")
+	}
+	if !strings.Contains(err.Error(), "non-canonical BIP-340 signature bytes") {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_ValidatesRequest(
 	t *testing.T,
 ) {
