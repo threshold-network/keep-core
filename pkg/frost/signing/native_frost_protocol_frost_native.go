@@ -304,10 +304,12 @@ func executeNativeFROSTSigning(
 		)
 	}
 
-	messageBytes := request.Message.Bytes()
-	if len(messageBytes) == 0 {
-		messageBytes = []byte{0}
+	messageDigest, err := messageDigestFromBigInt(request.Message)
+	if err != nil {
+		return nil, fmt.Errorf("invalid request message digest: [%v]", err)
 	}
+	messageBytes := make([]byte, len(messageDigest))
+	copy(messageBytes, messageDigest[:])
 
 	ownNonces, ownCommitment, err := engine.GenerateNoncesAndCommitments(
 		signerMaterial.KeyPackage,

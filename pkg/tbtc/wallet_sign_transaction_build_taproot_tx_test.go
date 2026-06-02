@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	btcec2 "github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/frost"
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
@@ -892,6 +894,274 @@ func TestWalletTransactionExecutor_SignTransaction_RejectsNativeUnsignedTransact
 	}
 }
 
+func TestWalletTransactionExecutor_SignTransaction_AppliesTaprootKeyPathSignatures(
+	t *testing.T,
+) {
+	originalBuildTaprootTxViaNativeSignerFn := buildTaprootTxViaNativeSignerFn
+	t.Cleanup(func() {
+		buildTaprootTxViaNativeSignerFn = originalBuildTaprootTxViaNativeSignerFn
+	})
+	buildTaprootTxViaNativeSignerFn = func(
+		unsignedTx *bitcoin.TransactionBuilder,
+	) (string, error) {
+		return "", nil
+	}
+
+	privateKeyBytes := mustDecodeHex(
+		t,
+		"0101010101010101010101010101010101010101010101010101010101010101",
+	)
+	privateKey, publicKey := btcec2.PrivKeyFromBytes(privateKeyBytes)
+
+	var taprootOutputKey [32]byte
+	copy(taprootOutputKey[:], schnorr.SerializePubKey(publicKey))
+
+	inputScript, err := bitcoin.PayToTaproot(taprootOutputKey)
+	if err != nil {
+		t.Fatalf("cannot create taproot input script: [%v]", err)
+	}
+
+	var outputPublicKeyHash [20]byte
+	copy(
+		outputPublicKeyHash[:],
+		mustDecodeHex(t, "0202020202020202020202020202020202020202"),
+	)
+	outputScript, err := bitcoin.PayToWitnessPublicKeyHash(outputPublicKeyHash)
+	if err != nil {
+		t.Fatalf("cannot create output script: [%v]", err)
+	}
+
+	localBitcoinChain := newLocalBitcoinChain()
+	fundingTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: bitcoin.Hash{
+						0x10, 0x11, 0x12, 0x13,
+						0x14, 0x15, 0x16, 0x17,
+						0x18, 0x19, 0x1a, 0x1b,
+						0x1c, 0x1d, 0x1e, 0x1f,
+						0x20, 0x21, 0x22, 0x23,
+						0x24, 0x25, 0x26, 0x27,
+						0x28, 0x29, 0x2a, 0x2b,
+						0x2c, 0x2d, 0x2e, 0x2f,
+					},
+					OutputIndex: 0,
+				},
+				SignatureScript: []byte{0x51},
+				Sequence:        0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: inputScript,
+			},
+		},
+		Locktime: 0,
+	}
+	if err := localBitcoinChain.BroadcastTransaction(fundingTransaction); err != nil {
+		t.Fatalf("cannot broadcast funding transaction: [%v]", err)
+	}
+
+	unsignedTx := bitcoin.NewTransactionBuilder(localBitcoinChain)
+	if err := unsignedTx.AddTaprootKeyPathInput(
+		&bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: fundingTransaction.Hash(),
+				OutputIndex:     0,
+			},
+			Value: 100000,
+		},
+	); err != nil {
+		t.Fatalf("cannot add taproot input: [%v]", err)
+	}
+	unsignedTx.AddOutput(&bitcoin.TransactionOutput{
+		Value:           90000,
+		PublicKeyScript: outputScript,
+	})
+
+	wte := &walletTransactionExecutor{
+		executingWallet: generateWallet(big.NewInt(111)),
+		signingExecutor: &deterministicSchnorrSigningExecutorForTaproot{
+			privateKey: privateKey,
+		},
+		waitForBlockFn: func(ctx context.Context, block uint64) error {
+			return nil
+		},
+	}
+
+	tx, err := wte.signTransaction(&warningCaptureLogger{}, unsignedTx, 0, 0)
+	if err != nil {
+		t.Fatalf("unexpected signTransaction error: [%v]", err)
+	}
+
+	expectedSignature := mustDecodeHex(
+		t,
+		"5e847a0c22486f3b89ff80edd5afaf4be550aa411a0a7e28cff19d2b5924d77102bbf9a0a51100f4fdfc8435d0e8ff0f61dfdeccd464b78c553b1b4414ac0877",
+	)
+
+	if len(tx.Inputs) != 1 {
+		t.Fatalf("unexpected input count: [%d]", len(tx.Inputs))
+	}
+	if len(tx.Inputs[0].Witness) != 1 {
+		t.Fatalf("unexpected taproot witness: [%x]", tx.Inputs[0].Witness)
+	}
+	if !bytes.Equal(expectedSignature, tx.Inputs[0].Witness[0]) {
+		t.Fatalf(
+			"unexpected taproot witness signature\nexpected: [%x]\nactual:   [%x]",
+			expectedSignature,
+			tx.Inputs[0].Witness[0],
+		)
+	}
+	if len(tx.Inputs[0].SignatureScript) != 0 {
+		t.Fatalf(
+			"unexpected signature script for taproot input: [%x]",
+			tx.Inputs[0].SignatureScript,
+		)
+	}
+}
+
+func TestWalletTransactionExecutor_SignTransaction_RejectsMixedTaprootAndLegacyInputsBeforeSigning(
+	t *testing.T,
+) {
+	originalBuildTaprootTxViaNativeSignerFn := buildTaprootTxViaNativeSignerFn
+	t.Cleanup(func() {
+		buildTaprootTxViaNativeSignerFn = originalBuildTaprootTxViaNativeSignerFn
+	})
+	buildTaprootTxViaNativeSignerFn = func(
+		unsignedTx *bitcoin.TransactionBuilder,
+	) (string, error) {
+		return "", nil
+	}
+
+	var taprootOutputKey [32]byte
+	copy(
+		taprootOutputKey[:],
+		mustDecodeHex(
+			t,
+			"1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
+		),
+	)
+	taprootInputScript, err := bitcoin.PayToTaproot(taprootOutputKey)
+	if err != nil {
+		t.Fatalf("cannot create taproot input script: [%v]", err)
+	}
+
+	var witnessPublicKeyHash [20]byte
+	copy(
+		witnessPublicKeyHash[:],
+		mustDecodeHex(t, "0202020202020202020202020202020202020202"),
+	)
+	witnessInputScript, err := bitcoin.PayToWitnessPublicKeyHash(
+		witnessPublicKeyHash,
+	)
+	if err != nil {
+		t.Fatalf("cannot create witness input script: [%v]", err)
+	}
+
+	localBitcoinChain := newLocalBitcoinChain()
+	taprootFundingTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: bitcoin.Hash{0x01},
+					OutputIndex:     0,
+				},
+				SignatureScript: []byte{0x51},
+				Sequence:        0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: taprootInputScript,
+			},
+		},
+		Locktime: 0,
+	}
+	if err := localBitcoinChain.BroadcastTransaction(
+		taprootFundingTransaction,
+	); err != nil {
+		t.Fatalf("cannot broadcast taproot funding transaction: [%v]", err)
+	}
+
+	legacyFundingTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: bitcoin.Hash{0x02},
+					OutputIndex:     0,
+				},
+				SignatureScript: []byte{0x51},
+				Sequence:        0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           50000,
+				PublicKeyScript: witnessInputScript,
+			},
+		},
+		Locktime: 0,
+	}
+	if err := localBitcoinChain.BroadcastTransaction(
+		legacyFundingTransaction,
+	); err != nil {
+		t.Fatalf("cannot broadcast legacy funding transaction: [%v]", err)
+	}
+
+	unsignedTx := bitcoin.NewTransactionBuilder(localBitcoinChain)
+	if err := unsignedTx.AddTaprootKeyPathInput(
+		&bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: taprootFundingTransaction.Hash(),
+				OutputIndex:     0,
+			},
+			Value: 100000,
+		},
+	); err != nil {
+		t.Fatalf("cannot add taproot input: [%v]", err)
+	}
+	if err := unsignedTx.AddPublicKeyHashInput(
+		&bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: legacyFundingTransaction.Hash(),
+				OutputIndex:     0,
+			},
+			Value: 50000,
+		},
+	); err != nil {
+		t.Fatalf("cannot add legacy input: [%v]", err)
+	}
+	unsignedTx.AddOutput(&bitcoin.TransactionOutput{
+		Value:           140000,
+		PublicKeyScript: witnessInputScript,
+	})
+
+	wte := &walletTransactionExecutor{
+		executingWallet: generateWallet(big.NewInt(111)),
+		signingExecutor: &unexpectedSigningExecutorForBuildTaprootTxError{},
+		waitForBlockFn: func(ctx context.Context, block uint64) error {
+			return nil
+		},
+	}
+
+	tx, err := wte.signTransaction(&warningCaptureLogger{}, unsignedTx, 0, 0)
+	if err == nil {
+		t.Fatal("expected mixed taproot and legacy signing error")
+	}
+	if tx != nil {
+		t.Fatal("expected no signed transaction")
+	}
+	if !strings.Contains(err.Error(), "mixed taproot and legacy inputs") {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
 func buildTaprootTxSubstitutionFixture(
 	t *testing.T,
 ) (
@@ -1070,6 +1340,37 @@ func (desefbts *deterministicECDSASigningExecutorForBuildTaprootTxSubstitution) 
 		copy(signature.S[len(signature.S)-len(sBytes):], sBytes)
 
 		signatures = append(signatures, signature)
+	}
+
+	return signatures, nil
+}
+
+type deterministicSchnorrSigningExecutorForTaproot struct {
+	privateKey *btcec2.PrivateKey
+}
+
+func (dsseft *deterministicSchnorrSigningExecutorForTaproot) signBatch(
+	ctx context.Context,
+	messages []*big.Int,
+	startBlock uint64,
+) ([]*frost.Signature, error) {
+	signatures := make([]*frost.Signature, 0, len(messages))
+
+	for _, message := range messages {
+		signature, err := schnorr.Sign(
+			dsseft.privateKey,
+			message.FillBytes(make([]byte, 32)),
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		serialized := signature.Serialize()
+		frostSignature := &frost.Signature{}
+		copy(frostSignature.R[:], serialized[:32])
+		copy(frostSignature.S[:], serialized[32:])
+
+		signatures = append(signatures, frostSignature)
 	}
 
 	return signatures, nil
