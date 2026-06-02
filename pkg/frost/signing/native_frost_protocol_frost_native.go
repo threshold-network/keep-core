@@ -5,11 +5,13 @@ package signing
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 
+	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
@@ -496,6 +498,16 @@ func executeNativeFROSTSigning(
 			err,
 		)
 	}
+	if err := verifyNativeFROSTBIP340Signature(
+		signature,
+		messageDigest,
+		signerMaterial.PublicKeyPackage,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"native FROST aggregation returned non-verifiable BIP-340 signature: [%w]",
+			err,
+		)
+	}
 
 	if logger != nil {
 		logger.Debugf(
@@ -506,6 +518,49 @@ func executeNativeFROSTSigning(
 	}
 
 	return signature, nil
+}
+
+func verifyNativeFROSTBIP340Signature(
+	signature *frost.Signature,
+	messageDigest [attempt.MessageDigestLength]byte,
+	publicKeyPackage *NativeFROSTPublicKeyPackage,
+) error {
+	if signature == nil {
+		return fmt.Errorf("signature is nil")
+	}
+
+	if publicKeyPackage == nil {
+		return fmt.Errorf("public key package is nil")
+	}
+
+	publicKeyBytes, err := hex.DecodeString(publicKeyPackage.VerifyingKey)
+	if err != nil {
+		return fmt.Errorf("cannot decode verifying key: [%w]", err)
+	}
+	if len(publicKeyBytes) != frost.OutputKeySize {
+		return fmt.Errorf(
+			"unexpected verifying key length [%d], expected [%d]",
+			len(publicKeyBytes),
+			frost.OutputKeySize,
+		)
+	}
+
+	publicKey, err := schnorr.ParsePubKey(publicKeyBytes)
+	if err != nil {
+		return fmt.Errorf("cannot parse BIP-340 verifying key: [%w]", err)
+	}
+
+	signatureBytes := signature.Serialize()
+	parsedSignature, err := schnorr.ParseSignature(signatureBytes[:])
+	if err != nil {
+		return fmt.Errorf("cannot parse BIP-340 signature: [%w]", err)
+	}
+
+	if !parsedSignature.Verify(messageDigest[:], publicKey) {
+		return fmt.Errorf("signature verification failed")
+	}
+
+	return nil
 }
 
 func includedMembersFromRequest(

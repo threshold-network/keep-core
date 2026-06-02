@@ -5,22 +5,30 @@ package signing
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/sha512"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/net/local"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
+
+var deterministicNativeFROSTSigningPrivateKeyBytesForTest = [32]byte{
+	0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+	0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+	0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+	0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+}
 
 type deterministicNativeFROSTSigningEngine struct{}
 
@@ -64,20 +72,14 @@ func (dnfse *deterministicNativeFROSTSigningEngine) NewSigningPackage(
 		return nil, fmt.Errorf("commitments are empty")
 	}
 
-	serialized := append([]byte{}, message...)
 	for _, commitment := range commitments {
 		if commitment == nil {
 			return nil, fmt.Errorf("commitment is nil")
 		}
-
-		serialized = append(serialized, []byte(commitment.Identifier)...)
-		serialized = append(serialized, commitment.Data...)
 	}
 
-	packageDigest := sha256.Sum256(serialized)
-
 	return &NativeFROSTSigningPackage{
-		Data: packageDigest[:],
+		Data: append([]byte{}, message...),
 	}, nil
 }
 
@@ -128,26 +130,29 @@ func (dnfse *deterministicNativeFROSTSigningEngine) Aggregate(
 		return nil, fmt.Errorf("signature shares are empty")
 	}
 
-	orderedSignatureShares := append([]*NativeFROSTSignatureShare{}, signatureShares...)
-	sort.Slice(orderedSignatureShares, func(i, j int) bool {
-		return orderedSignatureShares[i].Identifier < orderedSignatureShares[j].Identifier
-	})
-
-	serialized := append([]byte{}, signingPackage.Data...)
-	for _, signatureShare := range orderedSignatureShares {
+	for _, signatureShare := range signatureShares {
 		if signatureShare == nil {
 			return nil, fmt.Errorf("signature share is nil")
 		}
-
-		serialized = append(serialized, []byte(signatureShare.Identifier)...)
-		serialized = append(serialized, signatureShare.Data...)
 	}
 
-	serialized = append(serialized, []byte(publicKeyPackage.VerifyingKey)...)
+	privateKey, _ := btcec.PrivKeyFromBytes(
+		deterministicNativeFROSTSigningPrivateKeyBytesForTest[:],
+	)
+	signature, err := schnorr.Sign(privateKey, signingPackage.Data)
+	if err != nil {
+		return nil, err
+	}
 
-	signatureDigest := sha512.Sum512(serialized)
+	return signature.Serialize(), nil
+}
 
-	return signatureDigest[:], nil
+func deterministicNativeFROSTSigningVerifyingKeyForTest() string {
+	_, publicKey := btcec.PrivKeyFromBytes(
+		deterministicNativeFROSTSigningPrivateKeyBytesForTest[:],
+	)
+
+	return hex.EncodeToString(schnorr.SerializePubKey(publicKey))
 }
 
 type recordingNativeFROSTSigningEngine struct {
@@ -316,6 +321,32 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_Nati
 				results[i].signature,
 			)
 		}
+	}
+
+	assertNativeFROSTSignatureVerifiesBIP340(
+		t,
+		results[0].signature,
+		requests[0],
+	)
+}
+
+func TestVerifyNativeFROSTBIP340SignatureRejectsInvalidAggregate(
+	t *testing.T,
+) {
+	messageDigest, err := messageDigestFromBigInt(bigOneForTest())
+	if err != nil {
+		t.Fatalf("unexpected message digest error: [%v]", err)
+	}
+
+	err = verifyNativeFROSTBIP340Signature(
+		&frost.Signature{},
+		messageDigest,
+		&NativeFROSTPublicKeyPackage{
+			VerifyingKey: deterministicNativeFROSTSigningVerifyingKeyForTest(),
+		},
+	)
+	if err == nil {
+		t.Fatal("expected invalid BIP-340 aggregate signature to be rejected")
 	}
 }
 
@@ -586,7 +617,7 @@ func newNativeFROSTSigningRequestWithSessionForTest(
 		KeyPackage: keyPackage,
 		PublicKeyPackage: &NativeFROSTPublicKeyPackage{
 			VerifyingShares: verifyingShares,
-			VerifyingKey:    "verifying-key",
+			VerifyingKey:    deterministicNativeFROSTSigningVerifyingKeyForTest(),
 		},
 	})
 	if err != nil {
@@ -614,4 +645,39 @@ func newNativeFROSTSigningRequestWithSessionForTest(
 
 func bigOneForTest() *big.Int {
 	return big.NewInt(1)
+}
+
+func assertNativeFROSTSignatureVerifiesBIP340(
+	t *testing.T,
+	signature *frost.Signature,
+	request *NativeExecutionFFISigningRequest,
+) {
+	t.Helper()
+
+	messageDigest, err := messageDigestFromBigInt(request.Message)
+	if err != nil {
+		t.Fatalf("unexpected message digest error: [%v]", err)
+	}
+
+	publicKeyBytes, err := hex.DecodeString(
+		deterministicNativeFROSTSigningVerifyingKeyForTest(),
+	)
+	if err != nil {
+		t.Fatalf("unexpected verifying key decode error: [%v]", err)
+	}
+
+	publicKey, err := schnorr.ParsePubKey(publicKeyBytes)
+	if err != nil {
+		t.Fatalf("unexpected verifying key parse error: [%v]", err)
+	}
+
+	signatureBytes := signature.Serialize()
+	parsedSignature, err := schnorr.ParseSignature(signatureBytes[:])
+	if err != nil {
+		t.Fatalf("unexpected signature parse error: [%v]", err)
+	}
+
+	if !parsedSignature.Verify(messageDigest[:], publicKey) {
+		t.Fatal("expected native FROST aggregate signature to verify as BIP-340")
+	}
 }
