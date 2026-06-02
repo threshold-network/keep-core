@@ -384,6 +384,13 @@ func (wte *walletTransactionExecutor) signTransaction(
 		)
 	}
 
+	if unsignedTx.HasTaprootKeyPathInputs() &&
+		!unsignedTx.HasOnlyTaprootKeyPathInputs() {
+		return nil, fmt.Errorf(
+			"cannot apply FROST signatures to mixed taproot and legacy inputs",
+		)
+	}
+
 	signTxLogger.Infof("signing transaction's sig hashes")
 
 	signingCtx, cancelSigningCtx := withCancelOnBlock(
@@ -406,6 +413,31 @@ func (wte *walletTransactionExecutor) signTransaction(
 	}
 
 	signTxLogger.Infof("applying transaction's signatures")
+
+	if unsignedTx.HasTaprootKeyPathInputs() {
+		containers := make(
+			[]*bitcoin.SchnorrSignatureContainer,
+			len(signatures),
+		)
+		for i, signature := range signatures {
+			containers[i] = &bitcoin.SchnorrSignatureContainer{
+				Signature: signature.Serialize(),
+			}
+		}
+
+		tx, err := unsignedTx.AddTaprootKeyPathSignatures(containers)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"error while applying transaction's taproot key-path "+
+					"signatures: [%v]",
+				err,
+			)
+		}
+
+		signTxLogger.Infof("transaction created successfully")
+
+		return tx, nil
+	}
 
 	containers := make([]*bitcoin.SignatureContainer, len(signatures))
 	for i, signature := range signatures {

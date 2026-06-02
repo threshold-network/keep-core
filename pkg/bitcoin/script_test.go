@@ -334,6 +334,32 @@ func TestPayToScriptHash(t *testing.T) {
 	testutils.AssertBytesEqual(t, expectedResult, result[:])
 }
 
+func TestPayToTaproot(t *testing.T) {
+	outputKeyBytes, err := hex.DecodeString(
+		"1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var outputKey [32]byte
+	copy(outputKey[:], outputKeyBytes)
+
+	result, err := PayToTaproot(outputKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedResult, err := hex.DecodeString(
+		"51201b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertBytesEqual(t, expectedResult, result[:])
+}
+
 func TestGetScriptType(t *testing.T) {
 	fromHex := func(hexString string) []byte {
 		bytes, err := hex.DecodeString(hexString)
@@ -363,6 +389,10 @@ func TestGetScriptType(t *testing.T) {
 			script:       fromHex("002086a303cdd2e2eab1d1679f1a813835dc5a1b65321077cdccaf08f98cbf04ca96"),
 			expectedType: P2WSHScript,
 		},
+		"p2tr script": {
+			script:       fromHex("51201b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"),
+			expectedType: P2TRScript,
+		},
 		"non-standard script": {
 			script: fromHex(
 				"14934b98637ca318a4d6e7ca6ffd1690b8e77df6377508f9f0c90d0003" +
@@ -383,6 +413,59 @@ func TestGetScriptType(t *testing.T) {
 				int(test.expectedType),
 				int(actualType),
 			)
+		})
+	}
+}
+
+func TestExtractTaprootKey(t *testing.T) {
+	fromHex := func(hexString string) []byte {
+		bytes, err := hex.DecodeString(hexString)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return bytes
+	}
+
+	var outputKey [32]byte
+	copy(
+		outputKey[:],
+		fromHex("1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"),
+	)
+
+	var tests = map[string]struct {
+		script            Script
+		expectedOutputKey [32]byte
+		expectedErr       error
+	}{
+		"P2TR script": {
+			script:            fromHex("51201b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"),
+			expectedOutputKey: outputKey,
+		},
+		"other script": {
+			script:      fromHex("00148db50eb52063ea9d98b3eac91489a90f738986f6"),
+			expectedErr: fmt.Errorf("not a P2TR script"),
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			actualOutputKey, err := ExtractTaprootKey(test.script)
+
+			if !reflect.DeepEqual(test.expectedErr, err) {
+				t.Errorf(
+					"unexpected error\nexpected: %+v\nactual:   %+v\n",
+					test.expectedErr,
+					err,
+				)
+			}
+
+			if test.expectedOutputKey != actualOutputKey {
+				t.Errorf(
+					"unexpected taproot output key\nexpected: 0x%x\nactual:   0x%x\n",
+					test.expectedOutputKey,
+					actualOutputKey,
+				)
+			}
 		})
 	}
 }

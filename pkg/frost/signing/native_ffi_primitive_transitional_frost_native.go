@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
@@ -684,10 +685,12 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRoundWithSignature(
 		)
 	}
 
-	messageBytes := request.Message.Bytes()
-	if len(messageBytes) == 0 {
-		messageBytes = []byte{0}
+	messageDigest, err := messageDigestFromBigInt(request.Message)
+	if err != nil {
+		return nil, fmt.Errorf("invalid request message digest: [%v]", err)
 	}
+	messageBytes := make([]byte, len(messageDigest))
+	copy(messageBytes, messageDigest[:])
 
 	if request.MemberIndex == 0 {
 		return nil, fmt.Errorf("request member index is zero")
@@ -779,12 +782,19 @@ func decodeBuildTaggedTBTCSignerSignature(signature []byte) (*frost.Signature, e
 		return nil, fmt.Errorf("signature is empty")
 	}
 
-	// Unmarshal validates signature wire format (length + split into R/S) only.
-	// Cryptographic validity is enforced by downstream Schnorr verification at
-	// submission time.
+	// Unmarshal validates length and splits the wire value into R/S. The
+	// tbtc-signer material carries a key-group handle rather than the x-only
+	// output key, so this layer can only enforce canonical Schnorr encoding.
+	// Key-bound verification happens downstream when the wallet output key is
+	// available.
 	result := &frost.Signature{}
 	if err := result.Unmarshal(signature); err != nil {
 		return nil, fmt.Errorf("invalid frost signature bytes: [%w]", err)
+	}
+
+	serialized := result.Serialize()
+	if _, err := schnorr.ParseSignature(serialized[:]); err != nil {
+		return nil, fmt.Errorf("non-canonical BIP-340 signature bytes: [%w]", err)
 	}
 
 	return result, nil
