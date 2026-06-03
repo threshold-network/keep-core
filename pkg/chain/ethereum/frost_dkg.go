@@ -791,7 +791,7 @@ func (tc *TbtcChain) FrostDKGParameters() (*tbtc.DKGParameters, error) {
 }
 
 func convertFrostDKGResultFromABI(
-	result frostabi.Struct0,
+	result frostabi.FrostDkgResult,
 ) (*frostregistry.Result, error) {
 	submitterMemberIndex, err := uint256ToUint64(
 		result.SubmitterMemberIndex,
@@ -827,9 +827,9 @@ func convertFrostDKGResultFromABI(
 
 func convertFrostDKGResultToABI(
 	result *frostregistry.Result,
-) (frostabi.Struct0, error) {
+) (frostabi.FrostDkgResult, error) {
 	if result == nil {
-		return frostabi.Struct0{}, fmt.Errorf("FROST DKG result is nil")
+		return frostabi.FrostDkgResult{}, fmt.Errorf("FROST DKG result is nil")
 	}
 
 	signingMembersIndices := make([]*big.Int, len(result.SigningMembersIndices))
@@ -837,22 +837,22 @@ func convertFrostDKGResultToABI(
 		signingMembersIndices[i] = new(big.Int).SetUint64(signingMemberIndex)
 	}
 
-	return frostabi.Struct0{
+	return frostabi.FrostDkgResult{
 		SubmitterMemberIndex:     new(big.Int).SetUint64(result.SubmitterMemberIndex),
 		XOnlyOutputKey:           [32]byte(result.XOnlyOutputKey),
-		MembersHash:              result.MembersHash,
 		MisbehavedMembersIndices: append([]uint8{}, result.MisbehavedMembersIndices...),
 		Signatures:               append([]byte{}, result.Signatures...),
 		SigningMembersIndices:    signingMembersIndices,
 		Members:                  append([]uint32{}, result.Members...),
+		MembersHash:              result.MembersHash,
 	}, nil
 }
 
 func convertFrostDKGResultToValidatorABI(
 	result *frostregistry.Result,
-) (frostvalidatorabi.Struct0, error) {
+) (frostvalidatorabi.FrostDkgResult, error) {
 	if result == nil {
-		return frostvalidatorabi.Struct0{}, fmt.Errorf("FROST DKG result is nil")
+		return frostvalidatorabi.FrostDkgResult{}, fmt.Errorf("FROST DKG result is nil")
 	}
 
 	signingMembersIndices := make([]*big.Int, len(result.SigningMembersIndices))
@@ -860,14 +860,14 @@ func convertFrostDKGResultToValidatorABI(
 		signingMembersIndices[i] = new(big.Int).SetUint64(signingMemberIndex)
 	}
 
-	return frostvalidatorabi.Struct0{
+	return frostvalidatorabi.FrostDkgResult{
 		SubmitterMemberIndex:     new(big.Int).SetUint64(result.SubmitterMemberIndex),
 		XOnlyOutputKey:           [32]byte(result.XOnlyOutputKey),
-		MembersHash:              result.MembersHash,
 		MisbehavedMembersIndices: append([]uint8{}, result.MisbehavedMembersIndices...),
 		Signatures:               append([]byte{}, result.Signatures...),
 		SigningMembersIndices:    signingMembersIndices,
 		Members:                  append([]uint32{}, result.Members...),
+		MembersHash:              result.MembersHash,
 	}, nil
 }
 
