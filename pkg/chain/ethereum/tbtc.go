@@ -253,7 +253,11 @@ func newTbtcChain(
 	case err == nil:
 		ecdsaDkgValidatorAddress = validatorAddr
 	case errors.Is(err, ethereum.ErrAddressNotConfigured):
-		// Optional: without it TBTC falls back to defaultGroupParameters(network).
+		logger.Warnf(
+			"%s contract address is not configured; TBTC group parameters "+
+				"will fall back to network defaults instead of on-chain values",
+			EcdsaDkgValidatorContractName,
+		)
 	default:
 		return nil, fmt.Errorf(
 			"failed to resolve %s contract address: [%w]",

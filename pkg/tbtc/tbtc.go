@@ -53,8 +53,12 @@ func (gp *GroupParameters) DishonestThreshold() int {
 func defaultGroupParameters(n ethereum.Network) *GroupParameters {
 	switch n {
 	case ethereum.Sepolia, ethereum.Developer:
-		logger.Infof(
-			"TBTC group parameters: testnet/small group (size=3, quorum=3, honest=2) for %s",
+		logger.Warnf(
+			"TBTC group parameters: testnet/small group (size=3, quorum=3, "+
+				"honest=2) for %s; quorum equals size so all three operators "+
+				"must remain online for DKG to progress. Configure an "+
+				"EcdsaDkgValidator contract address to override these defaults "+
+				"with on-chain values.",
 			n,
 		)
 		return &GroupParameters{
