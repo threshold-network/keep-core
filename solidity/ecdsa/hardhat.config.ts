@@ -20,6 +20,8 @@ import "./tasks"
 import { task } from "hardhat/config"
 import { TASK_TEST } from "hardhat/builtin-tasks/task-names"
 
+import type { HardhatUserConfig } from "hardhat/config"
+
 const TASK_CHECK_ACCOUNTS_COUNT = "check-accounts-count"
 
 const hardhatVerifyEnabled = process.env.DISABLE_HARDHAT_VERIFY !== "true"
@@ -79,7 +81,7 @@ export const testConfig = {
   operatorsCount: 100,
 }
 
-const config = {
+const config: HardhatUserConfig = {
   solidity: {
     compilers: [
       {
@@ -171,13 +173,6 @@ const config = {
     username: "thesis",
     project: "",
   },
-  ...(hardhatVerifyEnabled
-    ? {
-        etherscan: {
-          apiKey: process.env.ETHERSCAN_API_KEY,
-        },
-      }
-    : {}),
   namedAccounts: {
     deployer: {
       default: 1, // take the second account
@@ -290,5 +285,15 @@ task(TASK_CHECK_ACCOUNTS_COUNT, "Checks accounts count").setAction(async () => {
     )
   }
 })
+
+if (hardhatVerifyEnabled) {
+  // Assigned post-declaration so the HardhatUserConfig type annotation above
+  // remains intact (a conditional spread inside the literal breaks inference).
+  ;(config as HardhatUserConfig & {
+    etherscan?: { apiKey?: string }
+  }).etherscan = {
+    apiKey: process.env.ETHERSCAN_API_KEY,
+  }
+}
 
 export default config
