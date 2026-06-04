@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -22,6 +23,12 @@ const (
 	LightRelayContractName                = "LightRelay"
 	LightRelayMaintainerProxyContractName = "LightRelayMaintainerProxy"
 )
+
+// waitDeployBackendTransactionMinedTimeout bounds the synchronous post-submit
+// wait for retarget transactions. The wait covers both receipt polling and the
+// follow-up confirmation-depth wait. Without a bound, a stalled RPC or a chain
+// that stops producing blocks would hang the maintainer indefinitely.
+const waitDeployBackendTransactionMinedTimeout = 10 * time.Minute
 
 // BitcoinDifficultyChain represents a Bitcoin difficulty-specific chain handle.
 type BitcoinDifficultyChain struct {
@@ -138,7 +145,13 @@ func (bdc *BitcoinDifficultyChain) waitDeployBackendTransactionMined(
 	if tx == nil {
 		return fmt.Errorf("nil transaction waiting for [%s]", method)
 	}
-	receipt, err := bind.WaitMined(context.Background(), bdc.client, tx)
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		waitDeployBackendTransactionMinedTimeout,
+	)
+	defer cancel()
+
+	receipt, err := bind.WaitMined(ctx, bdc.client, tx)
 	if err != nil {
 		return fmt.Errorf("waiting for transaction [%s] [%s]: [%w]", method, tx.Hash().Hex(), err)
 	}
@@ -155,7 +168,9 @@ func (bdc *BitcoinDifficultyChain) waitDeployBackendTransactionMined(
 	if receipt.BlockNumber != nil && bdc.blockCounter != nil {
 		includedAt := receipt.BlockNumber.Uint64()
 		const confirmDepth = uint64(3)
-		if err := bdc.blockCounter.WaitForBlockHeight(includedAt + confirmDepth); err != nil {
+		if err := waitForBlockHeightCtx(
+			ctx, bdc.blockCounter, includedAt+confirmDepth,
+		); err != nil {
 			return fmt.Errorf(
 				"waiting confirmation depth after [%s] [%s]: [%w]",
 				method,
@@ -165,6 +180,25 @@ func (bdc *BitcoinDifficultyChain) waitDeployBackendTransactionMined(
 		}
 	}
 	return nil
+}
+
+// waitForBlockHeightCtx wraps the context-less chain.BlockCounter.WaitForBlockHeight
+// so the caller can enforce a deadline. The underlying interface does not accept
+// a context; if ctx fires before the height is reached, the wait goroutine stays
+// parked until the next block tick eventually unblocks it.
+func waitForBlockHeightCtx(
+	ctx context.Context,
+	bc chain.BlockCounter,
+	blockNumber uint64,
+) error {
+	done := make(chan error, 1)
+	go func() { done <- bc.WaitForBlockHeight(blockNumber) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Ready checks whether the relay is active (i.e. genesis has been performed).
