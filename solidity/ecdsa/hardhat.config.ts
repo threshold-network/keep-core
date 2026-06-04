@@ -179,10 +179,17 @@ const config: HardhatUserConfig = {
         },
       }
     : {}),
+  // Sepolia uses a single key (account index 0 from ACCOUNTS_PRIVATE_KEYS) for every
+  // role because the testnet stack is operated from one funded deployer key — there is
+  // no separate governance multisig, Threshold Council, or chaosnet owner on Sepolia.
+  // This is testnet-only operational convenience and MUST NOT be replicated on mainnet,
+  // where the deployer key must be distinct from governance / chaosnetOwner / esdm
+  // (the latter three legitimately share the Threshold Council address). A deploy-time
+  // guard in deploy/00_log_external_deployments.ts fails the run on mainnet if the
+  // deployer collides with any other role.
   namedAccounts: {
     deployer: {
       default: 1, // take the second account
-      // Use first account from ACCOUNTS_PRIVATE_KEYS (required for custom testnet deployers)
       sepolia: 0,
       mainnet: "0x716089154304f22a2F9c8d2f8C45815183BF3532",
     },

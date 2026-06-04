@@ -25,7 +25,7 @@ const EXPECTED_EXTERNAL_ON_SEPOLIA = [
 ]
 
 const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
-  const { deployments, network } = hre
+  const { deployments, network, getNamedAccounts } = hre
   const { log } = deployments
 
   const all = await deployments.all()
@@ -49,6 +49,32 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
         )}. ` +
           `external.deployments.sepolia is empty by design; the committed snapshot under ` +
           `deployments/sepolia/ is the sole source. Regenerate or copy the missing artifacts.`
+      )
+    }
+  }
+
+  // On mainnet the deployer key must be distinct from governance / chaosnetOwner /
+  // esdm. Those three legitimately share the Threshold Council multisig address, but
+  // the deploy key must not be a Threshold Council signer — otherwise compromising
+  // a single key gives full governance. Sepolia legitimately collapses everything
+  // to one key (see hardhat.config.ts), so this guard runs only on mainnet.
+  if (network.name === "mainnet") {
+    const named = await getNamedAccounts()
+    const deployer = (named.deployer || "").toLowerCase()
+    const collisions: string[] = []
+    for (const role of ["governance", "chaosnetOwner", "esdm"]) {
+      const addr = (named[role] || "").toLowerCase()
+      if (deployer && addr && deployer === addr) {
+        collisions.push(role)
+      }
+    }
+    if (collisions.length > 0) {
+      throw new Error(
+        `Mainnet deploy refused: deployer address (${named.deployer}) collides with ` +
+          `role(s) ${collisions.join(
+            ", "
+          )}. Each of these must be a distinct address ` +
+          `to preserve the separation between the deploy key and governance.`
       )
     }
   }
