@@ -84,6 +84,9 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
         address: walletRegistry.address,
       })
     } catch (err) {
+      if (hre.network.name === "mainnet") {
+        throw err
+      }
       hre.deployments.log(`Tenderly verification skipped: ${err}`)
     }
   }
