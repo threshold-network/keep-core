@@ -173,6 +173,12 @@ const config: HardhatUserConfig = {
     username: "thesis",
     project: "",
   },
+  // Sepolia: all four roles collapse to account index 0 (the single key in
+  // ACCOUNTS_PRIVATE_KEYS). Single-key operation is intentional for our
+  // testnet deploy flow; downstream branches that distinguish deployer vs.
+  // governance vs. esdm (e.g. tasks/initialize-wallet-owner.ts's
+  // owner-vs-governance fork, Ownable.transferOwnership flows) are inactive
+  // on Sepolia by design.
   namedAccounts: {
     deployer: {
       default: 1, // take the second account
