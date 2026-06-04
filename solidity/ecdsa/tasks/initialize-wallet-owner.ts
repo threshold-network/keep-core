@@ -53,6 +53,9 @@ async function initializeWalletOwner(
     return
   }
 
+  // TOCTOU recheck: governance can be transferred between the early read
+  // above and this execute() on shared networks. Re-read immediately before
+  // the tx so a concurrent transferGovernance doesn't slip past the gate.
   const wrGovernanceNow = await read("WalletRegistry", {}, "governance")
   if (!helpers.address.equal(wrg.address, wrGovernanceNow)) {
     throw new Error(
