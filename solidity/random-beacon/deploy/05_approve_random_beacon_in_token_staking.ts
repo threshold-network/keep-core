@@ -53,23 +53,12 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     )
   }
 
-  try {
-    await execute(
-      "TokenStaking",
-      { from: deployer, log: true, waitConfirmations: 1 },
-      "approveApplication",
-      RandomBeacon.address
-    )
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e)
-    if (msg.includes("No method named") && msg.includes("approveApplication")) {
-      hre.deployments.log(
-        "TokenStaking has no approveApplication callable on this network; skipping"
-      )
-      return
-    }
-    throw e
-  }
+  await execute(
+    "TokenStaking",
+    { from: deployer, log: true, waitConfirmations: 1 },
+    "approveApplication",
+    RandomBeacon.address
+  )
 }
 
 export default func

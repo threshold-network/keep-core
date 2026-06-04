@@ -35,17 +35,7 @@ async function func(hre) {
     catch (e) {
         hre.deployments.log("Could not read TokenStaking application status (continuing): ".concat(e));
     }
-    try {
-        await execute("TokenStaking", { from: deployer, log: true, waitConfirmations: 1 }, "approveApplication", RandomBeacon.address);
-    }
-    catch (e) {
-        var msg = e instanceof Error ? e.message : String(e);
-        if (msg.includes("No method named") && msg.includes("approveApplication")) {
-            hre.deployments.log("TokenStaking has no approveApplication callable on this network; skipping");
-            return;
-        }
-        throw e;
-    }
+    await execute("TokenStaking", { from: deployer, log: true, waitConfirmations: 1 }, "approveApplication", RandomBeacon.address);
 }
 exports.default = func;
 func.tags = ["RandomBeaconApprove"];
