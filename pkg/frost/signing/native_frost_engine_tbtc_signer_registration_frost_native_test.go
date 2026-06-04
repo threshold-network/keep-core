@@ -3,16 +3,24 @@
 package signing
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 )
 
 func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 	UnregisterNativeTBTCSignerEngine()
+	UnregisterNativeFROSTDKGEngine()
+	UnregisterNativeFROSTSigningEngine()
 	t.Cleanup(func() {
 		UnregisterNativeTBTCSignerEngine()
+		UnregisterNativeFROSTDKGEngine()
+		UnregisterNativeFROSTSigningEngine()
 	})
 
 	err := registerBuildTaggedNativeFROSTSigningEngine()
@@ -46,6 +54,51 @@ func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("unexpected bridge error: [%v]", err)
+	}
+
+	dkgEngine := currentNativeFROSTDKGEngine()
+	if dkgEngine == nil {
+		t.Fatal("expected native FROST DKG engine registration")
+	}
+
+	_, err = dkgEngine.Part1(
+		"\"0100000000000000000000000000000000000000000000000000000000000000\"",
+		3,
+		2,
+	)
+	if err == nil {
+		t.Fatal("expected unavailable native FROST DKG bridge error")
+	}
+
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"expected native cryptography unavailable error: [%v], got [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
+	}
+
+	signingEngine := currentNativeFROSTSigningEngine()
+	if signingEngine == nil {
+		t.Fatal("expected native FROST signing engine registration")
+	}
+
+	_, _, err = signingEngine.GenerateNoncesAndCommitments(
+		&NativeFROSTKeyPackage{
+			Identifier: "\"0100000000000000000000000000000000000000000000000000000000000000\"",
+			Data:       []byte{0x01},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected unavailable native FROST signing bridge error")
+	}
+
+	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"expected native cryptography unavailable error: [%v], got [%v]",
+			ErrNativeCryptographyUnavailable,
+			err,
+		)
 	}
 
 	_, err = engine.BuildTaprootTx(
@@ -89,6 +142,223 @@ func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 			err,
 		)
 	}
+}
+
+func TestBuildTaggedTBTCSignerInteractiveFROSTBridge_WithLinkedSigner(t *testing.T) {
+	t.Setenv("TBTC_SIGNER_PROFILE", "development")
+	t.Setenv("TBTC_SIGNER_ENFORCE_PROVENANCE_GATE", "false")
+
+	engine := &buildTaggedTBTCSignerEngine{}
+	participantIDs := []byte{1, 2, 3}
+	participantIdentifiers := make(map[byte]string, len(participantIDs))
+	for _, participantID := range participantIDs {
+		participantIdentifiers[participantID] = buildTaggedTBTCSignerTestIdentifier(
+			participantID,
+		)
+	}
+
+	part1Results := make(map[byte]*NativeFROSTDKGPart1Result, len(participantIDs))
+	for _, participantID := range participantIDs {
+		result, err := engine.Part1(
+			participantIdentifiers[participantID],
+			3,
+			2,
+		)
+		if err != nil {
+			if errors.Is(err, ErrNativeCryptographyUnavailable) {
+				t.Skip("linked tbtc-signer FFI symbols unavailable")
+			}
+			t.Fatalf("unexpected DKG part1 error: [%v]", err)
+		}
+		if result.Package.Identifier != participantIdentifiers[participantID] {
+			t.Fatalf("unexpected DKG part1 identifier: [%s]", result.Package.Identifier)
+		}
+		part1Results[participantID] = result
+	}
+
+	part2Results := make(map[byte]*NativeFROSTDKGPart2Result, len(participantIDs))
+	for _, participantID := range participantIDs {
+		round1Packages := make([]*NativeFROSTDKGRound1Package, 0, 2)
+		for _, otherParticipantID := range participantIDs {
+			if otherParticipantID == participantID {
+				continue
+			}
+			round1Packages = append(
+				round1Packages,
+				part1Results[otherParticipantID].Package,
+			)
+		}
+
+		result, err := engine.Part2(
+			part1Results[participantID].SecretPackage,
+			round1Packages,
+		)
+		if err != nil {
+			t.Fatalf("unexpected DKG part2 error: [%v]", err)
+		}
+		if len(result.Packages) != 2 {
+			t.Fatalf("unexpected DKG part2 package count: [%d]", len(result.Packages))
+		}
+		part2Results[participantID] = result
+	}
+
+	part3Results := make(map[byte]*NativeFROSTDKGResult, len(participantIDs))
+	for _, participantID := range participantIDs {
+		round1Packages := make([]*NativeFROSTDKGRound1Package, 0, 2)
+		for _, otherParticipantID := range participantIDs {
+			if otherParticipantID == participantID {
+				continue
+			}
+			round1Packages = append(
+				round1Packages,
+				part1Results[otherParticipantID].Package,
+			)
+		}
+
+		round2Packages := make([]*NativeFROSTDKGRound2Package, 0, 2)
+		for _, senderParticipantID := range participantIDs {
+			if senderParticipantID == participantID {
+				continue
+			}
+			var packageForRecipient *NativeFROSTDKGRound2Package
+			for _, pkg := range part2Results[senderParticipantID].Packages {
+				if pkg.Identifier == participantIdentifiers[participantID] {
+					packageForRecipient = pkg
+					break
+				}
+			}
+			if packageForRecipient == nil {
+				t.Fatalf(
+					"missing DKG round2 package from [%d] to [%d]",
+					senderParticipantID,
+					participantID,
+				)
+			}
+			copied := *packageForRecipient
+			copied.SenderIdentifier = participantIdentifiers[senderParticipantID]
+			round2Packages = append(round2Packages, &copied)
+		}
+
+		result, err := engine.Part3(
+			part2Results[participantID].SecretPackage,
+			round1Packages,
+			round2Packages,
+		)
+		if err != nil {
+			t.Fatalf("unexpected DKG part3 error: [%v]", err)
+		}
+		if result.KeyPackage.Identifier != participantIdentifiers[participantID] {
+			t.Fatalf("unexpected DKG key package identifier")
+		}
+		if len(result.PublicKeyPackage.VerifyingKey) != 64 {
+			t.Fatalf(
+				"unexpected DKG x-only verifying key length: [%d]",
+				len(result.PublicKeyPackage.VerifyingKey),
+			)
+		}
+		if len(result.PublicKeyPackage.VerifyingShares) != 3 {
+			t.Fatalf(
+				"unexpected DKG verifying share count: [%d]",
+				len(result.PublicKeyPackage.VerifyingShares),
+			)
+		}
+		part3Results[participantID] = result
+	}
+
+	verifyingKey := part3Results[1].PublicKeyPackage.VerifyingKey
+	for _, participantID := range participantIDs {
+		if part3Results[participantID].PublicKeyPackage.VerifyingKey != verifyingKey {
+			t.Fatal("DKG participants produced different group verifying keys")
+		}
+	}
+
+	signingParticipants := []byte{1, 2}
+	commitments := make([]uniFFINativeFROSTCommitment, 0, len(signingParticipants))
+	noncesByParticipant := make(map[byte][]byte, len(signingParticipants))
+	for _, participantID := range signingParticipants {
+		nonces, commitmentIdentifier, commitmentData, err :=
+			engine.GenerateNoncesAndCommitments(
+				part3Results[participantID].KeyPackage.Identifier,
+				part3Results[participantID].KeyPackage.Data,
+			)
+		if err != nil {
+			t.Fatalf("unexpected nonce generation error: [%v]", err)
+		}
+		commitments = append(commitments, uniFFINativeFROSTCommitment{
+			Identifier: commitmentIdentifier,
+			Data:       commitmentData,
+		})
+		noncesByParticipant[participantID] = nonces
+	}
+
+	message := bytesOf(0x42, 32)
+	signingPackage, err := engine.NewSigningPackage(message, commitments)
+	if err != nil {
+		t.Fatalf("unexpected signing package error: [%v]", err)
+	}
+
+	signatureShares := make(
+		[]uniFFINativeFROSTSignatureShare,
+		0,
+		len(signingParticipants),
+	)
+	for _, participantID := range signingParticipants {
+		signatureShareIdentifier, signatureShareData, err := engine.Sign(
+			signingPackage,
+			noncesByParticipant[participantID],
+			part3Results[participantID].KeyPackage.Identifier,
+			part3Results[participantID].KeyPackage.Data,
+		)
+		if err != nil {
+			t.Fatalf("unexpected signature share error: [%v]", err)
+		}
+		signatureShares = append(signatureShares, uniFFINativeFROSTSignatureShare{
+			Identifier: signatureShareIdentifier,
+			Data:       signatureShareData,
+		})
+	}
+
+	signatureBytes, err := engine.Aggregate(
+		signingPackage,
+		signatureShares,
+		part3Results[1].PublicKeyPackage,
+	)
+	if err != nil {
+		t.Fatalf("unexpected aggregate error: [%v]", err)
+	}
+	if len(signatureBytes) != 64 {
+		t.Fatalf("unexpected aggregate signature length: [%d]", len(signatureBytes))
+	}
+
+	publicKeyBytes, err := hex.DecodeString(verifyingKey)
+	if err != nil {
+		t.Fatalf("cannot decode verifying key: [%v]", err)
+	}
+	publicKey, err := schnorr.ParsePubKey(publicKeyBytes)
+	if err != nil {
+		t.Fatalf("cannot parse verifying key: [%v]", err)
+	}
+	signature, err := schnorr.ParseSignature(signatureBytes)
+	if err != nil {
+		t.Fatalf("cannot parse aggregate signature: [%v]", err)
+	}
+	if !signature.Verify(message, publicKey) {
+		t.Fatal("aggregate signature does not verify under DKG x-only key")
+	}
+}
+
+func buildTaggedTBTCSignerTestIdentifier(memberIndex byte) string {
+	identifier := make([]byte, 32)
+	identifier[0] = memberIndex
+	return fmt.Sprintf("%q", hex.EncodeToString(identifier))
+}
+
+func bytesOf(value byte, length int) []byte {
+	bytes := make([]byte, length)
+	for i := range bytes {
+		bytes[i] = value
+	}
+	return bytes
 }
 
 func TestBuildTaggedTBTCSignerResultStatusError_Unavailable(t *testing.T) {
