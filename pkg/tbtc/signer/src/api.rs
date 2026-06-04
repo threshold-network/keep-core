@@ -23,6 +23,130 @@ pub struct DkgResult {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct DkgRound1Package {
+    pub identifier: String,
+    pub package_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct DkgRound2Package {
+    pub identifier: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_identifier: Option<String>,
+    pub package_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct DkgPart1Request {
+    pub participant_identifier: String,
+    pub max_signers: u16,
+    pub min_signers: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct DkgPart1Result {
+    pub secret_package_hex: String,
+    pub package: DkgRound1Package,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct DkgPart2Request {
+    pub secret_package_hex: String,
+    pub round1_packages: Vec<DkgRound1Package>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct DkgPart2Result {
+    pub secret_package_hex: String,
+    pub packages: Vec<DkgRound2Package>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct NativeFrostKeyPackage {
+    pub identifier: String,
+    pub data_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct NativeFrostPublicKeyPackage {
+    pub verifying_shares: std::collections::BTreeMap<String, String>,
+    pub verifying_key: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct DkgPart3Request {
+    pub secret_package_hex: String,
+    pub round1_packages: Vec<DkgRound1Package>,
+    pub round2_packages: Vec<DkgRound2Package>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct DkgPart3Result {
+    pub key_package: NativeFrostKeyPackage,
+    pub public_key_package: NativeFrostPublicKeyPackage,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct NativeFrostCommitment {
+    pub identifier: String,
+    pub data_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct NativeFrostSignatureShare {
+    pub identifier: String,
+    pub data_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct GenerateNoncesAndCommitmentsRequest {
+    pub key_package_identifier: String,
+    pub key_package_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct GenerateNoncesAndCommitmentsResult {
+    pub nonces_hex: String,
+    pub commitment: NativeFrostCommitment,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct NewSigningPackageRequest {
+    pub message_hex: String,
+    pub commitments: Vec<NativeFrostCommitment>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct NewSigningPackageResult {
+    pub signing_package_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct SignShareRequest {
+    pub signing_package_hex: String,
+    pub nonces_hex: String,
+    pub key_package_identifier: String,
+    pub key_package_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct SignShareResult {
+    pub signature_share: NativeFrostSignatureShare,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct AggregateRequest {
+    pub signing_package_hex: String,
+    pub signature_shares: Vec<NativeFrostSignatureShare>,
+    pub public_key_package: NativeFrostPublicKeyPackage,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct AggregateResult {
+    pub signature_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct StartSignRoundRequest {
     pub session_id: String,
     pub member_identifier: u16,
