@@ -14,3 +14,8 @@ deployments/*
 
 # OpenZeppelin
 .openzeppelin/unknown-*.json
+
+# Yarn Berry runtime state
+.yarn/install-state.gz
+.yarn/cache/
+.yarn/build-state.yml
