@@ -76,7 +76,7 @@ describe("WalletRegistry - Rewards", () => {
       deployer,
       governance,
       thirdParty,
-    } = await walletRegistryFixture())
+    } = await walletRegistryFixture({ useAllowlist: true }))
     ;({ members, walletID } = await createNewWallet(
       walletRegistry,
       walletOwner.wallet,

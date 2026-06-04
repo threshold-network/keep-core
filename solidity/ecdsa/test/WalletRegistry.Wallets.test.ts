@@ -60,7 +60,7 @@ describe("WalletRegistry - Wallets", async () => {
   before("load test fixture", async () => {
     // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({ walletRegistry, randomBeacon, walletOwner, thirdParty } =
-      await walletRegistryFixture())
+      await walletRegistryFixture({ useAllowlist: true }))
   })
 
   describe("approveDkgResult", async () => {

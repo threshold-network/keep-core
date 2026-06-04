@@ -75,7 +75,7 @@ describe("WalletRegistry - Slashing", () => {
       thirdParty,
       staking,
       tToken,
-    } = await walletRegistryFixture())
+    } = await walletRegistryFixture({ useAllowlist: true }))
     ;({ walletID, members } = await createNewWallet(
       walletRegistry,
       walletOwner.wallet,

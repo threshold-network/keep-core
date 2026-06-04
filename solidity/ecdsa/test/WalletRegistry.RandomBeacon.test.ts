@@ -34,7 +34,7 @@ describe("WalletRegistry - Random Beacon", async () => {
       walletOwner,
       thirdParty,
       randomBeacon: randomBeaconFake,
-    } = await walletRegistryFixture())
+    } = await walletRegistryFixture({ useAllowlist: true }))
   })
 
   describe("requestNewWallet", async () => {

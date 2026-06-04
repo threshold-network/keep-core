@@ -111,7 +111,7 @@ describe("WalletRegistry - Wallet Creation", async () => {
       thirdParty,
       operators,
       staking,
-    } = await walletRegistryFixture())
+    } = await walletRegistryFixture({ useAllowlist: true }))
   })
 
   describe("requestNewWallet", async () => {
