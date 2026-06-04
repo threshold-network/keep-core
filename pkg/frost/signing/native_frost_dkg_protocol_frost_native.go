@@ -75,20 +75,20 @@ func (nfdkgropm *nativeFROSTDKGRoundOnePackageMessage) Unmarshal(data []byte) er
 }
 
 type nativeFROSTDKGRoundTwoPackageMessage struct {
-	SenderIDValue                uint32 `json:"senderID"`
+	SenderIDValue               uint32                           `json:"senderID"`
+	SessionIDValue              string                           `json:"sessionID"`
+	SenderParticipantIdentifier string                           `json:"senderParticipantIdentifier"`
+	Packages                    []*nativeFROSTDKGRoundTwoPackage `json:"packages"`
+}
+
+type nativeFROSTDKGRoundTwoPackage struct {
 	ReceiverIDValue              uint32 `json:"receiverID"`
-	SessionIDValue               string `json:"sessionID"`
-	SenderParticipantIdentifier  string `json:"senderParticipantIdentifier"`
 	PackageParticipantIdentifier string `json:"packageParticipantIdentifier"`
 	PackageData                  []byte `json:"packageData"`
 }
 
 func (nfdkgtrpm *nativeFROSTDKGRoundTwoPackageMessage) SenderID() group.MemberIndex {
 	return group.MemberIndex(nfdkgtrpm.SenderIDValue)
-}
-
-func (nfdkgtrpm *nativeFROSTDKGRoundTwoPackageMessage) ReceiverID() group.MemberIndex {
-	return group.MemberIndex(nfdkgtrpm.ReceiverIDValue)
 }
 
 func (nfdkgtrpm *nativeFROSTDKGRoundTwoPackageMessage) SessionID() string {
@@ -111,23 +111,38 @@ func (nfdkgtrpm *nativeFROSTDKGRoundTwoPackageMessage) Unmarshal(data []byte) er
 	if nfdkgtrpm.SenderID() == 0 {
 		return fmt.Errorf("sender ID is zero")
 	}
-	if nfdkgtrpm.ReceiverID() == 0 {
-		return fmt.Errorf("receiver ID is zero")
-	}
 	if nfdkgtrpm.SessionID() == "" {
 		return fmt.Errorf("session ID is empty")
 	}
 	if nfdkgtrpm.SenderParticipantIdentifier == "" {
 		return fmt.Errorf("sender participant identifier is empty")
 	}
-	if nfdkgtrpm.PackageParticipantIdentifier == "" {
-		return fmt.Errorf("package participant identifier is empty")
+	if len(nfdkgtrpm.Packages) == 0 {
+		return fmt.Errorf("round-two packages are empty")
 	}
-	if len(nfdkgtrpm.PackageData) == 0 {
-		return fmt.Errorf("round-two package data is empty")
+	for i, pkg := range nfdkgtrpm.Packages {
+		if pkg == nil {
+			return fmt.Errorf("round-two package [%d] is nil", i)
+		}
+		if pkg.ReceiverID() == 0 {
+			return fmt.Errorf("round-two package [%d] receiver ID is zero", i)
+		}
+		if pkg.PackageParticipantIdentifier == "" {
+			return fmt.Errorf(
+				"round-two package [%d] participant identifier is empty",
+				i,
+			)
+		}
+		if len(pkg.PackageData) == 0 {
+			return fmt.Errorf("round-two package [%d] data is empty", i)
+		}
 	}
 
 	return nil
+}
+
+func (nfdkgtrp *nativeFROSTDKGRoundTwoPackage) ReceiverID() group.MemberIndex {
+	return group.MemberIndex(nfdkgtrp.ReceiverIDValue)
 }
 
 // RegisterNativeFROSTDKGUnmarshallers registers native FROST DKG protocol
@@ -253,6 +268,16 @@ func ExecuteNativeFROSTDKG(
 		return nil, err
 	}
 
+	roundTwoPackagesMessage := &nativeFROSTDKGRoundTwoPackageMessage{
+		SenderIDValue:               uint32(request.MemberIndex),
+		SessionIDValue:              request.SessionID,
+		SenderParticipantIdentifier: ownIdentifier,
+		Packages: make(
+			[]*nativeFROSTDKGRoundTwoPackage,
+			0,
+			len(part2.Packages),
+		),
+	}
 	for _, pkg := range part2.Packages {
 		receiverID, ok := memberIndexesByIdentifier[pkg.Identifier]
 		if !ok {
@@ -267,21 +292,29 @@ func ExecuteNativeFROSTDKG(
 			)
 		}
 
-		roundTwoMessage := &nativeFROSTDKGRoundTwoPackageMessage{
-			SenderIDValue:                uint32(request.MemberIndex),
-			ReceiverIDValue:              uint32(receiverID),
-			SessionIDValue:               request.SessionID,
-			SenderParticipantIdentifier:  ownIdentifier,
-			PackageParticipantIdentifier: pkg.Identifier,
-			PackageData:                  append([]byte{}, pkg.Data...),
-		}
-		if err := request.Channel.Send(
-			ctx,
-			roundTwoMessage,
-			net.BackoffRetransmissionStrategy,
-		); err != nil {
-			return nil, fmt.Errorf("cannot send native FROST DKG round-two package: [%w]", err)
-		}
+		roundTwoPackagesMessage.Packages = append(
+			roundTwoPackagesMessage.Packages,
+			&nativeFROSTDKGRoundTwoPackage{
+				ReceiverIDValue:              uint32(receiverID),
+				PackageParticipantIdentifier: pkg.Identifier,
+				PackageData:                  append([]byte{}, pkg.Data...),
+			},
+		)
+	}
+
+	sort.Slice(
+		roundTwoPackagesMessage.Packages,
+		func(i, j int) bool {
+			return roundTwoPackagesMessage.Packages[i].ReceiverID() <
+				roundTwoPackagesMessage.Packages[j].ReceiverID()
+		},
+	)
+	if err := request.Channel.Send(
+		ctx,
+		roundTwoPackagesMessage,
+		net.BackoffRetransmissionStrategy,
+	); err != nil {
+		return nil, fmt.Errorf("cannot send native FROST DKG round-two packages: [%w]", err)
 	}
 
 	roundTwoMessages, err := collectNativeFROSTDKGRoundTwoPackageMessages(
@@ -306,10 +339,18 @@ func ExecuteNativeFROSTDKG(
 		}
 
 		message := roundTwoMessages[memberIndex]
+		roundTwoPackage, err := nativeFROSTDKGRoundTwoPackageForReceiver(
+			message,
+			request.MemberIndex,
+		)
+		if err != nil {
+			return nil, err
+		}
+
 		roundTwoPackages = append(roundTwoPackages, &NativeFROSTDKGRound2Package{
-			Identifier:       message.PackageParticipantIdentifier,
+			Identifier:       roundTwoPackage.PackageParticipantIdentifier,
 			SenderIdentifier: message.SenderParticipantIdentifier,
-			Data:             append([]byte{}, message.PackageData...),
+			Data:             append([]byte{}, roundTwoPackage.PackageData...),
 		})
 	}
 
@@ -537,10 +578,6 @@ func collectNativeFROSTDKGRoundTwoPackageMessages(
 			return
 		}
 
-		if payload.ReceiverID() != request.MemberIndex {
-			return
-		}
-
 		if !shouldAcceptNativeFROSTDKGMessage(
 			request,
 			includedMembersSet,
@@ -562,10 +599,23 @@ func collectNativeFROSTDKGRoundTwoPackageMessages(
 			)
 			return
 		}
+		receiverPackage, err := nativeFROSTDKGRoundTwoPackageForReceiver(
+			payload,
+			request.MemberIndex,
+		)
+		if err != nil {
+			protocolLogger.Warnf(
+				"dropping native FROST DKG round-two packages from sender [%d] for receiver [%d]: [%v]",
+				payload.SenderID(),
+				request.MemberIndex,
+				err,
+			)
+			return
+		}
 		if err := validateNativeFROSTDKGParticipantIdentifier(
 			identifiersByMemberIndex,
 			request.MemberIndex,
-			payload.PackageParticipantIdentifier,
+			receiverPackage.PackageParticipantIdentifier,
 		); err != nil {
 			protocolLogger.Warnf(
 				"dropping native FROST DKG round-two package from sender [%d] for receiver [%d]: [%v]",
@@ -659,6 +709,40 @@ func validateNativeFROSTDKGParticipantIdentifier(
 	return nil
 }
 
+func nativeFROSTDKGRoundTwoPackageForReceiver(
+	message *nativeFROSTDKGRoundTwoPackageMessage,
+	receiverID group.MemberIndex,
+) (*nativeFROSTDKGRoundTwoPackage, error) {
+	if message == nil {
+		return nil, fmt.Errorf("round-two package message is nil")
+	}
+
+	var receiverPackage *nativeFROSTDKGRoundTwoPackage
+	for _, pkg := range message.Packages {
+		if pkg == nil || pkg.ReceiverID() != receiverID {
+			continue
+		}
+
+		if receiverPackage != nil {
+			return nil, fmt.Errorf(
+				"multiple round-two packages for receiver [%d]",
+				receiverID,
+			)
+		}
+
+		receiverPackage = pkg
+	}
+
+	if receiverPackage == nil {
+		return nil, fmt.Errorf(
+			"no round-two package for receiver [%d]",
+			receiverID,
+		)
+	}
+
+	return receiverPackage, nil
+}
+
 func nativeFROSTDKGRoundOnePackageMessagesEqual(
 	left, right *nativeFROSTDKGRoundOnePackageMessage,
 ) bool {
@@ -680,11 +764,35 @@ func nativeFROSTDKGRoundTwoPackageMessagesEqual(
 	}
 
 	return left.SenderIDValue == right.SenderIDValue &&
-		left.ReceiverIDValue == right.ReceiverIDValue &&
 		left.SessionIDValue == right.SessionIDValue &&
 		left.SenderParticipantIdentifier == right.SenderParticipantIdentifier &&
-		left.PackageParticipantIdentifier == right.PackageParticipantIdentifier &&
-		bytes.Equal(left.PackageData, right.PackageData)
+		nativeFROSTDKGRoundTwoPackagesEqual(left.Packages, right.Packages)
+}
+
+func nativeFROSTDKGRoundTwoPackagesEqual(
+	left, right []*nativeFROSTDKGRoundTwoPackage,
+) bool {
+	if len(left) != len(right) {
+		return false
+	}
+
+	for i := range left {
+		if left[i] == nil || right[i] == nil {
+			if left[i] != right[i] {
+				return false
+			}
+			continue
+		}
+
+		if left[i].ReceiverIDValue != right[i].ReceiverIDValue ||
+			left[i].PackageParticipantIdentifier !=
+				right[i].PackageParticipantIdentifier ||
+			!bytes.Equal(left[i].PackageData, right[i].PackageData) {
+			return false
+		}
+	}
+
+	return true
 }
 
 func validateNativeFROSTDKGPart1Result(result *NativeFROSTDKGPart1Result) error {
