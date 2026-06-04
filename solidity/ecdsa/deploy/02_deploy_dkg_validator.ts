@@ -15,11 +15,15 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 
   const EcdsaSortitionPool = await deployments.get("EcdsaSortitionPool")
 
-  // Non-mainnet: skipIfAlreadyDeployed false so hardhat-deploy can redeploy when bytecode
-  // changes (e.g. groupSize 100 → 3). Mainnet: true so bytecode/artifact drift cannot
-  // silently overwrite deployments/mainnet/EcdsaDkgValidator.json while WalletRegistry
-  // still points at the old on-chain validator (THRESHOLD_FORCE_DKG_COMPILE only forces compile).
-  const skipIfAlreadyDeployed = hre.network.name === "mainnet"
+  // Allowlist of networks where bytecode redeploy on artifact change is safe
+  // (e.g. groupSize 100 → 3 during local/testnet iteration). Any other network
+  // (mainnet and any future production-like alias) keeps the existing
+  // deployment record so bytecode/artifact drift cannot silently overwrite
+  // deployments/<network>/EcdsaDkgValidator.json while WalletRegistry still
+  // points at the old on-chain validator. THRESHOLD_FORCE_DKG_COMPILE only
+  // forces compile, not redeploy.
+  const redeploySafeNetworks = new Set(["hardhat", "development", "sepolia"])
+  const skipIfAlreadyDeployed = !redeploySafeNetworks.has(hre.network.name)
 
   const EcdsaDkgValidator = await deployments.deploy("EcdsaDkgValidator", {
     from: deployer,
