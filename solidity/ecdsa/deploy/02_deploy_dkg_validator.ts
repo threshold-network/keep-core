@@ -21,6 +21,22 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   // still points at the old on-chain validator (THRESHOLD_FORCE_DKG_COMPILE only forces compile).
   const skipIfAlreadyDeployed = hre.network.name === "mainnet"
 
+  // If a prior validator deployment exists and we're about to redeploy it (non-mainnet),
+  // log a loud warning. The WalletRegistry stores the validator address in its constructor
+  // args, so a new validator deploy that does not also re-deploy / re-initialize the
+  // WalletRegistry will leave WR pointing at the OLD on-chain validator.
+  if (!skipIfAlreadyDeployed) {
+    const existing = await deployments.getOrNull("EcdsaDkgValidator")
+    if (existing) {
+      deployments.log(
+        `WARN: redeploying EcdsaDkgValidator on "${hre.network.name}"; ` +
+          `previous address ${existing.address} will be replaced. ` +
+          `WalletRegistry still references the previous validator address until it is also redeployed ` +
+          `(03_deploy_wallet_registry.ts must run, or the WR proxy must be re-pointed manually).`
+      )
+    }
+  }
+
   const EcdsaDkgValidator = await deployments.deploy("EcdsaDkgValidator", {
     from: deployer,
     args: [EcdsaSortitionPool.address],
