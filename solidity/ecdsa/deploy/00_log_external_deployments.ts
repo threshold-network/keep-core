@@ -34,9 +34,9 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   log(
     `Deploy starting on network "${network.name}" with ${names.length} pre-resolved deployments:`
   )
-  for (const name of names) {
+  names.forEach((name) => {
     log(`  - ${name} @ ${all[name].address}`)
-  }
+  })
 
   if (network.name === "sepolia") {
     const missing = EXPECTED_EXTERNAL_ON_SEPOLIA.filter(
@@ -47,8 +47,8 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
         `Sepolia deploy: expected upstream contracts missing from deployments/sepolia/: ${missing.join(
           ", "
         )}. ` +
-          `external.deployments.sepolia is empty by design; the committed snapshot under ` +
-          `deployments/sepolia/ is the sole source. Regenerate or copy the missing artifacts.`
+          "external.deployments.sepolia is empty by design; the committed snapshot under " +
+          "deployments/sepolia/ is the sole source. Regenerate or copy the missing artifacts."
       )
     }
   }
@@ -61,20 +61,19 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   if (network.name === "mainnet") {
     const named = await getNamedAccounts()
     const deployer = (named.deployer || "").toLowerCase()
-    const collisions: string[] = []
-    for (const role of ["governance", "chaosnetOwner", "esdm"]) {
-      const addr = (named[role] || "").toLowerCase()
-      if (deployer && addr && deployer === addr) {
-        collisions.push(role)
+    const collisions: string[] = ["governance", "chaosnetOwner", "esdm"].filter(
+      (role) => {
+        const addr = (named[role] || "").toLowerCase()
+        return Boolean(deployer && addr && deployer === addr)
       }
-    }
+    )
     if (collisions.length > 0) {
       throw new Error(
         `Mainnet deploy refused: deployer address (${named.deployer}) collides with ` +
           `role(s) ${collisions.join(
             ", "
           )}. Each of these must be a distinct address ` +
-          `to preserve the separation between the deploy key and governance.`
+          "to preserve the separation between the deploy key and governance."
       )
     }
   }

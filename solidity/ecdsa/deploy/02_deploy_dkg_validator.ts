@@ -31,8 +31,8 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
       deployments.log(
         `WARN: redeploying EcdsaDkgValidator on "${hre.network.name}"; ` +
           `previous address ${existing.address} will be replaced. ` +
-          `WalletRegistry still references the previous validator address until it is also redeployed ` +
-          `(03_deploy_wallet_registry.ts must run, or the WR proxy must be re-pointed manually).`
+          "WalletRegistry still references the previous validator address until it is also redeployed " +
+          "(03_deploy_wallet_registry.ts must run, or the WR proxy must be re-pointed manually)."
       )
     }
   }

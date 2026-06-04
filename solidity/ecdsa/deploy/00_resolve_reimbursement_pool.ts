@@ -15,14 +15,14 @@ const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
   if (hre.network.name === "hardhat" || hre.network.name === "development") {
     throw new Error(
       `ReimbursementPool not found on "${hre.network.name}". On local networks it is expected to come from the ` +
-        `random-beacon external deploys — set USE_EXTERNAL_DEPLOY=true (the package.json test/deploy:test scripts ` +
-        `already do this) or pre-deploy ReimbursementPool yourself before running this script.`
+        "random-beacon external deploys — set USE_EXTERNAL_DEPLOY=true (the package.json test/deploy:test scripts " +
+        "already do this) or pre-deploy ReimbursementPool yourself before running this script."
     )
   }
   throw new Error(
     `ReimbursementPool not found on "${hre.network.name}". For Sepolia, the committed ` +
-      `deployments/sepolia/ReimbursementPool.json is the source of truth. For mainnet, ./external/mainnet must ` +
-      `contain ReimbursementPool.json.`
+      "deployments/sepolia/ReimbursementPool.json is the source of truth. For mainnet, ./external/mainnet must " +
+      "contain ReimbursementPool.json."
   )
 }
 

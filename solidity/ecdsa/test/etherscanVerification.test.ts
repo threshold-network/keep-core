@@ -52,15 +52,22 @@ describe("etherscanVerification - verifyOnEtherscanOrContinue", () => {
     expect(logs[0]).to.match(/rate limited/)
   })
 
-  it("swallows verify failure on hardhat / development networks", async () => {
-    for (const name of ["hardhat", "development"]) {
-      const { hre, logs } = fakeHre(name)
-      await verifyOnEtherscanOrContinue(hre, async () => {
-        throw new Error(`flake on ${name}`)
-      })
-      expect(logs).to.have.length(1)
-      expect(logs[0]).to.match(new RegExp(`flake on ${name}`))
-    }
+  it("swallows verify failure on hardhat network", async () => {
+    const { hre, logs } = fakeHre("hardhat")
+    await verifyOnEtherscanOrContinue(hre, async () => {
+      throw new Error("flake on hardhat")
+    })
+    expect(logs).to.have.length(1)
+    expect(logs[0]).to.match(/flake on hardhat/)
+  })
+
+  it("swallows verify failure on development network", async () => {
+    const { hre, logs } = fakeHre("development")
+    await verifyOnEtherscanOrContinue(hre, async () => {
+      throw new Error("flake on development")
+    })
+    expect(logs).to.have.length(1)
+    expect(logs[0]).to.match(/flake on development/)
   })
 
   it("rethrows verify failure on mainnet (no swallow)", async () => {
