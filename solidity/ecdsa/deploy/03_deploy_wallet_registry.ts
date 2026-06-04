@@ -1,4 +1,5 @@
 import verifyOnEtherscanOrContinue from "./etherscanVerification"
+import verifyOnTenderlyOrContinue from "./tenderlyVerification"
 
 import type { HardhatRuntimeEnvironment } from "hardhat/types"
 import type { DeployFunction } from "hardhat-deploy/types"
@@ -78,14 +79,12 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
   }
 
   if (hre.network.tags.tenderly) {
-    try {
-      await hre.tenderly.verify({
+    await verifyOnTenderlyOrContinue(hre, () =>
+      hre.tenderly.verify({
         name: "WalletRegistry",
         address: walletRegistry.address,
       })
-    } catch (err) {
-      hre.deployments.log(`Tenderly verification skipped: ${err}`)
-    }
+    )
   }
 
   return true
