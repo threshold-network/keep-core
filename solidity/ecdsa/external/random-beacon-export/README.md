@@ -1,9 +1,14 @@
-# `random-beacon-export/deploy`
+# `random-beacon-export`
 
-Vendored copies of `@keep-network/random-beacon`'s `export/deploy` scripts.
-Resolved by `hardhat.config.ts:resolveRandomBeaconExport()` as the second
-preference after `../random-beacon/export/` (gitignored upstream) and before
-the published `node_modules/@keep-network/random-beacon/export`.
+Vendored copies of `@keep-network/random-beacon`'s `export/deploy` scripts,
+under `./deploy/`. Resolved by `hardhat.config.ts:resolveRandomBeaconExport()`
+as the second preference after `../random-beacon/export/` (gitignored
+upstream) and before the published
+`node_modules/@keep-network/random-beacon/export`.
+
+This README lives one level above `deploy/` because hardhat-deploy walks
+that directory and tries to `require()` every file; a Markdown sibling
+there would crash deployment.
 
 ## Format
 
