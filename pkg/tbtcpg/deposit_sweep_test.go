@@ -188,6 +188,85 @@ func TestDepositSweepTask_FindDepositsToSweep_UnderflowGuard(t *testing.T) {
 	}
 }
 
+func TestDepositSweepTask_FindDepositsToSweep_UsesChainTimestamp(t *testing.T) {
+	currentBlock := uint64(100000)
+	chainNow := time.Now().Add(3 * time.Hour)
+
+	walletPublicKeyHash := hexToByte20(
+		"7670343fc00ccc2d0cd65360e6ad400697ea0fed",
+	)
+
+	tbtcChain := tbtcpg.NewLocalChain()
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+
+	blockCounter := tbtcpg.NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	tbtcChain.SetBlockCounter(blockCounter)
+
+	tbtcChain.SetCurrentBlockTimestamp(chainNow)
+	tbtcChain.SetDepositMinAge(3600)
+
+	fundingTxHash := hashFromString(
+		"f7fc639dd598e70a423fd28d39ca2f2d01e93523b847f601b78ac5a2b6da51da",
+	)
+
+	tbtcChain.SetDepositRequest(
+		fundingTxHash,
+		uint32(1),
+		&tbtc.DepositChainRequest{
+			// This timestamp is deliberately in the future compared to the
+			// host clock, but mature compared to the chain clock.
+			RevealedAt: chainNow.Add(-2 * time.Hour),
+			SweptAt:    time.Unix(0, 0),
+		},
+	)
+
+	btcChain.SetTransaction(fundingTxHash, &bitcoin.Transaction{})
+	btcChain.SetTransactionConfirmations(
+		fundingTxHash,
+		tbtc.DepositSweepRequiredFundingTxConfirmations,
+	)
+
+	err := tbtcChain.AddPastDepositRevealedEvent(
+		&tbtc.DepositRevealedEventFilter{
+			StartBlock:          0,
+			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+		},
+		&tbtc.DepositRevealedEvent{
+			BlockNumber:         90000,
+			WalletPublicKeyHash: walletPublicKeyHash,
+			FundingTxHash:       fundingTxHash,
+			FundingOutputIndex:  1,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	task := tbtcpg.NewDepositSweepTask(tbtcChain, btcChain)
+
+	deposits, err := task.FindDepositsToSweep(
+		&testutils.MockLogger{},
+		walletPublicKeyHash,
+		5,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(deposits) != 1 {
+		t.Fatalf("expected 1 deposit, got %d", len(deposits))
+	}
+
+	if deposits[0].FundingTxHash != fundingTxHash {
+		t.Errorf("unexpected funding tx hash")
+	}
+
+	if deposits[0].FundingOutputIndex != 1 {
+		t.Errorf("unexpected funding output index")
+	}
+}
+
 func TestDepositSweepTask_FindDepositsToSweep(t *testing.T) {
 	err := log.SetLogLevel("*", "DEBUG")
 	if err != nil {

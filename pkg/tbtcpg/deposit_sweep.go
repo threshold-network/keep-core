@@ -195,8 +195,13 @@ func findDeposits(
 		resultSliceCapacity = maxNumberOfDeposits
 	}
 
-	// Capture time now for computations.
-	timeNow := time.Now()
+	timeNow, err := chain.CurrentBlockTimestamp()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to get current block timestamp: [%w]",
+			err,
+		)
+	}
 
 	result := make([]*Deposit, 0, resultSliceCapacity)
 	for _, event := range depositRevealedEvents {

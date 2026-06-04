@@ -285,6 +285,114 @@ func TestNode_GetCoordinationExecutor(t *testing.T) {
 	}
 }
 
+func TestNode_ArchiveClosedWallets_KeepsLiveFrostWallet(t *testing.T) {
+	groupParameters := &GroupParameters{
+		GroupSize:       5,
+		GroupQuorum:     4,
+		HonestThreshold: 3,
+	}
+
+	localChain := Connect()
+	localProvider := local.Connect()
+
+	signer := createMockSigner(t)
+	walletPublicKeyHash := bitcoin.PublicKeyHash(signer.wallet.publicKey)
+	frostWalletID := [32]byte{0x01, 0x02, 0x03}
+
+	localChain.setWallet(
+		walletPublicKeyHash,
+		&WalletChainData{
+			WalletID: frostWalletID,
+			State:    StateLive,
+		},
+	)
+
+	keyStorePersistence := createMockKeyStorePersistence(t, signer)
+
+	node, err := newNode(
+		groupParameters,
+		localChain,
+		newLocalBitcoinChain(),
+		localProvider,
+		keyStorePersistence,
+		&mockPersistenceHandle{},
+		generator.StartScheduler(),
+		&mockCoordinationProposalGenerator{},
+		Config{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertIntsEqual(
+		t,
+		"archived wallets count",
+		0,
+		len(keyStorePersistence.archived),
+	)
+
+	testutils.AssertIntsEqual(
+		t,
+		"signers count",
+		1,
+		len(node.walletRegistry.getSigners(signer.wallet.publicKey)),
+	)
+}
+
+func TestNode_ArchiveClosedWallets_ArchivesClosedFrostWallet(t *testing.T) {
+	groupParameters := &GroupParameters{
+		GroupSize:       5,
+		GroupQuorum:     4,
+		HonestThreshold: 3,
+	}
+
+	localChain := Connect()
+	localProvider := local.Connect()
+
+	signer := createMockSigner(t)
+	walletPublicKeyHash := bitcoin.PublicKeyHash(signer.wallet.publicKey)
+	frostWalletID := [32]byte{0x01, 0x02, 0x03}
+
+	localChain.setWallet(
+		walletPublicKeyHash,
+		&WalletChainData{
+			WalletID: frostWalletID,
+			State:    StateClosed,
+		},
+	)
+
+	keyStorePersistence := createMockKeyStorePersistence(t, signer)
+
+	node, err := newNode(
+		groupParameters,
+		localChain,
+		newLocalBitcoinChain(),
+		localProvider,
+		keyStorePersistence,
+		&mockPersistenceHandle{},
+		generator.StartScheduler(),
+		&mockCoordinationProposalGenerator{},
+		Config{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertIntsEqual(
+		t,
+		"archived wallets count",
+		1,
+		len(keyStorePersistence.archived),
+	)
+
+	testutils.AssertIntsEqual(
+		t,
+		"signers count",
+		0,
+		len(node.walletRegistry.getSigners(signer.wallet.publicKey)),
+	)
+}
+
 func TestNode_RunCoordinationLayer(t *testing.T) {
 	groupParameters := &GroupParameters{
 		GroupSize:       5,

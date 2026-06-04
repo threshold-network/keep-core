@@ -1337,7 +1337,8 @@ func (n *node) archiveClosedWallets() error {
 			}
 
 			ecdsaWalletID = walletChainData.EcdsaWalletID
-			if ecdsaWalletID == [32]byte{} {
+			if ecdsaWalletID == [32]byte{} &&
+				walletID == DeriveLegacyWalletID(walletPublicKeyHash) {
 				ecdsaWalletID, err = n.chain.CalculateWalletID(walletPublicKey)
 				if err != nil {
 					return fmt.Errorf(
@@ -1350,11 +1351,12 @@ func (n *node) archiveClosedWallets() error {
 			}
 		}
 
-		isRegistered, err := n.chain.IsWalletRegistered(ecdsaWalletID)
+		isRegistered, err := n.isWalletRegistered(walletID, ecdsaWalletID)
 		if err != nil {
 			return fmt.Errorf(
-				"could not check if wallet is registered for wallet with ECDSA ID "+
-					"[0x%x]: [%v]",
+				"could not check if wallet is registered for wallet ID [0x%x] "+
+					"and ECDSA ID [0x%x]: [%v]",
+				walletID,
 				ecdsaWalletID,
 				err,
 			)
@@ -1382,6 +1384,29 @@ func (n *node) archiveClosedWallets() error {
 	}
 
 	return nil
+}
+
+type frostWalletRegistrationChecker interface {
+	IsFrostWalletRegistered(walletID [32]byte) (bool, error)
+}
+
+func (n *node) isWalletRegistered(
+	walletID [32]byte,
+	ecdsaWalletID [32]byte,
+) (bool, error) {
+	if ecdsaWalletID != [32]byte{} {
+		return n.chain.IsWalletRegistered(ecdsaWalletID)
+	}
+
+	frostChecker, ok := n.chain.(frostWalletRegistrationChecker)
+	if !ok {
+		return false, fmt.Errorf(
+			"wallet has no ECDSA ID and chain does not support FROST " +
+				"wallet registration checks",
+		)
+	}
+
+	return frostChecker.IsFrostWalletRegistered(walletID)
 }
 
 // handleWalletClosure handles the wallet termination or closing process.

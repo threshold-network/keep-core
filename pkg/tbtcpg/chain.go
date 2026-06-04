@@ -120,6 +120,11 @@ type Chain interface {
 
 	AverageBlockTime() time.Duration
 
+	// CurrentBlockTimestamp gets the timestamp of the current anchoring chain
+	// block. Proposal eligibility checks should use this timestamp instead of
+	// the local process clock because Bridge validators use block.timestamp.
+	CurrentBlockTimestamp() (time.Time, error)
+
 	// GetOperatorID returns the operator ID for the given operator address.
 	GetOperatorID(operatorAddress chain.Address) (chain.OperatorID, error)
 

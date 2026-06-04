@@ -98,6 +98,7 @@ type LocalChain struct {
 	operatorIDs                              map[chain.Address]uint32
 	redemptionDelays                         map[[32]byte]time.Duration
 	depositMinAge                            uint32
+	currentBlockTimestamp                    time.Time
 }
 
 func NewLocalChain() *LocalChain {
@@ -119,6 +120,7 @@ func NewLocalChain() *LocalChain {
 		movedFundsSweepProposalValidations:       make(map[[32]byte]bool),
 		operatorIDs:                              make(map[chain.Address]uint32),
 		redemptionDelays:                         make(map[[32]byte]time.Duration),
+		currentBlockTimestamp:                    time.Now(),
 	}
 }
 
@@ -983,6 +985,20 @@ func (lc *LocalChain) AverageBlockTime() time.Duration {
 	defer lc.mutex.Unlock()
 
 	return lc.averageBlockTime
+}
+
+func (lc *LocalChain) CurrentBlockTimestamp() (time.Time, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	return lc.currentBlockTimestamp, nil
+}
+
+func (lc *LocalChain) SetCurrentBlockTimestamp(currentBlockTimestamp time.Time) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	lc.currentBlockTimestamp = currentBlockTimestamp
 }
 
 func (lc *LocalChain) SetOperatorID(

@@ -928,6 +928,23 @@ func (lc *localChain) IsWalletRegistered(EcdsaWalletID [32]byte) (bool, error) {
 	return false, fmt.Errorf("wallet not found")
 }
 
+func (lc *localChain) IsFrostWalletRegistered(walletID [32]byte) (bool, error) {
+	lc.walletsMutex.Lock()
+	defer lc.walletsMutex.Unlock()
+
+	for _, walletData := range lc.wallets {
+		if walletID == walletData.WalletID {
+			if walletData.State == StateClosed ||
+				walletData.State == StateTerminated {
+				return false, nil
+			}
+			return true, nil
+		}
+	}
+
+	return false, fmt.Errorf("wallet not found")
+}
+
 func (lc *localChain) setWallet(
 	walletPublicKeyHash [20]byte,
 	walletChainData *WalletChainData,
