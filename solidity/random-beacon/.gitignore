@@ -4,6 +4,7 @@ cache/
 export/
 hardhat-dependency-compiler/
 export.json
+gasReporterOutput.json
 
 # Contract artifacts
 artifacts/
