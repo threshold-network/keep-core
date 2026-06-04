@@ -14,7 +14,7 @@ type blockingBlockCounter struct {
 	ch chan struct{}
 }
 
-func (b *blockingBlockCounter) CurrentBlock() (uint64, error)            { return 0, nil }
+func (b *blockingBlockCounter) CurrentBlock() (uint64, error)               { return 0, nil }
 func (b *blockingBlockCounter) WatchBlocks(_ context.Context) <-chan uint64 { return nil }
 func (b *blockingBlockCounter) BlockHeightWaiter(_ uint64) (<-chan uint64, error) {
 	return nil, nil
