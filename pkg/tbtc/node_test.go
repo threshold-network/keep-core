@@ -285,6 +285,103 @@ func TestNode_GetCoordinationExecutor(t *testing.T) {
 	}
 }
 
+func TestNode_KeepsLiveBridgeWalletWithoutLegacyRegistration(t *testing.T) {
+	groupParameters := &GroupParameters{
+		GroupSize:       5,
+		GroupQuorum:     4,
+		HonestThreshold: 3,
+	}
+
+	localChain := Connect()
+	localProvider := local.Connect()
+
+	signer := createMockSigner(t)
+	walletPublicKeyHash := bitcoin.PublicKeyHash(signer.wallet.publicKey)
+
+	localChain.setWallet(
+		walletPublicKeyHash,
+		&WalletChainData{
+			WalletID: [32]byte{31: 0x01},
+			State:    StateLive,
+		},
+	)
+
+	n, err := newNode(
+		groupParameters,
+		localChain,
+		newLocalBitcoinChain(),
+		localProvider,
+		createMockKeyStorePersistence(t, signer),
+		&mockPersistenceHandle{},
+		generator.StartScheduler(),
+		&mockCoordinationProposalGenerator{},
+		Config{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, ok := n.walletRegistry.getWalletByPublicKeyHash(walletPublicKeyHash)
+	if !ok {
+		t.Fatal("live Bridge wallet should not be archived")
+	}
+}
+
+func TestNode_ArchivesClosedBridgeWallet(t *testing.T) {
+	testCases := map[string]WalletState{
+		"closed":     StateClosed,
+		"terminated": StateTerminated,
+	}
+
+	for name, walletState := range testCases {
+		t.Run(name, func(t *testing.T) {
+			groupParameters := &GroupParameters{
+				GroupSize:       5,
+				GroupQuorum:     4,
+				HonestThreshold: 3,
+			}
+
+			localChain := Connect()
+			localProvider := local.Connect()
+
+			signer := createMockSigner(t)
+			walletPublicKeyHash := bitcoin.PublicKeyHash(
+				signer.wallet.publicKey,
+			)
+
+			localChain.setWallet(
+				walletPublicKeyHash,
+				&WalletChainData{
+					WalletID: [32]byte{31: 0x01},
+					State:    walletState,
+				},
+			)
+
+			n, err := newNode(
+				groupParameters,
+				localChain,
+				newLocalBitcoinChain(),
+				localProvider,
+				createMockKeyStorePersistence(t, signer),
+				&mockPersistenceHandle{},
+				generator.StartScheduler(),
+				&mockCoordinationProposalGenerator{},
+				Config{},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, ok := n.walletRegistry.getWalletByPublicKeyHash(
+				walletPublicKeyHash,
+			)
+			if ok {
+				t.Fatal("closed Bridge wallet should be archived")
+			}
+		})
+	}
+}
+
 func TestNode_RunCoordinationLayer(t *testing.T) {
 	groupParameters := &GroupParameters{
 		GroupSize:       5,

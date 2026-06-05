@@ -1325,7 +1325,7 @@ func (n *node) archiveClosedWallets() error {
 		walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
 
 		var walletID [32]byte
-		var ecdsaWalletID [32]byte
+		var archiveWallet bool
 
 		walletChainData, err := n.chain.GetWallet(walletPublicKeyHash)
 		if err != nil {
@@ -1339,40 +1339,31 @@ func (n *node) archiveClosedWallets() error {
 				)
 			}
 
-			// Legacy fallback for deployments where canonical wallet lookup
-			// is unavailable.
-			ecdsaWalletID = walletID
+			// Legacy fallback for deployments where Bridge wallet state is
+			// unavailable. FROST wallets are registered in the Bridge but not
+			// in the legacy ECDSA wallet registry.
+			isRegistered, err := n.chain.IsWalletRegistered(walletID)
+			if err != nil {
+				return fmt.Errorf(
+					"could not check if wallet is registered for wallet with ECDSA ID "+
+						"[0x%x]: [%v]",
+					walletID,
+					err,
+				)
+			}
+
+			archiveWallet = !isRegistered
 		} else {
 			walletID = walletChainData.WalletID
 			if walletID == [32]byte{} {
 				walletID = DeriveLegacyWalletID(walletPublicKeyHash)
 			}
 
-			ecdsaWalletID = walletChainData.EcdsaWalletID
-			if ecdsaWalletID == [32]byte{} {
-				ecdsaWalletID, err = n.chain.CalculateWalletID(walletPublicKey)
-				if err != nil {
-					return fmt.Errorf(
-						"could not calculate ECDSA wallet ID for wallet with public key "+
-							"hash [0x%x]: [%v]",
-						walletPublicKeyHash,
-						err,
-					)
-				}
-			}
+			archiveWallet = walletChainData.State == StateClosed ||
+				walletChainData.State == StateTerminated
 		}
 
-		isRegistered, err := n.chain.IsWalletRegistered(ecdsaWalletID)
-		if err != nil {
-			return fmt.Errorf(
-				"could not check if wallet is registered for wallet with ECDSA ID "+
-					"[0x%x]: [%v]",
-				ecdsaWalletID,
-				err,
-			)
-		}
-
-		if !isRegistered {
+		if archiveWallet {
 			// If the wallet is no longer registered it means the wallet has
 			// been closed or terminated.
 			err := n.walletRegistry.archiveWallet(walletPublicKeyHash)
