@@ -75,6 +75,7 @@ type LocalChain struct {
 
 	depositRequests                          map[[32]byte]*tbtc.DepositChainRequest
 	pastDepositRevealedEvents                map[[32]byte][]*tbtc.DepositRevealedEvent
+	pastTaprootDepositRevealedEvents         map[[32]byte][]*tbtc.TaprootDepositRevealedEvent
 	pastNewWalletRegisteredEvents            map[[32]byte][]*tbtc.NewWalletRegisteredEvent
 	depositParameters                        depositParameters
 	depositSweepProposalValidations          map[[32]byte]bool
@@ -104,6 +105,7 @@ func NewLocalChain() *LocalChain {
 	return &LocalChain{
 		depositRequests:                          make(map[[32]byte]*tbtc.DepositChainRequest),
 		pastDepositRevealedEvents:                make(map[[32]byte][]*tbtc.DepositRevealedEvent),
+		pastTaprootDepositRevealedEvents:         make(map[[32]byte][]*tbtc.TaprootDepositRevealedEvent),
 		pastNewWalletRegisteredEvents:            make(map[[32]byte][]*tbtc.NewWalletRegisteredEvent),
 		depositSweepProposalValidations:          make(map[[32]byte]bool),
 		pastRedemptionRequestedEvents:            make(map[[32]byte][]*tbtc.RedemptionRequestedEvent),
@@ -155,6 +157,45 @@ func (lc *LocalChain) AddPastDepositRevealedEvent(
 
 	lc.pastDepositRevealedEvents[eventsKey] = append(
 		lc.pastDepositRevealedEvents[eventsKey],
+		event,
+	)
+
+	return nil
+}
+
+func (lc *LocalChain) PastTaprootDepositRevealedEvents(
+	filter *tbtc.DepositRevealedEventFilter,
+) ([]*tbtc.TaprootDepositRevealedEvent, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	eventsKey, err := buildPastDepositRevealedEventsKey(filter)
+	if err != nil {
+		return nil, err
+	}
+
+	events, ok := lc.pastTaprootDepositRevealedEvents[eventsKey]
+	if !ok {
+		return []*tbtc.TaprootDepositRevealedEvent{}, nil
+	}
+
+	return events, nil
+}
+
+func (lc *LocalChain) AddPastTaprootDepositRevealedEvent(
+	filter *tbtc.DepositRevealedEventFilter,
+	event *tbtc.TaprootDepositRevealedEvent,
+) error {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	eventsKey, err := buildPastDepositRevealedEventsKey(filter)
+	if err != nil {
+		return err
+	}
+
+	lc.pastTaprootDepositRevealedEvents[eventsKey] = append(
+		lc.pastTaprootDepositRevealedEvents[eventsKey],
 		event,
 	)
 
@@ -613,6 +654,21 @@ func (lc *LocalChain) ValidateDepositSweepProposal(
 	}
 
 	return nil
+}
+
+func (lc *LocalChain) ValidateTaprootDepositSweepProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *tbtc.DepositSweepProposal,
+	depositsExtraInfo []struct {
+		*tbtc.Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	return lc.ValidateDepositSweepProposal(
+		walletPublicKeyHash,
+		proposal,
+		depositsExtraInfo,
+	)
 }
 
 func (lc *LocalChain) SetDepositSweepProposalValidationResult(

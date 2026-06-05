@@ -2,13 +2,17 @@ package tbtc
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec"
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/tbtc/internal/test"
 )
@@ -77,7 +81,16 @@ func TestDepositSweepAction_Execute(t *testing.T) {
 					*Deposit
 					FundingTx *bitcoin.Transaction
 				}{
-					Deposit:   (*Deposit)(deposit),
+					Deposit: &Deposit{
+						Utxo:                deposit.Utxo,
+						Depositor:           deposit.Depositor,
+						BlindingFactor:      deposit.BlindingFactor,
+						WalletPublicKeyHash: deposit.WalletPublicKeyHash,
+						RefundPublicKeyHash: deposit.RefundPublicKeyHash,
+						RefundLocktime:      deposit.RefundLocktime,
+						Vault:               deposit.Vault,
+						ExtraData:           deposit.ExtraData,
+					},
 					FundingTx: fundingTx,
 				}
 
@@ -315,4 +328,139 @@ func TestAssembleDepositSweepTransaction(t *testing.T) {
 			)
 		})
 	}
+}
+
+func TestAssembleDepositSweepTransaction_TaprootDeposit(t *testing.T) {
+	hexToSlice := func(hexString string) []byte {
+		bytes, err := hex.DecodeString(hexString)
+		if err != nil {
+			t.Fatalf("error while converting [%v]: [%v]", hexString, err)
+		}
+		return bytes
+	}
+
+	var walletXOnlyPublicKey [32]byte
+	copy(
+		walletXOnlyPublicKey[:],
+		hexToSlice("2336f65004d8f122f1fe947ebd009a8b4add3a0d937356d568e30f7fcc2e4008"),
+	)
+
+	compressedWalletPublicKey := append([]byte{0x02}, walletXOnlyPublicKey[:]...)
+	parsedWalletPublicKey, err := btcec.ParsePubKey(
+		compressedWalletPublicKey,
+		btcec.S256(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	walletPublicKey := &ecdsa.PublicKey{
+		Curve: btcec.S256(),
+		X:     parsedWalletPublicKey.X,
+		Y:     parsedWalletPublicKey.Y,
+	}
+
+	var refundXOnlyPublicKey [32]byte
+	copy(
+		refundXOnlyPublicKey[:],
+		hexToSlice("11223344556677889900aabbccddeeff00112233445566778899aabbccddeeff"),
+	)
+
+	deposit := &Deposit{
+		Depositor:            chain.Address("934b98637ca318a4d6e7ca6ffd1690b8e77df637"),
+		WalletXOnlyPublicKey: &walletXOnlyPublicKey,
+		RefundXOnlyPublicKey: &refundXOnlyPublicKey,
+	}
+	copy(deposit.BlindingFactor[:], hexToSlice("f9f0c90d00039523"))
+	copy(deposit.WalletPublicKeyHash[:], hexToSlice("c92a772f11bc97d8938a16a9db435401f4e6a7bc"))
+	copy(deposit.RefundPublicKeyHash[:], hexToSlice("c2a27a88d8d03e271e8edc556923e9398619f17c"))
+	copy(deposit.RefundLocktime[:], hexToSlice("60bcea61"))
+
+	merkleRoot, err := deposit.TaprootMerkleRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fundingOutputScript, err := bitcoin.PayToTaprootWithScriptTree(
+		walletXOnlyPublicKey,
+		merkleRoot,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var previousTxHash bitcoin.Hash
+	copy(previousTxHash[:], hexToSlice("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"))
+	fundingTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: previousTxHash,
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: fundingOutputScript,
+			},
+		},
+	}
+
+	bitcoinChain := newLocalBitcoinChain()
+	if err := bitcoinChain.BroadcastTransaction(fundingTx); err != nil {
+		t.Fatal(err)
+	}
+
+	deposit.Utxo = &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: fundingTx.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 100000,
+	}
+
+	builder, err := assembleDepositSweepTransaction(
+		bitcoinChain,
+		walletPublicKey,
+		nil,
+		[]*Deposit{deposit},
+		1000,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !builder.HasOnlyTaprootKeyPathInputs() {
+		t.Fatal("expected only Taproot key-path inputs")
+	}
+
+	merkleRoots := builder.TaprootKeyPathInputMerkleRoots()
+	if len(merkleRoots) != 1 || merkleRoots[0] == nil {
+		t.Fatalf("expected one Taproot merkle root")
+	}
+	testutils.AssertBytesEqual(t, merkleRoot[:], merkleRoots[0][:])
+
+	unsignedTx := builder.UnsignedTransaction()
+	if len(unsignedTx.Outputs) != 1 {
+		t.Fatalf("unexpected outputs count: [%v]", len(unsignedTx.Outputs))
+	}
+
+	expectedWalletOutputScript, err := bitcoin.PayToTaproot(walletXOnlyPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutils.AssertBytesEqual(
+		t,
+		expectedWalletOutputScript,
+		unsignedTx.Outputs[0].PublicKeyScript,
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"output value",
+		99000,
+		int(unsignedTx.Outputs[0].Value),
+	)
 }

@@ -114,6 +114,7 @@ type Deposit struct {
 	WalletPublicKeyHash [20]byte
 	DepositKey          string
 	IsSwept             bool
+	IsTaproot           bool
 	AmountBtc           float64
 	Confirmations       uint
 	Vault               *chain.Address
@@ -147,7 +148,7 @@ func FindDeposits(
 // deposit-revealed events are queried.
 func findDeposits(
 	fnLogger log.StandardLogger,
-	chain Chain,
+	hostChain Chain,
 	btcChain bitcoin.Chain,
 	walletPublicKeyHash [20]byte,
 	maxNumberOfDeposits int,
@@ -157,7 +158,7 @@ func findDeposits(
 ) ([]*Deposit, error) {
 	fnLogger.Infof("reading revealed deposits from chain")
 
-	depositMinAgeSeconds, err := chain.GetDepositMinAge()
+	depositMinAgeSeconds, err := hostChain.GetDepositMinAge()
 	if err != nil {
 		return nil, fmt.Errorf(
 			"failed to get deposit minimum age: [%w]",
@@ -173,7 +174,7 @@ func findDeposits(
 		filter.WalletPublicKeyHash = [][20]byte{walletPublicKeyHash}
 	}
 
-	depositRevealedEvents, err := chain.PastDepositRevealedEvents(filter)
+	depositRevealedEvents, err := hostChain.PastDepositRevealedEvents(filter)
 	if err != nil {
 		return []*Deposit{}, fmt.Errorf(
 			"failed to get past deposit revealed events: [%w]",
@@ -181,16 +182,73 @@ func findDeposits(
 		)
 	}
 
-	fnLogger.Infof("found [%d] DepositRevealed events", len(depositRevealedEvents))
+	taprootDepositRevealedEvents, err := hostChain.PastTaprootDepositRevealedEvents(filter)
+	if err != nil {
+		return []*Deposit{}, fmt.Errorf(
+			"failed to get past Taproot deposit revealed events: [%w]",
+			err,
+		)
+	}
+
+	fnLogger.Infof(
+		"found [%d] DepositRevealed events and [%d] TaprootDepositRevealed events",
+		len(depositRevealedEvents),
+		len(taprootDepositRevealedEvents),
+	)
+
+	type revealedDepositEvent struct {
+		FundingTxHash       bitcoin.Hash
+		FundingOutputIndex  uint32
+		WalletPublicKeyHash [20]byte
+		Amount              uint64
+		Vault               *chain.Address
+		BlockNumber         uint64
+		IsTaproot           bool
+	}
+
+	revealedDepositEvents := make(
+		[]*revealedDepositEvent,
+		0,
+		len(depositRevealedEvents)+len(taprootDepositRevealedEvents),
+	)
+
+	for _, event := range depositRevealedEvents {
+		revealedDepositEvents = append(
+			revealedDepositEvents,
+			&revealedDepositEvent{
+				FundingTxHash:       event.FundingTxHash,
+				FundingOutputIndex:  event.FundingOutputIndex,
+				WalletPublicKeyHash: event.WalletPublicKeyHash,
+				Amount:              event.Amount,
+				Vault:               event.Vault,
+				BlockNumber:         event.BlockNumber,
+			},
+		)
+	}
+
+	for _, event := range taprootDepositRevealedEvents {
+		revealedDepositEvents = append(
+			revealedDepositEvents,
+			&revealedDepositEvent{
+				FundingTxHash:       event.FundingTxHash,
+				FundingOutputIndex:  event.FundingOutputIndex,
+				WalletPublicKeyHash: event.WalletPublicKeyHash,
+				Amount:              event.Amount,
+				Vault:               event.Vault,
+				BlockNumber:         event.BlockNumber,
+				IsTaproot:           true,
+			},
+		)
+	}
 
 	// Take the oldest first
-	sort.SliceStable(depositRevealedEvents, func(i, j int) bool {
-		return depositRevealedEvents[i].BlockNumber < depositRevealedEvents[j].BlockNumber
+	sort.SliceStable(revealedDepositEvents, func(i, j int) bool {
+		return revealedDepositEvents[i].BlockNumber < revealedDepositEvents[j].BlockNumber
 	})
 
 	fnLogger.Infof("getting deposits details")
 
-	resultSliceCapacity := len(depositRevealedEvents)
+	resultSliceCapacity := len(revealedDepositEvents)
 	if maxNumberOfDeposits > 0 {
 		resultSliceCapacity = maxNumberOfDeposits
 	}
@@ -199,17 +257,17 @@ func findDeposits(
 	timeNow := time.Now()
 
 	result := make([]*Deposit, 0, resultSliceCapacity)
-	for _, event := range depositRevealedEvents {
+	for _, event := range revealedDepositEvents {
 		if len(result) == cap(result) {
 			break
 		}
 
-		depositKey := chain.BuildDepositKey(event.FundingTxHash, event.FundingOutputIndex)
+		depositKey := hostChain.BuildDepositKey(event.FundingTxHash, event.FundingOutputIndex)
 		depositKeyStr := depositKey.Text(16)
 
 		fnLogger.Debugf("getting details of deposit [%s]", depositKeyStr)
 
-		depositRequest, found, err := chain.GetDepositRequest(
+		depositRequest, found, err := hostChain.GetDepositRequest(
 			event.FundingTxHash,
 			event.FundingOutputIndex,
 		)
@@ -268,6 +326,7 @@ func findDeposits(
 				WalletPublicKeyHash: event.WalletPublicKeyHash,
 				DepositKey:          hexutils.Encode(depositKey.Bytes()),
 				IsSwept:             isSwept,
+				IsTaproot:           event.IsTaproot,
 				AmountBtc:           convertSatToBtc(float64(depositRequest.Amount)),
 				Confirmations:       confirmations,
 				Vault:               depositRequest.Vault,
@@ -351,6 +410,10 @@ func (dst *DepositSweepTask) FindDepositsToSweep(
 	for _, deposit := range unsweptDeposits {
 		var key string
 		var label string
+		scriptType := "legacy"
+		if deposit.IsTaproot {
+			scriptType = "taproot"
+		}
 
 		if deposit.Vault == nil {
 			key = ""
@@ -359,6 +422,8 @@ func (dst *DepositSweepTask) FindDepositsToSweep(
 			key = strings.ToLower(string(*deposit.Vault))
 			label = string(*deposit.Vault)
 		}
+		key = fmt.Sprintf("%s:%s", scriptType, key)
+		label = fmt.Sprintf("%s, %s", label, scriptType)
 
 		g, exists := groups[key]
 		if !exists {
@@ -413,13 +478,15 @@ func (dst *DepositSweepTask) FindDepositsToSweep(
 		//     different vault, making it eligible for a future sweep.
 		// The Warn-level log below flags these deposits for operator
 		// awareness and manual follow-up.
-		if nilGroup, ok := groups[""]; ok {
-			for _, deposit := range nilGroup.deposits {
-				taskLogger.Warnf(
-					"vault=0x0 deposit [%s] with wallet PKH [0x%x] requires manual follow-up",
-					deposit.DepositKey,
-					deposit.WalletPublicKeyHash,
-				)
+		for _, nilGroupKey := range []string{"legacy:", "taproot:"} {
+			if nilGroup, ok := groups[nilGroupKey]; ok {
+				for _, deposit := range nilGroup.deposits {
+					taskLogger.Warnf(
+						"vault=0x0 deposit [%s] with wallet PKH [0x%x] requires manual follow-up",
+						deposit.DepositKey,
+						deposit.WalletPublicKeyHash,
+					)
+				}
 			}
 		}
 	}

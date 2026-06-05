@@ -133,8 +133,8 @@ func (mfa *movingFundsAction) execute() error {
 
 	walletPublicKeyHash := bitcoin.PublicKeyHash(mfa.wallet().publicKey)
 
-	walletMainUtxo, err := DetermineWalletMainUtxo(
-		walletPublicKeyHash,
+	walletMainUtxo, err := DetermineWalletMainUtxoForPublicKey(
+		mfa.wallet().publicKey,
 		mfa.chain,
 		mfa.btcChain,
 	)
@@ -188,8 +188,8 @@ func (mfa *movingFundsAction) execute() error {
 		return fmt.Errorf("validate proposal step failed: [%v]", err)
 	}
 
-	err = EnsureWalletSyncedBetweenChains(
-		walletPublicKeyHash,
+	err = EnsureWalletSyncedBetweenChainsForPublicKey(
+		mfa.wallet().publicKey,
 		walletMainUtxo,
 		mfa.chain,
 		mfa.btcChain,

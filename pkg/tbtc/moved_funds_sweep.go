@@ -161,8 +161,8 @@ func (mfsa *movedFundsSweepAction) execute() error {
 	}
 
 	// Prepare the wallet's main UTXO.
-	walletMainUtxo, err := DetermineWalletMainUtxo(
-		walletPublicKeyHash,
+	walletMainUtxo, err := DetermineWalletMainUtxoForPublicKey(
+		mfsa.wallet().publicKey,
 		mfsa.chain,
 		mfsa.btcChain,
 	)
@@ -173,8 +173,8 @@ func (mfsa *movedFundsSweepAction) execute() error {
 		)
 	}
 
-	err = EnsureWalletSyncedBetweenChains(
-		walletPublicKeyHash,
+	err = EnsureWalletSyncedBetweenChainsForPublicKey(
+		mfsa.wallet().publicKey,
 		walletMainUtxo,
 		mfsa.chain,
 		mfsa.btcChain,

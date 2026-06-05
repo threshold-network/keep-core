@@ -1388,6 +1388,75 @@ func (tc *TbtcChain) PastDepositRevealedEvents(
 	return convertedEvents, err
 }
 
+func (tc *TbtcChain) PastTaprootDepositRevealedEvents(
+	filter *tbtc.DepositRevealedEventFilter,
+) ([]*tbtc.TaprootDepositRevealedEvent, error) {
+	var startBlock uint64
+	var endBlock *uint64
+	var depositor []common.Address
+	var walletPublicKeyHash [][20]byte
+
+	if filter != nil {
+		startBlock = filter.StartBlock
+		endBlock = filter.EndBlock
+
+		for _, d := range filter.Depositor {
+			depositor = append(depositor, common.HexToAddress(d.String()))
+		}
+
+		walletPublicKeyHash = filter.WalletPublicKeyHash
+	}
+
+	events, err := tc.bridge.PastTaprootDepositRevealedEvents(
+		startBlock,
+		endBlock,
+		depositor,
+		walletPublicKeyHash,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	convertedEvents := make([]*tbtc.TaprootDepositRevealedEvent, 0)
+	for _, event := range events {
+		var vault *chain.Address
+		if event.Vault != [20]byte{} {
+			v := chain.Address(event.Vault.Hex())
+			vault = &v
+		}
+
+		convertedEvent := &tbtc.TaprootDepositRevealedEvent{
+			// We can map the event.FundingTxHash field directly to the
+			// bitcoin.Hash type. This is because event.FundingTxHash is
+			// a [32]byte type representing a hash in the bitcoin.InternalByteOrder,
+			// just as bitcoin.Hash assumes.
+			FundingTxHash:        event.FundingTxHash,
+			FundingOutputIndex:   event.FundingOutputIndex,
+			Depositor:            chain.Address(event.Depositor.Hex()),
+			Amount:               event.Amount,
+			BlindingFactor:       event.BlindingFactor,
+			WalletPublicKeyHash:  event.WalletPubKeyHash,
+			WalletXOnlyPublicKey: event.WalletXOnlyPublicKey,
+			RefundPublicKeyHash:  event.RefundPubKeyHash,
+			RefundXOnlyPublicKey: event.RefundXOnlyPublicKey,
+			RefundLocktime:       event.RefundLocktime,
+			Vault:                vault,
+			BlockNumber:          event.Raw.BlockNumber,
+		}
+
+		convertedEvents = append(convertedEvents, convertedEvent)
+	}
+
+	sort.SliceStable(
+		convertedEvents,
+		func(i, j int) bool {
+			return convertedEvents[i].BlockNumber < convertedEvents[j].BlockNumber
+		},
+	)
+
+	return convertedEvents, err
+}
+
 func (tc *TbtcChain) PastRedemptionRequestedEvents(
 	filter *tbtc.RedemptionRequestedEventFilter,
 ) ([]*tbtc.RedemptionRequestedEvent, error) {
@@ -2407,6 +2476,58 @@ func (tc *TbtcChain) ValidateDepositSweepProposal(
 
 	// Should never happen because `validateDepositSweepProposal` returns true
 	// or reverts (returns an error) but do the check just in case.
+	if !valid {
+		return fmt.Errorf("unexpected validation result")
+	}
+
+	return nil
+}
+
+func (tc *TbtcChain) ValidateTaprootDepositSweepProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *tbtc.DepositSweepProposal,
+	depositsExtraInfo []struct {
+		*tbtc.Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	dei := make(
+		[]tbtcabi.WalletProposalValidatorTaprootDepositExtraInfo,
+		len(depositsExtraInfo),
+	)
+	for i, depositExtraInfo := range depositsExtraInfo {
+		fundingTx := tbtcabi.BitcoinTxInfo2{
+			Version:      depositExtraInfo.FundingTx.SerializeVersion(),
+			InputVector:  depositExtraInfo.FundingTx.SerializeInputs(),
+			OutputVector: depositExtraInfo.FundingTx.SerializeOutputs(),
+			Locktime:     depositExtraInfo.FundingTx.SerializeLocktime(),
+		}
+
+		if !depositExtraInfo.Deposit.IsTaproot() {
+			return fmt.Errorf("deposit extra info [%v] is not Taproot-native", i)
+		}
+
+		dei[i] = tbtcabi.WalletProposalValidatorTaprootDepositExtraInfo{
+			FundingTx:            fundingTx,
+			BlindingFactor:       depositExtraInfo.Deposit.BlindingFactor,
+			WalletPubKeyHash:     depositExtraInfo.Deposit.WalletPublicKeyHash,
+			WalletXOnlyPublicKey: *depositExtraInfo.Deposit.WalletXOnlyPublicKey,
+			RefundPubKeyHash:     depositExtraInfo.Deposit.RefundPublicKeyHash,
+			RefundXOnlyPublicKey: *depositExtraInfo.Deposit.RefundXOnlyPublicKey,
+			RefundLocktime:       depositExtraInfo.Deposit.RefundLocktime,
+		}
+	}
+
+	valid, err := tc.walletProposalValidator.ValidateTaprootDepositSweepProposal(
+		convertDepositSweepProposalToAbiType(walletPublicKeyHash, proposal),
+		dei,
+	)
+	if err != nil {
+		return fmt.Errorf("validation failed: [%v]", err)
+	}
+
+	// Should never happen because `validateTaprootDepositSweepProposal`
+	// returns true or reverts (returns an error) but do the check just in case.
 	if !valid {
 		return fmt.Errorf("unexpected validation result")
 	}
