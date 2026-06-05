@@ -683,6 +683,58 @@ func TestBuildTaggedTBTCSignerRunDKGInputs(t *testing.T) {
 	}
 }
 
+func TestBuildTaggedTBTCSignerRunDKGInputsForPayload_UsesPersistedDKGInputs(
+	t *testing.T,
+) {
+	persistedParticipants := []NativeTBTCSignerDKGParticipant{
+		{Identifier: 1, PublicKeyHex: "020001"},
+		{Identifier: 2, PublicKeyHex: "020002"},
+		{Identifier: 3, PublicKeyHex: "020003"},
+	}
+
+	participants, threshold, err := buildTaggedTBTCSignerRunDKGInputsForPayload(
+		&NativeTBTCSignerMaterialPayload{
+			KeyGroupSource:  NativeTBTCSignerKeyGroupSourceDKGPersisted,
+			DKGParticipants: persistedParticipants,
+			DKGThreshold:    2,
+		},
+		&NativeExecutionFFISigningRequest{
+			GroupSize:          3,
+			DishonestThreshold: 1,
+			Attempt: &Attempt{
+				Number:                 1,
+				CoordinatorMemberIndex: 1,
+				IncludedMembersIndexes: []group.MemberIndex{1, 3},
+			},
+		},
+		[]group.MemberIndex{1, 3},
+	)
+	if err != nil {
+		t.Fatalf("unexpected RunDKG inputs error: [%v]", err)
+	}
+
+	if threshold != 2 {
+		t.Fatalf("unexpected threshold: [%v]", threshold)
+	}
+	if len(participants) != len(persistedParticipants) {
+		t.Fatalf(
+			"unexpected participants count\nexpected: [%v]\nactual:   [%v]",
+			len(persistedParticipants),
+			len(participants),
+		)
+	}
+	for i := range participants {
+		if participants[i] != persistedParticipants[i] {
+			t.Fatalf(
+				"unexpected participant at index [%d]\nexpected: [%+v]\nactual:   [%+v]",
+				i,
+				persistedParticipants[i],
+				participants[i],
+			)
+		}
+	}
+}
+
 func TestBuildTaggedTBTCSignerRunDKGInputs_RejectsInvalidRequest(t *testing.T) {
 	testCases := []struct {
 		name    string

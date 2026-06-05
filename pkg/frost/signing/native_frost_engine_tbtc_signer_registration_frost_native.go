@@ -133,6 +133,7 @@ type buildTaggedTBTCSignerRunDKGRequest struct {
 	SessionID    string                                `json:"session_id"`
 	Participants []buildTaggedTBTCSignerDKGParticipant `json:"participants"`
 	Threshold    uint16                                `json:"threshold"`
+	DKGSeedHex   *string                               `json:"dkg_seed_hex,omitempty"`
 }
 
 type buildTaggedTBTCSignerDKGParticipant struct {
@@ -251,6 +252,30 @@ func (bttse *buildTaggedTBTCSignerEngine) RunDKG(
 	return decodeBuildTaggedTBTCSignerRunDKGResponse(responsePayload)
 }
 
+func (bttse *buildTaggedTBTCSignerEngine) RunDKGWithSeed(
+	sessionID string,
+	participants []NativeTBTCSignerDKGParticipant,
+	threshold uint16,
+	dkgSeedHex string,
+) (*NativeTBTCSignerDKGResult, error) {
+	requestPayload, err := buildTaggedTBTCSignerRunDKGRequestPayloadWithSeed(
+		sessionID,
+		participants,
+		threshold,
+		dkgSeedHex,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	responsePayload, err := callBuildTaggedTBTCSignerRunDKG(requestPayload)
+	if err != nil {
+		return nil, err
+	}
+
+	return decodeBuildTaggedTBTCSignerRunDKGResponse(responsePayload)
+}
+
 func (bttse *buildTaggedTBTCSignerEngine) StartSignRound(
 	sessionID string,
 	memberIdentifier uint16,
@@ -350,6 +375,41 @@ func buildTaggedTBTCSignerRunDKGRequestPayload(
 	participants []NativeTBTCSignerDKGParticipant,
 	threshold uint16,
 ) ([]byte, error) {
+	return buildTaggedTBTCSignerRunDKGRequestPayloadWithOptionalSeed(
+		sessionID,
+		participants,
+		threshold,
+		nil,
+	)
+}
+
+func buildTaggedTBTCSignerRunDKGRequestPayloadWithSeed(
+	sessionID string,
+	participants []NativeTBTCSignerDKGParticipant,
+	threshold uint16,
+	dkgSeedHex string,
+) ([]byte, error) {
+	if dkgSeedHex == "" {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"RunDKG",
+			"DKG seed hex is empty",
+		)
+	}
+
+	return buildTaggedTBTCSignerRunDKGRequestPayloadWithOptionalSeed(
+		sessionID,
+		participants,
+		threshold,
+		&dkgSeedHex,
+	)
+}
+
+func buildTaggedTBTCSignerRunDKGRequestPayloadWithOptionalSeed(
+	sessionID string,
+	participants []NativeTBTCSignerDKGParticipant,
+	threshold uint16,
+	dkgSeedHex *string,
+) ([]byte, error) {
 	if sessionID == "" {
 		return nil, buildTaggedTBTCSignerOperationError(
 			"RunDKG",
@@ -405,6 +465,7 @@ func buildTaggedTBTCSignerRunDKGRequestPayload(
 		SessionID:    sessionID,
 		Participants: requestParticipants,
 		Threshold:    threshold,
+		DKGSeedHex:   dkgSeedHex,
 	}
 
 	payload, err := json.Marshal(request)

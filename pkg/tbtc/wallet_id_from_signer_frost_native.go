@@ -34,11 +34,12 @@ func frostWalletIDFromSigner(signer *signer) ([32]byte, bool, error) {
 		return [32]byte{}, false, nil
 	}
 
-	if material.Format != frostsigning.NativeSignerMaterialFormatFrostUniFFIV2 {
+	if material.Format != frostsigning.NativeSignerMaterialFormatFrostUniFFIV2 &&
+		material.Format != frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1 {
 		return [32]byte{}, false, nil
 	}
 
-	xOnlyOutputKey, err := frostsigning.ExtractDkgGroupPublicKeyFromMaterial(
+	xOnlyOutputKey, err := frostsigning.ExtractTaprootOutputKeyFromMaterial(
 		material,
 	)
 	if err != nil {

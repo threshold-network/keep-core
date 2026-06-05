@@ -262,6 +262,44 @@ func TestBuildTaggedTBTCSignerRunDKGRequestPayload(t *testing.T) {
 			request.Participants[0].PublicKeyHex,
 		)
 	}
+
+	if request.DKGSeedHex != nil {
+		t.Fatalf("unexpected DKG seed hex: [%v]", *request.DKGSeedHex)
+	}
+}
+
+func TestBuildTaggedTBTCSignerRunDKGRequestPayloadWithSeed(t *testing.T) {
+	payload, err := buildTaggedTBTCSignerRunDKGRequestPayloadWithSeed(
+		"session-1",
+		[]NativeTBTCSignerDKGParticipant{
+			{
+				Identifier:   1,
+				PublicKeyHex: "02aa",
+			},
+			{
+				Identifier:   2,
+				PublicKeyHex: "02bb",
+			},
+		},
+		2,
+		"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+	)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+
+	var request buildTaggedTBTCSignerRunDKGRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+
+	if request.DKGSeedHex == nil {
+		t.Fatal("expected DKG seed hex")
+	}
+	if *request.DKGSeedHex !=
+		"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20" {
+		t.Fatalf("unexpected DKG seed hex: [%v]", *request.DKGSeedHex)
+	}
 }
 
 func TestBuildTaggedTBTCSignerRunDKGRequestPayload_RejectsInvalidInput(t *testing.T) {
