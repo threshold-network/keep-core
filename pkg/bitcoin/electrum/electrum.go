@@ -434,6 +434,56 @@ func (c *Connection) GetTransactionsForPublicKeyHash(
 	return transactions, nil
 }
 
+// GetTransactionsForPublicKeyScripts gets confirmed transactions that pay to
+// any of the given public key scripts. The returned transactions are ordered
+// by block height in ascending order, i.e. the latest transaction is at the
+// end of the list.
+func (c *Connection) GetTransactionsForPublicKeyScripts(
+	publicKeyScripts []bitcoin.Script,
+	limit int,
+) ([]*bitcoin.Transaction, error) {
+	txHashes, err := c.GetTxHashesForPublicKeyScripts(publicKeyScripts)
+	if err != nil {
+		return nil, err
+	}
+
+	selectedTxHashes := selectLatestUniqueTxHashes(txHashes, limit)
+
+	transactions := make([]*bitcoin.Transaction, len(selectedTxHashes))
+	for i, txHash := range selectedTxHashes {
+		transaction, err := c.GetTransaction(txHash)
+		if err != nil {
+			return nil, fmt.Errorf("cannot get transaction: [%v]", err)
+		}
+
+		transactions[i] = transaction
+	}
+
+	return transactions, nil
+}
+
+func selectLatestUniqueTxHashes(
+	txHashes []bitcoin.Hash,
+	limit int,
+) []bitcoin.Hash {
+	uniqueTxHashes := make([]bitcoin.Hash, 0, len(txHashes))
+	seen := make(map[bitcoin.Hash]bool)
+	for _, txHash := range txHashes {
+		if seen[txHash] {
+			continue
+		}
+
+		seen[txHash] = true
+		uniqueTxHashes = append(uniqueTxHashes, txHash)
+	}
+
+	if len(uniqueTxHashes) > limit {
+		return uniqueTxHashes[len(uniqueTxHashes)-limit:]
+	}
+
+	return uniqueTxHashes
+}
+
 // GetTxHashesForPublicKeyHash gets hashes of confirmed transactions that pays
 // the given public key hash using either a P2PKH or P2WPKH script. The returned
 // transactions hashes are ordered by block height in the ascending order, i.e.

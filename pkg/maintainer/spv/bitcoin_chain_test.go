@@ -148,6 +148,38 @@ func (lbc *localBitcoinChain) GetTransactionsForPublicKeyHash(
 	return matchingTransactions, nil
 }
 
+func (lbc *localBitcoinChain) GetTransactionsForPublicKeyScripts(
+	publicKeyScripts []bitcoin.Script,
+	limit int,
+) ([]*bitcoin.Transaction, error) {
+	lbc.mutex.Lock()
+	defer lbc.mutex.Unlock()
+
+	matchingTransactions := make([]*bitcoin.Transaction, 0)
+
+	for _, transaction := range lbc.transactions {
+		transactionMatches := false
+		for _, output := range transaction.Outputs {
+			for _, publicKeyScript := range publicKeyScripts {
+				if bytes.Equal(output.PublicKeyScript, publicKeyScript) {
+					matchingTransactions = append(matchingTransactions, transaction)
+					transactionMatches = true
+					break
+				}
+			}
+			if transactionMatches {
+				break
+			}
+		}
+	}
+
+	if len(matchingTransactions) > limit {
+		return matchingTransactions[len(matchingTransactions)-limit:], nil
+	}
+
+	return matchingTransactions, nil
+}
+
 func (lbc *localBitcoinChain) GetTxHashesForPublicKeyHash(
 	publicKeyHash [20]byte,
 ) ([]bitcoin.Hash, error) {
