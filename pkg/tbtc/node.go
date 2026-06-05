@@ -188,21 +188,23 @@ func newNode(
 		return nil, fmt.Errorf("cannot get node's operator address: [%v]", err)
 	}
 
-	// TODO: This chicken and egg problem should be solved when
-	// waitForBlockHeight becomes a part of BlockHeightWaiter interface.
-	node.dkgExecutor = newDkgExecutor(
-		node.groupParameters,
-		node.operatorID,
-		operatorAddress,
-		chain,
-		netProvider,
-		walletRegistry,
-		latch,
-		config,
-		workPersistence,
-		scheduler,
-		node.waitForBlockHeight,
-	)
+	if shouldRunLegacyECDSA(config) {
+		// TODO: This chicken and egg problem should be solved when
+		// waitForBlockHeight becomes a part of BlockHeightWaiter interface.
+		node.dkgExecutor = newDkgExecutor(
+			node.groupParameters,
+			node.operatorID,
+			operatorAddress,
+			chain,
+			netProvider,
+			walletRegistry,
+			latch,
+			config,
+			workPersistence,
+			scheduler,
+			node.waitForBlockHeight,
+		)
+	}
 
 	return node, nil
 }
@@ -329,6 +331,11 @@ func (n *node) joinDKGIfEligible(
 	startBlock uint64,
 	delayBlocks uint64,
 ) {
+	if n.dkgExecutor == nil {
+		logger.Warnf("legacy ECDSA DKG is disabled; ignoring DKG started event")
+		return
+	}
+
 	n.dkgExecutor.executeDkgIfEligible(seed, startBlock, delayBlocks)
 }
 
@@ -343,6 +350,11 @@ func (n *node) validateDKG(
 	result *DKGChainResult,
 	resultHash [32]byte,
 ) {
+	if n.dkgExecutor == nil {
+		logger.Warnf("legacy ECDSA DKG is disabled; ignoring DKG result")
+		return
+	}
+
 	n.dkgExecutor.executeDkgValidation(seed, submissionBlock, result, resultHash)
 }
 

@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/keep-network/keep-common/pkg/cache"
@@ -50,6 +51,27 @@ const (
 
 const (
 	sweptDepositsCachePeriod = 7 * 24 * time.Hour
+)
+
+const frostWalletRegistryAuthorizationViewsABI = `[
+	{
+		"inputs": [{"internalType": "address", "name": "operator", "type": "address"}],
+		"name": "operatorToStakingProvider",
+		"outputs": [{"internalType": "address", "name": "", "type": "address"}],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [{"internalType": "address", "name": "stakingProvider", "type": "address"}],
+		"name": "eligibleStake",
+		"outputs": [{"internalType": "uint96", "name": "", "type": "uint96"}],
+		"stateMutability": "view",
+		"type": "function"
+	}
+]`
+
+var frostWalletRegistryAuthorizationABI = mustParseABI(
+	frostWalletRegistryAuthorizationViewsABI,
 )
 
 // TbtcChain represents a TBTC-specific chain handle.
@@ -402,8 +424,9 @@ func (tc *TbtcChain) Staking() (chain.Address, error) {
 }
 
 // IsRecognized checks whether the given operator is recognized by the TbtcChain
-// as eligible to join the network. If the operator has a stake delegation or
-// had a stake delegation in the past, it will be recognized.
+// as eligible to join the network. Legacy ECDSA operators are recognized if
+// they have or had a stake delegation. FROST operators are recognized if the
+// FROST registry maps them to a provider with non-zero eligible weight.
 func (tc *TbtcChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool, error) {
 	operatorAddress, err := operatorPublicKeyToChainAddress(operatorPublicKey)
 	if err != nil {
@@ -424,28 +447,122 @@ func (tc *TbtcChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool, 
 		)
 	}
 
-	if (stakingProvider == common.Address{}) {
-		return false, nil
-	}
-
-	// Check if the staking provider has an owner. This check ensures that there
-	// is/was a stake delegation for the given staking provider.
-	_, _, _, hasStakeDelegation, err := tc.baseChain.RolesOf(
-		chain.Address(stakingProvider.Hex()),
-	)
-	if err != nil {
-		return false, fmt.Errorf(
-			"failed to check stake delegation for staking provider [%v]: [%v]",
-			stakingProvider,
-			err,
+	if (stakingProvider != common.Address{}) {
+		// Check if the staking provider has an owner. This check ensures that there
+		// is/was a stake delegation for the given staking provider.
+		_, _, _, hasStakeDelegation, err := tc.baseChain.RolesOf(
+			chain.Address(stakingProvider.Hex()),
 		)
+		if err != nil {
+			return false, fmt.Errorf(
+				"failed to check stake delegation for staking provider [%v]: [%v]",
+				stakingProvider,
+				err,
+			)
+		}
+
+		if hasStakeDelegation {
+			return true, nil
+		}
 	}
 
-	if !hasStakeDelegation {
+	isRecognizedByFrost, err := tc.isRecognizedByFrostRegistry(operatorAddress)
+	if err != nil {
+		return false, err
+	}
+	if !isRecognizedByFrost {
 		return false, nil
 	}
 
 	return true, nil
+}
+
+func (tc *TbtcChain) isRecognizedByFrostRegistry(
+	operatorAddress common.Address,
+) (bool, error) {
+	if tc.frostWalletRegistry == nil || (tc.frostWalletRegistryAddr == common.Address{}) {
+		return false, nil
+	}
+
+	out, err := tc.callFrostRegistryAuthorizationView(
+		"operatorToStakingProvider",
+		operatorAddress,
+	)
+	if err != nil {
+		return false, fmt.Errorf(
+			"failed to map FROST operator [%v] to a provider: [%v]",
+			operatorAddress,
+			err,
+		)
+	}
+	if len(out) != 1 {
+		return false, fmt.Errorf(
+			"unexpected FROST operatorToStakingProvider result length [%v]",
+			len(out),
+		)
+	}
+
+	stakingProvider := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
+	if (stakingProvider == common.Address{}) {
+		return false, nil
+	}
+
+	out, err = tc.callFrostRegistryAuthorizationView(
+		"eligibleStake",
+		stakingProvider,
+	)
+	if err != nil {
+		return false, fmt.Errorf(
+			"failed to get FROST eligible weight for provider [%v]: [%v]",
+			stakingProvider,
+			err,
+		)
+	}
+	if len(out) != 1 {
+		return false, fmt.Errorf(
+			"unexpected FROST eligibleStake result length [%v]",
+			len(out),
+		)
+	}
+
+	eligibleWeight := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
+	return eligibleWeight.Sign() > 0, nil
+}
+
+func (tc *TbtcChain) callFrostRegistryAuthorizationView(
+	method string,
+	args ...interface{},
+) ([]interface{}, error) {
+	var out []interface{}
+
+	contract := bind.NewBoundContract(
+		tc.frostWalletRegistryAddr,
+		frostWalletRegistryAuthorizationABI,
+		tc.baseChain.client,
+		nil,
+		nil,
+	)
+
+	err := contract.Call(
+		&bind.CallOpts{From: tc.key.Address},
+		&out,
+		method,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+func mustParseABI(rawABI string) abi.ABI {
+	parsed, err := abi.JSON(strings.NewReader(rawABI))
+	if err != nil {
+		panic(err)
+	}
+
+	return parsed
 }
 
 // OperatorToStakingProvider returns the staking provider address for the
