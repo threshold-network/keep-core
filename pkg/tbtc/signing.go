@@ -2,6 +2,8 @@ package tbtc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"math/big"
 	"strings"
@@ -44,18 +46,24 @@ var errSigningExecutorBusy = fmt.Errorf("signing executor is busy")
 func signingSessionID(
 	message *big.Int,
 	taprootMerkleRoot *[32]byte,
+	startBlock uint64,
 	attemptNumber uint,
 ) string {
 	if taprootMerkleRoot == nil {
 		return fmt.Sprintf("%v-%v", message.Text(16), attemptNumber)
 	}
 
-	return fmt.Sprintf(
-		"%v-%x-%v",
-		message.Text(16),
-		taprootMerkleRoot[:],
-		attemptNumber,
-	)
+	var startBlockBytes [8]byte
+	binary.BigEndian.PutUint64(startBlockBytes[:], startBlock)
+
+	sessionDigest := sha256.New()
+	sessionDigest.Write([]byte(message.Text(16)))
+	sessionDigest.Write([]byte{0})
+	sessionDigest.Write(taprootMerkleRoot[:])
+	sessionDigest.Write([]byte{0})
+	sessionDigest.Write(startBlockBytes[:])
+
+	return fmt.Sprintf("tr-%x-%v", sessionDigest.Sum(nil), attemptNumber)
 }
 
 // signingExecutor is a component responsible for executing signing related to
@@ -396,6 +404,7 @@ func (se *signingExecutor) signWithTaprootMerkleRoot(
 					sessionID := signingSessionID(
 						message,
 						taprootMerkleRoot,
+						startBlock,
 						attempt.number,
 					)
 
