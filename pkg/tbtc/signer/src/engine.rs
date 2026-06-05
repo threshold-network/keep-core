@@ -5353,6 +5353,7 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
 
     let request_fingerprint = {
         let mut canonical_request = request.clone();
+        canonical_request.member_identifier = 0;
         if let Some(signing_participants) = canonical_request.signing_participants.as_mut() {
             signing_participants.sort_unstable();
         }
@@ -5369,97 +5370,97 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
     let quarantined_operator_identifiers = guard.quarantined_operator_identifiers.clone();
 
     let mut pending_transition_record = None;
-    let round_state =
-        {
-            let session = guard.sessions.get_mut(&request.session_id).ok_or_else(|| {
-                EngineError::SessionNotFound {
-                    session_id: request.session_id.clone(),
-                }
+    let round_state = {
+        let session = guard.sessions.get_mut(&request.session_id).ok_or_else(|| {
+            EngineError::SessionNotFound {
+                session_id: request.session_id.clone(),
+            }
+        })?;
+
+        let dkg = session
+            .dkg_result
+            .clone()
+            .ok_or_else(|| EngineError::DkgNotReady {
+                session_id: request.session_id.clone(),
             })?;
 
-            let dkg = session
-                .dkg_result
-                .clone()
-                .ok_or_else(|| EngineError::DkgNotReady {
-                    session_id: request.session_id.clone(),
-                })?;
+        if let Some(emergency_rekey_event) = session.emergency_rekey_event.as_ref() {
+            return Err(EngineError::LifecyclePolicyRejected {
+                session_id: request.session_id.clone(),
+                reason_code: "emergency_rekey_required".to_string(),
+                detail: format!(
+                    "emergency rekey required for session [{}] since [{}]: {}",
+                    request.session_id,
+                    emergency_rekey_event.triggered_at_unix,
+                    emergency_rekey_event.reason
+                ),
+            });
+        }
 
-            if let Some(emergency_rekey_event) = session.emergency_rekey_event.as_ref() {
-                return Err(EngineError::LifecyclePolicyRejected {
-                    session_id: request.session_id.clone(),
-                    reason_code: "emergency_rekey_required".to_string(),
-                    detail: format!(
-                        "emergency rekey required for session [{}] since [{}]: {}",
-                        request.session_id,
-                        emergency_rekey_event.triggered_at_unix,
-                        emergency_rekey_event.reason
-                    ),
-                });
-            }
+        if session.finalize_request_fingerprint.is_some() {
+            // Lifecycle terminal state: once finalize succeeds for a session, we
+            // intentionally return SessionFinalized and require a new session_id
+            // for any subsequent StartSignRound call on that session ID.
+            return Err(EngineError::SessionFinalized {
+                session_id: request.session_id,
+            });
+        }
 
-            if session.finalize_request_fingerprint.is_some() {
-                // Lifecycle terminal state: once finalize succeeds for a session, we
-                // intentionally return SessionFinalized and require a new session_id
-                // for any subsequent StartSignRound call on that session ID.
-                return Err(EngineError::SessionFinalized {
-                    session_id: request.session_id,
-                });
-            }
+        if request.key_group != dkg.key_group {
+            return Err(EngineError::Validation(
+                "key_group does not match DKG output for this session".to_string(),
+            ));
+        }
 
-            if request.key_group != dkg.key_group {
+        {
+            let dkg_key_packages = session.dkg_key_packages.as_ref().ok_or_else(|| {
+                EngineError::Internal("missing DKG key package cache".to_string())
+            })?;
+
+            if !dkg_key_packages.contains_key(&request.member_identifier) {
                 return Err(EngineError::Validation(
-                    "key_group does not match DKG output for this session".to_string(),
+                    "member_identifier is not a DKG participant for this session".to_string(),
                 ));
             }
+        }
+        enforce_signing_message_binding_to_policy_checked_build_tx(
+            &request.session_id,
+            &request.message_hex,
+            session.tx_result.as_ref(),
+        )?;
 
-            {
-                let dkg_key_packages = session.dkg_key_packages.as_ref().ok_or_else(|| {
-                    EngineError::Internal("missing DKG key package cache".to_string())
-                })?;
+        // Guard against partial legacy state where sign material was cleared but
+        // active attempt context was not.
+        if session.sign_request_fingerprint.is_none() || session.round_state.is_none() {
+            session.active_attempt_context = None;
+        }
 
-                if !dkg_key_packages.contains_key(&request.member_identifier) {
-                    return Err(EngineError::Validation(
-                        "member_identifier is not a DKG participant for this session".to_string(),
-                    ));
-                }
-            }
-            enforce_signing_message_binding_to_policy_checked_build_tx(
-                &request.session_id,
-                &request.message_hex,
-                session.tx_result.as_ref(),
+        let canonical_attempt_context = request
+            .attempt_context
+            .as_ref()
+            .map(canonical_attempt_context);
+        let mut attempt_transition_telemetry = None;
+        let mut attempt_transition_record = None;
+        if let Some(active_attempt_context) = session.active_attempt_context.as_ref() {
+            let active_attempt_match_outcome = enforce_active_attempt_context_match(
+                active_attempt_context,
+                canonical_attempt_context.as_ref(),
+                request.attempt_transition_evidence.as_ref(),
+                session.round_state.as_ref(),
+                session.sign_request_fingerprint.as_deref(),
+                strict_roast_mode_enabled,
             )?;
 
-            // Guard against partial legacy state where sign material was cleared but
-            // active attempt context was not.
-            if session.sign_request_fingerprint.is_none() || session.round_state.is_none() {
-                session.active_attempt_context = None;
-            }
-
-            let canonical_attempt_context = request
-                .attempt_context
-                .as_ref()
-                .map(canonical_attempt_context);
-            let mut attempt_transition_telemetry = None;
-            let mut attempt_transition_record = None;
-            if let Some(active_attempt_context) = session.active_attempt_context.as_ref() {
-                let active_attempt_match_outcome = enforce_active_attempt_context_match(
-                    active_attempt_context,
-                    canonical_attempt_context.as_ref(),
-                    request.attempt_transition_evidence.as_ref(),
-                    session.round_state.as_ref(),
-                    session.sign_request_fingerprint.as_deref(),
-                    strict_roast_mode_enabled,
-                )?;
-
-                if let ActiveAttemptMatchOutcome::AdvanceAuthorized = active_attempt_match_outcome {
-                    let incoming_attempt_context =
-                        canonical_attempt_context.as_ref().ok_or_else(|| {
-                            EngineError::Internal(
-                                "missing incoming attempt context for authorized transition"
-                                    .to_string(),
-                            )
-                        })?;
-                    let transition_evidence = request
+            if let ActiveAttemptMatchOutcome::AdvanceAuthorized = active_attempt_match_outcome {
+                let incoming_attempt_context =
+                    canonical_attempt_context.as_ref().ok_or_else(|| {
+                        EngineError::Internal(
+                            "missing incoming attempt context for authorized transition"
+                                .to_string(),
+                        )
+                    })?;
+                let transition_evidence =
+                    request
                         .attempt_transition_evidence
                         .as_ref()
                         .ok_or_else(|| {
@@ -5468,160 +5469,183 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
                                     .to_string(),
                             )
                         })?;
-                    attempt_transition_telemetry = build_attempt_transition_telemetry(
-                        active_attempt_context,
-                        incoming_attempt_context,
-                        Some(transition_evidence),
-                    );
-                    if attempt_transition_telemetry.is_none() {
-                        return Err(EngineError::Internal(
-                            "missing transition telemetry evidence for authorized transition"
-                                .to_string(),
-                        ));
-                    }
-                    attempt_transition_record = Some(build_transcript_audit_record(
-                        active_attempt_context,
-                        incoming_attempt_context,
-                        transition_evidence,
-                    )?);
-                    clear_active_sign_round_for_attempt_transition(session);
+                attempt_transition_telemetry = build_attempt_transition_telemetry(
+                    active_attempt_context,
+                    incoming_attempt_context,
+                    Some(transition_evidence),
+                );
+                if attempt_transition_telemetry.is_none() {
+                    return Err(EngineError::Internal(
+                        "missing transition telemetry evidence for authorized transition"
+                            .to_string(),
+                    ));
                 }
+                attempt_transition_record = Some(build_transcript_audit_record(
+                    active_attempt_context,
+                    incoming_attempt_context,
+                    transition_evidence,
+                )?);
+                clear_active_sign_round_for_attempt_transition(session);
             }
+        }
 
-            if let Some(existing) = &session.sign_request_fingerprint {
-                if existing == &request_fingerprint {
-                    return session.round_state.clone().ok_or_else(|| {
-                        EngineError::Internal("missing round state cache".to_string())
-                    });
-                }
-
-                return Err(EngineError::SessionConflict {
-                    session_id: request.session_id,
-                });
-            }
-
-            let signing_participants = {
+        if let Some(existing) = &session.sign_request_fingerprint {
+            if existing == &request_fingerprint {
+                let mut round_state = session.round_state.clone().ok_or_else(|| {
+                    EngineError::Internal("missing round state cache".to_string())
+                })?;
+                let sign_message_bytes = session.sign_message_bytes.as_ref().ok_or_else(|| {
+                    EngineError::Internal("missing sign message cache".to_string())
+                })?;
+                let signing_participants =
+                    round_state.signing_participants.clone().ok_or_else(|| {
+                        EngineError::Internal(
+                            "missing round signing participants cache".to_string(),
+                        )
+                    })?;
                 let dkg_key_packages = session.dkg_key_packages.as_ref().ok_or_else(|| {
                     EngineError::Internal("missing DKG key package cache".to_string())
                 })?;
-                resolve_signing_participants(&request, dkg.threshold, dkg_key_packages)?
-            };
-            if let Some(canonical_attempt_signing_participants) = validate_attempt_context(
-                &request.session_id,
-                &message_digest_hex,
-                dkg.threshold,
-                request.attempt_context.as_ref(),
-                strict_roast_mode_enabled,
-            )? {
-                if canonical_attempt_signing_participants != signing_participants {
-                    return Err(EngineError::Validation(
-                    "attempt_context.included_participants must match resolved signing_participants"
-                        .to_string(),
-                ));
-                }
-            }
-            enforce_not_quarantined_identifiers(
-                &request.session_id,
-                &signing_participants,
-                &quarantined_operator_identifiers,
-                auto_quarantine_config.as_ref(),
-            )?;
 
-            let signing_participants_fingerprint = fingerprint(&signing_participants)?;
-            let consumed_attempt_id = canonical_attempt_context
-                .as_ref()
-                .map(|attempt_context| attempt_context.attempt_id.clone());
-            if let Some(attempt_id) = consumed_attempt_id.as_ref() {
-                if session.consumed_attempt_ids.contains(attempt_id) {
-                    return Err(EngineError::ConsumedAttemptReplay {
-                        session_id: request.session_id.clone(),
-                        attempt_id: attempt_id.clone(),
-                    });
-                }
-                ensure_consumed_registry_insert_capacity(
-                    &session.consumed_attempt_ids,
-                    attempt_id,
-                    "consumed_attempt_ids",
-                    &request.session_id,
-                )?;
-            }
-            let round_id = derive_round_id(
-                &request.session_id,
-                &request.key_group,
-                &request.message_hex,
-                request.taproot_merkle_root_hex.as_deref(),
-                &signing_participants_fingerprint,
-                canonical_attempt_context.as_ref(),
-            );
-            if session.consumed_sign_round_ids.contains(&round_id) {
-                return Err(EngineError::ConsumedRoundReplay {
-                    session_id: request.session_id.clone(),
-                    round_id: round_id.clone(),
-                });
-            }
-            ensure_consumed_registry_insert_capacity(
-                &session.consumed_sign_round_ids,
-                &round_id,
-                "consumed_sign_round_ids",
-                &request.session_id,
-            )?;
-            let own_contribution = {
-                let dkg_key_packages = session.dkg_key_packages.as_ref().ok_or_else(|| {
-                    EngineError::Internal("missing DKG key package cache".to_string())
-                })?;
-                build_real_signature_share_contribution(
+                round_state.own_contribution = build_real_signature_share_contribution(
                     dkg_key_packages,
                     &signing_participants,
                     &request,
-                    &round_id,
-                    &message_bytes,
+                    &round_state.round_id,
+                    sign_message_bytes,
                     taproot_merkle_root.as_ref(),
-                )?
-            };
+                )?;
 
-            if let Some(transition_telemetry) = attempt_transition_telemetry.as_ref() {
-                record_hardening_telemetry(|telemetry| {
-                    telemetry.attempt_transition_total =
-                        telemetry.attempt_transition_total.saturating_add(1);
-                    if transition_telemetry.coordinator_rotated {
-                        telemetry.coordinator_failover_total =
-                            telemetry.coordinator_failover_total.saturating_add(1);
-                    }
+                return Ok(round_state);
+            }
+
+            return Err(EngineError::SessionConflict {
+                session_id: request.session_id,
+            });
+        }
+
+        let signing_participants = {
+            let dkg_key_packages = session.dkg_key_packages.as_ref().ok_or_else(|| {
+                EngineError::Internal("missing DKG key package cache".to_string())
+            })?;
+            resolve_signing_participants(&request, dkg.threshold, dkg_key_packages)?
+        };
+        if let Some(canonical_attempt_signing_participants) = validate_attempt_context(
+            &request.session_id,
+            &message_digest_hex,
+            dkg.threshold,
+            request.attempt_context.as_ref(),
+            strict_roast_mode_enabled,
+        )? {
+            if canonical_attempt_signing_participants != signing_participants {
+                return Err(EngineError::Validation(
+                    "attempt_context.included_participants must match resolved signing_participants"
+                        .to_string(),
+                ));
+            }
+        }
+        enforce_not_quarantined_identifiers(
+            &request.session_id,
+            &signing_participants,
+            &quarantined_operator_identifiers,
+            auto_quarantine_config.as_ref(),
+        )?;
+
+        let signing_participants_fingerprint = fingerprint(&signing_participants)?;
+        let consumed_attempt_id = canonical_attempt_context
+            .as_ref()
+            .map(|attempt_context| attempt_context.attempt_id.clone());
+        if let Some(attempt_id) = consumed_attempt_id.as_ref() {
+            if session.consumed_attempt_ids.contains(attempt_id) {
+                return Err(EngineError::ConsumedAttemptReplay {
+                    session_id: request.session_id.clone(),
+                    attempt_id: attempt_id.clone(),
                 });
             }
-            if let Some(transition_record) = attempt_transition_record.as_ref() {
-                ensure_attempt_transition_record_insert_capacity(
-                    &session.attempt_transition_records,
-                    &request.session_id,
-                )?;
-                session
-                    .attempt_transition_records
-                    .push(transition_record.clone());
-                pending_transition_record = Some(transition_record.clone());
-            }
-
-            let round_state = RoundState {
+            ensure_consumed_registry_insert_capacity(
+                &session.consumed_attempt_ids,
+                attempt_id,
+                "consumed_attempt_ids",
+                &request.session_id,
+            )?;
+        }
+        let round_id = derive_round_id(
+            &request.session_id,
+            &request.key_group,
+            &request.message_hex,
+            request.taproot_merkle_root_hex.as_deref(),
+            &signing_participants_fingerprint,
+            canonical_attempt_context.as_ref(),
+        );
+        if session.consumed_sign_round_ids.contains(&round_id) {
+            return Err(EngineError::ConsumedRoundReplay {
                 session_id: request.session_id.clone(),
                 round_id: round_id.clone(),
-                required_contributions: dkg.threshold,
-                message_digest_hex: message_digest_hex.clone(),
-                taproot_merkle_root_hex: request.taproot_merkle_root_hex.clone(),
-                signing_participants: Some(signing_participants),
-                attempt_transition_telemetry,
-                own_contribution,
-            };
-
-            session.sign_request_fingerprint = Some(request_fingerprint);
-            session.sign_message_bytes = Some(Zeroizing::new(message_bytes));
-            session.round_state = Some(round_state.clone());
-            session.active_attempt_context = canonical_attempt_context;
-            if let Some(attempt_id) = consumed_attempt_id {
-                session.consumed_attempt_ids.insert(attempt_id);
-            }
-            session.consumed_sign_round_ids.insert(round_id);
-
-            round_state
+            });
+        }
+        ensure_consumed_registry_insert_capacity(
+            &session.consumed_sign_round_ids,
+            &round_id,
+            "consumed_sign_round_ids",
+            &request.session_id,
+        )?;
+        let own_contribution = {
+            let dkg_key_packages = session.dkg_key_packages.as_ref().ok_or_else(|| {
+                EngineError::Internal("missing DKG key package cache".to_string())
+            })?;
+            build_real_signature_share_contribution(
+                dkg_key_packages,
+                &signing_participants,
+                &request,
+                &round_id,
+                &message_bytes,
+                taproot_merkle_root.as_ref(),
+            )?
         };
+
+        if let Some(transition_telemetry) = attempt_transition_telemetry.as_ref() {
+            record_hardening_telemetry(|telemetry| {
+                telemetry.attempt_transition_total =
+                    telemetry.attempt_transition_total.saturating_add(1);
+                if transition_telemetry.coordinator_rotated {
+                    telemetry.coordinator_failover_total =
+                        telemetry.coordinator_failover_total.saturating_add(1);
+                }
+            });
+        }
+        if let Some(transition_record) = attempt_transition_record.as_ref() {
+            ensure_attempt_transition_record_insert_capacity(
+                &session.attempt_transition_records,
+                &request.session_id,
+            )?;
+            session
+                .attempt_transition_records
+                .push(transition_record.clone());
+            pending_transition_record = Some(transition_record.clone());
+        }
+
+        let round_state = RoundState {
+            session_id: request.session_id.clone(),
+            round_id: round_id.clone(),
+            required_contributions: dkg.threshold,
+            message_digest_hex: message_digest_hex.clone(),
+            taproot_merkle_root_hex: request.taproot_merkle_root_hex.clone(),
+            signing_participants: Some(signing_participants),
+            attempt_transition_telemetry,
+            own_contribution,
+        };
+
+        session.sign_request_fingerprint = Some(request_fingerprint);
+        session.sign_message_bytes = Some(Zeroizing::new(message_bytes));
+        session.round_state = Some(round_state.clone());
+        session.active_attempt_context = canonical_attempt_context;
+        if let Some(attempt_id) = consumed_attempt_id {
+            session.consumed_attempt_ids.insert(attempt_id);
+        }
+        session.consumed_sign_round_ids.insert(round_id);
+
+        round_state
+    };
 
     if let Some(transition_record) = pending_transition_record.as_ref() {
         apply_auto_quarantine_faults_for_transition(
@@ -12038,6 +12062,233 @@ mod tests {
             .verifying_key()
             .verify(&sign_message_bytes, &signature)
             .expect("signature verification");
+    }
+
+    #[test]
+    fn start_sign_round_allows_distinct_members_for_same_active_round() {
+        let _guard = lock_test_state();
+        reset_for_tests();
+
+        let run_dkg_request = RunDkgRequest {
+            session_id: "session-real-multi-member-process".to_string(),
+            participants: vec![
+                crate::api::DkgParticipant {
+                    identifier: 1,
+                    public_key_hex: "02aa".to_string(),
+                },
+                crate::api::DkgParticipant {
+                    identifier: 2,
+                    public_key_hex: "02bb".to_string(),
+                },
+            ],
+            threshold: 2,
+            dkg_seed_hex: None,
+        };
+
+        let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
+        let start_request = StartSignRoundRequest {
+            session_id: "session-real-multi-member-process".to_string(),
+            member_identifier: 1,
+            message_hex: "baddcafe".to_string(),
+            key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
+            signing_participants: Some(vec![1, 2]),
+            attempt_context: None,
+            attempt_transition_evidence: None,
+        };
+        let first_round_state =
+            start_sign_round(start_request.clone()).expect("first member start sign round");
+
+        let second_round_state = start_sign_round(StartSignRoundRequest {
+            member_identifier: 2,
+            ..start_request.clone()
+        })
+        .expect("second member start sign round");
+
+        assert_eq!(first_round_state.session_id, second_round_state.session_id);
+        assert_eq!(first_round_state.round_id, second_round_state.round_id);
+        assert_eq!(first_round_state.required_contributions, 2);
+        assert_eq!(second_round_state.required_contributions, 2);
+        assert_eq!(first_round_state.own_contribution.identifier, 1);
+        assert_eq!(second_round_state.own_contribution.identifier, 2);
+        assert_ne!(
+            first_round_state.own_contribution.signature_share_hex,
+            second_round_state.own_contribution.signature_share_hex
+        );
+
+        let (dkg_public_key_package, sign_message_bytes) = {
+            let guard = state().expect("engine state").lock().expect("engine lock");
+            let session = guard
+                .sessions
+                .get(&start_request.session_id)
+                .expect("session state");
+
+            (
+                session
+                    .dkg_public_key_package
+                    .clone()
+                    .expect("dkg public key package"),
+                session
+                    .sign_message_bytes
+                    .clone()
+                    .expect("sign message bytes"),
+            )
+        };
+
+        let finalize_request = FinalizeSignRoundRequest {
+            session_id: start_request.session_id,
+            taproot_merkle_root_hex: None,
+            attempt_context: None,
+            round_contributions: vec![
+                first_round_state.own_contribution,
+                second_round_state.own_contribution,
+            ],
+        };
+
+        let result = finalize_sign_round(finalize_request, false).expect("finalize");
+
+        assert_eq!(result.round_id, first_round_state.round_id);
+        let signature_bytes = hex::decode(&result.signature_hex).expect("signature decode");
+        let signature = frost::Signature::deserialize(&signature_bytes).expect("signature parse");
+        dkg_public_key_package
+            .verifying_key()
+            .verify(&sign_message_bytes, &signature)
+            .expect("signature verification");
+    }
+
+    #[test]
+    fn start_sign_round_allows_taproot_threshold_subset_members_for_same_active_round() {
+        use frost::keys::Tweak;
+
+        let _guard = lock_test_state();
+        reset_for_tests();
+
+        let participants = (1_u16..=100)
+            .map(|identifier| crate::api::DkgParticipant {
+                identifier,
+                public_key_hex: format!("02{identifier:02x}"),
+            })
+            .collect::<Vec<_>>();
+        let signing_participants = vec![
+            2, 3, 4, 8, 11, 13, 14, 17, 19, 21, 22, 25, 27, 29, 30, 31, 32, 33, 35, 37, 38, 39, 42,
+            44, 45, 48, 50, 51, 52, 53, 57, 58, 60, 61, 63, 64, 65, 67, 68, 73, 76, 77, 80, 81, 84,
+            86, 87, 88, 90, 94, 96,
+        ];
+        let taproot_merkle_root_hex =
+            "37a57b86de2819d2b72a173df46238a7ad295ea1485d3b40e9415daa82b4fdcb";
+
+        let dkg_result = run_dkg(RunDkgRequest {
+            session_id: "session-real-taproot-multi-member-process".to_string(),
+            participants,
+            threshold: 51,
+            dkg_seed_hex: None,
+        })
+        .expect("run dkg");
+
+        let first_request = StartSignRoundRequest {
+            session_id: "session-real-taproot-multi-member-process".to_string(),
+            member_identifier: 86,
+            message_hex: "ac692bb7fddf3f7e1e050a83cf3ffb6e8e69888ce980281aa39da169525750ef"
+                .to_string(),
+            key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: Some(taproot_merkle_root_hex.to_string()),
+            signing_participants: Some(signing_participants.clone()),
+            attempt_context: None,
+            attempt_transition_evidence: None,
+        };
+
+        let first_round_state =
+            start_sign_round(first_request.clone()).expect("first member start sign round");
+        assert_eq!(first_round_state.required_contributions, 51);
+        assert_eq!(
+            first_round_state.signing_participants.as_deref(),
+            Some(signing_participants.as_slice())
+        );
+
+        let mut contributions = vec![first_round_state.own_contribution.clone()];
+        for member_identifier in [76_u16, 39, 53, 3] {
+            let round_state = start_sign_round(StartSignRoundRequest {
+                member_identifier,
+                ..first_request.clone()
+            })
+            .expect("next member start sign round");
+
+            assert_eq!(round_state.session_id, first_round_state.session_id);
+            assert_eq!(round_state.round_id, first_round_state.round_id);
+            assert_eq!(round_state.required_contributions, 51);
+            assert_eq!(round_state.own_contribution.identifier, member_identifier);
+            contributions.push(round_state.own_contribution);
+        }
+
+        let (dkg_key_packages, dkg_public_key_package, sign_message_bytes) = {
+            let guard = state().expect("engine state").lock().expect("engine lock");
+            let session = guard
+                .sessions
+                .get(&first_request.session_id)
+                .expect("session state");
+
+            (
+                session.dkg_key_packages.clone().expect("dkg key packages"),
+                session
+                    .dkg_public_key_package
+                    .clone()
+                    .expect("dkg public key package"),
+                session
+                    .sign_message_bytes
+                    .clone()
+                    .expect("sign message bytes"),
+            )
+        };
+        let taproot_merkle_root_bytes =
+            hex::decode(taproot_merkle_root_hex).expect("taproot merkle root");
+        let mut taproot_merkle_root = [0_u8; 32];
+        taproot_merkle_root.copy_from_slice(&taproot_merkle_root_bytes);
+
+        for member_identifier in signing_participants
+            .iter()
+            .copied()
+            .filter(|identifier| ![86_u16, 76, 39, 53, 3].contains(identifier))
+            .take(46)
+        {
+            let member_request = StartSignRoundRequest {
+                member_identifier,
+                ..first_request.clone()
+            };
+            contributions.push(
+                build_real_signature_share_contribution(
+                    &dkg_key_packages,
+                    signing_participants.as_slice(),
+                    &member_request,
+                    &first_round_state.round_id,
+                    &sign_message_bytes,
+                    Some(&taproot_merkle_root),
+                )
+                .expect("additional contribution"),
+            );
+        }
+        assert_eq!(contributions.len(), 51);
+
+        let result = finalize_sign_round(
+            FinalizeSignRoundRequest {
+                session_id: first_request.session_id,
+                taproot_merkle_root_hex: Some(taproot_merkle_root_hex.to_string()),
+                attempt_context: None,
+                round_contributions: contributions,
+            },
+            false,
+        )
+        .expect("finalize");
+
+        assert_eq!(result.round_id, first_round_state.round_id);
+        let signature_bytes = hex::decode(&result.signature_hex).expect("signature decode");
+        let signature = frost::Signature::deserialize(&signature_bytes).expect("signature parse");
+        let tweaked_public_key_package = dkg_public_key_package
+            .clone()
+            .tweak(Some(taproot_merkle_root.as_slice()));
+        tweaked_public_key_package
+            .verifying_key()
+            .verify(&sign_message_bytes, &signature)
+            .expect("tweaked signature verification");
     }
 
     #[test]
