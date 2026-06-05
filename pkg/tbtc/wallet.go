@@ -292,6 +292,15 @@ type walletSigningExecutor interface {
 	) ([]*frost.Signature, error)
 }
 
+type taprootTweakedWalletSigningExecutor interface {
+	signBatchWithTaprootMerkleRoots(
+		ctx context.Context,
+		messages []*big.Int,
+		taprootMerkleRoots []*[32]byte,
+		startBlock uint64,
+	) ([]*frost.Signature, error)
+}
+
 // walletTransactionExecutor is a component allowing to sign and broadcast
 // wallet Bitcoin transactions.
 type walletTransactionExecutor struct {
@@ -400,11 +409,29 @@ func (wte *walletTransactionExecutor) signTransaction(
 	)
 	defer cancelSigningCtx()
 
-	signatures, err := wte.signingExecutor.signBatch(
-		signingCtx,
-		sigHashes,
-		signingStartBlock,
-	)
+	var signatures []*frost.Signature
+	taprootMerkleRoots := unsignedTx.TaprootKeyPathInputMerkleRoots()
+	if hasTaprootMerkleRoots(taprootMerkleRoots) {
+		tweakedSigningExecutor, ok := wte.signingExecutor.(taprootTweakedWalletSigningExecutor)
+		if !ok {
+			return nil, fmt.Errorf(
+				"taproot tweaked signing requires signer support",
+			)
+		}
+
+		signatures, err = tweakedSigningExecutor.signBatchWithTaprootMerkleRoots(
+			signingCtx,
+			sigHashes,
+			taprootMerkleRoots,
+			signingStartBlock,
+		)
+	} else {
+		signatures, err = wte.signingExecutor.signBatch(
+			signingCtx,
+			sigHashes,
+			signingStartBlock,
+		)
+	}
 	if err != nil {
 		return nil, fmt.Errorf(
 			"error while signing transaction's sig hashes: [%v]",
@@ -459,6 +486,16 @@ func (wte *walletTransactionExecutor) signTransaction(
 	signTxLogger.Infof("transaction created successfully")
 
 	return tx, nil
+}
+
+func hasTaprootMerkleRoots(taprootMerkleRoots []*[32]byte) bool {
+	for _, merkleRoot := range taprootMerkleRoots {
+		if merkleRoot != nil {
+			return true
+		}
+	}
+
+	return false
 }
 
 func nativeBuildTaprootTxSigningSubstitutionEnabled() bool {

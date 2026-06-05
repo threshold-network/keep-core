@@ -74,10 +74,12 @@ type NativeTBTCSignerEngine interface {
 		message []byte,
 		keyGroup string,
 		signingParticipants []uint16,
+		taprootMerkleRoot *[32]byte,
 	) (*NativeTBTCSignerRoundState, error)
 	FinalizeSignRound(
 		sessionID string,
 		roundContributions []NativeTBTCSignerRoundContribution,
+		taprootMerkleRoot *[32]byte,
 	) ([]byte, error)
 	BuildTaprootTx(
 		sessionID string,

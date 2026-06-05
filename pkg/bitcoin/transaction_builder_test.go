@@ -198,6 +198,184 @@ func TestTransactionBuilder_AddPublicKeyHashInput_AcceptsTaprootKeyPathInputForB
 	})
 }
 
+func TestTransactionBuilder_AddTaprootKeyPathInputWithMerkleRoot(t *testing.T) {
+	localChain := newLocalChain()
+	builder := NewTransactionBuilder(localChain)
+
+	privateKey, _ := btcec2.PrivKeyFromBytes(
+		hexToSlice(
+			t,
+			"0101010101010101010101010101010101010101010101010101010101010101",
+		),
+	)
+
+	var internalKey [32]byte
+	copy(internalKey[:], schnorr.SerializePubKey(privateKey.PubKey()))
+
+	refundLeaf := Script(hexToSlice(
+		t,
+		"76a9140102030405060708090a0b0c0d0e0f101112131488ac",
+	))
+	merkleRoot, err := TaprootLeafHash(refundLeaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outputKey, err := TaprootOutputKey(internalKey, &merkleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lockingScript, err := PayToTaproot(outputKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inputTransaction := &Transaction{
+		Version: 1,
+		Inputs: []*TransactionInput{
+			{
+				Outpoint: &TransactionOutpoint{
+					TransactionHash: Hash{0x01},
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: lockingScript,
+			},
+		},
+		Locktime: 0,
+	}
+
+	if err := localChain.addTransaction(inputTransaction); err != nil {
+		t.Fatal(err)
+	}
+
+	inputTransactionUtxo := &UnspentTransactionOutput{
+		Outpoint: &TransactionOutpoint{
+			TransactionHash: inputTransaction.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 100000,
+	}
+
+	if err := builder.AddTaprootKeyPathInputWithMerkleRoot(
+		inputTransactionUtxo,
+		internalKey,
+		merkleRoot,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	assertSigHashArgs(
+		t,
+		&inputSigHashArgs{
+			value:             inputTransactionUtxo.Value,
+			publicKeyScript:   lockingScript,
+			scriptCode:        lockingScript,
+			scriptType:        P2TRScript,
+			taprootMerkleRoot: &merkleRoot,
+			witness:           true,
+		},
+		builder.sigHashArgs[0],
+	)
+
+	merkleRoots := builder.TaprootKeyPathInputMerkleRoots()
+	if len(merkleRoots) != 1 {
+		t.Fatalf("unexpected merkle roots count: [%v]", len(merkleRoots))
+	}
+	testutils.AssertBytesEqual(t, merkleRoot[:], merkleRoots[0][:])
+}
+
+func TestTransactionBuilder_AddTaprootKeyPathInputWithMerkleRootRejectsMismatch(
+	t *testing.T,
+) {
+	localChain := newLocalChain()
+	builder := NewTransactionBuilder(localChain)
+
+	privateKey, _ := btcec2.PrivKeyFromBytes(
+		hexToSlice(
+			t,
+			"0101010101010101010101010101010101010101010101010101010101010101",
+		),
+	)
+
+	var internalKey [32]byte
+	copy(internalKey[:], schnorr.SerializePubKey(privateKey.PubKey()))
+
+	merkleRoot, err := TaprootLeafHash(Script(hexToSlice(
+		t,
+		"76a9140102030405060708090a0b0c0d0e0f101112131488ac",
+	)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wrongMerkleRoot, err := TaprootLeafHash(Script(hexToSlice(
+		t,
+		"76a914ffffffffffffffffffffffffffffffffffffffff88ac",
+	)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outputKey, err := TaprootOutputKey(internalKey, &merkleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lockingScript, err := PayToTaproot(outputKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inputTransaction := &Transaction{
+		Version: 1,
+		Inputs: []*TransactionInput{
+			{
+				Outpoint: &TransactionOutpoint{
+					TransactionHash: Hash{0x01},
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: lockingScript,
+			},
+		},
+		Locktime: 0,
+	}
+
+	if err := localChain.addTransaction(inputTransaction); err != nil {
+		t.Fatal(err)
+	}
+
+	err = builder.AddTaprootKeyPathInputWithMerkleRoot(
+		&UnspentTransactionOutput{
+			Outpoint: &TransactionOutpoint{
+				TransactionHash: inputTransaction.Hash(),
+				OutputIndex:     0,
+			},
+			Value: 100000,
+		},
+		internalKey,
+		wrongMerkleRoot,
+	)
+	if err == nil {
+		t.Fatal("expected taproot output key mismatch error")
+	}
+	if !strings.Contains(err.Error(), "taproot output key does not match") {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
 func TestTransactionBuilder_AddInputReturnsErrorForOutOfRangeOutputIndex(
 	t *testing.T,
 ) {
@@ -1313,6 +1491,20 @@ func assertSigHashArgs(t *testing.T, expected, actual *inputSigHashArgs) {
 			int(expected.scriptType),
 			int(actual.scriptType),
 		)
+	}
+
+	if expected.taprootMerkleRoot != nil {
+		if actual.taprootMerkleRoot == nil {
+			t.Fatal("expected taproot merkle root")
+		}
+
+		testutils.AssertBytesEqual(
+			t,
+			expected.taprootMerkleRoot[:],
+			actual.taprootMerkleRoot[:],
+		)
+	} else if actual.taprootMerkleRoot != nil {
+		t.Fatal("unexpected taproot merkle root")
 	}
 
 	testutils.AssertBoolsEqual(

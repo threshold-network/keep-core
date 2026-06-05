@@ -149,11 +149,12 @@ type buildTaggedTBTCSignerRunDKGResponse struct {
 }
 
 type buildTaggedTBTCSignerStartSignRoundRequest struct {
-	SessionID           string   `json:"session_id"`
-	MemberIdentifier    uint16   `json:"member_identifier"`
-	MessageHex          string   `json:"message_hex"`
-	KeyGroup            string   `json:"key_group"`
-	SigningParticipants []uint16 `json:"signing_participants,omitempty"`
+	SessionID            string   `json:"session_id"`
+	MemberIdentifier     uint16   `json:"member_identifier"`
+	MessageHex           string   `json:"message_hex"`
+	KeyGroup             string   `json:"key_group"`
+	TaprootMerkleRootHex *string  `json:"taproot_merkle_root_hex,omitempty"`
+	SigningParticipants  []uint16 `json:"signing_participants,omitempty"`
 }
 
 type buildTaggedTBTCSignerStartSignRoundResponse struct {
@@ -166,8 +167,9 @@ type buildTaggedTBTCSignerStartSignRoundResponse struct {
 }
 
 type buildTaggedTBTCSignerFinalizeSignRoundRequest struct {
-	SessionID          string                                           `json:"session_id"`
-	RoundContributions []buildTaggedTBTCSignerFinalizeRoundContribution `json:"round_contributions"`
+	SessionID            string                                           `json:"session_id"`
+	TaprootMerkleRootHex *string                                          `json:"taproot_merkle_root_hex,omitempty"`
+	RoundContributions   []buildTaggedTBTCSignerFinalizeRoundContribution `json:"round_contributions"`
 }
 
 type buildTaggedTBTCSignerFinalizeRoundContribution struct {
@@ -255,6 +257,7 @@ func (bttse *buildTaggedTBTCSignerEngine) StartSignRound(
 	message []byte,
 	keyGroup string,
 	signingParticipants []uint16,
+	taprootMerkleRoot *[32]byte,
 ) (*NativeTBTCSignerRoundState, error) {
 	requestPayload, err := buildTaggedTBTCSignerStartSignRoundRequestPayload(
 		sessionID,
@@ -262,6 +265,7 @@ func (bttse *buildTaggedTBTCSignerEngine) StartSignRound(
 		message,
 		keyGroup,
 		signingParticipants,
+		taprootMerkleRoot,
 	)
 	if err != nil {
 		return nil, err
@@ -278,10 +282,12 @@ func (bttse *buildTaggedTBTCSignerEngine) StartSignRound(
 func (bttse *buildTaggedTBTCSignerEngine) FinalizeSignRound(
 	sessionID string,
 	roundContributions []NativeTBTCSignerRoundContribution,
+	taprootMerkleRoot *[32]byte,
 ) ([]byte, error) {
 	requestPayload, err := buildTaggedTBTCSignerFinalizeSignRoundRequestPayload(
 		sessionID,
 		roundContributions,
+		taprootMerkleRoot,
 	)
 	if err != nil {
 		return nil, err
@@ -466,6 +472,7 @@ func buildTaggedTBTCSignerStartSignRoundRequestPayload(
 	message []byte,
 	keyGroup string,
 	signingParticipants []uint16,
+	taprootMerkleRoot *[32]byte,
 ) ([]byte, error) {
 	if sessionID == "" {
 		return nil, buildTaggedTBTCSignerOperationError(
@@ -505,12 +512,19 @@ func buildTaggedTBTCSignerStartSignRoundRequestPayload(
 		seenParticipants[participant] = struct{}{}
 	}
 
+	var taprootMerkleRootHex *string
+	if taprootMerkleRoot != nil {
+		encodedTaprootMerkleRoot := hex.EncodeToString(taprootMerkleRoot[:])
+		taprootMerkleRootHex = &encodedTaprootMerkleRoot
+	}
+
 	request := buildTaggedTBTCSignerStartSignRoundRequest{
-		SessionID:           sessionID,
-		MemberIdentifier:    memberIdentifier,
-		MessageHex:          hex.EncodeToString(message),
-		KeyGroup:            keyGroup,
-		SigningParticipants: append([]uint16{}, signingParticipants...),
+		SessionID:            sessionID,
+		MemberIdentifier:     memberIdentifier,
+		MessageHex:           hex.EncodeToString(message),
+		KeyGroup:             keyGroup,
+		TaprootMerkleRootHex: taprootMerkleRootHex,
+		SigningParticipants:  append([]uint16{}, signingParticipants...),
 	}
 
 	payload, err := json.Marshal(request)
@@ -623,6 +637,7 @@ func decodeBuildTaggedTBTCSignerStartSignRoundResponse(
 func buildTaggedTBTCSignerFinalizeSignRoundRequestPayload(
 	sessionID string,
 	roundContributions []NativeTBTCSignerRoundContribution,
+	taprootMerkleRoot *[32]byte,
 ) ([]byte, error) {
 	if sessionID == "" {
 		return nil, buildTaggedTBTCSignerOperationError(
@@ -661,9 +676,16 @@ func buildTaggedTBTCSignerFinalizeSignRoundRequestPayload(
 		)
 	}
 
+	var taprootMerkleRootHex *string
+	if taprootMerkleRoot != nil {
+		encodedTaprootMerkleRoot := hex.EncodeToString(taprootMerkleRoot[:])
+		taprootMerkleRootHex = &encodedTaprootMerkleRoot
+	}
+
 	request := buildTaggedTBTCSignerFinalizeSignRoundRequest{
-		SessionID:          sessionID,
-		RoundContributions: payloadContributions,
+		SessionID:            sessionID,
+		TaprootMerkleRootHex: taprootMerkleRootHex,
+		RoundContributions:   payloadContributions,
 	}
 
 	payload, err := json.Marshal(request)

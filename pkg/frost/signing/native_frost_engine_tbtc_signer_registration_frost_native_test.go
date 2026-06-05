@@ -3,6 +3,7 @@
 package signing
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -30,6 +31,7 @@ func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 		1,
 		[]byte("message"),
 		"key-group",
+		nil,
 		nil,
 	)
 	if err == nil {
@@ -394,6 +396,7 @@ func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload(t *testing.T) {
 		[]byte{0xab, 0xcd},
 		"key-group-1",
 		[]uint16{1, 2, 3},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("unexpected payload build error: [%v]", err)
@@ -457,12 +460,51 @@ func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload(t *testing.T) {
 	}
 }
 
+func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload_TaprootMerkleRoot(
+	t *testing.T,
+) {
+	var taprootMerkleRoot [32]byte
+	taprootMerkleRoot[0] = 0xab
+	taprootMerkleRoot[31] = 0xcd
+
+	payload, err := buildTaggedTBTCSignerStartSignRoundRequestPayload(
+		"session-1",
+		3,
+		[]byte{0xab, 0xcd},
+		"key-group-1",
+		[]uint16{1, 2, 3},
+		&taprootMerkleRoot,
+	)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+
+	var request buildTaggedTBTCSignerStartSignRoundRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+
+	if request.TaprootMerkleRootHex == nil {
+		t.Fatal("expected taproot merkle root")
+	}
+
+	expectedTaprootMerkleRootHex := hex.EncodeToString(taprootMerkleRoot[:])
+	if *request.TaprootMerkleRootHex != expectedTaprootMerkleRootHex {
+		t.Fatalf(
+			"unexpected taproot merkle root\nexpected: [%v]\nactual:   [%v]",
+			expectedTaprootMerkleRootHex,
+			*request.TaprootMerkleRootHex,
+		)
+	}
+}
+
 func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload_EmptySessionID(t *testing.T) {
 	_, err := buildTaggedTBTCSignerStartSignRoundRequestPayload(
 		"",
 		1,
 		[]byte{0xab},
 		"key-group-1",
+		nil,
 		nil,
 	)
 	if !errors.Is(err, ErrNativeBridgeOperationFailed) {
@@ -487,6 +529,7 @@ func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload_ZeroMemberID(t *testi
 		0,
 		[]byte{0xab},
 		"key-group-1",
+		nil,
 		nil,
 	)
 	if !errors.Is(err, ErrNativeBridgeOperationFailed) {
@@ -514,6 +557,7 @@ func TestBuildTaggedTBTCSignerFinalizeSignRoundRequestPayload(t *testing.T) {
 				Data:       []byte{0xde, 0xad},
 			},
 		},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("unexpected payload build error: [%v]", err)
@@ -553,6 +597,46 @@ func TestBuildTaggedTBTCSignerFinalizeSignRoundRequestPayload(t *testing.T) {
 			"unexpected contribution signature share\nexpected: [%v]\nactual:   [%v]",
 			"dead",
 			request.RoundContributions[0].SignatureShareHex,
+		)
+	}
+}
+
+func TestBuildTaggedTBTCSignerFinalizeSignRoundRequestPayload_TaprootMerkleRoot(
+	t *testing.T,
+) {
+	var taprootMerkleRoot [32]byte
+	taprootMerkleRoot[0] = 0xab
+	taprootMerkleRoot[31] = 0xcd
+
+	payload, err := buildTaggedTBTCSignerFinalizeSignRoundRequestPayload(
+		"session-1",
+		[]NativeTBTCSignerRoundContribution{
+			{
+				Identifier: 7,
+				Data:       []byte{0xde, 0xad},
+			},
+		},
+		&taprootMerkleRoot,
+	)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+
+	var request buildTaggedTBTCSignerFinalizeSignRoundRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+
+	if request.TaprootMerkleRootHex == nil {
+		t.Fatal("expected taproot merkle root")
+	}
+
+	expectedTaprootMerkleRootHex := hex.EncodeToString(taprootMerkleRoot[:])
+	if *request.TaprootMerkleRootHex != expectedTaprootMerkleRootHex {
+		t.Fatalf(
+			"unexpected taproot merkle root\nexpected: [%v]\nactual:   [%v]",
+			expectedTaprootMerkleRootHex,
+			*request.TaprootMerkleRootHex,
 		)
 	}
 }

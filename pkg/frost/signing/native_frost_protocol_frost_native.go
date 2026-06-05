@@ -13,6 +13,7 @@ import (
 
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/ipfs/go-log/v2"
+	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
 	"github.com/keep-network/keep-core/pkg/net"
@@ -411,11 +412,28 @@ func executeNativeFROSTSigning(
 		return nil, fmt.Errorf("native FROST signing package is nil")
 	}
 
-	ownSignatureShare, err := engine.Sign(
-		signingPackage,
-		ownNonces,
-		signerMaterial.KeyPackage,
-	)
+	var ownSignatureShare *NativeFROSTSignatureShare
+	if request.TaprootMerkleRoot != nil {
+		tweakedEngine, ok := engine.(NativeFROSTTaprootTweakedSigningEngine)
+		if !ok {
+			return nil, fmt.Errorf(
+				"native FROST engine does not support taproot tweaked signing",
+			)
+		}
+
+		ownSignatureShare, err = tweakedEngine.SignWithTaprootTweak(
+			signingPackage,
+			ownNonces,
+			signerMaterial.KeyPackage,
+			request.TaprootMerkleRoot[:],
+		)
+	} else {
+		ownSignatureShare, err = engine.Sign(
+			signingPackage,
+			ownNonces,
+			signerMaterial.KeyPackage,
+		)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("native FROST round two signing failed: [%w]", err)
 	}
@@ -482,11 +500,28 @@ func executeNativeFROSTSigning(
 		)
 	}
 
-	signatureBytes, err := engine.Aggregate(
-		signingPackage,
-		orderedSignatureShares,
-		signerMaterial.PublicKeyPackage,
-	)
+	var signatureBytes []byte
+	if request.TaprootMerkleRoot != nil {
+		tweakedEngine, ok := engine.(NativeFROSTTaprootTweakedSigningEngine)
+		if !ok {
+			return nil, fmt.Errorf(
+				"native FROST engine does not support taproot tweaked aggregation",
+			)
+		}
+
+		signatureBytes, err = tweakedEngine.AggregateWithTaprootTweak(
+			signingPackage,
+			orderedSignatureShares,
+			signerMaterial.PublicKeyPackage,
+			request.TaprootMerkleRoot[:],
+		)
+	} else {
+		signatureBytes, err = engine.Aggregate(
+			signingPackage,
+			orderedSignatureShares,
+			signerMaterial.PublicKeyPackage,
+		)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("native FROST aggregation failed: [%w]", err)
 	}
@@ -502,6 +537,7 @@ func executeNativeFROSTSigning(
 		signature,
 		messageDigest,
 		signerMaterial.PublicKeyPackage,
+		request.TaprootMerkleRoot,
 	); err != nil {
 		return nil, fmt.Errorf(
 			"native FROST aggregation returned non-verifiable BIP-340 signature: [%w]",
@@ -524,6 +560,7 @@ func verifyNativeFROSTBIP340Signature(
 	signature *frost.Signature,
 	messageDigest [attempt.MessageDigestLength]byte,
 	publicKeyPackage *NativeFROSTPublicKeyPackage,
+	taprootMerkleRoot *[32]byte,
 ) error {
 	if signature == nil {
 		return fmt.Errorf("signature is nil")
@@ -543,6 +580,21 @@ func verifyNativeFROSTBIP340Signature(
 			len(publicKeyBytes),
 			frost.OutputKeySize,
 		)
+	}
+
+	if taprootMerkleRoot != nil {
+		var internalKey [32]byte
+		copy(internalKey[:], publicKeyBytes)
+
+		outputKey, err := bitcoin.TaprootOutputKey(
+			internalKey,
+			taprootMerkleRoot,
+		)
+		if err != nil {
+			return fmt.Errorf("cannot derive taproot output key: [%w]", err)
+		}
+
+		publicKeyBytes = outputKey[:]
 	}
 
 	publicKey, err := schnorr.ParsePubKey(publicKeyBytes)

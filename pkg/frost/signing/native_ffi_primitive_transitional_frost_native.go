@@ -709,6 +709,7 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRoundWithSignature(
 		messageBytes,
 		keyGroup,
 		signingParticipants,
+		request.TaprootMerkleRoot,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("start sign round failed: [%w]", err)
@@ -765,6 +766,7 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRoundWithSignature(
 	signature, err := nativeEngine.FinalizeSignRound(
 		request.SessionID,
 		roundContributions,
+		request.TaprootMerkleRoot,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("finalize sign round failed: [%w]", err)
@@ -1153,6 +1155,13 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 	request *NativeExecutionFFISigningRequest,
 	privateKeyShare *tecdsa.PrivateKeyShare,
 ) (*frost.Signature, error) {
+	if request.TaprootMerkleRoot != nil {
+		return nil, fmt.Errorf(
+			"%w: taproot tweaked signing requires native FROST signer support",
+			ErrNativeCryptographyUnavailable,
+		)
+	}
+
 	if privateKeyShare == nil {
 		return nil, fmt.Errorf("legacy private key share is nil")
 	}
