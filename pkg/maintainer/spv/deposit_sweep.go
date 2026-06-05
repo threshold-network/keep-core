@@ -6,7 +6,6 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
 
-	"github.com/btcsuite/btcd/txscript"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -156,13 +155,25 @@ func parseDepositSweepTransactionInputs(
 
 		publicKeyScript := previousTransaction.Outputs[outpointIndex].PublicKeyScript
 		value := previousTransaction.Outputs[outpointIndex].Value
-		scriptClass := txscript.GetScriptClass(publicKeyScript)
+		scriptType := bitcoin.GetScriptType(publicKeyScript)
 
-		if scriptClass == txscript.PubKeyHashTy ||
-			scriptClass == txscript.WitnessV0PubKeyHashTy {
-			// The input is P2PKH or P2WPKH, so we found main UTXO. There should
-			// be at most one main UTXO. If any input of this kind has already
-			// been found, report an error.
+		deposit, found, err := spvChain.GetDepositRequest(
+			outpointTransactionHash,
+			outpointIndex,
+		)
+		if err != nil {
+			return bitcoin.UnspentTransactionOutput{}, common.Address{}, fmt.Errorf(
+				"failed to get deposit request: [%v]",
+				err,
+			)
+		}
+
+		if !found && (scriptType == bitcoin.P2PKHScript ||
+			scriptType == bitcoin.P2WPKHScript ||
+			scriptType == bitcoin.P2TRScript) {
+			// The input is a direct wallet UTXO, so we found main UTXO.
+			// There should be at most one main UTXO. If any input of this
+			// kind has already been found, report an error.
 			if mainUTXO == nil {
 				mainUTXO = &bitcoin.UnspentTransactionOutput{
 					Outpoint: &bitcoin.TransactionOutpoint{
@@ -177,31 +188,13 @@ func parseDepositSweepTransactionInputs(
 						"inputs",
 				)
 			}
-		} else if scriptClass == txscript.ScriptHashTy ||
-			scriptClass == txscript.WitnessV0ScriptHashTy {
-			// The input is P2SH or P2WSH, so we found a deposit input. All
+		} else if found && (scriptType == bitcoin.P2SHScript ||
+			scriptType == bitcoin.P2WSHScript ||
+			scriptType == bitcoin.P2TRScript) {
+			// The input is a deposit input. All
 			// the deposits should have the same vault set or no vault at all.
 			// If the vault if different than the vault from any previous
 			// deposit input, report an error.
-			deposit, found, err := spvChain.GetDepositRequest(
-				outpointTransactionHash,
-				outpointIndex,
-			)
-			if err != nil {
-				return bitcoin.UnspentTransactionOutput{}, common.Address{}, fmt.Errorf(
-					"failed to get deposit request: [%v]",
-					err,
-				)
-			}
-
-			if !found {
-				return bitcoin.UnspentTransactionOutput{}, common.Address{}, fmt.Errorf(
-					"deposit: [%v/%v] not found",
-					outpointTransactionHash,
-					outpointIndex,
-				)
-			}
-
 			if depositAlreadyProcessed {
 				if vault != convertVaultAddress(deposit.Vault) {
 					return bitcoin.UnspentTransactionOutput{}, common.Address{}, fmt.Errorf(
