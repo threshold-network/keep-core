@@ -1162,6 +1162,91 @@ func TestWalletTransactionExecutor_SignTransaction_RejectsMixedTaprootAndLegacyI
 	}
 }
 
+func TestWalletTransactionExecutor_SignTransaction_RejectsSchnorrForLegacyInputsBeforeSigning(
+	t *testing.T,
+) {
+	originalBuildTaprootTxViaNativeSignerFn := buildTaprootTxViaNativeSignerFn
+	t.Cleanup(func() {
+		buildTaprootTxViaNativeSignerFn = originalBuildTaprootTxViaNativeSignerFn
+	})
+	buildTaprootTxViaNativeSignerFn = func(
+		unsignedTx *bitcoin.TransactionBuilder,
+	) (string, error) {
+		return "", nil
+	}
+
+	var publicKeyHash [20]byte
+	copy(
+		publicKeyHash[:],
+		mustDecodeHex(t, "0202020202020202020202020202020202020202"),
+	)
+	inputScript, err := bitcoin.PayToWitnessPublicKeyHash(publicKeyHash)
+	if err != nil {
+		t.Fatalf("cannot create witness input script: [%v]", err)
+	}
+
+	localBitcoinChain := newLocalBitcoinChain()
+	fundingTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: bitcoin.Hash{0x03},
+					OutputIndex:     0,
+				},
+				SignatureScript: []byte{0x51},
+				Sequence:        0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: inputScript,
+			},
+		},
+		Locktime: 0,
+	}
+	if err := localBitcoinChain.BroadcastTransaction(fundingTransaction); err != nil {
+		t.Fatalf("cannot broadcast funding transaction: [%v]", err)
+	}
+
+	unsignedTx := bitcoin.NewTransactionBuilder(localBitcoinChain)
+	if err := unsignedTx.AddPublicKeyHashInput(
+		&bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: fundingTransaction.Hash(),
+				OutputIndex:     0,
+			},
+			Value: 100000,
+		},
+	); err != nil {
+		t.Fatalf("cannot add legacy input: [%v]", err)
+	}
+	unsignedTx.AddOutput(&bitcoin.TransactionOutput{
+		Value:           90000,
+		PublicKeyScript: inputScript,
+	})
+
+	wte := &walletTransactionExecutor{
+		executingWallet: generateWallet(big.NewInt(111)),
+		signingExecutor: &deterministicSchnorrSigningExecutorForTaproot{},
+		waitForBlockFn: func(ctx context.Context, block uint64) error {
+			return nil
+		},
+	}
+
+	tx, err := wte.signTransaction(&warningCaptureLogger{}, unsignedTx, 0, 0)
+	if err == nil {
+		t.Fatal("expected schnorr non-taproot signing error")
+	}
+	if tx != nil {
+		t.Fatal("expected no signed transaction")
+	}
+	if !strings.Contains(err.Error(), "non-taproot transaction inputs") {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
 func buildTaprootTxSubstitutionFixture(
 	t *testing.T,
 ) (
@@ -1374,6 +1459,10 @@ func (dsseft *deterministicSchnorrSigningExecutorForTaproot) signBatch(
 	}
 
 	return signatures, nil
+}
+
+func (dsseft *deterministicSchnorrSigningExecutorForTaproot) usesSchnorrSignatures() bool {
+	return true
 }
 
 type unexpectedSigningExecutorForBuildTaprootTxError struct{}

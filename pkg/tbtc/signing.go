@@ -16,6 +16,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/announcer"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
+	"github.com/keep-network/keep-core/pkg/tecdsa"
 	"go.uber.org/zap"
 	"golang.org/x/sync/semaphore"
 )
@@ -91,6 +92,16 @@ func newSigningExecutor(
 		waitForBlockFn:       waitForBlockFn,
 		signingAttemptsLimit: signingAttemptsLimit,
 	}
+}
+
+func (se *signingExecutor) usesSchnorrSignatures() bool {
+	for _, signer := range se.signers {
+		if _, ok := signer.signingMaterial().(*tecdsa.PrivateKeyShare); !ok {
+			return true
+		}
+	}
+
+	return false
 }
 
 // signBatch performs the signing process for each message from the given
