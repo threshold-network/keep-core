@@ -29,6 +29,8 @@ pub struct StartSignRoundRequest {
     pub message_hex: String,
     pub key_group: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taproot_merkle_root_hex: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signing_participants: Option<Vec<u16>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt_context: Option<AttemptContext>,
@@ -61,6 +63,8 @@ pub struct RoundState {
     pub required_contributions: u16,
     pub message_digest_hex: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taproot_merkle_root_hex: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signing_participants: Option<Vec<u16>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt_transition_telemetry: Option<AttemptTransitionTelemetry>,
@@ -70,6 +74,8 @@ pub struct RoundState {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct FinalizeSignRoundRequest {
     pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taproot_merkle_root_hex: Option<String>,
     pub round_contributions: Vec<RoundContribution>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt_context: Option<AttemptContext>,

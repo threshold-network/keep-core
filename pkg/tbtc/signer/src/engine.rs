@@ -4250,6 +4250,32 @@ fn canonicalize_refresh_shares_request_for_fingerprint(
     canonical_request
 }
 
+fn canonicalize_taproot_merkle_root_hex(
+    taproot_merkle_root_hex: &mut Option<String>,
+) -> Result<Option<[u8; 32]>, EngineError> {
+    let Some(raw_taproot_merkle_root_hex) = taproot_merkle_root_hex.as_mut() else {
+        return Ok(None);
+    };
+
+    let normalized_taproot_merkle_root_hex =
+        raw_taproot_merkle_root_hex.trim().to_ascii_lowercase();
+    let taproot_merkle_root_bytes =
+        hex::decode(&normalized_taproot_merkle_root_hex).map_err(|_| {
+            EngineError::Validation("taproot_merkle_root_hex must be valid hex".to_string())
+        })?;
+    if taproot_merkle_root_bytes.len() != 32 {
+        return Err(EngineError::Validation(
+            "taproot_merkle_root_hex must decode to 32 bytes".to_string(),
+        ));
+    }
+
+    let mut taproot_merkle_root = [0_u8; 32];
+    taproot_merkle_root.copy_from_slice(&taproot_merkle_root_bytes);
+    *raw_taproot_merkle_root_hex = normalized_taproot_merkle_root_hex;
+
+    Ok(Some(taproot_merkle_root))
+}
+
 fn truthy_env_flag(raw_value: &str) -> bool {
     matches!(
         raw_value.trim().to_ascii_lowercase().as_str(),
@@ -4316,16 +4342,19 @@ fn derive_round_id(
     session_id: &str,
     key_group: &str,
     message_hex: &str,
+    taproot_merkle_root_hex: Option<&str>,
     signing_participants_fingerprint: &str,
     attempt_context: Option<&AttemptContext>,
 ) -> String {
     let attempt_id_component = round_attempt_id_component(attempt_context);
+    let taproot_merkle_root_component = taproot_merkle_root_hex.unwrap_or("no-taproot-merkle-root");
     hash_hex(
         format!(
-            "round:{}:{}:{}:{}:{}",
+            "round:{}:{}:{}:{}:{}:{}",
             session_id,
             key_group,
             message_hex,
+            taproot_merkle_root_component,
             signing_participants_fingerprint,
             attempt_id_component
         )
@@ -5276,7 +5305,7 @@ fn enforce_bootstrap_dealer_dkg_disabled_in_production(
     Ok(())
 }
 
-pub fn start_sign_round(request: StartSignRoundRequest) -> Result<RoundState, EngineError> {
+pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState, EngineError> {
     record_hardening_telemetry(|telemetry| {
         telemetry.start_sign_round_calls_total =
             telemetry.start_sign_round_calls_total.saturating_add(1);
@@ -5294,6 +5323,8 @@ pub fn start_sign_round(request: StartSignRoundRequest) -> Result<RoundState, En
     let message_bytes = hex::decode(&request.message_hex)
         .map_err(|_| EngineError::Validation("message_hex must be valid hex".to_string()))?;
     let message_digest_hex = hash_hex(&message_bytes);
+    let taproot_merkle_root =
+        canonicalize_taproot_merkle_root_hex(&mut request.taproot_merkle_root_hex)?;
     let strict_roast_mode_enabled = roast_strict_mode_enabled();
 
     let request_fingerprint = {
@@ -5494,6 +5525,7 @@ pub fn start_sign_round(request: StartSignRoundRequest) -> Result<RoundState, En
                 &request.session_id,
                 &request.key_group,
                 &request.message_hex,
+                request.taproot_merkle_root_hex.as_deref(),
                 &signing_participants_fingerprint,
                 canonical_attempt_context.as_ref(),
             );
@@ -5519,6 +5551,7 @@ pub fn start_sign_round(request: StartSignRoundRequest) -> Result<RoundState, En
                     &request,
                     &round_id,
                     &message_bytes,
+                    taproot_merkle_root.as_ref(),
                 )?
             };
 
@@ -5548,6 +5581,7 @@ pub fn start_sign_round(request: StartSignRoundRequest) -> Result<RoundState, En
                 round_id: round_id.clone(),
                 required_contributions: dkg.threshold,
                 message_digest_hex: message_digest_hex.clone(),
+                taproot_merkle_root_hex: request.taproot_merkle_root_hex.clone(),
                 signing_participants: Some(signing_participants),
                 attempt_transition_telemetry,
                 own_contribution,
@@ -5645,6 +5679,7 @@ fn build_real_signature_share_contribution(
     request: &StartSignRoundRequest,
     round_id: &str,
     message_bytes: &[u8],
+    taproot_merkle_root: Option<&[u8; 32]>,
 ) -> Result<RoundContribution, EngineError> {
     let mut commitments = BTreeMap::new();
     let mut own_nonces = None;
@@ -5693,8 +5728,16 @@ fn build_real_signature_share_contribution(
         })?;
 
     let signing_package = frost::SigningPackage::new(commitments, message_bytes);
-    let signature_share_result =
-        frost::round2::sign(&signing_package, &own_nonces, own_key_package);
+    let signature_share_result = if let Some(taproot_merkle_root) = taproot_merkle_root {
+        frost::round2::sign_with_tweak(
+            &signing_package,
+            &own_nonces,
+            own_key_package,
+            Some(taproot_merkle_root.as_slice()),
+        )
+    } else {
+        frost::round2::sign(&signing_package, &own_nonces, own_key_package)
+    };
     own_nonces.zeroize();
     let signature_share = signature_share_result
         .map_err(|e| EngineError::Internal(format!("failed to create signature share: {e}")))?;
@@ -5710,7 +5753,7 @@ fn build_real_signature_share_contribution(
 }
 
 pub fn finalize_sign_round(
-    request: FinalizeSignRoundRequest,
+    mut request: FinalizeSignRoundRequest,
     bootstrap_mode_enabled: bool,
 ) -> Result<SignatureResult, EngineError> {
     record_hardening_telemetry(|telemetry| {
@@ -5721,6 +5764,8 @@ pub fn finalize_sign_round(
     enforce_provenance_gate()?;
     validate_session_id(&request.session_id)?;
     let strict_roast_mode_enabled = roast_strict_mode_enabled();
+    let finalize_taproot_merkle_root =
+        canonicalize_taproot_merkle_root_hex(&mut request.taproot_merkle_root_hex)?;
 
     let request_fingerprint = {
         let mut canonical_attempt_context = request.attempt_context.clone();
@@ -5735,6 +5780,7 @@ pub fn finalize_sign_round(
 
         fingerprint(&FinalizeSignRoundRequest {
             session_id: request.session_id.clone(),
+            taproot_merkle_root_hex: request.taproot_merkle_root_hex.clone(),
             round_contributions: canonical_contributions,
             attempt_context: canonical_attempt_context,
         })?
@@ -5806,6 +5852,11 @@ pub fn finalize_sign_round(
             .ok_or_else(|| EngineError::SignRoundNotStarted {
                 session_id: request.session_id.clone(),
             })?;
+    if request.taproot_merkle_root_hex != round_state.taproot_merkle_root_hex {
+        return Err(EngineError::Validation(
+            "taproot_merkle_root_hex does not match active signing round".to_string(),
+        ));
+    }
     if signing_policy_firewall_enforced() {
         let sign_message_hex = session
             .sign_message_bytes
@@ -5875,6 +5926,11 @@ pub fn finalize_sign_round(
         return Err(EngineError::SyntheticContributionRejected {
             session_id: request.session_id,
         });
+    }
+    if is_synthetic && round_state.taproot_merkle_root_hex.is_some() {
+        return Err(EngineError::Validation(
+            "synthetic contributions do not support taproot tweaked signing".to_string(),
+        ));
     }
 
     let signature_result = if is_synthetic {
@@ -5984,10 +6040,19 @@ pub fn finalize_sign_round(
         }
 
         let signing_package = frost::SigningPackage::new(commitments, sign_message_bytes);
-        let signature =
-            frost::aggregate(&signing_package, &signature_shares, dkg_public_key_package).map_err(
-                |e| EngineError::Validation(format!("failed to aggregate signature shares: {e}")),
-            )?;
+        let signature = if let Some(taproot_merkle_root) = finalize_taproot_merkle_root.as_ref() {
+            frost::aggregate_with_tweak(
+                &signing_package,
+                &signature_shares,
+                dkg_public_key_package,
+                Some(taproot_merkle_root.as_slice()),
+            )
+        } else {
+            frost::aggregate(&signing_package, &signature_shares, dkg_public_key_package)
+        }
+        .map_err(|e| {
+            EngineError::Validation(format!("failed to aggregate signature shares: {e}"))
+        })?;
         let signature_bytes = signature.serialize().map_err(|e| {
             EngineError::Internal(format!("failed to serialize aggregate signature: {e}"))
         })?;
@@ -6606,6 +6671,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -7951,6 +8017,7 @@ mod tests {
         let finalize_err = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: "session-metrics-provenance-finalize".to_string(),
+                taproot_merkle_root_hex: None,
                 round_contributions: vec![],
                 attempt_context: None,
             },
@@ -8004,6 +8071,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -8064,6 +8132,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2, 3]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -8085,6 +8154,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -8174,6 +8244,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2, 3]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -8194,6 +8265,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2, 3]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -8255,6 +8327,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2, 3]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -8276,6 +8349,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -8389,6 +8463,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2, 3]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -8410,6 +8485,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -8555,6 +8631,7 @@ mod tests {
             key_group: post_rekey_status
                 .continuity_reference_key_group
                 .expect("continuity reference key group"),
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -8677,6 +8754,7 @@ mod tests {
         let finalize_err = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: round_state.session_id.clone(),
+                taproot_merkle_root_hex: None,
                 round_contributions: vec![
                     RoundContribution {
                         identifier: 1,
@@ -8857,6 +8935,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -8904,6 +8983,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -8955,6 +9035,7 @@ mod tests {
             member_identifier: 1,
             message_hex,
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -8999,6 +9080,7 @@ mod tests {
             member_identifier: 1,
             message_hex,
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -9018,6 +9100,7 @@ mod tests {
         let err = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: session_id.to_string(),
+                taproot_merkle_root_hex: None,
                 round_contributions: vec![
                     RoundContribution {
                         identifier: 1,
@@ -9075,6 +9158,7 @@ mod tests {
             member_identifier: 1,
             message_hex,
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -9096,6 +9180,7 @@ mod tests {
         let err = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: session_id.to_string(),
+                taproot_merkle_root_hex: None,
                 round_contributions: vec![
                     RoundContribution {
                         identifier: 1,
@@ -9525,6 +9610,7 @@ mod tests {
             request_session_id,
             key_group,
             message_hex,
+            None,
             signing_participants_fingerprint,
             Some(&lowercase_attempt_context),
         );
@@ -9532,6 +9618,7 @@ mod tests {
             request_session_id,
             key_group,
             message_hex,
+            None,
             signing_participants_fingerprint,
             Some(&uppercase_attempt_context),
         );
@@ -9545,6 +9632,7 @@ mod tests {
             request_session_id,
             key_group,
             message_hex,
+            None,
             signing_participants_fingerprint,
             Some(&different_attempt_context),
         );
@@ -9554,6 +9642,7 @@ mod tests {
             request_session_id,
             key_group,
             message_hex,
+            None,
             signing_participants_fingerprint,
             None,
         );
@@ -9668,6 +9757,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -9724,6 +9814,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -9775,6 +9866,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -9818,6 +9910,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -9867,6 +9960,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -9916,6 +10010,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -9965,6 +10060,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -10026,6 +10122,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(invalid_attempt_context),
             attempt_transition_evidence: None,
@@ -10074,6 +10171,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -10127,6 +10225,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -10180,6 +10279,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(uppercase_attempt_context),
             attempt_transition_evidence: None,
@@ -10193,6 +10293,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![2, 1]),
             attempt_context: Some(lowercase_attempt_context),
             attempt_transition_evidence: None,
@@ -10234,6 +10335,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -10243,6 +10345,7 @@ mod tests {
         let err = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: session_id.to_string(),
+                taproot_merkle_root_hex: None,
                 attempt_context: None,
                 round_contributions: vec![
                     RoundContribution {
@@ -10301,6 +10404,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -10310,6 +10414,7 @@ mod tests {
         let signature_result = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: session_id.to_string(),
+                taproot_merkle_root_hex: None,
                 attempt_context: None,
                 round_contributions: vec![
                     RoundContribution {
@@ -10364,6 +10469,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -10375,6 +10481,7 @@ mod tests {
         let signature_result = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: session_id.to_string(),
+                taproot_merkle_root_hex: None,
                 attempt_context: None,
                 round_contributions: vec![
                     RoundContribution {
@@ -10431,6 +10538,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -10442,6 +10550,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -10484,6 +10593,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: None,
@@ -10497,6 +10607,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -10544,6 +10655,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -10557,6 +10669,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: None,
@@ -10604,6 +10717,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -10618,6 +10732,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -10643,6 +10758,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(stale_attempt),
             attempt_transition_evidence: None,
@@ -10691,6 +10807,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -10707,6 +10824,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -10753,6 +10871,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one.clone()),
             attempt_transition_evidence: None,
@@ -10767,6 +10886,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -10780,6 +10900,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -10831,6 +10952,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -10848,6 +10970,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(invalid_transition_evidence),
@@ -10895,6 +11018,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -10909,6 +11033,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_three),
             attempt_transition_evidence: Some(transition_evidence),
@@ -10956,6 +11081,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -10973,6 +11099,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -11020,6 +11147,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -11041,6 +11169,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -11092,6 +11221,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2, 3]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -11113,6 +11243,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -11168,6 +11299,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2, 3]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -11189,6 +11321,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -11240,6 +11373,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2, 3]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -11261,6 +11395,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -11308,6 +11443,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(start_attempt),
             attempt_transition_evidence: None,
@@ -11318,6 +11454,7 @@ mod tests {
         let err = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: session_id.to_string(),
+                taproot_merkle_root_hex: None,
                 attempt_context: Some(mismatched_attempt),
                 round_contributions: vec![
                     round_state.own_contribution.clone(),
@@ -11372,6 +11509,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(start_attempt),
             attempt_transition_evidence: None,
@@ -11383,6 +11521,7 @@ mod tests {
         let err = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: session_id.to_string(),
+                taproot_merkle_root_hex: None,
                 attempt_context: Some(stale_attempt),
                 round_contributions: vec![
                     round_state.own_contribution.clone(),
@@ -11413,6 +11552,7 @@ mod tests {
 
         let request = FinalizeSignRoundRequest {
             session_id: "session-synthetic-rejected".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -11441,6 +11581,7 @@ mod tests {
 
         let request = FinalizeSignRoundRequest {
             session_id: "session-synthetic-accepted".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -11489,6 +11630,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -11530,6 +11672,7 @@ mod tests {
             &member_two_request,
             &round_state.round_id,
             &hex::decode(&member_two_request.message_hex).expect("message decode"),
+            None,
         )
         .expect("member two contribution");
         let member_three_request = StartSignRoundRequest {
@@ -11543,11 +11686,13 @@ mod tests {
             &member_three_request,
             &round_state.round_id,
             &hex::decode(&member_three_request.message_hex).expect("message decode"),
+            None,
         )
         .expect("member three contribution");
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-real-finalize".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 round_state.own_contribution.clone(),
@@ -11568,6 +11713,142 @@ mod tests {
             .verifying_key()
             .verify(&sign_message_bytes, &signature)
             .expect("signature verification");
+    }
+
+    #[test]
+    fn finalize_aggregates_real_taproot_tweaked_contributions() {
+        use frost::keys::Tweak;
+
+        let _guard = lock_test_state();
+        reset_for_tests();
+
+        let run_dkg_request = RunDkgRequest {
+            session_id: "session-real-taproot-tweak".to_string(),
+            participants: vec![
+                crate::api::DkgParticipant {
+                    identifier: 1,
+                    public_key_hex: "02aa".to_string(),
+                },
+                crate::api::DkgParticipant {
+                    identifier: 2,
+                    public_key_hex: "02bb".to_string(),
+                },
+                crate::api::DkgParticipant {
+                    identifier: 3,
+                    public_key_hex: "02cc".to_string(),
+                },
+            ],
+            threshold: 2,
+        };
+
+        let taproot_merkle_root_hex =
+            "37a57b86de2819d2b72a173df46238a7ad295ea1485d3b40e9415daa82b4fdcb";
+        let taproot_merkle_root_bytes =
+            hex::decode(taproot_merkle_root_hex).expect("taproot merkle root");
+        let mut taproot_merkle_root = [0_u8; 32];
+        taproot_merkle_root.copy_from_slice(&taproot_merkle_root_bytes);
+
+        let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
+        let start_request = StartSignRoundRequest {
+            session_id: "session-real-taproot-tweak".to_string(),
+            member_identifier: 1,
+            message_hex: "deadbeef".to_string(),
+            key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: Some(taproot_merkle_root_hex.to_string()),
+            signing_participants: None,
+            attempt_context: None,
+            attempt_transition_evidence: None,
+        };
+        let round_state = start_sign_round(start_request.clone()).expect("start sign round");
+        assert_eq!(
+            round_state.taproot_merkle_root_hex.as_deref(),
+            Some(taproot_merkle_root_hex)
+        );
+        let signing_participants = round_state
+            .signing_participants
+            .clone()
+            .expect("round signing participants");
+
+        let (dkg_key_packages, dkg_public_key_package, sign_message_bytes) = {
+            let guard = state().expect("engine state").lock().expect("engine lock");
+            let session = guard
+                .sessions
+                .get(&start_request.session_id)
+                .expect("session state");
+
+            (
+                session.dkg_key_packages.clone().expect("dkg key packages"),
+                session
+                    .dkg_public_key_package
+                    .clone()
+                    .expect("dkg public key package"),
+                session
+                    .sign_message_bytes
+                    .clone()
+                    .expect("sign message bytes"),
+            )
+        };
+
+        let member_two_request = StartSignRoundRequest {
+            member_identifier: 2,
+            attempt_transition_evidence: None,
+            ..start_request.clone()
+        };
+        let member_two_contribution = build_real_signature_share_contribution(
+            &dkg_key_packages,
+            &signing_participants,
+            &member_two_request,
+            &round_state.round_id,
+            &hex::decode(&member_two_request.message_hex).expect("message decode"),
+            Some(&taproot_merkle_root),
+        )
+        .expect("member two contribution");
+        let member_three_request = StartSignRoundRequest {
+            member_identifier: 3,
+            attempt_transition_evidence: None,
+            ..member_two_request.clone()
+        };
+        let member_three_contribution = build_real_signature_share_contribution(
+            &dkg_key_packages,
+            &signing_participants,
+            &member_three_request,
+            &round_state.round_id,
+            &hex::decode(&member_three_request.message_hex).expect("message decode"),
+            Some(&taproot_merkle_root),
+        )
+        .expect("member three contribution");
+
+        let finalize_request = FinalizeSignRoundRequest {
+            session_id: "session-real-taproot-tweak".to_string(),
+            taproot_merkle_root_hex: Some(taproot_merkle_root_hex.to_string()),
+            attempt_context: None,
+            round_contributions: vec![
+                round_state.own_contribution.clone(),
+                member_two_contribution,
+                member_three_contribution,
+            ],
+        };
+
+        let result = finalize_sign_round(finalize_request, false).expect("finalize");
+
+        assert_eq!(result.round_id, round_state.round_id);
+        let signature_bytes = hex::decode(&result.signature_hex).expect("signature decode");
+        assert_eq!(signature_bytes.len(), 64);
+        let signature = frost::Signature::deserialize(&signature_bytes).expect("signature parse");
+        let tweaked_public_key_package = dkg_public_key_package
+            .clone()
+            .tweak(Some(taproot_merkle_root.as_slice()));
+        tweaked_public_key_package
+            .verifying_key()
+            .verify(&sign_message_bytes, &signature)
+            .expect("tweaked signature verification");
+        assert!(
+            dkg_public_key_package
+                .verifying_key()
+                .verify(&sign_message_bytes, &signature)
+                .is_err(),
+            "tweaked signature must not verify under the untweaked key"
+        );
     }
 
     #[test]
@@ -11600,6 +11881,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "cafef00d".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -11641,11 +11923,13 @@ mod tests {
             &member_two_request,
             &round_state.round_id,
             &hex::decode(&member_two_request.message_hex).expect("message decode"),
+            None,
         )
         .expect("member two contribution");
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-real-threshold-subset".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 round_state.own_contribution.clone(),
@@ -11771,6 +12055,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -11802,6 +12087,7 @@ mod tests {
             &member_two_request,
             &round_state.round_id,
             &hex::decode(&member_two_request.message_hex).expect("message decode"),
+            None,
         )
         .expect("member two contribution");
 
@@ -11819,6 +12105,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-message-tamper".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 round_state.own_contribution.clone(),
@@ -11867,6 +12154,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "b16b00b5".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -11898,11 +12186,13 @@ mod tests {
             &member_two_request,
             &round_state.round_id,
             &hex::decode(&member_two_request.message_hex).expect("message decode"),
+            None,
         )
         .expect("member two contribution");
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-real-contributor-set-mismatch".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 round_state.own_contribution.clone(),
@@ -11961,6 +12251,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "facefeed".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -11969,6 +12260,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-real-outside-signing-cohort".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 round_state.own_contribution,
@@ -12464,6 +12756,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -12476,6 +12769,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-persisted-idempotency".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -12700,6 +12994,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -12766,6 +13061,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -12840,6 +13136,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -12908,6 +13205,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -13079,6 +13377,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -13147,6 +13446,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -13215,6 +13515,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -13264,6 +13565,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -13272,6 +13574,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-consumed-round".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -13305,6 +13608,7 @@ mod tests {
 
         let round_only_replay_request = FinalizeSignRoundRequest {
             session_id: finalize_request.session_id.clone(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -13449,6 +13753,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -13473,6 +13778,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-consumed-request-capacity".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -13544,6 +13850,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(uppercase_attempt_context.clone()),
             attempt_transition_evidence: None,
@@ -13565,6 +13872,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: session_id.to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: Some(uppercase_attempt_context),
             round_contributions: vec![
                 RoundContribution {
@@ -13623,6 +13931,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -13647,6 +13956,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-consumed-round-capacity".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -13722,6 +14032,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context.clone()),
             attempt_transition_evidence: None,
@@ -13743,6 +14054,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: session_id.to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: Some(attempt_context),
             round_contributions: vec![
                 RoundContribution {
@@ -13808,6 +14120,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -13816,6 +14129,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-consumed-request-fingerprint".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -13836,6 +14150,7 @@ mod tests {
         });
         let expected_request_fingerprint = fingerprint(&FinalizeSignRoundRequest {
             session_id: finalize_request.session_id.clone(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: canonical_contributions,
         })
@@ -13912,6 +14227,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -13920,6 +14236,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-consumed-request-fingerprint-restart".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -13940,6 +14257,7 @@ mod tests {
         });
         let expected_request_fingerprint = fingerprint(&FinalizeSignRoundRequest {
             session_id: finalize_request.session_id.clone(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: canonical_contributions,
         })
@@ -14021,6 +14339,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![3, 1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -14032,6 +14351,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![2, 3, 1]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -14072,6 +14392,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![3, 1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -14083,6 +14404,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "cafebabe".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![2, 3, 1]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -14117,6 +14439,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -14125,6 +14448,7 @@ mod tests {
 
         let first_finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-reordered-idempotency".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -14140,6 +14464,7 @@ mod tests {
 
         let second_finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-reordered-idempotency".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -14187,6 +14512,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -14195,6 +14521,7 @@ mod tests {
 
         let first_finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-canonicalization-conflict".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -14211,6 +14538,7 @@ mod tests {
 
         let second_finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-canonicalization-conflict".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -14375,6 +14703,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: finalize_dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -14383,6 +14712,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-restart-finalize".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -14606,6 +14936,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -14614,6 +14945,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-clears-signing-material".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -14680,6 +15012,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -14688,6 +15021,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-purge-persist-reload".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {

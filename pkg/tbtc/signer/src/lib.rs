@@ -729,6 +729,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -786,6 +787,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -799,6 +801,7 @@ mod tests {
 
         let finalize = FinalizeSignRoundRequest {
             session_id: "session-sign".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -862,6 +865,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -875,6 +879,7 @@ mod tests {
 
         let finalize = FinalizeSignRoundRequest {
             session_id: "session-sign-bootstrap-disabled".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -927,6 +932,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -939,6 +945,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "cafebabe".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![2, 1]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -983,6 +990,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -994,6 +1002,7 @@ mod tests {
 
         let finalize = FinalizeSignRoundRequest {
             session_id: "session-sign-finalized".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -1027,6 +1036,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: "missing".to_string(),
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
