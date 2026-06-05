@@ -5194,8 +5194,8 @@ pub fn run_dkg(request: RunDkgRequest) -> Result<DkgResult, EngineError> {
         .map(|identifier| participant_identifier_to_frost_identifier(*identifier))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut keygen_rng_seed = [0u8; 32];
-    OsRng.fill_bytes(&mut keygen_rng_seed);
+    let mut keygen_rng_seed =
+        development_dealer_dkg_seed(request.dkg_seed_hex.as_deref(), &request_fingerprint)?;
     let keygen_rng = ZeroizingChaCha20Rng::from_seed(keygen_rng_seed);
     keygen_rng_seed.zeroize();
 
@@ -5303,6 +5303,30 @@ fn enforce_bootstrap_dealer_dkg_disabled_in_production(
     }
 
     Ok(())
+}
+
+fn development_dealer_dkg_seed(
+    dkg_seed_hex: Option<&str>,
+    request_fingerprint: &str,
+) -> Result<[u8; 32], EngineError> {
+    let (seed_source, seed_hex) = match dkg_seed_hex {
+        Some(seed) => ("DKG seed", seed),
+        None => ("DKG request fingerprint", request_fingerprint),
+    };
+
+    let seed = hex::decode(seed_hex)
+        .map_err(|e| EngineError::Internal(format!("failed to decode {seed_source}: {e}")))?;
+    if seed.len() != 32 {
+        return Err(EngineError::Internal(format!(
+            "{seed_source} decoded to [{}] bytes, expected 32",
+            seed.len()
+        )));
+    }
+
+    let mut output = [0u8; 32];
+    output.copy_from_slice(&seed);
+
+    Ok(output)
 }
 
 pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState, EngineError> {
@@ -6662,6 +6686,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -6887,6 +6912,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("production profile should reject bootstrap dealer DKG");
 
@@ -6924,6 +6950,7 @@ mod tests {
                     },
                 ],
                 threshold: 2,
+                dkg_seed_hex: None,
             })
             .expect_err("missing/empty profile should reject bootstrap dealer DKG");
 
@@ -6974,6 +7001,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected provenance gate rejection");
 
@@ -7044,6 +7072,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         });
         assert!(result.is_ok(), "expected signed attestation acceptance");
 
@@ -7087,6 +7116,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected missing signature rejection");
 
@@ -7149,6 +7179,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected signature verification rejection");
 
@@ -7202,6 +7233,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected attestation expiry rejection");
 
@@ -7255,6 +7287,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected attestation missing expiry rejection");
 
@@ -7311,6 +7344,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected attestation expiry too far rejection");
 
@@ -7373,6 +7407,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected trust-root mismatch rejection");
 
@@ -7426,6 +7461,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected runtime version mismatch rejection");
 
@@ -7479,6 +7515,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected status mismatch rejection");
 
@@ -7525,6 +7562,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected invalid trust root rejection");
 
@@ -7572,6 +7610,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected session_id validation rejection");
 
@@ -7608,6 +7647,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected admission policy rejection");
 
@@ -7641,6 +7681,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected admission policy config rejection");
 
@@ -7679,6 +7720,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected admission policy config rejection");
 
@@ -7988,6 +8030,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected run_dkg provenance gate rejection");
         assert!(matches!(
@@ -8063,6 +8106,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -8122,6 +8166,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -8234,6 +8279,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -8317,6 +8363,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -8379,6 +8426,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected auto-quarantine rejection");
         let EngineError::QuarantinePolicyRejected { reason_code, .. } = err else {
@@ -8410,6 +8458,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("allowlisted operator should bypass quarantine rejection");
 
@@ -8453,6 +8502,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -8521,6 +8571,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected quarantine rejection after reload");
         let EngineError::QuarantinePolicyRejected { reason_code, .. } = err else {
@@ -8555,6 +8606,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -8927,6 +8979,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -8973,6 +9026,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -9024,6 +9078,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -9070,6 +9125,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -9148,6 +9204,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -9749,6 +9806,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -9800,6 +9858,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("seed non-production dkg");
 
@@ -9856,6 +9915,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -9898,6 +9958,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -9948,6 +10009,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -9998,6 +10060,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10048,6 +10111,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10098,6 +10162,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10160,6 +10225,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10209,6 +10275,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10263,6 +10330,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10325,6 +10393,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10394,6 +10463,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10459,6 +10529,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10528,6 +10599,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10583,6 +10655,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10645,6 +10718,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10707,6 +10781,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10797,6 +10872,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10861,6 +10937,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10942,6 +11019,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -11008,6 +11086,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -11071,6 +11150,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -11137,6 +11217,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -11211,6 +11292,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -11289,6 +11371,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -11363,6 +11446,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -11433,6 +11517,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -11499,6 +11584,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -11622,6 +11708,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -11739,6 +11826,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let taproot_merkle_root_hex =
@@ -11873,6 +11961,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -11969,6 +12058,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         run_dkg(run_dkg_request).expect("run dkg");
@@ -12047,6 +12137,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -12146,6 +12237,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -12243,6 +12335,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -12300,6 +12393,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let mut request_b = request_a.clone();
         request_b.participants.push(crate::api::DkgParticipant {
@@ -12429,6 +12523,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         run_dkg(request_a.clone()).expect("initial run dkg");
@@ -12447,6 +12542,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let err = run_dkg(request_b).expect_err("expected session cap rejection");
         let EngineError::Internal(message) = err else {
@@ -12485,6 +12581,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let mut request_b = request_a.clone();
         request_b.session_id = "session-secret-entropy-b".to_string();
@@ -12527,6 +12624,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let mut retry_request = request.clone();
         retry_request.participants.reverse();
@@ -12748,6 +12846,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -12986,6 +13085,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -13053,6 +13153,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -13125,6 +13226,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -13194,6 +13296,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -13262,6 +13365,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         run_dkg(existing_request).expect("seed existing persisted session");
 
@@ -13278,6 +13382,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         set_persist_fault_injection_for_tests(
@@ -13326,6 +13431,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("post-fault recovery run dkg");
 
@@ -13353,6 +13459,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -13423,6 +13530,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -13492,6 +13600,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -13557,6 +13666,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -13664,6 +13774,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         run_dkg(existing_request).expect("seed existing persisted session");
 
@@ -13680,6 +13791,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         set_persist_fault_injection_for_tests(
@@ -13745,6 +13857,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -13834,6 +13947,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -13923,6 +14037,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -14022,6 +14137,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -14112,6 +14228,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -14219,6 +14336,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -14331,6 +14449,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -14384,6 +14503,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -14431,6 +14551,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -14504,6 +14625,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -14656,6 +14778,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(dkg_request.clone()).expect("run dkg");
 
@@ -14696,6 +14819,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let finalize_dkg_result = run_dkg(finalize_dkg_request).expect("run finalize dkg");
         let start_request = StartSignRoundRequest {
@@ -14765,6 +14889,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("post-restart run dkg");
         assert!(!new_session_result.key_group.is_empty());
@@ -14928,6 +15053,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -15004,6 +15130,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -15109,6 +15236,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("seed persisted state");
 
@@ -15188,6 +15316,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("seed persisted state");
 
@@ -15345,6 +15474,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("seed persisted encrypted state");
 
@@ -15434,6 +15564,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("seed encrypted state file");
 
@@ -15472,6 +15603,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("seed encrypted state file");
 
@@ -15724,6 +15856,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("seed encrypted state file");
 

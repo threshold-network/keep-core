@@ -11,6 +11,8 @@ pub struct RunDkgRequest {
     pub session_id: String,
     pub participants: Vec<DkgParticipant>,
     pub threshold: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dkg_seed_hex: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
