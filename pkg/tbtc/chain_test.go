@@ -47,6 +47,8 @@ type movingFundsParameters = struct {
 }
 
 type localChain struct {
+	frostWalletRegistryAvailable bool
+
 	dkgResultSubmissionHandlersMutex sync.Mutex
 	dkgResultSubmissionHandlers      map[int]func(submission *DKGResultSubmittedEvent)
 
@@ -964,7 +966,11 @@ func (lc *localChain) IsWalletRegistered(EcdsaWalletID [32]byte) (bool, error) {
 		}
 	}
 
-	return false, fmt.Errorf("wallet not found")
+	return false, nil
+}
+
+func (lc *localChain) FrostWalletRegistryAvailable() bool {
+	return lc.frostWalletRegistryAvailable
 }
 
 func (lc *localChain) setWallet(

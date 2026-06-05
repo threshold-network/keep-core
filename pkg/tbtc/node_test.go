@@ -327,6 +327,41 @@ func TestNode_KeepsLiveBridgeWalletWithoutLegacyRegistration(t *testing.T) {
 	}
 }
 
+func TestNode_KeepsPendingFrostWalletWithoutBridgeRegistration(t *testing.T) {
+	groupParameters := &GroupParameters{
+		GroupSize:       5,
+		GroupQuorum:     4,
+		HonestThreshold: 3,
+	}
+
+	localChain := Connect()
+	localChain.frostWalletRegistryAvailable = true
+	localProvider := local.Connect()
+
+	signer := createMockSigner(t)
+	walletPublicKeyHash := bitcoin.PublicKeyHash(signer.wallet.publicKey)
+
+	n, err := newNode(
+		groupParameters,
+		localChain,
+		newLocalBitcoinChain(),
+		localProvider,
+		createMockKeyStorePersistence(t, signer),
+		&mockPersistenceHandle{},
+		generator.StartScheduler(),
+		&mockCoordinationProposalGenerator{},
+		Config{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, ok := n.walletRegistry.getWalletByPublicKeyHash(walletPublicKeyHash)
+	if !ok {
+		t.Fatal("pending FROST wallet should not be archived")
+	}
+}
+
 func TestNode_ArchivesClosedBridgeWallet(t *testing.T) {
 	testCases := map[string]WalletState{
 		"closed":     StateClosed,

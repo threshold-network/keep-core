@@ -1352,6 +1352,19 @@ func (n *node) archiveClosedWallets() error {
 				)
 			}
 
+			if !isRegistered && n.frostWalletRegistryAvailable() {
+				logger.Infof(
+					"wallet with ECDSA ID [0x%x] and public key hash [0x%x] "+
+						"was not found in Bridge or the legacy ECDSA registry; "+
+						"preserving local key material because FROST wallet "+
+						"registration is available and the wallet may be "+
+						"pending Bridge registration",
+					walletID,
+					walletPublicKeyHash,
+				)
+				continue
+			}
+
 			archiveWallet = !isRegistered
 		} else {
 			walletID = walletChainData.WalletID
@@ -1385,6 +1398,16 @@ func (n *node) archiveClosedWallets() error {
 	}
 
 	return nil
+}
+
+type frostWalletRegistryAvailability interface {
+	FrostWalletRegistryAvailable() bool
+}
+
+func (n *node) frostWalletRegistryAvailable() bool {
+	frostChain, ok := n.chain.(frostWalletRegistryAvailability)
+
+	return ok && frostChain.FrostWalletRegistryAvailable()
 }
 
 // handleWalletClosure handles the wallet termination or closing process.
