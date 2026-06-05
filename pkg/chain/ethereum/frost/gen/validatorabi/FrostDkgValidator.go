@@ -33,16 +33,16 @@ var (
 type Struct0 struct {
 	SubmitterMemberIndex     *big.Int
 	XOnlyOutputKey           [32]byte
-	MembersHash              [32]byte
 	MisbehavedMembersIndices []uint8
 	Signatures               []byte
 	SigningMembersIndices    []*big.Int
 	Members                  []uint32
+	MembersHash              [32]byte
 }
 
 // FrostDkgValidatorMetaData contains all meta data concerning the FrostDkgValidator contract.
 var FrostDkgValidatorMetaData = &bind.MetaData{
-	ABI: "[{\"type\":\"function\",\"name\":\"resultDigest\",\"stateMutability\":\"view\",\"inputs\":[{\"name\":\"result\",\"type\":\"tuple\",\"components\":[{\"name\":\"submitterMemberIndex\",\"type\":\"uint256\"},{\"name\":\"xOnlyOutputKey\",\"type\":\"bytes32\"},{\"name\":\"membersHash\",\"type\":\"bytes32\"},{\"name\":\"misbehavedMembersIndices\",\"type\":\"uint8[]\"},{\"name\":\"signatures\",\"type\":\"bytes\"},{\"name\":\"signingMembersIndices\",\"type\":\"uint256[]\"},{\"name\":\"members\",\"type\":\"uint32[]\"}]},{\"name\":\"seed\",\"type\":\"uint256\"},{\"name\":\"bridge\",\"type\":\"address\"},{\"name\":\"registry\",\"type\":\"address\"}],\"outputs\":[{\"name\":\"digest\",\"type\":\"bytes32\"}]}]",
+	ABI: "[{\"type\":\"function\",\"name\":\"resultDigest\",\"stateMutability\":\"view\",\"inputs\":[{\"name\":\"result\",\"type\":\"tuple\",\"components\":[{\"name\":\"submitterMemberIndex\",\"type\":\"uint256\"},{\"name\":\"xOnlyOutputKey\",\"type\":\"bytes32\"},{\"name\":\"misbehavedMembersIndices\",\"type\":\"uint8[]\"},{\"name\":\"signatures\",\"type\":\"bytes\"},{\"name\":\"signingMembersIndices\",\"type\":\"uint256[]\"},{\"name\":\"members\",\"type\":\"uint32[]\"},{\"name\":\"membersHash\",\"type\":\"bytes32\"}]},{\"name\":\"seed\",\"type\":\"uint256\"},{\"name\":\"bridge\",\"type\":\"address\"},{\"name\":\"registry\",\"type\":\"address\"}],\"outputs\":[{\"name\":\"digest\",\"type\":\"bytes32\"}]}]",
 }
 
 // FrostDkgValidatorABI is the input ABI used to generate the binding from.
@@ -191,9 +191,9 @@ func (_FrostDkgValidator *FrostDkgValidatorTransactorRaw) Transact(opts *bind.Tr
 	return _FrostDkgValidator.Contract.contract.Transact(opts, method, params...)
 }
 
-// ResultDigest is a free data retrieval call binding the contract method 0x4669f2d6.
+// ResultDigest is a free data retrieval call binding the contract method 0xa63415cd.
 //
-// Solidity: function resultDigest((uint256,bytes32,bytes32,uint8[],bytes,uint256[],uint32[]) result, uint256 seed, address bridge, address registry) view returns(bytes32 digest)
+// Solidity: function resultDigest((uint256,bytes32,uint8[],bytes,uint256[],uint32[],bytes32) result, uint256 seed, address bridge, address registry) view returns(bytes32 digest)
 func (_FrostDkgValidator *FrostDkgValidatorCaller) ResultDigest(opts *bind.CallOpts, result Struct0, seed *big.Int, bridge common.Address, registry common.Address) ([32]byte, error) {
 	var out []interface{}
 	err := _FrostDkgValidator.contract.Call(opts, &out, "resultDigest", result, seed, bridge, registry)
@@ -208,16 +208,16 @@ func (_FrostDkgValidator *FrostDkgValidatorCaller) ResultDigest(opts *bind.CallO
 
 }
 
-// ResultDigest is a free data retrieval call binding the contract method 0x4669f2d6.
+// ResultDigest is a free data retrieval call binding the contract method 0xa63415cd.
 //
-// Solidity: function resultDigest((uint256,bytes32,bytes32,uint8[],bytes,uint256[],uint32[]) result, uint256 seed, address bridge, address registry) view returns(bytes32 digest)
+// Solidity: function resultDigest((uint256,bytes32,uint8[],bytes,uint256[],uint32[],bytes32) result, uint256 seed, address bridge, address registry) view returns(bytes32 digest)
 func (_FrostDkgValidator *FrostDkgValidatorSession) ResultDigest(result Struct0, seed *big.Int, bridge common.Address, registry common.Address) ([32]byte, error) {
 	return _FrostDkgValidator.Contract.ResultDigest(&_FrostDkgValidator.CallOpts, result, seed, bridge, registry)
 }
 
-// ResultDigest is a free data retrieval call binding the contract method 0x4669f2d6.
+// ResultDigest is a free data retrieval call binding the contract method 0xa63415cd.
 //
-// Solidity: function resultDigest((uint256,bytes32,bytes32,uint8[],bytes,uint256[],uint32[]) result, uint256 seed, address bridge, address registry) view returns(bytes32 digest)
+// Solidity: function resultDigest((uint256,bytes32,uint8[],bytes,uint256[],uint32[],bytes32) result, uint256 seed, address bridge, address registry) view returns(bytes32 digest)
 func (_FrostDkgValidator *FrostDkgValidatorCallerSession) ResultDigest(result Struct0, seed *big.Int, bridge common.Address, registry common.Address) ([32]byte, error) {
 	return _FrostDkgValidator.Contract.ResultDigest(&_FrostDkgValidator.CallOpts, result, seed, bridge, registry)
 }
