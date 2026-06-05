@@ -464,3 +464,204 @@ func TestAssembleDepositSweepTransaction_TaprootDeposit(t *testing.T) {
 		int(unsignedTx.Outputs[0].Value),
 	)
 }
+
+func TestValidateDepositSweepProposal_PrefersTaprootRevealOverCompatibilityReveal(t *testing.T) {
+	hexToSlice := func(hexString string) []byte {
+		bytes, err := hex.DecodeString(hexString)
+		if err != nil {
+			t.Fatalf("error while converting [%v]: [%v]", hexString, err)
+		}
+		return bytes
+	}
+
+	var fundingTxHash bitcoin.Hash
+	copy(fundingTxHash[:], hexToSlice("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"))
+
+	fundingTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: fundingTxHash,
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value: 100000,
+				PublicKeyScript: bitcoin.Script{
+					0x51, 0x20,
+					0x23, 0x36, 0xf6, 0x50, 0x04, 0xd8, 0xf1, 0x22,
+					0xf1, 0xfe, 0x94, 0x7e, 0xbd, 0x00, 0x9a, 0x8b,
+					0x4a, 0xdd, 0x3a, 0x0d, 0x93, 0x73, 0x56, 0xd5,
+					0x68, 0xe3, 0x0f, 0x7f, 0xcc, 0x2e, 0x40, 0x08,
+				},
+			},
+		},
+	}
+
+	bitcoinChain := newLocalBitcoinChain()
+	if err := bitcoinChain.BroadcastTransaction(fundingTx); err != nil {
+		t.Fatal(err)
+	}
+
+	fundingOutputIndex := uint32(0)
+	revealBlock := uint64(123)
+	var blindingFactor [8]byte
+	copy(blindingFactor[:], hexToSlice("f9f0c90d00039523"))
+	var walletPublicKeyHash [20]byte
+	copy(walletPublicKeyHash[:], hexToSlice("c92a772f11bc97d8938a16a9db435401f4e6a7bc"))
+	var walletXOnlyPublicKey [32]byte
+	copy(
+		walletXOnlyPublicKey[:],
+		hexToSlice("2336f65004d8f122f1fe947ebd009a8b4add3a0d937356d568e30f7fcc2e4008"),
+	)
+	var refundPublicKeyHash [20]byte
+	copy(refundPublicKeyHash[:], hexToSlice("c2a27a88d8d03e271e8edc556923e9398619f17c"))
+	var refundXOnlyPublicKey [32]byte
+	copy(
+		refundXOnlyPublicKey[:],
+		hexToSlice("11223344556677889900aabbccddeeff00112233445566778899aabbccddeeff"),
+	)
+	var refundLocktime [4]byte
+	copy(refundLocktime[:], hexToSlice("60bcea61"))
+	depositor := chain.Address("934b98637ca318a4d6e7ca6ffd1690b8e77df637")
+
+	proposal := &DepositSweepProposal{
+		DepositsKeys: []struct {
+			FundingTxHash      bitcoin.Hash
+			FundingOutputIndex uint32
+		}{
+			{
+				FundingTxHash:      fundingTx.Hash(),
+				FundingOutputIndex: fundingOutputIndex,
+			},
+		},
+		SweepTxFee: big.NewInt(1000),
+		DepositsRevealBlocks: []*big.Int{
+			big.NewInt(int64(revealBlock)),
+		},
+	}
+
+	validationChain := &depositSweepValidationChainStub{
+		legacyEvents: []*DepositRevealedEvent{
+			{
+				FundingTxHash:       fundingTx.Hash(),
+				FundingOutputIndex:  fundingOutputIndex,
+				Depositor:           depositor,
+				Amount:              100000,
+				BlindingFactor:      blindingFactor,
+				WalletPublicKeyHash: walletPublicKeyHash,
+				RefundPublicKeyHash: refundPublicKeyHash,
+				RefundLocktime:      refundLocktime,
+				BlockNumber:         revealBlock,
+			},
+		},
+		taprootEvents: []*TaprootDepositRevealedEvent{
+			{
+				FundingTxHash:        fundingTx.Hash(),
+				FundingOutputIndex:   fundingOutputIndex,
+				Depositor:            depositor,
+				Amount:               100000,
+				BlindingFactor:       blindingFactor,
+				WalletPublicKeyHash:  walletPublicKeyHash,
+				WalletXOnlyPublicKey: walletXOnlyPublicKey,
+				RefundPublicKeyHash:  refundPublicKeyHash,
+				RefundXOnlyPublicKey: refundXOnlyPublicKey,
+				RefundLocktime:       refundLocktime,
+				BlockNumber:          revealBlock,
+			},
+		},
+		depositRequest: &DepositChainRequest{
+			Depositor: depositor,
+			Amount:    100000,
+		},
+	}
+
+	deposits, err := ValidateDepositSweepProposal(
+		logger.With(),
+		walletPublicKeyHash,
+		proposal,
+		1,
+		validationChain,
+		bitcoinChain,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if validationChain.legacyValidationCalled {
+		t.Fatal("legacy validation should not be called when a Taproot event matches")
+	}
+	if !validationChain.taprootValidationCalled {
+		t.Fatal("Taproot validation was not called")
+	}
+	if len(deposits) != 1 {
+		t.Fatalf("unexpected deposits count: [%v]", len(deposits))
+	}
+	if !deposits[0].IsTaproot() {
+		t.Fatal("expected validated deposit to be Taproot-native")
+	}
+}
+
+type depositSweepValidationChainStub struct {
+	legacyEvents   []*DepositRevealedEvent
+	taprootEvents  []*TaprootDepositRevealedEvent
+	depositRequest *DepositChainRequest
+
+	legacyValidationCalled  bool
+	taprootValidationCalled bool
+}
+
+func (dsvcs *depositSweepValidationChainStub) PastDepositRevealedEvents(
+	filter *DepositRevealedEventFilter,
+) ([]*DepositRevealedEvent, error) {
+	return dsvcs.legacyEvents, nil
+}
+
+func (dsvcs *depositSweepValidationChainStub) PastTaprootDepositRevealedEvents(
+	filter *DepositRevealedEventFilter,
+) ([]*TaprootDepositRevealedEvent, error) {
+	return dsvcs.taprootEvents, nil
+}
+
+func (dsvcs *depositSweepValidationChainStub) ValidateDepositSweepProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *DepositSweepProposal,
+	depositsExtraInfo []struct {
+		*Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	dsvcs.legacyValidationCalled = true
+	return fmt.Errorf("legacy validation should not be called")
+}
+
+func (dsvcs *depositSweepValidationChainStub) ValidateTaprootDepositSweepProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *DepositSweepProposal,
+	depositsExtraInfo []struct {
+		*Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	dsvcs.taprootValidationCalled = true
+
+	if len(depositsExtraInfo) != 1 {
+		return fmt.Errorf("unexpected deposits extra info count: [%v]", len(depositsExtraInfo))
+	}
+	if !depositsExtraInfo[0].Deposit.IsTaproot() {
+		return fmt.Errorf("expected Taproot deposit extra info")
+	}
+
+	return nil
+}
+
+func (dsvcs *depositSweepValidationChainStub) GetDepositRequest(
+	fundingTxHash bitcoin.Hash,
+	fundingOutputIndex uint32,
+) (*DepositChainRequest, bool, error) {
+	return dsvcs.depositRequest, true, nil
+}

@@ -436,23 +436,21 @@ func ValidateDepositSweepProposal(
 			}
 		}
 
-		var matchingTaprootEvent *TaprootDepositRevealedEvent
-		if matchingEvent == nil {
-			taprootEvents, err := chain.PastTaprootDepositRevealedEvents(filter)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"cannot get on-chain TaprootDepositRevealed events for deposit [%v]: [%v]",
-					depositDisplayIndex,
-					err,
-				)
-			}
+		taprootEvents, err := chain.PastTaprootDepositRevealedEvents(filter)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot get on-chain TaprootDepositRevealed events for deposit [%v]: [%v]",
+				depositDisplayIndex,
+				err,
+			)
+		}
 
-			for _, event := range taprootEvents {
-				if event.FundingTxHash == depositKey.FundingTxHash &&
-					event.FundingOutputIndex == depositKey.FundingOutputIndex {
-					matchingTaprootEvent = event
-					break
-				}
+		var matchingTaprootEvent *TaprootDepositRevealedEvent
+		for _, event := range taprootEvents {
+			if event.FundingTxHash == depositKey.FundingTxHash &&
+				event.FundingOutputIndex == depositKey.FundingOutputIndex {
+				matchingTaprootEvent = event
+				break
 			}
 		}
 
