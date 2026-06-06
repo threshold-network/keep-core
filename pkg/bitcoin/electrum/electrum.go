@@ -984,8 +984,11 @@ func feeEstimateWithFallbackTargets(primary uint32) []uint32 {
 
 // defaultFallbackSatPerVByteWhenEstimateFails is used when Electrum cannot
 // return a fee for any confirmation target (typical on testnet4 / quiet
-// mempools: -32603 for all N). Relay policy still accepts low feerates;
-// deposit sweep max-fee checks on the Bridge bound the total fee.
+// mempools: -32603 for all N). It is only applied on test networks (see
+// lowFeeFallbackAllowed): on mainnet a fixed low feerate can leave a
+// transaction unconfirmable or evicted under congestion, so the oracle failure
+// is surfaced as an error (fail-safe) rather than broadcast at a guessed
+// feerate.
 const defaultFallbackSatPerVByteWhenEstimateFails int64 = 2
 
 // isElectrumFeeOracleFailure reports whether the error is the usual
@@ -1062,16 +1065,59 @@ func (c *Connection) EstimateSatPerVByteFee(blocks uint32) (int64, error) {
 	}
 
 	if sawFeeOracleFailure {
-		logger.Warnf(
-			"Electrum returned no fee estimate for any target %v; using "+
-				"fallback [%d] sat/vbyte (last error: [%v])",
-			targets,
-			defaultFallbackSatPerVByteWhenEstimateFails,
-			lastErr,
-		)
-		return defaultFallbackSatPerVByteWhenEstimateFails, nil
+		if lowFeeFallbackAllowed(c.config.Network) {
+			logger.Warnf(
+				"Electrum returned no fee estimate for any target %v on [%v] "+
+					"network; using fallback [%d] sat/vbyte (last error: [%v])",
+				targets,
+				c.config.Network,
+				defaultFallbackSatPerVByteWhenEstimateFails,
+				lastErr,
+			)
+		} else {
+			logger.Warnf(
+				"Electrum returned no fee estimate for any target %v on [%v] "+
+					"network; low-fee fallback is not permitted on this network, "+
+					"failing safe (last error: [%v])",
+				targets,
+				c.config.Network,
+				lastErr,
+			)
+		}
 	}
 
+	return feeFallbackResult(c.config.Network, sawFeeOracleFailure, lastErr, targets)
+}
+
+// lowFeeFallbackAllowed reports whether the hardcoded low-fee estimate fallback
+// is acceptable for the given Bitcoin network. It is permitted only on test
+// networks, where an underpriced transaction has no real economic consequence.
+// Mainnet and any unset/unrecognized network fail closed, so an oracle failure
+// is surfaced as an error rather than broadcast at a guessed feerate.
+func lowFeeFallbackAllowed(network bitcoin.Network) bool {
+	switch network {
+	case bitcoin.Testnet, bitcoin.Testnet4, bitcoin.Regtest:
+		return true
+	default:
+		return false
+	}
+}
+
+// feeFallbackResult resolves the result of EstimateSatPerVByteFee when no
+// Electrum fee estimate could be obtained for any confirmation target. On a
+// fee-oracle failure it returns the low-fee fallback only where
+// lowFeeFallbackAllowed permits it; otherwise (mainnet, an unset network, or a
+// transport-level failure) it returns an error so the caller does not broadcast
+// a transaction at a guessed feerate.
+func feeFallbackResult(
+	network bitcoin.Network,
+	sawFeeOracleFailure bool,
+	lastErr error,
+	targets []uint32,
+) (int64, error) {
+	if sawFeeOracleFailure && lowFeeFallbackAllowed(network) {
+		return defaultFallbackSatPerVByteWhenEstimateFails, nil
+	}
 	if lastErr != nil {
 		return 0, fmt.Errorf("failed to get fee: [%v]", lastErr)
 	}

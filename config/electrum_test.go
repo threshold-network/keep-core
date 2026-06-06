@@ -19,21 +19,24 @@ func TestResolveElectrum(t *testing.T) {
 		bitcoin.Mainnet: {
 			expectedConfig: []electrum.Config{
 				{
-					URL: "wss://electrum.boar.network:2083",
+					URL:     "wss://electrum.boar.network:2083",
+					Network: bitcoin.Mainnet,
 				},
 			},
 		},
 		bitcoin.Testnet: {
 			expectedConfig: []electrum.Config{
 				{
-					URL: "wss://electrum.testnet.boar.network:443/QxbJgaSLUHqrgAa9BW7bDpnGPxrlhnCa",
+					URL:     "wss://electrum.testnet.boar.network:443/QxbJgaSLUHqrgAa9BW7bDpnGPxrlhnCa",
+					Network: bitcoin.Testnet,
 				},
 			},
 		},
 		bitcoin.Testnet4: {
 			expectedConfig: []electrum.Config{
 				{
-					URL: "ssl://mempool.space:40002",
+					URL:     "ssl://mempool.space:40002",
+					Network: bitcoin.Testnet4,
 				},
 			},
 		},
@@ -42,6 +45,7 @@ func TestResolveElectrum(t *testing.T) {
 				{
 					URL:               "",
 					KeepAliveInterval: 0,
+					Network:           bitcoin.Regtest,
 				},
 			},
 		},
@@ -50,6 +54,7 @@ func TestResolveElectrum(t *testing.T) {
 				{
 					URL:               "",
 					KeepAliveInterval: 0,
+					Network:           bitcoin.Unknown,
 				},
 			},
 		},

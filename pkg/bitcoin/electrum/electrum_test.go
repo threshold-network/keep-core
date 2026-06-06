@@ -1,10 +1,12 @@
 package electrum
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
 	"github.com/keep-network/keep-core/internal/testutils"
+	"github.com/keep-network/keep-core/pkg/bitcoin"
 )
 
 func TestFeeEstimateWithFallbackTargets(t *testing.T) {
@@ -93,6 +95,96 @@ func TestConvertBtcKbToSatVByte(t *testing.T) {
 				int(test.expectedSatPerVByteFee),
 				int(satPerVByteFee),
 			)
+		})
+	}
+}
+
+func TestFeeFallbackResult(t *testing.T) {
+	t.Parallel()
+
+	oracleFailure := fmt.Errorf("cannot estimate fee")
+	transportFailure := fmt.Errorf("request failed: [connection refused]")
+	targets := []uint32{1, 6, 25}
+
+	for _, tc := range []struct {
+		name                string
+		network             bitcoin.Network
+		sawFeeOracleFailure bool
+		lastErr             error
+		wantFee             int64
+		wantErr             bool
+	}{
+		{
+			name:                "mainnet oracle failure fails safe",
+			network:             bitcoin.Mainnet,
+			sawFeeOracleFailure: true,
+			lastErr:             oracleFailure,
+			wantErr:             true,
+		},
+		{
+			name:                "unknown network oracle failure fails safe",
+			network:             bitcoin.Unknown,
+			sawFeeOracleFailure: true,
+			lastErr:             oracleFailure,
+			wantErr:             true,
+		},
+		{
+			name:                "testnet4 oracle failure uses fallback",
+			network:             bitcoin.Testnet4,
+			sawFeeOracleFailure: true,
+			lastErr:             oracleFailure,
+			wantFee:             defaultFallbackSatPerVByteWhenEstimateFails,
+		},
+		{
+			name:                "testnet oracle failure uses fallback",
+			network:             bitcoin.Testnet,
+			sawFeeOracleFailure: true,
+			lastErr:             oracleFailure,
+			wantFee:             defaultFallbackSatPerVByteWhenEstimateFails,
+		},
+		{
+			name:                "regtest oracle failure uses fallback",
+			network:             bitcoin.Regtest,
+			sawFeeOracleFailure: true,
+			lastErr:             oracleFailure,
+			wantFee:             defaultFallbackSatPerVByteWhenEstimateFails,
+		},
+		{
+			name:                "testnet4 transport failure does not use fallback",
+			network:             bitcoin.Testnet4,
+			sawFeeOracleFailure: false,
+			lastErr:             transportFailure,
+			wantErr:             true,
+		},
+		{
+			name:                "mainnet transport failure errors",
+			network:             bitcoin.Mainnet,
+			sawFeeOracleFailure: false,
+			lastErr:             transportFailure,
+			wantErr:             true,
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fee, err := feeFallbackResult(
+				tc.network,
+				tc.sawFeeOracleFailure,
+				tc.lastErr,
+				targets,
+			)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error, got fee [%d]", fee)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: [%v]", err)
+			}
+			if fee != tc.wantFee {
+				t.Fatalf("expected fee [%d], got [%d]", tc.wantFee, fee)
+			}
 		})
 	}
 }

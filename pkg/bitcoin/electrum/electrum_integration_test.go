@@ -42,6 +42,19 @@ type testConfig struct {
 	network      bitcoin.Network
 }
 
+// init propagates each test config's Bitcoin network into its Electrum
+// connection config. In production the network is injected during config
+// resolution; mirroring that here ensures the integration tests exercise the
+// same network-gated behavior (e.g. the low-fee estimate fallback) instead of
+// leaving Config.Network at its zero value (bitcoin.Unknown), which would
+// disable the fallback.
+func init() {
+	for key, tc := range testConfigs {
+		tc.clientConfig.Network = tc.network
+		testConfigs[key] = tc
+	}
+}
+
 // Servers details were taken from a public Electrum servers list published
 // at https://1209k.com/bitcoin-eye/ele.php?chain=tbtc.
 var testConfigs = map[string]testConfig{
