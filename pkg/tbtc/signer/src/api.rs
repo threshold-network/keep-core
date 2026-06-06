@@ -106,6 +106,12 @@ pub struct GenerateNoncesAndCommitmentsRequest {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct GenerateNoncesAndCommitmentsResult {
+    /// Secret one-time FROST signing nonces serialized as hex.
+    ///
+    /// The caller owns this secret after it crosses the FFI boundary. It must
+    /// be supplied to `SignShareRequest::nonces_hex` at most once and erased by
+    /// the caller immediately afterward. Reuse for another signing package or
+    /// message can reveal the private signing share.
     pub nonces_hex: String,
     pub commitment: NativeFrostCommitment,
 }
@@ -124,6 +130,10 @@ pub struct NewSigningPackageResult {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct SignShareRequest {
     pub signing_package_hex: String,
+    /// Secret one-time nonces returned by `GenerateNoncesAndCommitmentsResult`.
+    ///
+    /// This stateless endpoint cannot remember consumed nonces across FFI
+    /// calls. The caller is cryptographically responsible for single use.
     pub nonces_hex: String,
     pub key_package_identifier: String,
     pub key_package_hex: String,

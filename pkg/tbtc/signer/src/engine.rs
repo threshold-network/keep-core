@@ -7216,6 +7216,231 @@ mod tests {
         serde_json::from_slice(&vector_bytes).expect("attempt-context vectors decode")
     }
 
+    struct InteractiveDkgFixture {
+        pre_normalization_even_y: bool,
+        part3_requests: BTreeMap<u16, DkgPart3Request>,
+    }
+
+    fn deterministic_interactive_dkg_fixture(seed: u8) -> InteractiveDkgFixture {
+        let participant_ids = [1u16, 2, 3];
+        let participant_identifiers: BTreeMap<u16, frost::Identifier> = participant_ids
+            .iter()
+            .copied()
+            .map(|id| {
+                (
+                    id,
+                    participant_identifier_to_frost_identifier(id).expect("participant identifier"),
+                )
+            })
+            .collect();
+        let participant_id_by_identifier_hex: BTreeMap<String, u16> = participant_identifiers
+            .iter()
+            .map(|(id, identifier)| (hex::encode(identifier.serialize()), *id))
+            .collect();
+
+        let mut part1_secrets = BTreeMap::new();
+        let mut part1_packages = BTreeMap::new();
+        for id in participant_ids {
+            let mut rng_seed = [0u8; 32];
+            rng_seed[0] = seed;
+            rng_seed[1..3].copy_from_slice(&id.to_be_bytes());
+            let rng = ZeroizingChaCha20Rng::from_seed(rng_seed);
+            let (secret_package, package) = frost::keys::dkg::part1(
+                participant_identifiers[&id],
+                participant_ids.len() as u16,
+                2,
+                rng,
+            )
+            .expect("DKG part1");
+
+            part1_secrets.insert(id, secret_package);
+            part1_packages.insert(
+                id,
+                DkgRound1Package {
+                    identifier: frost_identifier_to_go_string(participant_identifiers[&id]),
+                    package_hex: hex::encode(package.serialize().expect("round1 package")),
+                },
+            );
+        }
+
+        let round1_packages_for = |recipient_id: u16| -> Vec<DkgRound1Package> {
+            participant_ids
+                .iter()
+                .copied()
+                .filter(|id| *id != recipient_id)
+                .map(|id| part1_packages[&id].clone())
+                .collect()
+        };
+
+        let mut part2_secrets = BTreeMap::new();
+        let mut round2_packages_by_recipient: BTreeMap<u16, Vec<DkgRound2Package>> =
+            BTreeMap::new();
+        for sender_id in participant_ids {
+            let round1_packages =
+                decode_round1_package_map("TestDKGPart2", &round1_packages_for(sender_id))
+                    .expect("round1 package map");
+            let (round2_secret, round2_packages) = frost::keys::dkg::part2(
+                part1_secrets
+                    .remove(&sender_id)
+                    .expect("part1 secret package"),
+                &round1_packages,
+            )
+            .expect("DKG part2");
+
+            part2_secrets.insert(sender_id, round2_secret);
+            for (recipient_identifier, package) in round2_packages {
+                let recipient_id = participant_id_by_identifier_hex
+                    .get(&hex::encode(recipient_identifier.serialize()))
+                    .copied()
+                    .expect("recipient identifier mapping");
+                round2_packages_by_recipient
+                    .entry(recipient_id)
+                    .or_default()
+                    .push(DkgRound2Package {
+                        identifier: frost_identifier_to_go_string(recipient_identifier),
+                        sender_identifier: Some(frost_identifier_to_go_string(
+                            participant_identifiers[&sender_id],
+                        )),
+                        package_hex: hex::encode(package.serialize().expect("round2 package")),
+                    });
+            }
+        }
+
+        let first_participant = participant_ids[0];
+        let round1_packages =
+            decode_round1_package_map("TestDKGPart3", &round1_packages_for(first_participant))
+                .expect("round1 package map");
+        let round2_packages = decode_round2_package_map(
+            "TestDKGPart3",
+            &round2_packages_by_recipient[&first_participant],
+            Some(participant_identifiers[&first_participant]),
+        )
+        .expect("round2 package map");
+        let (_, pre_normalization_public_key_package) = frost::keys::dkg::part3(
+            part2_secrets
+                .get(&first_participant)
+                .expect("round2 secret package"),
+            &round1_packages,
+            &round2_packages,
+        )
+        .expect("DKG part3");
+
+        let mut part3_requests = BTreeMap::new();
+        for id in participant_ids {
+            let secret_package = part2_secrets.get(&id).expect("round2 secret package");
+            let secret_package_bytes = secret_package.serialize().expect("round2 secret");
+            part3_requests.insert(
+                id,
+                DkgPart3Request {
+                    secret_package_hex: hex::encode(secret_package_bytes),
+                    round1_packages: round1_packages_for(id),
+                    round2_packages: round2_packages_by_recipient
+                        .get(&id)
+                        .expect("round2 packages")
+                        .clone(),
+                },
+            );
+        }
+
+        InteractiveDkgFixture {
+            pre_normalization_even_y: pre_normalization_public_key_package.has_even_y(),
+            part3_requests,
+        }
+    }
+
+    fn deterministic_odd_y_interactive_dkg_fixture() -> InteractiveDkgFixture {
+        for seed in 0u8..=u8::MAX {
+            let fixture = deterministic_interactive_dkg_fixture(seed);
+            if !fixture.pre_normalization_even_y {
+                return fixture;
+            }
+        }
+
+        panic!("could not find deterministic odd-Y DKG fixture");
+    }
+
+    #[test]
+    fn dkg_part3_normalizes_odd_y_group_key_and_secret_shares() {
+        let _guard = lock_test_state();
+        reset_for_tests();
+
+        let fixture = deterministic_odd_y_interactive_dkg_fixture();
+        assert!(
+            !fixture.pre_normalization_even_y,
+            "fixture must exercise the odd-Y normalization branch"
+        );
+
+        let mut part3_results = BTreeMap::new();
+        for (id, request) in fixture.part3_requests {
+            let result = dkg_part3(request).expect("DKG part3");
+            let expected_identifier = frost_identifier_to_go_string(
+                participant_identifier_to_frost_identifier(id).unwrap(),
+            );
+            assert_eq!(result.key_package.identifier, expected_identifier);
+            assert_eq!(result.public_key_package.verifying_key.len(), 64);
+            part3_results.insert(id, result);
+        }
+
+        let exported_x_only_key = part3_results[&1].public_key_package.verifying_key.clone();
+        for result in part3_results.values() {
+            assert_eq!(result.public_key_package.verifying_key, exported_x_only_key);
+            assert_eq!(
+                result.public_key_package.verifying_shares,
+                part3_results[&1].public_key_package.verifying_shares
+            );
+        }
+
+        let signing_participants = [1u16, 2];
+        let mut commitments = Vec::new();
+        let mut nonces_by_participant = BTreeMap::new();
+        for id in signing_participants {
+            let result = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+                key_package_identifier: part3_results[&id].key_package.identifier.clone(),
+                key_package_hex: part3_results[&id].key_package.data_hex.clone(),
+            })
+            .expect("generate nonces");
+            commitments.push(result.commitment);
+            nonces_by_participant.insert(id, result.nonces_hex);
+        }
+
+        let message = [0x42u8; 32];
+        let signing_package = new_signing_package(NewSigningPackageRequest {
+            message_hex: hex::encode(message),
+            commitments,
+        })
+        .expect("new signing package");
+
+        let mut signature_shares = Vec::new();
+        for id in signing_participants {
+            let result = sign_share(SignShareRequest {
+                signing_package_hex: signing_package.signing_package_hex.clone(),
+                nonces_hex: nonces_by_participant
+                    .remove(&id)
+                    .expect("participant nonces"),
+                key_package_identifier: part3_results[&id].key_package.identifier.clone(),
+                key_package_hex: part3_results[&id].key_package.data_hex.clone(),
+            })
+            .expect("sign share");
+            signature_shares.push(result.signature_share);
+        }
+
+        let aggregate = aggregate(AggregateRequest {
+            signing_package_hex: signing_package.signing_package_hex,
+            signature_shares,
+            public_key_package: part3_results[&1].public_key_package.clone(),
+        })
+        .expect("aggregate");
+
+        let signature_bytes = hex::decode(aggregate.signature_hex).expect("signature hex");
+        let signature = SchnorrSignature::from_slice(&signature_bytes).expect("BIP340 signature");
+        let public_key_bytes = hex::decode(exported_x_only_key).expect("verifying key hex");
+        let public_key = XOnlyPublicKey::from_slice(&public_key_bytes).expect("x-only public key");
+        let message = SecpMessage::from_digest(message);
+        Secp256k1::verification_only()
+            .verify_schnorr(&signature, &message, &public_key)
+            .expect("aggregate verifies under normalized x-only key");
+    }
+
     fn seeded_round_state(session_id: &str) -> RoundState {
         let run_dkg_request = RunDkgRequest {
             session_id: session_id.to_string(),
