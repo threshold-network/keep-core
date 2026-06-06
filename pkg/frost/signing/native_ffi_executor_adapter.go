@@ -22,6 +22,7 @@ type NativeExecutionFFISigningRequest struct {
 	Channel             net.BroadcastChannel
 	MembershipValidator *group.MembershipValidator
 	SignerMaterial      *NativeSignerMaterial
+	TaprootMerkleRoot   *[32]byte
 	Attempt             *Attempt
 }
 
@@ -94,6 +95,7 @@ func (nefea *nativeExecutionFFIExecutorAdapter) Execute(
 		Channel:             request.Channel,
 		MembershipValidator: request.MembershipValidator,
 		SignerMaterial:      signerMaterial,
+		TaprootMerkleRoot:   cloneTaprootMerkleRoot(request.TaprootMerkleRoot),
 		Attempt:             cloneAttempt(request.Attempt),
 	}
 
@@ -136,4 +138,15 @@ func (nefea *nativeExecutionFFIExecutorAdapter) RegisterUnmarshallers(
 	channel net.BroadcastChannel,
 ) {
 	nefea.primitive.RegisterUnmarshallers(channel)
+}
+
+func cloneTaprootMerkleRoot(taprootMerkleRoot *[32]byte) *[32]byte {
+	if taprootMerkleRoot == nil {
+		return nil
+	}
+
+	result := new([32]byte)
+	copy(result[:], taprootMerkleRoot[:])
+
+	return result
 }

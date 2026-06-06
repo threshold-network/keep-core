@@ -134,6 +134,193 @@ func TestSubmitDepositSweepProof(t *testing.T) {
 	)
 }
 
+func TestParseDepositSweepTransactionInputs_TaprootDeposit(t *testing.T) {
+	btcChain := newLocalBitcoinChain()
+	spvChain := newLocalChain()
+
+	taprootDepositScript, err := bitcoin.PayToTaproot([32]byte{0x01})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	walletScript, err := bitcoin.PayToTaproot([32]byte{0x02})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	depositTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           800000,
+				PublicKeyScript: taprootDepositScript,
+			},
+		},
+	}
+
+	if err := btcChain.BroadcastTransaction(depositTransaction); err != nil {
+		t.Fatal(err)
+	}
+
+	spvChain.setDepositRequest(
+		depositTransaction.Hash(),
+		0,
+		&tbtc.DepositChainRequest{
+			RevealedAt: time.Unix(1000, 0),
+			SweptAt:    time.Unix(0, 0),
+		},
+	)
+
+	depositSweepTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: depositTransaction.Hash(),
+					OutputIndex:     0,
+				},
+				Witness:  [][]byte{make([]byte, 64)},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           799000,
+				PublicKeyScript: walletScript,
+			},
+		},
+	}
+
+	mainUTXO, vault, err := parseDepositSweepTransactionInputs(
+		btcChain,
+		spvChain,
+		depositSweepTransaction,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedMainUtxo := bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: bitcoin.Hash{},
+			OutputIndex:     0,
+		},
+		Value: 0,
+	}
+	if diff := deep.Equal(expectedMainUtxo, mainUTXO); diff != nil {
+		t.Errorf("invalid main UTXO: %v", diff)
+	}
+
+	expectedVault := [20]byte{}
+	testutils.AssertBytesEqual(t, expectedVault[:], vault[:])
+}
+
+func TestParseDepositSweepTransactionInputs_TaprootMainUtxoAndDeposit(
+	t *testing.T,
+) {
+	btcChain := newLocalBitcoinChain()
+	spvChain := newLocalChain()
+
+	walletScript, err := bitcoin.PayToTaproot([32]byte{0x01})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	taprootDepositScript, err := bitcoin.PayToTaproot([32]byte{0x02})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mainUtxoTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           700000,
+				PublicKeyScript: walletScript,
+			},
+		},
+	}
+
+	depositTransaction := &bitcoin.Transaction{
+		Version: 2,
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           800000,
+				PublicKeyScript: taprootDepositScript,
+			},
+		},
+	}
+
+	for _, transaction := range []*bitcoin.Transaction{
+		mainUtxoTransaction,
+		depositTransaction,
+	} {
+		if err := btcChain.BroadcastTransaction(transaction); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	spvChain.setDepositRequest(
+		depositTransaction.Hash(),
+		0,
+		&tbtc.DepositChainRequest{
+			RevealedAt: time.Unix(1000, 0),
+			SweptAt:    time.Unix(0, 0),
+		},
+	)
+
+	depositSweepTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: mainUtxoTransaction.Hash(),
+					OutputIndex:     0,
+				},
+				Witness:  [][]byte{make([]byte, 64)},
+				Sequence: 0xffffffff,
+			},
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: depositTransaction.Hash(),
+					OutputIndex:     0,
+				},
+				Witness:  [][]byte{make([]byte, 64)},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           1499000,
+				PublicKeyScript: walletScript,
+			},
+		},
+	}
+
+	mainUTXO, vault, err := parseDepositSweepTransactionInputs(
+		btcChain,
+		spvChain,
+		depositSweepTransaction,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedMainUtxo := bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: mainUtxoTransaction.Hash(),
+			OutputIndex:     0,
+		},
+		Value: 700000,
+	}
+	if diff := deep.Equal(expectedMainUtxo, mainUTXO); diff != nil {
+		t.Errorf("invalid main UTXO: %v", diff)
+	}
+
+	expectedVault := [20]byte{}
+	testutils.AssertBytesEqual(t, expectedVault[:], vault[:])
+}
+
 func TestGetUnprovenDepositSweepTransactions(t *testing.T) {
 	bytesFromHex := func(str string) []byte {
 		value, err := hex.DecodeString(str)

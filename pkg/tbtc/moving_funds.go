@@ -133,8 +133,8 @@ func (mfa *movingFundsAction) execute() error {
 
 	walletPublicKeyHash := bitcoin.PublicKeyHash(mfa.wallet().publicKey)
 
-	walletMainUtxo, err := DetermineWalletMainUtxo(
-		walletPublicKeyHash,
+	walletMainUtxo, err := DetermineWalletMainUtxoForPublicKey(
+		mfa.wallet().publicKey,
 		mfa.chain,
 		mfa.btcChain,
 	)
@@ -149,6 +149,14 @@ func (mfa *movingFundsAction) execute() error {
 	// in case.
 	if walletMainUtxo == nil {
 		return fmt.Errorf("moving funds wallet has no main UTXO")
+	}
+
+	err = ensureMovingFundsMainUtxoSupportsLegacyTargets(
+		mfa.btcChain,
+		walletMainUtxo,
+	)
+	if err != nil {
+		return fmt.Errorf("unsupported moving funds wallet main UTXO: [%v]", err)
 	}
 
 	// Perform initial validation of the moving funds proposal.
@@ -188,8 +196,8 @@ func (mfa *movingFundsAction) execute() error {
 		return fmt.Errorf("validate proposal step failed: [%v]", err)
 	}
 
-	err = EnsureWalletSyncedBetweenChains(
-		walletPublicKeyHash,
+	err = EnsureWalletSyncedBetweenChainsForPublicKey(
+		mfa.wallet().publicKey,
 		walletMainUtxo,
 		mfa.chain,
 		mfa.btcChain,
@@ -574,8 +582,16 @@ func assembleMovingFundsTransaction(
 		return nil, fmt.Errorf("wallet main UTXO is required")
 	}
 
+	err := ensureMovingFundsMainUtxoSupportsLegacyTargets(
+		bitcoinChain,
+		walletMainUtxo,
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
-	err := builder.AddPublicKeyHashInput(walletMainUtxo)
+	err = builder.AddPublicKeyHashInput(walletMainUtxo)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"cannot add input pointing to wallet main UTXO: [%v]",
@@ -626,4 +642,23 @@ func assembleMovingFundsTransaction(
 	}
 
 	return builder, nil
+}
+
+func ensureMovingFundsMainUtxoSupportsLegacyTargets(
+	bitcoinChain bitcoin.Chain,
+	walletMainUtxo *bitcoin.UnspentTransactionOutput,
+) error {
+	scriptType, err := walletMainUtxoScriptType(bitcoinChain, walletMainUtxo)
+	if err != nil {
+		return err
+	}
+
+	if scriptType == bitcoin.P2TRScript {
+		return fmt.Errorf(
+			"Taproot moving-funds main UTXOs are not supported until " +
+				"moving-funds transactions support P2TR target wallet outputs",
+		)
+	}
+
+	return nil
 }

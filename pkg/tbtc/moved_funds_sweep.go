@@ -161,8 +161,8 @@ func (mfsa *movedFundsSweepAction) execute() error {
 	}
 
 	// Prepare the wallet's main UTXO.
-	walletMainUtxo, err := DetermineWalletMainUtxo(
-		walletPublicKeyHash,
+	walletMainUtxo, err := DetermineWalletMainUtxoForPublicKey(
+		mfsa.wallet().publicKey,
 		mfsa.chain,
 		mfsa.btcChain,
 	)
@@ -173,8 +173,8 @@ func (mfsa *movedFundsSweepAction) execute() error {
 		)
 	}
 
-	err = EnsureWalletSyncedBetweenChains(
-		walletPublicKeyHash,
+	err = EnsureWalletSyncedBetweenChainsForPublicKey(
+		mfsa.wallet().publicKey,
 		walletMainUtxo,
 		mfsa.chain,
 		mfsa.btcChain,
@@ -316,6 +316,27 @@ func assembleMovedFundsSweepTransaction(
 ) (*bitcoin.TransactionBuilder, error) {
 	if movedFundsUtxo == nil {
 		return nil, fmt.Errorf("moved funds UTXO is required")
+	}
+
+	if walletMainUtxo != nil {
+		scriptType, err := walletMainUtxoScriptType(
+			bitcoinChain,
+			walletMainUtxo,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot inspect wallet main UTXO script: [%v]",
+				err,
+			)
+		}
+
+		if scriptType == bitcoin.P2TRScript {
+			return nil, fmt.Errorf(
+				"Taproot moved-funds sweep main UTXOs are not supported " +
+					"until moved-funds sweep transactions support P2TR " +
+					"wallet outputs",
+			)
+		}
 	}
 
 	builder := bitcoin.NewTransactionBuilder(bitcoinChain)

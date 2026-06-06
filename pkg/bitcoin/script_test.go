@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/btcsuite/btcd/btcec"
+	btcec2 "github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 
 	"github.com/keep-network/keep-core/internal/testutils"
 )
@@ -358,6 +360,111 @@ func TestPayToTaproot(t *testing.T) {
 	}
 
 	testutils.AssertBytesEqual(t, expectedResult, result[:])
+}
+
+func TestTaprootLeafHash(t *testing.T) {
+	script := Script(hexToSlice(
+		t,
+		"76a9140102030405060708090a0b0c0d0e0f101112131488ac",
+	))
+
+	result, err := TaprootLeafHash(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedResult := hexToSlice(
+		t,
+		"37a57b86de2819d2b72a173df46238a7ad295ea1485d3b40e9415daa82b4fdcb",
+	)
+
+	testutils.AssertBytesEqual(t, expectedResult, result[:])
+}
+
+func TestTaprootTweakAndOutputKey(t *testing.T) {
+	privateKey, _ := btcec2.PrivKeyFromBytes(
+		hexToSlice(
+			t,
+			"0101010101010101010101010101010101010101010101010101010101010101",
+		),
+	)
+
+	var internalKey [32]byte
+	copy(internalKey[:], schnorr.SerializePubKey(privateKey.PubKey()))
+
+	refundLeaf := Script(hexToSlice(
+		t,
+		"76a9140102030405060708090a0b0c0d0e0f101112131488ac",
+	))
+
+	merkleRoot, err := TaprootLeafHash(refundLeaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tweak, err := TaprootTweak(internalKey, &merkleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedTweak := hexToSlice(
+		t,
+		"6ca66b4600554f36d490d227669ba78c2d4778a8ecc07565ae2f9e87c28f124a",
+	)
+
+	testutils.AssertBytesEqual(t, expectedTweak, tweak[:])
+
+	outputKey, err := TaprootOutputKey(internalKey, &merkleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedOutputKey := hexToSlice(
+		t,
+		"b31d6b4f10bcea1dfcace63ce7defda9e718a4340b4b5befef6194488780ef17",
+	)
+
+	testutils.AssertBytesEqual(t, expectedOutputKey, outputKey[:])
+}
+
+func TestPayToTaprootWithScriptTree(t *testing.T) {
+	privateKey, _ := btcec2.PrivKeyFromBytes(
+		hexToSlice(
+			t,
+			"0202020202020202020202020202020202020202020202020202020202020202",
+		),
+	)
+
+	var internalKey [32]byte
+	copy(internalKey[:], schnorr.SerializePubKey(privateKey.PubKey()))
+
+	merkleRootBytes := hexToSlice(
+		t,
+		"b2c459126150e0d47063ea7b6d0474a24c39e25908aae5740dd4787b67c6e19a",
+	)
+	var merkleRoot [32]byte
+	copy(merkleRoot[:], merkleRootBytes)
+
+	result, err := PayToTaprootWithScriptTree(internalKey, merkleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedOutputKey := hexToSlice(
+		t,
+		"e339710a2348c113ade4a4e7d52bd1c12bc69818f1af7f41e161142701b93c96",
+	)
+
+	// Rebuild the expected P2TR script directly to avoid reusing
+	// PayToTaprootWithScriptTree.
+	var expectedKey [32]byte
+	copy(expectedKey[:], expectedOutputKey)
+	expectedResult, err := PayToTaproot(expectedKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertBytesEqual(t, expectedResult, result)
 }
 
 func TestGetScriptType(t *testing.T) {

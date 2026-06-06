@@ -39,6 +39,7 @@ func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 		[]byte("message"),
 		"key-group",
 		nil,
+		nil,
 	)
 	if err == nil {
 		t.Fatal("expected unavailable tbtc-signer bridge error")
@@ -530,6 +531,44 @@ func TestBuildTaggedTBTCSignerRunDKGRequestPayload(t *testing.T) {
 			request.Participants[0].PublicKeyHex,
 		)
 	}
+
+	if request.DKGSeedHex != nil {
+		t.Fatalf("unexpected DKG seed hex: [%v]", *request.DKGSeedHex)
+	}
+}
+
+func TestBuildTaggedTBTCSignerRunDKGRequestPayloadWithSeed(t *testing.T) {
+	payload, err := buildTaggedTBTCSignerRunDKGRequestPayloadWithSeed(
+		"session-1",
+		[]NativeTBTCSignerDKGParticipant{
+			{
+				Identifier:   1,
+				PublicKeyHex: "02aa",
+			},
+			{
+				Identifier:   2,
+				PublicKeyHex: "02bb",
+			},
+		},
+		2,
+		"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+	)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+
+	var request buildTaggedTBTCSignerRunDKGRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+
+	if request.DKGSeedHex == nil {
+		t.Fatal("expected DKG seed hex")
+	}
+	if *request.DKGSeedHex !=
+		"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20" {
+		t.Fatalf("unexpected DKG seed hex: [%v]", *request.DKGSeedHex)
+	}
 }
 
 func TestBuildTaggedTBTCSignerRunDKGRequestPayload_RejectsInvalidInput(t *testing.T) {
@@ -664,6 +703,7 @@ func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload(t *testing.T) {
 		[]byte{0xab, 0xcd},
 		"key-group-1",
 		[]uint16{1, 2, 3},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("unexpected payload build error: [%v]", err)
@@ -727,12 +767,51 @@ func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload(t *testing.T) {
 	}
 }
 
+func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload_TaprootMerkleRoot(
+	t *testing.T,
+) {
+	var taprootMerkleRoot [32]byte
+	taprootMerkleRoot[0] = 0xab
+	taprootMerkleRoot[31] = 0xcd
+
+	payload, err := buildTaggedTBTCSignerStartSignRoundRequestPayload(
+		"session-1",
+		3,
+		[]byte{0xab, 0xcd},
+		"key-group-1",
+		[]uint16{1, 2, 3},
+		&taprootMerkleRoot,
+	)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+
+	var request buildTaggedTBTCSignerStartSignRoundRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+
+	if request.TaprootMerkleRootHex == nil {
+		t.Fatal("expected taproot merkle root")
+	}
+
+	expectedTaprootMerkleRootHex := hex.EncodeToString(taprootMerkleRoot[:])
+	if *request.TaprootMerkleRootHex != expectedTaprootMerkleRootHex {
+		t.Fatalf(
+			"unexpected taproot merkle root\nexpected: [%v]\nactual:   [%v]",
+			expectedTaprootMerkleRootHex,
+			*request.TaprootMerkleRootHex,
+		)
+	}
+}
+
 func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload_EmptySessionID(t *testing.T) {
 	_, err := buildTaggedTBTCSignerStartSignRoundRequestPayload(
 		"",
 		1,
 		[]byte{0xab},
 		"key-group-1",
+		nil,
 		nil,
 	)
 	if !errors.Is(err, ErrNativeBridgeOperationFailed) {
@@ -757,6 +836,7 @@ func TestBuildTaggedTBTCSignerStartSignRoundRequestPayload_ZeroMemberID(t *testi
 		0,
 		[]byte{0xab},
 		"key-group-1",
+		nil,
 		nil,
 	)
 	if !errors.Is(err, ErrNativeBridgeOperationFailed) {
@@ -784,6 +864,7 @@ func TestBuildTaggedTBTCSignerFinalizeSignRoundRequestPayload(t *testing.T) {
 				Data:       []byte{0xde, 0xad},
 			},
 		},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("unexpected payload build error: [%v]", err)
@@ -823,6 +904,46 @@ func TestBuildTaggedTBTCSignerFinalizeSignRoundRequestPayload(t *testing.T) {
 			"unexpected contribution signature share\nexpected: [%v]\nactual:   [%v]",
 			"dead",
 			request.RoundContributions[0].SignatureShareHex,
+		)
+	}
+}
+
+func TestBuildTaggedTBTCSignerFinalizeSignRoundRequestPayload_TaprootMerkleRoot(
+	t *testing.T,
+) {
+	var taprootMerkleRoot [32]byte
+	taprootMerkleRoot[0] = 0xab
+	taprootMerkleRoot[31] = 0xcd
+
+	payload, err := buildTaggedTBTCSignerFinalizeSignRoundRequestPayload(
+		"session-1",
+		[]NativeTBTCSignerRoundContribution{
+			{
+				Identifier: 7,
+				Data:       []byte{0xde, 0xad},
+			},
+		},
+		&taprootMerkleRoot,
+	)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+
+	var request buildTaggedTBTCSignerFinalizeSignRoundRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+
+	if request.TaprootMerkleRootHex == nil {
+		t.Fatal("expected taproot merkle root")
+	}
+
+	expectedTaprootMerkleRootHex := hex.EncodeToString(taprootMerkleRoot[:])
+	if *request.TaprootMerkleRootHex != expectedTaprootMerkleRootHex {
+		t.Fatalf(
+			"unexpected taproot merkle root\nexpected: [%v]\nactual:   [%v]",
+			expectedTaprootMerkleRootHex,
+			*request.TaprootMerkleRootHex,
 		)
 	}
 }

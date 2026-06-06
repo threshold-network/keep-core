@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/keep-network/keep-common/pkg/cache"
@@ -51,6 +52,27 @@ const (
 
 const (
 	sweptDepositsCachePeriod = 7 * 24 * time.Hour
+)
+
+const frostWalletRegistryAuthorizationViewsABI = `[
+	{
+		"inputs": [{"internalType": "address", "name": "operator", "type": "address"}],
+		"name": "operatorToStakingProvider",
+		"outputs": [{"internalType": "address", "name": "", "type": "address"}],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [{"internalType": "address", "name": "stakingProvider", "type": "address"}],
+		"name": "eligibleStake",
+		"outputs": [{"internalType": "uint96", "name": "", "type": "uint96"}],
+		"stateMutability": "view",
+		"type": "function"
+	}
+]`
+
+var frostWalletRegistryAuthorizationABI = mustParseABI(
+	frostWalletRegistryAuthorizationViewsABI,
 )
 
 // TbtcChain represents a TBTC-specific chain handle.
@@ -407,9 +429,9 @@ func (tc *TbtcChain) Staking() (chain.Address, error) {
 }
 
 // IsRecognized checks whether the given operator is recognized by the TbtcChain
-// as eligible to join the network. A FROST operator is recognized when it has
-// been registered through the FROST authorization source. Legacy ECDSA
-// operators are still recognized through the historical staking-provider path.
+// as eligible to join the network. Legacy ECDSA operators are recognized if
+// they have or had a stake delegation. FROST operators are recognized if the
+// FROST registry maps them to a provider with non-zero eligible weight.
 func (tc *TbtcChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool, error) {
 	operatorAddress, err := operatorPublicKeyToChainAddress(operatorPublicKey)
 	if err != nil {
@@ -417,24 +439,6 @@ func (tc *TbtcChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool, 
 			"cannot convert from operator key to chain address: [%v]",
 			err,
 		)
-	}
-
-	if tc.frostWalletRegistry != nil {
-		stakingProvider, err := tc.frostWalletRegistry.OperatorToStakingProvider(
-			&bind.CallOpts{From: tc.key.Address},
-			operatorAddress,
-		)
-		if err != nil {
-			return false, fmt.Errorf(
-				"failed to map FROST operator [%v] to a staking provider: [%v]",
-				operatorAddress,
-				err,
-			)
-		}
-
-		if stakingProvider != (common.Address{}) {
-			return true, nil
-		}
 	}
 
 	stakingProvider, err := tc.walletRegistry.OperatorToStakingProvider(
@@ -448,28 +452,123 @@ func (tc *TbtcChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool, 
 		)
 	}
 
-	if (stakingProvider == common.Address{}) {
-		return false, nil
-	}
-
-	// Check if the staking provider has an owner. This check ensures that there
-	// is/was a stake delegation for the given staking provider.
-	_, _, _, hasStakeDelegation, err := tc.baseChain.RolesOf(
-		chain.Address(stakingProvider.Hex()),
-	)
-	if err != nil {
-		return false, fmt.Errorf(
-			"failed to check stake delegation for staking provider [%v]: [%v]",
-			stakingProvider,
-			err,
+	if (stakingProvider != common.Address{}) {
+		// Check if the staking provider has an owner. This check ensures that there
+		// is/was a stake delegation for the given staking provider.
+		_, _, _, hasStakeDelegation, err := tc.baseChain.RolesOf(
+			chain.Address(stakingProvider.Hex()),
 		)
+		if err != nil {
+			return false, fmt.Errorf(
+				"failed to check stake delegation for staking provider [%v]: [%v]",
+				stakingProvider,
+				err,
+			)
+		}
+
+		if hasStakeDelegation {
+			return true, nil
+		}
 	}
 
-	if !hasStakeDelegation {
+	isRecognizedByFrost, err := tc.isRecognizedByFrostRegistry(operatorAddress)
+	if err != nil {
+		return false, err
+	}
+	if !isRecognizedByFrost {
 		return false, nil
 	}
 
 	return true, nil
+}
+
+func (tc *TbtcChain) isRecognizedByFrostRegistry(
+	operatorAddress common.Address,
+) (bool, error) {
+	if !tc.hasFrostAuthorization() ||
+		(tc.frostWalletRegistryAddr == common.Address{}) {
+		return false, nil
+	}
+
+	out, err := tc.callFrostRegistryAuthorizationView(
+		"operatorToStakingProvider",
+		operatorAddress,
+	)
+	if err != nil {
+		return false, fmt.Errorf(
+			"failed to map FROST operator [%v] to a provider: [%v]",
+			operatorAddress,
+			err,
+		)
+	}
+	if len(out) != 1 {
+		return false, fmt.Errorf(
+			"unexpected FROST operatorToStakingProvider result length [%v]",
+			len(out),
+		)
+	}
+
+	stakingProvider := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
+	if (stakingProvider == common.Address{}) {
+		return false, nil
+	}
+
+	out, err = tc.callFrostRegistryAuthorizationView(
+		"eligibleStake",
+		stakingProvider,
+	)
+	if err != nil {
+		return false, fmt.Errorf(
+			"failed to get FROST eligible weight for provider [%v]: [%v]",
+			stakingProvider,
+			err,
+		)
+	}
+	if len(out) != 1 {
+		return false, fmt.Errorf(
+			"unexpected FROST eligibleStake result length [%v]",
+			len(out),
+		)
+	}
+
+	eligibleWeight := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
+	return eligibleWeight.Sign() > 0, nil
+}
+
+func (tc *TbtcChain) callFrostRegistryAuthorizationView(
+	method string,
+	args ...interface{},
+) ([]interface{}, error) {
+	var out []interface{}
+
+	contract := bind.NewBoundContract(
+		tc.frostWalletRegistryAddr,
+		frostWalletRegistryAuthorizationABI,
+		tc.baseChain.client,
+		nil,
+		nil,
+	)
+
+	err := contract.Call(
+		&bind.CallOpts{From: tc.key.Address},
+		&out,
+		method,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+func mustParseABI(rawABI string) abi.ABI {
+	parsed, err := abi.JSON(strings.NewReader(rawABI))
+	if err != nil {
+		panic(err)
+	}
+
+	return parsed
 }
 
 // OperatorToStakingProvider returns the staking provider address for the
@@ -662,20 +761,33 @@ func (tc *TbtcChain) IsBetaOperator() (bool, error) {
 	return tc.sortitionPool.IsBetaOperator(tc.key.Address)
 }
 
-// GetOperatorID returns the ID number of the given operator address. An ID
-// number of 0 means the operator has not been allocated an ID number yet.
+// GetOperatorID returns the legacy ECDSA sortition pool ID number of the given
+// operator address. An ID number of 0 means the operator has not been allocated
+// an ID number yet.
+//
+// This method intentionally remains bound to the legacy ECDSA sortition pool
+// even when FROST authorization is configured. Existing ECDSA tBTC flows such
+// as DKG approval, inactivity claims, and tbtcpg moving-funds claims compare
+// against ECDSA WalletRegistry member IDs. FROST DKG paths use
+// SelectFrostGroup and the FROST sortition pool directly.
 func (tc *TbtcChain) GetOperatorID(
 	operatorAddress chain.Address,
 ) (chain.OperatorID, error) {
-	if tc.hasFrostAuthorization() {
-		return tc.frostSortitionPool.GetOperatorID(
-			common.HexToAddress(operatorAddress.String()),
-		)
-	}
-
-	return tc.sortitionPool.GetOperatorID(
+	return getOperatorID(
+		tc.sortitionPool,
 		common.HexToAddress(operatorAddress.String()),
 	)
+}
+
+type operatorIDResolver interface {
+	GetOperatorID(operator common.Address) (chain.OperatorID, error)
+}
+
+func getOperatorID(
+	sortitionPool operatorIDResolver,
+	operatorAddress common.Address,
+) (chain.OperatorID, error) {
+	return sortitionPool.GetOperatorID(operatorAddress)
 }
 
 // SelectGroup returns the group members selected for the current group
@@ -1485,6 +1597,75 @@ func (tc *TbtcChain) PastDepositRevealedEvents(
 			RefundLocktime:      event.RefundLocktime,
 			Vault:               vault,
 			BlockNumber:         event.Raw.BlockNumber,
+		}
+
+		convertedEvents = append(convertedEvents, convertedEvent)
+	}
+
+	sort.SliceStable(
+		convertedEvents,
+		func(i, j int) bool {
+			return convertedEvents[i].BlockNumber < convertedEvents[j].BlockNumber
+		},
+	)
+
+	return convertedEvents, err
+}
+
+func (tc *TbtcChain) PastTaprootDepositRevealedEvents(
+	filter *tbtc.DepositRevealedEventFilter,
+) ([]*tbtc.TaprootDepositRevealedEvent, error) {
+	var startBlock uint64
+	var endBlock *uint64
+	var depositor []common.Address
+	var walletPublicKeyHash [][20]byte
+
+	if filter != nil {
+		startBlock = filter.StartBlock
+		endBlock = filter.EndBlock
+
+		for _, d := range filter.Depositor {
+			depositor = append(depositor, common.HexToAddress(d.String()))
+		}
+
+		walletPublicKeyHash = filter.WalletPublicKeyHash
+	}
+
+	events, err := tc.bridge.PastTaprootDepositRevealedEvents(
+		startBlock,
+		endBlock,
+		depositor,
+		walletPublicKeyHash,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	convertedEvents := make([]*tbtc.TaprootDepositRevealedEvent, 0)
+	for _, event := range events {
+		var vault *chain.Address
+		if event.Vault != [20]byte{} {
+			v := chain.Address(event.Vault.Hex())
+			vault = &v
+		}
+
+		convertedEvent := &tbtc.TaprootDepositRevealedEvent{
+			// We can map the event.FundingTxHash field directly to the
+			// bitcoin.Hash type. This is because event.FundingTxHash is
+			// a [32]byte type representing a hash in the bitcoin.InternalByteOrder,
+			// just as bitcoin.Hash assumes.
+			FundingTxHash:        event.FundingTxHash,
+			FundingOutputIndex:   event.FundingOutputIndex,
+			Depositor:            chain.Address(event.Depositor.Hex()),
+			Amount:               event.Amount,
+			BlindingFactor:       event.BlindingFactor,
+			WalletPublicKeyHash:  event.WalletPubKeyHash,
+			WalletXOnlyPublicKey: event.WalletXOnlyPublicKey,
+			RefundPublicKeyHash:  event.RefundPubKeyHash,
+			RefundXOnlyPublicKey: event.RefundXOnlyPublicKey,
+			RefundLocktime:       event.RefundLocktime,
+			Vault:                vault,
+			BlockNumber:          event.Raw.BlockNumber,
 		}
 
 		convertedEvents = append(convertedEvents, convertedEvent)
@@ -2546,6 +2727,58 @@ func (tc *TbtcChain) ValidateDepositSweepProposal(
 	return nil
 }
 
+func (tc *TbtcChain) ValidateTaprootDepositSweepProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *tbtc.DepositSweepProposal,
+	depositsExtraInfo []struct {
+		*tbtc.Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	dei := make(
+		[]tbtcabi.WalletProposalValidatorTaprootDepositExtraInfo,
+		len(depositsExtraInfo),
+	)
+	for i, depositExtraInfo := range depositsExtraInfo {
+		fundingTx := tbtcabi.BitcoinTxInfo2{
+			Version:      depositExtraInfo.FundingTx.SerializeVersion(),
+			InputVector:  depositExtraInfo.FundingTx.SerializeInputs(),
+			OutputVector: depositExtraInfo.FundingTx.SerializeOutputs(),
+			Locktime:     depositExtraInfo.FundingTx.SerializeLocktime(),
+		}
+
+		if !depositExtraInfo.Deposit.IsTaproot() {
+			return fmt.Errorf("deposit extra info [%v] is not Taproot-native", i)
+		}
+
+		dei[i] = tbtcabi.WalletProposalValidatorTaprootDepositExtraInfo{
+			FundingTx:            fundingTx,
+			BlindingFactor:       depositExtraInfo.Deposit.BlindingFactor,
+			WalletPubKeyHash:     depositExtraInfo.Deposit.WalletPublicKeyHash,
+			WalletXOnlyPublicKey: *depositExtraInfo.Deposit.WalletXOnlyPublicKey,
+			RefundPubKeyHash:     depositExtraInfo.Deposit.RefundPublicKeyHash,
+			RefundXOnlyPublicKey: *depositExtraInfo.Deposit.RefundXOnlyPublicKey,
+			RefundLocktime:       depositExtraInfo.Deposit.RefundLocktime,
+		}
+	}
+
+	valid, err := tc.walletProposalValidator.ValidateTaprootDepositSweepProposal(
+		convertDepositSweepProposalToAbiType(walletPublicKeyHash, proposal),
+		dei,
+	)
+	if err != nil {
+		return fmt.Errorf("validation failed: [%v]", err)
+	}
+
+	// Should never happen because `validateTaprootDepositSweepProposal`
+	// returns true or reverts (returns an error) but do the check just in case.
+	if !valid {
+		return fmt.Errorf("unexpected validation result")
+	}
+
+	return nil
+}
+
 func (tc *TbtcChain) GetDepositSweepMaxSize() (uint16, error) {
 	return tc.walletProposalValidator.DEPOSITSWEEPMAXSIZE()
 }
@@ -2965,10 +3198,10 @@ func (tc *TbtcChain) GetDepositMinAge() (uint32, error) {
 }
 
 func (tc *TbtcChain) CurrentBlockTimestamp() (time.Time, error) {
-	currentBlock, err := tc.currentBlock()
+	currentBlock, err := tc.currentBlockHeader()
 	if err != nil {
 		return time.Time{}, fmt.Errorf("cannot get current block: [%v]", err)
 	}
 
-	return time.Unix(int64(currentBlock.Time()), 0), nil
+	return time.Unix(int64(currentBlock.Time), 0), nil
 }

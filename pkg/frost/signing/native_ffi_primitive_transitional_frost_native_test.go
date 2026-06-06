@@ -48,14 +48,17 @@ type mockBuildTaggedTBTCSignerEngine struct {
 		message []byte,
 		keyGroup string,
 		signingParticipants []uint16,
+		taprootMerkleRoot *[32]byte,
 	) (*NativeTBTCSignerRoundState, error)
-	startRoundState   *NativeTBTCSignerRoundState
-	startErr          error
-	finalizeCalled    bool
-	finalizeSessionID string
-	finalizeInputs    []NativeTBTCSignerRoundContribution
-	finalizeSignature []byte
-	finalizeErr       error
+	startTaprootMerkleRoot    *[32]byte
+	startRoundState           *NativeTBTCSignerRoundState
+	startErr                  error
+	finalizeCalled            bool
+	finalizeSessionID         string
+	finalizeTaprootMerkleRoot *[32]byte
+	finalizeInputs            []NativeTBTCSignerRoundContribution
+	finalizeSignature         []byte
+	finalizeErr               error
 }
 
 func (mbttse *mockBuildTaggedTBTCSignerEngine) RunDKG(
@@ -106,6 +109,7 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) StartSignRound(
 	message []byte,
 	keyGroup string,
 	signingParticipants []uint16,
+	taprootMerkleRoot *[32]byte,
 ) (*NativeTBTCSignerRoundState, error) {
 	mbttse.startCalled = true
 	mbttse.startSessionID = sessionID
@@ -113,6 +117,7 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) StartSignRound(
 	mbttse.startMessage = append([]byte{}, message...)
 	mbttse.startKeyGroup = keyGroup
 	mbttse.startSigningParticipants = append([]uint16{}, signingParticipants...)
+	mbttse.startTaprootMerkleRoot = cloneTestTaprootMerkleRoot(taprootMerkleRoot)
 
 	if mbttse.startErr != nil {
 		return nil, mbttse.startErr
@@ -125,6 +130,7 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) StartSignRound(
 			message,
 			keyGroup,
 			signingParticipants,
+			taprootMerkleRoot,
 		)
 	}
 
@@ -151,9 +157,11 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) StartSignRound(
 func (mbttse *mockBuildTaggedTBTCSignerEngine) FinalizeSignRound(
 	sessionID string,
 	roundContributions []NativeTBTCSignerRoundContribution,
+	taprootMerkleRoot *[32]byte,
 ) ([]byte, error) {
 	mbttse.finalizeCalled = true
 	mbttse.finalizeSessionID = sessionID
+	mbttse.finalizeTaprootMerkleRoot = cloneTestTaprootMerkleRoot(taprootMerkleRoot)
 	mbttse.finalizeInputs = append(
 		[]NativeTBTCSignerRoundContribution{},
 		roundContributions...,
@@ -177,6 +185,17 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) BuildTaprootTx(
 	scriptTreeHex *string,
 ) (*NativeTBTCSignerTxResult, error) {
 	return nil, errors.New("not implemented")
+}
+
+func cloneTestTaprootMerkleRoot(taprootMerkleRoot *[32]byte) *[32]byte {
+	if taprootMerkleRoot == nil {
+		return nil
+	}
+
+	result := new([32]byte)
+	copy(result[:], taprootMerkleRoot[:])
+
+	return result
 }
 
 type deterministicBuildTaggedTBTCSignerBootstrapRoundEngine struct {
@@ -206,6 +225,7 @@ func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) StartSig
 	_ []byte,
 	_ string,
 	signingParticipants []uint16,
+	_ *[32]byte,
 ) (*NativeTBTCSignerRoundState, error) {
 	if dbttsbre.roundState != nil {
 		if dbttsbre.roundState.OwnContribution == nil {
@@ -245,6 +265,7 @@ func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) StartSig
 func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) FinalizeSignRound(
 	_ string,
 	roundContributions []NativeTBTCSignerRoundContribution,
+	_ *[32]byte,
 ) ([]byte, error) {
 	dbttsbre.finalizeMutex.Lock()
 	defer dbttsbre.finalizeMutex.Unlock()
@@ -657,6 +678,58 @@ func TestBuildTaggedTBTCSignerRunDKGInputs(t *testing.T) {
 				i,
 				expectedPublicKeys[i],
 				participants[i].PublicKeyHex,
+			)
+		}
+	}
+}
+
+func TestBuildTaggedTBTCSignerRunDKGInputsForPayload_UsesPersistedDKGInputs(
+	t *testing.T,
+) {
+	persistedParticipants := []NativeTBTCSignerDKGParticipant{
+		{Identifier: 1, PublicKeyHex: "020001"},
+		{Identifier: 2, PublicKeyHex: "020002"},
+		{Identifier: 3, PublicKeyHex: "020003"},
+	}
+
+	participants, threshold, err := buildTaggedTBTCSignerRunDKGInputsForPayload(
+		&NativeTBTCSignerMaterialPayload{
+			KeyGroupSource:  NativeTBTCSignerKeyGroupSourceDKGPersisted,
+			DKGParticipants: persistedParticipants,
+			DKGThreshold:    2,
+		},
+		&NativeExecutionFFISigningRequest{
+			GroupSize:          3,
+			DishonestThreshold: 1,
+			Attempt: &Attempt{
+				Number:                 1,
+				CoordinatorMemberIndex: 1,
+				IncludedMembersIndexes: []group.MemberIndex{1, 3},
+			},
+		},
+		[]group.MemberIndex{1, 3},
+	)
+	if err != nil {
+		t.Fatalf("unexpected RunDKG inputs error: [%v]", err)
+	}
+
+	if threshold != 2 {
+		t.Fatalf("unexpected threshold: [%v]", threshold)
+	}
+	if len(participants) != len(persistedParticipants) {
+		t.Fatalf(
+			"unexpected participants count\nexpected: [%v]\nactual:   [%v]",
+			len(persistedParticipants),
+			len(participants),
+		)
+	}
+	for i := range participants {
+		if participants[i] != persistedParticipants[i] {
+			t.Fatalf(
+				"unexpected participant at index [%d]\nexpected: [%+v]\nactual:   [%+v]",
+				i,
+				persistedParticipants[i],
+				participants[i],
 			)
 		}
 	}
@@ -1264,6 +1337,7 @@ func TestExecuteBuildTaggedTBTCSignerBootstrapCoarseRound_FailsWhenRoundStateSig
 			message []byte,
 			keyGroup string,
 			signingParticipants []uint16,
+			_ *[32]byte,
 		) (*NativeTBTCSignerRoundState, error) {
 			return &NativeTBTCSignerRoundState{
 				SessionID:             sessionID,
@@ -1737,6 +1811,70 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 		if len(contribution.Data) == 0 {
 			t.Fatalf("expected non-empty contribution data at index [%d]", i)
 		}
+	}
+}
+
+func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_BootstrapVersion_TaprootMerkleRoot(
+	t *testing.T,
+) {
+	engine := &mockBuildTaggedTBTCSignerEngine{
+		version:           "tbtc-signer/0.1.0-bootstrap",
+		finalizeSignature: buildTaggedTBTCSignerValidTestSignature(0x22),
+	}
+	UnregisterNativeTBTCSignerEngine()
+	t.Cleanup(UnregisterNativeTBTCSignerEngine)
+
+	err := RegisterNativeTBTCSignerEngine(engine)
+	if err != nil {
+		t.Fatalf("unexpected registration error: [%v]", err)
+	}
+
+	var taprootMerkleRoot [32]byte
+	taprootMerkleRoot[0] = 0xab
+	taprootMerkleRoot[31] = 0xcd
+
+	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
+
+	signature, err := primitive.Sign(nil, nil, &NativeExecutionFFISigningRequest{
+		Message:            big.NewInt(123),
+		SessionID:          "session-1",
+		MemberIndex:        1,
+		GroupSize:          3,
+		DishonestThreshold: 1,
+		TaprootMerkleRoot:  &taprootMerkleRoot,
+		SignerMaterial: &NativeSignerMaterial{
+			Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
+			Payload: []byte(`{"keyGroup":"group-1"}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+
+	if signature == nil {
+		t.Fatal("expected signature")
+	}
+
+	if engine.startTaprootMerkleRoot == nil {
+		t.Fatal("expected StartSignRound taproot merkle root")
+	}
+	if !bytes.Equal(engine.startTaprootMerkleRoot[:], taprootMerkleRoot[:]) {
+		t.Fatalf(
+			"unexpected StartSignRound taproot merkle root\nexpected: [%x]\nactual:   [%x]",
+			taprootMerkleRoot,
+			*engine.startTaprootMerkleRoot,
+		)
+	}
+
+	if engine.finalizeTaprootMerkleRoot == nil {
+		t.Fatal("expected FinalizeSignRound taproot merkle root")
+	}
+	if !bytes.Equal(engine.finalizeTaprootMerkleRoot[:], taprootMerkleRoot[:]) {
+		t.Fatalf(
+			"unexpected FinalizeSignRound taproot merkle root\nexpected: [%x]\nactual:   [%x]",
+			taprootMerkleRoot,
+			*engine.finalizeTaprootMerkleRoot,
+		)
 	}
 }
 
@@ -2365,6 +2503,7 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTC
 			_ []byte,
 			_ string,
 			signingParticipants []uint16,
+			_ *[32]byte,
 		) (*NativeTBTCSignerRoundState, error) {
 			observedSigningParticipants = append(
 				observedSigningParticipants,

@@ -4,13 +4,6 @@ package signing
 
 import "fmt"
 
-// NativeTBTCSignerDKGParticipant identifies a DKG participant for coarse
-// tbtc-signer RunDKG operation.
-type NativeTBTCSignerDKGParticipant struct {
-	Identifier   uint16 `json:"identifier"`
-	PublicKeyHex string `json:"publicKeyHex"`
-}
-
 // NativeTBTCSignerDKGResult captures DKG result metadata returned by RunDKG.
 type NativeTBTCSignerDKGResult struct {
 	SessionID        string `json:"sessionID"`
@@ -74,10 +67,12 @@ type NativeTBTCSignerEngine interface {
 		message []byte,
 		keyGroup string,
 		signingParticipants []uint16,
+		taprootMerkleRoot *[32]byte,
 	) (*NativeTBTCSignerRoundState, error)
 	FinalizeSignRound(
 		sessionID string,
 		roundContributions []NativeTBTCSignerRoundContribution,
+		taprootMerkleRoot *[32]byte,
 	) ([]byte, error)
 	BuildTaprootTx(
 		sessionID string,
@@ -85,6 +80,18 @@ type NativeTBTCSignerEngine interface {
 		outputs []NativeTBTCSignerTxOutput,
 		scriptTreeHex *string,
 	) (*NativeTBTCSignerTxResult, error)
+}
+
+// NativeTBTCSignerSeededDKGEngine is implemented by tbtc-signer engines that
+// can pin development dealer DKG to an externally supplied seed. Production
+// distributed DKG does not rely on this helper.
+type NativeTBTCSignerSeededDKGEngine interface {
+	RunDKGWithSeed(
+		sessionID string,
+		participants []NativeTBTCSignerDKGParticipant,
+		threshold uint16,
+		dkgSeedHex string,
+	) (*NativeTBTCSignerDKGResult, error)
 }
 
 var nativeTBTCSignerEngine NativeTBTCSignerEngine
@@ -111,6 +118,12 @@ func UnregisterNativeTBTCSignerEngine() {
 	defer executionBackendMutex.Unlock()
 
 	nativeTBTCSignerEngine = nil
+}
+
+// CurrentNativeTBTCSignerEngine returns the registered coarse tbtc-signer
+// engine.
+func CurrentNativeTBTCSignerEngine() NativeTBTCSignerEngine {
+	return currentNativeTBTCSignerEngine()
 }
 
 func currentNativeTBTCSignerEngine() NativeTBTCSignerEngine {

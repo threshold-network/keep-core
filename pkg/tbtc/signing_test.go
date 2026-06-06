@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +19,68 @@ import (
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
+
+func TestSigningSessionID_LegacyFormat(t *testing.T) {
+	message, ok := new(big.Int).SetString(
+		"ac692bb7fddf3f7e1e050a83cf3ffb6e8e69888ce980281aa39da169525750ef",
+		16,
+	)
+	if !ok {
+		t.Fatal("failed to build test message")
+	}
+
+	sessionID := signingSessionID(message, nil, 25300, 12)
+
+	expected := "ac692bb7fddf3f7e1e050a83cf3ffb6e8e69888ce980281aa39da169525750ef-12"
+	if sessionID != expected {
+		t.Fatalf(
+			"unexpected signing session ID\nexpected: [%s]\nactual:   [%s]",
+			expected,
+			sessionID,
+		)
+	}
+}
+
+func TestSigningSessionID_TaprootFormatStaysWithinSignerLimit(t *testing.T) {
+	message, ok := new(big.Int).SetString(
+		"ac692bb7fddf3f7e1e050a83cf3ffb6e8e69888ce980281aa39da169525750ef",
+		16,
+	)
+	if !ok {
+		t.Fatal("failed to build test message")
+	}
+
+	var merkleRoot [32]byte
+	for i := range merkleRoot {
+		merkleRoot[i] = byte(i + 1)
+	}
+
+	sessionID := signingSessionID(message, &merkleRoot, 25300, 12)
+
+	if len(sessionID) > 128 {
+		t.Fatalf("Taproot signing session ID exceeds signer limit: [%d]", len(sessionID))
+	}
+	if !strings.HasPrefix(sessionID, "tr-") {
+		t.Fatalf("unexpected Taproot signing session ID prefix: [%s]", sessionID)
+	}
+	if !strings.HasSuffix(sessionID, "-12") {
+		t.Fatalf("unexpected Taproot signing session ID attempt suffix: [%s]", sessionID)
+	}
+
+	changedMerkleRoot := merkleRoot
+	changedMerkleRoot[0] ^= 0xff
+	if signingSessionID(message, &changedMerkleRoot, 25300, 12) == sessionID {
+		t.Fatal("expected Taproot signing session ID to bind the merkle root")
+	}
+
+	if signingSessionID(message, &merkleRoot, 25300, 13) == sessionID {
+		t.Fatal("expected Taproot signing session ID to bind the attempt number")
+	}
+
+	if signingSessionID(message, &merkleRoot, 28900, 12) == sessionID {
+		t.Fatal("expected Taproot signing session ID to bind the signing start block")
+	}
+}
 
 func TestSigningExecutor_Sign(t *testing.T) {
 	executor := setupSigningExecutor(t)

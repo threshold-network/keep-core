@@ -20,6 +20,8 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
+var _ tbtc.FrostDKGChain = (*TbtcChain)(nil)
+
 // FrostWalletRegistryAvailable reports whether the chain handle is configured
 // with a FROST wallet registry address.
 func (tc *TbtcChain) FrostWalletRegistryAvailable() bool {

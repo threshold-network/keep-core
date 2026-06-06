@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -207,5 +208,43 @@ func TestAssembleMovedFundsSweepTransaction(t *testing.T) {
 				transaction.WitnessHash().Hex(bitcoin.InternalByteOrder),
 			)
 		})
+	}
+}
+
+func TestAssembleMovedFundsSweepTransaction_RejectsTaprootWalletMainUtxo(
+	t *testing.T,
+) {
+	bitcoinChain := newLocalBitcoinChain()
+	walletPublicKey := testWalletPublicKeyFromXOnly(
+		t,
+		"2336f65004d8f122f1fe947ebd009a8b4add3a0d937356d568e30f7fcc2e4008",
+	)
+	walletMainUtxo := testTaprootWalletMainUtxo(
+		t,
+		bitcoinChain,
+		walletPublicKey,
+	)
+
+	var movedFundsTxHash bitcoin.Hash
+	movedFundsTxHash[0] = 0x02
+
+	_, err := assembleMovedFundsSweepTransaction(
+		bitcoinChain,
+		walletPublicKey,
+		&bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: movedFundsTxHash,
+				OutputIndex:     0,
+			},
+			Value: 100000,
+		},
+		walletMainUtxo,
+		1000,
+	)
+	if err == nil {
+		t.Fatal("expected Taproot moved-funds sweep main UTXO rejection")
+	}
+	if !strings.Contains(err.Error(), "Taproot moved-funds sweep main UTXOs") {
+		t.Fatalf("unexpected error: [%v]", err)
 	}
 }

@@ -280,6 +280,14 @@ type BridgeChain interface {
 		filter *DepositRevealedEventFilter,
 	) ([]*DepositRevealedEvent, error)
 
+	// PastTaprootDepositRevealedEvents fetches past Taproot deposit reveal
+	// events according to the provided filter or unfiltered if the filter is
+	// nil. Returned events are sorted by the block number in ascending order,
+	// i.e. the latest event is at the end of the slice.
+	PastTaprootDepositRevealedEvents(
+		filter *DepositRevealedEventFilter,
+	) ([]*TaprootDepositRevealedEvent, error)
+
 	// GetPendingRedemptionRequest gets the on-chain pending redemption request
 	// for the given wallet public key hash and redeemer output script.
 	// The returned bool value indicates whether the request was found or not.
@@ -397,6 +405,49 @@ func (dre *DepositRevealedEvent) GetWalletPublicKeyHash() [20]byte {
 	return dre.WalletPublicKeyHash
 }
 
+// TaprootDepositRevealedEvent represents a Taproot deposit reveal event.
+//
+// The Vault field is nil if the deposit does not target any vault on-chain.
+type TaprootDepositRevealedEvent struct {
+	FundingTxHash        bitcoin.Hash
+	FundingOutputIndex   uint32
+	Depositor            chain.Address
+	Amount               uint64
+	BlindingFactor       [8]byte
+	WalletPublicKeyHash  [20]byte
+	WalletXOnlyPublicKey [32]byte
+	RefundPublicKeyHash  [20]byte
+	RefundXOnlyPublicKey [32]byte
+	RefundLocktime       [4]byte
+	Vault                *chain.Address
+	BlockNumber          uint64
+}
+
+func (tdre *TaprootDepositRevealedEvent) unpack(extraData *[32]byte) *Deposit {
+	return &Deposit{
+		Utxo: &bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: tdre.FundingTxHash,
+				OutputIndex:     tdre.FundingOutputIndex,
+			},
+			Value: int64(tdre.Amount),
+		},
+		Depositor:            tdre.Depositor,
+		BlindingFactor:       tdre.BlindingFactor,
+		WalletPublicKeyHash:  tdre.WalletPublicKeyHash,
+		WalletXOnlyPublicKey: &tdre.WalletXOnlyPublicKey,
+		RefundPublicKeyHash:  tdre.RefundPublicKeyHash,
+		RefundXOnlyPublicKey: &tdre.RefundXOnlyPublicKey,
+		RefundLocktime:       tdre.RefundLocktime,
+		Vault:                tdre.Vault,
+		ExtraData:            extraData,
+	}
+}
+
+func (tdre *TaprootDepositRevealedEvent) GetWalletPublicKeyHash() [20]byte {
+	return tdre.WalletPublicKeyHash
+}
+
 // DepositRevealedEventFilter is a component allowing to filter DepositRevealedEvent.
 type DepositRevealedEventFilter struct {
 	StartBlock          uint64
@@ -445,6 +496,19 @@ type WalletProposalValidatorChain interface {
 	// that must be fetched externally. Returns an error if the proposal is
 	// not valid or nil otherwise.
 	ValidateDepositSweepProposal(
+		walletPublicKeyHash [20]byte,
+		proposal *DepositSweepProposal,
+		depositsExtraInfo []struct {
+			*Deposit
+			FundingTx *bitcoin.Transaction
+		},
+	) error
+
+	// ValidateTaprootDepositSweepProposal validates the given Taproot deposit
+	// sweep proposal against the chain. It requires some additional data about
+	// the deposits that must be fetched externally. Returns an error if the
+	// proposal is not valid or nil otherwise.
+	ValidateTaprootDepositSweepProposal(
 		walletPublicKeyHash [20]byte,
 		proposal *DepositSweepProposal,
 		depositsExtraInfo []struct {

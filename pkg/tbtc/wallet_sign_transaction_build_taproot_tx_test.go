@@ -1023,6 +1023,160 @@ func TestWalletTransactionExecutor_SignTransaction_AppliesTaprootKeyPathSignatur
 	}
 }
 
+func TestWalletTransactionExecutor_SignTransaction_AppliesTweakedTaprootKeyPathSignatures(
+	t *testing.T,
+) {
+	originalBuildTaprootTxViaNativeSignerFn := buildTaprootTxViaNativeSignerFn
+	t.Cleanup(func() {
+		buildTaprootTxViaNativeSignerFn = originalBuildTaprootTxViaNativeSignerFn
+	})
+	buildTaprootTxViaNativeSignerFn = func(
+		unsignedTx *bitcoin.TransactionBuilder,
+	) (string, error) {
+		return "", nil
+	}
+
+	internalPrivateKeyBytes := mustDecodeHex(
+		t,
+		"0101010101010101010101010101010101010101010101010101010101010101",
+	)
+	_, internalPublicKey := btcec2.PrivKeyFromBytes(internalPrivateKeyBytes)
+
+	var internalKey [32]byte
+	copy(internalKey[:], schnorr.SerializePubKey(internalPublicKey))
+
+	refundLeaf := bitcoin.Script(mustDecodeHex(
+		t,
+		"76a9140102030405060708090a0b0c0d0e0f101112131488ac",
+	))
+	merkleRoot, err := bitcoin.TaprootLeafHash(refundLeaf)
+	if err != nil {
+		t.Fatalf("cannot compute taproot leaf hash: [%v]", err)
+	}
+
+	taprootOutputKey, err := bitcoin.TaprootOutputKey(internalKey, &merkleRoot)
+	if err != nil {
+		t.Fatalf("cannot derive taproot output key: [%v]", err)
+	}
+
+	inputScript, err := bitcoin.PayToTaproot(taprootOutputKey)
+	if err != nil {
+		t.Fatalf("cannot create taproot input script: [%v]", err)
+	}
+
+	var outputPublicKeyHash [20]byte
+	copy(
+		outputPublicKeyHash[:],
+		mustDecodeHex(t, "0202020202020202020202020202020202020202"),
+	)
+	outputScript, err := bitcoin.PayToWitnessPublicKeyHash(outputPublicKeyHash)
+	if err != nil {
+		t.Fatalf("cannot create output script: [%v]", err)
+	}
+
+	localBitcoinChain := newLocalBitcoinChain()
+	fundingTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: bitcoin.Hash{0x10},
+					OutputIndex:     0,
+				},
+				SignatureScript: []byte{0x51},
+				Sequence:        0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: inputScript,
+			},
+		},
+		Locktime: 0,
+	}
+	if err := localBitcoinChain.BroadcastTransaction(fundingTransaction); err != nil {
+		t.Fatalf("cannot broadcast funding transaction: [%v]", err)
+	}
+
+	unsignedTx := bitcoin.NewTransactionBuilder(localBitcoinChain)
+	if err := unsignedTx.AddTaprootKeyPathInputWithMerkleRoot(
+		&bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: fundingTransaction.Hash(),
+				OutputIndex:     0,
+			},
+			Value: 100000,
+		},
+		internalKey,
+		merkleRoot,
+	); err != nil {
+		t.Fatalf("cannot add tweaked taproot input: [%v]", err)
+	}
+	unsignedTx.AddOutput(&bitcoin.TransactionOutput{
+		Value:           90000,
+		PublicKeyScript: outputScript,
+	})
+
+	tweakedPrivateKeyBytes := mustDecodeHex(
+		t,
+		"6ba56a44ff544e35d38fd126659aa68b2c4677a7ebbf7464ad2e9d86c18e1149",
+	)
+	tweakedPrivateKey, _ := btcec2.PrivKeyFromBytes(tweakedPrivateKeyBytes)
+
+	signingExecutor := &taprootMerkleRootRecordingSchnorrSigningExecutor{
+		privateKey: tweakedPrivateKey,
+	}
+
+	wte := &walletTransactionExecutor{
+		executingWallet: generateWallet(big.NewInt(111)),
+		signingExecutor: signingExecutor,
+		waitForBlockFn: func(ctx context.Context, block uint64) error {
+			return nil
+		},
+	}
+
+	tx, err := wte.signTransaction(&warningCaptureLogger{}, unsignedTx, 0, 0)
+	if err != nil {
+		t.Fatalf("unexpected signTransaction error: [%v]", err)
+	}
+
+	if signingExecutor.signBatchCalled {
+		t.Fatal("ordinary signBatch must not be called for tweaked taproot input")
+	}
+
+	if len(signingExecutor.taprootMerkleRoots) != 1 {
+		t.Fatalf(
+			"unexpected taproot merkle root count\nexpected: [%d]\nactual:   [%d]",
+			1,
+			len(signingExecutor.taprootMerkleRoots),
+		)
+	}
+	if signingExecutor.taprootMerkleRoots[0] == nil {
+		t.Fatal("expected taproot merkle root")
+	}
+	if !bytes.Equal(signingExecutor.taprootMerkleRoots[0][:], merkleRoot[:]) {
+		t.Fatalf(
+			"unexpected taproot merkle root\nexpected: [%x]\nactual:   [%x]",
+			merkleRoot,
+			*signingExecutor.taprootMerkleRoots[0],
+		)
+	}
+
+	if len(tx.Inputs) != 1 {
+		t.Fatalf("unexpected input count: [%d]", len(tx.Inputs))
+	}
+	if len(tx.Inputs[0].Witness) != 1 {
+		t.Fatalf("unexpected taproot witness: [%x]", tx.Inputs[0].Witness)
+	}
+	if len(tx.Inputs[0].SignatureScript) != 0 {
+		t.Fatalf(
+			"unexpected signature script for taproot input: [%x]",
+			tx.Inputs[0].SignatureScript,
+		)
+	}
+}
+
 func TestWalletTransactionExecutor_SignTransaction_RejectsMixedTaprootAndLegacyInputsBeforeSigning(
 	t *testing.T,
 ) {
@@ -1462,6 +1616,63 @@ func (dsseft *deterministicSchnorrSigningExecutorForTaproot) signBatch(
 }
 
 func (dsseft *deterministicSchnorrSigningExecutorForTaproot) usesSchnorrSignatures() bool {
+	return true
+}
+
+type taprootMerkleRootRecordingSchnorrSigningExecutor struct {
+	privateKey         *btcec2.PrivateKey
+	signBatchCalled    bool
+	taprootMerkleRoots []*[32]byte
+}
+
+func (tmrrsse *taprootMerkleRootRecordingSchnorrSigningExecutor) signBatch(
+	ctx context.Context,
+	messages []*big.Int,
+	startBlock uint64,
+) ([]*frost.Signature, error) {
+	tmrrsse.signBatchCalled = true
+	return nil, errors.New("unexpected signBatch invocation")
+}
+
+func (tmrrsse *taprootMerkleRootRecordingSchnorrSigningExecutor) signBatchWithTaprootMerkleRoots(
+	ctx context.Context,
+	messages []*big.Int,
+	taprootMerkleRoots []*[32]byte,
+	startBlock uint64,
+) ([]*frost.Signature, error) {
+	tmrrsse.taprootMerkleRoots = make([]*[32]byte, len(taprootMerkleRoots))
+	for i, taprootMerkleRoot := range taprootMerkleRoots {
+		if taprootMerkleRoot == nil {
+			continue
+		}
+
+		tmrrsse.taprootMerkleRoots[i] = new([32]byte)
+		copy(tmrrsse.taprootMerkleRoots[i][:], taprootMerkleRoot[:])
+	}
+
+	signatures := make([]*frost.Signature, 0, len(messages))
+
+	for _, message := range messages {
+		signature, err := schnorr.Sign(
+			tmrrsse.privateKey,
+			message.FillBytes(make([]byte, 32)),
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		serialized := signature.Serialize()
+		frostSignature := &frost.Signature{}
+		copy(frostSignature.R[:], serialized[:32])
+		copy(frostSignature.S[:], serialized[32:])
+
+		signatures = append(signatures, frostSignature)
+	}
+
+	return signatures, nil
+}
+
+func (tmrrsse *taprootMerkleRootRecordingSchnorrSigningExecutor) usesSchnorrSignatures() bool {
 	return true
 }
 
