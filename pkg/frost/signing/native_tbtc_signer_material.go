@@ -15,6 +15,9 @@ const (
 	// run, and is refused by default at signing time. See
 	// `AcceptScaffoldKeyGroupEnvVar` for the opt-in escape hatch.
 	NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey = "legacy-wallet-pubkey"
+	// NativeTBTCSignerKeyGroupSourceDKGPersisted marks key-group material
+	// produced by a FROST wallet DKG and persisted for later signing.
+	NativeTBTCSignerKeyGroupSourceDKGPersisted = "dkg-persisted"
 
 	// AcceptScaffoldKeyGroupEnvVar is the operator-facing opt-in that allows
 	// the FROST tbtc-signer FFI path to accept signer material whose
@@ -27,9 +30,20 @@ const (
 // NativeTBTCSignerMaterialPayload is the signer-material payload schema for
 // `frost-tbtc-signer-v1`.
 type NativeTBTCSignerMaterialPayload struct {
-	KeyGroup                 string `json:"keyGroup"`
-	KeyGroupSource           string `json:"keyGroupSource,omitempty"`
-	LegacyPrivateKeyShareHex string `json:"legacyPrivateKeyShareHex,omitempty"`
+	KeyGroup                 string                           `json:"keyGroup"`
+	TaprootOutputKey         string                           `json:"taprootOutputKey,omitempty"`
+	KeyGroupSource           string                           `json:"keyGroupSource,omitempty"`
+	DKGSeedHex               string                           `json:"dkgSeedHex,omitempty"`
+	DKGParticipants          []NativeTBTCSignerDKGParticipant `json:"dkgParticipants,omitempty"`
+	DKGThreshold             uint16                           `json:"dkgThreshold,omitempty"`
+	LegacyPrivateKeyShareHex string                           `json:"legacyPrivateKeyShareHex,omitempty"`
+}
+
+// NativeTBTCSignerDKGParticipant identifies a DKG participant for coarse
+// tbtc-signer RunDKG operation.
+type NativeTBTCSignerDKGParticipant struct {
+	Identifier   uint16 `json:"identifier"`
+	PublicKeyHex string `json:"publicKeyHex"`
 }
 
 // AcceptScaffoldKeyGroupEnabled reports whether the operator has opted into

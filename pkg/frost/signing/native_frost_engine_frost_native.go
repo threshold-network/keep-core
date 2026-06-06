@@ -71,6 +71,23 @@ type NativeFROSTSigningEngine interface {
 	) ([]byte, error)
 }
 
+// NativeFROSTTaprootTweakedSigningEngine executes BIP-341 tweaked FROST
+// signing operations for Taproot key-path spends that commit to a script tree.
+type NativeFROSTTaprootTweakedSigningEngine interface {
+	SignWithTaprootTweak(
+		signingPackage *NativeFROSTSigningPackage,
+		nonces *NativeFROSTNonces,
+		keyPackage *NativeFROSTKeyPackage,
+		taprootMerkleRoot []byte,
+	) (*NativeFROSTSignatureShare, error)
+	AggregateWithTaprootTweak(
+		signingPackage *NativeFROSTSigningPackage,
+		signatureShares []*NativeFROSTSignatureShare,
+		publicKeyPackage *NativeFROSTPublicKeyPackage,
+		taprootMerkleRoot []byte,
+	) ([]byte, error)
+}
+
 // RegisterNativeFROSTSigningEngine registers the native FROST cryptographic
 // engine used by the tagged native-signing primitive.
 func RegisterNativeFROSTSigningEngine(

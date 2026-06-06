@@ -188,21 +188,23 @@ func newNode(
 		return nil, fmt.Errorf("cannot get node's operator address: [%v]", err)
 	}
 
-	// TODO: This chicken and egg problem should be solved when
-	// waitForBlockHeight becomes a part of BlockHeightWaiter interface.
-	node.dkgExecutor = newDkgExecutor(
-		node.groupParameters,
-		node.operatorID,
-		operatorAddress,
-		chain,
-		netProvider,
-		walletRegistry,
-		latch,
-		config,
-		workPersistence,
-		scheduler,
-		node.waitForBlockHeight,
-	)
+	if shouldRunLegacyECDSA(config) {
+		// TODO: This chicken and egg problem should be solved when
+		// waitForBlockHeight becomes a part of BlockHeightWaiter interface.
+		node.dkgExecutor = newDkgExecutor(
+			node.groupParameters,
+			node.operatorID,
+			operatorAddress,
+			chain,
+			netProvider,
+			walletRegistry,
+			latch,
+			config,
+			workPersistence,
+			scheduler,
+			node.waitForBlockHeight,
+		)
+	}
 
 	return node, nil
 }
@@ -329,6 +331,11 @@ func (n *node) joinDKGIfEligible(
 	startBlock uint64,
 	delayBlocks uint64,
 ) {
+	if n.dkgExecutor == nil {
+		logger.Warnf("legacy ECDSA DKG is disabled; ignoring DKG started event")
+		return
+	}
+
 	n.dkgExecutor.executeDkgIfEligible(seed, startBlock, delayBlocks)
 }
 
@@ -343,6 +350,11 @@ func (n *node) validateDKG(
 	result *DKGChainResult,
 	resultHash [32]byte,
 ) {
+	if n.dkgExecutor == nil {
+		logger.Warnf("legacy ECDSA DKG is disabled; ignoring DKG result")
+		return
+	}
+
 	n.dkgExecutor.executeDkgValidation(seed, submissionBlock, result, resultHash)
 }
 
@@ -1313,7 +1325,7 @@ func (n *node) archiveClosedWallets() error {
 		walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
 
 		var walletID [32]byte
-		var ecdsaWalletID [32]byte
+		var archiveWallet bool
 
 		walletChainData, err := n.chain.GetWallet(walletPublicKeyHash)
 		if err != nil {
@@ -1327,40 +1339,44 @@ func (n *node) archiveClosedWallets() error {
 				)
 			}
 
-			// Legacy fallback for deployments where canonical wallet lookup
-			// is unavailable.
-			ecdsaWalletID = walletID
+			// Legacy fallback for deployments where Bridge wallet state is
+			// unavailable. FROST wallets are registered in the Bridge but not
+			// in the legacy ECDSA wallet registry.
+			isRegistered, err := n.chain.IsWalletRegistered(walletID)
+			if err != nil {
+				return fmt.Errorf(
+					"could not check if wallet is registered for wallet with ECDSA ID "+
+						"[0x%x]: [%v]",
+					walletID,
+					err,
+				)
+			}
+
+			if !isRegistered && n.frostWalletRegistryAvailable() {
+				logger.Infof(
+					"wallet with ECDSA ID [0x%x] and public key hash [0x%x] "+
+						"was not found in Bridge or the legacy ECDSA registry; "+
+						"preserving local key material because FROST wallet "+
+						"registration is available and the wallet may be "+
+						"pending Bridge registration",
+					walletID,
+					walletPublicKeyHash,
+				)
+				continue
+			}
+
+			archiveWallet = !isRegistered
 		} else {
 			walletID = walletChainData.WalletID
 			if walletID == [32]byte{} {
 				walletID = DeriveLegacyWalletID(walletPublicKeyHash)
 			}
 
-			ecdsaWalletID = walletChainData.EcdsaWalletID
-			if ecdsaWalletID == [32]byte{} {
-				ecdsaWalletID, err = n.chain.CalculateWalletID(walletPublicKey)
-				if err != nil {
-					return fmt.Errorf(
-						"could not calculate ECDSA wallet ID for wallet with public key "+
-							"hash [0x%x]: [%v]",
-						walletPublicKeyHash,
-						err,
-					)
-				}
-			}
+			archiveWallet = walletChainData.State == StateClosed ||
+				walletChainData.State == StateTerminated
 		}
 
-		isRegistered, err := n.chain.IsWalletRegistered(ecdsaWalletID)
-		if err != nil {
-			return fmt.Errorf(
-				"could not check if wallet is registered for wallet with ECDSA ID "+
-					"[0x%x]: [%v]",
-				ecdsaWalletID,
-				err,
-			)
-		}
-
-		if !isRegistered {
+		if archiveWallet {
 			// If the wallet is no longer registered it means the wallet has
 			// been closed or terminated.
 			err := n.walletRegistry.archiveWallet(walletPublicKeyHash)
@@ -1382,6 +1398,16 @@ func (n *node) archiveClosedWallets() error {
 	}
 
 	return nil
+}
+
+type frostWalletRegistryAvailability interface {
+	FrostWalletRegistryAvailable() bool
+}
+
+func (n *node) frostWalletRegistryAvailable() bool {
+	frostChain, ok := n.chain.(frostWalletRegistryAvailability)
+
+	return ok && frostChain.FrostWalletRegistryAvailable()
 }
 
 // handleWalletClosure handles the wallet termination or closing process.

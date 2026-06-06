@@ -6,6 +6,7 @@ package ethereum
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,6 +67,9 @@ func TestBaseChain_GetBlockNumberByTimestamp(t *testing.T) {
 	for testName, test := range tests {
 		t.Run(testName, func(t *testing.T) {
 			blockNumber, err := bc.GetBlockNumberByTimestamp(test.timestamp)
+			if isProviderRateLimitError(err) {
+				t.Skipf("skipping test due to Ethereum provider rate limit: [%v]", err)
+			}
 
 			if !reflect.DeepEqual(err, test.expectedError) {
 				t.Errorf(
@@ -83,4 +87,8 @@ func TestBaseChain_GetBlockNumberByTimestamp(t *testing.T) {
 			)
 		})
 	}
+}
+
+func isProviderRateLimitError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "429 Too Many Requests")
 }

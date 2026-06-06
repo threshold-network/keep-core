@@ -317,6 +317,20 @@ func initTbtcFlags(cmd *cobra.Command, cfg *config.Config) {
 			"`native` allows transitional legacy fallback; `ffi` requires native execution. "+
 			"Empty value selects legacy.",
 	)
+
+	cmd.Flags().BoolVar(
+		&cfg.Tbtc.DisableLegacyECDSA,
+		"tbtc.disableLegacyECDSA",
+		false,
+		"Disable legacy ECDSA wallet DKG and pre-params generation for FROST-only deployments.",
+	)
+
+	cmd.Flags().BoolVar(
+		&cfg.Tbtc.DisableLegacySortitionPoolMonitoring,
+		"tbtc.disableLegacySortitionPoolMonitoring",
+		false,
+		"Disable legacy ECDSA sortition pool monitoring for FROST-only deployments.",
+	)
 }
 
 // Initialize flags for Maintainer configuration.

@@ -72,6 +72,15 @@ type Config struct {
 	// execution is unavailable. `ffi` requires native execution and does not
 	// allow fallback.
 	FrostSigningBackend string
+	// DisableLegacyECDSA skips legacy ECDSA wallet DKG handling and pre-params
+	// generation. This is intended for FROST-only deployments where wallet
+	// creation and signing are handled by the FROST registry and signer.
+	DisableLegacyECDSA bool
+	// DisableLegacySortitionPoolMonitoring skips monitoring and auto-joining
+	// the legacy ECDSA sortition pool. This is intended for FROST-only
+	// deployments where operators are authorized through FrostAllowlist and no
+	// longer have TokenStaking-backed ECDSA operator state.
+	DisableLegacySortitionPoolMonitoring bool
 }
 
 // Initialize kicks off the TBTC by initializing internal state, ensuring
@@ -128,6 +137,10 @@ func Initialize(
 			"tbtc",
 			map[string]clientinfo.Source{
 				"pre_params_count": func() float64 {
+					if node.dkgExecutor == nil {
+						return 0
+					}
+
 					return float64(node.dkgExecutor.preParamsCount())
 				},
 			},
@@ -158,147 +171,155 @@ func Initialize(
 		)
 	}
 
-	err = sortition.MonitorPool(
-		ctx,
-		logger,
-		chain,
-		sortition.DefaultStatusCheckTick,
-		sortition.NewConjunctionPolicy(
-			sortition.NewBetaOperatorPolicy(chain, logger),
-			&enoughPreParamsInPoolPolicy{
-				node:   node,
-				config: config,
-			},
-		),
-	)
-	if err != nil {
-		return fmt.Errorf(
-			"could not set up sortition pool monitoring: [%v]",
-			err,
+	if shouldMonitorLegacySortitionPool(config) {
+		err = sortition.MonitorPool(
+			ctx,
+			logger,
+			chain,
+			sortition.DefaultStatusCheckTick,
+			sortition.NewConjunctionPolicy(
+				sortition.NewBetaOperatorPolicy(chain, logger),
+				&enoughPreParamsInPoolPolicy{
+					node:   node,
+					config: config,
+				},
+			),
 		)
+		if err != nil {
+			return fmt.Errorf(
+				"could not set up sortition pool monitoring: [%v]",
+				err,
+			)
+		}
+	} else {
+		logger.Infof("legacy ECDSA sortition pool monitoring disabled")
 	}
 
-	_ = chain.OnDKGStarted(func(event *DKGStartedEvent) {
-		go func() {
-			if ok := deduplicator.notifyDKGStarted(
-				event.Seed,
-			); !ok {
-				logger.Infof(
-					"DKG started event with seed [0x%x] has been "+
-						"already processed",
+	if shouldRunLegacyECDSA(config) {
+		_ = chain.OnDKGStarted(func(event *DKGStartedEvent) {
+			go func() {
+				if ok := deduplicator.notifyDKGStarted(
 					event.Seed,
-				)
-				return
-			}
-
-			confirmationBlock := event.BlockNumber + dkgStartedConfirmationBlocks
-
-			logger.Infof(
-				"observed DKG started event with seed [0x%x] and "+
-					"starting block [%v]; waiting for block [%v] to confirm",
-				event.Seed,
-				event.BlockNumber,
-				confirmationBlock,
-			)
-
-			err := node.waitForBlockHeight(ctx, confirmationBlock)
-			if err != nil {
-				logger.Errorf("failed to confirm DKG started event: [%v]", err)
-				return
-			}
-
-			dkgState, err := chain.GetDKGState()
-			if err != nil {
-				logger.Errorf("failed to check DKG state: [%v]", err)
-				return
-			}
-
-			if dkgState == AwaitingResult {
-				// Fetch all past DKG started events starting from one
-				// confirmation period before the original event's block.
-				// If there was a chain reorg, the event we received could be
-				// moved to a block with a lower number than the one
-				// we received.
-				pastEvents, err := chain.PastDKGStartedEvents(
-					&DKGStartedEventFilter{
-						StartBlock: event.BlockNumber - dkgStartedConfirmationBlocks,
-					},
-				)
-				if err != nil {
-					logger.Errorf("failed to get past DKG started events: [%v]", err)
+				); !ok {
+					logger.Infof(
+						"DKG started event with seed [0x%x] has been "+
+							"already processed",
+						event.Seed,
+					)
 					return
 				}
 
-				// Should not happen but just in case.
-				if len(pastEvents) == 0 {
-					logger.Errorf("no past DKG started events")
-					return
-				}
-
-				lastEvent := pastEvents[len(pastEvents)-1]
+				confirmationBlock := event.BlockNumber + dkgStartedConfirmationBlocks
 
 				logger.Infof(
-					"DKG started with seed [0x%x] at block [%v]",
-					lastEvent.Seed,
-					lastEvent.BlockNumber,
-				)
-
-				// The off-chain protocol should be started as close as possible
-				// to the current block or even further. Starting the off-chain
-				// protocol with a past block will likely cause a failure of the
-				// first attempt as the start block is used to synchronize
-				// the announcements and the state machine. Here we ensure
-				// a proper start point by delaying the execution by the
-				// confirmation period length.
-				node.joinDKGIfEligible(
-					lastEvent.Seed,
-					lastEvent.BlockNumber,
-					dkgStartedConfirmationBlocks,
-				)
-			} else {
-				logger.Infof(
-					"DKG started event with seed [0x%x] and starting "+
-						"block [%v] was not confirmed",
+					"observed DKG started event with seed [0x%x] and "+
+						"starting block [%v]; waiting for block [%v] to confirm",
 					event.Seed,
 					event.BlockNumber,
+					confirmationBlock,
 				)
-			}
-		}()
-	})
 
-	_ = chain.OnDKGResultSubmitted(func(event *DKGResultSubmittedEvent) {
-		go func() {
-			if ok := deduplicator.notifyDKGResultSubmitted(
-				event.Seed,
-				event.ResultHash,
-				event.BlockNumber,
-			); !ok {
-				logger.Warnf(
+				err := node.waitForBlockHeight(ctx, confirmationBlock)
+				if err != nil {
+					logger.Errorf("failed to confirm DKG started event: [%v]", err)
+					return
+				}
+
+				dkgState, err := chain.GetDKGState()
+				if err != nil {
+					logger.Errorf("failed to check DKG state: [%v]", err)
+					return
+				}
+
+				if dkgState == AwaitingResult {
+					// Fetch all past DKG started events starting from one
+					// confirmation period before the original event's block.
+					// If there was a chain reorg, the event we received could be
+					// moved to a block with a lower number than the one
+					// we received.
+					pastEvents, err := chain.PastDKGStartedEvents(
+						&DKGStartedEventFilter{
+							StartBlock: event.BlockNumber - dkgStartedConfirmationBlocks,
+						},
+					)
+					if err != nil {
+						logger.Errorf("failed to get past DKG started events: [%v]", err)
+						return
+					}
+
+					// Should not happen but just in case.
+					if len(pastEvents) == 0 {
+						logger.Errorf("no past DKG started events")
+						return
+					}
+
+					lastEvent := pastEvents[len(pastEvents)-1]
+
+					logger.Infof(
+						"DKG started with seed [0x%x] at block [%v]",
+						lastEvent.Seed,
+						lastEvent.BlockNumber,
+					)
+
+					// The off-chain protocol should be started as close as possible
+					// to the current block or even further. Starting the off-chain
+					// protocol with a past block will likely cause a failure of the
+					// first attempt as the start block is used to synchronize
+					// the announcements and the state machine. Here we ensure
+					// a proper start point by delaying the execution by the
+					// confirmation period length.
+					node.joinDKGIfEligible(
+						lastEvent.Seed,
+						lastEvent.BlockNumber,
+						dkgStartedConfirmationBlocks,
+					)
+				} else {
+					logger.Infof(
+						"DKG started event with seed [0x%x] and starting "+
+							"block [%v] was not confirmed",
+						event.Seed,
+						event.BlockNumber,
+					)
+				}
+			}()
+		})
+
+		_ = chain.OnDKGResultSubmitted(func(event *DKGResultSubmittedEvent) {
+			go func() {
+				if ok := deduplicator.notifyDKGResultSubmitted(
+					event.Seed,
+					event.ResultHash,
+					event.BlockNumber,
+				); !ok {
+					logger.Warnf(
+						"Result with hash [0x%x] for DKG with seed [0x%x] "+
+							"and starting block [%v] has been already processed",
+						event.ResultHash,
+						event.Seed,
+						event.BlockNumber,
+					)
+					return
+				}
+
+				logger.Infof(
 					"Result with hash [0x%x] for DKG with seed [0x%x] "+
-						"and starting block [%v] has been already processed",
+						"submitted at block [%v]",
 					event.ResultHash,
 					event.Seed,
 					event.BlockNumber,
 				)
-				return
-			}
 
-			logger.Infof(
-				"Result with hash [0x%x] for DKG with seed [0x%x] "+
-					"submitted at block [%v]",
-				event.ResultHash,
-				event.Seed,
-				event.BlockNumber,
-			)
-
-			node.validateDKG(
-				event.Seed,
-				event.BlockNumber,
-				event.Result,
-				event.ResultHash,
-			)
-		}()
-	})
+				node.validateDKG(
+					event.Seed,
+					event.BlockNumber,
+					event.Result,
+					event.ResultHash,
+				)
+			}()
+		})
+	} else {
+		logger.Infof("legacy ECDSA wallet DKG disabled")
+	}
 
 	_ = chain.OnWalletClosed(func(event *WalletClosedEvent) {
 		go func() {
@@ -335,6 +356,15 @@ func Initialize(
 	})
 
 	return nil
+}
+
+func shouldMonitorLegacySortitionPool(config Config) bool {
+	return shouldRunLegacyECDSA(config) &&
+		!config.DisableLegacySortitionPoolMonitoring
+}
+
+func shouldRunLegacyECDSA(config Config) bool {
+	return !config.DisableLegacyECDSA
 }
 
 // enoughPreParamsInPoolPolicy is a policy that enforces the sufficient size

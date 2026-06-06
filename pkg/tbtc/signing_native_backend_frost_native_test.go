@@ -215,7 +215,10 @@ func (atntsfe *attemptTrackingNativeTBTCSignerEngineForTBTC) StartSignRound(
 	message []byte,
 	keyGroup string,
 	signingParticipants []uint16,
+	taprootMerkleRoot *[32]byte,
 ) (*frostsigning.NativeTBTCSignerRoundState, error) {
+	_ = taprootMerkleRoot
+
 	attemptNumber, err := attemptNumberFromSessionIDForTBTC(sessionID)
 	if err != nil {
 		return nil, err
@@ -265,7 +268,10 @@ func (atntsfe *attemptTrackingNativeTBTCSignerEngineForTBTC) StartSignRound(
 func (atntsfe *attemptTrackingNativeTBTCSignerEngineForTBTC) FinalizeSignRound(
 	sessionID string,
 	roundContributions []frostsigning.NativeTBTCSignerRoundContribution,
+	taprootMerkleRoot *[32]byte,
 ) ([]byte, error) {
+	_ = taprootMerkleRoot
+
 	if _, err := attemptNumberFromSessionIDForTBTC(sessionID); err != nil {
 		return nil, err
 	}

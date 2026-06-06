@@ -94,7 +94,7 @@ func (tb *TransactionBuilder) AddPublicKeyHashInput(
 		)
 	}
 
-	return tb.addDirectKeySpendInput(utxo, utxoScript, scriptType)
+	return tb.addDirectKeySpendInput(utxo, utxoScript, scriptType, nil)
 }
 
 // AddTaprootKeyPathInput adds an unsigned input pointing to a UTXO locked
@@ -123,13 +123,80 @@ func (tb *TransactionBuilder) AddTaprootKeyPathInput(
 		)
 	}
 
-	return tb.addDirectKeySpendInput(utxo, utxoScript, scriptType)
+	return tb.addDirectKeySpendInput(utxo, utxoScript, scriptType, nil)
+}
+
+// AddTaprootKeyPathInputWithMerkleRoot adds an unsigned input pointing to a
+// UTXO locked using a BIP-341 tweaked P2TR output key and intended to be spent
+// using the Taproot key path.
+//
+// The provided internal key and script merkle root must derive the output key
+// committed to by the UTXO script. The merkle root is retained as signing
+// metadata so the FROST signer can produce a key-path signature under the same
+// Taproot tweak.
+func (tb *TransactionBuilder) AddTaprootKeyPathInputWithMerkleRoot(
+	utxo *UnspentTransactionOutput,
+	internalKey [32]byte,
+	merkleRoot [32]byte,
+) error {
+	utxoScript, err := tb.getScript(utxo)
+	if err != nil {
+		return fmt.Errorf(
+			"cannot get locking script for UTXO pointed "+
+				"by the input: [%v]",
+			err,
+		)
+	}
+
+	scriptType := GetScriptType(utxoScript)
+	if scriptType != P2TRScript {
+		return fmt.Errorf(
+			"UTXO pointed by the input is not P2TR",
+		)
+	}
+
+	outputKey, err := ExtractTaprootKey(utxoScript)
+	if err != nil {
+		return fmt.Errorf("cannot extract taproot output key: [%v]", err)
+	}
+
+	expectedOutputKey, err := TaprootOutputKey(internalKey, &merkleRoot)
+	if err != nil {
+		return fmt.Errorf("cannot derive taproot output key: [%v]", err)
+	}
+
+	if !bytes.Equal(outputKey[:], expectedOutputKey[:]) {
+		return fmt.Errorf(
+			"taproot output key does not match internal key and merkle root",
+		)
+	}
+
+	return tb.addDirectKeySpendInput(utxo, utxoScript, scriptType, &merkleRoot)
+}
+
+// TaprootKeyPathInputMerkleRoots returns per-input Taproot script merkle roots
+// retained by the builder. The returned slice is aligned with transaction
+// inputs. Non-Taproot inputs and untweaked Taproot inputs have nil entries.
+func (tb *TransactionBuilder) TaprootKeyPathInputMerkleRoots() []*[32]byte {
+	merkleRoots := make([]*[32]byte, len(tb.sigHashArgs))
+
+	for i, sigHashArgs := range tb.sigHashArgs {
+		if sigHashArgs.taprootMerkleRoot == nil {
+			continue
+		}
+
+		merkleRoots[i] = new([32]byte)
+		copy(merkleRoots[i][:], sigHashArgs.taprootMerkleRoot[:])
+	}
+
+	return merkleRoots
 }
 
 func (tb *TransactionBuilder) addDirectKeySpendInput(
 	utxo *UnspentTransactionOutput,
 	utxoScript Script,
 	scriptType ScriptType,
+	taprootMerkleRoot *[32]byte,
 ) error {
 	// The UTXO was locked using a direct key-spend script, so the scriptCode
 	// required to build the sighash is equivalent to that script. Worth noting
@@ -138,11 +205,12 @@ func (tb *TransactionBuilder) addDirectKeySpendInput(
 	// https://github.com/bitcoin/bips/blob/master/bip-0143.mediawiki#specification.
 	// That conversion is handled within the `txscript.CalcWitnessSigHash` call.
 	sigHashArgs := &inputSigHashArgs{
-		value:           utxo.Value,
-		publicKeyScript: utxoScript,
-		scriptCode:      utxoScript,
-		scriptType:      scriptType,
-		witness:         scriptType == P2WPKHScript || scriptType == P2TRScript,
+		value:             utxo.Value,
+		publicKeyScript:   utxoScript,
+		scriptCode:        utxoScript,
+		scriptType:        scriptType,
+		taprootMerkleRoot: taprootMerkleRoot,
+		witness:           scriptType == P2WPKHScript || scriptType == P2TRScript,
 	}
 
 	hash := chainhash.Hash(utxo.Outpoint.TransactionHash)
@@ -900,6 +968,10 @@ type inputSigHashArgs struct {
 	// scriptType denotes the locking script type of the UTXO pointed by the
 	// given input.
 	scriptType ScriptType
+	// taprootMerkleRoot denotes the BIP-341 script merkle root used to tweak
+	// the P2TR input's output key. It is nil for untweaked P2TR inputs and
+	// non-Taproot inputs.
+	taprootMerkleRoot *[32]byte
 	// witness denotes whether the given input point's to a UTXO locked using
 	// a witness script.
 	witness bool

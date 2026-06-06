@@ -292,6 +292,15 @@ type walletSigningExecutor interface {
 	) ([]*frost.Signature, error)
 }
 
+type taprootTweakedWalletSigningExecutor interface {
+	signBatchWithTaprootMerkleRoots(
+		ctx context.Context,
+		messages []*big.Int,
+		taprootMerkleRoots []*[32]byte,
+		startBlock uint64,
+	) ([]*frost.Signature, error)
+}
+
 // walletTransactionExecutor is a component allowing to sign and broadcast
 // wallet Bitcoin transactions.
 type walletTransactionExecutor struct {
@@ -400,11 +409,29 @@ func (wte *walletTransactionExecutor) signTransaction(
 	)
 	defer cancelSigningCtx()
 
-	signatures, err := wte.signingExecutor.signBatch(
-		signingCtx,
-		sigHashes,
-		signingStartBlock,
-	)
+	var signatures []*frost.Signature
+	taprootMerkleRoots := unsignedTx.TaprootKeyPathInputMerkleRoots()
+	if hasTaprootMerkleRoots(taprootMerkleRoots) {
+		tweakedSigningExecutor, ok := wte.signingExecutor.(taprootTweakedWalletSigningExecutor)
+		if !ok {
+			return nil, fmt.Errorf(
+				"taproot tweaked signing requires signer support",
+			)
+		}
+
+		signatures, err = tweakedSigningExecutor.signBatchWithTaprootMerkleRoots(
+			signingCtx,
+			sigHashes,
+			taprootMerkleRoots,
+			signingStartBlock,
+		)
+	} else {
+		signatures, err = wte.signingExecutor.signBatch(
+			signingCtx,
+			sigHashes,
+			signingStartBlock,
+		)
+	}
 	if err != nil {
 		return nil, fmt.Errorf(
 			"error while signing transaction's sig hashes: [%v]",
@@ -459,6 +486,16 @@ func (wte *walletTransactionExecutor) signTransaction(
 	signTxLogger.Infof("transaction created successfully")
 
 	return tx, nil
+}
+
+func hasTaprootMerkleRoots(taprootMerkleRoots []*[32]byte) bool {
+	for _, merkleRoot := range taprootMerkleRoots {
+		if merkleRoot != nil {
+			return true
+		}
+	}
+
+	return false
 }
 
 func nativeBuildTaprootTxSigningSubstitutionEnabled() bool {
@@ -907,6 +944,48 @@ func DetermineWalletMainUtxo(
 	bridgeChain BridgeChain,
 	btcChain bitcoin.Chain,
 ) (*bitcoin.UnspentTransactionOutput, error) {
+	walletScripts, err := legacyWalletPublicKeyScripts(walletPublicKeyHash)
+	if err != nil {
+		return nil, err
+	}
+
+	return determineWalletMainUtxo(
+		walletPublicKeyHash,
+		walletScripts,
+		bridgeChain,
+		btcChain,
+	)
+}
+
+// DetermineWalletMainUtxoForPublicKey determines the plain-text wallet main
+// UTXO currently registered in the Bridge on-chain contract. Unlike
+// DetermineWalletMainUtxo, this variant can discover Taproot wallet outputs.
+func DetermineWalletMainUtxoForPublicKey(
+	walletPublicKey *ecdsa.PublicKey,
+	bridgeChain BridgeChain,
+	btcChain bitcoin.Chain,
+) (*bitcoin.UnspentTransactionOutput, error) {
+	walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
+
+	walletScripts, err := walletPublicKeyScripts(walletPublicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return determineWalletMainUtxo(
+		walletPublicKeyHash,
+		walletScripts,
+		bridgeChain,
+		btcChain,
+	)
+}
+
+func determineWalletMainUtxo(
+	walletPublicKeyHash [20]byte,
+	walletScripts []bitcoin.Script,
+	bridgeChain BridgeChain,
+	btcChain bitcoin.Chain,
+) (*bitcoin.UnspentTransactionOutput, error) {
 	walletChainData, err := bridgeChain.GetWallet(walletPublicKeyHash)
 	if err != nil {
 		return nil, fmt.Errorf("cannot get on-chain data for wallet: [%v]", err)
@@ -930,18 +1009,13 @@ func DetermineWalletMainUtxo(
 	// fetch full transaction data (time-consuming calls) starting from
 	// the most recent transactions as there is a high chance the main UTXO
 	// comes from there.
-	txHashes, err := btcChain.GetTxHashesForPublicKeyHash(walletPublicKeyHash)
+	txHashes, err := getTxHashesForWalletScripts(
+		btcChain,
+		walletPublicKeyHash,
+		walletScripts,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("cannot get transactions history for wallet: [%v]", err)
-	}
-
-	walletP2PKH, err := bitcoin.PayToPublicKeyHash(walletPublicKeyHash)
-	if err != nil {
-		return nil, fmt.Errorf("cannot construct P2PKH for wallet: [%v]", err)
-	}
-	walletP2WPKH, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
-	if err != nil {
-		return nil, fmt.Errorf("cannot construct P2WPKH for wallet: [%v]", err)
 	}
 
 	// Start iterating from the latest transaction as the chance it matches
@@ -962,8 +1036,7 @@ func DetermineWalletMainUtxo(
 		// the wallet public key hash.
 		for outputIndex, output := range transaction.Outputs {
 			script := output.PublicKeyScript
-			matchesWallet := bytes.Equal(script, walletP2PKH) ||
-				bytes.Equal(script, walletP2WPKH)
+			matchesWallet := scriptMatchesAny(script, walletScripts)
 
 			// Once the right output is found, check whether their hash
 			// matches the main UTXO hash stored on-chain. If so, this
@@ -996,10 +1069,62 @@ func EnsureWalletSyncedBetweenChains(
 	bridgeChain BridgeChain,
 	btcChain bitcoin.Chain,
 ) error {
+	walletScripts, err := legacyWalletPublicKeyScripts(walletPublicKeyHash)
+	if err != nil {
+		return err
+	}
+
+	return ensureWalletSyncedBetweenChains(
+		walletPublicKeyHash,
+		walletScripts,
+		walletMainUtxo,
+		bridgeChain,
+		btcChain,
+	)
+}
+
+// EnsureWalletSyncedBetweenChainsForPublicKey makes sure all actions taken by
+// the wallet on the Bitcoin chain are reflected in the host chain Bridge.
+// Unlike EnsureWalletSyncedBetweenChains, this variant can discover Taproot
+// wallet outputs.
+func EnsureWalletSyncedBetweenChainsForPublicKey(
+	walletPublicKey *ecdsa.PublicKey,
+	walletMainUtxo *bitcoin.UnspentTransactionOutput,
+	bridgeChain BridgeChain,
+	btcChain bitcoin.Chain,
+) error {
+	walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
+
+	walletScripts, err := walletPublicKeyScripts(walletPublicKey)
+	if err != nil {
+		return err
+	}
+
+	return ensureWalletSyncedBetweenChains(
+		walletPublicKeyHash,
+		walletScripts,
+		walletMainUtxo,
+		bridgeChain,
+		btcChain,
+	)
+}
+
+func ensureWalletSyncedBetweenChains(
+	walletPublicKeyHash [20]byte,
+	walletScripts []bitcoin.Script,
+	walletMainUtxo *bitcoin.UnspentTransactionOutput,
+	bridgeChain BridgeChain,
+	btcChain bitcoin.Chain,
+) error {
 	// Take UTXOs controlled by the wallet on Bitcoin chain. Those are outputs
 	// coming from confirmed transactions, ready to be spent right now, and
 	// not used as inputs of other (either confirmed or mempool) transactions.
-	confirmedUtxos, err := btcChain.GetUtxosForPublicKeyHash(walletPublicKeyHash)
+	confirmedUtxos, err := getUtxosForWalletScripts(
+		btcChain,
+		walletPublicKeyHash,
+		walletScripts,
+		true,
+	)
 	if err != nil {
 		return fmt.Errorf("cannot get confirmed UTXOs: [%v]", err)
 	}
@@ -1046,7 +1171,12 @@ func EnsureWalletSyncedBetweenChains(
 		// to the wallet address. We need to look at the confirmed and mempool
 		// UTXOs and make sure there are no transactions produced by the wallet
 		// there.
-		mempoolUtxos, err := btcChain.GetMempoolUtxosForPublicKeyHash(walletPublicKeyHash)
+		mempoolUtxos, err := getUtxosForWalletScripts(
+			btcChain,
+			walletPublicKeyHash,
+			walletScripts,
+			false,
+		)
 		if err != nil {
 			return fmt.Errorf("cannot get mempool UTXOs: [%v]", err)
 		}
@@ -1151,6 +1281,100 @@ func EnsureWalletSyncedBetweenChains(
 
 		return nil
 	}
+}
+
+type walletPublicKeyScriptsChain interface {
+	GetTxHashesForPublicKeyScripts(
+		publicKeyScripts []bitcoin.Script,
+	) ([]bitcoin.Hash, error)
+	GetUtxosForPublicKeyScripts(
+		publicKeyScripts []bitcoin.Script,
+	) ([]*bitcoin.UnspentTransactionOutput, error)
+	GetMempoolUtxosForPublicKeyScripts(
+		publicKeyScripts []bitcoin.Script,
+	) ([]*bitcoin.UnspentTransactionOutput, error)
+}
+
+func legacyWalletPublicKeyScripts(
+	walletPublicKeyHash [20]byte,
+) ([]bitcoin.Script, error) {
+	walletP2PKH, err := bitcoin.PayToPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		return nil, fmt.Errorf("cannot construct P2PKH for wallet: [%v]", err)
+	}
+
+	walletP2WPKH, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		return nil, fmt.Errorf("cannot construct P2WPKH for wallet: [%v]", err)
+	}
+
+	return []bitcoin.Script{walletP2PKH, walletP2WPKH}, nil
+}
+
+func walletPublicKeyScripts(
+	walletPublicKey *ecdsa.PublicKey,
+) ([]bitcoin.Script, error) {
+	walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
+
+	walletScripts, err := legacyWalletPublicKeyScripts(walletPublicKeyHash)
+	if err != nil {
+		return nil, err
+	}
+
+	xOnlyPublicKey, err := walletXOnlyPublicKey(walletPublicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	walletP2TR, err := bitcoin.PayToTaproot(xOnlyPublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("cannot construct P2TR for wallet: [%v]", err)
+	}
+
+	return append(walletScripts, walletP2TR), nil
+}
+
+func getTxHashesForWalletScripts(
+	btcChain bitcoin.Chain,
+	walletPublicKeyHash [20]byte,
+	walletScripts []bitcoin.Script,
+) ([]bitcoin.Hash, error) {
+	if scriptChain, ok := btcChain.(walletPublicKeyScriptsChain); ok {
+		return scriptChain.GetTxHashesForPublicKeyScripts(walletScripts)
+	}
+
+	return btcChain.GetTxHashesForPublicKeyHash(walletPublicKeyHash)
+}
+
+func getUtxosForWalletScripts(
+	btcChain bitcoin.Chain,
+	walletPublicKeyHash [20]byte,
+	walletScripts []bitcoin.Script,
+	confirmed bool,
+) ([]*bitcoin.UnspentTransactionOutput, error) {
+	if scriptChain, ok := btcChain.(walletPublicKeyScriptsChain); ok {
+		if confirmed {
+			return scriptChain.GetUtxosForPublicKeyScripts(walletScripts)
+		}
+
+		return scriptChain.GetMempoolUtxosForPublicKeyScripts(walletScripts)
+	}
+
+	if confirmed {
+		return btcChain.GetUtxosForPublicKeyHash(walletPublicKeyHash)
+	}
+
+	return btcChain.GetMempoolUtxosForPublicKeyHash(walletPublicKeyHash)
+}
+
+func scriptMatchesAny(script bitcoin.Script, scripts []bitcoin.Script) bool {
+	for _, candidate := range scripts {
+		if bytes.Equal(script, candidate) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // signer represents a threshold signer of a tBTC wallet. A signer holds

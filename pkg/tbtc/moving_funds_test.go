@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -223,6 +224,63 @@ func TestAssembleMovingFundsTransaction(t *testing.T) {
 				transaction.WitnessHash().Hex(bitcoin.InternalByteOrder),
 			)
 		})
+	}
+}
+
+func TestAssembleMovingFundsTransaction_RejectsTaprootWalletMainUtxo(
+	t *testing.T,
+) {
+	var taprootOutputKey [32]byte
+	taprootOutputKey[31] = 1
+
+	taprootScript, err := bitcoin.PayToTaproot(taprootOutputKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fundingTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: bitcoin.Hash{},
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: taprootScript,
+			},
+		},
+	}
+
+	bitcoinChain := newLocalBitcoinChain()
+	if err := bitcoinChain.BroadcastTransaction(fundingTx); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = assembleMovingFundsTransaction(
+		bitcoinChain,
+		&bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: fundingTx.Hash(),
+				OutputIndex:     0,
+			},
+			Value: 100000,
+		},
+		[][20]byte{
+			hexToByte20("c7302d75072d78be94eb8d36c4b77583c7abb06e"),
+		},
+		1000,
+	)
+	if err == nil {
+		t.Fatal("expected Taproot moving-funds main UTXO rejection")
+	}
+	if !strings.Contains(err.Error(), "Taproot moving-funds main UTXOs") {
+		t.Fatalf("unexpected error: [%v]", err)
 	}
 }
 

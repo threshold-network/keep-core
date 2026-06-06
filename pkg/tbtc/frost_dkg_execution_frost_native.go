@@ -5,11 +5,15 @@ package tbtc
 import (
 	"context"
 	"crypto/ecdsa"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"math/big"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"go.uber.org/zap"
 
+	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/frost/registry"
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
@@ -29,11 +33,12 @@ func executeFrostDKGIfPossible(
 	memberIndexes []group.MemberIndex,
 	groupSelectionResult *GroupSelectionResult,
 ) {
-	engine := frostsigning.CurrentNativeFROSTDKGEngine()
-	if engine == nil {
+	nativeFROSTDKGEngine := frostsigning.CurrentNativeFROSTDKGEngine()
+	nativeTBTCSignerEngine := frostsigning.CurrentNativeTBTCSignerEngine()
+	if nativeFROSTDKGEngine == nil && nativeTBTCSignerEngine == nil {
 		logger.Infof(
 			"FROST DKG with seed [0x%x] selected this operator as member "+
-				"indexes [%v], but no native FROST DKG engine is registered",
+				"indexes [%v], but no native FROST DKG or tbtc-signer engine is registered",
 			event.Seed,
 			memberIndexes,
 		)
@@ -126,28 +131,29 @@ func executeFrostDKGIfPossible(
 				return
 			}
 
-			nativeResult, err := frostsigning.ExecuteNativeFROSTDKG(
+			executionResult, err := executeFrostDKG(
 				dkgCtx,
 				dkgLogger,
-				&frostsigning.NativeFROSTDKGRequest{
-					MemberIndex:            memberIndex,
-					GroupSize:              len(groupSelectionResult.OperatorsIDs),
-					Threshold:              signatureThreshold,
-					SessionID:              sessionID,
-					IncludedMembersIndexes: activeMemberIndexes,
-					Channel:                channel,
-					MembershipValidator:    membershipValidator,
-				},
-				engine,
+				nativeFROSTDKGEngine,
+				nativeTBTCSignerEngine,
+				event,
+				memberIndex,
+				activeMemberIndexes,
+				groupSelectionResult,
+				signatureThreshold,
+				sessionID,
+				channel,
+				membershipValidator,
 			)
 			if err != nil {
-				dkgLogger.Errorf("native FROST DKG execution failed: [%v]", err)
+				dkgLogger.Errorf("FROST DKG execution failed: [%v]", err)
 				return
 			}
 
-			if err := registerFrostSigner(
+			if err := registerFrostSignerWithMaterial(
 				node,
-				nativeResult,
+				executionResult.outputKey,
+				executionResult.signerMaterial,
 				memberIndex,
 				activeMemberIndexes,
 				groupSelectionResult,
@@ -156,15 +162,9 @@ func executeFrostDKGIfPossible(
 				return
 			}
 
-			outputKey, err := outputKeyFromNativeDKGResult(nativeResult)
-			if err != nil {
-				dkgLogger.Errorf("failed to extract FROST DKG output key: [%v]", err)
-				return
-			}
-
 			unsignedResult, err := registry.AssembleResult(
 				uint64(submitterMemberIndex),
-				outputKey,
+				executionResult.outputKey,
 				fullMembers,
 				misbehavedMembersIndices,
 				nil,
@@ -225,6 +225,215 @@ func executeFrostDKGIfPossible(
 			}
 		}()
 	}
+}
+
+type frostDKGExecutionResult struct {
+	outputKey      frost.OutputKey
+	signerMaterial *frostsigning.NativeSignerMaterial
+}
+
+func executeFrostDKG(
+	ctx context.Context,
+	logger log.StandardLogger,
+	nativeFROSTDKGEngine frostsigning.NativeFROSTDKGEngine,
+	nativeTBTCSignerEngine frostsigning.NativeTBTCSignerEngine,
+	event *FrostDKGStartedEvent,
+	memberIndex group.MemberIndex,
+	activeMemberIndexes []group.MemberIndex,
+	groupSelectionResult *GroupSelectionResult,
+	signatureThreshold int,
+	sessionID string,
+	channel net.BroadcastChannel,
+	membershipValidator *group.MembershipValidator,
+) (*frostDKGExecutionResult, error) {
+	if nativeFROSTDKGEngine != nil {
+		nativeResult, err := frostsigning.ExecuteNativeFROSTDKG(
+			ctx,
+			logger,
+			&frostsigning.NativeFROSTDKGRequest{
+				MemberIndex:            memberIndex,
+				GroupSize:              len(groupSelectionResult.OperatorsIDs),
+				Threshold:              signatureThreshold,
+				SessionID:              sessionID,
+				IncludedMembersIndexes: activeMemberIndexes,
+				Channel:                channel,
+				MembershipValidator:    membershipValidator,
+			},
+			nativeFROSTDKGEngine,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("native FROST DKG execution failed: [%w]", err)
+		}
+
+		signerMaterial, err := nativeResult.SignerMaterial()
+		if err != nil {
+			return nil, err
+		}
+
+		outputKey, err := outputKeyFromNativeDKGResult(nativeResult)
+		if err != nil {
+			return nil, err
+		}
+
+		return &frostDKGExecutionResult{
+			outputKey:      outputKey,
+			signerMaterial: signerMaterial,
+		}, nil
+	}
+
+	return executeTBTCSignerFROSTDKG(
+		nativeTBTCSignerEngine,
+		event,
+		activeMemberIndexes,
+		signatureThreshold,
+		sessionID,
+	)
+}
+
+func executeTBTCSignerFROSTDKG(
+	nativeEngine frostsigning.NativeTBTCSignerEngine,
+	event *FrostDKGStartedEvent,
+	activeMemberIndexes []group.MemberIndex,
+	signatureThreshold int,
+	sessionID string,
+) (*frostDKGExecutionResult, error) {
+	if nativeEngine == nil {
+		return nil, fmt.Errorf("native tbtc-signer engine is unavailable")
+	}
+
+	seededEngine, ok := nativeEngine.(frostsigning.NativeTBTCSignerSeededDKGEngine)
+	if !ok {
+		return nil, fmt.Errorf("native tbtc-signer engine does not support seeded DKG")
+	}
+
+	dkgSeedHex, err := frostDKGSeedHex(event.Seed)
+	if err != nil {
+		return nil, err
+	}
+
+	participants, err := nativeTBTCSignerDKGParticipants(activeMemberIndexes)
+	if err != nil {
+		return nil, err
+	}
+
+	if signatureThreshold <= 0 || signatureThreshold > int(^uint16(0)) {
+		return nil, fmt.Errorf(
+			"invalid tbtc-signer DKG threshold [%d]",
+			signatureThreshold,
+		)
+	}
+
+	dkgResult, err := seededEngine.RunDKGWithSeed(
+		sessionID,
+		participants,
+		uint16(signatureThreshold),
+		dkgSeedHex,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("tbtc-signer RunDKG failed: [%w]", err)
+	}
+
+	outputKey, err := outputKeyFromTBTCSignerDKGResult(dkgResult)
+	if err != nil {
+		return nil, err
+	}
+
+	payload, err := json.Marshal(frostsigning.NativeTBTCSignerMaterialPayload{
+		KeyGroup:         dkgResult.KeyGroup,
+		TaprootOutputKey: hex.EncodeToString(outputKey[:]),
+		KeyGroupSource:   frostsigning.NativeTBTCSignerKeyGroupSourceDKGPersisted,
+		DKGSeedHex:       dkgSeedHex,
+		DKGParticipants:  participants,
+		DKGThreshold:     uint16(signatureThreshold),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("cannot marshal tbtc-signer material: [%w]", err)
+	}
+
+	return &frostDKGExecutionResult{
+		outputKey: outputKey,
+		signerMaterial: &frostsigning.NativeSignerMaterial{
+			Format:  frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
+			Payload: payload,
+		},
+	}, nil
+}
+
+func nativeTBTCSignerDKGParticipants(
+	activeMemberIndexes []group.MemberIndex,
+) ([]frostsigning.NativeTBTCSignerDKGParticipant, error) {
+	participants := make(
+		[]frostsigning.NativeTBTCSignerDKGParticipant,
+		0,
+		len(activeMemberIndexes),
+	)
+
+	for _, memberIndex := range activeMemberIndexes {
+		if memberIndex == 0 {
+			return nil, fmt.Errorf(
+				"invalid tbtc-signer DKG member index [%d]",
+				memberIndex,
+			)
+		}
+
+		identifier := uint16(memberIndex)
+		participants = append(
+			participants,
+			frostsigning.NativeTBTCSignerDKGParticipant{
+				Identifier: identifier,
+				PublicKeyHex: frostsigning.
+					NativeTBTCSignerDKGPlaceholderPublicKeyHex(identifier),
+			},
+		)
+	}
+
+	return participants, nil
+}
+
+func frostDKGSeedHex(seed *big.Int) (string, error) {
+	if seed == nil {
+		return "", fmt.Errorf("FROST DKG seed is nil")
+	}
+	if seed.Sign() < 0 || len(seed.Bytes()) > frost.OutputKeySize {
+		return "", fmt.Errorf("FROST DKG seed must fit in %d bytes", frost.OutputKeySize)
+	}
+
+	seedBytes := make([]byte, frost.OutputKeySize)
+	seed.FillBytes(seedBytes)
+
+	return hex.EncodeToString(seedBytes), nil
+}
+
+func outputKeyFromTBTCSignerDKGResult(
+	dkgResult *frostsigning.NativeTBTCSignerDKGResult,
+) (frost.OutputKey, error) {
+	if dkgResult == nil {
+		return frost.OutputKey{}, fmt.Errorf("tbtc-signer DKG result is nil")
+	}
+	if dkgResult.KeyGroup == "" {
+		return frost.OutputKey{}, fmt.Errorf("tbtc-signer DKG key group is empty")
+	}
+
+	outputKeyBytes, err := frostsigning.TaprootOutputKeyFromTBTCSignerKey(
+		dkgResult.KeyGroup,
+	)
+	if err != nil {
+		return frost.OutputKey{}, fmt.Errorf(
+			"cannot derive tbtc-signer DKG Taproot output key: [%w]",
+			err,
+		)
+	}
+	if len(outputKeyBytes) != frost.OutputKeySize {
+		return frost.OutputKey{}, fmt.Errorf(
+			"unexpected tbtc-signer DKG output key length [%d]",
+			len(outputKeyBytes),
+		)
+	}
+
+	var outputKey frost.OutputKey
+	copy(outputKey[:], outputKeyBytes)
+
+	return outputKey, nil
 }
 
 func announceFrostDKGReadiness(
@@ -300,6 +509,28 @@ func registerFrostSigner(
 	outputKey, err := outputKeyFromNativeDKGResult(nativeResult)
 	if err != nil {
 		return err
+	}
+
+	return registerFrostSignerWithMaterial(
+		node,
+		outputKey,
+		signerMaterial,
+		memberIndex,
+		activeMemberIndexes,
+		groupSelectionResult,
+	)
+}
+
+func registerFrostSignerWithMaterial(
+	node *node,
+	outputKey frost.OutputKey,
+	signerMaterial *frostsigning.NativeSignerMaterial,
+	memberIndex group.MemberIndex,
+	activeMemberIndexes []group.MemberIndex,
+	groupSelectionResult *GroupSelectionResult,
+) error {
+	if signerMaterial == nil {
+		return fmt.Errorf("FROST signer material is nil")
 	}
 
 	walletPublicKey, err := frostOutputKeyToECDSAPublicKey(outputKey)
@@ -398,7 +629,7 @@ func outputKeyFromNativeDKGResult(
 		return frost.OutputKey{}, err
 	}
 
-	outputKeyBytes, err := frostsigning.ExtractDkgGroupPublicKeyFromMaterial(
+	outputKeyBytes, err := frostsigning.ExtractTaprootOutputKeyFromMaterial(
 		signerMaterial,
 	)
 	if err != nil {

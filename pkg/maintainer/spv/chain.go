@@ -32,6 +32,10 @@ type Chain interface {
 		walletPublicKeyHash [20]byte,
 	) (*tbtc.WalletChainData, error)
 
+	// WalletPublicKeyHashForWalletID resolves the canonical wallet ID to the
+	// wallet public key hash used by Bridge mappings.
+	WalletPublicKeyHashForWalletID(walletID [32]byte) ([20]byte, error)
+
 	// ComputeMainUtxoHash computes the hash of the provided main UTXO
 	// according to the on-chain Bridge rules.
 	ComputeMainUtxoHash(mainUtxo *bitcoin.UnspentTransactionOutput) [32]byte

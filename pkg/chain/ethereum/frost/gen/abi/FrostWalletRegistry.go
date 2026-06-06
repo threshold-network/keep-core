@@ -33,11 +33,11 @@ var (
 type Struct0 struct {
 	SubmitterMemberIndex     *big.Int
 	XOnlyOutputKey           [32]byte
-	MembersHash              [32]byte
 	MisbehavedMembersIndices []uint8
 	Signatures               []byte
 	SigningMembersIndices    []*big.Int
 	Members                  []uint32
+	MembersHash              [32]byte
 }
 
 // Struct1 is an auto generated low-level Go binding around an user-defined struct.
@@ -51,7 +51,7 @@ type Struct1 struct {
 
 // FrostWalletRegistryMetaData contains all meta data concerning the FrostWalletRegistry contract.
 var FrostWalletRegistryMetaData = &bind.MetaData{
-	ABI: "[{\"type\":\"event\",\"name\":\"DkgStarted\",\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"name\":\"seed\",\"type\":\"uint256\"}]},{\"type\":\"event\",\"name\":\"DkgResultSubmitted\",\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"name\":\"resultHash\",\"type\":\"bytes32\"},{\"indexed\":true,\"name\":\"seed\",\"type\":\"uint256\"},{\"indexed\":false,\"name\":\"result\",\"type\":\"tuple\",\"components\":[{\"name\":\"submitterMemberIndex\",\"type\":\"uint256\"},{\"name\":\"xOnlyOutputKey\",\"type\":\"bytes32\"},{\"name\":\"membersHash\",\"type\":\"bytes32\"},{\"name\":\"misbehavedMembersIndices\",\"type\":\"uint8[]\"},{\"name\":\"signatures\",\"type\":\"bytes\"},{\"name\":\"signingMembersIndices\",\"type\":\"uint256[]\"},{\"name\":\"members\",\"type\":\"uint32[]\"}]}]},{\"type\":\"event\",\"name\":\"DkgResultApproved\",\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"name\":\"resultHash\",\"type\":\"bytes32\"},{\"indexed\":true,\"name\":\"approver\",\"type\":\"address\"}]},{\"type\":\"event\",\"name\":\"DkgResultChallenged\",\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"name\":\"resultHash\",\"type\":\"bytes32\"},{\"indexed\":true,\"name\":\"challenger\",\"type\":\"address\"},{\"indexed\":false,\"name\":\"reason\",\"type\":\"string\"}]},{\"type\":\"event\",\"name\":\"DkgTimedOut\",\"anonymous\":false,\"inputs\":[]},{\"type\":\"event\",\"name\":\"DkgSeedTimedOut\",\"anonymous\":false,\"inputs\":[]},{\"type\":\"function\",\"name\":\"submitDkgResult\",\"stateMutability\":\"nonpayable\",\"inputs\":[{\"name\":\"dkgResult\",\"type\":\"tuple\",\"components\":[{\"name\":\"submitterMemberIndex\",\"type\":\"uint256\"},{\"name\":\"xOnlyOutputKey\",\"type\":\"bytes32\"},{\"name\":\"membersHash\",\"type\":\"bytes32\"},{\"name\":\"misbehavedMembersIndices\",\"type\":\"uint8[]\"},{\"name\":\"signatures\",\"type\":\"bytes\"},{\"name\":\"signingMembersIndices\",\"type\":\"uint256[]\"},{\"name\":\"members\",\"type\":\"uint32[]\"}]}],\"outputs\":[]},{\"type\":\"function\",\"name\":\"approveDkgResult\",\"stateMutability\":\"nonpayable\",\"inputs\":[{\"name\":\"dkgResult\",\"type\":\"tuple\",\"components\":[{\"name\":\"submitterMemberIndex\",\"type\":\"uint256\"},{\"name\":\"xOnlyOutputKey\",\"type\":\"bytes32\"},{\"name\":\"membersHash\",\"type\":\"bytes32\"},{\"name\":\"misbehavedMembersIndices\",\"type\":\"uint8[]\"},{\"name\":\"signatures\",\"type\":\"bytes\"},{\"name\":\"signingMembersIndices\",\"type\":\"uint256[]\"},{\"name\":\"members\",\"type\":\"uint32[]\"}]}],\"outputs\":[]},{\"type\":\"function\",\"name\":\"challengeDkgResult\",\"stateMutability\":\"nonpayable\",\"inputs\":[{\"name\":\"dkgResult\",\"type\":\"tuple\",\"components\":[{\"name\":\"submitterMemberIndex\",\"type\":\"uint256\"},{\"name\":\"xOnlyOutputKey\",\"type\":\"bytes32\"},{\"name\":\"membersHash\",\"type\":\"bytes32\"},{\"name\":\"misbehavedMembersIndices\",\"type\":\"uint8[]\"},{\"name\":\"signatures\",\"type\":\"bytes\"},{\"name\":\"signingMembersIndices\",\"type\":\"uint256[]\"},{\"name\":\"members\",\"type\":\"uint32[]\"}]}],\"outputs\":[]},{\"type\":\"function\",\"name\":\"notifyDkgTimeout\",\"stateMutability\":\"nonpayable\",\"inputs\":[],\"outputs\":[]},{\"type\":\"function\",\"name\":\"notifySeedTimeout\",\"stateMutability\":\"nonpayable\",\"inputs\":[],\"outputs\":[]},{\"type\":\"function\",\"name\":\"isDkgResultValid\",\"stateMutability\":\"view\",\"inputs\":[{\"name\":\"result\",\"type\":\"tuple\",\"components\":[{\"name\":\"submitterMemberIndex\",\"type\":\"uint256\"},{\"name\":\"xOnlyOutputKey\",\"type\":\"bytes32\"},{\"name\":\"membersHash\",\"type\":\"bytes32\"},{\"name\":\"misbehavedMembersIndices\",\"type\":\"uint8[]\"},{\"name\":\"signatures\",\"type\":\"bytes\"},{\"name\":\"signingMembersIndices\",\"type\":\"uint256[]\"},{\"name\":\"members\",\"type\":\"uint32[]\"}]}],\"outputs\":[{\"name\":\"\",\"type\":\"bool\"},{\"name\":\"\",\"type\":\"string\"}]},{\"type\":\"function\",\"name\":\"getWalletCreationState\",\"stateMutability\":\"view\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint8\"}]},{\"type\":\"function\",\"name\":\"selectGroup\",\"stateMutability\":\"view\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint32[]\"}]},{\"type\":\"function\",\"name\":\"sortitionPool\",\"stateMutability\":\"view\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\"}]},{\"type\":\"function\",\"name\":\"dkgParameters\",\"stateMutability\":\"view\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"tuple\",\"components\":[{\"name\":\"seedTimeout\",\"type\":\"uint256\"},{\"name\":\"resultChallengePeriodLength\",\"type\":\"uint256\"},{\"name\":\"resultChallengeExtraGas\",\"type\":\"uint256\"},{\"name\":\"resultSubmissionTimeout\",\"type\":\"uint256\"},{\"name\":\"submitterPrecedencePeriodLength\",\"type\":\"uint256\"}]}]}]",
+	ABI: "[{\"type\":\"event\",\"name\":\"DkgStarted\",\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"name\":\"seed\",\"type\":\"uint256\"}]},{\"type\":\"event\",\"name\":\"DkgResultSubmitted\",\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"name\":\"resultHash\",\"type\":\"bytes32\"},{\"indexed\":true,\"name\":\"seed\",\"type\":\"uint256\"},{\"indexed\":false,\"name\":\"result\",\"type\":\"tuple\",\"components\":[{\"name\":\"submitterMemberIndex\",\"type\":\"uint256\"},{\"name\":\"xOnlyOutputKey\",\"type\":\"bytes32\"},{\"name\":\"misbehavedMembersIndices\",\"type\":\"uint8[]\"},{\"name\":\"signatures\",\"type\":\"bytes\"},{\"name\":\"signingMembersIndices\",\"type\":\"uint256[]\"},{\"name\":\"members\",\"type\":\"uint32[]\"},{\"name\":\"membersHash\",\"type\":\"bytes32\"}]}]},{\"type\":\"event\",\"name\":\"DkgResultApproved\",\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"name\":\"resultHash\",\"type\":\"bytes32\"},{\"indexed\":true,\"name\":\"approver\",\"type\":\"address\"}]},{\"type\":\"event\",\"name\":\"DkgResultChallenged\",\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"name\":\"resultHash\",\"type\":\"bytes32\"},{\"indexed\":true,\"name\":\"challenger\",\"type\":\"address\"},{\"indexed\":false,\"name\":\"reason\",\"type\":\"string\"}]},{\"type\":\"event\",\"name\":\"DkgTimedOut\",\"anonymous\":false,\"inputs\":[]},{\"type\":\"event\",\"name\":\"DkgSeedTimedOut\",\"anonymous\":false,\"inputs\":[]},{\"type\":\"function\",\"name\":\"submitDkgResult\",\"stateMutability\":\"nonpayable\",\"inputs\":[{\"name\":\"dkgResult\",\"type\":\"tuple\",\"components\":[{\"name\":\"submitterMemberIndex\",\"type\":\"uint256\"},{\"name\":\"xOnlyOutputKey\",\"type\":\"bytes32\"},{\"name\":\"misbehavedMembersIndices\",\"type\":\"uint8[]\"},{\"name\":\"signatures\",\"type\":\"bytes\"},{\"name\":\"signingMembersIndices\",\"type\":\"uint256[]\"},{\"name\":\"members\",\"type\":\"uint32[]\"},{\"name\":\"membersHash\",\"type\":\"bytes32\"}]}],\"outputs\":[]},{\"type\":\"function\",\"name\":\"approveDkgResult\",\"stateMutability\":\"nonpayable\",\"inputs\":[{\"name\":\"dkgResult\",\"type\":\"tuple\",\"components\":[{\"name\":\"submitterMemberIndex\",\"type\":\"uint256\"},{\"name\":\"xOnlyOutputKey\",\"type\":\"bytes32\"},{\"name\":\"misbehavedMembersIndices\",\"type\":\"uint8[]\"},{\"name\":\"signatures\",\"type\":\"bytes\"},{\"name\":\"signingMembersIndices\",\"type\":\"uint256[]\"},{\"name\":\"members\",\"type\":\"uint32[]\"},{\"name\":\"membersHash\",\"type\":\"bytes32\"}]}],\"outputs\":[]},{\"type\":\"function\",\"name\":\"challengeDkgResult\",\"stateMutability\":\"nonpayable\",\"inputs\":[{\"name\":\"dkgResult\",\"type\":\"tuple\",\"components\":[{\"name\":\"submitterMemberIndex\",\"type\":\"uint256\"},{\"name\":\"xOnlyOutputKey\",\"type\":\"bytes32\"},{\"name\":\"misbehavedMembersIndices\",\"type\":\"uint8[]\"},{\"name\":\"signatures\",\"type\":\"bytes\"},{\"name\":\"signingMembersIndices\",\"type\":\"uint256[]\"},{\"name\":\"members\",\"type\":\"uint32[]\"},{\"name\":\"membersHash\",\"type\":\"bytes32\"}]}],\"outputs\":[]},{\"type\":\"function\",\"name\":\"notifyDkgTimeout\",\"stateMutability\":\"nonpayable\",\"inputs\":[],\"outputs\":[]},{\"type\":\"function\",\"name\":\"notifySeedTimeout\",\"stateMutability\":\"nonpayable\",\"inputs\":[],\"outputs\":[]},{\"type\":\"function\",\"name\":\"isDkgResultValid\",\"stateMutability\":\"view\",\"inputs\":[{\"name\":\"result\",\"type\":\"tuple\",\"components\":[{\"name\":\"submitterMemberIndex\",\"type\":\"uint256\"},{\"name\":\"xOnlyOutputKey\",\"type\":\"bytes32\"},{\"name\":\"misbehavedMembersIndices\",\"type\":\"uint8[]\"},{\"name\":\"signatures\",\"type\":\"bytes\"},{\"name\":\"signingMembersIndices\",\"type\":\"uint256[]\"},{\"name\":\"members\",\"type\":\"uint32[]\"},{\"name\":\"membersHash\",\"type\":\"bytes32\"}]}],\"outputs\":[{\"name\":\"\",\"type\":\"bool\"},{\"name\":\"\",\"type\":\"string\"}]},{\"type\":\"function\",\"name\":\"getWalletCreationState\",\"stateMutability\":\"view\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint8\"}]},{\"type\":\"function\",\"name\":\"selectGroup\",\"stateMutability\":\"view\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint32[]\"}]},{\"type\":\"function\",\"name\":\"sortitionPool\",\"stateMutability\":\"view\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\"}]},{\"type\":\"function\",\"name\":\"dkgParameters\",\"stateMutability\":\"view\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"tuple\",\"components\":[{\"name\":\"seedTimeout\",\"type\":\"uint256\"},{\"name\":\"resultChallengePeriodLength\",\"type\":\"uint256\"},{\"name\":\"resultChallengeExtraGas\",\"type\":\"uint256\"},{\"name\":\"resultSubmissionTimeout\",\"type\":\"uint256\"},{\"name\":\"submitterPrecedencePeriodLength\",\"type\":\"uint256\"}]}]}]",
 }
 
 // FrostWalletRegistryABI is the input ABI used to generate the binding from.
@@ -262,9 +262,9 @@ func (_FrostWalletRegistry *FrostWalletRegistryCallerSession) GetWalletCreationS
 	return _FrostWalletRegistry.Contract.GetWalletCreationState(&_FrostWalletRegistry.CallOpts)
 }
 
-// IsDkgResultValid is a free data retrieval call binding the contract method 0x2fd29068.
+// IsDkgResultValid is a free data retrieval call binding the contract method 0x3b74e062.
 //
-// Solidity: function isDkgResultValid((uint256,bytes32,bytes32,uint8[],bytes,uint256[],uint32[]) result) view returns(bool, string)
+// Solidity: function isDkgResultValid((uint256,bytes32,uint8[],bytes,uint256[],uint32[],bytes32) result) view returns(bool, string)
 func (_FrostWalletRegistry *FrostWalletRegistryCaller) IsDkgResultValid(opts *bind.CallOpts, result Struct0) (bool, string, error) {
 	var out []interface{}
 	err := _FrostWalletRegistry.contract.Call(opts, &out, "isDkgResultValid", result)
@@ -280,16 +280,16 @@ func (_FrostWalletRegistry *FrostWalletRegistryCaller) IsDkgResultValid(opts *bi
 
 }
 
-// IsDkgResultValid is a free data retrieval call binding the contract method 0x2fd29068.
+// IsDkgResultValid is a free data retrieval call binding the contract method 0x3b74e062.
 //
-// Solidity: function isDkgResultValid((uint256,bytes32,bytes32,uint8[],bytes,uint256[],uint32[]) result) view returns(bool, string)
+// Solidity: function isDkgResultValid((uint256,bytes32,uint8[],bytes,uint256[],uint32[],bytes32) result) view returns(bool, string)
 func (_FrostWalletRegistry *FrostWalletRegistrySession) IsDkgResultValid(result Struct0) (bool, string, error) {
 	return _FrostWalletRegistry.Contract.IsDkgResultValid(&_FrostWalletRegistry.CallOpts, result)
 }
 
-// IsDkgResultValid is a free data retrieval call binding the contract method 0x2fd29068.
+// IsDkgResultValid is a free data retrieval call binding the contract method 0x3b74e062.
 //
-// Solidity: function isDkgResultValid((uint256,bytes32,bytes32,uint8[],bytes,uint256[],uint32[]) result) view returns(bool, string)
+// Solidity: function isDkgResultValid((uint256,bytes32,uint8[],bytes,uint256[],uint32[],bytes32) result) view returns(bool, string)
 func (_FrostWalletRegistry *FrostWalletRegistryCallerSession) IsDkgResultValid(result Struct0) (bool, string, error) {
 	return _FrostWalletRegistry.Contract.IsDkgResultValid(&_FrostWalletRegistry.CallOpts, result)
 }
@@ -356,44 +356,44 @@ func (_FrostWalletRegistry *FrostWalletRegistryCallerSession) SortitionPool() (c
 	return _FrostWalletRegistry.Contract.SortitionPool(&_FrostWalletRegistry.CallOpts)
 }
 
-// ApproveDkgResult is a paid mutator transaction binding the contract method 0x65b514e2.
+// ApproveDkgResult is a paid mutator transaction binding the contract method 0xcf2feddd.
 //
-// Solidity: function approveDkgResult((uint256,bytes32,bytes32,uint8[],bytes,uint256[],uint32[]) dkgResult) returns()
+// Solidity: function approveDkgResult((uint256,bytes32,uint8[],bytes,uint256[],uint32[],bytes32) dkgResult) returns()
 func (_FrostWalletRegistry *FrostWalletRegistryTransactor) ApproveDkgResult(opts *bind.TransactOpts, dkgResult Struct0) (*types.Transaction, error) {
 	return _FrostWalletRegistry.contract.Transact(opts, "approveDkgResult", dkgResult)
 }
 
-// ApproveDkgResult is a paid mutator transaction binding the contract method 0x65b514e2.
+// ApproveDkgResult is a paid mutator transaction binding the contract method 0xcf2feddd.
 //
-// Solidity: function approveDkgResult((uint256,bytes32,bytes32,uint8[],bytes,uint256[],uint32[]) dkgResult) returns()
+// Solidity: function approveDkgResult((uint256,bytes32,uint8[],bytes,uint256[],uint32[],bytes32) dkgResult) returns()
 func (_FrostWalletRegistry *FrostWalletRegistrySession) ApproveDkgResult(dkgResult Struct0) (*types.Transaction, error) {
 	return _FrostWalletRegistry.Contract.ApproveDkgResult(&_FrostWalletRegistry.TransactOpts, dkgResult)
 }
 
-// ApproveDkgResult is a paid mutator transaction binding the contract method 0x65b514e2.
+// ApproveDkgResult is a paid mutator transaction binding the contract method 0xcf2feddd.
 //
-// Solidity: function approveDkgResult((uint256,bytes32,bytes32,uint8[],bytes,uint256[],uint32[]) dkgResult) returns()
+// Solidity: function approveDkgResult((uint256,bytes32,uint8[],bytes,uint256[],uint32[],bytes32) dkgResult) returns()
 func (_FrostWalletRegistry *FrostWalletRegistryTransactorSession) ApproveDkgResult(dkgResult Struct0) (*types.Transaction, error) {
 	return _FrostWalletRegistry.Contract.ApproveDkgResult(&_FrostWalletRegistry.TransactOpts, dkgResult)
 }
 
-// ChallengeDkgResult is a paid mutator transaction binding the contract method 0xf10f610b.
+// ChallengeDkgResult is a paid mutator transaction binding the contract method 0x24ac833e.
 //
-// Solidity: function challengeDkgResult((uint256,bytes32,bytes32,uint8[],bytes,uint256[],uint32[]) dkgResult) returns()
+// Solidity: function challengeDkgResult((uint256,bytes32,uint8[],bytes,uint256[],uint32[],bytes32) dkgResult) returns()
 func (_FrostWalletRegistry *FrostWalletRegistryTransactor) ChallengeDkgResult(opts *bind.TransactOpts, dkgResult Struct0) (*types.Transaction, error) {
 	return _FrostWalletRegistry.contract.Transact(opts, "challengeDkgResult", dkgResult)
 }
 
-// ChallengeDkgResult is a paid mutator transaction binding the contract method 0xf10f610b.
+// ChallengeDkgResult is a paid mutator transaction binding the contract method 0x24ac833e.
 //
-// Solidity: function challengeDkgResult((uint256,bytes32,bytes32,uint8[],bytes,uint256[],uint32[]) dkgResult) returns()
+// Solidity: function challengeDkgResult((uint256,bytes32,uint8[],bytes,uint256[],uint32[],bytes32) dkgResult) returns()
 func (_FrostWalletRegistry *FrostWalletRegistrySession) ChallengeDkgResult(dkgResult Struct0) (*types.Transaction, error) {
 	return _FrostWalletRegistry.Contract.ChallengeDkgResult(&_FrostWalletRegistry.TransactOpts, dkgResult)
 }
 
-// ChallengeDkgResult is a paid mutator transaction binding the contract method 0xf10f610b.
+// ChallengeDkgResult is a paid mutator transaction binding the contract method 0x24ac833e.
 //
-// Solidity: function challengeDkgResult((uint256,bytes32,bytes32,uint8[],bytes,uint256[],uint32[]) dkgResult) returns()
+// Solidity: function challengeDkgResult((uint256,bytes32,uint8[],bytes,uint256[],uint32[],bytes32) dkgResult) returns()
 func (_FrostWalletRegistry *FrostWalletRegistryTransactorSession) ChallengeDkgResult(dkgResult Struct0) (*types.Transaction, error) {
 	return _FrostWalletRegistry.Contract.ChallengeDkgResult(&_FrostWalletRegistry.TransactOpts, dkgResult)
 }
@@ -440,23 +440,23 @@ func (_FrostWalletRegistry *FrostWalletRegistryTransactorSession) NotifySeedTime
 	return _FrostWalletRegistry.Contract.NotifySeedTimeout(&_FrostWalletRegistry.TransactOpts)
 }
 
-// SubmitDkgResult is a paid mutator transaction binding the contract method 0xd776003c.
+// SubmitDkgResult is a paid mutator transaction binding the contract method 0x55129e3a.
 //
-// Solidity: function submitDkgResult((uint256,bytes32,bytes32,uint8[],bytes,uint256[],uint32[]) dkgResult) returns()
+// Solidity: function submitDkgResult((uint256,bytes32,uint8[],bytes,uint256[],uint32[],bytes32) dkgResult) returns()
 func (_FrostWalletRegistry *FrostWalletRegistryTransactor) SubmitDkgResult(opts *bind.TransactOpts, dkgResult Struct0) (*types.Transaction, error) {
 	return _FrostWalletRegistry.contract.Transact(opts, "submitDkgResult", dkgResult)
 }
 
-// SubmitDkgResult is a paid mutator transaction binding the contract method 0xd776003c.
+// SubmitDkgResult is a paid mutator transaction binding the contract method 0x55129e3a.
 //
-// Solidity: function submitDkgResult((uint256,bytes32,bytes32,uint8[],bytes,uint256[],uint32[]) dkgResult) returns()
+// Solidity: function submitDkgResult((uint256,bytes32,uint8[],bytes,uint256[],uint32[],bytes32) dkgResult) returns()
 func (_FrostWalletRegistry *FrostWalletRegistrySession) SubmitDkgResult(dkgResult Struct0) (*types.Transaction, error) {
 	return _FrostWalletRegistry.Contract.SubmitDkgResult(&_FrostWalletRegistry.TransactOpts, dkgResult)
 }
 
-// SubmitDkgResult is a paid mutator transaction binding the contract method 0xd776003c.
+// SubmitDkgResult is a paid mutator transaction binding the contract method 0x55129e3a.
 //
-// Solidity: function submitDkgResult((uint256,bytes32,bytes32,uint8[],bytes,uint256[],uint32[]) dkgResult) returns()
+// Solidity: function submitDkgResult((uint256,bytes32,uint8[],bytes,uint256[],uint32[],bytes32) dkgResult) returns()
 func (_FrostWalletRegistry *FrostWalletRegistryTransactorSession) SubmitDkgResult(dkgResult Struct0) (*types.Transaction, error) {
 	return _FrostWalletRegistry.Contract.SubmitDkgResult(&_FrostWalletRegistry.TransactOpts, dkgResult)
 }
@@ -843,9 +843,9 @@ type FrostWalletRegistryDkgResultSubmitted struct {
 	Raw        types.Log // Blockchain specific contextual infos
 }
 
-// FilterDkgResultSubmitted is a free log retrieval operation binding the contract event 0x4384430e6f3647db226a1f2644148e4c22a002f0e84329434dab4a0f5d5b59aa.
+// FilterDkgResultSubmitted is a free log retrieval operation binding the contract event 0xbfc6cd6291b6741d3ac1631ba81a0288d08265bea4d59d452e8c953e11ec11c6.
 //
-// Solidity: event DkgResultSubmitted(bytes32 indexed resultHash, uint256 indexed seed, (uint256,bytes32,bytes32,uint8[],bytes,uint256[],uint32[]) result)
+// Solidity: event DkgResultSubmitted(bytes32 indexed resultHash, uint256 indexed seed, (uint256,bytes32,uint8[],bytes,uint256[],uint32[],bytes32) result)
 func (_FrostWalletRegistry *FrostWalletRegistryFilterer) FilterDkgResultSubmitted(opts *bind.FilterOpts, resultHash [][32]byte, seed []*big.Int) (*FrostWalletRegistryDkgResultSubmittedIterator, error) {
 
 	var resultHashRule []interface{}
@@ -864,9 +864,9 @@ func (_FrostWalletRegistry *FrostWalletRegistryFilterer) FilterDkgResultSubmitte
 	return &FrostWalletRegistryDkgResultSubmittedIterator{contract: _FrostWalletRegistry.contract, event: "DkgResultSubmitted", logs: logs, sub: sub}, nil
 }
 
-// WatchDkgResultSubmitted is a free log subscription operation binding the contract event 0x4384430e6f3647db226a1f2644148e4c22a002f0e84329434dab4a0f5d5b59aa.
+// WatchDkgResultSubmitted is a free log subscription operation binding the contract event 0xbfc6cd6291b6741d3ac1631ba81a0288d08265bea4d59d452e8c953e11ec11c6.
 //
-// Solidity: event DkgResultSubmitted(bytes32 indexed resultHash, uint256 indexed seed, (uint256,bytes32,bytes32,uint8[],bytes,uint256[],uint32[]) result)
+// Solidity: event DkgResultSubmitted(bytes32 indexed resultHash, uint256 indexed seed, (uint256,bytes32,uint8[],bytes,uint256[],uint32[],bytes32) result)
 func (_FrostWalletRegistry *FrostWalletRegistryFilterer) WatchDkgResultSubmitted(opts *bind.WatchOpts, sink chan<- *FrostWalletRegistryDkgResultSubmitted, resultHash [][32]byte, seed []*big.Int) (event.Subscription, error) {
 
 	var resultHashRule []interface{}
@@ -910,9 +910,9 @@ func (_FrostWalletRegistry *FrostWalletRegistryFilterer) WatchDkgResultSubmitted
 	}), nil
 }
 
-// ParseDkgResultSubmitted is a log parse operation binding the contract event 0x4384430e6f3647db226a1f2644148e4c22a002f0e84329434dab4a0f5d5b59aa.
+// ParseDkgResultSubmitted is a log parse operation binding the contract event 0xbfc6cd6291b6741d3ac1631ba81a0288d08265bea4d59d452e8c953e11ec11c6.
 //
-// Solidity: event DkgResultSubmitted(bytes32 indexed resultHash, uint256 indexed seed, (uint256,bytes32,bytes32,uint8[],bytes,uint256[],uint32[]) result)
+// Solidity: event DkgResultSubmitted(bytes32 indexed resultHash, uint256 indexed seed, (uint256,bytes32,uint8[],bytes,uint256[],uint32[],bytes32) result)
 func (_FrostWalletRegistry *FrostWalletRegistryFilterer) ParseDkgResultSubmitted(log types.Log) (*FrostWalletRegistryDkgResultSubmitted, error) {
 	event := new(FrostWalletRegistryDkgResultSubmitted)
 	if err := _FrostWalletRegistry.contract.UnpackLog(event, "DkgResultSubmitted", log); err != nil {

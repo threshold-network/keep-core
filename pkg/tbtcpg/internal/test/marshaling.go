@@ -3,14 +3,15 @@ package test
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/keep-network/keep-core/pkg/tbtcpg"
 	"math/big"
 	"time"
 
 	"github.com/keep-network/keep-core/internal/hexutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/tbtc"
+	"github.com/keep-network/keep-core/pkg/tbtcpg"
 )
 
 // UnmarshalJSON implements a custom JSON unmarshaling logic to produce a
@@ -273,7 +274,7 @@ func (psts *ProposeSweepTestScenario) UnmarshalJSON(data []byte) error {
 
 	// Unmarshal expected error
 	if len(unmarshaled.ExpectedErr) > 0 {
-		psts.ExpectedErr = fmt.Errorf(unmarshaled.ExpectedErr)
+		psts.ExpectedErr = errors.New(unmarshaled.ExpectedErr)
 	}
 
 	return nil

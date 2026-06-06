@@ -191,8 +191,8 @@ func (ra *redemptionAction) execute() error {
 		return fmt.Errorf("validate proposal step failed: [%v]", err)
 	}
 
-	walletMainUtxo, err := DetermineWalletMainUtxo(
-		walletPublicKeyHash,
+	walletMainUtxo, err := DetermineWalletMainUtxoForPublicKey(
+		ra.wallet().publicKey,
 		ra.chain,
 		ra.btcChain,
 	)
@@ -215,8 +215,8 @@ func (ra *redemptionAction) execute() error {
 		return fmt.Errorf("redeeming wallet has no main UTXO")
 	}
 
-	err = EnsureWalletSyncedBetweenChains(
-		walletPublicKeyHash,
+	err = EnsureWalletSyncedBetweenChainsForPublicKey(
+		ra.wallet().publicKey,
 		walletMainUtxo,
 		ra.chain,
 		ra.btcChain,
@@ -508,14 +508,31 @@ func assembleRedemptionTransaction(
 
 	// If we can have a non-zero change, construct it.
 	if changeOutputValue > 0 {
-		changeOutputScript, err := bitcoin.PayToWitnessPublicKeyHash(
-			bitcoin.PublicKeyHash(walletPublicKey),
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"cannot compute change output script: [%v]",
-				err,
+		var changeOutputScript bitcoin.Script
+		var err error
+		if builder.HasOnlyTaprootKeyPathInputs() {
+			walletXOnlyPublicKey, err := walletXOnlyPublicKey(walletPublicKey)
+			if err != nil {
+				return nil, err
+			}
+
+			changeOutputScript, err = bitcoin.PayToTaproot(walletXOnlyPublicKey)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"cannot compute Taproot change output script: [%v]",
+					err,
+				)
+			}
+		} else {
+			changeOutputScript, err = bitcoin.PayToWitnessPublicKeyHash(
+				bitcoin.PublicKeyHash(walletPublicKey),
 			)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"cannot compute change output script: [%v]",
+					err,
+				)
+			}
 		}
 
 		changeOutput := &bitcoin.TransactionOutput{

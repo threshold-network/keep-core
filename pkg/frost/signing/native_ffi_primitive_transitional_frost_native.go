@@ -255,7 +255,8 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 		)
 	}
 
-	dkgParticipants, dkgThreshold, err := buildTaggedTBTCSignerRunDKGInputsForIncludedMembers(
+	dkgParticipants, dkgThreshold, err := buildTaggedTBTCSignerRunDKGInputsForPayload(
+		payload,
 		request,
 		includedMembersIndexes,
 	)
@@ -270,10 +271,12 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 		)
 	}
 
-	dkgResult, err := nativeEngine.RunDKG(
+	dkgResult, err := runNativeTBTCSignerDKG(
+		nativeEngine,
 		request.SessionID,
 		dkgParticipants,
 		dkgThreshold,
+		payload.DKGSeedHex,
 	)
 	if err != nil {
 		return btlcnnefsp.fallbackTBTCSignerLegacySigning(
@@ -485,6 +488,46 @@ func buildTaggedTBTCSignerRunDKGInputs(
 	)
 }
 
+func buildTaggedTBTCSignerRunDKGInputsForPayload(
+	payload *NativeTBTCSignerMaterialPayload,
+	request *NativeExecutionFFISigningRequest,
+	includedMembersIndexes []group.MemberIndex,
+) ([]NativeTBTCSignerDKGParticipant, uint16, error) {
+	if payload != nil &&
+		payload.KeyGroupSource == NativeTBTCSignerKeyGroupSourceDKGPersisted {
+		if len(payload.DKGParticipants) < 2 {
+			return nil, 0, fmt.Errorf(
+				"persisted tbtc-signer DKG participants are insufficient",
+			)
+		}
+		if payload.DKGThreshold == 0 {
+			return nil, 0, fmt.Errorf(
+				"persisted tbtc-signer DKG threshold is zero",
+			)
+		}
+		if int(payload.DKGThreshold) > len(payload.DKGParticipants) {
+			return nil, 0, fmt.Errorf(
+				"persisted tbtc-signer DKG threshold exceeds participant count: [%v] > [%v]",
+				payload.DKGThreshold,
+				len(payload.DKGParticipants),
+			)
+		}
+
+		participants := make(
+			[]NativeTBTCSignerDKGParticipant,
+			len(payload.DKGParticipants),
+		)
+		copy(participants, payload.DKGParticipants)
+
+		return participants, payload.DKGThreshold, nil
+	}
+
+	return buildTaggedTBTCSignerRunDKGInputsForIncludedMembers(
+		request,
+		includedMembersIndexes,
+	)
+}
+
 func buildTaggedTBTCSignerRunDKGInputsForIncludedMembers(
 	request *NativeExecutionFFISigningRequest,
 	includedMembersIndexes []group.MemberIndex,
@@ -533,6 +576,12 @@ func buildTaggedTBTCSignerDKGPlaceholderPublicKeyHex(identifier uint16) string {
 	// Transitional placeholder until canonical member public keys are available
 	// in the native signing request path.
 	return fmt.Sprintf("02%04x", identifier)
+}
+
+// NativeTBTCSignerDKGPlaceholderPublicKeyHex returns the transitional
+// placeholder public key used by tbtc-signer dealer-DKG requests.
+func NativeTBTCSignerDKGPlaceholderPublicKeyHex(identifier uint16) string {
+	return buildTaggedTBTCSignerDKGPlaceholderPublicKeyHex(identifier)
 }
 
 func buildTaggedTBTCSignerRoundKeyGroup(
@@ -709,6 +758,7 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRoundWithSignature(
 		messageBytes,
 		keyGroup,
 		signingParticipants,
+		request.TaprootMerkleRoot,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("start sign round failed: [%w]", err)
@@ -765,6 +815,7 @@ func executeBuildTaggedTBTCSignerBootstrapCoarseRoundWithSignature(
 	signature, err := nativeEngine.FinalizeSignRound(
 		request.SessionID,
 		roundContributions,
+		request.TaprootMerkleRoot,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("finalize sign round failed: [%w]", err)
@@ -1153,6 +1204,13 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 	request *NativeExecutionFFISigningRequest,
 	privateKeyShare *tecdsa.PrivateKeyShare,
 ) (*frost.Signature, error) {
+	if request.TaprootMerkleRoot != nil {
+		return nil, fmt.Errorf(
+			"%w: taproot tweaked signing requires native FROST signer support",
+			ErrNativeCryptographyUnavailable,
+		)
+	}
+
 	if privateKeyShare == nil {
 		return nil, fmt.Errorf("legacy private key share is nil")
 	}
@@ -1350,4 +1408,30 @@ func decodeBuildTaggedTBTCSignerLegacyPrivateKeyShare(
 	}
 
 	return privateKeyShare, nil
+}
+
+func runNativeTBTCSignerDKG(
+	nativeEngine NativeTBTCSignerEngine,
+	sessionID string,
+	participants []NativeTBTCSignerDKGParticipant,
+	threshold uint16,
+	dkgSeedHex string,
+) (*NativeTBTCSignerDKGResult, error) {
+	if dkgSeedHex == "" {
+		return nativeEngine.RunDKG(sessionID, participants, threshold)
+	}
+
+	seededEngine, ok := nativeEngine.(NativeTBTCSignerSeededDKGEngine)
+	if !ok {
+		return nil, fmt.Errorf(
+			"native tbtc-signer engine does not support seeded RunDKG",
+		)
+	}
+
+	return seededEngine.RunDKGWithSeed(
+		sessionID,
+		participants,
+		threshold,
+		dkgSeedHex,
+	)
 }
