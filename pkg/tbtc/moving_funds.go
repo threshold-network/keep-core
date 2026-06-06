@@ -648,35 +648,12 @@ func ensureMovingFundsMainUtxoSupportsLegacyTargets(
 	bitcoinChain bitcoin.Chain,
 	walletMainUtxo *bitcoin.UnspentTransactionOutput,
 ) error {
-	if walletMainUtxo.Outpoint == nil {
-		return fmt.Errorf("wallet main UTXO outpoint is required")
-	}
-
-	transaction, err := bitcoinChain.GetTransaction(
-		walletMainUtxo.Outpoint.TransactionHash,
-	)
+	scriptType, err := walletMainUtxoScriptType(bitcoinChain, walletMainUtxo)
 	if err != nil {
-		return fmt.Errorf(
-			"cannot get transaction with hash [%s]: [%v]",
-			walletMainUtxo.Outpoint.TransactionHash.Hex(bitcoin.InternalByteOrder),
-			err,
-		)
+		return err
 	}
 
-	outputIndex := walletMainUtxo.Outpoint.OutputIndex
-	if outputIndex >= uint32(len(transaction.Outputs)) {
-		return fmt.Errorf(
-			"output index [%d] out of range for transaction [%s] "+
-				"with [%d] outputs",
-			outputIndex,
-			walletMainUtxo.Outpoint.TransactionHash.Hex(bitcoin.InternalByteOrder),
-			len(transaction.Outputs),
-		)
-	}
-
-	if bitcoin.GetScriptType(
-		transaction.Outputs[outputIndex].PublicKeyScript,
-	) == bitcoin.P2TRScript {
+	if scriptType == bitcoin.P2TRScript {
 		return fmt.Errorf(
 			"Taproot moving-funds main UTXOs are not supported until " +
 				"moving-funds transactions support P2TR target wallet outputs",

@@ -318,6 +318,27 @@ func assembleMovedFundsSweepTransaction(
 		return nil, fmt.Errorf("moved funds UTXO is required")
 	}
 
+	if walletMainUtxo != nil {
+		scriptType, err := walletMainUtxoScriptType(
+			bitcoinChain,
+			walletMainUtxo,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot inspect wallet main UTXO script: [%v]",
+				err,
+			)
+		}
+
+		if scriptType == bitcoin.P2TRScript {
+			return nil, fmt.Errorf(
+				"Taproot moved-funds sweep main UTXOs are not supported " +
+					"until moved-funds sweep transactions support P2TR " +
+					"wallet outputs",
+			)
+		}
+	}
+
 	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
 
 	// The moved funds UTXO is always the first input.

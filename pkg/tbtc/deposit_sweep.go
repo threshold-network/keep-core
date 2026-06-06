@@ -588,6 +588,26 @@ func assembleDepositSweepTransaction(
 
 	taprootSweep := taprootDepositsCount > 0
 
+	if !taprootSweep && walletMainUtxo != nil {
+		scriptType, err := walletMainUtxoScriptType(
+			bitcoinChain,
+			walletMainUtxo,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot inspect wallet main UTXO script: [%v]",
+				err,
+			)
+		}
+
+		if scriptType == bitcoin.P2TRScript {
+			return nil, fmt.Errorf(
+				"legacy deposit sweeps are not supported for " +
+					"Taproot wallet main UTXOs",
+			)
+		}
+	}
+
 	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
 
 	if walletMainUtxo != nil {

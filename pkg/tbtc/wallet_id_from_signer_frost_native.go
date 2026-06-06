@@ -43,7 +43,7 @@ func frostWalletIDFromSigner(signer *signer) ([32]byte, bool, error) {
 	if material.Format == frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1 {
 		var payload frostsigning.NativeTBTCSignerMaterialPayload
 		if err := json.Unmarshal(material.Payload, &payload); err != nil {
-			return [32]byte{}, true, fmt.Errorf(
+			return [32]byte{}, false, fmt.Errorf(
 				"cannot decode FrostTBTCSignerV1 signer material: [%w]",
 				err,
 			)

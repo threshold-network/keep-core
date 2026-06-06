@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -506,6 +507,39 @@ func TestAssembleDepositSweepTransaction_TaprootDeposit(t *testing.T) {
 		209000,
 		int(unsignedTx.Outputs[0].Value),
 	)
+}
+
+func TestAssembleDepositSweepTransaction_RejectsLegacyDepositsWithTaprootWalletMainUtxo(
+	t *testing.T,
+) {
+	bitcoinChain := newLocalBitcoinChain()
+	walletPublicKey := testWalletPublicKeyFromXOnly(
+		t,
+		"2336f65004d8f122f1fe947ebd009a8b4add3a0d937356d568e30f7fcc2e4008",
+	)
+	walletMainUtxo := testTaprootWalletMainUtxo(
+		t,
+		bitcoinChain,
+		walletPublicKey,
+	)
+
+	_, err := assembleDepositSweepTransaction(
+		bitcoinChain,
+		walletPublicKey,
+		walletMainUtxo,
+		[]*Deposit{
+			{
+				Depositor: chain.Address("934b98637ca318a4d6e7ca6ffd1690b8e77df637"),
+			},
+		},
+		1000,
+	)
+	if err == nil {
+		t.Fatal("expected legacy deposit sweep with Taproot main UTXO rejection")
+	}
+	if !strings.Contains(err.Error(), "legacy deposit sweeps") {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
 }
 
 func TestValidateDepositSweepProposal_PrefersTaprootRevealOverCompatibilityReveal(t *testing.T) {
