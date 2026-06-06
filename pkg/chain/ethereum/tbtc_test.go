@@ -13,6 +13,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	ecdsacontract "github.com/keep-network/keep-core/pkg/chain/ethereum/ecdsa/gen/contract"
+	frostabi "github.com/keep-network/keep-core/pkg/chain/ethereum/frost/gen/abi"
 	tbtcabi "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
 	tbtcpkg "github.com/keep-network/keep-core/pkg/tbtc"
 
@@ -326,6 +328,102 @@ func TestCalculateWalletID(t *testing.T) {
 	)
 
 	testutils.AssertBytesEqual(t, expectedWalletID[:], actualWalletID[:])
+}
+
+func TestTbtcChainHasFrostAuthorization(t *testing.T) {
+	tests := map[string]struct {
+		chain          *TbtcChain
+		expectedResult bool
+	}{
+		"no frost contracts": {
+			chain:          &TbtcChain{},
+			expectedResult: false,
+		},
+		"registry only": {
+			chain: &TbtcChain{
+				frostWalletRegistry: &frostabi.FrostWalletRegistry{},
+			},
+			expectedResult: false,
+		},
+		"sortition pool only": {
+			chain: &TbtcChain{
+				frostSortitionPool: &ecdsacontract.EcdsaSortitionPool{},
+			},
+			expectedResult: false,
+		},
+		"registry and sortition pool": {
+			chain: &TbtcChain{
+				frostWalletRegistry: &frostabi.FrostWalletRegistry{},
+				frostSortitionPool:  &ecdsacontract.EcdsaSortitionPool{},
+			},
+			expectedResult: true,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			actualResult := test.chain.hasFrostAuthorization()
+			if actualResult != test.expectedResult {
+				t.Fatalf(
+					"unexpected FROST authorization result\nexpected: [%v]\nactual:   [%v]",
+					test.expectedResult,
+					actualResult,
+				)
+			}
+		})
+	}
+}
+
+type operatorIDResolverMock struct {
+	expectedOperator common.Address
+	operatorID       chain.OperatorID
+	err              error
+	called           bool
+}
+
+func (oirm *operatorIDResolverMock) GetOperatorID(
+	operator common.Address,
+) (chain.OperatorID, error) {
+	oirm.called = true
+
+	if operator != oirm.expectedOperator {
+		return 0, fmt.Errorf(
+			"unexpected operator address\nexpected: [%v]\nactual:   [%v]",
+			oirm.expectedOperator,
+			operator,
+		)
+	}
+
+	return oirm.operatorID, oirm.err
+}
+
+func TestGetOperatorIDUsesProvidedResolver(t *testing.T) {
+	expectedOperator := common.HexToAddress(
+		"0x7777777777777777777777777777777777777777",
+	)
+	expectedOperatorID := chain.OperatorID(777)
+
+	resolver := &operatorIDResolverMock{
+		expectedOperator: expectedOperator,
+		operatorID:       expectedOperatorID,
+	}
+
+	actualOperatorID, err := getOperatorID(resolver, expectedOperator)
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+
+	if !resolver.called {
+		t.Fatal("expected operator ID resolver to be called")
+	}
+
+	if actualOperatorID != expectedOperatorID {
+		t.Fatalf(
+			"unexpected operator ID\nexpected: [%v]\nactual:   [%v]",
+			expectedOperatorID,
+			actualOperatorID,
+		)
+	}
 }
 
 type pastNewWalletRegisteredV2EventsBridgeMock struct {

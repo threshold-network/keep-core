@@ -23,8 +23,12 @@ func TestFrostGeneratedBindingsUseDeployedDkgResultTupleOrder(t *testing.T) {
 		"MembersHash",
 	}
 
-	assertStructFieldOrder(t, reflect.TypeOf(frostabi.Struct0{}), expectedFields)
-	assertStructFieldOrder(t, reflect.TypeOf(frostvalidatorabi.Struct0{}), expectedFields)
+	assertStructFieldOrder(t, reflect.TypeOf(frostabi.FrostDkgResult{}), expectedFields)
+	assertStructFieldOrder(
+		t,
+		reflect.TypeOf(frostvalidatorabi.FrostDkgResult{}),
+		expectedFields,
+	)
 
 	walletRegistryABI, err := frostabi.FrostWalletRegistryMetaData.GetAbi()
 	if err != nil {

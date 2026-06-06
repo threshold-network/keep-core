@@ -16,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -371,6 +372,10 @@ func connectFrostWalletRegistry(
 	return frostWalletRegistry, frostWalletRegistryAddress, frostSortitionPool, nil
 }
 
+func (tc *TbtcChain) hasFrostAuthorization() bool {
+	return tc.frostWalletRegistry != nil && tc.frostSortitionPool != nil
+}
+
 func connectFrostDkgValidator(
 	config ethereum.Config,
 	baseChain *baseChain,
@@ -480,7 +485,8 @@ func (tc *TbtcChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool, 
 func (tc *TbtcChain) isRecognizedByFrostRegistry(
 	operatorAddress common.Address,
 ) (bool, error) {
-	if tc.frostWalletRegistry == nil || (tc.frostWalletRegistryAddr == common.Address{}) {
+	if !tc.hasFrostAuthorization() ||
+		(tc.frostWalletRegistryAddr == common.Address{}) {
 		return false, nil
 	}
 
@@ -571,7 +577,18 @@ func mustParseABI(rawABI string) abi.ABI {
 // false. If the staking provider has been registered, the address is not
 // empty and the boolean flag indicates true.
 func (tc *TbtcChain) OperatorToStakingProvider() (chain.Address, bool, error) {
-	stakingProvider, err := tc.walletRegistry.OperatorToStakingProvider(tc.key.Address)
+	var stakingProvider common.Address
+	var err error
+
+	if tc.hasFrostAuthorization() {
+		stakingProvider, err = tc.frostWalletRegistry.OperatorToStakingProvider(
+			&bind.CallOpts{From: tc.key.Address},
+			tc.key.Address,
+		)
+	} else {
+		stakingProvider, err = tc.walletRegistry.OperatorToStakingProvider(tc.key.Address)
+	}
+
 	if err != nil {
 		return "", false, fmt.Errorf(
 			"failed to map operator [%v] to a staking provider: [%v]",
@@ -594,9 +611,20 @@ func (tc *TbtcChain) OperatorToStakingProvider() (chain.Address, bool, error) {
 // If the authorized stake minus the pending authorization decrease
 // is below the minimum authorization, eligible stake is 0.
 func (tc *TbtcChain) EligibleStake(stakingProvider chain.Address) (*big.Int, error) {
-	eligibleStake, err := tc.walletRegistry.EligibleStake(
-		common.HexToAddress(stakingProvider.String()),
-	)
+	stakingProviderAddress := common.HexToAddress(stakingProvider.String())
+
+	var eligibleStake *big.Int
+	var err error
+
+	if tc.hasFrostAuthorization() {
+		eligibleStake, err = tc.frostWalletRegistry.EligibleStake(
+			&bind.CallOpts{From: tc.key.Address},
+			stakingProviderAddress,
+		)
+	} else {
+		eligibleStake, err = tc.walletRegistry.EligibleStake(stakingProviderAddress)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf(
 			"failed to get eligible stake for staking provider %s: [%w]",
@@ -611,12 +639,23 @@ func (tc *TbtcChain) EligibleStake(stakingProvider chain.Address) (*big.Int, err
 // IsPoolLocked returns true if the sortition pool is locked and no state
 // changes are allowed.
 func (tc *TbtcChain) IsPoolLocked() (bool, error) {
+	if tc.hasFrostAuthorization() {
+		return tc.frostSortitionPool.IsLocked()
+	}
+
 	return tc.sortitionPool.IsLocked()
 }
 
 // IsOperatorInPool returns true if the operator is registered in
 // the sortition pool.
 func (tc *TbtcChain) IsOperatorInPool() (bool, error) {
+	if tc.hasFrostAuthorization() {
+		return tc.frostWalletRegistry.IsOperatorInPool(
+			&bind.CallOpts{From: tc.key.Address},
+			tc.key.Address,
+		)
+	}
+
 	return tc.walletRegistry.IsOperatorInPool(tc.key.Address)
 }
 
@@ -627,12 +666,28 @@ func (tc *TbtcChain) IsOperatorInPool() (bool, error) {
 // If the operator is not in the sortition pool and their authorized stake
 // is non-zero, function returns false.
 func (tc *TbtcChain) IsOperatorUpToDate() (bool, error) {
+	if tc.hasFrostAuthorization() {
+		return tc.frostWalletRegistry.IsOperatorUpToDate(
+			&bind.CallOpts{From: tc.key.Address},
+			tc.key.Address,
+		)
+	}
+
 	return tc.walletRegistry.IsOperatorUpToDate(tc.key.Address)
 }
 
 // JoinSortitionPool executes a transaction to have the operator join the
 // sortition pool.
 func (tc *TbtcChain) JoinSortitionPool() error {
+	if tc.hasFrostAuthorization() {
+		return tc.submitFrostWalletRegistryTransaction(
+			"joinSortitionPool",
+			func(opts *bind.TransactOpts) (*types.Transaction, error) {
+				return tc.frostWalletRegistry.JoinSortitionPool(opts)
+			},
+		)
+	}
+
 	_, err := tc.walletRegistry.JoinSortitionPool()
 	return err
 }
@@ -640,6 +695,18 @@ func (tc *TbtcChain) JoinSortitionPool() error {
 // UpdateOperatorStatus executes a transaction to update the operator's
 // state in the sortition pool.
 func (tc *TbtcChain) UpdateOperatorStatus() error {
+	if tc.hasFrostAuthorization() {
+		return tc.submitFrostWalletRegistryTransaction(
+			"updateOperatorStatus",
+			func(opts *bind.TransactOpts) (*types.Transaction, error) {
+				return tc.frostWalletRegistry.UpdateOperatorStatus(
+					opts,
+					tc.key.Address,
+				)
+			},
+		)
+	}
+
 	_, err := tc.walletRegistry.UpdateOperatorStatus(tc.key.Address)
 	return err
 }
@@ -647,40 +714,80 @@ func (tc *TbtcChain) UpdateOperatorStatus() error {
 // IsEligibleForRewards checks whether the operator is eligible for rewards
 // or not.
 func (tc *TbtcChain) IsEligibleForRewards() (bool, error) {
+	if tc.hasFrostAuthorization() {
+		return tc.frostSortitionPool.IsEligibleForRewards(tc.key.Address)
+	}
+
 	return tc.sortitionPool.IsEligibleForRewards(tc.key.Address)
 }
 
 // Checks whether the operator is able to restore their eligibility for
 // rewards right away.
 func (tc *TbtcChain) CanRestoreRewardEligibility() (bool, error) {
+	if tc.hasFrostAuthorization() {
+		return tc.frostSortitionPool.CanRestoreRewardEligibility(tc.key.Address)
+	}
+
 	return tc.sortitionPool.CanRestoreRewardEligibility(tc.key.Address)
 }
 
 // Restores reward eligibility for the operator.
 func (tc *TbtcChain) RestoreRewardEligibility() error {
+	if tc.hasFrostAuthorization() {
+		_, err := tc.frostSortitionPool.RestoreRewardEligibility(tc.key.Address)
+		return err
+	}
+
 	_, err := tc.sortitionPool.RestoreRewardEligibility(tc.key.Address)
 	return err
 }
 
 // Returns true if the chaosnet phase is active, false otherwise.
 func (tc *TbtcChain) IsChaosnetActive() (bool, error) {
+	if tc.hasFrostAuthorization() {
+		return tc.frostSortitionPool.IsChaosnetActive()
+	}
+
 	return tc.sortitionPool.IsChaosnetActive()
 }
 
 // Returns true if operator is a beta operator, false otherwise.
 // Chaosnet status does not matter.
 func (tc *TbtcChain) IsBetaOperator() (bool, error) {
+	if tc.hasFrostAuthorization() {
+		return tc.frostSortitionPool.IsBetaOperator(tc.key.Address)
+	}
+
 	return tc.sortitionPool.IsBetaOperator(tc.key.Address)
 }
 
-// GetOperatorID returns the ID number of the given operator address. An ID
-// number of 0 means the operator has not been allocated an ID number yet.
+// GetOperatorID returns the legacy ECDSA sortition pool ID number of the given
+// operator address. An ID number of 0 means the operator has not been allocated
+// an ID number yet.
+//
+// This method intentionally remains bound to the legacy ECDSA sortition pool
+// even when FROST authorization is configured. Existing ECDSA tBTC flows such
+// as DKG approval, inactivity claims, and tbtcpg moving-funds claims compare
+// against ECDSA WalletRegistry member IDs. FROST DKG paths use
+// SelectFrostGroup and the FROST sortition pool directly.
 func (tc *TbtcChain) GetOperatorID(
 	operatorAddress chain.Address,
 ) (chain.OperatorID, error) {
-	return tc.sortitionPool.GetOperatorID(
+	return getOperatorID(
+		tc.sortitionPool,
 		common.HexToAddress(operatorAddress.String()),
 	)
+}
+
+type operatorIDResolver interface {
+	GetOperatorID(operator common.Address) (chain.OperatorID, error)
+}
+
+func getOperatorID(
+	sortitionPool operatorIDResolver,
+	operatorAddress common.Address,
+) (chain.OperatorID, error) {
+	return sortitionPool.GetOperatorID(operatorAddress)
 }
 
 // SelectGroup returns the group members selected for the current group
