@@ -24,6 +24,7 @@ use std::str::FromStr;
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use frost::keys::Tweak;
 use frost_secp256k1_tr as frost;
 use rand_chacha::rand_core::{CryptoRng, Error as RandCoreError, RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -4250,6 +4251,32 @@ fn canonicalize_refresh_shares_request_for_fingerprint(
     canonical_request
 }
 
+fn canonicalize_taproot_merkle_root_hex(
+    taproot_merkle_root_hex: &mut Option<String>,
+) -> Result<Option<[u8; 32]>, EngineError> {
+    let Some(raw_taproot_merkle_root_hex) = taproot_merkle_root_hex.as_mut() else {
+        return Ok(None);
+    };
+
+    let normalized_taproot_merkle_root_hex =
+        raw_taproot_merkle_root_hex.trim().to_ascii_lowercase();
+    let taproot_merkle_root_bytes =
+        hex::decode(&normalized_taproot_merkle_root_hex).map_err(|_| {
+            EngineError::Validation("taproot_merkle_root_hex must be valid hex".to_string())
+        })?;
+    if taproot_merkle_root_bytes.len() != 32 {
+        return Err(EngineError::Validation(
+            "taproot_merkle_root_hex must decode to 32 bytes".to_string(),
+        ));
+    }
+
+    let mut taproot_merkle_root = [0_u8; 32];
+    taproot_merkle_root.copy_from_slice(&taproot_merkle_root_bytes);
+    *raw_taproot_merkle_root_hex = normalized_taproot_merkle_root_hex;
+
+    Ok(Some(taproot_merkle_root))
+}
+
 fn truthy_env_flag(raw_value: &str) -> bool {
     matches!(
         raw_value.trim().to_ascii_lowercase().as_str(),
@@ -4306,6 +4333,45 @@ fn canonicalize_attempt_transition_evidence_for_fingerprint(
     }
 }
 
+fn start_sign_round_request_fingerprint(
+    request: &StartSignRoundRequest,
+    member_identifier: u16,
+) -> Result<String, EngineError> {
+    start_sign_round_request_fingerprint_internal(request, member_identifier, false)
+}
+
+fn start_sign_round_request_fingerprint_including_transition_evidence(
+    request: &StartSignRoundRequest,
+    member_identifier: u16,
+) -> Result<String, EngineError> {
+    start_sign_round_request_fingerprint_internal(request, member_identifier, true)
+}
+
+fn start_sign_round_request_fingerprint_internal(
+    request: &StartSignRoundRequest,
+    member_identifier: u16,
+    include_transition_evidence: bool,
+) -> Result<String, EngineError> {
+    let mut canonical_request = request.clone();
+    canonical_request.member_identifier = member_identifier;
+    if let Some(signing_participants) = canonical_request.signing_participants.as_mut() {
+        signing_participants.sort_unstable();
+    }
+    canonicalize_attempt_context_for_fingerprint(&mut canonical_request.attempt_context);
+    if include_transition_evidence {
+        canonicalize_attempt_transition_evidence_for_fingerprint(
+            &mut canonical_request.attempt_transition_evidence,
+        );
+    } else {
+        // Transition evidence authorizes creation of a new active attempt but is
+        // one-shot material. Once the active attempt context is established,
+        // other members may reuse the round without resending the evidence.
+        canonical_request.attempt_transition_evidence = None;
+    }
+
+    fingerprint(&canonical_request)
+}
+
 fn round_attempt_id_component(attempt_context: Option<&AttemptContext>) -> String {
     attempt_context
         .map(|attempt_context| attempt_context.attempt_id.to_ascii_lowercase())
@@ -4316,16 +4382,19 @@ fn derive_round_id(
     session_id: &str,
     key_group: &str,
     message_hex: &str,
+    taproot_merkle_root_hex: Option<&str>,
     signing_participants_fingerprint: &str,
     attempt_context: Option<&AttemptContext>,
 ) -> String {
     let attempt_id_component = round_attempt_id_component(attempt_context);
+    let taproot_merkle_root_component = taproot_merkle_root_hex.unwrap_or("no-taproot-merkle-root");
     hash_hex(
         format!(
-            "round:{}:{}:{}:{}:{}",
+            "round:{}:{}:{}:{}:{}:{}",
             session_id,
             key_group,
             message_hex,
+            taproot_merkle_root_component,
             signing_participants_fingerprint,
             attempt_id_component
         )
@@ -5165,8 +5234,7 @@ pub fn run_dkg(request: RunDkgRequest) -> Result<DkgResult, EngineError> {
         .map(|identifier| participant_identifier_to_frost_identifier(*identifier))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut keygen_rng_seed = [0u8; 32];
-    OsRng.fill_bytes(&mut keygen_rng_seed);
+    let mut keygen_rng_seed = development_dealer_dkg_seed(request.dkg_seed_hex.as_deref())?;
     let keygen_rng = ZeroizingChaCha20Rng::from_seed(keygen_rng_seed);
     keygen_rng_seed.zeroize();
 
@@ -5211,6 +5279,10 @@ pub fn run_dkg(request: RunDkgRequest) -> Result<DkgResult, EngineError> {
         ));
     }
 
+    // The `frost-secp256k1-tr` ciphersuite post-processes DKG output before
+    // returning these packages. This serialized verifying key is the protocol
+    // wallet key exported to Go/on-chain; later Taproot tweaks are applied
+    // relative to this exported key.
     let key_group = public_key_package
         .verifying_key()
         .serialize()
@@ -5276,7 +5348,31 @@ fn enforce_bootstrap_dealer_dkg_disabled_in_production(
     Ok(())
 }
 
-pub fn start_sign_round(request: StartSignRoundRequest) -> Result<RoundState, EngineError> {
+fn development_dealer_dkg_seed(dkg_seed_hex: Option<&str>) -> Result<[u8; 32], EngineError> {
+    let Some(seed_hex) = dkg_seed_hex else {
+        let mut seed = [0_u8; 32];
+        OsRng.fill_bytes(&mut seed);
+        return Ok(seed);
+    };
+
+    let seed =
+        Zeroizing::new(hex::decode(seed_hex).map_err(|e| {
+            EngineError::Validation(format!("dkg_seed_hex must be valid hex: {e}"))
+        })?);
+    if seed.len() != 32 {
+        return Err(EngineError::Validation(format!(
+            "dkg_seed_hex decoded to [{}] bytes, expected 32",
+            seed.len()
+        )));
+    }
+
+    let mut output = [0u8; 32];
+    output.copy_from_slice(&seed);
+
+    Ok(output)
+}
+
+pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState, EngineError> {
     record_hardening_telemetry(|telemetry| {
         telemetry.start_sign_round_calls_total =
             telemetry.start_sign_round_calls_total.saturating_add(1);
@@ -5294,19 +5390,26 @@ pub fn start_sign_round(request: StartSignRoundRequest) -> Result<RoundState, En
     let message_bytes = hex::decode(&request.message_hex)
         .map_err(|_| EngineError::Validation("message_hex must be valid hex".to_string()))?;
     let message_digest_hex = hash_hex(&message_bytes);
+    let taproot_merkle_root =
+        canonicalize_taproot_merkle_root_hex(&mut request.taproot_merkle_root_hex)?;
     let strict_roast_mode_enabled = roast_strict_mode_enabled();
 
-    let request_fingerprint = {
-        let mut canonical_request = request.clone();
-        if let Some(signing_participants) = canonical_request.signing_participants.as_mut() {
-            signing_participants.sort_unstable();
-        }
-        canonicalize_attempt_context_for_fingerprint(&mut canonical_request.attempt_context);
-        canonicalize_attempt_transition_evidence_for_fingerprint(
-            &mut canonical_request.attempt_transition_evidence,
-        );
-        fingerprint(&canonical_request)?
-    };
+    let request_fingerprint = start_sign_round_request_fingerprint(&request, 0)?;
+    // Before multi-seat round reuse, persisted active rounds were bound to the
+    // concrete member identifier. Accept that legacy fingerprint so an upgrade
+    // does not invalidate an in-flight signing round.
+    let legacy_member_request_fingerprint =
+        start_sign_round_request_fingerprint(&request, request.member_identifier)?;
+    // The previous round-reuse implementation included one-shot transition
+    // evidence in the persisted active-round fingerprint. Accept that shape
+    // when callers still resend the evidence, then migrate to the stable form.
+    let legacy_canonical_with_transition_evidence_fingerprint =
+        start_sign_round_request_fingerprint_including_transition_evidence(&request, 0)?;
+    let legacy_member_with_transition_evidence_fingerprint =
+        start_sign_round_request_fingerprint_including_transition_evidence(
+            &request,
+            request.member_identifier,
+        )?;
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -5314,97 +5417,97 @@ pub fn start_sign_round(request: StartSignRoundRequest) -> Result<RoundState, En
     let quarantined_operator_identifiers = guard.quarantined_operator_identifiers.clone();
 
     let mut pending_transition_record = None;
-    let round_state =
-        {
-            let session = guard.sessions.get_mut(&request.session_id).ok_or_else(|| {
-                EngineError::SessionNotFound {
-                    session_id: request.session_id.clone(),
-                }
+    let round_state = {
+        let session = guard.sessions.get_mut(&request.session_id).ok_or_else(|| {
+            EngineError::SessionNotFound {
+                session_id: request.session_id.clone(),
+            }
+        })?;
+
+        let dkg = session
+            .dkg_result
+            .clone()
+            .ok_or_else(|| EngineError::DkgNotReady {
+                session_id: request.session_id.clone(),
             })?;
 
-            let dkg = session
-                .dkg_result
-                .clone()
-                .ok_or_else(|| EngineError::DkgNotReady {
-                    session_id: request.session_id.clone(),
-                })?;
+        if let Some(emergency_rekey_event) = session.emergency_rekey_event.as_ref() {
+            return Err(EngineError::LifecyclePolicyRejected {
+                session_id: request.session_id.clone(),
+                reason_code: "emergency_rekey_required".to_string(),
+                detail: format!(
+                    "emergency rekey required for session [{}] since [{}]: {}",
+                    request.session_id,
+                    emergency_rekey_event.triggered_at_unix,
+                    emergency_rekey_event.reason
+                ),
+            });
+        }
 
-            if let Some(emergency_rekey_event) = session.emergency_rekey_event.as_ref() {
-                return Err(EngineError::LifecyclePolicyRejected {
-                    session_id: request.session_id.clone(),
-                    reason_code: "emergency_rekey_required".to_string(),
-                    detail: format!(
-                        "emergency rekey required for session [{}] since [{}]: {}",
-                        request.session_id,
-                        emergency_rekey_event.triggered_at_unix,
-                        emergency_rekey_event.reason
-                    ),
-                });
-            }
+        if session.finalize_request_fingerprint.is_some() {
+            // Lifecycle terminal state: once finalize succeeds for a session, we
+            // intentionally return SessionFinalized and require a new session_id
+            // for any subsequent StartSignRound call on that session ID.
+            return Err(EngineError::SessionFinalized {
+                session_id: request.session_id,
+            });
+        }
 
-            if session.finalize_request_fingerprint.is_some() {
-                // Lifecycle terminal state: once finalize succeeds for a session, we
-                // intentionally return SessionFinalized and require a new session_id
-                // for any subsequent StartSignRound call on that session ID.
-                return Err(EngineError::SessionFinalized {
-                    session_id: request.session_id,
-                });
-            }
+        if request.key_group != dkg.key_group {
+            return Err(EngineError::Validation(
+                "key_group does not match DKG output for this session".to_string(),
+            ));
+        }
 
-            if request.key_group != dkg.key_group {
+        {
+            let dkg_key_packages = session.dkg_key_packages.as_ref().ok_or_else(|| {
+                EngineError::Internal("missing DKG key package cache".to_string())
+            })?;
+
+            if !dkg_key_packages.contains_key(&request.member_identifier) {
                 return Err(EngineError::Validation(
-                    "key_group does not match DKG output for this session".to_string(),
+                    "member_identifier is not a DKG participant for this session".to_string(),
                 ));
             }
+        }
+        enforce_signing_message_binding_to_policy_checked_build_tx(
+            &request.session_id,
+            &request.message_hex,
+            session.tx_result.as_ref(),
+        )?;
 
-            {
-                let dkg_key_packages = session.dkg_key_packages.as_ref().ok_or_else(|| {
-                    EngineError::Internal("missing DKG key package cache".to_string())
-                })?;
+        // Guard against partial legacy state where sign material was cleared but
+        // active attempt context was not.
+        if session.sign_request_fingerprint.is_none() || session.round_state.is_none() {
+            session.active_attempt_context = None;
+        }
 
-                if !dkg_key_packages.contains_key(&request.member_identifier) {
-                    return Err(EngineError::Validation(
-                        "member_identifier is not a DKG participant for this session".to_string(),
-                    ));
-                }
-            }
-            enforce_signing_message_binding_to_policy_checked_build_tx(
-                &request.session_id,
-                &request.message_hex,
-                session.tx_result.as_ref(),
+        let canonical_attempt_context = request
+            .attempt_context
+            .as_ref()
+            .map(canonical_attempt_context);
+        let mut attempt_transition_telemetry = None;
+        let mut attempt_transition_record = None;
+        if let Some(active_attempt_context) = session.active_attempt_context.as_ref() {
+            let active_attempt_match_outcome = enforce_active_attempt_context_match(
+                active_attempt_context,
+                canonical_attempt_context.as_ref(),
+                request.attempt_transition_evidence.as_ref(),
+                session.round_state.as_ref(),
+                session.sign_request_fingerprint.as_deref(),
+                strict_roast_mode_enabled,
             )?;
 
-            // Guard against partial legacy state where sign material was cleared but
-            // active attempt context was not.
-            if session.sign_request_fingerprint.is_none() || session.round_state.is_none() {
-                session.active_attempt_context = None;
-            }
-
-            let canonical_attempt_context = request
-                .attempt_context
-                .as_ref()
-                .map(canonical_attempt_context);
-            let mut attempt_transition_telemetry = None;
-            let mut attempt_transition_record = None;
-            if let Some(active_attempt_context) = session.active_attempt_context.as_ref() {
-                let active_attempt_match_outcome = enforce_active_attempt_context_match(
-                    active_attempt_context,
-                    canonical_attempt_context.as_ref(),
-                    request.attempt_transition_evidence.as_ref(),
-                    session.round_state.as_ref(),
-                    session.sign_request_fingerprint.as_deref(),
-                    strict_roast_mode_enabled,
-                )?;
-
-                if let ActiveAttemptMatchOutcome::AdvanceAuthorized = active_attempt_match_outcome {
-                    let incoming_attempt_context =
-                        canonical_attempt_context.as_ref().ok_or_else(|| {
-                            EngineError::Internal(
-                                "missing incoming attempt context for authorized transition"
-                                    .to_string(),
-                            )
-                        })?;
-                    let transition_evidence = request
+            if let ActiveAttemptMatchOutcome::AdvanceAuthorized = active_attempt_match_outcome {
+                let incoming_attempt_context =
+                    canonical_attempt_context.as_ref().ok_or_else(|| {
+                        EngineError::Internal(
+                            "missing incoming attempt context for authorized transition"
+                                .to_string(),
+                        )
+                    })?;
+                let transition_evidence =
+                    request
                         .attempt_transition_evidence
                         .as_ref()
                         .ok_or_else(|| {
@@ -5413,157 +5516,194 @@ pub fn start_sign_round(request: StartSignRoundRequest) -> Result<RoundState, En
                                     .to_string(),
                             )
                         })?;
-                    attempt_transition_telemetry = build_attempt_transition_telemetry(
-                        active_attempt_context,
-                        incoming_attempt_context,
-                        Some(transition_evidence),
-                    );
-                    if attempt_transition_telemetry.is_none() {
-                        return Err(EngineError::Internal(
-                            "missing transition telemetry evidence for authorized transition"
-                                .to_string(),
-                        ));
-                    }
-                    attempt_transition_record = Some(build_transcript_audit_record(
-                        active_attempt_context,
-                        incoming_attempt_context,
-                        transition_evidence,
-                    )?);
-                    clear_active_sign_round_for_attempt_transition(session);
+                attempt_transition_telemetry = build_attempt_transition_telemetry(
+                    active_attempt_context,
+                    incoming_attempt_context,
+                    Some(transition_evidence),
+                );
+                if attempt_transition_telemetry.is_none() {
+                    return Err(EngineError::Internal(
+                        "missing transition telemetry evidence for authorized transition"
+                            .to_string(),
+                    ));
                 }
+                attempt_transition_record = Some(build_transcript_audit_record(
+                    active_attempt_context,
+                    incoming_attempt_context,
+                    transition_evidence,
+                )?);
+                clear_active_sign_round_for_attempt_transition(session);
             }
+        }
 
-            if let Some(existing) = &session.sign_request_fingerprint {
-                if existing == &request_fingerprint {
-                    return session.round_state.clone().ok_or_else(|| {
-                        EngineError::Internal("missing round state cache".to_string())
-                    });
-                }
+        if let Some(existing) = &session.sign_request_fingerprint {
+            let matches_canonical_fingerprint = existing == &request_fingerprint;
+            let matches_legacy_fingerprint = !matches_canonical_fingerprint
+                && (existing == &legacy_member_request_fingerprint
+                    || existing == &legacy_canonical_with_transition_evidence_fingerprint
+                    || existing == &legacy_member_with_transition_evidence_fingerprint);
 
-                return Err(EngineError::SessionConflict {
-                    session_id: request.session_id,
-                });
-            }
-
-            let signing_participants = {
+            if matches_canonical_fingerprint || matches_legacy_fingerprint {
+                let mut round_state = session.round_state.clone().ok_or_else(|| {
+                    EngineError::Internal("missing round state cache".to_string())
+                })?;
+                let sign_message_bytes = session.sign_message_bytes.as_ref().ok_or_else(|| {
+                    EngineError::Internal("missing sign message cache".to_string())
+                })?;
+                let signing_participants =
+                    round_state.signing_participants.clone().ok_or_else(|| {
+                        EngineError::Internal(
+                            "missing round signing participants cache".to_string(),
+                        )
+                    })?;
                 let dkg_key_packages = session.dkg_key_packages.as_ref().ok_or_else(|| {
                     EngineError::Internal("missing DKG key package cache".to_string())
                 })?;
-                resolve_signing_participants(&request, dkg.threshold, dkg_key_packages)?
-            };
-            if let Some(canonical_attempt_signing_participants) = validate_attempt_context(
-                &request.session_id,
-                &message_digest_hex,
-                dkg.threshold,
-                request.attempt_context.as_ref(),
-                strict_roast_mode_enabled,
-            )? {
-                if canonical_attempt_signing_participants != signing_participants {
-                    return Err(EngineError::Validation(
-                    "attempt_context.included_participants must match resolved signing_participants"
-                        .to_string(),
-                ));
-                }
-            }
-            enforce_not_quarantined_identifiers(
-                &request.session_id,
-                &signing_participants,
-                &quarantined_operator_identifiers,
-                auto_quarantine_config.as_ref(),
-            )?;
 
-            let signing_participants_fingerprint = fingerprint(&signing_participants)?;
-            let consumed_attempt_id = canonical_attempt_context
-                .as_ref()
-                .map(|attempt_context| attempt_context.attempt_id.clone());
-            if let Some(attempt_id) = consumed_attempt_id.as_ref() {
-                if session.consumed_attempt_ids.contains(attempt_id) {
-                    return Err(EngineError::ConsumedAttemptReplay {
-                        session_id: request.session_id.clone(),
-                        attempt_id: attempt_id.clone(),
-                    });
-                }
-                ensure_consumed_registry_insert_capacity(
-                    &session.consumed_attempt_ids,
-                    attempt_id,
-                    "consumed_attempt_ids",
-                    &request.session_id,
-                )?;
-            }
-            let round_id = derive_round_id(
-                &request.session_id,
-                &request.key_group,
-                &request.message_hex,
-                &signing_participants_fingerprint,
-                canonical_attempt_context.as_ref(),
-            );
-            if session.consumed_sign_round_ids.contains(&round_id) {
-                return Err(EngineError::ConsumedRoundReplay {
-                    session_id: request.session_id.clone(),
-                    round_id: round_id.clone(),
-                });
-            }
-            ensure_consumed_registry_insert_capacity(
-                &session.consumed_sign_round_ids,
-                &round_id,
-                "consumed_sign_round_ids",
-                &request.session_id,
-            )?;
-            let own_contribution = {
-                let dkg_key_packages = session.dkg_key_packages.as_ref().ok_or_else(|| {
-                    EngineError::Internal("missing DKG key package cache".to_string())
-                })?;
-                build_real_signature_share_contribution(
+                round_state.own_contribution = build_real_signature_share_contribution(
                     dkg_key_packages,
                     &signing_participants,
                     &request,
-                    &round_id,
-                    &message_bytes,
-                )?
-            };
+                    &round_state.round_id,
+                    sign_message_bytes,
+                    taproot_merkle_root.as_ref(),
+                )?;
 
-            if let Some(transition_telemetry) = attempt_transition_telemetry.as_ref() {
-                record_hardening_telemetry(|telemetry| {
-                    telemetry.attempt_transition_total =
-                        telemetry.attempt_transition_total.saturating_add(1);
-                    if transition_telemetry.coordinator_rotated {
-                        telemetry.coordinator_failover_total =
-                            telemetry.coordinator_failover_total.saturating_add(1);
-                    }
+                if matches_legacy_fingerprint {
+                    session.sign_request_fingerprint = Some(request_fingerprint.clone());
+                    persist_engine_state_to_storage(&guard)?;
+                }
+
+                return Ok(round_state);
+            }
+
+            return Err(EngineError::SessionConflict {
+                session_id: request.session_id,
+            });
+        }
+
+        let signing_participants = {
+            let dkg_key_packages = session.dkg_key_packages.as_ref().ok_or_else(|| {
+                EngineError::Internal("missing DKG key package cache".to_string())
+            })?;
+            resolve_signing_participants(&request, dkg.threshold, dkg_key_packages)?
+        };
+        if let Some(canonical_attempt_signing_participants) = validate_attempt_context(
+            &request.session_id,
+            &message_digest_hex,
+            dkg.threshold,
+            request.attempt_context.as_ref(),
+            strict_roast_mode_enabled,
+        )? {
+            if canonical_attempt_signing_participants != signing_participants {
+                return Err(EngineError::Validation(
+                    "attempt_context.included_participants must match resolved signing_participants"
+                        .to_string(),
+                ));
+            }
+        }
+        enforce_not_quarantined_identifiers(
+            &request.session_id,
+            &signing_participants,
+            &quarantined_operator_identifiers,
+            auto_quarantine_config.as_ref(),
+        )?;
+
+        let signing_participants_fingerprint = fingerprint(&signing_participants)?;
+        let consumed_attempt_id = canonical_attempt_context
+            .as_ref()
+            .map(|attempt_context| attempt_context.attempt_id.clone());
+        if let Some(attempt_id) = consumed_attempt_id.as_ref() {
+            if session.consumed_attempt_ids.contains(attempt_id) {
+                return Err(EngineError::ConsumedAttemptReplay {
+                    session_id: request.session_id.clone(),
+                    attempt_id: attempt_id.clone(),
                 });
             }
-            if let Some(transition_record) = attempt_transition_record.as_ref() {
-                ensure_attempt_transition_record_insert_capacity(
-                    &session.attempt_transition_records,
-                    &request.session_id,
-                )?;
-                session
-                    .attempt_transition_records
-                    .push(transition_record.clone());
-                pending_transition_record = Some(transition_record.clone());
-            }
-
-            let round_state = RoundState {
+            ensure_consumed_registry_insert_capacity(
+                &session.consumed_attempt_ids,
+                attempt_id,
+                "consumed_attempt_ids",
+                &request.session_id,
+            )?;
+        }
+        let round_id = derive_round_id(
+            &request.session_id,
+            &request.key_group,
+            &request.message_hex,
+            request.taproot_merkle_root_hex.as_deref(),
+            &signing_participants_fingerprint,
+            canonical_attempt_context.as_ref(),
+        );
+        if session.consumed_sign_round_ids.contains(&round_id) {
+            return Err(EngineError::ConsumedRoundReplay {
                 session_id: request.session_id.clone(),
                 round_id: round_id.clone(),
-                required_contributions: dkg.threshold,
-                message_digest_hex: message_digest_hex.clone(),
-                signing_participants: Some(signing_participants),
-                attempt_transition_telemetry,
-                own_contribution,
-            };
-
-            session.sign_request_fingerprint = Some(request_fingerprint);
-            session.sign_message_bytes = Some(Zeroizing::new(message_bytes));
-            session.round_state = Some(round_state.clone());
-            session.active_attempt_context = canonical_attempt_context;
-            if let Some(attempt_id) = consumed_attempt_id {
-                session.consumed_attempt_ids.insert(attempt_id);
-            }
-            session.consumed_sign_round_ids.insert(round_id);
-
-            round_state
+            });
+        }
+        ensure_consumed_registry_insert_capacity(
+            &session.consumed_sign_round_ids,
+            &round_id,
+            "consumed_sign_round_ids",
+            &request.session_id,
+        )?;
+        let own_contribution = {
+            let dkg_key_packages = session.dkg_key_packages.as_ref().ok_or_else(|| {
+                EngineError::Internal("missing DKG key package cache".to_string())
+            })?;
+            build_real_signature_share_contribution(
+                dkg_key_packages,
+                &signing_participants,
+                &request,
+                &round_id,
+                &message_bytes,
+                taproot_merkle_root.as_ref(),
+            )?
         };
+
+        if let Some(transition_telemetry) = attempt_transition_telemetry.as_ref() {
+            record_hardening_telemetry(|telemetry| {
+                telemetry.attempt_transition_total =
+                    telemetry.attempt_transition_total.saturating_add(1);
+                if transition_telemetry.coordinator_rotated {
+                    telemetry.coordinator_failover_total =
+                        telemetry.coordinator_failover_total.saturating_add(1);
+                }
+            });
+        }
+        if let Some(transition_record) = attempt_transition_record.as_ref() {
+            ensure_attempt_transition_record_insert_capacity(
+                &session.attempt_transition_records,
+                &request.session_id,
+            )?;
+            session
+                .attempt_transition_records
+                .push(transition_record.clone());
+            pending_transition_record = Some(transition_record.clone());
+        }
+
+        let round_state = RoundState {
+            session_id: request.session_id.clone(),
+            round_id: round_id.clone(),
+            required_contributions: dkg.threshold,
+            message_digest_hex: message_digest_hex.clone(),
+            taproot_merkle_root_hex: request.taproot_merkle_root_hex.clone(),
+            signing_participants: Some(signing_participants),
+            attempt_transition_telemetry,
+            own_contribution,
+        };
+
+        session.sign_request_fingerprint = Some(request_fingerprint);
+        session.sign_message_bytes = Some(Zeroizing::new(message_bytes));
+        session.round_state = Some(round_state.clone());
+        session.active_attempt_context = canonical_attempt_context;
+        if let Some(attempt_id) = consumed_attempt_id {
+            session.consumed_attempt_ids.insert(attempt_id);
+        }
+        session.consumed_sign_round_ids.insert(round_id);
+
+        round_state
+    };
 
     if let Some(transition_record) = pending_transition_record.as_ref() {
         apply_auto_quarantine_faults_for_transition(
@@ -5645,6 +5785,7 @@ fn build_real_signature_share_contribution(
     request: &StartSignRoundRequest,
     round_id: &str,
     message_bytes: &[u8],
+    taproot_merkle_root: Option<&[u8; 32]>,
 ) -> Result<RoundContribution, EngineError> {
     let mut commitments = BTreeMap::new();
     let mut own_nonces = None;
@@ -5693,8 +5834,16 @@ fn build_real_signature_share_contribution(
         })?;
 
     let signing_package = frost::SigningPackage::new(commitments, message_bytes);
-    let signature_share_result =
-        frost::round2::sign(&signing_package, &own_nonces, own_key_package);
+    let signature_share_result = if let Some(taproot_merkle_root) = taproot_merkle_root {
+        frost::round2::sign_with_tweak(
+            &signing_package,
+            &own_nonces,
+            own_key_package,
+            Some(taproot_merkle_root.as_slice()),
+        )
+    } else {
+        frost::round2::sign(&signing_package, &own_nonces, own_key_package)
+    };
     own_nonces.zeroize();
     let signature_share = signature_share_result
         .map_err(|e| EngineError::Internal(format!("failed to create signature share: {e}")))?;
@@ -5710,7 +5859,7 @@ fn build_real_signature_share_contribution(
 }
 
 pub fn finalize_sign_round(
-    request: FinalizeSignRoundRequest,
+    mut request: FinalizeSignRoundRequest,
     bootstrap_mode_enabled: bool,
 ) -> Result<SignatureResult, EngineError> {
     record_hardening_telemetry(|telemetry| {
@@ -5721,6 +5870,8 @@ pub fn finalize_sign_round(
     enforce_provenance_gate()?;
     validate_session_id(&request.session_id)?;
     let strict_roast_mode_enabled = roast_strict_mode_enabled();
+    let finalize_taproot_merkle_root =
+        canonicalize_taproot_merkle_root_hex(&mut request.taproot_merkle_root_hex)?;
 
     let request_fingerprint = {
         let mut canonical_attempt_context = request.attempt_context.clone();
@@ -5735,6 +5886,7 @@ pub fn finalize_sign_round(
 
         fingerprint(&FinalizeSignRoundRequest {
             session_id: request.session_id.clone(),
+            taproot_merkle_root_hex: request.taproot_merkle_root_hex.clone(),
             round_contributions: canonical_contributions,
             attempt_context: canonical_attempt_context,
         })?
@@ -5806,6 +5958,11 @@ pub fn finalize_sign_round(
             .ok_or_else(|| EngineError::SignRoundNotStarted {
                 session_id: request.session_id.clone(),
             })?;
+    if request.taproot_merkle_root_hex != round_state.taproot_merkle_root_hex {
+        return Err(EngineError::Validation(
+            "taproot_merkle_root_hex does not match active signing round".to_string(),
+        ));
+    }
     if signing_policy_firewall_enforced() {
         let sign_message_hex = session
             .sign_message_bytes
@@ -5875,6 +6032,11 @@ pub fn finalize_sign_round(
         return Err(EngineError::SyntheticContributionRejected {
             session_id: request.session_id,
         });
+    }
+    if is_synthetic && round_state.taproot_merkle_root_hex.is_some() {
+        return Err(EngineError::Validation(
+            "synthetic contributions do not support taproot tweaked signing".to_string(),
+        ));
     }
 
     let signature_result = if is_synthetic {
@@ -5984,10 +6146,37 @@ pub fn finalize_sign_round(
         }
 
         let signing_package = frost::SigningPackage::new(commitments, sign_message_bytes);
-        let signature =
-            frost::aggregate(&signing_package, &signature_shares, dkg_public_key_package).map_err(
-                |e| EngineError::Validation(format!("failed to aggregate signature shares: {e}")),
-            )?;
+        let signature = if let Some(taproot_merkle_root) = finalize_taproot_merkle_root.as_ref() {
+            frost::aggregate_with_tweak(
+                &signing_package,
+                &signature_shares,
+                dkg_public_key_package,
+                Some(taproot_merkle_root.as_slice()),
+            )
+        } else {
+            frost::aggregate(&signing_package, &signature_shares, dkg_public_key_package)
+        }
+        .map_err(|e| {
+            EngineError::Validation(format!("failed to aggregate signature shares: {e}"))
+        })?;
+
+        let verification_key_package =
+            if let Some(taproot_merkle_root) = finalize_taproot_merkle_root.as_ref() {
+                dkg_public_key_package
+                    .clone()
+                    .tweak(Some(taproot_merkle_root.as_slice()))
+            } else {
+                dkg_public_key_package.clone()
+            };
+        verification_key_package
+            .verifying_key()
+            .verify(sign_message_bytes, &signature)
+            .map_err(|e| {
+                EngineError::Validation(format!(
+                    "aggregate signature failed self-verification: {e}"
+                ))
+            })?;
+
         let signature_bytes = signature.serialize().map_err(|e| {
             EngineError::Internal(format!("failed to serialize aggregate signature: {e}"))
         })?;
@@ -6597,6 +6786,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -6606,6 +6796,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -6821,6 +7012,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("production profile should reject bootstrap dealer DKG");
 
@@ -6858,6 +7050,7 @@ mod tests {
                     },
                 ],
                 threshold: 2,
+                dkg_seed_hex: None,
             })
             .expect_err("missing/empty profile should reject bootstrap dealer DKG");
 
@@ -6886,6 +7079,43 @@ mod tests {
     }
 
     #[test]
+    fn run_dkg_rejects_malformed_seed_as_validation_input() {
+        let _guard = lock_test_state();
+        reset_for_tests();
+        clear_state_storage_policy_overrides();
+
+        for (index, seed_hex, expected_message) in [
+            (1, "not-hex", "dkg_seed_hex must be valid hex"),
+            (2, "0102", "dkg_seed_hex decoded to [2] bytes, expected 32"),
+        ] {
+            let err = run_dkg(RunDkgRequest {
+                session_id: format!("session-malformed-dkg-seed-{index}"),
+                participants: vec![
+                    crate::api::DkgParticipant {
+                        identifier: 1,
+                        public_key_hex: "02aa".to_string(),
+                    },
+                    crate::api::DkgParticipant {
+                        identifier: 2,
+                        public_key_hex: "02bb".to_string(),
+                    },
+                ],
+                threshold: 2,
+                dkg_seed_hex: Some(seed_hex.to_string()),
+            })
+            .expect_err("malformed DKG seed should be rejected");
+
+            let EngineError::Validation(message) = err else {
+                panic!("unexpected error variant");
+            };
+            assert!(
+                message.contains(expected_message),
+                "unexpected validation message: {message}"
+            );
+        }
+    }
+
+    #[test]
     fn run_dkg_rejects_when_provenance_gate_requires_attestation() {
         let _guard = lock_test_state();
         reset_for_tests();
@@ -6908,6 +7138,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected provenance gate rejection");
 
@@ -6978,6 +7209,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         });
         assert!(result.is_ok(), "expected signed attestation acceptance");
 
@@ -7021,6 +7253,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected missing signature rejection");
 
@@ -7083,6 +7316,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected signature verification rejection");
 
@@ -7136,6 +7370,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected attestation expiry rejection");
 
@@ -7189,6 +7424,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected attestation missing expiry rejection");
 
@@ -7245,6 +7481,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected attestation expiry too far rejection");
 
@@ -7307,6 +7544,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected trust-root mismatch rejection");
 
@@ -7360,6 +7598,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected runtime version mismatch rejection");
 
@@ -7413,6 +7652,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected status mismatch rejection");
 
@@ -7459,6 +7699,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected invalid trust root rejection");
 
@@ -7506,6 +7747,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected session_id validation rejection");
 
@@ -7542,6 +7784,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected admission policy rejection");
 
@@ -7575,6 +7818,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected admission policy config rejection");
 
@@ -7613,6 +7857,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected admission policy config rejection");
 
@@ -7922,6 +8167,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected run_dkg provenance gate rejection");
         assert!(matches!(
@@ -7951,6 +8197,7 @@ mod tests {
         let finalize_err = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: "session-metrics-provenance-finalize".to_string(),
+                taproot_merkle_root_hex: None,
                 round_contributions: vec![],
                 attempt_context: None,
             },
@@ -7996,6 +8243,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -8004,6 +8252,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -8054,6 +8303,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -8064,6 +8314,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2, 3]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -8085,6 +8336,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -8164,6 +8416,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -8174,6 +8427,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2, 3]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -8194,6 +8448,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2, 3]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -8245,6 +8500,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -8255,6 +8511,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2, 3]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -8276,6 +8533,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -8305,6 +8563,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected auto-quarantine rejection");
         let EngineError::QuarantinePolicyRejected { reason_code, .. } = err else {
@@ -8336,6 +8595,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("allowlisted operator should bypass quarantine rejection");
 
@@ -8379,6 +8639,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -8389,6 +8650,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2, 3]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -8410,6 +8672,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -8445,6 +8708,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect_err("expected quarantine rejection after reload");
         let EngineError::QuarantinePolicyRejected { reason_code, .. } = err else {
@@ -8479,6 +8743,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -8555,6 +8820,7 @@ mod tests {
             key_group: post_rekey_status
                 .continuity_reference_key_group
                 .expect("continuity reference key group"),
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -8677,6 +8943,7 @@ mod tests {
         let finalize_err = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: round_state.session_id.clone(),
+                taproot_merkle_root_hex: None,
                 round_contributions: vec![
                     RoundContribution {
                         identifier: 1,
@@ -8849,6 +9116,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -8857,6 +9125,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -8894,6 +9163,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -8904,6 +9174,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -8944,6 +9215,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -8955,6 +9227,7 @@ mod tests {
             member_identifier: 1,
             message_hex,
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -8989,6 +9262,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -8999,6 +9273,7 @@ mod tests {
             member_identifier: 1,
             message_hex,
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -9018,6 +9293,7 @@ mod tests {
         let err = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: session_id.to_string(),
+                taproot_merkle_root_hex: None,
                 round_contributions: vec![
                     RoundContribution {
                         identifier: 1,
@@ -9065,6 +9341,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -9075,6 +9352,7 @@ mod tests {
             member_identifier: 1,
             message_hex,
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -9096,6 +9374,7 @@ mod tests {
         let err = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: session_id.to_string(),
+                taproot_merkle_root_hex: None,
                 round_contributions: vec![
                     RoundContribution {
                         identifier: 1,
@@ -9525,6 +9804,7 @@ mod tests {
             request_session_id,
             key_group,
             message_hex,
+            None,
             signing_participants_fingerprint,
             Some(&lowercase_attempt_context),
         );
@@ -9532,6 +9812,7 @@ mod tests {
             request_session_id,
             key_group,
             message_hex,
+            None,
             signing_participants_fingerprint,
             Some(&uppercase_attempt_context),
         );
@@ -9545,6 +9826,7 @@ mod tests {
             request_session_id,
             key_group,
             message_hex,
+            None,
             signing_participants_fingerprint,
             Some(&different_attempt_context),
         );
@@ -9554,6 +9836,7 @@ mod tests {
             request_session_id,
             key_group,
             message_hex,
+            None,
             signing_participants_fingerprint,
             None,
         );
@@ -9660,6 +9943,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -9668,6 +9952,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -9710,6 +9995,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("seed non-production dkg");
 
@@ -9724,6 +10010,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -9765,6 +10052,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -9775,6 +10063,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -9806,6 +10095,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -9818,6 +10108,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -9855,6 +10146,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -9867,6 +10159,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -9904,6 +10197,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -9916,6 +10210,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -9953,6 +10248,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -9965,6 +10261,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -10002,6 +10299,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10026,6 +10324,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(invalid_attempt_context),
             attempt_transition_evidence: None,
@@ -10063,6 +10362,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10074,6 +10374,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -10111,6 +10412,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10127,6 +10429,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -10164,6 +10467,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10180,6 +10484,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(uppercase_attempt_context),
             attempt_transition_evidence: None,
@@ -10193,6 +10498,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![2, 1]),
             attempt_context: Some(lowercase_attempt_context),
             attempt_transition_evidence: None,
@@ -10224,6 +10530,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10234,6 +10541,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -10243,6 +10551,7 @@ mod tests {
         let err = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: session_id.to_string(),
+                taproot_merkle_root_hex: None,
                 attempt_context: None,
                 round_contributions: vec![
                     RoundContribution {
@@ -10291,6 +10600,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10301,6 +10611,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -10310,6 +10621,7 @@ mod tests {
         let signature_result = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: session_id.to_string(),
+                taproot_merkle_root_hex: None,
                 attempt_context: None,
                 round_contributions: vec![
                     RoundContribution {
@@ -10354,6 +10666,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10364,6 +10677,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -10375,6 +10689,7 @@ mod tests {
         let signature_result = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: session_id.to_string(),
+                taproot_merkle_root_hex: None,
                 attempt_context: None,
                 round_contributions: vec![
                     RoundContribution {
@@ -10421,6 +10736,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10431,6 +10747,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -10442,6 +10759,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -10474,6 +10792,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10484,6 +10803,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: None,
@@ -10497,6 +10817,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -10534,6 +10855,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10544,6 +10866,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -10557,6 +10880,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: None,
@@ -10594,6 +10918,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10604,6 +10929,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -10618,6 +10944,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -10643,6 +10970,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(stale_attempt),
             attempt_transition_evidence: None,
@@ -10655,6 +10983,89 @@ mod tests {
         assert!(
             message.contains("stale"),
             "expected stale-attempt validation message, got: {message}"
+        );
+    }
+
+    #[test]
+    fn start_sign_round_allows_member_reuse_after_transition_without_resending_evidence() {
+        let _guard = lock_test_state();
+        reset_for_tests();
+        let _roast_strict_mode = RoastStrictModeGuard::enable();
+
+        let session_id = "session-roast-transition-reuse-without-evidence";
+        let message_hex = "deadbeef";
+
+        let dkg_result = run_dkg(RunDkgRequest {
+            session_id: session_id.to_string(),
+            participants: vec![
+                crate::api::DkgParticipant {
+                    identifier: 1,
+                    public_key_hex: "02aa".to_string(),
+                },
+                crate::api::DkgParticipant {
+                    identifier: 2,
+                    public_key_hex: "02bb".to_string(),
+                },
+            ],
+            threshold: 2,
+            dkg_seed_hex: None,
+        })
+        .expect("run dkg");
+
+        let attempt_one =
+            build_deterministic_attempt_context(session_id, message_hex, 1, vec![1, 2]);
+        start_sign_round(StartSignRoundRequest {
+            session_id: session_id.to_string(),
+            member_identifier: 1,
+            message_hex: message_hex.to_string(),
+            key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
+            signing_participants: Some(vec![1, 2]),
+            attempt_context: Some(attempt_one),
+            attempt_transition_evidence: None,
+        })
+        .expect("start sign round for attempt 1");
+
+        let transition_evidence = build_attempt_transition_evidence_from_active_session(session_id);
+        let attempt_two =
+            build_deterministic_attempt_context(session_id, message_hex, 2, vec![1, 2]);
+        let transitioned_round_state = start_sign_round(StartSignRoundRequest {
+            session_id: session_id.to_string(),
+            member_identifier: 1,
+            message_hex: message_hex.to_string(),
+            key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
+            signing_participants: Some(vec![1, 2]),
+            attempt_context: Some(attempt_two.clone()),
+            attempt_transition_evidence: Some(transition_evidence),
+        })
+        .expect("start sign round for authorized attempt 2");
+
+        let reused_round_state = start_sign_round(StartSignRoundRequest {
+            session_id: session_id.to_string(),
+            member_identifier: 2,
+            message_hex: message_hex.to_string(),
+            key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
+            signing_participants: Some(vec![1, 2]),
+            attempt_context: Some(attempt_two),
+            attempt_transition_evidence: None,
+        })
+        .expect("reuse active attempt without transition evidence");
+
+        assert_eq!(
+            transitioned_round_state.round_id,
+            reused_round_state.round_id
+        );
+        assert_eq!(transitioned_round_state.required_contributions, 2);
+        assert_eq!(reused_round_state.required_contributions, 2);
+        assert_eq!(transitioned_round_state.own_contribution.identifier, 1);
+        assert_eq!(reused_round_state.own_contribution.identifier, 2);
+        assert_ne!(
+            transitioned_round_state
+                .own_contribution
+                .signature_share_hex,
+            reused_round_state.own_contribution.signature_share_hex
         );
     }
 
@@ -10681,6 +11092,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10691,6 +11103,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -10707,6 +11120,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -10743,6 +11157,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10753,6 +11168,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one.clone()),
             attempt_transition_evidence: None,
@@ -10767,6 +11183,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -10780,6 +11197,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -10821,6 +11239,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10831,6 +11250,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -10848,6 +11268,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(invalid_transition_evidence),
@@ -10885,6 +11306,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10895,6 +11317,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -10909,6 +11332,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_three),
             attempt_transition_evidence: Some(transition_evidence),
@@ -10946,6 +11370,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -10956,6 +11381,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -10973,6 +11399,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -11010,6 +11437,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -11020,6 +11448,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -11041,6 +11470,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -11082,6 +11512,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -11092,6 +11523,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2, 3]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -11113,6 +11545,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -11158,6 +11591,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -11168,6 +11602,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2, 3]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -11189,6 +11624,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -11230,6 +11666,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -11240,6 +11677,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2, 3]),
             attempt_context: Some(attempt_one),
             attempt_transition_evidence: None,
@@ -11261,6 +11699,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_two),
             attempt_transition_evidence: Some(transition_evidence),
@@ -11298,6 +11737,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -11308,6 +11748,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(start_attempt),
             attempt_transition_evidence: None,
@@ -11318,6 +11759,7 @@ mod tests {
         let err = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: session_id.to_string(),
+                taproot_merkle_root_hex: None,
                 attempt_context: Some(mismatched_attempt),
                 round_contributions: vec![
                     round_state.own_contribution.clone(),
@@ -11362,6 +11804,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("run dkg");
 
@@ -11372,6 +11815,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(start_attempt),
             attempt_transition_evidence: None,
@@ -11383,6 +11827,7 @@ mod tests {
         let err = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: session_id.to_string(),
+                taproot_merkle_root_hex: None,
                 attempt_context: Some(stale_attempt),
                 round_contributions: vec![
                     round_state.own_contribution.clone(),
@@ -11413,6 +11858,7 @@ mod tests {
 
         let request = FinalizeSignRoundRequest {
             session_id: "session-synthetic-rejected".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -11441,6 +11887,7 @@ mod tests {
 
         let request = FinalizeSignRoundRequest {
             session_id: "session-synthetic-accepted".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -11481,6 +11928,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -11488,7 +11936,8 @@ mod tests {
             session_id: "session-real-finalize".to_string(),
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
-            key_group: dkg_result.key_group,
+            key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -11530,6 +11979,7 @@ mod tests {
             &member_two_request,
             &round_state.round_id,
             &hex::decode(&member_two_request.message_hex).expect("message decode"),
+            None,
         )
         .expect("member two contribution");
         let member_three_request = StartSignRoundRequest {
@@ -11543,11 +11993,13 @@ mod tests {
             &member_three_request,
             &round_state.round_id,
             &hex::decode(&member_three_request.message_hex).expect("message decode"),
+            None,
         )
         .expect("member three contribution");
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-real-finalize".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 round_state.own_contribution.clone(),
@@ -11564,10 +12016,221 @@ mod tests {
         let signature_bytes = hex::decode(&first_result.signature_hex).expect("signature decode");
         assert_eq!(signature_bytes.len(), 64);
         let signature = frost::Signature::deserialize(&signature_bytes).expect("signature parse");
+        let exported_key_group_bytes =
+            hex::decode(&dkg_result.key_group).expect("decode exported key group");
+        let exported_verifying_key = frost::VerifyingKey::deserialize(&exported_key_group_bytes)
+            .expect("deserialize exported key group");
+        assert_eq!(
+            dkg_result.key_group,
+            hex::encode(
+                dkg_public_key_package
+                    .verifying_key()
+                    .serialize()
+                    .expect("serialize DKG verifying key")
+            )
+        );
         dkg_public_key_package
             .verifying_key()
             .verify(&sign_message_bytes, &signature)
             .expect("signature verification");
+        exported_verifying_key
+            .verify(&sign_message_bytes, &signature)
+            .expect("signature verifies under exported key group");
+        assert!(
+            dkg_public_key_package
+                .clone()
+                .tweak::<&[u8]>(None)
+                .verifying_key()
+                .verify(&sign_message_bytes, &signature)
+                .is_err(),
+            "no-root signature must not verify under an additional BIP-86 empty-root tweak"
+        );
+    }
+
+    #[test]
+    fn finalize_aggregates_real_taproot_tweaked_contributions() {
+        let _guard = lock_test_state();
+        reset_for_tests();
+
+        let run_dkg_request = RunDkgRequest {
+            session_id: "session-real-taproot-tweak".to_string(),
+            participants: vec![
+                crate::api::DkgParticipant {
+                    identifier: 1,
+                    public_key_hex: "02aa".to_string(),
+                },
+                crate::api::DkgParticipant {
+                    identifier: 2,
+                    public_key_hex: "02bb".to_string(),
+                },
+                crate::api::DkgParticipant {
+                    identifier: 3,
+                    public_key_hex: "02cc".to_string(),
+                },
+            ],
+            threshold: 2,
+            dkg_seed_hex: None,
+        };
+
+        let taproot_merkle_root_hex =
+            "37a57b86de2819d2b72a173df46238a7ad295ea1485d3b40e9415daa82b4fdcb";
+        let taproot_merkle_root_bytes =
+            hex::decode(taproot_merkle_root_hex).expect("taproot merkle root");
+        let mut taproot_merkle_root = [0_u8; 32];
+        taproot_merkle_root.copy_from_slice(&taproot_merkle_root_bytes);
+
+        let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
+        let start_request = StartSignRoundRequest {
+            session_id: "session-real-taproot-tweak".to_string(),
+            member_identifier: 1,
+            message_hex: "deadbeef".to_string(),
+            key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: Some(taproot_merkle_root_hex.to_string()),
+            signing_participants: None,
+            attempt_context: None,
+            attempt_transition_evidence: None,
+        };
+        let round_state = start_sign_round(start_request.clone()).expect("start sign round");
+        assert_eq!(
+            round_state.taproot_merkle_root_hex.as_deref(),
+            Some(taproot_merkle_root_hex)
+        );
+        let signing_participants = round_state
+            .signing_participants
+            .clone()
+            .expect("round signing participants");
+
+        let (dkg_key_packages, dkg_public_key_package, sign_message_bytes) = {
+            let guard = state().expect("engine state").lock().expect("engine lock");
+            let session = guard
+                .sessions
+                .get(&start_request.session_id)
+                .expect("session state");
+
+            (
+                session.dkg_key_packages.clone().expect("dkg key packages"),
+                session
+                    .dkg_public_key_package
+                    .clone()
+                    .expect("dkg public key package"),
+                session
+                    .sign_message_bytes
+                    .clone()
+                    .expect("sign message bytes"),
+            )
+        };
+
+        let member_two_request = StartSignRoundRequest {
+            member_identifier: 2,
+            attempt_transition_evidence: None,
+            ..start_request.clone()
+        };
+        let member_two_contribution = build_real_signature_share_contribution(
+            &dkg_key_packages,
+            &signing_participants,
+            &member_two_request,
+            &round_state.round_id,
+            &hex::decode(&member_two_request.message_hex).expect("message decode"),
+            Some(&taproot_merkle_root),
+        )
+        .expect("member two contribution");
+        let member_three_request = StartSignRoundRequest {
+            member_identifier: 3,
+            attempt_transition_evidence: None,
+            ..member_two_request.clone()
+        };
+        let member_three_contribution = build_real_signature_share_contribution(
+            &dkg_key_packages,
+            &signing_participants,
+            &member_three_request,
+            &round_state.round_id,
+            &hex::decode(&member_three_request.message_hex).expect("message decode"),
+            Some(&taproot_merkle_root),
+        )
+        .expect("member three contribution");
+
+        let finalize_request = FinalizeSignRoundRequest {
+            session_id: "session-real-taproot-tweak".to_string(),
+            taproot_merkle_root_hex: Some(taproot_merkle_root_hex.to_string()),
+            attempt_context: None,
+            round_contributions: vec![
+                round_state.own_contribution.clone(),
+                member_two_contribution,
+                member_three_contribution,
+            ],
+        };
+
+        let result = finalize_sign_round(finalize_request, false).expect("finalize");
+
+        assert_eq!(result.round_id, round_state.round_id);
+        let signature_bytes = hex::decode(&result.signature_hex).expect("signature decode");
+        assert_eq!(signature_bytes.len(), 64);
+        let signature = frost::Signature::deserialize(&signature_bytes).expect("signature parse");
+        let exported_key_group_bytes =
+            hex::decode(&dkg_result.key_group).expect("decode exported key group");
+        let exported_verifying_key = frost::VerifyingKey::deserialize(&exported_key_group_bytes)
+            .expect("deserialize exported key group");
+        let exported_public_key_package = frost::keys::PublicKeyPackage::new(
+            BTreeMap::<frost::Identifier, frost::keys::VerifyingShare>::new(),
+            exported_verifying_key,
+            Some(dkg_result.threshold),
+        );
+        assert_eq!(
+            dkg_result.key_group,
+            hex::encode(
+                dkg_public_key_package
+                    .verifying_key()
+                    .serialize()
+                    .expect("serialize DKG verifying key")
+            )
+        );
+        let tweaked_public_key_package = dkg_public_key_package
+            .clone()
+            .tweak(Some(taproot_merkle_root.as_slice()));
+        tweaked_public_key_package
+            .verifying_key()
+            .verify(&sign_message_bytes, &signature)
+            .expect("tweaked signature verification");
+        exported_public_key_package
+            .tweak(Some(taproot_merkle_root.as_slice()))
+            .verifying_key()
+            .verify(&sign_message_bytes, &signature)
+            .expect("tweaked signature verifies under exported key group");
+        assert!(
+            dkg_public_key_package
+                .verifying_key()
+                .verify(&sign_message_bytes, &signature)
+                .is_err(),
+            "tweaked signature must not verify under the untweaked key"
+        );
+    }
+
+    #[test]
+    fn taproot_tweak_matches_cross_repo_deposit_fixture() {
+        let internal_key =
+            hex::decode("022336f65004d8f122f1fe947ebd009a8b4add3a0d937356d568e30f7fcc2e4008")
+                .expect("decode compressed internal key");
+        let verifying_key =
+            frost::VerifyingKey::deserialize(&internal_key).expect("deserialize verifying key");
+        let public_key_package = frost::keys::PublicKeyPackage::new(
+            BTreeMap::<frost::Identifier, frost::keys::VerifyingShare>::new(),
+            verifying_key,
+            Some(1),
+        );
+
+        let merkle_root =
+            hex::decode("3d6f9a2fea1de0a6c260d1fbc0343c9b2ed84307e6a7231139b78438448ee8c0")
+                .expect("decode taproot merkle root");
+        let tweaked_public_key = public_key_package
+            .tweak(Some(merkle_root.as_slice()))
+            .verifying_key()
+            .serialize()
+            .expect("serialize tweaked verifying key");
+
+        assert_eq!(
+            hex::encode(&tweaked_public_key[1..]),
+            "90e7ce2b6cd476b7a1c2c7f6585c3fd0eae4379a508e981ed422b3e28b9ae8c2"
+        );
     }
 
     #[test]
@@ -11592,6 +12255,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -11600,6 +12264,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "cafef00d".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -11641,11 +12306,13 @@ mod tests {
             &member_two_request,
             &round_state.round_id,
             &hex::decode(&member_two_request.message_hex).expect("message decode"),
+            None,
         )
         .expect("member two contribution");
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-real-threshold-subset".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 round_state.own_contribution.clone(),
@@ -11668,6 +12335,231 @@ mod tests {
     }
 
     #[test]
+    fn start_sign_round_allows_distinct_members_for_same_active_round() {
+        let _guard = lock_test_state();
+        reset_for_tests();
+
+        let run_dkg_request = RunDkgRequest {
+            session_id: "session-real-multi-member-process".to_string(),
+            participants: vec![
+                crate::api::DkgParticipant {
+                    identifier: 1,
+                    public_key_hex: "02aa".to_string(),
+                },
+                crate::api::DkgParticipant {
+                    identifier: 2,
+                    public_key_hex: "02bb".to_string(),
+                },
+            ],
+            threshold: 2,
+            dkg_seed_hex: None,
+        };
+
+        let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
+        let start_request = StartSignRoundRequest {
+            session_id: "session-real-multi-member-process".to_string(),
+            member_identifier: 1,
+            message_hex: "baddcafe".to_string(),
+            key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
+            signing_participants: Some(vec![1, 2]),
+            attempt_context: None,
+            attempt_transition_evidence: None,
+        };
+        let first_round_state =
+            start_sign_round(start_request.clone()).expect("first member start sign round");
+
+        let second_round_state = start_sign_round(StartSignRoundRequest {
+            member_identifier: 2,
+            ..start_request.clone()
+        })
+        .expect("second member start sign round");
+
+        assert_eq!(first_round_state.session_id, second_round_state.session_id);
+        assert_eq!(first_round_state.round_id, second_round_state.round_id);
+        assert_eq!(first_round_state.required_contributions, 2);
+        assert_eq!(second_round_state.required_contributions, 2);
+        assert_eq!(first_round_state.own_contribution.identifier, 1);
+        assert_eq!(second_round_state.own_contribution.identifier, 2);
+        assert_ne!(
+            first_round_state.own_contribution.signature_share_hex,
+            second_round_state.own_contribution.signature_share_hex
+        );
+
+        let (dkg_public_key_package, sign_message_bytes) = {
+            let guard = state().expect("engine state").lock().expect("engine lock");
+            let session = guard
+                .sessions
+                .get(&start_request.session_id)
+                .expect("session state");
+
+            (
+                session
+                    .dkg_public_key_package
+                    .clone()
+                    .expect("dkg public key package"),
+                session
+                    .sign_message_bytes
+                    .clone()
+                    .expect("sign message bytes"),
+            )
+        };
+
+        let finalize_request = FinalizeSignRoundRequest {
+            session_id: start_request.session_id,
+            taproot_merkle_root_hex: None,
+            attempt_context: None,
+            round_contributions: vec![
+                first_round_state.own_contribution,
+                second_round_state.own_contribution,
+            ],
+        };
+
+        let result = finalize_sign_round(finalize_request, false).expect("finalize");
+
+        assert_eq!(result.round_id, first_round_state.round_id);
+        let signature_bytes = hex::decode(&result.signature_hex).expect("signature decode");
+        let signature = frost::Signature::deserialize(&signature_bytes).expect("signature parse");
+        dkg_public_key_package
+            .verifying_key()
+            .verify(&sign_message_bytes, &signature)
+            .expect("signature verification");
+    }
+
+    #[test]
+    fn start_sign_round_allows_taproot_threshold_subset_members_for_same_active_round() {
+        let _guard = lock_test_state();
+        reset_for_tests();
+
+        let participants = (1_u16..=100)
+            .map(|identifier| crate::api::DkgParticipant {
+                identifier,
+                public_key_hex: format!("02{identifier:02x}"),
+            })
+            .collect::<Vec<_>>();
+        let signing_participants = vec![
+            2, 3, 4, 8, 11, 13, 14, 17, 19, 21, 22, 25, 27, 29, 30, 31, 32, 33, 35, 37, 38, 39, 42,
+            44, 45, 48, 50, 51, 52, 53, 57, 58, 60, 61, 63, 64, 65, 67, 68, 73, 76, 77, 80, 81, 84,
+            86, 87, 88, 90, 94, 96,
+        ];
+        let taproot_merkle_root_hex =
+            "37a57b86de2819d2b72a173df46238a7ad295ea1485d3b40e9415daa82b4fdcb";
+
+        let dkg_result = run_dkg(RunDkgRequest {
+            session_id: "session-real-taproot-multi-member-process".to_string(),
+            participants,
+            threshold: 51,
+            dkg_seed_hex: None,
+        })
+        .expect("run dkg");
+
+        let first_request = StartSignRoundRequest {
+            session_id: "session-real-taproot-multi-member-process".to_string(),
+            member_identifier: 86,
+            message_hex: "ac692bb7fddf3f7e1e050a83cf3ffb6e8e69888ce980281aa39da169525750ef"
+                .to_string(),
+            key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: Some(taproot_merkle_root_hex.to_string()),
+            signing_participants: Some(signing_participants.clone()),
+            attempt_context: None,
+            attempt_transition_evidence: None,
+        };
+
+        let first_round_state =
+            start_sign_round(first_request.clone()).expect("first member start sign round");
+        assert_eq!(first_round_state.required_contributions, 51);
+        assert_eq!(
+            first_round_state.signing_participants.as_deref(),
+            Some(signing_participants.as_slice())
+        );
+
+        let mut contributions = vec![first_round_state.own_contribution.clone()];
+        for member_identifier in [76_u16, 39, 53, 3] {
+            let round_state = start_sign_round(StartSignRoundRequest {
+                member_identifier,
+                ..first_request.clone()
+            })
+            .expect("next member start sign round");
+
+            assert_eq!(round_state.session_id, first_round_state.session_id);
+            assert_eq!(round_state.round_id, first_round_state.round_id);
+            assert_eq!(round_state.required_contributions, 51);
+            assert_eq!(round_state.own_contribution.identifier, member_identifier);
+            contributions.push(round_state.own_contribution);
+        }
+
+        let (dkg_key_packages, dkg_public_key_package, sign_message_bytes) = {
+            let guard = state().expect("engine state").lock().expect("engine lock");
+            let session = guard
+                .sessions
+                .get(&first_request.session_id)
+                .expect("session state");
+
+            (
+                session.dkg_key_packages.clone().expect("dkg key packages"),
+                session
+                    .dkg_public_key_package
+                    .clone()
+                    .expect("dkg public key package"),
+                session
+                    .sign_message_bytes
+                    .clone()
+                    .expect("sign message bytes"),
+            )
+        };
+        let taproot_merkle_root_bytes =
+            hex::decode(taproot_merkle_root_hex).expect("taproot merkle root");
+        let mut taproot_merkle_root = [0_u8; 32];
+        taproot_merkle_root.copy_from_slice(&taproot_merkle_root_bytes);
+
+        for member_identifier in signing_participants
+            .iter()
+            .copied()
+            .filter(|identifier| ![86_u16, 76, 39, 53, 3].contains(identifier))
+            .take(46)
+        {
+            let member_request = StartSignRoundRequest {
+                member_identifier,
+                ..first_request.clone()
+            };
+            contributions.push(
+                build_real_signature_share_contribution(
+                    &dkg_key_packages,
+                    signing_participants.as_slice(),
+                    &member_request,
+                    &first_round_state.round_id,
+                    &sign_message_bytes,
+                    Some(&taproot_merkle_root),
+                )
+                .expect("additional contribution"),
+            );
+        }
+        assert_eq!(contributions.len(), 51);
+
+        let result = finalize_sign_round(
+            FinalizeSignRoundRequest {
+                session_id: first_request.session_id,
+                taproot_merkle_root_hex: Some(taproot_merkle_root_hex.to_string()),
+                attempt_context: None,
+                round_contributions: contributions,
+            },
+            false,
+        )
+        .expect("finalize");
+
+        assert_eq!(result.round_id, first_round_state.round_id);
+        let signature_bytes = hex::decode(&result.signature_hex).expect("signature decode");
+        let signature = frost::Signature::deserialize(&signature_bytes).expect("signature parse");
+        let tweaked_public_key_package = dkg_public_key_package
+            .clone()
+            .tweak(Some(taproot_merkle_root.as_slice()));
+        tweaked_public_key_package
+            .verifying_key()
+            .verify(&sign_message_bytes, &signature)
+            .expect("tweaked signature verification");
+    }
+
+    #[test]
     fn deterministic_round_nonce_and_commitment_is_message_bound() {
         let _guard = lock_test_state();
         reset_for_tests();
@@ -11685,6 +12577,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         run_dkg(run_dkg_request).expect("run dkg");
@@ -11763,6 +12656,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -11771,6 +12665,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -11802,6 +12697,7 @@ mod tests {
             &member_two_request,
             &round_state.round_id,
             &hex::decode(&member_two_request.message_hex).expect("message decode"),
+            None,
         )
         .expect("member two contribution");
 
@@ -11819,6 +12715,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-message-tamper".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 round_state.own_contribution.clone(),
@@ -11859,6 +12756,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -11867,6 +12765,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "b16b00b5".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -11898,11 +12797,13 @@ mod tests {
             &member_two_request,
             &round_state.round_id,
             &hex::decode(&member_two_request.message_hex).expect("message decode"),
+            None,
         )
         .expect("member two contribution");
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-real-contributor-set-mismatch".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 round_state.own_contribution.clone(),
@@ -11953,6 +12854,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -11961,6 +12863,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "facefeed".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -11969,6 +12872,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-real-outside-signing-cohort".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 round_state.own_contribution,
@@ -12008,6 +12912,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let mut request_b = request_a.clone();
         request_b.participants.push(crate::api::DkgParticipant {
@@ -12137,6 +13042,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         run_dkg(request_a.clone()).expect("initial run dkg");
@@ -12155,6 +13061,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let err = run_dkg(request_b).expect_err("expected session cap rejection");
         let EngineError::Internal(message) = err else {
@@ -12193,6 +13100,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let mut request_b = request_a.clone();
         request_b.session_id = "session-secret-entropy-b".to_string();
@@ -12235,6 +13143,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let mut retry_request = request.clone();
         retry_request.participants.reverse();
@@ -12456,6 +13365,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -12464,6 +13374,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -12476,6 +13387,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-persisted-idempotency".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -12495,6 +13407,96 @@ mod tests {
         let second_signature =
             finalize_sign_round(finalize_request, true).expect("persisted finalize retry");
         assert_eq!(first_signature, second_signature);
+
+        reset_for_tests();
+        cleanup_test_state_artifacts(&state_path);
+        clear_state_storage_policy_overrides();
+    }
+
+    #[test]
+    fn start_sign_round_accepts_persisted_legacy_member_bound_fingerprint() {
+        let _guard = lock_test_state();
+        let state_path = configure_test_state_path("sign_legacy_member_fingerprint");
+        reset_for_tests();
+
+        let run_dkg_request = RunDkgRequest {
+            session_id: "session-legacy-member-fingerprint".to_string(),
+            participants: vec![
+                crate::api::DkgParticipant {
+                    identifier: 1,
+                    public_key_hex: "02aa".to_string(),
+                },
+                crate::api::DkgParticipant {
+                    identifier: 2,
+                    public_key_hex: "02bb".to_string(),
+                },
+            ],
+            threshold: 2,
+            dkg_seed_hex: None,
+        };
+        let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
+
+        let start_request = StartSignRoundRequest {
+            session_id: "session-legacy-member-fingerprint".to_string(),
+            member_identifier: 1,
+            message_hex: "baddcafe".to_string(),
+            key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
+            signing_participants: Some(vec![1, 2]),
+            attempt_context: None,
+            attempt_transition_evidence: None,
+        };
+        let first_round_state = start_sign_round(start_request.clone()).expect("start sign round");
+
+        let canonical_fingerprint =
+            start_sign_round_request_fingerprint(&start_request, 0).expect("canonical fingerprint");
+        let legacy_member_fingerprint =
+            start_sign_round_request_fingerprint(&start_request, start_request.member_identifier)
+                .expect("legacy member fingerprint");
+        assert_ne!(canonical_fingerprint, legacy_member_fingerprint);
+
+        {
+            let mut guard = state().expect("engine state").lock().expect("engine lock");
+            let session = guard
+                .sessions
+                .get_mut(&start_request.session_id)
+                .expect("session state");
+            assert_eq!(
+                session.sign_request_fingerprint.as_deref(),
+                Some(canonical_fingerprint.as_str())
+            );
+            session.sign_request_fingerprint = Some(legacy_member_fingerprint.clone());
+            persist_engine_state_to_storage(&guard).expect("persist legacy fingerprint");
+        }
+
+        reload_state_from_storage_for_tests();
+        let retry_round_state =
+            start_sign_round(start_request.clone()).expect("legacy fingerprint retry");
+        assert_eq!(first_round_state, retry_round_state);
+
+        reload_state_from_storage_for_tests();
+        {
+            let guard = state().expect("engine state").lock().expect("engine lock");
+            let session = guard
+                .sessions
+                .get(&start_request.session_id)
+                .expect("session state");
+            assert_eq!(
+                session.sign_request_fingerprint.as_deref(),
+                Some(canonical_fingerprint.as_str())
+            );
+        }
+
+        let second_member_round_state = start_sign_round(StartSignRoundRequest {
+            member_identifier: 2,
+            ..start_request.clone()
+        })
+        .expect("second member after fingerprint migration");
+        assert_eq!(
+            first_round_state.round_id,
+            second_member_round_state.round_id
+        );
+        assert_eq!(second_member_round_state.own_contribution.identifier, 2);
 
         reset_for_tests();
         cleanup_test_state_artifacts(&state_path);
@@ -12692,6 +13694,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -12700,6 +13703,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -12758,6 +13762,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -12766,6 +13771,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -12829,6 +13835,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -12840,6 +13847,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -12897,6 +13905,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -12908,6 +13917,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -12964,6 +13974,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         run_dkg(existing_request).expect("seed existing persisted session");
 
@@ -12980,6 +13991,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         set_persist_fault_injection_for_tests(
@@ -13028,6 +14040,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("post-fault recovery run dkg");
 
@@ -13055,6 +14068,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -13079,6 +14093,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -13124,6 +14139,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -13147,6 +14163,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -13192,6 +14209,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -13215,6 +14233,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context),
             attempt_transition_evidence: None,
@@ -13256,6 +14275,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -13264,6 +14284,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -13272,6 +14293,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-consumed-round".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -13305,6 +14327,7 @@ mod tests {
 
         let round_only_replay_request = FinalizeSignRoundRequest {
             session_id: finalize_request.session_id.clone(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -13360,6 +14383,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         run_dkg(existing_request).expect("seed existing persisted session");
 
@@ -13376,6 +14400,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         set_persist_fault_injection_for_tests(
@@ -13441,6 +14466,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -13449,6 +14475,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -13473,6 +14500,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-consumed-request-capacity".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -13528,6 +14556,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -13544,6 +14573,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(uppercase_attempt_context.clone()),
             attempt_transition_evidence: None,
@@ -13565,6 +14595,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: session_id.to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: Some(uppercase_attempt_context),
             round_contributions: vec![
                 RoundContribution {
@@ -13615,6 +14646,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -13623,6 +14655,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -13647,6 +14680,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-consumed-round-capacity".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -13712,6 +14746,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -13722,6 +14757,7 @@ mod tests {
             member_identifier: 1,
             message_hex: message_hex.to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: Some(attempt_context.clone()),
             attempt_transition_evidence: None,
@@ -13743,6 +14779,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: session_id.to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: Some(attempt_context),
             round_contributions: vec![
                 RoundContribution {
@@ -13800,6 +14837,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -13808,6 +14846,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -13816,6 +14855,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-consumed-request-fingerprint".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -13836,6 +14876,7 @@ mod tests {
         });
         let expected_request_fingerprint = fingerprint(&FinalizeSignRoundRequest {
             session_id: finalize_request.session_id.clone(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: canonical_contributions,
         })
@@ -13904,6 +14945,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -13912,6 +14954,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -13920,6 +14963,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-consumed-request-fingerprint-restart".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -13940,6 +14984,7 @@ mod tests {
         });
         let expected_request_fingerprint = fingerprint(&FinalizeSignRoundRequest {
             session_id: finalize_request.session_id.clone(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: canonical_contributions,
         })
@@ -14013,6 +15058,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -14021,17 +15067,29 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![3, 1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
         };
         let first_round_state = start_sign_round(first_request).expect("first start sign round");
+        let consumed_round_ids_after_first = {
+            let guard = state().expect("engine state").lock().expect("engine lock");
+            let session = guard
+                .sessions
+                .get("session-start-round-reordered-idempotency")
+                .expect("session state");
+            session.consumed_sign_round_ids.clone()
+        };
+        assert_eq!(consumed_round_ids_after_first.len(), 1);
+        assert!(consumed_round_ids_after_first.contains(&first_round_state.round_id));
 
         let second_request = StartSignRoundRequest {
             session_id: "session-start-round-reordered-idempotency".to_string(),
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![2, 3, 1]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -14040,6 +15098,18 @@ mod tests {
             start_sign_round(second_request).expect("second start sign round retry");
 
         assert_eq!(first_round_state, second_round_state);
+        let consumed_round_ids_after_second = {
+            let guard = state().expect("engine state").lock().expect("engine lock");
+            let session = guard
+                .sessions
+                .get("session-start-round-reordered-idempotency")
+                .expect("session state");
+            session.consumed_sign_round_ids.clone()
+        };
+        assert_eq!(
+            consumed_round_ids_after_first,
+            consumed_round_ids_after_second
+        );
     }
 
     #[test]
@@ -14064,6 +15134,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -14072,6 +15143,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![3, 1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -14083,6 +15155,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "cafebabe".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![2, 3, 1]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -14109,6 +15182,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -14117,6 +15191,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -14125,6 +15200,7 @@ mod tests {
 
         let first_finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-reordered-idempotency".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -14140,6 +15216,7 @@ mod tests {
 
         let second_finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-reordered-idempotency".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -14179,6 +15256,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
 
@@ -14187,6 +15265,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -14195,6 +15274,7 @@ mod tests {
 
         let first_finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-canonicalization-conflict".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -14211,6 +15291,7 @@ mod tests {
 
         let second_finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-canonicalization-conflict".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -14328,6 +15409,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let dkg_result = run_dkg(dkg_request.clone()).expect("run dkg");
 
@@ -14368,6 +15450,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let finalize_dkg_result = run_dkg(finalize_dkg_request).expect("run finalize dkg");
         let start_request = StartSignRoundRequest {
@@ -14375,6 +15458,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: finalize_dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -14383,6 +15467,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-restart-finalize".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -14435,6 +15520,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("post-restart run dkg");
         assert!(!new_session_result.key_group.is_empty());
@@ -14598,6 +15684,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -14606,6 +15693,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -14614,6 +15702,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-clears-signing-material".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -14672,6 +15761,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
@@ -14680,6 +15770,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -14688,6 +15779,7 @@ mod tests {
 
         let finalize_request = FinalizeSignRoundRequest {
             session_id: "session-finalize-purge-persist-reload".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -14775,6 +15867,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("seed persisted state");
 
@@ -14854,6 +15947,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("seed persisted state");
 
@@ -15011,6 +16105,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("seed persisted encrypted state");
 
@@ -15100,6 +16195,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("seed encrypted state file");
 
@@ -15138,6 +16234,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("seed encrypted state file");
 
@@ -15390,6 +16487,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         })
         .expect("seed encrypted state file");
 
