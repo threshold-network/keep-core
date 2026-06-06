@@ -441,24 +441,6 @@ func (tc *TbtcChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool, 
 		)
 	}
 
-	if tc.hasFrostAuthorization() {
-		stakingProvider, err := tc.frostWalletRegistry.OperatorToStakingProvider(
-			&bind.CallOpts{From: tc.key.Address},
-			operatorAddress,
-		)
-		if err != nil {
-			return false, fmt.Errorf(
-				"failed to map FROST operator [%v] to a staking provider: [%v]",
-				operatorAddress,
-				err,
-			)
-		}
-
-		if stakingProvider != (common.Address{}) {
-			return true, nil
-		}
-	}
-
 	stakingProvider, err := tc.walletRegistry.OperatorToStakingProvider(
 		operatorAddress,
 	)
