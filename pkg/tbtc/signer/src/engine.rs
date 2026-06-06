@@ -4330,17 +4330,18 @@ fn decode_round2_package_map(
             &format!("round2_packages[{index}].sender_identifier"),
             sender_identifier,
         )?;
-        let package_bytes = decode_hex_field(
+        let mut package_bytes = decode_hex_field(
             operation,
             &format!("round2_packages[{index}].package_hex"),
             &package.package_hex,
         )?;
-        let round2_package = frost::keys::dkg::round2::Package::deserialize(&package_bytes)
-            .map_err(|e| {
-                EngineError::Validation(format!(
-                    "{operation}: invalid round2 package [{index}]: {e}"
-                ))
-            })?;
+        let round2_package_result = frost::keys::dkg::round2::Package::deserialize(&package_bytes);
+        package_bytes.zeroize();
+        let round2_package = round2_package_result.map_err(|e| {
+            EngineError::Validation(format!(
+                "{operation}: invalid round2 package [{index}]: {e}"
+            ))
+        })?;
 
         if package_map
             .insert(sender_identifier, round2_package)
@@ -4474,9 +4475,10 @@ fn decode_key_package(
     let expected_identifier =
         parse_frost_identifier(operation, "key_package_identifier", key_package_identifier)?;
     let mut key_package_bytes = decode_hex_field(operation, "key_package_hex", key_package_hex)?;
-    let key_package = frost::keys::KeyPackage::deserialize(&key_package_bytes)
-        .map_err(|e| EngineError::Validation(format!("{operation}: invalid key package: {e}")))?;
+    let key_package_result = frost::keys::KeyPackage::deserialize(&key_package_bytes);
     key_package_bytes.zeroize();
+    let key_package = key_package_result
+        .map_err(|e| EngineError::Validation(format!("{operation}: invalid key package: {e}")))?;
 
     if *key_package.identifier() != expected_identifier {
         return Err(EngineError::Validation(format!(
@@ -4600,13 +4602,19 @@ pub fn dkg_part1(request: DkgPart1Request) -> Result<DkgPart1Result, EngineError
         frost::keys::dkg::part1(identifier, request.max_signers, request.min_signers, rng)
             .map_err(|e| EngineError::Validation(format!("DKGPart1 failed: {e}")))?;
 
-    let mut secret_package_bytes = secret_package
-        .serialize()
-        .map_err(|e| EngineError::Internal(format!("failed to serialize DKG part1 secret: {e}")))?;
+    let package_bytes = match package.serialize() {
+        Ok(package_bytes) => package_bytes,
+        Err(err) => {
+            secret_package.zeroize();
+            return Err(EngineError::Internal(format!(
+                "failed to serialize DKG part1 package: {err}"
+            )));
+        }
+    };
+    let secret_package_bytes_result = secret_package.serialize();
     secret_package.zeroize();
-    let package_bytes = package.serialize().map_err(|e| {
-        EngineError::Internal(format!("failed to serialize DKG part1 package: {e}"))
-    })?;
+    let mut secret_package_bytes = secret_package_bytes_result
+        .map_err(|e| EngineError::Internal(format!("failed to serialize DKG part1 secret: {e}")))?;
 
     let result = DkgPart1Result {
         secret_package_hex: hex::encode(&secret_package_bytes),
@@ -4628,33 +4636,46 @@ pub fn dkg_part2(request: DkgPart2Request) -> Result<DkgPart2Result, EngineError
         "secret_package_hex",
         &request.secret_package_hex,
     )?;
-    let secret_package = frost::keys::dkg::round1::SecretPackage::deserialize(
-        &secret_package_bytes,
-    )
-    .map_err(|e| EngineError::Validation(format!("DKGPart2: invalid secret package: {e}")))?;
+    let secret_package_result =
+        frost::keys::dkg::round1::SecretPackage::deserialize(&secret_package_bytes);
     secret_package_bytes.zeroize();
+    let mut secret_package = secret_package_result
+        .map_err(|e| EngineError::Validation(format!("DKGPart2: invalid secret package: {e}")))?;
 
-    let round1_packages = decode_round1_package_map("DKGPart2", &request.round1_packages)?;
+    let round1_packages = match decode_round1_package_map("DKGPart2", &request.round1_packages) {
+        Ok(round1_packages) => round1_packages,
+        Err(err) => {
+            secret_package.zeroize();
+            return Err(err);
+        }
+    };
     let (mut round2_secret_package, round2_packages) =
         frost::keys::dkg::part2(secret_package, &round1_packages)
             .map_err(|e| EngineError::Validation(format!("DKGPart2 failed: {e}")))?;
 
-    let mut round2_secret_package_bytes = round2_secret_package
-        .serialize()
-        .map_err(|e| EngineError::Internal(format!("failed to serialize DKG part2 secret: {e}")))?;
-    round2_secret_package.zeroize();
-
     let mut packages = Vec::with_capacity(round2_packages.len());
     for (identifier, package) in round2_packages {
-        let package_bytes = package.serialize().map_err(|e| {
-            EngineError::Internal(format!("failed to serialize DKG part2 package: {e}"))
-        })?;
+        let mut package_bytes = match package.serialize() {
+            Ok(package_bytes) => package_bytes,
+            Err(err) => {
+                round2_secret_package.zeroize();
+                return Err(EngineError::Internal(format!(
+                    "failed to serialize DKG part2 package: {err}"
+                )));
+            }
+        };
         packages.push(DkgRound2Package {
             identifier: frost_identifier_to_go_string(identifier),
             sender_identifier: None,
-            package_hex: hex::encode(package_bytes),
+            package_hex: hex::encode(&package_bytes),
         });
+        package_bytes.zeroize();
     }
+
+    let round2_secret_package_bytes_result = round2_secret_package.serialize();
+    round2_secret_package.zeroize();
+    let mut round2_secret_package_bytes = round2_secret_package_bytes_result
+        .map_err(|e| EngineError::Internal(format!("failed to serialize DKG part2 secret: {e}")))?;
 
     let result = DkgPart2Result {
         secret_package_hex: hex::encode(&round2_secret_package_bytes),
@@ -4673,31 +4694,43 @@ pub fn dkg_part3(request: DkgPart3Request) -> Result<DkgPart3Result, EngineError
         "secret_package_hex",
         &request.secret_package_hex,
     )?;
-    let mut secret_package = frost::keys::dkg::round2::SecretPackage::deserialize(
-        &secret_package_bytes,
-    )
-    .map_err(|e| EngineError::Validation(format!("DKGPart3: invalid secret package: {e}")))?;
+    let secret_package_result =
+        frost::keys::dkg::round2::SecretPackage::deserialize(&secret_package_bytes);
     secret_package_bytes.zeroize();
+    let mut secret_package = secret_package_result
+        .map_err(|e| EngineError::Validation(format!("DKGPart3: invalid secret package: {e}")))?;
 
-    let round1_packages = decode_round1_package_map("DKGPart3", &request.round1_packages)?;
-    let round2_packages = decode_round2_package_map(
+    let round1_packages = match decode_round1_package_map("DKGPart3", &request.round1_packages) {
+        Ok(round1_packages) => round1_packages,
+        Err(err) => {
+            secret_package.zeroize();
+            return Err(err);
+        }
+    };
+    let round2_packages = match decode_round2_package_map(
         "DKGPart3",
         &request.round2_packages,
         Some(*secret_package.identifier()),
-    )?;
-    let (key_package, public_key_package) =
-        frost::keys::dkg::part3(&secret_package, &round1_packages, &round2_packages)
-            .map_err(|e| EngineError::Validation(format!("DKGPart3 failed: {e}")))?;
+    ) {
+        Ok(round2_packages) => round2_packages,
+        Err(err) => {
+            secret_package.zeroize();
+            return Err(err);
+        }
+    };
+    let dkg_result = frost::keys::dkg::part3(&secret_package, &round1_packages, &round2_packages);
     secret_package.zeroize();
+    let (key_package, public_key_package) =
+        dkg_result.map_err(|e| EngineError::Validation(format!("DKGPart3 failed: {e}")))?;
 
     let is_even_y = public_key_package.has_even_y();
     let key_package = key_package.into_even_y(Some(is_even_y));
     let public_key_package = public_key_package.into_even_y(Some(is_even_y));
 
+    let native_public_key_package = native_public_key_package_from_frost(&public_key_package)?;
     let mut key_package_bytes = key_package
         .serialize()
         .map_err(|e| EngineError::Internal(format!("failed to serialize DKG key package: {e}")))?;
-    let native_public_key_package = native_public_key_package_from_frost(&public_key_package)?;
     let result = DkgPart3Result {
         key_package: NativeFrostKeyPackage {
             identifier: frost_identifier_to_go_string(*key_package.identifier()),
@@ -4722,13 +4755,19 @@ pub fn generate_nonces_and_commitments(
     )?;
     let mut rng = zeroizing_rng_from_os();
     let (mut nonces, commitments) = frost::round1::commit(key_package.signing_share(), &mut rng);
-    let mut nonces_bytes = nonces
-        .serialize()
-        .map_err(|e| EngineError::Internal(format!("failed to serialize signing nonces: {e}")))?;
+    let commitment_bytes = match commitments.serialize() {
+        Ok(commitment_bytes) => commitment_bytes,
+        Err(err) => {
+            nonces.zeroize();
+            return Err(EngineError::Internal(format!(
+                "failed to serialize signing commitments: {err}"
+            )));
+        }
+    };
+    let nonces_bytes_result = nonces.serialize();
     nonces.zeroize();
-    let commitment_bytes = commitments.serialize().map_err(|e| {
-        EngineError::Internal(format!("failed to serialize signing commitments: {e}"))
-    })?;
+    let mut nonces_bytes = nonces_bytes_result
+        .map_err(|e| EngineError::Internal(format!("failed to serialize signing nonces: {e}")))?;
 
     let result = GenerateNoncesAndCommitmentsResult {
         nonces_hex: hex::encode(&nonces_bytes),
@@ -4777,18 +4816,26 @@ pub fn sign_share(request: SignShareRequest) -> Result<SignShareResult, EngineEr
         .map_err(|e| EngineError::Validation(format!("SignShare: invalid signing package: {e}")))?;
 
     let mut nonces_bytes = decode_hex_field("SignShare", "nonces_hex", &request.nonces_hex)?;
-    let mut nonces = frost::round1::SigningNonces::deserialize(&nonces_bytes)
-        .map_err(|e| EngineError::Validation(format!("SignShare: invalid nonces: {e}")))?;
+    let nonces_result = frost::round1::SigningNonces::deserialize(&nonces_bytes);
     nonces_bytes.zeroize();
+    let mut nonces = nonces_result
+        .map_err(|e| EngineError::Validation(format!("SignShare: invalid nonces: {e}")))?;
 
-    let key_package = decode_key_package(
+    let key_package = match decode_key_package(
         "SignShare",
         &request.key_package_identifier,
         &request.key_package_hex,
-    )?;
-    let signature_share = frost::round2::sign(&signing_package, &nonces, &key_package)
-        .map_err(|e| EngineError::Validation(format!("SignShare failed: {e}")))?;
+    ) {
+        Ok(key_package) => key_package,
+        Err(err) => {
+            nonces.zeroize();
+            return Err(err);
+        }
+    };
+    let signature_share_result = frost::round2::sign(&signing_package, &nonces, &key_package);
     nonces.zeroize();
+    let signature_share = signature_share_result
+        .map_err(|e| EngineError::Validation(format!("SignShare failed: {e}")))?;
     let mut signature_share_bytes = signature_share.serialize();
     let result = SignShareResult {
         signature_share: NativeFrostSignatureShare {
