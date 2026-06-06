@@ -3,6 +3,7 @@ package tbtc
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"reflect"
 	"testing"
 	"time"
@@ -13,11 +14,43 @@ import (
 
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/internal/tecdsatest"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 	"github.com/keep-network/keep-core/pkg/tecdsa/dkg"
 )
+
+func TestDkgExecutor_DisablesECDSAPreParamsWhenPoolSizeZero(t *testing.T) {
+	executor := newDkgExecutor(
+		&GroupParameters{},
+		nil,
+		"",
+		nil,
+		nil,
+		nil,
+		nil,
+		Config{PreParamsPoolSize: 0},
+		nil,
+		&generator.Scheduler{},
+		nil,
+	)
+
+	if executor.tecdsaExecutor != nil {
+		t.Fatal("expected ECDSA DKG executor to be disabled")
+	}
+
+	testutils.AssertIntsEqual(
+		t,
+		"ECDSA pre-parameters count",
+		0,
+		executor.preParamsCount(),
+	)
+
+	// An explicit zero pre-parameters pool disables the legacy ECDSA DKG path.
+	// This should be a no-op and must not require chain/network dependencies.
+	executor.executeDkgIfEligible(big.NewInt(1), 0, 0)
+}
 
 func TestDkgExecutor_RegisterSigner(t *testing.T) {
 	testData, err := tecdsatest.LoadPrivateKeyShareTestFixtures(1)

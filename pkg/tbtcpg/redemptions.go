@@ -383,8 +383,13 @@ redemptionRequestedLoop:
 		},
 	)
 
-	// Capture time now for computations.
-	timeNow := time.Now()
+	timeNow, err := chain.CurrentBlockTimestamp()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to get current block timestamp: [%w]",
+			err,
+		)
+	}
 
 	// Only redemption requests in range:
 	// [now - requestTimeout, now - minAge]

@@ -95,6 +95,8 @@ type signingExecutor struct {
 	}
 }
 
+var _ schnorrWalletSigningExecutor = (*signingExecutor)(nil)
+
 func newSigningExecutor(
 	signers []*signer,
 	broadcastChannel net.BroadcastChannel,
@@ -116,6 +118,16 @@ func newSigningExecutor(
 		waitForBlockFn:       waitForBlockFn,
 		signingAttemptsLimit: signingAttemptsLimit,
 	}
+}
+
+func (se *signingExecutor) usesSchnorrSignatures() bool {
+	for _, signer := range se.signers {
+		if signingMaterialUsesSchnorrSignatures(signer.signingMaterial()) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // signBatch performs the signing process for each message from the given

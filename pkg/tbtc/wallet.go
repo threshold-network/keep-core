@@ -292,6 +292,10 @@ type walletSigningExecutor interface {
 	) ([]*frost.Signature, error)
 }
 
+type schnorrWalletSigningExecutor interface {
+	usesSchnorrSignatures() bool
+}
+
 type taprootTweakedWalletSigningExecutor interface {
 	signBatchWithTaprootMerkleRoots(
 		ctx context.Context,
@@ -400,6 +404,13 @@ func (wte *walletTransactionExecutor) signTransaction(
 		)
 	}
 
+	if wte.usesSchnorrSignatures() &&
+		!unsignedTx.HasOnlyTaprootKeyPathInputs() {
+		return nil, fmt.Errorf(
+			"cannot apply FROST signatures to non-taproot transaction inputs",
+		)
+	}
+
 	signTxLogger.Infof("signing transaction's sig hashes")
 
 	signingCtx, cancelSigningCtx := withCancelOnBlock(
@@ -486,6 +497,15 @@ func (wte *walletTransactionExecutor) signTransaction(
 	signTxLogger.Infof("transaction created successfully")
 
 	return tx, nil
+}
+
+func (wte *walletTransactionExecutor) usesSchnorrSignatures() bool {
+	executor, ok := wte.signingExecutor.(schnorrWalletSigningExecutor)
+	if !ok {
+		return false
+	}
+
+	return executor.usesSchnorrSignatures()
 }
 
 func hasTaprootMerkleRoots(taprootMerkleRoots []*[32]byte) bool {

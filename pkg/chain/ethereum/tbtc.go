@@ -2075,6 +2075,26 @@ func (tc *TbtcChain) IsWalletRegistered(EcdsaWalletID [32]byte) (bool, error) {
 	return isWalletRegistered, nil
 }
 
+func (tc *TbtcChain) IsFrostWalletRegistered(walletID [32]byte) (bool, error) {
+	if tc.frostWalletRegistry == nil {
+		return false, fmt.Errorf("FROST wallet registry is not configured")
+	}
+
+	isWalletRegistered, err := tc.frostWalletRegistry.IsWalletRegistered(
+		&bind.CallOpts{},
+		walletID,
+	)
+	if err != nil {
+		return false, fmt.Errorf(
+			"cannot check if FROST wallet with ID [0x%x] is registered: [%v]",
+			walletID,
+			err,
+		)
+	}
+
+	return isWalletRegistered, nil
+}
+
 func (tc *TbtcChain) GetWallet(
 	walletPublicKeyHash [20]byte,
 ) (*tbtc.WalletChainData, error) {
@@ -3175,4 +3195,13 @@ func (tc *TbtcChain) GetRedemptionDelay(
 
 func (tc *TbtcChain) GetDepositMinAge() (uint32, error) {
 	return tc.walletProposalValidator.DEPOSITMINAGE()
+}
+
+func (tc *TbtcChain) CurrentBlockTimestamp() (time.Time, error) {
+	currentBlock, err := tc.currentBlockHeader()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("cannot get current block: [%v]", err)
+	}
+
+	return time.Unix(int64(currentBlock.Time), 0), nil
 }

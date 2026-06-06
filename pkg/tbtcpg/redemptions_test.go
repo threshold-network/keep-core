@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/go-test/deep"
 	"github.com/keep-network/keep-core/internal/testutils"
@@ -133,6 +134,95 @@ func TestRedemptionAction_FindPendingRedemptions(t *testing.T) {
 				t.Errorf("invalid wallets pending redemptions: %v", diff)
 			}
 		})
+	}
+}
+
+func TestRedemptionAction_FindPendingRedemptions_UsesChainTimestamp(t *testing.T) {
+	currentBlock := uint64(100000)
+	averageBlockTime := 10 * time.Second
+	requestTimeout := uint32(86400)
+	requestMinAge := uint32(600)
+	chainNow := time.Now().Add(3 * time.Hour)
+
+	walletPublicKeyHash := hexToByte20(
+		"7670343fc00ccc2d0cd65360e6ad400697ea0fed",
+	)
+	redeemerOutputScript := bitcoin.Script{
+		0x00, 0x14, 0xe6, 0xf9, 0xd7, 0x47, 0x26, 0xb1, 0x9b, 0x75,
+		0xf1, 0x6f, 0xe1, 0xe9, 0xfe, 0xae, 0xc0, 0x48, 0xaa, 0x4f,
+		0xa1, 0xd0,
+	}
+
+	tbtcChain := tbtcpg.NewLocalChain()
+	tbtcChain.SetAverageBlockTime(averageBlockTime)
+	tbtcChain.SetCurrentBlockTimestamp(chainNow)
+
+	blockCounter := tbtcpg.NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	tbtcChain.SetBlockCounter(blockCounter)
+
+	tbtcChain.SetRedemptionParameters(
+		0,
+		0,
+		0,
+		0,
+		requestTimeout,
+		nil,
+		0,
+	)
+	tbtcChain.SetRedemptionRequestMinAge(requestMinAge)
+
+	requestTimeoutBlocks := uint64(requestTimeout) /
+		uint64(averageBlockTime.Seconds())
+
+	err := tbtcChain.AddPastRedemptionRequestedEvent(
+		&tbtc.RedemptionRequestedEventFilter{
+			StartBlock:          currentBlock - requestTimeoutBlocks - 1000,
+			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+		},
+		&tbtc.RedemptionRequestedEvent{
+			WalletPublicKeyHash:  walletPublicKeyHash,
+			RedeemerOutputScript: redeemerOutputScript,
+			RequestedAmount:      100000,
+			BlockNumber:          90000,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tbtcChain.SetPendingRedemptionRequest(
+		walletPublicKeyHash,
+		&tbtc.RedemptionRequest{
+			RedeemerOutputScript: redeemerOutputScript,
+			RequestedAmount:      100000,
+			// This timestamp is deliberately in the future compared to the
+			// host clock, but mature compared to the chain clock.
+			RequestedAt: chainNow.Add(-(time.Duration(requestMinAge) + 1) * time.Second),
+		},
+	)
+	tbtcChain.SetRedemptionDelay(
+		walletPublicKeyHash,
+		redeemerOutputScript,
+		0,
+	)
+
+	task := tbtcpg.NewRedemptionTask(tbtcChain, nil)
+
+	redeemersOutputScripts, err := task.FindPendingRedemptions(
+		&testutils.MockLogger{},
+		walletPublicKeyHash,
+		1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if diff := deep.Equal(
+		[]bitcoin.Script{redeemerOutputScript},
+		redeemersOutputScripts,
+	); diff != nil {
+		t.Errorf("invalid wallets pending redemptions: %v", diff)
 	}
 }
 
