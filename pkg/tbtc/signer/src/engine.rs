@@ -24,6 +24,7 @@ use std::str::FromStr;
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use frost::keys::Tweak;
 use frost_secp256k1_tr as frost;
 use rand_chacha::rand_core::{CryptoRng, Error as RandCoreError, RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -5194,8 +5195,7 @@ pub fn run_dkg(request: RunDkgRequest) -> Result<DkgResult, EngineError> {
         .map(|identifier| participant_identifier_to_frost_identifier(*identifier))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut keygen_rng_seed =
-        development_dealer_dkg_seed(request.dkg_seed_hex.as_deref(), &request_fingerprint)?;
+    let mut keygen_rng_seed = development_dealer_dkg_seed(request.dkg_seed_hex.as_deref())?;
     let keygen_rng = ZeroizingChaCha20Rng::from_seed(keygen_rng_seed);
     keygen_rng_seed.zeroize();
 
@@ -5305,20 +5305,18 @@ fn enforce_bootstrap_dealer_dkg_disabled_in_production(
     Ok(())
 }
 
-fn development_dealer_dkg_seed(
-    dkg_seed_hex: Option<&str>,
-    request_fingerprint: &str,
-) -> Result<[u8; 32], EngineError> {
-    let (seed_source, seed_hex) = match dkg_seed_hex {
-        Some(seed) => ("DKG seed", seed),
-        None => ("DKG request fingerprint", request_fingerprint),
+fn development_dealer_dkg_seed(dkg_seed_hex: Option<&str>) -> Result<[u8; 32], EngineError> {
+    let Some(seed_hex) = dkg_seed_hex else {
+        let mut seed = [0_u8; 32];
+        OsRng.fill_bytes(&mut seed);
+        return Ok(seed);
     };
 
     let seed = hex::decode(seed_hex)
-        .map_err(|e| EngineError::Internal(format!("failed to decode {seed_source}: {e}")))?;
+        .map_err(|e| EngineError::Internal(format!("failed to decode DKG seed: {e}")))?;
     if seed.len() != 32 {
         return Err(EngineError::Internal(format!(
-            "{seed_source} decoded to [{}] bytes, expected 32",
+            "DKG seed decoded to [{}] bytes, expected 32",
             seed.len()
         )));
     }
@@ -6101,6 +6099,24 @@ pub fn finalize_sign_round(
         .map_err(|e| {
             EngineError::Validation(format!("failed to aggregate signature shares: {e}"))
         })?;
+
+        let verification_key_package =
+            if let Some(taproot_merkle_root) = finalize_taproot_merkle_root.as_ref() {
+                dkg_public_key_package
+                    .clone()
+                    .tweak(Some(taproot_merkle_root.as_slice()))
+            } else {
+                dkg_public_key_package.clone()
+            };
+        verification_key_package
+            .verifying_key()
+            .verify(sign_message_bytes, &signature)
+            .map_err(|e| {
+                EngineError::Validation(format!(
+                    "aggregate signature failed self-verification: {e}"
+                ))
+            })?;
+
         let signature_bytes = signature.serialize().map_err(|e| {
             EngineError::Internal(format!("failed to serialize aggregate signature: {e}"))
         })?;
@@ -11828,8 +11844,6 @@ mod tests {
 
     #[test]
     fn finalize_aggregates_real_taproot_tweaked_contributions() {
-        use frost::keys::Tweak;
-
         let _guard = lock_test_state();
         reset_for_tests();
 
@@ -11960,6 +11974,34 @@ mod tests {
                 .verify(&sign_message_bytes, &signature)
                 .is_err(),
             "tweaked signature must not verify under the untweaked key"
+        );
+    }
+
+    #[test]
+    fn taproot_tweak_matches_cross_repo_deposit_fixture() {
+        let internal_key =
+            hex::decode("022336f65004d8f122f1fe947ebd009a8b4add3a0d937356d568e30f7fcc2e4008")
+                .expect("decode compressed internal key");
+        let verifying_key =
+            frost::VerifyingKey::deserialize(&internal_key).expect("deserialize verifying key");
+        let public_key_package = frost::keys::PublicKeyPackage::new(
+            BTreeMap::<frost::Identifier, frost::keys::VerifyingShare>::new(),
+            verifying_key,
+            Some(1),
+        );
+
+        let merkle_root =
+            hex::decode("3d6f9a2fea1de0a6c260d1fbc0343c9b2ed84307e6a7231139b78438448ee8c0")
+                .expect("decode taproot merkle root");
+        let tweaked_public_key = public_key_package
+            .tweak(Some(merkle_root.as_slice()))
+            .verifying_key()
+            .serialize()
+            .expect("serialize tweaked verifying key");
+
+        assert_eq!(
+            hex::encode(&tweaked_public_key[1..]),
+            "90e7ce2b6cd476b7a1c2c7f6585c3fd0eae4379a508e981ed422b3e28b9ae8c2"
         );
     }
 
@@ -12158,8 +12200,6 @@ mod tests {
 
     #[test]
     fn start_sign_round_allows_taproot_threshold_subset_members_for_same_active_round() {
-        use frost::keys::Tweak;
-
         let _guard = lock_test_state();
         reset_for_tests();
 

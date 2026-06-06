@@ -450,12 +450,12 @@ mod tests {
     }
 
     #[test]
-    fn run_dkg_is_deterministic_for_identical_request_after_engine_reset() {
+    fn run_dkg_uses_fresh_entropy_for_unseeded_request_after_engine_reset() {
         let _guard = crate::engine::lock_test_state();
         crate::engine::reset_for_tests();
 
         let request = RunDkgRequest {
-            session_id: "session-deterministic".to_string(),
+            session_id: "session-unseeded-entropy".to_string(),
             participants: vec![
                 DkgParticipant {
                     identifier: 1,
@@ -480,7 +480,14 @@ mod tests {
 
         assert_eq!(status_first, 0);
         assert_eq!(status_second, 0);
-        assert_eq!(first_payload, second_payload);
+
+        let result_first: crate::api::DkgResult =
+            serde_json::from_slice(&first_payload).expect("decode first DKG result");
+        let result_second: crate::api::DkgResult =
+            serde_json::from_slice(&second_payload).expect("decode second DKG result");
+
+        assert_eq!(result_first.session_id, result_second.session_id);
+        assert_ne!(result_first.key_group, result_second.key_group);
     }
 
     #[test]
