@@ -4333,6 +4333,23 @@ fn canonicalize_attempt_transition_evidence_for_fingerprint(
     }
 }
 
+fn start_sign_round_request_fingerprint(
+    request: &StartSignRoundRequest,
+    member_identifier: u16,
+) -> Result<String, EngineError> {
+    let mut canonical_request = request.clone();
+    canonical_request.member_identifier = member_identifier;
+    if let Some(signing_participants) = canonical_request.signing_participants.as_mut() {
+        signing_participants.sort_unstable();
+    }
+    canonicalize_attempt_context_for_fingerprint(&mut canonical_request.attempt_context);
+    canonicalize_attempt_transition_evidence_for_fingerprint(
+        &mut canonical_request.attempt_transition_evidence,
+    );
+
+    fingerprint(&canonical_request)
+}
+
 fn round_attempt_id_component(attempt_context: Option<&AttemptContext>) -> String {
     attempt_context
         .map(|attempt_context| attempt_context.attempt_id.to_ascii_lowercase())
@@ -5349,18 +5366,12 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
         canonicalize_taproot_merkle_root_hex(&mut request.taproot_merkle_root_hex)?;
     let strict_roast_mode_enabled = roast_strict_mode_enabled();
 
-    let request_fingerprint = {
-        let mut canonical_request = request.clone();
-        canonical_request.member_identifier = 0;
-        if let Some(signing_participants) = canonical_request.signing_participants.as_mut() {
-            signing_participants.sort_unstable();
-        }
-        canonicalize_attempt_context_for_fingerprint(&mut canonical_request.attempt_context);
-        canonicalize_attempt_transition_evidence_for_fingerprint(
-            &mut canonical_request.attempt_transition_evidence,
-        );
-        fingerprint(&canonical_request)?
-    };
+    let request_fingerprint = start_sign_round_request_fingerprint(&request, 0)?;
+    // Before multi-seat round reuse, persisted active rounds were bound to the
+    // concrete member identifier. Accept that legacy fingerprint so an upgrade
+    // does not invalidate an in-flight signing round.
+    let legacy_member_request_fingerprint =
+        start_sign_round_request_fingerprint(&request, request.member_identifier)?;
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -5488,7 +5499,10 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
         }
 
         if let Some(existing) = &session.sign_request_fingerprint {
-            if existing == &request_fingerprint {
+            let matches_canonical_fingerprint = existing == &request_fingerprint;
+            let matches_legacy_member_fingerprint = existing == &legacy_member_request_fingerprint;
+
+            if matches_canonical_fingerprint || matches_legacy_member_fingerprint {
                 let mut round_state = session.round_state.clone().ok_or_else(|| {
                     EngineError::Internal("missing round state cache".to_string())
                 })?;
@@ -5513,6 +5527,11 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
                     sign_message_bytes,
                     taproot_merkle_root.as_ref(),
                 )?;
+
+                if matches_legacy_member_fingerprint {
+                    session.sign_request_fingerprint = Some(request_fingerprint.clone());
+                    persist_engine_state_to_storage(&guard)?;
+                }
 
                 return Ok(round_state);
             }
@@ -11840,6 +11859,15 @@ mod tests {
             .verifying_key()
             .verify(&sign_message_bytes, &signature)
             .expect("signature verification");
+        assert!(
+            dkg_public_key_package
+                .clone()
+                .tweak::<&[u8]>(None)
+                .verifying_key()
+                .verify(&sign_message_bytes, &signature)
+                .is_err(),
+            "no-root signature must not verify under an additional BIP-86 empty-root tweak"
+        );
     }
 
     #[test]
@@ -13179,6 +13207,96 @@ mod tests {
         let second_signature =
             finalize_sign_round(finalize_request, true).expect("persisted finalize retry");
         assert_eq!(first_signature, second_signature);
+
+        reset_for_tests();
+        cleanup_test_state_artifacts(&state_path);
+        clear_state_storage_policy_overrides();
+    }
+
+    #[test]
+    fn start_sign_round_accepts_persisted_legacy_member_bound_fingerprint() {
+        let _guard = lock_test_state();
+        let state_path = configure_test_state_path("sign_legacy_member_fingerprint");
+        reset_for_tests();
+
+        let run_dkg_request = RunDkgRequest {
+            session_id: "session-legacy-member-fingerprint".to_string(),
+            participants: vec![
+                crate::api::DkgParticipant {
+                    identifier: 1,
+                    public_key_hex: "02aa".to_string(),
+                },
+                crate::api::DkgParticipant {
+                    identifier: 2,
+                    public_key_hex: "02bb".to_string(),
+                },
+            ],
+            threshold: 2,
+            dkg_seed_hex: None,
+        };
+        let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
+
+        let start_request = StartSignRoundRequest {
+            session_id: "session-legacy-member-fingerprint".to_string(),
+            member_identifier: 1,
+            message_hex: "baddcafe".to_string(),
+            key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
+            signing_participants: Some(vec![1, 2]),
+            attempt_context: None,
+            attempt_transition_evidence: None,
+        };
+        let first_round_state = start_sign_round(start_request.clone()).expect("start sign round");
+
+        let canonical_fingerprint =
+            start_sign_round_request_fingerprint(&start_request, 0).expect("canonical fingerprint");
+        let legacy_member_fingerprint =
+            start_sign_round_request_fingerprint(&start_request, start_request.member_identifier)
+                .expect("legacy member fingerprint");
+        assert_ne!(canonical_fingerprint, legacy_member_fingerprint);
+
+        {
+            let mut guard = state().expect("engine state").lock().expect("engine lock");
+            let session = guard
+                .sessions
+                .get_mut(&start_request.session_id)
+                .expect("session state");
+            assert_eq!(
+                session.sign_request_fingerprint.as_deref(),
+                Some(canonical_fingerprint.as_str())
+            );
+            session.sign_request_fingerprint = Some(legacy_member_fingerprint.clone());
+            persist_engine_state_to_storage(&guard).expect("persist legacy fingerprint");
+        }
+
+        reload_state_from_storage_for_tests();
+        let retry_round_state =
+            start_sign_round(start_request.clone()).expect("legacy fingerprint retry");
+        assert_eq!(first_round_state, retry_round_state);
+
+        reload_state_from_storage_for_tests();
+        {
+            let guard = state().expect("engine state").lock().expect("engine lock");
+            let session = guard
+                .sessions
+                .get(&start_request.session_id)
+                .expect("session state");
+            assert_eq!(
+                session.sign_request_fingerprint.as_deref(),
+                Some(canonical_fingerprint.as_str())
+            );
+        }
+
+        let second_member_round_state = start_sign_round(StartSignRoundRequest {
+            member_identifier: 2,
+            ..start_request.clone()
+        })
+        .expect("second member after fingerprint migration");
+        assert_eq!(
+            first_round_state.round_id,
+            second_member_round_state.round_id
+        );
+        assert_eq!(second_member_round_state.own_contribution.identifier, 2);
 
         reset_for_tests();
         cleanup_test_state_artifacts(&state_path);
