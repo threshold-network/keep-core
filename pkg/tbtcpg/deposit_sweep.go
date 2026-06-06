@@ -212,9 +212,35 @@ func findDeposits(
 		len(depositRevealedEvents)+len(taprootDepositRevealedEvents),
 	)
 
+	type revealedDepositKey struct {
+		FundingTxHash      bitcoin.Hash
+		FundingOutputIndex uint32
+	}
+
+	revealedDepositEventsIndex := make(map[revealedDepositKey]int)
+	appendRevealedDepositEvent := func(event *revealedDepositEvent) {
+		key := revealedDepositKey{
+			FundingTxHash:      event.FundingTxHash,
+			FundingOutputIndex: event.FundingOutputIndex,
+		}
+
+		if existingIndex, ok := revealedDepositEventsIndex[key]; ok {
+			// A Taproot reveal may also emit a compatibility DepositRevealed
+			// event. Keep only the Taproot-specific representation so the
+			// same deposit cannot appear in both legacy and Taproot sweep groups.
+			if event.IsTaproot {
+				revealedDepositEvents[existingIndex] = event
+			}
+
+			return
+		}
+
+		revealedDepositEventsIndex[key] = len(revealedDepositEvents)
+		revealedDepositEvents = append(revealedDepositEvents, event)
+	}
+
 	for _, event := range depositRevealedEvents {
-		revealedDepositEvents = append(
-			revealedDepositEvents,
+		appendRevealedDepositEvent(
 			&revealedDepositEvent{
 				FundingTxHash:       event.FundingTxHash,
 				FundingOutputIndex:  event.FundingOutputIndex,
@@ -227,8 +253,7 @@ func findDeposits(
 	}
 
 	for _, event := range taprootDepositRevealedEvents {
-		revealedDepositEvents = append(
-			revealedDepositEvents,
+		appendRevealedDepositEvent(
 			&revealedDepositEvent{
 				FundingTxHash:       event.FundingTxHash,
 				FundingOutputIndex:  event.FundingOutputIndex,

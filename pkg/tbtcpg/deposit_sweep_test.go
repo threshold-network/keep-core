@@ -555,6 +555,109 @@ func TestFindDepositsToSweep_VaultGrouping(t *testing.T) {
 		}
 	})
 
+	t.Run("taproot compatibility reveals deduplicated before grouping", func(t *testing.T) {
+		tbtcChain := tbtcpg.NewLocalChain()
+		btcChain := tbtcpg.NewLocalBitcoinChain()
+
+		blockCounter := tbtcpg.NewMockBlockCounter()
+		blockCounter.SetCurrentBlock(currentBlock)
+		tbtcChain.SetBlockCounter(blockCounter)
+		tbtcChain.SetDepositMinAge(3600)
+
+		vaultA := chain.Address("0xAA1122BB3344CC5566DD7788EE9900FF00112233")
+
+		// Three ordinary legacy deposits form the largest valid group.
+		legacyHash1 := setupVaultGroupingDeposit(
+			t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+			"6611111111111111111111111111111111111111111111111111111111111111",
+			0, 290000, &vaultA,
+		)
+		legacyHash2 := setupVaultGroupingDeposit(
+			t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+			"6622222222222222222222222222222222222222222222222222222222222222",
+			0, 290001, &vaultA,
+		)
+		legacyHash3 := setupVaultGroupingDeposit(
+			t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+			"6633333333333333333333333333333333333333333333333333333333333333",
+			0, 290002, &vaultA,
+		)
+
+		taprootHash1 := setupVaultGroupingDeposit(
+			t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+			"6644444444444444444444444444444444444444444444444444444444444444",
+			0, 290003, &vaultA,
+		)
+		taprootHash2 := setupVaultGroupingDeposit(
+			t, tbtcChain, btcChain, walletPublicKeyHash, filterStartBlock,
+			"6655555555555555555555555555555555555555555555555555555555555555",
+			0, 290004, &vaultA,
+		)
+
+		for _, taprootDeposit := range []struct {
+			fundingTxHash bitcoin.Hash
+			blockNumber   uint64
+		}{
+			{fundingTxHash: taprootHash1, blockNumber: 290003},
+			{fundingTxHash: taprootHash2, blockNumber: 290004},
+		} {
+			err := tbtcChain.AddPastTaprootDepositRevealedEvent(
+				&tbtc.DepositRevealedEventFilter{
+					StartBlock:          filterStartBlock,
+					WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+				},
+				&tbtc.TaprootDepositRevealedEvent{
+					BlockNumber:         taprootDeposit.blockNumber,
+					WalletPublicKeyHash: walletPublicKeyHash,
+					FundingTxHash:       taprootDeposit.fundingTxHash,
+					FundingOutputIndex:  0,
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		task := tbtcpg.NewDepositSweepTask(tbtcChain, btcChain)
+		deposits, err := task.FindDepositsToSweep(
+			&testutils.MockLogger{},
+			walletPublicKeyHash,
+			10,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(deposits) != 3 {
+			t.Fatalf("expected 3 legacy deposits, got %d", len(deposits))
+		}
+
+		expectedLegacyHashes := map[bitcoin.Hash]bool{
+			legacyHash1: true,
+			legacyHash2: true,
+			legacyHash3: true,
+		}
+		taprootHashes := map[bitcoin.Hash]bool{
+			taprootHash1: true,
+			taprootHash2: true,
+		}
+
+		for _, deposit := range deposits {
+			if !expectedLegacyHashes[deposit.FundingTxHash] {
+				t.Errorf(
+					"unexpected non-legacy deposit selected: [%v]",
+					deposit.FundingTxHash,
+				)
+			}
+			if taprootHashes[deposit.FundingTxHash] {
+				t.Errorf(
+					"taproot compatibility reveal selected in legacy group: [%v]",
+					deposit.FundingTxHash,
+				)
+			}
+		}
+	})
+
 	t.Run("mixed vaults minority group excluded", func(t *testing.T) {
 		tbtcChain := tbtcpg.NewLocalChain()
 		btcChain := tbtcpg.NewLocalBitcoinChain()
