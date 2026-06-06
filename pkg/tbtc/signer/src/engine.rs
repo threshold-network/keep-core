@@ -5355,13 +5355,13 @@ fn development_dealer_dkg_seed(dkg_seed_hex: Option<&str>) -> Result<[u8; 32], E
         return Ok(seed);
     };
 
-    let seed = Zeroizing::new(
-        hex::decode(seed_hex)
-            .map_err(|e| EngineError::Internal(format!("failed to decode DKG seed: {e}")))?,
-    );
+    let seed =
+        Zeroizing::new(hex::decode(seed_hex).map_err(|e| {
+            EngineError::Validation(format!("dkg_seed_hex must be valid hex: {e}"))
+        })?);
     if seed.len() != 32 {
-        return Err(EngineError::Internal(format!(
-            "DKG seed decoded to [{}] bytes, expected 32",
+        return Err(EngineError::Validation(format!(
+            "dkg_seed_hex decoded to [{}] bytes, expected 32",
             seed.len()
         )));
     }
@@ -7076,6 +7076,43 @@ mod tests {
 
         std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_DEVELOPMENT);
         assert!(!provenance_gate_enforced());
+    }
+
+    #[test]
+    fn run_dkg_rejects_malformed_seed_as_validation_input() {
+        let _guard = lock_test_state();
+        reset_for_tests();
+        clear_state_storage_policy_overrides();
+
+        for (index, seed_hex, expected_message) in [
+            (1, "not-hex", "dkg_seed_hex must be valid hex"),
+            (2, "0102", "dkg_seed_hex decoded to [2] bytes, expected 32"),
+        ] {
+            let err = run_dkg(RunDkgRequest {
+                session_id: format!("session-malformed-dkg-seed-{index}"),
+                participants: vec![
+                    crate::api::DkgParticipant {
+                        identifier: 1,
+                        public_key_hex: "02aa".to_string(),
+                    },
+                    crate::api::DkgParticipant {
+                        identifier: 2,
+                        public_key_hex: "02bb".to_string(),
+                    },
+                ],
+                threshold: 2,
+                dkg_seed_hex: Some(seed_hex.to_string()),
+            })
+            .expect_err("malformed DKG seed should be rejected");
+
+            let EngineError::Validation(message) = err else {
+                panic!("unexpected error variant");
+            };
+            assert!(
+                message.contains(expected_message),
+                "unexpected validation message: {message}"
+            );
+        }
     }
 
     #[test]

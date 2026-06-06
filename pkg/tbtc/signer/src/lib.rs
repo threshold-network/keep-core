@@ -542,6 +542,44 @@ mod tests {
     }
 
     #[test]
+    fn run_dkg_reports_malformed_seed_as_recoverable_validation_error() {
+        let _guard = crate::engine::lock_test_state();
+        crate::engine::reset_for_tests();
+        let _profile = EnvVarGuard::set("TBTC_SIGNER_PROFILE", "development");
+        let _provenance_gate = EnvVarGuard::unset("TBTC_SIGNER_ENFORCE_PROVENANCE_GATE");
+        let _admission_policy = EnvVarGuard::unset("TBTC_SIGNER_ENFORCE_ADMISSION_POLICY");
+
+        let request = RunDkgRequest {
+            session_id: "session-bad-seed".to_string(),
+            participants: vec![
+                DkgParticipant {
+                    identifier: 1,
+                    public_key_hex: "02aa".to_string(),
+                },
+                DkgParticipant {
+                    identifier: 2,
+                    public_key_hex: "02bb".to_string(),
+                },
+            ],
+            threshold: 2,
+            dkg_seed_hex: Some("not-hex".to_string()),
+        };
+
+        let (status, payload) = call_ffi(&request, frost_tbtc_run_dkg);
+
+        assert_eq!(status, 1);
+        let response: ErrorResponse =
+            serde_json::from_slice(&payload).expect("decode error response");
+        assert_eq!(response.code, "validation_error");
+        assert_eq!(response.recovery_class, "recoverable");
+        assert!(
+            response.message.contains("dkg_seed_hex must be valid hex"),
+            "unexpected error message: {}",
+            response.message
+        );
+    }
+
+    #[test]
     fn run_dkg_rejects_conflicting_repeat_request_for_same_session() {
         let _guard = crate::engine::lock_test_state();
         crate::engine::reset_for_tests();
