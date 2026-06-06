@@ -5257,6 +5257,10 @@ pub fn run_dkg(request: RunDkgRequest) -> Result<DkgResult, EngineError> {
         ));
     }
 
+    // The `frost-secp256k1-tr` ciphersuite post-processes DKG output before
+    // returning these packages. This serialized verifying key is the protocol
+    // wallet key exported to Go/on-chain; later Taproot tweaks are applied
+    // relative to this exported key.
     let key_group = public_key_package
         .verifying_key()
         .serialize()
@@ -11775,7 +11779,7 @@ mod tests {
             session_id: "session-real-finalize".to_string(),
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
-            key_group: dkg_result.key_group,
+            key_group: dkg_result.key_group.clone(),
             taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
@@ -11855,10 +11859,26 @@ mod tests {
         let signature_bytes = hex::decode(&first_result.signature_hex).expect("signature decode");
         assert_eq!(signature_bytes.len(), 64);
         let signature = frost::Signature::deserialize(&signature_bytes).expect("signature parse");
+        let exported_key_group_bytes =
+            hex::decode(&dkg_result.key_group).expect("decode exported key group");
+        let exported_verifying_key = frost::VerifyingKey::deserialize(&exported_key_group_bytes)
+            .expect("deserialize exported key group");
+        assert_eq!(
+            dkg_result.key_group,
+            hex::encode(
+                dkg_public_key_package
+                    .verifying_key()
+                    .serialize()
+                    .expect("serialize DKG verifying key")
+            )
+        );
         dkg_public_key_package
             .verifying_key()
             .verify(&sign_message_bytes, &signature)
             .expect("signature verification");
+        exported_verifying_key
+            .verify(&sign_message_bytes, &signature)
+            .expect("signature verifies under exported key group");
         assert!(
             dkg_public_key_package
                 .clone()
@@ -11907,7 +11927,7 @@ mod tests {
             session_id: "session-real-taproot-tweak".to_string(),
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
-            key_group: dkg_result.key_group,
+            key_group: dkg_result.key_group.clone(),
             taproot_merkle_root_hex: Some(taproot_merkle_root_hex.to_string()),
             signing_participants: None,
             attempt_context: None,
@@ -11989,6 +12009,24 @@ mod tests {
         let signature_bytes = hex::decode(&result.signature_hex).expect("signature decode");
         assert_eq!(signature_bytes.len(), 64);
         let signature = frost::Signature::deserialize(&signature_bytes).expect("signature parse");
+        let exported_key_group_bytes =
+            hex::decode(&dkg_result.key_group).expect("decode exported key group");
+        let exported_verifying_key = frost::VerifyingKey::deserialize(&exported_key_group_bytes)
+            .expect("deserialize exported key group");
+        let exported_public_key_package = frost::keys::PublicKeyPackage::new(
+            BTreeMap::<frost::Identifier, frost::keys::VerifyingShare>::new(),
+            exported_verifying_key,
+            Some(dkg_result.threshold),
+        );
+        assert_eq!(
+            dkg_result.key_group,
+            hex::encode(
+                dkg_public_key_package
+                    .verifying_key()
+                    .serialize()
+                    .expect("serialize DKG verifying key")
+            )
+        );
         let tweaked_public_key_package = dkg_public_key_package
             .clone()
             .tweak(Some(taproot_merkle_root.as_slice()));
@@ -11996,6 +12034,11 @@ mod tests {
             .verifying_key()
             .verify(&sign_message_bytes, &signature)
             .expect("tweaked signature verification");
+        exported_public_key_package
+            .tweak(Some(taproot_merkle_root.as_slice()))
+            .verifying_key()
+            .verify(&sign_message_bytes, &signature)
+            .expect("tweaked signature verifies under exported key group");
         assert!(
             dkg_public_key_package
                 .verifying_key()
