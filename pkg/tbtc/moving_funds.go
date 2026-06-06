@@ -679,7 +679,7 @@ func ensureMovingFundsMainUtxoSupportsLegacyTargets(
 	) == bitcoin.P2TRScript {
 		return fmt.Errorf(
 			"Taproot moving-funds main UTXOs are not supported until " +
-				"P2TR target wallet outputs are implemented",
+				"moving-funds transactions support P2TR target wallet outputs",
 		)
 	}
 

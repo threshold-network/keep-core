@@ -4,6 +4,7 @@ package tbtc
 
 import (
 	"crypto/ecdsa"
+	"encoding/json"
 	"fmt"
 
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
@@ -37,6 +38,21 @@ func frostWalletIDFromSigner(signer *signer) ([32]byte, bool, error) {
 	if material.Format != frostsigning.NativeSignerMaterialFormatFrostUniFFIV2 &&
 		material.Format != frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1 {
 		return [32]byte{}, false, nil
+	}
+
+	if material.Format == frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1 {
+		var payload frostsigning.NativeTBTCSignerMaterialPayload
+		if err := json.Unmarshal(material.Payload, &payload); err != nil {
+			return [32]byte{}, true, fmt.Errorf(
+				"cannot decode FrostTBTCSignerV1 signer material: [%w]",
+				err,
+			)
+		}
+
+		if payload.KeyGroupSource ==
+			frostsigning.NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey {
+			return [32]byte{}, false, nil
+		}
 	}
 
 	xOnlyOutputKey, err := frostsigning.ExtractTaprootOutputKeyFromMaterial(
