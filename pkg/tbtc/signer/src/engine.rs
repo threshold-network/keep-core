@@ -4337,15 +4337,37 @@ fn start_sign_round_request_fingerprint(
     request: &StartSignRoundRequest,
     member_identifier: u16,
 ) -> Result<String, EngineError> {
+    start_sign_round_request_fingerprint_internal(request, member_identifier, false)
+}
+
+fn start_sign_round_request_fingerprint_including_transition_evidence(
+    request: &StartSignRoundRequest,
+    member_identifier: u16,
+) -> Result<String, EngineError> {
+    start_sign_round_request_fingerprint_internal(request, member_identifier, true)
+}
+
+fn start_sign_round_request_fingerprint_internal(
+    request: &StartSignRoundRequest,
+    member_identifier: u16,
+    include_transition_evidence: bool,
+) -> Result<String, EngineError> {
     let mut canonical_request = request.clone();
     canonical_request.member_identifier = member_identifier;
     if let Some(signing_participants) = canonical_request.signing_participants.as_mut() {
         signing_participants.sort_unstable();
     }
     canonicalize_attempt_context_for_fingerprint(&mut canonical_request.attempt_context);
-    canonicalize_attempt_transition_evidence_for_fingerprint(
-        &mut canonical_request.attempt_transition_evidence,
-    );
+    if include_transition_evidence {
+        canonicalize_attempt_transition_evidence_for_fingerprint(
+            &mut canonical_request.attempt_transition_evidence,
+        );
+    } else {
+        // Transition evidence authorizes creation of a new active attempt but is
+        // one-shot material. Once the active attempt context is established,
+        // other members may reuse the round without resending the evidence.
+        canonical_request.attempt_transition_evidence = None;
+    }
 
     fingerprint(&canonical_request)
 }
@@ -5333,8 +5355,10 @@ fn development_dealer_dkg_seed(dkg_seed_hex: Option<&str>) -> Result<[u8; 32], E
         return Ok(seed);
     };
 
-    let seed = hex::decode(seed_hex)
-        .map_err(|e| EngineError::Internal(format!("failed to decode DKG seed: {e}")))?;
+    let seed = Zeroizing::new(
+        hex::decode(seed_hex)
+            .map_err(|e| EngineError::Internal(format!("failed to decode DKG seed: {e}")))?,
+    );
     if seed.len() != 32 {
         return Err(EngineError::Internal(format!(
             "DKG seed decoded to [{}] bytes, expected 32",
@@ -5376,6 +5400,16 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
     // does not invalidate an in-flight signing round.
     let legacy_member_request_fingerprint =
         start_sign_round_request_fingerprint(&request, request.member_identifier)?;
+    // The previous round-reuse implementation included one-shot transition
+    // evidence in the persisted active-round fingerprint. Accept that shape
+    // when callers still resend the evidence, then migrate to the stable form.
+    let legacy_canonical_with_transition_evidence_fingerprint =
+        start_sign_round_request_fingerprint_including_transition_evidence(&request, 0)?;
+    let legacy_member_with_transition_evidence_fingerprint =
+        start_sign_round_request_fingerprint_including_transition_evidence(
+            &request,
+            request.member_identifier,
+        )?;
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -5504,9 +5538,12 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
 
         if let Some(existing) = &session.sign_request_fingerprint {
             let matches_canonical_fingerprint = existing == &request_fingerprint;
-            let matches_legacy_member_fingerprint = existing == &legacy_member_request_fingerprint;
+            let matches_legacy_fingerprint = !matches_canonical_fingerprint
+                && (existing == &legacy_member_request_fingerprint
+                    || existing == &legacy_canonical_with_transition_evidence_fingerprint
+                    || existing == &legacy_member_with_transition_evidence_fingerprint);
 
-            if matches_canonical_fingerprint || matches_legacy_member_fingerprint {
+            if matches_canonical_fingerprint || matches_legacy_fingerprint {
                 let mut round_state = session.round_state.clone().ok_or_else(|| {
                     EngineError::Internal("missing round state cache".to_string())
                 })?;
@@ -5532,7 +5569,7 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
                     taproot_merkle_root.as_ref(),
                 )?;
 
-                if matches_legacy_member_fingerprint {
+                if matches_legacy_fingerprint {
                     session.sign_request_fingerprint = Some(request_fingerprint.clone());
                     persist_engine_state_to_storage(&guard)?;
                 }
@@ -10909,6 +10946,89 @@ mod tests {
         assert!(
             message.contains("stale"),
             "expected stale-attempt validation message, got: {message}"
+        );
+    }
+
+    #[test]
+    fn start_sign_round_allows_member_reuse_after_transition_without_resending_evidence() {
+        let _guard = lock_test_state();
+        reset_for_tests();
+        let _roast_strict_mode = RoastStrictModeGuard::enable();
+
+        let session_id = "session-roast-transition-reuse-without-evidence";
+        let message_hex = "deadbeef";
+
+        let dkg_result = run_dkg(RunDkgRequest {
+            session_id: session_id.to_string(),
+            participants: vec![
+                crate::api::DkgParticipant {
+                    identifier: 1,
+                    public_key_hex: "02aa".to_string(),
+                },
+                crate::api::DkgParticipant {
+                    identifier: 2,
+                    public_key_hex: "02bb".to_string(),
+                },
+            ],
+            threshold: 2,
+            dkg_seed_hex: None,
+        })
+        .expect("run dkg");
+
+        let attempt_one =
+            build_deterministic_attempt_context(session_id, message_hex, 1, vec![1, 2]);
+        start_sign_round(StartSignRoundRequest {
+            session_id: session_id.to_string(),
+            member_identifier: 1,
+            message_hex: message_hex.to_string(),
+            key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
+            signing_participants: Some(vec![1, 2]),
+            attempt_context: Some(attempt_one),
+            attempt_transition_evidence: None,
+        })
+        .expect("start sign round for attempt 1");
+
+        let transition_evidence = build_attempt_transition_evidence_from_active_session(session_id);
+        let attempt_two =
+            build_deterministic_attempt_context(session_id, message_hex, 2, vec![1, 2]);
+        let transitioned_round_state = start_sign_round(StartSignRoundRequest {
+            session_id: session_id.to_string(),
+            member_identifier: 1,
+            message_hex: message_hex.to_string(),
+            key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
+            signing_participants: Some(vec![1, 2]),
+            attempt_context: Some(attempt_two.clone()),
+            attempt_transition_evidence: Some(transition_evidence),
+        })
+        .expect("start sign round for authorized attempt 2");
+
+        let reused_round_state = start_sign_round(StartSignRoundRequest {
+            session_id: session_id.to_string(),
+            member_identifier: 2,
+            message_hex: message_hex.to_string(),
+            key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
+            signing_participants: Some(vec![1, 2]),
+            attempt_context: Some(attempt_two),
+            attempt_transition_evidence: None,
+        })
+        .expect("reuse active attempt without transition evidence");
+
+        assert_eq!(
+            transitioned_round_state.round_id,
+            reused_round_state.round_id
+        );
+        assert_eq!(transitioned_round_state.required_contributions, 2);
+        assert_eq!(reused_round_state.required_contributions, 2);
+        assert_eq!(transitioned_round_state.own_contribution.identifier, 1);
+        assert_eq!(reused_round_state.own_contribution.identifier, 2);
+        assert_ne!(
+            transitioned_round_state
+                .own_contribution
+                .signature_share_hex,
+            reused_round_state.own_contribution.signature_share_hex
         );
     }
 
