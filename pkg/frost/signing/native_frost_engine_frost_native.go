@@ -4,6 +4,7 @@ package signing
 
 import (
 	"fmt"
+	"sync"
 )
 
 const (
@@ -32,6 +33,7 @@ type NativeFROSTPublicKeyPackage struct {
 // exactly one Sign call and reject later reuse of the same object.
 type NativeFROSTNonces struct {
 	Data     []byte `json:"data"`
+	lock     sync.Mutex
 	consumed bool
 }
 
@@ -56,6 +58,9 @@ func (nfn *NativeFROSTNonces) consumeData() ([]byte, error) {
 	if nfn == nil {
 		return nil, fmt.Errorf("nonces are nil")
 	}
+
+	nfn.lock.Lock()
+	defer nfn.lock.Unlock()
 
 	if nfn.consumed {
 		return nil, fmt.Errorf("nonces are already consumed")
