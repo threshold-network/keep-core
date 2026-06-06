@@ -151,6 +151,14 @@ func (mfa *movingFundsAction) execute() error {
 		return fmt.Errorf("moving funds wallet has no main UTXO")
 	}
 
+	err = ensureMovingFundsMainUtxoSupportsLegacyTargets(
+		mfa.btcChain,
+		walletMainUtxo,
+	)
+	if err != nil {
+		return fmt.Errorf("unsupported moving funds wallet main UTXO: [%v]", err)
+	}
+
 	// Perform initial validation of the moving funds proposal.
 	err = ValidateMovingFundsProposal(
 		validateProposalLogger,
@@ -574,8 +582,16 @@ func assembleMovingFundsTransaction(
 		return nil, fmt.Errorf("wallet main UTXO is required")
 	}
 
+	err := ensureMovingFundsMainUtxoSupportsLegacyTargets(
+		bitcoinChain,
+		walletMainUtxo,
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
-	err := builder.AddPublicKeyHashInput(walletMainUtxo)
+	err = builder.AddPublicKeyHashInput(walletMainUtxo)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"cannot add input pointing to wallet main UTXO: [%v]",
@@ -626,4 +642,46 @@ func assembleMovingFundsTransaction(
 	}
 
 	return builder, nil
+}
+
+func ensureMovingFundsMainUtxoSupportsLegacyTargets(
+	bitcoinChain bitcoin.Chain,
+	walletMainUtxo *bitcoin.UnspentTransactionOutput,
+) error {
+	if walletMainUtxo.Outpoint == nil {
+		return fmt.Errorf("wallet main UTXO outpoint is required")
+	}
+
+	transaction, err := bitcoinChain.GetTransaction(
+		walletMainUtxo.Outpoint.TransactionHash,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"cannot get transaction with hash [%s]: [%v]",
+			walletMainUtxo.Outpoint.TransactionHash.Hex(bitcoin.InternalByteOrder),
+			err,
+		)
+	}
+
+	outputIndex := walletMainUtxo.Outpoint.OutputIndex
+	if outputIndex >= uint32(len(transaction.Outputs)) {
+		return fmt.Errorf(
+			"output index [%d] out of range for transaction [%s] "+
+				"with [%d] outputs",
+			outputIndex,
+			walletMainUtxo.Outpoint.TransactionHash.Hex(bitcoin.InternalByteOrder),
+			len(transaction.Outputs),
+		)
+	}
+
+	if bitcoin.GetScriptType(
+		transaction.Outputs[outputIndex].PublicKeyScript,
+	) == bitcoin.P2TRScript {
+		return fmt.Errorf(
+			"Taproot moving-funds main UTXOs are not supported until " +
+				"P2TR target wallet outputs are implemented",
+		)
+	}
+
+	return nil
 }

@@ -365,24 +365,55 @@ func TestAssembleDepositSweepTransaction_TaprootDeposit(t *testing.T) {
 		hexToSlice("11223344556677889900aabbccddeeff00112233445566778899aabbccddeeff"),
 	)
 
-	deposit := &Deposit{
+	depositOne := &Deposit{
 		Depositor:            chain.Address("934b98637ca318a4d6e7ca6ffd1690b8e77df637"),
 		WalletXOnlyPublicKey: &walletXOnlyPublicKey,
 		RefundXOnlyPublicKey: &refundXOnlyPublicKey,
 	}
-	copy(deposit.BlindingFactor[:], hexToSlice("f9f0c90d00039523"))
-	copy(deposit.WalletPublicKeyHash[:], hexToSlice("c92a772f11bc97d8938a16a9db435401f4e6a7bc"))
-	copy(deposit.RefundPublicKeyHash[:], hexToSlice("c2a27a88d8d03e271e8edc556923e9398619f17c"))
-	copy(deposit.RefundLocktime[:], hexToSlice("60bcea61"))
+	copy(depositOne.BlindingFactor[:], hexToSlice("f9f0c90d00039523"))
+	copy(depositOne.WalletPublicKeyHash[:], hexToSlice("c92a772f11bc97d8938a16a9db435401f4e6a7bc"))
+	copy(depositOne.RefundPublicKeyHash[:], hexToSlice("c2a27a88d8d03e271e8edc556923e9398619f17c"))
+	copy(depositOne.RefundLocktime[:], hexToSlice("60bcea61"))
 
-	merkleRoot, err := deposit.TaprootMerkleRoot()
+	merkleRootOne, err := depositOne.TaprootMerkleRoot()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	fundingOutputScript, err := bitcoin.PayToTaprootWithScriptTree(
+	fundingOutputScriptOne, err := bitcoin.PayToTaprootWithScriptTree(
 		walletXOnlyPublicKey,
-		merkleRoot,
+		merkleRootOne,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	depositTwo := &Deposit{
+		Depositor:            chain.Address("934b98637ca318a4d6e7ca6ffd1690b8e77df637"),
+		WalletXOnlyPublicKey: &walletXOnlyPublicKey,
+		RefundXOnlyPublicKey: &refundXOnlyPublicKey,
+	}
+	copy(depositTwo.BlindingFactor[:], hexToSlice("f9f0c90d00039523"))
+	copy(depositTwo.WalletPublicKeyHash[:], hexToSlice("c92a772f11bc97d8938a16a9db435401f4e6a7bc"))
+	copy(depositTwo.RefundPublicKeyHash[:], hexToSlice("c2a27a88d8d03e271e8edc556923e9398619f17c"))
+	copy(depositTwo.RefundLocktime[:], hexToSlice("60bcea61"))
+	var extraData [32]byte
+	copy(
+		extraData[:],
+		hexToSlice(
+			"a9b38ea6435c8941d6eda6a46b68e3e2117196995bd154ab55196396b03d9bda",
+		),
+	)
+	depositTwo.ExtraData = &extraData
+
+	merkleRootTwo, err := depositTwo.TaprootMerkleRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fundingOutputScriptTwo, err := bitcoin.PayToTaprootWithScriptTree(
+		walletXOnlyPublicKey,
+		merkleRootTwo,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -404,7 +435,11 @@ func TestAssembleDepositSweepTransaction_TaprootDeposit(t *testing.T) {
 		Outputs: []*bitcoin.TransactionOutput{
 			{
 				Value:           100000,
-				PublicKeyScript: fundingOutputScript,
+				PublicKeyScript: fundingOutputScriptOne,
+			},
+			{
+				Value:           110000,
+				PublicKeyScript: fundingOutputScriptTwo,
 			},
 		},
 	}
@@ -414,19 +449,26 @@ func TestAssembleDepositSweepTransaction_TaprootDeposit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deposit.Utxo = &bitcoin.UnspentTransactionOutput{
+	depositOne.Utxo = &bitcoin.UnspentTransactionOutput{
 		Outpoint: &bitcoin.TransactionOutpoint{
 			TransactionHash: fundingTx.Hash(),
 			OutputIndex:     0,
 		},
 		Value: 100000,
 	}
+	depositTwo.Utxo = &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: fundingTx.Hash(),
+			OutputIndex:     1,
+		},
+		Value: 110000,
+	}
 
 	builder, err := assembleDepositSweepTransaction(
 		bitcoinChain,
 		walletPublicKey,
 		nil,
-		[]*Deposit{deposit},
+		[]*Deposit{depositOne, depositTwo},
 		1000,
 	)
 	if err != nil {
@@ -438,10 +480,11 @@ func TestAssembleDepositSweepTransaction_TaprootDeposit(t *testing.T) {
 	}
 
 	merkleRoots := builder.TaprootKeyPathInputMerkleRoots()
-	if len(merkleRoots) != 1 || merkleRoots[0] == nil {
-		t.Fatalf("expected one Taproot merkle root")
+	if len(merkleRoots) != 2 || merkleRoots[0] == nil || merkleRoots[1] == nil {
+		t.Fatalf("expected two Taproot merkle roots")
 	}
-	testutils.AssertBytesEqual(t, merkleRoot[:], merkleRoots[0][:])
+	testutils.AssertBytesEqual(t, merkleRootOne[:], merkleRoots[0][:])
+	testutils.AssertBytesEqual(t, merkleRootTwo[:], merkleRoots[1][:])
 
 	unsignedTx := builder.UnsignedTransaction()
 	if len(unsignedTx.Outputs) != 1 {
@@ -460,7 +503,7 @@ func TestAssembleDepositSweepTransaction_TaprootDeposit(t *testing.T) {
 	testutils.AssertIntsEqual(
 		t,
 		"output value",
-		99000,
+		209000,
 		int(unsignedTx.Outputs[0].Value),
 	)
 }
