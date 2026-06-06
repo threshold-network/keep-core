@@ -16,7 +16,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/announcer"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"github.com/keep-network/keep-core/pkg/tecdsa"
 	"go.uber.org/zap"
 	"golang.org/x/sync/semaphore"
 )
@@ -71,6 +70,8 @@ type signingExecutor struct {
 	}
 }
 
+var _ schnorrWalletSigningExecutor = (*signingExecutor)(nil)
+
 func newSigningExecutor(
 	signers []*signer,
 	broadcastChannel net.BroadcastChannel,
@@ -96,7 +97,7 @@ func newSigningExecutor(
 
 func (se *signingExecutor) usesSchnorrSignatures() bool {
 	for _, signer := range se.signers {
-		if _, ok := signer.signingMaterial().(*tecdsa.PrivateKeyShare); !ok {
+		if signingMaterialUsesSchnorrSignatures(signer.signingMaterial()) {
 			return true
 		}
 	}
