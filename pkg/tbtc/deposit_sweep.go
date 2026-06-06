@@ -159,8 +159,8 @@ func (dsa *depositSweepAction) execute() error {
 		return fmt.Errorf("validate proposal step failed: [%v]", err)
 	}
 
-	walletMainUtxo, err := DetermineWalletMainUtxo(
-		walletPublicKeyHash,
+	walletMainUtxo, err := DetermineWalletMainUtxoForPublicKey(
+		dsa.wallet().publicKey,
 		dsa.chain,
 		dsa.btcChain,
 	)
@@ -175,8 +175,8 @@ func (dsa *depositSweepAction) execute() error {
 		)
 	}
 
-	err = EnsureWalletSyncedBetweenChains(
-		walletPublicKeyHash,
+	err = EnsureWalletSyncedBetweenChainsForPublicKey(
+		dsa.wallet().publicKey,
 		walletMainUtxo,
 		dsa.chain,
 		dsa.btcChain,
@@ -288,11 +288,32 @@ func ValidateDepositSweepProposal(
 			filter *DepositRevealedEventFilter,
 		) ([]*DepositRevealedEvent, error)
 
+		// PastTaprootDepositRevealedEvents fetches past Taproot deposit reveal
+		// events according to the provided filter or unfiltered if the filter
+		// is nil. Returned events are sorted by the block number in the
+		// ascending order, i.e. the latest event is at the end of the slice.
+		PastTaprootDepositRevealedEvents(
+			filter *DepositRevealedEventFilter,
+		) ([]*TaprootDepositRevealedEvent, error)
+
 		// ValidateDepositSweepProposal validates the given deposit sweep proposal
 		// against the chain. It requires some additional data about the deposits
 		// that must be fetched externally. Returns an error if the proposal is
 		// not valid or nil otherwise.
 		ValidateDepositSweepProposal(
+			walletPublicKeyHash [20]byte,
+			proposal *DepositSweepProposal,
+			depositsExtraInfo []struct {
+				*Deposit
+				FundingTx *bitcoin.Transaction
+			},
+		) error
+
+		// ValidateTaprootDepositSweepProposal validates the given Taproot
+		// deposit sweep proposal against the chain. It requires some additional
+		// data about the deposits that must be fetched externally. Returns an
+		// error if the proposal is not valid or nil otherwise.
+		ValidateTaprootDepositSweepProposal(
 			walletPublicKeyHash [20]byte,
 			proposal *DepositSweepProposal,
 			depositsExtraInfo []struct {
@@ -330,6 +351,8 @@ func ValidateDepositSweepProposal(
 	if len(proposal.DepositsKeys) != len(proposal.DepositsRevealBlocks) {
 		return nil, fmt.Errorf("proposal's reveal blocks list has a wrong length")
 	}
+
+	taprootDepositsCount := 0
 
 	for i, depositKey := range proposal.DepositsKeys {
 		depositDisplayIndex := fmt.Sprintf("%v/%v", i+1, len(proposal.DepositsKeys))
@@ -377,6 +400,12 @@ func ValidateDepositSweepProposal(
 
 		revealBlock := proposal.DepositsRevealBlocks[i].Uint64()
 
+		filter := &DepositRevealedEventFilter{
+			StartBlock:          revealBlock,
+			EndBlock:            &revealBlock,
+			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+		}
+
 		// We need to fetch the past DepositRevealed event for the given deposit.
 		// It may be tempting to fetch such events for all deposit keys
 		// in the proposal using a single call, however, this solution has
@@ -387,11 +416,7 @@ func ValidateDepositSweepProposal(
 		// We have the revealBlock passed by the coordinator within the proposal
 		// so, we can use it to make a narrow call. Moreover, we use the
 		// wallet PKH as additional filter to limit the size of returned data.
-		events, err := chain.PastDepositRevealedEvents(&DepositRevealedEventFilter{
-			StartBlock:          revealBlock,
-			EndBlock:            &revealBlock,
-			WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
-		})
+		events, err := chain.PastDepositRevealedEvents(filter)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"cannot get on-chain DepositRevealed events for deposit [%v]: [%v]",
@@ -411,9 +436,27 @@ func ValidateDepositSweepProposal(
 			}
 		}
 
-		if matchingEvent == nil {
+		taprootEvents, err := chain.PastTaprootDepositRevealedEvents(filter)
+		if err != nil {
 			return nil, fmt.Errorf(
-				"no matching DepositRevealed event for deposit [%v]: [%v]",
+				"cannot get on-chain TaprootDepositRevealed events for deposit [%v]: [%v]",
+				depositDisplayIndex,
+				err,
+			)
+		}
+
+		var matchingTaprootEvent *TaprootDepositRevealedEvent
+		for _, event := range taprootEvents {
+			if event.FundingTxHash == depositKey.FundingTxHash &&
+				event.FundingOutputIndex == depositKey.FundingOutputIndex {
+				matchingTaprootEvent = event
+				break
+			}
+		}
+
+		if matchingEvent == nil && matchingTaprootEvent == nil {
+			return nil, fmt.Errorf(
+				"no matching DepositRevealed or TaprootDepositRevealed event for deposit [%v]: [%v]",
 				depositDisplayIndex,
 				err,
 			)
@@ -441,18 +484,40 @@ func ValidateDepositSweepProposal(
 			*Deposit
 			FundingTx *bitcoin.Transaction
 		}{
-			Deposit:   matchingEvent.unpack(depositRequest.ExtraData),
+			Deposit: func() *Deposit {
+				if matchingTaprootEvent != nil {
+					taprootDepositsCount++
+					return matchingTaprootEvent.unpack(depositRequest.ExtraData)
+				}
+
+				return matchingEvent.unpack(depositRequest.ExtraData)
+			}(),
 			FundingTx: fundingTx,
 		}
 	}
 
+	if taprootDepositsCount > 0 && taprootDepositsCount != len(proposal.DepositsKeys) {
+		return nil, fmt.Errorf(
+			"mixed legacy and Taproot deposits are not supported in one sweep proposal",
+		)
+	}
+
 	validateProposalLogger.Infof("calling chain for proposal validation")
 
-	err := chain.ValidateDepositSweepProposal(
-		walletPublicKeyHash,
-		proposal,
-		depositExtraInfo,
-	)
+	var err error
+	if taprootDepositsCount > 0 {
+		err = chain.ValidateTaprootDepositSweepProposal(
+			walletPublicKeyHash,
+			proposal,
+			depositExtraInfo,
+		)
+	} else {
+		err = chain.ValidateDepositSweepProposal(
+			walletPublicKeyHash,
+			proposal,
+			depositExtraInfo,
+		)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("deposit sweep proposal is invalid: [%v]", err)
 	}
@@ -508,6 +573,41 @@ func assembleDepositSweepTransaction(
 		return nil, fmt.Errorf("at least one deposit is required")
 	}
 
+	taprootDepositsCount := 0
+	for _, deposit := range deposits {
+		if deposit.IsTaproot() {
+			taprootDepositsCount++
+		}
+	}
+
+	if taprootDepositsCount > 0 && taprootDepositsCount != len(deposits) {
+		return nil, fmt.Errorf(
+			"mixed legacy and Taproot deposits are not supported in one sweep transaction",
+		)
+	}
+
+	taprootSweep := taprootDepositsCount > 0
+
+	if !taprootSweep && walletMainUtxo != nil {
+		scriptType, err := walletMainUtxoScriptType(
+			bitcoinChain,
+			walletMainUtxo,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot inspect wallet main UTXO script: [%v]",
+				err,
+			)
+		}
+
+		if scriptType == bitcoin.P2TRScript {
+			return nil, fmt.Errorf(
+				"legacy deposit sweeps are not supported for " +
+					"Taproot wallet main UTXOs",
+			)
+		}
+	}
+
 	builder := bitcoin.NewTransactionBuilder(bitcoinChain)
 
 	if walletMainUtxo != nil {
@@ -521,29 +621,73 @@ func assembleDepositSweepTransaction(
 	}
 
 	for i, deposit := range deposits {
-		depositScript, err := deposit.Script()
-		if err != nil {
-			return nil, fmt.Errorf(
-				"cannot get script for deposit [%v]: [%v]",
-				i,
-				err,
-			)
-		}
+		if deposit.IsTaproot() {
+			merkleRoot, err := deposit.TaprootMerkleRoot()
+			if err != nil {
+				return nil, fmt.Errorf(
+					"cannot compute Taproot merkle root for deposit [%v]: [%v]",
+					i,
+					err,
+				)
+			}
 
-		err = builder.AddScriptHashInput(deposit.Utxo, depositScript)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"cannot add input pointing to deposit [%v] UTXO: [%v]",
-				i,
-				err,
+			err = builder.AddTaprootKeyPathInputWithMerkleRoot(
+				deposit.Utxo,
+				*deposit.WalletXOnlyPublicKey,
+				merkleRoot,
 			)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"cannot add input pointing to Taproot deposit [%v] UTXO: [%v]",
+					i,
+					err,
+				)
+			}
+		} else {
+			depositScript, err := deposit.Script()
+			if err != nil {
+				return nil, fmt.Errorf(
+					"cannot get script for deposit [%v]: [%v]",
+					i,
+					err,
+				)
+			}
+
+			err = builder.AddScriptHashInput(deposit.Utxo, depositScript)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"cannot add input pointing to deposit [%v] UTXO: [%v]",
+					i,
+					err,
+				)
+			}
 		}
 	}
 
-	walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
-	outputScript, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
-	if err != nil {
-		return nil, fmt.Errorf("cannot compute output script: [%v]", err)
+	if taprootSweep && !builder.HasOnlyTaprootKeyPathInputs() {
+		return nil, fmt.Errorf(
+			"Taproot deposit sweep requires a Taproot wallet main UTXO",
+		)
+	}
+
+	var outputScript bitcoin.Script
+	var err error
+	if taprootSweep {
+		walletXOnlyPublicKey, err := walletXOnlyPublicKey(walletPublicKey)
+		if err != nil {
+			return nil, err
+		}
+
+		outputScript, err = bitcoin.PayToTaproot(walletXOnlyPublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("cannot compute Taproot output script: [%v]", err)
+		}
+	} else {
+		walletPublicKeyHash := bitcoin.PublicKeyHash(walletPublicKey)
+		outputScript, err = bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+		if err != nil {
+			return nil, fmt.Errorf("cannot compute output script: [%v]", err)
+		}
 	}
 
 	outputValue := builder.TotalInputsValue() - fee

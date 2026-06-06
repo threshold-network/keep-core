@@ -139,6 +139,113 @@ func TestExtractDkgGroupPublicKey_FrostTBTCSignerV1_ReturnsKeyGroupBytes(t *test
 	}
 }
 
+func TestExtractTaprootOutputKey_FrostTBTCSignerV1_DKGPersistedHexDecodes(
+	t *testing.T,
+) {
+	const hexKey = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+	payload, _ := json.Marshal(&NativeTBTCSignerMaterialPayload{
+		KeyGroup:       hexKey,
+		KeyGroupSource: NativeTBTCSignerKeyGroupSourceDKGPersisted,
+	})
+	mat := &NativeSignerMaterial{
+		Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
+		Payload: payload,
+	}
+
+	got, err := ExtractTaprootOutputKeyFromMaterial(mat)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	want, _ := hex.DecodeString(hexKey)
+	if !bytes.Equal(got, want) {
+		t.Fatalf(
+			"taproot output key mismatch: got %x, want %x",
+			got,
+			want,
+		)
+	}
+}
+
+func TestExtractTaprootOutputKey_FrostTBTCSignerV1_DKGPersistedCompressedKeyGroup(
+	t *testing.T,
+) {
+	const compressedKey = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+	const xOnlyKey = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+
+	payload, _ := json.Marshal(&NativeTBTCSignerMaterialPayload{
+		KeyGroup:       compressedKey,
+		KeyGroupSource: NativeTBTCSignerKeyGroupSourceDKGPersisted,
+	})
+	mat := &NativeSignerMaterial{
+		Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
+		Payload: payload,
+	}
+
+	got, err := ExtractTaprootOutputKeyFromMaterial(mat)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	want, _ := hex.DecodeString(xOnlyKey)
+	if !bytes.Equal(got, want) {
+		t.Fatalf(
+			"taproot output key mismatch: got %x, want %x",
+			got,
+			want,
+		)
+	}
+}
+
+func TestExtractTaprootOutputKey_FrostTBTCSignerV1_DKGPersistedUsesExplicitOutputKey(
+	t *testing.T,
+) {
+	const compressedKey = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+	const outputKey = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+
+	payload, _ := json.Marshal(&NativeTBTCSignerMaterialPayload{
+		KeyGroup:         compressedKey,
+		TaprootOutputKey: outputKey,
+		KeyGroupSource:   NativeTBTCSignerKeyGroupSourceDKGPersisted,
+	})
+	mat := &NativeSignerMaterial{
+		Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
+		Payload: payload,
+	}
+
+	got, err := ExtractTaprootOutputKeyFromMaterial(mat)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	want, _ := hex.DecodeString(outputKey)
+	if !bytes.Equal(got, want) {
+		t.Fatalf(
+			"taproot output key mismatch: got %x, want %x",
+			got,
+			want,
+		)
+	}
+}
+
+func TestExtractTaprootOutputKey_FrostTBTCSignerV1_RejectsNonDKGSource(
+	t *testing.T,
+) {
+	payload, _ := json.Marshal(&NativeTBTCSignerMaterialPayload{
+		KeyGroup:       strings.Repeat("11", 32),
+		KeyGroupSource: NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey,
+	})
+	mat := &NativeSignerMaterial{
+		Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
+		Payload: payload,
+	}
+
+	_, err := ExtractTaprootOutputKeyFromMaterial(mat)
+	if err == nil {
+		t.Fatal("expected non-DKG source rejection")
+	}
+	if !strings.Contains(err.Error(), NativeTBTCSignerKeyGroupSourceDKGPersisted) {
+		t.Fatalf("error should mention persisted DKG source: [%v]", err)
+	}
+}
+
 func TestExtractDkgGroupPublicKey_FrostTBTCSignerV1_DeterministicAcrossCalls(t *testing.T) {
 	payload, _ := json.Marshal(&NativeTBTCSignerMaterialPayload{
 		KeyGroup: "deterministic-group",

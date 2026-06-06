@@ -19,7 +19,10 @@ type Request struct {
 	SignerMaterial any
 	// PrivateKeyShare is a deprecated legacy alias kept for backward
 	// compatibility while migrating to backend-specific signer material.
-	PrivateKeyShare     *tecdsa.PrivateKeyShare
+	PrivateKeyShare *tecdsa.PrivateKeyShare
+	// TaprootMerkleRoot carries the optional BIP-341 script merkle root used
+	// to tweak a Taproot key-path signature.
+	TaprootMerkleRoot   *[32]byte
 	GroupSize           int
 	DishonestThreshold  int
 	Channel             net.BroadcastChannel

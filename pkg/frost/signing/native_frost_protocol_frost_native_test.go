@@ -344,6 +344,7 @@ func TestVerifyNativeFROSTBIP340SignatureRejectsInvalidAggregate(
 		&NativeFROSTPublicKeyPackage{
 			VerifyingKey: deterministicNativeFROSTSigningVerifyingKeyForTest(),
 		},
+		nil,
 	)
 	if err == nil {
 		t.Fatal("expected invalid BIP-340 aggregate signature to be rejected")

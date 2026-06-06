@@ -104,6 +104,19 @@ type Chain interface {
 		},
 	) error
 
+	// ValidateTaprootDepositSweepProposal validates the given Taproot deposit
+	// sweep proposal against the chain. It requires some additional data about
+	// the deposits that must be fetched externally. Returns an error if the
+	// proposal is not valid or nil otherwise.
+	ValidateTaprootDepositSweepProposal(
+		walletPublicKeyHash [20]byte,
+		proposal *tbtc.DepositSweepProposal,
+		depositsExtraInfo []struct {
+			*tbtc.Deposit
+			FundingTx *bitcoin.Transaction
+		},
+	) error
+
 	// ValidateRedemptionProposal validates the given redemption proposal
 	// against the chain. Returns an error if the proposal is not valid or
 	// nil otherwise.

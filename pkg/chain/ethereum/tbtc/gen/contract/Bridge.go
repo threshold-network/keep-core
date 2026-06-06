@@ -105,470 +105,6 @@ func NewBridge(
 // ----- Non-const Methods ------
 
 // Transaction submission.
-func (b *Bridge) DefeatFraudChallenge(
-	arg_walletPublicKey []byte,
-	arg_preimage []byte,
-	arg_witness bool,
-
-	transactionOptions ...chainutil.TransactionOptions,
-) (*types.Transaction, error) {
-	bLogger.Debug(
-		"submitting transaction defeatFraudChallenge",
-		" params: ",
-		fmt.Sprint(
-			arg_walletPublicKey,
-			arg_preimage,
-			arg_witness,
-		),
-	)
-
-	b.transactionMutex.Lock()
-	defer b.transactionMutex.Unlock()
-
-	// create a copy
-	transactorOptions := new(bind.TransactOpts)
-	*transactorOptions = *b.transactorOptions
-
-	if len(transactionOptions) > 1 {
-		return nil, fmt.Errorf(
-			"could not process multiple transaction options sets",
-		)
-	} else if len(transactionOptions) > 0 {
-		transactionOptions[0].Apply(transactorOptions)
-	}
-
-	nonce, err := b.nonceManager.CurrentNonce()
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
-	}
-
-	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
-
-	transaction, err := b.contract.DefeatFraudChallenge(
-		transactorOptions,
-		arg_walletPublicKey,
-		arg_preimage,
-		arg_witness,
-	)
-	if err != nil {
-		return transaction, b.errorResolver.ResolveError(
-			err,
-			b.transactorOptions.From,
-			nil,
-			"defeatFraudChallenge",
-			arg_walletPublicKey,
-			arg_preimage,
-			arg_witness,
-		)
-	}
-
-	bLogger.Infof(
-		"submitted transaction defeatFraudChallenge with id: [%s] and nonce [%v]",
-		transaction.Hash(),
-		transaction.Nonce(),
-	)
-
-	go b.miningWaiter.ForceMining(
-		transaction,
-		transactorOptions,
-		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
-			// If original transactor options has a non-zero gas limit, that
-			// means the client code set it on their own. In that case, we
-			// should rewrite the gas limit from the original transaction
-			// for each resubmission. If the gas limit is not set by the client
-			// code, let the the submitter re-estimate the gas limit on each
-			// resubmission.
-			if transactorOptions.GasLimit != 0 {
-				newTransactorOptions.GasLimit = transactorOptions.GasLimit
-			}
-
-			transaction, err := b.contract.DefeatFraudChallenge(
-				newTransactorOptions,
-				arg_walletPublicKey,
-				arg_preimage,
-				arg_witness,
-			)
-			if err != nil {
-				return nil, b.errorResolver.ResolveError(
-					err,
-					b.transactorOptions.From,
-					nil,
-					"defeatFraudChallenge",
-					arg_walletPublicKey,
-					arg_preimage,
-					arg_witness,
-				)
-			}
-
-			bLogger.Infof(
-				"submitted transaction defeatFraudChallenge with id: [%s] and nonce [%v]",
-				transaction.Hash(),
-				transaction.Nonce(),
-			)
-
-			return transaction, nil
-		},
-	)
-
-	b.nonceManager.IncrementNonce()
-
-	return transaction, err
-}
-
-// Non-mutating call, not a transaction submission.
-func (b *Bridge) CallDefeatFraudChallenge(
-	arg_walletPublicKey []byte,
-	arg_preimage []byte,
-	arg_witness bool,
-	blockNumber *big.Int,
-) error {
-	var result interface{} = nil
-
-	err := chainutil.CallAtBlock(
-		b.transactorOptions.From,
-		blockNumber, nil,
-		b.contractABI,
-		b.caller,
-		b.errorResolver,
-		b.contractAddress,
-		"defeatFraudChallenge",
-		&result,
-		arg_walletPublicKey,
-		arg_preimage,
-		arg_witness,
-	)
-
-	return err
-}
-
-func (b *Bridge) DefeatFraudChallengeGasEstimate(
-	arg_walletPublicKey []byte,
-	arg_preimage []byte,
-	arg_witness bool,
-) (uint64, error) {
-	var result uint64
-
-	result, err := chainutil.EstimateGas(
-		b.callerOptions.From,
-		b.contractAddress,
-		"defeatFraudChallenge",
-		b.contractABI,
-		b.transactor,
-		arg_walletPublicKey,
-		arg_preimage,
-		arg_witness,
-	)
-
-	return result, err
-}
-
-// Transaction submission.
-func (b *Bridge) DefeatFraudChallengeWithHeartbeat(
-	arg_walletPublicKey []byte,
-	arg_heartbeatMessage []byte,
-
-	transactionOptions ...chainutil.TransactionOptions,
-) (*types.Transaction, error) {
-	bLogger.Debug(
-		"submitting transaction defeatFraudChallengeWithHeartbeat",
-		" params: ",
-		fmt.Sprint(
-			arg_walletPublicKey,
-			arg_heartbeatMessage,
-		),
-	)
-
-	b.transactionMutex.Lock()
-	defer b.transactionMutex.Unlock()
-
-	// create a copy
-	transactorOptions := new(bind.TransactOpts)
-	*transactorOptions = *b.transactorOptions
-
-	if len(transactionOptions) > 1 {
-		return nil, fmt.Errorf(
-			"could not process multiple transaction options sets",
-		)
-	} else if len(transactionOptions) > 0 {
-		transactionOptions[0].Apply(transactorOptions)
-	}
-
-	nonce, err := b.nonceManager.CurrentNonce()
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
-	}
-
-	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
-
-	transaction, err := b.contract.DefeatFraudChallengeWithHeartbeat(
-		transactorOptions,
-		arg_walletPublicKey,
-		arg_heartbeatMessage,
-	)
-	if err != nil {
-		return transaction, b.errorResolver.ResolveError(
-			err,
-			b.transactorOptions.From,
-			nil,
-			"defeatFraudChallengeWithHeartbeat",
-			arg_walletPublicKey,
-			arg_heartbeatMessage,
-		)
-	}
-
-	bLogger.Infof(
-		"submitted transaction defeatFraudChallengeWithHeartbeat with id: [%s] and nonce [%v]",
-		transaction.Hash(),
-		transaction.Nonce(),
-	)
-
-	go b.miningWaiter.ForceMining(
-		transaction,
-		transactorOptions,
-		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
-			// If original transactor options has a non-zero gas limit, that
-			// means the client code set it on their own. In that case, we
-			// should rewrite the gas limit from the original transaction
-			// for each resubmission. If the gas limit is not set by the client
-			// code, let the the submitter re-estimate the gas limit on each
-			// resubmission.
-			if transactorOptions.GasLimit != 0 {
-				newTransactorOptions.GasLimit = transactorOptions.GasLimit
-			}
-
-			transaction, err := b.contract.DefeatFraudChallengeWithHeartbeat(
-				newTransactorOptions,
-				arg_walletPublicKey,
-				arg_heartbeatMessage,
-			)
-			if err != nil {
-				return nil, b.errorResolver.ResolveError(
-					err,
-					b.transactorOptions.From,
-					nil,
-					"defeatFraudChallengeWithHeartbeat",
-					arg_walletPublicKey,
-					arg_heartbeatMessage,
-				)
-			}
-
-			bLogger.Infof(
-				"submitted transaction defeatFraudChallengeWithHeartbeat with id: [%s] and nonce [%v]",
-				transaction.Hash(),
-				transaction.Nonce(),
-			)
-
-			return transaction, nil
-		},
-	)
-
-	b.nonceManager.IncrementNonce()
-
-	return transaction, err
-}
-
-// Non-mutating call, not a transaction submission.
-func (b *Bridge) CallDefeatFraudChallengeWithHeartbeat(
-	arg_walletPublicKey []byte,
-	arg_heartbeatMessage []byte,
-	blockNumber *big.Int,
-) error {
-	var result interface{} = nil
-
-	err := chainutil.CallAtBlock(
-		b.transactorOptions.From,
-		blockNumber, nil,
-		b.contractABI,
-		b.caller,
-		b.errorResolver,
-		b.contractAddress,
-		"defeatFraudChallengeWithHeartbeat",
-		&result,
-		arg_walletPublicKey,
-		arg_heartbeatMessage,
-	)
-
-	return err
-}
-
-func (b *Bridge) DefeatFraudChallengeWithHeartbeatGasEstimate(
-	arg_walletPublicKey []byte,
-	arg_heartbeatMessage []byte,
-) (uint64, error) {
-	var result uint64
-
-	result, err := chainutil.EstimateGas(
-		b.callerOptions.From,
-		b.contractAddress,
-		"defeatFraudChallengeWithHeartbeat",
-		b.contractABI,
-		b.transactor,
-		arg_walletPublicKey,
-		arg_heartbeatMessage,
-	)
-
-	return result, err
-}
-
-// Transaction submission.
-func (b *Bridge) EcdsaWalletCreatedCallback(
-	arg_ecdsaWalletID [32]byte,
-	arg_publicKeyX [32]byte,
-	arg_publicKeyY [32]byte,
-
-	transactionOptions ...chainutil.TransactionOptions,
-) (*types.Transaction, error) {
-	bLogger.Debug(
-		"submitting transaction ecdsaWalletCreatedCallback",
-		" params: ",
-		fmt.Sprint(
-			arg_ecdsaWalletID,
-			arg_publicKeyX,
-			arg_publicKeyY,
-		),
-	)
-
-	b.transactionMutex.Lock()
-	defer b.transactionMutex.Unlock()
-
-	// create a copy
-	transactorOptions := new(bind.TransactOpts)
-	*transactorOptions = *b.transactorOptions
-
-	if len(transactionOptions) > 1 {
-		return nil, fmt.Errorf(
-			"could not process multiple transaction options sets",
-		)
-	} else if len(transactionOptions) > 0 {
-		transactionOptions[0].Apply(transactorOptions)
-	}
-
-	nonce, err := b.nonceManager.CurrentNonce()
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
-	}
-
-	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
-
-	transaction, err := b.contract.EcdsaWalletCreatedCallback(
-		transactorOptions,
-		arg_ecdsaWalletID,
-		arg_publicKeyX,
-		arg_publicKeyY,
-	)
-	if err != nil {
-		return transaction, b.errorResolver.ResolveError(
-			err,
-			b.transactorOptions.From,
-			nil,
-			"ecdsaWalletCreatedCallback",
-			arg_ecdsaWalletID,
-			arg_publicKeyX,
-			arg_publicKeyY,
-		)
-	}
-
-	bLogger.Infof(
-		"submitted transaction ecdsaWalletCreatedCallback with id: [%s] and nonce [%v]",
-		transaction.Hash(),
-		transaction.Nonce(),
-	)
-
-	go b.miningWaiter.ForceMining(
-		transaction,
-		transactorOptions,
-		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
-			// If original transactor options has a non-zero gas limit, that
-			// means the client code set it on their own. In that case, we
-			// should rewrite the gas limit from the original transaction
-			// for each resubmission. If the gas limit is not set by the client
-			// code, let the the submitter re-estimate the gas limit on each
-			// resubmission.
-			if transactorOptions.GasLimit != 0 {
-				newTransactorOptions.GasLimit = transactorOptions.GasLimit
-			}
-
-			transaction, err := b.contract.EcdsaWalletCreatedCallback(
-				newTransactorOptions,
-				arg_ecdsaWalletID,
-				arg_publicKeyX,
-				arg_publicKeyY,
-			)
-			if err != nil {
-				return nil, b.errorResolver.ResolveError(
-					err,
-					b.transactorOptions.From,
-					nil,
-					"ecdsaWalletCreatedCallback",
-					arg_ecdsaWalletID,
-					arg_publicKeyX,
-					arg_publicKeyY,
-				)
-			}
-
-			bLogger.Infof(
-				"submitted transaction ecdsaWalletCreatedCallback with id: [%s] and nonce [%v]",
-				transaction.Hash(),
-				transaction.Nonce(),
-			)
-
-			return transaction, nil
-		},
-	)
-
-	b.nonceManager.IncrementNonce()
-
-	return transaction, err
-}
-
-// Non-mutating call, not a transaction submission.
-func (b *Bridge) CallEcdsaWalletCreatedCallback(
-	arg_ecdsaWalletID [32]byte,
-	arg_publicKeyX [32]byte,
-	arg_publicKeyY [32]byte,
-	blockNumber *big.Int,
-) error {
-	var result interface{} = nil
-
-	err := chainutil.CallAtBlock(
-		b.transactorOptions.From,
-		blockNumber, nil,
-		b.contractABI,
-		b.caller,
-		b.errorResolver,
-		b.contractAddress,
-		"ecdsaWalletCreatedCallback",
-		&result,
-		arg_ecdsaWalletID,
-		arg_publicKeyX,
-		arg_publicKeyY,
-	)
-
-	return err
-}
-
-func (b *Bridge) EcdsaWalletCreatedCallbackGasEstimate(
-	arg_ecdsaWalletID [32]byte,
-	arg_publicKeyX [32]byte,
-	arg_publicKeyY [32]byte,
-) (uint64, error) {
-	var result uint64
-
-	result, err := chainutil.EstimateGas(
-		b.callerOptions.From,
-		b.contractAddress,
-		"ecdsaWalletCreatedCallback",
-		b.contractABI,
-		b.transactor,
-		arg_ecdsaWalletID,
-		arg_publicKeyX,
-		arg_publicKeyY,
-	)
-
-	return result, err
-}
-
-// Transaction submission.
 func (b *Bridge) EcdsaWalletHeartbeatFailedCallback(
 	arg0 [32]byte,
 	arg_publicKeyX [32]byte,
@@ -721,6 +257,144 @@ func (b *Bridge) EcdsaWalletHeartbeatFailedCallbackGasEstimate(
 		arg0,
 		arg_publicKeyX,
 		arg_publicKeyY,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
+func (b *Bridge) FrostWalletCreatedCallback(
+	arg_xOnlyOutputKey [32]byte,
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	bLogger.Debug(
+		"submitting transaction frostWalletCreatedCallback",
+		" params: ",
+		fmt.Sprint(
+			arg_xOnlyOutputKey,
+		),
+	)
+
+	b.transactionMutex.Lock()
+	defer b.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *b.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := b.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := b.contract.FrostWalletCreatedCallback(
+		transactorOptions,
+		arg_xOnlyOutputKey,
+	)
+	if err != nil {
+		return transaction, b.errorResolver.ResolveError(
+			err,
+			b.transactorOptions.From,
+			nil,
+			"frostWalletCreatedCallback",
+			arg_xOnlyOutputKey,
+		)
+	}
+
+	bLogger.Infof(
+		"submitted transaction frostWalletCreatedCallback with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go b.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := b.contract.FrostWalletCreatedCallback(
+				newTransactorOptions,
+				arg_xOnlyOutputKey,
+			)
+			if err != nil {
+				return nil, b.errorResolver.ResolveError(
+					err,
+					b.transactorOptions.From,
+					nil,
+					"frostWalletCreatedCallback",
+					arg_xOnlyOutputKey,
+				)
+			}
+
+			bLogger.Infof(
+				"submitted transaction frostWalletCreatedCallback with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	b.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (b *Bridge) CallFrostWalletCreatedCallback(
+	arg_xOnlyOutputKey [32]byte,
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		b.transactorOptions.From,
+		blockNumber, nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"frostWalletCreatedCallback",
+		&result,
+		arg_xOnlyOutputKey,
+	)
+
+	return err
+}
+
+func (b *Bridge) FrostWalletCreatedCallbackGasEstimate(
+	arg_xOnlyOutputKey [32]byte,
+) (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		b.callerOptions.From,
+		b.contractAddress,
+		"frostWalletCreatedCallback",
+		b.contractABI,
+		b.transactor,
+		arg_xOnlyOutputKey,
 	)
 
 	return result, err
@@ -1039,20 +713,18 @@ func (b *Bridge) InitializeV2FixVaultZeroDepositGasEstimate() (uint64, error) {
 }
 
 // Transaction submission.
-func (b *Bridge) NotifyFraudChallengeDefeatTimeout(
-	arg_walletPublicKey []byte,
-	arg_walletMembersIDs []uint32,
-	arg_preimageSha256 []byte,
+func (b *Bridge) MigrateLegacyFraudChallenges(
+	arg_routerKind uint8,
+	arg_challengeKeys []*big.Int,
 
 	transactionOptions ...chainutil.TransactionOptions,
 ) (*types.Transaction, error) {
 	bLogger.Debug(
-		"submitting transaction notifyFraudChallengeDefeatTimeout",
+		"submitting transaction migrateLegacyFraudChallenges",
 		" params: ",
 		fmt.Sprint(
-			arg_walletPublicKey,
-			arg_walletMembersIDs,
-			arg_preimageSha256,
+			arg_routerKind,
+			arg_challengeKeys,
 		),
 	)
 
@@ -1078,26 +750,24 @@ func (b *Bridge) NotifyFraudChallengeDefeatTimeout(
 
 	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
 
-	transaction, err := b.contract.NotifyFraudChallengeDefeatTimeout(
+	transaction, err := b.contract.MigrateLegacyFraudChallenges(
 		transactorOptions,
-		arg_walletPublicKey,
-		arg_walletMembersIDs,
-		arg_preimageSha256,
+		arg_routerKind,
+		arg_challengeKeys,
 	)
 	if err != nil {
 		return transaction, b.errorResolver.ResolveError(
 			err,
 			b.transactorOptions.From,
 			nil,
-			"notifyFraudChallengeDefeatTimeout",
-			arg_walletPublicKey,
-			arg_walletMembersIDs,
-			arg_preimageSha256,
+			"migrateLegacyFraudChallenges",
+			arg_routerKind,
+			arg_challengeKeys,
 		)
 	}
 
 	bLogger.Infof(
-		"submitted transaction notifyFraudChallengeDefeatTimeout with id: [%s] and nonce [%v]",
+		"submitted transaction migrateLegacyFraudChallenges with id: [%s] and nonce [%v]",
 		transaction.Hash(),
 		transaction.Nonce(),
 	)
@@ -1116,26 +786,24 @@ func (b *Bridge) NotifyFraudChallengeDefeatTimeout(
 				newTransactorOptions.GasLimit = transactorOptions.GasLimit
 			}
 
-			transaction, err := b.contract.NotifyFraudChallengeDefeatTimeout(
+			transaction, err := b.contract.MigrateLegacyFraudChallenges(
 				newTransactorOptions,
-				arg_walletPublicKey,
-				arg_walletMembersIDs,
-				arg_preimageSha256,
+				arg_routerKind,
+				arg_challengeKeys,
 			)
 			if err != nil {
 				return nil, b.errorResolver.ResolveError(
 					err,
 					b.transactorOptions.From,
 					nil,
-					"notifyFraudChallengeDefeatTimeout",
-					arg_walletPublicKey,
-					arg_walletMembersIDs,
-					arg_preimageSha256,
+					"migrateLegacyFraudChallenges",
+					arg_routerKind,
+					arg_challengeKeys,
 				)
 			}
 
 			bLogger.Infof(
-				"submitted transaction notifyFraudChallengeDefeatTimeout with id: [%s] and nonce [%v]",
+				"submitted transaction migrateLegacyFraudChallenges with id: [%s] and nonce [%v]",
 				transaction.Hash(),
 				transaction.Nonce(),
 			)
@@ -1150,10 +818,9 @@ func (b *Bridge) NotifyFraudChallengeDefeatTimeout(
 }
 
 // Non-mutating call, not a transaction submission.
-func (b *Bridge) CallNotifyFraudChallengeDefeatTimeout(
-	arg_walletPublicKey []byte,
-	arg_walletMembersIDs []uint32,
-	arg_preimageSha256 []byte,
+func (b *Bridge) CallMigrateLegacyFraudChallenges(
+	arg_routerKind uint8,
+	arg_challengeKeys []*big.Int,
 	blockNumber *big.Int,
 ) error {
 	var result interface{} = nil
@@ -1165,32 +832,29 @@ func (b *Bridge) CallNotifyFraudChallengeDefeatTimeout(
 		b.caller,
 		b.errorResolver,
 		b.contractAddress,
-		"notifyFraudChallengeDefeatTimeout",
+		"migrateLegacyFraudChallenges",
 		&result,
-		arg_walletPublicKey,
-		arg_walletMembersIDs,
-		arg_preimageSha256,
+		arg_routerKind,
+		arg_challengeKeys,
 	)
 
 	return err
 }
 
-func (b *Bridge) NotifyFraudChallengeDefeatTimeoutGasEstimate(
-	arg_walletPublicKey []byte,
-	arg_walletMembersIDs []uint32,
-	arg_preimageSha256 []byte,
+func (b *Bridge) MigrateLegacyFraudChallengesGasEstimate(
+	arg_routerKind uint8,
+	arg_challengeKeys []*big.Int,
 ) (uint64, error) {
 	var result uint64
 
 	result, err := chainutil.EstimateGas(
 		b.callerOptions.From,
 		b.contractAddress,
-		"notifyFraudChallengeDefeatTimeout",
+		"migrateLegacyFraudChallenges",
 		b.contractABI,
 		b.transactor,
-		arg_walletPublicKey,
-		arg_walletMembersIDs,
-		arg_preimageSha256,
+		arg_routerKind,
+		arg_challengeKeys,
 	)
 
 	return result, err
@@ -2845,6 +2509,130 @@ func (b *Bridge) ResetMovingFundsTimeoutGasEstimate(
 }
 
 // Transaction submission.
+func (b *Bridge) RetireEcdsa(
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	bLogger.Debug(
+		"submitting transaction retireEcdsa",
+	)
+
+	b.transactionMutex.Lock()
+	defer b.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *b.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := b.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := b.contract.RetireEcdsa(
+		transactorOptions,
+	)
+	if err != nil {
+		return transaction, b.errorResolver.ResolveError(
+			err,
+			b.transactorOptions.From,
+			nil,
+			"retireEcdsa",
+		)
+	}
+
+	bLogger.Infof(
+		"submitted transaction retireEcdsa with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go b.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := b.contract.RetireEcdsa(
+				newTransactorOptions,
+			)
+			if err != nil {
+				return nil, b.errorResolver.ResolveError(
+					err,
+					b.transactorOptions.From,
+					nil,
+					"retireEcdsa",
+				)
+			}
+
+			bLogger.Infof(
+				"submitted transaction retireEcdsa with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	b.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (b *Bridge) CallRetireEcdsa(
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		b.transactorOptions.From,
+		blockNumber, nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"retireEcdsa",
+		&result,
+	)
+
+	return err
+}
+
+func (b *Bridge) RetireEcdsaGasEstimate() (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		b.callerOptions.From,
+		b.contractAddress,
+		"retireEcdsa",
+		b.contractABI,
+		b.transactor,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
 func (b *Bridge) RevealDeposit(
 	arg_fundingTx abi.BitcoinTxInfo,
 	arg_reveal abi.DepositDepositRevealInfo,
@@ -3145,6 +2933,864 @@ func (b *Bridge) RevealDepositWithExtraDataGasEstimate(
 		arg_fundingTx,
 		arg_reveal,
 		arg_extraData,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
+func (b *Bridge) RevealTaprootDeposit(
+	arg_fundingTx abi.BitcoinTxInfo,
+	arg_reveal abi.DepositTaprootDepositRevealInfo,
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	bLogger.Debug(
+		"submitting transaction revealTaprootDeposit",
+		" params: ",
+		fmt.Sprint(
+			arg_fundingTx,
+			arg_reveal,
+		),
+	)
+
+	b.transactionMutex.Lock()
+	defer b.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *b.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := b.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := b.contract.RevealTaprootDeposit(
+		transactorOptions,
+		arg_fundingTx,
+		arg_reveal,
+	)
+	if err != nil {
+		return transaction, b.errorResolver.ResolveError(
+			err,
+			b.transactorOptions.From,
+			nil,
+			"revealTaprootDeposit",
+			arg_fundingTx,
+			arg_reveal,
+		)
+	}
+
+	bLogger.Infof(
+		"submitted transaction revealTaprootDeposit with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go b.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := b.contract.RevealTaprootDeposit(
+				newTransactorOptions,
+				arg_fundingTx,
+				arg_reveal,
+			)
+			if err != nil {
+				return nil, b.errorResolver.ResolveError(
+					err,
+					b.transactorOptions.From,
+					nil,
+					"revealTaprootDeposit",
+					arg_fundingTx,
+					arg_reveal,
+				)
+			}
+
+			bLogger.Infof(
+				"submitted transaction revealTaprootDeposit with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	b.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (b *Bridge) CallRevealTaprootDeposit(
+	arg_fundingTx abi.BitcoinTxInfo,
+	arg_reveal abi.DepositTaprootDepositRevealInfo,
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		b.transactorOptions.From,
+		blockNumber, nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"revealTaprootDeposit",
+		&result,
+		arg_fundingTx,
+		arg_reveal,
+	)
+
+	return err
+}
+
+func (b *Bridge) RevealTaprootDepositGasEstimate(
+	arg_fundingTx abi.BitcoinTxInfo,
+	arg_reveal abi.DepositTaprootDepositRevealInfo,
+) (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		b.callerOptions.From,
+		b.contractAddress,
+		"revealTaprootDeposit",
+		b.contractABI,
+		b.transactor,
+		arg_fundingTx,
+		arg_reveal,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
+func (b *Bridge) RevealTaprootDepositWithExtraData(
+	arg_fundingTx abi.BitcoinTxInfo,
+	arg_reveal abi.DepositTaprootDepositRevealInfo,
+	arg_extraData [32]byte,
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	bLogger.Debug(
+		"submitting transaction revealTaprootDepositWithExtraData",
+		" params: ",
+		fmt.Sprint(
+			arg_fundingTx,
+			arg_reveal,
+			arg_extraData,
+		),
+	)
+
+	b.transactionMutex.Lock()
+	defer b.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *b.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := b.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := b.contract.RevealTaprootDepositWithExtraData(
+		transactorOptions,
+		arg_fundingTx,
+		arg_reveal,
+		arg_extraData,
+	)
+	if err != nil {
+		return transaction, b.errorResolver.ResolveError(
+			err,
+			b.transactorOptions.From,
+			nil,
+			"revealTaprootDepositWithExtraData",
+			arg_fundingTx,
+			arg_reveal,
+			arg_extraData,
+		)
+	}
+
+	bLogger.Infof(
+		"submitted transaction revealTaprootDepositWithExtraData with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go b.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := b.contract.RevealTaprootDepositWithExtraData(
+				newTransactorOptions,
+				arg_fundingTx,
+				arg_reveal,
+				arg_extraData,
+			)
+			if err != nil {
+				return nil, b.errorResolver.ResolveError(
+					err,
+					b.transactorOptions.From,
+					nil,
+					"revealTaprootDepositWithExtraData",
+					arg_fundingTx,
+					arg_reveal,
+					arg_extraData,
+				)
+			}
+
+			bLogger.Infof(
+				"submitted transaction revealTaprootDepositWithExtraData with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	b.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (b *Bridge) CallRevealTaprootDepositWithExtraData(
+	arg_fundingTx abi.BitcoinTxInfo,
+	arg_reveal abi.DepositTaprootDepositRevealInfo,
+	arg_extraData [32]byte,
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		b.transactorOptions.From,
+		blockNumber, nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"revealTaprootDepositWithExtraData",
+		&result,
+		arg_fundingTx,
+		arg_reveal,
+		arg_extraData,
+	)
+
+	return err
+}
+
+func (b *Bridge) RevealTaprootDepositWithExtraDataGasEstimate(
+	arg_fundingTx abi.BitcoinTxInfo,
+	arg_reveal abi.DepositTaprootDepositRevealInfo,
+	arg_extraData [32]byte,
+) (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		b.callerOptions.From,
+		b.contractAddress,
+		"revealTaprootDepositWithExtraData",
+		b.contractABI,
+		b.transactor,
+		arg_fundingTx,
+		arg_reveal,
+		arg_extraData,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
+func (b *Bridge) SetEcdsaFraudRouter(
+	arg_ecdsaFraudRouter common.Address,
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	bLogger.Debug(
+		"submitting transaction setEcdsaFraudRouter",
+		" params: ",
+		fmt.Sprint(
+			arg_ecdsaFraudRouter,
+		),
+	)
+
+	b.transactionMutex.Lock()
+	defer b.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *b.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := b.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := b.contract.SetEcdsaFraudRouter(
+		transactorOptions,
+		arg_ecdsaFraudRouter,
+	)
+	if err != nil {
+		return transaction, b.errorResolver.ResolveError(
+			err,
+			b.transactorOptions.From,
+			nil,
+			"setEcdsaFraudRouter",
+			arg_ecdsaFraudRouter,
+		)
+	}
+
+	bLogger.Infof(
+		"submitted transaction setEcdsaFraudRouter with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go b.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := b.contract.SetEcdsaFraudRouter(
+				newTransactorOptions,
+				arg_ecdsaFraudRouter,
+			)
+			if err != nil {
+				return nil, b.errorResolver.ResolveError(
+					err,
+					b.transactorOptions.From,
+					nil,
+					"setEcdsaFraudRouter",
+					arg_ecdsaFraudRouter,
+				)
+			}
+
+			bLogger.Infof(
+				"submitted transaction setEcdsaFraudRouter with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	b.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (b *Bridge) CallSetEcdsaFraudRouter(
+	arg_ecdsaFraudRouter common.Address,
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		b.transactorOptions.From,
+		blockNumber, nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"setEcdsaFraudRouter",
+		&result,
+		arg_ecdsaFraudRouter,
+	)
+
+	return err
+}
+
+func (b *Bridge) SetEcdsaFraudRouterGasEstimate(
+	arg_ecdsaFraudRouter common.Address,
+) (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		b.callerOptions.From,
+		b.contractAddress,
+		"setEcdsaFraudRouter",
+		b.contractABI,
+		b.transactor,
+		arg_ecdsaFraudRouter,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
+func (b *Bridge) SetFrostWalletRegistry(
+	arg_frostWalletRegistry common.Address,
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	bLogger.Debug(
+		"submitting transaction setFrostWalletRegistry",
+		" params: ",
+		fmt.Sprint(
+			arg_frostWalletRegistry,
+		),
+	)
+
+	b.transactionMutex.Lock()
+	defer b.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *b.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := b.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := b.contract.SetFrostWalletRegistry(
+		transactorOptions,
+		arg_frostWalletRegistry,
+	)
+	if err != nil {
+		return transaction, b.errorResolver.ResolveError(
+			err,
+			b.transactorOptions.From,
+			nil,
+			"setFrostWalletRegistry",
+			arg_frostWalletRegistry,
+		)
+	}
+
+	bLogger.Infof(
+		"submitted transaction setFrostWalletRegistry with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go b.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := b.contract.SetFrostWalletRegistry(
+				newTransactorOptions,
+				arg_frostWalletRegistry,
+			)
+			if err != nil {
+				return nil, b.errorResolver.ResolveError(
+					err,
+					b.transactorOptions.From,
+					nil,
+					"setFrostWalletRegistry",
+					arg_frostWalletRegistry,
+				)
+			}
+
+			bLogger.Infof(
+				"submitted transaction setFrostWalletRegistry with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	b.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (b *Bridge) CallSetFrostWalletRegistry(
+	arg_frostWalletRegistry common.Address,
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		b.transactorOptions.From,
+		blockNumber, nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"setFrostWalletRegistry",
+		&result,
+		arg_frostWalletRegistry,
+	)
+
+	return err
+}
+
+func (b *Bridge) SetFrostWalletRegistryGasEstimate(
+	arg_frostWalletRegistry common.Address,
+) (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		b.callerOptions.From,
+		b.contractAddress,
+		"setFrostWalletRegistry",
+		b.contractABI,
+		b.transactor,
+		arg_frostWalletRegistry,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
+func (b *Bridge) SetLifecycleRouter(
+	arg_lifecycleRouter common.Address,
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	bLogger.Debug(
+		"submitting transaction setLifecycleRouter",
+		" params: ",
+		fmt.Sprint(
+			arg_lifecycleRouter,
+		),
+	)
+
+	b.transactionMutex.Lock()
+	defer b.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *b.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := b.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := b.contract.SetLifecycleRouter(
+		transactorOptions,
+		arg_lifecycleRouter,
+	)
+	if err != nil {
+		return transaction, b.errorResolver.ResolveError(
+			err,
+			b.transactorOptions.From,
+			nil,
+			"setLifecycleRouter",
+			arg_lifecycleRouter,
+		)
+	}
+
+	bLogger.Infof(
+		"submitted transaction setLifecycleRouter with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go b.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := b.contract.SetLifecycleRouter(
+				newTransactorOptions,
+				arg_lifecycleRouter,
+			)
+			if err != nil {
+				return nil, b.errorResolver.ResolveError(
+					err,
+					b.transactorOptions.From,
+					nil,
+					"setLifecycleRouter",
+					arg_lifecycleRouter,
+				)
+			}
+
+			bLogger.Infof(
+				"submitted transaction setLifecycleRouter with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	b.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (b *Bridge) CallSetLifecycleRouter(
+	arg_lifecycleRouter common.Address,
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		b.transactorOptions.From,
+		blockNumber, nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"setLifecycleRouter",
+		&result,
+		arg_lifecycleRouter,
+	)
+
+	return err
+}
+
+func (b *Bridge) SetLifecycleRouterGasEstimate(
+	arg_lifecycleRouter common.Address,
+) (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		b.callerOptions.From,
+		b.contractAddress,
+		"setLifecycleRouter",
+		b.contractABI,
+		b.transactor,
+		arg_lifecycleRouter,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
+func (b *Bridge) SetP2TRFraudRouter(
+	arg_p2trFraudRouter common.Address,
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	bLogger.Debug(
+		"submitting transaction setP2TRFraudRouter",
+		" params: ",
+		fmt.Sprint(
+			arg_p2trFraudRouter,
+		),
+	)
+
+	b.transactionMutex.Lock()
+	defer b.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *b.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := b.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := b.contract.SetP2TRFraudRouter(
+		transactorOptions,
+		arg_p2trFraudRouter,
+	)
+	if err != nil {
+		return transaction, b.errorResolver.ResolveError(
+			err,
+			b.transactorOptions.From,
+			nil,
+			"setP2TRFraudRouter",
+			arg_p2trFraudRouter,
+		)
+	}
+
+	bLogger.Infof(
+		"submitted transaction setP2TRFraudRouter with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go b.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := b.contract.SetP2TRFraudRouter(
+				newTransactorOptions,
+				arg_p2trFraudRouter,
+			)
+			if err != nil {
+				return nil, b.errorResolver.ResolveError(
+					err,
+					b.transactorOptions.From,
+					nil,
+					"setP2TRFraudRouter",
+					arg_p2trFraudRouter,
+				)
+			}
+
+			bLogger.Infof(
+				"submitted transaction setP2TRFraudRouter with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	b.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (b *Bridge) CallSetP2TRFraudRouter(
+	arg_p2trFraudRouter common.Address,
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		b.transactorOptions.From,
+		blockNumber, nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"setP2TRFraudRouter",
+		&result,
+		arg_p2trFraudRouter,
+	)
+
+	return err
+}
+
+func (b *Bridge) SetP2TRFraudRouterGasEstimate(
+	arg_p2trFraudRouter common.Address,
+) (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		b.callerOptions.From,
+		b.contractAddress,
+		"setP2TRFraudRouter",
+		b.contractABI,
+		b.transactor,
+		arg_p2trFraudRouter,
 	)
 
 	return result, err
@@ -3723,6 +4369,322 @@ func (b *Bridge) SetVaultStatusGasEstimate(
 }
 
 // Transaction submission.
+func (b *Bridge) SlashWalletForFraud(
+	arg_walletPubKeyHash [20]byte,
+	arg_walletMembersIDs []uint32,
+	arg_challenger common.Address,
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	bLogger.Debug(
+		"submitting transaction slashWalletForFraud",
+		" params: ",
+		fmt.Sprint(
+			arg_walletPubKeyHash,
+			arg_walletMembersIDs,
+			arg_challenger,
+		),
+	)
+
+	b.transactionMutex.Lock()
+	defer b.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *b.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := b.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := b.contract.SlashWalletForFraud(
+		transactorOptions,
+		arg_walletPubKeyHash,
+		arg_walletMembersIDs,
+		arg_challenger,
+	)
+	if err != nil {
+		return transaction, b.errorResolver.ResolveError(
+			err,
+			b.transactorOptions.From,
+			nil,
+			"slashWalletForFraud",
+			arg_walletPubKeyHash,
+			arg_walletMembersIDs,
+			arg_challenger,
+		)
+	}
+
+	bLogger.Infof(
+		"submitted transaction slashWalletForFraud with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go b.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := b.contract.SlashWalletForFraud(
+				newTransactorOptions,
+				arg_walletPubKeyHash,
+				arg_walletMembersIDs,
+				arg_challenger,
+			)
+			if err != nil {
+				return nil, b.errorResolver.ResolveError(
+					err,
+					b.transactorOptions.From,
+					nil,
+					"slashWalletForFraud",
+					arg_walletPubKeyHash,
+					arg_walletMembersIDs,
+					arg_challenger,
+				)
+			}
+
+			bLogger.Infof(
+				"submitted transaction slashWalletForFraud with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	b.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (b *Bridge) CallSlashWalletForFraud(
+	arg_walletPubKeyHash [20]byte,
+	arg_walletMembersIDs []uint32,
+	arg_challenger common.Address,
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		b.transactorOptions.From,
+		blockNumber, nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"slashWalletForFraud",
+		&result,
+		arg_walletPubKeyHash,
+		arg_walletMembersIDs,
+		arg_challenger,
+	)
+
+	return err
+}
+
+func (b *Bridge) SlashWalletForFraudGasEstimate(
+	arg_walletPubKeyHash [20]byte,
+	arg_walletMembersIDs []uint32,
+	arg_challenger common.Address,
+) (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		b.callerOptions.From,
+		b.contractAddress,
+		"slashWalletForFraud",
+		b.contractABI,
+		b.transactor,
+		arg_walletPubKeyHash,
+		arg_walletMembersIDs,
+		arg_challenger,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
+func (b *Bridge) SlashWalletForP2TRFraud(
+	arg_walletPubKeyHash [20]byte,
+	arg_walletMembersIDs []uint32,
+	arg_challenger common.Address,
+
+	transactionOptions ...chainutil.TransactionOptions,
+) (*types.Transaction, error) {
+	bLogger.Debug(
+		"submitting transaction slashWalletForP2TRFraud",
+		" params: ",
+		fmt.Sprint(
+			arg_walletPubKeyHash,
+			arg_walletMembersIDs,
+			arg_challenger,
+		),
+	)
+
+	b.transactionMutex.Lock()
+	defer b.transactionMutex.Unlock()
+
+	// create a copy
+	transactorOptions := new(bind.TransactOpts)
+	*transactorOptions = *b.transactorOptions
+
+	if len(transactionOptions) > 1 {
+		return nil, fmt.Errorf(
+			"could not process multiple transaction options sets",
+		)
+	} else if len(transactionOptions) > 0 {
+		transactionOptions[0].Apply(transactorOptions)
+	}
+
+	nonce, err := b.nonceManager.CurrentNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
+	}
+
+	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
+
+	transaction, err := b.contract.SlashWalletForP2TRFraud(
+		transactorOptions,
+		arg_walletPubKeyHash,
+		arg_walletMembersIDs,
+		arg_challenger,
+	)
+	if err != nil {
+		return transaction, b.errorResolver.ResolveError(
+			err,
+			b.transactorOptions.From,
+			nil,
+			"slashWalletForP2TRFraud",
+			arg_walletPubKeyHash,
+			arg_walletMembersIDs,
+			arg_challenger,
+		)
+	}
+
+	bLogger.Infof(
+		"submitted transaction slashWalletForP2TRFraud with id: [%s] and nonce [%v]",
+		transaction.Hash(),
+		transaction.Nonce(),
+	)
+
+	go b.miningWaiter.ForceMining(
+		transaction,
+		transactorOptions,
+		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
+			// If original transactor options has a non-zero gas limit, that
+			// means the client code set it on their own. In that case, we
+			// should rewrite the gas limit from the original transaction
+			// for each resubmission. If the gas limit is not set by the client
+			// code, let the the submitter re-estimate the gas limit on each
+			// resubmission.
+			if transactorOptions.GasLimit != 0 {
+				newTransactorOptions.GasLimit = transactorOptions.GasLimit
+			}
+
+			transaction, err := b.contract.SlashWalletForP2TRFraud(
+				newTransactorOptions,
+				arg_walletPubKeyHash,
+				arg_walletMembersIDs,
+				arg_challenger,
+			)
+			if err != nil {
+				return nil, b.errorResolver.ResolveError(
+					err,
+					b.transactorOptions.From,
+					nil,
+					"slashWalletForP2TRFraud",
+					arg_walletPubKeyHash,
+					arg_walletMembersIDs,
+					arg_challenger,
+				)
+			}
+
+			bLogger.Infof(
+				"submitted transaction slashWalletForP2TRFraud with id: [%s] and nonce [%v]",
+				transaction.Hash(),
+				transaction.Nonce(),
+			)
+
+			return transaction, nil
+		},
+	)
+
+	b.nonceManager.IncrementNonce()
+
+	return transaction, err
+}
+
+// Non-mutating call, not a transaction submission.
+func (b *Bridge) CallSlashWalletForP2TRFraud(
+	arg_walletPubKeyHash [20]byte,
+	arg_walletMembersIDs []uint32,
+	arg_challenger common.Address,
+	blockNumber *big.Int,
+) error {
+	var result interface{} = nil
+
+	err := chainutil.CallAtBlock(
+		b.transactorOptions.From,
+		blockNumber, nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"slashWalletForP2TRFraud",
+		&result,
+		arg_walletPubKeyHash,
+		arg_walletMembersIDs,
+		arg_challenger,
+	)
+
+	return err
+}
+
+func (b *Bridge) SlashWalletForP2TRFraudGasEstimate(
+	arg_walletPubKeyHash [20]byte,
+	arg_walletMembersIDs []uint32,
+	arg_challenger common.Address,
+) (uint64, error) {
+	var result uint64
+
+	result, err := chainutil.EstimateGas(
+		b.callerOptions.From,
+		b.contractAddress,
+		"slashWalletForP2TRFraud",
+		b.contractABI,
+		b.transactor,
+		arg_walletPubKeyHash,
+		arg_walletMembersIDs,
+		arg_challenger,
+	)
+
+	return result, err
+}
+
+// Transaction submission.
 func (b *Bridge) SubmitDepositSweepProof(
 	arg_sweepTx abi.BitcoinTxInfo,
 	arg_sweepProof abi.BitcoinTxProof,
@@ -3885,164 +4847,6 @@ func (b *Bridge) SubmitDepositSweepProofGasEstimate(
 		arg_sweepProof,
 		arg_mainUtxo,
 		arg_vault,
-	)
-
-	return result, err
-}
-
-// Transaction submission.
-func (b *Bridge) SubmitFraudChallenge(
-	arg_walletPublicKey []byte,
-	arg_preimageSha256 []byte,
-	arg_signature abi.BitcoinTxRSVSignature,
-
-	transactionOptions ...chainutil.TransactionOptions,
-) (*types.Transaction, error) {
-	bLogger.Debug(
-		"submitting transaction submitFraudChallenge",
-		" params: ",
-		fmt.Sprint(
-			arg_walletPublicKey,
-			arg_preimageSha256,
-			arg_signature,
-		),
-	)
-
-	b.transactionMutex.Lock()
-	defer b.transactionMutex.Unlock()
-
-	// create a copy
-	transactorOptions := new(bind.TransactOpts)
-	*transactorOptions = *b.transactorOptions
-
-	if len(transactionOptions) > 1 {
-		return nil, fmt.Errorf(
-			"could not process multiple transaction options sets",
-		)
-	} else if len(transactionOptions) > 0 {
-		transactionOptions[0].Apply(transactorOptions)
-	}
-
-	nonce, err := b.nonceManager.CurrentNonce()
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
-	}
-
-	transactorOptions.Nonce = new(big.Int).SetUint64(nonce)
-
-	transaction, err := b.contract.SubmitFraudChallenge(
-		transactorOptions,
-		arg_walletPublicKey,
-		arg_preimageSha256,
-		arg_signature,
-	)
-	if err != nil {
-		return transaction, b.errorResolver.ResolveError(
-			err,
-			b.transactorOptions.From,
-			nil,
-			"submitFraudChallenge",
-			arg_walletPublicKey,
-			arg_preimageSha256,
-			arg_signature,
-		)
-	}
-
-	bLogger.Infof(
-		"submitted transaction submitFraudChallenge with id: [%s] and nonce [%v]",
-		transaction.Hash(),
-		transaction.Nonce(),
-	)
-
-	go b.miningWaiter.ForceMining(
-		transaction,
-		transactorOptions,
-		func(newTransactorOptions *bind.TransactOpts) (*types.Transaction, error) {
-			// If original transactor options has a non-zero gas limit, that
-			// means the client code set it on their own. In that case, we
-			// should rewrite the gas limit from the original transaction
-			// for each resubmission. If the gas limit is not set by the client
-			// code, let the the submitter re-estimate the gas limit on each
-			// resubmission.
-			if transactorOptions.GasLimit != 0 {
-				newTransactorOptions.GasLimit = transactorOptions.GasLimit
-			}
-
-			transaction, err := b.contract.SubmitFraudChallenge(
-				newTransactorOptions,
-				arg_walletPublicKey,
-				arg_preimageSha256,
-				arg_signature,
-			)
-			if err != nil {
-				return nil, b.errorResolver.ResolveError(
-					err,
-					b.transactorOptions.From,
-					nil,
-					"submitFraudChallenge",
-					arg_walletPublicKey,
-					arg_preimageSha256,
-					arg_signature,
-				)
-			}
-
-			bLogger.Infof(
-				"submitted transaction submitFraudChallenge with id: [%s] and nonce [%v]",
-				transaction.Hash(),
-				transaction.Nonce(),
-			)
-
-			return transaction, nil
-		},
-	)
-
-	b.nonceManager.IncrementNonce()
-
-	return transaction, err
-}
-
-// Non-mutating call, not a transaction submission.
-func (b *Bridge) CallSubmitFraudChallenge(
-	arg_walletPublicKey []byte,
-	arg_preimageSha256 []byte,
-	arg_signature abi.BitcoinTxRSVSignature,
-	blockNumber *big.Int,
-) error {
-	var result interface{} = nil
-
-	err := chainutil.CallAtBlock(
-		b.transactorOptions.From,
-		blockNumber, nil,
-		b.contractABI,
-		b.caller,
-		b.errorResolver,
-		b.contractAddress,
-		"submitFraudChallenge",
-		&result,
-		arg_walletPublicKey,
-		arg_preimageSha256,
-		arg_signature,
-	)
-
-	return err
-}
-
-func (b *Bridge) SubmitFraudChallengeGasEstimate(
-	arg_walletPublicKey []byte,
-	arg_preimageSha256 []byte,
-	arg_signature abi.BitcoinTxRSVSignature,
-) (uint64, error) {
-	var result uint64
-
-	result, err := chainutil.EstimateGas(
-		b.callerOptions.From,
-		b.contractAddress,
-		"submitFraudChallenge",
-		b.contractABI,
-		b.transactor,
-		arg_walletPublicKey,
-		arg_preimageSha256,
-		arg_signature,
 	)
 
 	return result, err
@@ -6173,12 +6977,9 @@ func (b *Bridge) DepositsAtBlock(
 	return result, err
 }
 
-func (b *Bridge) FraudChallenges(
-	arg_challengeKey *big.Int,
-) (abi.FraudFraudChallenge, error) {
-	result, err := b.contract.FraudChallenges(
+func (b *Bridge) EcdsaFraudRouter() (common.Address, error) {
+	result, err := b.contract.EcdsaFraudRouter(
 		b.callerOptions,
-		arg_challengeKey,
 	)
 
 	if err != nil {
@@ -6186,19 +6987,17 @@ func (b *Bridge) FraudChallenges(
 			err,
 			b.callerOptions.From,
 			nil,
-			"fraudChallenges",
-			arg_challengeKey,
+			"ecdsaFraudRouter",
 		)
 	}
 
 	return result, err
 }
 
-func (b *Bridge) FraudChallengesAtBlock(
-	arg_challengeKey *big.Int,
+func (b *Bridge) EcdsaFraudRouterAtBlock(
 	blockNumber *big.Int,
-) (abi.FraudFraudChallenge, error) {
-	var result abi.FraudFraudChallenge
+) (common.Address, error) {
+	var result common.Address
 
 	err := chainutil.CallAtBlock(
 		b.callerOptions.From,
@@ -6208,9 +7007,45 @@ func (b *Bridge) FraudChallengesAtBlock(
 		b.caller,
 		b.errorResolver,
 		b.contractAddress,
-		"fraudChallenges",
+		"ecdsaFraudRouter",
 		&result,
-		arg_challengeKey,
+	)
+
+	return result, err
+}
+
+func (b *Bridge) EcdsaRetired() (bool, error) {
+	result, err := b.contract.EcdsaRetired(
+		b.callerOptions,
+	)
+
+	if err != nil {
+		return result, b.errorResolver.ResolveError(
+			err,
+			b.callerOptions.From,
+			nil,
+			"ecdsaRetired",
+		)
+	}
+
+	return result, err
+}
+
+func (b *Bridge) EcdsaRetiredAtBlock(
+	blockNumber *big.Int,
+) (bool, error) {
+	var result bool
+
+	err := chainutil.CallAtBlock(
+		b.callerOptions.From,
+		blockNumber,
+		nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"ecdsaRetired",
+		&result,
 	)
 
 	return result, err
@@ -6255,6 +7090,54 @@ func (b *Bridge) FraudParametersAtBlock(
 		b.contractAddress,
 		"fraudParameters",
 		&result,
+	)
+
+	return result, err
+}
+
+type frostLifecycleContext struct {
+	FrostRegistry common.Address
+	WalletID      [32]byte
+}
+
+func (b *Bridge) FrostLifecycleContext(
+	arg_walletPubKeyHash [20]byte,
+) (frostLifecycleContext, error) {
+	result, err := b.contract.FrostLifecycleContext(
+		b.callerOptions,
+		arg_walletPubKeyHash,
+	)
+
+	if err != nil {
+		return result, b.errorResolver.ResolveError(
+			err,
+			b.callerOptions.From,
+			nil,
+			"frostLifecycleContext",
+			arg_walletPubKeyHash,
+		)
+	}
+
+	return result, err
+}
+
+func (b *Bridge) FrostLifecycleContextAtBlock(
+	arg_walletPubKeyHash [20]byte,
+	blockNumber *big.Int,
+) (frostLifecycleContext, error) {
+	var result frostLifecycleContext
+
+	err := chainutil.CallAtBlock(
+		b.callerOptions.From,
+		blockNumber,
+		nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"frostLifecycleContext",
+		&result,
+		arg_walletPubKeyHash,
 	)
 
 	return result, err
@@ -6539,6 +7422,43 @@ func (b *Bridge) MovingFundsParametersAtBlock(
 		b.errorResolver,
 		b.contractAddress,
 		"movingFundsParameters",
+		&result,
+	)
+
+	return result, err
+}
+
+func (b *Bridge) P2trFraudRouter() (common.Address, error) {
+	result, err := b.contract.P2trFraudRouter(
+		b.callerOptions,
+	)
+
+	if err != nil {
+		return result, b.errorResolver.ResolveError(
+			err,
+			b.callerOptions.From,
+			nil,
+			"p2trFraudRouter",
+		)
+	}
+
+	return result, err
+}
+
+func (b *Bridge) P2trFraudRouterAtBlock(
+	blockNumber *big.Int,
+) (common.Address, error) {
+	var result common.Address
+
+	err := chainutil.CallAtBlock(
+		b.callerOptions.From,
+		blockNumber,
+		nil,
+		b.contractABI,
+		b.caller,
+		b.errorResolver,
+		b.contractAddress,
+		"p2trFraudRouter",
 		&result,
 	)
 
@@ -7785,10 +8705,9 @@ func (b *Bridge) PastDepositsSweptEvents(
 	return events, nil
 }
 
-func (b *Bridge) FraudChallengeDefeatTimedOutEvent(
+func (b *Bridge) EcdsaFraudRouterSetEvent(
 	opts *ethereum.SubscribeOpts,
-	walletPubKeyHashFilter [][20]byte,
-) *BFraudChallengeDefeatTimedOutSubscription {
+) *BEcdsaFraudRouterSetSubscription {
 	if opts == nil {
 		opts = new(ethereum.SubscribeOpts)
 	}
@@ -7799,29 +8718,26 @@ func (b *Bridge) FraudChallengeDefeatTimedOutEvent(
 		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
 	}
 
-	return &BFraudChallengeDefeatTimedOutSubscription{
+	return &BEcdsaFraudRouterSetSubscription{
 		b,
 		opts,
-		walletPubKeyHashFilter,
 	}
 }
 
-type BFraudChallengeDefeatTimedOutSubscription struct {
-	contract               *Bridge
-	opts                   *ethereum.SubscribeOpts
-	walletPubKeyHashFilter [][20]byte
+type BEcdsaFraudRouterSetSubscription struct {
+	contract *Bridge
+	opts     *ethereum.SubscribeOpts
 }
 
-type bridgeFraudChallengeDefeatTimedOutFunc func(
-	WalletPubKeyHash [20]byte,
-	Sighash [32]byte,
+type bridgeEcdsaFraudRouterSetFunc func(
+	EcdsaFraudRouter common.Address,
 	blockNumber uint64,
 )
 
-func (fcdtos *BFraudChallengeDefeatTimedOutSubscription) OnEvent(
-	handler bridgeFraudChallengeDefeatTimedOutFunc,
+func (efrss *BEcdsaFraudRouterSetSubscription) OnEvent(
+	handler bridgeEcdsaFraudRouterSetFunc,
 ) subscription.EventSubscription {
-	eventChan := make(chan *abi.BridgeFraudChallengeDefeatTimedOut)
+	eventChan := make(chan *abi.BridgeEcdsaFraudRouterSet)
 	ctx, cancelCtx := context.WithCancel(context.Background())
 
 	go func() {
@@ -7831,51 +8747,49 @@ func (fcdtos *BFraudChallengeDefeatTimedOutSubscription) OnEvent(
 				return
 			case event := <-eventChan:
 				handler(
-					event.WalletPubKeyHash,
-					event.Sighash,
+					event.EcdsaFraudRouter,
 					event.Raw.BlockNumber,
 				)
 			}
 		}
 	}()
 
-	sub := fcdtos.Pipe(eventChan)
+	sub := efrss.Pipe(eventChan)
 	return subscription.NewEventSubscription(func() {
 		sub.Unsubscribe()
 		cancelCtx()
 	})
 }
 
-func (fcdtos *BFraudChallengeDefeatTimedOutSubscription) Pipe(
-	sink chan *abi.BridgeFraudChallengeDefeatTimedOut,
+func (efrss *BEcdsaFraudRouterSetSubscription) Pipe(
+	sink chan *abi.BridgeEcdsaFraudRouterSet,
 ) subscription.EventSubscription {
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	go func() {
-		ticker := time.NewTicker(fcdtos.opts.Tick)
+		ticker := time.NewTicker(efrss.opts.Tick)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				lastBlock, err := fcdtos.contract.blockCounter.CurrentBlock()
+				lastBlock, err := efrss.contract.blockCounter.CurrentBlock()
 				if err != nil {
 					bLogger.Errorf(
 						"subscription failed to pull events: [%v]",
 						err,
 					)
 				}
-				fromBlock := lastBlock - fcdtos.opts.PastBlocks
+				fromBlock := lastBlock - efrss.opts.PastBlocks
 
 				bLogger.Infof(
-					"subscription monitoring fetching past FraudChallengeDefeatTimedOut events "+
+					"subscription monitoring fetching past EcdsaFraudRouterSet events "+
 						"starting from block [%v]",
 					fromBlock,
 				)
-				events, err := fcdtos.contract.PastFraudChallengeDefeatTimedOutEvents(
+				events, err := efrss.contract.PastEcdsaFraudRouterSetEvents(
 					fromBlock,
 					nil,
-					fcdtos.walletPubKeyHashFilter,
 				)
 				if err != nil {
 					bLogger.Errorf(
@@ -7885,7 +8799,7 @@ func (fcdtos *BFraudChallengeDefeatTimedOutSubscription) Pipe(
 					continue
 				}
 				bLogger.Infof(
-					"subscription monitoring fetched [%v] past FraudChallengeDefeatTimedOut events",
+					"subscription monitoring fetched [%v] past EcdsaFraudRouterSet events",
 					len(events),
 				)
 
@@ -7896,9 +8810,8 @@ func (fcdtos *BFraudChallengeDefeatTimedOutSubscription) Pipe(
 		}
 	}()
 
-	sub := fcdtos.contract.watchFraudChallengeDefeatTimedOut(
+	sub := efrss.contract.watchEcdsaFraudRouterSet(
 		sink,
-		fcdtos.walletPubKeyHashFilter,
 	)
 
 	return subscription.NewEventSubscription(func() {
@@ -7907,21 +8820,19 @@ func (fcdtos *BFraudChallengeDefeatTimedOutSubscription) Pipe(
 	})
 }
 
-func (b *Bridge) watchFraudChallengeDefeatTimedOut(
-	sink chan *abi.BridgeFraudChallengeDefeatTimedOut,
-	walletPubKeyHashFilter [][20]byte,
+func (b *Bridge) watchEcdsaFraudRouterSet(
+	sink chan *abi.BridgeEcdsaFraudRouterSet,
 ) event.Subscription {
 	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
-		return b.contract.WatchFraudChallengeDefeatTimedOut(
+		return b.contract.WatchEcdsaFraudRouterSet(
 			&bind.WatchOpts{Context: ctx},
 			sink,
-			walletPubKeyHashFilter,
 		)
 	}
 
 	thresholdViolatedFn := func(elapsed time.Duration) {
 		bLogger.Warnf(
-			"subscription to event FraudChallengeDefeatTimedOut had to be "+
+			"subscription to event EcdsaFraudRouterSet had to be "+
 				"retried [%s] since the last attempt; please inspect "+
 				"host chain connectivity",
 			elapsed,
@@ -7930,7 +8841,7 @@ func (b *Bridge) watchFraudChallengeDefeatTimedOut(
 
 	subscriptionFailedFn := func(err error) {
 		bLogger.Errorf(
-			"subscription to event FraudChallengeDefeatTimedOut failed "+
+			"subscription to event EcdsaFraudRouterSet failed "+
 				"with error: [%v]; resubscription attempt will be "+
 				"performed",
 			err,
@@ -7946,26 +8857,24 @@ func (b *Bridge) watchFraudChallengeDefeatTimedOut(
 	)
 }
 
-func (b *Bridge) PastFraudChallengeDefeatTimedOutEvents(
+func (b *Bridge) PastEcdsaFraudRouterSetEvents(
 	startBlock uint64,
 	endBlock *uint64,
-	walletPubKeyHashFilter [][20]byte,
-) ([]*abi.BridgeFraudChallengeDefeatTimedOut, error) {
-	iterator, err := b.contract.FilterFraudChallengeDefeatTimedOut(
+) ([]*abi.BridgeEcdsaFraudRouterSet, error) {
+	iterator, err := b.contract.FilterEcdsaFraudRouterSet(
 		&bind.FilterOpts{
 			Start: startBlock,
 			End:   endBlock,
 		},
-		walletPubKeyHashFilter,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
-			"error retrieving past FraudChallengeDefeatTimedOut events: [%v]",
+			"error retrieving past EcdsaFraudRouterSet events: [%v]",
 			err,
 		)
 	}
 
-	events := make([]*abi.BridgeFraudChallengeDefeatTimedOut, 0)
+	events := make([]*abi.BridgeEcdsaFraudRouterSet, 0)
 
 	for iterator.Next() {
 		event := iterator.Event
@@ -7975,10 +8884,9 @@ func (b *Bridge) PastFraudChallengeDefeatTimedOutEvents(
 	return events, nil
 }
 
-func (b *Bridge) FraudChallengeDefeatedEvent(
+func (b *Bridge) EcdsaRetiredEvent(
 	opts *ethereum.SubscribeOpts,
-	walletPubKeyHashFilter [][20]byte,
-) *BFraudChallengeDefeatedSubscription {
+) *BEcdsaRetiredSubscription {
 	if opts == nil {
 		opts = new(ethereum.SubscribeOpts)
 	}
@@ -7989,29 +8897,25 @@ func (b *Bridge) FraudChallengeDefeatedEvent(
 		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
 	}
 
-	return &BFraudChallengeDefeatedSubscription{
+	return &BEcdsaRetiredSubscription{
 		b,
 		opts,
-		walletPubKeyHashFilter,
 	}
 }
 
-type BFraudChallengeDefeatedSubscription struct {
-	contract               *Bridge
-	opts                   *ethereum.SubscribeOpts
-	walletPubKeyHashFilter [][20]byte
+type BEcdsaRetiredSubscription struct {
+	contract *Bridge
+	opts     *ethereum.SubscribeOpts
 }
 
-type bridgeFraudChallengeDefeatedFunc func(
-	WalletPubKeyHash [20]byte,
-	Sighash [32]byte,
+type bridgeEcdsaRetiredFunc func(
 	blockNumber uint64,
 )
 
-func (fcds *BFraudChallengeDefeatedSubscription) OnEvent(
-	handler bridgeFraudChallengeDefeatedFunc,
+func (ers *BEcdsaRetiredSubscription) OnEvent(
+	handler bridgeEcdsaRetiredFunc,
 ) subscription.EventSubscription {
-	eventChan := make(chan *abi.BridgeFraudChallengeDefeated)
+	eventChan := make(chan *abi.BridgeEcdsaRetired)
 	ctx, cancelCtx := context.WithCancel(context.Background())
 
 	go func() {
@@ -8021,51 +8925,48 @@ func (fcds *BFraudChallengeDefeatedSubscription) OnEvent(
 				return
 			case event := <-eventChan:
 				handler(
-					event.WalletPubKeyHash,
-					event.Sighash,
 					event.Raw.BlockNumber,
 				)
 			}
 		}
 	}()
 
-	sub := fcds.Pipe(eventChan)
+	sub := ers.Pipe(eventChan)
 	return subscription.NewEventSubscription(func() {
 		sub.Unsubscribe()
 		cancelCtx()
 	})
 }
 
-func (fcds *BFraudChallengeDefeatedSubscription) Pipe(
-	sink chan *abi.BridgeFraudChallengeDefeated,
+func (ers *BEcdsaRetiredSubscription) Pipe(
+	sink chan *abi.BridgeEcdsaRetired,
 ) subscription.EventSubscription {
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	go func() {
-		ticker := time.NewTicker(fcds.opts.Tick)
+		ticker := time.NewTicker(ers.opts.Tick)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				lastBlock, err := fcds.contract.blockCounter.CurrentBlock()
+				lastBlock, err := ers.contract.blockCounter.CurrentBlock()
 				if err != nil {
 					bLogger.Errorf(
 						"subscription failed to pull events: [%v]",
 						err,
 					)
 				}
-				fromBlock := lastBlock - fcds.opts.PastBlocks
+				fromBlock := lastBlock - ers.opts.PastBlocks
 
 				bLogger.Infof(
-					"subscription monitoring fetching past FraudChallengeDefeated events "+
+					"subscription monitoring fetching past EcdsaRetired events "+
 						"starting from block [%v]",
 					fromBlock,
 				)
-				events, err := fcds.contract.PastFraudChallengeDefeatedEvents(
+				events, err := ers.contract.PastEcdsaRetiredEvents(
 					fromBlock,
 					nil,
-					fcds.walletPubKeyHashFilter,
 				)
 				if err != nil {
 					bLogger.Errorf(
@@ -8075,7 +8976,7 @@ func (fcds *BFraudChallengeDefeatedSubscription) Pipe(
 					continue
 				}
 				bLogger.Infof(
-					"subscription monitoring fetched [%v] past FraudChallengeDefeated events",
+					"subscription monitoring fetched [%v] past EcdsaRetired events",
 					len(events),
 				)
 
@@ -8086,9 +8987,8 @@ func (fcds *BFraudChallengeDefeatedSubscription) Pipe(
 		}
 	}()
 
-	sub := fcds.contract.watchFraudChallengeDefeated(
+	sub := ers.contract.watchEcdsaRetired(
 		sink,
-		fcds.walletPubKeyHashFilter,
 	)
 
 	return subscription.NewEventSubscription(func() {
@@ -8097,21 +8997,19 @@ func (fcds *BFraudChallengeDefeatedSubscription) Pipe(
 	})
 }
 
-func (b *Bridge) watchFraudChallengeDefeated(
-	sink chan *abi.BridgeFraudChallengeDefeated,
-	walletPubKeyHashFilter [][20]byte,
+func (b *Bridge) watchEcdsaRetired(
+	sink chan *abi.BridgeEcdsaRetired,
 ) event.Subscription {
 	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
-		return b.contract.WatchFraudChallengeDefeated(
+		return b.contract.WatchEcdsaRetired(
 			&bind.WatchOpts{Context: ctx},
 			sink,
-			walletPubKeyHashFilter,
 		)
 	}
 
 	thresholdViolatedFn := func(elapsed time.Duration) {
 		bLogger.Warnf(
-			"subscription to event FraudChallengeDefeated had to be "+
+			"subscription to event EcdsaRetired had to be "+
 				"retried [%s] since the last attempt; please inspect "+
 				"host chain connectivity",
 			elapsed,
@@ -8120,7 +9018,7 @@ func (b *Bridge) watchFraudChallengeDefeated(
 
 	subscriptionFailedFn := func(err error) {
 		bLogger.Errorf(
-			"subscription to event FraudChallengeDefeated failed "+
+			"subscription to event EcdsaRetired failed "+
 				"with error: [%v]; resubscription attempt will be "+
 				"performed",
 			err,
@@ -8136,222 +9034,24 @@ func (b *Bridge) watchFraudChallengeDefeated(
 	)
 }
 
-func (b *Bridge) PastFraudChallengeDefeatedEvents(
+func (b *Bridge) PastEcdsaRetiredEvents(
 	startBlock uint64,
 	endBlock *uint64,
-	walletPubKeyHashFilter [][20]byte,
-) ([]*abi.BridgeFraudChallengeDefeated, error) {
-	iterator, err := b.contract.FilterFraudChallengeDefeated(
+) ([]*abi.BridgeEcdsaRetired, error) {
+	iterator, err := b.contract.FilterEcdsaRetired(
 		&bind.FilterOpts{
 			Start: startBlock,
 			End:   endBlock,
 		},
-		walletPubKeyHashFilter,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
-			"error retrieving past FraudChallengeDefeated events: [%v]",
+			"error retrieving past EcdsaRetired events: [%v]",
 			err,
 		)
 	}
 
-	events := make([]*abi.BridgeFraudChallengeDefeated, 0)
-
-	for iterator.Next() {
-		event := iterator.Event
-		events = append(events, event)
-	}
-
-	return events, nil
-}
-
-func (b *Bridge) FraudChallengeSubmittedEvent(
-	opts *ethereum.SubscribeOpts,
-	walletPubKeyHashFilter [][20]byte,
-) *BFraudChallengeSubmittedSubscription {
-	if opts == nil {
-		opts = new(ethereum.SubscribeOpts)
-	}
-	if opts.Tick == 0 {
-		opts.Tick = chainutil.DefaultSubscribeOptsTick
-	}
-	if opts.PastBlocks == 0 {
-		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
-	}
-
-	return &BFraudChallengeSubmittedSubscription{
-		b,
-		opts,
-		walletPubKeyHashFilter,
-	}
-}
-
-type BFraudChallengeSubmittedSubscription struct {
-	contract               *Bridge
-	opts                   *ethereum.SubscribeOpts
-	walletPubKeyHashFilter [][20]byte
-}
-
-type bridgeFraudChallengeSubmittedFunc func(
-	WalletPubKeyHash [20]byte,
-	Sighash [32]byte,
-	V uint8,
-	R [32]byte,
-	S [32]byte,
-	blockNumber uint64,
-)
-
-func (fcss *BFraudChallengeSubmittedSubscription) OnEvent(
-	handler bridgeFraudChallengeSubmittedFunc,
-) subscription.EventSubscription {
-	eventChan := make(chan *abi.BridgeFraudChallengeSubmitted)
-	ctx, cancelCtx := context.WithCancel(context.Background())
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case event := <-eventChan:
-				handler(
-					event.WalletPubKeyHash,
-					event.Sighash,
-					event.V,
-					event.R,
-					event.S,
-					event.Raw.BlockNumber,
-				)
-			}
-		}
-	}()
-
-	sub := fcss.Pipe(eventChan)
-	return subscription.NewEventSubscription(func() {
-		sub.Unsubscribe()
-		cancelCtx()
-	})
-}
-
-func (fcss *BFraudChallengeSubmittedSubscription) Pipe(
-	sink chan *abi.BridgeFraudChallengeSubmitted,
-) subscription.EventSubscription {
-	ctx, cancelCtx := context.WithCancel(context.Background())
-	go func() {
-		ticker := time.NewTicker(fcss.opts.Tick)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				lastBlock, err := fcss.contract.blockCounter.CurrentBlock()
-				if err != nil {
-					bLogger.Errorf(
-						"subscription failed to pull events: [%v]",
-						err,
-					)
-				}
-				fromBlock := lastBlock - fcss.opts.PastBlocks
-
-				bLogger.Infof(
-					"subscription monitoring fetching past FraudChallengeSubmitted events "+
-						"starting from block [%v]",
-					fromBlock,
-				)
-				events, err := fcss.contract.PastFraudChallengeSubmittedEvents(
-					fromBlock,
-					nil,
-					fcss.walletPubKeyHashFilter,
-				)
-				if err != nil {
-					bLogger.Errorf(
-						"subscription failed to pull events: [%v]",
-						err,
-					)
-					continue
-				}
-				bLogger.Infof(
-					"subscription monitoring fetched [%v] past FraudChallengeSubmitted events",
-					len(events),
-				)
-
-				for _, event := range events {
-					sink <- event
-				}
-			}
-		}
-	}()
-
-	sub := fcss.contract.watchFraudChallengeSubmitted(
-		sink,
-		fcss.walletPubKeyHashFilter,
-	)
-
-	return subscription.NewEventSubscription(func() {
-		sub.Unsubscribe()
-		cancelCtx()
-	})
-}
-
-func (b *Bridge) watchFraudChallengeSubmitted(
-	sink chan *abi.BridgeFraudChallengeSubmitted,
-	walletPubKeyHashFilter [][20]byte,
-) event.Subscription {
-	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
-		return b.contract.WatchFraudChallengeSubmitted(
-			&bind.WatchOpts{Context: ctx},
-			sink,
-			walletPubKeyHashFilter,
-		)
-	}
-
-	thresholdViolatedFn := func(elapsed time.Duration) {
-		bLogger.Warnf(
-			"subscription to event FraudChallengeSubmitted had to be "+
-				"retried [%s] since the last attempt; please inspect "+
-				"host chain connectivity",
-			elapsed,
-		)
-	}
-
-	subscriptionFailedFn := func(err error) {
-		bLogger.Errorf(
-			"subscription to event FraudChallengeSubmitted failed "+
-				"with error: [%v]; resubscription attempt will be "+
-				"performed",
-			err,
-		)
-	}
-
-	return chainutil.WithResubscription(
-		chainutil.SubscriptionBackoffMax,
-		subscribeFn,
-		chainutil.SubscriptionAlertThreshold,
-		thresholdViolatedFn,
-		subscriptionFailedFn,
-	)
-}
-
-func (b *Bridge) PastFraudChallengeSubmittedEvents(
-	startBlock uint64,
-	endBlock *uint64,
-	walletPubKeyHashFilter [][20]byte,
-) ([]*abi.BridgeFraudChallengeSubmitted, error) {
-	iterator, err := b.contract.FilterFraudChallengeSubmitted(
-		&bind.FilterOpts{
-			Start: startBlock,
-			End:   endBlock,
-		},
-		walletPubKeyHashFilter,
-	)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"error retrieving past FraudChallengeSubmitted events: [%v]",
-			err,
-		)
-	}
-
-	events := make([]*abi.BridgeFraudChallengeSubmitted, 0)
+	events := make([]*abi.BridgeEcdsaRetired, 0)
 
 	for iterator.Next() {
 		event := iterator.Event
@@ -8537,6 +9237,185 @@ func (b *Bridge) PastFraudParametersUpdatedEvents(
 	}
 
 	events := make([]*abi.BridgeFraudParametersUpdated, 0)
+
+	for iterator.Next() {
+		event := iterator.Event
+		events = append(events, event)
+	}
+
+	return events, nil
+}
+
+func (b *Bridge) FrostWalletRegistrySetEvent(
+	opts *ethereum.SubscribeOpts,
+) *BFrostWalletRegistrySetSubscription {
+	if opts == nil {
+		opts = new(ethereum.SubscribeOpts)
+	}
+	if opts.Tick == 0 {
+		opts.Tick = chainutil.DefaultSubscribeOptsTick
+	}
+	if opts.PastBlocks == 0 {
+		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
+	}
+
+	return &BFrostWalletRegistrySetSubscription{
+		b,
+		opts,
+	}
+}
+
+type BFrostWalletRegistrySetSubscription struct {
+	contract *Bridge
+	opts     *ethereum.SubscribeOpts
+}
+
+type bridgeFrostWalletRegistrySetFunc func(
+	FrostWalletRegistry common.Address,
+	blockNumber uint64,
+)
+
+func (fwrss *BFrostWalletRegistrySetSubscription) OnEvent(
+	handler bridgeFrostWalletRegistrySetFunc,
+) subscription.EventSubscription {
+	eventChan := make(chan *abi.BridgeFrostWalletRegistrySet)
+	ctx, cancelCtx := context.WithCancel(context.Background())
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-eventChan:
+				handler(
+					event.FrostWalletRegistry,
+					event.Raw.BlockNumber,
+				)
+			}
+		}
+	}()
+
+	sub := fwrss.Pipe(eventChan)
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (fwrss *BFrostWalletRegistrySetSubscription) Pipe(
+	sink chan *abi.BridgeFrostWalletRegistrySet,
+) subscription.EventSubscription {
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(fwrss.opts.Tick)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				lastBlock, err := fwrss.contract.blockCounter.CurrentBlock()
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+				}
+				fromBlock := lastBlock - fwrss.opts.PastBlocks
+
+				bLogger.Infof(
+					"subscription monitoring fetching past FrostWalletRegistrySet events "+
+						"starting from block [%v]",
+					fromBlock,
+				)
+				events, err := fwrss.contract.PastFrostWalletRegistrySetEvents(
+					fromBlock,
+					nil,
+				)
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+					continue
+				}
+				bLogger.Infof(
+					"subscription monitoring fetched [%v] past FrostWalletRegistrySet events",
+					len(events),
+				)
+
+				for _, event := range events {
+					sink <- event
+				}
+			}
+		}
+	}()
+
+	sub := fwrss.contract.watchFrostWalletRegistrySet(
+		sink,
+	)
+
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (b *Bridge) watchFrostWalletRegistrySet(
+	sink chan *abi.BridgeFrostWalletRegistrySet,
+) event.Subscription {
+	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
+		return b.contract.WatchFrostWalletRegistrySet(
+			&bind.WatchOpts{Context: ctx},
+			sink,
+		)
+	}
+
+	thresholdViolatedFn := func(elapsed time.Duration) {
+		bLogger.Warnf(
+			"subscription to event FrostWalletRegistrySet had to be "+
+				"retried [%s] since the last attempt; please inspect "+
+				"host chain connectivity",
+			elapsed,
+		)
+	}
+
+	subscriptionFailedFn := func(err error) {
+		bLogger.Errorf(
+			"subscription to event FrostWalletRegistrySet failed "+
+				"with error: [%v]; resubscription attempt will be "+
+				"performed",
+			err,
+		)
+	}
+
+	return chainutil.WithResubscription(
+		chainutil.SubscriptionBackoffMax,
+		subscribeFn,
+		chainutil.SubscriptionAlertThreshold,
+		thresholdViolatedFn,
+		subscriptionFailedFn,
+	)
+}
+
+func (b *Bridge) PastFrostWalletRegistrySetEvents(
+	startBlock uint64,
+	endBlock *uint64,
+) ([]*abi.BridgeFrostWalletRegistrySet, error) {
+	iterator, err := b.contract.FilterFrostWalletRegistrySet(
+		&bind.FilterOpts{
+			Start: startBlock,
+			End:   endBlock,
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"error retrieving past FrostWalletRegistrySet events: [%v]",
+			err,
+		)
+	}
+
+	events := make([]*abi.BridgeFrostWalletRegistrySet, 0)
 
 	for iterator.Next() {
 		event := iterator.Event
@@ -8897,6 +9776,397 @@ func (b *Bridge) PastInitializedEvents(
 	}
 
 	events := make([]*abi.BridgeInitialized, 0)
+
+	for iterator.Next() {
+		event := iterator.Event
+		events = append(events, event)
+	}
+
+	return events, nil
+}
+
+func (b *Bridge) LegacyFraudChallengeMigratedEvent(
+	opts *ethereum.SubscribeOpts,
+	routerKindFilter []uint8,
+	challengeKeyFilter []*big.Int,
+	challengerFilter []common.Address,
+) *BLegacyFraudChallengeMigratedSubscription {
+	if opts == nil {
+		opts = new(ethereum.SubscribeOpts)
+	}
+	if opts.Tick == 0 {
+		opts.Tick = chainutil.DefaultSubscribeOptsTick
+	}
+	if opts.PastBlocks == 0 {
+		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
+	}
+
+	return &BLegacyFraudChallengeMigratedSubscription{
+		b,
+		opts,
+		routerKindFilter,
+		challengeKeyFilter,
+		challengerFilter,
+	}
+}
+
+type BLegacyFraudChallengeMigratedSubscription struct {
+	contract           *Bridge
+	opts               *ethereum.SubscribeOpts
+	routerKindFilter   []uint8
+	challengeKeyFilter []*big.Int
+	challengerFilter   []common.Address
+}
+
+type bridgeLegacyFraudChallengeMigratedFunc func(
+	RouterKind uint8,
+	ChallengeKey *big.Int,
+	Challenger common.Address,
+	DepositAmount *big.Int,
+	blockNumber uint64,
+)
+
+func (lfcms *BLegacyFraudChallengeMigratedSubscription) OnEvent(
+	handler bridgeLegacyFraudChallengeMigratedFunc,
+) subscription.EventSubscription {
+	eventChan := make(chan *abi.BridgeLegacyFraudChallengeMigrated)
+	ctx, cancelCtx := context.WithCancel(context.Background())
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-eventChan:
+				handler(
+					event.RouterKind,
+					event.ChallengeKey,
+					event.Challenger,
+					event.DepositAmount,
+					event.Raw.BlockNumber,
+				)
+			}
+		}
+	}()
+
+	sub := lfcms.Pipe(eventChan)
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (lfcms *BLegacyFraudChallengeMigratedSubscription) Pipe(
+	sink chan *abi.BridgeLegacyFraudChallengeMigrated,
+) subscription.EventSubscription {
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(lfcms.opts.Tick)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				lastBlock, err := lfcms.contract.blockCounter.CurrentBlock()
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+				}
+				fromBlock := lastBlock - lfcms.opts.PastBlocks
+
+				bLogger.Infof(
+					"subscription monitoring fetching past LegacyFraudChallengeMigrated events "+
+						"starting from block [%v]",
+					fromBlock,
+				)
+				events, err := lfcms.contract.PastLegacyFraudChallengeMigratedEvents(
+					fromBlock,
+					nil,
+					lfcms.routerKindFilter,
+					lfcms.challengeKeyFilter,
+					lfcms.challengerFilter,
+				)
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+					continue
+				}
+				bLogger.Infof(
+					"subscription monitoring fetched [%v] past LegacyFraudChallengeMigrated events",
+					len(events),
+				)
+
+				for _, event := range events {
+					sink <- event
+				}
+			}
+		}
+	}()
+
+	sub := lfcms.contract.watchLegacyFraudChallengeMigrated(
+		sink,
+		lfcms.routerKindFilter,
+		lfcms.challengeKeyFilter,
+		lfcms.challengerFilter,
+	)
+
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (b *Bridge) watchLegacyFraudChallengeMigrated(
+	sink chan *abi.BridgeLegacyFraudChallengeMigrated,
+	routerKindFilter []uint8,
+	challengeKeyFilter []*big.Int,
+	challengerFilter []common.Address,
+) event.Subscription {
+	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
+		return b.contract.WatchLegacyFraudChallengeMigrated(
+			&bind.WatchOpts{Context: ctx},
+			sink,
+			routerKindFilter,
+			challengeKeyFilter,
+			challengerFilter,
+		)
+	}
+
+	thresholdViolatedFn := func(elapsed time.Duration) {
+		bLogger.Warnf(
+			"subscription to event LegacyFraudChallengeMigrated had to be "+
+				"retried [%s] since the last attempt; please inspect "+
+				"host chain connectivity",
+			elapsed,
+		)
+	}
+
+	subscriptionFailedFn := func(err error) {
+		bLogger.Errorf(
+			"subscription to event LegacyFraudChallengeMigrated failed "+
+				"with error: [%v]; resubscription attempt will be "+
+				"performed",
+			err,
+		)
+	}
+
+	return chainutil.WithResubscription(
+		chainutil.SubscriptionBackoffMax,
+		subscribeFn,
+		chainutil.SubscriptionAlertThreshold,
+		thresholdViolatedFn,
+		subscriptionFailedFn,
+	)
+}
+
+func (b *Bridge) PastLegacyFraudChallengeMigratedEvents(
+	startBlock uint64,
+	endBlock *uint64,
+	routerKindFilter []uint8,
+	challengeKeyFilter []*big.Int,
+	challengerFilter []common.Address,
+) ([]*abi.BridgeLegacyFraudChallengeMigrated, error) {
+	iterator, err := b.contract.FilterLegacyFraudChallengeMigrated(
+		&bind.FilterOpts{
+			Start: startBlock,
+			End:   endBlock,
+		},
+		routerKindFilter,
+		challengeKeyFilter,
+		challengerFilter,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"error retrieving past LegacyFraudChallengeMigrated events: [%v]",
+			err,
+		)
+	}
+
+	events := make([]*abi.BridgeLegacyFraudChallengeMigrated, 0)
+
+	for iterator.Next() {
+		event := iterator.Event
+		events = append(events, event)
+	}
+
+	return events, nil
+}
+
+func (b *Bridge) LifecycleRouterSetEvent(
+	opts *ethereum.SubscribeOpts,
+) *BLifecycleRouterSetSubscription {
+	if opts == nil {
+		opts = new(ethereum.SubscribeOpts)
+	}
+	if opts.Tick == 0 {
+		opts.Tick = chainutil.DefaultSubscribeOptsTick
+	}
+	if opts.PastBlocks == 0 {
+		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
+	}
+
+	return &BLifecycleRouterSetSubscription{
+		b,
+		opts,
+	}
+}
+
+type BLifecycleRouterSetSubscription struct {
+	contract *Bridge
+	opts     *ethereum.SubscribeOpts
+}
+
+type bridgeLifecycleRouterSetFunc func(
+	LifecycleRouter common.Address,
+	blockNumber uint64,
+)
+
+func (lrss *BLifecycleRouterSetSubscription) OnEvent(
+	handler bridgeLifecycleRouterSetFunc,
+) subscription.EventSubscription {
+	eventChan := make(chan *abi.BridgeLifecycleRouterSet)
+	ctx, cancelCtx := context.WithCancel(context.Background())
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-eventChan:
+				handler(
+					event.LifecycleRouter,
+					event.Raw.BlockNumber,
+				)
+			}
+		}
+	}()
+
+	sub := lrss.Pipe(eventChan)
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (lrss *BLifecycleRouterSetSubscription) Pipe(
+	sink chan *abi.BridgeLifecycleRouterSet,
+) subscription.EventSubscription {
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(lrss.opts.Tick)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				lastBlock, err := lrss.contract.blockCounter.CurrentBlock()
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+				}
+				fromBlock := lastBlock - lrss.opts.PastBlocks
+
+				bLogger.Infof(
+					"subscription monitoring fetching past LifecycleRouterSet events "+
+						"starting from block [%v]",
+					fromBlock,
+				)
+				events, err := lrss.contract.PastLifecycleRouterSetEvents(
+					fromBlock,
+					nil,
+				)
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+					continue
+				}
+				bLogger.Infof(
+					"subscription monitoring fetched [%v] past LifecycleRouterSet events",
+					len(events),
+				)
+
+				for _, event := range events {
+					sink <- event
+				}
+			}
+		}
+	}()
+
+	sub := lrss.contract.watchLifecycleRouterSet(
+		sink,
+	)
+
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (b *Bridge) watchLifecycleRouterSet(
+	sink chan *abi.BridgeLifecycleRouterSet,
+) event.Subscription {
+	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
+		return b.contract.WatchLifecycleRouterSet(
+			&bind.WatchOpts{Context: ctx},
+			sink,
+		)
+	}
+
+	thresholdViolatedFn := func(elapsed time.Duration) {
+		bLogger.Warnf(
+			"subscription to event LifecycleRouterSet had to be "+
+				"retried [%s] since the last attempt; please inspect "+
+				"host chain connectivity",
+			elapsed,
+		)
+	}
+
+	subscriptionFailedFn := func(err error) {
+		bLogger.Errorf(
+			"subscription to event LifecycleRouterSet failed "+
+				"with error: [%v]; resubscription attempt will be "+
+				"performed",
+			err,
+		)
+	}
+
+	return chainutil.WithResubscription(
+		chainutil.SubscriptionBackoffMax,
+		subscribeFn,
+		chainutil.SubscriptionAlertThreshold,
+		thresholdViolatedFn,
+		subscriptionFailedFn,
+	)
+}
+
+func (b *Bridge) PastLifecycleRouterSetEvents(
+	startBlock uint64,
+	endBlock *uint64,
+) ([]*abi.BridgeLifecycleRouterSet, error) {
+	iterator, err := b.contract.FilterLifecycleRouterSet(
+		&bind.FilterOpts{
+			Start: startBlock,
+			End:   endBlock,
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"error retrieving past LifecycleRouterSet events: [%v]",
+			err,
+		)
+	}
+
+	events := make([]*abi.BridgeLifecycleRouterSet, 0)
 
 	for iterator.Next() {
 		event := iterator.Event
@@ -10433,6 +11703,216 @@ func (b *Bridge) PastMovingFundsTimeoutResetEvents(
 	return events, nil
 }
 
+func (b *Bridge) NewFrostWalletRegisteredEvent(
+	opts *ethereum.SubscribeOpts,
+	walletIDFilter [][32]byte,
+	walletPubKeyHashFilter [][20]byte,
+	xOnlyOutputKeyFilter [][32]byte,
+) *BNewFrostWalletRegisteredSubscription {
+	if opts == nil {
+		opts = new(ethereum.SubscribeOpts)
+	}
+	if opts.Tick == 0 {
+		opts.Tick = chainutil.DefaultSubscribeOptsTick
+	}
+	if opts.PastBlocks == 0 {
+		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
+	}
+
+	return &BNewFrostWalletRegisteredSubscription{
+		b,
+		opts,
+		walletIDFilter,
+		walletPubKeyHashFilter,
+		xOnlyOutputKeyFilter,
+	}
+}
+
+type BNewFrostWalletRegisteredSubscription struct {
+	contract               *Bridge
+	opts                   *ethereum.SubscribeOpts
+	walletIDFilter         [][32]byte
+	walletPubKeyHashFilter [][20]byte
+	xOnlyOutputKeyFilter   [][32]byte
+}
+
+type bridgeNewFrostWalletRegisteredFunc func(
+	WalletID [32]byte,
+	WalletPubKeyHash [20]byte,
+	XOnlyOutputKey [32]byte,
+	blockNumber uint64,
+)
+
+func (nfwrs *BNewFrostWalletRegisteredSubscription) OnEvent(
+	handler bridgeNewFrostWalletRegisteredFunc,
+) subscription.EventSubscription {
+	eventChan := make(chan *abi.BridgeNewFrostWalletRegistered)
+	ctx, cancelCtx := context.WithCancel(context.Background())
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-eventChan:
+				handler(
+					event.WalletID,
+					event.WalletPubKeyHash,
+					event.XOnlyOutputKey,
+					event.Raw.BlockNumber,
+				)
+			}
+		}
+	}()
+
+	sub := nfwrs.Pipe(eventChan)
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (nfwrs *BNewFrostWalletRegisteredSubscription) Pipe(
+	sink chan *abi.BridgeNewFrostWalletRegistered,
+) subscription.EventSubscription {
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(nfwrs.opts.Tick)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				lastBlock, err := nfwrs.contract.blockCounter.CurrentBlock()
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+				}
+				fromBlock := lastBlock - nfwrs.opts.PastBlocks
+
+				bLogger.Infof(
+					"subscription monitoring fetching past NewFrostWalletRegistered events "+
+						"starting from block [%v]",
+					fromBlock,
+				)
+				events, err := nfwrs.contract.PastNewFrostWalletRegisteredEvents(
+					fromBlock,
+					nil,
+					nfwrs.walletIDFilter,
+					nfwrs.walletPubKeyHashFilter,
+					nfwrs.xOnlyOutputKeyFilter,
+				)
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+					continue
+				}
+				bLogger.Infof(
+					"subscription monitoring fetched [%v] past NewFrostWalletRegistered events",
+					len(events),
+				)
+
+				for _, event := range events {
+					sink <- event
+				}
+			}
+		}
+	}()
+
+	sub := nfwrs.contract.watchNewFrostWalletRegistered(
+		sink,
+		nfwrs.walletIDFilter,
+		nfwrs.walletPubKeyHashFilter,
+		nfwrs.xOnlyOutputKeyFilter,
+	)
+
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (b *Bridge) watchNewFrostWalletRegistered(
+	sink chan *abi.BridgeNewFrostWalletRegistered,
+	walletIDFilter [][32]byte,
+	walletPubKeyHashFilter [][20]byte,
+	xOnlyOutputKeyFilter [][32]byte,
+) event.Subscription {
+	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
+		return b.contract.WatchNewFrostWalletRegistered(
+			&bind.WatchOpts{Context: ctx},
+			sink,
+			walletIDFilter,
+			walletPubKeyHashFilter,
+			xOnlyOutputKeyFilter,
+		)
+	}
+
+	thresholdViolatedFn := func(elapsed time.Duration) {
+		bLogger.Warnf(
+			"subscription to event NewFrostWalletRegistered had to be "+
+				"retried [%s] since the last attempt; please inspect "+
+				"host chain connectivity",
+			elapsed,
+		)
+	}
+
+	subscriptionFailedFn := func(err error) {
+		bLogger.Errorf(
+			"subscription to event NewFrostWalletRegistered failed "+
+				"with error: [%v]; resubscription attempt will be "+
+				"performed",
+			err,
+		)
+	}
+
+	return chainutil.WithResubscription(
+		chainutil.SubscriptionBackoffMax,
+		subscribeFn,
+		chainutil.SubscriptionAlertThreshold,
+		thresholdViolatedFn,
+		subscriptionFailedFn,
+	)
+}
+
+func (b *Bridge) PastNewFrostWalletRegisteredEvents(
+	startBlock uint64,
+	endBlock *uint64,
+	walletIDFilter [][32]byte,
+	walletPubKeyHashFilter [][20]byte,
+	xOnlyOutputKeyFilter [][32]byte,
+) ([]*abi.BridgeNewFrostWalletRegistered, error) {
+	iterator, err := b.contract.FilterNewFrostWalletRegistered(
+		&bind.FilterOpts{
+			Start: startBlock,
+			End:   endBlock,
+		},
+		walletIDFilter,
+		walletPubKeyHashFilter,
+		xOnlyOutputKeyFilter,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"error retrieving past NewFrostWalletRegistered events: [%v]",
+			err,
+		)
+	}
+
+	events := make([]*abi.BridgeNewFrostWalletRegistered, 0)
+
+	for iterator.Next() {
+		event := iterator.Event
+		events = append(events, event)
+	}
+
+	return events, nil
+}
+
 func (b *Bridge) NewWalletRegisteredEvent(
 	opts *ethereum.SubscribeOpts,
 	ecdsaWalletIDFilter [][32]byte,
@@ -11010,6 +12490,373 @@ func (b *Bridge) PastNewWalletRequestedEvents(
 	}
 
 	events := make([]*abi.BridgeNewWalletRequested, 0)
+
+	for iterator.Next() {
+		event := iterator.Event
+		events = append(events, event)
+	}
+
+	return events, nil
+}
+
+func (b *Bridge) NewWalletSchemeSetEvent(
+	opts *ethereum.SubscribeOpts,
+	schemeFilter []uint8,
+) *BNewWalletSchemeSetSubscription {
+	if opts == nil {
+		opts = new(ethereum.SubscribeOpts)
+	}
+	if opts.Tick == 0 {
+		opts.Tick = chainutil.DefaultSubscribeOptsTick
+	}
+	if opts.PastBlocks == 0 {
+		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
+	}
+
+	return &BNewWalletSchemeSetSubscription{
+		b,
+		opts,
+		schemeFilter,
+	}
+}
+
+type BNewWalletSchemeSetSubscription struct {
+	contract     *Bridge
+	opts         *ethereum.SubscribeOpts
+	schemeFilter []uint8
+}
+
+type bridgeNewWalletSchemeSetFunc func(
+	Scheme uint8,
+	blockNumber uint64,
+)
+
+func (nwsss *BNewWalletSchemeSetSubscription) OnEvent(
+	handler bridgeNewWalletSchemeSetFunc,
+) subscription.EventSubscription {
+	eventChan := make(chan *abi.BridgeNewWalletSchemeSet)
+	ctx, cancelCtx := context.WithCancel(context.Background())
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-eventChan:
+				handler(
+					event.Scheme,
+					event.Raw.BlockNumber,
+				)
+			}
+		}
+	}()
+
+	sub := nwsss.Pipe(eventChan)
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (nwsss *BNewWalletSchemeSetSubscription) Pipe(
+	sink chan *abi.BridgeNewWalletSchemeSet,
+) subscription.EventSubscription {
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(nwsss.opts.Tick)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				lastBlock, err := nwsss.contract.blockCounter.CurrentBlock()
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+				}
+				fromBlock := lastBlock - nwsss.opts.PastBlocks
+
+				bLogger.Infof(
+					"subscription monitoring fetching past NewWalletSchemeSet events "+
+						"starting from block [%v]",
+					fromBlock,
+				)
+				events, err := nwsss.contract.PastNewWalletSchemeSetEvents(
+					fromBlock,
+					nil,
+					nwsss.schemeFilter,
+				)
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+					continue
+				}
+				bLogger.Infof(
+					"subscription monitoring fetched [%v] past NewWalletSchemeSet events",
+					len(events),
+				)
+
+				for _, event := range events {
+					sink <- event
+				}
+			}
+		}
+	}()
+
+	sub := nwsss.contract.watchNewWalletSchemeSet(
+		sink,
+		nwsss.schemeFilter,
+	)
+
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (b *Bridge) watchNewWalletSchemeSet(
+	sink chan *abi.BridgeNewWalletSchemeSet,
+	schemeFilter []uint8,
+) event.Subscription {
+	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
+		return b.contract.WatchNewWalletSchemeSet(
+			&bind.WatchOpts{Context: ctx},
+			sink,
+			schemeFilter,
+		)
+	}
+
+	thresholdViolatedFn := func(elapsed time.Duration) {
+		bLogger.Warnf(
+			"subscription to event NewWalletSchemeSet had to be "+
+				"retried [%s] since the last attempt; please inspect "+
+				"host chain connectivity",
+			elapsed,
+		)
+	}
+
+	subscriptionFailedFn := func(err error) {
+		bLogger.Errorf(
+			"subscription to event NewWalletSchemeSet failed "+
+				"with error: [%v]; resubscription attempt will be "+
+				"performed",
+			err,
+		)
+	}
+
+	return chainutil.WithResubscription(
+		chainutil.SubscriptionBackoffMax,
+		subscribeFn,
+		chainutil.SubscriptionAlertThreshold,
+		thresholdViolatedFn,
+		subscriptionFailedFn,
+	)
+}
+
+func (b *Bridge) PastNewWalletSchemeSetEvents(
+	startBlock uint64,
+	endBlock *uint64,
+	schemeFilter []uint8,
+) ([]*abi.BridgeNewWalletSchemeSet, error) {
+	iterator, err := b.contract.FilterNewWalletSchemeSet(
+		&bind.FilterOpts{
+			Start: startBlock,
+			End:   endBlock,
+		},
+		schemeFilter,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"error retrieving past NewWalletSchemeSet events: [%v]",
+			err,
+		)
+	}
+
+	events := make([]*abi.BridgeNewWalletSchemeSet, 0)
+
+	for iterator.Next() {
+		event := iterator.Event
+		events = append(events, event)
+	}
+
+	return events, nil
+}
+
+func (b *Bridge) P2TRFraudRouterSetEvent(
+	opts *ethereum.SubscribeOpts,
+) *BP2TRFraudRouterSetSubscription {
+	if opts == nil {
+		opts = new(ethereum.SubscribeOpts)
+	}
+	if opts.Tick == 0 {
+		opts.Tick = chainutil.DefaultSubscribeOptsTick
+	}
+	if opts.PastBlocks == 0 {
+		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
+	}
+
+	return &BP2TRFraudRouterSetSubscription{
+		b,
+		opts,
+	}
+}
+
+type BP2TRFraudRouterSetSubscription struct {
+	contract *Bridge
+	opts     *ethereum.SubscribeOpts
+}
+
+type bridgeP2TRFraudRouterSetFunc func(
+	P2trFraudRouter common.Address,
+	blockNumber uint64,
+)
+
+func (ptrfrss *BP2TRFraudRouterSetSubscription) OnEvent(
+	handler bridgeP2TRFraudRouterSetFunc,
+) subscription.EventSubscription {
+	eventChan := make(chan *abi.BridgeP2TRFraudRouterSet)
+	ctx, cancelCtx := context.WithCancel(context.Background())
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-eventChan:
+				handler(
+					event.P2trFraudRouter,
+					event.Raw.BlockNumber,
+				)
+			}
+		}
+	}()
+
+	sub := ptrfrss.Pipe(eventChan)
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (ptrfrss *BP2TRFraudRouterSetSubscription) Pipe(
+	sink chan *abi.BridgeP2TRFraudRouterSet,
+) subscription.EventSubscription {
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(ptrfrss.opts.Tick)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				lastBlock, err := ptrfrss.contract.blockCounter.CurrentBlock()
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+				}
+				fromBlock := lastBlock - ptrfrss.opts.PastBlocks
+
+				bLogger.Infof(
+					"subscription monitoring fetching past P2TRFraudRouterSet events "+
+						"starting from block [%v]",
+					fromBlock,
+				)
+				events, err := ptrfrss.contract.PastP2TRFraudRouterSetEvents(
+					fromBlock,
+					nil,
+				)
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+					continue
+				}
+				bLogger.Infof(
+					"subscription monitoring fetched [%v] past P2TRFraudRouterSet events",
+					len(events),
+				)
+
+				for _, event := range events {
+					sink <- event
+				}
+			}
+		}
+	}()
+
+	sub := ptrfrss.contract.watchP2TRFraudRouterSet(
+		sink,
+	)
+
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (b *Bridge) watchP2TRFraudRouterSet(
+	sink chan *abi.BridgeP2TRFraudRouterSet,
+) event.Subscription {
+	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
+		return b.contract.WatchP2TRFraudRouterSet(
+			&bind.WatchOpts{Context: ctx},
+			sink,
+		)
+	}
+
+	thresholdViolatedFn := func(elapsed time.Duration) {
+		bLogger.Warnf(
+			"subscription to event P2TRFraudRouterSet had to be "+
+				"retried [%s] since the last attempt; please inspect "+
+				"host chain connectivity",
+			elapsed,
+		)
+	}
+
+	subscriptionFailedFn := func(err error) {
+		bLogger.Errorf(
+			"subscription to event P2TRFraudRouterSet failed "+
+				"with error: [%v]; resubscription attempt will be "+
+				"performed",
+			err,
+		)
+	}
+
+	return chainutil.WithResubscription(
+		chainutil.SubscriptionBackoffMax,
+		subscribeFn,
+		chainutil.SubscriptionAlertThreshold,
+		thresholdViolatedFn,
+		subscriptionFailedFn,
+	)
+}
+
+func (b *Bridge) PastP2TRFraudRouterSetEvents(
+	startBlock uint64,
+	endBlock *uint64,
+) ([]*abi.BridgeP2TRFraudRouterSet, error) {
+	iterator, err := b.contract.FilterP2TRFraudRouterSet(
+		&bind.FilterOpts{
+			Start: startBlock,
+			End:   endBlock,
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"error retrieving past P2TRFraudRouterSet events: [%v]",
+			err,
+		)
+	}
+
+	events := make([]*abi.BridgeP2TRFraudRouterSet, 0)
 
 	for iterator.Next() {
 		event := iterator.Event
@@ -12336,6 +14183,223 @@ func (b *Bridge) PastSpvMaintainerStatusUpdatedEvents(
 	}
 
 	events := make([]*abi.BridgeSpvMaintainerStatusUpdated, 0)
+
+	for iterator.Next() {
+		event := iterator.Event
+		events = append(events, event)
+	}
+
+	return events, nil
+}
+
+func (b *Bridge) TaprootDepositRevealedEvent(
+	opts *ethereum.SubscribeOpts,
+	depositorFilter []common.Address,
+	walletPubKeyHashFilter [][20]byte,
+) *BTaprootDepositRevealedSubscription {
+	if opts == nil {
+		opts = new(ethereum.SubscribeOpts)
+	}
+	if opts.Tick == 0 {
+		opts.Tick = chainutil.DefaultSubscribeOptsTick
+	}
+	if opts.PastBlocks == 0 {
+		opts.PastBlocks = chainutil.DefaultSubscribeOptsPastBlocks
+	}
+
+	return &BTaprootDepositRevealedSubscription{
+		b,
+		opts,
+		depositorFilter,
+		walletPubKeyHashFilter,
+	}
+}
+
+type BTaprootDepositRevealedSubscription struct {
+	contract               *Bridge
+	opts                   *ethereum.SubscribeOpts
+	depositorFilter        []common.Address
+	walletPubKeyHashFilter [][20]byte
+}
+
+type bridgeTaprootDepositRevealedFunc func(
+	FundingTxHash [32]byte,
+	FundingOutputIndex uint32,
+	Depositor common.Address,
+	Amount uint64,
+	BlindingFactor [8]byte,
+	WalletPubKeyHash [20]byte,
+	WalletXOnlyPublicKey [32]byte,
+	RefundPubKeyHash [20]byte,
+	RefundXOnlyPublicKey [32]byte,
+	RefundLocktime [4]byte,
+	Vault common.Address,
+	blockNumber uint64,
+)
+
+func (tdrs *BTaprootDepositRevealedSubscription) OnEvent(
+	handler bridgeTaprootDepositRevealedFunc,
+) subscription.EventSubscription {
+	eventChan := make(chan *abi.BridgeTaprootDepositRevealed)
+	ctx, cancelCtx := context.WithCancel(context.Background())
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-eventChan:
+				handler(
+					event.FundingTxHash,
+					event.FundingOutputIndex,
+					event.Depositor,
+					event.Amount,
+					event.BlindingFactor,
+					event.WalletPubKeyHash,
+					event.WalletXOnlyPublicKey,
+					event.RefundPubKeyHash,
+					event.RefundXOnlyPublicKey,
+					event.RefundLocktime,
+					event.Vault,
+					event.Raw.BlockNumber,
+				)
+			}
+		}
+	}()
+
+	sub := tdrs.Pipe(eventChan)
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (tdrs *BTaprootDepositRevealedSubscription) Pipe(
+	sink chan *abi.BridgeTaprootDepositRevealed,
+) subscription.EventSubscription {
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(tdrs.opts.Tick)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				lastBlock, err := tdrs.contract.blockCounter.CurrentBlock()
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+				}
+				fromBlock := lastBlock - tdrs.opts.PastBlocks
+
+				bLogger.Infof(
+					"subscription monitoring fetching past TaprootDepositRevealed events "+
+						"starting from block [%v]",
+					fromBlock,
+				)
+				events, err := tdrs.contract.PastTaprootDepositRevealedEvents(
+					fromBlock,
+					nil,
+					tdrs.depositorFilter,
+					tdrs.walletPubKeyHashFilter,
+				)
+				if err != nil {
+					bLogger.Errorf(
+						"subscription failed to pull events: [%v]",
+						err,
+					)
+					continue
+				}
+				bLogger.Infof(
+					"subscription monitoring fetched [%v] past TaprootDepositRevealed events",
+					len(events),
+				)
+
+				for _, event := range events {
+					sink <- event
+				}
+			}
+		}
+	}()
+
+	sub := tdrs.contract.watchTaprootDepositRevealed(
+		sink,
+		tdrs.depositorFilter,
+		tdrs.walletPubKeyHashFilter,
+	)
+
+	return subscription.NewEventSubscription(func() {
+		sub.Unsubscribe()
+		cancelCtx()
+	})
+}
+
+func (b *Bridge) watchTaprootDepositRevealed(
+	sink chan *abi.BridgeTaprootDepositRevealed,
+	depositorFilter []common.Address,
+	walletPubKeyHashFilter [][20]byte,
+) event.Subscription {
+	subscribeFn := func(ctx context.Context) (event.Subscription, error) {
+		return b.contract.WatchTaprootDepositRevealed(
+			&bind.WatchOpts{Context: ctx},
+			sink,
+			depositorFilter,
+			walletPubKeyHashFilter,
+		)
+	}
+
+	thresholdViolatedFn := func(elapsed time.Duration) {
+		bLogger.Warnf(
+			"subscription to event TaprootDepositRevealed had to be "+
+				"retried [%s] since the last attempt; please inspect "+
+				"host chain connectivity",
+			elapsed,
+		)
+	}
+
+	subscriptionFailedFn := func(err error) {
+		bLogger.Errorf(
+			"subscription to event TaprootDepositRevealed failed "+
+				"with error: [%v]; resubscription attempt will be "+
+				"performed",
+			err,
+		)
+	}
+
+	return chainutil.WithResubscription(
+		chainutil.SubscriptionBackoffMax,
+		subscribeFn,
+		chainutil.SubscriptionAlertThreshold,
+		thresholdViolatedFn,
+		subscriptionFailedFn,
+	)
+}
+
+func (b *Bridge) PastTaprootDepositRevealedEvents(
+	startBlock uint64,
+	endBlock *uint64,
+	depositorFilter []common.Address,
+	walletPubKeyHashFilter [][20]byte,
+) ([]*abi.BridgeTaprootDepositRevealed, error) {
+	iterator, err := b.contract.FilterTaprootDepositRevealed(
+		&bind.FilterOpts{
+			Start: startBlock,
+			End:   endBlock,
+		},
+		depositorFilter,
+		walletPubKeyHashFilter,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"error retrieving past TaprootDepositRevealed events: [%v]",
+			err,
+		)
+	}
+
+	events := make([]*abi.BridgeTaprootDepositRevealed, 0)
 
 	for iterator.Next() {
 		event := iterator.Event

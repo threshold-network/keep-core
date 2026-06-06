@@ -3,9 +3,12 @@
 package tbtc
 
 import (
+	"bytes"
+	"encoding/hex"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/frost/registry"
+	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
@@ -69,5 +72,30 @@ func TestFrostMisbehavedMemberIndices(t *testing.T) {
 				actual[i],
 			)
 		}
+	}
+}
+
+func TestOutputKeyFromTBTCSignerDKGResult_AcceptsCompressedKeyGroup(
+	t *testing.T,
+) {
+	const compressedKey = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+	const xOnlyKey = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+
+	outputKey, err := outputKeyFromTBTCSignerDKGResult(
+		&frostsigning.NativeTBTCSignerDKGResult{
+			KeyGroup: compressedKey,
+		},
+	)
+	if err != nil {
+		t.Fatalf("output key: %v", err)
+	}
+
+	want, _ := hex.DecodeString(xOnlyKey)
+	if !bytes.Equal(outputKey[:], want) {
+		t.Fatalf(
+			"unexpected output key\nexpected: [%x]\nactual:   [%x]",
+			want,
+			outputKey[:],
+		)
 	}
 }

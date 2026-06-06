@@ -47,6 +47,8 @@ type movingFundsParameters = struct {
 }
 
 type localChain struct {
+	frostWalletRegistryAvailable bool
+
 	dkgResultSubmissionHandlersMutex sync.Mutex
 	dkgResultSubmissionHandlers      map[int]func(submission *DKGResultSubmittedEvent)
 
@@ -80,6 +82,9 @@ type localChain struct {
 
 	pastDepositRevealedEventsMutex sync.Mutex
 	pastDepositRevealedEvents      map[[32]byte][]*DepositRevealedEvent
+
+	pastTaprootDepositRevealedEventsMutex sync.Mutex
+	pastTaprootDepositRevealedEvents      map[[32]byte][]*TaprootDepositRevealedEvent
 
 	pastMovingFundsCommitmentSubmittedEventsMutex sync.Mutex
 	pastMovingFundsCommitmentSubmittedEvents      map[[32]byte][]*MovingFundsCommitmentSubmittedEvent
@@ -733,6 +738,42 @@ func (lc *localChain) setPastDepositRevealedEvents(
 	return nil
 }
 
+func (lc *localChain) PastTaprootDepositRevealedEvents(
+	filter *DepositRevealedEventFilter,
+) ([]*TaprootDepositRevealedEvent, error) {
+	lc.pastTaprootDepositRevealedEventsMutex.Lock()
+	defer lc.pastTaprootDepositRevealedEventsMutex.Unlock()
+
+	eventsKey, err := buildPastDepositRevealedEventsKey(filter)
+	if err != nil {
+		return nil, err
+	}
+
+	events, ok := lc.pastTaprootDepositRevealedEvents[eventsKey]
+	if !ok {
+		return []*TaprootDepositRevealedEvent{}, nil
+	}
+
+	return events, nil
+}
+
+func (lc *localChain) setPastTaprootDepositRevealedEvents(
+	filter *DepositRevealedEventFilter,
+	events []*TaprootDepositRevealedEvent,
+) error {
+	lc.pastTaprootDepositRevealedEventsMutex.Lock()
+	defer lc.pastTaprootDepositRevealedEventsMutex.Unlock()
+
+	eventsKey, err := buildPastDepositRevealedEventsKey(filter)
+	if err != nil {
+		return err
+	}
+
+	lc.pastTaprootDepositRevealedEvents[eventsKey] = events
+
+	return nil
+}
+
 func buildPastDepositRevealedEventsKey(
 	filter *DepositRevealedEventFilter,
 ) ([32]byte, error) {
@@ -925,7 +966,11 @@ func (lc *localChain) IsWalletRegistered(EcdsaWalletID [32]byte) (bool, error) {
 		}
 	}
 
-	return false, fmt.Errorf("wallet not found")
+	return false, nil
+}
+
+func (lc *localChain) FrostWalletRegistryAvailable() bool {
+	return lc.frostWalletRegistryAvailable
 }
 
 func (lc *localChain) setWallet(
@@ -1034,6 +1079,21 @@ func (lc *localChain) ValidateDepositSweepProposal(
 	}
 
 	return nil
+}
+
+func (lc *localChain) ValidateTaprootDepositSweepProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *DepositSweepProposal,
+	depositsExtraInfo []struct {
+		*Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	return lc.ValidateDepositSweepProposal(
+		walletPublicKeyHash,
+		proposal,
+		depositsExtraInfo,
+	)
 }
 
 func (lc *localChain) setDepositSweepProposalValidationResult(
@@ -1490,6 +1550,7 @@ func ConnectWithKey(
 		blocksByTimestamp:                        make(map[uint64]uint64),
 		blocksHashesByNumber:                     make(map[uint64][32]byte),
 		pastDepositRevealedEvents:                make(map[[32]byte][]*DepositRevealedEvent),
+		pastTaprootDepositRevealedEvents:         make(map[[32]byte][]*TaprootDepositRevealedEvent),
 		pastMovingFundsCommitmentSubmittedEvents: make(map[[32]byte][]*MovingFundsCommitmentSubmittedEvent),
 		depositSweepProposalValidations:          make(map[[32]byte]bool),
 		pendingRedemptionRequests:                make(map[[32]byte]*RedemptionRequest),

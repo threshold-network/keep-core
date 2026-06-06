@@ -2,6 +2,8 @@ package tbtc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"math/big"
 	"strings"
@@ -40,6 +42,29 @@ const (
 // errSigningExecutorBusy is an error returned when the signing executor
 // cannot execute the requested signature due to an ongoing signing.
 var errSigningExecutorBusy = fmt.Errorf("signing executor is busy")
+
+func signingSessionID(
+	message *big.Int,
+	taprootMerkleRoot *[32]byte,
+	startBlock uint64,
+	attemptNumber uint,
+) string {
+	if taprootMerkleRoot == nil {
+		return fmt.Sprintf("%v-%v", message.Text(16), attemptNumber)
+	}
+
+	var startBlockBytes [8]byte
+	binary.BigEndian.PutUint64(startBlockBytes[:], startBlock)
+
+	sessionDigest := sha256.New()
+	sessionDigest.Write([]byte(message.Text(16)))
+	sessionDigest.Write([]byte{0})
+	sessionDigest.Write(taprootMerkleRoot[:])
+	sessionDigest.Write([]byte{0})
+	sessionDigest.Write(startBlockBytes[:])
+
+	return fmt.Sprintf("tr-%x-%v", sessionDigest.Sum(nil), attemptNumber)
+}
 
 // signingExecutor is a component responsible for executing signing related to
 // a specific wallet whose part is controlled by this node.
@@ -104,6 +129,23 @@ func (se *signingExecutor) signBatch(
 	messages []*big.Int,
 	startBlock uint64,
 ) ([]*frost.Signature, error) {
+	return se.signBatchWithTaprootMerkleRoots(ctx, messages, nil, startBlock)
+}
+
+func (se *signingExecutor) signBatchWithTaprootMerkleRoots(
+	ctx context.Context,
+	messages []*big.Int,
+	taprootMerkleRoots []*[32]byte,
+	startBlock uint64,
+) ([]*frost.Signature, error) {
+	if taprootMerkleRoots != nil && len(taprootMerkleRoots) != len(messages) {
+		return nil, fmt.Errorf(
+			"taproot merkle roots count [%v] does not match messages count [%v]",
+			len(taprootMerkleRoots),
+			len(messages),
+		)
+	}
+
 	wallet := se.wallet()
 
 	walletPublicKeyBytes, err := marshalPublicKey(wallet.publicKey)
@@ -155,7 +197,17 @@ func (se *signingExecutor) signBatch(
 			signingStartBlock = endBlocks[i-1] + signingBatchInterludeBlocks
 		}
 
-		signature, _, endBlock, err := se.sign(ctx, message, signingStartBlock)
+		var taprootMerkleRoot *[32]byte
+		if taprootMerkleRoots != nil {
+			taprootMerkleRoot = taprootMerkleRoots[i]
+		}
+
+		signature, _, endBlock, err := se.signWithTaprootMerkleRoot(
+			ctx,
+			message,
+			taprootMerkleRoot,
+			signingStartBlock,
+		)
 		if err != nil {
 			// Error metrics are recorded in the sign() method for all error paths.
 			return nil, err
@@ -184,6 +236,15 @@ func (se *signingExecutor) signBatch(
 func (se *signingExecutor) sign(
 	ctx context.Context,
 	message *big.Int,
+	startBlock uint64,
+) (*frost.Signature, *signingActivityReport, uint64, error) {
+	return se.signWithTaprootMerkleRoot(ctx, message, nil, startBlock)
+}
+
+func (se *signingExecutor) signWithTaprootMerkleRoot(
+	ctx context.Context,
+	message *big.Int,
+	taprootMerkleRoot *[32]byte,
 	startBlock uint64,
 ) (*frost.Signature, *signingActivityReport, uint64, error) {
 	if lockAcquired := se.lock.TryAcquire(1); !lockAcquired {
@@ -340,9 +401,10 @@ func (se *signingExecutor) sign(
 						se.waitForBlockFn,
 					)
 
-					sessionID := fmt.Sprintf(
-						"%v-%v",
-						message.Text(16),
+					sessionID := signingSessionID(
+						message,
+						taprootMerkleRoot,
+						startBlock,
 						attempt.number,
 					)
 
@@ -350,12 +412,13 @@ func (se *signingExecutor) sign(
 						attemptCtx,
 						signingAttemptLogger,
 						&signing.Request{
-							Message:         message,
-							SessionID:       sessionID,
-							MemberIndex:     signer.signingGroupMemberIndex,
-							SignerMaterial:  signer.signingMaterial(),
-							PrivateKeyShare: signer.privateKeyShare,
-							GroupSize:       wallet.groupSize(),
+							Message:           message,
+							SessionID:         sessionID,
+							MemberIndex:       signer.signingGroupMemberIndex,
+							SignerMaterial:    signer.signingMaterial(),
+							PrivateKeyShare:   signer.privateKeyShare,
+							TaprootMerkleRoot: taprootMerkleRoot,
+							GroupSize:         wallet.groupSize(),
 							DishonestThreshold: wallet.groupDishonestThreshold(
 								se.groupParameters.HonestThreshold,
 							),

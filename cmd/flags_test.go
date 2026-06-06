@@ -232,6 +232,24 @@ var cmdFlagsTests = map[string]struct {
 		expectedValueFromFlag: "native",
 		defaultValue:          "",
 	},
+	"tbtc.disableLegacyECDSA": {
+		readValueFunc: func(c *config.Config) interface{} {
+			return c.Tbtc.DisableLegacyECDSA
+		},
+		flagName:              "--tbtc.disableLegacyECDSA",
+		flagValue:             "", // don't provide any value
+		expectedValueFromFlag: true,
+		defaultValue:          false,
+	},
+	"tbtc.disableLegacySortitionPoolMonitoring": {
+		readValueFunc: func(c *config.Config) interface{} {
+			return c.Tbtc.DisableLegacySortitionPoolMonitoring
+		},
+		flagName:              "--tbtc.disableLegacySortitionPoolMonitoring",
+		flagValue:             "", // don't provide any value
+		expectedValueFromFlag: true,
+		defaultValue:          false,
+	},
 	"maintainer.bitcoinDifficulty": {
 		readValueFunc:         func(c *config.Config) interface{} { return c.Maintainer.BitcoinDifficulty.Enabled },
 		flagName:              "--bitcoinDifficulty",

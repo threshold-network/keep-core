@@ -75,6 +75,7 @@ func submitRedemptionProof(
 	}
 
 	mainUTXO, walletPublicKeyHash, err := parseRedemptionTransactionInput(
+		spvChain,
 		btcChain,
 		transaction,
 	)
@@ -114,6 +115,7 @@ func submitRedemptionProof(
 // parseRedemptionTransactionInput parses the transaction's input and
 // returns the main UTXO and the wallet public key hash.
 func parseRedemptionTransactionInput(
+	spvChain Chain,
 	btcChain bitcoin.Chain,
 	transaction *bitcoin.Transaction,
 ) (bitcoin.UnspentTransactionOutput, [20]byte, error) {
@@ -146,16 +148,125 @@ func parseRedemptionTransactionInput(
 		Value:    spentOutput.Value,
 	}
 
-	// Extract the wallet public key hash from script
-	walletPublicKeyHash, err := bitcoin.ExtractPublicKeyHash(spentOutput.PublicKeyScript)
+	walletPublicKeyHash, err := walletPublicKeyHashFromScript(
+		spvChain,
+		spentOutput.PublicKeyScript,
+	)
 	if err != nil {
-		return bitcoin.UnspentTransactionOutput{}, [20]byte{}, fmt.Errorf(
-			"cannot extract wallet public key hash: [%v]",
-			err,
-		)
+		return bitcoin.UnspentTransactionOutput{}, [20]byte{}, err
 	}
 
 	return mainUtxo, walletPublicKeyHash, nil
+}
+
+func walletPublicKeyHashFromScript(
+	spvChain Chain,
+	script bitcoin.Script,
+) ([20]byte, error) {
+	switch bitcoin.GetScriptType(script) {
+	case bitcoin.P2PKHScript, bitcoin.P2WPKHScript:
+		walletPublicKeyHash, err := bitcoin.ExtractPublicKeyHash(script)
+		if err != nil {
+			return [20]byte{}, fmt.Errorf(
+				"cannot extract wallet public key hash: [%v]",
+				err,
+			)
+		}
+
+		return walletPublicKeyHash, nil
+	case bitcoin.P2TRScript:
+		walletID, err := bitcoin.ExtractTaprootKey(script)
+		if err != nil {
+			return [20]byte{}, fmt.Errorf(
+				"cannot extract wallet Taproot key: [%v]",
+				err,
+			)
+		}
+
+		walletPublicKeyHash, err :=
+			spvChain.WalletPublicKeyHashForWalletID(walletID)
+		if err != nil {
+			return [20]byte{}, fmt.Errorf(
+				"cannot resolve wallet public key hash for Taproot wallet ID "+
+					"[0x%x]: [%v]",
+				walletID,
+				err,
+			)
+		}
+
+		return walletPublicKeyHash, nil
+	default:
+		return [20]byte{}, fmt.Errorf(
+			"not a wallet public key hash or Taproot script",
+		)
+	}
+}
+
+type transactionsForPublicKeyScriptsChain interface {
+	GetTransactionsForPublicKeyScripts(
+		publicKeyScripts []bitcoin.Script,
+		limit int,
+	) ([]*bitcoin.Transaction, error)
+}
+
+func getWalletTransactions(
+	walletPublicKeyHash [20]byte,
+	wallet *tbtc.WalletChainData,
+	transactionLimit int,
+	btcChain bitcoin.Chain,
+) ([]*bitcoin.Transaction, error) {
+	scriptChain, ok := btcChain.(transactionsForPublicKeyScriptsChain)
+	if !ok {
+		return btcChain.GetTransactionsForPublicKeyHash(
+			walletPublicKeyHash,
+			transactionLimit,
+		)
+	}
+
+	publicKeyScripts, err := walletPublicKeyScripts(
+		walletPublicKeyHash,
+		wallet,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return scriptChain.GetTransactionsForPublicKeyScripts(
+		publicKeyScripts,
+		transactionLimit,
+	)
+}
+
+func walletPublicKeyScripts(
+	walletPublicKeyHash [20]byte,
+	wallet *tbtc.WalletChainData,
+) ([]bitcoin.Script, error) {
+	p2pkh, err := bitcoin.PayToPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		return nil, fmt.Errorf("cannot construct P2PKH for wallet: [%v]", err)
+	}
+
+	p2wpkh, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		return nil, fmt.Errorf("cannot construct P2WPKH for wallet: [%v]", err)
+	}
+
+	publicKeyScripts := []bitcoin.Script{p2pkh, p2wpkh}
+
+	if wallet.WalletID != [32]byte{} {
+		// FROST Taproot wallets use the canonical wallet ID as the x-only
+		// Taproot output key. Legacy wallets will not normally have history
+		// under this script, but querying it is harmless and keeps discovery
+		// independent of wallet generation.
+		p2tr, err := bitcoin.PayToTaproot(wallet.WalletID)
+		if err != nil {
+			return nil, fmt.Errorf("cannot construct P2TR for wallet: [%v]", err)
+		}
+
+		publicKeyScripts = append(publicKeyScripts, p2tr)
+	}
+
+	return publicKeyScripts, nil
 }
 
 func getUnprovenRedemptionTransactions(
@@ -221,9 +332,11 @@ func getUnprovenRedemptionTransactions(
 			continue
 		}
 
-		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+		walletTransactions, err := getWalletTransactions(
 			walletPublicKeyHash,
+			wallet,
 			transactionLimit,
+			btcChain,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -305,7 +418,11 @@ func isUnprovenRedemptionTransaction(
 		// First, check if the given output is a change (if it wasn't
 		// found yet).
 		if !changeFound {
-			isChange, err := isWalletChangeOutput(walletPublicKeyHash, output)
+			isChange, err := isWalletChangeOutput(
+				walletPublicKeyHash,
+				spvChain,
+				output,
+			)
 			if err != nil {
 				return false, fmt.Errorf(
 					"failed to check if output is wallet change: [%v]",
@@ -351,6 +468,7 @@ func isUnprovenRedemptionTransaction(
 
 func isWalletChangeOutput(
 	walletPublicKeyHash [20]byte,
+	spvChain Chain,
 	output *bitcoin.TransactionOutput,
 ) (bool, error) {
 	walletP2PKH, err := bitcoin.PayToPublicKeyHash(walletPublicKeyHash)
@@ -363,5 +481,26 @@ func isWalletChangeOutput(
 	}
 
 	script := output.PublicKeyScript
-	return bytes.Equal(script, walletP2PKH) || bytes.Equal(script, walletP2WPKH), nil
+	if bytes.Equal(script, walletP2PKH) || bytes.Equal(script, walletP2WPKH) {
+		return true, nil
+	}
+
+	if bitcoin.GetScriptType(script) != bitcoin.P2TRScript {
+		return false, nil
+	}
+
+	wallet, err := spvChain.GetWallet(walletPublicKeyHash)
+	if err != nil {
+		return false, fmt.Errorf("cannot get wallet: [%v]", err)
+	}
+	if wallet.WalletID == [32]byte{} {
+		return false, nil
+	}
+
+	walletP2TR, err := bitcoin.PayToTaproot(wallet.WalletID)
+	if err != nil {
+		return false, fmt.Errorf("cannot construct P2TR for wallet: [%v]", err)
+	}
+
+	return bytes.Equal(script, walletP2TR), nil
 }
