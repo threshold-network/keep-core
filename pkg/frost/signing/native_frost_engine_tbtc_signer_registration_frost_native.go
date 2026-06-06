@@ -565,6 +565,7 @@ func (bttse *buildTaggedTBTCSignerEngine) GenerateNoncesAndCommitments(
 	if err != nil {
 		return nil, "", nil, err
 	}
+	defer zeroBytes(responsePayload)
 
 	return decodeBuildTaggedTBTCSignerGenerateNoncesResponse(responsePayload)
 }
@@ -595,6 +596,8 @@ func (bttse *buildTaggedTBTCSignerEngine) Sign(
 	keyPackageIdentifier string,
 	keyPackageData []byte,
 ) (signatureShareIdentifier string, signatureShareData []byte, err error) {
+	defer zeroBytes(noncesData)
+
 	requestPayload, err := buildTaggedTBTCSignerSignShareRequestPayload(
 		signingPackageData,
 		noncesData,
@@ -604,6 +607,7 @@ func (bttse *buildTaggedTBTCSignerEngine) Sign(
 	if err != nil {
 		return "", nil, err
 	}
+	defer zeroBytes(requestPayload)
 
 	responsePayload, err := callBuildTaggedTBTCSignerSignShare(requestPayload)
 	if err != nil {

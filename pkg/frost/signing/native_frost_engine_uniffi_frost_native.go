@@ -137,14 +137,6 @@ func (unfse *uniFFINativeFROSTSigningEngine) Sign(
 		return nil, fmt.Errorf("signing package data is empty")
 	}
 
-	if nonces == nil {
-		return nil, fmt.Errorf("nonces are nil")
-	}
-
-	if len(nonces.Data) == 0 {
-		return nil, fmt.Errorf("nonces data is empty")
-	}
-
 	if keyPackage == nil {
 		return nil, fmt.Errorf("key package is nil")
 	}
@@ -157,9 +149,15 @@ func (unfse *uniFFINativeFROSTSigningEngine) Sign(
 		return nil, fmt.Errorf("key package data is empty")
 	}
 
+	noncesData, err := nonces.consumeData()
+	if err != nil {
+		return nil, err
+	}
+	defer zeroBytes(noncesData)
+
 	identifier, signatureShareData, err := unfse.bridge.Sign(
 		append([]byte{}, signingPackage.Data...),
-		append([]byte{}, nonces.Data...),
+		noncesData,
 		keyPackage.Identifier,
 		append([]byte{}, keyPackage.Data...),
 	)

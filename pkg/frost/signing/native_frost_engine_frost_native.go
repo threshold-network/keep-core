@@ -27,9 +27,12 @@ type NativeFROSTPublicKeyPackage struct {
 	VerifyingKey    string            `json:"verifyingKey"`
 }
 
-// NativeFROSTNonces is round-one signer-local nonce material.
+// NativeFROSTNonces is round-one signer-local nonce material. FROST signing
+// nonces are one-time secrets: a NativeFROSTSigningEngine must consume them in
+// exactly one Sign call and reject later reuse of the same object.
 type NativeFROSTNonces struct {
-	Data []byte `json:"data"`
+	Data     []byte `json:"data"`
+	consumed bool
 }
 
 // NativeFROSTCommitment is round-one commitment shared with the group.
@@ -47,6 +50,33 @@ type NativeFROSTSigningPackage struct {
 type NativeFROSTSignatureShare struct {
 	Identifier string `json:"identifier"`
 	Data       []byte `json:"data"`
+}
+
+func (nfn *NativeFROSTNonces) consumeData() ([]byte, error) {
+	if nfn == nil {
+		return nil, fmt.Errorf("nonces are nil")
+	}
+
+	if nfn.consumed {
+		return nil, fmt.Errorf("nonces are already consumed")
+	}
+
+	if len(nfn.Data) == 0 {
+		return nil, fmt.Errorf("nonces data is empty")
+	}
+
+	consumedData := append([]byte{}, nfn.Data...)
+	zeroBytes(nfn.Data)
+	nfn.Data = nil
+	nfn.consumed = true
+
+	return consumedData, nil
+}
+
+func zeroBytes(data []byte) {
+	for i := range data {
+		data[i] = 0
+	}
 }
 
 // NativeFROSTSigningEngine executes cryptographic round operations needed by

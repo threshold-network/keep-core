@@ -147,6 +147,8 @@ func TestUniFFINativeFROSTSigningEngine_GenerateNoncesAndCommitments(t *testing.
 
 func TestUniFFINativeFROSTSigningEngine_SignAndAggregate(t *testing.T) {
 	expectedErr := errors.New("aggregate error")
+	var signCalls int
+	var capturedNonces []byte
 
 	engine, err := newUniFFINativeFROSTSigningEngine(&mockUniFFINativeFROSTBridge{
 		generateNoncesAndCommitmentsFn: func(
@@ -167,6 +169,8 @@ func TestUniFFINativeFROSTSigningEngine_SignAndAggregate(t *testing.T) {
 			keyPackageIdentifier string,
 			keyPackageData []byte,
 		) (string, []byte, error) {
+			signCalls++
+			capturedNonces = append([]byte{}, noncesData...)
 			return "member-1", []byte{0x99}, nil
 		},
 		aggregateFn: func(
@@ -194,11 +198,13 @@ func TestUniFFINativeFROSTSigningEngine_SignAndAggregate(t *testing.T) {
 		t.Fatalf("unexpected signing package error: [%v]", err)
 	}
 
+	nonceBacking := []byte{0x22}
+	nonces := &NativeFROSTNonces{
+		Data: nonceBacking,
+	}
 	signatureShare, err := engine.Sign(
 		signingPackage,
-		&NativeFROSTNonces{
-			Data: []byte{0x22},
-		},
+		nonces,
 		&NativeFROSTKeyPackage{
 			Identifier: "member-1",
 			Data:       []byte{0x33},
@@ -222,6 +228,43 @@ func TestUniFFINativeFROSTSigningEngine_SignAndAggregate(t *testing.T) {
 			[]byte{0x99},
 			signatureShare.Data,
 		)
+	}
+	if signCalls != 1 {
+		t.Fatalf("unexpected sign call count: [%d]", signCalls)
+	}
+	if !bytes.Equal(capturedNonces, []byte{0x22}) {
+		t.Fatalf(
+			"unexpected bridge nonces\nexpected: [%x]\nactual:   [%x]",
+			[]byte{0x22},
+			capturedNonces,
+		)
+	}
+	if len(nonces.Data) != 0 {
+		t.Fatalf("expected consumed nonce data to be cleared: [%x]", nonces.Data)
+	}
+	if !bytes.Equal(nonceBacking, []byte{0x00}) {
+		t.Fatalf(
+			"expected nonce backing array to be wiped\nactual: [%x]",
+			nonceBacking,
+		)
+	}
+
+	_, err = engine.Sign(
+		signingPackage,
+		nonces,
+		&NativeFROSTKeyPackage{
+			Identifier: "member-1",
+			Data:       []byte{0x33},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected consumed nonce reuse error")
+	}
+	if err.Error() != "nonces are already consumed" {
+		t.Fatalf("unexpected consumed nonce error: [%v]", err)
+	}
+	if signCalls != 1 {
+		t.Fatalf("consumed nonce reuse reached bridge; sign calls: [%d]", signCalls)
 	}
 
 	_, err = engine.Aggregate(
