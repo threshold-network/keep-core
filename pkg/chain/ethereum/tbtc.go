@@ -419,7 +419,7 @@ func (tc *TbtcChain) IsRecognized(operatorPublicKey *operator.PublicKey) (bool, 
 		)
 	}
 
-	if tc.frostWalletRegistry != nil {
+	if tc.hasFrostAuthorization() {
 		stakingProvider, err := tc.frostWalletRegistry.OperatorToStakingProvider(
 			&bind.CallOpts{From: tc.key.Address},
 			operatorAddress,
@@ -662,20 +662,33 @@ func (tc *TbtcChain) IsBetaOperator() (bool, error) {
 	return tc.sortitionPool.IsBetaOperator(tc.key.Address)
 }
 
-// GetOperatorID returns the ID number of the given operator address. An ID
-// number of 0 means the operator has not been allocated an ID number yet.
+// GetOperatorID returns the legacy ECDSA sortition pool ID number of the given
+// operator address. An ID number of 0 means the operator has not been allocated
+// an ID number yet.
+//
+// This method intentionally remains bound to the legacy ECDSA sortition pool
+// even when FROST authorization is configured. Existing ECDSA tBTC flows such
+// as DKG approval, inactivity claims, and tbtcpg moving-funds claims compare
+// against ECDSA WalletRegistry member IDs. FROST DKG paths use
+// SelectFrostGroup and the FROST sortition pool directly.
 func (tc *TbtcChain) GetOperatorID(
 	operatorAddress chain.Address,
 ) (chain.OperatorID, error) {
-	if tc.hasFrostAuthorization() {
-		return tc.frostSortitionPool.GetOperatorID(
-			common.HexToAddress(operatorAddress.String()),
-		)
-	}
-
-	return tc.sortitionPool.GetOperatorID(
+	return getOperatorID(
+		tc.sortitionPool,
 		common.HexToAddress(operatorAddress.String()),
 	)
+}
+
+type operatorIDResolver interface {
+	GetOperatorID(operator common.Address) (chain.OperatorID, error)
+}
+
+func getOperatorID(
+	sortitionPool operatorIDResolver,
+	operatorAddress common.Address,
+) (chain.OperatorID, error) {
+	return sortitionPool.GetOperatorID(operatorAddress)
 }
 
 // SelectGroup returns the group members selected for the current group
