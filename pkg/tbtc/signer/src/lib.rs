@@ -534,6 +534,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let (status_first, first_payload) = call_ffi(&request, frost_tbtc_run_dkg);
@@ -542,6 +543,136 @@ mod tests {
         assert_eq!(status_first, 0);
         assert_eq!(status_second, 0);
         assert_eq!(first_payload, second_payload);
+    }
+
+    #[test]
+    fn run_dkg_uses_fresh_entropy_for_unseeded_request_after_engine_reset() {
+        let _guard = crate::engine::lock_test_state();
+        crate::engine::reset_for_tests();
+
+        let request = RunDkgRequest {
+            session_id: "session-unseeded-entropy".to_string(),
+            participants: vec![
+                DkgParticipant {
+                    identifier: 1,
+                    public_key_hex: "02aa".to_string(),
+                },
+                DkgParticipant {
+                    identifier: 2,
+                    public_key_hex: "02bb".to_string(),
+                },
+                DkgParticipant {
+                    identifier: 3,
+                    public_key_hex: "02cc".to_string(),
+                },
+            ],
+            threshold: 2,
+            dkg_seed_hex: None,
+        };
+
+        let (status_first, first_payload) = call_ffi(&request, frost_tbtc_run_dkg);
+        crate::engine::reset_for_tests();
+        let (status_second, second_payload) = call_ffi(&request, frost_tbtc_run_dkg);
+
+        assert_eq!(status_first, 0);
+        assert_eq!(status_second, 0);
+
+        let result_first: crate::api::DkgResult =
+            serde_json::from_slice(&first_payload).expect("decode first DKG result");
+        let result_second: crate::api::DkgResult =
+            serde_json::from_slice(&second_payload).expect("decode second DKG result");
+
+        assert_eq!(result_first.session_id, result_second.session_id);
+        assert_ne!(result_first.key_group, result_second.key_group);
+    }
+
+    #[test]
+    fn run_dkg_uses_explicit_seed_across_distinct_sessions() {
+        let _guard = crate::engine::lock_test_state();
+        crate::engine::reset_for_tests();
+
+        let participants = vec![
+            DkgParticipant {
+                identifier: 1,
+                public_key_hex: "02aa".to_string(),
+            },
+            DkgParticipant {
+                identifier: 2,
+                public_key_hex: "02bb".to_string(),
+            },
+            DkgParticipant {
+                identifier: 3,
+                public_key_hex: "02cc".to_string(),
+            },
+        ];
+        let dkg_seed_hex = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+
+        let request_a = RunDkgRequest {
+            session_id: "session-seeded-a".to_string(),
+            participants: participants.clone(),
+            threshold: 2,
+            dkg_seed_hex: Some(dkg_seed_hex.to_string()),
+        };
+        let (status_a, payload_a) = call_ffi(&request_a, frost_tbtc_run_dkg);
+
+        crate::engine::reset_for_tests();
+
+        let request_b = RunDkgRequest {
+            session_id: "session-seeded-b".to_string(),
+            participants,
+            threshold: 2,
+            dkg_seed_hex: Some(dkg_seed_hex.to_string()),
+        };
+        let (status_b, payload_b) = call_ffi(&request_b, frost_tbtc_run_dkg);
+
+        assert_eq!(status_a, 0);
+        assert_eq!(status_b, 0);
+
+        let result_a: crate::api::DkgResult =
+            serde_json::from_slice(&payload_a).expect("decode first DKG result");
+        let result_b: crate::api::DkgResult =
+            serde_json::from_slice(&payload_b).expect("decode second DKG result");
+
+        assert_ne!(result_a.session_id, result_b.session_id);
+        assert_eq!(result_a.key_group, result_b.key_group);
+    }
+
+    #[test]
+    fn run_dkg_reports_malformed_seed_as_recoverable_validation_error() {
+        let _guard = crate::engine::lock_test_state();
+        crate::engine::reset_for_tests();
+        let _profile = EnvVarGuard::set("TBTC_SIGNER_PROFILE", "development");
+        let _provenance_gate = EnvVarGuard::unset("TBTC_SIGNER_ENFORCE_PROVENANCE_GATE");
+        let _admission_policy = EnvVarGuard::unset("TBTC_SIGNER_ENFORCE_ADMISSION_POLICY");
+
+        let request = RunDkgRequest {
+            session_id: "session-bad-seed".to_string(),
+            participants: vec![
+                DkgParticipant {
+                    identifier: 1,
+                    public_key_hex: "02aa".to_string(),
+                },
+                DkgParticipant {
+                    identifier: 2,
+                    public_key_hex: "02bb".to_string(),
+                },
+            ],
+            threshold: 2,
+            dkg_seed_hex: Some("not-hex".to_string()),
+        };
+
+        let (status, payload) = call_ffi(&request, frost_tbtc_run_dkg);
+
+        assert_eq!(status, 1);
+        let response: ErrorResponse =
+            serde_json::from_slice(&payload).expect("decode error response");
+        assert_eq!(response.code, "validation_error");
+        assert_eq!(response.recovery_class, "recoverable");
+        assert!(
+            response.message.contains("dkg_seed_hex must be valid hex"),
+            "unexpected error message: {}",
+            response.message
+        );
     }
 
     #[test]
@@ -562,6 +693,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let mut request_b = request_a.clone();
@@ -812,6 +944,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let (dkg_status, _) = call_ffi(&dkg_request, frost_tbtc_run_dkg);
         assert_eq!(dkg_status, 0);
@@ -982,6 +1115,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let (dkg_status, dkg_payload) = call_ffi(&dkg_request, frost_tbtc_run_dkg);
         assert_eq!(dkg_status, 0);
@@ -1004,6 +1138,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -1048,6 +1183,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let (dkg_status, dkg_payload) = call_ffi(&dkg, frost_tbtc_run_dkg);
@@ -1061,6 +1197,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -1074,6 +1211,7 @@ mod tests {
 
         let finalize = FinalizeSignRoundRequest {
             session_id: "session-sign".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -1124,6 +1262,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let (dkg_status, dkg_payload) = call_ffi(&dkg, frost_tbtc_run_dkg);
@@ -1137,6 +1276,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -1150,6 +1290,7 @@ mod tests {
 
         let finalize = FinalizeSignRoundRequest {
             session_id: "session-sign-bootstrap-disabled".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -1191,6 +1332,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let (dkg_status, dkg_payload) = call_ffi(&dkg, frost_tbtc_run_dkg);
         assert_eq!(dkg_status, 0);
@@ -1202,6 +1344,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -1214,6 +1357,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "cafebabe".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![2, 1]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -1247,6 +1391,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let (dkg_status, dkg_payload) = call_ffi(&dkg, frost_tbtc_run_dkg);
         assert_eq!(dkg_status, 0);
@@ -1258,6 +1403,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -1269,6 +1415,7 @@ mod tests {
 
         let finalize = FinalizeSignRoundRequest {
             session_id: "session-sign-finalized".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -1302,6 +1449,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: "missing".to_string(),
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
