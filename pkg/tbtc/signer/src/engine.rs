@@ -15073,6 +15073,16 @@ mod tests {
             attempt_transition_evidence: None,
         };
         let first_round_state = start_sign_round(first_request).expect("first start sign round");
+        let consumed_round_ids_after_first = {
+            let guard = state().expect("engine state").lock().expect("engine lock");
+            let session = guard
+                .sessions
+                .get("session-start-round-reordered-idempotency")
+                .expect("session state");
+            session.consumed_sign_round_ids.clone()
+        };
+        assert_eq!(consumed_round_ids_after_first.len(), 1);
+        assert!(consumed_round_ids_after_first.contains(&first_round_state.round_id));
 
         let second_request = StartSignRoundRequest {
             session_id: "session-start-round-reordered-idempotency".to_string(),
@@ -15088,6 +15098,18 @@ mod tests {
             start_sign_round(second_request).expect("second start sign round retry");
 
         assert_eq!(first_round_state, second_round_state);
+        let consumed_round_ids_after_second = {
+            let guard = state().expect("engine state").lock().expect("engine lock");
+            let session = guard
+                .sessions
+                .get("session-start-round-reordered-idempotency")
+                .expect("session state");
+            session.consumed_sign_round_ids.clone()
+        };
+        assert_eq!(
+            consumed_round_ids_after_first,
+            consumed_round_ids_after_second
+        );
     }
 
     #[test]
