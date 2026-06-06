@@ -24,8 +24,10 @@ use std::str::FromStr;
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use frost::keys::Tweak;
-use frost_secp256k1_tr as frost;
+use frost_secp256k1_tr::{
+    self as frost,
+    keys::{EvenY, Tweak},
+};
 use rand_chacha::rand_core::{CryptoRng, Error as RandCoreError, RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
@@ -33,17 +35,22 @@ use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::api::{
-    AttemptContext, AttemptExclusionEvidence, AttemptTransitionEvidence,
-    AttemptTransitionTelemetry, BlameProofVerificationResult, BuildTaprootTxRequest,
-    CanaryRolloutStatusResult, DifferentialDivergence, DifferentialFuzzRequest,
-    DifferentialFuzzResult, DkgResult, FinalizeSignRoundRequest, PromoteCanaryRequest,
-    PromoteCanaryResult, QuarantineStatusRequest, QuarantineStatusResult,
-    RefreshCadenceStatusRequest, RefreshCadenceStatusResult, RefreshSharesRequest,
-    RefreshSharesResult, RoastLivenessPolicyResult, RollbackCanaryRequest, RollbackCanaryResult,
-    RoundContribution, RoundState, RunDkgRequest, ShareMaterial, SignatureResult,
-    SignerHardeningMetricsResult, StartSignRoundRequest, TransactionResult, TranscriptAuditRecord,
-    TranscriptAuditRequest, TranscriptAuditResult, TriggerEmergencyRekeyRequest,
-    TriggerEmergencyRekeyResult, VerifyBlameProofRequest,
+    AggregateRequest, AggregateResult, AttemptContext, AttemptExclusionEvidence,
+    AttemptTransitionEvidence, AttemptTransitionTelemetry, BlameProofVerificationResult,
+    BuildTaprootTxRequest, CanaryRolloutStatusResult, DifferentialDivergence,
+    DifferentialFuzzRequest, DifferentialFuzzResult, DkgPart1Request, DkgPart1Result,
+    DkgPart2Request, DkgPart2Result, DkgPart3Request, DkgPart3Result, DkgResult, DkgRound1Package,
+    DkgRound2Package, FinalizeSignRoundRequest, GenerateNoncesAndCommitmentsRequest,
+    GenerateNoncesAndCommitmentsResult, NativeFrostCommitment, NativeFrostKeyPackage,
+    NativeFrostPublicKeyPackage, NativeFrostSignatureShare, NewSigningPackageRequest,
+    NewSigningPackageResult, PromoteCanaryRequest, PromoteCanaryResult, QuarantineStatusRequest,
+    QuarantineStatusResult, RefreshCadenceStatusRequest, RefreshCadenceStatusResult,
+    RefreshSharesRequest, RefreshSharesResult, RoastLivenessPolicyResult, RollbackCanaryRequest,
+    RollbackCanaryResult, RoundContribution, RoundState, RunDkgRequest, ShareMaterial,
+    SignShareRequest, SignShareResult, SignatureResult, SignerHardeningMetricsResult,
+    StartSignRoundRequest, TransactionResult, TranscriptAuditRecord, TranscriptAuditRequest,
+    TranscriptAuditResult, TriggerEmergencyRekeyRequest, TriggerEmergencyRekeyResult,
+    VerifyBlameProofRequest,
 };
 use crate::errors::EngineError;
 use crate::go_math_rand::select_coordinator_identifier;
@@ -4189,6 +4196,685 @@ fn participant_identifier_to_frost_identifier(
     })
 }
 
+fn frost_identifier_to_go_string(identifier: frost::Identifier) -> String {
+    serde_json::to_string(&hex::encode(identifier.serialize()))
+        .expect("serializing hex identifier as JSON string cannot fail")
+}
+
+fn parse_frost_identifier(
+    operation: &str,
+    field_name: &str,
+    raw_identifier: &str,
+) -> Result<frost::Identifier, EngineError> {
+    if raw_identifier.trim().is_empty() {
+        return Err(EngineError::Validation(format!(
+            "{operation}: {field_name} is empty"
+        )));
+    }
+
+    let trimmed = raw_identifier.trim();
+    let normalized_hex = if trimmed.starts_with('"') {
+        serde_json::from_str::<String>(trimmed).map_err(|e| {
+            EngineError::Validation(format!(
+                "{operation}: {field_name} must be a JSON string-wrapped hex identifier: {e}"
+            ))
+        })?
+    } else {
+        trimmed.to_string()
+    };
+
+    let bytes = hex::decode(&normalized_hex).map_err(|_| {
+        EngineError::Validation(format!(
+            "{operation}: {field_name} must be a hex-encoded FROST identifier"
+        ))
+    })?;
+
+    frost::Identifier::deserialize(&bytes)
+        .map_err(|e| EngineError::Validation(format!("{operation}: invalid {field_name}: {e}")))
+}
+
+fn decode_hex_field(
+    operation: &str,
+    field_name: &str,
+    value: &str,
+) -> Result<Vec<u8>, EngineError> {
+    if value.is_empty() {
+        return Err(EngineError::Validation(format!(
+            "{operation}: {field_name} is empty"
+        )));
+    }
+
+    hex::decode(value).map_err(|_| {
+        EngineError::Validation(format!("{operation}: {field_name} must be valid hex"))
+    })
+}
+
+fn zeroizing_rng_from_os() -> ZeroizingChaCha20Rng {
+    let mut seed = [0u8; 32];
+    OsRng.fill_bytes(&mut seed);
+    let rng = ZeroizingChaCha20Rng::from_seed(seed);
+    seed.zeroize();
+    rng
+}
+
+fn decode_round1_package_map(
+    operation: &str,
+    packages: &[DkgRound1Package],
+) -> Result<BTreeMap<frost::Identifier, frost::keys::dkg::round1::Package>, EngineError> {
+    if packages.is_empty() {
+        return Err(EngineError::Validation(format!(
+            "{operation}: round1_packages must not be empty"
+        )));
+    }
+
+    let mut package_map = BTreeMap::new();
+    for (index, package) in packages.iter().enumerate() {
+        let identifier = parse_frost_identifier(
+            operation,
+            &format!("round1_packages[{index}].identifier"),
+            &package.identifier,
+        )?;
+        let package_bytes = decode_hex_field(
+            operation,
+            &format!("round1_packages[{index}].package_hex"),
+            &package.package_hex,
+        )?;
+        let round1_package = frost::keys::dkg::round1::Package::deserialize(&package_bytes)
+            .map_err(|e| {
+                EngineError::Validation(format!(
+                    "{operation}: invalid round1 package [{index}]: {e}"
+                ))
+            })?;
+
+        if package_map.insert(identifier, round1_package).is_some() {
+            return Err(EngineError::Validation(format!(
+                "{operation}: duplicate round1 package identifier [{}]",
+                package.identifier
+            )));
+        }
+    }
+
+    Ok(package_map)
+}
+
+fn decode_round2_package_map(
+    operation: &str,
+    packages: &[DkgRound2Package],
+    expected_recipient: Option<frost::Identifier>,
+) -> Result<BTreeMap<frost::Identifier, frost::keys::dkg::round2::Package>, EngineError> {
+    if packages.is_empty() {
+        return Err(EngineError::Validation(format!(
+            "{operation}: round2_packages must not be empty"
+        )));
+    }
+
+    let mut package_map = BTreeMap::new();
+    for (index, package) in packages.iter().enumerate() {
+        let recipient_identifier = parse_frost_identifier(
+            operation,
+            &format!("round2_packages[{index}].identifier"),
+            &package.identifier,
+        )?;
+        if let Some(expected_recipient) = expected_recipient {
+            if recipient_identifier != expected_recipient {
+                return Err(EngineError::Validation(format!(
+                    "{operation}: round2 package [{index}] recipient identifier does not match local DKG participant"
+                )));
+            }
+        }
+
+        let sender_identifier = package.sender_identifier.as_ref().ok_or_else(|| {
+            EngineError::Validation(format!(
+                "{operation}: round2_packages[{index}].sender_identifier is empty"
+            ))
+        })?;
+        let sender_identifier = parse_frost_identifier(
+            operation,
+            &format!("round2_packages[{index}].sender_identifier"),
+            sender_identifier,
+        )?;
+        let mut package_bytes = decode_hex_field(
+            operation,
+            &format!("round2_packages[{index}].package_hex"),
+            &package.package_hex,
+        )?;
+        let round2_package_result = frost::keys::dkg::round2::Package::deserialize(&package_bytes);
+        package_bytes.zeroize();
+        let round2_package = round2_package_result.map_err(|e| {
+            EngineError::Validation(format!(
+                "{operation}: invalid round2 package [{index}]: {e}"
+            ))
+        })?;
+
+        if package_map
+            .insert(sender_identifier, round2_package)
+            .is_some()
+        {
+            return Err(EngineError::Validation(format!(
+                "{operation}: duplicate round2 package sender identifier"
+            )));
+        }
+    }
+
+    Ok(package_map)
+}
+
+fn x_only_verifying_key_hex(
+    public_key_package: &frost::keys::PublicKeyPackage,
+) -> Result<String, EngineError> {
+    let compressed = public_key_package
+        .verifying_key()
+        .serialize()
+        .map_err(|e| EngineError::Internal(format!("failed to serialize verifying key: {e}")))?;
+
+    if compressed.len() != 33 || compressed[0] != 0x02 {
+        return Err(EngineError::Internal(
+            "expected even-Y compressed FROST verifying key".to_string(),
+        ));
+    }
+
+    Ok(hex::encode(&compressed[1..]))
+}
+
+fn native_public_key_package_from_frost(
+    public_key_package: &frost::keys::PublicKeyPackage,
+) -> Result<NativeFrostPublicKeyPackage, EngineError> {
+    let mut verifying_shares = BTreeMap::new();
+    for (identifier, verifying_share) in public_key_package.verifying_shares() {
+        let share_bytes = verifying_share.serialize().map_err(|e| {
+            EngineError::Internal(format!("failed to serialize verifying share: {e}"))
+        })?;
+        verifying_shares.insert(
+            frost_identifier_to_go_string(*identifier),
+            hex::encode(share_bytes),
+        );
+    }
+
+    Ok(NativeFrostPublicKeyPackage {
+        verifying_shares,
+        verifying_key: x_only_verifying_key_hex(public_key_package)?,
+    })
+}
+
+fn native_public_key_package_to_frost(
+    operation: &str,
+    public_key_package: &NativeFrostPublicKeyPackage,
+) -> Result<frost::keys::PublicKeyPackage, EngineError> {
+    if public_key_package.verifying_key.is_empty() {
+        return Err(EngineError::Validation(format!(
+            "{operation}: public_key_package.verifying_key is empty"
+        )));
+    }
+    if public_key_package.verifying_shares.is_empty() {
+        return Err(EngineError::Validation(format!(
+            "{operation}: public_key_package.verifying_shares is empty"
+        )));
+    }
+
+    let mut verifying_key_bytes = decode_hex_field(
+        operation,
+        "public_key_package.verifying_key",
+        &public_key_package.verifying_key,
+    )?;
+    if verifying_key_bytes.len() != 32 {
+        verifying_key_bytes.zeroize();
+        return Err(EngineError::Validation(format!(
+            "{operation}: public_key_package.verifying_key must be a 32-byte x-only key"
+        )));
+    }
+
+    let mut compressed_verifying_key = Vec::with_capacity(33);
+    compressed_verifying_key.push(0x02);
+    compressed_verifying_key.extend_from_slice(&verifying_key_bytes);
+    verifying_key_bytes.zeroize();
+    let verifying_key =
+        frost::VerifyingKey::deserialize(&compressed_verifying_key).map_err(|e| {
+            EngineError::Validation(format!(
+                "{operation}: invalid public_key_package.verifying_key: {e}"
+            ))
+        })?;
+    compressed_verifying_key.zeroize();
+
+    let mut verifying_shares = BTreeMap::new();
+    for (identifier, share_hex) in &public_key_package.verifying_shares {
+        let identifier = parse_frost_identifier(
+            operation,
+            "public_key_package.verifying_shares identifier",
+            identifier,
+        )?;
+        let share_bytes = decode_hex_field(
+            operation,
+            "public_key_package.verifying_shares value",
+            share_hex,
+        )?;
+        let verifying_share =
+            frost::keys::VerifyingShare::deserialize(&share_bytes).map_err(|e| {
+                EngineError::Validation(format!(
+                    "{operation}: invalid public_key_package verifying share: {e}"
+                ))
+            })?;
+        if verifying_shares
+            .insert(identifier, verifying_share)
+            .is_some()
+        {
+            return Err(EngineError::Validation(format!(
+                "{operation}: duplicate public_key_package verifying share identifier"
+            )));
+        }
+    }
+
+    Ok(frost::keys::PublicKeyPackage::new(
+        verifying_shares,
+        verifying_key,
+        None,
+    ))
+}
+
+fn decode_key_package(
+    operation: &str,
+    key_package_identifier: &str,
+    key_package_hex: &str,
+) -> Result<frost::keys::KeyPackage, EngineError> {
+    let expected_identifier =
+        parse_frost_identifier(operation, "key_package_identifier", key_package_identifier)?;
+    let mut key_package_bytes = decode_hex_field(operation, "key_package_hex", key_package_hex)?;
+    let key_package_result = frost::keys::KeyPackage::deserialize(&key_package_bytes);
+    key_package_bytes.zeroize();
+    let key_package = key_package_result
+        .map_err(|e| EngineError::Validation(format!("{operation}: invalid key package: {e}")))?;
+
+    if *key_package.identifier() != expected_identifier {
+        return Err(EngineError::Validation(format!(
+            "{operation}: key_package_identifier does not match serialized key package"
+        )));
+    }
+
+    Ok(key_package)
+}
+
+fn decode_signing_commitment_map(
+    operation: &str,
+    commitments: &[NativeFrostCommitment],
+) -> Result<BTreeMap<frost::Identifier, frost::round1::SigningCommitments>, EngineError> {
+    if commitments.is_empty() {
+        return Err(EngineError::Validation(format!(
+            "{operation}: commitments must not be empty"
+        )));
+    }
+
+    let mut commitment_map = BTreeMap::new();
+    for (index, commitment) in commitments.iter().enumerate() {
+        let identifier = parse_frost_identifier(
+            operation,
+            &format!("commitments[{index}].identifier"),
+            &commitment.identifier,
+        )?;
+        let commitment_bytes = decode_hex_field(
+            operation,
+            &format!("commitments[{index}].data_hex"),
+            &commitment.data_hex,
+        )?;
+        let signing_commitment = frost::round1::SigningCommitments::deserialize(&commitment_bytes)
+            .map_err(|e| {
+                EngineError::Validation(format!(
+                    "{operation}: invalid signing commitment [{index}]: {e}"
+                ))
+            })?;
+        if commitment_map
+            .insert(identifier, signing_commitment)
+            .is_some()
+        {
+            return Err(EngineError::Validation(format!(
+                "{operation}: duplicate commitment identifier [{}]",
+                commitment.identifier
+            )));
+        }
+    }
+
+    Ok(commitment_map)
+}
+
+fn decode_signature_share_map(
+    operation: &str,
+    signature_shares: &[NativeFrostSignatureShare],
+) -> Result<BTreeMap<frost::Identifier, frost::round2::SignatureShare>, EngineError> {
+    if signature_shares.is_empty() {
+        return Err(EngineError::Validation(format!(
+            "{operation}: signature_shares must not be empty"
+        )));
+    }
+
+    let mut signature_share_map = BTreeMap::new();
+    for (index, signature_share) in signature_shares.iter().enumerate() {
+        let identifier = parse_frost_identifier(
+            operation,
+            &format!("signature_shares[{index}].identifier"),
+            &signature_share.identifier,
+        )?;
+        let mut signature_share_bytes = decode_hex_field(
+            operation,
+            &format!("signature_shares[{index}].data_hex"),
+            &signature_share.data_hex,
+        )?;
+        let signature_share = frost::round2::SignatureShare::deserialize(&signature_share_bytes)
+            .map_err(|e| {
+                EngineError::Validation(format!(
+                    "{operation}: invalid signature share [{index}]: {e}"
+                ))
+            })?;
+        signature_share_bytes.zeroize();
+        if signature_share_map
+            .insert(identifier, signature_share)
+            .is_some()
+        {
+            return Err(EngineError::Validation(format!(
+                "{operation}: duplicate signature share identifier"
+            )));
+        }
+    }
+
+    Ok(signature_share_map)
+}
+
+pub fn dkg_part1(request: DkgPart1Request) -> Result<DkgPart1Result, EngineError> {
+    enforce_provenance_gate()?;
+
+    if request.max_signers == 0 {
+        return Err(EngineError::Validation(
+            "DKGPart1: max_signers is zero".to_string(),
+        ));
+    }
+    if request.min_signers == 0 {
+        return Err(EngineError::Validation(
+            "DKGPart1: min_signers is zero".to_string(),
+        ));
+    }
+    if request.min_signers > request.max_signers {
+        return Err(EngineError::Validation(
+            "DKGPart1: min_signers exceeds max_signers".to_string(),
+        ));
+    }
+
+    let identifier = parse_frost_identifier(
+        "DKGPart1",
+        "participant_identifier",
+        &request.participant_identifier,
+    )?;
+    let rng = zeroizing_rng_from_os();
+    let (mut secret_package, package) =
+        frost::keys::dkg::part1(identifier, request.max_signers, request.min_signers, rng)
+            .map_err(|e| EngineError::Validation(format!("DKGPart1 failed: {e}")))?;
+
+    let package_bytes = match package.serialize() {
+        Ok(package_bytes) => package_bytes,
+        Err(err) => {
+            secret_package.zeroize();
+            return Err(EngineError::Internal(format!(
+                "failed to serialize DKG part1 package: {err}"
+            )));
+        }
+    };
+    let secret_package_bytes_result = secret_package.serialize();
+    secret_package.zeroize();
+    let mut secret_package_bytes = secret_package_bytes_result
+        .map_err(|e| EngineError::Internal(format!("failed to serialize DKG part1 secret: {e}")))?;
+
+    let result = DkgPart1Result {
+        secret_package_hex: hex::encode(&secret_package_bytes),
+        package: DkgRound1Package {
+            identifier: frost_identifier_to_go_string(identifier),
+            package_hex: hex::encode(package_bytes),
+        },
+    };
+    secret_package_bytes.zeroize();
+
+    Ok(result)
+}
+
+pub fn dkg_part2(request: DkgPart2Request) -> Result<DkgPart2Result, EngineError> {
+    enforce_provenance_gate()?;
+
+    let mut secret_package_bytes = decode_hex_field(
+        "DKGPart2",
+        "secret_package_hex",
+        &request.secret_package_hex,
+    )?;
+    let secret_package_result =
+        frost::keys::dkg::round1::SecretPackage::deserialize(&secret_package_bytes);
+    secret_package_bytes.zeroize();
+    let mut secret_package = secret_package_result
+        .map_err(|e| EngineError::Validation(format!("DKGPart2: invalid secret package: {e}")))?;
+
+    let round1_packages = match decode_round1_package_map("DKGPart2", &request.round1_packages) {
+        Ok(round1_packages) => round1_packages,
+        Err(err) => {
+            secret_package.zeroize();
+            return Err(err);
+        }
+    };
+    let (mut round2_secret_package, round2_packages) =
+        frost::keys::dkg::part2(secret_package, &round1_packages)
+            .map_err(|e| EngineError::Validation(format!("DKGPart2 failed: {e}")))?;
+
+    let mut packages = Vec::with_capacity(round2_packages.len());
+    for (identifier, package) in round2_packages {
+        let mut package_bytes = match package.serialize() {
+            Ok(package_bytes) => package_bytes,
+            Err(err) => {
+                round2_secret_package.zeroize();
+                return Err(EngineError::Internal(format!(
+                    "failed to serialize DKG part2 package: {err}"
+                )));
+            }
+        };
+        packages.push(DkgRound2Package {
+            identifier: frost_identifier_to_go_string(identifier),
+            sender_identifier: None,
+            package_hex: hex::encode(&package_bytes),
+        });
+        package_bytes.zeroize();
+    }
+
+    let round2_secret_package_bytes_result = round2_secret_package.serialize();
+    round2_secret_package.zeroize();
+    let mut round2_secret_package_bytes = round2_secret_package_bytes_result
+        .map_err(|e| EngineError::Internal(format!("failed to serialize DKG part2 secret: {e}")))?;
+
+    let result = DkgPart2Result {
+        secret_package_hex: hex::encode(&round2_secret_package_bytes),
+        packages,
+    };
+    round2_secret_package_bytes.zeroize();
+
+    Ok(result)
+}
+
+pub fn dkg_part3(request: DkgPart3Request) -> Result<DkgPart3Result, EngineError> {
+    enforce_provenance_gate()?;
+
+    let mut secret_package_bytes = decode_hex_field(
+        "DKGPart3",
+        "secret_package_hex",
+        &request.secret_package_hex,
+    )?;
+    let secret_package_result =
+        frost::keys::dkg::round2::SecretPackage::deserialize(&secret_package_bytes);
+    secret_package_bytes.zeroize();
+    let mut secret_package = secret_package_result
+        .map_err(|e| EngineError::Validation(format!("DKGPart3: invalid secret package: {e}")))?;
+
+    let round1_packages = match decode_round1_package_map("DKGPart3", &request.round1_packages) {
+        Ok(round1_packages) => round1_packages,
+        Err(err) => {
+            secret_package.zeroize();
+            return Err(err);
+        }
+    };
+    let round2_packages = match decode_round2_package_map(
+        "DKGPart3",
+        &request.round2_packages,
+        Some(*secret_package.identifier()),
+    ) {
+        Ok(round2_packages) => round2_packages,
+        Err(err) => {
+            secret_package.zeroize();
+            return Err(err);
+        }
+    };
+    let dkg_result = frost::keys::dkg::part3(&secret_package, &round1_packages, &round2_packages);
+    secret_package.zeroize();
+    let (key_package, public_key_package) =
+        dkg_result.map_err(|e| EngineError::Validation(format!("DKGPart3 failed: {e}")))?;
+
+    let is_even_y = public_key_package.has_even_y();
+    let key_package = key_package.into_even_y(Some(is_even_y));
+    let public_key_package = public_key_package.into_even_y(Some(is_even_y));
+
+    let native_public_key_package = native_public_key_package_from_frost(&public_key_package)?;
+    let mut key_package_bytes = key_package
+        .serialize()
+        .map_err(|e| EngineError::Internal(format!("failed to serialize DKG key package: {e}")))?;
+    let result = DkgPart3Result {
+        key_package: NativeFrostKeyPackage {
+            identifier: frost_identifier_to_go_string(*key_package.identifier()),
+            data_hex: hex::encode(&key_package_bytes),
+        },
+        public_key_package: native_public_key_package,
+    };
+    key_package_bytes.zeroize();
+
+    Ok(result)
+}
+
+pub fn generate_nonces_and_commitments(
+    request: GenerateNoncesAndCommitmentsRequest,
+) -> Result<GenerateNoncesAndCommitmentsResult, EngineError> {
+    enforce_provenance_gate()?;
+
+    let key_package = decode_key_package(
+        "GenerateNoncesAndCommitments",
+        &request.key_package_identifier,
+        &request.key_package_hex,
+    )?;
+    let mut rng = zeroizing_rng_from_os();
+    let (mut nonces, commitments) = frost::round1::commit(key_package.signing_share(), &mut rng);
+    let commitment_bytes = match commitments.serialize() {
+        Ok(commitment_bytes) => commitment_bytes,
+        Err(err) => {
+            nonces.zeroize();
+            return Err(EngineError::Internal(format!(
+                "failed to serialize signing commitments: {err}"
+            )));
+        }
+    };
+    let nonces_bytes_result = nonces.serialize();
+    nonces.zeroize();
+    let mut nonces_bytes = nonces_bytes_result
+        .map_err(|e| EngineError::Internal(format!("failed to serialize signing nonces: {e}")))?;
+
+    let result = GenerateNoncesAndCommitmentsResult {
+        nonces_hex: hex::encode(&nonces_bytes),
+        commitment: NativeFrostCommitment {
+            identifier: frost_identifier_to_go_string(*key_package.identifier()),
+            data_hex: hex::encode(commitment_bytes),
+        },
+    };
+    nonces_bytes.zeroize();
+
+    Ok(result)
+}
+
+pub fn new_signing_package(
+    request: NewSigningPackageRequest,
+) -> Result<NewSigningPackageResult, EngineError> {
+    enforce_provenance_gate()?;
+
+    let message = if request.message_hex.is_empty() {
+        Vec::new()
+    } else {
+        hex::decode(&request.message_hex).map_err(|_| {
+            EngineError::Validation("NewSigningPackage: message_hex must be valid hex".to_string())
+        })?
+    };
+    let commitments = decode_signing_commitment_map("NewSigningPackage", &request.commitments)?;
+    let signing_package = frost::SigningPackage::new(commitments, &message);
+    let signing_package_bytes = signing_package
+        .serialize()
+        .map_err(|e| EngineError::Internal(format!("failed to serialize signing package: {e}")))?;
+
+    Ok(NewSigningPackageResult {
+        signing_package_hex: hex::encode(signing_package_bytes),
+    })
+}
+
+pub fn sign_share(request: SignShareRequest) -> Result<SignShareResult, EngineError> {
+    enforce_provenance_gate()?;
+
+    let signing_package_bytes = decode_hex_field(
+        "SignShare",
+        "signing_package_hex",
+        &request.signing_package_hex,
+    )?;
+    let signing_package = frost::SigningPackage::deserialize(&signing_package_bytes)
+        .map_err(|e| EngineError::Validation(format!("SignShare: invalid signing package: {e}")))?;
+
+    let mut nonces_bytes = decode_hex_field("SignShare", "nonces_hex", &request.nonces_hex)?;
+    let nonces_result = frost::round1::SigningNonces::deserialize(&nonces_bytes);
+    nonces_bytes.zeroize();
+    let mut nonces = nonces_result
+        .map_err(|e| EngineError::Validation(format!("SignShare: invalid nonces: {e}")))?;
+
+    let key_package = match decode_key_package(
+        "SignShare",
+        &request.key_package_identifier,
+        &request.key_package_hex,
+    ) {
+        Ok(key_package) => key_package,
+        Err(err) => {
+            nonces.zeroize();
+            return Err(err);
+        }
+    };
+    let signature_share_result = frost::round2::sign(&signing_package, &nonces, &key_package);
+    nonces.zeroize();
+    let signature_share = signature_share_result
+        .map_err(|e| EngineError::Validation(format!("SignShare failed: {e}")))?;
+    let mut signature_share_bytes = signature_share.serialize();
+    let result = SignShareResult {
+        signature_share: NativeFrostSignatureShare {
+            identifier: frost_identifier_to_go_string(*key_package.identifier()),
+            data_hex: hex::encode(&signature_share_bytes),
+        },
+    };
+    signature_share_bytes.zeroize();
+
+    Ok(result)
+}
+
+pub fn aggregate(request: AggregateRequest) -> Result<AggregateResult, EngineError> {
+    enforce_provenance_gate()?;
+
+    let signing_package_bytes = decode_hex_field(
+        "Aggregate",
+        "signing_package_hex",
+        &request.signing_package_hex,
+    )?;
+    let signing_package = frost::SigningPackage::deserialize(&signing_package_bytes)
+        .map_err(|e| EngineError::Validation(format!("Aggregate: invalid signing package: {e}")))?;
+    let signature_shares = decode_signature_share_map("Aggregate", &request.signature_shares)?;
+    let public_key_package =
+        native_public_key_package_to_frost("Aggregate", &request.public_key_package)?;
+    let signature = frost::aggregate(&signing_package, &signature_shares, &public_key_package)
+        .map_err(|e| EngineError::Validation(format!("Aggregate failed: {e}")))?;
+    let signature_bytes = signature
+        .serialize()
+        .map_err(|e| EngineError::Internal(format!("failed to serialize aggregate: {e}")))?;
+
+    Ok(AggregateResult {
+        signature_hex: hex::encode(signature_bytes),
+    })
+}
+
 fn build_deterministic_round_nonce_and_commitment(
     key_package: &frost::keys::KeyPackage,
     session_id: &str,
@@ -6766,6 +7452,231 @@ mod tests {
         });
 
         serde_json::from_slice(&vector_bytes).expect("attempt-context vectors decode")
+    }
+
+    struct InteractiveDkgFixture {
+        pre_normalization_even_y: bool,
+        part3_requests: BTreeMap<u16, DkgPart3Request>,
+    }
+
+    fn deterministic_interactive_dkg_fixture(seed: u8) -> InteractiveDkgFixture {
+        let participant_ids = [1u16, 2, 3];
+        let participant_identifiers: BTreeMap<u16, frost::Identifier> = participant_ids
+            .iter()
+            .copied()
+            .map(|id| {
+                (
+                    id,
+                    participant_identifier_to_frost_identifier(id).expect("participant identifier"),
+                )
+            })
+            .collect();
+        let participant_id_by_identifier_hex: BTreeMap<String, u16> = participant_identifiers
+            .iter()
+            .map(|(id, identifier)| (hex::encode(identifier.serialize()), *id))
+            .collect();
+
+        let mut part1_secrets = BTreeMap::new();
+        let mut part1_packages = BTreeMap::new();
+        for id in participant_ids {
+            let mut rng_seed = [0u8; 32];
+            rng_seed[0] = seed;
+            rng_seed[1..3].copy_from_slice(&id.to_be_bytes());
+            let rng = ZeroizingChaCha20Rng::from_seed(rng_seed);
+            let (secret_package, package) = frost::keys::dkg::part1(
+                participant_identifiers[&id],
+                participant_ids.len() as u16,
+                2,
+                rng,
+            )
+            .expect("DKG part1");
+
+            part1_secrets.insert(id, secret_package);
+            part1_packages.insert(
+                id,
+                DkgRound1Package {
+                    identifier: frost_identifier_to_go_string(participant_identifiers[&id]),
+                    package_hex: hex::encode(package.serialize().expect("round1 package")),
+                },
+            );
+        }
+
+        let round1_packages_for = |recipient_id: u16| -> Vec<DkgRound1Package> {
+            participant_ids
+                .iter()
+                .copied()
+                .filter(|id| *id != recipient_id)
+                .map(|id| part1_packages[&id].clone())
+                .collect()
+        };
+
+        let mut part2_secrets = BTreeMap::new();
+        let mut round2_packages_by_recipient: BTreeMap<u16, Vec<DkgRound2Package>> =
+            BTreeMap::new();
+        for sender_id in participant_ids {
+            let round1_packages =
+                decode_round1_package_map("TestDKGPart2", &round1_packages_for(sender_id))
+                    .expect("round1 package map");
+            let (round2_secret, round2_packages) = frost::keys::dkg::part2(
+                part1_secrets
+                    .remove(&sender_id)
+                    .expect("part1 secret package"),
+                &round1_packages,
+            )
+            .expect("DKG part2");
+
+            part2_secrets.insert(sender_id, round2_secret);
+            for (recipient_identifier, package) in round2_packages {
+                let recipient_id = participant_id_by_identifier_hex
+                    .get(&hex::encode(recipient_identifier.serialize()))
+                    .copied()
+                    .expect("recipient identifier mapping");
+                round2_packages_by_recipient
+                    .entry(recipient_id)
+                    .or_default()
+                    .push(DkgRound2Package {
+                        identifier: frost_identifier_to_go_string(recipient_identifier),
+                        sender_identifier: Some(frost_identifier_to_go_string(
+                            participant_identifiers[&sender_id],
+                        )),
+                        package_hex: hex::encode(package.serialize().expect("round2 package")),
+                    });
+            }
+        }
+
+        let first_participant = participant_ids[0];
+        let round1_packages =
+            decode_round1_package_map("TestDKGPart3", &round1_packages_for(first_participant))
+                .expect("round1 package map");
+        let round2_packages = decode_round2_package_map(
+            "TestDKGPart3",
+            &round2_packages_by_recipient[&first_participant],
+            Some(participant_identifiers[&first_participant]),
+        )
+        .expect("round2 package map");
+        let (_, pre_normalization_public_key_package) = frost::keys::dkg::part3(
+            part2_secrets
+                .get(&first_participant)
+                .expect("round2 secret package"),
+            &round1_packages,
+            &round2_packages,
+        )
+        .expect("DKG part3");
+
+        let mut part3_requests = BTreeMap::new();
+        for id in participant_ids {
+            let secret_package = part2_secrets.get(&id).expect("round2 secret package");
+            let secret_package_bytes = secret_package.serialize().expect("round2 secret");
+            part3_requests.insert(
+                id,
+                DkgPart3Request {
+                    secret_package_hex: hex::encode(secret_package_bytes),
+                    round1_packages: round1_packages_for(id),
+                    round2_packages: round2_packages_by_recipient
+                        .get(&id)
+                        .expect("round2 packages")
+                        .clone(),
+                },
+            );
+        }
+
+        InteractiveDkgFixture {
+            pre_normalization_even_y: pre_normalization_public_key_package.has_even_y(),
+            part3_requests,
+        }
+    }
+
+    fn deterministic_odd_y_interactive_dkg_fixture() -> InteractiveDkgFixture {
+        for seed in 0u8..=u8::MAX {
+            let fixture = deterministic_interactive_dkg_fixture(seed);
+            if !fixture.pre_normalization_even_y {
+                return fixture;
+            }
+        }
+
+        panic!("could not find deterministic odd-Y DKG fixture");
+    }
+
+    #[test]
+    fn dkg_part3_normalizes_odd_y_group_key_and_secret_shares() {
+        let _guard = lock_test_state();
+        reset_for_tests();
+
+        let fixture = deterministic_odd_y_interactive_dkg_fixture();
+        assert!(
+            !fixture.pre_normalization_even_y,
+            "fixture must exercise the odd-Y normalization branch"
+        );
+
+        let mut part3_results = BTreeMap::new();
+        for (id, request) in fixture.part3_requests {
+            let result = dkg_part3(request).expect("DKG part3");
+            let expected_identifier = frost_identifier_to_go_string(
+                participant_identifier_to_frost_identifier(id).unwrap(),
+            );
+            assert_eq!(result.key_package.identifier, expected_identifier);
+            assert_eq!(result.public_key_package.verifying_key.len(), 64);
+            part3_results.insert(id, result);
+        }
+
+        let exported_x_only_key = part3_results[&1].public_key_package.verifying_key.clone();
+        for result in part3_results.values() {
+            assert_eq!(result.public_key_package.verifying_key, exported_x_only_key);
+            assert_eq!(
+                result.public_key_package.verifying_shares,
+                part3_results[&1].public_key_package.verifying_shares
+            );
+        }
+
+        let signing_participants = [1u16, 2];
+        let mut commitments = Vec::new();
+        let mut nonces_by_participant = BTreeMap::new();
+        for id in signing_participants {
+            let result = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+                key_package_identifier: part3_results[&id].key_package.identifier.clone(),
+                key_package_hex: part3_results[&id].key_package.data_hex.clone(),
+            })
+            .expect("generate nonces");
+            commitments.push(result.commitment);
+            nonces_by_participant.insert(id, result.nonces_hex);
+        }
+
+        let message = [0x42u8; 32];
+        let signing_package = new_signing_package(NewSigningPackageRequest {
+            message_hex: hex::encode(message),
+            commitments,
+        })
+        .expect("new signing package");
+
+        let mut signature_shares = Vec::new();
+        for id in signing_participants {
+            let result = sign_share(SignShareRequest {
+                signing_package_hex: signing_package.signing_package_hex.clone(),
+                nonces_hex: nonces_by_participant
+                    .remove(&id)
+                    .expect("participant nonces"),
+                key_package_identifier: part3_results[&id].key_package.identifier.clone(),
+                key_package_hex: part3_results[&id].key_package.data_hex.clone(),
+            })
+            .expect("sign share");
+            signature_shares.push(result.signature_share);
+        }
+
+        let aggregate = aggregate(AggregateRequest {
+            signing_package_hex: signing_package.signing_package_hex,
+            signature_shares,
+            public_key_package: part3_results[&1].public_key_package.clone(),
+        })
+        .expect("aggregate");
+
+        let signature_bytes = hex::decode(aggregate.signature_hex).expect("signature hex");
+        let signature = SchnorrSignature::from_slice(&signature_bytes).expect("BIP340 signature");
+        let public_key_bytes = hex::decode(exported_x_only_key).expect("verifying key hex");
+        let public_key = XOnlyPublicKey::from_slice(&public_key_bytes).expect("x-only public key");
+        let message = SecpMessage::from_digest(message);
+        Secp256k1::verification_only()
+            .verify_schnorr(&signature, &message, &public_key)
+            .expect("aggregate verifies under normalized x-only key");
     }
 
     fn seeded_round_state(session_id: &str) -> RoundState {
