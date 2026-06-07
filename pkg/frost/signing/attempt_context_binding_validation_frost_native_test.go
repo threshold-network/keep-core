@@ -125,8 +125,8 @@ func TestVerifyMessageAttemptContextHash_BindingPresent_MismatchedHashFails(t *t
 
 func TestVerifyMessageAttemptContextHash_RealMessageTypeIntegration(t *testing.T) {
 	// Exercise the helper against a real protocol message type
-	// (the round-one commitment from Phase 1B) rather than just
-	// the stub, so the test surface covers the actual Set/Get
+	// (the tbtc-signer round contribution) rather than just the stub,
+	// so the test surface covers the actual Set/Get
 	// helpers code path.
 	ResetSessionHandleRegistryForTest()
 	t.Cleanup(ResetSessionHandleRegistryForTest)
@@ -135,11 +135,11 @@ func TestVerifyMessageAttemptContextHash_RealMessageTypeIntegration(t *testing.T
 	SetCurrentAttemptHandleForSession("session-real-msg", roast.AttemptHandle{}, ctx)
 
 	expected := ctx.Hash()
-	msg := &nativeFROSTRoundOneCommitmentMessage{
-		SenderIDValue:         1,
-		SessionIDValue:        "session-real-msg",
-		ParticipantIdentifier: "p1",
-		CommitmentData:        []byte{0x01},
+	msg := &buildTaggedTBTCSignerRoundContributionMessage{
+		SenderIDValue:          1,
+		SessionIDValue:         "session-real-msg",
+		ContributionIdentifier: 1,
+		ContributionData:       []byte{0x01},
 	}
 	msg.SetAttemptContextHash(expected)
 
@@ -205,8 +205,6 @@ func TestSetMessageAttemptContextHashIfBound_AllOutboundMessageTypes(t *testing.
 	expected := ctx.Hash()
 
 	messages := []attemptContextHashCarrier{
-		&nativeFROSTRoundOneCommitmentMessage{},
-		&nativeFROSTRoundTwoSignatureShareMessage{},
 		&buildTaggedTBTCSignerRoundContributionMessage{},
 	}
 

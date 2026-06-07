@@ -98,155 +98,6 @@ func TestAttemptContextHashField_FromArrayDoesNotAliasCaller(t *testing.T) {
 	}
 }
 
-func TestRoundOneCommitmentMessage_OptionalFieldRoundTrip(t *testing.T) {
-	original := &nativeFROSTRoundOneCommitmentMessage{
-		SenderIDValue:         1,
-		SessionIDValue:        "session-1",
-		ParticipantIdentifier: "p1",
-		CommitmentData:        []byte{0xaa, 0xbb},
-	}
-
-	t.Run("absent field round-trips as absent", func(t *testing.T) {
-		data, err := original.Marshal()
-		if err != nil {
-			t.Fatalf("marshal failed: %v", err)
-		}
-		if strings.Contains(string(data), "attemptContextHash") {
-			t.Fatalf(
-				"absent field should be omitted by omitempty, got JSON: %s",
-				string(data),
-			)
-		}
-		decoded := &nativeFROSTRoundOneCommitmentMessage{}
-		if err := decoded.Unmarshal(data); err != nil {
-			t.Fatalf("unmarshal failed: %v", err)
-		}
-		if _, present := decoded.GetAttemptContextHash(); present {
-			t.Fatal("expected attempt context hash to be absent after round-trip")
-		}
-	})
-
-	t.Run("present field round-trips with same value", func(t *testing.T) {
-		withHash := *original
-		withHash.SetAttemptContextHash(pinnedAttemptContextHash)
-		data, err := withHash.Marshal()
-		if err != nil {
-			t.Fatalf("marshal failed: %v", err)
-		}
-		if !strings.Contains(string(data), "attemptContextHash") {
-			t.Fatalf(
-				"present field should appear in JSON, got: %s",
-				string(data),
-			)
-		}
-		decoded := &nativeFROSTRoundOneCommitmentMessage{}
-		if err := decoded.Unmarshal(data); err != nil {
-			t.Fatalf("unmarshal failed: %v", err)
-		}
-		got, present := decoded.GetAttemptContextHash()
-		if !present {
-			t.Fatal("expected attempt context hash to be present")
-		}
-		if got != pinnedAttemptContextHash {
-			t.Fatalf("round-trip altered hash: got %x want %x", got, pinnedAttemptContextHash)
-		}
-	})
-}
-
-func TestRoundOneCommitmentMessage_BackwardCompatWithOldJSON(t *testing.T) {
-	// JSON emitted by a pre-Phase-1B peer: no attemptContextHash field
-	// at all. The new struct must accept it without error and report
-	// the hash as absent.
-	oldJSON := []byte(`{
-		"senderID":1,
-		"sessionID":"session-1",
-		"participantIdentifier":"p1",
-		"commitmentData":"qrs="
-	}`)
-
-	decoded := &nativeFROSTRoundOneCommitmentMessage{}
-	if err := decoded.Unmarshal(oldJSON); err != nil {
-		t.Fatalf("unmarshal of old-format JSON failed: %v", err)
-	}
-	if _, present := decoded.GetAttemptContextHash(); present {
-		t.Fatal("expected absent hash for old-format JSON")
-	}
-}
-
-func TestRoundOneCommitmentMessage_RejectsWrongLengthHashField(t *testing.T) {
-	badJSON := []byte(`{
-		"senderID":1,
-		"sessionID":"session-1",
-		"participantIdentifier":"p1",
-		"commitmentData":"qrs=",
-		"attemptContextHash":"AAEC"
-	}`)
-
-	decoded := &nativeFROSTRoundOneCommitmentMessage{}
-	err := decoded.Unmarshal(badJSON)
-	if err == nil {
-		t.Fatal("expected wrong-length validation error")
-	}
-	if !strings.Contains(err.Error(), "wrong length") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestRoundTwoSignatureShareMessage_OptionalFieldRoundTrip(t *testing.T) {
-	withHash := &nativeFROSTRoundTwoSignatureShareMessage{
-		SenderIDValue:         2,
-		SessionIDValue:        "session-2",
-		ParticipantIdentifier: "p2",
-		SignatureShareData:    []byte{0xcc, 0xdd},
-	}
-	withHash.SetAttemptContextHash(pinnedAttemptContextHash)
-	data, err := withHash.Marshal()
-	if err != nil {
-		t.Fatalf("marshal failed: %v", err)
-	}
-	decoded := &nativeFROSTRoundTwoSignatureShareMessage{}
-	if err := decoded.Unmarshal(data); err != nil {
-		t.Fatalf("unmarshal failed: %v", err)
-	}
-	got, present := decoded.GetAttemptContextHash()
-	if !present || got != pinnedAttemptContextHash {
-		t.Fatalf("round-trip lost hash: present=%v got=%x", present, got)
-	}
-}
-
-func TestRoundTwoSignatureShareMessage_BackwardCompatWithOldJSON(t *testing.T) {
-	oldJSON := []byte(`{
-		"senderID":2,
-		"sessionID":"session-2",
-		"participantIdentifier":"p2",
-		"signatureShareData":"qrs="
-	}`)
-
-	decoded := &nativeFROSTRoundTwoSignatureShareMessage{}
-	if err := decoded.Unmarshal(oldJSON); err != nil {
-		t.Fatalf("unmarshal of old-format JSON failed: %v", err)
-	}
-	if _, present := decoded.GetAttemptContextHash(); present {
-		t.Fatal("expected absent hash for old-format JSON")
-	}
-}
-
-func TestRoundTwoSignatureShareMessage_RejectsWrongLengthHashField(t *testing.T) {
-	badJSON := []byte(`{
-		"senderID":2,
-		"sessionID":"session-2",
-		"participantIdentifier":"p2",
-		"signatureShareData":"qrs=",
-		"attemptContextHash":"AAEC"
-	}`)
-
-	decoded := &nativeFROSTRoundTwoSignatureShareMessage{}
-	err := decoded.Unmarshal(badJSON)
-	if err == nil {
-		t.Fatal("expected wrong-length validation error")
-	}
-}
-
 func TestBuildTaggedTBTCSignerRoundContributionMessage_OptionalFieldRoundTrip(t *testing.T) {
 	withHash := &buildTaggedTBTCSignerRoundContributionMessage{
 		SenderIDValue:          3,
@@ -333,12 +184,12 @@ func TestBuildTaggedTBTCSignerRoundContributionMessagesEqual_HashFieldDifferenti
 	}
 }
 
-func TestRoundOneCommitmentMessage_JSONEncoderOmitsAbsentField(t *testing.T) {
-	original := &nativeFROSTRoundOneCommitmentMessage{
-		SenderIDValue:         1,
-		SessionIDValue:        "s",
-		ParticipantIdentifier: "p",
-		CommitmentData:        []byte{0xaa},
+func TestBuildTaggedTBTCSignerRoundContributionMessage_JSONEncoderOmitsAbsentField(t *testing.T) {
+	original := &buildTaggedTBTCSignerRoundContributionMessage{
+		SenderIDValue:          1,
+		SessionIDValue:         "s",
+		ContributionIdentifier: 1,
+		ContributionData:       []byte{0xaa},
 	}
 	data, err := json.Marshal(original)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
@@ -64,6 +65,15 @@ const buildTaggedTBTCSignerConsumedAttemptReplayErrorCode = "consumed_attempt_re
 // the minimum-supported signer version, this code can be retired.
 const buildTaggedTBTCSignerLegacyValidationErrorCode = "validation_error"
 
+var (
+	// ErrInvalidSigningAttemptPolicy indicates the provided attempt metadata
+	// violates coordinator/cohort policy invariants.
+	ErrInvalidSigningAttemptPolicy = errors.New("invalid signing attempt policy")
+	// ErrConsumedSigningAttemptReplay indicates signer-side replay protection
+	// rejected a previously consumed signing attempt payload.
+	ErrConsumedSigningAttemptReplay = errors.New("consumed signing attempt replay")
+)
+
 type nativeTBTCSignerVersionedEngine interface {
 	Version() (string, error)
 }
@@ -73,8 +83,8 @@ type buildTaggedTBTCSignerRoundContributionMessage struct {
 	SessionIDValue         string `json:"sessionID"`
 	ContributionIdentifier uint16 `json:"contributionIdentifier"`
 	ContributionData       []byte `json:"contributionData"`
-	// AttemptContextHash -- see nativeFROSTRoundOneCommitmentMessage
-	// for the RFC-21 Phase 1 migration contract.
+	// AttemptContextHash binds this contribution to an RFC-21 attempt
+	// context when ROAST retry has registered one for the session.
 	AttemptContextHash []byte `json:"attemptContextHash,omitempty"`
 }
 
@@ -480,6 +490,108 @@ func buildTaggedTBTCSignerRunDKGInputs(
 		request,
 		includedMembersIndexes,
 	)
+}
+
+func includedMembersFromRequest(
+	request *NativeExecutionFFISigningRequest,
+) (map[group.MemberIndex]struct{}, []group.MemberIndex, error) {
+	if request == nil {
+		return nil, nil, fmt.Errorf("request is nil")
+	}
+
+	if request.GroupSize <= 0 {
+		return nil, nil, fmt.Errorf("group size must be positive")
+	}
+
+	attempt := request.Attempt
+	if attempt != nil {
+		if attempt.Number == 0 {
+			return nil, nil, fmt.Errorf(
+				"%w: attempt number is zero",
+				ErrInvalidSigningAttemptPolicy,
+			)
+		}
+
+		if attempt.CoordinatorMemberIndex == 0 {
+			return nil, nil, fmt.Errorf(
+				"%w: attempt coordinator member index is zero",
+				ErrInvalidSigningAttemptPolicy,
+			)
+		}
+	}
+
+	includedMembersSet := make(map[group.MemberIndex]struct{})
+	excludedMembersSet := make(map[group.MemberIndex]struct{})
+
+	if attempt != nil {
+		for _, memberIndex := range attempt.ExcludedMembersIndexes {
+			if memberIndex == 0 {
+				continue
+			}
+
+			excludedMembersSet[memberIndex] = struct{}{}
+		}
+	}
+
+	if attempt != nil && len(attempt.IncludedMembersIndexes) > 0 {
+		for _, memberIndex := range attempt.IncludedMembersIndexes {
+			if memberIndex == 0 {
+				return nil, nil, fmt.Errorf(
+					"%w: included member index is zero",
+					ErrInvalidSigningAttemptPolicy,
+				)
+			}
+
+			if _, excluded := excludedMembersSet[memberIndex]; excluded {
+				return nil, nil, fmt.Errorf(
+					"%w: member [%v] is both included and excluded in attempt",
+					ErrInvalidSigningAttemptPolicy,
+					memberIndex,
+				)
+			}
+
+			includedMembersSet[memberIndex] = struct{}{}
+		}
+	} else {
+		for i := 1; i <= request.GroupSize; i++ {
+			memberIndex := group.MemberIndex(i)
+			if _, excluded := excludedMembersSet[memberIndex]; !excluded {
+				includedMembersSet[memberIndex] = struct{}{}
+			}
+		}
+	}
+
+	if len(includedMembersSet) == 0 {
+		if attempt != nil {
+			return nil, nil, fmt.Errorf(
+				"%w: included members set is empty",
+				ErrInvalidSigningAttemptPolicy,
+			)
+		}
+
+		return nil, nil, fmt.Errorf("included members set is empty")
+	}
+
+	if attempt != nil {
+		if _, included := includedMembersSet[attempt.CoordinatorMemberIndex]; !included {
+			return nil, nil, fmt.Errorf(
+				"%w: attempt coordinator [%v] is not included",
+				ErrInvalidSigningAttemptPolicy,
+				attempt.CoordinatorMemberIndex,
+			)
+		}
+	}
+
+	includedMembersIndexes := make([]group.MemberIndex, 0, len(includedMembersSet))
+	for memberIndex := range includedMembersSet {
+		includedMembersIndexes = append(includedMembersIndexes, memberIndex)
+	}
+
+	sort.Slice(includedMembersIndexes, func(i, j int) bool {
+		return includedMembersIndexes[i] < includedMembersIndexes[j]
+	})
+
+	return includedMembersSet, includedMembersIndexes, nil
 }
 
 func buildTaggedTBTCSignerRunDKGInputsForPayload(
@@ -1373,6 +1485,36 @@ func decodeBuildTaggedTBTCSignerKeyGroup(
 	}
 
 	return payload.KeyGroup, nil
+}
+
+func shouldAcceptNativeFROSTMessage(
+	request *NativeExecutionFFISigningRequest,
+	includedMembersSet map[group.MemberIndex]struct{},
+	senderID group.MemberIndex,
+	sessionID string,
+	senderPublicKey []byte,
+) bool {
+	if senderID == 0 {
+		return false
+	}
+
+	if senderID == request.MemberIndex {
+		return false
+	}
+
+	if sessionID != request.SessionID {
+		return false
+	}
+
+	if _, included := includedMembersSet[senderID]; !included {
+		return false
+	}
+
+	if request.MembershipValidator == nil {
+		return true
+	}
+
+	return request.MembershipValidator.IsValidMembership(senderID, senderPublicKey)
 }
 
 func decodeBuildTaggedTBTCSignerLegacyPrivateKeyShare(

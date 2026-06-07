@@ -56,7 +56,6 @@ func executeFrostDKGIfPossible(
 		return
 	}
 
-	frostsigning.RegisterNativeFROSTDKGUnmarshallers(channel)
 	registerFrostDKGResultSigningUnmarshaller(channel)
 	protocolannouncer.RegisterUnmarshaller(channel)
 
@@ -500,33 +499,6 @@ func announceFrostDKGReadiness(
 		nil
 }
 
-func registerFrostSigner(
-	node *node,
-	nativeResult *frostsigning.NativeFROSTDKGResult,
-	memberIndex group.MemberIndex,
-	activeMemberIndexes []group.MemberIndex,
-	groupSelectionResult *GroupSelectionResult,
-) error {
-	signerMaterial, err := nativeResult.SignerMaterial()
-	if err != nil {
-		return err
-	}
-
-	outputKey, err := outputKeyFromNativeDKGResult(nativeResult)
-	if err != nil {
-		return err
-	}
-
-	return registerFrostSignerWithMaterial(
-		node,
-		outputKey,
-		signerMaterial,
-		memberIndex,
-		activeMemberIndexes,
-		groupSelectionResult,
-	)
-}
-
 func registerFrostSignerWithMaterial(
 	node *node,
 	outputKey frost.OutputKey,
@@ -625,33 +597,6 @@ func submitFrostDKGResultWithDelay(
 	}
 
 	return frostChain.SubmitFrostDKGResult(result)
-}
-
-func outputKeyFromNativeDKGResult(
-	nativeResult *frostsigning.NativeFROSTDKGResult,
-) (frost.OutputKey, error) {
-	signerMaterial, err := nativeResult.SignerMaterial()
-	if err != nil {
-		return frost.OutputKey{}, err
-	}
-
-	outputKeyBytes, err := frostsigning.ExtractTaprootOutputKeyFromMaterial(
-		signerMaterial,
-	)
-	if err != nil {
-		return frost.OutputKey{}, err
-	}
-	if len(outputKeyBytes) != frost.OutputKeySize {
-		return frost.OutputKey{}, fmt.Errorf(
-			"unexpected FROST DKG output key length [%d]",
-			len(outputKeyBytes),
-		)
-	}
-
-	var outputKey frost.OutputKey
-	copy(outputKey[:], outputKeyBytes)
-
-	return outputKey, nil
 }
 
 func frostOutputKeyToECDSAPublicKey(

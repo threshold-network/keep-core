@@ -11,9 +11,9 @@ import (
 )
 
 func TestEnqueueOrRecordOverflow_EnqueuesWhenChannelHasRoom(t *testing.T) {
-	ch := make(chan *nativeFROSTRoundOneCommitmentMessage, 4)
+	ch := make(chan *buildTaggedTBTCSignerRoundContributionMessage, 4)
 	rec := attempt.NewBoundedRecorder()
-	payload := &nativeFROSTRoundOneCommitmentMessage{SenderIDValue: 1}
+	payload := &buildTaggedTBTCSignerRoundContributionMessage{SenderIDValue: 1}
 
 	if !enqueueOrRecordOverflow(payload, ch, rec) {
 		t.Fatal("enqueue should succeed when channel has room")
@@ -27,11 +27,11 @@ func TestEnqueueOrRecordOverflow_EnqueuesWhenChannelHasRoom(t *testing.T) {
 }
 
 func TestEnqueueOrRecordOverflow_RecordsOverflowWhenChannelIsFull(t *testing.T) {
-	ch := make(chan *nativeFROSTRoundOneCommitmentMessage, 1)
-	ch <- &nativeFROSTRoundOneCommitmentMessage{SenderIDValue: 99} // fill it
+	ch := make(chan *buildTaggedTBTCSignerRoundContributionMessage, 1)
+	ch <- &buildTaggedTBTCSignerRoundContributionMessage{SenderIDValue: 99} // fill it
 	rec := attempt.NewBoundedRecorder()
 
-	payload := &nativeFROSTRoundOneCommitmentMessage{SenderIDValue: 7}
+	payload := &buildTaggedTBTCSignerRoundContributionMessage{SenderIDValue: 7}
 	if enqueueOrRecordOverflow(payload, ch, rec) {
 		t.Fatal("enqueue should fail when channel is full")
 	}
@@ -49,11 +49,11 @@ func TestEnqueueOrRecordOverflow_RecordsOverflowWhenChannelIsFull(t *testing.T) 
 }
 
 func TestEnqueueOrRecordOverflow_NoOpRecorderHasNoObservableEffect(t *testing.T) {
-	ch := make(chan *nativeFROSTRoundOneCommitmentMessage, 1)
-	ch <- &nativeFROSTRoundOneCommitmentMessage{SenderIDValue: 1}
+	ch := make(chan *buildTaggedTBTCSignerRoundContributionMessage, 1)
+	ch <- &buildTaggedTBTCSignerRoundContributionMessage{SenderIDValue: 1}
 	rec := attempt.NoOpRecorder()
 
-	payload := &nativeFROSTRoundOneCommitmentMessage{SenderIDValue: 7}
+	payload := &buildTaggedTBTCSignerRoundContributionMessage{SenderIDValue: 7}
 	if enqueueOrRecordOverflow(payload, ch, rec) {
 		t.Fatal("enqueue should fail when channel is full")
 	}
@@ -65,42 +65,14 @@ func TestEnqueueOrRecordOverflow_NoOpRecorderHasNoObservableEffect(t *testing.T)
 	}
 }
 
-func TestEnqueueOrRecordOverflow_WorksForRoundTwoMessages(t *testing.T) {
-	ch := make(chan *nativeFROSTRoundTwoSignatureShareMessage, 1)
-	ch <- &nativeFROSTRoundTwoSignatureShareMessage{SenderIDValue: 1}
-	rec := attempt.NewBoundedRecorder()
-
-	payload := &nativeFROSTRoundTwoSignatureShareMessage{SenderIDValue: 4}
-	if enqueueOrRecordOverflow(payload, ch, rec) {
-		t.Fatal("enqueue should fail when channel is full")
-	}
-	if got := rec.Snapshot().Overflows[4]; got != 1 {
-		t.Fatalf("expected overflow count 1 for sender 4, got %d", got)
-	}
-}
-
-func TestEnqueueOrRecordOverflow_WorksForTBTCSignerContributionMessages(t *testing.T) {
+func TestEnqueueOrRecordOverflow_RepeatedOverflowsSaturateAtQuota(t *testing.T) {
 	ch := make(chan *buildTaggedTBTCSignerRoundContributionMessage, 1)
 	ch <- &buildTaggedTBTCSignerRoundContributionMessage{SenderIDValue: 1}
-	rec := attempt.NewBoundedRecorder()
-
-	payload := &buildTaggedTBTCSignerRoundContributionMessage{SenderIDValue: 5}
-	if enqueueOrRecordOverflow(payload, ch, rec) {
-		t.Fatal("enqueue should fail when channel is full")
-	}
-	if got := rec.Snapshot().Overflows[5]; got != 1 {
-		t.Fatalf("expected overflow count 1 for sender 5, got %d", got)
-	}
-}
-
-func TestEnqueueOrRecordOverflow_RepeatedOverflowsSaturateAtQuota(t *testing.T) {
-	ch := make(chan *nativeFROSTRoundOneCommitmentMessage, 1)
-	ch <- &nativeFROSTRoundOneCommitmentMessage{SenderIDValue: 1}
 	rec := attempt.NewBoundedRecorderWithQuota(3)
 
 	for i := 0; i < 10; i++ {
 		_ = enqueueOrRecordOverflow(
-			&nativeFROSTRoundOneCommitmentMessage{SenderIDValue: 2},
+			&buildTaggedTBTCSignerRoundContributionMessage{SenderIDValue: 2},
 			ch,
 			rec,
 		)
@@ -113,8 +85,8 @@ func TestEnqueueOrRecordOverflow_RepeatedOverflowsSaturateAtQuota(t *testing.T) 
 func TestEnqueueOrRecordOverflow_ConcurrentCallersAreRaceSafe(t *testing.T) {
 	const numProducers = 8
 	const recordsPerProducer = 100
-	ch := make(chan *nativeFROSTRoundOneCommitmentMessage, 1)
-	ch <- &nativeFROSTRoundOneCommitmentMessage{SenderIDValue: 1} // fill it once
+	ch := make(chan *buildTaggedTBTCSignerRoundContributionMessage, 1)
+	ch <- &buildTaggedTBTCSignerRoundContributionMessage{SenderIDValue: 1} // fill it once
 	rec := attempt.NewBoundedRecorderWithQuota(uint(numProducers * recordsPerProducer))
 
 	var wg sync.WaitGroup
@@ -125,7 +97,7 @@ func TestEnqueueOrRecordOverflow_ConcurrentCallersAreRaceSafe(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < recordsPerProducer; i++ {
 				_ = enqueueOrRecordOverflow(
-					&nativeFROSTRoundOneCommitmentMessage{SenderIDValue: uint32(sender)},
+					&buildTaggedTBTCSignerRoundContributionMessage{SenderIDValue: uint32(sender)},
 					ch,
 					rec,
 				)
