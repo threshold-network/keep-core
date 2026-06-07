@@ -428,23 +428,12 @@ const buildTaggedTBTCSignerUnavailableStatusCode = -1
 func registerBuildTaggedNativeFROSTSigningEngine() error {
 	engine := &buildTaggedTBTCSignerEngine{}
 
-	if err := RegisterNativeTBTCSignerEngine(engine); err != nil {
-		return err
-	}
-
-	dkgEngine, err := newUniFFINativeFROSTDKGEngine(engine)
-	if err != nil {
-		return err
-	}
-	if err := RegisterNativeFROSTDKGEngine(dkgEngine); err != nil {
-		return err
-	}
-
-	signingEngine, err := newUniFFINativeFROSTSigningEngine(engine)
-	if err != nil {
-		return err
-	}
-	return RegisterNativeFROSTSigningEngine(signingEngine)
+	// Do not register the tbtc-signer bridge as the generic UniFFI-shaped
+	// FROST DKG/signing engine. That path persists `frost-uniffi-v2` wallet
+	// material, which cannot produce Taproot-tweaked signatures required for
+	// Taproot deposit sweeps. New FROST wallets in this build must use the
+	// coarse `frost-tbtc-signer-v1` material path exclusively.
+	return RegisterNativeTBTCSignerEngine(engine)
 }
 
 func (bttse *buildTaggedTBTCSignerEngine) Version() (string, error) {

@@ -246,6 +246,16 @@ func executeFrostDKG(
 	channel net.BroadcastChannel,
 	membershipValidator *group.MembershipValidator,
 ) (*frostDKGExecutionResult, error) {
+	if nativeTBTCSignerEngine != nil {
+		return executeTBTCSignerFROSTDKG(
+			nativeTBTCSignerEngine,
+			event,
+			activeMemberIndexes,
+			signatureThreshold,
+			sessionID,
+		)
+	}
+
 	if nativeFROSTDKGEngine != nil {
 		nativeResult, err := frostsigning.ExecuteNativeFROSTDKG(
 			ctx,
@@ -281,13 +291,7 @@ func executeFrostDKG(
 		}, nil
 	}
 
-	return executeTBTCSignerFROSTDKG(
-		nativeTBTCSignerEngine,
-		event,
-		activeMemberIndexes,
-		signatureThreshold,
-		sessionID,
-	)
+	return nil, fmt.Errorf("native FROST DKG engine is unavailable")
 }
 
 func executeTBTCSignerFROSTDKG(
