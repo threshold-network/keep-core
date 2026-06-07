@@ -90,7 +90,7 @@ func (dnefspf *deterministicNativeExecutionFFISigningPrimitiveForTBTC) Sign(
 		return nil, fmt.Errorf("native signer material is nil")
 	}
 
-	if nativeSignerMaterial.Format != frostsigning.NativeSignerMaterialFormatFrostUniFFIV2 {
+	if nativeSignerMaterial.Format != frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1 {
 		return nil, fmt.Errorf(
 			"unexpected signer material format: [%s]",
 			nativeSignerMaterial.Format,
@@ -459,7 +459,7 @@ func TestSigningExecutor_Sign_FFIStrictBackend_WithNativeSignerMaterial(
 	t *testing.T,
 ) {
 	executor := setupSigningExecutor(t)
-	configureSignersWithNativeFROSTUniFFIV2Material(t, executor)
+	configureSignersWithTBTCSignerMaterial(t, executor, 0)
 
 	primitive := &deterministicNativeExecutionFFISigningPrimitiveForTBTC{}
 
@@ -601,7 +601,7 @@ func TestSigningExecutor_Sign_FFIStrictBackend_AttemptVariationChangesCohortSele
 	t *testing.T,
 ) {
 	executor := setupSigningExecutor(t)
-	configureSignersWithNativeFROSTUniFFIV2Material(t, executor)
+	configureSignersWithTBTCSignerMaterial(t, executor, 0)
 
 	primitive := &attemptTrackingNativeExecutionFFISigningPrimitiveForTBTC{}
 
@@ -851,43 +851,6 @@ func TestSigningExecutor_Sign_FFIStrictBackend_TBTCSignerPath_AttemptVariationCh
 
 	if endBlock <= startBlock {
 		t.Fatal("wrong end block")
-	}
-}
-
-func configureSignersWithNativeFROSTUniFFIV2Material(
-	t *testing.T,
-	executor *signingExecutor,
-) {
-	t.Helper()
-
-	publicKeyPackage := &frostsigning.NativeFROSTPublicKeyPackage{
-		VerifyingShares: map[string]string{
-			"1": "share-1",
-		},
-		VerifyingKey: "group-verifying-key",
-	}
-
-	for _, signer := range executor.signers {
-		keyPackage := &frostsigning.NativeFROSTKeyPackage{
-			Identifier: strconv.FormatUint(uint64(signer.signingGroupMemberIndex), 10),
-			Data:       []byte{byte(signer.signingGroupMemberIndex)},
-		}
-
-		payload, err := json.Marshal(struct {
-			KeyPackage       *frostsigning.NativeFROSTKeyPackage       `json:"keyPackage"`
-			PublicKeyPackage *frostsigning.NativeFROSTPublicKeyPackage `json:"publicKeyPackage"`
-		}{
-			KeyPackage:       keyPackage,
-			PublicKeyPackage: publicKeyPackage,
-		})
-		if err != nil {
-			t.Fatalf("cannot marshal native signer material payload: [%v]", err)
-		}
-
-		signer.signerMaterial = &frostsigning.NativeSignerMaterial{
-			Format:  frostsigning.NativeSignerMaterialFormatFrostUniFFIV2,
-			Payload: payload,
-		}
 	}
 }
 

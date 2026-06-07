@@ -2,10 +2,7 @@
 
 package signing
 
-import (
-	"encoding/json"
-	"fmt"
-)
+import "fmt"
 
 // NativeFROSTDKGRound1Package is the public package broadcast during FROST DKG
 // round one.
@@ -58,30 +55,19 @@ type NativeFROSTDKGResult struct {
 	PublicKeyPackage *NativeFROSTPublicKeyPackage `json:"publicKeyPackage"`
 }
 
-// SignerMaterial converts the DKG output into the existing FrostUniFFIV2
-// signer-material envelope used by native FROST signing.
+// SignerMaterial rejects the unsupported generic UniFFI FROST DKG output.
+// FROST wallet material must be persisted through the tbtc-signer engine so
+// Taproot tweaked signing is available for deposit sweeps.
 func (nfdkg *NativeFROSTDKGResult) SignerMaterial() (*NativeSignerMaterial, error) {
 	if nfdkg == nil {
 		return nil, fmt.Errorf("native FROST DKG result is nil")
 	}
 
-	material := &nativeFROSTUniFFIV2SignerMaterial{
-		KeyPackage:       nfdkg.KeyPackage,
-		PublicKeyPackage: nfdkg.PublicKeyPackage,
-	}
-	if err := material.validate(); err != nil {
-		return nil, err
-	}
-
-	payload, err := json.Marshal(material)
-	if err != nil {
-		return nil, fmt.Errorf("cannot marshal native FROST DKG signer material: [%w]", err)
-	}
-
-	return &NativeSignerMaterial{
-		Format:  NativeSignerMaterialFormatFrostUniFFIV2,
-		Payload: payload,
-	}, nil
+	return nil, fmt.Errorf(
+		"native FROST DKG result cannot be persisted as unsupported [%s] signer material; use [%s]",
+		NativeSignerMaterialFormatFrostUniFFIV2,
+		NativeSignerMaterialFormatFrostTBTCSignerV1,
+	)
 }
 
 // NativeFROSTDKGEngine executes the cryptographic primitives for the three

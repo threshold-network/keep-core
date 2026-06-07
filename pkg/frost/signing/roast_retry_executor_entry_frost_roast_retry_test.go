@@ -16,22 +16,15 @@ import (
 
 func newEntryRetryTestRequest(t *testing.T) *NativeExecutionFFISigningRequest {
 	t.Helper()
-	const hexKey = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
-	payload, _ := json.Marshal(&nativeFROSTUniFFIV2SignerMaterial{
-		KeyPackage: &NativeFROSTKeyPackage{
-			Identifier: "id",
-			Data:       []byte{0x01},
-		},
-		PublicKeyPackage: &NativeFROSTPublicKeyPackage{
-			VerifyingKey: hexKey,
-		},
+	payload, _ := json.Marshal(&NativeTBTCSignerMaterialPayload{
+		KeyGroup: "tbtc-signer-entry-retry-group",
 	})
 	return &NativeExecutionFFISigningRequest{
 		Message:     new(big.Int).SetBytes([]byte{0xab, 0xcd}),
 		SessionID:   "executor-entry-retry-test",
 		MemberIndex: 1,
 		SignerMaterial: &NativeSignerMaterial{
-			Format:  NativeSignerMaterialFormatFrostUniFFIV2,
+			Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
 			Payload: payload,
 		},
 		Attempt: &Attempt{

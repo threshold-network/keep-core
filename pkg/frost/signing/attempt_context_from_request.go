@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
 )
 
@@ -35,13 +34,8 @@ var ErrAttemptContextConstruction = errors.New(
 //     the tagged payload, so padding is a no-op.
 //   - DkgGroupPublicKey is extracted via
 //     ExtractDkgGroupPublicKeyFromMaterial.
-//   - KeyGroupID is derived format-aware:
-//     FrostUniFFIV2: HASH160(0x02 || xOnlyOutputKey) -- matches
-//     RFC-20's compatibility-alias scheme for legacy
-//     20-byte wallet key hashes.
-//     FrostTBTCSignerV1: the raw KeyGroup string identifier from
-//     the tbtc-signer material, which is already a canonical
-//     per-group handle.
+//   - KeyGroupID is derived from the raw FrostTBTCSignerV1 KeyGroup string
+//     identifier, which is already a canonical per-group handle.
 //   - AttemptSeed = SHA256(DkgGroupPublicKey || SessionID ||
 //     MessageDigest) per RFC-21 Decision 2.
 //
@@ -55,7 +49,7 @@ var ErrAttemptContextConstruction = errors.New(
 // Returns ErrAttemptContextConstruction-wrapped errors for any
 // failure during the construction. Returns ErrUnsupportedSignerMaterialFormat
 // (via errors.Is) when the material's format is not extractable
-// (e.g. FrostUniFFIV1 today).
+// (e.g. FrostUniFFIV1 or unsupported FrostUniFFIV2 today).
 func BuildAttemptContextFromRequest(
 	request *NativeExecutionFFISigningRequest,
 ) (attempt.AttemptContext, error) {
@@ -151,11 +145,6 @@ func BuildAttemptContextFromRequest(
 // from the signer material plus the already-extracted DKG group
 // public key. The derivation is format-aware:
 //
-//   - FrostUniFFIV2: HASH160(0x02 || dkgPub) -- the compressed
-//     33-byte form prefixed with 0x02 matches the legacy
-//     compatibility-alias scheme RFC-20 introduced for 20-byte
-//     wallet pub-key-hashes. dkgPub here is the 32-byte x-only
-//     output key.
 //   - FrostTBTCSignerV1: the raw KeyGroup string from the tbtc-
 //     signer material. That string is the canonical handle.
 //
@@ -168,18 +157,6 @@ func deriveKeyGroupID(
 	dkgPub []byte,
 ) (string, error) {
 	switch signerMaterial.Format {
-	case NativeSignerMaterialFormatFrostUniFFIV2:
-		if len(dkgPub) != frost.OutputKeySize {
-			return "", fmt.Errorf(
-				"derive key group id: FrostUniFFIV2 x-only key length %d, expected %d",
-				len(dkgPub),
-				frost.OutputKeySize,
-			)
-		}
-		var outputKey frost.OutputKey
-		copy(outputKey[:], dkgPub)
-		alias := frost.WalletPublicKeyHashCompatibilityAlias(outputKey)
-		return fmt.Sprintf("%x", alias[:]), nil
 	case NativeSignerMaterialFormatFrostTBTCSignerV1:
 		payload, err := decodeBuildTaggedTBTCSignerMaterialPayload(signerMaterial)
 		if err != nil {

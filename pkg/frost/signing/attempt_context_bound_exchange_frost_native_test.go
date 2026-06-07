@@ -4,7 +4,6 @@ package signing
 
 import (
 	"context"
-	"fmt"
 	"math/big"
 	"sync"
 	"testing"
@@ -40,80 +39,6 @@ func bindAttemptContextHashForExchangeTest(
 	}
 
 	SetCurrentAttemptHandleForSession(sessionID, roast.AttemptHandle{}, ctx)
-}
-
-func TestNativeFROSTSigning_BoundAttemptContextHashExchange(t *testing.T) {
-	ResetSessionHandleRegistryForTest()
-	t.Cleanup(ResetSessionHandleRegistryForTest)
-
-	RegisterNativeFROSTSigningEngine(&deterministicNativeFROSTSigningEngine{})
-	t.Cleanup(UnregisterNativeFROSTSigningEngine)
-
-	provider := local.Connect()
-	channel, err := provider.BroadcastChannelFor(
-		"native-frost-signing-bound-attempt-context-test",
-	)
-	if err != nil {
-		t.Fatalf("failed creating broadcast channel: [%v]", err)
-	}
-
-	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
-	primitive.RegisterUnmarshallers(channel)
-
-	sessionID := "native-frost-bound-attempt-context"
-	includedMembers := []group.MemberIndex{1, 2, 3}
-	bindAttemptContextHashForExchangeTest(t, sessionID, includedMembers)
-
-	requests := make([]*NativeExecutionFFISigningRequest, len(includedMembers))
-	for i, memberIndex := range includedMembers {
-		requests[i], err = newNativeFROSTSigningRequestWithSessionForTest(
-			memberIndex,
-			includedMembers,
-			channel,
-			len(includedMembers),
-			sessionID,
-		)
-		if err != nil {
-			t.Fatalf(
-				"failed preparing request for member [%v]: [%v]",
-				memberIndex,
-				err,
-			)
-		}
-	}
-
-	ctx, cancelCtx := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelCtx()
-
-	signingErrors := make(chan error, len(requests))
-	var wg sync.WaitGroup
-	wg.Add(len(requests))
-
-	for _, request := range requests {
-		go func(signingRequest *NativeExecutionFFISigningRequest) {
-			defer wg.Done()
-
-			signature, signErr := primitive.Sign(ctx, nil, signingRequest)
-			if signErr != nil {
-				signingErrors <- signErr
-				return
-			}
-			if signature == nil {
-				signingErrors <- fmt.Errorf("nil signature")
-				return
-			}
-			signingErrors <- nil
-		}(request)
-	}
-
-	wg.Wait()
-	close(signingErrors)
-
-	for signErr := range signingErrors {
-		if signErr != nil {
-			t.Fatalf("unexpected signing error: [%v]", signErr)
-		}
-	}
 }
 
 func TestBuildTaggedTBTCSignerBootstrapCoarseRound_BoundAttemptContextHashExchange(

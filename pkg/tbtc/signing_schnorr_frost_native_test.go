@@ -50,7 +50,7 @@ func TestSigningMaterialUsesSchnorrSignatures_FrostNative(t *testing.T) {
 			},
 			expectSchnorr: false,
 		},
-		"native frost material": {
+		"unsupported uniffi frost material": {
 			material: &frostsigning.NativeSignerMaterial{
 				Format:  frostsigning.NativeSignerMaterialFormatFrostUniFFIV2,
 				Payload: []byte{0x01},

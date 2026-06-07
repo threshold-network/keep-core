@@ -359,6 +359,36 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_Vali
 	}
 }
 
+func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_RejectsUnsupportedUniFFIV2Material(
+	t *testing.T,
+) {
+	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
+
+	_, err := primitive.Sign(nil, nil, &NativeExecutionFFISigningRequest{
+		Message: big.NewInt(123),
+		SignerMaterial: &NativeSignerMaterial{
+			Format:  NativeSignerMaterialFormatFrostUniFFIV2,
+			Payload: []byte{0x01},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected unsupported material error")
+	}
+	if !errors.Is(err, ErrUnsupportedSignerMaterialFormat) {
+		t.Fatalf(
+			"unexpected error\nexpected: [%v]\nactual:   [%v]",
+			ErrUnsupportedSignerMaterialFormat,
+			err,
+		)
+	}
+	if errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Fatalf(
+			"unsupported signer material should not be reported as unavailable native cryptography: [%v]",
+			err,
+		)
+	}
+}
+
 func TestDecodeBuildTaggedLegacyPrivateKeyShare(t *testing.T) {
 	fixtures, err := tecdsatest.LoadPrivateKeyShareTestFixtures(5)
 	if err != nil {

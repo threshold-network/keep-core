@@ -11,12 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
-func newTestRequestWithUniFFIV2Material(t *testing.T, attemptNumber uint) *NativeExecutionFFISigningRequest {
+func newTestRequestWithUnsupportedUniFFIV2Material(t *testing.T, attemptNumber uint) *NativeExecutionFFISigningRequest {
 	t.Helper()
 	const hexKey = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
 	payload, _ := json.Marshal(&nativeFROSTUniFFIV2SignerMaterial{
@@ -67,48 +66,6 @@ func newTestRequestWithTBTCSignerV1Material(t *testing.T, attemptNumber uint) *N
 	}
 }
 
-func TestBuildAttemptContextFromRequest_UniFFIV2_HappyPath(t *testing.T) {
-	req := newTestRequestWithUniFFIV2Material(t, 1)
-	ctx, err := BuildAttemptContextFromRequest(req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ctx.SessionID != req.SessionID {
-		t.Fatalf("session id: got %q want %q", ctx.SessionID, req.SessionID)
-	}
-	if ctx.AttemptNumber != 0 {
-		t.Fatalf("attempt number: got %d, want 0 (Attempt.Number=1 maps to 0-based 0)", ctx.AttemptNumber)
-	}
-	if len(ctx.IncludedSet) != 5 {
-		t.Fatalf("included set: got %d, want 5", len(ctx.IncludedSet))
-	}
-	if len(ctx.TransientlyParked) != 0 {
-		t.Fatalf("parked: got %d, want 0 (Phase 6 ships attempt-zero shape)", len(ctx.TransientlyParked))
-	}
-}
-
-func TestBuildAttemptContextFromRequest_UniFFIV2_KeyGroupIDDerivation(t *testing.T) {
-	req := newTestRequestWithUniFFIV2Material(t, 1)
-	ctx, err := BuildAttemptContextFromRequest(req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// Reproduce the expected derivation: HASH160(0x02 || dkgPub).
-	dkgPub, _ := ExtractDkgGroupPublicKeyFromMaterial(req.SignerMaterial)
-	var outputKey frost.OutputKey
-	copy(outputKey[:], dkgPub)
-	want := fmt.Sprintf("%x", frost.WalletPublicKeyHashCompatibilityAlias(outputKey))
-	if ctx.KeyGroupID != want {
-		t.Fatalf(
-			"key group id: got %s, want %s",
-			ctx.KeyGroupID, want,
-		)
-	}
-	if len(ctx.KeyGroupID) != 40 {
-		t.Fatalf("key group id hex length: got %d, want 40 (20 bytes)", len(ctx.KeyGroupID))
-	}
-}
-
 func TestBuildAttemptContextFromRequest_TBTCSignerV1_KeyGroupIDIsRawIdentifier(t *testing.T) {
 	req := newTestRequestWithTBTCSignerV1Material(t, 1)
 	ctx, err := BuildAttemptContextFromRequest(req)
@@ -124,6 +81,17 @@ func TestBuildAttemptContextFromRequest_TBTCSignerV1_KeyGroupIDIsRawIdentifier(t
 	}
 }
 
+func TestBuildAttemptContextFromRequest_UnsupportedUniFFIV2Rejected(t *testing.T) {
+	req := newTestRequestWithUnsupportedUniFFIV2Material(t, 1)
+	_, err := BuildAttemptContextFromRequest(req)
+	if !errors.Is(err, ErrUnsupportedSignerMaterialFormat) {
+		t.Fatalf("expected ErrUnsupportedSignerMaterialFormat, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("error should mention unsupported format; got %v", err)
+	}
+}
+
 func TestBuildAttemptContextFromRequest_RejectsNilRequest(t *testing.T) {
 	_, err := BuildAttemptContextFromRequest(nil)
 	if !errors.Is(err, ErrAttemptContextConstruction) {
@@ -132,7 +100,7 @@ func TestBuildAttemptContextFromRequest_RejectsNilRequest(t *testing.T) {
 }
 
 func TestBuildAttemptContextFromRequest_RejectsNilMessage(t *testing.T) {
-	req := newTestRequestWithUniFFIV2Material(t, 1)
+	req := newTestRequestWithTBTCSignerV1Material(t, 1)
 	req.Message = nil
 	_, err := BuildAttemptContextFromRequest(req)
 	if err == nil {
@@ -144,7 +112,7 @@ func TestBuildAttemptContextFromRequest_RejectsNilMessage(t *testing.T) {
 }
 
 func TestBuildAttemptContextFromRequest_RejectsNilSignerMaterial(t *testing.T) {
-	req := newTestRequestWithUniFFIV2Material(t, 1)
+	req := newTestRequestWithTBTCSignerV1Material(t, 1)
 	req.SignerMaterial = nil
 	_, err := BuildAttemptContextFromRequest(req)
 	if err == nil {
@@ -156,7 +124,7 @@ func TestBuildAttemptContextFromRequest_RejectsNilSignerMaterial(t *testing.T) {
 }
 
 func TestBuildAttemptContextFromRequest_RejectsNilAttempt(t *testing.T) {
-	req := newTestRequestWithUniFFIV2Material(t, 1)
+	req := newTestRequestWithTBTCSignerV1Material(t, 1)
 	req.Attempt = nil
 	_, err := BuildAttemptContextFromRequest(req)
 	if err == nil {
@@ -165,7 +133,7 @@ func TestBuildAttemptContextFromRequest_RejectsNilAttempt(t *testing.T) {
 }
 
 func TestBuildAttemptContextFromRequest_RejectsZeroAttemptNumber(t *testing.T) {
-	req := newTestRequestWithUniFFIV2Material(t, 0)
+	req := newTestRequestWithTBTCSignerV1Material(t, 0)
 	_, err := BuildAttemptContextFromRequest(req)
 	if err == nil {
 		t.Fatal("expected error for zero attempt number")
@@ -176,7 +144,7 @@ func TestBuildAttemptContextFromRequest_RejectsZeroAttemptNumber(t *testing.T) {
 }
 
 func TestBuildAttemptContextFromRequest_PropagatesExtractionErrors(t *testing.T) {
-	req := newTestRequestWithUniFFIV2Material(t, 1)
+	req := newTestRequestWithTBTCSignerV1Material(t, 1)
 	req.SignerMaterial = &NativeSignerMaterial{
 		Format:  NativeSignerMaterialFormatFrostUniFFIV1,
 		Payload: []byte("{}"),
@@ -201,7 +169,7 @@ func TestBuildAttemptContextFromRequest_AttemptNumberIsZeroBased(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(fmt.Sprintf("legacy=%d", tc.legacyNumber), func(t *testing.T) {
-			req := newTestRequestWithUniFFIV2Material(t, tc.legacyNumber)
+			req := newTestRequestWithTBTCSignerV1Material(t, tc.legacyNumber)
 			ctx, err := BuildAttemptContextFromRequest(req)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -240,7 +208,7 @@ func TestMessageDigestFromBigInt_RejectsLongBigInts(t *testing.T) {
 }
 
 func TestBuildAttemptContextFromRequest_DeterministicAcrossInvocations(t *testing.T) {
-	req := newTestRequestWithUniFFIV2Material(t, 1)
+	req := newTestRequestWithTBTCSignerV1Material(t, 1)
 	a, err := BuildAttemptContextFromRequest(req)
 	if err != nil {
 		t.Fatalf("first: %v", err)
@@ -258,7 +226,7 @@ func TestBuildAttemptContextFromRequest_DeterministicAcrossInvocations(t *testin
 }
 
 func TestBuildAttemptContextFromRequest_HashChangesWhenMessageDigestChanges(t *testing.T) {
-	req := newTestRequestWithUniFFIV2Material(t, 1)
+	req := newTestRequestWithTBTCSignerV1Material(t, 1)
 	a, _ := BuildAttemptContextFromRequest(req)
 	req.Message = new(big.Int).SetBytes([]byte{0x99, 0x88, 0x77})
 	b, _ := BuildAttemptContextFromRequest(req)
@@ -268,9 +236,9 @@ func TestBuildAttemptContextFromRequest_HashChangesWhenMessageDigestChanges(t *t
 }
 
 func TestBuildAttemptContextFromRequest_HashChangesWhenIncludedSetChanges(t *testing.T) {
-	req := newTestRequestWithUniFFIV2Material(t, 1)
+	req := newTestRequestWithTBTCSignerV1Material(t, 1)
 	a, _ := BuildAttemptContextFromRequest(req)
-	req.Attempt.IncludedMembersIndexes = []group.MemberIndex{1, 2, 3}
+	req.Attempt.IncludedMembersIndexes = []group.MemberIndex{1, 2, 4}
 	b, _ := BuildAttemptContextFromRequest(req)
 	if a.Hash() == b.Hash() {
 		t.Fatal("hash must change when included set changes")

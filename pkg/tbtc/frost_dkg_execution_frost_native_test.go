@@ -4,12 +4,14 @@ package tbtc
 
 import (
 	"bytes"
-	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 
+	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/frost/registry"
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
@@ -103,23 +105,15 @@ func TestOutputKeyFromTBTCSignerDKGResult_AcceptsCompressedKeyGroup(
 	}
 }
 
-func TestExecuteFrostDKG_PrefersTBTCSignerMaterial(t *testing.T) {
+func TestExecuteFrostDKG_UsesTBTCSignerMaterial(t *testing.T) {
 	tbtcSignerEngine := &testNativeTBTCSignerSeededDKGEngine{}
-	uniffiEngine := &testNativeFROSTDKGEngine{}
 
 	result, err := executeFrostDKG(
-		context.Background(),
-		nil,
-		uniffiEngine,
 		tbtcSignerEngine,
 		&FrostDKGStartedEvent{Seed: big.NewInt(0x1234)},
-		1,
 		[]group.MemberIndex{1, 2, 3},
-		&GroupSelectionResult{},
 		2,
 		"test-session",
-		nil,
-		nil,
 	)
 	if err != nil {
 		t.Fatalf("unexpected DKG error: [%v]", err)
@@ -128,12 +122,14 @@ func TestExecuteFrostDKG_PrefersTBTCSignerMaterial(t *testing.T) {
 	if !tbtcSignerEngine.runDKGWithSeedCalled {
 		t.Fatal("expected tbtc-signer DKG engine to be used")
 	}
-	if uniffiEngine.called {
-		t.Fatal("did not expect UniFFI native FROST DKG engine to be used")
-	}
 	if result.signerMaterial == nil {
 		t.Fatal("expected signer material")
 	}
+	assertTBTCSignerDKGParticipantIdentifiers(
+		t,
+		tbtcSignerEngine.runDKGWithSeedParticipants,
+		[]uint16{1, 2, 3},
+	)
 	if result.signerMaterial.Format !=
 		frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1 {
 		t.Fatalf(
@@ -142,10 +138,94 @@ func TestExecuteFrostDKG_PrefersTBTCSignerMaterial(t *testing.T) {
 			result.signerMaterial.Format,
 		)
 	}
+
+	var payload frostsigning.NativeTBTCSignerMaterialPayload
+	if err := json.Unmarshal(result.signerMaterial.Payload, &payload); err != nil {
+		t.Fatalf("unexpected signer material payload decode error: [%v]", err)
+	}
+	assertTBTCSignerDKGParticipantIdentifiers(
+		t,
+		payload.DKGParticipants,
+		[]uint16{1, 2, 3},
+	)
+}
+
+func TestFinalFrostDKGMemberIndexes_NormalizesToFinalSigningGroupIndexes(
+	t *testing.T,
+) {
+	activeMemberIndexes := []group.MemberIndex{5, 2, 4}
+
+	actual, err := finalFrostDKGMemberIndexes(
+		activeMemberIndexes,
+		&GroupSelectionResult{
+			OperatorsAddresses: chain.Addresses{
+				"0xAA",
+				"0xBB",
+				"0xCC",
+				"0xDD",
+				"0xEE",
+			},
+		},
+		&GroupParameters{
+			GroupSize:       5,
+			GroupQuorum:     3,
+			HonestThreshold: 2,
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected final member index error: [%v]", err)
+	}
+
+	expected := []group.MemberIndex{1, 2, 3}
+	if len(actual) != len(expected) {
+		t.Fatalf(
+			"unexpected final member indexes count\nexpected: [%d]\nactual:   [%d]",
+			len(expected),
+			len(actual),
+		)
+	}
+	for i := range expected {
+		if actual[i] != expected[i] {
+			t.Fatalf(
+				"unexpected final member index at [%d]\nexpected: [%d]\nactual:   [%d]",
+				i,
+				expected[i],
+				actual[i],
+			)
+		}
+	}
+
+	expectedActive := []group.MemberIndex{5, 2, 4}
+	for i := range expectedActive {
+		if activeMemberIndexes[i] != expectedActive[i] {
+			t.Fatalf(
+				"active member indexes should not be mutated\nexpected: [%v]\nactual:   [%v]",
+				expectedActive,
+				activeMemberIndexes,
+			)
+		}
+	}
+}
+
+func TestExecuteFrostDKG_RequiresTBTCSignerMaterial(t *testing.T) {
+	_, err := executeFrostDKG(
+		nil,
+		&FrostDKGStartedEvent{Seed: big.NewInt(0x1234)},
+		[]group.MemberIndex{1, 2, 3},
+		2,
+		"test-session",
+	)
+	if err == nil {
+		t.Fatal("expected missing tbtc-signer engine error")
+	}
+	if !strings.Contains(err.Error(), "native tbtc-signer engine is unavailable") {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
 }
 
 type testNativeTBTCSignerSeededDKGEngine struct {
-	runDKGWithSeedCalled bool
+	runDKGWithSeedCalled       bool
+	runDKGWithSeedParticipants []frostsigning.NativeTBTCSignerDKGParticipant
 }
 
 func (tntsde *testNativeTBTCSignerSeededDKGEngine) RunDKG(
@@ -163,6 +243,10 @@ func (tntsde *testNativeTBTCSignerSeededDKGEngine) RunDKGWithSeed(
 	dkgSeedHex string,
 ) (*frostsigning.NativeTBTCSignerDKGResult, error) {
 	tntsde.runDKGWithSeedCalled = true
+	tntsde.runDKGWithSeedParticipants = append(
+		[]frostsigning.NativeTBTCSignerDKGParticipant{},
+		participants...,
+	)
 
 	if sessionID != "test-session" {
 		return nil, fmt.Errorf("unexpected session ID: [%s]", sessionID)
@@ -214,32 +298,29 @@ func (tntsde *testNativeTBTCSignerSeededDKGEngine) BuildTaprootTx(
 	return nil, fmt.Errorf("BuildTaprootTx should not be used")
 }
 
-type testNativeFROSTDKGEngine struct {
-	called bool
-}
+func assertTBTCSignerDKGParticipantIdentifiers(
+	t *testing.T,
+	participants []frostsigning.NativeTBTCSignerDKGParticipant,
+	expected []uint16,
+) {
+	t.Helper()
 
-func (tnfdkg *testNativeFROSTDKGEngine) Part1(
-	string,
-	uint16,
-	uint16,
-) (*frostsigning.NativeFROSTDKGPart1Result, error) {
-	tnfdkg.called = true
-	return nil, fmt.Errorf("UniFFI DKG Part1 should not be used")
-}
+	if len(participants) != len(expected) {
+		t.Fatalf(
+			"unexpected participant count\nexpected: [%d]\nactual:   [%d]",
+			len(expected),
+			len(participants),
+		)
+	}
 
-func (tnfdkg *testNativeFROSTDKGEngine) Part2(
-	*frostsigning.NativeFROSTDKGRound1SecretPackage,
-	[]*frostsigning.NativeFROSTDKGRound1Package,
-) (*frostsigning.NativeFROSTDKGPart2Result, error) {
-	tnfdkg.called = true
-	return nil, fmt.Errorf("UniFFI DKG Part2 should not be used")
-}
-
-func (tnfdkg *testNativeFROSTDKGEngine) Part3(
-	*frostsigning.NativeFROSTDKGRound2SecretPackage,
-	[]*frostsigning.NativeFROSTDKGRound1Package,
-	[]*frostsigning.NativeFROSTDKGRound2Package,
-) (*frostsigning.NativeFROSTDKGResult, error) {
-	tnfdkg.called = true
-	return nil, fmt.Errorf("UniFFI DKG Part3 should not be used")
+	for i := range expected {
+		if participants[i].Identifier != expected[i] {
+			t.Fatalf(
+				"unexpected participant identifier at [%d]\nexpected: [%d]\nactual:   [%d]",
+				i,
+				expected[i],
+				participants[i].Identifier,
+			)
+		}
+	}
 }

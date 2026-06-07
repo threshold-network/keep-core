@@ -130,66 +130,6 @@ func (mnfdkg *mockNativeFROSTDKGEngine) Part3(
 	return nil, nil
 }
 
-type mockUniFFINativeFROSTDKGBridge struct {
-	part1Called bool
-	part2Called bool
-	part3Called bool
-}
-
-func (munfdkgb *mockUniFFINativeFROSTDKGBridge) Part1(
-	participantIdentifier string,
-	maxSigners uint16,
-	minSigners uint16,
-) (*NativeFROSTDKGPart1Result, error) {
-	munfdkgb.part1Called = true
-
-	return &NativeFROSTDKGPart1Result{
-		SecretPackage: &NativeFROSTDKGRound1SecretPackage{Data: []byte{0x01}},
-		Package: &NativeFROSTDKGRound1Package{
-			Identifier: participantIdentifier,
-			Data:       []byte{byte(maxSigners), byte(minSigners)},
-		},
-	}, nil
-}
-
-func (munfdkgb *mockUniFFINativeFROSTDKGBridge) Part2(
-	secretPackage *NativeFROSTDKGRound1SecretPackage,
-	round1Packages []*NativeFROSTDKGRound1Package,
-) (*NativeFROSTDKGPart2Result, error) {
-	munfdkgb.part2Called = true
-
-	return &NativeFROSTDKGPart2Result{
-		SecretPackage: &NativeFROSTDKGRound2SecretPackage{Data: []byte{0x02}},
-		Packages: []*NativeFROSTDKGRound2Package{
-			{
-				Identifier: round1Packages[0].Identifier,
-				Data:       append([]byte{}, secretPackage.Data...),
-			},
-		},
-	}, nil
-}
-
-func (munfdkgb *mockUniFFINativeFROSTDKGBridge) Part3(
-	secretPackage *NativeFROSTDKGRound2SecretPackage,
-	round1Packages []*NativeFROSTDKGRound1Package,
-	round2Packages []*NativeFROSTDKGRound2Package,
-) (*NativeFROSTDKGResult, error) {
-	munfdkgb.part3Called = true
-
-	return &NativeFROSTDKGResult{
-		KeyPackage: &NativeFROSTKeyPackage{
-			Identifier: round2Packages[0].SenderIdentifier,
-			Data:       append([]byte{}, secretPackage.Data...),
-		},
-		PublicKeyPackage: &NativeFROSTPublicKeyPackage{
-			VerifyingShares: map[string]string{
-				round1Packages[0].Identifier: "share",
-			},
-			VerifyingKey: "1111111111111111111111111111111111111111111111111111111111111111",
-		},
-	}, nil
-}
-
 func TestRegisterNativeFROSTDKGEngineRejectsNil(t *testing.T) {
 	UnregisterNativeFROSTDKGEngine()
 	t.Cleanup(UnregisterNativeFROSTDKGEngine)
@@ -211,57 +151,6 @@ func TestRegisterNativeFROSTDKGEngine(t *testing.T) {
 
 	if currentNativeFROSTDKGEngine() != engine {
 		t.Fatal("unexpected current native FROST DKG engine")
-	}
-}
-
-func TestNewUniFFINativeFROSTDKGEngine_NilBridge(t *testing.T) {
-	_, err := newUniFFINativeFROSTDKGEngine(nil)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestUniFFINativeFROSTDKGEngine(t *testing.T) {
-	bridge := &mockUniFFINativeFROSTDKGBridge{}
-	engine, err := newUniFFINativeFROSTDKGEngine(bridge)
-	if err != nil {
-		t.Fatalf("unexpected constructor error: [%v]", err)
-	}
-
-	part1, err := engine.Part1("participant-1", 3, 2)
-	if err != nil {
-		t.Fatalf("unexpected part1 error: [%v]", err)
-	}
-
-	part2, err := engine.Part2(
-		part1.SecretPackage,
-		[]*NativeFROSTDKGRound1Package{
-			{Identifier: "participant-2", Data: []byte{0x22}},
-		},
-	)
-	if err != nil {
-		t.Fatalf("unexpected part2 error: [%v]", err)
-	}
-
-	_, err = engine.Part3(
-		part2.SecretPackage,
-		[]*NativeFROSTDKGRound1Package{
-			{Identifier: "participant-2", Data: []byte{0x22}},
-		},
-		[]*NativeFROSTDKGRound2Package{
-			{
-				Identifier:       "participant-1",
-				SenderIdentifier: "participant-2",
-				Data:             []byte{0x33},
-			},
-		},
-	)
-	if err != nil {
-		t.Fatalf("unexpected part3 error: [%v]", err)
-	}
-
-	if !bridge.part1Called || !bridge.part2Called || !bridge.part3Called {
-		t.Fatal("expected all bridge parts to be called")
 	}
 }
 
@@ -571,7 +460,7 @@ func nativeFROSTDKGTestMembership(
 	)
 }
 
-func TestNativeFROSTDKGResultSignerMaterial(t *testing.T) {
+func TestNativeFROSTDKGResultSignerMaterialRejectsUnsupportedFormat(t *testing.T) {
 	dkgResult := &NativeFROSTDKGResult{
 		KeyPackage: &NativeFROSTKeyPackage{
 			Identifier: "0000000000000000000000000000000000000000000000000000000000000001",
@@ -585,40 +474,11 @@ func TestNativeFROSTDKGResultSignerMaterial(t *testing.T) {
 		},
 	}
 
-	signerMaterial, err := dkgResult.SignerMaterial()
-	if err != nil {
-		t.Fatalf("unexpected signer material error: [%v]", err)
+	_, err := dkgResult.SignerMaterial()
+	if err == nil {
+		t.Fatal("expected unsupported signer material error")
 	}
-
-	if signerMaterial.Format != NativeSignerMaterialFormatFrostUniFFIV2 {
-		t.Fatalf(
-			"unexpected signer material format\nexpected: [%s]\nactual:   [%s]",
-			NativeSignerMaterialFormatFrostUniFFIV2,
-			signerMaterial.Format,
-		)
+	if !strings.Contains(err.Error(), NativeSignerMaterialFormatFrostUniFFIV2) {
+		t.Fatalf("error should mention unsupported format: [%v]", err)
 	}
-
-	extracted, err := ExtractDkgGroupPublicKeyFromMaterial(signerMaterial)
-	if err != nil {
-		t.Fatalf("unexpected DKG public-key extraction error: [%v]", err)
-	}
-
-	expected := "1111111111111111111111111111111111111111111111111111111111111111"
-	if actual := stringHex(extracted); actual != expected {
-		t.Fatalf(
-			"unexpected extracted DKG output key\nexpected: [%s]\nactual:   [%s]",
-			expected,
-			actual,
-		)
-	}
-}
-
-func stringHex(data []byte) string {
-	const hexChars = "0123456789abcdef"
-	result := make([]byte, len(data)*2)
-	for i, b := range data {
-		result[i*2] = hexChars[b>>4]
-		result[i*2+1] = hexChars[b&0x0f]
-	}
-	return string(result)
 }
