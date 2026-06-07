@@ -73,7 +73,7 @@ func signAndCollectFrostDKGResultSignatures(
 	membershipValidator *group.MembershipValidator,
 	sessionID string,
 	seed *big.Int,
-	memberIndex group.MemberIndex,
+	localMemberIndexes []group.MemberIndex,
 	includedMembersIndexes []group.MemberIndex,
 	groupSelectionResult *GroupSelectionResult,
 	unsignedResult *registry.Result,
@@ -98,23 +98,33 @@ func signAndCollectFrostDKGResultSignatures(
 		return nil, fmt.Errorf("cannot sign FROST DKG result digest: [%w]", err)
 	}
 
-	ownMessage := &frostDKGResultSignatureMessage{
-		SenderIDValue: uint32(memberIndex),
-		SessionID:     sessionID,
-		Digest:        append([]byte{}, digest[:]...),
-		PublicKey:     append([]byte{}, signing.PublicKey()...),
-		Signature:     append([]byte{}, ownSignature...),
-	}
-	if err := channel.Send(
-		ctx,
-		ownMessage,
-		net.BackoffRetransmissionStrategy,
-	); err != nil {
-		return nil, fmt.Errorf("cannot broadcast FROST DKG result signature: [%w]", err)
-	}
+	localMemberIndexesSet := make(map[group.MemberIndex]struct{})
+	signatures := make(map[group.MemberIndex][]byte)
+	for _, localMemberIndex := range localMemberIndexes {
+		if _, included := includedMembersSet[localMemberIndex]; !included {
+			continue
+		}
+		if _, seen := localMemberIndexesSet[localMemberIndex]; seen {
+			continue
+		}
 
-	signatures := map[group.MemberIndex][]byte{
-		memberIndex: ownSignature,
+		localMemberIndexesSet[localMemberIndex] = struct{}{}
+		signatures[localMemberIndex] = append([]byte{}, ownSignature...)
+
+		ownMessage := &frostDKGResultSignatureMessage{
+			SenderIDValue: uint32(localMemberIndex),
+			SessionID:     sessionID,
+			Digest:        append([]byte{}, digest[:]...),
+			PublicKey:     append([]byte{}, signing.PublicKey()...),
+			Signature:     append([]byte{}, ownSignature...),
+		}
+		if err := channel.Send(
+			ctx,
+			ownMessage,
+			net.BackoffRetransmissionStrategy,
+		); err != nil {
+			return nil, fmt.Errorf("cannot broadcast FROST DKG result signature: [%w]", err)
+		}
 	}
 
 	expectedSignaturesCount, err := frostDKGSignatureThreshold(node.groupParameters)
@@ -148,7 +158,7 @@ func signAndCollectFrostDKGResultSignatures(
 			payload,
 			message.SenderPublicKey(),
 			sessionID,
-			memberIndex,
+			localMemberIndexesSet,
 			includedMembersSet,
 			membershipValidator,
 		) {
@@ -253,7 +263,7 @@ func shouldAcceptFrostDKGResultSignatureMessage(
 	message *frostDKGResultSignatureMessage,
 	senderPublicKey []byte,
 	sessionID string,
-	selfMemberIndex group.MemberIndex,
+	selfMemberIndexesSet map[group.MemberIndex]struct{},
 	includedMembersSet map[group.MemberIndex]struct{},
 	membershipValidator *group.MembershipValidator,
 ) bool {
@@ -262,7 +272,10 @@ func shouldAcceptFrostDKGResultSignatureMessage(
 	}
 
 	senderID := message.SenderID()
-	if senderID == 0 || senderID == selfMemberIndex {
+	if senderID == 0 {
+		return false
+	}
+	if _, isSelf := selfMemberIndexesSet[senderID]; isSelf {
 		return false
 	}
 	if message.SessionID != sessionID {

@@ -108,24 +108,46 @@ func (a *Announcer) Announce(
 	[]group.MemberIndex,
 	error,
 ) {
+	return a.AnnounceMany(ctx, []group.MemberIndex{memberIndex}, sessionID)
+}
+
+// AnnounceMany sends readiness announcements for all given local member
+// indexes and listens for announcements from other group members. It returns a
+// list of unique members indexes that are ready for the given attempt,
+// including the local member indexes. The list is sorted in ascending order.
+// This function blocks until the ctx passed as argument is done.
+func (a *Announcer) AnnounceMany(
+	ctx context.Context,
+	memberIndexes []group.MemberIndex,
+	sessionID string,
+) (
+	[]group.MemberIndex,
+	error,
+) {
 	messagesChan := make(chan net.Message, announceReceiveBuffer)
 
 	a.broadcastChannel.Recv(ctx, func(message net.Message) {
 		messagesChan <- message
 	})
 
-	err := a.broadcastChannel.Send(ctx, &announcementMessage{
-		senderID:   memberIndex,
-		protocolID: a.protocolID,
-		sessionID:  sessionID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("cannot send announcement message: [%w]", err)
-	}
-
 	readyMembersIndexesSet := make(map[group.MemberIndex]bool)
-	// Mark itself as ready.
-	readyMembersIndexesSet[memberIndex] = true
+	for _, memberIndex := range memberIndexes {
+		if readyMembersIndexesSet[memberIndex] {
+			continue
+		}
+
+		err := a.broadcastChannel.Send(ctx, &announcementMessage{
+			senderID:   memberIndex,
+			protocolID: a.protocolID,
+			sessionID:  sessionID,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("cannot send announcement message: [%w]", err)
+		}
+
+		// Mark itself as ready.
+		readyMembersIndexesSet[memberIndex] = true
+	}
 
 loop:
 	for {
@@ -136,7 +158,7 @@ loop:
 				continue
 			}
 
-			if announcement.senderID == memberIndex {
+			if readyMembersIndexesSet[announcement.senderID] {
 				continue
 			}
 
