@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -89,6 +88,9 @@ func TestMovingFundsAction_Execute(t *testing.T) {
 				MainUtxoHash:                           walletMainUtxoHash,
 				MovingFundsTargetWalletsCommitmentHash: movingFundsCommitmentHash,
 			})
+			for _, targetWallet := range scenario.TargetWallets {
+				hostChain.setWallet(targetWallet, &WalletChainData{})
+			}
 
 			// Create a signing executor mock instance.
 			signingExecutor := newMockWalletSigningExecutor()
@@ -169,10 +171,17 @@ func TestAssembleMovingFundsTransaction(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			targetWalletOutputScripts, err := testLegacyWalletOutputScripts(
+				scenario.TargetWallets,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
 			builder, err := assembleMovingFundsTransaction(
 				bitcoinChain,
 				scenario.WalletMainUtxo,
-				scenario.TargetWallets,
+				targetWalletOutputScripts,
 				scenario.Fee,
 			)
 
@@ -227,60 +236,41 @@ func TestAssembleMovingFundsTransaction(t *testing.T) {
 	}
 }
 
-func TestAssembleMovingFundsTransaction_RejectsTaprootWalletMainUtxo(
+func TestAssembleMovingFundsTransaction_SupportsTaprootWalletMainUtxo(
 	t *testing.T,
 ) {
-	var taprootOutputKey [32]byte
-	taprootOutputKey[31] = 1
+	bitcoinChain := newLocalBitcoinChain()
+	walletPublicKey := testWalletPublicKeyFromXOnly(
+		t,
+		"2336f65004d8f122f1fe947ebd009a8b4add3a0d937356d568e30f7fcc2e4008",
+	)
+	walletMainUtxo := testTaprootWalletMainUtxo(
+		t,
+		bitcoinChain,
+		walletPublicKey,
+	)
 
-	taprootScript, err := bitcoin.PayToTaproot(taprootOutputKey)
+	var targetWalletID [32]byte
+	targetWalletID[31] = 1
+	targetWalletOutputScript, err := bitcoin.PayToTaproot(targetWalletID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	fundingTx := &bitcoin.Transaction{
-		Version: 1,
-		Inputs: []*bitcoin.TransactionInput{
-			{
-				Outpoint: &bitcoin.TransactionOutpoint{
-					TransactionHash: bitcoin.Hash{},
-					OutputIndex:     0,
-				},
-				Sequence: 0xffffffff,
-			},
-		},
-		Outputs: []*bitcoin.TransactionOutput{
-			{
-				Value:           100000,
-				PublicKeyScript: taprootScript,
-			},
-		},
-	}
-
-	bitcoinChain := newLocalBitcoinChain()
-	if err := bitcoinChain.BroadcastTransaction(fundingTx); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = assembleMovingFundsTransaction(
+	builder, err := assembleMovingFundsTransaction(
 		bitcoinChain,
-		&bitcoin.UnspentTransactionOutput{
-			Outpoint: &bitcoin.TransactionOutpoint{
-				TransactionHash: fundingTx.Hash(),
-				OutputIndex:     0,
-			},
-			Value: 100000,
-		},
-		[][20]byte{
-			hexToByte20("c7302d75072d78be94eb8d36c4b77583c7abb06e"),
+		walletMainUtxo,
+		[]bitcoin.Script{
+			targetWalletOutputScript,
 		},
 		1000,
 	)
-	if err == nil {
-		t.Fatal("expected Taproot moving-funds main UTXO rejection")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "Taproot moving-funds main UTXOs") {
-		t.Fatalf("unexpected error: [%v]", err)
+
+	if !builder.HasOnlyTaprootKeyPathInputs() {
+		t.Fatal("expected moving funds builder to use Taproot key-path inputs")
 	}
 }
 
@@ -489,4 +479,23 @@ func hexToByte20(hexStr string) [20]byte {
 	var result [20]byte
 	copy(result[:], decoded)
 	return result
+}
+
+func testLegacyWalletOutputScripts(
+	walletPublicKeyHashes [][20]byte,
+) ([]bitcoin.Script, error) {
+	outputScripts := make([]bitcoin.Script, len(walletPublicKeyHashes))
+
+	for i, walletPublicKeyHash := range walletPublicKeyHashes {
+		outputScript, err := bitcoin.PayToWitnessPublicKeyHash(
+			walletPublicKeyHash,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		outputScripts[i] = outputScript
+	}
+
+	return outputScripts, nil
 }

@@ -1,7 +1,6 @@
 package spv
 
 import (
-	"bytes"
 	"fmt"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -53,6 +52,7 @@ func submitMovingFundsProof(
 
 	mainUTXO, walletPublicKeyHash, err := parseMovingFundsTransactionInput(
 		btcChain,
+		spvChain,
 		transaction,
 	)
 	if err != nil {
@@ -81,6 +81,7 @@ func submitMovingFundsProof(
 // returns the main UTXO and the wallet public key hash.
 func parseMovingFundsTransactionInput(
 	btcChain bitcoin.Chain,
+	spvChain Chain,
 	transaction *bitcoin.Transaction,
 ) (bitcoin.UnspentTransactionOutput, [20]byte, error) {
 	// Perform a sanity check: a moving funds transaction must have exactly one
@@ -103,6 +104,16 @@ func parseMovingFundsTransactionInput(
 		)
 	}
 
+	if input.Outpoint.OutputIndex >= uint32(len(inputTx.Outputs)) {
+		return bitcoin.UnspentTransactionOutput{}, [20]byte{}, fmt.Errorf(
+			"output index [%d] out of range for transaction [%s] "+
+				"with [%d] outputs",
+			input.Outpoint.OutputIndex,
+			input.Outpoint.TransactionHash.Hex(bitcoin.InternalByteOrder),
+			len(inputTx.Outputs),
+		)
+	}
+
 	// Get the specific output spent by the moving funds transaction.
 	spentOutput := inputTx.Outputs[input.Outpoint.OutputIndex]
 
@@ -112,8 +123,11 @@ func parseMovingFundsTransactionInput(
 		Value:    spentOutput.Value,
 	}
 
-	// Extract the wallet public key hash from script
-	walletPublicKeyHash, err := bitcoin.ExtractPublicKeyHash(spentOutput.PublicKeyScript)
+	// Extract the wallet public key hash from script.
+	walletPublicKeyHash, err := walletPublicKeyHashFromScript(
+		spvChain,
+		spentOutput.PublicKeyScript,
+	)
 	if err != nil {
 		return bitcoin.UnspentTransactionOutput{}, [20]byte{}, fmt.Errorf(
 			"cannot extract wallet public key hash: [%v]",
@@ -197,10 +211,21 @@ func getUnprovenMovingFundsTransactions(
 		// source wallet.
 		targetWalletPublicKeyHash := targetWallets[0]
 
-		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
-			targetWalletPublicKeyHash,
-			transactionLimit,
-		)
+		targetWallet, err := spvChain.GetWallet(targetWalletPublicKeyHash)
+		var walletTransactions []*bitcoin.Transaction
+		if err != nil {
+			walletTransactions, err = btcChain.GetTransactionsForPublicKeyHash(
+				targetWalletPublicKeyHash,
+				transactionLimit,
+			)
+		} else {
+			walletTransactions, err = getWalletTransactions(
+				targetWalletPublicKeyHash,
+				targetWallet,
+				transactionLimit,
+				btcChain,
+			)
+		}
 		if err != nil {
 			return nil, fmt.Errorf(
 				"failed to get transactions for wallet: [%v]",
@@ -289,23 +314,18 @@ func isUnprovenMovingFundsTransaction(
 		// in the same order as target wallets on the list.
 		targetWalletPublicKeyHash := targetWalletsPublicKeyHashes[outputIndex]
 
-		p2pkh, err := bitcoin.PayToPublicKeyHash(targetWalletPublicKeyHash)
+		isWalletOutput, err := isWalletOutputScript(
+			targetWalletPublicKeyHash,
+			output.PublicKeyScript,
+			spvChain,
+		)
 		if err != nil {
 			return false, fmt.Errorf(
-				"failed to compute p2pkh script for transaction output: [%v]",
+				"failed to check if output is a target wallet output: [%v]",
 				err,
 			)
 		}
-		p2wpkh, err := bitcoin.PayToWitnessPublicKeyHash(targetWalletPublicKeyHash)
-		if err != nil {
-			return false, fmt.Errorf(
-				"failed to compute p2wpkh script for transaction output: [%v]",
-				err,
-			)
-		}
-
-		if !bytes.Equal(output.PublicKeyScript, p2pkh) &&
-			!bytes.Equal(output.PublicKeyScript, p2wpkh) {
+		if !isWalletOutput {
 			return false, nil
 		}
 	}

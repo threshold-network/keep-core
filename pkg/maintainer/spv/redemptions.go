@@ -1,7 +1,6 @@
 package spv
 
 import (
-	"bytes"
 	"fmt"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -253,17 +252,18 @@ func walletPublicKeyScripts(
 
 	publicKeyScripts := []bitcoin.Script{p2pkh, p2wpkh}
 
-	if wallet.WalletID != [32]byte{} {
-		// FROST Taproot wallets use the canonical wallet ID as the x-only
-		// Taproot output key. Legacy wallets will not normally have history
-		// under this script, but querying it is harmless and keeps discovery
-		// independent of wallet generation.
-		p2tr, err := bitcoin.PayToTaproot(wallet.WalletID)
-		if err != nil {
-			return nil, fmt.Errorf("cannot construct P2TR for wallet: [%v]", err)
-		}
+	walletOutputScript, err := tbtc.WalletOutputScript(
+		walletPublicKeyHash,
+		wallet.WalletID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot construct wallet output script: [%v]", err)
+	}
 
-		publicKeyScripts = append(publicKeyScripts, p2tr)
+	if bitcoin.GetScriptType(walletOutputScript) == bitcoin.P2TRScript {
+		// FROST Taproot wallets use the canonical wallet ID as the x-only
+		// Taproot output key.
+		publicKeyScripts = append(publicKeyScripts, walletOutputScript)
 	}
 
 	return publicKeyScripts, nil
@@ -471,36 +471,9 @@ func isWalletChangeOutput(
 	spvChain Chain,
 	output *bitcoin.TransactionOutput,
 ) (bool, error) {
-	walletP2PKH, err := bitcoin.PayToPublicKeyHash(walletPublicKeyHash)
-	if err != nil {
-		return false, fmt.Errorf("cannot construct P2PKH for wallet: [%v]", err)
-	}
-	walletP2WPKH, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
-	if err != nil {
-		return false, fmt.Errorf("cannot construct P2WPKH for wallet: [%v]", err)
-	}
-
-	script := output.PublicKeyScript
-	if bytes.Equal(script, walletP2PKH) || bytes.Equal(script, walletP2WPKH) {
-		return true, nil
-	}
-
-	if bitcoin.GetScriptType(script) != bitcoin.P2TRScript {
-		return false, nil
-	}
-
-	wallet, err := spvChain.GetWallet(walletPublicKeyHash)
-	if err != nil {
-		return false, fmt.Errorf("cannot get wallet: [%v]", err)
-	}
-	if wallet.WalletID == [32]byte{} {
-		return false, nil
-	}
-
-	walletP2TR, err := bitcoin.PayToTaproot(wallet.WalletID)
-	if err != nil {
-		return false, fmt.Errorf("cannot construct P2TR for wallet: [%v]", err)
-	}
-
-	return bytes.Equal(script, walletP2TR), nil
+	return isWalletOutputScript(
+		walletPublicKeyHash,
+		output.PublicKeyScript,
+		spvChain,
+	)
 }
