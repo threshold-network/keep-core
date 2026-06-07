@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
@@ -242,14 +241,11 @@ func (rnfse *recordingNativeFROSTSigningEngine) signatureShareIDs() [][]string {
 	return snapshots
 }
 
-func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_NativeFROSTPath(
+func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_UnsupportedNativeFROSTPath(
 	t *testing.T,
 ) {
-	RegisterNativeFROSTSigningEngine(&deterministicNativeFROSTSigningEngine{})
-	t.Cleanup(UnregisterNativeFROSTSigningEngine)
-
 	provider := local.Connect()
-	channel, err := provider.BroadcastChannelFor("native-frost-signing-protocol-test")
+	channel, err := provider.BroadcastChannelFor("unsupported-native-frost-signing-test")
 	if err != nil {
 		t.Fatalf("failed creating broadcast channel: [%v]", err)
 	}
@@ -257,77 +253,23 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_Nati
 	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
 	primitive.RegisterUnmarshallers(channel)
 
-	participantCount := 3
-	includedMembers := []group.MemberIndex{1, 2, 3}
-
-	requests := make([]*NativeExecutionFFISigningRequest, participantCount)
-	for i := 0; i < participantCount; i++ {
-		memberIndex := group.MemberIndex(i + 1)
-		requests[i], err = newNativeFROSTSigningRequestForTest(
-			memberIndex,
-			includedMembers,
-			channel,
-			participantCount,
-		)
-		if err != nil {
-			t.Fatalf("failed preparing request for member [%v]: [%v]", memberIndex, err)
-		}
-	}
-
-	ctx, cancelCtx := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelCtx()
-
-	results := make([]*frostSignatureResultForTest, participantCount)
-	wg := sync.WaitGroup{}
-	wg.Add(participantCount)
-
-	for i := 0; i < participantCount; i++ {
-		go func(index int) {
-			defer wg.Done()
-
-			signature, signErr := primitive.Sign(ctx, nil, requests[index])
-			results[index] = &frostSignatureResultForTest{
-				signature: signature,
-				err:       signErr,
-			}
-		}(i)
-	}
-
-	wg.Wait()
-
-	for i, result := range results {
-		if result == nil {
-			t.Fatalf("missing result for member [%v]", i+1)
-		}
-
-		if result.err != nil {
-			t.Fatalf(
-				"unexpected signing error for member [%v]: [%v]",
-				i+1,
-				result.err,
-			)
-		}
-
-		if result.signature == nil {
-			t.Fatalf("nil signature for member [%v]", i+1)
-		}
-	}
-
-	for i := 1; i < participantCount; i++ {
-		if !results[0].signature.Equals(results[i].signature) {
-			t.Fatalf(
-				"signature mismatch\nfirst:  [%v]\nsecond: [%v]",
-				results[0].signature,
-				results[i].signature,
-			)
-		}
-	}
-
-	assertNativeFROSTSignatureVerifiesBIP340(
-		t,
-		results[0].signature,
-		requests[0],
+	request, err := newNativeFROSTSigningRequestForTest(
+		1,
+		[]group.MemberIndex{1},
+		channel,
+		1,
 	)
+	if err != nil {
+		t.Fatalf("failed creating native request: [%v]", err)
+	}
+
+	_, err = primitive.Sign(context.Background(), nil, request)
+	if !errors.Is(err, ErrUnsupportedSignerMaterialFormat) {
+		t.Fatalf("expected unsupported material error, got [%v]", err)
+	}
+	if !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("error should mention unsupported format: [%v]", err)
+	}
 }
 
 func TestVerifyNativeFROSTBIP340SignatureRejectsInvalidAggregate(
@@ -351,191 +293,7 @@ func TestVerifyNativeFROSTBIP340SignatureRejectsInvalidAggregate(
 	}
 }
 
-func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_NativeFROSTPath_AttemptVariationUsesCohortSelections(
-	t *testing.T,
-) {
-	engine := &recordingNativeFROSTSigningEngine{}
-	RegisterNativeFROSTSigningEngine(engine)
-	t.Cleanup(UnregisterNativeFROSTSigningEngine)
-
-	provider := local.Connect()
-	channel, err := provider.BroadcastChannelFor("native-frost-signing-protocol-attempt-variation-test")
-	if err != nil {
-		t.Fatalf("failed creating broadcast channel: [%v]", err)
-	}
-
-	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
-	primitive.RegisterUnmarshallers(channel)
-
-	runRound := func(
-		sessionID string,
-		includedMembers []group.MemberIndex,
-		groupSize int,
-	) []*frost.Signature {
-		requests := make([]*NativeExecutionFFISigningRequest, len(includedMembers))
-		for i := 0; i < len(includedMembers); i++ {
-			memberIndex := includedMembers[i]
-
-			request, roundErr := newNativeFROSTSigningRequestWithSessionForTest(
-				memberIndex,
-				includedMembers,
-				channel,
-				groupSize,
-				sessionID,
-			)
-			if roundErr != nil {
-				t.Fatalf(
-					"failed preparing request for member [%v] in session [%s]: [%v]",
-					memberIndex,
-					sessionID,
-					roundErr,
-				)
-			}
-
-			requests[i] = request
-		}
-
-		ctx, cancelCtx := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancelCtx()
-
-		results := make([]*frostSignatureResultForTest, len(includedMembers))
-		var wg sync.WaitGroup
-		wg.Add(len(includedMembers))
-
-		for i := 0; i < len(includedMembers); i++ {
-			go func(index int) {
-				defer wg.Done()
-
-				signature, signErr := primitive.Sign(ctx, nil, requests[index])
-				results[index] = &frostSignatureResultForTest{
-					signature: signature,
-					err:       signErr,
-				}
-			}(i)
-		}
-
-		wg.Wait()
-
-		signatures := make([]*frost.Signature, len(includedMembers))
-		for i := 0; i < len(includedMembers); i++ {
-			if results[i] == nil {
-				t.Fatalf(
-					"missing signing result for member [%v] in session [%s]",
-					includedMembers[i],
-					sessionID,
-				)
-			}
-
-			if results[i].err != nil {
-				t.Fatalf(
-					"unexpected signing error for member [%v] in session [%s]: [%v]",
-					includedMembers[i],
-					sessionID,
-					results[i].err,
-				)
-			}
-
-			if results[i].signature == nil {
-				t.Fatalf(
-					"nil signature for member [%v] in session [%s]",
-					includedMembers[i],
-					sessionID,
-				)
-			}
-
-			signatures[i] = results[i].signature
-		}
-
-		return signatures
-	}
-
-	assertSignaturesMatch := func(
-		sessionID string,
-		signatures []*frost.Signature,
-	) {
-		if len(signatures) == 0 {
-			t.Fatalf("no signatures for session [%s]", sessionID)
-		}
-
-		for i := 1; i < len(signatures); i++ {
-			if !signatures[0].Equals(signatures[i]) {
-				t.Fatalf(
-					"signature mismatch in session [%s]\nfirst:  [%v]\nsecond: [%v]",
-					sessionID,
-					signatures[0],
-					signatures[i],
-				)
-			}
-		}
-	}
-
-	roundOneSignatures := runRound(
-		"native-frost-signing-session-attempt-1",
-		[]group.MemberIndex{1, 2, 3},
-		3,
-	)
-	assertSignaturesMatch("native-frost-signing-session-attempt-1", roundOneSignatures)
-
-	roundTwoSignatures := runRound(
-		"native-frost-signing-session-attempt-2",
-		[]group.MemberIndex{1, 3},
-		3,
-	)
-	assertSignaturesMatch("native-frost-signing-session-attempt-2", roundTwoSignatures)
-
-	snapshotHistogram := func(snapshots [][]string) map[string]int {
-		histogram := make(map[string]int)
-		for _, snapshot := range snapshots {
-			histogram[strings.Join(snapshot, ",")]++
-		}
-
-		return histogram
-	}
-
-	expectedHistogram := map[string]int{
-		"member-1,member-2,member-3": 3,
-		"member-1,member-3":          2,
-	}
-
-	assertHistogram := func(name string, actual map[string]int) {
-		if len(actual) != len(expectedHistogram) {
-			t.Fatalf(
-				"unexpected %s histogram size\nexpected: [%v]\nactual:   [%v]",
-				name,
-				len(expectedHistogram),
-				len(actual),
-			)
-		}
-
-		for key, expectedCount := range expectedHistogram {
-			actualCount, ok := actual[key]
-			if !ok {
-				t.Fatalf("missing %s histogram key: [%s]", name, key)
-			}
-
-			if actualCount != expectedCount {
-				t.Fatalf(
-					"unexpected %s count for key [%s]\nexpected: [%v]\nactual:   [%v]",
-					name,
-					key,
-					expectedCount,
-					actualCount,
-				)
-			}
-		}
-	}
-
-	assertHistogram(
-		"commitment IDs",
-		snapshotHistogram(engine.commitmentIDs()),
-	)
-	assertHistogram(
-		"signature share IDs",
-		snapshotHistogram(engine.signatureShareIDs()),
-	)
-}
-
-func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_NativeFROSTPathWithoutEngine(
+func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_UnsupportedNativeFROSTPathWithoutEngine(
 	t *testing.T,
 ) {
 	UnregisterNativeFROSTSigningEngine()
@@ -565,12 +323,15 @@ func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_Nati
 		t.Fatal("expected error")
 	}
 
-	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
+	if !errors.Is(err, ErrUnsupportedSignerMaterialFormat) {
 		t.Fatalf(
 			"unexpected error\nexpected: [%v]\nactual:   [%v]",
-			ErrNativeCryptographyUnavailable,
+			ErrUnsupportedSignerMaterialFormat,
 			err,
 		)
+	}
+	if !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("error should mention unsupported format: [%v]", err)
 	}
 }
 

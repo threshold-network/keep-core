@@ -13,7 +13,6 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2"
 	"go.uber.org/zap"
 
-	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/frost/registry"
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
@@ -33,12 +32,11 @@ func executeFrostDKGIfPossible(
 	memberIndexes []group.MemberIndex,
 	groupSelectionResult *GroupSelectionResult,
 ) {
-	nativeFROSTDKGEngine := frostsigning.CurrentNativeFROSTDKGEngine()
 	nativeTBTCSignerEngine := frostsigning.CurrentNativeTBTCSignerEngine()
-	if nativeFROSTDKGEngine == nil && nativeTBTCSignerEngine == nil {
+	if nativeTBTCSignerEngine == nil {
 		logger.Infof(
 			"FROST DKG with seed [0x%x] selected this operator as member "+
-				"indexes [%v], but no native FROST DKG or tbtc-signer engine is registered",
+				"indexes [%v], but no native tbtc-signer engine is registered",
 			event.Seed,
 			memberIndexes,
 		)
@@ -131,19 +129,22 @@ func executeFrostDKGIfPossible(
 				return
 			}
 
-			executionResult, err := executeFrostDKG(
-				dkgCtx,
-				dkgLogger,
-				nativeFROSTDKGEngine,
-				nativeTBTCSignerEngine,
-				event,
-				memberIndex,
+			tbtcSignerMemberIndexes, err := finalFrostDKGMemberIndexes(
 				activeMemberIndexes,
 				groupSelectionResult,
+				node.groupParameters,
+			)
+			if err != nil {
+				dkgLogger.Errorf("failed to resolve final FROST DKG member indexes: [%v]", err)
+				return
+			}
+
+			executionResult, err := executeFrostDKG(
+				nativeTBTCSignerEngine,
+				event,
+				tbtcSignerMemberIndexes,
 				signatureThreshold,
 				sessionID,
-				channel,
-				membershipValidator,
 			)
 			if err != nil {
 				dkgLogger.Errorf("FROST DKG execution failed: [%v]", err)
@@ -233,71 +234,72 @@ type frostDKGExecutionResult struct {
 }
 
 func executeFrostDKG(
-	ctx context.Context,
-	logger log.StandardLogger,
-	nativeFROSTDKGEngine frostsigning.NativeFROSTDKGEngine,
 	nativeTBTCSignerEngine frostsigning.NativeTBTCSignerEngine,
 	event *FrostDKGStartedEvent,
-	memberIndex group.MemberIndex,
-	activeMemberIndexes []group.MemberIndex,
-	groupSelectionResult *GroupSelectionResult,
+	dkgMemberIndexes []group.MemberIndex,
 	signatureThreshold int,
 	sessionID string,
-	channel net.BroadcastChannel,
-	membershipValidator *group.MembershipValidator,
 ) (*frostDKGExecutionResult, error) {
 	if nativeTBTCSignerEngine != nil {
 		return executeTBTCSignerFROSTDKG(
 			nativeTBTCSignerEngine,
 			event,
-			activeMemberIndexes,
+			dkgMemberIndexes,
 			signatureThreshold,
 			sessionID,
 		)
 	}
 
-	if nativeFROSTDKGEngine != nil {
-		nativeResult, err := frostsigning.ExecuteNativeFROSTDKG(
-			ctx,
-			logger,
-			&frostsigning.NativeFROSTDKGRequest{
-				MemberIndex:            memberIndex,
-				GroupSize:              len(groupSelectionResult.OperatorsIDs),
-				Threshold:              signatureThreshold,
-				SessionID:              sessionID,
-				IncludedMembersIndexes: activeMemberIndexes,
-				Channel:                channel,
-				MembershipValidator:    membershipValidator,
-			},
-			nativeFROSTDKGEngine,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("native FROST DKG execution failed: [%w]", err)
-		}
+	return nil, fmt.Errorf("native tbtc-signer engine is unavailable")
+}
 
-		signerMaterial, err := nativeResult.SignerMaterial()
-		if err != nil {
-			return nil, err
-		}
-
-		outputKey, err := outputKeyFromNativeDKGResult(nativeResult)
-		if err != nil {
-			return nil, err
-		}
-
-		return &frostDKGExecutionResult{
-			outputKey:      outputKey,
-			signerMaterial: signerMaterial,
-		}, nil
+func finalFrostDKGMemberIndexes(
+	activeMemberIndexes []group.MemberIndex,
+	groupSelectionResult *GroupSelectionResult,
+	groupParameters *GroupParameters,
+) ([]group.MemberIndex, error) {
+	if groupSelectionResult == nil {
+		return nil, fmt.Errorf("group selection result is nil")
+	}
+	if groupParameters == nil {
+		return nil, fmt.Errorf("group parameters are nil")
 	}
 
-	return nil, fmt.Errorf("native FROST DKG engine is unavailable")
+	operatingMembersIndexes := append([]group.MemberIndex{}, activeMemberIndexes...)
+	_, finalSigningGroupMembersIndexes, err := finalSigningGroup(
+		groupSelectionResult.OperatorsAddresses,
+		operatingMembersIndexes,
+		groupParameters,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	dkgMemberIndexes := make(
+		[]group.MemberIndex,
+		0,
+		len(operatingMembersIndexes),
+	)
+	for _, activeMemberIndex := range operatingMembersIndexes {
+		finalMemberIndex, ok :=
+			finalSigningGroupMembersIndexes[activeMemberIndex]
+		if !ok {
+			return nil, fmt.Errorf(
+				"active member [%d] is missing final FROST DKG member index",
+				activeMemberIndex,
+			)
+		}
+
+		dkgMemberIndexes = append(dkgMemberIndexes, finalMemberIndex)
+	}
+
+	return dkgMemberIndexes, nil
 }
 
 func executeTBTCSignerFROSTDKG(
 	nativeEngine frostsigning.NativeTBTCSignerEngine,
 	event *FrostDKGStartedEvent,
-	activeMemberIndexes []group.MemberIndex,
+	dkgMemberIndexes []group.MemberIndex,
 	signatureThreshold int,
 	sessionID string,
 ) (*frostDKGExecutionResult, error) {
@@ -315,7 +317,7 @@ func executeTBTCSignerFROSTDKG(
 		return nil, err
 	}
 
-	participants, err := nativeTBTCSignerDKGParticipants(activeMemberIndexes)
+	participants, err := nativeTBTCSignerDKGParticipants(dkgMemberIndexes)
 	if err != nil {
 		return nil, err
 	}

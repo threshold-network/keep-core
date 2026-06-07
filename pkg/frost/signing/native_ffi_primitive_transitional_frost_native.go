@@ -34,11 +34,13 @@ func defaultNativeExecutionFFISigningPrimitiveProviderForBuild() (
 }
 
 // buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive is a
-// transitional primitive that executes native two-round FROST when
-// `frost-uniffi-v2` signer material is provided, and preserves legacy bridge
-// execution for `frost-uniffi-v1` payloads. `frost-tbtc-signer-v1` uses the
-// coarse signing flow for bootstrap engine versions and falls back to legacy
-// signing for unsupported or failed coarse-path executions.
+// transitional primitive that preserves legacy bridge execution for
+// `frost-uniffi-v1` payloads. `frost-tbtc-signer-v1` uses the coarse signing
+// flow for bootstrap engine versions and falls back to legacy signing for
+// unsupported or failed coarse-path executions. Unsupported
+// `frost-uniffi-v2` material is rejected explicitly because it cannot produce
+// Taproot-tweaked signatures; accepting it would allow new deposits to a
+// wallet that cannot sweep them.
 type buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive struct{}
 
 const buildTaggedTBTCSignerVersionPrefix = "tbtc-signer/"
@@ -156,19 +158,11 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 
 	switch request.SignerMaterial.Format {
 	case NativeSignerMaterialFormatFrostUniFFIV2:
-		nativeSignerMaterial, err := decodeNativeFROSTUniFFIV2SignerMaterial(
-			request.SignerMaterial,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		return executeNativeFROSTSigning(
-			ctx,
-			logger,
-			request,
-			currentNativeFROSTSigningEngine(),
-			nativeSignerMaterial,
+		return nil, fmt.Errorf(
+			"%w: unsupported UniFFI FROST signer material format [%s]; it cannot sweep Taproot deposits; use [%s]",
+			ErrUnsupportedSignerMaterialFormat,
+			NativeSignerMaterialFormatFrostUniFFIV2,
+			NativeSignerMaterialFormatFrostTBTCSignerV1,
 		)
 
 	case NativeSignerMaterialFormatFrostUniFFIV1:
@@ -1280,7 +1274,6 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 	channel net.BroadcastChannel,
 ) {
 	registerBuildTaggedTBTCSignerUnmarshallers(channel)
-	registerNativeFROSTSigningUnmarshallers(channel)
 	legacySigning.RegisterUnmarshallers(channel)
 }
 

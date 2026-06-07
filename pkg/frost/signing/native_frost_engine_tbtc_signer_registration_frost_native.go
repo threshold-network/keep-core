@@ -430,9 +430,11 @@ func registerBuildTaggedNativeFROSTSigningEngine() error {
 
 	// Do not register the tbtc-signer bridge as the generic UniFFI-shaped
 	// FROST DKG/signing engine. That path persists `frost-uniffi-v2` wallet
-	// material, which cannot produce Taproot-tweaked signatures required for
-	// Taproot deposit sweeps. New FROST wallets in this build must use the
-	// coarse `frost-tbtc-signer-v1` material path exclusively.
+	// material, which cannot produce Taproot-tweaked signatures. A wallet
+	// using that material can accept Taproot deposits that are effectively
+	// unsweepable, so this must fail before new FROST wallet material exists.
+	// New FROST wallets in this build must use the coarse
+	// `frost-tbtc-signer-v1` material path exclusively.
 	return RegisterNativeTBTCSignerEngine(engine)
 }
 
@@ -588,7 +590,7 @@ func (bttse *buildTaggedTBTCSignerEngine) GenerateNoncesAndCommitments(
 
 func (bttse *buildTaggedTBTCSignerEngine) NewSigningPackage(
 	message []byte,
-	commitments []uniFFINativeFROSTCommitment,
+	commitments []nativeFROSTCommitment,
 ) (signingPackageData []byte, err error) {
 	requestPayload, err := buildTaggedTBTCSignerNewSigningPackageRequestPayload(
 		message,
@@ -635,7 +637,7 @@ func (bttse *buildTaggedTBTCSignerEngine) Sign(
 
 func (bttse *buildTaggedTBTCSignerEngine) Aggregate(
 	signingPackageData []byte,
-	signatureShares []uniFFINativeFROSTSignatureShare,
+	signatureShares []nativeFROSTSignatureShare,
 	publicKeyPackage *NativeFROSTPublicKeyPackage,
 ) (signature []byte, err error) {
 	requestPayload, err := buildTaggedTBTCSignerAggregateRequestPayload(
@@ -1229,7 +1231,7 @@ func decodeBuildTaggedTBTCSignerGenerateNoncesResponse(
 
 func buildTaggedTBTCSignerNewSigningPackageRequestPayload(
 	message []byte,
-	commitments []uniFFINativeFROSTCommitment,
+	commitments []nativeFROSTCommitment,
 ) ([]byte, error) {
 	if len(commitments) == 0 {
 		return nil, buildTaggedTBTCSignerOperationError(
@@ -1359,7 +1361,7 @@ func decodeBuildTaggedTBTCSignerSignShareResponse(
 
 func buildTaggedTBTCSignerAggregateRequestPayload(
 	signingPackageData []byte,
-	signatureShares []uniFFINativeFROSTSignatureShare,
+	signatureShares []nativeFROSTSignatureShare,
 	publicKeyPackage *NativeFROSTPublicKeyPackage,
 ) ([]byte, error) {
 	if len(signingPackageData) == 0 {

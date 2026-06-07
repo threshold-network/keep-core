@@ -8,8 +8,9 @@ import (
 )
 
 const (
-	// NativeSignerMaterialFormatFrostUniFFIV2 carries fully-native signer
-	// material required to execute two-round FROST signing.
+	// NativeSignerMaterialFormatFrostUniFFIV2 is the unsupported generic UniFFI
+	// FROST signer-material envelope. It is kept as a string constant so stale
+	// local/test material can be identified and rejected explicitly.
 	NativeSignerMaterialFormatFrostUniFFIV2 = "frost-uniffi-v2"
 )
 
@@ -52,6 +53,16 @@ type NativeFROSTSigningPackage struct {
 type NativeFROSTSignatureShare struct {
 	Identifier string `json:"identifier"`
 	Data       []byte `json:"data"`
+}
+
+type nativeFROSTCommitment struct {
+	Identifier string
+	Data       []byte
+}
+
+type nativeFROSTSignatureShare struct {
+	Identifier string
+	Data       []byte
 }
 
 func (nfn *NativeFROSTNonces) consumeData() ([]byte, error) {

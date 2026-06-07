@@ -35,24 +35,31 @@ func frostWalletIDFromSigner(signer *signer) ([32]byte, bool, error) {
 		return [32]byte{}, false, nil
 	}
 
-	if material.Format != frostsigning.NativeSignerMaterialFormatFrostUniFFIV2 &&
-		material.Format != frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1 {
+	switch material.Format {
+	case frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1:
+	case frostsigning.NativeSignerMaterialFormatFrostUniFFIV2:
+		return [32]byte{}, false, fmt.Errorf(
+			"%w: unsupported UniFFI FROST signer material format [%s]; "+
+				"it cannot sweep Taproot deposits; use [%s]",
+			frostsigning.ErrUnsupportedSignerMaterialFormat,
+			frostsigning.NativeSignerMaterialFormatFrostUniFFIV2,
+			frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
+		)
+	default:
 		return [32]byte{}, false, nil
 	}
 
-	if material.Format == frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1 {
-		var payload frostsigning.NativeTBTCSignerMaterialPayload
-		if err := json.Unmarshal(material.Payload, &payload); err != nil {
-			return [32]byte{}, false, fmt.Errorf(
-				"cannot decode FrostTBTCSignerV1 signer material: [%w]",
-				err,
-			)
-		}
+	var payload frostsigning.NativeTBTCSignerMaterialPayload
+	if err := json.Unmarshal(material.Payload, &payload); err != nil {
+		return [32]byte{}, false, fmt.Errorf(
+			"cannot decode FrostTBTCSignerV1 signer material: [%w]",
+			err,
+		)
+	}
 
-		if payload.KeyGroupSource ==
-			frostsigning.NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey {
-			return [32]byte{}, false, nil
-		}
+	if payload.KeyGroupSource ==
+		frostsigning.NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey {
+		return [32]byte{}, false, nil
 	}
 
 	xOnlyOutputKey, err := frostsigning.ExtractTaprootOutputKeyFromMaterial(

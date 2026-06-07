@@ -239,7 +239,7 @@ func TestBuildTaggedTBTCSignerInteractiveFROSTBridge_WithLinkedSigner(t *testing
 	}
 
 	signingParticipants := []byte{1, 2}
-	commitments := make([]uniFFINativeFROSTCommitment, 0, len(signingParticipants))
+	commitments := make([]nativeFROSTCommitment, 0, len(signingParticipants))
 	noncesByParticipant := make(map[byte][]byte, len(signingParticipants))
 	for _, participantID := range signingParticipants {
 		nonces, commitmentIdentifier, commitmentData, err :=
@@ -250,7 +250,7 @@ func TestBuildTaggedTBTCSignerInteractiveFROSTBridge_WithLinkedSigner(t *testing
 		if err != nil {
 			t.Fatalf("unexpected nonce generation error: [%v]", err)
 		}
-		commitments = append(commitments, uniFFINativeFROSTCommitment{
+		commitments = append(commitments, nativeFROSTCommitment{
 			Identifier: commitmentIdentifier,
 			Data:       commitmentData,
 		})
@@ -264,7 +264,7 @@ func TestBuildTaggedTBTCSignerInteractiveFROSTBridge_WithLinkedSigner(t *testing
 	}
 
 	signatureShares := make(
-		[]uniFFINativeFROSTSignatureShare,
+		[]nativeFROSTSignatureShare,
 		0,
 		len(signingParticipants),
 	)
@@ -278,7 +278,7 @@ func TestBuildTaggedTBTCSignerInteractiveFROSTBridge_WithLinkedSigner(t *testing
 		if err != nil {
 			t.Fatalf("unexpected signature share error: [%v]", err)
 		}
-		signatureShares = append(signatureShares, uniFFINativeFROSTSignatureShare{
+		signatureShares = append(signatureShares, nativeFROSTSignatureShare{
 			Identifier: signatureShareIdentifier,
 			Data:       signatureShareData,
 		})

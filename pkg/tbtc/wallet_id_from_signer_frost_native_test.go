@@ -6,14 +6,13 @@ import (
 	"crypto/ecdsa"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 )
 
-func TestCalculateWalletIDForSigner_FrostUniFFIV2UsesXOnlyOutputKey(t *testing.T) {
-	const xOnlyOutputKey = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-
+func TestCalculateWalletIDForSigner_FrostUniFFIV2RejectsUnsupportedMaterial(t *testing.T) {
 	payload, err := json.Marshal(struct {
 		KeyPackage       *frostsigning.NativeFROSTKeyPackage       `json:"keyPackage"`
 		PublicKeyPackage *frostsigning.NativeFROSTPublicKeyPackage `json:"publicKeyPackage"`
@@ -23,7 +22,7 @@ func TestCalculateWalletIDForSigner_FrostUniFFIV2UsesXOnlyOutputKey(t *testing.T
 			Data:       []byte{0x01},
 		},
 		PublicKeyPackage: &frostsigning.NativeFROSTPublicKeyPackage{
-			VerifyingKey: xOnlyOutputKey,
+			VerifyingKey: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		},
 	})
 	if err != nil {
@@ -36,29 +35,26 @@ func TestCalculateWalletIDForSigner_FrostUniFFIV2UsesXOnlyOutputKey(t *testing.T
 		Payload: payload,
 	}
 
-	walletID, err := calculateWalletIDForSigner(
+	legacyCalculatorCalled := false
+	_, err = calculateWalletIDForSigner(
 		signer,
 		func(_ *ecdsa.PublicKey) ([32]byte, error) {
+			legacyCalculatorCalled = true
 			return [32]byte{0xff}, nil
 		},
 	)
-	if err != nil {
-		t.Fatalf("unexpected wallet ID calculation error: [%v]", err)
+	if err == nil {
+		t.Fatal("expected unsupported material error")
 	}
-
-	var expectedWalletID [32]byte
-	expectedBytes, err := hex.DecodeString(xOnlyOutputKey)
-	if err != nil {
-		t.Fatalf("unexpected hex decode error: [%v]", err)
-	}
-	copy(expectedWalletID[:], expectedBytes)
-
-	if walletID != expectedWalletID {
+	if !errors.Is(err, frostsigning.ErrUnsupportedSignerMaterialFormat) {
 		t.Fatalf(
-			"unexpected FROST wallet ID\nexpected: [0x%x]\nactual:   [0x%x]",
-			expectedWalletID,
-			walletID,
+			"unexpected wallet ID calculation error\nexpected: [%v]\nactual:   [%v]",
+			frostsigning.ErrUnsupportedSignerMaterialFormat,
+			err,
 		)
+	}
+	if legacyCalculatorCalled {
+		t.Fatal("legacy wallet ID calculator should not have been called")
 	}
 }
 

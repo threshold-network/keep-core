@@ -857,6 +857,21 @@ func validateNativeFROSTDKGResult(result *NativeFROSTDKGResult) error {
 		return fmt.Errorf("native FROST DKG result is nil")
 	}
 
-	_, err := result.SignerMaterial()
-	return err
+	if result.KeyPackage == nil {
+		return fmt.Errorf("native FROST DKG key package is nil")
+	}
+	if result.KeyPackage.Identifier == "" {
+		return fmt.Errorf("native FROST DKG key package identifier is empty")
+	}
+	if len(result.KeyPackage.Data) == 0 {
+		return fmt.Errorf("native FROST DKG key package data is empty")
+	}
+	if result.PublicKeyPackage == nil {
+		return fmt.Errorf("native FROST DKG public key package is nil")
+	}
+	if result.PublicKeyPackage.VerifyingKey == "" {
+		return fmt.Errorf("native FROST DKG public key package verifying key is empty")
+	}
+
+	return nil
 }
