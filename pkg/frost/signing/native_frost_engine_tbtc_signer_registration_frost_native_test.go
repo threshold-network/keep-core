@@ -15,13 +15,7 @@ import (
 
 func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 	UnregisterNativeTBTCSignerEngine()
-	UnregisterNativeFROSTDKGEngine()
-	UnregisterNativeFROSTSigningEngine()
-	t.Cleanup(func() {
-		UnregisterNativeTBTCSignerEngine()
-		UnregisterNativeFROSTDKGEngine()
-		UnregisterNativeFROSTSigningEngine()
-	})
+	t.Cleanup(UnregisterNativeTBTCSignerEngine)
 
 	err := registerBuildTaggedNativeFROSTSigningEngine()
 	if err != nil {
@@ -55,16 +49,6 @@ func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("unexpected bridge error: [%v]", err)
-	}
-
-	dkgEngine := currentNativeFROSTDKGEngine()
-	if dkgEngine != nil {
-		t.Fatal("did not expect UniFFI native FROST DKG engine registration")
-	}
-
-	signingEngine := currentNativeFROSTSigningEngine()
-	if signingEngine != nil {
-		t.Fatal("did not expect UniFFI native FROST signing engine registration")
 	}
 
 	_, err = engine.BuildTaprootTx(

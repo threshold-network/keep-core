@@ -18,15 +18,7 @@ import (
 func newTestRequestWithUnsupportedUniFFIV2Material(t *testing.T, attemptNumber uint) *NativeExecutionFFISigningRequest {
 	t.Helper()
 	const hexKey = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
-	payload, _ := json.Marshal(&nativeFROSTUniFFIV2SignerMaterial{
-		KeyPackage: &NativeFROSTKeyPackage{
-			Identifier: "id-1",
-			Data:       []byte{0x01},
-		},
-		PublicKeyPackage: &NativeFROSTPublicKeyPackage{
-			VerifyingKey: hexKey,
-		},
-	})
+	payload := unsupportedUniFFIV2Payload(t, hexKey)
 	return &NativeExecutionFFISigningRequest{
 		Message:     new(big.Int).SetBytes([]byte{0xab, 0xcd}),
 		SessionID:   "session-test",

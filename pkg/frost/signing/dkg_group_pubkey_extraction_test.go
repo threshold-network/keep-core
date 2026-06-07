@@ -19,23 +19,15 @@ func TestExtractDkgGroupPublicKey_RejectsNilMaterial(t *testing.T) {
 }
 
 func TestExtractDkgGroupPublicKey_FrostUniFFIV2_ReturnsUnsupportedSentinel(t *testing.T) {
-	payload, err := json.Marshal(&nativeFROSTUniFFIV2SignerMaterial{
-		KeyPackage: &NativeFROSTKeyPackage{
-			Identifier: "id-1",
-			Data:       []byte{0x01},
-		},
-		PublicKeyPackage: &NativeFROSTPublicKeyPackage{
-			VerifyingKey: "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
-		},
-	})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	payload := unsupportedUniFFIV2Payload(
+		t,
+		"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+	)
 	mat := &NativeSignerMaterial{
 		Format:  NativeSignerMaterialFormatFrostUniFFIV2,
 		Payload: payload,
 	}
-	_, err = ExtractDkgGroupPublicKeyFromMaterial(mat)
+	_, err := ExtractDkgGroupPublicKeyFromMaterial(mat)
 	if !errors.Is(err, ErrUnsupportedSignerMaterialFormat) {
 		t.Fatalf("expected ErrUnsupportedSignerMaterialFormat, got %v", err)
 	}
@@ -45,24 +37,16 @@ func TestExtractDkgGroupPublicKey_FrostUniFFIV2_ReturnsUnsupportedSentinel(t *te
 }
 
 func TestExtractTaprootOutputKey_FrostUniFFIV2_ReturnsUnsupported(t *testing.T) {
-	payload, err := json.Marshal(&nativeFROSTUniFFIV2SignerMaterial{
-		KeyPackage: &NativeFROSTKeyPackage{
-			Identifier: "id-1",
-			Data:       []byte{0x01},
-		},
-		PublicKeyPackage: &NativeFROSTPublicKeyPackage{
-			VerifyingKey: "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
-		},
-	})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	payload := unsupportedUniFFIV2Payload(
+		t,
+		"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+	)
 	mat := &NativeSignerMaterial{
 		Format:  NativeSignerMaterialFormatFrostUniFFIV2,
 		Payload: payload,
 	}
 
-	_, err = ExtractTaprootOutputKeyFromMaterial(mat)
+	_, err := ExtractTaprootOutputKeyFromMaterial(mat)
 	if err == nil {
 		t.Fatal("expected unsupported V2 taproot output key rejection")
 	}
