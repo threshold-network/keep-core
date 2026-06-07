@@ -58,48 +58,13 @@ func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 	}
 
 	dkgEngine := currentNativeFROSTDKGEngine()
-	if dkgEngine == nil {
-		t.Fatal("expected native FROST DKG engine registration")
-	}
-
-	_, err = dkgEngine.Part1(
-		"\"0100000000000000000000000000000000000000000000000000000000000000\"",
-		3,
-		2,
-	)
-	if err == nil {
-		t.Fatal("expected unavailable native FROST DKG bridge error")
-	}
-
-	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
-		t.Fatalf(
-			"expected native cryptography unavailable error: [%v], got [%v]",
-			ErrNativeCryptographyUnavailable,
-			err,
-		)
+	if dkgEngine != nil {
+		t.Fatal("did not expect UniFFI native FROST DKG engine registration")
 	}
 
 	signingEngine := currentNativeFROSTSigningEngine()
-	if signingEngine == nil {
-		t.Fatal("expected native FROST signing engine registration")
-	}
-
-	_, _, err = signingEngine.GenerateNoncesAndCommitments(
-		&NativeFROSTKeyPackage{
-			Identifier: "\"0100000000000000000000000000000000000000000000000000000000000000\"",
-			Data:       []byte{0x01},
-		},
-	)
-	if err == nil {
-		t.Fatal("expected unavailable native FROST signing bridge error")
-	}
-
-	if !errors.Is(err, ErrNativeCryptographyUnavailable) {
-		t.Fatalf(
-			"expected native cryptography unavailable error: [%v], got [%v]",
-			ErrNativeCryptographyUnavailable,
-			err,
-		)
+	if signingEngine != nil {
+		t.Fatal("did not expect UniFFI native FROST signing engine registration")
 	}
 
 	_, err = engine.BuildTaprootTx(
