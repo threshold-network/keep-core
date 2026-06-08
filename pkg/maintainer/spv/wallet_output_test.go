@@ -8,6 +8,50 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
+func TestIsWalletOutputScript_AcceptsLegacyOutputs(t *testing.T) {
+	walletPublicKeyHash := bytes20FromHex(
+		t,
+		"c7302d75072d78be94eb8d36c4b77583c7abb06e",
+	)
+	walletID := tbtc.DeriveLegacyWalletID(walletPublicKeyHash)
+
+	spvChain := newLocalChain()
+	spvChain.setWallet(walletPublicKeyHash, &tbtc.WalletChainData{
+		WalletID: walletID,
+	})
+
+	outputScripts := map[string]bitcoin.Script{}
+
+	p2pkh, err := bitcoin.PayToPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputScripts["P2PKH"] = p2pkh
+
+	p2wpkh, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputScripts["P2WPKH"] = p2wpkh
+
+	for scriptType, outputScript := range outputScripts {
+		t.Run(scriptType, func(t *testing.T) {
+			isWalletOutput, err := isWalletOutputScript(
+				walletPublicKeyHash,
+				outputScript,
+				spvChain,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if !isWalletOutput {
+				t.Fatalf("expected legacy %s output to be recognized", scriptType)
+			}
+		})
+	}
+}
+
 func TestIsWalletOutputScript_AcceptsFrostP2TR(t *testing.T) {
 	walletPublicKeyHash := bytes20FromHex(
 		t,
@@ -41,6 +85,55 @@ func TestIsWalletOutputScript_AcceptsFrostP2TR(t *testing.T) {
 
 	if !isWalletOutput {
 		t.Fatal("expected FROST P2TR output to be recognized")
+	}
+}
+
+func TestIsWalletOutputScript_RejectsFrostLegacyOutputs(t *testing.T) {
+	walletPublicKeyHash := bytes20FromHex(
+		t,
+		"c7302d75072d78be94eb8d36c4b77583c7abb06e",
+	)
+	walletID := [32]byte{
+		0x23, 0x36, 0xf6, 0x50, 0x04, 0xd8, 0xf1, 0x22,
+		0xf1, 0xfe, 0x94, 0x7e, 0xbd, 0x00, 0x9a, 0x8b,
+		0x4a, 0xdd, 0x3a, 0x0d, 0x93, 0x73, 0x56, 0xd5,
+		0x68, 0xe3, 0x0f, 0x7f, 0xcc, 0x2e, 0x40, 0x08,
+	}
+
+	spvChain := newLocalChain()
+	spvChain.setWallet(walletPublicKeyHash, &tbtc.WalletChainData{
+		WalletID: walletID,
+	})
+
+	outputScripts := map[string]bitcoin.Script{}
+
+	p2pkh, err := bitcoin.PayToPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputScripts["P2PKH"] = p2pkh
+
+	p2wpkh, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputScripts["P2WPKH"] = p2wpkh
+
+	for scriptType, outputScript := range outputScripts {
+		t.Run(scriptType, func(t *testing.T) {
+			isWalletOutput, err := isWalletOutputScript(
+				walletPublicKeyHash,
+				outputScript,
+				spvChain,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if isWalletOutput {
+				t.Fatalf("expected FROST %s alias output to be rejected", scriptType)
+			}
+		})
 	}
 }
 

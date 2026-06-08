@@ -13,36 +13,42 @@ func isWalletOutputScript(
 	outputScript bitcoin.Script,
 	spvChain Chain,
 ) (bool, error) {
-	walletP2PKH, err := bitcoin.PayToPublicKeyHash(walletPublicKeyHash)
-	if err != nil {
-		return false, fmt.Errorf("cannot construct P2PKH for wallet: [%v]", err)
-	}
-	walletP2WPKH, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
-	if err != nil {
-		return false, fmt.Errorf("cannot construct P2WPKH for wallet: [%v]", err)
-	}
-
-	if bytes.Equal(outputScript, walletP2PKH) ||
-		bytes.Equal(outputScript, walletP2WPKH) {
-		return true, nil
-	}
-
-	if bitcoin.GetScriptType(outputScript) != bitcoin.P2TRScript {
-		return false, nil
-	}
-
 	wallet, err := spvChain.GetWallet(walletPublicKeyHash)
 	if err != nil {
 		return false, fmt.Errorf("cannot get wallet: [%v]", err)
 	}
 
+	walletID := wallet.WalletID
+	if walletID == [32]byte{} {
+		walletID = tbtc.DeriveLegacyWalletID(walletPublicKeyHash)
+	}
+
 	walletScript, err := tbtc.WalletOutputScript(
 		walletPublicKeyHash,
-		wallet.WalletID,
+		walletID,
 	)
 	if err != nil {
 		return false, fmt.Errorf("cannot construct wallet output script: [%v]", err)
 	}
 
-	return bytes.Equal(outputScript, walletScript), nil
+	if bytes.Equal(outputScript, walletScript) {
+		return true, nil
+	}
+
+	if bitcoin.GetScriptType(outputScript) != bitcoin.P2PKHScript {
+		return false, nil
+	}
+
+	legacyWalletPublicKeyHash, ok :=
+		tbtc.WalletPublicKeyHashFromLegacyWalletID(walletID)
+	if !ok || !bytes.Equal(legacyWalletPublicKeyHash[:], walletPublicKeyHash[:]) {
+		return false, nil
+	}
+
+	walletP2PKH, err := bitcoin.PayToPublicKeyHash(walletPublicKeyHash)
+	if err != nil {
+		return false, fmt.Errorf("cannot construct P2PKH for wallet: [%v]", err)
+	}
+
+	return bytes.Equal(outputScript, walletP2PKH), nil
 }

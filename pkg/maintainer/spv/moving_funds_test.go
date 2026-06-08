@@ -332,6 +332,13 @@ func TestGetUnprovenMovingFundsTransactions(t *testing.T) {
 		},
 	}
 
+	targetWallets := [][20]byte{
+		bytes20FromHex("3091d288521caec06ea912eacfd733edc5a36d6e"),
+		bytes20FromHex("92a6ec889a8fa34f731e639edede4c75e184307c"),
+		bytes20FromHex("c7302d75072d78be94eb8d36c4b77583c7abb06e"),
+		bytes20FromHex("2cd680318747b720d67bf4246eb7403b476adb34"),
+	}
+
 	// Record wallet data on both chains.
 	for _, wallet := range wallets {
 		spvChain.setWallet(wallet.walletPublicKeyHash, wallet.data)
@@ -343,25 +350,24 @@ func TestGetUnprovenMovingFundsTransactions(t *testing.T) {
 			}
 		}
 	}
+	for _, targetWallet := range targetWallets {
+		spvChain.setWallet(targetWallet, &tbtc.WalletChainData{
+			WalletID: tbtc.DeriveLegacyWalletID(targetWallet),
+		})
+	}
 
 	// Add moving funds commitment submitted events for the wallets.
 	// The block number field is just to make them distinguishable while reading.
 	events := []*tbtc.MovingFundsCommitmentSubmittedEvent{
 		{
 			WalletPublicKeyHash: wallets[0].walletPublicKeyHash,
-			TargetWallets: [][20]byte{
-				bytes20FromHex("3091d288521caec06ea912eacfd733edc5a36d6e"),
-				bytes20FromHex("92a6ec889a8fa34f731e639edede4c75e184307c"),
-				bytes20FromHex("c7302d75072d78be94eb8d36c4b77583c7abb06e"),
-			},
-			BlockNumber: 100,
+			TargetWallets:       targetWallets[:3],
+			BlockNumber:         100,
 		},
 		{
 			WalletPublicKeyHash: wallets[1].walletPublicKeyHash,
-			TargetWallets: [][20]byte{
-				bytes20FromHex("2cd680318747b720d67bf4246eb7403b476adb34"),
-			},
-			BlockNumber: 200,
+			TargetWallets:       targetWallets[3:],
+			BlockNumber:         200,
 		},
 	}
 
