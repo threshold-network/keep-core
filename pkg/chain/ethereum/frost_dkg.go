@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/event"
 	chainutil "github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
@@ -26,6 +27,22 @@ var _ tbtc.FrostDKGChain = (*TbtcChain)(nil)
 // with a FROST wallet registry address.
 func (tc *TbtcChain) FrostWalletRegistryAvailable() bool {
 	return tc.frostWalletRegistry != nil
+}
+
+// GetFrostOperatorID returns the FROST sortition pool ID number of the given
+// operator address. An ID number of 0 means the operator has not been allocated
+// an ID number yet.
+func (tc *TbtcChain) GetFrostOperatorID(
+	operatorAddress chain.Address,
+) (chain.OperatorID, error) {
+	if tc.frostSortitionPool == nil {
+		return 0, fmt.Errorf("FROST sortition pool is not configured")
+	}
+
+	return getOperatorID(
+		tc.frostSortitionPool,
+		common.HexToAddress(operatorAddress.String()),
+	)
 }
 
 // OnBridgeNewWalletRequested registers a callback for Bridge.NewWalletRequested.
