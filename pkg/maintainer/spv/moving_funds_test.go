@@ -109,6 +109,118 @@ func TestSubmitMovingFundsProof(t *testing.T) {
 	testutils.AssertBytesEqual(t, bytesFromHex("7ac2d9378a1c47e589dfb8095ca95ed2140d2726"), submittedProof.walletPublicKeyHash[:])
 }
 
+func TestSubmitMovingFundsProof_TaprootWalletInput(t *testing.T) {
+	requiredConfirmations := uint(6)
+
+	btcChain := newLocalBitcoinChain()
+	spvChain := newLocalChain()
+
+	walletPublicKeyHash := bytes20FromHex(
+		t,
+		"c7302d75072d78be94eb8d36c4b77583c7abb06e",
+	)
+	walletID := [32]byte{
+		0x23, 0x36, 0xf6, 0x50, 0x04, 0xd8, 0xf1, 0x22,
+		0xf1, 0xfe, 0x94, 0x7e, 0xbd, 0x00, 0x9a, 0x8b,
+		0x4a, 0xdd, 0x3a, 0x0d, 0x93, 0x73, 0x56, 0xd5,
+		0x68, 0xe3, 0x0f, 0x7f, 0xcc, 0x2e, 0x40, 0x08,
+	}
+	spvChain.setWallet(walletPublicKeyHash, &tbtc.WalletChainData{
+		WalletID: walletID,
+	})
+
+	walletOutputScript, err := bitcoin.PayToTaproot(walletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var previousTxHash bitcoin.Hash
+	previousTxHash[0] = 0x01
+	inputTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: previousTxHash,
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: walletOutputScript,
+			},
+		},
+	}
+	if err := btcChain.BroadcastTransaction(inputTx); err != nil {
+		t.Fatal(err)
+	}
+
+	targetOutputScript, err := bitcoin.PayToWitnessPublicKeyHash(
+		bytes20FromHex(t, "3091d288521caec06ea912eacfd733edc5a36d6e"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	movingFundsTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: inputTx.Hash(),
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           99000,
+				PublicKeyScript: targetOutputScript,
+			},
+		},
+	}
+
+	proof := &bitcoin.SpvProof{
+		MerkleProof:    []byte{0x01},
+		TxIndexInBlock: 2,
+		BitcoinHeaders: []byte{0x03},
+	}
+	mockSpvProofAssembler := func(
+		hash bitcoin.Hash,
+		confirmations uint,
+		btcChain bitcoin.Chain,
+	) (*bitcoin.Transaction, *bitcoin.SpvProof, error) {
+		if hash == movingFundsTx.Hash() && confirmations == requiredConfirmations {
+			return movingFundsTx, proof, nil
+		}
+
+		return nil, nil, fmt.Errorf("error while assembling spv proof")
+	}
+
+	err = submitMovingFundsProof(
+		movingFundsTx.Hash(),
+		requiredConfirmations,
+		btcChain,
+		spvChain,
+		mockSpvProofAssembler,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	submittedProofs := spvChain.getSubmittedMovingFundsProofs()
+	testutils.AssertIntsEqual(t, "proofs count", 1, len(submittedProofs))
+	testutils.AssertBytesEqual(
+		t,
+		walletPublicKeyHash[:],
+		submittedProofs[0].walletPublicKeyHash[:],
+	)
+}
+
 func TestGetUnprovenMovingFundsTransactions(t *testing.T) {
 	bytesFromHex := func(str string) []byte {
 		value, err := hex.DecodeString(str)
@@ -220,6 +332,13 @@ func TestGetUnprovenMovingFundsTransactions(t *testing.T) {
 		},
 	}
 
+	targetWallets := [][20]byte{
+		bytes20FromHex("3091d288521caec06ea912eacfd733edc5a36d6e"),
+		bytes20FromHex("92a6ec889a8fa34f731e639edede4c75e184307c"),
+		bytes20FromHex("c7302d75072d78be94eb8d36c4b77583c7abb06e"),
+		bytes20FromHex("2cd680318747b720d67bf4246eb7403b476adb34"),
+	}
+
 	// Record wallet data on both chains.
 	for _, wallet := range wallets {
 		spvChain.setWallet(wallet.walletPublicKeyHash, wallet.data)
@@ -231,25 +350,24 @@ func TestGetUnprovenMovingFundsTransactions(t *testing.T) {
 			}
 		}
 	}
+	for _, targetWallet := range targetWallets {
+		spvChain.setWallet(targetWallet, &tbtc.WalletChainData{
+			WalletID: tbtc.DeriveLegacyWalletID(targetWallet),
+		})
+	}
 
 	// Add moving funds commitment submitted events for the wallets.
 	// The block number field is just to make them distinguishable while reading.
 	events := []*tbtc.MovingFundsCommitmentSubmittedEvent{
 		{
 			WalletPublicKeyHash: wallets[0].walletPublicKeyHash,
-			TargetWallets: [][20]byte{
-				bytes20FromHex("3091d288521caec06ea912eacfd733edc5a36d6e"),
-				bytes20FromHex("92a6ec889a8fa34f731e639edede4c75e184307c"),
-				bytes20FromHex("c7302d75072d78be94eb8d36c4b77583c7abb06e"),
-			},
-			BlockNumber: 100,
+			TargetWallets:       targetWallets[:3],
+			BlockNumber:         100,
 		},
 		{
 			WalletPublicKeyHash: wallets[1].walletPublicKeyHash,
-			TargetWallets: [][20]byte{
-				bytes20FromHex("2cd680318747b720d67bf4246eb7403b476adb34"),
-			},
-			BlockNumber: 200,
+			TargetWallets:       targetWallets[3:],
+			BlockNumber:         200,
 		},
 	}
 
@@ -288,4 +406,148 @@ func TestGetUnprovenMovingFundsTransactions(t *testing.T) {
 	if diff := deep.Equal(expectedTransactionsHashes, transactionsHashes); diff != nil {
 		t.Errorf("invalid unproven transaction hashes: %v", diff)
 	}
+}
+
+func TestGetUnprovenMovingFundsTransactions_FindsTaprootTargetOutput(
+	t *testing.T,
+) {
+	historyDepth := uint64(5)
+	transactionLimit := 10
+
+	btcChain := newLocalBitcoinChain()
+	spvChain := newLocalChain()
+
+	currentBlock := uint64(1000)
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	spvChain.setBlockCounter(blockCounter)
+
+	sourceWalletPublicKeyHash := bytes20FromHex(
+		t,
+		"8db50eb52063ea9d98b3eac91489a90f738986f6",
+	)
+	sourceWalletID := [32]byte{
+		0x23, 0x36, 0xf6, 0x50, 0x04, 0xd8, 0xf1, 0x22,
+		0xf1, 0xfe, 0x94, 0x7e, 0xbd, 0x00, 0x9a, 0x8b,
+		0x4a, 0xdd, 0x3a, 0x0d, 0x93, 0x73, 0x56, 0xd5,
+		0x68, 0xe3, 0x0f, 0x7f, 0xcc, 0x2e, 0x40, 0x08,
+	}
+	targetWalletPublicKeyHash := bytes20FromHex(
+		t,
+		"c7302d75072d78be94eb8d36c4b77583c7abb06e",
+	)
+	targetWalletID := [32]byte{
+		0x90, 0xe7, 0xce, 0x2b, 0x70, 0xe4, 0x23, 0x3a,
+		0xbe, 0x6f, 0xd4, 0x9d, 0x45, 0x72, 0x45, 0xe3,
+		0x5a, 0x3b, 0xa1, 0x4f, 0x12, 0x1d, 0x16, 0x0c,
+		0xeb, 0x61, 0x26, 0xed, 0x1e, 0xdf, 0x14, 0x5a,
+	}
+
+	sourceScript, err := bitcoin.PayToTaproot(sourceWalletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetScript, err := bitcoin.PayToTaproot(targetWalletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var previousTxHash bitcoin.Hash
+	previousTxHash[0] = 0x02
+	inputTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: previousTxHash,
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: sourceScript,
+			},
+		},
+	}
+	if err := btcChain.BroadcastTransaction(inputTx); err != nil {
+		t.Fatal(err)
+	}
+
+	movingFundsTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: inputTx.Hash(),
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           99000,
+				PublicKeyScript: targetScript,
+			},
+		},
+	}
+	if err := btcChain.BroadcastTransaction(movingFundsTx); err != nil {
+		t.Fatal(err)
+	}
+
+	spvChain.setWallet(sourceWalletPublicKeyHash, &tbtc.WalletChainData{
+		WalletID: sourceWalletID,
+		MainUtxoHash: spvChain.ComputeMainUtxoHash(
+			&bitcoin.UnspentTransactionOutput{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: inputTx.Hash(),
+					OutputIndex:     0,
+				},
+				Value: 100000,
+			},
+		),
+		State: tbtc.StateMovingFunds,
+	})
+	spvChain.setWallet(targetWalletPublicKeyHash, &tbtc.WalletChainData{
+		WalletID: targetWalletID,
+		State:    tbtc.StateLive,
+	})
+
+	err = spvChain.addPastMovingFundsCommitmentSubmittedEvent(
+		&tbtc.MovingFundsCommitmentSubmittedEventFilter{
+			StartBlock: currentBlock - historyDepth,
+		},
+		&tbtc.MovingFundsCommitmentSubmittedEvent{
+			WalletPublicKeyHash: sourceWalletPublicKeyHash,
+			TargetWallets: [][20]byte{
+				targetWalletPublicKeyHash,
+			},
+			BlockNumber: currentBlock - 1,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unprovenTransactions, err := getUnprovenMovingFundsTransactions(
+		historyDepth,
+		transactionLimit,
+		btcChain,
+		spvChain,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertIntsEqual(t, "transactions count", 1, len(unprovenTransactions))
+	expectedHash := movingFundsTx.Hash()
+	actualHash := unprovenTransactions[0].Hash()
+	testutils.AssertBytesEqual(
+		t,
+		expectedHash[:],
+		actualHash[:],
+	)
 }

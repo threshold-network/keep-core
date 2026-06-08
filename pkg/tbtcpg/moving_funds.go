@@ -134,8 +134,12 @@ func (mft *MovingFundsTask) Run(request *tbtc.CoordinationProposalRequest) (
 		return nil, false, nil
 	}
 
-	walletMainUtxo, err := tbtc.DetermineWalletMainUtxo(
-		walletPublicKeyHash,
+	if request.WalletPublicKey == nil {
+		return nil, false, fmt.Errorf("wallet public key is required")
+	}
+
+	walletMainUtxo, err := tbtc.DetermineWalletMainUtxoForPublicKey(
+		request.WalletPublicKey,
 		mft.chain,
 		mft.btcChain,
 	)
@@ -189,6 +193,7 @@ func (mft *MovingFundsTask) Run(request *tbtc.CoordinationProposalRequest) (
 		walletMemberIDs, walletMemberIndex, err := mft.GetWalletMembersInfo(
 			request.WalletOperators,
 			request.ExecutingOperator,
+			walletChainData.EcdsaWalletID == [32]byte{},
 		)
 		if err != nil {
 			return nil, false, fmt.Errorf(
@@ -439,6 +444,7 @@ func (mft *MovingFundsTask) retrieveCommittedTargetWallets(
 func (mft *MovingFundsTask) GetWalletMembersInfo(
 	walletOperators []chain.Address,
 	executingOperator chain.Address,
+	useFrostOperatorIDs bool,
 ) ([]uint32, uint32, error) {
 	// Cache mapping operator addresses to their wallet member IDs. It helps to
 	// limit the number of calls to the ETH client if some operator addresses
@@ -465,7 +471,10 @@ func (mft *MovingFundsTask) GetWalletMembersInfo(
 		// Search for the operator address in the cache. Store the operator
 		// address in the cache if it's not there.
 		if operatorID, found := operatorIDCache[operatorAddress]; !found {
-			fetchedOperatorID, err := mft.chain.GetOperatorID(operatorAddress)
+			fetchedOperatorID, err := mft.getOperatorID(
+				operatorAddress,
+				useFrostOperatorIDs,
+			)
 			if err != nil {
 				return nil, 0, fmt.Errorf("failed to get operator ID: [%w]", err)
 			}
@@ -482,6 +491,17 @@ func (mft *MovingFundsTask) GetWalletMembersInfo(
 	}
 
 	return walletMemberIDs, uint32(walletMemberIndex), nil
+}
+
+func (mft *MovingFundsTask) getOperatorID(
+	operatorAddress chain.Address,
+	useFrostOperatorID bool,
+) (chain.OperatorID, error) {
+	if useFrostOperatorID {
+		return mft.chain.GetFrostOperatorID(operatorAddress)
+	}
+
+	return mft.chain.GetOperatorID(operatorAddress)
 }
 
 // SubmitMovingFundsCommitment submits the moving funds commitment and waits

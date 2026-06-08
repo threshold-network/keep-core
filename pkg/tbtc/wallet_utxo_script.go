@@ -10,6 +10,13 @@ func walletMainUtxoScriptType(
 	bitcoinChain bitcoin.Chain,
 	walletMainUtxo *bitcoin.UnspentTransactionOutput,
 ) (bitcoin.ScriptType, error) {
+	return walletUtxoScriptType(bitcoinChain, walletMainUtxo)
+}
+
+func walletUtxoScriptType(
+	bitcoinChain bitcoin.Chain,
+	walletMainUtxo *bitcoin.UnspentTransactionOutput,
+) (bitcoin.ScriptType, error) {
 	if walletMainUtxo == nil {
 		return bitcoin.NonStandardScript, fmt.Errorf("wallet main UTXO is required")
 	}
@@ -45,4 +52,21 @@ func walletMainUtxoScriptType(
 	return bitcoin.GetScriptType(
 		transaction.Outputs[outputIndex].PublicKeyScript,
 	), nil
+}
+
+func addWalletUtxoInput(
+	builder *bitcoin.TransactionBuilder,
+	bitcoinChain bitcoin.Chain,
+	utxo *bitcoin.UnspentTransactionOutput,
+) error {
+	scriptType, err := walletUtxoScriptType(bitcoinChain, utxo)
+	if err != nil {
+		return err
+	}
+
+	if scriptType == bitcoin.P2TRScript {
+		return builder.AddTaprootKeyPathInput(utxo)
+	}
+
+	return builder.AddPublicKeyHashInput(utxo)
 }

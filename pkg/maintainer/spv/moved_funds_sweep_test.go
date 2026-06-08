@@ -383,3 +383,126 @@ func TestGetUnprovenMovedFundsSweepTransactions(t *testing.T) {
 		t.Errorf("invalid unproven transaction hashes: %v", diff)
 	}
 }
+
+func TestGetUnprovenMovedFundsSweepTransactions_FindsTaprootWalletOutput(
+	t *testing.T,
+) {
+	historyDepth := uint64(5)
+	transactionLimit := 10
+
+	btcChain := newLocalBitcoinChain()
+	spvChain := newLocalChain()
+
+	currentBlock := uint64(1000)
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	spvChain.setBlockCounter(blockCounter)
+
+	walletPublicKeyHash := bytes20FromHex(
+		t,
+		"c7302d75072d78be94eb8d36c4b77583c7abb06e",
+	)
+	walletID := [32]byte{
+		0x23, 0x36, 0xf6, 0x50, 0x04, 0xd8, 0xf1, 0x22,
+		0xf1, 0xfe, 0x94, 0x7e, 0xbd, 0x00, 0x9a, 0x8b,
+		0x4a, 0xdd, 0x3a, 0x0d, 0x93, 0x73, 0x56, 0xd5,
+		0x68, 0xe3, 0x0f, 0x7f, 0xcc, 0x2e, 0x40, 0x08,
+	}
+	walletScript, err := bitcoin.PayToTaproot(walletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var previousTxHash bitcoin.Hash
+	previousTxHash[0] = 0x04
+	movingFundsTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: previousTxHash,
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: walletScript,
+			},
+		},
+	}
+	if err := btcChain.BroadcastTransaction(movingFundsTx); err != nil {
+		t.Fatal(err)
+	}
+
+	movedFundsSweepTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: movingFundsTx.Hash(),
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           99000,
+				PublicKeyScript: walletScript,
+			},
+		},
+	}
+	if err := btcChain.BroadcastTransaction(movedFundsSweepTx); err != nil {
+		t.Fatal(err)
+	}
+
+	spvChain.setWallet(walletPublicKeyHash, &tbtc.WalletChainData{
+		WalletID:                            walletID,
+		State:                               tbtc.StateLive,
+		PendingMovedFundsSweepRequestsCount: 1,
+	})
+	spvChain.setMovedFundsSweepRequest(
+		movingFundsTx.Hash(),
+		0,
+		&tbtc.MovedFundsSweepRequest{
+			State: tbtc.MovedFundsStatePending,
+		},
+	)
+
+	err = spvChain.addPastMovingFundsCommitmentSubmittedEvent(
+		&tbtc.MovingFundsCommitmentSubmittedEventFilter{
+			StartBlock: currentBlock - historyDepth,
+		},
+		&tbtc.MovingFundsCommitmentSubmittedEvent{
+			WalletPublicKeyHash: bytes20FromHex(
+				t,
+				"8db50eb52063ea9d98b3eac91489a90f738986f6",
+			),
+			TargetWallets: [][20]byte{
+				walletPublicKeyHash,
+			},
+			BlockNumber: currentBlock - 1,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unprovenTransactions, err := getUnprovenMovedFundsSweepTransactions(
+		historyDepth,
+		transactionLimit,
+		btcChain,
+		spvChain,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertIntsEqual(t, "transactions count", 1, len(unprovenTransactions))
+	expectedHash := movedFundsSweepTx.Hash()
+	actualHash := unprovenTransactions[0].Hash()
+	testutils.AssertBytesEqual(t, expectedHash[:], actualHash[:])
+}

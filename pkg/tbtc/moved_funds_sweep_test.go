@@ -159,11 +159,18 @@ func TestAssembleMovedFundsSweepTransaction(t *testing.T) {
 				}
 			}
 
+			walletOutputScript, err := bitcoin.PayToWitnessPublicKeyHash(
+				bitcoin.PublicKeyHash(scenario.WalletPublicKey),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
 			builder, err := assembleMovedFundsSweepTransaction(
 				bitcoinChain,
-				scenario.WalletPublicKey,
 				scenario.MovedFundsUtxo,
 				scenario.WalletMainUtxo,
+				walletOutputScript,
 				scenario.Fee,
 			)
 
@@ -211,7 +218,7 @@ func TestAssembleMovedFundsSweepTransaction(t *testing.T) {
 	}
 }
 
-func TestAssembleMovedFundsSweepTransaction_RejectsTaprootWalletMainUtxo(
+func TestAssembleMovedFundsSweepTransaction_SupportsTaprootUtxos(
 	t *testing.T,
 ) {
 	bitcoinChain := newLocalBitcoinChain()
@@ -225,26 +232,106 @@ func TestAssembleMovedFundsSweepTransaction_RejectsTaprootWalletMainUtxo(
 		walletPublicKey,
 	)
 
-	var movedFundsTxHash bitcoin.Hash
-	movedFundsTxHash[0] = 0x02
+	walletXOnlyPublicKey, err := walletXOnlyPublicKey(walletPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := assembleMovedFundsSweepTransaction(
+	walletOutputScript, err := bitcoin.PayToTaproot(walletXOnlyPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var previousTxHash bitcoin.Hash
+	previousTxHash[0] = 0x02
+	movingFundsTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: previousTxHash,
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: walletOutputScript,
+			},
+		},
+	}
+	if err := bitcoinChain.BroadcastTransaction(movingFundsTx); err != nil {
+		t.Fatal(err)
+	}
+
+	builder, err := assembleMovedFundsSweepTransaction(
 		bitcoinChain,
-		walletPublicKey,
 		&bitcoin.UnspentTransactionOutput{
 			Outpoint: &bitcoin.TransactionOutpoint{
-				TransactionHash: movedFundsTxHash,
+				TransactionHash: movingFundsTx.Hash(),
 				OutputIndex:     0,
 			},
 			Value: 100000,
 		},
 		walletMainUtxo,
+		walletOutputScript,
 		1000,
 	)
-	if err == nil {
-		t.Fatal("expected Taproot moved-funds sweep main UTXO rejection")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "Taproot moved-funds sweep main UTXOs") {
+
+	if !builder.HasOnlyTaprootKeyPathInputs() {
+		t.Fatal("expected moved funds sweep builder to use Taproot key-path inputs")
+	}
+}
+
+func TestAssembleMovedFundsSweepUtxo_RejectsOutOfRangeOutputIndex(t *testing.T) {
+	bitcoinChain := newLocalBitcoinChain()
+
+	var previousTxHash bitcoin.Hash
+	previousTxHash[0] = 0x03
+
+	outputScript, err := bitcoin.PayToWitnessPublicKeyHash(
+		hexToByte20("c7302d75072d78be94eb8d36c4b77583c7abb06e"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	movingFundsTx := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: previousTxHash,
+					OutputIndex:     0,
+				},
+				Sequence: 0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: outputScript,
+			},
+		},
+	}
+	if err := bitcoinChain.BroadcastTransaction(movingFundsTx); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = assembleMovedFundsSweepUtxo(
+		bitcoinChain,
+		movingFundsTx.Hash(),
+		1,
+	)
+	if err == nil {
+		t.Fatal("expected out-of-range output index error")
+	}
+	if !strings.Contains(err.Error(), "output index [1] out of range") {
 		t.Fatalf("unexpected error: [%v]", err)
 	}
 }

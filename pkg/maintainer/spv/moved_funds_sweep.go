@@ -1,7 +1,6 @@
 package spv
 
 import (
-	"bytes"
 	"fmt"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -116,6 +115,16 @@ func parseMovedFundsSweepTransactionInputs(
 		)
 	}
 
+	if input.Outpoint.OutputIndex >= uint32(len(inputTx.Outputs)) {
+		return bitcoin.UnspentTransactionOutput{}, fmt.Errorf(
+			"output index [%d] out of range for transaction [%s] "+
+				"with [%d] outputs",
+			input.Outpoint.OutputIndex,
+			input.Outpoint.TransactionHash.Hex(bitcoin.InternalByteOrder),
+			len(inputTx.Outputs),
+		)
+	}
+
 	// Get the specific output spent by the moved funds sweep transaction.
 	spentOutput := inputTx.Outputs[input.Outpoint.OutputIndex]
 
@@ -210,10 +219,12 @@ func getUnprovenMovedFundsSweepTransactions(
 
 		// When wallet makes a moved funds sweep transaction, it transfers
 		// funds to itself. Therefore we can search all the transactions that
-		// pay to the wallet's public key hash.
-		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+		// pay to one of the wallet's scripts.
+		walletTransactions, err := getWalletTransactions(
 			walletPublicKeyHash,
+			wallet,
 			transactionLimit,
+			btcChain,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -327,21 +338,17 @@ func isUnprovenMovedFundsSweepTransaction(
 	// transfer funds to the wallet itself.
 	output := transaction.Outputs[0]
 
-	p2pkh, err := bitcoin.PayToPublicKeyHash(walletPublicKeyHash)
+	isWalletOutput, err := isWalletOutputScript(
+		walletPublicKeyHash,
+		output.PublicKeyScript,
+		spvChain,
+	)
 	if err != nil {
 		return false, fmt.Errorf(
-			"failed to compute p2pkh script for transaction output: [%v]",
-			err,
-		)
-	}
-	p2wpkh, err := bitcoin.PayToWitnessPublicKeyHash(walletPublicKeyHash)
-	if err != nil {
-		return false, fmt.Errorf(
-			"failed to compute p2wpkh script for transaction output: [%v]",
+			"failed to check if output is a wallet output: [%v]",
 			err,
 		)
 	}
 
-	return bytes.Equal(output.PublicKeyScript, p2pkh) ||
-		bytes.Equal(output.PublicKeyScript, p2wpkh), nil
+	return isWalletOutput, nil
 }

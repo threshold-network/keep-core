@@ -331,7 +331,9 @@ func TestMovingFundsAction_FindTargetWallets_CommitmentAlreadySubmitted(t *testi
 func TestMovingFundsAction_GetWalletMembersInfo(t *testing.T) {
 	var tests = map[string]struct {
 		walletOperators          []operatorInfo
+		frostOperatorIDs         []operatorInfo
 		executingOperator        chain.Address
+		useFrostOperatorIDs      bool
 		expectedMemberIDs        []uint32
 		expectedOperatorPosition uint32
 		expectedError            error
@@ -346,6 +348,28 @@ func TestMovingFundsAction_GetWalletMembersInfo(t *testing.T) {
 				{"28759deda2ea33bd72f68ea2e8f60cd670c2549f", 2},
 			},
 			executingOperator:        "28759deda2ea33bd72f68ea2e8f60cd670c2549f",
+			expectedMemberIDs:        []uint32{3, 1, 2, 4, 2},
+			expectedOperatorPosition: 3,
+			expectedError:            nil,
+		},
+		"success case with FROST operator IDs": {
+			walletOperators: []operatorInfo{
+				// Legacy IDs are intentionally different to prove the FROST
+				// sortition pool is used.
+				{"5df232b0348928793658dd05dfc6b05a59d11ae8", 30},
+				{"dcc895d32b74b34cef2baa6546884fcda65da1e9", 10},
+				{"28759deda2ea33bd72f68ea2e8f60cd670c2549f", 20},
+				{"f7891d42f3c61a49e0aed1e31b151877c0905cf7", 40},
+				{"28759deda2ea33bd72f68ea2e8f60cd670c2549f", 20},
+			},
+			frostOperatorIDs: []operatorInfo{
+				{"5df232b0348928793658dd05dfc6b05a59d11ae8", 3},
+				{"dcc895d32b74b34cef2baa6546884fcda65da1e9", 1},
+				{"28759deda2ea33bd72f68ea2e8f60cd670c2549f", 2},
+				{"f7891d42f3c61a49e0aed1e31b151877c0905cf7", 4},
+			},
+			executingOperator:        "28759deda2ea33bd72f68ea2e8f60cd670c2549f",
+			useFrostOperatorIDs:      true,
 			expectedMemberIDs:        []uint32{3, 1, 2, 4, 2},
 			expectedOperatorPosition: 3,
 			expectedError:            nil,
@@ -379,10 +403,20 @@ func TestMovingFundsAction_GetWalletMembersInfo(t *testing.T) {
 				}
 				walletOperators = append(walletOperators, operatorInfo.Address)
 			}
+			for _, operatorInfo := range test.frostOperatorIDs {
+				err := tbtcChain.SetFrostOperatorID(
+					operatorInfo.Address,
+					operatorInfo.OperatorID,
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 
 			memberIDs, operatorPosition, err := task.GetWalletMembersInfo(
 				walletOperators,
 				test.executingOperator,
+				test.useFrostOperatorIDs,
 			)
 
 			if diff := deep.Equal(test.expectedMemberIDs, memberIDs); diff != nil {

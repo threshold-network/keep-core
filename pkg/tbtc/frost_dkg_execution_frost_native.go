@@ -79,152 +79,145 @@ func executeFrostDKGIfPossible(
 	fullMembers := frostFullMembers(groupSelectionResult)
 	dkgTimeoutBlock := event.BlockNumber + params.SubmissionTimeoutBlocks
 
-	for _, currentMemberIndex := range memberIndexes {
-		memberIndex := currentMemberIndex
+	go func() {
+		dkgLogger := logger.With(
+			zap.String("seed", fmt.Sprintf("0x%x", event.Seed)),
+			zap.String("memberIndexes", fmt.Sprintf("%v", memberIndexes)),
+		)
 
-		go func() {
-			dkgLogger := logger.With(
-				zap.String("seed", fmt.Sprintf("0x%x", event.Seed)),
-				zap.Uint8("memberIndex", uint8(memberIndex)),
-			)
+		node.protocolLatch.Lock()
+		defer node.protocolLatch.Unlock()
 
-			node.protocolLatch.Lock()
-			defer node.protocolLatch.Unlock()
+		dkgCtx, cancelDkgCtx := withCancelOnBlock(
+			ctx,
+			dkgTimeoutBlock,
+			node.waitForBlockHeight,
+		)
+		defer cancelDkgCtx()
 
-			dkgCtx, cancelDkgCtx := withCancelOnBlock(
-				ctx,
-				dkgTimeoutBlock,
-				node.waitForBlockHeight,
-			)
-			defer cancelDkgCtx()
-
-			sessionID := fmt.Sprintf("%s-%s", channelName, "attempt-1")
-			activeMemberIndexes, misbehavedMembersIndices, err :=
-				announceFrostDKGReadiness(
-					dkgCtx,
-					node,
-					channel,
-					membershipValidator,
-					fmt.Sprintf("%v-%v", ProtocolName, "frost-dkg"),
-					sessionID,
-					memberIndex,
-					len(groupSelectionResult.OperatorsIDs),
-				)
-			if err != nil {
-				dkgLogger.Errorf("FROST DKG readiness announcement failed: [%v]", err)
-				return
-			}
-
-			submitterMemberIndex := lowestLocalActiveMemberIndex(
-				memberIndexes,
-				activeMemberIndexes,
-			)
-			if submitterMemberIndex == 0 {
-				dkgLogger.Infof(
-					"skipping FROST DKG result assembly; no local member "+
-						"index is active in [%v]",
-					activeMemberIndexes,
-				)
-				return
-			}
-
-			tbtcSignerMemberIndexes, err := finalFrostDKGMemberIndexes(
-				activeMemberIndexes,
-				groupSelectionResult,
-				node.groupParameters,
-			)
-			if err != nil {
-				dkgLogger.Errorf("failed to resolve final FROST DKG member indexes: [%v]", err)
-				return
-			}
-
-			executionResult, err := executeFrostDKG(
-				nativeTBTCSignerEngine,
-				event,
-				tbtcSignerMemberIndexes,
-				signatureThreshold,
+		sessionID := fmt.Sprintf("%s-%s", channelName, "attempt-1")
+		activeMemberIndexes, misbehavedMembersIndices, err :=
+			announceFrostDKGReadiness(
+				dkgCtx,
+				node,
+				channel,
+				membershipValidator,
+				fmt.Sprintf("%v-%v", ProtocolName, "frost-dkg"),
 				sessionID,
+				memberIndexes,
+				len(groupSelectionResult.OperatorsIDs),
 			)
-			if err != nil {
-				dkgLogger.Errorf("FROST DKG execution failed: [%v]", err)
-				return
-			}
+		if err != nil {
+			dkgLogger.Errorf("FROST DKG readiness announcement failed: [%v]", err)
+			return
+		}
 
+		localActiveMemberIndexes := localActiveFrostMemberIndexes(
+			memberIndexes,
+			activeMemberIndexes,
+		)
+		submitterMemberIndex := lowestLocalActiveMemberIndex(
+			localActiveMemberIndexes,
+			activeMemberIndexes,
+		)
+		if submitterMemberIndex == 0 {
+			dkgLogger.Infof(
+				"skipping FROST DKG result assembly; no local member "+
+					"index is active in [%v]",
+				activeMemberIndexes,
+			)
+			return
+		}
+
+		tbtcSignerMemberIndexes, err := finalFrostDKGMemberIndexes(
+			activeMemberIndexes,
+			groupSelectionResult,
+			node.groupParameters,
+		)
+		if err != nil {
+			dkgLogger.Errorf("failed to resolve final FROST DKG member indexes: [%v]", err)
+			return
+		}
+
+		executionResult, err := executeFrostDKG(
+			nativeTBTCSignerEngine,
+			event,
+			tbtcSignerMemberIndexes,
+			signatureThreshold,
+			sessionID,
+		)
+		if err != nil {
+			dkgLogger.Errorf("FROST DKG execution failed: [%v]", err)
+			return
+		}
+
+		for _, localMemberIndex := range localActiveMemberIndexes {
 			if err := registerFrostSignerWithMaterial(
 				node,
 				executionResult.outputKey,
 				executionResult.signerMaterial,
-				memberIndex,
+				localMemberIndex,
 				activeMemberIndexes,
 				groupSelectionResult,
 			); err != nil {
 				dkgLogger.Errorf("failed to register FROST signer: [%v]", err)
 				return
 			}
+		}
 
-			unsignedResult, err := registry.AssembleResult(
-				uint64(submitterMemberIndex),
-				executionResult.outputKey,
-				fullMembers,
-				misbehavedMembersIndices,
-				nil,
-				nil,
-			)
-			if err != nil {
-				dkgLogger.Errorf("failed to assemble unsigned FROST DKG result: [%v]", err)
-				return
-			}
+		unsignedResult, err := registry.AssembleResult(
+			uint64(submitterMemberIndex),
+			executionResult.outputKey,
+			fullMembers,
+			misbehavedMembersIndices,
+			nil,
+			nil,
+		)
+		if err != nil {
+			dkgLogger.Errorf("failed to assemble unsigned FROST DKG result: [%v]", err)
+			return
+		}
 
-			signedResult, err := signAndCollectFrostDKGResultSignatures(
-				dkgCtx,
-				node,
-				frostChain,
-				channel,
-				membershipValidator,
-				sessionID,
-				event.Seed,
-				memberIndex,
-				activeMemberIndexes,
-				groupSelectionResult,
-				unsignedResult,
-			)
-			if err != nil {
-				dkgLogger.Errorf("failed to collect FROST DKG result signatures: [%v]", err)
-				return
-			}
+		signedResult, err := signAndCollectFrostDKGResultSignatures(
+			dkgCtx,
+			node,
+			frostChain,
+			channel,
+			membershipValidator,
+			sessionID,
+			event.Seed,
+			localActiveMemberIndexes,
+			activeMemberIndexes,
+			groupSelectionResult,
+			unsignedResult,
+		)
+		if err != nil {
+			dkgLogger.Errorf("failed to collect FROST DKG result signatures: [%v]", err)
+			return
+		}
 
-			valid, reason, err := frostChain.IsFrostDKGResultValid(signedResult)
-			if err != nil {
-				dkgLogger.Errorf("failed to pre-validate FROST DKG result: [%v]", err)
-				return
-			}
-			if !valid {
-				dkgLogger.Errorf("assembled FROST DKG result is invalid: [%s]", reason)
-				return
-			}
+		valid, reason, err := frostChain.IsFrostDKGResultValid(signedResult)
+		if err != nil {
+			dkgLogger.Errorf("failed to pre-validate FROST DKG result: [%v]", err)
+			return
+		}
+		if !valid {
+			dkgLogger.Errorf("assembled FROST DKG result is invalid: [%s]", reason)
+			return
+		}
 
-			if memberIndex != submitterMemberIndex {
-				dkgLogger.Infof(
-					"skipping FROST DKG result submission; member [%d] is "+
-						"the designated local submitter",
-					submitterMemberIndex,
-				)
-				return
-			}
-
-			if err := submitFrostDKGResultWithDelay(
-				dkgCtx,
-				node,
-				frostChain,
-				submitterMemberIndex,
-				activeMemberIndexes,
-				signedResult,
-			); err != nil {
-				dkgLogger.Errorf("failed to submit FROST DKG result: [%v]", err)
-				return
-			}
-		}()
-	}
+		if err := submitFrostDKGResultWithDelay(
+			dkgCtx,
+			node,
+			frostChain,
+			submitterMemberIndex,
+			activeMemberIndexes,
+			signedResult,
+		); err != nil {
+			dkgLogger.Errorf("failed to submit FROST DKG result: [%v]", err)
+			return
+		}
+	}()
 }
 
 type frostDKGExecutionResult struct {
@@ -448,7 +441,7 @@ func announceFrostDKGReadiness(
 	membershipValidator *group.MembershipValidator,
 	protocolID string,
 	sessionID string,
-	memberIndex group.MemberIndex,
+	memberIndexes []group.MemberIndex,
 	groupSize int,
 ) (
 	[]group.MemberIndex,
@@ -474,9 +467,9 @@ func announceFrostDKGReadiness(
 	defer cancelAnnounceCtx()
 
 	announcer := protocolannouncer.New(protocolID, channel, membershipValidator)
-	activeMemberIndexes, err := announcer.Announce(
+	activeMemberIndexes, err := announcer.AnnounceMany(
 		announceCtx,
-		memberIndex,
+		memberIndexes,
 		sessionID,
 	)
 	if err != nil {
@@ -497,6 +490,35 @@ func announceFrostDKGReadiness(
 	return activeMemberIndexes,
 		frostMisbehavedMemberIndices(groupSize, activeMemberIndexes),
 		nil
+}
+
+func localActiveFrostMemberIndexes(
+	localMemberIndexes []group.MemberIndex,
+	activeMemberIndexes []group.MemberIndex,
+) []group.MemberIndex {
+	activeMembersSet := make(
+		map[group.MemberIndex]struct{},
+		len(activeMemberIndexes),
+	)
+	for _, activeMemberIndex := range activeMemberIndexes {
+		activeMembersSet[activeMemberIndex] = struct{}{}
+	}
+
+	localActiveMemberIndexes := make(
+		[]group.MemberIndex,
+		0,
+		len(localMemberIndexes),
+	)
+	for _, localMemberIndex := range localMemberIndexes {
+		if _, ok := activeMembersSet[localMemberIndex]; ok {
+			localActiveMemberIndexes = append(
+				localActiveMemberIndexes,
+				localMemberIndex,
+			)
+		}
+	}
+
+	return localActiveMemberIndexes
 }
 
 func registerFrostSignerWithMaterial(

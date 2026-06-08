@@ -97,6 +97,7 @@ type LocalChain struct {
 	movedFundsSweepRequests                  map[[32]byte]*tbtc.MovedFundsSweepRequest
 	movedFundsSweepProposalValidations       map[[32]byte]bool
 	operatorIDs                              map[chain.Address]uint32
+	frostOperatorIDs                         map[chain.Address]uint32
 	redemptionDelays                         map[[32]byte]time.Duration
 	depositMinAge                            uint32
 	currentBlockTimestamp                    time.Time
@@ -121,6 +122,7 @@ func NewLocalChain() *LocalChain {
 		movedFundsSweepRequests:                  make(map[[32]byte]*tbtc.MovedFundsSweepRequest),
 		movedFundsSweepProposalValidations:       make(map[[32]byte]bool),
 		operatorIDs:                              make(map[chain.Address]uint32),
+		frostOperatorIDs:                         make(map[chain.Address]uint32),
 		redemptionDelays:                         make(map[[32]byte]time.Duration),
 		currentBlockTimestamp:                    time.Now(),
 	}
@@ -1081,6 +1083,35 @@ func (lc *LocalChain) GetOperatorID(
 	operatorID, ok := lc.operatorIDs[operatorAddress]
 	if !ok {
 		return 0, fmt.Errorf("operator not found")
+	}
+
+	return operatorID, nil
+}
+
+func (lc *LocalChain) SetFrostOperatorID(
+	operatorAddress chain.Address,
+	operatorID chain.OperatorID,
+) error {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	_, ok := lc.frostOperatorIDs[operatorAddress]
+	if !ok {
+		lc.frostOperatorIDs[operatorAddress] = operatorID
+	}
+
+	return nil
+}
+
+func (lc *LocalChain) GetFrostOperatorID(
+	operatorAddress chain.Address,
+) (chain.OperatorID, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	operatorID, ok := lc.frostOperatorIDs[operatorAddress]
+	if !ok {
+		return 0, fmt.Errorf("FROST operator not found")
 	}
 
 	return operatorID, nil
