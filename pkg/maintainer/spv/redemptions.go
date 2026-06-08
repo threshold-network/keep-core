@@ -263,7 +263,7 @@ func walletPublicKeyScripts(
 	if bitcoin.GetScriptType(walletOutputScript) == bitcoin.P2TRScript {
 		// FROST Taproot wallets use the canonical wallet ID as the x-only
 		// Taproot output key.
-		publicKeyScripts = append(publicKeyScripts, walletOutputScript)
+		return []bitcoin.Script{walletOutputScript}, nil
 	}
 
 	return publicKeyScripts, nil
