@@ -30,11 +30,10 @@ jobs:
           # https://github.com/NomicFoundation/hardhat/issues/3877.
           node-version: "18.15.0"
           registry-url: "https://registry.npmjs.org"
-          cache: "yarn"
-          cache-dependency-path: solidity/ecdsa/yarn.lock
 
-      - name: Install dependencies
-        run: yarn install --frozen-lockfile
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: ./solidity/ecdsa
 
       # Deploy contracts to a local network to generate deployment artifacts that
       # are required by dashboard and client compilation.

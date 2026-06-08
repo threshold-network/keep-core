@@ -335,8 +335,8 @@ $ curl localhost:9601/metrics
 # TYPE connected_peers_count gauge
 connected_peers_count 108 1623235129569
 
-# TYPE connected_bootstrap_count gauge
-connected_bootstrap_count 10 1623235129569
+# TYPE connected_wellknown_peers_count gauge
+connected_wellknown_peers_count 10 1623235129569
 
 # TYPE eth_connectivity gauge
 eth_connectivity 1 1623235129789

@@ -34,15 +34,16 @@ func ScheduleRetransmissions(
 	retransmit RetransmitFn,
 	strategy Strategy,
 ) {
-	go func() {
-		ticker.onTick(ctx, func() {
-			go func() {
-				if err := strategy.Tick(retransmit); err != nil {
-					logger.Errorf("could not retransmit message: [%v]", err)
-				}
-			}()
-		})
-	}()
+	// onTick must register the callback synchronously and not block; the
+	// callback offloads work to its own goroutine so the ticker loop is free
+	// to fire subsequent ticks.
+	ticker.onTick(ctx, func() {
+		go func() {
+			if err := strategy.Tick(retransmit); err != nil {
+				logger.Errorf("could not retransmit message: [%v]", err)
+			}
+		}()
+	})
 }
 
 // WithRetransmissionSupport takes the standard network message handler and

@@ -43,6 +43,11 @@ type validator interface {
 	UnregisterTopicValidator(topic string) error
 }
 
+type pubsubSubscription interface {
+	Next(ctx context.Context) (*pubsub.Message, error)
+	Cancel()
+}
+
 type publisher interface {
 	Publish(ctx context.Context, data []byte, opts ...pubsub.PubOpt) error
 }
@@ -67,7 +72,7 @@ type channel struct {
 	publisherMutex sync.Mutex
 	publisher      publisher
 
-	subscription         *pubsub.Subscription
+	subscription         pubsubSubscription
 	incomingMessageQueue chan *pubsub.Message
 
 	messageHandlersMutex sync.Mutex
@@ -473,25 +478,29 @@ func (c *channel) monitorQueueSizes(ctx context.Context, recorder interface {
 	for {
 		select {
 		case <-ticker.C:
-			// Record incoming message queue size
-			queueSize := float64(len(c.incomingMessageQueue))
-			recorder.SetGauge(clientinfo.MetricIncomingMessageQueueSize, queueSize)
-
-			// Record message handler queue sizes
-			// Copy data while holding lock, then record metrics after releasing
-			c.messageHandlersMutex.Lock()
-			queueSizes := make([]float64, len(c.messageHandlers))
-			for i, handler := range c.messageHandlers {
-				queueSizes[i] = float64(len(handler.channel))
-			}
-			c.messageHandlersMutex.Unlock()
-
-			// Record metrics outside the lock to prevent potential deadlock
-			for i, size := range queueSizes {
-				recorder.SetGauge(fmt.Sprintf("%s_%d", clientinfo.MetricMessageHandlerQueueSize, i), size)
-			}
+			c.snapshotQueueSizes(recorder)
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+// snapshotQueueSizes records the current incoming message queue and all message
+// handler queue sizes to the provided recorder. Exposed for testing.
+func (c *channel) snapshotQueueSizes(recorder interface {
+	SetGauge(name string, value float64)
+}) {
+	recorder.SetGauge(clientinfo.MetricIncomingMessageQueueSize, float64(len(c.incomingMessageQueue)))
+
+	// Copy sizes while holding lock, then record metrics after releasing.
+	c.messageHandlersMutex.Lock()
+	queueSizes := make([]float64, len(c.messageHandlers))
+	for i, handler := range c.messageHandlers {
+		queueSizes[i] = float64(len(handler.channel))
+	}
+	c.messageHandlersMutex.Unlock()
+
+	for i, size := range queueSizes {
+		recorder.SetGauge(fmt.Sprintf("%s_%d", clientinfo.MetricMessageHandlerQueueSize, i), size)
 	}
 }

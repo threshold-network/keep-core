@@ -16,8 +16,9 @@ type localBlockCounter struct {
 }
 
 type watcher struct {
-	ctx     context.Context
-	channel chan uint64
+	ctx       context.Context
+	channel   chan uint64
+	closeOnce sync.Once
 }
 
 var defaultBlockTime = 500 * time.Millisecond
@@ -120,7 +121,7 @@ func (lbc *localBlockCounter) count(blockTime ...time.Duration) {
 
 		for _, watcher := range watchers {
 			if watcher.ctx.Err() != nil {
-				close(watcher.channel)
+				watcher.closeOnce.Do(func() { close(watcher.channel) })
 				continue
 			}
 

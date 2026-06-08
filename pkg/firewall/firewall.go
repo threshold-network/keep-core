@@ -48,8 +48,16 @@ func (al *AllowList) Contains(operatorPublicKey *operator.PublicKey) bool {
 	return al.allowedPublicKeys[operatorPublicKey.String()]
 }
 
-// EmptyAllowList represents an empty firewall allowlist.
-var EmptyAllowList = NewAllowList([]*operator.PublicKey{})
+// emptyAllowList is the singleton empty allowlist used in production.
+// All peers must pass IsRecognized checks; no bypass is available.
+var emptyAllowList = NewAllowList([]*operator.PublicKey{})
+
+// EmptyAllowList returns the empty firewall allowlist. In production, this
+// ensures all peers are subject to on-chain staking verification with no
+// AllowList bypass.
+func EmptyAllowList() *AllowList {
+	return emptyAllowList
+}
 
 const (
 	// NegativeIsRecognizedCachePeriod is the time period the cache maintains

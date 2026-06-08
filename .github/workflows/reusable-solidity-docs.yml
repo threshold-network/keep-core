@@ -1,0 +1,260 @@
+name: Generate and push Solidity API documentation
+
+on:
+  workflow_call:
+    inputs:
+      projectDir:
+        description: "A root's subfolder containing the `contracts` folder and the Yarn / Hardhat configuration."
+        type: string
+        required: false
+        default: ""
+      trimComments:
+        description: "True if you want to remove space characters between `///` and a comment text."
+        type: boolean
+        required: false
+        default: true
+      preProcessingCommand:
+        description: "An optional additional bash command to be executed before transforming the Solidity files."
+        type: string
+        required: false
+      addTOC:
+        description: "True if you want to add Table Of Contents to the generated Markdown file."
+        type: boolean
+        required: false
+        default: true
+      tocOptions:
+        description: "Options to be passed to the `markdown-toc` tool."
+        type: string
+        required: false
+        default: "-i --maxdepth 2"
+      postProcessingCommand:
+        description: "An optional additional bash command to be executed after transforming the Solidity files."
+        type: string
+        required: false
+      publish:
+        description: "True if you want to push the generated file(s) to the destination repository."
+        type: boolean
+        required: false
+        default: true
+      verifyCommits:
+        description: "True if you want to sign commits updating the docs using GPG key."
+        type: boolean
+        required: false
+        default: false
+      destinationRepo:
+        description: "A name of the repository where the generated Solidity docs will be pushed to."
+        type: string
+        required: false
+      destinationFolder:
+        description: "A path in the destination repository where the generated Solidity docs will be pushed to."
+        type: string
+        required: false
+        default: "."
+      destinationBaseBranch:
+        description: "A branch on the destination repository which will be set as a base branch of the PR."
+        type: string
+        required: false
+        default: "main"
+      userEmail:
+        description: "The email address of a GitHub user associated with the `githubToken` secret."
+        type: string
+        required: false
+      userName:
+        description: "The name of the GitHub user associated with the `githubToken` secret."
+        type: string
+        required: false
+      rsyncDelete:
+        description: "True if you want to delete from the destination folder the files not generated during current run."
+        type: boolean
+        required: false
+        default: false
+      commentPR:
+        description: "True if you want to add a comment with the path to the generated files in the PR."
+        type: boolean
+        required: false
+        default: false
+      exportAsGHArtifacts:
+        description: "True if you want to see the artifacts generated on various stages of workflow execution."
+        type: boolean
+        required: false
+        default: false
+    secrets:
+      githubToken:
+        description: "A GitHub API token for the destination organization."
+        required: false
+      gpgPrivateKey:
+        description: "A GPG private key needed when `verifyCommits` is set to true."
+        required: false
+      gpgPassphrase:
+        description: "A passphrase of the GPG key."
+        required: false
+
+jobs:
+  docs-generate-html-and-publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .${{ inputs.projectDir }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare contract files for further processing
+        if: inputs.trimComments
+        shell: bash
+        run: |
+          find ./contracts \
+            -name "*.sol" \
+            -type f \
+            -exec sed -i 's_///[[:blank:]]*_///_' {} \;
+
+      - name: Execute additional command
+        if: inputs.preProcessingCommand != null
+        shell: bash
+        run: ${{ inputs.preProcessingCommand }}
+
+      - name: Export artifacts
+        if: inputs.exportAsGHArtifacts == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: contracts-after-preprocessing
+          path: .${{ inputs.projectDir }}/contracts
+
+      - name: Configure git to don't use unauthenticated protocol
+        shell: bash
+        run: git config --global url."https://".insteadOf git://
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18.15.0"
+
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: .${{ inputs.projectDir }}
+
+      - name: Build Markdown docs
+        run: yarn run hardhat docgen
+
+      - name: Add Table of Contents
+        if: inputs.addTOC == true
+        run: |
+          yarn global add markdown-toc
+          sed -i '2s/^/\ \n/' ./generated-docs/index.md
+          sed -i '2s/^/## Table Of Contents \n/' ./generated-docs/index.md
+          markdown-toc ${{ inputs.tocOptions }} ./generated-docs/index.md
+
+      - name: Execute additional command
+        if: inputs.postProcessingCommand != null
+        shell: bash
+        run: ${{ inputs.postProcessingCommand }}
+
+      - name: Export artifacts
+        if: inputs.exportAsGHArtifacts == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: contracts-final-output
+          path: .${{ inputs.projectDir }}/generated-docs
+
+      - name: Post link to artifacts in PR comment
+        if: |
+          inputs.exportAsGHArtifacts == true
+            && inputs.commentPR == true
+            && startsWith(github.ref, 'refs/pull')
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: 'Solidity API documentation preview available in the artifacts of the https://github.com/${{ github.repository}}/actions/runs/${{ github.run_id}} check.'
+            })
+
+      - name: Use real git for publishing steps (bypass Yarn git wrapper)
+        if: inputs.publish == true
+        shell: bash
+        run: |
+          # The Yarn git wrapper (.github/actions/setup-git-for-yarn) is placed on
+          # $PATH and exported as $GIT / $npm_config_git for the whole job so
+          # `yarn install` can clone git dependencies. Every git it intercepts is
+          # forced to GIT_CONFIG_GLOBAL=/dev/null with a throwaway $HOME. That
+          # breaks the docs-sync step below: `gh auth setup-git` and the
+          # `git config --global user.email/name` calls cannot write the global
+          # config ("could not lock config file /dev/null"), so the credential
+          # helper is never registered and the authenticated `git push` has no
+          # credentials. Docs publishing does not need the wrapper — `yarn install`
+          # already ran during doc generation — so remove it and point git back at
+          # the real binary for the remaining publishing steps. Scoped to
+          # publish == true, so the preview path and non-docs callers are
+          # unaffected.
+          set -euo pipefail
+          rm -f "${RUNNER_TEMP:-/tmp}/git-clean-bin/git"
+          real_git="$(command -v git)"
+          {
+            echo "GIT=${real_git}"
+            echo "npm_config_git=${real_git}"
+          } >> "$GITHUB_ENV"
+          echo "Bypassed Yarn git wrapper for publishing; git=${real_git}"
+
+      - name: Import GPG key
+        if: inputs.publish == true && inputs.verifyCommits == true
+        uses: crazy-max/ghaction-import-gpg@111c56156bcc6918c056dbef52164cfa583dc549
+        with:
+          gpg_private_key: ${{ secrets.gpgPrivateKey }}
+          passphrase: ${{ secrets.gpgPassphrase }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+
+      - name: Sync generated docs with the specified repository and create PR
+        if: inputs.publish == true
+        env:
+          GITHUB_TOKEN: ${{ secrets.githubToken }}
+          GH_TOKEN: ${{ secrets.githubToken }}
+        run: |
+          echo "➞ Configure environment variables"
+          head_branch=auto-update-solidity-api-docs
+          base_branch=${{ inputs.destinationBaseBranch }}
+          echo "➞ Configure gh as git credential helper (keeps token out of URLs and .git/config)"
+          gh auth setup-git --hostname github.com
+          echo "➞ Checkout destination repo"
+          git clone --branch $base_branch \
+            https://github.com/${{ inputs.destinationRepo }}.git \
+            dest-repo-clone
+          echo "➞ Create/checkout head branch"
+          cd dest-repo-clone
+          git checkout $head_branch || git checkout -b $head_branch
+          echo "➞ Synchronize docs"
+          mkdir -p ${{ inputs.destinationFolder }}
+          rsync -avh ${{ inputs.rsyncDelete && '--delete' || '' }} \
+            ../generated-docs \
+            ${{ inputs.destinationFolder }}
+          echo "➞ Commit changes"
+          git add -A
+          if git status | grep -q "Changes to be committed"; then
+            git config --global user.email ${{ inputs.userEmail }}
+            git config --global user.name ${{ inputs.userName }}
+            git commit ${{ inputs.verifyCommits && '-S' || '' }} \
+              -m "Update docs by https://github.com/${{ github.repository}}/actions/runs/${{ github.run_id}}"
+            echo "➞ Push commit"
+            git push --set-upstream origin HEAD:$head_branch
+            echo "➞ Check if PR for the head branch already exists"
+            dest_org=$(echo ${{ inputs.destinationRepo }} | cut -d'/' -f1)
+            pr_for_head=$(curl -L \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${{ inputs.destinationRepo }}/pulls?status=open&head=$dest_org:$head_branch")
+            if [[ $pr_for_head == $'[\n\n]' ]]; then
+              echo "➞ Checked. A PR for the head branch ($head_branch) will be created"
+              gh pr create \
+                --repo "${{ inputs.destinationRepo }}" \
+                --base "$base_branch" \
+                --head "$head_branch" \
+                --title "Update Solidity API docs" \
+                --body "Docs updated by workflow: https://github.com/${{ github.repository}}/actions/runs/${{ github.run_id}}"
+            else
+              echo "➞ Checked. A PR for head branch ($head_branch) already exists and got updated."
+            fi
+          else
+            echo "➞ No changes detected, no commits will be made."
+            exit 0
+          fi

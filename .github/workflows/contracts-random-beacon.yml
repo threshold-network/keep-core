@@ -56,11 +56,10 @@ jobs:
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
           node-version: "18.15.0"
-          cache: "yarn"
-          cache-dependency-path: solidity/random-beacon/yarn.lock
 
-      - name: Install dependencies
-        run: yarn install --network-concurrency 1
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: ./solidity/random-beacon
 
       - name: Build
         run: yarn build
@@ -83,8 +82,6 @@ jobs:
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
           node-version: "18.15.0"
-          cache: "yarn"
-          cache-dependency-path: solidity/random-beacon/yarn.lock
 
       - uses: actions/setup-python@v4
         with:
@@ -103,8 +100,9 @@ jobs:
           SLITHER_VERSION: 0.8.3
         run: pip3 install slither-analyzer==$SLITHER_VERSION
 
-      - name: Install dependencies
-        run: yarn install --network-concurrency 1
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: ./solidity/random-beacon
 
       - name: Run Slither
         run: slither .
@@ -124,11 +122,10 @@ jobs:
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
           node-version: "18.15.0"
-          cache: "yarn"
-          cache-dependency-path: solidity/random-beacon/yarn.lock
 
-      - name: Install dependencies
-        run: yarn install --network-concurrency 1
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: ./solidity/random-beacon
 
       - name: Build solidity contracts
         run: yarn build
@@ -152,11 +149,10 @@ jobs:
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
           node-version: "18.15.0"
-          cache: "yarn"
-          cache-dependency-path: solidity/random-beacon/yarn.lock
 
-      - name: Install dependencies
-        run: yarn install --network-concurrency 1 --frozen-lockfile
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: ./solidity/random-beacon
 
       - name: Deploy contracts
         run: yarn deploy:test
@@ -186,12 +182,11 @@ jobs:
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
           node-version: "18.15.0"
-          cache: "yarn"
-          cache-dependency-path: solidity/random-beacon/yarn.lock
           registry-url: "https://registry.npmjs.org"
 
-      - name: Install dependencies
-        run: yarn install --network-concurrency 1 --frozen-lockfile
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: ./solidity/random-beacon
 
       - name: Get upstream packages versions
         uses: keep-network/ci/actions/upstream-builds-query@v2
@@ -203,7 +198,7 @@ jobs:
 
       - name: Resolve latest contracts
         run: |
-          yarn upgrade \
+          yarn up \
             @threshold-network/solidity-contracts@${{ steps.upstream-builds-query.outputs.threshold-contracts-version }} \
             @keep-network/sortition-pools
 
@@ -213,7 +208,7 @@ jobs:
       # test environment it should be used temporarily only.
       - name: Use Sortition Pool forked contracts
         run: |
-          yarn upgrade @keep-network/sortition-pools@github:keep-network/sortition-pools#test-fork
+          yarn up @keep-network/sortition-pools@github:keep-network/sortition-pools#test-fork
 
       - name: Configure tenderly
         env:
@@ -285,12 +280,11 @@ jobs:
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
           node-version: "18.15.0"
-          cache: "yarn"
-          cache-dependency-path: solidity/random-beacon/yarn.lock
           registry-url: "https://registry.npmjs.org"
 
-      - name: Install dependencies
-        run: yarn install --network-concurrency 1 --frozen-lockfile
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: ./solidity/random-beacon
 
       - name: Get upstream packages versions
         uses: keep-network/ci/actions/upstream-builds-query@v2
@@ -302,7 +296,7 @@ jobs:
 
       - name: Resolve latest contracts
         run: |
-          yarn upgrade \
+          yarn up \
             @threshold-network/solidity-contracts@${{ steps.upstream-builds-query.outputs.threshold-contracts-version }} \
             @keep-network/sortition-pools
       

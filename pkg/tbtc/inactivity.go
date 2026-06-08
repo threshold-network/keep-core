@@ -436,6 +436,22 @@ func (ics *inactivityClaimSubmitter) SubmitClaim(
 		return nil
 	}
 
+	// Re-check the nonce after the delay wait. Another member may have
+	// submitted the claim while we were waiting.
+	currentNonce, err = ics.chain.GetInactivityClaimNonce(ecdsaWalletID)
+	if err != nil {
+		return fmt.Errorf("could not get nonce for wallet: [%v]", err)
+	}
+
+	if currentNonce.Cmp(inactivityNonce) > 0 {
+		ics.inactivityLogger.Infof(
+			"[member:%v] inactivity claim already submitted; "+
+				"aborting inactivity claim on-chain submission",
+			memberIndex,
+		)
+		return nil
+	}
+
 	ics.inactivityLogger.Infof(
 		"[member:%v] submitting inactivity claim with [%v] supporting "+
 			"member signatures",

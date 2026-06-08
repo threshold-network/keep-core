@@ -15,8 +15,8 @@ WORKDIR $WORK_DIR
 # Use `https://` instead of unauthenticated `git://` protocol.
 RUN git config --global url."https://".insteadOf git://
 
-COPY package*.json yarn.lock ./
-RUN yarn install
+COPY package*.json yarn.lock .yarnrc.yml ./
+RUN corepack enable && corepack prepare yarn@4.8.1 --activate && yarn install --immutable
 
 COPY . ./
 

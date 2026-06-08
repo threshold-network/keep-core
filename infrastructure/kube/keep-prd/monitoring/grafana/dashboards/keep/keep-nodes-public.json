@@ -197,7 +197,7 @@
                     },
                     "editorMode": "builder",
                     "exemplar": false,
-                    "expr": "min by(chain_address) (connected_bootstrap_count{job=\"keep-discovered-nodes\"})",
+                    "expr": "min by(chain_address) (connected_wellknown_peers_count{job=\"keep-discovered-nodes\"})",
                     "format": "time_series",
                     "hide": false,
                     "instant": false,

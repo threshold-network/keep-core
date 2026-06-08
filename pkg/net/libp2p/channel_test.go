@@ -3,15 +3,18 @@ package libp2p
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/keep-network/keep-core/pkg/operator"
-
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/net"
+	"github.com/keep-network/keep-core/pkg/net/gen/pb"
+	"github.com/keep-network/keep-core/pkg/operator"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	pubsubpb "github.com/libp2p/go-libp2p-pubsub/pb"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -260,3 +263,350 @@ type mockTransportIdentifier struct {
 func (mti *mockTransportIdentifier) String() string {
 	return mti.transportID
 }
+
+// TestDeliver_DropsMessageWhenHandlerFull verifies that deliver() does not
+// block and silently drops the message when a handler's channel buffer is full.
+func TestDeliver_DropsMessageWhenHandlerFull(t *testing.T) {
+	ch := &channel{}
+
+	// Fill the handler channel to capacity so the next send will be dropped.
+	handlerCh := make(chan net.Message, messageHandlerThrottle)
+	for i := 0; i < messageHandlerThrottle; i++ {
+		handlerCh <- &mockNetMessage{}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch.messageHandlers = []*messageHandler{
+		{ctx: ctx, channel: handlerCh},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		ch.deliver(&mockNetMessage{})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// deliver returned immediately -- correct
+	case <-time.After(1 * time.Second):
+		t.Fatal("deliver blocked when handler channel was full")
+	}
+
+	if len(handlerCh) != messageHandlerThrottle {
+		t.Errorf(
+			"expected handler channel to remain full (%d), got %d",
+			messageHandlerThrottle,
+			len(handlerCh),
+		)
+	}
+}
+
+// TestIncomingMessageWorker_IncrementsReceivedCounter verifies that
+// incomingMessageWorker increments the message_received_total counter for
+// every message dequeued, even when subsequent processing fails.
+func TestIncomingMessageWorker_IncrementsReceivedCounter(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	recorder := &mockMetricsRecorder{}
+
+	ch := &channel{
+		incomingMessageQueue: make(chan *pubsub.Message, incomingMessageThrottle),
+		metricsRecorder:      recorder,
+	}
+
+	go ch.incomingMessageWorker(ctx)
+
+	// A message with valid framing but no payload will fail type-lookup after
+	// proto-unmarshal succeeds; the counter is incremented before processing
+	// so it must still be observed. We set the inner pb.Message to avoid a
+	// nil-dereference on pubsubMessage.Data.
+	ch.incomingMessageQueue <- &pubsub.Message{Message: &pubsubpb.Message{}}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		recorder.mu.Lock()
+		count := recorder.counters["message_received_total"]
+		recorder.mu.Unlock()
+		if count >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	recorder.mu.Lock()
+	got := recorder.counters["message_received_total"]
+	recorder.mu.Unlock()
+
+	if got < 1 {
+		t.Errorf("expected message_received_total >= 1, got %v", got)
+	}
+}
+
+// TestSetMetricsRecorder_NilRecorderSkipsMonitor verifies that passing a nil
+// recorder to setMetricsRecorder does not start the monitoring goroutine.
+// A subsequent call with a real recorder must then start it (sync.Once is only
+// consumed when recorder != nil).
+func TestSetMetricsRecorder_NilRecorderSkipsMonitor(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch := &channel{ctx: ctx}
+
+	// First call with nil -- must not start the monitor goroutine.
+	ch.setMetricsRecorder(nil)
+	if ch.metricsRecorder != nil {
+		t.Error("expected metricsRecorder to be nil after nil set")
+	}
+
+	// sync.Once is NOT consumed by the nil-guarded branch, so a subsequent
+	// call with a real recorder must set the field.
+	recorder := &mockMetricsRecorder{}
+	ch.setMetricsRecorder(recorder)
+	if ch.metricsRecorder == nil {
+		t.Error("expected metricsRecorder to be set after non-nil set")
+	}
+}
+
+type mockMetricsRecorder struct {
+	mu       sync.Mutex
+	counters map[string]float64
+	gauges   map[string]float64
+}
+
+func (m *mockMetricsRecorder) IncrementCounter(name string, value float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.counters == nil {
+		m.counters = make(map[string]float64)
+	}
+	m.counters[name] += value
+}
+
+func (m *mockMetricsRecorder) SetGauge(name string, value float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.gauges == nil {
+		m.gauges = make(map[string]float64)
+	}
+	m.gauges[name] = value
+}
+
+func (m *mockMetricsRecorder) RecordDuration(_ string, _ time.Duration) {}
+
+// TestChannel_ProcessContainerMessage_UnknownType verifies that an incoming
+// message whose type has no registered unmarshaler returns an error instead
+// of panicking.
+func TestChannel_ProcessContainerMessage_UnknownType(t *testing.T) {
+	ch := &channel{
+		unmarshalersByType: make(map[string]func() net.TaggedUnmarshaler),
+	}
+
+	err := ch.processContainerMessage(
+		peer.ID(""),
+		&pb.BroadcastNetworkMessage{Type: []byte("unknown/type")},
+	)
+
+	if err == nil {
+		t.Fatal("expected error for unknown message type, got nil")
+	}
+	if !strings.Contains(err.Error(), "couldn't find unmarshaler") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestChannel_SetFilter_ValidatesMessages verifies that SetFilter registers a
+// validator that rejects messages from unauthorized peers.
+func TestChannel_SetFilter_ValidatesMessages(t *testing.T) {
+	_, authorizedKey, _ := operator.GenerateKeyPair(DefaultCurve)
+	_, unauthorizedKey, _ := operator.GenerateKeyPair(DefaultCurve)
+
+	authorizedBytes := hex.EncodeToString(operator.MarshalUncompressed(authorizedKey))
+
+	filter := func(pk *operator.PublicKey) bool {
+		return hex.EncodeToString(operator.MarshalUncompressed(pk)) == authorizedBytes
+	}
+
+	mv := &mockTopicValidator{}
+	ch := &channel{name: "test-channel", validator: mv}
+
+	if err := ch.SetFilter(filter); err != nil {
+		t.Fatalf("SetFilter returned unexpected error: %v", err)
+	}
+	if mv.registered == nil {
+		t.Fatal("expected a validator to be registered")
+	}
+
+	buildMsg := func(key *operator.PublicKey) *pubsub.Message {
+		netKey, err := operatorPublicKeyToNetworkPublicKey(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, _ := peer.IDFromPublicKey(netKey)
+		idBytes, _ := id.Marshal()
+		return &pubsub.Message{Message: &pubsubpb.Message{From: idBytes}}
+	}
+
+	if !mv.registered(nil, peer.ID(""), buildMsg(authorizedKey)) {
+		t.Error("expected authorized peer to pass filter")
+	}
+	if mv.registered(nil, peer.ID(""), buildMsg(unauthorizedKey)) {
+		t.Error("expected unauthorized peer to be rejected by filter")
+	}
+}
+
+// TestChannel_SetFilter_AllowsMessages verifies that a permissive filter
+// allows all peers through.
+func TestChannel_SetFilter_AllowsMessages(t *testing.T) {
+	filter := func(_ *operator.PublicKey) bool { return true }
+
+	mv := &mockTopicValidator{}
+	ch := &channel{name: "test-channel", validator: mv}
+
+	if err := ch.SetFilter(filter); err != nil {
+		t.Fatalf("SetFilter returned unexpected error: %v", err)
+	}
+
+	_, key, _ := operator.GenerateKeyPair(DefaultCurve)
+	netKey, _ := operatorPublicKeyToNetworkPublicKey(key)
+	id, _ := peer.IDFromPublicKey(netKey)
+	idBytes, _ := id.Marshal()
+	msg := &pubsub.Message{Message: &pubsubpb.Message{From: idBytes}}
+
+	if !mv.registered(nil, peer.ID(""), msg) {
+		t.Error("expected permissive filter to allow all messages")
+	}
+}
+
+// TestChannel_IncomingMessageWorker_ContextCancel verifies that
+// incomingMessageWorker exits cleanly when the context is cancelled.
+func TestChannel_IncomingMessageWorker_ContextCancel(t *testing.T) {
+	ch := &channel{
+		incomingMessageQueue: make(chan *pubsub.Message, incomingMessageThrottle),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		ch.incomingMessageWorker(ctx)
+		close(done)
+	}()
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("incomingMessageWorker did not exit after context cancel")
+	}
+}
+
+// TestChannel_SubscriptionWorker_ContextCancel verifies that subscriptionWorker
+// exits cleanly when the context is cancelled.
+func TestChannel_SubscriptionWorker_ContextCancel(t *testing.T) {
+	sub := &mockSubscription{}
+	ch := &channel{
+		subscription:         sub,
+		incomingMessageQueue: make(chan *pubsub.Message, incomingMessageThrottle),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		ch.subscriptionWorker(ctx)
+		close(done)
+	}()
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("subscriptionWorker did not exit after context cancel")
+	}
+}
+
+// TestChannel_MonitorQueueSizes_OverThreshold verifies that snapshotQueueSizes
+// records the current incoming queue and handler queue sizes as gauges.
+func TestChannel_MonitorQueueSizes_OverThreshold(t *testing.T) {
+	const incomingFill = 7
+	const handlerFill = 3
+
+	incomingQueue := make(chan *pubsub.Message, incomingMessageThrottle)
+	for i := 0; i < incomingFill; i++ {
+		incomingQueue <- &pubsub.Message{Message: &pubsubpb.Message{}}
+	}
+
+	handlerCh := make(chan net.Message, messageHandlerThrottle)
+	for i := 0; i < handlerFill; i++ {
+		handlerCh <- &mockNetMessage{}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch := &channel{
+		incomingMessageQueue: incomingQueue,
+		messageHandlers:      []*messageHandler{{ctx: ctx, channel: handlerCh}},
+	}
+
+	recorder := &mockMetricsRecorder{}
+	ch.snapshotQueueSizes(recorder)
+
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+
+	if got := recorder.gauges[clientinfo.MetricIncomingMessageQueueSize]; got != incomingFill {
+		t.Errorf(
+			"expected incoming queue gauge %v, got %v",
+			incomingFill,
+			got,
+		)
+	}
+
+	handlerKey := fmt.Sprintf("%s_0", clientinfo.MetricMessageHandlerQueueSize)
+	if got := recorder.gauges[handlerKey]; got != handlerFill {
+		t.Errorf(
+			"expected handler queue gauge %v, got %v",
+			handlerFill,
+			got,
+		)
+	}
+}
+
+type mockTopicValidator struct {
+	registered    pubsub.Validator
+	registerErr   error
+	unregisterErr error
+}
+
+func (mv *mockTopicValidator) RegisterTopicValidator(
+	_ string,
+	val interface{},
+	_ ...pubsub.ValidatorOpt,
+) error {
+	if v, ok := val.(pubsub.Validator); ok {
+		mv.registered = v
+	} else {
+		return fmt.Errorf("unexpected validator type: %T", val)
+	}
+	return mv.registerErr
+}
+
+func (mv *mockTopicValidator) UnregisterTopicValidator(_ string) error {
+	return mv.unregisterErr
+}
+
+type mockSubscription struct{}
+
+func (ms *mockSubscription) Next(ctx context.Context) (*pubsub.Message, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (ms *mockSubscription) Cancel() {}

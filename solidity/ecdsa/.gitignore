@@ -10,6 +10,7 @@ export.json
 artifacts/
 deployments/*
 !deployments/mainnet
+!deployments/sepolia
 
 # OpenZeppelin
 .openzeppelin/unknown-*.json

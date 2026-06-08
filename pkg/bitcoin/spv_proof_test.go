@@ -450,3 +450,69 @@ func TestAssembleTransactionProof(t *testing.T) {
 		})
 	}
 }
+
+// TestAssembleSpvProof_InsufficientConfirmations verifies that AssembleSpvProof
+// returns an error when the transaction has fewer confirmations than required,
+// catching regressions in the core confirmation-count security guard.
+func TestAssembleSpvProof_InsufficientConfirmations(t *testing.T) {
+	chain := newLocalChain()
+
+	txHash := Hash{0x01}
+	const accumulated uint = 3
+	const required uint = 6
+
+	if err := chain.addTransactionConfirmations(txHash, accumulated); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := AssembleSpvProof(txHash, required, chain)
+	if err == nil {
+		t.Fatal("expected error for insufficient confirmations, got nil")
+	}
+}
+
+// TestAssembleSpvProof_TransactionNotOnChain verifies that AssembleSpvProof
+// surfaces the error returned by GetTransactionConfirmations when the
+// transaction is not known to the chain yet.
+func TestAssembleSpvProof_TransactionNotOnChain(t *testing.T) {
+	chain := newLocalChain() // empty -- no transactions
+
+	txHash := Hash{0x02}
+
+	_, _, err := AssembleSpvProof(txHash, 1, chain)
+	if err == nil {
+		t.Fatal("expected error when transaction not found on chain, got nil")
+	}
+}
+
+// TestAssembleSpvProof_BlockHeaderMissing verifies that AssembleSpvProof
+// returns an error when a block header in the confirmation window is absent,
+// catching regressions in the header-chain assembly step.
+func TestAssembleSpvProof_BlockHeaderMissing(t *testing.T) {
+	chain := newLocalChain()
+
+	testData := SpvProofData["single input"].BitcoinChainData
+	transaction := transactionFrom(t, testData.TransactionHex)
+	txHash := transaction.Hash()
+
+	const requiredConfirmations uint = 6
+	const latestBlockHeight uint = 800000
+
+	if err := chain.addTransaction(transaction); err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.addTransactionConfirmations(txHash, requiredConfirmations); err != nil {
+		t.Fatal(err)
+	}
+	// Add only the tip header so GetLatestBlockHeight works, but omit all
+	// headers for the confirmation window (800000-5 to 800000). The first
+	// call to GetBlockHeader in getHeadersChain will return an error.
+	if err := chain.addBlockHeader(latestBlockHeight, &BlockHeader{}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := AssembleSpvProof(txHash, requiredConfirmations, chain)
+	if err == nil {
+		t.Fatal("expected error when block header is missing, got nil")
+	}
+}

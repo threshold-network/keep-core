@@ -1,0 +1,56 @@
+name: Install Yarn dependencies (Yarn 4 / Corepack)
+description: >
+  Enable Corepack, set up the Git-for-Yarn wrapper, and run
+  `yarn install --immutable` in the given workspace. Centralises the
+  install incantation so each workflow does not need to re-export PATH,
+  GIT_CONFIG_*, or pin the Corepack-managed Yarn version.
+inputs:
+  working-directory:
+    description: "Workspace directory containing package.json and yarn.lock."
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Set up Git wrapper for Yarn git dependencies
+      uses: ./.github/actions/setup-git-for-yarn
+
+    - name: Cache Yarn artifacts
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ inputs.working-directory }}/.yarn/cache
+          ${{ inputs.working-directory }}/.yarn/install-state.gz
+          ${{ inputs.working-directory }}/node_modules
+        key: yarn-${{ runner.os }}-${{ hashFiles(format('{0}/yarn.lock', inputs.working-directory)) }}
+        restore-keys: |
+          yarn-${{ runner.os }}-
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        export PATH="${RUNNER_TEMP:-/tmp}/git-clean-bin:$PATH"
+        # Opt out of Yarn 4 hardened mode. Yarn auto-enables it on public PR
+        # contexts; we cannot use it here because the lockfiles contain
+        # legitimate npm-descriptor -> git-URL remaps (e.g. ethereumjs-abi
+        # @npm:0.6.8 -> github.com/ethereumjs/ethereumjs-abi.git#<commit>,
+        # because npm 0.6.8 was published broken). Hardened mode rejects all
+        # such remaps as potential supply-chain attacks, even when the
+        # remap is internally consistent with the rest of the lockfile.
+        # Note: lockfile checksums remain enforced (YARN_CHECKSUM_BEHAVIOR
+        # is left at its default), so per-package integrity is still checked.
+        export YARN_ENABLE_HARDENED_MODE=0
+        corepack enable
+        yarn --version
+        unset_args=()
+        while IFS='=' read -r key _; do
+          case "$key" in
+            GIT_CONFIG_*) unset_args+=("-u" "$key") ;;
+          esac
+        done < <(env)
+        env "${unset_args[@]}" \
+          GIT_CONFIG_NOSYSTEM=1 \
+          GIT_CONFIG_SYSTEM=/dev/null \
+          GIT_CONFIG_COUNT=0 \
+          yarn install --immutable
