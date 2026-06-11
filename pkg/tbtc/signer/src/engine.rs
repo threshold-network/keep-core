@@ -4888,14 +4888,29 @@ pub fn aggregate(request: AggregateRequest) -> Result<AggregateResult, EngineErr
 /// integrity (durable state can be rolled back, restored, or replicated).
 /// If a new transcript input is added to the transitional signing flow (as
 /// the Taproot tweak once was), it must be added here in the same change.
+///
+/// Note on the key material: the *group* verifying key alone is NOT enough.
+/// In this transitional flow every member re-derives ALL participants'
+/// round-1 commitments from the held key packages, so each *other*
+/// participant's verifying share enters the commitment list, hence this
+/// member's binding factor and challenge. Two key packages can share a
+/// group verifying key while differing in an individual verifying share
+/// (any threshold t ≥ 3 admits two polynomials with the same f(0) and the
+/// same target share but a different non-target share). Binding only the
+/// group key would let a rolled-back/cloned state present an identical seed
+/// under a *different* challenge — the exact reuse this struct exists to
+/// preclude — so the field below binds the full `PublicKeyPackage`
+/// (group key AND every verifying share).
 #[derive(Clone, Copy)]
 struct RoundNonceBinding<'a> {
     session_id: &'a str,
     round_id: &'a str,
-    /// Serialized group verifying key; binds the nonce to the concrete group
-    /// key material (it enters the FROST binding-factor and challenge
-    /// preimages), not just to the session label that references it.
-    group_verifying_key_bytes: &'a [u8],
+    /// Serialized full `PublicKeyPackage` — the group verifying key AND
+    /// every participant's verifying share. Binds the nonce to the concrete
+    /// key material that determines the whole commitment list (every other
+    /// participant's commitment feeds this member's binding factor and
+    /// challenge), not just to the group key or the session label.
+    public_key_package_bytes: &'a [u8],
     message_bytes: &'a [u8],
     /// Taproot tweak applied at round 2; tweaking changes the challenge.
     taproot_merkle_root: Option<&'a [u8; 32]>,
@@ -4923,20 +4938,23 @@ fn build_deterministic_round_nonce_and_commitment(
     };
 
     let mut signing_share_bytes = key_package.signing_share().serialize();
-    // Domain bumped to v2 when the binding set was widened beyond
-    // (session, round, message, participant); see `RoundNonceBinding`.
+    // Domain v3: v2 widened the set beyond (session, round, message,
+    // participant); v3 widens the key-material binding from the group
+    // verifying key alone to the full PublicKeyPackage (every verifying
+    // share), closing the case where two key packages share a group key
+    // but differ in a non-target share. See `RoundNonceBinding`.
     //
     // Encoding note: the participants set serializes big-endian while
     // `participant_identifier` keeps the v1 little-endian encoding. The
     // mix is harmless -- both are fixed-width and `deterministic_seed`
     // length-frames every part -- but it is part of the derived value:
     // changing either encoding changes derived commitments fleet-wide
-    // and requires a new domain (`round-nonce-v3`), never an in-place
+    // and requires a new domain (`round-nonce-v4`), never an in-place
     // edit.
     let mut nonce_seed = deterministic_seed(&[
-        b"round-nonce-v2",
+        b"round-nonce-v3",
         &signing_share_bytes,
-        binding.group_verifying_key_bytes,
+        binding.public_key_package_bytes,
         binding.session_id.as_bytes(),
         binding.round_id.as_bytes(),
         binding.message_bytes,
@@ -6560,13 +6578,9 @@ fn build_real_signature_share_contribution(
     message_bytes: &[u8],
     taproot_merkle_root: Option<&[u8; 32]>,
 ) -> Result<RoundContribution, EngineError> {
-    let group_verifying_key_bytes =
-        dkg_public_key_package
-            .verifying_key()
-            .serialize()
-            .map_err(|e| {
-                EngineError::Internal(format!("failed to serialize group verifying key: {e}"))
-            })?;
+    let public_key_package_bytes = dkg_public_key_package.serialize().map_err(|e| {
+        EngineError::Internal(format!("failed to serialize public key package: {e}"))
+    })?;
     let mut commitments = BTreeMap::new();
     let mut own_nonces = None;
 
@@ -6585,7 +6599,7 @@ fn build_real_signature_share_contribution(
             &RoundNonceBinding {
                 session_id: &request.session_id,
                 round_id,
-                group_verifying_key_bytes: &group_verifying_key_bytes,
+                public_key_package_bytes: &public_key_package_bytes,
                 message_bytes,
                 taproot_merkle_root,
                 signing_participants,
@@ -6861,12 +6875,9 @@ pub fn finalize_sign_round(
             }
         }
 
-        let group_verifying_key_bytes = dkg_public_key_package
-            .verifying_key()
-            .serialize()
-            .map_err(|e| {
-                EngineError::Internal(format!("failed to serialize group verifying key: {e}"))
-            })?;
+        let public_key_package_bytes = dkg_public_key_package.serialize().map_err(|e| {
+            EngineError::Internal(format!("failed to serialize public key package: {e}"))
+        })?;
         let mut commitments = BTreeMap::new();
         for signing_participant in &signing_participants {
             let key_package = dkg_key_packages.get(signing_participant).ok_or_else(|| {
@@ -6883,7 +6894,7 @@ pub fn finalize_sign_round(
                     &RoundNonceBinding {
                         session_id: &round_state.session_id,
                         round_id: &round_state.round_id,
-                        group_verifying_key_bytes: &group_verifying_key_bytes,
+                        public_key_package_bytes: &public_key_package_bytes,
                         message_bytes: sign_message_bytes,
                         taproot_merkle_root: finalize_taproot_merkle_root.as_ref(),
                         signing_participants: &signing_participants,
@@ -13757,14 +13768,43 @@ mod tests {
         let (_, other_public_key_package) =
             fetch_session_material("session-nonce-transcript-bound-other");
 
-        let group_verifying_key_bytes = public_key_package
-            .verifying_key()
+        let public_key_package_bytes = public_key_package
             .serialize()
-            .expect("group verifying key bytes");
-        let other_group_verifying_key_bytes = other_public_key_package
-            .verifying_key()
+            .expect("public key package bytes");
+        let other_public_key_package_bytes = other_public_key_package
             .serialize()
-            .expect("other group verifying key bytes");
+            .expect("other public key package bytes");
+
+        // F1 regression: a package sharing the baseline's GROUP verifying
+        // key but differing in a non-target participant's verifying share
+        // (members 2 and 3 swapped). The target is member 1, so the old
+        // group-key-only binding produced an identical seed here even
+        // though every member re-derives member 2's commitment from this
+        // share -- the silent nonce-reuse-under-a-different-challenge case.
+        let identifier_two = participant_identifier_to_frost_identifier(2).expect("identifier 2");
+        let identifier_three = participant_identifier_to_frost_identifier(3).expect("identifier 3");
+        let mut perturbed_verifying_shares = public_key_package.verifying_shares().clone();
+        let share_two = *perturbed_verifying_shares
+            .get(&identifier_two)
+            .expect("verifying share 2");
+        let share_three = *perturbed_verifying_shares
+            .get(&identifier_three)
+            .expect("verifying share 3");
+        perturbed_verifying_shares.insert(identifier_two, share_three);
+        perturbed_verifying_shares.insert(identifier_three, share_two);
+        let perturbed_share_package = frost::keys::PublicKeyPackage::new(
+            perturbed_verifying_shares,
+            *public_key_package.verifying_key(),
+            None,
+        );
+        assert_eq!(
+            perturbed_share_package.verifying_key(),
+            public_key_package.verifying_key(),
+            "perturbed package must keep the baseline group verifying key",
+        );
+        let perturbed_share_package_bytes = perturbed_share_package
+            .serialize()
+            .expect("perturbed share package bytes");
 
         let message_one = hex::decode("deadbeef").expect("message one decode");
         let message_two = hex::decode("cafebabe").expect("message two decode");
@@ -13775,7 +13815,7 @@ mod tests {
         let baseline_binding = RoundNonceBinding {
             session_id: "session-nonce-transcript-bound",
             round_id: "fixed-round-id",
-            group_verifying_key_bytes: &group_verifying_key_bytes,
+            public_key_package_bytes: &public_key_package_bytes,
             message_bytes: &message_one,
             taproot_merkle_root: None,
             signing_participants: &baseline_participants,
@@ -13806,7 +13846,12 @@ mod tests {
                 ..baseline_binding
             },
             RoundNonceBinding {
-                group_verifying_key_bytes: &other_group_verifying_key_bytes,
+                public_key_package_bytes: &other_public_key_package_bytes,
+                ..baseline_binding
+            },
+            // Same group key, one non-target verifying share changed.
+            RoundNonceBinding {
+                public_key_package_bytes: &perturbed_share_package_bytes,
                 ..baseline_binding
             },
             RoundNonceBinding {
