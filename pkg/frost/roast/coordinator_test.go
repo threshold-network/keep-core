@@ -109,3 +109,64 @@ func TestSelectCoordinator_AffectedBySeed(t *testing.T) {
 		t.Fatal("coordinator did not change for any seed")
 	}
 }
+
+// TestSelectCoordinator_CrossLanguagePinnedVectors pins concrete
+// SelectCoordinator outputs so cross-language agreement with the Rust
+// engine is enforced by tests on both sides. The Rust port of Go's
+// math/rand (pkg/tbtc/signer/src/go_math_rand.rs,
+// select_coordinator_matches_known_keep_core_vectors) asserts these
+// exact values; the FROST/ROAST liveness path depends on every honest
+// node electing the same coordinator for the same attempt.
+//
+// If this test breaks, the Go selection semantics changed (for
+// example a move to math/rand/v2, a different shuffle, or a different
+// seed composition). That is a network-fracturing change: it must be
+// coordinated with the Rust engine and rolled out as a new versioned
+// selection rule, never shipped silently.
+func TestSelectCoordinator_CrossLanguagePinnedVectors(t *testing.T) {
+	const seed = int64(6879463052285329321)
+
+	vectors := []struct {
+		members     []group.MemberIndex
+		seed        int64
+		attempt     uint
+		coordinator group.MemberIndex
+	}{
+		{[]group.MemberIndex{1, 2}, seed, 1, 2},
+		{[]group.MemberIndex{1, 2}, seed, 2, 1},
+		{[]group.MemberIndex{1, 2}, seed, 3, 2},
+		{[]group.MemberIndex{1, 2, 3}, seed, 1, 3},
+		{[]group.MemberIndex{1, 2, 3}, seed, 2, 2},
+		{[]group.MemberIndex{1, 2, 3}, seed, 4, 1},
+		{[]group.MemberIndex{1, 2, 3, 4, 5, 6}, 333, 4, 4},
+	}
+
+	for _, vector := range vectors {
+		actual, err := SelectCoordinator(
+			vector.members,
+			vector.seed,
+			vector.attempt,
+		)
+		if err != nil {
+			t.Fatalf(
+				"selection failed for members [%v] seed [%d] attempt [%d]: [%v]",
+				vector.members,
+				vector.seed,
+				vector.attempt,
+				err,
+			)
+		}
+
+		if actual != vector.coordinator {
+			t.Fatalf(
+				"pinned vector drift for members [%v] seed [%d] attempt [%d]\n"+
+					"expected: [%v]\nactual:   [%v]",
+				vector.members,
+				vector.seed,
+				vector.attempt,
+				vector.coordinator,
+				actual,
+			)
+		}
+	}
+}
