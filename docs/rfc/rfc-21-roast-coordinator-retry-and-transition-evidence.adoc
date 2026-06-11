@@ -771,6 +771,95 @@ gossiped attestations *are* the persistent record.
   signer remains a single-process engine; coordinator state lives on
   the keep-core side.
 
+== Annex A (normative): coordinator-shuffle seed derivation
+
+This annex is the single normative definition of the coordinator-
+shuffle seed. Two independent implementations exist -- the Go RFC-21
+layer (`pkg/frost/roast`) and the Rust tbtc-signer attempt-context
+validation (`pkg/tbtc/signer/src/engine.rs`) -- and both MUST derive
+byte-identical values from this text. Conformance is pinned by the
+shared vector file regenerated from the Go implementation
+(`pkg/frost/roast/testdata/coordinator_seed_vectors.json`, mirrored
+byte-identically to `pkg/tbtc/signer/testdata/`); any divergence
+fails the drifting side's own unit suite.
+
+=== Inputs
+
+* `KeyGroupBytes`: the UTF-8 bytes of the canonical FROST key-group
+  handle. For `FrostTBTCSignerV1` signer material this handle is the
+  lowercase hex encoding of the serialized group verifying key as
+  produced by the tbtc-signer engine (the `KeyGroup` string), and
+  `ExtractDkgGroupPublicKeyFromMaterial` returns exactly these bytes.
+  The handle is treated as an opaque byte string; implementations
+  MUST NOT decode it to point bytes before hashing.
+* `SessionID`: the session identifier's raw UTF-8 bytes.
+* `MessageDigest`: the **raw signing message itself**, big-endian
+  left-padded with zeros to exactly 32 bytes; leading zero bytes are
+  insignificant, and more than 32 significant bytes MUST be rejected.
+  This is precisely keep-core's `messageDigestFromBigInt` output: in
+  BIP-340 production the signed message already is the 32-byte
+  sighash, so padding is a no-op. Implementations MUST NOT substitute
+  any transcript hash of the message here -- in particular not the
+  tbtc-signer engine's internal `SHA256(message_bytes)` digest, which
+  feeds only the engine's `round_id`/`attempt_id` derivations. Seeding
+  from the transcript digest instead of the padded message was a
+  cross-language coordinator divergence caught in review; the
+  engine-side contract is pinned by
+  `start_sign_round_accepts_go_derived_attempt_context_in_strict_mode`.
+* `AttemptNumber`: the RFC-21 attempt number, **0-based** (attempt
+  zero is the first attempt). The tbtc-signer FFI `AttemptContext`
+  carries `wire_attempt_number = AttemptNumber + 1` (1-based, zero
+  rejected); implementations consuming the wire form MUST subtract
+  one before the composition below.
+* `IncludedSet`: the attempt's included member indices.
+
+=== Derivation
+
+----
+AttemptSeed32   = SHA256(KeyGroupBytes || SessionID || MessageDigest)
+ShuffleSeed_i64 = int64_from_be_bytes(AttemptSeed32[0..8])
+SourceSeed_i64  = ShuffleSeed_i64 + int64(AttemptNumber)      // two's-complement wrap
+Coordinator     = GoMathRandShuffle(sort_ascending(IncludedSet), SourceSeed_i64)[0]
+----
+
+`GoMathRandShuffle` is the exact shuffle of Go's legacy `math/rand`:
+`rand.New(rand.NewSource(seed)).Shuffle` -- ported bit-exactly to
+Rust in `pkg/tbtc/signer/src/go_math_rand.rs` and pinned by the
+cross-language vectors of keep-core PRs #4026/#4027. The addition is
+two's-complement wrapping on both sides (Go's defined signed
+overflow; Rust `wrapping_add`).
+
+=== Non-goals and accepted properties
+
+* The concatenation `KeyGroupBytes || SessionID || MessageDigest` is
+  not length-framed, so input-boundary collisions are theoretically
+  expressible. This is accepted: the seed feeds a *non-cryptographic*
+  shuffle whose only job is deterministic agreement on rotation
+  order among honest members; every input is independently and
+  unambiguously bound (and framed) in the `AttemptContext` hash that
+  protocol messages verify. The seed is not a security boundary, and
+  no exclusion or signing decision may ever be derived from it.
+* Only the first 8 bytes of `AttemptSeed32` influence the shuffle;
+  the remaining 24 bytes are bound via the `AttemptContext` hash
+  only.
+* Grindability: an adversary who can choose `SessionID` or
+  `MessageDigest` can bias coordinator rotation order. Session and
+  message identifiers are protocol-fixed inputs (deposit/redemption
+  driven), not free adversary choices; rotation-order bias degrades
+  at worst into the serial-attempt latency bound, never into a
+  safety property.
+
+=== History
+
+Before this annex, the two implementations diverged: the Go layer
+derived `fold(SHA256(KeyGroup || SessionID || MessageDigest))` with
+0-based attempts while the Rust engine used the first 8 bytes of the
+raw `MessageDigest` with 1-based wire attempts (the legacy
+`signingAttemptSeed` convention of the pre-ROAST signing loop, which
+`pkg/tbtc/signing_loop.go` retains until Phase-7 migrates it to this
+annex). The divergence was flagged in keep-core PR #4026 and resolved
+by adopting the Go derivation as normative.
+
 == References
 
 * Ruffing, Ronge, Aranha, Schneider. ``ROAST: Robust Asynchronous
