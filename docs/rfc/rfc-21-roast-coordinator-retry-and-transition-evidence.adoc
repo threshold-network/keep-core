@@ -860,6 +860,146 @@ raw `MessageDigest` with 1-based wire attempts (the legacy
 annex). The divergence was flagged in keep-core PR #4026 and resolved
 by adopting the Go derivation as normative.
 
+== Annex B (informative): serial-attempt latency budget vs on-chain timeouts
+
+Paper-ROAST runs up to `n-t+1` concurrent signing sessions precisely so
+byzantine participants cannot serialize delay; RFC-21 (and the legacy
+retry loop it bridges from) runs attempts *serially*. This annex
+computes what that costs against the bridge's on-chain deadlines, and
+states plainly which constraint actually binds.
+
+=== Parameters (current code and chain values)
+
+[cols="3,1,3"]
+|===
+| Parameter | Value | Source
+
+| Announcement delay + active + protocol + cool-down per attempt
+| `1 + 5 + 30 + 5 = 41` blocks
+| `pkg/tbtc/signing_loop.go` (`signingAttemptMaximumBlocks`)
+
+| Wall-clock per attempt (12 s blocks)
+| ≈ 8.2 min
+| Ethereum mainnet block time
+
+| `signingAttemptsLimit`
+| 5
+| `pkg/tbtc/node.go`
+
+| Engine-side ROAST coordinator timeout
+| 30 s default
+| `TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS` (sub-dominant: the
+  block budget above dominates)
+
+| Signing group shape
+| `n = 100`, `t = 51`, `f = n - t = 49`
+| wallet parameters
+
+| `redemptionTimeout`
+| 5 days (432,000 s)
+| `tbtc-v2 Bridge.sol` (slashing-backed)
+
+| `movingFundsTimeout` / `movedFundsSweepTimeout`
+| 7 days each
+| `tbtc-v2 Bridge.sol`
+|===
+
+=== The serial-delay bound
+
+Each failed attempt costs at most one attempt budget (41 blocks
+≈ 8.2 min). Three regimes:
+
+* *As deployed* (`signingAttemptsLimit = 5`): the loop spends at most
+  `5 × 41 = 205` blocks ≈ **41 minutes** before giving up — roughly
+  **175×** inside the 5-day redemption timeout. Serial latency is
+  nowhere near the binding constraint.
+* *Review-suggested worst case* (`f` byzantine members each burning
+  one timeout, limit raised to `f + 1 = 50` attempts): `50 × 41 =
+  2,050` blocks ≈ **6.8 hours** — still ~**17×** inside the redemption
+  timeout, and ~25× inside the moving-funds timeouts.
+* *Byzantine coordinators only* (the regime bounded concurrency is
+  designed for): coordinator rotation visits at most `f` byzantine
+  coordinators before an honest one; with serial attempts that is the
+  same `f·τ ≈ 6.8 h` worst case as above.
+
+Conclusion of the arithmetic: serial attempts comfortably fit the
+on-chain deadlines whenever attempts *can* succeed at all. The honest
+caveat is the next section.
+
+=== What actually binds: subset sampling, not serial latency
+
+An attempt requires every included member to contribute (the
+transitional finalize rejects partial contribution sets), and each
+attempt's included set is drawn from ready members. The per-attempt
+success probability against `f` byzantine-but-announcing members is
+the probability of drawing an all-honest `t`-subset:
+
+[cols="1,2,2"]
+|===
+| `f` | P(all-honest subset) per attempt | P(success within 5 attempts)
+
+| 1 | 0.490 | 0.966
+| 2 | 0.238 | 0.743
+| 3 | 0.114 | 0.454
+| 5 | 0.025 | 0.120
+|===
+
+(`P = ∏_{i=0}^{f-1} (49-i)/(100-i)` for `n=100, t=51`; the
+`signingAttemptsLimit = 5` rationale in `pkg/tbtc/node.go` assumes
+`f ≤ 2`.)
+
+The table models the *deployed legacy loop*, which draws an
+independent pseudo-random `t`-subset per attempt, so per-attempt
+failures are approximately i.i.d. The RFC-21 Layer B transitional
+path (every included member must contribute) has a different profile
+in both directions: one-shot silence is absorbed in a single attempt
+(the silent member is parked for the next), but the i.i.d. table is
+*not* a worst case there — members that stagger silence across
+attempts (alternating, so someone unparked is always silent), or that
+submit their evidence snapshots while withholding signing
+contributions (which bundle-absence parking does not detect; see
+Layer B), can fail *every* attempt deterministically at small `f`.
+Both regimes reach the same conclusion below.
+
+So for `f ≥ 3` the loop fails with better-than-even odds long before
+any timeout is approached: **the binding liveness constraint is
+sampling probability, not serial latency**. A patient adversary does
+not even need coordinators — any included byzantine member can burn an
+attempt by going silent after announcing, and silence parking is
+strictly transient by design, so re-announcing members re-poison
+later subsets. This is the liveness profile inherited from the
+tECDSA-era loop; its production backstops are outside the signing
+loop: operator-inactivity claims (`pkg/protocol/inactivity`),
+redemption-timeout slashing, and wallet closure/moving-funds
+retirement.
+
+=== The structural fix (Phase-7+ requirement, not an optimization)
+
+True ROAST semantics remove the per-attempt veto entirely: the
+coordinator finalizes with the first `t` *responsive* members of the
+included set (t-of-included finalize) and runs up to `n-t+1` bounded
+concurrent sessions so a stalling coordinator costs nothing but its
+own slot. Under those semantics a silent member costs zero attempts
+(they are simply not among the first `t` responders), the sampling
+table above becomes irrelevant (any `t` honest responders suffice,
+which the `t`-of-`n` assumption guarantees exist), and the worst-case
+added latency degenerates to the coordinator-rotation bound. The
+design groundwork already exists in the signer repo
+(`pkg/tbtc/signer/docs/true-late-t-of-n-finalize-considerations.md`).
+
+Recommendation codified by this annex:
+
+. Before the ECDSA-retirement phases, adopt t-of-included finalize for
+  the ROAST signing path (at minimum for redemption signings, which
+  carry slashing-backed deadlines).
+. Treat bounded concurrent attempts (`n-t+1` cap) as the follow-on
+  once t-of-included finalize lands; with it, the `f·τ` serial bound
+  in this annex stops being the worst case and becomes the
+  no-concurrency fallback.
+. Until then, the `signingAttemptsLimit = 5` / `f ≤ 2` assumption and
+  this annex's tables are the documented envelope; alerting should
+  fire when observed attempt failure rates imply `f ≥ 3` behaviour.
+
 == References
 
 * Ruffing, Ronge, Aranha, Schneider. ``ROAST: Robust Asynchronous
