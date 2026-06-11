@@ -4875,26 +4875,67 @@ pub fn aggregate(request: AggregateRequest) -> Result<AggregateResult, EngineErr
     })
 }
 
+/// Inputs that bind a deterministic transitional round-1 nonce.
+///
+/// Nonce-reuse safety invariant: a deterministic nonce may only repeat when
+/// the entire FROST transcript it signs over repeats. Every value that can
+/// change that transcript — anything entering the binding factor, the
+/// challenge, the Lagrange interpolation set, or selecting the key material —
+/// MUST be a field here and MUST feed `deterministic_seed` below. Binding a
+/// value only through `round_id` is not sufficient: `round_id` is a
+/// registry/idempotency handle whose derivation schema may evolve, and nonce
+/// safety must not depend on that schema or on consumed-round registry
+/// integrity (durable state can be rolled back, restored, or replicated).
+/// If a new transcript input is added to the transitional signing flow (as
+/// the Taproot tweak once was), it must be added here in the same change.
+#[derive(Clone, Copy)]
+struct RoundNonceBinding<'a> {
+    session_id: &'a str,
+    round_id: &'a str,
+    /// Serialized group verifying key; binds the nonce to the concrete group
+    /// key material (it enters the FROST binding-factor and challenge
+    /// preimages), not just to the session label that references it.
+    group_verifying_key_bytes: &'a [u8],
+    message_bytes: &'a [u8],
+    /// Taproot tweak applied at round 2; tweaking changes the challenge.
+    taproot_merkle_root: Option<&'a [u8; 32]>,
+    /// Canonical (sorted, deduplicated) signing set; determines the
+    /// commitment list and the Lagrange coefficients.
+    signing_participants: &'a [u16],
+    participant_identifier: u16,
+}
+
 fn build_deterministic_round_nonce_and_commitment(
     key_package: &frost::keys::KeyPackage,
-    session_id: &str,
-    round_id: &str,
-    message_bytes: &[u8],
-    participant_identifier: u16,
+    binding: &RoundNonceBinding<'_>,
 ) -> (
     frost::round1::SigningNonces,
     frost::round1::SigningCommitments,
 ) {
-    // Defense-in-depth: bind nonces directly to message bytes in addition to
-    // `round_id` so future round ID schema changes cannot weaken nonce safety.
+    let mut signing_participants_bytes = Vec::with_capacity(binding.signing_participants.len() * 2);
+    for signing_participant in binding.signing_participants {
+        signing_participants_bytes.extend_from_slice(&signing_participant.to_be_bytes());
+    }
+    let (taproot_tweak_tag, taproot_tweak_bytes): (&[u8], &[u8]) = match binding.taproot_merkle_root
+    {
+        Some(taproot_merkle_root) => (b"taproot-tweak", taproot_merkle_root.as_slice()),
+        None => (b"no-taproot-tweak", &[]),
+    };
+
     let mut signing_share_bytes = key_package.signing_share().serialize();
+    // Domain bumped to v2 when the binding set was widened beyond
+    // (session, round, message, participant); see `RoundNonceBinding`.
     let mut nonce_seed = deterministic_seed(&[
-        b"round-nonce",
+        b"round-nonce-v2",
         &signing_share_bytes,
-        session_id.as_bytes(),
-        round_id.as_bytes(),
-        message_bytes,
-        &participant_identifier.to_le_bytes(),
+        binding.group_verifying_key_bytes,
+        binding.session_id.as_bytes(),
+        binding.round_id.as_bytes(),
+        binding.message_bytes,
+        taproot_tweak_tag,
+        taproot_tweak_bytes,
+        &signing_participants_bytes,
+        &binding.participant_identifier.to_le_bytes(),
     ]);
     signing_share_bytes.zeroize();
     let mut nonce_rng = ZeroizingChaCha20Rng::from_seed(nonce_seed);
@@ -6034,6 +6075,32 @@ fn enforce_bootstrap_dealer_dkg_disabled_in_production(
     Ok(())
 }
 
+/// The transitional StartSignRound/FinalizeSignRound flow derives round-1
+/// nonces deterministically (see `RoundNonceBinding`) and only operates on
+/// dealer-DKG sessions where one engine holds every participant's key
+/// package. Blocking dealer DKG in production (above) is not enough on its
+/// own: persisted state created under a development profile could be carried
+/// into a production-profile process and signed with there. Gate the signing
+/// entry points themselves so a production signer can never execute the
+/// deterministic-nonce path, regardless of how its on-disk state was created.
+/// Production signing must use the interactive FROST path, which draws
+/// nonces from OS randomness.
+fn enforce_transitional_signing_disabled_in_production(
+    session_id: &str,
+) -> Result<(), EngineError> {
+    if signer_profile_is_production() {
+        return Err(EngineError::LifecyclePolicyRejected {
+            session_id: session_id.to_string(),
+            reason_code: "transitional_deterministic_signing_disabled_in_production".to_string(),
+            detail: format!(
+                "transitional deterministic-nonce signing (StartSignRound/FinalizeSignRound) is disabled when {TBTC_SIGNER_PROFILE_ENV}={TBTC_SIGNER_PROFILE_PRODUCTION}; production signing must use the interactive FROST path with OS-random nonces"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 fn development_dealer_dkg_seed(dkg_seed_hex: Option<&str>) -> Result<[u8; 32], EngineError> {
     let Some(seed_hex) = dkg_seed_hex else {
         let mut seed = [0_u8; 32];
@@ -6066,6 +6133,7 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
     let _latency_guard = HardeningOperationLatencyGuard::new(HardeningOperation::StartSignRound);
     enforce_provenance_gate()?;
     validate_session_id(&request.session_id)?;
+    enforce_transitional_signing_disabled_in_production(&request.session_id)?;
 
     if request.member_identifier == 0 {
         return Err(EngineError::Validation(
@@ -6245,9 +6313,14 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
                 let dkg_key_packages = session.dkg_key_packages.as_ref().ok_or_else(|| {
                     EngineError::Internal("missing DKG key package cache".to_string())
                 })?;
+                let dkg_public_key_package =
+                    session.dkg_public_key_package.as_ref().ok_or_else(|| {
+                        EngineError::Internal("missing DKG public key package cache".to_string())
+                    })?;
 
                 round_state.own_contribution = build_real_signature_share_contribution(
                     dkg_key_packages,
+                    dkg_public_key_package,
                     &signing_participants,
                     &request,
                     &round_state.round_id,
@@ -6337,8 +6410,13 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
             let dkg_key_packages = session.dkg_key_packages.as_ref().ok_or_else(|| {
                 EngineError::Internal("missing DKG key package cache".to_string())
             })?;
+            let dkg_public_key_package =
+                session.dkg_public_key_package.as_ref().ok_or_else(|| {
+                    EngineError::Internal("missing DKG public key package cache".to_string())
+                })?;
             build_real_signature_share_contribution(
                 dkg_key_packages,
+                dkg_public_key_package,
                 &signing_participants,
                 &request,
                 &round_id,
@@ -6467,12 +6545,20 @@ fn resolve_signing_participants(
 
 fn build_real_signature_share_contribution(
     dkg_key_packages: &BTreeMap<u16, frost::keys::KeyPackage>,
+    dkg_public_key_package: &frost::keys::PublicKeyPackage,
     signing_participants: &[u16],
     request: &StartSignRoundRequest,
     round_id: &str,
     message_bytes: &[u8],
     taproot_merkle_root: Option<&[u8; 32]>,
 ) -> Result<RoundContribution, EngineError> {
+    let group_verifying_key_bytes =
+        dkg_public_key_package
+            .verifying_key()
+            .serialize()
+            .map_err(|e| {
+                EngineError::Internal(format!("failed to serialize group verifying key: {e}"))
+            })?;
     let mut commitments = BTreeMap::new();
     let mut own_nonces = None;
 
@@ -6488,10 +6574,15 @@ fn build_real_signature_share_contribution(
         let frost_identifier = participant_identifier_to_frost_identifier(*participant_identifier)?;
         let (mut nonces, participant_commitments) = build_deterministic_round_nonce_and_commitment(
             key_package,
-            &request.session_id,
-            round_id,
-            message_bytes,
-            *participant_identifier,
+            &RoundNonceBinding {
+                session_id: &request.session_id,
+                round_id,
+                group_verifying_key_bytes: &group_verifying_key_bytes,
+                message_bytes,
+                taproot_merkle_root,
+                signing_participants,
+                participant_identifier: *participant_identifier,
+            },
         );
         commitments.insert(frost_identifier, participant_commitments);
 
@@ -6555,6 +6646,7 @@ pub fn finalize_sign_round(
     let _latency_guard = HardeningOperationLatencyGuard::new(HardeningOperation::FinalizeSignRound);
     enforce_provenance_gate()?;
     validate_session_id(&request.session_id)?;
+    enforce_transitional_signing_disabled_in_production(&request.session_id)?;
     let strict_roast_mode_enabled = roast_strict_mode_enabled();
     let finalize_taproot_merkle_root =
         canonicalize_taproot_merkle_root_hex(&mut request.taproot_merkle_root_hex)?;
@@ -6761,6 +6853,12 @@ pub fn finalize_sign_round(
             }
         }
 
+        let group_verifying_key_bytes = dkg_public_key_package
+            .verifying_key()
+            .serialize()
+            .map_err(|e| {
+                EngineError::Internal(format!("failed to serialize group verifying key: {e}"))
+            })?;
         let mut commitments = BTreeMap::new();
         for signing_participant in &signing_participants {
             let key_package = dkg_key_packages.get(signing_participant).ok_or_else(|| {
@@ -6774,10 +6872,15 @@ pub fn finalize_sign_round(
             let (mut participant_nonces, participant_commitments) =
                 build_deterministic_round_nonce_and_commitment(
                     key_package,
-                    &round_state.session_id,
-                    &round_state.round_id,
-                    sign_message_bytes,
-                    *signing_participant,
+                    &RoundNonceBinding {
+                        session_id: &round_state.session_id,
+                        round_id: &round_state.round_id,
+                        group_verifying_key_bytes: &group_verifying_key_bytes,
+                        message_bytes: sign_message_bytes,
+                        taproot_merkle_root: finalize_taproot_merkle_root.as_ref(),
+                        signing_participants: &signing_participants,
+                        participant_identifier: *signing_participant,
+                    },
                 );
             participant_nonces.zeroize();
             commitments.insert(frost_identifier, participant_commitments);
@@ -10882,7 +10985,28 @@ mod tests {
     #[test]
     fn production_profile_forces_roast_strict_mode_without_env_flag() {
         let _guard = lock_test_state();
-        let state_path = configure_test_state_path("production_forces_roast_strict");
+        reset_for_tests();
+
+        {
+            let _signer_profile = SignerProfileGuard::production();
+            let _roast_strict_mode = RoastStrictModeGuard::set(Some("false"));
+            assert!(
+                roast_strict_mode_enabled(),
+                "production profile must force ROAST strict mode regardless of env flag",
+            );
+        }
+
+        let _roast_strict_mode = RoastStrictModeGuard::set(Some("false"));
+        assert!(
+            !roast_strict_mode_enabled(),
+            "development profile must honor the disabled strict-mode env flag",
+        );
+    }
+
+    #[test]
+    fn start_sign_round_rejects_transitional_signing_in_production_profile() {
+        let _guard = lock_test_state();
+        let state_path = configure_test_state_path("production_rejects_transitional_signing");
         reset_for_tests();
         std::env::set_var(
             TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
@@ -10894,7 +11018,7 @@ mod tests {
         );
 
         let dkg_result = run_dkg(RunDkgRequest {
-            session_id: "session-production-forces-roast-strict".to_string(),
+            session_id: "session-production-rejects-transitional".to_string(),
             participants: vec![
                 crate::api::DkgParticipant {
                     identifier: 1,
@@ -10912,12 +11036,17 @@ mod tests {
 
         // RAII guards restore the prior env on Drop so a panic or early return
         // does not leak production-profile state into subsequent tests.
+        //
+        // This is the state-smuggling scenario: the dealer session above was
+        // created under the development profile, and the process now runs as
+        // production. The deterministic-nonce signing entry point itself must
+        // reject, even with the strict-mode env flag explicitly disabled.
         configure_valid_provenance_attestation_for_tests();
         let _signer_profile = SignerProfileGuard::production();
         let _roast_strict_mode = RoastStrictModeGuard::set(Some("false"));
 
         let err = start_sign_round(StartSignRoundRequest {
-            session_id: "session-production-forces-roast-strict".to_string(),
+            session_id: "session-production-rejects-transitional".to_string(),
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
@@ -10926,14 +11055,87 @@ mod tests {
             attempt_context: None,
             attempt_transition_evidence: None,
         })
-        .expect_err("production profile should require ROAST attempt context");
+        .expect_err("production profile should reject transitional signing");
 
-        let EngineError::Validation(message) = err else {
+        let EngineError::LifecyclePolicyRejected { reason_code, .. } = err else {
             panic!("unexpected error variant");
         };
-        assert!(
-            message.contains("attempt_context is required"),
-            "unexpected validation message: {message}"
+        assert_eq!(
+            reason_code,
+            "transitional_deterministic_signing_disabled_in_production"
+        );
+
+        reset_for_tests();
+        cleanup_test_state_artifacts(&state_path);
+        clear_state_storage_policy_overrides();
+    }
+
+    #[test]
+    fn finalize_sign_round_rejects_transitional_signing_in_production_profile() {
+        let _guard = lock_test_state();
+        let state_path = configure_test_state_path("production_rejects_transitional_finalize");
+        reset_for_tests();
+        std::env::set_var(
+            TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
+            TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND,
+        );
+        std::env::set_var(
+            TBTC_SIGNER_STATE_KEY_COMMAND_ENV,
+            format!("printf '{}\\n'", TEST_STATE_ENCRYPTION_KEY_HEX),
+        );
+
+        let dkg_result = run_dkg(RunDkgRequest {
+            session_id: "session-production-rejects-transitional-finalize".to_string(),
+            participants: vec![
+                crate::api::DkgParticipant {
+                    identifier: 1,
+                    public_key_hex: "02aa".to_string(),
+                },
+                crate::api::DkgParticipant {
+                    identifier: 2,
+                    public_key_hex: "02bb".to_string(),
+                },
+            ],
+            threshold: 2,
+            dkg_seed_hex: None,
+        })
+        .expect("seed non-production dkg");
+
+        let round_state = start_sign_round(StartSignRoundRequest {
+            session_id: "session-production-rejects-transitional-finalize".to_string(),
+            member_identifier: 1,
+            message_hex: "deadbeef".to_string(),
+            key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
+            signing_participants: Some(vec![1, 2]),
+            attempt_context: None,
+            attempt_transition_evidence: None,
+        })
+        .expect("start sign round under development profile");
+
+        // A round started under the development profile must not be
+        // finalizable by a production-profile process either; the gate fires
+        // before any round state is consumed.
+        configure_valid_provenance_attestation_for_tests();
+        let _signer_profile = SignerProfileGuard::production();
+
+        let err = finalize_sign_round(
+            FinalizeSignRoundRequest {
+                session_id: "session-production-rejects-transitional-finalize".to_string(),
+                taproot_merkle_root_hex: None,
+                attempt_context: None,
+                round_contributions: vec![round_state.own_contribution.clone()],
+            },
+            false,
+        )
+        .expect_err("production profile should reject transitional finalize");
+
+        let EngineError::LifecyclePolicyRejected { reason_code, .. } = err else {
+            panic!("unexpected error variant");
+        };
+        assert_eq!(
+            reason_code,
+            "transitional_deterministic_signing_disabled_in_production"
         );
 
         reset_for_tests();
@@ -12886,6 +13088,7 @@ mod tests {
         };
         let member_two_contribution = build_real_signature_share_contribution(
             &dkg_key_packages,
+            &dkg_public_key_package,
             &signing_participants,
             &member_two_request,
             &round_state.round_id,
@@ -12900,6 +13103,7 @@ mod tests {
         };
         let member_three_contribution = build_real_signature_share_contribution(
             &dkg_key_packages,
+            &dkg_public_key_package,
             &signing_participants,
             &member_three_request,
             &round_state.round_id,
@@ -13038,6 +13242,7 @@ mod tests {
         };
         let member_two_contribution = build_real_signature_share_contribution(
             &dkg_key_packages,
+            &dkg_public_key_package,
             &signing_participants,
             &member_two_request,
             &round_state.round_id,
@@ -13052,6 +13257,7 @@ mod tests {
         };
         let member_three_contribution = build_real_signature_share_contribution(
             &dkg_key_packages,
+            &dkg_public_key_package,
             &signing_participants,
             &member_three_request,
             &round_state.round_id,
@@ -13213,6 +13419,7 @@ mod tests {
         };
         let member_two_contribution = build_real_signature_share_contribution(
             &dkg_key_packages,
+            &dkg_public_key_package,
             &signing_participants,
             &member_two_request,
             &round_state.round_id,
@@ -13436,6 +13643,7 @@ mod tests {
             contributions.push(
                 build_real_signature_share_contribution(
                     &dkg_key_packages,
+                    &dkg_public_key_package,
                     signing_participants.as_slice(),
                     &member_request,
                     &first_round_state.round_id,
@@ -13471,12 +13679,12 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_round_nonce_and_commitment_is_message_bound() {
+    fn deterministic_round_nonce_and_commitment_binds_full_transcript() {
         let _guard = lock_test_state();
         reset_for_tests();
 
         let run_dkg_request = RunDkgRequest {
-            session_id: "session-nonce-message-bound".to_string(),
+            session_id: "session-nonce-transcript-bound".to_string(),
             participants: vec![
                 crate::api::DkgParticipant {
                     identifier: 1,
@@ -13486,6 +13694,10 @@ mod tests {
                     identifier: 2,
                     public_key_hex: "02bb".to_string(),
                 },
+                crate::api::DkgParticipant {
+                    identifier: 3,
+                    public_key_hex: "02cc".to_string(),
+                },
             ],
             threshold: 2,
             dkg_seed_hex: None,
@@ -13493,52 +13705,123 @@ mod tests {
 
         run_dkg(run_dkg_request).expect("run dkg");
 
-        let key_package = {
-            let guard = state().expect("engine state").lock().expect("engine lock");
-            let session = guard
-                .sessions
-                .get("session-nonce-message-bound")
-                .expect("session state");
-
-            session
-                .dkg_key_packages
-                .as_ref()
-                .expect("dkg key packages")
-                .get(&1)
-                .expect("key package")
-                .clone()
+        let other_session_request = RunDkgRequest {
+            session_id: "session-nonce-transcript-bound-other".to_string(),
+            participants: vec![
+                crate::api::DkgParticipant {
+                    identifier: 1,
+                    public_key_hex: "02aa".to_string(),
+                },
+                crate::api::DkgParticipant {
+                    identifier: 2,
+                    public_key_hex: "02bb".to_string(),
+                },
+                crate::api::DkgParticipant {
+                    identifier: 3,
+                    public_key_hex: "02cc".to_string(),
+                },
+            ],
+            threshold: 2,
+            dkg_seed_hex: None,
         };
+        run_dkg(other_session_request).expect("run other dkg");
 
-        let session_id = "session-nonce-message-bound";
-        let round_id = "fixed-round-id";
-        let participant_identifier = 1u16;
+        let fetch_session_material = |session_id: &str| {
+            let guard = state().expect("engine state").lock().expect("engine lock");
+            let session = guard.sessions.get(session_id).expect("session state");
+
+            (
+                session
+                    .dkg_key_packages
+                    .as_ref()
+                    .expect("dkg key packages")
+                    .get(&1)
+                    .expect("key package")
+                    .clone(),
+                session
+                    .dkg_public_key_package
+                    .clone()
+                    .expect("dkg public key package"),
+            )
+        };
+        let (key_package, public_key_package) =
+            fetch_session_material("session-nonce-transcript-bound");
+        let (_, other_public_key_package) =
+            fetch_session_material("session-nonce-transcript-bound-other");
+
+        let group_verifying_key_bytes = public_key_package
+            .verifying_key()
+            .serialize()
+            .expect("group verifying key bytes");
+        let other_group_verifying_key_bytes = other_public_key_package
+            .verifying_key()
+            .serialize()
+            .expect("other group verifying key bytes");
+
         let message_one = hex::decode("deadbeef").expect("message one decode");
         let message_two = hex::decode("cafebabe").expect("message two decode");
+        let taproot_merkle_root = [0x42_u8; 32];
+        let baseline_participants: Vec<u16> = vec![1, 2];
+        let wider_participants: Vec<u16> = vec![1, 2, 3];
 
-        let (_, commitments_one) = build_deterministic_round_nonce_and_commitment(
-            &key_package,
-            session_id,
-            round_id,
-            &message_one,
-            participant_identifier,
-        );
-        let (_, commitments_one_retry) = build_deterministic_round_nonce_and_commitment(
-            &key_package,
-            session_id,
-            round_id,
-            &message_one,
-            participant_identifier,
-        );
-        let (_, commitments_two) = build_deterministic_round_nonce_and_commitment(
-            &key_package,
-            session_id,
-            round_id,
-            &message_two,
-            participant_identifier,
+        let baseline_binding = RoundNonceBinding {
+            session_id: "session-nonce-transcript-bound",
+            round_id: "fixed-round-id",
+            group_verifying_key_bytes: &group_verifying_key_bytes,
+            message_bytes: &message_one,
+            taproot_merkle_root: None,
+            signing_participants: &baseline_participants,
+            participant_identifier: 1,
+        };
+
+        let (_, baseline_commitments) =
+            build_deterministic_round_nonce_and_commitment(&key_package, &baseline_binding);
+        let (_, retry_commitments) =
+            build_deterministic_round_nonce_and_commitment(&key_package, &baseline_binding);
+        assert_eq!(
+            baseline_commitments, retry_commitments,
+            "identical binding inputs must re-derive identical commitments",
         );
 
-        assert_eq!(commitments_one, commitments_one_retry);
-        assert_ne!(commitments_one, commitments_two);
+        // Each transcript-affecting input must independently change the nonce.
+        let variant_bindings = [
+            RoundNonceBinding {
+                message_bytes: &message_two,
+                ..baseline_binding
+            },
+            RoundNonceBinding {
+                taproot_merkle_root: Some(&taproot_merkle_root),
+                ..baseline_binding
+            },
+            RoundNonceBinding {
+                signing_participants: &wider_participants,
+                ..baseline_binding
+            },
+            RoundNonceBinding {
+                group_verifying_key_bytes: &other_group_verifying_key_bytes,
+                ..baseline_binding
+            },
+            RoundNonceBinding {
+                session_id: "session-nonce-transcript-bound-other",
+                ..baseline_binding
+            },
+            RoundNonceBinding {
+                round_id: "other-round-id",
+                ..baseline_binding
+            },
+            RoundNonceBinding {
+                participant_identifier: 2,
+                ..baseline_binding
+            },
+        ];
+        for (variant_index, variant_binding) in variant_bindings.iter().enumerate() {
+            let (_, variant_commitments) =
+                build_deterministic_round_nonce_and_commitment(&key_package, variant_binding);
+            assert_ne!(
+                baseline_commitments, variant_commitments,
+                "binding variant [{variant_index}] must change the derived commitment",
+            );
+        }
     }
 
     #[test]
@@ -13587,14 +13870,20 @@ mod tests {
             .clone()
             .expect("round signing participants");
 
-        let dkg_key_packages = {
+        let (dkg_key_packages, dkg_public_key_package) = {
             let guard = state().expect("engine state").lock().expect("engine lock");
             let session = guard
                 .sessions
                 .get(&start_request.session_id)
                 .expect("session state");
 
-            session.dkg_key_packages.clone().expect("dkg key packages")
+            (
+                session.dkg_key_packages.clone().expect("dkg key packages"),
+                session
+                    .dkg_public_key_package
+                    .clone()
+                    .expect("dkg public key package"),
+            )
         };
 
         let member_two_request = StartSignRoundRequest {
@@ -13604,6 +13893,7 @@ mod tests {
         };
         let member_two_contribution = build_real_signature_share_contribution(
             &dkg_key_packages,
+            &dkg_public_key_package,
             &signing_participants,
             &member_two_request,
             &round_state.round_id,
@@ -13687,14 +13977,20 @@ mod tests {
             .clone()
             .expect("round signing participants");
 
-        let dkg_key_packages = {
+        let (dkg_key_packages, dkg_public_key_package) = {
             let guard = state().expect("engine state").lock().expect("engine lock");
             let session = guard
                 .sessions
                 .get(&start_request.session_id)
                 .expect("session state");
 
-            session.dkg_key_packages.clone().expect("dkg key packages")
+            (
+                session.dkg_key_packages.clone().expect("dkg key packages"),
+                session
+                    .dkg_public_key_package
+                    .clone()
+                    .expect("dkg public key package"),
+            )
         };
 
         let member_two_request = StartSignRoundRequest {
@@ -13704,6 +14000,7 @@ mod tests {
         };
         let member_two_contribution = build_real_signature_share_contribution(
             &dkg_key_packages,
+            &dkg_public_key_package,
             &signing_participants,
             &member_two_request,
             &round_state.round_id,
