@@ -184,6 +184,13 @@ func TestCoordinatorSeedDerivation_ConformanceVectors(t *testing.T) {
 // After regenerating, copy the file byte-identically to
 // pkg/tbtc/signer/testdata/coordinator_seed_vectors.json on the
 // signer branch.
+//
+// Regenerating is a protocol-change event, not a refresh: the file
+// pins the normative RFC-21 Annex A behaviour, so a run that produces
+// different bytes means the derivation changed and requires an
+// Annex A update in the same change plus a mixed-fleet rollout note.
+// Both language suites passing after a dual regen is NOT evidence of
+// compatibility with already-deployed engines.
 func TestRegenerateCoordinatorSeedVectors(t *testing.T) {
 	if os.Getenv("ROAST_SEED_VECTORS_REGEN") != "1" {
 		t.Skip("set ROAST_SEED_VECTORS_REGEN=1 to regenerate the vector file")
