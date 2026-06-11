@@ -4925,6 +4925,14 @@ fn build_deterministic_round_nonce_and_commitment(
     let mut signing_share_bytes = key_package.signing_share().serialize();
     // Domain bumped to v2 when the binding set was widened beyond
     // (session, round, message, participant); see `RoundNonceBinding`.
+    //
+    // Encoding note: the participants set serializes big-endian while
+    // `participant_identifier` keeps the v1 little-endian encoding. The
+    // mix is harmless -- both are fixed-width and `deterministic_seed`
+    // length-frames every part -- but it is part of the derived value:
+    // changing either encoding changes derived commitments fleet-wide
+    // and requires a new domain (`round-nonce-v3`), never an in-place
+    // edit.
     let mut nonce_seed = deterministic_seed(&[
         b"round-nonce-v2",
         &signing_share_bytes,
