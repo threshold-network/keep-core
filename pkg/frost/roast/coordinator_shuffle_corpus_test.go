@@ -150,6 +150,11 @@ func TestRegenerateCoordinatorShuffleCorpus(t *testing.T) {
 	// Boundary block: integer extremes, sign boundaries, the
 	// wrapping seed+attempt composition, and the historical
 	// cross-language pin seed from PR #4026.
+	//
+	// +/-MaxInt32 are the rand.NewSource seed-normalization collision:
+	// Go reduces the source seed mod (2^31 - 1) and maps 0 to 89482311,
+	// so +/-(2^31 - 1) seed the generator identically to 0. Pinning them
+	// catches a port that special-cases literal 0 but skips the modulo.
 	boundarySeeds := []int64{
 		0,
 		1,
@@ -158,6 +163,8 @@ func TestRegenerateCoordinatorShuffleCorpus(t *testing.T) {
 		math.MinInt64,
 		math.MaxInt64 - 3,
 		math.MinInt64 + 3,
+		math.MaxInt32,  // == 2^31 - 1; normalizes to the seed-0 state
+		-math.MaxInt32, // negative wrap then the same collision
 		6879463052285329321,
 		-6879463052285329321,
 	}
