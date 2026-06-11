@@ -817,5 +817,11 @@ mod tests {
         let right = select_coordinator_identifier(&[6, 1, 5, 2, 4, 3], 333, 4);
 
         assert_eq!(left, right);
+        // Pin the concrete result, not just the equality: the Go side
+        // (keep-core pkg/frost/roast,
+        // TestSelectCoordinator_CrossLanguagePinnedVectors) asserts the
+        // same value, so either implementation drifting fails its own
+        // suite instead of fracturing coordinator agreement at runtime.
+        assert_eq!(left, Some(4));
     }
 }
