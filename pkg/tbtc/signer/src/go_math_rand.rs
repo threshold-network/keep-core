@@ -824,4 +824,69 @@ mod tests {
         // suite instead of fracturing coordinator agreement at runtime.
         assert_eq!(left, Some(4));
     }
+
+    #[derive(serde::Deserialize)]
+    struct CoordinatorShuffleCorpusFile {
+        #[allow(dead_code)]
+        description: String,
+        cases: Vec<CoordinatorShuffleCase>,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CoordinatorShuffleCase {
+        name: String,
+        seed_int64: String,
+        attempt_number: u32,
+        members: Vec<u16>,
+        expected_coordinator: u16,
+    }
+
+    // Byte-identical copy of the canonical differential corpus
+    // generated from the Go implementation (keep-core
+    // pkg/frost/roast/testdata/coordinator_shuffle_corpus.json;
+    // regenerate there with ROAST_SHUFFLE_CORPUS_REGEN=1 and re-copy).
+    // Covers integer-boundary seeds (0, +/-1, i64 MIN/MAX, +/-MaxInt32
+    // for the source-seed normalization collision, the #4026 pin seed),
+    // the wrapping seed+attempt composition up to u32::MAX attempts,
+    // unsorted/reversed member inputs, and generated sweeps over set
+    // sizes 1..255 with full-range seeds. Any drift in source seeding,
+    // Fisher-Yates order, int31n bounds, sign handling, wrapping, or
+    // internal sorting fails this test on the drifting side instead of
+    // fracturing coordinator agreement in a mixed deployment.
+    //
+    // Two port branches are unreachable by differential cases and are
+    // accepted as faithful 1:1 ports of Go's math/rand, covered by Go's
+    // own stdlib tests: (1) `int63n` (the index > i32::MAX shuffle path)
+    // is dead for any u16 member set; (2) the `int31n_fast` rejection
+    // loop fires with probability ~set_size/2^31 per draw, so the corpus
+    // statistically never exercises it. Pinning their *outputs*
+    // differentially would require Go-instrumented forced RNG states,
+    // out of scope for a corpus that rides the existing unit-test CI.
+    #[test]
+    fn select_coordinator_matches_cross_language_differential_corpus() {
+        let raw = include_str!("../testdata/coordinator_shuffle_corpus.json");
+        let file: CoordinatorShuffleCorpusFile =
+            serde_json::from_str(raw).expect("corpus file decodes");
+        assert!(
+            file.cases.len() >= 600,
+            "expected at least the 600-case corpus, found {}",
+            file.cases.len()
+        );
+
+        for case in &file.cases {
+            let seed: i64 = case
+                .seed_int64
+                .parse()
+                .unwrap_or_else(|err| panic!("case [{}] seed parse: {err}", case.name));
+            let coordinator =
+                select_coordinator_identifier(&case.members, seed, case.attempt_number)
+                    .unwrap_or_else(|| panic!("case [{}] selected no coordinator", case.name));
+            assert_eq!(
+                coordinator, case.expected_coordinator,
+                "coordinator mismatch in case [{}]",
+                case.name
+            );
+        }
+    }
 }
