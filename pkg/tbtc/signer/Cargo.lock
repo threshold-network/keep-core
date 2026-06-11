@@ -541,9 +541,9 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
 name = "frost-core"
-version = "3.0.0-rc.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b28afb08296406bf64550a289fe37a779747cf24b062a8ad5f24f9c871d4b425"
+checksum = "81ef2787af391c7e8bedc037a3b9ea03dde803fbd93e778e6bb369547800e5cd"
 dependencies = [
  "byteorder",
  "const-crc32-nostd",
@@ -563,9 +563,9 @@ dependencies = [
 
 [[package]]
 name = "frost-rerandomized"
-version = "3.0.0-rc.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53efb7cfa387cb25b5a5ce3269dd05704fd879bc72b07d3598db0e4d222de16f"
+checksum = "8f4c5cedd2426728adef2c0b1720f57676354c473836d1ccc50d0f0d1c91942b"
 dependencies = [
  "derive-getters",
  "document-features",
@@ -576,9 +576,9 @@ dependencies = [
 
 [[package]]
 name = "frost-secp256k1-tr"
-version = "3.0.0-rc.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b8aa04ff85d94c85b5b679909380df227bf09206e4705670e54cf628b2effd6"
+checksum = "c6fca4ca9f057cf22066f3eb5bbda59d2af51f429f2aac5982a11a8a841c0993"
 dependencies = [
  "document-features",
  "frost-core",
