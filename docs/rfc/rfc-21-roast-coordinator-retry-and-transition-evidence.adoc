@@ -754,7 +754,19 @@ fails the drifting side's own unit suite.
   The handle is treated as an opaque byte string; implementations
   MUST NOT decode it to point bytes before hashing.
 * `SessionID`: the session identifier's raw UTF-8 bytes.
-* `MessageDigest`: the 32-byte signing message digest.
+* `MessageDigest`: the **raw signing message itself**, big-endian
+  left-padded with zeros to exactly 32 bytes; leading zero bytes are
+  insignificant, and more than 32 significant bytes MUST be rejected.
+  This is precisely keep-core's `messageDigestFromBigInt` output: in
+  BIP-340 production the signed message already is the 32-byte
+  sighash, so padding is a no-op. Implementations MUST NOT substitute
+  any transcript hash of the message here -- in particular not the
+  tbtc-signer engine's internal `SHA256(message_bytes)` digest, which
+  feeds only the engine's `round_id`/`attempt_id` derivations. Seeding
+  from the transcript digest instead of the padded message was a
+  cross-language coordinator divergence caught in review; the
+  engine-side contract is pinned by
+  `start_sign_round_accepts_go_derived_attempt_context_in_strict_mode`.
 * `AttemptNumber`: the RFC-21 attempt number, **0-based** (attempt
   zero is the first attempt). The tbtc-signer FFI `AttemptContext`
   carries `wire_attempt_number = AttemptNumber + 1` (1-based, zero
