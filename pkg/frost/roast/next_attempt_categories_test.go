@@ -7,10 +7,13 @@ import (
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
-// buildBundleWithCategories constructs a TransitionMessage where each
-// observer contributes the same per-(category, sender) evidence -- one
-// reject reason and one conflict per "blamed" sender per observer.
-// Useful for verifying the cross-observer summing behaviour.
+// buildBundleWithCategories constructs a TransitionMessage where
+// every member of prev.IncludedSet acts as an observer contributing
+// the same per-(category, sender) evidence -- one reject reason and
+// one conflict per "blamed" sender per observer. With the full
+// included set accusing, every accusation is established (accusers =
+// n >= quorum), so these bundles exercise the established-blame
+// paths.
 func buildBundleWithCategories(
 	t *testing.T,
 	prev attempt.AttemptContext,
@@ -18,9 +21,36 @@ func buildBundleWithCategories(
 	conflicts []group.MemberIndex,
 ) *TransitionMessage {
 	t.Helper()
+	return buildBundleWithCategoriesFromAccusers(
+		t, prev, prev.IncludedSet, rejects, conflicts,
+	)
+}
+
+// buildBundleWithCategoriesFromAccusers is buildBundleWithCategories
+// with an explicit accuser subset: every member of prev.IncludedSet
+// submits a snapshot, but only the listed accusers carry the
+// reject/conflict evidence. Lets tests pin the accuser-quorum
+// boundary precisely.
+func buildBundleWithCategoriesFromAccusers(
+	t *testing.T,
+	prev attempt.AttemptContext,
+	accusers []group.MemberIndex,
+	rejects map[group.MemberIndex][]string,
+	conflicts []group.MemberIndex,
+) *TransitionMessage {
+	t.Helper()
+	accuserSet := newMemberSet()
+	accuserSet.addAll(accusers)
 	prevHash := prev.Hash()
 	bundle := make([]LocalEvidenceSnapshot, 0, len(prev.IncludedSet))
 	for _, sender := range prev.IncludedSet {
+		if !accuserSet.contains(sender) {
+			bundle = append(bundle, LocalEvidenceSnapshot{
+				SenderIDValue:      uint32(sender),
+				AttemptContextHash: append([]byte{}, prevHash[:]...),
+			})
+			continue
+		}
 		snap := LocalEvidenceSnapshot{
 			SenderIDValue:      uint32(sender),
 			AttemptContextHash: append([]byte{}, prevHash[:]...),
@@ -67,12 +97,12 @@ func sortRejectEntriesForTest(entries []RejectEntry) {
 	}
 }
 
-func TestNextAttempt_SingleRejectExcludesPermanently(t *testing.T) {
+func TestNextAttempt_EstablishedRejectExcludesPermanently(t *testing.T) {
 	f := newNextAttemptFixture()
 	prev := f.prev(t)
-	// Every observer reports one reject against sender 3 → total
-	// count is len(IncludedSet) = 5 across observers, summed by
-	// rejectBlamedSenders.
+	// Every observer reports one reject against sender 3: five
+	// distinct accusers >= quorum (3), so the accusation is
+	// established and the exclusion is permanent.
 	bundle := buildBundleWithCategories(
 		t,
 		prev,
@@ -92,7 +122,7 @@ func TestNextAttempt_SingleRejectExcludesPermanently(t *testing.T) {
 	}
 }
 
-func TestNextAttempt_SingleConflictExcludesPermanently(t *testing.T) {
+func TestNextAttempt_EstablishedConflictExcludesPermanently(t *testing.T) {
 	f := newNextAttemptFixture()
 	prev := f.prev(t)
 	bundle := buildBundleWithCategories(
@@ -108,9 +138,80 @@ func TestNextAttempt_SingleConflictExcludesPermanently(t *testing.T) {
 	}
 	if !memberSliceContains(next.ExcludedSet, 3) {
 		t.Fatalf(
-			"sender 3 must be excluded after a single conflict; got %v",
+			"sender 3 must be excluded on an established conflict; got %v",
 			next.ExcludedSet,
 		)
+	}
+}
+
+func TestNextAttempt_SubQuorumRejectAndConflictDoNotExclude(t *testing.T) {
+	f := newNextAttemptFixture()
+	prev := f.prev(t)
+	// Only two accusers (= f, the tolerated byzantine count) report
+	// the reject and the conflict: below the quorum (3), so no
+	// action -- the accused stays included and is not parked.
+	bundle := buildBundleWithCategoriesFromAccusers(
+		t,
+		prev,
+		[]group.MemberIndex{1, 2},
+		map[group.MemberIndex][]string{3: {"validation_gate_rejected"}},
+		[]group.MemberIndex{3},
+	)
+
+	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey)
+	if err != nil {
+		t.Fatalf("compute: %v", err)
+	}
+	if memberSliceContains(next.ExcludedSet, 3) {
+		t.Fatalf(
+			"sub-quorum accusations must not exclude; got %v",
+			next.ExcludedSet,
+		)
+	}
+	if memberSliceContains(next.TransientlyParked, 3) {
+		t.Fatalf(
+			"sub-quorum accusations must not park; got %v",
+			next.TransientlyParked,
+		)
+	}
+	if !memberSliceContains(next.IncludedSet, 3) {
+		t.Fatalf("sender 3 must remain included; got %v", next.IncludedSet)
+	}
+}
+
+func TestNextAttempt_MultipleRejectReasonsAreOneAccuser(t *testing.T) {
+	f := newNextAttemptFixture()
+	prev := f.prev(t)
+	// Two observers each report three distinct reject reasons against
+	// sender 3. Reasons must not multiply accusers: 2 accusers <
+	// quorum (3), no action. Under summed counting this would have
+	// been 6 >= 1 and an immediate permanent exclusion.
+	bundle := buildBundleWithCategoriesFromAccusers(
+		t,
+		prev,
+		[]group.MemberIndex{1, 2},
+		map[group.MemberIndex][]string{
+			3: {
+				"validation_gate_rejected",
+				"share_verification_failed",
+				"commitment_malformed",
+			},
+		},
+		nil,
+	)
+
+	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey)
+	if err != nil {
+		t.Fatalf("compute: %v", err)
+	}
+	if memberSliceContains(next.ExcludedSet, 3) {
+		t.Fatalf(
+			"multiple reasons from few observers must not exclude; got %v",
+			next.ExcludedSet,
+		)
+	}
+	if !memberSliceContains(next.IncludedSet, 3) {
+		t.Fatalf("sender 3 must remain included; got %v", next.IncludedSet)
 	}
 }
 
@@ -149,17 +250,28 @@ func TestNextAttempt_EmptyRejectsAndConflicts_DoNotExclude(t *testing.T) {
 	}
 }
 
-func TestRejectAndConflictThresholds_MatchRFC(t *testing.T) {
-	if RejectExclusionThreshold != 1 {
-		t.Fatalf(
-			"RFC-21 Layer B specifies reject threshold = 1; constant is %d",
-			RejectExclusionThreshold,
-		)
+func TestNextAttempt_ExactQuorumOfHonestObserversExcludes(t *testing.T) {
+	f := newNextAttemptFixture()
+	prev := f.prev(t)
+	// Exactly quorum (3 = f+1) accusers: established. This is the
+	// boundary at which at least one accuser is guaranteed honest
+	// under the t-of-n assumption.
+	bundle := buildBundleWithCategoriesFromAccusers(
+		t,
+		prev,
+		[]group.MemberIndex{1, 2, 4},
+		map[group.MemberIndex][]string{3: {"validation_gate_rejected"}},
+		nil,
+	)
+
+	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey)
+	if err != nil {
+		t.Fatalf("compute: %v", err)
 	}
-	if ConflictExclusionThreshold != 1 {
+	if !memberSliceContains(next.ExcludedSet, 3) {
 		t.Fatalf(
-			"single conflict is sufficient evidence; constant is %d",
-			ConflictExclusionThreshold,
+			"exact quorum must establish the exclusion; got %v",
+			next.ExcludedSet,
 		)
 	}
 }
