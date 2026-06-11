@@ -265,13 +265,15 @@ func TestSoak_CleanAttemptPreservesIncludedSet(t *testing.T) {
 	}
 }
 
-func TestSoak_OverflowEvidenceExcludesPermanently(t *testing.T) {
+func TestSoak_EstablishedOverflowParksTransiently(t *testing.T) {
 	members := []group.MemberIndex{1, 2, 3, 4, 5}
 	nodes := newSoakHarness(t, members)
 	prev := soakStartingContext(t, members)
 
-	// Four observers report 1 overflow each against member 3.
-	// Total 4 = OverflowExclusionThreshold.
+	// Four distinct observers report overflow against member 3:
+	// 4 >= ExclusionAccuserQuorum(5, 3) = 3, so the accusation is
+	// established -- but transport blame is unverifiable in
+	// principle, so it parks transiently instead of excluding.
 	overflow := map[group.MemberIndex][]group.MemberIndex{
 		1: {3},
 		2: {3},
@@ -280,8 +282,14 @@ func TestSoak_OverflowEvidenceExcludesPermanently(t *testing.T) {
 	}
 	next, _ := soakAttempt(t, nodes, prev, nil, overflow, 3)
 
-	if !containsMember(next.ExcludedSet, 3) {
-		t.Fatalf("member 3 must be excluded; got %v", next.ExcludedSet)
+	if !containsMember(next.TransientlyParked, 3) {
+		t.Fatalf("member 3 must be parked; got %v", next.TransientlyParked)
+	}
+	if containsMember(next.ExcludedSet, 3) {
+		t.Fatalf(
+			"overflow must never permanently exclude; got %v",
+			next.ExcludedSet,
+		)
 	}
 	if containsMember(next.IncludedSet, 3) {
 		t.Fatal("member 3 must not be in next IncludedSet")

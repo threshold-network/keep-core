@@ -10,13 +10,17 @@ import (
 
 // nextAttemptFixture builds a previous AttemptContext and an
 // associated TransitionMessage for the NextAttempt-policy tests.
-// Members 1..5 included; no excluded; no parking. By default every
-// member submits a snapshot with no overflow events.
+// Members 1..5 included; no excluded; no parking; threshold 3 (so
+// ExclusionAccuserQuorum(5, 3) = 3). By default every member submits
+// a snapshot with no evidence entries. The overflows/rejects/conflicts
+// maps are keyed by observer, then by accused member.
 type nextAttemptFixture struct {
 	included          []group.MemberIndex
 	excluded          []group.MemberIndex
 	parked            []group.MemberIndex
 	overflows         map[group.MemberIndex]map[group.MemberIndex]uint
+	rejects           map[group.MemberIndex]map[group.MemberIndex]uint
+	conflicts         map[group.MemberIndex]map[group.MemberIndex]uint
 	bundleSenders     []group.MemberIndex // override default = included
 	attemptNumber     uint32
 	dkgGroupPublicKey []byte
@@ -31,6 +35,8 @@ func newNextAttemptFixture() *nextAttemptFixture {
 		excluded:          nil,
 		parked:            nil,
 		overflows:         map[group.MemberIndex]map[group.MemberIndex]uint{},
+		rejects:           map[group.MemberIndex]map[group.MemberIndex]uint{},
+		conflicts:         map[group.MemberIndex]map[group.MemberIndex]uint{},
 		bundleSenders:     nil,
 		attemptNumber:     0,
 		dkgGroupPublicKey: []byte{0x01, 0x02, 0x03},
@@ -79,6 +85,26 @@ func (f *nextAttemptFixture) bundle(t *testing.T) *TransitionMessage {
 			}
 			snap.Overflows = sortedOverflowEntries(ov)
 		}
+		if entries, ok := f.rejects[s]; ok {
+			rj := make([]RejectEntry, 0, len(entries))
+			for sender, count := range entries {
+				rj = append(rj, RejectEntry{
+					Sender: sender,
+					Reason: "validation_gate_rejected",
+					Count:  count,
+				})
+			}
+			sortRejectEntriesForTest(rj)
+			snap.Rejects = rj
+		}
+		if entries, ok := f.conflicts[s]; ok {
+			cf := make([]ConflictEntry, 0, len(entries))
+			for sender, count := range entries {
+				cf = append(cf, ConflictEntry{Sender: sender, Count: count})
+			}
+			sortConflictEntriesForTest(cf)
+			snap.Conflicts = cf
+		}
 		bundle = append(bundle, snap)
 	}
 	return &TransitionMessage{
@@ -97,6 +123,14 @@ func sortedOverflowEntries(in []OverflowEntry) []OverflowEntry {
 		}
 	}
 	return out
+}
+
+func sortConflictEntriesForTest(entries []ConflictEntry) {
+	for i := 1; i < len(entries); i++ {
+		for j := i; j > 0 && entries[j].Sender < entries[j-1].Sender; j-- {
+			entries[j], entries[j-1] = entries[j-1], entries[j]
+		}
+	}
 }
 
 func TestNextAttempt_NoEvidenceProducesIdenticalIncludedSet(t *testing.T) {
@@ -127,10 +161,12 @@ func TestNextAttempt_NoEvidenceProducesIdenticalIncludedSet(t *testing.T) {
 	}
 }
 
-func TestNextAttempt_OverflowThresholdTriggersPermanentExclusion(t *testing.T) {
+func TestNextAttempt_EstablishedOverflowParksTransiently(t *testing.T) {
 	f := newNextAttemptFixture()
-	// Members 2..5 all report 1 overflow event each against sender 3.
-	// 4 observers × 1 event = 4 total = OverflowExclusionThreshold.
+	// Members 2..5 all report overflow against sender 3: 4 distinct
+	// accusers >= quorum (3). Transport blame is unverifiable in
+	// principle, so even an established overflow accusation parks
+	// transiently and never permanently excludes.
 	for observer := group.MemberIndex(2); observer <= 5; observer++ {
 		f.overflows[observer] = map[group.MemberIndex]uint{3: 1}
 	}
@@ -139,24 +175,83 @@ func TestNextAttempt_OverflowThresholdTriggersPermanentExclusion(t *testing.T) {
 		t.Fatalf("compute: %v", err)
 	}
 	if memberSliceContains(next.IncludedSet, 3) {
-		t.Fatalf("sender 3 should be excluded; got included %v", next.IncludedSet)
+		t.Fatalf("sender 3 should be parked; got included %v", next.IncludedSet)
 	}
-	if !memberSliceContains(next.ExcludedSet, 3) {
-		t.Fatalf("sender 3 should appear in excluded set; got %v", next.ExcludedSet)
+	if !memberSliceContains(next.TransientlyParked, 3) {
+		t.Fatalf(
+			"sender 3 should appear in parked set; got %v",
+			next.TransientlyParked,
+		)
+	}
+	if memberSliceContains(next.ExcludedSet, 3) {
+		t.Fatalf(
+			"overflow must never permanently exclude; got excluded %v",
+			next.ExcludedSet,
+		)
 	}
 }
 
-func TestNextAttempt_OverflowBelowThresholdDoesNotExclude(t *testing.T) {
+func TestNextAttempt_EstablishedOverflowParkIsTransient(t *testing.T) {
 	f := newNextAttemptFixture()
-	// Only 1 observer reports 1 overflow event against sender 3.
-	// 1 < threshold (4).
-	f.overflows[2] = map[group.MemberIndex]uint{3: 1}
+	// Attempt N: quorum overflow accusation against member 3 parks it.
+	for observer := group.MemberIndex(2); observer <= 5; observer++ {
+		f.overflows[observer] = map[group.MemberIndex]uint{3: 1}
+	}
+	attemptN1, err := computeNextAttempt(
+		f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey,
+	)
+	if err != nil {
+		t.Fatalf("N -> N+1: %v", err)
+	}
+	if !memberSliceContains(attemptN1.TransientlyParked, 3) {
+		t.Fatalf("N+1 must park member 3; got %v", attemptN1.TransientlyParked)
+	}
+
+	// Attempt N+1: parked member 3 cannot submit; no new accusations.
+	attemptN1Hash := attemptN1.Hash()
+	bundleN1 := &TransitionMessage{
+		AttemptContextHash: append([]byte{}, attemptN1Hash[:]...),
+		CoordinatorIDValue: 1,
+		Bundle: []LocalEvidenceSnapshot{
+			{SenderIDValue: 1, AttemptContextHash: append([]byte{}, attemptN1Hash[:]...)},
+			{SenderIDValue: 2, AttemptContextHash: append([]byte{}, attemptN1Hash[:]...)},
+			{SenderIDValue: 4, AttemptContextHash: append([]byte{}, attemptN1Hash[:]...)},
+			{SenderIDValue: 5, AttemptContextHash: append([]byte{}, attemptN1Hash[:]...)},
+		},
+	}
+	attemptN2, err := computeNextAttempt(
+		attemptN1, bundleN1, f.threshold, f.dkgGroupPublicKey,
+	)
+	if err != nil {
+		t.Fatalf("N+1 -> N+2: %v", err)
+	}
+	if !memberSliceContains(attemptN2.IncludedSet, 3) {
+		t.Fatalf(
+			"N+2 must reinstate overflow-parked member 3; got included %v",
+			attemptN2.IncludedSet,
+		)
+	}
+}
+
+func TestNextAttempt_SubQuorumOverflowHasNoEffect(t *testing.T) {
+	f := newNextAttemptFixture()
+	// Two observers (< quorum 3) report overflow against sender 3,
+	// with large claimed counts. Counts must not be summed into
+	// blame: an accusation below the accuser quorum is ignored.
+	f.overflows[2] = map[group.MemberIndex]uint{3: 100}
+	f.overflows[4] = map[group.MemberIndex]uint{3: 100}
 	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey)
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
 	if !memberSliceContains(next.IncludedSet, 3) {
 		t.Fatalf("sender 3 should remain included; got %v", next.IncludedSet)
+	}
+	if memberSliceContains(next.TransientlyParked, 3) {
+		t.Fatal("sub-quorum overflow must not park")
+	}
+	if memberSliceContains(next.ExcludedSet, 3) {
+		t.Fatal("sub-quorum overflow must not exclude")
 	}
 }
 
@@ -326,19 +421,244 @@ func TestNextAttempt_ThresholdZeroDisablesInfeasibilityCheck(t *testing.T) {
 	}
 }
 
-func TestNextAttempt_OverflowFromMultipleObserversIsSummed(t *testing.T) {
+func TestNextAttempt_SingleObserverCountMagnitudeIsNotBlame(t *testing.T) {
 	f := newNextAttemptFixture()
-	// 2 observers each report 2 overflow events = total 4 = threshold.
-	f.overflows[1] = map[group.MemberIndex]uint{3: 2}
-	f.overflows[2] = map[group.MemberIndex]uint{3: 2}
+	// One observer fabricating arbitrarily large counts in every
+	// category is still a single accuser, far below the quorum (3):
+	// the accused member must be completely unaffected. This is the
+	// counted-blame fabrication vector the quorum policy closes.
+	f.overflows[5] = map[group.MemberIndex]uint{3: 1000}
+	f.rejects[5] = map[group.MemberIndex]uint{3: 1000}
+	f.conflicts[5] = map[group.MemberIndex]uint{3: 1000}
 	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey)
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
-	if !memberSliceContains(next.ExcludedSet, 3) {
+	if !memberSliceContains(next.IncludedSet, 3) {
+		t.Fatalf("sender 3 must remain included; got %v", next.IncludedSet)
+	}
+	if memberSliceContains(next.TransientlyParked, 3) {
+		t.Fatal("fabricated counts must not park")
+	}
+	if memberSliceContains(next.ExcludedSet, 3) {
+		t.Fatal("fabricated counts must not exclude")
+	}
+}
+
+func TestNextAttempt_QuorumBoundaryForRejectAndConflict(t *testing.T) {
+	// n=5, t=3 => f = 2 byzantine tolerated => quorum = 3 accusers.
+	for _, tc := range []struct {
+		name     string
+		category func(f *nextAttemptFixture) map[group.MemberIndex]map[group.MemberIndex]uint
+	}{
+		{
+			name: "rejects",
+			category: func(f *nextAttemptFixture) map[group.MemberIndex]map[group.MemberIndex]uint {
+				return f.rejects
+			},
+		},
+		{
+			name: "conflicts",
+			category: func(f *nextAttemptFixture) map[group.MemberIndex]map[group.MemberIndex]uint {
+				return f.conflicts
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// f accusers (= 2, the max byzantine count): no action.
+			fixtureAtF := newNextAttemptFixture()
+			tc.category(fixtureAtF)[1] = map[group.MemberIndex]uint{3: 1}
+			tc.category(fixtureAtF)[2] = map[group.MemberIndex]uint{3: 1}
+			next, err := computeNextAttempt(
+				fixtureAtF.prev(t),
+				fixtureAtF.bundle(t),
+				fixtureAtF.threshold,
+				fixtureAtF.dkgGroupPublicKey,
+			)
+			if err != nil {
+				t.Fatalf("compute at f accusers: %v", err)
+			}
+			if !memberSliceContains(next.IncludedSet, 3) {
+				t.Fatalf(
+					"f accusers must not move sender 3; got included %v",
+					next.IncludedSet,
+				)
+			}
+
+			// f+1 accusers (= 3): permanent exclusion.
+			fixtureAtQuorum := newNextAttemptFixture()
+			tc.category(fixtureAtQuorum)[1] = map[group.MemberIndex]uint{3: 1}
+			tc.category(fixtureAtQuorum)[2] = map[group.MemberIndex]uint{3: 1}
+			tc.category(fixtureAtQuorum)[4] = map[group.MemberIndex]uint{3: 1}
+			next, err = computeNextAttempt(
+				fixtureAtQuorum.prev(t),
+				fixtureAtQuorum.bundle(t),
+				fixtureAtQuorum.threshold,
+				fixtureAtQuorum.dkgGroupPublicKey,
+			)
+			if err != nil {
+				t.Fatalf("compute at quorum: %v", err)
+			}
+			if !memberSliceContains(next.ExcludedSet, 3) {
+				t.Fatalf(
+					"quorum accusers must exclude sender 3; got %v",
+					next.ExcludedSet,
+				)
+			}
+			if memberSliceContains(next.IncludedSet, 3) {
+				t.Fatal("excluded sender 3 must not remain included")
+			}
+		})
+	}
+}
+
+func TestNextAttempt_CrossCategoryAccusationsDoNotSum(t *testing.T) {
+	f := newNextAttemptFixture()
+	// Two reject accusers plus two different conflict accusers against
+	// sender 3: each category is below the quorum (3) on its own.
+	// Categories must be tallied independently -- four observers
+	// spread across categories are not an established accusation.
+	f.rejects[1] = map[group.MemberIndex]uint{3: 1}
+	f.rejects[2] = map[group.MemberIndex]uint{3: 1}
+	f.conflicts[4] = map[group.MemberIndex]uint{3: 1}
+	f.conflicts[5] = map[group.MemberIndex]uint{3: 1}
+	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey)
+	if err != nil {
+		t.Fatalf("compute: %v", err)
+	}
+	if memberSliceContains(next.ExcludedSet, 3) {
 		t.Fatalf(
-			"sender 3 should be excluded by summed overflow; got %v",
+			"cross-category sub-quorum claims must not exclude; got %v",
 			next.ExcludedSet,
+		)
+	}
+	if !memberSliceContains(next.IncludedSet, 3) {
+		t.Fatalf("sender 3 must remain included; got %v", next.IncludedSet)
+	}
+}
+
+func TestNextAttempt_FabricatedBlameCannotGrindHonestMembers(t *testing.T) {
+	// Regression for the counted-blame grinding vector: a single
+	// byzantine member fabricates maximal evidence against every
+	// honest member on every attempt. Under the quorum policy the
+	// honest members must never be excluded or parked, and the
+	// session must never become infeasible.
+	f := newNextAttemptFixture()
+	byzantine := group.MemberIndex(5)
+	honest := []group.MemberIndex{1, 2, 3, 4}
+
+	prev := f.prev(t)
+	for attemptIndex := 0; attemptIndex < 6; attemptIndex++ {
+		accusations := map[group.MemberIndex]uint{}
+		for _, target := range honest {
+			accusations[target] = 1000
+		}
+		prevHash := prev.Hash()
+		bundle := make([]LocalEvidenceSnapshot, 0, len(prev.IncludedSet))
+		for _, sender := range prev.IncludedSet {
+			snap := LocalEvidenceSnapshot{
+				SenderIDValue:      uint32(sender),
+				AttemptContextHash: append([]byte{}, prevHash[:]...),
+			}
+			if sender == byzantine {
+				overflows := make([]OverflowEntry, 0, len(honest))
+				rejects := make([]RejectEntry, 0, len(honest))
+				conflicts := make([]ConflictEntry, 0, len(honest))
+				for _, target := range honest {
+					overflows = append(overflows, OverflowEntry{
+						Sender: target, Count: accusations[target],
+					})
+					rejects = append(rejects, RejectEntry{
+						Sender: target,
+						Reason: "validation_gate_rejected",
+						Count:  accusations[target],
+					})
+					conflicts = append(conflicts, ConflictEntry{
+						Sender: target, Count: accusations[target],
+					})
+				}
+				snap.Overflows = overflows
+				snap.Rejects = rejects
+				snap.Conflicts = conflicts
+			}
+			bundle = append(bundle, snap)
+		}
+		msg := &TransitionMessage{
+			AttemptContextHash: append([]byte{}, prevHash[:]...),
+			CoordinatorIDValue: 1,
+			Bundle:             bundle,
+		}
+
+		next, err := computeNextAttempt(prev, msg, f.threshold, f.dkgGroupPublicKey)
+		if err != nil {
+			t.Fatalf("attempt %d: %v", attemptIndex, err)
+		}
+		for _, member := range honest {
+			if !memberSliceContains(next.IncludedSet, member) {
+				t.Fatalf(
+					"attempt %d: honest member %d ground out; included %v, excluded %v, parked %v",
+					attemptIndex,
+					member,
+					next.IncludedSet,
+					next.ExcludedSet,
+					next.TransientlyParked,
+				)
+			}
+		}
+		prev = next
+	}
+}
+
+func TestNextAttempt_NonCredibleAccusersAreIgnored(t *testing.T) {
+	f := newNextAttemptFixture()
+	// Members 1..5 included; member 6 is outside the original signer
+	// set and member 7 likewise. Their snapshots appear in the bundle
+	// (a byzantine coordinator could aggregate anything), each
+	// accusing sender 3 of conflicts, alongside two credible
+	// accusers. Total claims = 4, but credible accusers = 2 < quorum:
+	// no action.
+	f.bundleSenders = []group.MemberIndex{1, 2, 3, 4, 5, 6, 7}
+	f.conflicts[1] = map[group.MemberIndex]uint{3: 1}
+	f.conflicts[2] = map[group.MemberIndex]uint{3: 1}
+	f.conflicts[6] = map[group.MemberIndex]uint{3: 1}
+	f.conflicts[7] = map[group.MemberIndex]uint{3: 1}
+	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey)
+	if err != nil {
+		t.Fatalf("compute: %v", err)
+	}
+	if memberSliceContains(next.ExcludedSet, 3) {
+		t.Fatalf(
+			"non-credible accusers must not contribute to exclusion; got %v",
+			next.ExcludedSet,
+		)
+	}
+	if !memberSliceContains(next.IncludedSet, 3) {
+		t.Fatalf("sender 3 must remain included; got %v", next.IncludedSet)
+	}
+}
+
+func TestNextAttempt_AccusationsAgainstNonOriginalMembersIgnored(t *testing.T) {
+	f := newNextAttemptFixture()
+	// Quorum-many accusers blame member 9, which is not part of the
+	// original signer set. The policy must not act on it: the next
+	// context's excluded/parked sets stay within the original set.
+	f.conflicts[1] = map[group.MemberIndex]uint{9: 1}
+	f.conflicts[2] = map[group.MemberIndex]uint{9: 1}
+	f.conflicts[4] = map[group.MemberIndex]uint{9: 1}
+	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey)
+	if err != nil {
+		t.Fatalf("compute: %v", err)
+	}
+	if memberSliceContains(next.ExcludedSet, 9) {
+		t.Fatalf(
+			"non-original member must not enter excluded set; got %v",
+			next.ExcludedSet,
+		)
+	}
+	if memberSliceContains(next.TransientlyParked, 9) {
+		t.Fatalf(
+			"non-original member must not enter parked set; got %v",
+			next.TransientlyParked,
 		)
 	}
 }
@@ -361,12 +681,25 @@ func TestNextAttempt_UnknownHandleRejected(t *testing.T) {
 	}
 }
 
-func TestOverflowExclusionThreshold_MatchesRFC(t *testing.T) {
-	if OverflowExclusionThreshold != 4 {
-		t.Fatalf(
-			"RFC-21 Layer B specifies overflow threshold = 4; constant is %d",
-			OverflowExclusionThreshold,
-		)
+func TestExclusionAccuserQuorum_MatchesRFC(t *testing.T) {
+	// Production shape: n=100, t=51 => f = 49 => quorum 50. The 49
+	// worst-case byzantine members can never fabricate a quorum; the
+	// 51 honest members establish any fault they all observe.
+	if got := ExclusionAccuserQuorum(100, 51); got != 50 {
+		t.Fatalf("quorum(100, 51) = %d, want 50", got)
+	}
+	// Unit-test shape used by the fixtures in this file.
+	if got := ExclusionAccuserQuorum(5, 3); got != 3 {
+		t.Fatalf("quorum(5, 3) = %d, want 3", got)
+	}
+	// Zero threshold (policy-only test seam): quorum is deliberately
+	// unreachable so no accusation-driven action can occur.
+	if got := ExclusionAccuserQuorum(5, 0); got != 6 {
+		t.Fatalf("quorum(5, 0) = %d, want unreachable 6", got)
+	}
+	// Degenerate threshold larger than the group: also unreachable.
+	if got := ExclusionAccuserQuorum(3, 5); got != 4 {
+		t.Fatalf("quorum(3, 5) = %d, want unreachable 4", got)
 	}
 }
 
