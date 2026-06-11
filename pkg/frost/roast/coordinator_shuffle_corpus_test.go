@@ -133,6 +133,13 @@ func TestCoordinatorShuffle_DifferentialCorpus(t *testing.T) {
 // After regenerating, copy the file byte-identically to
 // pkg/tbtc/signer/testdata/coordinator_shuffle_corpus.json on the
 // signer branch.
+//
+// Regenerating is a protocol-change event, not a refresh: the corpus
+// pins the legacy math/rand shuffle semantics shared with the Rust
+// port, so a run that produces different bytes means the shuffle
+// changed and deployed engines would disagree on coordinator
+// rotation. Both language suites passing after a dual regen is NOT
+// evidence of compatibility with already-deployed engines.
 func TestRegenerateCoordinatorShuffleCorpus(t *testing.T) {
 	if os.Getenv("ROAST_SHUFFLE_CORPUS_REGEN") != "1" {
 		t.Skip("set ROAST_SHUFFLE_CORPUS_REGEN=1 to regenerate the corpus file")
