@@ -5141,21 +5141,49 @@ fn roast_hash_hex_with_components(
     Ok(hash_hex(&payload))
 }
 
-fn roast_attempt_seed_from_message_digest_hex(
+/// Derives the legacy `i64` coordinator-shuffle seed per RFC-21 Annex A
+/// (normative; see `docs/roast-coordinator-seed-derivation.md`):
+///
+/// ```text
+/// AttemptSeed32   = SHA256(KeyGroupBytes || SessionID || MessageDigest)
+/// ShuffleSeed_i64 = int64_from_be_bytes(AttemptSeed32[0..8])
+/// ```
+///
+/// `key_group` is the canonical FROST key-group handle (for this engine:
+/// the lowercase hex encoding of the serialized group verifying key); its
+/// UTF-8 bytes feed the hash as an opaque string, matching keep-core's
+/// `attempt.DeriveAttemptSeed` + `foldAttemptSeed` composition exactly.
+/// The shuffle-source composition adds the RFC-21 **0-based** attempt
+/// number; callers holding the 1-based wire attempt number must subtract
+/// one before composing.
+///
+/// Cross-language agreement is pinned by
+/// `testdata/coordinator_seed_vectors.json`, a byte-identical copy of the
+/// canonical file generated from the Go implementation in
+/// `pkg/frost/roast` on the RFC-21 branch.
+fn roast_attempt_shuffle_seed(
+    key_group: &str,
+    session_id: &str,
     message_digest_hex: &str,
 ) -> Result<i64, EngineError> {
     let message_digest_bytes = hex::decode(message_digest_hex).map_err(|_| {
         EngineError::Internal("message digest hex must decode for attempt seed".to_string())
     })?;
 
-    if message_digest_bytes.len() < 8 {
+    if message_digest_bytes.len() != 32 {
         return Err(EngineError::Internal(
-            "message digest must be at least 8 bytes for attempt seed".to_string(),
+            "message digest must be exactly 32 bytes for attempt seed".to_string(),
         ));
     }
 
+    let mut hasher = Sha256::new();
+    hasher.update(key_group.as_bytes());
+    hasher.update(session_id.as_bytes());
+    hasher.update(&message_digest_bytes);
+    let attempt_seed = hasher.finalize();
+
     let mut seed_bytes = [0_u8; 8];
-    seed_bytes.copy_from_slice(&message_digest_bytes[..8]);
+    seed_bytes.copy_from_slice(&attempt_seed[..8]);
     Ok(i64::from_be_bytes(seed_bytes))
 }
 
@@ -5197,6 +5225,7 @@ fn roast_attempt_id_hex(
 
 fn validate_attempt_context(
     session_id: &str,
+    key_group: &str,
     message_digest_hex: &str,
     threshold: u16,
     attempt_context: Option<&AttemptContext>,
@@ -5239,11 +5268,13 @@ fn validate_attempt_context(
         ));
     }
 
-    let attempt_seed = roast_attempt_seed_from_message_digest_hex(message_digest_hex)?;
+    let attempt_seed = roast_attempt_shuffle_seed(key_group, session_id, message_digest_hex)?;
+    // The wire attempt_number is 1-based (enforced above); the RFC-21
+    // Annex A shuffle composition uses the 0-based attempt number.
     let expected_coordinator_identifier = select_coordinator_identifier(
         &canonical_included_participants,
         attempt_seed,
-        attempt_context.attempt_number,
+        attempt_context.attempt_number - 1,
     )
     .ok_or_else(|| {
         EngineError::Validation(
@@ -6276,6 +6307,7 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
         };
         if let Some(canonical_attempt_signing_participants) = validate_attempt_context(
             &request.session_id,
+            &dkg.key_group,
             &message_digest_hex,
             dkg.threshold,
             request.attempt_context.as_ref(),
@@ -6687,8 +6719,14 @@ pub fn finalize_sign_round(
         )));
     }
 
+    let finalize_key_group = session
+        .dkg_result
+        .as_ref()
+        .map(|dkg| dkg.key_group.clone())
+        .ok_or_else(|| EngineError::Internal("missing DKG result cache".to_string()))?;
     if let Some(canonical_attempt_signing_participants) = validate_attempt_context(
         &request.session_id,
+        &finalize_key_group,
         &round_state.message_digest_hex,
         round_state.required_contributions,
         request.attempt_context.as_ref(),
@@ -7452,6 +7490,131 @@ mod tests {
         });
 
         serde_json::from_slice(&vector_bytes).expect("attempt-context vectors decode")
+    }
+
+    #[derive(Deserialize)]
+    struct CoordinatorSeedVectorFile {
+        #[allow(dead_code)]
+        description: String,
+        vectors: Vec<CoordinatorSeedVector>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CoordinatorSeedVector {
+        name: String,
+        key_group: String,
+        #[serde(rename = "sessionID")]
+        session_id: String,
+        message_digest_hex: String,
+        included_members: Vec<u16>,
+        attempt_number: u32,
+        wire_attempt_number: u32,
+        expected_shuffle_seed_int64: String,
+        expected_coordinator: u16,
+    }
+
+    // Byte-identical copy of the canonical cross-language vector file
+    // generated from the Go implementation
+    // (pkg/frost/roast/testdata/coordinator_seed_vectors.json on the
+    // RFC-21 branch; regenerate there with ROAST_SEED_VECTORS_REGEN=1
+    // and re-copy). Pins the RFC-21 Annex A derivation end to end so a
+    // semantic change on either side fails that side's own suite
+    // instead of fracturing coordinator agreement in a mixed
+    // deployment.
+    #[test]
+    fn coordinator_seed_derivation_matches_cross_language_vectors() {
+        let raw = include_str!("../testdata/coordinator_seed_vectors.json");
+        let file: CoordinatorSeedVectorFile =
+            serde_json::from_str(raw).expect("coordinator seed vector file decodes");
+        assert!(
+            !file.vectors.is_empty(),
+            "expected at least one coordinator seed vector"
+        );
+
+        let mut saw_negative_seed = false;
+        for vector in &file.vectors {
+            assert_eq!(
+                vector.wire_attempt_number,
+                vector.attempt_number + 1,
+                "wire attempt number must be the 1-based encoding in vector [{}]",
+                vector.name
+            );
+
+            let shuffle_seed = roast_attempt_shuffle_seed(
+                &vector.key_group,
+                &vector.session_id,
+                &vector.message_digest_hex,
+            )
+            .expect("shuffle seed derives");
+            let expected_shuffle_seed: i64 = vector
+                .expected_shuffle_seed_int64
+                .parse()
+                .expect("expected shuffle seed parses as i64");
+            assert_eq!(
+                shuffle_seed, expected_shuffle_seed,
+                "shuffle seed mismatch in vector [{}]",
+                vector.name
+            );
+            if expected_shuffle_seed < 0 {
+                saw_negative_seed = true;
+            }
+
+            // The shuffle-source composition uses the RFC-21 0-based
+            // attempt number, exactly as `validate_attempt_context`
+            // composes it from the 1-based wire encoding.
+            let coordinator = select_coordinator_identifier(
+                &vector.included_members,
+                shuffle_seed,
+                vector.wire_attempt_number - 1,
+            )
+            .expect("coordinator selects");
+            assert_eq!(
+                coordinator, vector.expected_coordinator,
+                "coordinator mismatch in vector [{}]",
+                vector.name
+            );
+
+            // End to end: an attempt context carrying the wire-encoded
+            // attempt number and the vector's coordinator passes the
+            // engine's strict validation under the vector's key group.
+            let fingerprint = roast_included_participants_fingerprint_hex(&vector.included_members)
+                .expect("fingerprint");
+            let attempt_id = roast_attempt_id_hex(
+                &vector.session_id,
+                &vector.message_digest_hex,
+                vector.wire_attempt_number,
+                coordinator,
+                &fingerprint,
+            )
+            .expect("attempt id");
+            let attempt_context = AttemptContext {
+                attempt_number: vector.wire_attempt_number,
+                coordinator_identifier: coordinator,
+                included_participants: vector.included_members.clone(),
+                included_participants_fingerprint: fingerprint,
+                attempt_id,
+            };
+            validate_attempt_context(
+                &vector.session_id,
+                &vector.key_group,
+                &vector.message_digest_hex,
+                2,
+                Some(&attempt_context),
+                true,
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "vector [{}] context failed engine validation: {err:?}",
+                    vector.name
+                )
+            });
+        }
+
+        assert!(
+            saw_negative_seed,
+            "vector file must pin at least one negative shuffle seed"
+        );
     }
 
     struct InteractiveDkgFixture {
@@ -10410,6 +10573,29 @@ mod tests {
         }
     }
 
+    // Resolves the key group the engine will use when validating attempt
+    // contexts for `session_id`: the session's dealer-DKG key group when
+    // the session exists, otherwise a deterministic per-session stand-in
+    // for tests that exercise `validate_attempt_context` directly without
+    // creating a session. Construction and validation must use the same
+    // resolver or the RFC-21 Annex A seed derivation diverges.
+    fn attempt_context_key_group_for_tests(session_id: &str) -> String {
+        if let Ok(state) = state() {
+            if let Ok(guard) = state.lock() {
+                if let Some(key_group) = guard
+                    .sessions
+                    .get(session_id)
+                    .and_then(|session| session.dkg_result.as_ref())
+                    .map(|dkg| dkg.key_group.clone())
+                {
+                    return key_group;
+                }
+            }
+        }
+
+        format!("test-key-group:{session_id}")
+    }
+
     fn build_deterministic_attempt_context(
         session_id: &str,
         message_hex: &str,
@@ -10421,12 +10607,17 @@ mod tests {
                 .expect("canonical included participants");
         let message_bytes = hex::decode(message_hex).expect("message hex");
         let message_digest_hex = hash_hex(&message_bytes);
-        let attempt_seed = roast_attempt_seed_from_message_digest_hex(&message_digest_hex)
-            .expect("attempt seed from message digest");
+        let key_group = attempt_context_key_group_for_tests(session_id);
+        let attempt_seed = roast_attempt_shuffle_seed(&key_group, session_id, &message_digest_hex)
+            .expect("attempt shuffle seed");
+        assert!(
+            attempt_number >= 1,
+            "attempt_number is the 1-based wire encoding",
+        );
         let coordinator_identifier = select_coordinator_identifier(
             &canonical_included_participants,
             attempt_seed,
-            attempt_number,
+            attempt_number - 1,
         )
         .expect("deterministic coordinator");
 
@@ -10598,6 +10789,7 @@ mod tests {
             );
             let validated_participants = validate_attempt_context(
                 &session_id,
+                &attempt_context_key_group_for_tests(&session_id),
                 &message_digest_hex,
                 2,
                 Some(&permuted_attempt_context),
@@ -10634,6 +10826,7 @@ mod tests {
             );
             let err = validate_attempt_context(
                 &session_id,
+                &attempt_context_key_group_for_tests(&session_id),
                 &message_digest_hex,
                 2,
                 Some(&tampered_attempt_context),
@@ -12666,7 +12859,22 @@ mod tests {
         })
         .expect("start sign round");
 
-        let mismatched_attempt = build_attempt_context(session_id, message_hex, 1, 1, vec![1, 2]);
+        // Pick the member that is provably not the deterministic
+        // coordinator so the test stays valid under any seed derivation.
+        let deterministic_attempt =
+            build_deterministic_attempt_context(session_id, message_hex, 1, vec![1, 2]);
+        let mismatched_coordinator = if deterministic_attempt.coordinator_identifier == 1 {
+            2
+        } else {
+            1
+        };
+        let mismatched_attempt = build_attempt_context(
+            session_id,
+            message_hex,
+            1,
+            mismatched_coordinator,
+            vec![1, 2],
+        );
         let err = finalize_sign_round(
             FinalizeSignRoundRequest {
                 session_id: session_id.to_string(),
