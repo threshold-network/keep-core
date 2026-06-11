@@ -897,6 +897,19 @@ the probability of drawing an all-honest `t`-subset:
 `signingAttemptsLimit = 5` rationale in `pkg/tbtc/node.go` assumes
 `f ≤ 2`.)
 
+The table models the *deployed legacy loop*, which draws an
+independent pseudo-random `t`-subset per attempt, so per-attempt
+failures are approximately i.i.d. The RFC-21 Layer B transitional
+path (every included member must contribute) has a different profile
+in both directions: one-shot silence is absorbed in a single attempt
+(the silent member is parked for the next), but the i.i.d. table is
+*not* a worst case there — members that stagger silence across
+attempts (alternating, so someone unparked is always silent), or that
+submit their evidence snapshots while withholding signing
+contributions (which bundle-absence parking does not detect; see
+Layer B), can fail *every* attempt deterministically at small `f`.
+Both regimes reach the same conclusion below.
+
 So for `f ≥ 3` the loop fails with better-than-even odds long before
 any timeout is approached: **the binding liveness constraint is
 sampling probability, not serial latency**. A patient adversary does
