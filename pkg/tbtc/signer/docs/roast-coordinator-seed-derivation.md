@@ -22,7 +22,17 @@ Coordinator     = GoMathRandShuffle(sort_ascending(IncludedSet), SourceSeed_i64)
   group verifying key (the `key_group` string in `DkgResult`), treated
   as an opaque string — never decoded to point bytes before hashing.
 - `SessionID`: raw UTF-8 bytes.
-- `MessageDigest`: exactly 32 bytes.
+- `MessageDigest`: the **raw signing message itself**, big-endian
+  left-padded with zeros to exactly 32 bytes (leading zero bytes are
+  insignificant; more than 32 significant bytes is rejected). This
+  mirrors keep-core's `messageDigestFromBigInt`: in BIP-340 production
+  the message the engine receives *is* the 32-byte sighash. It is
+  **not** the engine's internal transcript digest
+  (`SHA256(message_bytes)`), which continues to feed the
+  `round_id`/`attempt_id` derivations only. Implemented by
+  `rfc21_message_digest` in `src/engine.rs`; feeding the transcript
+  digest here instead was the cross-language coordinator divergence
+  caught in review of the unification PR.
 - `AttemptNumber`: the RFC-21 **0-based** attempt number. The FFI
   `AttemptContext.attempt_number` carries the **1-based** wire encoding
   (`wire = AttemptNumber + 1`, zero rejected); the engine subtracts one
@@ -31,7 +41,10 @@ Coordinator     = GoMathRandShuffle(sort_ascending(IncludedSet), SourceSeed_i64)
   shuffle in `src/go_math_rand.rs`, pinned by keep-core PRs #4026 and
   #4027.
 
-Implemented by `roast_attempt_shuffle_seed` in `src/engine.rs`.
+Implemented by `roast_attempt_shuffle_seed` in `src/engine.rs`; the
+end-to-end acceptance of a Go-derived context through strict
+`StartSignRound` is pinned by
+`start_sign_round_accepts_go_derived_attempt_context_in_strict_mode`.
 
 ## Conformance vectors
 

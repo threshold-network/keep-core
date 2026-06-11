@@ -5141,6 +5141,42 @@ fn roast_hash_hex_with_components(
     Ok(hash_hex(&payload))
 }
 
+/// Computes the RFC-21 `MessageDigest` from the raw signing message
+/// bytes, mirroring keep-core's `messageDigestFromBigInt` exactly: the
+/// message **is** the digest (in BIP-340 production the signed message is
+/// already a 32-byte sighash), leading zero bytes are insignificant
+/// (Go round-trips through `big.Int`, which strips them), the value is
+/// big-endian left-padded with zeros to exactly 32 bytes, and anything
+/// longer than 32 significant bytes is rejected.
+///
+/// This is deliberately NOT the engine's internal transcript digest
+/// (`hash_hex(message_bytes)` = SHA256 of the message), which continues
+/// to feed `round_id`/`attempt_id` derivations. Feeding the transcript
+/// digest into the shuffle seed was the cross-language divergence this
+/// helper exists to prevent: the Go RFC-21 layer seeds from the padded
+/// message itself.
+fn rfc21_message_digest(message_bytes: &[u8]) -> Result<[u8; 32], EngineError> {
+    let significant_bytes = {
+        let first_significant_index = message_bytes
+            .iter()
+            .position(|byte| *byte != 0)
+            .unwrap_or(message_bytes.len());
+        &message_bytes[first_significant_index..]
+    };
+
+    if significant_bytes.len() > 32 {
+        return Err(EngineError::Validation(format!(
+            "message length [{}] exceeds the RFC-21 32-byte message digest; \
+             attempt contexts only bind 32-byte signing digests",
+            significant_bytes.len()
+        )));
+    }
+
+    let mut digest = [0_u8; 32];
+    digest[32 - significant_bytes.len()..].copy_from_slice(significant_bytes);
+    Ok(digest)
+}
+
 /// Derives the legacy `i64` coordinator-shuffle seed per RFC-21 Annex A
 /// (normative; see `docs/roast-coordinator-seed-derivation.md`):
 ///
@@ -5153,6 +5189,8 @@ fn roast_hash_hex_with_components(
 /// the lowercase hex encoding of the serialized group verifying key); its
 /// UTF-8 bytes feed the hash as an opaque string, matching keep-core's
 /// `attempt.DeriveAttemptSeed` + `foldAttemptSeed` composition exactly.
+/// `rfc21_message_digest` is the padded raw signing message (see
+/// `rfc21_message_digest`), NOT the engine's SHA256 transcript digest.
 /// The shuffle-source composition adds the RFC-21 **0-based** attempt
 /// number; callers holding the 1-based wire attempt number must subtract
 /// one before composing.
@@ -5164,22 +5202,12 @@ fn roast_hash_hex_with_components(
 fn roast_attempt_shuffle_seed(
     key_group: &str,
     session_id: &str,
-    message_digest_hex: &str,
+    rfc21_message_digest: &[u8; 32],
 ) -> Result<i64, EngineError> {
-    let message_digest_bytes = hex::decode(message_digest_hex).map_err(|_| {
-        EngineError::Internal("message digest hex must decode for attempt seed".to_string())
-    })?;
-
-    if message_digest_bytes.len() != 32 {
-        return Err(EngineError::Internal(
-            "message digest must be exactly 32 bytes for attempt seed".to_string(),
-        ));
-    }
-
     let mut hasher = Sha256::new();
     hasher.update(key_group.as_bytes());
     hasher.update(session_id.as_bytes());
-    hasher.update(&message_digest_bytes);
+    hasher.update(rfc21_message_digest);
     let attempt_seed = hasher.finalize();
 
     let mut seed_bytes = [0_u8; 8];
@@ -5226,6 +5254,7 @@ fn roast_attempt_id_hex(
 fn validate_attempt_context(
     session_id: &str,
     key_group: &str,
+    message_bytes: &[u8],
     message_digest_hex: &str,
     threshold: u16,
     attempt_context: Option<&AttemptContext>,
@@ -5268,7 +5297,15 @@ fn validate_attempt_context(
         ));
     }
 
-    let attempt_seed = roast_attempt_shuffle_seed(key_group, session_id, message_digest_hex)?;
+    // The shuffle seed binds the RFC-21 MessageDigest -- the padded raw
+    // signing message, exactly as the Go layer's
+    // `messageDigestFromBigInt` produces it -- NOT the engine's SHA256
+    // transcript digest (`message_digest_hex`), which feeds only the
+    // `attempt_id` derivation below. Mixing the two was the
+    // coordinator-selection divergence flagged on the seed-unification
+    // review.
+    let attempt_seed =
+        roast_attempt_shuffle_seed(key_group, session_id, &rfc21_message_digest(message_bytes)?)?;
     // The wire attempt_number is 1-based (enforced above); the RFC-21
     // Annex A shuffle composition uses the 0-based attempt number.
     let expected_coordinator_identifier = select_coordinator_identifier(
@@ -6308,6 +6345,7 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
         if let Some(canonical_attempt_signing_participants) = validate_attempt_context(
             &request.session_id,
             &dkg.key_group,
+            &message_bytes,
             &message_digest_hex,
             dkg.threshold,
             request.attempt_context.as_ref(),
@@ -6724,9 +6762,19 @@ pub fn finalize_sign_round(
         .as_ref()
         .map(|dkg| dkg.key_group.clone())
         .ok_or_else(|| EngineError::Internal("missing DKG result cache".to_string()))?;
+    // The raw signing message cached at StartSignRound feeds the RFC-21
+    // shuffle-seed digest; `round_state.message_digest_hex` (the SHA256
+    // transcript digest) keeps feeding the attempt_id check. Both were
+    // stored by the same StartSignRound call.
+    let finalize_message_bytes = session
+        .sign_message_bytes
+        .as_ref()
+        .map(|message_bytes| message_bytes.to_vec())
+        .ok_or_else(|| EngineError::Internal("missing sign message cache".to_string()))?;
     if let Some(canonical_attempt_signing_participants) = validate_attempt_context(
         &request.session_id,
         &finalize_key_group,
+        &finalize_message_bytes,
         &round_state.message_digest_hex,
         round_state.required_contributions,
         request.attempt_context.as_ref(),
@@ -7541,10 +7589,24 @@ mod tests {
                 vector.name
             );
 
+            // In production the engine receives the 32-byte signing
+            // digest AS its raw message; the seed binds that padded
+            // message directly. Treat the vector digest as the message
+            // so this test exercises the exact production relationship.
+            let message_bytes =
+                hex::decode(&vector.message_digest_hex).expect("vector digest decodes");
+            let vector_rfc21_digest =
+                rfc21_message_digest(&message_bytes).expect("rfc21 message digest");
+            assert_eq!(
+                hex::encode(vector_rfc21_digest),
+                vector.message_digest_hex.to_ascii_lowercase(),
+                "32-byte vector digest must round-trip the rfc21 padding in [{}]",
+                vector.name
+            );
             let shuffle_seed = roast_attempt_shuffle_seed(
                 &vector.key_group,
                 &vector.session_id,
-                &vector.message_digest_hex,
+                &vector_rfc21_digest,
             )
             .expect("shuffle seed derives");
             let expected_shuffle_seed: i64 = vector
@@ -7578,11 +7640,16 @@ mod tests {
             // End to end: an attempt context carrying the wire-encoded
             // attempt number and the vector's coordinator passes the
             // engine's strict validation under the vector's key group.
+            // The attempt_id is bound to the engine's SHA256 transcript
+            // digest of the message, while the seed above bound the
+            // padded message itself -- the two-digest split the Go layer
+            // relies on.
+            let engine_message_digest_hex = hash_hex(&message_bytes);
             let fingerprint = roast_included_participants_fingerprint_hex(&vector.included_members)
                 .expect("fingerprint");
             let attempt_id = roast_attempt_id_hex(
                 &vector.session_id,
-                &vector.message_digest_hex,
+                &engine_message_digest_hex,
                 vector.wire_attempt_number,
                 coordinator,
                 &fingerprint,
@@ -7598,7 +7665,8 @@ mod tests {
             validate_attempt_context(
                 &vector.session_id,
                 &vector.key_group,
-                &vector.message_digest_hex,
+                &message_bytes,
+                &engine_message_digest_hex,
                 2,
                 Some(&attempt_context),
                 true,
@@ -7615,6 +7683,98 @@ mod tests {
             saw_negative_seed,
             "vector file must pin at least one negative shuffle seed"
         );
+    }
+
+    // Regression for the review finding on the seed-unification change:
+    // the engine must seed the coordinator shuffle from the padded raw
+    // message it receives (the Go layer's messageDigestFromBigInt
+    // output), NOT from its internal SHA256 transcript digest. This test
+    // reimplements the Go-side derivation inline -- independently of the
+    // engine helpers -- and proves the resulting context is accepted
+    // through the real strict-mode StartSignRound call path.
+    #[test]
+    fn start_sign_round_accepts_go_derived_attempt_context_in_strict_mode() {
+        let _guard = lock_test_state();
+        reset_for_tests();
+        let _roast_strict_mode = RoastStrictModeGuard::enable();
+
+        let session_id = "session-go-style-attempt-context";
+        // A 32-byte signing digest, as production always supplies (the
+        // engine message IS the digest).
+        let message_hex = "5f78c33274e43fa9de5659265c1d917e25c03722dcb0b8d27db8d5feaa813953";
+
+        let dkg_result = run_dkg(RunDkgRequest {
+            session_id: session_id.to_string(),
+            participants: vec![
+                crate::api::DkgParticipant {
+                    identifier: 1,
+                    public_key_hex: "02aa".to_string(),
+                },
+                crate::api::DkgParticipant {
+                    identifier: 2,
+                    public_key_hex: "02bb".to_string(),
+                },
+            ],
+            threshold: 2,
+            dkg_seed_hex: None,
+        })
+        .expect("run dkg");
+
+        // --- Go-side derivation, reimplemented inline ---
+        // attempt.DeriveAttemptSeed(keyGroupBytes, sessionID, digest):
+        // SHA256 over the raw concatenation, digest = the 32 message
+        // bytes themselves.
+        let message_bytes = hex::decode(message_hex).expect("message decodes");
+        let mut hasher = Sha256::new();
+        hasher.update(dkg_result.key_group.as_bytes());
+        hasher.update(session_id.as_bytes());
+        hasher.update(&message_bytes);
+        let go_attempt_seed = hasher.finalize();
+        // foldAttemptSeed: first 8 bytes, big-endian, reinterpreted i64.
+        let mut go_seed_bytes = [0_u8; 8];
+        go_seed_bytes.copy_from_slice(&go_attempt_seed[..8]);
+        let go_shuffle_seed = i64::from_be_bytes(go_seed_bytes);
+        // SelectCoordinator(included, seed, attemptNumber): 0-based
+        // RFC-21 attempt number; first logical attempt = 0.
+        let included_participants = vec![1_u16, 2];
+        let go_coordinator =
+            select_coordinator_identifier(&included_participants, go_shuffle_seed, 0)
+                .expect("go-style coordinator");
+
+        // --- FFI wire encoding of the same logical attempt ---
+        // wire attempt_number = RFC-21 AttemptNumber + 1; attempt_id is
+        // engine-defined over the SHA256 transcript digest.
+        let wire_attempt_number = 1_u32;
+        let engine_message_digest_hex = hash_hex(&message_bytes);
+        let fingerprint = roast_included_participants_fingerprint_hex(&included_participants)
+            .expect("fingerprint");
+        let attempt_id = roast_attempt_id_hex(
+            session_id,
+            &engine_message_digest_hex,
+            wire_attempt_number,
+            go_coordinator,
+            &fingerprint,
+        )
+        .expect("attempt id");
+
+        let round_state = start_sign_round(StartSignRoundRequest {
+            session_id: session_id.to_string(),
+            member_identifier: 1,
+            message_hex: message_hex.to_string(),
+            key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
+            signing_participants: Some(included_participants.clone()),
+            attempt_context: Some(AttemptContext {
+                attempt_number: wire_attempt_number,
+                coordinator_identifier: go_coordinator,
+                included_participants,
+                included_participants_fingerprint: fingerprint,
+                attempt_id,
+            }),
+            attempt_transition_evidence: None,
+        })
+        .expect("strict StartSignRound must accept the Go-derived attempt context");
+        assert_eq!(round_state.session_id, session_id);
     }
 
     struct InteractiveDkgFixture {
@@ -10606,10 +10766,15 @@ mod tests {
             canonicalize_included_participants(&included_participants)
                 .expect("canonical included participants");
         let message_bytes = hex::decode(message_hex).expect("message hex");
-        let message_digest_hex = hash_hex(&message_bytes);
         let key_group = attempt_context_key_group_for_tests(session_id);
-        let attempt_seed = roast_attempt_shuffle_seed(&key_group, session_id, &message_digest_hex)
-            .expect("attempt shuffle seed");
+        // RFC-21 seed input: the padded raw message, not the SHA256
+        // transcript digest -- mirroring the Go layer's derivation.
+        let attempt_seed = roast_attempt_shuffle_seed(
+            &key_group,
+            session_id,
+            &rfc21_message_digest(&message_bytes).expect("rfc21 message digest"),
+        )
+        .expect("attempt shuffle seed");
         assert!(
             attempt_number >= 1,
             "attempt_number is the 1-based wire encoding",
@@ -10755,7 +10920,10 @@ mod tests {
             session_suffix in any::<u32>(),
             attempt_number in 1_u32..=16_u32,
             participants in participant_set_strategy(),
-            message_bytes in prop::collection::vec(any::<u8>(), 1..=128),
+            // RFC-21 attempt contexts only bind 32-byte signing digests
+            // (rfc21_message_digest rejects longer messages), so the
+            // strategy stays within that bound.
+            message_bytes in prop::collection::vec(any::<u8>(), 1..=32),
         ) {
             let session_id = format!("formal-attempt-session-{session_suffix}");
             let message_hex = hex::encode(message_bytes);
@@ -10784,12 +10952,13 @@ mod tests {
                 &permuted_attempt_context.attempt_id
             );
 
-            let message_digest_hex = hash_hex(
-                &hex::decode(&message_hex).expect("message hex should decode for validation"),
-            );
+            let validation_message_bytes =
+                hex::decode(&message_hex).expect("message hex should decode for validation");
+            let message_digest_hex = hash_hex(&validation_message_bytes);
             let validated_participants = validate_attempt_context(
                 &session_id,
                 &attempt_context_key_group_for_tests(&session_id),
+                &validation_message_bytes,
                 &message_digest_hex,
                 2,
                 Some(&permuted_attempt_context),
@@ -10808,7 +10977,10 @@ mod tests {
             session_suffix in any::<u32>(),
             attempt_number in 1_u32..=16_u32,
             participants in participant_set_strategy(),
-            message_bytes in prop::collection::vec(any::<u8>(), 1..=128),
+            // RFC-21 attempt contexts only bind 32-byte signing digests
+            // (rfc21_message_digest rejects longer messages), so the
+            // strategy stays within that bound.
+            message_bytes in prop::collection::vec(any::<u8>(), 1..=32),
         ) {
             let session_id = format!("formal-attempt-tamper-session-{session_suffix}");
             let message_hex = hex::encode(message_bytes);
@@ -10821,12 +10993,13 @@ mod tests {
             );
             tampered_attempt_context.attempt_id = "11".repeat(32);
 
-            let message_digest_hex = hash_hex(
-                &hex::decode(&message_hex).expect("message hex should decode for validation"),
-            );
+            let validation_message_bytes =
+                hex::decode(&message_hex).expect("message hex should decode for validation");
+            let message_digest_hex = hash_hex(&validation_message_bytes);
             let err = validate_attempt_context(
                 &session_id,
                 &attempt_context_key_group_for_tests(&session_id),
+                &validation_message_bytes,
                 &message_digest_hex,
                 2,
                 Some(&tampered_attempt_context),
