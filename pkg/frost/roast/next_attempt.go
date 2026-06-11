@@ -35,9 +35,23 @@ import (
 // against a quorum of 50, while the 49 worst-case byzantine members
 // can never reach 50 by fabrication.
 //
+// The gate is intentionally demanding near the assumption boundary:
+// at worst-case f = groupSize - threshold, only threshold honest
+// observers exist, so establishment needs all but 2t-n-1 of them
+// (50 of 51 at the production shape) to have observed the fault and
+// landed snapshots in the bundle. In that regime the quorum acts as
+// a fabrication firewall rather than a working exclusion mechanism;
+// real faults that fewer honest members observe burn retry attempts
+// instead (budgeted in RFC-21 Annex B), and proof-carrying blame
+// (see the roadmap in NextAttempt) is what restores per-category
+// exclusion there.
+//
 // A zero threshold (used by policy-only tests) or a threshold larger
 // than the group yields groupSize+1 -- deliberately unreachable, so no
-// accusation-driven action can occur without a real threshold.
+// accusation-driven action can occur without a real threshold. A
+// threshold equal to groupSize (n-of-n) yields a quorum of 1: under
+// that shape's own assumption every member is honest (f = 0), so a
+// single accusation is established by definition.
 func ExclusionAccuserQuorum(groupSize, threshold uint) uint {
 	if threshold == 0 || threshold > groupSize {
 		return groupSize + 1

@@ -348,12 +348,18 @@ honest.
   falsely labelled silent because their contribution arrived late (or
   because a malicious coordinator censored it) is not permanently
   penalised -- they are reinstated by the very next attempt.
+  Silence is detected as *bundle absence* (the member submitted no
+  evidence snapshot for the transition). A member that submits its
+  snapshot while withholding its signing contribution is therefore
+  not parked by this policy: signing-silence is invisible to the
+  transition layer, costs the attempt, and is bounded only by the
+  retry budget (Annex B) until t-of-included finalize lands.
 . If `IncludedSet` minus exclusions drops below the threshold `t`, the
   coordinator returns `ErrAttemptInfeasible` and the session is
   declared failed for this signer set.
 
 The quorum is a *derived constant* of the key-group shape -- for the
-production 100-of-51 group it is 50 -- so honest signers do not need
+production 51-of-100 group it is 50 -- so honest signers do not need
 to negotiate it and drift cannot desynchronise it. Sub-quorum claims
 are deliberately ignored rather than parked: acting on a single
 unverifiable claim would let one byzantine observer cost any honest
@@ -370,7 +376,14 @@ to proof-verified entries. The cost of the interim quorum policy is
 bounded: a fault observed by fewer than `f+1` honest members (for
 example a targeted, per-recipient equivocation) is not permanently
 excluded and instead burns retry attempts, which the serial-attempt
-latency analysis already budgets for.
+latency analysis already budgets for. Near the assumption boundary
+the gate is intentionally demanding -- at worst-case `f` only `t`
+honest observers exist, so establishment needs all but `2t-n-1` of
+them (50 of 51 at the production shape) to have observed the fault
+and landed snapshots in the bundle. In that regime the quorum acts
+as a fabrication firewall rather than a working exclusion mechanism;
+restoring per-category exclusion under heavy attack is exactly what
+proof-carrying blame is for.
 
 === Layer C: Retry orchestration (M7)
 
