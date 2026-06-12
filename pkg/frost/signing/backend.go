@@ -198,9 +198,18 @@ func UnregisterNativeExecutionAdapter() {
 //
 // On default builds, this is a no-op.
 // On `frost_native` builds, this registers the tagged native adapter.
+//
+// When TBTC_SIGNER_INIT_CONFIG_PATH is set, the operator demands config-mode
+// FROST operation and this function does not return on failure: any state in
+// which the FROST-native engine did not come up (either registration leg
+// failed, or the build cannot register one at all) terminates the process.
+// See enforceNativeInitConfigDemand for the decision record. With the path
+// unset, registration failures keep the safe-by-default posture and the
+// legacy bridge remains available.
 func RegisterNativeExecutionAdapterForBuild() {
 	registerNativeExecutionAdapterForBuild()
 	RegisterNativeExecutionFFISigningPrimitiveForBuild()
+	enforceNativeInitConfigDemand()
 }
 
 func currentNativeExecutionBackend() (ExecutionBackend, error) {

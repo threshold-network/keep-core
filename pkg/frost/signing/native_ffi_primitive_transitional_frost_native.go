@@ -44,14 +44,14 @@ func defaultNativeExecutionFFISigningPrimitiveProviderForBuild() (
 // file. The operator setting the path is an explicit demand for config-mode
 // operation, so every failure - unreadable file, validation rejection, or a
 // loaded signer library that predates frost_tbtc_init_signer_config - fails
-// the FROST-native engine registration. Precisely: the process keeps
-// running on the legacy bridge with FROST operations reporting unavailable
-// (the registration layer's deliberate safe-by-default posture - it never
-// crashes the binary), a misconfigured signer can therefore never execute
-// FROST operations, and the failure is logged at error level here with the
-// config-mode context in addition to the registration layer's generic
-// warning. With the path unset this is a no-op and the signer reads
-// TBTC_SIGNER_* from the process environment (the transitional path).
+// the FROST-native engine registration, and the demand enforcement at the
+// end of registration (enforceNativeInitConfigDemand) then terminates the
+// process: a node that cannot honor its demanded config must not run
+// half-alive on the legacy bridge. The failure is logged at error level
+// here with the config-mode context before the fatal exit so the cause is
+// on record. With the path unset this is a no-op and the signer reads
+// TBTC_SIGNER_* from the process environment (the transitional path), where
+// registration failures keep the safe-by-default degrade posture.
 func installConfiguredTBTCSignerInitConfig() error {
 	configPath := strings.TrimSpace(os.Getenv(TBTCSignerInitConfigPathEnv))
 	if configPath == "" {
@@ -66,8 +66,9 @@ func installConfiguredTBTCSignerInitConfig() error {
 		)
 		registrationLogger.Errorf(
 			"tbtc-signer init config installation failed; FROST-native "+
-				"engine registration fails closed and the process continues "+
-				"on the legacy bridge: [%v]",
+				"engine registration fails closed and the process will "+
+				"terminate at the end of registration (config-mode demand "+
+				"unmet): [%v]",
 			err,
 		)
 		return err
@@ -81,8 +82,9 @@ func installConfiguredTBTCSignerInitConfig() error {
 		)
 		registrationLogger.Errorf(
 			"tbtc-signer init config installation failed; FROST-native "+
-				"engine registration fails closed and the process continues "+
-				"on the legacy bridge: [%v]",
+				"engine registration fails closed and the process will "+
+				"terminate at the end of registration (config-mode demand "+
+				"unmet): [%v]",
 			err,
 		)
 		return err

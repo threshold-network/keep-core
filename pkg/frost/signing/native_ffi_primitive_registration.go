@@ -26,7 +26,11 @@ func setLastRegistrationError(err error) {
 // or when no registration has been attempted yet. Callers that want to fail
 // startup on a registration error should check this after invoking
 // `RegisterNativeExecutionAdapterForBuild` rather than relying on the
-// previously panicking registration helpers themselves.
+// previously panicking registration helpers themselves. Note that when
+// TBTC_SIGNER_INIT_CONFIG_PATH is set, registration enforces this itself:
+// an unmet config-mode demand is process-fatal (see
+// enforceNativeInitConfigDemand), so callers only need this check for
+// env-fallback-mode policies of their own.
 func LastNativeRegistrationError() error {
 	registrationErrorMu.RLock()
 	defer registrationErrorMu.RUnlock()
