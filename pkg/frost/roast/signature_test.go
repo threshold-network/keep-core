@@ -85,12 +85,12 @@ func TestCanonicalSnapshotBytes_ExcludesOperatorSignature(t *testing.T) {
 	snap := NewLocalEvidenceSnapshot(7, pinnedContextHash, attempt.Evidence{
 		Overflows: map[group.MemberIndex]uint{1: 2, 3: 4},
 	})
-	withoutSig, err := CanonicalSnapshotBytes(snap)
+	withoutSig, err := snap.SignableBytes()
 	if err != nil {
 		t.Fatalf("canonical bytes (no sig): %v", err)
 	}
 	snap.OperatorSignature = []byte{0xff, 0xee}
-	withSig, err := CanonicalSnapshotBytes(snap)
+	withSig, err := snap.SignableBytes()
 	if err != nil {
 		t.Fatalf("canonical bytes (with sig): %v", err)
 	}
@@ -103,45 +103,52 @@ func TestCanonicalSnapshotBytes_ExcludesOperatorSignature(t *testing.T) {
 }
 
 func TestCanonicalSnapshotBytes_RejectsNil(t *testing.T) {
-	if _, err := CanonicalSnapshotBytes(nil); err == nil {
+	if _, err := (*LocalEvidenceSnapshot)(nil).SignableBytes(); err == nil {
 		t.Fatal("expected error for nil snapshot")
 	}
 }
 
-func TestCanonicalBundleBytes_ExcludesCoordinatorSignatureButIncludesSnapshots(t *testing.T) {
-	msg := buildValidTransitionMessage()
-	// Make sure each snapshot's OperatorSignature is non-empty so we
-	// can verify they appear in the canonical bytes.
-	for i := range msg.Bundle {
-		msg.Bundle[i].OperatorSignature = []byte{byte(i + 1)}
-	}
-	msg.CoordinatorSignature = []byte{0xaa, 0xbb}
-	canonical, err := CanonicalBundleBytes(msg)
+func TestBundleSignableBytes_ExcludeCoordinatorSignatureButIncludeSnapshotSignatures(t *testing.T) {
+	// Two fresh messages identical except for the coordinator signature
+	// must sign over the same bytes (the signature is over the body, not
+	// part of it). Fresh messages are required because signable bytes are
+	// computed once and cached.
+	msgA := buildValidTransitionMessage()
+	msgA.CoordinatorSignature = bytes.Repeat([]byte{0xaa}, 64)
+	msgB := buildValidTransitionMessage()
+	msgB.CoordinatorSignature = bytes.Repeat([]byte{0xbb}, 64)
+	bytesA, err := msgA.SignableBytes()
 	if err != nil {
-		t.Fatalf("canonical bundle: %v", err)
+		t.Fatalf("signable bundle A: %v", err)
 	}
-	// CoordinatorSignature bytes should not appear in the canonical
-	// payload (omitempty + nil in clone).
-	if bytes.Contains(canonical, []byte{0xaa, 0xbb}) {
-		t.Fatalf(
-			"CoordinatorSignature 0xaabb leaked into canonical bytes: %s",
-			string(canonical),
-		)
+	bytesB, err := msgB.SignableBytes()
+	if err != nil {
+		t.Fatalf("signable bundle B: %v", err)
 	}
-	// Each snapshot's OperatorSignature should appear via base64
-	// "AQ==", "Ag==", "Aw==" (1, 2, 3 → 0x01, 0x02, 0x03).
-	for _, want := range []string{`"AQ=="`, `"Ag=="`, `"Aw=="`} {
-		if !bytes.Contains(canonical, []byte(want)) {
-			t.Fatalf(
-				"expected per-snapshot OperatorSignature %q in canonical bundle: %s",
-				want, string(canonical),
-			)
-		}
+	if !bytes.Equal(bytesA, bytesB) {
+		t.Fatal("coordinator signature leaked into the signed bundle body")
+	}
+
+	// A distinctive per-snapshot operator signature must appear verbatim
+	// inside the signed bundle body: the coordinator attests to the exact
+	// signed snapshot envelopes.
+	distinctive := bytes.Repeat([]byte{0xc7, 0x3d}, 16)
+	msgC := buildValidTransitionMessage()
+	msgC.Bundle[0].OperatorSignature = distinctive
+	bytesC, err := msgC.SignableBytes()
+	if err != nil {
+		t.Fatalf("signable bundle C: %v", err)
+	}
+	if !bytes.Contains(bytesC, distinctive) {
+		t.Fatal("per-snapshot operator signature missing from signed bundle body")
+	}
+	if bytes.Equal(bytesA, bytesC) {
+		t.Fatal("changing a snapshot operator signature must change the bundle body")
 	}
 }
 
 func TestCanonicalBundleBytes_RejectsNil(t *testing.T) {
-	if _, err := CanonicalBundleBytes(nil); err == nil {
+	if _, err := (*TransitionMessage)(nil).SignableBytes(); err == nil {
 		t.Fatal("expected error for nil message")
 	}
 }
@@ -149,7 +156,7 @@ func TestCanonicalBundleBytes_RejectsNil(t *testing.T) {
 func TestVerifySnapshotSignature_RoundTripsThroughFakeSignerVerifier(t *testing.T) {
 	signer := &fakeSigner{id: 7}
 	snap := NewLocalEvidenceSnapshot(7, pinnedContextHash, attempt.Evidence{})
-	payload, err := CanonicalSnapshotBytes(snap)
+	payload, err := snap.SignableBytes()
 	if err != nil {
 		t.Fatalf("canonical: %v", err)
 	}
@@ -174,13 +181,16 @@ func TestVerifySnapshotSignature_RejectsMissingSignature(t *testing.T) {
 func TestVerifySnapshotSignature_RejectsTamperedPayload(t *testing.T) {
 	signer := &fakeSigner{id: 7}
 	snap := NewLocalEvidenceSnapshot(7, pinnedContextHash, attempt.Evidence{})
-	payload, _ := CanonicalSnapshotBytes(snap)
+	payload, _ := snap.SignableBytes()
 	sig, _ := signer.Sign(payload)
-	snap.OperatorSignature = sig
-	// Tamper: change the overflow set; the recomputed canonical
-	// bytes will no longer match.
-	snap.Overflows = []OverflowEntry{{Sender: 99, Count: 1}}
-	if err := verifySnapshotSignature(fakeVerifier{}, snap); !errors.Is(err, ErrSignatureInvalid) {
+	// Attach the signature to a *different* snapshot (fresh struct, so
+	// no cached bytes): its signed body differs, so verification over
+	// its bytes must fail.
+	tampered := NewLocalEvidenceSnapshot(7, pinnedContextHash, attempt.Evidence{
+		Overflows: map[group.MemberIndex]uint{99: 1},
+	})
+	tampered.OperatorSignature = sig
+	if err := verifySnapshotSignature(fakeVerifier{}, tampered); !errors.Is(err, ErrSignatureInvalid) {
 		t.Fatalf("expected ErrSignatureInvalid, got %v", err)
 	}
 }
@@ -190,7 +200,7 @@ func TestVerifyBundleSignature_RoundTrip(t *testing.T) {
 	msg := buildValidTransitionMessage()
 	msg.CoordinatorIDValue = 11
 	msg.CoordinatorSignature = nil
-	payload, _ := CanonicalBundleBytes(msg)
+	payload, _ := msg.SignableBytes()
 	sig, _ := signer.Sign(payload)
 	msg.CoordinatorSignature = sig
 	if err := verifyBundleSignature(fakeVerifier{}, msg, 11); err != nil {

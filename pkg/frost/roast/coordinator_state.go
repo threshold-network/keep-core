@@ -348,13 +348,13 @@ func (c *inMemoryCoordinator) RecordEvidence(
 	}
 
 	if existing, present := record.snapshots[snapshot.SenderID()]; present {
-		existingBytes, err := CanonicalSnapshotBytes(existing)
+		existingBytes, err := existing.SignableBytes()
 		if err != nil {
-			return fmt.Errorf("coordinator: canonical existing: %w", err)
+			return fmt.Errorf("coordinator: existing signable bytes: %w", err)
 		}
-		newBytes, err := CanonicalSnapshotBytes(snapshot)
+		newBytes, err := snapshot.SignableBytes()
 		if err != nil {
-			return fmt.Errorf("coordinator: canonical new: %w", err)
+			return fmt.Errorf("coordinator: new signable bytes: %w", err)
 		}
 		if !bytes.Equal(existingBytes, newBytes) ||
 			!bytes.Equal(existing.OperatorSignature, snapshot.OperatorSignature) {
@@ -414,10 +414,10 @@ func (c *inMemoryCoordinator) AggregateBundle(
 		CoordinatorIDValue: uint32(coord),
 		Bundle:             bundle,
 	}
-	payload, err := CanonicalBundleBytes(msg)
+	payload, err := msg.SignableBytes()
 	if err != nil {
 		c.markTransitionedLocked(handle.id)
-		return nil, fmt.Errorf("coordinator: canonical bundle: %w", err)
+		return nil, fmt.Errorf("coordinator: bundle signable bytes: %w", err)
 	}
 	sig, err := c.signer.Sign(payload)
 	if err != nil {

@@ -2,7 +2,6 @@ package roast
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -23,7 +22,8 @@ import (
 // goroutines.
 type Signer interface {
 	// Sign returns a signature over the canonical payload produced
-	// by CanonicalSnapshotBytes or CanonicalBundleBytes. The
+	// by LocalEvidenceSnapshot.SignableBytes or
+	// TransitionMessage.SignableBytes. The
 	// returned signature is treated as opaque bytes by the
 	// coordinator state machine; the SignatureVerifier is the only
 	// component that interprets the byte sequence.
@@ -96,51 +96,6 @@ func (noOpSignatureVerifier) Verify(_, _ []byte, _ group.MemberIndex) error {
 	return nil
 }
 
-// CanonicalSnapshotBytes returns the byte stream over which a signer
-// signs a LocalEvidenceSnapshot. The encoding excludes the
-// OperatorSignature field so a verifier can recompute the bytes from
-// the snapshot it received over the wire.
-//
-// The encoding is canonical JSON: the Overflows slice must already
-// be sorted ascending by Sender (NewLocalEvidenceSnapshot guarantees
-// this; Unmarshal enforces it). Any two honest signers seeing the
-// same snapshot fields produce byte-identical canonical bytes.
-func CanonicalSnapshotBytes(s *LocalEvidenceSnapshot) ([]byte, error) {
-	if s == nil {
-		return nil, errors.New("roast: cannot canonicalise a nil snapshot")
-	}
-	clone := LocalEvidenceSnapshot{
-		SenderIDValue:      s.SenderIDValue,
-		AttemptContextHash: s.AttemptContextHash,
-		Overflows:          s.Overflows,
-		// OperatorSignature intentionally omitted -- it is the
-		// signature *over* this canonical encoding, not part of it.
-	}
-	return json.Marshal(&clone)
-}
-
-// CanonicalBundleBytes returns the byte stream over which the elected
-// coordinator signs a TransitionMessage. The encoding excludes the
-// CoordinatorSignature field but *includes* every snapshot's
-// OperatorSignature -- the coordinator's signature attests that
-// these specific signed snapshots were assembled in this specific
-// order.
-//
-// The Bundle slice must already be sorted ascending by SenderID; the
-// canonical encoding assumes that invariant holds.
-func CanonicalBundleBytes(m *TransitionMessage) ([]byte, error) {
-	if m == nil {
-		return nil, errors.New("roast: cannot canonicalise a nil transition message")
-	}
-	clone := TransitionMessage{
-		AttemptContextHash: m.AttemptContextHash,
-		CoordinatorIDValue: m.CoordinatorIDValue,
-		Bundle:             m.Bundle,
-		// CoordinatorSignature intentionally omitted.
-	}
-	return json.Marshal(&clone)
-}
-
 // verifySnapshotSignature checks the OperatorSignature on a single
 // LocalEvidenceSnapshot against the verifier's record of the
 // snapshot's sender's operator key.
@@ -155,9 +110,9 @@ func verifySnapshotSignature(
 			snapshot.SenderID(),
 		)
 	}
-	payload, err := CanonicalSnapshotBytes(snapshot)
+	payload, err := snapshot.SignableBytes()
 	if err != nil {
-		return fmt.Errorf("canonical snapshot bytes: %w", err)
+		return fmt.Errorf("snapshot signable bytes: %w", err)
 	}
 	if err := verifier.Verify(
 		payload,
@@ -198,9 +153,9 @@ func verifyBundleSignature(
 			expectedCoordinator,
 		)
 	}
-	payload, err := CanonicalBundleBytes(msg)
+	payload, err := msg.SignableBytes()
 	if err != nil {
-		return fmt.Errorf("canonical bundle bytes: %w", err)
+		return fmt.Errorf("bundle signable bytes: %w", err)
 	}
 	if err := verifier.Verify(
 		payload,

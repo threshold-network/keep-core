@@ -631,12 +631,30 @@ optimization given the current key model.
 
 === Evidence message format
 
-*Decision: JSON payload wrapped in the existing `pkg/net/gen/pb`
-envelope, routed via the `net.Message` interface.*
+*Decision: signed-body protobuf envelopes
+(`pkg/frost/roast/gen/pb/evidence.proto`), routed via the
+`net.Message` interface.*
 
-This matches the FROST/tbtc-signer protocol messages (Phase 1B)
-and inherits the network layer's operator-key signing
-automatically. Raw JSON does not appear on the wire.
+Evidence signatures cover exact serialized body bytes, and those
+bytes travel verbatim: a snapshot is
+`SignedLocalEvidenceSnapshot{body, operator_signature}` where
+`body` is the serialized `LocalEvidenceSnapshotBody`, and a
+transition message is `SignedTransitionMessage{body,
+coordinator_signature}` whose body embeds every member's signed
+snapshot envelope verbatim (`repeated bytes signed_snapshots`).
+A verifier checks each signature over the bytes it received and
+only then parses them; nothing in the evidence chain is ever
+re-encoded. Signature validity therefore never depends on any
+serializer's canonical form -- across protobuf library versions
+or across languages (the Phase 7 Rust signer verifies and parses
+these same bytes). Producers marshal a body exactly once, at
+signing time, and transmit those bytes.
+
+The original Phase 3 implementation used canonical JSON
+(`json.Marshal` over field-order-stable structs) as the signed
+encoding; it was replaced before any persisted or cross-component
+evidence existed because canonical-JSON byte stability is a
+Go-implementation accident, not a portable contract.
 
 === Maximum evidence-message size
 
@@ -645,7 +663,7 @@ chunking.*
 
 Under coordinator-aggregation, the per-transition payload is
 `O(N)` not `O(N^2)`. At a 100-signer group with all four
-quotas saturated the JSON-encoded bundle is ~10-20 KiB,
+quotas saturated the encoded bundle is ~10-20 KiB,
 comfortably within libp2p's per-message limits.
 
 === Session-handle binding TTL eviction

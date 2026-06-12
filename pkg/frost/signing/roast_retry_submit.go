@@ -84,7 +84,7 @@ func buildSignedSnapshot(
 		ctx.Hash(),
 		evidence,
 	)
-	payload, err := roast.CanonicalSnapshotBytes(snap)
+	payload, err := snap.SignableBytes()
 	if err != nil {
 		roastRetryLogger.Warnf(
 			"roast-retry: canonicalising snapshot failed: %v",

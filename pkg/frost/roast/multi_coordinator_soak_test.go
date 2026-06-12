@@ -149,7 +149,7 @@ func soakAttempt(
 			evidence.Overflows[sender]++
 		}
 		snap := NewLocalEvidenceSnapshot(n.self, ctx.Hash(), evidence)
-		payload, _ := CanonicalSnapshotBytes(snap)
+		payload, _ := snap.SignableBytes()
 		sig, _ := n.signer.Sign(payload)
 		snap.OperatorSignature = sig
 		snaps = append(snaps, signedSnap{from: n.self, snapshot: snap})
@@ -376,7 +376,7 @@ func TestSoak_InfeasibilityWhenBelowThreshold(t *testing.T) {
 			continue
 		}
 		snap := NewLocalEvidenceSnapshot(n.self, prev.Hash(), attempt.Evidence{})
-		payload, _ := CanonicalSnapshotBytes(snap)
+		payload, _ := snap.SignableBytes()
 		sig, _ := n.signer.Sign(payload)
 		snap.OperatorSignature = sig
 		for _, b := range begins {
