@@ -55,7 +55,12 @@ Before Stage 1 canary:
    yesterday can be rejected after an upgrade, so upgrade + config
    changes are canaried together. Note this also enforces prerequisite
    6's attestation cadence: a node restarted with expired attestation
-   material will not start until re-attested.
+   material will not start until re-attested. Scope the variable to
+   the signer service unit (e.g. the systemd unit's `Environment=`),
+   never the host-global environment: every binary importing the
+   signing package honors the same demand, so a host-global export
+   plus a broken config would also kill maintenance tooling and test
+   binaries run on that host.
 
 ## 3. Rollout Stages
 

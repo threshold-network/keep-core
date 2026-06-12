@@ -163,8 +163,8 @@ architecture questions:
    config-file pushes to config-mode fleets must be canaried
    node-by-node (runbook prerequisite 7) because a bad push now
    produces visible downtime instead of silent capability loss.
-   Implemented on the scaffold branch as the follow-up to PR #4041's
-   Go-host adoption.
+   Implemented in keep-core PR #4045 (scaffold), the follow-up to
+   PR #4041's Go-host adoption.
 
 ## Provisional Rollback Thresholds (Draft)
 
