@@ -75,18 +75,72 @@ production signatures (`frost-secp256k1-tr`) and the v0.6.0 → 3.0.0
 evolution of `frost-core` have **no external audit coverage**. The
 NCC assessment establishes pedigree for the core protocol
 implementation but cannot be cited as covering the pinned version
-range. Gate 1 sign-off must therefore do one of:
+range.
 
-1. Commission (or await) an external audit covering `frost-core` 3.x
-   and the `frost-secp256k1-tr` ciphersuite - the follow-up
-   checklist's "external audit as merge gate for ECDSA-retirement
-   phases" decision; or
-2. Record an explicit, written risk acceptance for the unaudited
-   range, scoped to the canary stages of Gate 3 and revisited before
-   full rollout.
+**DECIDED (2026-06-12, MacLane): an external audit covering
+`frost-core` 3.x and the `frost-secp256k1-tr` ciphersuite is a HARD
+GATE for the ECDSA-retirement phases.** Gate 1 sign-off for those
+phases requires the completed audit; canary stages before ECDSA
+retirement may proceed under the existing gate criteria, but
+retirement-phase rollout does not start without the audit report in
+hand.
 
-This section records the facts; choosing between (1) and (2) is a
-team decision.
+## Decision Log (2026-06-12)
+
+Decisions taken on the post-merge follow-up checklist's open
+architecture questions:
+
+1. **External audit = hard gate for ECDSA retirement** (see above).
+2. **Sidecar signer process** chosen over in-process cgo as the
+   target architecture (stepping stone to TEE deployment). The
+   in-process dlopen bridge remains the transitional integration; new
+   isolation-sensitive work should assume the sidecar boundary. This
+   unblocks scoping of the decision-gated TEE checker stack (#4007).
+3. **Script-tree commitment vs timelocked recovery leaf for FROST
+   wallets: explicitly OPEN.** Needs more evaluation time; multiple
+   open questions remain. No work should bake in either assumption.
+4. **Proof-carrying blame (follow-up item 7): deferred until
+   production**, with a binding retention condition: telemetry and
+   logging must retain enough signed bytes to diagnose whether
+   targeted equivocation is occurring, so the revisit decision has
+   data. **This deferral is contingent on that retention landing.**
+   Retention of the conflicting signed evidence envelopes at the
+   detection points is added by keep-core PR #4044 against the
+   scaffold branch (`EquivocationEvidence` instrumentation); until
+   that merges, the base Go RFC-21 layer detects a conflict and
+   returns `ErrSnapshotConflict` but drops the conflicting envelope,
+   so the retention condition is NOT yet met and the deferral does
+   not hold. Full cross-member equivocation comparison arrives with
+   item 7 itself.
+5. **t-of-included finalize (follow-up item 6): scheduled as the
+   first engineering item of Phase 7**, not earlier. The transitional
+   flow computes each member's signature share at StartSignRound
+   against binding factors derived from the full included set's
+   commitment list (finalize enforces contributions == included set),
+   so first-t-responsive finalize requires computing shares after the
+   responsive subset is known - the interactive two-round exchange
+   that IS Phase 7's core. Pulling it earlier would implement the
+   interactive path without its Go-side consumer.
+6. **Transitional deterministic-nonce path: committed for DELETION.**
+   The path is already production-gated (production signing is
+   interactive-FROST-only with OS randomness), so it serves
+   dev/staging only - while its nonce safety rests on the
+   RoundNonceBinding transcript being *complete*, and the F1 finding
+   (round-nonce-v3) demonstrated that one missing field is a
+   key-extraction-class bug that an experienced review missed.
+   Carrying a binding-completeness invariant indefinitely is a
+   permanent footgun with no production benefit.
+   **Deletion trigger: the interactive production path validated end
+   to end** - at that point the transitional
+   StartSignRound/FinalizeSignRound deterministic flow and the
+   round-nonce binding machinery are removed. Until then the path is
+   FROZEN: no new transcript inputs may be added to the transitional
+   signing flow, because each addition must extend RoundNonceBinding
+   and any omission recreates the F1 bug class.
+   Interaction with item 6: the deletion commitment means the Phase 7
+   interactive session flow is designed t-of-included-native from the
+   start; no first-t-responsive retrofit of the transitional finalize
+   contract is needed or wanted.
 
 ## Provisional Rollback Thresholds (Draft)
 

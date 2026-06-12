@@ -1,4 +1,13 @@
 // Deterministic round-nonce binding (round-nonce-v3 transcript seed).
+//
+// DELETION COMMITTED (decision 2026-06-12; see the Decision Log in
+// docs/roast-phase-5-security-rollout-gates.md): this deterministic
+// transitional path is dev/staging-only (production-gated) and will be
+// deleted once the interactive production path is validated end to end.
+// Until then the transitional signing flow is FROZEN - do not add new
+// transcript inputs to it: each one must also extend RoundNonceBinding
+// below, and an omission is a key-extraction-class bug (see the v3
+// history in the struct docs).
 
 use super::*;
 
