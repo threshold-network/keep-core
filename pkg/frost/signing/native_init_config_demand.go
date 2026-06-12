@@ -83,11 +83,15 @@ func enforceNativeInitConfigDemand() {
 		return
 	}
 
+	// No recorded error here can mean an earlier leg's failure was
+	// overwritten by a later leg's success, so point at the warnings
+	// emitted at failure time instead of claiming a cause.
 	fatalNativeRegistrationExit(
 		"%s is set [%s]: config-mode FROST operation is demanded but "+
 			"native registration did not complete (native adapter "+
 			"registered [%v], native FFI executor registered [%v]); "+
-			"terminating instead of continuing on the legacy bridge",
+			"terminating instead of continuing on the legacy bridge - "+
+			"check the registration warnings logged above for the cause",
 		TBTCSignerInitConfigPathEnv,
 		configPath,
 		adapterRegistered,
