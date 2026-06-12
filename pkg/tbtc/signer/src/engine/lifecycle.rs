@@ -3,24 +3,21 @@
 use super::*;
 
 pub(crate) fn canary_max_start_sign_round_p95_ms() -> u64 {
-    std::env::var(TBTC_SIGNER_CANARY_MAX_START_SIGN_ROUND_P95_MS_ENV)
-        .ok()
+    signer_env_var(TBTC_SIGNER_CANARY_MAX_START_SIGN_ROUND_P95_MS_ENV)
         .and_then(|value| value.trim().parse::<u64>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(TBTC_SIGNER_DEFAULT_CANARY_MAX_START_SIGN_ROUND_P95_MS)
 }
 
 pub(crate) fn canary_max_finalize_sign_round_p95_ms() -> u64 {
-    std::env::var(TBTC_SIGNER_CANARY_MAX_FINALIZE_SIGN_ROUND_P95_MS_ENV)
-        .ok()
+    signer_env_var(TBTC_SIGNER_CANARY_MAX_FINALIZE_SIGN_ROUND_P95_MS_ENV)
         .and_then(|value| value.trim().parse::<u64>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(TBTC_SIGNER_DEFAULT_CANARY_MAX_FINALIZE_SIGN_ROUND_P95_MS)
 }
 
 pub(crate) fn canary_max_policy_reject_rate_bps() -> u64 {
-    std::env::var(TBTC_SIGNER_CANARY_MAX_POLICY_REJECT_RATE_BPS_ENV)
-        .ok()
+    signer_env_var(TBTC_SIGNER_CANARY_MAX_POLICY_REJECT_RATE_BPS_ENV)
         .and_then(|value| value.trim().parse::<u64>().ok())
         .filter(|value| *value <= TBTC_SIGNER_MAX_POLICY_REJECT_RATE_BPS)
         .unwrap_or(TBTC_SIGNER_DEFAULT_CANARY_MAX_POLICY_REJECT_RATE_BPS)

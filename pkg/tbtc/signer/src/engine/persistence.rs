@@ -250,8 +250,7 @@ set {}={} to quarantine the file and continue with clean state",
 }
 
 pub(crate) fn state_key_command_timeout_secs() -> u64 {
-    std::env::var(TBTC_SIGNER_STATE_KEY_COMMAND_TIMEOUT_SECS_ENV)
-        .ok()
+    signer_env_var(TBTC_SIGNER_STATE_KEY_COMMAND_TIMEOUT_SECS_ENV)
         .and_then(|value| value.trim().parse::<u64>().ok())
         .filter(|value| {
             *value >= TBTC_SIGNER_MIN_STATE_KEY_COMMAND_TIMEOUT_SECS
@@ -496,9 +495,9 @@ pub(crate) fn execute_state_key_command(command_spec: &str) -> Result<Output, En
 }
 
 pub(crate) fn state_encryption_key_material() -> Result<StateEncryptionKeyMaterial, EngineError> {
-    let provider = std::env::var(TBTC_SIGNER_STATE_KEY_PROVIDER_ENV)
+    let provider = signer_env_var(TBTC_SIGNER_STATE_KEY_PROVIDER_ENV)
         .map(|value| value.trim().to_ascii_lowercase())
-        .unwrap_or_else(|_| TBTC_SIGNER_STATE_KEY_PROVIDER_ENV_DEFAULT.to_string());
+        .unwrap_or_else(|| TBTC_SIGNER_STATE_KEY_PROVIDER_ENV_DEFAULT.to_string());
 
     match provider.as_str() {
         TBTC_SIGNER_STATE_KEY_PROVIDER_ENV_DEFAULT => {
@@ -514,6 +513,9 @@ pub(crate) fn state_encryption_key_material() -> Result<StateEncryptionKeyMateri
             }
 
             let raw_key_hex =
+                // Deliberately read from the real environment even when an init-time
+                // config is installed: the state-encryption key is a secret and the
+                // config FFI carries operational knobs only (see signer_env_var).
                 std::env::var(TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX_ENV).map_err(|_| {
                     EngineError::Internal(format!(
                         "missing required state encryption key env [{}]",
@@ -532,12 +534,13 @@ pub(crate) fn state_encryption_key_material() -> Result<StateEncryptionKeyMateri
             })
         }
         TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND => {
-            let command_spec = std::env::var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV).map_err(|_| {
-                EngineError::Internal(format!(
-                    "missing required state key command env [{}]",
-                    TBTC_SIGNER_STATE_KEY_COMMAND_ENV
-                ))
-            })?;
+            let command_spec =
+                signer_env_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV).ok_or_else(|| {
+                    EngineError::Internal(format!(
+                        "missing required state key command env [{}]",
+                        TBTC_SIGNER_STATE_KEY_COMMAND_ENV
+                    ))
+                })?;
             if command_spec.trim().is_empty() {
                 return Err(EngineError::Internal(format!(
                     "state key command env [{}] must be non-empty",

@@ -67,16 +67,16 @@ use crate::api::{
     DifferentialFuzzRequest, DifferentialFuzzResult, DkgPart1Request, DkgPart1Result,
     DkgPart2Request, DkgPart2Result, DkgPart3Request, DkgPart3Result, DkgResult, DkgRound1Package,
     DkgRound2Package, FinalizeSignRoundRequest, GenerateNoncesAndCommitmentsRequest,
-    GenerateNoncesAndCommitmentsResult, NativeFrostCommitment, NativeFrostKeyPackage,
-    NativeFrostPublicKeyPackage, NativeFrostSignatureShare, NewSigningPackageRequest,
-    NewSigningPackageResult, PromoteCanaryRequest, PromoteCanaryResult, QuarantineStatusRequest,
-    QuarantineStatusResult, RefreshCadenceStatusRequest, RefreshCadenceStatusResult,
-    RefreshSharesRequest, RefreshSharesResult, RoastLivenessPolicyResult, RollbackCanaryRequest,
-    RollbackCanaryResult, RoundContribution, RoundState, RunDkgRequest, ShareMaterial,
-    SignShareRequest, SignShareResult, SignatureResult, SignerHardeningMetricsResult,
-    StartSignRoundRequest, TransactionResult, TranscriptAuditRecord, TranscriptAuditRequest,
-    TranscriptAuditResult, TriggerEmergencyRekeyRequest, TriggerEmergencyRekeyResult,
-    VerifyBlameProofRequest,
+    GenerateNoncesAndCommitmentsResult, InitSignerConfigRequest, InitSignerConfigResult,
+    NativeFrostCommitment, NativeFrostKeyPackage, NativeFrostPublicKeyPackage,
+    NativeFrostSignatureShare, NewSigningPackageRequest, NewSigningPackageResult,
+    PromoteCanaryRequest, PromoteCanaryResult, QuarantineStatusRequest, QuarantineStatusResult,
+    RefreshCadenceStatusRequest, RefreshCadenceStatusResult, RefreshSharesRequest,
+    RefreshSharesResult, RoastLivenessPolicyResult, RollbackCanaryRequest, RollbackCanaryResult,
+    RoundContribution, RoundState, RunDkgRequest, ShareMaterial, SignShareRequest, SignShareResult,
+    SignatureResult, SignerHardeningMetricsResult, StartSignRoundRequest, TransactionResult,
+    TranscriptAuditRecord, TranscriptAuditRequest, TranscriptAuditResult,
+    TriggerEmergencyRekeyRequest, TriggerEmergencyRekeyResult, VerifyBlameProofRequest,
 };
 use crate::errors::EngineError;
 use crate::go_math_rand::select_coordinator_identifier;
@@ -86,6 +86,7 @@ mod codec;
 mod config;
 mod dkg;
 mod frost_ops;
+mod init_config;
 mod lifecycle;
 mod nonce;
 mod persistence;
@@ -106,6 +107,7 @@ pub(crate) use codec::*;
 pub(crate) use config::*;
 pub(crate) use dkg::*;
 pub(crate) use frost_ops::*;
+pub(crate) use init_config::*;
 pub(crate) use lifecycle::*;
 pub(crate) use nonce::*;
 pub(crate) use persistence::*;

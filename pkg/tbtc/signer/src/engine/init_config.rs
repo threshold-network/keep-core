@@ -1,0 +1,415 @@
+// Init-time signer configuration: a typed, FFI-installed snapshot that
+// replaces the process environment as the source of TBTC_SIGNER_* knobs.
+
+use super::*;
+use std::sync::{Arc, RwLock};
+
+static INSTALLED_SIGNER_CONFIG: OnceLock<RwLock<Option<Arc<InstalledSignerConfig>>>> =
+    OnceLock::new();
+static ENV_FALLBACK_WARNING_EMITTED: OnceLock<()> = OnceLock::new();
+
+pub(crate) struct InstalledSignerConfig {
+    pub(crate) values: HashMap<String, String>,
+    pub(crate) fingerprint: String,
+}
+
+fn installed_signer_config_slot() -> &'static RwLock<Option<Arc<InstalledSignerConfig>>> {
+    INSTALLED_SIGNER_CONFIG.get_or_init(|| RwLock::new(None))
+}
+
+fn installed_signer_config() -> Option<Arc<InstalledSignerConfig>> {
+    installed_signer_config_slot()
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+/// Single chokepoint for every `TBTC_SIGNER_*` operational read.
+///
+/// With an installed init-time config the process environment is NOT
+/// consulted: the snapshot is the sole source of truth and an absent key
+/// means the built-in default. Without an installed config this falls
+/// through to the process environment (test/development behavior, and the
+/// transitional path for hosts that have not adopted the init FFI yet).
+///
+/// The state-encryption key (`TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX`) is
+/// deliberately NOT routed through here: secrets stay on the dedicated
+/// env/command key-provider channel and never ride the config FFI.
+pub(crate) fn signer_env_var(name: &str) -> Option<String> {
+    if let Some(config) = installed_signer_config() {
+        return config.values.get(name).cloned();
+    }
+    warn_production_env_fallback_once(name);
+    std::env::var(name).ok()
+}
+
+fn warn_production_env_fallback_once(name: &str) {
+    // The production check reads the environment directly: routing it through
+    // signer_env_var would recurse, and on this path no config is installed
+    // so the environment is the authoritative source anyway.
+    if name == TBTC_SIGNER_PROFILE_ENV {
+        return;
+    }
+    ENV_FALLBACK_WARNING_EMITTED.get_or_init(|| {
+        let raw = std::env::var(TBTC_SIGNER_PROFILE_ENV).unwrap_or_default();
+        let normalized = raw.trim().to_ascii_lowercase();
+        if normalized.as_str() != TBTC_SIGNER_PROFILE_DEVELOPMENT {
+            eprintln!(
+                "warning: TBTC_SIGNER_* knobs are being read from the process \
+                 environment; production hosts should install an init-time \
+                 config via frost_tbtc_init_signer_config"
+            );
+        }
+    });
+}
+
+pub fn init_signer_config(
+    request: InitSignerConfigRequest,
+) -> Result<InitSignerConfigResult, EngineError> {
+    let config_fingerprint = fingerprint(&request)?;
+    let values = config_values_from_request(&request)?;
+    let configured_key_count = values.len() as u32;
+
+    let slot = installed_signer_config_slot();
+    {
+        let mut guard = slot
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(existing) = guard.as_ref() {
+            if existing.fingerprint == config_fingerprint {
+                return Ok(InitSignerConfigResult {
+                    installed: true,
+                    idempotent: true,
+                    config_fingerprint,
+                    configured_key_count: existing.values.len() as u32,
+                });
+            }
+            return Err(EngineError::Validation(format!(
+                "signer config already installed with fingerprint [{}]; \
+                 conflicting re-initialization rejected",
+                existing.fingerprint
+            )));
+        }
+        *guard = Some(Arc::new(InstalledSignerConfig {
+            values,
+            fingerprint: config_fingerprint.clone(),
+        }));
+    }
+
+    // Fail-closed validation: run the same loaders the runtime gates use,
+    // under the just-installed snapshot, and roll the install back if any of
+    // them reject. Knobs the runtime warn-and-defaults on keep that behavior.
+    if let Err(error) = validate_installed_config() {
+        let mut guard = slot
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
+        return Err(error);
+    }
+
+    Ok(InitSignerConfigResult {
+        installed: true,
+        idempotent: false,
+        config_fingerprint,
+        configured_key_count,
+    })
+}
+
+fn validate_installed_config() -> Result<(), EngineError> {
+    load_admission_policy_config()?;
+    load_signing_policy_firewall_config()?;
+    load_auto_quarantine_config()?;
+    Ok(())
+}
+
+pub(crate) fn config_values_from_request(
+    request: &InitSignerConfigRequest,
+) -> Result<HashMap<String, String>, EngineError> {
+    let mut values = HashMap::new();
+
+    if let Some(profile) = &request.profile {
+        let normalized = profile.trim().to_ascii_lowercase();
+        if normalized != TBTC_SIGNER_PROFILE_PRODUCTION
+            && normalized != TBTC_SIGNER_PROFILE_DEVELOPMENT
+        {
+            return Err(EngineError::Validation(format!(
+                "profile must be '{}' or '{}'; got [{}]",
+                TBTC_SIGNER_PROFILE_PRODUCTION, TBTC_SIGNER_PROFILE_DEVELOPMENT, profile
+            )));
+        }
+        values.insert(TBTC_SIGNER_PROFILE_ENV.to_string(), normalized);
+    }
+
+    insert_bool(
+        &mut values,
+        TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV,
+        request.allow_bootstrap,
+    );
+    insert_bool(
+        &mut values,
+        TBTC_SIGNER_ENABLE_ROAST_STRICT_ENV,
+        request.enable_roast_strict,
+    );
+    insert_bool(
+        &mut values,
+        TBTC_SIGNER_ALLOW_BENCH_RESTART_HOOK_ENV,
+        request.allow_bench_restart_hook,
+    );
+    insert_bool(
+        &mut values,
+        TBTC_SIGNER_ENFORCE_PROVENANCE_GATE_ENV,
+        request.enforce_provenance_gate,
+    );
+    insert_bool(
+        &mut values,
+        TBTC_SIGNER_ENFORCE_ADMISSION_POLICY_ENV,
+        request.enforce_admission_policy,
+    );
+    insert_bool(
+        &mut values,
+        TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV,
+        request.enforce_signing_policy_firewall,
+    );
+    insert_bool(
+        &mut values,
+        TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV,
+        request.enable_auto_quarantine,
+    );
+
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV,
+        request.roast_coordinator_timeout_ms,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_REFRESH_CADENCE_SECONDS_ENV,
+        request.refresh_cadence_seconds,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_STATE_CORRUPT_BACKUP_LIMIT_ENV,
+        request.state_corrupt_backup_limit,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_MAX_SESSIONS_ENV,
+        request.max_sessions,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_STATE_KEY_COMMAND_TIMEOUT_SECS_ENV,
+        request.state_key_command_timeout_secs,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_ADMISSION_MIN_PARTICIPANTS_ENV,
+        request.admission_min_participants,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_ADMISSION_MIN_THRESHOLD_ENV,
+        request.admission_min_threshold,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_POLICY_MAX_OUTPUT_COUNT_ENV,
+        request.policy_max_output_count,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_POLICY_MAX_OUTPUT_VALUE_SATS_ENV,
+        request.policy_max_output_value_sats,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_POLICY_MAX_TOTAL_OUTPUT_VALUE_SATS_ENV,
+        request.policy_max_total_output_value_sats,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_POLICY_RATE_LIMIT_PER_MINUTE_ENV,
+        request.policy_rate_limit_per_minute,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV,
+        request.auto_quarantine_fault_threshold,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY_ENV,
+        request.auto_quarantine_timeout_penalty,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_AUTO_QUARANTINE_INVALID_SHARE_PENALTY_ENV,
+        request.auto_quarantine_invalid_share_penalty,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_CANARY_MAX_START_SIGN_ROUND_P95_MS_ENV,
+        request.canary_max_start_sign_round_p95_ms,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_CANARY_MAX_FINALIZE_SIGN_ROUND_P95_MS_ENV,
+        request.canary_max_finalize_sign_round_p95_ms,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_CANARY_MAX_POLICY_REJECT_RATE_BPS_ENV,
+        request.canary_max_policy_reject_rate_bps,
+    );
+
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_POLICY_ALLOWED_UTC_START_HOUR_ENV,
+        request.policy_allowed_utc_start_hour.map(u64::from),
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_POLICY_ALLOWED_UTC_END_HOUR_ENV,
+        request.policy_allowed_utc_end_hour.map(u64::from),
+    );
+
+    insert_string(&mut values, TBTC_SIGNER_STATE_PATH_ENV, &request.state_path)?;
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_STATE_CORRUPTION_POLICY_ENV,
+        &request.state_corruption_policy,
+    )?;
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
+        &request.state_key_provider,
+    )?;
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_STATE_KEY_COMMAND_ENV,
+        &request.state_key_command,
+    )?;
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_PROVENANCE_ATTESTATION_STATUS_ENV,
+        &request.provenance_attestation_status,
+    )?;
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_PROVENANCE_ATTESTATION_PAYLOAD_ENV,
+        &request.provenance_attestation_payload,
+    )?;
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_PROVENANCE_ATTESTATION_SIGNATURE_HEX_ENV,
+        &request.provenance_attestation_signature_hex,
+    )?;
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_PROVENANCE_TRUST_ROOT_ENV,
+        &request.provenance_trust_root,
+    )?;
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_MIN_APPROVED_VERSION_ENV,
+        &request.min_approved_version,
+    )?;
+
+    insert_identifier_list(
+        &mut values,
+        TBTC_SIGNER_ADMISSION_REQUIRED_IDENTIFIERS_ENV,
+        &request.admission_required_identifiers,
+    )?;
+    insert_identifier_list(
+        &mut values,
+        TBTC_SIGNER_ADMISSION_ALLOWLIST_IDENTIFIERS_ENV,
+        &request.admission_allowlist_identifiers,
+    )?;
+    insert_identifier_list(
+        &mut values,
+        TBTC_SIGNER_AUTO_QUARANTINE_DAO_ALLOWLIST_IDENTIFIERS_ENV,
+        &request.auto_quarantine_dao_allowlist_identifiers,
+    )?;
+
+    if let Some(script_classes) = &request.policy_allowed_script_classes {
+        if script_classes.is_empty() || script_classes.iter().any(|class| class.trim().is_empty()) {
+            return Err(EngineError::Validation(format!(
+                "config field for [{}] must contain at least one non-empty script class when set",
+                TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV
+            )));
+        }
+        values.insert(
+            TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV.to_string(),
+            script_classes.join(","),
+        );
+    }
+
+    Ok(values)
+}
+
+fn insert_bool(values: &mut HashMap<String, String>, key: &str, value: Option<bool>) {
+    if let Some(value) = value {
+        values.insert(
+            key.to_string(),
+            if value { "true" } else { "false" }.to_string(),
+        );
+    }
+}
+
+fn insert_u64(values: &mut HashMap<String, String>, key: &str, value: Option<u64>) {
+    if let Some(value) = value {
+        values.insert(key.to_string(), value.to_string());
+    }
+}
+
+fn insert_string(
+    values: &mut HashMap<String, String>,
+    key: &str,
+    value: &Option<String>,
+) -> Result<(), EngineError> {
+    if let Some(value) = value {
+        if value.trim().is_empty() {
+            return Err(EngineError::Validation(format!(
+                "config field for [{}] must not be empty when set",
+                key
+            )));
+        }
+        values.insert(key.to_string(), value.clone());
+    }
+    Ok(())
+}
+
+fn insert_identifier_list(
+    values: &mut HashMap<String, String>,
+    key: &str,
+    identifiers: &Option<Vec<u16>>,
+) -> Result<(), EngineError> {
+    if let Some(identifiers) = identifiers {
+        if identifiers.is_empty() {
+            return Err(EngineError::Validation(format!(
+                "config field for [{}] must contain at least one identifier when set",
+                key
+            )));
+        }
+        let mut sorted = identifiers.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        values.insert(
+            key.to_string(),
+            sorted
+                .iter()
+                .map(|identifier| identifier.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn clear_installed_signer_config_for_tests() {
+    let mut guard = installed_signer_config_slot()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = None;
+}

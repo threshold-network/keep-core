@@ -55,19 +55,19 @@ pub(crate) fn provenance_gate_enforced() -> bool {
         return true;
     }
 
-    std::env::var(TBTC_SIGNER_ENFORCE_PROVENANCE_GATE_ENV)
+    signer_env_var(TBTC_SIGNER_ENFORCE_PROVENANCE_GATE_ENV)
         .map(|raw_value| truthy_env_flag(&raw_value))
         .unwrap_or(false)
 }
 
 pub(crate) fn admission_policy_enforced() -> bool {
-    std::env::var(TBTC_SIGNER_ENFORCE_ADMISSION_POLICY_ENV)
+    signer_env_var(TBTC_SIGNER_ENFORCE_ADMISSION_POLICY_ENV)
         .map(|raw_value| truthy_env_flag(&raw_value))
         .unwrap_or(false)
 }
 
 pub(crate) fn signing_policy_firewall_enforced() -> bool {
-    std::env::var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV)
+    signer_env_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV)
         .map(|raw_value| truthy_env_flag(&raw_value))
         .unwrap_or(false)
 }
@@ -297,7 +297,7 @@ pub(crate) fn load_signing_policy_firewall_config(
 }
 
 pub(crate) fn auto_quarantine_enabled() -> bool {
-    std::env::var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV)
+    signer_env_var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV)
         .map(|raw_value| truthy_env_flag(&raw_value))
         .unwrap_or(false)
 }

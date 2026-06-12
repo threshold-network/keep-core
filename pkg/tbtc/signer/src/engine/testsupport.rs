@@ -23,6 +23,7 @@ pub fn lock_test_state() -> std::sync::MutexGuard<'static, ()> {
 
 #[cfg(test)]
 pub fn reset_for_tests() {
+    clear_installed_signer_config_for_tests();
     clear_persist_fault_injection_for_tests();
     std::env::set_var(
         TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,

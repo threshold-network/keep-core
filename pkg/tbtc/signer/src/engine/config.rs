@@ -53,9 +53,10 @@ pub(crate) const TBTC_SIGNER_DEFAULT_MAX_SESSIONS: usize = 1024;
 
 pub(crate) const TBTC_SIGNER_STATE_LOCKFILE_SUFFIX: &str = ".lock";
 
+pub(crate) const TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV: &str = "TBTC_SIGNER_ALLOW_BOOTSTRAP";
+
 pub(crate) const TBTC_SIGNER_ENABLE_ROAST_STRICT_ENV: &str = "TBTC_SIGNER_ENABLE_ROAST_STRICT";
 
-#[cfg(any(test, feature = "bench-restart-hook"))]
 pub(crate) const TBTC_SIGNER_ALLOW_BENCH_RESTART_HOOK_ENV: &str =
     "TBTC_SIGNER_ALLOW_BENCH_RESTART_HOOK";
 
@@ -181,8 +182,7 @@ pub(crate) const TBTC_SIGNER_DEFAULT_CANARY_MAX_POLICY_REJECT_RATE_BPS: u64 = 1_
 pub(crate) const TBTC_SIGNER_MAX_POLICY_REJECT_RATE_BPS: u64 = 10_000;
 
 pub(crate) fn roast_coordinator_timeout_ms() -> u64 {
-    std::env::var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV)
-        .ok()
+    signer_env_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV)
         .and_then(|value| value.trim().parse::<u64>().ok())
         .filter(|timeout_ms| {
             *timeout_ms >= TBTC_SIGNER_MIN_ROAST_COORDINATOR_TIMEOUT_MS
@@ -192,8 +192,7 @@ pub(crate) fn roast_coordinator_timeout_ms() -> u64 {
 }
 
 pub(crate) fn refresh_cadence_seconds() -> u64 {
-    std::env::var(TBTC_SIGNER_REFRESH_CADENCE_SECONDS_ENV)
-        .ok()
+    signer_env_var(TBTC_SIGNER_REFRESH_CADENCE_SECONDS_ENV)
         .and_then(|value| value.trim().parse::<u64>().ok())
         .filter(|value| {
             *value >= TBTC_SIGNER_MIN_REFRESH_CADENCE_SECONDS
@@ -205,7 +204,7 @@ pub(crate) fn refresh_cadence_seconds() -> u64 {
 pub(crate) fn parse_identifier_set_from_env(
     env_name: &str,
 ) -> Result<Option<HashSet<u16>>, EngineError> {
-    let Ok(raw_value) = std::env::var(env_name) else {
+    let Some(raw_value) = signer_env_var(env_name) else {
         return Ok(None);
     };
 
@@ -246,7 +245,7 @@ pub(crate) fn parse_usize_from_env_with_default(
     env_name: &str,
     default_value: usize,
 ) -> Result<usize, EngineError> {
-    let Ok(raw_value) = std::env::var(env_name) else {
+    let Some(raw_value) = signer_env_var(env_name) else {
         return Ok(default_value);
     };
 
@@ -263,7 +262,7 @@ pub(crate) fn parse_u64_from_env_with_default(
     env_name: &str,
     default_value: u64,
 ) -> Result<u64, EngineError> {
-    let Ok(raw_value) = std::env::var(env_name) else {
+    let Some(raw_value) = signer_env_var(env_name) else {
         return Ok(default_value);
     };
 
@@ -277,8 +276,8 @@ pub(crate) fn parse_u64_from_env_with_default(
 }
 
 pub(crate) fn parse_usize_from_env_required(env_name: &str) -> Result<usize, EngineError> {
-    let raw_value = std::env::var(env_name)
-        .map_err(|_| EngineError::Internal(format!("missing required env [{}]", env_name)))?;
+    let raw_value = signer_env_var(env_name)
+        .ok_or_else(|| EngineError::Internal(format!("missing required env [{}]", env_name)))?;
     raw_value.trim().parse::<usize>().map_err(|_| {
         EngineError::Internal(format!(
             "failed to parse usize env [{}] value [{}]",
@@ -288,8 +287,8 @@ pub(crate) fn parse_usize_from_env_required(env_name: &str) -> Result<usize, Eng
 }
 
 pub(crate) fn parse_u64_from_env_required(env_name: &str) -> Result<u64, EngineError> {
-    let raw_value = std::env::var(env_name)
-        .map_err(|_| EngineError::Internal(format!("missing required env [{}]", env_name)))?;
+    let raw_value = signer_env_var(env_name)
+        .ok_or_else(|| EngineError::Internal(format!("missing required env [{}]", env_name)))?;
     raw_value.trim().parse::<u64>().map_err(|_| {
         EngineError::Internal(format!(
             "failed to parse u64 env [{}] value [{}]",
@@ -299,7 +298,7 @@ pub(crate) fn parse_u64_from_env_required(env_name: &str) -> Result<u64, EngineE
 }
 
 pub(crate) fn parse_u8_from_env_optional(env_name: &str) -> Result<Option<u8>, EngineError> {
-    let Ok(raw_value) = std::env::var(env_name) else {
+    let Some(raw_value) = signer_env_var(env_name) else {
         return Ok(None);
     };
 
@@ -321,8 +320,8 @@ pub(crate) fn parse_u8_from_env_optional(env_name: &str) -> Result<Option<u8>, E
 pub(crate) fn parse_script_class_set_required(
     env_name: &str,
 ) -> Result<HashSet<String>, EngineError> {
-    let raw_value = std::env::var(env_name)
-        .map_err(|_| EngineError::Internal(format!("missing required env [{}]", env_name)))?;
+    let raw_value = signer_env_var(env_name)
+        .ok_or_else(|| EngineError::Internal(format!("missing required env [{}]", env_name)))?;
     let raw_value = raw_value.trim();
     if raw_value.is_empty() {
         return Err(EngineError::Internal(format!(
@@ -362,20 +361,20 @@ pub(crate) fn roast_strict_mode_enabled() -> bool {
         return true;
     }
 
-    std::env::var(TBTC_SIGNER_ENABLE_ROAST_STRICT_ENV)
+    signer_env_var(TBTC_SIGNER_ENABLE_ROAST_STRICT_ENV)
         .map(|raw_value| truthy_env_flag(&raw_value))
         .unwrap_or(false)
 }
 
 #[cfg(any(test, feature = "bench-restart-hook"))]
 pub(crate) fn bench_restart_hook_enabled() -> bool {
-    std::env::var(TBTC_SIGNER_ALLOW_BENCH_RESTART_HOOK_ENV)
+    signer_env_var(TBTC_SIGNER_ALLOW_BENCH_RESTART_HOOK_ENV)
         .map(|raw_value| truthy_env_flag(&raw_value))
         .unwrap_or(false)
 }
 
 pub(crate) fn signer_profile_is_production() -> bool {
-    let raw = std::env::var(TBTC_SIGNER_PROFILE_ENV).unwrap_or_default();
+    let raw = signer_env_var(TBTC_SIGNER_PROFILE_ENV).unwrap_or_default();
     let normalized = raw.trim().to_ascii_lowercase();
     match normalized.as_str() {
         TBTC_SIGNER_PROFILE_PRODUCTION | "" => true,
