@@ -124,9 +124,13 @@ Semantics:
 - Re-initialization with an identical request is idempotent; a conflicting
   request is rejected.
 - The init validates enforcement-gated policy combinations (admission,
-  signing-policy firewall, auto-quarantine) and rolls the install back if
-  they are incomplete, so a misconfigured signer fails at startup rather
-  than at first signing.
+  signing-policy firewall, auto-quarantine) plus the provenance gate, so a
+  misconfigured signer fails at startup rather than at first signing. Since
+  production forces the provenance gate, production configs must carry a
+  complete attestation set (`provenance_attestation_status`/`_payload`/
+  `_signature_hex`, `provenance_trust_root`, `min_approved_version`); the
+  init-time pass does not exempt runtime re-checks — attestation TTL aging
+  still applies per call.
 - **Secrets never ride the config FFI**: `TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX`
   is read exclusively from the dedicated key-provider channel below, even
   when a config is installed. Do not inline key material into the

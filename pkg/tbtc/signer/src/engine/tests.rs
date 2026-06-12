@@ -10757,6 +10757,12 @@ fn init_signer_config_production_profile_forces_roast_strict_mode() {
     let _clear = InstalledConfigClearGuard;
     clear_state_storage_policy_overrides();
 
+    let (test_trust_root, test_payload, test_signature) = build_signed_provenance_attestation(
+        TBTC_SIGNER_REQUIRED_ATTESTATION_STATUS_APPROVED,
+        TBTC_SIGNER_RUNTIME_VERSION,
+        Some(now_unix() + 3600),
+    );
+
     // lock_test_state pins the env profile to development; the installed
     // config must override it wholesale.
     init_signer_config(InitSignerConfigRequest {
@@ -10769,6 +10775,11 @@ fn init_signer_config_production_profile_forces_roast_strict_mode() {
         ),
         state_key_provider: Some("command".to_string()),
         state_key_command: Some("/nonexistent/key-helper-never-run-at-init".to_string()),
+        provenance_attestation_status: Some("approved".to_string()),
+        provenance_trust_root: Some(test_trust_root.clone()),
+        provenance_attestation_payload: Some(test_payload.clone()),
+        provenance_attestation_signature_hex: Some(test_signature.clone()),
+        min_approved_version: Some(TBTC_SIGNER_RUNTIME_VERSION.to_string()),
         ..InitSignerConfigRequest::default()
     })
     .expect("install config");
@@ -11018,6 +11029,12 @@ fn init_signer_config_validates_command_key_provider_without_executing_it() {
     let _clear = InstalledConfigClearGuard;
     clear_state_storage_policy_overrides();
 
+    let (test_trust_root, test_payload, test_signature) = build_signed_provenance_attestation(
+        TBTC_SIGNER_REQUIRED_ATTESTATION_STATUS_APPROVED,
+        TBTC_SIGNER_RUNTIME_VERSION,
+        Some(now_unix() + 3600),
+    );
+
     // The command path deliberately points at a binary that cannot succeed:
     // if init executed the key command, this install would fail. Structural
     // validation must accept it without running it.
@@ -11026,8 +11043,102 @@ fn init_signer_config_validates_command_key_provider_without_executing_it() {
         state_path: Some("/var/lib/tbtc/signer-state.json".to_string()),
         state_key_provider: Some("command".to_string()),
         state_key_command: Some("/nonexistent/key-helper-never-run-at-init".to_string()),
+        provenance_attestation_status: Some("approved".to_string()),
+        provenance_trust_root: Some(test_trust_root.clone()),
+        provenance_attestation_payload: Some(test_payload.clone()),
+        provenance_attestation_signature_hex: Some(test_signature.clone()),
+        min_approved_version: Some(TBTC_SIGNER_RUNTIME_VERSION.to_string()),
         ..InitSignerConfigRequest::default()
     })
     .expect("structurally valid production config installs without running the key command");
     assert!(result.installed);
+}
+
+#[test]
+fn init_signer_config_rejects_production_config_without_provenance_attestation() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    // Production forces the provenance gate; a production config that is
+    // otherwise complete but carries no attestation set is unusable for
+    // every protected operation and must fail the init, not the first call.
+    let error = init_signer_config(InitSignerConfigRequest {
+        profile: Some("production".to_string()),
+        state_path: Some("/var/lib/tbtc/signer-state.json".to_string()),
+        state_key_provider: Some("command".to_string()),
+        state_key_command: Some("/nonexistent/key-helper-never-run-at-init".to_string()),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect_err("production config without provenance attestation must fail the init");
+    assert!(
+        error
+            .to_string()
+            .contains(TBTC_SIGNER_PROVENANCE_ATTESTATION_STATUS_ENV),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn init_signer_config_rejects_enforced_gate_with_unparseable_trust_root() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    let (_, test_payload, test_signature) = build_signed_provenance_attestation(
+        TBTC_SIGNER_REQUIRED_ATTESTATION_STATUS_APPROVED,
+        TBTC_SIGNER_RUNTIME_VERSION,
+        Some(now_unix() + 3600),
+    );
+
+    let error = init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
+        enforce_provenance_gate: Some(true),
+        provenance_attestation_status: Some("approved".to_string()),
+        provenance_trust_root: Some("not-a-pubkey".to_string()),
+        provenance_attestation_payload: Some(test_payload),
+        provenance_attestation_signature_hex: Some(test_signature),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect_err("enforced gate with unparseable trust root must fail the init");
+    assert!(
+        error
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("trust_root"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn init_signer_config_installs_production_config_with_valid_provenance() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    let (test_trust_root, test_payload, test_signature) = build_signed_provenance_attestation(
+        TBTC_SIGNER_REQUIRED_ATTESTATION_STATUS_APPROVED,
+        TBTC_SIGNER_RUNTIME_VERSION,
+        Some(now_unix() + 3600),
+    );
+
+    let result = init_signer_config(InitSignerConfigRequest {
+        profile: Some("production".to_string()),
+        state_path: Some("/var/lib/tbtc/signer-state.json".to_string()),
+        state_key_provider: Some("command".to_string()),
+        state_key_command: Some("/nonexistent/key-helper-never-run-at-init".to_string()),
+        provenance_attestation_status: Some("approved".to_string()),
+        provenance_trust_root: Some(test_trust_root),
+        provenance_attestation_payload: Some(test_payload),
+        provenance_attestation_signature_hex: Some(test_signature),
+        min_approved_version: Some(TBTC_SIGNER_RUNTIME_VERSION.to_string()),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect("complete production config installs");
+    assert!(result.installed);
+    assert!(signer_profile_is_production());
+    assert!(provenance_gate_enforced());
 }

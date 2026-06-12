@@ -126,7 +126,7 @@ pub fn init_signer_config(
     // so no other caller can ever observe an unvalidated config and a failed
     // init leaves prior state (installed config or environment fallback)
     // untouched. Validation runs the same loaders the runtime gates use plus
-    // the state-path and key-provider requirements; knobs the runtime warn-and-defaults on
+    // the state-path, key-provider and provenance-gate requirements; knobs the runtime warn-and-defaults on
     // keep that behavior.
     {
         let _candidate_guard = ValidationCandidateGuard::install(Arc::clone(&candidate));
@@ -184,6 +184,12 @@ fn validate_candidate_config() -> Result<(), EngineError> {
     // forbids the env provider; the command provider requires a command).
     // Resolved WITHOUT reading the secret or executing the key command.
     resolve_state_key_provider_plan()?;
+    // Production forces the provenance gate, so a production config without
+    // a complete, verifiable attestation set is unusable for every protected
+    // operation - reject it at init. The gate self-gates (no-op when not
+    // enforced), reads only candidate values plus local crypto, and runtime
+    // calls still re-check it: an init-time pass does not exempt TTL aging.
+    enforce_provenance_gate()?;
     Ok(())
 }
 
