@@ -91,8 +91,16 @@ func NewSigningAttemptLivenessTracker(
 
 // RecordAttemptOutcome records the terminal outcome of one network-wide
 // signing attempt and refreshes the exported gauges.
+//
+// The gauges are published while holding the tracker mutex so concurrent
+// recordings (executors of different wallets share one tracker) cannot
+// publish out of order and leave a stale rate or alert value standing
+// until the next attempt. The nesting tracker.mutex -> recorder gauge
+// lock is the only acquisition order between the two; the recorder never
+// calls back into the tracker.
 func (salt *SigningAttemptLivenessTracker) RecordAttemptOutcome(success bool) {
 	salt.mutex.Lock()
+	defer salt.mutex.Unlock()
 
 	if salt.filled == len(salt.window) {
 		if salt.window[salt.next] {
@@ -112,8 +120,6 @@ func (salt *SigningAttemptLivenessTracker) RecordAttemptOutcome(success bool) {
 	successRate := float64(salt.successCount) / float64(samples)
 	alert := samples >= salt.minimumSamples &&
 		successRate < salt.alertThreshold
-
-	salt.mutex.Unlock()
 
 	salt.recorder.SetGauge(MetricSigningAttemptRollingSuccessRate, successRate)
 	salt.recorder.SetGauge(
