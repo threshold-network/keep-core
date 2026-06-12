@@ -32,6 +32,18 @@ Before Stage 1 canary:
    - p95/p99 signing latency
 5. Baseline worksheet populated:
    - `docs/frost-migration/roast-phase-5-baseline-calibration.md`
+6. Provenance attestation rotation cadence scheduled: a production
+   signer installs its configuration once at process start (the
+   init-time config FFI, `frost_tbtc_init_signer_config`) and the
+   attestation material in it is immutable for the process lifetime,
+   while attestation TTL is capped at 7 days
+   (`TBTC_SIGNER_PROVENANCE_MAX_ATTESTATION_TTL_SECONDS`). Operators
+   MUST restart (re-init) each signer with fresh attestation material
+   within every attestation window, and rollout stage scheduling must
+   absorb that restart cadence. Live re-attestation without a restart
+   is deliberately unsupported: it would require a dedicated,
+   narrowly-scoped FFI, never general config mutation, which would
+   reopen the split-brain risk the immutable install design closed.
 
 ## 3. Rollout Stages
 
