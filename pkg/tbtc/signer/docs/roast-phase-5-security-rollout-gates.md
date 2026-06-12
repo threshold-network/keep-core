@@ -115,6 +115,26 @@ architecture questions:
    responsive subset is known - the interactive two-round exchange
    that IS Phase 7's core. Pulling it earlier would implement the
    interactive path without its Go-side consumer.
+6. **Transitional deterministic-nonce path: committed for DELETION.**
+   The path is already production-gated (production signing is
+   interactive-FROST-only with OS randomness), so it serves
+   dev/staging only - while its nonce safety rests on the
+   RoundNonceBinding transcript being *complete*, and the F1 finding
+   (round-nonce-v3) demonstrated that one missing field is a
+   key-extraction-class bug that an experienced review missed.
+   Carrying a binding-completeness invariant indefinitely is a
+   permanent footgun with no production benefit.
+   **Deletion trigger: the interactive production path validated end
+   to end** - at that point the transitional
+   StartSignRound/FinalizeSignRound deterministic flow and the
+   round-nonce binding machinery are removed. Until then the path is
+   FROZEN: no new transcript inputs may be added to the transitional
+   signing flow, because each addition must extend RoundNonceBinding
+   and any omission recreates the F1 bug class.
+   Interaction with item 6: the deletion commitment means the Phase 7
+   interactive session flow is designed t-of-included-native from the
+   start; no first-t-responsive retrofit of the transitional finalize
+   contract is needed or wanted.
 
 ## Provisional Rollback Thresholds (Draft)
 
