@@ -13,7 +13,9 @@ package signing
 // suffixes, unknown fields are rejected, and once installed the process
 // environment is ignored wholesale for covered knobs. Secrets never ride
 // this channel: TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX stays on the dedicated
-// env/command key-provider path.
+// env/command key-provider path. The file may carry the state_key_command
+// execution spec, so restrict its permissions to the operator account
+// (e.g. 0600), as with the signer state path.
 const TBTCSignerInitConfigPathEnv = "TBTC_SIGNER_INIT_CONFIG_PATH"
 
 // NativeTBTCSignerInitConfigResult captures the response of an init-time
