@@ -48,6 +48,12 @@ type PerformanceMetrics struct {
 	// Gauges track current values (like queue sizes)
 	gaugesMutex sync.RWMutex
 	gauges      map[string]*gauge
+
+	// signingLiveness is the process-wide signing-attempt liveness tracker
+	// (RFC-21 Annex B implied-f alerting), shared by all wallet signing
+	// executors so their attempts feed one rolling window.
+	signingLivenessOnce sync.Once
+	signingLiveness     *SigningAttemptLivenessTracker
 }
 
 // Ensure PerformanceMetrics implements PerformanceMetricsRecorder
@@ -312,6 +318,9 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricIncomingMessageQueueSize,
 		MetricMessageHandlerQueueSize,
 		MetricSigningAttemptsPerOperation,
+		MetricSigningAttemptRollingSuccessRate,
+		MetricSigningAttemptRollingSampleCount,
+		MetricSigningAttemptImpliedFAlert,
 		MetricCPUUtilization,
 		MetricMemoryUsageMB,
 		MetricGoroutineCount,
@@ -565,6 +574,18 @@ func (pm *PerformanceMetrics) updateMachineStats() {
 			pm.SetGauge(MetricSwapUtilizationPercent, 0)
 		}
 	}
+}
+
+// SigningAttemptLivenessTracker returns the process-wide signing-attempt
+// liveness tracker bound to this metrics instance, creating it on first
+// use. Signing executors of every wallet share the returned tracker so all
+// attempt outcomes feed one rolling window.
+func (pm *PerformanceMetrics) SigningAttemptLivenessTracker() *SigningAttemptLivenessTracker {
+	pm.signingLivenessOnce.Do(func() {
+		pm.signingLiveness = NewSigningAttemptLivenessTracker(pm)
+	})
+
+	return pm.signingLiveness
 }
 
 // NoOpPerformanceMetrics is a no-op implementation of PerformanceMetricsRecorder

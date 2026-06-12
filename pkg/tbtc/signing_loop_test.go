@@ -984,3 +984,106 @@ func (msdc *mockSigningDoneCheck) signalDone(
 func (msdc *mockSigningDoneCheck) waitUntilAllDone(ctx context.Context) (*signing.Result, uint64, error) {
 	return msdc.waitUntilAllDoneOutcomeFn(msdc.currentAttemptNumber)
 }
+
+func TestSigningRetryLoop_AttemptOutcomeReporting(t *testing.T) {
+	message := big.NewInt(100)
+
+	groupParameters := &GroupParameters{
+		GroupSize:       10,
+		HonestThreshold: 6,
+	}
+
+	signingGroupOperators := chain.Addresses{
+		"address-1", "address-2", "address-8", "address-4", "address-2",
+		"address-6", "address-7", "address-8", "address-9", "address-8",
+	}
+
+	signingGroupMembersIndexes := make([]group.MemberIndex, 0)
+	for i := range signingGroupOperators {
+		signingGroupMembersIndexes = append(
+			signingGroupMembersIndexes,
+			group.MemberIndex(i+1),
+		)
+	}
+
+	testResult := &signing.Result{
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(300), big.NewInt(400)),
+	}
+
+	announcer := &mockSigningAnnouncer{
+		outgoingAnnouncements: make(map[string]group.MemberIndex),
+		incomingAnnouncementsFn: func(
+			sessionID string,
+		) ([]group.MemberIndex, error) {
+			return signingGroupMembersIndexes, nil
+		},
+	}
+
+	doneCheck := &mockSigningDoneCheck{
+		waitUntilAllDoneOutcomeFn: func(
+			attemptNumber uint64,
+		) (*signing.Result, uint64, error) {
+			if attemptNumber == 1 {
+				return nil, 0, fmt.Errorf("done check timeout")
+			}
+			return testResult, 250, nil
+		},
+	}
+
+	retryLoop := newSigningRetryLoop(
+		&testutils.MockLogger{},
+		message,
+		200,
+		group.MemberIndex(1),
+		signingGroupOperators,
+		groupParameters,
+		announcer,
+		doneCheck,
+	)
+
+	reportedOutcomes := make([]bool, 0)
+	retryLoop.setAttemptOutcomeReporter(func(success bool) {
+		reportedOutcomes = append(reportedOutcomes, success)
+	})
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelCtx()
+
+	result, err := retryLoop.start(
+		ctx,
+		func(context.Context, uint64) error {
+			return nil
+		},
+		func() (uint64, error) {
+			return 200, nil
+		},
+		func(params *signingAttemptParams) (*signing.Result, uint64, error) {
+			// The first attempt's protocol run fails; subsequent ones
+			// succeed. Regardless of whether this member is included in
+			// the second attempt's subset, the attempt outcome must be
+			// reported exactly once per attempt: failure for the first,
+			// success for the second.
+			if params.number == 1 {
+				return nil, 0, fmt.Errorf("protocol failure")
+			}
+			return testResult, 250, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected retry loop error: [%v]", err)
+	}
+	if result == nil {
+		t.Fatal("expected a non-nil retry loop result")
+	}
+
+	expectedOutcomes := []bool{false, true}
+	if !reflect.DeepEqual(expectedOutcomes, reportedOutcomes) {
+		t.Errorf(
+			"unexpected reported attempt outcomes\n"+
+				"expected: [%v]\n"+
+				"actual:   [%v]",
+			expectedOutcomes,
+			reportedOutcomes,
+		)
+	}
+}
