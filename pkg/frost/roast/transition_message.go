@@ -222,7 +222,8 @@ func (s *LocalEvidenceSnapshot) Type() string {
 // envelope: the exact signed body bytes plus the operator signature.
 // For a snapshot parsed off the wire the received envelope is
 // returned verbatim, so evidence bytes survive any re-broadcast
-// unchanged. The snapshot must be signed first.
+// unchanged. The snapshot must be signed first. The returned slice is
+// the internal cache - callers must not mutate it.
 func (s *LocalEvidenceSnapshot) Marshal() ([]byte, error) {
 	return s.wireEnvelopeBytes()
 }
@@ -361,7 +362,8 @@ func (m *TransitionMessage) Type() string {
 // Marshal serialises the message as a SignedTransitionMessage
 // envelope: the exact signed body bytes plus the coordinator
 // signature. For a message parsed off the wire the received envelope
-// is returned verbatim. The message must be signed first.
+// is returned verbatim. The message must be signed first. The
+// returned slice is the internal cache - callers must not mutate it.
 func (m *TransitionMessage) Marshal() ([]byte, error) {
 	if m.wireEnvelope != nil {
 		return m.wireEnvelope, nil

@@ -77,6 +77,10 @@ else
 	$(foreach module,$(modules),$(call get_npm_package,$(module),$(environment)))
 endif
 
+# NOTE: a new *.proto package must also be added to the gen-directory COPY
+# allowlist in the Dockerfile: the image strips committed **/gen/**/*.go
+# (.dockerignore) and regenerates protobufs in-image, and make generate only
+# sees gen directories copied before it runs.
 proto_files := $(shell find ./pkg -name '*.proto')
 proto_targets := $(proto_files:.proto=.pb.go)
 

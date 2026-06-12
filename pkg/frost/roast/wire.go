@@ -79,7 +79,8 @@ func snapshotFieldsFromBody(s *LocalEvidenceSnapshot, body *pb.LocalEvidenceSnap
 // the body is marshaled once and cached - sign exactly what will be
 // transmitted. For a snapshot parsed off the wire this returns the
 // received body bytes verbatim - verify exactly what was received. The
-// snapshot's evidence fields must not be mutated afterwards.
+// snapshot's evidence fields must not be mutated afterwards, and the
+// returned slice is the internal cache - callers must not mutate it.
 func (s *LocalEvidenceSnapshot) SignableBytes() ([]byte, error) {
 	if s == nil {
 		return nil, errors.New("roast: cannot encode a nil snapshot")
@@ -129,7 +130,8 @@ func (s *LocalEvidenceSnapshot) wireEnvelopeBytes() ([]byte, error) {
 // snapshot's signed envelope verbatim. The coordinator's signature
 // attests that these specific signed snapshots were assembled in this
 // specific order. For a message parsed off the wire this returns the
-// received body bytes verbatim.
+// received body bytes verbatim. The returned slice is the internal
+// cache - callers must not mutate it.
 func (m *TransitionMessage) SignableBytes() ([]byte, error) {
 	if m == nil {
 		return nil, errors.New("roast: cannot encode a nil transition message")
