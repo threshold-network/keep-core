@@ -118,6 +118,47 @@ RFC-21 design and is enforced in
   paths are retained through Phase 6 and 7 deliberately to make
   this rollback bit-for-bit safe.
 
+== Interim liveness alerting (RFC-21 Annex B)
+
+Until Phase-7 t-of-included finalize removes the per-attempt veto,
+the serial retry loop's liveness envelope assumes `f <= 2` byzantine
+members (see RFC-21 Annex B for the sampling arithmetic). The node
+exports three gauges via the `/metrics` endpoint implementing the
+annex's required alerting:
+
+[cols="2,3"]
+|===
+| Gauge | Meaning
+
+| `signing_attempt_rolling_success_rate`
+| Per-attempt success rate over the last 50 terminal attempt
+  outcomes observed by this node (all wallets aggregated; one
+  observation per network-wide attempt).
+
+| `signing_attempt_rolling_sample_count`
+| Number of outcomes currently in the rolling window (caps at 50).
+
+| `signing_attempt_implied_f_alert`
+| `1` when the window is full and the success rate is below `0.14` -
+  observed failure rates imply `f >= 3` behaviour under the Annex B
+  model. Alert on this value being sustained, not on a single
+  scrape: the window slides per attempt, so consecutive scrapes are
+  correlated.
+|===
+
+For independent full windows the default threshold false-alarms on
+roughly 4% of windows at a true `f = 2` and detects roughly 64% of
+windows at `f = 3` (97% at `f >= 4`; the staggered-silence profile
+that fails attempts deterministically is detected with certainty).
+Benign attempt failures (network flakes, restarts) depress the rate
+below the model's prediction, so once the Phase 5 baseline
+calibration worksheet records the benign failure rate, revisit the
+threshold (`SigningLivenessAlertSuccessRateThreshold` in
+`pkg/clientinfo/signing_liveness.go`). The alert is advisory: its
+operational response is the Annex B escalation path (investigate
+member inactivity, operator-inactivity claims, wallet retirement),
+not an automatic rollback.
+
 == FROST DKG digest format coupling
 
 The FROST DKG result digest is a cross-repo wire-format contract

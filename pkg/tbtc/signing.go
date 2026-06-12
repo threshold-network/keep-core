@@ -93,6 +93,17 @@ type signingExecutor struct {
 		SetGauge(name string, value float64)
 		RecordDuration(name string, duration time.Duration)
 	}
+
+	// livenessTracker is optional and feeds the RFC-21 Annex B implied-f
+	// signing-attempt liveness gauges. It is shared across all wallets'
+	// executors of this node (acquired from the metrics recorder).
+	livenessTracker *clientinfo.SigningAttemptLivenessTracker
+}
+
+// signingLivenessTrackerProvider is implemented by metrics recorders that
+// own the process-wide signing-attempt liveness tracker.
+type signingLivenessTrackerProvider interface {
+	SigningAttemptLivenessTracker() *clientinfo.SigningAttemptLivenessTracker
 }
 
 var _ schnorrWalletSigningExecutor = (*signingExecutor)(nil)
@@ -336,6 +347,16 @@ func (se *signingExecutor) signWithTaprootMerkleRoot(
 				doneCheck,
 			)
 
+			// Every local signer of this wallet observes the same
+			// network-wide attempts, so exactly one of them reports
+			// outcomes to the liveness tracker to avoid multiplying
+			// observations of a single attempt.
+			if signer == se.signers[0] && se.livenessTracker != nil {
+				retryLoop.setAttemptOutcomeReporter(
+					se.livenessTracker.RecordAttemptOutcome,
+				)
+			}
+
 			// Set up the loop timeout signal. This context is associated with
 			// all attempts and gets canceled in three situations:
 			// - one of the attempts failed with an error,
@@ -569,4 +590,11 @@ func (se *signingExecutor) setMetricsRecorder(recorder interface {
 	RecordDuration(name string, duration time.Duration)
 }) {
 	se.metricsRecorder = recorder
+
+	// Recorders owning the process-wide signing-attempt liveness tracker
+	// (RFC-21 Annex B implied-f alerting) share it with this executor;
+	// no-op recorders simply leave the tracker disabled.
+	if provider, ok := recorder.(signingLivenessTrackerProvider); ok {
+		se.livenessTracker = provider.SigningAttemptLivenessTracker()
+	}
 }

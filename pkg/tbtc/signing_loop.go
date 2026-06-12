@@ -112,6 +112,17 @@ type signingRetryLoop struct {
 	// ROAST-driven implementation behind the frost_roast_retry
 	// build tag once AggregateBundle production is wired upstream.
 	participantSelector signingParticipantSelector
+
+	// attemptOutcomeReporter, when non-nil, receives the terminal outcome
+	// of every network-wide signing attempt this loop observes (RFC-21
+	// Annex B implied-f liveness alerting). An outcome is reported when an
+	// attempt reaches a terminal disposition: minority readiness after a
+	// completed announcement, a failed protocol run, a failed done-check
+	// exchange, or success. Mechanical iterations that never sample the
+	// group - block-timing skips, local announcement errors, context
+	// cancellation - are deliberately not reported, so the rate feeding
+	// the Annex B sampling model is not diluted by local noise.
+	attemptOutcomeReporter func(success bool)
 }
 
 func newSigningRetryLoop(
@@ -136,6 +147,20 @@ func newSigningRetryLoop(
 		attemptSeed:             signingAttemptSeed(message),
 		doneCheck:               doneCheck,
 		participantSelector:     defaultSigningParticipantSelector(),
+	}
+}
+
+// setAttemptOutcomeReporter installs the attempt-outcome reporter. See the
+// attemptOutcomeReporter field for the reporting contract.
+func (srl *signingRetryLoop) setAttemptOutcomeReporter(
+	reporter func(success bool),
+) {
+	srl.attemptOutcomeReporter = reporter
+}
+
+func (srl *signingRetryLoop) reportAttemptOutcome(success bool) {
+	if srl.attemptOutcomeReporter != nil {
+		srl.attemptOutcomeReporter(success)
 	}
 }
 
@@ -315,6 +340,7 @@ func (srl *signingRetryLoop) start(
 				len(readyMembersIndexes),
 				unreadyMembersIndexes,
 			)
+			srl.reportAttemptOutcome(false)
 			continue
 		}
 
@@ -378,6 +404,7 @@ func (srl *signingRetryLoop) start(
 					srl.attemptCounter,
 					err,
 				)
+				srl.reportAttemptOutcome(false)
 				continue
 			}
 
@@ -403,6 +430,11 @@ func (srl *signingRetryLoop) start(
 					srl.attemptCounter,
 					err,
 				)
+				// A failed done signal is a local fault, but this loop
+				// abandons the attempt here, so from this node's sampler
+				// the attempt did not complete; the baseline calibration
+				// absorbs this as benign noise.
+				srl.reportAttemptOutcome(false)
 				continue
 			}
 		} else {
@@ -423,6 +455,7 @@ func (srl *signingRetryLoop) start(
 				srl.attemptCounter,
 				err,
 			)
+			srl.reportAttemptOutcome(false)
 			continue
 		}
 
@@ -430,6 +463,8 @@ func (srl *signingRetryLoop) start(
 			activeMembers:   readyMembersIndexes,
 			inactiveMembers: unreadyMembersIndexes,
 		}
+
+		srl.reportAttemptOutcome(true)
 
 		return &signingRetryLoopResult{
 			result:              result,
