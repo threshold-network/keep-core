@@ -269,6 +269,16 @@ pub(crate) fn config_values_from_request(
     );
     insert_u64(
         &mut values,
+        TBTC_SIGNER_MAX_LIVE_INTERACTIVE_SESSIONS_ENV,
+        request.max_live_interactive_sessions,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_INTERACTIVE_SESSION_TTL_SECONDS_ENV,
+        request.interactive_session_ttl_seconds,
+    );
+    insert_u64(
+        &mut values,
         TBTC_SIGNER_STATE_KEY_COMMAND_TIMEOUT_SECS_ENV,
         request.state_key_command_timeout_secs,
     );

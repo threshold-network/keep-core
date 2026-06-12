@@ -11,6 +11,7 @@
 //! - [`config`] — TBTC_SIGNER_* environment surface: constant names, defaults, and parsers.
 //! - [`dkg`] — run_dkg session flow and production gates for the transitional dealer path.
 //! - [`frost_ops`] — Stateless FROST primitives: dkg_part1..3, nonces, signing package, share, aggregate.
+//! - [`interactive`] — Phase 7.1 hardened interactive signing session: engine-held nonce custody, Round1/Round2, consumption markers.
 //! - [`lifecycle`] — Operational lifecycle: canary rollout, refresh cadence/shares, emergency rekey, quarantine status.
 //! - [`nonce`] — Deterministic round-nonce binding (round-nonce-v3 transcript seed).
 //! - [`persistence`] — Encrypted state-file persistence: envelope codec, key providers, corruption recovery, persisted<->live conversions.
@@ -37,7 +38,7 @@ use chacha20poly1305::aead::{Aead, KeyInit, OsRng, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 #[cfg(unix)]
 use libc::{flock, EAGAIN, EWOULDBLOCK, LOCK_EX, LOCK_NB};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{Read, Write};
 #[cfg(unix)]
@@ -68,15 +69,18 @@ use crate::api::{
     DkgPart2Request, DkgPart2Result, DkgPart3Request, DkgPart3Result, DkgResult, DkgRound1Package,
     DkgRound2Package, FinalizeSignRoundRequest, GenerateNoncesAndCommitmentsRequest,
     GenerateNoncesAndCommitmentsResult, InitSignerConfigRequest, InitSignerConfigResult,
-    NativeFrostCommitment, NativeFrostKeyPackage, NativeFrostPublicKeyPackage,
-    NativeFrostSignatureShare, NewSigningPackageRequest, NewSigningPackageResult,
-    PromoteCanaryRequest, PromoteCanaryResult, QuarantineStatusRequest, QuarantineStatusResult,
-    RefreshCadenceStatusRequest, RefreshCadenceStatusResult, RefreshSharesRequest,
-    RefreshSharesResult, RoastLivenessPolicyResult, RollbackCanaryRequest, RollbackCanaryResult,
-    RoundContribution, RoundState, RunDkgRequest, ShareMaterial, SignShareRequest, SignShareResult,
-    SignatureResult, SignerHardeningMetricsResult, StartSignRoundRequest, TransactionResult,
-    TranscriptAuditRecord, TranscriptAuditRequest, TranscriptAuditResult,
-    TriggerEmergencyRekeyRequest, TriggerEmergencyRekeyResult, VerifyBlameProofRequest,
+    InteractiveRound1Request, InteractiveRound1Result, InteractiveRound2Request,
+    InteractiveRound2Result, InteractiveSessionAbortRequest, InteractiveSessionAbortResult,
+    InteractiveSessionOpenRequest, InteractiveSessionOpenResult, NativeFrostCommitment,
+    NativeFrostKeyPackage, NativeFrostPublicKeyPackage, NativeFrostSignatureShare,
+    NewSigningPackageRequest, NewSigningPackageResult, PromoteCanaryRequest, PromoteCanaryResult,
+    QuarantineStatusRequest, QuarantineStatusResult, RefreshCadenceStatusRequest,
+    RefreshCadenceStatusResult, RefreshSharesRequest, RefreshSharesResult,
+    RoastLivenessPolicyResult, RollbackCanaryRequest, RollbackCanaryResult, RoundContribution,
+    RoundState, RunDkgRequest, ShareMaterial, SignShareRequest, SignShareResult, SignatureResult,
+    SignerHardeningMetricsResult, StartSignRoundRequest, TransactionResult, TranscriptAuditRecord,
+    TranscriptAuditRequest, TranscriptAuditResult, TriggerEmergencyRekeyRequest,
+    TriggerEmergencyRekeyResult, VerifyBlameProofRequest,
 };
 use crate::errors::EngineError;
 use crate::go_math_rand::select_coordinator_identifier;
@@ -87,6 +91,7 @@ mod config;
 mod dkg;
 mod frost_ops;
 mod init_config;
+mod interactive;
 mod lifecycle;
 mod nonce;
 mod persistence;
@@ -108,6 +113,7 @@ pub(crate) use config::*;
 pub(crate) use dkg::*;
 pub(crate) use frost_ops::*;
 pub(crate) use init_config::*;
+pub(crate) use interactive::*;
 pub(crate) use lifecycle::*;
 pub(crate) use nonce::*;
 pub(crate) use persistence::*;

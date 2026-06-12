@@ -39,6 +39,11 @@ pub(crate) struct PersistedSessionState {
     pub(crate) refresh_history: Vec<RefreshHistoryRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) emergency_rekey_event: Option<EmergencyRekeyEvent>,
+    // Phase 7.1 interactive consumption markers - the ONLY durable
+    // artifact of interactive sessions (markers-only durability: live
+    // interactive state, including nonces, never persists).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) consumed_interactive_attempt_markers: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1261,6 +1266,26 @@ impl TryFrom<PersistedSessionState> for SessionState {
             consumed_finalize_request_fingerprints.len(),
             "consumed_finalize_request_fingerprints",
         )?;
+
+        let mut consumed_interactive_attempt_markers = HashSet::new();
+        for attempt_marker in persisted.consumed_interactive_attempt_markers {
+            if attempt_marker.is_empty() {
+                return Err(EngineError::Internal(
+                    "persisted consumed interactive attempt marker must be non-empty".to_string(),
+                ));
+            }
+
+            if !consumed_interactive_attempt_markers.insert(attempt_marker.clone()) {
+                return Err(EngineError::Internal(format!(
+                    "duplicate persisted consumed interactive attempt marker [{}]",
+                    attempt_marker
+                )));
+            }
+        }
+        ensure_consumed_registry_persisted_bound(
+            consumed_interactive_attempt_markers.len(),
+            "consumed_interactive_attempt_markers",
+        )?;
         if persisted.attempt_transition_records.len()
             > TBTC_SIGNER_MAX_ATTEMPT_TRANSITION_RECORDS_PER_SESSION
         {
@@ -1315,6 +1340,11 @@ impl TryFrom<PersistedSessionState> for SessionState {
             refresh_result: persisted.refresh_result,
             refresh_history: persisted.refresh_history,
             emergency_rekey_event: persisted.emergency_rekey_event,
+            // Live interactive state never restores: nonces are gone by
+            // construction after a restart, so the attempt fails safe and
+            // only the consumption markers survive.
+            interactive_signing: None,
+            consumed_interactive_attempt_markers,
         })
     }
 }
@@ -1382,6 +1412,10 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             session_state.consumed_finalize_request_fingerprints.len(),
             "consumed_finalize_request_fingerprints",
         )?;
+        ensure_consumed_registry_persisted_bound(
+            session_state.consumed_interactive_attempt_markers.len(),
+            "consumed_interactive_attempt_markers",
+        )?;
         if session_state.attempt_transition_records.len()
             > TBTC_SIGNER_MAX_ATTEMPT_TRANSITION_RECORDS_PER_SESSION
         {
@@ -1415,6 +1449,12 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             .cloned()
             .collect::<Vec<_>>();
         consumed_finalize_request_fingerprints.sort_unstable();
+        let mut consumed_interactive_attempt_markers = session_state
+            .consumed_interactive_attempt_markers
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        consumed_interactive_attempt_markers.sort_unstable();
 
         Ok(PersistedSessionState {
             dkg_request_fingerprint: session_state.dkg_request_fingerprint.clone(),
@@ -1438,6 +1478,7 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             refresh_result: session_state.refresh_result.clone(),
             refresh_history: session_state.refresh_history.clone(),
             emergency_rekey_event: session_state.emergency_rekey_event.clone(),
+            consumed_interactive_attempt_markers,
         })
     }
 }

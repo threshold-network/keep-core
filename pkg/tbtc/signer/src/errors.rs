@@ -69,6 +69,19 @@ pub enum EngineError {
         session_id: String,
         round_id: String,
     },
+    /// Returned when an interactive attempt whose nonce handle was already
+    /// consumed (a signature share was released, or release was durably
+    /// committed) is touched again - a second Round2 with the same handle,
+    /// or Round1/SessionOpen for a consumed attempt. The caller must mint a
+    /// new attempt; the engine will never release a second share under one
+    /// nonce pair (frozen Phase 7 spec, section 4).
+    #[error(
+        "interactive attempt [{attempt_id}] already consumed its nonces in session [{session_id}]"
+    )]
+    ConsumedNonceReplay {
+        session_id: String,
+        attempt_id: String,
+    },
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -90,6 +103,7 @@ impl EngineError {
             Self::SignRoundNotStarted { .. } => "sign_round_not_started",
             Self::ConsumedAttemptReplay { .. } => "consumed_attempt_replay",
             Self::ConsumedRoundReplay { .. } => "consumed_round_replay",
+            Self::ConsumedNonceReplay { .. } => "consumed_nonce_replay",
             Self::Internal(_) => "internal_error",
         }
     }
@@ -113,6 +127,7 @@ impl EngineError {
             // attempt_id rather than retransmit.
             Self::ConsumedAttemptReplay { .. } => "recoverable",
             Self::ConsumedRoundReplay { .. } => "recoverable",
+            Self::ConsumedNonceReplay { .. } => "recoverable",
             Self::SessionFinalized { .. } => "terminal",
             Self::SessionNotFound { .. } => "terminal",
             Self::Internal(_) => "terminal",

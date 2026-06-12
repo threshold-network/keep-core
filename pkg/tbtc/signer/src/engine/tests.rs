@@ -701,6 +701,7 @@ fn persisted_session_state_fixture() -> PersistedSessionState {
         refresh_result: None,
         refresh_history: vec![],
         emergency_rekey_event: None,
+        consumed_interactive_attempt_markers: vec![],
     }
 }
 
@@ -11141,4 +11142,1026 @@ fn init_signer_config_installs_production_config_with_valid_provenance() {
     assert!(result.installed);
     assert!(signer_profile_is_production());
     assert!(provenance_gate_enforced());
+}
+
+// --- Phase 7.1: hardened interactive signing session ---
+//
+// These tests pin the frozen-spec contracts (sections 4-5 of
+// docs/phase-7-interactive-session-spec-freeze.md): engine-held nonce
+// custody, Round2 verification (a)-(f) including the own-commitment
+// framing defense, verify-before-consume, consumption-before-release
+// marker durability, and abort/expiry/capacity semantics.
+
+fn interactive_test_key_packages() -> BTreeMap<u16, crate::api::NativeFrostKeyPackage> {
+    let fixture = deterministic_interactive_dkg_fixture(0);
+    fixture
+        .part3_requests
+        .into_iter()
+        .map(|(id, request)| {
+            (
+                id,
+                dkg_part3(request)
+                    .expect("DKG part3 for fixture")
+                    .key_package,
+            )
+        })
+        .collect()
+}
+
+fn interactive_test_attempt_context(
+    session_id: &str,
+    key_group: &str,
+    message_bytes: &[u8],
+    included_participants: &[u16],
+    wire_attempt_number: u32,
+) -> AttemptContext {
+    let shuffle_seed = roast_attempt_shuffle_seed(
+        key_group,
+        session_id,
+        &rfc21_message_digest(message_bytes).expect("rfc21 message digest"),
+    )
+    .expect("shuffle seed");
+    let coordinator =
+        select_coordinator_identifier(included_participants, shuffle_seed, wire_attempt_number - 1)
+            .expect("coordinator selects");
+    let fingerprint = roast_included_participants_fingerprint_hex(included_participants)
+        .expect("included participants fingerprint");
+    let attempt_id = roast_attempt_id_hex(
+        session_id,
+        &hash_hex(message_bytes),
+        wire_attempt_number,
+        coordinator,
+        &fingerprint,
+    )
+    .expect("attempt id");
+
+    AttemptContext {
+        attempt_number: wire_attempt_number,
+        coordinator_identifier: coordinator,
+        included_participants: included_participants.to_vec(),
+        included_participants_fingerprint: fingerprint,
+        attempt_id,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn open_interactive_for_test(
+    key_packages: &BTreeMap<u16, crate::api::NativeFrostKeyPackage>,
+    session_id: &str,
+    key_group: &str,
+    message_bytes: &[u8],
+    included_participants: &[u16],
+    wire_attempt_number: u32,
+    member_identifier: u16,
+    threshold: u16,
+) -> Result<InteractiveSessionOpenResult, EngineError> {
+    let attempt_context = interactive_test_attempt_context(
+        session_id,
+        key_group,
+        message_bytes,
+        included_participants,
+        wire_attempt_number,
+    );
+    interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: session_id.to_string(),
+        member_identifier,
+        message_hex: hex::encode(message_bytes),
+        key_group: key_group.to_string(),
+        threshold,
+        taproot_merkle_root_hex: None,
+        attempt_context,
+        key_package_identifier: key_packages[&member_identifier].identifier.clone(),
+        key_package_hex: key_packages[&member_identifier].data_hex.clone(),
+    })
+}
+
+fn interactive_package_for_test(
+    message_bytes: &[u8],
+    commitments: Vec<NativeFrostCommitment>,
+) -> String {
+    new_signing_package(NewSigningPackageRequest {
+        message_hex: hex::encode(message_bytes),
+        commitments,
+    })
+    .expect("signing package builds")
+    .signing_package_hex
+}
+
+#[test]
+fn interactive_session_full_round_trip_aggregates_bip340() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let session_id = "interactive-e2e";
+    let key_group = "interactive-e2e-key-group";
+    let message = [0x42u8; 32];
+    let included = [1u16, 2];
+
+    // Member 1 signs through the hardened session API; member 2 signs
+    // through the stateless primitive. The shares must interoperate:
+    // the session layer changes custody, not cryptography.
+    let opened = open_interactive_for_test(
+        &key_packages,
+        session_id,
+        key_group,
+        &message,
+        &included,
+        1,
+        1,
+        2,
+    )
+    .expect("interactive session opens");
+    assert!(!opened.idempotent);
+
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("interactive round 1");
+
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 stateless nonces");
+
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex.clone(),
+            },
+            member2.commitment.clone(),
+        ],
+    );
+
+    let round2 = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect("interactive round 2 releases the share");
+    assert_eq!(round2.attempt_id, opened.attempt_id);
+
+    let member2_share = sign_share(SignShareRequest {
+        signing_package_hex: signing_package_hex.clone(),
+        nonces_hex: member2.nonces_hex,
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 stateless share");
+
+    let public_key_package = dkg_part3(
+        deterministic_interactive_dkg_fixture(0)
+            .part3_requests
+            .remove(&1)
+            .expect("fixture participant 1"),
+    )
+    .expect("public key package")
+    .public_key_package;
+
+    let aggregate = aggregate(AggregateRequest {
+        signing_package_hex,
+        signature_shares: vec![
+            crate::api::NativeFrostSignatureShare {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round2.signature_share_hex,
+            },
+            member2_share.signature_share,
+        ],
+        public_key_package: public_key_package.clone(),
+    })
+    .expect("aggregate");
+
+    let signature_bytes = hex::decode(aggregate.signature_hex).expect("signature hex");
+    let signature = SchnorrSignature::from_slice(&signature_bytes).expect("BIP340 signature");
+    let public_key_bytes = hex::decode(public_key_package.verifying_key).expect("key hex");
+    let public_key = XOnlyPublicKey::from_slice(&public_key_bytes).expect("x-only key");
+    Secp256k1::verification_only()
+        .verify_schnorr(&signature, &SecpMessage::from_digest(message), &public_key)
+        .expect("interactive + stateless shares aggregate to a valid BIP-340 signature");
+}
+
+#[test]
+fn interactive_round1_is_idempotent_until_consumed() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let session_id = "interactive-round1-idempotent";
+    let key_group = "interactive-test-key-group";
+    let message = [0x21u8; 32];
+    let included = [1u16, 2];
+
+    let opened = open_interactive_for_test(
+        &key_packages,
+        session_id,
+        key_group,
+        &message,
+        &included,
+        1,
+        1,
+        2,
+    )
+    .expect("opens");
+
+    let first = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    let second = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("repeat round 1");
+    assert_eq!(
+        first.commitments_hex, second.commitments_hex,
+        "round 1 must be idempotent until the nonces are consumed"
+    );
+
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: first.commitments_hex.clone(),
+            },
+            member2.commitment,
+        ],
+    );
+    interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex,
+    })
+    .expect("round 2 consumes");
+
+    let replay = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect_err("round 1 after consumption must fail closed");
+    assert!(
+        matches!(replay, EngineError::ConsumedNonceReplay { .. }),
+        "unexpected error: {replay:?}"
+    );
+    assert_eq!(replay.code(), "consumed_nonce_replay");
+}
+
+#[test]
+fn interactive_round2_rejects_substituted_own_commitment_then_accepts_corrected() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let session_id = "interactive-framing-defense";
+    let key_group = "interactive-test-key-group";
+    let message = [0x33u8; 32];
+    let included = [1u16, 2];
+
+    let opened = open_interactive_for_test(
+        &key_packages,
+        session_id,
+        key_group,
+        &message,
+        &included,
+        1,
+        1,
+        2,
+    )
+    .expect("opens");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+
+    // A malicious coordinator substitutes member 1's commitment with a
+    // different (validly formed) commitment for the same key package.
+    // Without the own-commitment check the member would sign with its
+    // true nonces over a package misrepresenting its commitment - the
+    // share then fails verification at aggregation and becomes false
+    // blame evidence against an honest member.
+    let substituted = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&1].identifier.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone(),
+    })
+    .expect("substituted commitment");
+    assert_ne!(
+        substituted.commitment.data_hex, round1.commitments_hex,
+        "fixture sanity: substituted commitment differs"
+    );
+
+    let framed_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: substituted.commitment.data_hex,
+            },
+            member2.commitment.clone(),
+        ],
+    );
+    let framed = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: framed_package_hex,
+    })
+    .expect_err("substituted own commitment must be rejected");
+    assert!(
+        matches!(framed, EngineError::Validation(ref message)
+            if message.contains("does not match its round-1 output")),
+        "unexpected error: {framed:?}"
+    );
+
+    // Verify-before-consume: the rejected package must NOT have burned
+    // the nonces; the honest package still succeeds.
+    let honest_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex.clone(),
+            },
+            member2.commitment,
+        ],
+    );
+    interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id,
+        member_identifier: 1,
+        signing_package_hex: honest_package_hex,
+    })
+    .expect("honest package succeeds after the framed one was rejected");
+}
+
+#[test]
+fn interactive_round2_package_shape_rejections() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let key_group = "interactive-test-key-group";
+    let message = [0x44u8; 32];
+
+    // Session A: included {1,2} - outside-set and message-mismatch.
+    let session_a = "interactive-shape-a";
+    let opened_a = open_interactive_for_test(
+        &key_packages,
+        session_a,
+        key_group,
+        &message,
+        &[1, 2],
+        1,
+        1,
+        2,
+    )
+    .expect("session A opens");
+    let round1_a = interactive_round1(InteractiveRound1Request {
+        session_id: session_a.to_string(),
+        attempt_id: opened_a.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("session A round 1");
+
+    let member3 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&3].identifier.clone(),
+        key_package_hex: key_packages[&3].data_hex.clone(),
+    })
+    .expect("member 3 nonces");
+
+    let outside_set_package = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1_a.commitments_hex.clone(),
+            },
+            member3.commitment.clone(),
+        ],
+    );
+    let outside = interactive_round2(InteractiveRound2Request {
+        session_id: session_a.to_string(),
+        attempt_id: opened_a.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: outside_set_package,
+    })
+    .expect_err("participant outside the included set must be rejected");
+    assert!(
+        matches!(outside, EngineError::Validation(ref m) if m.contains("included set")),
+        "unexpected error: {outside:?}"
+    );
+
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let wrong_message = [0x55u8; 32];
+    let wrong_message_package = interactive_package_for_test(
+        &wrong_message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1_a.commitments_hex.clone(),
+            },
+            member2.commitment.clone(),
+        ],
+    );
+    let mismatch = interactive_round2(InteractiveRound2Request {
+        session_id: session_a.to_string(),
+        attempt_id: opened_a.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: wrong_message_package,
+    })
+    .expect_err("package over a different message must be rejected");
+    assert!(
+        matches!(mismatch, EngineError::Validation(ref m) if m.contains("message")),
+        "unexpected error: {mismatch:?}"
+    );
+
+    // Session B: included {1,2,3}, threshold 2 - size and self-missing.
+    let session_b = "interactive-shape-b";
+    let opened_b = open_interactive_for_test(
+        &key_packages,
+        session_b,
+        key_group,
+        &message,
+        &[1, 2, 3],
+        1,
+        1,
+        2,
+    )
+    .expect("session B opens");
+    let round1_b = interactive_round1(InteractiveRound1Request {
+        session_id: session_b.to_string(),
+        attempt_id: opened_b.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("session B round 1");
+
+    let oversized_package = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1_b.commitments_hex.clone(),
+            },
+            member2.commitment.clone(),
+            member3.commitment.clone(),
+        ],
+    );
+    let oversized = interactive_round2(InteractiveRound2Request {
+        session_id: session_b.to_string(),
+        attempt_id: opened_b.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: oversized_package,
+    })
+    .expect_err("more than exactly-threshold commitments must be rejected");
+    assert!(
+        matches!(oversized, EngineError::Validation(ref m) if m.contains("exactly threshold")),
+        "unexpected error: {oversized:?}"
+    );
+
+    let self_missing_package =
+        interactive_package_for_test(&message, vec![member2.commitment, member3.commitment]);
+    let self_missing = interactive_round2(InteractiveRound2Request {
+        session_id: session_b.to_string(),
+        attempt_id: opened_b.attempt_id,
+        member_identifier: 1,
+        signing_package_hex: self_missing_package,
+    })
+    .expect_err("a package excluding this member must be rejected");
+    assert!(
+        matches!(self_missing, EngineError::Validation(ref m)
+            if m.contains("does not include this member")),
+        "unexpected error: {self_missing:?}"
+    );
+}
+
+#[test]
+fn interactive_consumption_marker_survives_restart() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let session_id = "interactive-restart-marker";
+    let key_group = "interactive-test-key-group";
+    let message = [0x61u8; 32];
+    let included = [1u16, 2];
+
+    let opened = open_interactive_for_test(
+        &key_packages,
+        session_id,
+        key_group,
+        &message,
+        &included,
+        1,
+        1,
+        2,
+    )
+    .expect("opens");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+    interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex,
+    })
+    .expect("round 2 consumes");
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+
+    // The durable marker must reject the consumed attempt across a
+    // restart at every entry point, even though the live interactive
+    // state (and its nonces) did not survive by construction.
+    let reopen = open_interactive_for_test(
+        &key_packages,
+        session_id,
+        key_group,
+        &message,
+        &included,
+        1,
+        1,
+        2,
+    )
+    .expect_err("reopening a consumed attempt after restart must fail closed");
+    assert!(
+        matches!(reopen, EngineError::ConsumedNonceReplay { .. }),
+        "unexpected error: {reopen:?}"
+    );
+
+    // A fresh attempt for the same session proceeds: the marker is
+    // attempt-scoped, not session-scoped.
+    let second_attempt = open_interactive_for_test(
+        &key_packages,
+        session_id,
+        key_group,
+        &message,
+        &included,
+        2,
+        1,
+        2,
+    )
+    .expect("a new attempt opens after restart");
+    let round2_without_round1 = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: second_attempt.attempt_id,
+        member_identifier: 1,
+        signing_package_hex: "00".repeat(8),
+    })
+    .expect_err("round 2 without round 1 must fail");
+    assert!(
+        matches!(
+            round2_without_round1,
+            EngineError::Validation(_) | EngineError::SignRoundNotStarted { .. }
+        ),
+        "unexpected error: {round2_without_round1:?}"
+    );
+}
+
+#[test]
+fn interactive_round2_persist_fault_leaves_nonces_live() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let session_id = "interactive-persist-fault";
+    let key_group = "interactive-test-key-group";
+    let message = [0x71u8; 32];
+    let included = [1u16, 2];
+
+    let opened = open_interactive_for_test(
+        &key_packages,
+        session_id,
+        key_group,
+        &message,
+        &included,
+        1,
+        1,
+        2,
+    )
+    .expect("opens");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex.clone(),
+            },
+            member2.commitment,
+        ],
+    );
+
+    // Consumption-before-release: if the durable marker cannot be
+    // persisted, NO share leaves the engine and the nonces stay live.
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let faulted = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect_err("injected persist fault must fail round 2");
+    clear_persist_fault_injection_for_tests();
+    assert!(
+        matches!(faulted, EngineError::Internal(ref m) if m.contains("injected persist fault")),
+        "unexpected error: {faulted:?}"
+    );
+
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(session_id).expect("session exists");
+        assert!(
+            !session
+                .consumed_interactive_attempt_markers
+                .contains(&opened.attempt_id),
+            "a failed persist must roll the consumption marker back"
+        );
+    }
+
+    // The same attempt completes once persistence recovers - the
+    // nonces were never consumed by the failed call.
+    interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex,
+    })
+    .expect("round 2 succeeds after the persist fault clears");
+
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(session_id).expect("session exists");
+        assert!(
+            session
+                .consumed_interactive_attempt_markers
+                .contains(&opened.attempt_id),
+            "successful round 2 must leave the durable marker"
+        );
+    }
+}
+
+#[test]
+fn interactive_open_idempotency_conflict_and_replacement() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let session_id = "interactive-open-lifecycle";
+    let key_group = "interactive-test-key-group";
+    let message = [0x81u8; 32];
+    let included = [1u16, 2];
+
+    let first = open_interactive_for_test(
+        &key_packages,
+        session_id,
+        key_group,
+        &message,
+        &included,
+        1,
+        1,
+        2,
+    )
+    .expect("opens");
+    assert!(!first.idempotent);
+
+    let repeat = open_interactive_for_test(
+        &key_packages,
+        session_id,
+        key_group,
+        &message,
+        &included,
+        1,
+        1,
+        2,
+    )
+    .expect("identical reopen is idempotent");
+    assert!(repeat.idempotent);
+    assert_eq!(repeat.attempt_id, first.attempt_id);
+
+    // Same attempt, different request: conflicting reopen fails closed.
+    let attempt_context =
+        interactive_test_attempt_context(session_id, key_group, &message, &included, 1);
+    let conflicting = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: session_id.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: Some(
+            "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+        ),
+        attempt_context,
+        key_package_identifier: key_packages[&1].identifier.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone(),
+    })
+    .expect_err("conflicting reopen of a live attempt must fail closed");
+    assert!(
+        matches!(conflicting, EngineError::SessionConflict { .. }),
+        "unexpected error: {conflicting:?}"
+    );
+
+    // Round 1 for attempt 1, then open attempt 2: the retry loop has
+    // moved on, so the newer attempt implicitly aborts the older one
+    // and its nonces.
+    interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: first.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1 for attempt 1");
+    let second = open_interactive_for_test(
+        &key_packages,
+        session_id,
+        key_group,
+        &message,
+        &included,
+        2,
+        1,
+        2,
+    )
+    .expect("a newer attempt replaces the live one");
+    assert_ne!(second.attempt_id, first.attempt_id);
+
+    let stale = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: first.attempt_id,
+        member_identifier: 1,
+    })
+    .expect_err("the replaced attempt must no longer be live");
+    assert!(
+        matches!(stale, EngineError::Validation(ref m) if m.contains("does not match")),
+        "unexpected error: {stale:?}"
+    );
+}
+
+#[test]
+fn interactive_abort_destroys_nonces_and_is_idempotent() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let session_id = "interactive-abort";
+    let key_group = "interactive-test-key-group";
+    let message = [0x91u8; 32];
+    let included = [1u16, 2];
+
+    let opened = open_interactive_for_test(
+        &key_packages,
+        session_id,
+        key_group,
+        &message,
+        &included,
+        1,
+        1,
+        2,
+    )
+    .expect("opens");
+    interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+
+    let aborted = interactive_session_abort(InteractiveSessionAbortRequest {
+        session_id: session_id.to_string(),
+        attempt_id: Some(opened.attempt_id.clone()),
+    })
+    .expect("abort");
+    assert!(aborted.aborted);
+
+    let again = interactive_session_abort(InteractiveSessionAbortRequest {
+        session_id: session_id.to_string(),
+        attempt_id: Some(opened.attempt_id.clone()),
+    })
+    .expect("abort is idempotent");
+    assert!(!again.aborted);
+
+    let dead = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect_err("an aborted attempt must not serve round 1");
+    assert!(
+        matches!(dead, EngineError::SessionNotFound { .. }),
+        "unexpected error: {dead:?}"
+    );
+
+    // Abort destroyed the nonces WITHOUT a consumption marker: the
+    // attempt was never consumed, so reopening it is allowed and gets
+    // FRESH nonces (the old ones are gone forever).
+    let reopened = open_interactive_for_test(
+        &key_packages,
+        session_id,
+        key_group,
+        &message,
+        &included,
+        1,
+        1,
+        2,
+    )
+    .expect("an aborted (never consumed) attempt may reopen");
+    assert_eq!(reopened.attempt_id, opened.attempt_id);
+}
+
+#[test]
+fn interactive_session_ttl_expiry_has_abort_semantics() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let session_id = "interactive-ttl";
+    let key_group = "interactive-test-key-group";
+    let message = [0xa1u8; 32];
+    let included = [1u16, 2];
+
+    let opened = open_interactive_for_test(
+        &key_packages,
+        session_id,
+        key_group,
+        &message,
+        &included,
+        1,
+        1,
+        2,
+    )
+    .expect("opens");
+    interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+
+    // Age the session past the TTL directly; the next entry point's
+    // lazy sweep must destroy the nonces with abort semantics.
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get_mut(session_id).expect("session exists");
+        let interactive = session
+            .interactive_signing
+            .as_mut()
+            .expect("live interactive state");
+        interactive.opened_at_unix = interactive
+            .opened_at_unix
+            .saturating_sub(interactive_session_ttl_seconds() + 1);
+    }
+
+    let expired = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect_err("an expired attempt must not serve round 1");
+    assert!(
+        matches!(expired, EngineError::SessionNotFound { .. }),
+        "unexpected error: {expired:?}"
+    );
+
+    // Expiry, like abort, leaves no consumption marker: the attempt
+    // never released a share, so reopening is allowed.
+    open_interactive_for_test(
+        &key_packages,
+        session_id,
+        key_group,
+        &message,
+        &included,
+        1,
+        1,
+        2,
+    )
+    .expect("an expired (never consumed) attempt may reopen");
+}
+
+#[test]
+fn interactive_live_session_capacity_fails_closed() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let key_group = "interactive-test-key-group";
+    let message = [0xb1u8; 32];
+    let included = [1u16, 2];
+
+    std::env::set_var(TBTC_SIGNER_MAX_LIVE_INTERACTIVE_SESSIONS_ENV, "1");
+
+    let outcome = (|| -> Result<(), EngineError> {
+        open_interactive_for_test(
+            &key_packages,
+            "interactive-cap-a",
+            key_group,
+            &message,
+            &included,
+            1,
+            1,
+            2,
+        )?;
+
+        let at_capacity = open_interactive_for_test(
+            &key_packages,
+            "interactive-cap-b",
+            key_group,
+            &message,
+            &included,
+            1,
+            1,
+            2,
+        )
+        .expect_err("the live-session cap must fail closed");
+        assert!(
+            matches!(at_capacity, EngineError::Internal(ref m)
+                if m.contains("live interactive session count")),
+            "unexpected error: {at_capacity:?}"
+        );
+
+        // An idempotent reopen of the live session does not trip the cap.
+        let reopen = open_interactive_for_test(
+            &key_packages,
+            "interactive-cap-a",
+            key_group,
+            &message,
+            &included,
+            1,
+            1,
+            2,
+        )?;
+        assert!(reopen.idempotent);
+
+        // Aborting frees the slot.
+        interactive_session_abort(InteractiveSessionAbortRequest {
+            session_id: "interactive-cap-a".to_string(),
+            attempt_id: None,
+        })?;
+        open_interactive_for_test(
+            &key_packages,
+            "interactive-cap-b",
+            key_group,
+            &message,
+            &included,
+            1,
+            1,
+            2,
+        )?;
+        Ok(())
+    })();
+
+    std::env::remove_var(TBTC_SIGNER_MAX_LIVE_INTERACTIVE_SESSIONS_ENV);
+    outcome.expect("capacity lifecycle");
 }
