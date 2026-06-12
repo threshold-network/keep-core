@@ -103,9 +103,15 @@ architecture questions:
    production**, with a binding retention condition: telemetry and
    logging must retain enough signed bytes to diagnose whether
    targeted equivocation is occurring, so the revisit decision has
-   data. (Retention of conflicting signed evidence envelopes at the
-   detection points is implemented in the Go RFC-21 layer; full
-   cross-member equivocation comparison arrives with item 7 itself.)
+   data. **This deferral is contingent on that retention landing.**
+   Retention of the conflicting signed evidence envelopes at the
+   detection points is added by keep-core PR #4044 against the
+   scaffold branch (`EquivocationEvidence` instrumentation); until
+   that merges, the base Go RFC-21 layer detects a conflict and
+   returns `ErrSnapshotConflict` but drops the conflicting envelope,
+   so the retention condition is NOT yet met and the deferral does
+   not hold. Full cross-member equivocation comparison arrives with
+   item 7 itself.
 5. **t-of-included finalize (follow-up item 6): scheduled as the
    first engineering item of Phase 7**, not earlier. The transitional
    flow computes each member's signature share at StartSignRound
