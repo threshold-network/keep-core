@@ -2,12 +2,14 @@ package roast
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
+	"github.com/keep-network/keep-core/pkg/frost/roast/gen/pb"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
@@ -49,8 +51,8 @@ const MaxCoordinatorSignatureBytes = 256
 // two honest signers serialising the same evidence produce
 // byte-identical JSON.
 type OverflowEntry struct {
-	Sender group.MemberIndex `json:"sender"`
-	Count  uint              `json:"count"`
+	Sender group.MemberIndex
+	Count  uint
 }
 
 // RejectEntry carries one per-(sender, reason) reject count from an
@@ -58,17 +60,17 @@ type OverflowEntry struct {
 // ascending first by Sender, then by Reason, so two honest signers
 // produce byte-identical canonical encodings.
 type RejectEntry struct {
-	Sender group.MemberIndex `json:"sender"`
-	Reason string            `json:"reason"`
-	Count  uint              `json:"count"`
+	Sender group.MemberIndex
+	Reason string
+	Count  uint
 }
 
 // ConflictEntry carries one per-sender conflict count -- the number
 // of first-write-wins disagreements detected during the attempt.
 // Sorted ascending by Sender for canonical encoding.
 type ConflictEntry struct {
-	Sender group.MemberIndex `json:"sender"`
-	Count  uint              `json:"count"`
+	Sender group.MemberIndex
+	Count  uint
 }
 
 // LocalEvidenceSnapshot is the per-signer signed evidence produced
@@ -78,31 +80,40 @@ type ConflictEntry struct {
 // Phase 3.2 (this file) defines the wire type only. Signature
 // computation and verification land in Phase 3.3.
 type LocalEvidenceSnapshot struct {
-	SenderIDValue uint32 `json:"senderID"`
+	SenderIDValue uint32
 	// AttemptContextHash binds the snapshot to the attempt the
 	// evidence describes. Always exactly 32 bytes.
-	AttemptContextHash []byte `json:"attemptContextHash"`
+	AttemptContextHash []byte
 	// Overflows is the canonical sorted form of the
 	// attempt.Evidence.Overflows map; sorted ascending by Sender.
 	// Omitted when no overflow events were observed.
-	Overflows []OverflowEntry `json:"overflows,omitempty"`
+	Overflows []OverflowEntry
 	// Rejects is the canonical sorted form of the
 	// attempt.Evidence.Rejects map; sorted ascending first by Sender,
 	// then by Reason. Omitted when no validation-reject events were
 	// observed. Each entry counts the number of rejects observed
 	// for one (sender, reason) pair, saturated at the recorder's
 	// reject quota.
-	Rejects []RejectEntry `json:"rejects,omitempty"`
+	Rejects []RejectEntry
 	// Conflicts is the canonical sorted form of the
 	// attempt.Evidence.Conflicts map; sorted ascending by Sender.
 	// Omitted when no first-write-wins-conflict events were
 	// observed.
-	Conflicts []ConflictEntry `json:"conflicts,omitempty"`
+	Conflicts []ConflictEntry
 	// OperatorSignature is the signer's operator-key signature over
-	// the canonical encoding of (senderID, attemptContextHash,
-	// overflows, rejects, conflicts). Phase 3.3 defines the
-	// canonical-encoding algorithm and the verification routine.
-	OperatorSignature []byte `json:"operatorSignature,omitempty"`
+	// SignableBytes(): the serialized protobuf body of (senderID,
+	// attemptContextHash, overflows, rejects, conflicts).
+	OperatorSignature []byte
+
+	// signedBody caches the exact serialized body bytes the
+	// OperatorSignature covers: marshaled once at signing time for
+	// self-authored snapshots, or the received bytes verbatim for
+	// parsed ones. Evidence fields must not be mutated once set.
+	signedBody []byte
+	// wireEnvelope caches the exact on-wire envelope (body +
+	// signature): the received bytes verbatim for parsed snapshots,
+	// or built once after signing for self-authored ones.
+	wireEnvelope []byte
 }
 
 // NewLocalEvidenceSnapshot converts an attempt.Evidence map into a
@@ -207,24 +218,40 @@ func (s *LocalEvidenceSnapshot) Type() string {
 	return LocalEvidenceSnapshotType
 }
 
-// Marshal serialises the snapshot to canonical JSON. The Overflows
-// slice is sorted by Sender ascending in NewLocalEvidenceSnapshot
-// so two honest signers with the same evidence produce
-// byte-identical bytes.
+// Marshal serialises the snapshot as a SignedLocalEvidenceSnapshot
+// envelope: the exact signed body bytes plus the operator signature.
+// For a snapshot parsed off the wire the received envelope is
+// returned verbatim, so evidence bytes survive any re-broadcast
+// unchanged. The snapshot must be signed first. The returned slice is
+// the internal cache - callers must not mutate it.
 func (s *LocalEvidenceSnapshot) Marshal() ([]byte, error) {
-	return json.Marshal(s)
+	return s.wireEnvelopeBytes()
 }
 
-// Unmarshal parses canonical JSON into the snapshot and validates
-// the resulting structure.
+// Unmarshal parses a SignedLocalEvidenceSnapshot envelope, retains
+// the received body and envelope bytes verbatim (signature
+// verification runs over exactly these bytes), populates the
+// evidence fields from the body, and validates the structure.
 func (s *LocalEvidenceSnapshot) Unmarshal(data []byte) error {
-	if err := json.Unmarshal(data, s); err != nil {
-		return err
+	var envelope pb.SignedLocalEvidenceSnapshot
+	if err := proto.Unmarshal(data, &envelope); err != nil {
+		return fmt.Errorf("local evidence snapshot: parse envelope: %w", err)
 	}
+	if len(envelope.Body) == 0 {
+		return errors.New("local evidence snapshot: empty body")
+	}
+	var body pb.LocalEvidenceSnapshotBody
+	if err := proto.Unmarshal(envelope.Body, &body); err != nil {
+		return fmt.Errorf("local evidence snapshot: parse body: %w", err)
+	}
+	snapshotFieldsFromBody(s, &body)
+	s.OperatorSignature = append([]byte(nil), envelope.OperatorSignature...)
+	s.signedBody = append([]byte(nil), envelope.Body...)
+	s.wireEnvelope = append([]byte(nil), data...)
 	return s.Validate()
 }
 
-// Validate runs the structural checks Unmarshal applies after a JSON
+// Validate runs the structural checks Unmarshal applies after a
 // decode. Exposed publicly so callers that construct snapshots in
 // memory (e.g. the Coordinator state machine) can validate without
 // a marshal/unmarshal round-trip.
@@ -292,19 +319,22 @@ type TransitionMessage struct {
 	// AttemptContextHash identifies the attempt the bundle
 	// describes. Must match every snapshot's AttemptContextHash.
 	// Always exactly 32 bytes.
-	AttemptContextHash []byte `json:"attemptContextHash"`
+	AttemptContextHash []byte
 	// CoordinatorIDValue is the member index of the elected
 	// coordinator that produced this bundle.
-	CoordinatorIDValue uint32 `json:"coordinatorID"`
+	CoordinatorIDValue uint32
 	// Bundle is the canonical sorted-by-SenderID list of signed
 	// evidence snapshots aggregated by the coordinator.
-	Bundle []LocalEvidenceSnapshot `json:"bundle"`
+	Bundle []LocalEvidenceSnapshot
 	// CoordinatorSignature is the coordinator's operator-key
-	// signature over the canonical encoding of the bundle. Phase
-	// 3.3 defines the canonical-encoding algorithm and the
-	// verification routine. Phase 3.2 treats this field as opaque
-	// bytes with a length cap.
-	CoordinatorSignature []byte `json:"coordinatorSignature,omitempty"`
+	// signature over SignableBytes(): the serialized protobuf body
+	// embedding every snapshot's signed envelope verbatim.
+	CoordinatorSignature []byte
+
+	// signedBody and wireEnvelope cache exact bytes with the same
+	// semantics as the LocalEvidenceSnapshot caches.
+	signedBody   []byte
+	wireEnvelope []byte
 }
 
 // CoordinatorID returns the coordinator member index as a
@@ -329,24 +359,79 @@ func (m *TransitionMessage) Type() string {
 	return TransitionMessageType
 }
 
-// Marshal serialises the message to canonical JSON.
+// Marshal serialises the message as a SignedTransitionMessage
+// envelope: the exact signed body bytes plus the coordinator
+// signature. For a message parsed off the wire the received envelope
+// is returned verbatim. The message must be signed first. The
+// returned slice is the internal cache - callers must not mutate it.
 func (m *TransitionMessage) Marshal() ([]byte, error) {
-	return json.Marshal(m)
+	if m.wireEnvelope != nil {
+		return m.wireEnvelope, nil
+	}
+	if len(m.CoordinatorSignature) == 0 {
+		return nil, errors.New(
+			"transition message: must be signed before wire encoding",
+		)
+	}
+	body, err := m.SignableBytes()
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := proto.Marshal(&pb.SignedTransitionMessage{
+		Body:                 body,
+		CoordinatorSignature: m.CoordinatorSignature,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("transition message: marshal envelope: %w", err)
+	}
+	m.wireEnvelope = envelope
+	return envelope, nil
 }
 
-// Unmarshal parses canonical JSON into the message and validates
-// the structure: hash length, bundle size cap, signature size cap,
-// snapshot validity, bundle ordering by SenderID ascending, and
-// every snapshot binding to the same AttemptContextHash as the
-// bundle.
+// Unmarshal parses a SignedTransitionMessage envelope, retains the
+// received body and envelope bytes verbatim (the coordinator
+// signature verifies over exactly these bytes), parses each embedded
+// snapshot envelope (each retaining its own received bytes), and
+// validates the structure: hash length, bundle size cap, signature
+// size cap, snapshot validity, bundle ordering by SenderID
+// ascending, and every snapshot binding to the same
+// AttemptContextHash as the bundle.
 func (m *TransitionMessage) Unmarshal(data []byte) error {
-	if err := json.Unmarshal(data, m); err != nil {
-		return err
+	var envelope pb.SignedTransitionMessage
+	if err := proto.Unmarshal(data, &envelope); err != nil {
+		return fmt.Errorf("transition message: parse envelope: %w", err)
 	}
+	if len(envelope.Body) == 0 {
+		return errors.New("transition message: empty body")
+	}
+	var body pb.TransitionMessageBody
+	if err := proto.Unmarshal(envelope.Body, &body); err != nil {
+		return fmt.Errorf("transition message: parse body: %w", err)
+	}
+	if len(body.SignedSnapshots) > MaxSnapshotsPerBundle {
+		return fmt.Errorf(
+			"transition message: bundle length [%d] exceeds cap [%d]",
+			len(body.SignedSnapshots),
+			MaxSnapshotsPerBundle,
+		)
+	}
+	m.AttemptContextHash = append([]byte(nil), body.AttemptContextHash...)
+	m.CoordinatorIDValue = body.CoordinatorId
+	m.Bundle = make([]LocalEvidenceSnapshot, 0, len(body.SignedSnapshots))
+	for i, raw := range body.SignedSnapshots {
+		var snapshot LocalEvidenceSnapshot
+		if err := snapshot.Unmarshal(raw); err != nil {
+			return fmt.Errorf("transition message: bundle[%d]: %w", i, err)
+		}
+		m.Bundle = append(m.Bundle, snapshot)
+	}
+	m.CoordinatorSignature = append([]byte(nil), envelope.CoordinatorSignature...)
+	m.signedBody = append([]byte(nil), envelope.Body...)
+	m.wireEnvelope = append([]byte(nil), data...)
 	return m.Validate()
 }
 
-// Validate runs the structural checks Unmarshal applies after a JSON
+// Validate runs the structural checks Unmarshal applies after a
 // decode: bundle hash length, bundle size cap, coordinator id, every
 // snapshot's validity, bundle ordering, and intra-bundle hash
 // consistency. Exposed publicly so callers that construct messages

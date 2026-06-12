@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+option go_package = "./pb";
+package roast;
+
+// Evidence wire format (RFC-21 Layer B).
+//
+// Signatures cover exact serialized body bytes, and those bytes travel
+// verbatim: a verifier checks the signature over the bytes it received and
+// only then parses them. Nothing in the evidence chain is ever re-encoded,
+// so signature validity never depends on any serializer's canonical form -
+// across protobuf library versions or across languages (the Phase 7 Rust
+// signer verifies and parses these same bytes).
+
+// The byte stream a signer's operator key signs. Carried as exact bytes in
+// SignedLocalEvidenceSnapshot.body.
+message LocalEvidenceSnapshotBody {
+  uint32 sender_id = 1;
+  // 32-byte attempt context hash binding the evidence to one attempt.
+  bytes attempt_context_hash = 2;
+  // Sorted ascending by sender; producers emit the canonical order, and
+  // receivers validate it after signature verification.
+  repeated OverflowEntry overflows = 3;
+  // Sorted ascending by (sender, reason).
+  repeated RejectEntry rejects = 4;
+  // Sorted ascending by sender.
+  repeated ConflictEntry conflicts = 5;
+}
+
+message OverflowEntry {
+  uint32 sender = 1;
+  uint64 count = 2;
+}
+
+message RejectEntry {
+  uint32 sender = 1;
+  string reason = 2;
+  uint64 count = 3;
+}
+
+message ConflictEntry {
+  uint32 sender = 1;
+  uint64 count = 2;
+}
+
+// The on-wire snapshot message: exact signed body bytes plus the operator
+// signature over them.
+message SignedLocalEvidenceSnapshot {
+  bytes body = 1;
+  bytes operator_signature = 2;
+}
+
+// The byte stream the elected coordinator signs. signed_snapshots carries
+// each member's SignedLocalEvidenceSnapshot envelope verbatim as received,
+// so the coordinator attests to the exact signed snapshots it assembled,
+// in order, and downstream verifiers re-check the operator signatures over
+// those same exact bytes.
+message TransitionMessageBody {
+  bytes attempt_context_hash = 1;
+  uint32 coordinator_id = 2;
+  repeated bytes signed_snapshots = 3;
+}
+
+// The on-wire transition message: exact signed body bytes plus the
+// coordinator signature over them.
+message SignedTransitionMessage {
+  bytes body = 1;
+  bytes coordinator_signature = 2;
+}

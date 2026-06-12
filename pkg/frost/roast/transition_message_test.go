@@ -2,13 +2,63 @@ package roast
 
 import (
 	"bytes"
-	"encoding/json"
 	"strings"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
+	"github.com/keep-network/keep-core/pkg/frost/roast/gen/pb"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
+
+// encodeSnapshotForTest builds a SignedLocalEvidenceSnapshot envelope from
+// arbitrary (possibly invalid) in-memory fields, bypassing the production
+// signing/validation path, so tests can exercise Unmarshal's rejection of
+// structurally invalid wire bytes.
+func encodeSnapshotForTest(t *testing.T, s *LocalEvidenceSnapshot) []byte {
+	t.Helper()
+	body, err := proto.Marshal(snapshotBodyMessage(s))
+	if err != nil {
+		t.Fatalf("encode snapshot body: %v", err)
+	}
+	envelope, err := proto.Marshal(&pb.SignedLocalEvidenceSnapshot{
+		Body:              body,
+		OperatorSignature: s.OperatorSignature,
+	})
+	if err != nil {
+		t.Fatalf("encode snapshot envelope: %v", err)
+	}
+	return envelope
+}
+
+// encodeTransitionForTest builds a SignedTransitionMessage envelope from
+// arbitrary (possibly invalid) in-memory fields; see encodeSnapshotForTest.
+func encodeTransitionForTest(t *testing.T, m *TransitionMessage) []byte {
+	t.Helper()
+	body := &pb.TransitionMessageBody{
+		AttemptContextHash: m.AttemptContextHash,
+		CoordinatorId:      m.CoordinatorIDValue,
+	}
+	for i := range m.Bundle {
+		body.SignedSnapshots = append(
+			body.SignedSnapshots,
+			encodeSnapshotForTest(t, &m.Bundle[i]),
+		)
+	}
+	bodyBytes, err := proto.Marshal(body)
+	if err != nil {
+		t.Fatalf("encode transition body: %v", err)
+	}
+	envelope, err := proto.Marshal(&pb.SignedTransitionMessage{
+		Body:                 bodyBytes,
+		CoordinatorSignature: m.CoordinatorSignature,
+	})
+	if err != nil {
+		t.Fatalf("encode transition envelope: %v", err)
+	}
+	return envelope
+}
 
 var pinnedContextHash = [attempt.MessageDigestLength]byte{
 	0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
@@ -69,14 +119,19 @@ func TestNewLocalEvidenceSnapshot_EmptyEvidenceOmitsOverflows(t *testing.T) {
 	if len(s.Overflows) != 0 {
 		t.Fatalf("expected empty overflows, got %v", s.Overflows)
 	}
+	s.OperatorSignature = bytes.Repeat([]byte{0xab}, 64)
 	data, err := s.Marshal()
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if strings.Contains(string(data), "overflows") {
+	decoded := &LocalEvidenceSnapshot{}
+	if err := decoded.Unmarshal(data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(decoded.Overflows) != 0 {
 		t.Fatalf(
-			"empty overflows should be omitted by omitempty; got JSON: %s",
-			string(data),
+			"empty overflows must stay empty through the wire; got %v",
+			decoded.Overflows,
 		)
 	}
 }
@@ -121,7 +176,7 @@ func TestLocalEvidenceSnapshot_RejectsZeroSender(t *testing.T) {
 		SenderIDValue:      0,
 		AttemptContextHash: pinnedContextHash[:],
 	}
-	data, _ := json.Marshal(s)
+	data := encodeSnapshotForTest(t, s)
 	err := (&LocalEvidenceSnapshot{}).Unmarshal(data)
 	if err == nil || !strings.Contains(err.Error(), "senderID is zero") {
 		t.Fatalf("expected zero-sender error, got %v", err)
@@ -129,10 +184,10 @@ func TestLocalEvidenceSnapshot_RejectsZeroSender(t *testing.T) {
 }
 
 func TestLocalEvidenceSnapshot_RejectsWrongHashLength(t *testing.T) {
-	bad := []byte(`{
-		"senderID": 1,
-		"attemptContextHash": "AAEC"
-	}`)
+	bad := encodeSnapshotForTest(t, &LocalEvidenceSnapshot{
+		SenderIDValue:      1,
+		AttemptContextHash: []byte{0x00, 0x01, 0x02},
+	})
 	err := (&LocalEvidenceSnapshot{}).Unmarshal(bad)
 	if err == nil || !strings.Contains(err.Error(), "attemptContextHash length") {
 		t.Fatalf("expected hash-length error, got %v", err)
@@ -142,7 +197,7 @@ func TestLocalEvidenceSnapshot_RejectsWrongHashLength(t *testing.T) {
 func TestLocalEvidenceSnapshot_RejectsOversizeSignature(t *testing.T) {
 	s := NewLocalEvidenceSnapshot(1, pinnedContextHash, attempt.Evidence{})
 	s.OperatorSignature = bytes.Repeat([]byte{0xff}, MaxOperatorSignatureBytes+1)
-	data, _ := json.Marshal(s)
+	data := encodeSnapshotForTest(t, s)
 	err := (&LocalEvidenceSnapshot{}).Unmarshal(data)
 	if err == nil || !strings.Contains(err.Error(), "exceeds cap") {
 		t.Fatalf("expected signature-cap error, got %v", err)
@@ -158,7 +213,7 @@ func TestLocalEvidenceSnapshot_RejectsUnsortedOverflows(t *testing.T) {
 			{Sender: 1, Count: 1},
 		},
 	}
-	data, _ := json.Marshal(bad)
+	data := encodeSnapshotForTest(t, bad)
 	err := (&LocalEvidenceSnapshot{}).Unmarshal(data)
 	if err == nil || !strings.Contains(err.Error(), "not sorted") {
 		t.Fatalf("expected sort error, got %v", err)
@@ -174,7 +229,7 @@ func TestLocalEvidenceSnapshot_RejectsDuplicateOverflowSender(t *testing.T) {
 			{Sender: 3, Count: 1},
 		},
 	}
-	data, _ := json.Marshal(bad)
+	data := encodeSnapshotForTest(t, bad)
 	err := (&LocalEvidenceSnapshot{}).Unmarshal(data)
 	if err == nil {
 		t.Fatal("expected duplicate-sender error")
@@ -249,7 +304,7 @@ func TestTransitionMessage_RejectsBadBundleOrdering(t *testing.T) {
 	m := buildValidTransitionMessage()
 	// Swap order to make it unsorted.
 	m.Bundle[0], m.Bundle[1] = m.Bundle[1], m.Bundle[0]
-	data, _ := json.Marshal(m)
+	data := encodeTransitionForTest(t, m)
 	err := (&TransitionMessage{}).Unmarshal(data)
 	if err == nil || !strings.Contains(err.Error(), "not sorted") {
 		t.Fatalf("expected sort error, got %v", err)
@@ -264,7 +319,7 @@ func TestTransitionMessage_RejectsMismatchedBundleHash(t *testing.T) {
 	for i := range m.Bundle[0].AttemptContextHash {
 		m.Bundle[0].AttemptContextHash[i] = 0xff
 	}
-	data, _ := json.Marshal(m)
+	data := encodeTransitionForTest(t, m)
 	err := (&TransitionMessage{}).Unmarshal(data)
 	if err == nil || !strings.Contains(err.Error(), "does not match bundle hash") {
 		t.Fatalf("expected hash-mismatch error, got %v", err)
@@ -274,7 +329,7 @@ func TestTransitionMessage_RejectsMismatchedBundleHash(t *testing.T) {
 func TestTransitionMessage_RejectsEmptyBundle(t *testing.T) {
 	m := buildValidTransitionMessage()
 	m.Bundle = nil
-	data, _ := json.Marshal(m)
+	data := encodeTransitionForTest(t, m)
 	err := (&TransitionMessage{}).Unmarshal(data)
 	if err == nil || !strings.Contains(err.Error(), "must not be empty") {
 		t.Fatalf("expected empty-bundle error, got %v", err)
@@ -292,7 +347,7 @@ func TestTransitionMessage_RejectsOversizeBundle(t *testing.T) {
 			AttemptContextHash: append([]byte{}, m.AttemptContextHash...),
 		}
 	}
-	data, _ := json.Marshal(m)
+	data := encodeTransitionForTest(t, m)
 	err := (&TransitionMessage{}).Unmarshal(data)
 	if err == nil || !strings.Contains(err.Error(), "exceeds cap") {
 		t.Fatalf("expected oversize-bundle error, got %v", err)
@@ -302,7 +357,7 @@ func TestTransitionMessage_RejectsOversizeBundle(t *testing.T) {
 func TestTransitionMessage_RejectsZeroCoordinatorID(t *testing.T) {
 	m := buildValidTransitionMessage()
 	m.CoordinatorIDValue = 0
-	data, _ := json.Marshal(m)
+	data := encodeTransitionForTest(t, m)
 	err := (&TransitionMessage{}).Unmarshal(data)
 	if err == nil || !strings.Contains(err.Error(), "coordinatorID is zero") {
 		t.Fatalf("expected zero-coordinator error, got %v", err)
@@ -312,7 +367,7 @@ func TestTransitionMessage_RejectsZeroCoordinatorID(t *testing.T) {
 func TestTransitionMessage_RejectsOversizeCoordinatorSignature(t *testing.T) {
 	m := buildValidTransitionMessage()
 	m.CoordinatorSignature = bytes.Repeat([]byte{0xff}, MaxCoordinatorSignatureBytes+1)
-	data, _ := json.Marshal(m)
+	data := encodeTransitionForTest(t, m)
 	err := (&TransitionMessage{}).Unmarshal(data)
 	if err == nil || !strings.Contains(err.Error(), "exceeds cap") {
 		t.Fatalf("expected oversize-signature error, got %v", err)
@@ -322,7 +377,7 @@ func TestTransitionMessage_RejectsOversizeCoordinatorSignature(t *testing.T) {
 func TestTransitionMessage_RejectsBundleWithInvalidSnapshot(t *testing.T) {
 	m := buildValidTransitionMessage()
 	m.Bundle[0].SenderIDValue = 0
-	data, _ := json.Marshal(m)
+	data := encodeTransitionForTest(t, m)
 	err := (&TransitionMessage{}).Unmarshal(data)
 	if err == nil || !strings.Contains(err.Error(), "senderID is zero") {
 		t.Fatalf("expected invalid-snapshot error, got %v", err)
@@ -332,14 +387,14 @@ func TestTransitionMessage_RejectsBundleWithInvalidSnapshot(t *testing.T) {
 func TestTransitionMessage_RejectsDuplicateBundleSender(t *testing.T) {
 	m := buildValidTransitionMessage()
 	m.Bundle[1].SenderIDValue = m.Bundle[0].SenderIDValue
-	data, _ := json.Marshal(m)
+	data := encodeTransitionForTest(t, m)
 	err := (&TransitionMessage{}).Unmarshal(data)
 	if err == nil {
 		t.Fatal("expected duplicate-sender error")
 	}
 }
 
-func TestTransitionMessage_DeterministicJSONForIdenticalInputs(t *testing.T) {
+func TestTransitionMessage_DeterministicEncodingForIdenticalInputs(t *testing.T) {
 	a := buildValidTransitionMessage()
 	b := buildValidTransitionMessage()
 	dataA, err := a.Marshal()
@@ -352,8 +407,8 @@ func TestTransitionMessage_DeterministicJSONForIdenticalInputs(t *testing.T) {
 	}
 	if !bytes.Equal(dataA, dataB) {
 		t.Fatalf(
-			"identical inputs produced different JSON:\n a=%s\n b=%s",
-			string(dataA), string(dataB),
+			"identical inputs produced different wire bytes:\n a=%x\n b=%x",
+			dataA, dataB,
 		)
 	}
 }
@@ -366,6 +421,7 @@ func buildValidTransitionMessage() *TransitionMessage {
 			Overflows: []OverflowEntry{
 				{Sender: 99, Count: 1},
 			},
+			OperatorSignature: bytes.Repeat([]byte{0xab}, 64),
 		}
 	}
 	return &TransitionMessage{

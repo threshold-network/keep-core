@@ -38,7 +38,7 @@ func signSnapshotForTest(
 ) *LocalEvidenceSnapshot {
 	t.Helper()
 	signer := &fakeSigner{id: snap.SenderID()}
-	payload, err := CanonicalSnapshotBytes(snap)
+	payload, err := snap.SignableBytes()
 	if err != nil {
 		t.Fatalf("canonical: %v", err)
 	}
@@ -418,7 +418,7 @@ func TestVerifyBundle_DetectsCoordinatorSignatureForgery(t *testing.T) {
 	// Tamper: re-sign the bundle as a different (non-elected) member.
 	const wrongSigner group.MemberIndex = 99
 	bundle.CoordinatorIDValue = uint32(wrongSigner)
-	payload, _ := CanonicalBundleBytes(bundle)
+	payload, _ := bundle.SignableBytes()
 	forged, _ := (&fakeSigner{id: wrongSigner}).Sign(payload)
 	bundle.CoordinatorSignature = forged
 
@@ -458,7 +458,7 @@ func TestVerifyBundle_DetectsSnapshotSignatureForgery(t *testing.T) {
 	// bundle with the new garbage signature so the bundle-level
 	// signature appears valid but the snapshot signature does not.
 	bundle.Bundle[0].OperatorSignature = []byte{0xde, 0xad}
-	payload, _ := CanonicalBundleBytes(bundle)
+	payload, _ := bundle.SignableBytes()
 	resign, _ := (&fakeSigner{id: elected}).Sign(payload)
 	bundle.CoordinatorSignature = resign
 
