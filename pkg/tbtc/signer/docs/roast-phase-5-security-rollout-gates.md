@@ -141,6 +141,30 @@ architecture questions:
    interactive session flow is designed t-of-included-native from the
    start; no first-t-responsive retrofit of the transitional finalize
    contract is needed or wanted.
+7. **Init-config demand is process-fatal.** Setting
+   `TBTC_SIGNER_INIT_CONFIG_PATH` demands config-mode FROST operation;
+   any state in which the FROST-native engine does not come up under a
+   set path - config-install failure, engine-registration failure
+   after a successful install, or a binary built without
+   `frost_native` - terminates the process, in every profile and
+   environment. This replaces the earlier
+   continue-on-the-legacy-bridge degradation adopted in keep-core
+   PR #4041. Rationale: this code ships to production only when FROST
+   is a production duty, so "running but FROST-dead" is the dangerous
+   state - a silently half-alive node erodes FROST wallet fault
+   budgets invisibly, while threshold redundancy is designed to absorb
+   loud, full, bounded outages; and fatality cannot be
+   profile-conditional because an unreadable config file cannot reveal
+   its profile and a missing profile means production
+   (production-by-omission), so path-set is the only non-circular
+   trigger. Uniform semantics also mean testnet rehearses exactly the
+   behavior production will have. Env-fallback mode (path unset) keeps
+   the safe-by-default degrade posture. Operational consequence:
+   config-file pushes to config-mode fleets must be canaried
+   node-by-node (runbook prerequisite 7) because a bad push now
+   produces visible downtime instead of silent capability loss.
+   Implemented in keep-core PR #4045 (scaffold), the follow-up to
+   PR #4041's Go-host adoption.
 
 ## Provisional Rollback Thresholds (Draft)
 
