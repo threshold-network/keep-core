@@ -44,6 +44,18 @@ Before Stage 1 canary:
    is deliberately unsupported: it would require a dedicated,
    narrowly-scoped FFI, never general config mutation, which would
    reopen the split-brain risk the immutable install design closed.
+7. Config-file pushes are canaried node-by-node: an unmet init-config
+   demand (`TBTC_SIGNER_INIT_CONFIG_PATH` set but the FROST-native
+   engine did not come up) terminates the process in every profile
+   (gates-doc Decision Log, decision 7). A bad config template pushed
+   fleet-wide therefore produces a visible, correlated outage instead
+   of silent capability loss - push to a single node, confirm a clean
+   start, then roll out. The same applies to signer-library upgrades
+   that tighten init-time validation: a config that installed
+   yesterday can be rejected after an upgrade, so upgrade + config
+   changes are canaried together. Note this also enforces prerequisite
+   6's attestation cadence: a node restarted with expired attestation
+   material will not start until re-attested.
 
 ## 3. Rollout Stages
 
