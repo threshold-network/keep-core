@@ -107,7 +107,18 @@ func emitEquivocationEvidence(evidence EquivocationEvidence) {
 	equivocationEvidenceObserverMutex.RUnlock()
 
 	if observer != nil {
-		observer(evidence)
+		// Honor the never-fails contract: a panicking telemetry observer
+		// must not escape into the protocol path that detected the event.
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					equivocationLogger.Errorf(
+						"equivocation evidence observer panicked: [%v]", r,
+					)
+				}
+			}()
+			observer(evidence)
+		}()
 	}
 }
 
@@ -126,5 +137,10 @@ func snapshotEnvelopeForEvidence(snapshot *LocalEvidenceSnapshot) []byte {
 		)
 		return nil
 	}
-	return envelope
+	// Defensive copy: Marshal returns the snapshot's internal wire-envelope
+	// cache (its contract forbids callers from mutating it), but evidence
+	// bytes are handed to an external observer that may retain and later
+	// normalize, zero, or otherwise mutate them - which would corrupt the
+	// cached signed bytes on the stored snapshot.
+	return append([]byte(nil), envelope...)
 }

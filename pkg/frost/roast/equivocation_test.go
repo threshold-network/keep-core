@@ -151,3 +151,72 @@ func TestOwnSnapshotMissingFromBundle_RetainsSelfEnvelope(t *testing.T) {
 		t.Fatal("missing-snapshot evidence has no conflicting envelope")
 	}
 }
+
+func TestEquivocationObserver_PanicDoesNotEscapeProtocolPath(t *testing.T) {
+	if err := RegisterEquivocationEvidenceObserver(
+		func(_ EquivocationEvidence) { panic("observer boom") },
+	); err != nil {
+		t.Fatalf("register observer: %v", err)
+	}
+	t.Cleanup(UnregisterEquivocationEvidenceObserver)
+
+	c := NewInMemoryCoordinator().(*inMemoryCoordinator)
+	ctx := newTestContext(t)
+	handle, err := c.BeginAttempt(ctx)
+	if err != nil {
+		t.Fatalf("begin attempt: %v", err)
+	}
+	first := signSnapshotForTest(
+		t,
+		NewLocalEvidenceSnapshot(3, ctx.Hash(), attempt.Evidence{
+			Overflows: map[group.MemberIndex]uint{1: 1},
+		}),
+	)
+	if err := c.RecordEvidence(handle, first); err != nil {
+		t.Fatalf("record first: %v", err)
+	}
+	conflicting := signSnapshotForTest(
+		t,
+		NewLocalEvidenceSnapshot(3, ctx.Hash(), attempt.Evidence{
+			Overflows: map[group.MemberIndex]uint{1: 2},
+		}),
+	)
+	// A panicking observer must not crash the protocol path: the intended
+	// ErrSnapshotConflict must still surface.
+	if err := c.RecordEvidence(handle, conflicting); !errors.Is(err, ErrSnapshotConflict) {
+		t.Fatalf("expected ErrSnapshotConflict despite panicking observer, got %v", err)
+	}
+}
+
+func TestEquivocationEvidence_ObserverCannotCorruptSnapshotCache(t *testing.T) {
+	snapshot := signSnapshotForTest(
+		t,
+		NewLocalEvidenceSnapshot(7, pinnedContextHash, attempt.Evidence{
+			Overflows: map[group.MemberIndex]uint{1: 1},
+		}),
+	)
+	pristine, err := snapshot.Marshal()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	pristineCopy := append([]byte(nil), pristine...)
+
+	// Evidence bytes must not alias the snapshot's internal cache: mutating
+	// the returned evidence envelope must leave the snapshot's signed bytes
+	// intact.
+	evidenceBytes := snapshotEnvelopeForEvidence(snapshot)
+	if len(evidenceBytes) == 0 {
+		t.Fatal("expected evidence envelope bytes")
+	}
+	for i := range evidenceBytes {
+		evidenceBytes[i] ^= 0xff
+	}
+
+	after, err := snapshot.Marshal()
+	if err != nil {
+		t.Fatalf("re-marshal: %v", err)
+	}
+	if !bytes.Equal(after, pristineCopy) {
+		t.Fatal("mutating evidence bytes corrupted the snapshot's cached envelope")
+	}
+}
