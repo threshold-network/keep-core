@@ -1,5 +1,4 @@
 // ROAST/RFC-21 attempt machinery: request fingerprints, round/attempt ids, attempt-context and transition-evidence validation.
-// Split from the former single-file engine.rs (2026-06); see mod.rs.
 
 use super::*;
 

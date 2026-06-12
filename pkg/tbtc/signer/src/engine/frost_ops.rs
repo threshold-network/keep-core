@@ -1,5 +1,4 @@
 // Stateless FROST primitives: dkg_part1..3, nonces, signing package, share, aggregate.
-// Split from the former single-file engine.rs (2026-06); see mod.rs.
 
 use super::*;
 

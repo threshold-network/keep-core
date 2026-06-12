@@ -1,6 +1,6 @@
-// The former inline `mod tests` of engine.rs, moved verbatim (2026-06 split).
-// Module path is unchanged (`engine::tests::*`): chaos-suite --exact filters
-// and phase-doc test references remain valid.
+// Kept as a single module on purpose: scripts/run_phase5_chaos_suite.sh pins
+// `engine::tests::<name>` paths via `cargo test -- --exact`, and the phase
+// docs reference them; splitting this file would break those contracts.
 
 use super::*;
 use proptest::prelude::*;

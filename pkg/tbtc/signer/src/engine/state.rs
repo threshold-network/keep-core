@@ -1,5 +1,4 @@
 // In-memory engine/session state, the state-file lock, and registry capacity guards.
-// Split from the former single-file engine.rs (2026-06); see mod.rs.
 
 use super::*;
 

@@ -1,5 +1,4 @@
 // start/finalize sign-round session flows and bootstrap synthetic contributions.
-// Split from the former single-file engine.rs (2026-06); see mod.rs.
 
 use super::*;
 

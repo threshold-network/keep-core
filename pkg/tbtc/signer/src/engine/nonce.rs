@@ -1,5 +1,4 @@
 // Deterministic round-nonce binding (round-nonce-v3 transcript seed).
-// Split from the former single-file engine.rs (2026-06); see mod.rs.
 
 use super::*;
 

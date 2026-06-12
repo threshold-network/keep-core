@@ -33,12 +33,12 @@ Traceability matrix:
 
 - `RoastAttemptStateMachine.tla`:
   `MonotonicAttemptNumber`, `ReplaySafe` ->
-  `validate_attempt_context`, replay guards in start/finalize flow in
-  `tools/tbtc-signer/src/engine.rs`.
+  `validate_attempt_context` in `src/engine/roast.rs`; replay guards in
+  start/finalize flow in `src/engine/signing.rs`.
 - `StateKeyProviderPolicy.tla`:
   `LoadSuccessImpliesExactBinding`, `FailClosedDisallowedProvider` ->
   `decode_encrypted_state_envelope`, `encode_encrypted_state_envelope` in
-  `tools/tbtc-signer/src/engine.rs`.
+  `src/engine/persistence.rs`.
 - `TeeEnforcementModes.tla`:
   `EnforceModeRequiresValidAttestationWithoutOverride`,
   `NoDirectDisabledToEnforceTransition` -> policy design in

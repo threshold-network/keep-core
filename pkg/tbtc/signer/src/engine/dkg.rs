@@ -1,5 +1,4 @@
 // run_dkg session flow and production gates for the transitional dealer path.
-// Split from the former single-file engine.rs (2026-06); see mod.rs.
 
 use super::*;
 

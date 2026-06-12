@@ -1,5 +1,4 @@
 // Encrypted state-file persistence: envelope codec, key providers, corruption recovery, persisted<->live conversions.
-// Split from the former single-file engine.rs (2026-06); see mod.rs.
 
 use super::*;
 

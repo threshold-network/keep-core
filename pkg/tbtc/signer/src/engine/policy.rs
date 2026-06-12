@@ -1,5 +1,4 @@
 // Admission, signing-policy firewall, rate limiting, and auto-quarantine enforcement.
-// Split from the former single-file engine.rs (2026-06); see mod.rs.
 
 use super::*;
 

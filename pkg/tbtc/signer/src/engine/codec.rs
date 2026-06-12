@@ -1,5 +1,4 @@
 // Hex/struct codecs and Go<->frost identifier conversions.
-// Split from the former single-file engine.rs (2026-06); see mod.rs.
 
 use super::*;
 
