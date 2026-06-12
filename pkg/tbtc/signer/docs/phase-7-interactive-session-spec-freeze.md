@@ -115,9 +115,16 @@ the FFI and never persist.**
   pair exists only inside one process's memory and is consumed
   atomically.
 
-This is also the audit story for the FFI boundary: after Phase 7,
-no secret signing material (key shares already env/command-only;
-now nonces too) transits the Go/Rust interface in either direction.
+This is also the audit story for the FFI boundary — scoped
+precisely: after Phase 7, no secret material of the **signing
+path** (key shares already env/command-only; now nonces too)
+transits the Go/Rust interface in either direction. The interactive
+**DKG** primitives are explicitly out of this spec's scope and
+still hand secret round packages to the host (`dkg_part1` returns
+`secret_package_hex`; `dkg_part2` accepts it back). DKG custody is
+a named follow-up with the same design shape as section 4; until it
+lands, the audit scope statement must describe the DKG boundary
+as-is rather than inheriting this section's claim.
 
 ## 5. Session model and API contract
 
@@ -142,9 +149,21 @@ self-contained):
 3. `InteractiveRound2` — input: the coordinator's signing package
    (the chosen responsive subset's commitment list). The engine
    verifies (a) own membership in the subset, (b) the subset is a
-   subset of the attempt's included set, (c) `|subset| == t`,
-   (d) every commitment is well-formed, (e) attempt-context binding
-   — then consumes the nonce handle and returns the share.
+   subset of the attempt's included set, (c) `|subset| == t`
+   (exactly `t`, deliberately: deterministic, smallest-possible
+   package; FROST tolerates more, this spec does not), (d) every
+   commitment is well-formed, (e) attempt-context binding, and
+   (f) **the member's own commitment entry in the package is
+   byte-identical to its `InteractiveRound1` output** (the engine
+   holds it alongside the nonce handle). Without (f) a malicious
+   coordinator could substitute an honest member's commitment,
+   making that member's correctly-computed share fail verification
+   at aggregation and manufacturing false blame evidence against
+   it. ALL verification precedes consumption: a package that fails
+   any check leaves the nonce handle live (an invalid package must
+   not burn the attempt), while at-most-one-share-per-handle still
+   holds against two *valid* packages because the second call finds
+   the handle consumed.
 4. `InteractiveAggregate` — coordinator-side: collects shares
    against the signing package, verifies each share against the
    member's verifying share before aggregation (share verification
@@ -160,6 +179,15 @@ behavior; keys carry `(session_id, attempt_id)` so bounded
 concurrency (section 8) extends them without weakening replay
 protection.
 
+Live-state bounds: open sessions and unconsumed nonce handles are
+engine memory holding secret material, so they get the same
+discipline as the registries — a hard cap on concurrently live
+sessions (fail closed at capacity: `InteractiveSessionOpen` is
+rejected, never silently evicted) and a TTL sweep that aborts
+abandoned sessions, zeroizing their nonces, mirroring the Go-side
+session-handle registry's TTL. Without this, a flood of
+`SessionOpen`/`Round1` calls grows unbounded secret-bearing state.
+
 ## 6. t-of-included semantics and evidence
 
 * Members submit round-1 commitments to the attempt's coordinator
@@ -173,7 +201,8 @@ protection.
   different members yields shares that cannot aggregate — a
   liveness failure, not a soundness failure. The engine-side checks
   in `InteractiveRound2` (membership, subset-of-included, size
-  `t`) bound what a malicious coordinator can request at all.
+  `t`, own-commitment match) bound what a malicious coordinator can
+  request at all.
 * **Liveness failures must be attributable.** The signing package
   the coordinator distributes is a signed-body envelope (#4040
   pattern, operator key): members retain the received bytes, so a
@@ -185,6 +214,14 @@ protection.
   verification in `InteractiveAggregate` becomes re-checkable blame
   evidence (the proof-carrying-blame roadmap consumes this; the
   f+1 accuser quorum remains the exclusion gate until then).
+  Share-verification blame is sound ONLY because of Round2 check
+  (f): a member signs exclusively over packages that carry its true
+  commitment, so a share that fails verification against that
+  package cannot be the product of coordinator substitution — the
+  member is the only party who could have produced it. Blame
+  re-checking MUST verify against the package envelope the member
+  signed over (the retained received bytes), never a reconstructed
+  package.
 * Under these semantics a silent included member costs zero
   attempts — it is simply not among the first `t` responders — and
   Annex B's sampling table stops binding liveness. The
@@ -244,7 +281,9 @@ share reuse (forbidden by construction — one handle, one attempt).
   surfacing. (scaffold + mirror)
 * **7.5** — e2e/chaos extension + testnet validation run →
   section 7 trigger fires → transitional-path deletion PR +
-  readiness-manifest flip with attached evidence.
+  readiness-manifest flip with attached evidence. (The manifest's
+  FrostUniFFIV1-migration verification is an independent flip
+  condition — 7.5's testnet evidence alone does not satisfy it.)
 * **7.6** — bounded concurrency (fast-follow, own mini-spec).
 
 ## 10. Open questions this freeze forces (proposed defaults)
