@@ -120,8 +120,10 @@ type signingRetryLoop struct {
 	// completed announcement, a failed protocol run, a failed done-check
 	// exchange, or success. Mechanical iterations that never sample the
 	// group - block-timing skips, local announcement errors, context
-	// cancellation - are deliberately not reported, so the rate feeding
-	// the Annex B sampling model is not diluted by local noise.
+	// cancellation, and a members-selection error (which terminates the
+	// whole loop, not the attempt) - are deliberately not reported, so
+	// the rate feeding the Annex B sampling model is not diluted by
+	// local noise.
 	attemptOutcomeReporter func(success bool)
 }
 

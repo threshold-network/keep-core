@@ -1017,10 +1017,10 @@ Recommendation codified by this annex:
 . Until then, the `signingAttemptsLimit = 5` / `f ≤ 2` assumption and
   this annex's tables are the documented envelope; alerting should
   fire when observed attempt failure rates imply `f ≥ 3` behaviour.
-  (Implemented: the `signing_attempt_rolling_success_rate` /
-  `signing_attempt_implied_f_alert` gauges fed by the retry loop's
-  attempt-outcome reporter; thresholds and operator guidance in
-  `docs/development/frost-roast-retry-rollout.adoc` and
+  (Implemented: the `performance_signing_attempt_rolling_success_rate`
+  / `performance_signing_attempt_implied_f_alert` gauges fed by the
+  retry loop's attempt-outcome reporter; thresholds and operator
+  guidance in `docs/development/frost-roast-retry-rollout.adoc` and
   `pkg/clientinfo/signing_liveness.go`.)
 
 == References

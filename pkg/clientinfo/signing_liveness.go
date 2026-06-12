@@ -44,6 +44,12 @@ const (
 // the raw rolling window so operators can apply their own thresholds; the
 // alert gauge encodes the documented Annex B default (1 = observed attempt
 // failure rates imply f >= 3 under the sampling model).
+//
+// These constants are the registry source keys, NOT the exported series
+// names: ObserveApplicationSource prepends the "performance_" application
+// prefix, so the series operators query are
+// performance_signing_attempt_rolling_success_rate and friends. Operator
+// docs must use the prefixed form.
 const (
 	MetricSigningAttemptRollingSuccessRate = "signing_attempt_rolling_success_rate"
 	MetricSigningAttemptRollingSampleCount = "signing_attempt_rolling_sample_count"
@@ -81,10 +87,18 @@ type SigningAttemptLivenessTracker struct {
 func NewSigningAttemptLivenessTracker(
 	recorder SigningLivenessGaugeSetter,
 ) *SigningAttemptLivenessTracker {
+	// The sample count can never exceed the window size, so a minimum
+	// above it would make the alert silently unreachable; clamp to keep
+	// the alert attainable if the constants ever diverge.
+	minimumSamples := SigningLivenessMinimumSamples
+	if minimumSamples > SigningLivenessWindowSize {
+		minimumSamples = SigningLivenessWindowSize
+	}
+
 	return &SigningAttemptLivenessTracker{
 		recorder:       recorder,
 		window:         make([]bool, SigningLivenessWindowSize),
-		minimumSamples: SigningLivenessMinimumSamples,
+		minimumSamples: minimumSamples,
 		alertThreshold: SigningLivenessAlertSuccessRateThreshold,
 	}
 }

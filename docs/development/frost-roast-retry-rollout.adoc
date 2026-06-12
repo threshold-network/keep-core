@@ -124,21 +124,24 @@ Until Phase-7 t-of-included finalize removes the per-attempt veto,
 the serial retry loop's liveness envelope assumes `f <= 2` byzantine
 members (see RFC-21 Annex B for the sampling arithmetic). The node
 exports three gauges via the `/metrics` endpoint implementing the
-annex's required alerting:
+annex's required alerting. The names below are the exported series
+names: the metrics registry prepends the `performance_` application
+prefix to every gauge it registers, so alert queries must use the
+prefixed form.
 
 [cols="2,3"]
 |===
-| Gauge | Meaning
+| Exported gauge | Meaning
 
-| `signing_attempt_rolling_success_rate`
+| `performance_signing_attempt_rolling_success_rate`
 | Per-attempt success rate over the last 50 terminal attempt
   outcomes observed by this node (all wallets aggregated; one
   observation per network-wide attempt).
 
-| `signing_attempt_rolling_sample_count`
+| `performance_signing_attempt_rolling_sample_count`
 | Number of outcomes currently in the rolling window (caps at 50).
 
-| `signing_attempt_implied_f_alert`
+| `performance_signing_attempt_implied_f_alert`
 | `1` when the window is full and the success rate is below `0.14` -
   observed failure rates imply `f >= 3` behaviour under the Annex B
   model. Alert on this value being sustained, not on a single
