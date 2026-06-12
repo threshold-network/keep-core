@@ -1,7 +1,10 @@
 # Phase 7: Interactive Signing Session — Spec Freeze
 
 Date: 2026-06-12
-Status: Proposed (freezes on signer + keep-core owner sign-off)
+Status: FROZEN (2026-06-12 owner sign-off; section 10 decisions
+recorded in the gates-doc Decision Log, entry 8; review converged:
+adversarial pass findings applied in 73dc594c9, Codex and Gemini
+clean)
 Owner: Threshold Labs
 Scope: the hardened interactive two-round FROST signing session — the
 production signing path — with t-of-included finalize native from the
@@ -286,24 +289,26 @@ share reuse (forbidden by construction — one handle, one attempt).
   condition — 7.5's testnet evidence alone does not satisfy it.)
 * **7.6** — bounded concurrency (fast-follow, own mini-spec).
 
-## 10. Open questions this freeze forces (proposed defaults)
+## 10. Open questions this freeze forced (DECIDED 2026-06-12)
 
-1. **Signing-package distribution channel**: dedicated topic signed
-   with the operator key (consistent with RFC-21's resolved
-   coordinator-proposed-aggregation decision) — proposed default —
-   vs. piggybacking the existing session channel.
-2. **Round-1 commitment transport**: members → coordinator only
-   (paper-ROAST shape; proposed default) vs. broadcast to all
-   (more evidence, more traffic; revisit with bounded concurrency).
-3. **Responsive-subset policy**: strict first-t arrival order
-   (proposed default: simplest, no fairness window) vs. a short
-   gather window with deterministic tie-break. Fairness across
-   operators is an economics question; default to first-t and
-   revisit on testnet telemetry.
-4. **Session-state durability**: markers-only (proposed default,
-   per section 4) vs. resumable round-1 state. Resumability
-   contradicts never-persist-nonces; default is markers-only and
-   a crashed member simply misses that attempt.
+All four decided at freeze sign-off (MacLane; recorded as Decision
+Log entry 8 in `roast-phase-5-security-rollout-gates.md`):
+
+1. **Signing-package distribution channel — DECIDED: dedicated
+   topic signed with the operator key** (consistent with RFC-21's
+   resolved coordinator-proposed-aggregation decision), not
+   piggybacked on the existing session channel.
+2. **Round-1 commitment transport — DECIDED: members → coordinator
+   only** (paper-ROAST shape). Broadcast-to-all is revisited, if at
+   all, with bounded concurrency.
+3. **Responsive-subset policy — DECIDED: strict first-t arrival
+   order**, no fairness window. Operator-fairness economics are
+   deferred to testnet telemetry; a gather window may be proposed
+   later as its own decision.
+4. **Session-state durability — DECIDED: markers-only** (per
+   section 4). Resumable round-1 state contradicts
+   never-persist-nonces and is rejected; a crashed member misses
+   that attempt.
 
 ## 11. Freeze acceptance criteria
 
