@@ -11307,6 +11307,25 @@ fn interactive_session_full_round_trip_aggregates_bip340() {
     .expect("interactive round 2 releases the share");
     assert_eq!(round2.attempt_id, opened.attempt_id);
 
+    // A completed Round2 frees the live session state immediately: the
+    // resident key package + message must not linger to the TTL sweep,
+    // and the capacity slot must be returned. Only the durable marker
+    // remains.
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(session_id).expect("session exists");
+        assert!(
+            session.interactive_signing.is_none(),
+            "completed Round2 must free the live interactive session state"
+        );
+        assert!(
+            session
+                .consumed_interactive_attempt_markers
+                .contains(&opened.attempt_id),
+            "the durable consumption marker must remain after Round2"
+        );
+    }
+
     let member2_share = sign_share(SignShareRequest {
         signing_package_hex: signing_package_hex.clone(),
         nonces_hex: member2.nonces_hex,
@@ -12130,6 +12149,18 @@ fn interactive_live_session_capacity_fails_closed() {
                 if m.contains("live interactive session count")),
             "unexpected error: {at_capacity:?}"
         );
+
+        // A capacity rejection for a brand-new session_id must NOT
+        // leave an empty SessionState behind (it would otherwise
+        // accumulate against the global session cap and could starve
+        // DKG).
+        {
+            let guard = state().expect("state").lock().expect("lock");
+            assert!(
+                !guard.sessions.contains_key("interactive-cap-b"),
+                "a rejected interactive open must not insert an empty session"
+            );
+        }
 
         // An idempotent reopen of the live session does not trip the cap.
         let reopen = open_interactive_for_test(

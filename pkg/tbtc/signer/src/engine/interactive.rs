@@ -98,61 +98,78 @@ pub fn interactive_session_open(
 
     ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
 
-    // The live-session capacity check counts nonce-bearing sessions
-    // OTHER than this one, so an idempotent reopen or an
-    // implicit-abort replacement never trips the cap.
-    let live_interactive_sessions = guard
-        .sessions
-        .iter()
-        .filter(|(session_id, session)| {
-            session.interactive_signing.is_some() && session_id.as_str() != request.session_id
-        })
-        .count();
+    // Decide everything from a read-only view BEFORE inserting anything,
+    // so the reject paths (consumed marker, conflict, capacity) never
+    // leave an empty SessionState behind. Returns: whether the attempt
+    // is already consumed, the disposition of any live attempt under
+    // this exact attempt_id (Some(true)=idempotent, Some(false)=
+    // conflicting fingerprint, None=no matching live attempt), and
+    // whether a live interactive attempt is being replaced.
+    let (already_consumed, matching_attempt_idempotent, replacing) = {
+        let existing = guard.sessions.get(&request.session_id);
+        let already_consumed = existing.is_some_and(|session| {
+            session
+                .consumed_interactive_attempt_markers
+                .contains(&attempt_id)
+        });
+        let matching_attempt_idempotent = existing
+            .and_then(|session| session.interactive_signing.as_ref())
+            .filter(|interactive| interactive.attempt_context.attempt_id == attempt_id)
+            .map(|interactive| interactive.open_request_fingerprint == request_fingerprint);
+        let replacing = existing.is_some_and(|session| session.interactive_signing.is_some());
+        (already_consumed, matching_attempt_idempotent, replacing)
+    };
 
-    let session = guard
-        .sessions
-        .entry(request.session_id.clone())
-        .or_default();
-
-    if session
-        .consumed_interactive_attempt_markers
-        .contains(&attempt_id)
-    {
+    if already_consumed {
         return Err(EngineError::ConsumedNonceReplay {
             session_id: request.session_id.clone(),
             attempt_id,
         });
     }
 
-    if let Some(existing) = session.interactive_signing.as_ref() {
-        if existing.attempt_context.attempt_id == attempt_id {
-            if existing.open_request_fingerprint == request_fingerprint {
-                return Ok(InteractiveSessionOpenResult {
-                    session_id: request.session_id,
-                    attempt_id,
-                    idempotent: true,
-                });
-            }
+    match matching_attempt_idempotent {
+        Some(true) => {
+            return Ok(InteractiveSessionOpenResult {
+                session_id: request.session_id,
+                attempt_id,
+                idempotent: true,
+            });
+        }
+        Some(false) => {
             return Err(EngineError::SessionConflict {
                 session_id: request.session_id.clone(),
             });
         }
-        // A different attempt for the same session implicitly aborts
-        // the previous live attempt: the retry loop has moved on, and
-        // a stuck prior attempt must not strand its nonces. Zeroize
-        // happens in the round-1 state's drop path below.
+        // None: no live attempt under this attempt_id. If a DIFFERENT
+        // attempt is live it is implicitly aborted below - the retry
+        // loop has moved on and a stuck prior attempt must not strand
+        // its nonces.
+        None => {}
     }
 
-    if session.interactive_signing.is_none()
-        && live_interactive_sessions >= max_live_interactive_sessions_limit()
-    {
-        return Err(EngineError::Internal(format!(
-            "live interactive session count [{live_interactive_sessions}] reached max [{}]; \
-             abort idle sessions or increase {}",
-            max_live_interactive_sessions_limit(),
-            TBTC_SIGNER_MAX_LIVE_INTERACTIVE_SESSIONS_ENV
-        )));
+    // Capacity counts every live interactive session. When replacing,
+    // this session already holds one of those slots, so the cap does
+    // not apply; when not replacing, a new slot is being taken.
+    if !replacing {
+        let live_interactive_sessions = guard
+            .sessions
+            .values()
+            .filter(|session| session.interactive_signing.is_some())
+            .count();
+        if live_interactive_sessions >= max_live_interactive_sessions_limit() {
+            return Err(EngineError::Internal(format!(
+                "live interactive session count [{live_interactive_sessions}] reached max [{}]; \
+                 abort idle sessions or increase {}",
+                max_live_interactive_sessions_limit(),
+                TBTC_SIGNER_MAX_LIVE_INTERACTIVE_SESSIONS_ENV
+            )));
+        }
     }
+
+    let session = guard
+        .sessions
+        .entry(request.session_id.clone())
+        .or_default();
 
     if let Some(mut replaced) = session.interactive_signing.take() {
         zeroize_interactive_round1(&mut replaced);
@@ -369,6 +386,16 @@ pub fn interactive_round2(
         };
     round1.nonces.zeroize();
     drop(round1);
+
+    // Round2 is terminal for this member's participation in the
+    // attempt: the marker is durable and the nonces are gone, so free
+    // the live session state now rather than letting it (and its
+    // resident key package + message) linger until the TTL sweep. This
+    // also returns the live-session capacity slot immediately. Done on
+    // both the success and share-computation-failure paths: the
+    // attempt is consumed either way, and the durable marker carries
+    // all further replay protection.
+    session.interactive_signing = None;
 
     let signature_share = signature_share_result
         .map_err(|e| EngineError::Internal(format!("failed to create signature share: {e}")))?;
