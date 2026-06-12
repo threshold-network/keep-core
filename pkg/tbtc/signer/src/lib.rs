@@ -10,10 +10,11 @@ use std::sync::OnceLock;
 use api::{
     AggregateRequest, BuildTaprootTxRequest, DifferentialFuzzRequest, DkgPart1Request,
     DkgPart2Request, DkgPart3Request, FinalizeSignRoundRequest,
-    GenerateNoncesAndCommitmentsRequest, NewSigningPackageRequest, PromoteCanaryRequest,
-    QuarantineStatusRequest, RefreshCadenceStatusRequest, RefreshSharesRequest,
-    RollbackCanaryRequest, RunDkgRequest, SignShareRequest, StartSignRoundRequest,
-    TranscriptAuditRequest, TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
+    GenerateNoncesAndCommitmentsRequest, InitSignerConfigRequest, NewSigningPackageRequest,
+    PromoteCanaryRequest, QuarantineStatusRequest, RefreshCadenceStatusRequest,
+    RefreshSharesRequest, RollbackCanaryRequest, RunDkgRequest, SignShareRequest,
+    StartSignRoundRequest, TranscriptAuditRequest, TriggerEmergencyRekeyRequest,
+    VerifyBlameProofRequest,
 };
 use ffi::{
     ffi_entry, free_buffer, parse_request, serialize_response, success_from_string,
@@ -23,44 +24,20 @@ use ffi::{
 pub use ffi::TbtcBuffer;
 
 const TBTC_SIGNER_VERSION: &str = "tbtc-signer/0.1.0-bootstrap";
-const TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV: &str = "TBTC_SIGNER_ALLOW_BOOTSTRAP";
-const TBTC_SIGNER_PROFILE_ENV: &str = "TBTC_SIGNER_PROFILE";
-const TBTC_SIGNER_PROFILE_PRODUCTION: &str = "production";
-const TBTC_SIGNER_PROFILE_DEVELOPMENT: &str = "development";
+use engine::TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV;
+#[cfg(test)]
+use engine::TBTC_SIGNER_PROFILE_ENV;
 #[cfg(test)]
 static TEST_BOOTSTRAP_MODE_OVERRIDE: OnceLock<std::sync::Mutex<Option<bool>>> = OnceLock::new();
 
-fn bootstrap_mode_flag_enabled(raw_value: &str) -> bool {
-    matches!(
-        raw_value.trim().to_ascii_lowercase().as_str(),
-        "1" | "true" | "yes" | "on"
-    )
-}
-
 fn bootstrap_mode_enabled_from_env() -> bool {
-    if signer_profile_is_production() {
+    if engine::signer_profile_is_production() {
         return false;
     }
 
-    std::env::var(TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV)
-        .map(|raw_value| bootstrap_mode_flag_enabled(&raw_value))
+    engine::signer_env_var(TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV)
+        .map(|raw_value| engine::truthy_env_flag(&raw_value))
         .unwrap_or(false)
-}
-
-fn signer_profile_is_production() -> bool {
-    let raw = std::env::var(TBTC_SIGNER_PROFILE_ENV).unwrap_or_default();
-    let normalized = raw.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        TBTC_SIGNER_PROFILE_PRODUCTION | "" => true,
-        TBTC_SIGNER_PROFILE_DEVELOPMENT => false,
-        other => panic!(
-            "{} must be '{}' or '{}'; got {:?}",
-            TBTC_SIGNER_PROFILE_ENV,
-            TBTC_SIGNER_PROFILE_PRODUCTION,
-            TBTC_SIGNER_PROFILE_DEVELOPMENT,
-            other
-        ),
-    }
 }
 
 #[cfg(test)]
@@ -88,6 +65,18 @@ fn bootstrap_mode_enabled() -> bool {
 #[no_mangle]
 pub extern "C" fn frost_tbtc_version() -> TbtcSignerResult {
     success_from_string(TBTC_SIGNER_VERSION.to_string())
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_init_signer_config(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: InitSignerConfigRequest = parse_request(request_ptr, request_len)?;
+        let response = engine::init_signer_config(request)?;
+        serialize_response(&response)
+    })
 }
 
 #[no_mangle]
@@ -1876,7 +1865,7 @@ mod tests {
 
         for (value, expected) in test_cases {
             assert_eq!(
-                super::bootstrap_mode_flag_enabled(value),
+                super::engine::truthy_env_flag(value),
                 expected,
                 "unexpected bootstrap-mode flag classification for [{value:?}]",
             );
@@ -1900,12 +1889,12 @@ mod tests {
         let _allow_bootstrap_env = EnvVarGuard::set(super::TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV, "true");
         let _profile_env = EnvVarGuard::unset(super::TBTC_SIGNER_PROFILE_ENV);
 
-        assert!(super::signer_profile_is_production());
+        assert!(super::engine::signer_profile_is_production());
         assert!(!super::bootstrap_mode_enabled_from_env());
 
         std::env::set_var(super::TBTC_SIGNER_PROFILE_ENV, " ");
 
-        assert!(super::signer_profile_is_production());
+        assert!(super::engine::signer_profile_is_production());
         assert!(!super::bootstrap_mode_enabled_from_env());
     }
 
@@ -1921,5 +1910,33 @@ mod tests {
         std::env::set_var(super::TBTC_SIGNER_PROFILE_ENV, "production");
 
         assert!(!super::bootstrap_mode_enabled());
+    }
+    #[test]
+    fn init_signer_config_ffi_round_trip_installs_and_reports_fingerprint() {
+        let _guard = crate::engine::lock_test_state();
+        crate::engine::reset_for_tests();
+
+        let request = crate::api::InitSignerConfigRequest {
+            profile: Some("development".to_string()),
+            roast_coordinator_timeout_ms: Some(45_000),
+            ..crate::api::InitSignerConfigRequest::default()
+        };
+        let (status, response_bytes) = call_ffi(&request, crate::frost_tbtc_init_signer_config);
+        assert_eq!(
+            status,
+            0,
+            "init must succeed: {:?}",
+            String::from_utf8_lossy(&response_bytes)
+        );
+
+        let response: crate::api::InitSignerConfigResult =
+            serde_json::from_slice(&response_bytes).expect("response parses");
+        assert!(response.installed);
+        assert!(!response.idempotent);
+        assert_eq!(response.configured_key_count, 2);
+        assert!(!response.config_fingerprint.is_empty());
+
+        // Clear the installed snapshot so env-driven tests are unaffected.
+        crate::engine::reset_for_tests();
     }
 }

@@ -245,8 +245,7 @@ pub(crate) fn state() -> Result<&'static Mutex<EngineState>, EngineError> {
 }
 
 pub(crate) fn state_file_path() -> Result<PathBuf, EngineError> {
-    let configured_path = std::env::var(TBTC_SIGNER_STATE_PATH_ENV)
-        .ok()
+    let configured_path = signer_env_var(TBTC_SIGNER_STATE_PATH_ENV)
         .map(|path| path.trim().to_string())
         .filter(|path| !path.is_empty())
         .map(PathBuf::from);
@@ -264,7 +263,8 @@ pub(crate) fn state_file_path() -> Result<PathBuf, EngineError> {
 
     if signer_profile_is_production() {
         return Err(EngineError::Internal(format!(
-            "{} must be set when {}={}; refusing to use the implicit temp-dir signer state path",
+            "{} (or the state_path field of the init-time signer config) must be \
+             set when {}={}; refusing to use the implicit temp-dir signer state path",
             TBTC_SIGNER_STATE_PATH_ENV, TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_PRODUCTION
         )));
     }
@@ -322,8 +322,7 @@ pub(crate) fn ensure_state_file_lock() -> Result<(), EngineError> {
 }
 
 pub(crate) fn state_corruption_policy() -> CorruptStatePolicy {
-    let policy = std::env::var(TBTC_SIGNER_STATE_CORRUPTION_POLICY_ENV)
-        .ok()
+    let policy = signer_env_var(TBTC_SIGNER_STATE_CORRUPTION_POLICY_ENV)
         .map(|value| value.trim().to_ascii_lowercase())
         .unwrap_or_default();
 
@@ -335,15 +334,13 @@ pub(crate) fn state_corruption_policy() -> CorruptStatePolicy {
 }
 
 pub(crate) fn state_corrupt_backup_limit() -> usize {
-    std::env::var(TBTC_SIGNER_STATE_CORRUPT_BACKUP_LIMIT_ENV)
-        .ok()
+    signer_env_var(TBTC_SIGNER_STATE_CORRUPT_BACKUP_LIMIT_ENV)
         .and_then(|value| value.trim().parse::<usize>().ok())
         .unwrap_or(TBTC_SIGNER_DEFAULT_CORRUPT_BACKUP_LIMIT)
 }
 
 pub(crate) fn max_sessions_limit() -> usize {
-    std::env::var(TBTC_SIGNER_MAX_SESSIONS_ENV)
-        .ok()
+    signer_env_var(TBTC_SIGNER_MAX_SESSIONS_ENV)
         .and_then(|value| value.trim().parse::<usize>().ok())
         .filter(|limit| *limit > 0)
         .unwrap_or(TBTC_SIGNER_DEFAULT_MAX_SESSIONS)

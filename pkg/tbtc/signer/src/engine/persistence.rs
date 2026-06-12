@@ -250,8 +250,7 @@ set {}={} to quarantine the file and continue with clean state",
 }
 
 pub(crate) fn state_key_command_timeout_secs() -> u64 {
-    std::env::var(TBTC_SIGNER_STATE_KEY_COMMAND_TIMEOUT_SECS_ENV)
-        .ok()
+    signer_env_var(TBTC_SIGNER_STATE_KEY_COMMAND_TIMEOUT_SECS_ENV)
         .and_then(|value| value.trim().parse::<u64>().ok())
         .filter(|value| {
             *value >= TBTC_SIGNER_MIN_STATE_KEY_COMMAND_TIMEOUT_SECS
@@ -495,10 +494,21 @@ pub(crate) fn execute_state_key_command(command_spec: &str) -> Result<Output, En
     }
 }
 
-pub(crate) fn state_encryption_key_material() -> Result<StateEncryptionKeyMaterial, EngineError> {
-    let provider = std::env::var(TBTC_SIGNER_STATE_KEY_PROVIDER_ENV)
+/// Where the state-encryption key will come from, validated structurally:
+/// provider selection, the production prohibition on the env provider, and
+/// command-spec presence. Shared by `state_encryption_key_material` (which
+/// goes on to read the secret or execute the command) and init-time config
+/// validation (which deliberately must NOT touch the secret channel or run
+/// commands).
+pub(crate) enum StateKeyProviderPlan {
+    Env,
+    Command { command_spec: String },
+}
+
+pub(crate) fn resolve_state_key_provider_plan() -> Result<StateKeyProviderPlan, EngineError> {
+    let provider = signer_env_var(TBTC_SIGNER_STATE_KEY_PROVIDER_ENV)
         .map(|value| value.trim().to_ascii_lowercase())
-        .unwrap_or_else(|_| TBTC_SIGNER_STATE_KEY_PROVIDER_ENV_DEFAULT.to_string());
+        .unwrap_or_else(|| TBTC_SIGNER_STATE_KEY_PROVIDER_ENV_DEFAULT.to_string());
 
     match provider.as_str() {
         TBTC_SIGNER_STATE_KEY_PROVIDER_ENV_DEFAULT => {
@@ -512,8 +522,40 @@ pub(crate) fn state_encryption_key_material() -> Result<StateEncryptionKeyMateri
                     TBTC_SIGNER_STATE_KEY_COMMAND_ENV
                 )));
             }
+            Ok(StateKeyProviderPlan::Env)
+        }
+        TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND => {
+            let command_spec =
+                signer_env_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV).ok_or_else(|| {
+                    EngineError::Internal(format!(
+                        "missing required state key command env [{}]",
+                        TBTC_SIGNER_STATE_KEY_COMMAND_ENV
+                    ))
+                })?;
+            if command_spec.trim().is_empty() {
+                return Err(EngineError::Internal(format!(
+                    "state key command env [{}] must be non-empty",
+                    TBTC_SIGNER_STATE_KEY_COMMAND_ENV
+                )));
+            }
+            Ok(StateKeyProviderPlan::Command { command_spec })
+        }
+        _ => Err(EngineError::Internal(format!(
+            "unsupported state key provider [{}]; expected [{}] or [{}]",
+            provider,
+            TBTC_SIGNER_STATE_KEY_PROVIDER_ENV_DEFAULT,
+            TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND
+        ))),
+    }
+}
 
+pub(crate) fn state_encryption_key_material() -> Result<StateEncryptionKeyMaterial, EngineError> {
+    match resolve_state_key_provider_plan()? {
+        StateKeyProviderPlan::Env => {
             let raw_key_hex =
+                // Deliberately read from the real environment even when an init-time
+                // config is installed: the state-encryption key is a secret and the
+                // config FFI carries operational knobs only (see signer_env_var).
                 std::env::var(TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX_ENV).map_err(|_| {
                     EngineError::Internal(format!(
                         "missing required state encryption key env [{}]",
@@ -531,20 +573,7 @@ pub(crate) fn state_encryption_key_material() -> Result<StateEncryptionKeyMateri
                 key_id,
             })
         }
-        TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND => {
-            let command_spec = std::env::var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV).map_err(|_| {
-                EngineError::Internal(format!(
-                    "missing required state key command env [{}]",
-                    TBTC_SIGNER_STATE_KEY_COMMAND_ENV
-                ))
-            })?;
-            if command_spec.trim().is_empty() {
-                return Err(EngineError::Internal(format!(
-                    "state key command env [{}] must be non-empty",
-                    TBTC_SIGNER_STATE_KEY_COMMAND_ENV
-                )));
-            }
-
+        StateKeyProviderPlan::Command { command_spec } => {
             let mut output = execute_state_key_command(&command_spec)?;
 
             if !output.status.success() {
@@ -578,12 +607,6 @@ pub(crate) fn state_encryption_key_material() -> Result<StateEncryptionKeyMateri
                 key_id,
             })
         }
-        _ => Err(EngineError::Internal(format!(
-            "unsupported state key provider [{}]; expected [{}] or [{}]",
-            provider,
-            TBTC_SIGNER_STATE_KEY_PROVIDER_ENV_DEFAULT,
-            TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND
-        ))),
     }
 }
 

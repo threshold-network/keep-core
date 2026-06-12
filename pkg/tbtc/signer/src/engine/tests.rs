@@ -10556,3 +10556,589 @@ fn command_key_provider_survives_restart_with_stable_key() {
     cleanup_test_state_artifacts(&state_path);
     clear_state_storage_policy_overrides();
 }
+
+// --- init-time signer config (frost_tbtc_init_signer_config) ---
+
+/// Clears the installed config on drop so a panicking test cannot leak an
+/// installed snapshot into unrelated tests that expect env-fallback mode.
+struct InstalledConfigClearGuard;
+
+impl Drop for InstalledConfigClearGuard {
+    fn drop(&mut self) {
+        clear_installed_signer_config_for_tests();
+    }
+}
+
+#[test]
+fn init_signer_config_overrides_environment_for_covered_knobs() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    std::env::set_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV, "120000");
+    assert_eq!(roast_coordinator_timeout_ms(), 120_000);
+
+    let result = init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
+        roast_coordinator_timeout_ms: Some(60_000),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect("install config");
+    assert!(result.installed);
+    assert!(!result.idempotent);
+    assert_eq!(result.configured_key_count, 2);
+
+    assert_eq!(roast_coordinator_timeout_ms(), 60_000);
+    std::env::remove_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV);
+}
+
+#[test]
+fn init_signer_config_ignores_environment_wholesale_for_unset_fields() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    // A valid env override that would normally win...
+    std::env::set_var(TBTC_SIGNER_REFRESH_CADENCE_SECONDS_ENV, "120");
+    assert_eq!(refresh_cadence_seconds(), 120);
+
+    // ...is ignored once a config is installed, even though the installed
+    // config does not set that field: absent field = built-in default.
+    init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
+        roast_coordinator_timeout_ms: Some(60_000),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect("install config");
+
+    assert_eq!(
+        refresh_cadence_seconds(),
+        TBTC_SIGNER_DEFAULT_REFRESH_CADENCE_SECONDS
+    );
+    std::env::remove_var(TBTC_SIGNER_REFRESH_CADENCE_SECONDS_ENV);
+}
+
+#[test]
+fn init_signer_config_is_idempotent_for_identical_request_and_rejects_conflicts() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    let request = InitSignerConfigRequest {
+        profile: Some("development".to_string()),
+        max_sessions: Some(64),
+        ..InitSignerConfigRequest::default()
+    };
+    let first = init_signer_config(request.clone()).expect("first install");
+    assert!(!first.idempotent);
+
+    let second = init_signer_config(request).expect("identical re-init");
+    assert!(second.idempotent);
+    assert_eq!(second.config_fingerprint, first.config_fingerprint);
+
+    let conflict = init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
+        max_sessions: Some(128),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect_err("conflicting re-init must be rejected");
+    let message = conflict.to_string();
+    assert!(
+        message.contains("conflicting re-initialization rejected"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn init_signer_config_rejects_invalid_profile_without_installing() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    let error = init_signer_config(InitSignerConfigRequest {
+        profile: Some("staging".to_string()),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect_err("invalid profile must be rejected");
+    assert!(error.to_string().contains("profile"), "{error}");
+
+    // Nothing installed: environment reads still apply.
+    std::env::set_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV, "120000");
+    assert_eq!(roast_coordinator_timeout_ms(), 120_000);
+    std::env::remove_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV);
+}
+
+#[test]
+fn init_signer_config_rolls_back_install_when_policy_validation_fails() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    // Firewall enforcement on, but the required allowed-script-classes knob
+    // is absent from the same config (and, wholesale semantics, the
+    // environment cannot supply it) -> the loader rejects and the install
+    // must roll back. (Admission knobs would NOT trip this: that loader
+    // falls back to defaults for absent values.)
+    let error = init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
+        enforce_signing_policy_firewall: Some(true),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect_err("incomplete firewall policy must fail the init");
+    assert!(
+        error.to_string().contains("missing required env"),
+        "unexpected error: {error}"
+    );
+
+    // Rolled back: env fallback is live again.
+    std::env::set_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV, "120000");
+    assert_eq!(roast_coordinator_timeout_ms(), 120_000);
+    std::env::remove_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV);
+}
+
+#[test]
+fn init_signer_config_validates_complete_admission_policy_at_install() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    let result = init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
+        enforce_admission_policy: Some(true),
+        admission_min_participants: Some(3),
+        admission_min_threshold: Some(2),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect("complete admission policy installs");
+    assert_eq!(result.configured_key_count, 4);
+
+    let config = load_admission_policy_config()
+        .expect("load admission policy")
+        .expect("admission policy enforced");
+    assert_eq!(config.min_participants, 3);
+    assert_eq!(config.min_threshold, 2);
+}
+
+#[test]
+fn init_signer_config_keeps_state_encryption_key_on_environment_channel() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    // reset_for_tests points the env key at TEST_STATE_ENCRYPTION_KEY_HEX.
+    // Installing a config that selects the env provider but (by design)
+    // cannot carry the key itself must still resolve the key from the real
+    // environment.
+    init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
+        state_key_provider: Some("env".to_string()),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect("install config");
+
+    let material = state_encryption_key_material().expect("key material resolves from env");
+    assert_eq!(
+        material.key_provider,
+        TBTC_SIGNER_STATE_KEY_PROVIDER_ENV_DEFAULT
+    );
+}
+
+#[test]
+fn init_signer_config_production_profile_forces_roast_strict_mode() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    let (test_trust_root, test_payload, test_signature) = build_signed_provenance_attestation(
+        TBTC_SIGNER_REQUIRED_ATTESTATION_STATUS_APPROVED,
+        TBTC_SIGNER_RUNTIME_VERSION,
+        Some(now_unix() + 3600),
+    );
+
+    // lock_test_state pins the env profile to development; the installed
+    // config must override it wholesale.
+    init_signer_config(InitSignerConfigRequest {
+        profile: Some("production".to_string()),
+        state_path: Some(
+            std::env::temp_dir()
+                .join("frost_init_config_prod_profile_state.json")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        state_key_provider: Some("command".to_string()),
+        state_key_command: Some("/nonexistent/key-helper-never-run-at-init".to_string()),
+        provenance_attestation_status: Some("approved".to_string()),
+        provenance_trust_root: Some(test_trust_root.clone()),
+        provenance_attestation_payload: Some(test_payload.clone()),
+        provenance_attestation_signature_hex: Some(test_signature.clone()),
+        min_approved_version: Some(TBTC_SIGNER_RUNTIME_VERSION.to_string()),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect("install config");
+
+    assert!(signer_profile_is_production());
+    assert!(roast_strict_mode_enabled());
+}
+
+#[test]
+fn reset_for_tests_clears_installed_signer_config() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
+        roast_coordinator_timeout_ms: Some(60_000),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect("install config");
+    assert_eq!(roast_coordinator_timeout_ms(), 60_000);
+
+    reset_for_tests();
+
+    std::env::set_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV, "120000");
+    assert_eq!(roast_coordinator_timeout_ms(), 120_000);
+    std::env::remove_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV);
+}
+
+#[test]
+fn init_signer_config_request_rejects_unknown_fields() {
+    let parsed: Result<InitSignerConfigRequest, _> =
+        serde_json::from_str(r#"{"polciy_max_output_count": 1}"#);
+    assert!(parsed.is_err(), "typo'd field names must fail the parse");
+}
+
+#[test]
+fn init_signer_config_canonicalizes_list_and_bool_encodings() {
+    let values = config_values_from_request(&InitSignerConfigRequest {
+        enable_auto_quarantine: Some(false),
+        auto_quarantine_dao_allowlist_identifiers: Some(vec![3, 1, 2, 2]),
+        policy_allowed_script_classes: Some(vec!["P2TR".to_string(), "p2wpkh".to_string()]),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect("convert request");
+
+    assert_eq!(
+        values
+            .get(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV)
+            .map(String::as_str),
+        Some("false")
+    );
+    assert_eq!(
+        values
+            .get(TBTC_SIGNER_AUTO_QUARANTINE_DAO_ALLOWLIST_IDENTIFIERS_ENV)
+            .map(String::as_str),
+        Some("1,2,3")
+    );
+    // Raw values are inserted; the existing loader normalizes case exactly as
+    // it does for environment values.
+    assert_eq!(
+        values
+            .get(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV)
+            .map(String::as_str),
+        Some("P2TR,p2wpkh")
+    );
+
+    let empty_list = config_values_from_request(&InitSignerConfigRequest {
+        admission_required_identifiers: Some(Vec::new()),
+        ..InitSignerConfigRequest::default()
+    });
+    assert!(
+        empty_list.is_err(),
+        "empty identifier list must be rejected"
+    );
+}
+
+#[test]
+fn init_signer_config_rejects_production_config_without_state_path() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    // Explicit production AND production-by-omission (the wholesale default
+    // when the profile field is unset) must both fail the init when no
+    // state_path is configured, instead of installing and then failing at
+    // the first state access.
+    for request in [
+        InitSignerConfigRequest {
+            profile: Some("production".to_string()),
+            ..InitSignerConfigRequest::default()
+        },
+        InitSignerConfigRequest {
+            roast_coordinator_timeout_ms: Some(60_000),
+            ..InitSignerConfigRequest::default()
+        },
+    ] {
+        let error = init_signer_config(request)
+            .expect_err("production config without state_path must fail the init");
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to use the implicit temp-dir signer state path"),
+            "unexpected error: {error}"
+        );
+    }
+
+    // Nothing installed: environment reads still apply.
+    std::env::set_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV, "120000");
+    assert_eq!(roast_coordinator_timeout_ms(), 120_000);
+    std::env::remove_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV);
+}
+
+#[test]
+fn init_signer_config_state_path_is_honored_end_to_end() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    let state_path = std::env::temp_dir().join(format!(
+        "frost_init_config_e2e_state_{}.json",
+        std::process::id()
+    ));
+    let _ = fs::remove_file(&state_path);
+
+    init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
+        state_path: Some(state_path.to_string_lossy().into_owned()),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect("install config");
+
+    let dkg_request = RunDkgRequest {
+        session_id: "session-init-config-e2e".to_string(),
+        participants: vec![
+            crate::api::DkgParticipant {
+                identifier: 1,
+                public_key_hex: "02aa".to_string(),
+            },
+            crate::api::DkgParticipant {
+                identifier: 2,
+                public_key_hex: "02bb".to_string(),
+            },
+        ],
+        threshold: 2,
+        dkg_seed_hex: None,
+    };
+
+    // The state-file lock was already bound to the default path by the
+    // pre-install persist in reset_for_tests, and the engine refuses to
+    // switch state paths in-process: installing a config after state has
+    // been touched fails loudly instead of splitting state across paths.
+    let error = run_dkg(dkg_request.clone())
+        .expect_err("state-path switch after first state access must be refused");
+    assert!(
+        error.to_string().contains("refusing to switch"),
+        "unexpected error: {error}"
+    );
+
+    // A fresh process that installs the config before touching state binds
+    // the lock at the configured path and persists there.
+    simulate_process_restart_for_tests();
+    run_dkg(dkg_request).expect("run dkg under installed config after restart");
+
+    assert!(
+        state_path.exists(),
+        "engine state must persist at the config-provided path"
+    );
+
+    reset_for_tests();
+    let _ = fs::remove_file(&state_path);
+    let _ = fs::remove_file(state_path.with_extension("json.lock"));
+}
+
+#[test]
+fn init_signer_config_rejects_production_config_defaulting_to_env_key_provider() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    // Wholesale semantics: leaving state_key_provider unset in the config
+    // defaults to the env provider even if the environment exported
+    // "command" - and production forbids the env provider. This must fail
+    // the init, not the first state access.
+    std::env::set_var(TBTC_SIGNER_STATE_KEY_PROVIDER_ENV, "command");
+    let error = init_signer_config(InitSignerConfigRequest {
+        profile: Some("production".to_string()),
+        state_path: Some("/var/lib/tbtc/signer-state.json".to_string()),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect_err("production config defaulting to the env key provider must fail the init");
+    assert!(
+        error.to_string().contains("is not allowed in profile"),
+        "unexpected error: {error}"
+    );
+    std::env::remove_var(TBTC_SIGNER_STATE_KEY_PROVIDER_ENV);
+}
+
+#[test]
+fn init_signer_config_rejects_command_key_provider_without_command() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    let error = init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
+        state_key_provider: Some("command".to_string()),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect_err("command key provider without a command must fail the init");
+    assert!(
+        error
+            .to_string()
+            .contains("missing required state key command env"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn init_signer_config_rejects_unknown_state_key_provider() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    let error = init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
+        state_key_provider: Some("kms".to_string()),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect_err("unknown key provider must fail the init");
+    assert!(
+        error.to_string().contains("unsupported state key provider"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn init_signer_config_validates_command_key_provider_without_executing_it() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    let (test_trust_root, test_payload, test_signature) = build_signed_provenance_attestation(
+        TBTC_SIGNER_REQUIRED_ATTESTATION_STATUS_APPROVED,
+        TBTC_SIGNER_RUNTIME_VERSION,
+        Some(now_unix() + 3600),
+    );
+
+    // The command path deliberately points at a binary that cannot succeed:
+    // if init executed the key command, this install would fail. Structural
+    // validation must accept it without running it.
+    let result = init_signer_config(InitSignerConfigRequest {
+        profile: Some("production".to_string()),
+        state_path: Some("/var/lib/tbtc/signer-state.json".to_string()),
+        state_key_provider: Some("command".to_string()),
+        state_key_command: Some("/nonexistent/key-helper-never-run-at-init".to_string()),
+        provenance_attestation_status: Some("approved".to_string()),
+        provenance_trust_root: Some(test_trust_root.clone()),
+        provenance_attestation_payload: Some(test_payload.clone()),
+        provenance_attestation_signature_hex: Some(test_signature.clone()),
+        min_approved_version: Some(TBTC_SIGNER_RUNTIME_VERSION.to_string()),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect("structurally valid production config installs without running the key command");
+    assert!(result.installed);
+}
+
+#[test]
+fn init_signer_config_rejects_production_config_without_provenance_attestation() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    // Production forces the provenance gate; a production config that is
+    // otherwise complete but carries no attestation set is unusable for
+    // every protected operation and must fail the init, not the first call.
+    let error = init_signer_config(InitSignerConfigRequest {
+        profile: Some("production".to_string()),
+        state_path: Some("/var/lib/tbtc/signer-state.json".to_string()),
+        state_key_provider: Some("command".to_string()),
+        state_key_command: Some("/nonexistent/key-helper-never-run-at-init".to_string()),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect_err("production config without provenance attestation must fail the init");
+    assert!(
+        error
+            .to_string()
+            .contains(TBTC_SIGNER_PROVENANCE_ATTESTATION_STATUS_ENV),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn init_signer_config_rejects_enforced_gate_with_unparseable_trust_root() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    let (_, test_payload, test_signature) = build_signed_provenance_attestation(
+        TBTC_SIGNER_REQUIRED_ATTESTATION_STATUS_APPROVED,
+        TBTC_SIGNER_RUNTIME_VERSION,
+        Some(now_unix() + 3600),
+    );
+
+    let error = init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
+        enforce_provenance_gate: Some(true),
+        provenance_attestation_status: Some("approved".to_string()),
+        provenance_trust_root: Some("not-a-pubkey".to_string()),
+        provenance_attestation_payload: Some(test_payload),
+        provenance_attestation_signature_hex: Some(test_signature),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect_err("enforced gate with unparseable trust root must fail the init");
+    assert!(
+        error
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("trust_root"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn init_signer_config_installs_production_config_with_valid_provenance() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    let (test_trust_root, test_payload, test_signature) = build_signed_provenance_attestation(
+        TBTC_SIGNER_REQUIRED_ATTESTATION_STATUS_APPROVED,
+        TBTC_SIGNER_RUNTIME_VERSION,
+        Some(now_unix() + 3600),
+    );
+
+    let result = init_signer_config(InitSignerConfigRequest {
+        profile: Some("production".to_string()),
+        state_path: Some("/var/lib/tbtc/signer-state.json".to_string()),
+        state_key_provider: Some("command".to_string()),
+        state_key_command: Some("/nonexistent/key-helper-never-run-at-init".to_string()),
+        provenance_attestation_status: Some("approved".to_string()),
+        provenance_trust_root: Some(test_trust_root),
+        provenance_attestation_payload: Some(test_payload),
+        provenance_attestation_signature_hex: Some(test_signature),
+        min_approved_version: Some(TBTC_SIGNER_RUNTIME_VERSION.to_string()),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect("complete production config installs");
+    assert!(result.installed);
+    assert!(signer_profile_is_production());
+    assert!(provenance_gate_enforced());
+}

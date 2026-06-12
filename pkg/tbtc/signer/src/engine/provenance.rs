@@ -163,7 +163,7 @@ pub(crate) fn enforce_provenance_gate() -> Result<(), EngineError> {
         return Ok(());
     }
 
-    let attestation_status = std::env::var(TBTC_SIGNER_PROVENANCE_ATTESTATION_STATUS_ENV)
+    let attestation_status = signer_env_var(TBTC_SIGNER_PROVENANCE_ATTESTATION_STATUS_ENV)
         .unwrap_or_default()
         .trim()
         .to_ascii_lowercase();
@@ -186,7 +186,7 @@ pub(crate) fn enforce_provenance_gate() -> Result<(), EngineError> {
         );
     }
 
-    let trust_root = std::env::var(TBTC_SIGNER_PROVENANCE_TRUST_ROOT_ENV)
+    let trust_root = signer_env_var(TBTC_SIGNER_PROVENANCE_TRUST_ROOT_ENV)
         .unwrap_or_default()
         .trim()
         .to_string();
@@ -202,7 +202,7 @@ pub(crate) fn enforce_provenance_gate() -> Result<(), EngineError> {
     let trust_root_pubkey = parse_provenance_trust_root_pubkey(&trust_root)?;
 
     let raw_attestation_payload =
-        std::env::var(TBTC_SIGNER_PROVENANCE_ATTESTATION_PAYLOAD_ENV).unwrap_or_default();
+        signer_env_var(TBTC_SIGNER_PROVENANCE_ATTESTATION_PAYLOAD_ENV).unwrap_or_default();
     let attestation_payload = raw_attestation_payload.trim().to_string();
     if attestation_payload.len() != raw_attestation_payload.len() {
         eprintln!(
@@ -224,7 +224,7 @@ pub(crate) fn enforce_provenance_gate() -> Result<(), EngineError> {
     }
 
     let attestation_signature_hex =
-        std::env::var(TBTC_SIGNER_PROVENANCE_ATTESTATION_SIGNATURE_HEX_ENV)
+        signer_env_var(TBTC_SIGNER_PROVENANCE_ATTESTATION_SIGNATURE_HEX_ENV)
             .unwrap_or_default()
             .trim()
             .to_string();
@@ -308,7 +308,7 @@ pub(crate) fn enforce_provenance_gate() -> Result<(), EngineError> {
         );
     }
 
-    let min_approved_version = std::env::var(TBTC_SIGNER_MIN_APPROVED_VERSION_ENV)
+    let min_approved_version = signer_env_var(TBTC_SIGNER_MIN_APPROVED_VERSION_ENV)
         .unwrap_or_default()
         .trim()
         .to_string();

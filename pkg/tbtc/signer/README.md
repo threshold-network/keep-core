@@ -106,6 +106,52 @@ Sample input schemas are provided in:
 - `pkg/tbtc/signer/scripts/admission-override.sample.json`
 - `pkg/tbtc/signer/scripts/admission-override-registry.sample.json`
 
+## Init-Time Configuration (`frost_tbtc_init_signer_config`)
+
+Hosts should install the signer's operational configuration once at startup
+via `frost_tbtc_init_signer_config` instead of exporting `TBTC_SIGNER_*`
+environment variables. The request is a JSON object whose field names are the
+lowercased `TBTC_SIGNER_*` suffixes (`{"profile": "production",
+"roast_coordinator_timeout_ms": 30000, ...}`).
+
+Semantics:
+
+- Once installed, the process environment is **not consulted** for any
+  covered knob: an unset field means the built-in default, not the
+  environment value. There is no per-knob mixing of the two sources.
+- Unknown field names fail the init (typos cannot silently fall back to
+  defaults in production).
+- Re-initialization with an identical request is idempotent; a conflicting
+  request is rejected.
+- The init validates enforcement-gated policy combinations (admission,
+  signing-policy firewall, auto-quarantine) plus the provenance gate, so a
+  misconfigured signer fails at startup rather than at first signing. Since
+  production forces the provenance gate, production configs must carry a
+  complete attestation set (`provenance_attestation_status`/`_payload`/
+  `_signature_hex`, `provenance_trust_root`, `min_approved_version`); the
+  init-time pass does not exempt runtime re-checks — attestation TTL aging
+  still applies per call.
+- **Secrets never ride the config FFI**: `TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX`
+  is read exclusively from the dedicated key-provider channel below, even
+  when a config is installed. Do not inline key material into the
+  `state_key_command` string either — have the command fetch the secret —
+  because the command string itself is part of the config request.
+- A failed init has no observable side effects: the candidate config is
+  validated privately before it is published, so concurrent callers can
+  never read a config that is later rejected.
+- Production configs (explicitly `"profile": "production"`, or by omission —
+  production is the default) must set `state_path`; the init rejects them
+  otherwise. The init also rejects structurally unusable key-provider
+  settings (production forbids the `env` provider, so production configs
+  must set `state_key_provider: "command"` plus `state_key_command`) —
+  validated without reading the secret or executing the key command. Install the config before the first state-touching call: once
+  the state-file lock is bound, the engine refuses to switch state paths
+  in-process.
+
+Without an installed config the signer falls back to reading the
+`TBTC_SIGNER_*` environment (development/test behavior); in non-development
+profiles this fallback logs a one-time warning.
+
 ## Encrypted State Key Providers
 
 Signer state persistence is encrypted at rest. Key-provider behavior is controlled

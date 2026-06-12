@@ -530,3 +530,106 @@ pub struct ErrorResponse {
     pub message: String,
     pub recovery_class: String,
 }
+
+/// Init-time signer configuration installed once by the host over FFI.
+///
+/// Every field mirrors one `TBTC_SIGNER_*` environment variable (field name =
+/// lowercased variable suffix). Once a config is installed the process
+/// environment is no longer consulted for any covered knob: unset fields mean
+/// the built-in default, not the environment value. The state-encryption key
+/// (`TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX`) is deliberately absent — secrets
+/// stay on the dedicated env/command key-provider channel and never ride the
+/// config FFI. Unknown fields are rejected so a typo'd knob fails the init
+/// instead of silently running on a default.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InitSignerConfigRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_bootstrap: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_roast_strict: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_bench_restart_hook: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roast_coordinator_timeout_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_cadence_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_corruption_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_corrupt_backup_limit: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_sessions: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_key_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_key_command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_key_command_timeout_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enforce_provenance_gate: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_attestation_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_attestation_payload: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_attestation_signature_hex: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_trust_root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_approved_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enforce_admission_policy: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_min_participants: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_min_threshold: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_required_identifiers: Option<Vec<u16>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_allowlist_identifiers: Option<Vec<u16>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enforce_signing_policy_firewall: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_allowed_script_classes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_max_output_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_max_output_value_sats: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_max_total_output_value_sats: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_allowed_utc_start_hour: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_allowed_utc_end_hour: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_rate_limit_per_minute: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_auto_quarantine: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_quarantine_fault_threshold: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_quarantine_timeout_penalty: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_quarantine_invalid_share_penalty: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_quarantine_dao_allowlist_identifiers: Option<Vec<u16>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary_max_start_sign_round_p95_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary_max_finalize_sign_round_p95_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary_max_policy_reject_rate_bps: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct InitSignerConfigResult {
+    pub installed: bool,
+    pub idempotent: bool,
+    pub config_fingerprint: String,
+    pub configured_key_count: u32,
+}
