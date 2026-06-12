@@ -66,6 +66,10 @@ typedef TbtcSignerResult (*tbtc_build_taproot_tx_fn)(
   const uint8_t* request_ptr,
   size_t request_len
 );
+typedef TbtcSignerResult (*tbtc_init_signer_config_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
 typedef void (*tbtc_free_buffer_fn)(uint8_t* ptr, size_t len);
 
 static TbtcSignerResult unavailable_tbtc_signer_result(void) {
@@ -219,6 +223,18 @@ static TbtcSignerResult tbtc_signer_build_taproot_tx(const uint8_t* request_ptr,
   }
 
   return build_taproot_tx(request_ptr, request_len);
+}
+
+static TbtcSignerResult tbtc_signer_init_signer_config(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_init_signer_config_fn init_signer_config = (tbtc_init_signer_config_fn)dlsym(
+    RTLD_DEFAULT,
+    "frost_tbtc_init_signer_config"
+  );
+  if (init_signer_config == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+
+  return init_signer_config(request_ptr, request_len);
 }
 
 static void tbtc_signer_free_buffer(uint8_t* ptr, size_t len) {
@@ -2374,4 +2390,44 @@ func buildTaggedTBTCSignerResultStatusError(
 	}
 
 	return nil
+}
+
+func callBuildTaggedTBTCSignerInitSignerConfig(
+	requestPayload []byte,
+) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"InitSignerConfig",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_init_signer_config(requestPtr, requestLen)
+		},
+	)
+}
+
+// InstallNativeTBTCSignerConfig installs the tbtc-signer's init-time
+// operational configuration via frost_tbtc_init_signer_config. configJSON is
+// passed through verbatim: the Rust signer owns the schema and validation
+// (unknown fields rejected, enforcement-gated policy combinations validated
+// at install, environment ignored wholesale once installed) and the install
+// is idempotent for an identical payload while a conflicting re-install is
+// rejected. Must be called before the first state-touching signer operation.
+// Returns an ErrNativeCryptographyUnavailable-classed error when the loaded
+// signer library predates the symbol.
+func InstallNativeTBTCSignerConfig(
+	configJSON []byte,
+) (*NativeTBTCSignerInitConfigResult, error) {
+	responsePayload, err := callBuildTaggedTBTCSignerInitSignerConfig(configJSON)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &NativeTBTCSignerInitConfigResult{}
+	if err := json.Unmarshal(responsePayload, result); err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"InitSignerConfig",
+			fmt.Sprintf("response decode failed: [%v]", err),
+		)
+	}
+
+	return result, nil
 }

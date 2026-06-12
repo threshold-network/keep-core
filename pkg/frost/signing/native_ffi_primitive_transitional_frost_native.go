@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -27,11 +28,56 @@ func defaultNativeExecutionFFISigningPrimitiveProviderForBuild() (
 	NativeExecutionFFISigningPrimitive,
 	error,
 ) {
+	if err := installConfiguredTBTCSignerInitConfig(); err != nil {
+		return nil, err
+	}
+
 	if err := registerBuildTaggedNativeFROSTSigningEngine(); err != nil {
 		return nil, err
 	}
 
 	return &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}, nil
+}
+
+// installConfiguredTBTCSignerInitConfig installs the tbtc-signer init-time
+// configuration when TBTC_SIGNER_INIT_CONFIG_PATH points at a JSON config
+// file. The operator setting the path is an explicit demand for config-mode
+// operation, so every failure - unreadable file, validation rejection, or a
+// loaded signer library that predates frost_tbtc_init_signer_config - fails
+// the native engine registration closed. With the path unset this is a
+// no-op and the signer reads TBTC_SIGNER_* from the process environment
+// (the transitional path).
+func installConfiguredTBTCSignerInitConfig() error {
+	configPath := strings.TrimSpace(os.Getenv(TBTCSignerInitConfigPathEnv))
+	if configPath == "" {
+		return nil
+	}
+
+	configJSON, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf(
+			"read tbtc-signer init config [%s]: %w",
+			configPath, err,
+		)
+	}
+
+	result, err := InstallNativeTBTCSignerConfig(configJSON)
+	if err != nil {
+		return fmt.Errorf(
+			"install tbtc-signer init config from [%s]: %w",
+			configPath, err,
+		)
+	}
+
+	registrationLogger.Infof(
+		"installed tbtc-signer init config from [%s]: fingerprint [%s], "+
+			"configured keys [%d], idempotent [%v]",
+		configPath,
+		result.ConfigFingerprint,
+		result.ConfiguredKeyCount,
+		result.Idempotent,
+	)
+	return nil
 }
 
 // buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive is a
