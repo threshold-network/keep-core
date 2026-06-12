@@ -263,7 +263,8 @@ pub(crate) fn state_file_path() -> Result<PathBuf, EngineError> {
 
     if signer_profile_is_production() {
         return Err(EngineError::Internal(format!(
-            "{} must be set when {}={}; refusing to use the implicit temp-dir signer state path",
+            "{} (or the state_path field of the init-time signer config) must be \
+             set when {}={}; refusing to use the implicit temp-dir signer state path",
             TBTC_SIGNER_STATE_PATH_ENV, TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_PRODUCTION
         )));
     }

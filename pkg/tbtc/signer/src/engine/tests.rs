@@ -10580,13 +10580,14 @@ fn init_signer_config_overrides_environment_for_covered_knobs() {
     assert_eq!(roast_coordinator_timeout_ms(), 120_000);
 
     let result = init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
         roast_coordinator_timeout_ms: Some(60_000),
         ..InitSignerConfigRequest::default()
     })
     .expect("install config");
     assert!(result.installed);
     assert!(!result.idempotent);
-    assert_eq!(result.configured_key_count, 1);
+    assert_eq!(result.configured_key_count, 2);
 
     assert_eq!(roast_coordinator_timeout_ms(), 60_000);
     std::env::remove_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV);
@@ -10606,6 +10607,7 @@ fn init_signer_config_ignores_environment_wholesale_for_unset_fields() {
     // ...is ignored once a config is installed, even though the installed
     // config does not set that field: absent field = built-in default.
     init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
         roast_coordinator_timeout_ms: Some(60_000),
         ..InitSignerConfigRequest::default()
     })
@@ -10626,6 +10628,7 @@ fn init_signer_config_is_idempotent_for_identical_request_and_rejects_conflicts(
     clear_state_storage_policy_overrides();
 
     let request = InitSignerConfigRequest {
+        profile: Some("development".to_string()),
         max_sessions: Some(64),
         ..InitSignerConfigRequest::default()
     };
@@ -10637,6 +10640,7 @@ fn init_signer_config_is_idempotent_for_identical_request_and_rejects_conflicts(
     assert_eq!(second.config_fingerprint, first.config_fingerprint);
 
     let conflict = init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
         max_sessions: Some(128),
         ..InitSignerConfigRequest::default()
     })
@@ -10681,6 +10685,7 @@ fn init_signer_config_rolls_back_install_when_policy_validation_fails() {
     // must roll back. (Admission knobs would NOT trip this: that loader
     // falls back to defaults for absent values.)
     let error = init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
         enforce_signing_policy_firewall: Some(true),
         ..InitSignerConfigRequest::default()
     })
@@ -10704,13 +10709,14 @@ fn init_signer_config_validates_complete_admission_policy_at_install() {
     clear_state_storage_policy_overrides();
 
     let result = init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
         enforce_admission_policy: Some(true),
         admission_min_participants: Some(3),
         admission_min_threshold: Some(2),
         ..InitSignerConfigRequest::default()
     })
     .expect("complete admission policy installs");
-    assert_eq!(result.configured_key_count, 3);
+    assert_eq!(result.configured_key_count, 4);
 
     let config = load_admission_policy_config()
         .expect("load admission policy")
@@ -10755,6 +10761,12 @@ fn init_signer_config_production_profile_forces_roast_strict_mode() {
     // config must override it wholesale.
     init_signer_config(InitSignerConfigRequest {
         profile: Some("production".to_string()),
+        state_path: Some(
+            std::env::temp_dir()
+                .join("frost_init_config_prod_profile_state.json")
+                .to_string_lossy()
+                .into_owned(),
+        ),
         ..InitSignerConfigRequest::default()
     })
     .expect("install config");
@@ -10771,6 +10783,7 @@ fn reset_for_tests_clears_installed_signer_config() {
     clear_state_storage_policy_overrides();
 
     init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
         roast_coordinator_timeout_ms: Some(60_000),
         ..InitSignerConfigRequest::default()
     })
@@ -10830,4 +10843,103 @@ fn init_signer_config_canonicalizes_list_and_bool_encodings() {
         empty_list.is_err(),
         "empty identifier list must be rejected"
     );
+}
+
+#[test]
+fn init_signer_config_rejects_production_config_without_state_path() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    // Explicit production AND production-by-omission (the wholesale default
+    // when the profile field is unset) must both fail the init when no
+    // state_path is configured, instead of installing and then failing at
+    // the first state access.
+    for request in [
+        InitSignerConfigRequest {
+            profile: Some("production".to_string()),
+            ..InitSignerConfigRequest::default()
+        },
+        InitSignerConfigRequest {
+            roast_coordinator_timeout_ms: Some(60_000),
+            ..InitSignerConfigRequest::default()
+        },
+    ] {
+        let error = init_signer_config(request)
+            .expect_err("production config without state_path must fail the init");
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to use the implicit temp-dir signer state path"),
+            "unexpected error: {error}"
+        );
+    }
+
+    // Nothing installed: environment reads still apply.
+    std::env::set_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV, "120000");
+    assert_eq!(roast_coordinator_timeout_ms(), 120_000);
+    std::env::remove_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV);
+}
+
+#[test]
+fn init_signer_config_state_path_is_honored_end_to_end() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    let state_path = std::env::temp_dir().join(format!(
+        "frost_init_config_e2e_state_{}.json",
+        std::process::id()
+    ));
+    let _ = fs::remove_file(&state_path);
+
+    init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
+        state_path: Some(state_path.to_string_lossy().into_owned()),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect("install config");
+
+    let dkg_request = RunDkgRequest {
+        session_id: "session-init-config-e2e".to_string(),
+        participants: vec![
+            crate::api::DkgParticipant {
+                identifier: 1,
+                public_key_hex: "02aa".to_string(),
+            },
+            crate::api::DkgParticipant {
+                identifier: 2,
+                public_key_hex: "02bb".to_string(),
+            },
+        ],
+        threshold: 2,
+        dkg_seed_hex: None,
+    };
+
+    // The state-file lock was already bound to the default path by the
+    // pre-install persist in reset_for_tests, and the engine refuses to
+    // switch state paths in-process: installing a config after state has
+    // been touched fails loudly instead of splitting state across paths.
+    let error = run_dkg(dkg_request.clone())
+        .expect_err("state-path switch after first state access must be refused");
+    assert!(
+        error.to_string().contains("refusing to switch"),
+        "unexpected error: {error}"
+    );
+
+    // A fresh process that installs the config before touching state binds
+    // the lock at the configured path and persists there.
+    simulate_process_restart_for_tests();
+    run_dkg(dkg_request).expect("run dkg under installed config after restart");
+
+    assert!(
+        state_path.exists(),
+        "engine state must persist at the config-provided path"
+    );
+
+    reset_for_tests();
+    let _ = fs::remove_file(&state_path);
+    let _ = fs::remove_file(state_path.with_extension("json.lock"));
 }

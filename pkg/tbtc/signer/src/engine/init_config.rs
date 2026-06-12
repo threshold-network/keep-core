@@ -1,12 +1,49 @@
 // Init-time signer configuration: a typed, FFI-installed snapshot that
 // replaces the process environment as the source of TBTC_SIGNER_* knobs.
+//
+// Install guarantee: a candidate config is validated through the same
+// loaders the runtime gates use while visible only to the validating
+// thread (thread-local override below). It is published to the global
+// slot only after validation succeeds, so an unvalidated or rejected
+// config can never be observed by any other caller, and init results are
+// truthful under concurrent initialization (idempotent success is only
+// ever reported against a validated, installed config).
 
 use super::*;
+use std::cell::RefCell;
 use std::sync::{Arc, RwLock};
 
 static INSTALLED_SIGNER_CONFIG: OnceLock<RwLock<Option<Arc<InstalledSignerConfig>>>> =
     OnceLock::new();
 static ENV_FALLBACK_WARNING_EMITTED: OnceLock<()> = OnceLock::new();
+
+thread_local! {
+    // Candidate config visible ONLY to the thread running init-time
+    // validation. Keeping the candidate off the global slot until it
+    // validates means no other caller can ever observe an unvalidated
+    // config, and a failed init has no observable side effects.
+    static VALIDATION_CANDIDATE: RefCell<Option<Arc<InstalledSignerConfig>>> =
+        const { RefCell::new(None) };
+}
+
+struct ValidationCandidateGuard;
+
+impl ValidationCandidateGuard {
+    fn install(candidate: Arc<InstalledSignerConfig>) -> Self {
+        VALIDATION_CANDIDATE.with(|slot| *slot.borrow_mut() = Some(candidate));
+        ValidationCandidateGuard
+    }
+}
+
+impl Drop for ValidationCandidateGuard {
+    fn drop(&mut self) {
+        VALIDATION_CANDIDATE.with(|slot| *slot.borrow_mut() = None);
+    }
+}
+
+fn validation_candidate() -> Option<Arc<InstalledSignerConfig>> {
+    VALIDATION_CANDIDATE.with(|slot| slot.borrow().clone())
+}
 
 pub(crate) struct InstalledSignerConfig {
     pub(crate) values: HashMap<String, String>,
@@ -36,6 +73,9 @@ fn installed_signer_config() -> Option<Arc<InstalledSignerConfig>> {
 /// deliberately NOT routed through here: secrets stay on the dedicated
 /// env/command key-provider channel and never ride the config FFI.
 pub(crate) fn signer_env_var(name: &str) -> Option<String> {
+    if let Some(candidate) = validation_candidate() {
+        return candidate.values.get(name).cloned();
+    }
     if let Some(config) = installed_signer_config() {
         return config.values.get(name).cloned();
     }
@@ -69,43 +109,41 @@ pub fn init_signer_config(
     let config_fingerprint = fingerprint(&request)?;
     let values = config_values_from_request(&request)?;
     let configured_key_count = values.len() as u32;
+    let candidate = Arc::new(InstalledSignerConfig {
+        values,
+        fingerprint: config_fingerprint.clone(),
+    });
 
-    let slot = installed_signer_config_slot();
+    // Fast path against an already-installed (and therefore already
+    // validated) config; the authoritative re-check happens under the write
+    // lock below.
+    if let Some(existing) = installed_signer_config() {
+        return reinit_result(&existing, &config_fingerprint);
+    }
+
+    // Fail-closed validation BEFORE anything is published: the candidate is
+    // visible only to this thread's loaders via the thread-local override,
+    // so no other caller can ever observe an unvalidated config and a failed
+    // init leaves prior state (installed config or environment fallback)
+    // untouched. Validation runs the same loaders the runtime gates use plus
+    // the state-path requirement; knobs the runtime warn-and-defaults on
+    // keep that behavior.
     {
-        let mut guard = slot
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(existing) = guard.as_ref() {
-            if existing.fingerprint == config_fingerprint {
-                return Ok(InitSignerConfigResult {
-                    installed: true,
-                    idempotent: true,
-                    config_fingerprint,
-                    configured_key_count: existing.values.len() as u32,
-                });
-            }
-            return Err(EngineError::Validation(format!(
-                "signer config already installed with fingerprint [{}]; \
-                 conflicting re-initialization rejected",
-                existing.fingerprint
-            )));
-        }
-        *guard = Some(Arc::new(InstalledSignerConfig {
-            values,
-            fingerprint: config_fingerprint.clone(),
-        }));
+        let _candidate_guard = ValidationCandidateGuard::install(Arc::clone(&candidate));
+        validate_candidate_config()?;
     }
 
-    // Fail-closed validation: run the same loaders the runtime gates use,
-    // under the just-installed snapshot, and roll the install back if any of
-    // them reject. Knobs the runtime warn-and-defaults on keep that behavior.
-    if let Err(error) = validate_installed_config() {
-        let mut guard = slot
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *guard = None;
-        return Err(error);
+    // Publish, re-checking under the write lock: two threads may have
+    // validated identical (or conflicting) candidates concurrently.
+    let mut guard = installed_signer_config_slot()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(existing) = guard.as_ref() {
+        let existing = Arc::clone(existing);
+        drop(guard);
+        return reinit_result(&existing, &config_fingerprint);
     }
+    *guard = Some(candidate);
 
     Ok(InitSignerConfigResult {
         installed: true,
@@ -115,10 +153,33 @@ pub fn init_signer_config(
     })
 }
 
-fn validate_installed_config() -> Result<(), EngineError> {
+fn reinit_result(
+    existing: &InstalledSignerConfig,
+    config_fingerprint: &str,
+) -> Result<InitSignerConfigResult, EngineError> {
+    if existing.fingerprint == config_fingerprint {
+        return Ok(InitSignerConfigResult {
+            installed: true,
+            idempotent: true,
+            config_fingerprint: config_fingerprint.to_string(),
+            configured_key_count: existing.values.len() as u32,
+        });
+    }
+    Err(EngineError::Validation(format!(
+        "signer config already installed with fingerprint [{}]; \
+         conflicting re-initialization rejected",
+        existing.fingerprint
+    )))
+}
+
+fn validate_candidate_config() -> Result<(), EngineError> {
     load_admission_policy_config()?;
     load_signing_policy_firewall_config()?;
     load_auto_quarantine_config()?;
+    // Production (explicit or by profile-omission default) requires an
+    // explicit state path; surfacing this at init beats failing the first
+    // state access after a host migrates to the config FFI.
+    state_file_path()?;
     Ok(())
 }
 
