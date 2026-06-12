@@ -201,6 +201,13 @@ func verifyOwnObservationsPresent(
 			msg.Bundle[i].OperatorSignature,
 			selfSubmission.OperatorSignature,
 		) {
+			emitEquivocationEvidence(EquivocationEvidence{
+				Kind:                EquivocationKindOwnSnapshotMutatedInBundle,
+				AttemptContextHash:  append([]byte(nil), msg.AttemptContextHash...),
+				Sender:              selfMember,
+				ExistingEnvelope:    snapshotEnvelopeForEvidence(selfSubmission),
+				ConflictingEnvelope: snapshotEnvelopeForEvidence(&msg.Bundle[i]),
+			})
 			return fmt.Errorf(
 				"%w: own evidence snapshot signature mutated in bundle",
 				ErrCensorshipDetected,
@@ -208,5 +215,11 @@ func verifyOwnObservationsPresent(
 		}
 		return nil
 	}
+	emitEquivocationEvidence(EquivocationEvidence{
+		Kind:               EquivocationKindOwnSnapshotMissingFromBundle,
+		AttemptContextHash: append([]byte(nil), msg.AttemptContextHash...),
+		Sender:             selfMember,
+		ExistingEnvelope:   snapshotEnvelopeForEvidence(selfSubmission),
+	})
 	return ErrCensorshipDetected
 }

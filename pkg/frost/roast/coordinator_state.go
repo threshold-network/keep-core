@@ -358,6 +358,13 @@ func (c *inMemoryCoordinator) RecordEvidence(
 		}
 		if !bytes.Equal(existingBytes, newBytes) ||
 			!bytes.Equal(existing.OperatorSignature, snapshot.OperatorSignature) {
+			emitEquivocationEvidence(EquivocationEvidence{
+				Kind:                EquivocationKindSnapshotConflict,
+				AttemptContextHash:  append([]byte(nil), snapshot.AttemptContextHash...),
+				Sender:              snapshot.SenderID(),
+				ExistingEnvelope:    snapshotEnvelopeForEvidence(existing),
+				ConflictingEnvelope: snapshotEnvelopeForEvidence(snapshot),
+			})
 			return ErrSnapshotConflict
 		}
 		// Identical re-submission: idempotent no-op.
