@@ -4,6 +4,8 @@
 // docs/roast-phase-5-security-rollout-gates.md): this deterministic
 // transitional path is dev/staging-only (production-gated) and will be
 // deleted once the interactive production path is validated end to end.
+// The precise trigger definition is section 7 of
+// docs/phase-7-interactive-session-spec-freeze.md.
 // Until then the transitional signing flow is FROZEN - do not add new
 // transcript inputs to it: each one must also extend RoundNonceBinding
 // below, and an omission is a key-extraction-class bug (see the v3

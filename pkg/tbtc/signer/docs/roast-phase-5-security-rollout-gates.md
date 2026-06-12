@@ -165,6 +165,25 @@ architecture questions:
    produces visible downtime instead of silent capability loss.
    Implemented in keep-core PR #4045 (scaffold), the follow-up to
    PR #4041's Go-host adoption.
+8. **Phase 7 interactive-session spec FROZEN** (2026-06-12,
+   MacLane): `docs/phase-7-interactive-session-spec-freeze.md` is
+   the binding contract for the production interactive signing
+   path - engine-held nonce custody (no secret signing material on
+   the FFI), the InteractiveSessionOpen/Round1/Round2/Aggregate/
+   Abort API with own-commitment verification at Round2,
+   t-of-included-native finalize, live-state capacity + TTL bounds,
+   and the precise transitional-path deletion trigger (its section
+   7). The four design questions it forced are decided: signing
+   packages ride a dedicated operator-key-signed topic; round-1
+   commitments go members-to-coordinator only; the responsive
+   subset is strict first-t arrival order; durability is
+   markers-only (resumable round-1 state rejected as contradicting
+   never-persist-nonces). Review converged before freeze:
+   adversarial-pass findings applied (own-commitment check,
+   live-state bounds, verify-before-consume, DKG-custody scoping),
+   Codex and Gemini clean. DKG secret-package custody is a named
+   follow-up outside this freeze; the audit scope must describe the
+   DKG boundary as-is.
 
 ## Provisional Rollback Thresholds (Draft)
 
