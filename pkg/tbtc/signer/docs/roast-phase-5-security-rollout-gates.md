@@ -46,6 +46,48 @@ Recommended stages:
 2. Stage 2: 25% signer fleet / broader cohort, hold for 24h.
 3. Stage 3: 100% rollout after Phase 5 acceptance criteria remain green.
 
+## Cryptographic Dependency Audit Status (Gate 1 Input)
+
+The signer pins `frost-secp256k1-tr = "=3.0.0"` (`Cargo.toml`), the Zcash
+Foundation FROST implementation's Taproot (BIP-340/341) ciphersuite,
+released 2025-04-23.
+
+External audit coverage of that stack, verified against upstream
+statements as of 2026-06-12:
+
+- **NCC Group, "Zcash FROST Security Assessment"** (report dated
+  2023-10-20, published October 2023): audited the **v0.6.0** release
+  (commit `5fa17ed`) of `frost-core`, `frost-ed25519`, `frost-ed448`,
+  `frost-p256`, `frost-secp256k1`, and `frost-ristretto255` - key
+  generation (trusted dealer and DKG) and FROST signing. All findings
+  were addressed and re-reviewed by NCC.
+  Report: <https://www.nccgroup.com/media/m1yjijzn/_ncc_group_zcashfoundation_e008263_report_2023-10-20_v11-1.pdf>
+- The upstream README states explicitly: *"This does not include
+  frost-secp256k1-tr and rerandomized FROST."*
+- **Least Authority, FROST Demo audit (Q1 2025)**: covered the
+  `frost-client` and `frostd` demo tooling only - not the library
+  crates this signer consumes.
+  <https://zfnd.org/frost-demo-audit-frost-client-and-frostd/>
+- No 2.x or 3.x release notes mention additional audit coverage.
+
+**Consequence for Gate 1:** the exact ciphersuite this signer uses for
+production signatures (`frost-secp256k1-tr`) and the v0.6.0 → 3.0.0
+evolution of `frost-core` have **no external audit coverage**. The
+NCC assessment establishes pedigree for the core protocol
+implementation but cannot be cited as covering the pinned version
+range. Gate 1 sign-off must therefore do one of:
+
+1. Commission (or await) an external audit covering `frost-core` 3.x
+   and the `frost-secp256k1-tr` ciphersuite - the follow-up
+   checklist's "external audit as merge gate for ECDSA-retirement
+   phases" decision; or
+2. Record an explicit, written risk acceptance for the unaudited
+   range, scoped to the canary stages of Gate 3 and revisited before
+   full rollout.
+
+This section records the facts; choosing between (1) and (2) is a
+team decision.
+
 ## Provisional Rollback Thresholds (Draft)
 
 These thresholds are intentionally conservative and should be tuned once the
