@@ -4,9 +4,12 @@ package signing
 // tbtc-signer init-time operational configuration. When set, the
 // configuration is installed via frost_tbtc_init_signer_config during native
 // FROST engine registration, BEFORE any other signer call; a read, parse,
-// validation, or symbol-availability failure fails the registration closed.
-// When unset, the signer falls back to reading TBTC_SIGNER_* from the
-// process environment (the transitional path).
+// validation, or symbol-availability failure fails the registration closed
+// and TERMINATES THE PROCESS at the end of registration, in every profile
+// and build flavor (see enforceNativeInitConfigDemand for the decision
+// record and the full failure family). When unset, the signer falls back to
+// reading TBTC_SIGNER_* from the process environment (the transitional
+// path), where registration failures degrade to the legacy bridge instead.
 //
 // The JSON schema is owned by the Rust signer (InitSignerConfigRequest in
 // pkg/tbtc/signer/src/api.rs): field names are the lowercased TBTC_SIGNER_*
