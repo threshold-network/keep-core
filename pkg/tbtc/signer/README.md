@@ -137,7 +137,10 @@ Semantics:
   never read a config that is later rejected.
 - Production configs (explicitly `"profile": "production"`, or by omission —
   production is the default) must set `state_path`; the init rejects them
-  otherwise. Install the config before the first state-touching call: once
+  otherwise. The init also rejects structurally unusable key-provider
+  settings (production forbids the `env` provider, so production configs
+  must set `state_key_provider: "command"` plus `state_key_command`) —
+  validated without reading the secret or executing the key command. Install the config before the first state-touching call: once
   the state-file lock is bound, the engine refuses to switch state paths
   in-process.
 

@@ -10767,6 +10767,8 @@ fn init_signer_config_production_profile_forces_roast_strict_mode() {
                 .to_string_lossy()
                 .into_owned(),
         ),
+        state_key_provider: Some("command".to_string()),
+        state_key_command: Some("/nonexistent/key-helper-never-run-at-init".to_string()),
         ..InitSignerConfigRequest::default()
     })
     .expect("install config");
@@ -10942,4 +10944,90 @@ fn init_signer_config_state_path_is_honored_end_to_end() {
     reset_for_tests();
     let _ = fs::remove_file(&state_path);
     let _ = fs::remove_file(state_path.with_extension("json.lock"));
+}
+
+#[test]
+fn init_signer_config_rejects_production_config_defaulting_to_env_key_provider() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    // Wholesale semantics: leaving state_key_provider unset in the config
+    // defaults to the env provider even if the environment exported
+    // "command" - and production forbids the env provider. This must fail
+    // the init, not the first state access.
+    std::env::set_var(TBTC_SIGNER_STATE_KEY_PROVIDER_ENV, "command");
+    let error = init_signer_config(InitSignerConfigRequest {
+        profile: Some("production".to_string()),
+        state_path: Some("/var/lib/tbtc/signer-state.json".to_string()),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect_err("production config defaulting to the env key provider must fail the init");
+    assert!(
+        error.to_string().contains("is not allowed in profile"),
+        "unexpected error: {error}"
+    );
+    std::env::remove_var(TBTC_SIGNER_STATE_KEY_PROVIDER_ENV);
+}
+
+#[test]
+fn init_signer_config_rejects_command_key_provider_without_command() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    let error = init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
+        state_key_provider: Some("command".to_string()),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect_err("command key provider without a command must fail the init");
+    assert!(
+        error
+            .to_string()
+            .contains("missing required state key command env"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn init_signer_config_rejects_unknown_state_key_provider() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    let error = init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
+        state_key_provider: Some("kms".to_string()),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect_err("unknown key provider must fail the init");
+    assert!(
+        error.to_string().contains("unsupported state key provider"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn init_signer_config_validates_command_key_provider_without_executing_it() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    // The command path deliberately points at a binary that cannot succeed:
+    // if init executed the key command, this install would fail. Structural
+    // validation must accept it without running it.
+    let result = init_signer_config(InitSignerConfigRequest {
+        profile: Some("production".to_string()),
+        state_path: Some("/var/lib/tbtc/signer-state.json".to_string()),
+        state_key_provider: Some("command".to_string()),
+        state_key_command: Some("/nonexistent/key-helper-never-run-at-init".to_string()),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect("structurally valid production config installs without running the key command");
+    assert!(result.installed);
 }

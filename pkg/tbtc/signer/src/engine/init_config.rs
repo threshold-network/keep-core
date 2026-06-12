@@ -126,7 +126,7 @@ pub fn init_signer_config(
     // so no other caller can ever observe an unvalidated config and a failed
     // init leaves prior state (installed config or environment fallback)
     // untouched. Validation runs the same loaders the runtime gates use plus
-    // the state-path requirement; knobs the runtime warn-and-defaults on
+    // the state-path and key-provider requirements; knobs the runtime warn-and-defaults on
     // keep that behavior.
     {
         let _candidate_guard = ValidationCandidateGuard::install(Arc::clone(&candidate));
@@ -180,6 +180,10 @@ fn validate_candidate_config() -> Result<(), EngineError> {
     // explicit state path; surfacing this at init beats failing the first
     // state access after a host migrates to the config FFI.
     state_file_path()?;
+    // The key-provider settings must be structurally usable too (production
+    // forbids the env provider; the command provider requires a command).
+    // Resolved WITHOUT reading the secret or executing the key command.
+    resolve_state_key_provider_plan()?;
     Ok(())
 }
 
