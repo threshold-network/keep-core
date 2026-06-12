@@ -30,7 +30,7 @@ Coordinator     = GoMathRandShuffle(sort_ascending(IncludedSet), SourceSeed_i64)
   **not** the engine's internal transcript digest
   (`SHA256(message_bytes)`), which continues to feed the
   `round_id`/`attempt_id` derivations only. Implemented by
-  `rfc21_message_digest` in `src/engine.rs`; feeding the transcript
+  `rfc21_message_digest` in `src/engine/roast.rs`; feeding the transcript
   digest here instead was the cross-language coordinator divergence
   caught in review of the unification PR.
 - `AttemptNumber`: the RFC-21 **0-based** attempt number. The FFI
@@ -41,7 +41,7 @@ Coordinator     = GoMathRandShuffle(sort_ascending(IncludedSet), SourceSeed_i64)
   shuffle in `src/go_math_rand.rs`, pinned by keep-core PRs #4026 and
   #4027.
 
-Implemented by `roast_attempt_shuffle_seed` in `src/engine.rs`; the
+Implemented by `roast_attempt_shuffle_seed` in `src/engine/roast.rs`; the
 end-to-end acceptance of a Go-derived context through strict
 `StartSignRound` is pinned by
 `start_sign_round_accepts_go_derived_attempt_context_in_strict_mode`.
