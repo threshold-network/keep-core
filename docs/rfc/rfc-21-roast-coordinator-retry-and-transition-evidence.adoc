@@ -483,17 +483,45 @@ risk-management mechanism.
 
 === Phase 6: Migrate all signing call sites
 
-* Migrate *all three* signing call sites onto the adapter in a single
-  coordinated change:
-** `collectNativeFROSTRoundOneMessages`
-** `collectNativeFROSTRoundTwoMessages`
-** `collectBuildTaggedTBTCSignerRoundContributionMessages`
-+
-The three flows share one attempt context per session; migrating
-them together preserves the round-to-round evidence binding within a
-session.
+*Status (2026-06-12): the call-site migration is complete.* The plan
+below originally named three receive loops; the tree evolved under
+it and the honest accounting is:
+
+* `collectBuildTaggedTBTCSignerRoundContributionMessages` - the only
+  receive loop with a production consumer - is migrated: it takes
+  its `EvidenceRecorder` from the roast-retry registry
+  (`roastRetryRecorderForCollect`, NoOp fallback preserving Phase 2
+  semantics when nothing is registered), binds contributions to the
+  session's attempt context via the `attemptContextHash` message
+  field, and submits its end-of-collect snapshot through
+  `submitSnapshotIfActive` into `Coordinator.RecordEvidence`.
+* `collectNativeFROSTRoundOneMessages` and
+  `collectNativeFROSTRoundTwoMessages` were *deleted*, not migrated:
+  commit `1c692bf03` (2026-06-07, "Remove unreachable generic FROST
+  protocol scaffolding") removed the generic two-round exchange they
+  belonged to, because no production flow reached it -
+  `frost-uniffi-v1` payloads execute on the legacy bridge and
+  `frost-tbtc-signer-v1` uses the coarse signing flow. The
+  single-coordinated-change constraint ("the three flows share one
+  attempt context per session") is therefore satisfied by
+  subtraction: exactly one flow exists, and it is fully bound.
+* The surrounding orchestration shipped with the migration: the
+  executor adapter's Phase 6.3 entry
+  (`attemptRoastRetryOrchestrationFromRequest` →
+  `BeginOrchestrationForSession`), the static-vs-runtime error
+  taxonomy, the Phase 7.1 coordinator-side bundle production
+  (`maybeProduceTransitionBundle` in the orchestration cleanup), and
+  the Phase 7.2 bundle-consuming participant selector
+  (`roastSigningParticipantSelector` behind the `frost_roast_retry`
+  tag, legacy-shuffle fallback when no bundle is present).
+
+Two exit items remain deliberately open, gated on Phase 7's manifest
+flip - not on more code:
+
 * Once the legacy `EvaluateRetryParticipantsForSigning` has no
-  callers, delete it. (Key-generation legacy retry stays.)
+  callers, delete it. (Key-generation legacy retry stays.) It still
+  has one caller by design: `legacySigningParticipantSelector` is
+  the retained rollback path through Phases 6-7.
 * Remove the `frost_roast_retry` build tag; the new retry path is
   unconditional once Phase 7's manifest gate flips.
 
@@ -503,6 +531,12 @@ session.
   transition evidence from `missing-no-go` to `present` once Phase 6
   ships and the integration test suite has been run against a real
   testnet.
+* The manifest lives at
+  `docs/development/frost-readiness-manifest.adoc` in this
+  repository. (It was originally planned for the tBTC monorepo's
+  `docs/operations/` directory; the monorepo signer is retired and
+  keep-core is canonical, so the manifest moved here with the same
+  update discipline.)
 * As with every readiness gate in this repo, the manifest is updated
   only when the supporting evidence is attached. The RFC does not
   promise an early flip.
@@ -1034,10 +1068,11 @@ Recommendation codified by this annex:
   https://github.com/threshold-network/keep-core/pull/3866.
 * L5 paired error-code change: `tlabs-xyz/tbtc#425` (Rust producer) +
   `threshold-network/keep-core#3961` (Go consumer).
-* Receive-loop drop sites:
-** `pkg/frost/signing/native_ffi_primitive_transitional_frost_native.go:973`
-** `pkg/frost/signing/native_frost_protocol_frost_native.go:568`
-** `pkg/frost/signing/native_frost_protocol_frost_native.go:650`
+* Receive-loop drop site (the generic two-round exchange's two
+  further sites were removed with the unreachable scaffolding in
+  commit `1c692bf03`; see Phase 6 status):
+** `pkg/frost/signing/native_ffi_primitive_transitional_frost_native.go`
+   (`collectBuildTaggedTBTCSignerRoundContributionMessages`)
 * Byte-identical retry shuffle:
 ** `pkg/frost/retry/retry.go`
 ** `pkg/tecdsa/retry/retry.go`

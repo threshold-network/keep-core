@@ -91,9 +91,12 @@ RFC-21 design and is enforced in
 . *Build the binary with the tag.* Internal builds and CI
   pipelines already exercise the tag via
   `go test -tags 'frost_roast_retry' ./pkg/frost/... ./pkg/tbtc/...`.
-  Production binaries adopt the tag once the readiness manifest
-  in the cross-repo tBTC monorepo's `docs/operations/` directory
-  flips to `present`.
+  Production binaries adopt the tag once the readiness manifest at
+  `docs/development/frost-readiness-manifest.adoc` flips to
+  `present`. (The manifest was originally planned for the tBTC
+  monorepo's `docs/operations/` directory; the monorepo signer is
+  retired and keep-core is canonical, so the manifest lives in this
+  repository.)
 . *Verify FROST/UniFFI V1 migration.* The DKG-pubkey extraction
   helper rejects FrostUniFFIV1 signer material. The Phase 7
   manifest flip is gated on verified migration off V1 across
@@ -179,6 +182,7 @@ cleanup.
 == Cross-references
 
 * RFC-21: `docs/rfc/rfc-21-roast-coordinator-retry-and-transition-evidence.adoc`
+* Readiness manifest: `docs/development/frost-readiness-manifest.adoc`
 * Build-tag scaffolding: `pkg/frost/signing/roast_retry_registration_*.go`
 * Orchestration entry point: `pkg/frost/signing/roast_retry_orchestration.go`
 * Executor-adapter wiring: `pkg/frost/signing/native_ffi_executor_adapter.go`

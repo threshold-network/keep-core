@@ -1,0 +1,55 @@
+= FROST Readiness Manifest
+
+*Status:* Living document - gate states change only with attached
+evidence.
+*Owner:* Threshold Labs
+*Update discipline:* a gate flips from `missing-no-go` to `present`
+only when the supporting evidence is linked in the same change. No
+early flips, no flips on intention (RFC-21, "Phase 7: Readiness
+manifest evidence"). Reviewers should reject a flip whose evidence
+link does not substantiate the stated condition.
+
+This manifest was originally planned for the tBTC monorepo's
+`docs/operations/` directory. The monorepo signer is retired and
+`keep-core` is canonical, so the manifest lives here. Production
+binaries adopt the `frost_roast_retry` build tag once the gates
+below read `present`
+(`docs/development/frost-roast-retry-rollout.adoc`).
+
+== Gates
+
+[cols="2,1,4,3"]
+|===
+| Gate | State | Flip conditions | Evidence
+
+| ROAST retry
+| `missing-no-go`
+| (1) RFC-21 Phase 6 call-site migration shipped - *met*, see the
+  Phase 6 status section of RFC-21 (one live receive loop migrated;
+  the generic two-round exchange was removed as unreachable in
+  commit `1c692bf03`). +
+  (2) The `frost_roast_retry` integration suite has been run against
+  a real testnet deployment - *pending*. +
+  (3) Verified migration off FrostUniFFIV1 signer material across
+  production signers - *pending* (the DKG-pubkey extraction helper
+  rejects V1 material, so ROAST retry silently falls back to legacy
+  on V1-bearing nodes; see the rollout doc).
+| Phase 6 status: RFC-21. Testnet run: none yet. V1 migration: none
+  yet.
+
+| Transition evidence
+| `missing-no-go`
+| Same testnet-run condition as ROAST retry, exercised end to end:
+  coordinator-produced `TransitionMessage` bundles (signed-body
+  envelopes per the evidence wire format) observed driving
+  next-attempt participant selection on testnet, with the
+  byte-preservation contract intact across at least one node
+  restart.
+| None yet.
+|===
+
+== Change log
+
+* 2026-06-12: manifest created in keep-core (moved from the retired
+  monorepo plan); both gates recorded `missing-no-go` with Phase 6
+  completion noted as met.
