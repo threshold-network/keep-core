@@ -326,6 +326,18 @@ func (c *inMemoryCoordinator) RecordEvidence(
 		return fmt.Errorf("coordinator: %w", err)
 	}
 
+	// Emit any equivocation evidence AFTER c.mu is released: a registered
+	// observer is host telemetry (possibly a blocking write) and must not
+	// run while the coordinator state mutex is held. The evidence value is
+	// fully materialized (bytes copied) under the lock; emission only reads
+	// that copy. Registered before the unlock defer so it runs after it.
+	var pendingEvidence *EquivocationEvidence
+	defer func() {
+		if pendingEvidence != nil {
+			emitEquivocationEvidence(*pendingEvidence)
+		}
+	}()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	record, ok := c.attempts[handle.id]
@@ -358,13 +370,13 @@ func (c *inMemoryCoordinator) RecordEvidence(
 		}
 		if !bytes.Equal(existingBytes, newBytes) ||
 			!bytes.Equal(existing.OperatorSignature, snapshot.OperatorSignature) {
-			emitEquivocationEvidence(EquivocationEvidence{
+			pendingEvidence = &EquivocationEvidence{
 				Kind:                EquivocationKindSnapshotConflict,
 				AttemptContextHash:  append([]byte(nil), snapshot.AttemptContextHash...),
 				Sender:              snapshot.SenderID(),
 				ExistingEnvelope:    snapshotEnvelopeForEvidence(existing),
 				ConflictingEnvelope: snapshotEnvelopeForEvidence(snapshot),
-			})
+			}
 			return ErrSnapshotConflict
 		}
 		// Identical re-submission: idempotent no-op.
