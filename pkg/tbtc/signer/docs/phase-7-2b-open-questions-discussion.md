@@ -253,10 +253,16 @@ decisions above:
   coordinator replays an old A-signed share into a different
   attempt/package and frames A. (design note §4/§9/§11; this doc, Q1
   prerequisite)
-- **Group key in verify-share inputs** (P2) — the stateless verify-share
-  FFI needs the **group verifying key** (tweaked for taproot), not just the
-  per-member verifying share, to compute the challenge/binding factors;
-  resolved from session DKG state + tweaked. (design note §4/§7/§9)
+- **Group key + selector in verify-share inputs** (P2, two passes) — the
+  verify-share FFI needs the **group verifying key** (tweaked for taproot),
+  not just the per-member verifying share, to compute the challenge/binding
+  factors, AND a `session_id`/wallet **selector** to resolve the *right*
+  key in a multi-session engine. That key must come from
+  **durably-retained wallet DKG material** outliving the signing-session
+  TTL sweep, since the quorum re-check can run after the session is gone
+  (or, equivalently, the Go quorum passes the public key package explicitly
+  — it is public, sound under the f+1-independent-accuser model). (design
+  note §4/§7/§9/§11)
 
 These refine 7.2b's implementation shape without changing the frozen
 Phase 7 spec — Q1's resolution in fact *realigns* the design docs to it.

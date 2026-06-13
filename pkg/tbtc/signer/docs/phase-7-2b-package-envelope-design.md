@@ -135,12 +135,20 @@ when bound to what the member signed:
   reconstructed package. The cryptographic part of that re-check — does
   this share verify against the signing_package under the **group
   verifying key tweaked by taproot_merkle_root**? — is FROST math and is
-  **delegated to the engine** (a stateless verify; the engine resolves the
-  public key package = group key + verifying shares from the session DKG
-  state and applies the tweak, exactly as the AllCheaters aggregate path
-  below), so it is never reimplemented in Go. The Go quorum supplies only
-  public inputs (signing_package, taproot_merkle_root, the accused
-  member's identifier, the share), owns the policy (f+1 threshold,
+  **delegated to the engine** (a tweak-aware verify). The Go quorum
+  supplies (signing_package, taproot_merkle_root, the accused member's
+  identifier, the share) **plus a `session_id`/wallet selector**, so the
+  engine resolves the *right* canonical public key package (group key +
+  verifying shares) in a multi-session engine (Codex P2) and applies the
+  tweak. Because the quorum re-check can run *after* the interactive
+  session is TTL-swept (frozen §5), the engine MUST resolve that key from
+  **durably-retained, wallet-scoped DKG material** that outlives the
+  signing session — never the ephemeral session object. (Sound
+  alternative: the Go quorum passes the canonical public key package
+  explicitly; it is public, so only secret material stays off the FFI, and
+  this keeps verify-share a pure function — sound under the
+  f+1-independent-accuser model where each accuser verifies with its own
+  canonical DKG copy.) The Go quorum owns the policy (f+1 threshold,
   envelope/equivocation comparison, which shares to re-check), and never
   hands the engine the envelope or operator keys. A candidate culprit
   becomes authoritative blame ONLY for a share **provably submitted by the
@@ -222,13 +230,14 @@ marker.)
   decoder for the new structured FFI error.
 - **Rust (mirror branch)**: the FFI candidate-`culprits` payload (pure
   FROST math via `CheaterDetection::AllCheaters`, no envelopes) + C
-  header, a **stateless tweak-aware verify-share** entry the quorum
-  re-check calls (caller-supplied public inputs: signing_package,
-  taproot_merkle_root, member identifier, share; the engine resolves the
-  **group verifying key** + verifying shares from session DKG state and
-  applies the tweak — never the envelope or operator keys), the completion
-  marker, and the engine-side vectors. The engine never verifies envelopes
-  or operator signatures.
+  header, a **tweak-aware verify-share** entry the quorum re-check calls
+  (caller-supplied public inputs: signing_package, taproot_merkle_root,
+  member identifier, share, + a `session_id`/wallet selector; the engine
+  resolves the canonical **group verifying key** + verifying shares from
+  durably-retained wallet DKG material — surviving the session TTL sweep —
+  and applies the tweak; never the envelope or operator keys), the
+  completion marker, and the engine-side vectors. The engine never
+  verifies envelopes or operator signatures.
 
 ## 8. Cross-language vectors (frozen spec item 9)
 
@@ -263,10 +272,14 @@ event.
    culprit set is reported, not just the first; plus the **stateless
    tweak-aware verify-share** FFI the 7.2b-4 quorum re-check calls
    (caller-supplied public inputs: signing_package, taproot_merkle_root,
-   member identifier, share; the engine resolves the public key package =
-   **group verifying key** + verifying shares from session DKG state and
-   applies the tweak — the group key is required for the challenge/binding
-   factors, Codex P2).
+   member identifier, share, + a `session_id`/wallet selector; the engine
+   resolves the canonical public key package = **group verifying key** +
+   verifying shares from durably-retained wallet DKG material that outlives
+   the session TTL sweep, and applies the tweak — the group key is required
+   for the challenge/binding factors, the selector disambiguates
+   multi-session lookups, Codex P2). Confirm the wallet public key package
+   is durably retained beyond the signing-session TTL; if not, that
+   retention is a 7.2b-1 item.
 4. **7.2b-4 (scaffold)**: cross-member equivocation comparison
    (extends #4044) + the **blame-adjudication policy** (quorum re-check —
    the per-share crypto re-verify delegated to 7.2b-3's tweak-aware
@@ -313,7 +326,10 @@ not provably from member A NOR an old A-signed share replayed into a
 different attempt/package can make A a culprit (test, Codex P1); the
 quorum's per-share re-check is **tweak-consistent**, verifying under the
 tweaked group key (a valid taproot share verifies, an invalid one is
-blamed; test); a genuine bad share yields machine-readable
+blamed; test); the re-check resolves the correct canonical group key via
+its session/wallet selector and still succeeds after the signing session
+is TTL-swept (multi-session + post-sweep test, Codex P2); a genuine bad
+share yields machine-readable
 *candidate* culprits over the FFI (engine test, `AllCheaters`) that the Go
 quorum confirms as attributable `InvalidSignatureShare`; re-aggregation of
 a completed attempt is rejected (test); and the cross-language vectors are
