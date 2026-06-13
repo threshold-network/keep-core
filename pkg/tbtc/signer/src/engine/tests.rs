@@ -13045,6 +13045,13 @@ fn lock_test_state_recovers_from_a_poisoned_mutex() {
     // A test that panics while holding the test lock must not cascade
     // into every subsequent test. Poison the lock from a child thread,
     // then confirm lock_test_state still hands out the guard.
+    //
+    // The poisoning thread prints an "intentional poison" panic message
+    // (plus a backtrace note) to stderr - this is expected test output,
+    // not a failure. It is deliberately not suppressed with a panic
+    // hook: the hook is process-global, so silencing it here could
+    // swallow the message of a genuinely-failing test running in
+    // parallel.
     let poisoner = std::thread::spawn(|| {
         let _guard = lock_test_state();
         panic!("intentional poison to exercise lock recovery");

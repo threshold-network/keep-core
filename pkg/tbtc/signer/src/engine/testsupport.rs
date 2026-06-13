@@ -35,9 +35,16 @@ pub fn lock_test_state() -> std::sync::MutexGuard<'static, ()> {
 // raw set_var without per-site teardown.
 #[cfg(test)]
 pub(crate) fn establish_clean_signer_test_env() {
-    for (key, _) in std::env::vars() {
-        if key.starts_with("TBTC_SIGNER_") {
-            std::env::remove_var(key);
+    // Iterate with vars_os, not vars: std::env::vars panics if ANY env
+    // var in the process (name or value) is not valid UTF-8 - even one
+    // unrelated to the signer - which would abort every locked test in
+    // such an environment. TBTC_SIGNER_* names are ASCII, so a key that
+    // fails to_str cannot be one of ours.
+    for (key_os, _) in std::env::vars_os() {
+        if let Some(key) = key_os.to_str() {
+            if key.starts_with("TBTC_SIGNER_") {
+                std::env::remove_var(&key_os);
+            }
         }
     }
     std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_DEVELOPMENT);
