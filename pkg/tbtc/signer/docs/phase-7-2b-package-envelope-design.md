@@ -94,7 +94,8 @@ Three acceptance checks are load-bearing here (Codex P1+P2):
 A coordinator that distributes *different* package bodies to different
 members is the framing vector 7.2a could not defend against. With
 envelopes it is self-incriminating: each member retains the exact
-`SignedSigningPackage` it received and signed over. Two members holding
+`SignedSigningPackage` it received (whether or not it signed over it —
+§2 step 2). Two members holding
 envelopes with the same `attempt_context_hash` but different bodies, each
 carrying the coordinator's signature, are a proof of coordinator
 equivocation - the same shape as #4044's `EquivocationEvidence`, now
