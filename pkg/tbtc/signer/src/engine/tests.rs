@@ -12612,3 +12612,125 @@ fn interactive_open_requires_an_existing_dkg_session() {
         "unexpected error: {absent:?}"
     );
 }
+
+#[test]
+fn interactive_round2_rejects_quarantined_co_signer_in_package() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let session_id = "interactive-round2-quarantined-cosigner";
+    let key_group = "interactive-test-key-group";
+    let message = [0x1cu8; 32];
+    let included = [1u16, 2];
+    let key_packages = ensure_interactive_dkg_session(session_id, key_group);
+
+    std::env::set_var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV, "2");
+    std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY_ENV, "1");
+    std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_INVALID_SHARE_PENALTY_ENV, "2");
+
+    let outcome = (|| -> Result<(), EngineError> {
+        // This member (1) opens and runs round 1 while no one is
+        // quarantined; the co-signer (2) is quarantined afterward.
+        let opened =
+            open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)?;
+        let round1 = interactive_round1(InteractiveRound1Request {
+            session_id: session_id.to_string(),
+            attempt_id: opened.attempt_id.clone(),
+            member_identifier: 1,
+        })?;
+        let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+            key_package_identifier: key_packages[&2].identifier.clone(),
+            key_package_hex: key_packages[&2].data_hex.clone(),
+        })?;
+        let signing_package_hex = interactive_package_for_test(
+            &message,
+            vec![
+                NativeFrostCommitment {
+                    identifier: key_packages[&1].identifier.clone(),
+                    data_hex: round1.commitments_hex,
+                },
+                member2.commitment,
+            ],
+        );
+
+        // Quarantine the co-signer (member 2) after round 1.
+        {
+            let mut guard = state().expect("state").lock().expect("lock");
+            guard.quarantined_operator_identifiers.insert(2);
+        }
+
+        // Round2 must refuse: this node will not contribute a share to a
+        // package whose subset includes a quarantined co-signer, even
+        // though this node (member 1) is not itself quarantined.
+        let blocked = interactive_round2(InteractiveRound2Request {
+            session_id: session_id.to_string(),
+            attempt_id: opened.attempt_id.clone(),
+            member_identifier: 1,
+            signing_package_hex,
+        })
+        .expect_err("a quarantined co-signer in the package must block the share");
+        assert!(
+            matches!(blocked, EngineError::QuarantinePolicyRejected { ref reason_code, .. }
+                if reason_code == "operator_auto_quarantined"),
+            "unexpected error: {blocked:?}"
+        );
+
+        // Fail-closed without consuming: clearing the quarantine lets the
+        // same attempt complete (the rejection preceded consumption).
+        {
+            let mut guard = state().expect("state").lock().expect("lock");
+            assert!(
+                !guard
+                    .sessions
+                    .get(session_id)
+                    .expect("session")
+                    .consumed_interactive_attempt_markers
+                    .contains(&opened.attempt_id),
+                "a quarantine rejection must not consume the attempt"
+            );
+            guard.quarantined_operator_identifiers.remove(&2);
+        }
+        Ok(())
+    })();
+
+    std::env::remove_var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV);
+    std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV);
+    std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY_ENV);
+    std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_INVALID_SHARE_PENALTY_ENV);
+    outcome.expect("round2 co-signer quarantine lifecycle");
+}
+
+#[test]
+fn interactive_open_rejects_phantom_included_participant() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    // The session's DKG group is members 1..3. An attempt context whose
+    // included set names a phantom id (99) must be rejected even though
+    // the local member (1) is a real participant - otherwise a caller
+    // could bias the RFC-21 coordinator/attempt derivation with
+    // non-participants.
+    let session_id = "interactive-phantom-included";
+    let key_group = "interactive-test-key-group";
+    let message = [0x1du8; 32];
+    ensure_interactive_dkg_session(session_id, key_group);
+
+    let attempt_context =
+        interactive_test_attempt_context(session_id, key_group, &message, &[1u16, 99], 1);
+    let err = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: session_id.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        attempt_context,
+    })
+    .expect_err("a phantom included participant must be rejected");
+    assert!(
+        matches!(err, EngineError::Validation(ref m)
+            if m.contains("not a DKG participant for this session")),
+        "unexpected error: {err:?}"
+    );
+}

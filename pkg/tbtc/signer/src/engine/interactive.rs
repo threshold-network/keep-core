@@ -101,10 +101,11 @@ pub fn interactive_session_open(
                 request.threshold, dkg.threshold
             )));
         }
-        let key_package = session
+        let dkg_key_packages = session
             .dkg_key_packages
             .as_ref()
-            .ok_or_else(|| EngineError::Internal("missing DKG key package cache".to_string()))?
+            .ok_or_else(|| EngineError::Internal("missing DKG key package cache".to_string()))?;
+        let key_package = dkg_key_packages
             .get(&request.member_identifier)
             .ok_or_else(|| {
                 EngineError::Validation(
@@ -118,10 +119,12 @@ pub fn interactive_session_open(
         // runs again at Round2 (the share-release moment) so a policy
         // change recorded after Open - emergency rekey, finalization,
         // quarantine, or a re-bound policy-checked tx - cannot let a
-        // share escape.
+        // share escape. At Open only this node's own member is known to
+        // sign; Round2 re-checks quarantine over the actual chosen
+        // subset.
         enforce_interactive_signing_gates(
             &request.session_id,
-            request.member_identifier,
+            &[request.member_identifier],
             &request.message_hex,
             session.emergency_rekey_event.as_ref(),
             session.finalize_request_fingerprint.is_some(),
@@ -152,6 +155,19 @@ pub fn interactive_session_open(
                 "member_identifier must be included in attempt_context.included_participants"
                     .to_string(),
             ));
+        }
+        // Every included participant must be a real DKG member of this
+        // session. Otherwise a caller could pad the included set with
+        // phantom identifiers to bias the RFC-21 coordinator/attempt
+        // derivation, and Round2 could release a share under an attempt
+        // context that is not a genuine DKG subset.
+        for participant in &canonical_included_participants {
+            if !dkg_key_packages.contains_key(participant) {
+                return Err(EngineError::Validation(format!(
+                    "attempt_context.included_participants contains [{participant}], \
+                     which is not a DKG participant for this session"
+                )));
+            }
         }
         (key_package, canonical_included_participants)
     };
@@ -418,9 +434,13 @@ pub fn interactive_round2(
             && interactive.member_identifier == request.member_identifier
     }) {
         let bound_message_hex = hex::encode(interactive.message_bytes.as_slice());
+        // Fast-path lifecycle/firewall and this node's own quarantine.
+        // The full chosen signing subset is quarantine-checked after the
+        // package is verified (below), once it is known to be a real
+        // subset of the included set.
         enforce_interactive_signing_gates(
             &request.session_id,
-            request.member_identifier,
+            &[request.member_identifier],
             &bound_message_hex,
             session.emergency_rekey_event.as_ref(),
             session.finalize_request_fingerprint.is_some(),
@@ -449,6 +469,20 @@ pub fn interactive_round2(
     // share per handle still holds against two VALID packages because
     // the consumption marker is written before the share is released.
     verify_round2_signing_package(interactive, &signing_package)?;
+
+    // The package is now confirmed to be a threshold-sized subset of the
+    // attempt's included set, so the chosen signing subset is known.
+    // Quarantine-check ALL of it before releasing a share: this node
+    // must not contribute to a signature whose subset includes a
+    // locally quarantined co-signer, matching the coarse path's
+    // all-signing-participants quarantine enforcement.
+    let signing_subset = round2_signing_subset(interactive, &signing_package)?;
+    enforce_not_quarantined_identifiers(
+        &request.session_id,
+        &signing_subset,
+        &quarantined_operator_identifiers,
+        auto_quarantine_config.as_ref(),
+    )?;
 
     // Consumption-before-release: the durable marker is persisted
     // BEFORE the share is computed and returned. If persistence fails,
@@ -690,13 +724,20 @@ fn verify_round2_signing_package(
 // The signing gates the interactive path enforces at BOTH Open and
 // the Round2 share-release moment, mirroring the coarse
 // start_sign_round: emergency-rekey and finalized lifecycle, quarantine
-// of this node's own member, and the signing-policy firewall binding of
-// the message to a policy-checked build_taproot_tx. Centralized in one
-// function so the two call sites cannot drift apart.
+// of the signing participants, and the signing-policy firewall binding
+// of the message to a policy-checked build_taproot_tx. Centralized in
+// one function so the two call sites cannot drift apart.
+//
+// quarantine_identifiers is the set to quarantine-check: at Open only
+// this node's own member is known to sign; at Round2 it is the full
+// chosen signing subset (the package's participants), so this node
+// refuses to contribute a share to a package that includes any
+// quarantined co-signer - the same all-participants check the coarse
+// path applies.
 #[allow(clippy::too_many_arguments)]
 fn enforce_interactive_signing_gates(
     session_id: &str,
-    member_identifier: u16,
+    quarantine_identifiers: &[u16],
     message_hex: &str,
     emergency_rekey_event: Option<&EmergencyRekeyEvent>,
     session_finalized: bool,
@@ -721,7 +762,7 @@ fn enforce_interactive_signing_gates(
     }
     enforce_not_quarantined_identifiers(
         session_id,
-        &[member_identifier],
+        quarantine_identifiers,
         quarantined_operator_identifiers,
         auto_quarantine_config,
     )?;
@@ -735,6 +776,30 @@ fn enforce_interactive_signing_gates(
 // operate on this form to be replay-safe.
 fn canonical_attempt_id(attempt_id: &str) -> String {
     attempt_id.to_ascii_lowercase()
+}
+
+// The chosen signing subset as Go u16 identifiers: the included
+// participants whose commitment appears in the signing package. The
+// caller MUST have run verify_round2_signing_package first (which
+// confirms the package is a threshold-sized subset of the included
+// set), so every package participant maps back to an included member.
+fn round2_signing_subset(
+    interactive: &InteractiveSigningState,
+    signing_package: &frost::SigningPackage,
+) -> Result<Vec<u16>, EngineError> {
+    let package_identifiers = signing_package
+        .signing_commitments()
+        .keys()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let mut subset = Vec::with_capacity(package_identifiers.len());
+    for participant in &interactive.canonical_included_participants {
+        let frost_identifier = participant_identifier_to_frost_identifier(*participant)?;
+        if package_identifiers.contains(&frost_identifier) {
+            subset.push(*participant);
+        }
+    }
+    Ok(subset)
 }
 
 pub(crate) fn zeroize_interactive_round1(interactive: &mut InteractiveSigningState) {
