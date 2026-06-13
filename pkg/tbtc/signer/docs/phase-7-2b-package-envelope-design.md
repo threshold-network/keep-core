@@ -205,17 +205,25 @@ are candidates: the Go host adjudicates final blame at the f+1 quorum
 contract strong (YAGNI); it must be reflected in the C header and the Go
 bridge decoder.
 
-## 6. InteractiveAggregate completion marker
+## 6. InteractiveAggregate completion record
 
-Deferred from 7.2a: a persisted per-attempt "aggregated" marker
-(`aggregated_interactive_attempt_markers: HashSet<String>` on
-`SessionState`, mirrored in `PersistedSessionState`, bounded like the
-consumed markers). Re-aggregating a completed attempt returns a clear
-"already aggregated" error rather than recomputing. Not security-load-
-bearing (aggregate is deterministic over public data), but the spec
-calls for marking the session complete. (The blame binding is Go-side —
-section 4 — so the only engine-side state 7.2b adds is this completion
-marker.)
+Deferred from 7.2a: a persisted per-attempt completion record
+(`aggregated_interactive_attempt_signatures: BTreeMap<String, String>`,
+attempt_id → aggregate signature hex, on `SessionState`, mirrored in
+`PersistedSessionState`, bounded like the consumed markers).
+Re-aggregating a completed attempt returns the stored signature
+(idempotent re-emission) rather than recomputing or erroring: the
+aggregate is deterministic over public data and the signature is public,
+so the engine stays the source of truth for a completed attempt's
+signature. This keeps a host that loses the FFI response (e.g. a crash
+after the record persists but before the host stores the signature) from
+having to burn a fresh signing attempt to reproduce a signature the
+engine already holds — the initial design rejected the retry, which a
+Codex review flagged as an avoidable liveness / restart-divergence
+regression. The persisted signature is public (it goes on-chain), so
+recording it respects the never-persist-secrets freeze. Not
+security-load-bearing (the blame binding is Go-side — section 4), so the
+only engine-side state 7.2b adds is this completion record.
 
 ## 7. Go vs Rust split
 
@@ -344,6 +352,6 @@ its session/wallet selector and still succeeds after the signing session
 is TTL-swept (multi-session + post-sweep test, Codex P2); a genuine bad
 share yields machine-readable
 *candidate* culprits over the FFI (engine test, `AllCheaters`) that the Go
-quorum confirms as attributable `InvalidSignatureShare`; re-aggregation of
-a completed attempt is rejected (test); and the cross-language vectors are
-pinned both sides.
+quorum confirms as attributable `InvalidSignatureShare`; re-aggregating a
+completed attempt returns the same signature (idempotent re-emission,
+test); and the cross-language vectors are pinned both sides.
