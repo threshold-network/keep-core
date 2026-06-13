@@ -107,58 +107,22 @@ pub fn interactive_session_open(
 
     ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
 
-    // Session lifecycle gates (frozen spec section 5: Open "checks
-    // policy gates"). The interactive path must refuse in exactly the
-    // states the coarse start_sign_round refuses: a session under an
-    // emergency rekey, or one already terminally finalized. Without
-    // these, InteractiveRound1/Round2 could emit a share where the
-    // established path would not.
-    if let Some(existing_session) = guard.sessions.get(&request.session_id) {
-        if let Some(emergency_rekey_event) = existing_session.emergency_rekey_event.as_ref() {
-            return Err(EngineError::LifecyclePolicyRejected {
-                session_id: request.session_id.clone(),
-                reason_code: "emergency_rekey_required".to_string(),
-                detail: format!(
-                    "emergency rekey required for session [{}] since [{}]: {}",
-                    request.session_id,
-                    emergency_rekey_event.triggered_at_unix,
-                    emergency_rekey_event.reason
-                ),
-            });
-        }
-        if existing_session.finalize_request_fingerprint.is_some() {
-            return Err(EngineError::SessionFinalized {
-                session_id: request.session_id.clone(),
-            });
-        }
-    }
-
-    // Quarantine gate: this node is about to produce a share for
-    // member_identifier, so an auto-quarantined member (absent a DAO
-    // allowlist override) must not be able to sign through the
-    // interactive path either.
+    // Lifecycle + quarantine + signing-policy-firewall gates (frozen
+    // spec section 5: Open "checks policy gates"). The SAME helper runs
+    // again at Round2 (the share-release moment) so a policy change
+    // recorded after Open - emergency rekey, finalization, quarantine,
+    // or a re-bound policy-checked tx - cannot let a share escape.
     let auto_quarantine_config = load_auto_quarantine_config()?;
-    enforce_not_quarantined_identifiers(
+    let existing_session = guard.sessions.get(&request.session_id);
+    enforce_interactive_signing_gates(
         &request.session_id,
-        &[request.member_identifier],
+        request.member_identifier,
+        &request.message_hex,
+        existing_session.and_then(|session| session.emergency_rekey_event.as_ref()),
+        existing_session.is_some_and(|session| session.finalize_request_fingerprint.is_some()),
+        existing_session.and_then(|session| session.tx_result.as_ref()),
         &guard.quarantined_operator_identifiers,
         auto_quarantine_config.as_ref(),
-    )?;
-
-    // Signing-policy firewall (frozen spec section 5: Open "checks
-    // policy gates"). When the firewall is enabled, the message must be
-    // bound to a prior policy-checked build_taproot_tx for this
-    // session, exactly as the coarse start_sign_round path enforces it
-    // - otherwise a caller holding a key package could open an
-    // interactive session on a fresh session_id and sign an arbitrary
-    // message. A session with no policy-checked tx fails closed here.
-    enforce_signing_message_binding_to_policy_checked_build_tx(
-        &request.session_id,
-        &request.message_hex,
-        guard
-            .sessions
-            .get(&request.session_id)
-            .and_then(|session| session.tx_result.as_ref()),
     )?;
 
     // Decide everything from a read-only view BEFORE inserting anything,
@@ -367,6 +331,11 @@ pub fn interactive_round2(
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
     sweep_expired_interactive_state(&mut guard);
 
+    // Quarantine inputs must be read before the session is borrowed
+    // mutably from the same guard below.
+    let auto_quarantine_config = load_auto_quarantine_config()?;
+    let quarantined_operator_identifiers = guard.quarantined_operator_identifiers.clone();
+
     let session = guard.sessions.get_mut(&request.session_id).ok_or_else(|| {
         EngineError::SessionNotFound {
             session_id: request.session_id.clone(),
@@ -389,6 +358,31 @@ pub fn interactive_round2(
         "consumed_interactive_attempt_markers",
         &request.session_id,
     )?;
+
+    // Re-evaluate the signing gates at the share-release moment. The
+    // gates checked at Open are stale here: a kill switch recorded
+    // after Open (emergency rekey, finalization, quarantine, or a
+    // re-bound policy-checked tx) must stop the share leaving the
+    // engine. Read via immutable borrows of the live attempt before the
+    // mutable consume/sign borrow below. Skipped when no matching live
+    // attempt exists - there is no share to release in that case, and
+    // interactive_state_for_attempt_mut produces the canonical error.
+    if let Some(interactive) = session.interactive_signing.as_ref().filter(|interactive| {
+        interactive.attempt_context.attempt_id == attempt_id
+            && interactive.member_identifier == request.member_identifier
+    }) {
+        let bound_message_hex = hex::encode(interactive.message_bytes.as_slice());
+        enforce_interactive_signing_gates(
+            &request.session_id,
+            request.member_identifier,
+            &bound_message_hex,
+            session.emergency_rekey_event.as_ref(),
+            session.finalize_request_fingerprint.is_some(),
+            session.tx_result.as_ref(),
+            &quarantined_operator_identifiers,
+            auto_quarantine_config.as_ref(),
+        )?;
+    }
 
     let interactive = interactive_state_for_attempt_mut(
         session,
@@ -645,6 +639,47 @@ fn verify_round2_signing_package(
     }
 
     Ok(())
+}
+
+// The signing gates the interactive path enforces at BOTH Open and
+// the Round2 share-release moment, mirroring the coarse
+// start_sign_round: emergency-rekey and finalized lifecycle, quarantine
+// of this node's own member, and the signing-policy firewall binding of
+// the message to a policy-checked build_taproot_tx. Centralized in one
+// function so the two call sites cannot drift apart.
+#[allow(clippy::too_many_arguments)]
+fn enforce_interactive_signing_gates(
+    session_id: &str,
+    member_identifier: u16,
+    message_hex: &str,
+    emergency_rekey_event: Option<&EmergencyRekeyEvent>,
+    session_finalized: bool,
+    tx_result: Option<&TransactionResult>,
+    quarantined_operator_identifiers: &HashSet<u16>,
+    auto_quarantine_config: Option<&AutoQuarantineConfig>,
+) -> Result<(), EngineError> {
+    if let Some(emergency_rekey_event) = emergency_rekey_event {
+        return Err(EngineError::LifecyclePolicyRejected {
+            session_id: session_id.to_string(),
+            reason_code: "emergency_rekey_required".to_string(),
+            detail: format!(
+                "emergency rekey required for session [{}] since [{}]: {}",
+                session_id, emergency_rekey_event.triggered_at_unix, emergency_rekey_event.reason
+            ),
+        });
+    }
+    if session_finalized {
+        return Err(EngineError::SessionFinalized {
+            session_id: session_id.to_string(),
+        });
+    }
+    enforce_not_quarantined_identifiers(
+        session_id,
+        &[member_identifier],
+        quarantined_operator_identifiers,
+        auto_quarantine_config,
+    )?;
+    enforce_signing_message_binding_to_policy_checked_build_tx(session_id, message_hex, tx_result)
 }
 
 // Canonical key form for an attempt_id at the round entry points,

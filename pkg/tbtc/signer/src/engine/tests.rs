@@ -12591,3 +12591,99 @@ fn interactive_open_rejected_for_quarantined_member_honors_dao_allowlist() {
 
     outcome.expect("quarantine gate lifecycle");
 }
+
+#[test]
+fn interactive_round2_rechecks_gates_at_share_release() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let key_group = "interactive-test-key-group";
+    let message = [0x19u8; 32];
+    let included = [1u16, 2];
+
+    // Open + Round1 normally (gates pass at Open), build the package,
+    // THEN record an emergency rekey before Round2. The share must not
+    // leave the engine: Round2 re-evaluates the gates at release time.
+    let session_id = "interactive-toctou-rekey";
+    let opened = open_interactive_for_test(
+        &key_packages,
+        session_id,
+        key_group,
+        &message,
+        &included,
+        1,
+        1,
+        2,
+    )
+    .expect("opens");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+
+    // Kill switch recorded AFTER Open/Round1.
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get_mut(session_id).expect("session exists");
+        session.emergency_rekey_event = Some(EmergencyRekeyEvent {
+            reason: "post-open rekey".to_string(),
+            triggered_at_unix: now_unix(),
+        });
+    }
+
+    let blocked = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect_err("a post-open emergency rekey must block the Round2 share");
+    assert!(
+        matches!(blocked, EngineError::LifecyclePolicyRejected { ref reason_code, .. }
+            if reason_code == "emergency_rekey_required"),
+        "unexpected error: {blocked:?}"
+    );
+
+    // The block at release time must be fail-closed WITHOUT consuming
+    // the nonces: no marker was written (verify-before-consume applies
+    // to the gate recheck too), so clearing the kill switch lets the
+    // same attempt complete. This proves the recheck rejects before
+    // consumption rather than after.
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get_mut(session_id).expect("session exists");
+        assert!(
+            !session
+                .consumed_interactive_attempt_markers
+                .contains(&opened.attempt_id),
+            "a gate rejection must not consume the attempt"
+        );
+        session.emergency_rekey_event = None;
+    }
+
+    interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id,
+        member_identifier: 1,
+        signing_package_hex,
+    })
+    .expect("the same attempt completes once the kill switch clears");
+}
