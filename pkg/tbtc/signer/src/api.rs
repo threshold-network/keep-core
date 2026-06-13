@@ -222,7 +222,10 @@ pub struct InteractiveAggregateRequest {
     /// The collected signature shares from the responsive subset. Each
     /// is verified against the member's verifying share (resolved from
     /// the session's DKG public key package) before aggregation; an
-    /// invalid share yields attributable blame naming the culprit.
+    /// invalid share fails the call closed with `validation_error` and
+    /// no signature. Per-member attributable blame (a culprit list) is
+    /// deferred to Phase 7.2b, where the signed-package envelopes bind
+    /// what each member signed and make the attribution unforgeable.
     pub signature_shares: Vec<NativeFrostSignatureShare>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub taproot_merkle_root_hex: Option<String>,
