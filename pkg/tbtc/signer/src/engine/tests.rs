@@ -12196,3 +12196,261 @@ fn interactive_live_session_capacity_fails_closed() {
     std::env::remove_var(TBTC_SIGNER_MAX_LIVE_INTERACTIVE_SESSIONS_ENV);
     outcome.expect("capacity lifecycle");
 }
+
+#[test]
+fn interactive_open_signing_policy_firewall_rejects_without_policy_checked_build_tx() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    std::env::set_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV, "p2tr,p2wpkh");
+    configure_required_signing_policy_limits_for_tests();
+
+    // The critical security assertion: with the firewall enabled, a
+    // fresh interactive session with no prior policy-checked
+    // build_taproot_tx must NOT be able to open and sign an arbitrary
+    // message. It fails closed at the same gate the coarse path uses.
+    let key_packages = interactive_test_key_packages();
+    let outcome = open_interactive_for_test(
+        &key_packages,
+        "interactive-firewall-no-build-tx",
+        "interactive-firewall-key-group",
+        &[0xc1u8; 32],
+        &[1u16, 2],
+        1,
+        1,
+        2,
+    );
+
+    std::env::remove_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV);
+    std::env::remove_var(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV);
+    clear_state_storage_policy_overrides();
+
+    let err = outcome.expect_err("interactive open must fail closed under the firewall");
+    let EngineError::SigningPolicyRejected { reason_code, .. } = err else {
+        panic!("unexpected error variant: {err:?}");
+    };
+    assert_eq!(reason_code, "missing_policy_checked_build_tx");
+}
+
+#[test]
+fn interactive_open_signing_policy_firewall_binds_message_to_build_tx() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let session_id = "interactive-firewall-bound";
+    std::env::set_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV, "p2tr,p2wpkh");
+    configure_required_signing_policy_limits_for_tests();
+
+    let dkg_result = run_dkg(RunDkgRequest {
+        session_id: session_id.to_string(),
+        participants: vec![
+            crate::api::DkgParticipant {
+                identifier: 1,
+                public_key_hex: "02aa".to_string(),
+            },
+            crate::api::DkgParticipant {
+                identifier: 2,
+                public_key_hex: "02bb".to_string(),
+            },
+        ],
+        threshold: 2,
+        dkg_seed_hex: None,
+    })
+    .expect("run dkg");
+
+    let tx_result = build_taproot_tx(build_policy_test_request(session_id)).expect("build tx");
+    let bound_message_hex = policy_bound_message_hex_from_tx_result(&tx_result);
+    let bound_message = hex::decode(&bound_message_hex).expect("bound message decodes");
+    let key_packages = interactive_test_key_packages();
+
+    let outcome = (|| -> Result<(), EngineError> {
+        // A message NOT bound to the policy-checked tx is rejected even
+        // for an otherwise-valid attempt context.
+        let unbound = open_interactive_for_test(
+            &key_packages,
+            session_id,
+            &dkg_result.key_group,
+            &[0xd2u8; 32],
+            &[1u16, 2],
+            1,
+            1,
+            2,
+        )
+        .expect_err("an unbound message must be rejected under the firewall");
+        assert!(
+            matches!(unbound, EngineError::SigningPolicyRejected { ref reason_code, .. }
+                if reason_code == "signing_message_not_bound_to_policy_checked_build_tx"),
+            "unexpected error: {unbound:?}"
+        );
+
+        // The policy-bound message opens successfully: enforcement is
+        // real, not always-reject.
+        let opened = open_interactive_for_test(
+            &key_packages,
+            session_id,
+            &dkg_result.key_group,
+            &bound_message,
+            &[1u16, 2],
+            1,
+            1,
+            2,
+        )?;
+        assert!(!opened.idempotent);
+        Ok(())
+    })();
+
+    std::env::remove_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV);
+    std::env::remove_var(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV);
+    clear_state_storage_policy_overrides();
+
+    outcome.expect("policy-bound interactive open lifecycle");
+}
+
+#[test]
+fn interactive_consumed_marker_is_case_insensitive() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let session_id = "interactive-attempt-id-casing";
+    let key_group = "interactive-test-key-group";
+    let message = [0xe3u8; 32];
+    let included = [1u16, 2];
+
+    // Build the canonical (lowercase) attempt context, consume it, then
+    // retry the SAME logical attempt with the attempt_id upper-cased.
+    // validate_attempt_context accepts the hash fields case-
+    // insensitively, so a raw-keyed marker would miss and re-sign;
+    // the canonical keying must reject it as consumed.
+    let canonical = interactive_test_attempt_context(session_id, key_group, &message, &included, 1);
+    let opened = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: session_id.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        attempt_context: canonical.clone(),
+        key_package_identifier: key_packages[&1].identifier.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone(),
+    })
+    .expect("canonical open");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+    // Round2 with an UPPER-cased attempt_id must still consume the
+    // canonical attempt (proves round entry points canonicalize).
+    interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.to_ascii_uppercase(),
+        member_identifier: 1,
+        signing_package_hex,
+    })
+    .expect("round 2 under an upper-cased attempt_id consumes the canonical attempt");
+
+    // Reopen the SAME attempt with an upper-cased attempt_id: the
+    // consumed marker must catch it.
+    let mut recased_context = canonical;
+    recased_context.attempt_id = recased_context.attempt_id.to_ascii_uppercase();
+    let replay = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: session_id.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        attempt_context: recased_context,
+        key_package_identifier: key_packages[&1].identifier.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone(),
+    })
+    .expect_err("a re-cased consumed attempt must fail closed");
+    assert!(
+        matches!(replay, EngineError::ConsumedNonceReplay { .. }),
+        "unexpected error: {replay:?}"
+    );
+}
+
+#[test]
+fn interactive_abort_sweeps_expired_sessions() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let key_group = "interactive-test-key-group";
+    let message = [0xf4u8; 32];
+    let included = [1u16, 2];
+
+    // Open a live attempt on session A, then age it past the TTL.
+    let opened = open_interactive_for_test(
+        &key_packages,
+        "interactive-abort-sweep-a",
+        key_group,
+        &message,
+        &included,
+        1,
+        1,
+        2,
+    )
+    .expect("session A opens");
+    interactive_round1(InteractiveRound1Request {
+        session_id: "interactive-abort-sweep-a".to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        let session = guard
+            .sessions
+            .get_mut("interactive-abort-sweep-a")
+            .expect("session A exists");
+        let interactive = session
+            .interactive_signing
+            .as_mut()
+            .expect("live interactive state");
+        interactive.opened_at_unix = interactive
+            .opened_at_unix
+            .saturating_sub(interactive_session_ttl_seconds() + 1);
+    }
+
+    // An abort for a DIFFERENT session is the only post-expiry traffic;
+    // it must still sweep session A's expired nonces (the TTL guarantee
+    // holds regardless of which entry point takes the lock).
+    interactive_session_abort(InteractiveSessionAbortRequest {
+        session_id: "interactive-abort-sweep-other".to_string(),
+        attempt_id: None,
+    })
+    .expect("abort for an unrelated session");
+
+    let guard = state().expect("state").lock().expect("lock");
+    let session = guard
+        .sessions
+        .get("interactive-abort-sweep-a")
+        .expect("session A still present");
+    assert!(
+        session.interactive_signing.is_none(),
+        "an abort must sweep expired interactive state in other sessions"
+    );
+}

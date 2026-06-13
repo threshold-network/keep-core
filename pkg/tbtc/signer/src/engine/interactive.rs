@@ -51,6 +51,15 @@ pub fn interactive_session_open(
     let taproot_merkle_root =
         canonicalize_taproot_merkle_root_hex(&mut request.taproot_merkle_root_hex)?;
 
+    // Canonicalize the attempt context before anything keys off it -
+    // lowercases the hex hash fields and sorts the included set,
+    // exactly as the coarse start_sign_round path does. The wire
+    // accepts attempt_id/fingerprint case-insensitively, so the marker
+    // registry and live-state comparisons MUST run on the canonical
+    // form or a re-cased retry of a consumed attempt would miss the
+    // marker and sign again.
+    request.attempt_context = canonical_attempt_context(&request.attempt_context);
+
     // Strict-mode-only attempt context: required, fully validated,
     // coordinator recomputed per RFC-21 Annex A.
     let canonical_included_participants = validate_attempt_context(
@@ -97,6 +106,22 @@ pub fn interactive_session_open(
     sweep_expired_interactive_state(&mut guard);
 
     ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
+
+    // Signing-policy firewall (frozen spec section 5: Open "checks
+    // policy gates"). When the firewall is enabled, the message must be
+    // bound to a prior policy-checked build_taproot_tx for this
+    // session, exactly as the coarse start_sign_round path enforces it
+    // - otherwise a caller holding a key package could open an
+    // interactive session on a fresh session_id and sign an arbitrary
+    // message. A session with no policy-checked tx fails closed here.
+    enforce_signing_message_binding_to_policy_checked_build_tx(
+        &request.session_id,
+        &request.message_hex,
+        guard
+            .sessions
+            .get(&request.session_id)
+            .and_then(|session| session.tx_result.as_ref()),
+    )?;
 
     // Decide everything from a read-only view BEFORE inserting anything,
     // so the reject paths (consumed marker, conflict, capacity) never
@@ -212,6 +237,10 @@ pub fn interactive_round1(
     enforce_provenance_gate()?;
     validate_session_id(&request.session_id)?;
 
+    // The live state and markers are keyed on the canonical (lowercase)
+    // attempt_id; the wire form may differ in casing.
+    let attempt_id = canonical_attempt_id(&request.attempt_id);
+
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -225,18 +254,18 @@ pub fn interactive_round1(
 
     if session
         .consumed_interactive_attempt_markers
-        .contains(&request.attempt_id)
+        .contains(&attempt_id)
     {
         return Err(EngineError::ConsumedNonceReplay {
             session_id: request.session_id.clone(),
-            attempt_id: request.attempt_id,
+            attempt_id,
         });
     }
 
     let interactive = interactive_state_for_attempt_mut(
         session,
         &request.session_id,
-        &request.attempt_id,
+        &attempt_id,
         request.member_identifier,
     )?;
 
@@ -291,6 +320,10 @@ pub fn interactive_round2(
         EngineError::Validation(format!("InteractiveRound2: invalid signing package: {e}"))
     })?;
 
+    // The live state and markers are keyed on the canonical (lowercase)
+    // attempt_id; the wire form may differ in casing.
+    let attempt_id = canonical_attempt_id(&request.attempt_id);
+
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -304,17 +337,17 @@ pub fn interactive_round2(
 
     if session
         .consumed_interactive_attempt_markers
-        .contains(&request.attempt_id)
+        .contains(&attempt_id)
     {
         return Err(EngineError::ConsumedNonceReplay {
             session_id: request.session_id.clone(),
-            attempt_id: request.attempt_id,
+            attempt_id,
         });
     }
 
     ensure_consumed_registry_insert_capacity(
         &session.consumed_interactive_attempt_markers,
-        &request.attempt_id,
+        &attempt_id,
         "consumed_interactive_attempt_markers",
         &request.session_id,
     )?;
@@ -322,7 +355,7 @@ pub fn interactive_round2(
     let interactive = interactive_state_for_attempt_mut(
         session,
         &request.session_id,
-        &request.attempt_id,
+        &attempt_id,
         request.member_identifier,
     )?;
 
@@ -347,7 +380,7 @@ pub fn interactive_round2(
     // the nonces are destroyed, and no share was released.
     session
         .consumed_interactive_attempt_markers
-        .insert(request.attempt_id.clone());
+        .insert(attempt_id.clone());
     if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
         let session = guard
             .sessions
@@ -355,7 +388,7 @@ pub fn interactive_round2(
             .expect("session existed under the held engine lock");
         session
             .consumed_interactive_attempt_markers
-            .remove(&request.attempt_id);
+            .remove(&attempt_id);
         return Err(persist_error);
     }
 
@@ -411,7 +444,7 @@ pub fn interactive_round2(
 
     Ok(InteractiveRound2Result {
         session_id: request.session_id,
-        attempt_id: request.attempt_id,
+        attempt_id,
         signature_share_hex,
     })
 }
@@ -427,15 +460,24 @@ pub fn interactive_session_abort(
     enforce_provenance_gate()?;
     validate_session_id(&request.session_id)?;
 
+    // Canonicalize the optional attempt_id filter to match the
+    // canonical form the live state is keyed on.
+    let attempt_id_filter = request.attempt_id.as_deref().map(canonical_attempt_id);
+
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    // Abort takes the lock like every other entry point, so it sweeps
+    // expired interactive state too: the TTL guarantee (nonces gone
+    // within the TTL of inactivity) must hold even when the only
+    // post-expiry traffic is aborts for other sessions.
+    sweep_expired_interactive_state(&mut guard);
 
     let aborted = match guard.sessions.get_mut(&request.session_id) {
         Some(session) => match session.interactive_signing.as_ref() {
             Some(interactive)
-                if request.attempt_id.is_none()
-                    || request.attempt_id.as_deref()
+                if attempt_id_filter.is_none()
+                    || attempt_id_filter.as_deref()
                         == Some(interactive.attempt_context.attempt_id.as_str()) =>
             {
                 let mut removed = session
@@ -565,6 +607,15 @@ fn verify_round2_signing_package(
     }
 
     Ok(())
+}
+
+// Canonical key form for an attempt_id at the round entry points,
+// matching canonicalize_attempt_context_for_fingerprint (which
+// lowercases attempt_id). The wire accepts attempt_id case-
+// insensitively, so the marker registry and live-state lookups must
+// operate on this form to be replay-safe.
+fn canonical_attempt_id(attempt_id: &str) -> String {
+    attempt_id.to_ascii_lowercase()
 }
 
 pub(crate) fn zeroize_interactive_round1(interactive: &mut InteractiveSigningState) {
