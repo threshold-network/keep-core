@@ -10,12 +10,12 @@ use std::sync::OnceLock;
 use api::{
     AggregateRequest, BuildTaprootTxRequest, DifferentialFuzzRequest, DkgPart1Request,
     DkgPart2Request, DkgPart3Request, FinalizeSignRoundRequest,
-    GenerateNoncesAndCommitmentsRequest, InitSignerConfigRequest, InteractiveRound1Request,
-    InteractiveRound2Request, InteractiveSessionAbortRequest, InteractiveSessionOpenRequest,
-    NewSigningPackageRequest, PromoteCanaryRequest, QuarantineStatusRequest,
-    RefreshCadenceStatusRequest, RefreshSharesRequest, RollbackCanaryRequest, RunDkgRequest,
-    SignShareRequest, StartSignRoundRequest, TranscriptAuditRequest, TriggerEmergencyRekeyRequest,
-    VerifyBlameProofRequest,
+    GenerateNoncesAndCommitmentsRequest, InitSignerConfigRequest, InteractiveAggregateRequest,
+    InteractiveRound1Request, InteractiveRound2Request, InteractiveSessionAbortRequest,
+    InteractiveSessionOpenRequest, NewSigningPackageRequest, PromoteCanaryRequest,
+    QuarantineStatusRequest, RefreshCadenceStatusRequest, RefreshSharesRequest,
+    RollbackCanaryRequest, RunDkgRequest, SignShareRequest, StartSignRoundRequest,
+    TranscriptAuditRequest, TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
 };
 use ffi::{
     ffi_entry, free_buffer, parse_request, serialize_response, success_from_string,
@@ -350,6 +350,18 @@ pub extern "C" fn frost_tbtc_interactive_session_abort(
     ffi_entry(|| {
         let request: InteractiveSessionAbortRequest = parse_request(request_ptr, request_len)?;
         let response = engine::interactive_session_abort(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_interactive_aggregate(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: InteractiveAggregateRequest = parse_request(request_ptr, request_len)?;
+        let response = engine::interactive_aggregate(request)?;
         serialize_response(&response)
     })
 }
@@ -820,6 +832,25 @@ mod tests {
         let result: crate::api::InteractiveSessionAbortResult =
             serde_json::from_slice(&payload).expect("abort result payload");
         assert!(!result.aborted);
+
+        // Aggregate fails closed: the malformed signing package is
+        // rejected at parse (before the session lookup), proving the
+        // symbol -> parse -> engine -> structured-error dispatch.
+        let aggregate = crate::api::InteractiveAggregateRequest {
+            session_id: "ffi-interactive-smoke-missing".to_string(),
+            attempt_id: "missing".to_string(),
+            signing_package_hex: "00".to_string(),
+            signature_shares: vec![crate::api::NativeFrostSignatureShare {
+                identifier: "00".to_string(),
+                data_hex: "00".to_string(),
+            }],
+            taproot_merkle_root_hex: None,
+        };
+        let (status, payload) = call_ffi(&aggregate, super::frost_tbtc_interactive_aggregate);
+        assert_ne!(status, 0);
+        let error: ErrorResponse =
+            serde_json::from_slice(&payload).expect("aggregate error payload");
+        assert_eq!(error.code, "validation_error");
     }
 
     fn native_frost_identifier(member_index: u8) -> String {

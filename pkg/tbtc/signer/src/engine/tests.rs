@@ -11178,7 +11178,18 @@ fn ensure_interactive_dkg_session(
     session_id: &str,
     key_group: &str,
 ) -> BTreeMap<u16, crate::api::NativeFrostKeyPackage> {
-    let native = interactive_test_key_packages();
+    let fixture = deterministic_interactive_dkg_fixture(0);
+    let mut native = BTreeMap::new();
+    let mut public_key_package_native = None;
+    for (id, request) in fixture.part3_requests {
+        let result = dkg_part3(request).expect("DKG part3 for fixture");
+        if public_key_package_native.is_none() {
+            public_key_package_native = Some(result.public_key_package.clone());
+        }
+        native.insert(id, result.key_package);
+    }
+    let public_key_package_native =
+        public_key_package_native.expect("fixture has at least one participant");
 
     let mut guard = state().expect("engine state").lock().expect("engine lock");
     let session = guard.sessions.entry(session_id.to_string()).or_default();
@@ -11191,6 +11202,9 @@ fn ensure_interactive_dkg_session(
             .expect("fixture key package deserializes");
             frost_key_packages.insert(*id, deserialized);
         }
+        let public_key_package =
+            native_public_key_package_to_frost("interactive-dkg-seed", &public_key_package_native)
+                .expect("fixture public key package converts");
         session.dkg_result = Some(DkgResult {
             session_id: session_id.to_string(),
             key_group: key_group.to_string(),
@@ -11199,6 +11213,7 @@ fn ensure_interactive_dkg_session(
             created_at_unix: now_unix(),
         });
         session.dkg_key_packages = Some(frost_key_packages);
+        session.dkg_public_key_package = Some(public_key_package);
     }
 
     native
@@ -12732,5 +12747,295 @@ fn interactive_open_rejects_phantom_included_participant() {
         matches!(err, EngineError::Validation(ref m)
             if m.contains("not a DKG participant for this session")),
         "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn interactive_aggregate_produces_and_self_verifies_bip340() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let session_id = "interactive-aggregate-e2e";
+    let key_group = "interactive-test-key-group";
+    let message = [0x4au8; 32];
+    let included = [1u16, 2];
+    let key_packages = ensure_interactive_dkg_session(session_id, key_group);
+
+    // Member 1 signs through the hardened session API; member 2 through
+    // the stateless primitive. Both shares feed the coordinator's
+    // InteractiveAggregate, which resolves the verifying shares from the
+    // session's own DKG state.
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("opens");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment.clone(),
+        ],
+    );
+    let round2 = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect("round 2 share");
+    let member2_share = sign_share(SignShareRequest {
+        signing_package_hex: signing_package_hex.clone(),
+        nonces_hex: member2.nonces_hex,
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 share");
+
+    let aggregate = interactive_aggregate(InteractiveAggregateRequest {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        signing_package_hex,
+        signature_shares: vec![
+            crate::api::NativeFrostSignatureShare {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round2.signature_share_hex,
+            },
+            member2_share.signature_share,
+        ],
+        taproot_merkle_root_hex: None,
+    })
+    .expect("interactive aggregate");
+    assert_eq!(aggregate.attempt_id, opened.attempt_id);
+
+    // The engine already self-verified; re-verify here against the DKG
+    // group key to pin the round trip.
+    let public_key_package = {
+        let guard = state().expect("state").lock().expect("lock");
+        guard
+            .sessions
+            .get(session_id)
+            .expect("session")
+            .dkg_public_key_package
+            .clone()
+            .expect("public key package")
+    };
+    let verifying_key_bytes = public_key_package.verifying_key().serialize().expect("vk");
+    let signature_bytes = hex::decode(aggregate.signature_hex).expect("sig hex");
+    let signature = SchnorrSignature::from_slice(&signature_bytes).expect("BIP340 signature");
+    let public_key = XOnlyPublicKey::from_slice(&verifying_key_bytes[1..]).expect("x-only key");
+    Secp256k1::verification_only()
+        .verify_schnorr(&signature, &SecpMessage::from_digest(message), &public_key)
+        .expect("interactive aggregate yields a valid BIP-340 signature");
+}
+
+#[test]
+fn interactive_aggregate_rejects_invalid_share_fail_closed() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let session_id = "interactive-aggregate-blame";
+    let key_group = "interactive-test-key-group";
+    let message = [0x4bu8; 32];
+    let included = [1u16, 2];
+    let key_packages = ensure_interactive_dkg_session(session_id, key_group);
+
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("opens");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+    let round2 = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect("round 2 share");
+
+    // Member 2 contributes a structurally valid but WRONG share (a fresh
+    // share over a different signing package). Aggregation must fail with
+    // attributable blame naming member 2, not an opaque error.
+    let bogus_member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("bogus member 2 nonces");
+    let other_message = [0x4cu8; 32];
+    let other_package = interactive_package_for_test(
+        &other_message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&2].identifier.clone(),
+                data_hex: bogus_member2.commitment.data_hex.clone(),
+            },
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: bogus_member2.commitment.data_hex,
+            },
+        ],
+    );
+    let bogus_share = sign_share(SignShareRequest {
+        signing_package_hex: other_package,
+        nonces_hex: bogus_member2.nonces_hex,
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("bogus member 2 share");
+
+    let err = interactive_aggregate(InteractiveAggregateRequest {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        signing_package_hex,
+        signature_shares: vec![
+            crate::api::NativeFrostSignatureShare {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round2.signature_share_hex,
+            },
+            bogus_share.signature_share,
+        ],
+        taproot_merkle_root_hex: None,
+    })
+    .expect_err("an invalid share must fail aggregation closed");
+    // 7.2a fails closed without attributable member blame: the engine
+    // cannot yet bind the aggregate inputs to what each member signed
+    // (that needs the Phase 7.2b signed-package envelopes), so a
+    // verification failure is a generic error - no signature, and no
+    // culprit naming that a wrong-package/root coordinator could forge.
+    assert!(
+        matches!(err, EngineError::Validation(ref m) if m.contains("failed to aggregate")),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn interactive_aggregate_sweeps_expired_sessions() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_group = "interactive-test-key-group";
+    let message = [0x4du8; 32];
+    let included = [1u16, 2];
+
+    // An interactive attempt is opened + round-1'd on session A, then
+    // aged past the TTL.
+    let key_packages = ensure_interactive_dkg_session("interactive-aggregate-sweep-a", key_group);
+    let opened = open_interactive_for_test(
+        "interactive-aggregate-sweep-a",
+        key_group,
+        &message,
+        &included,
+        1,
+        1,
+        2,
+    )
+    .expect("session A opens");
+    interactive_round1(InteractiveRound1Request {
+        session_id: "interactive-aggregate-sweep-a".to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        let interactive = guard
+            .sessions
+            .get_mut("interactive-aggregate-sweep-a")
+            .expect("session A")
+            .interactive_signing
+            .as_mut()
+            .expect("live interactive state");
+        interactive.opened_at_unix = interactive
+            .opened_at_unix
+            .saturating_sub(interactive_session_ttl_seconds() + 1);
+    }
+
+    // A parseable threshold-sized package + share so the aggregate call
+    // reaches the lock and the sweep (it then fails on the missing
+    // target session). The package needs `threshold` (2) commitments for
+    // sign_share to produce a share.
+    let member1 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&1].identifier.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone(),
+    })
+    .expect("member 1 nonces");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let parseable_package = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: member1.commitment.data_hex.clone(),
+            },
+            member2.commitment,
+        ],
+    );
+    let parseable_share = sign_share(SignShareRequest {
+        signing_package_hex: parseable_package.clone(),
+        nonces_hex: member1.nonces_hex,
+        key_package_identifier: key_packages[&1].identifier.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone(),
+    })
+    .expect("member 1 share");
+
+    // Aggregate against a session that does not exist: the inputs parse,
+    // so the call reaches the lock and the sweep before failing with
+    // SessionNotFound.
+    let err = interactive_aggregate(InteractiveAggregateRequest {
+        session_id: "interactive-aggregate-sweep-missing".to_string(),
+        attempt_id: "missing".to_string(),
+        signing_package_hex: parseable_package,
+        signature_shares: vec![parseable_share.signature_share],
+        taproot_merkle_root_hex: None,
+    })
+    .expect_err("aggregate against a missing session fails closed");
+    assert!(
+        matches!(err, EngineError::SessionNotFound { .. }),
+        "unexpected error: {err:?}"
+    );
+
+    // The aggregate call's sweep must have cleared session A's expired
+    // nonce handle even though the call targeted a different session.
+    let guard = state().expect("state").lock().expect("lock");
+    let session_a = guard
+        .sessions
+        .get("interactive-aggregate-sweep-a")
+        .expect("session A (DKG state) retained");
+    assert!(
+        session_a.interactive_signing.is_none(),
+        "an aggregate call must sweep expired interactive state in other sessions"
     );
 }

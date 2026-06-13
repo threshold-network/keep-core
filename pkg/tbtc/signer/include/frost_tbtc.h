@@ -72,6 +72,18 @@ TbtcSignerResult frost_tbtc_interactive_session_open(const uint8_t* request_ptr,
 TbtcSignerResult frost_tbtc_interactive_round1(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_interactive_round2(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_interactive_session_abort(const uint8_t* request_ptr, size_t request_len);
+/*
+ * Coordinator-side aggregation: verifies each collected signature share
+ * against its verifying share (resolved from the session's DKG state) and
+ * returns the aggregated BIP-340 signature. Operates on public material
+ * only - no secret crosses here. On any verification failure it fails
+ * closed with the generic `validation_error` code and returns no
+ * signature; per-member attributable blame (a structured culprit list)
+ * is intentionally NOT emitted yet - it requires the signed-package
+ * envelope binding added in Phase 7.2b, without which the attribution
+ * would be forgeable by a coordinator using a mismatched package/root.
+ */
+TbtcSignerResult frost_tbtc_interactive_aggregate(const uint8_t* request_ptr, size_t request_len);
 
 #ifdef __cplusplus
 }
