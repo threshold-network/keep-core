@@ -57,6 +57,22 @@ TbtcSignerResult frost_tbtc_finalize_sign_round(const uint8_t* request_ptr, size
 TbtcSignerResult frost_tbtc_build_taproot_tx(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_refresh_shares(const uint8_t* request_ptr, size_t request_len);
 
+/*
+ * Phase 7.1 hardened interactive signing session.
+ *
+ * Unlike the stateless nonce contract above, secret nonces NEVER cross this
+ * boundary in either direction: the engine generates, holds, consumes, and
+ * zeroizes them internally, keyed by (session_id, attempt_id). The caller
+ * exchanges only public commitments, signing packages, and signature shares.
+ * frost_tbtc_interactive_round2 verifies the coordinator's signing package in
+ * full and consumes the attempt's nonces exactly once; a repeat call for a
+ * consumed attempt fails closed with the `consumed_nonce_replay` error code.
+ */
+TbtcSignerResult frost_tbtc_interactive_session_open(const uint8_t* request_ptr, size_t request_len);
+TbtcSignerResult frost_tbtc_interactive_round1(const uint8_t* request_ptr, size_t request_len);
+TbtcSignerResult frost_tbtc_interactive_round2(const uint8_t* request_ptr, size_t request_len);
+TbtcSignerResult frost_tbtc_interactive_session_abort(const uint8_t* request_ptr, size_t request_len);
+
 #ifdef __cplusplus
 }
 #endif

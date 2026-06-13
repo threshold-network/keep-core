@@ -51,6 +51,20 @@ pub(crate) const TBTC_SIGNER_MAX_SESSIONS_ENV: &str = "TBTC_SIGNER_MAX_SESSIONS"
 
 pub(crate) const TBTC_SIGNER_DEFAULT_MAX_SESSIONS: usize = 1024;
 
+// Phase 7.1 interactive session bounds. Live interactive sessions hold
+// secret nonces in memory, so they get a dedicated, smaller cap than
+// the overall session registry, and a TTL after which an abandoned
+// attempt's nonces are destroyed (expiry has abort semantics).
+pub(crate) const TBTC_SIGNER_MAX_LIVE_INTERACTIVE_SESSIONS_ENV: &str =
+    "TBTC_SIGNER_MAX_LIVE_INTERACTIVE_SESSIONS";
+
+pub(crate) const TBTC_SIGNER_DEFAULT_MAX_LIVE_INTERACTIVE_SESSIONS: usize = 64;
+
+pub(crate) const TBTC_SIGNER_INTERACTIVE_SESSION_TTL_SECONDS_ENV: &str =
+    "TBTC_SIGNER_INTERACTIVE_SESSION_TTL_SECONDS";
+
+pub(crate) const TBTC_SIGNER_DEFAULT_INTERACTIVE_SESSION_TTL_SECONDS: u64 = 3600;
+
 pub(crate) const TBTC_SIGNER_STATE_LOCKFILE_SUFFIX: &str = ".lock";
 
 pub(crate) const TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV: &str = "TBTC_SIGNER_ALLOW_BOOTSTRAP";

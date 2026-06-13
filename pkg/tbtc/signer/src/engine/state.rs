@@ -52,6 +52,40 @@ impl Drop for ZeroizingChaCha20Rng {
     }
 }
 
+// Phase 7.1 interactive session state. Lives ONLY in memory: the
+// nonces must never persist (frozen spec, markers-only durability),
+// and without them the rest of this struct is useless after a
+// restart, so none of it is mirrored into PersistedSessionState.
+// The durable artifact is SessionState.consumed_interactive_attempt_markers.
+pub(crate) struct InteractiveSigningState {
+    pub(crate) open_request_fingerprint: String,
+    pub(crate) attempt_context: AttemptContext,
+    pub(crate) canonical_included_participants: Vec<u16>,
+    pub(crate) member_identifier: u16,
+    pub(crate) threshold: u16,
+    pub(crate) message_bytes: SecretBytes,
+    pub(crate) taproot_merkle_root: Option<[u8; 32]>,
+    pub(crate) key_package: frost::keys::KeyPackage,
+    pub(crate) opened_at_unix: u64,
+    pub(crate) round1: Option<InteractiveRound1State>,
+}
+
+// Secret round-1 nonces and the public commitments they correspond
+// to. The nonces are zeroized at every exit path (consumption, abort,
+// expiry, replacement) by the interactive module; the Drop impl is
+// the backstop for paths that drop the struct without going through
+// one of those.
+pub(crate) struct InteractiveRound1State {
+    pub(crate) nonces: frost::round1::SigningNonces,
+    pub(crate) commitments_hex: String,
+}
+
+impl Drop for InteractiveRound1State {
+    fn drop(&mut self) {
+        self.nonces.zeroize();
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct SessionState {
     pub(crate) dkg_request_fingerprint: Option<String>,
@@ -75,6 +109,8 @@ pub(crate) struct SessionState {
     pub(crate) refresh_result: Option<RefreshSharesResult>,
     pub(crate) refresh_history: Vec<RefreshHistoryRecord>,
     pub(crate) emergency_rekey_event: Option<EmergencyRekeyEvent>,
+    pub(crate) interactive_signing: Option<InteractiveSigningState>,
+    pub(crate) consumed_interactive_attempt_markers: HashSet<String>,
 }
 
 #[derive(Default)]

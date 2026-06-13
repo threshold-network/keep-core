@@ -10,10 +10,11 @@ use std::sync::OnceLock;
 use api::{
     AggregateRequest, BuildTaprootTxRequest, DifferentialFuzzRequest, DkgPart1Request,
     DkgPart2Request, DkgPart3Request, FinalizeSignRoundRequest,
-    GenerateNoncesAndCommitmentsRequest, InitSignerConfigRequest, NewSigningPackageRequest,
-    PromoteCanaryRequest, QuarantineStatusRequest, RefreshCadenceStatusRequest,
-    RefreshSharesRequest, RollbackCanaryRequest, RunDkgRequest, SignShareRequest,
-    StartSignRoundRequest, TranscriptAuditRequest, TriggerEmergencyRekeyRequest,
+    GenerateNoncesAndCommitmentsRequest, InitSignerConfigRequest, InteractiveRound1Request,
+    InteractiveRound2Request, InteractiveSessionAbortRequest, InteractiveSessionOpenRequest,
+    NewSigningPackageRequest, PromoteCanaryRequest, QuarantineStatusRequest,
+    RefreshCadenceStatusRequest, RefreshSharesRequest, RollbackCanaryRequest, RunDkgRequest,
+    SignShareRequest, StartSignRoundRequest, TranscriptAuditRequest, TriggerEmergencyRekeyRequest,
     VerifyBlameProofRequest,
 };
 use ffi::{
@@ -296,6 +297,59 @@ pub extern "C" fn frost_tbtc_aggregate(
     ffi_entry(|| {
         let request: AggregateRequest = parse_request(request_ptr, request_len)?;
         let response = engine::aggregate(request)?;
+        serialize_response(&response)
+    })
+}
+
+// Phase 7.1 hardened interactive signing session (frozen spec
+// docs/phase-7-interactive-session-spec-freeze.md). Additive ABI: the
+// Go host adopts these in Phase 7.3; nothing breaks until it calls
+// them. Secret nonces never cross this boundary in either direction.
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_interactive_session_open(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: InteractiveSessionOpenRequest = parse_request(request_ptr, request_len)?;
+        let response = engine::interactive_session_open(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_interactive_round1(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: InteractiveRound1Request = parse_request(request_ptr, request_len)?;
+        let response = engine::interactive_round1(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_interactive_round2(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: InteractiveRound2Request = parse_request(request_ptr, request_len)?;
+        let response = engine::interactive_round2(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_interactive_session_abort(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: InteractiveSessionAbortRequest = parse_request(request_ptr, request_len)?;
+        let response = engine::interactive_session_abort(request)?;
         serialize_response(&response)
     })
 }
@@ -701,6 +755,71 @@ mod tests {
             serde_json::from_slice(&payload_second).expect("error payload decode");
         assert_eq!(error.code, "session_conflict");
         assert_eq!(error.recovery_class, "recoverable");
+    }
+
+    #[test]
+    fn interactive_session_ffi_dispatch_smoke() {
+        let _guard = crate::engine::lock_test_state();
+        crate::engine::reset_for_tests();
+        let _profile_env = EnvVarGuard::set(super::TBTC_SIGNER_PROFILE_ENV, "development");
+        let _provenance_env = EnvVarGuard::set("TBTC_SIGNER_ENFORCE_PROVENANCE_GATE", "false");
+
+        // Structurally valid requests whose semantics fail: proves
+        // symbol -> parse -> engine -> structured-error dispatch for
+        // every Phase 7.1 export without standing up a signing fixture
+        // (the engine tests own the cryptographic contracts).
+        let open = crate::api::InteractiveSessionOpenRequest {
+            session_id: "ffi-interactive-smoke".to_string(),
+            member_identifier: 1,
+            message_hex: "11".repeat(32),
+            key_group: "ffi-smoke-key-group".to_string(),
+            threshold: 2,
+            taproot_merkle_root_hex: None,
+            attempt_context: crate::api::AttemptContext {
+                attempt_number: 1,
+                coordinator_identifier: 1,
+                included_participants: vec![1, 2],
+                included_participants_fingerprint: "00".to_string(),
+                attempt_id: "ffi-smoke-attempt".to_string(),
+            },
+        };
+        // No DKG session exists, so Open fails closed with session_not_found
+        // (key material is resolved from engine DKG state, never the request).
+        let (status, payload) = call_ffi(&open, super::frost_tbtc_interactive_session_open);
+        assert_ne!(status, 0);
+        let error: ErrorResponse = serde_json::from_slice(&payload).expect("open error payload");
+        assert_eq!(error.code, "session_not_found");
+
+        let round1 = crate::api::InteractiveRound1Request {
+            session_id: "ffi-interactive-smoke-missing".to_string(),
+            attempt_id: "missing".to_string(),
+            member_identifier: 1,
+        };
+        let (status, payload) = call_ffi(&round1, super::frost_tbtc_interactive_round1);
+        assert_ne!(status, 0);
+        let error: ErrorResponse = serde_json::from_slice(&payload).expect("round1 error payload");
+        assert_eq!(error.code, "session_not_found");
+
+        let round2 = crate::api::InteractiveRound2Request {
+            session_id: "ffi-interactive-smoke-missing".to_string(),
+            attempt_id: "missing".to_string(),
+            member_identifier: 1,
+            signing_package_hex: "00".to_string(),
+        };
+        let (status, payload) = call_ffi(&round2, super::frost_tbtc_interactive_round2);
+        assert_ne!(status, 0);
+        let error: ErrorResponse = serde_json::from_slice(&payload).expect("round2 error payload");
+        assert_eq!(error.code, "validation_error");
+
+        let abort = crate::api::InteractiveSessionAbortRequest {
+            session_id: "ffi-interactive-smoke-missing".to_string(),
+            attempt_id: None,
+        };
+        let (status, payload) = call_ffi(&abort, super::frost_tbtc_interactive_session_abort);
+        assert_eq!(status, 0);
+        let result: crate::api::InteractiveSessionAbortResult =
+            serde_json::from_slice(&payload).expect("abort result payload");
+        assert!(!result.aborted);
     }
 
     fn native_frost_identifier(member_index: u8) -> String {

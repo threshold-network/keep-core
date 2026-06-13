@@ -145,6 +145,17 @@ self-contained):
    mode is the only mode here: no legacy-shape fallback), checks
    policy gates and provenance, registers the session. Idempotent
    by full-request fingerprint; conflicting reopen fails closed.
+   **The member's key package is resolved from the session's own DKG
+   state (run_dkg), NOT carried in the request** — so the session
+   must already exist with completed DKG, and no signing secret
+   crosses the FFI/host boundary (section 4). This is a correction to
+   an earlier draft of this spec that had Open accept the key package
+   in the request; accepting it would have left key shares outside
+   the engine and defeated the sidecar's signing-secret boundary. A
+   request `threshold` is still carried but must equal the DKG
+   threshold. As a consequence, an interactive session always rides a
+   DKG-populated session and never creates registry entries of its
+   own.
 2. `InteractiveRound1` — fresh nonces + commitments as in section
    4. Per (session, attempt, member) at most one live handle;
    repeat calls return the same commitments (idempotent) until

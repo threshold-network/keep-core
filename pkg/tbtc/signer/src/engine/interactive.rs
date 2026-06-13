@@ -1,0 +1,864 @@
+// Phase 7.1: the hardened interactive signing session layer.
+//
+// Implements sections 4-5 of the frozen spec
+// (docs/phase-7-interactive-session-spec-freeze.md). The defining
+// property is engine-held nonce custody: round-1 nonces are generated
+// from OS randomness, live only in in-memory session state bound to
+// (session_id, attempt_id), are zeroized on consumption, abort, and
+// expiry, and are NEVER serialized into a response or persisted state.
+// The only durable artifacts are per-attempt consumption markers,
+// written BEFORE a signature share leaves the engine
+// (consumption-before-release), so a restart can never lead to a
+// second share under the same nonces.
+//
+// Attempt contexts are strict-mode only: there is no legacy-shape
+// fallback on this path. All entry points are idempotent or fail
+// closed; none of them can be made to release more than one signature
+// share per nonce pair.
+
+use super::*;
+
+pub fn interactive_session_open(
+    mut request: InteractiveSessionOpenRequest,
+) -> Result<InteractiveSessionOpenResult, EngineError> {
+    record_hardening_telemetry(|telemetry| {
+        telemetry.interactive_session_open_calls_total = telemetry
+            .interactive_session_open_calls_total
+            .saturating_add(1);
+    });
+    enforce_provenance_gate()?;
+    validate_session_id(&request.session_id)?;
+
+    if request.member_identifier == 0 {
+        return Err(EngineError::Validation(
+            "member_identifier must be non-zero".to_string(),
+        ));
+    }
+    if request.threshold == 0 {
+        return Err(EngineError::Validation(
+            "threshold must be non-zero".to_string(),
+        ));
+    }
+
+    let message_bytes = hex::decode(&request.message_hex)
+        .map_err(|_| EngineError::Validation("message_hex must be valid hex".to_string()))?;
+    if message_bytes.is_empty() {
+        return Err(EngineError::Validation(
+            "message_hex must not be empty".to_string(),
+        ));
+    }
+    let message_digest_hex = hash_hex(&message_bytes);
+    let taproot_merkle_root =
+        canonicalize_taproot_merkle_root_hex(&mut request.taproot_merkle_root_hex)?;
+
+    // Canonicalize the attempt context before anything keys off it -
+    // lowercases the hex hash fields and sorts the included set,
+    // exactly as the coarse start_sign_round path does. The wire
+    // accepts attempt_id/fingerprint case-insensitively, so the marker
+    // registry and live-state comparisons MUST run on the canonical
+    // form or a re-cased retry of a consumed attempt would miss the
+    // marker and sign again.
+    request.attempt_context = canonical_attempt_context(&request.attempt_context);
+
+    let request_fingerprint = interactive_open_request_fingerprint(&request)?;
+    let attempt_id = request.attempt_context.attempt_id.clone();
+
+    let mut guard = state()?
+        .lock()
+        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    sweep_expired_interactive_state(&mut guard);
+
+    let auto_quarantine_config = load_auto_quarantine_config()?;
+
+    // The session must already exist with completed DKG. Key material
+    // lives in the engine's own DKG-populated state and is NEVER
+    // supplied through the request, so no signing secret crosses the
+    // FFI/host boundary (frozen spec section 4). Resolve the member's
+    // key package, run the policy gates, and validate the strict
+    // attempt context against the DKG threshold/key group - mirroring
+    // the coarse start_sign_round - all under one immutable borrow,
+    // then do the mutable install.
+    let (key_package, canonical_included_participants) = {
+        let session = guard.sessions.get(&request.session_id).ok_or_else(|| {
+            EngineError::SessionNotFound {
+                session_id: request.session_id.clone(),
+            }
+        })?;
+        let dkg = session
+            .dkg_result
+            .as_ref()
+            .ok_or_else(|| EngineError::DkgNotReady {
+                session_id: request.session_id.clone(),
+            })?;
+        if request.key_group != dkg.key_group {
+            return Err(EngineError::Validation(
+                "key_group does not match DKG output for this session".to_string(),
+            ));
+        }
+        if request.threshold != dkg.threshold {
+            return Err(EngineError::Validation(format!(
+                "threshold [{}] does not match the DKG threshold [{}] for this session",
+                request.threshold, dkg.threshold
+            )));
+        }
+        let dkg_key_packages = session
+            .dkg_key_packages
+            .as_ref()
+            .ok_or_else(|| EngineError::Internal("missing DKG key package cache".to_string()))?;
+        let key_package = dkg_key_packages
+            .get(&request.member_identifier)
+            .ok_or_else(|| {
+                EngineError::Validation(
+                    "member_identifier is not a DKG participant for this session".to_string(),
+                )
+            })?
+            .clone();
+
+        // Lifecycle + quarantine + signing-policy-firewall gates (frozen
+        // spec section 5: Open "checks policy gates"). The SAME helper
+        // runs again at Round2 (the share-release moment) so a policy
+        // change recorded after Open - emergency rekey, finalization,
+        // quarantine, or a re-bound policy-checked tx - cannot let a
+        // share escape. At Open only this node's own member is known to
+        // sign; Round2 re-checks quarantine over the actual chosen
+        // subset.
+        enforce_interactive_signing_gates(
+            &request.session_id,
+            &[request.member_identifier],
+            &request.message_hex,
+            session.emergency_rekey_event.as_ref(),
+            session.finalize_request_fingerprint.is_some(),
+            session.tx_result.as_ref(),
+            &guard.quarantined_operator_identifiers,
+            auto_quarantine_config.as_ref(),
+        )?;
+
+        // Strict-mode-only attempt context: required, fully validated
+        // against the DKG threshold/key group, coordinator recomputed
+        // per RFC-21 Annex A.
+        let canonical_included_participants = validate_attempt_context(
+            &request.session_id,
+            &dkg.key_group,
+            &message_bytes,
+            &message_digest_hex,
+            dkg.threshold,
+            Some(&request.attempt_context),
+            true,
+        )?
+        .ok_or_else(|| {
+            EngineError::Internal(
+                "strict attempt context validation returned no participants".to_string(),
+            )
+        })?;
+        if !canonical_included_participants.contains(&request.member_identifier) {
+            return Err(EngineError::Validation(
+                "member_identifier must be included in attempt_context.included_participants"
+                    .to_string(),
+            ));
+        }
+        // Every included participant must be a real DKG member of this
+        // session. Otherwise a caller could pad the included set with
+        // phantom identifiers to bias the RFC-21 coordinator/attempt
+        // derivation, and Round2 could release a share under an attempt
+        // context that is not a genuine DKG subset.
+        for participant in &canonical_included_participants {
+            if !dkg_key_packages.contains_key(participant) {
+                return Err(EngineError::Validation(format!(
+                    "attempt_context.included_participants contains [{participant}], \
+                     which is not a DKG participant for this session"
+                )));
+            }
+        }
+        (key_package, canonical_included_participants)
+    };
+
+    // Disposition over the (now-confirmed) existing session: consumed
+    // marker, idempotent/conflicting reopen of this exact attempt, and
+    // the live attempt (id + number) for the replacement decision.
+    let (already_consumed, matching_attempt_idempotent, live_attempt) = {
+        let session = guard
+            .sessions
+            .get(&request.session_id)
+            .expect("session existed under the held engine lock");
+        let already_consumed = session
+            .consumed_interactive_attempt_markers
+            .contains(&attempt_id);
+        let live = session.interactive_signing.as_ref();
+        let matching_attempt_idempotent = live
+            .filter(|interactive| interactive.attempt_context.attempt_id == attempt_id)
+            .map(|interactive| interactive.open_request_fingerprint == request_fingerprint);
+        let live_attempt = live.map(|interactive| {
+            (
+                interactive.attempt_context.attempt_id.clone(),
+                interactive.attempt_context.attempt_number,
+            )
+        });
+        (already_consumed, matching_attempt_idempotent, live_attempt)
+    };
+
+    if already_consumed {
+        return Err(EngineError::ConsumedNonceReplay {
+            session_id: request.session_id.clone(),
+            attempt_id,
+        });
+    }
+
+    match matching_attempt_idempotent {
+        Some(true) => {
+            return Ok(InteractiveSessionOpenResult {
+                session_id: request.session_id,
+                attempt_id,
+                idempotent: true,
+            });
+        }
+        Some(false) => {
+            return Err(EngineError::SessionConflict {
+                session_id: request.session_id.clone(),
+            });
+        }
+        None => {}
+    }
+
+    // A DIFFERENT live attempt is replaced ONLY by a strictly newer
+    // attempt: the retry loop advanced. A stale/delayed open for an
+    // older or equal attempt must not roll the session back and wipe
+    // the newer attempt's nonces.
+    let replacing = live_attempt.is_some();
+    if let Some((live_attempt_id, live_attempt_number)) = live_attempt {
+        if live_attempt_id != attempt_id
+            && request.attempt_context.attempt_number <= live_attempt_number
+        {
+            return Err(EngineError::Validation(format!(
+                "attempt_number [{}] does not advance the live interactive attempt [{}]; \
+                 refusing to roll back to an older or equal attempt",
+                request.attempt_context.attempt_number, live_attempt_number
+            )));
+        }
+    }
+
+    // Capacity counts every live interactive session. When replacing,
+    // this session already holds one of those slots, so the cap does
+    // not apply; when not replacing, a new slot is being taken.
+    if !replacing {
+        let live_interactive_sessions = guard
+            .sessions
+            .values()
+            .filter(|session| session.interactive_signing.is_some())
+            .count();
+        if live_interactive_sessions >= max_live_interactive_sessions_limit() {
+            return Err(EngineError::Internal(format!(
+                "live interactive session count [{live_interactive_sessions}] reached max [{}]; \
+                 abort idle sessions or increase {}",
+                max_live_interactive_sessions_limit(),
+                TBTC_SIGNER_MAX_LIVE_INTERACTIVE_SESSIONS_ENV
+            )));
+        }
+    }
+
+    let session = guard
+        .sessions
+        .get_mut(&request.session_id)
+        .expect("session existed under the held engine lock");
+
+    if let Some(mut replaced) = session.interactive_signing.take() {
+        zeroize_interactive_round1(&mut replaced);
+    }
+
+    session.interactive_signing = Some(InteractiveSigningState {
+        open_request_fingerprint: request_fingerprint,
+        attempt_context: request.attempt_context,
+        canonical_included_participants,
+        member_identifier: request.member_identifier,
+        threshold: request.threshold,
+        message_bytes: Zeroizing::new(message_bytes),
+        taproot_merkle_root,
+        key_package,
+        opened_at_unix: now_unix(),
+        round1: None,
+    });
+
+    record_hardening_telemetry(|telemetry| {
+        telemetry.interactive_session_open_success_total = telemetry
+            .interactive_session_open_success_total
+            .saturating_add(1);
+    });
+
+    Ok(InteractiveSessionOpenResult {
+        session_id: request.session_id,
+        attempt_id,
+        idempotent: false,
+    })
+}
+
+pub fn interactive_round1(
+    request: InteractiveRound1Request,
+) -> Result<InteractiveRound1Result, EngineError> {
+    record_hardening_telemetry(|telemetry| {
+        telemetry.interactive_round1_calls_total =
+            telemetry.interactive_round1_calls_total.saturating_add(1);
+    });
+    let _latency_guard = HardeningOperationLatencyGuard::new(HardeningOperation::InteractiveRound1);
+    enforce_provenance_gate()?;
+    validate_session_id(&request.session_id)?;
+
+    // The live state and markers are keyed on the canonical (lowercase)
+    // attempt_id; the wire form may differ in casing.
+    let attempt_id = canonical_attempt_id(&request.attempt_id);
+
+    let mut guard = state()?
+        .lock()
+        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    sweep_expired_interactive_state(&mut guard);
+
+    let session = guard.sessions.get_mut(&request.session_id).ok_or_else(|| {
+        EngineError::SessionNotFound {
+            session_id: request.session_id.clone(),
+        }
+    })?;
+
+    if session
+        .consumed_interactive_attempt_markers
+        .contains(&attempt_id)
+    {
+        return Err(EngineError::ConsumedNonceReplay {
+            session_id: request.session_id.clone(),
+            attempt_id,
+        });
+    }
+
+    let interactive = interactive_state_for_attempt_mut(
+        session,
+        &request.session_id,
+        &attempt_id,
+        request.member_identifier,
+    )?;
+
+    if let Some(round1) = interactive.round1.as_ref() {
+        // Idempotent until consumed: the commitments are public and
+        // re-sending them is safe; the nonces never leave.
+        return Ok(InteractiveRound1Result {
+            commitments_hex: round1.commitments_hex.clone(),
+        });
+    }
+
+    let mut rng = zeroizing_rng_from_os();
+    let (nonces, commitments) =
+        frost::round1::commit(interactive.key_package.signing_share(), &mut rng);
+    let commitment_bytes = commitments.serialize().map_err(|e| {
+        EngineError::Internal(format!("failed to serialize signing commitments: {e}"))
+    })?;
+    let commitments_hex = hex::encode(commitment_bytes);
+
+    interactive.round1 = Some(InteractiveRound1State {
+        nonces,
+        commitments_hex: commitments_hex.clone(),
+    });
+
+    record_hardening_telemetry(|telemetry| {
+        telemetry.interactive_round1_success_total =
+            telemetry.interactive_round1_success_total.saturating_add(1);
+    });
+
+    Ok(InteractiveRound1Result { commitments_hex })
+}
+
+pub fn interactive_round2(
+    request: InteractiveRound2Request,
+) -> Result<InteractiveRound2Result, EngineError> {
+    record_hardening_telemetry(|telemetry| {
+        telemetry.interactive_round2_calls_total =
+            telemetry.interactive_round2_calls_total.saturating_add(1);
+    });
+    let _latency_guard = HardeningOperationLatencyGuard::new(HardeningOperation::InteractiveRound2);
+    enforce_provenance_gate()?;
+    validate_session_id(&request.session_id)?;
+
+    let mut signing_package_bytes = decode_hex_field(
+        "InteractiveRound2",
+        "signing_package_hex",
+        &request.signing_package_hex,
+    )?;
+    let signing_package_result = frost::SigningPackage::deserialize(&signing_package_bytes);
+    signing_package_bytes.zeroize();
+    let signing_package = signing_package_result.map_err(|e| {
+        EngineError::Validation(format!("InteractiveRound2: invalid signing package: {e}"))
+    })?;
+
+    // The live state and markers are keyed on the canonical (lowercase)
+    // attempt_id; the wire form may differ in casing.
+    let attempt_id = canonical_attempt_id(&request.attempt_id);
+
+    let mut guard = state()?
+        .lock()
+        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    sweep_expired_interactive_state(&mut guard);
+
+    // Quarantine inputs must be read before the session is borrowed
+    // mutably from the same guard below.
+    let auto_quarantine_config = load_auto_quarantine_config()?;
+    let quarantined_operator_identifiers = guard.quarantined_operator_identifiers.clone();
+
+    let session = guard.sessions.get_mut(&request.session_id).ok_or_else(|| {
+        EngineError::SessionNotFound {
+            session_id: request.session_id.clone(),
+        }
+    })?;
+
+    if session
+        .consumed_interactive_attempt_markers
+        .contains(&attempt_id)
+    {
+        return Err(EngineError::ConsumedNonceReplay {
+            session_id: request.session_id.clone(),
+            attempt_id,
+        });
+    }
+
+    ensure_consumed_registry_insert_capacity(
+        &session.consumed_interactive_attempt_markers,
+        &attempt_id,
+        "consumed_interactive_attempt_markers",
+        &request.session_id,
+    )?;
+
+    // Re-evaluate the signing gates at the share-release moment. The
+    // gates checked at Open are stale here: a kill switch recorded
+    // after Open (emergency rekey, finalization, quarantine, or a
+    // re-bound policy-checked tx) must stop the share leaving the
+    // engine. Read via immutable borrows of the live attempt before the
+    // mutable consume/sign borrow below. Skipped when no matching live
+    // attempt exists - there is no share to release in that case, and
+    // interactive_state_for_attempt_mut produces the canonical error.
+    if let Some(interactive) = session.interactive_signing.as_ref().filter(|interactive| {
+        interactive.attempt_context.attempt_id == attempt_id
+            && interactive.member_identifier == request.member_identifier
+    }) {
+        let bound_message_hex = hex::encode(interactive.message_bytes.as_slice());
+        // Fast-path lifecycle/firewall and this node's own quarantine.
+        // The full chosen signing subset is quarantine-checked after the
+        // package is verified (below), once it is known to be a real
+        // subset of the included set.
+        enforce_interactive_signing_gates(
+            &request.session_id,
+            &[request.member_identifier],
+            &bound_message_hex,
+            session.emergency_rekey_event.as_ref(),
+            session.finalize_request_fingerprint.is_some(),
+            session.tx_result.as_ref(),
+            &quarantined_operator_identifiers,
+            auto_quarantine_config.as_ref(),
+        )?;
+    }
+
+    let interactive = interactive_state_for_attempt_mut(
+        session,
+        &request.session_id,
+        &attempt_id,
+        request.member_identifier,
+    )?;
+
+    if interactive.round1.is_none() {
+        return Err(EngineError::SignRoundNotStarted {
+            session_id: request.session_id.clone(),
+        });
+    }
+
+    // ALL verification precedes consumption (frozen spec section 5,
+    // Round2): a package that fails any check leaves the nonce handle
+    // live, so an invalid package cannot burn the attempt. At most one
+    // share per handle still holds against two VALID packages because
+    // the consumption marker is written before the share is released.
+    verify_round2_signing_package(interactive, &signing_package)?;
+
+    // The package is now confirmed to be a threshold-sized subset of the
+    // attempt's included set, so the chosen signing subset is known.
+    // Quarantine-check ALL of it before releasing a share: this node
+    // must not contribute to a signature whose subset includes a
+    // locally quarantined co-signer, matching the coarse path's
+    // all-signing-participants quarantine enforcement.
+    let signing_subset = round2_signing_subset(interactive, &signing_package)?;
+    enforce_not_quarantined_identifiers(
+        &request.session_id,
+        &signing_subset,
+        &quarantined_operator_identifiers,
+        auto_quarantine_config.as_ref(),
+    )?;
+
+    // Consumption-before-release: the durable marker is persisted
+    // BEFORE the share is computed and returned. If persistence fails,
+    // the marker is rolled back and the nonces remain live - no share
+    // has left the engine. If share computation fails after the marker
+    // persisted, the attempt is dead (fail closed): the marker stays,
+    // the nonces are destroyed, and no share was released.
+    session
+        .consumed_interactive_attempt_markers
+        .insert(attempt_id.clone());
+    if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
+        let session = guard
+            .sessions
+            .get_mut(&request.session_id)
+            .expect("session existed under the held engine lock");
+        session
+            .consumed_interactive_attempt_markers
+            .remove(&attempt_id);
+        return Err(persist_error);
+    }
+
+    let session = guard
+        .sessions
+        .get_mut(&request.session_id)
+        .expect("session existed under the held engine lock");
+    let interactive = session
+        .interactive_signing
+        .as_mut()
+        .expect("interactive state existed under the held engine lock");
+
+    let mut round1 = interactive
+        .round1
+        .take()
+        .expect("round1 state existed under the held engine lock");
+
+    let signature_share_result =
+        if let Some(taproot_merkle_root) = interactive.taproot_merkle_root.as_ref() {
+            frost::round2::sign_with_tweak(
+                &signing_package,
+                &round1.nonces,
+                &interactive.key_package,
+                Some(taproot_merkle_root.as_slice()),
+            )
+        } else {
+            frost::round2::sign(&signing_package, &round1.nonces, &interactive.key_package)
+        };
+    round1.nonces.zeroize();
+    drop(round1);
+
+    // Round2 is terminal for this member's participation in the
+    // attempt: the marker is durable and the nonces are gone, so free
+    // the live session state now rather than letting it (and its
+    // resident key package + message) linger until the TTL sweep. This
+    // also returns the live-session capacity slot immediately. Done on
+    // both the success and share-computation-failure paths: the
+    // attempt is consumed either way, and the durable marker carries
+    // all further replay protection.
+    session.interactive_signing = None;
+
+    let signature_share = signature_share_result
+        .map_err(|e| EngineError::Internal(format!("failed to create signature share: {e}")))?;
+
+    let mut signature_share_bytes = signature_share.serialize();
+    let signature_share_hex = hex::encode(&signature_share_bytes);
+    signature_share_bytes.zeroize();
+
+    record_hardening_telemetry(|telemetry| {
+        telemetry.interactive_round2_success_total =
+            telemetry.interactive_round2_success_total.saturating_add(1);
+    });
+
+    Ok(InteractiveRound2Result {
+        session_id: request.session_id,
+        attempt_id,
+        signature_share_hex,
+    })
+}
+
+pub fn interactive_session_abort(
+    request: InteractiveSessionAbortRequest,
+) -> Result<InteractiveSessionAbortResult, EngineError> {
+    record_hardening_telemetry(|telemetry| {
+        telemetry.interactive_session_abort_calls_total = telemetry
+            .interactive_session_abort_calls_total
+            .saturating_add(1);
+    });
+    enforce_provenance_gate()?;
+    validate_session_id(&request.session_id)?;
+
+    // Canonicalize the optional attempt_id filter to match the
+    // canonical form the live state is keyed on.
+    let attempt_id_filter = request.attempt_id.as_deref().map(canonical_attempt_id);
+
+    let mut guard = state()?
+        .lock()
+        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    // Abort takes the lock like every other entry point, so it sweeps
+    // expired interactive state too: the TTL guarantee (nonces gone
+    // within the TTL of inactivity) must hold even when the only
+    // post-expiry traffic is aborts for other sessions.
+    sweep_expired_interactive_state(&mut guard);
+
+    let aborted = match guard.sessions.get_mut(&request.session_id) {
+        Some(session) => match session.interactive_signing.as_ref() {
+            Some(interactive)
+                if attempt_id_filter.is_none()
+                    || attempt_id_filter.as_deref()
+                        == Some(interactive.attempt_context.attempt_id.as_str()) =>
+            {
+                let mut removed = session
+                    .interactive_signing
+                    .take()
+                    .expect("interactive state existed under the held engine lock");
+                zeroize_interactive_round1(&mut removed);
+                true
+            }
+            _ => false,
+        },
+        None => false,
+    };
+
+    record_hardening_telemetry(|telemetry| {
+        telemetry.interactive_session_abort_success_total = telemetry
+            .interactive_session_abort_success_total
+            .saturating_add(1);
+    });
+
+    Ok(InteractiveSessionAbortResult {
+        session_id: request.session_id,
+        aborted,
+    })
+}
+
+// Looks up the live interactive state and pins the
+// (attempt_id, member_identifier) binding every round call must carry.
+fn interactive_state_for_attempt_mut<'session>(
+    session: &'session mut SessionState,
+    session_id: &str,
+    attempt_id: &str,
+    member_identifier: u16,
+) -> Result<&'session mut InteractiveSigningState, EngineError> {
+    let interactive =
+        session
+            .interactive_signing
+            .as_mut()
+            .ok_or_else(|| EngineError::SessionNotFound {
+                session_id: format!("{session_id} (no live interactive attempt)"),
+            })?;
+
+    if interactive.attempt_context.attempt_id != attempt_id {
+        return Err(EngineError::Validation(format!(
+            "attempt_id [{attempt_id}] does not match the live interactive attempt [{}]",
+            interactive.attempt_context.attempt_id
+        )));
+    }
+
+    if interactive.member_identifier != member_identifier {
+        return Err(EngineError::Validation(
+            "member_identifier does not match the open interactive session".to_string(),
+        ));
+    }
+
+    Ok(interactive)
+}
+
+// The frozen spec's Round2 checks (a)-(f). Returns Ok only when every
+// check passes; the caller consumes the nonces strictly afterwards.
+fn verify_round2_signing_package(
+    interactive: &InteractiveSigningState,
+    signing_package: &frost::SigningPackage,
+) -> Result<(), EngineError> {
+    // (d) part 2 (deserialization already succeeded): the package must
+    // target exactly the session's message. A package for any other
+    // message - including the same message with different framing -
+    // must never reach the nonces.
+    if signing_package.message().as_slice() != interactive.message_bytes.as_slice() {
+        return Err(EngineError::Validation(
+            "signing package message does not match the open interactive session".to_string(),
+        ));
+    }
+
+    let package_commitments = signing_package.signing_commitments();
+
+    // (c) exactly threshold-many participants, deliberately not
+    // at-least (frozen spec section 5).
+    if package_commitments.len() != usize::from(interactive.threshold) {
+        return Err(EngineError::Validation(format!(
+            "signing package carries [{}] commitments; expected exactly threshold [{}]",
+            package_commitments.len(),
+            interactive.threshold
+        )));
+    }
+
+    // (b) the chosen subset must be inside the attempt's included set.
+    let included_identifiers = interactive
+        .canonical_included_participants
+        .iter()
+        .map(|participant| participant_identifier_to_frost_identifier(*participant))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    for package_identifier in package_commitments.keys() {
+        if !included_identifiers.contains(package_identifier) {
+            return Err(EngineError::Validation(
+                "signing package contains a participant outside the attempt's included set"
+                    .to_string(),
+            ));
+        }
+    }
+
+    // (a) this member must be in the chosen subset.
+    let own_identifier = participant_identifier_to_frost_identifier(interactive.member_identifier)?;
+    let own_package_commitments = package_commitments.get(&own_identifier).ok_or_else(|| {
+        EngineError::Validation(
+            "signing package does not include this member's commitment".to_string(),
+        )
+    })?;
+
+    // (f) the member's own commitment entry must be byte-identical to
+    // its round-1 output. Without this, a malicious coordinator could
+    // substitute the commitment, make this member's correctly-computed
+    // share fail verification at aggregation, and manufacture false
+    // blame evidence against an honest member.
+    let own_package_commitment_bytes = own_package_commitments.serialize().map_err(|e| {
+        EngineError::Internal(format!("failed to serialize package commitment: {e}"))
+    })?;
+    let round1 = interactive
+        .round1
+        .as_ref()
+        .expect("caller verified round1 state exists");
+    if hex::encode(own_package_commitment_bytes) != round1.commitments_hex {
+        return Err(EngineError::Validation(
+            "signing package commitment for this member does not match its round-1 output"
+                .to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+// The signing gates the interactive path enforces at BOTH Open and
+// the Round2 share-release moment, mirroring the coarse
+// start_sign_round: emergency-rekey and finalized lifecycle, quarantine
+// of the signing participants, and the signing-policy firewall binding
+// of the message to a policy-checked build_taproot_tx. Centralized in
+// one function so the two call sites cannot drift apart.
+//
+// quarantine_identifiers is the set to quarantine-check: at Open only
+// this node's own member is known to sign; at Round2 it is the full
+// chosen signing subset (the package's participants), so this node
+// refuses to contribute a share to a package that includes any
+// quarantined co-signer - the same all-participants check the coarse
+// path applies.
+#[allow(clippy::too_many_arguments)]
+fn enforce_interactive_signing_gates(
+    session_id: &str,
+    quarantine_identifiers: &[u16],
+    message_hex: &str,
+    emergency_rekey_event: Option<&EmergencyRekeyEvent>,
+    session_finalized: bool,
+    tx_result: Option<&TransactionResult>,
+    quarantined_operator_identifiers: &HashSet<u16>,
+    auto_quarantine_config: Option<&AutoQuarantineConfig>,
+) -> Result<(), EngineError> {
+    if let Some(emergency_rekey_event) = emergency_rekey_event {
+        return Err(EngineError::LifecyclePolicyRejected {
+            session_id: session_id.to_string(),
+            reason_code: "emergency_rekey_required".to_string(),
+            detail: format!(
+                "emergency rekey required for session [{}] since [{}]: {}",
+                session_id, emergency_rekey_event.triggered_at_unix, emergency_rekey_event.reason
+            ),
+        });
+    }
+    if session_finalized {
+        return Err(EngineError::SessionFinalized {
+            session_id: session_id.to_string(),
+        });
+    }
+    enforce_not_quarantined_identifiers(
+        session_id,
+        quarantine_identifiers,
+        quarantined_operator_identifiers,
+        auto_quarantine_config,
+    )?;
+    enforce_signing_message_binding_to_policy_checked_build_tx(session_id, message_hex, tx_result)
+}
+
+// Canonical key form for an attempt_id at the round entry points,
+// matching canonicalize_attempt_context_for_fingerprint (which
+// lowercases attempt_id). The wire accepts attempt_id case-
+// insensitively, so the marker registry and live-state lookups must
+// operate on this form to be replay-safe.
+fn canonical_attempt_id(attempt_id: &str) -> String {
+    attempt_id.to_ascii_lowercase()
+}
+
+// The chosen signing subset as Go u16 identifiers: the included
+// participants whose commitment appears in the signing package. The
+// caller MUST have run verify_round2_signing_package first (which
+// confirms the package is a threshold-sized subset of the included
+// set), so every package participant maps back to an included member.
+fn round2_signing_subset(
+    interactive: &InteractiveSigningState,
+    signing_package: &frost::SigningPackage,
+) -> Result<Vec<u16>, EngineError> {
+    let package_identifiers = signing_package
+        .signing_commitments()
+        .keys()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let mut subset = Vec::with_capacity(package_identifiers.len());
+    for participant in &interactive.canonical_included_participants {
+        let frost_identifier = participant_identifier_to_frost_identifier(*participant)?;
+        if package_identifiers.contains(&frost_identifier) {
+            subset.push(*participant);
+        }
+    }
+    Ok(subset)
+}
+
+pub(crate) fn zeroize_interactive_round1(interactive: &mut InteractiveSigningState) {
+    if let Some(mut round1) = interactive.round1.take() {
+        round1.nonces.zeroize();
+    }
+}
+
+// Lazy TTL enforcement: every interactive entry point sweeps before
+// acting, so an abandoned session's nonces are destroyed the first
+// time anything touches the engine after expiry. Expiry has abort
+// semantics - the durable consumption markers are untouched.
+pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) {
+    let ttl_seconds = interactive_session_ttl_seconds();
+    let now = now_unix();
+    // Interactive sessions always ride a DKG-populated session (Open
+    // requires existing DKG state), so expiry only clears the live
+    // attempt's nonces; the session itself - DKG material, consumed
+    // markers - is retained for future signing.
+    for session in engine_state.sessions.values_mut() {
+        let expired = session
+            .interactive_signing
+            .as_ref()
+            .is_some_and(|interactive| {
+                now.saturating_sub(interactive.opened_at_unix) > ttl_seconds
+            });
+        if expired {
+            if let Some(mut removed) = session.interactive_signing.take() {
+                zeroize_interactive_round1(&mut removed);
+            }
+        }
+    }
+}
+
+pub(crate) fn max_live_interactive_sessions_limit() -> usize {
+    signer_env_var(TBTC_SIGNER_MAX_LIVE_INTERACTIVE_SESSIONS_ENV)
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|limit| *limit > 0)
+        .unwrap_or(TBTC_SIGNER_DEFAULT_MAX_LIVE_INTERACTIVE_SESSIONS)
+}
+
+pub(crate) fn interactive_session_ttl_seconds() -> u64 {
+    signer_env_var(TBTC_SIGNER_INTERACTIVE_SESSION_TTL_SECONDS_ENV)
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|ttl| *ttl > 0)
+        .unwrap_or(TBTC_SIGNER_DEFAULT_INTERACTIVE_SESSION_TTL_SECONDS)
+}
+
+fn interactive_open_request_fingerprint(
+    request: &InteractiveSessionOpenRequest,
+) -> Result<String, EngineError> {
+    // The serialized request transiently contains key_package_hex;
+    // wipe the buffer once the fingerprint digest is taken.
+    let mut canonical = serde_json::to_vec(request).map_err(|e| {
+        EngineError::Internal(format!(
+            "failed to serialize InteractiveSessionOpen request for fingerprint: {e}"
+        ))
+    })?;
+    let fingerprint = hash_hex(&canonical);
+    canonical.zeroize();
+    Ok(fingerprint)
+}

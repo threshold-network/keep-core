@@ -146,6 +146,87 @@ pub struct SignShareResult {
     pub signature_share: NativeFrostSignatureShare,
 }
 
+// Phase 7.1 hardened interactive signing session (frozen spec
+// docs/phase-7-interactive-session-spec-freeze.md, section 5). Unlike
+// the stateless primitives above, secret nonces NEVER appear in these
+// requests or results: the engine generates, holds, consumes, and
+// zeroizes them internally, keyed by (session_id, attempt_id).
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct InteractiveSessionOpenRequest {
+    pub session_id: String,
+    pub member_identifier: u16,
+    pub message_hex: String,
+    pub key_group: String,
+    /// Signing threshold; must equal the session's DKG threshold. The
+    /// key material itself is resolved from the engine's DKG state and
+    /// is never carried in this request - no signing secret crosses the
+    /// FFI (frozen spec section 4).
+    pub threshold: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taproot_merkle_root_hex: Option<String>,
+    /// Required: interactive sessions are strict-mode only; there is
+    /// no legacy-shape fallback on this path.
+    pub attempt_context: AttemptContext,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct InteractiveSessionOpenResult {
+    pub session_id: String,
+    pub attempt_id: String,
+    pub idempotent: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct InteractiveRound1Request {
+    pub session_id: String,
+    pub attempt_id: String,
+    pub member_identifier: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct InteractiveRound1Result {
+    /// The member's public signing commitments. Idempotent until the
+    /// attempt's nonces are consumed; the secret nonces they
+    /// correspond to never leave the engine.
+    pub commitments_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct InteractiveRound2Request {
+    pub session_id: String,
+    pub attempt_id: String,
+    pub member_identifier: u16,
+    /// The coordinator's signing package (the chosen responsive
+    /// subset's commitment list). Verified in full - membership,
+    /// subset-of-included, exact threshold size, message binding, and
+    /// byte-identity of this member's own commitment entry - BEFORE
+    /// the nonces are consumed.
+    pub signing_package_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct InteractiveRound2Result {
+    pub session_id: String,
+    pub attempt_id: String,
+    pub signature_share_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct InteractiveSessionAbortRequest {
+    pub session_id: String,
+    /// When set, abort only if the live attempt matches; when unset,
+    /// abort whatever attempt is live for the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct InteractiveSessionAbortResult {
+    pub session_id: String,
+    pub aborted: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct AggregateRequest {
     pub signing_package_hex: String,
@@ -521,6 +602,30 @@ pub struct SignerHardeningMetricsResult {
     pub finalize_sign_round_latency_samples: u64,
     pub refresh_shares_latency_p95_ms: u64,
     pub refresh_shares_latency_samples: u64,
+    #[serde(default)]
+    pub interactive_session_open_calls_total: u64,
+    #[serde(default)]
+    pub interactive_session_open_success_total: u64,
+    #[serde(default)]
+    pub interactive_round1_calls_total: u64,
+    #[serde(default)]
+    pub interactive_round1_success_total: u64,
+    #[serde(default)]
+    pub interactive_round2_calls_total: u64,
+    #[serde(default)]
+    pub interactive_round2_success_total: u64,
+    #[serde(default)]
+    pub interactive_session_abort_calls_total: u64,
+    #[serde(default)]
+    pub interactive_session_abort_success_total: u64,
+    #[serde(default)]
+    pub interactive_round1_latency_p95_ms: u64,
+    #[serde(default)]
+    pub interactive_round1_latency_samples: u64,
+    #[serde(default)]
+    pub interactive_round2_latency_p95_ms: u64,
+    #[serde(default)]
+    pub interactive_round2_latency_samples: u64,
     pub last_updated_unix: u64,
 }
 
@@ -564,6 +669,10 @@ pub struct InitSignerConfigRequest {
     pub state_corrupt_backup_limit: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_sessions: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_live_interactive_sessions: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interactive_session_ttl_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_key_provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
