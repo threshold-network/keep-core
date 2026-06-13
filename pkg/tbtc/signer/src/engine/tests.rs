@@ -12936,3 +12936,106 @@ fn interactive_aggregate_rejects_invalid_share_fail_closed() {
         "unexpected error: {err:?}"
     );
 }
+
+#[test]
+fn interactive_aggregate_sweeps_expired_sessions() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_group = "interactive-test-key-group";
+    let message = [0x4du8; 32];
+    let included = [1u16, 2];
+
+    // An interactive attempt is opened + round-1'd on session A, then
+    // aged past the TTL.
+    let key_packages = ensure_interactive_dkg_session("interactive-aggregate-sweep-a", key_group);
+    let opened = open_interactive_for_test(
+        "interactive-aggregate-sweep-a",
+        key_group,
+        &message,
+        &included,
+        1,
+        1,
+        2,
+    )
+    .expect("session A opens");
+    interactive_round1(InteractiveRound1Request {
+        session_id: "interactive-aggregate-sweep-a".to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        let interactive = guard
+            .sessions
+            .get_mut("interactive-aggregate-sweep-a")
+            .expect("session A")
+            .interactive_signing
+            .as_mut()
+            .expect("live interactive state");
+        interactive.opened_at_unix = interactive
+            .opened_at_unix
+            .saturating_sub(interactive_session_ttl_seconds() + 1);
+    }
+
+    // A parseable threshold-sized package + share so the aggregate call
+    // reaches the lock and the sweep (it then fails on the missing
+    // target session). The package needs `threshold` (2) commitments for
+    // sign_share to produce a share.
+    let member1 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&1].identifier.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone(),
+    })
+    .expect("member 1 nonces");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let parseable_package = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: member1.commitment.data_hex.clone(),
+            },
+            member2.commitment,
+        ],
+    );
+    let parseable_share = sign_share(SignShareRequest {
+        signing_package_hex: parseable_package.clone(),
+        nonces_hex: member1.nonces_hex,
+        key_package_identifier: key_packages[&1].identifier.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone(),
+    })
+    .expect("member 1 share");
+
+    // Aggregate against a session that does not exist: the inputs parse,
+    // so the call reaches the lock and the sweep before failing with
+    // SessionNotFound.
+    let err = interactive_aggregate(InteractiveAggregateRequest {
+        session_id: "interactive-aggregate-sweep-missing".to_string(),
+        attempt_id: "missing".to_string(),
+        signing_package_hex: parseable_package,
+        signature_shares: vec![parseable_share.signature_share],
+        taproot_merkle_root_hex: None,
+    })
+    .expect_err("aggregate against a missing session fails closed");
+    assert!(
+        matches!(err, EngineError::SessionNotFound { .. }),
+        "unexpected error: {err:?}"
+    );
+
+    // The aggregate call's sweep must have cleared session A's expired
+    // nonce handle even though the call targeted a different session.
+    let guard = state().expect("state").lock().expect("lock");
+    let session_a = guard
+        .sessions
+        .get("interactive-aggregate-sweep-a")
+        .expect("session A (DKG state) retained");
+    assert!(
+        session_a.interactive_signing.is_none(),
+        "an aggregate call must sweep expired interactive state in other sessions"
+    );
+}

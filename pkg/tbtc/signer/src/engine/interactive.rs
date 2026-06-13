@@ -592,9 +592,14 @@ pub fn interactive_aggregate(
     let mut taproot_merkle_root_hex = request.taproot_merkle_root_hex.clone();
     let taproot_merkle_root = canonicalize_taproot_merkle_root_hex(&mut taproot_merkle_root_hex)?;
 
-    let guard = state()?
+    let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    // Aggregate takes the engine lock like every other interactive entry
+    // point, so it sweeps expired interactive state too: the TTL
+    // guarantee (a nonce handle gone within the TTL of inactivity) must
+    // hold even when the only post-expiry traffic is aggregate calls.
+    sweep_expired_interactive_state(&mut guard);
 
     // Resolve the group's public key package (the verifying shares used
     // to check each contribution) from the session's own DKG state, not
