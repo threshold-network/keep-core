@@ -158,17 +158,16 @@ pub struct InteractiveSessionOpenRequest {
     pub member_identifier: u16,
     pub message_hex: String,
     pub key_group: String,
+    /// Signing threshold; must equal the session's DKG threshold. The
+    /// key material itself is resolved from the engine's DKG state and
+    /// is never carried in this request - no signing secret crosses the
+    /// FFI (frozen spec section 4).
     pub threshold: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub taproot_merkle_root_hex: Option<String>,
     /// Required: interactive sessions are strict-mode only; there is
     /// no legacy-shape fallback on this path.
     pub attempt_context: AttemptContext,
-    /// The member's key package, supplied once per session and held by
-    /// the engine for the session's lifetime (in memory only:
-    /// interactive session state follows markers-only durability).
-    pub key_package_identifier: String,
-    pub key_package_hex: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]

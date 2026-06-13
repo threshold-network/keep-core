@@ -113,44 +113,6 @@ pub(crate) struct SessionState {
     pub(crate) consumed_interactive_attempt_markers: HashSet<String>,
 }
 
-impl SessionState {
-    // True when the session holds no durable or live state worth a
-    // registry slot: removing it loses nothing. Used to drop a session
-    // that only ever held a now-cleared interactive attempt, so churned
-    // interactive opens (open -> expire/abort before Round2) cannot
-    // accumulate empty entries and exhaust TBTC_SIGNER_MAX_SESSIONS.
-    //
-    // EVERY field must be checked here: a field omitted from this
-    // conjunction risks dropping a session that still carries replay
-    // protection (consumed markers) or DKG material. When adding a
-    // field to SessionState, add it here too.
-    pub(crate) fn is_disposable(&self) -> bool {
-        self.dkg_request_fingerprint.is_none()
-            && self.dkg_key_packages.is_none()
-            && self.dkg_public_key_package.is_none()
-            && self.dkg_result.is_none()
-            && self.sign_request_fingerprint.is_none()
-            && self.sign_message_bytes.is_none()
-            && self.round_state.is_none()
-            && self.active_attempt_context.is_none()
-            && self.attempt_transition_records.is_empty()
-            && self.consumed_attempt_ids.is_empty()
-            && self.consumed_sign_round_ids.is_empty()
-            && self.finalize_request_fingerprint.is_none()
-            && self.signature_result.is_none()
-            && self.consumed_finalize_round_ids.is_empty()
-            && self.consumed_finalize_request_fingerprints.is_empty()
-            && self.build_tx_request_fingerprint.is_none()
-            && self.tx_result.is_none()
-            && self.refresh_request_fingerprint.is_none()
-            && self.refresh_result.is_none()
-            && self.refresh_history.is_empty()
-            && self.emergency_rekey_event.is_none()
-            && self.interactive_signing.is_none()
-            && self.consumed_interactive_attempt_markers.is_empty()
-    }
-}
-
 #[derive(Default)]
 pub(crate) struct EngineState {
     pub(crate) sessions: HashMap<String, SessionState>,

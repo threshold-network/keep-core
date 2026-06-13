@@ -60,56 +60,6 @@ pub fn interactive_session_open(
     // marker and sign again.
     request.attempt_context = canonical_attempt_context(&request.attempt_context);
 
-    // Strict-mode-only attempt context: required, fully validated,
-    // coordinator recomputed per RFC-21 Annex A.
-    let canonical_included_participants = validate_attempt_context(
-        &request.session_id,
-        &request.key_group,
-        &message_bytes,
-        &message_digest_hex,
-        request.threshold,
-        Some(&request.attempt_context),
-        true,
-    )?
-    .ok_or_else(|| {
-        EngineError::Internal(
-            "strict attempt context validation returned no participants".to_string(),
-        )
-    })?;
-
-    if !canonical_included_participants.contains(&request.member_identifier) {
-        return Err(EngineError::Validation(
-            "member_identifier must be included in attempt_context.included_participants"
-                .to_string(),
-        ));
-    }
-
-    let key_package = decode_key_package(
-        "InteractiveSessionOpen",
-        &request.key_package_identifier,
-        &request.key_package_hex,
-    )?;
-    let expected_identifier =
-        participant_identifier_to_frost_identifier(request.member_identifier)?;
-    if *key_package.identifier() != expected_identifier {
-        return Err(EngineError::Validation(
-            "key_package_identifier must match member_identifier".to_string(),
-        ));
-    }
-    // The signing threshold is fixed by the key material. Reject a
-    // mismatch at Open: otherwise Round2 would accept a signing package
-    // of the requested (wrong) size, persist the consumed marker, and
-    // only then have frost::round2::sign fail on the commitment count -
-    // burning the nonce handle for a validation error, against the
-    // verify-before-consume contract.
-    if *key_package.min_signers() != request.threshold {
-        return Err(EngineError::Validation(format!(
-            "threshold [{}] does not match the key package min_signers [{}]",
-            request.threshold,
-            *key_package.min_signers()
-        )));
-    }
-
     let request_fingerprint = interactive_open_request_fingerprint(&request)?;
     let attempt_id = request.attempt_context.attempt_id.clone();
 
@@ -118,46 +68,116 @@ pub fn interactive_session_open(
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
     sweep_expired_interactive_state(&mut guard);
 
-    ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
-
-    // Lifecycle + quarantine + signing-policy-firewall gates (frozen
-    // spec section 5: Open "checks policy gates"). The SAME helper runs
-    // again at Round2 (the share-release moment) so a policy change
-    // recorded after Open - emergency rekey, finalization, quarantine,
-    // or a re-bound policy-checked tx - cannot let a share escape.
     let auto_quarantine_config = load_auto_quarantine_config()?;
-    let existing_session = guard.sessions.get(&request.session_id);
-    enforce_interactive_signing_gates(
-        &request.session_id,
-        request.member_identifier,
-        &request.message_hex,
-        existing_session.and_then(|session| session.emergency_rekey_event.as_ref()),
-        existing_session.is_some_and(|session| session.finalize_request_fingerprint.is_some()),
-        existing_session.and_then(|session| session.tx_result.as_ref()),
-        &guard.quarantined_operator_identifiers,
-        auto_quarantine_config.as_ref(),
-    )?;
 
-    // Decide everything from a read-only view BEFORE inserting anything,
-    // so the reject paths (consumed marker, conflict, capacity) never
-    // leave an empty SessionState behind. Returns: whether the attempt
-    // is already consumed, the disposition of any live attempt under
-    // this exact attempt_id (Some(true)=idempotent, Some(false)=
-    // conflicting fingerprint, None=no matching live attempt), and
-    // whether a live interactive attempt is being replaced.
-    let (already_consumed, matching_attempt_idempotent, replacing) = {
-        let existing = guard.sessions.get(&request.session_id);
-        let already_consumed = existing.is_some_and(|session| {
-            session
-                .consumed_interactive_attempt_markers
-                .contains(&attempt_id)
-        });
-        let matching_attempt_idempotent = existing
-            .and_then(|session| session.interactive_signing.as_ref())
+    // The session must already exist with completed DKG. Key material
+    // lives in the engine's own DKG-populated state and is NEVER
+    // supplied through the request, so no signing secret crosses the
+    // FFI/host boundary (frozen spec section 4). Resolve the member's
+    // key package, run the policy gates, and validate the strict
+    // attempt context against the DKG threshold/key group - mirroring
+    // the coarse start_sign_round - all under one immutable borrow,
+    // then do the mutable install.
+    let (key_package, canonical_included_participants) = {
+        let session = guard.sessions.get(&request.session_id).ok_or_else(|| {
+            EngineError::SessionNotFound {
+                session_id: request.session_id.clone(),
+            }
+        })?;
+        let dkg = session
+            .dkg_result
+            .as_ref()
+            .ok_or_else(|| EngineError::DkgNotReady {
+                session_id: request.session_id.clone(),
+            })?;
+        if request.key_group != dkg.key_group {
+            return Err(EngineError::Validation(
+                "key_group does not match DKG output for this session".to_string(),
+            ));
+        }
+        if request.threshold != dkg.threshold {
+            return Err(EngineError::Validation(format!(
+                "threshold [{}] does not match the DKG threshold [{}] for this session",
+                request.threshold, dkg.threshold
+            )));
+        }
+        let key_package = session
+            .dkg_key_packages
+            .as_ref()
+            .ok_or_else(|| EngineError::Internal("missing DKG key package cache".to_string()))?
+            .get(&request.member_identifier)
+            .ok_or_else(|| {
+                EngineError::Validation(
+                    "member_identifier is not a DKG participant for this session".to_string(),
+                )
+            })?
+            .clone();
+
+        // Lifecycle + quarantine + signing-policy-firewall gates (frozen
+        // spec section 5: Open "checks policy gates"). The SAME helper
+        // runs again at Round2 (the share-release moment) so a policy
+        // change recorded after Open - emergency rekey, finalization,
+        // quarantine, or a re-bound policy-checked tx - cannot let a
+        // share escape.
+        enforce_interactive_signing_gates(
+            &request.session_id,
+            request.member_identifier,
+            &request.message_hex,
+            session.emergency_rekey_event.as_ref(),
+            session.finalize_request_fingerprint.is_some(),
+            session.tx_result.as_ref(),
+            &guard.quarantined_operator_identifiers,
+            auto_quarantine_config.as_ref(),
+        )?;
+
+        // Strict-mode-only attempt context: required, fully validated
+        // against the DKG threshold/key group, coordinator recomputed
+        // per RFC-21 Annex A.
+        let canonical_included_participants = validate_attempt_context(
+            &request.session_id,
+            &dkg.key_group,
+            &message_bytes,
+            &message_digest_hex,
+            dkg.threshold,
+            Some(&request.attempt_context),
+            true,
+        )?
+        .ok_or_else(|| {
+            EngineError::Internal(
+                "strict attempt context validation returned no participants".to_string(),
+            )
+        })?;
+        if !canonical_included_participants.contains(&request.member_identifier) {
+            return Err(EngineError::Validation(
+                "member_identifier must be included in attempt_context.included_participants"
+                    .to_string(),
+            ));
+        }
+        (key_package, canonical_included_participants)
+    };
+
+    // Disposition over the (now-confirmed) existing session: consumed
+    // marker, idempotent/conflicting reopen of this exact attempt, and
+    // the live attempt (id + number) for the replacement decision.
+    let (already_consumed, matching_attempt_idempotent, live_attempt) = {
+        let session = guard
+            .sessions
+            .get(&request.session_id)
+            .expect("session existed under the held engine lock");
+        let already_consumed = session
+            .consumed_interactive_attempt_markers
+            .contains(&attempt_id);
+        let live = session.interactive_signing.as_ref();
+        let matching_attempt_idempotent = live
             .filter(|interactive| interactive.attempt_context.attempt_id == attempt_id)
             .map(|interactive| interactive.open_request_fingerprint == request_fingerprint);
-        let replacing = existing.is_some_and(|session| session.interactive_signing.is_some());
-        (already_consumed, matching_attempt_idempotent, replacing)
+        let live_attempt = live.map(|interactive| {
+            (
+                interactive.attempt_context.attempt_id.clone(),
+                interactive.attempt_context.attempt_number,
+            )
+        });
+        (already_consumed, matching_attempt_idempotent, live_attempt)
     };
 
     if already_consumed {
@@ -180,11 +200,24 @@ pub fn interactive_session_open(
                 session_id: request.session_id.clone(),
             });
         }
-        // None: no live attempt under this attempt_id. If a DIFFERENT
-        // attempt is live it is implicitly aborted below - the retry
-        // loop has moved on and a stuck prior attempt must not strand
-        // its nonces.
         None => {}
+    }
+
+    // A DIFFERENT live attempt is replaced ONLY by a strictly newer
+    // attempt: the retry loop advanced. A stale/delayed open for an
+    // older or equal attempt must not roll the session back and wipe
+    // the newer attempt's nonces.
+    let replacing = live_attempt.is_some();
+    if let Some((live_attempt_id, live_attempt_number)) = live_attempt {
+        if live_attempt_id != attempt_id
+            && request.attempt_context.attempt_number <= live_attempt_number
+        {
+            return Err(EngineError::Validation(format!(
+                "attempt_number [{}] does not advance the live interactive attempt [{}]; \
+                 refusing to roll back to an older or equal attempt",
+                request.attempt_context.attempt_number, live_attempt_number
+            )));
+        }
     }
 
     // Capacity counts every live interactive session. When replacing,
@@ -208,8 +241,8 @@ pub fn interactive_session_open(
 
     let session = guard
         .sessions
-        .entry(request.session_id.clone())
-        .or_default();
+        .get_mut(&request.session_id)
+        .expect("session existed under the held engine lock");
 
     if let Some(mut replaced) = session.interactive_signing.take() {
         zeroize_interactive_round1(&mut replaced);
@@ -537,18 +570,6 @@ pub fn interactive_session_abort(
         None => false,
     };
 
-    // Drop the session if aborting left it with nothing durable, so an
-    // open-then-abort churn cannot accumulate empty entries against
-    // TBTC_SIGNER_MAX_SESSIONS.
-    if aborted
-        && guard
-            .sessions
-            .get(&request.session_id)
-            .is_some_and(SessionState::is_disposable)
-    {
-        guard.sessions.remove(&request.session_id);
-    }
-
     record_hardening_telemetry(|telemetry| {
         telemetry.interactive_session_abort_success_total = telemetry
             .interactive_session_abort_success_total
@@ -729,28 +750,23 @@ pub(crate) fn zeroize_interactive_round1(interactive: &mut InteractiveSigningSta
 pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) {
     let ttl_seconds = interactive_session_ttl_seconds();
     let now = now_unix();
-    engine_state.sessions.retain(|_session_id, session| {
+    // Interactive sessions always ride a DKG-populated session (Open
+    // requires existing DKG state), so expiry only clears the live
+    // attempt's nonces; the session itself - DKG material, consumed
+    // markers - is retained for future signing.
+    for session in engine_state.sessions.values_mut() {
         let expired = session
             .interactive_signing
             .as_ref()
             .is_some_and(|interactive| {
                 now.saturating_sub(interactive.opened_at_unix) > ttl_seconds
             });
-        if !expired {
-            // Untouched sessions are kept as-is; only sessions whose
-            // live attempt we just expired are candidates for removal.
-            return true;
+        if expired {
+            if let Some(mut removed) = session.interactive_signing.take() {
+                zeroize_interactive_round1(&mut removed);
+            }
         }
-        if let Some(mut removed) = session.interactive_signing.take() {
-            zeroize_interactive_round1(&mut removed);
-        }
-        // Having cleared the expired attempt, drop the session if it now
-        // holds nothing durable, so churned interactive opens cannot
-        // accumulate empty entries against TBTC_SIGNER_MAX_SESSIONS. A
-        // session that still carries consumed markers or DKG material is
-        // kept.
-        !session.is_disposable()
-    });
+    }
 }
 
 pub(crate) fn max_live_interactive_sessions_limit() -> usize {

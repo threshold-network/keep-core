@@ -776,19 +776,19 @@ mod tests {
             threshold: 2,
             taproot_merkle_root_hex: None,
             attempt_context: crate::api::AttemptContext {
-                attempt_number: 0, // invalid: wire attempt numbers are 1-based
+                attempt_number: 1,
                 coordinator_identifier: 1,
                 included_participants: vec![1, 2],
                 included_participants_fingerprint: "00".to_string(),
                 attempt_id: "ffi-smoke-attempt".to_string(),
             },
-            key_package_identifier: "00".to_string(),
-            key_package_hex: "00".to_string(),
         };
+        // No DKG session exists, so Open fails closed with session_not_found
+        // (key material is resolved from engine DKG state, never the request).
         let (status, payload) = call_ffi(&open, super::frost_tbtc_interactive_session_open);
         assert_ne!(status, 0);
         let error: ErrorResponse = serde_json::from_slice(&payload).expect("open error payload");
-        assert_eq!(error.code, "validation_error");
+        assert_eq!(error.code, "session_not_found");
 
         let round1 = crate::api::InteractiveRound1Request {
             session_id: "ffi-interactive-smoke-missing".to_string(),
