@@ -12908,25 +12908,28 @@ fn interactive_aggregate_is_idempotent_for_completed_attempt() {
     let first =
         interactive_aggregate(aggregate_request.clone()).expect("first interactive aggregate");
 
-    // A repeat aggregate returns the PERSISTED signature, not a recompute
-    // (Phase 7.2b design section 6). A plain equality check would pass even on
-    // a recompute (aggregate is deterministic), so overwrite the stored record
-    // with a sentinel and confirm the repeat returns exactly that - the same
-    // return-the-recorded-value property the post-race path relies on.
-    {
-        let mut guard = state().expect("engine state").lock().expect("engine lock");
-        guard
-            .sessions
-            .get_mut(session_id)
-            .expect("session")
-            .aggregated_interactive_attempt_signatures
-            .insert(opened.attempt_id.clone(), "00sentinel".to_string());
-    }
-    let second = interactive_aggregate(aggregate_request)
-        .expect("re-aggregating a completed attempt returns the stored signature");
+    // Re-aggregating the SAME attempt with the SAME inputs returns the recorded
+    // signature (idempotent re-emission, Phase 7.2b design section 6).
+    let second = interactive_aggregate(aggregate_request.clone())
+        .expect("re-aggregating with the same inputs returns the recorded signature");
     assert_eq!(second.attempt_id, opened.attempt_id);
-    assert_eq!(second.signature_hex, "00sentinel");
-    assert_ne!(second.signature_hex, first.signature_hex);
+    assert_eq!(second.signature_hex, first.signature_hex);
+
+    // Reusing the attempt_id with a DIFFERENT taproot root is rejected, not
+    // handed the recorded key-path signature (which would not verify under the
+    // tweaked key). The completion record is keyed by attempt_id, which does
+    // not bind the root, so re-emission is validated against the request's
+    // package/root before returning.
+    let mismatched_root_request = InteractiveAggregateRequest {
+        taproot_merkle_root_hex: Some("11".repeat(32)),
+        ..aggregate_request
+    };
+    let err = interactive_aggregate(mismatched_root_request)
+        .expect_err("reusing an attempt_id with a different root must be rejected");
+    assert!(
+        matches!(err, EngineError::Validation(ref m) if m.contains("different package/root")),
+        "unexpected error: {err:?}"
+    );
 }
 
 #[test]

@@ -561,6 +561,34 @@ pub fn interactive_round2(
     })
 }
 
+// Does a recorded aggregate signature verify under THIS request's tweaked
+// group key and message? The completion record (section 6) is keyed by
+// attempt_id, which does NOT bind the taproot root, and the coordinator may be
+// adversarial - so the stored signature is re-emitted only when it is actually
+// valid for the caller's package/root, never a signature that would fail to
+// verify for these inputs.
+fn recorded_aggregate_matches_request(
+    public_key_package: &frost::keys::PublicKeyPackage,
+    taproot_merkle_root: Option<&[u8; 32]>,
+    signing_package: &frost::SigningPackage,
+    recorded_signature_hex: &str,
+) -> bool {
+    let Ok(signature_bytes) = hex::decode(recorded_signature_hex) else {
+        return false;
+    };
+    let Ok(signature) = frost::Signature::deserialize(&signature_bytes) else {
+        return false;
+    };
+    let verification_key_package = match taproot_merkle_root {
+        Some(root) => public_key_package.clone().tweak(Some(root.as_slice())),
+        None => public_key_package.clone(),
+    };
+    verification_key_package
+        .verifying_key()
+        .verify(signing_package.message().as_slice(), &signature)
+        .is_ok()
+}
+
 pub fn interactive_aggregate(
     request: InteractiveAggregateRequest,
 ) -> Result<InteractiveAggregateResult, EngineError> {
@@ -612,34 +640,50 @@ pub fn interactive_aggregate(
                 session_id: request.session_id.clone(),
             }
         })?;
-        // Idempotent re-emission (Phase 7.2b design section 6): if this attempt
-        // already aggregated, return the stored signature without recomputing.
-        // The record is durable, so the signature stays recoverable from the
-        // engine across restart - a host that lost the FFI response need not
-        // spend a fresh signing attempt to reproduce a signature the engine
-        // already holds.
-        if let Some(signature_hex) = session
-            .aggregated_interactive_attempt_signatures
-            .get(&attempt_id)
-        {
-            return Ok(InteractiveAggregateResult {
-                session_id: request.session_id.clone(),
-                attempt_id: attempt_id.clone(),
-                signature_hex: signature_hex.clone(),
-            });
-        }
         if session.dkg_result.is_none() {
             return Err(EngineError::DkgNotReady {
                 session_id: request.session_id.clone(),
             });
         }
-        session
+        let public_key_package = session
             .dkg_public_key_package
             .as_ref()
             .ok_or_else(|| {
                 EngineError::Internal("missing DKG public key package cache".to_string())
             })?
-            .clone()
+            .clone();
+        // Idempotent re-emission (Phase 7.2b design section 6): a completed
+        // attempt returns its recorded signature without recomputing, so the
+        // signature stays recoverable from the engine across restart - a host
+        // that lost the FFI response need not spend a fresh signing attempt.
+        // The record is keyed by attempt_id, which does NOT bind the taproot
+        // root, and the coordinator may be adversarial, so re-emit ONLY when the
+        // stored signature actually verifies under THIS request's tweaked group
+        // key and message; a reused attempt_id carrying different aggregate
+        // inputs is rejected rather than handed a signature that fails for them.
+        if let Some(existing) = session
+            .aggregated_interactive_attempt_signatures
+            .get(&attempt_id)
+        {
+            if recorded_aggregate_matches_request(
+                &public_key_package,
+                taproot_merkle_root.as_ref(),
+                &signing_package,
+                existing,
+            ) {
+                return Ok(InteractiveAggregateResult {
+                    session_id: request.session_id.clone(),
+                    attempt_id: attempt_id.clone(),
+                    signature_hex: existing.clone(),
+                });
+            }
+            return Err(EngineError::Validation(format!(
+                "InteractiveAggregate: attempt [{attempt_id}] already aggregated under a \
+                 different package/root; reuse of an attempt_id for different aggregate \
+                 inputs is rejected"
+            )));
+        }
+        public_key_package
     };
     drop(guard);
 
@@ -710,19 +754,34 @@ pub fn interactive_aggregate(
     // A concurrent aggregate that raced past the pre-check may already have
     // recorded this attempt. Different responsive subsets can each produce a
     // VALID but distinct signature for the same attempt, so return the
-    // canonical PERSISTED signature, not the one this call just recomputed -
+    // canonical PERSISTED signature when it verifies under this request's
+    // tweaked key and message (not the one this call just recomputed) -
     // otherwise the value a caller receives could diverge from what restarts
-    // and later re-emissions return. No re-store and no success count here: the
-    // call that recorded the attempt already counted it.
+    // and later re-emissions return. A record that does NOT verify for these
+    // inputs means the attempt_id was reused for a different package/root:
+    // reject it. No re-store and no success count on re-emission: the call that
+    // recorded the attempt already counted it.
     if let Some(existing) = session
         .aggregated_interactive_attempt_signatures
         .get(&attempt_id)
     {
-        return Ok(InteractiveAggregateResult {
-            session_id: request.session_id.clone(),
-            attempt_id: attempt_id.clone(),
-            signature_hex: existing.clone(),
-        });
+        if recorded_aggregate_matches_request(
+            &public_key_package,
+            taproot_merkle_root.as_ref(),
+            &signing_package,
+            existing,
+        ) {
+            return Ok(InteractiveAggregateResult {
+                session_id: request.session_id.clone(),
+                attempt_id: attempt_id.clone(),
+                signature_hex: existing.clone(),
+            });
+        }
+        return Err(EngineError::Validation(format!(
+            "InteractiveAggregate: attempt [{attempt_id}] already aggregated under a \
+             different package/root; reuse of an attempt_id for different aggregate \
+             inputs is rejected"
+        )));
     }
     ensure_consumed_registry_capacity_for_insert(
         session.aggregated_interactive_attempt_signatures.len(),
