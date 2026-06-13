@@ -626,8 +626,16 @@ pub fn interactive_aggregate(
     // verifying shares), so no policy gate runs here - the secret-bearing
     // step is each signer's Round2, where lifecycle/quarantine/firewall
     // were already enforced (including the full-subset quarantine check).
-    // frost verifies every share against its verifying share and reports
-    // the culprits on failure; surface them as attributable blame.
+    //
+    // frost verifies every share and can name which failed, but this path
+    // does NOT surface those as attributable member blame: the engine
+    // cannot yet bind these public inputs (signing package, taproot root)
+    // to what each member actually signed at Round2, so a coordinator
+    // aggregating against a different package/root would make honest
+    // shares fail and frame their members. Attributable blame waits for
+    // the signed-package envelopes (Phase 7.2b, frozen spec section 6),
+    // which prove what each member signed. Until then a verification
+    // failure is a generic fail-closed error: no signature, no blame.
     let verification_key_package = match taproot_merkle_root.as_ref() {
         Some(root) => public_key_package.clone().tweak(Some(root.as_slice())),
         None => public_key_package.clone(),
@@ -642,8 +650,11 @@ pub fn interactive_aggregate(
         ),
         None => frost::aggregate(&signing_package, &signature_shares, &public_key_package),
     };
-    let signature = aggregate_result
-        .map_err(|error| map_aggregate_error_to_blame(&request.session_id, error))?;
+    let signature = aggregate_result.map_err(|error| {
+        EngineError::Validation(format!(
+            "InteractiveAggregate: failed to aggregate: {error}"
+        ))
+    })?;
 
     // Self-verify the aggregate against the (tweaked) group verifying
     // key before releasing it, matching the coarse finalize path.
@@ -671,25 +682,6 @@ pub fn interactive_aggregate(
         attempt_id,
         signature_hex: hex::encode(signature_bytes),
     })
-}
-
-// Convert a frost aggregation error into an attributable blame error
-// when it identifies culprit shares, so the coordinator can exclude the
-// offending member(s) on the next attempt. Other failures map to a
-// generic validation error.
-fn map_aggregate_error_to_blame(session_id: &str, error: frost::Error) -> EngineError {
-    if let frost::Error::InvalidSignatureShare { culprits } = error {
-        return EngineError::InvalidSignatureShare {
-            session_id: session_id.to_string(),
-            culprits: culprits
-                .into_iter()
-                .map(frost_identifier_to_go_string)
-                .collect(),
-        };
-    }
-    EngineError::Validation(format!(
-        "InteractiveAggregate: failed to aggregate: {error}"
-    ))
 }
 
 pub fn interactive_session_abort(

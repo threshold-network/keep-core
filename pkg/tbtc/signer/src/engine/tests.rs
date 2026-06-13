@@ -12841,7 +12841,7 @@ fn interactive_aggregate_produces_and_self_verifies_bip340() {
 }
 
 #[test]
-fn interactive_aggregate_blames_invalid_share_culprit() {
+fn interactive_aggregate_rejects_invalid_share_fail_closed() {
     let _guard = lock_test_state();
     reset_for_tests();
 
@@ -12925,15 +12925,14 @@ fn interactive_aggregate_blames_invalid_share_culprit() {
         ],
         taproot_merkle_root_hex: None,
     })
-    .expect_err("an invalid share must fail aggregation with attributable blame");
-    match err {
-        EngineError::InvalidSignatureShare { ref culprits, .. } => {
-            assert!(
-                culprits.contains(&key_packages[&2].identifier),
-                "culprit list must name member 2: {culprits:?}"
-            );
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
-    assert_eq!(err.code(), "invalid_signature_share");
+    .expect_err("an invalid share must fail aggregation closed");
+    // 7.2a fails closed without attributable member blame: the engine
+    // cannot yet bind the aggregate inputs to what each member signed
+    // (that needs the Phase 7.2b signed-package envelopes), so a
+    // verification failure is a generic error - no signature, and no
+    // culprit naming that a wrong-package/root coordinator could forge.
+    assert!(
+        matches!(err, EngineError::Validation(ref m) if m.contains("failed to aggregate")),
+        "unexpected error: {err:?}"
+    );
 }
