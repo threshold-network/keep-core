@@ -17,8 +17,23 @@ A separate OS process that owns the signer engine and every secret
 it holds: key-share state, the state-encryption key path, and (after
 Phase 7.1) the in-memory interactive nonces. The keep-client host
 process — Go runtime, libp2p, Ethereum client, every transitive
-dependency — talks to it over local IPC and holds no signing
-secrets at any time.
+dependency — talks to it over local IPC.
+
+**Boundary scope (important, and a hard prerequisite for #4007).**
+The "host holds no signing secrets" property is *scoped to the
+signing path* and holds once Phase 7.1's engine-held nonce custody
+ships: key shares are env/command-only and nonces never leave the
+engine. It does **not** yet hold for **DKG**: the transitional DKG
+APIs that section 3 maps unchanged still return and accept
+`secret_package_hex` through the host (frozen Phase 7 spec section 4
+names DKG secret-package custody as an out-of-scope follow-up). So in
+any deployment that runs DKG through this transport, the host process
+still sees DKG secret material. #4007 must therefore treat the
+host↔sidecar **signing** interface as a secret boundary but must NOT
+treat the DKG interface as one until the DKG-custody follow-up moves
+that material inside the sidecar (or DKG is run out-of-band). Closing
+that gap is a precondition for the sidecar being a complete secret
+boundary.
 
 The isolation claim, stated precisely: today a memory-disclosure
 bug anywhere in the host address space can read whatever the
