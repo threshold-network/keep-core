@@ -561,34 +561,6 @@ pub fn interactive_round2(
     })
 }
 
-// Does a recorded aggregate signature verify under THIS request's tweaked
-// group key and message? The completion record (section 6) is keyed by
-// attempt_id, which does NOT bind the taproot root, and the coordinator may be
-// adversarial - so the stored signature is re-emitted only when it is actually
-// valid for the caller's package/root, never a signature that would fail to
-// verify for these inputs.
-fn recorded_aggregate_matches_request(
-    public_key_package: &frost::keys::PublicKeyPackage,
-    taproot_merkle_root: Option<&[u8; 32]>,
-    signing_package: &frost::SigningPackage,
-    recorded_signature_hex: &str,
-) -> bool {
-    let Ok(signature_bytes) = hex::decode(recorded_signature_hex) else {
-        return false;
-    };
-    let Ok(signature) = frost::Signature::deserialize(&signature_bytes) else {
-        return false;
-    };
-    let verification_key_package = match taproot_merkle_root {
-        Some(root) => public_key_package.clone().tweak(Some(root.as_slice())),
-        None => public_key_package.clone(),
-    };
-    verification_key_package
-        .verifying_key()
-        .verify(signing_package.message().as_slice(), &signature)
-        .is_ok()
-}
-
 pub fn interactive_aggregate(
     request: InteractiveAggregateRequest,
 ) -> Result<InteractiveAggregateResult, EngineError> {
@@ -602,10 +574,10 @@ pub fn interactive_aggregate(
     enforce_provenance_gate()?;
     validate_session_id(&request.session_id)?;
     let attempt_id = canonical_attempt_id(&request.attempt_id);
-    // A completed aggregate persists a completion record keyed by attempt_id,
-    // and the reload path rejects an empty key; reject an empty attempt_id here
-    // too so a malformed (or malicious) request cannot write durable state that
-    // fails to reload after a restart.
+    // The completion marker persists attempt_id, and the reload path rejects an
+    // empty key; reject an empty attempt_id here too so a malformed (or
+    // malicious) request cannot write durable state that fails to reload after
+    // a restart.
     if attempt_id.is_empty() {
         return Err(EngineError::Validation(
             "InteractiveAggregate: attempt_id must not be empty".to_string(),
@@ -649,50 +621,30 @@ pub fn interactive_aggregate(
                 session_id: request.session_id.clone(),
             }
         })?;
+        // Reject a completed attempt: re-aggregation is not a recovery path (a
+        // lost signature is recovered with a fresh attempt), and the marker is
+        // durable so a completed attempt stays rejected across a restart.
+        if session
+            .aggregated_interactive_attempt_markers
+            .contains(&attempt_id)
+        {
+            return Err(EngineError::InteractiveAttemptAlreadyAggregated {
+                session_id: request.session_id.clone(),
+                attempt_id,
+            });
+        }
         if session.dkg_result.is_none() {
             return Err(EngineError::DkgNotReady {
                 session_id: request.session_id.clone(),
             });
         }
-        let public_key_package = session
+        session
             .dkg_public_key_package
             .as_ref()
             .ok_or_else(|| {
                 EngineError::Internal("missing DKG public key package cache".to_string())
             })?
-            .clone();
-        // Idempotent re-emission (Phase 7.2b design section 6): a completed
-        // attempt returns its recorded signature without recomputing, so the
-        // signature stays recoverable from the engine across restart - a host
-        // that lost the FFI response need not spend a fresh signing attempt.
-        // The record is keyed by attempt_id, which does NOT bind the taproot
-        // root, and the coordinator may be adversarial, so re-emit ONLY when the
-        // stored signature actually verifies under THIS request's tweaked group
-        // key and message; a reused attempt_id carrying different aggregate
-        // inputs is rejected rather than handed a signature that fails for them.
-        if let Some(existing) = session
-            .aggregated_interactive_attempt_signatures
-            .get(&attempt_id)
-        {
-            if recorded_aggregate_matches_request(
-                &public_key_package,
-                taproot_merkle_root.as_ref(),
-                &signing_package,
-                existing,
-            ) {
-                return Ok(InteractiveAggregateResult {
-                    session_id: request.session_id.clone(),
-                    attempt_id: attempt_id.clone(),
-                    signature_hex: existing.clone(),
-                });
-            }
-            return Err(EngineError::Validation(format!(
-                "InteractiveAggregate: attempt [{attempt_id}] already aggregated under a \
-                 different package/root; reuse of an attempt_id for different aggregate \
-                 inputs is rejected"
-            )));
-        }
-        public_key_package
+            .clone()
     };
     drop(guard);
 
@@ -746,12 +698,12 @@ pub fn interactive_aggregate(
         .map_err(|e| EngineError::Internal(format!("failed to serialize aggregate: {e}")))?;
     let signature_hex = hex::encode(signature_bytes);
 
-    // Record the aggregate signature for this attempt before reporting success,
-    // so a repeat InteractiveAggregate returns the same signature (idempotent)
-    // rather than recomputing (Phase 7.2b design section 6). The engine lock was
-    // dropped for the aggregation crypto above; re-acquire it to record and
-    // persist. Persist before reporting success; on persist failure roll the
-    // record back and fail closed, leaving no half-recorded completion.
+    // Mark the attempt complete before reporting success, so a repeat
+    // InteractiveAggregate is rejected rather than recomputed (Phase 7.2b design
+    // section 6). The engine lock was dropped for the aggregation crypto above;
+    // re-acquire it, re-check the marker (a concurrent aggregate may have
+    // completed first), insert it, and persist before reporting success; on
+    // persist failure roll the marker back and fail closed.
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -760,54 +712,34 @@ pub fn interactive_aggregate(
             session_id: request.session_id.clone(),
         }
     })?;
-    // A concurrent aggregate that raced past the pre-check may already have
-    // recorded this attempt. Different responsive subsets can each produce a
-    // VALID but distinct signature for the same attempt, so return the
-    // canonical PERSISTED signature when it verifies under this request's
-    // tweaked key and message (not the one this call just recomputed) -
-    // otherwise the value a caller receives could diverge from what restarts
-    // and later re-emissions return. A record that does NOT verify for these
-    // inputs means the attempt_id was reused for a different package/root:
-    // reject it. No re-store and no success count on re-emission: the call that
-    // recorded the attempt already counted it.
-    if let Some(existing) = session
-        .aggregated_interactive_attempt_signatures
-        .get(&attempt_id)
+    // A concurrent aggregate that raced past the pre-check may have completed
+    // this attempt first; if the marker is now present, reject this call's
+    // re-aggregation - the winner already produced the attempt's signature.
+    if session
+        .aggregated_interactive_attempt_markers
+        .contains(&attempt_id)
     {
-        if recorded_aggregate_matches_request(
-            &public_key_package,
-            taproot_merkle_root.as_ref(),
-            &signing_package,
-            existing,
-        ) {
-            return Ok(InteractiveAggregateResult {
-                session_id: request.session_id.clone(),
-                attempt_id: attempt_id.clone(),
-                signature_hex: existing.clone(),
-            });
-        }
-        return Err(EngineError::Validation(format!(
-            "InteractiveAggregate: attempt [{attempt_id}] already aggregated under a \
-             different package/root; reuse of an attempt_id for different aggregate \
-             inputs is rejected"
-        )));
+        return Err(EngineError::InteractiveAttemptAlreadyAggregated {
+            session_id: request.session_id.clone(),
+            attempt_id,
+        });
     }
-    ensure_consumed_registry_capacity_for_insert(
-        session.aggregated_interactive_attempt_signatures.len(),
-        false,
-        "aggregated_interactive_attempt_signatures",
+    ensure_consumed_registry_insert_capacity(
+        &session.aggregated_interactive_attempt_markers,
+        &attempt_id,
+        "aggregated_interactive_attempt_markers",
         &request.session_id,
     )?;
     session
-        .aggregated_interactive_attempt_signatures
-        .insert(attempt_id.clone(), signature_hex.clone());
+        .aggregated_interactive_attempt_markers
+        .insert(attempt_id.clone());
     if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
         let session = guard
             .sessions
             .get_mut(&request.session_id)
             .expect("session existed under the held engine lock");
         session
-            .aggregated_interactive_attempt_signatures
+            .aggregated_interactive_attempt_markers
             .remove(&attempt_id);
         return Err(persist_error);
     }
