@@ -612,6 +612,18 @@ pub fn interactive_aggregate(
                 session_id: request.session_id.clone(),
             }
         })?;
+        // Reject a repeat aggregate of an already-completed attempt before
+        // recomputing (Phase 7.2b design section 6). The marker is durable,
+        // so a completed attempt stays completed across restart.
+        if session
+            .aggregated_interactive_attempt_markers
+            .contains(&attempt_id)
+        {
+            return Err(EngineError::InteractiveAttemptAlreadyAggregated {
+                session_id: request.session_id.clone(),
+                attempt_id,
+            });
+        }
         if session.dkg_result.is_none() {
             return Err(EngineError::DkgNotReady {
                 session_id: request.session_id.clone(),
@@ -675,6 +687,54 @@ pub fn interactive_aggregate(
     let signature_bytes = signature
         .serialize()
         .map_err(|e| EngineError::Internal(format!("failed to serialize aggregate: {e}")))?;
+
+    // Record the durable completion marker before reporting success, so a
+    // repeat InteractiveAggregate for this attempt is rejected rather than
+    // recomputed (Phase 7.2b design section 6). The engine lock was dropped
+    // for the aggregation crypto above; re-acquire it to mark and persist.
+    // This is a completion marker, not a security gate (the aggregate is
+    // deterministic over public data): a concurrent duplicate that raced past
+    // the pre-check recomputed the identical signature, so re-check the marker
+    // here and let the loser report the attempt already complete instead of
+    // persisting twice. Persist before success; on persist failure roll the
+    // marker back and fail closed, leaving no half-recorded completion.
+    let mut guard = state()?
+        .lock()
+        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    let session = guard.sessions.get_mut(&request.session_id).ok_or_else(|| {
+        EngineError::SessionNotFound {
+            session_id: request.session_id.clone(),
+        }
+    })?;
+    if session
+        .aggregated_interactive_attempt_markers
+        .contains(&attempt_id)
+    {
+        return Err(EngineError::InteractiveAttemptAlreadyAggregated {
+            session_id: request.session_id.clone(),
+            attempt_id,
+        });
+    }
+    ensure_consumed_registry_insert_capacity(
+        &session.aggregated_interactive_attempt_markers,
+        &attempt_id,
+        "aggregated_interactive_attempt_markers",
+        &request.session_id,
+    )?;
+    session
+        .aggregated_interactive_attempt_markers
+        .insert(attempt_id.clone());
+    if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
+        let session = guard
+            .sessions
+            .get_mut(&request.session_id)
+            .expect("session existed under the held engine lock");
+        session
+            .aggregated_interactive_attempt_markers
+            .remove(&attempt_id);
+        return Err(persist_error);
+    }
+    drop(guard);
 
     record_hardening_telemetry(|telemetry| {
         telemetry.interactive_aggregate_success_total = telemetry
