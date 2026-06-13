@@ -185,6 +185,80 @@ architecture questions:
    follow-up outside this freeze; the audit scope must describe the
    DKG boundary as-is.
 
+## Decision Log: Phase 7.2b Design Sign-Off (2026-06-13)
+
+9. **Phase 7.2b design SIGNED OFF (2026-06-13, MacLane):** the
+   package-envelope + bound-blame design note
+   (`phase-7-2b-package-envelope-design.md`, keep-core PR #4054) is
+   approved as the binding contract for the 7.2b implementation PRs,
+   after seven adversarial review passes (Codex + Gemini) whose final
+   two passes were clean on independent reads. The load-bearing
+   correction and the implementation gates folded across those passes:
+
+   a. **Engine stays crypto-only (Q1 - the load-bearing correction).**
+      The Rust engine does pure FROST share-math and returns the
+      mathematically-failing members as *candidate* culprits; it never
+      verifies signing-package envelopes or operator signatures (it
+      holds no operator-key registry). All envelope verification and
+      *authoritative* blame adjudication live in the Go host at the
+      f+1 accuser quorum, which re-checks each accused share against
+      that member's *retained received bytes* - never a
+      coordinator-submitted or reconstructed package. This is a return
+      to the frozen spec §5.4/§6, not an amendment; the earlier
+      engine-binds-the-body-hash proposal is withdrawn as unsound
+      (wrong authentication direction for member blame).
+   b. **Cross-member comparison + retention timing (Q2).** Retain
+      received envelopes now; run the cross-member equivocation
+      comparison at the f+1 accuser-quorum exclusion step (Option B).
+      Opportunistic gossip deferred.
+   c. **FFI culprit payload (Q3).** A typed optional
+      `culprits: Option<Vec<u16>>` field on the FFI `ErrorResponse`
+      (Go member-id u16 form), not a generic `details` map.
+   d. **All-cheater detection.** 7.2b-3 aggregates with
+      `CheaterDetection::AllCheaters` so the full candidate-culprit set
+      is reported, not just the first. Because
+      `frost_secp256k1_tr::aggregate_with_tweak` hard-codes
+      first-cheater, the engine applies the taproot tweak itself
+      (`public_key_package.tweak(merkle_root)`) and calls
+      `frost_core::aggregate_custom(…, AllCheaters)` on the tweaked
+      package.
+   e. **Taproot root binding before signing.** Members verify
+      `SignedSigningPackage.taproot_merkle_root` equals the live
+      session root *before* producing a Round2 share (the root is not
+      in the attempt context but is what Round2 signs under), else the
+      retained envelope misdescribes what was signed and the quorum
+      re-check misattributes blame.
+   f. **Context-bound member-authenticated share submission.** A
+      candidate culprit becomes authoritative blame only for a share
+      provably submitted by the accused member for THIS attempt and
+      package: the member's signed share body must cover
+      (attempt_context_hash, signing-package/envelope hash, share), so
+      an old A-signed share cannot be replayed into a different
+      attempt to frame A. Hard prerequisite - 7.2b-4 must not enable
+      blame until this exists.
+   g. **Elected-coordinator check + retain-on-reject.** Members verify
+      the envelope's `coordinator_id` is the *elected* coordinator
+      (RFC-21 Annex A) and the signature verifies under that specific
+      key; a divergent but genuine-coordinator envelope is retained as
+      equivocation evidence *before* the member refuses to sign it.
+   h. **verify-share FFI contract.** The quorum's per-share crypto
+      re-check is delegated to a stateless tweak-aware verify-share FFI
+      taking only public inputs (signing_package, taproot_merkle_root,
+      member identifier, share, + a `session_id`/wallet selector); the
+      engine resolves the canonical group verifying key + verifying
+      shares from durably-retained, wallet-scoped DKG material that
+      outlives the signing-session TTL sweep, and applies the tweak -
+      never the envelope or operator keys.
+
+   Standing gate unchanged: the external audit covering `frost-core`
+   3.x + `frost-secp256k1-tr` remains a hard gate before mainnet TVL /
+   ECDSA retirement (entry 1). Next engineering step: 7.2b-1 - the
+   InteractiveAggregate completion marker; the design's §9
+   durable-wallet-pubkey-package-retention question is confirmed
+   already satisfied (the DKG public key package lives on the persisted
+   session and survives the interactive-attempt TTL sweep), so 7.2b-1
+   adds no new persistence beyond the marker.
+
 ## Provisional Rollback Thresholds (Draft)
 
 These thresholds are intentionally conservative and should be tuned once the

@@ -254,6 +254,17 @@ event.
    (persistence plumbing only; no blame, no envelopes). Self-contained.
    (No engine-local Round2 package-hash record unless §4 identifies a
    consumer — the corrected design has none.)
+   **Durable-retention question (below) CONFIRMED satisfied
+   (2026-06-13):** the group public key package the 7.2b-3 verify-share
+   FFI needs already outlives the signing session. `SessionState`
+   holds `dkg_public_key_package` (group key + verifying shares), it is
+   persisted as `dkg_public_key_package_hex` in `PersistedSessionState`
+   (rehydrated/serialized in the persistence `TryFrom`s), and
+   `sweep_expired_interactive_state` clears ONLY the live attempt's
+   nonces (`interactive_signing`), explicitly retaining the session's
+   DKG material. So a post-sweep f+1 quorum re-check can still resolve
+   the canonical group key by `session_id` — no new wallet-key
+   persistence is needed in 7.2b-1, only the completion marker.
 2. **7.2b-2 (scaffold)**: `SignedSigningPackage` protos + gen +
    coordinator signing/distribution + member authenticate (elected
    `coordinator_id` + signature under that key + attempt hash + the
@@ -277,9 +288,11 @@ event.
    verifying shares from durably-retained wallet DKG material that outlives
    the session TTL sweep, and applies the tweak — the group key is required
    for the challenge/binding factors, the selector disambiguates
-   multi-session lookups, Codex P2). Confirm the wallet public key package
-   is durably retained beyond the signing-session TTL; if not, that
-   retention is a 7.2b-1 item.
+   multi-session lookups, Codex P2). The wallet public key package is
+   durably retained beyond the signing-session TTL (CONFIRMED in 7.2b-1:
+   `dkg_public_key_package` persists on the session and survives the
+   attempt-nonce sweep), so the verify-share FFI resolves it by
+   `session_id` with no extra persistence.
 4. **7.2b-4 (scaffold)**: cross-member equivocation comparison
    (extends #4044) + the **blame-adjudication policy** (quorum re-check —
    the per-share crypto re-verify delegated to 7.2b-3's tweak-aware
