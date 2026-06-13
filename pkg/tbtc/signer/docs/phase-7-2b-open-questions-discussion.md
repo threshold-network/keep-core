@@ -272,6 +272,6 @@ coordinator signature"), §5 (`[]u16`), §6 (Round2 record is local
 bookkeeping, not the blame-binding artifact), §7 (blame adjudication
 moves to the Go column), §10 (superseded body-hash proposal removed).
 
-**Pending owner (MacLane) sign-off** to record as a gates-doc Decision
-Log entry; on sign-off, 7.2b-1 (completion marker + any engine-local
-Round2 bookkeeping; **no** envelope plumbing in the engine) can start.
+**SIGNED OFF** (MacLane, 2026-06-13), recorded as gates-doc Decision Log
+entry 9; 7.2b-1 (the InteractiveAggregate completion record; **no**
+envelope plumbing in the engine) followed and is implemented in PR #4055.
