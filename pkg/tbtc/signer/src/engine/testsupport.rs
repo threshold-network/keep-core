@@ -7,18 +7,48 @@ pub(crate) static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[cfg(test)]
 pub fn lock_test_state() -> std::sync::MutexGuard<'static, ()> {
+    // Recover from poisoning rather than propagating it. The guarded
+    // value is `()` - the mutex only serializes tests, it protects no
+    // invariant - so a test that panics while holding it leaves nothing
+    // corrupt. Without this, that panic poisons the mutex and every
+    // subsequent test's lock acquisition panics too, turning one real
+    // failure into a cascade of dozens that masks the original (and even
+    // makes proptest record spurious regression seeds). Each test calls
+    // reset_for_tests() next to clear engine state.
     let guard = TEST_MUTEX
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("test lock should not be poisoned");
-    // Pin the signer profile to development at lock acquisition. Tests that
-    // need to exercise production-mode behavior set the env explicitly after
-    // taking the lock; doing this here prevents one test's `set_var` from
-    // leaking into the next locked test's body and (for example) routing the
-    // encrypted-state-envelope proptest into the production-rejects-env-key-
-    // provider gate that #414 introduced.
-    std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_DEVELOPMENT);
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    establish_clean_signer_test_env();
     guard
+}
+
+// Reset the process to a clean, hermetic TBTC_SIGNER_* environment at
+// every test-lock acquisition. Any TBTC_SIGNER_* var a prior test set
+// is removed - even if that test panicked before its own cleanup ran -
+// so one test's `set_var` (firewall/quarantine/cap/policy toggles, etc.)
+// cannot leak into the next locked test. The three baseline vars the
+// engine needs to function in tests are then re-established (profile,
+// state-key provider, state-encryption key); tests that need a
+// production profile or other toggles set them explicitly after taking
+// the lock. This centralizes leak-prevention so individual tests can use
+// raw set_var without per-site teardown.
+#[cfg(test)]
+pub(crate) fn establish_clean_signer_test_env() {
+    for (key, _) in std::env::vars() {
+        if key.starts_with("TBTC_SIGNER_") {
+            std::env::remove_var(key);
+        }
+    }
+    std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_DEVELOPMENT);
+    std::env::set_var(
+        TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
+        TBTC_SIGNER_STATE_KEY_PROVIDER_ENV_DEFAULT,
+    );
+    std::env::set_var(
+        TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX_ENV,
+        TEST_STATE_ENCRYPTION_KEY_HEX,
+    );
 }
 
 #[cfg(test)]

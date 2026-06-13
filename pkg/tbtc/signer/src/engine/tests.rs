@@ -13039,3 +13039,49 @@ fn interactive_aggregate_sweeps_expired_sessions() {
         "an aggregate call must sweep expired interactive state in other sessions"
     );
 }
+
+#[test]
+fn lock_test_state_recovers_from_a_poisoned_mutex() {
+    // A test that panics while holding the test lock must not cascade
+    // into every subsequent test. Poison the lock from a child thread,
+    // then confirm lock_test_state still hands out the guard.
+    let poisoner = std::thread::spawn(|| {
+        let _guard = lock_test_state();
+        panic!("intentional poison to exercise lock recovery");
+    });
+    assert!(
+        poisoner.join().is_err(),
+        "poisoner thread was expected to panic"
+    );
+
+    // Recovers the guard despite the poison (would panic before the fix).
+    let _guard = lock_test_state();
+}
+
+#[test]
+fn establish_clean_signer_test_env_clears_leaked_toggles() {
+    let _guard = lock_test_state();
+
+    // Simulate a prior test that set toggle vars and "panicked" before
+    // its own cleanup. The next lock acquisition's baseline reset must
+    // remove them.
+    std::env::set_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_MAX_LIVE_INTERACTIVE_SESSIONS_ENV, "1");
+
+    establish_clean_signer_test_env();
+
+    assert!(std::env::var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV).is_err());
+    assert!(std::env::var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV).is_err());
+    assert!(std::env::var(TBTC_SIGNER_MAX_LIVE_INTERACTIVE_SESSIONS_ENV).is_err());
+
+    // The baseline the engine needs is re-established.
+    assert_eq!(
+        std::env::var(TBTC_SIGNER_PROFILE_ENV).as_deref(),
+        Ok(TBTC_SIGNER_PROFILE_DEVELOPMENT)
+    );
+    assert_eq!(
+        std::env::var(TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX_ENV).as_deref(),
+        Ok(TEST_STATE_ENCRYPTION_KEY_HEX)
+    );
+}
