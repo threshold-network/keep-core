@@ -18,17 +18,18 @@ A framing distinction that runs through all three, stated once:
 > The coordinator is a node and may itself be the adversary. So
 > "detect a bad input" splits into two jobs with different trust
 > assumptions: (a) **protect honest members from false blame** when the
-> coordinator's inputs don't match what members signed — this can run
-> in the (possibly malicious) coordinator's own engine because its only
-> power is to *refuse to emit blame*, which a malicious coordinator
-> gains nothing by skipping; and (b) **prove a malicious coordinator
-> equivocated** so it can be excluded — this CANNOT rely on the
-> coordinator and must run at the members. Several options below are
-> really about which of these two jobs they serve.
+> coordinator's inputs don't match what members signed; and (b) **prove
+> a malicious coordinator equivocated** so it can be excluded. Neither
+> can be entrusted to the coordinator's engine: as Q1 resolves, the
+> engine emits only mathematical *candidate* culprits, and BOTH jobs are
+> enforced at the members / the f+1 accuser quorum — job (a) by
+> re-checking an accused share against the accused member's own retained
+> envelope, job (b) by comparing members' retained envelopes. Several
+> options below are really about which of these two jobs they serve.
 
 ---
 
-## Q1 — How does the engine bind a failing share to what the member signed?
+## Q1 — How is a failing share bound to what the member signed?
 
 **Problem.** InteractiveAggregate (7.2a) fails closed without blame
 because a coordinator aggregating against a different package/root than
@@ -101,15 +102,27 @@ re-check fail.
 | **Engine verifies envelopes** (my pre-review A *and* C) | verify operator sigs / body-hashes at aggregate | in-engine | **No** — engine has no registry (member-forgeable) and a coordinator-sig is the wrong auth direction (frames honest member) | **Rejected** (both reviewers, P1) |
 | **Engine pure-math + Go quorum adjudication** (frozen §5.4/§6) | verify share vs verifying share → candidate culprits | Go host, at f+1 quorum, vs member's retained bytes | **Yes** — Round2 (f) + quorum re-check; engine stays crypto-only | **Adopted** |
 
-### One implementation requirement to confirm in Go
+### Hard prerequisite (Codex P1): member-authenticated share submission
 
 For the quorum to attribute "this failing share is A's," A's share
-submission to the coordinator must itself be member(operator)-
-authenticated, so the coordinator cannot fabricate "A's share" wholesale.
-This should reuse the existing #4040 sign-what-you-transmit envelope on
-member→coordinator messages; **confirm it covers the share submission**
-when scoping the 7.2b scaffold PR (it is a Go-layer property, not an
-engine one).
+submission to the coordinator MUST be member(operator)-authenticated.
+This is not a nice-to-have to confirm — it is **load-bearing for blame
+soundness**: without it a malicious coordinator submits random bytes
+labeled "A's share," the engine returns A as a *candidate* culprit (the
+bytes fail share-verification), and the quorum re-checks bytes A never
+sent, framing A. Therefore authoritative blame (7.2b-4) MUST NOT be
+enabled until member→coordinator share submissions are authenticated
+(reuse the existing #4040 sign-what-you-transmit envelope). It is a
+Go-layer property (not an engine one) and is part of the implementation
+sequence (7.2b-2) and acceptance criteria (a share not provably from
+member A cannot make A a culprit).
+
+A second hard prerequisite rides with it (Codex P1, companion design
+note §2): members MUST verify `taproot_merkle_root` against their live
+session root before signing. The attempt context does not carry the
+root, so the retained envelope only faithfully describes "what the member
+signed" — the thing the quorum re-checks against — if the member rejected
+any envelope whose root diverged.
 
 ---
 
@@ -166,7 +179,7 @@ members.
 
 | Option | Shape | Typing | Extensible | Churn |
 |---|---|---|---|---|
-| **A. Typed optional field** — add `culprits: Option<Vec<String>>` (or a small typed `blame` sub-struct) to `ErrorResponse` | strong | per-kind: a new structured error adds a new field | small, localized |
+| **A. Typed optional field** — add `culprits: Option<Vec<u16>>` (a small typed `blame` sub-struct) to `ErrorResponse` | strong | per-kind: a new structured error adds a new field | small, localized |
 | **B. Generic `details: map<string, JSON>`** | weak — callers parse untyped JSON | any structured error reuses it | medium; defines a general contract |
 | **C. Encode culprits in the `message` string** with a parseable convention | none (stringly-typed) | no | tiny code, but it's the anti-pattern #4052 P2 named |
 
@@ -197,6 +210,18 @@ returned a P1 that corrected it back to the frozen spec.
 | Q1 binding | Engine does **pure FROST math** → candidate `culprits`; **all** envelope verification, retention, and authoritative blame re-check live in the **Go host at the f+1 accuser quorum**, against the member's retained received bytes (frozen §5.4/§6). Engine never sees envelopes or operator keys. | Gemini P1 + Codex P1 — adopted |
 | Q2 equivocation | **Retention now; compare at the f+1 quorum step (B).** Gossip (A) deferred; coordinator-side (C) can't catch a malicious coordinator. | Both concur |
 | Q3 FFI error | Typed optional `culprits: Option<Vec<u16>>` on `ErrorResponse` (A); generic details map deferred (YAGNI); design note pinned to `u16`. | Both concur |
+
+Re-review (post-resolution) folded in two Codex **P1**s on the
+implementation shape — neither changes the Q1/Q2/Q3 decisions above:
+- **Taproot root binding** — members MUST verify `taproot_merkle_root`
+  against their live session root before signing (the root is not in the
+  attempt context); otherwise the retained envelope misdescribes what was
+  signed and the quorum re-check misattributes blame. (design note
+  §2/§3/§11)
+- **Member-authenticated share submission** is a hard prerequisite, not a
+  confirmation: authoritative blame must not be enabled until a share is
+  provably attributable to its member. (this doc, Q1 prerequisite; design
+  note §9/§11)
 
 These refine 7.2b's implementation shape without changing the frozen
 Phase 7 spec — Q1's resolution in fact *realigns* the design docs to it.
