@@ -213,6 +213,30 @@ pub struct InteractiveRound2Result {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct InteractiveAggregateRequest {
+    pub session_id: String,
+    pub attempt_id: String,
+    /// The signing package the shares were produced over (carries the
+    /// message and the chosen subset's commitments).
+    pub signing_package_hex: String,
+    /// The collected signature shares from the responsive subset. Each
+    /// is verified against the member's verifying share (resolved from
+    /// the session's DKG public key package) before aggregation; an
+    /// invalid share yields attributable blame naming the culprit.
+    pub signature_shares: Vec<NativeFrostSignatureShare>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taproot_merkle_root_hex: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct InteractiveAggregateResult {
+    pub session_id: String,
+    pub attempt_id: String,
+    /// The aggregated BIP-340 Schnorr signature, hex-encoded.
+    pub signature_hex: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct InteractiveSessionAbortRequest {
     pub session_id: String,
     /// When set, abort only if the live attempt matches; when unset,
@@ -619,6 +643,10 @@ pub struct SignerHardeningMetricsResult {
     #[serde(default)]
     pub interactive_session_abort_success_total: u64,
     #[serde(default)]
+    pub interactive_aggregate_calls_total: u64,
+    #[serde(default)]
+    pub interactive_aggregate_success_total: u64,
+    #[serde(default)]
     pub interactive_round1_latency_p95_ms: u64,
     #[serde(default)]
     pub interactive_round1_latency_samples: u64,
@@ -626,6 +654,10 @@ pub struct SignerHardeningMetricsResult {
     pub interactive_round2_latency_p95_ms: u64,
     #[serde(default)]
     pub interactive_round2_latency_samples: u64,
+    #[serde(default)]
+    pub interactive_aggregate_latency_p95_ms: u64,
+    #[serde(default)]
+    pub interactive_aggregate_latency_samples: u64,
     pub last_updated_unix: u64,
 }
 

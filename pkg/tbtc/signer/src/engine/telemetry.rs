@@ -69,6 +69,8 @@ pub(crate) struct HardeningTelemetryState {
     pub(crate) interactive_round2_success_total: u64,
     pub(crate) interactive_session_abort_calls_total: u64,
     pub(crate) interactive_session_abort_success_total: u64,
+    pub(crate) interactive_aggregate_calls_total: u64,
+    pub(crate) interactive_aggregate_success_total: u64,
     pub(crate) run_dkg_latency: HardeningLatencyTracker,
     pub(crate) start_sign_round_latency: HardeningLatencyTracker,
     pub(crate) build_taproot_tx_latency: HardeningLatencyTracker,
@@ -76,6 +78,7 @@ pub(crate) struct HardeningTelemetryState {
     pub(crate) refresh_shares_latency: HardeningLatencyTracker,
     pub(crate) interactive_round1_latency: HardeningLatencyTracker,
     pub(crate) interactive_round2_latency: HardeningLatencyTracker,
+    pub(crate) interactive_aggregate_latency: HardeningLatencyTracker,
     pub(crate) last_updated_unix: u64,
 }
 
@@ -87,10 +90,11 @@ pub(crate) enum HardeningOperation {
     FinalizeSignRound,
     RefreshShares,
     // Interactive Open/Abort are O(1) registry mutations and record
-    // call/success counters only; the two cryptographic rounds get
-    // latency tracking.
+    // call/success counters only; the cryptographic rounds and the
+    // aggregation get latency tracking.
     InteractiveRound1,
     InteractiveRound2,
+    InteractiveAggregate,
 }
 
 pub(crate) struct HardeningOperationLatencyGuard {
@@ -155,6 +159,9 @@ pub(crate) fn record_hardening_operation_latency(operation: HardeningOperation, 
         HardeningOperation::InteractiveRound2 => {
             telemetry.interactive_round2_latency.record(duration_ms)
         }
+        HardeningOperation::InteractiveAggregate => {
+            telemetry.interactive_aggregate_latency.record(duration_ms)
+        }
     });
 }
 
@@ -209,10 +216,14 @@ pub fn hardening_metrics() -> SignerHardeningMetricsResult {
         interactive_round2_success_total: 0,
         interactive_session_abort_calls_total: 0,
         interactive_session_abort_success_total: 0,
+        interactive_aggregate_calls_total: 0,
+        interactive_aggregate_success_total: 0,
         interactive_round1_latency_p95_ms: 0,
         interactive_round1_latency_samples: 0,
         interactive_round2_latency_p95_ms: 0,
         interactive_round2_latency_samples: 0,
+        interactive_aggregate_latency_p95_ms: 0,
+        interactive_aggregate_latency_samples: 0,
         last_updated_unix: 0,
     };
 
@@ -274,6 +285,9 @@ pub fn hardening_metrics() -> SignerHardeningMetricsResult {
                 telemetry.interactive_session_abort_calls_total;
             result.interactive_session_abort_success_total =
                 telemetry.interactive_session_abort_success_total;
+            result.interactive_aggregate_calls_total = telemetry.interactive_aggregate_calls_total;
+            result.interactive_aggregate_success_total =
+                telemetry.interactive_aggregate_success_total;
             result.interactive_round1_latency_p95_ms =
                 telemetry.interactive_round1_latency.p95_ms();
             result.interactive_round1_latency_samples =
@@ -282,6 +296,10 @@ pub fn hardening_metrics() -> SignerHardeningMetricsResult {
                 telemetry.interactive_round2_latency.p95_ms();
             result.interactive_round2_latency_samples =
                 telemetry.interactive_round2_latency.sample_count();
+            result.interactive_aggregate_latency_p95_ms =
+                telemetry.interactive_aggregate_latency.p95_ms();
+            result.interactive_aggregate_latency_samples =
+                telemetry.interactive_aggregate_latency.sample_count();
             result.last_updated_unix = telemetry.last_updated_unix;
         }
         Err(error) => {

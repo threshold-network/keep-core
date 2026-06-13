@@ -82,6 +82,17 @@ pub enum EngineError {
         session_id: String,
         attempt_id: String,
     },
+    /// Returned by InteractiveAggregate when one or more collected signature
+    /// shares fail verification against their verifying share. The culprits
+    /// are named (as Go member identifiers) so the coordinator has
+    /// attributable blame evidence: it can exclude the offending member from
+    /// the next attempt rather than failing opaquely. Distinct structured
+    /// code so cross-language callers act on the culprit list, not a string.
+    #[error("invalid signature share(s) in session [{session_id}] from member(s): {culprits:?}")]
+    InvalidSignatureShare {
+        session_id: String,
+        culprits: Vec<String>,
+    },
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -104,6 +115,7 @@ impl EngineError {
             Self::ConsumedAttemptReplay { .. } => "consumed_attempt_replay",
             Self::ConsumedRoundReplay { .. } => "consumed_round_replay",
             Self::ConsumedNonceReplay { .. } => "consumed_nonce_replay",
+            Self::InvalidSignatureShare { .. } => "invalid_signature_share",
             Self::Internal(_) => "internal_error",
         }
     }
@@ -128,6 +140,9 @@ impl EngineError {
             Self::ConsumedAttemptReplay { .. } => "recoverable",
             Self::ConsumedRoundReplay { .. } => "recoverable",
             Self::ConsumedNonceReplay { .. } => "recoverable",
+            // Recoverable: the coordinator retries with a new attempt that
+            // excludes the blamed member(s).
+            Self::InvalidSignatureShare { .. } => "recoverable",
             Self::SessionFinalized { .. } => "terminal",
             Self::SessionNotFound { .. } => "terminal",
             Self::Internal(_) => "terminal",

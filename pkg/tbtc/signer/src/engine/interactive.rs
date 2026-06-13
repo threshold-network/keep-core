@@ -561,6 +561,137 @@ pub fn interactive_round2(
     })
 }
 
+pub fn interactive_aggregate(
+    request: InteractiveAggregateRequest,
+) -> Result<InteractiveAggregateResult, EngineError> {
+    record_hardening_telemetry(|telemetry| {
+        telemetry.interactive_aggregate_calls_total = telemetry
+            .interactive_aggregate_calls_total
+            .saturating_add(1);
+    });
+    let _latency_guard =
+        HardeningOperationLatencyGuard::new(HardeningOperation::InteractiveAggregate);
+    enforce_provenance_gate()?;
+    validate_session_id(&request.session_id)?;
+    let attempt_id = canonical_attempt_id(&request.attempt_id);
+
+    let mut signing_package_bytes = decode_hex_field(
+        "InteractiveAggregate",
+        "signing_package_hex",
+        &request.signing_package_hex,
+    )?;
+    let signing_package_result = frost::SigningPackage::deserialize(&signing_package_bytes);
+    signing_package_bytes.zeroize();
+    let signing_package = signing_package_result.map_err(|e| {
+        EngineError::Validation(format!(
+            "InteractiveAggregate: invalid signing package: {e}"
+        ))
+    })?;
+    let signature_shares =
+        decode_signature_share_map("InteractiveAggregate", &request.signature_shares)?;
+    let mut taproot_merkle_root_hex = request.taproot_merkle_root_hex.clone();
+    let taproot_merkle_root = canonicalize_taproot_merkle_root_hex(&mut taproot_merkle_root_hex)?;
+
+    let guard = state()?
+        .lock()
+        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+
+    // Resolve the group's public key package (the verifying shares used
+    // to check each contribution) from the session's own DKG state, not
+    // the request - consistent with the no-secret-on-the-FFI discipline
+    // and so a caller cannot substitute verifying material. The session
+    // must exist with completed DKG.
+    let public_key_package = {
+        let session = guard.sessions.get(&request.session_id).ok_or_else(|| {
+            EngineError::SessionNotFound {
+                session_id: request.session_id.clone(),
+            }
+        })?;
+        if session.dkg_result.is_none() {
+            return Err(EngineError::DkgNotReady {
+                session_id: request.session_id.clone(),
+            });
+        }
+        session
+            .dkg_public_key_package
+            .as_ref()
+            .ok_or_else(|| {
+                EngineError::Internal("missing DKG public key package cache".to_string())
+            })?
+            .clone()
+    };
+    drop(guard);
+
+    // Aggregation uses only public material (commitments, shares,
+    // verifying shares), so no policy gate runs here - the secret-bearing
+    // step is each signer's Round2, where lifecycle/quarantine/firewall
+    // were already enforced (including the full-subset quarantine check).
+    // frost verifies every share against its verifying share and reports
+    // the culprits on failure; surface them as attributable blame.
+    let verification_key_package = match taproot_merkle_root.as_ref() {
+        Some(root) => public_key_package.clone().tweak(Some(root.as_slice())),
+        None => public_key_package.clone(),
+    };
+
+    let aggregate_result = match taproot_merkle_root.as_ref() {
+        Some(root) => frost::aggregate_with_tweak(
+            &signing_package,
+            &signature_shares,
+            &public_key_package,
+            Some(root.as_slice()),
+        ),
+        None => frost::aggregate(&signing_package, &signature_shares, &public_key_package),
+    };
+    let signature = aggregate_result
+        .map_err(|error| map_aggregate_error_to_blame(&request.session_id, error))?;
+
+    // Self-verify the aggregate against the (tweaked) group verifying
+    // key before releasing it, matching the coarse finalize path.
+    verification_key_package
+        .verifying_key()
+        .verify(signing_package.message().as_slice(), &signature)
+        .map_err(|e| {
+            EngineError::Validation(format!(
+                "InteractiveAggregate: aggregate signature failed self-verification: {e}"
+            ))
+        })?;
+
+    let signature_bytes = signature
+        .serialize()
+        .map_err(|e| EngineError::Internal(format!("failed to serialize aggregate: {e}")))?;
+
+    record_hardening_telemetry(|telemetry| {
+        telemetry.interactive_aggregate_success_total = telemetry
+            .interactive_aggregate_success_total
+            .saturating_add(1);
+    });
+
+    Ok(InteractiveAggregateResult {
+        session_id: request.session_id,
+        attempt_id,
+        signature_hex: hex::encode(signature_bytes),
+    })
+}
+
+// Convert a frost aggregation error into an attributable blame error
+// when it identifies culprit shares, so the coordinator can exclude the
+// offending member(s) on the next attempt. Other failures map to a
+// generic validation error.
+fn map_aggregate_error_to_blame(session_id: &str, error: frost::Error) -> EngineError {
+    if let frost::Error::InvalidSignatureShare { culprits } = error {
+        return EngineError::InvalidSignatureShare {
+            session_id: session_id.to_string(),
+            culprits: culprits
+                .into_iter()
+                .map(frost_identifier_to_go_string)
+                .collect(),
+        };
+    }
+    EngineError::Validation(format!(
+        "InteractiveAggregate: failed to aggregate: {error}"
+    ))
+}
+
 pub fn interactive_session_abort(
     request: InteractiveSessionAbortRequest,
 ) -> Result<InteractiveSessionAbortResult, EngineError> {
