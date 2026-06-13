@@ -12904,17 +12904,29 @@ fn interactive_aggregate_is_idempotent_for_completed_attempt() {
         taproot_merkle_root_hex: None,
     };
 
-    // First aggregate completes the attempt.
+    // First aggregate completes the attempt and records its signature.
     let first =
         interactive_aggregate(aggregate_request.clone()).expect("first interactive aggregate");
 
-    // A second aggregate for the same attempt returns the SAME signature
-    // (idempotent re-emission) rather than recomputing or erroring (Phase 7.2b
-    // design section 6).
+    // A repeat aggregate returns the PERSISTED signature, not a recompute
+    // (Phase 7.2b design section 6). A plain equality check would pass even on
+    // a recompute (aggregate is deterministic), so overwrite the stored record
+    // with a sentinel and confirm the repeat returns exactly that - the same
+    // return-the-recorded-value property the post-race path relies on.
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        guard
+            .sessions
+            .get_mut(session_id)
+            .expect("session")
+            .aggregated_interactive_attempt_signatures
+            .insert(opened.attempt_id.clone(), "00sentinel".to_string());
+    }
     let second = interactive_aggregate(aggregate_request)
         .expect("re-aggregating a completed attempt returns the stored signature");
     assert_eq!(second.attempt_id, opened.attempt_id);
-    assert_eq!(second.signature_hex, first.signature_hex);
+    assert_eq!(second.signature_hex, "00sentinel");
+    assert_ne!(second.signature_hex, first.signature_hex);
 }
 
 #[test]

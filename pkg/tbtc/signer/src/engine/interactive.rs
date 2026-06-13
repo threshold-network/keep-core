@@ -697,12 +697,8 @@ pub fn interactive_aggregate(
     // so a repeat InteractiveAggregate returns the same signature (idempotent)
     // rather than recomputing (Phase 7.2b design section 6). The engine lock was
     // dropped for the aggregation crypto above; re-acquire it to record and
-    // persist. The aggregate is deterministic over public data, so a concurrent
-    // duplicate that raced past the pre-check recomputed the identical
-    // signature: if the record already exists we return ours without storing
-    // twice. Persist before reporting success; on persist failure roll the
-    // record back and fail closed, leaving no half-recorded completion. Count a
-    // success only for a freshly recorded aggregation, not a re-emission.
+    // persist. Persist before reporting success; on persist failure roll the
+    // record back and fail closed, leaving no half-recorded completion.
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -711,39 +707,49 @@ pub fn interactive_aggregate(
             session_id: request.session_id.clone(),
         }
     })?;
-    let recorded_new = !session
+    // A concurrent aggregate that raced past the pre-check may already have
+    // recorded this attempt. Different responsive subsets can each produce a
+    // VALID but distinct signature for the same attempt, so return the
+    // canonical PERSISTED signature, not the one this call just recomputed -
+    // otherwise the value a caller receives could diverge from what restarts
+    // and later re-emissions return. No re-store and no success count here: the
+    // call that recorded the attempt already counted it.
+    if let Some(existing) = session
         .aggregated_interactive_attempt_signatures
-        .contains_key(&attempt_id);
-    if recorded_new {
-        ensure_consumed_registry_capacity_for_insert(
-            session.aggregated_interactive_attempt_signatures.len(),
-            false,
-            "aggregated_interactive_attempt_signatures",
-            &request.session_id,
-        )?;
+        .get(&attempt_id)
+    {
+        return Ok(InteractiveAggregateResult {
+            session_id: request.session_id.clone(),
+            attempt_id: attempt_id.clone(),
+            signature_hex: existing.clone(),
+        });
+    }
+    ensure_consumed_registry_capacity_for_insert(
+        session.aggregated_interactive_attempt_signatures.len(),
+        false,
+        "aggregated_interactive_attempt_signatures",
+        &request.session_id,
+    )?;
+    session
+        .aggregated_interactive_attempt_signatures
+        .insert(attempt_id.clone(), signature_hex.clone());
+    if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
+        let session = guard
+            .sessions
+            .get_mut(&request.session_id)
+            .expect("session existed under the held engine lock");
         session
             .aggregated_interactive_attempt_signatures
-            .insert(attempt_id.clone(), signature_hex.clone());
-        if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
-            let session = guard
-                .sessions
-                .get_mut(&request.session_id)
-                .expect("session existed under the held engine lock");
-            session
-                .aggregated_interactive_attempt_signatures
-                .remove(&attempt_id);
-            return Err(persist_error);
-        }
+            .remove(&attempt_id);
+        return Err(persist_error);
     }
     drop(guard);
 
-    if recorded_new {
-        record_hardening_telemetry(|telemetry| {
-            telemetry.interactive_aggregate_success_total = telemetry
-                .interactive_aggregate_success_total
-                .saturating_add(1);
-        });
-    }
+    record_hardening_telemetry(|telemetry| {
+        telemetry.interactive_aggregate_success_total = telemetry
+            .interactive_aggregate_success_total
+            .saturating_add(1);
+    });
 
     Ok(InteractiveAggregateResult {
         session_id: request.session_id,
