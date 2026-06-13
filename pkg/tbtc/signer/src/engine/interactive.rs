@@ -107,6 +107,44 @@ pub fn interactive_session_open(
 
     ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
 
+    // Session lifecycle gates (frozen spec section 5: Open "checks
+    // policy gates"). The interactive path must refuse in exactly the
+    // states the coarse start_sign_round refuses: a session under an
+    // emergency rekey, or one already terminally finalized. Without
+    // these, InteractiveRound1/Round2 could emit a share where the
+    // established path would not.
+    if let Some(existing_session) = guard.sessions.get(&request.session_id) {
+        if let Some(emergency_rekey_event) = existing_session.emergency_rekey_event.as_ref() {
+            return Err(EngineError::LifecyclePolicyRejected {
+                session_id: request.session_id.clone(),
+                reason_code: "emergency_rekey_required".to_string(),
+                detail: format!(
+                    "emergency rekey required for session [{}] since [{}]: {}",
+                    request.session_id,
+                    emergency_rekey_event.triggered_at_unix,
+                    emergency_rekey_event.reason
+                ),
+            });
+        }
+        if existing_session.finalize_request_fingerprint.is_some() {
+            return Err(EngineError::SessionFinalized {
+                session_id: request.session_id.clone(),
+            });
+        }
+    }
+
+    // Quarantine gate: this node is about to produce a share for
+    // member_identifier, so an auto-quarantined member (absent a DAO
+    // allowlist override) must not be able to sign through the
+    // interactive path either.
+    let auto_quarantine_config = load_auto_quarantine_config()?;
+    enforce_not_quarantined_identifiers(
+        &request.session_id,
+        &[request.member_identifier],
+        &guard.quarantined_operator_identifiers,
+        auto_quarantine_config.as_ref(),
+    )?;
+
     // Signing-policy firewall (frozen spec section 5: Open "checks
     // policy gates"). When the firewall is enabled, the message must be
     // bound to a prior policy-checked build_taproot_tx for this

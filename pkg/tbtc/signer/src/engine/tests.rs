@@ -12454,3 +12454,140 @@ fn interactive_abort_sweeps_expired_sessions() {
         "an abort must sweep expired interactive state in other sessions"
     );
 }
+
+#[test]
+fn interactive_open_rejected_on_session_lifecycle_states() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let key_group = "interactive-test-key-group";
+    let message = [0x17u8; 32];
+    let included = [1u16, 2];
+
+    // A session under an emergency rekey must refuse interactive opens,
+    // exactly as start_sign_round does.
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        guard.sessions.insert(
+            "interactive-lifecycle-rekey".to_string(),
+            SessionState {
+                emergency_rekey_event: Some(EmergencyRekeyEvent {
+                    reason: "test rekey".to_string(),
+                    triggered_at_unix: now_unix(),
+                }),
+                ..Default::default()
+            },
+        );
+    }
+    let rekey = open_interactive_for_test(
+        &key_packages,
+        "interactive-lifecycle-rekey",
+        key_group,
+        &message,
+        &included,
+        1,
+        1,
+        2,
+    )
+    .expect_err("an emergency-rekey session must refuse interactive open");
+    assert!(
+        matches!(rekey, EngineError::LifecyclePolicyRejected { ref reason_code, .. }
+            if reason_code == "emergency_rekey_required"),
+        "unexpected error: {rekey:?}"
+    );
+
+    // A terminally finalized session must refuse interactive opens.
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        guard.sessions.insert(
+            "interactive-lifecycle-finalized".to_string(),
+            SessionState {
+                finalize_request_fingerprint: Some("already-finalized".to_string()),
+                ..Default::default()
+            },
+        );
+    }
+    let finalized = open_interactive_for_test(
+        &key_packages,
+        "interactive-lifecycle-finalized",
+        key_group,
+        &message,
+        &included,
+        1,
+        1,
+        2,
+    )
+    .expect_err("a finalized session must refuse interactive open");
+    assert!(
+        matches!(finalized, EngineError::SessionFinalized { .. }),
+        "unexpected error: {finalized:?}"
+    );
+}
+
+#[test]
+fn interactive_open_rejected_for_quarantined_member_honors_dao_allowlist() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    std::env::set_var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV, "2");
+    std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY_ENV, "1");
+    std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_INVALID_SHARE_PENALTY_ENV, "2");
+
+    // Member 1 is auto-quarantined.
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        guard.quarantined_operator_identifiers.insert(1);
+    }
+
+    let key_packages = interactive_test_key_packages();
+    let key_group = "interactive-test-key-group";
+    let message = [0x18u8; 32];
+    let included = [1u16, 2];
+
+    let outcome = (|| -> Result<(), EngineError> {
+        let quarantined = open_interactive_for_test(
+            &key_packages,
+            "interactive-quarantine",
+            key_group,
+            &message,
+            &included,
+            1,
+            1,
+            2,
+        )
+        .expect_err("a quarantined member must not open an interactive session");
+        assert!(
+            matches!(quarantined, EngineError::QuarantinePolicyRejected { ref reason_code, .. }
+                if reason_code == "operator_auto_quarantined"),
+            "unexpected error: {quarantined:?}"
+        );
+
+        // A DAO allowlist override restores the member's ability to sign.
+        std::env::set_var(
+            TBTC_SIGNER_AUTO_QUARANTINE_DAO_ALLOWLIST_IDENTIFIERS_ENV,
+            "1",
+        );
+        let allowlisted = open_interactive_for_test(
+            &key_packages,
+            "interactive-quarantine-allowlisted",
+            key_group,
+            &message,
+            &included,
+            1,
+            1,
+            2,
+        )?;
+        assert!(!allowlisted.idempotent);
+        Ok(())
+    })();
+
+    std::env::remove_var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV);
+    std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV);
+    std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY_ENV);
+    std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_INVALID_SHARE_PENALTY_ENV);
+    std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_DAO_ALLOWLIST_IDENTIFIERS_ENV);
+
+    outcome.expect("quarantine gate lifecycle");
+}
