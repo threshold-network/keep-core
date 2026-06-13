@@ -8,10 +8,11 @@ gates-doc Decision Log.
 Companion to: `phase-7-2b-package-envelope-design.md`
 
 This doc works the three open questions that gate the 7.2b
-implementation into explicit options with tradeoffs and a
-recommendation each. Reviewers: please confirm or dissent on each
-recommendation; the "Reviewer ask" line states the specific call we
-want a second opinion on.
+implementation into explicit options with tradeoffs and a recommendation
+each. They are now **resolved** (Gemini + Codex reviewed; see the
+Decision Log at the end) — each question's "RESOLVED" block records the
+decision and its reasoning. This is a decision record, not an open
+solicitation.
 
 A framing distinction that runs through all three, stated once:
 
@@ -211,17 +212,24 @@ returned a P1 that corrected it back to the frozen spec.
 | Q2 equivocation | **Retention now; compare at the f+1 quorum step (B).** Gossip (A) deferred; coordinator-side (C) can't catch a malicious coordinator. | Both concur |
 | Q3 FFI error | Typed optional `culprits: Option<Vec<u16>>` on `ErrorResponse` (A); generic details map deferred (YAGNI); design note pinned to `u16`. | Both concur |
 
-Re-review (post-resolution) folded in two Codex **P1**s on the
-implementation shape — neither changes the Q1/Q2/Q3 decisions above:
-- **Taproot root binding** — members MUST verify `taproot_merkle_root`
+Re-review (post-resolution) folded in two Codex **P1**s and a **P2** on
+the implementation shape — none changes the Q1/Q2/Q3 decisions above:
+- **Taproot root binding** (P1) — members MUST verify `taproot_merkle_root`
   against their live session root before signing (the root is not in the
   attempt context); otherwise the retained envelope misdescribes what was
   signed and the quorum re-check misattributes blame. (design note
   §2/§3/§11)
-- **Member-authenticated share submission** is a hard prerequisite, not a
-  confirmation: authoritative blame must not be enabled until a share is
-  provably attributable to its member. (this doc, Q1 prerequisite; design
-  note §9/§11)
+- **Member-authenticated share submission** (P1) is a hard prerequisite,
+  not a confirmation: authoritative blame must not be enabled until a
+  share is provably attributable to its member. (this doc, Q1
+  prerequisite; design note §9/§11)
+- **All-cheater detection** (P2) — 7.2b-3 must aggregate with
+  `CheaterDetection::AllCheaters`, not the default first-cheater path, or
+  the `culprits == entire subset` rule is unreachable and multi-share
+  failures are under-reported. Verified remedy: frost-core 3.0.0 already
+  collects all culprits in that mode (no reimplementation); the taproot
+  `aggregate_with_tweak` wrapper does not expose the mode, so apply the
+  tweak + `aggregate_custom(AllCheaters)`. (design note §4/§9)
 
 These refine 7.2b's implementation shape without changing the frozen
 Phase 7 spec — Q1's resolution in fact *realigns* the design docs to it.

@@ -60,18 +60,19 @@ The coordinator signs `SigningPackageBody` with its operator key and
 distributes `SignedSigningPackage` to the chosen subset. Each member:
 1. verifies the coordinator signature, the `attempt_context_hash`
    against its live attempt, AND that `taproot_merkle_root` equals the
-   live session/signing root (empty for key-path). **This root check is
-   load-bearing** (Codex P1): the attempt context does NOT carry the
-   root, but Round2 signs under the root in the engine session — so
-   without it a coordinator could hand a member an envelope with the
-   right package/attempt but a divergent root, the engine would sign
-   under the real session root, and the retained envelope would no longer
-   describe what the member actually signed; the later quorum re-check
-   would then use the wrong root and misattribute blame. Reject any
-   envelope whose root diverges (it is coordinator equivocation — §3);
+   live session/signing root (empty for key-path) — rejecting any
+   envelope whose root diverges (coordinator equivocation, §3);
 2. **retains the exact received envelope bytes** alongside its share;
 3. produces its Round2 share over the `signing_package` in that body,
    under the (now root-verified) session root.
+
+The root check (step 1) is load-bearing (Codex P1): the attempt context
+does NOT carry the root, but Round2 signs under the root in the engine
+session. Without it a coordinator could hand a member an envelope with
+the right package/attempt but a divergent root — the engine would sign
+under the real session root, the retained envelope would no longer
+describe what the member actually signed, and the later quorum re-check
+would use the wrong root and misattribute blame.
 
 ## 3. Equivocation detection (extends #4044)
 
@@ -130,7 +131,26 @@ when bound to what the member signed:
 - Refinement carried from the #4052 review: `culprits == the entire
   subset` is treated as suspect (a coordinator/config error is far more
   likely than every member simultaneously cheating) and is reported as a
-  coordinator-side error, not universal member blame.
+  coordinator-side error, not universal member blame. **For this rule to
+  be reachable, 7.2b-3 MUST request all-cheater detection** (Codex P2):
+  the plain `frost::aggregate` / `aggregate_with_tweak` hard-code
+  `CheaterDetection::FirstCheater` (verified in frost-core 3.0.0), so
+  they report only the first invalid share and the full-subset condition
+  could never trigger (multi-share failures would also be under-reported,
+  forcing one-cheater-per-attempt exclusion grinds). No reimplementation
+  is needed: frost-core 3.0.0 already collects every culprit under
+  `CheaterDetection::AllCheaters` (its `detect_cheater` extends an
+  `all_culprits` vec over all shares). Taproot wrinkle to pin in 7.2b-3:
+  `frost_secp256k1_tr::aggregate_with_tweak` does NOT expose the mode (it
+  delegates to first-cheater), so the engine applies the tweak itself
+  (`public_key_package.tweak(merkle_root)`, as the wrapper does
+  internally) and calls `frost_core::aggregate_custom(…,
+  CheaterDetection::AllCheaters)` on the tweaked package — confirm
+  `.tweak()` is callable from the engine, else reproduce the tweak or
+  request an upstream `aggregate_with_tweak_custom`. Soundness does not
+  hinge on this engine heuristic: the authoritative
+  all-honest-vs-coordinator distinction remains the Go quorum re-check
+  against retained envelopes (above).
 
 ## 5. FFI structured-culprit payload (Codex P2 on #4052)
 
@@ -153,9 +173,9 @@ Deferred from 7.2a: a persisted per-attempt "aggregated" marker
 consumed markers). Re-aggregating a completed attempt returns a clear
 "already aggregated" error rather than recomputing. Not security-load-
 bearing (aggregate is deterministic over public data), but the spec
-calls for marking the session complete. (The blame binding itself is
-Go-side — section 4 — so any engine-local Round2 bookkeeping here is just
-that: local bookkeeping, not the network-attributable blame artifact.)
+calls for marking the session complete. (The blame binding is Go-side —
+section 4 — so the only engine-side state 7.2b adds is this completion
+marker.)
 
 ## 7. Go vs Rust split
 
@@ -168,9 +188,9 @@ that: local bookkeeping, not the network-attributable blame artifact.)
   each member's retained envelope bytes at the f+1 accuser quorum. The Go
   bridge decoder for the new structured FFI error.
 - **Rust (mirror branch)**: the FFI candidate-`culprits` payload (pure
-  FROST math, no envelopes) + C header, the completion marker, any
-  engine-local Round2 bookkeeping, and the engine-side vectors. The
-  engine never verifies envelopes or operator signatures.
+  FROST math via `CheaterDetection::AllCheaters`, no envelopes) + C
+  header, the completion marker, and the engine-side vectors. The engine
+  never verifies envelopes or operator signatures.
 
 ## 8. Cross-language vectors (frozen spec item 9)
 
@@ -196,7 +216,9 @@ event.
    byte-preservation, no engine change yet.
 3. **7.2b-3 (mirror)**: FFI structured-error payload (`culprits: []u16`)
    + C header + the pure-FROST candidate-`InvalidSignatureShare` in
-   InteractiveAggregate (no envelope handling in the engine).
+   InteractiveAggregate (no envelope handling in the engine), aggregating
+   with **`CheaterDetection::AllCheaters`** (tweak-aware — §4) so the full
+   culprit set is reported, not just the first.
 4. **7.2b-4 (scaffold)**: cross-member equivocation comparison
    (extends #4044) + the **authoritative blame adjudication** (quorum
    re-check of the engine's candidate culprits against retained
