@@ -1,8 +1,10 @@
 # Phase 7.2b Open Questions — Options, Tradeoffs, Recommendations
 
 Date: 2026-06-13
-Status: Discussion — soliciting reviewer (Gemini, Claude) input before
-the 7.2b-1 implementation PR
+Status: Reviewed — Gemini + Codex concurred; recommendations resolved
+(see Decision Log at the end). Q1 was corrected back to the frozen spec
+on a converging reviewer P1. Pending owner sign-off to record in the
+gates-doc Decision Log.
 Companion to: `phase-7-2b-package-envelope-design.md`
 
 This doc works the three open questions that gate the 7.2b
@@ -37,41 +39,77 @@ package." A FROST share cryptographically binds to the package it was
 produced over, so a failure alone cannot tell these apart — the engine
 needs evidence of what each member was told to sign.
 
-### Correction to the design note's lean
+### RESOLVED (post-review) — the engine never touches envelopes; blame adjudication is Go-side
 
-The design note (open question 1) floated "the coordinator binds against
-the body hash each member's Round2 recorded, so the engine does not need
-every member's envelope." **On reflection that is wrong** and I'm
-flagging it rather than carrying it forward: the coordinator's engine
-holds only its *own* node's Round2 record (engine state is per-node), so
-it has nothing to check other members' shares against; and even with the
-hashes, distinguishing member-fault from coordinator-equivocation
-requires the coordinator's *signature* over the divergent body — the
-equivocation proof — which only a member's retained envelope carries.
+Both reviewers returned a converging **P1** that my pre-review lean
+(Option A: *the engine* verifies member envelopes at aggregate) was
+wrong, on two independent grounds:
 
-### Options
+- **Gemini (architecture):** the Rust engine holds only FROST/Schnorr
+  threshold key material — it has no operator-key registry, so it
+  *cannot* verify a coordinator's operator signature on an envelope.
+  Byte-comparing bodies without verifying the signature lets a malicious
+  *member* forge a body to dodge blame. Pushing operator keys into the
+  engine to fix that would blow the signing-secret boundary the sidecar
+  exists to hold (gates-doc decision 2). Verification belongs in the Go
+  host, which owns the registry, the network identities, and the exact
+  bytes it distributed.
+- **Codex (authentication direction):** even if the engine *could*
+  verify it, `SignedSigningPackage` is signed by the **coordinator, not
+  the member**. A malicious coordinator distributes P′ to member A,
+  collects A's share over P′, then aggregates against P with its own
+  validly-signed P-envelope: A's share fails against P, the envelope body
+  equals P, and the equality check frames honest A. Sound *member* blame
+  needs a *member*-authenticated binding of share↔body, never a
+  coordinator signature.
 
-| Option | Mechanism | Sound attribution? | Detects coordinator equivocation? | Cost |
+The two compose into the design the **frozen spec already specifies**
+(§5 item 4 and §6) — my 7.2b design note had drifted from it, so the
+reviewers' P1 is really "return to the freeze":
+
+1. **Engine = pure FROST math.** `InteractiveAggregate` verifies each
+   share against the member's verifying share (public, from the DKG key
+   package the engine already holds) and returns the mathematically
+   failing members as *candidate* `culprits`. No envelopes, no operator
+   signatures, no network identity in the engine. This makes the 7.2b-3
+   engine change *smaller* than the note implied.
+2. **Go host = envelope verification + retention.** Members verify the
+   coordinator's operator signature and retain the exact received
+   `SignedSigningPackage` bytes (§6, #4040 pattern). The coordinator
+   signature is the right artifact *here* — for proving *coordinator*
+   equivocation (job (b)), where coordinator-authentication is exactly
+   what you want — not for attributing member fault.
+3. **Authoritative blame = Go, at the f+1 accuser quorum, against the
+   member's retained bytes.** The engine's candidate culprits are only a
+   trigger. Final exclusion re-checks each accused share against *the
+   package envelope that member signed over* (its retained received
+   bytes), never a coordinator-submitted or reconstructed package (§6,
+   verbatim). Under Codex's attack, A's share verifies against its
+   retained P′-envelope, so A is exonerated and the coordinator's two
+   divergent signed bodies for one attempt-context convict *it*.
+
+Soundness comes from **Round2 check (f)** — already shipped in 7.1: a
+member signs only over a package carrying its own true commitment — plus
+the quorum re-check above. A single malicious coordinator can neither
+manufacture an f+1 quorum nor make an honest member's retained-envelope
+re-check fail.
+
+### Corrected options (the real axis is *where adjudication lives*, not *what crosses the FFI*)
+
+| Option | Engine role | Blame adjudication | Sound vs malicious coordinator? | Verdict |
 |---|---|---|---|---|
-| **A. Members transmit their `SignedSigningPackage`** alongside their share; the engine verifies each at aggregate | engine has every member's signed "what I was told to sign" | Yes | Yes (bodies diverge) | +1 envelope per share on the wire; N signature verifies |
-| **B. Coordinator binds only against its own distributed package** (no member envelopes) | engine sees only the package it aggregates | No — same as 7.2a; can't separate member-fault from coordinator-fault | No | none, but doesn't solve the problem |
-| **C. Members transmit a signed body-hash** (not full package bytes) | engine compares member-attested hashes to the aggregated package | Yes for agreement; weaker proof artifact | Partial — proves divergence but the excludable artifact is a bare hash+sig, not the package | smaller wire; still N verifies |
+| **Engine verifies envelopes** (my pre-review A *and* C) | verify operator sigs / body-hashes at aggregate | in-engine | **No** — engine has no registry (member-forgeable) and a coordinator-sig is the wrong auth direction (frames honest member) | **Rejected** (both reviewers, P1) |
+| **Engine pure-math + Go quorum adjudication** (frozen §5.4/§6) | verify share vs verifying share → candidate culprits | Go host, at f+1 quorum, vs member's retained bytes | **Yes** — Round2 (f) + quorum re-check; engine stays crypto-only | **Adopted** |
 
-### Recommendation — **Option A**
+### One implementation requirement to confirm in Go
 
-Mirror the proven #4040 shape exactly: members transmit their
-`SignedSigningPackage` envelopes, the engine embeds/verifies them
-verbatim, and a share-verification failure becomes attributable blame
-only when that member's envelope body equals the aggregated package
-(otherwise it's coordinator/input fault, not member blame). This is the
-direct, sound fix to the #4052 P1 and reuses a pattern already in
-production. The wire cost (one envelope per share) is bounded and the
-Annex-B latency budget has ample headroom.
-
-**Reviewer ask:** is Option A's per-share envelope worth it over Option
-C's lighter body-hash, given C's exclusion artifact is a bare hash and
-A's is the full coordinator-signed package? We lean A for evidence
-quality; push back if C's wire savings matter at n=100.
+For the quorum to attribute "this failing share is A's," A's share
+submission to the coordinator must itself be member(operator)-
+authenticated, so the coordinator cannot fabricate "A's share" wholesale.
+This should reuse the existing #4040 sign-what-you-transmit envelope on
+member→coordinator messages; **confirm it covers the share submission**
+when scoping the 7.2b scaffold PR (it is a Go-layer property, not an
+engine one).
 
 ---
 
@@ -91,24 +129,28 @@ compare their envelopes. The question is the transport for that pooling.
 | **B. At the f+1 accuser-quorum step** — retain now; compare only when an exclusion is being decided | late (at exclusion time) | low — reuses the existing #4029 quorum machinery | yes |
 | **C. Coordinator-side at aggregate only** | n/a for malicious coordinator | n/a | low | **no** — a malicious coordinator won't self-incriminate |
 
-### Recommendation — **implement retention now; comparison via Option B**
+### RESOLVED (post-review) — retention now; comparison via Option B (both reviewers concur)
 
 7.2b lands the *retention* (each member persists the exact
-`SignedSigningPackage` it received) regardless. For the comparison
-transport, do Option B: feed retained envelopes into the existing f+1
-accuser-quorum exclusion path (#4029), which is where an exclusion
-decision is actually made and which RFC-21 already chose over
-synchronous-gossip assumptions. Option C (coordinator-side at aggregate)
-still happens for free under Q1=A but only as the *refuse-to-blame*
-protection (job (a)), not as malicious-coordinator detection (job (b)) —
-the two are complementary, not alternatives. Opportunistic gossip
-(Option A) is a later latency optimization, not a 7.2b requirement.
+`SignedSigningPackage` it received) regardless. The comparison transport
+is **Option B**: feed retained envelopes into the existing f+1
+accuser-quorum exclusion path (#4029) — where an exclusion is actually
+decided, and which RFC-21 already chose over synchronous-gossip
+assumptions. This is also exactly the adjudication site Q1's resolution
+relies on.
 
-**Reviewer ask:** confirm that deferring the comparison transport to the
-quorum step (retention-only in 7.2b) is acceptable, i.e. that we don't
-need early/opportunistic equivocation detection before the
-ECDSA-retirement phases. If early detection is a gate, Option A moves
-into scope.
+Gemini's confirming argument closes the "what if the coordinator
+equivocates but stays silent" gap: a malicious coordinator that
+equivocates package bodies but emits no blame merely causes the attempt
+to time out — a *liveness* failure indistinguishable from the
+coordinator dropping messages, which the existing RFC-21 rotation
+machinery already handles by moving to the next attempt. Proof is needed
+only when the coordinator emits blame against an honest member, and there
+the accused member defends itself by revealing the equivocation at the
+exclusion step. So early/opportunistic gossip (Option A) is an
+unnecessary optimization on the critical path, not a 7.2b requirement;
+Option C (coordinator-side) cannot catch a malicious coordinator at all
+and is excluded as a detection mechanism.
 
 ---
 
@@ -128,31 +170,42 @@ members.
 | **B. Generic `details: map<string, JSON>`** | weak — callers parse untyped JSON | any structured error reuses it | medium; defines a general contract |
 | **C. Encode culprits in the `message` string** with a parseable convention | none (stringly-typed) | no | tiny code, but it's the anti-pattern #4052 P2 named |
 
-### Recommendation — **Option A**
+### RESOLVED (post-review) — Option A (both reviewers concur)
 
-Culprits are the only structured detail in flight; a typed optional
-field (a small `blame { culprits: []u16 }` sub-object on the error
-response) is safer and clearer than an untyped map, and a generic
-`details` map can be introduced later if a *second* structured error
-ever needs one (YAGNI). The change touches the Rust `ErrorResponse`, the
-C header, and the Go bridge decoder together. Use the Go member
-identifier (u16) form for culprits, consistent with the rest of the wire
-surface, not the frost-identifier hex.
-
-**Reviewer ask:** typed-field (A) vs generic-details-map (B) — we lean A
-on YAGNI/typing grounds; dissent if you expect several structured error
-kinds soon enough that B's one-time contract pays off.
+A typed optional field — `culprits: Option<Vec<u16>>` (a small typed
+`blame` sub-object) on `ErrorResponse` — is safer and clearer than an
+untyped JSON map, which would force the Go bridge into dynamic type
+assertions and weaken the FFI contract. Culprits are the only structured
+detail in flight (YAGNI: a generic `details` map can come later if a
+*second* structured error ever needs one). The change touches the Rust
+`ErrorResponse`, the C header, and the Go bridge decoder together. Use
+the Go member-identifier **u16** form, consistent with the rest of the
+wire surface — and note this pins the companion design note, which still
+said `[]string` (Codex P2); that note is corrected to `[]u16`.
 
 ---
 
-## Summary of recommendations
+## Decision Log (post-review)
 
-| Q | Recommendation |
-|---|---|
-| Q1 binding | **A** — members transmit `SignedSigningPackage`; engine verifies + binds (corrects the note's body-hash lean) |
-| Q2 equivocation | **retention now; compare at the f+1 quorum step (B)**; opportunistic gossip deferred |
-| Q3 FFI error | **A** — typed optional `culprits` (u16) field; generic details map deferred |
+Gemini and Codex both reviewed this doc and the companion design note.
+All three questions are resolved with reviewer concurrence; the only
+substantive change from my pre-review lean is Q1, where both reviewers
+returned a P1 that corrected it back to the frozen spec.
 
-None of these changes the frozen Phase 7 spec; they refine 7.2b's
-implementation shape. Once settled (recorded in the gates-doc Decision
-Log), 7.2b-1 (the Round2 binding record + completion marker) can start.
+| Q | Resolution | Reviewer status |
+|---|---|---|
+| Q1 binding | Engine does **pure FROST math** → candidate `culprits`; **all** envelope verification, retention, and authoritative blame re-check live in the **Go host at the f+1 accuser quorum**, against the member's retained received bytes (frozen §5.4/§6). Engine never sees envelopes or operator keys. | Gemini P1 + Codex P1 — adopted |
+| Q2 equivocation | **Retention now; compare at the f+1 quorum step (B).** Gossip (A) deferred; coordinator-side (C) can't catch a malicious coordinator. | Both concur |
+| Q3 FFI error | Typed optional `culprits: Option<Vec<u16>>` on `ErrorResponse` (A); generic details map deferred (YAGNI); design note pinned to `u16`. | Both concur |
+
+These refine 7.2b's implementation shape without changing the frozen
+Phase 7 spec — Q1's resolution in fact *realigns* the design docs to it.
+Companion design-note corrections applied alongside this doc: §4 (engine
+emits candidate culprits, Go adjudicates — not "engine verifies the
+coordinator signature"), §5 (`[]u16`), §6 (Round2 record is local
+bookkeeping, not the blame-binding artifact), §7 (blame adjudication
+moves to the Go column), §10 (superseded body-hash proposal removed).
+
+**Pending owner (MacLane) sign-off** to record as a gates-doc Decision
+Log entry; on sign-off, 7.2b-1 (completion marker + any engine-local
+Round2 bookkeeping; **no** envelope plumbing in the engine) can start.
