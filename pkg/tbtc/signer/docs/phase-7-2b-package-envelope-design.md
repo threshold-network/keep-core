@@ -212,15 +212,20 @@ Deferred from 7.2a: a persisted per-attempt completion record
 attempt_id → aggregate signature hex, on `SessionState`, mirrored in
 `PersistedSessionState`, bounded like the consumed markers).
 Re-aggregating a completed attempt returns the stored signature
-(idempotent re-emission) rather than recomputing or erroring: the
-aggregate is deterministic over public data and the signature is public,
-so the engine stays the source of truth for a completed attempt's
-signature. This keeps a host that loses the FFI response (e.g. a crash
-after the record persists but before the host stores the signature) from
-having to burn a fresh signing attempt to reproduce a signature the
-engine already holds — the initial design rejected the retry, which a
-Codex review flagged as an avoidable liveness / restart-divergence
-regression. The persisted signature is public (it goes on-chain), so
+(idempotent re-emission) rather than recomputing: the aggregate is
+deterministic over public data and the signature is public, so the
+engine stays the source of truth for a completed attempt's signature.
+This keeps a host that loses the FFI response (e.g. a crash after the
+record persists but before the host stores the signature) from having to
+burn a fresh signing attempt to reproduce a signature the engine already
+holds — the initial design rejected the retry, which a Codex review
+flagged as an avoidable liveness / restart-divergence regression.
+Re-emission is VALIDATED against the request: because attempt_id does not
+bind the taproot root and the coordinator may be adversarial, the
+recorded signature is returned only when it verifies under the request's
+tweaked group key and message; a reused attempt_id carrying different
+aggregate inputs is rejected, never handed a signature that would fail to
+verify for the caller's package/root (a second Codex finding). The persisted signature is public (it goes on-chain), so
 recording it respects the never-persist-secrets freeze. Not
 security-load-bearing (the blame binding is Go-side — section 4), so the
 only engine-side state 7.2b adds is this completion record.
