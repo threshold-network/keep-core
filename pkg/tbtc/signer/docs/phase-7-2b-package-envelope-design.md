@@ -133,16 +133,23 @@ when bound to what the member signed:
   envelope that member signed over* (its retained received bytes — both
   fields are what the member signed), never a coordinator-submitted or
   reconstructed package. The cryptographic part of that re-check — does
-  this share verify against (signing_package, taproot_merkle_root,
-  verifying_share)? — is FROST math and is **delegated to the engine** (a
-  stateless verify, tweak-aware exactly as the AllCheaters path below), so
-  it is never reimplemented in Go; the Go quorum owns the policy (f+1
-  threshold, envelope/equivocation comparison, which shares to re-check)
-  and hands the engine only those raw crypto inputs, never the envelope or
-  operator keys. A candidate culprit becomes authoritative blame
-  ONLY for a share **provably submitted by the accused member**
-  (member-authenticated submission — see §9/§11, a hard prerequisite): a
-  share the coordinator could have fabricated names no one. The
+  this share verify against the signing_package under the **group
+  verifying key tweaked by taproot_merkle_root**? — is FROST math and is
+  **delegated to the engine** (a stateless verify; the engine resolves the
+  public key package = group key + verifying shares from the session DKG
+  state and applies the tweak, exactly as the AllCheaters aggregate path
+  below), so it is never reimplemented in Go. The Go quorum supplies only
+  public inputs (signing_package, taproot_merkle_root, the accused
+  member's identifier, the share), owns the policy (f+1 threshold,
+  envelope/equivocation comparison, which shares to re-check), and never
+  hands the engine the envelope or operator keys. A candidate culprit
+  becomes authoritative blame ONLY for a share **provably submitted by the
+  accused member for THIS attempt and package** — the member-authenticated
+  submission must bind the share to the attempt context +
+  signing-package/envelope hash, not just the share bytes (see §9/§11, a
+  hard prerequisite), else a coordinator can replay an old A-signed share
+  into a different attempt and frame A. A share the coordinator could have
+  fabricated — or replayed — names no one. The
   coordinator's operator signature on the envelope is the artifact that
   convicts an *equivocating coordinator* (two divergent signed bodies for
   one attempt-context), not what attributes member fault.
@@ -216,10 +223,12 @@ marker.)
 - **Rust (mirror branch)**: the FFI candidate-`culprits` payload (pure
   FROST math via `CheaterDetection::AllCheaters`, no envelopes) + C
   header, a **stateless tweak-aware verify-share** entry the quorum
-  re-check calls (inputs: signing_package, taproot_merkle_root,
-  verifying_share, share — never the envelope or operator keys), the
-  completion marker, and the engine-side vectors. The engine never
-  verifies envelopes or operator signatures.
+  re-check calls (caller-supplied public inputs: signing_package,
+  taproot_merkle_root, member identifier, share; the engine resolves the
+  **group verifying key** + verifying shares from session DKG state and
+  applies the tweak — never the envelope or operator keys), the completion
+  marker, and the engine-side vectors. The engine never verifies envelopes
+  or operator signatures.
 
 ## 8. Cross-language vectors (frozen spec item 9)
 
@@ -240,17 +249,24 @@ event.
    coordinator signing/distribution + member authenticate (elected
    `coordinator_id` + signature under that key + attempt hash + the
    `taproot_merkle_root` check, §2) / retain (incl. retain-on-reject for
-   divergent envelopes) + **member-authenticated Round2 share submission**
-   (reuse the #4040 sign-what-you-transmit envelope so a share is provably
-   from its claimed member — a hard prerequisite for blame, Codex P1).
-   Wire + `wire_test.go` byte-preservation, no engine change yet.
+   divergent envelopes) + **member-authenticated Round2 share submission
+   bound to the attempt context + signing-package/envelope hash** (reuse
+   the #4040 sign-what-you-transmit envelope; the signed body MUST cover
+   (attempt_context_hash, package/envelope hash, share) so a share is
+   provably from its claimed member AND not replayable into another
+   attempt/package — a hard prerequisite for blame, Codex P1×2). Wire +
+   `wire_test.go` byte-preservation, no engine change yet.
 3. **7.2b-3 (mirror)**: FFI structured-error payload (`culprits: []u16`)
    + C header + the pure-FROST candidate-`InvalidSignatureShare` in
    InteractiveAggregate (no envelope handling in the engine), aggregating
    with **`CheaterDetection::AllCheaters`** (tweak-aware — §4) so the full
    culprit set is reported, not just the first; plus the **stateless
-   tweak-aware verify-share** FFI the 7.2b-4 quorum re-check calls (if not
-   already exposed).
+   tweak-aware verify-share** FFI the 7.2b-4 quorum re-check calls
+   (caller-supplied public inputs: signing_package, taproot_merkle_root,
+   member identifier, share; the engine resolves the public key package =
+   **group verifying key** + verifying shares from session DKG state and
+   applies the tweak — the group key is required for the challenge/binding
+   factors, Codex P2).
 4. **7.2b-4 (scaffold)**: cross-member equivocation comparison
    (extends #4044) + the **blame-adjudication policy** (quorum re-check —
    the per-share crypto re-verify delegated to 7.2b-3's tweak-aware
@@ -292,10 +308,12 @@ non-elected coordinator is rejected without retention (test, Codex P2); a
 coordinator equivocating package bodies (incl. the root) cannot produce
 member blame, and is itself convicted from two retained
 elected-coordinator bodies (Go quorum test); authoritative blame is gated
-on member-authenticated share submission — a share not provably from
-member A cannot make A a culprit (test, Codex P1); the quorum's per-share
-re-check is **tweak-consistent** (a valid taproot share verifies, an
-invalid one is blamed; test); a genuine bad share yields machine-readable
+on context-bound member-authenticated share submission — neither a share
+not provably from member A NOR an old A-signed share replayed into a
+different attempt/package can make A a culprit (test, Codex P1); the
+quorum's per-share re-check is **tweak-consistent**, verifying under the
+tweaked group key (a valid taproot share verifies, an invalid one is
+blamed; test); a genuine bad share yields machine-readable
 *candidate* culprits over the FFI (engine test, `AllCheaters`) that the Go
 quorum confirms as attributable `InvalidSignatureShare`; re-aggregation of
 a completed attempt is rejected (test); and the cross-language vectors are

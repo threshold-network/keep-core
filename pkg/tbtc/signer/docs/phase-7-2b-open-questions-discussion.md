@@ -113,10 +113,14 @@ labeled "A's share," the engine returns A as a *candidate* culprit (the
 bytes fail share-verification), and the quorum re-checks bytes A never
 sent, framing A. Therefore authoritative blame (7.2b-4) MUST NOT be
 enabled until member→coordinator share submissions are authenticated
-(reuse the existing #4040 sign-what-you-transmit envelope). It is a
-Go-layer property (not an engine one) and is part of the implementation
-sequence (7.2b-2) and acceptance criteria (a share not provably from
-member A cannot make A a culprit).
+(reuse the existing #4040 sign-what-you-transmit envelope). **The signed
+body must cover the attempt context AND the signing-package/envelope hash,
+not just the share bytes** (Codex follow-up P1): otherwise a coordinator
+replays an old A-signed share into a different attempt/package and the
+quorum re-checks bytes A never submitted for that context — framing A. It
+is a Go-layer property (not an engine one) and is part of the
+implementation sequence (7.2b-2) and acceptance criteria (neither an
+unattributable share nor a replayed A-signed share can make A a culprit).
 
 A second hard prerequisite rides with it (Codex P1, companion design
 note §2): members MUST verify `taproot_merkle_root` against their live
@@ -243,6 +247,16 @@ decisions above:
   tweak-consistent and is delegated to a stateless engine verify-share (Go
   owns only the quorum policy), not reimplemented in Go. (design note
   §4/§7/§9/§11)
+- **Context-bound share authentication** (P1, follow-up) — the
+  member-authenticated share submission must bind the share to the attempt
+  context + package/envelope hash, not just the share bytes, or a
+  coordinator replays an old A-signed share into a different
+  attempt/package and frames A. (design note §4/§9/§11; this doc, Q1
+  prerequisite)
+- **Group key in verify-share inputs** (P2) — the stateless verify-share
+  FFI needs the **group verifying key** (tweaked for taproot), not just the
+  per-member verifying share, to compute the challenge/binding factors;
+  resolved from session DKG state + tweaked. (design note §4/§7/§9)
 
 These refine 7.2b's implementation shape without changing the frozen
 Phase 7 spec — Q1's resolution in fact *realigns* the design docs to it.
