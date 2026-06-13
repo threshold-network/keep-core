@@ -612,16 +612,20 @@ pub fn interactive_aggregate(
                 session_id: request.session_id.clone(),
             }
         })?;
-        // Reject a repeat aggregate of an already-completed attempt before
-        // recomputing (Phase 7.2b design section 6). The marker is durable,
-        // so a completed attempt stays completed across restart.
-        if session
-            .aggregated_interactive_attempt_markers
-            .contains(&attempt_id)
+        // Idempotent re-emission (Phase 7.2b design section 6): if this attempt
+        // already aggregated, return the stored signature without recomputing.
+        // The record is durable, so the signature stays recoverable from the
+        // engine across restart - a host that lost the FFI response need not
+        // spend a fresh signing attempt to reproduce a signature the engine
+        // already holds.
+        if let Some(signature_hex) = session
+            .aggregated_interactive_attempt_signatures
+            .get(&attempt_id)
         {
-            return Err(EngineError::InteractiveAttemptAlreadyAggregated {
+            return Ok(InteractiveAggregateResult {
                 session_id: request.session_id.clone(),
-                attempt_id,
+                attempt_id: attempt_id.clone(),
+                signature_hex: signature_hex.clone(),
             });
         }
         if session.dkg_result.is_none() {
@@ -687,17 +691,18 @@ pub fn interactive_aggregate(
     let signature_bytes = signature
         .serialize()
         .map_err(|e| EngineError::Internal(format!("failed to serialize aggregate: {e}")))?;
+    let signature_hex = hex::encode(signature_bytes);
 
-    // Record the durable completion marker before reporting success, so a
-    // repeat InteractiveAggregate for this attempt is rejected rather than
-    // recomputed (Phase 7.2b design section 6). The engine lock was dropped
-    // for the aggregation crypto above; re-acquire it to mark and persist.
-    // This is a completion marker, not a security gate (the aggregate is
-    // deterministic over public data): a concurrent duplicate that raced past
-    // the pre-check recomputed the identical signature, so re-check the marker
-    // here and let the loser report the attempt already complete instead of
-    // persisting twice. Persist before success; on persist failure roll the
-    // marker back and fail closed, leaving no half-recorded completion.
+    // Record the aggregate signature for this attempt before reporting success,
+    // so a repeat InteractiveAggregate returns the same signature (idempotent)
+    // rather than recomputing (Phase 7.2b design section 6). The engine lock was
+    // dropped for the aggregation crypto above; re-acquire it to record and
+    // persist. The aggregate is deterministic over public data, so a concurrent
+    // duplicate that raced past the pre-check recomputed the identical
+    // signature: if the record already exists we return ours without storing
+    // twice. Persist before reporting success; on persist failure roll the
+    // record back and fail closed, leaving no half-recorded completion. Count a
+    // success only for a freshly recorded aggregation, not a re-emission.
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -706,46 +711,44 @@ pub fn interactive_aggregate(
             session_id: request.session_id.clone(),
         }
     })?;
-    if session
-        .aggregated_interactive_attempt_markers
-        .contains(&attempt_id)
-    {
-        return Err(EngineError::InteractiveAttemptAlreadyAggregated {
-            session_id: request.session_id.clone(),
-            attempt_id,
-        });
-    }
-    ensure_consumed_registry_insert_capacity(
-        &session.aggregated_interactive_attempt_markers,
-        &attempt_id,
-        "aggregated_interactive_attempt_markers",
-        &request.session_id,
-    )?;
-    session
-        .aggregated_interactive_attempt_markers
-        .insert(attempt_id.clone());
-    if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
-        let session = guard
-            .sessions
-            .get_mut(&request.session_id)
-            .expect("session existed under the held engine lock");
+    let recorded_new = !session
+        .aggregated_interactive_attempt_signatures
+        .contains_key(&attempt_id);
+    if recorded_new {
+        ensure_consumed_registry_capacity_for_insert(
+            session.aggregated_interactive_attempt_signatures.len(),
+            false,
+            "aggregated_interactive_attempt_signatures",
+            &request.session_id,
+        )?;
         session
-            .aggregated_interactive_attempt_markers
-            .remove(&attempt_id);
-        return Err(persist_error);
+            .aggregated_interactive_attempt_signatures
+            .insert(attempt_id.clone(), signature_hex.clone());
+        if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
+            let session = guard
+                .sessions
+                .get_mut(&request.session_id)
+                .expect("session existed under the held engine lock");
+            session
+                .aggregated_interactive_attempt_signatures
+                .remove(&attempt_id);
+            return Err(persist_error);
+        }
     }
     drop(guard);
 
-    record_hardening_telemetry(|telemetry| {
-        telemetry.interactive_aggregate_success_total = telemetry
-            .interactive_aggregate_success_total
-            .saturating_add(1);
-    });
+    if recorded_new {
+        record_hardening_telemetry(|telemetry| {
+            telemetry.interactive_aggregate_success_total = telemetry
+                .interactive_aggregate_success_total
+                .saturating_add(1);
+        });
+    }
 
     Ok(InteractiveAggregateResult {
         session_id: request.session_id,
         attempt_id,
-        signature_hex: hex::encode(signature_bytes),
+        signature_hex,
     })
 }
 

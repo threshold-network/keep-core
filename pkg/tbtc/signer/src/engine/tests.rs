@@ -702,7 +702,7 @@ fn persisted_session_state_fixture() -> PersistedSessionState {
         refresh_history: vec![],
         emergency_rekey_event: None,
         consumed_interactive_attempt_markers: vec![],
-        aggregated_interactive_attempt_markers: vec![],
+        aggregated_interactive_attempt_signatures: Default::default(),
     }
 }
 
@@ -12842,7 +12842,7 @@ fn interactive_aggregate_produces_and_self_verifies_bip340() {
 }
 
 #[test]
-fn interactive_aggregate_rejects_repeat_aggregate_of_completed_attempt() {
+fn interactive_aggregate_is_idempotent_for_completed_attempt() {
     let _guard = lock_test_state();
     reset_for_tests();
 
@@ -12905,26 +12905,20 @@ fn interactive_aggregate_rejects_repeat_aggregate_of_completed_attempt() {
     };
 
     // First aggregate completes the attempt.
-    interactive_aggregate(aggregate_request.clone()).expect("first interactive aggregate");
+    let first =
+        interactive_aggregate(aggregate_request.clone()).expect("first interactive aggregate");
 
-    // A second aggregate for the same attempt is rejected by the durable
-    // completion marker rather than recomputed (Phase 7.2b design section 6).
-    let err = interactive_aggregate(aggregate_request)
-        .expect_err("re-aggregating a completed attempt must be rejected");
-    assert!(
-        matches!(
-            err,
-            EngineError::InteractiveAttemptAlreadyAggregated { ref attempt_id, .. }
-                if *attempt_id == opened.attempt_id
-        ),
-        "unexpected error: {err:?}"
-    );
-    assert_eq!(err.code(), "interactive_attempt_already_aggregated");
-    assert_eq!(err.recovery_class(), "recoverable");
+    // A second aggregate for the same attempt returns the SAME signature
+    // (idempotent re-emission) rather than recomputing or erroring (Phase 7.2b
+    // design section 6).
+    let second = interactive_aggregate(aggregate_request)
+        .expect("re-aggregating a completed attempt returns the stored signature");
+    assert_eq!(second.attempt_id, opened.attempt_id);
+    assert_eq!(second.signature_hex, first.signature_hex);
 }
 
 #[test]
-fn interactive_aggregate_completion_marker_survives_process_restart() {
+fn interactive_aggregate_signature_recoverable_across_restart() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("interactive_aggregate_marker_restart");
     reset_for_tests();
@@ -12986,22 +12980,21 @@ fn interactive_aggregate_completion_marker_survives_process_restart() {
         ],
         taproot_merkle_root_hex: None,
     };
-    interactive_aggregate(aggregate_request.clone()).expect("first interactive aggregate");
+    let first =
+        interactive_aggregate(aggregate_request.clone()).expect("first interactive aggregate");
 
-    // The completion marker is the only durable interactive artifact (live
-    // nonce state is gone after restart by construction). It must survive a
-    // reload so a replayed aggregate is still rejected - this also exercises
-    // the marker's persistence round-trip (serialize + reload validation).
+    // The completion record (the aggregate signature) is the only durable
+    // interactive artifact (live nonce state is gone after restart by
+    // construction). It must survive a reload so the engine re-emits the
+    // identical signature instead of forcing a brand-new signing attempt -
+    // this also exercises the record's persistence round-trip (serialize +
+    // reload validation).
     simulate_process_restart_for_tests();
     reload_state_from_storage_for_tests();
 
-    let err = interactive_aggregate(aggregate_request)
-        .expect_err("a completed attempt must stay completed across restart");
-    assert!(
-        matches!(err, EngineError::InteractiveAttemptAlreadyAggregated { .. }),
-        "unexpected error: {err:?}"
-    );
-    assert_eq!(err.code(), "interactive_attempt_already_aggregated");
+    let after_restart = interactive_aggregate(aggregate_request)
+        .expect("a completed attempt's signature is recoverable across restart");
+    assert_eq!(after_restart.signature_hex, first.signature_hex);
 
     reset_for_tests();
     cleanup_test_state_artifacts(&state_path);

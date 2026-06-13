@@ -82,17 +82,6 @@ pub enum EngineError {
         session_id: String,
         attempt_id: String,
     },
-    /// Returned when InteractiveAggregate is invoked again for an attempt that
-    /// already produced an aggregate signature in this session. The per-attempt
-    /// "aggregated" marker is durable, so a completed attempt stays completed
-    /// across restart; re-aggregation is rejected rather than recomputed.
-    /// Distinct code so callers match on
-    /// `interactive_attempt_already_aggregated` rather than the message.
-    #[error("interactive attempt [{attempt_id}] already aggregated in session [{session_id}]")]
-    InteractiveAttemptAlreadyAggregated {
-        session_id: String,
-        attempt_id: String,
-    },
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -115,9 +104,6 @@ impl EngineError {
             Self::ConsumedAttemptReplay { .. } => "consumed_attempt_replay",
             Self::ConsumedRoundReplay { .. } => "consumed_round_replay",
             Self::ConsumedNonceReplay { .. } => "consumed_nonce_replay",
-            Self::InteractiveAttemptAlreadyAggregated { .. } => {
-                "interactive_attempt_already_aggregated"
-            }
             Self::Internal(_) => "internal_error",
         }
     }
@@ -142,10 +128,6 @@ impl EngineError {
             Self::ConsumedAttemptReplay { .. } => "recoverable",
             Self::ConsumedRoundReplay { .. } => "recoverable",
             Self::ConsumedNonceReplay { .. } => "recoverable",
-            // The aggregate is deterministic over public data and the attempt
-            // is durably marked complete; a re-aggregation request is a benign
-            // duplicate the caller should not retry, not an engine fault.
-            Self::InteractiveAttemptAlreadyAggregated { .. } => "recoverable",
             Self::SessionFinalized { .. } => "terminal",
             Self::SessionNotFound { .. } => "terminal",
             Self::Internal(_) => "terminal",
@@ -185,20 +167,6 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "round_id [round-1] already consumed for sign contribution in session [session-a]",
-        );
-    }
-
-    #[test]
-    fn interactive_attempt_already_aggregated_has_stable_code_and_message_format() {
-        let err = EngineError::InteractiveAttemptAlreadyAggregated {
-            session_id: "session-a".to_string(),
-            attempt_id: "attempt-1".to_string(),
-        };
-        assert_eq!(err.code(), "interactive_attempt_already_aggregated");
-        assert_eq!(err.recovery_class(), "recoverable");
-        assert_eq!(
-            err.to_string(),
-            "interactive attempt [attempt-1] already aggregated in session [session-a]",
         );
     }
 
