@@ -12933,6 +12933,30 @@ fn interactive_aggregate_is_idempotent_for_completed_attempt() {
 }
 
 #[test]
+fn interactive_aggregate_rejects_empty_attempt_id() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    // An empty attempt_id must be rejected before anything is persisted: the
+    // completion record is keyed by attempt_id and the reload path rejects an
+    // empty key, so persisting one would brick restart. The guard runs before
+    // the signing-package/share decode, so the placeholder inputs are never
+    // reached.
+    let err = interactive_aggregate(InteractiveAggregateRequest {
+        session_id: "interactive-aggregate-empty-attempt".to_string(),
+        attempt_id: String::new(),
+        signing_package_hex: String::new(),
+        signature_shares: vec![],
+        taproot_merkle_root_hex: None,
+    })
+    .expect_err("an empty attempt_id must be rejected");
+    assert!(
+        matches!(err, EngineError::Validation(ref m) if m.contains("attempt_id must not be empty")),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
 fn interactive_aggregate_signature_recoverable_across_restart() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("interactive_aggregate_marker_restart");

@@ -602,6 +602,15 @@ pub fn interactive_aggregate(
     enforce_provenance_gate()?;
     validate_session_id(&request.session_id)?;
     let attempt_id = canonical_attempt_id(&request.attempt_id);
+    // A completed aggregate persists a completion record keyed by attempt_id,
+    // and the reload path rejects an empty key; reject an empty attempt_id here
+    // too so a malformed (or malicious) request cannot write durable state that
+    // fails to reload after a restart.
+    if attempt_id.is_empty() {
+        return Err(EngineError::Validation(
+            "InteractiveAggregate: attempt_id must not be empty".to_string(),
+        ));
+    }
 
     let mut signing_package_bytes = decode_hex_field(
         "InteractiveAggregate",
