@@ -1,10 +1,10 @@
 # Phase 7.2b Open Questions — Options, Tradeoffs, Recommendations
 
 Date: 2026-06-13
-Status: Reviewed — Gemini + Codex concurred; recommendations resolved
-(see Decision Log at the end). Q1 was corrected back to the frozen spec
-on a converging reviewer P1. Pending owner sign-off to record in the
-gates-doc Decision Log.
+Status: SIGNED OFF 2026-06-13 — recorded as gates-doc Decision Log entry
+9. Reviewed (Gemini + Codex concurred; recommendations resolved — see the
+Decision Log at the end); Q1 was corrected back to the frozen spec on a
+converging reviewer P1.
 Companion to: `phase-7-2b-package-envelope-design.md`
 
 This doc works the three open questions that gate the 7.2b

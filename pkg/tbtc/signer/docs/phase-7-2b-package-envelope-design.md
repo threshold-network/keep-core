@@ -8,7 +8,7 @@ all envelope verification + blame adjudication is Go-side.
 Owner: Threshold Labs
 Scope: the signed-body signing-package envelope (frozen spec section 6),
 the envelope-bound attributable blame deferred from 7.2a, the FFI
-structured-culprit payload, the InteractiveAggregate completion marker,
+structured-culprit payload, the InteractiveAggregate completion record,
 and the cross-language vectors. Builds on merged 7.1 (#4051) + 7.2a
 (#4052, mirror).
 
@@ -117,10 +117,10 @@ when bound to what the member signed:
   in the Go layer (it carries the package AND the root — §2). The engine
   itself does NOT need to record what it signed for the blame flow:
   nothing in the corrected design consumes such a record (the quorum
-  re-checks Go-retained bytes; the completion marker is attempt-keyed).
+  re-checks Go-retained bytes; the completion record is attempt-keyed).
   7.2b-1 should add an engine-local Round2 record ONLY if a concrete
   consumer is identified; absent one, the engine-side state is just the
-  completion marker (section 6).
+  completion record (section 6).
 - At aggregation the **engine does pure FROST math**: it verifies each
   share against the member's verifying share (public, from the DKG key
   package it already holds) and returns the mathematically failing
@@ -244,7 +244,7 @@ only engine-side state 7.2b adds is this completion record.
   resolves the canonical **group verifying key** + verifying shares from
   durably-retained wallet DKG material — surviving the session TTL sweep —
   and applies the tweak; never the envelope or operator keys), the
-  completion marker, and the engine-side vectors. The engine never
+  completion record, and the engine-side vectors. The engine never
   verifies envelopes or operator signatures.
 
 ## 8. Cross-language vectors (frozen spec item 9)
@@ -258,7 +258,7 @@ event.
 
 ## 9. Suggested sub-PR sequence
 
-1. **7.2b-1 (mirror)**: the InteractiveAggregate completion marker
+1. **7.2b-1 (mirror)**: the InteractiveAggregate completion record
    (persistence plumbing only; no blame, no envelopes). Self-contained.
    (No engine-local Round2 package-hash record unless §4 identifies a
    consumer — the corrected design has none.)
@@ -272,7 +272,7 @@ event.
    nonces (`interactive_signing`), explicitly retaining the session's
    DKG material. So a post-sweep f+1 quorum re-check can still resolve
    the canonical group key by `session_id` — no new wallet-key
-   persistence is needed in 7.2b-1, only the completion marker.
+   persistence is needed in 7.2b-1, only the completion record.
 2. **7.2b-2 (scaffold)**: `SignedSigningPackage` protos + gen +
    coordinator signing/distribution + member authenticate (elected
    `coordinator_id` + signature under that key + attempt hash + the
