@@ -212,8 +212,9 @@ returned a P1 that corrected it back to the frozen spec.
 | Q2 equivocation | **Retention now; compare at the f+1 quorum step (B).** Gossip (A) deferred; coordinator-side (C) can't catch a malicious coordinator. | Both concur |
 | Q3 FFI error | Typed optional `culprits: Option<Vec<u16>>` on `ErrorResponse` (A); generic details map deferred (YAGNI); design note pinned to `u16`. | Both concur |
 
-Re-review (post-resolution) folded in two Codex **P1**s and a **P2** on
-the implementation shape — none changes the Q1/Q2/Q3 decisions above:
+Re-review (multiple passes) folded in Codex **P1**s and **P2**s plus a
+self-review item on the implementation shape — none changes the Q1/Q2/Q3
+decisions above:
 - **Taproot root binding** (P1) — members MUST verify `taproot_merkle_root`
   against their live session root before signing (the root is not in the
   attempt context); otherwise the retained envelope misdescribes what was
@@ -230,6 +231,18 @@ the implementation shape — none changes the Q1/Q2/Q3 decisions above:
   collects all culprits in that mode (no reimplementation); the taproot
   `aggregate_with_tweak` wrapper does not expose the mode, so apply the
   tweak + `aggregate_custom(AllCheaters)`. (design note §4/§9)
+- **Elected-coordinator check** (P2) — members must verify `coordinator_id`
+  is the *elected* coordinator and the signature is under that key; the
+  attempt hash is public, so any operator could otherwise inject packages
+  and pollute the equivocation evidence. (design note §2/§3/§9/§11)
+- **Retain-on-reject** (P2) — a member that refuses a root-divergent
+  envelope must retain it first, or §3 loses the bytes proving the
+  coordinator equivocated. (design note §2/§3/§11)
+- **Tweak-aware, engine-delegated quorum re-check** (self-review) — the
+  quorum's per-share crypto re-verify is FROST math; it must be
+  tweak-consistent and is delegated to a stateless engine verify-share (Go
+  owns only the quorum policy), not reimplemented in Go. (design note
+  §4/§7/§9/§11)
 
 These refine 7.2b's implementation shape without changing the frozen
 Phase 7 spec — Q1's resolution in fact *realigns* the design docs to it.

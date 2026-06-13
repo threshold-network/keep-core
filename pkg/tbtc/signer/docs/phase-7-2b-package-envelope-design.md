@@ -58,21 +58,36 @@ message SignedSigningPackage {
 
 The coordinator signs `SigningPackageBody` with its operator key and
 distributes `SignedSigningPackage` to the chosen subset. Each member:
-1. verifies the coordinator signature, the `attempt_context_hash`
-   against its live attempt, AND that `taproot_merkle_root` equals the
-   live session/signing root (empty for key-path) — rejecting any
-   envelope whose root diverges (coordinator equivocation, §3);
-2. **retains the exact received envelope bytes** alongside its share;
-3. produces its Round2 share over the `signing_package` in that body,
-   under the (now root-verified) session root.
+1. **authenticates the envelope as genuine coordinator evidence for this
+   attempt**: `coordinator_id` equals the attempt's *elected* coordinator
+   (RFC-21 Annex A), the signature verifies under that elected
+   coordinator's operator key, and `attempt_context_hash` matches the live
+   attempt. If any fails the envelope is not attributable to the
+   coordinator — reject WITHOUT retention (forgeable noise, not evidence);
+2. **retains the exact received envelope bytes** — for every envelope that
+   passed step 1, BEFORE the sign/no-sign decision, so a divergent
+   envelope is still available to the §3 cross-member comparison;
+3. checks `taproot_merkle_root` equals the live session/signing root
+   (empty for key-path); if it diverges, **refuse to sign** and flag the
+   (already-retained) envelope as reject/equivocation evidence;
+4. otherwise produces its Round2 share over the `signing_package` in that
+   body, under the (now root-verified) session root.
 
-The root check (step 1) is load-bearing (Codex P1): the attempt context
-does NOT carry the root, but Round2 signs under the root in the engine
-session. Without it a coordinator could hand a member an envelope with
-the right package/attempt but a divergent root — the engine would sign
-under the real session root, the retained envelope would no longer
-describe what the member actually signed, and the later quorum re-check
-would use the wrong root and misattribute blame.
+Three acceptance checks are load-bearing here (Codex P1+P2):
+- **Elected-coordinator (step 1):** `attempt_context_hash` is public, so
+  any operator could sign a body carrying it. Without checking
+  `coordinator_id` against the elected coordinator AND verifying under
+  that specific key, a non-elected operator could inject packages and
+  pollute the retained evidence — and the §3 equivocation proof requires
+  both divergent bodies to carry the *same elected coordinator's*
+  signature.
+- **Root binding (step 3):** the attempt context does NOT carry the root,
+  but Round2 signs under the session root, so a divergent root would make
+  the retained envelope misdescribe what the member signed and the quorum
+  re-check misattribute blame.
+- **Retain-before-refuse (steps 2–3):** the member must retain a divergent
+  envelope *before* refusing to sign it, or §3 loses the signed bytes that
+  prove the coordinator equivocated the root.
 
 ## 3. Equivocation detection (extends #4044)
 
@@ -85,10 +100,12 @@ carrying the coordinator's signature, are a proof of coordinator
 equivocation - the same shape as #4044's `EquivocationEvidence`, now
 over package envelopes rather than evidence snapshots. Because
 `taproot_merkle_root` is a field of the signed body, distributing
-different roots is the same equivocation, caught by the same machinery
-once members reject a root that does not match their session (§2). The
-cross-member comparison is the RFC-21 Go layer's job (scaffold), not the
-engine's.
+different roots is the same equivocation — and a member that refuses a
+root-divergent envelope still **retains it as evidence** (§2 step 2), so
+the comparison has both signed bodies even though one was never signed
+over. Both retained bodies must carry the *elected* coordinator's
+signature (§2 step 1) for the proof to convict it. The cross-member
+comparison is the RFC-21 Go layer's job (scaffold), not the engine's.
 
 ## 4. Bound attributable blame (reintroduces what 7.2a removed)
 
@@ -114,7 +131,14 @@ when bound to what the member signed:
   against the `signing_package` AND `taproot_merkle_root` inside *the
   envelope that member signed over* (its retained received bytes — both
   fields are what the member signed), never a coordinator-submitted or
-  reconstructed package. A candidate culprit becomes authoritative blame
+  reconstructed package. The cryptographic part of that re-check — does
+  this share verify against (signing_package, taproot_merkle_root,
+  verifying_share)? — is FROST math and is **delegated to the engine** (a
+  stateless verify, tweak-aware exactly as the AllCheaters path below), so
+  it is never reimplemented in Go; the Go quorum owns the policy (f+1
+  threshold, envelope/equivocation comparison, which shares to re-check)
+  and hands the engine only those raw crypto inputs, never the envelope or
+  operator keys. A candidate culprit becomes authoritative blame
   ONLY for a share **provably submitted by the accused member**
   (member-authenticated submission — see §9/§11, a hard prerequisite): a
   share the coordinator could have fabricated names no one. The
@@ -182,15 +206,19 @@ marker.)
 - **Go (scaffold branch)**: the `SigningPackageBody`/`SignedSigningPackage`
   protos + gen (mind the Dockerfile gen-COPY allowlist - the #4040 CI
   gotcha), coordinator-side package signing + distribution, member-side
-  verify + retain, the operator-signature verification, cross-member
-  equivocation comparison (extends #4044), and the **authoritative blame
-  adjudication** — re-checking the engine's candidate culprits against
-  each member's retained envelope bytes at the f+1 accuser quorum. The Go
-  bridge decoder for the new structured FFI error.
+  authenticate (elected-coordinator + signature) / retain (incl.
+  retain-on-reject), cross-member equivocation comparison (extends
+  #4044), and the **blame-adjudication policy** at the f+1 accuser quorum
+  — selecting which shares to re-check and the exclusion decision, but
+  delegating the per-share crypto re-verify to the engine. The Go bridge
+  decoder for the new structured FFI error.
 - **Rust (mirror branch)**: the FFI candidate-`culprits` payload (pure
   FROST math via `CheaterDetection::AllCheaters`, no envelopes) + C
-  header, the completion marker, and the engine-side vectors. The engine
-  never verifies envelopes or operator signatures.
+  header, a **stateless tweak-aware verify-share** entry the quorum
+  re-check calls (inputs: signing_package, taproot_merkle_root,
+  verifying_share, share — never the envelope or operator keys), the
+  completion marker, and the engine-side vectors. The engine never
+  verifies envelopes or operator signatures.
 
 ## 8. Cross-language vectors (frozen spec item 9)
 
@@ -208,24 +236,27 @@ event.
    (No engine-local Round2 package-hash record unless §4 identifies a
    consumer — the corrected design has none.)
 2. **7.2b-2 (scaffold)**: `SignedSigningPackage` protos + gen +
-   coordinator signing/distribution + member verify (incl. the
-   `taproot_merkle_root` check, §2) / retain + **member-authenticated
-   Round2 share submission** (reuse the #4040 sign-what-you-transmit
-   envelope so a share is provably from its claimed member — a hard
-   prerequisite for blame, Codex P1). Wire + `wire_test.go`
-   byte-preservation, no engine change yet.
+   coordinator signing/distribution + member authenticate (elected
+   `coordinator_id` + signature under that key + attempt hash + the
+   `taproot_merkle_root` check, §2) / retain (incl. retain-on-reject for
+   divergent envelopes) + **member-authenticated Round2 share submission**
+   (reuse the #4040 sign-what-you-transmit envelope so a share is provably
+   from its claimed member — a hard prerequisite for blame, Codex P1).
+   Wire + `wire_test.go` byte-preservation, no engine change yet.
 3. **7.2b-3 (mirror)**: FFI structured-error payload (`culprits: []u16`)
    + C header + the pure-FROST candidate-`InvalidSignatureShare` in
    InteractiveAggregate (no envelope handling in the engine), aggregating
    with **`CheaterDetection::AllCheaters`** (tweak-aware — §4) so the full
-   culprit set is reported, not just the first.
+   culprit set is reported, not just the first; plus the **stateless
+   tweak-aware verify-share** FFI the 7.2b-4 quorum re-check calls (if not
+   already exposed).
 4. **7.2b-4 (scaffold)**: cross-member equivocation comparison
-   (extends #4044) + the **authoritative blame adjudication** (quorum
-   re-check of the engine's candidate culprits against retained
-   envelopes) + the Go bridge decoder for the structured error.
-   **Gated on 7.2b-2's member-authenticated share submission** — blame
-   must not be enabled until a share is provably attributable to its
-   member.
+   (extends #4044) + the **blame-adjudication policy** (quorum re-check —
+   the per-share crypto re-verify delegated to 7.2b-3's tweak-aware
+   verify-share FFI, the exclusion decision in Go) + the Go bridge decoder
+   for the structured error. **Gated on 7.2b-2's member-authenticated
+   share submission** — blame must not be enabled until a share is
+   provably attributable to its member.
 5. **7.2b-5**: cross-language vectors, byte-copied both sides.
 
 Each is independently reviewable; the engine's candidate culprits
@@ -254,14 +285,17 @@ Each is independently reviewable; the engine's candidate culprits
 
 ## 11. Acceptance
 
-7.2b is done when: a member rejects an envelope whose `taproot_merkle_root`
-diverges from its session root (test, Codex P1); a coordinator
-equivocating package bodies (incl. the root) cannot produce member blame
-(Go quorum test, re-checking retained envelopes); authoritative blame is
-gated on member-authenticated share submission — a share not provably
-from member A cannot make A a culprit (test, Codex P1); a genuine bad
-share against an agreed-and-signed package yields machine-readable
-*candidate* culprits over the FFI (engine test) that the Go quorum
-confirms as attributable `InvalidSignatureShare`; re-aggregation of a
-completed attempt is rejected (test); and the cross-language vectors are
+7.2b is done when: a member refuses to sign a root-divergent envelope but
+**retains it as evidence** (test, Codex P1+P2); an envelope from a
+non-elected coordinator is rejected without retention (test, Codex P2); a
+coordinator equivocating package bodies (incl. the root) cannot produce
+member blame, and is itself convicted from two retained
+elected-coordinator bodies (Go quorum test); authoritative blame is gated
+on member-authenticated share submission — a share not provably from
+member A cannot make A a culprit (test, Codex P1); the quorum's per-share
+re-check is **tweak-consistent** (a valid taproot share verifies, an
+invalid one is blamed; test); a genuine bad share yields machine-readable
+*candidate* culprits over the FFI (engine test, `AllCheaters`) that the Go
+quorum confirms as attributable `InvalidSignatureShare`; re-aggregation of
+a completed attempt is rejected (test); and the cross-language vectors are
 pinned both sides.
