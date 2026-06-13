@@ -273,5 +273,5 @@ bookkeeping, not the blame-binding artifact), §7 (blame adjudication
 moves to the Go column), §10 (superseded body-hash proposal removed).
 
 **SIGNED OFF** (MacLane, 2026-06-13), recorded as gates-doc Decision Log
-entry 9; 7.2b-1 (the InteractiveAggregate completion record; **no**
+entry 9; 7.2b-1 (the InteractiveAggregate completion marker; **no**
 envelope plumbing in the engine) followed and is implemented in PR #4055.

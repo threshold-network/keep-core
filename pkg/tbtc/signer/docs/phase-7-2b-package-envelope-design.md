@@ -8,7 +8,7 @@ all envelope verification + blame adjudication is Go-side.
 Owner: Threshold Labs
 Scope: the signed-body signing-package envelope (frozen spec section 6),
 the envelope-bound attributable blame deferred from 7.2a, the FFI
-structured-culprit payload, the InteractiveAggregate completion record,
+structured-culprit payload, the InteractiveAggregate completion marker,
 and the cross-language vectors. Builds on merged 7.1 (#4051) + 7.2a
 (#4052, mirror).
 
@@ -117,10 +117,10 @@ when bound to what the member signed:
   in the Go layer (it carries the package AND the root — §2). The engine
   itself does NOT need to record what it signed for the blame flow:
   nothing in the corrected design consumes such a record (the quorum
-  re-checks Go-retained bytes; the completion record is attempt-keyed).
+  re-checks Go-retained bytes; the completion marker is attempt-keyed).
   7.2b-1 should add an engine-local Round2 record ONLY if a concrete
   consumer is identified; absent one, the engine-side state is just the
-  completion record (section 6).
+  completion marker (section 6).
 - At aggregation the **engine does pure FROST math**: it verifies each
   share against the member's verifying share (public, from the DKG key
   package it already holds) and returns the mathematically failing
@@ -205,30 +205,31 @@ are candidates: the Go host adjudicates final blame at the f+1 quorum
 contract strong (YAGNI); it must be reflected in the C header and the Go
 bridge decoder.
 
-## 6. InteractiveAggregate completion record
+## 6. InteractiveAggregate completion marker
 
-Deferred from 7.2a: a persisted per-attempt completion record
-(`aggregated_interactive_attempt_signatures: BTreeMap<String, String>`,
-attempt_id → aggregate signature hex, on `SessionState`, mirrored in
-`PersistedSessionState`, bounded like the consumed markers).
-Re-aggregating a completed attempt returns the stored signature
-(idempotent re-emission) rather than recomputing: the aggregate is
-deterministic over public data and the signature is public, so the
-engine stays the source of truth for a completed attempt's signature.
-This keeps a host that loses the FFI response (e.g. a crash after the
-record persists but before the host stores the signature) from having to
-burn a fresh signing attempt to reproduce a signature the engine already
-holds — the initial design rejected the retry, which a Codex review
-flagged as an avoidable liveness / restart-divergence regression.
-Re-emission is VALIDATED against the request: because attempt_id does not
-bind the taproot root and the coordinator may be adversarial, the
-recorded signature is returned only when it verifies under the request's
-tweaked group key and message; a reused attempt_id carrying different
-aggregate inputs is rejected, never handed a signature that would fail to
-verify for the caller's package/root (a second Codex finding). The persisted signature is public (it goes on-chain), so
-recording it respects the never-persist-secrets freeze. Not
-security-load-bearing (the blame binding is Go-side — section 4), so the
-only engine-side state 7.2b adds is this completion record.
+Deferred from 7.2a: a persisted per-attempt completion marker
+(`aggregated_interactive_attempt_markers: HashSet<String>` on
+`SessionState`, mirrored as `Vec<String>` in `PersistedSessionState`,
+bounded like the consumed markers). Re-aggregating a completed attempt is
+rejected with `InteractiveAttemptAlreadyAggregated` rather than
+recomputed — re-aggregation is not a recovery path. A host that loses an
+aggregate signature recovers it the way ROAST recovers any failed
+attempt: by starting a fresh attempt, not by replaying the engine. So the
+engine neither retains nor re-emits the signature; the marker only records
+"this attempt is complete" (frozen spec section 6). The marker is durable
+(markers-only durability) so a completed attempt stays rejected across a
+restart, and an empty attempt_id is rejected before the marker is written
+(the reload path rejects an empty key, so a malformed write must not be
+able to persist one). Not security-load-bearing — the blame binding is
+Go-side (section 4) — so this marker is the only engine-side state 7.2b
+adds.
+
+(A richer "re-emit the stored signature on replay" variant was explored
+and dropped after review: keyed by attempt_id it accumulated avoidable
+surface — concurrent-race signature divergence, request package/root
+binding, and a recovery path that still required the host to have retained
+the collected shares — for a benefit ROAST's native retry already
+provides.)
 
 ## 7. Go vs Rust split
 
@@ -249,7 +250,7 @@ only engine-side state 7.2b adds is this completion record.
   resolves the canonical **group verifying key** + verifying shares from
   durably-retained wallet DKG material — surviving the session TTL sweep —
   and applies the tweak; never the envelope or operator keys), the
-  completion record, and the engine-side vectors. The engine never
+  completion marker, and the engine-side vectors. The engine never
   verifies envelopes or operator signatures.
 
 ## 8. Cross-language vectors (frozen spec item 9)
@@ -263,7 +264,7 @@ event.
 
 ## 9. Suggested sub-PR sequence
 
-1. **7.2b-1 (mirror)**: the InteractiveAggregate completion record
+1. **7.2b-1 (mirror)**: the InteractiveAggregate completion marker
    (persistence plumbing only; no blame, no envelopes). Self-contained.
    (No engine-local Round2 package-hash record unless §4 identifies a
    consumer — the corrected design has none.)
@@ -277,7 +278,7 @@ event.
    nonces (`interactive_signing`), explicitly retaining the session's
    DKG material. So a post-sweep f+1 quorum re-check can still resolve
    the canonical group key by `session_id` — no new wallet-key
-   persistence is needed in 7.2b-1, only the completion record.
+   persistence is needed in 7.2b-1, only the completion marker.
 2. **7.2b-2 (scaffold)**: `SignedSigningPackage` protos + gen +
    coordinator signing/distribution + member authenticate (elected
    `coordinator_id` + signature under that key + attempt hash + the
@@ -358,5 +359,5 @@ is TTL-swept (multi-session + post-sweep test, Codex P2); a genuine bad
 share yields machine-readable
 *candidate* culprits over the FFI (engine test, `AllCheaters`) that the Go
 quorum confirms as attributable `InvalidSignatureShare`; re-aggregating a
-completed attempt returns the same signature (idempotent re-emission,
-test); and the cross-language vectors are pinned both sides.
+completed attempt is rejected (test) and an empty attempt_id is rejected
+(test); and the cross-language vectors are pinned both sides.
