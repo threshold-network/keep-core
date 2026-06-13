@@ -12444,14 +12444,13 @@ fn interactive_abort_sweeps_expired_sessions() {
     })
     .expect("abort for an unrelated session");
 
+    // Session A held only its (now-expired) interactive attempt, so the
+    // sweep must remove the whole entry, not just clear the live state -
+    // otherwise empty sessions accumulate against TBTC_SIGNER_MAX_SESSIONS.
     let guard = state().expect("state").lock().expect("lock");
-    let session = guard
-        .sessions
-        .get("interactive-abort-sweep-a")
-        .expect("session A still present");
     assert!(
-        session.interactive_signing.is_none(),
-        "an abort must sweep expired interactive state in other sessions"
+        !guard.sessions.contains_key("interactive-abort-sweep-a"),
+        "an abort must sweep AND drop an otherwise-empty expired session"
     );
 }
 
@@ -12686,4 +12685,93 @@ fn interactive_round2_rechecks_gates_at_share_release() {
         signing_package_hex,
     })
     .expect("the same attempt completes once the kill switch clears");
+}
+
+#[test]
+fn interactive_open_rejects_threshold_below_key_package_min_signers() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    // The fixture key packages are min_signers = 2. A request threshold
+    // of 3 must be rejected at Open: otherwise Round2 would accept a
+    // 3-commitment package, persist the marker, and only then have
+    // frost::round2::sign fail on the count - burning the nonce for a
+    // validation error.
+    let key_packages = interactive_test_key_packages();
+    let mismatch = open_interactive_for_test(
+        &key_packages,
+        "interactive-threshold-mismatch",
+        "interactive-test-key-group",
+        &[0x1au8; 32],
+        &[1u16, 2, 3],
+        1,
+        1,
+        3,
+    )
+    .expect_err("a threshold below the key package min_signers must be rejected");
+    assert!(
+        matches!(mismatch, EngineError::Validation(ref m)
+            if m.contains("does not match the key package min_signers")),
+        "unexpected error: {mismatch:?}"
+    );
+
+    // The matching threshold (2) opens.
+    open_interactive_for_test(
+        &key_packages,
+        "interactive-threshold-match",
+        "interactive-test-key-group",
+        &[0x1au8; 32],
+        &[1u16, 2],
+        1,
+        1,
+        2,
+    )
+    .expect("the key-package-matching threshold opens");
+}
+
+#[test]
+fn interactive_open_abort_churn_does_not_exhaust_session_registry() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    // A tiny global session cap: if open-then-abort left empty session
+    // entries behind, this churn would fill the registry and then reject
+    // a fresh open. The disposal on abort must keep the registry clear.
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
+
+    let key_packages = interactive_test_key_packages();
+    let key_group = "interactive-test-key-group";
+    let message = [0x1bu8; 32];
+    let included = [1u16, 2];
+
+    let outcome = (|| -> Result<(), EngineError> {
+        for cycle in 0..16 {
+            let session_id = format!("interactive-churn-{cycle}");
+            open_interactive_for_test(
+                &key_packages,
+                &session_id,
+                key_group,
+                &message,
+                &included,
+                1,
+                1,
+                2,
+            )?;
+            interactive_session_abort(InteractiveSessionAbortRequest {
+                session_id: session_id.clone(),
+                attempt_id: None,
+            })?;
+        }
+        // The registry is clear, so the global cap still has room.
+        let guard = state().expect("state").lock().expect("lock");
+        assert!(
+            guard.sessions.is_empty(),
+            "open-then-abort churn must not accumulate session entries: {} present",
+            guard.sessions.len()
+        );
+        Ok(())
+    })();
+
+    std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
+    outcome.expect("session churn stays bounded");
 }

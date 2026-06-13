@@ -96,6 +96,19 @@ pub fn interactive_session_open(
             "key_package_identifier must match member_identifier".to_string(),
         ));
     }
+    // The signing threshold is fixed by the key material. Reject a
+    // mismatch at Open: otherwise Round2 would accept a signing package
+    // of the requested (wrong) size, persist the consumed marker, and
+    // only then have frost::round2::sign fail on the commitment count -
+    // burning the nonce handle for a validation error, against the
+    // verify-before-consume contract.
+    if *key_package.min_signers() != request.threshold {
+        return Err(EngineError::Validation(format!(
+            "threshold [{}] does not match the key package min_signers [{}]",
+            request.threshold,
+            *key_package.min_signers()
+        )));
+    }
 
     let request_fingerprint = interactive_open_request_fingerprint(&request)?;
     let attempt_id = request.attempt_context.attempt_id.clone();
@@ -524,6 +537,18 @@ pub fn interactive_session_abort(
         None => false,
     };
 
+    // Drop the session if aborting left it with nothing durable, so an
+    // open-then-abort churn cannot accumulate empty entries against
+    // TBTC_SIGNER_MAX_SESSIONS.
+    if aborted
+        && guard
+            .sessions
+            .get(&request.session_id)
+            .is_some_and(SessionState::is_disposable)
+    {
+        guard.sessions.remove(&request.session_id);
+    }
+
     record_hardening_telemetry(|telemetry| {
         telemetry.interactive_session_abort_success_total = telemetry
             .interactive_session_abort_success_total
@@ -704,19 +729,28 @@ pub(crate) fn zeroize_interactive_round1(interactive: &mut InteractiveSigningSta
 pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) {
     let ttl_seconds = interactive_session_ttl_seconds();
     let now = now_unix();
-    for session in engine_state.sessions.values_mut() {
+    engine_state.sessions.retain(|_session_id, session| {
         let expired = session
             .interactive_signing
             .as_ref()
             .is_some_and(|interactive| {
                 now.saturating_sub(interactive.opened_at_unix) > ttl_seconds
             });
-        if expired {
-            if let Some(mut removed) = session.interactive_signing.take() {
-                zeroize_interactive_round1(&mut removed);
-            }
+        if !expired {
+            // Untouched sessions are kept as-is; only sessions whose
+            // live attempt we just expired are candidates for removal.
+            return true;
         }
-    }
+        if let Some(mut removed) = session.interactive_signing.take() {
+            zeroize_interactive_round1(&mut removed);
+        }
+        // Having cleared the expired attempt, drop the session if it now
+        // holds nothing durable, so churned interactive opens cannot
+        // accumulate empty entries against TBTC_SIGNER_MAX_SESSIONS. A
+        // session that still carries consumed markers or DKG material is
+        // kept.
+        !session.is_disposable()
+    });
 }
 
 pub(crate) fn max_live_interactive_sessions_limit() -> usize {
