@@ -197,6 +197,17 @@ func (p *SigningPackage) Validate() error {
 	if p.CoordinatorIDValue == 0 {
 		return errors.New("signed signing package: coordinatorID is zero")
 	}
+	// coordinator_id is a wire uint32 but a member index is a uint8
+	// (group.MemberIndex); reject an out-of-range value here so CoordinatorID()
+	// never silently truncates and the member-side elected-coordinator check
+	// compares a faithful value.
+	if p.CoordinatorIDValue > group.MaxMemberIndex {
+		return fmt.Errorf(
+			"signed signing package: coordinatorID [%d] exceeds max member index [%d]",
+			p.CoordinatorIDValue,
+			group.MaxMemberIndex,
+		)
+	}
 	if len(p.SigningPackageBytes) == 0 {
 		return errors.New("signed signing package: empty signing package")
 	}

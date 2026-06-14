@@ -149,6 +149,9 @@ func TestSigningPackage_ValidateRejectsMalformed(t *testing.T) {
 	}{
 		{"short attempt hash", func(p *SigningPackage) { p.AttemptContextHash = []byte{1, 2, 3} }},
 		{"zero coordinator", func(p *SigningPackage) { p.CoordinatorIDValue = 0 }},
+		{"coordinator out of member-index range", func(p *SigningPackage) {
+			p.CoordinatorIDValue = group.MaxMemberIndex + 1
+		}},
 		{"empty signing package", func(p *SigningPackage) { p.SigningPackageBytes = nil }},
 		{"bad root length", func(p *SigningPackage) { p.TaprootMerkleRoot = []byte{0x01} }},
 		{"oversize signing package", func(p *SigningPackage) {
