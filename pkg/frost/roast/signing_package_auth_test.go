@@ -131,3 +131,21 @@ func TestSigningPackage_MatchesRoot(t *testing.T) {
 		t.Fatal("a script-path package must not match a divergent root")
 	}
 }
+
+func TestAuthenticateSigningPackage_RejectsStructurallyInvalid(t *testing.T) {
+	// Authentication is a boundary for untrusted input: a manually-assembled
+	// package that did not pass Unmarshal/Validate - here a coordinator_id that
+	// truncates to the elected member (uint32 -> uint8) - must be rejected
+	// before verification.
+	pkg := &SigningPackage{
+		AttemptContextHash:  append([]byte(nil), pinnedContextHash[:]...),
+		CoordinatorIDValue:  259, // truncates to member 3
+		SigningPackageBytes: []byte("pkg"),
+	}
+	if err := SignSigningPackage(&fakeSigner{id: 3}, pkg); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	if err := AuthenticateSigningPackage(fakeVerifier{}, pkg, 3, pinnedContextHash[:]); err == nil {
+		t.Fatal("an out-of-range coordinator_id must be rejected before verification")
+	}
+}
