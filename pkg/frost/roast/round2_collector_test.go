@@ -199,3 +199,18 @@ func TestRound2Collector_RecordSigningPackage_RetainsOwnedCopy(t *testing.T) {
 		t.Fatal("retained existing envelope must be the collector's own copy, unaffected by caller mutation")
 	}
 }
+
+func TestRound2_NilInputsAreRejectedNotPanicked(t *testing.T) {
+	c := NewRound2Collector(fakeVerifier{})
+	if err := c.RecordSigningPackage(nil); err == nil {
+		t.Fatal("RecordSigningPackage(nil) must return an error, not panic")
+	}
+	// The auth entry points validate first, so a nil package/share is rejected
+	// via the Validate nil-receiver guard rather than panicking.
+	if err := AuthenticateSigningPackage(fakeVerifier{}, nil, 3, pinnedContextHash[:]); err == nil {
+		t.Fatal("AuthenticateSigningPackage(nil) must return an error")
+	}
+	if err := AuthenticateShareSubmission(fakeVerifier{}, nil, 3, pinnedContextHash[:], testSigningPackageHash()); err == nil {
+		t.Fatal("AuthenticateShareSubmission(nil) must return an error")
+	}
+}

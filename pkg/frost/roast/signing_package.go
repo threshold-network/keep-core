@@ -303,6 +303,9 @@ func (p *SigningPackage) CoordinatorID() group.MemberIndex {
 // authentication step (a later Phase 7.2b increment), which checks the
 // signature against the attempt's elected coordinator's operator key.
 func (p *SigningPackage) Validate() error {
+	if p == nil {
+		return errors.New("signed signing package: nil")
+	}
 	if len(p.AttemptContextHash) != attempt.MessageDigestLength {
 		return fmt.Errorf(
 			"signed signing package: attemptContextHash length [%d], expected [%d]",

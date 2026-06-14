@@ -250,6 +250,9 @@ func (p *ShareSubmission) Unmarshal(data []byte) error {
 // so callers that construct submissions in memory can validate without a
 // marshal/unmarshal round-trip.
 func (p *ShareSubmission) Validate() error {
+	if p == nil {
+		return errors.New("share submission: nil")
+	}
 	if len(p.AttemptContextHash) != attempt.MessageDigestLength {
 		return fmt.Errorf(
 			"share submission: attemptContextHash length [%d], expected [%d]",

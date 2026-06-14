@@ -148,6 +148,9 @@ func (c *Round2Collector) BeginAttempt(
 // that fails authentication is rejected without retention. Returns
 // ErrRound2UnknownAttempt if BeginAttempt was not called.
 func (c *Round2Collector) RecordSigningPackage(pkg *SigningPackage) error {
+	if pkg == nil {
+		return errors.New("round2: nil signing package")
+	}
 	key := round2AttemptKey(pkg.AttemptContextHash)
 
 	c.mu.Lock()
