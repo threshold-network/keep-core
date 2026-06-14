@@ -669,20 +669,30 @@ optimization given the current key model.
 (`pkg/frost/roast/gen/pb/evidence.proto`), routed via the
 `net.Message` interface.*
 
-Evidence signatures cover exact serialized body bytes, and those
-bytes travel verbatim: a snapshot is
+Evidence signatures cover a domain-separated byte stream -- a
+fixed per-message-type tag followed by the exact serialized body --
+while the body itself travels verbatim. A snapshot is
 `SignedLocalEvidenceSnapshot{body, operator_signature}` where
-`body` is the serialized `LocalEvidenceSnapshotBody`, and a
-transition message is `SignedTransitionMessage{body,
-coordinator_signature}` whose body embeds every member's signed
-snapshot envelope verbatim (`repeated bytes signed_snapshots`).
-A verifier checks each signature over the bytes it received and
-only then parses them; nothing in the evidence chain is ever
-re-encoded. Signature validity therefore never depends on any
-serializer's canonical form -- across protobuf library versions
-or across languages (the Phase 7 Rust signer verifies and parses
-these same bytes). Producers marshal a body exactly once, at
-signing time, and transmit those bytes.
+`body` is the serialized `LocalEvidenceSnapshotBody` and the
+operator signature covers `domain_tag || body`; a transition
+message is `SignedTransitionMessage{body, coordinator_signature}`
+whose body embeds every member's signed snapshot envelope verbatim
+(`repeated bytes signed_snapshots`) and whose coordinator signature
+covers `domain_tag || body`. Each `domain_tag` begins with byte
+0x00 -- an illegal protobuf tag (field 0) -- so the signed payload
+is undecodable as any protobuf message, and each message type uses
+a distinct tag, so a signature over one body can never be accepted
+for another (snapshot: `0x00 "roast/signed-evidence-snapshot/v1"
+0x00`; transition: `0x00 "roast/signed-transition-message/v1"
+0x00`; the Phase 7 signing package uses its own tag). The tag is
+not carried on the wire -- only the body is. A verifier re-derives
+the tag, checks the signature over the tag plus the body bytes it
+received, and only then parses the body; nothing in the evidence
+chain is ever re-encoded. Signature validity therefore never
+depends on any serializer's canonical form -- across protobuf
+library versions or across languages (the Phase 7 Rust signer
+verifies and parses these same bytes). Producers marshal a body
+exactly once, at signing time, and transmit those bytes.
 
 The original Phase 3 implementation used canonical JSON
 (`json.Marshal` over field-order-stable structs) as the signed

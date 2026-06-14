@@ -19,6 +19,33 @@ import (
 // on any serializer's canonical form, across protobuf library versions or
 // across languages. Producers marshal a body exactly once (at signing
 // time) and cache it; parsed messages cache the received bytes.
+//
+// Domain separation. Several signed bodies share the node's operator key and
+// are structurally similar - each carries an attempt-context hash and a member
+// index. The TransitionMessageBody and the signing-package body are outright
+// wire-compatible (both have attempt_context_hash as a length-delimited field
+// 1). The LocalEvidenceSnapshotBody is only INCIDENTALLY distinguished - its
+// field 1 is sender_id (a varint), not a length-delimited field - a difference
+// a later proto change could erase. So a signature over one body must not be
+// acceptable as a signature over another. Each signed-body type therefore
+// prepends a UNIQUE domain tag to the bytes it signs and verifies
+// (SignableBytes), making the separation intentional rather than incidental,
+// while the body that travels on the wire stays the bare serialized body
+// (bodyBytes).
+//
+// Each tag BEGINS with byte 0x00 - an illegal protobuf tag (field number 0) -
+// so the signed payload is undecodable as any protobuf message. That separates
+// the domains in both directions without relying on field layout: a signature
+// over one body cannot be replayed onto another envelope (whose decoder
+// proto.Unmarshals and rejects the 0x00-leading body), and a genuine
+// serialized protobuf body always begins with a valid tag (>= 0x08), so its
+// signature can never verify against domain || body. The tags are NOT carried
+// on the wire; signer and verifier prepend the same constant. (The signed
+// signing-package envelope follows the same scheme with its own tag.)
+var (
+	localEvidenceSnapshotSignatureDomain = []byte("\x00roast/signed-evidence-snapshot/v1\x00")
+	transitionMessageSignatureDomain     = []byte("\x00roast/signed-transition-message/v1\x00")
+)
 
 func snapshotBodyMessage(s *LocalEvidenceSnapshot) *pb.LocalEvidenceSnapshotBody {
 	body := &pb.LocalEvidenceSnapshotBody{
@@ -74,26 +101,52 @@ func snapshotFieldsFromBody(s *LocalEvidenceSnapshot, body *pb.LocalEvidenceSnap
 	}
 }
 
-// SignableBytes returns the exact byte stream the OperatorSignature covers:
-// the serialized LocalEvidenceSnapshotBody. For a self-authored snapshot
-// the body is marshaled once and cached - sign exactly what will be
-// transmitted. For a snapshot parsed off the wire this returns the
-// received body bytes verbatim - verify exactly what was received. The
-// snapshot's evidence fields must not be mutated afterwards, and the
-// returned slice is the internal cache - callers must not mutate it.
-func (s *LocalEvidenceSnapshot) SignableBytes() ([]byte, error) {
+// bodyBytes returns the exact serialized LocalEvidenceSnapshotBody - the body
+// carried verbatim in the SignedLocalEvidenceSnapshot envelope. Marshaled once
+// and cached for a self-authored snapshot; the received bytes verbatim for a
+// parsed one. The returned slice is the internal cache - callers must not
+// mutate it.
+func (s *LocalEvidenceSnapshot) bodyBytes() ([]byte, error) {
 	if s == nil {
 		return nil, errors.New("roast: cannot encode a nil snapshot")
 	}
-	if s.signedBody != nil {
-		return s.signedBody, nil
+	if s.bodyCache != nil {
+		return s.bodyCache, nil
 	}
 	body, err := proto.Marshal(snapshotBodyMessage(s))
 	if err != nil {
 		return nil, fmt.Errorf("roast: marshal snapshot body: %w", err)
 	}
-	s.signedBody = body
+	s.bodyCache = body
 	return body, nil
+}
+
+// SignableBytes returns the exact byte stream the OperatorSignature covers:
+// the snapshot domain tag (localEvidenceSnapshotSignatureDomain) followed by
+// the serialized LocalEvidenceSnapshotBody. The domain tag is a fixed constant
+// prepended by both signer and verifier and is NOT carried on the wire - it
+// domain-separates this signature from the node's other signed bodies (see the
+// package comment). The body half is the bytes that travel: marshaled once for
+// a self-authored snapshot, or the received body verbatim for a parsed one
+// (verify exactly what was received). Evidence fields must not be mutated
+// afterwards, and the returned slice is the internal cache - callers must not
+// mutate it.
+func (s *LocalEvidenceSnapshot) SignableBytes() ([]byte, error) {
+	if s == nil {
+		return nil, errors.New("roast: cannot encode a nil snapshot")
+	}
+	if s.signaturePayloadCache != nil {
+		return s.signaturePayloadCache, nil
+	}
+	body, err := s.bodyBytes()
+	if err != nil {
+		return nil, err
+	}
+	payload := make([]byte, 0, len(localEvidenceSnapshotSignatureDomain)+len(body))
+	payload = append(payload, localEvidenceSnapshotSignatureDomain...)
+	payload = append(payload, body...)
+	s.signaturePayloadCache = payload
+	return payload, nil
 }
 
 // wireEnvelopeBytes returns the exact on-wire SignedLocalEvidenceSnapshot
@@ -110,7 +163,7 @@ func (s *LocalEvidenceSnapshot) wireEnvelopeBytes() ([]byte, error) {
 			"roast: snapshot must be signed before wire encoding",
 		)
 	}
-	body, err := s.SignableBytes()
+	body, err := s.bodyBytes()
 	if err != nil {
 		return nil, err
 	}
@@ -125,19 +178,17 @@ func (s *LocalEvidenceSnapshot) wireEnvelopeBytes() ([]byte, error) {
 	return envelope, nil
 }
 
-// SignableBytes returns the exact byte stream the CoordinatorSignature
-// covers: the serialized TransitionMessageBody, which embeds every
-// snapshot's signed envelope verbatim. The coordinator's signature
-// attests that these specific signed snapshots were assembled in this
-// specific order. For a message parsed off the wire this returns the
-// received body bytes verbatim. The returned slice is the internal
-// cache - callers must not mutate it.
-func (m *TransitionMessage) SignableBytes() ([]byte, error) {
+// bodyBytes returns the exact serialized TransitionMessageBody, which embeds
+// every snapshot's signed envelope verbatim - the body carried in the
+// SignedTransitionMessage envelope. Built and cached once for a self-authored
+// message; the received bytes verbatim for a parsed one. The returned slice is
+// the internal cache - callers must not mutate it.
+func (m *TransitionMessage) bodyBytes() ([]byte, error) {
 	if m == nil {
 		return nil, errors.New("roast: cannot encode a nil transition message")
 	}
-	if m.signedBody != nil {
-		return m.signedBody, nil
+	if m.bodyCache != nil {
+		return m.bodyCache, nil
 	}
 	body := &pb.TransitionMessageBody{
 		AttemptContextHash: m.AttemptContextHash,
@@ -154,6 +205,33 @@ func (m *TransitionMessage) SignableBytes() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("roast: marshal transition body: %w", err)
 	}
-	m.signedBody = bodyBytes
+	m.bodyCache = bodyBytes
 	return bodyBytes, nil
+}
+
+// SignableBytes returns the exact byte stream the CoordinatorSignature covers:
+// the transition domain tag (transitionMessageSignatureDomain) followed by the
+// serialized TransitionMessageBody. The domain tag is a fixed constant
+// prepended by both signer and verifier and is NOT carried on the wire - it
+// domain-separates the coordinator's bundle signature from its other signed
+// bodies (see the package comment). The coordinator's signature attests that
+// these specific signed snapshots were assembled in this specific order; for a
+// message parsed off the wire the body half is the received bytes verbatim.
+// The returned slice is the internal cache - callers must not mutate it.
+func (m *TransitionMessage) SignableBytes() ([]byte, error) {
+	if m == nil {
+		return nil, errors.New("roast: cannot encode a nil transition message")
+	}
+	if m.signaturePayloadCache != nil {
+		return m.signaturePayloadCache, nil
+	}
+	body, err := m.bodyBytes()
+	if err != nil {
+		return nil, err
+	}
+	payload := make([]byte, 0, len(transitionMessageSignatureDomain)+len(body))
+	payload = append(payload, transitionMessageSignatureDomain...)
+	payload = append(payload, body...)
+	m.signaturePayloadCache = payload
+	return payload, nil
 }

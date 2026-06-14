@@ -101,15 +101,20 @@ type LocalEvidenceSnapshot struct {
 	// observed.
 	Conflicts []ConflictEntry
 	// OperatorSignature is the signer's operator-key signature over
-	// SignableBytes(): the serialized protobuf body of (senderID,
-	// attemptContextHash, overflows, rejects, conflicts).
+	// SignableBytes(): the snapshot domain tag followed by the serialized
+	// protobuf body of (senderID, attemptContextHash, overflows, rejects,
+	// conflicts).
 	OperatorSignature []byte
 
-	// signedBody caches the exact serialized body bytes the
-	// OperatorSignature covers: marshaled once at signing time for
-	// self-authored snapshots, or the received bytes verbatim for
-	// parsed ones. Evidence fields must not be mutated once set.
-	signedBody []byte
+	// bodyCache caches the exact serialized body bytes carried on the wire:
+	// marshaled once at signing time for self-authored snapshots, or the
+	// received bytes verbatim for parsed ones. Evidence fields must not be
+	// mutated once set.
+	bodyCache []byte
+	// signaturePayloadCache caches the domain-tagged bytes the
+	// OperatorSignature covers (localEvidenceSnapshotSignatureDomain ||
+	// bodyCache); rebuilt from bodyCache and never carried on the wire.
+	signaturePayloadCache []byte
 	// wireEnvelope caches the exact on-wire envelope (body +
 	// signature): the received bytes verbatim for parsed snapshots,
 	// or built once after signing for self-authored ones.
@@ -246,8 +251,17 @@ func (s *LocalEvidenceSnapshot) Unmarshal(data []byte) error {
 	}
 	snapshotFieldsFromBody(s, &body)
 	s.OperatorSignature = append([]byte(nil), envelope.OperatorSignature...)
-	s.signedBody = append([]byte(nil), envelope.Body...)
+	s.bodyCache = append([]byte(nil), envelope.Body...)
 	s.wireEnvelope = append([]byte(nil), data...)
+	// Prime the signable-bytes cache from the body just received, discarding any
+	// cache a prior SignableBytes call left on a reused value. Priming here -
+	// rather than lazily in SignableBytes - keeps concurrent signature
+	// verification of a parsed snapshot race-free: verifiers read a ready cache
+	// instead of racing on lazy initialization.
+	s.signaturePayloadCache = nil
+	if _, err := s.SignableBytes(); err != nil {
+		return err
+	}
 	return s.Validate()
 }
 
@@ -326,15 +340,16 @@ type TransitionMessage struct {
 	// Bundle is the canonical sorted-by-SenderID list of signed
 	// evidence snapshots aggregated by the coordinator.
 	Bundle []LocalEvidenceSnapshot
-	// CoordinatorSignature is the coordinator's operator-key
-	// signature over SignableBytes(): the serialized protobuf body
-	// embedding every snapshot's signed envelope verbatim.
+	// CoordinatorSignature is the coordinator's operator-key signature over
+	// SignableBytes(): the transition domain tag followed by the serialized
+	// protobuf body embedding every snapshot's signed envelope verbatim.
 	CoordinatorSignature []byte
 
-	// signedBody and wireEnvelope cache exact bytes with the same
-	// semantics as the LocalEvidenceSnapshot caches.
-	signedBody   []byte
-	wireEnvelope []byte
+	// bodyCache, signaturePayloadCache, and wireEnvelope cache exact bytes
+	// with the same semantics as the LocalEvidenceSnapshot caches.
+	bodyCache             []byte
+	signaturePayloadCache []byte
+	wireEnvelope          []byte
 }
 
 // CoordinatorID returns the coordinator member index as a
@@ -373,7 +388,7 @@ func (m *TransitionMessage) Marshal() ([]byte, error) {
 			"transition message: must be signed before wire encoding",
 		)
 	}
-	body, err := m.SignableBytes()
+	body, err := m.bodyBytes()
 	if err != nil {
 		return nil, err
 	}
@@ -426,8 +441,15 @@ func (m *TransitionMessage) Unmarshal(data []byte) error {
 		m.Bundle = append(m.Bundle, snapshot)
 	}
 	m.CoordinatorSignature = append([]byte(nil), envelope.CoordinatorSignature...)
-	m.signedBody = append([]byte(nil), envelope.Body...)
+	m.bodyCache = append([]byte(nil), envelope.Body...)
 	m.wireEnvelope = append([]byte(nil), data...)
+	// Prime the signable-bytes cache so concurrent verification of a parsed
+	// bundle is race-free, and discard any stale cache on a reused value (see
+	// LocalEvidenceSnapshot.Unmarshal).
+	m.signaturePayloadCache = nil
+	if _, err := m.SignableBytes(); err != nil {
+		return err
+	}
 	return m.Validate()
 }
 

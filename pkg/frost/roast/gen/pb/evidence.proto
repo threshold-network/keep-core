@@ -5,15 +5,28 @@ package roast;
 
 // Evidence wire format (RFC-21 Layer B).
 //
-// Signatures cover exact serialized body bytes, and those bytes travel
-// verbatim: a verifier checks the signature over the bytes it received and
-// only then parses them. Nothing in the evidence chain is ever re-encoded,
-// so signature validity never depends on any serializer's canonical form -
-// across protobuf library versions or across languages (the Phase 7 Rust
-// signer verifies and parses these same bytes).
+// The body bytes travel verbatim: a verifier checks the signature over the
+// bytes it received and only then parses them. Nothing in the evidence chain
+// is ever re-encoded, so signature validity never depends on any serializer's
+// canonical form - across protobuf library versions or across languages (the
+// Phase 7 Rust signer verifies and parses these same bytes).
+//
+// SIGNED PAYLOAD (cross-language contract). Operator and coordinator
+// signatures do NOT cover the bare body; they cover a domain-separated byte
+// stream, domain_tag || serialized body, where domain_tag is, in order: a
+// single 0x00 byte, a fixed ASCII string, and a trailing 0x00 byte. The
+// leading 0x00 is an illegal protobuf tag (field number 0), so the signed
+// payload is undecodable as any protobuf message and a signature over one body
+// type can never be accepted for another. The tag is NOT carried on the wire -
+// only the body is, in the .body field. The ASCII strings are
+// "roast/signed-evidence-snapshot/v1" (operator_signature) and
+// "roast/signed-transition-message/v1" (coordinator_signature). Any
+// implementation that signs or verifies the bare body (without the exact tag)
+// will fail to interoperate.
 
-// The byte stream a signer's operator key signs. Carried as exact bytes in
-// SignedLocalEvidenceSnapshot.body.
+// The evidence-snapshot body. Carried verbatim as
+// SignedLocalEvidenceSnapshot.body; the operator signature covers the
+// domain-tagged form of these bytes (domain_tag || body), not the bare bytes.
 message LocalEvidenceSnapshotBody {
   uint32 sender_id = 1;
   // 32-byte attempt context hash binding the evidence to one attempt.
@@ -43,26 +56,30 @@ message ConflictEntry {
   uint64 count = 2;
 }
 
-// The on-wire snapshot message: exact signed body bytes plus the operator
-// signature over them.
+// The on-wire snapshot message: the exact serialized LocalEvidenceSnapshotBody
+// bytes plus the operator signature, which covers the domain-tagged body
+// (domain_tag || body), not the bare body field.
 message SignedLocalEvidenceSnapshot {
   bytes body = 1;
   bytes operator_signature = 2;
 }
 
-// The byte stream the elected coordinator signs. signed_snapshots carries
-// each member's SignedLocalEvidenceSnapshot envelope verbatim as received,
-// so the coordinator attests to the exact signed snapshots it assembled,
-// in order, and downstream verifiers re-check the operator signatures over
-// those same exact bytes.
+// The transition-message body. signed_snapshots carries each member's
+// SignedLocalEvidenceSnapshot envelope verbatim as received, so the
+// coordinator attests to the exact signed snapshots it assembled, in order,
+// and downstream verifiers re-check the operator signatures over those same
+// exact bytes. Carried verbatim as SignedTransitionMessage.body; the
+// coordinator signature covers the domain-tagged form of these bytes
+// (domain_tag || body), not the bare bytes.
 message TransitionMessageBody {
   bytes attempt_context_hash = 1;
   uint32 coordinator_id = 2;
   repeated bytes signed_snapshots = 3;
 }
 
-// The on-wire transition message: exact signed body bytes plus the
-// coordinator signature over them.
+// The on-wire transition message: the exact serialized TransitionMessageBody
+// bytes plus the coordinator signature, which covers the domain-tagged body
+// (domain_tag || body), not the bare body field.
 message SignedTransitionMessage {
   bytes body = 1;
   bytes coordinator_signature = 2;

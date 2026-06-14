@@ -20,8 +20,9 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// The byte stream a signer's operator key signs. Carried as exact bytes in
-// SignedLocalEvidenceSnapshot.body.
+// The evidence-snapshot body. Carried verbatim as
+// SignedLocalEvidenceSnapshot.body; the operator signature covers the
+// domain-tagged form of these bytes (domain_tag || body), not the bare bytes.
 type LocalEvidenceSnapshotBody struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	SenderId uint32                 `protobuf:"varint,1,opt,name=sender_id,json=senderId,proto3" json:"sender_id,omitempty"`
@@ -267,8 +268,9 @@ func (x *ConflictEntry) GetCount() uint64 {
 	return 0
 }
 
-// The on-wire snapshot message: exact signed body bytes plus the operator
-// signature over them.
+// The on-wire snapshot message: the exact serialized LocalEvidenceSnapshotBody
+// bytes plus the operator signature, which covers the domain-tagged body
+// (domain_tag || body), not the bare body field.
 type SignedLocalEvidenceSnapshot struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	Body              []byte                 `protobuf:"bytes,1,opt,name=body,proto3" json:"body,omitempty"`
@@ -321,11 +323,13 @@ func (x *SignedLocalEvidenceSnapshot) GetOperatorSignature() []byte {
 	return nil
 }
 
-// The byte stream the elected coordinator signs. signed_snapshots carries
-// each member's SignedLocalEvidenceSnapshot envelope verbatim as received,
-// so the coordinator attests to the exact signed snapshots it assembled,
-// in order, and downstream verifiers re-check the operator signatures over
-// those same exact bytes.
+// The transition-message body. signed_snapshots carries each member's
+// SignedLocalEvidenceSnapshot envelope verbatim as received, so the
+// coordinator attests to the exact signed snapshots it assembled, in order,
+// and downstream verifiers re-check the operator signatures over those same
+// exact bytes. Carried verbatim as SignedTransitionMessage.body; the
+// coordinator signature covers the domain-tagged form of these bytes
+// (domain_tag || body), not the bare bytes.
 type TransitionMessageBody struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	AttemptContextHash []byte                 `protobuf:"bytes,1,opt,name=attempt_context_hash,json=attemptContextHash,proto3" json:"attempt_context_hash,omitempty"`
@@ -386,8 +390,9 @@ func (x *TransitionMessageBody) GetSignedSnapshots() [][]byte {
 	return nil
 }
 
-// The on-wire transition message: exact signed body bytes plus the
-// coordinator signature over them.
+// The on-wire transition message: the exact serialized TransitionMessageBody
+// bytes plus the coordinator signature, which covers the domain-tagged body
+// (domain_tag || body), not the bare body field.
 type SignedTransitionMessage struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	Body                 []byte                 `protobuf:"bytes,1,opt,name=body,proto3" json:"body,omitempty"`
