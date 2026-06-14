@@ -21,13 +21,17 @@ import (
 // time) and cache it; parsed messages cache the received bytes.
 //
 // Domain separation. Several signed bodies share the node's operator key and
-// have wire-compatible layouts (a LocalEvidenceSnapshotBody, a
-// TransitionMessageBody, and the signing-package body all begin with a field-1
-// tag and an attempt-context binding), so a signature over one body must not
-// be acceptable as a signature over another. Each signed-body type therefore
+// are structurally similar - each carries an attempt-context hash and a member
+// index. The TransitionMessageBody and the signing-package body are outright
+// wire-compatible (both have attempt_context_hash as a length-delimited field
+// 1). The LocalEvidenceSnapshotBody is only INCIDENTALLY distinguished - its
+// field 1 is sender_id (a varint), not a length-delimited field - a difference
+// a later proto change could erase. So a signature over one body must not be
+// acceptable as a signature over another. Each signed-body type therefore
 // prepends a UNIQUE domain tag to the bytes it signs and verifies
-// (SignableBytes), while the body that travels on the wire stays the bare
-// serialized body (bodyBytes).
+// (SignableBytes), making the separation intentional rather than incidental,
+// while the body that travels on the wire stays the bare serialized body
+// (bodyBytes).
 //
 // Each tag BEGINS with byte 0x00 - an illegal protobuf tag (field number 0) -
 // so the signed payload is undecodable as any protobuf message. That separates
