@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+option go_package = "./pb";
+package roast;
+
+// Member-authenticated Round2 share submission wire format (RFC-21 Phase 7.2b).
+//
+// After a member authenticates the elected coordinator's SignedSigningPackage
+// and accepts its taproot root, it returns its FROST round-2 signature share
+// bound to that exact package: the body commits to the attempt, the hash of the
+// SignedSigningPackage envelope it signed over, and the share itself, and the
+// member signs the whole with its operator key. This binding is what makes
+// blame adjudicable (RFC-21 Phase 7.2b-4): a member's share is provably tied to
+// the specific package bytes it received, so a coordinator that equivocated
+// (distributing different packages to different members) is detectable, and a
+// member's submission is non-repudiable.
+//
+// Same signed-body discipline as the other ROAST envelopes: the body travels
+// verbatim and the signature is verified over exactly the received bytes, so
+// validity never depends on a serializer's canonical form across protobuf
+// versions or languages.
+//
+// SIGNED PAYLOAD (cross-language contract). The submitter signature in
+// SignedShareSubmission.submitter_signature covers a domain-separated byte
+// stream, NOT the bare body:
+//
+//   domain_tag || serialized ShareSubmissionBody
+//
+// where domain_tag is, in order: a single 0x00 byte, the fixed ASCII bytes
+// "roast/signed-share-submission/v1", and a trailing 0x00 byte. The leading
+// 0x00 is an illegal protobuf tag (field number 0), so the signed payload is
+// undecodable as any protobuf message and a share-submission signature can
+// never be accepted for another coordinator/operator-signed body (or vice
+// versa). The tag is a constant prepended by signer and verifier alike and is
+// NOT carried on the wire - only the body is, in SignedShareSubmission.body.
+message ShareSubmissionBody {
+  // 32-byte attempt context hash binding the submission to one attempt.
+  bytes attempt_context_hash = 1;
+  // The submitting member's index (RFC-21 Annex A). A verifier checks the
+  // submitter signature under this member's operator key.
+  uint32 submitter_id = 2;
+  // 32-byte hash of the SignedSigningPackage envelope this share responds to -
+  // the exact bytes the member authenticated and retained. Binds the share to
+  // one package, so coordinator equivocation across members is detectable.
+  bytes signing_package_hash = 3;
+  // The serialized FROST round-2 signature share.
+  bytes signature_share = 4;
+}
+
+// The on-wire share submission: the exact serialized ShareSubmissionBody bytes
+// plus the submitting member's operator signature, which covers the
+// domain-tagged body (domain_tag || body), not the bare body field.
+message SignedShareSubmission {
+  bytes body = 1;
+  bytes submitter_signature = 2;
+}
