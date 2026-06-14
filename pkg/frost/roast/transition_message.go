@@ -253,9 +253,15 @@ func (s *LocalEvidenceSnapshot) Unmarshal(data []byte) error {
 	s.OperatorSignature = append([]byte(nil), envelope.OperatorSignature...)
 	s.bodyCache = append([]byte(nil), envelope.Body...)
 	s.wireEnvelope = append([]byte(nil), data...)
-	// Clear any signable-bytes cache a prior SignableBytes call left on a
-	// reused receiver, so the next call rebuilds it from the received body.
+	// Prime the signable-bytes cache from the body just received, discarding any
+	// cache a prior SignableBytes call left on a reused value. Priming here -
+	// rather than lazily in SignableBytes - keeps concurrent signature
+	// verification of a parsed snapshot race-free: verifiers read a ready cache
+	// instead of racing on lazy initialization.
 	s.signaturePayloadCache = nil
+	if _, err := s.SignableBytes(); err != nil {
+		return err
+	}
 	return s.Validate()
 }
 
@@ -437,9 +443,13 @@ func (m *TransitionMessage) Unmarshal(data []byte) error {
 	m.CoordinatorSignature = append([]byte(nil), envelope.CoordinatorSignature...)
 	m.bodyCache = append([]byte(nil), envelope.Body...)
 	m.wireEnvelope = append([]byte(nil), data...)
-	// Clear any signable-bytes cache left on a reused receiver (see
+	// Prime the signable-bytes cache so concurrent verification of a parsed
+	// bundle is race-free, and discard any stale cache on a reused value (see
 	// LocalEvidenceSnapshot.Unmarshal).
 	m.signaturePayloadCache = nil
+	if _, err := m.SignableBytes(); err != nil {
+		return err
+	}
 	return m.Validate()
 }
 

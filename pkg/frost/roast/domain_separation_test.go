@@ -2,11 +2,15 @@ package roast
 
 import (
 	"bytes"
+	"errors"
+	"sync"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
 	"github.com/keep-network/keep-core/pkg/frost/roast/gen/pb"
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
 // These pin the cross-protocol signature-confusion defense for the operator-key
@@ -157,4 +161,82 @@ func TestTransitionUnmarshal_ResetsSignableCache(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatal("Unmarshal must reset the transition signable-bytes cache")
 	}
+}
+
+func TestCrossProtocol_TransitionSignatureRejectedAsSnapshot(t *testing.T) {
+	// End-to-end: a coordinator signature over a transition message must not
+	// verify as an operator signature over a snapshot, even when the snapshot
+	// shares the signer id and attempt context. The distinct domain tags (and
+	// bodies) make the signed preimages disjoint.
+	const id group.MemberIndex = 7
+
+	transition := buildValidTransitionMessage()
+	transition.CoordinatorIDValue = uint32(id)
+	transition.CoordinatorSignature = nil
+	tPayload, err := transition.SignableBytes()
+	if err != nil {
+		t.Fatalf("transition signable: %v", err)
+	}
+	tSig, err := (&fakeSigner{id: id}).Sign(tPayload)
+	if err != nil {
+		t.Fatalf("sign transition: %v", err)
+	}
+	transition.CoordinatorSignature = tSig
+	// Control: the signature really is a valid bundle signature.
+	if err := verifyBundleSignature(fakeVerifier{}, transition, id); err != nil {
+		t.Fatalf("control: genuine transition signature must verify: %v", err)
+	}
+
+	// Paste it onto a snapshot from the same signer + attempt.
+	snap := NewLocalEvidenceSnapshot(id, pinnedContextHash, attempt.Evidence{})
+	snap.OperatorSignature = tSig
+	if err := verifySnapshotSignature(fakeVerifier{}, snap); !errors.Is(err, ErrSignatureInvalid) {
+		t.Fatalf("transition signature must not verify as a snapshot signature; got %v", err)
+	}
+}
+
+func TestCrossProtocol_SnapshotSignatureRejectedAsTransition(t *testing.T) {
+	// The reverse direction: an operator signature over a snapshot must not
+	// verify as a coordinator signature over a transition message.
+	const id group.MemberIndex = 7
+	snap := signedTestSnapshot(t, id)
+	// Control: it verifies as a snapshot signature.
+	if err := verifySnapshotSignature(fakeVerifier{}, snap); err != nil {
+		t.Fatalf("control: genuine snapshot signature must verify: %v", err)
+	}
+
+	transition := buildValidTransitionMessage()
+	transition.CoordinatorIDValue = uint32(id)
+	transition.CoordinatorSignature = snap.OperatorSignature
+	if err := verifyBundleSignature(fakeVerifier{}, transition, id); !errors.Is(err, ErrSignatureInvalid) {
+		t.Fatalf("snapshot signature must not verify as a transition signature; got %v", err)
+	}
+}
+
+func TestSnapshotSignableBytes_ConcurrentAfterUnmarshalIsRaceFree(t *testing.T) {
+	// Regression guard (run under -race): a parsed snapshot must carry a primed
+	// signable-bytes cache so concurrent signature verification reads a ready
+	// cache instead of racing on lazy initialization. Without priming in
+	// Unmarshal, the concurrent first SignableBytes calls below race on the
+	// cache write.
+	wire, err := signedTestSnapshot(t, 7).Marshal()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded LocalEvidenceSnapshot
+	if err := decoded.Unmarshal(wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := decoded.SignableBytes(); err != nil {
+				t.Errorf("signable: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
 }
