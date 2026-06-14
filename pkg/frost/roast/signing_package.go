@@ -249,10 +249,16 @@ func (p *SigningPackage) Unmarshal(data []byte) error {
 	p.CoordinatorSignature = append([]byte(nil), envelope.CoordinatorSignature...)
 	p.bodyCache = append([]byte(nil), envelope.Body...)
 	p.wireEnvelope = append([]byte(nil), data...)
-	// Clear any signable-bytes cache a prior SignableBytes call left on a reused
-	// receiver, so the next call rebuilds it from the body just received -
-	// authentication must verify against the received bytes, never stale ones.
+	// Prime the signable-bytes cache from the body just received, discarding any
+	// cache a prior SignableBytes call left on a reused value. Priming here -
+	// rather than lazily in SignableBytes - keeps concurrent signature
+	// verification of a parsed package race-free: verifiers read a ready cache
+	// instead of racing on lazy initialization (authentication must verify
+	// against the received bytes, never stale ones).
 	p.signaturePayloadCache = nil
+	if _, err := p.SignableBytes(); err != nil {
+		return err
+	}
 	return p.Validate()
 }
 

@@ -2,6 +2,7 @@ package roast
 
 import (
 	"bytes"
+	"sync"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -320,4 +321,32 @@ func TestSigningPackage_MarshalRequiresSignature(t *testing.T) {
 	if _, err := pkg.Marshal(); err == nil {
 		t.Fatal("Marshal must refuse an unsigned signing package")
 	}
+}
+
+func TestSigningPackage_ConcurrentSignableBytesAfterUnmarshalIsRaceFree(t *testing.T) {
+	// Regression guard (run under -race): a parsed signing package must carry a
+	// primed signable-bytes cache so concurrent signature verification reads a
+	// ready cache instead of racing on lazy initialization. Without priming in
+	// Unmarshal, the concurrent first SignableBytes calls below race on the
+	// cache write.
+	wire, err := signedTestSigningPackage(t, 3, nil).Marshal()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded SigningPackage
+	if err := decoded.Unmarshal(wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := decoded.SignableBytes(); err != nil {
+				t.Errorf("signable: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
 }
