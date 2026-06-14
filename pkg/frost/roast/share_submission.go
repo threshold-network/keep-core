@@ -1,6 +1,7 @@
 package roast
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 
@@ -158,6 +159,19 @@ func (p *ShareSubmission) SignableBytes() ([]byte, error) {
 	payload = append(payload, body...)
 	p.signaturePayloadCache = payload
 	return payload, nil
+}
+
+// BodyHash returns the SHA-256 of the submission's signed body bytes - the
+// identity used to detect member equivocation (two different signed share bodies
+// from one submitter for one attempt). It hashes the BODY (the signed content:
+// attempt, coordinator, signing-package hash, and share), not the on-wire
+// envelope, so it is stable across an unsigned envelope re-encoding.
+func (p *ShareSubmission) BodyHash() ([sha256.Size]byte, error) {
+	body, err := p.bodyBytes()
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	return sha256.Sum256(body), nil
 }
 
 // Type implements net.TaggedUnmarshaler.
