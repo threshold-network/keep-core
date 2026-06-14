@@ -21,6 +21,10 @@ func testSigningPackageHash() []byte {
 	return bytes.Repeat([]byte{0xab}, SigningPackageHashLength)
 }
 
+// testShareCoordinatorID is a fixed elected-coordinator index used by the
+// share-submission fixtures (distinct from the submitter ids under test).
+const testShareCoordinatorID = uint32(5)
+
 func signedTestShareSubmission(
 	t *testing.T,
 	submitter group.MemberIndex,
@@ -30,6 +34,7 @@ func signedTestShareSubmission(
 	p := &ShareSubmission{
 		AttemptContextHash: append([]byte(nil), pinnedContextHash[:]...),
 		SubmitterIDValue:   uint32(submitter),
+		CoordinatorIDValue: testShareCoordinatorID,
 		SigningPackageHash: pkgHash,
 		SignatureShare:     []byte("frost-round2-signature-share"),
 	}
@@ -71,6 +76,7 @@ func TestShareSubmissionWire_ReceivedBytesPreservedVerbatim(t *testing.T) {
 		t.Fatal("receiver must verify over exactly the bytes the submitter signed")
 	}
 	if decoded.SubmitterIDValue != original.SubmitterIDValue ||
+		decoded.CoordinatorIDValue != original.CoordinatorIDValue ||
 		!bytes.Equal(decoded.AttemptContextHash, original.AttemptContextHash) ||
 		!bytes.Equal(decoded.SigningPackageHash, original.SigningPackageHash) ||
 		!bytes.Equal(decoded.SignatureShare, original.SignatureShare) ||
@@ -176,6 +182,7 @@ func TestShareSubmission_ValidateRejectsMalformed(t *testing.T) {
 		return &ShareSubmission{
 			AttemptContextHash: append([]byte(nil), pinnedContextHash[:]...),
 			SubmitterIDValue:   3,
+			CoordinatorIDValue: testShareCoordinatorID,
 			SigningPackageHash: testSigningPackageHash(),
 			SignatureShare:     []byte("share"),
 		}
@@ -192,10 +199,17 @@ func TestShareSubmission_ValidateRejectsMalformed(t *testing.T) {
 		{"submitter out of member-index range", func(p *ShareSubmission) {
 			p.SubmitterIDValue = group.MaxMemberIndex + 1
 		}},
+		{"zero coordinator", func(p *ShareSubmission) { p.CoordinatorIDValue = 0 }},
+		{"coordinator out of member-index range", func(p *ShareSubmission) {
+			p.CoordinatorIDValue = group.MaxMemberIndex + 1
+		}},
 		{"short signing package hash", func(p *ShareSubmission) { p.SigningPackageHash = []byte{0x01} }},
 		{"empty signature share", func(p *ShareSubmission) { p.SignatureShare = nil }},
 		{"oversize signature share", func(p *ShareSubmission) {
 			p.SignatureShare = make([]byte, MaxSignatureShareBytes+1)
+		}},
+		{"oversize submitter signature", func(p *ShareSubmission) {
+			p.SubmitterSignature = make([]byte, MaxOperatorSignatureBytes+1)
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -212,6 +226,7 @@ func TestShareSubmission_MarshalRequiresSignature(t *testing.T) {
 	p := &ShareSubmission{
 		AttemptContextHash: append([]byte(nil), pinnedContextHash[:]...),
 		SubmitterIDValue:   3,
+		CoordinatorIDValue: testShareCoordinatorID,
 		SigningPackageHash: testSigningPackageHash(),
 		SignatureShare:     []byte("share"),
 	}
@@ -227,6 +242,7 @@ func TestShareSubmissionWire_UnmarshalRejectsOversizeBeforeCopy(t *testing.T) {
 	oversized := &ShareSubmission{
 		AttemptContextHash: append([]byte(nil), pinnedContextHash[:]...),
 		SubmitterIDValue:   3,
+		CoordinatorIDValue: testShareCoordinatorID,
 		SigningPackageHash: testSigningPackageHash(),
 		SignatureShare:     make([]byte, MaxSignatureShareBytes+1),
 	}

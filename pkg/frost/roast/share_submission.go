@@ -54,8 +54,14 @@ type ShareSubmission struct {
 	// SubmitterIDValue is the submitting member's index. A wire uint32; it must
 	// fit group.MemberIndex (uint8), enforced by Validate.
 	SubmitterIDValue uint32
+	// CoordinatorIDValue is the elected coordinator this share is authorized
+	// for, as resolved when authenticating the signing package. A wire uint32
+	// bounded to group.MemberIndex by Validate.
+	CoordinatorIDValue uint32
 	// SigningPackageHash is the 32-byte hash of the SignedSigningPackage
-	// envelope this share answers - the bytes the member retained.
+	// envelope (body plus coordinator signature) this share answers - the exact
+	// bytes the member retained. Assumes canonical operator signatures (see the
+	// proto for the malleability caveat).
 	SigningPackageHash []byte
 	// SignatureShare is the serialized FROST round-2 signature share.
 	SignatureShare []byte
@@ -83,6 +89,7 @@ func shareSubmissionBodyMessage(p *ShareSubmission) *pb.ShareSubmissionBody {
 	return &pb.ShareSubmissionBody{
 		AttemptContextHash: p.AttemptContextHash,
 		SubmitterId:        p.SubmitterIDValue,
+		CoordinatorId:      p.CoordinatorIDValue,
 		SigningPackageHash: p.SigningPackageHash,
 		SignatureShare:     p.SignatureShare,
 	}
@@ -91,6 +98,7 @@ func shareSubmissionBodyMessage(p *ShareSubmission) *pb.ShareSubmissionBody {
 func shareSubmissionFieldsFromBody(p *ShareSubmission, body *pb.ShareSubmissionBody) {
 	p.AttemptContextHash = append([]byte(nil), body.AttemptContextHash...)
 	p.SubmitterIDValue = body.SubmitterId
+	p.CoordinatorIDValue = body.CoordinatorId
 	p.SigningPackageHash = append([]byte(nil), body.SigningPackageHash...)
 	p.SignatureShare = append([]byte(nil), body.SignatureShare...)
 }
@@ -99,6 +107,12 @@ func shareSubmissionFieldsFromBody(p *ShareSubmission, body *pb.ShareSubmissionB
 // Validate (or Unmarshal) must have confirmed it fits.
 func (p *ShareSubmission) SubmitterID() group.MemberIndex {
 	return group.MemberIndex(p.SubmitterIDValue)
+}
+
+// CoordinatorID returns the authorized coordinator index as a
+// group.MemberIndex. Validate (or Unmarshal) must have confirmed it fits.
+func (p *ShareSubmission) CoordinatorID() group.MemberIndex {
+	return group.MemberIndex(p.CoordinatorIDValue)
 }
 
 // bodyBytes returns the exact serialized ShareSubmissionBody - the body carried
@@ -254,6 +268,16 @@ func (p *ShareSubmission) Validate() error {
 			group.MaxMemberIndex,
 		)
 	}
+	if p.CoordinatorIDValue == 0 {
+		return errors.New("share submission: coordinatorID is zero")
+	}
+	if p.CoordinatorIDValue > group.MaxMemberIndex {
+		return fmt.Errorf(
+			"share submission: coordinatorID [%d] exceeds max member index [%d]",
+			p.CoordinatorIDValue,
+			group.MaxMemberIndex,
+		)
+	}
 	if len(p.SigningPackageHash) != SigningPackageHashLength {
 		return fmt.Errorf(
 			"share submission: signingPackageHash length [%d], expected [%d]",
@@ -269,6 +293,13 @@ func (p *ShareSubmission) Validate() error {
 			"share submission: signatureShare length [%d] exceeds cap [%d]",
 			len(p.SignatureShare),
 			MaxSignatureShareBytes,
+		)
+	}
+	if len(p.SubmitterSignature) > MaxOperatorSignatureBytes {
+		return fmt.Errorf(
+			"share submission: submitterSignature length [%d] exceeds cap [%d]",
+			len(p.SubmitterSignature),
+			MaxOperatorSignatureBytes,
 		)
 	}
 	return nil
