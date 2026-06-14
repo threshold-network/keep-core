@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+option go_package = "./pb";
+package roast;
+
+// Signed signing-package wire format (RFC-21 Phase 7.2b).
+//
+// The elected coordinator signs the exact serialized SigningPackageBody
+// with its operator key and distributes the SignedSigningPackage to the
+// chosen signing subset. A member verifies the coordinator signature over
+// the bytes it received and only then parses them - the same signed-body,
+// verify-what-you-received discipline as the evidence envelopes
+// (evidence.proto): the body travels verbatim, so signature validity never
+// depends on any serializer's canonical form across protobuf versions or
+// languages.
+
+// The byte stream the elected coordinator's operator key signs. Carried as
+// exact bytes in SignedSigningPackage.body.
+message SigningPackageBody {
+  // 32-byte attempt context hash binding the package to one attempt.
+  bytes attempt_context_hash = 1;
+  // The elected coordinator's member index (RFC-21 Annex A). A member
+  // verifies this is the attempt's elected coordinator and that the
+  // signature verifies under that coordinator's operator key.
+  uint32 coordinator_id = 2;
+  // The serialized FROST SigningPackage the chosen subset signs over.
+  bytes signing_package = 3;
+  // The 32-byte taproot script-tree root the signature is tweaked by;
+  // empty for a key-path spend.
+  bytes taproot_merkle_root = 4;
+}
+
+// The on-wire signing package: exact signed body bytes plus the elected
+// coordinator's operator signature over them.
+message SignedSigningPackage {
+  bytes body = 1;
+  bytes coordinator_signature = 2;
+}

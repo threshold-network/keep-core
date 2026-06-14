@@ -1,0 +1,225 @@
+package roast
+
+import (
+	"errors"
+	"fmt"
+
+	"google.golang.org/protobuf/proto"
+
+	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
+	"github.com/keep-network/keep-core/pkg/frost/roast/gen/pb"
+	"github.com/keep-network/keep-core/pkg/protocol/group"
+)
+
+// SignedSigningPackageType is the stable Type() string for the
+// coordinator-distributed, operator-signed signing package (Phase 7.2b).
+const SignedSigningPackageType = roastMessageTypePrefix + "signed_signing_package"
+
+// MaxSigningPackageBytes caps the embedded FROST SigningPackage length,
+// rejecting pathological payloads at Unmarshal time so a misbehaving
+// coordinator cannot exhaust receiver memory. Sized for a worst-case
+// production signing subset's round-1 commitments plus generous headroom.
+const MaxSigningPackageBytes = 1 << 20 // 1 MiB
+
+// TaprootMerkleRootLength is the byte length of a taproot script-tree
+// root. A SigningPackage carries either exactly this many bytes or none
+// (the key-path case).
+const TaprootMerkleRootLength = 32
+
+// SigningPackage is the coordinator-distributed signing package for one
+// attempt, carried as a signed-body envelope (Phase 7.2b, frozen spec
+// section 6). The elected coordinator signs the exact serialized
+// SigningPackageBody with its operator key and distributes the
+// SignedSigningPackage to the chosen signing subset; each member verifies
+// the coordinator signature over the exact bytes it received and only then
+// parses them - the same sign-what-you-transmit / verify-what-you-received
+// discipline as the evidence envelopes (wire.go).
+//
+// This file defines the wire type and its byte-preservation contract only.
+// Coordinator-side signing/distribution and member-side authentication
+// (elected-coordinator check, signature verification, root binding) and
+// retention land in later Phase 7.2b increments; the engine never sees this
+// envelope (frozen spec: blame adjudication is Go-side).
+type SigningPackage struct {
+	// AttemptContextHash binds the package to one attempt. Always exactly
+	// 32 bytes (attempt.MessageDigestLength).
+	AttemptContextHash []byte
+	// CoordinatorIDValue is the elected coordinator's member index
+	// (RFC-21 Annex A). A member authenticates the envelope by checking
+	// this equals the attempt's elected coordinator and that the
+	// signature verifies under that coordinator's operator key.
+	CoordinatorIDValue uint32
+	// SigningPackageBytes is the serialized FROST SigningPackage the
+	// chosen subset signs over.
+	SigningPackageBytes []byte
+	// TaprootMerkleRoot is the taproot script-tree root the signature is
+	// tweaked by: exactly 32 bytes, or empty for a key-path spend.
+	TaprootMerkleRoot []byte
+	// CoordinatorSignature is the elected coordinator's operator-key
+	// signature over SignableBytes().
+	CoordinatorSignature []byte
+
+	// signedBody caches the exact serialized body bytes the
+	// CoordinatorSignature covers: marshaled once at signing time for a
+	// self-authored package, or the received bytes verbatim for a parsed
+	// one. Fields must not be mutated once set.
+	signedBody []byte
+	// wireEnvelope caches the exact on-wire envelope (body + signature):
+	// the received bytes verbatim for parsed packages, or built once
+	// after signing for self-authored ones.
+	wireEnvelope []byte
+}
+
+func signingPackageBodyMessage(p *SigningPackage) *pb.SigningPackageBody {
+	return &pb.SigningPackageBody{
+		AttemptContextHash: p.AttemptContextHash,
+		CoordinatorId:      p.CoordinatorIDValue,
+		SigningPackage:     p.SigningPackageBytes,
+		TaprootMerkleRoot:  p.TaprootMerkleRoot,
+	}
+}
+
+func signingPackageFieldsFromBody(p *SigningPackage, body *pb.SigningPackageBody) {
+	p.AttemptContextHash = append([]byte(nil), body.AttemptContextHash...)
+	p.CoordinatorIDValue = body.CoordinatorId
+	p.SigningPackageBytes = append([]byte(nil), body.SigningPackage...)
+	p.TaprootMerkleRoot = append([]byte(nil), body.TaprootMerkleRoot...)
+}
+
+// SignableBytes returns the exact byte stream the CoordinatorSignature
+// covers: the serialized SigningPackageBody. For a self-authored package
+// the body is marshaled once and cached - sign exactly what will be
+// transmitted. For a package parsed off the wire this returns the received
+// body bytes verbatim - verify exactly what was received. The fields must
+// not be mutated afterwards, and the returned slice is the internal cache -
+// callers must not mutate it.
+func (p *SigningPackage) SignableBytes() ([]byte, error) {
+	if p == nil {
+		return nil, errors.New("roast: cannot encode a nil signing package")
+	}
+	if p.signedBody != nil {
+		return p.signedBody, nil
+	}
+	body, err := proto.Marshal(signingPackageBodyMessage(p))
+	if err != nil {
+		return nil, fmt.Errorf("roast: marshal signing package body: %w", err)
+	}
+	p.signedBody = body
+	return body, nil
+}
+
+// Type implements net.TaggedUnmarshaler.
+func (p *SigningPackage) Type() string {
+	return SignedSigningPackageType
+}
+
+// Marshal serialises the package as a SignedSigningPackage envelope: the
+// exact signed body bytes plus the coordinator signature. For a package
+// parsed off the wire the received envelope is returned verbatim, so the
+// bytes a member retains for the section-3 equivocation comparison are the
+// exact bytes it received. The package must be signed first. The returned
+// slice is the internal cache - callers must not mutate it.
+func (p *SigningPackage) Marshal() ([]byte, error) {
+	if p.wireEnvelope != nil {
+		return p.wireEnvelope, nil
+	}
+	if len(p.CoordinatorSignature) == 0 {
+		return nil, errors.New(
+			"roast: signing package must be signed before wire encoding",
+		)
+	}
+	body, err := p.SignableBytes()
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := proto.Marshal(&pb.SignedSigningPackage{
+		Body:                 body,
+		CoordinatorSignature: p.CoordinatorSignature,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("roast: marshal signing package envelope: %w", err)
+	}
+	p.wireEnvelope = envelope
+	return envelope, nil
+}
+
+// Unmarshal parses a SignedSigningPackage envelope, retains the received
+// body and envelope bytes verbatim (the coordinator signature is verified
+// over exactly these bytes), populates the fields from the body, and
+// validates the structure.
+func (p *SigningPackage) Unmarshal(data []byte) error {
+	var envelope pb.SignedSigningPackage
+	if err := proto.Unmarshal(data, &envelope); err != nil {
+		return fmt.Errorf("signed signing package: parse envelope: %w", err)
+	}
+	if len(envelope.Body) == 0 {
+		return errors.New("signed signing package: empty body")
+	}
+	var body pb.SigningPackageBody
+	if err := proto.Unmarshal(envelope.Body, &body); err != nil {
+		return fmt.Errorf("signed signing package: parse body: %w", err)
+	}
+	signingPackageFieldsFromBody(p, &body)
+	p.CoordinatorSignature = append([]byte(nil), envelope.CoordinatorSignature...)
+	p.signedBody = append([]byte(nil), envelope.Body...)
+	p.wireEnvelope = append([]byte(nil), data...)
+	return p.Validate()
+}
+
+// AttemptContextHashArray returns the attempt context hash as a fixed
+// 32-byte array. Validate (or Unmarshal) must have confirmed the length
+// first; it copies at most 32 bytes and zero-pads a short slice.
+func (p *SigningPackage) AttemptContextHashArray() [attempt.MessageDigestLength]byte {
+	var out [attempt.MessageDigestLength]byte
+	copy(out[:], p.AttemptContextHash)
+	return out
+}
+
+// CoordinatorID returns the elected coordinator's member index.
+func (p *SigningPackage) CoordinatorID() group.MemberIndex {
+	return group.MemberIndex(p.CoordinatorIDValue)
+}
+
+// Validate runs the structural checks Unmarshal applies after a decode.
+// Exposed so callers that construct packages in memory (e.g. the
+// coordinator) can validate without a marshal/unmarshal round-trip. It
+// does not verify the coordinator signature - that is the member-side
+// authentication step (a later Phase 7.2b increment), which checks the
+// signature against the attempt's elected coordinator's operator key.
+func (p *SigningPackage) Validate() error {
+	if len(p.AttemptContextHash) != attempt.MessageDigestLength {
+		return fmt.Errorf(
+			"signed signing package: attemptContextHash length [%d], expected [%d]",
+			len(p.AttemptContextHash),
+			attempt.MessageDigestLength,
+		)
+	}
+	if p.CoordinatorIDValue == 0 {
+		return errors.New("signed signing package: coordinatorID is zero")
+	}
+	if len(p.SigningPackageBytes) == 0 {
+		return errors.New("signed signing package: empty signing package")
+	}
+	if len(p.SigningPackageBytes) > MaxSigningPackageBytes {
+		return fmt.Errorf(
+			"signed signing package: signingPackage length [%d] exceeds cap [%d]",
+			len(p.SigningPackageBytes),
+			MaxSigningPackageBytes,
+		)
+	}
+	if n := len(p.TaprootMerkleRoot); n != 0 && n != TaprootMerkleRootLength {
+		return fmt.Errorf(
+			"signed signing package: taprootMerkleRoot length [%d], expected 0 (key-path) or %d",
+			n,
+			TaprootMerkleRootLength,
+		)
+	}
+	if len(p.CoordinatorSignature) > MaxCoordinatorSignatureBytes {
+		return fmt.Errorf(
+			"signed signing package: coordinatorSignature length [%d] exceeds cap [%d]",
+			len(p.CoordinatorSignature),
+			MaxCoordinatorSignatureBytes,
+		)
+	}
+	return nil
+}
