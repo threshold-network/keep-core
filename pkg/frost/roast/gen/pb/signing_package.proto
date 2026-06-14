@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+option go_package = "./pb";
+package roast;
+
+// Signed signing-package wire format (RFC-21 Phase 7.2b).
+//
+// The elected coordinator signs the signing package with its operator key and
+// distributes the SignedSigningPackage to the chosen signing subset. A member
+// verifies the coordinator signature over the bytes it received and only then
+// parses them - the same signed-body, verify-what-you-received discipline as
+// the evidence envelopes (evidence.proto): the body travels verbatim, so
+// signature validity never depends on any serializer's canonical form across
+// protobuf versions or languages.
+//
+// SIGNED PAYLOAD (cross-language contract). The operator signature in
+// SignedSigningPackage.coordinator_signature is computed over a
+// domain-separated byte stream, NOT over the bare body:
+//
+//   domain_tag || serialized SigningPackageBody
+//
+// where domain_tag is, in order: a single 0x00 byte, the fixed ASCII bytes
+// "roast/signed-signing-package/v1", and a trailing 0x00 byte. The LEADING
+// 0x00 is an illegal protobuf tag (field number 0): it makes the signed
+// payload undecodable as any protobuf message, so a signing-package signature
+// can never be accepted on a transition-message (or other coordinator-signed)
+// envelope whose body is otherwise wire-compatible with SigningPackageBody.
+// The tag is a constant prepended by signer and verifier alike and is NOT
+// carried on the wire - only the body is, in SignedSigningPackage.body. Any
+// implementation that signs or verifies the bare body (without the exact tag)
+// will fail to interoperate.
+
+// The signing-package body. Carried verbatim as SignedSigningPackage.body;
+// the operator signature covers the domain-tagged form of these bytes
+// (domain_tag || body), not the bare bytes.
+message SigningPackageBody {
+  // 32-byte attempt context hash binding the package to one attempt.
+  bytes attempt_context_hash = 1;
+  // The elected coordinator's member index (RFC-21 Annex A). A member
+  // verifies this is the attempt's elected coordinator and that the
+  // signature verifies under that coordinator's operator key.
+  uint32 coordinator_id = 2;
+  // The serialized FROST SigningPackage the chosen subset signs over.
+  bytes signing_package = 3;
+  // The 32-byte taproot script-tree root the signature is tweaked by;
+  // empty for a key-path spend.
+  bytes taproot_merkle_root = 4;
+}
+
+// The on-wire signing package: the exact serialized SigningPackageBody bytes
+// plus the elected coordinator's operator signature. The signature covers the
+// domain-tagged body (domain_tag || body), not the bare body field.
+message SignedSigningPackage {
+  bytes body = 1;
+  bytes coordinator_signature = 2;
+}
