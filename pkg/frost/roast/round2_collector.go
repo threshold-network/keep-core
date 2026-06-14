@@ -30,9 +30,9 @@ var ErrRound2AttemptBindingConflict = errors.New(
 	"roast: round2 attempt binding conflicts with the existing one",
 )
 
-// ErrSigningPackageConflict is returned by RecordSigningPackage when a second,
-// DIFFERENT authenticated signing package is recorded for an attempt that
-// already has one - coordinator equivocation. The first package is retained
+// ErrSigningPackageConflict is returned by RecordSigningPackage when a second
+// authenticated package with a DIFFERENT signed body is recorded for an attempt
+// that already has one - coordinator equivocation. The first package is retained
 // (first-write-wins) and EquivocationEvidence is emitted.
 var ErrSigningPackageConflict = errors.New(
 	"roast: a different signing package was already recorded for this attempt (coordinator equivocation)",
@@ -66,11 +66,15 @@ type round2Record struct {
 	attemptContextHash []byte
 	electedCoordinator group.MemberIndex
 	includedSet        map[group.MemberIndex]struct{}
-	// signingPackage is the attempt's authoritative retained package (the first
-	// authenticated one); signingPackageHash is its EnvelopeHash, the value a
-	// share submission must bind to.
-	signingPackage     *SigningPackage
-	signingPackageHash [sha256.Size]byte
+	// signingPackageEnvelope is a collector-OWNED copy of the attempt's
+	// authoritative package's on-wire envelope (the first authenticated one);
+	// nil until one is recorded. signingPackageBodyHash is its BodyHash - the
+	// value a share submission binds to, and the identity used to detect
+	// coordinator equivocation. The identity is the BODY, not the envelope: the
+	// coordinator signature does not cover the outer envelope, so an unsigned
+	// re-encoding of the same (body, signature) is not equivocation.
+	signingPackageEnvelope []byte
+	signingPackageBodyHash [sha256.Size]byte
 	// shares retains each submitter's authenticated share (populated by the
 	// next increment).
 	shares map[group.MemberIndex]*ShareSubmission
@@ -136,12 +140,13 @@ func (c *Round2Collector) BeginAttempt(
 // RecordSigningPackage authenticates a signed signing package against the
 // attempt's binding (elected coordinator + attempt context) and retains it. The
 // first authenticated package becomes the attempt's authoritative package - its
-// EnvelopeHash binds share submissions. Re-recording the identical package is
-// idempotent. A second, DIFFERENT authenticated package for the same attempt is
-// coordinator equivocation: the first is retained (first-write-wins), both
-// envelopes are emitted as EquivocationEvidence, and ErrSigningPackageConflict
-// is returned. A package that fails authentication is rejected without
-// retention. Returns ErrRound2UnknownAttempt if BeginAttempt was not called.
+// BodyHash binds share submissions. Re-recording the same signed body is
+// idempotent, including an unsigned envelope re-encoding of it. A second package
+// with a DIFFERENT signed body for the same attempt is coordinator equivocation:
+// the first is retained (first-write-wins), both envelopes are emitted as
+// EquivocationEvidence, and ErrSigningPackageConflict is returned. A package
+// that fails authentication is rejected without retention. Returns
+// ErrRound2UnknownAttempt if BeginAttempt was not called.
 func (c *Round2Collector) RecordSigningPackage(pkg *SigningPackage) error {
 	key := round2AttemptKey(pkg.AttemptContextHash)
 
@@ -160,10 +165,21 @@ func (c *Round2Collector) RecordSigningPackage(pkg *SigningPackage) error {
 	if err := AuthenticateSigningPackage(c.verifier, pkg, elected, attemptHash); err != nil {
 		return err
 	}
-	hash, err := pkg.EnvelopeHash()
+	// Identity is the BODY hash, not the envelope: the coordinator signature does
+	// not cover the outer envelope, so an unsigned re-encoding of the same
+	// (body, signature) must NOT count as a different package.
+	bodyHash, err := pkg.BodyHash()
 	if err != nil {
 		return err
 	}
+	// Own a defensive copy of the envelope: the caller may reuse pkg (e.g. a
+	// receive loop calling Unmarshal for the next message), which would mutate
+	// the retained bytes out from under us.
+	envelope, err := pkg.Marshal()
+	if err != nil {
+		return err
+	}
+	ownedEnvelope := append([]byte(nil), envelope...)
 
 	var evidence *EquivocationEvidence
 	c.mu.Lock()
@@ -172,20 +188,26 @@ func (c *Round2Collector) RecordSigningPackage(pkg *SigningPackage) error {
 		c.mu.Unlock()
 		return ErrRound2UnknownAttempt // pruned concurrently
 	}
+	if record.electedCoordinator != elected {
+		// Binding changed under us (prune + re-begin): the authentication we ran
+		// no longer matches this record.
+		c.mu.Unlock()
+		return ErrRound2UnknownAttempt
+	}
 	switch {
-	case record.signingPackage == nil:
-		record.signingPackage = pkg
-		record.signingPackageHash = hash
-	case record.signingPackageHash == hash:
-		// Idempotent: the same authenticated package re-recorded.
+	case record.signingPackageEnvelope == nil:
+		record.signingPackageEnvelope = ownedEnvelope
+		record.signingPackageBodyHash = bodyHash
+	case record.signingPackageBodyHash == bodyHash:
+		// Idempotent: the same signed body re-recorded (possibly re-encoded).
 	default:
-		// A different authenticated package for the same attempt: coordinator
-		// equivocation. Keep the first; emit both.
+		// A different signed body for the same attempt: coordinator equivocation.
+		// Keep the first; emit both.
 		evidence = &EquivocationEvidence{
 			Kind:                EquivocationKindSigningPackageConflict,
 			AttemptContextHash:  append([]byte(nil), record.attemptContextHash...),
 			Sender:              elected,
-			ExistingEnvelope:    signingPackageEnvelopeForEvidence(record.signingPackage),
+			ExistingEnvelope:    append([]byte(nil), record.signingPackageEnvelope...),
 			ConflictingEnvelope: signingPackageEnvelopeForEvidence(pkg),
 		}
 	}

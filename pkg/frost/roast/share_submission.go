@@ -58,10 +58,9 @@ type ShareSubmission struct {
 	// for, as resolved when authenticating the signing package. A wire uint32
 	// bounded to group.MemberIndex by Validate.
 	CoordinatorIDValue uint32
-	// SigningPackageHash is the 32-byte hash of the SignedSigningPackage
-	// envelope (body plus coordinator signature) this share answers - the exact
-	// bytes the member retained. Assumes canonical operator signatures (see the
-	// proto for the malleability caveat).
+	// SigningPackageHash is the 32-byte SHA-256 of the signing-package BODY this
+	// share answers (SigningPackage.BodyHash) - the coordinator-signed content,
+	// stable across unsigned envelope re-encodings.
 	SigningPackageHash []byte
 	// SignatureShare is the serialized FROST round-2 signature share.
 	SignatureShare []byte

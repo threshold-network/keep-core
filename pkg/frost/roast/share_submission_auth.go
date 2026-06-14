@@ -54,7 +54,7 @@ func SignShareSubmission(signer Signer, sub *ShareSubmission) error {
 // (liveSigningPackageHash), and its signature verifies under the submitter's
 // operator key over the domain-tagged body. (electedCoordinator and
 // liveSigningPackageHash are resolved by the caller from the attempt and the
-// distributed SignedSigningPackage - see SigningPackage.EnvelopeHash.)
+// distributed SignedSigningPackage - see SigningPackage.BodyHash.)
 //
 // The signature check is over sub.SubmitterID(), so a forged submitter_id does
 // not verify: the signature binds the declared submitter to the actual signer.

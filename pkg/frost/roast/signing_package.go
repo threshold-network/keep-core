@@ -209,18 +209,23 @@ func (p *SigningPackage) Marshal() ([]byte, error) {
 	return envelope, nil
 }
 
-// EnvelopeHash returns the SHA-256 of the package's on-wire
-// SignedSigningPackage envelope - the value a ShareSubmission commits to in
-// signing_package_hash. For a package parsed off the wire this hashes the exact
-// received bytes, so the submitting member and every verifier derive the same
-// binding over the bytes the coordinator distributed. The package must be
-// signed (Marshal requires it).
-func (p *SigningPackage) EnvelopeHash() ([sha256.Size]byte, error) {
-	envelope, err := p.Marshal()
+// BodyHash returns the SHA-256 of the package's signed body bytes - the value a
+// ShareSubmission commits to in signing_package_hash, and the identity used to
+// detect coordinator equivocation. It hashes the BODY (the serialized
+// SigningPackageBody the coordinator signs), NOT the on-wire envelope: the
+// coordinator signature does not cover the outer envelope, so an unsigned
+// re-encoding of the same (body, signature) would change an envelope hash
+// without being equivocation, and would fragment share bindings across members.
+// The body bytes are stable - any re-serialization of the body would fail
+// signature verification - so honest envelope re-encodings map to the same
+// BodyHash. For a package parsed off the wire this hashes the received body
+// verbatim.
+func (p *SigningPackage) BodyHash() ([sha256.Size]byte, error) {
+	body, err := p.bodyBytes()
 	if err != nil {
 		return [sha256.Size]byte{}, err
 	}
-	return sha256.Sum256(envelope), nil
+	return sha256.Sum256(body), nil
 }
 
 // Unmarshal parses a SignedSigningPackage envelope, retains the received
