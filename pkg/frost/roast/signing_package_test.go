@@ -6,6 +6,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
 	"github.com/keep-network/keep-core/pkg/frost/roast/gen/pb"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
@@ -75,7 +76,10 @@ func TestSigningPackageWire_ReceivedBytesPreservedVerbatim(t *testing.T) {
 
 func TestSigningPackageWire_NonCanonicalEnvelopeEncodingSurvives(t *testing.T) {
 	original := signedTestSigningPackage(t, 3, nil)
-	body, _ := original.SignableBytes()
+	body, err := original.bodyBytes()
+	if err != nil {
+		t.Fatalf("body bytes: %v", err)
+	}
 
 	// Handcraft an envelope with fields in REVERSE tag order
 	// (coordinator_signature before body) - wire-legal but non-canonical, no
@@ -96,8 +100,8 @@ func TestSigningPackageWire_NonCanonicalEnvelopeEncodingSurvives(t *testing.T) {
 	if err := decoded.Unmarshal(crafted); err != nil {
 		t.Fatalf("unmarshal crafted: %v", err)
 	}
-	if gotBody, _ := decoded.SignableBytes(); !bytes.Equal(gotBody, body) {
-		t.Fatal("SignableBytes must return the embedded body bytes verbatim")
+	if gotBody, _ := decoded.bodyBytes(); !bytes.Equal(gotBody, body) {
+		t.Fatal("the received body must be preserved verbatim")
 	}
 	remarshaled, err := decoded.Marshal()
 	if err != nil {
@@ -105,6 +109,44 @@ func TestSigningPackageWire_NonCanonicalEnvelopeEncodingSurvives(t *testing.T) {
 	}
 	if !bytes.Equal(remarshaled, crafted) {
 		t.Fatal("re-marshal must preserve even a non-canonical received encoding verbatim")
+	}
+}
+
+func TestSigningPackageWire_SignedBytesDomainSeparatedFromTransitionMessage(t *testing.T) {
+	pkg := signedTestSigningPackage(t, 3, nil)
+	signable, err := pkg.SignableBytes()
+	if err != nil {
+		t.Fatalf("signable: %v", err)
+	}
+	body, _ := pkg.bodyBytes()
+
+	// The signed bytes are the domain tag followed by the body.
+	if !bytes.HasPrefix(signable, signingPackageSignatureDomain) {
+		t.Fatal("signed bytes must carry the signing-package domain tag")
+	}
+	if !bytes.Equal(signable[len(signingPackageSignatureDomain):], body) {
+		t.Fatal("signed bytes must be the domain tag followed by the body")
+	}
+
+	// The bare body IS wire-compatible with a TransitionMessageBody - the
+	// collision the domain tag defends against: it presents the same 32-byte
+	// attempt_context_hash and coordinator_id a transition body would.
+	var asTransition pb.TransitionMessageBody
+	if err := proto.Unmarshal(body, &asTransition); err != nil {
+		t.Fatalf("the bare body is expected to parse as a TransitionMessageBody: %v", err)
+	}
+	if len(asTransition.AttemptContextHash) != attempt.MessageDigestLength ||
+		asTransition.CoordinatorId != pkg.CoordinatorIDValue {
+		t.Fatal("sanity: the bare body must collide with TransitionMessageBody")
+	}
+
+	// But the domain-tagged SIGNED bytes do NOT present a valid transition body
+	// (no 32-byte attempt_context_hash), so a coordinator signature over a
+	// signing package cannot be replayed as a transition-message signature.
+	var signableAsTransition pb.TransitionMessageBody
+	_ = proto.Unmarshal(signable, &signableAsTransition)
+	if len(signableAsTransition.AttemptContextHash) == attempt.MessageDigestLength {
+		t.Fatal("domain-tagged signed bytes must not present a valid transition attempt_context_hash")
 	}
 }
 

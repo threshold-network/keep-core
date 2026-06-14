@@ -15,6 +15,18 @@ import (
 // coordinator-distributed, operator-signed signing package (Phase 7.2b).
 const SignedSigningPackageType = roastMessageTypePrefix + "signed_signing_package"
 
+// signingPackageSignatureDomain is the fixed domain-separation tag prefixed
+// to the bytes the coordinator signs (see SignableBytes). The elected
+// coordinator's operator key also signs TransitionMessage bodies, and a
+// SigningPackageBody is wire-compatible with a TransitionMessageBody (matching
+// tags/types for attempt_context_hash and coordinator_id, and a
+// length-delimited field 3). Prefixing a unique domain tag makes the signed
+// byte stream unambiguously a signing package, so a coordinator signature over
+// a signing package can never be replayed as a transition-message signature
+// (or vice versa) regardless of protobuf field layout. The tag is NOT carried
+// on the wire - it is a fixed constant both signer and verifier prepend.
+var signingPackageSignatureDomain = []byte("roast/signed-signing-package/v1\x00")
+
 // MaxSigningPackageBytes caps the embedded FROST SigningPackage length,
 // rejecting pathological payloads at Unmarshal time so a misbehaving
 // coordinator cannot exhaust receiver memory. Sized for a worst-case
@@ -59,11 +71,14 @@ type SigningPackage struct {
 	// signature over SignableBytes().
 	CoordinatorSignature []byte
 
-	// signedBody caches the exact serialized body bytes the
-	// CoordinatorSignature covers: marshaled once at signing time for a
-	// self-authored package, or the received bytes verbatim for a parsed
-	// one. Fields must not be mutated once set.
-	signedBody []byte
+	// bodyCache caches the exact serialized SigningPackageBody: marshaled
+	// once at signing time for a self-authored package, or the received body
+	// bytes verbatim for a parsed one. This is the body field carried on the
+	// wire; fields must not be mutated once set.
+	bodyCache []byte
+	// signaturePayloadCache caches the exact bytes the CoordinatorSignature
+	// covers - the domain tag followed by the body (see SignableBytes).
+	signaturePayloadCache []byte
 	// wireEnvelope caches the exact on-wire envelope (body + signature):
 	// the received bytes verbatim for parsed packages, or built once
 	// after signing for self-authored ones.
@@ -87,24 +102,49 @@ func signingPackageFieldsFromBody(p *SigningPackage, body *pb.SigningPackageBody
 }
 
 // SignableBytes returns the exact byte stream the CoordinatorSignature
-// covers: the serialized SigningPackageBody. For a self-authored package
-// the body is marshaled once and cached - sign exactly what will be
-// transmitted. For a package parsed off the wire this returns the received
-// body bytes verbatim - verify exactly what was received. The fields must
-// not be mutated afterwards, and the returned slice is the internal cache -
-// callers must not mutate it.
+// covers: the signing-package domain tag (see signingPackageSignatureDomain)
+// followed by the serialized SigningPackageBody. The domain tag is a fixed
+// constant prepended by both signer and verifier and is NOT carried on the
+// wire - it domain-separates this signature from the coordinator's
+// transition-message signatures (whose body is otherwise wire-compatible).
+// The body half is the bytes the package transmits: marshaled once for a
+// self-authored package, or the received body verbatim for a parsed one
+// (verify exactly what was received). Fields must not be mutated afterwards,
+// and the returned slice is the internal cache - callers must not mutate it.
 func (p *SigningPackage) SignableBytes() ([]byte, error) {
 	if p == nil {
 		return nil, errors.New("roast: cannot encode a nil signing package")
 	}
-	if p.signedBody != nil {
-		return p.signedBody, nil
+	if p.signaturePayloadCache != nil {
+		return p.signaturePayloadCache, nil
+	}
+	body, err := p.bodyBytes()
+	if err != nil {
+		return nil, err
+	}
+	payload := make([]byte, 0, len(signingPackageSignatureDomain)+len(body))
+	payload = append(payload, signingPackageSignatureDomain...)
+	payload = append(payload, body...)
+	p.signaturePayloadCache = payload
+	return payload, nil
+}
+
+// bodyBytes returns the exact serialized SigningPackageBody - the body field
+// carried in the SignedSigningPackage envelope. Marshaled once and cached for
+// a self-authored package; the received bytes verbatim for a parsed one. The
+// returned slice is the internal cache - callers must not mutate it.
+func (p *SigningPackage) bodyBytes() ([]byte, error) {
+	if p == nil {
+		return nil, errors.New("roast: cannot encode a nil signing package")
+	}
+	if p.bodyCache != nil {
+		return p.bodyCache, nil
 	}
 	body, err := proto.Marshal(signingPackageBodyMessage(p))
 	if err != nil {
 		return nil, fmt.Errorf("roast: marshal signing package body: %w", err)
 	}
-	p.signedBody = body
+	p.bodyCache = body
 	return body, nil
 }
 
@@ -114,11 +154,12 @@ func (p *SigningPackage) Type() string {
 }
 
 // Marshal serialises the package as a SignedSigningPackage envelope: the
-// exact signed body bytes plus the coordinator signature. For a package
-// parsed off the wire the received envelope is returned verbatim, so the
-// bytes a member retains for the section-3 equivocation comparison are the
-// exact bytes it received. The package must be signed first. The returned
-// slice is the internal cache - callers must not mutate it.
+// serialized SigningPackageBody plus the coordinator signature (which covers
+// the domain-tagged body, see SignableBytes). For a package parsed off the
+// wire the received envelope is returned verbatim, so the bytes a member
+// retains for the section-3 equivocation comparison are the exact bytes it
+// received. The package must be signed first. The returned slice is the
+// internal cache - callers must not mutate it.
 func (p *SigningPackage) Marshal() ([]byte, error) {
 	if p.wireEnvelope != nil {
 		return p.wireEnvelope, nil
@@ -128,7 +169,7 @@ func (p *SigningPackage) Marshal() ([]byte, error) {
 			"roast: signing package must be signed before wire encoding",
 		)
 	}
-	body, err := p.SignableBytes()
+	body, err := p.bodyBytes()
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +202,7 @@ func (p *SigningPackage) Unmarshal(data []byte) error {
 	}
 	signingPackageFieldsFromBody(p, &body)
 	p.CoordinatorSignature = append([]byte(nil), envelope.CoordinatorSignature...)
-	p.signedBody = append([]byte(nil), envelope.Body...)
+	p.bodyCache = append([]byte(nil), envelope.Body...)
 	p.wireEnvelope = append([]byte(nil), data...)
 	return p.Validate()
 }
