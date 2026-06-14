@@ -38,6 +38,13 @@ const MaxSigningPackageBytes = 1 << 20 // 1 MiB
 // (the key-path case).
 const TaprootMerkleRootLength = 32
 
+// MaxSignedSigningPackageBytes bounds a whole SignedSigningPackage envelope so
+// Unmarshal can reject a grossly oversized message before proto.Unmarshal
+// materializes it (and before the body/field copies). Sized as the
+// signing-package cap plus the coordinator-signature cap plus generous
+// framing/field overhead, so a legitimate maximum-size package still fits.
+const MaxSignedSigningPackageBytes = MaxSigningPackageBytes + MaxCoordinatorSignatureBytes + 512
+
 // SigningPackage is the coordinator-distributed signing package for one
 // attempt, carried as a signed-body envelope (Phase 7.2b, frozen spec
 // section 6). The elected coordinator signs the exact serialized
@@ -189,6 +196,17 @@ func (p *SigningPackage) Marshal() ([]byte, error) {
 // over exactly these bytes), populates the fields from the body, and
 // validates the structure.
 func (p *SigningPackage) Unmarshal(data []byte) error {
+	// Bound the input before allocating: reject a grossly oversized envelope
+	// before proto.Unmarshal materializes it (and before the copies below), so
+	// the MaxSigningPackageBytes cap protects memory rather than only rejecting
+	// after the fact.
+	if len(data) > MaxSignedSigningPackageBytes {
+		return fmt.Errorf(
+			"signed signing package: envelope length [%d] exceeds cap [%d]",
+			len(data),
+			MaxSignedSigningPackageBytes,
+		)
+	}
 	var envelope pb.SignedSigningPackage
 	if err := proto.Unmarshal(data, &envelope); err != nil {
 		return fmt.Errorf("signed signing package: parse envelope: %w", err)
@@ -199,6 +217,16 @@ func (p *SigningPackage) Unmarshal(data []byte) error {
 	var body pb.SigningPackageBody
 	if err := proto.Unmarshal(envelope.Body, &body); err != nil {
 		return fmt.Errorf("signed signing package: parse body: %w", err)
+	}
+	// Enforce the signing-package cap on the parsed field before copying it
+	// into the struct (and before caching the body), so an over-cap field is
+	// rejected without the extra allocations.
+	if len(body.SigningPackage) > MaxSigningPackageBytes {
+		return fmt.Errorf(
+			"signed signing package: signingPackage length [%d] exceeds cap [%d]",
+			len(body.SigningPackage),
+			MaxSigningPackageBytes,
+		)
 	}
 	signingPackageFieldsFromBody(p, &body)
 	p.CoordinatorSignature = append([]byte(nil), envelope.CoordinatorSignature...)

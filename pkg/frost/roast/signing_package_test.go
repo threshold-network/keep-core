@@ -210,6 +210,35 @@ func TestSigningPackage_ValidateRejectsMalformed(t *testing.T) {
 	}
 }
 
+func TestSigningPackageWire_UnmarshalRejectsOversizeBeforeCopy(t *testing.T) {
+	// A peer-supplied envelope whose signing_package exceeds the cap is
+	// rejected on receive, so the cap protects memory rather than only
+	// failing after the field is materialized and copied.
+	oversized := &SigningPackage{
+		AttemptContextHash:  append([]byte(nil), pinnedContextHash[:]...),
+		CoordinatorIDValue:  3,
+		SigningPackageBytes: make([]byte, MaxSigningPackageBytes+1),
+	}
+	payload, err := oversized.SignableBytes()
+	if err != nil {
+		t.Fatalf("signable: %v", err)
+	}
+	sig, err := (&fakeSigner{id: 3}).Sign(payload)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	oversized.CoordinatorSignature = sig
+	wire, err := oversized.Marshal()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded SigningPackage
+	if err := decoded.Unmarshal(wire); err == nil {
+		t.Fatal("Unmarshal must reject an over-cap signing package")
+	}
+}
+
 func TestSigningPackage_MarshalRequiresSignature(t *testing.T) {
 	pkg := &SigningPackage{
 		AttemptContextHash:  append([]byte(nil), pinnedContextHash[:]...),
