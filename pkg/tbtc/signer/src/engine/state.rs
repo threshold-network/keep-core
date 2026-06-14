@@ -111,6 +111,14 @@ pub(crate) struct SessionState {
     pub(crate) emergency_rekey_event: Option<EmergencyRekeyEvent>,
     pub(crate) interactive_signing: Option<InteractiveSigningState>,
     pub(crate) consumed_interactive_attempt_markers: HashSet<String>,
+    // Phase 7.2b InteractiveAggregate completion markers: an attempt whose
+    // aggregate signature has been produced is recorded here so a repeat
+    // InteractiveAggregate is rejected (re-aggregation is not a recovery path;
+    // a lost signature is recovered with a fresh attempt). Durable like the
+    // consumed markers (markers-only durability) and bounded the same way; not
+    // security-load-bearing (the aggregate is deterministic over public data),
+    // but the frozen Phase 7 spec marks the session complete.
+    pub(crate) aggregated_interactive_attempt_markers: HashSet<String>,
 }
 
 #[derive(Default)]

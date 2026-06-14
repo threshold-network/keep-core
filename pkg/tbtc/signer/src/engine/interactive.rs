@@ -574,6 +574,15 @@ pub fn interactive_aggregate(
     enforce_provenance_gate()?;
     validate_session_id(&request.session_id)?;
     let attempt_id = canonical_attempt_id(&request.attempt_id);
+    // The completion marker persists attempt_id, and the reload path rejects an
+    // empty key; reject an empty attempt_id here too so a malformed (or
+    // malicious) request cannot write durable state that fails to reload after
+    // a restart.
+    if attempt_id.is_empty() {
+        return Err(EngineError::Validation(
+            "InteractiveAggregate: attempt_id must not be empty".to_string(),
+        ));
+    }
 
     let mut signing_package_bytes = decode_hex_field(
         "InteractiveAggregate",
@@ -612,6 +621,18 @@ pub fn interactive_aggregate(
                 session_id: request.session_id.clone(),
             }
         })?;
+        // Reject a completed attempt: re-aggregation is not a recovery path (a
+        // lost signature is recovered with a fresh attempt), and the marker is
+        // durable so a completed attempt stays rejected across a restart.
+        if session
+            .aggregated_interactive_attempt_markers
+            .contains(&attempt_id)
+        {
+            return Err(EngineError::InteractiveAttemptAlreadyAggregated {
+                session_id: request.session_id.clone(),
+                attempt_id,
+            });
+        }
         if session.dkg_result.is_none() {
             return Err(EngineError::DkgNotReady {
                 session_id: request.session_id.clone(),
@@ -675,6 +696,54 @@ pub fn interactive_aggregate(
     let signature_bytes = signature
         .serialize()
         .map_err(|e| EngineError::Internal(format!("failed to serialize aggregate: {e}")))?;
+    let signature_hex = hex::encode(signature_bytes);
+
+    // Mark the attempt complete before reporting success, so a repeat
+    // InteractiveAggregate is rejected rather than recomputed (Phase 7.2b design
+    // section 6). The engine lock was dropped for the aggregation crypto above;
+    // re-acquire it, re-check the marker (a concurrent aggregate may have
+    // completed first), insert it, and persist before reporting success; on
+    // persist failure roll the marker back and fail closed.
+    let mut guard = state()?
+        .lock()
+        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    let session = guard.sessions.get_mut(&request.session_id).ok_or_else(|| {
+        EngineError::SessionNotFound {
+            session_id: request.session_id.clone(),
+        }
+    })?;
+    // A concurrent aggregate that raced past the pre-check may have completed
+    // this attempt first; if the marker is now present, reject this call's
+    // re-aggregation - the winner already produced the attempt's signature.
+    if session
+        .aggregated_interactive_attempt_markers
+        .contains(&attempt_id)
+    {
+        return Err(EngineError::InteractiveAttemptAlreadyAggregated {
+            session_id: request.session_id.clone(),
+            attempt_id,
+        });
+    }
+    ensure_consumed_registry_insert_capacity(
+        &session.aggregated_interactive_attempt_markers,
+        &attempt_id,
+        "aggregated_interactive_attempt_markers",
+        &request.session_id,
+    )?;
+    session
+        .aggregated_interactive_attempt_markers
+        .insert(attempt_id.clone());
+    if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
+        let session = guard
+            .sessions
+            .get_mut(&request.session_id)
+            .expect("session existed under the held engine lock");
+        session
+            .aggregated_interactive_attempt_markers
+            .remove(&attempt_id);
+        return Err(persist_error);
+    }
+    drop(guard);
 
     record_hardening_telemetry(|telemetry| {
         telemetry.interactive_aggregate_success_total = telemetry
@@ -685,7 +754,7 @@ pub fn interactive_aggregate(
     Ok(InteractiveAggregateResult {
         session_id: request.session_id,
         attempt_id,
-        signature_hex: hex::encode(signature_bytes),
+        signature_hex,
     })
 }
 

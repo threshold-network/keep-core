@@ -702,6 +702,7 @@ fn persisted_session_state_fixture() -> PersistedSessionState {
         refresh_history: vec![],
         emergency_rekey_event: None,
         consumed_interactive_attempt_markers: vec![],
+        aggregated_interactive_attempt_markers: vec![],
     }
 }
 
@@ -12838,6 +12839,199 @@ fn interactive_aggregate_produces_and_self_verifies_bip340() {
     Secp256k1::verification_only()
         .verify_schnorr(&signature, &SecpMessage::from_digest(message), &public_key)
         .expect("interactive aggregate yields a valid BIP-340 signature");
+}
+
+#[test]
+fn interactive_aggregate_rejects_repeat_aggregate_of_completed_attempt() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let session_id = "interactive-aggregate-repeat";
+    let key_group = "interactive-test-key-group";
+    let message = [0x4eu8; 32];
+    let included = [1u16, 2];
+    let key_packages = ensure_interactive_dkg_session(session_id, key_group);
+
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("opens");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment.clone(),
+        ],
+    );
+    let round2 = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect("round 2 share");
+    let member2_share = sign_share(SignShareRequest {
+        signing_package_hex: signing_package_hex.clone(),
+        nonces_hex: member2.nonces_hex,
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 share");
+
+    let aggregate_request = InteractiveAggregateRequest {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        signing_package_hex,
+        signature_shares: vec![
+            crate::api::NativeFrostSignatureShare {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round2.signature_share_hex,
+            },
+            member2_share.signature_share,
+        ],
+        taproot_merkle_root_hex: None,
+    };
+
+    // First aggregate completes the attempt.
+    interactive_aggregate(aggregate_request.clone()).expect("first interactive aggregate");
+
+    // Re-aggregating a completed attempt is rejected by the durable completion
+    // marker rather than recomputed (re-aggregation is not a recovery path; a
+    // lost signature is recovered with a fresh attempt). Phase 7.2b design
+    // section 6.
+    let err = interactive_aggregate(aggregate_request)
+        .expect_err("re-aggregating a completed attempt must be rejected");
+    assert!(
+        matches!(
+            err,
+            EngineError::InteractiveAttemptAlreadyAggregated { ref attempt_id, .. }
+                if *attempt_id == opened.attempt_id
+        ),
+        "unexpected error: {err:?}"
+    );
+    assert_eq!(err.code(), "interactive_attempt_already_aggregated");
+    assert_eq!(err.recovery_class(), "recoverable");
+}
+
+#[test]
+fn interactive_aggregate_rejects_empty_attempt_id() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    // An empty attempt_id must be rejected before anything is persisted: the
+    // completion record is keyed by attempt_id and the reload path rejects an
+    // empty key, so persisting one would brick restart. The guard runs before
+    // the signing-package/share decode, so the placeholder inputs are never
+    // reached.
+    let err = interactive_aggregate(InteractiveAggregateRequest {
+        session_id: "interactive-aggregate-empty-attempt".to_string(),
+        attempt_id: String::new(),
+        signing_package_hex: String::new(),
+        signature_shares: vec![],
+        taproot_merkle_root_hex: None,
+    })
+    .expect_err("an empty attempt_id must be rejected");
+    assert!(
+        matches!(err, EngineError::Validation(ref m) if m.contains("attempt_id must not be empty")),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn interactive_aggregate_completion_marker_survives_process_restart() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("interactive_aggregate_marker_restart");
+    reset_for_tests();
+
+    let session_id = "interactive-aggregate-marker-restart";
+    let key_group = "interactive-test-key-group";
+    let message = [0x4fu8; 32];
+    let included = [1u16, 2];
+    let key_packages = ensure_interactive_dkg_session(session_id, key_group);
+
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("opens");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment.clone(),
+        ],
+    );
+    let round2 = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect("round 2 share");
+    let member2_share = sign_share(SignShareRequest {
+        signing_package_hex: signing_package_hex.clone(),
+        nonces_hex: member2.nonces_hex,
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 share");
+
+    let aggregate_request = InteractiveAggregateRequest {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        signing_package_hex,
+        signature_shares: vec![
+            crate::api::NativeFrostSignatureShare {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round2.signature_share_hex,
+            },
+            member2_share.signature_share,
+        ],
+        taproot_merkle_root_hex: None,
+    };
+    interactive_aggregate(aggregate_request.clone()).expect("first interactive aggregate");
+
+    // The completion marker is the only durable interactive artifact (live
+    // nonce state is gone after restart by construction). It must survive a
+    // reload so a replayed aggregate is still rejected - this also exercises
+    // the marker's persistence round-trip (serialize + reload validation).
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+
+    let err = interactive_aggregate(aggregate_request)
+        .expect_err("a completed attempt must stay completed across restart");
+    assert!(
+        matches!(err, EngineError::InteractiveAttemptAlreadyAggregated { .. }),
+        "unexpected error: {err:?}"
+    );
+    assert_eq!(err.code(), "interactive_attempt_already_aggregated");
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
 }
 
 #[test]
