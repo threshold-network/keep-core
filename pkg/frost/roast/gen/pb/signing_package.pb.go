@@ -20,8 +20,9 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// The byte stream the elected coordinator's operator key signs. Carried as
-// exact bytes in SignedSigningPackage.body.
+// The signing-package body. Carried verbatim as SignedSigningPackage.body;
+// the operator signature covers the domain-tagged form of these bytes
+// (domain_tag || body), not the bare bytes.
 type SigningPackageBody struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 32-byte attempt context hash binding the package to one attempt.
@@ -97,8 +98,9 @@ func (x *SigningPackageBody) GetTaprootMerkleRoot() []byte {
 	return nil
 }
 
-// The on-wire signing package: exact signed body bytes plus the elected
-// coordinator's operator signature over them.
+// The on-wire signing package: the exact serialized SigningPackageBody bytes
+// plus the elected coordinator's operator signature. The signature covers the
+// domain-tagged body (domain_tag || body), not the bare body field.
 type SignedSigningPackage struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	Body                 []byte                 `protobuf:"bytes,1,opt,name=body,proto3" json:"body,omitempty"`
