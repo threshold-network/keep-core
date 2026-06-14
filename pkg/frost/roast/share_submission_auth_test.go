@@ -123,6 +123,26 @@ func TestAuthenticateShareSubmission_Rejections(t *testing.T) {
 			t.Fatalf("want ErrSignatureInvalid, got %v", err)
 		}
 	})
+
+	t.Run("structurally invalid submission is rejected before verification", func(t *testing.T) {
+		// submitter_id 259 truncates to member 3 (uint32 -> uint8); signed by
+		// member 3 it would otherwise verify AS member 3 despite the wire id. The
+		// structural pre-check (submitter_id > MaxMemberIndex) rejects it before
+		// any signature is trusted.
+		sub := &ShareSubmission{
+			AttemptContextHash: append([]byte(nil), pinnedContextHash[:]...),
+			SubmitterIDValue:   259,
+			CoordinatorIDValue: testShareCoordinatorID,
+			SigningPackageHash: pkgHash,
+			SignatureShare:     []byte("share"),
+		}
+		if err := SignShareSubmission(&fakeSigner{id: 3}, sub); err != nil {
+			t.Fatalf("sign: %v", err)
+		}
+		if err := AuthenticateShareSubmission(fakeVerifier{}, sub, elected, pinnedContextHash[:], pkgHash); err == nil {
+			t.Fatal("an out-of-range submitter_id must be rejected before verification")
+		}
+	})
 }
 
 func TestShareSubmissionBindsToSigningPackageEnvelope(t *testing.T) {

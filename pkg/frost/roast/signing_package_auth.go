@@ -64,6 +64,13 @@ func AuthenticateSigningPackage(
 	electedCoordinator group.MemberIndex,
 	liveAttemptContextHash []byte,
 ) error {
+	// Structurally validate first (authentication boundary): reject a
+	// manually-assembled package before the truncating ID accessor or bytes.Equal
+	// checks below trust any field - e.g. a coordinator_id that truncates to the
+	// elected member (uint32 -> uint8). Mirrors AuthenticateShareSubmission.
+	if err := pkg.Validate(); err != nil {
+		return fmt.Errorf("signing package failed structural validation: %w", err)
+	}
 	if len(pkg.CoordinatorSignature) == 0 {
 		return fmt.Errorf(
 			"%w: signing package has no coordinator signature",

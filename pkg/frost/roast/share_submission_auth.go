@@ -72,6 +72,15 @@ func AuthenticateShareSubmission(
 	liveAttemptContextHash []byte,
 	liveSigningPackageHash []byte,
 ) error {
+	// Structurally validate first: this is an authentication boundary for
+	// untrusted input, and the checks below use the truncating ID accessor and
+	// bytes.Equal. A manually-assembled (un-Unmarshaled) submission must be
+	// rejected before any field is trusted - e.g. a submitter_id that truncates
+	// to another member (uint32 -> uint8), or empty hashes that would make
+	// bytes.Equal(nil, nil) pass.
+	if err := sub.Validate(); err != nil {
+		return fmt.Errorf("share submission failed structural validation: %w", err)
+	}
 	if len(sub.SubmitterSignature) == 0 {
 		return fmt.Errorf(
 			"%w: share submission has no submitter signature",
