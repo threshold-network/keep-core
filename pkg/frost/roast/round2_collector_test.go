@@ -213,4 +213,19 @@ func TestRound2_NilInputsAreRejectedNotPanicked(t *testing.T) {
 	if err := AuthenticateShareSubmission(fakeVerifier{}, nil, 3, pinnedContextHash[:], testSigningPackageHash()); err == nil {
 		t.Fatal("AuthenticateShareSubmission(nil) must return an error")
 	}
+
+	// Marshal/Unmarshal on a nil receiver must error, not panic - matching the
+	// Validate/SignableBytes/BodyHash contract.
+	if _, err := (*SigningPackage)(nil).Marshal(); err == nil {
+		t.Fatal("SigningPackage.Marshal on a nil receiver must return an error")
+	}
+	if err := (*SigningPackage)(nil).Unmarshal([]byte{0x01}); err == nil {
+		t.Fatal("SigningPackage.Unmarshal into a nil receiver must return an error")
+	}
+	if _, err := (*ShareSubmission)(nil).Marshal(); err == nil {
+		t.Fatal("ShareSubmission.Marshal on a nil receiver must return an error")
+	}
+	if err := (*ShareSubmission)(nil).Unmarshal([]byte{0x01}); err == nil {
+		t.Fatal("ShareSubmission.Unmarshal into a nil receiver must return an error")
+	}
 }

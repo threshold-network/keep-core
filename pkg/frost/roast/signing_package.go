@@ -186,6 +186,9 @@ func (p *SigningPackage) Type() string {
 // received. The package must be signed first. The returned slice is the
 // internal cache - callers must not mutate it.
 func (p *SigningPackage) Marshal() ([]byte, error) {
+	if p == nil {
+		return nil, errors.New("roast: cannot marshal a nil signing package")
+	}
 	if p.wireEnvelope != nil {
 		return p.wireEnvelope, nil
 	}
@@ -233,6 +236,9 @@ func (p *SigningPackage) BodyHash() ([sha256.Size]byte, error) {
 // over exactly these bytes), populates the fields from the body, and
 // validates the structure.
 func (p *SigningPackage) Unmarshal(data []byte) error {
+	if p == nil {
+		return errors.New("roast: cannot unmarshal into a nil signing package")
+	}
 	// Bound the input before allocating: reject a grossly oversized envelope
 	// before proto.Unmarshal materializes it (and before the copies below), so
 	// the MaxSigningPackageBytes cap protects memory rather than only rejecting

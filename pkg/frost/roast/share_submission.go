@@ -173,6 +173,9 @@ func (p *ShareSubmission) Type() string {
 // The submission must be signed first. The returned slice is the internal
 // cache - callers must not mutate it.
 func (p *ShareSubmission) Marshal() ([]byte, error) {
+	if p == nil {
+		return nil, errors.New("roast: cannot marshal a nil share submission")
+	}
 	if p.wireEnvelope != nil {
 		return p.wireEnvelope, nil
 	}
@@ -200,6 +203,9 @@ func (p *ShareSubmission) Marshal() ([]byte, error) {
 // and envelope bytes verbatim (the submitter signature is verified over exactly
 // these bytes), populates the fields from the body, and validates the structure.
 func (p *ShareSubmission) Unmarshal(data []byte) error {
+	if p == nil {
+		return errors.New("roast: cannot unmarshal into a nil share submission")
+	}
 	// Bound the input before allocating: reject a grossly oversized envelope
 	// before proto.Unmarshal materializes it (and before the copies below), so
 	// the caps protect memory rather than only rejecting after the fact.
