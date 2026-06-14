@@ -63,15 +63,14 @@ type ShareSubmissionBody struct {
 	// for blame and non-repudiation; the member-side check rejects a share whose
 	// coordinator_id disagrees with the bound package.
 	CoordinatorId uint32 `protobuf:"varint,3,opt,name=coordinator_id,json=coordinatorId,proto3" json:"coordinator_id,omitempty"`
-	// 32-byte hash of the SignedSigningPackage ENVELOPE this share responds to -
-	// body PLUS coordinator signature, the exact bytes the member authenticated
-	// and retained. Hashing the whole envelope (not just the body) binds the
-	// share to the precise bytes received, so a coordinator that distributes
-	// distinct valid envelopes to different members is bound to the specific
-	// branch each member saw. NOTE: this binding assumes operator signatures are
-	// canonical / non-malleable; otherwise in-transit malleation of the same body
-	// could fragment bindings, so the blame layer (Phase 7.2b-4) must rely on
-	// canonical operator signatures or compare package bodies.
+	// 32-byte SHA-256 of the signing-package BODY this share responds to - the
+	// serialized SigningPackageBody the coordinator signed (NOT the on-wire
+	// envelope). Binds the share to the coordinator's instruction. Hashing the
+	// body, not the envelope, keeps the binding stable across unsigned envelope
+	// re-encodings (the coordinator signature does not cover the outer envelope),
+	// so the same instruction maps to one binding for every member and coordinator
+	// equivocation (two different signed bodies for one attempt) is detected
+	// without false positives. See SigningPackage.BodyHash.
 	SigningPackageHash []byte `protobuf:"bytes,4,opt,name=signing_package_hash,json=signingPackageHash,proto3" json:"signing_package_hash,omitempty"`
 	// The serialized FROST round-2 signature share.
 	SignatureShare []byte `protobuf:"bytes,5,opt,name=signature_share,json=signatureShare,proto3" json:"signature_share,omitempty"`

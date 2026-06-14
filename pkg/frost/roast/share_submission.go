@@ -58,10 +58,9 @@ type ShareSubmission struct {
 	// for, as resolved when authenticating the signing package. A wire uint32
 	// bounded to group.MemberIndex by Validate.
 	CoordinatorIDValue uint32
-	// SigningPackageHash is the 32-byte hash of the SignedSigningPackage
-	// envelope (body plus coordinator signature) this share answers - the exact
-	// bytes the member retained. Assumes canonical operator signatures (see the
-	// proto for the malleability caveat).
+	// SigningPackageHash is the 32-byte SHA-256 of the signing-package BODY this
+	// share answers (SigningPackage.BodyHash) - the coordinator-signed content,
+	// stable across unsigned envelope re-encodings.
 	SigningPackageHash []byte
 	// SignatureShare is the serialized FROST round-2 signature share.
 	SignatureShare []byte
@@ -174,6 +173,9 @@ func (p *ShareSubmission) Type() string {
 // The submission must be signed first. The returned slice is the internal
 // cache - callers must not mutate it.
 func (p *ShareSubmission) Marshal() ([]byte, error) {
+	if p == nil {
+		return nil, errors.New("roast: cannot marshal a nil share submission")
+	}
 	if p.wireEnvelope != nil {
 		return p.wireEnvelope, nil
 	}
@@ -201,6 +203,9 @@ func (p *ShareSubmission) Marshal() ([]byte, error) {
 // and envelope bytes verbatim (the submitter signature is verified over exactly
 // these bytes), populates the fields from the body, and validates the structure.
 func (p *ShareSubmission) Unmarshal(data []byte) error {
+	if p == nil {
+		return errors.New("roast: cannot unmarshal into a nil share submission")
+	}
 	// Bound the input before allocating: reject a grossly oversized envelope
 	// before proto.Unmarshal materializes it (and before the copies below), so
 	// the caps protect memory rather than only rejecting after the fact.
@@ -251,6 +256,9 @@ func (p *ShareSubmission) Unmarshal(data []byte) error {
 // so callers that construct submissions in memory can validate without a
 // marshal/unmarshal round-trip.
 func (p *ShareSubmission) Validate() error {
+	if p == nil {
+		return errors.New("share submission: nil")
+	}
 	if len(p.AttemptContextHash) != attempt.MessageDigestLength {
 		return fmt.Errorf(
 			"share submission: attemptContextHash length [%d], expected [%d]",

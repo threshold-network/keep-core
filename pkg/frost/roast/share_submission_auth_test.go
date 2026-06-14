@@ -145,8 +145,8 @@ func TestAuthenticateShareSubmission_Rejections(t *testing.T) {
 	})
 }
 
-func TestShareSubmissionBindsToSigningPackageEnvelope(t *testing.T) {
-	// End-to-end: a share bound to a real signing package's EnvelopeHash
+func TestShareSubmissionBindsToSigningPackageBody(t *testing.T) {
+	// End-to-end: a share bound to a real signing package's BodyHash
 	// authenticates against that hash, and a share checked against a different
 	// package's hash is rejected.
 	const (
@@ -154,9 +154,9 @@ func TestShareSubmissionBindsToSigningPackageEnvelope(t *testing.T) {
 		coordinator = group.MemberIndex(7)
 	)
 	pkg := signedTestSigningPackage(t, coordinator, nil)
-	pkgHash, err := pkg.EnvelopeHash()
+	pkgHash, err := pkg.BodyHash()
 	if err != nil {
-		t.Fatalf("envelope hash: %v", err)
+		t.Fatalf("body hash: %v", err)
 	}
 
 	sub := &ShareSubmission{
@@ -177,9 +177,9 @@ func TestShareSubmissionBindsToSigningPackageEnvelope(t *testing.T) {
 
 	// A different package -> different envelope hash -> rejected.
 	otherPkg := signedTestSigningPackage(t, coordinator, bytes.Repeat([]byte{0xcd}, TaprootMerkleRootLength))
-	otherHash, err := otherPkg.EnvelopeHash()
+	otherHash, err := otherPkg.BodyHash()
 	if err != nil {
-		t.Fatalf("other envelope hash: %v", err)
+		t.Fatalf("other body hash: %v", err)
 	}
 	if bytes.Equal(pkgHash[:], otherHash[:]) {
 		t.Fatal("sanity: distinct packages must have distinct envelope hashes")
@@ -191,25 +191,51 @@ func TestShareSubmissionBindsToSigningPackageEnvelope(t *testing.T) {
 	}
 }
 
-func TestSigningPackageEnvelopeHash_StableAcrossWire(t *testing.T) {
+func TestSigningPackageBodyHash_StableAcrossWireAndReEncoding(t *testing.T) {
 	pkg := signedTestSigningPackage(t, 3, nil)
 	wire, err := pkg.Marshal()
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	producerHash, err := pkg.EnvelopeHash()
+	producerHash, err := pkg.BodyHash()
 	if err != nil {
 		t.Fatalf("producer hash: %v", err)
 	}
+
 	var received SigningPackage
 	if err := received.Unmarshal(wire); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	receivedHash, err := received.EnvelopeHash()
+	receivedHash, err := received.BodyHash()
 	if err != nil {
 		t.Fatalf("received hash: %v", err)
 	}
 	if producerHash != receivedHash {
-		t.Fatal("envelope hash must match for producer and receiver over the same bytes")
+		t.Fatal("body hash must match for producer and receiver over the same bytes")
+	}
+
+	// It must also be stable across an unsigned ENVELOPE re-encoding (reversed
+	// field order) of the same (body, signature) - the property that stops a MitM
+	// re-wrap from looking like a different package or fragmenting share bindings.
+	body, _ := pkg.bodyBytes()
+	var reEncoded []byte
+	reEncoded = append(reEncoded, 0x12, byte(len(pkg.CoordinatorSignature)))
+	reEncoded = append(reEncoded, pkg.CoordinatorSignature...)
+	reEncoded = append(reEncoded, 0x0a, byte(len(body)))
+	reEncoded = append(reEncoded, body...)
+
+	var reDecoded SigningPackage
+	if err := reDecoded.Unmarshal(reEncoded); err != nil {
+		t.Fatalf("unmarshal re-encoded: %v", err)
+	}
+	reHash, err := reDecoded.BodyHash()
+	if err != nil {
+		t.Fatalf("re-encoded hash: %v", err)
+	}
+	if reHash != producerHash {
+		t.Fatal("body hash must be stable across an unsigned envelope re-encoding")
+	}
+	if reWire, _ := reDecoded.Marshal(); bytes.Equal(reWire, wire) {
+		t.Fatal("sanity: the re-encoded envelope must differ from the canonical envelope")
 	}
 }
