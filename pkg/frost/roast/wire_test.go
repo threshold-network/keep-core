@@ -66,7 +66,10 @@ func TestSnapshotWire_ReceivedBytesPreservedVerbatim(t *testing.T) {
 
 func TestSnapshotWire_NonCanonicalEnvelopeEncodingSurvives(t *testing.T) {
 	original := signedTestSnapshot(t, 7)
-	body, _ := original.SignableBytes()
+	// The wire body is the bare serialized body (NOT the domain-tagged
+	// SignableBytes); the signature over SignableBytes still verifies against
+	// it after decode.
+	body, _ := original.bodyBytes()
 
 	// Handcraft an envelope with the fields in REVERSE tag order
 	// (operator_signature before body) - a wire-legal but non-canonical

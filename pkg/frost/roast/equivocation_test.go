@@ -94,7 +94,8 @@ func TestOwnSnapshotMutatedInBundle_RetainsBothSignedEnvelopes(t *testing.T) {
 	mutated := *selfSubmission
 	mutated.OperatorSignature = bytes.Repeat([]byte{0xff}, 64)
 	// Fresh caches: the mutated copy is a distinct signed object.
-	mutated.signedBody = nil
+	mutated.bodyCache = nil
+	mutated.signaturePayloadCache = nil
 	mutated.wireEnvelope = nil
 
 	bundle := &TransitionMessage{
