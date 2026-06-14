@@ -140,13 +140,85 @@ func TestSigningPackageWire_SignedBytesDomainSeparatedFromTransitionMessage(t *t
 		t.Fatal("sanity: the bare body must collide with TransitionMessageBody")
 	}
 
-	// But the domain-tagged SIGNED bytes do NOT present a valid transition body
-	// (no 32-byte attempt_context_hash), so a coordinator signature over a
-	// signing package cannot be replayed as a transition-message signature.
-	var signableAsTransition pb.TransitionMessageBody
-	_ = proto.Unmarshal(signable, &signableAsTransition)
-	if len(signableAsTransition.AttemptContextHash) == attempt.MessageDigestLength {
-		t.Fatal("domain-tagged signed bytes must not present a valid transition attempt_context_hash")
+	// But the domain-tagged SIGNED bytes begin with an illegal protobuf tag
+	// (field 0), so they are not decodable as ANY protobuf message - a
+	// signing-package signature therefore cannot be replayed onto a
+	// transition-message (or other coordinator-signed) envelope, whose decoder
+	// proto.Unmarshals and rejects the body. A valid-protobuf tag would not give
+	// this (see TestSigningPackageWire_SignedBytesResistEmbeddedTransitionBody).
+	if signable[0] != 0x00 {
+		t.Fatal("signed bytes must begin with an illegal protobuf tag (0x00)")
+	}
+	if err := proto.Unmarshal(signable, &pb.TransitionMessageBody{}); err == nil {
+		t.Fatal("domain-tagged signed bytes must not decode as a protobuf message")
+	}
+}
+
+func TestSigningPackageWire_SignedBytesResistEmbeddedTransitionBody(t *testing.T) {
+	// A malicious coordinator controls signing_package, so it can embed a fully
+	// valid serialized TransitionMessageBody there. Under a domain tag that is
+	// itself valid protobuf wire data, a parser skips the tag as an unknown
+	// field and could resume into this embedded transition body, re-enabling
+	// cross-protocol signature confusion. The leading illegal tag must make the
+	// whole signed payload undecodable regardless of the embedded content.
+	embeddedTransition, err := proto.Marshal(&pb.TransitionMessageBody{
+		AttemptContextHash: bytes.Repeat([]byte{0x07}, attempt.MessageDigestLength),
+		CoordinatorId:      3,
+	})
+	if err != nil {
+		t.Fatalf("marshal embedded transition: %v", err)
+	}
+	// Sanity: the embedded payload really is a valid transition body.
+	var sanity pb.TransitionMessageBody
+	if err := proto.Unmarshal(embeddedTransition, &sanity); err != nil ||
+		len(sanity.AttemptContextHash) != attempt.MessageDigestLength {
+		t.Fatal("sanity: embedded payload must be a valid transition body")
+	}
+
+	pkg := &SigningPackage{
+		AttemptContextHash:  append([]byte(nil), pinnedContextHash[:]...),
+		CoordinatorIDValue:  3,
+		SigningPackageBytes: embeddedTransition,
+	}
+	signable, err := pkg.SignableBytes()
+	if err != nil {
+		t.Fatalf("signable: %v", err)
+	}
+	if err := proto.Unmarshal(signable, &pb.TransitionMessageBody{}); err == nil {
+		t.Fatal("signed bytes embedding a transition body must still be undecodable as protobuf")
+	}
+}
+
+func TestSigningPackageWire_UnmarshalResetsSignableCache(t *testing.T) {
+	// A SigningPackage value reused across a SignableBytes call and then an
+	// Unmarshal must authenticate the newly decoded package against the bytes it
+	// just received, never the stale cached payload.
+	reused := &SigningPackage{
+		AttemptContextHash:  append([]byte(nil), pinnedContextHash[:]...),
+		CoordinatorIDValue:  3,
+		SigningPackageBytes: []byte("stale-package"),
+	}
+	if _, err := reused.SignableBytes(); err != nil { // prime the cache
+		t.Fatalf("prime cache: %v", err)
+	}
+
+	// Decode a different, genuine package into the SAME value.
+	genuine := signedTestSigningPackage(t, 5, bytes.Repeat([]byte{0xab}, TaprootMerkleRootLength))
+	wire, err := genuine.Marshal()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := reused.Unmarshal(wire); err != nil {
+		t.Fatalf("unmarshal into reused value: %v", err)
+	}
+
+	got, _ := reused.SignableBytes()
+	want, _ := genuine.SignableBytes()
+	if !bytes.Equal(got, want) {
+		t.Fatal("Unmarshal must reset the signable-bytes cache to the received body")
+	}
+	if err := AuthenticateSigningPackage(fakeVerifier{}, reused, 5, pinnedContextHash[:]); err != nil {
+		t.Fatalf("authenticate reused-decoded package: %v", err)
 	}
 }
 

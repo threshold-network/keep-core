@@ -17,15 +17,32 @@ const SignedSigningPackageType = roastMessageTypePrefix + "signed_signing_packag
 
 // signingPackageSignatureDomain is the fixed domain-separation tag prefixed
 // to the bytes the coordinator signs (see SignableBytes). The elected
-// coordinator's operator key also signs TransitionMessage bodies, and a
-// SigningPackageBody is wire-compatible with a TransitionMessageBody (matching
-// tags/types for attempt_context_hash and coordinator_id, and a
-// length-delimited field 3). Prefixing a unique domain tag makes the signed
-// byte stream unambiguously a signing package, so a coordinator signature over
-// a signing package can never be replayed as a transition-message signature
-// (or vice versa) regardless of protobuf field layout. The tag is NOT carried
-// on the wire - it is a fixed constant both signer and verifier prepend.
-var signingPackageSignatureDomain = []byte("roast/signed-signing-package/v1\x00")
+// coordinator's operator key also signs TransitionMessage and evidence-snapshot
+// bodies, and a SigningPackageBody is wire-compatible with a
+// TransitionMessageBody (matching tags/types for attempt_context_hash and
+// coordinator_id, and a length-delimited field 3), so the signed byte streams
+// must not be confusable.
+//
+// The tag BEGINS with byte 0x00 - an illegal protobuf tag (field number 0) -
+// which separates the domains in BOTH directions without relying on field
+// layout:
+//
+//   - A signing-package signature cannot be accepted on another envelope:
+//     presenting these signed bytes as that envelope's body fails when the
+//     receiver decodes the body, because every signed-body decoder
+//     proto.Unmarshals it and an illegal leading tag is rejected. (A
+//     valid-protobuf ASCII tag does NOT give this: a parser skips it as an
+//     unknown length-delimited field and resumes into a transition body
+//     crafted inside signing_package.)
+//   - Another message's signature cannot be accepted on a signing package:
+//     the signature is verified over signingPackageSignatureDomain || body,
+//     which begins with 0x00, whereas a serialized protobuf body always begins
+//     with a valid field tag (>= 0x08), so the two signed byte streams differ
+//     in their first byte and the signature cannot verify.
+//
+// The tag is NOT carried on the wire - it is a fixed constant both signer and
+// verifier prepend.
+var signingPackageSignatureDomain = []byte("\x00roast/signed-signing-package/v1\x00")
 
 // MaxSigningPackageBytes caps the embedded FROST SigningPackage length,
 // rejecting pathological payloads at Unmarshal time so a misbehaving
@@ -232,6 +249,10 @@ func (p *SigningPackage) Unmarshal(data []byte) error {
 	p.CoordinatorSignature = append([]byte(nil), envelope.CoordinatorSignature...)
 	p.bodyCache = append([]byte(nil), envelope.Body...)
 	p.wireEnvelope = append([]byte(nil), data...)
+	// Clear any signable-bytes cache a prior SignableBytes call left on a reused
+	// receiver, so the next call rebuilds it from the body just received -
+	// authentication must verify against the received bytes, never stale ones.
+	p.signaturePayloadCache = nil
 	return p.Validate()
 }
 

@@ -19,13 +19,16 @@ package roast;
 //
 //   domain_tag || serialized SigningPackageBody
 //
-// where domain_tag is the fixed ASCII bytes "roast/signed-signing-package/v1"
-// followed by a single 0x00 byte. The tag is a constant prepended by signer
-// and verifier alike and is NOT carried on the wire - only the body is, in
-// SignedSigningPackage.body. The tag domain-separates this signature from the
-// coordinator's transition-message signatures, whose body is otherwise
-// wire-compatible with SigningPackageBody. Any implementation that signs or
-// verifies the bare body (without the tag) will fail to interoperate.
+// where domain_tag is, in order: a single 0x00 byte, the fixed ASCII bytes
+// "roast/signed-signing-package/v1", and a trailing 0x00 byte. The LEADING
+// 0x00 is an illegal protobuf tag (field number 0): it makes the signed
+// payload undecodable as any protobuf message, so a signing-package signature
+// can never be accepted on a transition-message (or other coordinator-signed)
+// envelope whose body is otherwise wire-compatible with SigningPackageBody.
+// The tag is a constant prepended by signer and verifier alike and is NOT
+// carried on the wire - only the body is, in SignedSigningPackage.body. Any
+// implementation that signs or verifies the bare body (without the exact tag)
+// will fail to interoperate.
 
 // The signing-package body. Carried verbatim as SignedSigningPackage.body;
 // the operator signature covers the domain-tagged form of these bytes
