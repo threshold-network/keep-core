@@ -40,6 +40,11 @@ const MaxSnapshotsPerBundle = 256
 // to a specific scheme at this layer. Rejects oversize payloads.
 const MaxOperatorSignatureBytes = 256
 
+// MaxCoordinatorPackageProofs caps the coordinator-signed package proofs a
+// snapshot may carry: the authoritative package this signer accepted plus, at
+// most, one body-different package proving local coordinator equivocation.
+const MaxCoordinatorPackageProofs = 2
+
 // MaxCoordinatorSignatureBytes caps the bundle-level
 // CoordinatorSignature. Same justification as
 // MaxOperatorSignatureBytes.
@@ -100,10 +105,19 @@ type LocalEvidenceSnapshot struct {
 	// Omitted when no first-write-wins-conflict events were
 	// observed.
 	Conflicts []ConflictEntry
+	// CoordinatorPackageProofs carries the coordinator-signed signing-package
+	// envelope(s) this signer accepted for the attempt (the authoritative one,
+	// plus a second body-different one if the coordinator equivocated to this
+	// signer). At most MaxCoordinatorPackageProofs, in canonical bytewise-ascending
+	// order. They are the raw, unforgeable proof material NextAttempt verifies and
+	// dedupes by signing-package body hash to exclude a coordinator that signed
+	// >= 2 distinct bodies for one attempt. Each entry is a serialized
+	// SignedSigningPackage, carried verbatim; omitted when none.
+	CoordinatorPackageProofs [][]byte
 	// OperatorSignature is the signer's operator-key signature over
 	// SignableBytes(): the snapshot domain tag followed by the serialized
 	// protobuf body of (senderID, attemptContextHash, overflows, rejects,
-	// conflicts).
+	// conflicts, coordinatorPackageProofs).
 	OperatorSignature []byte
 
 	// bodyCache caches the exact serialized body bytes carried on the wire:
@@ -122,14 +136,16 @@ type LocalEvidenceSnapshot struct {
 }
 
 // NewLocalEvidenceSnapshot converts an attempt.Evidence map into a
-// LocalEvidenceSnapshot ready for signing and broadcast. The
-// resulting snapshot's Overflows field is sorted ascending by
-// Sender for deterministic JSON encoding. The OperatorSignature is
-// left empty -- the caller must sign and populate it (Phase 3.3).
+// LocalEvidenceSnapshot ready for signing and broadcast. The evidence fields
+// are sorted into their canonical order; any coordinatorPackageProofs (the
+// coordinator-signed signing-package envelope(s) this signer accepted) are
+// stored as owned copies in canonical bytewise-ascending order. The
+// OperatorSignature is left empty -- the caller must sign and populate it.
 func NewLocalEvidenceSnapshot(
 	sender group.MemberIndex,
 	attemptContextHash [attempt.MessageDigestLength]byte,
 	evidence attempt.Evidence,
+	coordinatorPackageProofs ...[]byte,
 ) *LocalEvidenceSnapshot {
 	overflows := make([]OverflowEntry, 0, len(evidence.Overflows))
 	for s, c := range evidence.Overflows {
@@ -174,6 +190,18 @@ func NewLocalEvidenceSnapshot(
 	}
 	if len(conflicts) > 0 {
 		snap.Conflicts = conflicts
+	}
+	if len(coordinatorPackageProofs) > 0 {
+		proofs := make([][]byte, len(coordinatorPackageProofs))
+		for i, p := range coordinatorPackageProofs {
+			proofs[i] = append([]byte(nil), p...)
+		}
+		// Canonical bytewise-ascending order so the signed body is deterministic
+		// across signers; NextAttempt dedupes by body hash regardless of order.
+		sort.Slice(proofs, func(i, j int) bool {
+			return bytes.Compare(proofs[i], proofs[j]) < 0
+		})
+		snap.CoordinatorPackageProofs = proofs
 	}
 	return snap
 }
@@ -315,6 +343,35 @@ func (s *LocalEvidenceSnapshot) Validate() error {
 		if s.Conflicts[i].Sender <= s.Conflicts[i-1].Sender {
 			return fmt.Errorf(
 				"local evidence snapshot: conflicts not sorted ascending or contain duplicate at index %d",
+				i,
+			)
+		}
+	}
+	if len(s.CoordinatorPackageProofs) > MaxCoordinatorPackageProofs {
+		return fmt.Errorf(
+			"local evidence snapshot: coordinatorPackageProofs count [%d] exceeds cap [%d]",
+			len(s.CoordinatorPackageProofs),
+			MaxCoordinatorPackageProofs,
+		)
+	}
+	for i, proof := range s.CoordinatorPackageProofs {
+		if len(proof) == 0 {
+			return fmt.Errorf(
+				"local evidence snapshot: coordinatorPackageProofs[%d] is empty",
+				i,
+			)
+		}
+		if len(proof) > MaxSignedSigningPackageBytes {
+			return fmt.Errorf(
+				"local evidence snapshot: coordinatorPackageProofs[%d] length [%d] exceeds cap [%d]",
+				i,
+				len(proof),
+				MaxSignedSigningPackageBytes,
+			)
+		}
+		if i > 0 && bytes.Compare(proof, s.CoordinatorPackageProofs[i-1]) <= 0 {
+			return fmt.Errorf(
+				"local evidence snapshot: coordinatorPackageProofs not sorted ascending or contain duplicate at index %d",
 				i,
 			)
 		}
