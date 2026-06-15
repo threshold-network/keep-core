@@ -673,34 +673,54 @@ pub fn interactive_aggregate(
     // step is each signer's Round2, where lifecycle/quarantine/firewall
     // were already enforced (including the full-subset quarantine check).
     //
-    // frost verifies every share and can name which failed, but this path
-    // does NOT surface those as attributable member blame: the engine
-    // cannot yet bind these public inputs (signing package, taproot root)
-    // to what each member actually signed at Round2, so a coordinator
-    // aggregating against a different package/root would make honest
-    // shares fail and frame their members. Attributable blame waits for
-    // the signed-package envelopes (Phase 7.2b, frozen spec section 6),
-    // which prove what each member signed. Until then a verification
-    // failure is a generic fail-closed error: no signature, no blame.
+    // frost verifies every share and names which failed. This path now surfaces
+    // those as CANDIDATE culprits (Phase 7.2b-3): the engine reports the members
+    // whose shares did not verify against the group's own verifying material,
+    // but it does NOT adjudicate fault. The engine cannot bind these public
+    // inputs (signing package, taproot root) to what each member signed at
+    // Round2, so a coordinator that aggregated honest shares against a
+    // substituted package/root would make those honest shares fail and appear
+    // here. Authoritative, envelope-bound blame is the Go host's job at an f+1
+    // accuser quorum (frozen Phase 7.2b spec, section 6), using the signed
+    // signing-package envelopes; this candidate list is its input. Fail-closed
+    // either way: no signature leaves on a verification failure.
     let verification_key_package = match taproot_merkle_root.as_ref() {
         Some(root) => public_key_package.clone().tweak(Some(root.as_slice())),
         None => public_key_package.clone(),
     };
 
-    let aggregate_result = match taproot_merkle_root.as_ref() {
-        Some(root) => frost::aggregate_with_tweak(
-            &signing_package,
-            &signature_shares,
-            &public_key_package,
-            Some(root.as_slice()),
-        ),
-        None => frost::aggregate(&signing_package, &signature_shares, &public_key_package),
+    // Aggregate with AllCheaters detection. The frost-secp256k1-tr
+    // aggregate/aggregate_with_tweak wrappers hardcode FirstCheater, so a
+    // failure would name only one member; AllCheaters names EVERY member whose
+    // share failed. verification_key_package is the (taproot-tweaked, when a
+    // root is set) public key package - exactly what aggregate_with_tweak
+    // derives internally - so this is equivalent to those wrappers on the
+    // success path. Cheater detection only runs after the aggregate signature
+    // itself fails to verify, so there is no happy-path cost.
+    let signature = match frost_core::aggregate_custom(
+        &signing_package,
+        &signature_shares,
+        &verification_key_package,
+        frost_core::CheaterDetection::AllCheaters,
+    ) {
+        Ok(signature) => signature,
+        Err(error) => {
+            let candidate_culprits = aggregate_candidate_culprits(&error);
+            if candidate_culprits.is_empty() {
+                // Not a per-member share attribution (malformed package, wrong
+                // share count, group/field error): fail closed with the generic
+                // validation error, no blame.
+                return Err(EngineError::Validation(format!(
+                    "InteractiveAggregate: failed to aggregate: {error}"
+                )));
+            }
+            return Err(EngineError::AggregateShareVerificationFailed {
+                session_id: request.session_id.clone(),
+                attempt_id,
+                candidate_culprits,
+            });
+        }
     };
-    let signature = aggregate_result.map_err(|error| {
-        EngineError::Validation(format!(
-            "InteractiveAggregate: failed to aggregate: {error}"
-        ))
-    })?;
 
     // Self-verify the aggregate against the (tweaked) group verifying
     // key before releasing it, matching the coarse finalize path.

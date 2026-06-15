@@ -94,6 +94,28 @@ pub enum EngineError {
         session_id: String,
         attempt_id: String,
     },
+    /// Returned when InteractiveAggregate fails because one or more signature
+    /// shares did not verify against the (tweaked) group verifying material.
+    /// Unlike the generic `Validation` failure, this carries the FROST-identified
+    /// CANDIDATE culprits as u16 Go member identifiers - every member whose share
+    /// failed, via `CheaterDetection::AllCheaters` - so the Go host can feed them
+    /// into envelope-bound blame adjudication. CANDIDATES, not a verdict: the
+    /// engine verifies pure FROST shares against the group's own verifying
+    /// material and never inspects operator-signed envelopes (frozen Q1
+    /// boundary); a coordinator that aggregated honest shares against a
+    /// substituted package or root would make those honest shares appear here.
+    /// Authoritative blame is the Go host's at an f+1 accuser quorum. Fail-closed:
+    /// no signature is produced. Distinct code so callers match on
+    /// `aggregate_share_verification_failed` rather than the message.
+    #[error(
+        "InteractiveAggregate: {} signature share(s) failed verification for attempt [{attempt_id}] in session [{session_id}]",
+        candidate_culprits.len()
+    )]
+    AggregateShareVerificationFailed {
+        session_id: String,
+        attempt_id: String,
+        candidate_culprits: Vec<u16>,
+    },
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -119,6 +141,7 @@ impl EngineError {
             Self::InteractiveAttemptAlreadyAggregated { .. } => {
                 "interactive_attempt_already_aggregated"
             }
+            Self::AggregateShareVerificationFailed { .. } => "aggregate_share_verification_failed",
             Self::Internal(_) => "internal_error",
         }
     }
@@ -147,9 +170,26 @@ impl EngineError {
             // is durably marked complete; a re-aggregation request is a benign
             // duplicate the caller should not retry, not an engine fault.
             Self::InteractiveAttemptAlreadyAggregated { .. } => "recoverable",
+            // A fresh attempt that excludes the candidate culprits can still
+            // produce a signature, so this is recoverable: the caller mints a
+            // new attempt after the Go host adjudicates blame.
+            Self::AggregateShareVerificationFailed { .. } => "recoverable",
             Self::SessionFinalized { .. } => "terminal",
             Self::SessionNotFound { .. } => "terminal",
             Self::Internal(_) => "terminal",
+        }
+    }
+
+    /// The CANDIDATE culprits carried by this error. Non-empty only for
+    /// `AggregateShareVerificationFailed`; empty for every other variant. The
+    /// FFI layer uses this to surface the list to the Go host without matching
+    /// the variant inline.
+    pub fn candidate_culprits(&self) -> &[u16] {
+        match self {
+            Self::AggregateShareVerificationFailed {
+                candidate_culprits, ..
+            } => candidate_culprits,
+            _ => &[],
         }
     }
 }
@@ -244,5 +284,28 @@ mod tests {
             EngineError::Internal("panic".to_string()).recovery_class(),
             "terminal"
         );
+    }
+
+    #[test]
+    fn aggregate_share_verification_failed_code_message_and_culprits() {
+        let err = EngineError::AggregateShareVerificationFailed {
+            session_id: "session-a".to_string(),
+            attempt_id: "attempt-1".to_string(),
+            candidate_culprits: vec![2, 3],
+        };
+        assert_eq!(err.code(), "aggregate_share_verification_failed");
+        assert_eq!(err.recovery_class(), "recoverable");
+        // The count is rendered; the member identifiers travel in the structured
+        // candidate_culprits list, not the message string.
+        assert_eq!(
+            err.to_string(),
+            "InteractiveAggregate: 2 signature share(s) failed verification for attempt [attempt-1] in session [session-a]",
+        );
+        assert_eq!(err.candidate_culprits(), &[2, 3]);
+
+        // Every non-aggregate error exposes no culprits.
+        assert!(EngineError::Validation("x".to_string())
+            .candidate_culprits()
+            .is_empty());
     }
 }
