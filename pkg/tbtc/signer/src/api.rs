@@ -268,6 +268,46 @@ pub struct AggregateResult {
     pub signature_hex: String,
 }
 
+/// The verdict of a single-share verification (VerifySignatureShare). It is a
+/// deliberate THREE-way value, not pass/fail: the boundary between a
+/// member-attributable failure (blame) and a not-the-member's-fault failure
+/// (don't blame) is security-critical, and the engine - the only layer that can
+/// tell "the member's signed scalar is malformed" from "the coordinator's
+/// package/context is malformed" - decides it here so the Go host never has to.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShareVerificationVerdict {
+    /// The share is a valid FROST signature share under the (tweaked) package.
+    Valid,
+    /// MEMBER-attributable: the share is mathematically invalid, OR the member's
+    /// own operator-signed share bytes are undecodable (self-incriminating).
+    Invalid,
+    /// Not the member's fault: undecodable signing package (coordinator input),
+    /// missing/unknown verifying share, session not ready, ambiguous context.
+    /// Fail closed against blame.
+    Indeterminate,
+}
+
+/// Request to verify ONE retained round-2 signature share against an attempt's
+/// authoritative signing package, using FROST share verification. The verifying
+/// material is resolved from the session's own DKG state (never the request),
+/// and the taproot root is canonicalized + applied exactly as InteractiveAggregate
+/// does, so the verdict matches what aggregation would conclude for that share.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct VerifySignatureShareRequest {
+    pub session_id: String,
+    pub signing_package_hex: String,
+    pub signature_share_hex: String,
+    pub member_identifier: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taproot_merkle_root_hex: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct VerifySignatureShareResult {
+    pub verdict: ShareVerificationVerdict,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct StartSignRoundRequest {
     pub session_id: String,

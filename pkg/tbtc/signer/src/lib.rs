@@ -301,6 +301,19 @@ pub extern "C" fn frost_tbtc_aggregate(
     })
 }
 
+#[no_mangle]
+pub extern "C" fn frost_tbtc_verify_signature_share(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: crate::api::VerifySignatureShareRequest =
+            parse_request(request_ptr, request_len)?;
+        let response = engine::verify_signature_share(request)?;
+        serialize_response(&response)
+    })
+}
+
 // Phase 7.1 hardened interactive signing session (frozen spec
 // docs/phase-7-interactive-session-spec-freeze.md). Additive ABI: the
 // Go host adopts these in Phase 7.3; nothing breaks until it calls
