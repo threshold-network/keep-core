@@ -6,6 +6,14 @@
 // pure FROST share verification, no envelope/operator-signature inspection
 // (that is the Go layer's job; frozen Q1 boundary).
 //
+// As with InteractiveAggregate's candidate culprits, an `Invalid` verdict is
+// framable: this endpoint verifies the share against WHATEVER package/root the
+// caller supplies, so a coordinator that verifies an honest share against a
+// mismatched package/root would get `Invalid`. The engine cannot bind these
+// public inputs to what the member signed at Round2; authoritative,
+// envelope-bound blame is the Go host's job at an f+1 accuser quorum (frozen
+// Phase 7.2b spec, section 6). This verdict is that adjudication's INPUT.
+//
 // It returns an explicit tri-state verdict (Valid / Invalid / Indeterminate),
 // not a pass/fail + error: only the engine can distinguish a member's malformed
 // signed scalar (blame) from a malformed package/context (don't blame), so it
@@ -48,9 +56,18 @@ pub fn verify_signature_share(
     };
 
     // Canonicalize + apply the taproot root EXACTLY as InteractiveAggregate (the
-    // tweak path must not drift; None vs Some([]) must resolve identically).
+    // tweak path must not drift; None vs Some([]) must resolve identically). A
+    // malformed root (non-hex / not 32 bytes) is COORDINATOR/wallet-context
+    // input, never the member's signed-share fault, so it returns an in-band
+    // Indeterminate verdict rather than escaping to the FFI error channel: the
+    // contract is "a tri-state verdict for every input", so the Go host never
+    // has to infer "don't blame" from an error code.
     let mut taproot_merkle_root_hex = request.taproot_merkle_root_hex.clone();
-    let taproot_merkle_root = canonicalize_taproot_merkle_root_hex(&mut taproot_merkle_root_hex)?;
+    let taproot_merkle_root =
+        match canonicalize_taproot_merkle_root_hex(&mut taproot_merkle_root_hex) {
+            Ok(root) => root,
+            Err(_) => return Ok(verdict(ShareVerificationVerdict::Indeterminate)),
+        };
 
     let member_identifier =
         match participant_identifier_to_frost_identifier(request.member_identifier) {

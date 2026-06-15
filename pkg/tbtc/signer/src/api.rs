@@ -281,6 +281,11 @@ pub enum ShareVerificationVerdict {
     Valid,
     /// MEMBER-attributable: the share is mathematically invalid, OR the member's
     /// own operator-signed share bytes are undecodable (self-incriminating).
+    /// NOTE: like InteractiveAggregate's candidate-culprit list, this verdict is
+    /// framable by a coordinator that verifies an honest share against a
+    /// mismatched package/root, so it is an INPUT to the Go host's f+1
+    /// envelope-bound adjudication (Phase 7.2b spec, section 6), NOT authoritative
+    /// blame on its own.
     Invalid,
     /// Not the member's fault: undecodable signing package (coordinator input),
     /// missing/unknown verifying share, session not ready, ambiguous context.

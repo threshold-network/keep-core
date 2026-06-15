@@ -13718,6 +13718,20 @@ fn verify_signature_share_verdicts_match_aggregate_and_handle_edges() {
         .verdict,
         ShareVerificationVerdict::Indeterminate
     );
+    // Malformed taproot root (coordinator/wallet context) -> Indeterminate,
+    // returned in-band, NOT escaped to the error channel (verdict contract).
+    assert_eq!(
+        verify_signature_share(crate::api::VerifySignatureShareRequest {
+            session_id: session_id.to_string(),
+            signing_package_hex: signing_package_hex.clone(),
+            signature_share_hex: round2.signature_share_hex.clone(),
+            member_identifier: 1,
+            taproot_merkle_root_hex: Some("not-hex".to_string()),
+        })
+        .expect("malformed taproot root must not error out-of-band")
+        .verdict,
+        ShareVerificationVerdict::Indeterminate
+    );
 
     // Equivalence guard: aggregate's AllCheaters verdict over [member 1 valid,
     // member 2 bogus] must name exactly the share verify_signature_share calls

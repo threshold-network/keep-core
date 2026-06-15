@@ -84,6 +84,20 @@ TbtcSignerResult frost_tbtc_interactive_session_abort(const uint8_t* request_ptr
  * would be forgeable by a coordinator using a mismatched package/root.
  */
 TbtcSignerResult frost_tbtc_interactive_aggregate(const uint8_t* request_ptr, size_t request_len);
+/*
+ * Phase 7.2b-4 single round-2 signature-share verification: backs the Go
+ * host's Round2ShareVerifier (member-blame classifier). Verifies ONE retained
+ * share against the attempt's signing package using the group's own
+ * (taproot-tweaked) verifying material - public material only, no secret and
+ * no operator-signed-envelope inspection (the latter is the Go layer's job).
+ * Returns an explicit tri-state verdict (valid/invalid/indeterminate) so the
+ * caller never infers member-fault from an FFI error code. Like aggregate's
+ * culprit list, an `invalid` verdict is framable by a coordinator that
+ * supplies a mismatched package/root, so it is an INPUT to the Go host's f+1
+ * envelope-bound adjudication (Phase 7.2b spec, section 6), NOT authoritative
+ * blame on its own.
+ */
+TbtcSignerResult frost_tbtc_verify_signature_share(const uint8_t* request_ptr, size_t request_len);
 
 #ifdef __cplusplus
 }
