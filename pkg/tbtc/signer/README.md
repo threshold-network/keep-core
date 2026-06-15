@@ -11,6 +11,17 @@ in `docs/rust-rewrite-bootstrap.md`.
   - `FinalizeSignRound`
   - `BuildTaprootTx`
   - `RefreshShares`
+- Exposes fine-grained interactive (member-custodied nonce) signing via:
+  - `InteractiveSessionOpen`
+  - `InteractiveRound1`
+  - `InteractiveRound2`
+  - `InteractiveSessionAbort`
+  - `InteractiveAggregate`
+
+  Round-1 nonces live only in engine memory and never persist; the engine
+  enforces a per-node live-session cap and an inactivity TTL, and the open
+  path is idempotent per `(session_id, attempt_id, member_identifier)` with
+  consumption markers as the only durable artifact.
 - Exposes ROAST liveness policy metadata via:
   - `RoastLivenessPolicy`
 - Exposes hardening/runtime counters via:
