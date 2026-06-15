@@ -71,6 +71,9 @@ func snapshotBodyMessage(s *LocalEvidenceSnapshot) *pb.LocalEvidenceSnapshotBody
 			Count:  uint64(e.Count),
 		})
 	}
+	// Carried verbatim; canonical order + bounds are enforced by Validate. Nil
+	// when none, so a proof-free snapshot encodes exactly as before.
+	body.CoordinatorPackageProofs = s.CoordinatorPackageProofs
 	return body
 }
 
@@ -98,6 +101,13 @@ func snapshotFieldsFromBody(s *LocalEvidenceSnapshot, body *pb.LocalEvidenceSnap
 			Sender: group.MemberIndex(e.Sender),
 			Count:  uint(e.Count),
 		})
+	}
+	s.CoordinatorPackageProofs = nil
+	for _, proof := range body.CoordinatorPackageProofs {
+		s.CoordinatorPackageProofs = append(
+			s.CoordinatorPackageProofs,
+			append([]byte(nil), proof...),
+		)
 	}
 }
 
