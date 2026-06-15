@@ -18,10 +18,14 @@ import (
 // bytes are self-incriminating proof of coordinator equivocation.
 const EquivocationKindSigningPackageConflict = "signing_package_conflict"
 
-// EquivocationKindShareConflict: a submitter returned two DIFFERENT signed share
-// bodies for the same attempt (different signature share, signing-package hash,
-// or coordinator id). Two operator-signed share bodies from one submitter for
-// one attempt are self-incriminating proof of member equivocation.
+// EquivocationKindShareConflict: a submitter returned two DIFFERENT signed shares
+// for the SAME authenticated instruction. Authentication pins coordinator_id,
+// attempt, and the signing-package hash, so the differing field is the FROST
+// signature_share itself - self-incriminating member double-signing. (A
+// submission referencing a DIFFERENT package or coordinator is rejected at
+// authentication, not flagged here; detecting that as targeted coordinator
+// equivocation needs cross-package retention plus the f+1 quorum compare and is
+// deferred to Phase 7.2b-4.)
 const EquivocationKindShareConflict = "share_conflict"
 
 // ErrRound2UnknownAttempt is returned by Round2Collector when no binding exists
@@ -272,7 +276,17 @@ func (c *Round2Collector) RecordShareSubmission(sub *ShareSubmission) error {
 	if sub == nil {
 		return errors.New("round2: nil share submission")
 	}
+	// Validate up front so SubmitterID() is bounded (uint32 -> MemberIndex) for
+	// the membership pre-gate below. Membership is a cheap gate before the
+	// expensive signature verify: it rejects validly-signed-but-not-included
+	// junk without burning CPU. It is safe to gate here because the attempt
+	// context hash cryptographically commits to the included set, so the set for
+	// a given attempt key cannot change under us.
+	if err := sub.Validate(); err != nil {
+		return fmt.Errorf("share submission failed structural validation: %w", err)
+	}
 	key := round2AttemptKey(sub.AttemptContextHash)
+	submitter := sub.SubmitterID()
 
 	c.mu.Lock()
 	record, ok := c.attempts[key]
@@ -284,13 +298,16 @@ func (c *Round2Collector) RecordShareSubmission(sub *ShareSubmission) error {
 		c.mu.Unlock()
 		return ErrRound2NoSigningPackage
 	}
+	if _, included := record.includedSet[submitter]; !included {
+		c.mu.Unlock()
+		return ErrRound2SubmitterNotIncluded
+	}
 	elected := record.electedCoordinator
 	attemptHash := append([]byte(nil), record.attemptContextHash...)
 	pkgBodyHash := record.signingPackageBodyHash
 	c.mu.Unlock()
 
-	// Authenticate outside the lock (Validate + verify). Validate bounds the
-	// submitter id (uint32 -> MemberIndex), so SubmitterID() is safe below.
+	// Authenticate outside the lock (signature verify is the expensive step).
 	if err := AuthenticateShareSubmission(
 		c.verifier, sub, elected, attemptHash, pkgBodyHash[:],
 	); err != nil {
@@ -307,7 +324,6 @@ func (c *Round2Collector) RecordShareSubmission(sub *ShareSubmission) error {
 		return err
 	}
 	ownedEnvelope := append([]byte(nil), envelope...)
-	submitter := sub.SubmitterID()
 
 	var evidence *EquivocationEvidence
 	c.mu.Lock()
@@ -320,10 +336,6 @@ func (c *Round2Collector) RecordShareSubmission(sub *ShareSubmission) error {
 		// Binding or authoritative package changed under us (prune + re-begin).
 		c.mu.Unlock()
 		return ErrRound2UnknownAttempt
-	}
-	if _, included := record.includedSet[submitter]; !included {
-		c.mu.Unlock()
-		return ErrRound2SubmitterNotIncluded
 	}
 	switch existing, present := record.shares[submitter]; {
 	case !present:
