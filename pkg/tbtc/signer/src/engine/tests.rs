@@ -13365,3 +13365,62 @@ fn interactive_session_open_is_idempotent_across_message_hex_casing() {
         "re-cased message_hex reopen of an identical attempt must be idempotent"
     );
 }
+
+// interactive_session_abort_success_total must count only aborts that
+// actually destroyed live state. No-op calls (unknown session, or an
+// attempt_id filter that matched nothing) still bump calls_total but
+// must not inflate the success counter.
+#[test]
+fn interactive_session_abort_success_metric_counts_only_real_aborts() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let session_id = "interactive-abort-metric";
+    let key_group = "interactive-test-key-group";
+    let message = [0x73u8; 32];
+    let included = [1u16, 2];
+
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("opens");
+
+    // No-op: unknown session.
+    let noop = interactive_session_abort(InteractiveSessionAbortRequest {
+        session_id: "no-such-session".to_string(),
+        attempt_id: None,
+    })
+    .expect("no-op abort still returns Ok");
+    assert!(!noop.aborted);
+
+    // No-op: right session, attempt_id filter that matches nothing.
+    let noop_filter = interactive_session_abort(InteractiveSessionAbortRequest {
+        session_id: session_id.to_string(),
+        attempt_id: Some("deadbeef".to_string()),
+    })
+    .expect("filtered no-op abort returns Ok");
+    assert!(!noop_filter.aborted);
+
+    let after_noops = hardening_metrics();
+    assert_eq!(
+        after_noops.interactive_session_abort_calls_total, 2,
+        "every abort entry, including no-ops, increments calls_total"
+    );
+    assert_eq!(
+        after_noops.interactive_session_abort_success_total, 0,
+        "no-op aborts must not increment success_total"
+    );
+
+    // Real abort of the live attempt.
+    let aborted = interactive_session_abort(InteractiveSessionAbortRequest {
+        session_id: session_id.to_string(),
+        attempt_id: Some(opened.attempt_id.clone()),
+    })
+    .expect("real abort");
+    assert!(aborted.aborted);
+
+    let after_real = hardening_metrics();
+    assert_eq!(after_real.interactive_session_abort_calls_total, 3);
+    assert_eq!(
+        after_real.interactive_session_abort_success_total, 1,
+        "a real abort increments success_total exactly once"
+    );
+}

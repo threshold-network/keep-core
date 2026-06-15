@@ -811,11 +811,18 @@ pub fn interactive_session_abort(
         None => false,
     };
 
-    record_hardening_telemetry(|telemetry| {
-        telemetry.interactive_session_abort_success_total = telemetry
-            .interactive_session_abort_success_total
-            .saturating_add(1);
-    });
+    // Only count a success when live interactive state was actually
+    // aborted. A no-op call (no session, or an attempt_id filter that
+    // matched nothing) returns aborted == false and must not inflate the
+    // success counter - the calls_total counter at the top already
+    // records that the entry point ran.
+    if aborted {
+        record_hardening_telemetry(|telemetry| {
+            telemetry.interactive_session_abort_success_total = telemetry
+                .interactive_session_abort_success_total
+                .saturating_add(1);
+        });
+    }
 
     Ok(InteractiveSessionAbortResult {
         session_id: request.session_id,
