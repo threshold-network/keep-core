@@ -7,9 +7,9 @@ rewrite architecture.
 
 ## Implemented in this branch
 
-- Added `tools/tbtc-signer` Rust crate that builds a `cdylib` named
+- Added `pkg/tbtc/signer` Rust crate that builds a `cdylib` named
   `libfrost_tbtc`.
-- Added a C ABI contract in `tools/tbtc-signer/include/frost_tbtc.h`.
+- Added a C ABI contract in `pkg/tbtc/signer/include/frost_tbtc.h`.
 - Implemented coarse request/response operations keyed by `session_id`:
   - `frost_tbtc_run_dkg`
   - `frost_tbtc_start_sign_round`
@@ -135,11 +135,11 @@ rewrite architecture.
   includes that signer and fails, attempt-2 excludes it and succeeds, and
   `StartSignRound.signing_participants` cohorts are asserted across attempts
   (`threshold-network/keep-core` commit `7814f81a9`).
-- Added post-finalize signing-material cleanup in `tools/tbtc-signer` session
+- Added post-finalize signing-material cleanup in `pkg/tbtc/signer` session
   state: on successful finalize, bootstrap DKG key packages, DKG public key
   package cache, sign-request fingerprint, sign message bytes, and round state
   are removed while preserving finalize idempotency cache.
-- Added finalized-session guardrails in `tools/tbtc-signer`: subsequent
+- Added finalized-session guardrails in `pkg/tbtc/signer`: subsequent
   `StartSignRound` calls for an already-finalized session return
   `session_finalized`, preventing round restart and nonce/key-material reuse on
   the same session ID.
@@ -202,7 +202,7 @@ rewrite architecture.
   cryptographic RNG policy, crash-safe recovery).
 - Implement ROAST coordinator semantics.
   Implementation roadmap:
-  `docs/frost-migration/roast-implementation-plan.md`.
+  `pkg/tbtc/signer/docs/roast-implementation-plan.md`.
 - Extend `BuildTaprootTx` with full Taproot script-tree construction/signing
   policy semantics (current bootstrap path assembles validated unsigned txs).
 - Define canonical serialization rules and compatibility tests beyond JSON.
@@ -217,7 +217,7 @@ rewrite architecture.
 - This is a potential future direction, not a committed delivery item, and it
   may not be implemented.
 - Detailed discussion draft:
-  `docs/frost-migration/true-late-t-of-n-finalize-considerations.md`.
+  `pkg/tbtc/signer/docs/true-late-t-of-n-finalize-considerations.md`.
 
 - Current posture: we support early subset selection (`signing_participants` at
   `StartSignRound`), but not late subset selection after shares are already
@@ -262,6 +262,6 @@ rewrite architecture.
 ## Validation command
 
 ```bash
-cd tools/tbtc-signer
+cd pkg/tbtc/signer
 cargo test
 ```

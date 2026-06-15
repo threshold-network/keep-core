@@ -90,7 +90,7 @@ Deliverables:
 
 - Short RFC/decision brief for ROAST semantics in current architecture.
 - Phase 0 artifact:
-  `docs/frost-migration/roast-phase-0-spec-freeze.md`.
+  `pkg/tbtc/signer/docs/roast-phase-0-spec-freeze.md`.
 - Nonce-safety argument for attempt transitions (cohort/coordinator changes)
   under current deterministic nonce model.
 - Threat-model-to-control mapping for coordinator, participant, network, and
@@ -216,7 +216,7 @@ Acceptance criteria:
 Deliverables:
 
 - Phase 5 gate artifact:
-  `docs/frost-migration/roast-phase-5-security-rollout-gates.md`.
+  `pkg/tbtc/signer/docs/roast-phase-5-security-rollout-gates.md`.
 - Adversarial review packet focused on coordinator authority, transcript
   binding, replay resistance, and restart safety.
 - Rollout plan with feature flags, canary stages, and rollback conditions.
@@ -254,15 +254,15 @@ Recommended chunk order (docs+code):
 ## 9. Dependencies And Ownership
 
 - `tbtc` repo:
-  - `tools/tbtc-signer` request/state model updates and tests.
+  - `pkg/tbtc/signer` request/state model updates and tests.
 - `threshold-network/keep-core` repo:
   - coordinator policy enforcement, runtime retry transitions, integration tests.
 - Canonical attempt-context struct source of truth:
-  `tools/tbtc-signer/src/api.rs`.
+  `pkg/tbtc/signer/src/api.rs`.
 - keep-core must implement byte-for-byte compatible encode/decode + hashing.
 - Shared attempt-context vectors should be maintained and validated in both
   repos (proposed path:
-  `docs/frost-migration/test-vectors/roast-attempt-context-v1.json`).
+  `pkg/tbtc/signer/test/vectors/roast-attempt-context-v1.json`).
 
 ## 10. Relation To True Late t-of-n Finalize
 

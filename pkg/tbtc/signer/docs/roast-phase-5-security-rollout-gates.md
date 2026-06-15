@@ -302,7 +302,7 @@ Before final sign-off, collect and archive:
 4. Rollout metrics snapshots for each canary stage and final production cutover.
 5. Final approval record attached to the release or governance decision.
 6. Baseline calibration worksheet:
-   - `docs/frost-migration/roast-phase-5-baseline-calibration.md`
+   - `pkg/tbtc/signer/docs/roast-phase-5-baseline-calibration.md`
 
 ## Initial Benchmark Scaffold (Implemented)
 
@@ -349,15 +349,15 @@ Before final sign-off, collect and archive:
 ## Rollout Runbook (Implemented)
 
 - Runbook artifact:
-  `docs/frost-migration/roast-phase-5-rollout-runbook.md`
+  `pkg/tbtc/signer/docs/roast-phase-5-rollout-runbook.md`
 - Future mandatory TEE hardening profile
   (activation-gated):
-  `docs/frost-migration/tee-whitelisted-signer-enforcement-plan.md`
+  `pkg/tbtc/signer/docs/tee-whitelisted-signer-enforcement-plan.md`
 
 ## Baseline Calibration Worksheet (Prepared)
 
 - Worksheet artifact:
-  `docs/frost-migration/roast-phase-5-baseline-calibration.md`
+  `pkg/tbtc/signer/docs/roast-phase-5-baseline-calibration.md`
 - Current blocker:
   environment readiness for baseline data collection.
 

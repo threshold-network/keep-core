@@ -44,12 +44,12 @@ closed under ROAST strict mode.
 ## Evidence (Code + Tests)
 
 - State model updates:
-  `tools/tbtc-signer/src/engine.rs` (`SessionState.active_attempt_context`,
+  `pkg/tbtc/signer/src/engine` (`SessionState.active_attempt_context`,
   `PersistedSessionState.active_attempt_context`).
 - Policy enforcement helper:
-  `tools/tbtc-signer/src/engine.rs` (`enforce_active_attempt_context_match`).
+  `pkg/tbtc/signer/src/engine` (`enforce_active_attempt_context_match`).
 - Deterministic coordinator selector parity helper:
-  `tools/tbtc-signer/src/go_math_rand.rs`
+  `pkg/tbtc/signer/src/go_math_rand.rs`
   (`select_coordinator_identifier`).
 - Start stale-attempt rejection:
   `engine::tests::start_sign_round_rejects_stale_attempt_number_against_active_attempt_context`.

@@ -42,12 +42,12 @@ Traceability matrix:
 - `TeeEnforcementModes.tla`:
   `EnforceModeRequiresValidAttestationWithoutOverride`,
   `NoDirectDisabledToEnforceTransition` -> policy design in
-  `docs/frost-migration/tee-whitelisted-signer-enforcement-plan.md`.
+  `pkg/tbtc/signer/docs/tee-whitelisted-signer-enforcement-plan.md`.
 - `RoastRolloutPolicy.tla`:
   `BroadRequiresCanaryHistory`, `RollbackTransitionRequiresTrigger`,
   `CanaryHoldBlocksPromotion`, `BootstrapCannotJumpToBroad`,
   `EmergencyStopBlocksForwardProgress`, `HaltedModeIsTerminal` ->
-  `docs/frost-migration/roast-phase-5-security-rollout-gates.md`.
+  `pkg/tbtc/signer/docs/roast-phase-5-security-rollout-gates.md`.
 
 Run all models with:
 

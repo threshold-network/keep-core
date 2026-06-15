@@ -14,11 +14,11 @@ terminal/session-ending failures using machine-readable fields.
 ## Decisions Implemented In This Increment
 
 1. Added `EngineError::recovery_class()` classification in
-   `tools/tbtc-signer/src/errors.rs` with values:
+   `pkg/tbtc/signer/src/errors.rs` with values:
    - `recoverable`
    - `terminal`
 2. Extended signer FFI error payloads with `ErrorResponse.recovery_class` in
-   `tools/tbtc-signer/src/api.rs` and `tools/tbtc-signer/src/ffi.rs`.
+   `pkg/tbtc/signer/src/api.rs` and `pkg/tbtc/signer/src/ffi.rs`.
 3. Preserved existing `code`/`message` error contract while adding explicit
    recovery intent for policy/telemetry consumers.
 4. Added `frost_tbtc_roast_liveness_policy` FFI endpoint and
@@ -41,13 +41,13 @@ terminal/session-ending failures using machine-readable fields.
 ## Evidence (Code + Tests)
 
 - Recovery classification method + unit test:
-  - `tools/tbtc-signer/src/errors.rs`
+  - `pkg/tbtc/signer/src/errors.rs`
   - `errors::tests::recovery_class_maps_retryable_and_terminal_errors`
 - FFI payload extension:
-  - `tools/tbtc-signer/src/api.rs` (`ErrorResponse`)
-  - `tools/tbtc-signer/src/ffi.rs` (`error_result`)
+  - `pkg/tbtc/signer/src/api.rs` (`ErrorResponse`)
+  - `pkg/tbtc/signer/src/ffi.rs` (`error_result`)
 - API-level assertions:
-  - `tools/tbtc-signer/src/lib.rs`
+  - `pkg/tbtc/signer/src/lib.rs`
   - `run_dkg_rejects_conflicting_repeat_request_for_same_session`
   - `roast_liveness_policy_reports_default_contract`
   - `start_and_finalize_sign_round_rejects_synthetic_contributions_when_bootstrap_disabled`
@@ -55,26 +55,26 @@ terminal/session-ending failures using machine-readable fields.
   - `start_sign_round_returns_session_not_found_for_unknown_session`
   - `build_taproot_tx_rejects_invalid_input_txid_hex`
 - Timeout policy parser validation:
-  - `tools/tbtc-signer/src/engine.rs`
+  - `pkg/tbtc/signer/src/engine`
   - `roast_coordinator_timeout_ms_env_parser_is_strict_bounds`
 - Exclusion/blame evidence validation:
-  - `tools/tbtc-signer/src/api.rs` (`AttemptExclusionEvidence`, `AttemptTransitionEvidence`)
-  - `tools/tbtc-signer/src/engine.rs` (`validate_transition_exclusion_evidence`)
+  - `pkg/tbtc/signer/src/api.rs` (`AttemptExclusionEvidence`, `AttemptTransitionEvidence`)
+  - `pkg/tbtc/signer/src/engine` (`validate_transition_exclusion_evidence`)
   - `start_sign_round_rejects_next_attempt_without_exclusion_evidence`
   - `start_sign_round_rejects_timeout_reason_with_invalid_share_fingerprint`
   - `start_sign_round_accepts_invalid_share_proof_exclusion_evidence`
   - `start_sign_round_rejects_invalid_share_proof_without_fingerprint`
   - `start_sign_round_rejects_invalid_share_proof_with_empty_fingerprint`
 - Transition telemetry assertions:
-  - `tools/tbtc-signer/src/api.rs` (`AttemptTransitionTelemetry`)
+  - `pkg/tbtc/signer/src/api.rs` (`AttemptTransitionTelemetry`)
   - `start_sign_round_allows_next_attempt_with_valid_transition_evidence`
   - `start_sign_round_accepts_invalid_share_proof_exclusion_evidence`
 - FFI header contract update:
-  - `tools/tbtc-signer/include/frost_tbtc.h`
+  - `pkg/tbtc/signer/include/frost_tbtc.h`
 - Phase 4 liveness, exclusion-evidence, and transition-telemetry evidence is
   summarized in this document.
 - Contract documentation alignment:
-  - `tools/tbtc-signer/README.md` (`FFI contract` section now includes `recovery_class`)
+  - `pkg/tbtc/signer/README.md` (`FFI contract` section now includes `recovery_class`)
 
 ## Remaining Phase 4 Work
 

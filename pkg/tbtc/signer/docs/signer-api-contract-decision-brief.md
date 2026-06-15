@@ -40,11 +40,11 @@ The rewrite plan defines:
 - `BuildTaprootTx(...)`
 - `RefreshShares(...)`
 
-(plan tracked in `docs/frost-migration/rust-rewrite-bootstrap.md`)
+(plan tracked in `pkg/tbtc/signer/docs/rust-rewrite-bootstrap.md`)
 
 The bootstrap Rust crate already exposes this coarse C ABI surface:
 
-(file: `tools/tbtc-signer/src/lib.rs`)
+(file: `pkg/tbtc/signer/src/lib.rs`)
 
 ## Design Alternatives
 

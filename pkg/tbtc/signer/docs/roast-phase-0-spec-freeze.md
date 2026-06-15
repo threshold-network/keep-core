@@ -16,7 +16,7 @@ Freeze the minimum cross-repo contract required before ROAST code increments:
 
 This spec is an input to Phase 1 implementation work in:
 
-- `tbtc` (`tools/tbtc-signer`), and
+- `tbtc` (`pkg/tbtc/signer`), and
 - `threshold-network/keep-core`.
 
 ## 2. Decisions (Frozen For Phase 1)

@@ -12,7 +12,7 @@ thresholds before production ROAST canary progression.
 
 This worksheet is consumed by:
 
-- `docs/frost-migration/roast-phase-5-security-rollout-gates.md`
+- `pkg/tbtc/signer/docs/roast-phase-5-security-rollout-gates.md`
 
 ## 2. Baseline Window Metadata
 
@@ -60,7 +60,7 @@ Record completion artifacts for release or governance approval linkage:
 3. threshold update commit/PR reference (`TBD`)
 4. reviewer acknowledgment references (`TBD`)
 5. formal methods summary packet:
-   `docs/frost-migration/formal-verification/formal-methods-summary-packet.md`
+   `pkg/tbtc/signer/docs/formal/formal-methods-summary-packet.md`
 
 ## 6. Blocker Tracking
 

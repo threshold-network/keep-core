@@ -12,10 +12,10 @@ checks, incident actions, and evidence capture requirements.
 
 This runbook is paired with:
 
-- `docs/frost-migration/roast-phase-5-security-rollout-gates.md`
+- `pkg/tbtc/signer/docs/roast-phase-5-security-rollout-gates.md`
 - Future mandatory TEE hardening profile
   (activation-gated):
-  `docs/frost-migration/tee-whitelisted-signer-enforcement-plan.md`
+  `pkg/tbtc/signer/docs/tee-whitelisted-signer-enforcement-plan.md`
 
 ## 2. Prerequisites
 
@@ -31,7 +31,7 @@ Before Stage 1 canary:
    - coordinator rotations per signing request
    - p95/p99 signing latency
 5. Baseline worksheet populated:
-   - `docs/frost-migration/roast-phase-5-baseline-calibration.md`
+   - `pkg/tbtc/signer/docs/roast-phase-5-baseline-calibration.md`
 6. Provenance attestation rotation cadence scheduled: a production
    signer installs its configuration once at process start (the
    init-time config FFI, `frost_tbtc_init_signer_config`) and the
@@ -77,7 +77,7 @@ Before Stage 1 canary:
 ## 4. Monitoring And Decision Thresholds
 
 Use the thresholds from
-`docs/frost-migration/roast-phase-5-security-rollout-gates.md`.
+`pkg/tbtc/signer/docs/roast-phase-5-security-rollout-gates.md`.
 
 Hold thresholds:
 
