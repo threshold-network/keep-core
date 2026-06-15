@@ -1,4 +1,24 @@
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+/// A single CANDIDATE culprit surfaced by InteractiveAggregate when a signature
+/// share fails verification. `member_identifier` is the FROST participant
+/// identifier in the engine's canonical Go-string form (see
+/// `frost_identifier_to_go_string`); `reason` is a stable machine-readable code
+/// for the failure class.
+///
+/// CANDIDATE, not verdict: the engine verifies pure FROST shares against the
+/// group's own verifying material and never inspects operator-signed envelopes
+/// (frozen Q1 boundary). A coordinator that aggregated honest shares against a
+/// substituted signing package or taproot root would make those honest shares
+/// fail and appear here. Authoritative, envelope-bound blame is adjudicated by
+/// the Go host at an f+1 accuser quorum (frozen Phase 7.2b spec, section 6);
+/// this is its input, not its conclusion.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AggregateCulprit {
+    pub member_identifier: String,
+    pub reason: String,
+}
 
 #[derive(Debug, Error)]
 pub enum EngineError {
@@ -94,6 +114,24 @@ pub enum EngineError {
         session_id: String,
         attempt_id: String,
     },
+    /// Returned when InteractiveAggregate fails because one or more signature
+    /// shares did not verify against the (tweaked) group verifying material.
+    /// Unlike the generic `Validation` failure, this carries the FROST-identified
+    /// CANDIDATE culprits - every member whose share failed, via
+    /// `CheaterDetection::AllCheaters` - so the Go host can feed them into
+    /// envelope-bound blame adjudication. The engine never adjudicates fault
+    /// itself (see `AggregateCulprit`). Fail-closed: no signature is produced.
+    /// Distinct code so callers match on `aggregate_share_verification_failed`
+    /// rather than the message.
+    #[error(
+        "InteractiveAggregate: {} signature share(s) failed verification for attempt [{attempt_id}] in session [{session_id}]",
+        candidate_culprits.len()
+    )]
+    AggregateShareVerificationFailed {
+        session_id: String,
+        attempt_id: String,
+        candidate_culprits: Vec<AggregateCulprit>,
+    },
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -119,6 +157,7 @@ impl EngineError {
             Self::InteractiveAttemptAlreadyAggregated { .. } => {
                 "interactive_attempt_already_aggregated"
             }
+            Self::AggregateShareVerificationFailed { .. } => "aggregate_share_verification_failed",
             Self::Internal(_) => "internal_error",
         }
     }
@@ -147,16 +186,33 @@ impl EngineError {
             // is durably marked complete; a re-aggregation request is a benign
             // duplicate the caller should not retry, not an engine fault.
             Self::InteractiveAttemptAlreadyAggregated { .. } => "recoverable",
+            // A fresh attempt that excludes the candidate culprits can still
+            // produce a signature, so this is recoverable: the caller mints a
+            // new attempt after the Go host adjudicates blame.
+            Self::AggregateShareVerificationFailed { .. } => "recoverable",
             Self::SessionFinalized { .. } => "terminal",
             Self::SessionNotFound { .. } => "terminal",
             Self::Internal(_) => "terminal",
+        }
+    }
+
+    /// The CANDIDATE culprits carried by this error. Non-empty only for
+    /// `AggregateShareVerificationFailed`; empty for every other variant. The
+    /// FFI layer uses this to surface the list to the Go host without matching
+    /// the variant inline.
+    pub fn candidate_culprits(&self) -> &[AggregateCulprit] {
+        match self {
+            Self::AggregateShareVerificationFailed {
+                candidate_culprits, ..
+            } => candidate_culprits,
+            _ => &[],
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::EngineError;
+    use super::{AggregateCulprit, EngineError};
 
     #[test]
     fn consumed_attempt_replay_has_stable_code_and_message_format() {
@@ -244,5 +300,37 @@ mod tests {
             EngineError::Internal("panic".to_string()).recovery_class(),
             "terminal"
         );
+    }
+
+    #[test]
+    fn aggregate_share_verification_failed_code_message_and_culprits() {
+        let err = EngineError::AggregateShareVerificationFailed {
+            session_id: "session-a".to_string(),
+            attempt_id: "attempt-1".to_string(),
+            candidate_culprits: vec![AggregateCulprit {
+                member_identifier:
+                    "\"0200000000000000000000000000000000000000000000000000000000000000\""
+                        .to_string(),
+                reason: "invalid_signature_share".to_string(),
+            }],
+        };
+        assert_eq!(err.code(), "aggregate_share_verification_failed");
+        assert_eq!(err.recovery_class(), "recoverable");
+        // The count is rendered; the culprit identifiers are not (they travel in
+        // the structured candidate_culprits list, not the message string).
+        assert_eq!(
+            err.to_string(),
+            "InteractiveAggregate: 1 signature share(s) failed verification for attempt [attempt-1] in session [session-a]",
+        );
+        assert_eq!(err.candidate_culprits().len(), 1);
+        assert_eq!(
+            err.candidate_culprits()[0].reason,
+            "invalid_signature_share"
+        );
+
+        // Every non-aggregate error exposes no culprits.
+        assert!(EngineError::Validation("x".to_string())
+            .candidate_culprits()
+            .is_empty());
     }
 }

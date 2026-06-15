@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::errors::AggregateCulprit;
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DkgParticipant {
     pub identifier: u16,
@@ -219,13 +221,15 @@ pub struct InteractiveAggregateRequest {
     /// The signing package the shares were produced over (carries the
     /// message and the chosen subset's commitments).
     pub signing_package_hex: String,
-    /// The collected signature shares from the responsive subset. Each
-    /// is verified against the member's verifying share (resolved from
-    /// the session's DKG public key package) before aggregation; an
-    /// invalid share fails the call closed with `validation_error` and
-    /// no signature. Per-member attributable blame (a culprit list) is
-    /// deferred to Phase 7.2b, where the signed-package envelopes bind
-    /// what each member signed and make the attribution unforgeable.
+    /// The collected signature shares from the responsive subset. Each is
+    /// verified against the member's verifying share (resolved from the
+    /// session's DKG public key package) before aggregation. If any share fails,
+    /// the call fails closed with no signature and the
+    /// `aggregate_share_verification_failed` error, which carries the CANDIDATE
+    /// culprits - every member whose share failed (Phase 7.2b-3). These are
+    /// pure-crypto candidates for the Go host's envelope-bound blame
+    /// adjudication (frozen Phase 7.2b spec, section 6); the engine never
+    /// inspects operator-signed envelopes itself.
     pub signature_shares: Vec<NativeFrostSignatureShare>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub taproot_merkle_root_hex: Option<String>,
@@ -669,6 +673,14 @@ pub struct ErrorResponse {
     pub code: String,
     pub message: String,
     pub recovery_class: String,
+    /// CANDIDATE culprits for an `aggregate_share_verification_failed` error:
+    /// the members whose FROST signature shares failed verification. Empty - and
+    /// omitted from the JSON via skip_serializing_if - for every other error, so
+    /// existing Go clients that do not read the field are unaffected. These are
+    /// pure-crypto candidates, not adjudicated blame; the Go host performs the
+    /// envelope-bound adjudication (frozen Phase 7.2b spec, section 6).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidate_culprits: Vec<AggregateCulprit>,
 }
 
 /// Init-time signer configuration installed once by the host over FFI.

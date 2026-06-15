@@ -13120,15 +13120,60 @@ fn interactive_aggregate_rejects_invalid_share_fail_closed() {
         taproot_merkle_root_hex: None,
     })
     .expect_err("an invalid share must fail aggregation closed");
-    // 7.2a fails closed without attributable member blame: the engine
-    // cannot yet bind the aggregate inputs to what each member signed
-    // (that needs the Phase 7.2b signed-package envelopes), so a
-    // verification failure is a generic error - no signature, and no
-    // culprit naming that a wrong-package/root coordinator could forge.
+    // 7.2b-3: the aggregate now fails closed WITH attributable CANDIDATE blame.
+    // Member 2 submitted a structurally valid share over a different package, so
+    // its share fails verification against the group's verifying material and is
+    // named a candidate culprit; member 1's honest share is not. The engine
+    // surfaces candidates only - envelope-bound adjudication is the Go host's
+    // job (frozen Phase 7.2b spec, section 6).
+    let candidate_culprits = match err {
+        EngineError::AggregateShareVerificationFailed {
+            ref candidate_culprits,
+            ..
+        } => candidate_culprits.clone(),
+        other => panic!("expected AggregateShareVerificationFailed, got {other:?}"),
+    };
     assert!(
-        matches!(err, EngineError::Validation(ref m) if m.contains("failed to aggregate")),
-        "unexpected error: {err:?}"
+        candidate_culprits
+            .iter()
+            .any(|c| c.member_identifier == key_packages[&2].identifier),
+        "member 2 must be named a candidate culprit: {candidate_culprits:?}"
     );
+    assert!(
+        !candidate_culprits
+            .iter()
+            .any(|c| c.member_identifier == key_packages[&1].identifier),
+        "honest member 1 must not be blamed: {candidate_culprits:?}"
+    );
+    assert!(
+        candidate_culprits
+            .iter()
+            .all(|c| c.reason == "invalid_signature_share"),
+        "{candidate_culprits:?}"
+    );
+}
+
+#[test]
+fn candidate_culprits_from_identifiers_maps_each_member() {
+    // The AllCheaters mapping must surface EVERY flagged member (not just the
+    // first), each tagged with the stable reason and the same canonical
+    // Go-string identifier the DKG path emits.
+    let id2 = participant_identifier_to_frost_identifier(2).expect("identifier 2");
+    let id3 = participant_identifier_to_frost_identifier(3).expect("identifier 3");
+    let culprits = candidate_culprits_from_identifiers(&[id2, id3]);
+    assert_eq!(culprits.len(), 2);
+    assert_eq!(
+        culprits[0].member_identifier,
+        frost_identifier_to_go_string(id2)
+    );
+    assert_eq!(
+        culprits[1].member_identifier,
+        frost_identifier_to_go_string(id3)
+    );
+    assert!(culprits
+        .iter()
+        .all(|c| c.reason == "invalid_signature_share"));
+    assert!(candidate_culprits_from_identifiers(&[]).is_empty());
 }
 
 #[test]

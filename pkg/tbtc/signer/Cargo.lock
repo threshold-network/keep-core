@@ -1326,6 +1326,7 @@ dependencies = [
  "bitcoin",
  "chacha20poly1305",
  "criterion",
+ "frost-core",
  "frost-secp256k1-tr",
  "hex",
  "libc",

@@ -83,7 +83,7 @@ use crate::api::{
     TranscriptAuditResult, TriggerEmergencyRekeyRequest, TriggerEmergencyRekeyResult,
     VerifyBlameProofRequest,
 };
-use crate::errors::EngineError;
+use crate::errors::{AggregateCulprit, EngineError};
 use crate::go_math_rand::select_coordinator_identifier;
 
 mod audit;

@@ -72,6 +72,7 @@ fn error_result(error: EngineError) -> TbtcSignerResult {
         code: error.code().to_string(),
         message: error.to_string(),
         recovery_class: error.recovery_class().to_string(),
+        candidate_culprits: error.candidate_culprits().to_vec(),
     };
 
     let bytes = serde_json::to_vec(&payload).unwrap_or_else(|_| {

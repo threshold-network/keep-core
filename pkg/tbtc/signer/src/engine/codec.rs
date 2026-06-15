@@ -53,6 +53,39 @@ pub(crate) fn frost_identifier_to_go_string(identifier: frost::Identifier) -> St
         .expect("serializing hex identifier as JSON string cannot fail")
 }
 
+/// Map a FROST aggregate error to the CANDIDATE culprits it identifies.
+///
+/// Returns the participant identifiers FROST flagged for an invalid signature
+/// share (`Error::InvalidSignatureShare`, populated with the full set when
+/// aggregation uses `CheaterDetection::AllCheaters`). Every other error class -
+/// malformed package, wrong share count, group/field errors - yields an empty
+/// list: those are not per-member share attributions, so the caller surfaces
+/// them as a generic validation failure instead. The identifiers are CANDIDATES
+/// only - pure FROST verification verdicts, not adjudicated fault.
+pub(crate) fn aggregate_candidate_culprits(error: &frost::Error) -> Vec<AggregateCulprit> {
+    match error {
+        frost_core::Error::InvalidSignatureShare { culprits } => {
+            candidate_culprits_from_identifiers(culprits)
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Map FROST participant identifiers to CANDIDATE culprit records, tagging each
+/// with the `invalid_signature_share` reason and the canonical Go-string member
+/// identifier the rest of the engine uses.
+pub(crate) fn candidate_culprits_from_identifiers(
+    identifiers: &[frost::Identifier],
+) -> Vec<AggregateCulprit> {
+    identifiers
+        .iter()
+        .map(|identifier| AggregateCulprit {
+            member_identifier: frost_identifier_to_go_string(*identifier),
+            reason: "invalid_signature_share".to_string(),
+        })
+        .collect()
+}
+
 pub(crate) fn parse_frost_identifier(
     operation: &str,
     field_name: &str,
