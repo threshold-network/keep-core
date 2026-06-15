@@ -13321,3 +13321,47 @@ fn persisted_secret_structs_redact_debug_output() {
         "PersistedSessionState Debug leaked nested key share material: {rendered}"
     );
 }
+
+// The open-request fingerprint serializes message_hex verbatim, so a
+// retry of an identical open that only differs in message_hex casing
+// must still be recognized as idempotent (the engine accepts hex
+// case-insensitively elsewhere). Without canonicalization it would be
+// rejected as a SessionConflict.
+#[test]
+fn interactive_session_open_is_idempotent_across_message_hex_casing() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let session_id = "interactive-msg-hex-casing";
+    let key_group = "interactive-msg-hex-casing-key-group";
+    let message = [0x42u8; 32];
+    let included = [1u16, 2];
+
+    let first = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("first interactive open succeeds");
+    assert!(
+        !first.idempotent,
+        "a fresh open must not be reported as idempotent"
+    );
+
+    // Reopen with message_hex upper-cased; every other field (including
+    // the attempt context, which derives from the decoded bytes) is
+    // identical. This must be idempotent, not a SessionConflict.
+    ensure_interactive_dkg_session(session_id, key_group);
+    let attempt_context =
+        interactive_test_attempt_context(session_id, key_group, &message, &included, 1);
+    let reopened = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: session_id.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message).to_uppercase(),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        attempt_context,
+    })
+    .expect("re-cased reopen of an identical attempt must be accepted");
+    assert!(
+        reopened.idempotent,
+        "re-cased message_hex reopen of an identical attempt must be idempotent"
+    );
+}

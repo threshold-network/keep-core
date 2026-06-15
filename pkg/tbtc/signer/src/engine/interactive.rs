@@ -47,6 +47,16 @@ pub fn interactive_session_open(
             "message_hex must not be empty".to_string(),
         ));
     }
+    // Canonicalize message_hex to lowercase before it feeds the
+    // open-request fingerprint below. attempt_id and
+    // taproot_merkle_root_hex are already canonicalized
+    // case-insensitively (and the coarse signing path lowercases the
+    // signing message likewise), but the fingerprint serializes
+    // message_hex verbatim - so without this a re-cased retry of an
+    // otherwise identical open would mismatch the fingerprint and be
+    // rejected as a SessionConflict instead of returning idempotent.
+    // The decoded message_bytes are unaffected by hex casing.
+    request.message_hex = request.message_hex.to_ascii_lowercase();
     let message_digest_hex = hash_hex(&message_bytes);
     let taproot_merkle_root =
         canonicalize_taproot_merkle_root_hex(&mut request.taproot_merkle_root_hex)?;
