@@ -204,3 +204,36 @@ func (c *Round2Collector) snapshotCandidatesForClassification(
 	}
 	return signingPackageEnvelope, snapshot, nil
 }
+
+// CoordinatorConflicts surfaces this observer's locally-detected coordinator
+// equivocation for an attempt as a ConflictEntry accusation against the elected
+// coordinator, for the observer's LocalEvidenceSnapshot.Conflicts ->
+// NextAttempt's f+1 establishment gate (symmetric with ClassifyCandidateCulprits;
+// it never excludes by itself). An established coordinator conflict excludes the
+// coordinator, which auto-rotates it out of the next attempt's included set.
+//
+// The collector flags equivocation when the coordinator distributes two
+// body-different signing packages for one attempt; both were individually
+// authenticated as coordinator-signed before the conflict was recorded, so the
+// accusation rests on unforgeable, self-incriminating proof (no re-verification
+// needed, unlike candidate culprits). At most one entry - a single coordinator
+// per attempt - with Count 1; empty when no conflict was observed.
+//
+// This catches only equivocation THIS observer directly received (the rare
+// broadcast case). Targeted/split equivocation - different packages to disjoint
+// members, so no single observer sees two - needs the cross-observer comparison
+// (Phase 7.2b-4b-ii). Returns ErrRound2UnknownAttempt if the attempt was never
+// begun.
+func (c *Round2Collector) CoordinatorConflicts(attemptContextHash []byte) ([]ConflictEntry, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	record, ok := c.attempts[round2AttemptKey(attemptContextHash)]
+	if !ok {
+		return nil, ErrRound2UnknownAttempt
+	}
+	if record.conflictingSigningPackageEnvelope == nil {
+		return nil, nil
+	}
+	return []ConflictEntry{{Sender: record.electedCoordinator, Count: 1}}, nil
+}

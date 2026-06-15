@@ -223,3 +223,58 @@ func TestClassifyCandidateCulprits_Errors(t *testing.T) {
 		}
 	})
 }
+
+func TestCoordinatorConflicts_SurfacesEquivocationAsConflictEntry(t *testing.T) {
+	_ = captureEquivocationEvidence(t)
+	c := NewRound2Collector(fakeVerifier{})
+	const elected = group.MemberIndex(3)
+	if err := c.BeginAttempt(pinnedContextHash[:], elected, testIncludedSet()); err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := c.RecordSigningPackage(signedTestSigningPackage(t, elected, nil)); err != nil {
+		t.Fatalf("record first package: %v", err)
+	}
+
+	// No second package yet -> no coordinator equivocation -> no accusation.
+	conflicts, err := c.CoordinatorConflicts(pinnedContextHash[:])
+	if err != nil {
+		t.Fatalf("coordinator conflicts (pre-conflict): %v", err)
+	}
+	if len(conflicts) != 0 {
+		t.Fatalf("no equivocation yet, want no conflicts, got %+v", conflicts)
+	}
+
+	// A second, body-different authenticated package for the same attempt is
+	// coordinator equivocation.
+	scriptRoot := bytes.Repeat([]byte{0xab}, TaprootMerkleRootLength)
+	if err := c.RecordSigningPackage(signedTestSigningPackage(t, elected, scriptRoot)); !errors.Is(err, ErrSigningPackageConflict) {
+		t.Fatalf("want ErrSigningPackageConflict, got %v", err)
+	}
+
+	conflicts, err = c.CoordinatorConflicts(pinnedContextHash[:])
+	if err != nil {
+		t.Fatalf("coordinator conflicts: %v", err)
+	}
+	want := []ConflictEntry{{Sender: elected, Count: 1}}
+	if !reflect.DeepEqual(conflicts, want) {
+		t.Fatalf("want %+v, got %+v", want, conflicts)
+	}
+
+	// A third body-different package keeps it idempotent: still one accusation
+	// against the coordinator (Count is the f+1 tally's concern, not ours).
+	otherRoot := bytes.Repeat([]byte{0xcd}, TaprootMerkleRootLength)
+	if err := c.RecordSigningPackage(signedTestSigningPackage(t, elected, otherRoot)); !errors.Is(err, ErrSigningPackageConflict) {
+		t.Fatalf("third package: want ErrSigningPackageConflict, got %v", err)
+	}
+	conflicts, _ = c.CoordinatorConflicts(pinnedContextHash[:])
+	if !reflect.DeepEqual(conflicts, want) {
+		t.Fatalf("idempotent: want %+v, got %+v", want, conflicts)
+	}
+}
+
+func TestCoordinatorConflicts_UnknownAttempt(t *testing.T) {
+	c := NewRound2Collector(fakeVerifier{})
+	if _, err := c.CoordinatorConflicts(pinnedContextHash[:]); !errors.Is(err, ErrRound2UnknownAttempt) {
+		t.Fatalf("want ErrRound2UnknownAttempt, got %v", err)
+	}
+}
