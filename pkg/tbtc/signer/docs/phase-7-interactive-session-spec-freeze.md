@@ -98,16 +98,19 @@ the FFI and never persist.**
 
 * `InteractiveRound1` generates nonces via OS randomness inside the
   engine, stores them in session-scoped memory keyed by
-  `(session_id, attempt_id, key_package)`, zeroizes on consumption,
-  and returns only the public commitments plus an opaque
-  `nonce_handle`.
-* `InteractiveRound2` takes the signing package and the
-  `nonce_handle`; the engine atomically (a) marks the handle
-  consumed, (b) produces the signature share, (c) zeroizes the
-  nonces. A second call with the same handle fails closed with a
-  structured `consumed_nonce_replay` error. Consumption-before-
-  release ordering: the consumed marker is durable (or the nonce
-  irrecoverable) before the share leaves the engine.
+  `(session_id, attempt_id, member_identifier)`, zeroizes on
+  consumption, and returns only the public commitments. No opaque
+  nonce handle is returned across the FFI: the
+  `(session_id, attempt_id, member_identifier)` tuple that every
+  request already carries is itself the handle to the held nonces.
+* `InteractiveRound2` takes the signing package and that same
+  `(session_id, attempt_id, member_identifier)` tuple; the engine
+  resolves the held nonces from it and atomically (a) marks the
+  attempt's nonces consumed, (b) produces the signature share,
+  (c) zeroizes the nonces. A second call for the same tuple fails
+  closed with a structured `consumed_nonce_replay` error.
+  Consumption-before-release ordering: the consumed marker is durable
+  (or the nonce irrecoverable) before the share leaves the engine.
 * Nonces are **never written to durable state**. Restart loses
   in-flight nonces by construction: the attempt fails and the next
   attempt generates fresh ones. The persisted artifacts are only
