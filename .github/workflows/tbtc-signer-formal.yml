@@ -41,6 +41,23 @@ jobs:
           TBTC_SIGNER_STATE_PATH: /tmp/tbtc-signer-ci-state-${{ github.run_id }}-${{ github.run_attempt }}.json
         run: cargo test --manifest-path pkg/tbtc/signer/Cargo.toml
 
+  signer-dependency-audit:
+    name: Signer dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check RustSec advisories
+        # Blocking gate: a newly-published advisory against any locked
+        # dependency fails the build. Accepted/unfixable advisories are
+        # recorded with rationale in pkg/tbtc/signer/deny.toml.
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: pkg/tbtc/signer/Cargo.toml
+          command: check advisories
+
   signer-formal-invariants:
     name: Signer formal invariants
     runs-on: ubuntu-latest
