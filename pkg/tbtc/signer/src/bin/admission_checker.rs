@@ -6,7 +6,8 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SECONDS_PER_DAY: u64 = 86_400;
@@ -254,6 +255,53 @@ fn load_override_replay_registry(path: &PathBuf) -> Result<OverrideReplayRegistr
     load_json_file(path)
 }
 
+// Acquires an exclusive, non-blocking inter-process lock for the override
+// replay registry. Held across load -> validate -> insert -> persist so two
+// concurrent checker invocations cannot both consume the same one-time
+// override marker. Mirrors the signer state lock (engine::state).
+fn acquire_override_registry_lock(registry_path: &Path) -> Result<fs::File, String> {
+    let lock_path = registry_path.with_extension("lock");
+    let lock_file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|error| {
+            format!(
+                "failed to open override replay registry lock file [{}]: {error}",
+                lock_path.display()
+            )
+        })?;
+
+    #[cfg(unix)]
+    {
+        use libc::{flock, EAGAIN, EWOULDBLOCK, LOCK_EX, LOCK_NB};
+        use std::os::fd::AsRawFd;
+
+        let rc = unsafe { flock(lock_file.as_raw_fd(), LOCK_EX | LOCK_NB) };
+        if rc != 0 {
+            let lock_error = std::io::Error::last_os_error();
+            if lock_error
+                .raw_os_error()
+                .is_some_and(|errno| errno == EWOULDBLOCK || errno == EAGAIN)
+            {
+                return Err(format!(
+                    "override replay registry lock already held by another process [{}]",
+                    lock_path.display()
+                ));
+            }
+
+            return Err(format!(
+                "failed to lock override replay registry [{}]: {lock_error}",
+                lock_path.display()
+            ));
+        }
+    }
+
+    Ok(lock_file)
+}
+
 fn persist_override_replay_registry(
     path: &PathBuf,
     registry: &OverrideReplayRegistry,
@@ -261,16 +309,60 @@ fn persist_override_replay_registry(
     let serialized = serde_json::to_vec_pretty(registry)
         .map_err(|error| format!("failed to serialize override replay registry: {error}"))?;
     let tmp_path = path.with_extension(format!("tmp-{}", std::process::id()));
-    fs::write(&tmp_path, serialized).map_err(|error| {
-        format!(
-            "failed to write override replay registry temp file [{}]: {error}",
-            tmp_path.display()
-        )
-    })?;
+
+    // Write + fsync the temp file, then atomically rename and fsync the
+    // parent directory so a consumed-override marker survives power loss.
+    // Mirrors the signer state persistence path (engine::persistence).
+    {
+        let mut tmp_file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&tmp_path)
+            .map_err(|error| {
+                format!(
+                    "failed to open override replay registry temp file [{}]: {error}",
+                    tmp_path.display()
+                )
+            })?;
+        tmp_file.write_all(&serialized).map_err(|error| {
+            let _ = fs::remove_file(&tmp_path);
+            format!(
+                "failed to write override replay registry temp file [{}]: {error}",
+                tmp_path.display()
+            )
+        })?;
+        tmp_file.sync_all().map_err(|error| {
+            let _ = fs::remove_file(&tmp_path);
+            format!(
+                "failed to sync override replay registry temp file [{}]: {error}",
+                tmp_path.display()
+            )
+        })?;
+    }
+
     fs::rename(&tmp_path, path).map_err(|error| {
+        let _ = fs::remove_file(&tmp_path);
         format!(
             "failed to persist override replay registry [{}]: {error}",
             path.display()
+        )
+    })?;
+
+    let directory_path = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map_or_else(|| PathBuf::from("."), |parent| parent.to_path_buf());
+    let directory = fs::File::open(&directory_path).map_err(|error| {
+        format!(
+            "failed to open override replay registry directory [{}] for sync: {error}",
+            directory_path.display()
+        )
+    })?;
+    directory.sync_all().map_err(|error| {
+        format!(
+            "failed to sync override replay registry directory [{}]: {error}",
+            directory_path.display()
         )
     })
 }
@@ -731,6 +823,14 @@ fn run() -> Result<AdmissionDecision, String> {
     let now_unix_seconds = cli.now_unix_override.unwrap_or_else(now_unix);
     let override_artifact: Option<AdmissionOverrideArtifact> = match cli.override_path.as_ref() {
         Some(path) => Some(load_json_file(path)?),
+        None => None,
+    };
+    // Hold the exclusive registry lock across the whole load -> apply ->
+    // persist critical section so concurrent invocations cannot both accept
+    // and consume the same one-time override marker. Bound for the lifetime
+    // of `run`; released on drop after persistence completes.
+    let _registry_lock = match cli.override_registry_path.as_ref() {
+        Some(path) => Some(acquire_override_registry_lock(path)?),
         None => None,
     };
     let mut replay_registry: Option<OverrideReplayRegistry> =
@@ -1472,6 +1572,40 @@ mod tests {
             .expect("reloaded override record");
         assert_eq!(record.operator_id, "operator-1");
         assert_eq!(record.consumed_at_unix, 1_700_000_100);
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    // The inter-process lock must be exclusive: a second acquisition while
+    // the first is held fails, so two concurrent checker invocations cannot
+    // both consume the same one-time override marker. flock locks are tied
+    // to the open file description, so two separate opens contend even in
+    // one process. Unix-only (the lock is a flock no-op elsewhere).
+    #[cfg(unix)]
+    #[test]
+    fn override_registry_lock_is_exclusive_while_held() {
+        let tmp_dir = std::env::temp_dir().join(format!(
+            "admission-override-lock-test-{}-{}",
+            std::process::id(),
+            now_unix()
+        ));
+        fs::create_dir_all(&tmp_dir).expect("create tmp dir");
+        let registry_path = tmp_dir.join("override-registry.json");
+
+        let first = acquire_override_registry_lock(&registry_path).expect("first lock acquires");
+        let second = acquire_override_registry_lock(&registry_path);
+        assert!(
+            second.is_err(),
+            "second concurrent lock acquisition must fail while the first is held"
+        );
+
+        drop(first);
+        let third = acquire_override_registry_lock(&registry_path);
+        assert!(
+            third.is_ok(),
+            "lock must re-acquire after the holder releases"
+        );
+        drop(third);
 
         let _ = fs::remove_dir_all(tmp_dir);
     }
