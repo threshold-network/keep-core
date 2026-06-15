@@ -1,11 +1,11 @@
 package roast
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
-
 	"sync"
 
 	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
@@ -17,6 +17,26 @@ import (
 // coordinator-signed envelopes with the same attempt context but different
 // bytes are self-incriminating proof of coordinator equivocation.
 const EquivocationKindSigningPackageConflict = "signing_package_conflict"
+
+// EquivocationKindShareConflict: a submitter returned two DIFFERENT signed shares
+// for the SAME authenticated instruction. Authentication pins coordinator_id,
+// attempt, and the signing-package hash, so the differing field is the FROST
+// signature_share itself - self-incriminating member double-signing. (A
+// submission referencing a DIFFERENT package or coordinator is rejected at
+// authentication, not flagged here; detecting that as targeted coordinator
+// equivocation needs cross-package retention plus the f+1 quorum compare and is
+// deferred to Phase 7.2b-4.)
+const EquivocationKindShareConflict = "share_conflict"
+
+// EquivocationKindDivergentShare: an included member submitted a validly-signed,
+// attempt-bound share that does NOT bind the attempt's authoritative package
+// (different signing-package hash or coordinator). It is retained as evidence of
+// possible TARGETED coordinator equivocation (a package distributed to only some
+// members) - the collector preserves the bytes but does NOT attribute fault
+// locally; coordinator-vs-member classification is the f+1 quorum's job
+// (Phase 7.2b-4). The evidence carries the divergent share (ConflictingEnvelope)
+// and the attempt's authoritative signing-package envelope (ExistingEnvelope).
+const EquivocationKindDivergentShare = "divergent_share"
 
 // ErrRound2UnknownAttempt is returned by Round2Collector when no binding exists
 // for an attempt (BeginAttempt was not called, or the attempt was pruned).
@@ -36,6 +56,36 @@ var ErrRound2AttemptBindingConflict = errors.New(
 // (first-write-wins) and EquivocationEvidence is emitted.
 var ErrSigningPackageConflict = errors.New(
 	"roast: a different signing package was already recorded for this attempt (coordinator equivocation)",
+)
+
+// ErrRound2NoSigningPackage is returned by RecordShareSubmission when no signing
+// package has been recorded for the attempt yet - a share cannot be bound or
+// authenticated without the package it answers.
+var ErrRound2NoSigningPackage = errors.New(
+	"roast: no signing package recorded for this attempt yet",
+)
+
+// ErrRound2SubmitterNotIncluded is returned by RecordShareSubmission when the
+// submitter is not in the attempt's included set.
+var ErrRound2SubmitterNotIncluded = errors.New(
+	"roast: share submitter is not in the attempt's included set",
+)
+
+// ErrShareConflict is returned by RecordShareSubmission when a submitter records
+// a second share with a DIFFERENT signed body for an attempt - member
+// equivocation. The first share is retained (first-write-wins) and
+// EquivocationEvidence is emitted.
+var ErrShareConflict = errors.New(
+	"roast: a different share was already recorded by this submitter for this attempt (member equivocation)",
+)
+
+// ErrShareRetainedNotAccepted is returned by RecordShareSubmission when a share
+// is genuinely submitter-signed for the attempt but does NOT bind the
+// authoritative package/coordinator. It is RETAINED as divergent evidence (for
+// Phase 7.2b-4) but is NOT an accepted aggregation share - the caller must not
+// count it toward the signing threshold.
+var ErrShareRetainedNotAccepted = errors.New(
+	"roast: share retained as divergent evidence but not accepted (does not bind the authoritative package)",
 )
 
 // Round2Collector is the Go-side blame-input layer (RFC-21 Phase 7.2b). It
@@ -75,9 +125,22 @@ type round2Record struct {
 	// re-encoding of the same (body, signature) is not equivocation.
 	signingPackageEnvelope []byte
 	signingPackageBodyHash [sha256.Size]byte
-	// shares retains each submitter's authenticated share (populated by the
-	// next increment).
-	shares map[group.MemberIndex]*ShareSubmission
+	// shares retains each submitter's ACCEPTED share (binds the authoritative
+	// package + elected coordinator): its BodyHash (the member-equivocation
+	// identity) plus an owned copy of its envelope (evidence).
+	shares map[group.MemberIndex]*round2ShareRecord
+	// divergentShares retains each submitter's first validly-signed but
+	// NON-authoritative-package-bound share - blame evidence of possible targeted
+	// coordinator equivocation, not an aggregation input.
+	divergentShares map[group.MemberIndex]*round2ShareRecord
+}
+
+// round2ShareRecord is a collector-owned record of one submitter's retained
+// share: the body hash (identity, stable across envelope re-encoding) and an
+// owned copy of the on-wire envelope (for equivocation evidence and blame).
+type round2ShareRecord struct {
+	bodyHash [sha256.Size]byte
+	envelope []byte
 }
 
 // NewRound2Collector returns a collector that authenticates retained bytes with
@@ -132,7 +195,8 @@ func (c *Round2Collector) BeginAttempt(
 		attemptContextHash: append([]byte(nil), attemptContextHash...),
 		electedCoordinator: electedCoordinator,
 		includedSet:        included,
-		shares:             map[group.MemberIndex]*ShareSubmission{},
+		shares:             map[group.MemberIndex]*round2ShareRecord{},
+		divergentShares:    map[group.MemberIndex]*round2ShareRecord{},
 	}
 	return nil
 }
@@ -221,6 +285,168 @@ func (c *Round2Collector) RecordSigningPackage(pkg *SigningPackage) error {
 		return ErrSigningPackageConflict
 	}
 	return nil
+}
+
+// RecordShareSubmission verifies and retains a member's signed share submission.
+// The attempt must already have a recorded signing package
+// (ErrRound2NoSigningPackage) and the submitter must be in the included set
+// (ErrRound2SubmitterNotIncluded, checked cheaply before signature verification).
+// The submitter signature is verified over the attempt-bound body; a share not
+// genuinely submitter-signed for this attempt is rejected without retention.
+//
+// A verified share is classified:
+//   - ACCEPTED if it binds the elected coordinator AND the authoritative signing
+//     package (its BodyHash): retained as an aggregation share, first-write-wins.
+//     A second ACCEPTED share with a different body from the same submitter is
+//     member double-signing -> EquivocationKindShareConflict, ErrShareConflict.
+//   - DIVERGENT otherwise (validly signed for the attempt but bound to a
+//     different package/coordinator): retained SEPARATELY as evidence of possible
+//     targeted coordinator equivocation -> EquivocationKindDivergentShare,
+//     ErrShareRetainedNotAccepted (retained, NOT counted toward the threshold).
+//     Fault is not attributed here; the f+1 quorum decides in Phase 7.2b-4.
+//
+// Re-recording the same body (accepted or divergent) is idempotent, including an
+// unsigned envelope re-encoding.
+func (c *Round2Collector) RecordShareSubmission(sub *ShareSubmission) error {
+	if sub == nil {
+		return errors.New("round2: nil share submission")
+	}
+	// Validate up front so SubmitterID() is bounded (uint32 -> MemberIndex) for
+	// the membership pre-gate below. Membership is a cheap gate before the
+	// expensive signature verify: it rejects validly-signed-but-not-included
+	// junk without burning CPU. It is safe to gate here because the attempt
+	// context hash cryptographically commits to the included set, so the set for
+	// a given attempt key cannot change under us.
+	if err := sub.Validate(); err != nil {
+		return fmt.Errorf("share submission failed structural validation: %w", err)
+	}
+	key := round2AttemptKey(sub.AttemptContextHash)
+	submitter := sub.SubmitterID()
+
+	c.mu.Lock()
+	record, ok := c.attempts[key]
+	if !ok {
+		c.mu.Unlock()
+		return ErrRound2UnknownAttempt
+	}
+	if record.signingPackageEnvelope == nil {
+		c.mu.Unlock()
+		return ErrRound2NoSigningPackage
+	}
+	if _, included := record.includedSet[submitter]; !included {
+		c.mu.Unlock()
+		return ErrRound2SubmitterNotIncluded
+	}
+	elected := record.electedCoordinator
+	attemptHash := append([]byte(nil), record.attemptContextHash...)
+	pkgBodyHash := record.signingPackageBodyHash
+	c.mu.Unlock()
+
+	// Verify the submitter signature OUTSIDE the lock (the expensive step). This
+	// is the WEAKER check: it does not require the share to bind the authoritative
+	// package or elected coordinator, because a submitter-signed share that
+	// diverges from the authoritative package is retained as evidence (see
+	// EquivocationKindDivergentShare), never dropped.
+	if err := verifyShareSubmissionForAttempt(c.verifier, sub, attemptHash); err != nil {
+		return err
+	}
+	// Identity is the share BODY hash, not the envelope - an unsigned re-encoding
+	// of the same signed body must NOT count as a conflicting share.
+	bodyHash, err := sub.BodyHash()
+	if err != nil {
+		return err
+	}
+	envelope, err := sub.Marshal()
+	if err != nil {
+		return err
+	}
+	ownedEnvelope := append([]byte(nil), envelope...)
+	// Accepted = binds the elected coordinator AND the authoritative package
+	// (eligible for aggregation). Otherwise the share is divergent: retained as
+	// targeted-equivocation evidence, not an aggregation input.
+	accepted := sub.CoordinatorID() == elected &&
+		bytes.Equal(sub.SigningPackageHash, pkgBodyHash[:])
+
+	var (
+		evidence *EquivocationEvidence
+		result   error
+	)
+	c.mu.Lock()
+	record, ok = c.attempts[key]
+	if !ok {
+		c.mu.Unlock()
+		return ErrRound2UnknownAttempt
+	}
+	if record.electedCoordinator != elected || record.signingPackageBodyHash != pkgBodyHash {
+		// Binding or authoritative package changed under us (prune + re-begin).
+		c.mu.Unlock()
+		return ErrRound2UnknownAttempt
+	}
+	if accepted {
+		switch existing, present := record.shares[submitter]; {
+		case !present:
+			record.shares[submitter] = &round2ShareRecord{
+				bodyHash: bodyHash,
+				envelope: ownedEnvelope,
+			}
+		case existing.bodyHash == bodyHash:
+			// Idempotent: the same accepted share re-recorded (possibly re-encoded).
+		default:
+			// A different accepted share body from the same submitter: member
+			// double-signing the same instruction. Keep the first; emit both.
+			evidence = &EquivocationEvidence{
+				Kind:                EquivocationKindShareConflict,
+				AttemptContextHash:  append([]byte(nil), record.attemptContextHash...),
+				Sender:              submitter,
+				ExistingEnvelope:    append([]byte(nil), existing.envelope...),
+				ConflictingEnvelope: ownedEnvelope,
+			}
+			result = ErrShareConflict
+		}
+	} else {
+		// Divergent: retain as evidence (first per submitter) and flag it WITHOUT
+		// attributing fault - the f+1 quorum (7.2b-4) decides coordinator vs
+		// member. Always reported as retained-not-accepted so the caller does not
+		// count it toward the threshold.
+		result = ErrShareRetainedNotAccepted
+		switch existing, present := record.divergentShares[submitter]; {
+		case !present:
+			record.divergentShares[submitter] = &round2ShareRecord{
+				bodyHash: bodyHash,
+				envelope: ownedEnvelope,
+			}
+			evidence = divergentShareEvidence(record, submitter, ownedEnvelope)
+		case existing.bodyHash == bodyHash:
+			// Idempotent: the same divergent share re-recorded.
+		default:
+			// A second, different divergent share from the same submitter: re-flag
+			// (keep the first retained).
+			evidence = divergentShareEvidence(record, submitter, ownedEnvelope)
+		}
+	}
+	c.mu.Unlock()
+
+	if evidence != nil {
+		emitEquivocationEvidence(*evidence)
+	}
+	return result
+}
+
+// divergentShareEvidence builds EquivocationKindDivergentShare evidence: the
+// divergent share envelope plus the attempt's authoritative signing-package
+// envelope for context. The caller holds the lock.
+func divergentShareEvidence(
+	record *round2Record,
+	submitter group.MemberIndex,
+	divergentEnvelope []byte,
+) *EquivocationEvidence {
+	return &EquivocationEvidence{
+		Kind:                EquivocationKindDivergentShare,
+		AttemptContextHash:  append([]byte(nil), record.attemptContextHash...),
+		Sender:              submitter,
+		ExistingEnvelope:    append([]byte(nil), record.signingPackageEnvelope...),
+		ConflictingEnvelope: append([]byte(nil), divergentEnvelope...),
+	}
 }
 
 // PruneAttempt drops all retained round-2 state for an attempt. Callers invoke

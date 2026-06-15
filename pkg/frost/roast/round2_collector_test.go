@@ -229,3 +229,179 @@ func TestRound2_NilInputsAreRejectedNotPanicked(t *testing.T) {
 		t.Fatal("ShareSubmission.Unmarshal into a nil receiver must return an error")
 	}
 }
+
+// recordTestPackage begins an attempt, records a coordinator-signed package, and
+// returns the package's BodyHash (the value shares must bind to).
+func recordTestPackage(t *testing.T, c *Round2Collector, elected group.MemberIndex) []byte {
+	t.Helper()
+	if err := c.BeginAttempt(pinnedContextHash[:], elected, testIncludedSet()); err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	pkg := signedTestSigningPackage(t, elected, nil)
+	if err := c.RecordSigningPackage(pkg); err != nil {
+		t.Fatalf("record package: %v", err)
+	}
+	h, err := pkg.BodyHash()
+	if err != nil {
+		t.Fatalf("body hash: %v", err)
+	}
+	return h[:]
+}
+
+func TestRound2Collector_RecordShareSubmission_RetainsAuthenticated(t *testing.T) {
+	c := NewRound2Collector(fakeVerifier{})
+	elected := group.MemberIndex(testShareCoordinatorID)
+	pkgHash := recordTestPackage(t, c, elected)
+
+	if err := c.RecordShareSubmission(signedTestShareSubmission(t, 3, pkgHash)); err != nil {
+		t.Fatalf("record share: %v", err)
+	}
+	// An identical share (deterministic fakeSigner) re-records idempotently.
+	if err := c.RecordShareSubmission(signedTestShareSubmission(t, 3, pkgHash)); err != nil {
+		t.Fatalf("re-record identical share must be idempotent: %v", err)
+	}
+}
+
+func TestRound2Collector_RecordShareSubmission_Rejections(t *testing.T) {
+	elected := group.MemberIndex(testShareCoordinatorID)
+
+	t.Run("nil is rejected", func(t *testing.T) {
+		if err := NewRound2Collector(fakeVerifier{}).RecordShareSubmission(nil); err == nil {
+			t.Fatal("nil share must be rejected, not panic")
+		}
+	})
+	t.Run("unknown attempt", func(t *testing.T) {
+		c := NewRound2Collector(fakeVerifier{})
+		if err := c.RecordShareSubmission(signedTestShareSubmission(t, 3, testSigningPackageHash())); !errors.Is(err, ErrRound2UnknownAttempt) {
+			t.Fatalf("want ErrRound2UnknownAttempt, got %v", err)
+		}
+	})
+	t.Run("no signing package recorded yet", func(t *testing.T) {
+		c := NewRound2Collector(fakeVerifier{})
+		if err := c.BeginAttempt(pinnedContextHash[:], elected, testIncludedSet()); err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		if err := c.RecordShareSubmission(signedTestShareSubmission(t, 3, testSigningPackageHash())); !errors.Is(err, ErrRound2NoSigningPackage) {
+			t.Fatalf("want ErrRound2NoSigningPackage, got %v", err)
+		}
+	})
+	t.Run("submitter not in included set", func(t *testing.T) {
+		c := NewRound2Collector(fakeVerifier{})
+		if err := c.BeginAttempt(pinnedContextHash[:], elected, []group.MemberIndex{5, 7}); err != nil { // excludes 3
+			t.Fatalf("begin: %v", err)
+		}
+		pkg := signedTestSigningPackage(t, elected, nil)
+		if err := c.RecordSigningPackage(pkg); err != nil {
+			t.Fatalf("record package: %v", err)
+		}
+		pkgHash, _ := pkg.BodyHash()
+		if err := c.RecordShareSubmission(signedTestShareSubmission(t, 3, pkgHash[:])); !errors.Is(err, ErrRound2SubmitterNotIncluded) {
+			t.Fatalf("want ErrRound2SubmitterNotIncluded, got %v", err)
+		}
+	})
+	t.Run("share with a bad submitter signature is rejected without retention", func(t *testing.T) {
+		c := NewRound2Collector(fakeVerifier{})
+		pkgHash := recordTestPackage(t, c, elected)
+		sub := signedTestShareSubmission(t, 3, pkgHash)
+		sub.SubmitterSignature[0] ^= 0xff // tamper
+		if err := c.RecordShareSubmission(sub); !errors.Is(err, ErrSignatureInvalid) {
+			t.Fatalf("want ErrSignatureInvalid, got %v", err)
+		}
+	})
+}
+
+func TestRound2Collector_RecordShareSubmission_RetainsDivergentShare(t *testing.T) {
+	// A validly-signed, attempt-bound, included-member share that does NOT bind
+	// the authoritative package is RETAINED as divergent evidence (possible
+	// targeted coordinator equivocation), not dropped: it returns
+	// ErrShareRetainedNotAccepted and emits EquivocationKindDivergentShare.
+	captured := captureEquivocationEvidence(t)
+	c := NewRound2Collector(fakeVerifier{})
+	elected := group.MemberIndex(testShareCoordinatorID)
+	_ = recordTestPackage(t, c, elected)
+
+	wrong := bytes.Repeat([]byte{0x11}, SigningPackageHashLength)
+	if err := c.RecordShareSubmission(signedTestShareSubmission(t, 3, wrong)); !errors.Is(err, ErrShareRetainedNotAccepted) {
+		t.Fatalf("want ErrShareRetainedNotAccepted, got %v", err)
+	}
+	if len(*captured) != 1 || (*captured)[0].Kind != EquivocationKindDivergentShare {
+		t.Fatalf("expected 1 divergent_share event, got %d %+v", len(*captured), *captured)
+	}
+	if (*captured)[0].Sender != 3 || len((*captured)[0].ConflictingEnvelope) == 0 {
+		t.Fatal("divergent evidence must name the submitter and carry the share envelope")
+	}
+	// Re-recording the same divergent share is idempotent: still not accepted, no
+	// new evidence.
+	if err := c.RecordShareSubmission(signedTestShareSubmission(t, 3, wrong)); !errors.Is(err, ErrShareRetainedNotAccepted) {
+		t.Fatalf("re-record: want ErrShareRetainedNotAccepted, got %v", err)
+	}
+	if len(*captured) != 1 {
+		t.Fatalf("idempotent divergent re-record must not emit again, got %d", len(*captured))
+	}
+}
+
+func TestRound2Collector_RecordShareSubmission_DetectsMemberEquivocation(t *testing.T) {
+	captured := captureEquivocationEvidence(t)
+	c := NewRound2Collector(fakeVerifier{})
+	elected := group.MemberIndex(testShareCoordinatorID)
+	pkgHash := recordTestPackage(t, c, elected)
+
+	if err := c.RecordShareSubmission(signedTestShareSubmission(t, 3, pkgHash)); err != nil {
+		t.Fatalf("record first share: %v", err)
+	}
+	// Same submitter, DIFFERENT signed share body (different signature share).
+	conflicting := &ShareSubmission{
+		AttemptContextHash: append([]byte(nil), pinnedContextHash[:]...),
+		SubmitterIDValue:   3,
+		CoordinatorIDValue: testShareCoordinatorID,
+		SigningPackageHash: pkgHash,
+		SignatureShare:     []byte("a-different-round2-share"),
+	}
+	if err := SignShareSubmission(&fakeSigner{id: 3}, conflicting); err != nil {
+		t.Fatalf("sign conflicting: %v", err)
+	}
+	if err := c.RecordShareSubmission(conflicting); !errors.Is(err, ErrShareConflict) {
+		t.Fatalf("want ErrShareConflict, got %v", err)
+	}
+	if len(*captured) != 1 {
+		t.Fatalf("expected 1 equivocation event, got %d", len(*captured))
+	}
+	ev := (*captured)[0]
+	if ev.Kind != EquivocationKindShareConflict || ev.Sender != 3 {
+		t.Fatalf("want share_conflict from sender 3, got kind %q sender %d", ev.Kind, ev.Sender)
+	}
+	if len(ev.ExistingEnvelope) == 0 || len(ev.ConflictingEnvelope) == 0 ||
+		bytes.Equal(ev.ExistingEnvelope, ev.ConflictingEnvelope) {
+		t.Fatal("both distinct share envelopes must be retained as evidence")
+	}
+}
+
+func TestRound2Collector_RecordShareSubmission_EnvelopeReEncodingIsNotEquivocation(t *testing.T) {
+	captured := captureEquivocationEvidence(t)
+	c := NewRound2Collector(fakeVerifier{})
+	elected := group.MemberIndex(testShareCoordinatorID)
+	pkgHash := recordTestPackage(t, c, elected)
+
+	share := signedTestShareSubmission(t, 3, pkgHash)
+	if err := c.RecordShareSubmission(share); err != nil {
+		t.Fatalf("record share: %v", err)
+	}
+	// Re-wrap the SAME (body, signature) in a reversed-field-order envelope.
+	body, _ := share.bodyBytes()
+	var reEncoded []byte
+	reEncoded = append(reEncoded, 0x12, byte(len(share.SubmitterSignature)))
+	reEncoded = append(reEncoded, share.SubmitterSignature...)
+	reEncoded = append(reEncoded, 0x0a, byte(len(body)))
+	reEncoded = append(reEncoded, body...)
+	var reDecoded ShareSubmission
+	if err := reDecoded.Unmarshal(reEncoded); err != nil {
+		t.Fatalf("unmarshal re-encoded: %v", err)
+	}
+
+	if err := c.RecordShareSubmission(&reDecoded); err != nil {
+		t.Fatalf("a re-encoded same-body share must be idempotent, got %v", err)
+	}
+	if len(*captured) != 0 {
+		t.Fatalf("share envelope re-encoding must NOT emit equivocation, got %d", len(*captured))
+	}
+}
