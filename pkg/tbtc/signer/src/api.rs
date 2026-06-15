@@ -448,6 +448,7 @@ pub struct BuildTaprootTxRequest {
     pub session_id: String,
     pub inputs: Vec<TxInput>,
     pub outputs: Vec<TxOutput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script_tree_hex: Option<String>,
 }
 

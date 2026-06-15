@@ -13424,3 +13424,26 @@ fn interactive_session_abort_success_metric_counts_only_real_aborts() {
         "a real abort increments success_total exactly once"
     );
 }
+
+// An absent optional request field must be omitted from the serialized
+// form (not emitted as null), matching every other Option field in the
+// API surface, and a payload that omits it must still deserialize.
+#[test]
+fn build_taproot_tx_request_omits_absent_script_tree_hex() {
+    let request = BuildTaprootTxRequest {
+        session_id: "s".to_string(),
+        inputs: vec![],
+        outputs: vec![],
+        script_tree_hex: None,
+    };
+    let json = serde_json::to_string(&request).expect("serialize");
+    assert!(
+        !json.contains("script_tree_hex"),
+        "absent script_tree_hex must be omitted, not serialized as null: {json}"
+    );
+
+    let round_trip: BuildTaprootTxRequest =
+        serde_json::from_str(r#"{"session_id":"s","inputs":[],"outputs":[]}"#)
+            .expect("a payload omitting script_tree_hex must deserialize");
+    assert!(round_trip.script_tree_hex.is_none());
+}
