@@ -7,6 +7,16 @@ rewrite architecture.
 
 ## Implemented in this branch
 
+> Scope note: this section records the broader `tbtc-signer` rust-rewrite
+> bootstrap effort across keep-core, not the diff of a single PR. Bullets that
+> cite a `threshold-network/keep-core` PR or commit (e.g. the `BuildTaprootTx`
+> CGO bridge wiring, the transitional bootstrap-signing orchestration) live in
+> those **separate keep-core changes** and are **not part of this crate's PR
+> diff**. Within this PR the crate is standalone: it builds the `cdylib` and C
+> header, but nothing in keep-core's Go build links it yet (no `cgo`/`libfrost`
+> consumer references the crate). See the production gate below before treating
+> any of this as wired.
+
 - Added `pkg/tbtc/signer` Rust crate that builds a `cdylib` named
   `libfrost_tbtc`.
 - Added a C ABI contract in `pkg/tbtc/signer/include/frost_tbtc.h`.
@@ -237,6 +247,12 @@ rewrite architecture.
 
 ## Production gates (must close before rollout)
 
+- Consumer-activation re-review (mandatory): the crate currently has no Go
+  consumer in keep-core, so its custody-critical surface has only been reviewed
+  as inert code. Before any PR wires a Go consumer (links the `cdylib` / enables
+  the `BuildTaprootTx` CGO bridge), the crate must get a dedicated security
+  re-review as a now-load-bearing dependency. Treat this as a hard, mechanical
+  gate, not a cultural assumption.
 - Durable session state: complete production hardening around the persistent
   backend (crash-safe fsync semantics, path configuration, process lock model,
   corruption handling policy, and broader retention/cleanup lifecycle
