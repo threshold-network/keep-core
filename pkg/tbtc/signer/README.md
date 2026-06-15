@@ -109,6 +109,12 @@ Note: the override registry assumes single-writer access. Do not run concurrent
 `scripts/admission-override.sample.json` documents the artifact schema and
 requires a real Schnorr signature over `payload_json`.
 
+The `dao_override_trust_root_pubkey_hex` value in
+`scripts/admission-policy-v1.sample.json` is a non-functional placeholder
+(syntactically valid hex, but not a real key). Replace it with the governance
+trust root's real x-only Schnorr public key (32 bytes / 64 hex chars) before
+enabling overrides; the placeholder fails closed as an invalid trust root.
+
 Sample input schemas are provided in:
 
 - `pkg/tbtc/signer/scripts/admission-policy-v1.sample.json`
