@@ -119,3 +119,49 @@ func AuthenticateShareSubmission(
 	}
 	return nil
 }
+
+// verifyShareSubmissionForAttempt verifies the submitter signature on an
+// already-validated share for the live attempt WITHOUT the strict package /
+// coordinator binding that AuthenticateShareSubmission requires. It confirms only
+// that sub is a genuine, attempt-bound share from its declared submitter.
+//
+// The Round2Collector uses this to RETAIN a submitter-signed share that diverges
+// from the attempt's authoritative package (a different signing-package hash or
+// coordinator) as blame evidence, rather than dropping it: the collector's
+// contract is to preserve the exact bytes adjudication needs, and a dropped
+// divergent share is targeted coordinator equivocation that 7.2b-4 could never
+// recover. Classification (coordinator vs member fault) is deferred to the f+1
+// quorum compare. sub.Validate() must have already passed (so SubmitterID() is
+// bounded).
+func verifyShareSubmissionForAttempt(
+	verifier SignatureVerifier,
+	sub *ShareSubmission,
+	liveAttemptContextHash []byte,
+) error {
+	if len(sub.SubmitterSignature) == 0 {
+		return fmt.Errorf(
+			"%w: share submission has no submitter signature",
+			ErrSignatureMissing,
+		)
+	}
+	if !bytes.Equal(sub.AttemptContextHash, liveAttemptContextHash) {
+		return ErrShareSubmissionWrongAttempt
+	}
+	payload, err := sub.SignableBytes()
+	if err != nil {
+		return fmt.Errorf("share submission signable bytes: %w", err)
+	}
+	if err := verifier.Verify(
+		payload,
+		sub.SubmitterSignature,
+		sub.SubmitterID(),
+	); err != nil {
+		return fmt.Errorf(
+			"%w: submitter %d: %s",
+			ErrSignatureInvalid,
+			sub.SubmitterID(),
+			err.Error(),
+		)
+	}
+	return nil
+}

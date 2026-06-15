@@ -299,14 +299,45 @@ func TestRound2Collector_RecordShareSubmission_Rejections(t *testing.T) {
 			t.Fatalf("want ErrRound2SubmitterNotIncluded, got %v", err)
 		}
 	})
-	t.Run("share bound to a different package is rejected by auth", func(t *testing.T) {
+	t.Run("share with a bad submitter signature is rejected without retention", func(t *testing.T) {
 		c := NewRound2Collector(fakeVerifier{})
-		_ = recordTestPackage(t, c, elected)
-		wrong := bytes.Repeat([]byte{0x11}, SigningPackageHashLength)
-		if err := c.RecordShareSubmission(signedTestShareSubmission(t, 3, wrong)); !errors.Is(err, ErrShareSubmissionWrongPackage) {
-			t.Fatalf("want ErrShareSubmissionWrongPackage, got %v", err)
+		pkgHash := recordTestPackage(t, c, elected)
+		sub := signedTestShareSubmission(t, 3, pkgHash)
+		sub.SubmitterSignature[0] ^= 0xff // tamper
+		if err := c.RecordShareSubmission(sub); !errors.Is(err, ErrSignatureInvalid) {
+			t.Fatalf("want ErrSignatureInvalid, got %v", err)
 		}
 	})
+}
+
+func TestRound2Collector_RecordShareSubmission_RetainsDivergentShare(t *testing.T) {
+	// A validly-signed, attempt-bound, included-member share that does NOT bind
+	// the authoritative package is RETAINED as divergent evidence (possible
+	// targeted coordinator equivocation), not dropped: it returns
+	// ErrShareRetainedNotAccepted and emits EquivocationKindDivergentShare.
+	captured := captureEquivocationEvidence(t)
+	c := NewRound2Collector(fakeVerifier{})
+	elected := group.MemberIndex(testShareCoordinatorID)
+	_ = recordTestPackage(t, c, elected)
+
+	wrong := bytes.Repeat([]byte{0x11}, SigningPackageHashLength)
+	if err := c.RecordShareSubmission(signedTestShareSubmission(t, 3, wrong)); !errors.Is(err, ErrShareRetainedNotAccepted) {
+		t.Fatalf("want ErrShareRetainedNotAccepted, got %v", err)
+	}
+	if len(*captured) != 1 || (*captured)[0].Kind != EquivocationKindDivergentShare {
+		t.Fatalf("expected 1 divergent_share event, got %d %+v", len(*captured), *captured)
+	}
+	if (*captured)[0].Sender != 3 || len((*captured)[0].ConflictingEnvelope) == 0 {
+		t.Fatal("divergent evidence must name the submitter and carry the share envelope")
+	}
+	// Re-recording the same divergent share is idempotent: still not accepted, no
+	// new evidence.
+	if err := c.RecordShareSubmission(signedTestShareSubmission(t, 3, wrong)); !errors.Is(err, ErrShareRetainedNotAccepted) {
+		t.Fatalf("re-record: want ErrShareRetainedNotAccepted, got %v", err)
+	}
+	if len(*captured) != 1 {
+		t.Fatalf("idempotent divergent re-record must not emit again, got %d", len(*captured))
+	}
 }
 
 func TestRound2Collector_RecordShareSubmission_DetectsMemberEquivocation(t *testing.T) {
