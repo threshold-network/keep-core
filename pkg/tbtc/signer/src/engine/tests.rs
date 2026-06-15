@@ -13123,57 +13123,139 @@ fn interactive_aggregate_rejects_invalid_share_fail_closed() {
     // 7.2b-3: the aggregate now fails closed WITH attributable CANDIDATE blame.
     // Member 2 submitted a structurally valid share over a different package, so
     // its share fails verification against the group's verifying material and is
-    // named a candidate culprit; member 1's honest share is not. The engine
-    // surfaces candidates only - envelope-bound adjudication is the Go host's
-    // job (frozen Phase 7.2b spec, section 6).
+    // named a candidate culprit (its u16 Go member id); member 1's honest share
+    // is not. The engine surfaces candidates only - envelope-bound adjudication
+    // is the Go host's job (frozen Phase 7.2b spec, section 6).
     let candidate_culprits = match err {
         EngineError::AggregateShareVerificationFailed {
-            ref candidate_culprits,
-            ..
-        } => candidate_culprits.clone(),
+            candidate_culprits, ..
+        } => candidate_culprits,
         other => panic!("expected AggregateShareVerificationFailed, got {other:?}"),
     };
-    assert!(
-        candidate_culprits
-            .iter()
-            .any(|c| c.member_identifier == key_packages[&2].identifier),
-        "member 2 must be named a candidate culprit: {candidate_culprits:?}"
-    );
-    assert!(
-        !candidate_culprits
-            .iter()
-            .any(|c| c.member_identifier == key_packages[&1].identifier),
-        "honest member 1 must not be blamed: {candidate_culprits:?}"
-    );
-    assert!(
-        candidate_culprits
-            .iter()
-            .all(|c| c.reason == "invalid_signature_share"),
-        "{candidate_culprits:?}"
+    assert_eq!(
+        candidate_culprits,
+        vec![2],
+        "only the cheating member 2 must be named: {candidate_culprits:?}"
     );
 }
 
 #[test]
-fn candidate_culprits_from_identifiers_maps_each_member() {
-    // The AllCheaters mapping must surface EVERY flagged member (not just the
-    // first), each tagged with the stable reason and the same canonical
-    // Go-string identifier the DKG path emits.
-    let id2 = participant_identifier_to_frost_identifier(2).expect("identifier 2");
-    let id3 = participant_identifier_to_frost_identifier(3).expect("identifier 3");
-    let culprits = candidate_culprits_from_identifiers(&[id2, id3]);
-    assert_eq!(culprits.len(), 2);
-    assert_eq!(
-        culprits[0].member_identifier,
-        frost_identifier_to_go_string(id2)
+fn frost_identifier_to_u16_inverts_participant_mapping() {
+    // The culprit list reports u16 Go member identifiers, so the inverse of
+    // participant_identifier_to_frost_identifier must round-trip - including
+    // across the low/high byte boundary (255 -> 256).
+    for id in [1u16, 2, 3, 255, 256, 65535] {
+        let identifier = participant_identifier_to_frost_identifier(id).expect("identifier");
+        assert_eq!(frost_identifier_to_u16(identifier), Some(id), "id {id}");
+    }
+}
+
+#[test]
+fn interactive_aggregate_names_all_invalid_share_culprits() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let session_id = "interactive-aggregate-multi-blame";
+    let key_group = "interactive-test-key-group";
+    let message = [0x5au8; 32];
+    let included = [1u16, 2];
+    let key_packages = ensure_interactive_dkg_session(session_id, key_group);
+
+    // Both members of the threshold-2 signing subset cheat: each signs a
+    // DIFFERENT package, so both shares fail verification against the
+    // authoritative package. Aggregation must name BOTH (AllCheaters), not just
+    // the first cheater. (The signing package carries exactly `threshold`
+    // commitments, so a multi-culprit case needs every subset member to cheat.)
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("opens");
+
+    let real1 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&1].identifier.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone(),
+    })
+    .expect("member 1 nonces");
+    let real2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![real1.commitment.clone(), real2.commitment.clone()],
     );
-    assert_eq!(
-        culprits[1].member_identifier,
-        frost_identifier_to_go_string(id3)
+
+    // Each member signs a different (2-party) package over another message, so
+    // both shares fail verification against the authoritative package.
+    let other_message = [0x5bu8; 32];
+    let bogus1 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&1].identifier.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone(),
+    })
+    .expect("bogus member 1 nonces");
+    let bogus1_package = interactive_package_for_test(
+        &other_message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: bogus1.commitment.data_hex.clone(),
+            },
+            NativeFrostCommitment {
+                identifier: key_packages[&2].identifier.clone(),
+                data_hex: bogus1.commitment.data_hex.clone(),
+            },
+        ],
     );
-    assert!(culprits
-        .iter()
-        .all(|c| c.reason == "invalid_signature_share"));
-    assert!(candidate_culprits_from_identifiers(&[]).is_empty());
+    let bogus1_share = sign_share(SignShareRequest {
+        signing_package_hex: bogus1_package,
+        nonces_hex: bogus1.nonces_hex,
+        key_package_identifier: key_packages[&1].identifier.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone(),
+    })
+    .expect("bogus member 1 share");
+    let bogus2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("bogus member 2 nonces");
+    let bogus2_package = interactive_package_for_test(
+        &other_message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&2].identifier.clone(),
+                data_hex: bogus2.commitment.data_hex.clone(),
+            },
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: bogus2.commitment.data_hex.clone(),
+            },
+        ],
+    );
+    let bogus2_share = sign_share(SignShareRequest {
+        signing_package_hex: bogus2_package,
+        nonces_hex: bogus2.nonces_hex,
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("bogus member 2 share");
+
+    let err = interactive_aggregate(InteractiveAggregateRequest {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        signing_package_hex,
+        signature_shares: vec![bogus1_share.signature_share, bogus2_share.signature_share],
+        taproot_merkle_root_hex: None,
+    })
+    .expect_err("two invalid shares must fail aggregation closed");
+
+    let mut candidate_culprits = match err {
+        EngineError::AggregateShareVerificationFailed {
+            candidate_culprits, ..
+        } => candidate_culprits,
+        other => panic!("expected AggregateShareVerificationFailed, got {other:?}"),
+    };
+    candidate_culprits.sort_unstable();
+    // AllCheaters, not FirstCheater: BOTH cheating members are named.
+    assert_eq!(candidate_culprits, vec![1, 2], "{candidate_culprits:?}");
 }
 
 #[test]

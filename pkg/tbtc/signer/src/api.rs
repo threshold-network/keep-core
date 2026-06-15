@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use crate::errors::AggregateCulprit;
-
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DkgParticipant {
     pub identifier: u16,
@@ -674,13 +672,14 @@ pub struct ErrorResponse {
     pub message: String,
     pub recovery_class: String,
     /// CANDIDATE culprits for an `aggregate_share_verification_failed` error:
-    /// the members whose FROST signature shares failed verification. Empty - and
-    /// omitted from the JSON via skip_serializing_if - for every other error, so
-    /// existing Go clients that do not read the field are unaffected. These are
-    /// pure-crypto candidates, not adjudicated blame; the Go host performs the
-    /// envelope-bound adjudication (frozen Phase 7.2b spec, section 6).
+    /// the u16 Go member identifiers whose FROST signature shares failed
+    /// verification (the same identifier space as `excluded_member_identifiers`).
+    /// Empty - and omitted from the JSON via skip_serializing_if - for every
+    /// other error, so existing Go clients are unaffected. These are pure-crypto
+    /// candidates, not adjudicated blame; the Go host performs the envelope-bound
+    /// adjudication (frozen Phase 7.2b spec, section 6).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub candidate_culprits: Vec<AggregateCulprit>,
+    pub candidate_culprits: Vec<u16>,
 }
 
 /// Init-time signer configuration installed once by the host over FFI.

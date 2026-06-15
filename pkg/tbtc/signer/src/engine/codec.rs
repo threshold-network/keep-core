@@ -53,37 +53,41 @@ pub(crate) fn frost_identifier_to_go_string(identifier: frost::Identifier) -> St
         .expect("serializing hex identifier as JSON string cannot fail")
 }
 
-/// Map a FROST aggregate error to the CANDIDATE culprits it identifies.
+/// Map a FROST aggregate error to the CANDIDATE culprits it identifies, as u16
+/// Go member identifiers (the same identifier space as
+/// `excluded_member_identifiers`, so the Go host consumes them directly).
 ///
-/// Returns the participant identifiers FROST flagged for an invalid signature
-/// share (`Error::InvalidSignatureShare`, populated with the full set when
-/// aggregation uses `CheaterDetection::AllCheaters`). Every other error class -
-/// malformed package, wrong share count, group/field errors - yields an empty
-/// list: those are not per-member share attributions, so the caller surfaces
-/// them as a generic validation failure instead. The identifiers are CANDIDATES
-/// only - pure FROST verification verdicts, not adjudicated fault.
-pub(crate) fn aggregate_candidate_culprits(error: &frost::Error) -> Vec<AggregateCulprit> {
+/// Returns the members FROST flagged for an invalid signature share
+/// (`Error::InvalidSignatureShare`, the full set under
+/// `CheaterDetection::AllCheaters`). Every other error class - malformed
+/// package, wrong share count, group/field errors - yields an empty list: those
+/// are not per-member share attributions, so the caller surfaces them as a
+/// generic validation failure instead. Identifiers that do not map to a u16 are
+/// dropped: they cannot belong to a real group member (every submitted share
+/// carries a u16-derived identifier), so they are foreign to the Go host's
+/// member set. CANDIDATES only - pure FROST verdicts, not adjudicated fault.
+pub(crate) fn aggregate_candidate_culprits(error: &frost::Error) -> Vec<u16> {
     match error {
-        frost_core::Error::InvalidSignatureShare { culprits } => {
-            candidate_culprits_from_identifiers(culprits)
-        }
+        frost_core::Error::InvalidSignatureShare { culprits } => culprits
+            .iter()
+            .filter_map(|identifier| frost_identifier_to_u16(*identifier))
+            .collect(),
         _ => Vec::new(),
     }
 }
 
-/// Map FROST participant identifiers to CANDIDATE culprit records, tagging each
-/// with the `invalid_signature_share` reason and the canonical Go-string member
-/// identifier the rest of the engine uses.
-pub(crate) fn candidate_culprits_from_identifiers(
-    identifiers: &[frost::Identifier],
-) -> Vec<AggregateCulprit> {
-    identifiers
-        .iter()
-        .map(|identifier| AggregateCulprit {
-            member_identifier: frost_identifier_to_go_string(*identifier),
-            reason: "invalid_signature_share".to_string(),
-        })
-        .collect()
+/// Recover the u16 Go member identifier from a FROST participant identifier -
+/// the inverse of `participant_identifier_to_frost_identifier`. FROST(secp256k1)
+/// serializes the scalar big-endian, so this requires every byte above the low
+/// two to be zero and reads the trailing two big-endian. Returns None for an
+/// identifier that does not fit a u16.
+pub(crate) fn frost_identifier_to_u16(identifier: frost::Identifier) -> Option<u16> {
+    let bytes = identifier.serialize();
+    let split = bytes.len().checked_sub(2)?;
+    if bytes[..split].iter().any(|&b| b != 0) {
+        return None;
+    }
+    Some(u16::from_be_bytes([bytes[split], bytes[split + 1]]))
 }
 
 pub(crate) fn parse_frost_identifier(
