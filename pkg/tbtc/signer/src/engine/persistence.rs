@@ -2,13 +2,27 @@
 
 use super::*;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct PersistedKeyPackage {
     pub(crate) identifier: u16,
     pub(crate) key_package_hex: SecretString,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+// Hand-written Debug: `SecretString` is `Zeroizing<String>`, whose
+// derived Debug prints the inner string verbatim. `key_package_hex`
+// holds serialized signing-share material, so it MUST be redacted -
+// otherwise any `{:?}` of this struct (log line, panic, the derived
+// Debug of an enclosing struct) spills a key share.
+impl std::fmt::Debug for PersistedKeyPackage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PersistedKeyPackage")
+            .field("identifier", &self.identifier)
+            .field("key_package_hex", &"<redacted>")
+            .finish()
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct PersistedSessionState {
     pub(crate) dkg_request_fingerprint: Option<String>,
     pub(crate) dkg_key_packages: Option<Vec<PersistedKeyPackage>>,
@@ -49,6 +63,71 @@ pub(crate) struct PersistedSessionState {
     // deserializes to an empty set.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) aggregated_interactive_attempt_markers: Vec<String>,
+}
+
+// Hand-written Debug: `sign_message_hex` is `SecretString`
+// (`Zeroizing<String>`), whose derived Debug renders the inner value
+// verbatim. It is redacted here (presence preserved, content hidden);
+// `dkg_key_packages` redacts via PersistedKeyPackage's own Debug.
+// NOTE: any future secret-bearing field MUST be redacted here too.
+impl std::fmt::Debug for PersistedSessionState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PersistedSessionState")
+            .field("dkg_request_fingerprint", &self.dkg_request_fingerprint)
+            .field("dkg_key_packages", &self.dkg_key_packages)
+            .field(
+                "dkg_public_key_package_hex",
+                &self.dkg_public_key_package_hex,
+            )
+            .field("dkg_result", &self.dkg_result)
+            .field("sign_request_fingerprint", &self.sign_request_fingerprint)
+            .field(
+                "sign_message_hex",
+                &self.sign_message_hex.as_ref().map(|_| "<redacted>"),
+            )
+            .field("round_state", &self.round_state)
+            .field("active_attempt_context", &self.active_attempt_context)
+            .field(
+                "attempt_transition_records",
+                &self.attempt_transition_records,
+            )
+            .field("consumed_attempt_ids", &self.consumed_attempt_ids)
+            .field("consumed_sign_round_ids", &self.consumed_sign_round_ids)
+            .field(
+                "finalize_request_fingerprint",
+                &self.finalize_request_fingerprint,
+            )
+            .field("signature_result", &self.signature_result)
+            .field(
+                "consumed_finalize_round_ids",
+                &self.consumed_finalize_round_ids,
+            )
+            .field(
+                "consumed_finalize_request_fingerprints",
+                &self.consumed_finalize_request_fingerprints,
+            )
+            .field(
+                "build_tx_request_fingerprint",
+                &self.build_tx_request_fingerprint,
+            )
+            .field("tx_result", &self.tx_result)
+            .field(
+                "refresh_request_fingerprint",
+                &self.refresh_request_fingerprint,
+            )
+            .field("refresh_result", &self.refresh_result)
+            .field("refresh_history", &self.refresh_history)
+            .field("emergency_rekey_event", &self.emergency_rekey_event)
+            .field(
+                "consumed_interactive_attempt_markers",
+                &self.consumed_interactive_attempt_markers,
+            )
+            .field(
+                "aggregated_interactive_attempt_markers",
+                &self.aggregated_interactive_attempt_markers,
+            )
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

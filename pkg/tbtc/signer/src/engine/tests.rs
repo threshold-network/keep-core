@@ -13286,3 +13286,38 @@ fn establish_clean_signer_test_env_clears_leaked_toggles() {
         Ok(TEST_STATE_ENCRYPTION_KEY_HEX)
     );
 }
+
+// Persisted structs hold serialized signing-share material in
+// `SecretString` (`Zeroizing<String>`) fields. `Debug` MUST NOT
+// render that material: any future log/panic that `{:?}`-formats one
+// of these structs would otherwise spill key shares or the signing
+// message. Guards both the top-level field and the nested key-package
+// vec.
+#[test]
+fn persisted_secret_structs_redact_debug_output() {
+    let secret_key_package = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+    let secret_message = "cafebabecafebabecafebabecafebabe";
+
+    let key_package = PersistedKeyPackage {
+        identifier: 1,
+        key_package_hex: Zeroizing::new(secret_key_package.to_string()),
+    };
+    let rendered = format!("{key_package:?}");
+    assert!(
+        !rendered.contains(secret_key_package),
+        "PersistedKeyPackage Debug leaked key share material: {rendered}"
+    );
+
+    let mut session = persisted_session_state_fixture();
+    session.sign_message_hex = Some(Zeroizing::new(secret_message.to_string()));
+    session.dkg_key_packages = Some(vec![key_package]);
+    let rendered = format!("{session:?}");
+    assert!(
+        !rendered.contains(secret_message),
+        "PersistedSessionState Debug leaked sign message material: {rendered}"
+    );
+    assert!(
+        !rendered.contains(secret_key_package),
+        "PersistedSessionState Debug leaked nested key share material: {rendered}"
+    );
+}
