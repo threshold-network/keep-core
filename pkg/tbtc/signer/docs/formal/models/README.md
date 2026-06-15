@@ -49,6 +49,24 @@ Traceability matrix:
   `EmergencyStopBlocksForwardProgress`, `HaltedModeIsTerminal` ->
   `pkg/tbtc/signer/docs/roast-phase-5-security-rollout-gates.md`.
 
+Implementation status (read before trusting a green check):
+
+- **Implemented** — invariants trace to shipped code:
+  - `RoastAttemptStateMachine.tla` -> `src/engine/roast.rs`, `src/engine/signing.rs`.
+  - `StateKeyProviderPolicy.tla` -> `src/engine/persistence.rs`.
+- **Planned / not yet implemented** — invariants trace to design docs, not code:
+  - `TeeEnforcementModes.tla` and `RoastRolloutPolicy.tla` model the three-mode
+    (`disabled`/`audit`/`enforce`) + break-glass enforcement profile and the
+    staged rollout/rollback policy. The shipped signer implements only a binary
+    provenance enforce gate (`src/engine/provenance.rs`) and has no audit-mode
+    ramp, break-glass path, or rollout state machine. Both trace to plans that
+    are explicitly "not active" future hardening profiles
+    (`tee-whitelisted-signer-enforcement-plan.md`,
+    `roast-phase-5-security-rollout-gates.md`).
+
+A passing TLC run proves each model is internally consistent; for the two
+planned models it does **not** prove the shipped signer enforces that behavior.
+
 Run all models with:
 
 ```bash
