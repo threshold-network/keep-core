@@ -50,10 +50,35 @@ where
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(Ok(bytes)) => success_from_serialized(bytes),
         Ok(Err(err)) => error_result(err),
-        Err(payload) => error_result(EngineError::Internal(format!(
+        Err(payload) => error_result(EngineError::Internal(panic_boundary_message(payload))),
+    }
+}
+
+// A panic crossing the FFI boundary must not reflect its raw payload to the
+// host in production: the panic message could carry a filesystem path, a
+// config value, or other internal detail. Only the development profile keeps
+// the payload, for operator diagnostics.
+//
+// This reads the profile directly and fails CLOSED (redacts) for any
+// non-development value - including a missing or malformed profile - rather
+// than calling signer_profile_is_production(), which panics on a malformed
+// profile. Re-validating the profile here could otherwise turn a handled
+// panic into a second panic on the FFI error path and unwind into C.
+fn panic_boundary_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    let development_profile = crate::engine::signer_env_var(crate::engine::TBTC_SIGNER_PROFILE_ENV)
+        .map(|raw| {
+            raw.trim()
+                .eq_ignore_ascii_case(crate::engine::TBTC_SIGNER_PROFILE_DEVELOPMENT)
+        })
+        .unwrap_or(false);
+
+    if development_profile {
+        format!(
             "panic crossed FFI boundary: {}",
             panic_payload_message(payload)
-        ))),
+        )
+    } else {
+        "panic crossed FFI boundary".to_string()
     }
 }
 
@@ -164,24 +189,56 @@ mod tests {
         );
     }
 
+    // A panic payload may carry internal detail (paths, config). It must be
+    // withheld from the host in production and only surfaced under the
+    // development profile. Serialized under the shared test-state lock because
+    // the profile is read from a process-global env var.
     #[test]
-    fn ffi_entry_preserves_string_panic_payload() {
-        let result = ffi_entry(|| -> Result<Vec<u8>, EngineError> {
-            panic!("TBTC_SIGNER_PROFILE must be production or development");
-        });
-        assert_eq!(result.status_code, STATUS_ERROR);
+    fn ffi_entry_redacts_panic_payload_in_production_and_preserves_in_development() {
+        let _guard = crate::engine::lock_test_state();
+        let secret_detail = "panic detail with /secret/path and a config value";
 
-        let bytes = unsafe { std::slice::from_raw_parts(result.buffer.ptr, result.buffer.len) };
-        let response: ErrorResponse = serde_json::from_slice(bytes).expect("decode error response");
-        assert_eq!(response.code, "internal_error");
-        assert!(
-            response
-                .message
-                .contains("TBTC_SIGNER_PROFILE must be production or development"),
-            "panic payload was not preserved: {}",
+        let decode_message = |result: &TbtcSignerResult| -> String {
+            assert_eq!(result.status_code, STATUS_ERROR);
+            let bytes = unsafe { std::slice::from_raw_parts(result.buffer.ptr, result.buffer.len) };
+            let response: ErrorResponse =
+                serde_json::from_slice(bytes).expect("decode error response");
+            assert_eq!(response.code, "internal_error");
             response.message
-        );
+        };
 
+        // Production (and any non-development profile): payload withheld.
+        std::env::set_var(
+            crate::engine::TBTC_SIGNER_PROFILE_ENV,
+            crate::engine::TBTC_SIGNER_PROFILE_PRODUCTION,
+        );
+        let result = ffi_entry(|| -> Result<Vec<u8>, EngineError> {
+            panic!("{secret_detail}");
+        });
+        let message = decode_message(&result);
+        assert!(
+            !message.contains(secret_detail),
+            "production must not reflect the panic payload to the host: {message}"
+        );
+        assert!(
+            message.contains("panic crossed FFI boundary"),
+            "production should still report a generic boundary panic: {message}"
+        );
+        free_buffer(result.buffer.ptr, result.buffer.len);
+
+        // Development: payload preserved for operator diagnostics.
+        std::env::set_var(
+            crate::engine::TBTC_SIGNER_PROFILE_ENV,
+            crate::engine::TBTC_SIGNER_PROFILE_DEVELOPMENT,
+        );
+        let result = ffi_entry(|| -> Result<Vec<u8>, EngineError> {
+            panic!("{secret_detail}");
+        });
+        let message = decode_message(&result);
+        assert!(
+            message.contains(secret_detail),
+            "development must preserve the panic payload: {message}"
+        );
         free_buffer(result.buffer.ptr, result.buffer.len);
     }
 }
