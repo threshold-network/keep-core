@@ -12,6 +12,32 @@ import (
 // invalid. It is the Go-side reason string; the engine never supplies it.
 const candidateCulpritRejectReason = "invalid_signature_share"
 
+// ShareVerificationResult is the verdict of a FROST share re-verification.
+//
+// It is deliberately a three-way enum rather than a (bool, error): the boundary
+// between a MEMBER-attributable failure (blame) and a not-the-member's-fault
+// failure (don't blame) is security-critical, and a (bool, error) shape silently
+// routes a member's own undecodable/garbage share bytes into the error channel -
+// where the classifier would read them as "indeterminate" and let the cheater
+// dodge blame. The enum forces the (engine-backed) implementer to categorize the
+// failure boundary deliberately.
+type ShareVerificationResult int
+
+const (
+	// ShareValid: the retained share is a valid FROST signature share for the
+	// authoritative package. Not blamable.
+	ShareValid ShareVerificationResult = iota
+	// ShareInvalid: the share is MEMBER-attributable garbage - mathematically
+	// invalid against the package, OR undecodable/malformed share bytes the
+	// member operator-signed. Self-incriminating, hence blamable.
+	ShareInvalid
+	// ShareIndeterminate: verification could not be completed for a reason that
+	// is NOT the member's fault - missing verifying material, ambiguous
+	// key/taproot context, an undecodable AUTHORITATIVE PACKAGE, or an engine /
+	// FFI execution failure. Fail closed against blame.
+	ShareIndeterminate
+)
+
 // Round2ShareVerifier re-verifies a retained round-2 signature share against an
 // attempt's authoritative signing package using FROST share verification.
 //
@@ -24,14 +50,11 @@ const candidateCulpritRejectReason = "invalid_signature_share"
 //
 // VerifyRetainedShare reports whether submitter's retained, operator-signed
 // share envelope is a valid FROST signature share for the authoritative signing
-// package envelope the collector accepted for the attempt:
-//
-//   - (true, nil):  the share is a VALID FROST share under the package.
-//   - (false, nil): the share is provably INVALID under the package - the
-//     self-incriminating condition that justifies a reject accusation.
-//   - (_, err):     verification was INDETERMINATE (envelope decode failure,
-//     missing verifying material, ambiguous taproot/key context). The caller
-//     MUST NOT blame the member on an indeterminate result.
+// package envelope the collector accepted. Implementations MUST map a member's
+// OWN invalid or undecodable share bytes to ShareInvalid (it is self-incriminating
+// member fault), and reserve ShareIndeterminate for failures that are not the
+// member's fault (see the constants). Misclassifying undecodable member bytes as
+// ShareIndeterminate would let a cheater escape blame.
 //
 // Implementations must be safe for concurrent calls from multiple goroutines.
 type Round2ShareVerifier interface {
@@ -39,7 +62,7 @@ type Round2ShareVerifier interface {
 		signingPackageEnvelope []byte,
 		shareEnvelope []byte,
 		submitter group.MemberIndex,
-	) (valid bool, err error)
+	) ShareVerificationResult
 }
 
 // classifierCandidate pairs a candidate culprit with the retained bytes the
@@ -117,18 +140,15 @@ func (c *Round2Collector) ClassifyCandidateCulprits(
 			// submission. Nothing self-incriminating to accuse with.
 			continue
 		}
-		valid, verr := verifier.VerifyRetainedShare(
+		// Blame ONLY a member-attributable invalid share. ShareValid (not
+		// self-incriminating under this observer's package - coordinator-directed
+		// faults are Phase 7.2b-4b), ShareIndeterminate (not the member's fault),
+		// and any future verdict fail closed against blame.
+		if verifier.VerifyRetainedShare(
 			signingPackageEnvelope,
 			candidate.shareEnvelope,
 			candidate.member,
-		)
-		if verr != nil {
-			// Indeterminate (undecodable / ambiguous): fail closed against blame.
-			continue
-		}
-		if valid {
-			// Valid under this observer's authoritative package: not
-			// self-incriminating. Coordinator-directed faults are Phase 7.2b-4b.
+		) != ShareInvalid {
 			continue
 		}
 		rejects = append(rejects, RejectEntry{

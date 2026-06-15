@@ -3,26 +3,18 @@ package roast
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"reflect"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
-// shareVerdict is one fakeShareVerifier outcome: (valid, err). err models an
-// INDETERMINATE re-verification; valid is consulted only when err is nil.
-type shareVerdict struct {
-	valid bool
-	err   error
-}
-
 // fakeShareVerifier is a configurable Round2ShareVerifier for the classifier
-// tests. Members without a configured verdict default to VALID (no blame); the
-// calls slice records every member actually re-verified, so tests can assert
+// tests. Members without a configured verdict default to ShareValid (no blame);
+// the calls slice records every member actually re-verified, so tests can assert
 // that divergent-only and absent candidates are never handed to the verifier.
 type fakeShareVerifier struct {
-	verdicts map[group.MemberIndex]shareVerdict
+	verdicts map[group.MemberIndex]ShareVerificationResult
 	calls    *[]group.MemberIndex
 }
 
@@ -30,15 +22,14 @@ func (f fakeShareVerifier) VerifyRetainedShare(
 	_ []byte,
 	_ []byte,
 	submitter group.MemberIndex,
-) (bool, error) {
+) ShareVerificationResult {
 	if f.calls != nil {
 		*f.calls = append(*f.calls, submitter)
 	}
-	v, ok := f.verdicts[submitter]
-	if !ok {
-		return true, nil
+	if r, ok := f.verdicts[submitter]; ok {
+		return r
 	}
-	return v.valid, v.err
+	return ShareValid
 }
 
 // recordAcceptedShare records an authoritative-package-bound (accepted) share for
@@ -56,7 +47,9 @@ func TestClassifyCandidateCulprits_InvalidAcceptedShareEmitsReject(t *testing.T)
 	pkgHash := recordTestPackage(t, c, elected)
 	recordAcceptedShare(t, c, 3, pkgHash)
 
-	verifier := fakeShareVerifier{verdicts: map[group.MemberIndex]shareVerdict{3: {valid: false}}}
+	// ShareInvalid covers both a mathematically invalid share and undecodable
+	// share bytes the member operator-signed: either is self-incriminating.
+	verifier := fakeShareVerifier{verdicts: map[group.MemberIndex]ShareVerificationResult{3: ShareInvalid}}
 	rejects, err := c.ClassifyCandidateCulprits(pinnedContextHash[:], []group.MemberIndex{3}, verifier)
 	if err != nil {
 		t.Fatalf("classify: %v", err)
@@ -75,7 +68,7 @@ func TestClassifyCandidateCulprits_ValidAcceptedShareEmitsNothing(t *testing.T) 
 
 	// The engine flagged 3, but THIS observer's retained share re-verifies valid
 	// against the package it accepted: not self-incriminating -> no accusation.
-	verifier := fakeShareVerifier{verdicts: map[group.MemberIndex]shareVerdict{3: {valid: true}}}
+	verifier := fakeShareVerifier{verdicts: map[group.MemberIndex]ShareVerificationResult{3: ShareValid}}
 	rejects, err := c.ClassifyCandidateCulprits(pinnedContextHash[:], []group.MemberIndex{3}, verifier)
 	if err != nil {
 		t.Fatalf("classify: %v", err)
@@ -91,11 +84,9 @@ func TestClassifyCandidateCulprits_IndeterminateEmitsNothing(t *testing.T) {
 	pkgHash := recordTestPackage(t, c, elected)
 	recordAcceptedShare(t, c, 3, pkgHash)
 
-	// An indeterminate re-verification (undecodable / ambiguous) must fail closed
-	// against blame.
-	verifier := fakeShareVerifier{verdicts: map[group.MemberIndex]shareVerdict{
-		3: {valid: false, err: fmt.Errorf("ambiguous taproot context")},
-	}}
+	// An indeterminate re-verification (not the member's fault) must fail closed
+	// against blame - distinct from ShareValid, but likewise emits nothing.
+	verifier := fakeShareVerifier{verdicts: map[group.MemberIndex]ShareVerificationResult{3: ShareIndeterminate}}
 	rejects, err := c.ClassifyCandidateCulprits(pinnedContextHash[:], []group.MemberIndex{3}, verifier)
 	if err != nil {
 		t.Fatalf("classify: %v", err)
@@ -121,7 +112,7 @@ func TestClassifyCandidateCulprits_DivergentShareIsNeutral(t *testing.T) {
 	verifier := fakeShareVerifier{
 		// Would blame 3 if consulted - but a divergent-only candidate must be
 		// skipped BEFORE re-verification.
-		verdicts: map[group.MemberIndex]shareVerdict{3: {valid: false}},
+		verdicts: map[group.MemberIndex]ShareVerificationResult{3: ShareInvalid},
 		calls:    &calls,
 	}
 	rejects, err := c.ClassifyCandidateCulprits(pinnedContextHash[:], []group.MemberIndex{3}, verifier)
@@ -143,7 +134,7 @@ func TestClassifyCandidateCulprits_AbsentCandidateIsNothing(t *testing.T) {
 	recordAcceptedShare(t, c, 3, pkgHash)
 
 	calls := []group.MemberIndex{}
-	verifier := fakeShareVerifier{verdicts: map[group.MemberIndex]shareVerdict{5: {valid: false}}, calls: &calls}
+	verifier := fakeShareVerifier{verdicts: map[group.MemberIndex]ShareVerificationResult{5: ShareInvalid}, calls: &calls}
 	// 5 is in the included set but never submitted a share to this observer.
 	rejects, err := c.ClassifyCandidateCulprits(pinnedContextHash[:], []group.MemberIndex{5}, verifier)
 	if err != nil {
@@ -167,10 +158,10 @@ func TestClassifyCandidateCulprits_MultipleSortedAndDeduplicated(t *testing.T) {
 	recordAcceptedShare(t, c, 7, pkgHash)
 
 	// 3 and 7 re-verify invalid; 5 re-verifies valid (not blamed).
-	verifier := fakeShareVerifier{verdicts: map[group.MemberIndex]shareVerdict{
-		3: {valid: false},
-		5: {valid: true},
-		7: {valid: false},
+	verifier := fakeShareVerifier{verdicts: map[group.MemberIndex]ShareVerificationResult{
+		3: ShareInvalid,
+		5: ShareValid,
+		7: ShareInvalid,
 	}}
 	// Candidates arrive unsorted and duplicated.
 	rejects, err := c.ClassifyCandidateCulprits(
