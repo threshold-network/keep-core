@@ -138,7 +138,9 @@ type round2Record struct {
 	// authoritative one is signingPackageEnvelope). Non-nil = the coordinator
 	// equivocated: the observer holds two distinct, individually authenticated
 	// coordinator-signed packages - unforgeable, self-incriminating proof.
-	// Surfaced as a ConflictEntry against the coordinator by CoordinatorConflicts.
+	// Surfaced (with the authoritative package) as raw proof material by
+	// CoordinatorPackageProofs for NextAttempt's proof-carrying coordinator
+	// exclusion - never as a bare f+1 ConflictEntry.
 	conflictingSigningPackageEnvelope []byte
 }
 
