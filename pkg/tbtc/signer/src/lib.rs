@@ -862,6 +862,14 @@ mod tests {
 
     #[test]
     fn interactive_frost_dkg_and_signing_ffi_roundtrip() {
+        // Serialize with every other env-touching test. This test mutates
+        // process-global TBTC_SIGNER_* env vars (profile, provenance gate),
+        // and env is shared across all parallel test threads; without the
+        // lock its EnvVarGuard set/restore races with the serialized tests
+        // and can leak a `production` profile into a concurrent state test,
+        // which then panics while holding the engine lock and poisons it.
+        // Declared first so it drops last - after the EnvVarGuards restore.
+        let _guard = crate::engine::lock_test_state();
         let _profile_env = EnvVarGuard::set(super::TBTC_SIGNER_PROFILE_ENV, "development");
         let _provenance_env = EnvVarGuard::set("TBTC_SIGNER_ENFORCE_PROVENANCE_GATE", "false");
 
