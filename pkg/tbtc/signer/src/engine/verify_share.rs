@@ -97,9 +97,15 @@ pub fn verify_signature_share(
     // never the request - mirroring InteractiveAggregate. A missing session or
     // incomplete DKG is not the member's fault -> indeterminate.
     let public_key_package = {
-        let guard = state()?
+        let mut guard = state()?
             .lock()
             .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+        // Verify-share takes the engine lock like every other interactive entry
+        // point, so it sweeps expired interactive state too: the nonce-TTL
+        // guarantee (an abandoned interactive nonce handle gone within the TTL of
+        // inactivity) must hold even when the only post-expiry traffic is
+        // verify-share blame rechecks. Mirrors InteractiveAggregate.
+        sweep_expired_interactive_state(&mut guard);
         let session = match guard.sessions.get(&request.session_id) {
             Some(session) => session,
             None => return Ok(verdict(ShareVerificationVerdict::Indeterminate)),
