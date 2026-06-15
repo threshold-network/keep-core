@@ -252,7 +252,16 @@ rewrite architecture.
   as inert code. Before any PR wires a Go consumer (links the `cdylib` / enables
   the `BuildTaprootTx` CGO bridge), the crate must get a dedicated security
   re-review as a now-load-bearing dependency. Treat this as a hard, mechanical
-  gate, not a cultural assumption.
+  gate, not a cultural assumption. The re-review MUST validate at least:
+  - Exclusion-evidence trust: the signer applies auto-quarantine penalties from
+    caller-supplied `attempt_transition_evidence` using a fault-*count* threshold
+    and a hex-only `invalid_share_proof_fingerprint` check (`engine::roast`), with
+    no accuser-corroboration of its own. It therefore assumes the Go ROAST layer
+    has already established exclusions via `VerifyBundle` + the f+1 accuser-quorum
+    `NextAttempt` policy (RFC-21 Layer B) before feeding them in. Confirm the wired
+    consumer only feeds quorum-established exclusions, or add signer-side
+    verification. (Coordinator-*selection* grindability is benign: RFC-21 makes a
+    byzantine coordinator unable to fabricate exclusions.)
 - Durable session state: complete production hardening around the persistent
   backend (crash-safe fsync semantics, path configuration, process lock model,
   corruption handling policy, and broader retention/cleanup lifecycle
