@@ -205,26 +205,27 @@ func (c *Round2Collector) snapshotCandidatesForClassification(
 	return signingPackageEnvelope, snapshot, nil
 }
 
-// CoordinatorConflicts surfaces this observer's locally-detected coordinator
-// equivocation for an attempt as a ConflictEntry accusation against the elected
-// coordinator, for the observer's LocalEvidenceSnapshot.Conflicts ->
-// NextAttempt's f+1 establishment gate (symmetric with ClassifyCandidateCulprits;
-// it never excludes by itself). An established coordinator conflict excludes the
-// coordinator, which auto-rotates it out of the next attempt's included set.
+// CoordinatorPackageProofs returns the coordinator-signed signing-package
+// envelope(s) this observer retained for an attempt, to publish in its
+// LocalEvidenceSnapshot so NextAttempt can detect coordinator equivocation
+// across observers (Phase 7.2b-4b). It returns the authoritative package the
+// observer accepted and, when the coordinator equivocated TO THIS observer (a
+// second body-different package arrived), that conflicting package too - at most
+// two envelopes (authoritative first, then the first conflicting one).
 //
-// The collector flags equivocation when the coordinator distributes two
-// body-different signing packages for one attempt; both were individually
-// authenticated as coordinator-signed before the conflict was recorded, so the
-// accusation rests on unforgeable, self-incriminating proof (no re-verification
-// needed, unlike candidate culprits). At most one entry - a single coordinator
-// per attempt - with Count 1; empty when no conflict was observed.
+// These are the raw, unforgeable proof material: each envelope carries the
+// coordinator's operator signature over its body and the attempt context.
+// Adjudication is NextAttempt's job, NOT the collector's - NextAttempt verifies
+// the coordinator signature + attempt binding, dedupes by body hash, and
+// instant-excludes a coordinator that signed >= 2 distinct bodies for one
+// attempt. Because that proof is unforgeable, a single honest observer suffices
+// and it does NOT pass through the f+1 counted gate (which exists to bound
+// fabricated bare-counter claims). The collector only surfaces retained signed
+// bytes (owned copies); it never decides blame.
 //
-// This catches only equivocation THIS observer directly received (the rare
-// broadcast case). Targeted/split equivocation - different packages to disjoint
-// members, so no single observer sees two - needs the cross-observer comparison
-// (Phase 7.2b-4b-ii). Returns ErrRound2UnknownAttempt if the attempt was never
-// begun.
-func (c *Round2Collector) CoordinatorConflicts(attemptContextHash []byte) ([]ConflictEntry, error) {
+// Returns ErrRound2UnknownAttempt if the attempt was never begun, and an empty
+// slice (nil error) if no authoritative package has been recorded yet.
+func (c *Round2Collector) CoordinatorPackageProofs(attemptContextHash []byte) ([][]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -232,8 +233,12 @@ func (c *Round2Collector) CoordinatorConflicts(attemptContextHash []byte) ([]Con
 	if !ok {
 		return nil, ErrRound2UnknownAttempt
 	}
-	if record.conflictingSigningPackageEnvelope == nil {
+	if record.signingPackageEnvelope == nil {
 		return nil, nil
 	}
-	return []ConflictEntry{{Sender: record.electedCoordinator, Count: 1}}, nil
+	proofs := [][]byte{append([]byte(nil), record.signingPackageEnvelope...)}
+	if record.conflictingSigningPackageEnvelope != nil {
+		proofs = append(proofs, append([]byte(nil), record.conflictingSigningPackageEnvelope...))
+	}
+	return proofs, nil
 }
