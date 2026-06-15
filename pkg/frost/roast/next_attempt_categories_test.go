@@ -110,7 +110,7 @@ func TestNextAttempt_EstablishedRejectExcludesPermanently(t *testing.T) {
 		nil,
 	)
 
-	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey)
+	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestNextAttempt_EstablishedConflictExcludesPermanently(t *testing.T) {
 		[]group.MemberIndex{3},
 	)
 
-	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey)
+	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestNextAttempt_SubQuorumRejectAndConflictDoNotExclude(t *testing.T) {
 		[]group.MemberIndex{3},
 	)
 
-	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey)
+	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestNextAttempt_MultipleRejectReasonsAreOneAccuser(t *testing.T) {
 		nil,
 	)
 
-	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey)
+	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestNextAttempt_RejectAndConflictBothExclude(t *testing.T) {
 		[]group.MemberIndex{4},
 	)
 
-	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey)
+	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestNextAttempt_EmptyRejectsAndConflicts_DoNotExclude(t *testing.T) {
 	f := newNextAttemptFixture()
 	prev := f.prev(t)
 	bundle := buildBundleWithCategories(t, prev, nil, nil)
-	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey)
+	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestNextAttempt_ExactQuorumOfHonestObserversExcludes(t *testing.T) {
 		nil,
 	)
 
-	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey)
+	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
