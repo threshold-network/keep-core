@@ -50,6 +50,21 @@ const MaxCoordinatorPackageProofs = 2
 // MaxOperatorSignatureBytes.
 const MaxCoordinatorSignatureBytes = 256
 
+// MaxSignedLocalEvidenceSnapshotBytes bounds a whole SignedLocalEvidenceSnapshot
+// envelope so Unmarshal can reject a grossly oversized payload BEFORE the
+// protobuf decoder allocates for it (mirroring SigningPackage / ShareSubmission).
+// The coordinator package proofs dominate - each up to a full SignedSigningPackage
+// - and the fixed 64 KiB allowance generously covers the evidence fields, the
+// operator signature, and protobuf framing.
+const MaxSignedLocalEvidenceSnapshotBytes = MaxCoordinatorPackageProofs*MaxSignedSigningPackageBytes +
+	MaxOperatorSignatureBytes + 64*1024
+
+// MaxSignedTransitionMessageBytes bounds a whole SignedTransitionMessage envelope
+// for the same pre-allocation reason: a full bundle of (now proof-carrying)
+// snapshots, the coordinator signature, and protobuf framing.
+const MaxSignedTransitionMessageBytes = MaxSnapshotsPerBundle*MaxSignedLocalEvidenceSnapshotBytes +
+	MaxCoordinatorSignatureBytes + 64*1024
+
 // OverflowEntry is the JSON-friendly key/value pair representing one
 // per-sender overflow count from an attempt.Evidence map. The slice
 // representation is canonical (sorted by Sender ascending) so any
@@ -266,6 +281,16 @@ func (s *LocalEvidenceSnapshot) Marshal() ([]byte, error) {
 // verification runs over exactly these bytes), populates the
 // evidence fields from the body, and validates the structure.
 func (s *LocalEvidenceSnapshot) Unmarshal(data []byte) error {
+	// Reject a grossly oversized envelope before the protobuf decoder allocates
+	// for it: the carried coordinator package proofs make a legitimate snapshot
+	// MBs large, so an unbounded decode is a memory-DoS vector.
+	if len(data) > MaxSignedLocalEvidenceSnapshotBytes {
+		return fmt.Errorf(
+			"local evidence snapshot: envelope length [%d] exceeds cap [%d]",
+			len(data),
+			MaxSignedLocalEvidenceSnapshotBytes,
+		)
+	}
 	var envelope pb.SignedLocalEvidenceSnapshot
 	if err := proto.Unmarshal(data, &envelope); err != nil {
 		return fmt.Errorf("local evidence snapshot: parse envelope: %w", err)
@@ -469,6 +494,15 @@ func (m *TransitionMessage) Marshal() ([]byte, error) {
 // ascending, and every snapshot binding to the same
 // AttemptContextHash as the bundle.
 func (m *TransitionMessage) Unmarshal(data []byte) error {
+	// Reject a grossly oversized envelope before the protobuf decoder allocates
+	// for it (each bundled snapshot may now carry coordinator package proofs).
+	if len(data) > MaxSignedTransitionMessageBytes {
+		return fmt.Errorf(
+			"transition message: envelope length [%d] exceeds cap [%d]",
+			len(data),
+			MaxSignedTransitionMessageBytes,
+		)
+	}
 	var envelope pb.SignedTransitionMessage
 	if err := proto.Unmarshal(data, &envelope); err != nil {
 		return fmt.Errorf("transition message: parse envelope: %w", err)

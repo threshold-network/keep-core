@@ -126,3 +126,14 @@ func TestLocalEvidenceSnapshot_CoordinatorPackageProofs_ValidateRejections(t *te
 		}
 	})
 }
+
+func TestLocalEvidenceSnapshot_Unmarshal_RejectsOversizedEnvelope(t *testing.T) {
+	// Carrying coordinator package proofs makes a legitimate snapshot MBs large,
+	// so Unmarshal must reject a grossly oversized envelope before the protobuf
+	// decoder allocates for it (memory-DoS guard, mirroring SigningPackage /
+	// ShareSubmission). TransitionMessage.Unmarshal applies the analogous cap.
+	oversized := make([]byte, MaxSignedLocalEvidenceSnapshotBytes+1)
+	if err := (&LocalEvidenceSnapshot{}).Unmarshal(oversized); err == nil {
+		t.Fatal("an oversized snapshot envelope must be rejected before decoding")
+	}
+}
