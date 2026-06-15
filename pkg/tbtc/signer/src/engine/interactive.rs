@@ -1075,8 +1075,11 @@ pub(crate) fn interactive_session_ttl_seconds() -> u64 {
 fn interactive_open_request_fingerprint(
     request: &InteractiveSessionOpenRequest,
 ) -> Result<String, EngineError> {
-    // The serialized request transiently contains key_package_hex;
-    // wipe the buffer once the fingerprint digest is taken.
+    // The serialized request transiently holds the signing inputs
+    // (message_hex and the rest of the request) in plaintext; wipe the
+    // buffer once the fingerprint digest is taken. No key material is
+    // carried in the request - it is resolved from DKG state - so only
+    // the request inputs are exposed here.
     let mut canonical = serde_json::to_vec(request).map_err(|e| {
         EngineError::Internal(format!(
             "failed to serialize InteractiveSessionOpen request for fingerprint: {e}"
