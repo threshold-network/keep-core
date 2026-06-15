@@ -77,22 +77,6 @@ pub fn verify_signature_share(
             Err(_) => return Ok(verdict(ShareVerificationVerdict::Indeterminate)),
         };
 
-    // The member operator-signed these share bytes: if they are undecodable, that
-    // is self-incriminating member fault -> invalid (the Go layer already
-    // authenticated the envelope; the inner FROST scalar is the member's).
-    let signature_share_bytes = match decode_hex_field(
-        "VerifySignatureShare",
-        "signature_share_hex",
-        &request.signature_share_hex,
-    ) {
-        Ok(bytes) => bytes,
-        Err(_) => return Ok(verdict(ShareVerificationVerdict::Invalid)),
-    };
-    let signature_share = match frost::round2::SignatureShare::deserialize(&signature_share_bytes) {
-        Ok(share) => share,
-        Err(_) => return Ok(verdict(ShareVerificationVerdict::Invalid)),
-    };
-
     // Resolve the group's public key package from the session's own DKG state -
     // never the request - mirroring InteractiveAggregate. A missing session or
     // incomplete DKG is not the member's fault -> indeterminate.
@@ -133,6 +117,26 @@ pub fn verify_signature_share(
         // The member has no verifying share for this group / is not in the
         // package's set - a coordinator/package matter, not member-share fault.
         None => return Ok(verdict(ShareVerificationVerdict::Indeterminate)),
+    };
+
+    // Only now that the session, completed DKG, and the member's membership in
+    // THIS group are all established do we judge the member's signed share bytes:
+    // if they are undecodable here, that is self-incriminating member fault ->
+    // invalid (the Go layer already authenticated the envelope; the inner FROST
+    // scalar is the member's). Decoding any earlier would let a malformed share
+    // for an unknown / not-ready session or a non-member id return Invalid
+    // (blame) before the member context exists - it must be Indeterminate then.
+    let signature_share_bytes = match decode_hex_field(
+        "VerifySignatureShare",
+        "signature_share_hex",
+        &request.signature_share_hex,
+    ) {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(verdict(ShareVerificationVerdict::Invalid)),
+    };
+    let signature_share = match frost::round2::SignatureShare::deserialize(&signature_share_bytes) {
+        Ok(share) => share,
+        Err(_) => return Ok(verdict(ShareVerificationVerdict::Invalid)),
     };
 
     match frost_core::verify_signature_share(

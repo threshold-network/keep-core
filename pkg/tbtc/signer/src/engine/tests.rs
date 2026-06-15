@@ -13682,7 +13682,8 @@ fn verify_signature_share_verdicts_match_aggregate_and_handle_edges() {
         ShareVerificationVerdict::Invalid
     );
 
-    // Undecodable member share bytes -> Invalid (self-incriminating member fault).
+    // Undecodable member share bytes, WITH established context (member 2 is in
+    // this group, session ready) -> Invalid (self-incriminating member fault).
     assert_eq!(
         verdict("ee".to_string(), 2),
         ShareVerificationVerdict::Invalid
@@ -13690,6 +13691,13 @@ fn verify_signature_share_verdicts_match_aggregate_and_handle_edges() {
     // A member with no verifying share in the group -> Indeterminate.
     assert_eq!(
         verdict(round2.signature_share_hex.clone(), 9),
+        ShareVerificationVerdict::Indeterminate
+    );
+    // Ordering contract: undecodable share bytes for a member NOT in the group
+    // are Indeterminate, NOT Invalid - the share is only judged once session /
+    // DKG / membership are established, so blame never precedes that context.
+    assert_eq!(
+        verdict("ee".to_string(), 9),
         ShareVerificationVerdict::Indeterminate
     );
     // Undecodable signing package (coordinator input) -> Indeterminate.
@@ -13711,6 +13719,20 @@ fn verify_signature_share_verdicts_match_aggregate_and_handle_edges() {
             session_id: "no-such-session".to_string(),
             signing_package_hex: signing_package_hex.clone(),
             signature_share_hex: round2.signature_share_hex.clone(),
+            member_identifier: 1,
+            taproot_merkle_root_hex: None,
+        })
+        .expect("verify")
+        .verdict,
+        ShareVerificationVerdict::Indeterminate
+    );
+    // Ordering contract: even undecodable share bytes for an unknown session are
+    // Indeterminate (session context is resolved before the share is judged).
+    assert_eq!(
+        verify_signature_share(crate::api::VerifySignatureShareRequest {
+            session_id: "no-such-session".to_string(),
+            signing_package_hex: signing_package_hex.clone(),
+            signature_share_hex: "ee".to_string(),
             member_identifier: 1,
             taproot_merkle_root_hex: None,
         })
