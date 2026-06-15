@@ -235,9 +235,19 @@ pub fn interactive_session_open(
     // the newer attempt's nonces.
     let replacing = live_attempt.is_some();
     if let Some((live_attempt_id, live_attempt_number)) = live_attempt {
-        if live_attempt_id != attempt_id
-            && request.attempt_context.attempt_number <= live_attempt_number
-        {
+        // By construction the live attempt here is a DIFFERENT attempt:
+        // a live attempt with the same attempt_id would have been
+        // resolved above as idempotent (Some(true)) or conflicting
+        // (Some(false)) and returned. Assert that invariant instead of
+        // re-testing it at runtime - the assert stays so that a future
+        // change to the matching_attempt_idempotent logic which let an
+        // equal attempt_id reach here trips loudly, rather than silently
+        // rolling back a live attempt's nonces.
+        debug_assert_ne!(
+            live_attempt_id, attempt_id,
+            "a live attempt with a matching attempt_id must have been resolved above"
+        );
+        if request.attempt_context.attempt_number <= live_attempt_number {
             return Err(EngineError::Validation(format!(
                 "attempt_number [{}] does not advance the live interactive attempt [{}]; \
                  refusing to roll back to an older or equal attempt",
