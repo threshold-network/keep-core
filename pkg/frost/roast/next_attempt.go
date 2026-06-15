@@ -160,19 +160,22 @@ func (c *inMemoryCoordinator) NextAttempt(
 	prev := record.context
 	c.mu.Unlock()
 
-	return computeNextAttempt(prev, bundle, threshold, dkgGroupPublicKey)
+	return computeNextAttempt(prev, bundle, threshold, dkgGroupPublicKey, c.verifier)
 }
 
-// computeNextAttempt is the pure-function policy core: it takes the
-// previous AttemptContext, a verified bundle, and the signing
-// threshold, and returns the next AttemptContext. Factored out from
-// NextAttempt so the policy is independently unit-testable without a
-// Coordinator instance.
+// computeNextAttempt is the policy core: it takes the previous AttemptContext, a
+// verified bundle, the signing threshold, and the operator-signature verifier,
+// and returns the next AttemptContext. Factored out from NextAttempt so the
+// policy is independently unit-testable without a Coordinator instance (tests
+// inject a fake verifier). The verifier is used ONLY to authenticate the
+// coordinator-signed package proofs carried in the snapshots (proof-carrying
+// coordinator-equivocation exclusion); the f+1 accusation tally needs no crypto.
 func computeNextAttempt(
 	prev attempt.AttemptContext,
 	bundle *TransitionMessage,
 	threshold uint,
 	dkgGroupPublicKey []byte,
+	verifier SignatureVerifier,
 ) (attempt.AttemptContext, error) {
 	// Original signer set persists across transitions as
 	// IncludedSet ∪ ExcludedSet ∪ TransientlyParked. Its size (not
@@ -201,11 +204,20 @@ func computeNextAttempt(
 		bundle, credibleObservers, original, quorum, snapshotOverflowAccusations,
 	)
 
+	// Proof-carrying coordinator equivocation: if the bundle's snapshots carry
+	// two distinct VALID coordinator-signed packages for this attempt, the
+	// coordinator equivocated. That is unforgeable (the coordinator's own two
+	// signatures over different bodies), so it is established INSTANTLY - it does
+	// NOT pass through the f+1 accuser gate, which exists only to bound
+	// fabricated bare-counter claims (frozen Phase 7.2b spec, section 6).
+	coordinatorEquivocators := verifiedCoordinatorEquivocations(bundle, verifier)
+
 	// Merge into permanent exclusion.
 	exclSet := newMemberSet()
 	exclSet.addAll(prev.ExcludedSet)
 	exclSet.addAll(rejectBlamed)
 	exclSet.addAll(conflictBlamed)
+	exclSet.addAll(coordinatorEquivocators)
 
 	// (3)+(4) Parking: established overflow accusations plus senders
 	// in prev.IncludedSet missing from the bundle -- in both cases
@@ -324,6 +336,46 @@ func snapshotConflictAccusations(
 		out = append(out, entry.Sender)
 	}
 	return out
+}
+
+// verifiedCoordinatorEquivocations returns the elected coordinator if the bundle
+// proves it equivocated: two distinct VALID coordinator-signed signing packages
+// for this attempt, surfaced (possibly by different members) in the snapshots'
+// CoordinatorPackageProofs. Each proof is authenticated as a genuine
+// SignedSigningPackage from the elected coordinator binding this attempt - Go
+// operator-signature verification, not FROST crypto - so unparseable or
+// unauthenticated proofs are ignored, never blamed. Two distinct authentic body
+// hashes are unforgeable proof (the coordinator's own two signatures over
+// different bodies), so a SINGLE honest observer's bundle entry suffices: no f+1
+// gate. Returns nil when no such proof is present.
+func verifiedCoordinatorEquivocations(
+	bundle *TransitionMessage,
+	verifier SignatureVerifier,
+) []group.MemberIndex {
+	electedCoordinator := bundle.CoordinatorID()
+	bodies := make(map[[32]byte]struct{}, 2)
+	for i := range bundle.Bundle {
+		for _, proof := range bundle.Bundle[i].CoordinatorPackageProofs {
+			pkg := &SigningPackage{}
+			if err := pkg.Unmarshal(proof); err != nil {
+				continue
+			}
+			if err := AuthenticateSigningPackage(
+				verifier, pkg, electedCoordinator, bundle.AttemptContextHash,
+			); err != nil {
+				continue
+			}
+			bodyHash, err := pkg.BodyHash()
+			if err != nil {
+				continue
+			}
+			bodies[bodyHash] = struct{}{}
+			if len(bodies) >= 2 {
+				return []group.MemberIndex{electedCoordinator}
+			}
+		}
+	}
+	return nil
 }
 
 // establishedAccused tallies one evidence category across the bundle

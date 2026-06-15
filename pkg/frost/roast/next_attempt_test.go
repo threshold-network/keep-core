@@ -137,7 +137,7 @@ func TestNextAttempt_NoEvidenceProducesIdenticalIncludedSet(t *testing.T) {
 	f := newNextAttemptFixture()
 	prev := f.prev(t)
 	bundle := f.bundle(t)
-	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey)
+	next, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestNextAttempt_EstablishedOverflowParksTransiently(t *testing.T) {
 	for observer := group.MemberIndex(2); observer <= 5; observer++ {
 		f.overflows[observer] = map[group.MemberIndex]uint{3: 1}
 	}
-	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey)
+	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestNextAttempt_EstablishedOverflowParkIsTransient(t *testing.T) {
 		f.overflows[observer] = map[group.MemberIndex]uint{3: 1}
 	}
 	attemptN1, err := computeNextAttempt(
-		f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey,
+		f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey, fakeVerifier{},
 	)
 	if err != nil {
 		t.Fatalf("N -> N+1: %v", err)
@@ -220,7 +220,7 @@ func TestNextAttempt_EstablishedOverflowParkIsTransient(t *testing.T) {
 		},
 	}
 	attemptN2, err := computeNextAttempt(
-		attemptN1, bundleN1, f.threshold, f.dkgGroupPublicKey,
+		attemptN1, bundleN1, f.threshold, f.dkgGroupPublicKey, fakeVerifier{},
 	)
 	if err != nil {
 		t.Fatalf("N+1 -> N+2: %v", err)
@@ -240,7 +240,7 @@ func TestNextAttempt_SubQuorumOverflowHasNoEffect(t *testing.T) {
 	// blame: an accusation below the accuser quorum is ignored.
 	f.overflows[2] = map[group.MemberIndex]uint{3: 100}
 	f.overflows[4] = map[group.MemberIndex]uint{3: 100}
-	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey)
+	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestNextAttempt_SilentMemberIsParkedTransiently(t *testing.T) {
 	f := newNextAttemptFixture()
 	// Only members 1, 2, 4, 5 submit; member 3 is silent.
 	f.bundleSenders = []group.MemberIndex{1, 2, 4, 5}
-	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey)
+	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestNextAttempt_PreviouslyParkedAreReinstated(t *testing.T) {
 	// Bundle: only the included set submits (parked cannot).
 	f.bundleSenders = []group.MemberIndex{1, 2, 4, 5}
 
-	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey)
+	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestNextAttempt_ParkingIsStrictlyTransient_NoEscalation(t *testing.T) {
 	f.bundleSenders = []group.MemberIndex{1, 2, 4, 5}
 	prev := f.prev(t)
 	bundle := f.bundle(t)
-	attemptN1, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey)
+	attemptN1, err := computeNextAttempt(prev, bundle, f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("N -> N+1: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestNextAttempt_ParkingIsStrictlyTransient_NoEscalation(t *testing.T) {
 			{SenderIDValue: 5, AttemptContextHash: append([]byte{}, attemptN1Hash[:]...)},
 		},
 	}
-	attemptN2, err := computeNextAttempt(attemptN1, bundleN1, f.threshold, f.dkgGroupPublicKey)
+	attemptN2, err := computeNextAttempt(attemptN1, bundleN1, f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("N+1 -> N+2: %v", err)
 	}
@@ -355,7 +355,7 @@ func TestNextAttempt_ParkingIsStrictlyTransient_NoEscalation(t *testing.T) {
 func TestNextAttempt_OriginalSignerSetPreservedAcrossTransitions(t *testing.T) {
 	f := newNextAttemptFixture()
 	f.bundleSenders = []group.MemberIndex{1, 2, 4, 5} // 3 silent
-	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey)
+	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
@@ -374,11 +374,11 @@ func TestNextAttempt_PolicyIsDeterministic(t *testing.T) {
 	f.bundleSenders = []group.MemberIndex{1, 2, 4, 5}
 	f.overflows[2] = map[group.MemberIndex]uint{1: 2}
 	f.overflows[5] = map[group.MemberIndex]uint{1: 2}
-	a, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey)
+	a, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("first compute: %v", err)
 	}
-	b, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey)
+	b, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("second compute: %v", err)
 	}
@@ -393,7 +393,7 @@ func TestNextAttempt_InfeasibilityWhenBelowThreshold(t *testing.T) {
 	// Silently lose 2 members -> only 3 remain in IncludedSet, below
 	// threshold of 5.
 	f.bundleSenders = []group.MemberIndex{1, 2, 3}
-	_, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey)
+	_, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if !errors.Is(err, ErrAttemptInfeasible) {
 		t.Fatalf("expected ErrAttemptInfeasible, got %v", err)
 	}
@@ -415,7 +415,7 @@ func TestNextAttempt_ThresholdZeroDisablesInfeasibilityCheck(t *testing.T) {
 	f.bundleSenders = []group.MemberIndex{1}
 	// IncludedSet would become {1}; for threshold=0 that's still
 	// permitted.
-	_, err := computeNextAttempt(f.prev(t), f.bundle(t), 0, f.dkgGroupPublicKey)
+	_, err := computeNextAttempt(f.prev(t), f.bundle(t), 0, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("expected success with threshold=0, got %v", err)
 	}
@@ -430,7 +430,7 @@ func TestNextAttempt_SingleObserverCountMagnitudeIsNotBlame(t *testing.T) {
 	f.overflows[5] = map[group.MemberIndex]uint{3: 1000}
 	f.rejects[5] = map[group.MemberIndex]uint{3: 1000}
 	f.conflicts[5] = map[group.MemberIndex]uint{3: 1000}
-	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey)
+	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
@@ -474,6 +474,7 @@ func TestNextAttempt_QuorumBoundaryForRejectAndConflict(t *testing.T) {
 				fixtureAtF.bundle(t),
 				fixtureAtF.threshold,
 				fixtureAtF.dkgGroupPublicKey,
+				fakeVerifier{},
 			)
 			if err != nil {
 				t.Fatalf("compute at f accusers: %v", err)
@@ -495,6 +496,7 @@ func TestNextAttempt_QuorumBoundaryForRejectAndConflict(t *testing.T) {
 				fixtureAtQuorum.bundle(t),
 				fixtureAtQuorum.threshold,
 				fixtureAtQuorum.dkgGroupPublicKey,
+				fakeVerifier{},
 			)
 			if err != nil {
 				t.Fatalf("compute at quorum: %v", err)
@@ -522,7 +524,7 @@ func TestNextAttempt_CrossCategoryAccusationsDoNotSum(t *testing.T) {
 	f.rejects[2] = map[group.MemberIndex]uint{3: 1}
 	f.conflicts[4] = map[group.MemberIndex]uint{3: 1}
 	f.conflicts[5] = map[group.MemberIndex]uint{3: 1}
-	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey)
+	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
@@ -589,7 +591,7 @@ func TestNextAttempt_FabricatedBlameCannotGrindHonestMembers(t *testing.T) {
 			Bundle:             bundle,
 		}
 
-		next, err := computeNextAttempt(prev, msg, f.threshold, f.dkgGroupPublicKey)
+		next, err := computeNextAttempt(prev, msg, f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 		if err != nil {
 			t.Fatalf("attempt %d: %v", attemptIndex, err)
 		}
@@ -622,7 +624,7 @@ func TestNextAttempt_NonCredibleAccusersAreIgnored(t *testing.T) {
 	f.conflicts[2] = map[group.MemberIndex]uint{3: 1}
 	f.conflicts[6] = map[group.MemberIndex]uint{3: 1}
 	f.conflicts[7] = map[group.MemberIndex]uint{3: 1}
-	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey)
+	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
@@ -645,7 +647,7 @@ func TestNextAttempt_AccusationsAgainstNonOriginalMembersIgnored(t *testing.T) {
 	f.conflicts[1] = map[group.MemberIndex]uint{9: 1}
 	f.conflicts[2] = map[group.MemberIndex]uint{9: 1}
 	f.conflicts[4] = map[group.MemberIndex]uint{9: 1}
-	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey)
+	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
