@@ -223,3 +223,75 @@ func TestClassifyCandidateCulprits_Errors(t *testing.T) {
 		}
 	})
 }
+
+func TestCoordinatorPackageProofs_SurfacesAuthoritativeAndConflicting(t *testing.T) {
+	_ = captureEquivocationEvidence(t)
+	c := NewRound2Collector(fakeVerifier{})
+	const elected = group.MemberIndex(3)
+	if err := c.BeginAttempt(pinnedContextHash[:], elected, testIncludedSet()); err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	// No package recorded yet -> no proofs.
+	proofs, err := c.CoordinatorPackageProofs(pinnedContextHash[:])
+	if err != nil {
+		t.Fatalf("proofs (pre-package): %v", err)
+	}
+	if len(proofs) != 0 {
+		t.Fatalf("no package yet, want no proofs, got %d", len(proofs))
+	}
+
+	// One authoritative package -> exactly one proof (the accepted package the
+	// observer publishes for cross-observer comparison).
+	if err := c.RecordSigningPackage(signedTestSigningPackage(t, elected, nil)); err != nil {
+		t.Fatalf("record authoritative package: %v", err)
+	}
+	proofs, err = c.CoordinatorPackageProofs(pinnedContextHash[:])
+	if err != nil {
+		t.Fatalf("proofs (one package): %v", err)
+	}
+	if len(proofs) != 1 || len(proofs[0]) == 0 {
+		t.Fatalf("want exactly one non-empty authoritative proof, got %d", len(proofs))
+	}
+	authoritative := append([]byte(nil), proofs[0]...)
+
+	// A second body-different authenticated package = coordinator equivocation
+	// -> two proofs (authoritative first, then the conflicting one), the
+	// unforgeable pair NextAttempt instant-excludes on.
+	scriptRoot := bytes.Repeat([]byte{0xab}, TaprootMerkleRootLength)
+	if err := c.RecordSigningPackage(signedTestSigningPackage(t, elected, scriptRoot)); !errors.Is(err, ErrSigningPackageConflict) {
+		t.Fatalf("want ErrSigningPackageConflict, got %v", err)
+	}
+	proofs, err = c.CoordinatorPackageProofs(pinnedContextHash[:])
+	if err != nil {
+		t.Fatalf("proofs (conflict): %v", err)
+	}
+	if len(proofs) != 2 {
+		t.Fatalf("want two proofs (authoritative + conflicting), got %d", len(proofs))
+	}
+	if !bytes.Equal(proofs[0], authoritative) {
+		t.Fatal("the authoritative proof must stay first and unchanged")
+	}
+	if bytes.Equal(proofs[1], authoritative) || len(proofs[1]) == 0 {
+		t.Fatal("the conflicting proof must be a distinct, non-empty envelope")
+	}
+	conflicting := append([]byte(nil), proofs[1]...)
+
+	// A third body-different package stays capped at two, keeping the FIRST
+	// conflicting envelope (idempotent retention).
+	otherRoot := bytes.Repeat([]byte{0xcd}, TaprootMerkleRootLength)
+	if err := c.RecordSigningPackage(signedTestSigningPackage(t, elected, otherRoot)); !errors.Is(err, ErrSigningPackageConflict) {
+		t.Fatalf("third package: want ErrSigningPackageConflict, got %v", err)
+	}
+	proofs, _ = c.CoordinatorPackageProofs(pinnedContextHash[:])
+	if len(proofs) != 2 || !bytes.Equal(proofs[0], authoritative) || !bytes.Equal(proofs[1], conflicting) {
+		t.Fatalf("must stay capped at two with the first (authoritative, conflicting) pair, got %d", len(proofs))
+	}
+}
+
+func TestCoordinatorPackageProofs_UnknownAttempt(t *testing.T) {
+	c := NewRound2Collector(fakeVerifier{})
+	if _, err := c.CoordinatorPackageProofs(pinnedContextHash[:]); !errors.Is(err, ErrRound2UnknownAttempt) {
+		t.Fatalf("want ErrRound2UnknownAttempt, got %v", err)
+	}
+}

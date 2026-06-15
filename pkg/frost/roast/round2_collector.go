@@ -133,6 +133,15 @@ type round2Record struct {
 	// NON-authoritative-package-bound share - blame evidence of possible targeted
 	// coordinator equivocation, not an aggregation input.
 	divergentShares map[group.MemberIndex]*round2ShareRecord
+	// conflictingSigningPackageEnvelope retains the FIRST body-different signing
+	// package the elected coordinator distributed for this attempt (the
+	// authoritative one is signingPackageEnvelope). Non-nil = the coordinator
+	// equivocated: the observer holds two distinct, individually authenticated
+	// coordinator-signed packages - unforgeable, self-incriminating proof.
+	// Surfaced (with the authoritative package) as raw proof material by
+	// CoordinatorPackageProofs for NextAttempt's proof-carrying coordinator
+	// exclusion - never as a bare f+1 ConflictEntry.
+	conflictingSigningPackageEnvelope []byte
 }
 
 // round2ShareRecord is a collector-owned record of one submitter's retained
@@ -269,7 +278,11 @@ func (c *Round2Collector) RecordSigningPackage(pkg *SigningPackage) error {
 		// Idempotent: the same signed body re-recorded (possibly re-encoded).
 	default:
 		// A different signed body for the same attempt: coordinator equivocation.
-		// Keep the first; emit both.
+		// Keep the first authoritative package; retain the first conflicting one
+		// (idempotent) as self-incriminating proof, and emit both.
+		if record.conflictingSigningPackageEnvelope == nil {
+			record.conflictingSigningPackageEnvelope = ownedEnvelope
+		}
 		evidence = &EquivocationEvidence{
 			Kind:                EquivocationKindSigningPackageConflict,
 			AttemptContextHash:  append([]byte(nil), record.attemptContextHash...),
