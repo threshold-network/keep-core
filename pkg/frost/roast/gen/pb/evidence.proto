@@ -38,6 +38,15 @@ message LocalEvidenceSnapshotBody {
   repeated RejectEntry rejects = 4;
   // Sorted ascending by sender.
   repeated ConflictEntry conflicts = 5;
+  // coordinator_package_proofs carries the coordinator-signed signing-package
+  // envelope(s) this observer accepted for the attempt - the authoritative one,
+  // plus a second body-different one if the coordinator equivocated to this
+  // observer. At most two; sorted ascending bytewise for a canonical signed body.
+  // Each entry is a serialized SignedSigningPackage and travels verbatim like the
+  // other evidence bytes. NextAttempt verifies each (coordinator signature +
+  // attempt binding), dedupes by signing-package body hash, and excludes a
+  // coordinator that signed >= 2 distinct bodies for one attempt.
+  repeated bytes coordinator_package_proofs = 6;
 }
 
 message OverflowEntry {
