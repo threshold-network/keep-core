@@ -1482,3 +1482,26 @@ func TestDecodeBuildTaggedTBTCSignerVerifySignatureShareResponse_UnrecognizedVer
 		)
 	}
 }
+
+func TestDecodeBuildTaggedTBTCSignerVerifySignatureShareResponse_MalformedJSON(
+	t *testing.T,
+) {
+	verdict, err := decodeBuildTaggedTBTCSignerVerifySignatureShareResponse(
+		[]byte("not json"),
+	)
+	if err == nil {
+		t.Fatal("expected malformed JSON to be rejected")
+	}
+	if !errors.Is(err, ErrNativeBridgeOperationFailed) {
+		t.Fatalf("expected ErrNativeBridgeOperationFailed, got: [%v]", err)
+	}
+	// The other decoder error path (a json.Unmarshal failure) must also fail
+	// closed to the safe Indeterminate, never to a blame verdict.
+	if verdict != NativeShareVerdictIndeterminate {
+		t.Fatalf(
+			"expected Indeterminate on error\nexpected: [%v]\nactual:   [%v]",
+			NativeShareVerdictIndeterminate,
+			verdict,
+		)
+	}
+}
