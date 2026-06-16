@@ -34,7 +34,24 @@ type fakeInteractiveSigningEngine struct {
 	newPackageCalls     int
 	round2Calls         int
 	aggregateCalls      int
+	abortCalls          int
 	lastAggregateShares []nativeFROSTSignatureShare
+}
+
+func (f *fakeInteractiveSigningEngine) InteractiveSessionAbort(
+	sessionID string,
+	attemptID *string,
+) (*NativeInteractiveSessionAbortResult, error) {
+	f.mu.Lock()
+	f.abortCalls++
+	f.mu.Unlock()
+	return &NativeInteractiveSessionAbortResult{SessionID: sessionID, Aborted: true}, nil
+}
+
+func (f *fakeInteractiveSigningEngine) abortCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.abortCalls
 }
 
 func newFakeInteractiveSigningEngine() *fakeInteractiveSigningEngine {

@@ -25,15 +25,18 @@ import (
 // node records its OWN produced share into the collector explicitly rather than
 // relying on bus self-echo.
 type interactiveSigningRunner struct {
-	attempt     *ActiveRoastAttempt
-	member      group.MemberIndex
-	message     []byte
-	threshold   uint16
-	engine      interactiveSigningEngine
-	collector   *roast.Round2Collector
-	coordinator roast.Coordinator
-	signer      roast.Signer
-	bus         RunnerBus
+	attempt *ActiveRoastAttempt
+	member  group.MemberIndex
+	// messageDigest is the message FROST signs: the binding's MessageDigest, NOT
+	// a separate caller parameter, so the runner can never open/aggregate a
+	// message inconsistent with the attempt it is bound to.
+	messageDigest []byte
+	threshold     uint16
+	engine        interactiveSigningEngine
+	collector     *roast.Round2Collector
+	coordinator   roast.Coordinator
+	signer        roast.Signer
+	bus           RunnerBus
 	// sub is established at construction (before any Run broadcasts) so a node
 	// never misses a peer message broadcast before it subscribed.
 	sub *RunnerBusSubscriber
@@ -42,7 +45,6 @@ type interactiveSigningRunner struct {
 func newInteractiveSigningRunner(
 	attempt *ActiveRoastAttempt,
 	member group.MemberIndex,
-	message []byte,
 	threshold uint16,
 	engine interactiveSigningEngine,
 	collector *roast.Round2Collector,
@@ -65,25 +67,28 @@ func newInteractiveSigningRunner(
 		return nil, fmt.Errorf("roast runner: bus is nil")
 	case threshold == 0:
 		return nil, fmt.Errorf("roast runner: threshold is zero")
-	case len(message) == 0:
-		return nil, fmt.Errorf("roast runner: message is empty")
 	}
-	if !memberInSet(member, attempt.Context().IncludedSet) {
+	attemptCtx := attempt.Context()
+	if !memberInSet(member, attemptCtx.IncludedSet) {
 		return nil, fmt.Errorf(
 			"roast runner: member %d is not in the attempt's included set", member,
 		)
 	}
+	// The signed message is the binding's MessageDigest, derived here rather than
+	// accepted as a parameter: a caller-supplied message that diverged from the
+	// digest the attempt (and its package/share envelopes) is bound to could mark
+	// an attempt for digest A succeeded with a signature over digest B.
 	return &interactiveSigningRunner{
-		attempt:     attempt,
-		member:      member,
-		message:     append([]byte(nil), message...),
-		threshold:   threshold,
-		engine:      engine,
-		collector:   collector,
-		coordinator: coordinator,
-		signer:      signer,
-		bus:         bus,
-		sub:         bus.Subscribe(),
+		attempt:       attempt,
+		member:        member,
+		messageDigest: append([]byte(nil), attemptCtx.MessageDigest[:]...),
+		threshold:     threshold,
+		engine:        engine,
+		collector:     collector,
+		coordinator:   coordinator,
+		signer:        signer,
+		bus:           bus,
+		sub:           bus.Subscribe(),
 	}, nil
 }
 
@@ -103,7 +108,7 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 	open, err := r.engine.InteractiveSessionOpen(
 		binding.SessionID(),
 		uint16(r.member),
-		r.message,
+		r.messageDigest,
 		attemptCtx.KeyGroupID,
 		r.threshold,
 		binding.TaprootMerkleRoot(),
@@ -113,6 +118,18 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("roast runner: open session: %w", err)
 	}
 	attemptID := open.AttemptID
+
+	// Once the session is open the engine holds this attempt's secret nonces and
+	// session state. On any early exit (ctx cancel, or an error before round 2
+	// consumes the nonces) abort so the engine drops that material; a clean
+	// success clears the flag first. Best-effort - a failing abort must not mask
+	// the run's real outcome.
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			_, _ = r.engine.InteractiveSessionAbort(binding.SessionID(), &attemptID)
+		}
+	}()
 
 	// 2. Begin collecting evidence for this attempt (elected coordinator from the
 	// binding, not a peer).
@@ -196,6 +213,9 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 	if err := r.coordinator.MarkSucceeded(binding.Handle()); err != nil {
 		return nil, fmt.Errorf("roast runner: mark succeeded: %w", err)
 	}
+	// Aggregation consumed the nonces and the attempt is finalized; suppress the
+	// deferred abort.
+	succeeded = true
 	return signature, nil
 }
 
@@ -232,7 +252,7 @@ func (r *interactiveSigningRunner) obtainSigningPackage(
 		}
 	}
 
-	frostPackage, err := r.engine.NewSigningPackage(r.message, toFrostCommitments(commitments, includedSet))
+	frostPackage, err := r.engine.NewSigningPackage(r.messageDigest, toFrostCommitments(commitments, includedSet))
 	if err != nil {
 		return nil, fmt.Errorf("roast runner: new signing package: %w", err)
 	}

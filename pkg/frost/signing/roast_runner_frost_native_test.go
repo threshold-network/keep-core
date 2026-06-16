@@ -50,7 +50,6 @@ func buildInteractiveSigningHarness(t *testing.T, n int, threshold uint16) harne
 	bus := NewInProcessRunnerBus(256)
 	signer := fixedTestSigner{}
 	verifier := roast.NoOpSignatureVerifier()
-	message := []byte("message-to-sign")
 
 	h := harness{bus: bus, contextHash: ctx.Hash(), includedSet: included}
 	for i := 0; i < n; i++ {
@@ -65,7 +64,7 @@ func buildInteractiveSigningHarness(t *testing.T, n int, threshold uint16) harne
 			t.Fatalf("active attempt (member %d): %v", member, err)
 		}
 		runner, err := newInteractiveSigningRunner(
-			ara, member, message, threshold,
+			ara, member, threshold,
 			newFakeInteractiveSigningEngine(),
 			roast.NewRound2Collector(verifier),
 			coord, signer, bus,
@@ -150,6 +149,52 @@ func TestInteractiveSigningRunner_IgnoresAdversarialBusMessages(t *testing.T) {
 	h.runAndAssertAllSucceed(t)
 }
 
+// When Run exits early after the engine session is open (here: ctx expires
+// while collecting commitments, before round 2 consumes the nonces), the runner
+// must abort the native attempt so the engine drops the resident secret
+// nonces/session state rather than leaking it.
+func TestInteractiveSigningRunner_AbortsNativeAttemptOnEarlyExit(t *testing.T) {
+	included := []group.MemberIndex{1, 2}
+	dkgKey := []byte{0x01, 0x02}
+	ctx, err := attempt.NewAttemptContext(
+		"session-1", "key-group-1", dkgKey,
+		[attempt.MessageDigestLength]byte{0x42}, 0, included, nil,
+	)
+	if err != nil {
+		t.Fatalf("attempt context: %v", err)
+	}
+	signer := fixedTestSigner{}
+	verifier := roast.NoOpSignatureVerifier()
+	bus := NewInProcessRunnerBus(8)
+	coord := roast.NewInMemoryCoordinatorWithSigning(1, signer, verifier)
+	handle, err := coord.BeginAttempt(ctx)
+	if err != nil {
+		t.Fatalf("begin attempt: %v", err)
+	}
+	ara, err := NewActiveRoastAttempt(coord, handle, ctx, "session-1", nil, dkgKey)
+	if err != nil {
+		t.Fatalf("active attempt: %v", err)
+	}
+	engine := newFakeInteractiveSigningEngine()
+	runner, err := newInteractiveSigningRunner(
+		ara, 1, 2, engine, roast.NewRound2Collector(verifier), coord, signer, bus,
+	)
+	if err != nil {
+		t.Fatalf("runner: %v", err)
+	}
+
+	// No second node ever broadcasts, so Run blocks in collectCommitments until
+	// the short deadline fires - an early exit with the session already open.
+	runCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := runner.Run(runCtx); err == nil {
+		t.Fatal("expected Run to fail on the expired context")
+	}
+	if got := engine.abortCallCount(); got != 1 {
+		t.Fatalf("expected exactly one native abort on early exit, got %d", got)
+	}
+}
+
 func TestNewInteractiveSigningRunner_RejectsInvalidConstruction(t *testing.T) {
 	// A valid baseline to vary one field at a time.
 	included := []group.MemberIndex{1, 2, 3}
@@ -175,40 +220,36 @@ func TestNewInteractiveSigningRunner_RejectsInvalidConstruction(t *testing.T) {
 	}
 	engine := newFakeInteractiveSigningEngine()
 	collector := roast.NewRound2Collector(verifier)
-	msg := []byte("m")
 
 	// Sanity: the baseline constructs.
-	if _, err := newInteractiveSigningRunner(ara, 1, msg, 2, engine, collector, coord, signer, bus); err != nil {
+	if _, err := newInteractiveSigningRunner(ara, 1, 2, engine, collector, coord, signer, bus); err != nil {
 		t.Fatalf("baseline construction failed: %v", err)
 	}
 
 	tests := map[string]func() (*interactiveSigningRunner, error){
 		"nil attempt": func() (*interactiveSigningRunner, error) {
-			return newInteractiveSigningRunner(nil, 1, msg, 2, engine, collector, coord, signer, bus)
+			return newInteractiveSigningRunner(nil, 1, 2, engine, collector, coord, signer, bus)
 		},
 		"nil engine": func() (*interactiveSigningRunner, error) {
-			return newInteractiveSigningRunner(ara, 1, msg, 2, nil, collector, coord, signer, bus)
+			return newInteractiveSigningRunner(ara, 1, 2, nil, collector, coord, signer, bus)
 		},
 		"nil collector": func() (*interactiveSigningRunner, error) {
-			return newInteractiveSigningRunner(ara, 1, msg, 2, engine, nil, coord, signer, bus)
+			return newInteractiveSigningRunner(ara, 1, 2, engine, nil, coord, signer, bus)
 		},
 		"nil coordinator": func() (*interactiveSigningRunner, error) {
-			return newInteractiveSigningRunner(ara, 1, msg, 2, engine, collector, nil, signer, bus)
+			return newInteractiveSigningRunner(ara, 1, 2, engine, collector, nil, signer, bus)
 		},
 		"nil signer": func() (*interactiveSigningRunner, error) {
-			return newInteractiveSigningRunner(ara, 1, msg, 2, engine, collector, coord, nil, bus)
+			return newInteractiveSigningRunner(ara, 1, 2, engine, collector, coord, nil, bus)
 		},
 		"nil bus": func() (*interactiveSigningRunner, error) {
-			return newInteractiveSigningRunner(ara, 1, msg, 2, engine, collector, coord, signer, nil)
+			return newInteractiveSigningRunner(ara, 1, 2, engine, collector, coord, signer, nil)
 		},
 		"zero threshold": func() (*interactiveSigningRunner, error) {
-			return newInteractiveSigningRunner(ara, 1, msg, 0, engine, collector, coord, signer, bus)
-		},
-		"empty message": func() (*interactiveSigningRunner, error) {
-			return newInteractiveSigningRunner(ara, 1, nil, 2, engine, collector, coord, signer, bus)
+			return newInteractiveSigningRunner(ara, 1, 0, engine, collector, coord, signer, bus)
 		},
 		"member not included": func() (*interactiveSigningRunner, error) {
-			return newInteractiveSigningRunner(ara, 99, msg, 2, engine, collector, coord, signer, bus)
+			return newInteractiveSigningRunner(ara, 99, 2, engine, collector, coord, signer, bus)
 		},
 	}
 	for name, build := range tests {

@@ -60,4 +60,13 @@ type interactiveSigningEngine interface {
 		signatureShares []nativeFROSTSignatureShare,
 		taprootMerkleRoot *[32]byte,
 	) ([]byte, error)
+
+	// InteractiveSessionAbort tells the engine to drop the attempt's held
+	// secret nonces/session state. The runner defers it for early exits so an
+	// attempt abandoned before aggregation does not leave nonce material
+	// resident.
+	InteractiveSessionAbort(
+		sessionID string,
+		attemptID *string,
+	) (*NativeInteractiveSessionAbortResult, error)
 }
