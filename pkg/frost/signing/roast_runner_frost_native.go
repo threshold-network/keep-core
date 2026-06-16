@@ -3,6 +3,7 @@
 package signing
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -128,7 +129,7 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 
 	// 4. Collect every included member's commitments.
 	commitments := map[group.MemberIndex][]byte{r.member: ownCommitments}
-	if err := r.collectCommitments(ctx, r.sub.Commitments(), includedSet, commitments); err != nil {
+	if err := r.collectCommitments(ctx, r.sub.Commitments(), contextHash, includedSet, commitments); err != nil {
 		return nil, fmt.Errorf("roast runner: collect commitments: %w", err)
 	}
 
@@ -146,6 +147,12 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 	// the collector, not here).
 	if err := r.collector.RecordSigningPackage(pkg); err != nil {
 		return nil, fmt.Errorf("roast runner: record signing package: %w", err)
+	}
+	// Refuse a package whose taproot root diverges from the bound root: signing
+	// Round 2 against it would sign for the WRONG tweak. The package was retained
+	// above as evidence for the blame path; we just must not sign it.
+	if !r.taprootRootMatches(pkg.TaprootMerkleRoot) {
+		return nil, fmt.Errorf("roast runner: signing package taproot root diverges from the bound session root")
 	}
 
 	// 6. Round 2: our signature share, recorded locally and broadcast.
@@ -167,7 +174,7 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 	// included set, so the aggregate needs a share from each of them (silent-
 	// member subsetting is the retry path's concern, not the happy flow).
 	shares := map[group.MemberIndex][]byte{r.member: ownShare}
-	if err := r.collectShares(ctx, r.sub.Shares(), len(includedSet), shares); err != nil {
+	if err := r.collectShares(ctx, r.sub.Shares(), contextHash, includedSet, shares); err != nil {
 		return nil, fmt.Errorf("roast runner: collect shares: %w", err)
 	}
 
@@ -208,11 +215,20 @@ func (r *interactiveSigningRunner) obtainSigningPackage(
 	includedSet []group.MemberIndex,
 ) ([]byte, error) {
 	if r.member != elected {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case msg := <-stream:
-			return msg.Payload, nil
+		// Accept ONLY the elected coordinator's package for THIS attempt. Without
+		// this, any node could broadcast a garbage package; the honest member
+		// would forward it to RecordSigningPackage, fail authentication, and abort
+		// its run before the real package ever arrives.
+		for {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case msg := <-stream:
+				if msg.Attempt != contextHash || msg.Sender != elected {
+					continue
+				}
+				return append([]byte(nil), msg.Payload...), nil
+			}
 		}
 	}
 
@@ -295,6 +311,7 @@ func (r *interactiveSigningRunner) signShareSubmission(
 func (r *interactiveSigningRunner) collectCommitments(
 	ctx context.Context,
 	stream <-chan RunnerMessage,
+	contextHash [attempt.MessageDigestLength]byte,
 	includedSet []group.MemberIndex,
 	into map[group.MemberIndex][]byte,
 ) error {
@@ -304,13 +321,21 @@ func (r *interactiveSigningRunner) collectCommitments(
 		case <-ctx.Done():
 			return ctx.Err()
 		case msg := <-stream:
+			// Ignore messages for another attempt (the bus may carry several),
+			// from non-included senders, and a sender already collected. Round-1
+			// commitments are unsigned; a spoofed commitment for a member is
+			// caught engine-side at Round2, which byte-checks the member's own
+			// commitment against the package.
+			if msg.Attempt != contextHash {
+				continue
+			}
 			if _, want := included[msg.Sender]; !want {
 				continue
 			}
 			if _, have := into[msg.Sender]; have {
 				continue
 			}
-			into[msg.Sender] = msg.Payload
+			into[msg.Sender] = append([]byte(nil), msg.Payload...)
 		}
 	}
 	return nil
@@ -322,24 +347,47 @@ func (r *interactiveSigningRunner) collectCommitments(
 func (r *interactiveSigningRunner) collectShares(
 	ctx context.Context,
 	stream <-chan RunnerMessage,
-	need int,
+	contextHash [attempt.MessageDigestLength]byte,
+	includedSet []group.MemberIndex,
 	into map[group.MemberIndex][]byte,
 ) error {
-	for len(into) < need {
+	included := setOf(includedSet)
+	for len(into) < len(included) {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case msg := <-stream:
+			if msg.Attempt != contextHash {
+				continue
+			}
+			if _, want := included[msg.Sender]; !want {
+				continue
+			}
 			if _, have := into[msg.Sender]; have {
 				continue
 			}
 			var sub roast.ShareSubmission
 			if err := sub.Unmarshal(msg.Payload); err != nil {
-				// A malformed peer submission is not fatal to collection; skip it
-				// (blame for it is the sad path's concern, not the happy flow).
 				continue
 			}
-			into[sub.SubmitterID()] = append([]byte(nil), sub.SignatureShare...)
+			// Bind the authenticated transport sender to the claimed submitter:
+			// a node embedding another member's id would otherwise fill that
+			// honest member's slot with garbage, drop their real share, and get
+			// them falsely blamed.
+			if sub.SubmitterID() != msg.Sender {
+				continue
+			}
+			// Authenticate + retain via the collector. Only an ACCEPTED share
+			// (operator-sig valid, binds the elected coordinator AND the
+			// authoritative package) counts toward aggregation; a divergent or
+			// conflicting share is retained for the blame path but not counted
+			// (ErrShareRetainedNotAccepted / ErrShareConflict), and an
+			// unauthenticated one is dropped. Retaining peer shares here is also
+			// what lets the blame path corroborate engine culprits.
+			if err := r.collector.RecordShareSubmission(&sub); err != nil {
+				continue
+			}
+			into[msg.Sender] = append([]byte(nil), sub.SignatureShare...)
 		}
 	}
 	return nil
@@ -406,6 +454,17 @@ func toFrostSignatureShares(shares map[group.MemberIndex][]byte) []nativeFROSTSi
 // engine ignores it); here it is a stable, distinct-per-member placeholder.
 func memberFrostIdentifier(member group.MemberIndex) string {
 	return fmt.Sprintf("%d", member)
+}
+
+// taprootRootMatches reports whether a received package's taproot root equals
+// the bound session root, honoring key-path (nil bound root <-> empty package
+// root) semantics.
+func (r *interactiveSigningRunner) taprootRootMatches(packageRoot []byte) bool {
+	bound := r.attempt.TaprootMerkleRoot()
+	if bound == nil {
+		return len(packageRoot) == 0
+	}
+	return bytes.Equal(packageRoot, bound[:])
 }
 
 func memberInSet(member group.MemberIndex, set []group.MemberIndex) bool {
