@@ -171,6 +171,9 @@ func (e *erroringEntryCoordinator) RecordEvidence(_ roast.AttemptHandle, _ *roas
 func (e *erroringEntryCoordinator) AggregateBundle(_ roast.AttemptHandle) (*roast.TransitionMessage, error) {
 	return nil, nil
 }
+func (e *erroringEntryCoordinator) MarkSucceeded(_ roast.AttemptHandle) error {
+	return nil
+}
 func (e *erroringEntryCoordinator) VerifyBundle(_ roast.AttemptHandle, _ *roast.TransitionMessage) error {
 	return nil
 }

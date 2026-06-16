@@ -13,10 +13,14 @@ import (
 )
 
 // AttemptState is the phase an attempt is in within the Coordinator
-// state machine. The lifecycle is monotonic:
+// state machine. The lifecycle is monotonic; from AttemptStateCollecting
+// it branches by outcome:
 //
-//	AttemptStatePending -> AttemptStateCollecting -> AttemptStateAggregating
-//	    -> {AttemptStateSucceeded, AttemptStateTransitioned}
+//	AttemptStatePending -> AttemptStateCollecting, then either
+//	  - AttemptStateAggregating -> AttemptStateTransitioned  (failure:
+//	    the coordinator emitted a TransitionMessage; AggregateBundle), or
+//	  - AttemptStateSucceeded  (success: a final signature was aggregated;
+//	    no transition message is needed; MarkSucceeded).
 //
 // AttemptStateSucceeded means the attempt produced a final signature.
 // AttemptStateTransitioned means the attempt timed out or hit an
@@ -130,6 +134,16 @@ type Coordinator interface {
 	// coordinator for the attempt (the Coordinator's selfMember
 	// must equal SelectedCoordinator(handle)).
 	AggregateBundle(handle AttemptHandle) (*TransitionMessage, error)
+	// MarkSucceeded transitions a live (Collecting) attempt to
+	// AttemptStateSucceeded after this node has aggregated a final
+	// signature for it. It is the success counterpart to AggregateBundle's
+	// failure transition: without it a successful attempt would remain
+	// Collecting and the cleanup path would emit a spurious
+	// TransitionMessage for an attempt that actually completed. Any node
+	// may mark its OWN attempt succeeded (unlike AggregateBundle, success
+	// is not coordinator-only). Returns ErrUnknownAttempt for an untracked
+	// handle and ErrAttemptStateInvalid if the attempt is not Collecting.
+	MarkSucceeded(handle AttemptHandle) error
 	// VerifyBundle is called by every receiver of a
 	// TransitionMessage. It validates the structural invariants of
 	// the bundle, verifies the coordinator-level signature against
@@ -458,6 +472,29 @@ func (c *inMemoryCoordinator) markTransitionedLocked(id uint64) {
 	if record, ok := c.attempts[id]; ok {
 		record.state = AttemptStateTransitioned
 	}
+}
+
+func (c *inMemoryCoordinator) MarkSucceeded(handle AttemptHandle) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	record, ok := c.attempts[handle.id]
+	if !ok {
+		return ErrUnknownAttempt
+	}
+	// Only a live attempt can succeed. A non-Collecting attempt has already
+	// concluded (aggregating/transitioned to failure, or already succeeded);
+	// re-marking it would mask a caller bug, so fail closed as the other
+	// state-changing methods do.
+	if record.state != AttemptStateCollecting {
+		return fmt.Errorf(
+			"%w: state is %v, want %v",
+			ErrAttemptStateInvalid,
+			record.state,
+			AttemptStateCollecting,
+		)
+	}
+	record.state = AttemptStateSucceeded
+	return nil
 }
 
 func (c *inMemoryCoordinator) VerifyBundle(
