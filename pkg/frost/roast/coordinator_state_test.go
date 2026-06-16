@@ -261,3 +261,50 @@ func TestAttemptState_String(t *testing.T) {
 		}
 	}
 }
+
+func TestMarkSucceeded_TransitionsCollectingToSucceeded(t *testing.T) {
+	coord := NewInMemoryCoordinator()
+	handle, err := coord.BeginAttempt(newTestContext(t))
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	if err := coord.MarkSucceeded(handle); err != nil {
+		t.Fatalf("mark succeeded: %v", err)
+	}
+
+	// State is now Succeeded, not Collecting - so the cleanup path's
+	// state == Collecting guard skips it and no spurious TransitionMessage is
+	// produced for an attempt that actually completed.
+	state, err := coord.State(handle)
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	if state != AttemptStateSucceeded {
+		t.Fatalf("expected Succeeded, got %v", state)
+	}
+}
+
+func TestMarkSucceeded_UnknownHandleReturnsSentinel(t *testing.T) {
+	coord := NewInMemoryCoordinator()
+	if err := coord.MarkSucceeded(AttemptHandle{id: 999}); !errors.Is(err, ErrUnknownAttempt) {
+		t.Fatalf("expected ErrUnknownAttempt, got %v", err)
+	}
+}
+
+func TestMarkSucceeded_RejectsNonCollectingAttempt(t *testing.T) {
+	coord := NewInMemoryCoordinator()
+	handle, err := coord.BeginAttempt(newTestContext(t))
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := coord.MarkSucceeded(handle); err != nil {
+		t.Fatalf("first mark succeeded: %v", err)
+	}
+
+	// A second mark on an already-succeeded (non-Collecting) attempt fails
+	// closed rather than masking a caller bug.
+	if err := coord.MarkSucceeded(handle); !errors.Is(err, ErrAttemptStateInvalid) {
+		t.Fatalf("expected ErrAttemptStateInvalid, got %v", err)
+	}
+}

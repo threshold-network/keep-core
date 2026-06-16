@@ -49,6 +49,9 @@ func (c *captureCoordinator) RecordEvidence(h roast.AttemptHandle, s *roast.Loca
 func (c *captureCoordinator) AggregateBundle(h roast.AttemptHandle) (*roast.TransitionMessage, error) {
 	return c.inner.AggregateBundle(h)
 }
+func (c *captureCoordinator) MarkSucceeded(h roast.AttemptHandle) error {
+	return c.inner.MarkSucceeded(h)
+}
 func (c *captureCoordinator) VerifyBundle(h roast.AttemptHandle, m *roast.TransitionMessage) error {
 	return c.inner.VerifyBundle(h, m)
 }
