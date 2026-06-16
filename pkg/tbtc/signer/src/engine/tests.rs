@@ -13796,3 +13796,176 @@ fn verify_signature_share_verdicts_match_aggregate_and_handle_edges() {
         "aggregate's culprit verdict must match verify_signature_share: {candidate_culprits:?}"
     );
 }
+
+// Script-path (tweaked-root) companion to the equivalence test above: the
+// None-root case pins parity on the untweaked path; this pins it on the taproot
+// tweak path, where the even-Y/tweak machinery is exercised. Shares are produced
+// with sign_with_tweak (== sign under a taproot-tweaked key package, the
+// production taproot signing path), and verify_signature_share / aggregate are
+// driven with Some(root). The clinching assertion is that the SAME tweaked share
+// is Invalid under None: the root must be materially applied, not ignored.
+#[test]
+fn verify_signature_share_tweaked_root_matches_aggregate() {
+    use crate::api::ShareVerificationVerdict;
+
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let session_id = "verify-share-tweaked-session";
+    let key_group = "interactive-test-key-group";
+    let message = [0x55u8; 32];
+    let included = [1u16, 2];
+    let key_packages = ensure_interactive_dkg_session(session_id, key_group);
+
+    // The attempt's opened root is independent of the root passed to verify /
+    // aggregate (both take it as a parameter), so open with None and drive the
+    // tweaked path purely through the verify/aggregate root arguments.
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("opens");
+
+    let member1 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&1].identifier.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone(),
+    })
+    .expect("member 1 nonces");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![member1.commitment.clone(), member2.commitment.clone()],
+    );
+
+    let taproot_merkle_root = [0x11u8; 32];
+    let taproot_merkle_root_hex = hex::encode(taproot_merkle_root);
+
+    // Produce a TWEAKED round-2 share: sign_with_tweak signs under a
+    // taproot-tweaked key package, exactly the production taproot signing path.
+    let sign_tweaked = |key_package_hex: &str, nonces_hex: &str, package_hex: &str| -> String {
+        let key_package = frost::keys::KeyPackage::deserialize(
+            &hex::decode(key_package_hex).expect("key package hex"),
+        )
+        .expect("key package");
+        let nonces = frost::round1::SigningNonces::deserialize(
+            &hex::decode(nonces_hex).expect("nonces hex"),
+        )
+        .expect("nonces");
+        let package =
+            frost::SigningPackage::deserialize(&hex::decode(package_hex).expect("package hex"))
+                .expect("signing package");
+        let share = frost::round2::sign_with_tweak(
+            &package,
+            &nonces,
+            &key_package,
+            Some(taproot_merkle_root.as_slice()),
+        )
+        .expect("sign_with_tweak");
+        hex::encode(share.serialize())
+    };
+
+    let share1 = sign_tweaked(
+        &key_packages[&1].data_hex,
+        &member1.nonces_hex,
+        &signing_package_hex,
+    );
+    let share2 = sign_tweaked(
+        &key_packages[&2].data_hex,
+        &member2.nonces_hex,
+        &signing_package_hex,
+    );
+
+    let verdict = |share_hex: String, member: u16, root: Option<String>| {
+        verify_signature_share(crate::api::VerifySignatureShareRequest {
+            session_id: session_id.to_string(),
+            signing_package_hex: signing_package_hex.clone(),
+            signature_share_hex: share_hex,
+            member_identifier: member,
+            taproot_merkle_root_hex: root,
+        })
+        .expect("verify")
+        .verdict
+    };
+
+    // Each tweaked share verifies Valid UNDER THE ROOT...
+    assert_eq!(
+        verdict(share1.clone(), 1, Some(taproot_merkle_root_hex.clone())),
+        ShareVerificationVerdict::Valid
+    );
+    assert_eq!(
+        verdict(share2.clone(), 2, Some(taproot_merkle_root_hex.clone())),
+        ShareVerificationVerdict::Valid
+    );
+    // ...and the SAME tweaked share is Invalid WITHOUT the root: the taproot
+    // tweak is materially applied to the verifying material, not ignored. (This
+    // is what makes the Some(root) Valid verdicts meaningful.)
+    assert_eq!(
+        verdict(share1.clone(), 1, None),
+        ShareVerificationVerdict::Invalid
+    );
+
+    // A bogus tweaked share for member 2: validly signed (with the root) over a
+    // DIFFERENT package, so it fails verification against this package.
+    let other_message = [0x66u8; 32];
+    let bogus_member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("bogus member 2 nonces");
+    let other_package_hex = interactive_package_for_test(
+        &other_message,
+        vec![
+            bogus_member2.commitment.clone(),
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: member1.commitment.data_hex.clone(),
+            },
+        ],
+    );
+    let bogus_share2 = sign_tweaked(
+        &key_packages[&2].data_hex,
+        &bogus_member2.nonces_hex,
+        &other_package_hex,
+    );
+    assert_eq!(
+        verdict(
+            bogus_share2.clone(),
+            2,
+            Some(taproot_merkle_root_hex.clone())
+        ),
+        ShareVerificationVerdict::Invalid
+    );
+
+    // Equivalence on the TWEAKED path: aggregate's AllCheaters verdict over
+    // [member 1 valid, member 2 bogus] with the same root must name exactly the
+    // share verify_signature_share calls Invalid (member 2), and not member 1.
+    let err = interactive_aggregate(InteractiveAggregateRequest {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        signing_package_hex: signing_package_hex.clone(),
+        signature_shares: vec![
+            crate::api::NativeFrostSignatureShare {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: share1.clone(),
+            },
+            crate::api::NativeFrostSignatureShare {
+                identifier: key_packages[&2].identifier.clone(),
+                data_hex: bogus_share2,
+            },
+        ],
+        taproot_merkle_root_hex: Some(taproot_merkle_root_hex),
+    })
+    .expect_err("an invalid tweaked share must fail aggregation closed");
+    let candidate_culprits = match err {
+        EngineError::AggregateShareVerificationFailed {
+            candidate_culprits, ..
+        } => candidate_culprits,
+        other => panic!("expected AggregateShareVerificationFailed, got {other:?}"),
+    };
+    assert_eq!(
+        candidate_culprits,
+        vec![2],
+        "tweaked aggregate culprit must match verify_signature_share: {candidate_culprits:?}"
+    );
+}
