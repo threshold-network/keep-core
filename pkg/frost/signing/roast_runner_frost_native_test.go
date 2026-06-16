@@ -223,6 +223,218 @@ func TestInteractiveSigningRunner_AbortsNativeAttemptOnEarlyExit(t *testing.T) {
 	}
 }
 
+// captureEquivocationEvidence registers a process-wide observer recording every
+// emitted equivocation event for the test's duration, returning a snapshot
+// accessor. Only one observer may be registered process-wide, so tests using it
+// must not run in parallel.
+func captureEquivocationEvidence(t *testing.T) func() []roast.EquivocationEvidence {
+	t.Helper()
+	var mu sync.Mutex
+	var captured []roast.EquivocationEvidence
+	if err := roast.RegisterEquivocationEvidenceObserver(func(ev roast.EquivocationEvidence) {
+		mu.Lock()
+		captured = append(captured, ev)
+		mu.Unlock()
+	}); err != nil {
+		t.Fatalf("register equivocation observer: %v", err)
+	}
+	t.Cleanup(roast.UnregisterEquivocationEvidenceObserver)
+	return func() []roast.EquivocationEvidence {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]roast.EquivocationEvidence(nil), captured...)
+	}
+}
+
+// craftSigningPackage builds a coordinator-signed signing-package envelope (and
+// returns its body hash) over the given FROST package body.
+func craftSigningPackage(
+	t *testing.T,
+	contextHash [attempt.MessageDigestLength]byte,
+	elected group.MemberIndex,
+	body []byte,
+	signer roast.Signer,
+) ([]byte, [32]byte) {
+	t.Helper()
+	pkg := &roast.SigningPackage{
+		AttemptContextHash:  append([]byte(nil), contextHash[:]...),
+		CoordinatorIDValue:  uint32(elected),
+		SigningPackageBytes: append([]byte(nil), body...),
+	}
+	payload, err := pkg.SignableBytes()
+	if err != nil {
+		t.Fatalf("signing package signable bytes: %v", err)
+	}
+	sig, err := signer.Sign(payload)
+	if err != nil {
+		t.Fatalf("sign signing package: %v", err)
+	}
+	pkg.CoordinatorSignature = sig
+	envelope, err := pkg.Marshal()
+	if err != nil {
+		t.Fatalf("marshal signing package: %v", err)
+	}
+	bodyHash, err := pkg.BodyHash()
+	if err != nil {
+		t.Fatalf("signing package body hash: %v", err)
+	}
+	return envelope, bodyHash
+}
+
+// craftShareSubmission builds a submitter-signed accepted-share envelope for a
+// member, binding the elected coordinator and authoritative package body hash so
+// the collector accepts it (a body-different share for the same member is then
+// member equivocation).
+func craftShareSubmission(
+	t *testing.T,
+	contextHash [attempt.MessageDigestLength]byte,
+	member, elected group.MemberIndex,
+	pkgBodyHash [32]byte,
+	share []byte,
+	signer roast.Signer,
+) []byte {
+	t.Helper()
+	sub := &roast.ShareSubmission{
+		AttemptContextHash: append([]byte(nil), contextHash[:]...),
+		SubmitterIDValue:   uint32(member),
+		CoordinatorIDValue: uint32(elected),
+		SigningPackageHash: append([]byte(nil), pkgBodyHash[:]...),
+		SignatureShare:     append([]byte(nil), share...),
+	}
+	payload, err := sub.SignableBytes()
+	if err != nil {
+		t.Fatalf("share submission signable bytes: %v", err)
+	}
+	sig, err := signer.Sign(payload)
+	if err != nil {
+		t.Fatalf("sign share submission: %v", err)
+	}
+	sub.SubmitterSignature = sig
+	envelope, err := sub.Marshal()
+	if err != nil {
+		t.Fatalf("marshal share submission: %v", err)
+	}
+	return envelope
+}
+
+// buildEquivocationRunner builds a single runner with a fresh collector for the
+// evidence-retention tests, returning the runner, its collector, the attempt
+// context hash, and the elected coordinator.
+func buildEquivocationRunner(t *testing.T, included []group.MemberIndex) (
+	*interactiveSigningRunner, *roast.Round2Collector, [attempt.MessageDigestLength]byte, group.MemberIndex,
+) {
+	t.Helper()
+	dkgKey := []byte{0x01, 0x02}
+	ctx, err := attempt.NewAttemptContext(
+		"session-1", "key-group-1", dkgKey,
+		[attempt.MessageDigestLength]byte{0x42}, 0, included, nil,
+	)
+	if err != nil {
+		t.Fatalf("attempt context: %v", err)
+	}
+	signer := fixedTestSigner{}
+	verifier := roast.NoOpSignatureVerifier()
+	bus := NewInProcessRunnerBus(16)
+	coord := roast.NewInMemoryCoordinatorWithSigning(included[0], signer, verifier)
+	handle, err := coord.BeginAttempt(ctx)
+	if err != nil {
+		t.Fatalf("begin attempt: %v", err)
+	}
+	ara, err := NewActiveRoastAttempt(coord, handle, ctx, "session-1", nil, dkgKey)
+	if err != nil {
+		t.Fatalf("active attempt: %v", err)
+	}
+	collector := roast.NewRound2Collector(verifier)
+	runner, err := newInteractiveSigningRunner(
+		ara, included[0], 2, newFakeInteractiveSigningEngine(), collector, coord, signer, bus,
+	)
+	if err != nil {
+		t.Fatalf("runner: %v", err)
+	}
+	return runner, collector, ctx.Hash(), ara.ElectedCoordinator()
+}
+
+// A second, body-different package from the elected coordinator must be recorded
+// as coordinator equivocation, not dropped because obtainSigningPackage already
+// returned on the first one.
+func TestInteractiveSigningRunner_RetainsCoordinatorPackageEquivocation(t *testing.T) {
+	included := []group.MemberIndex{1, 2}
+	runner, collector, contextHash, elected := buildEquivocationRunner(t, included)
+	signer := fixedTestSigner{}
+
+	if err := collector.BeginAttempt(contextHash[:], elected, included); err != nil {
+		t.Fatalf("collector begin: %v", err)
+	}
+	// The authoritative package is recorded first (as Run does).
+	authEnvelope, _ := craftSigningPackage(t, contextHash, elected, []byte("authoritative-package"), signer)
+	authPkg := &roast.SigningPackage{}
+	if err := authPkg.Unmarshal(authEnvelope); err != nil {
+		t.Fatalf("unmarshal authoritative: %v", err)
+	}
+	if err := collector.RecordSigningPackage(authPkg); err != nil {
+		t.Fatalf("record authoritative: %v", err)
+	}
+
+	// A body-different package the coordinator also broadcast sits buffered.
+	conflictEnvelope, _ := craftSigningPackage(t, contextHash, elected, []byte("equivocating-package"), signer)
+	stream := make(chan RunnerMessage, 4)
+	stream <- RunnerMessage{Type: RunnerMsgSigningPackage, Sender: elected, Attempt: contextHash, Payload: conflictEnvelope}
+
+	evidence := captureEquivocationEvidence(t)
+	runner.recordBufferedCoordinatorPackages(stream, elected, contextHash)
+
+	got := evidence()
+	if len(got) != 1 || got[0].Kind != roast.EquivocationKindSigningPackageConflict || got[0].Sender != elected {
+		t.Fatalf("expected one signing-package conflict from member %d, got %+v", elected, got)
+	}
+}
+
+// A member that double-signs (a body-different second accepted share) must be
+// recorded as equivocation even after its first share was already counted -
+// collectShares must not drop the later envelope before the collector sees it.
+func TestInteractiveSigningRunner_RetainsMemberShareEquivocation(t *testing.T) {
+	included := []group.MemberIndex{1, 2}
+	runner, collector, contextHash, elected := buildEquivocationRunner(t, included)
+	signer := fixedTestSigner{}
+
+	if err := collector.BeginAttempt(contextHash[:], elected, included); err != nil {
+		t.Fatalf("collector begin: %v", err)
+	}
+	authEnvelope, pkgBodyHash := craftSigningPackage(t, contextHash, elected, []byte("authoritative-package"), signer)
+	authPkg := &roast.SigningPackage{}
+	if err := authPkg.Unmarshal(authEnvelope); err != nil {
+		t.Fatalf("unmarshal authoritative: %v", err)
+	}
+	if err := collector.RecordSigningPackage(authPkg); err != nil {
+		t.Fatalf("record authoritative: %v", err)
+	}
+
+	// Member 1 double-signs; member 2 sends one share. Ordered so member 1's
+	// first share is counted before its conflicting second arrives.
+	share1a := craftShareSubmission(t, contextHash, 1, elected, pkgBodyHash, []byte("share-1-a"), signer)
+	share1b := craftShareSubmission(t, contextHash, 1, elected, pkgBodyHash, []byte("share-1-b"), signer)
+	share2 := craftShareSubmission(t, contextHash, 2, elected, pkgBodyHash, []byte("share-2"), signer)
+	stream := make(chan RunnerMessage, 8)
+	stream <- RunnerMessage{Type: RunnerMsgShareSubmission, Sender: 1, Attempt: contextHash, Payload: share1a}
+	stream <- RunnerMessage{Type: RunnerMsgShareSubmission, Sender: 1, Attempt: contextHash, Payload: share1b}
+	stream <- RunnerMessage{Type: RunnerMsgShareSubmission, Sender: 2, Attempt: contextHash, Payload: share2}
+
+	evidence := captureEquivocationEvidence(t)
+	into := map[group.MemberIndex][]byte{}
+	if err := runner.collectShares(context.Background(), stream, contextHash, included, into); err != nil {
+		t.Fatalf("collect shares: %v", err)
+	}
+
+	// The first accepted share per member is counted; the double-sign is retained.
+	if string(into[1]) != "share-1-a" || string(into[2]) != "share-2" {
+		t.Fatalf("unexpected counted shares: 1=%q 2=%q", into[1], into[2])
+	}
+	got := evidence()
+	if len(got) != 1 || got[0].Kind != roast.EquivocationKindShareConflict || got[0].Sender != 1 {
+		t.Fatalf("expected one share conflict from member 1, got %+v", got)
+	}
+}
+
 func TestNewInteractiveSigningRunner_RejectsInvalidConstruction(t *testing.T) {
 	// A valid baseline to vary one field at a time.
 	included := []group.MemberIndex{1, 2, 3}

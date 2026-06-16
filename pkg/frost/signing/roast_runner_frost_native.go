@@ -172,6 +172,16 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 	if err := r.collector.RecordSigningPackage(pkg); err != nil {
 		return nil, fmt.Errorf("roast runner: record signing package: %w", err)
 	}
+	// Retain any FURTHER body-different packages the elected coordinator already
+	// broadcast for this attempt: the authoritative one is recorded above, so
+	// these record as coordinator equivocation (EquivocationKindSigningPackageConflict,
+	// surfaced via CoordinatorPackageProofs). obtainSigningPackage returns on the
+	// first package, so without this the duplicates the bus deliberately preserves
+	// would be lost. Non-coordinators only - the coordinator does not receive its
+	// own broadcast.
+	if r.member != elected {
+		r.recordBufferedCoordinatorPackages(r.sub.SigningPackages(), elected, contextHash)
+	}
 	// Refuse a package whose taproot root diverges from the bound root: signing
 	// Round 2 against it would sign for the WRONG tweak. The package was retained
 	// above as evidence for the blame path; we just must not sign it.
@@ -368,9 +378,11 @@ func (r *interactiveSigningRunner) collectCommitments(
 	return nil
 }
 
-// collectShares fills `into` with at least `need` members' inner FROST share
+// collectShares fills `into` with each included member's inner FROST share
 // bytes (own already seeded), unwrapping each ShareSubmission envelope and
-// taking the first accepted body per sender.
+// counting the first accepted body per sender. Every well-formed share is still
+// passed to the collector for retention, even after a sender's first - that is
+// where member equivocation is detected.
 func (r *interactiveSigningRunner) collectShares(
 	ctx context.Context,
 	stream <-chan RunnerMessage,
@@ -390,9 +402,6 @@ func (r *interactiveSigningRunner) collectShares(
 			if _, want := included[msg.Sender]; !want {
 				continue
 			}
-			if _, have := into[msg.Sender]; have {
-				continue
-			}
 			var sub roast.ShareSubmission
 			if err := sub.Unmarshal(msg.Payload); err != nil {
 				continue
@@ -404,20 +413,60 @@ func (r *interactiveSigningRunner) collectShares(
 			if sub.SubmitterID() != msg.Sender {
 				continue
 			}
-			// Authenticate + retain via the collector. Only an ACCEPTED share
-			// (operator-sig valid, binds the elected coordinator AND the
-			// authoritative package) counts toward aggregation; a divergent or
-			// conflicting share is retained for the blame path but not counted
-			// (ErrShareRetainedNotAccepted / ErrShareConflict), and an
-			// unauthenticated one is dropped. Retaining peer shares here is also
-			// what lets the blame path corroborate engine culprits.
-			if err := r.collector.RecordShareSubmission(&sub); err != nil {
+			// Authenticate + retain via the collector BEFORE the already-collected
+			// short-circuit. A body-different second signed share from a sender is
+			// exactly the member-equivocation evidence the collector is built to
+			// retain and emit (EquivocationKindShareConflict / DivergentShare);
+			// dropping it just because we already hold that sender's first share
+			// would let a double-signer go unrecorded. Retention is bounded (the
+			// collector keeps the first per submitter and only emits on the rest),
+			// and the bus delivers only body-different duplicates.
+			recordErr := r.collector.RecordShareSubmission(&sub)
+			if _, have := into[msg.Sender]; have {
+				continue
+			}
+			// Only an ACCEPTED share (err == nil: operator-sig valid, binds the
+			// elected coordinator AND the authoritative package) counts toward
+			// aggregation; a divergent/conflicting/unauthenticated share is
+			// retained above where applicable but never counted
+			// (ErrShareRetainedNotAccepted / ErrShareConflict / auth failure).
+			if recordErr != nil {
 				continue
 			}
 			into[msg.Sender] = append([]byte(nil), sub.SignatureShare...)
 		}
 	}
 	return nil
+}
+
+// recordBufferedCoordinatorPackages drains every signing package the elected
+// coordinator has already broadcast for this attempt and records each, so the
+// collector can surface coordinator equivocation. The caller MUST have recorded
+// the authoritative package first, so a body-different one here records as the
+// conflicting package (not the authoritative). Non-blocking: it retains the
+// duplicates already buffered; continuous monitoring across a real transport is
+// the blame path's concern. RecordSigningPackage authenticates the coordinator
+// signature, so a forged-sender package is rejected rather than retained.
+func (r *interactiveSigningRunner) recordBufferedCoordinatorPackages(
+	stream <-chan RunnerMessage,
+	elected group.MemberIndex,
+	contextHash [attempt.MessageDigestLength]byte,
+) {
+	for {
+		select {
+		case msg := <-stream:
+			if msg.Attempt != contextHash || msg.Sender != elected {
+				continue
+			}
+			pkg := &roast.SigningPackage{}
+			if err := pkg.Unmarshal(msg.Payload); err != nil {
+				continue
+			}
+			_ = r.collector.RecordSigningPackage(pkg)
+		default:
+			return
+		}
+	}
 }
 
 // nativeAttemptContext maps the binding's RFC-21 attempt context to the engine's
