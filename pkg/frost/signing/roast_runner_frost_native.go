@@ -415,10 +415,21 @@ func (r *interactiveSigningRunner) collectShares(
 
 // nativeAttemptContext maps the binding's RFC-21 attempt context to the engine's
 // wire shape. AttemptNumber stays 0-based (the bridge converts to the 1-based
-// wire value). The included-participants fingerprint and attempt id are derived
-// here as stable placeholders; their exact engine-valid derivation is finalized
-// when the real cgo engine is wired (the fake engine ignores them, and the
-// runner drives subsequent rounds with the attempt id the engine RETURNS).
+// wire value).
+//
+// IncludedParticipantsFingerprint and AttemptID are PLACEHOLDERS, inert here:
+// the only engine #4076 wires is the fake, which ignores them, and no production
+// path constructs the real cgo engine yet. They are NOT engine-valid. Strict-mode
+// validate_attempt_context (engine roast.rs) recomputes both from canonical
+// inputs and rejects a mismatch before round 1:
+//   - fingerprint := roast_included_participants_fingerprint_hex(participants)
+//     (domain-separated hash of the framed u16 set), and
+//   - attempt_id   := roast_attempt_id_hex(session_id, message_digest_hex,
+//     attempt_number, coordinator_id, fingerprint_hex).
+// Producing these byte-for-byte is a cross-impl derivation (the seed-divergence
+// class of bug); deriving-in-Go vs exposing-from-engine is the open design fork
+// for the real-engine attempt-context wiring increment. The runner already drives
+// subsequent rounds with the attempt id the engine RETURNS, not this field.
 func nativeAttemptContext(binding *ActiveRoastAttempt) NativeInteractiveAttemptContext {
 	ctx := binding.Context()
 	included := make([]uint16, 0, len(ctx.IncludedSet))
@@ -469,9 +480,17 @@ func toFrostSignatureShares(shares map[group.MemberIndex][]byte) []nativeFROSTSi
 	return out
 }
 
-// memberFrostIdentifier maps a Go member index to the FROST identifier string
-// the engine expects. The exact encoding is finalized at cgo wiring (the fake
-// engine ignores it); here it is a stable, distinct-per-member placeholder.
+// memberFrostIdentifier maps a Go member index to the FROST identifier the
+// engine keys signing-package commitments and signature shares by.
+//
+// This decimal form is a PLACEHOLDER, inert against the fake (which ignores it)
+// and never reaching the real engine in #4076. The engine's canonical encoding
+// (codec.rs participant_identifier_to_frost_identifier + frost_identifier_to_go_string)
+// is the u16 serialized as the secp256k1 scalar - 32-byte big-endian - hex
+// encoded; the real engine deserializes exactly that to build the
+// BTreeMap<Identifier, _> in the FROST signing package, so "1" would not match
+// the member's key share. Replaced with the canonical encoding in the
+// real-engine wiring increment.
 func memberFrostIdentifier(member group.MemberIndex) string {
 	return fmt.Sprintf("%d", member)
 }
