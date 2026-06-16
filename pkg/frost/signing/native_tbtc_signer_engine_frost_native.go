@@ -53,6 +53,29 @@ type NativeTBTCSignerRoundState struct {
 	OwnContribution       *NativeTBTCSignerRoundContribution `json:"ownContribution"`
 }
 
+// NativeShareVerificationVerdict is the typed result of a single-share FROST
+// re-verification (frost_tbtc_verify_signature_share). It mirrors the engine's
+// tri-state verdict.
+//
+// Indeterminate is deliberately the ZERO value: the boundary between blame
+// (Invalid) and don't-blame is security-critical, so an unset value, a decode
+// failure, or an FFI-transport error all fail closed against false blame. A
+// verdict is only meaningful when the accompanying error is nil.
+type NativeShareVerificationVerdict int
+
+const (
+	// NativeShareVerdictIndeterminate: verification could not be completed for a
+	// reason that is not the member's fault (or could not be obtained at all).
+	// Fail closed against blame. Zero value.
+	NativeShareVerdictIndeterminate NativeShareVerificationVerdict = iota
+	// NativeShareVerdictValid: the share is a valid FROST signature share for the
+	// (tweaked) package. Not blamable.
+	NativeShareVerdictValid
+	// NativeShareVerdictInvalid: the share is member-attributable garbage -
+	// mathematically invalid, or undecodable member-signed bytes. Blamable.
+	NativeShareVerdictInvalid
+)
+
 // NativeTBTCSignerEngine executes coarse, session-keyed tbtc-signer
 // operations.
 type NativeTBTCSignerEngine interface {
