@@ -24,6 +24,7 @@ type harness struct {
 	bus         RunnerBus
 	runners     []*interactiveSigningRunner
 	coords      []roast.Coordinator
+	collectors  []*roast.Round2Collector
 	handles     []roast.AttemptHandle
 	contextHash [attempt.MessageDigestLength]byte
 	includedSet []group.MemberIndex
@@ -63,16 +64,18 @@ func buildInteractiveSigningHarness(t *testing.T, n int, threshold uint16) harne
 		if err != nil {
 			t.Fatalf("active attempt (member %d): %v", member, err)
 		}
+		collector := roast.NewRound2Collector(verifier)
 		runner, err := newInteractiveSigningRunner(
 			ara, member, threshold,
 			newFakeInteractiveSigningEngine(),
-			roast.NewRound2Collector(verifier),
+			collector,
 			coord, signer, bus,
 		)
 		if err != nil {
 			t.Fatalf("runner (member %d): %v", member, err)
 		}
 		h.coords = append(h.coords, coord)
+		h.collectors = append(h.collectors, collector)
 		h.handles = append(h.handles, handle)
 		h.runners = append(h.runners, runner)
 	}
@@ -118,6 +121,31 @@ func (h harness) runAndAssertAllSucceed(t *testing.T) {
 
 func TestInteractiveSigningRunner_HappyPath(t *testing.T) {
 	buildInteractiveSigningHarness(t, 3, 2).runAndAssertAllSucceed(t)
+}
+
+// A concluded attempt must leave no retained round-2 collector state, per the
+// collector's prune-on-conclusion contract (else a long-lived collector reused
+// across attempts accumulates every attempt's envelopes). The collector exposes
+// no presence query, but a SURVIVING record makes a re-begin of the same context
+// hash under a DIFFERENT binding conflict, whereas a pruned collector accepts
+// that fresh begin - so a clean re-begin proves the prune happened.
+func TestInteractiveSigningRunner_PrunesCollectorStateAfterSuccess(t *testing.T) {
+	h := buildInteractiveSigningHarness(t, 3, 2)
+	h.runAndAssertAllSucceed(t)
+
+	elected := h.runners[0].attempt.ElectedCoordinator()
+	var differentElected group.MemberIndex
+	for _, m := range h.includedSet {
+		if m != elected {
+			differentElected = m
+			break
+		}
+	}
+	for i, collector := range h.collectors {
+		if err := collector.BeginAttempt(h.contextHash[:], differentElected, h.includedSet); err != nil {
+			t.Fatalf("member %d: collector retained concluded attempt state (conflicting re-begin: %v)", i+1, err)
+		}
+	}
 }
 
 // Adversarial bus traffic - a garbage signing package from a non-elected sender

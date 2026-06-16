@@ -119,13 +119,20 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 	}
 	attemptID := open.AttemptID
 
-	// Once the session is open the engine holds this attempt's secret nonces and
-	// session state. On any early exit (ctx cancel, or an error before round 2
-	// consumes the nonces) abort so the engine drops that material; a clean
-	// success clears the flag first. Best-effort - a failing abort must not mask
-	// the run's real outcome.
+	// Cleanup on conclusion - the attempt concludes for this runner on any exit:
+	//   - Always prune this attempt's round-2 collector state, per the collector's
+	//     prune-on-conclusion contract. A collector reused across attempts would
+	//     otherwise retain every concluded attempt's package/share envelopes
+	//     indefinitely. A no-op if the attempt was never begun, and (when the
+	//     blame path lands) it extracts its evidence into the transition bundle
+	//     within Run, before this defer fires.
+	//   - On an EARLY exit only (ctx cancel, or an error before round 2 consumed
+	//     the nonces) abort the engine session so it drops this attempt's resident
+	//     secret nonces; a clean success consumed them and clears the flag first.
+	// Both are best-effort: they must not mask the run's real outcome.
 	succeeded := false
 	defer func() {
+		r.collector.PruneAttempt(contextHash[:])
 		if !succeeded {
 			_, _ = r.engine.InteractiveSessionAbort(binding.SessionID(), &attemptID)
 		}
@@ -426,6 +433,7 @@ func (r *interactiveSigningRunner) collectShares(
 //     (domain-separated hash of the framed u16 set), and
 //   - attempt_id   := roast_attempt_id_hex(session_id, message_digest_hex,
 //     attempt_number, coordinator_id, fingerprint_hex).
+//
 // Producing these byte-for-byte is a cross-impl derivation (the seed-divergence
 // class of bug); deriving-in-Go vs exposing-from-engine is the open design fork
 // for the real-engine attempt-context wiring increment. The runner already drives
