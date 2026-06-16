@@ -187,6 +187,16 @@ func (mbttse *mockBuildTaggedTBTCSignerEngine) BuildTaprootTx(
 	return nil, errors.New("not implemented")
 }
 
+func (mbttse *mockBuildTaggedTBTCSignerEngine) VerifySignatureShare(
+	sessionID string,
+	signingPackage []byte,
+	signatureShare []byte,
+	memberIdentifier uint16,
+	taprootMerkleRoot *[32]byte,
+) (NativeShareVerificationVerdict, error) {
+	return NativeShareVerdictIndeterminate, errors.New("not implemented")
+}
+
 func cloneTestTaprootMerkleRoot(taprootMerkleRoot *[32]byte) *[32]byte {
 	if taprootMerkleRoot == nil {
 		return nil
@@ -286,6 +296,16 @@ func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) BuildTap
 	scriptTreeHex *string,
 ) (*NativeTBTCSignerTxResult, error) {
 	return nil, errors.New("not implemented")
+}
+
+func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) VerifySignatureShare(
+	sessionID string,
+	signingPackage []byte,
+	signatureShare []byte,
+	memberIdentifier uint16,
+	taprootMerkleRoot *[32]byte,
+) (NativeShareVerificationVerdict, error) {
+	return NativeShareVerdictIndeterminate, errors.New("not implemented")
 }
 
 func (dbttsbre *deterministicBuildTaggedTBTCSignerBootstrapRoundEngine) finalizeInputs() []NativeTBTCSignerRoundContribution {

@@ -103,6 +103,13 @@ type NativeTBTCSignerEngine interface {
 		outputs []NativeTBTCSignerTxOutput,
 		scriptTreeHex *string,
 	) (*NativeTBTCSignerTxResult, error)
+	VerifySignatureShare(
+		sessionID string,
+		signingPackage []byte,
+		signatureShare []byte,
+		memberIdentifier uint16,
+		taprootMerkleRoot *[32]byte,
+	) (NativeShareVerificationVerdict, error)
 }
 
 // NativeTBTCSignerSeededDKGEngine is implemented by tbtc-signer engines that
