@@ -1505,3 +1505,243 @@ func TestDecodeBuildTaggedTBTCSignerVerifySignatureShareResponse_MalformedJSON(
 		)
 	}
 }
+
+func testInteractiveAttemptContext() NativeInteractiveAttemptContext {
+	return NativeInteractiveAttemptContext{
+		AttemptNumber:                   3,
+		CoordinatorIdentifier:           2,
+		IncludedParticipants:            []uint16{1, 2, 3},
+		IncludedParticipantsFingerprint: "fingerprint-abc",
+		AttemptID:                       "attempt-1",
+	}
+}
+
+func TestBuildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(t *testing.T) {
+	payload, err := buildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(
+		"session-1",
+		2,
+		[]byte{0xab, 0xcd},
+		"key-group-1",
+		2,
+		nil,
+		testInteractiveAttemptContext(),
+	)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+
+	var request buildTaggedTBTCSignerInteractiveSessionOpenRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+
+	if request.SessionID != "session-1" {
+		t.Fatalf("unexpected session id: [%s]", request.SessionID)
+	}
+	if request.MemberIdentifier != 2 {
+		t.Fatalf("unexpected member id: [%d]", request.MemberIdentifier)
+	}
+	if request.MessageHex != "abcd" {
+		t.Fatalf("unexpected message hex: [%s]", request.MessageHex)
+	}
+	if request.KeyGroup != "key-group-1" {
+		t.Fatalf("unexpected key group: [%s]", request.KeyGroup)
+	}
+	if request.Threshold != 2 {
+		t.Fatalf("unexpected threshold: [%d]", request.Threshold)
+	}
+	if request.TaprootMerkleRootHex != nil {
+		t.Fatalf("expected omitted taproot root, got: [%v]", *request.TaprootMerkleRootHex)
+	}
+	if request.AttemptContext.AttemptNumber != 3 ||
+		request.AttemptContext.CoordinatorIdentifier != 2 ||
+		request.AttemptContext.IncludedParticipantsFingerprint != "fingerprint-abc" ||
+		request.AttemptContext.AttemptID != "attempt-1" {
+		t.Fatalf("unexpected attempt context: [%+v]", request.AttemptContext)
+	}
+	if len(request.AttemptContext.IncludedParticipants) != 3 ||
+		request.AttemptContext.IncludedParticipants[0] != 1 ||
+		request.AttemptContext.IncludedParticipants[2] != 3 {
+		t.Fatalf("unexpected included participants: [%v]", request.AttemptContext.IncludedParticipants)
+	}
+}
+
+func TestBuildTaggedTBTCSignerInteractiveSessionOpenRequestPayload_TaprootMerkleRoot(t *testing.T) {
+	var root [32]byte
+	root[0] = 0xab
+	root[31] = 0xcd
+
+	payload, err := buildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(
+		"session-1", 2, []byte{0xab}, "key-group-1", 2, &root, testInteractiveAttemptContext(),
+	)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+
+	var request buildTaggedTBTCSignerInteractiveSessionOpenRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+	if request.TaprootMerkleRootHex == nil {
+		t.Fatal("expected taproot merkle root")
+	}
+	if *request.TaprootMerkleRootHex != hex.EncodeToString(root[:]) {
+		t.Fatalf("unexpected taproot root hex: [%s]", *request.TaprootMerkleRootHex)
+	}
+}
+
+func TestBuildTaggedTBTCSignerInteractiveSessionOpenRequestPayload_RejectsInvalidInput(t *testing.T) {
+	ctx := testInteractiveAttemptContext()
+	emptyCtx := NativeInteractiveAttemptContext{}
+	noParticipantsCtx := testInteractiveAttemptContext()
+	noParticipantsCtx.IncludedParticipants = nil
+
+	tests := map[string]struct {
+		sessionID string
+		member    uint16
+		message   []byte
+		keyGroup  string
+		threshold uint16
+		ctx       NativeInteractiveAttemptContext
+	}{
+		"empty session":            {"", 2, []byte{0xab}, "kg", 2, ctx},
+		"zero member":              {"s", 0, []byte{0xab}, "kg", 2, ctx},
+		"empty message":            {"s", 2, nil, "kg", 2, ctx},
+		"empty key group":          {"s", 2, []byte{0xab}, "", 2, ctx},
+		"zero threshold":           {"s", 2, []byte{0xab}, "kg", 0, ctx},
+		"empty attempt context":    {"s", 2, []byte{0xab}, "kg", 2, emptyCtx},
+		"no included participants": {"s", 2, []byte{0xab}, "kg", 2, noParticipantsCtx},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := buildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(
+				test.sessionID, test.member, test.message, test.keyGroup, test.threshold, nil, test.ctx,
+			)
+			if err == nil {
+				t.Fatal("expected invalid input to be rejected")
+			}
+			if !errors.Is(err, ErrNativeBridgeOperationFailed) {
+				t.Fatalf("expected ErrNativeBridgeOperationFailed, got: [%v]", err)
+			}
+		})
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerInteractiveSessionOpenResponse(t *testing.T) {
+	result, err := decodeBuildTaggedTBTCSignerInteractiveSessionOpenResponse(
+		[]byte(`{"session_id":"session-1","attempt_id":"attempt-1","idempotent":true}`),
+	)
+	if err != nil {
+		t.Fatalf("unexpected decode error: [%v]", err)
+	}
+	if result.SessionID != "session-1" || result.AttemptID != "attempt-1" || !result.Idempotent {
+		t.Fatalf("unexpected result: [%+v]", result)
+	}
+}
+
+func TestBuildTaggedTBTCSignerInteractiveRound1RequestPayload(t *testing.T) {
+	payload, err := buildTaggedTBTCSignerInteractiveRound1RequestPayload("session-1", "attempt-1", 2)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+	var request buildTaggedTBTCSignerInteractiveRound1Request
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+	if request.SessionID != "session-1" || request.AttemptID != "attempt-1" || request.MemberIdentifier != 2 {
+		t.Fatalf("unexpected request: [%+v]", request)
+	}
+
+	if _, err := buildTaggedTBTCSignerInteractiveRound1RequestPayload("", "attempt-1", 2); err == nil {
+		t.Fatal("expected empty session id to be rejected")
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerInteractiveRound1Response(t *testing.T) {
+	commitments, err := decodeBuildTaggedTBTCSignerInteractiveRound1Response(
+		[]byte(`{"commitments_hex":"dead"}`),
+	)
+	if err != nil {
+		t.Fatalf("unexpected decode error: [%v]", err)
+	}
+	if hex.EncodeToString(commitments) != "dead" {
+		t.Fatalf("unexpected commitments: [%x]", commitments)
+	}
+}
+
+func TestBuildTaggedTBTCSignerInteractiveRound2RequestPayload(t *testing.T) {
+	payload, err := buildTaggedTBTCSignerInteractiveRound2RequestPayload(
+		"session-1", "attempt-1", 2, []byte{0xbe, 0xef},
+	)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+	var request buildTaggedTBTCSignerInteractiveRound2Request
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+	if request.SigningPackageHex != "beef" {
+		t.Fatalf("unexpected signing package hex: [%s]", request.SigningPackageHex)
+	}
+
+	if _, err := buildTaggedTBTCSignerInteractiveRound2RequestPayload("session-1", "attempt-1", 2, nil); err == nil {
+		t.Fatal("expected empty signing package to be rejected")
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerInteractiveRound2Response(t *testing.T) {
+	share, err := decodeBuildTaggedTBTCSignerInteractiveRound2Response(
+		[]byte(`{"session_id":"s","attempt_id":"a","signature_share_hex":"cafe"}`),
+	)
+	if err != nil {
+		t.Fatalf("unexpected decode error: [%v]", err)
+	}
+	if hex.EncodeToString(share) != "cafe" {
+		t.Fatalf("unexpected signature share: [%x]", share)
+	}
+}
+
+func TestBuildTaggedTBTCSignerInteractiveSessionAbortRequestPayload(t *testing.T) {
+	attemptID := "attempt-1"
+	payload, err := buildTaggedTBTCSignerInteractiveSessionAbortRequestPayload("session-1", &attemptID)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+	var request buildTaggedTBTCSignerInteractiveSessionAbortRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+	if request.AttemptID == nil || *request.AttemptID != "attempt-1" {
+		t.Fatalf("unexpected attempt id: [%v]", request.AttemptID)
+	}
+
+	// A nil attempt id (abort whatever is live) is valid and omitted on the wire.
+	payloadNil, err := buildTaggedTBTCSignerInteractiveSessionAbortRequestPayload("session-1", nil)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+	var requestNil buildTaggedTBTCSignerInteractiveSessionAbortRequest
+	if err := json.Unmarshal(payloadNil, &requestNil); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+	if requestNil.AttemptID != nil {
+		t.Fatalf("expected omitted attempt id, got: [%v]", *requestNil.AttemptID)
+	}
+
+	if _, err := buildTaggedTBTCSignerInteractiveSessionAbortRequestPayload("", nil); err == nil {
+		t.Fatal("expected empty session id to be rejected")
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerInteractiveSessionAbortResponse(t *testing.T) {
+	result, err := decodeBuildTaggedTBTCSignerInteractiveSessionAbortResponse(
+		[]byte(`{"session_id":"session-1","aborted":true}`),
+	)
+	if err != nil {
+		t.Fatalf("unexpected decode error: [%v]", err)
+	}
+	if result.SessionID != "session-1" || !result.Aborted {
+		t.Fatalf("unexpected result: [%+v]", result)
+	}
+}

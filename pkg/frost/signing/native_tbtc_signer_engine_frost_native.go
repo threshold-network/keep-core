@@ -76,6 +76,34 @@ const (
 	NativeShareVerdictInvalid
 )
 
+// NativeInteractiveAttemptContext is the RFC-21 attempt context an interactive
+// signing session is bound to. It mirrors the engine's AttemptContext: the
+// orchestrator derives it from the wallet/session state (never from a peer
+// message) and passes it on InteractiveSessionOpen.
+type NativeInteractiveAttemptContext struct {
+	AttemptNumber                   uint32
+	CoordinatorIdentifier           uint16
+	IncludedParticipants            []uint16
+	IncludedParticipantsFingerprint string
+	AttemptID                       string
+}
+
+// NativeInteractiveSessionOpenResult is the result of InteractiveSessionOpen:
+// the engine's canonical attempt id for the opened (or idempotently re-opened)
+// attempt.
+type NativeInteractiveSessionOpenResult struct {
+	SessionID  string
+	AttemptID  string
+	Idempotent bool
+}
+
+// NativeInteractiveSessionAbortResult is the result of InteractiveSessionAbort.
+// Aborted is false when there was no live attempt to abort.
+type NativeInteractiveSessionAbortResult struct {
+	SessionID string
+	Aborted   bool
+}
+
 // NativeTBTCSignerEngine executes coarse, session-keyed tbtc-signer
 // operations.
 type NativeTBTCSignerEngine interface {
