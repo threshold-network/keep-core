@@ -11,12 +11,17 @@ import (
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
+// testDkgGroupPublicKey is the DKG group public key the test attempt contexts
+// are built from; NewActiveRoastAttempt now binds the passed key to ctx via the
+// derived seed, so callers must pass this same key.
+var testDkgGroupPublicKey = []byte{0x01, 0x02}
+
 func testActiveAttemptContext(t *testing.T, sessionID string, digest byte) attempt.AttemptContext {
 	t.Helper()
 	ctx, err := attempt.NewAttemptContext(
 		sessionID,
 		"key-group-test",
-		[]byte{0x01, 0x02},
+		testDkgGroupPublicKey,
 		[attempt.MessageDigestLength]byte{digest},
 		0,
 		[]group.MemberIndex{1, 2, 3, 4, 5},
@@ -36,7 +41,7 @@ func TestNewActiveRoastAttempt_BindsAndValidates(t *testing.T) {
 		t.Fatalf("begin attempt: %v", err)
 	}
 	root := [32]byte{0xaa, 0xbb}
-	dkgKey := []byte{0x09, 0x08, 0x07}
+	dkgKey := append([]byte(nil), testDkgGroupPublicKey...)
 
 	ara, err := NewActiveRoastAttempt(coord, handle, ctx, "session-1", &root, dkgKey)
 	if err != nil {
@@ -82,8 +87,6 @@ func TestNewActiveRoastAttempt_RejectsInconsistentBinding(t *testing.T) {
 	// so the session-id check passes but the handle/context-hash check fires.
 	otherCtx := testActiveAttemptContext(t, "session-1", 0x77)
 
-	dkgKey := []byte{0x01}
-
 	tests := map[string]struct {
 		coord     roast.Coordinator
 		handle    roast.AttemptHandle
@@ -91,11 +94,13 @@ func TestNewActiveRoastAttempt_RejectsInconsistentBinding(t *testing.T) {
 		sessionID string
 		dkgKey    []byte
 	}{
-		"nil coordinator":           {nil, handle, ctx, "session-1", dkgKey},
-		"empty session id":          {coord, handle, ctx, "", dkgKey},
-		"session id mismatch":       {coord, handle, ctx, "other-session", dkgKey},
-		"handle / context mismatch": {coord, handle, otherCtx, "session-1", dkgKey},
+		"nil coordinator":           {nil, handle, ctx, "session-1", testDkgGroupPublicKey},
+		"empty session id":          {coord, handle, ctx, "", testDkgGroupPublicKey},
+		"session id mismatch":       {coord, handle, ctx, "other-session", testDkgGroupPublicKey},
+		"handle / context mismatch": {coord, handle, otherCtx, "session-1", testDkgGroupPublicKey},
 		"empty dkg group key":       {coord, handle, ctx, "session-1", nil},
+		// Non-empty but NOT the key ctx was built from: rejected via the seed check.
+		"dkg key mismatch": {coord, handle, ctx, "session-1", []byte{0xff, 0xfe}},
 	}
 
 	for name, test := range tests {
@@ -120,7 +125,9 @@ func TestActiveRoastAttempt_ImmutableAfterConstruction(t *testing.T) {
 		t.Fatalf("begin attempt: %v", err)
 	}
 	root := [32]byte{0xaa}
-	dkgKey := []byte{0x01, 0x02, 0x03}
+	// A copy of the bound key (so mutating it below is safe and it still matches
+	// ctx for the seed check).
+	dkgKey := append([]byte(nil), testDkgGroupPublicKey...)
 
 	ara, err := NewActiveRoastAttempt(coord, handle, ctx, "session-1", &root, dkgKey)
 	if err != nil {
@@ -133,7 +140,7 @@ func TestActiveRoastAttempt_ImmutableAfterConstruction(t *testing.T) {
 	if got := ara.TaprootMerkleRoot(); got[0] != 0xaa {
 		t.Fatalf("taproot root not copied from caller: %x", got)
 	}
-	if got := ara.DkgGroupPublicKey(); got[0] != 0x01 {
+	if got := ara.DkgGroupPublicKey(); got[0] != testDkgGroupPublicKey[0] {
 		t.Fatalf("dkg group key not copied from caller: %x", got)
 	}
 

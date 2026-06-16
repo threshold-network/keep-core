@@ -80,6 +80,17 @@ func NewActiveRoastAttempt(
 	if len(dkgGroupPublicKey) == 0 {
 		return nil, fmt.Errorf("roast runner: dkg group public key is empty")
 	}
+	// The DKG group public key must be the one ctx was built from, not merely
+	// non-empty: ctx.AttemptSeed = SHA256(dkgGroupPublicKey || sessionID ||
+	// messageDigest), and this same key later feeds NextAttempt's retry-seed
+	// derivation. Binding ctx's hash (key A) to retry material from a different
+	// key B would make subsequent attempts diverge, so re-derive the seed and
+	// reject a mismatch (sessionID is already asserted == ctx.SessionID above).
+	if attempt.DeriveAttemptSeed(dkgGroupPublicKey, sessionID, ctx.MessageDigest) != ctx.AttemptSeed {
+		return nil, fmt.Errorf(
+			"roast runner: dkg group public key does not match the attempt context (seed mismatch)",
+		)
+	}
 
 	var rootCopy *[32]byte
 	if taprootMerkleRoot != nil {
@@ -89,7 +100,7 @@ func NewActiveRoastAttempt(
 
 	return &ActiveRoastAttempt{
 		sessionID:          sessionID,
-		context:            ctx,
+		context:            cloneAttemptContext(ctx),
 		contextHash:        ctx.Hash(),
 		handle:             handle,
 		electedCoordinator: elected,
@@ -101,8 +112,22 @@ func NewActiveRoastAttempt(
 // SessionID is the engine DKG session this attempt signs under.
 func (a *ActiveRoastAttempt) SessionID() string { return a.sessionID }
 
-// Context is the RFC-21 attempt context.
-func (a *ActiveRoastAttempt) Context() attempt.AttemptContext { return a.context }
+// Context is the RFC-21 attempt context. It returns a clone (its slice fields
+// copied) so a caller cannot mutate the binding's participant sets and make
+// Context().Hash() drift from the pinned ContextHash().
+func (a *ActiveRoastAttempt) Context() attempt.AttemptContext {
+	return cloneAttemptContext(a.context)
+}
+
+// cloneAttemptContext returns a copy of ctx with its slice fields
+// (IncludedSet, ExcludedSet, TransientlyParked) deep-copied, so the result
+// shares no backing arrays with the input. Scalar/array fields copy by value.
+func cloneAttemptContext(ctx attempt.AttemptContext) attempt.AttemptContext {
+	ctx.IncludedSet = append([]group.MemberIndex(nil), ctx.IncludedSet...)
+	ctx.ExcludedSet = append([]group.MemberIndex(nil), ctx.ExcludedSet...)
+	ctx.TransientlyParked = append([]group.MemberIndex(nil), ctx.TransientlyParked...)
+	return ctx
+}
 
 // ContextHash is the attempt-context hash (== Handle().ContextHash()).
 func (a *ActiveRoastAttempt) ContextHash() [attempt.MessageDigestLength]byte {
