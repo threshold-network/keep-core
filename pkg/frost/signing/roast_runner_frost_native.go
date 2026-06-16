@@ -379,10 +379,9 @@ func (r *interactiveSigningRunner) collectCommitments(
 }
 
 // collectShares fills `into` with each included member's inner FROST share
-// bytes (own already seeded), unwrapping each ShareSubmission envelope and
-// counting the first accepted body per sender. Every well-formed share is still
-// passed to the collector for retention, even after a sender's first - that is
-// where member equivocation is detected.
+// bytes (own already seeded), counting the first accepted body per sender, and
+// retains EVERY well-formed share in the collector - including a sender's later,
+// body-different ones - which is where member equivocation is detected.
 func (r *interactiveSigningRunner) collectShares(
 	ctx context.Context,
 	stream <-chan RunnerMessage,
@@ -396,47 +395,63 @@ func (r *interactiveSigningRunner) collectShares(
 		case <-ctx.Done():
 			return ctx.Err()
 		case msg := <-stream:
-			if msg.Attempt != contextHash {
-				continue
-			}
-			if _, want := included[msg.Sender]; !want {
-				continue
-			}
-			var sub roast.ShareSubmission
-			if err := sub.Unmarshal(msg.Payload); err != nil {
-				continue
-			}
-			// Bind the authenticated transport sender to the claimed submitter:
-			// a node embedding another member's id would otherwise fill that
-			// honest member's slot with garbage, drop their real share, and get
-			// them falsely blamed.
-			if sub.SubmitterID() != msg.Sender {
-				continue
-			}
-			// Authenticate + retain via the collector BEFORE the already-collected
-			// short-circuit. A body-different second signed share from a sender is
-			// exactly the member-equivocation evidence the collector is built to
-			// retain and emit (EquivocationKindShareConflict / DivergentShare);
-			// dropping it just because we already hold that sender's first share
-			// would let a double-signer go unrecorded. Retention is bounded (the
-			// collector keeps the first per submitter and only emits on the rest),
-			// and the bus delivers only body-different duplicates.
-			recordErr := r.collector.RecordShareSubmission(&sub)
-			if _, have := into[msg.Sender]; have {
-				continue
-			}
-			// Only an ACCEPTED share (err == nil: operator-sig valid, binds the
-			// elected coordinator AND the authoritative package) counts toward
-			// aggregation; a divergent/conflicting/unauthenticated share is
-			// retained above where applicable but never counted
-			// (ErrShareRetainedNotAccepted / ErrShareConflict / auth failure).
-			if recordErr != nil {
-				continue
-			}
-			into[msg.Sender] = append([]byte(nil), sub.SignatureShare...)
+			r.recordShareMessage(msg, contextHash, included, into)
 		}
 	}
-	return nil
+	// `into` is full, but the slot-filling share may have body-different
+	// duplicates already queued behind it on the stream. Drain and record them
+	// before Run aggregates and prunes the collector, else that queued member-
+	// equivocation evidence is lost (same rationale as the coordinator-package
+	// drain). Non-blocking and buffer-bounded; late arrivals are the blame path's
+	// concern.
+	for {
+		select {
+		case msg := <-stream:
+			r.recordShareMessage(msg, contextHash, included, into)
+		default:
+			return nil
+		}
+	}
+}
+
+// recordShareMessage validates a share-submission bus message, retains it in the
+// collector, and counts it toward `into` when it is the sender's first accepted
+// share. Recording BEFORE the already-collected check is what lets the collector
+// observe member equivocation (a body-different second signed share ->
+// EquivocationKindShareConflict / DivergentShare); a divergent / conflicting /
+// unauthenticated share is retained where applicable but never counted.
+// Retention is bounded (the collector keeps the first per submitter and only
+// emits on the rest), and the bus delivers only body-different duplicates.
+func (r *interactiveSigningRunner) recordShareMessage(
+	msg RunnerMessage,
+	contextHash [attempt.MessageDigestLength]byte,
+	included map[group.MemberIndex]struct{},
+	into map[group.MemberIndex][]byte,
+) {
+	if msg.Attempt != contextHash {
+		return
+	}
+	if _, want := included[msg.Sender]; !want {
+		return
+	}
+	var sub roast.ShareSubmission
+	if err := sub.Unmarshal(msg.Payload); err != nil {
+		return
+	}
+	// Bind the authenticated transport sender to the claimed submitter: a node
+	// embedding another member's id would otherwise fill that honest member's
+	// slot with garbage, drop their real share, and get them falsely blamed.
+	if sub.SubmitterID() != msg.Sender {
+		return
+	}
+	recordErr := r.collector.RecordShareSubmission(&sub)
+	if _, have := into[msg.Sender]; have {
+		return
+	}
+	if recordErr != nil {
+		return
+	}
+	into[msg.Sender] = append([]byte(nil), sub.SignatureShare...)
 }
 
 // recordBufferedCoordinatorPackages drains every signing package the elected

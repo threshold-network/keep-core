@@ -435,6 +435,52 @@ func TestInteractiveSigningRunner_RetainsMemberShareEquivocation(t *testing.T) {
 	}
 }
 
+// A body-different duplicate queued BEHIND the share that fills the final slot
+// must still be retained: collectShares stops counting once `into` is full, so
+// it must drain the remaining buffered shares before Run aggregates and prunes.
+func TestInteractiveSigningRunner_RetainsQueuedShareEquivocationAfterCollection(t *testing.T) {
+	included := []group.MemberIndex{1, 2}
+	runner, collector, contextHash, elected := buildEquivocationRunner(t, included)
+	signer := fixedTestSigner{}
+
+	if err := collector.BeginAttempt(contextHash[:], elected, included); err != nil {
+		t.Fatalf("collector begin: %v", err)
+	}
+	authEnvelope, pkgBodyHash := craftSigningPackage(t, contextHash, elected, []byte("authoritative-package"), signer)
+	authPkg := &roast.SigningPackage{}
+	if err := authPkg.Unmarshal(authEnvelope); err != nil {
+		t.Fatalf("unmarshal authoritative: %v", err)
+	}
+	if err := collector.RecordSigningPackage(authPkg); err != nil {
+		t.Fatalf("record authoritative: %v", err)
+	}
+
+	// Member 2's first share fills the final slot; its body-different duplicate is
+	// queued right behind it, so the collection loop exits before reading it and
+	// only the post-completion drain can retain it.
+	share1 := craftShareSubmission(t, contextHash, 1, elected, pkgBodyHash, []byte("share-1"), signer)
+	share2a := craftShareSubmission(t, contextHash, 2, elected, pkgBodyHash, []byte("share-2-a"), signer)
+	share2b := craftShareSubmission(t, contextHash, 2, elected, pkgBodyHash, []byte("share-2-b"), signer)
+	stream := make(chan RunnerMessage, 8)
+	stream <- RunnerMessage{Type: RunnerMsgShareSubmission, Sender: 1, Attempt: contextHash, Payload: share1}
+	stream <- RunnerMessage{Type: RunnerMsgShareSubmission, Sender: 2, Attempt: contextHash, Payload: share2a}
+	stream <- RunnerMessage{Type: RunnerMsgShareSubmission, Sender: 2, Attempt: contextHash, Payload: share2b}
+
+	evidence := captureEquivocationEvidence(t)
+	into := map[group.MemberIndex][]byte{}
+	if err := runner.collectShares(context.Background(), stream, contextHash, included, into); err != nil {
+		t.Fatalf("collect shares: %v", err)
+	}
+
+	if string(into[1]) != "share-1" || string(into[2]) != "share-2-a" {
+		t.Fatalf("unexpected counted shares: 1=%q 2=%q", into[1], into[2])
+	}
+	got := evidence()
+	if len(got) != 1 || got[0].Kind != roast.EquivocationKindShareConflict || got[0].Sender != 2 {
+		t.Fatalf("expected one queued share conflict from member 2, got %+v", got)
+	}
+}
+
 func TestNewInteractiveSigningRunner_RejectsInvalidConstruction(t *testing.T) {
 	// A valid baseline to vary one field at a time.
 	included := []group.MemberIndex{1, 2, 3}
