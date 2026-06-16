@@ -399,12 +399,12 @@ func (r *interactiveSigningRunner) collectShares(
 		}
 	}
 	// `into` is full, but the slot-filling share may have body-different
-	// duplicates already queued behind it on the stream. Drain and record them
-	// before Run aggregates and prunes the collector, else that queued member-
-	// equivocation evidence is lost (same rationale as the coordinator-package
-	// drain). Non-blocking and buffer-bounded; late arrivals are the blame path's
-	// concern.
-	for {
+	// duplicates already queued behind it on the stream. Record ONLY those
+	// buffered at entry: the bound is the queue length now, so a peer that keeps
+	// the stream non-empty (e.g. flooding body-different shares) cannot starve a
+	// receive-until-empty loop and livelock the drain, stalling aggregation. Late
+	// arrivals are the blame path's concern.
+	for i, n := 0, len(stream); i < n; i++ {
 		select {
 		case msg := <-stream:
 			r.recordShareMessage(msg, contextHash, included, into)
@@ -412,6 +412,7 @@ func (r *interactiveSigningRunner) collectShares(
 			return nil
 		}
 	}
+	return nil
 }
 
 // recordShareMessage validates a share-submission bus message, retains it in the
@@ -454,20 +455,21 @@ func (r *interactiveSigningRunner) recordShareMessage(
 	into[msg.Sender] = append([]byte(nil), sub.SignatureShare...)
 }
 
-// recordBufferedCoordinatorPackages drains every signing package the elected
-// coordinator has already broadcast for this attempt and records each, so the
-// collector can surface coordinator equivocation. The caller MUST have recorded
-// the authoritative package first, so a body-different one here records as the
-// conflicting package (not the authoritative). Non-blocking: it retains the
-// duplicates already buffered; continuous monitoring across a real transport is
-// the blame path's concern. RecordSigningPackage authenticates the coordinator
-// signature, so a forged-sender package is rejected rather than retained.
+// recordBufferedCoordinatorPackages records the signing packages the elected
+// coordinator has already broadcast for this attempt that are buffered at entry,
+// so the collector can surface coordinator equivocation. The caller MUST have
+// recorded the authoritative package first, so a body-different one here records
+// as the conflicting package (not the authoritative). Bounded by the queue
+// length at entry so a flooding peer cannot livelock a receive-until-empty loop;
+// continuous monitoring across a real transport is the blame path's concern.
+// RecordSigningPackage authenticates the coordinator signature, so a
+// forged-sender package is rejected rather than retained.
 func (r *interactiveSigningRunner) recordBufferedCoordinatorPackages(
 	stream <-chan RunnerMessage,
 	elected group.MemberIndex,
 	contextHash [attempt.MessageDigestLength]byte,
 ) {
-	for {
+	for i, n := 0, len(stream); i < n; i++ {
 		select {
 		case msg := <-stream:
 			if msg.Attempt != contextHash || msg.Sender != elected {

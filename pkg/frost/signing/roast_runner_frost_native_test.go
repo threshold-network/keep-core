@@ -481,6 +481,62 @@ func TestInteractiveSigningRunner_RetainsQueuedShareEquivocationAfterCollection(
 	}
 }
 
+// The post-completion drain must be bounded: a peer that keeps the share stream
+// non-empty (flooding body-different shares) must not livelock collectShares
+// once enough valid shares are already collected. With `into` pre-filled only
+// the drain runs, and it must return promptly despite the continuous flood.
+func TestInteractiveSigningRunner_DrainDoesNotLivelockUnderShareFlood(t *testing.T) {
+	included := []group.MemberIndex{1, 2}
+	runner, collector, contextHash, elected := buildEquivocationRunner(t, included)
+	signer := fixedTestSigner{}
+	if err := collector.BeginAttempt(contextHash[:], elected, included); err != nil {
+		t.Fatalf("collector begin: %v", err)
+	}
+	authEnvelope, pkgBodyHash := craftSigningPackage(t, contextHash, elected, []byte("authoritative-package"), signer)
+	authPkg := &roast.SigningPackage{}
+	if err := authPkg.Unmarshal(authEnvelope); err != nil {
+		t.Fatalf("unmarshal authoritative: %v", err)
+	}
+	if err := collector.RecordSigningPackage(authPkg); err != nil {
+		t.Fatalf("record authoritative: %v", err)
+	}
+
+	floodEnvelope := craftShareSubmission(t, contextHash, 2, elected, pkgBodyHash, []byte("flood"), signer)
+	floodMsg := RunnerMessage{Type: RunnerMsgShareSubmission, Sender: 2, Attempt: contextHash, Payload: floodEnvelope}
+	stream := make(chan RunnerMessage, 8)
+	for i := 0; i < cap(stream); i++ {
+		stream <- floodMsg // full at entry, so the bound is actually exercised
+	}
+	stop := make(chan struct{})
+	floodDone := make(chan struct{})
+	go func() {
+		defer close(floodDone)
+		for {
+			select {
+			case <-stop:
+				return
+			case stream <- floodMsg: // keep the stream non-empty as the drain reads
+			}
+		}
+	}()
+
+	// `into` already complete -> the collection loop is skipped; only the drain runs.
+	into := map[group.MemberIndex][]byte{1: []byte("a"), 2: []byte("b")}
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		_ = runner.collectShares(context.Background(), stream, contextHash, included, into)
+	}()
+	select {
+	case <-returned:
+		// Bounded drain returned despite the flood.
+	case <-time.After(2 * time.Second):
+		t.Fatal("collectShares drain livelocked under share flood")
+	}
+	close(stop)
+	<-floodDone
+}
+
 func TestNewInteractiveSigningRunner_RejectsInvalidConstruction(t *testing.T) {
 	// A valid baseline to vary one field at a time.
 	included := []group.MemberIndex{1, 2, 3}
