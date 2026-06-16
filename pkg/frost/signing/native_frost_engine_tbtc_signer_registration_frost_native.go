@@ -74,6 +74,10 @@ typedef TbtcSignerResult (*tbtc_interactive_session_abort_fn)(
   const uint8_t* request_ptr,
   size_t request_len
 );
+typedef TbtcSignerResult (*tbtc_interactive_aggregate_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
 typedef TbtcSignerResult (*tbtc_start_sign_round_fn)(
   const uint8_t* request_ptr,
   size_t request_len
@@ -267,6 +271,18 @@ static TbtcSignerResult tbtc_signer_interactive_session_abort(const uint8_t* req
   }
 
   return interactive_session_abort(request_ptr, request_len);
+}
+
+static TbtcSignerResult tbtc_signer_interactive_aggregate(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_interactive_aggregate_fn interactive_aggregate = (tbtc_interactive_aggregate_fn)dlsym(
+    RTLD_DEFAULT,
+    "frost_tbtc_interactive_aggregate"
+  );
+  if (interactive_aggregate == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+
+  return interactive_aggregate(request_ptr, request_len);
 }
 
 static TbtcSignerResult tbtc_signer_start_sign_round(const uint8_t* request_ptr, size_t request_len) {
@@ -3082,6 +3098,153 @@ func callBuildTaggedTBTCSignerInteractiveSessionAbort(requestPayload []byte) ([]
 		requestPayload,
 		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
 			return C.tbtc_signer_interactive_session_abort(requestPtr, requestLen)
+		},
+	)
+}
+
+// ----------------------------------------------------------------------------
+// Phase 7.3 interactive aggregation bridge.
+//
+// Aggregates the responsive subset's signature shares for an interactive
+// attempt into the BIP-340 signature. The engine resolves the verifying
+// material from the session's own DKG state (no public key package crosses
+// here). On a share-verification failure it returns the candidate culprits in
+// the error payload; InteractiveAggregate surfaces them as a typed
+// InteractiveAggregateShareVerificationError for the Go host's envelope-bound
+// blame adjudication. Additive: no Go caller yet.
+// ----------------------------------------------------------------------------
+
+type buildTaggedTBTCSignerInteractiveAggregateRequest struct {
+	SessionID            string                                           `json:"session_id"`
+	AttemptID            string                                           `json:"attempt_id"`
+	SigningPackageHex    string                                           `json:"signing_package_hex"`
+	SignatureShares      []buildTaggedTBTCSignerNativeFROSTSignatureShare `json:"signature_shares"`
+	TaprootMerkleRootHex *string                                          `json:"taproot_merkle_root_hex,omitempty"`
+}
+
+type buildTaggedTBTCSignerInteractiveAggregateResponse struct {
+	SessionID    string `json:"session_id"`
+	AttemptID    string `json:"attempt_id"`
+	SignatureHex string `json:"signature_hex"`
+}
+
+func (bttse *buildTaggedTBTCSignerEngine) InteractiveAggregate(
+	sessionID string,
+	attemptID string,
+	signingPackage []byte,
+	signatureShares []nativeFROSTSignatureShare,
+	taprootMerkleRoot *[32]byte,
+) (signature []byte, err error) {
+	requestPayload, err := buildTaggedTBTCSignerInteractiveAggregateRequestPayload(
+		sessionID,
+		attemptID,
+		signingPackage,
+		signatureShares,
+		taprootMerkleRoot,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	responsePayload, err := callBuildTaggedTBTCSignerInteractiveAggregate(requestPayload)
+	if err != nil {
+		// Surface a share-verification failure as the typed error carrying the
+		// candidate culprits; any other error passes through unchanged.
+		return nil, interpretInteractiveAggregateError(sessionID, attemptID, err)
+	}
+
+	return decodeBuildTaggedTBTCSignerInteractiveAggregateResponse(responsePayload)
+}
+
+func buildTaggedTBTCSignerInteractiveAggregateRequestPayload(
+	sessionID string,
+	attemptID string,
+	signingPackage []byte,
+	signatureShares []nativeFROSTSignatureShare,
+	taprootMerkleRoot *[32]byte,
+) ([]byte, error) {
+	if sessionID == "" {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveAggregate", "session ID is empty")
+	}
+	if attemptID == "" {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveAggregate", "attempt ID is empty")
+	}
+	if len(signingPackage) == 0 {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveAggregate", "signing package is empty")
+	}
+	if len(signatureShares) == 0 {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveAggregate", "signature shares are empty")
+	}
+
+	requestShares := make(
+		[]buildTaggedTBTCSignerNativeFROSTSignatureShare,
+		0,
+		len(signatureShares),
+	)
+	for i, signatureShare := range signatureShares {
+		if signatureShare.Identifier == "" {
+			return nil, buildTaggedTBTCSignerOperationError(
+				"InteractiveAggregate",
+				fmt.Sprintf("signature share [%d] identifier is empty", i),
+			)
+		}
+		if len(signatureShare.Data) == 0 {
+			return nil, buildTaggedTBTCSignerOperationError(
+				"InteractiveAggregate",
+				fmt.Sprintf("signature share [%d] data is empty", i),
+			)
+		}
+		requestShares = append(
+			requestShares,
+			buildTaggedTBTCSignerNativeFROSTSignatureShare{
+				Identifier: signatureShare.Identifier,
+				DataHex:    hex.EncodeToString(signatureShare.Data),
+			},
+		)
+	}
+
+	var taprootMerkleRootHex *string
+	if taprootMerkleRoot != nil {
+		encoded := hex.EncodeToString(taprootMerkleRoot[:])
+		taprootMerkleRootHex = &encoded
+	}
+
+	return buildTaggedTBTCSignerMarshalRequest(
+		"InteractiveAggregate",
+		buildTaggedTBTCSignerInteractiveAggregateRequest{
+			SessionID:            sessionID,
+			AttemptID:            attemptID,
+			SigningPackageHex:    hex.EncodeToString(signingPackage),
+			SignatureShares:      requestShares,
+			TaprootMerkleRootHex: taprootMerkleRootHex,
+		},
+	)
+}
+
+func decodeBuildTaggedTBTCSignerInteractiveAggregateResponse(
+	responsePayload []byte,
+) ([]byte, error) {
+	var response buildTaggedTBTCSignerInteractiveAggregateResponse
+	if err := json.Unmarshal(responsePayload, &response); err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"InteractiveAggregate",
+			fmt.Sprintf("cannot decode response payload: %v", err),
+		)
+	}
+
+	return buildTaggedTBTCSignerDecodeHexField(
+		"InteractiveAggregate",
+		"response signature",
+		response.SignatureHex,
+	)
+}
+
+func callBuildTaggedTBTCSignerInteractiveAggregate(requestPayload []byte) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"InteractiveAggregate",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_interactive_aggregate(requestPtr, requestLen)
 		},
 	)
 }
