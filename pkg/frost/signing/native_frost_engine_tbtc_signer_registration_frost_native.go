@@ -58,6 +58,22 @@ typedef TbtcSignerResult (*tbtc_verify_signature_share_fn)(
   const uint8_t* request_ptr,
   size_t request_len
 );
+typedef TbtcSignerResult (*tbtc_interactive_session_open_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
+typedef TbtcSignerResult (*tbtc_interactive_round1_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
+typedef TbtcSignerResult (*tbtc_interactive_round2_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
+typedef TbtcSignerResult (*tbtc_interactive_session_abort_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
 typedef TbtcSignerResult (*tbtc_start_sign_round_fn)(
   const uint8_t* request_ptr,
   size_t request_len
@@ -203,6 +219,54 @@ static TbtcSignerResult tbtc_signer_verify_signature_share(const uint8_t* reques
   }
 
   return verify_signature_share(request_ptr, request_len);
+}
+
+static TbtcSignerResult tbtc_signer_interactive_session_open(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_interactive_session_open_fn interactive_session_open = (tbtc_interactive_session_open_fn)dlsym(
+    RTLD_DEFAULT,
+    "frost_tbtc_interactive_session_open"
+  );
+  if (interactive_session_open == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+
+  return interactive_session_open(request_ptr, request_len);
+}
+
+static TbtcSignerResult tbtc_signer_interactive_round1(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_interactive_round1_fn interactive_round1 = (tbtc_interactive_round1_fn)dlsym(
+    RTLD_DEFAULT,
+    "frost_tbtc_interactive_round1"
+  );
+  if (interactive_round1 == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+
+  return interactive_round1(request_ptr, request_len);
+}
+
+static TbtcSignerResult tbtc_signer_interactive_round2(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_interactive_round2_fn interactive_round2 = (tbtc_interactive_round2_fn)dlsym(
+    RTLD_DEFAULT,
+    "frost_tbtc_interactive_round2"
+  );
+  if (interactive_round2 == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+
+  return interactive_round2(request_ptr, request_len);
+}
+
+static TbtcSignerResult tbtc_signer_interactive_session_abort(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_interactive_session_abort_fn interactive_session_abort = (tbtc_interactive_session_abort_fn)dlsym(
+    RTLD_DEFAULT,
+    "frost_tbtc_interactive_session_abort"
+  );
+  if (interactive_session_abort == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+
+  return interactive_session_abort(request_ptr, request_len);
 }
 
 static TbtcSignerResult tbtc_signer_start_sign_round(const uint8_t* request_ptr, size_t request_len) {
@@ -2578,4 +2642,446 @@ func InstallNativeTBTCSignerConfig(
 	}
 
 	return result, nil
+}
+
+// ----------------------------------------------------------------------------
+// Phase 7.3 interactive signing session bridge: open / round1 / round2 / abort.
+//
+// The hardened interactive path - unlike the stateless nonce contract, secret
+// nonces NEVER cross this boundary: the engine generates, holds, consumes, and
+// zeroizes them keyed by (session_id, attempt_id). The caller exchanges only
+// public commitments, the coordinator's signing package, and signature shares.
+// Additive: no Go caller yet (the orchestrator adopts these in a later
+// increment). interactive_aggregate, whose failure path surfaces candidate
+// culprits, lands in a separate PR with its own structured error.
+// ----------------------------------------------------------------------------
+
+type buildTaggedTBTCSignerInteractiveAttemptContext struct {
+	AttemptNumber                   uint32   `json:"attempt_number"`
+	CoordinatorIdentifier           uint16   `json:"coordinator_identifier"`
+	IncludedParticipants            []uint16 `json:"included_participants"`
+	IncludedParticipantsFingerprint string   `json:"included_participants_fingerprint"`
+	AttemptID                       string   `json:"attempt_id"`
+}
+
+type buildTaggedTBTCSignerInteractiveSessionOpenRequest struct {
+	SessionID            string                                         `json:"session_id"`
+	MemberIdentifier     uint16                                         `json:"member_identifier"`
+	MessageHex           string                                         `json:"message_hex"`
+	KeyGroup             string                                         `json:"key_group"`
+	Threshold            uint16                                         `json:"threshold"`
+	TaprootMerkleRootHex *string                                        `json:"taproot_merkle_root_hex,omitempty"`
+	AttemptContext       buildTaggedTBTCSignerInteractiveAttemptContext `json:"attempt_context"`
+}
+
+type buildTaggedTBTCSignerInteractiveSessionOpenResponse struct {
+	SessionID  string `json:"session_id"`
+	AttemptID  string `json:"attempt_id"`
+	Idempotent bool   `json:"idempotent"`
+}
+
+type buildTaggedTBTCSignerInteractiveRound1Request struct {
+	SessionID        string `json:"session_id"`
+	AttemptID        string `json:"attempt_id"`
+	MemberIdentifier uint16 `json:"member_identifier"`
+}
+
+type buildTaggedTBTCSignerInteractiveRound1Response struct {
+	CommitmentsHex string `json:"commitments_hex"`
+}
+
+type buildTaggedTBTCSignerInteractiveRound2Request struct {
+	SessionID         string `json:"session_id"`
+	AttemptID         string `json:"attempt_id"`
+	MemberIdentifier  uint16 `json:"member_identifier"`
+	SigningPackageHex string `json:"signing_package_hex"`
+}
+
+type buildTaggedTBTCSignerInteractiveRound2Response struct {
+	SessionID         string `json:"session_id"`
+	AttemptID         string `json:"attempt_id"`
+	SignatureShareHex string `json:"signature_share_hex"`
+}
+
+type buildTaggedTBTCSignerInteractiveSessionAbortRequest struct {
+	SessionID string  `json:"session_id"`
+	AttemptID *string `json:"attempt_id,omitempty"`
+}
+
+type buildTaggedTBTCSignerInteractiveSessionAbortResponse struct {
+	SessionID string `json:"session_id"`
+	Aborted   bool   `json:"aborted"`
+}
+
+func (bttse *buildTaggedTBTCSignerEngine) InteractiveSessionOpen(
+	sessionID string,
+	memberIdentifier uint16,
+	message []byte,
+	keyGroup string,
+	threshold uint16,
+	taprootMerkleRoot *[32]byte,
+	attemptContext NativeInteractiveAttemptContext,
+) (*NativeInteractiveSessionOpenResult, error) {
+	requestPayload, err := buildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(
+		sessionID,
+		memberIdentifier,
+		message,
+		keyGroup,
+		threshold,
+		taprootMerkleRoot,
+		attemptContext,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	responsePayload, err := callBuildTaggedTBTCSignerInteractiveSessionOpen(requestPayload)
+	if err != nil {
+		return nil, err
+	}
+
+	return decodeBuildTaggedTBTCSignerInteractiveSessionOpenResponse(responsePayload)
+}
+
+func (bttse *buildTaggedTBTCSignerEngine) InteractiveRound1(
+	sessionID string,
+	attemptID string,
+	memberIdentifier uint16,
+) (commitments []byte, err error) {
+	requestPayload, err := buildTaggedTBTCSignerInteractiveRound1RequestPayload(
+		sessionID,
+		attemptID,
+		memberIdentifier,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	responsePayload, err := callBuildTaggedTBTCSignerInteractiveRound1(requestPayload)
+	if err != nil {
+		return nil, err
+	}
+
+	return decodeBuildTaggedTBTCSignerInteractiveRound1Response(responsePayload)
+}
+
+func (bttse *buildTaggedTBTCSignerEngine) InteractiveRound2(
+	sessionID string,
+	attemptID string,
+	memberIdentifier uint16,
+	signingPackage []byte,
+) (signatureShare []byte, err error) {
+	requestPayload, err := buildTaggedTBTCSignerInteractiveRound2RequestPayload(
+		sessionID,
+		attemptID,
+		memberIdentifier,
+		signingPackage,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	responsePayload, err := callBuildTaggedTBTCSignerInteractiveRound2(requestPayload)
+	if err != nil {
+		return nil, err
+	}
+
+	return decodeBuildTaggedTBTCSignerInteractiveRound2Response(responsePayload)
+}
+
+func (bttse *buildTaggedTBTCSignerEngine) InteractiveSessionAbort(
+	sessionID string,
+	attemptID *string,
+) (*NativeInteractiveSessionAbortResult, error) {
+	requestPayload, err := buildTaggedTBTCSignerInteractiveSessionAbortRequestPayload(
+		sessionID,
+		attemptID,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	responsePayload, err := callBuildTaggedTBTCSignerInteractiveSessionAbort(requestPayload)
+	if err != nil {
+		return nil, err
+	}
+
+	return decodeBuildTaggedTBTCSignerInteractiveSessionAbortResponse(responsePayload)
+}
+
+func buildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(
+	sessionID string,
+	memberIdentifier uint16,
+	message []byte,
+	keyGroup string,
+	threshold uint16,
+	taprootMerkleRoot *[32]byte,
+	attemptContext NativeInteractiveAttemptContext,
+) ([]byte, error) {
+	if sessionID == "" {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveSessionOpen", "session ID is empty")
+	}
+	if memberIdentifier == 0 {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveSessionOpen", "member identifier is zero")
+	}
+	if len(message) == 0 {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveSessionOpen", "message is empty")
+	}
+	if keyGroup == "" {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveSessionOpen", "key group is empty")
+	}
+	if threshold == 0 {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveSessionOpen", "threshold is zero")
+	}
+	if attemptContext.AttemptID == "" {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveSessionOpen", "attempt context attempt ID is empty")
+	}
+	if attemptContext.CoordinatorIdentifier == 0 {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveSessionOpen", "attempt context coordinator identifier is zero")
+	}
+	if len(attemptContext.IncludedParticipants) == 0 {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveSessionOpen", "attempt context included participants are empty")
+	}
+
+	// attempt.AttemptContext numbers attempts 0-based; the engine's wire
+	// attempt_number is 1-based and rejects 0 ("must be at least 1"). Convert
+	// here so the first attempt (RFC 0) is sent as wire 1 rather than rejected
+	// before round 1. The engine subtracts 1 internally for its shuffle math.
+	wireAttemptNumber := attemptContext.AttemptNumber + 1
+	if wireAttemptNumber == 0 {
+		// attemptContext.AttemptNumber was the max uint32; +1 wrapped to 0.
+		return nil, buildTaggedTBTCSignerOperationError(
+			"InteractiveSessionOpen",
+			"attempt number overflows the 1-based wire encoding",
+		)
+	}
+
+	var taprootMerkleRootHex *string
+	if taprootMerkleRoot != nil {
+		encoded := hex.EncodeToString(taprootMerkleRoot[:])
+		taprootMerkleRootHex = &encoded
+	}
+
+	return buildTaggedTBTCSignerMarshalRequest(
+		"InteractiveSessionOpen",
+		buildTaggedTBTCSignerInteractiveSessionOpenRequest{
+			SessionID:            sessionID,
+			MemberIdentifier:     memberIdentifier,
+			MessageHex:           hex.EncodeToString(message),
+			KeyGroup:             keyGroup,
+			Threshold:            threshold,
+			TaprootMerkleRootHex: taprootMerkleRootHex,
+			AttemptContext: buildTaggedTBTCSignerInteractiveAttemptContext{
+				AttemptNumber:                   wireAttemptNumber,
+				CoordinatorIdentifier:           attemptContext.CoordinatorIdentifier,
+				IncludedParticipants:            append([]uint16(nil), attemptContext.IncludedParticipants...),
+				IncludedParticipantsFingerprint: attemptContext.IncludedParticipantsFingerprint,
+				AttemptID:                       attemptContext.AttemptID,
+			},
+		},
+	)
+}
+
+func decodeBuildTaggedTBTCSignerInteractiveSessionOpenResponse(
+	responsePayload []byte,
+) (*NativeInteractiveSessionOpenResult, error) {
+	var response buildTaggedTBTCSignerInteractiveSessionOpenResponse
+	if err := json.Unmarshal(responsePayload, &response); err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"InteractiveSessionOpen",
+			fmt.Sprintf("cannot decode response payload: %v", err),
+		)
+	}
+	if response.SessionID == "" {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveSessionOpen", "response session ID is empty")
+	}
+	if response.AttemptID == "" {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveSessionOpen", "response attempt ID is empty")
+	}
+
+	return &NativeInteractiveSessionOpenResult{
+		SessionID:  response.SessionID,
+		AttemptID:  response.AttemptID,
+		Idempotent: response.Idempotent,
+	}, nil
+}
+
+func buildTaggedTBTCSignerInteractiveRound1RequestPayload(
+	sessionID string,
+	attemptID string,
+	memberIdentifier uint16,
+) ([]byte, error) {
+	if sessionID == "" {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveRound1", "session ID is empty")
+	}
+	if attemptID == "" {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveRound1", "attempt ID is empty")
+	}
+	if memberIdentifier == 0 {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveRound1", "member identifier is zero")
+	}
+
+	return buildTaggedTBTCSignerMarshalRequest(
+		"InteractiveRound1",
+		buildTaggedTBTCSignerInteractiveRound1Request{
+			SessionID:        sessionID,
+			AttemptID:        attemptID,
+			MemberIdentifier: memberIdentifier,
+		},
+	)
+}
+
+func decodeBuildTaggedTBTCSignerInteractiveRound1Response(
+	responsePayload []byte,
+) ([]byte, error) {
+	var response buildTaggedTBTCSignerInteractiveRound1Response
+	if err := json.Unmarshal(responsePayload, &response); err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"InteractiveRound1",
+			fmt.Sprintf("cannot decode response payload: %v", err),
+		)
+	}
+
+	return buildTaggedTBTCSignerDecodeHexField(
+		"InteractiveRound1",
+		"response commitments",
+		response.CommitmentsHex,
+	)
+}
+
+func buildTaggedTBTCSignerInteractiveRound2RequestPayload(
+	sessionID string,
+	attemptID string,
+	memberIdentifier uint16,
+	signingPackage []byte,
+) ([]byte, error) {
+	if sessionID == "" {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveRound2", "session ID is empty")
+	}
+	if attemptID == "" {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveRound2", "attempt ID is empty")
+	}
+	if memberIdentifier == 0 {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveRound2", "member identifier is zero")
+	}
+	if len(signingPackage) == 0 {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveRound2", "signing package is empty")
+	}
+
+	return buildTaggedTBTCSignerMarshalRequest(
+		"InteractiveRound2",
+		buildTaggedTBTCSignerInteractiveRound2Request{
+			SessionID:         sessionID,
+			AttemptID:         attemptID,
+			MemberIdentifier:  memberIdentifier,
+			SigningPackageHex: hex.EncodeToString(signingPackage),
+		},
+	)
+}
+
+func decodeBuildTaggedTBTCSignerInteractiveRound2Response(
+	responsePayload []byte,
+) ([]byte, error) {
+	var response buildTaggedTBTCSignerInteractiveRound2Response
+	if err := json.Unmarshal(responsePayload, &response); err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"InteractiveRound2",
+			fmt.Sprintf("cannot decode response payload: %v", err),
+		)
+	}
+
+	return buildTaggedTBTCSignerDecodeHexField(
+		"InteractiveRound2",
+		"response signature share",
+		response.SignatureShareHex,
+	)
+}
+
+func buildTaggedTBTCSignerInteractiveSessionAbortRequestPayload(
+	sessionID string,
+	attemptID *string,
+) ([]byte, error) {
+	if sessionID == "" {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveSessionAbort", "session ID is empty")
+	}
+
+	var requestAttemptID *string
+	if attemptID != nil {
+		if *attemptID == "" {
+			return nil, buildTaggedTBTCSignerOperationError(
+				"InteractiveSessionAbort",
+				"attempt ID is set but empty",
+			)
+		}
+		copied := *attemptID
+		requestAttemptID = &copied
+	}
+
+	return buildTaggedTBTCSignerMarshalRequest(
+		"InteractiveSessionAbort",
+		buildTaggedTBTCSignerInteractiveSessionAbortRequest{
+			SessionID: sessionID,
+			AttemptID: requestAttemptID,
+		},
+	)
+}
+
+func decodeBuildTaggedTBTCSignerInteractiveSessionAbortResponse(
+	responsePayload []byte,
+) (*NativeInteractiveSessionAbortResult, error) {
+	var response buildTaggedTBTCSignerInteractiveSessionAbortResponse
+	if err := json.Unmarshal(responsePayload, &response); err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"InteractiveSessionAbort",
+			fmt.Sprintf("cannot decode response payload: %v", err),
+		)
+	}
+	if response.SessionID == "" {
+		return nil, buildTaggedTBTCSignerOperationError("InteractiveSessionAbort", "response session ID is empty")
+	}
+
+	return &NativeInteractiveSessionAbortResult{
+		SessionID: response.SessionID,
+		Aborted:   response.Aborted,
+	}, nil
+}
+
+func callBuildTaggedTBTCSignerInteractiveSessionOpen(requestPayload []byte) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"InteractiveSessionOpen",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_interactive_session_open(requestPtr, requestLen)
+		},
+	)
+}
+
+func callBuildTaggedTBTCSignerInteractiveRound1(requestPayload []byte) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"InteractiveRound1",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_interactive_round1(requestPtr, requestLen)
+		},
+	)
+}
+
+func callBuildTaggedTBTCSignerInteractiveRound2(requestPayload []byte) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"InteractiveRound2",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_interactive_round2(requestPtr, requestLen)
+		},
+	)
+}
+
+func callBuildTaggedTBTCSignerInteractiveSessionAbort(requestPayload []byte) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"InteractiveSessionAbort",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_interactive_session_abort(requestPtr, requestLen)
+		},
+	)
 }
