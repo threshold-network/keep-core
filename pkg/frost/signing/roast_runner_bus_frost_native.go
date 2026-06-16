@@ -125,7 +125,17 @@ func (s *RunnerBusSubscriber) deliver(hash [sha256.Size]byte, msg RunnerMessage)
 	s.mu.Unlock()
 
 	if stream := s.streamFor(msg.Type); stream != nil {
-		stream <- msg
+		// Own the payload bytes per delivery: RunnerMessage.Payload is a slice,
+		// so without this every queued message would alias one backing array.
+		// The broadcaster mutating/reusing it after Broadcast returns, or one
+		// receiver mutating what it read, would then change another subscriber's
+		// view - and the body the bus hashed for dedup could differ from the body
+		// delivered, silently destroying the equivocation evidence this bus
+		// exists to preserve. The dedup hash was computed from these same bytes,
+		// so the copy is byte-identical and consistent with it.
+		delivered := msg
+		delivered.Payload = append([]byte(nil), msg.Payload...)
+		stream <- delivered
 	}
 }
 

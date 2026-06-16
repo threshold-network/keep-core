@@ -99,3 +99,30 @@ func TestInProcessRunnerBus_LateSubscriberMissesPastMessages(t *testing.T) {
 	default:
 	}
 }
+
+// Each delivered message must own its payload bytes: mutating the broadcaster's
+// slice after Broadcast, or one subscriber's received slice, must not change
+// another subscriber's view - otherwise the body the bus hashed for dedup could
+// differ from the body delivered, destroying equivocation evidence.
+func TestInProcessRunnerBus_OwnsDeliveredPayload(t *testing.T) {
+	bus := NewInProcessRunnerBus(8)
+	a := bus.Subscribe()
+	b := bus.Subscribe()
+
+	payload := []byte{0xaa, 0xbb}
+	bus.Broadcast(testRunnerMessage(RunnerMsgSigningPackage, 1, payload))
+
+	// Mutate the broadcaster's original slice after Broadcast returns.
+	payload[0] = 0xff
+	msgA := recvOrFail(t, a.SigningPackages(), "package (a)")
+	if msgA.Payload[0] != 0xaa {
+		t.Fatalf("subscriber a saw the broadcaster's post-broadcast mutation: %x", msgA.Payload)
+	}
+
+	// Mutating a's received payload must not corrupt b's.
+	msgA.Payload[0] = 0xee
+	msgB := recvOrFail(t, b.SigningPackages(), "package (b)")
+	if msgB.Payload[0] != 0xaa {
+		t.Fatalf("subscriber b's payload was corrupted by a's mutation: %x", msgB.Payload)
+	}
+}
