@@ -13574,3 +13574,225 @@ fn build_taproot_tx_request_omits_absent_script_tree_hex() {
             .expect("a payload omitting script_tree_hex must deserialize");
     assert!(round_trip.script_tree_hex.is_none());
 }
+
+#[test]
+fn verify_signature_share_verdicts_match_aggregate_and_handle_edges() {
+    use crate::api::ShareVerificationVerdict;
+
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let session_id = "verify-share-session";
+    let key_group = "interactive-test-key-group";
+    let message = [0x77u8; 32];
+    let included = [1u16, 2];
+    let key_packages = ensure_interactive_dkg_session(session_id, key_group);
+
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("opens");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let member2_nonces = member2.nonces_hex.clone();
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+    // Member 1's valid share (engine round2); member 2's valid share (stateless).
+    let round2 = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect("round 2 share");
+    let member2_valid = sign_share(SignShareRequest {
+        signing_package_hex: signing_package_hex.clone(),
+        nonces_hex: member2_nonces,
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 valid share");
+
+    // Member 2's INVALID share: validly signed over a DIFFERENT package.
+    let bogus_member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("bogus member 2 nonces");
+    let other_message = [0x88u8; 32];
+    let other_package = interactive_package_for_test(
+        &other_message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&2].identifier.clone(),
+                data_hex: bogus_member2.commitment.data_hex.clone(),
+            },
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: bogus_member2.commitment.data_hex,
+            },
+        ],
+    );
+    let bogus_share = sign_share(SignShareRequest {
+        signing_package_hex: other_package,
+        nonces_hex: bogus_member2.nonces_hex,
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("bogus member 2 share");
+
+    let verdict = |share_hex: String, member: u16| {
+        verify_signature_share(crate::api::VerifySignatureShareRequest {
+            session_id: session_id.to_string(),
+            signing_package_hex: signing_package_hex.clone(),
+            signature_share_hex: share_hex,
+            member_identifier: member,
+            taproot_merkle_root_hex: None,
+        })
+        .expect("verify")
+        .verdict
+    };
+
+    // Valid shares verify Valid; the wrong-package share is Invalid.
+    assert_eq!(
+        verdict(round2.signature_share_hex.clone(), 1),
+        ShareVerificationVerdict::Valid
+    );
+    assert_eq!(
+        verdict(member2_valid.signature_share.data_hex.clone(), 2),
+        ShareVerificationVerdict::Valid
+    );
+    assert_eq!(
+        verdict(bogus_share.signature_share.data_hex.clone(), 2),
+        ShareVerificationVerdict::Invalid
+    );
+
+    // Undecodable member share bytes, WITH established context (member 2 is in
+    // this group, session ready) -> Invalid (self-incriminating member fault).
+    assert_eq!(
+        verdict("ee".to_string(), 2),
+        ShareVerificationVerdict::Invalid
+    );
+    // A member with no verifying share in the group -> Indeterminate.
+    assert_eq!(
+        verdict(round2.signature_share_hex.clone(), 9),
+        ShareVerificationVerdict::Indeterminate
+    );
+    // Ordering contract: undecodable share bytes for a member NOT in the group
+    // are Indeterminate, NOT Invalid - the share is only judged once session /
+    // DKG / membership are established, so blame never precedes that context.
+    assert_eq!(
+        verdict("ee".to_string(), 9),
+        ShareVerificationVerdict::Indeterminate
+    );
+    // Package-membership contract: member 3 is in the GROUP (threshold 2 of {1,2,3})
+    // but OMITTED from this attempt's package (commitments {1,2}). The package
+    // omission is coordinator/context input, so neither a decodable share NOR
+    // undecodable bytes may blame member 3 - both are Indeterminate, never Invalid.
+    assert_eq!(
+        verdict(round2.signature_share_hex.clone(), 3),
+        ShareVerificationVerdict::Indeterminate
+    );
+    assert_eq!(
+        verdict("ee".to_string(), 3),
+        ShareVerificationVerdict::Indeterminate
+    );
+    // Undecodable signing package (coordinator input) -> Indeterminate.
+    assert_eq!(
+        verify_signature_share(crate::api::VerifySignatureShareRequest {
+            session_id: session_id.to_string(),
+            signing_package_hex: "ee".to_string(),
+            signature_share_hex: round2.signature_share_hex.clone(),
+            member_identifier: 1,
+            taproot_merkle_root_hex: None,
+        })
+        .expect("verify")
+        .verdict,
+        ShareVerificationVerdict::Indeterminate
+    );
+    // Unknown session -> Indeterminate.
+    assert_eq!(
+        verify_signature_share(crate::api::VerifySignatureShareRequest {
+            session_id: "no-such-session".to_string(),
+            signing_package_hex: signing_package_hex.clone(),
+            signature_share_hex: round2.signature_share_hex.clone(),
+            member_identifier: 1,
+            taproot_merkle_root_hex: None,
+        })
+        .expect("verify")
+        .verdict,
+        ShareVerificationVerdict::Indeterminate
+    );
+    // Ordering contract: even undecodable share bytes for an unknown session are
+    // Indeterminate (session context is resolved before the share is judged).
+    assert_eq!(
+        verify_signature_share(crate::api::VerifySignatureShareRequest {
+            session_id: "no-such-session".to_string(),
+            signing_package_hex: signing_package_hex.clone(),
+            signature_share_hex: "ee".to_string(),
+            member_identifier: 1,
+            taproot_merkle_root_hex: None,
+        })
+        .expect("verify")
+        .verdict,
+        ShareVerificationVerdict::Indeterminate
+    );
+    // Malformed taproot root (coordinator/wallet context) -> Indeterminate,
+    // returned in-band, NOT escaped to the error channel (verdict contract).
+    assert_eq!(
+        verify_signature_share(crate::api::VerifySignatureShareRequest {
+            session_id: session_id.to_string(),
+            signing_package_hex: signing_package_hex.clone(),
+            signature_share_hex: round2.signature_share_hex.clone(),
+            member_identifier: 1,
+            taproot_merkle_root_hex: Some("not-hex".to_string()),
+        })
+        .expect("malformed taproot root must not error out-of-band")
+        .verdict,
+        ShareVerificationVerdict::Indeterminate
+    );
+
+    // Equivalence guard: aggregate's AllCheaters verdict over [member 1 valid,
+    // member 2 bogus] must name exactly the share verify_signature_share calls
+    // Invalid (member 2), and not the one it calls Valid (member 1).
+    let err = interactive_aggregate(InteractiveAggregateRequest {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        signing_package_hex: signing_package_hex.clone(),
+        signature_shares: vec![
+            crate::api::NativeFrostSignatureShare {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round2.signature_share_hex.clone(),
+            },
+            bogus_share.signature_share,
+        ],
+        taproot_merkle_root_hex: None,
+    })
+    .expect_err("an invalid share must fail aggregation closed");
+    let candidate_culprits = match err {
+        EngineError::AggregateShareVerificationFailed {
+            candidate_culprits, ..
+        } => candidate_culprits,
+        other => panic!("expected AggregateShareVerificationFailed, got {other:?}"),
+    };
+    assert_eq!(
+        candidate_culprits,
+        vec![2],
+        "aggregate's culprit verdict must match verify_signature_share: {candidate_culprits:?}"
+    );
+}

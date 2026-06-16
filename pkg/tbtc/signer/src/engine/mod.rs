@@ -107,6 +107,7 @@ mod tests;
 #[cfg(test)]
 mod testsupport;
 mod transaction;
+mod verify_share;
 
 pub(crate) use audit::*;
 pub(crate) use codec::*;
@@ -127,3 +128,4 @@ pub(crate) use telemetry::*;
 #[cfg(test)]
 pub(crate) use testsupport::*;
 pub(crate) use transaction::*;
+pub(crate) use verify_share::*;
