@@ -114,17 +114,34 @@ pub fn verify_signature_share(
         .get(&member_identifier)
     {
         Some(verifying_share) => verifying_share,
-        // The member has no verifying share for this group / is not in the
-        // package's set - a coordinator/package matter, not member-share fault.
+        // No verifying share in this GROUP (the member never received a DKG
+        // share) - a coordinator/caller matter, not member-share fault.
         None => return Ok(verdict(ShareVerificationVerdict::Indeterminate)),
     };
 
-    // Only now that the session, completed DKG, and the member's membership in
-    // THIS group are all established do we judge the member's signed share bytes:
-    // if they are undecodable here, that is self-incriminating member fault ->
-    // invalid (the Go layer already authenticated the envelope; the inner FROST
-    // scalar is the member's). Decoding any earlier would let a malformed share
-    // for an unknown / not-ready session or a non-member id return Invalid
+    // The member must ALSO be a participant in THIS attempt's signing package
+    // (its commitment set), not merely a group member. A package that omits the
+    // member is coordinator/context input - the member never signed a share for
+    // a package they are not in - so undecodable share bytes paired with such a
+    // package must NOT read as self-incriminating. Without this guard the
+    // omitted-member + undecodable-share case would hit the Invalid decode-
+    // failure branch below before frost_core's own UnknownIdentifier check (which
+    // already maps a DECODABLE omitted-member share to Indeterminate) is reached.
+    // Fail closed against blame: Indeterminate.
+    if !signing_package
+        .signing_commitments()
+        .contains_key(&member_identifier)
+    {
+        return Ok(verdict(ShareVerificationVerdict::Indeterminate));
+    }
+
+    // Only now that the session, completed DKG, the member's group membership,
+    // AND the member's inclusion in this attempt's package are all established do
+    // we judge the member's signed share bytes: if they are undecodable here that
+    // is self-incriminating member fault -> invalid (the Go layer already
+    // authenticated the envelope; the inner FROST scalar is the member's).
+    // Decoding any earlier would let a malformed share for an unknown / not-ready
+    // session, a non-member id, or a package that omits the member return Invalid
     // (blame) before the member context exists - it must be Indeterminate then.
     let signature_share_bytes = match decode_hex_field(
         "VerifySignatureShare",

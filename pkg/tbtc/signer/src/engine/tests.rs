@@ -13700,6 +13700,18 @@ fn verify_signature_share_verdicts_match_aggregate_and_handle_edges() {
         verdict("ee".to_string(), 9),
         ShareVerificationVerdict::Indeterminate
     );
+    // Package-membership contract: member 3 is in the GROUP (threshold 2 of {1,2,3})
+    // but OMITTED from this attempt's package (commitments {1,2}). The package
+    // omission is coordinator/context input, so neither a decodable share NOR
+    // undecodable bytes may blame member 3 - both are Indeterminate, never Invalid.
+    assert_eq!(
+        verdict(round2.signature_share_hex.clone(), 3),
+        ShareVerificationVerdict::Indeterminate
+    );
+    assert_eq!(
+        verdict("ee".to_string(), 3),
+        ShareVerificationVerdict::Indeterminate
+    );
     // Undecodable signing package (coordinator input) -> Indeterminate.
     assert_eq!(
         verify_signature_share(crate::api::VerifySignatureShareRequest {
