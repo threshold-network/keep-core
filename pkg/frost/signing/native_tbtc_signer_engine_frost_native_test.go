@@ -49,6 +49,16 @@ func (mntse *mockNativeTBTCSignerEngine) BuildTaprootTx(
 	return nil, fmt.Errorf("not implemented")
 }
 
+func (mntse *mockNativeTBTCSignerEngine) VerifySignatureShare(
+	sessionID string,
+	signingPackage []byte,
+	signatureShare []byte,
+	memberIdentifier uint16,
+	taprootMerkleRoot *[32]byte,
+) (NativeShareVerificationVerdict, error) {
+	return NativeShareVerdictIndeterminate, fmt.Errorf("not implemented")
+}
+
 func TestRegisterNativeTBTCSignerEngineRejectsNil(t *testing.T) {
 	UnregisterNativeTBTCSignerEngine()
 	t.Cleanup(UnregisterNativeTBTCSignerEngine)

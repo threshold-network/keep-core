@@ -324,6 +324,17 @@ func (tntsde *testNativeTBTCSignerSeededDKGEngine) BuildTaprootTx(
 	return nil, fmt.Errorf("BuildTaprootTx should not be used")
 }
 
+func (tntsde *testNativeTBTCSignerSeededDKGEngine) VerifySignatureShare(
+	string,
+	[]byte,
+	[]byte,
+	uint16,
+	*[32]byte,
+) (frostsigning.NativeShareVerificationVerdict, error) {
+	return frostsigning.NativeShareVerdictIndeterminate,
+		fmt.Errorf("VerifySignatureShare should not be used")
+}
+
 func assertTBTCSignerDKGParticipantIdentifiers(
 	t *testing.T,
 	participants []frostsigning.NativeTBTCSignerDKGParticipant,
