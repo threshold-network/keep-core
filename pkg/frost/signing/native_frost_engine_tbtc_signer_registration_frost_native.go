@@ -54,6 +54,10 @@ typedef TbtcSignerResult (*tbtc_aggregate_fn)(
   const uint8_t* request_ptr,
   size_t request_len
 );
+typedef TbtcSignerResult (*tbtc_verify_signature_share_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
 typedef TbtcSignerResult (*tbtc_start_sign_round_fn)(
   const uint8_t* request_ptr,
   size_t request_len
@@ -187,6 +191,18 @@ static TbtcSignerResult tbtc_signer_aggregate(const uint8_t* request_ptr, size_t
   }
 
   return aggregate(request_ptr, request_len);
+}
+
+static TbtcSignerResult tbtc_signer_verify_signature_share(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_verify_signature_share_fn verify_signature_share = (tbtc_verify_signature_share_fn)dlsym(
+    RTLD_DEFAULT,
+    "frost_tbtc_verify_signature_share"
+  );
+  if (verify_signature_share == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+
+  return verify_signature_share(request_ptr, request_len);
 }
 
 static TbtcSignerResult tbtc_signer_start_sign_round(const uint8_t* request_ptr, size_t request_len) {
@@ -379,6 +395,18 @@ type buildTaggedTBTCSignerAggregateRequest struct {
 
 type buildTaggedTBTCSignerAggregateResponse struct {
 	SignatureHex string `json:"signature_hex"`
+}
+
+type buildTaggedTBTCSignerVerifySignatureShareRequest struct {
+	SessionID            string  `json:"session_id"`
+	SigningPackageHex    string  `json:"signing_package_hex"`
+	SignatureShareHex    string  `json:"signature_share_hex"`
+	MemberIdentifier     uint16  `json:"member_identifier"`
+	TaprootMerkleRootHex *string `json:"taproot_merkle_root_hex,omitempty"`
+}
+
+type buildTaggedTBTCSignerVerifySignatureShareResponse struct {
+	Verdict string `json:"verdict"`
 }
 
 type buildTaggedTBTCSignerStartSignRoundRequest struct {
@@ -671,6 +699,37 @@ func (bttse *buildTaggedTBTCSignerEngine) Aggregate(
 	}
 
 	return decodeBuildTaggedTBTCSignerAggregateResponse(responsePayload)
+}
+
+// VerifySignatureShare re-verifies ONE retained round-2 signature share against
+// an attempt's signing package, returning the engine's tri-state verdict. It
+// backs the Go host's Round2ShareVerifier (member-blame classifier). On any
+// FFI-transport error it returns (NativeShareVerdictIndeterminate, err); the
+// caller fails closed to don't-blame.
+func (bttse *buildTaggedTBTCSignerEngine) VerifySignatureShare(
+	sessionID string,
+	signingPackage []byte,
+	signatureShare []byte,
+	memberIdentifier uint16,
+	taprootMerkleRoot *[32]byte,
+) (NativeShareVerificationVerdict, error) {
+	requestPayload, err := buildTaggedTBTCSignerVerifySignatureShareRequestPayload(
+		sessionID,
+		signingPackage,
+		signatureShare,
+		memberIdentifier,
+		taprootMerkleRoot,
+	)
+	if err != nil {
+		return NativeShareVerdictIndeterminate, err
+	}
+
+	responsePayload, err := callBuildTaggedTBTCSignerVerifySignatureShare(requestPayload)
+	if err != nil {
+		return NativeShareVerdictIndeterminate, err
+	}
+
+	return decodeBuildTaggedTBTCSignerVerifySignatureShareResponse(responsePayload)
 }
 
 func (bttse *buildTaggedTBTCSignerEngine) StartSignRound(
@@ -1469,6 +1528,83 @@ func decodeBuildTaggedTBTCSignerAggregateResponse(
 		"response signature",
 		response.SignatureHex,
 	)
+}
+
+// buildTaggedTBTCSignerVerifySignatureShareRequestPayload builds the
+// VerifySignatureShare request.
+//
+// Unlike every other bridge operation, it deliberately does NOT reject empty or
+// short signing-package / signature-share bytes. For THIS operation those bytes
+// are the SUBJECT of the engine's tri-state verdict: a member's retained share
+// envelope can carry empty or malformed inner FROST bytes (the collector
+// authenticates the operator signature over the envelope, not the FROST share
+// equation), and the engine classifies such bytes as an `invalid` (blamable)
+// verdict. If the bridge instead rejected them with an error here, the Go host
+// would map that FFI error to ShareIndeterminate and a cheater who submitted
+// garbage would dodge blame. So only the sessionID routing key is validated;
+// the package, share, and member identifier are passed through for the engine
+// to classify (a malformed package or out-of-range id yields `indeterminate`,
+// never false blame).
+func buildTaggedTBTCSignerVerifySignatureShareRequestPayload(
+	sessionID string,
+	signingPackage []byte,
+	signatureShare []byte,
+	memberIdentifier uint16,
+	taprootMerkleRoot *[32]byte,
+) ([]byte, error) {
+	if sessionID == "" {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"VerifySignatureShare",
+			"session ID is empty",
+		)
+	}
+
+	var taprootMerkleRootHex *string
+	if taprootMerkleRoot != nil {
+		encoded := hex.EncodeToString(taprootMerkleRoot[:])
+		taprootMerkleRootHex = &encoded
+	}
+
+	return buildTaggedTBTCSignerMarshalRequest(
+		"VerifySignatureShare",
+		buildTaggedTBTCSignerVerifySignatureShareRequest{
+			SessionID:            sessionID,
+			SigningPackageHex:    hex.EncodeToString(signingPackage),
+			SignatureShareHex:    hex.EncodeToString(signatureShare),
+			MemberIdentifier:     memberIdentifier,
+			TaprootMerkleRootHex: taprootMerkleRootHex,
+		},
+	)
+}
+
+// decodeBuildTaggedTBTCSignerVerifySignatureShareResponse maps the engine's
+// snake_case verdict string to the typed tri-state. An unrecognized verdict is
+// an error (never silently defaulted); the zero value of the verdict type is the
+// safe Indeterminate, so an unchecked error never reads as blame.
+func decodeBuildTaggedTBTCSignerVerifySignatureShareResponse(
+	responsePayload []byte,
+) (NativeShareVerificationVerdict, error) {
+	var response buildTaggedTBTCSignerVerifySignatureShareResponse
+	if err := json.Unmarshal(responsePayload, &response); err != nil {
+		return NativeShareVerdictIndeterminate, buildTaggedTBTCSignerOperationError(
+			"VerifySignatureShare",
+			fmt.Sprintf("cannot decode response payload: %v", err),
+		)
+	}
+
+	switch response.Verdict {
+	case "valid":
+		return NativeShareVerdictValid, nil
+	case "invalid":
+		return NativeShareVerdictInvalid, nil
+	case "indeterminate":
+		return NativeShareVerdictIndeterminate, nil
+	default:
+		return NativeShareVerdictIndeterminate, buildTaggedTBTCSignerOperationError(
+			"VerifySignatureShare",
+			fmt.Sprintf("response verdict is unrecognized: %q", response.Verdict),
+		)
+	}
 }
 
 func buildTaggedTBTCSignerMarshalRequest(
@@ -2276,6 +2412,18 @@ func callBuildTaggedTBTCSignerAggregate(
 		requestPayload,
 		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
 			return C.tbtc_signer_aggregate(requestPtr, requestLen)
+		},
+	)
+}
+
+func callBuildTaggedTBTCSignerVerifySignatureShare(
+	requestPayload []byte,
+) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"VerifySignatureShare",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_verify_signature_share(requestPtr, requestLen)
 		},
 	)
 }

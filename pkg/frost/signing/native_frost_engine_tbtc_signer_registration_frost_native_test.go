@@ -1292,3 +1292,216 @@ func TestDecodeBuildTaggedTBTCSignerBuildTaprootTxResponse(t *testing.T) {
 		)
 	}
 }
+
+func TestBuildTaggedTBTCSignerVerifySignatureShareRequestPayload(t *testing.T) {
+	payload, err := buildTaggedTBTCSignerVerifySignatureShareRequestPayload(
+		"session-1",
+		[]byte{0xde, 0xad},
+		[]byte{0xbe, 0xef},
+		2,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+
+	var request buildTaggedTBTCSignerVerifySignatureShareRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+
+	if request.SessionID != "session-1" {
+		t.Fatalf(
+			"unexpected session id\nexpected: [%v]\nactual:   [%v]",
+			"session-1",
+			request.SessionID,
+		)
+	}
+	if request.SigningPackageHex != "dead" {
+		t.Fatalf(
+			"unexpected signing package hex\nexpected: [%v]\nactual:   [%v]",
+			"dead",
+			request.SigningPackageHex,
+		)
+	}
+	if request.SignatureShareHex != "beef" {
+		t.Fatalf(
+			"unexpected signature share hex\nexpected: [%v]\nactual:   [%v]",
+			"beef",
+			request.SignatureShareHex,
+		)
+	}
+	if request.MemberIdentifier != 2 {
+		t.Fatalf(
+			"unexpected member identifier\nexpected: [%v]\nactual:   [%v]",
+			2,
+			request.MemberIdentifier,
+		)
+	}
+	if request.TaprootMerkleRootHex != nil {
+		t.Fatalf(
+			"expected omitted taproot merkle root, got: [%v]",
+			*request.TaprootMerkleRootHex,
+		)
+	}
+}
+
+func TestBuildTaggedTBTCSignerVerifySignatureShareRequestPayload_TaprootMerkleRoot(
+	t *testing.T,
+) {
+	var taprootMerkleRoot [32]byte
+	taprootMerkleRoot[0] = 0xab
+	taprootMerkleRoot[31] = 0xcd
+
+	payload, err := buildTaggedTBTCSignerVerifySignatureShareRequestPayload(
+		"session-1",
+		[]byte{0xde, 0xad},
+		[]byte{0xbe, 0xef},
+		2,
+		&taprootMerkleRoot,
+	)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+
+	var request buildTaggedTBTCSignerVerifySignatureShareRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+
+	if request.TaprootMerkleRootHex == nil {
+		t.Fatal("expected taproot merkle root")
+	}
+	expectedTaprootMerkleRootHex := hex.EncodeToString(taprootMerkleRoot[:])
+	if *request.TaprootMerkleRootHex != expectedTaprootMerkleRootHex {
+		t.Fatalf(
+			"unexpected taproot merkle root hex\nexpected: [%v]\nactual:   [%v]",
+			expectedTaprootMerkleRootHex,
+			*request.TaprootMerkleRootHex,
+		)
+	}
+}
+
+func TestBuildTaggedTBTCSignerVerifySignatureShareRequestPayload_EmptySessionID(
+	t *testing.T,
+) {
+	_, err := buildTaggedTBTCSignerVerifySignatureShareRequestPayload(
+		"",
+		[]byte{0xde, 0xad},
+		[]byte{0xbe, 0xef},
+		2,
+		nil,
+	)
+	if err == nil {
+		t.Fatal("expected an empty session id to be rejected")
+	}
+	if !errors.Is(err, ErrNativeBridgeOperationFailed) {
+		t.Fatalf("expected ErrNativeBridgeOperationFailed, got: [%v]", err)
+	}
+}
+
+// The verify-share request builder must NOT reject empty/short package or share
+// bytes: those are the SUBJECT of the engine's verdict. A member who submits
+// empty/garbage inner FROST bytes must reach the engine (which returns
+// `invalid` -> blame); a bridge-side rejection would surface as an FFI error the
+// Go host maps to ShareIndeterminate, letting the cheater dodge blame. This test
+// pins that the builder passes such bytes through as empty/short hex.
+func TestBuildTaggedTBTCSignerVerifySignatureShareRequestPayload_PassesThroughEmptyBlameSubjectBytes(
+	t *testing.T,
+) {
+	payload, err := buildTaggedTBTCSignerVerifySignatureShareRequestPayload(
+		"session-1",
+		nil,
+		nil,
+		2,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("empty package/share bytes must pass through, got error: [%v]", err)
+	}
+
+	var request buildTaggedTBTCSignerVerifySignatureShareRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+	if request.SigningPackageHex != "" {
+		t.Fatalf("expected empty signing package hex, got: [%q]", request.SigningPackageHex)
+	}
+	if request.SignatureShareHex != "" {
+		t.Fatalf("expected empty signature share hex, got: [%q]", request.SignatureShareHex)
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerVerifySignatureShareResponse(t *testing.T) {
+	tests := map[string]struct {
+		verdict  string
+		expected NativeShareVerificationVerdict
+	}{
+		"valid":         {verdict: "valid", expected: NativeShareVerdictValid},
+		"invalid":       {verdict: "invalid", expected: NativeShareVerdictInvalid},
+		"indeterminate": {verdict: "indeterminate", expected: NativeShareVerdictIndeterminate},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			payload := []byte(fmt.Sprintf(`{"verdict":%q}`, test.verdict))
+			verdict, err := decodeBuildTaggedTBTCSignerVerifySignatureShareResponse(payload)
+			if err != nil {
+				t.Fatalf("unexpected decode error: [%v]", err)
+			}
+			if verdict != test.expected {
+				t.Fatalf(
+					"unexpected verdict\nexpected: [%v]\nactual:   [%v]",
+					test.expected,
+					verdict,
+				)
+			}
+		})
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerVerifySignatureShareResponse_UnrecognizedVerdict(
+	t *testing.T,
+) {
+	verdict, err := decodeBuildTaggedTBTCSignerVerifySignatureShareResponse(
+		[]byte(`{"verdict":"maybe"}`),
+	)
+	if err == nil {
+		t.Fatal("expected an unrecognized verdict to be rejected")
+	}
+	if !errors.Is(err, ErrNativeBridgeOperationFailed) {
+		t.Fatalf("expected ErrNativeBridgeOperationFailed, got: [%v]", err)
+	}
+	// An unrecognized verdict must fail closed to the safe Indeterminate, never
+	// to a blame verdict, even though the caller is expected to check the error.
+	if verdict != NativeShareVerdictIndeterminate {
+		t.Fatalf(
+			"expected Indeterminate on error\nexpected: [%v]\nactual:   [%v]",
+			NativeShareVerdictIndeterminate,
+			verdict,
+		)
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerVerifySignatureShareResponse_MalformedJSON(
+	t *testing.T,
+) {
+	verdict, err := decodeBuildTaggedTBTCSignerVerifySignatureShareResponse(
+		[]byte("not json"),
+	)
+	if err == nil {
+		t.Fatal("expected malformed JSON to be rejected")
+	}
+	if !errors.Is(err, ErrNativeBridgeOperationFailed) {
+		t.Fatalf("expected ErrNativeBridgeOperationFailed, got: [%v]", err)
+	}
+	// The other decoder error path (a json.Unmarshal failure) must also fail
+	// closed to the safe Indeterminate, never to a blame verdict.
+	if verdict != NativeShareVerdictIndeterminate {
+		t.Fatalf(
+			"expected Indeterminate on error\nexpected: [%v]\nactual:   [%v]",
+			NativeShareVerdictIndeterminate,
+			verdict,
+		)
+	}
+}
