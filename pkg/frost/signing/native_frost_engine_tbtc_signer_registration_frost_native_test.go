@@ -1796,3 +1796,143 @@ func TestDecodeBuildTaggedTBTCSignerInteractiveResponses_RejectMalformed(t *test
 		t.Fatal("open: expected a response missing session/attempt ids to be rejected")
 	}
 }
+
+func TestBuildTaggedTBTCSignerInteractiveAggregateRequestPayload(t *testing.T) {
+	shares := []nativeFROSTSignatureShare{
+		{Identifier: "id-1", Data: []byte{0xaa}},
+		{Identifier: "id-2", Data: []byte{0xbb}},
+	}
+
+	payload, err := buildTaggedTBTCSignerInteractiveAggregateRequestPayload(
+		"session-1", "attempt-1", []byte{0xde, 0xad}, shares, nil,
+	)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+
+	var request buildTaggedTBTCSignerInteractiveAggregateRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+	if request.SessionID != "session-1" || request.AttemptID != "attempt-1" {
+		t.Fatalf("unexpected session/attempt: [%+v]", request)
+	}
+	if request.SigningPackageHex != "dead" {
+		t.Fatalf("unexpected signing package hex: [%s]", request.SigningPackageHex)
+	}
+	if len(request.SignatureShares) != 2 ||
+		request.SignatureShares[0].Identifier != "id-1" ||
+		request.SignatureShares[0].DataHex != "aa" ||
+		request.SignatureShares[1].DataHex != "bb" {
+		t.Fatalf("unexpected signature shares: [%+v]", request.SignatureShares)
+	}
+
+	rejections := map[string]struct {
+		sessionID string
+		attemptID string
+		pkg       []byte
+		shares    []nativeFROSTSignatureShare
+	}{
+		"empty session":         {"", "a", []byte{0x1}, shares},
+		"empty attempt":         {"s", "", []byte{0x1}, shares},
+		"empty signing package": {"s", "a", nil, shares},
+		"no shares":             {"s", "a", []byte{0x1}, nil},
+		"share missing data":    {"s", "a", []byte{0x1}, []nativeFROSTSignatureShare{{Identifier: "id-1"}}},
+	}
+	for name, r := range rejections {
+		t.Run(name, func(t *testing.T) {
+			if _, err := buildTaggedTBTCSignerInteractiveAggregateRequestPayload(
+				r.sessionID, r.attemptID, r.pkg, r.shares, nil,
+			); err == nil {
+				t.Fatal("expected invalid input to be rejected")
+			}
+		})
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerInteractiveAggregateResponse(t *testing.T) {
+	signature, err := decodeBuildTaggedTBTCSignerInteractiveAggregateResponse(
+		[]byte(`{"session_id":"s","attempt_id":"a","signature_hex":"cafe"}`),
+	)
+	if err != nil {
+		t.Fatalf("unexpected decode error: [%v]", err)
+	}
+	if hex.EncodeToString(signature) != "cafe" {
+		t.Fatalf("unexpected signature: [%x]", signature)
+	}
+
+	if _, err := decodeBuildTaggedTBTCSignerInteractiveAggregateResponse([]byte("not json")); err == nil {
+		t.Fatal("expected malformed JSON to be rejected")
+	}
+}
+
+// The aggregate_share_verification_failed error must surface as the typed error
+// carrying the candidate culprits (so the Go host can adjudicate envelope-bound
+// blame over them), with the session/attempt filled from the caller's request.
+func TestInterpretInteractiveAggregateError_ShareVerificationFailure(t *testing.T) {
+	structured := &buildTaggedTBTCSignerStructuredError{
+		Code:              interactiveAggregateShareVerificationFailedCode,
+		Message:           "shares failed verification",
+		CandidateCulprits: []uint16{2, 3},
+	}
+	// Wrap exactly as the bridge call helper does (double %w).
+	wrapped := fmt.Errorf(
+		"%w: tbtc-signer bridge operation [InteractiveAggregate] failed: [%w]",
+		ErrNativeBridgeOperationFailed,
+		structured,
+	)
+
+	err := interpretInteractiveAggregateError("session-1", "attempt-1", wrapped)
+
+	var aggErr *InteractiveAggregateShareVerificationError
+	if !errors.As(err, &aggErr) {
+		t.Fatalf("expected InteractiveAggregateShareVerificationError, got: [%v]", err)
+	}
+	if aggErr.SessionID != "session-1" || aggErr.AttemptID != "attempt-1" {
+		t.Fatalf("unexpected session/attempt: [%+v]", aggErr)
+	}
+	if len(aggErr.CandidateCulprits) != 2 ||
+		aggErr.CandidateCulprits[0] != 2 ||
+		aggErr.CandidateCulprits[1] != 3 {
+		t.Fatalf("unexpected candidate culprits: [%v]", aggErr.CandidateCulprits)
+	}
+}
+
+func TestInterpretInteractiveAggregateError_OtherErrorPassesThrough(t *testing.T) {
+	structured := &buildTaggedTBTCSignerStructuredError{Code: "some_other_error", Message: "boom"}
+	wrapped := fmt.Errorf(
+		"%w: tbtc-signer bridge operation [InteractiveAggregate] failed: [%w]",
+		ErrNativeBridgeOperationFailed,
+		structured,
+	)
+
+	err := interpretInteractiveAggregateError("s", "a", wrapped)
+
+	var aggErr *InteractiveAggregateShareVerificationError
+	if errors.As(err, &aggErr) {
+		t.Fatal("a non-share-verification error must not become the typed culprit error")
+	}
+	if !errors.Is(err, ErrNativeBridgeOperationFailed) {
+		t.Fatalf("expected the original wrapped error to pass through, got: [%v]", err)
+	}
+}
+
+func TestBuildTaggedTBTCSignerErrorPayload_CandidateCulprits(t *testing.T) {
+	structured := buildTaggedTBTCSignerErrorPayload([]byte(
+		`{"code":"aggregate_share_verification_failed","message":"x","candidate_culprits":[2,3]}`,
+	))
+	if structured.Code != interactiveAggregateShareVerificationFailedCode {
+		t.Fatalf("unexpected code: [%s]", structured.Code)
+	}
+	if len(structured.CandidateCulprits) != 2 ||
+		structured.CandidateCulprits[0] != 2 ||
+		structured.CandidateCulprits[1] != 3 {
+		t.Fatalf("unexpected candidate culprits: [%v]", structured.CandidateCulprits)
+	}
+
+	// A non-culprit error decodes with an empty culprit list.
+	plain := buildTaggedTBTCSignerErrorPayload([]byte(`{"code":"validation_error","message":"x"}`))
+	if len(plain.CandidateCulprits) != 0 {
+		t.Fatalf("expected no culprits for a non-culprit error, got: [%v]", plain.CandidateCulprits)
+	}
+}
