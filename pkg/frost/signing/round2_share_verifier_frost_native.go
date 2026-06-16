@@ -160,6 +160,23 @@ func (v *EngineRound2ShareVerifier) VerifyRetainedShare(
 		return roast.ShareIndeterminate
 	}
 
+	// The retained share must answer THIS package: SigningPackageHash is the
+	// member's commitment to the package body its share signs over. If it does
+	// not equal the bound package's body hash, the share is not evidence against
+	// this package, and verifying it against a package the member never committed
+	// to would manufacture false blame -> Indeterminate. The collector only
+	// accepts shares matching the authoritative package, so this is a defensive
+	// cross-check that keeps the verifier sound for any caller.
+	packageBodyHash, err := signingPackage.BodyHash()
+	if err != nil {
+		v.logIndeterminate("could not hash the retained signing-package body", submitter, err)
+		return roast.ShareIndeterminate
+	}
+	if !bytes.Equal(shareSubmission.SigningPackageHash, packageBodyHash[:]) {
+		v.logIndeterminate("retained share does not commit to the bound signing package", submitter, nil)
+		return roast.ShareIndeterminate
+	}
+
 	// submitter (group.MemberIndex == uint8) widens to the engine's uint16
 	// losslessly. The engine classifies the inner FROST bytes: undecodable or
 	// mathematically invalid member bytes become `invalid` only AFTER it

@@ -44,12 +44,15 @@ func (f *fakeShareVerifyingEngine) VerifySignatureShare(
 	return f.verdict, f.err
 }
 
-func testSigningPackageEnvelope(
+// testSigningPackage builds a signing package and returns both its on-wire
+// envelope and its body hash, so a share can commit to the SAME package the
+// verifier is bound to (SigningPackageHash == BodyHash).
+func testSigningPackage(
 	t *testing.T,
 	attemptContextHash [32]byte,
 	taprootMerkleRoot []byte,
 	frostSigningPackage []byte,
-) []byte {
+) (envelope []byte, bodyHash []byte) {
 	t.Helper()
 	pkg := &roast.SigningPackage{
 		AttemptContextHash:   append([]byte(nil), attemptContextHash[:]...),
@@ -62,13 +65,18 @@ func testSigningPackageEnvelope(
 	if err != nil {
 		t.Fatalf("cannot marshal test signing package: [%v]", err)
 	}
-	return envelope
+	hash, err := pkg.BodyHash()
+	if err != nil {
+		t.Fatalf("cannot hash test signing package body: [%v]", err)
+	}
+	return envelope, hash[:]
 }
 
 func testShareSubmissionEnvelope(
 	t *testing.T,
 	attemptContextHash [32]byte,
 	submitter uint32,
+	signingPackageHash []byte,
 	frostSignatureShare []byte,
 ) []byte {
 	t.Helper()
@@ -76,7 +84,7 @@ func testShareSubmissionEnvelope(
 		AttemptContextHash: append([]byte(nil), attemptContextHash[:]...),
 		SubmitterIDValue:   submitter,
 		CoordinatorIDValue: 1,
-		SigningPackageHash: make([]byte, 32), // 32-byte dummy
+		SigningPackageHash: signingPackageHash,
 		SignatureShare:     frostSignatureShare,
 		SubmitterSignature: []byte{0x01}, // dummy
 	}
@@ -135,8 +143,8 @@ func TestEngineRound2ShareVerifier_VerdictMappingWithRoot(t *testing.T) {
 				t.Fatalf("unexpected constructor error: [%v]", err)
 			}
 
-			pkgEnv := testSigningPackageEnvelope(t, attempt, root[:], frostPackage)
-			shareEnv := testShareSubmissionEnvelope(t, attempt, 2, frostShare)
+			pkgEnv, pkgHash := testSigningPackage(t, attempt, root[:], frostPackage)
+			shareEnv := testShareSubmissionEnvelope(t, attempt, 2, pkgHash, frostShare)
 
 			result := verifier.VerifyRetainedShare(pkgEnv, shareEnv, 2)
 			if result != test.expected {
@@ -178,8 +186,8 @@ func TestEngineRound2ShareVerifier_KeyPathNilRoot(t *testing.T) {
 		t.Fatalf("unexpected constructor error: [%v]", err)
 	}
 
-	pkgEnv := testSigningPackageEnvelope(t, attempt, nil, []byte{0xde, 0xad})
-	shareEnv := testShareSubmissionEnvelope(t, attempt, 2, []byte{0xbe, 0xef})
+	pkgEnv, pkgHash := testSigningPackage(t, attempt, nil, []byte{0xde, 0xad})
+	shareEnv := testShareSubmissionEnvelope(t, attempt, 2, pkgHash, []byte{0xbe, 0xef})
 
 	if result := verifier.VerifyRetainedShare(pkgEnv, shareEnv, 2); result != roast.ShareValid {
 		t.Fatalf("expected ShareValid, got [%v]", result)
@@ -197,8 +205,8 @@ func TestEngineRound2ShareVerifier_EngineErrorIsIndeterminate(t *testing.T) {
 	}
 	verifier := mustVerifier(t, engine, "session-1", attempt, nil)
 
-	pkgEnv := testSigningPackageEnvelope(t, attempt, nil, []byte{0xde, 0xad})
-	shareEnv := testShareSubmissionEnvelope(t, attempt, 2, []byte{0xbe, 0xef})
+	pkgEnv, pkgHash := testSigningPackage(t, attempt, nil, []byte{0xde, 0xad})
+	shareEnv := testShareSubmissionEnvelope(t, attempt, 2, pkgHash, []byte{0xbe, 0xef})
 
 	if result := verifier.VerifyRetainedShare(pkgEnv, shareEnv, 2); result != roast.ShareIndeterminate {
 		t.Fatalf("expected ShareIndeterminate on engine error, got [%v]", result)
@@ -213,7 +221,13 @@ func TestEngineRound2ShareVerifier_FailClosedWithoutCallingEngine(t *testing.T) 
 	frostPackage := []byte{0xde, 0xad}
 	frostShare := []byte{0xbe, 0xef}
 
-	validPkgEnv := testSigningPackageEnvelope(t, attempt, root[:], frostPackage)
+	validPkgEnv, _ := testSigningPackage(t, attempt, root[:], frostPackage)
+	otherAttemptPkgEnv, _ := testSigningPackage(t, otherAttempt, root[:], frostPackage)
+	otherRootPkgEnv, _ := testSigningPackage(t, attempt, otherRoot[:], frostPackage)
+
+	// A dummy package hash for the share in cases that fail closed BEFORE the
+	// share-commits-to-package check is reached.
+	dummyHash := make([]byte, 32)
 
 	tests := map[string]struct {
 		bindRoot  *[32]byte
@@ -224,31 +238,31 @@ func TestEngineRound2ShareVerifier_FailClosedWithoutCallingEngine(t *testing.T) 
 		"submitter zero": {
 			bindRoot:  &root,
 			pkgEnv:    validPkgEnv,
-			shareEnv:  testShareSubmissionEnvelope(t, attempt, 2, frostShare),
+			shareEnv:  testShareSubmissionEnvelope(t, attempt, 2, dummyHash, frostShare),
 			submitter: 0,
 		},
 		"unparseable signing-package envelope": {
 			bindRoot:  &root,
 			pkgEnv:    []byte("not a signing package envelope"),
-			shareEnv:  testShareSubmissionEnvelope(t, attempt, 2, frostShare),
+			shareEnv:  testShareSubmissionEnvelope(t, attempt, 2, dummyHash, frostShare),
 			submitter: 2,
 		},
 		"attempt-context mismatch": {
 			bindRoot:  &root,
-			pkgEnv:    testSigningPackageEnvelope(t, otherAttempt, root[:], frostPackage),
-			shareEnv:  testShareSubmissionEnvelope(t, attempt, 2, frostShare),
+			pkgEnv:    otherAttemptPkgEnv,
+			shareEnv:  testShareSubmissionEnvelope(t, attempt, 2, dummyHash, frostShare),
 			submitter: 2,
 		},
 		"taproot root mismatch": {
 			bindRoot:  &root,
-			pkgEnv:    testSigningPackageEnvelope(t, attempt, otherRoot[:], frostPackage),
-			shareEnv:  testShareSubmissionEnvelope(t, attempt, 2, frostShare),
+			pkgEnv:    otherRootPkgEnv,
+			shareEnv:  testShareSubmissionEnvelope(t, attempt, 2, dummyHash, frostShare),
 			submitter: 2,
 		},
 		"key-path verifier rejects a rooted package": {
 			bindRoot:  nil,
-			pkgEnv:    testSigningPackageEnvelope(t, attempt, root[:], frostPackage),
-			shareEnv:  testShareSubmissionEnvelope(t, attempt, 2, frostShare),
+			pkgEnv:    validPkgEnv,
+			shareEnv:  testShareSubmissionEnvelope(t, attempt, 2, dummyHash, frostShare),
 			submitter: 2,
 		},
 		"unparseable share envelope": {
@@ -260,8 +274,14 @@ func TestEngineRound2ShareVerifier_FailClosedWithoutCallingEngine(t *testing.T) 
 		"share submitter id mismatch": {
 			bindRoot:  &root,
 			pkgEnv:    validPkgEnv,
-			shareEnv:  testShareSubmissionEnvelope(t, attempt, 3, frostShare), // envelope says member 3
-			submitter: 2,                                                      // adjudicating member 2
+			shareEnv:  testShareSubmissionEnvelope(t, attempt, 3, dummyHash, frostShare), // envelope says member 3
+			submitter: 2,                                                                 // adjudicating member 2
+		},
+		"share commits to a different package": {
+			bindRoot:  &root,
+			pkgEnv:    validPkgEnv,
+			shareEnv:  testShareSubmissionEnvelope(t, attempt, 2, bytes.Repeat([]byte{0xee}, 32), frostShare),
+			submitter: 2,
 		},
 	}
 
@@ -305,8 +325,8 @@ func TestEngineRound2ShareVerifier_ConstructorCopiesTaprootRoot(t *testing.T) {
 	// originalRoot and the original-root package below would (wrongly) mismatch.
 	root[0] = 0xff
 
-	pkgEnv := testSigningPackageEnvelope(t, attempt, originalRoot[:], []byte{0xde, 0xad})
-	shareEnv := testShareSubmissionEnvelope(t, attempt, 2, []byte{0xbe, 0xef})
+	pkgEnv, pkgHash := testSigningPackage(t, attempt, originalRoot[:], []byte{0xde, 0xad})
+	shareEnv := testShareSubmissionEnvelope(t, attempt, 2, pkgHash, []byte{0xbe, 0xef})
 
 	if result := verifier.VerifyRetainedShare(pkgEnv, shareEnv, 2); result != roast.ShareValid {
 		t.Fatalf("expected ShareValid (verifier root unaffected by caller mutation), got [%v]", result)

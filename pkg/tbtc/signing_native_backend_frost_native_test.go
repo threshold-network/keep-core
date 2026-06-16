@@ -292,6 +292,16 @@ func (atntsfe *attemptTrackingNativeTBTCSignerEngineForTBTC) BuildTaprootTx(
 	return nil, fmt.Errorf("not implemented")
 }
 
+func (atntsfe *attemptTrackingNativeTBTCSignerEngineForTBTC) VerifySignatureShare(
+	sessionID string,
+	signingPackage []byte,
+	signatureShare []byte,
+	memberIdentifier uint16,
+	taprootMerkleRoot *[32]byte,
+) (frostsigning.NativeShareVerificationVerdict, error) {
+	return frostsigning.NativeShareVerdictIndeterminate, fmt.Errorf("not implemented")
+}
+
 func (atntsfe *attemptTrackingNativeTBTCSignerEngineForTBTC) uniqueStartCohortsByAttempt() map[uint][][]uint16 {
 	atntsfe.mutex.Lock()
 	defer atntsfe.mutex.Unlock()
