@@ -2843,6 +2843,19 @@ func buildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(
 		return nil, buildTaggedTBTCSignerOperationError("InteractiveSessionOpen", "attempt context included participants are empty")
 	}
 
+	// attempt.AttemptContext numbers attempts 0-based; the engine's wire
+	// attempt_number is 1-based and rejects 0 ("must be at least 1"). Convert
+	// here so the first attempt (RFC 0) is sent as wire 1 rather than rejected
+	// before round 1. The engine subtracts 1 internally for its shuffle math.
+	wireAttemptNumber := attemptContext.AttemptNumber + 1
+	if wireAttemptNumber == 0 {
+		// attemptContext.AttemptNumber was the max uint32; +1 wrapped to 0.
+		return nil, buildTaggedTBTCSignerOperationError(
+			"InteractiveSessionOpen",
+			"attempt number overflows the 1-based wire encoding",
+		)
+	}
+
 	var taprootMerkleRootHex *string
 	if taprootMerkleRoot != nil {
 		encoded := hex.EncodeToString(taprootMerkleRoot[:])
@@ -2859,7 +2872,7 @@ func buildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(
 			Threshold:            threshold,
 			TaprootMerkleRootHex: taprootMerkleRootHex,
 			AttemptContext: buildTaggedTBTCSignerInteractiveAttemptContext{
-				AttemptNumber:                   attemptContext.AttemptNumber,
+				AttemptNumber:                   wireAttemptNumber,
 				CoordinatorIdentifier:           attemptContext.CoordinatorIdentifier,
 				IncludedParticipants:            append([]uint16(nil), attemptContext.IncludedParticipants...),
 				IncludedParticipantsFingerprint: attemptContext.IncludedParticipantsFingerprint,

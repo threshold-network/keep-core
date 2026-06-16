@@ -81,6 +81,10 @@ const (
 // orchestrator derives it from the wallet/session state (never from a peer
 // message) and passes it on InteractiveSessionOpen.
 type NativeInteractiveAttemptContext struct {
+	// AttemptNumber is the RFC-21 ZERO-based attempt ordinal (attempt 0 is the
+	// first), matching attempt.AttemptContext. The bridge converts it to the
+	// engine's ONE-based wire attempt_number (which rejects 0) on the way out, so
+	// callers pass the natural attempt.AttemptContext value unchanged.
 	AttemptNumber                   uint32
 	CoordinatorIdentifier           uint16
 	IncludedParticipants            []uint16

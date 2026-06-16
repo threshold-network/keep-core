@@ -1553,7 +1553,8 @@ func TestBuildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(t *testing.T)
 	if request.TaprootMerkleRootHex != nil {
 		t.Fatalf("expected omitted taproot root, got: [%v]", *request.TaprootMerkleRootHex)
 	}
-	if request.AttemptContext.AttemptNumber != 3 ||
+	// Wire attempt_number is 1-based: the RFC-21 0-based 3 serializes as 4.
+	if request.AttemptContext.AttemptNumber != 4 ||
 		request.AttemptContext.CoordinatorIdentifier != 2 ||
 		request.AttemptContext.IncludedParticipantsFingerprint != "fingerprint-abc" ||
 		request.AttemptContext.AttemptID != "attempt-1" {
@@ -1563,6 +1564,32 @@ func TestBuildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(t *testing.T)
 		request.AttemptContext.IncludedParticipants[0] != 1 ||
 		request.AttemptContext.IncludedParticipants[2] != 3 {
 		t.Fatalf("unexpected included participants: [%v]", request.AttemptContext.IncludedParticipants)
+	}
+}
+
+// The RFC-21 0-based first attempt (AttemptNumber 0) must serialize as the
+// engine's 1-based wire attempt_number 1 - the engine rejects 0, so passing it
+// through unchanged would fail InteractiveSessionOpen before round 1.
+func TestBuildTaggedTBTCSignerInteractiveSessionOpenRequestPayload_FirstAttemptIsOneBasedOnWire(t *testing.T) {
+	ctx := testInteractiveAttemptContext()
+	ctx.AttemptNumber = 0 // RFC-21 first attempt
+
+	payload, err := buildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(
+		"session-1", 2, []byte{0xab}, "key-group-1", 2, nil, ctx,
+	)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+
+	var request buildTaggedTBTCSignerInteractiveSessionOpenRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+	if request.AttemptContext.AttemptNumber != 1 {
+		t.Fatalf(
+			"expected RFC-21 attempt 0 to serialize as wire attempt_number 1, got [%d]",
+			request.AttemptContext.AttemptNumber,
+		)
 	}
 }
 
@@ -1743,5 +1770,29 @@ func TestDecodeBuildTaggedTBTCSignerInteractiveSessionAbortResponse(t *testing.T
 	}
 	if result.SessionID != "session-1" || !result.Aborted {
 		t.Fatalf("unexpected result: [%+v]", result)
+	}
+}
+
+// Every interactive decoder must reject a malformed payload rather than return a
+// zero-valued result, and the open decoder must also reject a structurally
+// valid response missing the session/attempt ids.
+func TestDecodeBuildTaggedTBTCSignerInteractiveResponses_RejectMalformed(t *testing.T) {
+	malformed := []byte("not json")
+
+	if _, err := decodeBuildTaggedTBTCSignerInteractiveSessionOpenResponse(malformed); err == nil {
+		t.Fatal("open: expected malformed JSON to be rejected")
+	}
+	if _, err := decodeBuildTaggedTBTCSignerInteractiveRound1Response(malformed); err == nil {
+		t.Fatal("round1: expected malformed JSON to be rejected")
+	}
+	if _, err := decodeBuildTaggedTBTCSignerInteractiveRound2Response(malformed); err == nil {
+		t.Fatal("round2: expected malformed JSON to be rejected")
+	}
+	if _, err := decodeBuildTaggedTBTCSignerInteractiveSessionAbortResponse(malformed); err == nil {
+		t.Fatal("abort: expected malformed JSON to be rejected")
+	}
+
+	if _, err := decodeBuildTaggedTBTCSignerInteractiveSessionOpenResponse([]byte(`{}`)); err == nil {
+		t.Fatal("open: expected a response missing session/attempt ids to be rejected")
 	}
 }
