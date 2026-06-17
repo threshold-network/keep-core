@@ -197,10 +197,13 @@ func TestRunnerTransportMessage_RejectsOutOfRangeSender(t *testing.T) {
 	}
 }
 
-// A message dropped because a stream was full must NOT be recorded as seen, so a
-// pkg/net retransmission of it is still delivered once the stream drains -
-// otherwise the runner could permanently miss a required message.
-func TestBroadcastChannelRunnerBus_DoesNotSuppressDroppedMessages(t *testing.T) {
+// A message dropped because a stream was full must NOT be recorded as seen: a
+// drop must not poison the dedup set against a later re-delivery of the same
+// content. (Standard pkg/net retransmissions are filtered upstream and would not
+// re-reach the handler, so the real protection against losing an honest message
+// is the buffer sizing; this guards only the dedup bookkeeping for any
+// non-retransmit re-delivery.)
+func TestBroadcastChannelRunnerBus_DropDoesNotPoisonDedup(t *testing.T) {
 	f := newRunnerBusAuthFixture(t, 1) // buffer of one
 	sub := f.bus.Subscribe()
 
@@ -214,15 +217,16 @@ func TestBroadcastChannelRunnerBus_DoesNotSuppressDroppedMessages(t *testing.T) 
 		t.Fatalf("expected 'first' drained, got %q", got.Payload)
 	}
 
-	// Retransmission of the dropped message, now that the buffer has room.
+	// A re-delivery of the dropped content, now that the buffer has room, is
+	// accepted (not suppressed as a duplicate).
 	f.bus.handleMessage(second)
 	select {
 	case got := <-sub.Shares():
 		if string(got.Payload) != "second" {
-			t.Fatalf("expected 'second' on retransmit, got %q", got.Payload)
+			t.Fatalf("expected 'second' on re-delivery, got %q", got.Payload)
 		}
 	default:
-		t.Fatal("a message dropped on overflow must be deliverable on retransmit after drain")
+		t.Fatal("a message dropped on overflow must not be suppressed on a later re-delivery")
 	}
 }
 

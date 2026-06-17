@@ -33,8 +33,15 @@ import (
 //     binding.)
 //  2. Delivery never blocks an honest broadcaster. The single Recv handler
 //     demuxes into bounded per-subscriber streams with non-blocking sends
-//     (dropping the newest on overflow); late/excess traffic is the blame path's
-//     concern, and pkg/net retransmits a genuinely-needed message anyway.
+//     (dropping the newest on overflow). A dropped message is PERMANENT: pkg/net
+//     filters retransmissions before this handler (BroadcastChannel.Recv wraps it
+//     with retransmission support), so a retransmit never re-reaches the bus. The
+//     streams are therefore sized to hold a whole attempt's honest message volume
+//     so honest operation never overflows; overflow only arises when a peer floods
+//     distinct messages faster than the runner drains, which degrades the attempt
+//     to a ROAST retry (pkg/net per-peer limits backstop the flood). Blocking
+//     instead is unsafe: the runner drains the streams in phases, so blocking on a
+//     stream it has finished with would stall delivery of the ones it still needs.
 
 // runnerTransportType maps each RunnerMessageType to the distinct pkg/net
 // message Type() string the BroadcastChannel dispatches on.
@@ -124,11 +131,15 @@ func registerRunnerTransportUnmarshalers(channel net.BroadcastChannel) {
 }
 
 const (
-	// defaultRunnerBusStreamBuffer bounds each per-subscriber stream. Sized to
-	// comfortably hold one attempt's worth of one type from every member, with
-	// headroom; overflow drops the newest (late/excess is the blame path's
-	// concern).
-	defaultRunnerBusStreamBuffer = 256
+	// defaultRunnerBusStreamBuffer bounds each per-subscriber stream. Because a
+	// drop here is permanent (pkg/net filters retransmissions before the handler),
+	// it is sized well above a single attempt's honest message volume - at most
+	// one message per included member per type, plus a small equivocation
+	// allowance the collector caps anyway - for the expected group sizes (tBTC
+	// wallets are ~100 seats). Honest operation thus never overflows; only a peer
+	// flooding distinct messages faster than the runner drains can, and that
+	// degrades the attempt to a retry rather than silently losing an honest one.
+	defaultRunnerBusStreamBuffer = 1024
 	// defaultRunnerBusSeenBound caps the per-subscriber dedup set so a peer
 	// flooding body-different messages cannot grow it without bound. On overflow
 	// the set resets (coarse but bounded); a re-delivered byte-identical message
@@ -295,15 +306,20 @@ func (s *RunnerBusSubscriber) deliverNonBlocking(
 	}
 	select {
 	case stream <- delivered:
-		// Record as seen ONLY after a successful enqueue. A message dropped on
-		// overflow is left un-seen so the pkg/net retransmission of it can still be
-		// delivered once the stream drains - marking it here would permanently
-		// suppress a message the runner never actually received.
+		// Record as seen ONLY after a successful enqueue, so a drop never poisons
+		// the dedup set against a later re-delivery of the same content. (Standard
+		// pkg/net retransmissions are filtered upstream and do NOT re-reach this
+		// handler, so this guards only a non-retransmit re-delivery; it is not a
+		// recovery path for an overflow drop - the buffer sizing is what keeps
+		// honest messages from being dropped in the first place.)
 		if seenBound > 0 && len(s.seen) >= seenBound {
 			s.seen = make(map[[sha256.Size]byte]struct{})
 		}
 		s.seen[hash] = struct{}{}
 	default:
-		// Stream full: drop the newest, leave it un-seen for a future retransmit.
+		// Stream full: drop the newest. This is permanent (retransmissions are
+		// filtered upstream), so the buffer is sized above honest volume and this
+		// only occurs under a flood (-> ROAST retry). Left un-seen so a
+		// non-retransmit re-delivery, if any, is still accepted.
 	}
 }
