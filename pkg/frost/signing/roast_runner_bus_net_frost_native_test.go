@@ -6,7 +6,206 @@ import (
 	"bytes"
 	"context"
 	"testing"
+
+	"github.com/keep-network/keep-core/internal/testutils"
+	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/chain/local_v1"
+	"github.com/keep-network/keep-core/pkg/net"
+	"github.com/keep-network/keep-core/pkg/operator"
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
+
+// fakeNetMessage is a minimal net.Message for exercising the adapter's receive
+// path (sender authentication + demux) without standing up a full network. The
+// authenticated author key is SenderPublicKey(); Payload() is the unmarshaled
+// runner transport message the channel would hand the handler.
+type fakeNetMessage struct {
+	senderPublicKey []byte
+	payload         interface{}
+}
+
+func (m fakeNetMessage) TransportSenderID() net.TransportIdentifier { return nil }
+func (m fakeNetMessage) SenderPublicKey() []byte                    { return m.senderPublicKey }
+func (m fakeNetMessage) Payload() interface{}                       { return m.payload }
+func (m fakeNetMessage) Seqno() uint64                              { return 0 }
+func (m fakeNetMessage) Type() string {
+	if w, ok := m.payload.(*runnerTransportMessage); ok {
+		return w.Type()
+	}
+	return ""
+}
+
+// runnerBusAuthFixture builds a three-seat group with a MULTI-SEAT operator
+// (operator A holds seats 1 and 3; operator B holds seat 2) and a bus wired to
+// the resulting MembershipValidator. It returns the bus plus each operator's
+// authenticated public-key bytes and an outsider's key (not in the group).
+type runnerBusAuthFixture struct {
+	bus        *broadcastChannelRunnerBus
+	operatorA  []byte // seats 1 and 3
+	operatorB  []byte // seat 2
+	outsider   []byte // not selected
+	streamSize int
+}
+
+func newRunnerBusAuthFixture(t *testing.T, streamSize int) runnerBusAuthFixture {
+	t.Helper()
+	signing := local_v1.Connect(3, 3).Signing()
+
+	key := func() []byte {
+		_, publicKey, err := operator.GenerateKeyPair(local_v1.DefaultCurve)
+		if err != nil {
+			t.Fatalf("generate operator key: %v", err)
+		}
+		return operator.MarshalUncompressed(publicKey)
+	}
+	operatorA, operatorB, outsider := key(), key(), key()
+
+	addrA := signing.PublicKeyBytesToAddress(operatorA)
+	addrB := signing.PublicKeyBytesToAddress(operatorB)
+	// Ordered seats: 1 -> A, 2 -> B, 3 -> A (operator A is multi-seat).
+	validator := group.NewMembershipValidator(
+		&testutils.MockLogger{},
+		[]chain.Address{addrA, addrB, addrA},
+		signing,
+	)
+
+	bus := &broadcastChannelRunnerBus{
+		logger:              &testutils.MockLogger{},
+		membershipValidator: validator,
+		streamBuffer:        streamSize,
+		seenBound:           defaultRunnerBusSeenBound,
+	}
+	return runnerBusAuthFixture{
+		bus:        bus,
+		operatorA:  operatorA,
+		operatorB:  operatorB,
+		outsider:   outsider,
+		streamSize: streamSize,
+	}
+}
+
+func shareMessage(sender group.MemberIndex, authorPublicKey []byte, payload string) fakeNetMessage {
+	return fakeNetMessage{
+		senderPublicKey: authorPublicKey,
+		payload: &runnerTransportMessage{
+			messageType: RunnerMsgShareSubmission,
+			sender:      sender,
+			attempt:     [attemptContextHashLength]byte{0x42},
+			payload:     []byte(payload),
+		},
+	}
+}
+
+func TestBroadcastChannelRunnerBus_AuthenticatedMessageDemuxed(t *testing.T) {
+	f := newRunnerBusAuthFixture(t, 8)
+	sub := f.bus.Subscribe()
+
+	// Operator A authentically sends as seat 1 (a seat it holds).
+	f.bus.handleMessage(shareMessage(1, f.operatorA, "share-from-1"))
+
+	select {
+	case msg := <-sub.Shares():
+		if msg.Sender != 1 {
+			t.Fatalf("unexpected sender: [%d]", msg.Sender)
+		}
+		if string(msg.Payload) != "share-from-1" {
+			t.Fatalf("unexpected payload: [%q]", msg.Payload)
+		}
+		if msg.Type != RunnerMsgShareSubmission {
+			t.Fatalf("unexpected type: [%v]", msg.Type)
+		}
+	default:
+		t.Fatal("expected an authenticated message to be delivered")
+	}
+}
+
+func TestBroadcastChannelRunnerBus_RejectsSpoofedSeat(t *testing.T) {
+	f := newRunnerBusAuthFixture(t, 8)
+	sub := f.bus.Subscribe()
+
+	// Operator B (seat 2) claims seat 1 - a seat its key was NOT selected to.
+	f.bus.handleMessage(shareMessage(1, f.operatorB, "spoofed"))
+	// An outsider (no seat) claims seat 1.
+	f.bus.handleMessage(shareMessage(1, f.outsider, "outsider"))
+
+	select {
+	case msg := <-sub.Shares():
+		t.Fatalf("expected spoofed-seat messages to be dropped, got sender [%d]", msg.Sender)
+	default:
+	}
+}
+
+func TestBroadcastChannelRunnerBus_MultiSeatOperator(t *testing.T) {
+	f := newRunnerBusAuthFixture(t, 8)
+	sub := f.bus.Subscribe()
+
+	// Operator A holds seats 1 AND 3: it may authentically send as either, but
+	// NOT as seat 2 (operator B's).
+	f.bus.handleMessage(shareMessage(3, f.operatorA, "share-from-3"))
+	f.bus.handleMessage(shareMessage(2, f.operatorA, "claiming-Bs-seat"))
+
+	got := map[group.MemberIndex]string{}
+	for {
+		select {
+		case msg := <-sub.Shares():
+			got[msg.Sender] = string(msg.Payload)
+			continue
+		default:
+		}
+		break
+	}
+	if len(got) != 1 || got[3] != "share-from-3" {
+		t.Fatalf("expected only seat 3 delivered, got %v", got)
+	}
+}
+
+func TestBroadcastChannelRunnerBus_DedupsByteIdentical(t *testing.T) {
+	f := newRunnerBusAuthFixture(t, 8)
+	sub := f.bus.Subscribe()
+
+	msg := shareMessage(1, f.operatorA, "same-body")
+	f.bus.handleMessage(msg)
+	f.bus.handleMessage(msg) // a retransmission of the identical content
+
+	count := 0
+	for {
+		select {
+		case <-sub.Shares():
+			count++
+			continue
+		default:
+		}
+		break
+	}
+	if count != 1 {
+		t.Fatalf("expected one delivery for byte-identical messages, got [%d]", count)
+	}
+}
+
+func TestBroadcastChannelRunnerBus_DropsWhenStreamFullWithoutBlocking(t *testing.T) {
+	f := newRunnerBusAuthFixture(t, 2) // tiny stream buffer
+	sub := f.bus.Subscribe()
+
+	// Deliver more distinct (body-different) shares than the buffer holds. Each
+	// must not block; the excess is dropped (newest).
+	for i := 0; i < 5; i++ {
+		f.bus.handleMessage(shareMessage(1, f.operatorA, string(rune('a'+i))))
+	}
+
+	count := 0
+	for {
+		select {
+		case <-sub.Shares():
+			count++
+			continue
+		default:
+		}
+		break
+	}
+	if count != 2 {
+		t.Fatalf("expected the stream bounded to 2, got [%d] (and Broadcast must not have blocked)", count)
+	}
+}
 
 func TestRunnerTransportMessage_RoundTrip(t *testing.T) {
 	original := &runnerTransportMessage{
