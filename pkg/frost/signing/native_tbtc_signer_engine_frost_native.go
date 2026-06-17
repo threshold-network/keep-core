@@ -108,6 +108,25 @@ type NativeInteractiveSessionAbortResult struct {
 	Aborted   bool
 }
 
+// NativeDeriveInteractiveAttemptContextResult is the result of
+// DeriveInteractiveAttemptContext: the canonical attempt context the host passes
+// to InteractiveSessionOpen (AttemptNumber is the RFC-21 ZERO-based ordinal,
+// converted back from the engine's 1-based wire value), plus one FROST
+// identifier per included participant in canonical (ascending) order.
+type NativeDeriveInteractiveAttemptContextResult struct {
+	AttemptContext   NativeInteractiveAttemptContext
+	FrostIdentifiers []NativeFROSTParticipantIdentifier
+}
+
+// NativeFROSTParticipantIdentifier pairs a Go member identifier with the
+// engine's canonical FROST identifier string (the key-package encoding the
+// signing-package and aggregate paths require), so the host never re-implements
+// that serialization.
+type NativeFROSTParticipantIdentifier struct {
+	ParticipantIdentifier uint16
+	FrostIdentifier       string
+}
+
 // NativeTBTCSignerEngine executes coarse, session-keyed tbtc-signer
 // operations.
 type NativeTBTCSignerEngine interface {

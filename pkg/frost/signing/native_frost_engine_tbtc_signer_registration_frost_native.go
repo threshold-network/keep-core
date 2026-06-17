@@ -58,6 +58,10 @@ typedef TbtcSignerResult (*tbtc_verify_signature_share_fn)(
   const uint8_t* request_ptr,
   size_t request_len
 );
+typedef TbtcSignerResult (*tbtc_derive_interactive_attempt_context_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
 typedef TbtcSignerResult (*tbtc_interactive_session_open_fn)(
   const uint8_t* request_ptr,
   size_t request_len
@@ -223,6 +227,18 @@ static TbtcSignerResult tbtc_signer_verify_signature_share(const uint8_t* reques
   }
 
   return verify_signature_share(request_ptr, request_len);
+}
+
+static TbtcSignerResult tbtc_signer_derive_interactive_attempt_context(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_derive_interactive_attempt_context_fn derive_interactive_attempt_context = (tbtc_derive_interactive_attempt_context_fn)dlsym(
+    RTLD_DEFAULT,
+    "frost_tbtc_derive_interactive_attempt_context"
+  );
+  if (derive_interactive_attempt_context == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+
+  return derive_interactive_attempt_context(request_ptr, request_len);
 }
 
 static TbtcSignerResult tbtc_signer_interactive_session_open(const uint8_t* request_ptr, size_t request_len) {
@@ -3245,6 +3261,208 @@ func callBuildTaggedTBTCSignerInteractiveAggregate(requestPayload []byte) ([]byt
 		requestPayload,
 		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
 			return C.tbtc_signer_interactive_aggregate(requestPtr, requestLen)
+		},
+	)
+}
+
+// ----------------------------------------------------------------------------
+// Phase 7.3 interactive attempt-context derivation bridge.
+//
+// Derives the canonical attempt context (coordinator, included-participants
+// fingerprint, attempt id) + per-participant FROST identifiers from an attempt's
+// public inputs, so the Go host never re-implements the engine's
+// domain-separated derivations. Stateless and secret-free; the engine
+// re-validates the derived context against the same strict check
+// InteractiveSessionOpen runs, so the host can pass the result straight back in.
+// Additive: no Go caller yet (the runner wiring is the next increment).
+// ----------------------------------------------------------------------------
+
+type buildTaggedTBTCSignerDeriveInteractiveAttemptContextRequest struct {
+	SessionID            string   `json:"session_id"`
+	MessageHex           string   `json:"message_hex"`
+	KeyGroup             string   `json:"key_group"`
+	Threshold            uint16   `json:"threshold"`
+	AttemptNumber        uint32   `json:"attempt_number"`
+	IncludedParticipants []uint16 `json:"included_participants"`
+}
+
+type buildTaggedTBTCSignerParticipantFrostIdentifier struct {
+	ParticipantIdentifier uint16 `json:"participant_identifier"`
+	FrostIdentifier       string `json:"frost_identifier"`
+}
+
+type buildTaggedTBTCSignerDeriveInteractiveAttemptContextResponse struct {
+	AttemptContext   buildTaggedTBTCSignerInteractiveAttemptContext    `json:"attempt_context"`
+	FrostIdentifiers []buildTaggedTBTCSignerParticipantFrostIdentifier `json:"frost_identifiers"`
+}
+
+func (bttse *buildTaggedTBTCSignerEngine) DeriveInteractiveAttemptContext(
+	sessionID string,
+	message []byte,
+	keyGroup string,
+	threshold uint16,
+	attemptNumber uint32,
+	includedParticipants []uint16,
+) (*NativeDeriveInteractiveAttemptContextResult, error) {
+	requestPayload, err := buildTaggedTBTCSignerDeriveInteractiveAttemptContextRequestPayload(
+		sessionID,
+		message,
+		keyGroup,
+		threshold,
+		attemptNumber,
+		includedParticipants,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	responsePayload, err := callBuildTaggedTBTCSignerDeriveInteractiveAttemptContext(requestPayload)
+	if err != nil {
+		return nil, err
+	}
+
+	return decodeBuildTaggedTBTCSignerDeriveInteractiveAttemptContextResponse(responsePayload)
+}
+
+func buildTaggedTBTCSignerDeriveInteractiveAttemptContextRequestPayload(
+	sessionID string,
+	message []byte,
+	keyGroup string,
+	threshold uint16,
+	attemptNumber uint32,
+	includedParticipants []uint16,
+) ([]byte, error) {
+	const operation = "DeriveInteractiveAttemptContext"
+	if sessionID == "" {
+		return nil, buildTaggedTBTCSignerOperationError(operation, "session ID is empty")
+	}
+	if len(message) == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(operation, "message is empty")
+	}
+	if keyGroup == "" {
+		return nil, buildTaggedTBTCSignerOperationError(operation, "key group is empty")
+	}
+	if threshold == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(operation, "threshold is zero")
+	}
+	if len(includedParticipants) == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(operation, "included participants are empty")
+	}
+
+	// attempt.AttemptContext numbers attempts 0-based; the engine's wire
+	// attempt_number is 1-based and rejects 0. Convert here so the first attempt
+	// (RFC 0) is sent as wire 1, matching InteractiveSessionOpen.
+	wireAttemptNumber := attemptNumber + 1
+	if wireAttemptNumber == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(
+			operation,
+			"attempt number overflows the 1-based wire encoding",
+		)
+	}
+
+	return buildTaggedTBTCSignerMarshalRequest(
+		operation,
+		buildTaggedTBTCSignerDeriveInteractiveAttemptContextRequest{
+			SessionID:            sessionID,
+			MessageHex:           hex.EncodeToString(message),
+			KeyGroup:             keyGroup,
+			Threshold:            threshold,
+			AttemptNumber:        wireAttemptNumber,
+			IncludedParticipants: append([]uint16(nil), includedParticipants...),
+		},
+	)
+}
+
+func decodeBuildTaggedTBTCSignerDeriveInteractiveAttemptContextResponse(
+	responsePayload []byte,
+) (*NativeDeriveInteractiveAttemptContextResult, error) {
+	const operation = "DeriveInteractiveAttemptContext"
+	var response buildTaggedTBTCSignerDeriveInteractiveAttemptContextResponse
+	if err := json.Unmarshal(responsePayload, &response); err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			operation,
+			fmt.Sprintf("cannot decode response payload: %v", err),
+		)
+	}
+
+	attemptContext := response.AttemptContext
+	if attemptContext.AttemptID == "" {
+		return nil, buildTaggedTBTCSignerOperationError(operation, "response attempt context attempt ID is empty")
+	}
+	if attemptContext.CoordinatorIdentifier == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(operation, "response attempt context coordinator identifier is zero")
+	}
+	// The engine's wire attempt_number is 1-based; 0 is impossible and would
+	// underflow the conversion below.
+	if attemptContext.AttemptNumber == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(operation, "response attempt context attempt number is zero")
+	}
+	if len(attemptContext.IncludedParticipants) == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(operation, "response attempt context included participants are empty")
+	}
+	// The engine returns exactly one FROST identifier per included participant
+	// (canonical order); a mismatch is a malformed response the host must not
+	// silently consume - downstream signing-package/aggregate keying depends on
+	// the 1:1 correspondence.
+	if len(response.FrostIdentifiers) != len(attemptContext.IncludedParticipants) {
+		return nil, buildTaggedTBTCSignerOperationError(
+			operation,
+			fmt.Sprintf(
+				"response has [%d] frost identifiers for [%d] included participants",
+				len(response.FrostIdentifiers),
+				len(attemptContext.IncludedParticipants),
+			),
+		)
+	}
+
+	frostIdentifiers := make([]NativeFROSTParticipantIdentifier, 0, len(response.FrostIdentifiers))
+	for i, entry := range response.FrostIdentifiers {
+		if entry.FrostIdentifier == "" {
+			return nil, buildTaggedTBTCSignerOperationError(operation, "response frost identifier is empty")
+		}
+		// The engine returns identifiers in canonical participant order, one per
+		// included participant. Bind each entry to the participant at its position:
+		// a matching count alone still lets a duplicate, zero, reordered, or
+		// foreign participant_identifier through, yielding a mapping that diverges
+		// from included_participants - which the runner keys commitments and shares
+		// by. (Index is in bounds: the count-match check above pins the lengths.)
+		if entry.ParticipantIdentifier != attemptContext.IncludedParticipants[i] {
+			return nil, buildTaggedTBTCSignerOperationError(
+				operation,
+				fmt.Sprintf(
+					"response frost identifier [%d] is for participant [%d], expected [%d]",
+					i,
+					entry.ParticipantIdentifier,
+					attemptContext.IncludedParticipants[i],
+				),
+			)
+		}
+		frostIdentifiers = append(frostIdentifiers, NativeFROSTParticipantIdentifier{
+			ParticipantIdentifier: entry.ParticipantIdentifier,
+			FrostIdentifier:       entry.FrostIdentifier,
+		})
+	}
+
+	return &NativeDeriveInteractiveAttemptContextResult{
+		AttemptContext: NativeInteractiveAttemptContext{
+			// Wire 1-based -> RFC-21 0-based, the inverse of the request encoding,
+			// so the host receives the natural attempt.AttemptContext value.
+			AttemptNumber:                   attemptContext.AttemptNumber - 1,
+			CoordinatorIdentifier:           attemptContext.CoordinatorIdentifier,
+			IncludedParticipants:            append([]uint16(nil), attemptContext.IncludedParticipants...),
+			IncludedParticipantsFingerprint: attemptContext.IncludedParticipantsFingerprint,
+			AttemptID:                       attemptContext.AttemptID,
+		},
+		FrostIdentifiers: frostIdentifiers,
+	}, nil
+}
+
+func callBuildTaggedTBTCSignerDeriveInteractiveAttemptContext(requestPayload []byte) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"DeriveInteractiveAttemptContext",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_derive_interactive_attempt_context(requestPtr, requestLen)
 		},
 	)
 }
