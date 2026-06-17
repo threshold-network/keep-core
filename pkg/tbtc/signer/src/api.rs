@@ -381,6 +381,45 @@ pub struct AttemptContext {
     pub attempt_id: String,
 }
 
+/// Request to derive the canonical interactive attempt context (plus the
+/// per-participant FROST identifiers) from an attempt's public inputs, so the
+/// host never re-implements the engine's domain-separated derivations - the
+/// cross-language divergence class. Stateless and secret-free: no DKG lookup,
+/// no nonce/session state, no policy decision.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct DeriveInteractiveAttemptContextRequest {
+    pub session_id: String,
+    pub message_hex: String,
+    pub key_group: String,
+    /// Validation gate only - the derivation requires `included_participants`
+    /// to hold at least `threshold` members; it is NOT an input to the
+    /// fingerprint, attempt-id, or coordinator derivation.
+    pub threshold: u16,
+    /// 1-based wire attempt number (the host's 0-based value + 1), matching
+    /// `AttemptContext.attempt_number`.
+    pub attempt_number: u32,
+    pub included_participants: Vec<u16>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct DeriveInteractiveAttemptContextResult {
+    /// The canonical attempt context, re-validated against strict-mode
+    /// `validate_attempt_context` before returning, so the host can pass it
+    /// verbatim to `InteractiveSessionOpenRequest.attempt_context` and the
+    /// engine will accept it.
+    pub attempt_context: AttemptContext,
+    /// One FROST identifier string per included participant, in canonical
+    /// (ascending) participant order - the exact key-package encoding the
+    /// signing-package and aggregate paths expect.
+    pub frost_identifiers: Vec<ParticipantFrostIdentifier>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct ParticipantFrostIdentifier {
+    pub participant_identifier: u16,
+    pub frost_identifier: String,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct AttemptExclusionEvidence {
     pub reason: String,

@@ -98,6 +98,16 @@ TbtcSignerResult frost_tbtc_interactive_aggregate(const uint8_t* request_ptr, si
  * blame on its own.
  */
 TbtcSignerResult frost_tbtc_verify_signature_share(const uint8_t* request_ptr, size_t request_len);
+/*
+ * Phase 7.3 interactive attempt-context derivation. Stateless and secret-free:
+ * derives the canonical attempt context (coordinator, included-participants
+ * fingerprint, attempt id) and the per-participant FROST identifiers the host
+ * feeds into frost_tbtc_interactive_session_open, so the host never
+ * re-implements the engine's domain-separated derivations. The returned context
+ * is re-validated against the same strict-mode check session_open runs, so the
+ * engine is guaranteed to accept it. No DKG/nonce/session state is touched.
+ */
+TbtcSignerResult frost_tbtc_derive_interactive_attempt_context(const uint8_t* request_ptr, size_t request_len);
 
 #ifdef __cplusplus
 }

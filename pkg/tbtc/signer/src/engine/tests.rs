@@ -3350,6 +3350,171 @@ fn roast_attempt_context_hash_vectors_match_expected_values() {
 }
 
 #[test]
+fn derive_interactive_attempt_context_matches_standalone_derivations() {
+    let _guard = lock_test_state(); // hermetic env: development profile, provenance gate off
+    let session_id = "derive-session-1";
+    let key_group = "derive-key-group";
+    let message_hex = "77".repeat(32); // 32-byte signing digest
+    let message_bytes = hex::decode(&message_hex).expect("message hex");
+    let threshold = 2u16;
+    let attempt_number = 3u32; // 1-based wire
+    let included = vec![5u16, 1, 3]; // unsorted -> exercises canonical (ascending) ordering
+
+    let result = derive_interactive_attempt_context(DeriveInteractiveAttemptContextRequest {
+        session_id: session_id.to_string(),
+        message_hex: message_hex.clone(),
+        key_group: key_group.to_string(),
+        threshold,
+        attempt_number,
+        included_participants: included.clone(),
+    })
+    .expect("derivation should succeed");
+
+    let canonical = canonicalize_included_participants(&included).expect("canonical");
+    assert_eq!(canonical, vec![1, 3, 5]);
+    assert_eq!(result.attempt_context.included_participants, canonical);
+    assert_eq!(result.attempt_context.attempt_number, attempt_number);
+
+    // Coordinator matches the standalone shuffle selection (0-based attempt).
+    let seed = roast_attempt_shuffle_seed(
+        key_group,
+        session_id,
+        &rfc21_message_digest(&message_bytes).expect("rfc21 digest"),
+    )
+    .expect("seed");
+    let expected_coordinator =
+        select_coordinator_identifier(&canonical, seed, attempt_number - 1).expect("coordinator");
+    assert_eq!(
+        result.attempt_context.coordinator_identifier,
+        expected_coordinator
+    );
+
+    // Fingerprint + attempt_id match the standalone domain-separated derivations.
+    let expected_fingerprint =
+        roast_included_participants_fingerprint_hex(&canonical).expect("fingerprint");
+    assert_eq!(
+        result.attempt_context.included_participants_fingerprint,
+        expected_fingerprint
+    );
+    let expected_attempt_id = roast_attempt_id_hex(
+        session_id,
+        &hash_hex(&message_bytes),
+        attempt_number,
+        expected_coordinator,
+        &expected_fingerprint,
+    )
+    .expect("attempt id");
+    assert_eq!(result.attempt_context.attempt_id, expected_attempt_id);
+
+    // The derived context is accepted by the same strict validator open runs.
+    validate_attempt_context(
+        session_id,
+        key_group,
+        &message_bytes,
+        &hash_hex(&message_bytes),
+        threshold,
+        Some(&result.attempt_context),
+        true,
+    )
+    .expect("derived context must satisfy strict validation");
+
+    // One FROST identifier per participant, canonical order + encoding.
+    assert_eq!(result.frost_identifiers.len(), canonical.len());
+    for (entry, participant) in result.frost_identifiers.iter().zip(canonical.iter()) {
+        assert_eq!(entry.participant_identifier, *participant);
+        let expected = frost_identifier_to_go_string(
+            participant_identifier_to_frost_identifier(*participant).expect("frost id"),
+        );
+        assert_eq!(entry.frost_identifier, expected);
+    }
+}
+
+#[test]
+fn derive_interactive_attempt_context_is_deterministic() {
+    let _guard = lock_test_state();
+    let request = DeriveInteractiveAttemptContextRequest {
+        session_id: "s".to_string(),
+        message_hex: "ab".repeat(32),
+        key_group: "kg".to_string(),
+        threshold: 2,
+        attempt_number: 1,
+        included_participants: vec![1, 2, 3],
+    };
+    let first = derive_interactive_attempt_context(request.clone()).expect("first");
+    let second = derive_interactive_attempt_context(request).expect("second");
+    assert_eq!(first, second);
+}
+
+#[test]
+fn derive_interactive_attempt_context_rejects_invalid_inputs() {
+    let _guard = lock_test_state();
+    let base = DeriveInteractiveAttemptContextRequest {
+        session_id: "s".to_string(),
+        message_hex: "cd".repeat(32),
+        key_group: "kg".to_string(),
+        threshold: 2,
+        attempt_number: 1,
+        included_participants: vec![1, 2, 3],
+    };
+
+    let mut empty_message = base.clone();
+    empty_message.message_hex = String::new();
+    assert!(derive_interactive_attempt_context(empty_message).is_err());
+
+    // session_id is validated (and hashed into attempt_id), so an empty/malformed
+    // one must fail here exactly as interactive_session_open's validate_session_id
+    // would reject it.
+    let mut empty_session = base.clone();
+    empty_session.session_id = String::new();
+    assert!(derive_interactive_attempt_context(empty_session).is_err());
+
+    let mut zero_attempt = base.clone();
+    zero_attempt.attempt_number = 0;
+    assert!(derive_interactive_attempt_context(zero_attempt).is_err());
+
+    // threshold == 0 is vacuously >= len, but interactive_session_open rejects
+    // it, so the helper must too rather than hand back a context open refuses.
+    let mut zero_threshold = base.clone();
+    zero_threshold.threshold = 0;
+    assert!(derive_interactive_attempt_context(zero_threshold).is_err());
+
+    let mut threshold_too_large = base.clone();
+    threshold_too_large.threshold = 5;
+    threshold_too_large.included_participants = vec![1, 2];
+    assert!(derive_interactive_attempt_context(threshold_too_large).is_err());
+
+    let mut duplicate_participant = base.clone();
+    duplicate_participant.included_participants = vec![1, 2, 2];
+    assert!(derive_interactive_attempt_context(duplicate_participant).is_err());
+
+    let mut no_participants = base;
+    no_participants.included_participants = vec![];
+    assert!(derive_interactive_attempt_context(no_participants).is_err());
+}
+
+#[test]
+fn derive_interactive_attempt_context_enforces_provenance_gate() {
+    let _guard = lock_test_state();
+    // Enable the provenance gate with no attestation configured: the helper must
+    // fail closed exactly like interactive_session_open's front door, never
+    // returning a derived context on an unattested engine.
+    std::env::set_var(TBTC_SIGNER_ENFORCE_PROVENANCE_GATE_ENV, "true");
+
+    let result = derive_interactive_attempt_context(DeriveInteractiveAttemptContextRequest {
+        session_id: "s".to_string(),
+        message_hex: "ef".repeat(32),
+        key_group: "kg".to_string(),
+        threshold: 2,
+        attempt_number: 1,
+        included_participants: vec![1, 2, 3],
+    });
+    assert!(matches!(
+        result,
+        Err(EngineError::ProvenanceGateRejected { .. })
+    ));
+}
+
+#[test]
 fn formal_verification_roast_attempt_context_shared_vectors_match_expected_values() {
     let vector_suite = load_attempt_context_vector_suite();
     assert_eq!(vector_suite.schema_version, "roast-attempt-context-v1");
