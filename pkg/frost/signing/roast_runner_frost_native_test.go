@@ -537,6 +537,110 @@ func TestInteractiveSigningRunner_DrainDoesNotLivelockUnderShareFlood(t *testing
 	<-floodDone
 }
 
+// beginSyntheticAttempt makes a second attempt live in the SAME collector, keyed
+// by a synthetic context hash with the given elected coordinator, and records an
+// authoritative package for it - so a cross-attempt test can prove a payload
+// signed for THIS attempt would be accepted here absent the signed-hash guard.
+// Returns that attempt's authoritative package body hash.
+func beginSyntheticAttempt(
+	t *testing.T,
+	collector *roast.Round2Collector,
+	hash [attempt.MessageDigestLength]byte,
+	elected group.MemberIndex,
+	included []group.MemberIndex,
+	signer roast.Signer,
+) [32]byte {
+	t.Helper()
+	if err := collector.BeginAttempt(hash[:], elected, included); err != nil {
+		t.Fatalf("begin synthetic attempt: %v", err)
+	}
+	envelope, bodyHash := craftSigningPackage(t, hash, elected, []byte("authoritative-B"), signer)
+	pkg := &roast.SigningPackage{}
+	if err := pkg.Unmarshal(envelope); err != nil {
+		t.Fatalf("unmarshal synthetic authoritative: %v", err)
+	}
+	if err := collector.RecordSigningPackage(pkg); err != nil {
+		t.Fatalf("record synthetic authoritative: %v", err)
+	}
+	return bodyHash
+}
+
+func recordAuthoritativePackage(
+	t *testing.T,
+	collector *roast.Round2Collector,
+	hash [attempt.MessageDigestLength]byte,
+	elected group.MemberIndex,
+	signer roast.Signer,
+) {
+	t.Helper()
+	envelope, _ := craftSigningPackage(t, hash, elected, []byte("authoritative-A"), signer)
+	pkg := &roast.SigningPackage{}
+	if err := pkg.Unmarshal(envelope); err != nil {
+		t.Fatalf("unmarshal authoritative: %v", err)
+	}
+	if err := collector.RecordSigningPackage(pkg); err != nil {
+		t.Fatalf("record authoritative: %v", err)
+	}
+}
+
+// A share carried in a current-attempt (A) bus message but SIGNED for another
+// live attempt (B) must not be counted toward A - the runner must check the
+// signed AttemptContextHash, not the unsigned outer bus field. Without the
+// guard, the collector records it under B (accepted) and returns nil, so this
+// code would count it toward A.
+func TestInteractiveSigningRunner_RejectsCrossAttemptShare(t *testing.T) {
+	included := []group.MemberIndex{1, 2}
+	runner, collector, hashA, electedA := buildEquivocationRunner(t, included)
+	signer := fixedTestSigner{}
+	if err := collector.BeginAttempt(hashA[:], electedA, included); err != nil {
+		t.Fatalf("collector begin A: %v", err)
+	}
+	recordAuthoritativePackage(t, collector, hashA, electedA, signer)
+
+	// Attempt B live in the same collector (electedB == electedA so an electedA-
+	// bound payload is acceptable there).
+	hashB := [attempt.MessageDigestLength]byte{0x99}
+	pkgBodyHashB := beginSyntheticAttempt(t, collector, hashB, electedA, included, signer)
+
+	shareForB := craftShareSubmission(t, hashB, 1, electedA, pkgBodyHashB, []byte("share-for-B"), signer)
+	msg := RunnerMessage{Type: RunnerMsgShareSubmission, Sender: 1, Attempt: hashA, Payload: shareForB}
+
+	into := map[group.MemberIndex][]byte{}
+	runner.recordShareMessage(msg, hashA, setOf(included), into)
+	if _, counted := into[1]; counted {
+		t.Fatal("share signed for attempt B was counted toward attempt A")
+	}
+}
+
+// A package carried in a current-attempt (A) bus message but SIGNED for another
+// live attempt (B) must not be recorded by A's buffered-package drain. Without
+// the guard the drain records it under B (a body-different conflict there),
+// emitting a B equivocation event A had no business producing.
+func TestInteractiveSigningRunner_RejectsCrossAttemptPackageInDrain(t *testing.T) {
+	included := []group.MemberIndex{1, 2}
+	runner, collector, hashA, electedA := buildEquivocationRunner(t, included)
+	signer := fixedTestSigner{}
+	if err := collector.BeginAttempt(hashA[:], electedA, included); err != nil {
+		t.Fatalf("collector begin A: %v", err)
+	}
+	recordAuthoritativePackage(t, collector, hashA, electedA, signer)
+
+	hashB := [attempt.MessageDigestLength]byte{0x99}
+	_ = beginSyntheticAttempt(t, collector, hashB, electedA, included, signer)
+
+	// A body-different package signed for B, rewrapped as a current-attempt (A)
+	// message from electedA.
+	crossEnvelope, _ := craftSigningPackage(t, hashB, electedA, []byte("equivocating-B"), signer)
+	stream := make(chan RunnerMessage, 4)
+	stream <- RunnerMessage{Type: RunnerMsgSigningPackage, Sender: electedA, Attempt: hashA, Payload: crossEnvelope}
+
+	evidence := captureEquivocationEvidence(t)
+	runner.recordBufferedCoordinatorPackages(stream, electedA, hashA)
+	if got := evidence(); len(got) != 0 {
+		t.Fatalf("package signed for attempt B was recorded under it via A's drain: %+v", got)
+	}
+}
+
 func TestNewInteractiveSigningRunner_RejectsInvalidConstruction(t *testing.T) {
 	// A valid baseline to vary one field at a time.
 	included := []group.MemberIndex{1, 2, 3}

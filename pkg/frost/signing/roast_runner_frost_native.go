@@ -264,6 +264,19 @@ func (r *interactiveSigningRunner) obtainSigningPackage(
 				if msg.Attempt != contextHash || msg.Sender != elected {
 					continue
 				}
+				// Trust the SIGNED attempt hash, not just the unsigned outer bus
+				// field. A package the coordinator legitimately signed for ANOTHER
+				// attempt, rewrapped in a current-attempt message, must not drive
+				// this flow - it could be recorded/authenticated under that other
+				// attempt (if live in this shared collector) and we would sign the
+				// wrong package. Keep waiting for the package signed for THIS attempt.
+				pkg := &roast.SigningPackage{}
+				if err := pkg.Unmarshal(msg.Payload); err != nil {
+					continue
+				}
+				if !bytes.Equal(pkg.AttemptContextHash, contextHash[:]) {
+					continue
+				}
 				return append([]byte(nil), msg.Payload...), nil
 			}
 		}
@@ -445,6 +458,14 @@ func (r *interactiveSigningRunner) recordShareMessage(
 	if sub.SubmitterID() != msg.Sender {
 		return
 	}
+	// Trust the SIGNED attempt hash, not just the unsigned outer bus field. The
+	// collector keys RecordShareSubmission by sub.AttemptContextHash, so a share
+	// the submitter signed for ANOTHER attempt - rewrapped in a current-attempt
+	// message - would be recorded under that attempt (accepted, returning nil if
+	// it is live in this shared collector) and counted toward THIS aggregate.
+	if !bytes.Equal(sub.AttemptContextHash, contextHash[:]) {
+		return
+	}
 	recordErr := r.collector.RecordShareSubmission(&sub)
 	if _, have := into[msg.Sender]; have {
 		return
@@ -477,6 +498,12 @@ func (r *interactiveSigningRunner) recordBufferedCoordinatorPackages(
 			}
 			pkg := &roast.SigningPackage{}
 			if err := pkg.Unmarshal(msg.Payload); err != nil {
+				continue
+			}
+			// Signed attempt hash, not the unsigned outer field (see
+			// obtainSigningPackage): never record a package signed for another
+			// attempt under it via this attempt's drain.
+			if !bytes.Equal(pkg.AttemptContextHash, contextHash[:]) {
 				continue
 			}
 			_ = r.collector.RecordSigningPackage(pkg)
