@@ -24,6 +24,11 @@ type fakeInteractiveSigningEngine struct {
 	signingPackage []byte
 	signature      []byte
 	aggregateErr   error
+	// coordinatorIdentifier is what DeriveInteractiveAttemptContext returns; the
+	// harness sets it to the binding's elected coordinator so the runner's
+	// cross-check passes (a real engine derives the same value the binding did).
+	coordinatorIdentifier uint16
+	deriveErr             error
 
 	commitmentsByMember map[uint16][]byte
 	shareByMember       map[uint16][]byte
@@ -35,7 +40,41 @@ type fakeInteractiveSigningEngine struct {
 	round2Calls         int
 	aggregateCalls      int
 	abortCalls          int
+	deriveCalls         int
 	lastAggregateShares []nativeFROSTSignatureShare
+}
+
+func (f *fakeInteractiveSigningEngine) DeriveInteractiveAttemptContext(
+	sessionID string,
+	message []byte,
+	keyGroup string,
+	threshold uint16,
+	attemptNumber uint32,
+	includedParticipants []uint16,
+) (*NativeDeriveInteractiveAttemptContextResult, error) {
+	f.mu.Lock()
+	f.deriveCalls++
+	f.mu.Unlock()
+	if f.deriveErr != nil {
+		return nil, f.deriveErr
+	}
+	identifiers := make([]NativeFROSTParticipantIdentifier, 0, len(includedParticipants))
+	for _, participant := range includedParticipants {
+		identifiers = append(identifiers, NativeFROSTParticipantIdentifier{
+			ParticipantIdentifier: participant,
+			FrostIdentifier:       fmt.Sprintf("frost-id-%d", participant),
+		})
+	}
+	return &NativeDeriveInteractiveAttemptContextResult{
+		AttemptContext: NativeInteractiveAttemptContext{
+			AttemptNumber:                   attemptNumber,
+			CoordinatorIdentifier:           f.coordinatorIdentifier,
+			IncludedParticipants:            append([]uint16(nil), includedParticipants...),
+			IncludedParticipantsFingerprint: "fake-fingerprint",
+			AttemptID:                       "fake-attempt-id",
+		},
+		FrostIdentifiers: identifiers,
+	}, nil
 }
 
 func (f *fakeInteractiveSigningEngine) InteractiveSessionAbort(

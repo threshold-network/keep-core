@@ -370,6 +370,13 @@ import (
 
 type buildTaggedTBTCSignerEngine struct{}
 
+// The cgo-backed engine must satisfy the runner's interactiveSigningEngine
+// boundary (defined under the frost_native tag, which this file also carries).
+// This assertion lives in the cgo wiring layer so widening the interface there
+// is compile-checked against the real engine, even before a production path
+// constructs one.
+var _ interactiveSigningEngine = (*buildTaggedTBTCSignerEngine)(nil)
+
 type buildTaggedTBTCSignerRunDKGRequest struct {
 	SessionID    string                                `json:"session_id"`
 	Participants []buildTaggedTBTCSignerDKGParticipant `json:"participants"`

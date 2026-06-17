@@ -5,8 +5,6 @@ package signing
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 
 	"github.com/keep-network/keep-core/pkg/frost/roast"
@@ -120,8 +118,39 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 	contextHash := binding.ContextHash()
 	elected := binding.ElectedCoordinator()
 
-	// 1. Open the interactive session; the engine returns the attempt id used
-	// for every subsequent round.
+	// 1. Derive the canonical attempt context + per-participant FROST identifiers
+	// from the engine (single source of truth - the runner never re-implements the
+	// engine's domain-separated derivations). Cross-check the engine-derived
+	// coordinator and included set against the binding's own RFC-21 election so a
+	// divergence fails closed HERE rather than producing a signature bound to the
+	// wrong coordinator/set; the two independent derivations must agree.
+	derived, err := r.engine.DeriveInteractiveAttemptContext(
+		binding.SessionID(),
+		r.messageDigest,
+		attemptCtx.KeyGroupID,
+		r.threshold,
+		attemptCtx.AttemptNumber,
+		includedSetToUint16(includedSet),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("roast runner: derive attempt context: %w", err)
+	}
+	if group.MemberIndex(derived.AttemptContext.CoordinatorIdentifier) != elected {
+		return nil, fmt.Errorf(
+			"roast runner: engine-derived coordinator [%d] does not match the bound elected coordinator [%d]",
+			derived.AttemptContext.CoordinatorIdentifier, elected,
+		)
+	}
+	if !sameMemberSet(derived.AttemptContext.IncludedParticipants, includedSet) {
+		return nil, fmt.Errorf("roast runner: engine-derived included set diverges from the bound attempt")
+	}
+	frostIdentifiers, err := frostIdentifierMap(derived.FrostIdentifiers, includedSet)
+	if err != nil {
+		return nil, fmt.Errorf("roast runner: %w", err)
+	}
+
+	// 2. Open the interactive session with the engine-derived context; the engine
+	// returns the attempt id used for every subsequent round.
 	open, err := r.engine.InteractiveSessionOpen(
 		binding.SessionID(),
 		uint16(r.member),
@@ -129,7 +158,7 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 		attemptCtx.KeyGroupID,
 		r.threshold,
 		binding.TaprootMerkleRoot(),
-		nativeAttemptContext(binding),
+		derived.AttemptContext,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("roast runner: open session: %w", err)
@@ -178,7 +207,7 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 
 	// 5. The elected coordinator builds, signs, and broadcasts the signing
 	// package; everyone else awaits it.
-	signingPackageEnvelope, err := r.obtainSigningPackage(ctx, r.sub.SigningPackages(), elected, contextHash, commitments, includedSet)
+	signingPackageEnvelope, err := r.obtainSigningPackage(ctx, r.sub.SigningPackages(), elected, contextHash, commitments, includedSet, frostIdentifiers)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +266,7 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 		binding.SessionID(),
 		attemptID,
 		pkg.SigningPackageBytes,
-		toFrostSignatureShares(shares),
+		toFrostSignatureShares(shares, frostIdentifiers),
 		binding.TaprootMerkleRoot(),
 	)
 	if err != nil {
@@ -269,6 +298,7 @@ func (r *interactiveSigningRunner) obtainSigningPackage(
 	contextHash [attempt.MessageDigestLength]byte,
 	commitments map[group.MemberIndex][]byte,
 	includedSet []group.MemberIndex,
+	frostIdentifiers map[group.MemberIndex]string,
 ) ([]byte, error) {
 	if r.member != elected {
 		// Accept ONLY the elected coordinator's package for THIS attempt. Without
@@ -301,7 +331,7 @@ func (r *interactiveSigningRunner) obtainSigningPackage(
 		}
 	}
 
-	frostPackage, err := r.engine.NewSigningPackage(r.messageDigest, toFrostCommitments(commitments, includedSet))
+	frostPackage, err := r.engine.NewSigningPackage(r.messageDigest, toFrostCommitments(commitments, includedSet, frostIdentifiers))
 	if err != nil {
 		return nil, fmt.Errorf("roast runner: new signing package: %w", err)
 	}
@@ -532,49 +562,63 @@ func (r *interactiveSigningRunner) recordBufferedCoordinatorPackages(
 	}
 }
 
-// nativeAttemptContext maps the binding's RFC-21 attempt context to the engine's
-// wire shape. AttemptNumber stays 0-based (the bridge converts to the 1-based
-// wire value).
-//
-// IncludedParticipantsFingerprint and AttemptID are PLACEHOLDERS, inert here:
-// the only engine #4076 wires is the fake, which ignores them, and no production
-// path constructs the real cgo engine yet. They are NOT engine-valid. Strict-mode
-// validate_attempt_context (engine roast.rs) recomputes both from canonical
-// inputs and rejects a mismatch before round 1:
-//   - fingerprint := roast_included_participants_fingerprint_hex(participants)
-//     (domain-separated hash of the framed u16 set), and
-//   - attempt_id   := roast_attempt_id_hex(session_id, message_digest_hex,
-//     attempt_number, coordinator_id, fingerprint_hex).
-//
-// Producing these byte-for-byte is a cross-impl derivation (the seed-divergence
-// class of bug); deriving-in-Go vs exposing-from-engine is the open design fork
-// for the real-engine attempt-context wiring increment. The runner already drives
-// subsequent rounds with the attempt id the engine RETURNS, not this field.
-func nativeAttemptContext(binding *ActiveRoastAttempt) NativeInteractiveAttemptContext {
-	ctx := binding.Context()
-	included := make([]uint16, 0, len(ctx.IncludedSet))
-	for _, m := range ctx.IncludedSet {
-		included = append(included, uint16(m))
-	}
-	hash := binding.ContextHash()
-	return NativeInteractiveAttemptContext{
-		AttemptNumber:                   ctx.AttemptNumber,
-		CoordinatorIdentifier:           uint16(binding.ElectedCoordinator()),
-		IncludedParticipants:            included,
-		IncludedParticipantsFingerprint: hex.EncodeToString(includedSetFingerprint(ctx.IncludedSet)),
-		AttemptID:                       hex.EncodeToString(hash[:]),
-	}
-}
-
-func includedSetFingerprint(includedSet []group.MemberIndex) []byte {
-	h := sha256.New()
+// includedSetToUint16 converts the binding's member-index set to the u16 list the
+// engine's DeriveInteractiveAttemptContext expects.
+func includedSetToUint16(includedSet []group.MemberIndex) []uint16 {
+	out := make([]uint16, 0, len(includedSet))
 	for _, m := range includedSet {
-		h.Write([]byte{byte(m)})
+		out = append(out, uint16(m))
 	}
-	return h.Sum(nil)
+	return out
 }
 
-func toFrostCommitments(commitments map[group.MemberIndex][]byte, includedSet []group.MemberIndex) []nativeFROSTCommitment {
+// sameMemberSet reports whether the engine-derived participant list is the same
+// SET as the binding's included members - the cross-check that the engine's
+// canonicalization agrees with the bound attempt, independent of order.
+func sameMemberSet(derived []uint16, included []group.MemberIndex) bool {
+	if len(derived) != len(included) {
+		return false
+	}
+	want := make(map[uint16]struct{}, len(included))
+	for _, m := range included {
+		want[uint16(m)] = struct{}{}
+	}
+	for _, d := range derived {
+		if _, ok := want[d]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// frostIdentifierMap indexes the engine-derived FROST identifiers by Go member
+// index, requiring exactly one per included member. The engine returns one per
+// participant and the bridge already verified the 1:1 correspondence, so a gap
+// here is defensive against a future engine/bridge change.
+func frostIdentifierMap(
+	entries []NativeFROSTParticipantIdentifier,
+	includedSet []group.MemberIndex,
+) (map[group.MemberIndex]string, error) {
+	out := make(map[group.MemberIndex]string, len(entries))
+	for _, entry := range entries {
+		out[group.MemberIndex(entry.ParticipantIdentifier)] = entry.FrostIdentifier
+	}
+	for _, m := range includedSet {
+		if out[m] == "" {
+			return nil, fmt.Errorf("missing FROST identifier for included member [%d]", m)
+		}
+	}
+	return out, nil
+}
+
+// toFrostCommitments keys each collected commitment by the engine-derived FROST
+// identifier for that member (frostIdentifiers), so NewSigningPackage builds the
+// FROST BTreeMap<Identifier, _> the member's key share expects.
+func toFrostCommitments(
+	commitments map[group.MemberIndex][]byte,
+	includedSet []group.MemberIndex,
+	frostIdentifiers map[group.MemberIndex]string,
+) []nativeFROSTCommitment {
 	out := make([]nativeFROSTCommitment, 0, len(includedSet))
 	for _, m := range includedSet {
 		data, ok := commitments[m]
@@ -582,37 +626,28 @@ func toFrostCommitments(commitments map[group.MemberIndex][]byte, includedSet []
 			continue
 		}
 		out = append(out, nativeFROSTCommitment{
-			Identifier: memberFrostIdentifier(m),
+			Identifier: frostIdentifiers[m],
 			Data:       append([]byte(nil), data...),
 		})
 	}
 	return out
 }
 
-func toFrostSignatureShares(shares map[group.MemberIndex][]byte) []nativeFROSTSignatureShare {
+// toFrostSignatureShares keys each collected share by the engine-derived FROST
+// identifier for that member, so InteractiveAggregate matches each share to the
+// member's verifying share.
+func toFrostSignatureShares(
+	shares map[group.MemberIndex][]byte,
+	frostIdentifiers map[group.MemberIndex]string,
+) []nativeFROSTSignatureShare {
 	out := make([]nativeFROSTSignatureShare, 0, len(shares))
 	for m, data := range shares {
 		out = append(out, nativeFROSTSignatureShare{
-			Identifier: memberFrostIdentifier(m),
+			Identifier: frostIdentifiers[m],
 			Data:       append([]byte(nil), data...),
 		})
 	}
 	return out
-}
-
-// memberFrostIdentifier maps a Go member index to the FROST identifier the
-// engine keys signing-package commitments and signature shares by.
-//
-// This decimal form is a PLACEHOLDER, inert against the fake (which ignores it)
-// and never reaching the real engine in #4076. The engine's canonical encoding
-// (codec.rs participant_identifier_to_frost_identifier + frost_identifier_to_go_string)
-// is the u16 serialized as the secp256k1 scalar - 32-byte big-endian - hex
-// encoded; the real engine deserializes exactly that to build the
-// BTreeMap<Identifier, _> in the FROST signing package, so "1" would not match
-// the member's key share. Replaced with the canonical encoding in the
-// real-engine wiring increment.
-func memberFrostIdentifier(member group.MemberIndex) string {
-	return fmt.Sprintf("%d", member)
 }
 
 // taprootRootMatches reports whether a received package's taproot root equals
