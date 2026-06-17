@@ -135,7 +135,10 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("roast runner: derive attempt context: %w", err)
 	}
-	if group.MemberIndex(derived.AttemptContext.CoordinatorIdentifier) != elected {
+	// Compare in uint16 space (widening the uint8 elected is lossless): a
+	// truncating group.MemberIndex(...) cast would let a malformed engine
+	// coordinator > 255 alias an honest member (e.g. 257 -> 1) and falsely match.
+	if derived.AttemptContext.CoordinatorIdentifier != uint16(elected) {
 		return nil, fmt.Errorf(
 			"roast runner: engine-derived coordinator [%d] does not match the bound elected coordinator [%d]",
 			derived.AttemptContext.CoordinatorIdentifier, elected,
