@@ -119,6 +119,33 @@ func (nefea *nativeExecutionFFIExecutorAdapter) Execute(
 		defer orchCleanup()
 	}
 
+	// RFC-21 Phase 7.3: gated interactive ROAST signing. When the operator
+	// audit gate (KEEP_CORE_FROST_INTERACTIVE_SIGNING_ENABLED) is on, an
+	// interactive engine is registered, and orchestration is active for this
+	// session, drive ONE interactive attempt and return its signature. The
+	// outer tBTC signingRetryLoop owns retries -- it re-invokes Execute with a
+	// fresh attempt context on failure -- so this drives a single attempt and
+	// never loops. When interactive signing is not enabled, handled is false
+	// and execution falls through to the coarse primitive below. In the default
+	// build (no frost_native && frost_roast_retry) the helper is a permanent
+	// no-op returning (nil, false, nil).
+	interactiveSignature, handled, interactiveErr :=
+		driveInteractiveRoastSigningIfEnabled(ctx, logger, ffiRequest)
+	if interactiveErr != nil {
+		return nil, interactiveErr
+	}
+	if handled {
+		if interactiveSignature == nil {
+			return nil, fmt.Errorf(
+				"interactive ROAST signing returned nil signature",
+			)
+		}
+		return &Result{
+			Signature: interactiveSignature,
+			Attempt:   cloneAttempt(request.Attempt),
+		}, nil
+	}
+
 	signature, err := nefea.primitive.Sign(ctx, logger, ffiRequest)
 	if err != nil {
 		return nil, err
