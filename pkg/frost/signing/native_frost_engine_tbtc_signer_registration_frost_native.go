@@ -3416,9 +3416,26 @@ func decodeBuildTaggedTBTCSignerDeriveInteractiveAttemptContextResponse(
 	}
 
 	frostIdentifiers := make([]NativeFROSTParticipantIdentifier, 0, len(response.FrostIdentifiers))
-	for _, entry := range response.FrostIdentifiers {
+	for i, entry := range response.FrostIdentifiers {
 		if entry.FrostIdentifier == "" {
 			return nil, buildTaggedTBTCSignerOperationError(operation, "response frost identifier is empty")
+		}
+		// The engine returns identifiers in canonical participant order, one per
+		// included participant. Bind each entry to the participant at its position:
+		// a matching count alone still lets a duplicate, zero, reordered, or
+		// foreign participant_identifier through, yielding a mapping that diverges
+		// from included_participants - which the runner keys commitments and shares
+		// by. (Index is in bounds: the count-match check above pins the lengths.)
+		if entry.ParticipantIdentifier != attemptContext.IncludedParticipants[i] {
+			return nil, buildTaggedTBTCSignerOperationError(
+				operation,
+				fmt.Sprintf(
+					"response frost identifier [%d] is for participant [%d], expected [%d]",
+					i,
+					entry.ParticipantIdentifier,
+					attemptContext.IncludedParticipants[i],
+				),
+			)
 		}
 		frostIdentifiers = append(frostIdentifiers, NativeFROSTParticipantIdentifier{
 			ParticipantIdentifier: entry.ParticipantIdentifier,

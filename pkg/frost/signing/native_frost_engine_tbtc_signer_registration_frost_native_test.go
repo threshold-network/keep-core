@@ -2059,4 +2059,11 @@ func TestDecodeBuildTaggedTBTCSignerDeriveInteractiveAttemptContextResponse(t *t
 	); err == nil {
 		t.Fatal("expected frost-identifier/participant count mismatch to be rejected")
 	}
+	// A matching count but mismatched participant correspondence is rejected
+	// (participant 3 appears at the position participant 2 is expected).
+	if _, err := decodeBuildTaggedTBTCSignerDeriveInteractiveAttemptContextResponse(
+		[]byte(`{"attempt_context":{"attempt_number":4,"coordinator_identifier":2,"included_participants":[1,2,3],"included_participants_fingerprint":"ab","attempt_id":"a"},"frost_identifiers":[{"participant_identifier":1,"frost_identifier":"id-1"},{"participant_identifier":3,"frost_identifier":"id-3"},{"participant_identifier":2,"frost_identifier":"id-2"}]}`),
+	); err == nil {
+		t.Fatal("expected mismatched participant correspondence to be rejected")
+	}
 }
