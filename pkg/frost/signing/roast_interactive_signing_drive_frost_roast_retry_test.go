@@ -47,16 +47,19 @@ func singleSeatValidator(t *testing.T) *group.MembershipValidator {
 	return group.NewMembershipValidator(&testutils.MockLogger{}, []chain.Address{addr}, sgn)
 }
 
-// driveFixture is a consistent single-node (1-of-1) interactive signing setup:
-// a registered coordinator, a stashed orchestration handle, and a request whose
-// persisted material's DKG public key matches the attempt-context seed. It sets
-// the readiness gate (so BeginOrchestrationForSession mints a handle) but NOT
-// the interactive audit gate, and does NOT register the engine provider; each
-// test opts into those so the front-door behaviour is isolated.
+// driveFixture is a consistent single-node (1-of-1) interactive signing setup: a
+// registered coordinator, the attempt handle that coordinator minted, and a
+// request whose persisted material's DKG public key matches the attempt-context
+// seed. The handle + context are passed to the drive directly (as the executor
+// entry does with the per-Execute handle), so no session-handle registry or
+// readiness gate is involved. The fixture does NOT set the interactive audit
+// gate or register the engine provider; each test opts into those so the
+// front-door behaviour is isolated.
 type driveFixture struct {
-	request   *NativeExecutionFFISigningRequest
-	engine    *fakeInteractiveSigningEngine
-	sessionID string
+	request    *NativeExecutionFFISigningRequest
+	engine     *fakeInteractiveSigningEngine
+	handle     roast.AttemptHandle
+	attemptCtx attempt.AttemptContext
 }
 
 func newDriveFixture(t *testing.T) driveFixture {
@@ -69,7 +72,7 @@ func newDriveFixture(t *testing.T) driveFixture {
 	dkgKey := []byte(keyGroup)
 	included := []group.MemberIndex{1}
 
-	ctx, err := attempt.NewAttemptContext(
+	attemptCtx, err := attempt.NewAttemptContext(
 		sessionID, keyGroup, dkgKey,
 		[attempt.MessageDigestLength]byte{0x42}, 0, included, nil,
 	)
@@ -90,15 +93,12 @@ func newDriveFixture(t *testing.T) driveFixture {
 	t.Cleanup(ResetRoastRetryRegistrationForTest)
 	t.Cleanup(ResetInteractiveSigningEngineProviderForTest)
 
-	// Readiness gate enables BeginOrchestrationForSession to mint + stash the
-	// handle the drive later retrieves. The interactive audit gate is left to
-	// the individual tests.
-	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
-	_, cleanup, err := BeginOrchestrationForSession(sessionID, ctx)
+	// The handle is minted by the registered coordinator - exactly the handle
+	// the executor entry threads into the drive for this Execute.
+	handle, err := coord.BeginAttempt(attemptCtx)
 	if err != nil {
-		t.Fatalf("begin orchestration: %v", err)
+		t.Fatalf("begin attempt: %v", err)
 	}
-	t.Cleanup(cleanup)
 
 	engine := newFakeInteractiveSigningEngine()
 	// A real engine derives the same coordinator the binding elected; the sole
@@ -113,7 +113,7 @@ func newDriveFixture(t *testing.T) driveFixture {
 		SignerMaterial:      persistedTBTCSignerMaterial(t, keyGroup, 1, 1),
 	}
 
-	return driveFixture{request: request, engine: engine, sessionID: sessionID}
+	return driveFixture{request: request, engine: engine, handle: handle, attemptCtx: attemptCtx}
 }
 
 func validBIP340Signature(t *testing.T) []byte {
@@ -129,11 +129,13 @@ func validBIP340Signature(t *testing.T) []byte {
 	return sig.Serialize()
 }
 
-func runDrive(t *testing.T, request *NativeExecutionFFISigningRequest) (*frost.Signature, bool, error) {
+func (f driveFixture) run(t *testing.T) (*frost.Signature, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return driveInteractiveRoastSigningIfEnabled(ctx, &testutils.MockLogger{}, request)
+	return driveInteractiveRoastSigningIfEnabled(
+		ctx, &testutils.MockLogger{}, f.request, f.handle, f.attemptCtx,
+	)
 }
 
 func TestDriveInteractiveRoastSigning_HappyPath(t *testing.T) {
@@ -143,15 +145,12 @@ func TestDriveInteractiveRoastSigning_HappyPath(t *testing.T) {
 	RegisterInteractiveSigningEngineProvider(func() interactiveSigningEngine { return f.engine })
 	t.Setenv(InteractiveSigningOptInEnvVar, "true")
 
-	sig, handled, err := runDrive(t, f.request)
+	sig, err := f.run(t)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !handled {
-		t.Fatal("expected handled=true on the interactive path")
-	}
 	if sig == nil {
-		t.Fatal("expected a signature")
+		t.Fatal("expected a signature on the interactive path")
 	}
 	serialized := sig.Serialize()
 	if string(serialized[:]) != string(want) {
@@ -161,53 +160,37 @@ func TestDriveInteractiveRoastSigning_HappyPath(t *testing.T) {
 
 func TestDriveInteractiveRoastSigning_GateOffFallsBackToCoarse(t *testing.T) {
 	f := newDriveFixture(t)
-	// Everything is ready (handle stashed, engine registered) EXCEPT the audit
+	// Everything is ready (handle minted, engine registered) EXCEPT the audit
 	// gate, proving the gate alone gates the interactive path.
 	RegisterInteractiveSigningEngineProvider(func() interactiveSigningEngine { return f.engine })
 
-	sig, handled, err := runDrive(t, f.request)
-	if err != nil || handled || sig != nil {
-		t.Fatalf("expected coarse fallback (nil,false,nil), got sig=%v handled=%v err=%v", sig, handled, err)
+	sig, err := f.run(t)
+	if err != nil || sig != nil {
+		t.Fatalf("expected coarse fallback (nil,nil), got sig=%v err=%v", sig, err)
 	}
 }
 
 func TestDriveInteractiveRoastSigning_NoEngineFallsBackToCoarse(t *testing.T) {
 	f := newDriveFixture(t)
-	// Gate on, handle stashed, but no engine registered.
+	// Gate on, handle minted, but no engine registered.
 	t.Setenv(InteractiveSigningOptInEnvVar, "true")
 
-	sig, handled, err := runDrive(t, f.request)
-	if err != nil || handled || sig != nil {
-		t.Fatalf("expected coarse fallback (nil,false,nil), got sig=%v handled=%v err=%v", sig, handled, err)
-	}
-}
-
-func TestDriveInteractiveRoastSigning_NoHandleFallsBackToCoarse(t *testing.T) {
-	// Gate on + engine registered, but orchestration is not active for this
-	// session (no stashed handle).
-	t.Setenv(InteractiveSigningOptInEnvVar, "true")
-	RegisterInteractiveSigningEngineProvider(func() interactiveSigningEngine {
-		return newFakeInteractiveSigningEngine()
-	})
-	t.Cleanup(ResetInteractiveSigningEngineProviderForTest)
-
-	request := &NativeExecutionFFISigningRequest{SessionID: "orchestration-inactive-session"}
-	sig, handled, err := runDrive(t, request)
-	if err != nil || handled || sig != nil {
-		t.Fatalf("expected coarse fallback (nil,false,nil), got sig=%v handled=%v err=%v", sig, handled, err)
+	sig, err := f.run(t)
+	if err != nil || sig != nil {
+		t.Fatalf("expected coarse fallback (nil,nil), got sig=%v err=%v", sig, err)
 	}
 }
 
 func TestDriveInteractiveRoastSigning_RunnerFailureHardFails(t *testing.T) {
 	f := newDriveFixture(t)
-	// The node has COMMITTED to interactive signing (gate on, engine present,
-	// orchestration active); a runner failure must propagate as an error so the
-	// outer tBTC signingRetryLoop advances, NOT silently drop to coarse.
+	// The node has COMMITTED to interactive signing (gate on, engine present);
+	// a runner failure must propagate as an error so the outer tBTC
+	// signingRetryLoop advances, NOT silently drop to coarse.
 	f.engine.aggregateErr = fmt.Errorf("aggregate share verification failed")
 	RegisterInteractiveSigningEngineProvider(func() interactiveSigningEngine { return f.engine })
 	t.Setenv(InteractiveSigningOptInEnvVar, "true")
 
-	sig, _, err := runDrive(t, f.request)
+	sig, err := f.run(t)
 	if err == nil {
 		t.Fatal("expected a hard-fail error on runner failure")
 	}

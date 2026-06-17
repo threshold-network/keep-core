@@ -111,35 +111,31 @@ func (nefea *nativeExecutionFFIExecutorAdapter) Execute(
 	//     HARD FAIL to prevent group fracture across honest signers.
 	// In the default build (no frost_native tag) the helper is a
 	// permanent no-op returning (nil, nil).
-	orchCleanup, orchErr := attemptRoastRetryOrchestrationFromRequest(ffiRequest, logger)
-	if orchErr != nil {
-		return nil, orchErr
-	}
+	// RFC-21 Phase 6.3 + 7.3: ROAST orchestration + gated interactive signing.
+	// attemptRoastRetryOrchestrationFromRequest sets up per-session
+	// orchestration and, when the operator audit gate
+	// (KEEP_CORE_FROST_INTERACTIVE_SIGNING_ENABLED) is on and an engine is
+	// registered, drives ONE interactive attempt with the handle minted for THIS
+	// Execute (the outer tBTC signingRetryLoop owns retries; this is one
+	// attempt). It returns (signature, cleanup, error):
+	//   - signature non-nil -> interactive signing produced it; return it.
+	//   - signature nil, cleanup non-nil -> orchestration active but interactive
+	//     not enabled; defer cleanup, fall through to the coarse primitive.
+	//   - signature nil, cleanup nil -> static fallback; coarse primitive.
+	//   - error non-nil -> RUNTIME/committed failure; HARD FAIL (cleanup, when
+	//     non-nil, is deferred first so a failed interactive attempt still
+	//     stashes its transition bundle).
+	// In the default build (no frost_native) the helper is a permanent no-op
+	// returning (nil, nil, nil).
+	interactiveSignature, orchCleanup, orchErr :=
+		attemptRoastRetryOrchestrationFromRequest(ctx, ffiRequest, logger)
 	if orchCleanup != nil {
 		defer orchCleanup()
 	}
-
-	// RFC-21 Phase 7.3: gated interactive ROAST signing. When the operator
-	// audit gate (KEEP_CORE_FROST_INTERACTIVE_SIGNING_ENABLED) is on, an
-	// interactive engine is registered, and orchestration is active for this
-	// session, drive ONE interactive attempt and return its signature. The
-	// outer tBTC signingRetryLoop owns retries -- it re-invokes Execute with a
-	// fresh attempt context on failure -- so this drives a single attempt and
-	// never loops. When interactive signing is not enabled, handled is false
-	// and execution falls through to the coarse primitive below. In the default
-	// build (no frost_native && frost_roast_retry) the helper is a permanent
-	// no-op returning (nil, false, nil).
-	interactiveSignature, handled, interactiveErr :=
-		driveInteractiveRoastSigningIfEnabled(ctx, logger, ffiRequest)
-	if interactiveErr != nil {
-		return nil, interactiveErr
+	if orchErr != nil {
+		return nil, orchErr
 	}
-	if handled {
-		if interactiveSignature == nil {
-			return nil, fmt.Errorf(
-				"interactive ROAST signing returned nil signature",
-			)
-		}
+	if interactiveSignature != nil {
 		return &Result{
 			Signature: interactiveSignature,
 			Attempt:   cloneAttempt(request.Attempt),

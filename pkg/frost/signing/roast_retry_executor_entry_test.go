@@ -1,6 +1,7 @@
 package signing
 
 import (
+	"context"
 	"testing"
 
 	"github.com/ipfs/go-log/v2"
@@ -8,14 +9,14 @@ import (
 
 func TestAttemptRoastRetryOrchestrationFromRequest_DefaultBuildIsNoOp(t *testing.T) {
 	// In the default build, the helper is a permanent stub returning
-	// (nil, nil) so the executor adapter behaves exactly as in
-	// Phase 5: no orchestration, no error, no cleanup deferred.
+	// (nil, nil, nil) so the executor adapter behaves exactly as in
+	// Phase 5: no orchestration, no signature, no error, no cleanup deferred.
 	//
 	// The tagged-build test surface
 	// (roast_retry_executor_entry_frost_native_test.go) exercises
 	// the real branching.
-	cleanup, err := attemptRoastRetryOrchestrationFromRequest(
-		&NativeExecutionFFISigningRequest{SessionID: "x"},
+	_, cleanup, err := attemptRoastRetryOrchestrationFromRequest(
+		context.Background(), &NativeExecutionFFISigningRequest{SessionID: "x"},
 		log.Logger("test"),
 	)
 	if err != nil {

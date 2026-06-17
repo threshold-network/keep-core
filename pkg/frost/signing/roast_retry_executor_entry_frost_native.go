@@ -3,10 +3,12 @@
 package signing
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
 	"github.com/ipfs/go-log/v2"
+	"github.com/keep-network/keep-core/pkg/frost"
 )
 
 // attemptRoastRetryOrchestrationFromRequest is the executor-adapter
@@ -35,24 +37,34 @@ import (
 //     errors -- log at INFO and return (nil, nil). Any other error
 //     is treated as RUNTIME and propagated unchanged.
 //
-//  5. On success returns the cleanup function the executor adapter
-//     must defer.
+//  5. With orchestration active, drives ONE gated interactive ROAST
+//     signing attempt (driveInteractiveRoastSigningIfEnabled) using
+//     the handle minted HERE for this Execute call -- never a
+//     session-keyed lookup, so concurrent multi-seat signers stay
+//     bound to their own attempt. Returns the signature when the
+//     interactive path handled signing; nil signature means the
+//     executor falls through to the coarse primitive.
 //
-// The function returns (cleanup, error):
-//   - cleanup non-nil + error nil -> orchestration active; defer cleanup.
-//   - cleanup nil + error nil      -> static fallback; proceed legacy.
-//   - cleanup nil + error non-nil  -> runtime failure; propagate.
+// The function returns (signature, cleanup, error):
+//   - signature non-nil -> interactive signing produced it; executor returns it.
+//   - signature nil + cleanup non-nil + error nil -> orchestration active but
+//     interactive not enabled; defer cleanup, fall through to the coarse path.
+//   - signature nil + cleanup nil + error nil -> static fallback; coarse path.
+//   - error non-nil -> runtime/committed failure; propagate. cleanup may be
+//     non-nil (interactive runner failure) so the caller defers it to stash the
+//     failed attempt's transition bundle before returning the error.
 func attemptRoastRetryOrchestrationFromRequest(
+	execCtx context.Context,
 	request *NativeExecutionFFISigningRequest,
 	logger log.StandardLogger,
-) (func(), error) {
+) (*frost.Signature, func(), error) {
 	if logger == nil {
 		// Defensive: existing executor-adapter tests pass nil here.
 		// The helper logs static-fallback diagnostics, so a nil
 		// logger must not panic the executor.
 		logger = log.Logger("keep-frost-roast-orchestration")
 	}
-	ctx, err := BuildAttemptContextFromRequest(request)
+	attemptCtx, err := BuildAttemptContextFromRequest(request)
 	if err != nil {
 		// All BuildAttemptContextFromRequest errors are treated as
 		// STATIC fallbacks because they are deterministic per-input:
@@ -67,16 +79,16 @@ func attemptRoastRetryOrchestrationFromRequest(
 			request.SessionID,
 			err,
 		)
-		return nil, nil
+		return nil, nil, nil
 	}
 	logger.Infof(
 		"ROAST signer-material telemetry: session=%q key_group_id=%q signer_material_format=%q",
 		request.SessionID,
-		ctx.KeyGroupID,
+		attemptCtx.KeyGroupID,
 		request.SignerMaterial.Format,
 	)
 
-	handle, cleanup, err := BeginOrchestrationForSession(request.SessionID, ctx)
+	handle, cleanup, err := BeginOrchestrationForSession(request.SessionID, attemptCtx)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrRoastRetryReadinessOptOut),
@@ -87,16 +99,29 @@ func attemptRoastRetryOrchestrationFromRequest(
 				request.SessionID,
 				err,
 			)
-			return nil, nil
+			return nil, nil, nil
 		default:
 			// Runtime failure: HARD FAIL.
-			return nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"ROAST orchestration: begin session %q: %w",
 				request.SessionID,
 				err,
 			)
 		}
 	}
-	_ = handle // Phase 6.4+ uses this for retry adapter invocation.
-	return cleanup, nil
+
+	// Orchestration is active. Drive ONE gated interactive attempt with the
+	// handle minted HERE for this Execute (never a session-keyed lookup, so
+	// concurrent multi-seat signers do not collide). A nil signature with nil
+	// error means interactive signing is not enabled -> the executor falls
+	// through to the coarse primitive. A drive error is a committed-path
+	// failure: return it with the cleanup so the caller defers cleanup (stashing
+	// the failed attempt's transition bundle) before propagating.
+	signature, err := driveInteractiveRoastSigningIfEnabled(
+		execCtx, logger, request, handle, attemptCtx,
+	)
+	if err != nil {
+		return nil, cleanup, err
+	}
+	return signature, cleanup, nil
 }

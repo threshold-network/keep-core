@@ -3,6 +3,7 @@
 package signing
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -48,8 +49,8 @@ func TestEntry_StaticFallback_NoCoordinatorRegistered_TaggedBuild(t *testing.T) 
 	// adapter proceeds without orchestration, matching Phase 5
 	// receive semantics.
 	logger := log.Logger("entry-static-test")
-	cleanup, err := attemptRoastRetryOrchestrationFromRequest(
-		newEntryTestRequest(t), logger,
+	_, cleanup, err := attemptRoastRetryOrchestrationFromRequest(
+		context.Background(), newEntryTestRequest(t), logger,
 	)
 	if err != nil {
 		t.Fatalf("static fallback must not surface an error: %v", err)
@@ -61,8 +62,8 @@ func TestEntry_StaticFallback_NoCoordinatorRegistered_TaggedBuild(t *testing.T) 
 
 func TestEntry_LogsSignerMaterialFormatTelemetry(t *testing.T) {
 	logger := &captureInfoLogger{}
-	cleanup, err := attemptRoastRetryOrchestrationFromRequest(
-		newEntryTestRequest(t), logger,
+	_, cleanup, err := attemptRoastRetryOrchestrationFromRequest(
+		context.Background(), newEntryTestRequest(t), logger,
 	)
 	if err != nil {
 		t.Fatalf("static fallback must not surface an error: %v", err)
@@ -89,8 +90,8 @@ func TestEntry_StaticFallback_UnsupportedSignerFormat(t *testing.T) {
 		Format:  NativeSignerMaterialFormatFrostUniFFIV1,
 		Payload: []byte("{}"),
 	}
-	cleanup, err := attemptRoastRetryOrchestrationFromRequest(
-		req, log.Logger("entry-v1-test"),
+	_, cleanup, err := attemptRoastRetryOrchestrationFromRequest(
+		context.Background(), req, log.Logger("entry-v1-test"),
 	)
 	if err != nil {
 		t.Fatalf("V1 material must be a static fallback: %v", err)
@@ -109,8 +110,8 @@ func TestEntry_StaticFallback_OnNilSignerMaterial(t *testing.T) {
 	// non-deterministic Coordinator state-machine errors.
 	req := newEntryTestRequest(t)
 	req.SignerMaterial = nil
-	cleanup, err := attemptRoastRetryOrchestrationFromRequest(
-		req, log.Logger("entry-nil-mat-test"),
+	_, cleanup, err := attemptRoastRetryOrchestrationFromRequest(
+		context.Background(), req, log.Logger("entry-nil-mat-test"),
 	)
 	if err != nil {
 		t.Fatalf("nil signer material must be a STATIC fallback; got %v", err)
@@ -134,8 +135,8 @@ func TestEntry_StaticFallback_OnZeroAttemptNumber(t *testing.T) {
 	// failure; treated as STATIC fallback.
 	req := newEntryTestRequest(t)
 	req.Attempt.Number = 0
-	cleanup, err := attemptRoastRetryOrchestrationFromRequest(
-		req, log.Logger("entry-zero-attempt-test"),
+	_, cleanup, err := attemptRoastRetryOrchestrationFromRequest(
+		context.Background(), req, log.Logger("entry-zero-attempt-test"),
 	)
 	if err != nil {
 		t.Fatalf("zero attempt number must be a STATIC fallback; got %v", err)

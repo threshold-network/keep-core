@@ -3,6 +3,7 @@
 package signing
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"math/big"
@@ -52,8 +53,8 @@ func TestEntry_StaticFallback_ReadinessOptInUnset(t *testing.T) {
 		SelfMember:  1,
 	})
 
-	cleanup, err := attemptRoastRetryOrchestrationFromRequest(
-		newEntryRetryTestRequest(t), log.Logger("entry-no-optin"),
+	_, cleanup, err := attemptRoastRetryOrchestrationFromRequest(
+		context.Background(), newEntryRetryTestRequest(t), log.Logger("entry-no-optin"),
 	)
 	if err != nil {
 		t.Fatalf("static fallback (env var unset) must not surface an error: %v", err)
@@ -71,8 +72,8 @@ func TestEntry_StaticFallback_RegistryEmpty(t *testing.T) {
 	t.Cleanup(ResetSessionHandleRegistryForTest)
 
 	// Registry is empty (no Register call).
-	cleanup, err := attemptRoastRetryOrchestrationFromRequest(
-		newEntryRetryTestRequest(t), log.Logger("entry-no-registry"),
+	_, cleanup, err := attemptRoastRetryOrchestrationFromRequest(
+		context.Background(), newEntryRetryTestRequest(t), log.Logger("entry-no-registry"),
 	)
 	if err != nil {
 		t.Fatalf("static fallback (registry empty) must not surface an error: %v", err)
@@ -97,8 +98,8 @@ func TestEntry_HappyPath_ActivatesOrchestration(t *testing.T) {
 	})
 
 	req := newEntryRetryTestRequest(t)
-	cleanup, err := attemptRoastRetryOrchestrationFromRequest(
-		req, log.Logger("entry-happy"),
+	_, cleanup, err := attemptRoastRetryOrchestrationFromRequest(
+		context.Background(), req, log.Logger("entry-happy"),
 	)
 	if err != nil {
 		t.Fatalf("happy path must not error: %v", err)
@@ -135,8 +136,8 @@ func TestEntry_HardFail_RuntimeBeginAttemptFailure(t *testing.T) {
 		SelfMember: 1,
 	})
 
-	cleanup, err := attemptRoastRetryOrchestrationFromRequest(
-		newEntryRetryTestRequest(t), log.Logger("entry-hard-fail"),
+	_, cleanup, err := attemptRoastRetryOrchestrationFromRequest(
+		context.Background(), newEntryRetryTestRequest(t), log.Logger("entry-hard-fail"),
 	)
 	if err == nil {
 		t.Fatal("runtime BeginAttempt error must HARD FAIL (not static fallback)")
