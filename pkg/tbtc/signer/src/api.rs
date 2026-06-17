@@ -391,6 +391,9 @@ pub struct DeriveInteractiveAttemptContextRequest {
     pub session_id: String,
     pub message_hex: String,
     pub key_group: String,
+    /// Validation gate only - the derivation requires `included_participants`
+    /// to hold at least `threshold` members; it is NOT an input to the
+    /// fingerprint, attempt-id, or coordinator derivation.
     pub threshold: u16,
     /// 1-based wire attempt number (the host's 0-based value + 1), matching
     /// `AttemptContext.attempt_number`.
