@@ -456,6 +456,110 @@ pub(crate) fn validate_attempt_context(
     Ok(Some(canonical_included_participants))
 }
 
+/// Derives the canonical interactive attempt context for an attempt from its
+/// public inputs, so the host never re-implements the engine's domain-separated
+/// derivations (the cross-language divergence class that bit the coordinator
+/// seed). Stateless and secret-free: it touches no DKG, nonce, or session state.
+///
+/// The returned context is re-validated against strict-mode
+/// `validate_attempt_context` for the same inputs before returning, so it is
+/// guaranteed to be accepted by `interactive_session_open`; the per-participant
+/// FROST identifiers use the canonical key-package encoding the
+/// signing-package/aggregate paths require.
+pub(crate) fn derive_interactive_attempt_context(
+    request: DeriveInteractiveAttemptContextRequest,
+) -> Result<DeriveInteractiveAttemptContextResult, EngineError> {
+    let message_bytes = hex::decode(&request.message_hex)
+        .map_err(|e| EngineError::Validation(format!("message_hex is not valid hex: {e}")))?;
+    if message_bytes.is_empty() {
+        return Err(EngineError::Validation(
+            "message_hex must not be empty".to_string(),
+        ));
+    }
+    if request.attempt_number == 0 {
+        return Err(EngineError::Validation(
+            "attempt_number must be at least 1".to_string(),
+        ));
+    }
+
+    let canonical_included_participants =
+        canonicalize_included_participants(&request.included_participants)?;
+    if canonical_included_participants.len() < usize::from(request.threshold) {
+        return Err(EngineError::Validation(format!(
+            "included_participants must contain at least threshold members [{}]",
+            request.threshold
+        )));
+    }
+
+    // Coordinator: the RFC-21 Annex A shuffle binds the padded raw message
+    // digest and uses the 0-based attempt number.
+    let attempt_seed = roast_attempt_shuffle_seed(
+        &request.key_group,
+        &request.session_id,
+        &rfc21_message_digest(&message_bytes)?,
+    )?;
+    let coordinator_identifier = select_coordinator_identifier(
+        &canonical_included_participants,
+        attempt_seed,
+        request.attempt_number - 1,
+    )
+    .ok_or_else(|| {
+        EngineError::Validation("included_participants must not be empty".to_string())
+    })?;
+
+    // Fingerprint over the canonical set; the attempt_id binds the engine's
+    // SHA256 transcript digest of the message (NOT the RFC-21 shuffle digest).
+    let included_participants_fingerprint =
+        roast_included_participants_fingerprint_hex(&canonical_included_participants)?;
+    let message_digest_hex = hash_hex(&message_bytes);
+    let attempt_id = roast_attempt_id_hex(
+        &request.session_id,
+        &message_digest_hex,
+        request.attempt_number,
+        coordinator_identifier,
+        &included_participants_fingerprint,
+    )?;
+
+    let attempt_context = AttemptContext {
+        attempt_number: request.attempt_number,
+        coordinator_identifier,
+        included_participants: canonical_included_participants.clone(),
+        included_participants_fingerprint,
+        attempt_id,
+    };
+
+    // Post-condition: the derived context MUST satisfy the same strict-mode
+    // validator `interactive_session_open` runs, so the host can never be handed
+    // a context the engine would later reject. A failure here is an internal
+    // derivation inconsistency, surfaced rather than shipped.
+    validate_attempt_context(
+        &request.session_id,
+        &request.key_group,
+        &message_bytes,
+        &message_digest_hex,
+        request.threshold,
+        Some(&attempt_context),
+        true,
+    )?;
+
+    let frost_identifiers = canonical_included_participants
+        .iter()
+        .map(|participant| {
+            Ok(ParticipantFrostIdentifier {
+                participant_identifier: *participant,
+                frost_identifier: frost_identifier_to_go_string(
+                    participant_identifier_to_frost_identifier(*participant)?,
+                ),
+            })
+        })
+        .collect::<Result<Vec<_>, EngineError>>()?;
+
+    Ok(DeriveInteractiveAttemptContextResult {
+        attempt_context,
+        frost_identifiers,
+    })
+}
+
 pub(crate) fn canonical_attempt_context(attempt_context: &AttemptContext) -> AttemptContext {
     let mut canonical = Some(attempt_context.clone());
     canonicalize_attempt_context_for_fingerprint(&mut canonical);

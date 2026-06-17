@@ -8,14 +8,15 @@ mod go_math_rand;
 use std::sync::OnceLock;
 
 use api::{
-    AggregateRequest, BuildTaprootTxRequest, DifferentialFuzzRequest, DkgPart1Request,
-    DkgPart2Request, DkgPart3Request, FinalizeSignRoundRequest,
-    GenerateNoncesAndCommitmentsRequest, InitSignerConfigRequest, InteractiveAggregateRequest,
-    InteractiveRound1Request, InteractiveRound2Request, InteractiveSessionAbortRequest,
-    InteractiveSessionOpenRequest, NewSigningPackageRequest, PromoteCanaryRequest,
-    QuarantineStatusRequest, RefreshCadenceStatusRequest, RefreshSharesRequest,
-    RollbackCanaryRequest, RunDkgRequest, SignShareRequest, StartSignRoundRequest,
-    TranscriptAuditRequest, TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
+    AggregateRequest, BuildTaprootTxRequest, DeriveInteractiveAttemptContextRequest,
+    DifferentialFuzzRequest, DkgPart1Request, DkgPart2Request, DkgPart3Request,
+    FinalizeSignRoundRequest, GenerateNoncesAndCommitmentsRequest, InitSignerConfigRequest,
+    InteractiveAggregateRequest, InteractiveRound1Request, InteractiveRound2Request,
+    InteractiveSessionAbortRequest, InteractiveSessionOpenRequest, NewSigningPackageRequest,
+    PromoteCanaryRequest, QuarantineStatusRequest, RefreshCadenceStatusRequest,
+    RefreshSharesRequest, RollbackCanaryRequest, RunDkgRequest, SignShareRequest,
+    StartSignRoundRequest, TranscriptAuditRequest, TriggerEmergencyRekeyRequest,
+    VerifyBlameProofRequest,
 };
 use ffi::{
     ffi_entry, free_buffer, parse_request, serialize_response, success_from_string,
@@ -375,6 +376,19 @@ pub extern "C" fn frost_tbtc_interactive_aggregate(
     ffi_entry(|| {
         let request: InteractiveAggregateRequest = parse_request(request_ptr, request_len)?;
         let response = engine::interactive_aggregate(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_derive_interactive_attempt_context(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: DeriveInteractiveAttemptContextRequest =
+            parse_request(request_ptr, request_len)?;
+        let response = engine::derive_interactive_attempt_context(request)?;
         serialize_response(&response)
     })
 }
@@ -864,6 +878,41 @@ mod tests {
         let error: ErrorResponse =
             serde_json::from_slice(&payload).expect("aggregate error payload");
         assert_eq!(error.code, "validation_error");
+    }
+
+    #[test]
+    fn derive_interactive_attempt_context_ffi_roundtrip() {
+        // Stateless + secret-free: unlike the session calls above, a valid
+        // request SUCCEEDS with no DKG fixture, proving the
+        // symbol -> parse -> engine -> serialize_response SUCCESS path for the
+        // derivation export (the engine tests own the derivation contract).
+        let request = crate::api::DeriveInteractiveAttemptContextRequest {
+            session_id: "ffi-derive-smoke".to_string(),
+            message_hex: "11".repeat(32),
+            key_group: "ffi-derive-key-group".to_string(),
+            threshold: 2,
+            attempt_number: 1,
+            included_participants: vec![3, 1, 2],
+        };
+        let (status, payload) = call_ffi(
+            &request,
+            super::frost_tbtc_derive_interactive_attempt_context,
+        );
+        assert_eq!(status, 0);
+        let result: crate::api::DeriveInteractiveAttemptContextResult =
+            serde_json::from_slice(&payload).expect("derive result payload");
+        assert_eq!(result.attempt_context.included_participants, vec![1, 2, 3]);
+        assert_eq!(result.attempt_context.attempt_number, 1);
+        assert!(result.attempt_context.coordinator_identifier >= 1);
+        assert_eq!(
+            result
+                .attempt_context
+                .included_participants_fingerprint
+                .len(),
+            64
+        );
+        assert_eq!(result.attempt_context.attempt_id.len(), 64);
+        assert_eq!(result.frost_identifiers.len(), 3);
     }
 
     fn native_frost_identifier(member_index: u8) -> String {
