@@ -469,6 +469,13 @@ pub(crate) fn validate_attempt_context(
 pub(crate) fn derive_interactive_attempt_context(
     request: DeriveInteractiveAttemptContextRequest,
 ) -> Result<DeriveInteractiveAttemptContextResult, EngineError> {
+    // Mirror interactive_session_open's front door (and every other engine
+    // endpoint, including the public-material-only verify_signature_share): an
+    // unattested engine, or a session_id open would reject, must fail closed
+    // here too rather than hand back a context the real open refuses.
+    enforce_provenance_gate()?;
+    validate_session_id(&request.session_id)?;
+
     let message_bytes = hex::decode(&request.message_hex)
         .map_err(|e| EngineError::Validation(format!("message_hex is not valid hex: {e}")))?;
     if message_bytes.is_empty() {

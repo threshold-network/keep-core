@@ -3351,6 +3351,7 @@ fn roast_attempt_context_hash_vectors_match_expected_values() {
 
 #[test]
 fn derive_interactive_attempt_context_matches_standalone_derivations() {
+    let _guard = lock_test_state(); // hermetic env: development profile, provenance gate off
     let session_id = "derive-session-1";
     let key_group = "derive-key-group";
     let message_hex = "77".repeat(32); // 32-byte signing digest
@@ -3430,6 +3431,7 @@ fn derive_interactive_attempt_context_matches_standalone_derivations() {
 
 #[test]
 fn derive_interactive_attempt_context_is_deterministic() {
+    let _guard = lock_test_state();
     let request = DeriveInteractiveAttemptContextRequest {
         session_id: "s".to_string(),
         message_hex: "ab".repeat(32),
@@ -3445,6 +3447,7 @@ fn derive_interactive_attempt_context_is_deterministic() {
 
 #[test]
 fn derive_interactive_attempt_context_rejects_invalid_inputs() {
+    let _guard = lock_test_state();
     let base = DeriveInteractiveAttemptContextRequest {
         session_id: "s".to_string(),
         message_hex: "cd".repeat(32),
@@ -3457,6 +3460,13 @@ fn derive_interactive_attempt_context_rejects_invalid_inputs() {
     let mut empty_message = base.clone();
     empty_message.message_hex = String::new();
     assert!(derive_interactive_attempt_context(empty_message).is_err());
+
+    // session_id is validated (and hashed into attempt_id), so an empty/malformed
+    // one must fail here exactly as interactive_session_open's validate_session_id
+    // would reject it.
+    let mut empty_session = base.clone();
+    empty_session.session_id = String::new();
+    assert!(derive_interactive_attempt_context(empty_session).is_err());
 
     let mut zero_attempt = base.clone();
     zero_attempt.attempt_number = 0;
@@ -3480,6 +3490,28 @@ fn derive_interactive_attempt_context_rejects_invalid_inputs() {
     let mut no_participants = base;
     no_participants.included_participants = vec![];
     assert!(derive_interactive_attempt_context(no_participants).is_err());
+}
+
+#[test]
+fn derive_interactive_attempt_context_enforces_provenance_gate() {
+    let _guard = lock_test_state();
+    // Enable the provenance gate with no attestation configured: the helper must
+    // fail closed exactly like interactive_session_open's front door, never
+    // returning a derived context on an unattested engine.
+    std::env::set_var(TBTC_SIGNER_ENFORCE_PROVENANCE_GATE_ENV, "true");
+
+    let result = derive_interactive_attempt_context(DeriveInteractiveAttemptContextRequest {
+        session_id: "s".to_string(),
+        message_hex: "ef".repeat(32),
+        key_group: "kg".to_string(),
+        threshold: 2,
+        attempt_number: 1,
+        included_participants: vec![1, 2, 3],
+    });
+    assert!(matches!(
+        result,
+        Err(EngineError::ProvenanceGateRejected { .. })
+    ));
 }
 
 #[test]

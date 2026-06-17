@@ -882,6 +882,10 @@ mod tests {
 
     #[test]
     fn derive_interactive_attempt_context_ffi_roundtrip() {
+        // Hermetic env (development profile, provenance gate off) so the new
+        // front-door gate does not reject; the engine tests own the gate's
+        // fail-closed behavior.
+        let _guard = crate::engine::lock_test_state();
         // Stateless + secret-free: unlike the session calls above, a valid
         // request SUCCEEDS with no DKG fixture, proving the
         // symbol -> parse -> engine -> serialize_response SUCCESS path for the
