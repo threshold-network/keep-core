@@ -3400,6 +3400,20 @@ func decodeBuildTaggedTBTCSignerDeriveInteractiveAttemptContextResponse(
 	if len(attemptContext.IncludedParticipants) == 0 {
 		return nil, buildTaggedTBTCSignerOperationError(operation, "response attempt context included participants are empty")
 	}
+	// The engine returns exactly one FROST identifier per included participant
+	// (canonical order); a mismatch is a malformed response the host must not
+	// silently consume - downstream signing-package/aggregate keying depends on
+	// the 1:1 correspondence.
+	if len(response.FrostIdentifiers) != len(attemptContext.IncludedParticipants) {
+		return nil, buildTaggedTBTCSignerOperationError(
+			operation,
+			fmt.Sprintf(
+				"response has [%d] frost identifiers for [%d] included participants",
+				len(response.FrostIdentifiers),
+				len(attemptContext.IncludedParticipants),
+			),
+		)
+	}
 
 	frostIdentifiers := make([]NativeFROSTParticipantIdentifier, 0, len(response.FrostIdentifiers))
 	for _, entry := range response.FrostIdentifiers {
