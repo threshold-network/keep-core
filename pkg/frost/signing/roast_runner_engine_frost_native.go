@@ -15,6 +15,21 @@ package signing
 // the public commitments, the coordinator's signing package, and the signature
 // shares returned here.
 type interactiveSigningEngine interface {
+	// DeriveInteractiveAttemptContext derives the canonical attempt context
+	// (coordinator, included-participants fingerprint, attempt id) and the
+	// per-participant FROST identifiers from the attempt's public inputs, so the
+	// runner never re-implements the engine's domain-separated derivations. The
+	// runner cross-checks the returned coordinator/included set against the
+	// binding's own RFC-21 election before opening.
+	DeriveInteractiveAttemptContext(
+		sessionID string,
+		message []byte,
+		keyGroup string,
+		threshold uint16,
+		attemptNumber uint32,
+		includedParticipants []uint16,
+	) (*NativeDeriveInteractiveAttemptContextResult, error)
+
 	// InteractiveSessionOpen opens (or idempotently re-opens) the attempt and
 	// returns the engine's canonical attempt id.
 	InteractiveSessionOpen(

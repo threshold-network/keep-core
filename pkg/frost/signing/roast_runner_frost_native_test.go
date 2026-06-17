@@ -68,6 +68,10 @@ func buildInteractiveSigningHarness(t *testing.T, n int, threshold uint16) harne
 		}
 		collector := roast.NewRound2Collector(verifier)
 		engine := newFakeInteractiveSigningEngine()
+		// The engine derivation must agree with the binding's RFC-21 election, or
+		// the runner's cross-check fails closed (a real engine derives the same
+		// coordinator the binding did).
+		engine.coordinatorIdentifier = uint16(ara.ElectedCoordinator())
 		runner, err := newInteractiveSigningRunner(
 			ara, member, threshold,
 			engine,
@@ -255,6 +259,7 @@ func TestInteractiveSigningRunner_AbortsNativeAttemptOnEarlyExit(t *testing.T) {
 		t.Fatalf("active attempt: %v", err)
 	}
 	engine := newFakeInteractiveSigningEngine()
+	engine.coordinatorIdentifier = uint16(ara.ElectedCoordinator())
 	runner, err := newInteractiveSigningRunner(
 		ara, 1, 2, engine, roast.NewRound2Collector(verifier), coord, signer, bus,
 	)
@@ -271,6 +276,90 @@ func TestInteractiveSigningRunner_AbortsNativeAttemptOnEarlyExit(t *testing.T) {
 	}
 	if got := engine.abortCallCount(); got != 1 {
 		t.Fatalf("expected exactly one native abort on early exit, got %d", got)
+	}
+}
+
+// The runner cross-checks the engine-derived coordinator against the binding's
+// own RFC-21 election and fails closed on divergence - BEFORE opening a session -
+// so it can never sign an attempt bound to the wrong coordinator.
+func TestInteractiveSigningRunner_RejectsEngineCoordinatorMismatch(t *testing.T) {
+	included := []group.MemberIndex{1, 2}
+	dkgKey := []byte{0x01, 0x02}
+	ctx, err := attempt.NewAttemptContext(
+		"session-1", "key-group-1", dkgKey,
+		[attempt.MessageDigestLength]byte{0x42}, 0, included, nil,
+	)
+	if err != nil {
+		t.Fatalf("attempt context: %v", err)
+	}
+	signer := fixedTestSigner{}
+	verifier := roast.NoOpSignatureVerifier()
+	bus := NewInProcessRunnerBus(8)
+	coord := roast.NewInMemoryCoordinatorWithSigning(1, signer, verifier)
+	handle, err := coord.BeginAttempt(ctx)
+	if err != nil {
+		t.Fatalf("begin attempt: %v", err)
+	}
+	ara, err := NewActiveRoastAttempt(coord, handle, ctx, "session-1", nil, dkgKey)
+	if err != nil {
+		t.Fatalf("active attempt: %v", err)
+	}
+	engine := newFakeInteractiveSigningEngine()
+	// Engine derives a coordinator the binding did NOT elect.
+	engine.coordinatorIdentifier = uint16(ara.ElectedCoordinator()) + 100
+	runner, err := newInteractiveSigningRunner(
+		ara, 1, 2, engine, roast.NewRound2Collector(verifier), coord, signer, bus,
+	)
+	if err != nil {
+		t.Fatalf("runner: %v", err)
+	}
+
+	runCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := runner.Run(runCtx); err == nil {
+		t.Fatal("expected the engine/binding coordinator mismatch to be rejected")
+	}
+	// The mismatch is caught at the derive cross-check, before the session opens.
+	if engine.openCalls != 0 {
+		t.Fatalf("expected no session open on coordinator mismatch, got %d", engine.openCalls)
+	}
+}
+
+// The happy path must key signing-package commitments and aggregate shares by the
+// engine-derived FROST identifiers, not a Go-fabricated placeholder.
+func TestInteractiveSigningRunner_UsesEngineDerivedFrostIdentifiers(t *testing.T) {
+	h := buildInteractiveSigningHarness(t, 3, 2)
+	h.runAndAssertAllSucceed(t)
+
+	got := map[string]struct{}{}
+	for _, share := range h.engines[0].lastAggregateShares {
+		got[share.Identifier] = struct{}{}
+	}
+	for _, want := range []string{"frost-id-1", "frost-id-2", "frost-id-3"} {
+		if _, ok := got[want]; !ok {
+			t.Fatalf("aggregate missing engine-derived identifier %q; got %v", want, got)
+		}
+	}
+}
+
+func TestSameMemberSet(t *testing.T) {
+	cases := map[string]struct {
+		derived  []uint16
+		included []group.MemberIndex
+		want     bool
+	}{
+		"equal, reordered":        {[]uint16{3, 1, 2}, []group.MemberIndex{1, 2, 3}, true},
+		"different length":        {[]uint16{1, 2}, []group.MemberIndex{1, 2, 3}, false},
+		"foreign member":          {[]uint16{1, 9}, []group.MemberIndex{1, 2}, false},
+		"duplicate masks missing": {[]uint16{1, 1}, []group.MemberIndex{1, 2}, false},
+		"empty equal":             {[]uint16{}, []group.MemberIndex{}, true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := sameMemberSet(tc.derived, tc.included); got != tc.want {
+				t.Fatalf("sameMemberSet(%v, %v) = %v, want %v", tc.derived, tc.included, got, tc.want)
+			}
+		})
 	}
 }
 
