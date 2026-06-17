@@ -342,6 +342,27 @@ func TestInteractiveSigningRunner_UsesEngineDerivedFrostIdentifiers(t *testing.T
 	}
 }
 
+func TestSameMemberSet(t *testing.T) {
+	cases := map[string]struct {
+		derived  []uint16
+		included []group.MemberIndex
+		want     bool
+	}{
+		"equal, reordered":        {[]uint16{3, 1, 2}, []group.MemberIndex{1, 2, 3}, true},
+		"different length":        {[]uint16{1, 2}, []group.MemberIndex{1, 2, 3}, false},
+		"foreign member":          {[]uint16{1, 9}, []group.MemberIndex{1, 2}, false},
+		"duplicate masks missing": {[]uint16{1, 1}, []group.MemberIndex{1, 2}, false},
+		"empty equal":             {[]uint16{}, []group.MemberIndex{}, true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := sameMemberSet(tc.derived, tc.included); got != tc.want {
+				t.Fatalf("sameMemberSet(%v, %v) = %v, want %v", tc.derived, tc.included, got, tc.want)
+			}
+		})
+	}
+}
+
 // captureEquivocationEvidence registers a process-wide observer recording every
 // emitted equivocation event for the test's duration, returning a snapshot
 // accessor. Only one observer may be registered process-wide, so tests using it

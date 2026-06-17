@@ -577,21 +577,25 @@ func includedSetToUint16(includedSet []group.MemberIndex) []uint16 {
 
 // sameMemberSet reports whether the engine-derived participant list is the same
 // SET as the binding's included members - the cross-check that the engine's
-// canonicalization agrees with the bound attempt, independent of order.
+// canonicalization agrees with the bound attempt, independent of order. It
+// rejects duplicates in `derived` (consuming each expected member at most once),
+// so a malformed list like [1,1] for included [1,2] does NOT falsely match
+// despite the equal length.
 func sameMemberSet(derived []uint16, included []group.MemberIndex) bool {
 	if len(derived) != len(included) {
 		return false
 	}
-	want := make(map[uint16]struct{}, len(included))
+	remaining := make(map[uint16]struct{}, len(included))
 	for _, m := range included {
-		want[uint16(m)] = struct{}{}
+		remaining[uint16(m)] = struct{}{}
 	}
 	for _, d := range derived {
-		if _, ok := want[d]; !ok {
+		if _, ok := remaining[d]; !ok {
 			return false
 		}
+		delete(remaining, d)
 	}
-	return true
+	return len(remaining) == 0
 }
 
 // frostIdentifierMap indexes the engine-derived FROST identifiers by Go member
