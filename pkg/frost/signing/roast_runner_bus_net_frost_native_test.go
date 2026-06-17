@@ -5,6 +5,7 @@ package signing
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"testing"
 
 	"github.com/keep-network/keep-core/internal/testutils"
@@ -179,6 +180,49 @@ func TestBroadcastChannelRunnerBus_DedupsByteIdentical(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected one delivery for byte-identical messages, got [%d]", count)
+	}
+}
+
+func TestRunnerTransportMessage_RejectsOutOfRangeSender(t *testing.T) {
+	frame := make([]byte, 4+attemptContextHashLength+2)
+	// A seat beyond the valid range must be rejected at decode, BEFORE the uint8
+	// narrowing - else it would wrap (e.g. 256+3 -> 3) and pass authentication.
+	binary.BigEndian.PutUint32(frame[0:4], uint32(group.MaxMemberIndex)+1)
+	if err := (&runnerTransportMessage{}).Unmarshal(frame); err == nil {
+		t.Fatal("expected an out-of-range sender id to be rejected")
+	}
+	binary.BigEndian.PutUint32(frame[0:4], 256+3) // wraps to seat 3 if truncated
+	if err := (&runnerTransportMessage{}).Unmarshal(frame); err == nil {
+		t.Fatal("expected a wrapping sender id to be rejected before truncation")
+	}
+}
+
+// A message dropped because a stream was full must NOT be recorded as seen, so a
+// pkg/net retransmission of it is still delivered once the stream drains -
+// otherwise the runner could permanently miss a required message.
+func TestBroadcastChannelRunnerBus_DoesNotSuppressDroppedMessages(t *testing.T) {
+	f := newRunnerBusAuthFixture(t, 1) // buffer of one
+	sub := f.bus.Subscribe()
+
+	first := shareMessage(1, f.operatorA, "first")
+	second := shareMessage(1, f.operatorA, "second") // distinct body, distinct hash
+
+	f.bus.handleMessage(first)  // fills the single-slot buffer
+	f.bus.handleMessage(second) // buffer full -> dropped (must stay un-seen)
+
+	if got := <-sub.Shares(); string(got.Payload) != "first" {
+		t.Fatalf("expected 'first' drained, got %q", got.Payload)
+	}
+
+	// Retransmission of the dropped message, now that the buffer has room.
+	f.bus.handleMessage(second)
+	select {
+	case got := <-sub.Shares():
+		if string(got.Payload) != "second" {
+			t.Fatalf("expected 'second' on retransmit, got %q", got.Payload)
+		}
+	default:
+		t.Fatal("a message dropped on overflow must be deliverable on retransmit after drain")
 	}
 }
 

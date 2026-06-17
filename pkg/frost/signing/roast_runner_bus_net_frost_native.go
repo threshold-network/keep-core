@@ -93,10 +93,19 @@ func (m *runnerTransportMessage) Unmarshal(data []byte) error {
 			len(data), prefix,
 		)
 	}
-	m.sender = group.MemberIndex(binary.BigEndian.Uint32(data[0:4]))
-	if m.sender == 0 {
-		return fmt.Errorf("runner transport: sender is zero")
+	// Validate the raw 4-byte seat BEFORE narrowing to group.MemberIndex (uint8).
+	// A truncating cast would wrap an out-of-range claim (e.g. 259 -> 3) and let
+	// it pass IsValidMembership for whoever holds the wrapped seat - and round-1
+	// commitments carry no inner signature to reject it later. Reject any
+	// non-canonical seat at the decode boundary.
+	rawSender := binary.BigEndian.Uint32(data[0:4])
+	if rawSender == 0 || rawSender > uint32(group.MaxMemberIndex) {
+		return fmt.Errorf(
+			"runner transport: sender id [%d] out of range [1, %d]",
+			rawSender, group.MaxMemberIndex,
+		)
 	}
+	m.sender = group.MemberIndex(rawSender)
 	copy(m.attempt[:], data[4:prefix])
 	m.payload = append([]byte(nil), data[prefix:]...)
 	return nil
@@ -267,17 +276,6 @@ func (s *RunnerBusSubscriber) deliverNonBlocking(
 	msg RunnerMessage,
 	seenBound int,
 ) {
-	s.mu.Lock()
-	if _, dup := s.seen[hash]; dup {
-		s.mu.Unlock()
-		return
-	}
-	if seenBound > 0 && len(s.seen) >= seenBound {
-		s.seen = make(map[[sha256.Size]byte]struct{})
-	}
-	s.seen[hash] = struct{}{}
-	s.mu.Unlock()
-
 	stream := s.streamFor(msg.Type)
 	if stream == nil {
 		return
@@ -287,10 +285,25 @@ func (s *RunnerBusSubscriber) deliverNonBlocking(
 	// to mutate another subscriber's view.
 	delivered := msg
 	delivered.Payload = append([]byte(nil), msg.Payload...)
+
+	// Dedup-check, enqueue, and record-seen under one lock. The non-blocking
+	// send never blocks (select/default), so holding the lock across it is safe.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, dup := s.seen[hash]; dup {
+		return
+	}
 	select {
 	case stream <- delivered:
+		// Record as seen ONLY after a successful enqueue. A message dropped on
+		// overflow is left un-seen so the pkg/net retransmission of it can still be
+		// delivered once the stream drains - marking it here would permanently
+		// suppress a message the runner never actually received.
+		if seenBound > 0 && len(s.seen) >= seenBound {
+			s.seen = make(map[[sha256.Size]byte]struct{})
+		}
+		s.seen[hash] = struct{}{}
 	default:
-		// Stream full: drop the newest. Late/excess delivery is the blame path's
-		// concern, and pkg/net retransmits a genuinely-needed message.
+		// Stream full: drop the newest, leave it un-seen for a future retransmit.
 	}
 }
