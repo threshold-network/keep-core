@@ -4,6 +4,7 @@ package signing
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ type harness struct {
 	runners     []*interactiveSigningRunner
 	coords      []roast.Coordinator
 	collectors  []*roast.Round2Collector
+	engines     []*fakeInteractiveSigningEngine
 	handles     []roast.AttemptHandle
 	contextHash [attempt.MessageDigestLength]byte
 	includedSet []group.MemberIndex
@@ -65,9 +67,10 @@ func buildInteractiveSigningHarness(t *testing.T, n int, threshold uint16) harne
 			t.Fatalf("active attempt (member %d): %v", member, err)
 		}
 		collector := roast.NewRound2Collector(verifier)
+		engine := newFakeInteractiveSigningEngine()
 		runner, err := newInteractiveSigningRunner(
 			ara, member, threshold,
-			newFakeInteractiveSigningEngine(),
+			engine,
 			collector,
 			coord, signer, bus,
 		)
@@ -76,6 +79,7 @@ func buildInteractiveSigningHarness(t *testing.T, n int, threshold uint16) harne
 		}
 		h.coords = append(h.coords, coord)
 		h.collectors = append(h.collectors, collector)
+		h.engines = append(h.engines, engine)
 		h.handles = append(h.handles, handle)
 		h.runners = append(h.runners, runner)
 	}
@@ -144,6 +148,53 @@ func TestInteractiveSigningRunner_PrunesCollectorStateAfterSuccess(t *testing.T)
 	for i, collector := range h.collectors {
 		if err := collector.BeginAttempt(h.contextHash[:], differentElected, h.includedSet); err != nil {
 			t.Fatalf("member %d: collector retained concluded attempt state (conflicting re-begin: %v)", i+1, err)
+		}
+	}
+}
+
+// A FAILED attempt must NOT be pruned by the runner: the retained signed
+// evidence is what the blame/retry path reads (CoordinatorPackageProofs /
+// ClassifyCandidateCulprits). Force aggregation to fail after every node has
+// recorded its package and shares, then assert each collector still holds the
+// attempt - a conflicting re-begin is rejected, whereas a pruned collector would
+// accept it.
+func TestInteractiveSigningRunner_PreservesEvidenceOnAggregateFailure(t *testing.T) {
+	h := buildInteractiveSigningHarness(t, 3, 2)
+	for _, e := range h.engines {
+		e.aggregateErr = fmt.Errorf("aggregate share verification failed")
+	}
+
+	runCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	errs := make([]error, len(h.runners))
+	var wg sync.WaitGroup
+	for i := range h.runners {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			_, errs[idx] = h.runners[idx].Run(runCtx)
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err == nil {
+			t.Fatalf("member %d: expected aggregate failure", i+1)
+		}
+	}
+
+	// Retained evidence must survive the failure (not pruned): a surviving record
+	// makes a re-begin under a DIFFERENT binding conflict.
+	elected := h.runners[0].attempt.ElectedCoordinator()
+	var differentElected group.MemberIndex
+	for _, m := range h.includedSet {
+		if m != elected {
+			differentElected = m
+			break
+		}
+	}
+	for i, collector := range h.collectors {
+		if err := collector.BeginAttempt(h.contextHash[:], differentElected, h.includedSet); err == nil {
+			t.Fatalf("member %d: evidence pruned on failure (conflicting re-begin unexpectedly succeeded)", i+1)
 		}
 	}
 }

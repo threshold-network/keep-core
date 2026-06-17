@@ -119,23 +119,25 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 	}
 	attemptID := open.AttemptID
 
-	// Cleanup on conclusion - the attempt concludes for this runner on any exit:
-	//   - Always prune this attempt's round-2 collector state, per the collector's
-	//     prune-on-conclusion contract. A collector reused across attempts would
-	//     otherwise retain every concluded attempt's package/share envelopes
-	//     indefinitely. A no-op if the attempt was never begun, and (when the
-	//     blame path lands) it extracts its evidence into the transition bundle
-	//     within Run, before this defer fires.
-	//   - On an EARLY exit only (ctx cancel, or an error before round 2 consumed
-	//     the nonces) abort the engine session so it drops this attempt's resident
-	//     secret nonces; a clean success consumed them and clears the flag first.
-	// Both are best-effort: they must not mask the run's real outcome.
+	// Cleanup on conclusion, by outcome:
+	//   - SUCCESS: prune this attempt's round-2 collector state per the
+	//     prune-on-conclusion contract (nothing needs it), so a collector reused
+	//     across attempts does not retain concluded attempts indefinitely.
+	//   - FAILURE / early exit: abort the engine session so it drops this
+	//     attempt's resident secret nonces, but do NOT prune the collector. A
+	//     failure path (the root-divergence return below, or - once it lands - an
+	//     aggregate share-verification failure) retains signed evidence that the
+	//     blame/retry path must still read via CoordinatorPackageProofs /
+	//     ClassifyCandidateCulprits; the caller prunes after snapshotting or
+	//     propagating it.
+	// Best-effort: neither may mask the run's real outcome.
 	succeeded := false
 	defer func() {
-		r.collector.PruneAttempt(contextHash[:])
-		if !succeeded {
-			_, _ = r.engine.InteractiveSessionAbort(binding.SessionID(), &attemptID)
+		if succeeded {
+			r.collector.PruneAttempt(contextHash[:])
+			return
 		}
+		_, _ = r.engine.InteractiveSessionAbort(binding.SessionID(), &attemptID)
 	}()
 
 	// 2. Begin collecting evidence for this attempt (elected coordinator from the
