@@ -481,6 +481,16 @@ pub(crate) fn derive_interactive_attempt_context(
             "attempt_number must be at least 1".to_string(),
         ));
     }
+    // interactive_session_open rejects threshold == 0 BEFORE validating the
+    // context, and validate_attempt_context only checks len >= threshold (always
+    // true for 0). Reject it here too so the helper never hands the host a
+    // context open would reject - a missing/uninitialized threshold fails at the
+    // derivation seam, not later at open.
+    if request.threshold == 0 {
+        return Err(EngineError::Validation(
+            "threshold must be non-zero".to_string(),
+        ));
+    }
 
     let canonical_included_participants =
         canonicalize_included_participants(&request.included_participants)?;

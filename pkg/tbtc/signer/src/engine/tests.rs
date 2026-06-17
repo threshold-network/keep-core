@@ -3462,6 +3462,12 @@ fn derive_interactive_attempt_context_rejects_invalid_inputs() {
     zero_attempt.attempt_number = 0;
     assert!(derive_interactive_attempt_context(zero_attempt).is_err());
 
+    // threshold == 0 is vacuously >= len, but interactive_session_open rejects
+    // it, so the helper must too rather than hand back a context open refuses.
+    let mut zero_threshold = base.clone();
+    zero_threshold.threshold = 0;
+    assert!(derive_interactive_attempt_context(zero_threshold).is_err());
+
     let mut threshold_too_large = base.clone();
     threshold_too_large.threshold = 5;
     threshold_too_large.included_participants = vec![1, 2];
