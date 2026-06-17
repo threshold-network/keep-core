@@ -24,6 +24,23 @@ import (
 // the immutable ActiveRoastAttempt binding, never from peer messages, and the
 // node records its OWN produced share into the collector explicitly rather than
 // relying on bus self-echo.
+//
+// Transport assumptions - the in-process test bus meets the first; the real
+// pkg/net transport MUST meet both:
+//  1. RunnerMessage.Sender is the AUTHENTICATED peer identity. The sender==elected
+//     and SubmitterID==Sender filters, and per-member commitment slotting, are
+//     only as sound as that authentication.
+//  2. Delivery must not let a slow or flooding peer block an honest broadcaster
+//     indefinitely. The runner does not fully drain every stream - it bounds the
+//     equivocation drains, and the coordinator never reads its own package
+//     stream - so the transport must apply backpressure or drop, never block
+//     forever, on an undrained or oversubscribed stream.
+//
+// Round-1 commitments are unsigned: with authenticated senders the worst case is
+// a member's own bad or equivocated commitment, which surfaces as a round-2
+// mismatch and retry, never a cross-member poison or signing breach. Blaming
+// commitment equivocation would need signed commitments - a protocol decision
+// for the design consult.
 type interactiveSigningRunner struct {
 	attempt *ActiveRoastAttempt
 	member  group.MemberIndex
