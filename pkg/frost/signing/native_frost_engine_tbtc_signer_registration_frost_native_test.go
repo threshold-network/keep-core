@@ -1936,3 +1936,121 @@ func TestBuildTaggedTBTCSignerErrorPayload_CandidateCulprits(t *testing.T) {
 		t.Fatalf("expected no culprits for a non-culprit error, got: [%v]", plain.CandidateCulprits)
 	}
 }
+
+func TestBuildTaggedTBTCSignerDeriveInteractiveAttemptContextRequestPayload(t *testing.T) {
+	payload, err := buildTaggedTBTCSignerDeriveInteractiveAttemptContextRequestPayload(
+		"session-1",
+		[]byte{0xab, 0xcd},
+		"key-group-1",
+		2,
+		3, // RFC-21 0-based attempt
+		[]uint16{1, 2, 3},
+	)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+
+	var request buildTaggedTBTCSignerDeriveInteractiveAttemptContextRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+	if request.SessionID != "session-1" {
+		t.Fatalf("unexpected session id: [%s]", request.SessionID)
+	}
+	if request.MessageHex != "abcd" {
+		t.Fatalf("unexpected message hex: [%s]", request.MessageHex)
+	}
+	if request.KeyGroup != "key-group-1" {
+		t.Fatalf("unexpected key group: [%s]", request.KeyGroup)
+	}
+	if request.Threshold != 2 {
+		t.Fatalf("unexpected threshold: [%d]", request.Threshold)
+	}
+	// Wire attempt_number is 1-based: the RFC-21 0-based 3 serializes as 4.
+	if request.AttemptNumber != 4 {
+		t.Fatalf("unexpected wire attempt number: [%d]", request.AttemptNumber)
+	}
+	if len(request.IncludedParticipants) != 3 ||
+		request.IncludedParticipants[0] != 1 ||
+		request.IncludedParticipants[2] != 3 {
+		t.Fatalf("unexpected included participants: [%v]", request.IncludedParticipants)
+	}
+}
+
+func TestBuildTaggedTBTCSignerDeriveInteractiveAttemptContextRequestPayload_RejectsInvalidInput(t *testing.T) {
+	tests := map[string]struct {
+		sessionID    string
+		message      []byte
+		keyGroup     string
+		threshold    uint16
+		participants []uint16
+	}{
+		"empty session":      {"", []byte{0x01}, "kg", 2, []uint16{1, 2}},
+		"empty message":      {"s", nil, "kg", 2, []uint16{1, 2}},
+		"empty key group":    {"s", []byte{0x01}, "", 2, []uint16{1, 2}},
+		"zero threshold":     {"s", []byte{0x01}, "kg", 0, []uint16{1, 2}},
+		"empty participants": {"s", []byte{0x01}, "kg", 2, nil},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := buildTaggedTBTCSignerDeriveInteractiveAttemptContextRequestPayload(
+				tc.sessionID, tc.message, tc.keyGroup, tc.threshold, 0, tc.participants,
+			); err == nil {
+				t.Fatal("expected invalid input to be rejected")
+			}
+		})
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerDeriveInteractiveAttemptContextResponse(t *testing.T) {
+	result, err := decodeBuildTaggedTBTCSignerDeriveInteractiveAttemptContextResponse([]byte(`{
+		"attempt_context": {
+			"attempt_number": 4,
+			"coordinator_identifier": 2,
+			"included_participants": [1, 2, 3],
+			"included_participants_fingerprint": "deadbeef",
+			"attempt_id": "attempt-xyz"
+		},
+		"frost_identifiers": [
+			{"participant_identifier": 1, "frost_identifier": "id-1"},
+			{"participant_identifier": 2, "frost_identifier": "id-2"},
+			{"participant_identifier": 3, "frost_identifier": "id-3"}
+		]
+	}`))
+	if err != nil {
+		t.Fatalf("unexpected decode error: [%v]", err)
+	}
+	// Wire 1-based attempt_number 4 decodes to the RFC-21 0-based 3.
+	if result.AttemptContext.AttemptNumber != 3 {
+		t.Fatalf("unexpected attempt number: [%d]", result.AttemptContext.AttemptNumber)
+	}
+	if result.AttemptContext.CoordinatorIdentifier != 2 {
+		t.Fatalf("unexpected coordinator: [%d]", result.AttemptContext.CoordinatorIdentifier)
+	}
+	if result.AttemptContext.IncludedParticipantsFingerprint != "deadbeef" {
+		t.Fatalf("unexpected fingerprint: [%s]", result.AttemptContext.IncludedParticipantsFingerprint)
+	}
+	if result.AttemptContext.AttemptID != "attempt-xyz" {
+		t.Fatalf("unexpected attempt id: [%s]", result.AttemptContext.AttemptID)
+	}
+	if len(result.AttemptContext.IncludedParticipants) != 3 ||
+		result.AttemptContext.IncludedParticipants[2] != 3 {
+		t.Fatalf("unexpected included participants: [%v]", result.AttemptContext.IncludedParticipants)
+	}
+	if len(result.FrostIdentifiers) != 3 ||
+		result.FrostIdentifiers[0].ParticipantIdentifier != 1 ||
+		result.FrostIdentifiers[0].FrostIdentifier != "id-1" ||
+		result.FrostIdentifiers[2].FrostIdentifier != "id-3" {
+		t.Fatalf("unexpected frost identifiers: [%+v]", result.FrostIdentifiers)
+	}
+
+	// Malformed JSON and a zero (impossible 1-based) wire attempt number reject.
+	if _, err := decodeBuildTaggedTBTCSignerDeriveInteractiveAttemptContextResponse([]byte(`{`)); err == nil {
+		t.Fatal("expected malformed payload to be rejected")
+	}
+	if _, err := decodeBuildTaggedTBTCSignerDeriveInteractiveAttemptContextResponse(
+		[]byte(`{"attempt_context":{"attempt_number":0,"coordinator_identifier":2,"included_participants":[1,2],"included_participants_fingerprint":"ab","attempt_id":"a"}}`),
+	); err == nil {
+		t.Fatal("expected zero wire attempt number to be rejected")
+	}
+}
