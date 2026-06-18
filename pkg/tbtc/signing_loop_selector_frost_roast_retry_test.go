@@ -41,16 +41,21 @@ func TestROASTSelector_InitialAttemptUsesLegacy(t *testing.T) {
 	t.Cleanup(signing.ResetRoastTransitionRegistryForTest)
 
 	sel := roastSigningParticipantSelector{}
+	// Args: ready, operators, seed, retryCount, roastAttemptNumber, honestThreshold,
+	// sessionID, memberIndex. roastAttemptNumber 0 == the initial ROAST attempt.
 	got, err := sel.Select(
 		[]group.MemberIndex{1, 2, 3, 4, 5},
 		selectorTestMembers(),
-		42, 0, 3, "session", 1, // retry 0
+		42, 0, 0, 3, "session", 1,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(got) != 3 {
-		t.Fatalf("expected a legacy-shaped included set (the honest threshold); got %d", len(got))
+	if len(got.includedMembersIndexes) != 3 {
+		t.Fatalf(
+			"expected a legacy-shaped included set (the honest threshold); got %d",
+			len(got.includedMembersIndexes),
+		)
 	}
 }
 
@@ -72,10 +77,12 @@ func TestROASTSelector_FailsClosedWhenTransitionMissing(t *testing.T) {
 	})
 
 	sel := roastSigningParticipantSelector{}
+	// roastAttemptNumber 1 (> 0) under active ROAST expects a transition; none is
+	// stored, so the selector must fail closed.
 	_, err := sel.Select(
 		[]group.MemberIndex{1, 2, 3, 4, 5},
 		selectorTestMembers(),
-		42, 1, 3, "session", 1, // retry 1, no record stored
+		42, 1, 1, 3, "session", 1,
 	)
 	if err == nil {
 		t.Fatal("expected a fail-closed error when an expected transition is missing")

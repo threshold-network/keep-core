@@ -108,6 +108,14 @@ type signingRetryLoop struct {
 	attemptStartBlock uint64
 	attemptSeed       int64
 
+	// roastAttemptNumber is the 0-based COMMITTED ROAST attempt index: it advances
+	// only when an iteration reaches selection/observe (a committed attempt), NOT
+	// on the block-timing/announcement/minority-readiness skips that tick
+	// attemptCounter. The ROAST transition chain keys off it (observe context,
+	// freshness, consume) so a skipped loop iteration does not break the
+	// consecutive-transition chain across honest nodes (RFC-21 Phase 7.3 PR2b-1b).
+	roastAttemptNumber uint
+
 	doneCheck signingDoneCheckStrategy
 
 	// participantSelector dispatches qualified-operator selection.
@@ -367,7 +375,7 @@ func (srl *signingRetryLoop) start(
 			continue
 		}
 
-		includedMembersIndexes, excludedMembersIndexes, err := srl.performMembersSelection(
+		includedMembersIndexes, excludedMembersIndexes, transientlyParkedMembersIndexes, err := srl.performMembersSelection(
 			readyMembersIndexes,
 		)
 		if err != nil {
@@ -379,17 +387,25 @@ func (srl *signingRetryLoop) start(
 		}
 
 		// RFC-21 Phase 7.3 PR2b-1b: record a local observe binding for this
-		// attempt BEFORE the skip branch, so every local seat -- including one
-		// excluded from this attempt -- holds a handle to verify the attempt's
-		// transition bundle and run NextAttempt for the next attempt's selection.
-		// Inert in C1: the bindings are produced but not yet consumed.
+		// committed ROAST attempt BEFORE the skip branch, so every local seat --
+		// including one excluded from this attempt -- holds a handle to verify the
+		// attempt's transition bundle and run NextAttempt for the next attempt's
+		// selection. The observe context carries the transiently-parked set, so a
+		// one-attempt park is reinstated next time rather than made permanent.
 		if srl.transitionController != nil {
 			srl.transitionController.BeginObservedAttempt(
-				srl.attemptCounter,
+				srl.roastAttemptNumber,
 				includedMembersIndexes,
 				excludedMembersIndexes,
+				transientlyParkedMembersIndexes,
 			)
 		}
+		// This iteration reached selection/observe, so it COMMITTED to a ROAST
+		// attempt: advance the committed ROAST attempt number (the block-timing,
+		// announcement, and minority-readiness skips above did not). Every seat --
+		// included or excluded -- advances identically, keeping the transition
+		// chain consecutive across honest nodes.
+		srl.roastAttemptNumber++
 
 		attemptSkipped := slices.Contains(
 			excludedMembersIndexes,
@@ -514,49 +530,51 @@ func (srl *signingRetryLoop) start(
 }
 
 // performMembersSelection runs the member selection process for the given
-// signing attempt, returning BOTH the included member indices (the members
-// that participate) and the excluded ones (everyone else), each sorted
-// ascending.
+// signing attempt, returning the included member indices (the members that
+// participate), the excluded ones (everyone else), and the transiently-parked
+// subset, each sorted ascending.
 //
-// Selection is dispatched through participantSelector (RFC-21 Phase 6.4) so a
-// ROAST-driven implementation can be installed behind the frost_roast_retry
-// build tag without touching this call site. As of RFC-21 Phase 7.3 PR2b-1a
-// the selector is MEMBER-LEVEL: it returns the exact included member indices.
-// The legacy implementation computes them from the qualified-operator set, the
-// ready members, and the surplus trim; the ROAST implementation (PR2b-1b) will
-// return the transition's IncludedSet directly. The excluded set is the
-// complement of the included set over the whole signing group, so the two
-// partition [1, groupSize] -- which is why the downstream AttemptInfo can
-// reconstruct the exact included set from the excluded one losslessly.
+// Selection is dispatched through participantSelector (RFC-21 Phase 6.4). As of
+// Phase 7.3 PR2b-1a it is MEMBER-LEVEL; PR2b-1b's ROAST implementation returns
+// the transition's IncludedSet + TransientlyParked directly (keyed by the
+// COMMITTED roastAttemptNumber, not the block-paced attemptCounter). The excluded
+// set is the complement of the included set over the whole signing group, so the
+// two partition [1, groupSize]; the parked set is the subset of the excluded set
+// that the next attempt reinstates.
 func (srl *signingRetryLoop) performMembersSelection(
 	readyMembersIndexes []group.MemberIndex,
-) ([]group.MemberIndex, []group.MemberIndex, error) {
-	// The retry algorithm counts retries from 0. The first invocation is for
-	// attemptCounter == 1, so the retry count is attemptCounter - 1.
+) ([]group.MemberIndex, []group.MemberIndex, []group.MemberIndex, error) {
+	// The legacy retry algorithm counts retries from 0. The first invocation is
+	// for attemptCounter == 1, so the legacy retry count is attemptCounter - 1.
+	// The ROAST path instead keys off the committed roastAttemptNumber.
 	retryCount := srl.attemptCounter - 1
 
-	includedMembersIndexes, err := srl.participantSelector.Select(
+	selection, err := srl.participantSelector.Select(
 		readyMembersIndexes,
 		srl.signingGroupOperators,
 		srl.attemptSeed,
 		retryCount,
+		srl.roastAttemptNumber,
 		uint(srl.groupParameters.HonestThreshold),
 		srl.roastSessionID,
 		srl.signingGroupMemberIndex,
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf(
+		return nil, nil, nil, fmt.Errorf(
 			"participant selection failed: [%w]",
 			err,
 		)
 	}
 
 	excludedMembersIndexes := membersComplement(
-		includedMembersIndexes,
+		selection.includedMembersIndexes,
 		len(srl.signingGroupOperators),
 	)
 
-	return includedMembersIndexes, excludedMembersIndexes, nil
+	return selection.includedMembersIndexes,
+		excludedMembersIndexes,
+		selection.transientlyParkedMembersIndexes,
+		nil
 }
 
 // membersComplement returns the member indices in [1, groupSize] that are NOT

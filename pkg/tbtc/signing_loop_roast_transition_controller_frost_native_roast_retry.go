@@ -97,23 +97,29 @@ func newRoastTransitionExchangeForRequest(
 }
 
 func (c *roastTransitionControllerImpl) BeginObservedAttempt(
-	attemptNumber uint,
+	roastAttemptNumber uint,
 	includedMembersIndexes []group.MemberIndex,
 	excludedMembersIndexes []group.MemberIndex,
+	transientlyParkedMembersIndexes []group.MemberIndex,
 ) {
 	// Shallow-copy the static template and stamp this attempt's metadata.
+	// Attempt.Number is 1-based; BuildAttemptContextFromRequest maps it to the
+	// 0-based AttemptContext.AttemptNumber == roastAttemptNumber, so the observe
+	// context and the transition-record freshness chain key off the committed
+	// ROAST attempt index, not the block-paced loop counter.
 	request := *c.requestTemplate
 	request.Attempt = &signing.Attempt{
-		Number:                 attemptNumber,
-		IncludedMembersIndexes: includedMembersIndexes,
-		ExcludedMembersIndexes: excludedMembersIndexes,
+		Number:                          roastAttemptNumber + 1,
+		IncludedMembersIndexes:          includedMembersIndexes,
+		ExcludedMembersIndexes:          excludedMembersIndexes,
+		TransientlyParkedMembersIndexes: transientlyParkedMembersIndexes,
 	}
 
 	hash, err := signing.ObserveAttemptForTransition(&request)
 	if err != nil {
 		c.logger.Warnf(
-			"[member:%v] roast transition: observe attempt [%v] failed: [%v]",
-			request.MemberIndex, attemptNumber, err,
+			"[member:%v] roast transition: observe roast attempt [%v] failed: [%v]",
+			request.MemberIndex, roastAttemptNumber, err,
 		)
 	}
 	// Retain the attempt hash so OnAttemptFailed can drive the exchange against

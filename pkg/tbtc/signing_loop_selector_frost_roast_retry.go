@@ -42,28 +42,33 @@ func (s roastSigningParticipantSelector) Select(
 	signingGroupOperators chain.Addresses,
 	seed int64,
 	retryCount uint,
+	roastAttemptNumber uint,
 	honestThreshold uint,
 	sessionID string,
 	memberIndex group.MemberIndex,
-) ([]group.MemberIndex, error) {
-	includedMembersIndexes, err := signing.ConsumeRoastTransitionForSelection(
+) (participantSelection, error) {
+	included, parked, err := signing.ConsumeRoastTransitionForSelection(
 		sessionID,
 		memberIndex,
-		retryCount,
+		roastAttemptNumber,
 		honestThreshold,
 	)
 	if err == nil {
-		return includedMembersIndexes, nil
+		return participantSelection{
+			includedMembersIndexes:          included,
+			transientlyParkedMembersIndexes: parked,
+		}, nil
 	}
 
-	// Initial attempt or ROAST retry inactive: a uniform legacy fallback every
-	// honest node makes identically.
+	// Initial ROAST attempt or ROAST retry inactive: a uniform legacy fallback
+	// every honest node makes identically.
 	if errors.Is(err, signing.ErrRoastSelectionFallBackToLegacy) {
 		return s.legacy.Select(
 			readyMembersIndexes,
 			signingGroupOperators,
 			seed,
 			retryCount,
+			roastAttemptNumber,
 			honestThreshold,
 			sessionID,
 			memberIndex,
@@ -75,5 +80,5 @@ func (s roastSigningParticipantSelector) Select(
 	// retry loop, and the outer layer retries the whole signing. Falling back to
 	// legacy here -- while peers that DID receive the transition select from it --
 	// would split the signing group into divergent included sets.
-	return nil, err
+	return participantSelection{}, err
 }

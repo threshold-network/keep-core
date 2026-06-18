@@ -30,17 +30,19 @@ func (r *recordingSelector) Select(
 	_ int64,
 	_ uint,
 	_ uint,
+	_ uint,
 	_ string,
 	_ group.MemberIndex,
-) ([]group.MemberIndex, error) {
+) (participantSelection, error) {
 	r.calls++
 	if r.err != nil {
-		return nil, r.err
+		return participantSelection{}, r.err
 	}
-	if r.result != nil {
-		return r.result, nil
+	included := r.result
+	if included == nil {
+		included = readyMembersIndexes
 	}
-	return readyMembersIndexes, nil
+	return participantSelection{includedMembersIndexes: included}, nil
 }
 
 func TestLegacySigningParticipantSelector_DelegatesToRetryShuffle(t *testing.T) {
@@ -53,14 +55,21 @@ func TestLegacySigningParticipantSelector_DelegatesToRetryShuffle(t *testing.T) 
 	}
 	readyMembers := []group.MemberIndex{1, 2, 3, 4, 5}
 	sel := legacySigningParticipantSelector{}
-	got, err := sel.Select(readyMembers, operators, 42, 0, 3, "session-x", 1)
+	// Args: ready, operators, seed, retryCount, roastAttemptNumber, honestThreshold,
+	// sessionID, memberIndex.
+	selection, err := sel.Select(readyMembers, operators, 42, 0, 0, 3, "session-x", 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	got := selection.includedMembersIndexes
 	// Five members are ready and the honest threshold is 3, so the
 	// surplus trim leaves exactly the threshold count included.
 	if len(got) != 3 {
 		t.Fatalf("expected 3 included members (the honest threshold), got %d", len(got))
+	}
+	// The legacy path never parks.
+	if len(selection.transientlyParkedMembersIndexes) != 0 {
+		t.Fatalf("legacy selection must not park members, got %v", selection.transientlyParkedMembersIndexes)
 	}
 	// The result must be sorted ascending and contain only ready members.
 	for i := 1; i < len(got); i++ {
@@ -75,7 +84,7 @@ func TestLegacySigningParticipantSelector_PropagatesErrors(t *testing.T) {
 	_, err := sel.Select(
 		[]group.MemberIndex{1},
 		chain.Addresses{chain.Address("op-1")},
-		0, 0,
+		0, 0, 0,
 		99, // honest threshold higher than member count
 		"session-x",
 		1,
@@ -105,7 +114,7 @@ func TestSigningRetryLoopUsesDispatcher(t *testing.T) {
 		participantSelector: recorder,
 	}
 
-	included, excluded, err := srl.performMembersSelection(
+	included, excluded, _, err := srl.performMembersSelection(
 		[]group.MemberIndex{1, 2, 3, 4, 5},
 	)
 	if err != nil {
@@ -139,7 +148,7 @@ func TestSigningRetryLoopPropagatesSelectorError(t *testing.T) {
 		attemptSeed:         0,
 		participantSelector: &recordingSelector{err: wantErr},
 	}
-	_, _, err := srl.performMembersSelection([]group.MemberIndex{1, 2})
+	_, _, _, err := srl.performMembersSelection([]group.MemberIndex{1, 2})
 	if err == nil {
 		t.Fatal("expected selector error to propagate")
 	}

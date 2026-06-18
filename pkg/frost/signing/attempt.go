@@ -27,6 +27,16 @@ func cloneAttempt(attempt *Attempt) *Attempt {
 		return nil
 	}
 
+	// Preserve nil-ness for the optional parked set (nil when there is no
+	// parking) so a clone compares equal to an attempt that never set it.
+	var transientlyParked []group.MemberIndex
+	if attempt.TransientlyParkedMembersIndexes != nil {
+		transientlyParked = append(
+			[]group.MemberIndex{},
+			attempt.TransientlyParkedMembersIndexes...,
+		)
+	}
+
 	return &Attempt{
 		Number:                 attempt.Number,
 		CoordinatorMemberIndex: attempt.CoordinatorMemberIndex,
@@ -38,9 +48,6 @@ func cloneAttempt(attempt *Attempt) *Attempt {
 			[]group.MemberIndex{},
 			attempt.ExcludedMembersIndexes...,
 		),
-		TransientlyParkedMembersIndexes: append(
-			[]group.MemberIndex{},
-			attempt.TransientlyParkedMembersIndexes...,
-		),
+		TransientlyParkedMembersIndexes: transientlyParked,
 	}
 }

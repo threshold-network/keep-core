@@ -3,6 +3,7 @@ package tbtc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"testing"
 	"time"
@@ -14,9 +15,10 @@ import (
 )
 
 type observedAttemptCall struct {
-	attemptNumber uint
-	included      []group.MemberIndex
-	excluded      []group.MemberIndex
+	roastAttemptNumber uint
+	included           []group.MemberIndex
+	excluded           []group.MemberIndex
+	parked             []group.MemberIndex
 }
 
 type failedAttemptCall struct {
@@ -33,14 +35,16 @@ type fakeTransitionController struct {
 }
 
 func (f *fakeTransitionController) BeginObservedAttempt(
-	attemptNumber uint,
+	roastAttemptNumber uint,
 	includedMembersIndexes []group.MemberIndex,
 	excludedMembersIndexes []group.MemberIndex,
+	transientlyParkedMembersIndexes []group.MemberIndex,
 ) {
 	f.calls = append(f.calls, observedAttemptCall{
-		attemptNumber: attemptNumber,
-		included:      includedMembersIndexes,
-		excluded:      excludedMembersIndexes,
+		roastAttemptNumber: roastAttemptNumber,
+		included:           includedMembersIndexes,
+		excluded:           excludedMembersIndexes,
+		parked:             transientlyParkedMembersIndexes,
 	})
 }
 
@@ -131,8 +135,8 @@ func TestSigningRetryLoop_ObservesEachAttempt(t *testing.T) {
 		t.Fatalf("expected BeginObservedAttempt called once, got %d", len(controller.calls))
 	}
 	call := controller.calls[0]
-	if call.attemptNumber != 1 {
-		t.Fatalf("expected attempt number 1, got %d", call.attemptNumber)
+	if call.roastAttemptNumber != 0 {
+		t.Fatalf("expected the first committed roast attempt number 0, got %d", call.roastAttemptNumber)
 	}
 	// The observed sets must partition the whole group and match the honest
 	// threshold count -- i.e. the loop passes selection's exact member-level
@@ -236,5 +240,60 @@ func TestSigningRetryLoop_SignalsFailedAttempt(t *testing.T) {
 	// successful retry).
 	if len(controller.calls) != 2 {
 		t.Fatalf("expected BeginObservedAttempt called twice, got %d", len(controller.calls))
+	}
+}
+
+// TestSigningRetryLoop_SkipDoesNotAdvanceRoastAttemptNumber asserts the committed
+// ROAST attempt number advances only on attempts that reach selection/observe,
+// not on the pre-selection skips (here a minority-readiness skip). The committed
+// attempt after a skip must still be roast attempt 0 -- otherwise the transition
+// chain would expect a record for an attempt that never ran (Codex B2).
+func TestSigningRetryLoop_SkipDoesNotAdvanceRoastAttemptNumber(t *testing.T) {
+	message := big.NewInt(100)
+	testResult := &signing.Result{
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(300), big.NewInt(400)),
+	}
+	announcer := &mockSigningAnnouncer{
+		outgoingAnnouncements: make(map[string]group.MemberIndex),
+		incomingAnnouncementsFn: func(sessionID string) ([]group.MemberIndex, error) {
+			// Loop attempt 1: minority readiness (< honest threshold) -> skipped
+			// BEFORE selection/observe. Loop attempt 2: full -> committed.
+			if sessionID == fmt.Sprintf("%v-%v", message, 1) {
+				return []group.MemberIndex{1, 2}, nil
+			}
+			return []group.MemberIndex{1, 2, 3}, nil
+		},
+	}
+	doneCheck := &mockSigningDoneCheck{
+		waitUntilAllDoneOutcomeFn: func(uint64) (*signing.Result, uint64, error) {
+			return testResult, 215, nil
+		},
+	}
+	retryLoop := newSigningRetryLoop(
+		&testutils.MockLogger{},
+		message,
+		"",
+		200,
+		1,
+		chain.Addresses{"address-1", "address-2", "address-3"},
+		&GroupParameters{GroupSize: 3, HonestThreshold: 3},
+		announcer,
+		doneCheck,
+	)
+	controller := &fakeTransitionController{}
+	retryLoop.setTransitionController(controller)
+
+	runOneSuccessfulAttempt(t, retryLoop)
+
+	// Only the committed (loop attempt 2) attempt was observed; the minority skip
+	// did not.
+	if len(controller.calls) != 1 {
+		t.Fatalf("expected 1 observed (committed) attempt, got %d", len(controller.calls))
+	}
+	if controller.calls[0].roastAttemptNumber != 0 {
+		t.Fatalf(
+			"the committed attempt after a skip must be roast attempt 0, got %d",
+			controller.calls[0].roastAttemptNumber,
+		)
 	}
 }

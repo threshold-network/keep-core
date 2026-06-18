@@ -25,9 +25,10 @@ type roastTransitionController interface {
 	// must track the transition too). Best-effort: a failure is logged, never
 	// propagated to the signing flow.
 	BeginObservedAttempt(
-		attemptNumber uint,
+		roastAttemptNumber uint,
 		includedMembersIndexes []group.MemberIndex,
 		excludedMembersIndexes []group.MemberIndex,
+		transientlyParkedMembersIndexes []group.MemberIndex,
 	)
 	// OnAttemptFailed signals that a committed attempt this seat participated in
 	// failed, so the transition exchange should run: publish this seat's forced
