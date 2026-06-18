@@ -8,6 +8,7 @@ import (
 	"math/big"
 
 	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
 // ErrAttemptContextConstruction is the sentinel error class returned
@@ -132,6 +133,16 @@ func BuildAttemptContextFromRequest(
 		roastSessionID = request.SessionID
 	}
 
+	// RFC-21 Phase 7.3 PR2b-1b: carry transient parking. Attempt.Excluded is the
+	// full "not participating now" set (permanent-excluded plus transiently-
+	// parked); split it so the AttemptContext distinguishes them, or NextAttempt
+	// would treat a one-attempt park as a permanent exclusion and never reinstate
+	// the member.
+	transientlyParked := request.Attempt.TransientlyParkedMembersIndexes
+	permanentExcluded := membersDifference(
+		request.Attempt.ExcludedMembersIndexes,
+		transientlyParked,
+	)
 	ctx, err := attempt.NewAttemptContextWithParking(
 		roastSessionID,
 		keyGroupID,
@@ -139,8 +150,8 @@ func BuildAttemptContextFromRequest(
 		digest,
 		attemptNumber,
 		request.Attempt.IncludedMembersIndexes,
-		request.Attempt.ExcludedMembersIndexes,
-		nil, // Phase 6 ships attempt-zero shape; parking lands in Phase 7+ orchestration.
+		permanentExcluded,
+		transientlyParked,
 	)
 	if err != nil {
 		return attempt.AttemptContext{}, fmt.Errorf(
@@ -150,6 +161,26 @@ func BuildAttemptContextFromRequest(
 		)
 	}
 	return ctx, nil
+}
+
+// membersDifference returns the members in `all` not present in `remove`,
+// preserving the order of `all`. Used to split an attempt's "not participating"
+// set into permanently-excluded vs transiently-parked.
+func membersDifference(all, remove []group.MemberIndex) []group.MemberIndex {
+	if len(remove) == 0 {
+		return all
+	}
+	removeSet := make(map[group.MemberIndex]bool, len(remove))
+	for _, m := range remove {
+		removeSet[m] = true
+	}
+	out := make([]group.MemberIndex, 0, len(all))
+	for _, m := range all {
+		if !removeSet[m] {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // deriveKeyGroupID computes the AttemptContext KeyGroupID field
