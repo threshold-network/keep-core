@@ -3,47 +3,38 @@
 package tbtc
 
 import (
-	"fmt"
-
 	"github.com/keep-network/keep-core/pkg/chain"
-	"github.com/keep-network/keep-core/pkg/frost/roast"
-	"github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
-// roastSigningParticipantSelector consumes the per-session
-// TransitionMessage registry populated by Phase 7.1's bundle
-// production. When a bundle is available for the session, it
-// invokes EvaluateRoastRetryForSigning to compute the next
-// attempt's IncludedSet from the verified evidence. When no bundle
-// is available -- typically the first attempt of a session, or
-// when the elected coordinator has not yet produced a transition
-// message for the current message -- it falls back to the legacy
-// retry shuffle.
+// roastSigningParticipantSelector is installed as the default participant
+// selector in the frost_roast_retry build. In RFC-21 Phase 7.3 PR2a it
+// delegates to the legacy retry shuffle: the cross-attempt ROAST transition
+// record is now PRODUCED and stored (the data foundation this PR lays), but
+// CONSUMING it to drive participant selection is deferred to PR2b.
 //
-// The selector is installed as defaultSigningParticipantSelector
-// when the binary is built with the frost_roast_retry tag and the
-// operator opts in via KEEP_CORE_FROST_ROAST_RETRY_ENABLED.
+// Consuming a purely-local record here would FRACTURE the signing group: only
+// the elected coordinator's cleanup produces a record locally, so on a retry it
+// would take the ROAST branch while every peer (no local record) fell back to
+// legacy -- yielding divergent IncludedSets across honest nodes. PR2b adds the
+// snapshot/transition bus exchange so every signer holds the record, AND selects
+// at the member level (the legacy address-based path loses ROAST's per-member
+// decision under multi-seat operators and partial readiness). Until then this
+// selector is observationally identical to the legacy one.
 type roastSigningParticipantSelector struct {
 	legacy legacySigningParticipantSelector
 }
 
-// defaultSigningParticipantSelector in the frost_roast_retry build
-// returns the ROAST-driven selector. Its Select method internally
-// dispatches to the bundle-based path when a TransitionMessage is
-// available and falls back to the legacy shuffle otherwise, so a
-// node that has not yet produced any bundles is observationally
-// identical to a legacy-only deployment.
+// defaultSigningParticipantSelector in the frost_roast_retry build returns the
+// ROAST selector (which, in PR2a, delegates to legacy -- see the type doc).
 func defaultSigningParticipantSelector() signingParticipantSelector {
 	return roastSigningParticipantSelector{}
 }
 
-// Select chooses the next attempt's qualified operators. When a
-// TransitionMessage is present for sessionID, the selector calls
-// EvaluateRoastRetryForSigning with a per-call closure resolver
-// that maps group.MemberIndex to chain.Address using the supplied
-// members slice. When no bundle is present, the selector falls
-// back to the legacy retry shuffle.
+// Select delegates to the legacy retry shuffle in PR2a. The sessionID +
+// memberIndex parameters are threaded through the interface now so PR2b can wire
+// distributed, member-level consumption of the transition record without
+// touching the call site again.
 func (s roastSigningParticipantSelector) Select(
 	members []chain.Address,
 	seed int64,
@@ -52,81 +43,7 @@ func (s roastSigningParticipantSelector) Select(
 	sessionID string,
 	memberIndex group.MemberIndex,
 ) ([]chain.Address, error) {
-	record, ok := signing.RoastTransitionForSession(sessionID, memberIndex)
-	if !ok || record.Bundle == nil {
-		return s.legacy.Select(
-			members, seed, retryCount, honestThreshold, sessionID, memberIndex,
-		)
-	}
-	// Consume the record: a transition record drives exactly ONE next-attempt
-	// selection. Clearing it here prevents a STALE record from driving a later
-	// retry -- if this member is not the next attempt's elected coordinator it
-	// produces no fresh record, and a lingering record would re-derive the
-	// wrong (earlier) attempt's IncludedSet instead of advancing. The next
-	// retry's record is re-stored by that attempt's cleanup (or, in multi-node,
-	// re-broadcast); absent one, the selector falls back to legacy.
-	signing.ClearRoastTransitionForSession(sessionID, memberIndex)
-
-	deps, registryOK := signing.RegisteredRoastRetryCoordinator()
-	if !registryOK || deps.Coordinator == nil {
-		// Should not happen in practice (the record was produced
-		// by a registered coordinator) but defend against the
-		// race anyway.
-		return s.legacy.Select(
-			members, seed, retryCount, honestThreshold, sessionID, memberIndex,
-		)
-	}
-
-	// The transition record carries the failed attempt's handle (so the
-	// selector does not race the cleanup that clears the live handle registry)
-	// and the DKG group public key (so NextAttempt derives a next AttemptContext
-	// the executor's NewActiveRoastAttempt accepts; a nil key yields a seed
-	// mismatch). NextAttempt is invoked against PreviousHandle to derive the
-	// next attempt's IncludedSet from the verified bundle.
-	resolver := membersResolver(members)
-	addresses, _, err := roast.EvaluateRoastRetryForSigning[chain.Address](
-		deps.Coordinator,
-		record.PreviousHandle,
-		record.Bundle,
-		honestThreshold,
-		record.DkgGroupPublicKey,
-		resolver,
+	return s.legacy.Select(
+		members, seed, retryCount, honestThreshold, sessionID, memberIndex,
 	)
-	if err != nil {
-		// Hard-fail per RFC-21 Phase-6 error taxonomy:
-		// EvaluateRoastRetryForSigning surfaces
-		// ErrAttemptInfeasible (session structurally failed) or
-		// resolver errors. Neither is safe to silently fall back
-		// to legacy, because honest signers would all observe the
-		// same outcome from the same verified bundle. Surface to
-		// the caller so the session can be terminated cleanly.
-		return nil, fmt.Errorf(
-			"roast signing participant selector: %w",
-			err,
-		)
-	}
-	return addresses, nil
-}
-
-// membersResolver is the per-call closure that maps
-// group.MemberIndex to chain.Address using the supplied slice.
-// Member indices are 1-based (per the FROST group convention) and
-// the address at index 0 of `members` corresponds to member index
-// 1.
-type membersResolver []chain.Address
-
-func (m membersResolver) For(member group.MemberIndex) (chain.Address, error) {
-	if member == 0 {
-		return chain.Address(""), fmt.Errorf(
-			"member resolver: zero member index",
-		)
-	}
-	idx := int(member) - 1
-	if idx >= len(m) {
-		return chain.Address(""), fmt.Errorf(
-			"member resolver: member index %d exceeds members slice length %d",
-			member, len(m),
-		)
-	}
-	return m[idx], nil
 }
