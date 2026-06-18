@@ -26,8 +26,10 @@ func resetSelectionRegistries(t *testing.T) {
 	t.Helper()
 	ResetRoastRetryRegistrationForTest()
 	ResetRoastTransitionRegistryForTest()
+	ResetObservedAttemptRegistryForTest()
 	t.Cleanup(ResetRoastRetryRegistrationForTest)
 	t.Cleanup(ResetRoastTransitionRegistryForTest)
+	t.Cleanup(ResetObservedAttemptRegistryForTest)
 }
 
 func TestConsumeRoastTransitionForSelection_FallbackInitialAttempt(t *testing.T) {

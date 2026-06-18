@@ -168,7 +168,10 @@ func BuildAttemptContextFromRequest(
 // set into permanently-excluded vs transiently-parked.
 func membersDifference(all, remove []group.MemberIndex) []group.MemberIndex {
 	if len(remove) == 0 {
-		return all
+		// Return a fresh slice, never the caller's backing array: the result
+		// becomes permanentExcluded on the context-build path and must not alias
+		// request.Attempt.ExcludedMembersIndexes (shared via the request template).
+		return append([]group.MemberIndex(nil), all...)
 	}
 	removeSet := make(map[group.MemberIndex]bool, len(remove))
 	for _, m := range remove {

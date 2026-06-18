@@ -254,6 +254,14 @@ func TestSigningRetryLoop_SignalsFailedAttempt(t *testing.T) {
 	if len(controller.calls) != 2 {
 		t.Fatalf("expected BeginObservedAttempt called twice, got %d", len(controller.calls))
 	}
+	// The committed ROAST attempt number advances 0 -> 1 across the two committed
+	// attempts (no pre-selection skip here), so the transition chain is consecutive.
+	if controller.calls[0].roastAttemptNumber != 0 || controller.calls[1].roastAttemptNumber != 1 {
+		t.Fatalf(
+			"committed roast attempt numbers must advance 0,1; got %d,%d",
+			controller.calls[0].roastAttemptNumber, controller.calls[1].roastAttemptNumber,
+		)
+	}
 }
 
 // TestSigningRetryLoop_SkipDoesNotAdvanceRoastAttemptNumber asserts the committed
