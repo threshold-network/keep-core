@@ -417,6 +417,31 @@ func (se *signingExecutor) signWithTaprootMerkleRoot(
 				se.waitForBlockFn,
 			)
 
+			// RFC-21 Phase 7.3 PR2b-1b: install the per-signer ROAST transition
+			// controller, scoped to loopCtx (the session lifetime). It observes
+			// every attempt so this seat can verify the attempt's transition bundle
+			// and run NextAttempt for participant selection. nil in builds/
+			// deployments without ROAST retry, in which case the loop skips all
+			// transition steps. The request template carries the static signing
+			// material; the controller stamps each attempt's metadata itself.
+			retryLoop.setTransitionController(newRoastTransitionController(
+				loopCtx,
+				signingLogger,
+				&signing.Request{
+					Message:           message,
+					RoastSessionID:    roastSID,
+					MemberIndex:       signer.signingGroupMemberIndex,
+					SignerMaterial:    signer.signingMaterial(),
+					TaprootMerkleRoot: taprootMerkleRoot,
+					GroupSize:         wallet.groupSize(),
+					DishonestThreshold: wallet.groupDishonestThreshold(
+						se.groupParameters.HonestThreshold,
+					),
+					Channel:             se.broadcastChannel,
+					MembershipValidator: se.membershipValidator,
+				},
+			))
+
 			loopResult, err := retryLoop.start(
 				loopCtx,
 				se.waitForBlockFn,

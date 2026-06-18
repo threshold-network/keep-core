@@ -116,6 +116,14 @@ type signingRetryLoop struct {
 	// build tag once AggregateBundle production is wired upstream.
 	participantSelector signingParticipantSelector
 
+	// transitionController, when non-nil, owns the session-scoped ROAST
+	// transition machinery for this signer (RFC-21 Phase 7.3 PR2b-1b): observing
+	// each attempt so the signer holds a handle to verify the attempt's
+	// transition bundle and run NextAttempt for participant selection. nil in the
+	// default build and in deployments that do not drive ROAST retry, in which
+	// case the loop runs no transition steps.
+	transitionController roastTransitionController
+
 	// attemptOutcomeReporter, when non-nil, receives the terminal outcome
 	// of every network-wide signing attempt this loop observes (RFC-21
 	// Annex B implied-f liveness alerting). An outcome is reported when an
@@ -163,6 +171,14 @@ func (srl *signingRetryLoop) setAttemptOutcomeReporter(
 	reporter func(success bool),
 ) {
 	srl.attemptOutcomeReporter = reporter
+}
+
+// setTransitionController installs the ROAST transition controller. A nil
+// controller leaves the loop running no transition steps (the default).
+func (srl *signingRetryLoop) setTransitionController(
+	controller roastTransitionController,
+) {
+	srl.transitionController = controller
 }
 
 func (srl *signingRetryLoop) reportAttemptOutcome(success bool) {
@@ -359,6 +375,19 @@ func (srl *signingRetryLoop) start(
 				"cannot select members for attempt [%v]: [%w]",
 				srl.attemptCounter,
 				err,
+			)
+		}
+
+		// RFC-21 Phase 7.3 PR2b-1b: record a local observe binding for this
+		// attempt BEFORE the skip branch, so every local seat -- including one
+		// excluded from this attempt -- holds a handle to verify the attempt's
+		// transition bundle and run NextAttempt for the next attempt's selection.
+		// Inert in C1: the bindings are produced but not yet consumed.
+		if srl.transitionController != nil {
+			srl.transitionController.BeginObservedAttempt(
+				srl.attemptCounter,
+				includedMembersIndexes,
+				excludedMembersIndexes,
 			)
 		}
 
