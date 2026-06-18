@@ -8,6 +8,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/frost/roast"
 	"github.com/keep-network/keep-core/pkg/frost/signing"
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
 func selectorTestMembers() []chain.Address {
@@ -45,12 +46,16 @@ func TestROASTSelector_DelegatesToLegacyAndDoesNotConsumeRecord(t *testing.T) {
 	})
 
 	sel := roastSigningParticipantSelector{}
-	got, err := sel.Select(selectorTestMembers(), 42, 0, 3, "session", 1)
+	got, err := sel.Select(
+		[]group.MemberIndex{1, 2, 3, 4, 5},
+		selectorTestMembers(),
+		42, 0, 3, "session", 1,
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(got) < 3 {
-		t.Fatalf("expected a legacy-shaped qualified set; got %d", len(got))
+		t.Fatalf("expected a legacy-shaped included set; got %d", len(got))
 	}
 
 	// The record must be untouched: PR2a's selector does not consume it.

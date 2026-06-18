@@ -5,8 +5,8 @@ import (
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
-// signingParticipantSelector picks the set of operators qualified for
-// a signing attempt. The legacy implementation is the pseudo-random
+// signingParticipantSelector picks the set of members included in a
+// signing attempt. The legacy implementation is the pseudo-random
 // retry shuffle in pkg/frost/retry; the RFC-21 Phase-6 migration
 // introduces this interface so an alternate ROAST-driven
 // implementation can be installed behind the frost_roast_retry build
@@ -15,27 +15,40 @@ import (
 // PR 6.4 ships the dispatcher with only the legacy implementation
 // installed; Phase 7 wires the ROAST-driven implementation along
 // with the supporting AggregateBundle production at the executor-
-// adapter layer. Until Phase 7, behaviour is byte-identical to
+// adapter layer. Until the ROAST selector consumes its transition
+// record (RFC-21 Phase 7.3 PR2b), behaviour is byte-identical to
 // pre-RFC-21 retry semantics.
+//
+// RFC-21 Phase 7.3 PR2b-1a made selection MEMBER-LEVEL: Select returns
+// the exact included member indices, not a qualified-operator address
+// set the caller re-maps. The legacy path computes the indices
+// internally (operator selection + member mapping + surplus trim);
+// the ROAST path (PR2b) returns the transition's IncludedSet directly.
+// This removes the multi-seat precision loss of the old address-based
+// path, where one ready seat qualified ALL of an operator's seats --
+// including ones ROAST means to park or exclude.
 type signingParticipantSelector interface {
-	// Select returns the set of operators qualified to participate
-	// in the given signing attempt. members is the set of operators
-	// whose ready signal was received for this attempt. seed is the
-	// per-message retry seed; retryCount is 0-based (i.e. 0 for the
-	// first retry). honestThreshold is the group's signing
-	// threshold. sessionID is the STABLE ROAST session id and
-	// memberIndex is the local signer's member; together they key the
-	// per-(session, member) transition record the ROAST selector
-	// consumes (a multi-seat operator runs one signer per seat, each
-	// with its own record).
+	// Select returns the member indices included in the given signing
+	// attempt, sorted ascending. readyMembersIndexes is the set of
+	// members whose ready signal was received this attempt;
+	// signingGroupOperators is the full member->operator roster
+	// (index i is member i+1), used by the legacy path to map
+	// qualified operators back to members. seed is the per-message
+	// retry seed; retryCount is 0-based (0 for the first attempt).
+	// honestThreshold is the group's signing threshold. sessionID is
+	// the STABLE ROAST session id and memberIndex is the local
+	// signer's member; together they key the per-(session, member)
+	// transition record the ROAST selector consumes (a multi-seat
+	// operator runs one signer per seat, each with its own record).
 	Select(
-		members []chain.Address,
+		readyMembersIndexes []group.MemberIndex,
+		signingGroupOperators chain.Addresses,
 		seed int64,
 		retryCount uint,
 		honestThreshold uint,
 		sessionID string,
 		memberIndex group.MemberIndex,
-	) ([]chain.Address, error)
+	) ([]group.MemberIndex, error)
 }
 
 // defaultSigningParticipantSelector returns the build-default

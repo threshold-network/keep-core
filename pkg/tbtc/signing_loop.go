@@ -6,8 +6,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math/big"
-	"math/rand"
-	"sort"
 
 	"github.com/keep-network/keep-core/pkg/protocol/announcer"
 
@@ -353,7 +351,7 @@ func (srl *signingRetryLoop) start(
 			continue
 		}
 
-		excludedMembersIndexes, err := srl.performMembersSelection(
+		includedMembersIndexes, excludedMembersIndexes, err := srl.performMembersSelection(
 			readyMembersIndexes,
 		)
 		if err != nil {
@@ -362,14 +360,6 @@ func (srl *signingRetryLoop) start(
 				srl.attemptCounter,
 				err,
 			)
-		}
-
-		includedMembersIndexes := make([]group.MemberIndex, 0)
-		for i := range srl.signingGroupOperators {
-			memberIndex := group.MemberIndex(i + 1)
-			if !slices.Contains(excludedMembersIndexes, memberIndex) {
-				includedMembersIndexes = append(includedMembersIndexes, memberIndex)
-			}
 		}
 
 		attemptSkipped := slices.Contains(
@@ -484,70 +474,31 @@ func (srl *signingRetryLoop) start(
 	}
 }
 
-// performMembersSelection runs the member selection process whose result
-// is a list of members' indexes that should be excluded by the client
-// for the given signing attempt.
+// performMembersSelection runs the member selection process for the given
+// signing attempt, returning BOTH the included member indices (the members
+// that participate) and the excluded ones (everyone else), each sorted
+// ascending.
 //
-// The member selection process is done based on the list of ready members
-// provided as the readyMembersIndexes argument. This list is used twice:
-//
-// First, the algorithm determining the qualified operators set uses the
-// ready members list to build an input consisting of only active operators.
-// This way we guarantee that the qualified operators set contains only
-// ready and active operators that will actually take part in the signing
-// attempt.
-//
-// Second, the ready members list is used to determine a list of excluded
-// members. The excluded members list is built using the qualified operators
-// set. The algorithm that determines the qualified operators set does not
-// care about an exact mapping between operators and controlled members but
-// relies on the members count solely. That means the information about
-// readiness of specific members controlled by the given operators is not
-// included in the resulting qualified operators set. In order to properly
-// decide about inclusion or exclusion of specific members of a given
-// qualified operator, we must take the ready members list into account.
+// Selection is dispatched through participantSelector (RFC-21 Phase 6.4) so a
+// ROAST-driven implementation can be installed behind the frost_roast_retry
+// build tag without touching this call site. As of RFC-21 Phase 7.3 PR2b-1a
+// the selector is MEMBER-LEVEL: it returns the exact included member indices.
+// The legacy implementation computes them from the qualified-operator set, the
+// ready members, and the surplus trim; the ROAST implementation (PR2b-1b) will
+// return the transition's IncludedSet directly. The excluded set is the
+// complement of the included set over the whole signing group, so the two
+// partition [1, groupSize] -- which is why the downstream AttemptInfo can
+// reconstruct the exact included set from the excluded one losslessly.
 func (srl *signingRetryLoop) performMembersSelection(
 	readyMembersIndexes []group.MemberIndex,
-) ([]group.MemberIndex, error) {
-	qualifiedOperatorsSet, err := srl.qualifiedOperatorsSet(readyMembersIndexes)
-	if err != nil {
-		return nil, fmt.Errorf("cannot get qualified operators: [%w]", err)
-	}
-
-	// Exclude all members controlled by the operators that were not
-	// qualified for the current attempt.
-	return srl.excludedMembersIndexes(
-		qualifiedOperatorsSet,
-		readyMembersIndexes,
-	), nil
-}
-
-// qualifiedOperatorsSet returns a set of operators qualified to participate
-// in the given signing attempt. The set of qualified operators is taken
-// from the set of active operators who announced readiness through
-// their controlled signing group members.
-func (srl *signingRetryLoop) qualifiedOperatorsSet(
-	readyMembersIndexes []group.MemberIndex,
-) (map[chain.Address]bool, error) {
-	// The retry algorithm expects that we count retries from 0. Since
-	// the first invocation of the algorithm will be for `attemptCounter == 1`
-	// we need to subtract one while determining the number of the given retry.
+) ([]group.MemberIndex, []group.MemberIndex, error) {
+	// The retry algorithm counts retries from 0. The first invocation is for
+	// attemptCounter == 1, so the retry count is attemptCounter - 1.
 	retryCount := srl.attemptCounter - 1
 
-	var readySigningGroupOperators []chain.Address
-	for _, memberIndex := range readyMembersIndexes {
-		readySigningGroupOperators = append(
-			readySigningGroupOperators,
-			srl.signingGroupOperators[memberIndex-1],
-		)
-	}
-
-	// RFC-21 Phase 6.4: dispatch through participantSelector so a
-	// future ROAST-driven implementation can be installed behind
-	// the frost_roast_retry build tag without touching this call
-	// site. Default and current behaviour: legacy retry shuffle.
-	qualifiedOperators, err := srl.participantSelector.Select(
-		readySigningGroupOperators,
+	includedMembersIndexes, err := srl.participantSelector.Select(
+		readyMembersIndexes,
+		srl.signingGroupOperators,
 		srl.attemptSeed,
 		retryCount,
 		uint(srl.groupParameters.HonestThreshold),
@@ -555,68 +506,38 @@ func (srl *signingRetryLoop) qualifiedOperatorsSet(
 		srl.signingGroupMemberIndex,
 	)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"random operator selection failed: [%w]",
+		return nil, nil, fmt.Errorf(
+			"participant selection failed: [%w]",
 			err,
 		)
 	}
 
-	return chain.Addresses(qualifiedOperators).Set(), nil
+	excludedMembersIndexes := membersComplement(
+		includedMembersIndexes,
+		len(srl.signingGroupOperators),
+	)
+
+	return includedMembersIndexes, excludedMembersIndexes, nil
 }
 
-// excludedMembersIndexes returns a list of excluded members' indexes for
-// the given qualified operators set.
-func (srl *signingRetryLoop) excludedMembersIndexes(
-	qualifiedOperatorsSet map[chain.Address]bool,
-	readyMembersIndexes []group.MemberIndex,
+// membersComplement returns the member indices in [1, groupSize] that are NOT
+// in the included set, sorted ascending. Together with the included set it
+// partitions the whole signing group.
+func membersComplement(
+	includedMembersIndexes []group.MemberIndex,
+	groupSize int,
 ) []group.MemberIndex {
-	includedMembersIndexes := make([]group.MemberIndex, 0)
-	excludedMembersIndexes := make([]group.MemberIndex, 0)
-	for i, operator := range srl.signingGroupOperators {
-		memberIndex := group.MemberIndex(i + 1)
-
-		if qualifiedOperatorsSet[operator] &&
-			slices.Contains(readyMembersIndexes, memberIndex) {
-			includedMembersIndexes = append(
-				includedMembersIndexes,
-				memberIndex,
-			)
-		} else {
-			excludedMembersIndexes = append(
-				excludedMembersIndexes,
-				memberIndex,
-			)
-		}
+	includedSet := make(map[group.MemberIndex]bool, len(includedMembersIndexes))
+	for _, memberIndex := range includedMembersIndexes {
+		includedSet[memberIndex] = true
 	}
 
-	// Make sure we always use just the smallest required count of
-	// signing members for performance reasons
-	if len(includedMembersIndexes) > srl.groupParameters.HonestThreshold {
-		// #nosec G404 (insecure random number source (rand))
-		// Shuffling does not require secure randomness.
-		rng := rand.New(rand.NewSource(
-			srl.attemptSeed + int64(srl.attemptCounter),
-		))
-		// Sort in ascending order just in case.
-		sort.Slice(includedMembersIndexes, func(i, j int) bool {
-			return includedMembersIndexes[i] < includedMembersIndexes[j]
-		})
-		// Shuffle the included members slice to randomize the
-		// selection of additionally excluded members.
-		rng.Shuffle(len(includedMembersIndexes), func(i, j int) {
-			includedMembersIndexes[i], includedMembersIndexes[j] =
-				includedMembersIndexes[j], includedMembersIndexes[i]
-		})
-		// Get the surplus of included members and add them to
-		// the excluded members list.
-		excludedMembersIndexes = append(
-			excludedMembersIndexes,
-			includedMembersIndexes[srl.groupParameters.HonestThreshold:]...,
-		)
-		// Sort the resulting excluded members list in ascending order.
-		sort.Slice(excludedMembersIndexes, func(i, j int) bool {
-			return excludedMembersIndexes[i] < excludedMembersIndexes[j]
-		})
+	excludedMembersIndexes := make([]group.MemberIndex, 0, groupSize)
+	for i := 0; i < groupSize; i++ {
+		memberIndex := group.MemberIndex(i + 1)
+		if !includedSet[memberIndex] {
+			excludedMembersIndexes = append(excludedMembersIndexes, memberIndex)
+		}
 	}
 
 	return excludedMembersIndexes
