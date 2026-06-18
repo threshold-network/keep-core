@@ -582,6 +582,17 @@ func registerBuildTaggedNativeFROSTSigningEngine() error {
 	// unsweepable, so this must fail before new FROST wallet material exists.
 	// New FROST wallets in this build must use the coarse
 	// `frost-tbtc-signer-v1` material path exclusively.
+	//
+	// RFC-21 Phase 7.3: this same engine satisfies interactiveSigningEngine, but
+	// it is intentionally NOT registered as the interactive provider
+	// (RegisterInteractiveSigningEngineProvider) here yet. Wiring the gated
+	// interactive ROAST path into production is deferred until the blame/evidence
+	// bridge + stable ROAST session-key plumbing land AND the frost-secp256k1-tr
+	// engine external audit clears. Until then the executor's interactive path is
+	// unreachable in production BY CONSTRUCTION (no provider), on top of the
+	// default-off KEEP_CORE_FROST_INTERACTIVE_SIGNING_ENABLED gate -- two
+	// independent barriers, so an operator cannot enable a half-wired interactive
+	// flow ahead of the blame bridge. Production signs via the coarse path below.
 	return RegisterNativeTBTCSignerEngine(engine)
 }
 
