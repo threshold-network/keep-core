@@ -80,7 +80,12 @@ func roastSessionID(
 	startBlock uint64,
 ) string {
 	if taprootMerkleRoot == nil {
-		return fmt.Sprintf("roast-%v", message.Text(16))
+		// startBlock is included so two independent signings of the SAME message
+		// at different start blocks get distinct stable ids (and so distinct
+		// transition-record / interactive-engine namespaces); without it a later
+		// signing could collide with retained ROAST state from an earlier one.
+		// The taproot branch below already binds startBlock.
+		return fmt.Sprintf("roast-%v-%v", message.Text(16), startBlock)
 	}
 
 	var startBlockBytes [8]byte

@@ -77,7 +77,7 @@ func TestCleanup_ProducesRecordWhenElectedCoordinator(t *testing.T) {
 	})
 
 	const sessionID = "bundle-producer-session"
-	handle, cleanup, err := BeginOrchestrationForSession(sessionID, ctx, elected, bundleTestDkgKey)
+	handle, cleanup, err := BeginOrchestrationForSession(sessionID, ctx, bundleTestDkgKey)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestCleanup_DoesNotProduceRecordWhenNotElectedCoordinator(t *testing.T) {
 	})
 
 	const sessionID = "non-elected-session"
-	_, cleanup, err := BeginOrchestrationForSession(sessionID, ctx, nonElected, bundleTestDkgKey)
+	_, cleanup, err := BeginOrchestrationForSession(sessionID, ctx, bundleTestDkgKey)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestCleanup_AggregateBundleErrorIsSwallowed(t *testing.T) {
 	})
 
 	const sessionID = "double-cleanup-session"
-	handle, cleanup, err := BeginOrchestrationForSession(sessionID, ctx, elected, bundleTestDkgKey)
+	handle, cleanup, err := BeginOrchestrationForSession(sessionID, ctx, bundleTestDkgKey)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}

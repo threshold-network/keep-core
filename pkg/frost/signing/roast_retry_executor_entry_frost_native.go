@@ -110,7 +110,7 @@ func attemptRoastRetryOrchestrationFromRequest(
 	// ctx.SessionID (== RoastSessionID), inside BeginOrchestrationForSession's
 	// cleanup, so the next attempt's selector can find it.
 	handle, cleanup, err := BeginOrchestrationForSession(
-		request.SessionID, attemptCtx, request.MemberIndex, dkgGroupPublicKey,
+		request.SessionID, attemptCtx, dkgGroupPublicKey,
 	)
 	if err != nil {
 		switch {

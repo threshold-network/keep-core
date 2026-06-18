@@ -45,7 +45,7 @@ func TestBeginOrchestrationForSession_HappyPath(t *testing.T) {
 	})
 
 	ctx := newOrchestrationTestContext(t)
-	handle, cleanup, err := BeginOrchestrationForSession("session-A", ctx, 1, []byte{0x01, 0x02})
+	handle, cleanup, err := BeginOrchestrationForSession("session-A", ctx, []byte{0x01, 0x02})
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestBeginOrchestrationForSession_ErrorsWhenRegistryEmpty(t *testing.T) {
 
 	// Readiness env var is set; the registry is empty -- we expect
 	// the registry-empty error, not the env-var error.
-	_, _, err := BeginOrchestrationForSession("session-X", newOrchestrationTestContext(t), 1, []byte{0x01, 0x02})
+	_, _, err := BeginOrchestrationForSession("session-X", newOrchestrationTestContext(t), []byte{0x01, 0x02})
 	if err == nil {
 		t.Fatal("expected error when registry is empty")
 	}
@@ -110,7 +110,7 @@ func TestBeginOrchestrationForSession_ErrorsWhenReadinessOptInUnset(t *testing.T
 		SelfMember:  1,
 	})
 
-	_, _, err := BeginOrchestrationForSession("session-no-optin", newOrchestrationTestContext(t), 1, []byte{0x01, 0x02})
+	_, _, err := BeginOrchestrationForSession("session-no-optin", newOrchestrationTestContext(t), []byte{0x01, 0x02})
 	if !errors.Is(err, ErrRoastRetryReadinessOptOut) {
 		t.Fatalf("expected ErrRoastRetryReadinessOptOut, got %v", err)
 	}
@@ -130,7 +130,7 @@ func TestBeginOrchestrationForSession_ErrorsWhenCoordinatorNil(t *testing.T) {
 		SelfMember:  1,
 	})
 
-	_, _, err := BeginOrchestrationForSession("session-Y", newOrchestrationTestContext(t), 1, []byte{0x01, 0x02})
+	_, _, err := BeginOrchestrationForSession("session-Y", newOrchestrationTestContext(t), []byte{0x01, 0x02})
 	if err == nil {
 		t.Fatal("expected error when Coordinator is nil")
 	}
@@ -154,7 +154,7 @@ func TestBeginOrchestrationForSession_PropagatesBeginAttemptError(t *testing.T) 
 		SelfMember:  1,
 	})
 
-	_, _, err := BeginOrchestrationForSession("session-Z", newOrchestrationTestContext(t), 1, []byte{0x01, 0x02})
+	_, _, err := BeginOrchestrationForSession("session-Z", newOrchestrationTestContext(t), []byte{0x01, 0x02})
 	if err == nil {
 		t.Fatal("expected error from coordinator")
 	}
