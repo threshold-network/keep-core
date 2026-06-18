@@ -4,6 +4,8 @@ package signing
 
 import (
 	"fmt"
+
+	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
 )
 
 // ObserveAttemptForTransition begins a LOCAL "observe" attempt for the given
@@ -26,9 +28,12 @@ import (
 // runtime fault) is returned, so the caller can log it; in PR2b-1b's
 // observe-only wiring a missing binding surfaces later as a fail-closed
 // selection, never a divergent one.
-func ObserveAttemptForTransition(request *Request) error {
+func ObserveAttemptForTransition(
+	request *Request,
+) ([attempt.MessageDigestLength]byte, error) {
+	var zeroHash [attempt.MessageDigestLength]byte
 	if request == nil {
-		return fmt.Errorf("observe attempt: request is nil")
+		return zeroHash, fmt.Errorf("observe attempt: request is nil")
 	}
 
 	// Respect the readiness opt-in gate, exactly as BeginOrchestrationForSession
@@ -36,21 +41,21 @@ func ObserveAttemptForTransition(request *Request) error {
 	// consumes the binding) and must stay inert. Opt-out is a deterministic
 	// static condition every honest node sees identically.
 	if err := EnsureRoastRetryReadinessOptIn(); err != nil {
-		return nil
+		return zeroHash, nil
 	}
 
 	deps, ok := RegisteredRoastRetryCoordinator()
 	if !ok || deps.Coordinator == nil {
 		// No orchestration registered -- static fallback, every honest node
 		// observes the same empty registry.
-		return nil
+		return zeroHash, nil
 	}
 
 	signerMaterial, err := request.NativeSignerMaterial()
 	if err != nil {
 		// Material not extractable (e.g. a UniFFI v1 deployment) -- deterministic
 		// static fallback.
-		return nil
+		return zeroHash, nil
 	}
 
 	ffiRequest := &NativeExecutionFFISigningRequest{
@@ -67,12 +72,12 @@ func ObserveAttemptForTransition(request *Request) error {
 	if err != nil {
 		// Deterministic per-input construction failure -- static fallback (matches
 		// attemptRoastRetryOrchestrationFromRequest's handling).
-		return nil
+		return zeroHash, nil
 	}
 
 	dkgGroupPublicKey, err := ExtractDkgGroupPublicKeyFromMaterial(signerMaterial)
 	if err != nil {
-		return nil
+		return zeroHash, nil
 	}
 
 	// Begin a local attempt to mint a coordinator-instance-local handle bound to
@@ -81,7 +86,7 @@ func ObserveAttemptForTransition(request *Request) error {
 	// elected coordinator without exchanging anything.
 	handle, err := deps.Coordinator.BeginAttempt(attemptCtx)
 	if err != nil {
-		return fmt.Errorf("observe attempt: begin attempt: %w", err)
+		return zeroHash, fmt.Errorf("observe attempt: begin attempt: %w", err)
 	}
 
 	// Key by the STABLE attemptCtx.SessionID (== RoastSessionID), matching the
@@ -97,5 +102,5 @@ func ObserveAttemptForTransition(request *Request) error {
 			dkgGroupPublicKey: dkgGroupPublicKey,
 		},
 	)
-	return nil
+	return attemptCtx.Hash(), nil
 }

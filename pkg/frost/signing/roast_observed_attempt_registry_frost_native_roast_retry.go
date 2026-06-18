@@ -94,6 +94,22 @@ func clearObservedAttempt(
 	delete(observedAttemptRegistry, observedAttemptKey{sessionID, member, attemptHash})
 }
 
+// clearObservedAttemptsForSession removes every observe binding for
+// (sessionID, member), regardless of attempt hash. The transition exchange calls
+// it when the session ends (its listener context is done), so a signing whose
+// attempts succeeded -- and therefore never produced a transition record to clear
+// per-attempt via clearObservedAttempt -- does not leave its observe bindings
+// behind.
+func clearObservedAttemptsForSession(sessionID string, member group.MemberIndex) {
+	observedAttemptRegistryMu.Lock()
+	defer observedAttemptRegistryMu.Unlock()
+	for key := range observedAttemptRegistry {
+		if key.sessionID == sessionID && key.member == member {
+			delete(observedAttemptRegistry, key)
+		}
+	}
+}
+
 // ObservedAttemptStoredForTest reports whether any observe binding exists for
 // (sessionID, member), regardless of attempt hash. Exported test seam so
 // downstream-package tests can assert the controller stored a binding without

@@ -18,6 +18,7 @@ func newRoastTransitionController(
 	_ context.Context,
 	_ log.StandardLogger,
 	_ *signing.Request,
+	_ waitForBlockFn,
 ) roastTransitionController {
 	return nil
 }

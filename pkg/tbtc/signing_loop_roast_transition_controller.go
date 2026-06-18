@@ -29,4 +29,11 @@ type roastTransitionController interface {
 		includedMembersIndexes []group.MemberIndex,
 		excludedMembersIndexes []group.MemberIndex,
 	)
+	// OnAttemptFailed signals that a committed attempt this seat participated in
+	// failed, so the transition exchange should run: publish this seat's forced
+	// proof-of-attendance snapshot and, on the elected coordinator, aggregate +
+	// broadcast the transition bundle once the snapshot collection window
+	// (derived from timeoutBlock) closes. Best-effort and non-blocking: the
+	// aggregation runs off the retry-loop goroutine.
+	OnAttemptFailed(attemptNumber uint, timeoutBlock uint64)
 }

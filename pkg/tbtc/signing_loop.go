@@ -432,6 +432,16 @@ func (srl *signingRetryLoop) start(
 					srl.attemptCounter,
 					err,
 				)
+				// RFC-21 Phase 7.3 PR2b-1b: this seat committed to and failed the
+				// attempt, so drive the transition exchange (forced snapshot, and
+				// the elected coordinator's aggregation) for the next attempt's
+				// selection. Inert until the selector consumes records (C3).
+				if srl.transitionController != nil {
+					srl.transitionController.OnAttemptFailed(
+						srl.attemptCounter,
+						timeoutBlock,
+					)
+				}
 				srl.reportAttemptOutcome(false)
 				continue
 			}

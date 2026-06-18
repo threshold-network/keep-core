@@ -73,6 +73,11 @@ func NewRoastTransitionExchange(
 }
 
 func (e *RoastTransitionExchange) listen() {
+	// On session end (ctx done), drop any observe bindings this seat did not
+	// consume per-attempt -- e.g. a signing whose attempts all succeeded never
+	// produced a transition record to clear, so its bindings would otherwise
+	// linger until the TTL sweep.
+	defer clearObservedAttemptsForSession(e.roastSessionID, e.member)
 	for {
 		select {
 		case <-e.ctx.Done():

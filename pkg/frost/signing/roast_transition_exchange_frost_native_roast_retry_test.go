@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-core/pkg/frost/roast"
@@ -74,7 +75,8 @@ type exchangeNode struct {
 // newExchangeTestNodes builds one node per included member: each gets its own
 // in-memory coordinator, begins the SAME attempt context (so all nodes elect the
 // same coordinator deterministically), records its observe binding, and wires an
-// exchange over its own capture bus with an already-cancelled ctx (no listener).
+// exchange over its own capture bus (the listener blocks on the unfed bus until
+// test end; the tests drive the exchange methods directly).
 func newExchangeTestNodes(
 	t *testing.T,
 	roastSessionID string,
@@ -84,8 +86,12 @@ func newExchangeTestNodes(
 	t.Helper()
 	hash := ctx.Hash()
 	nodes := map[group.MemberIndex]*exchangeNode{}
+	// A test-lifetime ctx: listen() blocks harmlessly on the capture bus's unfed
+	// streams (the bus captures broadcasts rather than delivering them), and the
+	// tests drive onSnapshot/onBundle directly. Cancelling only at test end keeps
+	// the session-end defer-clear from wiping the bindings before the assertions.
 	exchangeCtx, cancel := context.WithCancel(context.Background())
-	cancel() // listen() exits immediately; the tests drive methods directly.
+	t.Cleanup(cancel)
 	for _, m := range ctx.IncludedSet {
 		coord := roast.NewInMemoryCoordinatorWithSigning(
 			m, fixedSigner{}, roast.NoOpSignatureVerifier(),
@@ -222,6 +228,50 @@ func TestRoastTransitionExchange_ProducesRecordsAcrossNodes(t *testing.T) {
 		if _, ok := observedAttempt(roastSessionID, m, hash); ok {
 			t.Fatalf("member %d observe binding must be cleared after storing the record", m)
 		}
+	}
+}
+
+// TestRoastTransitionExchange_SessionEndClearsObserveBindings asserts that when
+// the exchange's session context ends, its listener clears the observe bindings
+// this seat did not consume per-attempt (e.g. a signing whose attempts all
+// succeeded), rather than leaking them until the TTL sweep.
+func TestRoastTransitionExchange_SessionEndClearsObserveBindings(t *testing.T) {
+	ResetObservedAttemptRegistryForTest()
+	t.Cleanup(ResetObservedAttemptRegistryForTest)
+
+	roastSessionID := "exchange-session-end"
+	var hash [attempt.MessageDigestLength]byte
+	hash[0] = 0x7e
+	recordObservedAttempt(roastSessionID, 1, hash, observedAttemptBinding{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	_ = NewRoastTransitionExchange(
+		ctx,
+		log.Logger("exchange-test"),
+		&captureBus{},
+		RoastRetryDeps{
+			Coordinator: roast.NewInMemoryCoordinatorWithSigning(
+				1, fixedSigner{}, roast.NoOpSignatureVerifier(),
+			),
+			Signer:     fixedSigner{},
+			Verifier:   roast.NoOpSignatureVerifier(),
+			SelfMember: 1,
+		},
+		roastSessionID,
+		1,
+	)
+	if !ObservedAttemptStoredForTest(roastSessionID, 1) {
+		t.Fatal("binding should exist before session end")
+	}
+
+	cancel() // session end -> listener exits -> defer clears bindings.
+
+	deadline := time.Now().Add(2 * time.Second)
+	for ObservedAttemptStoredForTest(roastSessionID, 1) {
+		if time.Now().After(deadline) {
+			t.Fatal("session end must clear the observe binding")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

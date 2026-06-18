@@ -50,7 +50,7 @@ func TestObserveAttemptForTransition_StoresBinding(t *testing.T) {
 	registerObserveTestCoordinator()
 
 	req := newObserveTestRequest()
-	if err := ObserveAttemptForTransition(req); err != nil {
+	if _, err := ObserveAttemptForTransition(req); err != nil {
 		t.Fatalf("observe must not error: %v", err)
 	}
 	if !ObservedAttemptStoredForTest(req.RoastSessionID, req.MemberIndex) {
@@ -67,7 +67,7 @@ func TestObserveAttemptForTransition_StaticFallback_NoCoordinator(t *testing.T) 
 
 	// No coordinator registered -> static fallback, no binding.
 	req := newObserveTestRequest()
-	if err := ObserveAttemptForTransition(req); err != nil {
+	if _, err := ObserveAttemptForTransition(req); err != nil {
 		t.Fatalf("static fallback must not error: %v", err)
 	}
 	if ObservedAttemptStoredForTest(req.RoastSessionID, req.MemberIndex) {
@@ -86,7 +86,7 @@ func TestObserveAttemptForTransition_StaticFallback_ReadinessOff(t *testing.T) {
 	registerObserveTestCoordinator()
 
 	req := newObserveTestRequest()
-	if err := ObserveAttemptForTransition(req); err != nil {
+	if _, err := ObserveAttemptForTransition(req); err != nil {
 		t.Fatalf("readiness-off fallback must not error: %v", err)
 	}
 	if ObservedAttemptStoredForTest(req.RoastSessionID, req.MemberIndex) {
@@ -95,7 +95,7 @@ func TestObserveAttemptForTransition_StaticFallback_ReadinessOff(t *testing.T) {
 }
 
 func TestObserveAttemptForTransition_NilRequest(t *testing.T) {
-	if err := ObserveAttemptForTransition(nil); err == nil {
+	if _, err := ObserveAttemptForTransition(nil); err == nil {
 		t.Fatal("nil request must error")
 	}
 }

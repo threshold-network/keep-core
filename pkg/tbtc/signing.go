@@ -440,6 +440,7 @@ func (se *signingExecutor) signWithTaprootMerkleRoot(
 					Channel:             se.broadcastChannel,
 					MembershipValidator: se.membershipValidator,
 				},
+				se.waitForBlockFn,
 			))
 
 			loopResult, err := retryLoop.start(
