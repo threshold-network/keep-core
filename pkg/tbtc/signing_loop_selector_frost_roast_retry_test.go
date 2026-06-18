@@ -125,25 +125,18 @@ func TestMembersResolver_RejectsOutOfRangeIndex(t *testing.T) {
 	}
 }
 
-func TestROASTSelector_UsesRecordWhenAllConditionsMet(t *testing.T) {
-	signing.ResetRoastTransitionRegistryForTest()
-	signing.ResetRoastRetryRegistrationForTest()
-	t.Cleanup(signing.ResetRoastTransitionRegistryForTest)
-	t.Cleanup(signing.ResetRoastRetryRegistrationForTest)
-
-	// Build a real coordinator and run the bundle-production flow end-to-end,
-	// then store a full transition record (handle + bundle + DKG key) and verify
-	// the selector consumes it (calling NextAttempt against the record's handle
-	// with the record's DKG key) rather than falling back to legacy.
+// setupRecordedTransition runs the bundle-production flow end-to-end and stores
+// a full transition record (handle + bundle + DKG key) under the elected member,
+// exactly as the orchestration cleanup would. It returns the session id and the
+// elected member so the caller can drive the selector against the record.
+func setupRecordedTransition(t *testing.T) (string, group.MemberIndex) {
+	t.Helper()
+	const sessionID = "session-with-record"
 	dkgKey := []byte{0x01, 0x02, 0x03}
 	ctx, _ := attempt.NewAttemptContext(
-		"session-with-record",
-		"key-group",
-		dkgKey,
-		[attempt.MessageDigestLength]byte{0xab},
-		0,
-		[]group.MemberIndex{1, 2, 3, 4, 5},
-		nil,
+		sessionID, "key-group", dkgKey,
+		[attempt.MessageDigestLength]byte{0xab}, 0,
+		[]group.MemberIndex{1, 2, 3, 4, 5}, nil,
 	)
 
 	scratch := roast.NewInMemoryCoordinator()
@@ -161,7 +154,6 @@ func TestROASTSelector_UsesRecordWhenAllConditionsMet(t *testing.T) {
 	})
 
 	handle, _ := coord.BeginAttempt(ctx)
-	// Seed every member's snapshot so AggregateBundle has content.
 	for _, m := range ctx.IncludedSet {
 		snap := roast.NewLocalEvidenceSnapshot(m, ctx.Hash(), attempt.Evidence{})
 		snap.OperatorSignature = []byte{0x01}
@@ -174,21 +166,60 @@ func TestROASTSelector_UsesRecordWhenAllConditionsMet(t *testing.T) {
 		t.Fatalf("aggregate: %v", err)
 	}
 
-	// Store the full record exactly as the orchestration cleanup would, keyed by
-	// the elected member.
-	signing.RecordRoastTransition("session-with-record", elected, signing.RoastTransitionRecord{
+	signing.RecordRoastTransition(sessionID, elected, signing.RoastTransitionRecord{
 		Bundle:            bundle,
 		PreviousHandle:    handle,
 		PreviousContext:   ctx,
 		DkgGroupPublicKey: dkgKey,
 	})
+	return sessionID, elected
+}
+
+func TestROASTSelector_UsesRecordWhenAllConditionsMet(t *testing.T) {
+	signing.ResetRoastTransitionRegistryForTest()
+	signing.ResetRoastRetryRegistrationForTest()
+	t.Cleanup(signing.ResetRoastTransitionRegistryForTest)
+	t.Cleanup(signing.ResetRoastRetryRegistrationForTest)
+
+	sessionID, elected := setupRecordedTransition(t)
 
 	sel := roastSigningParticipantSelector{}
-	got, err := sel.Select(selectorTestMembers(), 0, 0, 3, "session-with-record", elected)
+	got, err := sel.Select(selectorTestMembers(), 0, 0, 3, sessionID, elected)
 	if err != nil {
 		t.Fatalf("select: %v", err)
 	}
 	if len(got) == 0 {
 		t.Fatal("selector must return at least one address from the record's bundle")
+	}
+}
+
+func TestROASTSelector_ConsumesRecordToPreventStaleReuse(t *testing.T) {
+	signing.ResetRoastTransitionRegistryForTest()
+	signing.ResetRoastRetryRegistrationForTest()
+	t.Cleanup(signing.ResetRoastTransitionRegistryForTest)
+	t.Cleanup(signing.ResetRoastRetryRegistrationForTest)
+
+	sessionID, elected := setupRecordedTransition(t)
+
+	sel := roastSigningParticipantSelector{}
+	// First selection consumes the record.
+	if _, err := sel.Select(selectorTestMembers(), 0, 0, 3, sessionID, elected); err != nil {
+		t.Fatalf("first select: %v", err)
+	}
+
+	// The record must now be gone (consumed) so it cannot drive a LATER retry:
+	// if this member is not the next attempt's coordinator it produces no fresh
+	// record, and a lingering one would re-derive the wrong attempt's set.
+	if _, ok := signing.RoastTransitionForSession(sessionID, elected); ok {
+		t.Fatal("selector must consume (clear) the record after use")
+	}
+
+	// A subsequent selection with no fresh record falls back to legacy.
+	got, err := sel.Select(selectorTestMembers(), 0, 1, 3, sessionID, elected)
+	if err != nil {
+		t.Fatalf("second select: %v", err)
+	}
+	if len(got) < 3 {
+		t.Fatalf("expected legacy fallback after the record is consumed; got %d", len(got))
 	}
 }

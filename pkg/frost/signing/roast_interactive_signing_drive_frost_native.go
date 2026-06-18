@@ -101,11 +101,17 @@ func driveInteractiveRoastSigningIfEnabled(
 		return nil, fmt.Errorf("interactive ROAST signing: %w", err)
 	}
 
+	// Bind the attempt (and therefore the interactive engine session) to the
+	// STABLE attemptCtx.SessionID, NOT request.SessionID: NewActiveRoastAttempt
+	// requires sessionID == ctx.SessionID, and ctx.SessionID is the RoastSessionID
+	// (the engine session is unified on the stable id - it separates attempts by
+	// the canonical attempt id). request.SessionID is the attempt-specific coarse
+	// id and would be rejected here.
 	active, err := NewActiveRoastAttempt(
 		deps.Coordinator,
 		handle,
 		attemptCtx,
-		request.SessionID,
+		attemptCtx.SessionID,
 		request.TaprootMerkleRoot,
 		dkgGroupPublicKey,
 	)

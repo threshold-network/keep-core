@@ -58,6 +58,15 @@ func (s roastSigningParticipantSelector) Select(
 			members, seed, retryCount, honestThreshold, sessionID, memberIndex,
 		)
 	}
+	// Consume the record: a transition record drives exactly ONE next-attempt
+	// selection. Clearing it here prevents a STALE record from driving a later
+	// retry -- if this member is not the next attempt's elected coordinator it
+	// produces no fresh record, and a lingering record would re-derive the
+	// wrong (earlier) attempt's IncludedSet instead of advancing. The next
+	// retry's record is re-stored by that attempt's cleanup (or, in multi-node,
+	// re-broadcast); absent one, the selector falls back to legacy.
+	signing.ClearRoastTransitionForSession(sessionID, memberIndex)
+
 	deps, registryOK := signing.RegisteredRoastRetryCoordinator()
 	if !registryOK || deps.Coordinator == nil {
 		// Should not happen in practice (the record was produced

@@ -66,14 +66,20 @@ func newDriveFixture(t *testing.T) driveFixture {
 	t.Helper()
 
 	const (
-		sessionID = "interactive-session-1"
-		keyGroup  = "interactive-key-group"
+		// attemptSessionID is the attempt-specific (coarse) id; roastSessionID is
+		// the STABLE one BuildAttemptContextFromRequest puts in ctx.SessionID.
+		// They DIFFER, mirroring production, so the drive must bind the attempt
+		// to ctx.SessionID (not request.SessionID, which NewActiveRoastAttempt
+		// would reject).
+		attemptSessionID = "interactive-attempt-session-1"
+		roastSessionID   = "interactive-roast-session"
+		keyGroup         = "interactive-key-group"
 	)
 	dkgKey := []byte(keyGroup)
 	included := []group.MemberIndex{1}
 
 	attemptCtx, err := attempt.NewAttemptContext(
-		sessionID, keyGroup, dkgKey,
+		roastSessionID, keyGroup, dkgKey,
 		[attempt.MessageDigestLength]byte{0x42}, 0, included, nil,
 	)
 	if err != nil {
@@ -106,7 +112,8 @@ func newDriveFixture(t *testing.T) driveFixture {
 	engine.coordinatorIdentifier = 1
 
 	request := &NativeExecutionFFISigningRequest{
-		SessionID:           sessionID,
+		SessionID:           attemptSessionID,
+		RoastSessionID:      roastSessionID,
 		MemberIndex:         1,
 		Channel:             noopBroadcastChannel{},
 		MembershipValidator: singleSeatValidator(t),
