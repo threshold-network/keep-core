@@ -88,29 +88,13 @@ func attemptRoastRetryOrchestrationFromRequest(
 		request.SignerMaterial.Format,
 	)
 
-	// Extract the DKG group public key for the transition record: the next
-	// attempt's selector needs it to derive a valid next context via
-	// NextAttempt (a nil key yields a context NewActiveRoastAttempt rejects).
-	// BuildAttemptContextFromRequest already validated the material above, so
-	// this re-extraction is expected to succeed; a failure is the same
-	// deterministic static-fallback class.
-	dkgGroupPublicKey, err := ExtractDkgGroupPublicKeyFromMaterial(request.SignerMaterial)
-	if err != nil {
-		logger.Infof(
-			"ROAST orchestration unavailable for session %q: %v",
-			request.SessionID, err,
-		)
-		return nil, nil, nil
-	}
-
 	// The handle registry stays keyed by the attempt-specific request.SessionID:
 	// the coarse receive-loop binding validation + snapshot submission look the
 	// handle up by that id, so keying it otherwise would silently disable them.
-	// Only the CROSS-ATTEMPT transition record is keyed by the stable
-	// ctx.SessionID (== RoastSessionID), inside BeginOrchestrationForSession's
-	// cleanup, so the next attempt's selector can find it.
+	// The cross-attempt transition record is produced + keyed (by the stable
+	// RoastSessionID) entirely in the transition exchange now, not here.
 	handle, cleanup, err := BeginOrchestrationForSession(
-		request.SessionID, attemptCtx, dkgGroupPublicKey,
+		request.SessionID, attemptCtx,
 	)
 	if err != nil {
 		switch {

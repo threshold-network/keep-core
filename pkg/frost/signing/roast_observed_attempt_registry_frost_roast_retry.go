@@ -1,4 +1,4 @@
-//go:build frost_native && frost_roast_retry
+//go:build frost_roast_retry
 
 package signing
 
