@@ -31,19 +31,27 @@ func defaultSigningParticipantSelector() signingParticipantSelector {
 	return roastSigningParticipantSelector{}
 }
 
-// Select delegates to the legacy retry shuffle in PR2a. The sessionID +
-// memberIndex parameters are threaded through the interface now so PR2b can wire
-// distributed, member-level consumption of the transition record without
-// touching the call site again.
+// Select delegates to the legacy retry shuffle in PR2a/PR2b-1a. The
+// readyMembersIndexes + signingGroupOperators + sessionID + memberIndex
+// parameters are threaded through the interface now so PR2b-1b can wire
+// distributed, member-level consumption of the transition record (it returns
+// the transition's IncludedSet directly) without touching the call site again.
 func (s roastSigningParticipantSelector) Select(
-	members []chain.Address,
+	readyMembersIndexes []group.MemberIndex,
+	signingGroupOperators chain.Addresses,
 	seed int64,
 	retryCount uint,
 	honestThreshold uint,
 	sessionID string,
 	memberIndex group.MemberIndex,
-) ([]chain.Address, error) {
+) ([]group.MemberIndex, error) {
 	return s.legacy.Select(
-		members, seed, retryCount, honestThreshold, sessionID, memberIndex,
+		readyMembersIndexes,
+		signingGroupOperators,
+		seed,
+		retryCount,
+		honestThreshold,
+		sessionID,
+		memberIndex,
 	)
 }

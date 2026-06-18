@@ -2,6 +2,7 @@ package tbtc
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -19,18 +20,19 @@ import (
 // than the legacy path.
 type recordingSelector struct {
 	calls  int
-	result []chain.Address
+	result []group.MemberIndex
 	err    error
 }
 
 func (r *recordingSelector) Select(
-	members []chain.Address,
+	readyMembersIndexes []group.MemberIndex,
+	_ chain.Addresses,
 	_ int64,
 	_ uint,
 	_ uint,
 	_ string,
 	_ group.MemberIndex,
-) ([]chain.Address, error) {
+) ([]group.MemberIndex, error) {
 	r.calls++
 	if r.err != nil {
 		return nil, r.err
@@ -38,31 +40,41 @@ func (r *recordingSelector) Select(
 	if r.result != nil {
 		return r.result, nil
 	}
-	return members, nil
+	return readyMembersIndexes, nil
 }
 
 func TestLegacySigningParticipantSelector_DelegatesToRetryShuffle(t *testing.T) {
-	members := []chain.Address{
+	operators := chain.Addresses{
 		chain.Address("op-1"),
 		chain.Address("op-2"),
 		chain.Address("op-3"),
 		chain.Address("op-4"),
 		chain.Address("op-5"),
 	}
+	readyMembers := []group.MemberIndex{1, 2, 3, 4, 5}
 	sel := legacySigningParticipantSelector{}
-	got, err := sel.Select(members, 42, 0, 3, "session-x", 1)
+	got, err := sel.Select(readyMembers, operators, 42, 0, 3, "session-x", 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(got) < 3 {
-		t.Fatalf("expected at least 3 qualified operators, got %d", len(got))
+	// Five members are ready and the honest threshold is 3, so the
+	// surplus trim leaves exactly the threshold count included.
+	if len(got) != 3 {
+		t.Fatalf("expected 3 included members (the honest threshold), got %d", len(got))
+	}
+	// The result must be sorted ascending and contain only ready members.
+	for i := 1; i < len(got); i++ {
+		if got[i] <= got[i-1] {
+			t.Fatalf("expected included members sorted ascending, got %v", got)
+		}
 	}
 }
 
 func TestLegacySigningParticipantSelector_PropagatesErrors(t *testing.T) {
 	sel := legacySigningParticipantSelector{}
 	_, err := sel.Select(
-		[]chain.Address{chain.Address("op-1")},
+		[]group.MemberIndex{1},
+		chain.Addresses{chain.Address("op-1")},
 		0, 0,
 		99, // honest threshold higher than member count
 		"session-x",
@@ -74,11 +86,7 @@ func TestLegacySigningParticipantSelector_PropagatesErrors(t *testing.T) {
 }
 
 func TestSigningRetryLoopUsesDispatcher(t *testing.T) {
-	sentinel := []chain.Address{
-		chain.Address("op-1"),
-		chain.Address("op-2"),
-		chain.Address("op-3"),
-	}
+	sentinel := []group.MemberIndex{1, 2, 3}
 	recorder := &recordingSelector{result: sentinel}
 
 	srl := &signingRetryLoop{
@@ -97,18 +105,25 @@ func TestSigningRetryLoopUsesDispatcher(t *testing.T) {
 		participantSelector: recorder,
 	}
 
-	set, err := srl.qualifiedOperatorsSet([]group.MemberIndex{1, 2, 3, 4, 5})
+	included, excluded, err := srl.performMembersSelection(
+		[]group.MemberIndex{1, 2, 3, 4, 5},
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if recorder.calls != 1 {
 		t.Fatalf("expected dispatcher to be called once; got %d", recorder.calls)
 	}
-	if len(set) != len(sentinel) {
+	if !reflect.DeepEqual(included, sentinel) {
 		t.Fatalf(
-			"expected %d qualified operators (the sentinel), got %d",
-			len(sentinel), len(set),
+			"expected the dispatcher's included set (the sentinel %v), got %v",
+			sentinel, included,
 		)
+	}
+	// Excluded is the complement of the sentinel over the 5-member group.
+	wantExcluded := []group.MemberIndex{4, 5}
+	if !reflect.DeepEqual(excluded, wantExcluded) {
+		t.Fatalf("expected excluded %v, got %v", wantExcluded, excluded)
 	}
 }
 
@@ -124,7 +139,7 @@ func TestSigningRetryLoopPropagatesSelectorError(t *testing.T) {
 		attemptSeed:         0,
 		participantSelector: &recordingSelector{err: wantErr},
 	}
-	_, err := srl.qualifiedOperatorsSet([]group.MemberIndex{1, 2})
+	_, _, err := srl.performMembersSelection([]group.MemberIndex{1, 2})
 	if err == nil {
 		t.Fatal("expected selector error to propagate")
 	}
