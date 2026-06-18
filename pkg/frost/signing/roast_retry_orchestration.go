@@ -92,6 +92,8 @@ var ErrNoRoastRetryCoordinatorRegistered = errors.New(
 func BeginOrchestrationForSession(
 	sessionID string,
 	ctx attempt.AttemptContext,
+	member group.MemberIndex,
+	dkgGroupPublicKey []byte,
 ) (roast.AttemptHandle, func(), error) {
 	if err := EnsureRoastRetryReadinessOptIn(); err != nil {
 		return roast.AttemptHandle{}, nil, fmt.Errorf(
@@ -121,56 +123,68 @@ func BeginOrchestrationForSession(
 	}
 	SetCurrentAttemptHandleForSession(sessionID, handle, ctx)
 	cleanup := func() {
-		// RFC-21 Phase 7.1: if this node is the elected
-		// coordinator and the attempt is still in the Collecting
-		// state at cleanup time (i.e. it did not succeed via
-		// signature aggregation), produce the TransitionMessage
-		// and stash it in the per-session bundle registry. Phase
-		// 7.2's ROAST signingParticipantSelector consumes the
-		// stashed bundle to compute the next attempt's
-		// IncludedSet via EvaluateRoastRetryForSigning.
+		// RFC-21 Phase 7.1/7.3: if this seat is the elected
+		// coordinator and the attempt is still Collecting at
+		// cleanup time (i.e. it did not succeed via signature
+		// aggregation), produce the TransitionMessage and stash a
+		// full RoastTransitionRecord (bundle + this attempt's
+		// handle/context + the DKG group public key) keyed by
+		// (sessionID, member). The next attempt's ROAST
+		// signingParticipantSelector consumes it to compute the
+		// IncludedSet via EvaluateRoastRetryForSigning. The record
+		// carries the handle/context so the selector does not race
+		// the ClearCurrentAttemptHandleForSession below, and the
+		// DKG key so NextAttempt can derive a valid next context.
 		//
 		// Failures are best-effort and silent: a panic in the
 		// deferred cleanup is materially worse than a missing
-		// transition bundle (the next attempt's selector falls
+		// transition record (the next attempt's selector falls
 		// back to the legacy retry shuffle), so we swallow errors
 		// rather than propagate them.
-		maybeProduceTransitionBundle(sessionID, handle, deps)
+		// The transition record is keyed by the STABLE ctx.SessionID
+		// (== RoastSessionID) so the next attempt's selector finds it; the
+		// handle registry above stays keyed by the attempt-specific sessionID.
+		maybeProduceTransitionRecord(ctx.SessionID, member, handle, ctx, dkgGroupPublicKey, deps)
 		ClearCurrentAttemptHandleForSession(sessionID)
 	}
 	return handle, cleanup, nil
 }
 
-// maybeProduceTransitionBundle attempts to call AggregateBundle on
-// the registered Coordinator when (a) the local node is the
+// maybeProduceTransitionRecord attempts to call AggregateBundle on
+// the registered Coordinator when (a) this seat (member) is the
 // elected coordinator for the attempt and (b) the attempt has not
-// already transitioned. The result is stashed via
-// RecordTransitionBundleForSession (a no-op in default build); on
-// any error path the function returns silently because cleanup
-// must not break the signing-flow contract.
+// already transitioned, then stashes a full RoastTransitionRecord
+// keyed by (sessionID, member) via RecordRoastTransition (a no-op
+// in the default build). On any error path the function returns
+// silently because cleanup must not break the signing-flow
+// contract.
+//
+// The elected check uses the per-seat member (not deps.SelfMember)
+// so a multi-seat operator's elected-coordinator seat -- whichever
+// it is -- is the one that produces and stores the record under its
+// own member. Non-coordinator seats produce nothing here; they
+// receive the bundle via the (Phase 7.3 PR2b) snapshot/transition
+// bus exchange.
 //
 // In the default build this still compiles because
-// RecordTransitionBundleForSession is a no-op stub; calls to
-// roast.Coordinator methods compile because pkg/frost/roast is
-// not build-tagged.
-func maybeProduceTransitionBundle(
-	sessionID string,
+// RecordRoastTransition is a no-op stub; calls to roast.Coordinator
+// methods compile because pkg/frost/roast is not build-tagged.
+func maybeProduceTransitionRecord(
+	roastSessionID string,
+	member group.MemberIndex,
 	handle roast.AttemptHandle,
+	ctx attempt.AttemptContext,
+	dkgGroupPublicKey []byte,
 	deps RoastRetryDeps,
 ) {
-	if deps.Coordinator == nil {
-		return
-	}
-	if deps.SelfMember == 0 {
-		// Without a known self-member, we cannot determine
-		// whether to aggregate. Skip.
+	if deps.Coordinator == nil || member == 0 {
 		return
 	}
 	elected, err := deps.Coordinator.SelectedCoordinator(handle)
 	if err != nil {
 		return
 	}
-	if elected != group.MemberIndex(deps.SelfMember) {
+	if elected != member {
 		return
 	}
 	state, err := deps.Coordinator.State(handle)
@@ -187,7 +201,12 @@ func maybeProduceTransitionBundle(
 		// back to the legacy retry shuffle.
 		return
 	}
-	RecordTransitionBundleForSession(sessionID, bundle)
+	RecordRoastTransition(roastSessionID, member, RoastTransitionRecord{
+		Bundle:            bundle,
+		PreviousHandle:    handle,
+		PreviousContext:   ctx,
+		DkgGroupPublicKey: dkgGroupPublicKey,
+	})
 }
 
 // EndOrchestrationForSession is a convenience for callers that

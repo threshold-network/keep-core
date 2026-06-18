@@ -50,41 +50,37 @@ func (s roastSigningParticipantSelector) Select(
 	retryCount uint,
 	honestThreshold uint,
 	sessionID string,
+	memberIndex group.MemberIndex,
 ) ([]chain.Address, error) {
-	bundle, ok := signing.TransitionBundleForSession(sessionID)
-	if !ok || bundle == nil {
+	record, ok := signing.RoastTransitionForSession(sessionID, memberIndex)
+	if !ok || record.Bundle == nil {
 		return s.legacy.Select(
-			members, seed, retryCount, honestThreshold, sessionID,
+			members, seed, retryCount, honestThreshold, sessionID, memberIndex,
 		)
 	}
 	deps, registryOK := signing.RegisteredRoastRetryCoordinator()
 	if !registryOK || deps.Coordinator == nil {
-		// Should not happen in practice (the bundle was produced
+		// Should not happen in practice (the record was produced
 		// by a registered coordinator) but defend against the
 		// race anyway.
 		return s.legacy.Select(
-			members, seed, retryCount, honestThreshold, sessionID,
+			members, seed, retryCount, honestThreshold, sessionID, memberIndex,
 		)
 	}
 
-	// Look up the AttemptHandle bound to this session. The handle
-	// identifies the attempt whose bundle we are now consuming;
-	// NextAttempt is invoked against it to derive the next
-	// AttemptContext's IncludedSet.
-	handle, _, handleOK := signing.CurrentAttemptHandleForSession(sessionID)
-	if !handleOK {
-		return s.legacy.Select(
-			members, seed, retryCount, honestThreshold, sessionID,
-		)
-	}
-
+	// The transition record carries the failed attempt's handle (so the
+	// selector does not race the cleanup that clears the live handle registry)
+	// and the DKG group public key (so NextAttempt derives a next AttemptContext
+	// the executor's NewActiveRoastAttempt accepts; a nil key yields a seed
+	// mismatch). NextAttempt is invoked against PreviousHandle to derive the
+	// next attempt's IncludedSet from the verified bundle.
 	resolver := membersResolver(members)
 	addresses, _, err := roast.EvaluateRoastRetryForSigning[chain.Address](
 		deps.Coordinator,
-		handle,
-		bundle,
+		record.PreviousHandle,
+		record.Bundle,
 		honestThreshold,
-		nil, // DKG public key is recomputed inside Coordinator.NextAttempt; passing nil is acceptable when the bundle's attempt context carries the seed binding.
+		record.DkgGroupPublicKey,
 		resolver,
 	)
 	if err != nil {

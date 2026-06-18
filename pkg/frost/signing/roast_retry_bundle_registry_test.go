@@ -8,27 +8,25 @@ import (
 	"github.com/keep-network/keep-core/pkg/frost/roast"
 )
 
-func TestTransitionBundleRegistry_DefaultBuildIsNoOp(t *testing.T) {
+func TestRoastTransitionRegistry_DefaultBuildIsNoOp(t *testing.T) {
 	// In the default build the registry is a permanent stub:
-	// RecordTransitionBundleForSession discards; TransitionBundleForSession
-	// always returns (nil, false). The ROAST selector must therefore
-	// always fall back to legacy retry in the default build.
-	RecordTransitionBundleForSession(
+	// RecordRoastTransition discards; RoastTransitionForSession always returns
+	// (zero, false). The ROAST selector must therefore always fall back to
+	// legacy retry in the default build.
+	RecordRoastTransition(
 		"session-default-build-test",
-		&roast.TransitionMessage{},
+		1,
+		RoastTransitionRecord{Bundle: &roast.TransitionMessage{}},
 	)
-	got, ok := TransitionBundleForSession("session-default-build-test")
+	got, ok := RoastTransitionForSession("session-default-build-test", 1)
 	if ok {
-		t.Fatalf(
-			"default build registry must report not-present; got bundle %v",
-			got,
-		)
+		t.Fatalf("default build registry must report not-present; got record %v", got)
 	}
-	if got != nil {
-		t.Fatalf("default build must return nil bundle; got %v", got)
+	if got.Bundle != nil {
+		t.Fatalf("default build must return a zero record; got bundle %v", got.Bundle)
 	}
 
 	// Clear and reset must not panic.
-	ClearTransitionBundleForSession("session-default-build-test")
-	ResetTransitionBundleRegistryForTest()
+	ClearRoastTransitionForSession("session-default-build-test", 1)
+	ResetRoastTransitionRegistryForTest()
 }

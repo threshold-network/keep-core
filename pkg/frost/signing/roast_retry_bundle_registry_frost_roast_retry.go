@@ -6,98 +6,97 @@ import (
 	"sync"
 	"time"
 
-	"github.com/keep-network/keep-core/pkg/frost/roast"
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
-// TransitionBundleRegistryTTL is how long a session's most recent
-// TransitionMessage is retained before the background sweeper
-// evicts it. Matches the session-handle TTL: a bundle's usefulness
-// to retry-driven participant selection expires when the session
-// it describes is itself archived.
-const TransitionBundleRegistryTTL = SessionHandleBindingTTL
+// RoastTransitionRegistryTTL is how long a (session, member) transition
+// record is retained before the background sweeper evicts it. Matches the
+// session-handle TTL: a record's usefulness to retry-driven participant
+// selection expires when the session it describes is itself archived.
+const RoastTransitionRegistryTTL = SessionHandleBindingTTL
 
-// sessionBundleEntry pairs a TransitionMessage with the wall-clock
-// time at which it was recorded so the sweeper can evict stale
-// entries.
-type sessionBundleEntry struct {
-	bundle    *roast.TransitionMessage
+// roastTransitionKey scopes a transition record to one local signer (member)
+// within a ROAST session. A multi-seat operator runs one concurrent signer per
+// seat sharing one roastSessionID; keying by session alone would collide (the
+// #4081 multi-seat handle class). Each seat reads and writes its own record.
+type roastTransitionKey struct {
+	sessionID string
+	member    group.MemberIndex
+}
+
+type roastTransitionEntry struct {
+	record    RoastTransitionRecord
 	createdAt time.Time
 }
 
 var (
-	sessionBundleRegistryMu sync.RWMutex
-	sessionBundleRegistry   = map[string]sessionBundleEntry{}
+	roastTransitionRegistryMu sync.RWMutex
+	roastTransitionRegistry   = map[roastTransitionKey]roastTransitionEntry{}
 )
 
-// RecordTransitionBundleForSession stores the most recent
-// TransitionMessage produced by the elected coordinator for the
-// named session. The bundle is later consumed by the ROAST-driven
-// signingParticipantSelector to compute the next attempt's
-// IncludedSet via EvaluateRoastRetryForSigning.
-//
-// A later call for the same session overwrites the earlier bundle
-// -- the registry tracks only the most recent transition.
-func RecordTransitionBundleForSession(
+// RecordRoastTransition stores the most recent transition record produced for
+// (sessionID, member). A later call for the same key overwrites the earlier
+// record. A nil Bundle is ignored: a record without a bundle is useless to the
+// selector (it has nothing to drive NextAttempt with).
+func RecordRoastTransition(
 	sessionID string,
-	bundle *roast.TransitionMessage,
+	member group.MemberIndex,
+	record RoastTransitionRecord,
 ) {
-	if bundle == nil {
+	if record.Bundle == nil {
 		return
 	}
-	sessionBundleRegistryMu.Lock()
-	defer sessionBundleRegistryMu.Unlock()
-	sessionBundleRegistry[sessionID] = sessionBundleEntry{
-		bundle:    bundle,
+	roastTransitionRegistryMu.Lock()
+	defer roastTransitionRegistryMu.Unlock()
+	roastTransitionRegistry[roastTransitionKey{sessionID, member}] = roastTransitionEntry{
+		record:    record,
 		createdAt: time.Now(),
 	}
 }
 
-// TransitionBundleForSession returns the most recent transition
-// message for the named session, plus a presence flag. Callers
-// (the ROAST selector) treat (nil, false) as "no bundle; fall back
-// to legacy".
-func TransitionBundleForSession(
+// RoastTransitionForSession returns the most recent transition record for
+// (sessionID, member), plus a presence flag. The ROAST selector treats
+// (zero, false) as "no record; fall back to legacy".
+func RoastTransitionForSession(
 	sessionID string,
-) (*roast.TransitionMessage, bool) {
-	sessionBundleRegistryMu.RLock()
-	defer sessionBundleRegistryMu.RUnlock()
-	entry, ok := sessionBundleRegistry[sessionID]
+	member group.MemberIndex,
+) (RoastTransitionRecord, bool) {
+	roastTransitionRegistryMu.RLock()
+	defer roastTransitionRegistryMu.RUnlock()
+	entry, ok := roastTransitionRegistry[roastTransitionKey{sessionID, member}]
 	if !ok {
-		return nil, false
+		return RoastTransitionRecord{}, false
 	}
-	return entry.bundle, true
+	return entry.record, true
 }
 
-// ClearTransitionBundleForSession removes any bundle for the named
-// session. Called when a session terminates.
-func ClearTransitionBundleForSession(sessionID string) {
-	sessionBundleRegistryMu.Lock()
-	defer sessionBundleRegistryMu.Unlock()
-	delete(sessionBundleRegistry, sessionID)
+// ClearRoastTransitionForSession removes the record for (sessionID, member).
+// Called when a session terminates.
+func ClearRoastTransitionForSession(sessionID string, member group.MemberIndex) {
+	roastTransitionRegistryMu.Lock()
+	defer roastTransitionRegistryMu.Unlock()
+	delete(roastTransitionRegistry, roastTransitionKey{sessionID, member})
 }
 
-// ResetTransitionBundleRegistryForTest clears every bundle. Test-
-// only seam.
-func ResetTransitionBundleRegistryForTest() {
-	sessionBundleRegistryMu.Lock()
-	defer sessionBundleRegistryMu.Unlock()
-	sessionBundleRegistry = map[string]sessionBundleEntry{}
+// ResetRoastTransitionRegistryForTest clears every record. Test-only seam.
+func ResetRoastTransitionRegistryForTest() {
+	roastTransitionRegistryMu.Lock()
+	defer roastTransitionRegistryMu.Unlock()
+	roastTransitionRegistry = map[roastTransitionKey]roastTransitionEntry{}
 }
 
-// evictStaleTransitionBundles sweeps the registry and removes
-// entries older than maxAge. Exposed at the package level so
-// tests can invoke it directly with small maxAge values. The
-// production sweeper invokes it from sessionHandleSweepLoop
-// (Phase 5.2) so the bundle and handle registries share a single
+// evictStaleRoastTransitions sweeps the registry and removes entries older than
+// maxAge. Exposed at the package level so tests can invoke it directly with
+// small maxAge values and so the session-handle sweeper can share one
 // background goroutine.
-func evictStaleTransitionBundles(maxAge time.Duration) int {
+func evictStaleRoastTransitions(maxAge time.Duration) int {
 	cutoff := time.Now().Add(-maxAge)
-	sessionBundleRegistryMu.Lock()
-	defer sessionBundleRegistryMu.Unlock()
+	roastTransitionRegistryMu.Lock()
+	defer roastTransitionRegistryMu.Unlock()
 	evicted := 0
-	for sessionID, entry := range sessionBundleRegistry {
+	for key, entry := range roastTransitionRegistry {
 		if entry.createdAt.Before(cutoff) {
-			delete(sessionBundleRegistry, sessionID)
+			delete(roastTransitionRegistry, key)
 			evicted++
 		}
 	}

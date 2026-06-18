@@ -16,6 +16,7 @@ import (
 type NativeExecutionFFISigningRequest struct {
 	Message             *big.Int
 	SessionID           string
+	RoastSessionID      string
 	MemberIndex         group.MemberIndex
 	GroupSize           int
 	DishonestThreshold  int
@@ -89,6 +90,7 @@ func (nefea *nativeExecutionFFIExecutorAdapter) Execute(
 	ffiRequest := &NativeExecutionFFISigningRequest{
 		Message:             request.Message,
 		SessionID:           request.SessionID,
+		RoastSessionID:      request.RoastSessionID,
 		MemberIndex:         request.MemberIndex,
 		GroupSize:           request.GroupSize,
 		DishonestThreshold:  request.DishonestThreshold,

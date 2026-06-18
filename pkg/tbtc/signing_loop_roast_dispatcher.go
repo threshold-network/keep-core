@@ -2,6 +2,7 @@ package tbtc
 
 import (
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
 // signingParticipantSelector picks the set of operators qualified for
@@ -22,13 +23,18 @@ type signingParticipantSelector interface {
 	// whose ready signal was received for this attempt. seed is the
 	// per-message retry seed; retryCount is 0-based (i.e. 0 for the
 	// first retry). honestThreshold is the group's signing
-	// threshold.
+	// threshold. sessionID is the STABLE ROAST session id and
+	// memberIndex is the local signer's member; together they key the
+	// per-(session, member) transition record the ROAST selector
+	// consumes (a multi-seat operator runs one signer per seat, each
+	// with its own record).
 	Select(
 		members []chain.Address,
 		seed int64,
 		retryCount uint,
 		honestThreshold uint,
 		sessionID string,
+		memberIndex group.MemberIndex,
 	) ([]chain.Address, error)
 }
 

@@ -12,6 +12,16 @@ import (
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
+func selectorTestMembers() []chain.Address {
+	return []chain.Address{
+		chain.Address("op-1"),
+		chain.Address("op-2"),
+		chain.Address("op-3"),
+		chain.Address("op-4"),
+		chain.Address("op-5"),
+	}
+}
+
 func TestDefaultSigningParticipantSelector_IsROASTInTaggedBuild(t *testing.T) {
 	sel := defaultSigningParticipantSelector()
 	if _, ok := sel.(roastSigningParticipantSelector); !ok {
@@ -22,19 +32,12 @@ func TestDefaultSigningParticipantSelector_IsROASTInTaggedBuild(t *testing.T) {
 	}
 }
 
-func TestROASTSelector_FallsBackToLegacyWhenNoBundle(t *testing.T) {
-	signing.ResetTransitionBundleRegistryForTest()
-	t.Cleanup(signing.ResetTransitionBundleRegistryForTest)
+func TestROASTSelector_FallsBackToLegacyWhenNoRecord(t *testing.T) {
+	signing.ResetRoastTransitionRegistryForTest()
+	t.Cleanup(signing.ResetRoastTransitionRegistryForTest)
 
 	sel := roastSigningParticipantSelector{}
-	members := []chain.Address{
-		chain.Address("op-1"),
-		chain.Address("op-2"),
-		chain.Address("op-3"),
-		chain.Address("op-4"),
-		chain.Address("op-5"),
-	}
-	got, err := sel.Select(members, 42, 0, 3, "session-no-bundle")
+	got, err := sel.Select(selectorTestMembers(), 42, 0, 3, "session-no-record", 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -44,28 +47,19 @@ func TestROASTSelector_FallsBackToLegacyWhenNoBundle(t *testing.T) {
 }
 
 func TestROASTSelector_FallsBackToLegacyWhenRegistryEmpty(t *testing.T) {
-	signing.ResetTransitionBundleRegistryForTest()
+	signing.ResetRoastTransitionRegistryForTest()
 	signing.ResetRoastRetryRegistrationForTest()
-	signing.ResetSessionHandleRegistryForTest()
-	t.Cleanup(signing.ResetTransitionBundleRegistryForTest)
+	t.Cleanup(signing.ResetRoastTransitionRegistryForTest)
 	t.Cleanup(signing.ResetRoastRetryRegistrationForTest)
-	t.Cleanup(signing.ResetSessionHandleRegistryForTest)
 
-	// Record a bundle but do NOT register a coordinator.
-	signing.RecordTransitionBundleForSession(
-		"session-no-registry",
-		&roast.TransitionMessage{CoordinatorIDValue: 1},
-	)
+	// Record a transition but do NOT register a coordinator.
+	signing.RecordRoastTransition("session-no-registry", 1, signing.RoastTransitionRecord{
+		Bundle:            &roast.TransitionMessage{CoordinatorIDValue: 1},
+		DkgGroupPublicKey: []byte{0x01, 0x02, 0x03},
+	})
 
 	sel := roastSigningParticipantSelector{}
-	members := []chain.Address{
-		chain.Address("op-1"),
-		chain.Address("op-2"),
-		chain.Address("op-3"),
-		chain.Address("op-4"),
-		chain.Address("op-5"),
-	}
-	got, err := sel.Select(members, 42, 0, 3, "session-no-registry")
+	got, err := sel.Select(selectorTestMembers(), 42, 0, 3, "session-no-registry", 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -74,43 +68,25 @@ func TestROASTSelector_FallsBackToLegacyWhenRegistryEmpty(t *testing.T) {
 	}
 }
 
-func TestROASTSelector_FallsBackToLegacyWhenNoHandleBinding(t *testing.T) {
-	signing.ResetTransitionBundleRegistryForTest()
-	signing.ResetRoastRetryRegistrationForTest()
-	signing.ResetSessionHandleRegistryForTest()
-	t.Cleanup(signing.ResetTransitionBundleRegistryForTest)
-	t.Cleanup(signing.ResetRoastRetryRegistrationForTest)
-	t.Cleanup(signing.ResetSessionHandleRegistryForTest)
+func TestROASTSelector_FallsBackToLegacyWhenNoRecordForMember(t *testing.T) {
+	signing.ResetRoastTransitionRegistryForTest()
+	t.Cleanup(signing.ResetRoastTransitionRegistryForTest)
 
-	// Register coordinator + record bundle, but DO NOT bind a
-	// session handle. The selector must still fall back to legacy
-	// because it cannot identify which attempt to consume the
-	// bundle against.
-	signing.RegisterRoastRetryCoordinator(signing.RoastRetryDeps{
-		Coordinator: roast.NewInMemoryCoordinator(),
-		Signer:      roast.NoOpSigner(),
-		Verifier:    roast.NoOpSignatureVerifier(),
-		SelfMember:  1,
+	// A record exists for member 1, but the selector queries for member 2.
+	// Records are member-scoped (the multi-seat fix), so member 2 must NOT alias
+	// member 1's record; it falls back to legacy.
+	signing.RecordRoastTransition("session-member-scoped", 1, signing.RoastTransitionRecord{
+		Bundle:            &roast.TransitionMessage{CoordinatorIDValue: 1},
+		DkgGroupPublicKey: []byte{0x01, 0x02, 0x03},
 	})
-	signing.RecordTransitionBundleForSession(
-		"session-no-handle",
-		&roast.TransitionMessage{CoordinatorIDValue: 1},
-	)
 
 	sel := roastSigningParticipantSelector{}
-	members := []chain.Address{
-		chain.Address("op-1"),
-		chain.Address("op-2"),
-		chain.Address("op-3"),
-		chain.Address("op-4"),
-		chain.Address("op-5"),
-	}
-	got, err := sel.Select(members, 42, 0, 3, "session-no-handle")
+	got, err := sel.Select(selectorTestMembers(), 42, 0, 3, "session-member-scoped", 2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(got) < 3 {
-		t.Fatalf("expected legacy fallback; got %d members", len(got))
+		t.Fatalf("expected legacy fallback for a member with no record; got %d", len(got))
 	}
 }
 
@@ -149,21 +125,21 @@ func TestMembersResolver_RejectsOutOfRangeIndex(t *testing.T) {
 	}
 }
 
-func TestROASTSelector_UsesBundleWhenAllConditionsMet(t *testing.T) {
-	signing.ResetTransitionBundleRegistryForTest()
+func TestROASTSelector_UsesRecordWhenAllConditionsMet(t *testing.T) {
+	signing.ResetRoastTransitionRegistryForTest()
 	signing.ResetRoastRetryRegistrationForTest()
-	signing.ResetSessionHandleRegistryForTest()
-	t.Cleanup(signing.ResetTransitionBundleRegistryForTest)
+	t.Cleanup(signing.ResetRoastTransitionRegistryForTest)
 	t.Cleanup(signing.ResetRoastRetryRegistrationForTest)
-	t.Cleanup(signing.ResetSessionHandleRegistryForTest)
 
-	// Build a real coordinator and run through the bundle-production
-	// flow end-to-end, then verify the selector consumes the bundle
-	// and returns the IncludedSet mapped to addresses.
+	// Build a real coordinator and run the bundle-production flow end-to-end,
+	// then store a full transition record (handle + bundle + DKG key) and verify
+	// the selector consumes it (calling NextAttempt against the record's handle
+	// with the record's DKG key) rather than falling back to legacy.
+	dkgKey := []byte{0x01, 0x02, 0x03}
 	ctx, _ := attempt.NewAttemptContext(
-		"session-with-bundle",
+		"session-with-record",
 		"key-group",
-		[]byte{0x01, 0x02, 0x03},
+		dkgKey,
 		[attempt.MessageDigestLength]byte{0xab},
 		0,
 		[]group.MemberIndex{1, 2, 3, 4, 5},
@@ -185,8 +161,6 @@ func TestROASTSelector_UsesBundleWhenAllConditionsMet(t *testing.T) {
 	})
 
 	handle, _ := coord.BeginAttempt(ctx)
-	signing.SetCurrentAttemptHandleForSession("session-with-bundle", handle, ctx)
-
 	// Seed every member's snapshot so AggregateBundle has content.
 	for _, m := range ctx.IncludedSet {
 		snap := roast.NewLocalEvidenceSnapshot(m, ctx.Hash(), attempt.Evidence{})
@@ -199,21 +173,22 @@ func TestROASTSelector_UsesBundleWhenAllConditionsMet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("aggregate: %v", err)
 	}
-	signing.RecordTransitionBundleForSession("session-with-bundle", bundle)
+
+	// Store the full record exactly as the orchestration cleanup would, keyed by
+	// the elected member.
+	signing.RecordRoastTransition("session-with-record", elected, signing.RoastTransitionRecord{
+		Bundle:            bundle,
+		PreviousHandle:    handle,
+		PreviousContext:   ctx,
+		DkgGroupPublicKey: dkgKey,
+	})
 
 	sel := roastSigningParticipantSelector{}
-	members := []chain.Address{
-		chain.Address("op-1"),
-		chain.Address("op-2"),
-		chain.Address("op-3"),
-		chain.Address("op-4"),
-		chain.Address("op-5"),
-	}
-	got, err := sel.Select(members, 0, 0, 3, "session-with-bundle")
+	got, err := sel.Select(selectorTestMembers(), 0, 0, 3, "session-with-record", elected)
 	if err != nil {
 		t.Fatalf("select: %v", err)
 	}
 	if len(got) == 0 {
-		t.Fatal("selector must return at least one address")
+		t.Fatal("selector must return at least one address from the record's bundle")
 	}
 }
