@@ -10,8 +10,13 @@ import (
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
+// bundleTestDkgKey is the DKG group public key signingForBundleContext builds
+// the attempt context from; the orchestration cleanup stores it in the
+// transition record.
+var bundleTestDkgKey = []byte{0x01, 0x02, 0x03}
+
 // signingForBundleContext constructs an attempt context whose
-// SelectCoordinator will deterministically pick member 1 (for the
+// SelectCoordinator will deterministically pick a member (for the
 // sake of this test). Real production deployments use the
 // rotating selection; here we pin a stable handle for assertion.
 func signingForBundleContext(t *testing.T, members []group.MemberIndex) attempt.AttemptContext {
@@ -19,7 +24,7 @@ func signingForBundleContext(t *testing.T, members []group.MemberIndex) attempt.
 	ctx, err := attempt.NewAttemptContext(
 		"orchestration-bundle-test",
 		"key-group",
-		[]byte{0x01, 0x02, 0x03},
+		bundleTestDkgKey,
 		[attempt.MessageDigestLength]byte{0xab},
 		0,
 		members,
@@ -31,11 +36,12 @@ func signingForBundleContext(t *testing.T, members []group.MemberIndex) attempt.
 	return ctx
 }
 
-// realCoordinatorForBundleTest returns an in-memory coordinator
-// with NoOp signer/verifier so AggregateBundle path runs end-to-
-// end without crypto setup. The coordinator's selfMember is the
-// elected coordinator computed from the test context, so
-// maybeProduceTransitionBundle invokes AggregateBundle.
+// realCoordinatorForBundleTest returns an in-memory coordinator with NoOp
+// signer/verifier so the AggregateBundle path runs end-to-end without crypto
+// setup, plus the elected coordinator computed from the test context. The
+// caller passes `elected` as the member to BeginOrchestrationForSession so
+// maybeProduceTransitionRecord's elected==member check passes and it invokes
+// AggregateBundle.
 func realCoordinatorForBundleTest(
 	t *testing.T,
 	ctx attempt.AttemptContext,
@@ -52,14 +58,14 @@ func realCoordinatorForBundleTest(
 	return coord, elected
 }
 
-func TestCleanup_ProducesBundleWhenElectedCoordinator(t *testing.T) {
+func TestCleanup_ProducesRecordWhenElectedCoordinator(t *testing.T) {
 	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
 	ResetRoastRetryRegistrationForTest()
 	ResetSessionHandleRegistryForTest()
-	ResetTransitionBundleRegistryForTest()
+	ResetRoastTransitionRegistryForTest()
 	t.Cleanup(ResetRoastRetryRegistrationForTest)
 	t.Cleanup(ResetSessionHandleRegistryForTest)
-	t.Cleanup(ResetTransitionBundleRegistryForTest)
+	t.Cleanup(ResetRoastTransitionRegistryForTest)
 
 	ctx := signingForBundleContext(t, []group.MemberIndex{1, 2, 3, 4, 5})
 	coord, elected := realCoordinatorForBundleTest(t, ctx)
@@ -71,56 +77,58 @@ func TestCleanup_ProducesBundleWhenElectedCoordinator(t *testing.T) {
 	})
 
 	const sessionID = "bundle-producer-session"
-	handle, cleanup, err := BeginOrchestrationForSession(sessionID, ctx)
+	handle, cleanup, err := BeginOrchestrationForSession(sessionID, ctx, bundleTestDkgKey)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 
-	// Seed at least one snapshot so AggregateBundle's
-	// non-empty-bundle validation passes.
+	// Seed at least one snapshot so AggregateBundle's non-empty-bundle
+	// validation passes. NoOpSigner returns empty bytes but the
+	// signature-verification pre-check rejects zero-length signatures, so
+	// provide a dummy non-empty signature (the NoOp verifier accepts any bytes).
 	snap := roast.NewLocalEvidenceSnapshot(elected, ctx.Hash(), attempt.Evidence{})
-	// NoOpSigner returns empty bytes but the signature-verification
-	// pre-check rejects zero-length signatures. Provide a dummy
-	// non-empty signature; the NoOp verifier accepts any byte
-	// sequence.
 	snap.OperatorSignature = []byte{0x01}
 	if err := coord.RecordEvidence(handle, snap); err != nil {
 		t.Fatalf("record evidence: %v", err)
 	}
 
-	// Cleanup must produce + record a bundle (we're the elected
-	// coordinator and the attempt is still Collecting).
+	// Cleanup must produce + record a transition record (we passed the elected
+	// member and the attempt is still Collecting).
 	cleanup()
 
-	bundle, ok := TransitionBundleForSession(sessionID)
+	record, ok := RoastTransitionForSession(ctx.SessionID, elected)
 	if !ok {
-		t.Fatal("elected coordinator's cleanup must produce a bundle")
+		t.Fatal("elected coordinator's cleanup must produce a transition record")
 	}
-	if bundle == nil {
-		t.Fatal("recorded bundle must not be nil")
+	if record.Bundle == nil {
+		t.Fatal("recorded transition must carry a non-nil bundle")
 	}
-	if bundle.CoordinatorID() != elected {
-		t.Fatalf(
-			"bundle coordinator id %d != elected %d",
-			bundle.CoordinatorID(), elected,
-		)
+	if record.Bundle.CoordinatorID() != elected {
+		t.Fatalf("bundle coordinator id %d != elected %d", record.Bundle.CoordinatorID(), elected)
+	}
+	// The record must carry the binding the selector needs.
+	if record.PreviousHandle != handle {
+		t.Fatal("record must carry the failed attempt's handle (survives cleanup's handle clear)")
+	}
+	if string(record.DkgGroupPublicKey) != string(bundleTestDkgKey) {
+		t.Fatalf("record dkg key %x != %x", record.DkgGroupPublicKey, bundleTestDkgKey)
 	}
 }
 
-func TestCleanup_DoesNotProduceBundleWhenNotElectedCoordinator(t *testing.T) {
+func TestCleanup_DoesNotProduceRecordWhenNotElectedCoordinator(t *testing.T) {
 	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
 	ResetRoastRetryRegistrationForTest()
 	ResetSessionHandleRegistryForTest()
-	ResetTransitionBundleRegistryForTest()
+	ResetRoastTransitionRegistryForTest()
 	t.Cleanup(ResetRoastRetryRegistrationForTest)
 	t.Cleanup(ResetSessionHandleRegistryForTest)
-	t.Cleanup(ResetTransitionBundleRegistryForTest)
+	t.Cleanup(ResetRoastTransitionRegistryForTest)
 
 	ctx := signingForBundleContext(t, []group.MemberIndex{1, 2, 3, 4, 5})
 	_, elected := realCoordinatorForBundleTest(t, ctx)
 
-	// Register with a SELF that is NOT the elected coordinator.
-	nonElected := group.MemberIndex(elected + 10) // arbitrary non-elected
+	// A member that is NOT the elected coordinator.
+	nonElected := group.MemberIndex(elected + 10)
 	for _, m := range ctx.IncludedSet {
 		if m != elected {
 			nonElected = m
@@ -128,7 +136,6 @@ func TestCleanup_DoesNotProduceBundleWhenNotElectedCoordinator(t *testing.T) {
 		}
 	}
 
-	// Use a fresh coordinator bound to the non-elected member.
 	coord := roast.NewInMemoryCoordinatorWithSigning(
 		nonElected,
 		roast.NoOpSigner(),
@@ -142,14 +149,14 @@ func TestCleanup_DoesNotProduceBundleWhenNotElectedCoordinator(t *testing.T) {
 	})
 
 	const sessionID = "non-elected-session"
-	_, cleanup, err := BeginOrchestrationForSession(sessionID, ctx)
+	_, cleanup, err := BeginOrchestrationForSession(sessionID, ctx, bundleTestDkgKey)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 	cleanup()
 
-	if _, ok := TransitionBundleForSession(sessionID); ok {
-		t.Fatal("non-elected coordinator must not produce a bundle")
+	if _, ok := RoastTransitionForSession(ctx.SessionID, nonElected); ok {
+		t.Fatal("non-elected coordinator must not produce a transition record")
 	}
 }
 
@@ -157,23 +164,10 @@ func TestCleanup_AggregateBundleErrorIsSwallowed(t *testing.T) {
 	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
 	ResetRoastRetryRegistrationForTest()
 	ResetSessionHandleRegistryForTest()
-	ResetTransitionBundleRegistryForTest()
+	ResetRoastTransitionRegistryForTest()
 	t.Cleanup(ResetRoastRetryRegistrationForTest)
 	t.Cleanup(ResetSessionHandleRegistryForTest)
-	t.Cleanup(ResetTransitionBundleRegistryForTest)
-
-	// Use the standard coordinator. AggregateBundle will fail
-	// because the elected coordinator was 'self' but we never
-	// recorded any snapshots in the coordinator (so the bundle
-	// would be empty). Actually -- empty bundle violates
-	// validation. Let me set up a scenario where Aggregate fails.
-	//
-	// Strategy: register a coordinator whose BeginAttempt succeeds
-	// but AggregateBundle returns ErrAttemptStateInvalid because
-	// we manually transition the state through State. Simpler:
-	// just call cleanup() twice. The second call sees the
-	// already-transitioned state and bails out cleanly without
-	// recording a duplicate bundle.
+	t.Cleanup(ResetRoastTransitionRegistryForTest)
 
 	ctx := signingForBundleContext(t, []group.MemberIndex{1, 2, 3, 4, 5})
 	coord, elected := realCoordinatorForBundleTest(t, ctx)
@@ -185,31 +179,24 @@ func TestCleanup_AggregateBundleErrorIsSwallowed(t *testing.T) {
 	})
 
 	const sessionID = "double-cleanup-session"
-	handle, cleanup, err := BeginOrchestrationForSession(sessionID, ctx)
+	handle, cleanup, err := BeginOrchestrationForSession(sessionID, ctx, bundleTestDkgKey)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 
-	// Seed snapshot so the first cleanup's AggregateBundle
-	// succeeds.
 	snap := roast.NewLocalEvidenceSnapshot(elected, ctx.Hash(), attempt.Evidence{})
-	// NoOpSigner returns empty bytes but the signature-verification
-	// pre-check rejects zero-length signatures. Provide a dummy
-	// non-empty signature; the NoOp verifier accepts any byte
-	// sequence.
 	snap.OperatorSignature = []byte{0x01}
 	if err := coord.RecordEvidence(handle, snap); err != nil {
 		t.Fatalf("record evidence: %v", err)
 	}
 
-	// First cleanup -- bundle recorded.
+	// First cleanup -- record produced.
 	cleanup()
-	if _, ok := TransitionBundleForSession(sessionID); !ok {
-		t.Fatal("first cleanup must record bundle")
+	if _, ok := RoastTransitionForSession(ctx.SessionID, elected); !ok {
+		t.Fatal("first cleanup must record a transition")
 	}
 
-	// Second cleanup -- state is now Transitioned. AggregateBundle
-	// returns ErrAttemptStateInvalid; the helper must swallow the
-	// error rather than panic.
+	// Second cleanup -- state is now Transitioned. AggregateBundle returns
+	// ErrAttemptStateInvalid; the helper must swallow it rather than panic.
 	cleanup() // Must not panic.
 }

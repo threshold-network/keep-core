@@ -11,9 +11,19 @@ import (
 
 // Request carries execution input for a FROST signing backend.
 type Request struct {
-	Message     *big.Int
-	SessionID   string
-	MemberIndex group.MemberIndex
+	Message   *big.Int
+	SessionID string
+	// RoastSessionID is the STABLE per-signing ROAST session id (derived from
+	// message+root+startBlock, WITHOUT the attempt number), used for ROAST
+	// orchestration, AttemptContext.SessionID, the transition-record registry,
+	// the selector lookup, and the interactive engine session. SessionID stays
+	// attempt-specific for the coarse/legacy execution path and its replay
+	// isolation; this stable id lets cross-attempt ROAST state (the previous
+	// attempt's transition record) be found by the next attempt's selector.
+	// Empty when the caller does not drive ROAST orchestration; callers that
+	// build an AttemptContext fall back to SessionID.
+	RoastSessionID string
+	MemberIndex    group.MemberIndex
 	// SignerMaterial carries backend-specific signer material.
 	// Legacy backend expects *tecdsa.PrivateKeyShare.
 	SignerMaterial any

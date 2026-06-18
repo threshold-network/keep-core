@@ -602,6 +602,7 @@ func TestSigningRetryLoop(t *testing.T) {
 			retryLoop := newSigningRetryLoop(
 				&testutils.MockLogger{},
 				message,
+				"",
 				200,
 				test.signingGroupMemberIndex,
 				signingGroupOperators,
@@ -712,6 +713,7 @@ func TestSigningRetryLoop_GetCurrentBlockErrorCausesRetry(t *testing.T) {
 	retryLoop := newSigningRetryLoop(
 		&testutils.MockLogger{},
 		message,
+		"",
 		200,
 		1,
 		signingGroupOperators,
@@ -767,6 +769,7 @@ func TestSigningRetryLoop_WaitForBlockErrorCausesRetry(t *testing.T) {
 	retryLoop := newSigningRetryLoop(
 		&testutils.MockLogger{},
 		message,
+		"",
 		200,
 		1,
 		signingGroupOperators,
@@ -820,6 +823,7 @@ func TestSigningRetryLoop_ContextCancelled(t *testing.T) {
 	retryLoop := newSigningRetryLoop(
 		&testutils.MockLogger{},
 		big.NewInt(100),
+		"",
 		200,
 		1,
 		signingGroupOperators,
@@ -881,6 +885,7 @@ func TestSigningRetryLoop_SuccessAfterRetry(t *testing.T) {
 	retryLoop := newSigningRetryLoop(
 		&testutils.MockLogger{},
 		message,
+		"",
 		200,
 		1,
 		signingGroupOperators,
@@ -1033,6 +1038,7 @@ func TestSigningRetryLoop_AttemptOutcomeReporting(t *testing.T) {
 	retryLoop := newSigningRetryLoop(
 		&testutils.MockLogger{},
 		message,
+		"",
 		200,
 		group.MemberIndex(1),
 		signingGroupOperators,

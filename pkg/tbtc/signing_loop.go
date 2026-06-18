@@ -94,6 +94,11 @@ type signingRetryLoop struct {
 
 	message *big.Int
 
+	// roastSessionID is the STABLE ROAST session id (no attempt number) keying
+	// the ROAST transition-record registry + participant-selector lookup across
+	// this signing's attempts. Empty in deployments that do not drive ROAST.
+	roastSessionID string
+
 	signingGroupMemberIndex group.MemberIndex
 	signingGroupOperators   chain.Addresses
 
@@ -130,6 +135,7 @@ type signingRetryLoop struct {
 func newSigningRetryLoop(
 	logger log.StandardLogger,
 	message *big.Int,
+	roastSessionID string,
 	initialStartBlock uint64,
 	signingGroupMemberIndex group.MemberIndex,
 	signingGroupOperators chain.Addresses,
@@ -140,6 +146,7 @@ func newSigningRetryLoop(
 	return &signingRetryLoop{
 		logger:                  logger,
 		message:                 message,
+		roastSessionID:          roastSessionID,
 		signingGroupMemberIndex: signingGroupMemberIndex,
 		signingGroupOperators:   signingGroupOperators,
 		groupParameters:         groupParameters,
@@ -544,7 +551,8 @@ func (srl *signingRetryLoop) qualifiedOperatorsSet(
 		srl.attemptSeed,
 		retryCount,
 		uint(srl.groupParameters.HonestThreshold),
-		fmt.Sprintf("%v", srl.message),
+		srl.roastSessionID,
+		srl.signingGroupMemberIndex,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(

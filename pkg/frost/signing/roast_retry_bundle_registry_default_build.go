@@ -2,25 +2,23 @@
 
 package signing
 
-import "github.com/keep-network/keep-core/pkg/frost/roast"
+import "github.com/keep-network/keep-core/pkg/protocol/group"
 
-// RecordTransitionBundleForSession is a no-op in the default build:
-// the per-session bundle registry is not active without the
-// frost_roast_retry tag. The signing-loop ROAST selector (when
-// installed via Phase 7's build) reads this registry to consume
-// the most recent TransitionMessage for a message.
-func RecordTransitionBundleForSession(_ string, _ *roast.TransitionMessage) {}
+// RecordRoastTransition is a no-op in the default build: the per-(session,
+// member) transition-record registry is not active without the
+// frost_roast_retry tag. The signing-loop ROAST selector (only compiled into
+// the frost_roast_retry build) reads this registry; in the default build the
+// legacy retry shuffle is always used.
+func RecordRoastTransition(_ string, _ group.MemberIndex, _ RoastTransitionRecord) {}
 
-// TransitionBundleForSession returns (nil, false) in the default
-// build, signalling to callers that no ROAST bundle is available
-// and the legacy retry shuffle should be used.
-func TransitionBundleForSession(_ string) (*roast.TransitionMessage, bool) {
-	return nil, false
+// RoastTransitionForSession returns (zero, false) in the default build,
+// signalling to callers "no ROAST record; use the legacy retry shuffle".
+func RoastTransitionForSession(_ string, _ group.MemberIndex) (RoastTransitionRecord, bool) {
+	return RoastTransitionRecord{}, false
 }
 
-// ClearTransitionBundleForSession is a no-op in the default build.
-func ClearTransitionBundleForSession(_ string) {}
+// ClearRoastTransitionForSession is a no-op in the default build.
+func ClearRoastTransitionForSession(_ string, _ group.MemberIndex) {}
 
-// ResetTransitionBundleRegistryForTest is a no-op in the default
-// build.
-func ResetTransitionBundleRegistryForTest() {}
+// ResetRoastTransitionRegistryForTest is a no-op in the default build.
+func ResetRoastTransitionRegistryForTest() {}

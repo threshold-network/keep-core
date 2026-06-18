@@ -5,6 +5,7 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/frost/retry"
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
 // legacySigningParticipantSelector is the pre-RFC-21 implementation:
@@ -25,6 +26,7 @@ func (legacySigningParticipantSelector) Select(
 	retryCount uint,
 	honestThreshold uint,
 	_ string,
+	_ group.MemberIndex,
 ) ([]chain.Address, error) {
 	qualifiedOperators, err := retry.EvaluateRetryParticipantsForSigning(
 		members,

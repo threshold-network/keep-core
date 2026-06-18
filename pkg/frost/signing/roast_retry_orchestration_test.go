@@ -30,7 +30,7 @@ func TestBeginOrchestrationForSession_DefaultBuildReturnsError(t *testing.T) {
 		t.Fatalf("ctx: %v", err)
 	}
 
-	_, _, err = BeginOrchestrationForSession("session-default-build", ctx)
+	_, _, err = BeginOrchestrationForSession("session-default-build", ctx, []byte{0x01, 0x02})
 	if err == nil {
 		t.Fatal("default build must return error from BeginOrchestrationForSession")
 	}

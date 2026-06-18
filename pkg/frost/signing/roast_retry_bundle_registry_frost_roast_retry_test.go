@@ -9,100 +9,123 @@ import (
 	"github.com/keep-network/keep-core/pkg/frost/roast"
 )
 
-func TestTransitionBundleRegistry_RoundTrip(t *testing.T) {
-	ResetTransitionBundleRegistryForTest()
-	t.Cleanup(ResetTransitionBundleRegistryForTest)
-
-	bundle := &roast.TransitionMessage{
-		CoordinatorIDValue: 7,
+func testTransitionRecord(coordinator uint32) RoastTransitionRecord {
+	return RoastTransitionRecord{
+		Bundle:            &roast.TransitionMessage{CoordinatorIDValue: coordinator},
+		DkgGroupPublicKey: []byte{0x01, 0x02},
 	}
-	RecordTransitionBundleForSession("session-A", bundle)
+}
 
-	got, ok := TransitionBundleForSession("session-A")
+func TestRoastTransitionRegistry_RoundTrip(t *testing.T) {
+	ResetRoastTransitionRegistryForTest()
+	t.Cleanup(ResetRoastTransitionRegistryForTest)
+
+	RecordRoastTransition("session-A", 1, testTransitionRecord(7))
+
+	got, ok := RoastTransitionForSession("session-A", 1)
 	if !ok {
-		t.Fatal("expected bundle to be present after Record")
+		t.Fatal("expected record to be present after Record")
 	}
-	if got.CoordinatorIDValue != 7 {
-		t.Fatalf(
-			"bundle round-trip mismatch: got coordinator %d, want 7",
-			got.CoordinatorIDValue,
-		)
+	if got.Bundle.CoordinatorIDValue != 7 {
+		t.Fatalf("record round-trip mismatch: got coordinator %d, want 7", got.Bundle.CoordinatorIDValue)
 	}
 }
 
-func TestTransitionBundleRegistry_LaterRecordOverwrites(t *testing.T) {
-	ResetTransitionBundleRegistryForTest()
-	t.Cleanup(ResetTransitionBundleRegistryForTest)
+func TestRoastTransitionRegistry_MemberScoped(t *testing.T) {
+	ResetRoastTransitionRegistryForTest()
+	t.Cleanup(ResetRoastTransitionRegistryForTest)
 
-	RecordTransitionBundleForSession("session-B", &roast.TransitionMessage{CoordinatorIDValue: 1})
-	RecordTransitionBundleForSession("session-B", &roast.TransitionMessage{CoordinatorIDValue: 2})
-	got, ok := TransitionBundleForSession("session-B")
+	// Two seats of one operator share a session id; their records must NOT
+	// collide (the #4081 multi-seat handle class applied to transition state).
+	RecordRoastTransition("session", 1, testTransitionRecord(11))
+	RecordRoastTransition("session", 2, testTransitionRecord(22))
+
+	got1, ok1 := RoastTransitionForSession("session", 1)
+	got2, ok2 := RoastTransitionForSession("session", 2)
+	if !ok1 || !ok2 {
+		t.Fatal("both members' records must be present")
+	}
+	if got1.Bundle.CoordinatorIDValue != 11 || got2.Bundle.CoordinatorIDValue != 22 {
+		t.Fatalf("member records collided: got %d and %d, want 11 and 22",
+			got1.Bundle.CoordinatorIDValue, got2.Bundle.CoordinatorIDValue)
+	}
+	// A member with no record reads absent (does not alias another seat's).
+	if _, ok := RoastTransitionForSession("session", 3); ok {
+		t.Fatal("member 3 has no record; lookup must be absent")
+	}
+}
+
+func TestRoastTransitionRegistry_LaterRecordOverwrites(t *testing.T) {
+	ResetRoastTransitionRegistryForTest()
+	t.Cleanup(ResetRoastTransitionRegistryForTest)
+
+	RecordRoastTransition("session-B", 1, testTransitionRecord(1))
+	RecordRoastTransition("session-B", 1, testTransitionRecord(2))
+	got, ok := RoastTransitionForSession("session-B", 1)
 	if !ok {
-		t.Fatal("expected bundle to be present")
+		t.Fatal("expected record to be present")
 	}
-	if got.CoordinatorIDValue != 2 {
-		t.Fatalf(
-			"later Record must overwrite earlier: got %d, want 2",
-			got.CoordinatorIDValue,
-		)
+	if got.Bundle.CoordinatorIDValue != 2 {
+		t.Fatalf("later Record must overwrite earlier: got %d, want 2", got.Bundle.CoordinatorIDValue)
 	}
 }
 
-func TestTransitionBundleRegistry_ClearRemovesBundle(t *testing.T) {
-	ResetTransitionBundleRegistryForTest()
-	t.Cleanup(ResetTransitionBundleRegistryForTest)
+func TestRoastTransitionRegistry_ClearRemovesRecord(t *testing.T) {
+	ResetRoastTransitionRegistryForTest()
+	t.Cleanup(ResetRoastTransitionRegistryForTest)
 
-	RecordTransitionBundleForSession("session-clear", &roast.TransitionMessage{})
-	if _, ok := TransitionBundleForSession("session-clear"); !ok {
-		t.Fatal("setup: bundle must exist")
+	RecordRoastTransition("session-clear", 1, testTransitionRecord(1))
+	if _, ok := RoastTransitionForSession("session-clear", 1); !ok {
+		t.Fatal("setup: record must exist")
 	}
-	ClearTransitionBundleForSession("session-clear")
-	if _, ok := TransitionBundleForSession("session-clear"); ok {
-		t.Fatal("bundle must be removed after Clear")
-	}
-}
-
-func TestTransitionBundleRegistry_NilBundleIsIgnored(t *testing.T) {
-	ResetTransitionBundleRegistryForTest()
-	t.Cleanup(ResetTransitionBundleRegistryForTest)
-
-	RecordTransitionBundleForSession("session-nil", nil)
-	if _, ok := TransitionBundleForSession("session-nil"); ok {
-		t.Fatal("nil bundle must be discarded")
+	ClearRoastTransitionForSession("session-clear", 1)
+	if _, ok := RoastTransitionForSession("session-clear", 1); ok {
+		t.Fatal("record must be removed after Clear")
 	}
 }
 
-func TestEvictStaleTransitionBundles_RemovesOldEntries(t *testing.T) {
-	ResetTransitionBundleRegistryForTest()
-	t.Cleanup(ResetTransitionBundleRegistryForTest)
+func TestRoastTransitionRegistry_NilBundleIsIgnored(t *testing.T) {
+	ResetRoastTransitionRegistryForTest()
+	t.Cleanup(ResetRoastTransitionRegistryForTest)
 
-	RecordTransitionBundleForSession("session-old", &roast.TransitionMessage{CoordinatorIDValue: 1})
+	RecordRoastTransition("session-nil", 1, RoastTransitionRecord{Bundle: nil})
+	if _, ok := RoastTransitionForSession("session-nil", 1); ok {
+		t.Fatal("a record with a nil bundle must be discarded")
+	}
+}
+
+func TestEvictStaleRoastTransitions_RemovesOldEntries(t *testing.T) {
+	ResetRoastTransitionRegistryForTest()
+	t.Cleanup(ResetRoastTransitionRegistryForTest)
+
+	RecordRoastTransition("session-old", 1, testTransitionRecord(1))
 	// Backdate.
-	sessionBundleRegistryMu.Lock()
-	entry := sessionBundleRegistry["session-old"]
+	roastTransitionRegistryMu.Lock()
+	key := roastTransitionKey{"session-old", 1}
+	entry := roastTransitionRegistry[key]
 	entry.createdAt = time.Now().Add(-10 * time.Minute)
-	sessionBundleRegistry["session-old"] = entry
-	sessionBundleRegistryMu.Unlock()
+	roastTransitionRegistry[key] = entry
+	roastTransitionRegistryMu.Unlock()
 
-	RecordTransitionBundleForSession("session-new", &roast.TransitionMessage{CoordinatorIDValue: 2})
+	RecordRoastTransition("session-new", 1, testTransitionRecord(2))
 
-	evicted := evictStaleTransitionBundles(5 * time.Minute)
+	evicted := evictStaleRoastTransitions(5 * time.Minute)
 	if evicted != 1 {
 		t.Fatalf("expected 1 eviction, got %d", evicted)
 	}
-	if _, ok := TransitionBundleForSession("session-old"); ok {
-		t.Fatal("old bundle must be evicted")
+	if _, ok := RoastTransitionForSession("session-old", 1); ok {
+		t.Fatal("old record must be evicted")
 	}
-	if _, ok := TransitionBundleForSession("session-new"); !ok {
-		t.Fatal("new bundle must survive")
+	if _, ok := RoastTransitionForSession("session-new", 1); !ok {
+		t.Fatal("new record must survive")
 	}
 }
 
-func TestTransitionBundleRegistryTTL_MatchesSessionHandleTTL(t *testing.T) {
-	if TransitionBundleRegistryTTL != SessionHandleBindingTTL {
+func TestRoastTransitionRegistryTTL_MatchesSessionHandleTTL(t *testing.T) {
+	if RoastTransitionRegistryTTL != SessionHandleBindingTTL {
 		t.Fatalf(
-			"bundle TTL %s != session-handle TTL %s; bundles must not outlive sessions",
-			TransitionBundleRegistryTTL,
+			"transition-record TTL %s != session-handle TTL %s; records must not outlive sessions",
+			RoastTransitionRegistryTTL,
 			SessionHandleBindingTTL,
 		)
 	}

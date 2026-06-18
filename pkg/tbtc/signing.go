@@ -66,6 +66,41 @@ func signingSessionID(
 	return fmt.Sprintf("tr-%x-%v", sessionDigest.Sum(nil), attemptNumber)
 }
 
+// roastSessionID is the STABLE per-signing ROAST session id: the signing
+// session key WITHOUT the attempt number, so it is constant across every
+// attempt of one message-signing. RFC-21 Phase 7.3 ROAST orchestration, the
+// transition-record registry, and the participant selector key off it so
+// attempt N+1's selector can find attempt N's transition record; the
+// coarse/legacy path keeps using the attempt-specific signingSessionID for its
+// replay isolation. The "roast-" prefix keeps this id disjoint from any
+// signingSessionID value.
+func roastSessionID(
+	message *big.Int,
+	taprootMerkleRoot *[32]byte,
+	startBlock uint64,
+) string {
+	if taprootMerkleRoot == nil {
+		// startBlock is included so two independent signings of the SAME message
+		// at different start blocks get distinct stable ids (and so distinct
+		// transition-record / interactive-engine namespaces); without it a later
+		// signing could collide with retained ROAST state from an earlier one.
+		// The taproot branch below already binds startBlock.
+		return fmt.Sprintf("roast-%v-%v", message.Text(16), startBlock)
+	}
+
+	var startBlockBytes [8]byte
+	binary.BigEndian.PutUint64(startBlockBytes[:], startBlock)
+
+	sessionDigest := sha256.New()
+	sessionDigest.Write([]byte(message.Text(16)))
+	sessionDigest.Write([]byte{0})
+	sessionDigest.Write(taprootMerkleRoot[:])
+	sessionDigest.Write([]byte{0})
+	sessionDigest.Write(startBlockBytes[:])
+
+	return fmt.Sprintf("roast-tr-%x", sessionDigest.Sum(nil))
+}
+
 // signingExecutor is a component responsible for executing signing related to
 // a specific wallet whose part is controlled by this node.
 type signingExecutor struct {
@@ -317,6 +352,12 @@ func (se *signingExecutor) signWithTaprootMerkleRoot(
 	wg.Add(len(se.signers))
 	signingOutcomeChan := make(chan *signingOutcome, len(se.signers))
 
+	// roastSID is the STABLE ROAST session id (no attempt number) shared by every
+	// signer's retry loop and signing request, so the ROAST participant selector
+	// and transition-record registry are keyed consistently across this signing's
+	// attempts. Computed once; constant across signers and attempts.
+	roastSID := roastSessionID(message, taprootMerkleRoot, startBlock)
+
 	for _, currentSigner := range se.signers {
 		go func(signer *signer) {
 			se.protocolLatch.Lock()
@@ -339,6 +380,7 @@ func (se *signingExecutor) signWithTaprootMerkleRoot(
 			retryLoop := newSigningRetryLoop(
 				signingLogger,
 				message,
+				roastSID,
 				startBlock,
 				signer.signingGroupMemberIndex,
 				wallet.signingGroupOperators,
@@ -447,6 +489,7 @@ func (se *signingExecutor) signWithTaprootMerkleRoot(
 						&signing.Request{
 							Message:           message,
 							SessionID:         sessionID,
+							RoastSessionID:    roastSID,
 							MemberIndex:       signer.signingGroupMemberIndex,
 							SignerMaterial:    signer.signingMaterial(),
 							PrivateKeyShare:   signer.privateKeyShare,

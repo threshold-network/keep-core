@@ -121,8 +121,19 @@ func BuildAttemptContextFromRequest(
 	}
 	attemptNumber := uint32(request.Attempt.Number - 1)
 
+	// Prefer the STABLE ROAST session id so ctx.SessionID -- and everything
+	// keyed off it (the orchestration handle + transition-record registries,
+	// the selector lookup, the interactive engine session) -- is stable across
+	// attempts; the per-attempt SessionID would make the next attempt's selector
+	// unable to find the previous attempt's transition record. Fall back to
+	// SessionID when the caller does not drive ROAST orchestration.
+	roastSessionID := request.RoastSessionID
+	if roastSessionID == "" {
+		roastSessionID = request.SessionID
+	}
+
 	ctx, err := attempt.NewAttemptContextWithParking(
-		request.SessionID,
+		roastSessionID,
 		keyGroupID,
 		dkgPub,
 		digest,

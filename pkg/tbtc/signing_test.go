@@ -82,6 +82,54 @@ func TestSigningSessionID_TaprootFormatStaysWithinSignerLimit(t *testing.T) {
 	}
 }
 
+func TestRoastSessionID_StableAndBinds(t *testing.T) {
+	message, ok := new(big.Int).SetString(
+		"ac692bb7fddf3f7e1e050a83cf3ffb6e8e69888ce980281aa39da169525750ef",
+		16,
+	)
+	if !ok {
+		t.Fatal("failed to build test message")
+	}
+
+	// Key-path (nil root): the stable id binds message + startBlock, but takes
+	// no attempt number (stable across attempts by construction).
+	keyPath := roastSessionID(message, nil, 25300)
+	if !strings.HasPrefix(keyPath, "roast-") {
+		t.Fatalf("roast session id must be namespaced; got [%s]", keyPath)
+	}
+	if roastSessionID(message, nil, 28900) == keyPath {
+		t.Fatal("key-path roast session id must bind the start block")
+	}
+	other, _ := new(big.Int).SetString("01", 16)
+	if roastSessionID(other, nil, 25300) == keyPath {
+		t.Fatal("key-path roast session id must bind the message")
+	}
+
+	// Taproot branch: binds root + startBlock.
+	var merkleRoot [32]byte
+	for i := range merkleRoot {
+		merkleRoot[i] = byte(i + 1)
+	}
+	taproot := roastSessionID(message, &merkleRoot, 25300)
+	if !strings.HasPrefix(taproot, "roast-tr-") {
+		t.Fatalf("unexpected taproot roast session id prefix; got [%s]", taproot)
+	}
+	changed := merkleRoot
+	changed[0] ^= 0xff
+	if roastSessionID(message, &changed, 25300) == taproot {
+		t.Fatal("taproot roast session id must bind the merkle root")
+	}
+	if roastSessionID(message, &merkleRoot, 28900) == taproot {
+		t.Fatal("taproot roast session id must bind the start block")
+	}
+
+	// The stable roast id must be disjoint from any attempt-specific
+	// signingSessionID so they never share a registry namespace.
+	if keyPath == signingSessionID(message, nil, 25300, 12) {
+		t.Fatal("roast and signing session ids must not collide")
+	}
+}
+
 func TestSigningExecutor_Sign(t *testing.T) {
 	executor := setupSigningExecutor(t)
 
