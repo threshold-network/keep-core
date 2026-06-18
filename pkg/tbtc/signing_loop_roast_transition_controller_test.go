@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,11 +28,15 @@ type failedAttemptCall struct {
 }
 
 // fakeTransitionController records controller calls so the loop-wiring tests can
-// assert the loop observes each attempt (with the exact member sets) and signals
-// failed attempts.
+// assert the loop observes each attempt (with the exact member sets), signals
+// failed and succeeded attempts, and consults lost-sync before selection.
 type fakeTransitionController struct {
-	calls       []observedAttemptCall
-	failedCalls []failedAttemptCall
+	calls          []observedAttemptCall
+	failedCalls    []failedAttemptCall
+	succeededCalls int
+	// lostSync is returned by HasLostSync; a test sets it to drive the loop's
+	// fail-closed-before-selection path.
+	lostSync bool
 }
 
 func (f *fakeTransitionController) BeginObservedAttempt(
@@ -56,6 +61,14 @@ func (f *fakeTransitionController) OnAttemptFailed(
 		attemptNumber: attemptNumber,
 		timeoutBlock:  timeoutBlock,
 	})
+}
+
+func (f *fakeTransitionController) OnAttemptSucceeded() {
+	f.succeededCalls++
+}
+
+func (f *fakeTransitionController) HasLostSync() bool {
+	return f.lostSync
 }
 
 func newObserveTestRetryLoop(
@@ -295,5 +308,153 @@ func TestSigningRetryLoop_SkipDoesNotAdvanceRoastAttemptNumber(t *testing.T) {
 			"the committed attempt after a skip must be roast attempt 0, got %d",
 			controller.calls[0].roastAttemptNumber,
 		)
+	}
+}
+
+// TestSigningRetryLoop_LocalSuccessSignalsSucceeded asserts the loop signals
+// OnAttemptSucceeded -- and NOT OnAttemptFailed -- when a committed attempt the
+// seat participated in completes successfully. The succeeded signal clears the
+// observe binding so no failure transition can be synthesized for an attempt this
+// seat won (Codex B3). A 3-of-3 group keeps the local seat included.
+func TestSigningRetryLoop_LocalSuccessSignalsSucceeded(t *testing.T) {
+	testResult := &signing.Result{
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(300), big.NewInt(400)),
+	}
+	announcer := &mockSigningAnnouncer{
+		outgoingAnnouncements: make(map[string]group.MemberIndex),
+		incomingAnnouncementsFn: func(string) ([]group.MemberIndex, error) {
+			return []group.MemberIndex{1, 2, 3}, nil
+		},
+	}
+	doneCheck := &mockSigningDoneCheck{
+		waitUntilAllDoneOutcomeFn: func(uint64) (*signing.Result, uint64, error) {
+			return testResult, 215, nil
+		},
+	}
+	retryLoop := newSigningRetryLoop(
+		&testutils.MockLogger{},
+		big.NewInt(100),
+		"",
+		200,
+		1,
+		chain.Addresses{"address-1", "address-2", "address-3"},
+		&GroupParameters{GroupSize: 3, HonestThreshold: 3},
+		announcer,
+		doneCheck,
+	)
+	controller := &fakeTransitionController{}
+	retryLoop.setTransitionController(controller)
+
+	runOneSuccessfulAttempt(t, retryLoop)
+
+	if controller.succeededCalls != 1 {
+		t.Fatalf("expected OnAttemptSucceeded called once, got %d", controller.succeededCalls)
+	}
+	if len(controller.failedCalls) != 0 {
+		t.Fatalf("a successful attempt must not signal OnAttemptFailed, got %d", len(controller.failedCalls))
+	}
+}
+
+// TestSigningRetryLoop_DoneCheckFailureAfterSuccessDoesNotSignalFailure asserts
+// that when the protocol round succeeds locally but the done-check then fails, the
+// loop signals OnAttemptSucceeded (clearing the observe binding) and NEVER
+// OnAttemptFailed -- it must not synthesize a failure transition for an attempt
+// whose signature aggregated (Codex B3, adjudicated to mark-succeeded + fail-closed
+// over synthesizing a no-reject transition). Here the done-check fails on the first
+// attempt and succeeds on the retry; both attempts succeeded locally.
+func TestSigningRetryLoop_DoneCheckFailureAfterSuccessDoesNotSignalFailure(t *testing.T) {
+	testResult := &signing.Result{
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(300), big.NewInt(400)),
+	}
+	announcer := &mockSigningAnnouncer{
+		outgoingAnnouncements: make(map[string]group.MemberIndex),
+		incomingAnnouncementsFn: func(string) ([]group.MemberIndex, error) {
+			return []group.MemberIndex{1, 2, 3}, nil
+		},
+	}
+	doneCheck := &mockSigningDoneCheck{
+		waitUntilAllDoneOutcomeFn: func(attemptNumber uint64) (*signing.Result, uint64, error) {
+			// The protocol round (signingAttemptFn) always succeeds; the done-check
+			// coordination fails on the first attempt only.
+			if attemptNumber == 1 {
+				return nil, 0, errors.New("synthetic done-check failure after local success")
+			}
+			return testResult, 215, nil
+		},
+	}
+	retryLoop := newSigningRetryLoop(
+		&testutils.MockLogger{},
+		big.NewInt(100),
+		"",
+		200,
+		1,
+		chain.Addresses{"address-1", "address-2", "address-3"},
+		&GroupParameters{GroupSize: 3, HonestThreshold: 3},
+		announcer,
+		doneCheck,
+	)
+	controller := &fakeTransitionController{}
+	retryLoop.setTransitionController(controller)
+
+	runOneSuccessfulAttempt(t, retryLoop)
+
+	// Both attempts' protocol rounds succeeded locally, so each signals succeeded.
+	if controller.succeededCalls != 2 {
+		t.Fatalf("expected OnAttemptSucceeded for each locally-succeeded attempt (2), got %d", controller.succeededCalls)
+	}
+	// A done-check failure after a local success must NOT be reported as an attempt
+	// failure -- no failure transition is honest for an attempt that aggregated.
+	if len(controller.failedCalls) != 0 {
+		t.Fatalf(
+			"a done-check failure after local success must not signal OnAttemptFailed, got %d",
+			len(controller.failedCalls),
+		)
+	}
+}
+
+// TestSigningRetryLoop_LostSyncFailsClosedBeforeSelection asserts the loop fails
+// closed -- before selection and before observing -- when the controller reports
+// lost ROAST sync (its listener received a transition for an attempt this seat
+// never observed). Selecting from a stale position would diverge from peers (the
+// fracture class), so the loop terminates and the outer layer retries the whole
+// signing.
+func TestSigningRetryLoop_LostSyncFailsClosedBeforeSelection(t *testing.T) {
+	testResult := &signing.Result{
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(300), big.NewInt(400)),
+	}
+	announcer := &mockSigningAnnouncer{
+		outgoingAnnouncements: make(map[string]group.MemberIndex),
+		incomingAnnouncementsFn: func(string) ([]group.MemberIndex, error) {
+			return []group.MemberIndex{1, 2, 3, 4, 5}, nil
+		},
+	}
+	doneCheck := &mockSigningDoneCheck{
+		waitUntilAllDoneOutcomeFn: func(uint64) (*signing.Result, uint64, error) {
+			return testResult, 215, nil
+		},
+	}
+	retryLoop := newObserveTestRetryLoop(announcer, doneCheck)
+	controller := &fakeTransitionController{lostSync: true}
+	retryLoop.setTransitionController(controller)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := retryLoop.start(
+		ctx,
+		func(context.Context, uint64) error { return nil },
+		func() (uint64, error) { return 200, nil },
+		func(*signingAttemptParams) (*signing.Result, uint64, error) {
+			return testResult, 215, nil
+		},
+	)
+	if err == nil {
+		t.Fatal("expected a fail-closed error on lost ROAST sync")
+	}
+	if !strings.Contains(err.Error(), "lost ROAST sync") {
+		t.Fatalf("expected a lost-sync fail-closed error, got %v", err)
+	}
+	// Fail-closed happens BEFORE selection/observe, so no attempt is observed.
+	if len(controller.calls) != 0 {
+		t.Fatalf("lost sync must fail closed before observing any attempt, got %d", len(controller.calls))
 	}
 }

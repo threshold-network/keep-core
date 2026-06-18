@@ -231,6 +231,189 @@ func TestRoastTransitionExchange_ProducesRecordsAcrossNodes(t *testing.T) {
 	}
 }
 
+// produceTransitionBundleForTest runs the forced-snapshot + aggregate flow across
+// the included nodes by hand and returns the elected coordinator's broadcast
+// transition bundle message plus the elected member.
+func produceTransitionBundleForTest(
+	t *testing.T,
+	roastSessionID string,
+	ctx attempt.AttemptContext,
+	nodes map[group.MemberIndex]*exchangeNode,
+) (RunnerMessage, group.MemberIndex) {
+	t.Helper()
+	hash := ctx.Hash()
+
+	var elected group.MemberIndex
+	for _, n := range nodes {
+		binding, ok := observedAttempt(roastSessionID, n.member, hash)
+		if !ok {
+			t.Fatalf("missing observe binding for member %d", n.member)
+		}
+		e, err := n.coord.SelectedCoordinator(binding.handle)
+		if err != nil {
+			t.Fatalf("selected coordinator: %v", err)
+		}
+		elected = e
+		break
+	}
+
+	for _, m := range ctx.IncludedSet {
+		nodes[m].ex.BroadcastForcedSnapshot(hash)
+	}
+	for _, m := range ctx.IncludedSet {
+		if m == elected {
+			continue
+		}
+		snaps := nodes[m].bus.only(RunnerMsgEvidenceSnapshot)
+		if len(snaps) != 1 {
+			t.Fatalf("member %d expected to broadcast 1 snapshot, got %d", m, len(snaps))
+		}
+		nodes[elected].ex.onSnapshot(snaps[0])
+	}
+	nodes[elected].ex.AggregateAndBroadcast(hash)
+
+	bundles := nodes[elected].bus.only(RunnerMsgTransitionBundle)
+	if len(bundles) != 1 {
+		t.Fatalf("elected coordinator must broadcast exactly one bundle, got %d", len(bundles))
+	}
+	return bundles[0], elected
+}
+
+// TestRoastTransitionExchange_LostSyncOnUnobservedBundle asserts a seat whose
+// listener receives a transition bundle for an attempt it NEVER observed (it
+// skipped a window the others committed) trips lost sync, so the retry loop can
+// fail closed before selecting from a stale position (Codex lost-sync correction).
+func TestRoastTransitionExchange_LostSyncOnUnobservedBundle(t *testing.T) {
+	ResetObservedAttemptRegistryForTest()
+	ResetRoastTransitionRegistryForTest()
+	t.Cleanup(ResetObservedAttemptRegistryForTest)
+	t.Cleanup(ResetRoastTransitionRegistryForTest)
+
+	roastSessionID := "exchange-lost-sync-session"
+	included := []group.MemberIndex{1, 2, 3}
+	dkgKey := []byte{0x04, 0x05}
+	ctx := newExchangeTestContext(t, roastSessionID, included, dkgKey)
+	nodes := newExchangeTestNodes(t, roastSessionID, ctx, dkgKey)
+
+	bundle, _ := produceTransitionBundleForTest(t, roastSessionID, ctx, nodes)
+
+	// A lagging seat (member 4) that never observed this attempt -- its listener
+	// receives the bundle the committed seats produced.
+	var lagging group.MemberIndex = 4
+	laggingCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	laggingEx := NewRoastTransitionExchange(
+		laggingCtx,
+		log.Logger("exchange-test-lagging"),
+		&captureBus{},
+		RoastRetryDeps{
+			Coordinator: roast.NewInMemoryCoordinatorWithSigning(
+				lagging, fixedSigner{}, roast.NoOpSignatureVerifier(),
+			),
+			Signer:     fixedSigner{},
+			Verifier:   roast.NoOpSignatureVerifier(),
+			SelfMember: uint32(lagging),
+		},
+		roastSessionID,
+		lagging,
+	)
+
+	if laggingEx.HasLostSync() {
+		t.Fatal("a seat must not start in lost sync")
+	}
+	laggingEx.onBundle(bundle)
+	if !laggingEx.HasLostSync() {
+		t.Fatal("a bundle for an attempt this seat never observed must trip lost sync")
+	}
+}
+
+// TestRoastTransitionExchange_ConsumedRetransmitDoesNotLoseSync asserts that a
+// duplicate bundle for an attempt this seat already observed and consumed is a
+// benign no-op -- the observed-history marker (retained past the binding's
+// clear) keeps a retransmit from falsely tripping lost sync.
+func TestRoastTransitionExchange_ConsumedRetransmitDoesNotLoseSync(t *testing.T) {
+	ResetObservedAttemptRegistryForTest()
+	ResetRoastTransitionRegistryForTest()
+	t.Cleanup(ResetObservedAttemptRegistryForTest)
+	t.Cleanup(ResetRoastTransitionRegistryForTest)
+
+	roastSessionID := "exchange-retransmit-session"
+	included := []group.MemberIndex{1, 2, 3}
+	dkgKey := []byte{0x06}
+	ctx := newExchangeTestContext(t, roastSessionID, included, dkgKey)
+	hash := ctx.Hash()
+	nodes := newExchangeTestNodes(t, roastSessionID, ctx, dkgKey)
+
+	bundle, elected := produceTransitionBundleForTest(t, roastSessionID, ctx, nodes)
+
+	// A non-elected receiver consumes the bundle: it stores the record and clears
+	// its observe binding, leaving only the observed-history marker.
+	var receiver group.MemberIndex
+	for _, m := range included {
+		if m != elected {
+			receiver = m
+			break
+		}
+	}
+	nodes[receiver].ex.onBundle(bundle)
+	if _, ok := RoastTransitionForSession(roastSessionID, receiver); !ok {
+		t.Fatalf("receiver %d must hold a transition record after consuming", receiver)
+	}
+	if _, ok := observedAttempt(roastSessionID, receiver, hash); ok {
+		t.Fatalf("receiver %d binding must be cleared after consuming", receiver)
+	}
+
+	// The same bundle re-delivered (a retransmit) must not trip lost sync.
+	nodes[receiver].ex.onBundle(bundle)
+	if nodes[receiver].ex.HasLostSync() {
+		t.Fatal("a retransmit of an already-consumed bundle must not trip lost sync")
+	}
+}
+
+// TestRoastTransitionExchange_SucceededSeatDoesNotStorePeerFailureBundle asserts
+// the core B3 outcome: after a seat clears its observe binding on local success, a
+// peer's failure bundle for that attempt is neither stored as a transition record
+// (the attempt was won, not failed) nor mistaken for lost sync (the observed
+// marker keeps it a benign no-op). With no fresh record the seat's next selection
+// then fails closed -- the honest fail-closed-after-success path.
+func TestRoastTransitionExchange_SucceededSeatDoesNotStorePeerFailureBundle(t *testing.T) {
+	ResetObservedAttemptRegistryForTest()
+	ResetRoastTransitionRegistryForTest()
+	t.Cleanup(ResetObservedAttemptRegistryForTest)
+	t.Cleanup(ResetRoastTransitionRegistryForTest)
+
+	roastSessionID := "exchange-success-nostore-session"
+	included := []group.MemberIndex{1, 2, 3}
+	dkgKey := []byte{0x07}
+	ctx := newExchangeTestContext(t, roastSessionID, included, dkgKey)
+	hash := ctx.Hash()
+	nodes := newExchangeTestNodes(t, roastSessionID, ctx, dkgKey)
+
+	bundle, elected := produceTransitionBundleForTest(t, roastSessionID, ctx, nodes)
+
+	// A non-elected seat completed the attempt locally: it clears its observe
+	// binding (B3), keeping only the observed-history marker. It has not consumed a
+	// record (the helper delivered the bundle only to the elected coordinator).
+	var succeeded group.MemberIndex
+	for _, m := range included {
+		if m != elected {
+			succeeded = m
+			break
+		}
+	}
+	ClearObservedAttemptOnLocalSuccess(roastSessionID, succeeded, hash)
+
+	// The peer's failure bundle now arrives at the succeeded seat's listener.
+	nodes[succeeded].ex.onBundle(bundle)
+
+	if _, ok := RoastTransitionForSession(roastSessionID, succeeded); ok {
+		t.Fatal("a succeeded seat must not store a peer's failure transition for its won attempt")
+	}
+	if nodes[succeeded].ex.HasLostSync() {
+		t.Fatal("a bundle for a succeeded (observed) attempt must not trip lost sync")
+	}
+}
+
 // TestRoastTransitionExchange_SessionEndClearsObserveBindings asserts that when
 // the exchange's session context ends, its listener clears the observe bindings
 // this seat did not consume per-attempt (e.g. a signing whose attempts all

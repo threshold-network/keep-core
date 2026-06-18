@@ -48,11 +48,20 @@ type observedAttemptEntry struct {
 var (
 	observedAttemptRegistryMu sync.RWMutex
 	observedAttemptRegistry   = map[observedAttemptKey]observedAttemptEntry{}
+	// observedAttemptHistory records that (sessionID, member) observed an attempt
+	// hash, retained even after the per-attempt binding is consumed or cleared so
+	// the transition listener can tell a bundle for an attempt this seat NEVER
+	// observed (it skipped a window peers committed -> lost ROAST sync -> fail
+	// closed) apart from a duplicate bundle for one it already consumed (a benign
+	// retransmit). It shares the binding's lifetime: cleared at session end and
+	// swept by the same TTL.
+	observedAttemptHistory = map[observedAttemptKey]time.Time{}
 )
 
 // recordObservedAttempt stores the observe binding for (sessionID, member,
-// attemptHash). A later call for the same key overwrites the earlier binding
-// (a re-observed attempt re-binds against the latest handle).
+// attemptHash) and marks the attempt as observed in the history. A later call for
+// the same key overwrites the earlier binding (a re-observed attempt re-binds
+// against the latest handle).
 func recordObservedAttempt(
 	sessionID string,
 	member group.MemberIndex,
@@ -61,8 +70,10 @@ func recordObservedAttempt(
 ) {
 	observedAttemptRegistryMu.Lock()
 	defer observedAttemptRegistryMu.Unlock()
-	observedAttemptRegistry[observedAttemptKey{sessionID, member, attemptHash}] =
-		observedAttemptEntry{binding: binding, createdAt: time.Now()}
+	now := time.Now()
+	key := observedAttemptKey{sessionID, member, attemptHash}
+	observedAttemptRegistry[key] = observedAttemptEntry{binding: binding, createdAt: now}
+	observedAttemptHistory[key] = now
 }
 
 // observedAttempt returns the observe binding for (sessionID, member,
@@ -81,6 +92,23 @@ func observedAttempt(
 	return entry.binding, true
 }
 
+// attemptEverObserved reports whether (sessionID, member) observed the given
+// attempt hash at any point this session -- including an attempt whose per-attempt
+// binding has since been consumed or cleared. The transition listener uses it to
+// tell a bundle for a NEVER-observed attempt (this seat skipped a window peers
+// committed -> lost ROAST sync) apart from a duplicate bundle for an
+// already-consumed attempt (a benign retransmit that must NOT trip lost sync).
+func attemptEverObserved(
+	sessionID string,
+	member group.MemberIndex,
+	attemptHash [attempt.MessageDigestLength]byte,
+) bool {
+	observedAttemptRegistryMu.RLock()
+	defer observedAttemptRegistryMu.RUnlock()
+	_, ok := observedAttemptHistory[observedAttemptKey{sessionID, member, attemptHash}]
+	return ok
+}
+
 // clearObservedAttempt removes the observe binding for (sessionID, member,
 // attemptHash). Called once a verified transition record is stored for the
 // attempt, on success, or at session end.
@@ -92,6 +120,25 @@ func clearObservedAttempt(
 	observedAttemptRegistryMu.Lock()
 	defer observedAttemptRegistryMu.Unlock()
 	delete(observedAttemptRegistry, observedAttemptKey{sessionID, member, attemptHash})
+}
+
+// ClearObservedAttemptOnLocalSuccess clears the observe binding for an attempt
+// this seat completed successfully (a valid signature aggregated on its drive
+// handle). The observe handle otherwise stays in a collecting state, so an elected
+// coordinator could still aggregate a failure bundle, and a peer's failure bundle
+// would be stored as a transition record, for an attempt that actually SUCCEEDED.
+// Clearing the binding -- the observed-history marker remains, so a later bundle
+// for it is treated as a benign retransmit, not lost sync -- means no failure
+// transition is synthesized or stored for the succeeded attempt, so a subsequent
+// done-check failure fails closed (no fresh record) instead of consuming a
+// dishonest failure transition (RFC-21 Phase 7.3 PR2b-1b B3). Exported so the
+// pkg/tbtc transition controller can call it on local success.
+func ClearObservedAttemptOnLocalSuccess(
+	sessionID string,
+	member group.MemberIndex,
+	attemptHash [attempt.MessageDigestLength]byte,
+) {
+	clearObservedAttempt(sessionID, member, attemptHash)
 }
 
 // clearObservedAttemptsForSession removes every observe binding for
@@ -106,6 +153,11 @@ func clearObservedAttemptsForSession(sessionID string, member group.MemberIndex)
 	for key := range observedAttemptRegistry {
 		if key.sessionID == sessionID && key.member == member {
 			delete(observedAttemptRegistry, key)
+		}
+	}
+	for key := range observedAttemptHistory {
+		if key.sessionID == sessionID && key.member == member {
+			delete(observedAttemptHistory, key)
 		}
 	}
 }
@@ -131,6 +183,7 @@ func ResetObservedAttemptRegistryForTest() {
 	observedAttemptRegistryMu.Lock()
 	defer observedAttemptRegistryMu.Unlock()
 	observedAttemptRegistry = map[observedAttemptKey]observedAttemptEntry{}
+	observedAttemptHistory = map[observedAttemptKey]time.Time{}
 }
 
 // evictStaleObservedAttempts sweeps the registry and removes bindings older than
@@ -146,6 +199,13 @@ func evictStaleObservedAttempts(maxAge time.Duration) int {
 		if entry.createdAt.Before(cutoff) {
 			delete(observedAttemptRegistry, key)
 			evicted++
+		}
+	}
+	// Sweep stale observed-history markers on the same cutoff so a long-abandoned
+	// session's lost-sync markers do not linger past their backstop TTL.
+	for key, observedAt := range observedAttemptHistory {
+		if observedAt.Before(cutoff) {
+			delete(observedAttemptHistory, key)
 		}
 	}
 	return evicted

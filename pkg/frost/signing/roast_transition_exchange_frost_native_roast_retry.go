@@ -5,6 +5,7 @@ package signing
 import (
 	"bytes"
 	"context"
+	"sync/atomic"
 
 	"github.com/ipfs/go-log/v2"
 	"github.com/keep-network/keep-core/pkg/frost/roast"
@@ -42,6 +43,10 @@ type RoastTransitionExchange struct {
 	roastSessionID string
 	member         group.MemberIndex
 	sub            *RunnerBusSubscriber
+	// lostSync is set by the listener when a transition bundle arrives for an
+	// attempt this seat never observed (it skipped a window peers committed). The
+	// retry loop reads it via the controller from its own goroutine, hence atomic.
+	lostSync atomic.Bool
 }
 
 // NewRoastTransitionExchange constructs the exchange and starts its listener for
@@ -136,7 +141,40 @@ func (e *RoastTransitionExchange) onBundle(msg RunnerMessage) {
 	if bundle.CoordinatorID() != msg.Sender {
 		return
 	}
+	hash := bundle.AttemptContextHashArray()
+	if !attemptEverObserved(e.roastSessionID, e.member, hash) {
+		// A bundle for an attempt this seat NEVER observed: peers committed an
+		// attempt this seat skipped (its local block schedule moved past the
+		// announcement window while peers stayed in it), so this seat is behind the
+		// group's committed ROAST attempt chain. Flag lost sync; the retry loop
+		// fails closed before its next selection rather than select a divergent
+		// included set (the fracture class).
+		//
+		// The bundle is authenticated (the bus binds msg.Sender to an operator seat
+		// and the claimed coordinator must equal it) but UNVERIFIABLE here:
+		// VerifyBundle needs the local observe handle this seat never created. An
+		// authenticated member could thus broadcast a bundle for a bogus hash to
+		// force a peer's fail-closed -- an insider-liveness surface that the blame
+		// bridge addresses (PR2b-2) and that stays within 1b's accepted
+		// fail-closed-terminate liveness regression (a single bad actor can already
+		// kill a round by withholding a bundle).
+		e.markLostSync()
+		return
+	}
 	e.verifyAndStore(bundle)
+}
+
+// markLostSync records that this seat received a transition for an attempt it
+// never observed -- it fell behind the group's committed ROAST attempt chain.
+func (e *RoastTransitionExchange) markLostSync() {
+	e.lostSync.Store(true)
+}
+
+// HasLostSync reports whether this seat fell behind the group's committed ROAST
+// attempt chain (it received a transition for an attempt it never observed). The
+// retry loop checks it before selection and fails closed when true.
+func (e *RoastTransitionExchange) HasLostSync() bool {
+	return e.lostSync.Load()
 }
 
 // BroadcastForcedSnapshot publishes this seat's forced (empty) proof-of-attendance

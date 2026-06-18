@@ -16,6 +16,7 @@ import (
 type roastTransitionExchange interface {
 	BroadcastForcedSnapshot(attemptHash [32]byte)
 	AggregateAndBroadcast(attemptHash [32]byte)
+	HasLostSync() bool
 }
 
 // roastTransitionControllerImpl is the active (frost_native && frost_roast_retry)
@@ -164,4 +165,28 @@ func (c *roastTransitionControllerImpl) OnAttemptFailed(
 		}
 		exchange.AggregateAndBroadcast(hash)
 	}()
+}
+
+func (c *roastTransitionControllerImpl) OnAttemptSucceeded() {
+	hash := c.currentAttemptHash
+	if hash == ([32]byte{}) {
+		// No observe binding for this attempt (static fallback) -- nothing to clear.
+		return
+	}
+	// Clear the observe binding for the succeeded attempt so the observe handle no
+	// longer collects: the elected coordinator cannot aggregate a failure bundle,
+	// and a peer's failure bundle is not stored, for an attempt this seat won. The
+	// observed-history marker remains, so a late bundle for it is a benign
+	// retransmit rather than lost sync.
+	signing.ClearObservedAttemptOnLocalSuccess(
+		c.requestTemplate.RoastSessionID,
+		c.requestTemplate.MemberIndex,
+		hash,
+	)
+}
+
+func (c *roastTransitionControllerImpl) HasLostSync() bool {
+	// nil when ROAST retry is inactive (the controller only observes): never lost
+	// sync, since no listener runs to receive a peer's transition.
+	return c.exchange != nil && c.exchange.HasLostSync()
 }

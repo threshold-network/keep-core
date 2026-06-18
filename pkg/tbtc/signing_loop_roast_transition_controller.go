@@ -37,4 +37,19 @@ type roastTransitionController interface {
 	// (derived from timeoutBlock) closes. Best-effort and non-blocking: the
 	// aggregation runs off the retry-loop goroutine.
 	OnAttemptFailed(attemptNumber uint, timeoutBlock uint64)
+	// OnAttemptSucceeded signals that a committed attempt this seat participated in
+	// completed successfully (a valid signature aggregated locally). It clears this
+	// seat's observe binding for the attempt so neither an elected coordinator's
+	// aggregation nor a peer's failure bundle can synthesize or store a failure
+	// transition for an attempt that actually succeeded; a subsequent done-check
+	// failure then fails closed (no fresh record) instead of consuming a dishonest
+	// failure transition. Best-effort.
+	OnAttemptSucceeded()
+	// HasLostSync reports whether this seat fell behind the group's committed ROAST
+	// attempt chain -- it received a transition bundle for an attempt it never
+	// observed (it skipped a window peers committed). The retry loop checks it
+	// before selection and fails closed when true, since selecting from a stale
+	// position diverges from peers (the fracture class). Always false for a nil
+	// controller or inactive ROAST.
+	HasLostSync() bool
 }

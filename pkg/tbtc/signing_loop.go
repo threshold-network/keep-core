@@ -375,6 +375,21 @@ func (srl *signingRetryLoop) start(
 			continue
 		}
 
+		// RFC-21 Phase 7.3 PR2b-1b: if this seat fell behind the group's committed
+		// ROAST attempt chain -- its listener received a transition for an attempt
+		// it never observed because it skipped a window peers committed -- selecting
+		// now would produce a divergent included set (the fracture class). Fail
+		// closed before selection; the outer layer retries the whole signing from a
+		// fresh election. The check is deterministic per seat (a nil controller or
+		// inactive ROAST is never lost-sync).
+		if srl.transitionController != nil && srl.transitionController.HasLostSync() {
+			return nil, fmt.Errorf(
+				"cannot select members for attempt [%v]: lost ROAST sync "+
+					"(received a transition for an unobserved attempt); fail closed",
+				srl.attemptCounter,
+			)
+		}
+
 		includedMembersIndexes, excludedMembersIndexes, transientlyParkedMembersIndexes, err := srl.performMembersSelection(
 			readyMembersIndexes,
 		)
@@ -460,6 +475,16 @@ func (srl *signingRetryLoop) start(
 				}
 				srl.reportAttemptOutcome(false)
 				continue
+			}
+
+			// RFC-21 Phase 7.3 PR2b-1b: the protocol round succeeded locally (a valid
+			// signature aggregated), so clear this seat's observe binding for the
+			// attempt -- no failure transition may be synthesized or stored for a
+			// succeeded attempt. If the done-check below then fails, the next attempt
+			// finds no fresh transition and fails closed (the honest outcome) instead
+			// of consuming a peer's failure transition for an attempt this seat won.
+			if srl.transitionController != nil {
+				srl.transitionController.OnAttemptSucceeded()
 			}
 
 			srl.logger.Infof(

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/keep-network/keep-core/internal/testutils"
+	"github.com/keep-network/keep-core/pkg/frost/signing"
 )
 
 // fakeExchange records the produce-side calls the controller drives.
@@ -17,6 +18,7 @@ type fakeExchange struct {
 	broadcastCalls [][32]byte
 	aggregateCalls [][32]byte
 	aggregated     chan struct{}
+	lostSync       bool
 }
 
 func (f *fakeExchange) BroadcastForcedSnapshot(hash [32]byte) {
@@ -32,6 +34,12 @@ func (f *fakeExchange) AggregateAndBroadcast(hash [32]byte) {
 	if f.aggregated != nil {
 		f.aggregated <- struct{}{}
 	}
+}
+
+func (f *fakeExchange) HasLostSync() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lostSync
 }
 
 func (f *fakeExchange) broadcasts() [][32]byte {
@@ -129,5 +137,57 @@ func TestRoastTransitionController_OnAttemptFailedZeroHashIsNoOp(t *testing.T) {
 	case <-exchange.aggregated:
 		t.Fatal("zero attempt hash must not aggregate")
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// TestRoastTransitionController_HasLostSyncDelegatesToExchange asserts HasLostSync
+// reflects the exchange's lost-sync state, and is false when no exchange is
+// installed (ROAST retry inactive -> observe-only -> no listener -> never lost
+// sync).
+func TestRoastTransitionController_HasLostSyncDelegatesToExchange(t *testing.T) {
+	exchange := &fakeExchange{}
+	controller := &roastTransitionControllerImpl{
+		ctx:      context.Background(),
+		logger:   &testutils.MockLogger{},
+		exchange: exchange,
+	}
+	if controller.HasLostSync() {
+		t.Fatal("expected not lost sync initially")
+	}
+	exchange.mu.Lock()
+	exchange.lostSync = true
+	exchange.mu.Unlock()
+	if !controller.HasLostSync() {
+		t.Fatal("expected HasLostSync to reflect the exchange's lost-sync state")
+	}
+
+	noExchange := &roastTransitionControllerImpl{
+		ctx:    context.Background(),
+		logger: &testutils.MockLogger{},
+	}
+	if noExchange.HasLostSync() {
+		t.Fatal("a controller without an exchange must never report lost sync")
+	}
+}
+
+// TestRoastTransitionController_OnAttemptSucceededZeroHashIsNoOp asserts that
+// without a stored attempt hash (a static-fallback observe) the success hook
+// clears nothing.
+func TestRoastTransitionController_OnAttemptSucceededZeroHashIsNoOp(t *testing.T) {
+	signing.ResetObservedAttemptRegistryForTest()
+	t.Cleanup(signing.ResetObservedAttemptRegistryForTest)
+
+	controller := &roastTransitionControllerImpl{
+		ctx:    context.Background(),
+		logger: &testutils.MockLogger{},
+		requestTemplate: &signing.Request{
+			RoastSessionID: "ctrl-success-session",
+			MemberIndex:    1,
+		},
+		// currentAttemptHash is the zero value.
+	}
+	controller.OnAttemptSucceeded() // must not panic
+	if signing.ObservedAttemptStoredForTest("ctrl-success-session", 1) {
+		t.Fatal("zero attempt hash must not interact with the registry")
 	}
 }
