@@ -377,6 +377,12 @@ type buildTaggedTBTCSignerEngine struct{}
 // constructs one.
 var _ interactiveSigningEngine = (*buildTaggedTBTCSignerEngine)(nil)
 
+// The cgo engine must also satisfy the share-blame re-verifier boundary
+// (Round2ShareVerifyingEngine, RFC-21 Phase 7.3 share-blame): the drive type-asserts
+// the registered engine to it to classify interactive aggregate share-verification
+// culprits. Compile-check it here against the real engine.
+var _ Round2ShareVerifyingEngine = (*buildTaggedTBTCSignerEngine)(nil)
+
 type buildTaggedTBTCSignerRunDKGRequest struct {
 	SessionID    string                                `json:"session_id"`
 	Participants []buildTaggedTBTCSignerDKGParticipant `json:"participants"`

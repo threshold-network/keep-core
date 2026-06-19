@@ -159,6 +159,12 @@ func driveInteractiveRoastSigningIfEnabled(
 				attemptCtx.SessionID, request.MemberIndex, attemptHash, proofs,
 			)
 		}
+		// RFC-21 Phase 7.3 share-blame (the third fault source): if the aggregate
+		// failed on share verification, classify the engine's candidate culprits
+		// against this seat's retained shares and stash the resulting f+1 reject
+		// accusations -- carried alongside the proofs in the same union
+		// pending-evidence entry, so one failed attempt can publish both.
+		stashInteractiveShareBlame(err, attemptCtx, request, collector, engine)
 		// Propagate so the outer signingRetryLoop advances and drives the transition
 		// exchange (OnAttemptFailed -> BroadcastForcedSnapshot).
 		return nil, fmt.Errorf("interactive ROAST signing attempt: %w", err)

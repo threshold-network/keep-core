@@ -42,10 +42,10 @@ type pendingEvidenceEntry struct {
 	evidence attempt.Evidence
 	// coordinatorProofs holds the coordinator-signed signing-package proof
 	// envelope(s) the interactive path retained for the attempt (RFC-21 Phase 7.3
-	// PR2b-2 step 2b). Empty for a coarse attempt. The two sources are mutually
-	// exclusive per attempt, so in practice an entry carries evidence XOR proofs --
-	// but both fields are independent so an entry carrying both stays structurally
-	// valid (NextAttempt reads the categories independently).
+	// PR2b-2 step 2b). Empty for a coarse attempt. evidence and coordinatorProofs are
+	// independent: a coarse attempt carries only evidence, while ONE interactive
+	// failure can carry BOTH a coordinator proof (2b) and share-verification reject
+	// evidence (7.3 share-blame) -- NextAttempt reads the categories independently.
 	coordinatorProofs [][]byte
 	createdAt         time.Time
 }
@@ -69,9 +69,10 @@ func stashPendingEvidence(
 	pendingEvidenceMu.Lock()
 	defer pendingEvidenceMu.Unlock()
 	// Upsert the evidence field, preserving any coordinator proofs already stashed
-	// for this attempt. The coarse and interactive paths are mutually exclusive per
-	// attempt, so normally only one writer fires; preserving the sibling field keeps
-	// the entry valid if that ever changes, never an XOR assumption that drops data.
+	// for this attempt. An interactive failure legitimately stashes BOTH coordinator
+	// proofs (2b) and share-verification reject evidence (7.3 share-blame) for one
+	// attempt, so preserving the sibling field is load-bearing -- never an XOR
+	// assumption that would drop the other writer's data.
 	entry := pendingEvidenceRegistry[key]
 	entry.evidence = copyEvidence(evidence)
 	entry.createdAt = time.Now()
