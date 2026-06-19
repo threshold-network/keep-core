@@ -50,11 +50,17 @@ type interactiveSigningRunner struct {
 	// message inconsistent with the attempt it is bound to.
 	messageDigest []byte
 	threshold     uint16
-	engine        interactiveSigningEngine
-	collector     *roast.Round2Collector
-	coordinator   roast.Coordinator
-	signer        roast.Signer
-	bus           RunnerBus
+	// includedMembers is the attempt's included set as a lookup, cached at
+	// construction. It gates which shares the collector retains as evidence (any
+	// included member's, even a non-signer observer's divergent share), distinct
+	// from the per-attempt signer set that gates which shares count toward the
+	// aggregate.
+	includedMembers map[group.MemberIndex]struct{}
+	engine          interactiveSigningEngine
+	collector       *roast.Round2Collector
+	coordinator     roast.Coordinator
+	signer          roast.Signer
+	bus             RunnerBus
 	// sub is established at construction (before any Run broadcasts) so a node
 	// never misses a peer message broadcast before it subscribed.
 	sub *RunnerBusSubscriber
@@ -108,16 +114,17 @@ func newInteractiveSigningRunner(
 	// digest the attempt (and its package/share envelopes) is bound to could mark
 	// an attempt for digest A succeeded with a signature over digest B.
 	return &interactiveSigningRunner{
-		attempt:       attempt,
-		member:        member,
-		messageDigest: append([]byte(nil), attemptCtx.MessageDigest[:]...),
-		threshold:     threshold,
-		engine:        engine,
-		collector:     collector,
-		coordinator:   coordinator,
-		signer:        signer,
-		bus:           bus,
-		sub:           bus.Subscribe(),
+		attempt:         attempt,
+		member:          member,
+		messageDigest:   append([]byte(nil), attemptCtx.MessageDigest[:]...),
+		threshold:       threshold,
+		includedMembers: setOf(attemptCtx.IncludedSet),
+		engine:          engine,
+		collector:       collector,
+		coordinator:     coordinator,
+		signer:          signer,
+		bus:             bus,
+		sub:             bus.Subscribe(),
 	}, nil
 }
 
@@ -554,13 +561,20 @@ func (r *interactiveSigningRunner) collectShares(
 }
 
 // recordShareMessage validates a share-submission bus message, retains it in the
-// collector, and counts it toward `into` when it is the sender's first accepted
-// share. Recording BEFORE the already-collected check is what lets the collector
-// observe member equivocation (a body-different second signed share ->
+// collector, and counts it toward `into` only when the sender is in the chosen
+// signing subset and it is the sender's first accepted share. Retention is gated
+// by INCLUDED-set membership, not the signer set: the collector deliberately
+// keeps an included non-signer's DIVERGENT share - a targeted coordinator-
+// equivocation victim that signed a different package - as
+// EquivocationKindDivergentShare evidence for the f+1 blame/transition path, so
+// the runner must hand any included member's well-formed share to the collector
+// even though only signer-set shares count toward the aggregate. Recording BEFORE
+// the already-collected check is what lets the collector observe member
+// equivocation (a body-different second signed share ->
 // EquivocationKindShareConflict / DivergentShare); a divergent / conflicting /
-// unauthenticated share is retained where applicable but never counted.
-// Retention is bounded (the collector keeps the first per submitter and only
-// emits on the rest), and the bus delivers only body-different duplicates.
+// unauthenticated share is retained where applicable but never counted. Retention
+// is bounded (the collector keeps the first per submitter and only emits on the
+// rest), and the bus delivers only body-different duplicates.
 func (r *interactiveSigningRunner) recordShareMessage(
 	msg RunnerMessage,
 	contextHash [attempt.MessageDigestLength]byte,
@@ -570,9 +584,11 @@ func (r *interactiveSigningRunner) recordShareMessage(
 	if msg.Attempt != contextHash {
 		return
 	}
-	// Only shares from the chosen signing subset count toward this aggregate; a
-	// share from a committed-but-unchosen observer (or any non-signer) is ignored.
-	if _, want := signers[msg.Sender]; !want {
+	// Retain shares from any INCLUDED member, not just the signing subset: an
+	// included non-signer's divergent share is targeted-equivocation evidence the
+	// collector keeps. An outsider (not in the included set) is dropped here rather
+	// than handed to the collector, which would reject it as not-included anyway.
+	if _, included := r.includedMembers[msg.Sender]; !included {
 		return
 	}
 	var sub roast.ShareSubmission
@@ -594,6 +610,12 @@ func (r *interactiveSigningRunner) recordShareMessage(
 		return
 	}
 	recordErr := r.collector.RecordShareSubmission(&sub)
+	// Only the chosen signing subset's shares count toward this aggregate; a
+	// committed-but-unchosen observer's share is retained above as evidence but
+	// never counted.
+	if _, isSigner := signers[msg.Sender]; !isSigner {
+		return
+	}
 	if _, have := into[msg.Sender]; have {
 		return
 	}

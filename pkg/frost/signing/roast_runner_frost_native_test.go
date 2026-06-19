@@ -1102,6 +1102,52 @@ func TestInteractiveSigningRunner_ObserverAggregatesAndAbortsWithoutSigning(t *t
 	}
 }
 
+// An included NON-SIGNER (observer) that broadcasts a DIVERGENT share - a
+// targeted coordinator-equivocation victim that signed a different package - must
+// still be RETAINED by the collector as EquivocationKindDivergentShare evidence
+// for the f+1 blame/transition path, even though its share does not count toward
+// the aggregate (it is not in the signing subset). Retention is gated by
+// included-set membership, not the signer set.
+func TestInteractiveSigningRunner_RetainsObserverDivergentShareAsEvidence(t *testing.T) {
+	included := []group.MemberIndex{1, 2, 3}
+	runner, collector, contextHash, elected := buildEquivocationRunner(t, included)
+	signer := fixedTestSigner{}
+	if err := collector.BeginAttempt(contextHash[:], elected, included); err != nil {
+		t.Fatalf("collector begin: %v", err)
+	}
+	// Authoritative package over the signing subset {1,2}; its body hash binds
+	// accepted shares.
+	authEnvelope, _ := craftSigningPackage(t, contextHash, elected, []byte("authoritative-package"), signer)
+	authPkg := &roast.SigningPackage{}
+	if err := authPkg.Unmarshal(authEnvelope); err != nil {
+		t.Fatalf("unmarshal authoritative: %v", err)
+	}
+	if err := collector.RecordSigningPackage(authPkg); err != nil {
+		t.Fatalf("record authoritative: %v", err)
+	}
+
+	// Member 3 is an included observer (not in the {1,2} signing subset) but was
+	// handed a DIFFERENT package, so it broadcasts a share bound to that other
+	// package's body hash - divergent vs the authoritative package.
+	_, otherBodyHash := craftSigningPackage(t, contextHash, elected, []byte("equivocating-package-for-3"), signer)
+	divergentShare := craftShareSubmission(t, contextHash, 3, elected, otherBodyHash, []byte("share-3-divergent"), signer)
+	msg := RunnerMessage{Type: RunnerMsgShareSubmission, Sender: 3, Attempt: contextHash, Payload: divergentShare}
+
+	evidence := captureEquivocationEvidence(t)
+	into := map[group.MemberIndex][]byte{}
+	// Signer set excludes member 3 (the observer); counting must skip it while
+	// retention must not.
+	runner.recordShareMessage(msg, contextHash, setOf([]group.MemberIndex{1, 2}), into)
+
+	if _, counted := into[3]; counted {
+		t.Fatal("observer (non-signer) share was counted toward the aggregate")
+	}
+	got := evidence()
+	if len(got) != 1 || got[0].Kind != roast.EquivocationKindDivergentShare || got[0].Sender != 3 {
+		t.Fatalf("expected one divergent-share evidence retained from member 3, got %+v", got)
+	}
+}
+
 // captureCoordinatorSignerIDs drains a sniffer subscriber's signing-package
 // stream for the elected coordinator's package for the attempt and returns its
 // signer_ids. It fails the test if no such package was observed.
