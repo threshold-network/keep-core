@@ -103,6 +103,107 @@ func TestSigningRetryLoop_ActiveAttemptUsesCommittedRoastNumber(t *testing.T) {
 	}
 }
 
+// parkingSelector is a participant selector that returns a fixed included +
+// transiently-parked set, so a loop test can assert the parking threads from
+// selection through signingAttemptParams to the active attempt without standing
+// up a full transition record.
+type parkingSelector struct {
+	included []group.MemberIndex
+	parked   []group.MemberIndex
+}
+
+func (s parkingSelector) Select(
+	_ []group.MemberIndex,
+	_ chain.Addresses,
+	_ int64,
+	_ uint,
+	_ uint,
+	_ uint,
+	_ string,
+	_ group.MemberIndex,
+) (participantSelection, error) {
+	return participantSelection{
+		includedMembersIndexes:          s.included,
+		transientlyParkedMembersIndexes: s.parked,
+	}, nil
+}
+
+// TestSigningRetryLoop_ActiveAttemptCarriesParking asserts the transiently-parked
+// set produced by selection threads through signingAttemptParams to the active
+// signing attempt (and thus onto its AttemptContext), so the active context's
+// parking matches the observe context's. A regression dropping the field would
+// make a one-attempt park permanent (the B1 hazard) on the active path.
+func TestSigningRetryLoop_ActiveAttemptCarriesParking(t *testing.T) {
+	t.Setenv(signing.RoastRetryReadinessOptInEnvVar, "true")
+	signing.ResetRoastRetryRegistrationForTest()
+	t.Cleanup(signing.ResetRoastRetryRegistrationForTest)
+	signing.RegisterRoastRetryCoordinator(signing.RoastRetryDeps{
+		Coordinator: roast.NewInMemoryCoordinator(),
+		Signer:      roast.NoOpSigner(),
+		Verifier:    roast.NoOpSignatureVerifier(),
+		SelfMember:  1,
+	})
+
+	message := big.NewInt(100)
+	testResult := &signing.Result{
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(300), big.NewInt(400)),
+	}
+	announcer := &mockSigningAnnouncer{
+		outgoingAnnouncements: make(map[string]group.MemberIndex),
+		incomingAnnouncementsFn: func(string) ([]group.MemberIndex, error) {
+			return []group.MemberIndex{1, 2, 3}, nil
+		},
+	}
+	doneCheck := &mockSigningDoneCheck{
+		waitUntilAllDoneOutcomeFn: func(uint64) (*signing.Result, uint64, error) {
+			return testResult, 215, nil
+		},
+	}
+	retryLoop := newSigningRetryLoop(
+		&testutils.MockLogger{},
+		message,
+		"",
+		200,
+		1,
+		chain.Addresses{"address-1", "address-2", "address-3"},
+		&GroupParameters{GroupSize: 3, HonestThreshold: 3},
+		announcer,
+		doneCheck,
+	)
+	// Park member 3; keep the local seat (1) included so it reaches the active
+	// attempt.
+	retryLoop.participantSelector = parkingSelector{
+		included: []group.MemberIndex{1, 2},
+		parked:   []group.MemberIndex{3},
+	}
+
+	var captured *signingAttemptParams
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := retryLoop.start(
+		ctx,
+		func(context.Context, uint64) error { return nil },
+		func() (uint64, error) { return 200, nil },
+		func(params *signingAttemptParams) (*signing.Result, uint64, error) {
+			captured = params
+			return testResult, 215, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured == nil {
+		t.Fatal("the committed signing attempt was never executed")
+	}
+	if len(captured.transientlyParkedMembersIndexes) != 1 ||
+		captured.transientlyParkedMembersIndexes[0] != 3 {
+		t.Fatalf(
+			"active attempt must carry the parked set [3]; got %v",
+			captured.transientlyParkedMembersIndexes,
+		)
+	}
+}
+
 // TestSigningRetryLoop_ActiveAttemptUsesAttemptCounterWhenRoastInactive asserts
 // the legacy invariant is preserved: with ROAST retry inactive (no coordinator
 // registered), the active attempt keys off the block-paced attemptCounter
