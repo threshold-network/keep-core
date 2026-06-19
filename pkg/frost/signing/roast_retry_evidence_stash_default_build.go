@@ -18,3 +18,15 @@ func stashPendingEvidence(
 	_ attempt.Evidence,
 ) {
 }
+
+// stashPendingCoordinatorProofs is a no-op in the default build, mirroring
+// stashPendingEvidence: the interactive drive path (frost_native) calls it, but
+// with no ROAST-retry orchestration there is no transition exchange to consume the
+// proofs. The build-tagged implementation does the real stashing.
+func stashPendingCoordinatorProofs(
+	_ string,
+	_ group.MemberIndex,
+	_ [attempt.MessageDigestLength]byte,
+	_ [][]byte,
+) {
+}

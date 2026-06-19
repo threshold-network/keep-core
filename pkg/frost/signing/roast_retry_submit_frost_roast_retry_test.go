@@ -104,7 +104,7 @@ func TestSubmitSnapshotIfActive_StashesEvidenceWhenBoundAndPopulated(t *testing.
 	recorder.RecordOverflow(5)
 	submitSnapshotIfActive("session-real", selfMember, recorder)
 
-	evidence, ok := takePendingEvidence(ctx.SessionID, selfMember, ctx.Hash())
+	evidence, _, ok := takePendingEvidence(ctx.SessionID, selfMember, ctx.Hash())
 	if !ok {
 		t.Fatal("expected stashed evidence after a populated submit")
 	}
@@ -116,7 +116,7 @@ func TestSubmitSnapshotIfActive_StashesEvidenceWhenBoundAndPopulated(t *testing.
 		t.Fatalf("stashed overflow counts wrong: %+v", evidence.Overflows)
 	}
 	// take consumes: a second take finds nothing.
-	if _, ok := takePendingEvidence(ctx.SessionID, selfMember, ctx.Hash()); ok {
+	if _, _, ok := takePendingEvidence(ctx.SessionID, selfMember, ctx.Hash()); ok {
 		t.Fatal("take must consume the stash entry")
 	}
 }
@@ -141,7 +141,7 @@ func TestSubmitSnapshotIfActive_StashesRejectOnlySnapshot(t *testing.T) {
 	recorder.RecordReject(2, "attempt_context_hash_mismatch")
 	submitSnapshotIfActive("session-reject-only", selfMember, recorder)
 
-	evidence, ok := takePendingEvidence(ctx.SessionID, selfMember, ctx.Hash())
+	evidence, _, ok := takePendingEvidence(ctx.SessionID, selfMember, ctx.Hash())
 	if !ok {
 		t.Fatal("reject-only snapshot must be stashed")
 	}
@@ -173,8 +173,8 @@ func TestSubmitSnapshotIfActive_MultiSeatStashesPerSeat(t *testing.T) {
 	submitSnapshotIfActive("session-ms", 1, rec1)
 	submitSnapshotIfActive("session-ms", 2, rec2)
 
-	ev1, ok1 := takePendingEvidence(ctx.SessionID, 1, ctx.Hash())
-	ev2, ok2 := takePendingEvidence(ctx.SessionID, 2, ctx.Hash())
+	ev1, _, ok1 := takePendingEvidence(ctx.SessionID, 1, ctx.Hash())
+	ev2, _, ok2 := takePendingEvidence(ctx.SessionID, 2, ctx.Hash())
 	if !ok1 || !ok2 {
 		t.Fatalf("both seats must stash their own evidence; got ok1=%v ok2=%v", ok1, ok2)
 	}
