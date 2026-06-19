@@ -127,8 +127,148 @@ func (h harness) runAndAssertAllSucceed(t *testing.T) {
 	}
 }
 
+// The happy path over an oversized group (group size 3, threshold 2): the
+// coordinator finalizes over the first t responsive committers and the remaining
+// committed member is an observer that aggregates the subset's broadcast shares.
+// Which member observes depends on bus timing, but every node obtains the
+// signature and reaches Succeeded. The deterministic subset/observer dynamics are
+// pinned in TestInteractiveSigningRunner_OversizedAllOnline_FinalizesOverThreshold
+// and the offline/observer tests below.
+// runMembers runs only the given members' runners concurrently (the rest stay
+// offline / non-responsive, never committing) and returns each member's
+// signature and error keyed by member index.
+func (h harness) runMembers(t *testing.T, members []group.MemberIndex) (map[group.MemberIndex][]byte, map[group.MemberIndex]error) {
+	t.Helper()
+	runCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var mu sync.Mutex
+	sigs := map[group.MemberIndex][]byte{}
+	errs := map[group.MemberIndex]error{}
+	var wg sync.WaitGroup
+	for _, m := range members {
+		wg.Add(1)
+		go func(member group.MemberIndex) {
+			defer wg.Done()
+			sig, err := h.runners[member-1].Run(runCtx)
+			mu.Lock()
+			sigs[member] = sig
+			errs[member] = err
+			mu.Unlock()
+		}(m)
+	}
+	wg.Wait()
+	return sigs, errs
+}
+
 func TestInteractiveSigningRunner_HappyPath(t *testing.T) {
 	buildInteractiveSigningHarness(t, 3, 2).runAndAssertAllSucceed(t)
+}
+
+// A non-responsive (offline) included member must NOT stall the attempt: the
+// coordinator finalizes over the first t responsive committers. Group size 3,
+// threshold 2, one NON-COORDINATOR member never runs (never commits), so the two
+// responsive members - the coordinator plus one peer - finalize over the t-subset
+// and both succeed, and the coordinator's package omits the offline member.
+func TestInteractiveSigningRunner_FinalizesOverResponsiveThresholdSubset(t *testing.T) {
+	h := buildInteractiveSigningHarness(t, 3, 2)
+	elected := h.runners[0].attempt.ElectedCoordinator()
+
+	var offline group.MemberIndex
+	for _, m := range h.includedSet {
+		if m != elected {
+			offline = m
+			break
+		}
+	}
+	online := make([]group.MemberIndex, 0, 2)
+	for _, m := range h.includedSet {
+		if m != offline {
+			online = append(online, m)
+		}
+	}
+
+	sigs, errs := h.runMembers(t, online)
+	for _, m := range online {
+		if errs[m] != nil {
+			t.Fatalf("online member %d failed: %v", m, errs[m])
+		}
+		if string(sigs[m]) != "fake-bip340-signature" {
+			t.Fatalf("online member %d unexpected signature: %q", m, sigs[m])
+		}
+		state, err := h.coords[m-1].State(h.handles[m-1])
+		if err != nil {
+			t.Fatalf("member %d state: %v", m, err)
+		}
+		if state != roast.AttemptStateSucceeded {
+			t.Fatalf("member %d: expected Succeeded, got %v", m, state)
+		}
+	}
+
+	// The coordinator built the package over exactly the t responsive committers;
+	// the offline member is absent from the signing subset.
+	coordCommitments := h.engines[elected-1].newPackageCommitments()
+	if len(coordCommitments) != 2 {
+		t.Fatalf("coordinator built package over %d commitments, want t=2", len(coordCommitments))
+	}
+	gotIDs := map[string]struct{}{}
+	for _, c := range coordCommitments {
+		gotIDs[c.Identifier] = struct{}{}
+	}
+	if _, present := gotIDs[fmt.Sprintf("frost-id-%d", offline)]; present {
+		t.Fatalf("offline member %d was included in the signing subset: %v", offline, gotIDs)
+	}
+	for _, m := range online {
+		if _, present := gotIDs[fmt.Sprintf("frost-id-%d", m)]; !present {
+			t.Fatalf("online member %d missing from the signing subset: %v", m, gotIDs)
+		}
+	}
+}
+
+// An oversized all-online group (size 3, threshold 2): every member commits, the
+// coordinator finalizes over exactly t of them, and the remaining committed
+// member observes. All three obtain the signature and reach Succeeded; exactly t
+// members sign round 2 and the n-t observers abort their unconsumed round-1
+// nonces. The coordinator's broadcast package names exactly t ascending signers.
+func TestInteractiveSigningRunner_OversizedAllOnline_FinalizesOverThreshold(t *testing.T) {
+	const n, threshold = 3, 2
+	h := buildInteractiveSigningHarness(t, n, threshold)
+
+	// A sniffer subscribed before any Run captures the coordinator's broadcast
+	// package so the test can inspect its signer_ids.
+	sniffer := h.bus.Subscribe()
+	elected := h.runners[0].attempt.ElectedCoordinator()
+
+	h.runAndAssertAllSucceed(t)
+
+	totalRound2, totalAbort := 0, 0
+	for _, e := range h.engines {
+		totalRound2 += e.round2CallCount()
+		totalAbort += e.abortCallCount()
+	}
+	if totalRound2 != threshold {
+		t.Fatalf("expected exactly t=%d round-2 signers, got %d", threshold, totalRound2)
+	}
+	// The n-t observers each abort their unconsumed round-1 nonces; signers do not.
+	if totalAbort != n-threshold {
+		t.Fatalf("expected %d observer aborts, got %d", n-threshold, totalAbort)
+	}
+
+	signerIDs := captureCoordinatorSignerIDs(t, sniffer, elected, h.contextHash)
+	if len(signerIDs) != threshold {
+		t.Fatalf("package signer_ids = %v, want exactly t=%d", signerIDs, threshold)
+	}
+	for i := 1; i < len(signerIDs); i++ {
+		if signerIDs[i] <= signerIDs[i-1] {
+			t.Fatalf("signer_ids not strictly ascending: %v", signerIDs)
+		}
+	}
+	includedSetMap := setOf(h.includedSet)
+	for _, id := range signerIDs {
+		if _, ok := includedSetMap[id]; !ok {
+			t.Fatalf("signer id %d not in included set %v", id, h.includedSet)
+		}
+	}
 }
 
 // A concluded attempt must leave no retained round-2 collector state, per the
@@ -267,8 +407,9 @@ func TestInteractiveSigningRunner_AbortsNativeAttemptOnEarlyExit(t *testing.T) {
 		t.Fatalf("runner: %v", err)
 	}
 
-	// No second node ever broadcasts, so Run blocks in collectCommitments until
-	// the short deadline fires - an early exit with the session already open.
+	// No second node ever broadcasts, so Run blocks waiting for round 1 to reach
+	// the threshold (as coordinator) or for the coordinator's package (otherwise)
+	// until the short deadline fires - an early exit with the session already open.
 	runCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	if _, err := runner.Run(runCtx); err == nil {
@@ -325,17 +466,19 @@ func TestInteractiveSigningRunner_RejectsEngineCoordinatorMismatch(t *testing.T)
 	}
 }
 
-// The happy path must key signing-package commitments and aggregate shares by the
-// engine-derived FROST identifiers, not a Go-fabricated placeholder.
+// The happy path must key aggregate shares by the engine-derived FROST
+// identifiers, not a Go-fabricated placeholder. A full-included attempt
+// (threshold == group size) has every member sign, so the aggregate carries
+// every member's engine-derived identifier (no observer subsetting to vary it).
 func TestInteractiveSigningRunner_UsesEngineDerivedFrostIdentifiers(t *testing.T) {
-	h := buildInteractiveSigningHarness(t, 3, 2)
+	h := buildInteractiveSigningHarness(t, 2, 2)
 	h.runAndAssertAllSucceed(t)
 
 	got := map[string]struct{}{}
 	for _, share := range h.engines[0].lastAggregateShares {
 		got[share.Identifier] = struct{}{}
 	}
-	for _, want := range []string{"frost-id-1", "frost-id-2", "frost-id-3"} {
+	for _, want := range []string{"frost-id-1", "frost-id-2"} {
 		if _, ok := got[want]; !ok {
 			t.Fatalf("aggregate missing engine-derived identifier %q; got %v", want, got)
 		}
@@ -837,6 +980,10 @@ func TestNewInteractiveSigningRunner_RejectsInvalidConstruction(t *testing.T) {
 		"member not included": func() (*interactiveSigningRunner, error) {
 			return newInteractiveSigningRunner(ara, 99, 2, engine, collector, coord, signer, bus)
 		},
+		"threshold exceeds included set": func() (*interactiveSigningRunner, error) {
+			// included set has 3 members; a threshold of 4 can never form a subset.
+			return newInteractiveSigningRunner(ara, 1, 4, engine, collector, coord, signer, bus)
+		},
 	}
 	for name, build := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -845,4 +992,228 @@ func TestNewInteractiveSigningRunner_RejectsInvalidConstruction(t *testing.T) {
 			}
 		})
 	}
+}
+
+// An OBSERVER - a member that committed in round 1 but is NOT in the package's
+// signer set - must aggregate the subset's broadcast shares to obtain the
+// signature, mark its attempt Succeeded, and return the signature WITHOUT running
+// round 2; and even on success it must abort the engine session to drop its
+// unconsumed round-1 nonces (success otherwise suppresses the abort, leaking
+// them). Driven deterministically: the coordinator's signed package (signer_ids
+// excluding this member) and the signers' shares are pre-injected on the bus.
+func TestInteractiveSigningRunner_ObserverAggregatesAndAbortsWithoutSigning(t *testing.T) {
+	included := []group.MemberIndex{1, 2, 3}
+	dkgKey := []byte{0x01, 0x02}
+	ctx, err := attempt.NewAttemptContext(
+		"session-1", "key-group-1", dkgKey,
+		[attempt.MessageDigestLength]byte{0x42}, 0, included, nil,
+	)
+	if err != nil {
+		t.Fatalf("attempt context: %v", err)
+	}
+	signer := fixedTestSigner{}
+	verifier := roast.NoOpSignatureVerifier()
+	bus := NewInProcessRunnerBus(16)
+	contextHash := ctx.Hash()
+
+	// The election is deterministic for the attempt; probe it so the observer is a
+	// NON-coordinator (a coordinator is always a signer) and the signer subset is
+	// the other two members.
+	probe := roast.NewInMemoryCoordinatorWithSigning(1, signer, verifier)
+	probeHandle, err := probe.BeginAttempt(ctx)
+	if err != nil {
+		t.Fatalf("probe begin: %v", err)
+	}
+	probeAttempt, err := NewActiveRoastAttempt(probe, probeHandle, ctx, "session-1", nil, dkgKey)
+	if err != nil {
+		t.Fatalf("probe active attempt: %v", err)
+	}
+	elected := probeAttempt.ElectedCoordinator()
+
+	var observer group.MemberIndex
+	for _, m := range included {
+		if m != elected {
+			observer = m
+			break
+		}
+	}
+	// included is ascending, so iterating it (skipping the observer) yields an
+	// ascending signer subset - what signer_ids requires.
+	signers := make([]group.MemberIndex, 0, 2)
+	for _, m := range included {
+		if m != observer {
+			signers = append(signers, m)
+		}
+	}
+
+	coord := roast.NewInMemoryCoordinatorWithSigning(observer, signer, verifier)
+	handle, err := coord.BeginAttempt(ctx)
+	if err != nil {
+		t.Fatalf("begin attempt: %v", err)
+	}
+	ara, err := NewActiveRoastAttempt(coord, handle, ctx, "session-1", nil, dkgKey)
+	if err != nil {
+		t.Fatalf("active attempt: %v", err)
+	}
+	engine := newFakeInteractiveSigningEngine()
+	engine.coordinatorIdentifier = uint16(ara.ElectedCoordinator())
+	runner, err := newInteractiveSigningRunner(
+		ara, observer, 2, engine, roast.NewRound2Collector(verifier), coord, signer, bus,
+	)
+	if err != nil {
+		t.Fatalf("runner: %v", err)
+	}
+
+	// Pre-inject the coordinator's signed package (signer_ids = the two signers,
+	// excluding the observer) plus both signers' shares, so the observer's await
+	// and share collection complete from the bus.
+	pkgEnvelope, pkgBodyHash := craftSigningPackageWithSigners(
+		t, contextHash, elected, []byte("fake-signing-package"), signers, signer,
+	)
+	bus.Broadcast(RunnerMessage{Type: RunnerMsgSigningPackage, Sender: elected, Attempt: contextHash, Payload: pkgEnvelope})
+	for _, s := range signers {
+		shareEnvelope := craftShareSubmission(
+			t, contextHash, s, elected, pkgBodyHash, []byte(fmt.Sprintf("share-%d", s)), signer,
+		)
+		bus.Broadcast(RunnerMessage{Type: RunnerMsgShareSubmission, Sender: s, Attempt: contextHash, Payload: shareEnvelope})
+	}
+
+	runCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	sig, err := runner.Run(runCtx)
+	if err != nil {
+		t.Fatalf("observer run failed: %v", err)
+	}
+	if string(sig) != "fake-bip340-signature" {
+		t.Fatalf("observer unexpected signature: %q", sig)
+	}
+	if engine.round2CallCount() != 0 {
+		t.Fatalf("observer ran round 2 %d times, want 0 (it is not a signer)", engine.round2CallCount())
+	}
+	if engine.abortCallCount() != 1 {
+		t.Fatalf("observer aborted %d times, want exactly 1 (drop unconsumed round-1 nonces on success)", engine.abortCallCount())
+	}
+	state, err := coord.State(handle)
+	if err != nil {
+		t.Fatalf("observer state: %v", err)
+	}
+	if state != roast.AttemptStateSucceeded {
+		t.Fatalf("observer expected Succeeded, got %v", state)
+	}
+}
+
+// An included NON-SIGNER (observer) that broadcasts a DIVERGENT share - a
+// targeted coordinator-equivocation victim that signed a different package - must
+// still be RETAINED by the collector as EquivocationKindDivergentShare evidence
+// for the f+1 blame/transition path, even though its share does not count toward
+// the aggregate (it is not in the signing subset). Retention is gated by
+// included-set membership, not the signer set.
+func TestInteractiveSigningRunner_RetainsObserverDivergentShareAsEvidence(t *testing.T) {
+	included := []group.MemberIndex{1, 2, 3}
+	runner, collector, contextHash, elected := buildEquivocationRunner(t, included)
+	signer := fixedTestSigner{}
+	if err := collector.BeginAttempt(contextHash[:], elected, included); err != nil {
+		t.Fatalf("collector begin: %v", err)
+	}
+	// Authoritative package over the signing subset {1,2}; its body hash binds
+	// accepted shares.
+	authEnvelope, _ := craftSigningPackage(t, contextHash, elected, []byte("authoritative-package"), signer)
+	authPkg := &roast.SigningPackage{}
+	if err := authPkg.Unmarshal(authEnvelope); err != nil {
+		t.Fatalf("unmarshal authoritative: %v", err)
+	}
+	if err := collector.RecordSigningPackage(authPkg); err != nil {
+		t.Fatalf("record authoritative: %v", err)
+	}
+
+	// Member 3 is an included observer (not in the {1,2} signing subset) but was
+	// handed a DIFFERENT package, so it broadcasts a share bound to that other
+	// package's body hash - divergent vs the authoritative package.
+	_, otherBodyHash := craftSigningPackage(t, contextHash, elected, []byte("equivocating-package-for-3"), signer)
+	divergentShare := craftShareSubmission(t, contextHash, 3, elected, otherBodyHash, []byte("share-3-divergent"), signer)
+	msg := RunnerMessage{Type: RunnerMsgShareSubmission, Sender: 3, Attempt: contextHash, Payload: divergentShare}
+
+	evidence := captureEquivocationEvidence(t)
+	into := map[group.MemberIndex][]byte{}
+	// Signer set excludes member 3 (the observer); counting must skip it while
+	// retention must not.
+	runner.recordShareMessage(msg, contextHash, setOf([]group.MemberIndex{1, 2}), into)
+
+	if _, counted := into[3]; counted {
+		t.Fatal("observer (non-signer) share was counted toward the aggregate")
+	}
+	got := evidence()
+	if len(got) != 1 || got[0].Kind != roast.EquivocationKindDivergentShare || got[0].Sender != 3 {
+		t.Fatalf("expected one divergent-share evidence retained from member 3, got %+v", got)
+	}
+}
+
+// captureCoordinatorSignerIDs drains a sniffer subscriber's signing-package
+// stream for the elected coordinator's package for the attempt and returns its
+// signer_ids. It fails the test if no such package was observed.
+func captureCoordinatorSignerIDs(
+	t *testing.T,
+	sniffer *RunnerBusSubscriber,
+	elected group.MemberIndex,
+	contextHash [attempt.MessageDigestLength]byte,
+) []group.MemberIndex {
+	t.Helper()
+	for {
+		select {
+		case msg := <-sniffer.SigningPackages():
+			if msg.Sender != elected || msg.Attempt != contextHash {
+				continue
+			}
+			pkg := &roast.SigningPackage{}
+			if err := pkg.Unmarshal(msg.Payload); err != nil {
+				t.Fatalf("unmarshal coordinator package: %v", err)
+			}
+			return pkg.SignerIDs()
+		default:
+			t.Fatal("coordinator package not observed on the bus")
+			return nil
+		}
+	}
+}
+
+// craftSigningPackageWithSigners builds a coordinator-signed package carrying an
+// explicit signer subset (signer_ids, which must be ascending/distinct), and
+// returns its envelope and body hash.
+func craftSigningPackageWithSigners(
+	t *testing.T,
+	contextHash [attempt.MessageDigestLength]byte,
+	elected group.MemberIndex,
+	body []byte,
+	signers []group.MemberIndex,
+	signer roast.Signer,
+) ([]byte, [32]byte) {
+	t.Helper()
+	signerIDs := make([]uint32, 0, len(signers))
+	for _, m := range signers {
+		signerIDs = append(signerIDs, uint32(m))
+	}
+	pkg := &roast.SigningPackage{
+		AttemptContextHash:  append([]byte(nil), contextHash[:]...),
+		CoordinatorIDValue:  uint32(elected),
+		SigningPackageBytes: append([]byte(nil), body...),
+		SignerIDsValue:      signerIDs,
+	}
+	payload, err := pkg.SignableBytes()
+	if err != nil {
+		t.Fatalf("signing package signable bytes: %v", err)
+	}
+	sig, err := signer.Sign(payload)
+	if err != nil {
+		t.Fatalf("sign signing package: %v", err)
+	}
+	pkg.CoordinatorSignature = sig
+	envelope, err := pkg.Marshal()
+	if err != nil {
+		t.Fatalf("marshal signing package: %v", err)
+	}
+	bodyHash, err := pkg.BodyHash()
+	if err != nil {
+		t.Fatalf("signing package body hash: %v", err)
+	}
+	return envelope, bodyHash
 }

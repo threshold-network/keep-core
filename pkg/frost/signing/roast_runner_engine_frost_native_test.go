@@ -33,15 +33,16 @@ type fakeInteractiveSigningEngine struct {
 	commitmentsByMember map[uint16][]byte
 	shareByMember       map[uint16][]byte
 
-	mu                  sync.Mutex
-	openCalls           int
-	round1Calls         int
-	newPackageCalls     int
-	round2Calls         int
-	aggregateCalls      int
-	abortCalls          int
-	deriveCalls         int
-	lastAggregateShares []nativeFROSTSignatureShare
+	mu                        sync.Mutex
+	openCalls                 int
+	round1Calls               int
+	newPackageCalls           int
+	round2Calls               int
+	aggregateCalls            int
+	abortCalls                int
+	deriveCalls               int
+	lastAggregateShares       []nativeFROSTSignatureShare
+	lastNewPackageCommitments []nativeFROSTCommitment
 }
 
 func (f *fakeInteractiveSigningEngine) DeriveInteractiveAttemptContext(
@@ -91,6 +92,20 @@ func (f *fakeInteractiveSigningEngine) abortCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.abortCalls
+}
+
+func (f *fakeInteractiveSigningEngine) round2CallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.round2Calls
+}
+
+// newPackageCommitments returns a copy of the commitments the engine last built a
+// signing package over - the chosen t-subset for the coordinator.
+func (f *fakeInteractiveSigningEngine) newPackageCommitments() []nativeFROSTCommitment {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]nativeFROSTCommitment(nil), f.lastNewPackageCommitments...)
 }
 
 func newFakeInteractiveSigningEngine() *fakeInteractiveSigningEngine {
@@ -153,6 +168,7 @@ func (f *fakeInteractiveSigningEngine) NewSigningPackage(
 ) ([]byte, error) {
 	f.mu.Lock()
 	f.newPackageCalls++
+	f.lastNewPackageCommitments = append([]nativeFROSTCommitment(nil), commitments...)
 	f.mu.Unlock()
 	return f.signingPackage, nil
 }
