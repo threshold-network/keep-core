@@ -22,6 +22,9 @@ var roastRetryLogger = log.Logger("keep-frost-roast-retry")
 //
 //   - the ROAST-retry registry is empty (default build, no caller
 //     has invoked RegisterRoastRetryCoordinator);
+//   - more than one local seat is registered (multi-seat): this path
+//     is not yet member-aware (PR2b-1.5), so it disables itself rather
+//     than mis-attribute one seat's evidence to a sibling;
 //   - no session-handle binding exists for sessionID (the typical
 //     Phase-4 state, where the orchestration layer that calls
 //     SetCurrentAttemptHandleForSession is not yet implemented);
@@ -38,6 +41,17 @@ func submitSnapshotIfActive(
 	recorder attempt.EvidenceRecorder,
 ) {
 	if recorder == nil {
+		return
+	}
+	// RFC-21 Phase 7.3 PR2b-1.5: the coarse/drive evidence path is not yet
+	// member-aware -- it looks up deps via any-entry RegisteredRoastRetryCoordinator
+	// and keys the drive handle by sessionID alone. Under a MULTI-SEAT operator
+	// (more than one local seat registered) that would attribute one local seat's
+	// evidence to an arbitrary sibling and collide their drive handles, so disable
+	// it for multi-seat until PR2b-2 wires the member-aware coarse/drive path (where
+	// this evidence is consumed by the blame bridge). Single-seat is unchanged, and
+	// the whole path is inert in 1b/1.5 (no production caller submits yet).
+	if registeredRoastRetryMemberCount() > 1 {
 		return
 	}
 	deps, ok := RegisteredRoastRetryCoordinator()

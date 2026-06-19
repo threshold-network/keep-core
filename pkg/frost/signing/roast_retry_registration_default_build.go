@@ -64,6 +64,11 @@ func RegisteredRoastRetryCoordinator() (RoastRetryDeps, bool) {
 	return RoastRetryDeps{}, false
 }
 
+// registeredRoastRetryMemberCount returns 0 in the default build: no
+// seats are ever registered, so the coarse evidence path's multi-seat
+// guard (submitSnapshotIfActive) is never tripped here.
+func registeredRoastRetryMemberCount() int { return 0 }
+
 // ResetRoastRetryRegistrationForTest is a no-op in the default
 // build. Exposed so tests can call it unconditionally regardless of
 // which build is active.
