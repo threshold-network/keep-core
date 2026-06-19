@@ -64,10 +64,13 @@ func ConsumeRoastTransitionForSelection(
 		return nil, nil, ErrRoastSelectionFallBackToLegacy
 	}
 
-	// ROAST retry inactive (readiness opted out or no coordinator registered):
-	// a uniform legacy fallback. This MUST mirror the observe/exchange gating, so
-	// a node that produced no records also does not expect to consume one.
-	if optInErr := EnsureRoastRetryReadinessOptIn(); optInErr != nil {
+	// ROAST retry inactive (readiness opted out, no coordinator registered, or no
+	// transition producer built in -- frost_roast_retry && !frost_native): a uniform
+	// legacy fallback. This MUST mirror the observe/exchange gating, so a node that
+	// produced no records also does not expect to consume one; in particular,
+	// without a producer (RoastRetryActive false on the build) the selector must NOT
+	// fail-close every retry against records that can never be created (Codex P2-1).
+	if !RoastRetryActive() {
 		return nil, nil, ErrRoastSelectionFallBackToLegacy
 	}
 	deps, ok := RegisteredRoastRetryCoordinator()

@@ -63,13 +63,19 @@ func TestRoastRetryActive_GatesOnReadinessAndRegistration(t *testing.T) {
 		t.Fatal("readiness on without a coordinator must yield inactive")
 	}
 
-	// Readiness on AND a coordinator -> active.
+	// Readiness on AND a coordinator -> active IFF a transition producer is built in
+	// (frost_native). A frost_roast_retry && !frost_native build has no producer, so
+	// ROAST stays inactive (legacy) even with readiness + a coordinator -- the
+	// build-config gate from Codex P2-1.
 	RegisterRoastRetryCoordinator(RoastRetryDeps{
 		Coordinator: roast.NewInMemoryCoordinator(),
 		SelfMember:  1,
 	})
-	if !RoastRetryActive() {
-		t.Fatal("readiness on with a coordinator must yield active")
+	if RoastRetryActive() != roastTransitionProducerAvailable() {
+		t.Fatalf(
+			"readiness + coordinator: RoastRetryActive must equal producer availability (%v); got %v",
+			roastTransitionProducerAvailable(), RoastRetryActive(),
+		)
 	}
 }
 
