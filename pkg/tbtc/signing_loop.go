@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -491,6 +492,25 @@ func (srl *signingRetryLoop) start(
 				transientlyParkedMembersIndexes: transientlyParkedMembersIndexes,
 			})
 			if err != nil {
+				// RFC-21 Phase 7.3 PR2b-1.5 (Codex/Gemini consult): a TERMINAL
+				// orchestration error is a STATIC condition no future attempt can
+				// resolve (e.g. multi-seat interactive ROAST orchestration that is not
+				// yet member-safe). Retrying is futile -- every attempt re-derives the
+				// same outcome -- and would spin until timeout while synthesizing garbage
+				// failed-attempt transitions via OnAttemptFailed below. Abort the loop
+				// immediately, BEFORE the retry/transition machinery; the outer
+				// wallet-signing layer gives up cleanly for this action. Coarse fallback
+				// is not an option here: interactive<->coarse mixing fractures the group.
+				if errors.Is(err, signing.ErrTerminalSigningFailure) {
+					srl.logger.Errorf(
+						"[member:%v] terminal signing failure on attempt [%v]: [%v]; "+
+							"aborting retry loop",
+						srl.signingGroupMemberIndex,
+						srl.attemptCounter,
+						err,
+					)
+					return nil, err
+				}
 				srl.logger.Warnf(
 					"[member:%v] failed attempt [%v]: [%v]; "+
 						"starting next attempt",

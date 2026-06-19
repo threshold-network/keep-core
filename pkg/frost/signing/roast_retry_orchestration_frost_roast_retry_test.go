@@ -176,6 +176,11 @@ func assertOrchestrationFailedClosed(t *testing.T, sessionID string, cleanup fun
 	if errors.Is(err, ErrRoastRetryReadinessOptOut) {
 		t.Fatalf("must NOT return the readiness sentinel; got %v", err)
 	}
+	// Must be classified TERMINAL so the signingRetryLoop aborts instead of
+	// retrying the (static, never-resolving) multi-seat condition.
+	if !errors.Is(err, ErrTerminalSigningFailure) {
+		t.Fatalf("multi-seat fail-closed must be classified terminal (ErrTerminalSigningFailure); got %v", err)
+	}
 	if cleanup != nil {
 		t.Fatal("a failed begin must not return a cleanup")
 	}
