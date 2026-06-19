@@ -205,3 +205,42 @@ func TestDriveInteractiveRoastSigning_RunnerFailureHardFails(t *testing.T) {
 		t.Fatalf("expected no signature on failure, got %v", sig)
 	}
 }
+
+// TestDriveInteractiveRoastSigning_StashesCoordinatorProofsOnFailure covers the
+// RFC-21 Phase 7.3 PR2b-2 step 2b extraction seam end-to-end through the real
+// drive: when a committed interactive attempt fails AFTER the runner recorded the
+// coordinator-signed package, the drive surfaces collector.CoordinatorPackageProofs
+// and stashes them so BroadcastForcedSnapshot can carry them into the bundle (where
+// NextAttempt's cross-observer tally adjudicates coordinator equivocation). A 1-of-1
+// attempt retains only its own authoritative package (no equivocation), so exactly
+// one proof is stashed -- proving the seam fires through the real runner+collector,
+// not a directly-seeded stash.
+func TestDriveInteractiveRoastSigning_StashesCoordinatorProofsOnFailure(t *testing.T) {
+	ResetPendingEvidenceRegistryForTest()
+	t.Cleanup(ResetPendingEvidenceRegistryForTest)
+
+	f := newDriveFixture(t)
+	// Fail at aggregation -- the runner records the coordinator's signing package
+	// (obtainSigningPackage -> RecordSigningPackage) BEFORE InteractiveAggregate, so
+	// the collector still holds it when the drive extracts on failure.
+	f.engine.aggregateErr = fmt.Errorf("aggregate share verification failed")
+	RegisterInteractiveSigningEngineProvider(func() interactiveSigningEngine { return f.engine })
+	t.Setenv(InteractiveSigningOptInEnvVar, "true")
+
+	if _, err := f.run(t); err == nil {
+		t.Fatal("expected a hard-fail error on runner failure")
+	}
+
+	// The proofs are stashed under the attempt's (RoastSessionID==ctx.SessionID,
+	// member, attemptHash) -- the same key BroadcastForcedSnapshot reads.
+	evidence, proofs, ok := takePendingEvidence(f.attemptCtx.SessionID, 1, f.attemptCtx.Hash())
+	if !ok {
+		t.Fatal("a committed interactive failure must stash the retained coordinator package proof")
+	}
+	if len(proofs) != 1 {
+		t.Fatalf("a 1-of-1 attempt retains exactly its own authoritative package; got %d proofs", len(proofs))
+	}
+	if len(evidence.Overflows)+len(evidence.Rejects)+len(evidence.Conflicts) != 0 {
+		t.Fatalf("interactive failure must stash proofs only, no coarse evidence; got %+v", evidence)
+	}
+}
