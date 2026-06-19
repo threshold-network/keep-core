@@ -119,10 +119,12 @@ type signingRetryLoop struct {
 
 	doneCheck signingDoneCheckStrategy
 
-	// participantSelector dispatches qualified-operator selection.
-	// Default: legacy retry shuffle. Phase 7 may install a
-	// ROAST-driven implementation behind the frost_roast_retry
-	// build tag once AggregateBundle production is wired upstream.
+	// participantSelector dispatches qualified-operator selection. The default
+	// build uses the legacy retry shuffle; the frost_roast_retry build installs the
+	// ROAST-driven selector (signing_loop_selector_frost_roast_retry.go), which
+	// consumes the transition record the exchange produces -- now carrying the real
+	// blame evidence the coarse path captures (RFC-21 Phase 7.3 PR2b-2 step 2) --
+	// and falls back to the shuffle only on the uniform initial/inactive condition.
 	participantSelector signingParticipantSelector
 
 	// transitionController, when non-nil, owns the session-scoped ROAST
