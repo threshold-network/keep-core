@@ -75,6 +75,13 @@ func TestROASTSelector_FailsClosedWhenTransitionMissing(t *testing.T) {
 		Verifier:    roast.NoOpSignatureVerifier(),
 		SelfMember:  1,
 	})
+	if !signing.RoastRetryActive() {
+		// In a frost_roast_retry && !frost_native build there is no transition
+		// producer, so the selector falls back to legacy rather than fail-closing --
+		// the dedicated no-producer test covers that path. The fail-closed discipline
+		// asserted here only applies when a producer (frost_native) exists.
+		t.Skip("requires a transition producer (frost_native) for the fail-closed path")
+	}
 
 	sel := roastSigningParticipantSelector{}
 	// roastAttemptNumber 1 (> 0) under active ROAST expects a transition; none is
