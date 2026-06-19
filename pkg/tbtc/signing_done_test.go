@@ -281,16 +281,198 @@ func TestSigningDoneCheck_AnotherSignature(t *testing.T) {
 	}
 }
 
+// TestSigningDoneCheck_ThresholdSubsetConcludes covers RFC-21 Phase 7.3
+// t-of-included finalize: the included set is oversized (larger than the honest
+// threshold) and only the t-subset that actually signed reports done - the rest
+// are offline. The check must conclude on a quorum of t matching signatures
+// rather than hanging for the absent members, and must return the DETERMINISTIC
+// attempt timeout block as the end block (not a network-order-dependent max over
+// the done messages, which would desync batch scheduling across nodes).
+func TestSigningDoneCheck_ThresholdSubsetConcludes(t *testing.T) {
+	groupParameters := &GroupParameters{
+		GroupSize:       5,
+		GroupQuorum:     4,
+		HonestThreshold: 3,
+	}
+
+	doneCheck := setupSigningDoneCheck(t, groupParameters)
+
+	memberIndexes := make([]group.MemberIndex, doneCheck.groupSize)
+	for i := range memberIndexes {
+		memberIndexes[i] = group.MemberIndex(i + 1)
+	}
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelCtx()
+
+	message := big.NewInt(100)
+	attemptNumber := uint64(1)
+	attemptTimeoutBlock := uint64(1000)
+	// Oversized included set: ALL five members are included, but only the first
+	// three (the chosen signing subset) report done; members 4 and 5 are offline.
+	attemptMemberIndexes := memberIndexes
+	result := &signing.Result{
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(200), big.NewInt(300)),
+	}
+
+	doneCheck.listen(
+		ctx,
+		message,
+		attemptNumber,
+		attemptTimeoutBlock,
+		attemptMemberIndexes,
+	)
+
+	// The three reporters carry DIFFERENT end blocks (501, 502, 503); the result
+	// must still be the deterministic attempt timeout block, proving the returned
+	// end block does not depend on which/how-many done messages arrived.
+	for i := 1; i <= groupParameters.HonestThreshold; i++ {
+		err := doneCheck.signalDone(
+			ctx,
+			uint8(i),
+			message,
+			attemptNumber,
+			result,
+			500+uint64(i),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	returnedResult, endBlock, err := doneCheck.waitUntilAllDone(ctx)
+	if err != nil {
+		t.Fatalf("expected conclusion on the t-subset, got error: [%v]", err)
+	}
+	if returnedResult == nil || !result.Signature.Equals(returnedResult.Signature) {
+		t.Fatalf("unexpected result: [%v]", returnedResult)
+	}
+	testutils.AssertIntsEqual(t, "end block", int(attemptTimeoutBlock), int(endBlock))
+}
+
+// TestSigningDoneCheck_OversizedIgnoresMinorityDivergentSignature proves the
+// oversized rule is robust to a minority adversary: a single done message
+// carrying a DIFFERENT signature must not fail the check or fracture the group.
+// t members report the correct signature (a quorum) while one reports a
+// divergent one; the check concludes on the quorum and ignores the minority,
+// rather than erroring the way the legacy all-members match-all rule would.
+func TestSigningDoneCheck_OversizedIgnoresMinorityDivergentSignature(t *testing.T) {
+	groupParameters := &GroupParameters{
+		GroupSize:       5,
+		GroupQuorum:     4,
+		HonestThreshold: 3,
+	}
+
+	doneCheck := setupSigningDoneCheck(t, groupParameters)
+
+	memberIndexes := make([]group.MemberIndex, doneCheck.groupSize)
+	for i := range memberIndexes {
+		memberIndexes[i] = group.MemberIndex(i + 1)
+	}
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelCtx()
+
+	message := big.NewInt(100)
+	attemptNumber := uint64(1)
+	attemptTimeoutBlock := uint64(1000)
+	attemptMemberIndexes := memberIndexes // oversized (5 > threshold 3)
+	correctResult := &signing.Result{
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(200), big.NewInt(300)),
+	}
+	divergentResult := &signing.Result{
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(201), big.NewInt(300)),
+	}
+
+	doneCheck.listen(ctx, message, attemptNumber, attemptTimeoutBlock, attemptMemberIndexes)
+
+	// Members 1..3 report the correct signature (a quorum); member 4 reports a
+	// divergent one.
+	for i := 1; i <= groupParameters.HonestThreshold; i++ {
+		if err := doneCheck.signalDone(ctx, uint8(i), message, attemptNumber, correctResult, 100); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := doneCheck.signalDone(ctx, uint8(4), message, attemptNumber, divergentResult, 100); err != nil {
+		t.Fatal(err)
+	}
+
+	returnedResult, endBlock, err := doneCheck.waitUntilAllDone(ctx)
+	if err != nil {
+		t.Fatalf("a minority divergent signature must be ignored, not fatal; got error: [%v]", err)
+	}
+	if returnedResult == nil || !correctResult.Signature.Equals(returnedResult.Signature) {
+		t.Fatalf("expected the quorum signature, got: [%v]", returnedResult)
+	}
+	testutils.AssertIntsEqual(t, "end block", int(attemptTimeoutBlock), int(endBlock))
+}
+
+// TestSigningDoneCheck_OversizedSplitBelowQuorumTimesOut covers the no-quorum
+// case (e.g. a coordinator equivocation splitting honest nodes across two
+// signatures, plus offline members): with the reporters split below the
+// threshold in every signature bucket, no bucket reaches t, so the check must
+// time out rather than conclude on a non-quorum subset.
+func TestSigningDoneCheck_OversizedSplitBelowQuorumTimesOut(t *testing.T) {
+	groupParameters := &GroupParameters{
+		GroupSize:       5,
+		GroupQuorum:     4,
+		HonestThreshold: 3,
+	}
+
+	doneCheck := setupSigningDoneCheck(t, groupParameters)
+
+	memberIndexes := make([]group.MemberIndex, doneCheck.groupSize)
+	for i := range memberIndexes {
+		memberIndexes[i] = group.MemberIndex(i + 1)
+	}
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancelCtx()
+
+	message := big.NewInt(100)
+	attemptNumber := uint64(1)
+	attemptTimeoutBlock := uint64(1000)
+	attemptMemberIndexes := memberIndexes // oversized (5 > threshold 3)
+	resultA := &signing.Result{
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(200), big.NewInt(300)),
+	}
+	resultB := &signing.Result{
+		Signature: mustFrostSignatureFromBigInts(big.NewInt(201), big.NewInt(300)),
+	}
+
+	doneCheck.listen(ctx, message, attemptNumber, attemptTimeoutBlock, attemptMemberIndexes)
+
+	// 2 report signature A, 2 report signature B, 1 offline: no bucket reaches t=3.
+	for _, i := range []uint8{1, 2} {
+		if err := doneCheck.signalDone(ctx, i, message, attemptNumber, resultA, 100); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, i := range []uint8{3, 4} {
+		if err := doneCheck.signalDone(ctx, i, message, attemptNumber, resultB, 100); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	returnedResult, endBlock, err := doneCheck.waitUntilAllDone(ctx)
+	if returnedResult != nil {
+		t.Errorf("expected nil result on a below-quorum split, has [%v]", returnedResult)
+	}
+	testutils.AssertIntsEqual(t, "end block", 0, int(endBlock))
+	testutils.AssertErrorsSame(t, errWaitDoneTimedOut, err)
+}
+
 // signingDoneCheckComponents holds the shared state used to construct one or
 // more signingDoneCheck instances that communicate over the same channel.
 type signingDoneCheckComponents struct {
 	groupSize           int
+	honestThreshold     int
 	broadcastChannel    net.BroadcastChannel
 	membershipValidator *group.MembershipValidator
 }
 
 func (c *signingDoneCheckComponents) newCheck() *signingDoneCheck {
-	return newSigningDoneCheck(c.groupSize, c.broadcastChannel, c.membershipValidator)
+	return newSigningDoneCheck(c.groupSize, c.honestThreshold, c.broadcastChannel, c.membershipValidator)
 }
 
 // setupSigningDoneCheckComponents builds the shared channel and validator
@@ -341,6 +523,7 @@ func setupSigningDoneCheckComponents(
 
 	return &signingDoneCheckComponents{
 		groupSize:           groupParameters.GroupSize,
+		honestThreshold:     groupParameters.HonestThreshold,
 		broadcastChannel:    broadcastChannel,
 		membershipValidator: membershipValidator,
 	}

@@ -373,6 +373,7 @@ func (se *signingExecutor) signWithTaprootMerkleRoot(
 
 			doneCheck := newSigningDoneCheck(
 				se.groupParameters.GroupSize,
+				se.groupParameters.HonestThreshold,
 				se.broadcastChannel,
 				se.membershipValidator,
 			)
