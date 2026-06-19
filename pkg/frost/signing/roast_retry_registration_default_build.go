@@ -2,7 +2,10 @@
 
 package signing
 
-import "github.com/keep-network/keep-core/pkg/frost/roast"
+import (
+	"github.com/keep-network/keep-core/pkg/frost/roast"
+	"github.com/keep-network/keep-core/pkg/protocol/group"
+)
 
 // RoastRetryDeps bundles the per-process dependencies the FROST
 // receive loops need to participate in RFC-21 Phase-4 coordinator-
@@ -39,6 +42,19 @@ type RoastRetryDeps struct {
 // registration only takes effect when the `frost_roast_retry` build
 // tag is active.
 func RegisterRoastRetryCoordinator(_ RoastRetryDeps) {}
+
+// RegisterRoastRetryCoordinatorForMember is a no-op in the default
+// build. Production multi-seat wiring may invoke it unconditionally;
+// the per-member registration only takes effect under the
+// `frost_roast_retry` build tag.
+func RegisterRoastRetryCoordinatorForMember(_ group.MemberIndex, _ RoastRetryDeps) {}
+
+// RegisteredRoastRetryCoordinatorForMember returns (zero, false) in
+// the default build: no ROAST-retry plumbing is active for any seat,
+// so member-aware receivers use the Phase-2 NoOp fallback.
+func RegisteredRoastRetryCoordinatorForMember(_ group.MemberIndex) (RoastRetryDeps, bool) {
+	return RoastRetryDeps{}, false
+}
 
 // RegisteredRoastRetryCoordinator returns (zero, false) in the
 // default build, signalling to receivers that ROAST-retry plumbing
