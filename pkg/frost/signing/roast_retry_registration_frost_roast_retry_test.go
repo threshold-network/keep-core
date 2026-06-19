@@ -38,6 +38,47 @@ func TestRoastRetryRegistration_TaggedBuildRoundTrip(t *testing.T) {
 	}
 }
 
+// TestRoastRetryActive_GatesOnReadinessAndRegistration asserts RoastRetryActive
+// is true only when BOTH the readiness opt-in is set AND a coordinator is
+// registered -- the deterministic group-wide gate the signing loop uses to decide
+// whether to key the active attempt off the committed roast number.
+func TestRoastRetryActive_GatesOnReadinessAndRegistration(t *testing.T) {
+	ResetRoastRetryRegistrationForTest()
+	t.Cleanup(ResetRoastRetryRegistrationForTest)
+
+	// Readiness off -> inactive regardless of registration.
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "false")
+	RegisterRoastRetryCoordinator(RoastRetryDeps{
+		Coordinator: roast.NewInMemoryCoordinator(),
+		SelfMember:  1,
+	})
+	if RoastRetryActive() {
+		t.Fatal("readiness off must yield inactive even with a coordinator")
+	}
+
+	// Readiness on but no coordinator -> inactive.
+	ResetRoastRetryRegistrationForTest()
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
+	if RoastRetryActive() {
+		t.Fatal("readiness on without a coordinator must yield inactive")
+	}
+
+	// Readiness on AND a coordinator -> active IFF a transition producer is built in
+	// (frost_native). A frost_roast_retry && !frost_native build has no producer, so
+	// ROAST stays inactive (legacy) even with readiness + a coordinator -- the
+	// build-config gate from Codex P2-1.
+	RegisterRoastRetryCoordinator(RoastRetryDeps{
+		Coordinator: roast.NewInMemoryCoordinator(),
+		SelfMember:  1,
+	})
+	if RoastRetryActive() != roastTransitionProducerAvailable() {
+		t.Fatalf(
+			"readiness + coordinator: RoastRetryActive must equal producer availability (%v); got %v",
+			roastTransitionProducerAvailable(), RoastRetryActive(),
+		)
+	}
+}
+
 func TestRoastRetryRegistration_LaterRegistrationOverwrites(t *testing.T) {
 	ResetRoastRetryRegistrationForTest()
 	t.Cleanup(ResetRoastRetryRegistrationForTest)

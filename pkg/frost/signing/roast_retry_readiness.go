@@ -58,3 +58,30 @@ func RoastRetryReadinessOptInEnabled() bool {
 	value := strings.TrimSpace(os.Getenv(RoastRetryReadinessOptInEnvVar))
 	return strings.EqualFold(value, "true")
 }
+
+// RoastRetryActive reports whether ROAST retry orchestration is runtime-active:
+// the readiness opt-in is set, a coordinator is registered, AND this build
+// contains the transition producer (frost_native). It is the deterministic,
+// process-level gate every honest node evaluates identically (env var +
+// in-process registration + build), so the signing loop and the signing executor
+// agree on whether to key the active attempt off the COMMITTED ROAST attempt
+// index (roastAttemptNumber) rather than the block-paced attemptCounter -- RFC-21
+// Phase 7.3 PR2b-1b. The participant selector gates on the same predicate, so
+// selection, observe, and the active signing context stay consistent.
+//
+// The producer requirement matters in a frost_roast_retry && !frost_native build:
+// there the selector and the registry exist but nothing PRODUCES transition
+// records, so without this check a retry would fail-close against a record that
+// can never be created instead of using the uniform legacy shuffle (Codex P2-1).
+// Always false in builds without the frost_roast_retry tag (the registration and
+// producer default stubs both report unavailable).
+func RoastRetryActive() bool {
+	if !RoastRetryReadinessOptInEnabled() {
+		return false
+	}
+	if !roastTransitionProducerAvailable() {
+		return false
+	}
+	_, ok := RegisteredRoastRetryCoordinator()
+	return ok
+}

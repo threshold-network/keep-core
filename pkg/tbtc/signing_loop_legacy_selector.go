@@ -39,10 +39,11 @@ func (legacySigningParticipantSelector) Select(
 	signingGroupOperators chain.Addresses,
 	seed int64,
 	retryCount uint,
+	_ uint, // roastAttemptNumber: legacy diversifies by retryCount, not the ROAST counter
 	honestThreshold uint,
 	_ string,
 	_ group.MemberIndex,
-) ([]group.MemberIndex, error) {
+) (participantSelection, error) {
 	// Build the input the retry shuffle expects: one operator address
 	// per ready member (an operator controlling k ready members appears
 	// k times, matching the pre-RFC-21 input to the algorithm).
@@ -61,7 +62,7 @@ func (legacySigningParticipantSelector) Select(
 		honestThreshold,
 	)
 	if err != nil {
-		return nil, fmt.Errorf(
+		return participantSelection{}, fmt.Errorf(
 			"legacy participant selector: random operator selection failed: %w",
 			err,
 		)
@@ -113,5 +114,6 @@ func (legacySigningParticipantSelector) Select(
 	sort.Slice(includedMembersIndexes, func(i, j int) bool {
 		return includedMembersIndexes[i] < includedMembersIndexes[j]
 	})
-	return includedMembersIndexes, nil
+	// The legacy path never parks: parking is a ROAST-transition concept.
+	return participantSelection{includedMembersIndexes: includedMembersIndexes}, nil
 }

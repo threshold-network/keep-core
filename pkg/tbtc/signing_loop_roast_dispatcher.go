@@ -28,27 +28,40 @@ import (
 // path, where one ready seat qualified ALL of an operator's seats --
 // including ones ROAST means to park or exclude.
 type signingParticipantSelector interface {
-	// Select returns the member indices included in the given signing
-	// attempt, sorted ascending. readyMembersIndexes is the set of
-	// members whose ready signal was received this attempt;
-	// signingGroupOperators is the full member->operator roster
-	// (index i is member i+1), used by the legacy path to map
-	// qualified operators back to members. seed is the per-message
-	// retry seed; retryCount is 0-based (0 for the first attempt).
-	// honestThreshold is the group's signing threshold. sessionID is
-	// the STABLE ROAST session id and memberIndex is the local
-	// signer's member; together they key the per-(session, member)
-	// transition record the ROAST selector consumes (a multi-seat
-	// operator runs one signer per seat, each with its own record).
+	// Select returns the participant selection for the given attempt.
+	// readyMembersIndexes is the set of members whose ready signal was
+	// received this attempt; signingGroupOperators is the full
+	// member->operator roster (index i is member i+1), used by the
+	// legacy path to map qualified operators back to members. seed is
+	// the per-message retry seed; retryCount is the 0-based LEGACY retry
+	// counter (the block-paced loop counter, for the legacy shuffle).
+	// roastAttemptNumber is the 0-based COMMITTED ROAST attempt index
+	// (advanced only by observed attempts), which the ROAST selector
+	// keys its freshness/consume off so block-timing skips do not break
+	// the transition chain. honestThreshold is the group's signing
+	// threshold. sessionID is the STABLE ROAST session id and
+	// memberIndex is the local signer's member.
 	Select(
 		readyMembersIndexes []group.MemberIndex,
 		signingGroupOperators chain.Addresses,
 		seed int64,
 		retryCount uint,
+		roastAttemptNumber uint,
 		honestThreshold uint,
 		sessionID string,
 		memberIndex group.MemberIndex,
-	) ([]group.MemberIndex, error)
+	) (participantSelection, error)
+}
+
+// participantSelection is one attempt's selection result: the member-level
+// included set, plus the members the prior ROAST transition parked for THIS
+// attempt ONLY (empty for the legacy path). The parked set is a subset of the
+// complement of the included set; the loop carries it so the attempt after this
+// one reinstates them -- without it a one-attempt (transient) park becomes a
+// permanent exclusion (RFC-21 Phase 7.3 PR2b-1b).
+type participantSelection struct {
+	includedMembersIndexes          []group.MemberIndex
+	transientlyParkedMembersIndexes []group.MemberIndex
 }
 
 // defaultSigningParticipantSelector returns the build-default

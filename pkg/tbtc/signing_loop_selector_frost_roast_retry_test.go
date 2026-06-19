@@ -3,6 +3,7 @@
 package tbtc
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -31,35 +32,69 @@ func TestDefaultSigningParticipantSelector_IsROASTInTaggedBuild(t *testing.T) {
 	}
 }
 
-// In PR2a the ROAST selector delegates to legacy: the transition record is
-// produced + stored (the data foundation) but NOT consumed (consumption +
-// distribution land in PR2b, where consuming a purely-local record would no
-// longer diverge across peers). This test asserts both halves: a legacy-shaped
-// result, and that an existing record is left UNTOUCHED (not consumed).
-func TestROASTSelector_DelegatesToLegacyAndDoesNotConsumeRecord(t *testing.T) {
+// The initial attempt (retry 0) has no prior transition, so the ROAST selector
+// uses the legacy retry shuffle -- a uniform decision every honest node makes.
+func TestROASTSelector_InitialAttemptUsesLegacy(t *testing.T) {
+	signing.ResetRoastRetryRegistrationForTest()
 	signing.ResetRoastTransitionRegistryForTest()
+	t.Cleanup(signing.ResetRoastRetryRegistrationForTest)
 	t.Cleanup(signing.ResetRoastTransitionRegistryForTest)
 
-	signing.RecordRoastTransition("session", 1, signing.RoastTransitionRecord{
-		Bundle:            &roast.TransitionMessage{CoordinatorIDValue: 1},
-		DkgGroupPublicKey: []byte{0x01, 0x02, 0x03},
-	})
-
 	sel := roastSigningParticipantSelector{}
+	// Args: ready, operators, seed, retryCount, roastAttemptNumber, honestThreshold,
+	// sessionID, memberIndex. roastAttemptNumber 0 == the initial ROAST attempt.
 	got, err := sel.Select(
 		[]group.MemberIndex{1, 2, 3, 4, 5},
 		selectorTestMembers(),
-		42, 0, 3, "session", 1,
+		42, 0, 0, 3, "session", 1,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(got) < 3 {
-		t.Fatalf("expected a legacy-shaped included set; got %d", len(got))
+	if len(got.includedMembersIndexes) != 3 {
+		t.Fatalf(
+			"expected a legacy-shaped included set (the honest threshold); got %d",
+			len(got.includedMembersIndexes),
+		)
+	}
+}
+
+// On a retry under ACTIVE ROAST retry, a transition is expected; when none
+// arrived the selector must FAIL CLOSED (surface an error that terminates the
+// loop) rather than fall back to legacy -- mixed selection across honest nodes
+// is the fracture class. C3 activates this consumption.
+func TestROASTSelector_FailsClosedWhenTransitionMissing(t *testing.T) {
+	t.Setenv(signing.RoastRetryReadinessOptInEnvVar, "true")
+	signing.ResetRoastRetryRegistrationForTest()
+	signing.ResetRoastTransitionRegistryForTest()
+	t.Cleanup(signing.ResetRoastRetryRegistrationForTest)
+	t.Cleanup(signing.ResetRoastTransitionRegistryForTest)
+	signing.RegisterRoastRetryCoordinator(signing.RoastRetryDeps{
+		Coordinator: roast.NewInMemoryCoordinator(),
+		Signer:      roast.NoOpSigner(),
+		Verifier:    roast.NoOpSignatureVerifier(),
+		SelfMember:  1,
+	})
+	if !signing.RoastRetryActive() {
+		// In a frost_roast_retry && !frost_native build there is no transition
+		// producer, so the selector falls back to legacy rather than fail-closing --
+		// the dedicated no-producer test covers that path. The fail-closed discipline
+		// asserted here only applies when a producer (frost_native) exists.
+		t.Skip("requires a transition producer (frost_native) for the fail-closed path")
 	}
 
-	// The record must be untouched: PR2a's selector does not consume it.
-	if _, ok := signing.RoastTransitionForSession("session", 1); !ok {
-		t.Fatal("PR2a selector must not consume the transition record")
+	sel := roastSigningParticipantSelector{}
+	// roastAttemptNumber 1 (> 0) under active ROAST expects a transition; none is
+	// stored, so the selector must fail closed.
+	_, err := sel.Select(
+		[]group.MemberIndex{1, 2, 3, 4, 5},
+		selectorTestMembers(),
+		42, 1, 1, 3, "session", 1,
+	)
+	if err == nil {
+		t.Fatal("expected a fail-closed error when an expected transition is missing")
+	}
+	if errors.Is(err, signing.ErrRoastSelectionFallBackToLegacy) {
+		t.Fatal("a missing expected transition must fail closed, not fall back to legacy")
 	}
 }

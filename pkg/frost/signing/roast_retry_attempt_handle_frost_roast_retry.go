@@ -128,6 +128,13 @@ func sessionHandleSweepLoop(stop <-chan struct{}) {
 			return
 		case <-ticker.C:
 			evictStaleSessionHandleBindings(SessionHandleBindingTTL)
+			// Defense-in-depth backstop for the cross-attempt registries
+			// (RFC-21 Phase 7.3 PR2b-1b): observe bindings are normally cleared
+			// at session end and transition records are overwritten per attempt,
+			// but a session that ends abnormally could orphan either -- sweep
+			// anything past the TTL.
+			evictStaleObservedAttempts(ObservedAttemptRegistryTTL)
+			evictStaleRoastTransitions(RoastTransitionRegistryTTL)
 		}
 	}
 }
