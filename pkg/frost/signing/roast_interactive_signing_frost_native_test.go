@@ -44,10 +44,18 @@ func persistedTBTCSignerMaterial(
 }
 
 func TestRegisterInteractiveSigningEngineProvider(t *testing.T) {
+	// Establish a clean precondition rather than assume one: other tests in this
+	// package install an interactive provider as a global side effect (e.g. the
+	// default FFI-provider registration under the cgo build calls
+	// registerBuildTaggedNativeFROSTSigningEngine), so a bare "no provider yet"
+	// assertion is order dependent and fails under -shuffle / a focused -run.
+	// Resetting up front makes this test order-independent regardless of which
+	// tests ran before it.
+	ResetInteractiveSigningEngineProviderForTest()
 	defer ResetInteractiveSigningEngineProviderForTest()
 
 	if got := registeredInteractiveSigningEngine(); got != nil {
-		t.Fatalf("expected nil engine before registration, got %T", got)
+		t.Fatalf("expected nil engine after reset, got %T", got)
 	}
 
 	want := newFakeInteractiveSigningEngine()

@@ -41,8 +41,16 @@ func TestRegisterNativeExecutionFFISigningPrimitiveForBuild_UsesDefaultProvider(
 ) {
 	UnregisterNativeExecutionFFISigningPrimitiveProviderForBuild()
 	UnregisterNativeExecutionFFIExecutor()
+	// Under the cgo build the default provider's registration installs the
+	// interactive signing provider as a side effect, so reset it here too -
+	// symmetric with the FFI executor/provider - both before (clean slate) and in
+	// cleanup. Otherwise a later test asserting no interactive provider is set
+	// (TestRegisterInteractiveSigningEngineProvider) fails under -shuffle or a
+	// focused -run. Resetting is a no-op on builds that register no provider.
+	ResetInteractiveSigningEngineProviderForTest()
 	t.Cleanup(UnregisterNativeExecutionFFISigningPrimitiveProviderForBuild)
 	t.Cleanup(UnregisterNativeExecutionFFIExecutor)
+	t.Cleanup(ResetInteractiveSigningEngineProviderForTest)
 
 	RegisterNativeExecutionFFISigningPrimitiveForBuild()
 
