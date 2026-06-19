@@ -633,3 +633,99 @@ func TestRoastTransitionExchange_NonElectedDoesNotAggregate(t *testing.T) {
 		t.Fatal("non-elected seat must not store a transition record from AggregateAndBroadcast")
 	}
 }
+
+// TestRoastTransitionExchange_StashedEvidenceDrivesExclusion is the end-to-end
+// blame-bridge proof (RFC-21 Phase 7.3 PR2b-2 step 2): coarse-path evidence stashed
+// by the receive loop is carried by BroadcastForcedSnapshot into the aggregated
+// bundle, so NextAttempt's f+1 accuser tally excludes the blamed member -- the
+// exclusion the pre-bridge forced-EMPTY snapshots could never trigger.
+func TestRoastTransitionExchange_StashedEvidenceDrivesExclusion(t *testing.T) {
+	ResetObservedAttemptRegistryForTest()
+	ResetRoastTransitionRegistryForTest()
+	ResetPendingEvidenceRegistryForTest()
+	t.Cleanup(ResetObservedAttemptRegistryForTest)
+	t.Cleanup(ResetRoastTransitionRegistryForTest)
+	t.Cleanup(ResetPendingEvidenceRegistryForTest)
+
+	roastSessionID := "exchange-blame-bridge-session"
+	included := []group.MemberIndex{1, 2, 3}
+	dkgKey := []byte{0x09, 0x0a}
+	// original group size 3; quorum = ExclusionAccuserQuorum(3, threshold) =
+	// 3 - 2 + 1 = 2, so two accusers establish a permanent reject exclusion.
+	const threshold uint = 2
+
+	ctx := newExchangeTestContext(t, roastSessionID, included, dkgKey)
+	hash := ctx.Hash()
+	nodes := newExchangeTestNodes(t, roastSessionID, ctx, dkgKey)
+
+	// Members 1 and 2 each observed a validation reject against member 3 during the
+	// coarse receive loop; their submit stashed it. Member 3 observed nothing and
+	// broadcasts only an empty proof-of-attendance snapshot.
+	rejectAgainst3 := attempt.Evidence{
+		Rejects: map[group.MemberIndex][]attempt.RejectEntry{
+			3: {{Reason: "attempt_context_hash_mismatch", Count: 1}},
+		},
+	}
+	stashPendingEvidence(roastSessionID, 1, hash, rejectAgainst3)
+	stashPendingEvidence(roastSessionID, 2, hash, rejectAgainst3)
+
+	bundleMsg, elected := produceTransitionBundleForTest(t, roastSessionID, ctx, nodes)
+
+	// The aggregated bundle must carry real reject evidence from >=2 accusers, not
+	// the forced-empty snapshots of the pre-bridge design.
+	bundle := &roast.TransitionMessage{}
+	if err := bundle.Unmarshal(bundleMsg.Payload); err != nil {
+		t.Fatalf("unmarshal bundle: %v", err)
+	}
+	accusers := 0
+	for i := range bundle.Bundle {
+		if len(bundle.Bundle[i].Rejects) > 0 {
+			accusers++
+		}
+	}
+	if accusers < 2 {
+		t.Fatalf("bundle must carry reject evidence from >=2 accusers; got %d", accusers)
+	}
+
+	// BroadcastForcedSnapshot consumed the stash.
+	if PendingEvidenceStashedForTest(roastSessionID, 1) ||
+		PendingEvidenceStashedForTest(roastSessionID, 2) {
+		t.Fatal("BroadcastForcedSnapshot must consume the stash")
+	}
+
+	// A non-elected accuser verifies the bundle against its own observe handle and
+	// computes the next attempt: member 3 meets the f+1 reject quorum -> excluded.
+	var verifier group.MemberIndex
+	for _, m := range included {
+		if m != elected {
+			verifier = m
+			break
+		}
+	}
+	binding, ok := observedAttempt(roastSessionID, verifier, hash)
+	if !ok {
+		t.Fatalf("non-elected seat %d must still hold its observe binding", verifier)
+	}
+	if err := nodes[verifier].coord.VerifyBundle(binding.handle, bundle); err != nil {
+		t.Fatalf("verify bundle: %v", err)
+	}
+	next, err := nodes[verifier].coord.NextAttempt(binding.handle, bundle, threshold, dkgKey)
+	if err != nil {
+		t.Fatalf("next attempt: %v", err)
+	}
+
+	excluded3 := false
+	for _, m := range next.ExcludedSet {
+		if m == 3 {
+			excluded3 = true
+		}
+	}
+	if !excluded3 {
+		t.Fatalf("member 3 must be excluded by the f+1 reject quorum; excluded=%v", next.ExcludedSet)
+	}
+	for _, m := range next.IncludedSet {
+		if m == 3 {
+			t.Fatalf("excluded member 3 must not be in the next included set; included=%v", next.IncludedSet)
+		}
+	}
+}

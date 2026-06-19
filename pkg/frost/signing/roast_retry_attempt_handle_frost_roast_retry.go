@@ -161,6 +161,10 @@ func sessionHandleSweepLoop(stop <-chan struct{}) {
 			// anything past the TTL.
 			evictStaleObservedAttempts(ObservedAttemptRegistryTTL)
 			evictStaleRoastTransitions(RoastTransitionRegistryTTL)
+			// Stashed coarse-path evidence is normally consumed by
+			// BroadcastForcedSnapshot or cleared on success/session-end (RFC-21
+			// Phase 7.3 PR2b-2 step 2); sweep any orphaned by an abnormal end.
+			evictStalePendingEvidence(PendingEvidenceRegistryTTL)
 		}
 	}
 }

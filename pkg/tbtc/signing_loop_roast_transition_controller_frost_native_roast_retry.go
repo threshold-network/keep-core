@@ -186,6 +186,15 @@ func (c *roastTransitionControllerImpl) OnAttemptSucceeded() {
 		c.requestTemplate.MemberIndex,
 		hash,
 	)
+	// Also drop any coarse-path evidence stashed for this attempt: a succeeded
+	// attempt never reaches OnAttemptFailed -> BroadcastForcedSnapshot (which is
+	// what consumes the stash), so without this the entry would leak until the TTL
+	// sweep (RFC-21 Phase 7.3 PR2b-2 step 2, the blame bridge).
+	signing.ClearPendingEvidenceOnLocalSuccess(
+		c.requestTemplate.RoastSessionID,
+		c.requestTemplate.MemberIndex,
+		hash,
+	)
 }
 
 func (c *roastTransitionControllerImpl) HasLostSync() bool {

@@ -3,95 +3,12 @@
 package signing
 
 import (
-	"errors"
-	"sync"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/frost/roast"
 	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
-
-// captureCoordinator is a roast.Coordinator wrapper that records
-// every RecordEvidence call so tests can assert what was submitted.
-// It delegates everything else to an embedded real coordinator.
-type captureCoordinator struct {
-	inner       roast.Coordinator
-	mu          sync.Mutex
-	recordedFor []roast.AttemptHandle
-	recordedSnp []*roast.LocalEvidenceSnapshot
-	recordErr   error
-}
-
-func newCaptureCoordinator(inner roast.Coordinator) *captureCoordinator {
-	return &captureCoordinator{inner: inner}
-}
-
-func (c *captureCoordinator) BeginAttempt(ctx attempt.AttemptContext) (roast.AttemptHandle, error) {
-	return c.inner.BeginAttempt(ctx)
-}
-func (c *captureCoordinator) State(h roast.AttemptHandle) (roast.AttemptState, error) {
-	return c.inner.State(h)
-}
-func (c *captureCoordinator) SelectedCoordinator(h roast.AttemptHandle) (group.MemberIndex, error) {
-	return c.inner.SelectedCoordinator(h)
-}
-func (c *captureCoordinator) RecordEvidence(h roast.AttemptHandle, s *roast.LocalEvidenceSnapshot) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.recordErr != nil {
-		return c.recordErr
-	}
-	c.recordedFor = append(c.recordedFor, h)
-	c.recordedSnp = append(c.recordedSnp, s)
-	return c.inner.RecordEvidence(h, s)
-}
-func (c *captureCoordinator) AggregateBundle(h roast.AttemptHandle) (*roast.TransitionMessage, error) {
-	return c.inner.AggregateBundle(h)
-}
-func (c *captureCoordinator) MarkSucceeded(h roast.AttemptHandle) error {
-	return c.inner.MarkSucceeded(h)
-}
-func (c *captureCoordinator) VerifyBundle(h roast.AttemptHandle, m *roast.TransitionMessage) error {
-	return c.inner.VerifyBundle(h, m)
-}
-func (c *captureCoordinator) NextAttempt(
-	h roast.AttemptHandle, m *roast.TransitionMessage, t uint, pk []byte,
-) (attempt.AttemptContext, error) {
-	return c.inner.NextAttempt(h, m, t, pk)
-}
-
-// deterministicSigner produces SHA256(memberID || payload)-style
-// signatures the captureSignatureVerifier accepts.
-type deterministicSigner struct {
-	id group.MemberIndex
-}
-
-func (d *deterministicSigner) Sign(payload []byte) ([]byte, error) {
-	out := make([]byte, len(payload)+1)
-	out[0] = byte(d.id)
-	copy(out[1:], payload)
-	return out, nil
-}
-
-type deterministicVerifier struct{}
-
-func (deterministicVerifier) Verify(
-	payload []byte, signature []byte, signer group.MemberIndex,
-) error {
-	if len(signature) != len(payload)+1 {
-		return errors.New("deterministicVerifier: length mismatch")
-	}
-	if signature[0] != byte(signer) {
-		return errors.New("deterministicVerifier: signer byte mismatch")
-	}
-	for i, b := range payload {
-		if signature[i+1] != b {
-			return errors.New("deterministicVerifier: payload byte mismatch")
-		}
-	}
-	return nil
-}
 
 func newTestContextForSubmit(t *testing.T, sessionID string) attempt.AttemptContext {
 	t.Helper()
@@ -110,111 +27,76 @@ func newTestContextForSubmit(t *testing.T, sessionID string) attempt.AttemptCont
 	return ctx
 }
 
-func TestSubmitSnapshotIfActive_NoOpWhenRegistryEmpty(t *testing.T) {
-	ResetRoastRetryRegistrationForTest()
+// TestSubmitSnapshotIfActive_NilRecorderIsNoOp guards the cheap nil guard: the
+// receive loop falls back to a nil/NoOp recorder when ROAST retry is inactive, and
+// submit must not panic or stash.
+func TestSubmitSnapshotIfActive_NilRecorderIsNoOp(t *testing.T) {
 	ResetSessionHandleRegistryForTest()
-	t.Cleanup(ResetRoastRetryRegistrationForTest)
+	ResetPendingEvidenceRegistryForTest()
 	t.Cleanup(ResetSessionHandleRegistryForTest)
+	t.Cleanup(ResetPendingEvidenceRegistryForTest)
 
-	// No registration, no binding. submit should be a no-op.
-	recorder := attempt.NewBoundedRecorder()
-	recorder.RecordOverflow(7)
-	submitSnapshotIfActive("session-x", 1, recorder)
-	// Nothing to assert observably: success is the absence of a
-	// panic and no calls to a non-existent coordinator.
+	submitSnapshotIfActive("session-nil", 1, nil)
+
+	if PendingEvidenceStashedForTest("session-nil", 1) {
+		t.Fatal("nil recorder must not stash")
+	}
 }
 
+// TestSubmitSnapshotIfActive_NoOpWhenSessionUnbound asserts that without a
+// session-handle binding (the orchestration layer has not run, or the default
+// build), submit stashes nothing -- there is no attempt to attribute evidence to.
 func TestSubmitSnapshotIfActive_NoOpWhenSessionUnbound(t *testing.T) {
-	ResetRoastRetryRegistrationForTest()
 	ResetSessionHandleRegistryForTest()
-	t.Cleanup(ResetRoastRetryRegistrationForTest)
+	ResetPendingEvidenceRegistryForTest()
 	t.Cleanup(ResetSessionHandleRegistryForTest)
-
-	innerCoord := roast.NewInMemoryCoordinator()
-	cap := newCaptureCoordinator(innerCoord)
-	RegisterRoastRetryCoordinator(RoastRetryDeps{
-		Coordinator: cap,
-		Signer:      &deterministicSigner{id: 1},
-		Verifier:    deterministicVerifier{},
-		SelfMember:  1,
-	})
+	t.Cleanup(ResetPendingEvidenceRegistryForTest)
 
 	recorder := attempt.NewBoundedRecorder()
 	recorder.RecordOverflow(7)
 	submitSnapshotIfActive("session-with-no-binding", 1, recorder)
 
-	if len(cap.recordedFor) != 0 {
-		t.Fatalf(
-			"expected no RecordEvidence calls when session unbound; got %d",
-			len(cap.recordedFor),
-		)
+	if PendingEvidenceStashedForTest("session-with-no-binding", 1) {
+		t.Fatal("expected no stash when session unbound")
 	}
 }
 
+// TestSubmitSnapshotIfActive_NoOpWhenRecorderEmpty asserts a bound attempt whose
+// recorder captured zero events stashes nothing: the exchange still broadcasts an
+// empty proof-of-attendance snapshot, so skipping the stash does not silence-park
+// the seat.
 func TestSubmitSnapshotIfActive_NoOpWhenRecorderEmpty(t *testing.T) {
-	ResetRoastRetryRegistrationForTest()
 	ResetSessionHandleRegistryForTest()
-	t.Cleanup(ResetRoastRetryRegistrationForTest)
+	ResetPendingEvidenceRegistryForTest()
 	t.Cleanup(ResetSessionHandleRegistryForTest)
-
-	innerCoord := roast.NewInMemoryCoordinatorWithSigning(
-		1,
-		&deterministicSigner{id: 1},
-		deterministicVerifier{},
-	)
-	cap := newCaptureCoordinator(innerCoord)
-	RegisterRoastRetryCoordinator(RoastRetryDeps{
-		Coordinator: cap,
-		Signer:      &deterministicSigner{id: 1},
-		Verifier:    deterministicVerifier{},
-		SelfMember:  1,
-	})
-
-	ctx := newTestContextForSubmit(t, "session-empty")
-	handle, err := cap.BeginAttempt(ctx)
-	if err != nil {
-		t.Fatalf("begin: %v", err)
-	}
-	SetCurrentAttemptHandleForSession("session-empty", 1, handle, ctx)
-
-	// Recorder is bounded but has captured zero events.
-	recorder := attempt.NewBoundedRecorder()
-	submitSnapshotIfActive("session-empty", 1, recorder)
-
-	if len(cap.recordedFor) != 0 {
-		t.Fatalf(
-			"expected no RecordEvidence for empty snapshot; got %d",
-			len(cap.recordedFor),
-		)
-	}
-}
-
-func TestSubmitSnapshotIfActive_SubmitsSignedSnapshotWhenBoundAndPopulated(t *testing.T) {
-	ResetRoastRetryRegistrationForTest()
-	ResetSessionHandleRegistryForTest()
-	t.Cleanup(ResetRoastRetryRegistrationForTest)
-	t.Cleanup(ResetSessionHandleRegistryForTest)
+	t.Cleanup(ResetPendingEvidenceRegistryForTest)
 
 	const selfMember group.MemberIndex = 1
-	innerCoord := roast.NewInMemoryCoordinatorWithSigning(
-		selfMember,
-		&deterministicSigner{id: selfMember},
-		deterministicVerifier{},
-	)
-	cap := newCaptureCoordinator(innerCoord)
-	RegisterRoastRetryCoordinator(RoastRetryDeps{
-		Coordinator: cap,
-		Signer:      &deterministicSigner{id: selfMember},
-		Verifier:    deterministicVerifier{},
-		SelfMember:  uint32(selfMember),
-	})
+	ctx := newTestContextForSubmit(t, "session-empty")
+	SetCurrentAttemptHandleForSession("session-empty", selfMember, roast.AttemptHandle{}, ctx)
 
-	ctx := newTestContextForSubmit(t, "session-real")
-	handle, err := cap.BeginAttempt(ctx)
-	if err != nil {
-		t.Fatalf("begin: %v", err)
+	recorder := attempt.NewBoundedRecorder()
+	submitSnapshotIfActive("session-empty", selfMember, recorder)
+
+	if PendingEvidenceStashedForTest("session-empty", selfMember) {
+		t.Fatal("expected no stash for an empty snapshot")
 	}
-	SetCurrentAttemptHandleForSession("session-real", selfMember, handle, ctx)
+}
+
+// TestSubmitSnapshotIfActive_StashesEvidenceWhenBoundAndPopulated is the core
+// blame-bridge wiring (RFC-21 Phase 7.3 PR2b-2 step 2): a bound attempt with
+// captured evidence stashes the RAW evidence keyed by the attempt's
+// (RoastSessionID==ctx.SessionID, member, attemptHash==ctx.Hash()) so the
+// transition exchange's BroadcastForcedSnapshot can carry it into the bundle.
+func TestSubmitSnapshotIfActive_StashesEvidenceWhenBoundAndPopulated(t *testing.T) {
+	ResetSessionHandleRegistryForTest()
+	ResetPendingEvidenceRegistryForTest()
+	t.Cleanup(ResetSessionHandleRegistryForTest)
+	t.Cleanup(ResetPendingEvidenceRegistryForTest)
+
+	const selfMember group.MemberIndex = 1
+	ctx := newTestContextForSubmit(t, "session-real")
+	SetCurrentAttemptHandleForSession("session-real", selfMember, roast.AttemptHandle{}, ctx)
 
 	recorder := attempt.NewBoundedRecorder()
 	recorder.RecordOverflow(3)
@@ -222,66 +104,66 @@ func TestSubmitSnapshotIfActive_SubmitsSignedSnapshotWhenBoundAndPopulated(t *te
 	recorder.RecordOverflow(5)
 	submitSnapshotIfActive("session-real", selfMember, recorder)
 
-	if len(cap.recordedFor) != 1 {
-		t.Fatalf("expected 1 RecordEvidence; got %d", len(cap.recordedFor))
+	evidence, ok := takePendingEvidence(ctx.SessionID, selfMember, ctx.Hash())
+	if !ok {
+		t.Fatal("expected stashed evidence after a populated submit")
 	}
-	if cap.recordedFor[0] != handle {
-		t.Fatal("RecordEvidence handle mismatch")
+	// 2 distinct senders observed (3 twice, 5 once).
+	if len(evidence.Overflows) != 2 {
+		t.Fatalf("expected 2 overflow senders stashed; got %d", len(evidence.Overflows))
 	}
-	snap := cap.recordedSnp[0]
-	if snap.SenderID() != selfMember {
-		t.Fatalf("snapshot sender: got %d want %d", snap.SenderID(), selfMember)
+	if evidence.Overflows[3] != 2 || evidence.Overflows[5] != 1 {
+		t.Fatalf("stashed overflow counts wrong: %+v", evidence.Overflows)
 	}
-	if len(snap.OperatorSignature) == 0 {
-		t.Fatal("snapshot must be signed")
-	}
-	// 2 distinct senders observed.
-	if len(snap.Overflows) != 2 {
-		t.Fatalf("expected 2 overflow entries; got %d", len(snap.Overflows))
+	// take consumes: a second take finds nothing.
+	if _, ok := takePendingEvidence(ctx.SessionID, selfMember, ctx.Hash()); ok {
+		t.Fatal("take must consume the stash entry")
 	}
 }
 
-// TestSubmitSnapshotIfActive_MultiSeatSubmitsPerSeat asserts the PR2b-2 member-
-// aware submit path: with two local seats registered, each seat submits its own
-// evidence against ITS OWN coordinator and attempt handle. The PR2b-1.5 count>1
-// no-op guard is gone, so both submissions land -- and neither lands on the
-// sibling's coordinator.
-func TestSubmitSnapshotIfActive_MultiSeatSubmitsPerSeat(t *testing.T) {
-	ResetRoastRetryRegistrationForTest()
+// TestSubmitSnapshotIfActive_StashesRejectOnlySnapshot guards the all-categories
+// emptiness test: a snapshot carrying ONLY reject evidence -- no overflow, no
+// conflict -- must still be stashed. A validation-blamable Reject populates
+// Evidence.Rejects without any Overflow, and NextAttempt's exclusion path consumes
+// snapshot.Rejects; an overflow-only emptiness check would starve the blame
+// pipeline.
+func TestSubmitSnapshotIfActive_StashesRejectOnlySnapshot(t *testing.T) {
 	ResetSessionHandleRegistryForTest()
-	t.Cleanup(ResetRoastRetryRegistrationForTest)
+	ResetPendingEvidenceRegistryForTest()
 	t.Cleanup(ResetSessionHandleRegistryForTest)
+	t.Cleanup(ResetPendingEvidenceRegistryForTest)
 
-	cap1 := newCaptureCoordinator(roast.NewInMemoryCoordinatorWithSigning(
-		1, &deterministicSigner{id: 1}, deterministicVerifier{},
-	))
-	cap2 := newCaptureCoordinator(roast.NewInMemoryCoordinatorWithSigning(
-		2, &deterministicSigner{id: 2}, deterministicVerifier{},
-	))
-	RegisterRoastRetryCoordinatorForMember(1, RoastRetryDeps{
-		Coordinator: cap1,
-		Signer:      &deterministicSigner{id: 1},
-		Verifier:    deterministicVerifier{},
-		SelfMember:  1,
-	})
-	RegisterRoastRetryCoordinatorForMember(2, RoastRetryDeps{
-		Coordinator: cap2,
-		Signer:      &deterministicSigner{id: 2},
-		Verifier:    deterministicVerifier{},
-		SelfMember:  2,
-	})
+	const selfMember group.MemberIndex = 1
+	ctx := newTestContextForSubmit(t, "session-reject-only")
+	SetCurrentAttemptHandleForSession("session-reject-only", selfMember, roast.AttemptHandle{}, ctx)
+
+	recorder := attempt.NewBoundedRecorder()
+	recorder.RecordReject(2, "attempt_context_hash_mismatch")
+	submitSnapshotIfActive("session-reject-only", selfMember, recorder)
+
+	evidence, ok := takePendingEvidence(ctx.SessionID, selfMember, ctx.Hash())
+	if !ok {
+		t.Fatal("reject-only snapshot must be stashed")
+	}
+	if len(evidence.Rejects[2]) == 0 {
+		t.Fatalf("stashed evidence must carry the reject for sender 2; got %+v", evidence.Rejects)
+	}
+}
+
+// TestSubmitSnapshotIfActive_MultiSeatStashesPerSeat asserts the PR2b-2
+// member-aware path: with two local seats bound to the SAME attempt (same
+// RoastSessionID + attemptHash), each seat stashes its OWN evidence under its own
+// member key -- neither overwrites the other (the member-keying that fixes the
+// sibling-collision hazard).
+func TestSubmitSnapshotIfActive_MultiSeatStashesPerSeat(t *testing.T) {
+	ResetSessionHandleRegistryForTest()
+	ResetPendingEvidenceRegistryForTest()
+	t.Cleanup(ResetSessionHandleRegistryForTest)
+	t.Cleanup(ResetPendingEvidenceRegistryForTest)
 
 	ctx := newTestContextForSubmit(t, "session-ms")
-	handle1, err := cap1.BeginAttempt(ctx)
-	if err != nil {
-		t.Fatalf("seat 1 begin: %v", err)
-	}
-	handle2, err := cap2.BeginAttempt(ctx)
-	if err != nil {
-		t.Fatalf("seat 2 begin: %v", err)
-	}
-	SetCurrentAttemptHandleForSession("session-ms", 1, handle1, ctx)
-	SetCurrentAttemptHandleForSession("session-ms", 2, handle2, ctx)
+	SetCurrentAttemptHandleForSession("session-ms", 1, roast.AttemptHandle{}, ctx)
+	SetCurrentAttemptHandleForSession("session-ms", 2, roast.AttemptHandle{}, ctx)
 
 	rec1 := attempt.NewBoundedRecorder()
 	rec1.RecordOverflow(3)
@@ -291,66 +173,17 @@ func TestSubmitSnapshotIfActive_MultiSeatSubmitsPerSeat(t *testing.T) {
 	submitSnapshotIfActive("session-ms", 1, rec1)
 	submitSnapshotIfActive("session-ms", 2, rec2)
 
-	// Each seat's evidence landed on ITS OWN coordinator (no mis-attribution),
-	// each against its own handle and signed as its own member.
-	if len(cap1.recordedFor) != 1 || cap1.recordedFor[0] != handle1 {
-		t.Fatalf("seat 1 must record once against its own handle; got %+v", cap1.recordedFor)
+	ev1, ok1 := takePendingEvidence(ctx.SessionID, 1, ctx.Hash())
+	ev2, ok2 := takePendingEvidence(ctx.SessionID, 2, ctx.Hash())
+	if !ok1 || !ok2 {
+		t.Fatalf("both seats must stash their own evidence; got ok1=%v ok2=%v", ok1, ok2)
 	}
-	if len(cap2.recordedFor) != 1 || cap2.recordedFor[0] != handle2 {
-		t.Fatalf("seat 2 must record once against its own handle; got %+v", cap2.recordedFor)
+	// Seat 1 observed sender 3 only; seat 2 observed sender 4 only -- no bleed.
+	if ev1.Overflows[3] != 1 || ev1.Overflows[4] != 0 {
+		t.Fatalf("seat 1 stash must isolate its own evidence; got %+v", ev1.Overflows)
 	}
-	if cap1.recordedSnp[0].SenderID() != 1 {
-		t.Fatalf("seat 1 snapshot sender: got %d want 1", cap1.recordedSnp[0].SenderID())
-	}
-	if cap2.recordedSnp[0].SenderID() != 2 {
-		t.Fatalf("seat 2 snapshot sender: got %d want 2", cap2.recordedSnp[0].SenderID())
-	}
-}
-
-// TestSubmitSnapshotIfActive_SubmitsRejectOnlySnapshot guards the fold of Codex's
-// PR2b-2 P2: a snapshot carrying ONLY reject evidence -- no overflow, no conflict
-// -- must still be signed and submitted. A validation-blamable Reject (e.g. an
-// attempt-context-hash mismatch) populates Evidence.Rejects without any Overflow,
-// and NextAttempt's exclusion path consumes snapshot.Rejects; the old overflow-only
-// emptiness check silently dropped such snapshots, starving the blame pipeline.
-func TestSubmitSnapshotIfActive_SubmitsRejectOnlySnapshot(t *testing.T) {
-	ResetRoastRetryRegistrationForTest()
-	ResetSessionHandleRegistryForTest()
-	t.Cleanup(ResetRoastRetryRegistrationForTest)
-	t.Cleanup(ResetSessionHandleRegistryForTest)
-
-	const selfMember group.MemberIndex = 1
-	cap := newCaptureCoordinator(roast.NewInMemoryCoordinatorWithSigning(
-		selfMember, &deterministicSigner{id: selfMember}, deterministicVerifier{},
-	))
-	RegisterRoastRetryCoordinator(RoastRetryDeps{
-		Coordinator: cap,
-		Signer:      &deterministicSigner{id: selfMember},
-		Verifier:    deterministicVerifier{},
-		SelfMember:  uint32(selfMember),
-	})
-
-	ctx := newTestContextForSubmit(t, "session-reject-only")
-	handle, err := cap.BeginAttempt(ctx)
-	if err != nil {
-		t.Fatalf("begin: %v", err)
-	}
-	SetCurrentAttemptHandleForSession("session-reject-only", selfMember, handle, ctx)
-
-	// Only a reject -- no overflow, no conflict.
-	recorder := attempt.NewBoundedRecorder()
-	recorder.RecordReject(2, "attempt_context_hash_mismatch")
-	submitSnapshotIfActive("session-reject-only", selfMember, recorder)
-
-	if len(cap.recordedFor) != 1 {
-		t.Fatalf("reject-only snapshot must be submitted; got %d RecordEvidence calls", len(cap.recordedFor))
-	}
-	snap := cap.recordedSnp[0]
-	if len(snap.Rejects) == 0 {
-		t.Fatal("submitted snapshot must carry the reject evidence")
-	}
-	if len(snap.OperatorSignature) == 0 {
-		t.Fatal("reject-only snapshot must be signed")
+	if ev2.Overflows[4] != 1 || ev2.Overflows[3] != 0 {
+		t.Fatalf("seat 2 stash must isolate its own evidence; got %+v", ev2.Overflows)
 	}
 }
 
@@ -402,33 +235,4 @@ func TestClearCurrentAttemptHandleForSession_RemovesBinding(t *testing.T) {
 	if _, _, ok := currentAttemptHandleForCollect("session-clear", 1); ok {
 		t.Fatal("binding must be cleared")
 	}
-}
-
-func TestSubmitSnapshotIfActive_RecordEvidenceFailureIsLoggedNotPropagated(t *testing.T) {
-	ResetRoastRetryRegistrationForTest()
-	ResetSessionHandleRegistryForTest()
-	t.Cleanup(ResetRoastRetryRegistrationForTest)
-	t.Cleanup(ResetSessionHandleRegistryForTest)
-
-	innerCoord := roast.NewInMemoryCoordinatorWithSigning(
-		1, &deterministicSigner{id: 1}, deterministicVerifier{},
-	)
-	cap := newCaptureCoordinator(innerCoord)
-	cap.recordErr = errors.New("synthetic RecordEvidence failure")
-	RegisterRoastRetryCoordinator(RoastRetryDeps{
-		Coordinator: cap,
-		Signer:      &deterministicSigner{id: 1},
-		Verifier:    deterministicVerifier{},
-		SelfMember:  1,
-	})
-
-	ctx := newTestContextForSubmit(t, "session-failure")
-	handle, _ := cap.BeginAttempt(ctx)
-	SetCurrentAttemptHandleForSession("session-failure", 1, handle, ctx)
-
-	recorder := attempt.NewBoundedRecorder()
-	recorder.RecordOverflow(3)
-
-	// Must not panic. Caller is unaffected.
-	submitSnapshotIfActive("session-failure", 1, recorder)
 }

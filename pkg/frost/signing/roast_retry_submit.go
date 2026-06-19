@@ -1,43 +1,39 @@
 package signing
 
 import (
-	"github.com/ipfs/go-log/v2"
-	"github.com/keep-network/keep-core/pkg/frost/roast"
 	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
-// roastRetryLogger is the logger the snapshot-submission path uses
-// for non-fatal diagnostics (submission failures, signature errors).
-// A submission failure does not propagate to the signing flow:
-// Phase 4 ships the submission code path unused in production, and
-// even when wired (Phase 5+) a transient submission failure is
-// recoverable by the next attempt's evidence flow.
-var roastRetryLogger = log.Logger("keep-frost-roast-retry")
-
-// submitSnapshotIfActive is invoked at end-of-collect to push the
-// receive loop's accumulated evidence into the ROAST coordinator's
-// RecordEvidence pipeline. member is the local seat whose receive loop
-// is submitting (request.MemberIndex). The path is fully member-aware
-// (RFC-21 Phase 7.3 PR2b-2): a multi-seat operator's sibling seats each
-// submit their own evidence against their own coordinator and attempt
-// handle, so they no longer mis-attribute or collide (which is why the
-// PR2b-1.5 multi-seat no-op guard is gone). The function is a no-op when
-// any of the following is true:
+// submitSnapshotIfActive is invoked at end-of-collect to capture the receive
+// loop's accumulated evidence for the ROAST blame pipeline. member is the local
+// seat whose receive loop is submitting (request.MemberIndex). The path is fully
+// member-aware (RFC-21 Phase 7.3 PR2b-2): a multi-seat operator's sibling seats
+// each capture their own evidence against their own attempt binding, so they never
+// mis-attribute or collide.
 //
-//   - this member has no registered ROAST-retry coordinator (default
-//     build where RegisterRoastRetryCoordinator is a no-op, or a
-//     partially-registered operator where only a sibling seat is wired);
-//   - no session-handle binding exists for (sessionID, member) (the
-//     typical Phase-4 state, where the orchestration layer that calls
-//     SetCurrentAttemptHandleForSession is not yet implemented);
-//   - the recorder is nil / a NoOp (no events were captured).
+// RFC-21 Phase 7.3 PR2b-2 step 2 (the blame bridge): the captured evidence is
+// STASHED keyed by the attempt's (RoastSessionID, member, attemptHash), NOT
+// recorded against the drive handle. The drive handle is never aggregated -- the
+// transition exchange is the sole bundle producer and aggregates the OBSERVE
+// handle -- so a RecordEvidence here was a write-only dead end. Stashing instead
+// lets the exchange's BroadcastForcedSnapshot build + sign ONE snapshot carrying
+// this evidence, so the elected coordinator's AggregateBundle includes it and
+// NextAttempt's f+1 accuser tally can finally fire.
 //
-// Otherwise the function builds a LocalEvidenceSnapshot, signs it with
-// this member's registered Signer, and submits it via
-// Coordinator.RecordEvidence. Errors at any step are logged at WARN
-// level and otherwise swallowed -- snapshot submission must not break
-// the receive loop's primary signing behaviour.
+// The function is a no-op when any of the following holds:
+//
+//   - no session-handle binding exists for (sessionID, member): the default build
+//     (where currentAttemptHandleForCollect always returns ok=false), or a state
+//     where the orchestration layer that calls SetCurrentAttemptHandleForSession
+//     has not run;
+//   - the recorder is nil / a NoOp (no events were captured);
+//   - the captured evidence is empty across all three categories: the exchange
+//     still broadcasts an empty proof-of-attendance snapshot for the attempt, so
+//     skipping the stash here does not silence-park the seat.
+//
+// Capturing must never break the receive loop's primary signing behaviour, so the
+// function returns silently on every skip condition.
 func submitSnapshotIfActive(
 	sessionID string,
 	member group.MemberIndex,
@@ -46,14 +42,12 @@ func submitSnapshotIfActive(
 	if recorder == nil {
 		return
 	}
-	// Member-aware lookup: a multi-seat operator's elected seat aggregates with
-	// its OWN coordinator and the snapshot is attributed to deps.SelfMember ==
-	// member. A seat with no coordinator (partial registration) submits nothing.
-	deps, ok := RegisteredRoastRetryCoordinatorForMember(member)
-	if !ok {
-		return
-	}
-	handle, ctx, ok := currentAttemptHandleForCollect(sessionID, member)
+	// The drive binding (set by BeginOrchestrationForSession) signals this seat is
+	// driving a ROAST attempt and carries its AttemptContext. ctx.SessionID is the
+	// STABLE RoastSessionID and ctx.Hash() the attempt hash -- the
+	// namespace-independent coordinate the transition exchange keys its observe
+	// binding (and this stash) by, so the broadcast resolves the same entry.
+	_, ctx, ok := currentAttemptHandleForCollect(sessionID, member)
 	if !ok {
 		return
 	}
@@ -61,61 +55,14 @@ func submitSnapshotIfActive(
 	if len(evidence.Overflows) == 0 &&
 		len(evidence.Rejects) == 0 &&
 		len(evidence.Conflicts) == 0 {
-		// Truly nothing observed worth submitting; emitting an empty
-		// snapshot is still meaningful in the ROAST protocol
-		// (proof-of-attendance) but adds noise to the bundle, so we
-		// skip it. The emptiness test MUST consider all three evidence
-		// categories, not just overflows: a validation-blamable Reject
-		// (e.g. an attempt-context-hash mismatch) or a first-write-wins
-		// Conflict populates Rejects/Conflicts WITHOUT any Overflow, and
-		// NextAttempt's exclusion path consumes snapshot.Rejects
-		// (next_attempt.go). Dropping a reject/conflict-only snapshot
-		// here would silently starve the blame pipeline of exactly the
-		// validation evidence it needs.
+		// Truly nothing observed worth carrying. The emptiness test MUST consider
+		// all three categories, not just overflows: a validation-blamable Reject
+		// (e.g. an attempt-context-hash mismatch) or a first-write-wins Conflict
+		// populates Rejects/Conflicts WITHOUT any Overflow, and NextAttempt's
+		// exclusion path consumes snapshot.Rejects (next_attempt.go). Dropping a
+		// reject/conflict-only snapshot here would silently starve the blame
+		// pipeline of exactly the validation evidence it needs.
 		return
 	}
-	snap := buildSignedSnapshot(deps, ctx, evidence)
-	if snap == nil {
-		return
-	}
-	if err := deps.Coordinator.RecordEvidence(handle, snap); err != nil {
-		roastRetryLogger.Warnf(
-			"roast-retry: RecordEvidence failed for session %q: %v",
-			sessionID,
-			err,
-		)
-	}
-}
-
-// buildSignedSnapshot constructs and signs a LocalEvidenceSnapshot
-// from the captured evidence. Returns nil and logs on signature
-// failure; callers treat nil as "skip submission" and continue.
-func buildSignedSnapshot(
-	deps RoastRetryDeps,
-	ctx attempt.AttemptContext,
-	evidence attempt.Evidence,
-) *roast.LocalEvidenceSnapshot {
-	snap := roast.NewLocalEvidenceSnapshot(
-		group.MemberIndex(deps.SelfMember),
-		ctx.Hash(),
-		evidence,
-	)
-	payload, err := snap.SignableBytes()
-	if err != nil {
-		roastRetryLogger.Warnf(
-			"roast-retry: canonicalising snapshot failed: %v",
-			err,
-		)
-		return nil
-	}
-	sig, err := deps.Signer.Sign(payload)
-	if err != nil {
-		roastRetryLogger.Warnf(
-			"roast-retry: signing snapshot failed: %v",
-			err,
-		)
-		return nil
-	}
-	snap.OperatorSignature = sig
-	return snap
+	stashPendingEvidence(ctx.SessionID, member, ctx.Hash(), evidence)
 }

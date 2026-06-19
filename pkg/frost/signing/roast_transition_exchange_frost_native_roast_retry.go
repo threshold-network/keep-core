@@ -22,9 +22,10 @@ import (
 //     coordinator's local observe handle (only the elected seat collects, for
 //     aggregation); peers' transition bundles are verified against this seat's
 //     own observe handle and, when valid, stored as the next-attempt record.
-//   - BroadcastForcedSnapshot: a participating seat publishes a forced (empty)
-//     proof-of-attendance snapshot so it appears in the aggregated bundle and is
-//     not silence-parked by NextAttempt. It records its OWN snapshot before
+//   - BroadcastForcedSnapshot: a participating seat publishes its proof-of-
+//     attendance snapshot -- carrying the real evidence the coarse receive loop
+//     stashed for the attempt, if any -- so it appears in the aggregated bundle
+//     and is not silence-parked by NextAttempt. It records its OWN snapshot before
 //     broadcasting, so VerifyBundle's censorship check is meaningful.
 //   - AggregateAndBroadcast: the elected seat aggregates the collected snapshots
 //     into a coordinator-signed bundle, stores it locally via the same
@@ -83,6 +84,10 @@ func (e *RoastTransitionExchange) listen() {
 	// produced a transition record to clear, so its bindings would otherwise
 	// linger until the TTL sweep.
 	defer clearObservedAttemptsForSession(e.roastSessionID, e.member)
+	// Likewise drop any stashed coarse-path evidence this seat captured but never
+	// broadcast -- a succeeded attempt never reaches BroadcastForcedSnapshot, which
+	// is what consumes the stash (RFC-21 Phase 7.3 PR2b-2 step 2).
+	defer clearPendingEvidenceForSession(e.roastSessionID, e.member)
 	for {
 		select {
 		case <-e.ctx.Done():
@@ -180,10 +185,19 @@ func (e *RoastTransitionExchange) HasLostSync() bool {
 	return e.lostSync.Load()
 }
 
-// BroadcastForcedSnapshot publishes this seat's forced (empty) proof-of-attendance
-// snapshot for the attempt, recording it locally BEFORE the broadcast so the
-// censorship check on the returned bundle is meaningful. A no-op when the seat
-// has no observe binding for the attempt or signing fails.
+// BroadcastForcedSnapshot publishes this seat's proof-of-attendance snapshot for
+// the attempt, recording it locally BEFORE the broadcast so the censorship check
+// on the returned bundle is meaningful. A no-op when the seat has no observe
+// binding for the attempt or signing fails.
+//
+// RFC-21 Phase 7.3 PR2b-2 step 2 (the blame bridge): the snapshot carries the REAL
+// evidence the coarse receive loop captured for this attempt, if any. The coarse
+// path stashes its recorder snapshot keyed by the same (RoastSessionID, member,
+// attemptHash); this consumes it so the seat's broadcast -- and therefore the
+// elected coordinator's aggregated bundle -- carries real rejects/overflows/
+// conflicts and NextAttempt's f+1 tally can fire. When the stash is empty (the
+// seat observed nothing) the snapshot is the empty proof-of-attendance one, which
+// must still be broadcast so the seat is not silence-parked.
 func (e *RoastTransitionExchange) BroadcastForcedSnapshot(
 	attemptHash [attempt.MessageDigestLength]byte,
 ) {
@@ -191,7 +205,11 @@ func (e *RoastTransitionExchange) BroadcastForcedSnapshot(
 	if !ok {
 		return
 	}
-	snapshot := roast.NewLocalEvidenceSnapshot(e.member, attemptHash, attempt.Evidence{})
+	// takePendingEvidence returns the zero Evidence on a miss, which
+	// NewLocalEvidenceSnapshot renders as the empty proof-of-attendance snapshot --
+	// still broadcast so the seat is not silence-parked.
+	evidence, _ := takePendingEvidence(e.roastSessionID, e.member, attemptHash)
+	snapshot := roast.NewLocalEvidenceSnapshot(e.member, attemptHash, evidence)
 	payload, err := snapshot.SignableBytes()
 	if err != nil {
 		e.logger.Warnf("roast transition: forced snapshot signable bytes: [%v]", err)
