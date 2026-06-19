@@ -70,10 +70,10 @@ func ConsumeRoastTransitionForSelection(
 	// produced no records also does not expect to consume one; in particular,
 	// without a producer (RoastRetryActive false on the build) the selector must NOT
 	// fail-close every retry against records that can never be created (Codex P2-1).
-	if !RoastRetryActive() {
+	if !RoastRetryActiveForMember(member) {
 		return nil, nil, ErrRoastSelectionFallBackToLegacy
 	}
-	deps, ok := RegisteredRoastRetryCoordinator()
+	deps, ok := RegisteredRoastRetryCoordinatorForMember(member)
 	if !ok || deps.Coordinator == nil {
 		return nil, nil, ErrRoastSelectionFallBackToLegacy
 	}

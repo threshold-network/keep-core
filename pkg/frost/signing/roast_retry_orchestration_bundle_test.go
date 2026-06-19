@@ -60,7 +60,7 @@ func TestCleanup_ClearsBindingAndProducesNoTransitionRecord(t *testing.T) {
 	})
 
 	const sessionID = "cleanup-no-record-session"
-	handle, cleanup, err := BeginOrchestrationForSession(sessionID, ctx)
+	handle, cleanup, err := BeginOrchestrationForSession(sessionID, elected, ctx)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}

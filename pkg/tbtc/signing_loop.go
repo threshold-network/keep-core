@@ -477,7 +477,7 @@ func (srl *signingRetryLoop) start(
 			// inactive keeps the block-paced attemptCounter (legacy, unchanged); the
 			// gate is the deterministic, group-wide RoastRetryActive predicate.
 			activeAttemptNumber := srl.attemptCounter
-			if signing.RoastRetryActive() {
+			if signing.RoastRetryActiveForMember(srl.signingGroupMemberIndex) {
 				activeAttemptNumber = committedRoastAttemptNumber + 1
 			}
 

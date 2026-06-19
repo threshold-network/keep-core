@@ -82,7 +82,7 @@ func driveInteractiveRoastSigningIfEnabled(
 	// SelectedCoordinator(handle) return ErrUnknownAttempt and hard-fail below --
 	// safe (no wrong signature), and only reachable by reconfiguring the
 	// coordinator mid-session. An absent registration falls back to coarse.
-	deps, ok := RegisteredRoastRetryCoordinator()
+	deps, ok := RegisteredRoastRetryCoordinatorForMember(request.MemberIndex)
 	if !ok || deps.Coordinator == nil {
 		return nil, nil
 	}

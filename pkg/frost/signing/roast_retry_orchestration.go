@@ -55,6 +55,7 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/frost/roast"
 	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
 // ErrNoRoastRetryCoordinatorRegistered is returned by
@@ -94,6 +95,7 @@ var ErrNoRoastRetryCoordinatorRegistered = errors.New(
 // this no longer takes the DKG group public key.
 func BeginOrchestrationForSession(
 	sessionID string,
+	member group.MemberIndex,
 	ctx attempt.AttemptContext,
 ) (roast.AttemptHandle, func(), error) {
 	if err := EnsureRoastRetryReadinessOptIn(); err != nil {
@@ -102,7 +104,9 @@ func BeginOrchestrationForSession(
 			err,
 		)
 	}
-	deps, ok := RegisteredRoastRetryCoordinator()
+	// RFC-21 Phase 7.3 PR2b-1.5: mint the handle from THIS seat's coordinator, so a
+	// multi-seat operator's elected seat aggregates with its own binding.
+	deps, ok := RegisteredRoastRetryCoordinatorForMember(member)
 	if !ok {
 		return roast.AttemptHandle{}, nil, fmt.Errorf(
 			"%w: caller should fall back to legacy behaviour",

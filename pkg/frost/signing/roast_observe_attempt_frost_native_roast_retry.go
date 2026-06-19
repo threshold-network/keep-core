@@ -36,18 +36,19 @@ func ObserveAttemptForTransition(
 		return zeroHash, fmt.Errorf("observe attempt: request is nil")
 	}
 
-	// Respect the readiness opt-in gate, exactly as BeginOrchestrationForSession
-	// does: when ROAST retry is opted out, observing is pointless (nothing
-	// consumes the binding) and must stay inert. Opt-out is a deterministic
-	// static condition every honest node sees identically.
-	if err := EnsureRoastRetryReadinessOptIn(); err != nil {
+	// Respect the per-seat readiness + registration gate, exactly as the selector
+	// and BeginOrchestrationForSession do: when THIS seat has no registered
+	// coordinator (or readiness is opted out), observing is pointless (nothing
+	// consumes the binding) and must stay inert. A deterministic static condition
+	// every honest node sees identically per seat. RFC-21 Phase 7.3 PR2b-1.5: a
+	// multi-seat operator observes per local seat with that seat's coordinator.
+	if !RoastRetryActiveForMember(request.MemberIndex) {
 		return zeroHash, nil
 	}
 
-	deps, ok := RegisteredRoastRetryCoordinator()
+	deps, ok := RegisteredRoastRetryCoordinatorForMember(request.MemberIndex)
 	if !ok || deps.Coordinator == nil {
-		// No orchestration registered -- static fallback, every honest node
-		// observes the same empty registry.
+		// No coordinator registered for this seat -- static fallback.
 		return zeroHash, nil
 	}
 
