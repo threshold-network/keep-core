@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
 // RoastRetryReadinessOptInEnvVar is the environment variable name
@@ -75,13 +77,34 @@ func RoastRetryReadinessOptInEnabled() bool {
 // can never be created instead of using the uniform legacy shuffle (Codex P2-1).
 // Always false in builds without the frost_roast_retry tag (the registration and
 // producer default stubs both report unavailable).
+// readinessAndProducerReady is the build+env prefix shared by RoastRetryActive and
+// RoastRetryActiveForMember: the readiness opt-in is set AND the transition producer
+// is built in (frost_native). Both gates additionally require a registered
+// coordinator (any entry / the specific member's).
+func readinessAndProducerReady() bool {
+	return RoastRetryReadinessOptInEnabled() && roastTransitionProducerAvailable()
+}
+
 func RoastRetryActive() bool {
-	if !RoastRetryReadinessOptInEnabled() {
-		return false
-	}
-	if !roastTransitionProducerAvailable() {
+	if !readinessAndProducerReady() {
 		return false
 	}
 	_, ok := RegisteredRoastRetryCoordinator()
+	return ok
+}
+
+// RoastRetryActiveForMember reports whether ROAST retry is runtime-active for a
+// SPECIFIC local seat: readiness opt-in AND the producer is built in AND THIS
+// member has a coordinator registered. Member-aware paths (the per-seat signing
+// loop, the per-member selector, observe, and the exchange) use it so a multi-seat
+// operator activates ROAST per seat -- a seat with no registered coordinator stays
+// on the legacy path rather than fail-closing. Always false in builds without the
+// frost_roast_retry tag (the per-member registration default stub reports
+// not-registered). RFC-21 Phase 7.3 PR2b-1.5.
+func RoastRetryActiveForMember(member group.MemberIndex) bool {
+	if !readinessAndProducerReady() {
+		return false
+	}
+	_, ok := RegisteredRoastRetryCoordinatorForMember(member)
 	return ok
 }

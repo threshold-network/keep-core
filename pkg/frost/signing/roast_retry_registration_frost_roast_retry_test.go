@@ -79,18 +79,111 @@ func TestRoastRetryActive_GatesOnReadinessAndRegistration(t *testing.T) {
 	}
 }
 
-func TestRoastRetryRegistration_LaterRegistrationOverwrites(t *testing.T) {
+// TestRoastRetryActiveForMember_GatesPerMember asserts per-member activation: a
+// seat with a registered coordinator is active (given readiness + a producer); a
+// seat WITHOUT one is inactive even when a sibling seat is registered.
+func TestRoastRetryActiveForMember_GatesPerMember(t *testing.T) {
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
 	ResetRoastRetryRegistrationForTest()
 	t.Cleanup(ResetRoastRetryRegistrationForTest)
 
-	RegisterRoastRetryCoordinator(RoastRetryDeps{SelfMember: 1})
-	RegisterRoastRetryCoordinator(RoastRetryDeps{SelfMember: 2})
-	got, ok := RegisteredRoastRetryCoordinator()
-	if !ok {
-		t.Fatal("expected ok=true after register")
+	RegisterRoastRetryCoordinatorForMember(1, RoastRetryDeps{
+		Coordinator: roast.NewInMemoryCoordinatorWithSigning(1, roast.NoOpSigner(), roast.NoOpSignatureVerifier()),
+		SelfMember:  1,
+	})
+
+	// Member 1 active iff a producer is built in; member 2 (unregistered) never.
+	if RoastRetryActiveForMember(1) != roastTransitionProducerAvailable() {
+		t.Fatalf("member 1: active must equal producer availability (%v); got %v",
+			roastTransitionProducerAvailable(), RoastRetryActiveForMember(1))
 	}
-	if got.SelfMember != 2 {
-		t.Fatalf("later registration must win: got %d want 2", got.SelfMember)
+	if RoastRetryActiveForMember(2) {
+		t.Fatal("member 2 (unregistered) must be inactive even with a sibling registered")
+	}
+
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "false")
+	if RoastRetryActiveForMember(1) {
+		t.Fatal("readiness off must yield inactive even for a registered member")
+	}
+}
+
+// TestRoastRetryRegistration_PerMemberOverwriteAndCoexist asserts the per-member
+// registry semantics (PR2b-1.5): registering the SAME member twice overwrites that
+// member's entry, while DIFFERENT members coexist (a multi-seat operator registers
+// one coordinator per local seat).
+func TestRoastRetryRegistration_PerMemberOverwriteAndCoexist(t *testing.T) {
+	ResetRoastRetryRegistrationForTest()
+	t.Cleanup(ResetRoastRetryRegistrationForTest)
+
+	coord1a := roast.NewInMemoryCoordinatorWithSigning(1, roast.NoOpSigner(), roast.NoOpSignatureVerifier())
+	coord1b := roast.NewInMemoryCoordinatorWithSigning(1, roast.NoOpSigner(), roast.NoOpSignatureVerifier())
+	coord2 := roast.NewInMemoryCoordinatorWithSigning(2, roast.NoOpSigner(), roast.NoOpSignatureVerifier())
+
+	RegisterRoastRetryCoordinatorForMember(1, RoastRetryDeps{Coordinator: coord1a, SelfMember: 1})
+	RegisterRoastRetryCoordinatorForMember(2, RoastRetryDeps{Coordinator: coord2, SelfMember: 2})
+	RegisterRoastRetryCoordinatorForMember(1, RoastRetryDeps{Coordinator: coord1b, SelfMember: 1}) // overwrite 1
+
+	got1, ok := RegisteredRoastRetryCoordinatorForMember(1)
+	if !ok || got1.Coordinator != coord1b {
+		t.Fatalf("member 1 must hold the later (overwriting) coordinator; ok=%v", ok)
+	}
+	got2, ok := RegisteredRoastRetryCoordinatorForMember(2)
+	if !ok || got2.Coordinator != coord2 {
+		t.Fatalf("member 2 must coexist with member 1; ok=%v", ok)
+	}
+}
+
+// TestRoastRetryRegistration_RejectsSelfMemberMismatch asserts a coordinator
+// registered under a member that does not match deps.SelfMember is rejected -- the
+// coordinator is bound to deps.SelfMember at construction, so registering it under
+// a different member would let it aggregate as the wrong seat.
+func TestRoastRetryRegistration_RejectsSelfMemberMismatch(t *testing.T) {
+	ResetRoastRetryRegistrationForTest()
+	t.Cleanup(ResetRoastRetryRegistrationForTest)
+
+	RegisterRoastRetryCoordinatorForMember(5, RoastRetryDeps{SelfMember: 3})
+	if _, ok := RegisteredRoastRetryCoordinatorForMember(5); ok {
+		t.Fatal("a SelfMember/member mismatch must not register")
+	}
+}
+
+// TestRoastRetryRegistration_RejectDropsExistingEntry asserts a rejected
+// re-registration (member 0 or a SelfMember mismatch) REMOVES any existing entry,
+// so a bad reconfiguration deactivates the seat (fail-safe to legacy) rather than
+// leaving stale deps active (Codex P2-2).
+func TestRoastRetryRegistration_RejectDropsExistingEntry(t *testing.T) {
+	ResetRoastRetryRegistrationForTest()
+	t.Cleanup(ResetRoastRetryRegistrationForTest)
+
+	RegisterRoastRetryCoordinatorForMember(1, RoastRetryDeps{
+		Coordinator: roast.NewInMemoryCoordinatorWithSigning(1, roast.NoOpSigner(), roast.NoOpSignatureVerifier()),
+		SelfMember:  1,
+	})
+	if _, ok := RegisteredRoastRetryCoordinatorForMember(1); !ok {
+		t.Fatal("member 1 must be registered after a valid registration")
+	}
+
+	// A later mis-registration for member 1 (deps bound to member 2) must DROP the
+	// existing entry, not silently keep the stale one.
+	RegisterRoastRetryCoordinatorForMember(1, RoastRetryDeps{SelfMember: 2})
+	if _, ok := RegisteredRoastRetryCoordinatorForMember(1); ok {
+		t.Fatal("a rejected re-registration must drop the existing entry (fail-safe to inactive)")
+	}
+}
+
+// TestRoastRetryRegistration_LegacyWrapperRegistersUnderSelfMember asserts the
+// legacy single-arg RegisterRoastRetryCoordinator registers under deps.SelfMember,
+// so existing single-seat callers + RegisteredRoastRetryCoordinator round-trip.
+func TestRoastRetryRegistration_LegacyWrapperRegistersUnderSelfMember(t *testing.T) {
+	ResetRoastRetryRegistrationForTest()
+	t.Cleanup(ResetRoastRetryRegistrationForTest)
+
+	RegisterRoastRetryCoordinator(RoastRetryDeps{SelfMember: 4})
+	if _, ok := RegisteredRoastRetryCoordinatorForMember(4); !ok {
+		t.Fatal("legacy register must place the entry under deps.SelfMember (4)")
+	}
+	if got, ok := RegisteredRoastRetryCoordinator(); !ok || got.SelfMember != 4 {
+		t.Fatalf("legacy lookup must round-trip the single entry; got %d ok=%v", got.SelfMember, ok)
 	}
 }
 

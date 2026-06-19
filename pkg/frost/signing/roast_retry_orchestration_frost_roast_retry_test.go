@@ -45,7 +45,7 @@ func TestBeginOrchestrationForSession_HappyPath(t *testing.T) {
 	})
 
 	ctx := newOrchestrationTestContext(t)
-	handle, cleanup, err := BeginOrchestrationForSession("session-A", ctx)
+	handle, cleanup, err := BeginOrchestrationForSession("session-A", 1, ctx)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestBeginOrchestrationForSession_ErrorsWhenRegistryEmpty(t *testing.T) {
 
 	// Readiness env var is set; the registry is empty -- we expect
 	// the registry-empty error, not the env-var error.
-	_, _, err := BeginOrchestrationForSession("session-X", newOrchestrationTestContext(t))
+	_, _, err := BeginOrchestrationForSession("session-X", 1, newOrchestrationTestContext(t))
 	if err == nil {
 		t.Fatal("expected error when registry is empty")
 	}
@@ -110,7 +110,7 @@ func TestBeginOrchestrationForSession_ErrorsWhenReadinessOptInUnset(t *testing.T
 		SelfMember:  1,
 	})
 
-	_, _, err := BeginOrchestrationForSession("session-no-optin", newOrchestrationTestContext(t))
+	_, _, err := BeginOrchestrationForSession("session-no-optin", 1, newOrchestrationTestContext(t))
 	if !errors.Is(err, ErrRoastRetryReadinessOptOut) {
 		t.Fatalf("expected ErrRoastRetryReadinessOptOut, got %v", err)
 	}
@@ -130,7 +130,7 @@ func TestBeginOrchestrationForSession_ErrorsWhenCoordinatorNil(t *testing.T) {
 		SelfMember:  1,
 	})
 
-	_, _, err := BeginOrchestrationForSession("session-Y", newOrchestrationTestContext(t))
+	_, _, err := BeginOrchestrationForSession("session-Y", 1, newOrchestrationTestContext(t))
 	if err == nil {
 		t.Fatal("expected error when Coordinator is nil")
 	}
@@ -154,12 +154,91 @@ func TestBeginOrchestrationForSession_PropagatesBeginAttemptError(t *testing.T) 
 		SelfMember:  1,
 	})
 
-	_, _, err := BeginOrchestrationForSession("session-Z", newOrchestrationTestContext(t))
+	_, _, err := BeginOrchestrationForSession("session-Z", 1, newOrchestrationTestContext(t))
 	if err == nil {
 		t.Fatal("expected error from coordinator")
 	}
 	if !strings.Contains(err.Error(), "synthetic begin failure") {
 		t.Fatalf("error must wrap underlying cause; got %v", err)
+	}
+}
+
+// assertOrchestrationFailedClosed asserts err is a HARD fail-closed: non-nil,
+// neither static-fallback sentinel, and that no session binding leaked.
+func assertOrchestrationFailedClosed(t *testing.T, sessionID string, cleanup func(), err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected a fail-closed error, got nil")
+	}
+	if errors.Is(err, ErrNoRoastRetryCoordinatorRegistered) {
+		t.Fatalf("must NOT return the legacy-fallback sentinel; got %v", err)
+	}
+	if errors.Is(err, ErrRoastRetryReadinessOptOut) {
+		t.Fatalf("must NOT return the readiness sentinel; got %v", err)
+	}
+	// Must be classified TERMINAL so the signingRetryLoop aborts instead of
+	// retrying the (static, never-resolving) multi-seat condition.
+	if !errors.Is(err, ErrTerminalSigningFailure) {
+		t.Fatalf("multi-seat fail-closed must be classified terminal (ErrTerminalSigningFailure); got %v", err)
+	}
+	if cleanup != nil {
+		t.Fatal("a failed begin must not return a cleanup")
+	}
+	if _, _, ok := currentAttemptHandleForCollect(sessionID); ok {
+		t.Fatal("fail-closed must not create a session binding")
+	}
+}
+
+// TestBeginOrchestrationForSession_FailsClosedPartialMultiSeat is the Codex
+// re-review case: a multi-seat operator that has at least one seat registered but
+// NOT this one. The member-aware lookup misses, and rather than returning the
+// legacy-fallback sentinel (which would let this seat run coarse/legacy while the
+// registered sibling drives bound ROAST -> fracture), Begin fails CLOSED.
+func TestBeginOrchestrationForSession_FailsClosedPartialMultiSeat(t *testing.T) {
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
+	ResetRoastRetryRegistrationForTest()
+	ResetSessionHandleRegistryForTest()
+	t.Cleanup(ResetRoastRetryRegistrationForTest)
+	t.Cleanup(ResetSessionHandleRegistryForTest)
+
+	// Only seat 1 is registered; this Execute is for the unregistered seat 2.
+	RegisterRoastRetryCoordinatorForMember(1, RoastRetryDeps{
+		Coordinator: roast.NewInMemoryCoordinatorWithSigning(1, roast.NoOpSigner(), roast.NoOpSignatureVerifier()),
+		SelfMember:  1,
+	})
+
+	_, cleanup, err := BeginOrchestrationForSession("session-partial", 2, newOrchestrationTestContext(t))
+	assertOrchestrationFailedClosed(t, "session-partial", cleanup, err)
+	if !strings.Contains(err.Error(), "fail closed") {
+		t.Fatalf("error must explain the fail-closed; got %v", err)
+	}
+}
+
+// TestBeginOrchestrationForSession_FailsClosedFullMultiSeat asserts the
+// fully-registered multi-seat case also fails closed: the session-handle binding
+// is still keyed by sessionID alone, so two local seats would collide. Deferred
+// to PR2b-2; until then any multi-seat operator fails closed rather than mis-bind.
+func TestBeginOrchestrationForSession_FailsClosedFullMultiSeat(t *testing.T) {
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
+	ResetRoastRetryRegistrationForTest()
+	ResetSessionHandleRegistryForTest()
+	t.Cleanup(ResetRoastRetryRegistrationForTest)
+	t.Cleanup(ResetSessionHandleRegistryForTest)
+
+	// Both local seats registered -> multi-seat; call with a registered member.
+	RegisterRoastRetryCoordinatorForMember(1, RoastRetryDeps{
+		Coordinator: roast.NewInMemoryCoordinatorWithSigning(1, roast.NoOpSigner(), roast.NoOpSignatureVerifier()),
+		SelfMember:  1,
+	})
+	RegisterRoastRetryCoordinatorForMember(2, RoastRetryDeps{
+		Coordinator: roast.NewInMemoryCoordinatorWithSigning(2, roast.NoOpSigner(), roast.NoOpSignatureVerifier()),
+		SelfMember:  2,
+	})
+
+	_, cleanup, err := BeginOrchestrationForSession("session-multiseat", 1, newOrchestrationTestContext(t))
+	assertOrchestrationFailedClosed(t, "session-multiseat", cleanup, err)
+	if !strings.Contains(err.Error(), "multi-seat") {
+		t.Fatalf("error must explain the multi-seat fail-closed; got %v", err)
 	}
 }
 

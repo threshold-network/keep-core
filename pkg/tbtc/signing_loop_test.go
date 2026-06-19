@@ -2,6 +2,7 @@ package tbtc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -748,6 +749,88 @@ func TestSigningRetryLoop_GetCurrentBlockErrorCausesRetry(t *testing.T) {
 			"unexpected error\nexpected: [%v]\nactual:   [%v]",
 			context.DeadlineExceeded,
 			err,
+		)
+	}
+}
+
+// TestSigningRetryLoop_TerminalErrorAbortsWithoutRetry asserts that a terminal
+// signing failure from the attempt function (signing.ErrTerminalSigningFailure,
+// e.g. multi-seat interactive ROAST orchestration that is not yet member-safe)
+// ABORTS the loop after a single attempt instead of being retried. A retryable
+// error would re-invoke the attempt fn until the context deadline; a terminal one
+// must surface immediately so the outer wallet layer fails closed cleanly.
+func TestSigningRetryLoop_TerminalErrorAbortsWithoutRetry(t *testing.T) {
+	message := big.NewInt(100)
+
+	groupParameters := &GroupParameters{
+		GroupSize:       10,
+		HonestThreshold: 6,
+	}
+
+	signingGroupOperators := chain.Addresses{
+		"address-1", "address-2", "address-8", "address-4",
+		"address-2", "address-6", "address-7", "address-8",
+		"address-9", "address-8",
+	}
+
+	allMembers := make([]group.MemberIndex, 0, len(signingGroupOperators))
+	for i := range signingGroupOperators {
+		allMembers = append(allMembers, group.MemberIndex(i+1))
+	}
+
+	retryLoop := newSigningRetryLoop(
+		&testutils.MockLogger{},
+		message,
+		"",
+		200,
+		1,
+		signingGroupOperators,
+		groupParameters,
+		&mockSigningAnnouncer{
+			outgoingAnnouncements: make(map[string]group.MemberIndex),
+			incomingAnnouncementsFn: func(string) ([]group.MemberIndex, error) {
+				return allMembers, nil
+			},
+		},
+		&mockSigningDoneCheck{
+			waitUntilAllDoneOutcomeFn: func(uint64) (*signing.Result, uint64, error) {
+				panic("should not be reached: a terminal error aborts before the done check")
+			},
+		},
+	)
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelCtx()
+
+	// A wrapped terminal sentinel, exactly as BeginOrchestrationForSession produces
+	// for a multi-seat operator.
+	terminalErr := fmt.Errorf(
+		"%w: synthetic multi-seat orchestration",
+		signing.ErrTerminalSigningFailure,
+	)
+	attemptCalls := 0
+
+	_, err := retryLoop.start(
+		ctx,
+		func(context.Context, uint64) error { return nil },
+		func() (uint64, error) { return 200, nil },
+		func(*signingAttemptParams) (*signing.Result, uint64, error) {
+			attemptCalls++
+			return nil, 0, terminalErr
+		},
+	)
+
+	if !errors.Is(err, signing.ErrTerminalSigningFailure) {
+		t.Errorf(
+			"expected a terminal signing failure to propagate; got [%v]",
+			err,
+		)
+	}
+	if attemptCalls != 1 {
+		t.Errorf(
+			"terminal error must abort after exactly one attempt (no retry); "+
+				"got %d attempt calls",
+			attemptCalls,
 		)
 	}
 }

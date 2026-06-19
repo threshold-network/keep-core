@@ -117,8 +117,11 @@ func (e *RoastTransitionExchange) onSnapshot(msg RunnerMessage) {
 		return
 	}
 	elected, err := e.deps.Coordinator.SelectedCoordinator(binding.handle)
-	if err != nil || elected != group.MemberIndex(e.deps.SelfMember) {
-		// Only the elected coordinator collects snapshots for aggregation.
+	if err != nil || elected != e.member {
+		// Only the elected coordinator collects snapshots for aggregation. Compare
+		// against THIS exchange's seat (e.member), not deps.SelfMember: under
+		// PR2b-1.5 multi-seat, deps is per-seat so the two agree, but e.member is
+		// the unambiguous seat identity and avoids relying on the deps binding.
 		return
 	}
 	if err := e.deps.Coordinator.RecordEvidence(binding.handle, snapshot); err != nil {

@@ -73,6 +73,30 @@ func TestConsumeRoastTransitionForSelection_FailsClosedNoRecord(t *testing.T) {
 	}
 }
 
+// TestConsumeRoastTransitionForSelection_PartialRegistrationFailsClosed asserts the
+// multi-seat partial-activation fracture guard (Codex P2-1): when ROAST is active
+// for the process (one local seat registered) but the SELECTING seat has no
+// registered coordinator, selection FAILS CLOSED rather than falling back to legacy
+// -- a legacy fallback for the unregistered seat while a sibling selects from the
+// transition would split the included set.
+func TestConsumeRoastTransitionForSelection_PartialRegistrationFailsClosed(t *testing.T) {
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
+	resetSelectionRegistries(t)
+	// One of the operator's seats (member 1) is registered; member 2 is NOT, so ROAST
+	// retry is active for the process but member 2 has no coordinator.
+	RegisterRoastRetryCoordinator(RoastRetryDeps{
+		Coordinator: roast.NewInMemoryCoordinator(),
+		Signer:      roast.NoOpSigner(),
+		Verifier:    roast.NoOpSignatureVerifier(),
+		SelfMember:  1,
+	})
+
+	_, _, err := ConsumeRoastTransitionForSelection("session", 2, 1, 3)
+	if err == nil || errors.Is(err, ErrRoastSelectionFallBackToLegacy) {
+		t.Fatalf("partial registration must fail closed, not fall back to legacy; got %v", err)
+	}
+}
+
 func TestConsumeRoastTransitionForSelection_FailsClosedStaleRecord(t *testing.T) {
 	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
 	resetSelectionRegistries(t)

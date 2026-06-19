@@ -94,7 +94,7 @@ func attemptRoastRetryOrchestrationFromRequest(
 	// The cross-attempt transition record is produced + keyed (by the stable
 	// RoastSessionID) entirely in the transition exchange now, not here.
 	handle, cleanup, err := BeginOrchestrationForSession(
-		request.SessionID, attemptCtx,
+		request.SessionID, request.MemberIndex, attemptCtx,
 	)
 	if err != nil {
 		switch {

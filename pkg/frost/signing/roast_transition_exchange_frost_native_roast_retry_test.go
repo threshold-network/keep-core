@@ -370,6 +370,142 @@ func TestRoastTransitionExchange_ConsumedRetransmitDoesNotLoseSync(t *testing.T)
 	}
 }
 
+// TestRoastTransitionExchange_MultiSeatElectedSeatAggregates is the PR2b-1.5
+// acceptance test: when an operator controls multiple local seats and the elected
+// ROAST coordinator is one of them, that seat aggregates the transition bundle
+// using ITS OWN per-member coordinator (from the per-member registry). Pre-fix a
+// single process-wide coordinator bound to ONE SelfMember returned ErrNotAggregator
+// whenever the elected seat differed from it -> no bundle -> the next retry
+// fail-closed for the whole group.
+//
+// NOTE on local fanout (Codex's guardrail): this test delivers the sibling seats'
+// snapshots to the elected seat's exchange directly. In production the per-seat
+// exchanges share ONE wallet BroadcastChannel; a node's own broadcast reaches its
+// OTHER local seats' subscribers via the channel's self-delivery (libp2p FloodSub
+// delivers a node's publishes to its own subscriptions, and the membership
+// validator passes own-author). That self-delivery is a transport-contract
+// assumption to confirm at prod-wiring; if a transport does not self-deliver,
+// explicit local fanout is the remedy. The aggregation fix proven here is
+// independent of how the sibling snapshot arrives.
+func TestRoastTransitionExchange_MultiSeatElectedSeatAggregates(t *testing.T) {
+	ResetObservedAttemptRegistryForTest()
+	ResetRoastTransitionRegistryForTest()
+	ResetRoastRetryRegistrationForTest()
+	t.Cleanup(ResetObservedAttemptRegistryForTest)
+	t.Cleanup(ResetRoastTransitionRegistryForTest)
+	t.Cleanup(ResetRoastRetryRegistrationForTest)
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
+
+	roastSessionID := "multiseat-session"
+	included := []group.MemberIndex{1, 2, 3}
+	dkgKey := []byte{0x0d}
+	ctx := newExchangeTestContext(t, roastSessionID, included, dkgKey)
+	hash := ctx.Hash()
+
+	// Deterministic elected coordinator for this context.
+	probe := roast.NewInMemoryCoordinatorWithSigning(0, fixedSigner{}, roast.NoOpSignatureVerifier())
+	probeHandle, err := probe.BeginAttempt(ctx)
+	if err != nil {
+		t.Fatalf("probe begin: %v", err)
+	}
+	elected, err := probe.SelectedCoordinator(probeHandle)
+	if err != nil {
+		t.Fatalf("probe elected: %v", err)
+	}
+
+	// One operator controls ALL included seats (the extreme multi-seat case): each
+	// seat gets its OWN coordinator bound to its member, registered per-member,
+	// sharing the operator key (fixedSigner).
+	for _, m := range included {
+		RegisterRoastRetryCoordinatorForMember(m, RoastRetryDeps{
+			Coordinator: roast.NewInMemoryCoordinatorWithSigning(m, fixedSigner{}, roast.NoOpSignatureVerifier()),
+			Signer:      fixedSigner{},
+			Verifier:    roast.NoOpSignatureVerifier(),
+			SelfMember:  uint32(m),
+		})
+	}
+
+	// Build an exchange + observe binding for EVERY local seat from ITS OWN
+	// registered per-member deps (the path the controller takes per signer); keep
+	// each seat's capture bus to inspect what it broadcasts.
+	exCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	buses := map[group.MemberIndex]*captureBus{}
+	exchanges := map[group.MemberIndex]*RoastTransitionExchange{}
+	for _, m := range included {
+		deps, ok := RegisteredRoastRetryCoordinatorForMember(m)
+		if !ok {
+			t.Fatalf("deps for member %d missing", m)
+		}
+		handle, err := deps.Coordinator.BeginAttempt(ctx)
+		if err != nil {
+			t.Fatalf("begin attempt for %d: %v", m, err)
+		}
+		recordObservedAttempt(roastSessionID, m, hash, observedAttemptBinding{
+			handle:            handle,
+			context:           ctx,
+			dkgGroupPublicKey: dkgKey,
+		})
+		bus := &captureBus{}
+		buses[m] = bus
+		exchanges[m] = NewRoastTransitionExchange(exCtx, log.Logger("multiseat"), bus, deps, roastSessionID, m)
+	}
+
+	// Every seat broadcasts its forced snapshot; the elected seat collects all (its
+	// own recorded in BroadcastForcedSnapshot, the siblings' delivered to it).
+	for _, m := range included {
+		exchanges[m].BroadcastForcedSnapshot(hash)
+	}
+	for _, m := range included {
+		if m == elected {
+			continue
+		}
+		snaps := buses[m].only(RunnerMsgEvidenceSnapshot)
+		if len(snaps) != 1 {
+			t.Fatalf("member %d expected to broadcast 1 forced snapshot, got %d", m, len(snaps))
+		}
+		exchanges[elected].onSnapshot(snaps[0])
+	}
+
+	// Each seat runs aggregation.
+	for _, m := range included {
+		exchanges[m].AggregateAndBroadcast(hash)
+	}
+
+	// The elected local seat aggregated with ITS OWN per-member coordinator: a
+	// transition record + exactly one broadcast bundle.
+	if _, ok := RoastTransitionForSession(roastSessionID, elected); !ok {
+		t.Fatal("the elected local seat must aggregate + store a record with its own per-member coordinator")
+	}
+	if got := buses[elected].only(RunnerMsgTransitionBundle); len(got) != 1 {
+		t.Fatalf("the elected seat must broadcast exactly one bundle, got %d", len(got))
+	}
+
+	// The NON-elected sibling seats must NOT aggregate. This is the non-vacuous half:
+	// pre-fix all seats shared ONE coordinator bound to the elected member, so a
+	// sibling's AggregateBundle would have run as the elected member and broadcast a
+	// bundle; per-member coordinators (bound to members != elected) make it
+	// ErrNotAggregator -> no bundle.
+	var sibling group.MemberIndex
+	for _, m := range included {
+		if m == elected {
+			continue
+		}
+		if got := buses[m].only(RunnerMsgTransitionBundle); len(got) != 0 {
+			t.Fatalf("non-elected local seat %d must not aggregate a bundle, got %d", m, len(got))
+		}
+		sibling = m
+	}
+
+	// A sibling seat receives the elected seat's bundle and stores ITS OWN
+	// next-attempt record with its own coordinator (the multi-seat sibling-unparking
+	// path that lets a non-elected local seat advance).
+	exchanges[sibling].onBundle(buses[elected].only(RunnerMsgTransitionBundle)[0])
+	if _, ok := RoastTransitionForSession(roastSessionID, sibling); !ok {
+		t.Fatal("a sibling local seat must store its own transition record from the elected seat's bundle")
+	}
+}
+
 // TestRoastTransitionExchange_SucceededSeatDoesNotStorePeerFailureBundle asserts
 // the core B3 outcome: after a seat clears its observe binding on local success, a
 // peer's failure bundle for that attempt is neither stored as a transition record

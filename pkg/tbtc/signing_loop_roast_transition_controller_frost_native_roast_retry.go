@@ -75,10 +75,13 @@ func newRoastTransitionExchangeForRequest(
 	logger log.StandardLogger,
 	template *signing.Request,
 ) roastTransitionExchange {
-	if err := signing.EnsureRoastRetryReadinessOptIn(); err != nil {
+	// RFC-21 Phase 7.3 PR2b-1.5: gate + fetch deps for THIS seat, so a multi-seat
+	// operator's exchange uses the coordinator bound to template.MemberIndex (the
+	// elected-but-not-process-default seat can then collect + aggregate).
+	if !signing.RoastRetryActiveForMember(template.MemberIndex) {
 		return nil
 	}
-	deps, ok := signing.RegisteredRoastRetryCoordinator()
+	deps, ok := signing.RegisteredRoastRetryCoordinatorForMember(template.MemberIndex)
 	if !ok || deps.Coordinator == nil {
 		return nil
 	}
