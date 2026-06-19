@@ -39,8 +39,15 @@ type pendingEvidenceKey struct {
 }
 
 type pendingEvidenceEntry struct {
-	evidence  attempt.Evidence
-	createdAt time.Time
+	evidence attempt.Evidence
+	// coordinatorProofs holds the coordinator-signed signing-package proof
+	// envelope(s) the interactive path retained for the attempt (RFC-21 Phase 7.3
+	// PR2b-2 step 2b). Empty for a coarse attempt. The two sources are mutually
+	// exclusive per attempt, so in practice an entry carries evidence XOR proofs --
+	// but both fields are independent so an entry carrying both stays structurally
+	// valid (NextAttempt reads the categories independently).
+	coordinatorProofs [][]byte
+	createdAt         time.Time
 }
 
 var (
@@ -61,33 +68,63 @@ func stashPendingEvidence(
 	key := pendingEvidenceKey{sessionID, member, attemptHash}
 	pendingEvidenceMu.Lock()
 	defer pendingEvidenceMu.Unlock()
-	pendingEvidenceRegistry[key] = pendingEvidenceEntry{
-		evidence:  copyEvidence(evidence),
-		createdAt: time.Now(),
-	}
+	// Upsert the evidence field, preserving any coordinator proofs already stashed
+	// for this attempt. The coarse and interactive paths are mutually exclusive per
+	// attempt, so normally only one writer fires; preserving the sibling field keeps
+	// the entry valid if that ever changes, never an XOR assumption that drops data.
+	entry := pendingEvidenceRegistry[key]
+	entry.evidence = copyEvidence(evidence)
+	entry.createdAt = time.Now()
+	pendingEvidenceRegistry[key] = entry
 }
 
-// takePendingEvidence returns the stashed evidence for (sessionID, member,
-// attemptHash) and a presence flag, REMOVING it (consume-on-read). The returned
-// value is the sole reference -- the entry is deleted from the registry -- so the
-// caller owns it exclusively without a further copy. BroadcastForcedSnapshot calls
-// it: a present entry means the coarse receive loop observed real evidence for the
-// attempt; absent means none was captured (the broadcast then carries an empty
-// proof-of-attendance snapshot).
+// stashPendingCoordinatorProofs stores deep COPIES of the coordinator-signed
+// signing-package proof envelope(s) the interactive runner's Round2Collector
+// retained for (sessionID, member, attemptHash). BroadcastForcedSnapshot carries
+// them in this seat's snapshot so the bundle's aggregated proofs let NextAttempt
+// instant-exclude an equivocating coordinator (RFC-21 Phase 7.3 PR2b-2 step 2b).
+// A no-op when proofs is empty. Like stashPendingEvidence it upserts only its own
+// field, preserving any coarse evidence already stashed for the attempt.
+func stashPendingCoordinatorProofs(
+	sessionID string,
+	member group.MemberIndex,
+	attemptHash [attempt.MessageDigestLength]byte,
+	proofs [][]byte,
+) {
+	if len(proofs) == 0 {
+		return
+	}
+	key := pendingEvidenceKey{sessionID, member, attemptHash}
+	pendingEvidenceMu.Lock()
+	defer pendingEvidenceMu.Unlock()
+	entry := pendingEvidenceRegistry[key]
+	entry.coordinatorProofs = copyProofs(proofs)
+	entry.createdAt = time.Now()
+	pendingEvidenceRegistry[key] = entry
+}
+
+// takePendingEvidence returns the stashed evidence AND coordinator proofs for
+// (sessionID, member, attemptHash) plus a presence flag, REMOVING the entry
+// (consume-on-read). The returned values are the sole references -- the entry is
+// deleted from the registry -- so the caller owns them exclusively without a
+// further copy. BroadcastForcedSnapshot calls it: a present entry means the coarse
+// receive loop observed evidence (Evidence) and/or the interactive path retained
+// coordinator-equivocation proofs ([][]byte) for the attempt; absent means neither
+// was captured (the broadcast then carries an empty proof-of-attendance snapshot).
 func takePendingEvidence(
 	sessionID string,
 	member group.MemberIndex,
 	attemptHash [attempt.MessageDigestLength]byte,
-) (attempt.Evidence, bool) {
+) (attempt.Evidence, [][]byte, bool) {
 	key := pendingEvidenceKey{sessionID, member, attemptHash}
 	pendingEvidenceMu.Lock()
 	defer pendingEvidenceMu.Unlock()
 	entry, ok := pendingEvidenceRegistry[key]
 	if !ok {
-		return attempt.Evidence{}, false
+		return attempt.Evidence{}, nil, false
 	}
 	delete(pendingEvidenceRegistry, key)
-	return entry.evidence, true
+	return entry.evidence, entry.coordinatorProofs, true
 }
 
 // clearPendingEvidence removes any stashed evidence for (sessionID, member,
@@ -199,6 +236,20 @@ func copyEvidence(e attempt.Evidence) attempt.Evidence {
 		for k, v := range e.Conflicts {
 			out.Conflicts[k] = v
 		}
+	}
+	return out
+}
+
+// copyProofs returns a deep copy of a slice of proof envelopes: the outer slice
+// and each inner []byte are re-allocated, so a later mutation of the caller's
+// slice cannot race the exchange's read. nil/empty stays nil.
+func copyProofs(proofs [][]byte) [][]byte {
+	if len(proofs) == 0 {
+		return nil
+	}
+	out := make([][]byte, len(proofs))
+	for i, p := range proofs {
+		out[i] = append([]byte(nil), p...)
 	}
 	return out
 }

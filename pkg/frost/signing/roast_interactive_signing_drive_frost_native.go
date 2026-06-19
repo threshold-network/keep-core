@@ -26,10 +26,11 @@ import (
 // Retry-loop ownership (per the Phase 7.3 executor-wiring design consult): the
 // existing tBTC signingRetryLoop owns retries -- it re-invokes the executor
 // (and therefore this helper) once per attempt with a fresh attempt context.
-// This helper drives exactly one attempt; it never loops. On a runner failure
-// it returns the error so the outer loop advances, and the deferred
-// orchestration cleanup stashes the transition bundle the (later PR) blame/retry
-// selector consumes.
+// This helper drives exactly one attempt; it never loops. On a runner failure it
+// stashes any coordinator-equivocation proofs the collector retained (consumed by
+// the transition exchange's BroadcastForcedSnapshot) and returns the error so the
+// outer loop advances and drives the transition. The deferred orchestration
+// cleanup only clears the per-attempt handle binding.
 //
 // Return contract -- (signature, error):
 //   - (sig, nil)  the interactive attempt completed; the executor returns sig
@@ -144,9 +145,22 @@ func driveInteractiveRoastSigningIfEnabled(
 
 	signatureBytes, err := runner.Run(ctx)
 	if err != nil {
-		// The attempt was driven and failed. Propagate so the outer tBTC
-		// signingRetryLoop advances; the deferred orchestration cleanup stashes
-		// the transition bundle for the next attempt's selector.
+		// The attempt was driven and failed. Before propagating, surface any
+		// coordinator-signed package proofs the collector retained -- it is NOT
+		// pruned on failure (roast_runner_frost_native.go), so the authoritative
+		// package (plus any body-different one the coordinator equivocated to this
+		// seat) is still held. Stashing them lets BroadcastForcedSnapshot carry them
+		// in this seat's snapshot; the bundle's aggregated proofs let NextAttempt
+		// instant-exclude an equivocating coordinator (RFC-21 Phase 7.3 PR2b-2 step
+		// 2b). An empty / unknown-attempt result stashes nothing.
+		attemptHash := attemptCtx.Hash()
+		if proofs, perr := collector.CoordinatorPackageProofs(attemptHash[:]); perr == nil {
+			stashPendingCoordinatorProofs(
+				attemptCtx.SessionID, request.MemberIndex, attemptHash, proofs,
+			)
+		}
+		// Propagate so the outer signingRetryLoop advances and drives the transition
+		// exchange (OnAttemptFailed -> BroadcastForcedSnapshot).
 		return nil, fmt.Errorf("interactive ROAST signing attempt: %w", err)
 	}
 

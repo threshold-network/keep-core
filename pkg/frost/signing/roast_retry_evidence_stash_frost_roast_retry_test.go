@@ -3,6 +3,7 @@
 package signing
 
 import (
+	"bytes"
 	"testing"
 	"time"
 
@@ -36,14 +37,14 @@ func TestPendingEvidenceStash_StoreTakeConsumes(t *testing.T) {
 	if !PendingEvidenceStashedForTest("s", 1) {
 		t.Fatal("entry must be present after store")
 	}
-	got, ok := takePendingEvidence("s", 1, hash)
+	got, _, ok := takePendingEvidence("s", 1, hash)
 	if !ok {
 		t.Fatal("take must find the stored entry")
 	}
 	if got.Overflows[2] != 1 || got.Conflicts[4] != 1 || len(got.Rejects[3]) != 1 {
 		t.Fatalf("taken evidence does not match stored: %+v", got)
 	}
-	if _, ok := takePendingEvidence("s", 1, hash); ok {
+	if _, _, ok := takePendingEvidence("s", 1, hash); ok {
 		t.Fatal("take must consume: a second take finds nothing")
 	}
 	if PendingEvidenceStashedForTest("s", 1) {
@@ -68,7 +69,7 @@ func TestPendingEvidenceStash_DeepCopyIsolatesCallerMutation(t *testing.T) {
 	src.Rejects[3][0].Count = 99
 	src.Conflicts[4] = 99
 
-	got, ok := takePendingEvidence("s", 1, hash)
+	got, _, ok := takePendingEvidence("s", 1, hash)
 	if !ok {
 		t.Fatal("take must find the stored entry")
 	}
@@ -97,8 +98,8 @@ func TestPendingEvidenceStash_MemberKeyedIsolation(t *testing.T) {
 	stashPendingEvidence("s", 1, hash, attempt.Evidence{Overflows: map[group.MemberIndex]uint{7: 1}})
 	stashPendingEvidence("s", 2, hash, attempt.Evidence{Overflows: map[group.MemberIndex]uint{8: 1}})
 
-	got1, ok1 := takePendingEvidence("s", 1, hash)
-	got2, ok2 := takePendingEvidence("s", 2, hash)
+	got1, _, ok1 := takePendingEvidence("s", 1, hash)
+	got2, _, ok2 := takePendingEvidence("s", 2, hash)
 	if !ok1 || !ok2 {
 		t.Fatalf("both member entries must exist; ok1=%v ok2=%v", ok1, ok2)
 	}
@@ -161,5 +162,97 @@ func TestEvictStalePendingEvidence(t *testing.T) {
 	}
 	if PendingEvidenceStashedForTest("s", 1) {
 		t.Fatal("entry must be gone after the sweep")
+	}
+}
+
+// TestStashPendingCoordinatorProofs_StoreTakeConsumes is the 2b proof path: the
+// interactive drive stashes coordinator-package proofs; takePendingEvidence returns
+// them (with empty Evidence) and consumes the entry.
+func TestStashPendingCoordinatorProofs_StoreTakeConsumes(t *testing.T) {
+	ResetPendingEvidenceRegistryForTest()
+	t.Cleanup(ResetPendingEvidenceRegistryForTest)
+
+	hash := stashTestHash(0x61)
+	proofs := [][]byte{[]byte("auth-package"), []byte("conflicting-package")}
+	stashPendingCoordinatorProofs("s", 1, hash, proofs)
+
+	if !PendingEvidenceStashedForTest("s", 1) {
+		t.Fatal("entry must be present after stashing proofs")
+	}
+	gotEv, gotProofs, ok := takePendingEvidence("s", 1, hash)
+	if !ok {
+		t.Fatal("take must find the stored proofs")
+	}
+	if len(gotEv.Overflows)+len(gotEv.Rejects)+len(gotEv.Conflicts) != 0 {
+		t.Fatalf("proof-only entry must carry empty evidence; got %+v", gotEv)
+	}
+	if len(gotProofs) != 2 ||
+		!bytes.Equal(gotProofs[0], proofs[0]) ||
+		!bytes.Equal(gotProofs[1], proofs[1]) {
+		t.Fatalf("taken proofs do not match stored: %q", gotProofs)
+	}
+	if _, _, ok := takePendingEvidence("s", 1, hash); ok {
+		t.Fatal("take must consume the proof entry")
+	}
+}
+
+// TestStashPendingCoordinatorProofs_EmptyIsNoOp guards the empty guard: an attempt
+// with no retained packages (CoordinatorPackageProofs returned nothing) stashes
+// nothing.
+func TestStashPendingCoordinatorProofs_EmptyIsNoOp(t *testing.T) {
+	ResetPendingEvidenceRegistryForTest()
+	t.Cleanup(ResetPendingEvidenceRegistryForTest)
+
+	stashPendingCoordinatorProofs("s", 1, stashTestHash(0x62), nil)
+	stashPendingCoordinatorProofs("s", 1, stashTestHash(0x62), [][]byte{})
+	if PendingEvidenceStashedForTest("s", 1) {
+		t.Fatal("empty proofs must not create a stash entry")
+	}
+}
+
+// TestStashPendingCoordinatorProofs_DeepCopied proves copyProofs isolates the
+// stash from later caller mutation of the proof bytes.
+func TestStashPendingCoordinatorProofs_DeepCopied(t *testing.T) {
+	ResetPendingEvidenceRegistryForTest()
+	t.Cleanup(ResetPendingEvidenceRegistryForTest)
+
+	hash := stashTestHash(0x63)
+	proof := []byte("package-bytes")
+	stashPendingCoordinatorProofs("s", 1, hash, [][]byte{proof})
+
+	proof[0] = 'X' // mutate the caller's slice after the store
+
+	_, gotProofs, ok := takePendingEvidence("s", 1, hash)
+	if !ok || len(gotProofs) != 1 {
+		t.Fatalf("expected one stashed proof; ok=%v got=%q", ok, gotProofs)
+	}
+	if !bytes.Equal(gotProofs[0], []byte("package-bytes")) {
+		t.Fatalf("proof must reflect store-time bytes, not the mutation; got %q", gotProofs[0])
+	}
+}
+
+// TestPendingEvidenceStash_EvidenceAndProofsUnion asserts the union entry: stashing
+// evidence and proofs under the SAME key (which the mutually-exclusive coarse and
+// interactive paths normally never do) carries BOTH -- neither writer clobbers the
+// other's field (Codex's "never an XOR assumption that drops data").
+func TestPendingEvidenceStash_EvidenceAndProofsUnion(t *testing.T) {
+	ResetPendingEvidenceRegistryForTest()
+	t.Cleanup(ResetPendingEvidenceRegistryForTest)
+
+	hash := stashTestHash(0x64)
+	stashPendingEvidence("s", 1, hash, attempt.Evidence{
+		Overflows: map[group.MemberIndex]uint{9: 1},
+	})
+	stashPendingCoordinatorProofs("s", 1, hash, [][]byte{[]byte("pkg")})
+
+	gotEv, gotProofs, ok := takePendingEvidence("s", 1, hash)
+	if !ok {
+		t.Fatal("union entry must exist")
+	}
+	if gotEv.Overflows[9] != 1 {
+		t.Fatalf("proof stash must not clobber the evidence field; got %+v", gotEv.Overflows)
+	}
+	if len(gotProofs) != 1 || !bytes.Equal(gotProofs[0], []byte("pkg")) {
+		t.Fatalf("evidence stash must not clobber the proofs field; got %q", gotProofs)
 	}
 }

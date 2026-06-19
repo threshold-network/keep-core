@@ -729,3 +729,117 @@ func TestRoastTransitionExchange_StashedEvidenceDrivesExclusion(t *testing.T) {
 		}
 	}
 }
+
+// TestRoastTransitionExchange_StashedProofsDriveCoordinatorEquivocationExclusion is
+// the end-to-end blame bridge for coordinator equivocation (RFC-21 Phase 7.3 PR2b-2
+// step 2b): coordinator-signed package proofs the interactive path stashes are
+// carried by BroadcastForcedSnapshot into the aggregated bundle, where NextAttempt's
+// cross-observer proof tally instantly excludes a coordinator that signed two
+// body-different packages -- the TARGETED case where no single observer saw both.
+func TestRoastTransitionExchange_StashedProofsDriveCoordinatorEquivocationExclusion(t *testing.T) {
+	ResetObservedAttemptRegistryForTest()
+	ResetRoastTransitionRegistryForTest()
+	ResetPendingEvidenceRegistryForTest()
+	t.Cleanup(ResetObservedAttemptRegistryForTest)
+	t.Cleanup(ResetRoastTransitionRegistryForTest)
+	t.Cleanup(ResetPendingEvidenceRegistryForTest)
+
+	roastSessionID := "exchange-equivocation-session"
+	included := []group.MemberIndex{1, 2, 3}
+	dkgKey := []byte{0x0b, 0x0c}
+	const threshold uint = 2 // excluding the single coordinator leaves 2 >= threshold
+
+	ctx := newExchangeTestContext(t, roastSessionID, included, dkgKey)
+	hash := ctx.Hash()
+	nodes := newExchangeTestNodes(t, roastSessionID, ctx, dkgKey)
+
+	// Determine the deterministically elected coordinator.
+	binding, ok := observedAttempt(roastSessionID, 1, hash)
+	if !ok {
+		t.Fatal("missing observe binding for member 1")
+	}
+	elected, err := nodes[1].coord.SelectedCoordinator(binding.handle)
+	if err != nil {
+		t.Fatalf("selected coordinator: %v", err)
+	}
+
+	// The coordinator distributed TWO body-different signed packages for this
+	// attempt; members 1 and 2 each retained a DIFFERENT one (the targeted split:
+	// no single observer saw both). Build them as authentic coordinator-signed
+	// proofs -- the harness's NoOpSignatureVerifier accepts the signature, and
+	// AuthenticateSigningPackage still checks coordinator id + attempt hash.
+	makeProof := func(body string) []byte {
+		pkg := &roast.SigningPackage{
+			AttemptContextHash:   append([]byte(nil), hash[:]...),
+			CoordinatorIDValue:   uint32(elected),
+			SigningPackageBytes:  []byte(body),
+			CoordinatorSignature: []byte{0x01},
+		}
+		env, perr := pkg.Marshal()
+		if perr != nil {
+			t.Fatalf("marshal proof: %v", perr)
+		}
+		return env
+	}
+	stashPendingCoordinatorProofs(roastSessionID, 1, hash, [][]byte{makeProof("frost-package-A")})
+	stashPendingCoordinatorProofs(roastSessionID, 2, hash, [][]byte{makeProof("frost-package-B")})
+
+	bundleMsg, electedFromBundle := produceTransitionBundleForTest(t, roastSessionID, ctx, nodes)
+	if electedFromBundle != elected {
+		t.Fatalf("elected mismatch: %d vs %d", electedFromBundle, elected)
+	}
+
+	bundle := &roast.TransitionMessage{}
+	if err := bundle.Unmarshal(bundleMsg.Payload); err != nil {
+		t.Fatalf("unmarshal bundle: %v", err)
+	}
+	// The bundle must carry >=2 proof envelopes across its snapshots (the pre-2b
+	// design carried none), and the stash must be consumed.
+	totalProofs := 0
+	for i := range bundle.Bundle {
+		totalProofs += len(bundle.Bundle[i].CoordinatorPackageProofs)
+	}
+	if totalProofs < 2 {
+		t.Fatalf("bundle must carry >=2 coordinator package proofs; got %d", totalProofs)
+	}
+	if PendingEvidenceStashedForTest(roastSessionID, 1) ||
+		PendingEvidenceStashedForTest(roastSessionID, 2) {
+		t.Fatal("BroadcastForcedSnapshot must consume the proof stash")
+	}
+
+	// A non-elected seat verifies the bundle and computes the next attempt: two
+	// distinct authentic coordinator-signed bodies -> instant coordinator exclusion.
+	var verifier group.MemberIndex
+	for _, m := range included {
+		if m != elected {
+			verifier = m
+			break
+		}
+	}
+	vbinding, ok := observedAttempt(roastSessionID, verifier, hash)
+	if !ok {
+		t.Fatalf("non-elected seat %d must still hold its observe binding", verifier)
+	}
+	if err := nodes[verifier].coord.VerifyBundle(vbinding.handle, bundle); err != nil {
+		t.Fatalf("verify bundle: %v", err)
+	}
+	next, err := nodes[verifier].coord.NextAttempt(vbinding.handle, bundle, threshold, dkgKey)
+	if err != nil {
+		t.Fatalf("next attempt: %v", err)
+	}
+
+	excludedCoord := false
+	for _, m := range next.ExcludedSet {
+		if m == elected {
+			excludedCoord = true
+		}
+	}
+	if !excludedCoord {
+		t.Fatalf("equivocating coordinator %d must be excluded; excluded=%v", elected, next.ExcludedSet)
+	}
+	for _, m := range next.IncludedSet {
+		if m == elected {
+			t.Fatalf("excluded coordinator %d must not remain in the included set; included=%v", elected, next.IncludedSet)
+		}
+	}
+}

@@ -205,11 +205,14 @@ func (e *RoastTransitionExchange) BroadcastForcedSnapshot(
 	if !ok {
 		return
 	}
-	// takePendingEvidence returns the zero Evidence on a miss, which
+	// takePendingEvidence returns the zero Evidence + nil proofs on a miss, which
 	// NewLocalEvidenceSnapshot renders as the empty proof-of-attendance snapshot --
-	// still broadcast so the seat is not silence-parked.
-	evidence, _ := takePendingEvidence(e.roastSessionID, e.member, attemptHash)
-	snapshot := roast.NewLocalEvidenceSnapshot(e.member, attemptHash, evidence)
+	// still broadcast so the seat is not silence-parked. When present, the snapshot
+	// carries the coarse path's evidence and/or the interactive path's
+	// coordinator-equivocation proofs (RFC-21 Phase 7.3 PR2b-2 step 2b); the
+	// constructor sorts + owns the proofs and the single signing happens below.
+	evidence, proofs, _ := takePendingEvidence(e.roastSessionID, e.member, attemptHash)
+	snapshot := roast.NewLocalEvidenceSnapshot(e.member, attemptHash, evidence, proofs...)
 	payload, err := snapshot.SignableBytes()
 	if err != nil {
 		e.logger.Warnf("roast transition: forced snapshot signable bytes: [%v]", err)
