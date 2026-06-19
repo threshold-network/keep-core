@@ -45,6 +45,16 @@ message SigningPackageBody {
   // The 32-byte taproot script-tree root the signature is tweaked by;
   // empty for a key-path spend.
   bytes taproot_merkle_root = 4;
+  // The member indices of the chosen signing subset the FROST signing_package
+  // was built over (RFC-21 Phase 7.3 t-of-included finalize): ascending,
+  // distinct, each a valid member index. It lets non-coordinators know which
+  // members to await round-2 shares from when the package covers a t-subset of
+  // the included set. The cryptographic source of truth is signing_package
+  // itself, so a coordinator that lies here causes only a LIVENESS failure
+  // (aggregate fails closed when the shares do not match the package), never a
+  // wrong signature or false blame. Empty for packages that do not carry a
+  // subset (the full-included flow).
+  repeated uint32 signer_ids = 5;
 }
 
 // The on-wire signing package: the exact serialized SigningPackageBody bytes
