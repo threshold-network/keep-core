@@ -474,8 +474,10 @@ func (srl *signingRetryLoop) start(
 			// attempt above. Keyed off attemptCounter, the two would diverge after a
 			// pre-selection skip or whenever a member is parked, binding signing
 			// messages and transition bundles to different context hashes. ROAST
-			// inactive keeps the block-paced attemptCounter (legacy, unchanged); the
-			// gate is the deterministic, group-wide RoastRetryActive predicate.
+			// inactive keeps the block-paced attemptCounter (legacy, unchanged). The
+			// gate is the PER-SEAT RoastRetryActiveForMember predicate (PR2b-1.5): a
+			// multi-seat operator may have one seat registered and another not, so
+			// activation is a per-member property; it stays deterministic per seat.
 			activeAttemptNumber := srl.attemptCounter
 			if signing.RoastRetryActiveForMember(srl.signingGroupMemberIndex) {
 				activeAttemptNumber = committedRoastAttemptNumber + 1

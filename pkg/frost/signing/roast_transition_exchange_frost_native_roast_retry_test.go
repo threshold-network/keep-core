@@ -425,7 +425,13 @@ func TestRoastTransitionExchange_MultiSeatElectedSeatAggregates(t *testing.T) {
 		})
 	}
 
-	// Every seat observes the attempt with ITS OWN registered coordinator.
+	// Build an exchange + observe binding for EVERY local seat from ITS OWN
+	// registered per-member deps (the path the controller takes per signer); keep
+	// each seat's capture bus to inspect what it broadcasts.
+	exCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	buses := map[group.MemberIndex]*captureBus{}
+	exchanges := map[group.MemberIndex]*RoastTransitionExchange{}
 	for _, m := range included {
 		deps, ok := RegisteredRoastRetryCoordinatorForMember(m)
 		if !ok {
@@ -440,41 +446,63 @@ func TestRoastTransitionExchange_MultiSeatElectedSeatAggregates(t *testing.T) {
 			context:           ctx,
 			dkgGroupPublicKey: dkgKey,
 		})
+		bus := &captureBus{}
+		buses[m] = bus
+		exchanges[m] = NewRoastTransitionExchange(exCtx, log.Logger("multiseat"), bus, deps, roastSessionID, m)
 	}
 
-	// Build the ELECTED seat's exchange from ITS registered deps (the coordinator
-	// bound to `elected`, NOT a process-default seat).
-	electedDeps, _ := RegisteredRoastRetryCoordinatorForMember(elected)
-	exCtx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	electedExchange := NewRoastTransitionExchange(
-		exCtx, log.Logger("multiseat"), &captureBus{}, electedDeps, roastSessionID, elected,
-	)
-
-	// Elected seat records its own forced snapshot; the sibling seats' forced
-	// snapshots arrive at the elected seat's exchange.
-	electedExchange.BroadcastForcedSnapshot(hash)
+	// Every seat broadcasts its forced snapshot; the elected seat collects all (its
+	// own recorded in BroadcastForcedSnapshot, the siblings' delivered to it).
+	for _, m := range included {
+		exchanges[m].BroadcastForcedSnapshot(hash)
+	}
 	for _, m := range included {
 		if m == elected {
 			continue
 		}
-		payload, err := signedForcedSnapshot(m, hash).Marshal()
-		if err != nil {
-			t.Fatalf("marshal snapshot for %d: %v", m, err)
+		snaps := buses[m].only(RunnerMsgEvidenceSnapshot)
+		if len(snaps) != 1 {
+			t.Fatalf("member %d expected to broadcast 1 forced snapshot, got %d", m, len(snaps))
 		}
-		electedExchange.onSnapshot(RunnerMessage{
-			Type:    RunnerMsgEvidenceSnapshot,
-			Sender:  m,
-			Attempt: hash,
-			Payload: payload,
-		})
+		exchanges[elected].onSnapshot(snaps[0])
 	}
 
-	// The elected seat aggregates + stores the transition record with ITS own
-	// per-member coordinator -- the multi-seat fix.
-	electedExchange.AggregateAndBroadcast(hash)
+	// Each seat runs aggregation.
+	for _, m := range included {
+		exchanges[m].AggregateAndBroadcast(hash)
+	}
+
+	// The elected local seat aggregated with ITS OWN per-member coordinator: a
+	// transition record + exactly one broadcast bundle.
 	if _, ok := RoastTransitionForSession(roastSessionID, elected); !ok {
-		t.Fatal("the elected local seat must aggregate + store a transition record with its own per-member coordinator")
+		t.Fatal("the elected local seat must aggregate + store a record with its own per-member coordinator")
+	}
+	if got := buses[elected].only(RunnerMsgTransitionBundle); len(got) != 1 {
+		t.Fatalf("the elected seat must broadcast exactly one bundle, got %d", len(got))
+	}
+
+	// The NON-elected sibling seats must NOT aggregate. This is the non-vacuous half:
+	// pre-fix all seats shared ONE coordinator bound to the elected member, so a
+	// sibling's AggregateBundle would have run as the elected member and broadcast a
+	// bundle; per-member coordinators (bound to members != elected) make it
+	// ErrNotAggregator -> no bundle.
+	var sibling group.MemberIndex
+	for _, m := range included {
+		if m == elected {
+			continue
+		}
+		if got := buses[m].only(RunnerMsgTransitionBundle); len(got) != 0 {
+			t.Fatalf("non-elected local seat %d must not aggregate a bundle, got %d", m, len(got))
+		}
+		sibling = m
+	}
+
+	// A sibling seat receives the elected seat's bundle and stores ITS OWN
+	// next-attempt record with its own coordinator (the multi-seat sibling-unparking
+	// path that lets a non-elected local seat advance).
+	exchanges[sibling].onBundle(buses[elected].only(RunnerMsgTransitionBundle)[0])
+	if _, ok := RoastTransitionForSession(roastSessionID, sibling); !ok {
+		t.Fatal("a sibling local seat must store its own transition record from the elected seat's bundle")
 	}
 }
 

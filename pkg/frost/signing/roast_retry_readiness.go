@@ -77,11 +77,16 @@ func RoastRetryReadinessOptInEnabled() bool {
 // can never be created instead of using the uniform legacy shuffle (Codex P2-1).
 // Always false in builds without the frost_roast_retry tag (the registration and
 // producer default stubs both report unavailable).
+// readinessAndProducerReady is the build+env prefix shared by RoastRetryActive and
+// RoastRetryActiveForMember: the readiness opt-in is set AND the transition producer
+// is built in (frost_native). Both gates additionally require a registered
+// coordinator (any entry / the specific member's).
+func readinessAndProducerReady() bool {
+	return RoastRetryReadinessOptInEnabled() && roastTransitionProducerAvailable()
+}
+
 func RoastRetryActive() bool {
-	if !RoastRetryReadinessOptInEnabled() {
-		return false
-	}
-	if !roastTransitionProducerAvailable() {
+	if !readinessAndProducerReady() {
 		return false
 	}
 	_, ok := RegisteredRoastRetryCoordinator()
@@ -97,10 +102,7 @@ func RoastRetryActive() bool {
 // frost_roast_retry tag (the per-member registration default stub reports
 // not-registered). RFC-21 Phase 7.3 PR2b-1.5.
 func RoastRetryActiveForMember(member group.MemberIndex) bool {
-	if !RoastRetryReadinessOptInEnabled() {
-		return false
-	}
-	if !roastTransitionProducerAvailable() {
+	if !readinessAndProducerReady() {
 		return false
 	}
 	_, ok := RegisteredRoastRetryCoordinatorForMember(member)

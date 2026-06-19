@@ -43,7 +43,12 @@ var (
 // goroutine that evicts orphaned bindings (defence-in-depth backstop); subsequent
 // registrations do not restart it.
 func RegisterRoastRetryCoordinatorForMember(member group.MemberIndex, deps RoastRetryDeps) {
-	if deps.SelfMember != uint32(member) {
+	if member == 0 || deps.SelfMember != uint32(member) {
+		// Member indices are 1-based; a coordinator bound to selfMember 0 is the
+		// "disabled" sentinel that NEVER aggregates (coordinator_state.go), so
+		// registering under member 0 -- or under any member that disagrees with
+		// deps.SelfMember -- would silently mis-bind. Reject (the seat stays
+		// ROAST-inactive -> legacy) rather than register a non-aggregating entry.
 		return
 	}
 	roastRetryRegistrationMu.Lock()
