@@ -472,11 +472,20 @@ func (se *signingExecutor) signWithTaprootMerkleRoot(
 						)
 					}
 
+					// RFC-21 Phase 7.3 PR2b-1b: attempt.number is the committed roast
+					// attempt number under active ROAST retry (set by the loop), so the
+					// coordinator election, session id, and this AttemptContext all key
+					// off the committed identity -- matching the observe/transition
+					// context. TransientlyParkedMembersIndexes is carried through so the
+					// active context's parking is byte-identical to the observe context's
+					// (BuildAttemptContextFromRequest splits Excluded into permanent +
+					// parked from it).
 					attemptInfo := &signing.Attempt{
-						Number:                 attempt.number,
-						CoordinatorMemberIndex: coordinatorMemberIndex,
-						IncludedMembersIndexes: includedMembersIndexes,
-						ExcludedMembersIndexes: attempt.excludedMembersIndexes,
+						Number:                          attempt.number,
+						CoordinatorMemberIndex:          coordinatorMemberIndex,
+						IncludedMembersIndexes:          includedMembersIndexes,
+						ExcludedMembersIndexes:          attempt.excludedMembersIndexes,
+						TransientlyParkedMembersIndexes: attempt.transientlyParkedMembersIndexes,
 					}
 
 					signingAttemptLogger.Infof(

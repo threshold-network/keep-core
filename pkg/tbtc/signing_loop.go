@@ -197,10 +197,21 @@ func (srl *signingRetryLoop) reportAttemptOutcome(success bool) {
 
 // signingAttemptParams represents parameters of a signing attempt.
 type signingAttemptParams struct {
+	// number is the attempt number the active signing keys its AttemptContext,
+	// coordinator election, and session id off. Under active ROAST retry this is
+	// the COMMITTED roast attempt number (roastAttemptNumber+1), so the active
+	// signing context matches the observe/transition context the loop built for
+	// the same committed attempt; otherwise it is the block-paced attemptCounter
+	// (legacy, unchanged). RFC-21 Phase 7.3 PR2b-1b.
 	number                 uint
 	startBlock             uint64
 	timeoutBlock           uint64
 	excludedMembersIndexes []group.MemberIndex
+	// transientlyParkedMembersIndexes are the members the prior ROAST transition
+	// parked for THIS attempt only. The active signing stamps them onto its
+	// AttemptContext so it is byte-identical to the observe context (which carries
+	// the same parking); empty for the legacy path.
+	transientlyParkedMembersIndexes []group.MemberIndex
 }
 
 // signingAttemptFn represents a function performing a signing attempt.
@@ -401,6 +412,13 @@ func (srl *signingRetryLoop) start(
 			)
 		}
 
+		// committedRoastAttemptNumber is this committed attempt's 0-based ROAST
+		// index, captured BEFORE the advance below so both the observe context and
+		// the active signing context key off the same value (the observe Attempt is
+		// stamped Number = committedRoastAttemptNumber+1, so the active attempt must
+		// use the same number to stay byte-identical).
+		committedRoastAttemptNumber := srl.roastAttemptNumber
+
 		// RFC-21 Phase 7.3 PR2b-1b: record a local observe binding for this
 		// committed ROAST attempt BEFORE the skip branch, so every local seat --
 		// including one excluded from this attempt -- holds a handle to verify the
@@ -409,7 +427,7 @@ func (srl *signingRetryLoop) start(
 		// one-attempt park is reinstated next time rather than made permanent.
 		if srl.transitionController != nil {
 			srl.transitionController.BeginObservedAttempt(
-				srl.roastAttemptNumber,
+				committedRoastAttemptNumber,
 				includedMembersIndexes,
 				excludedMembersIndexes,
 				transientlyParkedMembersIndexes,
@@ -449,11 +467,26 @@ func (srl *signingRetryLoop) start(
 				srl.attemptCounter,
 			)
 
+			// RFC-21 Phase 7.3 PR2b-1b: when ROAST retry is runtime-active, the
+			// active signing attempt must key off the COMMITTED roast attempt index
+			// (+ parking) so its AttemptContext is byte-identical to the
+			// observe/transition context this seat built for the same committed
+			// attempt above. Keyed off attemptCounter, the two would diverge after a
+			// pre-selection skip or whenever a member is parked, binding signing
+			// messages and transition bundles to different context hashes. ROAST
+			// inactive keeps the block-paced attemptCounter (legacy, unchanged); the
+			// gate is the deterministic, group-wide RoastRetryActive predicate.
+			activeAttemptNumber := srl.attemptCounter
+			if signing.RoastRetryActive() {
+				activeAttemptNumber = committedRoastAttemptNumber + 1
+			}
+
 			result, endBlock, err := signingAttemptFn(&signingAttemptParams{
-				number:                 srl.attemptCounter,
-				startBlock:             announcementEndBlock,
-				timeoutBlock:           timeoutBlock,
-				excludedMembersIndexes: excludedMembersIndexes,
+				number:                          activeAttemptNumber,
+				startBlock:                      announcementEndBlock,
+				timeoutBlock:                    timeoutBlock,
+				excludedMembersIndexes:          excludedMembersIndexes,
+				transientlyParkedMembersIndexes: transientlyParkedMembersIndexes,
 			})
 			if err != nil {
 				srl.logger.Warnf(

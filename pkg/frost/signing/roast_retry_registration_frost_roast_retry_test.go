@@ -38,6 +38,41 @@ func TestRoastRetryRegistration_TaggedBuildRoundTrip(t *testing.T) {
 	}
 }
 
+// TestRoastRetryActive_GatesOnReadinessAndRegistration asserts RoastRetryActive
+// is true only when BOTH the readiness opt-in is set AND a coordinator is
+// registered -- the deterministic group-wide gate the signing loop uses to decide
+// whether to key the active attempt off the committed roast number.
+func TestRoastRetryActive_GatesOnReadinessAndRegistration(t *testing.T) {
+	ResetRoastRetryRegistrationForTest()
+	t.Cleanup(ResetRoastRetryRegistrationForTest)
+
+	// Readiness off -> inactive regardless of registration.
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "false")
+	RegisterRoastRetryCoordinator(RoastRetryDeps{
+		Coordinator: roast.NewInMemoryCoordinator(),
+		SelfMember:  1,
+	})
+	if RoastRetryActive() {
+		t.Fatal("readiness off must yield inactive even with a coordinator")
+	}
+
+	// Readiness on but no coordinator -> inactive.
+	ResetRoastRetryRegistrationForTest()
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
+	if RoastRetryActive() {
+		t.Fatal("readiness on without a coordinator must yield inactive")
+	}
+
+	// Readiness on AND a coordinator -> active.
+	RegisterRoastRetryCoordinator(RoastRetryDeps{
+		Coordinator: roast.NewInMemoryCoordinator(),
+		SelfMember:  1,
+	})
+	if !RoastRetryActive() {
+		t.Fatal("readiness on with a coordinator must yield active")
+	}
+}
+
 func TestRoastRetryRegistration_LaterRegistrationOverwrites(t *testing.T) {
 	ResetRoastRetryRegistrationForTest()
 	t.Cleanup(ResetRoastRetryRegistrationForTest)
