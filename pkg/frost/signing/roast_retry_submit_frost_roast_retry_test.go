@@ -307,6 +307,53 @@ func TestSubmitSnapshotIfActive_MultiSeatSubmitsPerSeat(t *testing.T) {
 	}
 }
 
+// TestSubmitSnapshotIfActive_SubmitsRejectOnlySnapshot guards the fold of Codex's
+// PR2b-2 P2: a snapshot carrying ONLY reject evidence -- no overflow, no conflict
+// -- must still be signed and submitted. A validation-blamable Reject (e.g. an
+// attempt-context-hash mismatch) populates Evidence.Rejects without any Overflow,
+// and NextAttempt's exclusion path consumes snapshot.Rejects; the old overflow-only
+// emptiness check silently dropped such snapshots, starving the blame pipeline.
+func TestSubmitSnapshotIfActive_SubmitsRejectOnlySnapshot(t *testing.T) {
+	ResetRoastRetryRegistrationForTest()
+	ResetSessionHandleRegistryForTest()
+	t.Cleanup(ResetRoastRetryRegistrationForTest)
+	t.Cleanup(ResetSessionHandleRegistryForTest)
+
+	const selfMember group.MemberIndex = 1
+	cap := newCaptureCoordinator(roast.NewInMemoryCoordinatorWithSigning(
+		selfMember, &deterministicSigner{id: selfMember}, deterministicVerifier{},
+	))
+	RegisterRoastRetryCoordinator(RoastRetryDeps{
+		Coordinator: cap,
+		Signer:      &deterministicSigner{id: selfMember},
+		Verifier:    deterministicVerifier{},
+		SelfMember:  uint32(selfMember),
+	})
+
+	ctx := newTestContextForSubmit(t, "session-reject-only")
+	handle, err := cap.BeginAttempt(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	SetCurrentAttemptHandleForSession("session-reject-only", selfMember, handle, ctx)
+
+	// Only a reject -- no overflow, no conflict.
+	recorder := attempt.NewBoundedRecorder()
+	recorder.RecordReject(2, "attempt_context_hash_mismatch")
+	submitSnapshotIfActive("session-reject-only", selfMember, recorder)
+
+	if len(cap.recordedFor) != 1 {
+		t.Fatalf("reject-only snapshot must be submitted; got %d RecordEvidence calls", len(cap.recordedFor))
+	}
+	snap := cap.recordedSnp[0]
+	if len(snap.Rejects) == 0 {
+		t.Fatal("submitted snapshot must carry the reject evidence")
+	}
+	if len(snap.OperatorSignature) == 0 {
+		t.Fatal("reject-only snapshot must be signed")
+	}
+}
+
 func TestSetCurrentAttemptHandleForSession_LaterBindingOverwrites(t *testing.T) {
 	ResetSessionHandleRegistryForTest()
 	t.Cleanup(ResetSessionHandleRegistryForTest)

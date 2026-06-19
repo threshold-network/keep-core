@@ -58,13 +58,20 @@ func submitSnapshotIfActive(
 		return
 	}
 	evidence := recorder.Snapshot()
-	if len(evidence.Overflows) == 0 {
-		// Nothing observed worth submitting; emitting an empty
+	if len(evidence.Overflows) == 0 &&
+		len(evidence.Rejects) == 0 &&
+		len(evidence.Conflicts) == 0 {
+		// Truly nothing observed worth submitting; emitting an empty
 		// snapshot is still meaningful in the ROAST protocol
-		// (proof-of-attendance) but adds noise to the bundle.
-		// Phase 4.3 chooses to skip empty submissions; Phase 5
-		// orchestration may revisit this if attestations need to
-		// be unconditional.
+		// (proof-of-attendance) but adds noise to the bundle, so we
+		// skip it. The emptiness test MUST consider all three evidence
+		// categories, not just overflows: a validation-blamable Reject
+		// (e.g. an attempt-context-hash mismatch) or a first-write-wins
+		// Conflict populates Rejects/Conflicts WITHOUT any Overflow, and
+		// NextAttempt's exclusion path consumes snapshot.Rejects
+		// (next_attempt.go). Dropping a reject/conflict-only snapshot
+		// here would silently starve the blame pipeline of exactly the
+		// validation evidence it needs.
 		return
 	}
 	snap := buildSignedSnapshot(deps, ctx, evidence)
