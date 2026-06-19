@@ -107,10 +107,40 @@ func BeginOrchestrationForSession(
 	// RFC-21 Phase 7.3 PR2b-1.5: mint the handle from THIS seat's coordinator, so a
 	// multi-seat operator's elected seat aggregates with its own binding.
 	deps, ok := RegisteredRoastRetryCoordinatorForMember(member)
-	if !ok {
+	memberCount := registeredRoastRetryMemberCount()
+	// Multi-seat is not yet member-safe here: the session handle binding below
+	// (SetCurrentAttemptHandleForSession) is keyed by sessionID alone, so two local
+	// seats in the same attempt would collide. Fail CLOSED for any multi-seat operator
+	// -- a hard (non-sentinel) error the dispatcher treats as terminal, NEVER the
+	// legacy-fallback sentinel -- until PR2b-2 wires member-keyed handles. Returning the
+	// sentinel here would let this seat run the coarse/legacy path while sibling seats
+	// drive bound ROAST messages, splitting the attempt into mixed bound/unbound. This
+	// mirrors the coarse evidence path's multi-seat guard (submitSnapshotIfActive) in
+	// this same PR.
+	if memberCount > 1 {
 		return roast.AttemptHandle{}, nil, fmt.Errorf(
-			"%w: caller should fall back to legacy behaviour",
-			ErrNoRoastRetryCoordinatorRegistered,
+			"roast orchestration: multi-seat orchestration is not yet member-aware; "+
+				"fail closed for session %q until PR2b-2",
+			sessionID,
+		)
+	}
+	if !ok {
+		// memberCount is 0 or 1 here. count==0: no seat is registered anywhere, so ROAST
+		// is not active for the process -- a uniform, group-wide condition every honest
+		// node decides identically -> safe legacy fallback (the sentinel). count==1: a
+		// sibling seat IS registered but not THIS one (a partially-registered operator),
+		// so advertising the legacy fallback for this seat while the sibling drives bound
+		// ROAST would fracture the attempt -> fail CLOSED instead (Codex re-review).
+		if memberCount == 0 {
+			return roast.AttemptHandle{}, nil, fmt.Errorf(
+				"%w: caller should fall back to legacy behaviour",
+				ErrNoRoastRetryCoordinatorRegistered,
+			)
+		}
+		return roast.AttemptHandle{}, nil, fmt.Errorf(
+			"roast orchestration: seat %d has no registered coordinator while a sibling "+
+				"seat is ROAST-active; fail closed",
+			member,
 		)
 	}
 	if deps.Coordinator == nil {
