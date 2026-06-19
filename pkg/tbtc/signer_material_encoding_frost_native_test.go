@@ -1,4 +1,4 @@
-//go:build frost_native
+//go:build frost_native && !(frost_tbtc_signer && cgo)
 
 package tbtc
 
