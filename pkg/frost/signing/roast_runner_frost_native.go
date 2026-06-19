@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/keep-network/keep-core/pkg/frost/roast"
 	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
@@ -30,9 +31,11 @@ import (
 //     only as sound as that authentication.
 //  2. Delivery must not let a slow or flooding peer block an honest broadcaster
 //     indefinitely. The runner does not fully drain every stream - it bounds the
-//     equivocation drains, and the coordinator never reads its own package
-//     stream - so the transport must apply backpressure or drop, never block
-//     forever, on an undrained or oversubscribed stream.
+//     equivocation drains, the coordinator never reads its own package stream,
+//     and for t-of-included finalize the coordinator stops reading commitments
+//     once t have arrived while non-coordinators never read commitments at all -
+//     so the transport must apply backpressure or drop, never block forever, on
+//     an undrained or oversubscribed stream.
 //
 // Round-1 commitments are unsigned: with authenticated senders the worst case is
 // a member's own bad or equivocated commitment, which surfaces as a round-2
@@ -87,6 +90,17 @@ func newInteractiveSigningRunner(
 	if !memberInSet(member, attemptCtx.IncludedSet) {
 		return nil, fmt.Errorf(
 			"roast runner: member %d is not in the attempt's included set", member,
+		)
+	}
+	// The coordinator's round-1 collection proceeds until t responsive committers,
+	// so t must not exceed the included set - otherwise the subset can never form
+	// and the coordinator would block to the ctx deadline on every attempt. A
+	// well-formed attempt always selects at least threshold members; fail fast at
+	// construction rather than silently degrade into timeout-driven retries.
+	if int(threshold) > len(attemptCtx.IncludedSet) {
+		return nil, fmt.Errorf(
+			"roast runner: threshold [%d] exceeds the attempt's included set size [%d]",
+			threshold, len(attemptCtx.IncludedSet),
 		)
 	}
 	// The signed message is the binding's MessageDigest, derived here rather than
@@ -169,21 +183,32 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 	attemptID := open.AttemptID
 
 	// Cleanup on conclusion, by outcome:
-	//   - SUCCESS: prune this attempt's round-2 collector state per the
+	//   - SUCCESS as a SIGNER: prune this attempt's round-2 collector state per the
 	//     prune-on-conclusion contract (nothing needs it), so a collector reused
-	//     across attempts does not retain concluded attempts indefinitely.
-	//   - FAILURE / early exit: abort the engine session so it drops this
-	//     attempt's resident secret nonces, but do NOT prune the collector. A
-	//     failure path (the root-divergence return below, or - once it lands - an
-	//     aggregate share-verification failure) retains signed evidence that the
-	//     blame/retry path must still read via CoordinatorPackageProofs /
-	//     ClassifyCandidateCulprits; the caller prunes after snapshotting or
-	//     propagating it.
+	//     across attempts does not retain concluded attempts indefinitely. Round 2
+	//     already consumed our round-1 nonces, so no abort is needed.
+	//   - SUCCESS as an OBSERVER: a member that committed in round 1 but was not in
+	//     the chosen signing subset obtains the signature by aggregating the
+	//     subset's broadcast shares WITHOUT signing, so its round-1 nonces are
+	//     still resident in the engine. Prune the collector AND abort the session
+	//     to drop those nonces - the success branch otherwise suppresses the abort.
+	//   - FAILURE / early exit: abort the engine session so it drops this attempt's
+	//     resident secret nonces, but do NOT prune the collector. A failure path
+	//     (the root-divergence return below, or an aggregate share-verification
+	//     failure) retains signed evidence that the blame/retry path must still
+	//     read via CoordinatorPackageProofs / ClassifyCandidateCulprits; the caller
+	//     prunes after snapshotting or propagating it.
 	// Best-effort: neither may mask the run's real outcome.
 	succeeded := false
+	// signedRound2 records whether this node ran round 2 and thereby consumed its
+	// round-1 nonces; an observer never does, so it must still abort on success.
+	signedRound2 := false
 	defer func() {
 		if succeeded {
 			r.collector.PruneAttempt(contextHash[:])
+			if !signedRound2 {
+				_, _ = r.engine.InteractiveSessionAbort(binding.SessionID(), &attemptID)
+			}
 			return
 		}
 		_, _ = r.engine.InteractiveSessionAbort(binding.SessionID(), &attemptID)
@@ -202,10 +227,16 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 	}
 	r.broadcast(RunnerMsgCommitments, contextHash, ownCommitments)
 
-	// 4. Collect every included member's commitments.
+	// 4. Only the elected coordinator collects commitments - it alone builds the
+	// signing package. It gathers the first t responsive committers (its own
+	// already seeded) and builds the package over exactly that subset, so a member
+	// past the t-th to commit (slow or offline) never stalls the attempt. Every
+	// other member broadcast its own commitment above and now awaits the package.
 	commitments := map[group.MemberIndex][]byte{r.member: ownCommitments}
-	if err := r.collectCommitments(ctx, r.sub.Commitments(), contextHash, includedSet, commitments); err != nil {
-		return nil, fmt.Errorf("roast runner: collect commitments: %w", err)
+	if r.member == elected {
+		if err := r.collectCommitments(ctx, r.sub.Commitments(), contextHash, includedSet, commitments); err != nil {
+			return nil, fmt.Errorf("roast runner: collect commitments: %w", err)
+		}
 	}
 
 	// 5. The elected coordinator builds, signs, and broadcasts the signing
@@ -240,31 +271,55 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("roast runner: signing package taproot root diverges from the bound session root")
 	}
 
-	// 6. Round 2: our signature share, recorded locally and broadcast.
-	ownShare, err := r.engine.InteractiveRound2(binding.SessionID(), attemptID, uint16(r.member), pkg.SigningPackageBytes)
-	if err != nil {
-		return nil, fmt.Errorf("roast runner: round 2: %w", err)
+	// 6. The package names the chosen signing subset (the first t responsive
+	// committers the coordinator built it over). A local member IN that subset is
+	// a signer; one NOT in it is an OBSERVER - it committed in round 1 but was not
+	// chosen, so it does not sign and only aggregates the subset's broadcast
+	// shares. An empty signer set is the full-included flow (back-compat / no
+	// oversizing): every included member signs. SignerIDs() is safe here -
+	// Unmarshal and AuthenticateSigningPackage (via RecordSigningPackage) both
+	// Validate, so each id is a real, ascending, distinct member index.
+	signerSet := pkg.SignerIDs()
+	if len(signerSet) == 0 {
+		signerSet = includedSet
 	}
-	ownSubmission, ownSubmissionEnvelope, err := r.signShareSubmission(pkg, contextHash, elected, ownShare)
-	if err != nil {
-		return nil, err
-	}
-	if err := r.collector.RecordShareSubmission(ownSubmission); err != nil {
-		return nil, fmt.Errorf("roast runner: record own share submission: %w", err)
-	}
-	r.broadcast(RunnerMsgShareSubmission, contextHash, ownSubmissionEnvelope)
 
-	// 7. Collect a share from every signer in the package (own already in), as
-	// inner FROST share bytes. The package was built from the whole responsive
-	// included set, so the aggregate needs a share from each of them (silent-
-	// member subsetting is the retry path's concern, not the happy flow).
-	shares := map[group.MemberIndex][]byte{r.member: ownShare}
-	if err := r.collectShares(ctx, r.sub.Shares(), contextHash, includedSet, shares); err != nil {
+	// 7. Round 2 (signers only): our signature share, recorded locally and
+	// broadcast. An observer skips round 2 entirely, leaving its round-1 nonces
+	// resident - the cleanup defer aborts them on success.
+	shares := map[group.MemberIndex][]byte{}
+	if memberInSet(r.member, signerSet) {
+		ownShare, err := r.engine.InteractiveRound2(binding.SessionID(), attemptID, uint16(r.member), pkg.SigningPackageBytes)
+		if err != nil {
+			return nil, fmt.Errorf("roast runner: round 2: %w", err)
+		}
+		// Round 2 consumed our round-1 nonces: a successful signer prunes without
+		// aborting; only a non-signing observer still needs the abort.
+		signedRound2 = true
+		ownSubmission, ownSubmissionEnvelope, err := r.signShareSubmission(pkg, contextHash, elected, ownShare)
+		if err != nil {
+			return nil, err
+		}
+		if err := r.collector.RecordShareSubmission(ownSubmission); err != nil {
+			return nil, fmt.Errorf("roast runner: record own share submission: %w", err)
+		}
+		r.broadcast(RunnerMsgShareSubmission, contextHash, ownSubmissionEnvelope)
+		shares[r.member] = ownShare
+	}
+
+	// 8. Collect a round-2 share from every member in the chosen signing subset (a
+	// signer already has its own; an observer collects all t), as inner FROST
+	// share bytes. A subset signer that never broadcasts a share stalls the
+	// attempt to the ctx deadline -> fail -> the existing ROAST retry path.
+	if err := r.collectShares(ctx, r.sub.Shares(), contextHash, signerSet, shares); err != nil {
 		return nil, fmt.Errorf("roast runner: collect shares: %w", err)
 	}
 
-	// 8. Aggregate. A share-verification failure surfaces the typed error with
-	// candidate culprits for the (separate) blame path.
+	// 9. Aggregate the subset's shares. Aggregation is a public operation over the
+	// package and the t broadcast shares, so signers and observers alike obtain
+	// the same signature; an observer aggregates against its own open session
+	// without having contributed a share. A share-verification failure surfaces
+	// the typed error with candidate culprits for the (separate) blame path.
 	signature, err := r.engine.InteractiveAggregate(
 		binding.SessionID(),
 		attemptID,
@@ -276,13 +331,13 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("roast runner: aggregate: %w", err)
 	}
 
-	// 9. Mark the attempt succeeded so the cleanup path produces no transition
+	// 10. Mark the attempt succeeded so the cleanup path produces no transition
 	// bundle for a completed attempt.
 	if err := r.coordinator.MarkSucceeded(binding.Handle()); err != nil {
 		return nil, fmt.Errorf("roast runner: mark succeeded: %w", err)
 	}
-	// Aggregation consumed the nonces and the attempt is finalized; suppress the
-	// deferred abort.
+	// The attempt is finalized; the cleanup defer prunes. A signer's nonces are
+	// spent so it does not abort; an observer aborts via the !signedRound2 branch.
 	succeeded = true
 	return signature, nil
 }
@@ -338,7 +393,13 @@ func (r *interactiveSigningRunner) obtainSigningPackage(
 	if err != nil {
 		return nil, fmt.Errorf("roast runner: new signing package: %w", err)
 	}
-	envelope, err := r.signSigningPackage(contextHash, elected, frostPackage)
+	// The chosen signing subset is exactly the members whose commitments the
+	// package was built over (the first t responsive committers). Carry it in
+	// signer_ids so non-coordinators learn which members to await shares from and
+	// which committed members are observers. The FROST SigningPackageBytes is the
+	// cryptographic source of truth, so this is a liveness hint, never blame.
+	signerIDs := sortedMemberIndices(commitments)
+	envelope, err := r.signSigningPackage(contextHash, elected, signerIDs, frostPackage)
 	if err != nil {
 		return nil, err
 	}
@@ -349,12 +410,14 @@ func (r *interactiveSigningRunner) obtainSigningPackage(
 func (r *interactiveSigningRunner) signSigningPackage(
 	contextHash [attempt.MessageDigestLength]byte,
 	elected group.MemberIndex,
+	signerIDs []group.MemberIndex,
 	frostPackage []byte,
 ) ([]byte, error) {
 	pkg := &roast.SigningPackage{
 		AttemptContextHash:  append([]byte(nil), contextHash[:]...),
 		CoordinatorIDValue:  uint32(elected),
 		SigningPackageBytes: frostPackage,
+		SignerIDsValue:      memberIndicesToUint32(signerIDs),
 	}
 	if root := r.attempt.TaprootMerkleRoot(); root != nil {
 		pkg.TaprootMerkleRoot = append([]byte(nil), root[:]...)
@@ -408,8 +471,14 @@ func (r *interactiveSigningRunner) signShareSubmission(
 	return sub, envelope, nil
 }
 
-// collectCommitments fills `into` with every included member's commitments
-// (own already seeded), taking the first body per sender.
+// collectCommitments (coordinator only) fills `into` with the first t responsive
+// committers' round-1 commitments - the coordinator's own already seeded, then
+// the first t-1 included peers to arrive - and STOPS at t (r.threshold). The
+// coordinator builds the FROST package over exactly this t-subset, so a member
+// past the t-th to commit (slow or offline) never stalls the attempt: collection
+// proceeds the instant t have committed. If ctx expires first (fewer than t ever
+// commit), the run fails into the existing ROAST retry path. t <= len(included)
+// always, so the loop terminates once t included members have committed.
 func (r *interactiveSigningRunner) collectCommitments(
 	ctx context.Context,
 	stream <-chan RunnerMessage,
@@ -418,7 +487,7 @@ func (r *interactiveSigningRunner) collectCommitments(
 	into map[group.MemberIndex][]byte,
 ) error {
 	included := setOf(includedSet)
-	for len(into) < len(included) {
+	for len(into) < int(r.threshold) {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -443,24 +512,28 @@ func (r *interactiveSigningRunner) collectCommitments(
 	return nil
 }
 
-// collectShares fills `into` with each included member's inner FROST share
-// bytes (own already seeded), counting the first accepted body per sender, and
-// retains EVERY well-formed share in the collector - including a sender's later,
-// body-different ones - which is where member equivocation is detected.
+// collectShares fills `into` with each share from the chosen signing subset
+// (`signerSet`) as inner FROST share bytes - a signer's own already seeded, an
+// observer's none - counting the first accepted body per sender, and retains
+// EVERY well-formed share in the collector (including a sender's later,
+// body-different ones) which is where member equivocation is detected. It
+// collects over the signer set, NOT the full included set: a committed member
+// the coordinator did not choose is an observer that contributes no share, so
+// waiting for it would stall every attempt that omitted an offline member.
 func (r *interactiveSigningRunner) collectShares(
 	ctx context.Context,
 	stream <-chan RunnerMessage,
 	contextHash [attempt.MessageDigestLength]byte,
-	includedSet []group.MemberIndex,
+	signerSet []group.MemberIndex,
 	into map[group.MemberIndex][]byte,
 ) error {
-	included := setOf(includedSet)
-	for len(into) < len(included) {
+	signers := setOf(signerSet)
+	for len(into) < len(signers) {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case msg := <-stream:
-			r.recordShareMessage(msg, contextHash, included, into)
+			r.recordShareMessage(msg, contextHash, signers, into)
 		}
 	}
 	// `into` is full, but the slot-filling share may have body-different
@@ -472,7 +545,7 @@ func (r *interactiveSigningRunner) collectShares(
 	for i, n := 0, len(stream); i < n; i++ {
 		select {
 		case msg := <-stream:
-			r.recordShareMessage(msg, contextHash, included, into)
+			r.recordShareMessage(msg, contextHash, signers, into)
 		default:
 			return nil
 		}
@@ -491,13 +564,15 @@ func (r *interactiveSigningRunner) collectShares(
 func (r *interactiveSigningRunner) recordShareMessage(
 	msg RunnerMessage,
 	contextHash [attempt.MessageDigestLength]byte,
-	included map[group.MemberIndex]struct{},
+	signers map[group.MemberIndex]struct{},
 	into map[group.MemberIndex][]byte,
 ) {
 	if msg.Attempt != contextHash {
 		return
 	}
-	if _, want := included[msg.Sender]; !want {
+	// Only shares from the chosen signing subset count toward this aggregate; a
+	// share from a committed-but-unchosen observer (or any non-signer) is ignored.
+	if _, want := signers[msg.Sender]; !want {
 		return
 	}
 	var sub roast.ShareSubmission
@@ -681,6 +756,30 @@ func setOf(members []group.MemberIndex) map[group.MemberIndex]struct{} {
 	out := make(map[group.MemberIndex]struct{}, len(members))
 	for _, m := range members {
 		out[m] = struct{}{}
+	}
+	return out
+}
+
+// sortedMemberIndices returns the keys of a member-indexed map in ascending
+// order - the chosen signing subset the coordinator carries in the package's
+// signer_ids, which SigningPackage.Validate requires strictly ascending (the map
+// keys are distinct, so sorting yields a strictly-ascending list).
+func sortedMemberIndices(m map[group.MemberIndex][]byte) []group.MemberIndex {
+	out := make([]group.MemberIndex, 0, len(m))
+	for member := range m {
+		out = append(out, member)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// memberIndicesToUint32 widens an ascending member-index slice to the wire
+// (uint32) form SigningPackage.SignerIDsValue carries. Widening uint8 ->
+// uint32 is lossless, and ascending/distinct order is preserved.
+func memberIndicesToUint32(members []group.MemberIndex) []uint32 {
+	out := make([]uint32, 0, len(members))
+	for _, member := range members {
+		out = append(out, uint32(member))
 	}
 	return out
 }
