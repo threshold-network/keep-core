@@ -244,3 +244,111 @@ func TestDriveInteractiveRoastSigning_StashesCoordinatorProofsOnFailure(t *testi
 		t.Fatalf("interactive failure must stash proofs only, no coarse evidence; got %+v", evidence)
 	}
 }
+
+// verifierCapableFakeEngine wraps the fake interactive engine with a configurable
+// share re-verification verdict, so it ALSO satisfies Round2ShareVerifyingEngine
+// (the plain fake does not). Used to drive the share-blame path (RFC-21 Phase 7.3).
+type verifierCapableFakeEngine struct {
+	*fakeInteractiveSigningEngine
+	shareVerdict NativeShareVerificationVerdict
+	shareErr     error
+}
+
+func (e *verifierCapableFakeEngine) VerifySignatureShare(
+	_ string, _ []byte, _ []byte, _ uint16, _ *[32]byte,
+) (NativeShareVerificationVerdict, error) {
+	return e.shareVerdict, e.shareErr
+}
+
+// TestDriveInteractiveRoastSigning_SkipsShareBlameWithoutVerifierEngine asserts the
+// share-blame path fails safe when the engine cannot re-verify shares: the plain
+// fake engine does not implement Round2ShareVerifyingEngine, so the type-assert in
+// the drive skips classification. The 2b coordinator-proof stash still fires (a
+// 1-of-1 attempt retains its authoritative package), so the entry exists but
+// carries NO reject evidence -- no false blame from a missing verifier.
+func TestDriveInteractiveRoastSigning_SkipsShareBlameWithoutVerifierEngine(t *testing.T) {
+	ResetPendingEvidenceRegistryForTest()
+	t.Cleanup(ResetPendingEvidenceRegistryForTest)
+
+	f := newDriveFixture(t)
+	f.engine.aggregateErr = &InteractiveAggregateShareVerificationError{CandidateCulprits: []uint16{1}}
+	RegisterInteractiveSigningEngineProvider(func() interactiveSigningEngine { return f.engine })
+	t.Setenv(InteractiveSigningOptInEnvVar, "true")
+
+	if _, err := f.run(t); err == nil {
+		t.Fatal("expected a hard-fail error on share-verification failure")
+	}
+
+	evidence, proofs, ok := takePendingEvidence(f.attemptCtx.SessionID, 1, f.attemptCtx.Hash())
+	if !ok {
+		t.Fatal("the 2b proof stash should still produce an entry")
+	}
+	if len(evidence.Rejects) != 0 {
+		t.Fatalf("share-blame must be skipped without a verifier engine; got rejects %+v", evidence.Rejects)
+	}
+	if len(proofs) == 0 {
+		t.Fatal("the 2b authoritative package proof should still be stashed")
+	}
+}
+
+// TestDriveInteractiveRoastSigning_StashesShareRejectBlameOnVerifiedInvalidShare is
+// the share-blame happy path (RFC-21 Phase 7.3, the third fault source): an
+// interactive aggregate that fails naming member 1 a candidate culprit, with an
+// engine that re-verifies member 1's retained share INVALID, stashes an f+1 reject
+// accusation against member 1 (alongside the 2b authoritative proof in the same
+// union entry).
+func TestDriveInteractiveRoastSigning_StashesShareRejectBlameOnVerifiedInvalidShare(t *testing.T) {
+	ResetPendingEvidenceRegistryForTest()
+	t.Cleanup(ResetPendingEvidenceRegistryForTest)
+
+	f := newDriveFixture(t)
+	f.engine.aggregateErr = &InteractiveAggregateShareVerificationError{CandidateCulprits: []uint16{1}}
+	verifierEngine := &verifierCapableFakeEngine{
+		fakeInteractiveSigningEngine: f.engine,
+		shareVerdict:                 NativeShareVerdictInvalid,
+	}
+	RegisterInteractiveSigningEngineProvider(func() interactiveSigningEngine { return verifierEngine })
+	t.Setenv(InteractiveSigningOptInEnvVar, "true")
+
+	if _, err := f.run(t); err == nil {
+		t.Fatal("expected a hard-fail error on share-verification failure")
+	}
+
+	evidence, _, ok := takePendingEvidence(f.attemptCtx.SessionID, 1, f.attemptCtx.Hash())
+	if !ok {
+		t.Fatal("share-verification failure must stash reject evidence")
+	}
+	if len(evidence.Rejects[1]) == 0 {
+		t.Fatalf("member 1's engine-verified-invalid share must produce a reject accusation; got %+v", evidence.Rejects)
+	}
+}
+
+// TestDriveInteractiveRoastSigning_SkipsShareBlameForMalformedCandidates guards the
+// uint16->MemberIndex conversion: a zero or out-of-range (> uint8 max) candidate is
+// dropped BEFORE classification, so a malformed engine candidate can never truncate
+// into -- and falsely blame -- an honest seat. With every candidate dropped, no
+// reject evidence is stashed (the 2b proof still is).
+func TestDriveInteractiveRoastSigning_SkipsShareBlameForMalformedCandidates(t *testing.T) {
+	ResetPendingEvidenceRegistryForTest()
+	t.Cleanup(ResetPendingEvidenceRegistryForTest)
+
+	f := newDriveFixture(t)
+	f.engine.aggregateErr = &InteractiveAggregateShareVerificationError{CandidateCulprits: []uint16{0, 300}}
+	verifierEngine := &verifierCapableFakeEngine{
+		fakeInteractiveSigningEngine: f.engine,
+		shareVerdict:                 NativeShareVerdictInvalid,
+	}
+	RegisterInteractiveSigningEngineProvider(func() interactiveSigningEngine { return verifierEngine })
+	t.Setenv(InteractiveSigningOptInEnvVar, "true")
+
+	if _, err := f.run(t); err == nil {
+		t.Fatal("expected a hard-fail error")
+	}
+	evidence, _, ok := takePendingEvidence(f.attemptCtx.SessionID, 1, f.attemptCtx.Hash())
+	if !ok {
+		t.Fatal("the 2b proof stash should still produce an entry")
+	}
+	if len(evidence.Rejects) != 0 {
+		t.Fatalf("malformed candidates must produce no reject blame; got %+v", evidence.Rejects)
+	}
+}
