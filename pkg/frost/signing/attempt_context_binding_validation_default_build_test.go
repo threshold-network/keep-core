@@ -14,7 +14,7 @@ func TestVerifyMessageAttemptContextHash_DefaultBuildPassesEverything(t *testing
 	// build, matching the rollback promise made in the rollout
 	// guide (docs/development/frost-roast-retry-rollout.adoc).
 	msg := stubDefaultBuildMessage{}
-	if err := verifyMessageAttemptContextHash(msg, "any-session"); err != nil {
+	if err := verifyMessageAttemptContextHash(msg, "any-session", 1); err != nil {
 		t.Fatalf(
 			"default build must always pass; got %v",
 			err,

@@ -97,10 +97,13 @@ func RegisteredRoastRetryCoordinator() (RoastRetryDeps, bool) {
 }
 
 // registeredRoastRetryMemberCount returns how many local seats currently have a
-// coordinator registered. A count > 1 means a multi-seat operator; the
-// not-yet-member-aware coarse/drive evidence path (submitSnapshotIfActive) uses it
-// to disable itself for multi-seat rather than mis-attribute one seat's evidence to
-// a sibling (RFC-21 Phase 7.3 PR2b-1.5).
+// coordinator registered. BeginOrchestrationForSession uses it for the one
+// distinction that depends on process-wide ROAST activation: when THIS seat has no
+// coordinator, count==0 means ROAST is inactive everywhere (safe legacy fallback)
+// while count>0 means a sibling seat IS ROAST-active, so this unregistered seat
+// must fail closed rather than fracture the attempt. (RFC-21 Phase 7.3 PR2b-2
+// retired the former submitSnapshotIfActive multi-seat no-op that also used this;
+// the evidence path is now member-keyed and isolates seats directly.)
 func registeredRoastRetryMemberCount() int {
 	roastRetryRegistrationMu.RLock()
 	defer roastRetryRegistrationMu.RUnlock()

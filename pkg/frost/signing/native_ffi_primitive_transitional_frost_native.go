@@ -1086,7 +1086,7 @@ func buildTaggedTBTCSignerRoundContributions(
 		ContributionIdentifier: ownContribution.Identifier,
 		ContributionData:       append([]byte{}, ownContribution.Data...),
 	}
-	setMessageAttemptContextHashIfBound(roundContributionMessage, request.SessionID)
+	setMessageAttemptContextHashIfBound(roundContributionMessage, request.SessionID, request.MemberIndex)
 
 	if err := request.Channel.Send(
 		ctx,
@@ -1102,7 +1102,7 @@ func buildTaggedTBTCSignerRoundContributions(
 	// when nothing is registered preserves Phase 2 receive
 	// semantics.
 	contributionsRecorder := roastRetryRecorderForCollect()
-	defer submitSnapshotIfActive(request.SessionID, contributionsRecorder)
+	defer submitSnapshotIfActive(request.SessionID, request.MemberIndex, contributionsRecorder)
 	peerMessages, err := collectBuildTaggedTBTCSignerRoundContributionMessages(
 		ctx,
 		request,
@@ -1237,7 +1237,7 @@ func collectBuildTaggedTBTCSignerRoundContributionMessages(
 			return
 		}
 
-		if err := verifyMessageAttemptContextHash(payload, request.SessionID); err != nil {
+		if err := verifyMessageAttemptContextHash(payload, request.SessionID, request.MemberIndex); err != nil {
 			evidence.RecordReject(payload.SenderID(), "attempt_context_hash_mismatch")
 			return
 		}

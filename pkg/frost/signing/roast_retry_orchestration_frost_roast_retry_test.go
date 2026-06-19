@@ -53,8 +53,8 @@ func TestBeginOrchestrationForSession_HappyPath(t *testing.T) {
 		t.Fatal("cleanup must not be nil")
 	}
 
-	// Binding must exist.
-	gotHandle, gotCtx, ok := currentAttemptHandleForCollect("session-A")
+	// Binding must exist under (session, member).
+	gotHandle, gotCtx, ok := currentAttemptHandleForCollect("session-A", 1)
 	if !ok {
 		t.Fatal("binding must exist after Begin")
 	}
@@ -66,7 +66,7 @@ func TestBeginOrchestrationForSession_HappyPath(t *testing.T) {
 	}
 
 	cleanup()
-	if _, _, ok := currentAttemptHandleForCollect("session-A"); ok {
+	if _, _, ok := currentAttemptHandleForCollect("session-A", 1); ok {
 		t.Fatal("binding must be cleared after cleanup")
 	}
 }
@@ -86,6 +86,14 @@ func TestBeginOrchestrationForSession_ErrorsWhenRegistryEmpty(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no coordinator registered") {
 		t.Fatalf("error must mention missing registration; got %v", err)
+	}
+	// Empty registry => count==0 => the STATIC legacy-fallback sentinel, NOT
+	// the terminal fail-closed (which is reserved for partial registration).
+	if !errors.Is(err, ErrNoRoastRetryCoordinatorRegistered) {
+		t.Fatalf("empty registry must return the static sentinel; got %v", err)
+	}
+	if errors.Is(err, ErrTerminalSigningFailure) {
+		t.Fatalf("empty registry must NOT be terminal; got %v", err)
 	}
 }
 
@@ -164,8 +172,9 @@ func TestBeginOrchestrationForSession_PropagatesBeginAttemptError(t *testing.T) 
 }
 
 // assertOrchestrationFailedClosed asserts err is a HARD fail-closed: non-nil,
-// neither static-fallback sentinel, and that no session binding leaked.
-func assertOrchestrationFailedClosed(t *testing.T, sessionID string, cleanup func(), err error) {
+// neither static-fallback sentinel, classified terminal, and that no session
+// binding leaked for (sessionID, member).
+func assertOrchestrationFailedClosed(t *testing.T, sessionID string, member group.MemberIndex, cleanup func(), err error) {
 	t.Helper()
 	if err == nil {
 		t.Fatal("expected a fail-closed error, got nil")
@@ -177,14 +186,14 @@ func assertOrchestrationFailedClosed(t *testing.T, sessionID string, cleanup fun
 		t.Fatalf("must NOT return the readiness sentinel; got %v", err)
 	}
 	// Must be classified TERMINAL so the signingRetryLoop aborts instead of
-	// retrying the (static, never-resolving) multi-seat condition.
+	// retrying the (static, never-resolving) fail-closed condition.
 	if !errors.Is(err, ErrTerminalSigningFailure) {
-		t.Fatalf("multi-seat fail-closed must be classified terminal (ErrTerminalSigningFailure); got %v", err)
+		t.Fatalf("fail-closed must be classified terminal (ErrTerminalSigningFailure); got %v", err)
 	}
 	if cleanup != nil {
 		t.Fatal("a failed begin must not return a cleanup")
 	}
-	if _, _, ok := currentAttemptHandleForCollect(sessionID); ok {
+	if _, _, ok := currentAttemptHandleForCollect(sessionID, member); ok {
 		t.Fatal("fail-closed must not create a session binding")
 	}
 }
@@ -193,7 +202,9 @@ func assertOrchestrationFailedClosed(t *testing.T, sessionID string, cleanup fun
 // re-review case: a multi-seat operator that has at least one seat registered but
 // NOT this one. The member-aware lookup misses, and rather than returning the
 // legacy-fallback sentinel (which would let this seat run coarse/legacy while the
-// registered sibling drives bound ROAST -> fracture), Begin fails CLOSED.
+// registered sibling drives bound ROAST -> fracture), Begin fails CLOSED. PR2b-2
+// keeps this fail-closed: member-keying the handle binding does nothing for a seat
+// with no coordinator at all.
 func TestBeginOrchestrationForSession_FailsClosedPartialMultiSeat(t *testing.T) {
 	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
 	ResetRoastRetryRegistrationForTest()
@@ -208,24 +219,30 @@ func TestBeginOrchestrationForSession_FailsClosedPartialMultiSeat(t *testing.T) 
 	})
 
 	_, cleanup, err := BeginOrchestrationForSession("session-partial", 2, newOrchestrationTestContext(t))
-	assertOrchestrationFailedClosed(t, "session-partial", cleanup, err)
+	assertOrchestrationFailedClosed(t, "session-partial", 2, cleanup, err)
 	if !strings.Contains(err.Error(), "fail closed") {
 		t.Fatalf("error must explain the fail-closed; got %v", err)
 	}
 }
 
-// TestBeginOrchestrationForSession_FailsClosedFullMultiSeat asserts the
-// fully-registered multi-seat case also fails closed: the session-handle binding
-// is still keyed by sessionID alone, so two local seats would collide. Deferred
-// to PR2b-2; until then any multi-seat operator fails closed rather than mis-bind.
-func TestBeginOrchestrationForSession_FailsClosedFullMultiSeat(t *testing.T) {
+// TestBeginOrchestrationForSession_MultiSeatProceedsPerSeat asserts that PR2b-2
+// retired the fully-registered multi-seat fail-closed guard: with both local
+// seats registered, EACH seat begins its own attempt and binds its OWN handle
+// under (sessionID, member), so sibling seats stay isolated. The load-bearing
+// isolation proof is that one seat's cleanup does NOT tear down the sibling's
+// binding -- under the old sessionID-only key, seat 1's cleanup deleted the
+// shared binding and seat 2 lost its hash enforcement. (The two handles are equal
+// here because both coordinators mint id=1 for the same ctx; equality is expected,
+// so survival-after-sibling-cleanup -- not handle distinctness -- is the proof.
+// TestSessionHandleBinding_IsolatesByMember exercises distinct handles directly.)
+func TestBeginOrchestrationForSession_MultiSeatProceedsPerSeat(t *testing.T) {
 	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
 	ResetRoastRetryRegistrationForTest()
 	ResetSessionHandleRegistryForTest()
 	t.Cleanup(ResetRoastRetryRegistrationForTest)
 	t.Cleanup(ResetSessionHandleRegistryForTest)
 
-	// Both local seats registered -> multi-seat; call with a registered member.
+	// Both local seats registered -> multi-seat.
 	RegisterRoastRetryCoordinatorForMember(1, RoastRetryDeps{
 		Coordinator: roast.NewInMemoryCoordinatorWithSigning(1, roast.NoOpSigner(), roast.NoOpSignatureVerifier()),
 		SelfMember:  1,
@@ -235,10 +252,109 @@ func TestBeginOrchestrationForSession_FailsClosedFullMultiSeat(t *testing.T) {
 		SelfMember:  2,
 	})
 
-	_, cleanup, err := BeginOrchestrationForSession("session-multiseat", 1, newOrchestrationTestContext(t))
-	assertOrchestrationFailedClosed(t, "session-multiseat", cleanup, err)
-	if !strings.Contains(err.Error(), "multi-seat") {
-		t.Fatalf("error must explain the multi-seat fail-closed; got %v", err)
+	ctx := newOrchestrationTestContext(t)
+
+	handle1, cleanup1, err := BeginOrchestrationForSession("session-multiseat", 1, ctx)
+	if err != nil {
+		t.Fatalf("seat 1 begin must succeed (no longer fail-closed): %v", err)
+	}
+	if cleanup1 == nil {
+		t.Fatal("seat 1 cleanup must not be nil")
+	}
+	handle2, cleanup2, err := BeginOrchestrationForSession("session-multiseat", 2, ctx)
+	if err != nil {
+		t.Fatalf("seat 2 begin must succeed (no longer fail-closed): %v", err)
+	}
+	if cleanup2 == nil {
+		t.Fatal("seat 2 cleanup must not be nil")
+	}
+
+	// Each seat reads back its own binding.
+	got1, _, ok := currentAttemptHandleForCollect("session-multiseat", 1)
+	if !ok {
+		t.Fatal("seat 1 binding must exist")
+	}
+	if got1 != handle1 {
+		t.Fatal("seat 1 must read back its own handle")
+	}
+	got2, _, ok := currentAttemptHandleForCollect("session-multiseat", 2)
+	if !ok {
+		t.Fatal("seat 2 binding must exist")
+	}
+	if got2 != handle2 {
+		t.Fatal("seat 2 must read back its own handle")
+	}
+
+	// ISOLATION: seat 1's cleanup must clear ONLY seat 1's binding; seat 2's
+	// binding must survive (this is exactly the multi-seat bug being fixed).
+	cleanup1()
+	if _, _, ok := currentAttemptHandleForCollect("session-multiseat", 1); ok {
+		t.Fatal("seat 1 binding must be cleared after its own cleanup")
+	}
+	if _, _, ok := currentAttemptHandleForCollect("session-multiseat", 2); !ok {
+		t.Fatal("seat 2 binding must SURVIVE seat 1's cleanup (member isolation)")
+	}
+	cleanup2()
+	if _, _, ok := currentAttemptHandleForCollect("session-multiseat", 2); ok {
+		t.Fatal("seat 2 binding must be cleared after its own cleanup")
+	}
+}
+
+// TestSessionHandleBinding_IsolatesByMember exercises the (sessionID, member)
+// re-keying directly with DISTINCT handles: two contexts (differing only in
+// attempt number) minted by one coordinator yield distinct handles, bound under
+// the same session for two different members. Each member must read back its own
+// handle, and clearing one member must leave the other intact.
+func TestSessionHandleBinding_IsolatesByMember(t *testing.T) {
+	ResetSessionHandleRegistryForTest()
+	t.Cleanup(ResetSessionHandleRegistryForTest)
+
+	coord := roast.NewInMemoryCoordinator()
+	ctxA := newOrchestrationTestContext(t)
+	ctxB, err := attempt.NewAttemptContext(
+		"orchestration-session",
+		"key-group-orchestration",
+		[]byte{0x01, 0x02},
+		[attempt.MessageDigestLength]byte{0x77},
+		1, // distinct attempt number -> distinct context hash -> distinct handle
+		[]group.MemberIndex{1, 2, 3, 4, 5},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("ctxB: %v", err)
+	}
+
+	handleA, err := coord.BeginAttempt(ctxA)
+	if err != nil {
+		t.Fatalf("beginA: %v", err)
+	}
+	handleB, err := coord.BeginAttempt(ctxB)
+	if err != nil {
+		t.Fatalf("beginB: %v", err)
+	}
+	if handleA == handleB {
+		t.Fatal("setup: the two handles must be distinct for a meaningful isolation test")
+	}
+
+	SetCurrentAttemptHandleForSession("shared-session", 1, handleA, ctxA)
+	SetCurrentAttemptHandleForSession("shared-session", 2, handleB, ctxB)
+
+	got1, gotCtx1, ok := currentAttemptHandleForCollect("shared-session", 1)
+	if !ok || got1 != handleA || gotCtx1.Hash() != ctxA.Hash() {
+		t.Fatalf("member 1 must read back its own (handle, ctx); ok=%v", ok)
+	}
+	got2, gotCtx2, ok := currentAttemptHandleForCollect("shared-session", 2)
+	if !ok || got2 != handleB || gotCtx2.Hash() != ctxB.Hash() {
+		t.Fatalf("member 2 must read back its own (handle, ctx); ok=%v", ok)
+	}
+
+	// Clearing member 1 must not disturb member 2.
+	ClearCurrentAttemptHandleForSession("shared-session", 1)
+	if _, _, ok := currentAttemptHandleForCollect("shared-session", 1); ok {
+		t.Fatal("member 1 binding must be gone after clear")
+	}
+	if got, _, ok := currentAttemptHandleForCollect("shared-session", 2); !ok || got != handleB {
+		t.Fatal("member 2 binding must survive member 1's clear")
 	}
 }
 
@@ -247,13 +363,13 @@ func TestEndOrchestrationForSession_RemovesBinding(t *testing.T) {
 	t.Cleanup(ResetSessionHandleRegistryForTest)
 
 	ctx := newOrchestrationTestContext(t)
-	SetCurrentAttemptHandleForSession("session-end", roast.AttemptHandle{}, ctx)
+	SetCurrentAttemptHandleForSession("session-end", 3, roast.AttemptHandle{}, ctx)
 
-	if _, _, ok := currentAttemptHandleForCollect("session-end"); !ok {
+	if _, _, ok := currentAttemptHandleForCollect("session-end", 3); !ok {
 		t.Fatal("setup: binding must exist")
 	}
-	EndOrchestrationForSession("session-end")
-	if _, _, ok := currentAttemptHandleForCollect("session-end"); ok {
+	EndOrchestrationForSession("session-end", 3)
+	if _, _, ok := currentAttemptHandleForCollect("session-end", 3); ok {
 		t.Fatal("binding must be removed after End")
 	}
 }
@@ -264,25 +380,26 @@ func TestEvictStaleSessionHandleBindings_RemovesOldEntries(t *testing.T) {
 
 	// Two bindings with different ages.
 	ctx := newOrchestrationTestContext(t)
-	SetCurrentAttemptHandleForSession("session-old", roast.AttemptHandle{}, ctx)
+	SetCurrentAttemptHandleForSession("session-old", 1, roast.AttemptHandle{}, ctx)
 	// Backdate by forcing the timestamp.
 	sessionAttemptBindingMu.Lock()
-	b := sessionAttemptBindings["session-old"]
+	oldKey := sessionMemberKey{"session-old", 1}
+	b := sessionAttemptBindings[oldKey]
 	b.createdAt = time.Now().Add(-10 * time.Minute)
-	sessionAttemptBindings["session-old"] = b
+	sessionAttemptBindings[oldKey] = b
 	sessionAttemptBindingMu.Unlock()
 
-	SetCurrentAttemptHandleForSession("session-new", roast.AttemptHandle{}, ctx)
+	SetCurrentAttemptHandleForSession("session-new", 1, roast.AttemptHandle{}, ctx)
 
 	// Sweep with 5-minute TTL: old must be evicted, new must survive.
 	evicted := evictStaleSessionHandleBindings(5 * time.Minute)
 	if evicted != 1 {
 		t.Fatalf("expected 1 eviction, got %d", evicted)
 	}
-	if _, _, ok := currentAttemptHandleForCollect("session-old"); ok {
+	if _, _, ok := currentAttemptHandleForCollect("session-old", 1); ok {
 		t.Fatal("session-old must be evicted")
 	}
-	if _, _, ok := currentAttemptHandleForCollect("session-new"); !ok {
+	if _, _, ok := currentAttemptHandleForCollect("session-new", 1); !ok {
 		t.Fatal("session-new must survive")
 	}
 }
@@ -292,7 +409,7 @@ func TestEvictStaleSessionHandleBindings_LeavesFreshEntries(t *testing.T) {
 	t.Cleanup(ResetSessionHandleRegistryForTest)
 
 	ctx := newOrchestrationTestContext(t)
-	SetCurrentAttemptHandleForSession("session-fresh", roast.AttemptHandle{}, ctx)
+	SetCurrentAttemptHandleForSession("session-fresh", 1, roast.AttemptHandle{}, ctx)
 
 	// Sweep with the default 2-hour TTL: nothing should be evicted.
 	evicted := evictStaleSessionHandleBindings(SessionHandleBindingTTL)

@@ -108,12 +108,12 @@ func TestEntry_HappyPath_ActivatesOrchestration(t *testing.T) {
 		t.Fatal("happy path must return a cleanup function")
 	}
 
-	// Binding must exist for the session.
-	if _, _, ok := currentAttemptHandleForCollect(req.SessionID); !ok {
+	// Binding must exist for the session under this seat's member.
+	if _, _, ok := currentAttemptHandleForCollect(req.SessionID, req.MemberIndex); !ok {
 		t.Fatal("binding must exist after orchestration entry")
 	}
 	cleanup()
-	if _, _, ok := currentAttemptHandleForCollect(req.SessionID); ok {
+	if _, _, ok := currentAttemptHandleForCollect(req.SessionID, req.MemberIndex); ok {
 		t.Fatal("binding must be cleared after cleanup")
 	}
 }
