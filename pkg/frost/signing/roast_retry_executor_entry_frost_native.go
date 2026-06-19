@@ -88,11 +88,12 @@ func attemptRoastRetryOrchestrationFromRequest(
 		request.SignerMaterial.Format,
 	)
 
-	// The handle registry stays keyed by the attempt-specific request.SessionID:
+	// The handle registry is keyed by (request.SessionID, request.MemberIndex):
 	// the coarse receive-loop binding validation + snapshot submission look the
-	// handle up by that id, so keying it otherwise would silently disable them.
-	// The cross-attempt transition record is produced + keyed (by the stable
-	// RoastSessionID) entirely in the transition exchange now, not here.
+	// handle up by that pair (RFC-21 Phase 7.3 PR2b-2), so a multi-seat operator's
+	// sibling seats stay isolated. The cross-attempt transition record is produced
+	// + keyed (by the stable RoastSessionID) entirely in the transition exchange
+	// now, not here.
 	handle, cleanup, err := BeginOrchestrationForSession(
 		request.SessionID, request.MemberIndex, attemptCtx,
 	)

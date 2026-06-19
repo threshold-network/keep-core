@@ -5,6 +5,8 @@ package signing
 import (
 	"errors"
 	"fmt"
+
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
 // attemptContextHashCarrier is implemented by every protocol
@@ -49,11 +51,17 @@ var ErrAttemptContextHashMismatch = errors.New(
 // optional to required at the receive boundary, but only when the
 // session has a ROAST-attempt binding registered.
 //
-// When no session-handle binding exists for sessionID (the typical
-// state for non-ROAST sessions and for default builds), this
+// When no session-handle binding exists for (sessionID, member) (the
+// typical state for non-ROAST sessions and for default builds), this
 // function returns nil and lets the message through. The receive
 // loop's other gates (shouldAcceptNativeFROSTMessage, etc.) still
 // apply.
+//
+// member is the LOCAL receiver seat's member index (request.MemberIndex),
+// NOT the inbound message's sender: the binding being enforced is the
+// one THIS seat's orchestration set for the attempt it is running. A
+// multi-seat operator keys its bindings per seat (RFC-21 Phase 7.3
+// PR2b-2), so looking up by sender would read the wrong (or no) binding.
 //
 // When a binding exists -- i.e. the orchestration layer has begun
 // an attempt for this session and is expecting the receive loops
@@ -64,8 +72,9 @@ var ErrAttemptContextHashMismatch = errors.New(
 func verifyMessageAttemptContextHash(
 	msg attemptContextHashCarrier,
 	sessionID string,
+	member group.MemberIndex,
 ) error {
-	_, ctx, ok := currentAttemptHandleForCollect(sessionID)
+	_, ctx, ok := currentAttemptHandleForCollect(sessionID, member)
 	if !ok {
 		// No binding: legacy / non-ROAST mode. Skip enforcement
 		// so default builds and non-ROAST sessions stay
@@ -91,12 +100,16 @@ func verifyMessageAttemptContextHash(
 // setMessageAttemptContextHashIfBound attaches the current ROAST
 // attempt binding to an outbound message. Default/non-ROAST sessions
 // have no binding, so the field stays absent for backward
-// compatibility.
+// compatibility. member is the local sender seat's member index
+// (request.MemberIndex); the binding is looked up per (sessionID,
+// member) so a multi-seat operator tags each seat's outbound message
+// with that seat's own bound context (RFC-21 Phase 7.3 PR2b-2).
 func setMessageAttemptContextHashIfBound(
 	msg outboundAttemptContextHashCarrier,
 	sessionID string,
+	member group.MemberIndex,
 ) {
-	_, ctx, ok := currentAttemptHandleForCollect(sessionID)
+	_, ctx, ok := currentAttemptHandleForCollect(sessionID, member)
 	if !ok {
 		return
 	}

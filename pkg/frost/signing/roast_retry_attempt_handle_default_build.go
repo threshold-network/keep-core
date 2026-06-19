@@ -5,14 +5,16 @@ package signing
 import (
 	"github.com/keep-network/keep-core/pkg/frost/roast"
 	"github.com/keep-network/keep-core/pkg/frost/roast/attempt"
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
 // SetCurrentAttemptHandleForSession is a no-op in the default build:
-// the receive loops will never find a handle for any session, so the
-// snapshot submission path is dormant. The build-tagged
+// the receive loops will never find a handle for any (session, member),
+// so the snapshot submission path is dormant. The build-tagged
 // implementation does the real registration.
 func SetCurrentAttemptHandleForSession(
 	_ string,
+	_ group.MemberIndex,
 	_ roast.AttemptHandle,
 	_ attempt.AttemptContext,
 ) {
@@ -20,7 +22,7 @@ func SetCurrentAttemptHandleForSession(
 
 // ClearCurrentAttemptHandleForSession is a no-op in the default
 // build.
-func ClearCurrentAttemptHandleForSession(_ string) {}
+func ClearCurrentAttemptHandleForSession(_ string, _ group.MemberIndex) {}
 
 // ResetSessionHandleRegistryForTest is a no-op in the default
 // build.
@@ -35,6 +37,7 @@ func StartSessionHandleSweeper() {}
 // the RecordEvidence call.
 func currentAttemptHandleForCollect(
 	_ string,
+	_ group.MemberIndex,
 ) (roast.AttemptHandle, attempt.AttemptContext, bool) {
 	return roast.AttemptHandle{}, attempt.AttemptContext{}, false
 }
@@ -45,6 +48,7 @@ func currentAttemptHandleForCollect(
 // always returns ok=false.
 func CurrentAttemptHandleForSession(
 	sessionID string,
+	member group.MemberIndex,
 ) (roast.AttemptHandle, attempt.AttemptContext, bool) {
-	return currentAttemptHandleForCollect(sessionID)
+	return currentAttemptHandleForCollect(sessionID, member)
 }

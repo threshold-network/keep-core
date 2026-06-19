@@ -119,7 +119,7 @@ func TestSubmitSnapshotIfActive_NoOpWhenRegistryEmpty(t *testing.T) {
 	// No registration, no binding. submit should be a no-op.
 	recorder := attempt.NewBoundedRecorder()
 	recorder.RecordOverflow(7)
-	submitSnapshotIfActive("session-x", recorder)
+	submitSnapshotIfActive("session-x", 1, recorder)
 	// Nothing to assert observably: success is the absence of a
 	// panic and no calls to a non-existent coordinator.
 }
@@ -141,7 +141,7 @@ func TestSubmitSnapshotIfActive_NoOpWhenSessionUnbound(t *testing.T) {
 
 	recorder := attempt.NewBoundedRecorder()
 	recorder.RecordOverflow(7)
-	submitSnapshotIfActive("session-with-no-binding", recorder)
+	submitSnapshotIfActive("session-with-no-binding", 1, recorder)
 
 	if len(cap.recordedFor) != 0 {
 		t.Fatalf(
@@ -175,11 +175,11 @@ func TestSubmitSnapshotIfActive_NoOpWhenRecorderEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	SetCurrentAttemptHandleForSession("session-empty", handle, ctx)
+	SetCurrentAttemptHandleForSession("session-empty", 1, handle, ctx)
 
 	// Recorder is bounded but has captured zero events.
 	recorder := attempt.NewBoundedRecorder()
-	submitSnapshotIfActive("session-empty", recorder)
+	submitSnapshotIfActive("session-empty", 1, recorder)
 
 	if len(cap.recordedFor) != 0 {
 		t.Fatalf(
@@ -214,13 +214,13 @@ func TestSubmitSnapshotIfActive_SubmitsSignedSnapshotWhenBoundAndPopulated(t *te
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	SetCurrentAttemptHandleForSession("session-real", handle, ctx)
+	SetCurrentAttemptHandleForSession("session-real", selfMember, handle, ctx)
 
 	recorder := attempt.NewBoundedRecorder()
 	recorder.RecordOverflow(3)
 	recorder.RecordOverflow(3)
 	recorder.RecordOverflow(5)
-	submitSnapshotIfActive("session-real", recorder)
+	submitSnapshotIfActive("session-real", selfMember, recorder)
 
 	if len(cap.recordedFor) != 1 {
 		t.Fatalf("expected 1 RecordEvidence; got %d", len(cap.recordedFor))
@@ -241,6 +241,72 @@ func TestSubmitSnapshotIfActive_SubmitsSignedSnapshotWhenBoundAndPopulated(t *te
 	}
 }
 
+// TestSubmitSnapshotIfActive_MultiSeatSubmitsPerSeat asserts the PR2b-2 member-
+// aware submit path: with two local seats registered, each seat submits its own
+// evidence against ITS OWN coordinator and attempt handle. The PR2b-1.5 count>1
+// no-op guard is gone, so both submissions land -- and neither lands on the
+// sibling's coordinator.
+func TestSubmitSnapshotIfActive_MultiSeatSubmitsPerSeat(t *testing.T) {
+	ResetRoastRetryRegistrationForTest()
+	ResetSessionHandleRegistryForTest()
+	t.Cleanup(ResetRoastRetryRegistrationForTest)
+	t.Cleanup(ResetSessionHandleRegistryForTest)
+
+	cap1 := newCaptureCoordinator(roast.NewInMemoryCoordinatorWithSigning(
+		1, &deterministicSigner{id: 1}, deterministicVerifier{},
+	))
+	cap2 := newCaptureCoordinator(roast.NewInMemoryCoordinatorWithSigning(
+		2, &deterministicSigner{id: 2}, deterministicVerifier{},
+	))
+	RegisterRoastRetryCoordinatorForMember(1, RoastRetryDeps{
+		Coordinator: cap1,
+		Signer:      &deterministicSigner{id: 1},
+		Verifier:    deterministicVerifier{},
+		SelfMember:  1,
+	})
+	RegisterRoastRetryCoordinatorForMember(2, RoastRetryDeps{
+		Coordinator: cap2,
+		Signer:      &deterministicSigner{id: 2},
+		Verifier:    deterministicVerifier{},
+		SelfMember:  2,
+	})
+
+	ctx := newTestContextForSubmit(t, "session-ms")
+	handle1, err := cap1.BeginAttempt(ctx)
+	if err != nil {
+		t.Fatalf("seat 1 begin: %v", err)
+	}
+	handle2, err := cap2.BeginAttempt(ctx)
+	if err != nil {
+		t.Fatalf("seat 2 begin: %v", err)
+	}
+	SetCurrentAttemptHandleForSession("session-ms", 1, handle1, ctx)
+	SetCurrentAttemptHandleForSession("session-ms", 2, handle2, ctx)
+
+	rec1 := attempt.NewBoundedRecorder()
+	rec1.RecordOverflow(3)
+	rec2 := attempt.NewBoundedRecorder()
+	rec2.RecordOverflow(4)
+
+	submitSnapshotIfActive("session-ms", 1, rec1)
+	submitSnapshotIfActive("session-ms", 2, rec2)
+
+	// Each seat's evidence landed on ITS OWN coordinator (no mis-attribution),
+	// each against its own handle and signed as its own member.
+	if len(cap1.recordedFor) != 1 || cap1.recordedFor[0] != handle1 {
+		t.Fatalf("seat 1 must record once against its own handle; got %+v", cap1.recordedFor)
+	}
+	if len(cap2.recordedFor) != 1 || cap2.recordedFor[0] != handle2 {
+		t.Fatalf("seat 2 must record once against its own handle; got %+v", cap2.recordedFor)
+	}
+	if cap1.recordedSnp[0].SenderID() != 1 {
+		t.Fatalf("seat 1 snapshot sender: got %d want 1", cap1.recordedSnp[0].SenderID())
+	}
+	if cap2.recordedSnp[0].SenderID() != 2 {
+		t.Fatalf("seat 2 snapshot sender: got %d want 2", cap2.recordedSnp[0].SenderID())
+	}
+}
+
 func TestSetCurrentAttemptHandleForSession_LaterBindingOverwrites(t *testing.T) {
 	ResetSessionHandleRegistryForTest()
 	t.Cleanup(ResetSessionHandleRegistryForTest)
@@ -254,8 +320,8 @@ func TestSetCurrentAttemptHandleForSession_LaterBindingOverwrites(t *testing.T) 
 	h1 := roast.AttemptHandle{}
 	h2 := roast.AttemptHandle{}
 
-	SetCurrentAttemptHandleForSession("session-overwrite", h1, ctxA)
-	gotHandle, gotCtx, ok := currentAttemptHandleForCollect("session-overwrite")
+	SetCurrentAttemptHandleForSession("session-overwrite", 1, h1, ctxA)
+	gotHandle, gotCtx, ok := currentAttemptHandleForCollect("session-overwrite", 1)
 	if !ok {
 		t.Fatal("expected binding after first Set")
 	}
@@ -266,8 +332,8 @@ func TestSetCurrentAttemptHandleForSession_LaterBindingOverwrites(t *testing.T) 
 		t.Fatal("first binding context mismatch")
 	}
 
-	SetCurrentAttemptHandleForSession("session-overwrite", h2, ctxB)
-	_, gotCtx2, ok := currentAttemptHandleForCollect("session-overwrite")
+	SetCurrentAttemptHandleForSession("session-overwrite", 1, h2, ctxB)
+	_, gotCtx2, ok := currentAttemptHandleForCollect("session-overwrite", 1)
 	if !ok {
 		t.Fatal("expected binding after second Set")
 	}
@@ -281,12 +347,12 @@ func TestClearCurrentAttemptHandleForSession_RemovesBinding(t *testing.T) {
 	t.Cleanup(ResetSessionHandleRegistryForTest)
 
 	ctx := newTestContextForSubmit(t, "session-clear")
-	SetCurrentAttemptHandleForSession("session-clear", roast.AttemptHandle{}, ctx)
-	if _, _, ok := currentAttemptHandleForCollect("session-clear"); !ok {
+	SetCurrentAttemptHandleForSession("session-clear", 1, roast.AttemptHandle{}, ctx)
+	if _, _, ok := currentAttemptHandleForCollect("session-clear", 1); !ok {
 		t.Fatal("setup: binding must exist")
 	}
-	ClearCurrentAttemptHandleForSession("session-clear")
-	if _, _, ok := currentAttemptHandleForCollect("session-clear"); ok {
+	ClearCurrentAttemptHandleForSession("session-clear", 1)
+	if _, _, ok := currentAttemptHandleForCollect("session-clear", 1); ok {
 		t.Fatal("binding must be cleared")
 	}
 }
@@ -311,11 +377,11 @@ func TestSubmitSnapshotIfActive_RecordEvidenceFailureIsLoggedNotPropagated(t *te
 
 	ctx := newTestContextForSubmit(t, "session-failure")
 	handle, _ := cap.BeginAttempt(ctx)
-	SetCurrentAttemptHandleForSession("session-failure", handle, ctx)
+	SetCurrentAttemptHandleForSession("session-failure", 1, handle, ctx)
 
 	recorder := attempt.NewBoundedRecorder()
 	recorder.RecordOverflow(3)
 
 	// Must not panic. Caller is unaffected.
-	submitSnapshotIfActive("session-failure", recorder)
+	submitSnapshotIfActive("session-failure", 1, recorder)
 }

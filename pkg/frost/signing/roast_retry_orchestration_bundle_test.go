@@ -77,7 +77,7 @@ func TestCleanup_ClearsBindingAndProducesNoTransitionRecord(t *testing.T) {
 	if _, ok := RoastTransitionForSession(ctx.SessionID, elected); ok {
 		t.Fatal("cleanup must not produce a transition record (the exchange is the sole producer)")
 	}
-	if _, _, ok := currentAttemptHandleForCollect(sessionID); ok {
+	if _, _, ok := currentAttemptHandleForCollect(sessionID, elected); ok {
 		t.Fatal("cleanup must clear the per-attempt handle binding")
 	}
 }

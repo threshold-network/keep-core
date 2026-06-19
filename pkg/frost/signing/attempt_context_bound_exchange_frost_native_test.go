@@ -38,7 +38,14 @@ func bindAttemptContextHashForExchangeTest(
 		t.Fatalf("failed creating attempt context: [%v]", err)
 	}
 
-	SetCurrentAttemptHandleForSession(sessionID, roast.AttemptHandle{}, ctx)
+	// Bind the (identical, group-level) attempt context for EVERY participating
+	// local member seat. The bootstrap round runs one receive loop per member, and
+	// each loop looks the binding up by its own (sessionID, member) after PR2b-2
+	// member-keyed the registry; binding only one member would leave the others'
+	// loops unbound and silently skip the hash enforcement this test exercises.
+	for _, member := range members {
+		SetCurrentAttemptHandleForSession(sessionID, member, roast.AttemptHandle{}, ctx)
+	}
 }
 
 func TestBuildTaggedTBTCSignerBootstrapCoarseRound_BoundAttemptContextHashExchange(

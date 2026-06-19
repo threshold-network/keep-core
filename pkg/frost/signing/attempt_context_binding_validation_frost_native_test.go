@@ -62,7 +62,7 @@ func TestVerifyMessageAttemptContextHash_NoBindingPasses(t *testing.T) {
 		{present: true, hash: [AttemptContextHashFieldLength]byte{0x01}},
 	}
 	for _, msg := range cases {
-		if err := verifyMessageAttemptContextHash(msg, "session-x"); err != nil {
+		if err := verifyMessageAttemptContextHash(msg, "session-x", 1); err != nil {
 			t.Fatalf(
 				"no-binding path must pass; got %v for msg %+v",
 				err, msg,
@@ -76,11 +76,11 @@ func TestVerifyMessageAttemptContextHash_BindingPresent_MatchingHashPasses(t *te
 	t.Cleanup(ResetSessionHandleRegistryForTest)
 
 	ctx := newOrchestrationTestContextForValidation(t)
-	SetCurrentAttemptHandleForSession("session-match", roast.AttemptHandle{}, ctx)
+	SetCurrentAttemptHandleForSession("session-match", 1, roast.AttemptHandle{}, ctx)
 
 	expected := ctx.Hash()
 	msg := stubMessage{hash: expected, present: true}
-	if err := verifyMessageAttemptContextHash(msg, "session-match"); err != nil {
+	if err := verifyMessageAttemptContextHash(msg, "session-match", 1); err != nil {
 		t.Fatalf("matching hash must pass; got %v", err)
 	}
 }
@@ -90,10 +90,10 @@ func TestVerifyMessageAttemptContextHash_BindingPresent_MissingHashFails(t *test
 	t.Cleanup(ResetSessionHandleRegistryForTest)
 
 	ctx := newOrchestrationTestContextForValidation(t)
-	SetCurrentAttemptHandleForSession("session-missing", roast.AttemptHandle{}, ctx)
+	SetCurrentAttemptHandleForSession("session-missing", 1, roast.AttemptHandle{}, ctx)
 
 	msg := stubMessage{present: false}
-	err := verifyMessageAttemptContextHash(msg, "session-missing")
+	err := verifyMessageAttemptContextHash(msg, "session-missing", 1)
 	if !errors.Is(err, ErrAttemptContextHashMissing) {
 		t.Fatalf(
 			"expected ErrAttemptContextHashMissing; got %v",
@@ -107,19 +107,50 @@ func TestVerifyMessageAttemptContextHash_BindingPresent_MismatchedHashFails(t *t
 	t.Cleanup(ResetSessionHandleRegistryForTest)
 
 	ctx := newOrchestrationTestContextForValidation(t)
-	SetCurrentAttemptHandleForSession("session-mismatch", roast.AttemptHandle{}, ctx)
+	SetCurrentAttemptHandleForSession("session-mismatch", 1, roast.AttemptHandle{}, ctx)
 
 	wrong := [AttemptContextHashFieldLength]byte{}
 	for i := range wrong {
 		wrong[i] = 0xff
 	}
 	msg := stubMessage{hash: wrong, present: true}
-	err := verifyMessageAttemptContextHash(msg, "session-mismatch")
+	err := verifyMessageAttemptContextHash(msg, "session-mismatch", 1)
 	if !errors.Is(err, ErrAttemptContextHashMismatch) {
 		t.Fatalf(
 			"expected ErrAttemptContextHashMismatch; got %v",
 			err,
 		)
+	}
+}
+
+// TestVerifyMessageAttemptContextHash_BindingIsMemberScoped asserts the binding
+// lookup is keyed by the LOCAL receiver seat's member (request.MemberIndex), not
+// shared across seats: a binding set for member 1 enforces the hash for member 1
+// but is invisible to member 2's receive loop (which has its own binding or, here,
+// none -> passes through). This is the PR2b-2 member-keying applied to the receive
+// validation path; under the old sessionID-only key, member 2 would have enforced
+// member 1's binding.
+func TestVerifyMessageAttemptContextHash_BindingIsMemberScoped(t *testing.T) {
+	ResetSessionHandleRegistryForTest()
+	t.Cleanup(ResetSessionHandleRegistryForTest)
+
+	ctx := newOrchestrationTestContextForValidation(t)
+	SetCurrentAttemptHandleForSession("session-scoped", 1, roast.AttemptHandle{}, ctx)
+
+	// A message that does NOT match the bound context.
+	wrong := [AttemptContextHashFieldLength]byte{}
+	for i := range wrong {
+		wrong[i] = 0xff
+	}
+	msg := stubMessage{hash: wrong, present: true}
+
+	// Member 1 has the binding -> enforcement runs -> mismatch.
+	if err := verifyMessageAttemptContextHash(msg, "session-scoped", 1); !errors.Is(err, ErrAttemptContextHashMismatch) {
+		t.Fatalf("member 1 must enforce its binding; got %v", err)
+	}
+	// Member 2 has no binding for this session -> passes through (no enforcement).
+	if err := verifyMessageAttemptContextHash(msg, "session-scoped", 2); err != nil {
+		t.Fatalf("member 2 (no binding) must pass through; got %v", err)
 	}
 }
 
@@ -132,7 +163,7 @@ func TestVerifyMessageAttemptContextHash_RealMessageTypeIntegration(t *testing.T
 	t.Cleanup(ResetSessionHandleRegistryForTest)
 
 	ctx := newOrchestrationTestContextForValidation(t)
-	SetCurrentAttemptHandleForSession("session-real-msg", roast.AttemptHandle{}, ctx)
+	SetCurrentAttemptHandleForSession("session-real-msg", 1, roast.AttemptHandle{}, ctx)
 
 	expected := ctx.Hash()
 	msg := &buildTaggedTBTCSignerRoundContributionMessage{
@@ -143,7 +174,7 @@ func TestVerifyMessageAttemptContextHash_RealMessageTypeIntegration(t *testing.T
 	}
 	msg.SetAttemptContextHash(expected)
 
-	if err := verifyMessageAttemptContextHash(msg, "session-real-msg"); err != nil {
+	if err := verifyMessageAttemptContextHash(msg, "session-real-msg", 1); err != nil {
 		t.Fatalf("real-message integration must pass; got %v", err)
 	}
 
@@ -157,9 +188,9 @@ func TestVerifyMessageAttemptContextHash_RealMessageTypeIntegration(t *testing.T
 		[]group.MemberIndex{1, 2, 3, 4, 5},
 		nil,
 	)
-	SetCurrentAttemptHandleForSession("session-real-msg", roast.AttemptHandle{}, differentCtx)
+	SetCurrentAttemptHandleForSession("session-real-msg", 1, roast.AttemptHandle{}, differentCtx)
 
-	err := verifyMessageAttemptContextHash(msg, "session-real-msg")
+	err := verifyMessageAttemptContextHash(msg, "session-real-msg", 1)
 	if !errors.Is(err, ErrAttemptContextHashMismatch) {
 		t.Fatalf("rebinding must cause mismatch; got %v", err)
 	}
@@ -170,10 +201,10 @@ func TestSetMessageAttemptContextHashIfBound_AttachesBoundHash(t *testing.T) {
 	t.Cleanup(ResetSessionHandleRegistryForTest)
 
 	ctx := newOrchestrationTestContextForValidation(t)
-	SetCurrentAttemptHandleForSession("session-outbound", roast.AttemptHandle{}, ctx)
+	SetCurrentAttemptHandleForSession("session-outbound", 1, roast.AttemptHandle{}, ctx)
 
 	msg := &stubMessage{}
-	setMessageAttemptContextHashIfBound(msg, "session-outbound")
+	setMessageAttemptContextHashIfBound(msg, "session-outbound", 1)
 
 	got, present := msg.GetAttemptContextHash()
 	if !present {
@@ -189,7 +220,7 @@ func TestSetMessageAttemptContextHashIfBound_NoBindingLeavesAbsent(t *testing.T)
 	t.Cleanup(ResetSessionHandleRegistryForTest)
 
 	msg := &stubMessage{}
-	setMessageAttemptContextHashIfBound(msg, "session-no-binding")
+	setMessageAttemptContextHashIfBound(msg, "session-no-binding", 1)
 
 	if _, present := msg.GetAttemptContextHash(); present {
 		t.Fatal("expected no attempt context hash without a session binding")
@@ -201,7 +232,7 @@ func TestSetMessageAttemptContextHashIfBound_AllOutboundMessageTypes(t *testing.
 	t.Cleanup(ResetSessionHandleRegistryForTest)
 
 	ctx := newOrchestrationTestContextForValidation(t)
-	SetCurrentAttemptHandleForSession("session-all-types", roast.AttemptHandle{}, ctx)
+	SetCurrentAttemptHandleForSession("session-all-types", 1, roast.AttemptHandle{}, ctx)
 	expected := ctx.Hash()
 
 	messages := []attemptContextHashCarrier{
@@ -214,7 +245,7 @@ func TestSetMessageAttemptContextHashIfBound_AllOutboundMessageTypes(t *testing.
 			t.Fatalf("%T does not implement outbound carrier", msg)
 		}
 
-		setMessageAttemptContextHashIfBound(outbound, "session-all-types")
+		setMessageAttemptContextHashIfBound(outbound, "session-all-types", 1)
 
 		got, present := msg.GetAttemptContextHash()
 		if !present {

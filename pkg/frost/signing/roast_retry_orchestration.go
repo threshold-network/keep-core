@@ -35,12 +35,15 @@ package signing
 //                     because the fault may be transient and clear.
 //
 //   TERMINAL errors -> ABORT THE RETRY LOOP. A STATIC condition that no
-//                     future attempt can resolve, e.g. multi-seat
-//                     interactive ROAST orchestration, which is not yet
-//                     member-safe (the session handle binding is keyed
-//                     by sessionID alone, so sibling seats collide;
-//                     member-keyed handles land in a later PR). Unlike a
-//                     RUNTIME error, retrying is FUTILE: every attempt
+//                     future attempt can resolve, e.g. a partially-
+//                     registered multi-seat operator: THIS seat has no
+//                     ROAST coordinator while a sibling seat is ROAST-
+//                     active, so this seat can neither drive ROAST nor
+//                     safely fall back to legacy (that would fracture
+//                     the attempt). (PR2b-2 member-keyed the handle
+//                     binding, so a FULLY-registered multi-seat operator
+//                     is no longer terminal -- it proceeds per-seat.)
+//                     Unlike a RUNTIME error, retrying is FUTILE: every attempt
 //                     re-derives the same static outcome, so the loop
 //                     would spin until timeout AND synthesize garbage
 //                     failed-attempt transitions (OnAttemptFailed).
@@ -102,8 +105,10 @@ var ErrNoRoastRetryCoordinatorRegistered = errors.New(
 // TERMINAL error is futile to retry and unsafe to coarse-fall-back, so the only
 // non-fracturing disposition is to stop.
 //
-// Current sole producer: BeginOrchestrationForSession, for a multi-seat operator
-// whose interactive ROAST orchestration is not yet member-safe.
+// Current sole producer: BeginOrchestrationForSession, for a partially-registered
+// multi-seat operator -- this seat has no registered coordinator while a sibling
+// seat is ROAST-active. (A fully-registered multi-seat operator is no longer
+// terminal as of PR2b-2's member-keyed handle binding.)
 //
 // Use errors.Is to detect.
 var ErrTerminalSigningFailure = errors.New(
@@ -143,34 +148,26 @@ func BeginOrchestrationForSession(
 		)
 	}
 	// RFC-21 Phase 7.3 PR2b-1.5: mint the handle from THIS seat's coordinator, so a
-	// multi-seat operator's elected seat aggregates with its own binding.
+	// multi-seat operator's elected seat aggregates with its own binding. PR2b-2
+	// member-keyed the handle binding below (SetCurrentAttemptHandleForSession), so a
+	// fully-registered multi-seat operator now proceeds per-seat with isolated
+	// bindings -- the PR2b-1.5 `count > 1` fail-closed guard that stood here is gone.
 	deps, ok := RegisteredRoastRetryCoordinatorForMember(member)
-	memberCount := registeredRoastRetryMemberCount()
-	// Multi-seat is not yet member-safe here: the session handle binding below
-	// (SetCurrentAttemptHandleForSession) is keyed by sessionID alone, so two local
-	// seats in the same attempt would collide. Fail CLOSED for any multi-seat operator
-	// -- a hard (non-sentinel) error the dispatcher treats as terminal, NEVER the
-	// legacy-fallback sentinel -- until PR2b-2 wires member-keyed handles. Returning the
-	// sentinel here would let this seat run the coarse/legacy path while sibling seats
-	// drive bound ROAST messages, splitting the attempt into mixed bound/unbound. This
-	// mirrors the coarse evidence path's multi-seat guard (submitSnapshotIfActive) in
-	// this same PR.
-	if memberCount > 1 {
-		return roast.AttemptHandle{}, nil, fmt.Errorf(
-			"%w: multi-seat orchestration is not yet member-aware; "+
-				"fail closed for session %q until PR2b-2",
-			ErrTerminalSigningFailure,
-			sessionID,
-		)
-	}
 	if !ok {
-		// memberCount is 0 or 1 here. count==0: no seat is registered anywhere, so ROAST
-		// is not active for the process -- a uniform, group-wide condition every honest
-		// node decides identically -> safe legacy fallback (the sentinel). count==1: a
-		// sibling seat IS registered but not THIS one (a partially-registered operator),
-		// so advertising the legacy fallback for this seat while the sibling drives bound
-		// ROAST would fracture the attempt -> fail CLOSED instead (Codex re-review).
-		if memberCount == 0 {
+		// THIS seat has no registered coordinator. Whether that means legacy fallback
+		// or fail-closed hinges on whether the PROCESS is ROAST-active, which is
+		// group-uniform (the selector uses any-entry RoastRetryActive()):
+		//   - count == 0: no seat is registered anywhere, so ROAST is inactive
+		//     process-wide -- a uniform condition every honest node decides
+		//     identically -> safe legacy fallback (the static sentinel).
+		//   - count > 0: a sibling seat IS ROAST-active (a partially-registered
+		//     operator). Advertising the legacy fallback for THIS seat while the
+		//     sibling drives bound ROAST would fracture the attempt (some seats bound,
+		//     one seat legacy-shuffle) -> fail CLOSED (terminal). Member-keying the
+		//     handle binding does NOTHING here: a seat with no coordinator cannot
+		//     participate in ROAST regardless of key shape, so this fail-closed
+		//     survives PR2b-2 (only the fully-registered multi-seat guard was retired).
+		if registeredRoastRetryMemberCount() == 0 {
 			return roast.AttemptHandle{}, nil, fmt.Errorf(
 				"%w: caller should fall back to legacy behaviour",
 				ErrNoRoastRetryCoordinatorRegistered,
@@ -196,7 +193,10 @@ func BeginOrchestrationForSession(
 			err,
 		)
 	}
-	SetCurrentAttemptHandleForSession(sessionID, handle, ctx)
+	// RFC-21 Phase 7.3 PR2b-2: bind per (sessionID, member). A multi-seat
+	// operator's sibling seats each bind their own handle here, so neither
+	// overwrites the other and each seat's cleanup clears only its own binding.
+	SetCurrentAttemptHandleForSession(sessionID, member, handle, ctx)
 	cleanup := func() {
 		// RFC-21 Phase 7.3 PR2b-1b: the cleanup ONLY clears the per-attempt
 		// handle binding. It no longer produces a transition record -- the
@@ -205,7 +205,7 @@ func BeginOrchestrationForSession(
 		// keyed by the observe handle. Producing here too would let this drive
 		// handle's (empty) aggregation write a SECOND, possibly divergent record
 		// for the same (sessionID, member) the exchange owns -- a fracture risk.
-		ClearCurrentAttemptHandleForSession(sessionID)
+		ClearCurrentAttemptHandleForSession(sessionID, member)
 	}
 	return handle, cleanup, nil
 }
@@ -214,7 +214,8 @@ func BeginOrchestrationForSession(
 // did not capture the cleanup function from
 // BeginOrchestrationForSession (e.g. callers that pass session
 // ownership across function boundaries). It is equivalent to
-// invoking the cleanup function returned by Begin.
-func EndOrchestrationForSession(sessionID string) {
-	ClearCurrentAttemptHandleForSession(sessionID)
+// invoking the cleanup function returned by Begin, so it clears the
+// binding for this (session, member) seat.
+func EndOrchestrationForSession(sessionID string, member group.MemberIndex) {
+	ClearCurrentAttemptHandleForSession(sessionID, member)
 }

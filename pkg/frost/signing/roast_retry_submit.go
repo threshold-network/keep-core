@@ -17,48 +17,43 @@ var roastRetryLogger = log.Logger("keep-frost-roast-retry")
 
 // submitSnapshotIfActive is invoked at end-of-collect to push the
 // receive loop's accumulated evidence into the ROAST coordinator's
-// RecordEvidence pipeline. The function is a no-op when any of the
-// following is true:
+// RecordEvidence pipeline. member is the local seat whose receive loop
+// is submitting (request.MemberIndex). The path is fully member-aware
+// (RFC-21 Phase 7.3 PR2b-2): a multi-seat operator's sibling seats each
+// submit their own evidence against their own coordinator and attempt
+// handle, so they no longer mis-attribute or collide (which is why the
+// PR2b-1.5 multi-seat no-op guard is gone). The function is a no-op when
+// any of the following is true:
 //
-//   - the ROAST-retry registry is empty (default build, no caller
-//     has invoked RegisterRoastRetryCoordinator);
-//   - more than one local seat is registered (multi-seat): this path
-//     is not yet member-aware (PR2b-1.5), so it disables itself rather
-//     than mis-attribute one seat's evidence to a sibling;
-//   - no session-handle binding exists for sessionID (the typical
-//     Phase-4 state, where the orchestration layer that calls
+//   - this member has no registered ROAST-retry coordinator (default
+//     build where RegisterRoastRetryCoordinator is a no-op, or a
+//     partially-registered operator where only a sibling seat is wired);
+//   - no session-handle binding exists for (sessionID, member) (the
+//     typical Phase-4 state, where the orchestration layer that calls
 //     SetCurrentAttemptHandleForSession is not yet implemented);
-//   - the recorder is a NoOp (no events were captured).
+//   - the recorder is nil / a NoOp (no events were captured).
 //
-// When all three preconditions hold, the function builds a
-// LocalEvidenceSnapshot, signs it with the registered Signer, and
-// submits it via Coordinator.RecordEvidence. Errors at any step are
-// logged at WARN level and otherwise swallowed -- snapshot
-// submission must not break the receive loop's primary signing
-// behaviour.
+// Otherwise the function builds a LocalEvidenceSnapshot, signs it with
+// this member's registered Signer, and submits it via
+// Coordinator.RecordEvidence. Errors at any step are logged at WARN
+// level and otherwise swallowed -- snapshot submission must not break
+// the receive loop's primary signing behaviour.
 func submitSnapshotIfActive(
 	sessionID string,
+	member group.MemberIndex,
 	recorder attempt.EvidenceRecorder,
 ) {
 	if recorder == nil {
 		return
 	}
-	// RFC-21 Phase 7.3 PR2b-1.5: the coarse/drive evidence path is not yet
-	// member-aware -- it looks up deps via any-entry RegisteredRoastRetryCoordinator
-	// and keys the drive handle by sessionID alone. Under a MULTI-SEAT operator
-	// (more than one local seat registered) that would attribute one local seat's
-	// evidence to an arbitrary sibling and collide their drive handles, so disable
-	// it for multi-seat until PR2b-2 wires the member-aware coarse/drive path (where
-	// this evidence is consumed by the blame bridge). Single-seat is unchanged, and
-	// the whole path is inert in 1b/1.5 (no production caller submits yet).
-	if registeredRoastRetryMemberCount() > 1 {
-		return
-	}
-	deps, ok := RegisteredRoastRetryCoordinator()
+	// Member-aware lookup: a multi-seat operator's elected seat aggregates with
+	// its OWN coordinator and the snapshot is attributed to deps.SelfMember ==
+	// member. A seat with no coordinator (partial registration) submits nothing.
+	deps, ok := RegisteredRoastRetryCoordinatorForMember(member)
 	if !ok {
 		return
 	}
-	handle, ctx, ok := currentAttemptHandleForCollect(sessionID)
+	handle, ctx, ok := currentAttemptHandleForCollect(sessionID, member)
 	if !ok {
 		return
 	}
