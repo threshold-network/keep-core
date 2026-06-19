@@ -223,6 +223,58 @@ func TestSigningPackageWire_UnmarshalResetsSignableCache(t *testing.T) {
 	}
 }
 
+func TestSigningPackageWire_SignerIDsRoundTripAndSigned(t *testing.T) {
+	pkg := &SigningPackage{
+		AttemptContextHash:  append([]byte(nil), pinnedContextHash[:]...),
+		CoordinatorIDValue:  3,
+		SigningPackageBytes: []byte("frost-signing-package-bytes"),
+		SignerIDsValue:      []uint32{1, 2, 5},
+	}
+	payload, err := pkg.SignableBytes()
+	if err != nil {
+		t.Fatalf("signable: %v", err)
+	}
+	pkg.CoordinatorSignature, err = (&fakeSigner{id: 3}).Sign(payload)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	// signer_ids is part of the SIGNED body: a different list yields different
+	// signable bytes, so a coordinator cannot swap the subset without re-signing
+	// and the field is authenticated, not an unsigned sidecar.
+	other := &SigningPackage{
+		AttemptContextHash:  append([]byte(nil), pinnedContextHash[:]...),
+		CoordinatorIDValue:  3,
+		SigningPackageBytes: []byte("frost-signing-package-bytes"),
+		SignerIDsValue:      []uint32{1, 2, 4},
+	}
+	otherPayload, _ := other.SignableBytes()
+	if bytes.Equal(payload, otherPayload) {
+		t.Fatal("signer_ids must be covered by the signed body (different lists -> different signable bytes)")
+	}
+
+	wire, err := pkg.Marshal()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	decoded := &SigningPackage{}
+	if err := decoded.Unmarshal(wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := decoded.SignerIDs(); len(got) != 3 || got[0] != 1 || got[1] != 2 || got[2] != 5 {
+		t.Fatalf("signer_ids must round-trip into the validated member indices; got %v", got)
+	}
+	if err := AuthenticateSigningPackage(fakeVerifier{}, decoded, 3, pinnedContextHash[:]); err != nil {
+		t.Fatalf("authenticate a package carrying signer_ids: %v", err)
+	}
+
+	// A package with no subset (the full-included flow) returns an empty,
+	// non-panicking SignerIDs() and still validates.
+	if ids := (&SigningPackage{}).SignerIDs(); len(ids) != 0 {
+		t.Fatalf("empty signer_ids must yield an empty SignerIDs(); got %v", ids)
+	}
+}
+
 func TestSigningPackageWire_RootRoundTrips(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -272,6 +324,12 @@ func TestSigningPackage_ValidateRejectsMalformed(t *testing.T) {
 		{"oversize signing package", func(p *SigningPackage) {
 			p.SigningPackageBytes = make([]byte, MaxSigningPackageBytes+1)
 		}},
+		{"signer id zero", func(p *SigningPackage) { p.SignerIDsValue = []uint32{1, 0, 3} }},
+		{"signer id out of member-index range", func(p *SigningPackage) {
+			p.SignerIDsValue = []uint32{1, group.MaxMemberIndex + 1}
+		}},
+		{"signer ids not ascending", func(p *SigningPackage) { p.SignerIDsValue = []uint32{3, 1} }},
+		{"signer ids duplicate", func(p *SigningPackage) { p.SignerIDsValue = []uint32{2, 2} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := valid()
