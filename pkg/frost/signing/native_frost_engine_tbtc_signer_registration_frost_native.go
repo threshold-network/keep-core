@@ -589,16 +589,24 @@ func registerBuildTaggedNativeFROSTSigningEngine() error {
 	// New FROST wallets in this build must use the coarse
 	// `frost-tbtc-signer-v1` material path exclusively.
 	//
-	// RFC-21 Phase 7.3: this same engine satisfies interactiveSigningEngine, but
-	// it is intentionally NOT registered as the interactive provider
-	// (RegisterInteractiveSigningEngineProvider) here yet. Wiring the gated
-	// interactive ROAST path into production is deferred until the blame/evidence
-	// bridge + stable ROAST session-key plumbing land AND the frost-secp256k1-tr
-	// engine external audit clears. Until then the executor's interactive path is
-	// unreachable in production BY CONSTRUCTION (no provider), on top of the
-	// default-off KEEP_CORE_FROST_INTERACTIVE_SIGNING_ENABLED gate -- two
-	// independent barriers, so an operator cannot enable a half-wired interactive
-	// flow ahead of the blame bridge. Production signs via the coarse path below.
+	// RFC-21 Phase 7.3: this same engine satisfies interactiveSigningEngine, and
+	// it IS registered as the interactive provider here. The prerequisites the
+	// registration waited on have landed -- the f+1 blame/evidence bridge and the
+	// stable ROAST session-key plumbing -- so the executor may drive the real cgo
+	// engine through the interactive ROAST path. Registration on its own changes
+	// nothing for an operator: the executor still requires the default-off
+	// KEEP_CORE_FROST_INTERACTIVE_SIGNING_ENABLED opt-in (read per call, see
+	// roast_interactive_signing_gate.go), so the interactive path stays dormant
+	// until explicitly enabled on a cgo build, and the coarse path remains the
+	// fallback. The frost-secp256k1-tr engine external audit gates the
+	// threshold-ECDSA -> FROST CUTOVER in production (turning that opt-in on for
+	// real wallets), NOT this registration. The provider is a factory: each call
+	// returns a fresh stateless bridge handle (interactive sessions live
+	// engine-side, keyed by session id).
+	RegisterInteractiveSigningEngineProvider(func() interactiveSigningEngine {
+		return &buildTaggedTBTCSignerEngine{}
+	})
+
 	return RegisterNativeTBTCSignerEngine(engine)
 }
 
