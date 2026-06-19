@@ -47,8 +47,13 @@ func RegisterRoastRetryCoordinatorForMember(member group.MemberIndex, deps Roast
 		// Member indices are 1-based; a coordinator bound to selfMember 0 is the
 		// "disabled" sentinel that NEVER aggregates (coordinator_state.go), so
 		// registering under member 0 -- or under any member that disagrees with
-		// deps.SelfMember -- would silently mis-bind. Reject (the seat stays
-		// ROAST-inactive -> legacy) rather than register a non-aggregating entry.
+		// deps.SelfMember -- would silently mis-bind. REMOVE any existing entry for
+		// this member so a bad re-registration deactivates the seat (fail-safe to
+		// legacy) rather than leaving STALE deps active (Codex P2-2); member 0 never
+		// has an entry, so the delete is a no-op there.
+		roastRetryRegistrationMu.Lock()
+		delete(roastRetryRegistrationByMember, member)
+		roastRetryRegistrationMu.Unlock()
 		return
 	}
 	roastRetryRegistrationMu.Lock()

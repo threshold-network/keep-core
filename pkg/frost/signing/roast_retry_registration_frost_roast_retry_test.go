@@ -147,6 +147,30 @@ func TestRoastRetryRegistration_RejectsSelfMemberMismatch(t *testing.T) {
 	}
 }
 
+// TestRoastRetryRegistration_RejectDropsExistingEntry asserts a rejected
+// re-registration (member 0 or a SelfMember mismatch) REMOVES any existing entry,
+// so a bad reconfiguration deactivates the seat (fail-safe to legacy) rather than
+// leaving stale deps active (Codex P2-2).
+func TestRoastRetryRegistration_RejectDropsExistingEntry(t *testing.T) {
+	ResetRoastRetryRegistrationForTest()
+	t.Cleanup(ResetRoastRetryRegistrationForTest)
+
+	RegisterRoastRetryCoordinatorForMember(1, RoastRetryDeps{
+		Coordinator: roast.NewInMemoryCoordinatorWithSigning(1, roast.NoOpSigner(), roast.NoOpSignatureVerifier()),
+		SelfMember:  1,
+	})
+	if _, ok := RegisteredRoastRetryCoordinatorForMember(1); !ok {
+		t.Fatal("member 1 must be registered after a valid registration")
+	}
+
+	// A later mis-registration for member 1 (deps bound to member 2) must DROP the
+	// existing entry, not silently keep the stale one.
+	RegisterRoastRetryCoordinatorForMember(1, RoastRetryDeps{SelfMember: 2})
+	if _, ok := RegisteredRoastRetryCoordinatorForMember(1); ok {
+		t.Fatal("a rejected re-registration must drop the existing entry (fail-safe to inactive)")
+	}
+}
+
 // TestRoastRetryRegistration_LegacyWrapperRegistersUnderSelfMember asserts the
 // legacy single-arg RegisterRoastRetryCoordinator registers under deps.SelfMember,
 // so existing single-seat callers + RegisteredRoastRetryCoordinator round-trip.
