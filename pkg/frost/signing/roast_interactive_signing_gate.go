@@ -31,3 +31,23 @@ func InteractiveSigningOptInEnabled() bool {
 	value := strings.TrimSpace(os.Getenv(InteractiveSigningOptInEnvVar))
 	return strings.EqualFold(value, "true")
 }
+
+// InteractiveSigningOnlyEnvVar is the no-coarse-fallback half of coarse-path
+// retirement (RFC-21 Phase 7.3). When set to "true", the executor REFUSES to fall
+// through to the coarse signing primitive: interactive signing is mandatory, and a
+// session where it does not run fails CLOSED rather than silently signing via the
+// retired coarse path. It is meant to be set ONLY together with the audit gate above
+// (and a registered engine) - setting it on its own makes signing fail closed.
+//
+// It stays OFF by default and is intended to remain off in production until the
+// frost-secp256k1-tr engine external audit clears and the tECDSA->FROST cutover is
+// made: flipping it on IS that cutover for this node (the coarse path is no longer
+// available as a fallback). Read per call, not cached, matching the audit gate.
+const InteractiveSigningOnlyEnvVar = "KEEP_CORE_FROST_INTERACTIVE_SIGNING_ONLY"
+
+// InteractiveSigningOnlyEnabled reports whether interactive-only (no coarse
+// fallback) mode is currently set to "true" (case-insensitive, whitespace-trimmed).
+func InteractiveSigningOnlyEnabled() bool {
+	value := strings.TrimSpace(os.Getenv(InteractiveSigningOnlyEnvVar))
+	return strings.EqualFold(value, "true")
+}

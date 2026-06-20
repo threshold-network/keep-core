@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ipfs/go-log/v2"
@@ -33,6 +34,55 @@ func newEntryRetryTestRequest(t *testing.T) *NativeExecutionFFISigningRequest {
 			CoordinatorMemberIndex: 1,
 			IncludedMembersIndexes: []group.MemberIndex{1, 2, 3, 4, 5},
 		},
+	}
+}
+
+func TestEntry_InteractiveOnly_RefusesCoarseFallback(t *testing.T) {
+	// Coarse-path retirement: with interactive-only mode ON but interactive signing
+	// not running (its audit gate off), the executor must REFUSE the coarse fallback
+	// and fail closed, rather than returning a nil signature for the caller to sign
+	// over the retired coarse path.
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
+	t.Setenv(InteractiveSigningOptInEnvVar, "") // audit gate OFF -> the drive returns nil
+	t.Setenv(InteractiveSigningOnlyEnvVar, "true")
+	ResetRoastRetryRegistrationForTest()
+	ResetSessionHandleRegistryForTest()
+	t.Cleanup(ResetRoastRetryRegistrationForTest)
+	t.Cleanup(ResetSessionHandleRegistryForTest)
+
+	RegisterRoastRetryCoordinator(RoastRetryDeps{
+		Coordinator: roast.NewInMemoryCoordinator(),
+		Signer:      roast.NoOpSigner(),
+		Verifier:    roast.NoOpSignatureVerifier(),
+		SelfMember:  1,
+	})
+
+	signature, _, err := attemptRoastRetryOrchestrationFromRequest(
+		context.Background(), newEntryRetryTestRequest(t), log.Logger("entry-interactive-only"),
+	)
+	if signature != nil {
+		t.Fatal("interactive-only refusal must not return a signature")
+	}
+	if err == nil {
+		t.Fatal("interactive-only mode must refuse the coarse fallback when interactive signing did not run")
+	}
+	if !strings.Contains(err.Error(), InteractiveSigningOnlyEnvVar) {
+		t.Fatalf("unexpected error (want a refusal naming %s): %v", InteractiveSigningOnlyEnvVar, err)
+	}
+}
+
+func TestEntry_InteractiveSigningOnlyEnabled_ParsesFlag(t *testing.T) {
+	t.Setenv(InteractiveSigningOnlyEnvVar, "")
+	if InteractiveSigningOnlyEnabled() {
+		t.Fatal("unset must be off")
+	}
+	t.Setenv(InteractiveSigningOnlyEnvVar, "  TrUe ")
+	if !InteractiveSigningOnlyEnabled() {
+		t.Fatal("case-insensitive, trimmed true must be on")
+	}
+	t.Setenv(InteractiveSigningOnlyEnvVar, "false")
+	if InteractiveSigningOnlyEnabled() {
+		t.Fatal("false must be off")
 	}
 }
 
