@@ -11935,6 +11935,65 @@ fn interactive_open_advances_only_the_opening_member_attempt() {
 }
 
 #[test]
+fn interactive_honors_legacy_bare_aggregate_completion_marker() {
+    // Backward compat: a completion persisted by the pre-binding engine is the BARE
+    // attempt_id (not attempt_id@digest). After an upgrade it must still finalize the
+    // attempt fail-closed - the Round2 completion gate refuses a fresh share for it.
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let session_id = "interactive-legacy-aggregate-marker";
+    let key_group = "interactive-test-key-group";
+    let message = [0x66u8; 32];
+    let included = [1u16, 2];
+
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("member 1 opens");
+    let c1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("member 1 round 1");
+
+    // Simulate a completion persisted by the pre-binding engine: the BARE attempt_id.
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        guard
+            .sessions
+            .get_mut(session_id)
+            .expect("session")
+            .aggregated_interactive_attempt_markers
+            .insert(opened.attempt_id.clone());
+    }
+
+    // Round2 must treat the bare legacy marker as a completed attempt and fail closed
+    // before any share is released.
+    let package = interactive_package_for_test(
+        &message,
+        vec![NativeFrostCommitment {
+            identifier: key_packages[&1].identifier.clone(),
+            data_hex: c1.commitments_hex.clone(),
+        }],
+    );
+    let refused = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: package,
+    })
+    .expect_err("a legacy bare completion marker must finalize the attempt");
+    assert!(
+        matches!(
+            refused,
+            EngineError::InteractiveAttemptAlreadyAggregated { .. }
+        ),
+        "unexpected error: {refused:?}"
+    );
+}
+
+#[test]
 fn interactive_round1_is_idempotent_until_consumed() {
     let _guard = lock_test_state();
     reset_for_tests();
