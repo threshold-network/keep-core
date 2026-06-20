@@ -109,7 +109,11 @@ pub(crate) struct SessionState {
     pub(crate) refresh_result: Option<RefreshSharesResult>,
     pub(crate) refresh_history: Vec<RefreshHistoryRecord>,
     pub(crate) emergency_rekey_event: Option<EmergencyRekeyEvent>,
-    pub(crate) interactive_signing: Option<InteractiveSigningState>,
+    // Multi-seat: a process-global engine may hold several LOCAL members (seats)
+    // signing the same session concurrently, each on its own attempt timeline.
+    // Keyed by member_identifier; each entry is independent (own attempt, nonces,
+    // replace/round2/expiry). Was Option (one member per session).
+    pub(crate) interactive_signing: BTreeMap<u16, InteractiveSigningState>,
     pub(crate) consumed_interactive_attempt_markers: HashSet<String>,
     // Phase 7.2b InteractiveAggregate completion markers: an attempt whose
     // aggregate signature has been produced is recorded here so a repeat

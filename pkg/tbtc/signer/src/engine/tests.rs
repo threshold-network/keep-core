@@ -11523,13 +11523,13 @@ fn interactive_session_full_round_trip_aggregates_bip340() {
         let guard = state().expect("state").lock().expect("lock");
         let session = guard.sessions.get(session_id).expect("session exists");
         assert!(
-            session.interactive_signing.is_none(),
+            session.interactive_signing.is_empty(),
             "completed Round2 must free the live interactive session state"
         );
         assert!(
             session
                 .consumed_interactive_attempt_markers
-                .contains(&opened.attempt_id),
+                .contains(&interactive_consumed_marker(&opened.attempt_id, 1)),
             "the durable consumption marker must remain after Round2"
         );
     }
@@ -11571,6 +11571,150 @@ fn interactive_session_full_round_trip_aggregates_bip340() {
     Secp256k1::verification_only()
         .verify_schnorr(&signature, &SecpMessage::from_digest(message), &public_key)
         .expect("interactive + stateless shares aggregate to a valid BIP-340 signature");
+}
+
+#[test]
+fn interactive_multi_seat_two_members_one_process_aggregate_bip340() {
+    // Multi-seat: ONE process drives TWO local members through the interactive
+    // session API for the SAME session and attempt - the case the pre-multi-seat
+    // engine rejected with SessionConflict. Both produce real shares; member 1's
+    // Round2 must NOT disturb member 2's live entry, and member 1's consumed
+    // marker must NOT block member 2 for the same attempt. The two interactive
+    // shares aggregate to a valid BIP-340 signature.
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let session_id = "interactive-multi-seat";
+    let key_group = "interactive-multi-seat-key-group";
+    let message = [0x77u8; 32];
+    let included = [1u16, 2];
+
+    // Both seats open the SAME session + attempt. With the per-member map this
+    // succeeds for both (was SessionConflict for the second seat).
+    let opened1 = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("member 1 opens");
+    let opened2 = open_interactive_for_test(session_id, key_group, &message, &included, 1, 2, 2)
+        .expect("member 2 opens the same attempt (multi-seat)");
+    assert_eq!(
+        opened1.attempt_id, opened2.attempt_id,
+        "both local seats sign the same attempt"
+    );
+
+    // Independent Round1 per member.
+    let round1_m1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened1.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("member 1 round 1");
+    let round1_m2 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened2.attempt_id.clone(),
+        member_identifier: 2,
+    })
+    .expect("member 2 round 1");
+
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1_m1.commitments_hex.clone(),
+            },
+            NativeFrostCommitment {
+                identifier: key_packages[&2].identifier.clone(),
+                data_hex: round1_m2.commitments_hex.clone(),
+            },
+        ],
+    );
+
+    // Member 1's Round2 releases its share and frees ONLY its own entry.
+    let round2_m1 = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened1.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect("member 1 round 2");
+
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(session_id).expect("session exists");
+        assert!(
+            !session.interactive_signing.contains_key(&1),
+            "member 1's entry is freed after its Round2"
+        );
+        assert!(
+            session.interactive_signing.contains_key(&2),
+            "member 2's entry stays live - a sibling seat's Round2 must not free it"
+        );
+        assert!(
+            session
+                .consumed_interactive_attempt_markers
+                .contains(&interactive_consumed_marker(&opened1.attempt_id, 1)),
+            "member 1's consumed marker is written"
+        );
+        assert!(
+            !session
+                .consumed_interactive_attempt_markers
+                .contains(&interactive_consumed_marker(&opened2.attempt_id, 2)),
+            "member 2's marker is NOT written by member 1's Round2"
+        );
+    }
+
+    // Member 2's Round2 is NOT blocked by member 1's same-attempt marker.
+    let round2_m2 = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened2.attempt_id.clone(),
+        member_identifier: 2,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect("member 2 round 2 is independent of member 1's consumed marker");
+
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(session_id).expect("session exists");
+        assert!(
+            session.interactive_signing.is_empty(),
+            "both members' entries are freed after their Round2s"
+        );
+    }
+
+    // The two interactive shares aggregate to a valid BIP-340 signature: real
+    // multi-seat interactive signing, end to end in one process.
+    let public_key_package = dkg_part3(
+        deterministic_interactive_dkg_fixture(0)
+            .part3_requests
+            .remove(&1)
+            .expect("fixture participant 1"),
+    )
+    .expect("public key package")
+    .public_key_package;
+
+    let aggregate = aggregate(AggregateRequest {
+        signing_package_hex,
+        signature_shares: vec![
+            crate::api::NativeFrostSignatureShare {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round2_m1.signature_share_hex,
+            },
+            crate::api::NativeFrostSignatureShare {
+                identifier: key_packages[&2].identifier.clone(),
+                data_hex: round2_m2.signature_share_hex,
+            },
+        ],
+        public_key_package: public_key_package.clone(),
+    })
+    .expect("aggregate");
+
+    let signature_bytes = hex::decode(aggregate.signature_hex).expect("signature hex");
+    let signature = SchnorrSignature::from_slice(&signature_bytes).expect("BIP340 signature");
+    let public_key_bytes = hex::decode(public_key_package.verifying_key).expect("key hex");
+    let public_key = XOnlyPublicKey::from_slice(&public_key_bytes).expect("x-only key");
+    Secp256k1::verification_only()
+        .verify_schnorr(&signature, &SecpMessage::from_digest(message), &public_key)
+        .expect("two interactive multi-seat shares aggregate to a valid BIP-340 signature");
 }
 
 #[test]
@@ -11985,7 +12129,7 @@ fn interactive_round2_persist_fault_leaves_nonces_live() {
         assert!(
             !session
                 .consumed_interactive_attempt_markers
-                .contains(&opened.attempt_id),
+                .contains(&interactive_consumed_marker(&opened.attempt_id, 1)),
             "a failed persist must roll the consumption marker back"
         );
     }
@@ -12006,7 +12150,7 @@ fn interactive_round2_persist_fault_leaves_nonces_live() {
         assert!(
             session
                 .consumed_interactive_attempt_markers
-                .contains(&opened.attempt_id),
+                .contains(&interactive_consumed_marker(&opened.attempt_id, 1)),
             "successful round 2 must leave the durable marker"
         );
     }
@@ -12154,7 +12298,8 @@ fn interactive_session_ttl_expiry_has_abort_semantics() {
         let session = guard.sessions.get_mut(session_id).expect("session exists");
         let interactive = session
             .interactive_signing
-            .as_mut()
+            .values_mut()
+            .next()
             .expect("live interactive state");
         interactive.opened_at_unix = interactive
             .opened_at_unix
@@ -12197,7 +12342,7 @@ fn interactive_live_session_capacity_fails_closed() {
                 .expect_err("the live-session cap must fail closed");
         assert!(
             matches!(at_capacity, EngineError::Internal(ref m)
-                if m.contains("live interactive session count")),
+                if m.contains("live interactive member count")),
             "unexpected error: {at_capacity:?}"
         );
 
@@ -12446,7 +12591,8 @@ fn interactive_abort_sweeps_expired_sessions() {
             .expect("session A exists");
         let interactive = session
             .interactive_signing
-            .as_mut()
+            .values_mut()
+            .next()
             .expect("live interactive state");
         interactive.opened_at_unix = interactive
             .opened_at_unix
@@ -12472,7 +12618,7 @@ fn interactive_abort_sweeps_expired_sessions() {
         .get("interactive-abort-sweep-a")
         .expect("session A (DKG state) is retained");
     assert!(
-        session.interactive_signing.is_none(),
+        session.interactive_signing.is_empty(),
         "an abort elsewhere must still sweep an expired interactive attempt"
     );
 }
@@ -12680,7 +12826,7 @@ fn interactive_round2_rechecks_gates_at_share_release() {
         assert!(
             !session
                 .consumed_interactive_attempt_markers
-                .contains(&opened.attempt_id),
+                .contains(&interactive_consumed_marker(&opened.attempt_id, 1)),
             "a gate rejection must not consume the attempt"
         );
         session.emergency_rekey_event = None;
@@ -12867,7 +13013,7 @@ fn interactive_round2_rejects_quarantined_co_signer_in_package() {
                     .get(session_id)
                     .expect("session")
                     .consumed_interactive_attempt_markers
-                    .contains(&opened.attempt_id),
+                    .contains(&interactive_consumed_marker(&opened.attempt_id, 1)),
                 "a quarantine rejection must not consume the attempt"
             );
             guard.quarantined_operator_identifiers.remove(&2);
@@ -13458,7 +13604,8 @@ fn interactive_aggregate_sweeps_expired_sessions() {
             .get_mut("interactive-aggregate-sweep-a")
             .expect("session A")
             .interactive_signing
-            .as_mut()
+            .values_mut()
+            .next()
             .expect("live interactive state");
         interactive.opened_at_unix = interactive
             .opened_at_unix
@@ -13521,7 +13668,7 @@ fn interactive_aggregate_sweeps_expired_sessions() {
         .get("interactive-aggregate-sweep-a")
         .expect("session A (DKG state) retained");
     assert!(
-        session_a.interactive_signing.is_none(),
+        session_a.interactive_signing.is_empty(),
         "an aggregate call must sweep expired interactive state in other sessions"
     );
 }
