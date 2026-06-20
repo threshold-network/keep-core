@@ -11994,6 +11994,100 @@ fn interactive_honors_legacy_bare_aggregate_completion_marker() {
 }
 
 #[test]
+fn interactive_round2_completion_marker_binds_taproot_root() {
+    // The completion marker binds the taproot root: a completion recorded for one
+    // root must NOT finalize the same attempt/message for a member opened with a
+    // different root (the signature differs per tweak), else Round2 for the live root
+    // is wrongly preempted.
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let session_id = "interactive-taproot-root-binding";
+    let key_group = "interactive-test-key-group";
+    let message = [0x44u8; 32];
+    let included = [1u16, 2];
+
+    // Member 1 opens key-path (no taproot root).
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("member 1 opens key-path");
+    let c1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("member 1 round 1");
+
+    let digest = hash_hex(&message);
+    let package = interactive_package_for_test(
+        &message,
+        vec![NativeFrostCommitment {
+            identifier: key_packages[&1].identifier.clone(),
+            data_hex: c1.commitments_hex.clone(),
+        }],
+    );
+
+    // A completion recorded for a DIFFERENT taproot root must not finalize this
+    // member's key-path attempt: Round2 gets past the completion gate (and then fails
+    // on the deliberately sub-threshold package, not as already-aggregated).
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        guard
+            .sessions
+            .get_mut(session_id)
+            .expect("session")
+            .aggregated_interactive_attempt_markers
+            .insert(interactive_aggregated_marker(
+                &opened.attempt_id,
+                &digest,
+                Some(&[0x22u8; 32]),
+            ));
+    }
+    let not_preempted = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: package.clone(),
+    });
+    assert!(
+        !matches!(
+            not_preempted,
+            Err(EngineError::InteractiveAttemptAlreadyAggregated { .. })
+        ),
+        "a different-root completion must not finalize this attempt: {not_preempted:?}"
+    );
+
+    // A completion for THIS member's root (key-path) does finalize it.
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        guard
+            .sessions
+            .get_mut(session_id)
+            .expect("session")
+            .aggregated_interactive_attempt_markers
+            .insert(interactive_aggregated_marker(
+                &opened.attempt_id,
+                &digest,
+                None,
+            ));
+    }
+    let preempted = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: package,
+    })
+    .expect_err("a same-root completion finalizes the attempt");
+    assert!(
+        matches!(
+            preempted,
+            EngineError::InteractiveAttemptAlreadyAggregated { .. }
+        ),
+        "unexpected error: {preempted:?}"
+    );
+}
+
+#[test]
 fn interactive_round1_is_idempotent_until_consumed() {
     let _guard = lock_test_state();
     reset_for_tests();

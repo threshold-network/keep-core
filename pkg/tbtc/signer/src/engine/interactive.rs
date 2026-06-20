@@ -44,8 +44,17 @@ pub(crate) fn interactive_attempt_consumed(
 // aggregate preempt an unrelated live attempt's Round2 (the Round2 completion gate).
 // interactive_aggregate writes it from the package it aggregated; Round2 and the
 // re-aggregate guard recompute it from the message they actually hold.
-pub(crate) fn interactive_aggregated_marker(attempt_id: &str, message_digest_hex: &str) -> String {
-    format!("{attempt_id}@{message_digest_hex}")
+pub(crate) fn interactive_aggregated_marker(
+    attempt_id: &str,
+    message_digest_hex: &str,
+    taproot_merkle_root: Option<&[u8; 32]>,
+) -> String {
+    // The signature differs per taproot tweak, so the completion is per (message,
+    // root). "keypath" (a key-path / None spend) cannot collide with a 64-hex root.
+    let root = taproot_merkle_root
+        .map(hex::encode)
+        .unwrap_or_else(|| "keypath".to_string());
+    format!("{attempt_id}@{message_digest_hex}@{root}")
 }
 
 // Aggregate-completion check honoring legacy markers: the new bound form for THIS
@@ -57,10 +66,12 @@ pub(crate) fn interactive_attempt_aggregated(
     markers: &HashSet<String>,
     attempt_id: &str,
     message_digest_hex: &str,
+    taproot_merkle_root: Option<&[u8; 32]>,
 ) -> bool {
     markers.contains(&interactive_aggregated_marker(
         attempt_id,
         message_digest_hex,
+        taproot_merkle_root,
     )) || markers.contains(attempt_id)
 }
 
@@ -507,20 +518,22 @@ pub fn interactive_round2(
     // member's live Round2. It fires only for a genuine same-message completion; the
     // member's entry for that finalized attempt is then dead, so free it (zeroizing
     // its nonces) rather than holding a live-member slot until the TTL sweep.
-    let member_attempt_message_digest = session
+    let member_attempt_finalization = session
         .interactive_signing
         .get(&request.member_identifier)
         .filter(|entry| entry.attempt_context.attempt_id == attempt_id)
-        .map(|entry| hash_hex(&entry.message_bytes));
-    let attempt_finalized = member_attempt_message_digest
-        .as_deref()
-        .is_some_and(|digest| {
-            interactive_attempt_aggregated(
-                &session.aggregated_interactive_attempt_markers,
-                &attempt_id,
-                digest,
-            )
-        });
+        .map(|entry| (hash_hex(&entry.message_bytes), entry.taproot_merkle_root));
+    let attempt_finalized =
+        member_attempt_finalization
+            .as_ref()
+            .is_some_and(|(digest, taproot_merkle_root)| {
+                interactive_attempt_aggregated(
+                    &session.aggregated_interactive_attempt_markers,
+                    &attempt_id,
+                    digest,
+                    taproot_merkle_root.as_ref(),
+                )
+            });
     if attempt_finalized {
         if let Some(mut removed) = session
             .interactive_signing
@@ -721,15 +734,20 @@ pub fn interactive_aggregate(
             "InteractiveAggregate: invalid signing package: {e}"
         ))
     })?;
-    // The completion marker binds attempt_id to THIS aggregated message digest, so a
-    // valid aggregate over a different message cannot finalize this attempt id (and
-    // so cannot, via the Round2 completion gate, preempt an unrelated live attempt).
-    let aggregated_message_digest = hash_hex(signing_package.message().as_slice());
-    let aggregated_marker = interactive_aggregated_marker(&attempt_id, &aggregated_message_digest);
     let signature_shares =
         decode_signature_share_map("InteractiveAggregate", &request.signature_shares)?;
     let mut taproot_merkle_root_hex = request.taproot_merkle_root_hex.clone();
     let taproot_merkle_root = canonicalize_taproot_merkle_root_hex(&mut taproot_merkle_root_hex)?;
+    // The completion marker binds attempt_id to THIS aggregated message digest AND the
+    // canonical taproot root, so a valid aggregate over a different message or root
+    // cannot finalize this attempt id (and so cannot, via the Round2 completion gate,
+    // preempt an unrelated live attempt or root - the signature differs per tweak).
+    let aggregated_message_digest = hash_hex(signing_package.message().as_slice());
+    let aggregated_marker = interactive_aggregated_marker(
+        &attempt_id,
+        &aggregated_message_digest,
+        taproot_merkle_root.as_ref(),
+    );
 
     let mut guard = state()?
         .lock()
@@ -758,6 +776,7 @@ pub fn interactive_aggregate(
             &session.aggregated_interactive_attempt_markers,
             &attempt_id,
             &aggregated_message_digest,
+            taproot_merkle_root.as_ref(),
         ) {
             return Err(EngineError::InteractiveAttemptAlreadyAggregated {
                 session_id: request.session_id.clone(),
@@ -870,6 +889,7 @@ pub fn interactive_aggregate(
         &session.aggregated_interactive_attempt_markers,
         &attempt_id,
         &aggregated_message_digest,
+        taproot_merkle_root.as_ref(),
     ) {
         return Err(EngineError::InteractiveAttemptAlreadyAggregated {
             session_id: request.session_id.clone(),
