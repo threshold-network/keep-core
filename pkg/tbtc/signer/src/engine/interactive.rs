@@ -18,6 +18,63 @@
 
 use super::*;
 
+// Multi-seat: a session's interactive consumed-nonce markers are keyed per
+// (attempt_id, member_identifier), so independent local seats can each consume
+// their own nonces for the same attempt without colliding. The marker is written
+// BEFORE a share leaves the engine (consumption-before-release). Legacy bare
+// attempt_id markers (written by the pre-multi-seat single-member engine, and
+// possibly reloaded from durable state) are honored FAIL-CLOSED on read: a bare
+// marker means the attempt is consumed for every member.
+pub(crate) fn interactive_consumed_marker(attempt_id: &str, member_identifier: u16) -> String {
+    format!("m{member_identifier}@{attempt_id}")
+}
+
+pub(crate) fn interactive_attempt_consumed(
+    markers: &HashSet<String>,
+    attempt_id: &str,
+    member_identifier: u16,
+) -> bool {
+    markers.contains(&interactive_consumed_marker(attempt_id, member_identifier))
+        || markers.contains(attempt_id)
+}
+
+// The aggregate completion marker binds attempt_id to the AGGREGATED message digest,
+// so the durable "this attempt is final" record cannot be set for one attempt id via
+// a valid aggregate over a DIFFERENT message - which would otherwise let a replayed
+// aggregate preempt an unrelated live attempt's Round2 (the Round2 completion gate).
+// interactive_aggregate writes it from the package it aggregated; Round2 and the
+// re-aggregate guard recompute it from the message they actually hold.
+pub(crate) fn interactive_aggregated_marker(
+    attempt_id: &str,
+    message_digest_hex: &str,
+    taproot_merkle_root: Option<&[u8; 32]>,
+) -> String {
+    // The signature differs per taproot tweak, so the completion is per (message,
+    // root). "keypath" (a key-path / None spend) cannot collide with a 64-hex root.
+    let root = taproot_merkle_root
+        .map(hex::encode)
+        .unwrap_or_else(|| "keypath".to_string());
+    format!("{attempt_id}@{message_digest_hex}@{root}")
+}
+
+// Aggregate-completion check honoring legacy markers: the new bound form for THIS
+// message, OR a legacy bare attempt_id marker (written by the pre-binding engine and
+// reloaded from durable state) - the latter fail-closed, exactly like the consumed
+// markers, so a completion persisted before this format change stays final (no repeat
+// aggregate, no fresh Round2 share) after an upgrade.
+pub(crate) fn interactive_attempt_aggregated(
+    markers: &HashSet<String>,
+    attempt_id: &str,
+    message_digest_hex: &str,
+    taproot_merkle_root: Option<&[u8; 32]>,
+) -> bool {
+    markers.contains(&interactive_aggregated_marker(
+        attempt_id,
+        message_digest_hex,
+        taproot_merkle_root,
+    )) || markers.contains(attempt_id)
+}
+
 pub fn interactive_session_open(
     mut request: InteractiveSessionOpenRequest,
 ) -> Result<InteractiveSessionOpenResult, EngineError> {
@@ -185,15 +242,22 @@ pub fn interactive_session_open(
     // Disposition over the (now-confirmed) existing session: consumed
     // marker, idempotent/conflicting reopen of this exact attempt, and
     // the live attempt (id + number) for the replacement decision.
+    let member_identifier = request.member_identifier;
     let (already_consumed, matching_attempt_idempotent, live_attempt) = {
         let session = guard
             .sessions
             .get(&request.session_id)
             .expect("session existed under the held engine lock");
-        let already_consumed = session
-            .consumed_interactive_attempt_markers
-            .contains(&attempt_id);
-        let live = session.interactive_signing.as_ref();
+        // Per-member consumed check: this member's composite marker, or a legacy
+        // bare attempt_id marker (fail-closed for the whole attempt).
+        let already_consumed = interactive_attempt_consumed(
+            &session.consumed_interactive_attempt_markers,
+            &attempt_id,
+            member_identifier,
+        );
+        // Disposition is scoped to THIS member's live entry; sibling seats are
+        // independent and on their own attempt timelines.
+        let live = session.interactive_signing.get(&member_identifier);
         let matching_attempt_idempotent = live
             .filter(|interactive| interactive.attempt_context.attempt_id == attempt_id)
             .map(|interactive| interactive.open_request_fingerprint == request_fingerprint);
@@ -229,10 +293,11 @@ pub fn interactive_session_open(
         None => {}
     }
 
-    // A DIFFERENT live attempt is replaced ONLY by a strictly newer
-    // attempt: the retry loop advanced. A stale/delayed open for an
-    // older or equal attempt must not roll the session back and wipe
-    // the newer attempt's nonces.
+    // A DIFFERENT live attempt FOR THIS MEMBER is replaced ONLY by a strictly
+    // newer attempt: this seat's retry loop advanced. A stale/delayed open for an
+    // older or equal attempt must not roll this member back and wipe its newer
+    // nonces. A sibling seat on a different (even newer) attempt is irrelevant -
+    // seats advance independently, exactly as separate processes would.
     let replacing = live_attempt.is_some();
     if let Some((live_attempt_id, live_attempt_number)) = live_attempt {
         // By construction the live attempt here is a DIFFERENT attempt:
@@ -249,9 +314,9 @@ pub fn interactive_session_open(
         );
         if request.attempt_context.attempt_number <= live_attempt_number {
             return Err(EngineError::Validation(format!(
-                "attempt_number [{}] does not advance the live interactive attempt [{}]; \
+                "attempt_number [{}] does not advance member [{}]'s live interactive attempt [{}]; \
                  refusing to roll back to an older or equal attempt",
-                request.attempt_context.attempt_number, live_attempt_number
+                request.attempt_context.attempt_number, member_identifier, live_attempt_number
             )));
         }
     }
@@ -259,15 +324,18 @@ pub fn interactive_session_open(
     // Capacity counts every live interactive session. When replacing,
     // this session already holds one of those slots, so the cap does
     // not apply; when not replacing, a new slot is being taken.
+    // Capacity bounds resident nonce/key exposure, so it counts every live member
+    // ENTRY across all sessions. Replacing this member's own entry takes no new
+    // slot; a new member (even in an existing session) takes one.
     if !replacing {
-        let live_interactive_sessions = guard
+        let live_interactive_members: usize = guard
             .sessions
             .values()
-            .filter(|session| session.interactive_signing.is_some())
-            .count();
-        if live_interactive_sessions >= max_live_interactive_sessions_limit() {
+            .map(|session| session.interactive_signing.len())
+            .sum();
+        if live_interactive_members >= max_live_interactive_sessions_limit() {
             return Err(EngineError::Internal(format!(
-                "live interactive session count [{live_interactive_sessions}] reached max [{}]; \
+                "live interactive member count [{live_interactive_members}] reached max [{}]; \
                  abort idle sessions or increase {}",
                 max_live_interactive_sessions_limit(),
                 TBTC_SIGNER_MAX_LIVE_INTERACTIVE_SESSIONS_ENV
@@ -280,22 +348,27 @@ pub fn interactive_session_open(
         .get_mut(&request.session_id)
         .expect("session existed under the held engine lock");
 
-    if let Some(mut replaced) = session.interactive_signing.take() {
+    // Replace only THIS member's prior entry (zeroizing its old nonces); sibling
+    // seats' entries are untouched.
+    if let Some(mut replaced) = session.interactive_signing.remove(&member_identifier) {
         zeroize_interactive_round1(&mut replaced);
     }
 
-    session.interactive_signing = Some(InteractiveSigningState {
-        open_request_fingerprint: request_fingerprint,
-        attempt_context: request.attempt_context,
-        canonical_included_participants,
-        member_identifier: request.member_identifier,
-        threshold: request.threshold,
-        message_bytes: Zeroizing::new(message_bytes),
-        taproot_merkle_root,
-        key_package,
-        opened_at_unix: now_unix(),
-        round1: None,
-    });
+    session.interactive_signing.insert(
+        member_identifier,
+        InteractiveSigningState {
+            open_request_fingerprint: request_fingerprint,
+            attempt_context: request.attempt_context,
+            canonical_included_participants,
+            member_identifier,
+            threshold: request.threshold,
+            message_bytes: Zeroizing::new(message_bytes),
+            taproot_merkle_root,
+            key_package,
+            opened_at_unix: now_unix(),
+            round1: None,
+        },
+    );
 
     record_hardening_telemetry(|telemetry| {
         telemetry.interactive_session_open_success_total = telemetry
@@ -336,10 +409,11 @@ pub fn interactive_round1(
         }
     })?;
 
-    if session
-        .consumed_interactive_attempt_markers
-        .contains(&attempt_id)
-    {
+    if interactive_attempt_consumed(
+        &session.consumed_interactive_attempt_markers,
+        &attempt_id,
+        request.member_identifier,
+    ) {
         return Err(EngineError::ConsumedNonceReplay {
             session_id: request.session_id.clone(),
             attempt_id,
@@ -424,19 +498,61 @@ pub fn interactive_round2(
         }
     })?;
 
-    if session
-        .consumed_interactive_attempt_markers
-        .contains(&attempt_id)
-    {
+    if interactive_attempt_consumed(
+        &session.consumed_interactive_attempt_markers,
+        &attempt_id,
+        request.member_identifier,
+    ) {
         return Err(EngineError::ConsumedNonceReplay {
             session_id: request.session_id.clone(),
             attempt_id,
         });
     }
 
+    // A completed attempt releases no further shares. Once interactive_aggregate has
+    // produced the attempt's signature, an open sibling seat that never signed has NO
+    // per-member consumed marker, so the consumed gate above does not cover it. Gate
+    // on the completion marker too - but matched to the MESSAGE this member opened
+    // (the marker binds attempt_id to the aggregated message digest), so a replayed
+    // aggregate carrying a different message for this attempt id cannot preempt this
+    // member's live Round2. It fires only for a genuine same-message completion; the
+    // member's entry for that finalized attempt is then dead, so free it (zeroizing
+    // its nonces) rather than holding a live-member slot until the TTL sweep.
+    let member_attempt_finalization = session
+        .interactive_signing
+        .get(&request.member_identifier)
+        .filter(|entry| entry.attempt_context.attempt_id == attempt_id)
+        .map(|entry| (hash_hex(&entry.message_bytes), entry.taproot_merkle_root));
+    let attempt_finalized =
+        member_attempt_finalization
+            .as_ref()
+            .is_some_and(|(digest, taproot_merkle_root)| {
+                interactive_attempt_aggregated(
+                    &session.aggregated_interactive_attempt_markers,
+                    &attempt_id,
+                    digest,
+                    taproot_merkle_root.as_ref(),
+                )
+            });
+    if attempt_finalized {
+        if let Some(mut removed) = session
+            .interactive_signing
+            .remove(&request.member_identifier)
+        {
+            zeroize_interactive_round1(&mut removed);
+        }
+        return Err(EngineError::InteractiveAttemptAlreadyAggregated {
+            session_id: request.session_id.clone(),
+            attempt_id,
+        });
+    }
+
+    // Per-member consumed marker (composite): independent seats consume their own
+    // nonces for the same attempt without colliding.
+    let consumed_marker = interactive_consumed_marker(&attempt_id, request.member_identifier);
     ensure_consumed_registry_insert_capacity(
         &session.consumed_interactive_attempt_markers,
-        &attempt_id,
+        &consumed_marker,
         "consumed_interactive_attempt_markers",
         &request.session_id,
     )?;
@@ -449,10 +565,11 @@ pub fn interactive_round2(
     // mutable consume/sign borrow below. Skipped when no matching live
     // attempt exists - there is no share to release in that case, and
     // interactive_state_for_attempt_mut produces the canonical error.
-    if let Some(interactive) = session.interactive_signing.as_ref().filter(|interactive| {
-        interactive.attempt_context.attempt_id == attempt_id
-            && interactive.member_identifier == request.member_identifier
-    }) {
+    if let Some(interactive) = session
+        .interactive_signing
+        .get(&request.member_identifier)
+        .filter(|interactive| interactive.attempt_context.attempt_id == attempt_id)
+    {
         let bound_message_hex = hex::encode(interactive.message_bytes.as_slice());
         // Fast-path lifecycle/firewall and this node's own quarantine.
         // The full chosen signing subset is quarantine-checked after the
@@ -512,7 +629,7 @@ pub fn interactive_round2(
     // the nonces are destroyed, and no share was released.
     session
         .consumed_interactive_attempt_markers
-        .insert(attempt_id.clone());
+        .insert(consumed_marker.clone());
     if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
         let session = guard
             .sessions
@@ -520,7 +637,7 @@ pub fn interactive_round2(
             .expect("session existed under the held engine lock");
         session
             .consumed_interactive_attempt_markers
-            .remove(&attempt_id);
+            .remove(&consumed_marker);
         return Err(persist_error);
     }
 
@@ -530,7 +647,7 @@ pub fn interactive_round2(
         .expect("session existed under the held engine lock");
     let interactive = session
         .interactive_signing
-        .as_mut()
+        .get_mut(&request.member_identifier)
         .expect("interactive state existed under the held engine lock");
 
     let mut round1 = interactive
@@ -552,15 +669,16 @@ pub fn interactive_round2(
     round1.nonces.zeroize();
     drop(round1);
 
-    // Round2 is terminal for this member's participation in the
-    // attempt: the marker is durable and the nonces are gone, so free
-    // the live session state now rather than letting it (and its
-    // resident key package + message) linger until the TTL sweep. This
-    // also returns the live-session capacity slot immediately. Done on
-    // both the success and share-computation-failure paths: the
-    // attempt is consumed either way, and the durable marker carries
-    // all further replay protection.
-    session.interactive_signing = None;
+    // Round2 is terminal for THIS member's participation in the attempt: the
+    // marker is durable and the nonces are gone, so free this member's entry now
+    // rather than letting it (and its resident key package + message) linger until
+    // the TTL sweep. This also returns its capacity slot immediately; sibling seats
+    // stay live. Done on both the success and share-computation-failure paths: the
+    // attempt is consumed for this member either way, and the durable marker
+    // carries all further replay protection.
+    session
+        .interactive_signing
+        .remove(&request.member_identifier);
 
     let signature_share = signature_share_result
         .map_err(|e| EngineError::Internal(format!("failed to create signature share: {e}")))?;
@@ -620,6 +738,16 @@ pub fn interactive_aggregate(
         decode_signature_share_map("InteractiveAggregate", &request.signature_shares)?;
     let mut taproot_merkle_root_hex = request.taproot_merkle_root_hex.clone();
     let taproot_merkle_root = canonicalize_taproot_merkle_root_hex(&mut taproot_merkle_root_hex)?;
+    // The completion marker binds attempt_id to THIS aggregated message digest AND the
+    // canonical taproot root, so a valid aggregate over a different message or root
+    // cannot finalize this attempt id (and so cannot, via the Round2 completion gate,
+    // preempt an unrelated live attempt or root - the signature differs per tweak).
+    let aggregated_message_digest = hash_hex(signing_package.message().as_slice());
+    let aggregated_marker = interactive_aggregated_marker(
+        &attempt_id,
+        &aggregated_message_digest,
+        taproot_merkle_root.as_ref(),
+    );
 
     let mut guard = state()?
         .lock()
@@ -644,10 +772,12 @@ pub fn interactive_aggregate(
         // Reject a completed attempt: re-aggregation is not a recovery path (a
         // lost signature is recovered with a fresh attempt), and the marker is
         // durable so a completed attempt stays rejected across a restart.
-        if session
-            .aggregated_interactive_attempt_markers
-            .contains(&attempt_id)
-        {
+        if interactive_attempt_aggregated(
+            &session.aggregated_interactive_attempt_markers,
+            &attempt_id,
+            &aggregated_message_digest,
+            taproot_merkle_root.as_ref(),
+        ) {
             return Err(EngineError::InteractiveAttemptAlreadyAggregated {
                 session_id: request.session_id.clone(),
                 attempt_id,
@@ -755,10 +885,12 @@ pub fn interactive_aggregate(
     // A concurrent aggregate that raced past the pre-check may have completed
     // this attempt first; if the marker is now present, reject this call's
     // re-aggregation - the winner already produced the attempt's signature.
-    if session
-        .aggregated_interactive_attempt_markers
-        .contains(&attempt_id)
-    {
+    if interactive_attempt_aggregated(
+        &session.aggregated_interactive_attempt_markers,
+        &attempt_id,
+        &aggregated_message_digest,
+        taproot_merkle_root.as_ref(),
+    ) {
         return Err(EngineError::InteractiveAttemptAlreadyAggregated {
             session_id: request.session_id.clone(),
             attempt_id,
@@ -766,13 +898,13 @@ pub fn interactive_aggregate(
     }
     ensure_consumed_registry_insert_capacity(
         &session.aggregated_interactive_attempt_markers,
-        &attempt_id,
+        &aggregated_marker,
         "aggregated_interactive_attempt_markers",
         &request.session_id,
     )?;
     session
         .aggregated_interactive_attempt_markers
-        .insert(attempt_id.clone());
+        .insert(aggregated_marker.clone());
     if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
         let session = guard
             .sessions
@@ -780,8 +912,39 @@ pub fn interactive_aggregate(
             .expect("session existed under the held engine lock");
         session
             .aggregated_interactive_attempt_markers
-            .remove(&attempt_id);
+            .remove(&aggregated_marker);
         return Err(persist_error);
+    }
+
+    // The attempt is now final for (attempt_id, message, root). A LOCAL sibling seat
+    // that opened/Round1'd this same attempt + root but is NOT in the signing subset
+    // never calls Round2, so free those entries now - zeroizing their nonces and
+    // returning their live-member slots - rather than leaving them resident until the
+    // TTL sweep. The signers' own entries were already removed at their Round2; a
+    // sibling on a DIFFERENT root is a distinct signing task and is left untouched.
+    let session = guard
+        .sessions
+        .get_mut(&request.session_id)
+        .expect("session existed under the held engine lock");
+    let finalized_members: Vec<u16> = session
+        .interactive_signing
+        .iter()
+        .filter(|(_, entry)| {
+            // Match the FULL finalized identity (attempt_id + message + root), not
+            // just (attempt_id, root): a mismatched aggregate (a valid package for a
+            // different message submitted under this attempt id) must NOT delete the
+            // live nonce state of the real, differently-messaged attempt - mirroring
+            // the message binding the completion marker already enforces.
+            entry.attempt_context.attempt_id == attempt_id
+                && hash_hex(&entry.message_bytes) == aggregated_message_digest
+                && entry.taproot_merkle_root == taproot_merkle_root
+        })
+        .map(|(member, _)| *member)
+        .collect();
+    for member in &finalized_members {
+        if let Some(mut removed) = session.interactive_signing.remove(member) {
+            zeroize_interactive_round1(&mut removed);
+        }
     }
     drop(guard);
 
@@ -823,21 +986,28 @@ pub fn interactive_session_abort(
     sweep_expired_interactive_state(&mut guard);
 
     let aborted = match guard.sessions.get_mut(&request.session_id) {
-        Some(session) => match session.interactive_signing.as_ref() {
-            Some(interactive)
-                if attempt_id_filter.is_none()
-                    || attempt_id_filter.as_deref()
-                        == Some(interactive.attempt_context.attempt_id.as_str()) =>
-            {
-                let mut removed = session
-                    .interactive_signing
-                    .take()
-                    .expect("interactive state existed under the held engine lock");
-                zeroize_interactive_round1(&mut removed);
-                true
+        Some(session) => {
+            // Abort has no member parameter, so it is session-level over the map:
+            // remove every member entry matching the optional attempt filter,
+            // zeroizing each entry's nonces. Sibling members on a non-matching
+            // attempt survive. Aborted iff at least one entry was removed.
+            let members_to_abort: Vec<u16> = session
+                .interactive_signing
+                .iter()
+                .filter(|(_, interactive)| {
+                    attempt_id_filter.is_none()
+                        || attempt_id_filter.as_deref()
+                            == Some(interactive.attempt_context.attempt_id.as_str())
+                })
+                .map(|(member, _)| *member)
+                .collect();
+            for member in &members_to_abort {
+                if let Some(mut removed) = session.interactive_signing.remove(member) {
+                    zeroize_interactive_round1(&mut removed);
+                }
             }
-            _ => false,
-        },
+            !members_to_abort.is_empty()
+        }
         None => false,
     };
 
@@ -868,25 +1038,21 @@ fn interactive_state_for_attempt_mut<'session>(
     attempt_id: &str,
     member_identifier: u16,
 ) -> Result<&'session mut InteractiveSigningState, EngineError> {
-    let interactive =
-        session
-            .interactive_signing
-            .as_mut()
-            .ok_or_else(|| EngineError::SessionNotFound {
-                session_id: format!("{session_id} (no live interactive attempt)"),
-            })?;
+    let interactive = session
+        .interactive_signing
+        .get_mut(&member_identifier)
+        .ok_or_else(|| EngineError::SessionNotFound {
+            session_id: format!(
+                "{session_id} (no live interactive attempt for member {member_identifier})"
+            ),
+        })?;
 
     if interactive.attempt_context.attempt_id != attempt_id {
         return Err(EngineError::Validation(format!(
-            "attempt_id [{attempt_id}] does not match the live interactive attempt [{}]",
+            "attempt_id [{attempt_id}] does not match member [{member_identifier}]'s \
+             live interactive attempt [{}]",
             interactive.attempt_context.attempt_id
         )));
-    }
-
-    if interactive.member_identifier != member_identifier {
-        return Err(EngineError::Validation(
-            "member_identifier does not match the open interactive session".to_string(),
-        ));
     }
 
     Ok(interactive)
@@ -1064,14 +1230,16 @@ pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) {
     // attempt's nonces; the session itself - DKG material, consumed
     // markers - is retained for future signing.
     for session in engine_state.sessions.values_mut() {
-        let expired = session
+        // Per-member expiry: each seat's entry expires independently by its own
+        // opened_at_unix; non-expired sibling seats in the same session survive.
+        let expired_members: Vec<u16> = session
             .interactive_signing
-            .as_ref()
-            .is_some_and(|interactive| {
-                now.saturating_sub(interactive.opened_at_unix) > ttl_seconds
-            });
-        if expired {
-            if let Some(mut removed) = session.interactive_signing.take() {
+            .iter()
+            .filter(|(_, interactive)| now.saturating_sub(interactive.opened_at_unix) > ttl_seconds)
+            .map(|(member, _)| *member)
+            .collect();
+        for member in &expired_members {
+            if let Some(mut removed) = session.interactive_signing.remove(member) {
                 zeroize_interactive_round1(&mut removed);
             }
         }

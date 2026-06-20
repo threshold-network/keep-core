@@ -1446,8 +1446,8 @@ impl TryFrom<PersistedSessionState> for SessionState {
             emergency_rekey_event: persisted.emergency_rekey_event,
             // Live interactive state never restores: nonces are gone by
             // construction after a restart, so the attempt fails safe and
-            // only the consumption markers survive.
-            interactive_signing: None,
+            // only the consumption markers survive. Empty map (no live members).
+            interactive_signing: BTreeMap::new(),
             consumed_interactive_attempt_markers,
             aggregated_interactive_attempt_markers,
         })
