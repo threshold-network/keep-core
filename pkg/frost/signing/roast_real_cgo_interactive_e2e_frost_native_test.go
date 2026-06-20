@@ -73,31 +73,7 @@ var realCgoSessionSeq atomic.Uint64
 // the Rust signer and runs only against a current lib.
 
 func TestRealCgoInteractiveSigning_MemberContribution(t *testing.T) {
-	t.Setenv("TBTC_SIGNER_PROFILE", "development")
-	t.Setenv("TBTC_SIGNER_ENFORCE_PROVENANCE_GATE", "false")
-	// RunDKG persists the DKG result in the signer's ENCRYPTED state, so a linked
-	// signer needs a state encryption key and a state path. The path must be STABLE
-	// within the process: the signer binds its process-global state-file lock to the
-	// first path it sees and refuses to switch, so a fresh t.TempDir() per invocation
-	// would break in-process repeats (go test -count=2 fails on the second run). Use
-	// a per-PROCESS path (stable across -count=N, unique across processes so separate
-	// runs do not contend on one lock) plus a unique session id per invocation
-	// (below), so repeats add a fresh DKG session rather than conflicting on a fixed
-	// one. The encryption key is fixed so the persisted state stays decryptable across
-	// in-process repeats.
-	stateKey := make([]byte, 32)
-	for i := range stateKey {
-		stateKey[i] = byte(i + 1)
-	}
-	t.Setenv("TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX", hex.EncodeToString(stateKey))
-	stateDir := filepath.Join(
-		os.TempDir(),
-		fmt.Sprintf("keep-frost-realcgo-state-%d", os.Getpid()),
-	)
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		t.Fatalf("create signer state dir: %v", err)
-	}
-	t.Setenv("TBTC_SIGNER_STATE_PATH", filepath.Join(stateDir, "signer-state"))
+	setupRealCgoSignerState(t)
 
 	engine := &buildTaggedTBTCSignerEngine{}
 
@@ -153,6 +129,130 @@ func TestRealCgoInteractiveSigning_MemberContribution(t *testing.T) {
 	if len(commitmentData) == 0 {
 		t.Fatal("interactive round 1 returned an empty commitment from the real engine")
 	}
+}
+
+// TestRealCgoInteractiveSigning_MultiSeatAggregate drives TWO local seats through the
+// FULL interactive signing flow in ONE process against the real cgo engine, producing a
+// real 2-of-3 BIP-340 signature. This is the payoff of the multi-seat engine fix
+// (member-keyed interactive_signing): before it, the second seat's InteractiveSessionOpen
+// failed with SessionConflict, so a single process could only drive one seat's
+// contribution (see _MemberContribution). Now both seats Open, Round1, and Round2
+// independently and their shares aggregate. Skip-guarded; runs only against a linked,
+// CURRENT libfrost_tbtc that includes the multi-seat fix.
+func TestRealCgoInteractiveSigning_MultiSeatAggregate(t *testing.T) {
+	setupRealCgoSignerState(t)
+
+	engine := &buildTaggedTBTCSignerEngine{}
+
+	const threshold = 2
+	sessionID := fmt.Sprintf("real-cgo-multiseat-session-%d", realCgoSessionSeq.Add(1))
+	participantIDs := []byte{1, 2, 3}
+	// Both seats are LOCAL members in this one process (the multi-seat case).
+	signingMembers := []byte{1, 2}
+	message := bytesOf(0x42, 32)
+
+	keyGroup := runRealCgoDKGKeyGroup(t, engine, sessionID, participantIDs, threshold)
+
+	derived, err := engine.DeriveInteractiveAttemptContext(
+		sessionID,
+		message,
+		keyGroup,
+		threshold,
+		0,
+		uint16sOf(signingMembers),
+	)
+	skipFrostUnavailable(t, "derive interactive attempt context", err)
+	frostIDByMember := map[byte]string{}
+	for _, id := range derived.FrostIdentifiers {
+		frostIDByMember[byte(id.ParticipantIdentifier)] = id.FrostIdentifier
+	}
+
+	// Open + Round1 for BOTH seats in one process. The second Open succeeding (rather
+	// than SessionConflict) is exactly what the multi-seat engine fix enables.
+	attemptIDByMember := make(map[byte]string, len(signingMembers))
+	commitments := make([]nativeFROSTCommitment, 0, len(signingMembers))
+	for _, member := range signingMembers {
+		open, err := engine.InteractiveSessionOpen(
+			sessionID,
+			uint16(member),
+			message,
+			keyGroup,
+			threshold,
+			nil, // key-path spend
+			derived.AttemptContext,
+		)
+		skipFrostUnavailable(t, fmt.Sprintf("interactive session open (member %d)", member), err)
+		attemptIDByMember[member] = open.AttemptID
+
+		commitmentData, err := engine.InteractiveRound1(sessionID, open.AttemptID, uint16(member))
+		skipFrostUnavailable(t, fmt.Sprintf("interactive round 1 (member %d)", member), err)
+		commitments = append(commitments, nativeFROSTCommitment{
+			Identifier: frostIDByMember[member],
+			Data:       commitmentData,
+		})
+	}
+
+	signingPackage, err := engine.NewSigningPackage(message, commitments)
+	skipFrostUnavailable(t, "new signing package", err)
+
+	// Round2 for BOTH seats: each releases its share independently; member 1's Round2
+	// must not disturb member 2's live state (the per-member entry isolation).
+	shares := make([]nativeFROSTSignatureShare, 0, len(signingMembers))
+	for _, member := range signingMembers {
+		shareData, err := engine.InteractiveRound2(
+			sessionID,
+			attemptIDByMember[member],
+			uint16(member),
+			signingPackage,
+		)
+		skipFrostUnavailable(t, fmt.Sprintf("interactive round 2 (member %d)", member), err)
+		shares = append(shares, nativeFROSTSignatureShare{
+			Identifier: frostIDByMember[member],
+			Data:       shareData,
+		})
+	}
+
+	// Aggregate the two interactive shares into a real 2-of-3 BIP-340 signature -
+	// produced by two local seats in ONE process via the cgo bridge. The engine
+	// validates the shares + aggregate internally, so a non-error 64-byte result is a
+	// valid threshold signature (see _MemberContribution on the absent external
+	// keyGroup->pubkey accessor).
+	signature, err := engine.InteractiveAggregate(
+		sessionID,
+		attemptIDByMember[signingMembers[0]],
+		signingPackage,
+		shares,
+		nil,
+	)
+	skipFrostUnavailable(t, "interactive aggregate", err)
+	if len(signature) != 64 {
+		t.Fatalf("unexpected multi-seat interactive signature length: %d", len(signature))
+	}
+}
+
+// setupRealCgoSignerState sets the linked-signer env the persisted-DKG interactive flow
+// needs: the development profile, a fixed state encryption key, and a per-PROCESS state
+// path - stable across -count=N (the signer binds its process-global state-file lock to
+// the first path and refuses to switch) and unique across processes (so separate runs
+// do not contend on one lock). Tests pair it with a unique session id per invocation so
+// in-process repeats add a fresh DKG session rather than conflicting on a fixed one.
+func setupRealCgoSignerState(t *testing.T) {
+	t.Helper()
+	t.Setenv("TBTC_SIGNER_PROFILE", "development")
+	t.Setenv("TBTC_SIGNER_ENFORCE_PROVENANCE_GATE", "false")
+	stateKey := make([]byte, 32)
+	for i := range stateKey {
+		stateKey[i] = byte(i + 1)
+	}
+	t.Setenv("TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX", hex.EncodeToString(stateKey))
+	stateDir := filepath.Join(
+		os.TempDir(),
+		fmt.Sprintf("keep-frost-realcgo-state-%d", os.Getpid()),
+	)
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatalf("create signer state dir: %v", err)
+	}
+	t.Setenv("TBTC_SIGNER_STATE_PATH", filepath.Join(stateDir, "signer-state"))
 }
 
 // skipFrostUnavailable turns an engine-call error into the right outcome: a missing
