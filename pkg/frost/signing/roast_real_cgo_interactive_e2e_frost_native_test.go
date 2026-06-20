@@ -39,6 +39,11 @@ import (
 // multi-member orchestration itself is covered with the fake engine over the real
 // transport in the runner net e2e.
 //
+// What this test does NOT prove: interactive round 2 or aggregate over the cgo
+// session surface (those need >= 2 signers, i.e. multiple processes). It is a
+// real-crypto round-1 / FFI-bridge / persisted-state integration test, not a full
+// interactive end-to-end signature.
+//
 // The DKG -> interactive keyGroup glue is RunDKG: InteractiveSessionOpen resolves
 // the signing key by a keyGroup IDENTIFIER (engine-internal persisted material),
 // not KeyPackage bytes. RunDKG runs the full DKG and PERSISTS the result, keyed by
