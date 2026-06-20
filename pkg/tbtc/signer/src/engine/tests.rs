@@ -11808,6 +11808,27 @@ fn interactive_round2_refused_after_aggregate_for_unsigned_sibling() {
     })
     .expect("interactive aggregate completes the attempt");
 
+    // The completion marker is MESSAGE-BOUND (attempt_id@digest), not the bare
+    // attempt_id - so it cannot be set for this attempt id via an aggregate over a
+    // different message (which would otherwise preempt this attempt's live Round2).
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(session_id).expect("session exists");
+        assert!(
+            session
+                .aggregated_interactive_attempt_markers
+                .iter()
+                .any(|marker| marker.starts_with(&format!("{}@", opened.attempt_id))),
+            "completion marker binds attempt_id to the aggregated message digest"
+        );
+        assert!(
+            !session
+                .aggregated_interactive_attempt_markers
+                .contains(&opened.attempt_id),
+            "the bare (unbound) attempt_id marker is not written"
+        );
+    }
+
     // Seat 3 (open, round1'd, never signed) tries to release a share for the now
     // completed attempt, in a subset it WOULD be valid for ({1,3}). Without the
     // completion gate this releases a fresh share; with it the attempt is final.
@@ -11838,6 +11859,17 @@ fn interactive_round2_refused_after_aggregate_for_unsigned_sibling() {
         ),
         "unexpected error: {refused:?}"
     );
+
+    // The refused sibling's now-dead entry is freed (its nonces zeroized) rather
+    // than lingering against the live-member cap until the TTL sweep.
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(session_id).expect("session exists");
+        assert!(
+            !session.interactive_signing.contains_key(&3),
+            "seat 3's dead entry is freed when Round2 is refused for the finalized attempt"
+        );
+    }
 }
 
 #[test]

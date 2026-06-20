@@ -38,6 +38,16 @@ pub(crate) fn interactive_attempt_consumed(
         || markers.contains(attempt_id)
 }
 
+// The aggregate completion marker binds attempt_id to the AGGREGATED message digest,
+// so the durable "this attempt is final" record cannot be set for one attempt id via
+// a valid aggregate over a DIFFERENT message - which would otherwise let a replayed
+// aggregate preempt an unrelated live attempt's Round2 (the Round2 completion gate).
+// interactive_aggregate writes it from the package it aggregated; Round2 and the
+// re-aggregate guard recompute it from the message they actually hold.
+pub(crate) fn interactive_aggregated_marker(attempt_id: &str, message_digest_hex: &str) -> String {
+    format!("{attempt_id}@{message_digest_hex}")
+}
+
 pub fn interactive_session_open(
     mut request: InteractiveSessionOpenRequest,
 ) -> Result<InteractiveSessionOpenResult, EngineError> {
@@ -473,15 +483,33 @@ pub fn interactive_round2(
     }
 
     // A completed attempt releases no further shares. Once interactive_aggregate has
-    // produced the attempt's signature (aggregated_interactive_attempt_markers), an
-    // open sibling seat that never signed has NO per-member consumed marker, so the
-    // consumed gate above does not cover it. Gate on the completion marker here too:
-    // re-aggregation is not a recovery path (a lost signature is recovered with a
-    // fresh attempt), so no fresh share may leave for a finished attempt.
-    if session
-        .aggregated_interactive_attempt_markers
-        .contains(&attempt_id)
-    {
+    // produced the attempt's signature, an open sibling seat that never signed has NO
+    // per-member consumed marker, so the consumed gate above does not cover it. Gate
+    // on the completion marker too - but matched to the MESSAGE this member opened
+    // (the marker binds attempt_id to the aggregated message digest), so a replayed
+    // aggregate carrying a different message for this attempt id cannot preempt this
+    // member's live Round2. It fires only for a genuine same-message completion; the
+    // member's entry for that finalized attempt is then dead, so free it (zeroizing
+    // its nonces) rather than holding a live-member slot until the TTL sweep.
+    let member_attempt_message_digest = session
+        .interactive_signing
+        .get(&request.member_identifier)
+        .filter(|entry| entry.attempt_context.attempt_id == attempt_id)
+        .map(|entry| hash_hex(&entry.message_bytes));
+    let attempt_finalized = member_attempt_message_digest
+        .as_deref()
+        .is_some_and(|digest| {
+            session
+                .aggregated_interactive_attempt_markers
+                .contains(&interactive_aggregated_marker(&attempt_id, digest))
+        });
+    if attempt_finalized {
+        if let Some(mut removed) = session
+            .interactive_signing
+            .remove(&request.member_identifier)
+        {
+            zeroize_interactive_round1(&mut removed);
+        }
         return Err(EngineError::InteractiveAttemptAlreadyAggregated {
             session_id: request.session_id.clone(),
             attempt_id,
@@ -675,6 +703,11 @@ pub fn interactive_aggregate(
             "InteractiveAggregate: invalid signing package: {e}"
         ))
     })?;
+    // The completion marker binds attempt_id to THIS aggregated message digest, so a
+    // valid aggregate over a different message cannot finalize this attempt id (and
+    // so cannot, via the Round2 completion gate, preempt an unrelated live attempt).
+    let aggregated_marker =
+        interactive_aggregated_marker(&attempt_id, &hash_hex(signing_package.message().as_slice()));
     let signature_shares =
         decode_signature_share_map("InteractiveAggregate", &request.signature_shares)?;
     let mut taproot_merkle_root_hex = request.taproot_merkle_root_hex.clone();
@@ -705,7 +738,7 @@ pub fn interactive_aggregate(
         // durable so a completed attempt stays rejected across a restart.
         if session
             .aggregated_interactive_attempt_markers
-            .contains(&attempt_id)
+            .contains(&aggregated_marker)
         {
             return Err(EngineError::InteractiveAttemptAlreadyAggregated {
                 session_id: request.session_id.clone(),
@@ -816,7 +849,7 @@ pub fn interactive_aggregate(
     // re-aggregation - the winner already produced the attempt's signature.
     if session
         .aggregated_interactive_attempt_markers
-        .contains(&attempt_id)
+        .contains(&aggregated_marker)
     {
         return Err(EngineError::InteractiveAttemptAlreadyAggregated {
             session_id: request.session_id.clone(),
@@ -825,13 +858,13 @@ pub fn interactive_aggregate(
     }
     ensure_consumed_registry_insert_capacity(
         &session.aggregated_interactive_attempt_markers,
-        &attempt_id,
+        &aggregated_marker,
         "aggregated_interactive_attempt_markers",
         &request.session_id,
     )?;
     session
         .aggregated_interactive_attempt_markers
-        .insert(attempt_id.clone());
+        .insert(aggregated_marker.clone());
     if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
         let session = guard
             .sessions
@@ -839,7 +872,7 @@ pub fn interactive_aggregate(
             .expect("session existed under the held engine lock");
         session
             .aggregated_interactive_attempt_markers
-            .remove(&attempt_id);
+            .remove(&aggregated_marker);
         return Err(persist_error);
     }
     drop(guard);
