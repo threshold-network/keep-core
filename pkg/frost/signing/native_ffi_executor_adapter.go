@@ -144,6 +144,20 @@ func (nefea *nativeExecutionFFIExecutorAdapter) Execute(
 		}, nil
 	}
 
+	if InteractiveSigningOnlyEnabled() {
+		// Interactive-only mode (coarse-path retirement): the orchestration produced
+		// no interactive signature - the audit gate is off, no engine is registered,
+		// OR any static fallback fired (readiness off, no coordinator, unsupported
+		// material). This is the SINGLE point where the coarse primitive is invoked,
+		// so refusing here fails CLOSED on every fall-through path rather than
+		// silently signing over the retired coarse path.
+		return nil, fmt.Errorf(
+			"interactive-only signing mode (%s) is set but interactive signing did not run "+
+				"(%s off, no engine, or static fallback); refusing the coarse fallback",
+			InteractiveSigningOnlyEnvVar, InteractiveSigningOptInEnvVar,
+		)
+	}
+
 	signature, err := nefea.primitive.Sign(ctx, logger, ffiRequest)
 	if err != nil {
 		return nil, err

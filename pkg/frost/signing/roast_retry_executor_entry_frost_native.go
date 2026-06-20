@@ -131,16 +131,5 @@ func attemptRoastRetryOrchestrationFromRequest(
 	if err != nil {
 		return nil, cleanup, err
 	}
-	if signature == nil && InteractiveSigningOnlyEnabled() {
-		// Interactive-only mode (coarse-path retirement): interactive signing did
-		// not produce a signature (its audit gate is off, or no engine is
-		// registered), and the coarse fallback is disabled - fail CLOSED rather than
-		// silently signing via the retired coarse path.
-		return nil, cleanup, fmt.Errorf(
-			"interactive-only signing mode (%s) is set but interactive signing did not run "+
-				"(%s off or no engine registered); refusing the coarse fallback",
-			InteractiveSigningOnlyEnvVar, InteractiveSigningOptInEnvVar,
-		)
-	}
 	return signature, cleanup, nil
 }
