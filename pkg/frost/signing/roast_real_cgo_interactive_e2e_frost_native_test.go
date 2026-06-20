@@ -5,6 +5,7 @@ package signing
 import (
 	"encoding/hex"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/chain/local_v1"
@@ -50,6 +51,17 @@ import (
 func TestRealCgoInteractiveSigning_EndToEnd(t *testing.T) {
 	t.Setenv("TBTC_SIGNER_PROFILE", "development")
 	t.Setenv("TBTC_SIGNER_ENFORCE_PROVENANCE_GATE", "false")
+	// RunDKG persists the DKG result in the signer's ENCRYPTED state, so a linked
+	// signer needs a state encryption key and an ISOLATED, fresh state path. Without
+	// them a clean linked environment fails before signing (missing key), and a
+	// shared/default state path makes reruns conflict on the fixed session id.
+	// t.TempDir() yields a fresh path per run, so each run starts clean.
+	stateKey := make([]byte, 32)
+	for i := range stateKey {
+		stateKey[i] = byte(i + 1)
+	}
+	t.Setenv("TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX", hex.EncodeToString(stateKey))
+	t.Setenv("TBTC_SIGNER_STATE_PATH", filepath.Join(t.TempDir(), "signer-state"))
 
 	engine := &buildTaggedTBTCSignerEngine{}
 
