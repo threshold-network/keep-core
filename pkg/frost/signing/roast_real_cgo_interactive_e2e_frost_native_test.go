@@ -5,6 +5,7 @@ package signing
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -44,9 +45,18 @@ import (
 // verification would need a new keyGroup->group-pubkey accessor. That is the one
 // remaining nicety; the e2e itself is complete via the internal validation.
 //
-// The whole test is skip-guarded for the absence of the linked tbtc-signer FFI
-// symbols, matching the other real-cgo tests, so it is inert in CI builds that do
-// not link the Rust signer and runs only where the lib is present.
+// To run it, link the signer library so the frost_tbtc_* symbols resolve, e.g.:
+//
+//	CGO_ENABLED=1 \
+//	  CGO_LDFLAGS="-L<dir> -lfrost_tbtc -Wl,-rpath,<dir>" \
+//	  go test -tags "frost_native frost_tbtc_signer" \
+//	    -run TestRealCgoInteractiveSigning_EndToEnd ./pkg/frost/signing/
+//
+// Every engine call is guarded by skipFrostUnavailable: when the lib is absent, or
+// present but stale (an older dylib missing a newer symbol such as
+// frost_tbtc_derive_interactive_attempt_context), the test SKIPS with a message
+// naming the operation, rather than failing - so it is inert in CI builds that do
+// not link the Rust signer and runs to completion only against a current lib.
 
 func TestRealCgoInteractiveSigning_EndToEnd(t *testing.T) {
 	t.Setenv("TBTC_SIGNER_PROFILE", "development")
@@ -65,15 +75,13 @@ func TestRealCgoInteractiveSigning_EndToEnd(t *testing.T) {
 
 	engine := &buildTaggedTBTCSignerEngine{}
 
-	const groupSize = 3
 	const threshold = 2
 	participantIDs := []byte{1, 2, 3}
 	signingMembers := []byte{1, 2}
 	message := bytesOf(0x42, 32)
 
 	// 1. Full DKG that persists a key group. RunDKG runs the whole DKG over the
-	// participants and returns a keyGroup the signing path resolves. Skips if the
-	// linked tbtc-signer FFI symbols are absent (no Rust lib in this build).
+	// participants and returns a keyGroup the signing path resolves.
 	keyGroup := runRealCgoDKGKeyGroup(t, engine, participantIDs, threshold)
 
 	// 2. Interactive signing over the chosen t-subset, driven through the engine's
@@ -87,9 +95,7 @@ func TestRealCgoInteractiveSigning_EndToEnd(t *testing.T) {
 		0, // 0-based attempt number; the bridge converts to the 1-based wire value
 		uint16sOf(signingMembers),
 	)
-	if err != nil {
-		t.Fatalf("derive interactive attempt context: %v", err)
-	}
+	skipFrostUnavailable(t, "derive interactive attempt context", err)
 	frostIDByMember := map[byte]string{}
 	for _, id := range derived.FrostIdentifiers {
 		frostIDByMember[byte(id.ParticipantIdentifier)] = id.FrostIdentifier
@@ -107,17 +113,13 @@ func TestRealCgoInteractiveSigning_EndToEnd(t *testing.T) {
 			nil, // key-path spend
 			derived.AttemptContext,
 		)
-		if err != nil {
-			t.Fatalf("interactive session open (member %d): %v", member, err)
-		}
+		skipFrostUnavailable(t, fmt.Sprintf("interactive session open (member %d)", member), err)
 		attemptIDByMember[member] = open.AttemptID
 
 		commitmentData, err := engine.InteractiveRound1(
 			"real-cgo-session-1", open.AttemptID, uint16(member),
 		)
-		if err != nil {
-			t.Fatalf("interactive round 1 (member %d): %v", member, err)
-		}
+		skipFrostUnavailable(t, fmt.Sprintf("interactive round 1 (member %d)", member), err)
 		commitments = append(commitments, nativeFROSTCommitment{
 			Identifier: frostIDByMember[member],
 			Data:       commitmentData,
@@ -125,9 +127,7 @@ func TestRealCgoInteractiveSigning_EndToEnd(t *testing.T) {
 	}
 
 	signingPackage, err := engine.NewSigningPackage(message, commitments)
-	if err != nil {
-		t.Fatalf("new signing package: %v", err)
-	}
+	skipFrostUnavailable(t, "new signing package", err)
 
 	signatureShares := make([]nativeFROSTSignatureShare, 0, len(signingMembers))
 	for _, member := range signingMembers {
@@ -137,15 +137,17 @@ func TestRealCgoInteractiveSigning_EndToEnd(t *testing.T) {
 			uint16(member),
 			signingPackage,
 		)
-		if err != nil {
-			t.Fatalf("interactive round 2 (member %d): %v", member, err)
-		}
+		skipFrostUnavailable(t, fmt.Sprintf("interactive round 2 (member %d)", member), err)
 		signatureShares = append(signatureShares, nativeFROSTSignatureShare{
 			Identifier: frostIDByMember[member],
 			Data:       shareData,
 		})
 	}
 
+	// A failed aggregate (other than an unavailable symbol) IS the verification:
+	// real FROST rejects invalid shares or a key/package mismatch here, so a
+	// non-error result is the proof the interactive round produced a valid
+	// threshold signature.
 	signatureBytes, err := engine.InteractiveAggregate(
 		"real-cgo-session-1",
 		attemptIDByMember[signingMembers[0]],
@@ -153,12 +155,7 @@ func TestRealCgoInteractiveSigning_EndToEnd(t *testing.T) {
 		signatureShares,
 		nil,
 	)
-	if err != nil {
-		// A failed aggregate IS the verification: real FROST would reject invalid
-		// shares or a key/package mismatch here, so a non-error result is the
-		// proof the interactive round produced a valid threshold signature.
-		t.Fatalf("interactive aggregate: %v", err)
-	}
+	skipFrostUnavailable(t, "interactive aggregate", err)
 
 	// 3. The successful aggregate is a valid 64-byte BIP-340 signature (the engine
 	// validated the shares and the aggregate internally). External schnorr.Verify
@@ -167,6 +164,26 @@ func TestRealCgoInteractiveSigning_EndToEnd(t *testing.T) {
 	if len(signatureBytes) != 64 {
 		t.Fatalf("unexpected interactive signature length: %d", len(signatureBytes))
 	}
+}
+
+// skipFrostUnavailable turns an engine-call error into the right outcome: a missing
+// FFI symbol (lib absent, or present but stale and missing a newer symbol) SKIPS
+// the test naming the operation, while any other error is a real failure. nil is a
+// no-op. Centralizing this makes every step of the e2e robust to an incomplete lib
+// rather than only the first (RunDKG) call.
+func skipFrostUnavailable(t *testing.T, op string, err error) {
+	t.Helper()
+	if err == nil {
+		return
+	}
+	if errors.Is(err, ErrNativeCryptographyUnavailable) {
+		t.Skipf(
+			"linked tbtc-signer FFI symbol for %s unavailable (lib absent or stale; "+
+				"rebuild libfrost_tbtc): %v",
+			op, err,
+		)
+	}
+	t.Fatalf("%s: %v", op, err)
 }
 
 // runRealCgoDKGKeyGroup runs a full real FROST DKG over the participants via
@@ -195,12 +212,7 @@ func runRealCgoDKGKeyGroup(
 	}
 
 	result, err := engine.RunDKG("real-cgo-dkg-session-1", participants, threshold)
-	if err != nil {
-		if errors.Is(err, ErrNativeCryptographyUnavailable) {
-			t.Skip("linked tbtc-signer FFI symbols unavailable")
-		}
-		t.Fatalf("run DKG: %v", err)
-	}
+	skipFrostUnavailable(t, "run DKG", err)
 	if result.KeyGroup == "" {
 		t.Fatal("RunDKG returned an empty key group")
 	}
