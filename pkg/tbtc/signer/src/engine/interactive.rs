@@ -915,6 +915,31 @@ pub fn interactive_aggregate(
             .remove(&aggregated_marker);
         return Err(persist_error);
     }
+
+    // The attempt is now final for (attempt_id, message, root). A LOCAL sibling seat
+    // that opened/Round1'd this same attempt + root but is NOT in the signing subset
+    // never calls Round2, so free those entries now - zeroizing their nonces and
+    // returning their live-member slots - rather than leaving them resident until the
+    // TTL sweep. The signers' own entries were already removed at their Round2; a
+    // sibling on a DIFFERENT root is a distinct signing task and is left untouched.
+    let session = guard
+        .sessions
+        .get_mut(&request.session_id)
+        .expect("session existed under the held engine lock");
+    let finalized_members: Vec<u16> = session
+        .interactive_signing
+        .iter()
+        .filter(|(_, entry)| {
+            entry.attempt_context.attempt_id == attempt_id
+                && entry.taproot_merkle_root == taproot_merkle_root
+        })
+        .map(|(member, _)| *member)
+        .collect();
+    for member in &finalized_members {
+        if let Some(mut removed) = session.interactive_signing.remove(member) {
+            zeroize_interactive_round1(&mut removed);
+        }
+    }
     drop(guard);
 
     record_hardening_telemetry(|telemetry| {

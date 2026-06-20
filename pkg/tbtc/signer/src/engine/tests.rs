@@ -11755,7 +11755,8 @@ fn interactive_round2_refused_after_aggregate_for_unsigned_sibling() {
         member_identifier: 2,
     })
     .expect("member 2 round 1");
-    let c3 = interactive_round1(InteractiveRound1Request {
+    // Seat 3 opens + Round1s the same attempt but is NOT in the {1,2} signing subset.
+    interactive_round1(InteractiveRound1Request {
         session_id: session_id.to_string(),
         attempt_id: opened.attempt_id.clone(),
         member_identifier: 3,
@@ -11829,9 +11830,28 @@ fn interactive_round2_refused_after_aggregate_for_unsigned_sibling() {
         );
     }
 
-    // Seat 3 (open, round1'd, never signed) tries to release a share for the now
-    // completed attempt, in a subset it WOULD be valid for ({1,3}). Without the
-    // completion gate this releases a fresh share; with it the attempt is final.
+    // Aggregation proactively frees the LOCAL non-signing sibling (seat 3): it never
+    // calls Round2, so its entry must not linger to the TTL sweep.
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(session_id).expect("session exists");
+        assert!(
+            !session.interactive_signing.contains_key(&3),
+            "the non-signing sibling is freed when the attempt aggregates"
+        );
+    }
+
+    // If seat 3 RE-OPENS the finalized attempt and tries to release a share (in a
+    // {1,3} subset it would otherwise be valid for), the completion gate refuses it:
+    // the bound marker makes the attempt/message/root final.
+    open_interactive_for_test(session_id, key_group, &message, &included, 1, 3, 2)
+        .expect("seat 3 re-opens the finalized attempt");
+    let c3_reopened = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 3,
+    })
+    .expect("seat 3 round 1 after re-open");
     let package_13 = interactive_package_for_test(
         &message,
         vec![
@@ -11841,7 +11861,7 @@ fn interactive_round2_refused_after_aggregate_for_unsigned_sibling() {
             },
             NativeFrostCommitment {
                 identifier: key_packages[&3].identifier.clone(),
-                data_hex: c3.commitments_hex.clone(),
+                data_hex: c3_reopened.commitments_hex.clone(),
             },
         ],
     );
