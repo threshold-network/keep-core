@@ -16,6 +16,7 @@ import (
 func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 	UnregisterNativeTBTCSignerEngine()
 	t.Cleanup(UnregisterNativeTBTCSignerEngine)
+	t.Cleanup(ResetInteractiveSigningEngineProviderForTest)
 
 	err := registerBuildTaggedNativeFROSTSigningEngine()
 	if err != nil {
@@ -25,6 +26,22 @@ func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 	engine := currentNativeTBTCSignerEngine()
 	if engine == nil {
 		t.Fatal("expected native tbtc-signer engine registration")
+	}
+
+	// RFC-21 Phase 7.3: the same registration installs the cgo engine as the
+	// interactive signing provider, so the executor can obtain a real engine for
+	// the gated interactive ROAST path. The provider is a factory returning a
+	// fresh cgo bridge handle; the path itself stays dormant behind the default-off
+	// KEEP_CORE_FROST_INTERACTIVE_SIGNING_ENABLED opt-in.
+	interactive := registeredInteractiveSigningEngine()
+	if interactive == nil {
+		t.Fatal("expected the interactive signing provider to be registered")
+	}
+	if _, ok := interactive.(*buildTaggedTBTCSignerEngine); !ok {
+		t.Fatalf(
+			"interactive provider returned %T, want *buildTaggedTBTCSignerEngine",
+			interactive,
+		)
 	}
 
 	_, err = engine.StartSignRound(
