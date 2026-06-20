@@ -12108,6 +12108,83 @@ fn interactive_round2_completion_marker_binds_taproot_root() {
 }
 
 #[test]
+fn interactive_aggregate_cleanup_is_message_bound() {
+    // The aggregate's finalized-sibling cleanup matches the full identity
+    // (attempt_id + message + root). A mismatched aggregate - a VALID package for a
+    // DIFFERENT message submitted under a live attempt's id - must NOT delete that
+    // attempt's live nonce state (its message differs), mirroring the completion
+    // marker's message binding.
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let session_id = "interactive-cleanup-message-binding";
+    let key_group = "interactive-test-key-group";
+    let message_a = [0x88u8; 32];
+    let message_b = [0x99u8; 32];
+    let included = [1u16, 2];
+
+    // A live interactive attempt over message A (attempt_id derives from message A).
+    let opened = open_interactive_for_test(session_id, key_group, &message_a, &included, 1, 1, 2)
+        .expect("member 1 opens message-A attempt");
+    interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("member 1 round 1 (message A)");
+
+    // A valid aggregate over a DIFFERENT message B, submitted under message A's
+    // attempt id - via stateless shares, so it does not touch the live attempt.
+    let m1_b = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&1].identifier.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone(),
+    })
+    .expect("stateless nonces 1");
+    let m2_b = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("stateless nonces 2");
+    let package_b = interactive_package_for_test(
+        &message_b,
+        vec![m1_b.commitment.clone(), m2_b.commitment.clone()],
+    );
+    let share1_b = sign_share(SignShareRequest {
+        signing_package_hex: package_b.clone(),
+        nonces_hex: m1_b.nonces_hex,
+        key_package_identifier: key_packages[&1].identifier.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone(),
+    })
+    .expect("stateless share 1 over B");
+    let share2_b = sign_share(SignShareRequest {
+        signing_package_hex: package_b.clone(),
+        nonces_hex: m2_b.nonces_hex,
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("stateless share 2 over B");
+    interactive_aggregate(InteractiveAggregateRequest {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        signing_package_hex: package_b,
+        signature_shares: vec![share1_b.signature_share, share2_b.signature_share],
+        taproot_merkle_root_hex: None,
+    })
+    .expect("aggregate over message B succeeds under message A's attempt id");
+
+    // The live message-A seat must survive: the cleanup is message-bound.
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(session_id).expect("session exists");
+        assert!(
+            session.interactive_signing.contains_key(&1),
+            "a mismatched-message aggregate must not delete the live message-A seat"
+        );
+    }
+}
+
+#[test]
 fn interactive_round1_is_idempotent_until_consumed() {
     let _guard = lock_test_state();
     reset_for_tests();

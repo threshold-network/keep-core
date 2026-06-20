@@ -930,7 +930,13 @@ pub fn interactive_aggregate(
         .interactive_signing
         .iter()
         .filter(|(_, entry)| {
+            // Match the FULL finalized identity (attempt_id + message + root), not
+            // just (attempt_id, root): a mismatched aggregate (a valid package for a
+            // different message submitted under this attempt id) must NOT delete the
+            // live nonce state of the real, differently-messaged attempt - mirroring
+            // the message binding the completion marker already enforces.
             entry.attempt_context.attempt_id == attempt_id
+                && hash_hex(&entry.message_bytes) == aggregated_message_digest
                 && entry.taproot_merkle_root == taproot_merkle_root
         })
         .map(|(member, _)| *member)
