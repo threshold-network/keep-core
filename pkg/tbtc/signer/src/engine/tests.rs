@@ -11718,6 +11718,191 @@ fn interactive_multi_seat_two_members_one_process_aggregate_bip340() {
 }
 
 #[test]
+fn interactive_round2_refused_after_aggregate_for_unsigned_sibling() {
+    // Multi-seat: an attempt completes (interactive_aggregate) with one threshold
+    // subset {1,2} while a third local seat is open but never signed - so it has NO
+    // per-member consumed marker. Round2 must still refuse to release seat 3's share
+    // for the finished attempt: completion is final (recovery is a fresh attempt),
+    // and otherwise seat 3's share could combine with a signer's into a SECOND valid
+    // signature over the same message. Also exercises interactive_aggregate over two
+    // interactive multi-seat shares.
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let session_id = "interactive-multi-seat-completed";
+    let key_group = "interactive-multi-seat-completed-key-group";
+    let message = [0x55u8; 32];
+    let included = [1u16, 2, 3];
+
+    // Three local seats open the same attempt.
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("member 1 opens");
+    open_interactive_for_test(session_id, key_group, &message, &included, 1, 2, 2)
+        .expect("member 2 opens");
+    open_interactive_for_test(session_id, key_group, &message, &included, 1, 3, 2)
+        .expect("member 3 opens");
+
+    let c1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("member 1 round 1");
+    let c2 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 2,
+    })
+    .expect("member 2 round 1");
+    let c3 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 3,
+    })
+    .expect("member 3 round 1");
+
+    // Complete the attempt with the {1,2} subset.
+    let package_12 = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: c1.commitments_hex.clone(),
+            },
+            NativeFrostCommitment {
+                identifier: key_packages[&2].identifier.clone(),
+                data_hex: c2.commitments_hex.clone(),
+            },
+        ],
+    );
+    let share1 = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: package_12.clone(),
+    })
+    .expect("member 1 round 2");
+    let share2 = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 2,
+        signing_package_hex: package_12.clone(),
+    })
+    .expect("member 2 round 2");
+    interactive_aggregate(InteractiveAggregateRequest {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        signing_package_hex: package_12,
+        signature_shares: vec![
+            crate::api::NativeFrostSignatureShare {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: share1.signature_share_hex,
+            },
+            crate::api::NativeFrostSignatureShare {
+                identifier: key_packages[&2].identifier.clone(),
+                data_hex: share2.signature_share_hex,
+            },
+        ],
+        taproot_merkle_root_hex: None,
+    })
+    .expect("interactive aggregate completes the attempt");
+
+    // Seat 3 (open, round1'd, never signed) tries to release a share for the now
+    // completed attempt, in a subset it WOULD be valid for ({1,3}). Without the
+    // completion gate this releases a fresh share; with it the attempt is final.
+    let package_13 = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: c1.commitments_hex.clone(),
+            },
+            NativeFrostCommitment {
+                identifier: key_packages[&3].identifier.clone(),
+                data_hex: c3.commitments_hex.clone(),
+            },
+        ],
+    );
+    let refused = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 3,
+        signing_package_hex: package_13,
+    })
+    .expect_err("round 2 must refuse a share for an already-aggregated attempt");
+    assert!(
+        matches!(
+            refused,
+            EngineError::InteractiveAttemptAlreadyAggregated { .. }
+        ),
+        "unexpected error: {refused:?}"
+    );
+}
+
+#[test]
+fn interactive_open_advances_only_the_opening_member_attempt() {
+    // Per-member live attempt: seat 1 advancing to a newer attempt replaces ONLY its
+    // own entry (with fresh nonce state); a sibling seat on an older attempt is
+    // untouched - seats advance independently, exactly as separate processes would.
+    // A stale re-open is rejected for the member that advanced, but an idempotent
+    // re-open is accepted for a sibling still on that attempt.
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_group = "interactive-multi-seat-advance-key-group";
+    let session_id = "interactive-multi-seat-advance";
+    let message = [0x33u8; 32];
+    let included = [1u16, 2];
+
+    // Seat 1 and seat 2 open attempt 1; seat 1 takes its round-1 nonces.
+    let a1_m1 = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("member 1 opens attempt 1");
+    open_interactive_for_test(session_id, key_group, &message, &included, 1, 2, 2)
+        .expect("member 2 opens attempt 1");
+    interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: a1_m1.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("member 1 round 1 on attempt 1");
+
+    // Seat 1 advances to attempt 2; only its entry is replaced.
+    let a2_m1 = open_interactive_for_test(session_id, key_group, &message, &included, 2, 1, 2)
+        .expect("member 1 opens attempt 2");
+    assert_ne!(a2_m1.attempt_id, a1_m1.attempt_id);
+
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(session_id).expect("session exists");
+        assert_eq!(
+            session.interactive_signing[&1].attempt_context.attempt_id, a2_m1.attempt_id,
+            "seat 1 advanced to attempt 2"
+        );
+        assert!(
+            session.interactive_signing[&1].round1.is_none(),
+            "seat 1's attempt-2 entry starts fresh (old round-1 nonces replaced)"
+        );
+        assert_eq!(
+            session.interactive_signing[&2].attempt_context.attempt_id, a1_m1.attempt_id,
+            "seat 2's attempt-1 entry is untouched by seat 1's advance"
+        );
+    }
+
+    // A stale re-open of attempt 1 is rejected for seat 1 (it advanced) ...
+    let stale = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect_err("seat 1 cannot roll back to attempt 1");
+    assert!(
+        matches!(stale, EngineError::Validation(_)),
+        "unexpected error: {stale:?}"
+    );
+    // ... but seat 2 re-opening attempt 1 is idempotent (it never advanced).
+    let m2_reopen = open_interactive_for_test(session_id, key_group, &message, &included, 1, 2, 2)
+        .expect("seat 2 idempotent re-open of its live attempt");
+    assert!(m2_reopen.idempotent);
+}
+
+#[test]
 fn interactive_round1_is_idempotent_until_consumed() {
     let _guard = lock_test_state();
     reset_for_tests();

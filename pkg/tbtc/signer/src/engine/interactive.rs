@@ -472,6 +472,22 @@ pub fn interactive_round2(
         });
     }
 
+    // A completed attempt releases no further shares. Once interactive_aggregate has
+    // produced the attempt's signature (aggregated_interactive_attempt_markers), an
+    // open sibling seat that never signed has NO per-member consumed marker, so the
+    // consumed gate above does not cover it. Gate on the completion marker here too:
+    // re-aggregation is not a recovery path (a lost signature is recovered with a
+    // fresh attempt), so no fresh share may leave for a finished attempt.
+    if session
+        .aggregated_interactive_attempt_markers
+        .contains(&attempt_id)
+    {
+        return Err(EngineError::InteractiveAttemptAlreadyAggregated {
+            session_id: request.session_id.clone(),
+            attempt_id,
+        });
+    }
+
     // Per-member consumed marker (composite): independent seats consume their own
     // nonces for the same attempt without colliding.
     let consumed_marker = interactive_consumed_marker(&attempt_id, request.member_identifier);
