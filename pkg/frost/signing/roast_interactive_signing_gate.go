@@ -43,6 +43,14 @@ func InteractiveSigningOptInEnabled() bool {
 // frost-secp256k1-tr engine external audit clears and the tECDSA->FROST cutover is
 // made: flipping it on IS that cutover for this node (the coarse path is no longer
 // available as a fallback). Read per call, not cached, matching the audit gate.
+//
+// SCOPE: it presumes the node signs EXCLUSIVELY via the interactive tBTC-FROST path.
+// The refusal is format-agnostic (it fails closed for every signer format the native
+// executor handles, not only the tBTC-signer one); it closes BOTH the inner FFI coarse
+// primitive and the outer legacy fallbacks (the latter via nativeExecutionFallbackAllowed);
+// and in a build WITHOUT the interactive engine (no frost_native) it fails all native
+// signing closed. Enable it only on a node running the frost_native interactive engine
+// with the audit gate on.
 const InteractiveSigningOnlyEnvVar = "KEEP_CORE_FROST_INTERACTIVE_SIGNING_ONLY"
 
 // InteractiveSigningOnlyEnabled reports whether interactive-only (no coarse

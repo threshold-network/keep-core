@@ -300,6 +300,9 @@ func TestNativeExecutionFFIExecutorAdapter_Execute_InteractiveOnlyRefusesCoarse(
 	if err == nil {
 		t.Fatal("interactive-only mode must fail closed instead of using the coarse primitive")
 	}
+	if !errors.Is(err, ErrTerminalSigningFailure) {
+		t.Fatalf("interactive-only refusal must be TERMINAL so the retry loop aborts: %v", err)
+	}
 	if !strings.Contains(err.Error(), InteractiveSigningOnlyEnvVar) {
 		t.Fatalf("unexpected error (want a refusal naming %s): %v", InteractiveSigningOnlyEnvVar, err)
 	}

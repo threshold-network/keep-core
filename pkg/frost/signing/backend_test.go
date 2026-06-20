@@ -176,6 +176,26 @@ func TestSetExecutionBackendByName(t *testing.T) {
 	}
 }
 
+func TestNativeExecutionFallbackAllowed_SuppressedByInteractiveOnly(t *testing.T) {
+	// Coarse-path retirement (Codex #4101 P2): interactive-only mode must close the
+	// OUTER native fallbacks too - the bridge/adapter consult this single gate before
+	// delegating to the legacy backend, so the flag has to flip it closed regardless
+	// of the execution mode, or a node with an unavailable FFI path would still sign
+	// over the legacy/coarse delegate.
+	previousMode := currentNativeExecutionMode()
+	t.Cleanup(func() { setNativeExecutionMode(previousMode) })
+
+	setNativeExecutionMode(nativeExecutionModeFallbackAllowed)
+	if !nativeExecutionFallbackAllowed() {
+		t.Fatal("baseline: the fallback-allowed mode must permit the outer fallback")
+	}
+
+	t.Setenv(InteractiveSigningOnlyEnvVar, "true")
+	if nativeExecutionFallbackAllowed() {
+		t.Fatal("interactive-only mode must suppress the outer native fallback")
+	}
+}
+
 func TestSetExecutionBackendByName_NativeFailureRestoresPreviousMode(
 	t *testing.T,
 ) {
