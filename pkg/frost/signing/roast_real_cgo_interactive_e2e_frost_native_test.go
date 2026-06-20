@@ -5,12 +5,20 @@ package signing
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/chain/local_v1"
 	"github.com/keep-network/keep-core/pkg/operator"
 )
+
+// realCgoSessionSeq gives each invocation a unique session id so that in-process
+// repeats (go test -count=N) over the shared, process-stable signer state path add
+// a fresh DKG session instead of conflicting on a fixed one.
+var realCgoSessionSeq atomic.Uint64
 
 // This file is the REAL-cgo interactive signing test: a full FROST DKG that
 // PERSISTS a key group, followed by one signer's interactive ROAST contribution
@@ -68,16 +76,28 @@ func TestRealCgoInteractiveSigning_MemberContribution(t *testing.T) {
 	t.Setenv("TBTC_SIGNER_PROFILE", "development")
 	t.Setenv("TBTC_SIGNER_ENFORCE_PROVENANCE_GATE", "false")
 	// RunDKG persists the DKG result in the signer's ENCRYPTED state, so a linked
-	// signer needs a state encryption key and an ISOLATED, fresh state path. Without
-	// them a clean linked environment fails before signing (missing key), and a
-	// shared/default state path makes reruns conflict on the fixed session id.
-	// t.TempDir() yields a fresh path per run, so each run starts clean.
+	// signer needs a state encryption key and a state path. The path must be STABLE
+	// within the process: the signer binds its process-global state-file lock to the
+	// first path it sees and refuses to switch, so a fresh t.TempDir() per invocation
+	// would break in-process repeats (go test -count=2 fails on the second run). Use
+	// a per-PROCESS path (stable across -count=N, unique across processes so separate
+	// runs do not contend on one lock) plus a unique session id per invocation
+	// (below), so repeats add a fresh DKG session rather than conflicting on a fixed
+	// one. The encryption key is fixed so the persisted state stays decryptable across
+	// in-process repeats.
 	stateKey := make([]byte, 32)
 	for i := range stateKey {
 		stateKey[i] = byte(i + 1)
 	}
 	t.Setenv("TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX", hex.EncodeToString(stateKey))
-	t.Setenv("TBTC_SIGNER_STATE_PATH", filepath.Join(t.TempDir(), "signer-state"))
+	stateDir := filepath.Join(
+		os.TempDir(),
+		fmt.Sprintf("keep-frost-realcgo-state-%d", os.Getpid()),
+	)
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatalf("create signer state dir: %v", err)
+	}
+	t.Setenv("TBTC_SIGNER_STATE_PATH", filepath.Join(stateDir, "signer-state"))
 
 	engine := &buildTaggedTBTCSignerEngine{}
 
@@ -85,8 +105,10 @@ func TestRealCgoInteractiveSigning_MemberContribution(t *testing.T) {
 	// {1,2} over a 3-party DKG. This process drives the one local signer (member 1).
 	const threshold = 2
 	// One session id for the whole flow: the engine keys the interactive session by
-	// the DKG session id, so RunDKG, derive, and open all use sessionID.
-	const sessionID = "real-cgo-session-1"
+	// the DKG session id, so RunDKG, derive, and open all use sessionID. It is unique
+	// per invocation so in-process repeats over the stable state path add a fresh
+	// session instead of conflicting on a fixed one.
+	sessionID := fmt.Sprintf("real-cgo-session-%d", realCgoSessionSeq.Add(1))
 	const localMember = uint16(1)
 	participantIDs := []byte{1, 2, 3}
 	includedMembers := []byte{1, 2}
