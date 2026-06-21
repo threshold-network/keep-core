@@ -152,6 +152,7 @@ func (nefea *nativeExecutionFFIExecutorAdapter) Execute(
 		// legacy fallback is closed separately via nativeExecutionFallbackAllowed().
 		// Mark the refusal TERMINAL so the tBTC signingRetryLoop aborts immediately
 		// instead of retrying a deterministic configuration failure until timeout.
+		recordCoarseFallbackRefused()
 		return nil, fmt.Errorf(
 			"%w: interactive-only signing mode (%s) is set but interactive signing did "+
 				"not run (%s off, no engine, or static fallback); refusing the coarse fallback",

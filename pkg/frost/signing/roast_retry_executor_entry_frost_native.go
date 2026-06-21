@@ -128,8 +128,17 @@ func attemptRoastRetryOrchestrationFromRequest(
 	signature, err := driveInteractiveRoastSigningIfEnabled(
 		execCtx, logger, request, handle, attemptCtx,
 	)
+	// Observability (handoff §6.3): a committed interactive failure (err != nil) vs a
+	// produced signature (signature != nil) vs the inactive fall-through (both nil,
+	// interactive not enabled - counted as neither). This is the single chokepoint
+	// where the drive's outcome is interpreted, so instrument here rather than at the
+	// drive's many return points.
 	if err != nil {
+		recordInteractiveSigningFailure()
 		return nil, cleanup, err
+	}
+	if signature != nil {
+		recordInteractiveSigningSuccess()
 	}
 	return signature, cleanup, nil
 }
