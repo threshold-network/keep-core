@@ -280,17 +280,36 @@ func isPreMultiSeatConflict(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "session conflict")
 }
 
+// FrostRequireCgoEnvVar, when truthy, turns the "linked lib unavailable" SKIP into a
+// FATAL. It is set by the frost-cgo-integration CI gate, which builds a current
+// libfrost_tbtc and links it: there, a would-be skip means the lib is absent, stale, or
+// failed to load - which must fail the job loudly rather than silently dropping the
+// real-crypto coverage the gate exists to provide. Unset (local/normal CI), the tests
+// skip as before so they stay inert where the lib is not linked.
+const FrostRequireCgoEnvVar = "KEEP_CORE_FROST_REQUIRE_CGO"
+
+func frostCgoRequired() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv(FrostRequireCgoEnvVar)), "true")
+}
+
 // skipFrostUnavailable turns an engine-call error into the right outcome: a missing
 // FFI symbol (lib absent, or present but stale and missing a newer symbol) SKIPS
 // the test naming the operation, while any other error is a real failure. nil is a
 // no-op. Centralizing this makes every step robust to an incomplete lib rather than
-// only the first (RunDKG) call.
+// only the first (RunDKG) call. Under the require-cgo gate the would-be skip is fatal.
 func skipFrostUnavailable(t *testing.T, op string, err error) {
 	t.Helper()
 	if err == nil {
 		return
 	}
 	if errors.Is(err, ErrNativeCryptographyUnavailable) {
+		if frostCgoRequired() {
+			t.Fatalf(
+				"%s: tbtc-signer FFI symbol unavailable but %s is set (lib absent, stale, "+
+					"or failed to load - the linked libfrost_tbtc must satisfy the bridge): %v",
+				op, FrostRequireCgoEnvVar, err,
+			)
+		}
 		t.Skipf(
 			"linked tbtc-signer FFI symbol for %s unavailable (lib absent or stale; "+
 				"rebuild libfrost_tbtc): %v",
