@@ -257,6 +257,78 @@ func TestNativeExecutionFFIExecutorAdapter_Execute_RejectsNilSignature(
 	}
 }
 
+func TestNativeExecutionFFIExecutorAdapter_Execute_InteractiveOnlyRefusesCoarse(
+	t *testing.T,
+) {
+	// Coarse-path retirement: with interactive-only mode ON, the adapter must NOT fall
+	// through to the coarse primitive on ANY no-interactive-signature path. In the
+	// default build attemptRoastRetryOrchestrationFromRequest is a no-op (nil,nil,nil)
+	// - the ultimate static fallback - so this exercises exactly the gap Codex flagged:
+	// a fall-through that an executor-level check (which runs only after orchestration
+	// activates) would have bypassed. The adapter is the single coarse-invocation
+	// point, so the refusal here covers every path.
+	t.Setenv(InteractiveSigningOnlyEnvVar, "true")
+
+	primitive := &mockNativeExecutionFFISigningPrimitive{
+		signature: &frost.Signature{
+			R: [frost.SignatureComponentSize]byte{0x01},
+			S: [frost.SignatureComponentSize]byte{0x02},
+		},
+	}
+
+	executor, err := NewNativeExecutionFFIExecutorAdapter(primitive)
+	if err != nil {
+		t.Fatalf("unexpected adapter setup error: [%v]", err)
+	}
+
+	_, err = executor.Execute(context.Background(), nil, &Request{
+		Message:            big.NewInt(123),
+		SessionID:          "session-interactive-only",
+		MemberIndex:        2,
+		GroupSize:          5,
+		DishonestThreshold: 1,
+		SignerMaterial: &NativeSignerMaterial{
+			Format:  NativeSignerMaterialFormatFrostUniFFIV1,
+			Payload: []byte{0xaa},
+		},
+		Attempt: &Attempt{
+			Number:                 3,
+			CoordinatorMemberIndex: 1,
+			IncludedMembersIndexes: []group.MemberIndex{1, 2, 3},
+		},
+	})
+	if err == nil {
+		t.Fatal("interactive-only mode must fail closed instead of using the coarse primitive")
+	}
+	if !errors.Is(err, ErrTerminalSigningFailure) {
+		t.Fatalf("interactive-only refusal must be TERMINAL so the retry loop aborts: %v", err)
+	}
+	if !strings.Contains(err.Error(), InteractiveSigningOnlyEnvVar) {
+		t.Fatalf("unexpected error (want a refusal naming %s): %v", InteractiveSigningOnlyEnvVar, err)
+	}
+	if primitive.signCalls != 0 {
+		t.Fatalf(
+			"coarse primitive must NOT be called in interactive-only mode, got %d call(s)",
+			primitive.signCalls,
+		)
+	}
+}
+
+func TestInteractiveSigningOnlyEnabled_ParsesFlag(t *testing.T) {
+	t.Setenv(InteractiveSigningOnlyEnvVar, "")
+	if InteractiveSigningOnlyEnabled() {
+		t.Fatal("unset must be off")
+	}
+	t.Setenv(InteractiveSigningOnlyEnvVar, "  TrUe ")
+	if !InteractiveSigningOnlyEnabled() {
+		t.Fatal("case-insensitive, trimmed true must be on")
+	}
+	t.Setenv(InteractiveSigningOnlyEnvVar, "false")
+	if InteractiveSigningOnlyEnabled() {
+		t.Fatal("false must be off")
+	}
+}
+
 func TestNativeExecutionFFIExecutorAdapter_RegisterUnmarshallers_Delegates(
 	t *testing.T,
 ) {

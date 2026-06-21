@@ -2,6 +2,7 @@ package signing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/ipfs/go-log/v2"
@@ -50,7 +51,23 @@ func (neb *nativeExecutionBackend) Execute(
 		return nil, fmt.Errorf("request is nil")
 	}
 
-	return neb.adapter.Execute(ctx, logger, request)
+	result, err := neb.adapter.Execute(ctx, logger, request)
+	if err != nil &&
+		InteractiveSigningOnlyEnabled() &&
+		errors.Is(err, ErrNativeCryptographyUnavailable) &&
+		!errors.Is(err, ErrTerminalSigningFailure) {
+		// Interactive-only mode (coarse-path retirement): the native interactive path
+		// could not produce a signature and every coarse/legacy fallback is suppressed,
+		// so an outer refusal surfaces as a bare ErrNativeCryptographyUnavailable.
+		// Promote it to TERMINAL so the tBTC signingRetryLoop aborts immediately rather
+		// than retrying a deterministic configuration failure until timeout.
+		return nil, fmt.Errorf(
+			"%w: interactive-only signing mode (%s) and the native interactive path is "+
+				"unavailable; refusing the coarse fallback: %v",
+			ErrTerminalSigningFailure, InteractiveSigningOnlyEnvVar, err,
+		)
+	}
+	return result, err
 }
 
 func (neb *nativeExecutionBackend) RegisterUnmarshallers(

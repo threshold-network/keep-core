@@ -164,6 +164,16 @@ func setNativeExecutionMode(mode nativeExecutionModeValue) {
 }
 
 func nativeExecutionFallbackAllowed() bool {
+	// Interactive-only mode (coarse-path retirement) suppresses EVERY legacy/coarse
+	// fallback, not only the inner FFI coarse primitive: if the native FFI path does
+	// not yield an interactive signature - including when it is unavailable before the
+	// adapter's own guard runs - the outer bridge/adapter must not delegate to the
+	// legacy backend either. This is the single gate those outer fallbacks consult, so
+	// failing it here closes them all.
+	if InteractiveSigningOnlyEnabled() {
+		return false
+	}
+
 	executionBackendMutex.RLock()
 	defer executionBackendMutex.RUnlock()
 
