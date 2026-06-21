@@ -1,0 +1,107 @@
+name: FROST cgo integration
+
+# Pre-merge validation gate for the interactive FROST cgo path (RFC-21 Phase 7.3).
+#
+# The rest of CI builds NONE of the `frost_native frost_tbtc_signer cgo` tags, so the
+# real-crypto interactive tests (which link libfrost_tbtc, built from the Rust signer
+# crate) are otherwise validated only locally and can silently rot. This job builds the
+# lib from a PINNED signer source (ci/frost-signer-pin.env) and runs the cgo-tagged tests
+# against it with skips FORBIDDEN (KEEP_CORE_FROST_REQUIRE_CGO=true), so a stale/missing/
+# unloadable lib fails the job instead of quietly dropping coverage.
+#
+# The Go interactive code and the signer crate currently live on separate branches, so
+# this checks the pinned mirror commit out into a side path and builds from there. After
+# the branches merge, replace the cross-branch checkout with an in-tree cargo build and
+# keep the gate.
+
+on:
+  pull_request:
+    paths:
+      - "pkg/frost/**"
+      - "pkg/tbtc/**"
+      - "pkg/net/**"
+      - "go.mod"
+      - "go.sum"
+      - "ci/frost-signer-pin.env"
+      - ".github/workflows/frost-cgo-integration.yml"
+  workflow_dispatch: {}
+
+jobs:
+  frost-cgo-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the Go branch
+        uses: actions/checkout@v4
+
+      - name: Read the pinned signer source ref
+        id: pin
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source ci/frost-signer-pin.env
+          if [ -z "${FROST_SIGNER_MIRROR_REF:-}" ]; then
+            echo "FROST_SIGNER_MIRROR_REF is not set in ci/frost-signer-pin.env"
+            exit 1
+          fi
+          echo "ref=${FROST_SIGNER_MIRROR_REF}" >> "$GITHUB_OUTPUT"
+          echo "Pinned tbtc-signer source: ${FROST_SIGNER_MIRROR_REF}"
+
+      - name: Check out the pinned signer source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pin.outputs.ref }}
+          path: _signer-mirror
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+
+      - name: Build libfrost_tbtc from the pinned source
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/_frost-target
+        run: |
+          set -euo pipefail
+          test -f _signer-mirror/pkg/tbtc/signer/Cargo.toml || {
+            echo "signer crate not found at the pinned ref (_signer-mirror/pkg/tbtc/signer)"; exit 1; }
+          cargo build --manifest-path _signer-mirror/pkg/tbtc/signer/Cargo.toml
+          lib="${CARGO_TARGET_DIR}/debug/libfrost_tbtc.so"
+          test -f "$lib" || { echo "libfrost_tbtc.so not found at $lib"; exit 1; }
+          echo "FROST_LIB_DIR=${CARGO_TARGET_DIR}/debug" >> "$GITHUB_ENV"
+
+      - name: Verify the engine ABI symbols are exported
+        run: |
+          set -euo pipefail
+          lib="${FROST_LIB_DIR}/libfrost_tbtc.so"
+          # A representative slice of the symbols the cgo bridge resolves via
+          # dlsym(RTLD_DEFAULT). A miss here means the pinned lib is stale vs. the bridge;
+          # fail with a clear message (the require-cgo run below would also catch it).
+          missing=0
+          for sym in \
+            frost_tbtc_run_dkg \
+            frost_tbtc_derive_interactive_attempt_context \
+            frost_tbtc_interactive_session_open \
+            frost_tbtc_interactive_session_abort \
+            frost_tbtc_new_signing_package \
+            frost_tbtc_interactive_aggregate \
+            frost_tbtc_verify_signature_share \
+            frost_tbtc_version; do
+            if ! nm -D --defined-only "$lib" | grep -q " ${sym}$"; then
+              echo "missing exported symbol: ${sym}"
+              missing=1
+            fi
+          done
+          test "$missing" -eq 0 || { echo "pinned libfrost_tbtc is missing required symbols"; exit 1; }
+
+      - name: Run the cgo-tagged real-crypto tests (skips forbidden)
+        env:
+          CGO_ENABLED: "1"
+          KEEP_CORE_FROST_REQUIRE_CGO: "true"
+        run: |
+          set -euo pipefail
+          # --no-as-needed keeps the DT_NEEDED on libfrost_tbtc even though the bridge
+          # references its symbols only via dlsym (no direct references), so the loader
+          # makes them resolvable at runtime; rpath lets the test binary find the .so.
+          export CGO_LDFLAGS="-L${FROST_LIB_DIR} -Wl,--no-as-needed -lfrost_tbtc -Wl,-rpath,${FROST_LIB_DIR}"
+          go test -tags "frost_native frost_tbtc_signer" -count=1 \
+            -run 'TestRealCgoInteractiveSigning' ./pkg/frost/signing/
