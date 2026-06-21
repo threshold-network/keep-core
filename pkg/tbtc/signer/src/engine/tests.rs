@@ -12185,6 +12185,92 @@ fn interactive_aggregate_cleanup_is_message_bound() {
 }
 
 #[test]
+fn interactive_capacity_counts_new_members_not_replacements() {
+    // The live-member cap counts member ENTRIES: a new member takes a slot, but a
+    // same-member replacement (re-open on a newer attempt) reuses its own slot.
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_group = "interactive-test-key-group";
+    let message = [0xc4u8; 32];
+    let included = [1u16, 2];
+    let session_id = "interactive-cap-multiseat";
+
+    std::env::set_var(TBTC_SIGNER_MAX_LIVE_INTERACTIVE_SESSIONS_ENV, "1");
+    let outcome = (|| -> Result<(), EngineError> {
+        // Member 1 takes the one live-member slot.
+        open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)?;
+
+        // Member 1 advancing to a NEWER attempt replaces its own entry - no new slot,
+        // so it succeeds even at capacity 1 (a replacement, not an idempotent reopen).
+        let advanced =
+            open_interactive_for_test(session_id, key_group, &message, &included, 2, 1, 2)?;
+        assert!(
+            !advanced.idempotent,
+            "a newer attempt is a replacement, not idempotent"
+        );
+
+        // A DIFFERENT member is a new entry, so it trips the cap and fails closed.
+        let at_capacity =
+            open_interactive_for_test(session_id, key_group, &message, &included, 2, 2, 2)
+                .expect_err("a new member must trip the live-member cap");
+        assert!(
+            matches!(at_capacity, EngineError::Internal(ref m)
+                if m.contains("live interactive member count")),
+            "unexpected error: {at_capacity:?}"
+        );
+        Ok(())
+    })();
+    std::env::remove_var(TBTC_SIGNER_MAX_LIVE_INTERACTIVE_SESSIONS_ENV);
+    outcome.expect("capacity new-vs-replacement lifecycle");
+}
+
+#[test]
+fn interactive_abort_by_attempt_removes_all_members_on_that_attempt() {
+    // Abort with an attempt_id filter is session-level over the member map: it removes
+    // EVERY local seat on that attempt, while a sibling seat on a different attempt
+    // survives.
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_group = "interactive-test-key-group";
+    let message = [0xa4u8; 32];
+    let included = [1u16, 2, 3];
+    let session_id = "interactive-abort-multiseat";
+
+    // Members 1 and 2 on attempt 1; member 3 on attempt 2 (a different attempt id).
+    let opened1 = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("member 1 opens attempt 1");
+    open_interactive_for_test(session_id, key_group, &message, &included, 1, 2, 2)
+        .expect("member 2 opens attempt 1");
+    open_interactive_for_test(session_id, key_group, &message, &included, 2, 3, 2)
+        .expect("member 3 opens attempt 2");
+
+    // Abort attempt 1: removes BOTH members on it; member 3 (attempt 2) is untouched.
+    let result = interactive_session_abort(InteractiveSessionAbortRequest {
+        session_id: session_id.to_string(),
+        attempt_id: Some(opened1.attempt_id.clone()),
+    })
+    .expect("abort attempt 1");
+    assert!(result.aborted, "abort removed live state");
+
+    let guard = state().expect("state").lock().expect("lock");
+    let session = guard.sessions.get(session_id).expect("session exists");
+    assert!(
+        !session.interactive_signing.contains_key(&1),
+        "member 1 (attempt 1) is aborted"
+    );
+    assert!(
+        !session.interactive_signing.contains_key(&2),
+        "member 2 (attempt 1) is aborted"
+    );
+    assert!(
+        session.interactive_signing.contains_key(&3),
+        "member 3 (attempt 2) survives the attempt-1 abort"
+    );
+}
+
+#[test]
 fn interactive_round1_is_idempotent_until_consumed() {
     let _guard = lock_test_state();
     reset_for_tests();
