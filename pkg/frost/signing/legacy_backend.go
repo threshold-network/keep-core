@@ -31,6 +31,18 @@ func (leb *legacyExecutionBackend) Execute(
 		return nil, fmt.Errorf("request is nil")
 	}
 
+	if InteractiveSigningOnlyEnabled() {
+		// Interactive-only mode (coarse-path retirement): the legacy backend is the
+		// tECDSA/coarse signer the flag retires. Refuse at the action itself so the
+		// safety switch holds even under the DEFAULT backend selection, where the
+		// native bridge/adapter guards never run. Terminal so the retry loop aborts.
+		return nil, fmt.Errorf(
+			"%w: interactive-only signing mode (%s) is set but the legacy (coarse "+
+				"tECDSA) backend is selected; the coarse path is retired",
+			ErrTerminalSigningFailure, InteractiveSigningOnlyEnvVar,
+		)
+	}
+
 	if request.Attempt != nil {
 		logger.Infof(
 			"[member:%v] executing FROST signing attempt [%v] "+

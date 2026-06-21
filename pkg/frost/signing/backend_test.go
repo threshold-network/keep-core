@@ -196,6 +196,62 @@ func TestNativeExecutionFallbackAllowed_SuppressedByInteractiveOnly(t *testing.T
 	}
 }
 
+func TestLegacyExecutionBackend_InteractiveOnlyRefusesTerminal(t *testing.T) {
+	// Coarse-path retirement (Codex #4101 P2): the DEFAULT backend is the legacy
+	// coarse/tECDSA signer, which the native bridge/adapter guards never touch. The
+	// flag must fail closed here too, terminally, so it cannot fail open under the
+	// documented default config.
+	t.Setenv(InteractiveSigningOnlyEnvVar, "true")
+
+	_, err := newLegacyExecutionBackend().Execute(
+		context.Background(), log.Logger("test"), &Request{Message: big.NewInt(1)},
+	)
+	if !errors.Is(err, ErrTerminalSigningFailure) {
+		t.Fatalf("interactive-only must terminally refuse the legacy backend: %v", err)
+	}
+}
+
+type unavailableNativeAdapter struct{}
+
+func (unavailableNativeAdapter) Execute(
+	context.Context, log.StandardLogger, *Request,
+) (*Result, error) {
+	return nil, ErrNativeCryptographyUnavailable
+}
+
+func (unavailableNativeAdapter) RegisterUnmarshallers(net.BroadcastChannel) {}
+
+func TestNativeExecutionBackend_InteractiveOnlyPromotesUnavailableToTerminal(t *testing.T) {
+	// Coarse-path retirement (Codex #4101 P2): when the native interactive path is
+	// unavailable and every fallback is suppressed, the outer refusal surfaces as a
+	// bare ErrNativeCryptographyUnavailable - promote it to terminal so the retry loop
+	// aborts instead of spinning.
+	backend, err := newNativeExecutionBackend(unavailableNativeAdapter{})
+	if err != nil {
+		t.Fatalf("unexpected backend setup error: %v", err)
+	}
+
+	t.Setenv(InteractiveSigningOnlyEnvVar, "true")
+	_, err = backend.Execute(
+		context.Background(), log.Logger("test"), &Request{Message: big.NewInt(1)},
+	)
+	if !errors.Is(err, ErrTerminalSigningFailure) {
+		t.Fatalf("interactive-only must promote the native unavailable error to terminal: %v", err)
+	}
+
+	// With the flag OFF the unavailable error passes through unpromoted (no regression).
+	t.Setenv(InteractiveSigningOnlyEnvVar, "")
+	_, offErr := backend.Execute(
+		context.Background(), log.Logger("test"), &Request{Message: big.NewInt(1)},
+	)
+	if errors.Is(offErr, ErrTerminalSigningFailure) {
+		t.Fatalf("must not promote to terminal when the flag is off: %v", offErr)
+	}
+	if !errors.Is(offErr, ErrNativeCryptographyUnavailable) {
+		t.Fatalf("flag off must pass the native unavailable error through: %v", offErr)
+	}
+}
+
 func TestSetExecutionBackendByName_NativeFailureRestoresPreviousMode(
 	t *testing.T,
 ) {
