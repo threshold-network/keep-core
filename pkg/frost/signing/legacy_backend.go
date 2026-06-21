@@ -36,6 +36,7 @@ func (leb *legacyExecutionBackend) Execute(
 		// tECDSA/coarse signer the flag retires. Refuse at the action itself so the
 		// safety switch holds even under the DEFAULT backend selection, where the
 		// native bridge/adapter guards never run. Terminal so the retry loop aborts.
+		recordCoarseFallbackRefused()
 		return nil, fmt.Errorf(
 			"%w: interactive-only signing mode (%s) is set but the legacy (coarse "+
 				"tECDSA) backend is selected; the coarse path is retired",

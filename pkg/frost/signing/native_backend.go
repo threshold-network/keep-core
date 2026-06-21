@@ -61,6 +61,7 @@ func (neb *nativeExecutionBackend) Execute(
 		// so an outer refusal surfaces as a bare ErrNativeCryptographyUnavailable.
 		// Promote it to TERMINAL so the tBTC signingRetryLoop aborts immediately rather
 		// than retrying a deterministic configuration failure until timeout.
+		recordCoarseFallbackRefused()
 		return nil, fmt.Errorf(
 			"%w: interactive-only signing mode (%s) and the native interactive path is "+
 				"unavailable; refusing the coarse fallback: %v",
