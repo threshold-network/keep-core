@@ -12,6 +12,7 @@ import (
 
 	"github.com/keep-network/keep-common/pkg/persistence"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
+	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/sortition"
@@ -145,6 +146,15 @@ func Initialize(
 				},
 			},
 		)
+
+		// RFC-21 Phase 7.3 interactive FROST signing observability. These sources
+		// are inert (report zero) until the gated interactive path actually runs;
+		// registering them only exposes the counters to the scrape and does not
+		// activate any signing behavior, so it is safe regardless of the cutover
+		// gates. Without this, the counters increment internally but never reach
+		// Prometheus.
+		frostsigning.RegisterRoastRetryMetrics(clientInfo)
+		frostsigning.RegisterInteractiveSigningMetrics(clientInfo)
 
 		if perfMetrics == nil {
 			perfMetrics = clientinfo.NewPerformanceMetrics(ctx, clientInfo)
