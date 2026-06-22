@@ -459,9 +459,29 @@ func (ics *inactivityClaimSubmitter) SubmitClaim(
 		len(signatures),
 	)
 
-	return ics.chain.SubmitInactivityClaim(
+	err = ics.chain.SubmitInactivityClaim(
 		chainClaim,
 		inactivityNonce,
 		ics.groupMembers,
 	)
+	if err == nil {
+		return nil
+	}
+
+	// The nonce can become stale between the initial check and actual
+	// submission if another member submits the same claim first. In that
+	// case, treat this as expected and return without error.
+	currentNonce, nonceErr := ics.chain.GetInactivityClaimNonce(
+		ecdsaWalletID,
+	)
+	if nonceErr == nil && currentNonce.Cmp(inactivityNonce) > 0 {
+		ics.inactivityLogger.Infof(
+			"[member:%v] inactivity claim already submitted by another "+
+				"member; aborting inactivity claim on-chain submission",
+			memberIndex,
+		)
+		return nil
+	}
+
+	return err
 }

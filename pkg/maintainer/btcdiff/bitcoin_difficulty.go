@@ -2,9 +2,12 @@ package btcdiff
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math/big"
 	"time"
 
+	"github.com/btcsuite/btcd/blockchain"
 	"github.com/ipfs/go-log/v2"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -38,6 +41,10 @@ var (
 		"genesis has not been performed in the Bitcoin difficulty chain",
 	)
 )
+
+// lightRelayMinDifficultyTarget matches LightRelay.MIN_DIFFICULTY_TARGET /
+// BTCUtils.DIFF1_TARGET (compact bits 0x1d00ffff).
+var lightRelayMinDifficultyTarget = blockchain.CompactToBig(0x1d00ffff)
 
 func Initialize(
 	ctx context.Context,
@@ -242,6 +249,25 @@ func (bdm *bitcoinDifficultyMaintainer) proveNextEpoch(ctx context.Context) (
 	// blockchain only if the blockchain height is equal to or greater than
 	// the end of the range.
 	if currentBlockHeight >= lastBlockHeaderHeight {
+		lastPreRetargetHeight := newEpochHeight - 1
+		if err := bdm.verifyUniformPreRetargetDifficulty(
+			currentEpoch,
+			firstBlockHeaderHeight,
+			lastPreRetargetHeight,
+		); err != nil {
+			if bdm.config.IdleOnPreflightFailure &&
+				errors.Is(err, ErrUniformPreRetargetDifficulty) {
+				logger.Warnf(
+					"idling bitcoin difficulty maintainer (%v); "+
+						"set bitcoinDifficulty.idleOnPreflightFailure=false to "+
+						"fail fast instead",
+					err,
+				)
+				return false, nil
+			}
+			return false, err
+		}
+
 		headers, err := bdm.getBlockHeaders(
 			firstBlockHeaderHeight,
 			lastBlockHeaderHeight,
@@ -309,6 +335,69 @@ func (bdm *bitcoinDifficultyMaintainer) proveNextEpoch(ctx context.Context) (
 	}
 
 	return false, nil
+}
+
+// verifyUniformPreRetargetDifficulty checks that each Bitcoin header on the
+// pre-retarget side of the relay proof is acceptable to LightRelay: each
+// header's difficulty target must equal the current epoch's target (from the
+// block at the epoch start) or the minimum-difficulty target (DIFF1), matching
+// LightRelay.retarget's pre-retarget loop. Mainnet typically only uses the
+// epoch target; Bitcoin testnet4 may insert minimum-difficulty blocks between
+// retargets while other blocks use the epoch difficulty.
+func (bdm *bitcoinDifficultyMaintainer) verifyUniformPreRetargetDifficulty(
+	currentEpoch uint64,
+	firstPreRetargetHeight uint,
+	lastPreRetargetHeight uint,
+) error {
+	anchorHeight := uint(currentEpoch) * bitcoinDifficultyEpochLength
+	anchor, err := bdm.btcChain.GetBlockHeader(anchorHeight)
+	if err != nil {
+		return fmt.Errorf(
+			"cannot load anchor header at epoch start height %d for "+
+				"pre-retarget difficulty check: %w",
+			anchorHeight,
+			err,
+		)
+	}
+
+	oldTarget := anchor.Target()
+
+	for h := firstPreRetargetHeight; h <= lastPreRetargetHeight; h++ {
+		hdr, err := bdm.btcChain.GetBlockHeader(h)
+		if err != nil {
+			return fmt.Errorf(
+				"cannot load header %d for pre-retarget difficulty check: %w",
+				h,
+				err,
+			)
+		}
+
+		headerTarget := hdr.Target()
+		if relayAllowsPreRetargetHeaderTarget(oldTarget, headerTarget) {
+			continue
+		}
+
+		return fmt.Errorf(
+			"%w: bitcoin header at height %d has target %v but epoch %d "+
+				"anchor (height %d) has target %v; LightRelay allows the anchor "+
+				"target or minimum-difficulty only",
+			ErrUniformPreRetargetDifficulty,
+			h,
+			headerTarget,
+			currentEpoch,
+			anchorHeight,
+			oldTarget,
+		)
+	}
+
+	return nil
+}
+
+func relayAllowsPreRetargetHeaderTarget(oldEpochTarget, headerTarget *big.Int) bool {
+	if oldEpochTarget.Cmp(headerTarget) == 0 {
+		return true
+	}
+	return lightRelayMinDifficultyTarget.Cmp(headerTarget) == 0
 }
 
 // getBlockHeaders returns block headers from the given range.

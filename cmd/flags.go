@@ -352,6 +352,14 @@ func initMaintainerFlags(command *cobra.Command, cfg *config.Config) {
 	)
 
 	command.Flags().BoolVar(
+		&cfg.Maintainer.BitcoinDifficulty.IdleOnPreflightFailure,
+		"bitcoinDifficulty.idleOnPreflightFailure",
+		false,
+		"If uniform pre-retarget nBits mismatch is detected, idle instead "+
+			"of erroring/restarting (e.g. testnet4 vs LightRelay).",
+	)
+
+	command.Flags().BoolVar(
 		&cfg.Maintainer.Spv.Enabled,
 		"spv",
 		false,

@@ -35,7 +35,7 @@ describe("WalletRegistry - Parameters", async () => {
       deployer,
       governance,
       thirdParty,
-    } = await walletRegistryFixture())
+    } = await walletRegistryFixture({ useAllowlist: true }))
   })
 
   describe("updateAuthorizationParameters", () => {

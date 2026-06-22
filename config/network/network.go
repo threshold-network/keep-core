@@ -40,7 +40,7 @@ func (n Type) Bitcoin() bitcoin.Network {
 	return []bitcoin.Network{
 		bitcoin.Unknown,
 		bitcoin.Mainnet,
-		bitcoin.Testnet,
+		bitcoin.Testnet4, // Sepolia uses Bitcoin testnet4
 		bitcoin.Regtest,
 	}[n]
 }

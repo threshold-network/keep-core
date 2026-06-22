@@ -134,6 +134,7 @@ func executeDKG(
 	var signersMutex sync.Mutex
 	var signers []*dkg.ThresholdSigner
 
+	var memberFailuresMutex sync.Mutex
 	var memberFailures []error
 
 	var wg sync.WaitGroup
@@ -177,7 +178,9 @@ func executeDKG(
 			}
 			if err != nil {
 				fmt.Printf("failed with: [%v]\n", err)
+				memberFailuresMutex.Lock()
 				memberFailures = append(memberFailures, err)
+				memberFailuresMutex.Unlock()
 			}
 			wg.Done()
 		}()

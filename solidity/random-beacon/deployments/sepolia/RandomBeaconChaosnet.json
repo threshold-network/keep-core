@@ -1,0 +1,253 @@
+{
+  "address": "0x993c7F14ff546fbD56Dc91c942C1629312C77E70",
+  "abi": [
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "previousOwner",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "newOwner",
+          "type": "address"
+        }
+      ],
+      "name": "OwnershipTransferred",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "requester",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "bool",
+          "name": "isAuthorized",
+          "type": "bool"
+        }
+      ],
+      "name": "RequesterAuthorizationUpdated",
+      "type": "event"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "authorizedRequesters",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "owner",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "renounceOwnership",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "contract IRandomBeaconConsumer",
+          "name": "callbackContract",
+          "type": "address"
+        }
+      ],
+      "name": "requestRelayEntry",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "requester",
+          "type": "address"
+        },
+        {
+          "internalType": "bool",
+          "name": "isAuthorized",
+          "type": "bool"
+        }
+      ],
+      "name": "setRequesterAuthorization",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "newOwner",
+          "type": "address"
+        }
+      ],
+      "name": "transferOwnership",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ],
+  "transactionHash": "0x576d49646cf4b91f1c3c5ed3ae0c315cb694020f136ef4b4600a0cec6f1e27aa",
+  "receipt": {
+    "to": null,
+    "from": "0xb9B8a92677fcad86dc8d36fe947184283B03b3C8",
+    "contractAddress": "0x993c7F14ff546fbD56Dc91c942C1629312C77E70",
+    "transactionIndex": 81,
+    "gasUsed": "335190",
+    "logsBloom": "0x00000000000000000000000000000000000000000000000000800000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000004004000000000001000000000000000000000000000000000000020000000000000000000800000000000000000000000000000000400000000000008000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000",
+    "blockHash": "0x1188e52f98830132200134a3337b1be2151ba1bf4cc74ea306369bf22631cabc",
+    "transactionHash": "0x576d49646cf4b91f1c3c5ed3ae0c315cb694020f136ef4b4600a0cec6f1e27aa",
+    "logs": [
+      {
+        "transactionIndex": 81,
+        "blockNumber": 10769902,
+        "transactionHash": "0x576d49646cf4b91f1c3c5ed3ae0c315cb694020f136ef4b4600a0cec6f1e27aa",
+        "address": "0x993c7F14ff546fbD56Dc91c942C1629312C77E70",
+        "topics": [
+          "0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0",
+          "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "0x000000000000000000000000b9b8a92677fcad86dc8d36fe947184283b03b3c8"
+        ],
+        "data": "0x",
+        "logIndex": 327,
+        "blockHash": "0x1188e52f98830132200134a3337b1be2151ba1bf4cc74ea306369bf22631cabc"
+      }
+    ],
+    "blockNumber": 10769902,
+    "cumulativeGasUsed": "13394883",
+    "status": 1,
+    "byzantium": true
+  },
+  "args": [],
+  "numDeployments": 1,
+  "solcInputHash": "1e5eb1acf61a0ac700a4d3fd49dd4f7b",
+  "metadata": "{\"compiler\":{\"version\":\"0.8.17+commit.8df45f5f\"},\"language\":\"Solidity\",\"output\":{\"abi\":[{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"address\",\"name\":\"previousOwner\",\"type\":\"address\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"newOwner\",\"type\":\"address\"}],\"name\":\"OwnershipTransferred\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"address\",\"name\":\"requester\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"bool\",\"name\":\"isAuthorized\",\"type\":\"bool\"}],\"name\":\"RequesterAuthorizationUpdated\",\"type\":\"event\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"name\":\"authorizedRequesters\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"owner\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"renounceOwnership\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"contract IRandomBeaconConsumer\",\"name\":\"callbackContract\",\"type\":\"address\"}],\"name\":\"requestRelayEntry\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"requester\",\"type\":\"address\"},{\"internalType\":\"bool\",\"name\":\"isAuthorized\",\"type\":\"bool\"}],\"name\":\"setRequesterAuthorization\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"newOwner\",\"type\":\"address\"}],\"name\":\"transferOwnership\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"}],\"devdoc\":{\"kind\":\"dev\",\"methods\":{\"owner()\":{\"details\":\"Returns the address of the current owner.\"},\"renounceOwnership()\":{\"details\":\"Leaves the contract without owner. It will not be possible to call `onlyOwner` functions anymore. Can only be called by the current owner. NOTE: Renouncing ownership will leave the contract without an owner, thereby removing any functionality that is only available to the owner.\"},\"requestRelayEntry(address)\":{\"details\":\"The caller must be an authorized requester.\",\"params\":{\"callbackContract\":\"Beacon consumer callback contract - Wallet Registry\"}},\"transferOwnership(address)\":{\"details\":\"Transfers ownership of the contract to a new account (`newOwner`). Can only be called by the current owner.\"}},\"title\":\"Keep Random Beacon Chaosnet\",\"version\":1},\"userdoc\":{\"kind\":\"user\",\"methods\":{\"authorizedRequesters(address)\":{\"notice\":\"Authorized addresses that can request a relay entry.\"},\"requestRelayEntry(address)\":{\"notice\":\"Executes the callback with an arbitrary relay entry number.\"},\"setRequesterAuthorization(address,bool)\":{\"notice\":\"Authorizes a requester of the relay entry.\"}},\"notice\":\"A stub contract that will be used temporarily until the real-world         random beacon client implementation is ready.\",\"version\":1}},\"settings\":{\"compilationTarget\":{\"contracts/RandomBeaconChaosnet.sol\":\"RandomBeaconChaosnet\"},\"evmVersion\":\"london\",\"libraries\":{},\"metadata\":{\"bytecodeHash\":\"ipfs\",\"useLiteralContent\":true},\"optimizer\":{\"enabled\":true,\"runs\":200},\"remappings\":[]},\"sources\":{\"@openzeppelin/contracts/access/Ownable.sol\":{\"content\":\"// SPDX-License-Identifier: MIT\\n// OpenZeppelin Contracts (last updated v4.7.0) (access/Ownable.sol)\\n\\npragma solidity ^0.8.0;\\n\\nimport \\\"../utils/Context.sol\\\";\\n\\n/**\\n * @dev Contract module which provides a basic access control mechanism, where\\n * there is an account (an owner) that can be granted exclusive access to\\n * specific functions.\\n *\\n * By default, the owner account will be the one that deploys the contract. This\\n * can later be changed with {transferOwnership}.\\n *\\n * This module is used through inheritance. It will make available the modifier\\n * `onlyOwner`, which can be applied to your functions to restrict their use to\\n * the owner.\\n */\\nabstract contract Ownable is Context {\\n    address private _owner;\\n\\n    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);\\n\\n    /**\\n     * @dev Initializes the contract setting the deployer as the initial owner.\\n     */\\n    constructor() {\\n        _transferOwnership(_msgSender());\\n    }\\n\\n    /**\\n     * @dev Throws if called by any account other than the owner.\\n     */\\n    modifier onlyOwner() {\\n        _checkOwner();\\n        _;\\n    }\\n\\n    /**\\n     * @dev Returns the address of the current owner.\\n     */\\n    function owner() public view virtual returns (address) {\\n        return _owner;\\n    }\\n\\n    /**\\n     * @dev Throws if the sender is not the owner.\\n     */\\n    function _checkOwner() internal view virtual {\\n        require(owner() == _msgSender(), \\\"Ownable: caller is not the owner\\\");\\n    }\\n\\n    /**\\n     * @dev Leaves the contract without owner. It will not be possible to call\\n     * `onlyOwner` functions anymore. Can only be called by the current owner.\\n     *\\n     * NOTE: Renouncing ownership will leave the contract without an owner,\\n     * thereby removing any functionality that is only available to the owner.\\n     */\\n    function renounceOwnership() public virtual onlyOwner {\\n        _transferOwnership(address(0));\\n    }\\n\\n    /**\\n     * @dev Transfers ownership of the contract to a new account (`newOwner`).\\n     * Can only be called by the current owner.\\n     */\\n    function transferOwnership(address newOwner) public virtual onlyOwner {\\n        require(newOwner != address(0), \\\"Ownable: new owner is the zero address\\\");\\n        _transferOwnership(newOwner);\\n    }\\n\\n    /**\\n     * @dev Transfers ownership of the contract to a new account (`newOwner`).\\n     * Internal function without access restriction.\\n     */\\n    function _transferOwnership(address newOwner) internal virtual {\\n        address oldOwner = _owner;\\n        _owner = newOwner;\\n        emit OwnershipTransferred(oldOwner, newOwner);\\n    }\\n}\\n\",\"keccak256\":\"0xa94b34880e3c1b0b931662cb1c09e5dfa6662f31cba80e07c5ee71cd135c9673\",\"license\":\"MIT\"},\"@openzeppelin/contracts/utils/Context.sol\":{\"content\":\"// SPDX-License-Identifier: MIT\\n// OpenZeppelin Contracts v4.4.1 (utils/Context.sol)\\n\\npragma solidity ^0.8.0;\\n\\n/**\\n * @dev Provides information about the current execution context, including the\\n * sender of the transaction and its data. While these are generally available\\n * via msg.sender and msg.data, they should not be accessed in such a direct\\n * manner, since when dealing with meta-transactions the account sending and\\n * paying for execution may not be the actual sender (as far as an application\\n * is concerned).\\n *\\n * This contract is only required for intermediate, library-like contracts.\\n */\\nabstract contract Context {\\n    function _msgSender() internal view virtual returns (address) {\\n        return msg.sender;\\n    }\\n\\n    function _msgData() internal view virtual returns (bytes calldata) {\\n        return msg.data;\\n    }\\n}\\n\",\"keccak256\":\"0xe2e337e6dde9ef6b680e07338c493ebea1b5fd09b43424112868e9cc1706bca7\",\"license\":\"MIT\"},\"contracts/RandomBeaconChaosnet.sol\":{\"content\":\"// SPDX-License-Identifier: GPL-3.0-only\\n//\\n// \\u2593\\u2593\\u258c \\u2593\\u2593 \\u2590\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u258c\\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2584\\n// \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u258c\\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\n//   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593    \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580    \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593    \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593     \\u2593\\u2593\\u2593\\u2593\\u2593   \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u258c   \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\n//   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2584\\u2584\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580      \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2584\\u2584\\u2584\\u2584         \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2584\\u2584\\u2584\\u2584         \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u258c   \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\n//   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580        \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593         \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593         \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\n//   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580\\u2580\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2584       \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580\\u2580\\u2580\\u2580         \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580\\u2580\\u2580\\u2580         \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580\\n//   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593   \\u2580\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2584     \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593     \\u2593\\u2593\\u2593\\u2593\\u2593   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593     \\u2593\\u2593\\u2593\\u2593\\u2593   \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u258c\\n// \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2588\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593  \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\n// \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593  \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\n//\\n//                           Trust math, not hardware.\\n\\npragma solidity 0.8.17;\\n\\nimport \\\"./api/IRandomBeacon.sol\\\";\\nimport \\\"@openzeppelin/contracts/access/Ownable.sol\\\";\\n\\n/// @title Keep Random Beacon Chaosnet\\n/// @notice A stub contract that will be used temporarily until the real-world\\n///         random beacon client implementation is ready.\\ncontract RandomBeaconChaosnet is IRandomBeacon, Ownable {\\n    /// @notice Authorized addresses that can request a relay entry.\\n    mapping(address => bool) public authorizedRequesters;\\n\\n    /// @notice Arbitrary relay entry. Initially set to the Euler's number.\\n    ///         It's updated after each relay entry request.\\n    uint256 internal entry = 271828182845904523536028747135266249;\\n\\n    event RequesterAuthorizationUpdated(\\n        address indexed requester,\\n        bool isAuthorized\\n    );\\n\\n    /// @notice Executes the callback with an arbitrary relay entry number.\\n    /// @param callbackContract Beacon consumer callback contract - Wallet Registry\\n    /// @dev The caller must be an authorized requester.\\n    function requestRelayEntry(IRandomBeaconConsumer callbackContract)\\n        external\\n    {\\n        require(\\n            authorizedRequesters[msg.sender],\\n            \\\"Requester must be authorized\\\"\\n        );\\n\\n        // Update the entry so that a different group of wallet operators is\\n        // selected in `WalletRegistry` on each request.\\n        entry = uint256(keccak256(abi.encodePacked(entry)));\\n        callbackContract.__beaconCallback(entry, block.number);\\n    }\\n\\n    /// @notice Authorizes a requester of the relay entry.\\n    function setRequesterAuthorization(address requester, bool isAuthorized)\\n        external\\n        onlyOwner\\n    {\\n        authorizedRequesters[requester] = isAuthorized;\\n\\n        emit RequesterAuthorizationUpdated(requester, isAuthorized);\\n    }\\n}\\n\",\"keccak256\":\"0x9f633134dc47371f464d3bf8c2649ad60a362657382250df889ecb5820c122fb\",\"license\":\"GPL-3.0-only\"},\"contracts/api/IRandomBeacon.sol\":{\"content\":\"// SPDX-License-Identifier: GPL-3.0-only\\n//\\n// \\u2593\\u2593\\u258c \\u2593\\u2593 \\u2590\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u258c\\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2584\\n// \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u258c\\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\n//   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593    \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580    \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593    \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593     \\u2593\\u2593\\u2593\\u2593\\u2593   \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u258c   \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\n//   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2584\\u2584\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580      \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2584\\u2584\\u2584\\u2584         \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2584\\u2584\\u2584\\u2584         \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u258c   \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\n//   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580        \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593         \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593         \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\n//   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580\\u2580\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2584       \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580\\u2580\\u2580\\u2580         \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580\\u2580\\u2580\\u2580         \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580\\n//   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593   \\u2580\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2584     \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593     \\u2593\\u2593\\u2593\\u2593\\u2593   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593     \\u2593\\u2593\\u2593\\u2593\\u2593   \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u258c\\n// \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2588\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593  \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\n// \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593  \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\n//\\n//                           Trust math, not hardware.\\n\\npragma solidity 0.8.17;\\n\\nimport \\\"./IRandomBeaconConsumer.sol\\\";\\n\\n/// @title Random Beacon interface\\ninterface IRandomBeacon {\\n    /// @notice Creates a request to generate a new relay entry. Requires a\\n    ///         request fee denominated in T token.\\n    /// @param callbackContract Beacon consumer callback contract.\\n    function requestRelayEntry(IRandomBeaconConsumer callbackContract) external;\\n}\\n\",\"keccak256\":\"0xc5f6ddbf69b2f2e2c03fe78b3857a1f038982e858679f520101f53c4ebe2f4bf\",\"license\":\"GPL-3.0-only\"},\"contracts/api/IRandomBeaconConsumer.sol\":{\"content\":\"// SPDX-License-Identifier: GPL-3.0-only\\n//\\n// \\u2593\\u2593\\u258c \\u2593\\u2593 \\u2590\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u258c\\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2584\\n// \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u258c\\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\n//   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593    \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580    \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593    \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593     \\u2593\\u2593\\u2593\\u2593\\u2593   \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u258c   \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\n//   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2584\\u2584\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580      \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2584\\u2584\\u2584\\u2584         \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2584\\u2584\\u2584\\u2584         \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u258c   \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\n//   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580        \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593         \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593         \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\n//   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580\\u2580\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2584       \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580\\u2580\\u2580\\u2580         \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580\\u2580\\u2580\\u2580         \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2580\\n//   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593   \\u2580\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2584     \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593     \\u2593\\u2593\\u2593\\u2593\\u2593   \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593     \\u2593\\u2593\\u2593\\u2593\\u2593   \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u258c\\n// \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2588\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593  \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\n// \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2590\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593 \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593  \\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\u2593\\n//\\n//                           Trust math, not hardware.\\n\\npragma solidity 0.8.17;\\n\\ninterface IRandomBeaconConsumer {\\n    /// @notice Receives relay entry produced by Keep Random Beacon. This function\\n    /// should be called only by Keep Random Beacon.\\n    ///\\n    /// @param relayEntry Relay entry (random number) produced by Keep Random\\n    ///                   Beacon.\\n    /// @param blockNumber Block number at which the relay entry was submitted\\n    ///                    to the chain.\\n    function __beaconCallback(uint256 relayEntry, uint256 blockNumber) external;\\n}\\n\",\"keccak256\":\"0x84ce236b4eeb664ccb02782777a05c6ebb410be9b9e586a123a1205437a2ed9f\",\"license\":\"GPL-3.0-only\"}},\"version\":1}",
+  "bytecode": "0x60806040526e345a2a05aba6d6b069b7f5b1b12dc960025534801561002357600080fd5b5061002d33610032565b610082565b600080546001600160a01b038381166001600160a01b0319831681178455604051919092169283917f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e09190a35050565b61043d806100916000396000f3fe608060405234801561001057600080fd5b50600436106100625760003560e01c80633ea478aa146100675780634368ec0c1461009f578063715018a6146100b45780638da5cb5b146100bc578063985e6487146100d7578063f2fde38b146100ea575b600080fd5b61008a6100753660046103a5565b60016020526000908152604090205460ff1681565b60405190151581526020015b60405180910390f35b6100b26100ad3660046103a5565b6100fd565b005b6100b26101f2565b6000546040516001600160a01b039091168152602001610096565b6100b26100e53660046103c9565b610206565b6100b26100f83660046103a5565b61026d565b3360009081526001602052604090205460ff166101615760405162461bcd60e51b815260206004820152601c60248201527f526571756573746572206d75737420626520617574686f72697a65640000000060448201526064015b60405180910390fd5b60025460405160200161017691815260200190565b60408051808303601f190181529082905280516020909101206002819055631bfaf51960e21b825260048201524360248201526001600160a01b03821690636febd46490604401600060405180830381600087803b1580156101d757600080fd5b505af11580156101eb573d6000803e3d6000fd5b5050505050565b6101fa6102e6565b6102046000610340565b565b61020e6102e6565b6001600160a01b038216600081815260016020908152604091829020805460ff191685151590811790915591519182527fb4d9db68405970190721d2b3726fc9f728c1413038755e60518dea67d5545556910160405180910390a25050565b6102756102e6565b6001600160a01b0381166102da5760405162461bcd60e51b815260206004820152602660248201527f4f776e61626c653a206e6577206f776e657220697320746865207a65726f206160448201526564647265737360d01b6064820152608401610158565b6102e381610340565b50565b6000546001600160a01b031633146102045760405162461bcd60e51b815260206004820181905260248201527f4f776e61626c653a2063616c6c6572206973206e6f7420746865206f776e65726044820152606401610158565b600080546001600160a01b038381166001600160a01b0319831681178455604051919092169283917f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e09190a35050565b6001600160a01b03811681146102e357600080fd5b6000602082840312156103b757600080fd5b81356103c281610390565b9392505050565b600080604083850312156103dc57600080fd5b82356103e781610390565b9150602083013580151581146103fc57600080fd5b80915050925092905056fea2646970667358221220856a0ad265f63854383336ddb70989db38bfa9bf236963c74a4e7212b45ca4c564736f6c63430008110033",
+  "deployedBytecode": "0x608060405234801561001057600080fd5b50600436106100625760003560e01c80633ea478aa146100675780634368ec0c1461009f578063715018a6146100b45780638da5cb5b146100bc578063985e6487146100d7578063f2fde38b146100ea575b600080fd5b61008a6100753660046103a5565b60016020526000908152604090205460ff1681565b60405190151581526020015b60405180910390f35b6100b26100ad3660046103a5565b6100fd565b005b6100b26101f2565b6000546040516001600160a01b039091168152602001610096565b6100b26100e53660046103c9565b610206565b6100b26100f83660046103a5565b61026d565b3360009081526001602052604090205460ff166101615760405162461bcd60e51b815260206004820152601c60248201527f526571756573746572206d75737420626520617574686f72697a65640000000060448201526064015b60405180910390fd5b60025460405160200161017691815260200190565b60408051808303601f190181529082905280516020909101206002819055631bfaf51960e21b825260048201524360248201526001600160a01b03821690636febd46490604401600060405180830381600087803b1580156101d757600080fd5b505af11580156101eb573d6000803e3d6000fd5b5050505050565b6101fa6102e6565b6102046000610340565b565b61020e6102e6565b6001600160a01b038216600081815260016020908152604091829020805460ff191685151590811790915591519182527fb4d9db68405970190721d2b3726fc9f728c1413038755e60518dea67d5545556910160405180910390a25050565b6102756102e6565b6001600160a01b0381166102da5760405162461bcd60e51b815260206004820152602660248201527f4f776e61626c653a206e6577206f776e657220697320746865207a65726f206160448201526564647265737360d01b6064820152608401610158565b6102e381610340565b50565b6000546001600160a01b031633146102045760405162461bcd60e51b815260206004820181905260248201527f4f776e61626c653a2063616c6c6572206973206e6f7420746865206f776e65726044820152606401610158565b600080546001600160a01b038381166001600160a01b0319831681178455604051919092169283917f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e09190a35050565b6001600160a01b03811681146102e357600080fd5b6000602082840312156103b757600080fd5b81356103c281610390565b9392505050565b600080604083850312156103dc57600080fd5b82356103e781610390565b9150602083013580151581146103fc57600080fd5b80915050925092905056fea2646970667358221220856a0ad265f63854383336ddb70989db38bfa9bf236963c74a4e7212b45ca4c564736f6c63430008110033",
+  "devdoc": {
+    "kind": "dev",
+    "methods": {
+      "owner()": {
+        "details": "Returns the address of the current owner."
+      },
+      "renounceOwnership()": {
+        "details": "Leaves the contract without owner. It will not be possible to call `onlyOwner` functions anymore. Can only be called by the current owner. NOTE: Renouncing ownership will leave the contract without an owner, thereby removing any functionality that is only available to the owner."
+      },
+      "requestRelayEntry(address)": {
+        "details": "The caller must be an authorized requester.",
+        "params": {
+          "callbackContract": "Beacon consumer callback contract - Wallet Registry"
+        }
+      },
+      "transferOwnership(address)": {
+        "details": "Transfers ownership of the contract to a new account (`newOwner`). Can only be called by the current owner."
+      }
+    },
+    "title": "Keep Random Beacon Chaosnet",
+    "version": 1
+  },
+  "userdoc": {
+    "kind": "user",
+    "methods": {
+      "authorizedRequesters(address)": {
+        "notice": "Authorized addresses that can request a relay entry."
+      },
+      "requestRelayEntry(address)": {
+        "notice": "Executes the callback with an arbitrary relay entry number."
+      },
+      "setRequesterAuthorization(address,bool)": {
+        "notice": "Authorizes a requester of the relay entry."
+      }
+    },
+    "notice": "A stub contract that will be used temporarily until the real-world         random beacon client implementation is ready.",
+    "version": 1
+  },
+  "storageLayout": {
+    "storage": [
+      {
+        "astId": 3888,
+        "contract": "contracts/RandomBeaconChaosnet.sol:RandomBeaconChaosnet",
+        "label": "_owner",
+        "offset": 0,
+        "slot": "0",
+        "type": "t_address"
+      },
+      {
+        "astId": 12013,
+        "contract": "contracts/RandomBeaconChaosnet.sol:RandomBeaconChaosnet",
+        "label": "authorizedRequesters",
+        "offset": 0,
+        "slot": "1",
+        "type": "t_mapping(t_address,t_bool)"
+      },
+      {
+        "astId": 12017,
+        "contract": "contracts/RandomBeaconChaosnet.sol:RandomBeaconChaosnet",
+        "label": "entry",
+        "offset": 0,
+        "slot": "2",
+        "type": "t_uint256"
+      }
+    ],
+    "types": {
+      "t_address": {
+        "encoding": "inplace",
+        "label": "address",
+        "numberOfBytes": "20"
+      },
+      "t_bool": {
+        "encoding": "inplace",
+        "label": "bool",
+        "numberOfBytes": "1"
+      },
+      "t_mapping(t_address,t_bool)": {
+        "encoding": "mapping",
+        "key": "t_address",
+        "label": "mapping(address => bool)",
+        "numberOfBytes": "32",
+        "value": "t_bool"
+      },
+      "t_uint256": {
+        "encoding": "inplace",
+        "label": "uint256",
+        "numberOfBytes": "32"
+      }
+    }
+  }
+}

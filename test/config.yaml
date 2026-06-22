@@ -34,6 +34,7 @@ Maintainer:
   BitcoinDifficulty:
     Enabled: true
     DisableProxy: true
+    IdleOnPreflightFailure: true
   Spv:
     Enabled: true
     HistoryDepth: 25000

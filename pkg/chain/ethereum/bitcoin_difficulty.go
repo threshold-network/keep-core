@@ -1,10 +1,14 @@
 package ethereum
 
 import (
+	"context"
 	"fmt"
 	"math/big"
+	"time"
 
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
@@ -19,6 +23,12 @@ const (
 	LightRelayContractName                = "LightRelay"
 	LightRelayMaintainerProxyContractName = "LightRelayMaintainerProxy"
 )
+
+// waitDeployBackendTransactionMinedTimeout bounds the synchronous post-submit
+// wait for retarget transactions. The wait covers both receipt polling and the
+// follow-up confirmation-depth wait. Without a bound, a stalled RPC or a chain
+// that stops producing blocks would hang the maintainer indefinitely.
+const waitDeployBackendTransactionMinedTimeout = 10 * time.Minute
 
 // BitcoinDifficultyChain represents a Bitcoin difficulty-specific chain handle.
 type BitcoinDifficultyChain struct {
@@ -124,6 +134,90 @@ func NewBitcoinDifficultyChain(
 	}, nil
 }
 
+// waitDeployBackendTransactionMined blocks until tx is mined. Generated contract
+// bindings submit via asynchronous mining waiter; without this wait, callers can
+// read stale LightRelay.currentEpoch via eth_call and fail the next
+// RetargetGasEstimate with "Invalid target in pre-retarget headers".
+func (bdc *BitcoinDifficultyChain) waitDeployBackendTransactionMined(
+	tx *types.Transaction,
+	method string,
+) error {
+	if tx == nil {
+		return fmt.Errorf("nil transaction waiting for [%s]", method)
+	}
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		waitDeployBackendTransactionMinedTimeout,
+	)
+	defer cancel()
+
+	receipt, err := bind.WaitMined(ctx, bdc.client, tx)
+	if err != nil {
+		return fmt.Errorf("waiting for transaction [%s] [%s]: [%w]", method, tx.Hash().Hex(), err)
+	}
+	if receipt.Status != types.ReceiptStatusSuccessful {
+		return fmt.Errorf(
+			"transaction [%s] [%s] failed with status [%d]",
+			method,
+			tx.Hash().Hex(),
+			receipt.Status,
+		)
+	}
+	// Some RPC load balancers can lag reads after receipt; wait a few L1
+	// confirmations before the next RetargetGasEstimate/eth_call.
+	if receipt.BlockNumber != nil && bdc.blockCounter != nil {
+		includedAt := receipt.BlockNumber.Uint64()
+		const confirmDepth = uint64(3)
+		if err := waitForBlockHeightCtx(
+			ctx, bdc.blockCounter, includedAt+confirmDepth,
+		); err != nil {
+			return fmt.Errorf(
+				"waiting confirmation depth after [%s] [%s]: [%w]",
+				method,
+				tx.Hash().Hex(),
+				err,
+			)
+		}
+	}
+	return nil
+}
+
+// waitForBlockHeightCtxPollInterval is how often waitForBlockHeightCtx polls the
+// chain height. Block times on the supported networks are far larger, so this is
+// responsive without busy-looping.
+const waitForBlockHeightCtxPollInterval = 1 * time.Second
+
+// waitForBlockHeightCtx waits until the chain reaches blockNumber or ctx is
+// cancelled, whichever happens first. It polls the context-less
+// chain.BlockCounter via the non-blocking CurrentBlock rather than spawning a
+// goroutine parked in WaitForBlockHeight: callers retry this under a deadline,
+// so a goroutine that cannot be cancelled would accumulate on a stalled chain.
+// Polling leaves nothing behind once the function returns.
+func waitForBlockHeightCtx(
+	ctx context.Context,
+	bc chain.BlockCounter,
+	blockNumber uint64,
+) error {
+	ticker := time.NewTicker(waitForBlockHeightCtxPollInterval)
+	defer ticker.Stop()
+
+	for {
+		current, err := bc.CurrentBlock()
+		if err != nil {
+			return fmt.Errorf("failed to read current block height: [%w]", err)
+		}
+		if current >= blockNumber {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
 // Ready checks whether the relay is active (i.e. genesis has been performed).
 // Note that if the relay is used by querying the current and previous epoch
 // difficulty, at least one retarget needs to be provided after genesis;
@@ -174,8 +268,11 @@ func (bdc *BitcoinDifficultyChain) Retarget(headers []*bitcoin.BlockHeader) erro
 	}
 
 	// Update Bitcoin difficulty directly via LightRelay.
-	_, err := bdc.lightRelay.Retarget(serializedHeaders)
-	return err
+	tx, err := bdc.lightRelay.Retarget(serializedHeaders)
+	if err != nil {
+		return err
+	}
+	return bdc.waitDeployBackendTransactionMined(tx, "LightRelay.Retarget")
 }
 
 // RetargetWithRefund adds a new epoch to the relay by providing a proof of the
@@ -203,13 +300,19 @@ func (bdc *BitcoinDifficultyChain) RetargetWithRefund(headers []*bitcoin.BlockHe
 	gasEstimateWithMargin := float64(gasEstimate) * float64(1.2)
 
 	// Update Bitcoin difficulty via LightRelayMaintainerProxy.
-	_, err = bdc.lightRelayMaintainerProxy.Retarget(
+	tx, err := bdc.lightRelayMaintainerProxy.Retarget(
 		serializedHeaders,
 		ethutil.TransactionOptions{
 			GasLimit: uint64(gasEstimateWithMargin),
 		},
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return bdc.waitDeployBackendTransactionMined(
+		tx,
+		"LightRelayMaintainerProxy.Retarget",
+	)
 }
 
 // CurrentEpoch returns the number of the latest difficulty epoch which is

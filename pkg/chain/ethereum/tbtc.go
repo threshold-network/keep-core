@@ -1,9 +1,11 @@
 package ethereum
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/big"
 	"reflect"
@@ -48,6 +50,11 @@ const (
 	BridgeContractName                  = "Bridge"
 	MaintainerProxyContractName         = "MaintainerProxy"
 	WalletProposalValidatorContractName = "WalletProposalValidator"
+	// EcdsaDkgValidatorContractName is optional: when set under
+	// ethereum contract addresses or developer.ecdsaDkgValidatorAddress
+	// alias in config, TBTC ECDSA sizing is read via eth_call instead of only
+	// network defaults from defaultGroupParameters.
+	EcdsaDkgValidatorContractName = "EcdsaDkgValidator"
 )
 
 const (
@@ -90,6 +97,8 @@ type TbtcChain struct {
 	frostSortitionPool      *ecdsacontract.EcdsaSortitionPool
 	walletProposalValidator *tbtccontract.WalletProposalValidator
 	redemptionWatchtower    *tbtccontract.RedemptionWatchtower
+	// ecdsaDkgValidatorAddress optional; when zero, TBTC uses defaultGroupParameters(network).
+	ecdsaDkgValidatorAddress common.Address
 
 	sweptDepositsCache *cache.GenericTimeCache[*tbtc.DepositChainRequest]
 }
@@ -284,20 +293,40 @@ func newTbtcChain(
 		}
 	}
 
+	var ecdsaDkgValidatorAddress common.Address
+	validatorAddr, err := config.ContractAddress(EcdsaDkgValidatorContractName)
+	switch {
+	case err == nil:
+		ecdsaDkgValidatorAddress = validatorAddr
+	case errors.Is(err, ethereum.ErrAddressNotConfigured):
+		logger.Warnf(
+			"%s contract address is not configured; TBTC group parameters "+
+				"will fall back to network defaults instead of on-chain values",
+			EcdsaDkgValidatorContractName,
+		)
+	default:
+		return nil, fmt.Errorf(
+			"failed to resolve %s contract address: [%w]",
+			EcdsaDkgValidatorContractName,
+			err,
+		)
+	}
+
 	return &TbtcChain{
-		baseChain:               baseChain,
-		bridge:                  bridge,
-		bridgeAddress:           bridgeAddress,
-		maintainerProxy:         maintainerProxy,
-		walletRegistry:          walletRegistry,
-		sortitionPool:           sortitionPool,
-		frostWalletRegistry:     frostWalletRegistry,
-		frostWalletRegistryAddr: frostWalletRegistryAddr,
-		frostDkgValidator:       frostDkgValidator,
-		frostSortitionPool:      frostSortitionPool,
-		walletProposalValidator: walletProposalValidator,
-		redemptionWatchtower:    redemptionWatchtower,
-		sweptDepositsCache:      cache.NewGenericTimeCache[*tbtc.DepositChainRequest](sweptDepositsCachePeriod),
+		baseChain:                baseChain,
+		bridge:                   bridge,
+		bridgeAddress:            bridgeAddress,
+		maintainerProxy:          maintainerProxy,
+		walletRegistry:           walletRegistry,
+		sortitionPool:            sortitionPool,
+		frostWalletRegistry:      frostWalletRegistry,
+		frostWalletRegistryAddr:  frostWalletRegistryAddr,
+		frostDkgValidator:        frostDkgValidator,
+		frostSortitionPool:       frostSortitionPool,
+		walletProposalValidator:  walletProposalValidator,
+		redemptionWatchtower:     redemptionWatchtower,
+		ecdsaDkgValidatorAddress: ecdsaDkgValidatorAddress,
+		sweptDepositsCache:       cache.NewGenericTimeCache[*tbtc.DepositChainRequest](sweptDepositsCachePeriod),
 	}, nil
 }
 
@@ -412,6 +441,23 @@ func connectFrostDkgValidator(
 	}
 
 	return frostDkgValidator, nil
+}
+
+// EcdsaWalletGroupParametersFromChain mirrors EcdsaDkgValidator sizing constants
+// when EcdsaDkgValidator contract address was configured under [ethereum]
+// contract addresses or developer.ecdsaDkgValidatorAddress alias. When absent,
+// returns (nil, nil) and callers use defaultGroupParameters(network).
+func (tc *TbtcChain) EcdsaWalletGroupParametersFromChain(
+	ctx context.Context,
+) (*tbtc.GroupParameters, error) {
+	if tc.ecdsaDkgValidatorAddress == (common.Address{}) {
+		return nil, nil
+	}
+	return ecdsaWalletGroupParametersFromValidator(
+		ctx,
+		tc.baseChain.client,
+		tc.ecdsaDkgValidatorAddress,
+	)
 }
 
 // Staking returns address of the TokenStaking contract the WalletRegistry is

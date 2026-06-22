@@ -55,7 +55,7 @@ describe("EcdsaDkgValidator", () => {
   before("load test fixture", async () => {
     // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({ walletRegistry, sortitionPool, walletOwner } =
-      await walletRegistryFixture())
+      await walletRegistryFixture({ useAllowlist: true }))
 
     validator = await helpers.contracts.getContract("EcdsaDkgValidator")
 

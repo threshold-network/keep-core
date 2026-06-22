@@ -1,0 +1,1360 @@
+{
+  "address": "0xd9502824f4e16E5d3F4A84246a96B14a2D0Ee248",
+  "abi": [
+    {
+      "type": "constructor",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "_token"
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "ApplicationStatusChanged",
+      "inputs": [
+        {
+          "type": "address",
+          "name": "application",
+          "indexed": true
+        },
+        {
+          "type": "uint8",
+          "name": "newStatus",
+          "indexed": true
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "AuthorizationCeilingSet",
+      "inputs": [
+        {
+          "type": "uint256",
+          "name": "ceiling",
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "AuthorizationDecreaseApproved",
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider",
+          "indexed": true
+        },
+        {
+          "type": "address",
+          "name": "application",
+          "indexed": true
+        },
+        {
+          "type": "uint96",
+          "name": "fromAmount",
+          "indexed": false
+        },
+        {
+          "type": "uint96",
+          "name": "toAmount",
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "AuthorizationDecreaseRequested",
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider",
+          "indexed": true
+        },
+        {
+          "type": "address",
+          "name": "application",
+          "indexed": true
+        },
+        {
+          "type": "uint96",
+          "name": "fromAmount",
+          "indexed": false
+        },
+        {
+          "type": "uint96",
+          "name": "toAmount",
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "AuthorizationIncreased",
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider",
+          "indexed": true
+        },
+        {
+          "type": "address",
+          "name": "application",
+          "indexed": true
+        },
+        {
+          "type": "uint96",
+          "name": "fromAmount",
+          "indexed": false
+        },
+        {
+          "type": "uint96",
+          "name": "toAmount",
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "AuthorizationInvoluntaryDecreased",
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider",
+          "indexed": true
+        },
+        {
+          "type": "address",
+          "name": "application",
+          "indexed": true
+        },
+        {
+          "type": "uint96",
+          "name": "fromAmount",
+          "indexed": false
+        },
+        {
+          "type": "uint96",
+          "name": "toAmount",
+          "indexed": false
+        },
+        {
+          "type": "bool",
+          "name": "successfulCall",
+          "indexed": true
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "AutoIncreaseToggled",
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider",
+          "indexed": true
+        },
+        {
+          "type": "bool",
+          "name": "autoIncrease",
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "DelegateChanged",
+      "inputs": [
+        {
+          "type": "address",
+          "name": "delegator",
+          "indexed": true
+        },
+        {
+          "type": "address",
+          "name": "fromDelegate",
+          "indexed": true
+        },
+        {
+          "type": "address",
+          "name": "toDelegate",
+          "indexed": true
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "DelegateVotesChanged",
+      "inputs": [
+        {
+          "type": "address",
+          "name": "delegate",
+          "indexed": true
+        },
+        {
+          "type": "uint256",
+          "name": "previousBalance",
+          "indexed": false
+        },
+        {
+          "type": "uint256",
+          "name": "newBalance",
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "GovernanceTransferred",
+      "inputs": [
+        {
+          "type": "address",
+          "name": "oldGovernance",
+          "indexed": false
+        },
+        {
+          "type": "address",
+          "name": "newGovernance",
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "MinimumStakeAmountSet",
+      "inputs": [
+        {
+          "type": "uint96",
+          "name": "amount",
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "NotificationReceived",
+      "inputs": [
+        {
+          "type": "uint96",
+          "name": "amount",
+          "indexed": false
+        },
+        {
+          "type": "uint256",
+          "name": "rewardMultipier",
+          "indexed": false
+        },
+        {
+          "type": "address",
+          "name": "notifier",
+          "indexed": false
+        },
+        {
+          "type": "address[]",
+          "name": "stakingProviders",
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "NotificationRewardPushed",
+      "inputs": [
+        {
+          "type": "uint96",
+          "name": "reward",
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "NotificationRewardSet",
+      "inputs": [
+        {
+          "type": "uint96",
+          "name": "reward",
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "NotificationRewardWithdrawn",
+      "inputs": [
+        {
+          "type": "address",
+          "name": "recipient",
+          "indexed": false
+        },
+        {
+          "type": "uint96",
+          "name": "amount",
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "NotifierRewarded",
+      "inputs": [
+        {
+          "type": "address",
+          "name": "notifier",
+          "indexed": true
+        },
+        {
+          "type": "uint256",
+          "name": "amount",
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "PanicButtonSet",
+      "inputs": [
+        {
+          "type": "address",
+          "name": "application",
+          "indexed": true
+        },
+        {
+          "type": "address",
+          "name": "panicButton",
+          "indexed": true
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "SlashingProcessed",
+      "inputs": [
+        {
+          "type": "address",
+          "name": "caller",
+          "indexed": true
+        },
+        {
+          "type": "uint256",
+          "name": "count",
+          "indexed": false
+        },
+        {
+          "type": "uint256",
+          "name": "tAmount",
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "Staked",
+      "inputs": [
+        {
+          "type": "uint8",
+          "name": "stakeType",
+          "indexed": true
+        },
+        {
+          "type": "address",
+          "name": "owner",
+          "indexed": true
+        },
+        {
+          "type": "address",
+          "name": "stakingProvider",
+          "indexed": true
+        },
+        {
+          "type": "address",
+          "name": "beneficiary",
+          "indexed": false
+        },
+        {
+          "type": "address",
+          "name": "authorizer",
+          "indexed": false
+        },
+        {
+          "type": "uint96",
+          "name": "amount",
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "TokensSeized",
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider",
+          "indexed": true
+        },
+        {
+          "type": "uint96",
+          "name": "amount",
+          "indexed": false
+        },
+        {
+          "type": "bool",
+          "name": "discrepancy",
+          "indexed": true
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "ToppedUp",
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider",
+          "indexed": true
+        },
+        {
+          "type": "uint96",
+          "name": "amount",
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "type": "event",
+      "anonymous": false,
+      "name": "Unstaked",
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider",
+          "indexed": true
+        },
+        {
+          "type": "uint96",
+          "name": "amount",
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "addToSkipList",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "application"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "applicationInfo",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "uint8",
+          "name": "status"
+        },
+        {
+          "type": "address",
+          "name": "panicButton"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "applications",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "address"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "approveApplication",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "application"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "approveAuthorizationDecrease",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "uint96"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "authorizationCeiling",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [],
+      "outputs": [
+        {
+          "type": "uint256"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "authorizedStake",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        },
+        {
+          "type": "address",
+          "name": "application"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "uint96"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "checkpoints",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "account"
+        },
+        {
+          "type": "uint32",
+          "name": "pos"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "tuple",
+          "name": "checkpoint",
+          "components": [
+            {
+              "type": "uint32",
+              "name": "fromBlock"
+            },
+            {
+              "type": "uint96",
+              "name": "votes"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "cleanAuthorizedApplications",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        },
+        {
+          "type": "uint256",
+          "name": "numberToDelete"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "delegateVoting",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        },
+        {
+          "type": "address",
+          "name": "delegatee"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "delegates",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "account"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "address"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "disableApplication",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "application"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "forceDecreaseAuthorization",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        },
+        {
+          "type": "address",
+          "name": "application"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "getApplicationsLength",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [],
+      "outputs": [
+        {
+          "type": "uint256"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "getAuthorizedApplications",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "address[]"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "getAvailableToAuthorize",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        },
+        {
+          "type": "address",
+          "name": "application"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "uint96",
+          "name": "availableTValue"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "getDeauthorizingAmount",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        },
+        {
+          "type": "address",
+          "name": "application"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "uint96"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "getMaxAuthorization",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "uint96"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "getPastTotalSupply",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "uint256",
+          "name": "blockNumber"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "uint96"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "getPastVotes",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "account"
+        },
+        {
+          "type": "uint256",
+          "name": "blockNumber"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "uint96"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "getStartStakingTimestamp",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "uint256"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "getVotes",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "account"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "uint96"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "governance",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [],
+      "outputs": [
+        {
+          "type": "address"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "increaseAuthorization",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        },
+        {
+          "type": "address",
+          "name": "application"
+        },
+        {
+          "type": "uint96",
+          "name": "amount"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "initialize",
+      "constant": false,
+      "payable": false,
+      "inputs": [],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "legacyApproveAuthorizationDecrease",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        },
+        {
+          "type": "address",
+          "name": "application"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "uint96"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "legacyRequestAuthorizationDecrease",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "legacyRequestAuthorizationDecrease",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        },
+        {
+          "type": "address",
+          "name": "application"
+        },
+        {
+          "type": "uint96",
+          "name": "amount"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "migrateAndRelease",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        },
+        {
+          "type": "uint96",
+          "name": "amount"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "bool",
+          "name": "stakeless"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "minTStakeAmount",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [],
+      "outputs": [
+        {
+          "type": "uint96"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "notifiersTreasury",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [],
+      "outputs": [
+        {
+          "type": "uint256"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "numCheckpoints",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "account"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "uint32"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "pauseApplication",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "application"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "pushNotificationReward",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "uint96",
+          "name": "reward"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "requestAuthorizationDecrease",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        },
+        {
+          "type": "address",
+          "name": "application"
+        },
+        {
+          "type": "uint96",
+          "name": "amount"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "rolesOf",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "address",
+          "name": "owner"
+        },
+        {
+          "type": "address",
+          "name": "beneficiary"
+        },
+        {
+          "type": "address",
+          "name": "authorizer"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "seize",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "uint96",
+          "name": "amount"
+        },
+        {
+          "type": "uint256",
+          "name": "rewardMultiplier"
+        },
+        {
+          "type": "address",
+          "name": "notifier"
+        },
+        {
+          "type": "address[]",
+          "name": "_stakingProviders"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "setAuthorization",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        },
+        {
+          "type": "address",
+          "name": "application"
+        },
+        {
+          "type": "uint96",
+          "name": "amount"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "setAuthorizationCeiling",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "uint256",
+          "name": "ceiling"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "setAuthorizedApplications",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        },
+        {
+          "type": "address[]",
+          "name": "_applications"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "setMinimumStakeAmount",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "uint96",
+          "name": "amount"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "setPanicButton",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "application"
+        },
+        {
+          "type": "address",
+          "name": "panicButton"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "skipList",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "slash",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "uint96",
+          "name": "amount"
+        },
+        {
+          "type": "address[]",
+          "name": "_stakingProviders"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "stake",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        },
+        {
+          "type": "address",
+          "name": "beneficiary"
+        },
+        {
+          "type": "address",
+          "name": "authorizer"
+        },
+        {
+          "type": "uint96",
+          "name": "amount"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "stakeAmount",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "uint96"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "stakes",
+      "constant": true,
+      "stateMutability": "view",
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        }
+      ],
+      "outputs": [
+        {
+          "type": "uint96",
+          "name": "tStake"
+        },
+        {
+          "type": "uint96",
+          "name": "keepInTStake"
+        },
+        {
+          "type": "uint96",
+          "name": "nuInTStake"
+        }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "transferGovernance",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "newGuvnor"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "unstakeT",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "stakingProvider"
+        },
+        {
+          "type": "uint96",
+          "name": "amount"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "type": "function",
+      "name": "withdrawNotificationReward",
+      "constant": false,
+      "payable": false,
+      "inputs": [
+        {
+          "type": "address",
+          "name": "recipient"
+        },
+        {
+          "type": "uint96",
+          "name": "amount"
+        }
+      ],
+      "outputs": []
+    }
+  ]
+}

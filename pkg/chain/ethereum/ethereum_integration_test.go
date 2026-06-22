@@ -71,8 +71,8 @@ func TestBaseChain_GetBlockNumberByTimestamp(t *testing.T) {
 	for testName, test := range tests {
 		t.Run(testName, func(t *testing.T) {
 			blockNumber, err := bc.GetBlockNumberByTimestamp(test.timestamp)
-			if isProviderRateLimitError(err) {
-				t.Skipf("skipping test due to Ethereum provider rate limit: [%v]", err)
+			if shouldSkipEthereumIntegrationError(err) {
+				t.Skipf("skipping due to transient Ethereum provider error: %v", err)
 			}
 
 			if !reflect.DeepEqual(err, test.expectedError) {
@@ -93,6 +93,13 @@ func TestBaseChain_GetBlockNumberByTimestamp(t *testing.T) {
 	}
 }
 
-func isProviderRateLimitError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "429 Too Many Requests")
+func shouldSkipEthereumIntegrationError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errorMessage := err.Error()
+
+	return strings.Contains(errorMessage, "429 Too Many Requests") ||
+		strings.Contains(errorMessage, "\"message\":\"Too Many Requests\"")
 }

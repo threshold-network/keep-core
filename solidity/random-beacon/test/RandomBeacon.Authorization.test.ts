@@ -4,6 +4,7 @@ import { smock } from "@defi-wonderland/smock"
 import { expect } from "chai"
 
 import { constants, params, randomBeaconDeployment } from "./fixtures"
+import { legacyTokenStakingAt } from "./utils/operators"
 
 import type { FakeContract } from "@defi-wonderland/smock"
 import type { BigNumber, BigNumberish, ContractTransaction } from "ethers"
@@ -61,28 +62,26 @@ describe("RandomBeacon - Authorization", () => {
 
     await t.connect(deployer).mint(owner.address, stakedAmount)
     await t.connect(owner).approve(staking.address, stakedAmount)
-    await staking
-      .connect(owner)
-      .stake(
-        stakingProvider.address,
-        beneficiary.address,
-        authorizer.address,
-        stakedAmount
-      )
+    await legacyTokenStakingAt(staking, owner).stake(
+      stakingProvider.address,
+      beneficiary.address,
+      authorizer.address,
+      stakedAmount
+    )
 
     minimumAuthorization = await randomBeacon.minimumAuthorization()
 
     // Initialize slasher - fake application capable of slashing the
     // staking provider.
     slasher = await smock.fake<IApplication>("IApplication")
-    await staking.connect(deployer).approveApplication(slasher.address)
-    await staking
-      .connect(authorizer)
-      .increaseAuthorization(
-        stakingProvider.address,
-        slasher.address,
-        stakedAmount
-      )
+    await legacyTokenStakingAt(staking, deployer).approveApplication(
+      slasher.address
+    )
+    await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+      stakingProvider.address,
+      slasher.address,
+      stakedAmount
+    )
 
     // Fund slasher so that it can call T TokenStaking functions
     await (
@@ -216,23 +215,17 @@ describe("RandomBeacon - Authorization", () => {
       before(async () => {
         await createSnapshot()
 
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            randomBeacon.address,
-            stakedAmount
-          )
+        await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+          stakingProvider.address,
+          randomBeacon.address,
+          stakedAmount
+        )
 
         const deauthorizingBy = to1e18(1)
 
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            randomBeacon.address,
-            deauthorizingBy
-          )
+        await legacyTokenStakingAt(staking, authorizer)[
+          "requestAuthorizationDecrease(address,address,uint96)"
+        ](stakingProvider.address, randomBeacon.address, deauthorizingBy)
       })
 
       after(async () => {
@@ -261,23 +254,17 @@ describe("RandomBeacon - Authorization", () => {
       before(async () => {
         await createSnapshot()
 
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            randomBeacon.address,
-            stakedAmount
-          )
+        await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+          stakingProvider.address,
+          randomBeacon.address,
+          stakedAmount
+        )
 
         const deauthorizingBy = to1e18(1)
 
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            randomBeacon.address,
-            deauthorizingBy
-          )
+        await legacyTokenStakingAt(staking, authorizer)[
+          "requestAuthorizationDecrease(address,address,uint96)"
+        ](stakingProvider.address, randomBeacon.address, deauthorizingBy)
 
         await randomBeacon.approveAuthorizationDecrease(stakingProvider.address)
 
@@ -324,13 +311,11 @@ describe("RandomBeacon - Authorization", () => {
     context("when authorization is below the minimum", () => {
       it("should revert", async () => {
         await expect(
-          staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              randomBeacon.address,
-              minimumAuthorization.sub(1)
-            )
+          legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+            stakingProvider.address,
+            randomBeacon.address,
+            minimumAuthorization.sub(1)
+          )
         ).to.be.revertedWith("Authorization below the minimum")
       })
     })
@@ -348,13 +333,14 @@ describe("RandomBeacon - Authorization", () => {
 
         before(async () => {
           await createSnapshot()
-          tx = await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              randomBeacon.address,
-              minimumAuthorization
-            )
+          tx = await legacyTokenStakingAt(
+            staking,
+            authorizer
+          ).increaseAuthorization(
+            stakingProvider.address,
+            randomBeacon.address,
+            minimumAuthorization
+          )
         })
 
         after(async () => {
@@ -380,13 +366,14 @@ describe("RandomBeacon - Authorization", () => {
 
         before(async () => {
           await createSnapshot()
-          tx = await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              randomBeacon.address,
-              stakedAmount
-            )
+          tx = await legacyTokenStakingAt(
+            staking,
+            authorizer
+          ).increaseAuthorization(
+            stakingProvider.address,
+            randomBeacon.address,
+            stakedAmount
+          )
         })
 
         after(async () => {
@@ -427,13 +414,14 @@ describe("RandomBeacon - Authorization", () => {
         before(async () => {
           await createSnapshot()
 
-          tx = await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              randomBeacon.address,
-              minimumAuthorization
-            )
+          tx = await legacyTokenStakingAt(
+            staking,
+            authorizer
+          ).increaseAuthorization(
+            stakingProvider.address,
+            randomBeacon.address,
+            minimumAuthorization
+          )
         })
 
         after(async () => {
@@ -460,13 +448,14 @@ describe("RandomBeacon - Authorization", () => {
         before(async () => {
           await createSnapshot()
 
-          tx = await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              randomBeacon.address,
-              stakedAmount
-            )
+          tx = await legacyTokenStakingAt(
+            staking,
+            authorizer
+          ).increaseAuthorization(
+            stakingProvider.address,
+            randomBeacon.address,
+            stakedAmount
+          )
         })
 
         after(async () => {
@@ -506,13 +495,11 @@ describe("RandomBeacon - Authorization", () => {
     context("when the operator is unknown", () => {
       before(async () => {
         await createSnapshot()
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            randomBeacon.address,
-            stakedAmount
-          )
+        await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+          stakingProvider.address,
+          randomBeacon.address,
+          stakedAmount
+        )
       })
 
       after(async () => {
@@ -527,13 +514,9 @@ describe("RandomBeacon - Authorization", () => {
           const deauthorizingBy = stakedAmount.sub(deauthorizingTo)
 
           await expect(
-            staking
-              .connect(authorizer)
-              ["requestAuthorizationDecrease(address,address,uint96)"](
-                stakingProvider.address,
-                randomBeacon.address,
-                deauthorizingBy
-              )
+            legacyTokenStakingAt(staking, authorizer)[
+              "requestAuthorizationDecrease(address,address,uint96)"
+            ](stakingProvider.address, randomBeacon.address, deauthorizingBy)
           ).to.be.revertedWith(
             "Authorization amount should be 0 or above the minimum"
           )
@@ -551,13 +534,9 @@ describe("RandomBeacon - Authorization", () => {
           await createSnapshot()
 
           decreasingBy = stakedAmount.sub(decreasingTo)
-          tx = await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              randomBeacon.address,
-              decreasingBy
-            )
+          tx = await legacyTokenStakingAt(staking, authorizer)[
+            "requestAuthorizationDecrease(address,address,uint96)"
+          ](stakingProvider.address, randomBeacon.address, decreasingBy)
         })
 
         after(async () => {
@@ -604,13 +583,9 @@ describe("RandomBeacon - Authorization", () => {
 
           decreasingTo = minimumAuthorization
           decreasingBy = stakedAmount.sub(decreasingTo)
-          tx = await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              randomBeacon.address,
-              decreasingBy
-            )
+          tx = await legacyTokenStakingAt(staking, authorizer)[
+            "requestAuthorizationDecrease(address,address,uint96)"
+          ](stakingProvider.address, randomBeacon.address, decreasingBy)
         })
 
         after(async () => {
@@ -657,13 +632,9 @@ describe("RandomBeacon - Authorization", () => {
 
           decreasingTo = minimumAuthorization.add(1)
           decreasingBy = stakedAmount.sub(decreasingTo)
-          tx = await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              randomBeacon.address,
-              decreasingBy
-            )
+          tx = await legacyTokenStakingAt(staking, authorizer)[
+            "requestAuthorizationDecrease(address,address,uint96)"
+          ](stakingProvider.address, randomBeacon.address, decreasingBy)
         })
 
         after(async () => {
@@ -707,13 +678,9 @@ describe("RandomBeacon - Authorization", () => {
         before(async () => {
           await createSnapshot()
 
-          await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              randomBeacon.address,
-              deauthorizingFirst
-            )
+          await legacyTokenStakingAt(staking, authorizer)[
+            "requestAuthorizationDecrease(address,address,uint96)"
+          ](stakingProvider.address, randomBeacon.address, deauthorizingFirst)
         })
 
         after(async () => {
@@ -738,13 +705,13 @@ describe("RandomBeacon - Authorization", () => {
               await createSnapshot()
               await helpers.time.increaseTime(params.authorizationDecreaseDelay)
 
-              await staking
-                .connect(authorizer)
-                ["requestAuthorizationDecrease(address,address,uint96)"](
-                  stakingProvider.address,
-                  randomBeacon.address,
-                  deauthorizingSecond
-                )
+              await legacyTokenStakingAt(staking, authorizer)[
+                "requestAuthorizationDecrease(address,address,uint96)"
+              ](
+                stakingProvider.address,
+                randomBeacon.address,
+                deauthorizingSecond
+              )
             })
 
             after(async () => {
@@ -767,13 +734,13 @@ describe("RandomBeacon - Authorization", () => {
                 params.authorizationDecreaseDelay - 60 // -1min
               )
 
-              await staking
-                .connect(authorizer)
-                ["requestAuthorizationDecrease(address,address,uint96)"](
-                  stakingProvider.address,
-                  randomBeacon.address,
-                  deauthorizingSecond
-                )
+              await legacyTokenStakingAt(staking, authorizer)[
+                "requestAuthorizationDecrease(address,address,uint96)"
+              ](
+                stakingProvider.address,
+                randomBeacon.address,
+                deauthorizingSecond
+              )
             })
 
             after(async () => {
@@ -802,13 +769,13 @@ describe("RandomBeacon - Authorization", () => {
               .connect(governance)
               .finalizeAuthorizationDecreaseChangePeriodUpdate()
 
-            await staking
-              .connect(authorizer)
-              ["requestAuthorizationDecrease(address,address,uint96)"](
-                stakingProvider.address,
-                randomBeacon.address,
-                deauthorizingSecond
-              )
+            await legacyTokenStakingAt(staking, authorizer)[
+              "requestAuthorizationDecrease(address,address,uint96)"
+            ](
+              stakingProvider.address,
+              randomBeacon.address,
+              deauthorizingSecond
+            )
           })
 
           after(async () => {
@@ -848,13 +815,13 @@ describe("RandomBeacon - Authorization", () => {
               await createSnapshot()
               await helpers.time.increaseTime(params.authorizationDecreaseDelay)
 
-              await staking
-                .connect(authorizer)
-                ["requestAuthorizationDecrease(address,address,uint96)"](
-                  stakingProvider.address,
-                  randomBeacon.address,
-                  deauthorizingSecond
-                )
+              await legacyTokenStakingAt(staking, authorizer)[
+                "requestAuthorizationDecrease(address,address,uint96)"
+              ](
+                stakingProvider.address,
+                randomBeacon.address,
+                deauthorizingSecond
+              )
             })
 
             after(async () => {
@@ -877,13 +844,13 @@ describe("RandomBeacon - Authorization", () => {
                 params.authorizationDecreaseDelay - newChangePeriod + 60
               ) // +1min
 
-              await staking
-                .connect(authorizer)
-                ["requestAuthorizationDecrease(address,address,uint96)"](
-                  stakingProvider.address,
-                  randomBeacon.address,
-                  deauthorizingSecond
-                )
+              await legacyTokenStakingAt(staking, authorizer)[
+                "requestAuthorizationDecrease(address,address,uint96)"
+              ](
+                stakingProvider.address,
+                randomBeacon.address,
+                deauthorizingSecond
+              )
             })
 
             after(async () => {
@@ -906,13 +873,13 @@ describe("RandomBeacon - Authorization", () => {
                 params.authorizationDecreaseDelay - newChangePeriod - 60 // -1min
               )
 
-              await staking
-                .connect(authorizer)
-                ["requestAuthorizationDecrease(address,address,uint96)"](
-                  stakingProvider.address,
-                  randomBeacon.address,
-                  deauthorizingSecond
-                )
+              await legacyTokenStakingAt(staking, authorizer)[
+                "requestAuthorizationDecrease(address,address,uint96)"
+              ](
+                stakingProvider.address,
+                randomBeacon.address,
+                deauthorizingSecond
+              )
             })
 
             after(async () => {
@@ -936,13 +903,11 @@ describe("RandomBeacon - Authorization", () => {
     context("when the operator is registered", () => {
       before(async () => {
         await createSnapshot()
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            randomBeacon.address,
-            stakedAmount
-          )
+        await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+          stakingProvider.address,
+          randomBeacon.address,
+          stakedAmount
+        )
         await randomBeacon
           .connect(stakingProvider)
           .registerOperator(operator.address)
@@ -958,13 +923,9 @@ describe("RandomBeacon - Authorization", () => {
           const deauthorizingBy = stakedAmount.sub(deauthorizingTo)
 
           await expect(
-            staking
-              .connect(authorizer)
-              ["requestAuthorizationDecrease(address,address,uint96)"](
-                stakingProvider.address,
-                randomBeacon.address,
-                deauthorizingBy
-              )
+            legacyTokenStakingAt(staking, authorizer)[
+              "requestAuthorizationDecrease(address,address,uint96)"
+            ](stakingProvider.address, randomBeacon.address, deauthorizingBy)
           ).to.be.revertedWith(
             "Authorization amount should be 0 or above the minimum"
           )
@@ -980,13 +941,9 @@ describe("RandomBeacon - Authorization", () => {
           await createSnapshot()
 
           decreasingBy = stakedAmount.sub(decreasingTo)
-          tx = await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              randomBeacon.address,
-              decreasingBy
-            )
+          tx = await legacyTokenStakingAt(staking, authorizer)[
+            "requestAuthorizationDecrease(address,address,uint96)"
+          ](stakingProvider.address, randomBeacon.address, decreasingBy)
         })
 
         after(async () => {
@@ -1032,13 +989,9 @@ describe("RandomBeacon - Authorization", () => {
 
           decreasingTo = minimumAuthorization
           decreasingBy = stakedAmount.sub(decreasingTo)
-          tx = await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              randomBeacon.address,
-              decreasingBy
-            )
+          tx = await legacyTokenStakingAt(staking, authorizer)[
+            "requestAuthorizationDecrease(address,address,uint96)"
+          ](stakingProvider.address, randomBeacon.address, decreasingBy)
         })
 
         after(async () => {
@@ -1084,13 +1037,9 @@ describe("RandomBeacon - Authorization", () => {
 
           decreasingTo = minimumAuthorization.add(1)
           decreasingBy = stakedAmount.sub(decreasingTo)
-          tx = await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              randomBeacon.address,
-              decreasingBy
-            )
+          tx = await legacyTokenStakingAt(staking, authorizer)[
+            "requestAuthorizationDecrease(address,address,uint96)"
+          ](stakingProvider.address, randomBeacon.address, decreasingBy)
         })
 
         after(async () => {
@@ -1135,13 +1084,9 @@ describe("RandomBeacon - Authorization", () => {
 
           await randomBeacon.connect(operator).joinSortitionPool()
 
-          await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              randomBeacon.address,
-              deauthorizingFirst
-            )
+          await legacyTokenStakingAt(staking, authorizer)[
+            "requestAuthorizationDecrease(address,address,uint96)"
+          ](stakingProvider.address, randomBeacon.address, deauthorizingFirst)
         })
 
         after(async () => {
@@ -1165,13 +1110,13 @@ describe("RandomBeacon - Authorization", () => {
             before(async () => {
               await createSnapshot()
 
-              await staking
-                .connect(authorizer)
-                ["requestAuthorizationDecrease(address,address,uint96)"](
-                  stakingProvider.address,
-                  randomBeacon.address,
-                  deauthorizingSecond
-                )
+              await legacyTokenStakingAt(staking, authorizer)[
+                "requestAuthorizationDecrease(address,address,uint96)"
+              ](
+                stakingProvider.address,
+                randomBeacon.address,
+                deauthorizingSecond
+              )
             })
 
             after(async () => {
@@ -1220,13 +1165,13 @@ describe("RandomBeacon - Authorization", () => {
               before(async () => {
                 await createSnapshot()
 
-                await staking
-                  .connect(authorizer)
-                  ["requestAuthorizationDecrease(address,address,uint96)"](
-                    stakingProvider.address,
-                    randomBeacon.address,
-                    deauthorizingSecond
-                  )
+                await legacyTokenStakingAt(staking, authorizer)[
+                  "requestAuthorizationDecrease(address,address,uint96)"
+                ](
+                  stakingProvider.address,
+                  randomBeacon.address,
+                  deauthorizingSecond
+                )
               })
 
               after(async () => {
@@ -1258,13 +1203,13 @@ describe("RandomBeacon - Authorization", () => {
                   params.authorizationDecreaseDelay - 60 // -1min
                 )
 
-                await staking
-                  .connect(authorizer)
-                  ["requestAuthorizationDecrease(address,address,uint96)"](
-                    stakingProvider.address,
-                    randomBeacon.address,
-                    deauthorizingSecond
-                  )
+                await legacyTokenStakingAt(staking, authorizer)[
+                  "requestAuthorizationDecrease(address,address,uint96)"
+                ](
+                  stakingProvider.address,
+                  randomBeacon.address,
+                  deauthorizingSecond
+                )
               })
 
               after(async () => {
@@ -1311,13 +1256,13 @@ describe("RandomBeacon - Authorization", () => {
             before(async () => {
               await createSnapshot()
 
-              await staking
-                .connect(authorizer)
-                ["requestAuthorizationDecrease(address,address,uint96)"](
-                  stakingProvider.address,
-                  randomBeacon.address,
-                  deauthorizingSecond
-                )
+              await legacyTokenStakingAt(staking, authorizer)[
+                "requestAuthorizationDecrease(address,address,uint96)"
+              ](
+                stakingProvider.address,
+                randomBeacon.address,
+                deauthorizingSecond
+              )
             })
 
             after(async () => {
@@ -1355,13 +1300,13 @@ describe("RandomBeacon - Authorization", () => {
             context("when called before delay passed", () => {
               it("should revert", async () => {
                 await expect(
-                  staking
-                    .connect(authorizer)
-                    ["requestAuthorizationDecrease(address,address,uint96)"](
-                      stakingProvider.address,
-                      randomBeacon.address,
-                      deauthorizingSecond
-                    )
+                  legacyTokenStakingAt(staking, authorizer)[
+                    "requestAuthorizationDecrease(address,address,uint96)"
+                  ](
+                    stakingProvider.address,
+                    randomBeacon.address,
+                    deauthorizingSecond
+                  )
                 ).to.be.revertedWith(
                   "Not enough time passed since the original request"
                 )
@@ -1375,13 +1320,13 @@ describe("RandomBeacon - Authorization", () => {
                   params.authorizationDecreaseDelay
                 )
 
-                await staking
-                  .connect(authorizer)
-                  ["requestAuthorizationDecrease(address,address,uint96)"](
-                    stakingProvider.address,
-                    randomBeacon.address,
-                    deauthorizingSecond
-                  )
+                await legacyTokenStakingAt(staking, authorizer)[
+                  "requestAuthorizationDecrease(address,address,uint96)"
+                ](
+                  stakingProvider.address,
+                  randomBeacon.address,
+                  deauthorizingSecond
+                )
               })
 
               after(async () => {
@@ -1430,13 +1375,13 @@ describe("RandomBeacon - Authorization", () => {
             before(async () => {
               await createSnapshot()
 
-              await staking
-                .connect(authorizer)
-                ["requestAuthorizationDecrease(address,address,uint96)"](
-                  stakingProvider.address,
-                  randomBeacon.address,
-                  deauthorizingSecond
-                )
+              await legacyTokenStakingAt(staking, authorizer)[
+                "requestAuthorizationDecrease(address,address,uint96)"
+              ](
+                stakingProvider.address,
+                randomBeacon.address,
+                deauthorizingSecond
+              )
             })
 
             after(async () => {
@@ -1485,13 +1430,13 @@ describe("RandomBeacon - Authorization", () => {
 
               it("should revert", async () => {
                 await expect(
-                  staking
-                    .connect(authorizer)
-                    ["requestAuthorizationDecrease(address,address,uint96)"](
-                      stakingProvider.address,
-                      randomBeacon.address,
-                      deauthorizingSecond
-                    )
+                  legacyTokenStakingAt(staking, authorizer)[
+                    "requestAuthorizationDecrease(address,address,uint96)"
+                  ](
+                    stakingProvider.address,
+                    randomBeacon.address,
+                    deauthorizingSecond
+                  )
                 ).to.be.revertedWith(
                   "Not enough time passed since the original request"
                 )
@@ -1505,13 +1450,13 @@ describe("RandomBeacon - Authorization", () => {
                   params.authorizationDecreaseDelay - newChangePeriod + 60 // +1min
                 )
 
-                await staking
-                  .connect(authorizer)
-                  ["requestAuthorizationDecrease(address,address,uint96)"](
-                    stakingProvider.address,
-                    randomBeacon.address,
-                    deauthorizingSecond
-                  )
+                await legacyTokenStakingAt(staking, authorizer)[
+                  "requestAuthorizationDecrease(address,address,uint96)"
+                ](
+                  stakingProvider.address,
+                  randomBeacon.address,
+                  deauthorizingSecond
+                )
               })
 
               after(async () => {
@@ -1542,13 +1487,13 @@ describe("RandomBeacon - Authorization", () => {
                   params.authorizationDecreaseDelay
                 )
 
-                await staking
-                  .connect(authorizer)
-                  ["requestAuthorizationDecrease(address,address,uint96)"](
-                    stakingProvider.address,
-                    randomBeacon.address,
-                    deauthorizingSecond
-                  )
+                await legacyTokenStakingAt(staking, authorizer)[
+                  "requestAuthorizationDecrease(address,address,uint96)"
+                ](
+                  stakingProvider.address,
+                  randomBeacon.address,
+                  deauthorizingSecond
+                )
               })
 
               after(async () => {
@@ -1580,13 +1525,11 @@ describe("RandomBeacon - Authorization", () => {
   describe("approveAuthorizationDecrease", () => {
     before(async () => {
       await createSnapshot()
-      await staking
-        .connect(authorizer)
-        .increaseAuthorization(
-          stakingProvider.address,
-          randomBeacon.address,
-          stakedAmount
-        )
+      await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+        stakingProvider.address,
+        randomBeacon.address,
+        stakedAmount
+      )
     })
 
     after(async () => {
@@ -1608,13 +1551,9 @@ describe("RandomBeacon - Authorization", () => {
 
           const deauthorizingBy = stakedAmount
 
-          staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              randomBeacon.address,
-              deauthorizingBy
-            )
+          await legacyTokenStakingAt(staking, authorizer)[
+            "requestAuthorizationDecrease(address,address,uint96)"
+          ](stakingProvider.address, randomBeacon.address, deauthorizingBy)
         })
 
         after(async () => {
@@ -1642,13 +1581,9 @@ describe("RandomBeacon - Authorization", () => {
           .registerOperator(operator.address)
 
         const deauthorizingBy = stakedAmount
-        staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            randomBeacon.address,
-            deauthorizingBy
-          )
+        await legacyTokenStakingAt(staking, authorizer)[
+          "requestAuthorizationDecrease(address,address,uint96)"
+        ](stakingProvider.address, randomBeacon.address, deauthorizingBy)
       })
 
       after(async () => {
@@ -1753,13 +1688,11 @@ describe("RandomBeacon - Authorization", () => {
 
       before(async () => {
         await createSnapshot()
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            randomBeacon.address,
-            stakedAmount
-          )
+        await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+          stakingProvider.address,
+          randomBeacon.address,
+          stakedAmount
+        )
 
         // lock the pool for DKG
         // we lock the pool to ensure that the update is ignored for the
@@ -1771,7 +1704,7 @@ describe("RandomBeacon - Authorization", () => {
         await staking
           .connect(slasher.wallet)
           .slash(slashedAmount, [stakingProvider.address])
-        tx = await staking.connect(thirdParty).processSlashing(1)
+        tx = await legacyTokenStakingAt(staking, thirdParty).processSlashing(1)
       })
 
       after(async () => {
@@ -1789,13 +1722,11 @@ describe("RandomBeacon - Authorization", () => {
     context("when the operator is known", () => {
       before(async () => {
         await createSnapshot()
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            randomBeacon.address,
-            stakedAmount
-          )
+        await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+          stakingProvider.address,
+          randomBeacon.address,
+          stakedAmount
+        )
 
         await randomBeacon
           .connect(stakingProvider)
@@ -1823,7 +1754,9 @@ describe("RandomBeacon - Authorization", () => {
           await staking
             .connect(slasher.wallet)
             .slash(slashedAmount, [stakingProvider.address])
-          tx = await staking.connect(thirdParty).processSlashing(1)
+          tx = await legacyTokenStakingAt(staking, thirdParty).processSlashing(
+            1
+          )
         })
 
         after(async () => {
@@ -1862,7 +1795,10 @@ describe("RandomBeacon - Authorization", () => {
             await staking
               .connect(slasher.wallet)
               .slash(slashedAmount, [stakingProvider.address])
-            tx = await staking.connect(thirdParty).processSlashing(1)
+            tx = await legacyTokenStakingAt(
+              staking,
+              thirdParty
+            ).processSlashing(1)
           })
 
           after(async () => {
@@ -1898,7 +1834,10 @@ describe("RandomBeacon - Authorization", () => {
               await staking
                 .connect(slasher.wallet)
                 .slash(slashedAmount, [stakingProvider.address])
-              tx = await staking.connect(thirdParty).processSlashing(1)
+              tx = await legacyTokenStakingAt(
+                staking,
+                thirdParty
+              ).processSlashing(1)
             })
 
             after(async () => {
@@ -1932,7 +1871,9 @@ describe("RandomBeacon - Authorization", () => {
                   .connect(slasher.wallet)
                   .slash(slashingBy, [stakingProvider.address])
 
-                await staking.connect(thirdParty).processSlashing(1)
+                await legacyTokenStakingAt(staking, thirdParty).processSlashing(
+                  1
+                )
               })
 
               after(async () => {
@@ -1991,13 +1932,11 @@ describe("RandomBeacon - Authorization", () => {
             .registerOperator(operator.address)
 
           const authorizedAmount = minimumAuthorization
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              randomBeacon.address,
-              authorizedAmount
-            )
+          await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+            stakingProvider.address,
+            randomBeacon.address,
+            authorizedAmount
+          )
 
           const slashingTo = minimumAuthorization.sub(1)
           const slashedAmount = authorizedAmount.sub(slashingTo)
@@ -2005,7 +1944,7 @@ describe("RandomBeacon - Authorization", () => {
           await staking
             .connect(slasher.wallet)
             .slash(slashedAmount, [stakingProvider.address])
-          await staking.connect(thirdParty).processSlashing(1)
+          await legacyTokenStakingAt(staking, thirdParty).processSlashing(1)
         })
 
         after(async () => {
@@ -2030,13 +1969,11 @@ describe("RandomBeacon - Authorization", () => {
           .connect(stakingProvider)
           .registerOperator(operator.address)
 
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            randomBeacon.address,
-            minimumAuthorization
-          )
+        await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+          stakingProvider.address,
+          randomBeacon.address,
+          minimumAuthorization
+        )
 
         tx = await randomBeacon.connect(operator).joinSortitionPool()
       })
@@ -2076,13 +2013,11 @@ describe("RandomBeacon - Authorization", () => {
 
           authorizedStake = minimumAuthorization.mul(2)
 
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              randomBeacon.address,
-              authorizedStake
-            )
+          await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+            stakingProvider.address,
+            randomBeacon.address,
+            authorizedStake
+          )
 
           await randomBeacon.connect(operator).joinSortitionPool()
         })
@@ -2116,24 +2051,18 @@ describe("RandomBeacon - Authorization", () => {
 
         const authorizedStake = stakedAmount
 
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            randomBeacon.address,
-            authorizedStake
-          )
+        await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+          stakingProvider.address,
+          randomBeacon.address,
+          authorizedStake
+        )
 
         deauthorizingTo = minimumAuthorization.add(to1e18(1337))
         const deauthorizingBy = authorizedStake.sub(deauthorizingTo)
 
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            randomBeacon.address,
-            deauthorizingBy
-          )
+        await legacyTokenStakingAt(staking, authorizer)[
+          "requestAuthorizationDecrease(address,address,uint96)"
+        ](stakingProvider.address, randomBeacon.address, deauthorizingBy)
 
         await randomBeacon.connect(operator).joinSortitionPool()
       })
@@ -2175,33 +2104,25 @@ describe("RandomBeacon - Authorization", () => {
 
           const authorizedStake = minimumAuthorization.add(to1e18(100))
 
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              randomBeacon.address,
-              authorizedStake
-            )
+          await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+            stakingProvider.address,
+            randomBeacon.address,
+            authorizedStake
+          )
 
           const deauthorizingTo = minimumAuthorization.add(to1e18(50))
           const deauthorizingBy = authorizedStake.sub(deauthorizingTo)
 
-          await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              randomBeacon.address,
-              deauthorizingBy
-            )
+          await legacyTokenStakingAt(staking, authorizer)[
+            "requestAuthorizationDecrease(address,address,uint96)"
+          ](stakingProvider.address, randomBeacon.address, deauthorizingBy)
 
           const increasingBy = to1e18(5000)
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              randomBeacon.address,
-              increasingBy
-            )
+          await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+            stakingProvider.address,
+            randomBeacon.address,
+            increasingBy
+          )
 
           expectedAuthorizedStake = deauthorizingTo.add(increasingBy)
 
@@ -2262,13 +2183,11 @@ describe("RandomBeacon - Authorization", () => {
         before(async () => {
           await createSnapshot()
 
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              randomBeacon.address,
-              minimumAuthorization
-            )
+          await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+            stakingProvider.address,
+            randomBeacon.address,
+            minimumAuthorization
+          )
 
           tx = await randomBeacon
             .connect(thirdParty)
@@ -2297,22 +2216,16 @@ describe("RandomBeacon - Authorization", () => {
         before(async () => {
           await createSnapshot()
 
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              randomBeacon.address,
-              stakedAmount
-            )
+          await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+            stakingProvider.address,
+            randomBeacon.address,
+            stakedAmount
+          )
 
           const deauthorizingBy = to1e18(100)
-          await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              randomBeacon.address,
-              deauthorizingBy
-            )
+          await legacyTokenStakingAt(staking, authorizer)[
+            "requestAuthorizationDecrease(address,address,uint96)"
+          ](stakingProvider.address, randomBeacon.address, deauthorizingBy)
 
           tx = await randomBeacon
             .connect(thirdParty)
@@ -2352,13 +2265,11 @@ describe("RandomBeacon - Authorization", () => {
           .connect(stakingProvider)
           .registerOperator(operator.address)
 
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            randomBeacon.address,
-            minimumAuthorization.mul(2)
-          )
+        await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+          stakingProvider.address,
+          randomBeacon.address,
+          minimumAuthorization.mul(2)
+        )
 
         await randomBeacon.connect(operator).joinSortitionPool()
       })
@@ -2375,13 +2286,11 @@ describe("RandomBeacon - Authorization", () => {
           await createSnapshot()
 
           const topUp = to1e18(1337)
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              randomBeacon.address,
-              topUp
-            )
+          await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+            stakingProvider.address,
+            randomBeacon.address,
+            topUp
+          )
 
           // initial authorization was 2 x minimum
           // it was increased by 1337 tokens
@@ -2430,13 +2339,9 @@ describe("RandomBeacon - Authorization", () => {
               .sub(deauthorizingTo)
             expectedWeight = deauthorizingTo.div(constants.poolWeightDivisor)
 
-            await staking
-              .connect(authorizer)
-              ["requestAuthorizationDecrease(address,address,uint96)"](
-                stakingProvider.address,
-                randomBeacon.address,
-                deauthorizingBy
-              )
+            await legacyTokenStakingAt(staking, authorizer)[
+              "requestAuthorizationDecrease(address,address,uint96)"
+            ](stakingProvider.address, randomBeacon.address, deauthorizingBy)
 
             tx = await randomBeacon
               .connect(thirdParty)
@@ -2481,13 +2386,9 @@ describe("RandomBeacon - Authorization", () => {
             // we want to decrease to zero
             const deauthorizingBy = minimumAuthorization.mul(2)
 
-            await staking
-              .connect(authorizer)
-              ["requestAuthorizationDecrease(address,address,uint96)"](
-                stakingProvider.address,
-                randomBeacon.address,
-                deauthorizingBy
-              )
+            await legacyTokenStakingAt(staking, authorizer)[
+              "requestAuthorizationDecrease(address,address,uint96)"
+            ](stakingProvider.address, randomBeacon.address, deauthorizingBy)
 
             tx = await randomBeacon
               .connect(thirdParty)
@@ -2539,21 +2440,18 @@ describe("RandomBeacon - Authorization", () => {
             const increasingTo = deauthorizingTo.add(increasingBy)
             expectedWeight = increasingTo.div(constants.poolWeightDivisor)
 
-            await staking
-              .connect(authorizer)
-              ["requestAuthorizationDecrease(address,address,uint96)"](
-                stakingProvider.address,
-                randomBeacon.address,
-                deauthorizingBy
-              )
+            await legacyTokenStakingAt(staking, authorizer)[
+              "requestAuthorizationDecrease(address,address,uint96)"
+            ](stakingProvider.address, randomBeacon.address, deauthorizingBy)
 
-            await staking
-              .connect(authorizer)
-              .increaseAuthorization(
-                stakingProvider.address,
-                randomBeacon.address,
-                increasingBy
-              )
+            await legacyTokenStakingAt(
+              staking,
+              authorizer
+            ).increaseAuthorization(
+              stakingProvider.address,
+              randomBeacon.address,
+              increasingBy
+            )
 
             tx = await randomBeacon
               .connect(thirdParty)
@@ -2604,13 +2502,11 @@ describe("RandomBeacon - Authorization", () => {
         await createSnapshot()
 
         authorizedAmount = minimumAuthorization
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            randomBeacon.address,
-            authorizedAmount
-          )
+        await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+          stakingProvider.address,
+          randomBeacon.address,
+          authorizedAmount
+        )
       })
 
       after(async () => {
@@ -2635,22 +2531,16 @@ describe("RandomBeacon - Authorization", () => {
 
           authorizedAmount = minimumAuthorization.add(to1e18(2000))
 
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              randomBeacon.address,
-              authorizedAmount
-            )
+          await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+            stakingProvider.address,
+            randomBeacon.address,
+            authorizedAmount
+          )
 
           deauthorizingAmount = to1e18(1337)
-          await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              randomBeacon.address,
-              deauthorizingAmount
-            )
+          await legacyTokenStakingAt(staking, authorizer)[
+            "requestAuthorizationDecrease(address,address,uint96)"
+          ](stakingProvider.address, randomBeacon.address, deauthorizingAmount)
         })
 
         after(async () => {
@@ -2670,21 +2560,15 @@ describe("RandomBeacon - Authorization", () => {
         await createSnapshot()
 
         const authorizedAmount = minimumAuthorization
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            randomBeacon.address,
-            authorizedAmount
-          )
+        await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+          stakingProvider.address,
+          randomBeacon.address,
+          authorizedAmount
+        )
 
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            randomBeacon.address,
-            authorizedAmount
-          )
+        await legacyTokenStakingAt(staking, authorizer)[
+          "requestAuthorizationDecrease(address,address,uint96)"
+        ](stakingProvider.address, randomBeacon.address, authorizedAmount)
       })
 
       after(async () => {
@@ -2703,21 +2587,15 @@ describe("RandomBeacon - Authorization", () => {
         await createSnapshot()
 
         const authorizedAmount = minimumAuthorization.add(1200)
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            randomBeacon.address,
-            authorizedAmount
-          )
+        await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+          stakingProvider.address,
+          randomBeacon.address,
+          authorizedAmount
+        )
 
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            randomBeacon.address,
-            authorizedAmount
-          )
+        await legacyTokenStakingAt(staking, authorizer)[
+          "requestAuthorizationDecrease(address,address,uint96)"
+        ](stakingProvider.address, randomBeacon.address, authorizedAmount)
 
         await randomBeacon.approveAuthorizationDecrease(stakingProvider.address)
       })
@@ -2741,13 +2619,11 @@ describe("RandomBeacon - Authorization", () => {
           await createSnapshot()
 
           const authorizedAmount = minimumAuthorization
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              randomBeacon.address,
-              authorizedAmount
-            )
+          await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+            stakingProvider.address,
+            randomBeacon.address,
+            authorizedAmount
+          )
 
           const slashingTo = minimumAuthorization.sub(1)
           const slashedAmount = authorizedAmount.sub(slashingTo)
@@ -2755,7 +2631,7 @@ describe("RandomBeacon - Authorization", () => {
           await staking
             .connect(slasher.wallet)
             .slash(slashedAmount, [stakingProvider.address])
-          await staking.connect(thirdParty).processSlashing(1)
+          await legacyTokenStakingAt(staking, thirdParty).processSlashing(1)
         })
 
         after(async () => {
@@ -2776,26 +2652,20 @@ describe("RandomBeacon - Authorization", () => {
       await createSnapshot()
 
       const authorizedAmount = minimumAuthorization.add(1200)
-      await staking
-        .connect(authorizer)
-        .increaseAuthorization(
-          stakingProvider.address,
-          randomBeacon.address,
-          authorizedAmount
-        )
+      await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+        stakingProvider.address,
+        randomBeacon.address,
+        authorizedAmount
+      )
 
       await randomBeacon
         .connect(stakingProvider)
         .registerOperator(operator.address)
       await randomBeacon.connect(operator).joinSortitionPool()
 
-      await staking
-        .connect(authorizer)
-        ["requestAuthorizationDecrease(address,address,uint96)"](
-          stakingProvider.address,
-          randomBeacon.address,
-          authorizedAmount
-        )
+      await legacyTokenStakingAt(staking, authorizer)[
+        "requestAuthorizationDecrease(address,address,uint96)"
+      ](stakingProvider.address, randomBeacon.address, authorizedAmount)
     })
 
     after(async () => {
@@ -2890,13 +2760,11 @@ describe("RandomBeacon - Authorization", () => {
         before(async () => {
           await createSnapshot()
 
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              randomBeacon.address,
-              minimumAuthorization
-            )
+          await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+            stakingProvider.address,
+            randomBeacon.address,
+            minimumAuthorization
+          )
         })
 
         after(async () => {
@@ -2918,13 +2786,11 @@ describe("RandomBeacon - Authorization", () => {
           .connect(stakingProvider)
           .registerOperator(operator.address)
 
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            randomBeacon.address,
-            minimumAuthorization.mul(2)
-          )
+        await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+          stakingProvider.address,
+          randomBeacon.address,
+          minimumAuthorization.mul(2)
+        )
 
         await randomBeacon.connect(operator).joinSortitionPool()
       })
@@ -2944,13 +2810,11 @@ describe("RandomBeacon - Authorization", () => {
         before(async () => {
           await createSnapshot()
 
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              randomBeacon.address,
-              to1e18(1337)
-            )
+          await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+            stakingProvider.address,
+            randomBeacon.address,
+            to1e18(1337)
+          )
         })
 
         after(async () => {
@@ -2978,13 +2842,9 @@ describe("RandomBeacon - Authorization", () => {
           await createSnapshot()
 
           const deauthorizingBy = to1e18(1)
-          await staking
-            .connect(authorizer)
-            ["requestAuthorizationDecrease(address,address,uint96)"](
-              stakingProvider.address,
-              randomBeacon.address,
-              deauthorizingBy
-            )
+          await legacyTokenStakingAt(staking, authorizer)[
+            "requestAuthorizationDecrease(address,address,uint96)"
+          ](stakingProvider.address, randomBeacon.address, deauthorizingBy)
         })
 
         after(async () => {
@@ -3019,13 +2879,11 @@ describe("RandomBeacon - Authorization", () => {
             randomBeacon.address
           )
           const increaseBy = stakedAmount.sub(authorized)
-          await staking
-            .connect(authorizer)
-            .increaseAuthorization(
-              stakingProvider.address,
-              randomBeacon.address,
-              increaseBy
-            )
+          await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+            stakingProvider.address,
+            randomBeacon.address,
+            increaseBy
+          )
           await randomBeacon.updateOperatorStatus(operator.address)
 
           // lock the pool for DKG
@@ -3035,7 +2893,7 @@ describe("RandomBeacon - Authorization", () => {
           await staking
             .connect(slasher.wallet)
             .slash(to1e18(100), [stakingProvider.address])
-          await staking.connect(thirdParty).processSlashing(1)
+          await legacyTokenStakingAt(staking, thirdParty).processSlashing(1)
 
           // unlock the pool by stopping DKG
           await mineBlocks(
@@ -3081,13 +2939,11 @@ describe("RandomBeacon - Authorization", () => {
       // Authorized almost the entire staked amount but leave some margin for
       // authorization increase.
       initialIncrease = stakedAmount.sub(to1e18(20000))
-      await staking
-        .connect(authorizer)
-        .increaseAuthorization(
-          stakingProvider.address,
-          randomBeacon.address,
-          initialIncrease
-        )
+      await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+        stakingProvider.address,
+        randomBeacon.address,
+        initialIncrease
+      )
       await randomBeacon.connect(operator).joinSortitionPool()
     })
 
@@ -3103,13 +2959,11 @@ describe("RandomBeacon - Authorization", () => {
         await createSnapshot()
 
         secondIncrease = to1e18(11111)
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            randomBeacon.address,
-            secondIncrease
-          )
+        await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+          stakingProvider.address,
+          randomBeacon.address,
+          secondIncrease
+        )
 
         await randomBeacon
           .connect(operator)
@@ -3142,25 +2996,19 @@ describe("RandomBeacon - Authorization", () => {
         await createSnapshot()
 
         firstDecrease = to1e18(111)
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            randomBeacon.address,
-            firstDecrease
-          )
+        await legacyTokenStakingAt(staking, authorizer)[
+          "requestAuthorizationDecrease(address,address,uint96)"
+        ](stakingProvider.address, randomBeacon.address, firstDecrease)
         await randomBeacon
           .connect(operator)
           .updateOperatorStatus(operator.address)
 
         secondIncrease = to1e18(11111)
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            randomBeacon.address,
-            secondIncrease
-          )
+        await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+          stakingProvider.address,
+          randomBeacon.address,
+          secondIncrease
+        )
         await randomBeacon
           .connect(operator)
           .updateOperatorStatus(operator.address)
@@ -3192,13 +3040,9 @@ describe("RandomBeacon - Authorization", () => {
         await createSnapshot()
 
         firstDecrease = to1e18(222)
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            randomBeacon.address,
-            firstDecrease
-          )
+        await legacyTokenStakingAt(staking, authorizer)[
+          "requestAuthorizationDecrease(address,address,uint96)"
+        ](stakingProvider.address, randomBeacon.address, firstDecrease)
         await randomBeacon
           .connect(operator)
           .updateOperatorStatus(operator.address)
@@ -3207,13 +3051,11 @@ describe("RandomBeacon - Authorization", () => {
         await randomBeacon.approveAuthorizationDecrease(stakingProvider.address)
 
         secondIncrease = to1e18(7311)
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            randomBeacon.address,
-            secondIncrease
-          )
+        await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+          stakingProvider.address,
+          randomBeacon.address,
+          secondIncrease
+        )
         await randomBeacon
           .connect(operator)
           .updateOperatorStatus(operator.address)
@@ -3242,13 +3084,9 @@ describe("RandomBeacon - Authorization", () => {
       before(async () => {
         await createSnapshot()
 
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            randomBeacon.address,
-            initialIncrease
-          )
+        await legacyTokenStakingAt(staking, authorizer)[
+          "requestAuthorizationDecrease(address,address,uint96)"
+        ](stakingProvider.address, randomBeacon.address, initialIncrease)
         await randomBeacon
           .connect(operator)
           .updateOperatorStatus(operator.address)
@@ -3257,13 +3095,11 @@ describe("RandomBeacon - Authorization", () => {
         await randomBeacon.approveAuthorizationDecrease(stakingProvider.address)
 
         secondIncrease = minimumAuthorization.add(to1e18(21))
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            randomBeacon.address,
-            secondIncrease
-          )
+        await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+          stakingProvider.address,
+          randomBeacon.address,
+          secondIncrease
+        )
         await randomBeacon.connect(operator).joinSortitionPool()
       })
 
@@ -3298,7 +3134,7 @@ describe("RandomBeacon - Authorization", () => {
         await staking
           .connect(slasher.wallet)
           .slash(slashedAmount, [stakingProvider.address])
-        await staking.connect(thirdParty).processSlashing(1)
+        await legacyTokenStakingAt(staking, thirdParty).processSlashing(1)
 
         // Give the stake owner some more T and let them top-up the stake before
         // they increase the authorization again.
@@ -3310,13 +3146,11 @@ describe("RandomBeacon - Authorization", () => {
           .topUp(stakingProvider.address, secondIncrease)
 
         // And finally increase!
-        await staking
-          .connect(authorizer)
-          .increaseAuthorization(
-            stakingProvider.address,
-            randomBeacon.address,
-            secondIncrease
-          )
+        await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+          stakingProvider.address,
+          randomBeacon.address,
+          secondIncrease
+        )
         await randomBeacon.connect(operator).joinSortitionPool()
       })
 
@@ -3344,13 +3178,9 @@ describe("RandomBeacon - Authorization", () => {
         await createSnapshot()
 
         decreasedAmount = to1e18(20000)
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            randomBeacon.address,
-            decreasedAmount
-          )
+        await legacyTokenStakingAt(staking, authorizer)[
+          "requestAuthorizationDecrease(address,address,uint96)"
+        ](stakingProvider.address, randomBeacon.address, decreasedAmount)
         await randomBeacon
           .connect(operator)
           .updateOperatorStatus(operator.address)
@@ -3361,7 +3191,7 @@ describe("RandomBeacon - Authorization", () => {
         await staking
           .connect(slasher.wallet)
           .slash(slashedAmount, [stakingProvider.address])
-        await staking.connect(thirdParty).processSlashing(1)
+        await legacyTokenStakingAt(staking, thirdParty).processSlashing(1)
       })
 
       after(async () => {
@@ -3388,13 +3218,9 @@ describe("RandomBeacon - Authorization", () => {
         await createSnapshot()
 
         decreasedAmount = to1e18(20000)
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            randomBeacon.address,
-            decreasedAmount
-          )
+        await legacyTokenStakingAt(staking, authorizer)[
+          "requestAuthorizationDecrease(address,address,uint96)"
+        ](stakingProvider.address, randomBeacon.address, decreasedAmount)
         await randomBeacon
           .connect(operator)
           .updateOperatorStatus(operator.address)
@@ -3405,7 +3231,7 @@ describe("RandomBeacon - Authorization", () => {
         await staking
           .connect(slasher.wallet)
           .slash(slashedAmount, [stakingProvider.address])
-        await staking.connect(thirdParty).processSlashing(1)
+        await legacyTokenStakingAt(staking, thirdParty).processSlashing(1)
 
         await helpers.time.increaseTime(params.authorizationDecreaseDelay)
         await randomBeacon.approveAuthorizationDecrease(stakingProvider.address)
@@ -3435,13 +3261,9 @@ describe("RandomBeacon - Authorization", () => {
         await createSnapshot()
 
         decreasedAmount = to1e18(1000)
-        await staking
-          .connect(authorizer)
-          ["requestAuthorizationDecrease(address,address,uint96)"](
-            stakingProvider.address,
-            randomBeacon.address,
-            decreasedAmount
-          )
+        await legacyTokenStakingAt(staking, authorizer)[
+          "requestAuthorizationDecrease(address,address,uint96)"
+        ](stakingProvider.address, randomBeacon.address, decreasedAmount)
         await randomBeacon
           .connect(operator)
           .updateOperatorStatus(operator.address)
@@ -3457,7 +3279,7 @@ describe("RandomBeacon - Authorization", () => {
         await staking
           .connect(slasher.wallet)
           .slash(slashedAmount, [stakingProvider.address])
-        await staking.connect(thirdParty).processSlashing(1)
+        await legacyTokenStakingAt(staking, thirdParty).processSlashing(1)
       })
 
       after(async () => {

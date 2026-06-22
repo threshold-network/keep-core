@@ -1,0 +1,6 @@
+{
+  "deploy_ecdsa_sortition_pool": 1777655041,
+  "deploy_ecdsa_dkg_validator": 1777655068,
+  "deploy_wallet_registry": 1777655124,
+  "deploy_allowlist": 1777655234
+}

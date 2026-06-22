@@ -591,7 +591,7 @@ func TestSubmitClaim_AnotherMemberSubmitsClaim(t *testing.T) {
 		claim,
 		signatures,
 	)
-	if err != nil {
+	if firstMemberErr != nil {
 		t.Fatal(firstMemberErr)
 	}
 
@@ -603,6 +603,101 @@ func TestSubmitClaim_AnotherMemberSubmitsClaim(t *testing.T) {
 
 	expectedNonce := big.NewInt(1)
 
+	nonce, err := chain.GetInactivityClaimNonce(ecdsaWalletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertBigIntsEqual(
+		t,
+		"inactivity nonce",
+		expectedNonce,
+		nonce,
+	)
+}
+
+func TestSubmitClaim_StaleNonceAfterDelayTreatedAsSubmitted(t *testing.T) {
+	testData, err := tecdsatest.LoadPrivateKeyShareTestFixtures(1)
+	if err != nil {
+		t.Fatalf("failed to load test data: [%v]", err)
+	}
+	privateKeyShare := tecdsa.NewPrivateKeyShare(testData[0])
+
+	publicKey := privateKeyShare.PublicKey()
+	walletPublicKeyHash := bitcoin.PublicKeyHash(publicKey)
+	ecdsaWalletID := [32]byte{1, 2, 3}
+
+	chain := Connect()
+
+	chain.setWallet(
+		walletPublicKeyHash,
+		&WalletChainData{
+			EcdsaWalletID: ecdsaWalletID,
+		},
+	)
+
+	groupParameters := &GroupParameters{
+		GroupSize:       5,
+		GroupQuorum:     4,
+		HonestThreshold: 3,
+	}
+
+	groupMembers := []uint32{1, 2, 2, 3, 5}
+
+	claim := inactivity.NewClaimPreimage(
+		big.NewInt(0),
+		publicKey,
+		[]group.MemberIndex{11, 22, 33},
+		true,
+	)
+
+	signatures := map[group.MemberIndex][]byte{
+		1: []byte("signature 1"),
+		2: []byte("signature 2"),
+		3: []byte("signature 3"),
+		4: []byte("signature 4"),
+	}
+
+	firstMemberSubmitter := newInactivityClaimSubmitter(
+		&testutils.MockLogger{},
+		chain,
+		groupParameters,
+		groupMembers,
+		func(context.Context, uint64) error { return nil },
+	)
+
+	var firstMemberSubmitErr error
+	secondMemberSubmitter := newInactivityClaimSubmitter(
+		&testutils.MockLogger{},
+		chain,
+		groupParameters,
+		groupMembers,
+		func(ctx context.Context, _ uint64) error {
+			// Simulate another member submitting while this member is delayed.
+			firstMemberSubmitErr = firstMemberSubmitter.SubmitClaim(
+				ctx,
+				group.MemberIndex(1),
+				claim,
+				signatures,
+			)
+			return nil
+		},
+	)
+
+	err = secondMemberSubmitter.SubmitClaim(
+		context.Background(),
+		group.MemberIndex(2),
+		claim,
+		signatures,
+	)
+	if err != nil {
+		t.Fatalf("expected stale nonce to be treated as already submitted: %v", err)
+	}
+	if firstMemberSubmitErr != nil {
+		t.Fatalf("first member submission failed: %v", firstMemberSubmitErr)
+	}
+
+	expectedNonce := big.NewInt(1)
 	nonce, err := chain.GetInactivityClaimNonce(ecdsaWalletID)
 	if err != nil {
 		t.Fatal(err)

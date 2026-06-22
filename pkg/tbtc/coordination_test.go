@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -125,20 +126,20 @@ func TestWatchCoordinationWindows(t *testing.T) {
 		blocksChan := make(chan uint64)
 
 		go func() {
-			ticker := time.NewTicker(1 * time.Millisecond)
-			defer ticker.Stop()
-
-			block := uint64(0)
-
-			for {
+			// Emit a deterministic sequence that spans two coordination windows.
+			// This avoids relying on real-time ticker scheduling that can be slow
+			// in loaded/containerized environments.
+			for _, block := range []uint64{899, 900, 901, 1799, 1800, 1801} {
 				select {
-				case <-ticker.C:
-					block++
-					blocksChan <- block
+				case blocksChan <- block:
 				case <-ctx.Done():
 					return
 				}
 			}
+
+			// Keep the goroutine alive until cancellation so the channel is not
+			// closed unexpectedly while watchCoordinationWindows is selecting.
+			<-ctx.Done()
 		}()
 
 		return blocksChan
@@ -151,43 +152,31 @@ func TestWatchCoordinationWindows(t *testing.T) {
 		windowsChan <- window
 	}
 
-	ctx, cancelCtx := context.WithTimeout(
-		context.Background(),
-		2500*time.Millisecond,
-	)
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancelCtx()
 
 	go watchCoordinationWindows(ctx, watchBlocksFn, onWindowFn)
 
-	// Wait for the context to complete so all blocks are generated.
-	<-ctx.Done()
-
-	// Now collect windows with a timeout to ensure we get all expected windows.
-	// This avoids race conditions where callback goroutines haven't sent yet.
-	// We use a longer timeout since the watchCoordinationWindows loop may have
-	// just spawned the callback goroutine for the last window when the context expired.
-	receivedWindows := make([]*coordinationWindow, 0)
+	receivedWindows := make([]*coordinationWindow, 0, 2)
 	expectedWindows := 2
-	collectTimeout := 2 * time.Second
-	deadline := time.Now().Add(collectTimeout)
 
 	for len(receivedWindows) < expectedWindows {
 		select {
 		case window := <-windowsChan:
 			receivedWindows = append(receivedWindows, window)
-		case <-time.After(10 * time.Millisecond):
-			// Check if we've exceeded the deadline
-			if time.Now().After(deadline) {
-				t.Fatalf(
-					"timeout waiting for windows: got %d, expected %d",
-					len(receivedWindows),
-					expectedWindows,
-				)
-			}
+		case <-ctx.Done():
+			t.Fatalf(
+				"timeout waiting for windows: got %d, expected %d",
+				len(receivedWindows),
+				expectedWindows,
+			)
 		}
 	}
 
 	testutils.AssertIntsEqual(t, "received windows", 2, len(receivedWindows))
+	sort.Slice(receivedWindows, func(i, j int) bool {
+		return receivedWindows[i].coordinationBlock < receivedWindows[j].coordinationBlock
+	})
 	testutils.AssertIntsEqual(
 		t,
 		"first window",

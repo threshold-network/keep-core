@@ -5,6 +5,7 @@ export/
 external/npm
 hardhat-dependency-compiler/
 export.json
+gasReporterOutput.json
 
 # Contract artifacts
 artifacts/

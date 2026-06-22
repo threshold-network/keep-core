@@ -10,7 +10,6 @@ import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type { FakeContract } from "@defi-wonderland/smock"
 import type { Operator, OperatorID } from "./utils/operators"
 import type {
-  Allowlist,
   SortitionPool,
   WalletRegistry,
   WalletRegistryGovernance,
@@ -18,11 +17,30 @@ import type {
   IWalletOwner,
   T,
   IRandomBeacon,
+  Allowlist,
 } from "../typechain"
 
 const { to1e18 } = helpers.number
 
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
+
+async function rewardsBeneficiaryAddress(
+  walletRegistry: WalletRegistry,
+  staking: TokenStaking,
+  stakingProvider: string
+): Promise<string> {
+  const allowlistAddr = await walletRegistry.allowlist()
+  if (allowlistAddr !== ethers.constants.AddressZero) {
+    const al = (await ethers.getContractAt(
+      "Allowlist",
+      allowlistAddr
+    )) as Allowlist
+    const r = await al.rolesOf(stakingProvider)
+    return r.beneficiary
+  }
+  const r = await staking.rolesOf(stakingProvider)
+  return r.beneficiary
+}
 
 describe("WalletRegistry - Rewards", () => {
   let tToken: T
@@ -58,7 +76,7 @@ describe("WalletRegistry - Rewards", () => {
       deployer,
       governance,
       thirdParty,
-    } = await walletRegistryFixture())
+    } = await walletRegistryFixture({ useAllowlist: true }))
     ;({ members, walletID } = await createNewWallet(
       walletRegistry,
       walletOwner.wallet,
@@ -90,8 +108,11 @@ describe("WalletRegistry - Rewards", () => {
         stakingProvider = await walletRegistry.operatorToStakingProvider(
           operator
         )
-        // eslint-disable-next-line @typescript-eslint/no-extra-semi
-        ;({ beneficiary } = await staking.rolesOf(stakingProvider))
+        beneficiary = await rewardsBeneficiaryAddress(
+          walletRegistry,
+          staking,
+          stakingProvider
+        )
 
         // Allocate sortition pool rewards
         await tToken.connect(deployer).mint(deployer.address, rewardAmount)
@@ -144,8 +165,11 @@ describe("WalletRegistry - Rewards", () => {
         stakingProvider = await walletRegistry.operatorToStakingProvider(
           operator
         )
-        // eslint-disable-next-line @typescript-eslint/no-extra-semi
-        ;({ beneficiary } = await staking.rolesOf(stakingProvider))
+        beneficiary = await rewardsBeneficiaryAddress(
+          walletRegistry,
+          staking,
+          stakingProvider
+        )
 
         // Allocate sortition pool rewards
         await tToken.connect(deployer).mint(deployer.address, rewardAmount)
@@ -242,70 +266,6 @@ describe("WalletRegistry - Rewards", () => {
           .withdrawIneligibleRewards(thirdParty.address)
         expect(await tToken.balanceOf(thirdParty.address)).to.be.gt(0)
       })
-    })
-  })
-
-  describe("withdrawRewards when allowlist != address(0)", () => {
-    const walletPublicKeyLocal: string = ecdsaData.group1.publicKey
-
-    let tTokenLocal: T
-    let walletRegistryLocal: WalletRegistry
-    let sortitionPoolLocal: SortitionPool
-    let randomBeaconLocal: FakeContract<IRandomBeacon>
-    let walletOwnerLocal: FakeContract<IWalletOwner>
-    let deployerLocal: SignerWithAddress
-    let membersLocal: Operator[]
-
-    before(async () => {
-      await createSnapshot()
-      ;({
-        tToken: tTokenLocal,
-        walletRegistry: walletRegistryLocal,
-        sortitionPool: sortitionPoolLocal,
-        randomBeacon: randomBeaconLocal,
-        walletOwner: walletOwnerLocal,
-        deployer: deployerLocal,
-      } = await walletRegistryFixture({ useAllowlist: true }))
-      expect(await walletRegistryLocal.allowlist()).to.not.equal(
-        ethers.constants.AddressZero
-      )
-      ;({ members: membersLocal } = await createNewWallet(
-        walletRegistryLocal,
-        walletOwnerLocal.wallet,
-        randomBeaconLocal,
-        walletPublicKeyLocal
-      ))
-    })
-
-    after(async () => {
-      await restoreSnapshot()
-    })
-
-    it("should pay rewards to _currentAuthorizationSource().rolesOf beneficiary (Allowlist)", async () => {
-      const operator = membersLocal[0].signer.address
-      const stakingProvider =
-        await walletRegistryLocal.operatorToStakingProvider(operator)
-      const allowlistAddr = await walletRegistryLocal.allowlist()
-      const allowlist = (await ethers.getContractAt(
-        "Allowlist",
-        allowlistAddr
-      )) as Allowlist
-
-      const { beneficiary: expectedBeneficiary } = await allowlist.rolesOf(
-        stakingProvider
-      )
-      expect(expectedBeneficiary).to.equal(stakingProvider)
-
-      await tTokenLocal
-        .connect(deployerLocal)
-        .mint(deployerLocal.address, rewardAmount)
-      await tTokenLocal
-        .connect(deployerLocal)
-        .approveAndCall(sortitionPoolLocal.address, rewardAmount, [])
-
-      expect(await tTokenLocal.balanceOf(expectedBeneficiary)).to.equal(0)
-      await walletRegistryLocal.withdrawRewards(stakingProvider)
-      expect(await tTokenLocal.balanceOf(expectedBeneficiary)).to.be.gt(0)
     })
   })
 })

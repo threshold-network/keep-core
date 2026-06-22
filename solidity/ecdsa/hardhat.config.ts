@@ -1,8 +1,15 @@
+// `@nomicfoundation/hardhat-verify` ^2.1.x is the Hardhat 2–compatible line; Hardhat 3 uses ^3.x (API v2).
+// Plugin is imported statically so HardhatUserConfig picks up the `etherscan` field type
+// augmentation. Set DISABLE_HARDHAT_VERIFY=true to skip the Etherscan config and any verify
+// calls in deploy scripts; the plugin's task registration is harmless when unused.
+import fs from "fs"
+import path from "path"
+
+import "@nomicfoundation/hardhat-chai-matchers"
 import "@nomicfoundation/hardhat-verify"
 import "@keep-network/hardhat-helpers"
 import "@keep-network/hardhat-local-networks-config"
 import "@nomiclabs/hardhat-waffle"
-import "@nomicfoundation/hardhat-chai-matchers"
 import "@openzeppelin/hardhat-upgrades"
 import "@typechain/hardhat"
 import "hardhat-deploy"
@@ -19,6 +26,34 @@ import { TASK_TEST } from "hardhat/builtin-tasks/task-names"
 import type { HardhatUserConfig } from "hardhat/config"
 
 const TASK_CHECK_ACCOUNTS_COUNT = "check-accounts-count"
+
+const hardhatVerifyEnabled = process.env.DISABLE_HARDHAT_VERIFY !== "true"
+
+/**
+ * Random-beacon `export/` is gitignored in the random-beacon package, so CI never
+ * has ../random-beacon/export. Prefer committed `external/random-beacon-export/deploy`
+ * (mirrors npm export scripts with a fixed 05_approve_*) before falling back to node_modules.
+ */
+function resolveRandomBeaconExport(subdir: "deploy" | "artifacts"): string {
+  const local = path.join(__dirname, "../random-beacon/export", subdir)
+  if (fs.existsSync(local)) {
+    return local
+  }
+  if (subdir === "deploy") {
+    const bundledDeploy = path.join(
+      __dirname,
+      "external/random-beacon-export/deploy"
+    )
+    if (fs.existsSync(bundledDeploy)) {
+      return bundledDeploy
+    }
+  }
+  return path.join(
+    __dirname,
+    "node_modules/@keep-network/random-beacon/export",
+    subdir
+  )
+}
 
 const thresholdSolidityCompilerConfig = {
   version: "0.8.9",
@@ -137,28 +172,37 @@ const config: HardhatUserConfig = {
     username: "thesis",
     project: "",
   },
-  etherscan: {
-    apiKey: process.env.ETHERSCAN_API_KEY,
-  },
+  // Sepolia: all four roles collapse to account index 0 (the single key in
+  // ACCOUNTS_PRIVATE_KEYS) because the testnet stack is operated from one funded
+  // deployer key — there is no separate governance multisig, Threshold Council, or
+  // chaosnet owner on Sepolia. Single-key operation is intentional for our testnet
+  // deploy flow; downstream branches that distinguish deployer vs. governance vs.
+  // esdm (e.g. tasks/initialize-wallet-owner.ts's owner-vs-governance fork,
+  // Ownable.transferOwnership flows) are inactive on Sepolia by design.
+  // This MUST NOT be replicated on mainnet, where the deployer key must be distinct
+  // from governance / chaosnetOwner / esdm (the latter three legitimately share the
+  // Threshold Council address). A deploy-time guard in deploy/00_log_external_deployments.ts
+  // fails the run on mainnet if the deployer collides with any other role.
+  // (etherscan config is assigned post-declaration below to keep HardhatUserConfig inference intact.)
   namedAccounts: {
     deployer: {
       default: 1, // take the second account
-      sepolia: "0x68ad60CC5e8f3B7cC53beaB321cf0e6036962dBc",
+      sepolia: 0,
       mainnet: "0x716089154304f22a2F9c8d2f8C45815183BF3532",
     },
     governance: {
       default: 2,
-      sepolia: "0x68ad60CC5e8f3B7cC53beaB321cf0e6036962dBc",
+      sepolia: 0,
       mainnet: "0x9f6e831c8f8939dc0c830c6e492e7cef4f9c2f5f", // Threshold Council
     },
     chaosnetOwner: {
       default: 3,
-      sepolia: "0x68ad60CC5e8f3B7cC53beaB321cf0e6036962dBc",
+      sepolia: 0,
       mainnet: "0x9f6e831c8f8939dc0c830c6e492e7cef4f9c2f5f", // Threshold Council
     },
     esdm: {
       default: 4,
-      sepolia: "0x68ad60CC5e8f3B7cC53beaB321cf0e6036962dBc",
+      sepolia: 0,
       mainnet: "0x9f6e831c8f8939dc0c830c6e492e7cef4f9c2f5f", // Threshold Council
     },
   },
@@ -173,9 +217,8 @@ const config: HardhatUserConfig = {
                 "node_modules/@threshold-network/solidity-contracts/export/deploy",
             },
             {
-              artifacts:
-                "node_modules/@keep-network/random-beacon/export/artifacts",
-              deploy: "node_modules/@keep-network/random-beacon/export/deploy",
+              artifacts: resolveRandomBeaconExport("artifacts"),
+              deploy: resolveRandomBeaconExport("deploy"),
             },
           ]
         : undefined,
@@ -187,13 +230,15 @@ const config: HardhatUserConfig = {
       // with `yarn link` command.
       development: [
         "node_modules/@threshold-network/solidity-contracts/deployments/development",
-        "node_modules/@keep-network/random-beacon/deployments/development",
+        fs.existsSync(
+          path.join(__dirname, "../random-beacon/deployments/development")
+        )
+          ? path.join(__dirname, "../random-beacon/deployments/development")
+          : "node_modules/@keep-network/random-beacon/deployments/development",
       ],
-      sepolia: [
-        "./external/sepolia",
-        "node_modules/@threshold-network/solidity-contracts/artifacts",
-        "node_modules/@keep-network/random-beacon/artifacts",
-      ],
+      // Use local deployments/sepolia only - npm artifacts have transactionHash
+      // that causes "cannot get the transaction" errors with some RPC nodes.
+      sepolia: [],
       mainnet: ["./external/mainnet"],
     },
   },
@@ -250,5 +295,16 @@ task(TASK_CHECK_ACCOUNTS_COUNT, "Checks accounts count").setAction(async () => {
     )
   }
 })
+
+if (hardhatVerifyEnabled) {
+  // Assigned post-declaration so the HardhatUserConfig type annotation above
+  // remains intact (a conditional spread inside the literal breaks inference).
+  const configWithEtherscan = config as HardhatUserConfig & {
+    etherscan?: { apiKey?: string }
+  }
+  configWithEtherscan.etherscan = {
+    apiKey: process.env.ETHERSCAN_API_KEY,
+  }
+}
 
 export default config

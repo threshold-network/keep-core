@@ -170,6 +170,7 @@ func start(cmd *cobra.Command) error {
 			clientConfig.Tbtc,
 			clientInfoRegistry,
 			perfMetrics, // Pass the existing performance metrics instance to avoid duplicate registrations
+			clientConfig.Ethereum.Network,
 		)
 		if err != nil {
 			return fmt.Errorf("error initializing TBTC: [%v]", err)

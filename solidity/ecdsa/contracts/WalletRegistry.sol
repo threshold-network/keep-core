@@ -450,24 +450,29 @@ contract WalletRegistry is
     }
 
     /// @notice Withdraws application rewards for the given staking provider.
-    ///         Rewards are sent to the beneficiary returned by
-    ///         `_currentAuthorizationSource().rolesOf(stakingProvider)` — the
-    ///         same authorization source used elsewhere after TIP-092 (Allowlist
-    ///         when `allowlist != address(0)`, otherwise TokenStaking). Reverts
-    ///         if the staking provider has not registered an operator address.
+    ///         Rewards are withdrawn to the beneficiary returned by
+    ///         `rolesOf(stakingProvider)` on the current authorization source.
+    ///         Reverts if the staking provider has not registered the operator
+    ///         address.
     /// @dev Emits `RewardsWithdrawn` event.
     ///
-    /// Allowlist vs TokenStaking: `Allowlist.rolesOf` follows TIP-092 semantics
-    /// (beneficiary is the staking provider address), while `TokenStaking.rolesOf`
-    /// can return a distinct delegated beneficiary. After `initializeV2(allowlist)`,
-    /// reward payout follows Allowlist, not legacy TokenStaking role resolution.
+    ///         Beneficiary lookup uses `_currentAuthorizationSource()` (Allowlist
+    ///         when set, otherwise legacy TokenStaking), consistent with other
+    ///         authorization reads. For delegated setups, Allowlist.rolesOf() and
+    ///         TokenStaking.rolesOf() can disagree on beneficiary; mainnet has
+    ///         shown at least one live provider where the two sources diverge.
     ///
-    /// Historical Context (TIP-092/100 - February 15, 2025):
-    /// - Sortition pool DKG participation rewards HALTED Feb 15, 2025
-    /// - TokenStaking notification rewards HALTED for ECDSA/RandomBeacon
-    /// - Only TACo application rewards continue (6-month transition)
-    /// - For ECDSA, expect zero withdrawable amount unless application rewards
-    ///   are reactivated.
+    /// Historical context (TIP-092/100 - February 15, 2025):
+    /// - Sortition pool DKG participation rewards halted; TokenStaking notification
+    ///   rewards halted for ECDSA/RandomBeacon; only TACo application rewards were
+    ///   in a transition window. Today this path returns 0 for ECDSA operators (no
+    ///   rewards), so immediate impact is bounded; the next redeploy still encodes
+    ///   the beneficiary routing above if rewards are ever re-enabled.
+    ///
+    /// If rewards are reactivated: Allowlist.rolesOf() always returns the staking
+    /// provider as beneficiary (no owner-vs-beneficiary delegation), while
+    /// TokenStaking.rolesOf() returns the configured beneficiary when delegation
+    /// applies. Operators should align expectations with whichever source is active.
     function withdrawRewards(address stakingProvider) external {
         address operator = stakingProviderToOperator(stakingProvider);
         if (operator == address(0)) revert UnknownOperator();
