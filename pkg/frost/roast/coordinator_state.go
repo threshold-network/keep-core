@@ -525,13 +525,13 @@ func (c *inMemoryCoordinator) VerifyBundle(
 	if err := verifyBundleSignature(c.verifier, msg, expectedCoordinator); err != nil {
 		return fmt.Errorf("coordinator: %w", err)
 	}
+	if err := verifyOwnObservationsPresent(msg, c.selfMember, selfSubmission); err != nil {
+		return err
+	}
 	for i := range msg.Bundle {
 		if err := verifySnapshotSignature(c.verifier, &msg.Bundle[i]); err != nil {
 			return fmt.Errorf("coordinator: bundle[%d]: %w", i, err)
 		}
-	}
-	if err := verifyOwnObservationsPresent(msg, c.selfMember, selfSubmission); err != nil {
-		return err
 	}
 	return nil
 }
