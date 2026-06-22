@@ -19,6 +19,7 @@ typedef struct {
 } TbtcSignerResult;
 
 TbtcSignerResult frost_tbtc_version(void);
+TbtcSignerResult frost_tbtc_abi_version(void);
 TbtcSignerResult frost_tbtc_init_signer_config(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_roast_liveness_policy(void);
 TbtcSignerResult frost_tbtc_hardening_metrics(void);

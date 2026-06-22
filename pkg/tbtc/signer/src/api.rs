@@ -673,6 +673,22 @@ pub struct RoastLivenessPolicyResult {
     pub exclusion_evidence_policy: String,
 }
 
+/// The FFI CONTRACT version reported by `frost_tbtc_abi_version`, so a Go bridge can
+/// fail closed against an incompatible `libfrost_tbtc` rather than silently
+/// misinterpreting a changed contract.
+///
+/// `abi_major` covers any INCOMPATIBLE change to the Go<->Rust contract: C signatures,
+/// JSON field meaning, required fields, enum/status values, serialization, memory
+/// ownership, or crypto transcript/domain semantics the bridge relies on. `abi_minor`
+/// covers a cumulative ADDITIVE, backward-compatible change - a new symbol or a new
+/// optional field that old bridges safely ignore. A consumer requires
+/// `lib.abi_major == its_major` AND `lib.abi_minor >= the_minor_it_needs`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct FrostTbtcAbiVersionResult {
+    pub abi_major: u32,
+    pub abi_minor: u32,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct SignerHardeningMetricsResult {
     pub runtime_version: String,

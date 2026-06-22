@@ -10,12 +10,12 @@ use std::sync::OnceLock;
 use api::{
     AggregateRequest, BuildTaprootTxRequest, DeriveInteractiveAttemptContextRequest,
     DifferentialFuzzRequest, DkgPart1Request, DkgPart2Request, DkgPart3Request,
-    FinalizeSignRoundRequest, GenerateNoncesAndCommitmentsRequest, InitSignerConfigRequest,
-    InteractiveAggregateRequest, InteractiveRound1Request, InteractiveRound2Request,
-    InteractiveSessionAbortRequest, InteractiveSessionOpenRequest, NewSigningPackageRequest,
-    PromoteCanaryRequest, QuarantineStatusRequest, RefreshCadenceStatusRequest,
-    RefreshSharesRequest, RollbackCanaryRequest, RunDkgRequest, SignShareRequest,
-    StartSignRoundRequest, TranscriptAuditRequest, TriggerEmergencyRekeyRequest,
+    FinalizeSignRoundRequest, FrostTbtcAbiVersionResult, GenerateNoncesAndCommitmentsRequest,
+    InitSignerConfigRequest, InteractiveAggregateRequest, InteractiveRound1Request,
+    InteractiveRound2Request, InteractiveSessionAbortRequest, InteractiveSessionOpenRequest,
+    NewSigningPackageRequest, PromoteCanaryRequest, QuarantineStatusRequest,
+    RefreshCadenceStatusRequest, RefreshSharesRequest, RollbackCanaryRequest, RunDkgRequest,
+    SignShareRequest, StartSignRoundRequest, TranscriptAuditRequest, TriggerEmergencyRekeyRequest,
     VerifyBlameProofRequest,
 };
 use ffi::{
@@ -26,6 +26,19 @@ use ffi::{
 pub use ffi::TbtcBuffer;
 
 const TBTC_SIGNER_VERSION: &str = "tbtc-signer/0.1.0-bootstrap";
+
+/// The FFI CONTRACT version (see api::FrostTbtcAbiVersionResult), reported by
+/// frost_tbtc_abi_version so a Go bridge can fail closed against an incompatible lib.
+/// Starts at 1.0 - NOT 0.x, to avoid semver pre-1.0 ambiguity - distinct from the
+/// human-readable TBTC_SIGNER_VERSION string above, which stays informational only.
+///
+/// Bump rules: bump TBTC_SIGNER_ABI_MAJOR on ANY incompatible change to the Go<->Rust
+/// contract; bump TBTC_SIGNER_ABI_MINOR on a purely ADDITIVE, backward-compatible
+/// change. A minor bump is valid ONLY if old consumers safely ignore the addition - if
+/// a new field or enum value can appear in an existing response that an old bridge does
+/// not tolerate, that is a MAJOR bump.
+const TBTC_SIGNER_ABI_MAJOR: u32 = 1;
+const TBTC_SIGNER_ABI_MINOR: u32 = 0;
 use engine::TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV;
 #[cfg(test)]
 use engine::TBTC_SIGNER_PROFILE_ENV;
@@ -67,6 +80,21 @@ fn bootstrap_mode_enabled() -> bool {
 #[no_mangle]
 pub extern "C" fn frost_tbtc_version() -> TbtcSignerResult {
     success_from_string(TBTC_SIGNER_VERSION.to_string())
+}
+
+/// Reports the structured FFI CONTRACT version (api::FrostTbtcAbiVersionResult JSON)
+/// so a Go bridge can fail closed on an incompatible libfrost_tbtc. See
+/// TBTC_SIGNER_ABI_MAJOR / TBTC_SIGNER_ABI_MINOR for the bump rules. This response
+/// shape is the ROOT compatibility surface and must stay stable: {abi_major, abi_minor}
+/// as unsigned integers.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_abi_version() -> TbtcSignerResult {
+    ffi_entry(|| {
+        serialize_response(&FrostTbtcAbiVersionResult {
+            abi_major: TBTC_SIGNER_ABI_MAJOR,
+            abi_minor: TBTC_SIGNER_ABI_MINOR,
+        })
+    })
 }
 
 #[no_mangle]
@@ -455,18 +483,19 @@ mod tests {
         DifferentialFuzzRequest, DifferentialFuzzResult, DkgPart1Request, DkgPart1Result,
         DkgPart2Request, DkgPart2Result, DkgPart3Request, DkgPart3Result, DkgParticipant,
         DkgRound1Package, DkgRound2Package, ErrorResponse, FinalizeSignRoundRequest,
-        GenerateNoncesAndCommitmentsRequest, GenerateNoncesAndCommitmentsResult,
-        NewSigningPackageRequest, NewSigningPackageResult, PromoteCanaryRequest,
-        QuarantineStatusRequest, QuarantineStatusResult, RefreshCadenceStatusRequest,
-        RefreshCadenceStatusResult, RefreshSharesRequest, RoastLivenessPolicyResult,
-        RollbackCanaryRequest, RoundContribution, RunDkgRequest, ShareMaterial, SignShareRequest,
-        SignShareResult, SignerHardeningMetricsResult, StartSignRoundRequest, TransactionResult,
-        TranscriptAuditRequest, TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
+        FrostTbtcAbiVersionResult, GenerateNoncesAndCommitmentsRequest,
+        GenerateNoncesAndCommitmentsResult, NewSigningPackageRequest, NewSigningPackageResult,
+        PromoteCanaryRequest, QuarantineStatusRequest, QuarantineStatusResult,
+        RefreshCadenceStatusRequest, RefreshCadenceStatusResult, RefreshSharesRequest,
+        RoastLivenessPolicyResult, RollbackCanaryRequest, RoundContribution, RunDkgRequest,
+        ShareMaterial, SignShareRequest, SignShareResult, SignerHardeningMetricsResult,
+        StartSignRoundRequest, TransactionResult, TranscriptAuditRequest,
+        TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
     };
     use crate::{
-        frost_tbtc_aggregate, frost_tbtc_build_taproot_tx, frost_tbtc_canary_rollout_status,
-        frost_tbtc_dkg_part1, frost_tbtc_dkg_part2, frost_tbtc_dkg_part3,
-        frost_tbtc_finalize_sign_round, frost_tbtc_free_buffer,
+        frost_tbtc_abi_version, frost_tbtc_aggregate, frost_tbtc_build_taproot_tx,
+        frost_tbtc_canary_rollout_status, frost_tbtc_dkg_part1, frost_tbtc_dkg_part2,
+        frost_tbtc_dkg_part3, frost_tbtc_finalize_sign_round, frost_tbtc_free_buffer,
         frost_tbtc_generate_nonces_and_commitments, frost_tbtc_hardening_metrics,
         frost_tbtc_new_signing_package, frost_tbtc_promote_canary, frost_tbtc_quarantine_status,
         frost_tbtc_refresh_cadence_status, frost_tbtc_refresh_shares,
@@ -1123,6 +1152,20 @@ mod tests {
             policy.exclusion_evidence_policy,
             "timeout_or_invalid_share_proof"
         );
+    }
+
+    #[test]
+    fn abi_version_reports_the_contract_version() {
+        let (status, payload) = call_ffi_no_input(frost_tbtc_abi_version);
+        assert_eq!(status, 0);
+
+        let abi: FrostTbtcAbiVersionResult =
+            serde_json::from_slice(&payload).expect("abi version payload decode");
+        // The enforced FFI contract starts at 1.0; bump deliberately per the
+        // TBTC_SIGNER_ABI_MAJOR / TBTC_SIGNER_ABI_MINOR rules. This test pins the
+        // current value so an accidental bump is caught.
+        assert_eq!(abi.abi_major, 1);
+        assert_eq!(abi.abi_minor, 0);
     }
 
     #[test]
