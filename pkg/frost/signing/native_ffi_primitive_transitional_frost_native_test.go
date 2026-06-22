@@ -3041,6 +3041,90 @@ func TestBuildTaggedTBTCSignerErrorPayload(t *testing.T) {
 	}
 }
 
+func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_ABIIncompatible_DoesNotFallback(
+	t *testing.T,
+) {
+	// Codex #4105 P2: a PRESENT-but-incompatible engine lib must fail CLOSED. The coarse
+	// path must NOT fall back to legacy tECDSA signing even though the material carries a
+	// legacy private key share (the ABI error was previously swallowed by the fallback,
+	// signing anyway). A valid attempt is used so the only thing stopping a signature is
+	// the ABI guard.
+	t.Setenv(AcceptScaffoldKeyGroupEnvVar, "true")
+
+	// Force the engine-lib ABI preflight to report a present-but-incompatible lib.
+	originalCheck := tbtcSignerABIIncompatibilityCheck
+	tbtcSignerABIIncompatibilityCheck = func() error { return ErrTBTCSignerABIIncompatible }
+	t.Cleanup(func() { tbtcSignerABIIncompatibilityCheck = originalCheck })
+
+	fixtures, err := tecdsatest.LoadPrivateKeyShareTestFixtures(3)
+	if err != nil {
+		t.Fatalf("failed loading key share fixtures: [%v]", err)
+	}
+	privateKeyShare := tecdsa.NewPrivateKeyShare(fixtures[0])
+	privateKeySharePayload, err := privateKeyShare.Marshal()
+	if err != nil {
+		t.Fatalf("failed marshaling private key share: [%v]", err)
+	}
+	signerMaterialPayload, err := json.Marshal(&NativeTBTCSignerMaterialPayload{
+		KeyGroup:                 "group-1",
+		KeyGroupSource:           NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey,
+		LegacyPrivateKeyShareHex: hex.EncodeToString(privateKeySharePayload),
+	})
+	if err != nil {
+		t.Fatalf("cannot marshal signer material payload: [%v]", err)
+	}
+
+	UnregisterNativeTBTCSignerEngine()
+	UnregisterNativeTBTCSignerFallbackObserver()
+	t.Cleanup(UnregisterNativeTBTCSignerEngine)
+	t.Cleanup(UnregisterNativeTBTCSignerFallbackObserver)
+	if err := RegisterNativeTBTCSignerEngine(
+		&mockBuildTaggedTBTCSignerEngine{version: "tbtc-signer/0.1.0-bootstrap"},
+	); err != nil {
+		t.Fatalf("unexpected registration error: [%v]", err)
+	}
+
+	var observedEvents []NativeTBTCSignerFallbackEvent
+	if err := RegisterNativeTBTCSignerFallbackObserver(
+		func(event NativeTBTCSignerFallbackEvent) {
+			observedEvents = append(observedEvents, event)
+		},
+	); err != nil {
+		t.Fatalf("unexpected observer registration error: [%v]", err)
+	}
+
+	primitive := &buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive{}
+	signature, err := primitive.Sign(nil, nil, &NativeExecutionFFISigningRequest{
+		Message:            big.NewInt(123),
+		SessionID:          "session-1",
+		MemberIndex:        1,
+		GroupSize:          3,
+		DishonestThreshold: 1,
+		SignerMaterial: &NativeSignerMaterial{
+			Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
+			Payload: signerMaterialPayload,
+		},
+		Attempt: &Attempt{
+			Number:                 1,
+			CoordinatorMemberIndex: 1,
+			IncludedMembersIndexes: []group.MemberIndex{1, 2},
+		},
+	})
+
+	if signature != nil {
+		t.Fatal("an incompatible engine lib must not produce a signature (no legacy fallback)")
+	}
+	if !errors.Is(err, ErrTBTCSignerABIIncompatible) {
+		t.Fatalf("expected ErrTBTCSignerABIIncompatible, got: [%v]", err)
+	}
+	if len(observedEvents) != 0 {
+		t.Fatalf(
+			"legacy fallback must NOT be reached on ABI incompatibility; got %d fallback event(s)",
+			len(observedEvents),
+		)
+	}
+}
+
 func TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_ConsumedAttemptReplay_DoesNotFallback(
 	t *testing.T,
 ) {

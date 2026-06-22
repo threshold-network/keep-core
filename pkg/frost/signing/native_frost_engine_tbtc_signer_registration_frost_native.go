@@ -22,6 +22,7 @@ typedef struct {
 } TbtcSignerResult;
 
 typedef TbtcSignerResult (*tbtc_version_fn)(void);
+typedef TbtcSignerResult (*tbtc_abi_version_fn)(void);
 typedef TbtcSignerResult (*tbtc_run_dkg_fn)(
   const uint8_t* request_ptr,
   size_t request_len
@@ -118,6 +119,18 @@ static TbtcSignerResult tbtc_signer_version(void) {
   }
 
   return version();
+}
+
+static TbtcSignerResult tbtc_signer_abi_version(void) {
+  tbtc_abi_version_fn abi_version = (tbtc_abi_version_fn)dlsym(
+    RTLD_DEFAULT,
+    "frost_tbtc_abi_version"
+  );
+  if (abi_version == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+
+  return abi_version();
 }
 
 static TbtcSignerResult tbtc_signer_run_dkg(const uint8_t* request_ptr, size_t request_len) {
@@ -2445,6 +2458,16 @@ func callBuildTaggedTBTCSignerVersion() ([]byte, error) {
 	return parseBuildTaggedTBTCSignerResult("Version", result)
 }
 
+// callBuildTaggedTBTCSignerABIVersion fetches the structured FFI contract version. A
+// missing frost_tbtc_abi_version symbol surfaces as ErrNativeCryptographyUnavailable
+// (the lib predates ABI versioning), which the ABI preflight turns into an explicit
+// incompatibility. It deliberately does NOT pass through callBuildTaggedTBTCSignerOperation
+// (it takes no request and must not recurse into the ABI gate).
+func callBuildTaggedTBTCSignerABIVersion() ([]byte, error) {
+	result := C.tbtc_signer_abi_version()
+	return parseBuildTaggedTBTCSignerResult("ABIVersion", result)
+}
+
 func callBuildTaggedTBTCSignerRunDKG(
 	requestPayload []byte,
 ) ([]byte, error) {
@@ -2597,6 +2620,14 @@ func callBuildTaggedTBTCSignerOperation(
 	requestPayload []byte,
 	call func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult,
 ) ([]byte, error) {
+	// ABI preflight (once per process): every request-taking engine operation funnels
+	// through here, so a libfrost_tbtc whose FFI contract version is incompatible with
+	// this bridge fails CLOSED before any contract-sensitive call rather than risking a
+	// silently misinterpreted struct/JSON contract. The no-arg version/abi-version
+	// calls bypass this helper, so the check does not recurse.
+	if err := ensureTBTCSignerABICompatible(); err != nil {
+		return nil, err
+	}
 	if len(requestPayload) == 0 {
 		return nil, buildTaggedTBTCSignerOperationError(
 			operation,

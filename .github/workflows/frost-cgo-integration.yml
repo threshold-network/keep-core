@@ -85,7 +85,8 @@ jobs:
             frost_tbtc_new_signing_package \
             frost_tbtc_interactive_aggregate \
             frost_tbtc_verify_signature_share \
-            frost_tbtc_version; do
+            frost_tbtc_version \
+            frost_tbtc_abi_version; do
             if ! nm -D --defined-only "$lib" | grep -q " ${sym}$"; then
               echo "missing exported symbol: ${sym}"
               missing=1
@@ -103,5 +104,10 @@ jobs:
           # references its symbols only via dlsym (no direct references), so the loader
           # makes them resolvable at runtime; rpath lets the test binary find the .so.
           export CGO_LDFLAGS="-L${FROST_LIB_DIR} -Wl,--no-as-needed -lfrost_tbtc -Wl,-rpath,${FROST_LIB_DIR}"
+          # The real-crypto suite (exercises the engine + the ABI preflight against the
+          # linked lib) plus the ABI fail-closed test (proves a present-but-incompatible
+          # lib refuses to fall back to legacy signing; uses the seam, so it does not need
+          # an actually-incompatible lib). This gate is the only CI that builds these tags.
           go test -tags "frost_native frost_tbtc_signer" -count=1 \
-            -run 'TestRealCgoInteractiveSigning' ./pkg/frost/signing/
+            -run 'TestRealCgoInteractiveSigning|TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_ABIIncompatible_DoesNotFallback' \
+            ./pkg/frost/signing/
