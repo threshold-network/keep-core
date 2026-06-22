@@ -85,7 +85,8 @@ jobs:
             frost_tbtc_new_signing_package \
             frost_tbtc_interactive_aggregate \
             frost_tbtc_verify_signature_share \
-            frost_tbtc_version; do
+            frost_tbtc_version \
+            frost_tbtc_abi_version; do
             if ! nm -D --defined-only "$lib" | grep -q " ${sym}$"; then
               echo "missing exported symbol: ${sym}"
               missing=1
