@@ -400,6 +400,74 @@ func TestVerifyBundle_DetectsCensorship(t *testing.T) {
 	}
 }
 
+func TestVerifyBundle_RetainsMutatedSelfSnapshotEvidenceBeforeSignatureFailure(t *testing.T) {
+	captured := captureEquivocationEvidence(t)
+
+	scratch := NewInMemoryCoordinator().(*inMemoryCoordinator)
+	ctx := newTestContext(t)
+	h0, _ := scratch.BeginAttempt(ctx)
+	elected, _ := scratch.SelectedCoordinator(h0)
+	receiverID := pickNonCoordinatorMember(t, ctx.IncludedSet, elected)
+
+	receiver := NewInMemoryCoordinatorWithSigning(
+		receiverID,
+		&fakeSigner{id: receiverID},
+		fakeVerifier{},
+	).(*inMemoryCoordinator)
+	rh, err := receiver.BeginAttempt(ctx)
+	if err != nil {
+		t.Fatalf("receiver begin: %v", err)
+	}
+	selfSnap := signSnapshotForTest(
+		t,
+		NewLocalEvidenceSnapshot(receiverID, ctx.Hash(), attempt.Evidence{}),
+	)
+	if err := receiver.RecordEvidence(rh, selfSnap); err != nil {
+		t.Fatalf("receiver record self: %v", err)
+	}
+
+	mutated := *selfSnap
+	mutated.OperatorSignature = bytes.Repeat([]byte{0xff}, len(mutated.OperatorSignature))
+	mutated.bodyCache = nil
+	mutated.signaturePayloadCache = nil
+	mutated.wireEnvelope = nil
+
+	contextHash := ctx.Hash()
+	bundle := &TransitionMessage{
+		AttemptContextHash: append([]byte(nil), contextHash[:]...),
+		CoordinatorIDValue: uint32(elected),
+		Bundle:             []LocalEvidenceSnapshot{mutated},
+	}
+	payload, err := bundle.SignableBytes()
+	if err != nil {
+		t.Fatalf("bundle signable bytes: %v", err)
+	}
+	signature, err := (&fakeSigner{id: elected}).Sign(payload)
+	if err != nil {
+		t.Fatalf("sign bundle: %v", err)
+	}
+	bundle.CoordinatorSignature = signature
+
+	err = receiver.VerifyBundle(rh, bundle)
+	if !errors.Is(err, ErrCensorshipDetected) {
+		t.Fatalf("expected ErrCensorshipDetected, got %v", err)
+	}
+	if len(*captured) != 1 {
+		t.Fatalf("expected 1 evidence event, got %d", len(*captured))
+	}
+	evidence := (*captured)[0]
+	if evidence.Kind != EquivocationKindOwnSnapshotMutatedInBundle {
+		t.Fatalf("kind = %q", evidence.Kind)
+	}
+	wantSelf, _ := selfSnap.Marshal()
+	if !bytes.Equal(evidence.ExistingEnvelope, wantSelf) {
+		t.Fatal("existing envelope must be the self submission verbatim")
+	}
+	if len(evidence.ConflictingEnvelope) == 0 {
+		t.Fatal("conflicting envelope must carry the bundled snapshot")
+	}
+}
+
 func TestVerifyBundle_DetectsCoordinatorSignatureForgery(t *testing.T) {
 	scratch := NewInMemoryCoordinator().(*inMemoryCoordinator)
 	ctx := newTestContext(t)
