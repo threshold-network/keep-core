@@ -257,11 +257,29 @@ func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive)
 	}
 }
 
+// tbtcSignerABIIncompatibilityCheck is the engine-lib ABI preflight the coarse signing
+// path consults before any legacy fallback. It points at the build-split
+// tbtcSignerABIIncompatibility (the real cgo check, or the non-cgo no-op); a test seam
+// so the fail-closed-no-fallback behavior is exercisable in the frost_native build.
+var tbtcSignerABIIncompatibilityCheck = tbtcSignerABIIncompatibility
+
 func (btlcnnefsp *buildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive) signWithTBTCSignerCoarseEngine(
 	ctx context.Context,
 	logger log.StandardLogger,
 	request *NativeExecutionFFISigningRequest,
 ) (*frost.Signature, error) {
+	// Fail closed on a PRESENT-but-incompatible engine lib BEFORE any legacy fallback
+	// below can mask it (Codex #4105 P2). The FFI preflight surfaces a wrong/malformed
+	// contract version as ErrTBTCSignerABIIncompatible; every fallbackTBTCSignerLegacySigning
+	// path below would otherwise swallow that into a legacy tECDSA signature if the
+	// material carries a private key share. A MISSING/absent lib is NOT this sentinel
+	// (it is ErrNativeCryptographyUnavailable) and still falls back as intended.
+	// Indirected through a var so the no-fallback behavior is testable in the
+	// frost_native build, where tbtcSignerABIIncompatibility is the non-cgo no-op.
+	if err := tbtcSignerABIIncompatibilityCheck(); err != nil {
+		return nil, err
+	}
+
 	payload, err := decodeBuildTaggedTBTCSignerMaterialPayload(request.SignerMaterial)
 	if err != nil {
 		return nil, err
