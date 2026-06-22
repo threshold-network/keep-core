@@ -7,9 +7,19 @@ rewrite architecture.
 
 ## Implemented in this branch
 
-- Added `tools/tbtc-signer` Rust crate that builds a `cdylib` named
+> Scope note: this section records the broader `tbtc-signer` rust-rewrite
+> bootstrap effort across keep-core, not the diff of a single PR. Bullets that
+> cite a `threshold-network/keep-core` PR or commit (e.g. the `BuildTaprootTx`
+> CGO bridge wiring, the transitional bootstrap-signing orchestration) live in
+> those **separate keep-core changes** and are **not part of this crate's PR
+> diff**. Within this PR the crate is standalone: it builds the `cdylib` and C
+> header, but nothing in keep-core's Go build links it yet (no `cgo`/`libfrost`
+> consumer references the crate). See the production gate below before treating
+> any of this as wired.
+
+- Added `pkg/tbtc/signer` Rust crate that builds a `cdylib` named
   `libfrost_tbtc`.
-- Added a C ABI contract in `tools/tbtc-signer/include/frost_tbtc.h`.
+- Added a C ABI contract in `pkg/tbtc/signer/include/frost_tbtc.h`.
 - Implemented coarse request/response operations keyed by `session_id`:
   - `frost_tbtc_run_dkg`
   - `frost_tbtc_start_sign_round`
@@ -135,11 +145,11 @@ rewrite architecture.
   includes that signer and fails, attempt-2 excludes it and succeeds, and
   `StartSignRound.signing_participants` cohorts are asserted across attempts
   (`threshold-network/keep-core` commit `7814f81a9`).
-- Added post-finalize signing-material cleanup in `tools/tbtc-signer` session
+- Added post-finalize signing-material cleanup in `pkg/tbtc/signer` session
   state: on successful finalize, bootstrap DKG key packages, DKG public key
   package cache, sign-request fingerprint, sign message bytes, and round state
   are removed while preserving finalize idempotency cache.
-- Added finalized-session guardrails in `tools/tbtc-signer`: subsequent
+- Added finalized-session guardrails in `pkg/tbtc/signer`: subsequent
   `StartSignRound` calls for an already-finalized session return
   `session_finalized`, preventing round restart and nonce/key-material reuse on
   the same session ID.
@@ -202,7 +212,7 @@ rewrite architecture.
   cryptographic RNG policy, crash-safe recovery).
 - Implement ROAST coordinator semantics.
   Implementation roadmap:
-  `docs/frost-migration/roast-implementation-plan.md`.
+  `pkg/tbtc/signer/docs/roast-implementation-plan.md`.
 - Extend `BuildTaprootTx` with full Taproot script-tree construction/signing
   policy semantics (current bootstrap path assembles validated unsigned txs).
 - Define canonical serialization rules and compatibility tests beyond JSON.
@@ -217,7 +227,7 @@ rewrite architecture.
 - This is a potential future direction, not a committed delivery item, and it
   may not be implemented.
 - Detailed discussion draft:
-  `docs/frost-migration/true-late-t-of-n-finalize-considerations.md`.
+  `pkg/tbtc/signer/docs/true-late-t-of-n-finalize-considerations.md`.
 
 - Current posture: we support early subset selection (`signing_participants` at
   `StartSignRound`), but not late subset selection after shares are already
@@ -237,6 +247,21 @@ rewrite architecture.
 
 ## Production gates (must close before rollout)
 
+- Consumer-activation re-review (mandatory): the crate currently has no Go
+  consumer in keep-core, so its custody-critical surface has only been reviewed
+  as inert code. Before any PR wires a Go consumer (links the `cdylib` / enables
+  the `BuildTaprootTx` CGO bridge), the crate must get a dedicated security
+  re-review as a now-load-bearing dependency. Treat this as a hard, mechanical
+  gate, not a cultural assumption. The re-review MUST validate at least:
+  - Exclusion-evidence trust: the signer applies auto-quarantine penalties from
+    caller-supplied `attempt_transition_evidence` using a fault-*count* threshold
+    and a hex-only `invalid_share_proof_fingerprint` check (`engine::roast`), with
+    no accuser-corroboration of its own. It therefore assumes the Go ROAST layer
+    has already established exclusions via `VerifyBundle` + the f+1 accuser-quorum
+    `NextAttempt` policy (RFC-21 Layer B) before feeding them in. Confirm the wired
+    consumer only feeds quorum-established exclusions, or add signer-side
+    verification. (Coordinator-*selection* grindability is benign: RFC-21 makes a
+    byzantine coordinator unable to fabricate exclusions.)
 - Durable session state: complete production hardening around the persistent
   backend (crash-safe fsync semantics, path configuration, process lock model,
   corruption handling policy, and broader retention/cleanup lifecycle
@@ -262,6 +287,6 @@ rewrite architecture.
 ## Validation command
 
 ```bash
-cd tools/tbtc-signer
+cd pkg/tbtc/signer
 cargo test
 ```

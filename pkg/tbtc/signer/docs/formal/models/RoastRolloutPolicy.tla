@@ -1,6 +1,13 @@
 ----------------------------- MODULE RoastRolloutPolicy -----------------------------
 EXTENDS TLC
 
+\* STATUS: models a PLANNED staged-rollout policy, not yet implemented in the
+\* shipped signer. There is no rollout state machine in the crate; the stages
+\* and transition guards below are design targets per
+\* docs/roast-phase-5-security-rollout-gates.md (a future rollout plan). A
+\* passing TLC run verifies this model's internal consistency, NOT that the
+\* shipped signer enforces this behavior.
+
 Stages == {"bootstrap", "canary", "broad", "rollback", "halted"}
 
 VARIABLES stage, canaryCompleted, holdTrigger, rollbackTrigger, manualOverride, emergencyStop

@@ -346,9 +346,8 @@ Activation gate record must include:
 
 This plan is linked from:
 
-1. `docs/frost-migration/roast-phase-5-security-rollout-gates.md`
-2. `docs/frost-migration/roast-phase-5-rollout-runbook.md`
-3. `docs/frost-migration/roast-phase-5-human-signoff-packet.md`
+1. `pkg/tbtc/signer/docs/roast-phase-5-security-rollout-gates.md`
+2. `pkg/tbtc/signer/docs/roast-phase-5-rollout-runbook.md`
 
 as a future mandatory TEE hardening profile for permissioned operator deployments
 once Section 12 activation gate is approved.

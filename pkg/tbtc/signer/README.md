@@ -11,6 +11,17 @@ in `docs/rust-rewrite-bootstrap.md`.
   - `FinalizeSignRound`
   - `BuildTaprootTx`
   - `RefreshShares`
+- Exposes fine-grained interactive (member-custodied nonce) signing via:
+  - `InteractiveSessionOpen`
+  - `InteractiveRound1`
+  - `InteractiveRound2`
+  - `InteractiveSessionAbort`
+  - `InteractiveAggregate`
+
+  Round-1 nonces live only in engine memory and never persist; the engine
+  enforces a per-node live-session cap and an inactivity TTL, and the open
+  path is idempotent per `(session_id, attempt_id, member_identifier)` with
+  consumption markers as the only durable artifact.
 - Exposes ROAST liveness policy metadata via:
   - `RoastLivenessPolicy`
 - Exposes hardening/runtime counters via:
@@ -97,6 +108,12 @@ Note: the override registry assumes single-writer access. Do not run concurrent
 
 `scripts/admission-override.sample.json` documents the artifact schema and
 requires a real Schnorr signature over `payload_json`.
+
+The `dao_override_trust_root_pubkey_hex` value in
+`scripts/admission-policy-v1.sample.json` is a non-functional placeholder
+(syntactically valid hex, but not a real key). Replace it with the governance
+trust root's real x-only Schnorr public key (32 bytes / 64 hex chars) before
+enabling overrides; the placeholder fails closed as an invalid trust root.
 
 Sample input schemas are provided in:
 
@@ -310,6 +327,52 @@ Sample input schemas are provided in:
 - `pkg/tbtc/signer/scripts/tee-enforcement-context-monitor-v1.sample.json`
 - `pkg/tbtc/signer/scripts/tee-enforcement-context-hard-canary-v1.sample.json`
 - `pkg/tbtc/signer/scripts/tee-enforcement-context-full-break-glass-v1.sample.json`
+
+## Init-Time Configuration (`frost_tbtc_init_signer_config`)
+
+Hosts should install the signer's operational configuration once at startup
+via `frost_tbtc_init_signer_config` instead of exporting `TBTC_SIGNER_*`
+environment variables. The request is a JSON object whose field names are the
+lowercased `TBTC_SIGNER_*` suffixes (`{"profile": "production",
+"roast_coordinator_timeout_ms": 30000, ...}`).
+
+Semantics:
+
+- Once installed, the process environment is **not consulted** for any
+  covered knob: an unset field means the built-in default, not the
+  environment value. There is no per-knob mixing of the two sources.
+- Unknown field names fail the init (typos cannot silently fall back to
+  defaults in production).
+- Re-initialization with an identical request is idempotent; a conflicting
+  request is rejected.
+- The init validates enforcement-gated policy combinations (admission,
+  signing-policy firewall, auto-quarantine) plus the provenance gate, so a
+  misconfigured signer fails at startup rather than at first signing. Since
+  production forces the provenance gate, production configs must carry a
+  complete attestation set (`provenance_attestation_status`/`_payload`/
+  `_signature_hex`, `provenance_trust_root`, `min_approved_version`); the
+  init-time pass does not exempt runtime re-checks — attestation TTL aging
+  still applies per call.
+- **Secrets never ride the config FFI**: `TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX`
+  is read exclusively from the dedicated key-provider channel below, even
+  when a config is installed. Do not inline key material into the
+  `state_key_command` string either — have the command fetch the secret —
+  because the command string itself is part of the config request.
+- A failed init has no observable side effects: the candidate config is
+  validated privately before it is published, so concurrent callers can
+  never read a config that is later rejected.
+- Production configs (explicitly `"profile": "production"`, or by omission —
+  production is the default) must set `state_path`; the init rejects them
+  otherwise. The init also rejects structurally unusable key-provider
+  settings (production forbids the `env` provider, so production configs
+  must set `state_key_provider: "command"` plus `state_key_command`) —
+  validated without reading the secret or executing the key command. Install the config before the first state-touching call: once
+  the state-file lock is bound, the engine refuses to switch state paths
+  in-process.
+
+Without an installed config the signer falls back to reading the
+`TBTC_SIGNER_*` environment (development/test behavior); in non-development
+profiles this fallback logs a one-time warning.
 
 ## Encrypted State Key Providers
 
@@ -538,6 +601,10 @@ Scenario coverage and pass criteria:
   - Signing-path binding: when the firewall is enabled, `StartSignRound.message_hex`
     must equal `sha256(tx_hex_bytes)` from the same-session `BuildTaprootTx`
     result; `FinalizeSignRound` re-validates the same binding.
+  - `BuildTaprootTx` currently accepts caller-derived `script_pubkey_hex`
+    outputs; until full script-tree construction lands, keep the firewall
+    enabled and restrict `TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES` to the
+    intended output classes, such as `p2tr`.
 - Transcript accountability / quarantine config:
   - `TBTC_SIGNER_ENABLE_AUTO_QUARANTINE`
   - `TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD`

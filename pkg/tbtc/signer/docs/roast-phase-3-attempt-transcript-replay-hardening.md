@@ -29,11 +29,11 @@ so attempt replay safety does not depend only on `round_id` composition.
 ## Evidence (Code + Tests)
 
 - Runtime and persistence model updates:
-  `tools/tbtc-signer/src/engine.rs` (`SessionState.consumed_attempt_ids`,
+  `pkg/tbtc/signer/src/engine` (`SessionState.consumed_attempt_ids`,
   `PersistedSessionState.consumed_attempt_ids`,
   `SessionState::try_from`, `PersistedSessionState::try_from`).
 - Start-path attempt replay enforcement:
-  `tools/tbtc-signer/src/engine.rs` (`start_sign_round` consumed-attempt checks).
+  `pkg/tbtc/signer/src/engine` (`start_sign_round` consumed-attempt checks).
 - Persisted-state validation tests:
   - `engine::tests::persisted_session_state_rejects_empty_consumed_attempt_id`
   - `engine::tests::persisted_session_state_rejects_duplicate_consumed_attempt_id`
@@ -48,4 +48,4 @@ so attempt replay safety does not depend only on `round_id` composition.
 
 1. No open blocking items for Phase 3 transcript/replay scope. Next protocol
    increment is Phase 4 liveness policy and recovery behavior:
-   `docs/frost-migration/roast-phase-4-liveness-policy-recovery.md`.
+   `pkg/tbtc/signer/docs/roast-phase-4-liveness-policy-recovery.md`.

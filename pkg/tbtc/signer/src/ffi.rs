@@ -19,6 +19,7 @@ pub struct TbtcSignerResult {
 
 const STATUS_OK: i32 = 0;
 const STATUS_ERROR: i32 = 1;
+const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn success_from_serialized(payload: Vec<u8>) -> TbtcSignerResult {
     TbtcSignerResult {
@@ -49,9 +50,35 @@ where
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(Ok(bytes)) => success_from_serialized(bytes),
         Ok(Err(err)) => error_result(err),
-        Err(_) => error_result(EngineError::Internal(
-            "panic crossed FFI boundary".to_string(),
-        )),
+        Err(payload) => error_result(EngineError::Internal(panic_boundary_message(payload))),
+    }
+}
+
+// A panic crossing the FFI boundary must not reflect its raw payload to the
+// host in production: the panic message could carry a filesystem path, a
+// config value, or other internal detail. Only the development profile keeps
+// the payload, for operator diagnostics.
+//
+// This reads the profile directly and fails CLOSED (redacts) for any
+// non-development value - including a missing or malformed profile - rather
+// than calling signer_profile_is_production(), which panics on a malformed
+// profile. Re-validating the profile here could otherwise turn a handled
+// panic into a second panic on the FFI error path and unwind into C.
+fn panic_boundary_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    let development_profile = crate::engine::signer_env_var(crate::engine::TBTC_SIGNER_PROFILE_ENV)
+        .map(|raw| {
+            raw.trim()
+                .eq_ignore_ascii_case(crate::engine::TBTC_SIGNER_PROFILE_DEVELOPMENT)
+        })
+        .unwrap_or(false);
+
+    if development_profile {
+        format!(
+            "panic crossed FFI boundary: {}",
+            panic_payload_message(payload)
+        )
+    } else {
+        "panic crossed FFI boundary".to_string()
     }
 }
 
@@ -70,6 +97,7 @@ fn error_result(error: EngineError) -> TbtcSignerResult {
         code: error.code().to_string(),
         message: error.to_string(),
         recovery_class: error.recovery_class().to_string(),
+        candidate_culprits: error.candidate_culprits().to_vec(),
     };
 
     let bytes = serde_json::to_vec(&payload).unwrap_or_else(|_| {
@@ -82,7 +110,25 @@ fn error_result(error: EngineError) -> TbtcSignerResult {
     }
 }
 
+fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return (*message).to_string();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+
+    "non-string panic payload".to_string()
+}
+
 fn request_bytes<'a>(ptr: *const u8, len: usize) -> Result<&'a [u8], EngineError> {
+    if len > MAX_REQUEST_BYTES {
+        return Err(EngineError::Validation(format!(
+            "request buffer length [{}] exceeds maximum [{}]",
+            len, MAX_REQUEST_BYTES
+        )));
+    }
+
     if ptr.is_null() {
         return Err(EngineError::Validation(
             "request buffer pointer must be non-null".to_string(),
@@ -124,6 +170,76 @@ mod tests {
         let bytes = unsafe { std::slice::from_raw_parts(result.buffer.ptr, result.buffer.len) };
         assert_eq!(bytes, b"ok");
 
+        free_buffer(result.buffer.ptr, result.buffer.len);
+    }
+
+    #[test]
+    fn request_bytes_rejects_payloads_above_max_without_dereferencing() {
+        let err = request_bytes(
+            std::ptr::NonNull::<u8>::dangling().as_ptr(),
+            MAX_REQUEST_BYTES + 1,
+        )
+        .expect_err("oversized request should be rejected");
+
+        let EngineError::Validation(message) = err else {
+            panic!("unexpected error variant");
+        };
+        assert!(
+            message.contains("exceeds maximum"),
+            "unexpected validation message: {message}"
+        );
+    }
+
+    // A panic payload may carry internal detail (paths, config). It must be
+    // withheld from the host in production and only surfaced under the
+    // development profile. Serialized under the shared test-state lock because
+    // the profile is read from a process-global env var.
+    #[test]
+    fn ffi_entry_redacts_panic_payload_in_production_and_preserves_in_development() {
+        let _guard = crate::engine::lock_test_state();
+        let secret_detail = "panic detail with /secret/path and a config value";
+
+        let decode_message = |result: &TbtcSignerResult| -> String {
+            assert_eq!(result.status_code, STATUS_ERROR);
+            let bytes = unsafe { std::slice::from_raw_parts(result.buffer.ptr, result.buffer.len) };
+            let response: ErrorResponse =
+                serde_json::from_slice(bytes).expect("decode error response");
+            assert_eq!(response.code, "internal_error");
+            response.message
+        };
+
+        // Production (and any non-development profile): payload withheld.
+        std::env::set_var(
+            crate::engine::TBTC_SIGNER_PROFILE_ENV,
+            crate::engine::TBTC_SIGNER_PROFILE_PRODUCTION,
+        );
+        let result = ffi_entry(|| -> Result<Vec<u8>, EngineError> {
+            panic!("{secret_detail}");
+        });
+        let message = decode_message(&result);
+        assert!(
+            !message.contains(secret_detail),
+            "production must not reflect the panic payload to the host: {message}"
+        );
+        assert!(
+            message.contains("panic crossed FFI boundary"),
+            "production should still report a generic boundary panic: {message}"
+        );
+        free_buffer(result.buffer.ptr, result.buffer.len);
+
+        // Development: payload preserved for operator diagnostics.
+        std::env::set_var(
+            crate::engine::TBTC_SIGNER_PROFILE_ENV,
+            crate::engine::TBTC_SIGNER_PROFILE_DEVELOPMENT,
+        );
+        let result = ffi_entry(|| -> Result<Vec<u8>, EngineError> {
+            panic!("{secret_detail}");
+        });
+        let message = decode_message(&result);
+        assert!(
+            message.contains(secret_detail),
+            "development must preserve the panic payload: {message}"
+        );
         free_buffer(result.buffer.ptr, result.buffer.len);
     }
 }

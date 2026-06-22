@@ -5,6 +5,6 @@
   "required_attestation_status": "approved",
   "min_patch_sla_days_remaining": 14,
   "require_incident_response_contact": true,
-  "dao_override_trust_root_pubkey_hex": "REPLACE_WITH_XONLY_PUBKEY_HEX",
+  "dao_override_trust_root_pubkey_hex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "dao_override_max_ttl_seconds": 604800
 }

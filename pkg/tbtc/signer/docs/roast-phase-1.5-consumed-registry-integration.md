@@ -34,10 +34,10 @@ multi-attempt semantics without weakening nonce/replay protections.
 ## Evidence (Code + Tests)
 
 - Round-id derivation helper:
-  `tools/tbtc-signer/src/engine.rs` (`derive_round_id`,
+  `pkg/tbtc/signer/src/engine` (`derive_round_id`,
   `round_attempt_id_component`).
 - Attempt-context canonicalization fix:
-  `tools/tbtc-signer/src/engine.rs` (`canonicalize_attempt_context_for_fingerprint`).
+  `pkg/tbtc/signer/src/engine` (`canonicalize_attempt_context_for_fingerprint`).
 - Hash golden vectors:
   `engine::tests::roast_attempt_context_hash_vectors_match_expected_values`.
 - Round-id attempt binding test:
@@ -60,10 +60,10 @@ multi-attempt semantics without weakening nonce/replay protections.
   round-id consumed registries remain authoritative, and `attempt_context` is
   folded into round identity instead of replacing existing guards.
 - Existing keep-core retry/cohort wiring evidence remains valid under this
-  model (see `docs/frost-migration/rust-rewrite-bootstrap.md` keep-core
+  model (see `pkg/tbtc/signer/docs/rust-rewrite-bootstrap.md` keep-core
   integration notes and linked `threshold-network/keep-core` commits).
 
 ## Remaining Work
 
 1. Continue Phase 2 coordinator policy enforcement:
-   `docs/frost-migration/roast-phase-2-coordinator-policy-enforcement.md`.
+   `pkg/tbtc/signer/docs/roast-phase-2-coordinator-policy-enforcement.md`.

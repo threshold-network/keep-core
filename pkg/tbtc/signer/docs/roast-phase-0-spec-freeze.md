@@ -16,7 +16,7 @@ Freeze the minimum cross-repo contract required before ROAST code increments:
 
 This spec is an input to Phase 1 implementation work in:
 
-- `tbtc` (`tools/tbtc-signer`), and
+- `tbtc` (`pkg/tbtc/signer`), and
 - `threshold-network/keep-core`.
 
 ## 2. Decisions (Frozen For Phase 1)
@@ -68,11 +68,11 @@ Canonical framing:
 
 Included participants fingerprint:
 
-- `included_participants_fingerprint = SHA256(tag || framed(sorted_unique_ids))`
+- `included_participants_fingerprint = SHA256(framed(tag) || framed(sorted_unique_ids))`
 
 Attempt id:
 
-- `attempt_id = SHA256(tag || framed(session_id) || framed(message_digest_hex) || framed(attempt_number) || framed(coordinator_identifier) || framed(included_participants_fingerprint))`
+- `attempt_id = SHA256(framed(tag) || framed(session_id) || framed(message_digest_hex) || framed(attempt_number) || framed(coordinator_identifier) || framed(included_participants_fingerprint))`
 
 Output format:
 

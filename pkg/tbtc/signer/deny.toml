@@ -1,0 +1,21 @@
+# cargo-deny configuration for the tbtc-signer crate.
+#
+# CI runs `cargo deny check advisories` as a blocking gate (see
+# .github/workflows/tbtc-signer-formal.yml) so a newly-published RustSec
+# advisory against any of the ~190 locked dependencies fails the build. This
+# is the dependency-scanning gate that complements the external cryptographic
+# audit tracked in docs/roast-phase-5-security-rollout-gates.md (Gate 1).
+#
+# Only the advisories section is enforced here; licenses/bans/sources are
+# intentionally left at defaults to keep this gate scoped to security and
+# maintenance advisories and avoid unrelated CI churn.
+
+[advisories]
+ignore = [
+  # atomic-polyfill is unmaintained (informational advisory, not a security
+  # vulnerability). It is pulled in transitively via
+  # frost-core -> postcard -> heapless 0.7 and has no safe upgrade available
+  # until that chain moves off heapless 0.7. Accepted as a known risk; revisit
+  # when frost-core updates its heapless dependency.
+  { id = "RUSTSEC-2023-0089", reason = "unmaintained-only; transitive via frost-core/heapless 0.7; no fix available upstream yet" },
+]

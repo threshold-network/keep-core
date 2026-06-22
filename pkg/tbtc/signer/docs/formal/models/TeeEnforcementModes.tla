@@ -1,6 +1,14 @@
 ------------------------------ MODULE TeeEnforcementModes ------------------------------
 EXTENDS TLC
 
+\* STATUS: models a PLANNED enforcement profile, not yet implemented in the
+\* shipped signer. The crate implements only a binary provenance enforce gate
+\* (src/engine/provenance.rs); the three modes below, the
+\* disabled->enforce transition guard, and break-glass are design targets per
+\* docs/tee-whitelisted-signer-enforcement-plan.md (an explicitly "not active"
+\* future hardening profile). A passing TLC run verifies this model's internal
+\* consistency, NOT that the shipped signer enforces this behavior.
+
 Modes == {"disabled", "audit", "enforce"}
 AttestationStates == {"valid", "invalid", "missing"}
 

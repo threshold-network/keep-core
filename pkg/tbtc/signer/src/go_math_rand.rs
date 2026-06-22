@@ -720,20 +720,7 @@ impl GoRngSource {
             panic!("invalid argument to int31n_fast");
         }
 
-        let mut value = self.uint32();
-        let mut prod = u64::from(value) * u64::from(n as u32);
-        let mut low = prod as u32;
-
-        if low < n as u32 {
-            let threshold = (0_u32.wrapping_sub(n as u32)) % (n as u32);
-            while low < threshold {
-                value = self.uint32();
-                prod = u64::from(value) * u64::from(n as u32);
-                low = prod as u32;
-            }
-        }
-
-        (prod >> 32) as i32
+        int31n_fast_lemire(n, || self.uint32())
     }
 
     fn intn_for_shuffle(&mut self, n: usize) -> usize {
@@ -768,6 +755,30 @@ impl GoRngSource {
     }
 }
 
+// Lemire bounded reduction with rejection, mirroring Go `math/rand`'s
+// internal `(*Rand).int31n` (the fast shuffle path) byte-for-byte: the
+// rejection threshold `2^32 mod n` is computed lazily, only after a draw
+// lands in `[0, n)`, then the loop redraws while `low < threshold`. The
+// `next_u32` source is abstracted only so the rejection branch -- which
+// the differential corpus statistically never reaches -- can be exercised
+// by a forced-state unit test; `int31n_fast` always passes `self.uint32`.
+fn int31n_fast_lemire(n: i32, mut next_u32: impl FnMut() -> u32) -> i32 {
+    let mut value = next_u32();
+    let mut prod = u64::from(value) * u64::from(n as u32);
+    let mut low = prod as u32;
+
+    if low < n as u32 {
+        let threshold = (0_u32.wrapping_sub(n as u32)) % (n as u32);
+        while low < threshold {
+            value = next_u32();
+            prod = u64::from(value) * u64::from(n as u32);
+            low = prod as u32;
+        }
+    }
+
+    (prod >> 32) as i32
+}
+
 // Matches keep-core pkg/frost/roast.SelectCoordinator semantics:
 // sort members, then shuffle with Go math/rand source seeded by
 // attempt_seed + attempt_number, and pick first coordinator.
@@ -798,6 +809,45 @@ mod tests {
         assert!(select_coordinator_identifier(&[], 100, 1).is_none());
     }
 
+    // Drives the real bounded-reduction helper with a forced u32 stream so
+    // the rejection branch -- which the differential corpus statistically
+    // never reaches -- is pinned against Go math/rand's `(*Rand).int31n`.
+    //
+    // n = 3 => threshold = 2^32 mod 3 = 1, so the loop rejects exactly when
+    // `low == 0`:
+    //   draw #1: v = 0           -> prod = 0,            low = 0
+    //            (0 < 3 enters the branch; 0 < threshold(1) -> REJECT, redraw)
+    //   draw #2: v = 0x8000_0000 -> prod = 0x1_8000_0000, low = 0x8000_0000
+    //            (0x8000_0000 >= threshold -> accept)
+    //   result = prod >> 32 = 1
+    #[test]
+    fn int31n_fast_lemire_rejection_loop_redraws_like_go() {
+        let mut stream = [0_u32, 0x8000_0000].into_iter();
+        let mut draws = 0_u32;
+        let result = int31n_fast_lemire(3, || {
+            draws += 1;
+            stream.next().expect("forced stream exhausted")
+        });
+
+        assert_eq!(draws, 2, "rejection branch must consume a second draw");
+        assert_eq!(result, 1);
+    }
+
+    // A draw whose low half is >= n never enters the rejection branch:
+    // v = 0x8000_0000, n = 3 -> prod = 0x1_8000_0000, low = 0x8000_0000
+    // (>= 3) -> single draw, result = prod >> 32 = 1.
+    #[test]
+    fn int31n_fast_lemire_accepts_first_draw_without_rejection() {
+        let mut draws = 0_u32;
+        let result = int31n_fast_lemire(3, || {
+            draws += 1;
+            0x8000_0000
+        });
+
+        assert_eq!(draws, 1, "no rejection expected when low >= n");
+        assert_eq!(result, 1);
+    }
+
     #[test]
     fn select_coordinator_matches_known_keep_core_vectors() {
         let seed = 6_879_463_052_285_329_321_i64;
@@ -817,5 +867,78 @@ mod tests {
         let right = select_coordinator_identifier(&[6, 1, 5, 2, 4, 3], 333, 4);
 
         assert_eq!(left, right);
+        // Pin the concrete result, not just the equality: the Go side
+        // (keep-core pkg/frost/roast,
+        // TestSelectCoordinator_CrossLanguagePinnedVectors) asserts the
+        // same value, so either implementation drifting fails its own
+        // suite instead of fracturing coordinator agreement at runtime.
+        assert_eq!(left, Some(4));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct CoordinatorShuffleCorpusFile {
+        #[allow(dead_code)]
+        description: String,
+        cases: Vec<CoordinatorShuffleCase>,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CoordinatorShuffleCase {
+        name: String,
+        seed_int64: String,
+        attempt_number: u32,
+        members: Vec<u16>,
+        expected_coordinator: u16,
+    }
+
+    // Byte-identical copy of the canonical differential corpus
+    // generated from the Go implementation (keep-core
+    // pkg/frost/roast/testdata/coordinator_shuffle_corpus.json;
+    // regenerate there with ROAST_SHUFFLE_CORPUS_REGEN=1 and re-copy).
+    // Covers integer-boundary seeds (0, +/-1, i64 MIN/MAX, +/-MaxInt32
+    // for the source-seed normalization collision, the #4026 pin seed),
+    // the wrapping seed+attempt composition up to u32::MAX attempts,
+    // unsorted/reversed member inputs, and generated sweeps over set
+    // sizes 1..255 with full-range seeds. Any drift in source seeding,
+    // Fisher-Yates order, int31n bounds, sign handling, wrapping, or
+    // internal sorting fails this test on the drifting side instead of
+    // fracturing coordinator agreement in a mixed deployment.
+    //
+    // Two port branches are unreachable by differential cases and are
+    // accepted as faithful 1:1 ports of Go's math/rand, covered by Go's
+    // own stdlib tests: (1) `int63n` (the index > i32::MAX shuffle path)
+    // is dead for any u16 member set; (2) the `int31n_fast` rejection
+    // loop fires with probability ~set_size/2^31 per draw, so the corpus
+    // statistically never exercises it -- the rejection branch itself is
+    // pinned against Go's `(*Rand).int31n` separately by
+    // `int31n_fast_lemire_rejection_loop_redraws_like_go`. Pinning the
+    // `int63n` output differentially would require Go-instrumented forced
+    // RNG states, out of scope for a corpus that rides the unit-test CI.
+    #[test]
+    fn select_coordinator_matches_cross_language_differential_corpus() {
+        let raw = include_str!("../testdata/coordinator_shuffle_corpus.json");
+        let file: CoordinatorShuffleCorpusFile =
+            serde_json::from_str(raw).expect("corpus file decodes");
+        assert!(
+            file.cases.len() >= 600,
+            "expected at least the 600-case corpus, found {}",
+            file.cases.len()
+        );
+
+        for case in &file.cases {
+            let seed: i64 = case
+                .seed_int64
+                .parse()
+                .unwrap_or_else(|err| panic!("case [{}] seed parse: {err}", case.name));
+            let coordinator =
+                select_coordinator_identifier(&case.members, seed, case.attempt_number)
+                    .unwrap_or_else(|| panic!("case [{}] selected no coordinator", case.name));
+            assert_eq!(
+                coordinator, case.expected_coordinator,
+                "coordinator mismatch in case [{}]",
+                case.name
+            );
+        }
     }
 }

@@ -3,7 +3,7 @@
 Date: 2026-03-01
 Status: Proposed (pre-implementation)
 Owner: Threshold Labs
-Scope: `tools/tbtc-signer` persistent secret-material handling before FROST/ROAST
+Scope: `pkg/tbtc/signer` persistent secret-material handling before FROST/ROAST
 production rollout.
 
 ## Decision

@@ -8,10 +8,15 @@ mod go_math_rand;
 use std::sync::OnceLock;
 
 use api::{
-    BuildTaprootTxRequest, DifferentialFuzzRequest, FinalizeSignRoundRequest, PromoteCanaryRequest,
-    QuarantineStatusRequest, RefreshCadenceStatusRequest, RefreshSharesRequest,
-    RollbackCanaryRequest, RunDkgRequest, StartSignRoundRequest, TranscriptAuditRequest,
-    TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
+    AggregateRequest, BuildTaprootTxRequest, DeriveInteractiveAttemptContextRequest,
+    DifferentialFuzzRequest, DkgPart1Request, DkgPart2Request, DkgPart3Request,
+    FinalizeSignRoundRequest, FrostTbtcAbiVersionResult, GenerateNoncesAndCommitmentsRequest,
+    InitSignerConfigRequest, InteractiveAggregateRequest, InteractiveRound1Request,
+    InteractiveRound2Request, InteractiveSessionAbortRequest, InteractiveSessionOpenRequest,
+    NewSigningPackageRequest, PromoteCanaryRequest, QuarantineStatusRequest,
+    RefreshCadenceStatusRequest, RefreshSharesRequest, RollbackCanaryRequest, RunDkgRequest,
+    SignShareRequest, StartSignRoundRequest, TranscriptAuditRequest, TriggerEmergencyRekeyRequest,
+    VerifyBlameProofRequest,
 };
 use ffi::{
     ffi_entry, free_buffer, parse_request, serialize_response, success_from_string,
@@ -21,48 +26,33 @@ use ffi::{
 pub use ffi::TbtcBuffer;
 
 const TBTC_SIGNER_VERSION: &str = "tbtc-signer/0.1.0-bootstrap";
-const TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV: &str = "TBTC_SIGNER_ALLOW_BOOTSTRAP";
-const TBTC_SIGNER_PROFILE_ENV: &str = "TBTC_SIGNER_PROFILE";
-const TBTC_SIGNER_PROFILE_PRODUCTION: &str = "production";
-const TBTC_SIGNER_PROFILE_DEVELOPMENT: &str = "development";
+
+/// The FFI CONTRACT version (see api::FrostTbtcAbiVersionResult), reported by
+/// frost_tbtc_abi_version so a Go bridge can fail closed against an incompatible lib.
+/// Starts at 1.0 - NOT 0.x, to avoid semver pre-1.0 ambiguity - distinct from the
+/// human-readable TBTC_SIGNER_VERSION string above, which stays informational only.
+///
+/// Bump rules: bump TBTC_SIGNER_ABI_MAJOR on ANY incompatible change to the Go<->Rust
+/// contract; bump TBTC_SIGNER_ABI_MINOR on a purely ADDITIVE, backward-compatible
+/// change. A minor bump is valid ONLY if old consumers safely ignore the addition - if
+/// a new field or enum value can appear in an existing response that an old bridge does
+/// not tolerate, that is a MAJOR bump.
+const TBTC_SIGNER_ABI_MAJOR: u32 = 1;
+const TBTC_SIGNER_ABI_MINOR: u32 = 0;
+use engine::TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV;
+#[cfg(test)]
+use engine::TBTC_SIGNER_PROFILE_ENV;
 #[cfg(test)]
 static TEST_BOOTSTRAP_MODE_OVERRIDE: OnceLock<std::sync::Mutex<Option<bool>>> = OnceLock::new();
 
-fn bootstrap_mode_flag_enabled(raw_value: &str) -> bool {
-    matches!(
-        raw_value.trim().to_ascii_lowercase().as_str(),
-        "1" | "true" | "yes" | "on"
-    )
-}
-
 fn bootstrap_mode_enabled_from_env() -> bool {
-    if signer_profile_is_production() {
+    if engine::signer_profile_is_production() {
         return false;
     }
 
-    std::env::var(TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV)
-        .map(|raw_value| bootstrap_mode_flag_enabled(&raw_value))
+    engine::signer_env_var(TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV)
+        .map(|raw_value| engine::truthy_env_flag(&raw_value))
         .unwrap_or(false)
-}
-
-fn signer_profile_is_production() -> bool {
-    let raw = std::env::var(TBTC_SIGNER_PROFILE_ENV).unwrap_or_default();
-    let normalized = raw.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        TBTC_SIGNER_PROFILE_PRODUCTION => true,
-        // See engine::signer_profile_is_production for the rationale: missing
-        // is tolerated as development so parallel cargo test runs don't race
-        // on env mutation, but typos still panic so operators cannot silently
-        // bypass production-mode gates via `TBTC_SIGNER_PROFILE=prod`.
-        TBTC_SIGNER_PROFILE_DEVELOPMENT | "" => false,
-        other => panic!(
-            "{} must be '{}' or '{}'; got {:?}",
-            TBTC_SIGNER_PROFILE_ENV,
-            TBTC_SIGNER_PROFILE_PRODUCTION,
-            TBTC_SIGNER_PROFILE_DEVELOPMENT,
-            other
-        ),
-    }
 }
 
 #[cfg(test)]
@@ -90,6 +80,33 @@ fn bootstrap_mode_enabled() -> bool {
 #[no_mangle]
 pub extern "C" fn frost_tbtc_version() -> TbtcSignerResult {
     success_from_string(TBTC_SIGNER_VERSION.to_string())
+}
+
+/// Reports the structured FFI CONTRACT version (api::FrostTbtcAbiVersionResult JSON)
+/// so a Go bridge can fail closed on an incompatible libfrost_tbtc. See
+/// TBTC_SIGNER_ABI_MAJOR / TBTC_SIGNER_ABI_MINOR for the bump rules. This response
+/// shape is the ROOT compatibility surface and must stay stable: {abi_major, abi_minor}
+/// as unsigned integers.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_abi_version() -> TbtcSignerResult {
+    ffi_entry(|| {
+        serialize_response(&FrostTbtcAbiVersionResult {
+            abi_major: TBTC_SIGNER_ABI_MAJOR,
+            abi_minor: TBTC_SIGNER_ABI_MINOR,
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_init_signer_config(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: InitSignerConfigRequest = parse_request(request_ptr, request_len)?;
+        let response = engine::init_signer_config(request)?;
+        serialize_response(&response)
+    })
 }
 
 #[no_mangle]
@@ -230,6 +247,181 @@ pub extern "C" fn frost_tbtc_run_dkg(
 }
 
 #[no_mangle]
+pub extern "C" fn frost_tbtc_dkg_part1(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: DkgPart1Request = parse_request(request_ptr, request_len)?;
+        let response = engine::dkg_part1(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_dkg_part2(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: DkgPart2Request = parse_request(request_ptr, request_len)?;
+        let response = engine::dkg_part2(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_dkg_part3(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: DkgPart3Request = parse_request(request_ptr, request_len)?;
+        let response = engine::dkg_part3(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_generate_nonces_and_commitments(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: GenerateNoncesAndCommitmentsRequest = parse_request(request_ptr, request_len)?;
+        let response = engine::generate_nonces_and_commitments(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_new_signing_package(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: NewSigningPackageRequest = parse_request(request_ptr, request_len)?;
+        let response = engine::new_signing_package(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_sign_share(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: SignShareRequest = parse_request(request_ptr, request_len)?;
+        let response = engine::sign_share(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_aggregate(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: AggregateRequest = parse_request(request_ptr, request_len)?;
+        let response = engine::aggregate(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_verify_signature_share(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: crate::api::VerifySignatureShareRequest =
+            parse_request(request_ptr, request_len)?;
+        let response = engine::verify_signature_share(request)?;
+        serialize_response(&response)
+    })
+}
+
+// Phase 7.1 hardened interactive signing session (frozen spec
+// docs/phase-7-interactive-session-spec-freeze.md). Additive ABI: the
+// Go host adopts these in Phase 7.3; nothing breaks until it calls
+// them. Secret nonces never cross this boundary in either direction.
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_interactive_session_open(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: InteractiveSessionOpenRequest = parse_request(request_ptr, request_len)?;
+        let response = engine::interactive_session_open(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_interactive_round1(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: InteractiveRound1Request = parse_request(request_ptr, request_len)?;
+        let response = engine::interactive_round1(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_interactive_round2(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: InteractiveRound2Request = parse_request(request_ptr, request_len)?;
+        let response = engine::interactive_round2(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_interactive_session_abort(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: InteractiveSessionAbortRequest = parse_request(request_ptr, request_len)?;
+        let response = engine::interactive_session_abort(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_interactive_aggregate(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: InteractiveAggregateRequest = parse_request(request_ptr, request_len)?;
+        let response = engine::interactive_aggregate(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_derive_interactive_attempt_context(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: DeriveInteractiveAttemptContextRequest =
+            parse_request(request_ptr, request_len)?;
+        let response = engine::derive_interactive_attempt_context(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn frost_tbtc_start_sign_round(
     request_ptr: *const u8,
     request_len: usize,
@@ -280,26 +472,37 @@ pub extern "C" fn frost_tbtc_refresh_shares(
 #[cfg(test)]
 mod tests {
     use bitcoin::consensus::encode::deserialize;
+    use bitcoin::secp256k1::{
+        schnorr::Signature as SchnorrSignature, Message as SecpMessage, Secp256k1, XOnlyPublicKey,
+    };
     use pretty_assertions::assert_eq;
     use sha2::{Digest, Sha256};
 
     use crate::api::{
-        BuildTaprootTxRequest, CanaryRolloutStatusResult, DifferentialFuzzRequest,
-        DifferentialFuzzResult, DkgParticipant, ErrorResponse, FinalizeSignRoundRequest,
+        AggregateRequest, AggregateResult, BuildTaprootTxRequest, CanaryRolloutStatusResult,
+        DifferentialFuzzRequest, DifferentialFuzzResult, DkgPart1Request, DkgPart1Result,
+        DkgPart2Request, DkgPart2Result, DkgPart3Request, DkgPart3Result, DkgParticipant,
+        DkgRound1Package, DkgRound2Package, ErrorResponse, FinalizeSignRoundRequest,
+        FrostTbtcAbiVersionResult, GenerateNoncesAndCommitmentsRequest,
+        GenerateNoncesAndCommitmentsResult, NewSigningPackageRequest, NewSigningPackageResult,
         PromoteCanaryRequest, QuarantineStatusRequest, QuarantineStatusResult,
         RefreshCadenceStatusRequest, RefreshCadenceStatusResult, RefreshSharesRequest,
         RoastLivenessPolicyResult, RollbackCanaryRequest, RoundContribution, RunDkgRequest,
-        ShareMaterial, SignerHardeningMetricsResult, StartSignRoundRequest, TransactionResult,
-        TranscriptAuditRequest, TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
+        ShareMaterial, SignShareRequest, SignShareResult, SignerHardeningMetricsResult,
+        StartSignRoundRequest, TransactionResult, TranscriptAuditRequest,
+        TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
     };
     use crate::{
-        frost_tbtc_build_taproot_tx, frost_tbtc_canary_rollout_status,
-        frost_tbtc_finalize_sign_round, frost_tbtc_free_buffer, frost_tbtc_hardening_metrics,
-        frost_tbtc_promote_canary, frost_tbtc_quarantine_status, frost_tbtc_refresh_cadence_status,
-        frost_tbtc_refresh_shares, frost_tbtc_roast_liveness_policy,
-        frost_tbtc_roast_transcript_audit, frost_tbtc_rollback_canary,
-        frost_tbtc_run_differential_fuzzing, frost_tbtc_run_dkg, frost_tbtc_start_sign_round,
-        frost_tbtc_trigger_emergency_rekey, frost_tbtc_verify_blame_proof,
+        frost_tbtc_abi_version, frost_tbtc_aggregate, frost_tbtc_build_taproot_tx,
+        frost_tbtc_canary_rollout_status, frost_tbtc_dkg_part1, frost_tbtc_dkg_part2,
+        frost_tbtc_dkg_part3, frost_tbtc_finalize_sign_round, frost_tbtc_free_buffer,
+        frost_tbtc_generate_nonces_and_commitments, frost_tbtc_hardening_metrics,
+        frost_tbtc_new_signing_package, frost_tbtc_promote_canary, frost_tbtc_quarantine_status,
+        frost_tbtc_refresh_cadence_status, frost_tbtc_refresh_shares,
+        frost_tbtc_roast_liveness_policy, frost_tbtc_roast_transcript_audit,
+        frost_tbtc_rollback_canary, frost_tbtc_run_differential_fuzzing, frost_tbtc_run_dkg,
+        frost_tbtc_sign_share, frost_tbtc_start_sign_round, frost_tbtc_trigger_emergency_rekey,
+        frost_tbtc_verify_blame_proof,
     };
 
     fn bootstrap_synthetic_share_hex(
@@ -442,6 +645,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let (status_first, first_payload) = call_ffi(&request, frost_tbtc_run_dkg);
@@ -450,6 +654,136 @@ mod tests {
         assert_eq!(status_first, 0);
         assert_eq!(status_second, 0);
         assert_eq!(first_payload, second_payload);
+    }
+
+    #[test]
+    fn run_dkg_uses_fresh_entropy_for_unseeded_request_after_engine_reset() {
+        let _guard = crate::engine::lock_test_state();
+        crate::engine::reset_for_tests();
+
+        let request = RunDkgRequest {
+            session_id: "session-unseeded-entropy".to_string(),
+            participants: vec![
+                DkgParticipant {
+                    identifier: 1,
+                    public_key_hex: "02aa".to_string(),
+                },
+                DkgParticipant {
+                    identifier: 2,
+                    public_key_hex: "02bb".to_string(),
+                },
+                DkgParticipant {
+                    identifier: 3,
+                    public_key_hex: "02cc".to_string(),
+                },
+            ],
+            threshold: 2,
+            dkg_seed_hex: None,
+        };
+
+        let (status_first, first_payload) = call_ffi(&request, frost_tbtc_run_dkg);
+        crate::engine::reset_for_tests();
+        let (status_second, second_payload) = call_ffi(&request, frost_tbtc_run_dkg);
+
+        assert_eq!(status_first, 0);
+        assert_eq!(status_second, 0);
+
+        let result_first: crate::api::DkgResult =
+            serde_json::from_slice(&first_payload).expect("decode first DKG result");
+        let result_second: crate::api::DkgResult =
+            serde_json::from_slice(&second_payload).expect("decode second DKG result");
+
+        assert_eq!(result_first.session_id, result_second.session_id);
+        assert_ne!(result_first.key_group, result_second.key_group);
+    }
+
+    #[test]
+    fn run_dkg_uses_explicit_seed_across_distinct_sessions() {
+        let _guard = crate::engine::lock_test_state();
+        crate::engine::reset_for_tests();
+
+        let participants = vec![
+            DkgParticipant {
+                identifier: 1,
+                public_key_hex: "02aa".to_string(),
+            },
+            DkgParticipant {
+                identifier: 2,
+                public_key_hex: "02bb".to_string(),
+            },
+            DkgParticipant {
+                identifier: 3,
+                public_key_hex: "02cc".to_string(),
+            },
+        ];
+        let dkg_seed_hex = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+
+        let request_a = RunDkgRequest {
+            session_id: "session-seeded-a".to_string(),
+            participants: participants.clone(),
+            threshold: 2,
+            dkg_seed_hex: Some(dkg_seed_hex.to_string()),
+        };
+        let (status_a, payload_a) = call_ffi(&request_a, frost_tbtc_run_dkg);
+
+        crate::engine::reset_for_tests();
+
+        let request_b = RunDkgRequest {
+            session_id: "session-seeded-b".to_string(),
+            participants,
+            threshold: 2,
+            dkg_seed_hex: Some(dkg_seed_hex.to_string()),
+        };
+        let (status_b, payload_b) = call_ffi(&request_b, frost_tbtc_run_dkg);
+
+        assert_eq!(status_a, 0);
+        assert_eq!(status_b, 0);
+
+        let result_a: crate::api::DkgResult =
+            serde_json::from_slice(&payload_a).expect("decode first DKG result");
+        let result_b: crate::api::DkgResult =
+            serde_json::from_slice(&payload_b).expect("decode second DKG result");
+
+        assert_ne!(result_a.session_id, result_b.session_id);
+        assert_eq!(result_a.key_group, result_b.key_group);
+    }
+
+    #[test]
+    fn run_dkg_reports_malformed_seed_as_recoverable_validation_error() {
+        let _guard = crate::engine::lock_test_state();
+        crate::engine::reset_for_tests();
+        let _profile = EnvVarGuard::set("TBTC_SIGNER_PROFILE", "development");
+        let _provenance_gate = EnvVarGuard::unset("TBTC_SIGNER_ENFORCE_PROVENANCE_GATE");
+        let _admission_policy = EnvVarGuard::unset("TBTC_SIGNER_ENFORCE_ADMISSION_POLICY");
+
+        let request = RunDkgRequest {
+            session_id: "session-bad-seed".to_string(),
+            participants: vec![
+                DkgParticipant {
+                    identifier: 1,
+                    public_key_hex: "02aa".to_string(),
+                },
+                DkgParticipant {
+                    identifier: 2,
+                    public_key_hex: "02bb".to_string(),
+                },
+            ],
+            threshold: 2,
+            dkg_seed_hex: Some("not-hex".to_string()),
+        };
+
+        let (status, payload) = call_ffi(&request, frost_tbtc_run_dkg);
+
+        assert_eq!(status, 1);
+        let response: ErrorResponse =
+            serde_json::from_slice(&payload).expect("decode error response");
+        assert_eq!(response.code, "validation_error");
+        assert_eq!(response.recovery_class, "recoverable");
+        assert!(
+            response.message.contains("dkg_seed_hex must be valid hex"),
+            "unexpected error message: {}",
+            response.message
+        );
     }
 
     #[test]
@@ -470,6 +804,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let mut request_b = request_a.clone();
@@ -491,6 +826,316 @@ mod tests {
     }
 
     #[test]
+    fn interactive_session_ffi_dispatch_smoke() {
+        let _guard = crate::engine::lock_test_state();
+        crate::engine::reset_for_tests();
+        let _profile_env = EnvVarGuard::set(super::TBTC_SIGNER_PROFILE_ENV, "development");
+        let _provenance_env = EnvVarGuard::set("TBTC_SIGNER_ENFORCE_PROVENANCE_GATE", "false");
+
+        // Structurally valid requests whose semantics fail: proves
+        // symbol -> parse -> engine -> structured-error dispatch for
+        // every Phase 7.1 export without standing up a signing fixture
+        // (the engine tests own the cryptographic contracts).
+        let open = crate::api::InteractiveSessionOpenRequest {
+            session_id: "ffi-interactive-smoke".to_string(),
+            member_identifier: 1,
+            message_hex: "11".repeat(32),
+            key_group: "ffi-smoke-key-group".to_string(),
+            threshold: 2,
+            taproot_merkle_root_hex: None,
+            attempt_context: crate::api::AttemptContext {
+                attempt_number: 1,
+                coordinator_identifier: 1,
+                included_participants: vec![1, 2],
+                included_participants_fingerprint: "00".to_string(),
+                attempt_id: "ffi-smoke-attempt".to_string(),
+            },
+        };
+        // No DKG session exists, so Open fails closed with session_not_found
+        // (key material is resolved from engine DKG state, never the request).
+        let (status, payload) = call_ffi(&open, super::frost_tbtc_interactive_session_open);
+        assert_ne!(status, 0);
+        let error: ErrorResponse = serde_json::from_slice(&payload).expect("open error payload");
+        assert_eq!(error.code, "session_not_found");
+
+        let round1 = crate::api::InteractiveRound1Request {
+            session_id: "ffi-interactive-smoke-missing".to_string(),
+            attempt_id: "missing".to_string(),
+            member_identifier: 1,
+        };
+        let (status, payload) = call_ffi(&round1, super::frost_tbtc_interactive_round1);
+        assert_ne!(status, 0);
+        let error: ErrorResponse = serde_json::from_slice(&payload).expect("round1 error payload");
+        assert_eq!(error.code, "session_not_found");
+
+        let round2 = crate::api::InteractiveRound2Request {
+            session_id: "ffi-interactive-smoke-missing".to_string(),
+            attempt_id: "missing".to_string(),
+            member_identifier: 1,
+            signing_package_hex: "00".to_string(),
+        };
+        let (status, payload) = call_ffi(&round2, super::frost_tbtc_interactive_round2);
+        assert_ne!(status, 0);
+        let error: ErrorResponse = serde_json::from_slice(&payload).expect("round2 error payload");
+        assert_eq!(error.code, "validation_error");
+
+        let abort = crate::api::InteractiveSessionAbortRequest {
+            session_id: "ffi-interactive-smoke-missing".to_string(),
+            attempt_id: None,
+        };
+        let (status, payload) = call_ffi(&abort, super::frost_tbtc_interactive_session_abort);
+        assert_eq!(status, 0);
+        let result: crate::api::InteractiveSessionAbortResult =
+            serde_json::from_slice(&payload).expect("abort result payload");
+        assert!(!result.aborted);
+
+        // Aggregate fails closed: the malformed signing package is
+        // rejected at parse (before the session lookup), proving the
+        // symbol -> parse -> engine -> structured-error dispatch.
+        let aggregate = crate::api::InteractiveAggregateRequest {
+            session_id: "ffi-interactive-smoke-missing".to_string(),
+            attempt_id: "missing".to_string(),
+            signing_package_hex: "00".to_string(),
+            signature_shares: vec![crate::api::NativeFrostSignatureShare {
+                identifier: "00".to_string(),
+                data_hex: "00".to_string(),
+            }],
+            taproot_merkle_root_hex: None,
+        };
+        let (status, payload) = call_ffi(&aggregate, super::frost_tbtc_interactive_aggregate);
+        assert_ne!(status, 0);
+        let error: ErrorResponse =
+            serde_json::from_slice(&payload).expect("aggregate error payload");
+        assert_eq!(error.code, "validation_error");
+    }
+
+    #[test]
+    fn derive_interactive_attempt_context_ffi_roundtrip() {
+        // Hermetic env (development profile, provenance gate off) so the new
+        // front-door gate does not reject; the engine tests own the gate's
+        // fail-closed behavior.
+        let _guard = crate::engine::lock_test_state();
+        // Stateless + secret-free: unlike the session calls above, a valid
+        // request SUCCEEDS with no DKG fixture, proving the
+        // symbol -> parse -> engine -> serialize_response SUCCESS path for the
+        // derivation export (the engine tests own the derivation contract).
+        let request = crate::api::DeriveInteractiveAttemptContextRequest {
+            session_id: "ffi-derive-smoke".to_string(),
+            message_hex: "11".repeat(32),
+            key_group: "ffi-derive-key-group".to_string(),
+            threshold: 2,
+            attempt_number: 1,
+            included_participants: vec![3, 1, 2],
+        };
+        let (status, payload) = call_ffi(
+            &request,
+            super::frost_tbtc_derive_interactive_attempt_context,
+        );
+        assert_eq!(status, 0);
+        let result: crate::api::DeriveInteractiveAttemptContextResult =
+            serde_json::from_slice(&payload).expect("derive result payload");
+        assert_eq!(result.attempt_context.included_participants, vec![1, 2, 3]);
+        assert_eq!(result.attempt_context.attempt_number, 1);
+        assert!(result.attempt_context.coordinator_identifier >= 1);
+        assert_eq!(
+            result
+                .attempt_context
+                .included_participants_fingerprint
+                .len(),
+            64
+        );
+        assert_eq!(result.attempt_context.attempt_id.len(), 64);
+        assert_eq!(result.frost_identifiers.len(), 3);
+    }
+
+    fn native_frost_identifier(member_index: u8) -> String {
+        let mut identifier = [0u8; 32];
+        identifier[0] = member_index;
+        serde_json::to_string(&hex::encode(identifier))
+            .expect("identifier JSON encoding cannot fail")
+    }
+
+    #[test]
+    fn interactive_frost_dkg_and_signing_ffi_roundtrip() {
+        // Serialize with every other env-touching test. This test mutates
+        // process-global TBTC_SIGNER_* env vars (profile, provenance gate),
+        // and env is shared across all parallel test threads; without the
+        // lock its EnvVarGuard set/restore races with the serialized tests
+        // and can leak a `production` profile into a concurrent state test,
+        // which then panics while holding the engine lock and poisons it.
+        // Declared first so it drops last - after the EnvVarGuards restore.
+        let _guard = crate::engine::lock_test_state();
+        let _profile_env = EnvVarGuard::set(super::TBTC_SIGNER_PROFILE_ENV, "development");
+        let _provenance_env = EnvVarGuard::set("TBTC_SIGNER_ENFORCE_PROVENANCE_GATE", "false");
+
+        let participant_ids = [1u8, 2u8, 3u8];
+        let participant_identifiers: std::collections::BTreeMap<u8, String> = participant_ids
+            .iter()
+            .map(|id| (*id, native_frost_identifier(*id)))
+            .collect();
+
+        let mut part1_results = std::collections::BTreeMap::new();
+        for id in participant_ids {
+            let request = DkgPart1Request {
+                participant_identifier: participant_identifiers[&id].clone(),
+                max_signers: 3,
+                min_signers: 2,
+            };
+            let (status, payload) = call_ffi(&request, frost_tbtc_dkg_part1);
+            assert_eq!(status, 0);
+            let result: DkgPart1Result =
+                serde_json::from_slice(&payload).expect("part1 response decode");
+            assert_eq!(result.package.identifier, participant_identifiers[&id]);
+            assert!(!result.secret_package_hex.is_empty());
+            assert!(!result.package.package_hex.is_empty());
+            part1_results.insert(id, result);
+        }
+
+        let mut part2_results = std::collections::BTreeMap::new();
+        for id in participant_ids {
+            let round1_packages: Vec<DkgRound1Package> = participant_ids
+                .iter()
+                .filter(|other_id| **other_id != id)
+                .map(|other_id| part1_results[other_id].package.clone())
+                .collect();
+            let request = DkgPart2Request {
+                secret_package_hex: part1_results[&id].secret_package_hex.clone(),
+                round1_packages,
+            };
+            let (status, payload) = call_ffi(&request, frost_tbtc_dkg_part2);
+            assert_eq!(status, 0);
+            let result: DkgPart2Result =
+                serde_json::from_slice(&payload).expect("part2 response decode");
+            assert_eq!(result.packages.len(), 2);
+            assert!(result
+                .packages
+                .iter()
+                .all(|pkg| pkg.sender_identifier.is_none()));
+            part2_results.insert(id, result);
+        }
+
+        let mut part3_results = std::collections::BTreeMap::new();
+        for id in participant_ids {
+            let round1_packages: Vec<DkgRound1Package> = participant_ids
+                .iter()
+                .filter(|other_id| **other_id != id)
+                .map(|other_id| part1_results[other_id].package.clone())
+                .collect();
+            let round2_packages: Vec<DkgRound2Package> = participant_ids
+                .iter()
+                .filter(|sender_id| **sender_id != id)
+                .map(|sender_id| {
+                    let mut package = part2_results[sender_id]
+                        .packages
+                        .iter()
+                        .find(|pkg| pkg.identifier == participant_identifiers[&id])
+                        .expect("round2 package for recipient")
+                        .clone();
+                    package.sender_identifier = Some(participant_identifiers[sender_id].clone());
+                    package
+                })
+                .collect();
+            let request = DkgPart3Request {
+                secret_package_hex: part2_results[&id].secret_package_hex.clone(),
+                round1_packages,
+                round2_packages,
+            };
+            let (status, payload) = call_ffi(&request, frost_tbtc_dkg_part3);
+            assert_eq!(status, 0);
+            let result: DkgPart3Result =
+                serde_json::from_slice(&payload).expect("part3 response decode");
+            assert_eq!(result.key_package.identifier, participant_identifiers[&id]);
+            assert_eq!(result.public_key_package.verifying_key.len(), 64);
+            assert_eq!(result.public_key_package.verifying_shares.len(), 3);
+            part3_results.insert(id, result);
+        }
+
+        let verifying_key = part3_results[&1].public_key_package.verifying_key.clone();
+        for id in participant_ids {
+            assert_eq!(
+                part3_results[&id].public_key_package.verifying_key,
+                verifying_key
+            );
+            assert_eq!(
+                part3_results[&id].public_key_package.verifying_shares,
+                part3_results[&1].public_key_package.verifying_shares
+            );
+        }
+
+        let signing_participants = [1u8, 2u8];
+        let mut commitments = Vec::new();
+        let mut nonces_by_participant = std::collections::BTreeMap::new();
+        for id in signing_participants {
+            let request = GenerateNoncesAndCommitmentsRequest {
+                key_package_identifier: part3_results[&id].key_package.identifier.clone(),
+                key_package_hex: part3_results[&id].key_package.data_hex.clone(),
+            };
+            let (status, payload) = call_ffi(&request, frost_tbtc_generate_nonces_and_commitments);
+            assert_eq!(status, 0);
+            let result: GenerateNoncesAndCommitmentsResult =
+                serde_json::from_slice(&payload).expect("nonce response decode");
+            commitments.push(result.commitment);
+            nonces_by_participant.insert(id, result.nonces_hex);
+        }
+
+        let message = [0x42u8; 32];
+        let request = NewSigningPackageRequest {
+            message_hex: hex::encode(message),
+            commitments: commitments.clone(),
+        };
+        let (status, payload) = call_ffi(&request, frost_tbtc_new_signing_package);
+        assert_eq!(status, 0);
+        let signing_package: NewSigningPackageResult =
+            serde_json::from_slice(&payload).expect("signing package response decode");
+
+        let mut signature_shares = Vec::new();
+        for id in signing_participants {
+            let request = SignShareRequest {
+                signing_package_hex: signing_package.signing_package_hex.clone(),
+                nonces_hex: nonces_by_participant[&id].clone(),
+                key_package_identifier: part3_results[&id].key_package.identifier.clone(),
+                key_package_hex: part3_results[&id].key_package.data_hex.clone(),
+            };
+            let (status, payload) = call_ffi(&request, frost_tbtc_sign_share);
+            assert_eq!(status, 0);
+            let result: SignShareResult =
+                serde_json::from_slice(&payload).expect("signature share response decode");
+            signature_shares.push(result.signature_share);
+        }
+
+        let request = AggregateRequest {
+            signing_package_hex: signing_package.signing_package_hex,
+            signature_shares,
+            public_key_package: part3_results[&1].public_key_package.clone(),
+        };
+        let (status, payload) = call_ffi(&request, frost_tbtc_aggregate);
+        assert_eq!(status, 0);
+        let aggregate: AggregateResult =
+            serde_json::from_slice(&payload).expect("aggregate response decode");
+
+        let signature_bytes = hex::decode(aggregate.signature_hex).expect("signature hex");
+        assert_eq!(signature_bytes.len(), 64);
+        let signature = SchnorrSignature::from_slice(&signature_bytes).expect("BIP340 signature");
+        let public_key_bytes = hex::decode(verifying_key).expect("verifying key hex");
+        let public_key = XOnlyPublicKey::from_slice(&public_key_bytes).expect("x-only public key");
+        let message = SecpMessage::from_digest(message);
+        Secp256k1::verification_only()
+            .verify_schnorr(&signature, &message, &public_key)
+            .expect("aggregate verifies under DKG x-only key");
+
+        let commitment_identifiers: Vec<String> = commitments
+            .into_iter()
+            .map(|commitment| commitment.identifier)
+            .collect();
+        let share_identifiers: Vec<String> = request
+            .signature_shares
+            .into_iter()
+            .map(|share| share.identifier)
+            .collect();
+        assert_eq!(commitment_identifiers, share_identifiers);
+    }
+
+    #[test]
     fn roast_liveness_policy_reports_default_contract() {
         let _guard = crate::engine::lock_test_state();
         crate::engine::reset_for_tests();
@@ -507,6 +1152,20 @@ mod tests {
             policy.exclusion_evidence_policy,
             "timeout_or_invalid_share_proof"
         );
+    }
+
+    #[test]
+    fn abi_version_reports_the_contract_version() {
+        let (status, payload) = call_ffi_no_input(frost_tbtc_abi_version);
+        assert_eq!(status, 0);
+
+        let abi: FrostTbtcAbiVersionResult =
+            serde_json::from_slice(&payload).expect("abi version payload decode");
+        // The enforced FFI contract starts at 1.0; bump deliberately per the
+        // TBTC_SIGNER_ABI_MAJOR / TBTC_SIGNER_ABI_MINOR rules. This test pins the
+        // current value so an accidental bump is caught.
+        assert_eq!(abi.abi_major, 1);
+        assert_eq!(abi.abi_minor, 0);
     }
 
     #[test]
@@ -541,6 +1200,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let (dkg_status, _) = call_ffi(&dkg_request, frost_tbtc_run_dkg);
         assert_eq!(dkg_status, 0);
@@ -711,6 +1371,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let (dkg_status, dkg_payload) = call_ffi(&dkg_request, frost_tbtc_run_dkg);
         assert_eq!(dkg_status, 0);
@@ -733,6 +1394,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -777,6 +1439,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let (dkg_status, dkg_payload) = call_ffi(&dkg, frost_tbtc_run_dkg);
@@ -790,6 +1453,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -803,6 +1467,7 @@ mod tests {
 
         let finalize = FinalizeSignRoundRequest {
             session_id: "session-sign".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -853,6 +1518,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
 
         let (dkg_status, dkg_payload) = call_ffi(&dkg, frost_tbtc_run_dkg);
@@ -866,6 +1532,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -879,6 +1546,7 @@ mod tests {
 
         let finalize = FinalizeSignRoundRequest {
             session_id: "session-sign-bootstrap-disabled".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -920,6 +1588,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let (dkg_status, dkg_payload) = call_ffi(&dkg, frost_tbtc_run_dkg);
         assert_eq!(dkg_status, 0);
@@ -931,6 +1600,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group.clone(),
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![1, 2]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -943,6 +1613,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "cafebabe".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: Some(vec![2, 1]),
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -976,6 +1647,7 @@ mod tests {
                 },
             ],
             threshold: 2,
+            dkg_seed_hex: None,
         };
         let (dkg_status, dkg_payload) = call_ffi(&dkg, frost_tbtc_run_dkg);
         assert_eq!(dkg_status, 0);
@@ -987,6 +1659,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: dkg_result.key_group,
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -998,6 +1671,7 @@ mod tests {
 
         let finalize = FinalizeSignRoundRequest {
             session_id: "session-sign-finalized".to_string(),
+            taproot_merkle_root_hex: None,
             attempt_context: None,
             round_contributions: vec![
                 RoundContribution {
@@ -1031,6 +1705,7 @@ mod tests {
             member_identifier: 1,
             message_hex: "deadbeef".to_string(),
             key_group: "missing".to_string(),
+            taproot_merkle_root_hex: None,
             signing_participants: None,
             attempt_context: None,
             attempt_transition_evidence: None,
@@ -1457,7 +2132,7 @@ mod tests {
 
         for (value, expected) in test_cases {
             assert_eq!(
-                super::bootstrap_mode_flag_enabled(value),
+                super::engine::truthy_env_flag(value),
                 expected,
                 "unexpected bootstrap-mode flag classification for [{value:?}]",
             );
@@ -1475,6 +2150,22 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_mode_env_is_ignored_when_profile_is_missing_or_empty() {
+        let _guard = crate::engine::lock_test_state();
+        let _bootstrap_mode_guard = BootstrapModeGuard::set(None);
+        let _allow_bootstrap_env = EnvVarGuard::set(super::TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV, "true");
+        let _profile_env = EnvVarGuard::unset(super::TBTC_SIGNER_PROFILE_ENV);
+
+        assert!(super::engine::signer_profile_is_production());
+        assert!(!super::bootstrap_mode_enabled_from_env());
+
+        std::env::set_var(super::TBTC_SIGNER_PROFILE_ENV, " ");
+
+        assert!(super::engine::signer_profile_is_production());
+        assert!(!super::bootstrap_mode_enabled_from_env());
+    }
+
+    #[test]
     fn bootstrap_mode_rechecks_production_profile_each_call() {
         let _guard = crate::engine::lock_test_state();
         let _bootstrap_mode_guard = BootstrapModeGuard::set(None);
@@ -1486,5 +2177,33 @@ mod tests {
         std::env::set_var(super::TBTC_SIGNER_PROFILE_ENV, "production");
 
         assert!(!super::bootstrap_mode_enabled());
+    }
+    #[test]
+    fn init_signer_config_ffi_round_trip_installs_and_reports_fingerprint() {
+        let _guard = crate::engine::lock_test_state();
+        crate::engine::reset_for_tests();
+
+        let request = crate::api::InitSignerConfigRequest {
+            profile: Some("development".to_string()),
+            roast_coordinator_timeout_ms: Some(45_000),
+            ..crate::api::InitSignerConfigRequest::default()
+        };
+        let (status, response_bytes) = call_ffi(&request, crate::frost_tbtc_init_signer_config);
+        assert_eq!(
+            status,
+            0,
+            "init must succeed: {:?}",
+            String::from_utf8_lossy(&response_bytes)
+        );
+
+        let response: crate::api::InitSignerConfigResult =
+            serde_json::from_slice(&response_bytes).expect("response parses");
+        assert!(response.installed);
+        assert!(!response.idempotent);
+        assert_eq!(response.configured_key_count, 2);
+        assert!(!response.config_fingerprint.is_empty());
+
+        // Clear the installed snapshot so env-driven tests are unaffected.
+        crate::engine::reset_for_tests();
     }
 }

@@ -12,10 +12,10 @@ checks, incident actions, and evidence capture requirements.
 
 This runbook is paired with:
 
-- `docs/frost-migration/roast-phase-5-security-rollout-gates.md`
+- `pkg/tbtc/signer/docs/roast-phase-5-security-rollout-gates.md`
 - Future mandatory TEE hardening profile
   (activation-gated):
-  `docs/frost-migration/tee-whitelisted-signer-enforcement-plan.md`
+  `pkg/tbtc/signer/docs/tee-whitelisted-signer-enforcement-plan.md`
 
 ## 2. Prerequisites
 
@@ -23,15 +23,44 @@ Before Stage 1 canary:
 
 1. Security/correctness gate checks are green.
 2. Benchmark suite is current:
-   - `cd tools/tbtc-signer && cargo bench --features bench-restart-hook --bench phase5_roast`
+   - `cd pkg/tbtc/signer && cargo bench --features bench-restart-hook --bench phase5_roast`
 3. Chaos/failure suite is green:
-   - `cd tools/tbtc-signer && ./scripts/run_phase5_chaos_suite.sh`
+   - `cd pkg/tbtc/signer && ./scripts/run_phase5_chaos_suite.sh`
 4. Pre-ROAST baseline window captured for:
    - attempt success rate
    - coordinator rotations per signing request
    - p95/p99 signing latency
 5. Baseline worksheet populated:
-   - `docs/frost-migration/roast-phase-5-baseline-calibration.md`
+   - `pkg/tbtc/signer/docs/roast-phase-5-baseline-calibration.md`
+6. Provenance attestation rotation cadence scheduled: a production
+   signer installs its configuration once at process start (the
+   init-time config FFI, `frost_tbtc_init_signer_config`) and the
+   attestation material in it is immutable for the process lifetime,
+   while attestation TTL is capped at 7 days
+   (`TBTC_SIGNER_PROVENANCE_MAX_ATTESTATION_TTL_SECONDS`). Operators
+   MUST restart (re-init) each signer with fresh attestation material
+   within every attestation window, and rollout stage scheduling must
+   absorb that restart cadence. Live re-attestation without a restart
+   is deliberately unsupported: it would require a dedicated,
+   narrowly-scoped FFI, never general config mutation, which would
+   reopen the split-brain risk the immutable install design closed.
+7. Config-file pushes are canaried node-by-node: an unmet init-config
+   demand (`TBTC_SIGNER_INIT_CONFIG_PATH` set but the FROST-native
+   engine did not come up) terminates the process in every profile
+   (gates-doc Decision Log, decision 7). A bad config template pushed
+   fleet-wide therefore produces a visible, correlated outage instead
+   of silent capability loss - push to a single node, confirm a clean
+   start, then roll out. The same applies to signer-library upgrades
+   that tighten init-time validation: a config that installed
+   yesterday can be rejected after an upgrade, so upgrade + config
+   changes are canaried together. Note this also enforces prerequisite
+   6's attestation cadence: a node restarted with expired attestation
+   material will not start until re-attested. Scope the variable to
+   the signer service unit (e.g. the systemd unit's `Environment=`),
+   never the host-global environment: every binary importing the
+   signing package honors the same demand, so a host-global export
+   plus a broken config would also kill maintenance tooling and test
+   binaries run on that host.
 
 ## 3. Rollout Stages
 
@@ -48,7 +77,7 @@ Before Stage 1 canary:
 ## 4. Monitoring And Decision Thresholds
 
 Use the thresholds from
-`docs/frost-migration/roast-phase-5-security-rollout-gates.md`.
+`pkg/tbtc/signer/docs/roast-phase-5-security-rollout-gates.md`.
 
 Hold thresholds:
 
