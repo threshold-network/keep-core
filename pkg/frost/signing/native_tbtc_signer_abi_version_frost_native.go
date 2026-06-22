@@ -3,18 +3,10 @@
 package signing
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
 )
-
-// nativeTBTCSignerABIVersion is the frozen root compatibility surface: the JSON shape
-// frost_tbtc_abi_version returns. Keep it in lockstep with api::FrostTbtcAbiVersionResult.
-type nativeTBTCSignerABIVersion struct {
-	AbiMajor uint32 `json:"abi_major"`
-	AbiMinor uint32 `json:"abi_minor"`
-}
 
 // assertTBTCSignerABICompatible fetches the linked lib's FFI contract version and
 // applies the compatibility rule, failing closed. It distinguishes two cases:
@@ -43,15 +35,12 @@ func assertTBTCSignerABICompatible() error {
 		)
 	}
 
-	var version nativeTBTCSignerABIVersion
-	if err := json.Unmarshal(payload, &version); err != nil {
-		return fmt.Errorf(
-			"%w: malformed FFI contract version response: %v",
-			ErrTBTCSignerABIIncompatible, err,
-		)
+	major, minor, err := parseTBTCSignerABIVersion(payload)
+	if err != nil {
+		return err
 	}
 
-	return checkTBTCSignerABICompatibility(version.AbiMajor, version.AbiMinor)
+	return checkTBTCSignerABICompatibility(major, minor)
 }
 
 var (

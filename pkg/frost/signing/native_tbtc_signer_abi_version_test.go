@@ -39,6 +39,55 @@ func TestCheckABIContractCompatibility(t *testing.T) {
 	}
 }
 
+func TestParseTBTCSignerABIVersion(t *testing.T) {
+	t.Run("valid", func(t *testing.T) {
+		major, minor, err := parseTBTCSignerABIVersion([]byte(`{"abi_major":2,"abi_minor":3}`))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if major != 2 || minor != 3 {
+			t.Fatalf("got (%d,%d), want (2,3)", major, minor)
+		}
+	})
+
+	// Both fields are REQUIRED: a missing field must be rejected, not zero-filled - else
+	// a partial lib omitting abi_minor would default to 0 and pass the (>= 0) rule.
+	rejected := map[string]string{
+		"missing abi_minor": `{"abi_major":1}`,
+		"missing abi_major": `{"abi_minor":0}`,
+		"empty object":      `{}`,
+		"malformed json":    `{"abi_major":1,`,
+		"not an object":     `42`,
+	}
+	for name, payload := range rejected {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := parseTBTCSignerABIVersion([]byte(payload))
+			if err == nil {
+				t.Fatalf("payload %q must be rejected", payload)
+			}
+			if !errors.Is(err, ErrTBTCSignerABIIncompatible) {
+				t.Fatalf("rejection must wrap ErrTBTCSignerABIIncompatible: %v", err)
+			}
+		})
+	}
+
+	// A present zero minor with major present is VALID (abi 1.0 is a real version).
+	t.Run("zero minor is valid when present", func(t *testing.T) {
+		major, minor, err := parseTBTCSignerABIVersion([]byte(`{"abi_major":1,"abi_minor":0}`))
+		if err != nil || major != 1 || minor != 0 {
+			t.Fatalf("got (%d,%d,%v), want (1,0,nil)", major, minor, err)
+		}
+	})
+
+	// Extra/unknown fields are tolerated (additive minor may add fields old bridges ignore).
+	t.Run("extra fields tolerated", func(t *testing.T) {
+		major, minor, err := parseTBTCSignerABIVersion([]byte(`{"abi_major":1,"abi_minor":0,"future":"x"}`))
+		if err != nil || major != 1 || minor != 0 {
+			t.Fatalf("got (%d,%d,%v), want (1,0,nil)", major, minor, err)
+		}
+	})
+}
+
 func TestCheckTBTCSignerABICompatibility_CurrentContract(t *testing.T) {
 	// Pins the bridge's current required contract (major 1, min minor 0): the matching
 	// lib version is compatible; a different major is not. A regression here means the
