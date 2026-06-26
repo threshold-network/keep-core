@@ -285,6 +285,27 @@ pub(crate) fn load_signing_policy_firewall_config(
         )));
     }
 
+    if let (Some(start_hour), Some(end_hour)) = (allowed_utc_start_hour, allowed_utc_end_hour) {
+        if start_hour >= 24 || end_hour >= 24 {
+            return Err(EngineError::Internal(format!(
+                "env [{}] and [{}] must be hours in the range 0..=23",
+                TBTC_SIGNER_POLICY_ALLOWED_UTC_START_HOUR_ENV,
+                TBTC_SIGNER_POLICY_ALLOWED_UTC_END_HOUR_ENV
+            )));
+        }
+        // Reject a zero-width window. utc_hour_in_window treats start == end as
+        // "always in window", so silently accepting equal bounds would disable
+        // the time-of-day control entirely (fail-open) rather than restricting
+        // it. An operator who wants no time restriction must leave both unset.
+        if start_hour == end_hour {
+            return Err(EngineError::Internal(format!(
+                "env [{}] and [{}] must differ; an equal start and end hour does not define a restricted window",
+                TBTC_SIGNER_POLICY_ALLOWED_UTC_START_HOUR_ENV,
+                TBTC_SIGNER_POLICY_ALLOWED_UTC_END_HOUR_ENV
+            )));
+        }
+    }
+
     Ok(Some(SigningPolicyFirewallConfig {
         allowed_script_classes,
         max_output_count,

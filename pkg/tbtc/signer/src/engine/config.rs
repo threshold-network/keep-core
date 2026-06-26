@@ -387,18 +387,33 @@ pub(crate) fn bench_restart_hook_enabled() -> bool {
         .unwrap_or(false)
 }
 
+static PROFILE_VALUE_WARNING_EMITTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
 pub(crate) fn signer_profile_is_production() -> bool {
     let raw = signer_env_var(TBTC_SIGNER_PROFILE_ENV).unwrap_or_default();
     let normalized = raw.trim().to_ascii_lowercase();
     match normalized.as_str() {
         TBTC_SIGNER_PROFILE_PRODUCTION | "" => true,
         TBTC_SIGNER_PROFILE_DEVELOPMENT => false,
-        other => panic!(
-            "{} must be '{}' or '{}'; got {:?}",
-            TBTC_SIGNER_PROFILE_ENV,
-            TBTC_SIGNER_PROFILE_PRODUCTION,
-            TBTC_SIGNER_PROFILE_DEVELOPMENT,
-            other
-        ),
+        other => {
+            // Fail closed: an unrecognized profile is treated as production
+            // (the strictest gate set) instead of panicking. The previous
+            // panic turned a single typo in TBTC_SIGNER_PROFILE into a
+            // process-wide denial of service, because this is consulted on the
+            // unvalidated env-fallback path and every profile-gated FFI
+            // operation would abort and surface as a generic internal error.
+            // Warn once so the misconfiguration stays visible to operators.
+            PROFILE_VALUE_WARNING_EMITTED.get_or_init(|| {
+                eprintln!(
+                    "warning: {} value {:?} is not '{}' or '{}'; treating as '{}' (fail-closed)",
+                    TBTC_SIGNER_PROFILE_ENV,
+                    other,
+                    TBTC_SIGNER_PROFILE_PRODUCTION,
+                    TBTC_SIGNER_PROFILE_DEVELOPMENT,
+                    TBTC_SIGNER_PROFILE_PRODUCTION,
+                );
+            });
+            true
+        }
     }
 }
