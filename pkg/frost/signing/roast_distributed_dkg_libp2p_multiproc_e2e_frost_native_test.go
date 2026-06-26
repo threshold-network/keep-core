@@ -84,6 +84,7 @@ type ddkgConfig struct {
 	Threshold  int          `json:"threshold"`
 	MessageHex string       `json:"message_hex"`
 	Topic      string       `json:"topic"`
+	ReadyDir   string       `json:"ready_dir"`
 	Members    []ddkgMember `json:"members"`
 }
 
@@ -154,7 +155,11 @@ func runDdkgOrchestrator(t *testing.T, n int, threshold uint16) {
 		Threshold:  int(threshold),
 		MessageHex: hex.EncodeToString(message),
 		Topic:      ddkgTopic,
+		ReadyDir:   t.TempDir() + "/ddkg-ready",
 		Members:    members,
+	}
+	if err := os.MkdirAll(cfg.ReadyDir, 0o700); err != nil {
+		t.Fatalf("create readiness dir: %v", err)
 	}
 	cfgBytes, err := json.Marshal(cfg)
 	if err != nil {
@@ -310,6 +315,10 @@ func runDdkgWorker(t *testing.T, idxStr string) {
 		collector.put(msg.Phase, msg.Sender, msg.Payload)
 	})
 
+	if err := waitForMultiprocReady(ctx, cfg.ReadyDir, "ddkg", index, cfg.N, 30*time.Second); err != nil {
+		fmt.Printf("%sreadiness barrier: %v\n", ddkgErrPrefix, err)
+		return
+	}
 	// Gossipsub mesh warmup before the first round (the periodic ticker also resends).
 	select {
 	case <-time.After(3 * time.Second):

@@ -89,6 +89,7 @@ type shapeBConfig struct {
 	KeyGroup   string         `json:"key_group"`
 	MessageHex string         `json:"message_hex"`
 	Topic      string         `json:"topic"`
+	ReadyDir   string         `json:"ready_dir"`
 	Members    []shapeBMember `json:"members"`
 }
 
@@ -229,7 +230,11 @@ func runShapeBOrchestrator(t *testing.T, n int, threshold uint16) {
 		KeyGroup:   keyGroup,
 		MessageHex: hex.EncodeToString(messageDigest),
 		Topic:      shapeBTopic,
+		ReadyDir:   filepath.Join(t.TempDir(), "shapeb-ready"),
 		Members:    members,
+	}
+	if err := os.MkdirAll(cfg.ReadyDir, 0o700); err != nil {
+		t.Fatalf("create readiness dir: %v", err)
 	}
 	configPath := filepath.Join(t.TempDir(), "shapeb-config.json")
 	cfgBytes, err := json.Marshal(cfg)
@@ -355,15 +360,6 @@ func runShapeBWorker(t *testing.T, idxStr string) {
 		fmt.Printf("%swait for peers: %v\n", shapeBErrPrefix, err)
 		return
 	}
-	// Gossipsub mesh warmup: a connection is not yet a subscribed mesh peer. With the
-	// periodic retransmission ticker, early broadcasts still resend until the mesh forms,
-	// but a short settle reduces wasted rounds.
-	select {
-	case <-time.After(3 * time.Second):
-	case <-ctx.Done():
-		fmt.Printf("%scontext done during warmup\n", shapeBErrPrefix)
-		return
-	}
 
 	channel, err := provider.BroadcastChannelFor(cfg.Topic)
 	if err != nil {
@@ -440,6 +436,20 @@ func runShapeBWorker(t *testing.T, idxStr string) {
 			return
 		}
 		fmt.Printf("%srunner: %v\n", shapeBErrPrefix, err)
+		return
+	}
+
+	if err := waitForMultiprocReady(ctx, cfg.ReadyDir, "shapeb", index, cfg.N, 30*time.Second); err != nil {
+		fmt.Printf("%sreadiness barrier: %v\n", shapeBErrPrefix, err)
+		return
+	}
+	// Gossipsub mesh warmup: a connection is not yet a subscribed mesh peer. Wait
+	// only after every worker has created its channel and runner subscription, so
+	// the first runner broadcast cannot race a peer that has not subscribed yet.
+	select {
+	case <-time.After(3 * time.Second):
+	case <-ctx.Done():
+		fmt.Printf("%scontext done during warmup\n", shapeBErrPrefix)
 		return
 	}
 
@@ -553,6 +563,53 @@ func periodicRetransmissionTicker(ctx context.Context, interval time.Duration) *
 		}
 	}()
 	return retransmission.NewTicker(ticks)
+}
+
+func waitForMultiprocReady(
+	ctx context.Context,
+	readyDir string,
+	prefix string,
+	index int,
+	n int,
+	timeout time.Duration,
+) error {
+	if readyDir == "" {
+		return fmt.Errorf("readiness directory is empty")
+	}
+	if err := os.MkdirAll(readyDir, 0o700); err != nil {
+		return err
+	}
+	marker := filepath.Join(readyDir, fmt.Sprintf("%s-%d.ready", prefix, index))
+	if err := os.WriteFile(marker, []byte("ready\n"), 0o600); err != nil {
+		return err
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		count := 0
+		entries, err := os.ReadDir(readyDir)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.Type().IsRegular() &&
+				strings.HasPrefix(entry.Name(), prefix+"-") &&
+				strings.HasSuffix(entry.Name(), ".ready") {
+				count++
+			}
+		}
+		if count >= n {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("only %d of %d workers became ready before timeout", count, n)
+		}
+		select {
+		case <-time.After(100 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 func withEnvOverrides(base []string, overrides map[string]string) []string {
