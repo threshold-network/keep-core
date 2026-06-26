@@ -2124,6 +2124,112 @@ fn roast_transcript_audit_and_verify_blame_proof_roundtrip() {
     clear_state_storage_policy_overrides();
 }
 
+// Regression: a forged advance (valid transition evidence but a
+// coordinator_identifier that fails deterministic RFC-21 validation) must be
+// rejected WITHOUT clearing the active round. Before the fix the active round
+// was cleared before the incoming context was validated, so the rejected
+// advance bricked the session (the original attempt stayed in
+// consumed_attempt_ids and could never be re-signed in-memory).
+#[test]
+fn rejected_forged_advance_preserves_active_sign_round() {
+    let _guard = lock_test_state();
+    let _state_path = configure_test_state_path("forged_advance_preserves_active_round");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    let _roast_strict_mode = RoastStrictModeGuard::enable();
+
+    let session_id = "session-forged-advance-active-round";
+    let message_hex = "deadbeef";
+    let dkg_result = run_dkg(RunDkgRequest {
+        session_id: session_id.to_string(),
+        participants: vec![
+            crate::api::DkgParticipant {
+                identifier: 1,
+                public_key_hex: "02aa".to_string(),
+            },
+            crate::api::DkgParticipant {
+                identifier: 2,
+                public_key_hex: "02bb".to_string(),
+            },
+            crate::api::DkgParticipant {
+                identifier: 3,
+                public_key_hex: "02cc".to_string(),
+            },
+        ],
+        threshold: 2,
+        dkg_seed_hex: None,
+    })
+    .expect("run dkg");
+
+    // Establish active attempt 1.
+    let attempt_one =
+        build_deterministic_attempt_context(session_id, message_hex, 1, vec![1, 2, 3]);
+    start_sign_round(StartSignRoundRequest {
+        session_id: session_id.to_string(),
+        member_identifier: 1,
+        message_hex: message_hex.to_string(),
+        key_group: dkg_result.key_group.clone(),
+        taproot_merkle_root_hex: None,
+        signing_participants: Some(vec![1, 2, 3]),
+        attempt_context: Some(attempt_one.clone()),
+        attempt_transition_evidence: None,
+    })
+    .expect("start sign round attempt 1");
+
+    // Build an otherwise-valid advance to attempt 2, then forge the coordinator
+    // to a different included participant: this still satisfies the transition
+    // evidence (which does not re-derive the coordinator) but fails the
+    // deterministic coordinator check inside validate_attempt_context.
+    let mut transition_evidence = build_attempt_transition_evidence_from_active_session(session_id);
+    transition_evidence.exclusion_evidence = Some(AttemptExclusionEvidence {
+        reason: ROAST_EXCLUSION_REASON_INVALID_SHARE_PROOF.to_string(),
+        excluded_member_identifiers: vec![3],
+        invalid_share_proof_fingerprint: Some("ab".repeat(32)),
+    });
+
+    let mut attempt_two =
+        build_deterministic_attempt_context(session_id, message_hex, 2, vec![1, 2]);
+    let legitimate_coordinator = attempt_two.coordinator_identifier;
+    attempt_two.coordinator_identifier = if legitimate_coordinator == 1 { 2 } else { 1 };
+    assert_ne!(
+        attempt_two.coordinator_identifier, legitimate_coordinator,
+        "forged coordinator must differ from the deterministic selection"
+    );
+
+    let forged_advance_err = start_sign_round(StartSignRoundRequest {
+        session_id: session_id.to_string(),
+        member_identifier: 1,
+        message_hex: message_hex.to_string(),
+        key_group: dkg_result.key_group.clone(),
+        taproot_merkle_root_hex: None,
+        signing_participants: Some(vec![1, 2]),
+        attempt_context: Some(attempt_two),
+        attempt_transition_evidence: Some(transition_evidence),
+    })
+    .expect_err("forged advance must be rejected");
+    assert!(
+        matches!(forged_advance_err, EngineError::Validation(_)),
+        "expected validation error, got {forged_advance_err:?}"
+    );
+
+    // The active attempt-1 round must survive the rejected advance: re-submitting
+    // the original attempt-1 request is idempotent and still succeeds, rather
+    // than failing with ConsumedAttemptReplay against a destroyed round.
+    start_sign_round(StartSignRoundRequest {
+        session_id: session_id.to_string(),
+        member_identifier: 1,
+        message_hex: message_hex.to_string(),
+        key_group: dkg_result.key_group,
+        taproot_merkle_root_hex: None,
+        signing_participants: Some(vec![1, 2, 3]),
+        attempt_context: Some(attempt_one),
+        attempt_transition_evidence: None,
+    })
+    .expect("attempt 1 remains signable after the rejected forged advance");
+
+    clear_state_storage_policy_overrides();
+}
+
 #[test]
 fn roast_transcript_audit_records_persist_across_reload() {
     let _guard = lock_test_state();
