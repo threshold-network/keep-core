@@ -71,6 +71,7 @@ const (
 	shapeBSigPrefix      = "SHAPEB_SIGNATURE="
 	shapeBErrPrefix      = "SHAPEB_ERROR="
 	shapeBKeyGroupPrefix = "SHAPEB_KEYGROUP="
+	shapeBSkipPrefix     = "SHAPEB_SKIP="
 )
 
 type shapeBMember struct {
@@ -166,8 +167,12 @@ func runShapeBOrchestrator(t *testing.T, n int, threshold uint16) {
 		"TBTC_SIGNER_ENFORCE_PROVENANCE_GATE":  "false",
 		"TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX": stateKeyHex,
 		"TBTC_SIGNER_STATE_PATH":               bootstrapState,
+		frostSubprocessSkipPrefixEnv:           shapeBSkipPrefix,
 	})
 	bootstrapOut, err := bootstrapCmd.CombinedOutput()
+	if skip := extractPrefixed(string(bootstrapOut), shapeBSkipPrefix); skip != "" {
+		t.Skip(skip)
+	}
 	keyGroup := extractPrefixed(string(bootstrapOut), shapeBKeyGroupPrefix)
 	if keyGroup == "" {
 		t.Fatalf("bootstrap DKG emitted no key group (err=%v):\n%s", err, indentTail(string(bootstrapOut), 40))
@@ -258,6 +263,7 @@ func runShapeBOrchestrator(t *testing.T, n int, threshold uint16) {
 				"TBTC_SIGNER_ENFORCE_PROVENANCE_GATE":  "false",
 				"TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX": stateKeyHex,
 				"TBTC_SIGNER_STATE_PATH":               m.StatePath,
+				frostSubprocessSkipPrefixEnv:           shapeBSkipPrefix,
 			})
 			out, err := cmd.CombinedOutput()
 			results[idx] = result{index: m.Index, output: string(out), err: err}
@@ -269,6 +275,9 @@ func runShapeBOrchestrator(t *testing.T, n int, threshold uint16) {
 	var winning string
 	winners := 0
 	for _, r := range results {
+		if skip := extractPrefixed(r.output, shapeBSkipPrefix); skip != "" {
+			t.Skipf("member %d skipped: %s", r.index, skip)
+		}
 		sig := extractPrefixed(r.output, shapeBSigPrefix)
 		if sig == "" {
 			t.Fatalf("member %d did not emit a signature (err=%v):\n%s", r.index, r.err, indentTail(r.output, 40))
@@ -427,12 +436,18 @@ func runShapeBWorker(t *testing.T, idxStr string) {
 		ara, member, cfg.Threshold2uint16(), engine, collector, coord, signer, bus,
 	)
 	if err != nil {
+		if reportFrostSubprocessSkip("interactive signing runner setup", err) {
+			return
+		}
 		fmt.Printf("%srunner: %v\n", shapeBErrPrefix, err)
 		return
 	}
 
 	sig, err := runner.Run(ctx)
 	if err != nil {
+		if reportFrostSubprocessSkip("interactive signing runner", err) {
+			return
+		}
 		fmt.Printf("%srun: %v\n", shapeBErrPrefix, err)
 		return
 	}

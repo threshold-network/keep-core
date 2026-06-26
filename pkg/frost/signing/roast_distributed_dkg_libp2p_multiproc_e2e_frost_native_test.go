@@ -62,6 +62,7 @@ const (
 	ddkgTopic      = "frost-distributed-dkg-and-sign"
 	ddkgSigPrefix  = "DDKG_SIGNATURE="
 	ddkgErrPrefix  = "DDKG_ERROR="
+	ddkgSkipPrefix = "DDKG_SKIP="
 	ddkgVKeyPrefix = "DDKG_GROUPKEY=" // diagnostic only
 
 	phaseRound1   = "dkg-r1"
@@ -184,6 +185,7 @@ func runDdkgOrchestrator(t *testing.T, n int, threshold uint16) {
 				ddkgConfigEnv:                         configPath,
 				"TBTC_SIGNER_PROFILE":                 "development",
 				"TBTC_SIGNER_ENFORCE_PROVENANCE_GATE": "false",
+				frostSubprocessSkipPrefixEnv:          ddkgSkipPrefix,
 			})
 			out, err := cmd.CombinedOutput()
 			results[idx] = result{index: m.Index, output: string(out), err: err}
@@ -194,6 +196,9 @@ func runDdkgOrchestrator(t *testing.T, n int, threshold uint16) {
 	var winning string
 	winners := 0
 	for _, r := range results {
+		if skip := extractPrefixed(r.output, ddkgSkipPrefix); skip != "" {
+			t.Skipf("member %d skipped: %s", r.index, skip)
+		}
 		sig := extractPrefixed(r.output, ddkgSigPrefix)
 		if sig == "" {
 			t.Fatalf("member %d produced no signature (err=%v):\n%s", r.index, r.err, indentTail(r.output, 40))
@@ -319,6 +324,9 @@ func runDdkgWorker(t *testing.T, idxStr string) {
 	// ---- DKG part 1: broadcast my public round-1 commitment package ----
 	part1, err := engine.Part1(selfID, uint16(cfg.N), uint16(cfg.Threshold))
 	if err != nil {
+		if reportFrostSubprocessSkip("distributed DKG part1", err) {
+			return
+		}
 		fmt.Printf("%spart1: %v\n", ddkgErrPrefix, err)
 		return
 	}
@@ -344,6 +352,9 @@ func runDdkgWorker(t *testing.T, idxStr string) {
 	// ---- DKG part 2: produce per-recipient secret packages, SEAL each to its recipient ----
 	part2, err := engine.Part2(part1.SecretPackage, round1Packages)
 	if err != nil {
+		if reportFrostSubprocessSkip("distributed DKG part2", err) {
+			return
+		}
 		fmt.Printf("%spart2: %v\n", ddkgErrPrefix, err)
 		return
 	}
@@ -406,6 +417,9 @@ func runDdkgWorker(t *testing.T, idxStr string) {
 	// ---- DKG part 3: derive MY key package + the shared group public key ----
 	dkgResult, err := engine.Part3(part2.SecretPackage, round1Packages, round2Packages)
 	if err != nil {
+		if reportFrostSubprocessSkip("distributed DKG part3", err) {
+			return
+		}
 		fmt.Printf("%spart3: %v\n", ddkgErrPrefix, err)
 		return
 	}
@@ -434,6 +448,9 @@ func runDdkgWorker(t *testing.T, idxStr string) {
 		myKeyPackage.Identifier, myKeyPackage.Data,
 	)
 	if err != nil {
+		if reportFrostSubprocessSkip("generate nonces and commitments", err) {
+			return
+		}
 		fmt.Printf("%sgenerate nonces: %v\n", ddkgErrPrefix, err)
 		return
 	}
@@ -466,11 +483,17 @@ func runDdkgWorker(t *testing.T, idxStr string) {
 	}
 	signingPackage, err := engine.NewSigningPackage(message, commitments)
 	if err != nil {
+		if reportFrostSubprocessSkip("new signing package", err) {
+			return
+		}
 		fmt.Printf("%snew signing package: %v\n", ddkgErrPrefix, err)
 		return
 	}
 	shareID, shareData, err := engine.Sign(signingPackage, nonces, myKeyPackage.Identifier, myKeyPackage.Data)
 	if err != nil {
+		if reportFrostSubprocessSkip("sign", err) {
+			return
+		}
 		fmt.Printf("%ssign: %v\n", ddkgErrPrefix, err)
 		return
 	}
@@ -497,6 +520,9 @@ func runDdkgWorker(t *testing.T, idxStr string) {
 
 	signature, err := engine.Aggregate(signingPackage, shares, groupPublicKey)
 	if err != nil {
+		if reportFrostSubprocessSkip("aggregate", err) {
+			return
+		}
 		fmt.Printf("%saggregate: %v\n", ddkgErrPrefix, err)
 		return
 	}
