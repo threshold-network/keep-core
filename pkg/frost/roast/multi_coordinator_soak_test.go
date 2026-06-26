@@ -347,14 +347,16 @@ func TestSoak_ParkedMemberIsReinstatedNextAttempt(t *testing.T) {
 	}
 }
 
-func TestSoak_InfeasibilityWhenBelowThreshold(t *testing.T) {
+func TestSoak_TransientSilenceBelowThresholdRecovers(t *testing.T) {
 	members := []group.MemberIndex{1, 2, 3, 4, 5}
 	nodes := newSoakHarness(t, members)
 	prev := soakStartingContext(t, members)
 
-	// Threshold = 5 (all members required). Silence two members.
-	// Next attempt's IncludedSet would be 3 (= 5 - 2 silenced), below 5.
-	// NextAttempt must return ErrAttemptInfeasible.
+	// Threshold = 5 (all members required). Silence two members, dropping the
+	// next attempt's IncludedSet to 3 (= 5 - 2 silenced), below threshold. No
+	// member is permanently excluded, so NextAttempt must NOT fail: each honest
+	// node transiently parks the silenced members for reinstatement by a later
+	// attempt.
 	silence := map[group.MemberIndex]bool{
 		4: true,
 		5: true,
@@ -393,13 +395,27 @@ func TestSoak_InfeasibilityWhenBelowThreshold(t *testing.T) {
 	}
 	bundle, _ := aggregator.node.coord.AggregateBundle(aggregator.handle)
 
-	// Verify each non-coordinator's NextAttempt returns infeasible.
+	// Each honest node's NextAttempt must succeed (not fail closed) and park the
+	// silenced members transiently rather than excluding them permanently.
 	for _, b := range begins {
-		_, err := b.node.coord.NextAttempt(b.handle, bundle, 5, []byte{0x01})
-		if !errors.Is(err, ErrAttemptInfeasible) {
+		next, err := b.node.coord.NextAttempt(b.handle, bundle, 5, []byte{0x01})
+		if err != nil {
 			t.Fatalf(
-				"node %d NextAttempt: expected ErrAttemptInfeasible; got %v",
+				"node %d NextAttempt: transient silence must not fail the session; got %v",
 				b.node.self, err,
+			)
+		}
+		if !memberSliceContains(next.TransientlyParked, 4) ||
+			!memberSliceContains(next.TransientlyParked, 5) {
+			t.Fatalf(
+				"node %d: silenced members 4 and 5 must be transiently parked; got %v",
+				b.node.self, next.TransientlyParked,
+			)
+		}
+		if len(next.ExcludedSet) != 0 {
+			t.Fatalf(
+				"node %d: silence must not permanently exclude; got %v",
+				b.node.self, next.ExcludedSet,
 			)
 		}
 	}

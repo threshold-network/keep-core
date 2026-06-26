@@ -387,15 +387,98 @@ func TestNextAttempt_PolicyIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestNextAttempt_InfeasibilityWhenBelowThreshold(t *testing.T) {
+func TestNextAttempt_InfeasibilityWhenPermanentExclusionsBelowThreshold(t *testing.T) {
 	f := newNextAttemptFixture()
-	f.threshold = 5 // Require all 5 members.
-	// Silently lose 2 members -> only 3 remain in IncludedSet, below
-	// threshold of 5.
-	f.bundleSenders = []group.MemberIndex{1, 2, 3}
+	f.threshold = 5 // n-of-n: the accuser quorum is 1, so one reject establishes.
+	// Permanently exclude member 3 via an established reject accusation. Only 4
+	// non-excluded members remain, below the threshold of 5, and a permanently
+	// excluded member is never reinstated -- so the session is genuinely
+	// infeasible.
+	f.rejects[1] = map[group.MemberIndex]uint{3: 1}
 	_, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
 	if !errors.Is(err, ErrAttemptInfeasible) {
 		t.Fatalf("expected ErrAttemptInfeasible, got %v", err)
+	}
+}
+
+func TestNextAttempt_TransientSilenceBelowThresholdDoesNotPermanentlyFail(t *testing.T) {
+	f := newNextAttemptFixture()
+	f.threshold = 5 // Require all 5 members.
+	// Silently lose 2 members -> the next attempt's included set drops to 3
+	// (below threshold), but NO member is permanently excluded. The session
+	// must NOT be declared infeasible: the silenced members are transiently
+	// parked and a later attempt reinstates them.
+	f.bundleSenders = []group.MemberIndex{1, 2, 3}
+	next, err := computeNextAttempt(f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey, fakeVerifier{})
+	if err != nil {
+		t.Fatalf("transient silence must not permanently fail the session, got %v", err)
+	}
+	if !memberSliceContains(next.TransientlyParked, 4) ||
+		!memberSliceContains(next.TransientlyParked, 5) {
+		t.Fatalf(
+			"silenced members 4 and 5 must be transiently parked; got parked %v",
+			next.TransientlyParked,
+		)
+	}
+	if len(next.ExcludedSet) != 0 {
+		t.Fatalf(
+			"transient silence must not permanently exclude; got excluded %v",
+			next.ExcludedSet,
+		)
+	}
+}
+
+func TestNextAttempt_TransientSilenceRecoversAcrossTwoAttempts(t *testing.T) {
+	f := newNextAttemptFixture()
+	f.threshold = 5
+
+	// Attempt N -> N+1: members 4 and 5 are silent. They are parked (not
+	// excluded) and the next attempt's included set is {1,2,3} (sub-threshold),
+	// but the session is not failed.
+	f.bundleSenders = []group.MemberIndex{1, 2, 3}
+	attemptN1, err := computeNextAttempt(
+		f.prev(t), f.bundle(t), f.threshold, f.dkgGroupPublicKey, fakeVerifier{},
+	)
+	if err != nil {
+		t.Fatalf("attempt N+1: transient silence must not fail, got %v", err)
+	}
+	if !memberSliceContains(attemptN1.TransientlyParked, 4) ||
+		!memberSliceContains(attemptN1.TransientlyParked, 5) {
+		t.Fatalf(
+			"attempt N+1: members 4 and 5 must be parked; got %v",
+			attemptN1.TransientlyParked,
+		)
+	}
+
+	// Attempt N+1 -> N+2: the previously-parked members are reinstated, so the
+	// included set returns to all five and the session recovers without
+	// intervention. The bundle defaults to N+1's included set {1,2,3}, which all
+	// respond.
+	g := newNextAttemptFixture()
+	g.threshold = 5
+	g.included = attemptN1.IncludedSet
+	g.excluded = attemptN1.ExcludedSet
+	g.parked = attemptN1.TransientlyParked
+	g.attemptNumber = attemptN1.AttemptNumber
+	attemptN2, err := computeNextAttempt(
+		g.prev(t), g.bundle(t), g.threshold, g.dkgGroupPublicKey, fakeVerifier{},
+	)
+	if err != nil {
+		t.Fatalf("attempt N+2: %v", err)
+	}
+	for _, m := range []group.MemberIndex{1, 2, 3, 4, 5} {
+		if !memberSliceContains(attemptN2.IncludedSet, m) {
+			t.Fatalf(
+				"attempt N+2 must reinstate all members; missing %d, got included %v",
+				m, attemptN2.IncludedSet,
+			)
+		}
+	}
+	if len(attemptN2.TransientlyParked) != 0 {
+		t.Fatalf(
+			"attempt N+2 should have no parked members; got %v",
+			attemptN2.TransientlyParked,
+		)
 	}
 }
 

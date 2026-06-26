@@ -242,23 +242,47 @@ func computeNextAttempt(
 
 	// (5) Reinstate previously parked members by re-including them
 	// (unless newly permanently excluded or re-parked).
-	included := original.sorted()
-	included = filterOut(included, exclSet)
-	included = filterOut(included, parkSet)
+	//
+	// Feasibility (step 6) is judged against the PERMANENTLY-available set --
+	// the original signer set minus permanent exclusions -- NOT the
+	// post-parking included set. Transiently-parked members (overflow and
+	// silence) are reinstated by a later attempt (steps 3-4), so counting them
+	// as gone here would let a single transient mass-silence event, or one
+	// byzantine elected coordinator that omits snapshots, permanently fail a
+	// session the original signer set can still complete -- exactly the
+	// grind-to-ErrAttemptInfeasible failure the accuser quorum exists to
+	// prevent, here via the ungated silence-parking path. Permanent exclusion
+	// is the only thing that can render a session infeasible.
+	feasible := filterOut(original.sorted(), exclSet)
 
-	// (6) Infeasibility check.
-	if threshold > 0 && uint(len(included)) < threshold {
+	// (6) Infeasibility check: only when permanent exclusions leave fewer than
+	// threshold members can no future attempt ever reach the threshold.
+	if threshold > 0 && uint(len(feasible)) < threshold {
 		return attempt.AttemptContext{}, fmt.Errorf(
-			"%w: %d eligible, threshold %d",
+			"%w: %d non-excluded, threshold %d",
 			ErrAttemptInfeasible,
-			len(included),
+			len(feasible),
 			threshold,
 		)
 	}
 
+	// The next attempt's included set is the feasible set minus this attempt's
+	// transient parking. It may fall below threshold (the parked members are
+	// reinstated next attempt); that burns one attempt rather than failing the
+	// session.
+	included := filterOut(feasible, parkSet)
+	nextParked := parkSet.sorted()
+	if len(included) == 0 {
+		// Every non-excluded member is transiently parked this attempt. Parking
+		// is strictly transient and an AttemptContext requires a non-empty
+		// included set, so reinstate the parked members now (they retry this
+		// attempt) rather than producing an empty, unconstructable attempt.
+		included = feasible
+		nextParked = nil
+	}
+
 	// Convert ExcludedSet to its canonical (sorted, deduped) slice.
 	nextExcluded := exclSet.sorted()
-	nextParked := parkSet.sorted()
 
 	next, err := attempt.NewAttemptContextWithParking(
 		prev.SessionID,
