@@ -820,6 +820,24 @@ fn production_profile_forces_provenance_gate_without_env_flag() {
 }
 
 #[test]
+fn unknown_profile_value_fails_closed_to_production() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    // A typo / unknown profile value must be treated as production
+    // (fail-closed) rather than panicking. The previous panic on the
+    // unvalidated env-fallback path turned one typo into a process-wide DoS.
+    std::env::set_var(TBTC_SIGNER_PROFILE_ENV, "staging");
+    assert!(
+        signer_profile_is_production(),
+        "unrecognized profile must fail closed to production"
+    );
+
+    std::env::remove_var(TBTC_SIGNER_PROFILE_ENV);
+}
+
+#[test]
 fn run_dkg_rejects_malformed_seed_as_validation_input() {
     let _guard = lock_test_state();
     reset_for_tests();
@@ -1855,6 +1873,34 @@ fn build_taproot_tx_signing_policy_firewall_rejects_outside_utc_window() {
         panic!("unexpected error variant");
     };
     assert_eq!(reason_code, "request_outside_allowed_utc_window");
+
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn signing_policy_firewall_rejects_equal_utc_window_bounds() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    // A degenerate equal-bounds window (start == end) must be rejected at load
+    // time. utc_hour_in_window treats start == end as "always in window", so
+    // accepting it would silently disable the time-of-day control (fail-open).
+    std::env::set_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV, "p2tr,p2wpkh");
+    configure_required_signing_policy_limits_for_tests();
+    std::env::set_var(TBTC_SIGNER_POLICY_ALLOWED_UTC_START_HOUR_ENV, "12");
+    std::env::set_var(TBTC_SIGNER_POLICY_ALLOWED_UTC_END_HOUR_ENV, "12");
+
+    let err = load_signing_policy_firewall_config()
+        .expect_err("equal-bounds UTC window must be rejected at load time");
+    let EngineError::Internal(message) = err else {
+        panic!("unexpected error variant: {err:?}");
+    };
+    assert!(
+        message.contains("must differ"),
+        "unexpected validation message: {message}"
+    );
 
     clear_state_storage_policy_overrides();
 }
