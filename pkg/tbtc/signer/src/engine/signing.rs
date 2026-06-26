@@ -166,6 +166,24 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
                     incoming_attempt_context,
                     transition_evidence,
                 )?);
+                // Validate the incoming attempt context against the
+                // deterministic RFC-21 coordinator selection BEFORE destroying
+                // the active round. A malformed advance (e.g. a forged
+                // coordinator_identifier that satisfies the transition evidence
+                // but fails deterministic validation) must be rejected here.
+                // Rejecting it only after clear_active_sign_round_for_attempt_transition
+                // has run would leave the in-memory round destroyed while the
+                // attempt id stays in consumed_attempt_ids, bricking the
+                // session until the durable state is reloaded on restart.
+                validate_attempt_context(
+                    &request.session_id,
+                    &dkg.key_group,
+                    &message_bytes,
+                    &message_digest_hex,
+                    dkg.threshold,
+                    request.attempt_context.as_ref(),
+                    strict_roast_mode_enabled,
+                )?;
                 clear_active_sign_round_for_attempt_transition(session);
             }
         }
