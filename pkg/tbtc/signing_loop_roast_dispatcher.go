@@ -7,7 +7,7 @@ import (
 
 // signingParticipantSelector picks the set of members included in a
 // signing attempt. The legacy implementation is the pseudo-random
-// retry shuffle in pkg/frost/retry; the RFC-21 Phase-6 migration
+// retry shuffle in pkg/protocol/retry; the RFC-21 Phase-6 migration
 // introduces this interface so an alternate ROAST-driven
 // implementation can be installed behind the frost_roast_retry build
 // tag without touching the call site.

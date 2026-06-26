@@ -98,7 +98,7 @@ type SigningRetryAdapter[T any] struct {
 }
 
 // EvaluateRetryParticipantsForSigning matches the shape of the
-// legacy helper in pkg/frost/retry so call sites can adopt the
+// legacy helper in pkg/protocol/retry so call sites can adopt the
 // adapter without changing their function-call surface. The legacy
 // signature's parameters (groupMembers, seed, retryCount,
 // retryParticipantsCount) are ignored: the AttemptContext bound to
