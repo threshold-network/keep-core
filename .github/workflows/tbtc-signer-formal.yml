@@ -34,12 +34,12 @@ jobs:
         run: cargo fmt --manifest-path pkg/tbtc/signer/Cargo.toml -- --check
 
       - name: Run clippy
-        run: cargo clippy --manifest-path pkg/tbtc/signer/Cargo.toml --all-targets -- -D warnings
+        run: cargo clippy --locked --manifest-path pkg/tbtc/signer/Cargo.toml --all-targets -- -D warnings
 
       - name: Run signer tests
         env:
           TBTC_SIGNER_STATE_PATH: /tmp/tbtc-signer-ci-state-${{ github.run_id }}-${{ github.run_attempt }}.json
-        run: cargo test --manifest-path pkg/tbtc/signer/Cargo.toml
+        run: cargo test --locked --manifest-path pkg/tbtc/signer/Cargo.toml
 
   signer-dependency-audit:
     name: Signer dependency audit
@@ -74,7 +74,7 @@ jobs:
         # the formal-invariant test cases run (faster + clearer signal
         # than the full suite). Matches the convention used in the
         # source monorepo's ci-formal-verification.yml.
-        run: cargo test --manifest-path pkg/tbtc/signer/Cargo.toml formal_verification_
+        run: cargo test --locked --manifest-path pkg/tbtc/signer/Cargo.toml formal_verification_
 
   tla-model-checks:
     name: TLA model checks
