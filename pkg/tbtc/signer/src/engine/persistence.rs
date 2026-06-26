@@ -701,12 +701,12 @@ pub(crate) fn state_encryption_key_material() -> Result<StateEncryptionKeyMateri
 
 pub(crate) fn encode_encrypted_state_envelope(
     persisted: &PersistedEngineState,
+    key_material: &StateEncryptionKeyMaterial,
 ) -> Result<Zeroizing<Vec<u8>>, EngineError> {
     let mut plaintext = Zeroizing::new(
         serde_json::to_vec(persisted)
             .map_err(|e| EngineError::Internal(format!("failed to encode signer state: {e}")))?,
     );
-    let key_material = state_encryption_key_material()?;
     let cipher = XChaCha20Poly1305::new_from_slice(&key_material.key[..]).map_err(|e| {
         EngineError::Internal(format!("failed to initialize state encryption cipher: {e}"))
     })?;
@@ -718,7 +718,7 @@ pub(crate) fn encode_encrypted_state_envelope(
     let schema_version = PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION;
     let encryption_algorithm = TBTC_SIGNER_STATE_ENCRYPTION_ALGORITHM_XCHACHA20POLY1305;
     let key_provider = key_material.key_provider.to_string();
-    let key_id = key_material.key_id;
+    let key_id = key_material.key_id.clone();
     let aad = encrypted_state_envelope_aad(
         schema_version,
         encryption_algorithm,
@@ -1016,12 +1016,45 @@ pub(crate) fn clear_persist_fault_injection_for_tests() {
     }
 }
 
+// Hot paths resolve the state-encryption key (a KMS/HSM subprocess for the
+// `command` provider) BEFORE taking the ENGINE_STATE lock, then defer the
+// outcome: the success or failure is only consulted at a site that actually
+// persists, via require_resolved_state_key. Idempotent replays and pre-persist
+// rejections return without ever consulting it, so a transient key-provider
+// outage cannot turn a cached read into a failure.
+pub(crate) fn require_resolved_state_key(
+    resolved: &Result<StateEncryptionKeyMaterial, EngineError>,
+) -> Result<&StateEncryptionKeyMaterial, EngineError> {
+    // EngineError is not Clone, so reconstruct from the original's Display to
+    // keep the underlying key-resolution detail.
+    resolved.as_ref().map_err(|error| {
+        EngineError::Internal(format!(
+            "state encryption key could not be resolved for persistence: {error}"
+        ))
+    })
+}
+
 pub(crate) fn persist_engine_state_to_storage(
     engine_state: &EngineState,
 ) -> Result<(), EngineError> {
+    // Convenience wrapper for cold paths and tests. It resolves the
+    // state-encryption key (which, for the `command` provider, spawns the
+    // KMS/HSM subprocess) and then persists. Hot per-operation paths must
+    // instead resolve the key with state_encryption_key_material() BEFORE
+    // acquiring the ENGINE_STATE lock and call
+    // persist_engine_state_to_storage_with_key, so the key subprocess never
+    // runs while the global lock is held.
+    let key_material = state_encryption_key_material()?;
+    persist_engine_state_to_storage_with_key(engine_state, &key_material)
+}
+
+pub(crate) fn persist_engine_state_to_storage_with_key(
+    engine_state: &EngineState,
+    key_material: &StateEncryptionKeyMaterial,
+) -> Result<(), EngineError> {
     let path = active_state_file_path()?;
     let persisted: PersistedEngineState = engine_state.try_into()?;
-    let mut bytes = encode_encrypted_state_envelope(&persisted)?;
+    let mut bytes = encode_encrypted_state_envelope(&persisted, key_material)?;
     drop(persisted);
     let temp_path = path.with_extension(format!("tmp-{}", std::process::id()));
     let persist_result = (|| -> Result<(), EngineError> {

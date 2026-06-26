@@ -44,6 +44,11 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
             &request,
             request.member_identifier,
         )?;
+    // Resolve the state-encryption key (a KMS/HSM subprocess under the
+    // `command` provider) BEFORE taking the global ENGINE_STATE lock, so the
+    // subprocess can never stall the lock. See
+    // persist_engine_state_to_storage_with_key.
+    let state_key_material = state_encryption_key_material();
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -210,7 +215,10 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
 
                 if matches_legacy_fingerprint {
                     session.sign_request_fingerprint = Some(request_fingerprint.clone());
-                    persist_engine_state_to_storage(&guard)?;
+                    persist_engine_state_to_storage_with_key(
+                        &guard,
+                        require_resolved_state_key(&state_key_material)?,
+                    )?;
                 }
 
                 return Ok(round_state);
@@ -360,7 +368,10 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
         );
     }
 
-    persist_engine_state_to_storage(&guard)?;
+    persist_engine_state_to_storage_with_key(
+        &guard,
+        require_resolved_state_key(&state_key_material)?,
+    )?;
     record_hardening_telemetry(|telemetry| {
         telemetry.start_sign_round_success_total =
             telemetry.start_sign_round_success_total.saturating_add(1);
@@ -547,6 +558,9 @@ pub fn finalize_sign_round(
             attempt_context: canonical_attempt_context,
         })?
     };
+    // Resolve the state-encryption key before taking the global lock; see
+    // persist_engine_state_to_storage_with_key.
+    let state_key_material = state_encryption_key_material();
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -891,7 +905,10 @@ pub fn finalize_sign_round(
         .consumed_finalize_request_fingerprints
         .insert(request_fingerprint);
     clear_session_signing_material(session);
-    persist_engine_state_to_storage(&guard)?;
+    persist_engine_state_to_storage_with_key(
+        &guard,
+        require_resolved_state_key(&state_key_material)?,
+    )?;
     record_hardening_telemetry(|telemetry| {
         telemetry.finalize_sign_round_success_total = telemetry
             .finalize_sign_round_success_total

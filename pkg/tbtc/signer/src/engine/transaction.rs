@@ -30,6 +30,9 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
     }
 
     let request_fingerprint = fingerprint(&request)?;
+    // Resolve the state-encryption key before taking the global lock; see
+    // persist_engine_state_to_storage_with_key.
+    let state_key_material = state_encryption_key_material();
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -216,7 +219,10 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
         .or_insert_with(SessionState::default);
     session.build_tx_request_fingerprint = Some(request_fingerprint);
     session.tx_result = Some(result.clone());
-    persist_engine_state_to_storage(&guard)?;
+    persist_engine_state_to_storage_with_key(
+        &guard,
+        require_resolved_state_key(&state_key_material)?,
+    )?;
     record_hardening_telemetry(|telemetry| {
         telemetry.build_taproot_tx_success_total =
             telemetry.build_taproot_tx_success_total.saturating_add(1);

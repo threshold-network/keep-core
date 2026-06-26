@@ -129,6 +129,9 @@ pub fn trigger_emergency_rekey(
         ));
     }
 
+    // Resolve the state-encryption key before taking the global lock; see
+    // persist_engine_state_to_storage_with_key.
+    let state_key_material = state_encryption_key_material();
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -148,7 +151,10 @@ pub fn trigger_emergency_rekey(
         reason: reason.to_string(),
         triggered_at_unix,
     });
-    persist_engine_state_to_storage(&guard)?;
+    persist_engine_state_to_storage_with_key(
+        &guard,
+        require_resolved_state_key(&state_key_material)?,
+    )?;
 
     Ok(TriggerEmergencyRekeyResult {
         session_id: request.session_id.clone(),
@@ -217,6 +223,9 @@ pub fn promote_canary(request: PromoteCanaryRequest) -> Result<PromoteCanaryResu
 
     let metrics = hardening_metrics();
     let gate_failures = canary_promotion_gate_failures(&metrics);
+    // Resolve the state-encryption key before taking the global lock; see
+    // persist_engine_state_to_storage_with_key.
+    let state_key_material = state_encryption_key_material();
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -259,7 +268,10 @@ pub fn promote_canary(request: PromoteCanaryRequest) -> Result<PromoteCanaryResu
         config_version: guard.canary_rollout.config_version,
         promoted_at_unix: guard.canary_rollout.last_action_unix,
     };
-    persist_engine_state_to_storage(&guard)?;
+    persist_engine_state_to_storage_with_key(
+        &guard,
+        require_resolved_state_key(&state_key_material)?,
+    )?;
     record_hardening_telemetry(|telemetry| {
         telemetry.canary_promotions_total = telemetry.canary_promotions_total.saturating_add(1);
     });
@@ -278,6 +290,9 @@ pub fn rollback_canary(
         ));
     }
 
+    // Resolve the state-encryption key before taking the global lock; see
+    // persist_engine_state_to_storage_with_key.
+    let state_key_material = state_encryption_key_material();
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -294,7 +309,10 @@ pub fn rollback_canary(
         reason: reason.to_string(),
         rolled_back_at_unix: guard.canary_rollout.last_action_unix,
     };
-    persist_engine_state_to_storage(&guard)?;
+    persist_engine_state_to_storage_with_key(
+        &guard,
+        require_resolved_state_key(&state_key_material)?,
+    )?;
     record_hardening_telemetry(|telemetry| {
         telemetry.canary_rollbacks_total = telemetry.canary_rollbacks_total.saturating_add(1);
     });
@@ -375,6 +393,9 @@ pub fn refresh_shares(request: RefreshSharesRequest) -> Result<RefreshSharesResu
     let request_fingerprint = fingerprint(&canonicalize_refresh_shares_request_for_fingerprint(
         &request,
     ))?;
+    // Resolve the state-encryption key before taking the global lock; see
+    // persist_engine_state_to_storage_with_key.
+    let state_key_material = state_encryption_key_material();
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -454,7 +475,10 @@ pub fn refresh_shares(request: RefreshSharesRequest) -> Result<RefreshSharesResu
         share_count: result.new_shares.len().min(u16::MAX as usize) as u16,
         key_group: session.dkg_result.as_ref().map(|dkg| dkg.key_group.clone()),
     });
-    persist_engine_state_to_storage(&guard)?;
+    persist_engine_state_to_storage_with_key(
+        &guard,
+        require_resolved_state_key(&state_key_material)?,
+    )?;
     record_hardening_telemetry(|telemetry| {
         telemetry.refresh_shares_success_total =
             telemetry.refresh_shares_success_total.saturating_add(1);

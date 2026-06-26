@@ -144,6 +144,9 @@ pub fn run_dkg(request: RunDkgRequest) -> Result<DkgResult, EngineError> {
         .map(hex::encode)
         .map_err(|e| EngineError::Internal(format!("failed to serialize verifying key: {e}")))?;
 
+    // Resolve the state-encryption key before taking the global lock; see
+    // persist_engine_state_to_storage_with_key.
+    let state_key_material = state_encryption_key_material();
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -179,7 +182,10 @@ pub fn run_dkg(request: RunDkgRequest) -> Result<DkgResult, EngineError> {
     session.dkg_key_packages = Some(key_packages);
     session.dkg_public_key_package = Some(public_key_package);
     session.dkg_result = Some(result.clone());
-    persist_engine_state_to_storage(&guard)?;
+    persist_engine_state_to_storage_with_key(
+        &guard,
+        require_resolved_state_key(&state_key_material)?,
+    )?;
     record_hardening_telemetry(|telemetry| {
         telemetry.run_dkg_success_total = telemetry.run_dkg_success_total.saturating_add(1);
     });
