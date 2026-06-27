@@ -333,6 +333,13 @@ func initTbtcFlags(cmd *cobra.Command, cfg *config.Config) {
 		false,
 		"Disable legacy ECDSA sortition pool monitoring for FROST-only deployments.",
 	)
+
+	cmd.Flags().BoolVar(
+		&cfg.Tbtc.DisableFrostSortitionPoolMonitoring,
+		"tbtc.disableFrostSortitionPoolMonitoring",
+		false,
+		"Disable FROST sortition pool monitoring for operators that manage FROST pool membership out of band.",
+	)
 }
 
 // Initialize flags for Maintainer configuration.
