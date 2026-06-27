@@ -84,7 +84,7 @@ var testConfigs = map[string]testConfig{
 	},
 	"fulcrum tcp": {
 		clientConfig: electrum.Config{
-			URL:                 "tcp://v22019051929289916.bestsrv.de:50001",
+			URL:                 "tcp://blackie.c3-soft.com:57005",
 			RequestTimeout:      requestTimeout * 2,
 			RequestRetryTimeout: requestRetryTimeout * 2,
 		},
@@ -160,7 +160,7 @@ func init() {
 
 func TestConnect_Integration(t *testing.T) {
 	runParallel(t, func(t *testing.T, testConfig testConfig) {
-		_, cancelCtx := newTestConnection(t, testConfig.clientConfig)
+		_, cancelCtx := newRequiredTestConnection(t, testConfig.clientConfig)
 		defer cancelCtx()
 	})
 }
@@ -640,9 +640,32 @@ func runParallel(t *testing.T, runFunc func(t *testing.T, testConfig testConfig)
 }
 
 func newTestConnection(t *testing.T, config electrum.Config) (bitcoin.Chain, context.CancelFunc) {
+	t.Helper()
+
+	return connectTestConnection(t, config, true)
+}
+
+func newRequiredTestConnection(t *testing.T, config electrum.Config) (bitcoin.Chain, context.CancelFunc) {
+	t.Helper()
+
+	return connectTestConnection(t, config, false)
+}
+
+func connectTestConnection(
+	t *testing.T,
+	config electrum.Config,
+	skipTransientConnectionError bool,
+) (bitcoin.Chain, context.CancelFunc) {
+	t.Helper()
+
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	electrum, err := electrum.Connect(ctx, config)
 	if err != nil {
+		cancelCtx()
+		if skipTransientConnectionError && shouldSkipElectrumIntegrationError(err) {
+			t.Skipf("skipping due to transient electrum connection error: %v", err)
+		}
+
 		t.Fatal(err)
 	}
 
