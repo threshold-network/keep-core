@@ -2166,13 +2166,13 @@ func (tc *TbtcChain) GetWallet(
 		return nil, fmt.Errorf("cannot parse wallet state: [%v]", err)
 	}
 
-	walletID, err := walletIDForWalletPublicKeyHash(
+	walletID, err := resolveWalletID(
 		tc.bridge,
 		walletPublicKeyHash,
+		wallet.EcdsaWalletID,
 	)
 	if err != nil {
-		// Fallback for legacy deployments where walletID accessor may not exist.
-		walletID = tbtc.DeriveLegacyWalletID(walletPublicKeyHash)
+		return nil, err
 	}
 
 	return &tbtc.WalletChainData{
@@ -2212,6 +2212,44 @@ func walletIDForWalletPublicKeyHash(
 	}
 
 	return resolver.WalletID(walletPublicKeyHash)
+}
+
+// resolveWalletID returns the canonical wallet ID for the wallet identified by
+// walletPublicKeyHash. ecdsaWalletID is that wallet's ECDSA wallet ID from the
+// Bridge record -- zero for FROST wallets, non-zero for legacy ECDSA wallets.
+//
+// On an accessor error the fallback is routed by SCHEME, not by error type
+// (which cannot reliably distinguish a legacy on-chain Bridge -- whose walletID
+// eth_call returns a normal RPC/ABI error even when the node uses the current
+// binding -- from a transient failure):
+//
+//   - A legacy ECDSA wallet's canonical wallet ID equals its legacy derivation,
+//     so falling back is correct, and it is the only option on a legacy Bridge
+//     whose contract lacks the walletID accessor.
+//   - A FROST wallet requires its canonical wallet ID; the legacy derivation
+//     would be a different value and would select the wrong (P2WPKH vs P2TR)
+//     wallet script, so the error is surfaced instead of falling back. A FROST
+//     wallet only exists on a canonical-ID Bridge, so such an error is genuinely
+//     transient.
+func resolveWalletID(
+	bridge any,
+	walletPublicKeyHash [20]byte,
+	ecdsaWalletID [32]byte,
+) ([32]byte, error) {
+	walletID, err := walletIDForWalletPublicKeyHash(bridge, walletPublicKeyHash)
+	if err == nil {
+		return walletID, nil
+	}
+
+	if ecdsaWalletID == ([32]byte{}) {
+		return [32]byte{}, fmt.Errorf(
+			"cannot resolve canonical wallet ID for FROST wallet [0x%x]: [%w]",
+			walletPublicKeyHash,
+			err,
+		)
+	}
+
+	return tbtc.DeriveLegacyWalletID(walletPublicKeyHash), nil
 }
 
 type walletPublicKeyHashForWalletIDFn interface {
