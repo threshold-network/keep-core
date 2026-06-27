@@ -6,12 +6,12 @@ import (
 	"sort"
 
 	"github.com/keep-network/keep-core/pkg/chain"
-	"github.com/keep-network/keep-core/pkg/frost/retry"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
+	"github.com/keep-network/keep-core/pkg/protocol/retry"
 )
 
 // legacySigningParticipantSelector is the pre-RFC-21 implementation:
-// it calls the pseudo-random retry shuffle in pkg/frost/retry and maps
+// it calls the pseudo-random retry shuffle in pkg/protocol/retry and maps
 // the resulting qualified operators back to the included member
 // indices.
 //
