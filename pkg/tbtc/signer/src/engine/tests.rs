@@ -802,6 +802,47 @@ fn run_dkg_rejects_bootstrap_dealer_dkg_when_profile_is_missing_or_empty() {
     }
 }
 
+// Regression for resolving the state-key (a KMS/HSM subprocess for the `command`
+// provider) only at the actual persist site, under the held ENGINE_STATE lock: an
+// idempotent replay returns its cached result WITHOUT ever resolving the key, so a
+// transient key-provider outage cannot turn a cached read into a failure. Here a
+// first build persists with the working provider; a replay then succeeds even
+// though the state-key command now fails.
+#[test]
+fn idempotent_build_tx_replay_survives_state_key_outage() {
+    let _guard = lock_test_state();
+    let _state_path = configure_test_state_path("build_tx_replay_state_key_outage");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let session_id = "session-build-tx-replay-key-outage";
+
+    // First build persists with the default (working) state-key provider.
+    let first = build_taproot_tx(build_policy_test_request(session_id))
+        .expect("first build_taproot_tx should persist and succeed");
+
+    // Now make the `command` state-key provider fail. The idempotent replay
+    // returns the cached result without persisting, so it must not depend on the
+    // key command succeeding.
+    std::env::set_var(
+        TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
+        TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND,
+    );
+    std::env::set_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV, "exit 7");
+
+    let replay = build_taproot_tx(build_policy_test_request(session_id)).expect(
+        "idempotent build_taproot_tx replay must succeed despite a failing state-key command",
+    );
+    assert_eq!(
+        replay.tx_hex, first.tx_hex,
+        "replay must return the cached transaction"
+    );
+
+    std::env::remove_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV);
+    std::env::remove_var(TBTC_SIGNER_STATE_KEY_PROVIDER_ENV);
+    clear_state_storage_policy_overrides();
+}
+
 #[test]
 fn production_profile_forces_provenance_gate_without_env_flag() {
     let _guard = lock_test_state();
@@ -3841,8 +3882,10 @@ proptest! {
             quarantined_operator_identifiers: vec![],
             canary_rollout: CanaryRolloutState::default(),
         };
-        let encoded =
-            encode_encrypted_state_envelope(&persisted).expect("state envelope encode");
+        let key_material =
+            state_encryption_key_material().expect("state encryption key material");
+        let encoded = encode_encrypted_state_envelope(&persisted, &key_material)
+            .expect("state envelope encode");
         let envelope: PersistedEncryptedEngineStateEnvelope =
             serde_json::from_slice(encoded.as_ref()).expect("state envelope decode");
 
@@ -11614,6 +11657,89 @@ fn interactive_package_for_test(
     })
     .expect("signing package builds")
     .signing_package_hex
+}
+
+// Regression for the deferred state-key resolution: a Round2 whose persist
+// fails because the state-key command fails must NOT leave the consumption
+// marker set (which would burn the attempt in-process). The key is resolved
+// before the marker insert, so the failure returns cleanly with the nonces
+// still live, and a retry after the key recovers still releases the share.
+#[test]
+fn interactive_round2_state_key_failure_does_not_burn_attempt() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let session_id = "interactive-round2-key-failure";
+    let key_group = "interactive-round2-key-failure-group";
+    let message = [0x42u8; 32];
+    let included = [1u16, 2];
+
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("interactive session opens");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("interactive round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 stateless nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex.clone(),
+            },
+            member2.commitment.clone(),
+        ],
+    );
+
+    // Make the state-key command fail, then attempt Round2.
+    std::env::set_var(
+        TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
+        TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND,
+    );
+    std::env::set_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV, "exit 7");
+
+    let err = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect_err("round 2 must fail when the state-key command fails");
+    assert!(matches!(err, EngineError::Internal(_)), "got {err:?}");
+
+    // The consumption marker must NOT be set: the failed Round2 must not burn
+    // the attempt.
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(session_id).expect("session exists");
+        assert!(
+            !session
+                .consumed_interactive_attempt_markers
+                .contains(&interactive_consumed_marker(&opened.attempt_id, 1)),
+            "a Round2 that failed at the state-key step must not leave a consumption marker"
+        );
+    }
+
+    // Restore a working key; the same attempt must still release its share.
+    std::env::remove_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV);
+    std::env::remove_var(TBTC_SIGNER_STATE_KEY_PROVIDER_ENV);
+
+    let round2 = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex,
+    })
+    .expect("round 2 retry must succeed after the key recovers");
+    assert_eq!(round2.attempt_id, opened.attempt_id);
 }
 
 #[test]

@@ -627,10 +627,21 @@ pub fn interactive_round2(
     // has left the engine. If share computation fails after the marker
     // persisted, the attempt is dead (fail closed): the marker stays,
     // the nonces are destroyed, and no share was released.
+    // Resolve the state-encryption key under the held ENGINE_STATE guard, in the
+    // same serialized order as the write, and BEFORE inserting the marker.
+    // Resolving under the guard makes key selection match the write order, so the
+    // last writer encrypts with the then-current key; a key resolved before the
+    // lock could be stale and lose a rotation race, leaving the persisted envelope
+    // tagged with an old key id that decode rejects on restart. Resolving before
+    // the marker also keeps a key-provider outage failing the attempt cleanly (no
+    // marker written) rather than escaping the rollback below via `?`.
+    let resolved_state_key = state_encryption_key_material()?;
     session
         .consumed_interactive_attempt_markers
         .insert(consumed_marker.clone());
-    if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
+    if let Err(persist_error) =
+        persist_engine_state_to_storage_with_key(&guard, &resolved_state_key)
+    {
         let session = guard
             .sessions
             .get_mut(&request.session_id)
@@ -902,10 +913,21 @@ pub fn interactive_aggregate(
         "aggregated_interactive_attempt_markers",
         &request.session_id,
     )?;
+    // Resolve the state-encryption key under the held ENGINE_STATE guard, in the
+    // same serialized order as the write, and BEFORE inserting the marker.
+    // Resolving under the guard makes key selection match the write order, so the
+    // last writer encrypts with the then-current key; a key resolved before the
+    // lock could be stale and lose a rotation race, leaving the persisted envelope
+    // tagged with an old key id that decode rejects on restart. Resolving before
+    // the marker also keeps a key-provider outage failing the attempt cleanly (no
+    // marker written) rather than escaping the rollback below via `?`.
+    let resolved_state_key = state_encryption_key_material()?;
     session
         .aggregated_interactive_attempt_markers
         .insert(aggregated_marker.clone());
-    if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
+    if let Err(persist_error) =
+        persist_engine_state_to_storage_with_key(&guard, &resolved_state_key)
+    {
         let session = guard
             .sessions
             .get_mut(&request.session_id)

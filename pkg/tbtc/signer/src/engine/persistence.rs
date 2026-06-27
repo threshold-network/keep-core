@@ -701,12 +701,12 @@ pub(crate) fn state_encryption_key_material() -> Result<StateEncryptionKeyMateri
 
 pub(crate) fn encode_encrypted_state_envelope(
     persisted: &PersistedEngineState,
+    key_material: &StateEncryptionKeyMaterial,
 ) -> Result<Zeroizing<Vec<u8>>, EngineError> {
     let mut plaintext = Zeroizing::new(
         serde_json::to_vec(persisted)
             .map_err(|e| EngineError::Internal(format!("failed to encode signer state: {e}")))?,
     );
-    let key_material = state_encryption_key_material()?;
     let cipher = XChaCha20Poly1305::new_from_slice(&key_material.key[..]).map_err(|e| {
         EngineError::Internal(format!("failed to initialize state encryption cipher: {e}"))
     })?;
@@ -718,7 +718,7 @@ pub(crate) fn encode_encrypted_state_envelope(
     let schema_version = PERSISTED_STATE_ENVELOPE_SCHEMA_VERSION;
     let encryption_algorithm = TBTC_SIGNER_STATE_ENCRYPTION_ALGORITHM_XCHACHA20POLY1305;
     let key_provider = key_material.key_provider.to_string();
-    let key_id = key_material.key_id;
+    let key_id = key_material.key_id.clone();
     let aad = encrypted_state_envelope_aad(
         schema_version,
         encryption_algorithm,
@@ -1016,12 +1016,40 @@ pub(crate) fn clear_persist_fault_injection_for_tests() {
     }
 }
 
+// Hot paths resolve the state-encryption key (a KMS/HSM subprocess for the
+// `command` provider) UNDER the held ENGINE_STATE guard, at the persist site --
+// after any idempotent-replay/pre-persist rejection has already returned (so a
+// transient key-provider outage never fails a non-persisting call) and, where a
+// durable marker is written, before that marker (so an outage fails the attempt
+// cleanly with no marker). Resolving under the guard keeps key selection in the
+// same serialized order as the writes the guard already serializes, so the last
+// writer encrypts with the then-current key. Resolving the key BEFORE the lock
+// instead would let a caller that resolved an older key win the final write after
+// a rotation, tagging the persisted envelope with a stale key id that decode
+// rejects on restart.
 pub(crate) fn persist_engine_state_to_storage(
     engine_state: &EngineState,
 ) -> Result<(), EngineError> {
+    // Resolves the state-encryption key (which, for the `command` provider,
+    // spawns the KMS/HSM subprocess) and then persists. Hot paths call this at
+    // the persist site WITH the ENGINE_STATE guard held, so key resolution is
+    // ordered with the write (see the note above). The startup legacy-envelope
+    // rewrite in load_engine_state_from_storage also calls it, off-guard, before
+    // the engine serves concurrent operations -- there is no concurrent write to
+    // lose a rotation race against there. Sites that write a durable marker before
+    // persisting instead resolve the key explicitly before the marker and call
+    // persist_engine_state_to_storage_with_key.
+    let key_material = state_encryption_key_material()?;
+    persist_engine_state_to_storage_with_key(engine_state, &key_material)
+}
+
+pub(crate) fn persist_engine_state_to_storage_with_key(
+    engine_state: &EngineState,
+    key_material: &StateEncryptionKeyMaterial,
+) -> Result<(), EngineError> {
     let path = active_state_file_path()?;
     let persisted: PersistedEngineState = engine_state.try_into()?;
-    let mut bytes = encode_encrypted_state_envelope(&persisted)?;
+    let mut bytes = encode_encrypted_state_envelope(&persisted, key_material)?;
     drop(persisted);
     let temp_path = path.with_extension(format!("tmp-{}", std::process::id()));
     let persist_result = (|| -> Result<(), EngineError> {
