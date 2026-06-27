@@ -826,6 +826,112 @@ func TestPastNewWalletRegisteredV2Events_ReturnsErrorWhenRawMissing(t *testing.T
 	}
 }
 
+type walletIDForWalletPublicKeyHashBridgeMock struct {
+	resolve func(walletPublicKeyHash [20]byte) ([32]byte, error)
+}
+
+func (m *walletIDForWalletPublicKeyHashBridgeMock) WalletID(
+	walletPublicKeyHash [20]byte,
+) ([32]byte, error) {
+	return m.resolve(walletPublicKeyHash)
+}
+
+func TestResolveWalletID(t *testing.T) {
+	walletPublicKeyHash := [20]byte{0xaa}
+	legacyEcdsaWalletID := [32]byte{0x07} // non-zero -> legacy ECDSA wallet
+	frostEcdsaWalletID := [32]byte{}      // zero -> FROST wallet
+
+	t.Run("returns the canonical wallet ID when the accessor succeeds", func(t *testing.T) {
+		expectedWalletID := [32]byte{0x01}
+
+		actualWalletID, err := resolveWalletID(
+			&walletIDForWalletPublicKeyHashBridgeMock{
+				resolve: func(actual [20]byte) ([32]byte, error) {
+					if actual != walletPublicKeyHash {
+						t.Fatalf("unexpected wallet public key hash: [%x]", actual)
+					}
+					return expectedWalletID, nil
+				},
+			},
+			walletPublicKeyHash,
+			frostEcdsaWalletID,
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+		if actualWalletID != expectedWalletID {
+			t.Fatalf(
+				"unexpected wallet ID\nexpected: [%x]\nactual:   [%x]",
+				expectedWalletID,
+				actualWalletID,
+			)
+		}
+	})
+
+	t.Run("surfaces the error for a FROST wallet when the accessor fails", func(t *testing.T) {
+		// A FROST wallet (zero ECDSA wallet ID) requires its canonical ID; the
+		// legacy derivation would be the wrong value (wrong P2WPKH vs P2TR
+		// script), so the error must surface rather than fall back.
+		_, err := resolveWalletID(
+			&walletIDForWalletPublicKeyHashBridgeMock{
+				resolve: func([20]byte) ([32]byte, error) {
+					return [32]byte{}, errors.New("execution reverted: temporary")
+				},
+			},
+			walletPublicKeyHash,
+			frostEcdsaWalletID,
+		)
+		if err == nil {
+			t.Fatal("expected an error for a FROST wallet with an unresolvable canonical ID")
+		}
+	})
+
+	t.Run("falls back to the legacy ID for a legacy ECDSA wallet on accessor error", func(t *testing.T) {
+		// Regression for legacy on-chain Bridges: the accessor exists in the
+		// binding but the contract lacks the walletID function, so the call
+		// returns a normal RPC/ABI error (NOT a typed missing-accessor signal). A
+		// legacy ECDSA wallet (non-zero ECDSA wallet ID) must still fall back.
+		actualWalletID, err := resolveWalletID(
+			&walletIDForWalletPublicKeyHashBridgeMock{
+				resolve: func([20]byte) ([32]byte, error) {
+					return [32]byte{}, errors.New("execution reverted")
+				},
+			},
+			walletPublicKeyHash,
+			legacyEcdsaWalletID,
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+		if expected := tbtcpkg.DeriveLegacyWalletID(walletPublicKeyHash); actualWalletID != expected {
+			t.Fatalf(
+				"unexpected wallet ID\nexpected: [%x]\nactual:   [%x]",
+				expected,
+				actualWalletID,
+			)
+		}
+	})
+
+	t.Run("falls back to the legacy ID for a legacy wallet on a Bridge without the accessor", func(t *testing.T) {
+		// Legacy deployment where the binding itself lacks the accessor.
+		actualWalletID, err := resolveWalletID(
+			struct{}{},
+			walletPublicKeyHash,
+			legacyEcdsaWalletID,
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: [%v]", err)
+		}
+		if expected := tbtcpkg.DeriveLegacyWalletID(walletPublicKeyHash); actualWalletID != expected {
+			t.Fatalf(
+				"unexpected wallet ID\nexpected: [%x]\nactual:   [%x]",
+				expected,
+				actualWalletID,
+			)
+		}
+	})
+}
+
 type walletPublicKeyHashForWalletIDBridgeMock struct {
 	resolve func(walletID [32]byte) ([20]byte, error)
 }
