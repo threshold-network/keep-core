@@ -39,6 +39,47 @@ func (mnefsp *mockNativeExecutionFFISigningPrimitive) RegisterUnmarshallers(
 	mnefsp.lastChannel = channel
 }
 
+// panickingFFISigningPrimitive panics in Sign, standing in for a panic raised
+// along the cgo/FFI path (e.g. a C.GoBytes length-out-of-range on a malformed
+// native-signer response).
+type panickingFFISigningPrimitive struct{}
+
+func (panickingFFISigningPrimitive) Sign(
+	ctx context.Context,
+	logger log.StandardLogger,
+	request *NativeExecutionFFISigningRequest,
+) (*frost.Signature, error) {
+	panic("simulated cgo boundary panic")
+}
+
+func (panickingFFISigningPrimitive) RegisterUnmarshallers(channel net.BroadcastChannel) {}
+
+func TestNativeExecutionFFIExecutorAdapter_Execute_RecoversCgoBoundaryPanic(
+	t *testing.T,
+) {
+	executor, err := NewNativeExecutionFFIExecutorAdapter(panickingFFISigningPrimitive{})
+	if err != nil {
+		t.Fatalf("unexpected adapter setup error: [%v]", err)
+	}
+
+	result, err := executor.Execute(context.Background(), nil, &Request{
+		Message:        big.NewInt(1),
+		SignerMaterial: []byte{0x01},
+	})
+	if err == nil {
+		t.Fatal("expected an error from the recovered panic, got nil")
+	}
+	if result != nil {
+		t.Fatalf("expected a nil result on a recovered panic, got [%v]", result)
+	}
+	if !strings.Contains(err.Error(), "panicked at the cgo boundary") {
+		t.Fatalf(
+			"expected a cgo-boundary panic error, got: [%v]",
+			err,
+		)
+	}
+}
+
 func TestNewNativeExecutionFFIExecutorAdapter_NilPrimitive(t *testing.T) {
 	_, err := NewNativeExecutionFFIExecutorAdapter(nil)
 	if err == nil {

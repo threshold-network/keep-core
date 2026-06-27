@@ -378,6 +378,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"unsafe"
 )
 
@@ -2636,7 +2637,15 @@ func callBuildTaggedTBTCSignerOperation(
 	}
 
 	requestPtr := C.CBytes(requestPayload)
-	defer C.free(requestPtr)
+	requestLen := len(requestPayload)
+	defer func() {
+		// Scrub the secret request bytes from the C heap before releasing them.
+		// The request payload can carry signing-share / nonce material, and a
+		// plain C.free does not overwrite; this mirrors the Go-side zeroBytes
+		// hygiene applied to the caller's own copy.
+		zeroBytes(unsafe.Slice((*byte)(requestPtr), requestLen))
+		C.free(requestPtr)
+	}()
 
 	result := call((*C.uint8_t)(requestPtr), C.size_t(len(requestPayload)))
 	return parseBuildTaggedTBTCSignerResult(operation, result)
@@ -2659,6 +2668,20 @@ func parseBuildTaggedTBTCSignerResult(
 
 	var payload []byte
 	if result.buffer.ptr != nil && result.buffer.len > 0 {
+		// Guard the size_t -> C.int narrowing in C.GoBytes: a length that does
+		// not fit in a C.int (>= 2^31) would overflow to a negative value and
+		// panic ("length out of range") at the cgo boundary, or silently
+		// truncate to a wrong length. A response that large is never valid, so
+		// reject it; the buffer is still released by the deferred free above.
+		if uint64(result.buffer.len) > uint64(math.MaxInt32) {
+			return nil, buildTaggedTBTCSignerOperationError(
+				operation,
+				fmt.Sprintf(
+					"response buffer length [%d] exceeds maximum [%d]",
+					uint64(result.buffer.len), math.MaxInt32,
+				),
+			)
+		}
 		payload = C.GoBytes(unsafe.Pointer(result.buffer.ptr), C.int(result.buffer.len))
 	}
 

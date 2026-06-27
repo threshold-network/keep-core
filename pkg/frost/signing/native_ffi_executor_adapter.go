@@ -73,7 +73,20 @@ func (nefea *nativeExecutionFFIExecutorAdapter) Execute(
 	ctx context.Context,
 	logger log.StandardLogger,
 	request *Request,
-) (*Result, error) {
+) (result *Result, err error) {
+	// Recover any panic originating along the cgo/FFI signing path (e.g. a
+	// malformed or oversized response from the native signer) and surface it as
+	// a failed attempt instead of crashing the whole signing process. The outer
+	// tBTC signingRetryLoop then handles this attempt cleanly.
+	defer func() {
+		if r := recover(); r != nil {
+			result = nil
+			err = fmt.Errorf(
+				"native FFI signing panicked at the cgo boundary: %v", r,
+			)
+		}
+	}()
+
 	if request == nil {
 		return nil, fmt.Errorf("request is nil")
 	}
