@@ -1017,33 +1017,28 @@ pub(crate) fn clear_persist_fault_injection_for_tests() {
 }
 
 // Hot paths resolve the state-encryption key (a KMS/HSM subprocess for the
-// `command` provider) BEFORE taking the ENGINE_STATE lock, then defer the
-// outcome: the success or failure is only consulted at a site that actually
-// persists, via require_resolved_state_key. Idempotent replays and pre-persist
-// rejections return without ever consulting it, so a transient key-provider
-// outage cannot turn a cached read into a failure.
-pub(crate) fn require_resolved_state_key(
-    resolved: &Result<StateEncryptionKeyMaterial, EngineError>,
-) -> Result<&StateEncryptionKeyMaterial, EngineError> {
-    // EngineError is not Clone, so reconstruct from the original's Display to
-    // keep the underlying key-resolution detail.
-    resolved.as_ref().map_err(|error| {
-        EngineError::Internal(format!(
-            "state encryption key could not be resolved for persistence: {error}"
-        ))
-    })
-}
-
+// `command` provider) UNDER the held ENGINE_STATE guard, at the persist site --
+// after any idempotent-replay/pre-persist rejection has already returned (so a
+// transient key-provider outage never fails a non-persisting call) and, where a
+// durable marker is written, before that marker (so an outage fails the attempt
+// cleanly with no marker). Resolving under the guard keeps key selection in the
+// same serialized order as the writes the guard already serializes, so the last
+// writer encrypts with the then-current key. Resolving the key BEFORE the lock
+// instead would let a caller that resolved an older key win the final write after
+// a rotation, tagging the persisted envelope with a stale key id that decode
+// rejects on restart.
 pub(crate) fn persist_engine_state_to_storage(
     engine_state: &EngineState,
 ) -> Result<(), EngineError> {
-    // Convenience wrapper for cold paths and tests. It resolves the
-    // state-encryption key (which, for the `command` provider, spawns the
-    // KMS/HSM subprocess) and then persists. Hot per-operation paths must
-    // instead resolve the key with state_encryption_key_material() BEFORE
-    // acquiring the ENGINE_STATE lock and call
-    // persist_engine_state_to_storage_with_key, so the key subprocess never
-    // runs while the global lock is held.
+    // Resolves the state-encryption key (which, for the `command` provider,
+    // spawns the KMS/HSM subprocess) and then persists. Hot paths call this at
+    // the persist site WITH the ENGINE_STATE guard held, so key resolution is
+    // ordered with the write (see the note above). The startup legacy-envelope
+    // rewrite in load_engine_state_from_storage also calls it, off-guard, before
+    // the engine serves concurrent operations -- there is no concurrent write to
+    // lose a rotation race against there. Sites that write a durable marker before
+    // persisting instead resolve the key explicitly before the marker and call
+    // persist_engine_state_to_storage_with_key.
     let key_material = state_encryption_key_material()?;
     persist_engine_state_to_storage_with_key(engine_state, &key_material)
 }

@@ -802,13 +802,12 @@ fn run_dkg_rejects_bootstrap_dealer_dkg_when_profile_is_missing_or_empty() {
     }
 }
 
-// Regression for moving the state-key subprocess out from under the global
-// ENGINE_STATE lock. Hot paths resolve the state-encryption key (a KMS/HSM
-// subprocess for the `command` provider) BEFORE the lock, but the outcome is
-// deferred: idempotent replays return their cached result WITHOUT consulting
-// the key, so a transient key-provider outage cannot turn a cached read into a
-// failure. Here a first build persists with the working provider; a replay then
-// succeeds even though the state-key command now fails.
+// Regression for resolving the state-key (a KMS/HSM subprocess for the `command`
+// provider) only at the actual persist site, under the held ENGINE_STATE lock: an
+// idempotent replay returns its cached result WITHOUT ever resolving the key, so a
+// transient key-provider outage cannot turn a cached read into a failure. Here a
+// first build persists with the working provider; a replay then succeeds even
+// though the state-key command now fails.
 #[test]
 fn idempotent_build_tx_replay_survives_state_key_outage() {
     let _guard = lock_test_state();

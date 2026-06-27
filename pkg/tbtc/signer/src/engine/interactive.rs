@@ -482,9 +482,6 @@ pub fn interactive_round2(
     // attempt_id; the wire form may differ in casing.
     let attempt_id = canonical_attempt_id(&request.attempt_id);
 
-    // Resolve the state-encryption key before taking the global lock; see
-    // persist_engine_state_to_storage_with_key.
-    let state_key_material = state_encryption_key_material();
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -630,15 +627,20 @@ pub fn interactive_round2(
     // has left the engine. If share computation fails after the marker
     // persisted, the attempt is dead (fail closed): the marker stays,
     // the nonces are destroyed, and no share was released.
-    // Resolve the deferred state key BEFORE inserting the marker, so a
-    // key-provider outage fails the attempt cleanly (no marker written) instead
-    // of escaping the rollback below via `?` and leaving a non-persisted marker
-    // set in memory.
-    let resolved_state_key = require_resolved_state_key(&state_key_material)?;
+    // Resolve the state-encryption key under the held ENGINE_STATE guard, in the
+    // same serialized order as the write, and BEFORE inserting the marker.
+    // Resolving under the guard makes key selection match the write order, so the
+    // last writer encrypts with the then-current key; a key resolved before the
+    // lock could be stale and lose a rotation race, leaving the persisted envelope
+    // tagged with an old key id that decode rejects on restart. Resolving before
+    // the marker also keeps a key-provider outage failing the attempt cleanly (no
+    // marker written) rather than escaping the rollback below via `?`.
+    let resolved_state_key = state_encryption_key_material()?;
     session
         .consumed_interactive_attempt_markers
         .insert(consumed_marker.clone());
-    if let Err(persist_error) = persist_engine_state_to_storage_with_key(&guard, resolved_state_key)
+    if let Err(persist_error) =
+        persist_engine_state_to_storage_with_key(&guard, &resolved_state_key)
     {
         let session = guard
             .sessions
@@ -883,9 +885,6 @@ pub fn interactive_aggregate(
     // re-acquire it, re-check the marker (a concurrent aggregate may have
     // completed first), insert it, and persist before reporting success; on
     // persist failure roll the marker back and fail closed.
-    // Resolve the state-encryption key before re-taking the global lock; see
-    // persist_engine_state_to_storage_with_key.
-    let state_key_material = state_encryption_key_material();
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -914,15 +913,20 @@ pub fn interactive_aggregate(
         "aggregated_interactive_attempt_markers",
         &request.session_id,
     )?;
-    // Resolve the deferred state key BEFORE inserting the marker, so a
-    // key-provider outage fails the attempt cleanly (no marker written) instead
-    // of escaping the rollback below via `?` and leaving a non-persisted marker
-    // set in memory.
-    let resolved_state_key = require_resolved_state_key(&state_key_material)?;
+    // Resolve the state-encryption key under the held ENGINE_STATE guard, in the
+    // same serialized order as the write, and BEFORE inserting the marker.
+    // Resolving under the guard makes key selection match the write order, so the
+    // last writer encrypts with the then-current key; a key resolved before the
+    // lock could be stale and lose a rotation race, leaving the persisted envelope
+    // tagged with an old key id that decode rejects on restart. Resolving before
+    // the marker also keeps a key-provider outage failing the attempt cleanly (no
+    // marker written) rather than escaping the rollback below via `?`.
+    let resolved_state_key = state_encryption_key_material()?;
     session
         .aggregated_interactive_attempt_markers
         .insert(aggregated_marker.clone());
-    if let Err(persist_error) = persist_engine_state_to_storage_with_key(&guard, resolved_state_key)
+    if let Err(persist_error) =
+        persist_engine_state_to_storage_with_key(&guard, &resolved_state_key)
     {
         let session = guard
             .sessions
