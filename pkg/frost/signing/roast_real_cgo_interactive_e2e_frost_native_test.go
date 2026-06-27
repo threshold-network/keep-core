@@ -292,6 +292,26 @@ func frostCgoRequired() bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv(FrostRequireCgoEnvVar)), "true")
 }
 
+const frostSubprocessSkipPrefixEnv = "KEEP_CORE_FROST_SUBPROCESS_SKIP_PREFIX"
+
+func frostUnavailableSkipMessage(op string, err error) string {
+	return fmt.Sprintf(
+		"linked tbtc-signer FFI symbol for %s unavailable (lib absent or stale; "+
+			"rebuild libfrost_tbtc): %v",
+		op, err,
+	)
+}
+
+func reportFrostSubprocessSkip(op string, err error) bool {
+	if err == nil || !errors.Is(err, ErrNativeCryptographyUnavailable) || frostCgoRequired() {
+		return false
+	}
+	if prefix := os.Getenv(frostSubprocessSkipPrefixEnv); prefix != "" {
+		fmt.Printf("%s%s\n", prefix, frostUnavailableSkipMessage(op, err))
+	}
+	return true
+}
+
 // skipFrostUnavailable turns an engine-call error into the right outcome: a missing
 // FFI symbol (lib absent, or present but stale and missing a newer symbol) SKIPS
 // the test naming the operation, while any other error is a real failure. nil is a
@@ -310,11 +330,10 @@ func skipFrostUnavailable(t *testing.T, op string, err error) {
 				op, FrostRequireCgoEnvVar, err,
 			)
 		}
-		t.Skipf(
-			"linked tbtc-signer FFI symbol for %s unavailable (lib absent or stale; "+
-				"rebuild libfrost_tbtc): %v",
-			op, err,
-		)
+		if prefix := os.Getenv(frostSubprocessSkipPrefixEnv); prefix != "" {
+			fmt.Printf("%s%s\n", prefix, frostUnavailableSkipMessage(op, err))
+		}
+		t.Skip(frostUnavailableSkipMessage(op, err))
 	}
 	t.Fatalf("%s: %v", op, err)
 }
