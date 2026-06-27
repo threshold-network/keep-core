@@ -59,13 +59,19 @@ func ExclusionAccuserQuorum(groupSize, threshold uint) uint {
 	return groupSize - threshold + 1
 }
 
-// ErrAttemptInfeasible is returned by NextAttempt when the next
-// attempt's IncludedSet would drop below the signing threshold t and
-// the session can no longer make progress with the original signer
-// set. Callers must surface this to the application layer: the
-// session is permanently failed.
+// ErrAttemptInfeasible is returned by NextAttempt when PERMANENT exclusions
+// leave fewer than threshold non-excluded members, so no future attempt can
+// ever reach the signing threshold t and the session can no longer make
+// progress with the original signer set. Callers must surface this to the
+// application layer: the session is permanently failed.
+//
+// It is NOT returned merely because the next attempt's IncludedSet falls below
+// threshold due to TRANSIENT parking (silence/overflow): parked members are
+// reinstated on the following attempt, so a sub-threshold included set burns
+// one attempt rather than failing the session. The infeasibility test is on the
+// non-excluded (feasible) set, not the post-parking included set.
 var ErrAttemptInfeasible = errors.New(
-	"coordinator: next attempt is infeasible -- included set below threshold",
+	"coordinator: next attempt is infeasible -- non-excluded members below threshold",
 )
 
 // NextAttempt computes the deterministic next attempt context from a
@@ -117,8 +123,12 @@ var ErrAttemptInfeasible = errors.New(
 //     TransientlyParked set automatically rejoin the next attempt's
 //     IncludedSet (unless they are now permanently excluded).
 //
-//  6. Infeasibility: if the next attempt's IncludedSet would have
-//     fewer than threshold members, return ErrAttemptInfeasible.
+//  6. Infeasibility: if PERMANENT exclusions leave fewer than threshold
+//     non-excluded members -- so no future attempt can reach the
+//     threshold -- return ErrAttemptInfeasible. A next IncludedSet that
+//     falls below threshold only because of TRANSIENT parking is NOT
+//     infeasible: the parked members rejoin on the following attempt
+//     (step 5), so it burns one attempt rather than failing the session.
 //
 // Verifiability roadmap: permanent exclusion on a *single* piece of
 // evidence becomes sound once the wire format carries
@@ -242,23 +252,47 @@ func computeNextAttempt(
 
 	// (5) Reinstate previously parked members by re-including them
 	// (unless newly permanently excluded or re-parked).
-	included := original.sorted()
-	included = filterOut(included, exclSet)
-	included = filterOut(included, parkSet)
+	//
+	// Feasibility (step 6) is judged against the PERMANENTLY-available set --
+	// the original signer set minus permanent exclusions -- NOT the
+	// post-parking included set. Transiently-parked members (overflow and
+	// silence) are reinstated by a later attempt (steps 3-4), so counting them
+	// as gone here would let a single transient mass-silence event, or one
+	// byzantine elected coordinator that omits snapshots, permanently fail a
+	// session the original signer set can still complete -- exactly the
+	// grind-to-ErrAttemptInfeasible failure the accuser quorum exists to
+	// prevent, here via the ungated silence-parking path. Permanent exclusion
+	// is the only thing that can render a session infeasible.
+	feasible := filterOut(original.sorted(), exclSet)
 
-	// (6) Infeasibility check.
-	if threshold > 0 && uint(len(included)) < threshold {
+	// (6) Infeasibility check: only when permanent exclusions leave fewer than
+	// threshold members can no future attempt ever reach the threshold.
+	if threshold > 0 && uint(len(feasible)) < threshold {
 		return attempt.AttemptContext{}, fmt.Errorf(
-			"%w: %d eligible, threshold %d",
+			"%w: %d non-excluded, threshold %d",
 			ErrAttemptInfeasible,
-			len(included),
+			len(feasible),
 			threshold,
 		)
 	}
 
+	// The next attempt's included set is the feasible set minus this attempt's
+	// transient parking. It may fall below threshold (the parked members are
+	// reinstated next attempt); that burns one attempt rather than failing the
+	// session.
+	included := filterOut(feasible, parkSet)
+	nextParked := parkSet.sorted()
+	if len(included) == 0 {
+		// Every non-excluded member is transiently parked this attempt. Parking
+		// is strictly transient and an AttemptContext requires a non-empty
+		// included set, so reinstate the parked members now (they retry this
+		// attempt) rather than producing an empty, unconstructable attempt.
+		included = feasible
+		nextParked = nil
+	}
+
 	// Convert ExcludedSet to its canonical (sorted, deduped) slice.
 	nextExcluded := exclSet.sorted()
-	nextParked := parkSet.sorted()
 
 	next, err := attempt.NewAttemptContextWithParking(
 		prev.SessionID,
