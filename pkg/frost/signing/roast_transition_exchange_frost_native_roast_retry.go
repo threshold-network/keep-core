@@ -166,7 +166,22 @@ func (e *RoastTransitionExchange) onBundle(msg RunnerMessage) {
 		// bridge addresses (PR2b-2) and that stays within 1b's accepted
 		// fail-closed-terminate liveness regression (a single bad actor can already
 		// kill a round by withholding a bundle).
-		e.markLostSync()
+		//
+		// Under the PERMISSIONED operator set this residual is accepted: the
+		// triggering seat is operator-authenticated (logged below for attribution),
+		// the action is liveness-only (fail-closed, never an unsafe/divergent
+		// signature), and a misbehaving operator is governance-removable. REVISIT
+		// before any move to a PERMISSIONLESS operator set, where an anonymous,
+		// costless, non-attributable DoS would warrant the f+1 snapshot-corroboration
+		// (or resync) fix rather than accepting it.
+		if e.markLostSync() {
+			e.logger.Warnf(
+				"roast transition exchange: seat %d entered lost-sync from an "+
+					"unobserved-attempt bundle sent by seat %d (attempt context "+
+					"hash %x); failing closed before next selection",
+				e.member, msg.Sender, hash,
+			)
+		}
 		return
 	}
 	e.verifyAndStore(bundle)
@@ -174,8 +189,11 @@ func (e *RoastTransitionExchange) onBundle(msg RunnerMessage) {
 
 // markLostSync records that this seat received a transition for an attempt it
 // never observed -- it fell behind the group's committed ROAST attempt chain.
-func (e *RoastTransitionExchange) markLostSync() {
-	e.lostSync.Store(true)
+// It returns true only on the first transition into lost-sync, so the caller can
+// attribute the triggering bundle exactly once (the listener may keep receiving
+// such bundles -- including a spammer's -- while lost-sync stays latched).
+func (e *RoastTransitionExchange) markLostSync() bool {
+	return e.lostSync.CompareAndSwap(false, true)
 }
 
 // HasLostSync reports whether this seat fell behind the group's committed ROAST
