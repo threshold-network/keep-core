@@ -250,6 +250,15 @@ var cmdFlagsTests = map[string]struct {
 		expectedValueFromFlag: true,
 		defaultValue:          false,
 	},
+	"tbtc.disableFrostSortitionPoolMonitoring": {
+		readValueFunc: func(c *config.Config) interface{} {
+			return c.Tbtc.DisableFrostSortitionPoolMonitoring
+		},
+		flagName:              "--tbtc.disableFrostSortitionPoolMonitoring",
+		flagValue:             "", // don't provide any value
+		expectedValueFromFlag: true,
+		defaultValue:          false,
+	},
 	"maintainer.bitcoinDifficulty": {
 		readValueFunc:         func(c *config.Config) interface{} { return c.Maintainer.BitcoinDifficulty.Enabled },
 		flagName:              "--bitcoinDifficulty",

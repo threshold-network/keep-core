@@ -2,6 +2,7 @@ package tbtc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"time"
@@ -113,6 +114,13 @@ type Config struct {
 	// deployments where operators are authorized through FrostAllowlist and no
 	// longer have TokenStaking-backed ECDSA operator state.
 	DisableLegacySortitionPoolMonitoring bool
+	// DisableFrostSortitionPoolMonitoring skips monitoring and auto-joining the
+	// FROST sortition pool. FROST pool monitoring is enabled by default whenever
+	// FROST authorization is configured, independent of DisableLegacyECDSA, so
+	// that operators stay selectable for new FROST wallet DKG both during the
+	// ECDSA drain and after the legacy pool is retired. This flag is an opt-out
+	// for operators that manage FROST pool membership out of band.
+	DisableFrostSortitionPoolMonitoring bool
 }
 
 // Initialize kicks off the TBTC by initializing internal state, ensuring
@@ -232,14 +240,29 @@ func Initialize(
 		)
 	}
 
+	// During the ECDSA->FROST migration an operator is a member of BOTH the
+	// legacy ECDSA and the FROST sortition pools at once (existing ECDSA wallets
+	// keep draining while FROST is live), so each pool needs its own monitor
+	// loop bound explicitly to that pool. A single hasFrostAuthorization()-
+	// switched loop would maintain only one pool -- and, once the legacy flag is
+	// disabled post-cutover, neither. Resolve a sortition.Chain bound explicitly
+	// to the legacy ECDSA pool; fall back to the chain itself for chains that do
+	// not expose the explicit view (e.g. test chains, which are not FROST-dual).
+	legacyECDSASortitionChain := sortition.Chain(chain)
+	if provider, ok := chain.(interface {
+		LegacyECDSASortitionChain() sortition.Chain
+	}); ok {
+		legacyECDSASortitionChain = provider.LegacyECDSASortitionChain()
+	}
+
 	if shouldMonitorLegacySortitionPool(config) {
 		err = sortition.MonitorPool(
 			ctx,
 			logger,
-			chain,
+			legacyECDSASortitionChain,
 			sortition.DefaultStatusCheckTick,
 			sortition.NewConjunctionPolicy(
-				sortition.NewBetaOperatorPolicy(chain, logger),
+				sortition.NewBetaOperatorPolicy(legacyECDSASortitionChain, logger),
 				&enoughPreParamsInPoolPolicy{
 					node:   node,
 					config: config,
@@ -248,12 +271,54 @@ func Initialize(
 		)
 		if err != nil {
 			return fmt.Errorf(
-				"could not set up sortition pool monitoring: [%v]",
+				"could not set up legacy ECDSA sortition pool monitoring: [%v]",
 				err,
 			)
 		}
 	} else {
 		logger.Infof("legacy ECDSA sortition pool monitoring disabled")
+	}
+
+	// FROST sortition pool monitoring runs whenever FROST authorization is
+	// configured, independent of DisableLegacyECDSA, so operators stay selectable
+	// for new FROST wallet DKG during the drain AND after the legacy pool is
+	// retired. The FROST loop uses the beta-operator policy only: the ECDSA
+	// pre-params gate does not apply to FROST DKG.
+	if provider, ok := chain.(interface {
+		FrostSortitionChain() (sortition.Chain, bool)
+	}); ok {
+		if frostSortitionChain, frostConfigured := provider.FrostSortitionChain(); frostConfigured {
+			if config.DisableFrostSortitionPoolMonitoring {
+				logger.Infof("FROST sortition pool monitoring disabled")
+			} else {
+				err = sortition.MonitorPool(
+					ctx,
+					logger,
+					frostSortitionChain,
+					sortition.DefaultStatusCheckTick,
+					sortition.NewBetaOperatorPolicy(frostSortitionChain, logger),
+				)
+				if err != nil {
+					// Absence from the FROST pool is a recoverable, per-pool
+					// state: an operator may register for FROST after node start,
+					// or remain ECDSA-only during the drain. It must not abort
+					// node startup nor the legacy pool's monitoring. Other
+					// monitoring failures remain fatal.
+					if errors.Is(err, sortition.ErrOperatorUnknown) {
+						logger.Warnf(
+							"operator is not registered in the FROST sortition " +
+								"pool; FROST pool monitoring is inactive until the " +
+								"operator is registered and the node is restarted",
+						)
+					} else {
+						return fmt.Errorf(
+							"could not set up FROST sortition pool monitoring: [%v]",
+							err,
+						)
+					}
+				}
+			}
+		}
 	}
 
 	if shouldRunLegacyECDSA(config) {
