@@ -23,7 +23,7 @@ import (
 func TestWalletTransactionExecutor_SignTransaction_ReturnsBuildTaprootTxError(
 	t *testing.T,
 ) {
-	privateKey, unsignedTx, _, _ := buildTaprootTxSubstitutionFixture(t)
+	unsignedTx, _ := buildTaprootKeyPathUnsignedTxForTest(t)
 
 	original := buildTaprootTxViaNativeSignerFn
 	t.Cleanup(func() {
@@ -37,9 +37,7 @@ func TestWalletTransactionExecutor_SignTransaction_ReturnsBuildTaprootTxError(
 	}
 
 	wte := &walletTransactionExecutor{
-		executingWallet: wallet{
-			publicKey: &privateKey.PublicKey,
-		},
+		executingWallet: generateWallet(big.NewInt(111)),
 		signingExecutor: &unexpectedSigningExecutorForBuildTaprootTxError{},
 		waitForBlockFn: func(ctx context.Context, block uint64) error {
 			return nil
@@ -60,7 +58,7 @@ func TestWalletTransactionExecutor_SignTransaction_ReturnsBuildTaprootTxError(
 func TestWalletTransactionExecutor_SignTransaction_PropagatesBuildTaprootTxBridgeOperationError(
 	t *testing.T,
 ) {
-	privateKey, unsignedTx, _, _ := buildTaprootTxSubstitutionFixture(t)
+	unsignedTx, _ := buildTaprootKeyPathUnsignedTxForTest(t)
 
 	original := buildTaprootTxViaNativeSignerFn
 	t.Cleanup(func() {
@@ -77,9 +75,7 @@ func TestWalletTransactionExecutor_SignTransaction_PropagatesBuildTaprootTxBridg
 	}
 
 	wte := &walletTransactionExecutor{
-		executingWallet: wallet{
-			publicKey: &privateKey.PublicKey,
-		},
+		executingWallet: generateWallet(big.NewInt(111)),
 		signingExecutor: &unexpectedSigningExecutorForBuildTaprootTxError{},
 		waitForBlockFn: func(ctx context.Context, block uint64) error {
 			return nil
@@ -536,10 +532,15 @@ func TestNativeBuildTaprootTxSigningSubstitutionEnabled(t *testing.T) {
 	}
 }
 
-func TestWalletTransactionExecutor_SignTransaction_SubstitutesNativeUnsignedTransactionWhenGateEnabled(
+// The native tbtc-signer BuildTaprootTx parity/substitution path is gated on the
+// transaction being all-Taproot. The substitution LOGIC itself (observational
+// logging, divergence rejection, matching-IO acceptance) is covered directly by
+// the TestEvaluateNativeUnsignedTransactionForSigning_* tests; these two tests
+// cover the signTransaction gate: skip for legacy, invoke for Taproot.
+func TestWalletTransactionExecutor_SignTransaction_SkipsNativeBuildForLegacyTransaction(
 	t *testing.T,
 ) {
-	privateKey, unsignedTx, nativeUnsignedTxHex, nativeUnsignedTx := buildTaprootTxSubstitutionFixture(t)
+	privateKey, unsignedTx, _, _ := buildTaprootTxSubstitutionFixture(t)
 
 	originalBuildTaprootTxViaNativeSignerFn := buildTaprootTxViaNativeSignerFn
 	originalSigningSubstitutionEnabledFn := nativeBuildTaprootTxSigningSubstitutionEnabledFn
@@ -548,11 +549,15 @@ func TestWalletTransactionExecutor_SignTransaction_SubstitutesNativeUnsignedTran
 		nativeBuildTaprootTxSigningSubstitutionEnabledFn = originalSigningSubstitutionEnabledFn
 	})
 
+	nativeBuildCalled := false
 	buildTaprootTxViaNativeSignerFn = func(
 		unsignedTx *bitcoin.TransactionBuilder,
 	) (string, error) {
-		return nativeUnsignedTxHex, nil
+		nativeBuildCalled = true
+		return "", nil
 	}
+	// Even with substitution enabled, the native Taproot builder must not run for
+	// a legacy (non-Taproot) transaction.
 	nativeBuildTaprootTxSigningSubstitutionEnabledFn = func() bool {
 		return true
 	}
@@ -576,192 +581,34 @@ func TestWalletTransactionExecutor_SignTransaction_SubstitutesNativeUnsignedTran
 		t.Fatalf("unexpected signTransaction error: [%v]", err)
 	}
 
-	if tx.Version != nativeUnsignedTx.Version {
-		t.Fatalf(
-			"unexpected substituted transaction version\nexpected: [%v]\nactual:   [%v]",
-			nativeUnsignedTx.Version,
-			tx.Version,
+	if nativeBuildCalled {
+		t.Fatal(
+			"native BuildTaprootTx must not be invoked for a legacy (non-Taproot) transaction",
 		)
 	}
-
-	if tx.Locktime != nativeUnsignedTx.Locktime {
-		t.Fatalf(
-			"unexpected substituted transaction locktime\nexpected: [%v]\nactual:   [%v]",
-			nativeUnsignedTx.Locktime,
-			tx.Locktime,
-		)
-	}
-
-	if len(tx.Inputs) != len(nativeUnsignedTx.Inputs) {
-		t.Fatalf(
-			"unexpected substituted input count\nexpected: [%v]\nactual:   [%v]",
-			len(nativeUnsignedTx.Inputs),
-			len(tx.Inputs),
-		)
-	}
-
-	if tx.Inputs[0].Outpoint.TransactionHash != nativeUnsignedTx.Inputs[0].Outpoint.TransactionHash {
-		t.Fatalf(
-			"unexpected substituted input txid\nexpected: [%v]\nactual:   [%v]",
-			nativeUnsignedTx.Inputs[0].Outpoint.TransactionHash,
-			tx.Inputs[0].Outpoint.TransactionHash,
-		)
-	}
-
-	if tx.Inputs[0].Outpoint.OutputIndex != nativeUnsignedTx.Inputs[0].Outpoint.OutputIndex {
-		t.Fatalf(
-			"unexpected substituted input vout\nexpected: [%v]\nactual:   [%v]",
-			nativeUnsignedTx.Inputs[0].Outpoint.OutputIndex,
-			tx.Inputs[0].Outpoint.OutputIndex,
-		)
-	}
-
-	if tx.Inputs[0].Sequence != nativeUnsignedTx.Inputs[0].Sequence {
-		t.Fatalf(
-			"unexpected substituted input sequence\nexpected: [%v]\nactual:   [%v]",
-			nativeUnsignedTx.Inputs[0].Sequence,
-			tx.Inputs[0].Sequence,
-		)
-	}
-
 	if len(tx.Inputs[0].SignatureScript) == 0 {
-		t.Fatal("expected signature script to be populated after signing")
+		t.Fatal("expected the legacy transaction to be signed via the Go path")
 	}
-
-	if len(tx.Outputs) != len(nativeUnsignedTx.Outputs) {
-		t.Fatalf(
-			"unexpected substituted output count\nexpected: [%v]\nactual:   [%v]",
-			len(nativeUnsignedTx.Outputs),
-			len(tx.Outputs),
-		)
-	}
-
-	if tx.Outputs[0].Value != nativeUnsignedTx.Outputs[0].Value {
-		t.Fatalf(
-			"unexpected substituted output value\nexpected: [%v]\nactual:   [%v]",
-			nativeUnsignedTx.Outputs[0].Value,
-			tx.Outputs[0].Value,
-		)
-	}
-
-	if !bytes.Equal(
-		tx.Outputs[0].PublicKeyScript,
-		nativeUnsignedTx.Outputs[0].PublicKeyScript,
-	) {
-		t.Fatalf(
-			"unexpected substituted output script\nexpected: [%x]\nactual:   [%x]",
-			nativeUnsignedTx.Outputs[0].PublicKeyScript,
-			tx.Outputs[0].PublicKeyScript,
-		)
-	}
-
-	if len(logger.warningMessages) != 0 {
-		t.Fatalf("unexpected warning logs: [%v]", logger.warningMessages)
-	}
-
-	if !containsLoggedMessage(
-		logger.infoMessages,
-		"substituted Go unsigned transaction with native tbtc-signer BuildTaprootTx output",
-	) {
-		t.Fatalf("expected substitution info log, got: [%v]", logger.infoMessages)
-	}
-}
-
-func TestWalletTransactionExecutor_SignTransaction_DoesNotSubstituteWhenGateDisabled(
-	t *testing.T,
-) {
-	privateKey, unsignedTx, nativeUnsignedTxHex, _ := buildTaprootTxSubstitutionFixture(t)
-
-	originalBuildTaprootTxViaNativeSignerFn := buildTaprootTxViaNativeSignerFn
-	originalSigningSubstitutionEnabledFn := nativeBuildTaprootTxSigningSubstitutionEnabledFn
-	t.Cleanup(func() {
-		buildTaprootTxViaNativeSignerFn = originalBuildTaprootTxViaNativeSignerFn
-		nativeBuildTaprootTxSigningSubstitutionEnabledFn = originalSigningSubstitutionEnabledFn
-	})
-
-	buildTaprootTxViaNativeSignerFn = func(
-		unsignedTx *bitcoin.TransactionBuilder,
-	) (string, error) {
-		return nativeUnsignedTxHex, nil
-	}
-	nativeBuildTaprootTxSigningSubstitutionEnabledFn = func() bool {
-		return false
-	}
-
-	wte := &walletTransactionExecutor{
-		executingWallet: wallet{
-			publicKey: &privateKey.PublicKey,
-		},
-		signingExecutor: &deterministicECDSASigningExecutorForBuildTaprootTxSubstitution{
-			privateKey: privateKey,
-		},
-		waitForBlockFn: func(ctx context.Context, block uint64) error {
-			return nil
-		},
-	}
-
-	logger := &warningCaptureLogger{}
-
-	tx, err := wte.signTransaction(logger, unsignedTx, 0, 0)
-	if err != nil {
-		t.Fatalf("unexpected signTransaction error: [%v]", err)
-	}
-
-	if tx.Version != 1 {
-		t.Fatalf(
-			"unexpected non-substituted transaction version\nexpected: [1]\nactual:   [%v]",
-			tx.Version,
-		)
-	}
-
-	if tx.Locktime != 0 {
-		t.Fatalf(
-			"unexpected non-substituted transaction locktime\nexpected: [0]\nactual:   [%v]",
-			tx.Locktime,
-		)
-	}
-
-	if tx.Inputs[0].Sequence != 0xffffffff {
-		t.Fatalf(
-			"unexpected non-substituted input sequence\nexpected: [4294967295]\nactual:   [%v]",
-			tx.Inputs[0].Sequence,
-		)
-	}
-
-	if len(logger.warningMessages) != 0 {
-		t.Fatalf("unexpected warning logs: [%v]", logger.warningMessages)
-	}
-
 	if containsLoggedMessage(
 		logger.infoMessages,
 		"substituted Go unsigned transaction with native tbtc-signer BuildTaprootTx output",
 	) {
-		t.Fatalf("did not expect substitution info log when gate disabled: [%v]", logger.infoMessages)
+		t.Fatal("must not substitute a native transaction for a legacy transaction")
 	}
 }
 
-func TestWalletTransactionExecutor_SignTransaction_RejectsNativeUnsignedTransactionDivergenceWhenGateEnabled(
+func TestWalletTransactionExecutor_SignTransaction_SubstitutesNativeBuildForTaprootTransaction(
 	t *testing.T,
 ) {
-	privateKey, unsignedTx, _, nativeUnsignedTx := buildTaprootTxSubstitutionFixture(t)
+	unsignedTx, privateKey := buildTaprootKeyPathUnsignedTxForTest(t)
 
-	divergingNativeUnsignedTx := *nativeUnsignedTx
-	divergingOutputs := make(
-		[]*bitcoin.TransactionOutput,
-		len(nativeUnsignedTx.Outputs),
-	)
-	for i, output := range nativeUnsignedTx.Outputs {
-		if output == nil {
-			t.Fatalf("native fixture output [%d] is nil", i)
-		}
-
-		clonedOutput := *output
-		divergingOutputs[i] = &clonedOutput
-	}
-	divergingNativeUnsignedTx.Outputs = divergingOutputs
-	divergingNativeUnsignedTx.Outputs[0].Value = nativeUnsignedTx.Outputs[0].Value - 1
-	divergingNativeUnsignedTxHex := hex.EncodeToString(
-		divergingNativeUnsignedTx.Serialize(bitcoin.Standard),
+	// The native builder returns a transaction structurally identical to the
+	// Go-built one, so substitution mode accepts it and substitutes -- this
+	// exercises the ReplaceUnsignedTransaction call and the substitution info
+	// log in the real signTransaction caller. Returning a non-empty hex also
+	// proves the gate invoked the native build for an all-Taproot transaction.
+	nativeUnsignedTxHex := hex.EncodeToString(
+		unsignedTx.UnsignedTransaction().Serialize(bitcoin.Standard),
 	)
 
 	originalBuildTaprootTxViaNativeSignerFn := buildTaprootTxViaNativeSignerFn
@@ -771,20 +618,20 @@ func TestWalletTransactionExecutor_SignTransaction_RejectsNativeUnsignedTransact
 		nativeBuildTaprootTxSigningSubstitutionEnabledFn = originalSigningSubstitutionEnabledFn
 	})
 
+	nativeBuildCalled := false
 	buildTaprootTxViaNativeSignerFn = func(
 		unsignedTx *bitcoin.TransactionBuilder,
 	) (string, error) {
-		return divergingNativeUnsignedTxHex, nil
+		nativeBuildCalled = true
+		return nativeUnsignedTxHex, nil
 	}
 	nativeBuildTaprootTxSigningSubstitutionEnabledFn = func() bool {
 		return true
 	}
 
 	wte := &walletTransactionExecutor{
-		executingWallet: wallet{
-			publicKey: &privateKey.PublicKey,
-		},
-		signingExecutor: &deterministicECDSASigningExecutorForBuildTaprootTxSubstitution{
+		executingWallet: generateWallet(big.NewInt(111)),
+		signingExecutor: &deterministicSchnorrSigningExecutorForTaproot{
 			privateKey: privateKey,
 		},
 		waitForBlockFn: func(ctx context.Context, block uint64) error {
@@ -793,104 +640,24 @@ func TestWalletTransactionExecutor_SignTransaction_RejectsNativeUnsignedTransact
 	}
 
 	logger := &warningCaptureLogger{}
-
 	tx, err := wte.signTransaction(logger, unsignedTx, 0, 0)
-	if err == nil {
-		t.Fatal("expected signTransaction divergence error")
+	if err != nil {
+		t.Fatalf("unexpected signTransaction error: [%v]", err)
 	}
 
-	if tx != nil {
-		t.Fatal("expected no signed transaction on substitution divergence")
+	if !nativeBuildCalled {
+		t.Fatal(
+			"native BuildTaprootTx must be invoked for an all-Taproot transaction",
+		)
 	}
-
-	if !strings.Contains(err.Error(), "diverges") {
-		t.Fatalf("unexpected signTransaction divergence error: [%v]", err)
+	if !containsLoggedMessage(
+		logger.infoMessages,
+		"substituted Go unsigned transaction with native tbtc-signer BuildTaprootTx output",
+	) {
+		t.Fatalf("expected the substitution info log, got: [%v]", logger.infoMessages)
 	}
-
-	if !strings.Contains(err.Error(), "output value mismatch") {
-		t.Fatalf("missing divergence detail in signTransaction error: [%v]", err)
-	}
-
-	if len(logger.warningMessages) != 0 {
-		t.Fatalf("unexpected warning logs in substitution mode: [%v]", logger.warningMessages)
-	}
-}
-
-func TestWalletTransactionExecutor_SignTransaction_RejectsNativeUnsignedTransactionStructuralDivergenceWhenGateEnabled(
-	t *testing.T,
-) {
-	privateKey, unsignedTx, _, nativeUnsignedTx := buildTaprootTxSubstitutionFixture(t)
-
-	divergingNativeUnsignedTx := *nativeUnsignedTx
-	divergingInputs := make(
-		[]*bitcoin.TransactionInput,
-		len(nativeUnsignedTx.Inputs),
-	)
-	for i, input := range nativeUnsignedTx.Inputs {
-		if input == nil {
-			t.Fatalf("native fixture input [%d] is nil", i)
-		}
-
-		clonedInput := *input
-		divergingInputs[i] = &clonedInput
-	}
-	divergingNativeUnsignedTx.Inputs = divergingInputs
-	divergingNativeUnsignedTx.Version = nativeUnsignedTx.Version + 1
-	divergingNativeUnsignedTx.Locktime = nativeUnsignedTx.Locktime + 1
-	divergingNativeUnsignedTx.Inputs[0].Sequence = nativeUnsignedTx.Inputs[0].Sequence - 1
-	divergingNativeUnsignedTxHex := hex.EncodeToString(
-		divergingNativeUnsignedTx.Serialize(bitcoin.Standard),
-	)
-
-	originalBuildTaprootTxViaNativeSignerFn := buildTaprootTxViaNativeSignerFn
-	originalSigningSubstitutionEnabledFn := nativeBuildTaprootTxSigningSubstitutionEnabledFn
-	t.Cleanup(func() {
-		buildTaprootTxViaNativeSignerFn = originalBuildTaprootTxViaNativeSignerFn
-		nativeBuildTaprootTxSigningSubstitutionEnabledFn = originalSigningSubstitutionEnabledFn
-	})
-
-	buildTaprootTxViaNativeSignerFn = func(
-		unsignedTx *bitcoin.TransactionBuilder,
-	) (string, error) {
-		return divergingNativeUnsignedTxHex, nil
-	}
-	nativeBuildTaprootTxSigningSubstitutionEnabledFn = func() bool {
-		return true
-	}
-
-	wte := &walletTransactionExecutor{
-		executingWallet: wallet{
-			publicKey: &privateKey.PublicKey,
-		},
-		signingExecutor: &deterministicECDSASigningExecutorForBuildTaprootTxSubstitution{
-			privateKey: privateKey,
-		},
-		waitForBlockFn: func(ctx context.Context, block uint64) error {
-			return nil
-		},
-	}
-
-	logger := &warningCaptureLogger{}
-
-	tx, err := wte.signTransaction(logger, unsignedTx, 0, 0)
-	if err == nil {
-		t.Fatal("expected signTransaction structural divergence error")
-	}
-
-	if tx != nil {
-		t.Fatal("expected no signed transaction on substitution structural divergence")
-	}
-
-	if !strings.Contains(err.Error(), "diverges") {
-		t.Fatalf("unexpected signTransaction divergence error: [%v]", err)
-	}
-
-	if !strings.Contains(err.Error(), "version mismatch") {
-		t.Fatalf("missing divergence detail in signTransaction error: [%v]", err)
-	}
-
-	if len(logger.warningMessages) != 0 {
-		t.Fatalf("unexpected warning logs in substitution mode: [%v]", logger.warningMessages)
+	if len(tx.Inputs) != 1 || len(tx.Inputs[0].Witness) == 0 {
+		t.Fatal("expected the substituted transaction to be signed with a taproot witness")
 	}
 }
 
@@ -1399,6 +1166,88 @@ func TestWalletTransactionExecutor_SignTransaction_RejectsSchnorrForLegacyInputs
 	if !strings.Contains(err.Error(), "non-taproot transaction inputs") {
 		t.Fatalf("unexpected error: [%v]", err)
 	}
+}
+
+// buildTaprootKeyPathUnsignedTxForTest builds an all-Taproot-key-path unsigned
+// transaction (and returns the key controlling its single input) for exercising
+// the native BuildTaprootTx gate / signing path.
+func buildTaprootKeyPathUnsignedTxForTest(
+	t *testing.T,
+) (*bitcoin.TransactionBuilder, *btcec2.PrivateKey) {
+	t.Helper()
+
+	privateKeyBytes := mustDecodeHex(
+		t,
+		"0101010101010101010101010101010101010101010101010101010101010101",
+	)
+	privateKey, publicKey := btcec2.PrivKeyFromBytes(privateKeyBytes)
+
+	var taprootOutputKey [32]byte
+	copy(taprootOutputKey[:], schnorr.SerializePubKey(publicKey))
+
+	inputScript, err := bitcoin.PayToTaproot(taprootOutputKey)
+	if err != nil {
+		t.Fatalf("cannot create taproot input script: [%v]", err)
+	}
+
+	var outputPublicKeyHash [20]byte
+	copy(
+		outputPublicKeyHash[:],
+		mustDecodeHex(t, "0202020202020202020202020202020202020202"),
+	)
+	outputScript, err := bitcoin.PayToWitnessPublicKeyHash(outputPublicKeyHash)
+	if err != nil {
+		t.Fatalf("cannot create output script: [%v]", err)
+	}
+
+	localBitcoinChain := newLocalBitcoinChain()
+	fundingTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: bitcoin.Hash{
+						0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+						0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+						0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+						0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
+					},
+					OutputIndex: 0,
+				},
+				SignatureScript: []byte{0x51},
+				Sequence:        0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: inputScript,
+			},
+		},
+		Locktime: 0,
+	}
+	if err := localBitcoinChain.BroadcastTransaction(fundingTransaction); err != nil {
+		t.Fatalf("cannot broadcast funding transaction: [%v]", err)
+	}
+
+	unsignedTx := bitcoin.NewTransactionBuilder(localBitcoinChain)
+	if err := unsignedTx.AddTaprootKeyPathInput(
+		&bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: fundingTransaction.Hash(),
+				OutputIndex:     0,
+			},
+			Value: 100000,
+		},
+	); err != nil {
+		t.Fatalf("cannot add taproot input: [%v]", err)
+	}
+	unsignedTx.AddOutput(&bitcoin.TransactionOutput{
+		Value:           90000,
+		PublicKeyScript: outputScript,
+	})
+
+	return unsignedTx, privateKey
 }
 
 func buildTaprootTxSubstitutionFixture(

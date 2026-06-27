@@ -344,46 +344,18 @@ func (wte *walletTransactionExecutor) signTransaction(
 	signingStartBlock uint64,
 	signingTimeoutBlock uint64,
 ) (*bitcoin.Transaction, error) {
-	substitutionEnabled := nativeBuildTaprootTxSigningSubstitutionEnabledFn()
-
-	nativeUnsignedTxHex, err := buildTaprootTxViaNativeSignerFn(unsignedTx)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"error while building unsigned transaction with native tbtc-signer: [%w]",
-			err,
-		)
-	}
-
-	if nativeUnsignedTxHex != "" {
-		signTxLogger.Debugf(
-			"received unsigned transaction from native tbtc-signer BuildTaprootTx [txHexLen:%d]",
-			len(nativeUnsignedTxHex),
-		)
-
-		nativeUnsignedTx, err := evaluateNativeUnsignedTransactionForSigning(
+	// The native tbtc-signer BuildTaprootTx parity/substitution path applies
+	// only to Taproot transactions: the native builder is a Taproot builder, so
+	// running it for a legacy (non-Taproot) ECDSA redemption/sweep/moving-funds
+	// transaction is meaningless, and a hard error from it would otherwise fail
+	// the signing of that legacy transaction. FROST/Schnorr wallets sign
+	// exclusively all-Taproot transactions (enforced below).
+	if unsignedTx.HasOnlyTaprootKeyPathInputs() {
+		if err := wte.maybeSubstituteNativeBuildTaprootTx(
 			signTxLogger,
-			nativeUnsignedTxHex,
-			unsignedTx.UnsignedTransaction(),
-			substitutionEnabled,
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"cannot process native BuildTaprootTx unsigned transaction for signing: [%v]",
-				err,
-			)
-		}
-
-		if nativeUnsignedTx != nil {
-			if err := unsignedTx.ReplaceUnsignedTransaction(nativeUnsignedTx); err != nil {
-				return nil, fmt.Errorf(
-					"cannot substitute Go unsigned transaction with native BuildTaprootTx output: [%v]",
-					err,
-				)
-			}
-
-			signTxLogger.Infof(
-				"substituted Go unsigned transaction with native tbtc-signer BuildTaprootTx output",
-			)
+			unsignedTx,
+		); err != nil {
+			return nil, err
 		}
 	}
 
@@ -506,6 +478,64 @@ func (wte *walletTransactionExecutor) usesSchnorrSignatures() bool {
 	}
 
 	return executor.usesSchnorrSignatures()
+}
+
+// maybeSubstituteNativeBuildTaprootTx runs the native tbtc-signer BuildTaprootTx
+// parity/substitution path: it builds the unsigned transaction via the native
+// signer and, when KEEP_CORE_NATIVE_BUILDTX_SIGNING_SUBSTITUTION is set,
+// substitutes the Go-built transaction with the native one. In the default build
+// the native builder is a no-op (returns an empty hex), so this is observational
+// only. It must only be called for Taproot transactions (see signTransaction).
+func (wte *walletTransactionExecutor) maybeSubstituteNativeBuildTaprootTx(
+	signTxLogger log.StandardLogger,
+	unsignedTx *bitcoin.TransactionBuilder,
+) error {
+	substitutionEnabled := nativeBuildTaprootTxSigningSubstitutionEnabledFn()
+
+	nativeUnsignedTxHex, err := buildTaprootTxViaNativeSignerFn(unsignedTx)
+	if err != nil {
+		return fmt.Errorf(
+			"error while building unsigned transaction with native tbtc-signer: [%w]",
+			err,
+		)
+	}
+
+	if nativeUnsignedTxHex == "" {
+		return nil
+	}
+
+	signTxLogger.Debugf(
+		"received unsigned transaction from native tbtc-signer BuildTaprootTx [txHexLen:%d]",
+		len(nativeUnsignedTxHex),
+	)
+
+	nativeUnsignedTx, err := evaluateNativeUnsignedTransactionForSigning(
+		signTxLogger,
+		nativeUnsignedTxHex,
+		unsignedTx.UnsignedTransaction(),
+		substitutionEnabled,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"cannot process native BuildTaprootTx unsigned transaction for signing: [%v]",
+			err,
+		)
+	}
+
+	if nativeUnsignedTx != nil {
+		if err := unsignedTx.ReplaceUnsignedTransaction(nativeUnsignedTx); err != nil {
+			return fmt.Errorf(
+				"cannot substitute Go unsigned transaction with native BuildTaprootTx output: [%v]",
+				err,
+			)
+		}
+
+		signTxLogger.Infof(
+			"substituted Go unsigned transaction with native tbtc-signer BuildTaprootTx output",
+		)
+	}
+
+	return nil
 }
 
 func hasTaprootMerkleRoots(taprootMerkleRoots []*[32]byte) bool {
