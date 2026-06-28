@@ -1043,6 +1043,31 @@ pub(crate) fn persist_engine_state_to_storage(
     persist_engine_state_to_storage_with_key(engine_state, &key_material)
 }
 
+/// Process-local marker tracking whether `start_sign_round` has established a
+/// round in memory whose durable persist has not yet succeeded. It lets the
+/// idempotent cached serve persist ONLY when the round is not yet durable (so a
+/// lost-consumed-marker hole on the original-persist-failure path is closed),
+/// while still serving the cached round WITHOUT persisting -- so an idempotent
+/// replay survives a state-key-provider outage -- once the round is durable.
+/// SET by `start_sign_round` on a fresh-round mutation and CLEARED by ANY
+/// successful persist (see `persist_engine_state_to_storage_with_key`): a
+/// successful persist writes the whole engine state, so the round becomes durable
+/// regardless of which operation triggered it. Accessed only while the
+/// ENGINE_STATE guard is held, so `Relaxed` ordering suffices.
+static SIGN_ROUND_PERSIST_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Marks that `start_sign_round` established an in-memory round not yet durably
+/// persisted. Cleared by the next successful persist of any kind.
+pub(crate) fn mark_sign_round_persist_pending() {
+    SIGN_ROUND_PERSIST_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Returns true while a `start_sign_round` round is in memory but not yet durable.
+pub(crate) fn sign_round_persist_pending() -> bool {
+    SIGN_ROUND_PERSIST_PENDING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub(crate) fn persist_engine_state_to_storage_with_key(
     engine_state: &EngineState,
     key_material: &StateEncryptionKeyMaterial,
@@ -1122,6 +1147,16 @@ pub(crate) fn persist_engine_state_to_storage_with_key(
     }
 
     bytes.zeroize();
+    if persist_result.is_ok() {
+        // A successful persist writes the entire engine state durably -- including
+        // any in-memory start_sign_round round -- so the sign-round persist-pending
+        // marker no longer applies, regardless of which operation triggered this
+        // persist. Clearing it here (rather than only at the start_sign_round
+        // persist sites) keeps an idempotent replay of an already-durable round
+        // from being forced to re-persist, which would otherwise fail during a
+        // state-key-provider outage.
+        SIGN_ROUND_PERSIST_PENDING.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
     persist_result
 }
 

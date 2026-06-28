@@ -2492,6 +2492,104 @@ fn idempotent_sign_round_replay_persists_before_serving_after_persist_outage() {
 }
 
 #[test]
+fn idempotent_sign_round_replay_survives_outage_after_unrelated_persist_clears_pending() {
+    let _guard = lock_test_state();
+    let _state_path =
+        configure_test_state_path("sign_round_replay_unrelated_persist_clears_pending");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    let _roast_strict_mode = RoastStrictModeGuard::enable();
+
+    let session_id = "session-sign-round-pending-cross-op";
+    let message_hex = "deadbeef";
+    let dkg_result = run_dkg(RunDkgRequest {
+        session_id: session_id.to_string(),
+        participants: vec![
+            crate::api::DkgParticipant {
+                identifier: 1,
+                public_key_hex: "02aa".to_string(),
+            },
+            crate::api::DkgParticipant {
+                identifier: 2,
+                public_key_hex: "02bb".to_string(),
+            },
+            crate::api::DkgParticipant {
+                identifier: 3,
+                public_key_hex: "02cc".to_string(),
+            },
+        ],
+        threshold: 2,
+        dkg_seed_hex: None,
+    })
+    .expect("run dkg");
+
+    let attempt_one =
+        build_deterministic_attempt_context(session_id, message_hex, 1, vec![1, 2, 3]);
+    let request = || StartSignRoundRequest {
+        session_id: session_id.to_string(),
+        member_identifier: 1,
+        message_hex: message_hex.to_string(),
+        key_group: dkg_result.key_group.clone(),
+        taproot_merkle_root_hex: None,
+        signing_participants: Some(vec![1, 2, 3]),
+        attempt_context: Some(attempt_one.clone()),
+        attempt_transition_evidence: None,
+    };
+
+    // Establish the round in memory but fail its persist, leaving the persist-
+    // pending marker set.
+    std::env::set_var(
+        TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
+        TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND,
+    );
+    std::env::set_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV, "exit 7");
+    start_sign_round(request()).expect_err("fresh round must fail when its persist fails");
+
+    // An UNRELATED operation now persists successfully once the key recovers: a
+    // DKG for a different session writes the entire engine state -- including the
+    // round above -- so that round becomes durable. This must clear the
+    // persist-pending marker even though it was not start_sign_round's own
+    // persist.
+    std::env::remove_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV);
+    std::env::remove_var(TBTC_SIGNER_STATE_KEY_PROVIDER_ENV);
+    run_dkg(RunDkgRequest {
+        session_id: "session-sign-round-pending-cross-op-other".to_string(),
+        participants: vec![
+            crate::api::DkgParticipant {
+                identifier: 1,
+                public_key_hex: "02aa".to_string(),
+            },
+            crate::api::DkgParticipant {
+                identifier: 2,
+                public_key_hex: "02bb".to_string(),
+            },
+            crate::api::DkgParticipant {
+                identifier: 3,
+                public_key_hex: "02cc".to_string(),
+            },
+        ],
+        threshold: 2,
+        dkg_seed_hex: None,
+    })
+    .expect("unrelated dkg persists the whole engine state");
+
+    // With the round now durable, an idempotent replay during a fresh state-key
+    // outage must serve the cached round WITHOUT persisting -- a stale marker
+    // must not force it to re-persist and fail.
+    std::env::set_var(
+        TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
+        TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND,
+    );
+    std::env::set_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV, "exit 7");
+    start_sign_round(request())
+        .expect("idempotent replay of a now-durable round must survive a state-key outage");
+
+    std::env::remove_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV);
+    std::env::remove_var(TBTC_SIGNER_STATE_KEY_PROVIDER_ENV);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn roast_transcript_audit_records_persist_across_reload() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("transcript_audit_persist_reload");

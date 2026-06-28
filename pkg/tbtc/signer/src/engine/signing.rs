@@ -5,17 +5,11 @@ use super::*;
 pub(crate) const BOOTSTRAP_SYNTHETIC_CONTRIBUTION_DOMAIN: &str =
     "tbtc-signer-bootstrap-contribution-v1";
 
-/// Process-local marker: set when `start_sign_round` establishes a round in
-/// memory whose durable persist has not yet succeeded, and cleared after a
-/// successful `start_sign_round` persist. It lets the idempotent cached serve
-/// persist ONLY when the round is not yet durable -- closing the
-/// lost-consumed-marker hole on the original-persist-failure path -- while still
-/// serving the cached round WITHOUT persisting (so an idempotent replay survives
-/// a state-key-provider outage, matching `build_taproot_tx`) when the original
-/// persist already succeeded. Read/written only while the ENGINE_STATE guard is
-/// held, so `Relaxed` ordering suffices.
-static SIGN_ROUND_PERSIST_PENDING: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+// The sign-round persist-pending marker lives in the persistence module
+// (`mark_sign_round_persist_pending` / `sign_round_persist_pending`) so that ANY
+// successful persist clears it, not only `start_sign_round`'s own -- otherwise a
+// later unrelated persist that makes the round durable would leave the marker
+// stale and force an idempotent replay to re-persist during a state-key outage.
 
 pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState, EngineError> {
     record_hardening_telemetry(|telemetry| {
@@ -270,11 +264,10 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
                 // (the common case) serve the cached round WITHOUT persisting, so
                 // the idempotent replay still survives a state-key-provider
                 // outage, as build_taproot_tx does.
-                if matches_legacy_fingerprint
-                    || SIGN_ROUND_PERSIST_PENDING.load(std::sync::atomic::Ordering::Relaxed)
-                {
+                if matches_legacy_fingerprint || sign_round_persist_pending() {
+                    // persist_engine_state_to_storage clears the pending marker on
+                    // success (see the persistence module).
                     persist_engine_state_to_storage(&guard)?;
-                    SIGN_ROUND_PERSIST_PENDING.store(false, std::sync::atomic::Ordering::Relaxed);
                 }
 
                 return Ok(round_state);
@@ -421,8 +414,9 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
         session.consumed_sign_round_ids.insert(round_id);
         // The round is now established in memory but not yet durable. Mark a
         // persist as pending so a later idempotent cached serve re-persists if
-        // the persist below fails; cleared once that persist succeeds.
-        SIGN_ROUND_PERSIST_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
+        // the persist below fails; cleared by the next successful persist (of any
+        // kind).
+        mark_sign_round_persist_pending();
 
         round_state
     };
@@ -437,7 +431,6 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
     }
 
     persist_engine_state_to_storage(&guard)?;
-    SIGN_ROUND_PERSIST_PENDING.store(false, std::sync::atomic::Ordering::Relaxed);
     record_hardening_telemetry(|telemetry| {
         telemetry.start_sign_round_success_total =
             telemetry.start_sign_round_success_total.saturating_add(1);
