@@ -2318,6 +2318,180 @@ fn rejected_forged_advance_preserves_active_sign_round() {
 }
 
 #[test]
+fn authorized_advance_failing_later_check_preserves_active_sign_round() {
+    let _guard = lock_test_state();
+    let _state_path = configure_test_state_path("authorized_advance_late_failure_preserves_round");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    let _roast_strict_mode = RoastStrictModeGuard::enable();
+
+    let session_id = "session-authorized-advance-late-failure";
+    let message_hex = "deadbeef";
+    let dkg_result = run_dkg(RunDkgRequest {
+        session_id: session_id.to_string(),
+        participants: vec![
+            crate::api::DkgParticipant {
+                identifier: 1,
+                public_key_hex: "02aa".to_string(),
+            },
+            crate::api::DkgParticipant {
+                identifier: 2,
+                public_key_hex: "02bb".to_string(),
+            },
+            crate::api::DkgParticipant {
+                identifier: 3,
+                public_key_hex: "02cc".to_string(),
+            },
+        ],
+        threshold: 2,
+        dkg_seed_hex: None,
+    })
+    .expect("run dkg");
+
+    // Establish active attempt 1 over participants [1, 2, 3].
+    let attempt_one =
+        build_deterministic_attempt_context(session_id, message_hex, 1, vec![1, 2, 3]);
+    start_sign_round(StartSignRoundRequest {
+        session_id: session_id.to_string(),
+        member_identifier: 1,
+        message_hex: message_hex.to_string(),
+        key_group: dkg_result.key_group.clone(),
+        taproot_merkle_root_hex: None,
+        signing_participants: Some(vec![1, 2, 3]),
+        attempt_context: Some(attempt_one.clone()),
+        attempt_transition_evidence: None,
+    })
+    .expect("start sign round attempt 1");
+
+    // A genuinely authorized advance to attempt 2 over [1, 2] (excluding 3), but
+    // whose request signing-participant set [1, 2, 3] does NOT match the attempt
+    // context's included participants [1, 2]. The advance clears authorization
+    // and the RFC-21 coordinator validation, then fails the included-set
+    // equality check -- which runs AFTER the point at which the active round
+    // used to be cleared. With the clear deferred, the active round survives.
+    let mut transition_evidence = build_attempt_transition_evidence_from_active_session(session_id);
+    transition_evidence.exclusion_evidence = Some(AttemptExclusionEvidence {
+        reason: ROAST_EXCLUSION_REASON_INVALID_SHARE_PROOF.to_string(),
+        excluded_member_identifiers: vec![3],
+        invalid_share_proof_fingerprint: Some("ab".repeat(32)),
+    });
+    let attempt_two = build_deterministic_attempt_context(session_id, message_hex, 2, vec![1, 2]);
+
+    let advance_err = start_sign_round(StartSignRoundRequest {
+        session_id: session_id.to_string(),
+        member_identifier: 1,
+        message_hex: message_hex.to_string(),
+        key_group: dkg_result.key_group.clone(),
+        taproot_merkle_root_hex: None,
+        signing_participants: Some(vec![1, 2, 3]),
+        attempt_context: Some(attempt_two),
+        attempt_transition_evidence: Some(transition_evidence),
+    })
+    .expect_err("authorized advance with mismatched included set must be rejected");
+    assert!(
+        matches!(
+            &advance_err,
+            EngineError::Validation(message)
+                if message.contains("must match resolved signing_participants")
+        ),
+        "expected included-set validation error, got {advance_err:?}"
+    );
+
+    // The active attempt-1 round must survive the late-failing advance:
+    // re-submitting the original attempt-1 request is idempotent and still
+    // succeeds, rather than failing with ConsumedAttemptReplay against a round
+    // that an eager clear would have destroyed.
+    start_sign_round(StartSignRoundRequest {
+        session_id: session_id.to_string(),
+        member_identifier: 1,
+        message_hex: message_hex.to_string(),
+        key_group: dkg_result.key_group,
+        taproot_merkle_root_hex: None,
+        signing_participants: Some(vec![1, 2, 3]),
+        attempt_context: Some(attempt_one),
+        attempt_transition_evidence: None,
+    })
+    .expect("attempt 1 remains signable after the rejected late-failing advance");
+
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn idempotent_sign_round_replay_persists_before_serving_after_persist_outage() {
+    let _guard = lock_test_state();
+    let _state_path = configure_test_state_path("sign_round_replay_persist_after_outage");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    let _roast_strict_mode = RoastStrictModeGuard::enable();
+
+    let session_id = "session-sign-round-persist-outage";
+    let message_hex = "deadbeef";
+    let dkg_result = run_dkg(RunDkgRequest {
+        session_id: session_id.to_string(),
+        participants: vec![
+            crate::api::DkgParticipant {
+                identifier: 1,
+                public_key_hex: "02aa".to_string(),
+            },
+            crate::api::DkgParticipant {
+                identifier: 2,
+                public_key_hex: "02bb".to_string(),
+            },
+            crate::api::DkgParticipant {
+                identifier: 3,
+                public_key_hex: "02cc".to_string(),
+            },
+        ],
+        threshold: 2,
+        dkg_seed_hex: None,
+    })
+    .expect("run dkg");
+
+    let attempt_one =
+        build_deterministic_attempt_context(session_id, message_hex, 1, vec![1, 2, 3]);
+    let request = || StartSignRoundRequest {
+        session_id: session_id.to_string(),
+        member_identifier: 1,
+        message_hex: message_hex.to_string(),
+        key_group: dkg_result.key_group.clone(),
+        taproot_merkle_root_hex: None,
+        signing_participants: Some(vec![1, 2, 3]),
+        attempt_context: Some(attempt_one.clone()),
+        attempt_transition_evidence: None,
+    };
+
+    // Establish the round in memory but make the durable persist fail: the
+    // state-key `command` provider exits non-zero. The round's consumed-replay
+    // markers and round state are mutated in memory, but the persist -- and the
+    // call -- fails, so no shares are served.
+    std::env::set_var(
+        TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
+        TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND,
+    );
+    std::env::set_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV, "exit 7");
+
+    start_sign_round(request()).expect_err("fresh round must fail when its persist fails");
+
+    // The idempotent cached serve must NOT return shares while the round is
+    // still only in memory: with the key command still failing it surfaces the
+    // persist error rather than serving shares without a durable consumed
+    // marker (which a restart could otherwise replay). This is the behaviour the
+    // SIGN_ROUND_PERSIST_PENDING marker enforces.
+    start_sign_round(request())
+        .expect_err("idempotent replay must not serve shares before the round is durable");
+
+    // Once the state-key provider recovers, the replay persists the markers and
+    // then serves the cached round.
+    std::env::remove_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV);
+    std::env::remove_var(TBTC_SIGNER_STATE_KEY_PROVIDER_ENV);
+
+    start_sign_round(request())
+        .expect("idempotent replay must persist then serve once the state key recovers");
+
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn roast_transcript_audit_records_persist_across_reload() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("transcript_audit_persist_reload");
