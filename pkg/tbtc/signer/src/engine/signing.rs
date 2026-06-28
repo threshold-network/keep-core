@@ -5,6 +5,15 @@ use super::*;
 pub(crate) const BOOTSTRAP_SYNTHETIC_CONTRIBUTION_DOMAIN: &str =
     "tbtc-signer-bootstrap-contribution-v1";
 
+// The sign-round persist-pending markers live in the persistence module
+// (`mark_sign_round_persist_pending` / `sign_round_persist_pending`), keyed PER
+// SESSION. ANY successful persist clears them all, not only `start_sign_round`'s
+// own -- otherwise a later unrelated persist that makes the round durable would
+// leave the marker stale and force an idempotent replay to re-persist during a
+// state-key outage. They are keyed per session so one session's failed persist
+// cannot force an unrelated, already-durable session's replay to re-persist (and
+// fail) during the same outage.
+
 pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState, EngineError> {
     record_hardening_telemetry(|telemetry| {
         telemetry.start_sign_round_calls_total =
@@ -122,6 +131,10 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
             .map(canonical_attempt_context);
         let mut attempt_transition_telemetry = None;
         let mut attempt_transition_record = None;
+        // Set when an attempt advance is authorized below. The actual clear of
+        // the prior round is deferred until the replacement round has passed
+        // every fallible check, so a failed advance cannot strand the session.
+        let mut attempt_transition_authorized = false;
         if let Some(active_attempt_context) = session.active_attempt_context.as_ref() {
             let active_attempt_match_outcome = enforce_active_attempt_context_match(
                 active_attempt_context,
@@ -167,14 +180,10 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
                     transition_evidence,
                 )?);
                 // Validate the incoming attempt context against the
-                // deterministic RFC-21 coordinator selection BEFORE destroying
-                // the active round. A malformed advance (e.g. a forged
+                // deterministic RFC-21 coordinator selection BEFORE the active
+                // round is touched. A malformed advance (e.g. a forged
                 // coordinator_identifier that satisfies the transition evidence
                 // but fails deterministic validation) must be rejected here.
-                // Rejecting it only after clear_active_sign_round_for_attempt_transition
-                // has run would leave the in-memory round destroyed while the
-                // attempt id stays in consumed_attempt_ids, bricking the
-                // session until the durable state is reloaded on restart.
                 validate_attempt_context(
                     &request.session_id,
                     &dkg.key_group,
@@ -184,11 +193,27 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
                     request.attempt_context.as_ref(),
                     strict_roast_mode_enabled,
                 )?;
-                clear_active_sign_round_for_attempt_transition(session);
+                // Authorize the advance but DEFER clearing the active round.
+                // The replacement round must still pass several fallible
+                // fresh-path checks below (participant resolution, included-set
+                // equality, quarantine, consumed-replay, share construction).
+                // Clearing here would let any of those failures destroy the
+                // in-memory active round with no validated, persisted
+                // replacement -- stranding the session (round material gone,
+                // transition record unwritten) so the next StartSignRound could
+                // start a fresh attempt without transition evidence until a
+                // restart reloads durable state. The clear runs just before the
+                // replacement round is installed and persisted.
+                attempt_transition_authorized = true;
             }
         }
 
-        if let Some(existing) = &session.sign_request_fingerprint {
+        if attempt_transition_authorized {
+            // An authorized attempt advance is in progress: the prior round
+            // material is still in memory, but a new attempt is starting. Skip
+            // the idempotent/conflict match against the old fingerprint and fall
+            // through to establish (and persist) the replacement round below.
+        } else if let Some(existing) = &session.sign_request_fingerprint {
             let matches_canonical_fingerprint = existing == &request_fingerprint;
             let matches_legacy_fingerprint = !matches_canonical_fingerprint
                 && (existing == &legacy_member_request_fingerprint
@@ -228,6 +253,25 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
 
                 if matches_legacy_fingerprint {
                     session.sign_request_fingerprint = Some(request_fingerprint.clone());
+                }
+
+                // Persist the cached round before serving it when either (a) we
+                // just upgraded a legacy fingerprint, or (b) the round was
+                // established in memory but its original persist has not yet
+                // succeeded -- e.g. a prior StartSignRound mutated the
+                // consumed-replay markers and round state, then failed to persist
+                // (state-key-provider or disk error) and returned an error,
+                // serving no shares. Serving shares here without persisting in
+                // that case would let a restart replay the round with no durable
+                // consumed marker. When the original persist already succeeded
+                // (the common case) serve the cached round WITHOUT persisting, so
+                // the idempotent replay still survives a state-key-provider
+                // outage, as build_taproot_tx does.
+                if matches_legacy_fingerprint || sign_round_persist_pending(&request.session_id) {
+                    // persist_engine_state_to_storage clears the pending markers on
+                    // success (see the persistence module). Only THIS session's own
+                    // not-yet-durable round forces a re-persist here; an unrelated
+                    // session's pending persist does not.
                     persist_engine_state_to_storage(&guard)?;
                 }
 
@@ -357,6 +401,14 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
             own_contribution,
         };
 
+        // Every fallible fresh-round check has now passed and the replacement
+        // round is fully built. Scrub the prior round material as part of the
+        // attempt transition -- deferred to here (not the AdvanceAuthorized
+        // decision) so a malformed advance that failed a later check could not
+        // have destroyed the active round without a validated replacement.
+        if attempt_transition_authorized {
+            clear_active_sign_round_for_attempt_transition(session);
+        }
         session.sign_request_fingerprint = Some(request_fingerprint);
         session.sign_message_bytes = Some(Zeroizing::new(message_bytes));
         session.round_state = Some(round_state.clone());
@@ -365,6 +417,12 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
             session.consumed_attempt_ids.insert(attempt_id);
         }
         session.consumed_sign_round_ids.insert(round_id);
+        // The round is now established in memory but not yet durable. Mark this
+        // session's persist as pending so a later idempotent cached serve
+        // re-persists if the persist below fails; cleared by the next successful
+        // persist (of any kind). Keyed per session so an unrelated, already-durable
+        // session's replay is not forced to re-persist during an outage.
+        mark_sign_round_persist_pending(&request.session_id);
 
         round_state
     };

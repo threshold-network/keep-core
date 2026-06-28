@@ -1043,6 +1043,63 @@ pub(crate) fn persist_engine_state_to_storage(
     persist_engine_state_to_storage_with_key(engine_state, &key_material)
 }
 
+/// Process-local set of session IDs whose `start_sign_round` round is established
+/// in memory but whose durable persist has not yet succeeded. It lets the
+/// idempotent cached serve persist ONLY for a session whose round is not yet
+/// durable (closing the lost-consumed-marker hole on the original-persist-failure
+/// path), while still serving an already-durable session's cached round WITHOUT
+/// persisting -- so an idempotent replay survives a state-key-provider outage.
+///
+/// The marker is scoped PER SESSION, not process-wide: one session's failed
+/// persist must NOT force an unrelated, already-durable session's idempotent
+/// replay to re-persist (and fail) during the same outage. A session is INSERTED
+/// by `start_sign_round` on a fresh-round mutation and the whole set is CLEARED
+/// by ANY successful persist (see `persist_engine_state_to_storage_with_key`): a
+/// successful persist writes the entire engine state, so every in-memory round
+/// becomes durable at once, regardless of which operation triggered it.
+///
+/// Mutual exclusion is provided by the inner mutex itself, NOT by the ENGINE_STATE
+/// guard. `mark`/`pending` and the common clear-on-persist do run under that
+/// guard, but the clear ALSO runs off-guard -- on the startup legacy-envelope
+/// rewrite (`load_engine_state_from_storage` persists before serving begins) and
+/// in `reset_for_tests`. Those off-guard accesses are single-threaded, so the
+/// mutex is effectively uncontended, but it must not be downgraded to a
+/// non-locking primitive on the assumption that ENGINE_STATE serializes access.
+static SIGN_ROUND_PERSIST_PENDING_SESSIONS: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
+
+fn sign_round_persist_pending_sessions() -> &'static Mutex<BTreeSet<String>> {
+    SIGN_ROUND_PERSIST_PENDING_SESSIONS.get_or_init(|| Mutex::new(BTreeSet::new()))
+}
+
+/// Marks that `start_sign_round` established an in-memory round for `session_id`
+/// that is not yet durably persisted. Cleared by the next successful persist of
+/// any kind.
+pub(crate) fn mark_sign_round_persist_pending(session_id: &str) {
+    sign_round_persist_pending_sessions()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(session_id.to_string());
+}
+
+/// Returns true while `session_id`'s `start_sign_round` round is in memory but
+/// not yet durable.
+pub(crate) fn sign_round_persist_pending(session_id: &str) -> bool {
+    sign_round_persist_pending_sessions()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(session_id)
+}
+
+/// Clears every pending sign-round marker. Called on any successful persist (the
+/// whole engine state -- and thus every in-memory round -- is now durable) and on
+/// test reset.
+pub(crate) fn clear_sign_round_persist_pending() {
+    sign_round_persist_pending_sessions()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+}
+
 pub(crate) fn persist_engine_state_to_storage_with_key(
     engine_state: &EngineState,
     key_material: &StateEncryptionKeyMaterial,
@@ -1122,6 +1179,16 @@ pub(crate) fn persist_engine_state_to_storage_with_key(
     }
 
     bytes.zeroize();
+    if persist_result.is_ok() {
+        // A successful persist writes the entire engine state durably -- including
+        // every in-memory start_sign_round round -- so no session's persist-pending
+        // marker still applies, regardless of which operation triggered this
+        // persist. Clearing the whole set here (rather than only at the
+        // start_sign_round persist sites) keeps an idempotent replay of an
+        // already-durable round from being forced to re-persist, which would
+        // otherwise fail during a state-key-provider outage.
+        clear_sign_round_persist_pending();
+    }
     persist_result
 }
 
