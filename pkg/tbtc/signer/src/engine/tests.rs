@@ -2476,7 +2476,7 @@ fn idempotent_sign_round_replay_persists_before_serving_after_persist_outage() {
     // still only in memory: with the key command still failing it surfaces the
     // persist error rather than serving shares without a durable consumed
     // marker (which a restart could otherwise replay). This is the behaviour the
-    // SIGN_ROUND_PERSIST_PENDING marker enforces.
+    // per-session sign-round persist-pending marker enforces.
     start_sign_round(request())
         .expect_err("idempotent replay must not serve shares before the round is durable");
 
@@ -2583,6 +2583,102 @@ fn idempotent_sign_round_replay_survives_outage_after_unrelated_persist_clears_p
     std::env::set_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV, "exit 7");
     start_sign_round(request())
         .expect("idempotent replay of a now-durable round must survive a state-key outage");
+
+    std::env::remove_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV);
+    std::env::remove_var(TBTC_SIGNER_STATE_KEY_PROVIDER_ENV);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn idempotent_sign_round_replay_of_durable_session_survives_unrelated_session_persist_failure() {
+    let _guard = lock_test_state();
+    let _state_path =
+        configure_test_state_path("sign_round_replay_durable_survives_unrelated_persist_failure");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    let _roast_strict_mode = RoastStrictModeGuard::enable();
+
+    let durable_session = "session-sign-round-pending-durable";
+    let failing_session = "session-sign-round-pending-failing";
+    let message_hex = "deadbeef";
+
+    let participants = || {
+        vec![
+            crate::api::DkgParticipant {
+                identifier: 1,
+                public_key_hex: "02aa".to_string(),
+            },
+            crate::api::DkgParticipant {
+                identifier: 2,
+                public_key_hex: "02bb".to_string(),
+            },
+            crate::api::DkgParticipant {
+                identifier: 3,
+                public_key_hex: "02cc".to_string(),
+            },
+        ]
+    };
+
+    let durable_dkg = run_dkg(RunDkgRequest {
+        session_id: durable_session.to_string(),
+        participants: participants(),
+        threshold: 2,
+        dkg_seed_hex: None,
+    })
+    .expect("run dkg for durable session");
+    let failing_dkg = run_dkg(RunDkgRequest {
+        session_id: failing_session.to_string(),
+        participants: participants(),
+        threshold: 2,
+        dkg_seed_hex: None,
+    })
+    .expect("run dkg for failing session");
+
+    let durable_attempt =
+        build_deterministic_attempt_context(durable_session, message_hex, 1, vec![1, 2, 3]);
+    let durable_request = || StartSignRoundRequest {
+        session_id: durable_session.to_string(),
+        member_identifier: 1,
+        message_hex: message_hex.to_string(),
+        key_group: durable_dkg.key_group.clone(),
+        taproot_merkle_root_hex: None,
+        signing_participants: Some(vec![1, 2, 3]),
+        attempt_context: Some(durable_attempt.clone()),
+        attempt_transition_evidence: None,
+    };
+    let failing_attempt =
+        build_deterministic_attempt_context(failing_session, message_hex, 1, vec![1, 2, 3]);
+    let failing_request = StartSignRoundRequest {
+        session_id: failing_session.to_string(),
+        member_identifier: 1,
+        message_hex: message_hex.to_string(),
+        key_group: failing_dkg.key_group.clone(),
+        taproot_merkle_root_hex: None,
+        signing_participants: Some(vec![1, 2, 3]),
+        attempt_context: Some(failing_attempt),
+        attempt_transition_evidence: None,
+    };
+
+    // The durable session establishes and durably persists its round under a
+    // healthy state key.
+    start_sign_round(durable_request()).expect("durable session round must persist");
+
+    // A state-key outage begins. A DIFFERENT session establishes a round whose
+    // persist fails, leaving ONLY that session's persist-pending marker set.
+    std::env::set_var(
+        TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
+        TBTC_SIGNER_STATE_KEY_PROVIDER_COMMAND,
+    );
+    std::env::set_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV, "exit 7");
+    start_sign_round(failing_request)
+        .expect_err("unrelated session round must fail when its persist fails");
+
+    // The durable session's idempotent replay, during the SAME outage, must serve
+    // its cached shares WITHOUT persisting. A process-wide pending marker would
+    // wrongly force it to re-persist and fail here; the per-session marker does
+    // not, because this session's round is already durable.
+    start_sign_round(durable_request())
+        .expect("durable session replay must survive an unrelated session's persist failure");
 
     std::env::remove_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV);
     std::env::remove_var(TBTC_SIGNER_STATE_KEY_PROVIDER_ENV);

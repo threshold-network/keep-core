@@ -5,11 +5,14 @@ use super::*;
 pub(crate) const BOOTSTRAP_SYNTHETIC_CONTRIBUTION_DOMAIN: &str =
     "tbtc-signer-bootstrap-contribution-v1";
 
-// The sign-round persist-pending marker lives in the persistence module
-// (`mark_sign_round_persist_pending` / `sign_round_persist_pending`) so that ANY
-// successful persist clears it, not only `start_sign_round`'s own -- otherwise a
-// later unrelated persist that makes the round durable would leave the marker
-// stale and force an idempotent replay to re-persist during a state-key outage.
+// The sign-round persist-pending markers live in the persistence module
+// (`mark_sign_round_persist_pending` / `sign_round_persist_pending`), keyed PER
+// SESSION. ANY successful persist clears them all, not only `start_sign_round`'s
+// own -- otherwise a later unrelated persist that makes the round durable would
+// leave the marker stale and force an idempotent replay to re-persist during a
+// state-key outage. They are keyed per session so one session's failed persist
+// cannot force an unrelated, already-durable session's replay to re-persist (and
+// fail) during the same outage.
 
 pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState, EngineError> {
     record_hardening_telemetry(|telemetry| {
@@ -264,9 +267,11 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
                 // (the common case) serve the cached round WITHOUT persisting, so
                 // the idempotent replay still survives a state-key-provider
                 // outage, as build_taproot_tx does.
-                if matches_legacy_fingerprint || sign_round_persist_pending() {
-                    // persist_engine_state_to_storage clears the pending marker on
-                    // success (see the persistence module).
+                if matches_legacy_fingerprint || sign_round_persist_pending(&request.session_id) {
+                    // persist_engine_state_to_storage clears the pending markers on
+                    // success (see the persistence module). Only THIS session's own
+                    // not-yet-durable round forces a re-persist here; an unrelated
+                    // session's pending persist does not.
                     persist_engine_state_to_storage(&guard)?;
                 }
 
@@ -412,11 +417,12 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
             session.consumed_attempt_ids.insert(attempt_id);
         }
         session.consumed_sign_round_ids.insert(round_id);
-        // The round is now established in memory but not yet durable. Mark a
-        // persist as pending so a later idempotent cached serve re-persists if
-        // the persist below fails; cleared by the next successful persist (of any
-        // kind).
-        mark_sign_round_persist_pending();
+        // The round is now established in memory but not yet durable. Mark this
+        // session's persist as pending so a later idempotent cached serve
+        // re-persists if the persist below fails; cleared by the next successful
+        // persist (of any kind). Keyed per session so an unrelated, already-durable
+        // session's replay is not forced to re-persist during an outage.
+        mark_sign_round_persist_pending(&request.session_id);
 
         round_state
     };
