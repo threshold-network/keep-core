@@ -146,7 +146,7 @@ fn request_bytes<'a>(ptr: *const u8, len: usize) -> Result<&'a [u8], EngineError
     unsafe { Ok(std::slice::from_raw_parts(ptr, len)) }
 }
 
-fn to_ffi_buffer(bytes: Vec<u8>) -> TbtcBuffer {
+fn to_ffi_buffer(mut bytes: Vec<u8>) -> TbtcBuffer {
     let len = bytes.len();
     if len == 0 {
         return TbtcBuffer {
@@ -155,7 +155,13 @@ fn to_ffi_buffer(bytes: Vec<u8>) -> TbtcBuffer {
         };
     }
 
-    let boxed = bytes.into_boxed_slice();
+    // Copy into an exact-capacity boxed slice, then wipe the source Vec.
+    // `bytes.into_boxed_slice()` shrink-to-fits and reallocates when capacity > len
+    // (serde_json::to_vec over-allocates secret-bearing JSON), which would free the
+    // original secret buffer WITHOUT zeroizing it. free_buffer wipes the boxed
+    // slice on free; we wipe the source here so no un-zeroized copy survives.
+    let boxed: Box<[u8]> = bytes.as_slice().into();
+    bytes.zeroize();
     let ptr = Box::into_raw(boxed) as *mut u8;
 
     TbtcBuffer { ptr, len }

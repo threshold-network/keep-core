@@ -887,9 +887,12 @@ pub(crate) fn decode_encrypted_state_envelope(
 /// Plaintext state is UNAUTHENTICATED, so accepting it would let anyone who can
 /// write the state file forge it (cleared replay markers, attacker key material)
 /// without holding the state-encryption key. Per the secret-material hardening
-/// plan this is an emergency-rollback-only path: compile-time disabled in
-/// release builds, never permitted in a production profile, and otherwise gated
-/// behind an explicit opt-in env flag.
+/// plan this is an emergency-rollback-only path. The load-bearing guard is the
+/// runtime non-production check (a production profile NEVER accepts plaintext,
+/// regardless of build); it is additionally gated off in optimized builds via
+/// `debug_assertions` and behind an explicit opt-in env flag. (Note: a release
+/// build compiled with `debug-assertions = on` would still require both the
+/// non-production profile and the opt-in flag.)
 fn legacy_plaintext_state_permitted() -> bool {
     cfg!(debug_assertions)
         && !signer_profile_is_production()

@@ -141,6 +141,11 @@ pub(crate) struct RefreshHistoryRecord {
     pub(crate) share_count: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) key_group: Option<String>,
+    /// Fingerprint of the refresh request that produced this record, used to
+    /// reject stale / out-of-order retries of an already-accepted refresh.
+    /// Optional for backward compatibility with state written before this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) request_fingerprint: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

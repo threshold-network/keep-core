@@ -9437,6 +9437,66 @@ fn finalize_sign_round_rejects_materially_different_retry_after_canonicalization
 }
 
 #[test]
+fn refresh_shares_allows_new_fingerprint_but_rejects_stale_retry() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("refresh_stale_retry");
+    reset_for_tests();
+
+    let session_id = "session-refresh-stale".to_string();
+    let req_a = RefreshSharesRequest {
+        session_id: session_id.clone(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "aaaa".to_string(),
+        }],
+    };
+    let req_b = RefreshSharesRequest {
+        session_id: session_id.clone(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "bbbb".to_string(),
+        }],
+    };
+
+    // First refresh A.
+    assert_eq!(
+        refresh_shares(req_a.clone())
+            .expect("refresh A")
+            .refresh_epoch,
+        1
+    );
+    // Idempotent replay of A (most recent) returns the cached result, no new epoch.
+    assert_eq!(
+        refresh_shares(req_a.clone())
+            .expect("idempotent replay of A")
+            .refresh_epoch,
+        1
+    );
+    // A genuinely new fingerprint B is a real subsequent periodic refresh.
+    assert_eq!(
+        refresh_shares(req_b.clone())
+            .expect("refresh B")
+            .refresh_epoch,
+        2
+    );
+    // Idempotent replay of B (now most recent) returns the cached result.
+    assert_eq!(
+        refresh_shares(req_b)
+            .expect("idempotent replay of B")
+            .refresh_epoch,
+        2
+    );
+    // A stale retry of A (already accepted, no longer most recent) is rejected --
+    // it must NOT re-derive old shares or bump the epoch forward.
+    let err = refresh_shares(req_a).expect_err("stale retry of A must be rejected");
+    assert!(matches!(err, EngineError::SessionConflict { .. }));
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn refresh_epoch_counter_persists_across_storage_reload() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("refresh_epoch_counter");
@@ -10169,7 +10229,12 @@ fn schema_mismatch_state_file_quarantines_and_resets_when_enabled() {
     let persisted_bytes = serde_json::to_vec(&persisted).expect("encode mismatched schema");
     std::fs::write(&state_path, &persisted_bytes).expect("write mismatched schema state file");
 
+    // Reach schema validation (the test's intent) by opting into the plaintext
+    // rollback path; otherwise the plaintext gate refuses the bytes before the
+    // schema check and the quarantine-and-reset would fire for the wrong reason.
+    std::env::set_var(TBTC_SIGNER_PERMIT_PLAINTEXT_STATE_ROLLBACK_ENV, "true");
     let loaded = load_engine_state_from_storage().expect("recover from schema mismatch state");
+    std::env::remove_var(TBTC_SIGNER_PERMIT_PLAINTEXT_STATE_ROLLBACK_ENV);
     assert!(loaded.sessions.is_empty());
     assert_eq!(loaded.refresh_epoch_counter, 0);
     assert!(!state_path.exists());
