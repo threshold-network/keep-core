@@ -11076,6 +11076,7 @@ fn init_signer_config_canonicalizes_list_and_bool_encodings() {
         enable_auto_quarantine: Some(false),
         auto_quarantine_dao_allowlist_identifiers: Some(vec![3, 1, 2, 2]),
         policy_allowed_script_classes: Some(vec!["P2TR".to_string(), "p2wpkh".to_string()]),
+        permit_plaintext_state_rollback: Some(true),
         ..InitSignerConfigRequest::default()
     })
     .expect("convert request");
@@ -11099,6 +11100,14 @@ fn init_signer_config_canonicalizes_list_and_bool_encodings() {
             .get(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV)
             .map(String::as_str),
         Some("P2TR,p2wpkh")
+    );
+    // The plaintext rollback opt-in is reachable via init-time config, not only
+    // the process environment.
+    assert_eq!(
+        values
+            .get(TBTC_SIGNER_PERMIT_PLAINTEXT_STATE_ROLLBACK_ENV)
+            .map(String::as_str),
+        Some("true")
     );
 
     let empty_list = config_values_from_request(&InitSignerConfigRequest {

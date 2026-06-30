@@ -241,6 +241,14 @@ pub(crate) fn config_values_from_request(
         TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV,
         request.enforce_signing_policy_firewall,
     );
+    // Make the emergency plaintext-state rollback opt-in reachable for hosts that
+    // configure via init-time config (where signer_env_var reads the installed
+    // config, not the process environment), not just raw env.
+    insert_bool(
+        &mut values,
+        TBTC_SIGNER_PERMIT_PLAINTEXT_STATE_ROLLBACK_ENV,
+        request.permit_plaintext_state_rollback,
+    );
     insert_bool(
         &mut values,
         TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV,
