@@ -45,10 +45,42 @@ pub fn serialize_response<T: serde::Serialize>(response: &T) -> Result<Vec<u8>, 
         .map_err(|e| EngineError::Internal(format!("failed to encode response: {e}")))
 }
 
+// Install a panic hook that redacts the panic payload outside the development
+// profile. `catch_unwind` does not suppress Rust's default hook, so a panic
+// carrying a path / config value / secret would otherwise print verbatim to
+// stderr before it is converted to a redacted ErrorResponse. Installed once.
+fn install_redacting_panic_hook() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let development_profile =
+                crate::engine::signer_env_var(crate::engine::TBTC_SIGNER_PROFILE_ENV)
+                    .map(|raw| {
+                        raw.trim()
+                            .eq_ignore_ascii_case(crate::engine::TBTC_SIGNER_PROFILE_DEVELOPMENT)
+                    })
+                    .unwrap_or(false);
+            if development_profile {
+                default_hook(info);
+            } else if let Some(location) = info.location() {
+                eprintln!(
+                    "panic at {}:{} (payload redacted)",
+                    location.file(),
+                    location.line()
+                );
+            } else {
+                eprintln!("panic (payload redacted)");
+            }
+        }));
+    });
+}
+
 pub fn ffi_entry<F>(f: F) -> TbtcSignerResult
 where
     F: FnOnce() -> Result<Vec<u8>, EngineError>,
 {
+    install_redacting_panic_hook();
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(Ok(bytes)) => success_from_serialized(bytes),
         Ok(Err(err)) => error_result(err),

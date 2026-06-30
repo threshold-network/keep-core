@@ -483,9 +483,10 @@ fn dkg_part3_normalizes_odd_y_group_key_and_secret_shares() {
             signing_package_hex: signing_package.signing_package_hex.clone(),
             nonces_hex: nonces_by_participant
                 .remove(&id)
-                .expect("participant nonces"),
+                .expect("participant nonces")
+                .into(),
             key_package_identifier: part3_results[&id].key_package.identifier.clone(),
-            key_package_hex: part3_results[&id].key_package.data_hex.clone(),
+            key_package_hex: part3_results[&id].key_package.data_hex.clone().into(),
         })
         .expect("sign share");
         signature_shares.push(result.signature_share);
@@ -11766,9 +11767,9 @@ fn interactive_session_full_round_trip_aggregates_bip340() {
 
     let member2_share = sign_share(SignShareRequest {
         signing_package_hex: signing_package_hex.clone(),
-        nonces_hex: member2.nonces_hex,
+        nonces_hex: member2.nonces_hex.into(),
         key_package_identifier: key_packages[&2].identifier.clone(),
-        key_package_hex: key_packages[&2].data_hex.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone().into(),
     })
     .expect("member 2 stateless share");
 
@@ -12382,16 +12383,16 @@ fn interactive_aggregate_cleanup_is_message_bound() {
     );
     let share1_b = sign_share(SignShareRequest {
         signing_package_hex: package_b.clone(),
-        nonces_hex: m1_b.nonces_hex,
+        nonces_hex: m1_b.nonces_hex.into(),
         key_package_identifier: key_packages[&1].identifier.clone(),
-        key_package_hex: key_packages[&1].data_hex.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone().into(),
     })
     .expect("stateless share 1 over B");
     let share2_b = sign_share(SignShareRequest {
         signing_package_hex: package_b.clone(),
-        nonces_hex: m2_b.nonces_hex,
+        nonces_hex: m2_b.nonces_hex.into(),
         key_package_identifier: key_packages[&2].identifier.clone(),
-        key_package_hex: key_packages[&2].data_hex.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone().into(),
     })
     .expect("stateless share 2 over B");
     interactive_aggregate(InteractiveAggregateRequest {
@@ -13806,9 +13807,9 @@ fn interactive_aggregate_produces_and_self_verifies_bip340() {
     .expect("round 2 share");
     let member2_share = sign_share(SignShareRequest {
         signing_package_hex: signing_package_hex.clone(),
-        nonces_hex: member2.nonces_hex,
+        nonces_hex: member2.nonces_hex.into(),
         key_package_identifier: key_packages[&2].identifier.clone(),
-        key_package_hex: key_packages[&2].data_hex.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone().into(),
     })
     .expect("member 2 share");
 
@@ -13892,9 +13893,9 @@ fn interactive_aggregate_rejects_repeat_aggregate_of_completed_attempt() {
     .expect("round 2 share");
     let member2_share = sign_share(SignShareRequest {
         signing_package_hex: signing_package_hex.clone(),
-        nonces_hex: member2.nonces_hex,
+        nonces_hex: member2.nonces_hex.into(),
         key_package_identifier: key_packages[&2].identifier.clone(),
-        key_package_hex: key_packages[&2].data_hex.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone().into(),
     })
     .expect("member 2 share");
 
@@ -14001,9 +14002,9 @@ fn interactive_aggregate_completion_marker_survives_process_restart() {
     .expect("round 2 share");
     let member2_share = sign_share(SignShareRequest {
         signing_package_hex: signing_package_hex.clone(),
-        nonces_hex: member2.nonces_hex,
+        nonces_hex: member2.nonces_hex.into(),
         key_package_identifier: key_packages[&2].identifier.clone(),
-        key_package_hex: key_packages[&2].data_hex.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone().into(),
     })
     .expect("member 2 share");
 
@@ -14108,9 +14109,9 @@ fn interactive_aggregate_rejects_invalid_share_fail_closed() {
     );
     let bogus_share = sign_share(SignShareRequest {
         signing_package_hex: other_package,
-        nonces_hex: bogus_member2.nonces_hex,
+        nonces_hex: bogus_member2.nonces_hex.into(),
         key_package_identifier: key_packages[&2].identifier.clone(),
-        key_package_hex: key_packages[&2].data_hex.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone().into(),
     })
     .expect("bogus member 2 share");
 
@@ -14215,9 +14216,9 @@ fn interactive_aggregate_names_all_invalid_share_culprits() {
     );
     let bogus1_share = sign_share(SignShareRequest {
         signing_package_hex: bogus1_package,
-        nonces_hex: bogus1.nonces_hex,
+        nonces_hex: bogus1.nonces_hex.into(),
         key_package_identifier: key_packages[&1].identifier.clone(),
-        key_package_hex: key_packages[&1].data_hex.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone().into(),
     })
     .expect("bogus member 1 share");
     let bogus2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
@@ -14240,9 +14241,9 @@ fn interactive_aggregate_names_all_invalid_share_culprits() {
     );
     let bogus2_share = sign_share(SignShareRequest {
         signing_package_hex: bogus2_package,
-        nonces_hex: bogus2.nonces_hex,
+        nonces_hex: bogus2.nonces_hex.into(),
         key_package_identifier: key_packages[&2].identifier.clone(),
-        key_package_hex: key_packages[&2].data_hex.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone().into(),
     })
     .expect("bogus member 2 share");
 
@@ -14335,9 +14336,9 @@ fn interactive_aggregate_sweeps_expired_sessions() {
     );
     let parseable_share = sign_share(SignShareRequest {
         signing_package_hex: parseable_package.clone(),
-        nonces_hex: member1.nonces_hex,
+        nonces_hex: member1.nonces_hex.into(),
         key_package_identifier: key_packages[&1].identifier.clone(),
-        key_package_hex: key_packages[&1].data_hex.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone().into(),
     })
     .expect("member 1 share");
 
@@ -14631,9 +14632,9 @@ fn verify_signature_share_verdicts_match_aggregate_and_handle_edges() {
     .expect("round 2 share");
     let member2_valid = sign_share(SignShareRequest {
         signing_package_hex: signing_package_hex.clone(),
-        nonces_hex: member2_nonces,
+        nonces_hex: member2_nonces.into(),
         key_package_identifier: key_packages[&2].identifier.clone(),
-        key_package_hex: key_packages[&2].data_hex.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone().into(),
     })
     .expect("member 2 valid share");
 
@@ -14659,9 +14660,9 @@ fn verify_signature_share_verdicts_match_aggregate_and_handle_edges() {
     );
     let bogus_share = sign_share(SignShareRequest {
         signing_package_hex: other_package,
-        nonces_hex: bogus_member2.nonces_hex,
+        nonces_hex: bogus_member2.nonces_hex.into(),
         key_package_identifier: key_packages[&2].identifier.clone(),
-        key_package_hex: key_packages[&2].data_hex.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone().into(),
     })
     .expect("bogus member 2 share");
 

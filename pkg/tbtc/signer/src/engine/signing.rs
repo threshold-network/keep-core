@@ -198,6 +198,18 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
                         EngineError::Internal("missing DKG public key package cache".to_string())
                     })?;
 
+                // Re-check quarantine on cached-round reuse: auto-quarantine may
+                // have marked a participant after the round was opened (e.g. from
+                // another session's transition) but before this reuse. The
+                // new-round path's enforce_not_quarantined_identifiers below is
+                // skipped on this branch, so apply it here too.
+                enforce_not_quarantined_identifiers(
+                    &request.session_id,
+                    &signing_participants,
+                    &quarantined_operator_identifiers,
+                    auto_quarantine_config.as_ref(),
+                )?;
+
                 round_state.own_contribution = build_real_signature_share_contribution(
                     dkg_key_packages,
                     dkg_public_key_package,
