@@ -464,6 +464,24 @@ pub fn refresh_shares(request: RefreshSharesRequest) -> Result<RefreshSharesResu
             ),
         });
     }
+    // Preserve the previously-accepted fingerprint before overwriting it. If the
+    // last accepted refresh predates RefreshHistoryRecord.request_fingerprint
+    // (loaded from legacy state, where history records deserialize with None), its
+    // fingerprint lives only in refresh_request_fingerprint; backfill it onto the
+    // most-recent history record so a delayed retry of it is still recognized as
+    // stale instead of being re-executed as a new refresh.
+    if let Some(previous_fingerprint) = session.refresh_request_fingerprint.clone() {
+        let already_tracked = session.refresh_history.iter().any(|record| {
+            record.request_fingerprint.as_deref() == Some(previous_fingerprint.as_str())
+        });
+        if !already_tracked {
+            if let Some(last) = session.refresh_history.last_mut() {
+                if last.request_fingerprint.is_none() {
+                    last.request_fingerprint = Some(previous_fingerprint);
+                }
+            }
+        }
+    }
     session.refresh_request_fingerprint = Some(request_fingerprint.clone());
     session.refresh_result = Some(result.clone());
     session.refresh_history.push(RefreshHistoryRecord {

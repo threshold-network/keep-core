@@ -9497,6 +9497,58 @@ fn refresh_shares_allows_new_fingerprint_but_rejects_stale_retry() {
 }
 
 #[test]
+fn refresh_shares_rejects_legacy_pre_upgrade_fingerprint_after_new_refresh() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("refresh_legacy_fingerprint");
+    reset_for_tests();
+
+    let session_id = "session-refresh-legacy".to_string();
+    let req_a = RefreshSharesRequest {
+        session_id: session_id.clone(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "aaaa".to_string(),
+        }],
+    };
+    let req_b = RefreshSharesRequest {
+        session_id: session_id.clone(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "bbbb".to_string(),
+        }],
+    };
+
+    // Accept refresh A.
+    refresh_shares(req_a.clone()).expect("refresh A");
+
+    // Simulate state written before RefreshHistoryRecord.request_fingerprint
+    // existed: A's history record deserializes with None, so A's fingerprint
+    // survives only in session.refresh_request_fingerprint.
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard.sessions.get_mut(&session_id).expect("session state");
+        for record in session.refresh_history.iter_mut() {
+            record.request_fingerprint = None;
+        }
+        persist_engine_state_to_storage(&guard).expect("persist legacy-shaped state");
+    }
+    reload_state_from_storage_for_tests();
+
+    // A new refresh B is accepted and overwrites refresh_request_fingerprint; the
+    // backfill must move A's fingerprint into history before that overwrite.
+    assert_eq!(refresh_shares(req_b).expect("refresh B").refresh_epoch, 2);
+
+    // A delayed retry of the pre-upgrade refresh A must be rejected as stale, not
+    // re-executed as a new epoch.
+    let err = refresh_shares(req_a).expect_err("stale legacy retry of A must be rejected");
+    assert!(matches!(err, EngineError::SessionConflict { .. }));
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn refresh_epoch_counter_persists_across_storage_reload() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("refresh_epoch_counter");
