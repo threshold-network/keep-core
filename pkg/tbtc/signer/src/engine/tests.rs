@@ -1692,6 +1692,63 @@ fn policy_bound_message_hex_from_tx_result(tx_result: &TransactionResult) -> Str
 }
 
 #[test]
+fn signing_policy_firewall_is_enforced_in_production_by_default() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    // Development without the opt-in flag: not enforced (unchanged default).
+    std::env::remove_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV);
+    assert!(
+        !signing_policy_firewall_enforced(),
+        "firewall must stay opt-in outside production"
+    );
+
+    // Production: always enforced, no flag required (mirrors the provenance gate).
+    std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_PRODUCTION);
+    assert!(
+        signing_policy_firewall_enforced(),
+        "firewall must be force-enabled in production"
+    );
+
+    reset_for_tests();
+}
+
+#[test]
+fn signing_policy_firewall_config_uses_builtin_defaults_in_production() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_PRODUCTION);
+
+    // No explicit firewall policy env -> conservative built-in defaults, so a
+    // production signer boots without shipping full policy config.
+    for env in [
+        TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV,
+        TBTC_SIGNER_POLICY_MAX_OUTPUT_COUNT_ENV,
+        TBTC_SIGNER_POLICY_MAX_OUTPUT_VALUE_SATS_ENV,
+        TBTC_SIGNER_POLICY_MAX_TOTAL_OUTPUT_VALUE_SATS_ENV,
+    ] {
+        std::env::remove_var(env);
+    }
+
+    let config = load_signing_policy_firewall_config()
+        .expect("firewall config loads with built-in defaults")
+        .expect("firewall is enforced in production");
+
+    let expected_classes: std::collections::HashSet<String> = DEFAULT_ALLOWED_SCRIPT_CLASSES
+        .iter()
+        .map(|class| class.to_string())
+        .collect();
+    assert_eq!(config.allowed_script_classes, expected_classes);
+    // "other" (non-standard) is not in the default allowlist -> fails closed.
+    assert!(!config.allowed_script_classes.contains("other"));
+    assert_eq!(config.max_output_count, DEFAULT_MAX_OUTPUT_COUNT);
+    assert_eq!(config.max_output_value_sats, BITCOIN_MAX_MONEY_SATS);
+    assert_eq!(config.max_total_output_value_sats, BITCOIN_MAX_MONEY_SATS);
+
+    reset_for_tests();
+}
+
+#[test]
 fn build_taproot_tx_signing_policy_firewall_rejects_disallowed_script_class() {
     let _guard = lock_test_state();
     reset_for_tests();
@@ -11409,19 +11466,19 @@ fn init_signer_config_rolls_back_install_when_policy_validation_fails() {
     let _clear = InstalledConfigClearGuard;
     clear_state_storage_policy_overrides();
 
-    // Firewall enforcement on, but the required allowed-script-classes knob
-    // is absent from the same config (and, wholesale semantics, the
-    // environment cannot supply it) -> the loader rejects and the install
-    // must roll back. (Admission knobs would NOT trip this: that loader
-    // falls back to defaults for absent values.)
+    // Firewall enforcement on with an INVALID policy (a UTC start hour without a
+    // matching end hour) -> the loader rejects and the install must roll back.
+    // Absent firewall knobs no longer trip this: the loader now falls back to
+    // conservative built-in defaults, so only an explicitly-invalid value fails.
     let error = init_signer_config(InitSignerConfigRequest {
         profile: Some("development".to_string()),
         enforce_signing_policy_firewall: Some(true),
+        policy_allowed_utc_start_hour: Some(8),
         ..InitSignerConfigRequest::default()
     })
-    .expect_err("incomplete firewall policy must fail the init");
+    .expect_err("invalid firewall policy must fail the init");
     assert!(
-        error.to_string().contains("missing required env"),
+        error.to_string().contains("must be configured together"),
         "unexpected error: {error}"
     );
 

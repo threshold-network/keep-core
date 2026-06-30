@@ -142,8 +142,11 @@ Semantics:
   request is rejected.
 - The init validates enforcement-gated policy combinations (admission,
   signing-policy firewall, auto-quarantine) plus the provenance gate, so a
-  misconfigured signer fails at startup rather than at first signing. Since
-  production forces the provenance gate, production configs must carry a
+  misconfigured signer fails at startup rather than at first signing. Production
+  forces both the provenance gate and the signing-policy firewall; the firewall
+  resolves to conservative built-in defaults (standard tBTC script classes,
+  permissive numeric caps) so it needs no extra config to boot, while the
+  provenance gate requires production configs to carry a
   complete attestation set (`provenance_attestation_status`/`_payload`/
   `_signature_hex`, `provenance_trust_root`, `min_approved_version`); the
   init-time pass does not exempt runtime re-checks — attestation TTL aging
@@ -385,10 +388,15 @@ Scenario coverage and pass criteria:
   - `TBTC_SIGNER_ADMISSION_ALLOWLIST_IDENTIFIERS` (comma-separated; unset to disable, empty string is invalid)
 - Signing policy firewall config:
   - `TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL`
-  - `TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES` (comma-separated, e.g. `p2tr,p2wpkh`)
-  - `TBTC_SIGNER_POLICY_MAX_OUTPUT_COUNT` (required when firewall is enabled)
-  - `TBTC_SIGNER_POLICY_MAX_OUTPUT_VALUE_SATS` (required when firewall is enabled)
-  - `TBTC_SIGNER_POLICY_MAX_TOTAL_OUTPUT_VALUE_SATS` (required when firewall is enabled)
+  - `TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES` (comma-separated, e.g.
+    `p2tr,p2wpkh`; defaults to the standard tBTC output forms
+    `p2pkh,p2sh,p2wpkh,p2wsh,p2tr` when unset, failing closed on other forms)
+  - `TBTC_SIGNER_POLICY_MAX_OUTPUT_COUNT` (defaults to a conservative built-in
+    bound when unset)
+  - `TBTC_SIGNER_POLICY_MAX_OUTPUT_VALUE_SATS` (defaults to permissive/unbounded
+    when unset; operators should tighten per wallet sizing)
+  - `TBTC_SIGNER_POLICY_MAX_TOTAL_OUTPUT_VALUE_SATS` (defaults to
+    permissive/unbounded when unset)
   - `TBTC_SIGNER_POLICY_ALLOWED_UTC_START_HOUR` / `TBTC_SIGNER_POLICY_ALLOWED_UTC_END_HOUR`
     - Note: setting `ALLOWED_UTC_START_HOUR == ALLOWED_UTC_END_HOUR` opens a
       24-hour window (all hours permitted).
@@ -431,8 +439,10 @@ Scenario coverage and pass criteria:
     - `TBTC_SIGNER_CANARY_MAX_FINALIZE_SIGN_ROUND_P95_MS`
     - `TBTC_SIGNER_CANARY_MAX_POLICY_REJECT_RATE_BPS`
 - Known limitations (P0 scope):
-  - Policy gates default to disabled: provenance/admission/signing enforcement
-    gates require explicit `=true` env vars.
+  - Policy gates default to disabled in non-production profiles
+    (provenance/admission/signing enforcement gates require explicit `=true`
+    env vars). In a production profile the provenance gate and the
+    signing-policy firewall are force-enabled regardless.
 - `StartSignRound.attempt_transition_evidence.exclusion_evidence` schema:
   - `reason`: `coordinator_timeout` or `invalid_share_proof`
   - `excluded_member_identifiers`: members excluded from the next attempt
