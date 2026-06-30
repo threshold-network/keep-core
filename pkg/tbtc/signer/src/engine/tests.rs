@@ -700,6 +700,7 @@ fn persisted_session_state_fixture() -> PersistedSessionState {
         refresh_request_fingerprint: None,
         refresh_result: None,
         refresh_history: vec![],
+        refresh_count: 0,
         emergency_rekey_event: None,
         consumed_interactive_attempt_markers: vec![],
         aggregated_interactive_attempt_markers: vec![],
@@ -9542,6 +9543,45 @@ fn refresh_shares_rejects_legacy_pre_upgrade_fingerprint_after_new_refresh() {
     // re-executed as a new epoch.
     let err = refresh_shares(req_a).expect_err("stale legacy retry of A must be rejected");
     assert!(matches!(err, EngineError::SessionConflict { .. }));
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn refresh_cadence_status_count_survives_history_pruning() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("refresh_count_pruning");
+    reset_for_tests();
+
+    let session_id = "session-refresh-count".to_string();
+    for hex in ["aaaa", "bbbb", "cccc"] {
+        refresh_shares(RefreshSharesRequest {
+            session_id: session_id.clone(),
+            current_shares: vec![ShareMaterial {
+                identifier: 1,
+                encrypted_share_hex: hex.to_string(),
+            }],
+        })
+        .expect("refresh");
+    }
+
+    // Simulate the MAX_REFRESH_HISTORY prune (drop older records) without touching
+    // the monotonic refresh_count.
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard.sessions.get_mut(&session_id).expect("session state");
+        assert_eq!(session.refresh_count, 3);
+        session.refresh_history.drain(0..2);
+    }
+
+    let status = refresh_cadence_status(RefreshCadenceStatusRequest {
+        session_id: session_id.clone(),
+    })
+    .expect("cadence status");
+    // Reports the true total (3), not the pruned history window (1).
+    assert_eq!(status.refresh_count, 3);
 
     reset_for_tests();
     cleanup_test_state_artifacts(&state_path);

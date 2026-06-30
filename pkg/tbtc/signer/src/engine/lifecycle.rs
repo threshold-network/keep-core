@@ -109,7 +109,7 @@ pub fn refresh_cadence_status(
 
     Ok(RefreshCadenceStatusResult {
         session_id: request.session_id,
-        refresh_count: session.refresh_history.len() as u64,
+        refresh_count: session.refresh_count,
         last_refresh_epoch: last_refresh_record
             .map(|record| record.refresh_epoch)
             .unwrap_or(0),
@@ -482,6 +482,13 @@ pub fn refresh_shares(request: RefreshSharesRequest) -> Result<RefreshSharesResu
             }
         }
     }
+    // Monotonic total refresh count, independent of refresh_history pruning;
+    // backfilled from the retained history length for sessions written before
+    // this field existed.
+    session.refresh_count = session
+        .refresh_count
+        .max(session.refresh_history.len() as u64)
+        .saturating_add(1);
     session.refresh_request_fingerprint = Some(request_fingerprint.clone());
     session.refresh_result = Some(result.clone());
     session.refresh_history.push(RefreshHistoryRecord {

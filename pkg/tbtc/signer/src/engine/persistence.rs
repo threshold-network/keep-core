@@ -51,6 +51,8 @@ pub(crate) struct PersistedSessionState {
     pub(crate) refresh_result: Option<RefreshSharesResult>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) refresh_history: Vec<RefreshHistoryRecord>,
+    #[serde(default)]
+    pub(crate) refresh_count: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) emergency_rekey_event: Option<EmergencyRekeyEvent>,
     // Phase 7.1 interactive consumption markers - the ONLY durable
@@ -1477,6 +1479,7 @@ impl TryFrom<PersistedSessionState> for SessionState {
             refresh_request_fingerprint: persisted.refresh_request_fingerprint,
             refresh_result: persisted.refresh_result,
             refresh_history: persisted.refresh_history,
+            refresh_count: persisted.refresh_count,
             emergency_rekey_event: persisted.emergency_rekey_event,
             // Live interactive state never restores: nonces are gone by
             // construction after a restart, so the attempt fails safe and
@@ -1622,6 +1625,7 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             refresh_request_fingerprint: session_state.refresh_request_fingerprint.clone(),
             refresh_result: session_state.refresh_result.clone(),
             refresh_history: session_state.refresh_history.clone(),
+            refresh_count: session_state.refresh_count,
             emergency_rekey_event: session_state.emergency_rekey_event.clone(),
             consumed_interactive_attempt_markers,
             aggregated_interactive_attempt_markers,
