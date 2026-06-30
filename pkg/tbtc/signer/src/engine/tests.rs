@@ -10159,6 +10159,10 @@ fn truncated_state_file_quarantines_and_resets_when_enabled() {
     clear_state_storage_policy_overrides();
 }
 
+// The plaintext-acceptance path is debug-only (legacy_plaintext_state_permitted
+// gates on cfg!(debug_assertions)), so this rollback-path test is too; in a
+// release build the bytes are always refused before schema validation is reached.
+#[cfg(debug_assertions)]
 #[test]
 fn schema_mismatch_state_file_fails_closed_by_default() {
     let _guard = lock_test_state();
@@ -10202,6 +10206,7 @@ fn schema_mismatch_state_file_fails_closed_by_default() {
     clear_state_storage_policy_overrides();
 }
 
+#[cfg(debug_assertions)] // plaintext rollback path is debug-only; see legacy_plaintext_state_permitted
 #[test]
 fn schema_mismatch_state_file_quarantines_and_resets_when_enabled() {
     let _guard = lock_test_state();
@@ -10329,6 +10334,7 @@ fn persisted_state_is_encrypted_envelope() {
     clear_state_storage_policy_overrides();
 }
 
+#[cfg(debug_assertions)] // plaintext rollback path is debug-only; see legacy_plaintext_state_permitted
 #[test]
 fn legacy_plaintext_state_migrates_to_encrypted_envelope_on_load() {
     let _guard = lock_test_state();
