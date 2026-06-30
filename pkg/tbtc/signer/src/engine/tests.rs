@@ -10121,10 +10121,14 @@ fn schema_mismatch_state_file_fails_closed_by_default() {
     let persisted_bytes = serde_json::to_vec(&persisted).expect("encode mismatched schema");
     std::fs::write(&state_path, &persisted_bytes).expect("write mismatched schema state file");
 
+    // Schema validation runs only after the plaintext gate, so opt into the
+    // legacy plaintext rollback path (development profile + flag) to reach it.
+    std::env::set_var(TBTC_SIGNER_PERMIT_PLAINTEXT_STATE_ROLLBACK_ENV, "true");
     let err = match load_engine_state_from_storage() {
         Ok(_) => panic!("expected schema mismatch failure"),
         Err(err) => err,
     };
+    std::env::remove_var(TBTC_SIGNER_PERMIT_PLAINTEXT_STATE_ROLLBACK_ENV);
     assert!(matches!(err, EngineError::Internal(_)));
 
     let err_message = err.to_string();
@@ -10282,7 +10286,18 @@ fn legacy_plaintext_state_migrates_to_encrypted_envelope_on_load() {
     let plaintext_bytes = serde_json::to_vec(&plaintext_state).expect("encode plaintext state");
     std::fs::write(&state_path, &plaintext_bytes).expect("write plaintext state file");
 
+    // Without the opt-in rollback flag the unauthenticated plaintext is refused
+    // (fail-closed), even in a non-production profile.
+    assert!(
+        load_engine_state_from_storage().is_err(),
+        "plaintext signer state must be rejected without the rollback opt-in"
+    );
+
+    // Plaintext load is an opt-in emergency-rollback path: development profile
+    // (selected by reset_for_tests) + this flag.
+    std::env::set_var(TBTC_SIGNER_PERMIT_PLAINTEXT_STATE_ROLLBACK_ENV, "true");
     let loaded = load_engine_state_from_storage().expect("load and migrate legacy plaintext");
+    std::env::remove_var(TBTC_SIGNER_PERMIT_PLAINTEXT_STATE_ROLLBACK_ENV);
     assert_eq!(loaded.sessions.len(), 1);
     assert_eq!(loaded.refresh_epoch_counter, 7);
 

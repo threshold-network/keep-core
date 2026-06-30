@@ -2,6 +2,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use serde::de::DeserializeOwned;
 
+use zeroize::Zeroize;
+
 use crate::api::ErrorResponse;
 use crate::errors::EngineError;
 
@@ -88,7 +90,13 @@ pub fn free_buffer(ptr: *mut u8, len: usize) {
     }
 
     unsafe {
-        drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)));
+        let mut buffer = Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len));
+        // Wipe any plaintext secret material (e.g. FROST nonces, DKG/key-package
+        // bytes) before deallocation rather than trusting every FFI caller to do
+        // it correctly. Leaking a nonce after a share is produced can expose the
+        // signing share. `zeroize` is a volatile wipe the optimizer cannot elide.
+        buffer.zeroize();
+        drop(buffer);
     }
 }
 

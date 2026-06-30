@@ -393,15 +393,18 @@ pub fn refresh_shares(request: RefreshSharesRequest) -> Result<RefreshSharesResu
 
         if let Some(existing) = &session.refresh_request_fingerprint {
             if existing == &request_fingerprint {
+                // Idempotent replay of the *same* refresh request: return the
+                // cached result.
                 return session
                     .refresh_result
                     .clone()
                     .ok_or_else(|| EngineError::Internal("missing refresh cache".to_string()));
             }
 
-            return Err(EngineError::SessionConflict {
-                session_id: request.session_id,
-            });
+            // A different fingerprint is a subsequent periodic refresh (updated
+            // current_shares), not a conflict. Fall through to perform it so a
+            // long-lived session can advance refresh_history / refresh_count /
+            // cadence past the first refresh.
         }
     }
     ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;

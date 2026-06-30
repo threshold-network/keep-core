@@ -882,6 +882,22 @@ pub(crate) fn decode_encrypted_state_envelope(
         .map_err(|e| EngineError::Internal(format!("failed to decode decrypted signer state: {e}")))
 }
 
+/// Whether the legacy unencrypted plaintext state path may be accepted.
+///
+/// Plaintext state is UNAUTHENTICATED, so accepting it would let anyone who can
+/// write the state file forge it (cleared replay markers, attacker key material)
+/// without holding the state-encryption key. Per the secret-material hardening
+/// plan this is an emergency-rollback-only path: compile-time disabled in
+/// release builds, never permitted in a production profile, and otherwise gated
+/// behind an explicit opt-in env flag.
+fn legacy_plaintext_state_permitted() -> bool {
+    cfg!(debug_assertions)
+        && !signer_profile_is_production()
+        && signer_env_var(TBTC_SIGNER_PERMIT_PLAINTEXT_STATE_ROLLBACK_ENV)
+            .map(|raw_value| truthy_env_flag(&raw_value))
+            .unwrap_or(false)
+}
+
 pub(crate) fn decode_persisted_state_storage_format(
     bytes: &[u8],
 ) -> Result<PersistedStateStorageFormat, EngineError> {
@@ -893,6 +909,21 @@ pub(crate) fn decode_persisted_state_storage_format(
             persisted,
             should_rewrite,
         });
+    }
+
+    // The bytes are not an encrypted envelope. Only fall back to the legacy
+    // UNAUTHENTICATED plaintext format on the gated emergency-rollback path;
+    // otherwise refuse, so an attacker who can write the state file cannot
+    // bypass the AEAD envelope (forged replay markers / key material) without
+    // the state-encryption key.
+    if !legacy_plaintext_state_permitted() {
+        return Err(EngineError::Internal(
+            "refusing to load unauthenticated plaintext signer state; an \
+             encrypted state envelope is required (legacy plaintext is an \
+             emergency-rollback-only path, disabled in production and release \
+             builds)"
+                .to_string(),
+        ));
     }
 
     let persisted = serde_json::from_slice::<PersistedEngineState>(bytes).map_err(|e| {
