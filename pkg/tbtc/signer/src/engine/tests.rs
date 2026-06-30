@@ -9499,6 +9499,53 @@ fn refresh_shares_allows_new_fingerprint_but_rejects_stale_retry() {
 }
 
 #[test]
+fn refresh_shares_rejects_legacy_fingerprint_with_empty_history() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("refresh_legacy_empty_history");
+    reset_for_tests();
+
+    let session_id = "session-refresh-legacy-empty".to_string();
+    let req_a = RefreshSharesRequest {
+        session_id: session_id.clone(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "aaaa".to_string(),
+        }],
+    };
+    let req_b = RefreshSharesRequest {
+        session_id: session_id.clone(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "bbbb".to_string(),
+        }],
+    };
+
+    refresh_shares(req_a.clone()).expect("refresh A");
+
+    // Simulate state written before refresh_history existed: the fingerprint and
+    // cached result are set, but refresh_history is empty.
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard.sessions.get_mut(&session_id).expect("session state");
+        session.refresh_history.clear();
+        assert!(session.refresh_request_fingerprint.is_some());
+        assert!(session.refresh_result.is_some());
+        persist_engine_state_to_storage(&guard).expect("persist legacy-shaped state");
+    }
+    reload_state_from_storage_for_tests();
+
+    // Refresh B must synthesize a history record for A (no record to backfill onto)
+    // before overwriting the fingerprint, so a delayed retry of A is rejected.
+    refresh_shares(req_b).expect("refresh B");
+    let err = refresh_shares(req_a).expect_err("stale retry of A must be rejected");
+    assert!(matches!(err, EngineError::SessionConflict { .. }));
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn refresh_shares_rejects_legacy_pre_upgrade_fingerprint_after_new_refresh() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("refresh_legacy_fingerprint");

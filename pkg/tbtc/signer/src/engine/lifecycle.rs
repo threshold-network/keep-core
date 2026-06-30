@@ -479,6 +479,20 @@ pub fn refresh_shares(request: RefreshSharesRequest) -> Result<RefreshSharesResu
                 if last.request_fingerprint.is_none() {
                     last.request_fingerprint = Some(previous_fingerprint);
                 }
+            } else if let Some(previous_result) = session.refresh_result.clone() {
+                // Legacy state can carry a fingerprint with an EMPTY history
+                // (refresh_history postdates refresh_request_fingerprint), so there
+                // is no record to backfill onto. Synthesize one from the cached
+                // result so the previous fingerprint is still recognized for
+                // stale-retry rejection. Its epoch is the prior refresh's, so the
+                // history stays strictly increasing once the new record is appended.
+                session.refresh_history.push(RefreshHistoryRecord {
+                    refresh_epoch: previous_result.refresh_epoch,
+                    refreshed_at_unix: now_unix(),
+                    share_count: previous_result.new_shares.len().min(u16::MAX as usize) as u16,
+                    key_group: session.dkg_result.as_ref().map(|dkg| dkg.key_group.clone()),
+                    request_fingerprint: Some(previous_fingerprint),
+                });
             }
         }
     }
