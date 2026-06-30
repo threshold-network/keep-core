@@ -9550,6 +9550,49 @@ fn refresh_shares_rejects_legacy_pre_upgrade_fingerprint_after_new_refresh() {
 }
 
 #[test]
+fn refresh_count_backfills_from_history_on_legacy_load() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("refresh_count_legacy_load");
+    reset_for_tests();
+
+    let session_id = "session-refresh-count-legacy".to_string();
+    for hex in ["aaaa", "bbbb"] {
+        refresh_shares(RefreshSharesRequest {
+            session_id: session_id.clone(),
+            current_shares: vec![ShareMaterial {
+                identifier: 1,
+                encrypted_share_hex: hex.to_string(),
+            }],
+        })
+        .expect("refresh");
+    }
+
+    // Simulate state written before refresh_count existed: the field deserializes
+    // to 0 even though refresh_history already holds accepted refreshes.
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard.sessions.get_mut(&session_id).expect("session state");
+        assert_eq!(session.refresh_count, 2);
+        assert_eq!(session.refresh_history.len(), 2);
+        session.refresh_count = 0;
+        persist_engine_state_to_storage(&guard).expect("persist legacy-shaped state");
+    }
+    reload_state_from_storage_for_tests();
+
+    // On load, refresh_count is backfilled from history length, so cadence status
+    // reports the true total immediately -- not 0 until the next refresh.
+    let status = refresh_cadence_status(RefreshCadenceStatusRequest {
+        session_id: session_id.clone(),
+    })
+    .expect("cadence status");
+    assert_eq!(status.refresh_count, 2);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn refresh_cadence_status_count_survives_history_pruning() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("refresh_count_pruning");

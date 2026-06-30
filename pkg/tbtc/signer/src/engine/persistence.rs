@@ -1478,8 +1478,14 @@ impl TryFrom<PersistedSessionState> for SessionState {
             tx_result: persisted.tx_result,
             refresh_request_fingerprint: persisted.refresh_request_fingerprint,
             refresh_result: persisted.refresh_result,
+            // Backfill from history length for state written before refresh_count
+            // existed (serde defaults it to 0), so refresh_cadence_status reports
+            // the true total immediately after upgrade rather than 0 until the next
+            // refresh. Evaluated before refresh_history is moved below.
+            refresh_count: persisted
+                .refresh_count
+                .max(persisted.refresh_history.len() as u64),
             refresh_history: persisted.refresh_history,
-            refresh_count: persisted.refresh_count,
             emergency_rekey_event: persisted.emergency_rekey_event,
             // Live interactive state never restores: nonces are gone by
             // construction after a restart, so the attempt fails safe and
