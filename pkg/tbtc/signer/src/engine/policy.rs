@@ -4,6 +4,20 @@ use super::*;
 
 pub(crate) const BITCOIN_MAX_MONEY_SATS: u64 = 2_100_000_000_000_000;
 
+/// Conservative built-in signing-policy-firewall defaults, applied when the
+/// firewall is enforced (always in production, see `signing_policy_firewall_enforced`)
+/// but the operator has not set explicit policy env. The script-class allowlist is
+/// the meaningful default: it fails closed on any non-standard output form
+/// (`classify_script_pubkey` returns "other"), which is the on-signer guard against
+/// an authorized coordinator getting an unusual/unauthorized script signed. The
+/// numeric caps default to permissive bounds (operators tighten them per wallet
+/// sizing) -- a too-tight static cap would false-reject legitimate large
+/// redemptions/sweeps, and `enforce_signing_message_binding_to_policy_checked_build_tx`
+/// remains the primary control that the signed digest matches a policy-checked tx.
+pub(crate) const DEFAULT_ALLOWED_SCRIPT_CLASSES: &[&str] =
+    &["p2pkh", "p2sh", "p2wpkh", "p2wsh", "p2tr"];
+pub(crate) const DEFAULT_MAX_OUTPUT_COUNT: usize = 10_000;
+
 pub(crate) static POLICY_GATE_WARNING_EMITTED: OnceLock<()> = OnceLock::new();
 
 pub(crate) static BUILD_TX_RATE_LIMITER: OnceLock<Mutex<BuildTxRateLimiterState>> = OnceLock::new();
@@ -67,6 +81,15 @@ pub(crate) fn admission_policy_enforced() -> bool {
 }
 
 pub(crate) fn signing_policy_firewall_enforced() -> bool {
+    // Mirror provenance_gate_enforced(): the signing-policy firewall is always
+    // enforced in production. It resolves to conservative built-in policy
+    // defaults (see load_signing_policy_firewall_config) so production does not
+    // depend on every operator shipping explicit policy config -- closing the
+    // fail-open default without making firewall config mandatory to boot.
+    if signer_profile_is_production() {
+        return true;
+    }
+
     signer_env_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV)
         .map(|raw_value| truthy_env_flag(&raw_value))
         .unwrap_or(false)
@@ -256,13 +279,27 @@ pub(crate) fn load_signing_policy_firewall_config(
         return Ok(None);
     }
 
-    let allowed_script_classes =
-        parse_script_class_set_required(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV)?;
-    let max_output_count = parse_usize_from_env_required(TBTC_SIGNER_POLICY_MAX_OUTPUT_COUNT_ENV)?;
-    let max_output_value_sats =
-        parse_u64_from_env_required(TBTC_SIGNER_POLICY_MAX_OUTPUT_VALUE_SATS_ENV)?;
-    let max_total_output_value_sats =
-        parse_u64_from_env_required(TBTC_SIGNER_POLICY_MAX_TOTAL_OUTPUT_VALUE_SATS_ENV)?;
+    // Resolve to conservative built-in defaults when explicit policy env is not
+    // set, so an enforced firewall (always on in production) does not require
+    // every operator to ship full policy config to boot. The script-class
+    // allowlist fails closed on non-standard forms; the numeric caps default
+    // permissive and are operator-tunable.
+    let allowed_script_classes = parse_script_class_set_with_default(
+        TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV,
+        DEFAULT_ALLOWED_SCRIPT_CLASSES,
+    )?;
+    let max_output_count = parse_usize_from_env_with_default(
+        TBTC_SIGNER_POLICY_MAX_OUTPUT_COUNT_ENV,
+        DEFAULT_MAX_OUTPUT_COUNT,
+    )?;
+    let max_output_value_sats = parse_u64_from_env_with_default(
+        TBTC_SIGNER_POLICY_MAX_OUTPUT_VALUE_SATS_ENV,
+        BITCOIN_MAX_MONEY_SATS,
+    )?;
+    let max_total_output_value_sats = parse_u64_from_env_with_default(
+        TBTC_SIGNER_POLICY_MAX_TOTAL_OUTPUT_VALUE_SATS_ENV,
+        BITCOIN_MAX_MONEY_SATS,
+    )?;
     let allowed_utc_start_hour =
         parse_u8_from_env_optional(TBTC_SIGNER_POLICY_ALLOWED_UTC_START_HOUR_ENV)?;
     let allowed_utc_end_hour =

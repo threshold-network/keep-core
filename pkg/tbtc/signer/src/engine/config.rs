@@ -289,28 +289,6 @@ pub(crate) fn parse_u64_from_env_with_default(
     Ok(parsed)
 }
 
-pub(crate) fn parse_usize_from_env_required(env_name: &str) -> Result<usize, EngineError> {
-    let raw_value = signer_env_var(env_name)
-        .ok_or_else(|| EngineError::Internal(format!("missing required env [{}]", env_name)))?;
-    raw_value.trim().parse::<usize>().map_err(|_| {
-        EngineError::Internal(format!(
-            "failed to parse usize env [{}] value [{}]",
-            env_name, raw_value
-        ))
-    })
-}
-
-pub(crate) fn parse_u64_from_env_required(env_name: &str) -> Result<u64, EngineError> {
-    let raw_value = signer_env_var(env_name)
-        .ok_or_else(|| EngineError::Internal(format!("missing required env [{}]", env_name)))?;
-    raw_value.trim().parse::<u64>().map_err(|_| {
-        EngineError::Internal(format!(
-            "failed to parse u64 env [{}] value [{}]",
-            env_name, raw_value
-        ))
-    })
-}
-
 pub(crate) fn parse_u8_from_env_optional(env_name: &str) -> Result<Option<u8>, EngineError> {
     let Some(raw_value) = signer_env_var(env_name) else {
         return Ok(None);
@@ -329,6 +307,22 @@ pub(crate) fn parse_u8_from_env_optional(env_name: &str) -> Result<Option<u8>, E
         )));
     }
     Ok(Some(parsed))
+}
+
+/// Like `parse_script_class_set_required`, but falls back to `default_classes`
+/// when the env var is absent. An explicitly-set value is parsed normally (an
+/// explicit empty value is still an error).
+pub(crate) fn parse_script_class_set_with_default(
+    env_name: &str,
+    default_classes: &[&str],
+) -> Result<HashSet<String>, EngineError> {
+    if signer_env_var(env_name).is_some() {
+        return parse_script_class_set_required(env_name);
+    }
+    Ok(default_classes
+        .iter()
+        .map(|class| class.to_ascii_lowercase())
+        .collect())
 }
 
 pub(crate) fn parse_script_class_set_required(
