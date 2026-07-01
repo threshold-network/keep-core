@@ -43,6 +43,10 @@ runs:
         export YARN_ENABLE_HARDENED_MODE=0
         corepack enable
         yarn --version
+        SAFE_GIT_HOME="${RUNNER_TEMP:-/tmp}/git-clean-home"
+        SAFE_GIT_CONFIG="${SAFE_GIT_HOME}/.gitconfig"
+        mkdir -p "$SAFE_GIT_HOME"
+        touch "$SAFE_GIT_CONFIG"
         unset_args=()
         while IFS='=' read -r key _; do
           case "$key" in
@@ -50,7 +54,7 @@ runs:
           esac
         done < <(env)
         env "${unset_args[@]}" \
+          GIT_CONFIG_GLOBAL="$SAFE_GIT_CONFIG" \
           GIT_CONFIG_NOSYSTEM=1 \
-          GIT_CONFIG_SYSTEM=/dev/null \
           GIT_CONFIG_COUNT=0 \
           yarn install --immutable
