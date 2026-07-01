@@ -479,17 +479,34 @@ pub fn refresh_shares(request: RefreshSharesRequest) -> Result<RefreshSharesResu
                 if last.request_fingerprint.is_none() {
                     last.request_fingerprint = Some(previous_fingerprint);
                 }
-            } else if let Some(previous_result) = session.refresh_result.clone() {
-                // Legacy state can carry a fingerprint with an EMPTY history
-                // (refresh_history postdates refresh_request_fingerprint), so there
-                // is no record to backfill onto. Synthesize one from the cached
-                // result so the previous fingerprint is still recognized for
-                // stale-retry rejection. Its epoch is the prior refresh's, so the
-                // history stays strictly increasing once the new record is appended.
+            } else {
+                // Legacy/degraded state can carry a fingerprint with an EMPTY
+                // history (refresh_history postdates refresh_request_fingerprint),
+                // so there is no record to backfill onto. Synthesize one carrying
+                // the fingerprint so a delayed retry is still recognized for
+                // stale-retry rejection instead of being re-executed as a new
+                // refresh (which would advance the epoch). Prefer the cached
+                // result's epoch/share_count; when the result is absent (a
+                // truncated/legacy blob that kept only the fingerprint, or a
+                // corrupt state where refresh_result deserialized to None) fall
+                // back to an epoch one below the new refresh so the history stays
+                // strictly increasing, and a zero share_count. refresh_epoch_counter
+                // is persisted, so a prior accepted refresh implies refresh_epoch >= 2
+                // and the fallback stays non-zero.
+                let previous_result = session.refresh_result.clone();
+                let synthesized_epoch = previous_result
+                    .as_ref()
+                    .map(|previous| previous.refresh_epoch)
+                    .filter(|&epoch| epoch != 0 && epoch < refresh_epoch)
+                    .unwrap_or_else(|| refresh_epoch.saturating_sub(1).max(1));
+                let synthesized_share_count = previous_result
+                    .as_ref()
+                    .map(|previous| previous.new_shares.len().min(u16::MAX as usize) as u16)
+                    .unwrap_or(0);
                 session.refresh_history.push(RefreshHistoryRecord {
-                    refresh_epoch: previous_result.refresh_epoch,
+                    refresh_epoch: synthesized_epoch,
                     refreshed_at_unix: now_unix(),
-                    share_count: previous_result.new_shares.len().min(u16::MAX as usize) as u16,
+                    share_count: synthesized_share_count,
                     key_group: session.dkg_result.as_ref().map(|dkg| dkg.key_group.clone()),
                     request_fingerprint: Some(previous_fingerprint),
                 });

@@ -9636,6 +9636,57 @@ fn refresh_shares_rejects_legacy_fingerprint_with_empty_history() {
 }
 
 #[test]
+fn refresh_shares_rejects_legacy_fingerprint_with_empty_history_and_no_result() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("refresh_legacy_empty_history_no_result");
+    reset_for_tests();
+
+    let session_id = "session-refresh-legacy-empty-no-result".to_string();
+    let req_a = RefreshSharesRequest {
+        session_id: session_id.clone(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "aaaa".to_string(),
+        }],
+    };
+    let req_b = RefreshSharesRequest {
+        session_id: session_id.clone(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "bbbb".to_string(),
+        }],
+    };
+
+    refresh_shares(req_a.clone()).expect("refresh A");
+
+    // Simulate a truncated/legacy blob that kept A's fingerprint but whose
+    // refresh_result deserialized to None and whose refresh_history is empty.
+    // The synthesize branch must still preserve A's fingerprint even without a
+    // cached result to derive the epoch/share_count from.
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard.sessions.get_mut(&session_id).expect("session state");
+        session.refresh_history.clear();
+        session.refresh_result = None;
+        assert!(session.refresh_request_fingerprint.is_some());
+        persist_engine_state_to_storage(&guard).expect("persist legacy-shaped state");
+    }
+    reload_state_from_storage_for_tests();
+
+    // Refresh B synthesizes a history record carrying A's fingerprint (falling
+    // back to a below-B epoch since there is no cached result) before
+    // overwriting the fingerprint, so a delayed retry of A is still rejected as
+    // stale instead of being re-executed as a new refresh.
+    assert_eq!(refresh_shares(req_b).expect("refresh B").refresh_epoch, 2);
+    let err = refresh_shares(req_a).expect_err("stale retry of A must be rejected");
+    assert!(matches!(err, EngineError::SessionConflict { .. }));
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn refresh_shares_rejects_legacy_pre_upgrade_fingerprint_after_new_refresh() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("refresh_legacy_fingerprint");
