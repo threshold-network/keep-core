@@ -483,9 +483,10 @@ fn dkg_part3_normalizes_odd_y_group_key_and_secret_shares() {
             signing_package_hex: signing_package.signing_package_hex.clone(),
             nonces_hex: nonces_by_participant
                 .remove(&id)
-                .expect("participant nonces"),
+                .expect("participant nonces")
+                .into(),
             key_package_identifier: part3_results[&id].key_package.identifier.clone(),
-            key_package_hex: part3_results[&id].key_package.data_hex.clone(),
+            key_package_hex: part3_results[&id].key_package.data_hex.clone().into(),
         })
         .expect("sign share");
         signature_shares.push(result.signature_share);
@@ -700,6 +701,7 @@ fn persisted_session_state_fixture() -> PersistedSessionState {
         refresh_request_fingerprint: None,
         refresh_result: None,
         refresh_history: vec![],
+        refresh_count: 0,
         emergency_rekey_event: None,
         consumed_interactive_attempt_markers: vec![],
         aggregated_interactive_attempt_markers: vec![],
@@ -8176,6 +8178,96 @@ fn sign_round_and_finalize_idempotency_persist_across_storage_reload() {
 }
 
 #[test]
+fn start_sign_round_accepts_persisted_legacy_mixed_case_message_fingerprint() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("sign_legacy_mixed_case_message_fingerprint");
+    reset_for_tests();
+
+    let run_dkg_request = RunDkgRequest {
+        session_id: "session-legacy-mixed-case-message".to_string(),
+        participants: vec![
+            crate::api::DkgParticipant {
+                identifier: 1,
+                public_key_hex: "02aa".to_string(),
+            },
+            crate::api::DkgParticipant {
+                identifier: 2,
+                public_key_hex: "02bb".to_string(),
+            },
+        ],
+        threshold: 2,
+        dkg_seed_hex: None,
+    };
+    let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
+
+    // Caller sends non-lowercase message_hex, as a pre-canonicalization build
+    // would have. hex::decode accepts it; start_sign_round lowercases it
+    // internally before fingerprinting.
+    let start_request = StartSignRoundRequest {
+        session_id: "session-legacy-mixed-case-message".to_string(),
+        member_identifier: 1,
+        message_hex: "BADDCAFE".to_string(),
+        key_group: dkg_result.key_group,
+        taproot_merkle_root_hex: None,
+        signing_participants: Some(vec![1, 2]),
+        attempt_context: None,
+        attempt_transition_evidence: None,
+    };
+    let first_round_state = start_sign_round(start_request.clone()).expect("start sign round");
+
+    // The canonical fingerprint the current build stores is computed over the
+    // lowercased message_hex; the fingerprint a pre-canonicalization build
+    // persisted is computed over the original mixed casing. They must differ.
+    let mut lowercase_request = start_request.clone();
+    lowercase_request.message_hex = start_request.message_hex.to_ascii_lowercase();
+    let canonical_fingerprint =
+        start_sign_round_request_fingerprint(&lowercase_request, 0).expect("canonical fingerprint");
+    let legacy_mixed_case_fingerprint =
+        start_sign_round_request_fingerprint(&start_request, 0).expect("mixed-case fingerprint");
+    assert_ne!(canonical_fingerprint, legacy_mixed_case_fingerprint);
+
+    // Simulate the persisted state of a pre-canonicalization build: the active
+    // round's fingerprint was stored over the original mixed casing.
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard
+            .sessions
+            .get_mut(&start_request.session_id)
+            .expect("session state");
+        assert_eq!(
+            session.sign_request_fingerprint.as_deref(),
+            Some(canonical_fingerprint.as_str())
+        );
+        session.sign_request_fingerprint = Some(legacy_mixed_case_fingerprint.clone());
+        persist_engine_state_to_storage(&guard).expect("persist legacy mixed-case fingerprint");
+    }
+
+    // The same retry (still mixed casing) must reuse the cached round instead of
+    // failing SessionConflict.
+    reload_state_from_storage_for_tests();
+    let retry_round_state =
+        start_sign_round(start_request.clone()).expect("legacy mixed-case fingerprint retry");
+    assert_eq!(first_round_state, retry_round_state);
+
+    // Reuse migrates the stored fingerprint to the canonical lowercase form.
+    reload_state_from_storage_for_tests();
+    {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard
+            .sessions
+            .get(&start_request.session_id)
+            .expect("session state");
+        assert_eq!(
+            session.sign_request_fingerprint.as_deref(),
+            Some(canonical_fingerprint.as_str())
+        );
+    }
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn start_sign_round_accepts_persisted_legacy_member_bound_fingerprint() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("sign_legacy_member_fingerprint");
@@ -10057,6 +10149,298 @@ fn finalize_sign_round_rejects_materially_different_retry_after_canonicalization
 }
 
 #[test]
+fn refresh_shares_allows_new_fingerprint_but_rejects_stale_retry() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("refresh_stale_retry");
+    reset_for_tests();
+
+    let session_id = "session-refresh-stale".to_string();
+    let req_a = RefreshSharesRequest {
+        session_id: session_id.clone(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "aaaa".to_string(),
+        }],
+    };
+    let req_b = RefreshSharesRequest {
+        session_id: session_id.clone(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "bbbb".to_string(),
+        }],
+    };
+
+    // First refresh A.
+    assert_eq!(
+        refresh_shares(req_a.clone())
+            .expect("refresh A")
+            .refresh_epoch,
+        1
+    );
+    // Idempotent replay of A (most recent) returns the cached result, no new epoch.
+    assert_eq!(
+        refresh_shares(req_a.clone())
+            .expect("idempotent replay of A")
+            .refresh_epoch,
+        1
+    );
+    // A genuinely new fingerprint B is a real subsequent periodic refresh.
+    assert_eq!(
+        refresh_shares(req_b.clone())
+            .expect("refresh B")
+            .refresh_epoch,
+        2
+    );
+    // Idempotent replay of B (now most recent) returns the cached result.
+    assert_eq!(
+        refresh_shares(req_b)
+            .expect("idempotent replay of B")
+            .refresh_epoch,
+        2
+    );
+    // A stale retry of A (already accepted, no longer most recent) is rejected --
+    // it must NOT re-derive old shares or bump the epoch forward.
+    let err = refresh_shares(req_a).expect_err("stale retry of A must be rejected");
+    assert!(matches!(err, EngineError::SessionConflict { .. }));
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn refresh_shares_rejects_legacy_fingerprint_with_empty_history() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("refresh_legacy_empty_history");
+    reset_for_tests();
+
+    let session_id = "session-refresh-legacy-empty".to_string();
+    let req_a = RefreshSharesRequest {
+        session_id: session_id.clone(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "aaaa".to_string(),
+        }],
+    };
+    let req_b = RefreshSharesRequest {
+        session_id: session_id.clone(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "bbbb".to_string(),
+        }],
+    };
+
+    refresh_shares(req_a.clone()).expect("refresh A");
+
+    // Simulate state written before refresh_history existed: the fingerprint and
+    // cached result are set, but refresh_history is empty.
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard.sessions.get_mut(&session_id).expect("session state");
+        session.refresh_history.clear();
+        assert!(session.refresh_request_fingerprint.is_some());
+        assert!(session.refresh_result.is_some());
+        persist_engine_state_to_storage(&guard).expect("persist legacy-shaped state");
+    }
+    reload_state_from_storage_for_tests();
+
+    // Refresh B must synthesize a history record for A (no record to backfill onto)
+    // before overwriting the fingerprint, so a delayed retry of A is rejected.
+    refresh_shares(req_b).expect("refresh B");
+    let err = refresh_shares(req_a).expect_err("stale retry of A must be rejected");
+    assert!(matches!(err, EngineError::SessionConflict { .. }));
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn refresh_shares_rejects_legacy_fingerprint_with_empty_history_and_no_result() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("refresh_legacy_empty_history_no_result");
+    reset_for_tests();
+
+    let session_id = "session-refresh-legacy-empty-no-result".to_string();
+    let req_a = RefreshSharesRequest {
+        session_id: session_id.clone(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "aaaa".to_string(),
+        }],
+    };
+    let req_b = RefreshSharesRequest {
+        session_id: session_id.clone(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "bbbb".to_string(),
+        }],
+    };
+
+    refresh_shares(req_a.clone()).expect("refresh A");
+
+    // Simulate a truncated/legacy blob that kept A's fingerprint but whose
+    // refresh_result deserialized to None and whose refresh_history is empty.
+    // The synthesize branch must still preserve A's fingerprint even without a
+    // cached result to derive the epoch/share_count from.
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard.sessions.get_mut(&session_id).expect("session state");
+        session.refresh_history.clear();
+        session.refresh_result = None;
+        assert!(session.refresh_request_fingerprint.is_some());
+        persist_engine_state_to_storage(&guard).expect("persist legacy-shaped state");
+    }
+    reload_state_from_storage_for_tests();
+
+    // Refresh B synthesizes a history record carrying A's fingerprint (falling
+    // back to a below-B epoch since there is no cached result) before
+    // overwriting the fingerprint, so a delayed retry of A is still rejected as
+    // stale instead of being re-executed as a new refresh.
+    assert_eq!(refresh_shares(req_b).expect("refresh B").refresh_epoch, 2);
+    let err = refresh_shares(req_a).expect_err("stale retry of A must be rejected");
+    assert!(matches!(err, EngineError::SessionConflict { .. }));
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn refresh_shares_rejects_legacy_pre_upgrade_fingerprint_after_new_refresh() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("refresh_legacy_fingerprint");
+    reset_for_tests();
+
+    let session_id = "session-refresh-legacy".to_string();
+    let req_a = RefreshSharesRequest {
+        session_id: session_id.clone(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "aaaa".to_string(),
+        }],
+    };
+    let req_b = RefreshSharesRequest {
+        session_id: session_id.clone(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "bbbb".to_string(),
+        }],
+    };
+
+    // Accept refresh A.
+    refresh_shares(req_a.clone()).expect("refresh A");
+
+    // Simulate state written before RefreshHistoryRecord.request_fingerprint
+    // existed: A's history record deserializes with None, so A's fingerprint
+    // survives only in session.refresh_request_fingerprint.
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard.sessions.get_mut(&session_id).expect("session state");
+        for record in session.refresh_history.iter_mut() {
+            record.request_fingerprint = None;
+        }
+        persist_engine_state_to_storage(&guard).expect("persist legacy-shaped state");
+    }
+    reload_state_from_storage_for_tests();
+
+    // A new refresh B is accepted and overwrites refresh_request_fingerprint; the
+    // backfill must move A's fingerprint into history before that overwrite.
+    assert_eq!(refresh_shares(req_b).expect("refresh B").refresh_epoch, 2);
+
+    // A delayed retry of the pre-upgrade refresh A must be rejected as stale, not
+    // re-executed as a new epoch.
+    let err = refresh_shares(req_a).expect_err("stale legacy retry of A must be rejected");
+    assert!(matches!(err, EngineError::SessionConflict { .. }));
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn refresh_count_backfills_from_history_on_legacy_load() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("refresh_count_legacy_load");
+    reset_for_tests();
+
+    let session_id = "session-refresh-count-legacy".to_string();
+    for hex in ["aaaa", "bbbb"] {
+        refresh_shares(RefreshSharesRequest {
+            session_id: session_id.clone(),
+            current_shares: vec![ShareMaterial {
+                identifier: 1,
+                encrypted_share_hex: hex.to_string(),
+            }],
+        })
+        .expect("refresh");
+    }
+
+    // Simulate state written before refresh_count existed: the field deserializes
+    // to 0 even though refresh_history already holds accepted refreshes.
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard.sessions.get_mut(&session_id).expect("session state");
+        assert_eq!(session.refresh_count, 2);
+        assert_eq!(session.refresh_history.len(), 2);
+        session.refresh_count = 0;
+        persist_engine_state_to_storage(&guard).expect("persist legacy-shaped state");
+    }
+    reload_state_from_storage_for_tests();
+
+    // On load, refresh_count is backfilled from history length, so cadence status
+    // reports the true total immediately -- not 0 until the next refresh.
+    let status = refresh_cadence_status(RefreshCadenceStatusRequest {
+        session_id: session_id.clone(),
+    })
+    .expect("cadence status");
+    assert_eq!(status.refresh_count, 2);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn refresh_cadence_status_count_survives_history_pruning() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("refresh_count_pruning");
+    reset_for_tests();
+
+    let session_id = "session-refresh-count".to_string();
+    for hex in ["aaaa", "bbbb", "cccc"] {
+        refresh_shares(RefreshSharesRequest {
+            session_id: session_id.clone(),
+            current_shares: vec![ShareMaterial {
+                identifier: 1,
+                encrypted_share_hex: hex.to_string(),
+            }],
+        })
+        .expect("refresh");
+    }
+
+    // Simulate the MAX_REFRESH_HISTORY prune (drop older records) without touching
+    // the monotonic refresh_count.
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard.sessions.get_mut(&session_id).expect("session state");
+        assert_eq!(session.refresh_count, 3);
+        session.refresh_history.drain(0..2);
+    }
+
+    let status = refresh_cadence_status(RefreshCadenceStatusRequest {
+        session_id: session_id.clone(),
+    })
+    .expect("cadence status");
+    // Reports the true total (3), not the pruned history window (1).
+    assert_eq!(status.refresh_count, 3);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn refresh_epoch_counter_persists_across_storage_reload() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("refresh_epoch_counter");
@@ -10719,6 +11103,10 @@ fn truncated_state_file_quarantines_and_resets_when_enabled() {
     clear_state_storage_policy_overrides();
 }
 
+// The plaintext-acceptance path is debug-only (legacy_plaintext_state_permitted
+// gates on cfg!(debug_assertions)), so this rollback-path test is too; in a
+// release build the bytes are always refused before schema validation is reached.
+#[cfg(debug_assertions)]
 #[test]
 fn schema_mismatch_state_file_fails_closed_by_default() {
     let _guard = lock_test_state();
@@ -10741,10 +11129,14 @@ fn schema_mismatch_state_file_fails_closed_by_default() {
     let persisted_bytes = serde_json::to_vec(&persisted).expect("encode mismatched schema");
     std::fs::write(&state_path, &persisted_bytes).expect("write mismatched schema state file");
 
+    // Schema validation runs only after the plaintext gate, so opt into the
+    // legacy plaintext rollback path (development profile + flag) to reach it.
+    std::env::set_var(TBTC_SIGNER_PERMIT_PLAINTEXT_STATE_ROLLBACK_ENV, "true");
     let err = match load_engine_state_from_storage() {
         Ok(_) => panic!("expected schema mismatch failure"),
         Err(err) => err,
     };
+    std::env::remove_var(TBTC_SIGNER_PERMIT_PLAINTEXT_STATE_ROLLBACK_ENV);
     assert!(matches!(err, EngineError::Internal(_)));
 
     let err_message = err.to_string();
@@ -10758,6 +11150,7 @@ fn schema_mismatch_state_file_fails_closed_by_default() {
     clear_state_storage_policy_overrides();
 }
 
+#[cfg(debug_assertions)] // plaintext rollback path is debug-only; see legacy_plaintext_state_permitted
 #[test]
 fn schema_mismatch_state_file_quarantines_and_resets_when_enabled() {
     let _guard = lock_test_state();
@@ -10785,7 +11178,12 @@ fn schema_mismatch_state_file_quarantines_and_resets_when_enabled() {
     let persisted_bytes = serde_json::to_vec(&persisted).expect("encode mismatched schema");
     std::fs::write(&state_path, &persisted_bytes).expect("write mismatched schema state file");
 
+    // Reach schema validation (the test's intent) by opting into the plaintext
+    // rollback path; otherwise the plaintext gate refuses the bytes before the
+    // schema check and the quarantine-and-reset would fire for the wrong reason.
+    std::env::set_var(TBTC_SIGNER_PERMIT_PLAINTEXT_STATE_ROLLBACK_ENV, "true");
     let loaded = load_engine_state_from_storage().expect("recover from schema mismatch state");
+    std::env::remove_var(TBTC_SIGNER_PERMIT_PLAINTEXT_STATE_ROLLBACK_ENV);
     assert!(loaded.sessions.is_empty());
     assert_eq!(loaded.refresh_epoch_counter, 0);
     assert!(!state_path.exists());
@@ -10880,6 +11278,7 @@ fn persisted_state_is_encrypted_envelope() {
     clear_state_storage_policy_overrides();
 }
 
+#[cfg(debug_assertions)] // plaintext rollback path is debug-only; see legacy_plaintext_state_permitted
 #[test]
 fn legacy_plaintext_state_migrates_to_encrypted_envelope_on_load() {
     let _guard = lock_test_state();
@@ -10902,7 +11301,18 @@ fn legacy_plaintext_state_migrates_to_encrypted_envelope_on_load() {
     let plaintext_bytes = serde_json::to_vec(&plaintext_state).expect("encode plaintext state");
     std::fs::write(&state_path, &plaintext_bytes).expect("write plaintext state file");
 
+    // Without the opt-in rollback flag the unauthenticated plaintext is refused
+    // (fail-closed), even in a non-production profile.
+    assert!(
+        load_engine_state_from_storage().is_err(),
+        "plaintext signer state must be rejected without the rollback opt-in"
+    );
+
+    // Plaintext load is an opt-in emergency-rollback path: development profile
+    // (selected by reset_for_tests) + this flag.
+    std::env::set_var(TBTC_SIGNER_PERMIT_PLAINTEXT_STATE_ROLLBACK_ENV, "true");
     let loaded = load_engine_state_from_storage().expect("load and migrate legacy plaintext");
+    std::env::remove_var(TBTC_SIGNER_PERMIT_PLAINTEXT_STATE_ROLLBACK_ENV);
     assert_eq!(loaded.sessions.len(), 1);
     assert_eq!(loaded.refresh_epoch_counter, 7);
 
@@ -11610,6 +12020,7 @@ fn init_signer_config_canonicalizes_list_and_bool_encodings() {
         enable_auto_quarantine: Some(false),
         auto_quarantine_dao_allowlist_identifiers: Some(vec![3, 1, 2, 2]),
         policy_allowed_script_classes: Some(vec!["P2TR".to_string(), "p2wpkh".to_string()]),
+        permit_plaintext_state_rollback: Some(true),
         ..InitSignerConfigRequest::default()
     })
     .expect("convert request");
@@ -11633,6 +12044,14 @@ fn init_signer_config_canonicalizes_list_and_bool_encodings() {
             .get(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV)
             .map(String::as_str),
         Some("P2TR,p2wpkh")
+    );
+    // The plaintext rollback opt-in is reachable via init-time config, not only
+    // the process environment.
+    assert_eq!(
+        values
+            .get(TBTC_SIGNER_PERMIT_PLAINTEXT_STATE_ROLLBACK_ENV)
+            .map(String::as_str),
+        Some("true")
     );
 
     let empty_list = config_values_from_request(&InitSignerConfigRequest {
@@ -12239,9 +12658,9 @@ fn interactive_session_full_round_trip_aggregates_bip340() {
 
     let member2_share = sign_share(SignShareRequest {
         signing_package_hex: signing_package_hex.clone(),
-        nonces_hex: member2.nonces_hex,
+        nonces_hex: member2.nonces_hex.into(),
         key_package_identifier: key_packages[&2].identifier.clone(),
-        key_package_hex: key_packages[&2].data_hex.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone().into(),
     })
     .expect("member 2 stateless share");
 
@@ -12855,16 +13274,16 @@ fn interactive_aggregate_cleanup_is_message_bound() {
     );
     let share1_b = sign_share(SignShareRequest {
         signing_package_hex: package_b.clone(),
-        nonces_hex: m1_b.nonces_hex,
+        nonces_hex: m1_b.nonces_hex.into(),
         key_package_identifier: key_packages[&1].identifier.clone(),
-        key_package_hex: key_packages[&1].data_hex.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone().into(),
     })
     .expect("stateless share 1 over B");
     let share2_b = sign_share(SignShareRequest {
         signing_package_hex: package_b.clone(),
-        nonces_hex: m2_b.nonces_hex,
+        nonces_hex: m2_b.nonces_hex.into(),
         key_package_identifier: key_packages[&2].identifier.clone(),
-        key_package_hex: key_packages[&2].data_hex.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone().into(),
     })
     .expect("stateless share 2 over B");
     interactive_aggregate(InteractiveAggregateRequest {
@@ -14365,9 +14784,9 @@ fn interactive_aggregate_produces_and_self_verifies_bip340() {
     .expect("round 2 share");
     let member2_share = sign_share(SignShareRequest {
         signing_package_hex: signing_package_hex.clone(),
-        nonces_hex: member2.nonces_hex,
+        nonces_hex: member2.nonces_hex.into(),
         key_package_identifier: key_packages[&2].identifier.clone(),
-        key_package_hex: key_packages[&2].data_hex.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone().into(),
     })
     .expect("member 2 share");
 
@@ -14451,9 +14870,9 @@ fn interactive_aggregate_rejects_repeat_aggregate_of_completed_attempt() {
     .expect("round 2 share");
     let member2_share = sign_share(SignShareRequest {
         signing_package_hex: signing_package_hex.clone(),
-        nonces_hex: member2.nonces_hex,
+        nonces_hex: member2.nonces_hex.into(),
         key_package_identifier: key_packages[&2].identifier.clone(),
-        key_package_hex: key_packages[&2].data_hex.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone().into(),
     })
     .expect("member 2 share");
 
@@ -14560,9 +14979,9 @@ fn interactive_aggregate_completion_marker_survives_process_restart() {
     .expect("round 2 share");
     let member2_share = sign_share(SignShareRequest {
         signing_package_hex: signing_package_hex.clone(),
-        nonces_hex: member2.nonces_hex,
+        nonces_hex: member2.nonces_hex.into(),
         key_package_identifier: key_packages[&2].identifier.clone(),
-        key_package_hex: key_packages[&2].data_hex.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone().into(),
     })
     .expect("member 2 share");
 
@@ -14667,9 +15086,9 @@ fn interactive_aggregate_rejects_invalid_share_fail_closed() {
     );
     let bogus_share = sign_share(SignShareRequest {
         signing_package_hex: other_package,
-        nonces_hex: bogus_member2.nonces_hex,
+        nonces_hex: bogus_member2.nonces_hex.into(),
         key_package_identifier: key_packages[&2].identifier.clone(),
-        key_package_hex: key_packages[&2].data_hex.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone().into(),
     })
     .expect("bogus member 2 share");
 
@@ -14774,9 +15193,9 @@ fn interactive_aggregate_names_all_invalid_share_culprits() {
     );
     let bogus1_share = sign_share(SignShareRequest {
         signing_package_hex: bogus1_package,
-        nonces_hex: bogus1.nonces_hex,
+        nonces_hex: bogus1.nonces_hex.into(),
         key_package_identifier: key_packages[&1].identifier.clone(),
-        key_package_hex: key_packages[&1].data_hex.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone().into(),
     })
     .expect("bogus member 1 share");
     let bogus2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
@@ -14799,9 +15218,9 @@ fn interactive_aggregate_names_all_invalid_share_culprits() {
     );
     let bogus2_share = sign_share(SignShareRequest {
         signing_package_hex: bogus2_package,
-        nonces_hex: bogus2.nonces_hex,
+        nonces_hex: bogus2.nonces_hex.into(),
         key_package_identifier: key_packages[&2].identifier.clone(),
-        key_package_hex: key_packages[&2].data_hex.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone().into(),
     })
     .expect("bogus member 2 share");
 
@@ -14894,9 +15313,9 @@ fn interactive_aggregate_sweeps_expired_sessions() {
     );
     let parseable_share = sign_share(SignShareRequest {
         signing_package_hex: parseable_package.clone(),
-        nonces_hex: member1.nonces_hex,
+        nonces_hex: member1.nonces_hex.into(),
         key_package_identifier: key_packages[&1].identifier.clone(),
-        key_package_hex: key_packages[&1].data_hex.clone(),
+        key_package_hex: key_packages[&1].data_hex.clone().into(),
     })
     .expect("member 1 share");
 
@@ -15190,9 +15609,9 @@ fn verify_signature_share_verdicts_match_aggregate_and_handle_edges() {
     .expect("round 2 share");
     let member2_valid = sign_share(SignShareRequest {
         signing_package_hex: signing_package_hex.clone(),
-        nonces_hex: member2_nonces,
+        nonces_hex: member2_nonces.into(),
         key_package_identifier: key_packages[&2].identifier.clone(),
-        key_package_hex: key_packages[&2].data_hex.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone().into(),
     })
     .expect("member 2 valid share");
 
@@ -15218,9 +15637,9 @@ fn verify_signature_share_verdicts_match_aggregate_and_handle_edges() {
     );
     let bogus_share = sign_share(SignShareRequest {
         signing_package_hex: other_package,
-        nonces_hex: bogus_member2.nonces_hex,
+        nonces_hex: bogus_member2.nonces_hex.into(),
         key_package_identifier: key_packages[&2].identifier.clone(),
-        key_package_hex: key_packages[&2].data_hex.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone().into(),
     })
     .expect("bogus member 2 share");
 

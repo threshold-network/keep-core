@@ -32,6 +32,18 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
 
     let message_bytes = hex::decode(&request.message_hex)
         .map_err(|_| EngineError::Validation("message_hex must be valid hex".to_string()))?;
+    // Canonicalize message_hex to lowercase before it feeds the request
+    // fingerprint (below) and round-id derivation, mirroring the interactive
+    // path (see interactive.rs). hex::decode accepts mixed casing, so without
+    // this two calls carrying the same message bytes but different hex casing
+    // would derive different fingerprints/round ids and a semantically
+    // identical retry would be rejected as a SessionConflict.
+    // Retain the pre-canonicalization casing so an in-flight round whose
+    // fingerprint a previous build persisted over the original (mixed/upper)
+    // casing can still be matched below, instead of falling through to
+    // SessionConflict after an upgrade.
+    let original_message_hex = request.message_hex.clone();
+    request.message_hex = request.message_hex.to_ascii_lowercase();
     let message_digest_hex = hash_hex(&message_bytes);
     let taproot_merkle_root =
         canonicalize_taproot_merkle_root_hex(&mut request.taproot_merkle_root_hex)?;
@@ -53,6 +65,35 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
             &request,
             request.member_identifier,
         )?;
+    // A build before message_hex canonicalization persisted the active round's
+    // fingerprint over the original casing. When the caller resends the same
+    // non-lowercase message_hex after upgrading, accept those pre-canonicalization
+    // shapes so the in-flight round reuses its cache; a match migrates the stored
+    // fingerprint to the canonical (lowercase) form below. Skipped entirely when
+    // the caller already sent lowercase hex (the common path), so no extra
+    // hashing is done for well-formed requests.
+    let legacy_mixed_case_message_fingerprints: Vec<String> =
+        if original_message_hex != request.message_hex {
+            let mut mixed_case_request = request.clone();
+            mixed_case_request.message_hex = original_message_hex;
+            vec![
+                start_sign_round_request_fingerprint(&mixed_case_request, 0)?,
+                start_sign_round_request_fingerprint(
+                    &mixed_case_request,
+                    mixed_case_request.member_identifier,
+                )?,
+                start_sign_round_request_fingerprint_including_transition_evidence(
+                    &mixed_case_request,
+                    0,
+                )?,
+                start_sign_round_request_fingerprint_including_transition_evidence(
+                    &mixed_case_request,
+                    mixed_case_request.member_identifier,
+                )?,
+            ]
+        } else {
+            Vec::new()
+        };
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -218,7 +259,10 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
             let matches_legacy_fingerprint = !matches_canonical_fingerprint
                 && (existing == &legacy_member_request_fingerprint
                     || existing == &legacy_canonical_with_transition_evidence_fingerprint
-                    || existing == &legacy_member_with_transition_evidence_fingerprint);
+                    || existing == &legacy_member_with_transition_evidence_fingerprint
+                    || legacy_mixed_case_message_fingerprints
+                        .iter()
+                        .any(|fingerprint| existing == fingerprint));
 
             if matches_canonical_fingerprint || matches_legacy_fingerprint {
                 let mut round_state = session.round_state.clone().ok_or_else(|| {
@@ -240,6 +284,18 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
                     session.dkg_public_key_package.as_ref().ok_or_else(|| {
                         EngineError::Internal("missing DKG public key package cache".to_string())
                     })?;
+
+                // Re-check quarantine on cached-round reuse: auto-quarantine may
+                // have marked a participant after the round was opened (e.g. from
+                // another session's transition) but before this reuse. The
+                // new-round path's enforce_not_quarantined_identifiers below is
+                // skipped on this branch, so apply it here too.
+                enforce_not_quarantined_identifiers(
+                    &request.session_id,
+                    &signing_participants,
+                    &quarantined_operator_identifiers,
+                    auto_quarantine_config.as_ref(),
+                )?;
 
                 round_state.own_contribution = build_real_signature_share_contribution(
                     dkg_key_packages,

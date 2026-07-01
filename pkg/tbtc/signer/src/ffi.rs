@@ -2,6 +2,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use serde::de::DeserializeOwned;
 
+use zeroize::Zeroize;
+
 use crate::api::ErrorResponse;
 use crate::errors::EngineError;
 
@@ -43,10 +45,42 @@ pub fn serialize_response<T: serde::Serialize>(response: &T) -> Result<Vec<u8>, 
         .map_err(|e| EngineError::Internal(format!("failed to encode response: {e}")))
 }
 
+// Install a panic hook that redacts the panic payload outside the development
+// profile. `catch_unwind` does not suppress Rust's default hook, so a panic
+// carrying a path / config value / secret would otherwise print verbatim to
+// stderr before it is converted to a redacted ErrorResponse. Installed once.
+fn install_redacting_panic_hook() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let development_profile =
+                crate::engine::signer_env_var(crate::engine::TBTC_SIGNER_PROFILE_ENV)
+                    .map(|raw| {
+                        raw.trim()
+                            .eq_ignore_ascii_case(crate::engine::TBTC_SIGNER_PROFILE_DEVELOPMENT)
+                    })
+                    .unwrap_or(false);
+            if development_profile {
+                default_hook(info);
+            } else if let Some(location) = info.location() {
+                eprintln!(
+                    "panic at {}:{} (payload redacted)",
+                    location.file(),
+                    location.line()
+                );
+            } else {
+                eprintln!("panic (payload redacted)");
+            }
+        }));
+    });
+}
+
 pub fn ffi_entry<F>(f: F) -> TbtcSignerResult
 where
     F: FnOnce() -> Result<Vec<u8>, EngineError>,
 {
+    install_redacting_panic_hook();
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(Ok(bytes)) => success_from_serialized(bytes),
         Ok(Err(err)) => error_result(err),
@@ -88,7 +122,13 @@ pub fn free_buffer(ptr: *mut u8, len: usize) {
     }
 
     unsafe {
-        drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)));
+        let mut buffer = Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len));
+        // Wipe any plaintext secret material (e.g. FROST nonces, DKG/key-package
+        // bytes) before deallocation rather than trusting every FFI caller to do
+        // it correctly. Leaking a nonce after a share is produced can expose the
+        // signing share. `zeroize` is a volatile wipe the optimizer cannot elide.
+        buffer.zeroize();
+        drop(buffer);
     }
 }
 
@@ -138,7 +178,7 @@ fn request_bytes<'a>(ptr: *const u8, len: usize) -> Result<&'a [u8], EngineError
     unsafe { Ok(std::slice::from_raw_parts(ptr, len)) }
 }
 
-fn to_ffi_buffer(bytes: Vec<u8>) -> TbtcBuffer {
+fn to_ffi_buffer(mut bytes: Vec<u8>) -> TbtcBuffer {
     let len = bytes.len();
     if len == 0 {
         return TbtcBuffer {
@@ -147,7 +187,13 @@ fn to_ffi_buffer(bytes: Vec<u8>) -> TbtcBuffer {
         };
     }
 
-    let boxed = bytes.into_boxed_slice();
+    // Copy into an exact-capacity boxed slice, then wipe the source Vec.
+    // `bytes.into_boxed_slice()` shrink-to-fits and reallocates when capacity > len
+    // (serde_json::to_vec over-allocates secret-bearing JSON), which would free the
+    // original secret buffer WITHOUT zeroizing it. free_buffer wipes the boxed
+    // slice on free; we wipe the source here so no un-zeroized copy survives.
+    let boxed: Box<[u8]> = bytes.as_slice().into();
+    bytes.zeroize();
     let ptr = Box::into_raw(boxed) as *mut u8;
 
     TbtcBuffer { ptr, len }

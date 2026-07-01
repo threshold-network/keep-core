@@ -282,6 +282,18 @@ fn ensure_benchmark_environment() {
         std::env::set_var("TBTC_SIGNER_MAX_SESSIONS", "200000");
         std::env::set_var("TBTC_SIGNER_ALLOW_BOOTSTRAP", "true");
         std::env::set_var("TBTC_SIGNER_ALLOW_BENCH_RESTART_HOOK", "true");
+        // The signer treats a missing profile as production, and the default
+        // `env` state-key provider requires an encryption key for persistence.
+        // Seed both (and pin the provider) so the README-documented
+        // `cargo bench --features bench-restart-hook --bench phase5_roast`
+        // runs in a clean shell without any pre-set TBTC_SIGNER_* variables;
+        // otherwise the first RunDkg persist fails.
+        std::env::set_var("TBTC_SIGNER_PROFILE", "development");
+        std::env::set_var("TBTC_SIGNER_STATE_KEY_PROVIDER", "env");
+        std::env::set_var(
+            "TBTC_SIGNER_STATE_ENCRYPTION_KEY_HEX",
+            "0c9258935f0a30c065befcd746cb1564e9f3c91936c0f0f1c78853fa2d6713dc",
+        );
     });
 }
 

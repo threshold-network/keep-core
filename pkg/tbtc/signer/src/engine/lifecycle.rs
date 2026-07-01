@@ -2,6 +2,12 @@
 
 use super::*;
 
+/// Upper bound on per-session `refresh_history` length. Older records are
+/// dropped once this is exceeded, bounding persisted-state size for a long-lived
+/// / frequently-refreshed session. Also bounds the stale-fingerprint detection
+/// window (retries older than this many refreshes are no longer recognized).
+const MAX_REFRESH_HISTORY: usize = 256;
+
 pub(crate) fn canary_max_start_sign_round_p95_ms() -> u64 {
     signer_env_var(TBTC_SIGNER_CANARY_MAX_START_SIGN_ROUND_P95_MS_ENV)
         .and_then(|value| value.trim().parse::<u64>().ok())
@@ -103,7 +109,7 @@ pub fn refresh_cadence_status(
 
     Ok(RefreshCadenceStatusResult {
         session_id: request.session_id,
-        refresh_count: session.refresh_history.len() as u64,
+        refresh_count: session.refresh_count,
         last_refresh_epoch: last_refresh_record
             .map(|record| record.refresh_epoch)
             .unwrap_or(0),
@@ -393,15 +399,27 @@ pub fn refresh_shares(request: RefreshSharesRequest) -> Result<RefreshSharesResu
 
         if let Some(existing) = &session.refresh_request_fingerprint {
             if existing == &request_fingerprint {
+                // Idempotent replay of the *same* (most-recent) refresh request:
+                // return the cached result.
                 return session
                     .refresh_result
                     .clone()
                     .ok_or_else(|| EngineError::Internal("missing refresh cache".to_string()));
             }
 
-            return Err(EngineError::SessionConflict {
-                session_id: request.session_id,
-            });
+            // A fingerprint we have already accepted before (but which is no
+            // longer the most recent) is a stale / out-of-order retry, not a new
+            // refresh. Reject it rather than re-deriving the older share set and
+            // bumping the epoch forward, which would roll the session back behind
+            // a newer refresh. A genuinely new fingerprint falls through to
+            // perform the refresh (supporting repeatable periodic reshares).
+            if session.refresh_history.iter().any(|record| {
+                record.request_fingerprint.as_deref() == Some(request_fingerprint.as_str())
+            }) {
+                return Err(EngineError::SessionConflict {
+                    session_id: request.session_id.clone(),
+                });
+            }
         }
     }
     ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
@@ -446,14 +464,78 @@ pub fn refresh_shares(request: RefreshSharesRequest) -> Result<RefreshSharesResu
             ),
         });
     }
-    session.refresh_request_fingerprint = Some(request_fingerprint);
+    // Preserve the previously-accepted fingerprint before overwriting it. If the
+    // last accepted refresh predates RefreshHistoryRecord.request_fingerprint
+    // (loaded from legacy state, where history records deserialize with None), its
+    // fingerprint lives only in refresh_request_fingerprint; backfill it onto the
+    // most-recent history record so a delayed retry of it is still recognized as
+    // stale instead of being re-executed as a new refresh.
+    if let Some(previous_fingerprint) = session.refresh_request_fingerprint.clone() {
+        let already_tracked = session.refresh_history.iter().any(|record| {
+            record.request_fingerprint.as_deref() == Some(previous_fingerprint.as_str())
+        });
+        if !already_tracked {
+            if let Some(last) = session.refresh_history.last_mut() {
+                if last.request_fingerprint.is_none() {
+                    last.request_fingerprint = Some(previous_fingerprint);
+                }
+            } else {
+                // Legacy/degraded state can carry a fingerprint with an EMPTY
+                // history (refresh_history postdates refresh_request_fingerprint),
+                // so there is no record to backfill onto. Synthesize one carrying
+                // the fingerprint so a delayed retry is still recognized for
+                // stale-retry rejection instead of being re-executed as a new
+                // refresh (which would advance the epoch). Prefer the cached
+                // result's epoch/share_count; when the result is absent (a
+                // truncated/legacy blob that kept only the fingerprint, or a
+                // corrupt state where refresh_result deserialized to None) fall
+                // back to an epoch one below the new refresh so the history stays
+                // strictly increasing, and a zero share_count. refresh_epoch_counter
+                // is persisted, so a prior accepted refresh implies refresh_epoch >= 2
+                // and the fallback stays non-zero.
+                let previous_result = session.refresh_result.clone();
+                let synthesized_epoch = previous_result
+                    .as_ref()
+                    .map(|previous| previous.refresh_epoch)
+                    .filter(|&epoch| epoch != 0 && epoch < refresh_epoch)
+                    .unwrap_or_else(|| refresh_epoch.saturating_sub(1).max(1));
+                let synthesized_share_count = previous_result
+                    .as_ref()
+                    .map(|previous| previous.new_shares.len().min(u16::MAX as usize) as u16)
+                    .unwrap_or(0);
+                session.refresh_history.push(RefreshHistoryRecord {
+                    refresh_epoch: synthesized_epoch,
+                    refreshed_at_unix: now_unix(),
+                    share_count: synthesized_share_count,
+                    key_group: session.dkg_result.as_ref().map(|dkg| dkg.key_group.clone()),
+                    request_fingerprint: Some(previous_fingerprint),
+                });
+            }
+        }
+    }
+    // Monotonic total refresh count, independent of refresh_history pruning;
+    // backfilled from the retained history length for sessions written before
+    // this field existed.
+    session.refresh_count = session
+        .refresh_count
+        .max(session.refresh_history.len() as u64)
+        .saturating_add(1);
+    session.refresh_request_fingerprint = Some(request_fingerprint.clone());
     session.refresh_result = Some(result.clone());
     session.refresh_history.push(RefreshHistoryRecord {
         refresh_epoch,
         refreshed_at_unix: now_unix(),
         share_count: result.new_shares.len().min(u16::MAX as usize) as u16,
         key_group: session.dkg_result.as_ref().map(|dkg| dkg.key_group.clone()),
+        request_fingerprint: Some(request_fingerprint),
     });
+    // Bound per-session history growth (state-at-rest size + stale-detection
+    // window). Keep the most recent records; epochs stay strictly increasing so
+    // refresh_history_continuity_preserved still holds.
+    if session.refresh_history.len() > MAX_REFRESH_HISTORY {
+        let excess = session.refresh_history.len() - MAX_REFRESH_HISTORY;
+        session.refresh_history.drain(0..excess);
+    }
     persist_engine_state_to_storage(&guard)?;
     record_hardening_telemetry(|telemetry| {
         telemetry.refresh_shares_success_total =

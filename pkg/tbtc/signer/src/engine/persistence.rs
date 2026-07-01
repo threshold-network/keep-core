@@ -51,6 +51,8 @@ pub(crate) struct PersistedSessionState {
     pub(crate) refresh_result: Option<RefreshSharesResult>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) refresh_history: Vec<RefreshHistoryRecord>,
+    #[serde(default)]
+    pub(crate) refresh_count: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) emergency_rekey_event: Option<EmergencyRekeyEvent>,
     // Phase 7.1 interactive consumption markers - the ONLY durable
@@ -882,6 +884,25 @@ pub(crate) fn decode_encrypted_state_envelope(
         .map_err(|e| EngineError::Internal(format!("failed to decode decrypted signer state: {e}")))
 }
 
+/// Whether the legacy unencrypted plaintext state path may be accepted.
+///
+/// Plaintext state is UNAUTHENTICATED, so accepting it would let anyone who can
+/// write the state file forge it (cleared replay markers, attacker key material)
+/// without holding the state-encryption key. Per the secret-material hardening
+/// plan this is an emergency-rollback-only path. The load-bearing guard is the
+/// runtime non-production check (a production profile NEVER accepts plaintext,
+/// regardless of build); it is additionally gated off in optimized builds via
+/// `debug_assertions` and behind an explicit opt-in env flag. (Note: a release
+/// build compiled with `debug-assertions = on` would still require both the
+/// non-production profile and the opt-in flag.)
+fn legacy_plaintext_state_permitted() -> bool {
+    cfg!(debug_assertions)
+        && !signer_profile_is_production()
+        && signer_env_var(TBTC_SIGNER_PERMIT_PLAINTEXT_STATE_ROLLBACK_ENV)
+            .map(|raw_value| truthy_env_flag(&raw_value))
+            .unwrap_or(false)
+}
+
 pub(crate) fn decode_persisted_state_storage_format(
     bytes: &[u8],
 ) -> Result<PersistedStateStorageFormat, EngineError> {
@@ -893,6 +914,21 @@ pub(crate) fn decode_persisted_state_storage_format(
             persisted,
             should_rewrite,
         });
+    }
+
+    // The bytes are not an encrypted envelope. Only fall back to the legacy
+    // UNAUTHENTICATED plaintext format on the gated emergency-rollback path;
+    // otherwise refuse, so an attacker who can write the state file cannot
+    // bypass the AEAD envelope (forged replay markers / key material) without
+    // the state-encryption key.
+    if !legacy_plaintext_state_permitted() {
+        return Err(EngineError::Internal(
+            "refusing to load unauthenticated plaintext signer state; an \
+             encrypted state envelope is required (legacy plaintext is an \
+             emergency-rollback-only path, disabled in production and release \
+             builds)"
+                .to_string(),
+        ));
     }
 
     let persisted = serde_json::from_slice::<PersistedEngineState>(bytes).map_err(|e| {
@@ -1537,6 +1573,13 @@ impl TryFrom<PersistedSessionState> for SessionState {
             tx_result: persisted.tx_result,
             refresh_request_fingerprint: persisted.refresh_request_fingerprint,
             refresh_result: persisted.refresh_result,
+            // Backfill from history length for state written before refresh_count
+            // existed (serde defaults it to 0), so refresh_cadence_status reports
+            // the true total immediately after upgrade rather than 0 until the next
+            // refresh. Evaluated before refresh_history is moved below.
+            refresh_count: persisted
+                .refresh_count
+                .max(persisted.refresh_history.len() as u64),
             refresh_history: persisted.refresh_history,
             emergency_rekey_event: persisted.emergency_rekey_event,
             // Live interactive state never restores: nonces are gone by
@@ -1683,6 +1726,7 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             refresh_request_fingerprint: session_state.refresh_request_fingerprint.clone(),
             refresh_result: session_state.refresh_result.clone(),
             refresh_history: session_state.refresh_history.clone(),
+            refresh_count: session_state.refresh_count,
             emergency_rekey_event: session_state.emergency_rekey_event.clone(),
             consumed_interactive_attempt_markers,
             aggregated_interactive_attempt_markers,

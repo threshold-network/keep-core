@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DkgParticipant {
@@ -129,16 +130,31 @@ pub struct NewSigningPackageResult {
     pub signing_package_hex: String,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Deserialize, PartialEq, Eq, Serialize)]
 pub struct SignShareRequest {
     pub signing_package_hex: String,
     /// Secret one-time nonces returned by `GenerateNoncesAndCommitmentsResult`.
     ///
     /// This stateless endpoint cannot remember consumed nonces across FFI
     /// calls. The caller is cryptographically responsible for single use.
-    pub nonces_hex: String,
+    /// Wrapped in `Zeroizing` so the deserialized secret is wiped from the heap
+    /// on drop rather than lingering in freed memory after the share is produced.
+    pub nonces_hex: Zeroizing<String>,
     pub key_package_identifier: String,
-    pub key_package_hex: String,
+    /// Secret private key-package material; `Zeroizing` so it is wiped on drop.
+    pub key_package_hex: Zeroizing<String>,
+}
+
+// Custom Debug redacts the secret fields (the derive would print them verbatim).
+impl std::fmt::Debug for SignShareRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignShareRequest")
+            .field("signing_package_hex", &self.signing_package_hex)
+            .field("nonces_hex", &"<redacted>")
+            .field("key_package_identifier", &self.key_package_identifier)
+            .field("key_package_hex", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -814,6 +830,8 @@ pub struct InitSignerConfigRequest {
     pub state_corruption_policy: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_corrupt_backup_limit: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permit_plaintext_state_rollback: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_sessions: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

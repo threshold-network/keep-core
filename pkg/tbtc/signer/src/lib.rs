@@ -1092,9 +1092,9 @@ mod tests {
         for id in signing_participants {
             let request = SignShareRequest {
                 signing_package_hex: signing_package.signing_package_hex.clone(),
-                nonces_hex: nonces_by_participant[&id].clone(),
+                nonces_hex: nonces_by_participant[&id].clone().into(),
                 key_package_identifier: part3_results[&id].key_package.identifier.clone(),
-                key_package_hex: part3_results[&id].key_package.data_hex.clone(),
+                key_package_hex: part3_results[&id].key_package.data_hex.clone().into(),
             };
             let (status, payload) = call_ffi(&request, frost_tbtc_sign_share);
             assert_eq!(status, 0);
