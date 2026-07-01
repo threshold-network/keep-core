@@ -88,10 +88,32 @@ RFC-21 design and is enforced in
 
 == Production rollout sequencing
 
-. *Build the binary with the tag.* Internal builds and CI
-  pipelines already exercise the tag via
-  `go test -tags 'frost_roast_retry' ./pkg/frost/... ./pkg/tbtc/...`.
-  Production binaries adopt the tag once the readiness manifest at
+. *Build the binary with the tag.* CI exercises the tagged path on
+  every pull request that touches Go, so the ROAST retry flow cannot
+  silently rot:
++
+--
+* The `client-frost-roast-retry` job in `.github/workflows/client.yml`
+  compiles the coordinator flow with cgo disabled
+  (`go build -tags "frost_roast_retry" ./...` and
+  `go build -tags "frost_native frost_roast_retry" ./...`) and runs the
+  tagged unit tests under the three non-cgo tag sets that cover the
+  matrix — `frost_native`, `frost_roast_retry`, and
+  `frost_native frost_roast_retry` — via
+  `go test -tags "<set>" ./pkg/frost/... ./pkg/tbtc/...` against the
+  mock FFI (no `libfrost_tbtc` required).
+* `.github/workflows/frost-cgo-integration.yml` adds `frost_roast_retry`
+  to its real-crypto cgo tag set, runs the whole tagged
+  `./pkg/frost/signing/` suite against the linked `libfrost_tbtc` with
+  skips forbidden, and smoke-builds the activation artifact via
+  `make build-frost`.
+--
++
+Production binaries are produced with `make build-frost` (tags
+  `frost_native frost_tbtc_signer frost_roast_retry`, cgo-linked against
+  `libfrost_tbtc`); the default `make build` still ships the
+  `!frost_roast_retry` no-op stubs. Production adopts the tagged build
+  once the readiness manifest at
   `docs/development/frost-readiness-manifest.adoc` flips to
   `present`. (The manifest was originally planned for the tBTC
   monorepo's `docs/operations/` directory; the monorepo signer is

@@ -129,6 +129,39 @@ build:
 	$(info Building Go code)
 	$(call go_build_cmd,.,$(app_name))
 
+# FROST activation build.
+#
+# Produces the keep-client binary with the interactive FROST + ROAST retry
+# coordinator path compiled in (build tags `frost_native frost_tbtc_signer
+# frost_roast_retry`). The default `build` target above compiles the
+# `!frost_roast_retry` no-op stubs, so the released image ships with the ROAST
+# retry coordinator disabled; this target is the artifact that actually enables
+# it once the readiness manifest flips (see
+# docs/development/frost-roast-retry-rollout.adoc).
+#
+# Unlike `build` this is a cgo build that links libfrost_tbtc (the Rust signer
+# lib built from the tbtc-signer crate). Point `frost_lib_dir` at the directory
+# holding the built `libfrost_tbtc.{so,dylib}`. The CGO_LDFLAGS mirror the
+# frost-cgo-integration CI workflow: `--no-as-needed` keeps the DT_NEEDED entry
+# even though the cgo bridge resolves the frost_tbtc_* symbols via dlsym (no
+# direct references), and the rpath lets the binary find the lib at runtime.
+# These are GNU-ld flags; the target is meant for the Linux CI/release toolchain.
+frost_build_tags := frost_native frost_tbtc_signer frost_roast_retry
+
+ifndef frost_lib_dir
+override frost_lib_dir = $(CURDIR)/_frost-target/debug
+endif
+
+build-frost:
+	$(info Building Go code with the FROST activation tags [$(frost_build_tags)])
+	CGO_ENABLED=1 \
+	CGO_LDFLAGS="-L$(frost_lib_dir) -Wl,--no-as-needed -lfrost_tbtc -Wl,-rpath,$(frost_lib_dir)" \
+	go build \
+		-tags "$(frost_build_tags)" \
+		-ldflags "-X github.com/keep-network/keep-core/build.Version=$(version) -X github.com/keep-network/keep-core/build.Revision=$(revision) -checklinkname=0" \
+		-o $(app_name) \
+		.
+
 platforms := linux/amd64 \
 	darwin/amd64
 
@@ -150,4 +183,4 @@ cmd-help: build
 	@echo '$$ $(app_name) start --help' > docs/resources/client-start-help
 	./$(app_name) start --help >> docs/resources/client-start-help
 
-.PHONY: all development sepolia download_artifacts generate gen_proto build cmd-help release build_multi
+.PHONY: all development sepolia download_artifacts generate gen_proto build build-frost cmd-help release build_multi

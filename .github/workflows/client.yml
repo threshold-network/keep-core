@@ -310,6 +310,55 @@ jobs:
           install-go: false
           checks: "-SA1019"
 
+  # Compiles and unit-tests the interactive FROST + ROAST retry coordinator path,
+  # which lives behind the `frost_roast_retry` (and `frost_native`) build tags. The
+  # default untagged build the other jobs run compiles only the `!frost_roast_retry`
+  # no-op stubs, so without this job the entire ROAST retry state machine (liveness +
+  # evidence/blame) and the ~30 `frost_native` unit tests never compile or run in CI.
+  #
+  # This is the mock-FFI path: it exercises the Go coordinator flow with cgo DISABLED,
+  # so it needs neither libfrost_tbtc (the Rust signer lib) nor Docker. The real-crypto
+  # cgo variant of these tags is gated separately by frost-cgo-integration.yml.
+  client-frost-roast-retry:
+    needs: client-detect-changes
+    if: |
+      github.event_name == 'push'
+        || needs.client-detect-changes.outputs.path-filter == 'true'
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+
+      - name: Build the ROAST retry coordinator path (mock FFI, no cgo)
+        run: |
+          # `frost_roast_retry` alone compiles the coordinator registry / evidence /
+          # blame flow against mock producers; adding `frost_native` also compiles the
+          # native-engine <-> retry integration files (mock FFI engine, still no lib).
+          go build -tags "frost_roast_retry" ./...
+          go build -tags "frost_native frost_roast_retry" ./...
+
+      - name: Unit-test the tagged path (mock FFI, no cgo)
+        run: |
+          # These three tag sets cover every non-cgo tagged test file in pkg/frost and
+          # pkg/tbtc:
+          #   frost_native                    -> frost_native (and && !frost_roast_retry)
+          #   frost_roast_retry               -> frost_roast_retry (and && !frost_native)
+          #   frost_native frost_roast_retry  -> the intersection integration tests
+          # The `frost_native frost_tbtc_signer cgo` real-crypto tests are NOT run here;
+          # they are covered by frost-cgo-integration.yml.
+          for tags in \
+            "frost_native" \
+            "frost_roast_retry" \
+            "frost_native frost_roast_retry"; do
+            echo "::group::go test -tags \"$tags\""
+            go test -tags "$tags" -count=1 -timeout 25m ./pkg/frost/... ./pkg/tbtc/...
+            echo "::endgroup::"
+          done
+
   client-integration-test:
     needs: [client-detect-changes, electrum-integration-detect-changes, client-build-test-publish]
     if: |
