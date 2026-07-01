@@ -7558,6 +7558,96 @@ fn sign_round_and_finalize_idempotency_persist_across_storage_reload() {
 }
 
 #[test]
+fn start_sign_round_accepts_persisted_legacy_mixed_case_message_fingerprint() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("sign_legacy_mixed_case_message_fingerprint");
+    reset_for_tests();
+
+    let run_dkg_request = RunDkgRequest {
+        session_id: "session-legacy-mixed-case-message".to_string(),
+        participants: vec![
+            crate::api::DkgParticipant {
+                identifier: 1,
+                public_key_hex: "02aa".to_string(),
+            },
+            crate::api::DkgParticipant {
+                identifier: 2,
+                public_key_hex: "02bb".to_string(),
+            },
+        ],
+        threshold: 2,
+        dkg_seed_hex: None,
+    };
+    let dkg_result = run_dkg(run_dkg_request).expect("run dkg");
+
+    // Caller sends non-lowercase message_hex, as a pre-canonicalization build
+    // would have. hex::decode accepts it; start_sign_round lowercases it
+    // internally before fingerprinting.
+    let start_request = StartSignRoundRequest {
+        session_id: "session-legacy-mixed-case-message".to_string(),
+        member_identifier: 1,
+        message_hex: "BADDCAFE".to_string(),
+        key_group: dkg_result.key_group,
+        taproot_merkle_root_hex: None,
+        signing_participants: Some(vec![1, 2]),
+        attempt_context: None,
+        attempt_transition_evidence: None,
+    };
+    let first_round_state = start_sign_round(start_request.clone()).expect("start sign round");
+
+    // The canonical fingerprint the current build stores is computed over the
+    // lowercased message_hex; the fingerprint a pre-canonicalization build
+    // persisted is computed over the original mixed casing. They must differ.
+    let mut lowercase_request = start_request.clone();
+    lowercase_request.message_hex = start_request.message_hex.to_ascii_lowercase();
+    let canonical_fingerprint =
+        start_sign_round_request_fingerprint(&lowercase_request, 0).expect("canonical fingerprint");
+    let legacy_mixed_case_fingerprint =
+        start_sign_round_request_fingerprint(&start_request, 0).expect("mixed-case fingerprint");
+    assert_ne!(canonical_fingerprint, legacy_mixed_case_fingerprint);
+
+    // Simulate the persisted state of a pre-canonicalization build: the active
+    // round's fingerprint was stored over the original mixed casing.
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard
+            .sessions
+            .get_mut(&start_request.session_id)
+            .expect("session state");
+        assert_eq!(
+            session.sign_request_fingerprint.as_deref(),
+            Some(canonical_fingerprint.as_str())
+        );
+        session.sign_request_fingerprint = Some(legacy_mixed_case_fingerprint.clone());
+        persist_engine_state_to_storage(&guard).expect("persist legacy mixed-case fingerprint");
+    }
+
+    // The same retry (still mixed casing) must reuse the cached round instead of
+    // failing SessionConflict.
+    reload_state_from_storage_for_tests();
+    let retry_round_state =
+        start_sign_round(start_request.clone()).expect("legacy mixed-case fingerprint retry");
+    assert_eq!(first_round_state, retry_round_state);
+
+    // Reuse migrates the stored fingerprint to the canonical lowercase form.
+    reload_state_from_storage_for_tests();
+    {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard
+            .sessions
+            .get(&start_request.session_id)
+            .expect("session state");
+        assert_eq!(
+            session.sign_request_fingerprint.as_deref(),
+            Some(canonical_fingerprint.as_str())
+        );
+    }
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn start_sign_round_accepts_persisted_legacy_member_bound_fingerprint() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("sign_legacy_member_fingerprint");
