@@ -23,6 +23,13 @@ pub fn start_sign_round(mut request: StartSignRoundRequest) -> Result<RoundState
 
     let message_bytes = hex::decode(&request.message_hex)
         .map_err(|_| EngineError::Validation("message_hex must be valid hex".to_string()))?;
+    // Canonicalize message_hex to lowercase before it feeds the request
+    // fingerprint (below) and round-id derivation, mirroring the interactive
+    // path (see interactive.rs). hex::decode accepts mixed casing, so without
+    // this two calls carrying the same message bytes but different hex casing
+    // would derive different fingerprints/round ids and a semantically
+    // identical retry would be rejected as a SessionConflict.
+    request.message_hex = request.message_hex.to_ascii_lowercase();
     let message_digest_hex = hash_hex(&message_bytes);
     let taproot_merkle_root =
         canonicalize_taproot_merkle_root_hex(&mut request.taproot_merkle_root_hex)?;
