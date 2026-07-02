@@ -30,6 +30,12 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
+          # Name the toolchain explicitly so it is self-documenting and
+          # independent of the pinned action's default. (This action version
+          # already defaults `toolchain` to `stable`; older versions instead
+          # derived it from the action ref, which would resolve to the SHA
+          # under this supply-chain pin -- so being explicit is the safe form.)
+          toolchain: stable
           components: rustfmt, clippy
 
       - name: Check formatting
@@ -74,6 +80,10 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          # Explicit toolchain, independent of the pinned action's default
+          # (see the Setup Rust step above).
+          toolchain: stable
 
       - name: Run signer formal invariant tests
         # Filters cargo test by the formal_verification_ prefix so only
