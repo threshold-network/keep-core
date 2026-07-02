@@ -9,6 +9,12 @@ name: FROST cgo integration
 # against it with skips FORBIDDEN (KEEP_CORE_FROST_REQUIRE_CGO=true), so a stale/missing/
 # unloadable lib fails the job instead of quietly dropping coverage.
 #
+# The tag set also includes `frost_roast_retry`, so the ROAST retry coordinator flow is
+# compiled and tested against real crypto here (the mock-FFI variant runs in client.yml),
+# and the job smoke-builds the full activation artifact via `make build-frost`. The
+# non-cgo tagged build/test coverage lives in the client.yml `client-frost-roast-retry`
+# job; together they cover the tag matrix that the default untagged CI never touches.
+#
 # The Go interactive code and the signer crate currently live on separate branches, so
 # this checks the pinned mirror commit out into a side path and builds from there. After
 # the branches merge, replace the cross-branch checkout with an in-tree cargo build and
@@ -22,6 +28,7 @@ on:
       - "pkg/net/**"
       - "go.mod"
       - "go.sum"
+      - "Makefile"
       - "ci/frost-signer-pin.env"
       - ".github/workflows/frost-cgo-integration.yml"
   workflow_dispatch: {}
@@ -104,10 +111,28 @@ jobs:
           # references its symbols only via dlsym (no direct references), so the loader
           # makes them resolvable at runtime; rpath lets the test binary find the .so.
           export CGO_LDFLAGS="-L${FROST_LIB_DIR} -Wl,--no-as-needed -lfrost_tbtc -Wl,-rpath,${FROST_LIB_DIR}"
-          # The real-crypto suite (exercises the engine + the ABI preflight against the
-          # linked lib) plus the ABI fail-closed test (proves a present-but-incompatible
-          # lib refuses to fall back to legacy signing; uses the seam, so it does not need
-          # an actually-incompatible lib). This gate is the only CI that builds these tags.
-          go test -tags "frost_native frost_tbtc_signer" -count=1 \
-            -run 'TestRealCgoInteractiveSigning|TestBuildTaggedLegacyCompatibleNativeExecutionFFISigningPrimitive_Sign_TBTCSignerPath_ABIIncompatible_DoesNotFallback' \
+          # Run the WHOLE tagged pkg/frost/signing suite against the linked lib, not a
+          # narrow -run subset. `frost_roast_retry` is added to the tag set so the ROAST
+          # retry coordinator flow (liveness + evidence/blame) is compiled and tested
+          # against real crypto here too, not only in the mock-FFI job (client.yml).
+          # With KEEP_CORE_FROST_REQUIRE_CGO=true a lib-unavailable would-be skip becomes
+          # a hard failure, so a stale/missing symbol fails the gate instead of silently
+          # dropping coverage. This gate is the only CI that builds the cgo tag set.
+          go test -tags "frost_native frost_tbtc_signer frost_roast_retry" -count=1 \
+            -timeout 20m \
             ./pkg/frost/signing/
+
+      - name: Smoke-build the FROST activation artifact (make build-frost)
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          set -euo pipefail
+          # Proves the release/activation binary - the keep-client built with
+          # `frost_native frost_tbtc_signer frost_roast_retry` and linked against
+          # libfrost_tbtc - actually compiles and links. The default `make build` the
+          # release/Docker path runs ships the `!frost_roast_retry` no-op stubs; this is
+          # the target that produces the ROAST-retry-enabled artifact once the readiness
+          # manifest flips. Reuses the same lib built above (frost_lib_dir=FROST_LIB_DIR).
+          make build-frost frost_lib_dir="${FROST_LIB_DIR}"
+          test -x ./keep-client || { echo "keep-client activation binary was not produced"; exit 1; }
+          ./keep-client --version
