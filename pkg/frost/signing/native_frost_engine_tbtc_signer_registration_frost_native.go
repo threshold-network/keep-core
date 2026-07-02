@@ -678,6 +678,12 @@ func (bttse *buildTaggedTBTCSignerEngine) RunDKGWithSeed(
 	if err != nil {
 		return nil, err
 	}
+	// The request embeds the DKG seed, which deterministically drives key
+	// generation and therefore reconstructs the group secret; scrub the
+	// Go-side buffer on every return path, mirroring the Sign path. The C copy
+	// is separately scrubbed in callBuildTaggedTBTCSignerOperation. The RunDKG
+	// response carries only public metadata, so it is not zeroized.
+	defer zeroBytes(requestPayload)
 
 	responsePayload, err := callBuildTaggedTBTCSignerRunDKG(requestPayload)
 	if err != nil {
@@ -705,6 +711,11 @@ func (bttse *buildTaggedTBTCSignerEngine) Part1(
 	if err != nil {
 		return nil, err
 	}
+	// The response carries the round-1 secret package (private polynomial
+	// coefficients that must never be broadcast). Scrub the Go-side transport
+	// buffer once decoded, mirroring the Sign path's zeroBytes hygiene; the
+	// decoded secret returned to the caller is a fresh, independent copy.
+	defer zeroBytes(responsePayload)
 
 	return decodeBuildTaggedTBTCSignerDKGPart1Response(responsePayload)
 }
@@ -720,11 +731,19 @@ func (bttse *buildTaggedTBTCSignerEngine) Part2(
 	if err != nil {
 		return nil, err
 	}
+	// The request embeds the round-1 secret package; scrub the Go-side buffer
+	// on every return path (including a failed FFI call), mirroring the Sign
+	// path. The C copy is separately scrubbed in callBuildTaggedTBTCSignerOperation.
+	defer zeroBytes(requestPayload)
 
 	responsePayload, err := callBuildTaggedTBTCSignerDKGPart2(requestPayload)
 	if err != nil {
 		return nil, err
 	}
+	// The response carries the round-2 secret package and the per-recipient
+	// round-2 packages (secret shares). Scrub the Go-side transport buffer once
+	// decoded; the decoded values returned to the caller are fresh copies.
+	defer zeroBytes(responsePayload)
 
 	return decodeBuildTaggedTBTCSignerDKGPart2Response(responsePayload)
 }
@@ -742,11 +761,20 @@ func (bttse *buildTaggedTBTCSignerEngine) Part3(
 	if err != nil {
 		return nil, err
 	}
+	// The request embeds the round-2 secret package and the received round-2
+	// packages (incoming secret shares); scrub the Go-side buffer on every
+	// return path, mirroring the Sign path. The C copy is separately scrubbed
+	// in callBuildTaggedTBTCSignerOperation.
+	defer zeroBytes(requestPayload)
 
 	responsePayload, err := callBuildTaggedTBTCSignerDKGPart3(requestPayload)
 	if err != nil {
 		return nil, err
 	}
+	// The response carries the final key package (the long-term signing share).
+	// Scrub the Go-side transport buffer once decoded; the decoded key package
+	// returned to the caller is a fresh copy.
+	defer zeroBytes(responsePayload)
 
 	return decodeBuildTaggedTBTCSignerDKGPart3Response(responsePayload)
 }
