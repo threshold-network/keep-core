@@ -50,10 +50,12 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -87,6 +89,9 @@ func TestFrostDKGCoordinatorChainEndToEnd_RealCgo(t *testing.T) {
 	realEngine := frostsigning.CurrentNativeTBTCSignerEngine()
 	seeded, ok := realEngine.(frostsigning.NativeTBTCSignerSeededDKGEngine)
 	if realEngine == nil || !ok {
+		// The build-tagged engine registers whether or not libfrost_tbtc is
+		// actually linked, so this only guards the trivial "no engine at all"
+		// case; the real lib-usability probe follows.
 		if requireFrostCgo() {
 			t.Fatalf(
 				"real cgo tbtc-signer seeded DKG engine unavailable "+
@@ -96,6 +101,31 @@ func TestFrostDKGCoordinatorChainEndToEnd_RealCgo(t *testing.T) {
 		}
 		t.Skip("real cgo tbtc-signer seeded DKG engine unavailable; skipping")
 	}
+
+	// P1: probe the REAL linked library UP FRONT. The tbtc-signer engine
+	// registers via build tag even when libfrost_tbtc is absent/stale; the
+	// missing ABI symbol only surfaces inside a request-taking engine op (which
+	// funnels through the once-per-process ABI preflight). Exercise that path
+	// here - BEFORE emitting the event - so an unusable lib SKIPS immediately
+	// (or FATALs under the require-cgo gate) instead of failing the coordinator
+	// goroutine and hanging until the 90s deadline. This runs on the raw seeded
+	// engine so it does not pollute the recording wrapper's captured key.
+	probeSeed, err := frostDKGSeedHex(randomFrostSeed(t))
+	if err != nil {
+		t.Fatalf("cannot build probe seed: %v", err)
+	}
+	// Unique session id per invocation so in-process repeats (-count=N) add a
+	// fresh probe DKG session rather than conflicting on a fixed one.
+	_, probeErr := seeded.RunDKGWithSeed(
+		fmt.Sprintf("frost-e2e-abi-probe-%d-%x", os.Getpid(), randomFrostSeed(t).Bytes()),
+		[]frostsigning.NativeTBTCSignerDKGParticipant{
+			{Identifier: 1, PublicKeyHex: frostsigning.NativeTBTCSignerDKGPlaceholderPublicKeyHex(1)},
+			{Identifier: 2, PublicKeyHex: frostsigning.NativeTBTCSignerDKGPlaceholderPublicKeyHex(2)},
+		},
+		2,
+		probeSeed,
+	)
+	skipOrFailIfFrostUnavailable(t, "tbtc-signer ABI preflight (RunDKGWithSeed)", probeErr)
 
 	recordingEngine := &recordingSeededDKGEngine{
 		NativeTBTCSignerEngine: realEngine,
@@ -156,13 +186,27 @@ func TestFrostDKGCoordinatorChainEndToEnd_RealCgo(t *testing.T) {
 		bridgeHandlers:    map[int]func(*BridgeNewWalletRequestedEvent){},
 		submittedHandlers: map[int]func(*FrostDKGResultSubmittedEvent){},
 		submittedCh:       make(chan *registry.Result, 1),
+		recoveryScanned:   make(chan struct{}),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	// (1) wire the coordinator to the chain, exactly as production startup does.
+	// This also launches recoverFrostDKGCoordinatorState asynchronously.
 	initializeFrostDKGCoordinator(ctx, node, frostChain)
+
+	// P2: wait until recovery has completed its initial state scan (observing
+	// IDLE) before flipping the state. Recovery reads GetFrostDKGState exactly
+	// once at startup; because the chain is IDLE with no past started events, it
+	// exits as a no-op. Gating the emit on that scan removes any reliance on
+	// goroutine scheduling: only the OnFrostDKGStarted subscription (which always
+	// runs the block-confirmation path) can drive this DKG.
+	select {
+	case <-frostChain.recoveryScanned:
+	case <-ctx.Done():
+		t.Fatalf("recovery state scan did not complete: %v", ctx.Err())
+	}
 
 	// (2) simulate requestNewWallet -> the chain emits FrostDKGStarted with a
 	// unique seed (keeps the derived cgo session id unique across -count=N).
@@ -179,6 +223,34 @@ func TestFrostDKGCoordinatorChainEndToEnd_RealCgo(t *testing.T) {
 		t.Fatalf("timed out waiting for FROST DKG result submission: %v", ctx.Err())
 	}
 	t.Logf("STEP 4: SubmitFrostDKGResult observed on-chain")
+
+	// P2 (regression guard): prove the OnFrostDKGStarted subscription's
+	// block-confirmation path actually ran - not the recovery bypass. That path
+	// blocks on node.waitForBlockHeight(emitBlock + dkgStartedConfirmationBlocks)
+	// before it can announce and submit, so the submission CANNOT land before
+	// that block floor. The recovery bypass (handleFrostDKGStarted with
+	// waitForConfirmation=false) skips the wait and would submit
+	// dkgStartedConfirmationBlocks sooner. This is a deterministic floor
+	// (waitForBlockHeight blocks until the height is reached), not a timing race.
+	frostChain.mu.Lock()
+	emitBlock := frostChain.emitBlock
+	submitBlock := frostChain.submitBlock
+	frostChain.mu.Unlock()
+	if submitBlock < emitBlock+dkgStartedConfirmationBlocks {
+		t.Fatalf(
+			"submission at block %d did not clear the confirmation floor "+
+				"(emit %d + %d); the block-confirmation path was NOT exercised",
+			submitBlock,
+			emitBlock,
+			dkgStartedConfirmationBlocks,
+		)
+	}
+	t.Logf(
+		"CONFIRMATION PATH: submit block %d >= emit %d + confirmation %d (block-confirmation path exercised)",
+		submitBlock,
+		emitBlock,
+		dkgStartedConfirmationBlocks,
+	)
 
 	// --- LOAD-BEARING ASSERTIONS ---------------------------------------------
 	// The submitted x-only group key must be the EXACT output of the real cgo
@@ -309,10 +381,22 @@ type frostE2EChain struct {
 	pastSubmitted     []*FrostDKGResultSubmittedEvent
 	group             *GroupSelectionResult
 	submitted         *registry.Result
+	emitBlock         uint64
+	submitBlock       uint64
 	startedHandlers   map[int]func(*FrostDKGStartedEvent)
 	bridgeHandlers    map[int]func(*BridgeNewWalletRequestedEvent)
 	submittedHandlers map[int]func(*FrostDKGResultSubmittedEvent)
 	submittedCh       chan *registry.Result
+
+	// recoveryScanned is closed by the FIRST GetFrostDKGState call, which is
+	// recoverFrostDKGCoordinatorState's initial scan (nothing else queries the
+	// state before the started event is emitted). The test waits on it to
+	// guarantee recovery has already observed the IDLE state - making it a
+	// genuine no-op - before the state is flipped to AwaitingResult, so the DKG
+	// is driven DETERMINISTICALLY through the OnFrostDKGStarted subscription +
+	// confirmation path and never through the recovery bypass. See P2.
+	recoveryScanned  chan struct{}
+	recoveryScanOnce sync.Once
 }
 
 // startFrostDKG simulates the on-chain requestNewWallet -> DkgStarted sequence:
@@ -328,6 +412,7 @@ func (c *frostE2EChain) startFrostDKG(seed *big.Int) {
 
 	c.mu.Lock()
 	c.state = AwaitingResult
+	c.emitBlock = block
 	c.pastStarted = append(c.pastStarted, event)
 	bridgeHandlers := make([]func(*BridgeNewWalletRequestedEvent), 0, len(c.bridgeHandlers))
 	for _, handler := range c.bridgeHandlers {
@@ -432,8 +517,14 @@ func (c *frostE2EChain) SelectFrostGroup() (*GroupSelectionResult, error) {
 
 func (c *frostE2EChain) GetFrostDKGState() (DKGState, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.state, nil
+	state := c.state
+	c.mu.Unlock()
+
+	// The first reader is recoverFrostDKGCoordinatorState's startup scan; signal
+	// it has observed the state so the test can safely emit afterwards (P2).
+	c.recoveryScanOnce.Do(func() { close(c.recoveryScanned) })
+
+	return state, nil
 }
 
 func (c *frostE2EChain) IsFrostDKGResultValid(
@@ -481,6 +572,7 @@ func (c *frostE2EChain) SubmitFrostDKGResult(result *registry.Result) error {
 	}
 	c.state = Challenge
 	c.submitted = result
+	c.submitBlock = block
 	resultHash := DKGChainResultHash(sha256.Sum256(result.XOnlyOutputKey[:]))
 	seed := big.NewInt(0)
 	if len(c.pastStarted) > 0 {
@@ -580,12 +672,43 @@ func randomFrostSeed(t *testing.T) *big.Int {
 	return seed
 }
 
+// requireFrostCgo mirrors the reference harness's FrostRequireCgoEnvVar gate
+// (pkg/frost/signing): the "lib unavailable" outcome is a SKIP unless
+// KEEP_CORE_FROST_REQUIRE_CGO is truthy, in which case it is FATAL.
 func requireFrostCgo() bool {
-	value := os.Getenv("KEEP_CORE_FROST_REQUIRE_CGO")
-	switch value {
-	case "", "0", "false", "FALSE", "False":
-		return false
-	default:
-		return true
+	return strings.EqualFold(
+		strings.TrimSpace(os.Getenv("KEEP_CORE_FROST_REQUIRE_CGO")),
+		"true",
+	)
+}
+
+// skipOrFailIfFrostUnavailable mirrors the reference skipFrostUnavailable
+// (pkg/frost/signing/roast_real_cgo_interactive_e2e_frost_native_test.go): a
+// missing/stale libfrost_tbtc surfaces as ErrNativeCryptographyUnavailable and
+// SKIPS the test (or FATALs under the require-cgo gate); any other error is a
+// genuine failure; nil is a no-op.
+func skipOrFailIfFrostUnavailable(t *testing.T, op string, err error) {
+	t.Helper()
+	if err == nil {
+		return
 	}
+	if errors.Is(err, frostsigning.ErrNativeCryptographyUnavailable) {
+		if requireFrostCgo() {
+			t.Fatalf(
+				"%s: tbtc-signer FFI symbol unavailable but "+
+					"KEEP_CORE_FROST_REQUIRE_CGO is set (lib absent, stale, or "+
+					"failed to load - the linked libfrost_tbtc must satisfy the "+
+					"bridge): %v",
+				op,
+				err,
+			)
+		}
+		t.Skipf(
+			"%s: linked tbtc-signer FFI symbol unavailable (lib absent or "+
+				"stale; rebuild libfrost_tbtc): %v",
+			op,
+			err,
+		)
+	}
+	t.Fatalf("%s: %v", op, err)
 }
