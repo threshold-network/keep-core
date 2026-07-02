@@ -172,10 +172,45 @@ pub fn dkg_part3(request: DkgPart3Request) -> Result<DkgPart3Result, EngineError
     Ok(result)
 }
 
+/// The stateless `generate_nonces_and_commitments` / `sign_share` FFI
+/// primitives hand a one-time signing nonce pair out to the host and later
+/// accept it back as opaque `nonces_hex`. That leaves nonce custody -- and
+/// the single-use invariant -- entirely with the caller (the `SignShareRequest`
+/// contract even states the caller "is cryptographically responsible for
+/// single use"). A host bug or compromise that replays one `nonces_hex`
+/// across two distinct signing packages produces two Schnorr shares under
+/// the same nonce, which algebraically solves for the long-term secret
+/// share. Unlike the deterministic StartSignRound/FinalizeSignRound path --
+/// which is already fenced off in production by
+/// `enforce_transitional_signing_disabled_in_production` -- these primitives
+/// had no production gate, so a production signer could be driven through
+/// them and inherit that blast radius. Fail closed under the production
+/// profile: production signing must use the interactive FROST path
+/// (`interactive.rs`), where the engine retains nonce custody and enforces
+/// durable single-use consumption markers. Non-production profiles keep the
+/// primitives available for the transitional/host-orchestrated flow and for
+/// tests.
+pub(crate) fn enforce_stateless_nonce_primitives_disabled_in_production(
+    operation: &str,
+) -> Result<(), EngineError> {
+    if signer_profile_is_production() {
+        return Err(EngineError::LifecyclePolicyRejected {
+            session_id: operation.to_string(),
+            reason_code: "stateless_nonce_primitives_disabled_in_production".to_string(),
+            detail: format!(
+                "stateless host-custody nonce primitive [{operation}] is disabled when {TBTC_SIGNER_PROFILE_ENV}={TBTC_SIGNER_PROFILE_PRODUCTION}; production signing must use the interactive FROST path, which keeps nonce custody inside the engine and enforces single-use nonces"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 pub fn generate_nonces_and_commitments(
     request: GenerateNoncesAndCommitmentsRequest,
 ) -> Result<GenerateNoncesAndCommitmentsResult, EngineError> {
     enforce_provenance_gate()?;
+    enforce_stateless_nonce_primitives_disabled_in_production("GenerateNoncesAndCommitments")?;
 
     let key_package = decode_key_package(
         "GenerateNoncesAndCommitments",
@@ -235,6 +270,7 @@ pub fn new_signing_package(
 
 pub fn sign_share(request: SignShareRequest) -> Result<SignShareResult, EngineError> {
     enforce_provenance_gate()?;
+    enforce_stateless_nonce_primitives_disabled_in_production("SignShare")?;
 
     let signing_package_bytes = decode_hex_field(
         "SignShare",

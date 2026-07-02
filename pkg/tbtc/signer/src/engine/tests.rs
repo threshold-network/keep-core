@@ -4686,6 +4686,86 @@ fn finalize_sign_round_rejects_transitional_signing_in_production_profile() {
 }
 
 #[test]
+fn stateless_nonce_primitives_reject_under_production_profile() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    // Build real, secret-bearing inputs under the development profile: valid
+    // key packages, a nonce pair per signer, and a signing package. Both
+    // stateless primitives must succeed here, proving the production gate does
+    // not regress the transitional/host-orchestrated path or the test path.
+    let fixture = deterministic_interactive_dkg_fixture(7);
+    let mut part3_results = BTreeMap::new();
+    for (id, request) in fixture.part3_requests {
+        part3_results.insert(id, dkg_part3(request).expect("DKG part3"));
+    }
+
+    let signing_participants = [1u16, 2];
+    let mut commitments = Vec::new();
+    let mut nonces_by_participant = BTreeMap::new();
+    for id in signing_participants {
+        let result = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+            key_package_identifier: part3_results[&id].key_package.identifier.clone(),
+            key_package_hex: part3_results[&id].key_package.data_hex.clone(),
+        })
+        .expect("development profile generates nonces");
+        commitments.push(result.commitment);
+        nonces_by_participant.insert(id, result.nonces_hex);
+    }
+    let signing_package = new_signing_package(NewSigningPackageRequest {
+        message_hex: hex::encode([0x11u8; 32]),
+        commitments,
+    })
+    .expect("development profile builds signing package");
+    sign_share(SignShareRequest {
+        signing_package_hex: signing_package.signing_package_hex.clone(),
+        nonces_hex: nonces_by_participant[&1].clone().into(),
+        key_package_identifier: part3_results[&1].key_package.identifier.clone(),
+        key_package_hex: part3_results[&1].key_package.data_hex.clone().into(),
+    })
+    .expect("development profile signs share");
+
+    // Flip to the production profile with valid provenance configured so the
+    // primitives reach the new gate rather than tripping the provenance gate
+    // first. Feed the SAME secret key package, host-custody nonces, and
+    // signing package that just succeeded: production must now fail closed
+    // BEFORE any secret is deserialized (the gate is the second statement of
+    // each primitive, ahead of decode_key_package / nonce deserialization).
+    configure_valid_provenance_attestation_for_tests();
+    let _signer_profile = SignerProfileGuard::production();
+
+    let nonces_err = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: part3_results[&1].key_package.identifier.clone(),
+        key_package_hex: part3_results[&1].key_package.data_hex.clone(),
+    })
+    .expect_err("production profile must refuse to mint host-custody nonces");
+    let EngineError::LifecyclePolicyRejected { reason_code, .. } = nonces_err else {
+        panic!("unexpected error variant for generate_nonces_and_commitments");
+    };
+    assert_eq!(
+        reason_code,
+        "stateless_nonce_primitives_disabled_in_production"
+    );
+
+    let share_err = sign_share(SignShareRequest {
+        signing_package_hex: signing_package.signing_package_hex.clone(),
+        nonces_hex: nonces_by_participant[&1].clone().into(),
+        key_package_identifier: part3_results[&1].key_package.identifier.clone(),
+        key_package_hex: part3_results[&1].key_package.data_hex.clone().into(),
+    })
+    .expect_err("production profile must refuse to sign a host-supplied nonce");
+    let EngineError::LifecyclePolicyRejected { reason_code, .. } = share_err else {
+        panic!("unexpected error variant for sign_share");
+    };
+    assert_eq!(
+        reason_code,
+        "stateless_nonce_primitives_disabled_in_production"
+    );
+
+    reset_for_tests();
+}
+
+#[test]
 fn start_sign_round_accepts_valid_attempt_context_in_roast_strict_mode() {
     let _guard = lock_test_state();
     reset_for_tests();
