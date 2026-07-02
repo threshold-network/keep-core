@@ -23,11 +23,19 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
+          # Name the toolchain explicitly so it is self-documenting and
+          # independent of the pinned action's default. (This action version
+          # already defaults `toolchain` to `stable`; older versions instead
+          # derived it from the action ref, which would resolve to the SHA
+          # under this supply-chain pin -- so being explicit is the safe form.)
+          toolchain: stable
           components: rustfmt, clippy
 
       - name: Check formatting
@@ -47,13 +55,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Check RustSec advisories
         # Blocking gate: a newly-published advisory against any locked
         # dependency fails the build. Accepted/unfixable advisories are
         # recorded with rationale in pkg/tbtc/signer/deny.toml.
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
         with:
           manifest-path: pkg/tbtc/signer/Cargo.toml
           command: check advisories
@@ -64,10 +74,16 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          # Explicit toolchain, independent of the pinned action's default
+          # (see the Setup Rust step above).
+          toolchain: stable
 
       - name: Run signer formal invariant tests
         # Filters cargo test by the formal_verification_ prefix so only
@@ -82,10 +98,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
         with:
           distribution: temurin
           java-version: "17"
