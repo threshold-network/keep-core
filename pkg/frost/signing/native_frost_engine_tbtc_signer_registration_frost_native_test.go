@@ -44,6 +44,29 @@ func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 		)
 	}
 
+	// The fail-closed contract asserted below - every engine operation returns
+	// ErrNativeCryptographyUnavailable - only holds when libfrost_tbtc is NOT linked:
+	// the cgo bridge is compiled (this file's build tag) but the frost_tbtc_* symbols
+	// are not resolvable via dlsym. Under the frost-cgo-integration gate the lib IS
+	// linked, so native crypto is available and StartSignRound instead reaches the real
+	// signer (and its provenance gate); asserting an unavailable error there would be a
+	// false failure. Probe the linked lib with the same check the ABI preflight uses -
+	// it keeps ErrNativeCryptographyUnavailable in the chain iff the lib is absent - and
+	// skip the fail-closed assertions with a reason when the lib is present. The
+	// registration wiring above still runs under both builds, and the linked-lib crypto
+	// path is covered by TestBuildTaggedTBTCSignerInteractiveFROSTBridge_WithLinkedSigner
+	// and the TestRealCgoInteractiveSigning* suite.
+	if abiErr := assertTBTCSignerABICompatible(); !errors.Is(
+		abiErr, ErrNativeCryptographyUnavailable,
+	) {
+		t.Skipf(
+			"libfrost_tbtc linked (native crypto available; ABI probe: %v); the "+
+				"fail-closed-unavailable path this test asserts is not exercisable with "+
+				"the lib present",
+			abiErr,
+		)
+	}
+
 	_, err = engine.StartSignRound(
 		"session-1",
 		1,
