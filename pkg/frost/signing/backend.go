@@ -100,28 +100,19 @@ func CurrentExecutionBackendName() string {
 	return currentExecutionBackend().Name()
 }
 
-// NativeExecutionAvailable reports whether native FROST signing execution is
-// both registered and usable in the current build/runtime. It applies the same
-// availability gate that strict (ffi) mode enforces at backend selection, but
-// can be consulted regardless of the configured mode. This lets callers that
-// require native execution (e.g. FROST-enabled nodes) fail fast: the
-// fallback-allowed "native" mode does not verify availability when the backend
-// is selected, so an unavailable native engine otherwise stays hidden until it
-// falls back to the legacy bridge and fails at signing time.
+// NativeExecutionAvailable reports whether the real native FROST signing engine
+// (the native tbtc-signer FFI executor) is registered in the current
+// build/runtime. This is the strict availability signal: it deliberately does
+// NOT consult the build-tagged adapter's NativeExecutionAvailable, because in
+// fallback-allowed ("native") mode that reports available whenever the legacy
+// delegate is present - even on a frost_native build where the native FFI engine
+// failed to register or is not linked. Callers that require native execution
+// (e.g. FROST-enabled nodes) use this to fail fast at startup instead of
+// silently falling back to the legacy bridge and failing on native FROST signer
+// material at signing time. It mirrors the strict path the native bridge itself
+// uses (currentFFIExecutor() != nil).
 func NativeExecutionAvailable() bool {
-	executionBackendMutex.RLock()
-	adapter := nativeExecutionAdapter
-	executionBackendMutex.RUnlock()
-
-	if adapter == nil {
-		return false
-	}
-	// Mirror currentNativeExecutionBackend's strict-mode check: an adapter that
-	// does not report availability is treated as available once registered.
-	if reporter, ok := adapter.(nativeExecutionAvailabilityReporter); ok {
-		return reporter.NativeExecutionAvailable()
-	}
-	return true
+	return currentNativeExecutionFFIExecutor() != nil
 }
 
 // SetExecutionBackendByName configures the runtime backend by a stable name.
