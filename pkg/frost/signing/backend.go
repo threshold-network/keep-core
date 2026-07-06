@@ -100,6 +100,30 @@ func CurrentExecutionBackendName() string {
 	return currentExecutionBackend().Name()
 }
 
+// NativeExecutionAvailable reports whether native FROST signing execution is
+// both registered and usable in the current build/runtime. It applies the same
+// availability gate that strict (ffi) mode enforces at backend selection, but
+// can be consulted regardless of the configured mode. This lets callers that
+// require native execution (e.g. FROST-enabled nodes) fail fast: the
+// fallback-allowed "native" mode does not verify availability when the backend
+// is selected, so an unavailable native engine otherwise stays hidden until it
+// falls back to the legacy bridge and fails at signing time.
+func NativeExecutionAvailable() bool {
+	executionBackendMutex.RLock()
+	adapter := nativeExecutionAdapter
+	executionBackendMutex.RUnlock()
+
+	if adapter == nil {
+		return false
+	}
+	// Mirror currentNativeExecutionBackend's strict-mode check: an adapter that
+	// does not report availability is treated as available once registered.
+	if reporter, ok := adapter.(nativeExecutionAvailabilityReporter); ok {
+		return reporter.NativeExecutionAvailable()
+	}
+	return true
+}
+
 // SetExecutionBackendByName configures the runtime backend by a stable name.
 //
 // Supported values:

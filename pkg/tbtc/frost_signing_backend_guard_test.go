@@ -59,4 +59,39 @@ func TestVerifyFrostSigningBackend(t *testing.T) {
 			t.Fatalf("expected no error for the native backend, got [%v]", err)
 		}
 	})
+
+	t.Run("FROST enabled: native selected but unavailable is rejected", func(t *testing.T) {
+		// The fallback-allowed "native" mode selects a native backend name
+		// without verifying availability, so an unavailable native engine must
+		// still be rejected rather than silently falling back to legacy.
+		frostsigning.ResetExecutionBackend()
+		frostsigning.UnregisterNativeExecutionAdapter()
+		t.Cleanup(frostsigning.ResetExecutionBackend)
+		t.Cleanup(frostsigning.UnregisterNativeExecutionAdapter)
+
+		if err := frostsigning.RegisterNativeExecutionAdapter(
+			&unavailableNativeExecutionAdapter{},
+		); err != nil {
+			t.Fatalf("failed to register native execution adapter: [%v]", err)
+		}
+		if err := frostsigning.SetExecutionBackendByName("native"); err != nil {
+			t.Fatalf("failed to select the native backend: [%v]", err)
+		}
+
+		err := verifyFrostSigningBackend(true)
+		if err == nil {
+			t.Fatal("expected an error when native execution is unavailable, got nil")
+		}
+	})
+}
+
+// unavailableNativeExecutionAdapter is a native adapter that registers
+// successfully but reports native execution as unavailable, modelling a build
+// where the native tbtc-signer engine is not linked in.
+type unavailableNativeExecutionAdapter struct {
+	noopNativeExecutionAdapter
+}
+
+func (u *unavailableNativeExecutionAdapter) NativeExecutionAvailable() bool {
+	return false
 }

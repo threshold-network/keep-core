@@ -229,12 +229,30 @@ func verifyFrostSigningBackend(frostEnabled bool) error {
 	if !frostEnabled {
 		return nil
 	}
-	if backend := signing.CurrentExecutionBackendName(); backend == signing.LegacyExecutionBackendName {
+
+	backend := signing.CurrentExecutionBackendName()
+	if backend == signing.LegacyExecutionBackendName {
 		return fmt.Errorf(
 			"FROST DKG is enabled but the FROST signing backend is [%s]; set "+
 				"tbtc.frostSigningBackend to \"native\" or \"ffi\" - the legacy "+
 				"backend cannot sign native FROST wallets and would fail every "+
 				"signature",
+			backend,
+		)
+	}
+
+	// A non-legacy backend name is not sufficient: the fallback-allowed "native"
+	// mode is selected without verifying that native execution is actually
+	// available, so an unavailable native engine would fall back to the legacy
+	// bridge and fail on native FROST signer material at signing time. Require
+	// usable native execution up front.
+	if !signing.NativeExecutionAvailable() {
+		return fmt.Errorf(
+			"FROST DKG is enabled with signing backend [%s] but native FROST "+
+				"execution is unavailable in this build/runtime; use "+
+				"tbtc.frostSigningBackend=\"ffi\" with the native tbtc-signer "+
+				"linked in, otherwise signing falls back to the legacy bridge "+
+				"and fails on native FROST wallets",
 			backend,
 		)
 	}
