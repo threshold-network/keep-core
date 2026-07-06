@@ -7,16 +7,28 @@ import (
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 )
 
-// TestVerifyFrostSigningBackendForFrost covers the startup guard that prevents a
+// TestVerifyFrostSigningBackend covers the startup guard that prevents a
 // FROST-enabled node from running on the legacy signing backend (which cannot
-// sign native FROST wallets and would fail every signature).
-func TestVerifyFrostSigningBackendForFrost(t *testing.T) {
-	t.Run("legacy backend is rejected", func(t *testing.T) {
+// sign native FROST wallets and would fail every signature), while leaving nodes
+// with FROST disabled unaffected.
+func TestVerifyFrostSigningBackend(t *testing.T) {
+	t.Run("FROST disabled: legacy backend is accepted", func(t *testing.T) {
+		// A node whose chain satisfies FrostDKGChain but has no FROST wallet
+		// registry configured must keep working on the default legacy backend.
+		frostsigning.ResetExecutionBackend()
+		t.Cleanup(frostsigning.ResetExecutionBackend)
+
+		if err := verifyFrostSigningBackend(false); err != nil {
+			t.Fatalf("expected no error when FROST is disabled, got [%v]", err)
+		}
+	})
+
+	t.Run("FROST enabled: legacy backend is rejected", func(t *testing.T) {
 		// The default backend is the transitional legacy backend.
 		frostsigning.ResetExecutionBackend()
 		t.Cleanup(frostsigning.ResetExecutionBackend)
 
-		err := verifyFrostSigningBackendForFrost()
+		err := verifyFrostSigningBackend(true)
 		if err == nil {
 			t.Fatal("expected an error for the legacy signing backend, got nil")
 		}
@@ -28,7 +40,7 @@ func TestVerifyFrostSigningBackendForFrost(t *testing.T) {
 		}
 	})
 
-	t.Run("native backend is accepted", func(t *testing.T) {
+	t.Run("FROST enabled: native backend is accepted", func(t *testing.T) {
 		frostsigning.ResetExecutionBackend()
 		frostsigning.UnregisterNativeExecutionAdapter()
 		t.Cleanup(frostsigning.ResetExecutionBackend)
@@ -43,7 +55,7 @@ func TestVerifyFrostSigningBackendForFrost(t *testing.T) {
 			t.Fatalf("failed to select the native backend: [%v]", err)
 		}
 
-		if err := verifyFrostSigningBackendForFrost(); err != nil {
+		if err := verifyFrostSigningBackend(true); err != nil {
 			t.Fatalf("expected no error for the native backend, got [%v]", err)
 		}
 	})

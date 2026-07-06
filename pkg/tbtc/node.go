@@ -213,14 +213,22 @@ func configureFrostSigningBackend(config Config) error {
 	return signing.SetExecutionBackendByName(config.FrostSigningBackend)
 }
 
-// verifyFrostSigningBackendForFrost fails fast when FROST DKG is enabled while
-// the configured signing backend is the transitional legacy backend. Native
-// FROST wallets carry native signer material that the legacy backend cannot
-// process, so a node left on the legacy backend produces valid wallets via DKG
-// but then fails every signing attempt (heartbeat, deposit sweep, redemption,
-// ...). The native backend handles both native FROST and legacy-ECDSA material,
-// so it is always the correct choice once FROST is enabled.
-func verifyFrostSigningBackendForFrost() error {
+// verifyFrostSigningBackend fails fast when FROST DKG is enabled while the
+// configured signing backend is the transitional legacy backend. Native FROST
+// wallets carry native signer material that the legacy backend cannot process,
+// so a node left on the legacy backend produces valid wallets via DKG but then
+// fails every signing attempt (heartbeat, deposit sweep, redemption, ...). The
+// native backend handles both native FROST and legacy-ECDSA material, so it is
+// always the correct choice once FROST is enabled.
+//
+// The guard is a no-op when FROST is not enabled (frostEnabled == false): the
+// normal Ethereum TbtcChain satisfies FrostDKGChain even when no FROST wallet
+// registry is configured, and in that case the node has no FROST wallets to
+// sign for, so the default legacy backend is fine.
+func verifyFrostSigningBackend(frostEnabled bool) error {
+	if !frostEnabled {
+		return nil
+	}
 	if backend := signing.CurrentExecutionBackendName(); backend == signing.LegacyExecutionBackendName {
 		return fmt.Errorf(
 			"FROST DKG is enabled but the FROST signing backend is [%s]; set "+

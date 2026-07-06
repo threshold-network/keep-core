@@ -189,8 +189,13 @@ func Initialize(
 
 	if frostChain, ok := chain.(FrostDKGChain); ok {
 		// Fail fast if a FROST-enabled node is left on the legacy signing
-		// backend, which cannot sign native FROST wallets.
-		if err := verifyFrostSigningBackendForFrost(); err != nil {
+		// backend, which cannot sign native FROST wallets. Gate on the same
+		// FROST-enabled signal that initializeFrostDKGCoordinator uses so that
+		// nodes without a FROST wallet registry configured (FROST disabled) are
+		// unaffected and keep working on the default backend.
+		if err := verifyFrostSigningBackend(
+			frostChain.FrostWalletRegistryAvailable(),
+		); err != nil {
 			return err
 		}
 
