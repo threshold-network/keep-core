@@ -180,6 +180,21 @@ func Initialize(
 		return fmt.Errorf("cannot set up TBTC node: [%v]", err)
 	}
 
+	// Fail fast on an invalid FROST signing backend BEFORE starting any protocol
+	// work. verifyFrostSigningBackend is a no-op unless FROST is enabled (a FROST
+	// wallet registry is configured); a FROST-enabled node on the legacy backend,
+	// or without a usable/linked native signer engine, cannot sign native FROST
+	// wallets. Reject it here - before the coordination layer starts its window
+	// watcher and result processor - so a rejected node has no protocol side
+	// effects even if the caller does not immediately cancel the context.
+	if frostChain, ok := chain.(FrostDKGChain); ok {
+		if err := verifyFrostSigningBackend(
+			frostChain.FrostWalletRegistryAvailable(),
+		); err != nil {
+			return err
+		}
+	}
+
 	err = node.runCoordinationLayer(ctx)
 	if err != nil {
 		return fmt.Errorf("cannot run coordination layer: [%w]", err)
@@ -188,17 +203,6 @@ func Initialize(
 	deduplicator := newDeduplicator()
 
 	if frostChain, ok := chain.(FrostDKGChain); ok {
-		// Fail fast if a FROST-enabled node is left on the legacy signing
-		// backend, which cannot sign native FROST wallets. Gate on the same
-		// FROST-enabled signal that initializeFrostDKGCoordinator uses so that
-		// nodes without a FROST wallet registry configured (FROST disabled) are
-		// unaffected and keep working on the default backend.
-		if err := verifyFrostSigningBackend(
-			frostChain.FrostWalletRegistryAvailable(),
-		); err != nil {
-			return err
-		}
-
 		initializeFrostDKGCoordinator(ctx, node, frostChain)
 	}
 

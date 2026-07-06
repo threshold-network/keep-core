@@ -63,6 +63,12 @@ func TestVerifyFrostSigningBackend(t *testing.T) {
 		if err := frostsigning.SetExecutionBackendByName("native"); err != nil {
 			t.Fatalf("failed to select the native backend: [%v]", err)
 		}
+		// In the optional-link dev profile libfrost_tbtc is not linked, so native
+		// execution is genuinely unavailable and the guard correctly rejects it;
+		// skip the positive assertion there.
+		if !frostsigning.NativeExecutionAvailable() {
+			t.Skip("native signer library not linked in this build profile; native execution is genuinely unavailable")
+		}
 		if err := verifyFrostSigningBackend(true); err != nil {
 			t.Fatalf("expected no error with the native signer engine linked, got [%v]", err)
 		}
