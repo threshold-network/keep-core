@@ -100,19 +100,23 @@ func CurrentExecutionBackendName() string {
 	return currentExecutionBackend().Name()
 }
 
-// NativeExecutionAvailable reports whether the real native FROST signing engine
-// (the native tbtc-signer FFI executor) is registered in the current
-// build/runtime. This is the strict availability signal: it deliberately does
-// NOT consult the build-tagged adapter's NativeExecutionAvailable, because in
-// fallback-allowed ("native") mode that reports available whenever the legacy
-// delegate is present - even on a frost_native build where the native FFI engine
-// failed to register or is not linked. Callers that require native execution
-// (e.g. FROST-enabled nodes) use this to fail fast at startup instead of
-// silently falling back to the legacy bridge and failing on native FROST signer
-// material at signing time. It mirrors the strict path the native bridge itself
-// uses (currentFFIExecutor() != nil).
+// NativeExecutionAvailable reports whether the real native tbtc-signer FROST
+// engine is linked and registered in the current build/runtime. This is the
+// strict availability signal: it deliberately does NOT consult the backend
+// name, the adapter's NativeExecutionAvailable, or the FFI executor pointer.
+// Those all report available too eagerly on a frost_native build that is NOT
+// linked with the native signer (frost_tbtc_signer/cgo): the build init still
+// registers the transitional FFI executor/legacy-delegate wrappers, so a
+// FROST-enabled node on native/ffi would pass and only fall back to legacy (or
+// fail on ErrNativeCryptographyUnavailable) when it hits DKG-persisted FROST
+// signer material. Instead this checks the actual linked signer engine
+// (nativeSignerEngineAvailable), which is registered only by
+// frost_native && frost_tbtc_signer && cgo builds - the same engine the
+// transitional primitive itself requires before executing natively. Callers
+// that require native execution (e.g. FROST-enabled nodes) use this to fail
+// fast at startup.
 func NativeExecutionAvailable() bool {
-	return currentNativeExecutionFFIExecutor() != nil
+	return nativeSignerEngineAvailable()
 }
 
 // SetExecutionBackendByName configures the runtime backend by a stable name.
