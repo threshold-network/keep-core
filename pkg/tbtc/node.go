@@ -213,6 +213,26 @@ func configureFrostSigningBackend(config Config) error {
 	return signing.SetExecutionBackendByName(config.FrostSigningBackend)
 }
 
+// verifyFrostSigningBackendForFrost fails fast when FROST DKG is enabled while
+// the configured signing backend is the transitional legacy backend. Native
+// FROST wallets carry native signer material that the legacy backend cannot
+// process, so a node left on the legacy backend produces valid wallets via DKG
+// but then fails every signing attempt (heartbeat, deposit sweep, redemption,
+// ...). The native backend handles both native FROST and legacy-ECDSA material,
+// so it is always the correct choice once FROST is enabled.
+func verifyFrostSigningBackendForFrost() error {
+	if backend := signing.CurrentExecutionBackendName(); backend == signing.LegacyExecutionBackendName {
+		return fmt.Errorf(
+			"FROST DKG is enabled but the FROST signing backend is [%s]; set "+
+				"tbtc.frostSigningBackend to \"native\" or \"ffi\" - the legacy "+
+				"backend cannot sign native FROST wallets and would fail every "+
+				"signature",
+			backend,
+		)
+	}
+	return nil
+}
+
 // setPerformanceMetrics sets the performance metrics recorder for the node
 // and wires it into components that support metrics.
 func (n *node) setPerformanceMetrics(metrics interface {

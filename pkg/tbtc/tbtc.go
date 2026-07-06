@@ -188,6 +188,12 @@ func Initialize(
 	deduplicator := newDeduplicator()
 
 	if frostChain, ok := chain.(FrostDKGChain); ok {
+		// Fail fast if a FROST-enabled node is left on the legacy signing
+		// backend, which cannot sign native FROST wallets.
+		if err := verifyFrostSigningBackendForFrost(); err != nil {
+			return err
+		}
+
 		initializeFrostDKGCoordinator(ctx, node, frostChain)
 	}
 
