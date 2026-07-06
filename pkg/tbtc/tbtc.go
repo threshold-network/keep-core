@@ -180,6 +180,11 @@ func Initialize(
 		return fmt.Errorf("cannot set up TBTC node: [%v]", err)
 	}
 
+	// Note: the FROST signing-backend guard runs inside newNode above (right
+	// after the backend is configured and before the legacy pre-params pool is
+	// started), so an invalid backend fails Initialize with no protocol or
+	// pre-params side effects.
+
 	err = node.runCoordinationLayer(ctx)
 	if err != nil {
 		return fmt.Errorf("cannot run coordination layer: [%w]", err)
