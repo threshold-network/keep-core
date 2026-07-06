@@ -180,20 +180,10 @@ func Initialize(
 		return fmt.Errorf("cannot set up TBTC node: [%v]", err)
 	}
 
-	// Fail fast on an invalid FROST signing backend BEFORE starting any protocol
-	// work. verifyFrostSigningBackend is a no-op unless FROST is enabled (a FROST
-	// wallet registry is configured); a FROST-enabled node on the legacy backend,
-	// or without a usable/linked native signer engine, cannot sign native FROST
-	// wallets. Reject it here - before the coordination layer starts its window
-	// watcher and result processor - so a rejected node has no protocol side
-	// effects even if the caller does not immediately cancel the context.
-	if frostChain, ok := chain.(FrostDKGChain); ok {
-		if err := verifyFrostSigningBackend(
-			frostChain.FrostWalletRegistryAvailable(),
-		); err != nil {
-			return err
-		}
-	}
+	// Note: the FROST signing-backend guard runs inside newNode above (right
+	// after the backend is configured and before the legacy pre-params pool is
+	// started), so an invalid backend fails Initialize with no protocol or
+	// pre-params side effects.
 
 	err = node.runCoordinationLayer(ctx)
 	if err != nil {

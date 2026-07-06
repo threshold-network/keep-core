@@ -147,6 +147,22 @@ func newNode(
 		return nil, fmt.Errorf("cannot configure FROST signing backend: %w", err)
 	}
 
+	// Fail fast on an invalid FROST signing backend here, right after it is
+	// configured and before any further node construction - in particular before
+	// newDkgExecutor below starts the legacy ECDSA pre-params pool, which
+	// schedules CPU-heavy generation/persistence on a background context. This
+	// keeps the fail-closed path side-effect free. verifyFrostSigningBackend is a
+	// no-op unless FROST is enabled (a FROST wallet registry is configured); a
+	// FROST-enabled node on the legacy backend, or without a usable/linked native
+	// signer engine, cannot sign native FROST wallets.
+	if frostChain, ok := chain.(FrostDKGChain); ok {
+		if err := verifyFrostSigningBackend(
+			frostChain.FrostWalletRegistryAvailable(),
+		); err != nil {
+			return nil, err
+		}
+	}
+
 	walletRegistry, err := newWalletRegistry(
 		keyStorePersistance,
 		chain.CalculateWalletID,
