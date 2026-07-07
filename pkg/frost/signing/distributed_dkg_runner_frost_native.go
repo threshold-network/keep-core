@@ -103,6 +103,12 @@ type DKGBus interface {
 type dkgBusSubscriber struct {
 	round1 chan dkgMessage
 	round2 chan dkgMessage
+
+	// mu and seen back the net bus's per-subscriber dedup of byte-identical
+	// retransmissions (keyed by full message content hash); the in-process bus
+	// leaves them unused.
+	mu   sync.Mutex
+	seen map[[32]byte]struct{}
 }
 
 // distributedDKGRunner drives one member's participation in one distributed FROST
