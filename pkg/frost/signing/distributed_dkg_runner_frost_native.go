@@ -222,18 +222,11 @@ func (r *distributedDKGRunner) Run(ctx context.Context) (*NativeFROSTDKGResult, 
 	if part2.SecretPackage == nil {
 		return nil, fmt.Errorf("distributed dkg: part2 returned an incomplete result")
 	}
-	// Scrub the round-2 secret package on return (consumed by Part3 below).
+	// Scrub the round-2 secret package AND the OUTGOING per-recipient share
+	// packages on return: both carry secret material and are consumed only within
+	// this function (Part3 consumes the RECEIVED packages, not these). Registered
+	// BEFORE the count check so an unexpected-count return still scrubs them.
 	defer zeroBytes(part2.SecretPackage.Data)
-	if len(part2.Packages) != n-1 {
-		return nil, fmt.Errorf(
-			"distributed dkg: part2 produced [%d] packages, want [%d]",
-			len(part2.Packages), n-1,
-		)
-	}
-	// The OUTGOING round-2 packages each carry a per-recipient secret share; scrub
-	// them on return. They are needed only for the broadcast below - Part3
-	// consumes the RECEIVED round-2 packages, not these - so leaving them resident
-	// would defeat the zeroization the rest of this function does.
 	defer func() {
 		for _, pkg := range part2.Packages {
 			if pkg != nil {
@@ -241,6 +234,12 @@ func (r *distributedDKGRunner) Run(ctx context.Context) (*NativeFROSTDKGResult, 
 			}
 		}
 	}()
+	if len(part2.Packages) != n-1 {
+		return nil, fmt.Errorf(
+			"distributed dkg: part2 produced [%d] packages, want [%d]",
+			len(part2.Packages), n-1,
+		)
+	}
 	for _, pkg := range part2.Packages {
 		recipient, ok := r.idByIdentifier[pkg.Identifier]
 		if !ok {
@@ -353,6 +352,13 @@ func (r *distributedDKGRunner) collectRound2(
 	for len(bySender) < want {
 		select {
 		case <-ctx.Done():
+			// Scrub the partial shares accumulated before the deadline: a missing
+			// round-2 package is an expected dropout/retry path, and each held
+			// package carries incoming secret-share material. len(bySender) is
+			// unaffected by zeroing the payloads, so the count below stays accurate.
+			for _, pkg := range bySender {
+				zeroBytes(pkg.Data)
+			}
 			return nil, fmt.Errorf(
 				"distributed dkg: collect round2: got [%d] of [%d] packages: %w",
 				len(bySender), want, ctx.Err(),
