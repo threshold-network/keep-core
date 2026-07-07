@@ -63,7 +63,7 @@ func TestDistributedDKGRunner_ThreeSeatsAgreeOnGroupKeyWithDistinctShares(t *tes
 	// peer's round-1 broadcast is missed.
 	runners := make(map[group.MemberIndex]*distributedDKGRunner, n)
 	for _, m := range members {
-		runner, err := newDistributedDKGRunner(m, members, identifiers, threshold, engine, bus, pub, priv[m])
+		runner, err := newDistributedDKGRunner(m, testDKGSession, members, identifiers, threshold, engine, bus, pub, priv[m])
 		if err != nil {
 			t.Fatalf("new runner (member %d): %v", m, err)
 		}

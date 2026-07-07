@@ -72,6 +72,13 @@ const (
 // round-1 or round-2 package; the bus treats it as opaque.
 type dkgMessage struct {
 	Type dkgMessageType
+	// Session binds a message to ONE DKG attempt. Retries for the same wallet seed
+	// share a broadcast channel, so without this discriminator a stale round-1 or
+	// round-2 message from a failed prior attempt (from a retained member) would
+	// pass the sender/recipient checks, fill that sender's slot in the retry, and
+	// mix packages across attempts in Part2/Part3. Collectors accept only messages
+	// carrying the current attempt's session.
+	Session string
 	// Sender is the authenticated originating member (the transport binds it;
 	// the orchestrator never trusts an id inside Payload for routing).
 	Sender group.MemberIndex
@@ -104,6 +111,7 @@ type dkgBusSubscriber struct {
 // per-recipient round-2 packages cross the bus.
 type distributedDKGRunner struct {
 	member        group.MemberIndex
+	session       string
 	identifier    string
 	memberIndexes []group.MemberIndex
 	// memberSet is the DKG participant set as a lookup. A round message from an
@@ -129,6 +137,7 @@ type distributedDKGRunner struct {
 
 func newDistributedDKGRunner(
 	member group.MemberIndex,
+	session string,
 	memberIndexes []group.MemberIndex,
 	identifierByID map[group.MemberIndex]string,
 	threshold uint16,
@@ -144,6 +153,8 @@ func newDistributedDKGRunner(
 		return nil, fmt.Errorf("distributed dkg: bus is nil")
 	case selfKey == nil:
 		return nil, fmt.Errorf("distributed dkg: self key is nil")
+	case session == "":
+		return nil, fmt.Errorf("distributed dkg: session is empty")
 	case threshold == 0:
 		return nil, fmt.Errorf("distributed dkg: threshold is zero")
 	case int(threshold) > len(memberIndexes):
@@ -189,6 +200,7 @@ func newDistributedDKGRunner(
 	}
 	return &distributedDKGRunner{
 		member:         member,
+		session:        session,
 		identifier:     identifier,
 		memberIndexes:  memberIndexes,
 		memberSet:      memberSet,
@@ -315,6 +327,7 @@ func (r *distributedDKGRunner) broadcastPackage(
 	}
 	r.bus.Broadcast(dkgMessage{
 		Type:      msgType,
+		Session:   r.session,
 		Sender:    r.member,
 		Recipient: recipient,
 		Payload:   payload,
@@ -339,6 +352,9 @@ func (r *distributedDKGRunner) collectRound1(
 				len(bySender), want, ctx.Err(),
 			)
 		case msg := <-r.sub.round1:
+			if msg.Session != r.session {
+				continue // a stale message from a different DKG attempt
+			}
 			if msg.Sender == r.member {
 				continue // never our own echo
 			}
@@ -391,6 +407,9 @@ func (r *distributedDKGRunner) collectRound2(
 				len(bySender), want, ctx.Err(),
 			)
 		case msg := <-r.sub.round2:
+			if msg.Session != r.session {
+				continue // a stale message from a different DKG attempt
+			}
 			if msg.Sender == r.member || msg.Recipient != r.member {
 				continue // not addressed to us (or our own echo)
 			}

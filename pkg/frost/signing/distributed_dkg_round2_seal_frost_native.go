@@ -115,5 +115,8 @@ func operatorPrivateKeyToEphemeral(privateKey *operator.PrivateKey) (*ephemeral.
 	}
 	scalar := make([]byte, 32)
 	privateKey.D.FillBytes(scalar)
+	// UnmarshalPrivateKey copies the scalar into the returned key, so scrub this
+	// raw copy of the long-lived operator secret on return.
+	defer zeroBytes(scalar)
 	return ephemeral.UnmarshalPrivateKey(scalar), nil
 }
