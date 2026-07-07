@@ -157,7 +157,7 @@ func TestRealCgoInteractiveSigning_CoordinatorEquivocationForcesInstantPermanent
 	// bodies differ via the taproot root (0 vs 32 bytes) - signing the same body
 	// twice would give a different ECDSA signature but the SAME BodyHash, which is
 	// NOT an equivocation.
-	pkgA := newSignedPkg(nil)                                             // key-path spend
+	pkgA := newSignedPkg(nil)                                                       // key-path spend
 	pkgB := newSignedPkg(bytes.Repeat([]byte{0xab}, roast.TaprootMerkleRootLength)) // script-path spend
 
 	// ---- FAULT REACHED: a genuine equivocation, not a synthetic pass. ----
