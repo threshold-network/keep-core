@@ -82,6 +82,13 @@ type dkgMessage struct {
 	// Sender is the authenticated originating member (the transport binds it;
 	// the orchestrator never trusts an id inside Payload for routing).
 	Sender group.MemberIndex
+	// SenderPublicKey is the sender's AUTHENTICATED operator public key, set by
+	// the transport (the net bus overwrites any claimed value with the key it
+	// authenticated the sender against). The orchestrator learns each member's
+	// round-2 sealing key from the round-1 message it broadcasts, since peer
+	// operator public keys are not known up front (group selection carries only
+	// addresses).
+	SenderPublicKey []byte
 	// Recipient is the addressed member for a round-2 message; unused (0) for a
 	// broadcast round-1 message.
 	Recipient group.MemberIndex
@@ -132,13 +139,16 @@ type distributedDKGRunner struct {
 	engine         distributedDKGEngine
 	bus            DKGBus
 	sub            *dkgBusSubscriber
-	// recipientKeys holds each other member's public key, used to SEAL that
-	// member's round-2 share before it is broadcast over the group-visible
-	// channel. selfKey is this node's private key, used to OPEN the round-2 shares
-	// sealed to us. In production these are the members' operator keys (converted
-	// via operatorPublicKeyToEphemeral / operatorPrivateKeyToEphemeral).
+	// recipientKeys is LEARNED during round 1: each member's authenticated
+	// operator public key (from the SenderPublicKey on its round-1 message) is the
+	// key its round-2 share is SEALED to. It is written only by collectRound1 and
+	// read only by the later round-2 send, both on the single Run goroutine.
 	recipientKeys map[group.MemberIndex]*ephemeral.PublicKey
+	// selfKey is this node's operator private key, used to OPEN the round-2 shares
+	// sealed to us; selfPublicKey is its marshaled operator public key, stamped on
+	// our own broadcasts so peers learn the key to seal our share to.
 	selfKey       *ephemeral.PrivateKey
+	selfPublicKey []byte
 }
 
 func newDistributedDKGRunner(
@@ -149,8 +159,8 @@ func newDistributedDKGRunner(
 	threshold uint16,
 	engine distributedDKGEngine,
 	bus DKGBus,
-	recipientKeys map[group.MemberIndex]*ephemeral.PublicKey,
 	selfKey *ephemeral.PrivateKey,
+	selfPublicKey []byte,
 ) (*distributedDKGRunner, error) {
 	switch {
 	case engine == nil:
@@ -159,6 +169,8 @@ func newDistributedDKGRunner(
 		return nil, fmt.Errorf("distributed dkg: bus is nil")
 	case selfKey == nil:
 		return nil, fmt.Errorf("distributed dkg: self key is nil")
+	case len(selfPublicKey) == 0:
+		return nil, fmt.Errorf("distributed dkg: self public key is empty")
 	case session == "":
 		return nil, fmt.Errorf("distributed dkg: session is empty")
 	case threshold == 0:
@@ -195,10 +207,6 @@ func newDistributedDKGRunner(
 		memberSet[m] = struct{}{}
 		if m == member {
 			memberInSet = true
-		} else if recipientKeys[m] == nil {
-			// Every other member's share is sealed to its key; a missing one would
-			// stall the DKG at round 2, so fail fast at construction.
-			return nil, fmt.Errorf("distributed dkg: no sealing key for member [%d]", m)
 		}
 	}
 	if !memberInSet {
@@ -215,8 +223,9 @@ func newDistributedDKGRunner(
 		threshold:      threshold,
 		engine:         engine,
 		bus:            bus,
-		recipientKeys:  recipientKeys,
+		recipientKeys:  make(map[group.MemberIndex]*ephemeral.PublicKey, len(memberIndexes)),
 		selfKey:        selfKey,
+		selfPublicKey:  selfPublicKey,
 		// Subscribe at construction so no peer's round-1 broadcast is missed.
 		sub: bus.Subscribe(),
 	}, nil
@@ -283,10 +292,17 @@ func (r *distributedDKGRunner) Run(ctx context.Context) (*NativeFROSTDKGResult, 
 				"distributed dkg: part2 package addressed to unknown identifier",
 			)
 		}
-		// Seal the share to the recipient before it crosses the group-visible
-		// channel: only the recipient can open it. recipientKeys[recipient] is
-		// guaranteed non-nil by the constructor (recipient != self).
-		sealed, err := sealRound2Share(pkg.Data, r.recipientKeys[recipient])
+		// Seal the share to the recipient's key - learned from its round-1 message -
+		// before it crosses the group-visible channel: only the recipient can open
+		// it. The key is present because we accept a round-1 sender only after
+		// learning its key, and Part2 produces packages only for round-1 senders.
+		recipientKey, ok := r.recipientKeys[recipient]
+		if !ok {
+			return nil, fmt.Errorf(
+				"distributed dkg: no learned round-2 sealing key for recipient [%d]", recipient,
+			)
+		}
+		sealed, err := sealRound2Share(pkg.Data, recipientKey)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"distributed dkg: seal round-2 share for member [%d]: %w", recipient, err,
@@ -332,11 +348,12 @@ func (r *distributedDKGRunner) broadcastPackage(
 		return fmt.Errorf("distributed dkg: marshal package: %w", err)
 	}
 	r.bus.Broadcast(dkgMessage{
-		Type:      msgType,
-		Session:   r.session,
-		Sender:    r.member,
-		Recipient: recipient,
-		Payload:   payload,
+		Type:            msgType,
+		Session:         r.session,
+		Sender:          r.member,
+		SenderPublicKey: r.selfPublicKey,
+		Recipient:       recipient,
+		Payload:         payload,
 	})
 	return nil
 }
@@ -382,6 +399,14 @@ func (r *distributedDKGRunner) collectRound1(
 			if pkg.Identifier != r.identifierByID[msg.Sender] {
 				continue
 			}
+			// Learn this sender's round-2 sealing key from its authenticated operator
+			// public key. A sender whose key we cannot parse is skipped, not counted:
+			// we could not seal a round-2 share to it, so it must not fill a slot.
+			recipientKey, err := ephemeral.UnmarshalPublicKey(msg.SenderPublicKey)
+			if err != nil {
+				continue
+			}
+			r.recipientKeys[msg.Sender] = recipientKey
 			pkgCopy := pkg
 			bySender[msg.Sender] = &pkgCopy
 		}

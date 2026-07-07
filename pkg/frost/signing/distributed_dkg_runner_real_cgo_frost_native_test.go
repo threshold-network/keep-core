@@ -54,16 +54,16 @@ func TestDistributedDKGRunner_ThreeSeatsAgreeOnGroupKeyWithDistinctShares(t *tes
 
 	bus := NewInProcessDKGBus(64)
 
-	// Per-member keys standing in for operator keys: round-2 shares are SEALED to
-	// the recipient's key and opened with the recipient's own, so this exercises
-	// the encrypted round-2 path end to end.
-	pub, priv := dkgTestKeys(t, members)
+	// Per-member keys standing in for operator keys: each seat stamps its public
+	// key on round 1, peers LEARN it, and round-2 shares are sealed to it and
+	// opened with the seat's own private key - the full encrypted round-2 path.
+	priv, pub := dkgTestKeys(t, members)
 
 	// Build every runner (each subscribes to the bus) BEFORE starting any, so no
 	// peer's round-1 broadcast is missed.
 	runners := make(map[group.MemberIndex]*distributedDKGRunner, n)
 	for _, m := range members {
-		runner, err := newDistributedDKGRunner(m, testDKGSession, members, identifiers, threshold, engine, bus, pub, priv[m])
+		runner, err := newDistributedDKGRunner(m, testDKGSession, members, identifiers, threshold, engine, bus, priv[m], pub[m])
 		if err != nil {
 			t.Fatalf("new runner (member %d): %v", m, err)
 		}

@@ -229,11 +229,15 @@ func (b *broadcastChannelDKGBus) handleMessage(m net.Message) {
 	}
 
 	msg := dkgMessage{
-		Type:      wire.messageType,
-		Session:   wire.session,
-		Sender:    wire.sender,
-		Recipient: wire.recipient,
-		Payload:   wire.payload,
+		Type:    wire.messageType,
+		Session: wire.session,
+		Sender:  wire.sender,
+		// The AUTHENTICATED operator public key, not any value claimed on the wire:
+		// peers learn each other's round-2 sealing key from this, so it must be the
+		// key membership was validated against.
+		SenderPublicKey: m.SenderPublicKey(),
+		Recipient:       wire.recipient,
+		Payload:         wire.payload,
 	}
 	hash := msg.contentHash()
 
