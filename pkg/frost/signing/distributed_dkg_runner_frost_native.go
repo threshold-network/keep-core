@@ -230,6 +230,17 @@ func (r *distributedDKGRunner) Run(ctx context.Context) (*NativeFROSTDKGResult, 
 			len(part2.Packages), n-1,
 		)
 	}
+	// The OUTGOING round-2 packages each carry a per-recipient secret share; scrub
+	// them on return. They are needed only for the broadcast below - Part3
+	// consumes the RECEIVED round-2 packages, not these - so leaving them resident
+	// would defeat the zeroization the rest of this function does.
+	defer func() {
+		for _, pkg := range part2.Packages {
+			if pkg != nil {
+				zeroBytes(pkg.Data)
+			}
+		}
+	}()
 	for _, pkg := range part2.Packages {
 		recipient, ok := r.idByIdentifier[pkg.Identifier]
 		if !ok {
