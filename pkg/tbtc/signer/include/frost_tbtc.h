@@ -38,6 +38,7 @@ TbtcSignerResult frost_tbtc_run_dkg(const uint8_t* request_ptr, size_t request_l
 TbtcSignerResult frost_tbtc_dkg_part1(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_dkg_part2(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_dkg_part3(const uint8_t* request_ptr, size_t request_len);
+TbtcSignerResult frost_tbtc_persist_distributed_dkg_key_package(const uint8_t* request_ptr, size_t request_len);
 
 /*
  * Stateless interactive signing nonce contract:

@@ -13,7 +13,8 @@ use api::{
     FinalizeSignRoundRequest, FrostTbtcAbiVersionResult, GenerateNoncesAndCommitmentsRequest,
     InitSignerConfigRequest, InteractiveAggregateRequest, InteractiveRound1Request,
     InteractiveRound2Request, InteractiveSessionAbortRequest, InteractiveSessionOpenRequest,
-    NewSigningPackageRequest, PromoteCanaryRequest, QuarantineStatusRequest,
+    NewSigningPackageRequest, PersistDistributedDkgKeyPackageRequest, PromoteCanaryRequest,
+    QuarantineStatusRequest,
     RefreshCadenceStatusRequest, RefreshSharesRequest, RollbackCanaryRequest, RunDkgRequest,
     SignShareRequest, StartSignRoundRequest, TranscriptAuditRequest, TriggerEmergencyRekeyRequest,
     VerifyBlameProofRequest,
@@ -278,6 +279,19 @@ pub extern "C" fn frost_tbtc_dkg_part3(
     ffi_entry(|| {
         let request: DkgPart3Request = parse_request(request_ptr, request_len)?;
         let response = engine::dkg_part3(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_persist_distributed_dkg_key_package(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: PersistDistributedDkgKeyPackageRequest =
+            parse_request(request_ptr, request_len)?;
+        let response = engine::persist_distributed_dkg_key_package(request)?;
         serialize_response(&response)
     })
 }

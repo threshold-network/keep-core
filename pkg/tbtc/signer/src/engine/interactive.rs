@@ -172,6 +172,15 @@ pub fn interactive_session_open(
             .dkg_key_packages
             .as_ref()
             .ok_or_else(|| EngineError::Internal("missing DKG key package cache".to_string()))?;
+        // The public key package carries a verifying share for EVERY DKG
+        // participant, so it is the authoritative participant set. A distributed
+        // DKG node holds only its OWN secret key package (dkg_key_packages has a
+        // single entry), so the included-participants membership check below must
+        // use the public package, not dkg_key_packages.
+        let dkg_public_key_package = session
+            .dkg_public_key_package
+            .as_ref()
+            .ok_or_else(|| EngineError::Internal("missing DKG public key package".to_string()))?;
         let key_package = dkg_key_packages
             .get(&request.member_identifier)
             .ok_or_else(|| {
@@ -227,9 +236,16 @@ pub fn interactive_session_open(
         // session. Otherwise a caller could pad the included set with
         // phantom identifiers to bias the RFC-21 coordinator/attempt
         // derivation, and Round2 could release a share under an attempt
-        // context that is not a genuine DKG subset.
+        // context that is not a genuine DKG subset. Checked against the public
+        // key package (the full participant set) so it holds for a distributed
+        // DKG node, which caches only its own secret key package.
         for participant in &canonical_included_participants {
-            if !dkg_key_packages.contains_key(participant) {
+            let participant_frost_identifier =
+                participant_identifier_to_frost_identifier(*participant)?;
+            if !dkg_public_key_package
+                .verifying_shares()
+                .contains_key(&participant_frost_identifier)
+            {
                 return Err(EngineError::Validation(format!(
                     "attempt_context.included_participants contains [{participant}], \
                      which is not a DKG participant for this session"

@@ -187,6 +187,106 @@ pub fn run_dkg(request: RunDkgRequest) -> Result<DkgResult, EngineError> {
     Ok(result)
 }
 
+/// Persists a DISTRIBUTED FROST DKG result for one seat so the interactive
+/// signing path can load its key. The dealer `run_dkg` above persists ALL key
+/// packages (it generates them all); a distributed DKG instead runs Part1/2/3
+/// across nodes and each node's Part3 returns only ITS OWN secret key package.
+/// This op stores that single key package (keyed by this node's participant
+/// identifier) together with the group public key package, then persists - the
+/// exact session shape interactive signing consumes (own key package by
+/// member_identifier; the public key package for the participant set and
+/// aggregation). There is NO production gate: this is the real distributed path,
+/// not the transitional dealer one.
+pub fn persist_distributed_dkg_key_package(
+    request: PersistDistributedDkgKeyPackageRequest,
+) -> Result<DkgResult, EngineError> {
+    const OP: &str = "persist_distributed_dkg_key_package";
+    validate_session_id(&request.session_id)?;
+
+    if request.participant_identifier == 0 {
+        return Err(EngineError::Validation(format!(
+            "{OP}: participant identifier must be non-zero"
+        )));
+    }
+    if request.threshold < 2 || request.participant_count < request.threshold {
+        return Err(EngineError::Validation(format!(
+            "{OP}: threshold [{}] must be between 2 and participant_count [{}]",
+            request.threshold, request.participant_count
+        )));
+    }
+
+    let public_key_package = native_public_key_package_to_frost(OP, &request.public_key_package)?;
+    let key_package = decode_key_package(
+        OP,
+        &request.key_package.identifier,
+        &request.key_package.data_hex,
+    )?;
+
+    // The key package must belong to this participant and be a genuine member of
+    // the group (present in the public key package).
+    let frost_identifier = participant_identifier_to_frost_identifier(request.participant_identifier)?;
+    if *key_package.identifier() != frost_identifier {
+        return Err(EngineError::Validation(format!(
+            "{OP}: key package identifier does not match participant_identifier"
+        )));
+    }
+    if !public_key_package
+        .verifying_shares()
+        .contains_key(&frost_identifier)
+    {
+        return Err(EngineError::Validation(format!(
+            "{OP}: participant_identifier is not a member of the public key package"
+        )));
+    }
+
+    let key_group = public_key_package
+        .verifying_key()
+        .serialize()
+        .map(hex::encode)
+        .map_err(|e| {
+            EngineError::Internal(format!("{OP}: failed to serialize verifying key: {e}"))
+        })?;
+
+    let mut guard = state()?
+        .lock()
+        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
+
+    let session = guard
+        .sessions
+        .entry(request.session_id.clone())
+        .or_insert_with(SessionState::default);
+
+    // Idempotent for the same key group; a different one for this session is a
+    // conflict (mirrors run_dkg's disposition).
+    if let Some(existing) = &session.dkg_result {
+        if existing.key_group == key_group {
+            return Ok(existing.clone());
+        }
+        return Err(EngineError::SessionConflict {
+            session_id: request.session_id,
+        });
+    }
+
+    let mut key_packages = BTreeMap::new();
+    key_packages.insert(request.participant_identifier, key_package);
+
+    let result = DkgResult {
+        session_id: request.session_id,
+        key_group,
+        participant_count: request.participant_count,
+        threshold: request.threshold,
+        created_at_unix: now_unix(),
+    };
+
+    session.dkg_key_packages = Some(key_packages);
+    session.dkg_public_key_package = Some(public_key_package);
+    session.dkg_result = Some(result.clone());
+    persist_engine_state_to_storage(&guard)?;
+
+    Ok(result)
+}
+
 pub(crate) fn enforce_bootstrap_dealer_dkg_disabled_in_production(
     session_id: &str,
 ) -> Result<(), EngineError> {
