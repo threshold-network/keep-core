@@ -39,6 +39,10 @@ typedef TbtcSignerResult (*tbtc_dkg_part3_fn)(
   const uint8_t* request_ptr,
   size_t request_len
 );
+typedef TbtcSignerResult (*tbtc_persist_distributed_dkg_key_package_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
 typedef TbtcSignerResult (*tbtc_generate_nonces_and_commitments_fn)(
   const uint8_t* request_ptr,
   size_t request_len
@@ -179,6 +183,19 @@ static TbtcSignerResult tbtc_signer_dkg_part3(const uint8_t* request_ptr, size_t
   }
 
   return dkg_part3(request_ptr, request_len);
+}
+
+static TbtcSignerResult tbtc_signer_persist_distributed_dkg_key_package(const uint8_t* request_ptr, size_t request_len) {
+  tbtc_persist_distributed_dkg_key_package_fn persist =
+    (tbtc_persist_distributed_dkg_key_package_fn)dlsym(
+      RTLD_DEFAULT,
+      "frost_tbtc_persist_distributed_dkg_key_package"
+    );
+  if (persist == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+
+  return persist(request_ptr, request_len);
 }
 
 static TbtcSignerResult tbtc_signer_generate_nonces_and_commitments(const uint8_t* request_ptr, size_t request_len) {
@@ -468,6 +485,15 @@ type buildTaggedTBTCSignerNativeFROSTPublicKeyPackage struct {
 type buildTaggedTBTCSignerDKGPart3Response struct {
 	KeyPackage       *buildTaggedTBTCSignerNativeFROSTKeyPackage       `json:"key_package"`
 	PublicKeyPackage *buildTaggedTBTCSignerNativeFROSTPublicKeyPackage `json:"public_key_package"`
+}
+
+type buildTaggedTBTCSignerPersistDistributedDKGKeyPackageRequest struct {
+	SessionID             string                                            `json:"session_id"`
+	ParticipantIdentifier uint16                                            `json:"participant_identifier"`
+	Threshold             uint16                                            `json:"threshold"`
+	ParticipantCount      uint16                                            `json:"participant_count"`
+	KeyPackage            *buildTaggedTBTCSignerNativeFROSTKeyPackage       `json:"key_package"`
+	PublicKeyPackage      *buildTaggedTBTCSignerNativeFROSTPublicKeyPackage `json:"public_key_package"`
 }
 
 type buildTaggedTBTCSignerNativeFROSTCommitment struct {
@@ -777,6 +803,42 @@ func (bttse *buildTaggedTBTCSignerEngine) Part3(
 	defer zeroBytes(responsePayload)
 
 	return decodeBuildTaggedTBTCSignerDKGPart3Response(responsePayload)
+}
+
+// PersistDistributedDKGKeyPackage stores this node's Part3 key package plus the
+// group public key package as signing material the interactive signing path can
+// load (keyed by the returned key group). A distributed DKG - unlike the dealer
+// RunDKG - leaves each node with only its OWN secret key package, which Part3
+// returns; this persists it so the wallet can sign.
+func (bttse *buildTaggedTBTCSignerEngine) PersistDistributedDKGKeyPackage(
+	sessionID string,
+	participantIdentifier uint16,
+	threshold uint16,
+	participantCount uint16,
+	keyPackage *NativeFROSTKeyPackage,
+	publicKeyPackage *NativeFROSTPublicKeyPackage,
+) (*NativeTBTCSignerDKGResult, error) {
+	requestPayload, err := buildTaggedTBTCSignerPersistDistributedDKGKeyPackageRequestPayload(
+		sessionID,
+		participantIdentifier,
+		threshold,
+		participantCount,
+		keyPackage,
+		publicKeyPackage,
+	)
+	if err != nil {
+		return nil, err
+	}
+	// The request embeds this node's serialized key package (secret material);
+	// scrub the Go-side transport buffer on every return path, mirroring Sign/Part3.
+	defer zeroBytes(requestPayload)
+
+	responsePayload, err := callBuildTaggedTBTCSignerPersistDistributedDKGKeyPackage(requestPayload)
+	if err != nil {
+		return nil, err
+	}
+
+	return decodeBuildTaggedTBTCSignerRunDKGResponse(responsePayload)
 }
 
 func (bttse *buildTaggedTBTCSignerEngine) GenerateNoncesAndCommitments(
@@ -1351,6 +1413,43 @@ func buildTaggedTBTCSignerDKGPart3RequestPayload(
 			SecretPackageHex: hex.EncodeToString(secretPackage.Data),
 			Round1Packages:   requestRound1Packages,
 			Round2Packages:   requestRound2Packages,
+		},
+	)
+}
+
+func buildTaggedTBTCSignerPersistDistributedDKGKeyPackageRequestPayload(
+	sessionID string,
+	participantIdentifier uint16,
+	threshold uint16,
+	participantCount uint16,
+	keyPackage *NativeFROSTKeyPackage,
+	publicKeyPackage *NativeFROSTPublicKeyPackage,
+) ([]byte, error) {
+	const op = "PersistDistributedDKGKeyPackage"
+	if keyPackage == nil {
+		return nil, buildTaggedTBTCSignerOperationError(op, "key package is nil")
+	}
+	if len(keyPackage.Data) == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(op, "key package data is empty")
+	}
+	if publicKeyPackage == nil {
+		return nil, buildTaggedTBTCSignerOperationError(op, "public key package is nil")
+	}
+	return buildTaggedTBTCSignerMarshalRequest(
+		op,
+		buildTaggedTBTCSignerPersistDistributedDKGKeyPackageRequest{
+			SessionID:             sessionID,
+			ParticipantIdentifier: participantIdentifier,
+			Threshold:             threshold,
+			ParticipantCount:      participantCount,
+			KeyPackage: &buildTaggedTBTCSignerNativeFROSTKeyPackage{
+				Identifier: keyPackage.Identifier,
+				DataHex:    hex.EncodeToString(keyPackage.Data),
+			},
+			PublicKeyPackage: &buildTaggedTBTCSignerNativeFROSTPublicKeyPackage{
+				VerifyingShares: publicKeyPackage.VerifyingShares,
+				VerifyingKey:    publicKeyPackage.VerifyingKey,
+			},
 		},
 	)
 }
@@ -2541,6 +2640,18 @@ func callBuildTaggedTBTCSignerDKGPart3(
 		requestPayload,
 		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
 			return C.tbtc_signer_dkg_part3(requestPtr, requestLen)
+		},
+	)
+}
+
+func callBuildTaggedTBTCSignerPersistDistributedDKGKeyPackage(
+	requestPayload []byte,
+) ([]byte, error) {
+	return callBuildTaggedTBTCSignerOperation(
+		"PersistDistributedDKGKeyPackage",
+		requestPayload,
+		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
+			return C.tbtc_signer_persist_distributed_dkg_key_package(requestPtr, requestLen)
 		},
 	)
 }
