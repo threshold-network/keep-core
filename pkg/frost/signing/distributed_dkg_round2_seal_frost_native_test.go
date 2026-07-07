@@ -6,8 +6,42 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/keep-network/keep-core/pkg/chain/local_v1"
 	"github.com/keep-network/keep-core/pkg/crypto/ephemeral"
+	"github.com/keep-network/keep-core/pkg/operator"
 )
+
+func TestOperatorKeyConversion_SealsAndOpens(t *testing.T) {
+	priv, pub, err := operator.GenerateKeyPair(local_v1.DefaultCurve)
+	if err != nil {
+		t.Fatalf("operator key: %v", err)
+	}
+
+	// Convert the operator keypair separately, then verify a share sealed to the
+	// converted PUBLIC key opens with the converted PRIVATE key - i.e. the
+	// conversions produce a matching ECDH keypair.
+	recipientPub, err := operatorPublicKeyToEphemeral(pub)
+	if err != nil {
+		t.Fatalf("convert public: %v", err)
+	}
+	recipientPriv, err := operatorPrivateKeyToEphemeral(priv)
+	if err != nil {
+		t.Fatalf("convert private: %v", err)
+	}
+
+	share := []byte("a-share-sealed-to-an-operator-key")
+	sealed, err := sealRound2Share(share, recipientPub)
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	opened, err := openRound2Share(sealed, recipientPriv)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if !bytes.Equal(opened, share) {
+		t.Fatal("share sealed to a converted operator public key did not open with the converted private key")
+	}
+}
 
 func TestSealRound2Share_RoundTrip(t *testing.T) {
 	recipient, err := ephemeral.GenerateKeyPair()
@@ -80,6 +114,22 @@ func TestSealRound2Share_TamperedEnvelopeFails(t *testing.T) {
 	opened, err := openRound2Share(sealed, recipient.PrivateKey)
 	if err == nil && bytes.Equal(opened, share) {
 		t.Fatal("a tampered envelope still opened to the original share")
+	}
+}
+
+func TestSealRound2Share_MalformedEphemeralKeyFails(t *testing.T) {
+	recipient, err := ephemeral.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("recipient key: %v", err)
+	}
+	sealed, err := sealRound2Share([]byte("secret-share"), recipient.PublicKey)
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	// A garbage ephemeral public key must fail to parse, not panic or open.
+	sealed.EphemeralPublicKey = []byte{0x00, 0x01, 0x02}
+	if _, err := openRound2Share(sealed, recipient.PrivateKey); err == nil {
+		t.Fatal("open with a malformed ephemeral public key must error")
 	}
 }
 

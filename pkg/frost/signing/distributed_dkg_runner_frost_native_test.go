@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/keep-network/keep-core/pkg/crypto/ephemeral"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
@@ -35,6 +36,42 @@ func (noopDKGEngine) Part3(
 	return nil, nil
 }
 
+// dkgTestKeys generates a per-member ephemeral keypair standing in for the
+// members' operator keys (both secp256k1), returning the public keys the
+// orchestrator seals round-2 shares to and the private keys it opens them with.
+func dkgTestKeys(t *testing.T, members []group.MemberIndex) (
+	map[group.MemberIndex]*ephemeral.PublicKey,
+	map[group.MemberIndex]*ephemeral.PrivateKey,
+) {
+	t.Helper()
+	pub := make(map[group.MemberIndex]*ephemeral.PublicKey, len(members))
+	priv := make(map[group.MemberIndex]*ephemeral.PrivateKey, len(members))
+	for _, m := range members {
+		kp, err := ephemeral.GenerateKeyPair()
+		if err != nil {
+			t.Fatalf("key for member %d: %v", m, err)
+		}
+		pub[m] = kp.PublicKey
+		priv[m] = kp.PrivateKey
+	}
+	return pub, priv
+}
+
+// sealTestShare produces the sealed round-2 payload the orchestrator broadcasts,
+// so collection tests exercise the real open path.
+func sealTestShare(t *testing.T, share []byte, recipient *ephemeral.PublicKey) []byte {
+	t.Helper()
+	sealed, err := sealRound2Share(share, recipient)
+	if err != nil {
+		t.Fatalf("seal test share: %v", err)
+	}
+	payload, err := json.Marshal(sealed)
+	if err != nil {
+		t.Fatalf("marshal sealed share: %v", err)
+	}
+	return payload
+}
+
 // TestDistributedDKGRunner_CollectRound1RejectsNonParticipants guards the
 // shared-transport hazard: a message from an authenticated sender that is NOT in
 // THIS DKG's member set must not be counted toward the round's collection target.
@@ -49,9 +86,10 @@ func TestDistributedDKGRunner_CollectRound1RejectsNonParticipants(t *testing.T) 
 	identifierByID := map[group.MemberIndex]string{
 		1: "id-1", 2: "id-2", 3: "id-3", 4: "id-4",
 	}
+	pub, priv := dkgTestKeys(t, members)
 
 	bus := NewInProcessDKGBus(16)
-	runner, err := newDistributedDKGRunner(3, members, identifierByID, 2, noopDKGEngine{}, bus)
+	runner, err := newDistributedDKGRunner(3, members, identifierByID, 2, noopDKGEngine{}, bus, pub, priv[3])
 	if err != nil {
 		t.Fatalf("new runner: %v", err)
 	}
@@ -99,9 +137,23 @@ func TestNewDistributedDKGRunner_RejectsDuplicateIdentifiers(t *testing.T) {
 	identifierByID := map[group.MemberIndex]string{
 		1: "id-1", 2: "dup", 3: "dup", // 2 and 3 collide
 	}
+	pub, priv := dkgTestKeys(t, members)
 	bus := NewInProcessDKGBus(16)
-	if _, err := newDistributedDKGRunner(1, members, identifierByID, 2, noopDKGEngine{}, bus); err == nil {
+	if _, err := newDistributedDKGRunner(1, members, identifierByID, 2, noopDKGEngine{}, bus, pub, priv[1]); err == nil {
 		t.Fatal("expected a duplicate-identifier error, got nil")
+	}
+}
+
+// TestNewDistributedDKGRunner_RejectsMissingSealingKey ensures a member without a
+// sealing key fails at construction rather than stalling round 2.
+func TestNewDistributedDKGRunner_RejectsMissingSealingKey(t *testing.T) {
+	members := []group.MemberIndex{1, 2, 3}
+	identifierByID := map[group.MemberIndex]string{1: "id-1", 2: "id-2", 3: "id-3"}
+	pub, priv := dkgTestKeys(t, members)
+	delete(pub, 2) // member 2 has no sealing key
+	bus := NewInProcessDKGBus(16)
+	if _, err := newDistributedDKGRunner(1, members, identifierByID, 2, noopDKGEngine{}, bus, pub, priv[1]); err == nil {
+		t.Fatal("expected a missing-sealing-key error, got nil")
 	}
 }
 
@@ -114,21 +166,17 @@ func TestDistributedDKGRunner_CollectRound2RejectsNonParticipants(t *testing.T) 
 	identifierByID := map[group.MemberIndex]string{
 		1: "id-1", 2: "id-2", 3: "id-3", 4: "id-4",
 	}
+	pub, priv := dkgTestKeys(t, members)
 	bus := NewInProcessDKGBus(16)
-	// self = 3; it collects round-2 packages addressed to id-3 from members 1, 2.
-	runner, err := newDistributedDKGRunner(3, members, identifierByID, 2, noopDKGEngine{}, bus)
+	// self = 3; it collects round-2 shares addressed to it from members 1, 2.
+	runner, err := newDistributedDKGRunner(3, members, identifierByID, 2, noopDKGEngine{}, bus, pub, priv[3])
 	if err != nil {
 		t.Fatalf("new runner: %v", err)
 	}
 
 	push := func(sender group.MemberIndex) {
-		payload, err := json.Marshal(NativeFROSTDKGRound2Package{
-			Identifier: identifierByID[3], // addressed to us
-			Data:       []byte{byte(sender)},
-		})
-		if err != nil {
-			t.Fatalf("marshal round2 package: %v", err)
-		}
+		// A share sealed to us (member 3); the sender labels who it claims to be.
+		payload := sealTestShare(t, []byte{byte(sender)}, pub[3])
 		runner.sub.round2 <- dkgMessage{
 			Type:      dkgRound2Message,
 			Sender:    sender,
@@ -167,18 +215,20 @@ func TestDistributedDKGRunner_CollectRound2RejectsNonParticipants(t *testing.T) 
 func TestDistributedDKGRunner_CollectRound2TimesOutOnMissingPackage(t *testing.T) {
 	members := []group.MemberIndex{1, 2, 3}
 	identifierByID := map[group.MemberIndex]string{1: "id-1", 2: "id-2", 3: "id-3"}
+	pub, priv := dkgTestKeys(t, members)
 	bus := NewInProcessDKGBus(16)
-	runner, err := newDistributedDKGRunner(3, members, identifierByID, 2, noopDKGEngine{}, bus)
+	runner, err := newDistributedDKGRunner(3, members, identifierByID, 2, noopDKGEngine{}, bus, pub, priv[3])
 	if err != nil {
 		t.Fatalf("new runner: %v", err)
 	}
 
-	// Only ONE of the two expected round-2 packages arrives.
-	payload, err := json.Marshal(NativeFROSTDKGRound2Package{Identifier: identifierByID[3], Data: []byte{1}})
-	if err != nil {
-		t.Fatalf("marshal round2 package: %v", err)
+	// Only ONE of the two expected round-2 shares arrives.
+	runner.sub.round2 <- dkgMessage{
+		Type:      dkgRound2Message,
+		Sender:    1,
+		Recipient: 3,
+		Payload:   sealTestShare(t, []byte{1}, pub[3]),
 	}
-	runner.sub.round2 <- dkgMessage{Type: dkgRound2Message, Sender: 1, Recipient: 3, Payload: payload}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()

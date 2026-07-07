@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/keep-network/keep-core/pkg/crypto/ephemeral"
+	"github.com/keep-network/keep-core/pkg/operator"
 )
 
 // Phase 1 of the distributed-DKG wiring makes round-2 CONFIDENTIAL. A FROST DKG
@@ -23,6 +24,16 @@ import (
 // The envelope is generic over ephemeral keys here; the orchestrator supplies
 // each recipient's operator key (converted to an ephemeral public key) when it
 // wires this in.
+//
+// SECURITY BOUNDARY: the envelope provides CONFIDENTIALITY ONLY. It does not
+// authenticate the sealer, bind to a session/attempt, or prevent replay. Those
+// come from (a) the sender-authenticated transport it runs over - the wallet
+// broadcast channel authenticates the claimed sender against its operator key
+// via the group MembershipValidator - and (b) FROST DKG Part3, which
+// cryptographically verifies each round-2 share against the sender's round-1
+// commitment (so a garbage or misdirected share fails the DKG into the existing
+// retry/blame path, not a signing breach). It MUST NOT be used over an
+// unauthenticated transport.
 
 // sealedRound2Share is the confidential on-wire form of a round-2 share: a
 // one-time ephemeral public key bound to the AES-ECDH ciphertext of the share.
@@ -72,4 +83,37 @@ func openRound2Share(sealed *sealedRound2Share, self *ephemeral.PrivateKey) ([]b
 		return nil, fmt.Errorf("distributed dkg: open round-2 share: %w", err)
 	}
 	return share, nil
+}
+
+// operatorPublicKeyToEphemeral converts a member's operator public key into the
+// ephemeral (btcec) public key the seal envelope encrypts to. Operator keys are
+// secp256k1 (the ephemeral package's only curve), so the uncompressed operator
+// key parses directly; a non-secp256k1 key is rejected rather than silently
+// mis-parsed.
+func operatorPublicKeyToEphemeral(publicKey *operator.PublicKey) (*ephemeral.PublicKey, error) {
+	if publicKey == nil {
+		return nil, fmt.Errorf("distributed dkg: nil operator public key")
+	}
+	if publicKey.Curve != operator.Secp256k1 {
+		return nil, fmt.Errorf(
+			"distributed dkg: operator key curve [%v] is not secp256k1", publicKey.Curve,
+		)
+	}
+	return ephemeral.UnmarshalPublicKey(operator.MarshalUncompressed(publicKey))
+}
+
+// operatorPrivateKeyToEphemeral converts this node's operator private key into
+// the ephemeral private key used to open round-2 shares sealed to us.
+func operatorPrivateKeyToEphemeral(privateKey *operator.PrivateKey) (*ephemeral.PrivateKey, error) {
+	if privateKey == nil {
+		return nil, fmt.Errorf("distributed dkg: nil operator private key")
+	}
+	if privateKey.Curve != operator.Secp256k1 {
+		return nil, fmt.Errorf(
+			"distributed dkg: operator key curve [%v] is not secp256k1", privateKey.Curve,
+		)
+	}
+	scalar := make([]byte, 32)
+	privateKey.D.FillBytes(scalar)
+	return ephemeral.UnmarshalPrivateKey(scalar), nil
 }

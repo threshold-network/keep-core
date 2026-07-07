@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/keep-network/keep-core/pkg/crypto/ephemeral"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
@@ -117,6 +118,13 @@ type distributedDKGRunner struct {
 	engine         distributedDKGEngine
 	bus            DKGBus
 	sub            *dkgBusSubscriber
+	// recipientKeys holds each other member's public key, used to SEAL that
+	// member's round-2 share before it is broadcast over the group-visible
+	// channel. selfKey is this node's private key, used to OPEN the round-2 shares
+	// sealed to us. In production these are the members' operator keys (converted
+	// via operatorPublicKeyToEphemeral / operatorPrivateKeyToEphemeral).
+	recipientKeys map[group.MemberIndex]*ephemeral.PublicKey
+	selfKey       *ephemeral.PrivateKey
 }
 
 func newDistributedDKGRunner(
@@ -126,12 +134,16 @@ func newDistributedDKGRunner(
 	threshold uint16,
 	engine distributedDKGEngine,
 	bus DKGBus,
+	recipientKeys map[group.MemberIndex]*ephemeral.PublicKey,
+	selfKey *ephemeral.PrivateKey,
 ) (*distributedDKGRunner, error) {
 	switch {
 	case engine == nil:
 		return nil, fmt.Errorf("distributed dkg: engine is nil")
 	case bus == nil:
 		return nil, fmt.Errorf("distributed dkg: bus is nil")
+	case selfKey == nil:
+		return nil, fmt.Errorf("distributed dkg: self key is nil")
 	case threshold == 0:
 		return nil, fmt.Errorf("distributed dkg: threshold is zero")
 	case int(threshold) > len(memberIndexes):
@@ -166,6 +178,10 @@ func newDistributedDKGRunner(
 		memberSet[m] = struct{}{}
 		if m == member {
 			memberInSet = true
+		} else if recipientKeys[m] == nil {
+			// Every other member's share is sealed to its key; a missing one would
+			// stall the DKG at round 2, so fail fast at construction.
+			return nil, fmt.Errorf("distributed dkg: no sealing key for member [%d]", m)
 		}
 	}
 	if !memberInSet {
@@ -181,6 +197,8 @@ func newDistributedDKGRunner(
 		threshold:      threshold,
 		engine:         engine,
 		bus:            bus,
+		recipientKeys:  recipientKeys,
+		selfKey:        selfKey,
 		// Subscribe at construction so no peer's round-1 broadcast is missed.
 		sub: bus.Subscribe(),
 	}, nil
@@ -247,7 +265,16 @@ func (r *distributedDKGRunner) Run(ctx context.Context) (*NativeFROSTDKGResult, 
 				"distributed dkg: part2 package addressed to unknown identifier",
 			)
 		}
-		if err := r.broadcastPackage(dkgRound2Message, recipient, pkg); err != nil {
+		// Seal the share to the recipient before it crosses the group-visible
+		// channel: only the recipient can open it. recipientKeys[recipient] is
+		// guaranteed non-nil by the constructor (recipient != self).
+		sealed, err := sealRound2Share(pkg.Data, r.recipientKeys[recipient])
+		if err != nil {
+			return nil, fmt.Errorf(
+				"distributed dkg: seal round-2 share for member [%d]: %w", recipient, err,
+			)
+		}
+		if err := r.broadcastPackage(dkgRound2Message, recipient, sealed); err != nil {
 			return nil, err
 		}
 	}
@@ -373,19 +400,26 @@ func (r *distributedDKGRunner) collectRound2(
 			if _, have := bySender[msg.Sender]; have {
 				continue
 			}
-			var pkg NativeFROSTDKGRound2Package
-			if err := json.Unmarshal(msg.Payload, &pkg); err != nil {
+			var sealed sealedRound2Share
+			if err := json.Unmarshal(msg.Payload, &sealed); err != nil {
 				continue
 			}
-			// The package must be addressed to us; reject a misrouted one.
-			if pkg.Identifier != r.identifier {
+			// Open the share sealed to us (only we can, via our private key). A
+			// share we cannot open - corrupt, tampered, or sealed to someone else -
+			// is skipped, not counted: the sender's slot stays empty and the round
+			// fails into the retry path if a valid one never arrives.
+			share, err := openRound2Share(&sealed, r.selfKey)
+			if err != nil {
 				continue
 			}
-			// Tag the sender: Part3 keys round-2 packages by sender while the
-			// package itself carries the recipient identifier.
-			pkg.SenderIdentifier = r.identifierByID[msg.Sender]
-			pkgCopy := pkg
-			bySender[msg.Sender] = &pkgCopy
+			// Reconstruct the round-2 package Part3 consumes: addressed to us (our
+			// identifier) and tagged with its authenticated sender (Part3 keys
+			// round-2 packages by sender while the package carries the recipient).
+			bySender[msg.Sender] = &NativeFROSTDKGRound2Package{
+				Identifier:       r.identifier,
+				SenderIdentifier: r.identifierByID[msg.Sender],
+				Data:             share,
+			}
 		}
 	}
 	return sortedRound2Packages(r.memberIndexes, r.member, bySender), nil
