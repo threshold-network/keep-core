@@ -908,6 +908,197 @@ fn canary_rollout_status_rejects_when_provenance_gate_requires_attestation() {
     clear_state_storage_policy_overrides();
 }
 
+// Real per-seat distributed-DKG material in the native (Go-facing) form the
+// persist op takes: each member's OWN key package plus the shared public key
+// package. Dealer-generated here for brevity, but shaped like a distributed
+// Part3 output (one key package per member + one public key package).
+fn sample_distributed_dkg_native_material(
+    seed: u8,
+) -> (
+    crate::api::NativeFrostPublicKeyPackage,
+    BTreeMap<u16, crate::api::NativeFrostKeyPackage>,
+) {
+    let identifiers = [1_u16, 2, 3]
+        .iter()
+        .map(|m| participant_identifier_to_frost_identifier(*m).expect("frost identifier"))
+        .collect::<Vec<_>>();
+    let rng = ZeroizingChaCha20Rng::from_seed([seed; 32]);
+    let (shares, public_key_package) = frost::keys::generate_with_dealer(
+        3,
+        2,
+        frost::keys::IdentifierList::Custom(&identifiers),
+        rng,
+    )
+    .expect("generate_with_dealer");
+
+    // Normalize to even-Y exactly as dkg_part3 does, so this material matches a
+    // real distributed DKG's output (the x-only verifying key is even-Y per
+    // BIP-340); raw generate_with_dealer output is odd-Y for some seeds.
+    let is_even_y = public_key_package.has_even_y();
+    let public_key_package = public_key_package.into_even_y(Some(is_even_y));
+    let native_public =
+        native_public_key_package_from_frost(&public_key_package).expect("native public package");
+
+    let mut native_key_packages = BTreeMap::new();
+    for member in [1_u16, 2, 3] {
+        let frost_id =
+            participant_identifier_to_frost_identifier(member).expect("frost identifier");
+        let share = shares.get(&frost_id).expect("share for member").clone();
+        let key_package = frost::keys::KeyPackage::try_from(share)
+            .expect("key package")
+            .into_even_y(Some(is_even_y));
+        native_key_packages.insert(
+            member,
+            crate::api::NativeFrostKeyPackage {
+                identifier: frost_identifier_to_go_string(*key_package.identifier()),
+                data_hex: hex::encode(key_package.serialize().expect("serialize key package")),
+            },
+        );
+    }
+
+    (native_public, native_key_packages)
+}
+
+// A multi-seat operator persists several local seats of the SAME distributed DKG
+// into one session; the key packages must accumulate (not overwrite), so every
+// local seat can later open an interactive signing session.
+#[test]
+fn persist_distributed_dkg_key_package_accumulates_seats_under_one_session() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(7);
+    let session_id = "session-distributed-persist-accumulate".to_string();
+
+    let result1 =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: session_id.clone(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+            public_key_package: native_public.clone(),
+        })
+        .expect("persist seat 1");
+    assert_eq!(result1.threshold, 2);
+    assert_eq!(result1.participant_count, 3);
+    assert!(!result1.key_group.is_empty());
+
+    let result2 =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: session_id.clone(),
+            participant_identifier: 2,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&2).expect("seat 2").clone(),
+            public_key_package: native_public.clone(),
+        })
+        .expect("persist seat 2");
+    assert_eq!(
+        result2.key_group, result1.key_group,
+        "sibling seats of one DKG must share the key group"
+    );
+
+    let guard = state().expect("state").lock().expect("engine lock");
+    let session = guard.sessions.get(&session_id).expect("session exists");
+    let key_packages = session
+        .dkg_key_packages
+        .as_ref()
+        .expect("key packages present");
+    assert!(
+        key_packages.contains_key(&1) && key_packages.contains_key(&2),
+        "both accumulated seats must be stored (got {:?})",
+        key_packages.keys().collect::<Vec<_>>()
+    );
+    assert!(session.dkg_public_key_package.is_some());
+}
+
+// The op rejects a key package whose own identifier does not match the claimed
+// participant, and refuses to install a DIFFERENT DKG's key group over a session
+// that already holds one.
+#[test]
+fn persist_distributed_dkg_key_package_rejects_mismatched_and_conflicting_inputs() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(7);
+
+    let mismatch =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: "session-persist-mismatch".to_string(),
+            participant_identifier: 2, // the key package below is seat 1's
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+            public_key_package: native_public.clone(),
+        })
+        .expect_err("identifier mismatch must be rejected");
+    assert!(
+        matches!(mismatch, EngineError::Validation(_)),
+        "got {mismatch:?}"
+    );
+
+    let session_id = "session-persist-conflict".to_string();
+    persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+        session_id: session_id.clone(),
+        participant_identifier: 1,
+        threshold: 2,
+        participant_count: 3,
+        key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+        public_key_package: native_public.clone(),
+    })
+    .expect("first DKG persists");
+
+    let (other_public, other_key_packages) = sample_distributed_dkg_native_material(9);
+    let conflict =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: session_id.clone(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: other_key_packages.get(&1).expect("seat 1").clone(),
+            public_key_package: other_public,
+        })
+        .expect_err("a different key group for the same session must conflict");
+    assert!(
+        matches!(conflict, EngineError::SessionConflict { .. }),
+        "got {conflict:?}"
+    );
+}
+
+// The op writes signing material to durable state, so it must enforce the same
+// provenance gate run_dkg and the interactive path do: an unattested runtime
+// cannot install distributed-DKG signing material.
+#[test]
+fn persist_distributed_dkg_key_package_rejects_when_provenance_gate_requires_attestation() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    std::env::set_var(TBTC_SIGNER_ENFORCE_PROVENANCE_GATE_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_PROVENANCE_TRUST_ROOT_ENV, "sigstore-main");
+    std::env::set_var(TBTC_SIGNER_MIN_APPROVED_VERSION_ENV, "0.1.0");
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(7);
+    let err =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: "session-persist-provenance".to_string(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+            public_key_package: native_public,
+        })
+        .expect_err("expected provenance gate rejection");
+
+    let EngineError::ProvenanceGateRejected { reason_code, .. } = err else {
+        panic!("unexpected error variant: {err:?}");
+    };
+    assert_eq!(reason_code, "missing_attestation_status");
+
+    clear_state_storage_policy_overrides();
+}
+
 #[test]
 fn run_dkg_accepts_valid_signed_provenance_attestation() {
     let _guard = lock_test_state();

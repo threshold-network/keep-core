@@ -203,6 +203,11 @@ pub fn persist_distributed_dkg_key_package(
 ) -> Result<DkgResult, EngineError> {
     const OP: &str = "persist_distributed_dkg_key_package";
     validate_session_id(&request.session_id)?;
+    // Gate BEFORE decoding or persisting any key material: this op writes signing
+    // material to durable state that interactive signing trusts after restart, so
+    // an unattested runtime must not be able to install it - the same gate run_dkg
+    // and every interactive op enforce.
+    enforce_provenance_gate()?;
 
     if request.participant_identifier == 0 {
         return Err(EngineError::Validation(format!(
@@ -225,7 +230,8 @@ pub fn persist_distributed_dkg_key_package(
 
     // The key package must belong to this participant and be a genuine member of
     // the group (present in the public key package).
-    let frost_identifier = participant_identifier_to_frost_identifier(request.participant_identifier)?;
+    let frost_identifier =
+        participant_identifier_to_frost_identifier(request.participant_identifier)?;
     if *key_package.identifier() != frost_identifier {
         return Err(EngineError::Validation(format!(
             "{OP}: key package identifier does not match participant_identifier"

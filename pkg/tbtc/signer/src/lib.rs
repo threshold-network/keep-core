@@ -14,10 +14,9 @@ use api::{
     InitSignerConfigRequest, InteractiveAggregateRequest, InteractiveRound1Request,
     InteractiveRound2Request, InteractiveSessionAbortRequest, InteractiveSessionOpenRequest,
     NewSigningPackageRequest, PersistDistributedDkgKeyPackageRequest, PromoteCanaryRequest,
-    QuarantineStatusRequest,
-    RefreshCadenceStatusRequest, RefreshSharesRequest, RollbackCanaryRequest, RunDkgRequest,
-    SignShareRequest, StartSignRoundRequest, TranscriptAuditRequest, TriggerEmergencyRekeyRequest,
-    VerifyBlameProofRequest,
+    QuarantineStatusRequest, RefreshCadenceStatusRequest, RefreshSharesRequest,
+    RollbackCanaryRequest, RunDkgRequest, SignShareRequest, StartSignRoundRequest,
+    TranscriptAuditRequest, TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
 };
 use ffi::{
     ffi_entry, free_buffer, parse_request, serialize_response, success_from_string,
