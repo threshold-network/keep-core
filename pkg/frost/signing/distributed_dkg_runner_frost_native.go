@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
@@ -101,9 +102,15 @@ type dkgBusSubscriber struct {
 // package) stays local to this runner; only the public round-1 package and the
 // per-recipient round-2 packages cross the bus.
 type distributedDKGRunner struct {
-	member         group.MemberIndex
-	identifier     string
-	memberIndexes  []group.MemberIndex
+	member        group.MemberIndex
+	identifier    string
+	memberIndexes []group.MemberIndex
+	// memberSet is the DKG participant set as a lookup. A round message from an
+	// authenticated sender NOT in this set (a shared transport may carry other
+	// groups' traffic) must be rejected BEFORE it is counted toward a round's
+	// collection target - otherwise it fills a slot that a real peer's package is
+	// then dropped from, and the runner proceeds with incomplete packages.
+	memberSet      map[group.MemberIndex]struct{}
 	identifierByID map[group.MemberIndex]string
 	idByIdentifier map[string]group.MemberIndex
 	threshold      uint16
@@ -137,15 +144,26 @@ func newDistributedDKGRunner(
 	if !ok {
 		return nil, fmt.Errorf("distributed dkg: no identifier for member [%d]", member)
 	}
-	idByIdentifier := make(map[string]group.MemberIndex, len(identifierByID))
+	// Build the participant set and the identifier<->member routing maps from the
+	// DKG member set only (not the whole identifierByID, which may be broader).
+	// Identifiers must be distinct across participants, or round-2 routing would
+	// silently collapse two members onto one; fail closed on a collision.
+	memberSet := make(map[group.MemberIndex]struct{}, len(memberIndexes))
+	idByIdentifier := make(map[string]group.MemberIndex, len(memberIndexes))
 	memberInSet := false
-	for m, id := range identifierByID {
-		idByIdentifier[id] = m
-	}
 	for _, m := range memberIndexes {
-		if _, ok := identifierByID[m]; !ok {
+		id, ok := identifierByID[m]
+		if !ok {
 			return nil, fmt.Errorf("distributed dkg: no identifier for member [%d] in set", m)
 		}
+		if existing, dup := idByIdentifier[id]; dup {
+			return nil, fmt.Errorf(
+				"distributed dkg: members [%d] and [%d] share identifier %q",
+				existing, m, id,
+			)
+		}
+		idByIdentifier[id] = m
+		memberSet[m] = struct{}{}
 		if m == member {
 			memberInSet = true
 		}
@@ -157,6 +175,7 @@ func newDistributedDKGRunner(
 		member:         member,
 		identifier:     identifier,
 		memberIndexes:  memberIndexes,
+		memberSet:      memberSet,
 		identifierByID: identifierByID,
 		idByIdentifier: idByIdentifier,
 		threshold:      threshold,
@@ -183,6 +202,10 @@ func (r *distributedDKGRunner) Run(ctx context.Context) (*NativeFROSTDKGResult, 
 	if part1.Package == nil || part1.SecretPackage == nil {
 		return nil, fmt.Errorf("distributed dkg: part1 returned an incomplete result")
 	}
+	// Scrub the round-1 secret package on return: Part2 consumes it below, but it
+	// must not linger in the heap afterward (the engine only zeroes its own
+	// transport buffers; the copies handed to the Go caller are ours to scrub).
+	defer zeroBytes(part1.SecretPackage.Data)
 	if err := r.broadcastPackage(dkgRound1Message, 0, part1.Package); err != nil {
 		return nil, err
 	}
@@ -196,6 +219,11 @@ func (r *distributedDKGRunner) Run(ctx context.Context) (*NativeFROSTDKGResult, 
 	if err != nil {
 		return nil, fmt.Errorf("distributed dkg: part2: %w", err)
 	}
+	if part2.SecretPackage == nil {
+		return nil, fmt.Errorf("distributed dkg: part2 returned an incomplete result")
+	}
+	// Scrub the round-2 secret package on return (consumed by Part3 below).
+	defer zeroBytes(part2.SecretPackage.Data)
 	if len(part2.Packages) != n-1 {
 		return nil, fmt.Errorf(
 			"distributed dkg: part2 produced [%d] packages, want [%d]",
@@ -217,6 +245,15 @@ func (r *distributedDKGRunner) Run(ctx context.Context) (*NativeFROSTDKGResult, 
 	if err != nil {
 		return nil, err
 	}
+	// The received round-2 packages carry incoming secret-share material; scrub
+	// them once Part3 (below) has consumed them.
+	defer func() {
+		for _, pkg := range round2Packages {
+			if pkg != nil {
+				zeroBytes(pkg.Data)
+			}
+		}
+	}()
 
 	// ---- Round 3: our long-term secret share + the agreed group key. ----
 	result, err := r.engine.Part3(part2.SecretPackage, round1Packages, round2Packages)
@@ -268,6 +305,12 @@ func (r *distributedDKGRunner) collectRound1(
 			if msg.Sender == r.member {
 				continue // never our own echo
 			}
+			if _, ok := r.memberSet[msg.Sender]; !ok {
+				// Not a participant in THIS DKG. A shared transport may carry other
+				// groups' traffic; counting it would fill a slot a real peer is then
+				// dropped from, so we would proceed with incomplete packages.
+				continue
+			}
 			if _, have := bySender[msg.Sender]; have {
 				continue
 			}
@@ -306,6 +349,9 @@ func (r *distributedDKGRunner) collectRound2(
 		case msg := <-r.sub.round2:
 			if msg.Sender == r.member || msg.Recipient != r.member {
 				continue // not addressed to us (or our own echo)
+			}
+			if _, ok := r.memberSet[msg.Sender]; !ok {
+				continue // not a participant in THIS DKG (shared transport)
 			}
 			if _, have := bySender[msg.Sender]; have {
 				continue
@@ -371,12 +417,17 @@ func sortedRound2Packages(
 // streams; the buffer is sized above a whole DKG's message volume so an honest
 // run never blocks.
 type inProcessDKGBus struct {
+	mu          sync.Mutex
 	subscribers []*dkgBusSubscriber
 	bufferSize  int
 }
 
 // NewInProcessDKGBus returns an in-process DKG bus with per-stream buffers of the
-// given size.
+// given size. Sends are blocking, so bufferSize MUST exceed a whole DKG's
+// per-stream message volume - up to n*(n-1) round-2 messages reach every
+// subscriber's round-2 stream - or a Broadcast can block. It is sized generously
+// for the small groups the orchestrator tests use; production runs over the net
+// broadcast channel, not this bus.
 func NewInProcessDKGBus(bufferSize int) DKGBus {
 	if bufferSize < 1 {
 		bufferSize = 1
@@ -389,12 +440,17 @@ func (b *inProcessDKGBus) Subscribe() *dkgBusSubscriber {
 		round1: make(chan dkgMessage, b.bufferSize),
 		round2: make(chan dkgMessage, b.bufferSize),
 	}
+	b.mu.Lock()
 	b.subscribers = append(b.subscribers, s)
+	b.mu.Unlock()
 	return s
 }
 
 func (b *inProcessDKGBus) Broadcast(msg dkgMessage) {
-	for _, s := range b.subscribers {
+	b.mu.Lock()
+	subscribers := append([]*dkgBusSubscriber(nil), b.subscribers...)
+	b.mu.Unlock()
+	for _, s := range subscribers {
 		// Own the payload per delivery so no receiver can mutate another's view.
 		delivered := msg
 		delivered.Payload = append([]byte(nil), msg.Payload...)
