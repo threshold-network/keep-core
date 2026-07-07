@@ -191,12 +191,13 @@ pub fn run_dkg(request: RunDkgRequest) -> Result<DkgResult, EngineError> {
 /// signing path can load its key. The dealer `run_dkg` above persists ALL key
 /// packages (it generates them all); a distributed DKG instead runs Part1/2/3
 /// across nodes and each node's Part3 returns only ITS OWN secret key package.
-/// This op stores that single key package (keyed by this node's participant
-/// identifier) together with the group public key package, then persists - the
-/// exact session shape interactive signing consumes (own key package by
-/// member_identifier; the public key package for the participant set and
-/// aggregation). There is NO production gate: this is the real distributed path,
-/// not the transitional dealer one.
+/// This op stores that key package (keyed by this node's participant identifier)
+/// together with the group public key package, then persists - the exact session
+/// shape interactive signing consumes (own key package by member_identifier; the
+/// public key package for the participant set and aggregation). A MULTI-SEAT
+/// operator calls it once per local seat and the key packages accumulate under
+/// one session (same key group). There is NO production gate: this is the real
+/// distributed path, not the transitional dealer one.
 pub fn persist_distributed_dkg_key_package(
     request: PersistDistributedDkgKeyPackageRequest,
 ) -> Result<DkgResult, EngineError> {
@@ -257,31 +258,38 @@ pub fn persist_distributed_dkg_key_package(
         .entry(request.session_id.clone())
         .or_insert_with(SessionState::default);
 
-    // Idempotent for the same key group; a different one for this session is a
-    // conflict (mirrors run_dkg's disposition).
+    // A session may already hold a DKG result: this seat re-persisting (idempotent)
+    // or, for a MULTI-SEAT operator, a sibling seat of the SAME distributed DKG.
+    // Same key group -> accumulate this seat's key package into the session; a
+    // different key group for the same session is a conflict.
     if let Some(existing) = &session.dkg_result {
-        if existing.key_group == key_group {
-            return Ok(existing.clone());
+        if existing.key_group != key_group {
+            return Err(EngineError::SessionConflict {
+                session_id: request.session_id,
+            });
         }
-        return Err(EngineError::SessionConflict {
-            session_id: request.session_id,
+    } else {
+        session.dkg_result = Some(DkgResult {
+            session_id: request.session_id.clone(),
+            key_group,
+            participant_count: request.participant_count,
+            threshold: request.threshold,
+            created_at_unix: now_unix(),
         });
+        session.dkg_public_key_package = Some(public_key_package);
     }
 
-    let mut key_packages = BTreeMap::new();
-    key_packages.insert(request.participant_identifier, key_package);
+    session
+        .dkg_key_packages
+        .get_or_insert_with(BTreeMap::new)
+        .insert(request.participant_identifier, key_package);
 
-    let result = DkgResult {
-        session_id: request.session_id,
-        key_group,
-        participant_count: request.participant_count,
-        threshold: request.threshold,
-        created_at_unix: now_unix(),
-    };
-
-    session.dkg_key_packages = Some(key_packages);
-    session.dkg_public_key_package = Some(public_key_package);
-    session.dkg_result = Some(result.clone());
+    // Clone the result before the `&guard` persist call so the mutable `session`
+    // borrow ends here (mirrors run_dkg's ordering).
+    let result = session
+        .dkg_result
+        .clone()
+        .expect("dkg_result was just set for this session");
     persist_engine_state_to_storage(&guard)?;
 
     Ok(result)
