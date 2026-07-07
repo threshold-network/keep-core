@@ -100,10 +100,11 @@ func dkgRound2Msg(sender, recipient group.MemberIndex, authorKey []byte, session
 
 func TestBroadcastChannelDKGBus_AuthenticatedMessagesDemuxed(t *testing.T) {
 	f := newDKGBusAuthFixture(t, 8)
-	sub := f.bus.Subscribe()
+	// Subscribe as seat 2 so it receives the round-2 message addressed to it.
+	sub := f.bus.Subscribe(2)
 
 	// Operator A authentically sends a round-1 broadcast as seat 1 and a round-2
-	// message as seat 3 (both seats it holds).
+	// message as seat 3 (both seats it holds), the latter addressed to seat 2.
 	f.bus.handleMessage(dkgRound1Msg(1, f.operatorA, "sess", "round1-from-1"))
 	f.bus.handleMessage(dkgRound2Msg(3, 2, f.operatorA, "sess", "round2-from-3"))
 
@@ -111,6 +112,11 @@ func TestBroadcastChannelDKGBus_AuthenticatedMessagesDemuxed(t *testing.T) {
 	case msg := <-sub.round1:
 		if msg.Sender != 1 || msg.Session != "sess" || string(msg.Payload) != "round1-from-1" || msg.Type != dkgRound1Message {
 			t.Fatalf("unexpected round-1 delivery: %+v", msg)
+		}
+		// The delivered SenderPublicKey must be the AUTHENTICATED operator key
+		// (what peers learn their round-2 sealing key from), not any wire claim.
+		if !bytes.Equal(msg.SenderPublicKey, f.operatorA) {
+			t.Fatalf("round-1 SenderPublicKey must be the authenticated key")
 		}
 	default:
 		t.Fatal("expected the authenticated round-1 message on the round-1 stream")
@@ -120,6 +126,9 @@ func TestBroadcastChannelDKGBus_AuthenticatedMessagesDemuxed(t *testing.T) {
 		if msg.Sender != 3 || msg.Recipient != 2 || string(msg.Payload) != "round2-from-3" || msg.Type != dkgRound2Message {
 			t.Fatalf("unexpected round-2 delivery: %+v", msg)
 		}
+		if !bytes.Equal(msg.SenderPublicKey, f.operatorA) {
+			t.Fatalf("round-2 SenderPublicKey must be the authenticated key")
+		}
 	default:
 		t.Fatal("expected the authenticated round-2 message on the round-2 stream")
 	}
@@ -127,7 +136,7 @@ func TestBroadcastChannelDKGBus_AuthenticatedMessagesDemuxed(t *testing.T) {
 
 func TestBroadcastChannelDKGBus_RejectsSpoofedSeat(t *testing.T) {
 	f := newDKGBusAuthFixture(t, 8)
-	sub := f.bus.Subscribe()
+	sub := f.bus.Subscribe(1)
 
 	// Operator B (seat 2) claims seat 1; an outsider claims seat 1; operator A
 	// claims seat 2 (operator B's). All must be dropped.
@@ -144,7 +153,7 @@ func TestBroadcastChannelDKGBus_RejectsSpoofedSeat(t *testing.T) {
 
 func TestBroadcastChannelDKGBus_MultiSeatOperator(t *testing.T) {
 	f := newDKGBusAuthFixture(t, 8)
-	sub := f.bus.Subscribe()
+	sub := f.bus.Subscribe(1)
 
 	// Operator A holds seats 1 AND 3: it may authentically send as either.
 	f.bus.handleMessage(dkgRound1Msg(1, f.operatorA, "sess", "from-1"))
@@ -167,7 +176,7 @@ func TestBroadcastChannelDKGBus_MultiSeatOperator(t *testing.T) {
 
 func TestBroadcastChannelDKGBus_DedupsByteIdentical(t *testing.T) {
 	f := newDKGBusAuthFixture(t, 8)
-	sub := f.bus.Subscribe()
+	sub := f.bus.Subscribe(1)
 
 	msg := dkgRound1Msg(1, f.operatorA, "sess", "same-body")
 	f.bus.handleMessage(msg)
@@ -185,6 +194,21 @@ func TestBroadcastChannelDKGBus_DedupsByteIdentical(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("byte-identical retransmission must be deduped to a single delivery, got %d", count)
+	}
+}
+
+func TestBroadcastChannelDKGBus_Round2DeliveredOnlyToRecipient(t *testing.T) {
+	f := newDKGBusAuthFixture(t, 8)
+	// This subscriber is seat 1; a round-2 message addressed to seat 2 must NOT
+	// reach it (that would be the O(n^2) fan-out the recipient filter prevents).
+	sub := f.bus.Subscribe(1)
+
+	f.bus.handleMessage(dkgRound2Msg(3, 2, f.operatorA, "sess", "for-seat-2"))
+
+	select {
+	case msg := <-sub.round2:
+		t.Fatalf("seat 1 received a round-2 message addressed to seat 2: %+v", msg)
+	default:
 	}
 }
 

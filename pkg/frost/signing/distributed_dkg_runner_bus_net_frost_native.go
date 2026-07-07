@@ -117,11 +117,12 @@ func registerDKGTransportUnmarshalers(channel net.BroadcastChannel) {
 }
 
 const (
-	// defaultDKGBusStreamBuffer bounds each per-subscriber stream. A DKG's honest
-	// per-stream volume is bounded (round-1: one per member; round-2: one per
-	// member addressed to us, plus the others we discard), so this is sized well
-	// above it; only a flooding peer can overflow, which degrades the attempt to a
-	// retry rather than losing an honest message.
+	// defaultDKGBusStreamBuffer bounds each per-subscriber stream. Because round-2
+	// messages are delivered only to their addressed recipient, a subscriber's
+	// honest per-stream volume is O(n): round-1 is one per member and round-2 is
+	// one per OTHER member (those addressed to this seat). 1024 sits well above the
+	// largest tBTC group (MaxMemberIndex 255), so honest operation never overflows;
+	// only a flooding peer can, which degrades the attempt to a retry.
 	defaultDKGBusStreamBuffer = 1024
 	// defaultDKGBusSeenBound caps the per-subscriber dedup set so a peer flooding
 	// distinct messages cannot grow it without bound; on overflow it resets.
@@ -182,8 +183,9 @@ func NewBroadcastChannelDKGBus(
 
 // Subscribe registers a receiver and returns its typed streams. The orchestrator
 // subscribes in its constructor, before broadcasting.
-func (b *broadcastChannelDKGBus) Subscribe() *dkgBusSubscriber {
+func (b *broadcastChannelDKGBus) Subscribe(member group.MemberIndex) *dkgBusSubscriber {
 	s := &dkgBusSubscriber{
+		member: member,
 		round1: make(chan dkgMessage, b.streamBuffer),
 		round2: make(chan dkgMessage, b.streamBuffer),
 		seen:   make(map[[32]byte]struct{}),
@@ -246,6 +248,13 @@ func (b *broadcastChannelDKGBus) handleMessage(m net.Message) {
 	b.mu.Unlock()
 
 	for _, s := range subscribers {
+		// A round-2 message is ADDRESSED: deliver it only to its recipient's
+		// subscriber, so a subscriber buffers O(n) round-2 messages (those for it),
+		// not the O(n^2) whole-group fan-out that would overflow the stream at
+		// mainnet group sizes. Round-1 messages are broadcast to every subscriber.
+		if msg.Type == dkgRound2Message && s.member != msg.Recipient {
+			continue
+		}
 		s.deliverNonBlocking(hash, msg, b.seenBound)
 	}
 }

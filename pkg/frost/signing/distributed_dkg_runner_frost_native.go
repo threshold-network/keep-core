@@ -99,15 +99,22 @@ type dkgMessage struct {
 // drives the orchestrator's deterministic tests; production wraps the wallet
 // broadcast channel (with round-2 encrypted to the recipient).
 type DKGBus interface {
-	// Broadcast delivers msg to every subscriber. A round-2 message is addressed
-	// (Recipient set); subscribers keep only the ones addressed to them.
+	// Broadcast delivers a round-1 message to every subscriber and a round-2
+	// message only to the subscriber for its addressed recipient.
 	Broadcast(msg dkgMessage)
-	// Subscribe registers a receiver up front (before any Broadcast).
-	Subscribe() *dkgBusSubscriber
+	// Subscribe registers a receiver for the given seat up front (before any
+	// Broadcast); round-2 messages addressed to that seat are routed to it.
+	Subscribe(member group.MemberIndex) *dkgBusSubscriber
 }
 
-// dkgBusSubscriber exposes one member's typed round streams.
+// dkgBusSubscriber exposes one member's typed round streams. member is the seat
+// this subscriber belongs to: round-1 messages are broadcast to every
+// subscriber, but a round-2 message - which is ADDRESSED to one recipient - is
+// delivered only to the matching subscriber, so a subscriber's round-2 stream
+// holds O(n) messages (the ones addressed to it) rather than the O(n^2) whole-
+// group fan-out (~9900 for a 100-seat group), which would overflow the buffer.
 type dkgBusSubscriber struct {
+	member group.MemberIndex
 	round1 chan dkgMessage
 	round2 chan dkgMessage
 
@@ -145,8 +152,10 @@ type distributedDKGRunner struct {
 	// read only by the later round-2 send, both on the single Run goroutine.
 	recipientKeys map[group.MemberIndex]*ephemeral.PublicKey
 	// selfKey is this node's operator private key, used to OPEN the round-2 shares
-	// sealed to us; selfPublicKey is its marshaled operator public key, stamped on
-	// our own broadcasts so peers learn the key to seal our share to.
+	// sealed to us. selfPublicKey is its marshaled operator public key, stamped on
+	// our broadcasts so peers learn the key to seal our share to. Over the net bus
+	// the stamp is dropped and re-derived from the AUTHENTICATED transport key, so
+	// this trusted stamp path is used only by the in-process test bus.
 	selfKey       *ephemeral.PrivateKey
 	selfPublicKey []byte
 }
@@ -226,8 +235,9 @@ func newDistributedDKGRunner(
 		recipientKeys:  make(map[group.MemberIndex]*ephemeral.PublicKey, len(memberIndexes)),
 		selfKey:        selfKey,
 		selfPublicKey:  selfPublicKey,
-		// Subscribe at construction so no peer's round-1 broadcast is missed.
-		sub: bus.Subscribe(),
+		// Subscribe at construction so no peer's round-1 broadcast is missed;
+		// round-2 messages addressed to this seat route here.
+		sub: bus.Subscribe(member),
 	}, nil
 }
 
@@ -524,11 +534,11 @@ type inProcessDKGBus struct {
 }
 
 // NewInProcessDKGBus returns an in-process DKG bus with per-stream buffers of the
-// given size. Sends are blocking, so bufferSize MUST exceed a whole DKG's
-// per-stream message volume - up to n*(n-1) round-2 messages reach every
-// subscriber's round-2 stream - or a Broadcast can block. It is sized generously
-// for the small groups the orchestrator tests use; production runs over the net
-// broadcast channel, not this bus.
+// given size. Sends are blocking, so bufferSize MUST exceed a subscriber's honest
+// per-stream volume (round-1: one per member; round-2: one per OTHER member, as
+// round-2 is delivered only to its addressed recipient) or a Broadcast can block.
+// It is sized generously for the small groups the orchestrator tests use;
+// production runs over the net broadcast channel, not this bus.
 func NewInProcessDKGBus(bufferSize int) DKGBus {
 	if bufferSize < 1 {
 		bufferSize = 1
@@ -536,8 +546,9 @@ func NewInProcessDKGBus(bufferSize int) DKGBus {
 	return &inProcessDKGBus{bufferSize: bufferSize}
 }
 
-func (b *inProcessDKGBus) Subscribe() *dkgBusSubscriber {
+func (b *inProcessDKGBus) Subscribe(member group.MemberIndex) *dkgBusSubscriber {
 	s := &dkgBusSubscriber{
+		member: member,
 		round1: make(chan dkgMessage, b.bufferSize),
 		round2: make(chan dkgMessage, b.bufferSize),
 	}
@@ -552,6 +563,10 @@ func (b *inProcessDKGBus) Broadcast(msg dkgMessage) {
 	subscribers := append([]*dkgBusSubscriber(nil), b.subscribers...)
 	b.mu.Unlock()
 	for _, s := range subscribers {
+		// An addressed round-2 message goes only to its recipient's subscriber.
+		if msg.Type == dkgRound2Message && s.member != msg.Recipient {
+			continue
+		}
 		// Own the payload per delivery so no receiver can mutate another's view.
 		delivered := msg
 		delivered.Payload = append([]byte(nil), msg.Payload...)
