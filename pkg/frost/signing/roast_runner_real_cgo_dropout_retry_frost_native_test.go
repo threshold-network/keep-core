@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -189,6 +190,10 @@ func TestRealCgoInteractiveSigning_DropoutForcesNextAttemptAndReshuffledSubsetFi
 	<-coordErr.done
 	<-targetErr.done
 
+	// The coordinator must fail SPECIFICALLY by starving on the missing share: it
+	// built + broadcast the package, produced its own round-2 share, then timed
+	// out collecting the target's. Pinning the failure to share collection (not a
+	// generic early error) is what makes this the withheld-share path.
 	if coordErr.err == nil {
 		t.Fatalf(
 			"attempt 1: the coordinator aggregated a signature despite the selected co-signer (seat %d) "+
@@ -196,7 +201,32 @@ func TestRealCgoInteractiveSigning_DropoutForcesNextAttemptAndReshuffledSubsetFi
 			target,
 		)
 	}
-	t.Logf("attempt 1 coordinator failed as expected: %v", coordErr.err)
+	if !strings.Contains(coordErr.err.Error(), "collect shares") {
+		t.Fatalf(
+			"attempt 1: coordinator must starve at round-2 share collection; got a different failure: %v",
+			coordErr.err,
+		)
+	}
+	t.Logf("attempt 1 coordinator starved at share collection as expected: %v", coordErr.err)
+
+	// Crucially, the target must actually have REACHED round 2 and produced the
+	// share it withheld -- otherwise the coordinator's timeout would be vacuous (an
+	// early target failure, e.g. an undelivered signing package or a pre-round-2
+	// engine error, would starve the coordinator identically). Because only the
+	// target's OUTBOUND share is dropped, the target still receives the
+	// coordinator's share and aggregates locally off the shared engine; that local
+	// success -- or, failing that, its own collect-shares timeout -- is the proof
+	// it produced (and the bus withheld) a genuine round-2 share. A failure BEFORE
+	// round 2 must fail this test.
+	if targetErr.err != nil && !strings.Contains(targetErr.err.Error(), "collect shares") {
+		t.Fatalf(
+			"attempt 1: target seat %d must reach round 2 and produce its withheld share, but it "+
+				"failed before round 2 (so the coordinator's starvation would be vacuous): %v",
+			target, targetErr.err,
+		)
+	}
+	t.Logf("attempt 1 target reached round 2 and produced its withheld share (err=%v sigLen=%d)",
+		targetErr.err, len(targetErr.sig))
 
 	// ---- Transition: build the bundle from the LIVE senders (target absent). ----
 	prevHash := attempt1Ctx.Hash()
