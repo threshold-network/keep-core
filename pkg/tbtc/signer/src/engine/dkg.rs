@@ -223,19 +223,43 @@ pub fn persist_distributed_dkg_key_package(
 
     let public_key_package = native_public_key_package_to_frost(OP, &request.public_key_package)?;
 
+    // The group public key package is the authoritative participant set. EVERY
+    // verifying share must have a canonical (u16-derived) identifier: a
+    // non-canonical one cannot be a real group member, and silently dropping it
+    // would let it slip past the admission allowlist/required checks below while
+    // still inflating the participant count.
+    let mut admission_participant_identifiers = HashSet::new();
+    for identifier in public_key_package.verifying_shares().keys() {
+        match frost_identifier_to_u16(*identifier) {
+            Some(participant_identifier) => {
+                admission_participant_identifiers.insert(participant_identifier);
+            }
+            None => {
+                return Err(EngineError::Validation(format!(
+                    "{OP}: public key package contains a non-canonical participant identifier"
+                )))
+            }
+        }
+    }
+
+    // The caller's participant_count must match the authoritative public-package
+    // set, or downstream consumers of the stored DkgResult get the wrong group
+    // size for this key material.
+    if request.participant_count as usize != admission_participant_identifiers.len() {
+        return Err(EngineError::Validation(format!(
+            "{OP}: participant_count [{}] does not match the public key package [{}]",
+            request.participant_count,
+            admission_participant_identifiers.len()
+        )));
+    }
+
     // Enforce the SAME DKG admission policy the dealer run_dkg enforces, over the
-    // participant set derived from the group public key package (its verifying
-    // shares are keyed by each member's canonical FROST identifier). Otherwise a
-    // caller could persist a package that omits a required participant or includes
-    // a non-allowlisted one, and interactive signing would later trust it.
-    let admission_participant_identifiers: HashSet<u16> = public_key_package
-        .verifying_shares()
-        .keys()
-        .filter_map(|identifier| frost_identifier_to_u16(*identifier))
-        .collect();
+    // participant set derived from the public key package. Otherwise a caller could
+    // persist a package that omits a required participant or includes a
+    // non-allowlisted one, and interactive signing would later trust it.
     enforce_admission_policy_for(
         &request.session_id,
-        public_key_package.verifying_shares().len(),
+        admission_participant_identifiers.len(),
         &admission_participant_identifiers,
         request.threshold,
     )?;

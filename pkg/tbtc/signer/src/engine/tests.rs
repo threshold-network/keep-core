@@ -1091,6 +1091,7 @@ fn persist_distributed_dkg_key_package_enforces_admission_policy() {
     let _guard = lock_test_state();
     reset_for_tests();
 
+    clear_state_storage_policy_overrides();
     std::env::set_var(TBTC_SIGNER_ENFORCE_ADMISSION_POLICY_ENV, "true");
     std::env::set_var(TBTC_SIGNER_ADMISSION_ALLOWLIST_IDENTIFIERS_ENV, "1,2");
 
@@ -1112,6 +1113,10 @@ fn persist_distributed_dkg_key_package_enforces_admission_policy() {
         panic!("unexpected error variant: {err:?}");
     };
     assert_eq!(reason_code, "participant_identifier_not_allowlisted");
+
+    // Restore the global policy env so later tests see the default configuration
+    // (reset_for_tests does not clear the admission overrides).
+    clear_state_storage_policy_overrides();
 }
 
 // The op writes signing material to durable state, so it must enforce the same
