@@ -334,12 +334,11 @@ func executeDistributedFrostDKG(
 		node.chain.Signing(),
 	)
 
-	// This node's operator key, shared by all its local seats.
-	operatorPrivateKey, _, err := node.chain.OperatorKeyPair()
-	if err != nil {
-		return nil, fmt.Errorf("cannot resolve the operator key pair: [%v]", err)
-	}
-
+	// Each seat's per-DKG round-2 sealing key is a fresh ephemeral generated inside
+	// the orchestration (not this node's operator key), so operator-key material
+	// never reaches the runner; the operator key stays bound to the channel, which
+	// authenticates every seat's round-1 broadcast (and the ephemeral key riding
+	// in it) via finalMembershipValidator.
 	persistBySeat, err := frostsigning.RunDistributedDKGForSeats(
 		dkgCtx,
 		logger,
@@ -351,7 +350,6 @@ func executeDistributedFrostDKG(
 		localDKGMemberIndexes,
 		identifierByID,
 		uint16(signatureThreshold),
-		operatorPrivateKey,
 	)
 	if err != nil {
 		return nil, err

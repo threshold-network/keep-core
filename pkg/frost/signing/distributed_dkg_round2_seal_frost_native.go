@@ -15,15 +15,17 @@ import (
 // clear would leak to every other member. This file seals each share to its
 // recipient with an ECIES envelope over the existing pkg/crypto/ephemeral ECDH:
 // the sender derives a symmetric key from a ONE-TIME ephemeral private key and
-// the recipient's static (operator) public key, encrypts the share, and carries
-// the ephemeral PUBLIC key alongside the ciphertext. Only the recipient, via ECDH
-// between its private key and that ephemeral public key, recovers the same
-// symmetric key and opens the share. The sender's ephemeral private key is
-// discarded after sealing, giving per-message forward secrecy on the sender side.
+// the recipient's public key, encrypts the share, and carries the ephemeral
+// PUBLIC key alongside the ciphertext. Only the recipient, via ECDH between its
+// private key and that ephemeral public key, recovers the same symmetric key and
+// opens the share. The sender's ephemeral private key is discarded after sealing,
+// giving per-message forward secrecy on the sender side.
 //
-// The envelope is generic over ephemeral keys here; the orchestrator supplies
-// each recipient's operator key (converted to an ephemeral public key) when it
-// wires this in.
+// The envelope is generic over ephemeral keys. The orchestrator supplies each
+// recipient's per-DKG EPHEMERAL public key (learned from its authenticated
+// round-1 broadcast), so BOTH sides use ephemeral keys discarded after the DKG,
+// giving two-sided forward secrecy. (operatorPublicKeyToEphemeral converts an
+// operator key to this type too, still used by the seal's own round-trip test.)
 //
 // SECURITY BOUNDARY: the envelope provides CONFIDENTIALITY ONLY. It does not
 // authenticate the sealer, bind to a session/attempt, or prevent replay. Those

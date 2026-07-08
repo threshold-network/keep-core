@@ -38,16 +38,17 @@ import (
 //     PublicKeyPackage (agreed identically by every honest member).
 //
 // Round-2 packages carry secret-share material and are delivered confidentially
-// per recipient: each share is ECIES-sealed to the recipient's STATIC operator
-// key (a fresh sender ephemeral per message; see
-// distributed_dkg_round2_seal_frost_native.go). NOTE the forward-secrecy scope:
-// this gives per-message secrecy on the SENDER side only. Unlike pkg/tecdsa/dkg,
-// which runs a two-sided per-DKG EPHEMERAL key exchange, the recipient key here
-// is long-lived, so an observer who records the round-2 broadcasts and LATER
-// obtains recipients' operator private keys can recover the shares addressed to
-// them. Closing that gap would require an ephemeral-key-exchange round (a
-// deliberate trade-off deferred here); the bus abstraction keeps any such change
-// local to the transport.
+// per recipient with TWO-SIDED forward secrecy: each share is ECIES-sealed with a
+// fresh sender ephemeral to the recipient's per-DKG EPHEMERAL public key (learned
+// from the recipient's authenticated round-1 broadcast), and opened with the
+// recipient's matching ephemeral private key, which is discarded when the DKG
+// ends (see distributed_dkg_round2_seal_frost_native.go). BOTH the sender and
+// recipient keys are ephemeral, so - like pkg/tecdsa/dkg's exchange round - an
+// observer who records the round-2 broadcasts and LATER obtains members' operator
+// keys learns nothing: the sealing keys never existed at rest. The long-lived
+// operator key stays with the transport, which authenticates the round-1 message
+// (and thus the ephemeral key riding in it). No extra round is needed - the
+// ephemeral public key piggybacks on the round-1 broadcast that already exists.
 
 // distributedDKGEngine is the subset of the native FROST engine the DKG
 // orchestrator needs. *buildTaggedTBTCSignerEngine satisfies it.
@@ -88,12 +89,13 @@ type dkgMessage struct {
 	// Sender is the authenticated originating member (the transport binds it;
 	// the orchestrator never trusts an id inside Payload for routing).
 	Sender group.MemberIndex
-	// SenderPublicKey is the sender's AUTHENTICATED operator public key, set by
-	// the transport (the net bus overwrites any claimed value with the key it
-	// authenticated the sender against). The orchestrator learns each member's
-	// round-2 sealing key from the round-1 message it broadcasts, since peer
-	// operator public keys are not known up front (group selection carries only
-	// addresses).
+	// SenderPublicKey is the sender's per-DKG EPHEMERAL round-2 sealing public key,
+	// carried on its round-1 message. Peers learn it here and seal this sender's
+	// round-2 shares to it; the sender opens them with the matching ephemeral
+	// private key, which is discarded when the DKG ends (recipient-side forward
+	// secrecy). It is trustworthy because the round-1 message is authenticated
+	// (the net bus binds the claimed seat to the operator key that signed the
+	// message, and the ephemeral key rides inside that same authenticated message).
 	SenderPublicKey []byte
 	// Recipient is the addressed member for a round-2 message; unused (0) for a
 	// broadcast round-1 message.
@@ -157,16 +159,17 @@ type distributedDKGRunner struct {
 	engine         distributedDKGEngine
 	bus            DKGBus
 	sub            *dkgBusSubscriber
-	// recipientKeys is LEARNED during round 1: each member's authenticated
-	// operator public key (from the SenderPublicKey on its round-1 message) is the
-	// key its round-2 share is SEALED to. It is written only by collectRound1 and
-	// read only by the later round-2 send, both on the single Run goroutine.
+	// recipientKeys is LEARNED during round 1: each member's per-DKG EPHEMERAL
+	// public key (from the SenderPublicKey on its round-1 message) is the key its
+	// round-2 share is SEALED to. It is written only by collectRound1 and read only
+	// by the later round-2 send, both on the single Run goroutine.
 	recipientKeys map[group.MemberIndex]*ephemeral.PublicKey
-	// selfKey is this node's operator private key, used to OPEN the round-2 shares
-	// sealed to us. selfPublicKey is its marshaled operator public key, stamped on
-	// our broadcasts so peers learn the key to seal our share to. Over the net bus
-	// the stamp is dropped and re-derived from the AUTHENTICATED transport key, so
-	// this trusted stamp path is used only by the in-process test bus.
+	// selfKey is this seat's per-DKG EPHEMERAL private key, used to OPEN the round-2
+	// shares sealed to us; selfPublicKey is its marshaled ephemeral public key,
+	// stamped on our broadcasts so peers seal our share to it. The ephemeral key is
+	// fresh per DKG and discarded afterward, giving recipient-side forward secrecy;
+	// the operator key stays with the transport, which authenticates the broadcast
+	// this ephemeral key rides in.
 	selfKey       *ephemeral.PrivateKey
 	selfPublicKey []byte
 }

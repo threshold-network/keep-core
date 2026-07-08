@@ -10,8 +10,8 @@ import (
 
 	"github.com/ipfs/go-log/v2"
 
+	"github.com/keep-network/keep-core/pkg/crypto/ephemeral"
 	"github.com/keep-network/keep-core/pkg/net"
-	"github.com/keep-network/keep-core/pkg/operator"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
@@ -82,22 +82,10 @@ func RunDistributedDKGForSeats(
 	localMemberIndexes []group.MemberIndex,
 	identifierByID map[group.MemberIndex]string,
 	threshold uint16,
-	selfOperatorKey *operator.PrivateKey,
 ) (map[group.MemberIndex]*NativeTBTCSignerDKGResult, error) {
 	if len(localMemberIndexes) == 0 {
 		return nil, fmt.Errorf("no local seats to run the distributed DKG for")
 	}
-	if selfOperatorKey == nil {
-		return nil, fmt.Errorf("self operator key is nil")
-	}
-
-	// One operator key for every local seat: peers learn each seat's round-2
-	// sealing key from the authenticated operator key on its round-1 broadcasts.
-	selfKey, err := operatorPrivateKeyToEphemeral(selfOperatorKey)
-	if err != nil {
-		return nil, fmt.Errorf("cannot convert operator private key to ephemeral: [%v]", err)
-	}
-	selfPublicKey := operator.MarshalUncompressed(&selfOperatorKey.PublicKey)
 
 	bus, err := NewBroadcastChannelDKGBus(ctx, logger, channel, membershipValidator)
 	if err != nil {
@@ -110,6 +98,16 @@ func RunDistributedDKGForSeats(
 	// bus before any of them broadcasts round 1.
 	runners := make(map[group.MemberIndex]*distributedDKGRunner, len(localMemberIndexes))
 	for _, seat := range localMemberIndexes {
+		// A FRESH per-DKG ephemeral key pair per seat: peers seal this seat's round-2
+		// shares to its ephemeral public key (learned from its authenticated round-1
+		// broadcast) and it opens them with the ephemeral private key, which is
+		// discarded when the DKG ends. This gives the shares two-sided forward
+		// secrecy - a recorded broadcast plus a later operator-key leak reveals
+		// nothing, because the sealing key never existed at rest.
+		seatEphemeral, err := ephemeral.GenerateKeyPair()
+		if err != nil {
+			return nil, fmt.Errorf("cannot generate the ephemeral key for seat [%v]: [%v]", seat, err)
+		}
 		runner, err := newDistributedDKGRunner(
 			seat,
 			session,
@@ -118,8 +116,8 @@ func RunDistributedDKGForSeats(
 			threshold,
 			engine,
 			bus,
-			selfKey,
-			selfPublicKey,
+			seatEphemeral.PrivateKey,
+			seatEphemeral.PublicKey.Marshal(),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("cannot create the distributed DKG runner for seat [%v]: [%w]", seat, err)

@@ -73,14 +73,19 @@ func newDKGBusAuthFixture(t *testing.T, streamSize int) dkgBusAuthFixture {
 	return dkgBusAuthFixture{bus: bus, operatorA: operatorA, operatorB: operatorB, outsider: outsider}
 }
 
+// dkgRound1Msg builds a round-1 message authored (signed) by authorKey. For test
+// simplicity the sender's on-wire ephemeral sealing key is set to authorKey too;
+// TestBroadcastChannelDKGBus_CarriesWireEphemeralKey exercises the case where they
+// differ.
 func dkgRound1Msg(sender group.MemberIndex, authorKey []byte, session, payload string) fakeDKGNetMessage {
 	return fakeDKGNetMessage{
 		senderPublicKey: authorKey,
 		payload: &dkgTransportMessage{
-			messageType: dkgRound1Message,
-			sender:      sender,
-			session:     session,
-			payload:     []byte(payload),
+			messageType:        dkgRound1Message,
+			sender:             sender,
+			session:            session,
+			ephemeralPublicKey: authorKey,
+			payload:            []byte(payload),
 		},
 	}
 }
@@ -89,11 +94,12 @@ func dkgRound2Msg(sender, recipient group.MemberIndex, authorKey []byte, session
 	return fakeDKGNetMessage{
 		senderPublicKey: authorKey,
 		payload: &dkgTransportMessage{
-			messageType: dkgRound2Message,
-			sender:      sender,
-			recipient:   recipient,
-			session:     session,
-			payload:     []byte(payload),
+			messageType:        dkgRound2Message,
+			sender:             sender,
+			recipient:          recipient,
+			session:            session,
+			ephemeralPublicKey: authorKey,
+			payload:            []byte(payload),
 		},
 	}
 }
@@ -113,10 +119,10 @@ func TestBroadcastChannelDKGBus_AuthenticatedMessagesDemuxed(t *testing.T) {
 		if msg.Sender != 1 || msg.Session != "sess" || string(msg.Payload) != "round1-from-1" || msg.Type != dkgRound1Message {
 			t.Fatalf("unexpected round-1 delivery: %+v", msg)
 		}
-		// The delivered SenderPublicKey must be the AUTHENTICATED operator key
-		// (what peers learn their round-2 sealing key from), not any wire claim.
+		// The delivered SenderPublicKey is the sender's ephemeral sealing key
+		// carried on the wire (here equal to the author key).
 		if !bytes.Equal(msg.SenderPublicKey, f.operatorA) {
-			t.Fatalf("round-1 SenderPublicKey must be the authenticated key")
+			t.Fatalf("round-1 SenderPublicKey must be the wire ephemeral key")
 		}
 	default:
 		t.Fatal("expected the authenticated round-1 message on the round-1 stream")
@@ -127,10 +133,39 @@ func TestBroadcastChannelDKGBus_AuthenticatedMessagesDemuxed(t *testing.T) {
 			t.Fatalf("unexpected round-2 delivery: %+v", msg)
 		}
 		if !bytes.Equal(msg.SenderPublicKey, f.operatorA) {
-			t.Fatalf("round-2 SenderPublicKey must be the authenticated key")
+			t.Fatalf("round-2 SenderPublicKey must be the wire ephemeral key")
 		}
 	default:
 		t.Fatal("expected the authenticated round-2 message on the round-2 stream")
+	}
+}
+
+// TestBroadcastChannelDKGBus_CarriesWireEphemeralKey proves the delivered
+// SenderPublicKey (peers' round-2 sealing key) is the sender's EPHEMERAL key
+// carried on the wire - NOT the operator key the message was authenticated
+// against. So a seat seals to a key that never exists at rest (forward secrecy),
+// while the seat itself is still bound to its operator for authentication.
+func TestBroadcastChannelDKGBus_CarriesWireEphemeralKey(t *testing.T) {
+	f := newDKGBusAuthFixture(t, 8)
+	sub := f.bus.Subscribe(1)
+
+	// Operator A (seat 1) authenticates the message, but the on-wire ephemeral
+	// sealing key is DISTINCT from the operator key.
+	ephemeralKey := []byte("distinct-ephemeral-round2-sealing-key")
+	msg := dkgRound1Msg(1, f.operatorA, "sess", "round1")
+	msg.payload.(*dkgTransportMessage).ephemeralPublicKey = ephemeralKey
+	f.bus.handleMessage(msg)
+
+	select {
+	case delivered := <-sub.round1:
+		if bytes.Equal(delivered.SenderPublicKey, f.operatorA) {
+			t.Fatal("delivered sealing key must be the wire ephemeral, not the operator key")
+		}
+		if !bytes.Equal(delivered.SenderPublicKey, ephemeralKey) {
+			t.Fatal("delivered sealing key must equal the sender's wire ephemeral key")
+		}
+	default:
+		t.Fatal("expected the round-1 message on the round-1 stream")
 	}
 }
 
@@ -214,23 +249,26 @@ func TestBroadcastChannelDKGBus_Round2DeliveredOnlyToRecipient(t *testing.T) {
 
 func TestDKGTransportMessage_MarshalRoundTrip(t *testing.T) {
 	original := &dkgTransportMessage{
-		messageType: dkgRound2Message,
-		sender:      7,
-		recipient:   3,
-		session:     "wallet-seed-0xabcd-attempt-2",
-		payload:     []byte("sealed-round-2-share-bytes"),
+		messageType:        dkgRound1Message,
+		sender:             7,
+		recipient:          3,
+		session:            "wallet-seed-0xabcd-attempt-2",
+		ephemeralPublicKey: []byte("per-dkg-ephemeral-sealing-pubkey"),
+		payload:            []byte("sealed-round-2-share-bytes"),
 	}
 	encoded, err := original.Marshal()
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	decoded := &dkgTransportMessage{messageType: dkgRound2Message}
+	decoded := &dkgTransportMessage{messageType: dkgRound1Message}
 	if err := decoded.Unmarshal(encoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if decoded.sender != original.sender || decoded.recipient != original.recipient ||
-		decoded.session != original.session || !bytes.Equal(decoded.payload, original.payload) {
+		decoded.session != original.session ||
+		!bytes.Equal(decoded.ephemeralPublicKey, original.ephemeralPublicKey) ||
+		!bytes.Equal(decoded.payload, original.payload) {
 		t.Fatalf("round-trip mismatch: got %+v, want %+v", decoded, original)
 	}
 }

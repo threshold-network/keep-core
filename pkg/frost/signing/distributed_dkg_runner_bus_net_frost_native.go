@@ -40,22 +40,26 @@ var dkgTransportType = map[dkgMessageType]string{
 // dkgTransportMessage is the wire envelope for one dkgMessage. The two DKG
 // message types share this body and are distinguished by Type() (set per
 // registered unmarshaler). The body carries the CLAIMED sender seat, the
-// addressed recipient (0 for a round-1 broadcast), the attempt session, and the
-// opaque round payload; the sender is authenticated by the receive handler.
+// addressed recipient (0 for a round-1 broadcast), the attempt session, the
+// sender's per-DKG EPHEMERAL round-2 sealing public key (round-1 only), and the
+// opaque round payload. The sender seat is authenticated by the receive handler
+// against the message's operator signature; the ephemeral key rides inside that
+// authenticated message, so it too cannot be substituted by a MITM.
 type dkgTransportMessage struct {
-	messageType dkgMessageType
-	sender      group.MemberIndex
-	recipient   group.MemberIndex
-	session     string
-	payload     []byte
+	messageType        dkgMessageType
+	sender             group.MemberIndex
+	recipient          group.MemberIndex
+	session            string
+	ephemeralPublicKey []byte
+	payload            []byte
 }
 
 // Type returns the pkg/net dispatch tag for this message's DKG round type.
 func (m *dkgTransportMessage) Type() string { return dkgTransportType[m.messageType] }
 
 // Marshal encodes the body as: sender(4 BE) || recipient(4 BE) ||
-// session_len(2 BE) || session || payload. The fixed-size prefix plus the
-// length-prefixed session make the payload boundary unambiguous.
+// session_len(2 BE) || session || eph_len(2 BE) || ephemeral_public_key ||
+// payload. Each length-prefixed field keeps the boundaries unambiguous.
 func (m *dkgTransportMessage) Marshal() ([]byte, error) {
 	if m.sender == 0 {
 		return nil, fmt.Errorf("dkg transport: sender is zero")
@@ -63,12 +67,19 @@ func (m *dkgTransportMessage) Marshal() ([]byte, error) {
 	if len(m.session) > 0xffff {
 		return nil, fmt.Errorf("dkg transport: session length [%d] exceeds the 16-bit cap", len(m.session))
 	}
-	out := make([]byte, 10+len(m.session)+len(m.payload))
+	if len(m.ephemeralPublicKey) > 0xffff {
+		return nil, fmt.Errorf("dkg transport: ephemeral key length [%d] exceeds the 16-bit cap", len(m.ephemeralPublicKey))
+	}
+	out := make([]byte, 12+len(m.session)+len(m.ephemeralPublicKey)+len(m.payload))
 	binary.BigEndian.PutUint32(out[0:4], uint32(m.sender))
 	binary.BigEndian.PutUint32(out[4:8], uint32(m.recipient))
 	binary.BigEndian.PutUint16(out[8:10], uint16(len(m.session)))
-	copy(out[10:10+len(m.session)], m.session)
-	copy(out[10+len(m.session):], m.payload)
+	off := 10
+	off += copy(out[off:off+len(m.session)], m.session)
+	binary.BigEndian.PutUint16(out[off:off+2], uint16(len(m.ephemeralPublicKey)))
+	off += 2
+	off += copy(out[off:off+len(m.ephemeralPublicKey)], m.ephemeralPublicKey)
+	copy(out[off:], m.payload)
 	return out, nil
 }
 
@@ -97,13 +108,26 @@ func (m *dkgTransportMessage) Unmarshal(data []byte) error {
 		)
 	}
 	sessionLen := int(binary.BigEndian.Uint16(data[8:10]))
-	if len(data) < prefix+sessionLen {
+	off := prefix
+	if len(data) < off+sessionLen {
 		return fmt.Errorf("dkg transport: message truncated in the session field")
+	}
+	session := string(data[off : off+sessionLen])
+	off += sessionLen
+	if len(data) < off+2 {
+		return fmt.Errorf("dkg transport: message truncated before the ephemeral-key length")
+	}
+	ephLen := int(binary.BigEndian.Uint16(data[off : off+2]))
+	off += 2
+	if len(data) < off+ephLen {
+		return fmt.Errorf("dkg transport: message truncated in the ephemeral key field")
 	}
 	m.sender = group.MemberIndex(rawSender)
 	m.recipient = group.MemberIndex(rawRecipient)
-	m.session = string(data[prefix : prefix+sessionLen])
-	m.payload = append([]byte(nil), data[prefix+sessionLen:]...)
+	m.session = session
+	m.ephemeralPublicKey = append([]byte(nil), data[off:off+ephLen]...)
+	off += ephLen
+	m.payload = append([]byte(nil), data[off:]...)
 	return nil
 }
 
@@ -208,11 +232,12 @@ func (b *broadcastChannelDKGBus) Subscribe(member group.MemberIndex) *dkgBusSubs
 // Send error is logged, not surfaced.
 func (b *broadcastChannelDKGBus) Broadcast(msg dkgMessage) {
 	wire := &dkgTransportMessage{
-		messageType: msg.Type,
-		sender:      msg.Sender,
-		recipient:   msg.Recipient,
-		session:     msg.Session,
-		payload:     msg.Payload,
+		messageType:        msg.Type,
+		sender:             msg.Sender,
+		recipient:          msg.Recipient,
+		session:            msg.Session,
+		ephemeralPublicKey: msg.SenderPublicKey,
+		payload:            msg.Payload,
 	}
 	if err := b.channel.Send(b.ctx, wire); err != nil {
 		b.logger.Warnf("dkg bus: failed to broadcast [%s] message: [%v]", wire.Type(), err)
@@ -242,10 +267,12 @@ func (b *broadcastChannelDKGBus) handleMessage(m net.Message) {
 		Type:    wire.messageType,
 		Session: wire.session,
 		Sender:  wire.sender,
-		// The AUTHENTICATED operator public key, not any value claimed on the wire:
-		// peers learn each other's round-2 sealing key from this, so it must be the
-		// key membership was validated against.
-		SenderPublicKey: m.SenderPublicKey(),
+		// The sender's per-DKG EPHEMERAL round-2 sealing key, carried on the wire.
+		// It is trustworthy because it rides inside the message whose operator
+		// signature we just authenticated the CLAIMED seat against (above), so a
+		// MITM cannot substitute it; using an ephemeral (not the long-lived operator
+		// key) gives the round-2 shares recipient-side forward secrecy.
+		SenderPublicKey: wire.ephemeralPublicKey,
 		Recipient:       wire.recipient,
 		Payload:         wire.payload,
 	}
@@ -273,6 +300,7 @@ func (m dkgMessage) contentHash() [32]byte {
 	h := sha256.New()
 	h.Write([]byte{byte(m.Type), byte(m.Sender), byte(m.Recipient)})
 	h.Write([]byte(m.Session))
+	h.Write(m.SenderPublicKey)
 	h.Write(m.Payload)
 	var out [32]byte
 	copy(out[:], h.Sum(nil))

@@ -49,18 +49,19 @@ func TestDistributedDKG_MultiNode_NetTransport(t *testing.T) {
 	engine := &buildTaggedTBTCSignerEngine{}
 
 	// One operator per seat; the MembershipValidator maps each seat to that
-	// operator's address so the DKG bus authenticates every round message's
-	// claimed seat against its authenticated sender key.
+	// operator's address so the DKG bus authenticates every round message's claimed
+	// seat against its authenticated sender key. The operator key stays bound to the
+	// channel (transport signing) - the DKG itself uses fresh per-seat ephemeral
+	// keys generated inside RunDistributedDKGForSeats, so no operator PRIVATE key is
+	// handed to the DKG (recipient-side forward secrecy).
 	chainSigning := local_v1.Connect(n, n).Signing()
-	privateKeys := make([]*operator.PrivateKey, n)
 	publicKeys := make([]*operator.PublicKey, n)
 	addresses := make([]chain.Address, n)
 	for i := 0; i < n; i++ {
-		priv, pub, err := operator.GenerateKeyPair(local_v1.DefaultCurve)
+		_, pub, err := operator.GenerateKeyPair(local_v1.DefaultCurve)
 		if err != nil {
 			t.Fatalf("operator key (seat %d): %v", i+1, err)
 		}
-		privateKeys[i] = priv
 		publicKeys[i] = pub
 		addresses[i] = chainSigning.PublicKeyBytesToAddress(operator.MarshalUncompressed(pub))
 	}
@@ -112,7 +113,6 @@ func TestDistributedDKG_MultiNode_NetTransport(t *testing.T) {
 				[]group.MemberIndex{member}, // one seat per node
 				identifierByID,
 				threshold,
-				privateKeys[i],
 			)
 			outcomes <- nodeOutcome{member: member, persist: persist, err: err}
 		}()
