@@ -1230,9 +1230,9 @@ fn persist_distributed_dkg_key_package_rejects_signing_share_not_deriving_to_pub
     // Seat 1's identity + verifying share, but seat 2's signing share.
     let corrupt = frost::keys::KeyPackage::new(
         *key_package_1.identifier(),
-        key_package_2.signing_share().clone(),
+        *key_package_2.signing_share(),
         *key_package_1.verifying_share(),
-        key_package_1.verifying_key().clone(),
+        *key_package_1.verifying_key(),
         *key_package_1.min_signers(),
     );
     let corrupt_data = corrupt.serialize().expect("serialize corrupt key package");

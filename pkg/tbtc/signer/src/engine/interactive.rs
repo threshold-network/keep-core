@@ -1370,7 +1370,7 @@ pub(crate) fn resolve_wallet_session_id(
         if session
             .dkg_result
             .as_ref()
-            .map_or(false, |dkg| dkg.key_group == key_group)
+            .is_some_and(|dkg| dkg.key_group == key_group)
         {
             return Some(session_id.to_string());
         }
@@ -1383,7 +1383,7 @@ pub(crate) fn resolve_wallet_session_id(
             session
                 .dkg_result
                 .as_ref()
-                .map_or(false, |dkg| dkg.key_group == key_group)
+                .is_some_and(|dkg| dkg.key_group == key_group)
         })
         .map(|(id, _)| id.clone())
 }
