@@ -27,8 +27,8 @@ import (
 // RunDistributedDKGForSeats seam - the exact call the node's
 // executeDistributedFrostDKG makes. Unlike the in-process-bus e2e, every round
 // package crosses the real transport adapter and is membership-authenticated
-// against the sender's operator key, and round-2 shares are ECIES-sealed to
-// peers' operator keys LEARNED from their authenticated round-1 broadcasts. So a
+// against the sender's operator key, and round-2 shares are ECIES-sealed to peers'
+// per-DKG EPHEMERAL keys LEARNED from their authenticated round-1 broadcasts. So a
 // passing run proves the production orchestration + net bus + key learning +
 // encrypted round-2 all work together over real messaging.
 //
@@ -151,7 +151,12 @@ func TestDistributedDKG_MultiNode_NetTransport(t *testing.T) {
 	}
 	t.Logf("%d nodes agreed on group key %s… over the real net transport", n, keyGroup[:16])
 
-	// ---- Interactive threshold signing over the accumulated session. ----
+	// ---- Interactive threshold signing under a DISTINCT session. ----
+	// The DKG persisted under `session`, but interactive ROAST signing runs under a
+	// per-message RoastSessionID that is NOT the DKG session - the production shape.
+	// The engine resolves the wallet key by keyGroup, so signing under a different
+	// session must still work (a distributed-DKG wallet is signable ONLY this way).
+	signingSession := session + "-roast-signing"
 	signingMembers := members[:threshold]
 	includedParticipants := make([]uint16, len(signingMembers))
 	for i, m := range signingMembers {
@@ -159,7 +164,7 @@ func TestDistributedDKG_MultiNode_NetTransport(t *testing.T) {
 	}
 
 	derived, err := engine.DeriveInteractiveAttemptContext(
-		session, message, keyGroup, threshold, 0, includedParticipants,
+		signingSession, message, keyGroup, threshold, 0, includedParticipants,
 	)
 	if err != nil {
 		t.Fatalf("derive interactive attempt context: %v", err)
@@ -173,7 +178,7 @@ func TestDistributedDKG_MultiNode_NetTransport(t *testing.T) {
 	commitments := make([]nativeFROSTCommitment, 0, len(signingMembers))
 	for _, m := range signingMembers {
 		open, err := engine.InteractiveSessionOpen(
-			session, uint16(m), message, keyGroup, threshold, nil, derived.AttemptContext,
+			signingSession, uint16(m), message, keyGroup, threshold, nil, derived.AttemptContext,
 		)
 		if err != nil {
 			t.Fatalf("interactive session open (member %d): %v", m, err)
@@ -181,7 +186,7 @@ func TestDistributedDKG_MultiNode_NetTransport(t *testing.T) {
 		if attemptID == "" {
 			attemptID = open.AttemptID
 		}
-		commitmentData, err := engine.InteractiveRound1(session, open.AttemptID, uint16(m))
+		commitmentData, err := engine.InteractiveRound1(signingSession, open.AttemptID, uint16(m))
 		if err != nil {
 			t.Fatalf("interactive round 1 (member %d): %v", m, err)
 		}
@@ -198,7 +203,7 @@ func TestDistributedDKG_MultiNode_NetTransport(t *testing.T) {
 
 	shares := make([]nativeFROSTSignatureShare, 0, len(signingMembers))
 	for _, m := range signingMembers {
-		shareData, err := engine.InteractiveRound2(session, attemptID, uint16(m), signingPackage)
+		shareData, err := engine.InteractiveRound2(signingSession, attemptID, uint16(m), signingPackage)
 		if err != nil {
 			t.Fatalf("interactive round 2 (member %d): %v", m, err)
 		}
@@ -208,7 +213,7 @@ func TestDistributedDKG_MultiNode_NetTransport(t *testing.T) {
 		})
 	}
 
-	signatureBytes, err := engine.InteractiveAggregate(session, attemptID, signingPackage, shares, nil)
+	signatureBytes, err := engine.InteractiveAggregate(signingSession, attemptID, signingPackage, shares, nil)
 	if err != nil {
 		t.Fatalf("interactive aggregate: %v", err)
 	}
