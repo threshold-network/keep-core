@@ -867,12 +867,13 @@ mod tests {
                 attempt_id: "ffi-smoke-attempt".to_string(),
             },
         };
-        // No DKG session exists, so Open fails closed with session_not_found
-        // (key material is resolved from engine DKG state, never the request).
+        // No wallet key exists for this key_group, so Open fails closed with
+        // dkg_not_ready (key material is resolved from engine DKG state by
+        // key_group, never the request).
         let (status, payload) = call_ffi(&open, super::frost_tbtc_interactive_session_open);
         assert_ne!(status, 0);
         let error: ErrorResponse = serde_json::from_slice(&payload).expect("open error payload");
-        assert_eq!(error.code, "session_not_found");
+        assert_eq!(error.code, "dkg_not_ready");
 
         let round1 = crate::api::InteractiveRound1Request {
             session_id: "ffi-interactive-smoke-missing".to_string(),

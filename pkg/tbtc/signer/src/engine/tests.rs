@@ -11970,6 +11970,148 @@ fn interactive_session_full_round_trip_aggregates_bip340() {
 }
 
 #[test]
+fn interactive_signs_across_sessions_by_key_group() {
+    // PRODUCTION SHAPE: a wallet's DKG material is persisted under its DKG session,
+    // but interactive ROAST signing runs under a DIFFERENT, per-message session (the
+    // RoastSessionID). The engine must resolve the wallet key by key_group so signing
+    // under a distinct session still works - otherwise distributed-DKG wallets, which
+    // are signable ONLY via the interactive path, could never sign. The single-session
+    // tests miss this because they persist and sign under one id.
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let wallet_session = "wallet-dkg-session";
+    let signing_session = "roast-signing-session";
+    let key_group = "cross-session-key-group";
+    let message = [0x5au8; 32];
+    let included = [1u16, 2];
+
+    // The DKG material lives ONLY under the wallet (DKG) session.
+    ensure_interactive_dkg_session(wallet_session, key_group);
+
+    // All signing runs under a DISTINCT session id, with the attempt context derived
+    // from THAT signing session (coordinator/attempt id bind to the RoastSessionID,
+    // unchanged by this fix).
+    let open_under_signing_session = |member: u16| {
+        let attempt_context =
+            interactive_test_attempt_context(signing_session, key_group, &message, &included, 1);
+        interactive_session_open(InteractiveSessionOpenRequest {
+            session_id: signing_session.to_string(),
+            member_identifier: member,
+            message_hex: hex::encode(message),
+            key_group: key_group.to_string(),
+            threshold: 2,
+            taproot_merkle_root_hex: None,
+            attempt_context,
+        })
+        .unwrap_or_else(|e| panic!("member {member} opens under the signing session: {e:?}"))
+    };
+    let opened1 = open_under_signing_session(1);
+    let opened2 = open_under_signing_session(2);
+    assert_eq!(opened1.attempt_id, opened2.attempt_id);
+
+    // The wallet material must NOT be copied into the signing session (no secret
+    // duplication): the signing session holds only per-signing state, bound to the
+    // wallet key by key_group.
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let signing = guard
+            .sessions
+            .get(signing_session)
+            .expect("signing session created on open");
+        assert!(
+            signing.dkg_key_packages.is_none() && signing.dkg_result.is_none(),
+            "signing session must not hold a copy of the wallet DKG material"
+        );
+        assert_eq!(
+            signing.bound_key_group.as_deref(),
+            Some(key_group),
+            "signing session is bound to the wallet key it signs for"
+        );
+    }
+
+    let round1_m1 = interactive_round1(InteractiveRound1Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened1.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("member 1 round 1 under the signing session");
+    let round1_m2 = interactive_round1(InteractiveRound1Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened2.attempt_id.clone(),
+        member_identifier: 2,
+    })
+    .expect("member 2 round 1 under the signing session");
+
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1_m1.commitments_hex.clone(),
+            },
+            NativeFrostCommitment {
+                identifier: key_packages[&2].identifier.clone(),
+                data_hex: round1_m2.commitments_hex.clone(),
+            },
+        ],
+    );
+
+    let round2_m1 = interactive_round2(InteractiveRound2Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened1.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect("member 1 round 2 under the signing session");
+    let round2_m2 = interactive_round2(InteractiveRound2Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened2.attempt_id.clone(),
+        member_identifier: 2,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect("member 2 round 2 under the signing session");
+
+    // interactive_aggregate resolves the group public key by key_group from the wallet
+    // session and produces a valid BIP-340 signature over the distinct signing session.
+    let aggregated = interactive_aggregate(InteractiveAggregateRequest {
+        session_id: signing_session.to_string(),
+        attempt_id: opened1.attempt_id.clone(),
+        signing_package_hex: signing_package_hex.clone(),
+        signature_shares: vec![
+            crate::api::NativeFrostSignatureShare {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round2_m1.signature_share_hex,
+            },
+            crate::api::NativeFrostSignatureShare {
+                identifier: key_packages[&2].identifier.clone(),
+                data_hex: round2_m2.signature_share_hex,
+            },
+        ],
+        taproot_merkle_root_hex: None,
+    })
+    .expect("interactive aggregate resolves wallet material by key_group across sessions");
+
+    let public_key_package = dkg_part3(
+        deterministic_interactive_dkg_fixture(0)
+            .part3_requests
+            .remove(&1)
+            .expect("fixture participant 1"),
+    )
+    .expect("public key package")
+    .public_key_package;
+
+    let signature_bytes = hex::decode(aggregated.signature_hex).expect("signature hex");
+    let signature = SchnorrSignature::from_slice(&signature_bytes).expect("BIP340 signature");
+    let public_key_bytes = hex::decode(public_key_package.verifying_key).expect("key hex");
+    let public_key = XOnlyPublicKey::from_slice(&public_key_bytes).expect("x-only key");
+    Secp256k1::verification_only()
+        .verify_schnorr(&signature, &SecpMessage::from_digest(message), &public_key)
+        .expect("cross-session interactive signing produces a valid BIP-340 signature");
+}
+
+#[test]
 fn interactive_multi_seat_two_members_one_process_aggregate_bip340() {
     // Multi-seat: ONE process drives TWO local members through the interactive
     // session API for the SAME session and attempt - the case the pre-multi-seat
@@ -13834,11 +13976,11 @@ fn interactive_open_requires_an_existing_dkg_session() {
     let _guard = lock_test_state();
     reset_for_tests();
 
-    // Key material is resolved from engine DKG state, never the request,
-    // so an interactive open against a session with no DKG fails closed
-    // - the interactive path cannot create a session or sign with
-    // caller-supplied material. (This is also why interactive opens
-    // cannot churn empty registry entries.)
+    // Key material is resolved from engine DKG state by key_group, never the
+    // request, so an interactive open when NO wallet key exists for that
+    // key_group fails closed with DkgNotReady - the interactive path never
+    // signs with caller-supplied material. (It MAY create a per-signing session
+    // bound to an EXISTING wallet key, but only then.)
     let attempt_context = interactive_test_attempt_context(
         "interactive-no-dkg",
         "interactive-test-key-group",
@@ -13855,9 +13997,9 @@ fn interactive_open_requires_an_existing_dkg_session() {
         taproot_merkle_root_hex: None,
         attempt_context,
     })
-    .expect_err("interactive open without a DKG session must fail closed");
+    .expect_err("interactive open with no wallet key for the key_group must fail closed");
     assert!(
-        matches!(err, EngineError::SessionNotFound { .. }),
+        matches!(err, EngineError::DkgNotReady { .. }),
         "unexpected error: {err:?}"
     );
 

@@ -1448,6 +1448,9 @@ impl TryFrom<PersistedSessionState> for SessionState {
             // construction after a restart, so the attempt fails safe and
             // only the consumption markers survive. Empty map (no live members).
             interactive_signing: BTreeMap::new(),
+            // Transient, like the live interactive state above: re-set on the next
+            // Open, which must precede any Round2/Aggregate in a fresh process.
+            bound_key_group: None,
             consumed_interactive_attempt_markers,
             aggregated_interactive_attempt_markers,
         })

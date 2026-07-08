@@ -90,14 +90,32 @@ pub fn verify_signature_share(
         // inactivity) must hold even when the only post-expiry traffic is
         // verify-share blame rechecks. Mirrors InteractiveAggregate.
         sweep_expired_interactive_state(&mut guard);
-        let session = match guard.sessions.get(&request.session_id) {
-            Some(session) => session,
+        // The public key package is a WALLET-level asset resolved by key_group, so a
+        // per-signing session (a distinct RoastSessionID) can be blame-checked. The
+        // key_group is this signing session's own DKG (co-located) or the one bound at
+        // Open; a missing session/binding/DKG is not the member's fault -> indeterminate.
+        let key_group = match guard.sessions.get(&request.session_id) {
+            Some(session) => session
+                .dkg_result
+                .as_ref()
+                .map(|dkg| dkg.key_group.clone())
+                .or_else(|| session.bound_key_group.clone()),
+            None => None,
+        };
+        let key_group = match key_group {
+            Some(key_group) => key_group,
             None => return Ok(verdict(ShareVerificationVerdict::Indeterminate)),
         };
-        if session.dkg_result.is_none() {
-            return Ok(verdict(ShareVerificationVerdict::Indeterminate));
-        }
-        match session.dkg_public_key_package.as_ref() {
+        let wallet_session_id =
+            match resolve_wallet_session_id(&guard, &request.session_id, &key_group) {
+                Some(id) => id,
+                None => return Ok(verdict(ShareVerificationVerdict::Indeterminate)),
+            };
+        match guard
+            .sessions
+            .get(&wallet_session_id)
+            .and_then(|session| session.dkg_public_key_package.as_ref())
+        {
             Some(package) => package.clone(),
             None => return Ok(verdict(ShareVerificationVerdict::Indeterminate)),
         }

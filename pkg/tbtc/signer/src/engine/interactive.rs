@@ -145,10 +145,25 @@ pub fn interactive_session_open(
     // attempt context against the DKG threshold/key group - mirroring
     // the coarse start_sign_round - all under one immutable borrow,
     // then do the mutable install.
-    let (key_package, canonical_included_participants) = {
-        let session = guard.sessions.get(&request.session_id).ok_or_else(|| {
-            EngineError::SessionNotFound {
+    // The DKG key material is a WALLET-level asset keyed by key_group, not by the
+    // per-signing session_id: interactive signing runs under a fresh RoastSessionID
+    // per message, while the wallet key lives under the session its DKG completed in.
+    // Resolve that wallet session by key_group so ANY signing session can reach the
+    // material (and the wallet-level policy gates below); the per-signing state
+    // (consumed markers, live attempt, nonces) still lives under request.session_id,
+    // and the attempt context is still validated against request.session_id so
+    // coordinator/attempt derivation is unchanged. DkgNotReady now means "no wallet
+    // key for this key_group" rather than "this exact session lacks DKG".
+    let wallet_session_id =
+        resolve_wallet_session_id(&guard, &request.session_id, &request.key_group).ok_or_else(
+            || EngineError::DkgNotReady {
                 session_id: request.session_id.clone(),
+            },
+        )?;
+    let (key_package, canonical_included_participants) = {
+        let session = guard.sessions.get(&wallet_session_id).ok_or_else(|| {
+            EngineError::SessionNotFound {
+                session_id: wallet_session_id.clone(),
             }
         })?;
         let dkg = session
@@ -259,32 +274,35 @@ pub fn interactive_session_open(
     // marker, idempotent/conflicting reopen of this exact attempt, and
     // the live attempt (id + number) for the replacement decision.
     let member_identifier = request.member_identifier;
-    let (already_consumed, matching_attempt_idempotent, live_attempt) = {
-        let session = guard
-            .sessions
-            .get(&request.session_id)
-            .expect("session existed under the held engine lock");
-        // Per-member consumed check: this member's composite marker, or a legacy
-        // bare attempt_id marker (fail-closed for the whole attempt).
-        let already_consumed = interactive_attempt_consumed(
-            &session.consumed_interactive_attempt_markers,
-            &attempt_id,
-            member_identifier,
-        );
-        // Disposition is scoped to THIS member's live entry; sibling seats are
-        // independent and on their own attempt timelines.
-        let live = session.interactive_signing.get(&member_identifier);
-        let matching_attempt_idempotent = live
-            .filter(|interactive| interactive.attempt_context.attempt_id == attempt_id)
-            .map(|interactive| interactive.open_request_fingerprint == request_fingerprint);
-        let live_attempt = live.map(|interactive| {
-            (
-                interactive.attempt_context.attempt_id.clone(),
-                interactive.attempt_context.attempt_number,
-            )
-        });
-        (already_consumed, matching_attempt_idempotent, live_attempt)
-    };
+    let (already_consumed, matching_attempt_idempotent, live_attempt) =
+        match guard.sessions.get(&request.session_id) {
+            Some(session) => {
+                // Per-member consumed check: this member's composite marker, or a legacy
+                // bare attempt_id marker (fail-closed for the whole attempt).
+                let already_consumed = interactive_attempt_consumed(
+                    &session.consumed_interactive_attempt_markers,
+                    &attempt_id,
+                    member_identifier,
+                );
+                // Disposition is scoped to THIS member's live entry; sibling seats are
+                // independent and on their own attempt timelines.
+                let live = session.interactive_signing.get(&member_identifier);
+                let matching_attempt_idempotent = live
+                    .filter(|interactive| interactive.attempt_context.attempt_id == attempt_id)
+                    .map(|interactive| interactive.open_request_fingerprint == request_fingerprint);
+                let live_attempt = live.map(|interactive| {
+                    (
+                        interactive.attempt_context.attempt_id.clone(),
+                        interactive.attempt_context.attempt_number,
+                    )
+                });
+                (already_consumed, matching_attempt_idempotent, live_attempt)
+            }
+            // A fresh per-signing session (a distinct RoastSessionID that is not the
+            // wallet's DKG session) does not exist yet: no consumed markers, no live
+            // attempt. It is created at the install below.
+            None => (false, None, None),
+        };
 
     if already_consumed {
         return Err(EngineError::ConsumedNonceReplay {
@@ -359,10 +377,16 @@ pub fn interactive_session_open(
         }
     }
 
+    // Create the per-signing session on first Open if it is distinct from the wallet
+    // DKG session (the production case). Its DKG material is NOT copied here - it stays
+    // the single wallet copy, resolved by key_group; only per-signing state lives here.
     let session = guard
         .sessions
-        .get_mut(&request.session_id)
-        .expect("session existed under the held engine lock");
+        .entry(request.session_id.clone())
+        .or_insert_with(SessionState::default);
+    // Bind this signing session to the wallet key it signs for, so Round2 and Aggregate
+    // resolve the same wallet material by key_group.
+    session.bound_key_group = Some(request.key_group.clone());
 
     // Replace only THIS member's prior entry (zeroizing its old nonces); sibling
     // seats' entries are untouched.
@@ -780,30 +804,52 @@ pub fn interactive_aggregate(
     // and so a caller cannot substitute verifying material. The session
     // must exist with completed DKG.
     let public_key_package = {
-        let session = guard.sessions.get(&request.session_id).ok_or_else(|| {
-            EngineError::SessionNotFound {
+        // The completion marker is per-signing-session state; read it - and the wallet
+        // key_group this session serves - from request.session_id.
+        let key_group = {
+            let session = guard.sessions.get(&request.session_id).ok_or_else(|| {
+                EngineError::SessionNotFound {
+                    session_id: request.session_id.clone(),
+                }
+            })?;
+            // Reject a completed attempt: re-aggregation is not a recovery path (a
+            // lost signature is recovered with a fresh attempt), and the marker is
+            // durable so a completed attempt stays rejected across a restart.
+            if interactive_attempt_aggregated(
+                &session.aggregated_interactive_attempt_markers,
+                &attempt_id,
+                &aggregated_message_digest,
+                taproot_merkle_root.as_ref(),
+            ) {
+                return Err(EngineError::InteractiveAttemptAlreadyAggregated {
+                    session_id: request.session_id.clone(),
+                    attempt_id,
+                });
+            }
+            // The wallet key this signing session serves: its own DKG (co-located) or
+            // the key_group bound at Open (distinct per-signing RoastSessionID).
+            session
+                .dkg_result
+                .as_ref()
+                .map(|dkg| dkg.key_group.clone())
+                .or_else(|| session.bound_key_group.clone())
+                .ok_or_else(|| EngineError::DkgNotReady {
+                    session_id: request.session_id.clone(),
+                })?
+        };
+        // The group's public key package (the verifying shares used to check each
+        // contribution) is a WALLET-level asset resolved by key_group, so a per-signing
+        // session can verify shares. Read from the engine's own DKG state, not the
+        // request, so a caller cannot substitute verifying material.
+        let wallet_session_id = resolve_wallet_session_id(&guard, &request.session_id, &key_group)
+            .ok_or_else(|| EngineError::DkgNotReady {
                 session_id: request.session_id.clone(),
+            })?;
+        let session = guard.sessions.get(&wallet_session_id).ok_or_else(|| {
+            EngineError::SessionNotFound {
+                session_id: wallet_session_id.clone(),
             }
         })?;
-        // Reject a completed attempt: re-aggregation is not a recovery path (a
-        // lost signature is recovered with a fresh attempt), and the marker is
-        // durable so a completed attempt stays rejected across a restart.
-        if interactive_attempt_aggregated(
-            &session.aggregated_interactive_attempt_markers,
-            &attempt_id,
-            &aggregated_message_digest,
-            taproot_merkle_root.as_ref(),
-        ) {
-            return Err(EngineError::InteractiveAttemptAlreadyAggregated {
-                session_id: request.session_id.clone(),
-                attempt_id,
-            });
-        }
-        if session.dkg_result.is_none() {
-            return Err(EngineError::DkgNotReady {
-                session_id: request.session_id.clone(),
-            });
-        }
         session
             .dkg_public_key_package
             .as_ref()
@@ -1238,6 +1284,47 @@ pub(crate) fn zeroize_interactive_round1(interactive: &mut InteractiveSigningSta
 // acting, so an abandoned session's nonces are destroyed the first
 // time anything touches the engine after expiry. Expiry has abort
 // semantics - the durable consumption markers are untouched.
+/// Resolve the session that holds the DKG key material for `key_group`.
+///
+/// Interactive signing runs under a fresh RoastSessionID per message, but a wallet's
+/// DKG key material is a WALLET-level asset that lives under the session its DKG
+/// completed in. This returns that wallet session so any per-signing session can reach
+/// the material by key_group:
+///  - prefer `session_id` itself if it already holds this wallet's DKG output (the
+///    co-located case: DKG and signing share one session, as in the coarse path and
+///    the single-session tests);
+///  - otherwise find the session whose completed DKG produced `key_group`.
+///
+/// Returns None when no completed DKG for `key_group` exists (i.e. no wallet key), which
+/// callers map to DkgNotReady.
+pub(crate) fn resolve_wallet_session_id(
+    engine_state: &EngineState,
+    session_id: &str,
+    key_group: &str,
+) -> Option<String> {
+    // Prefer the request's own session (the co-located DKG+signing case).
+    if let Some(session) = engine_state.sessions.get(session_id) {
+        if session
+            .dkg_result
+            .as_ref()
+            .map_or(false, |dkg| dkg.key_group == key_group)
+        {
+            return Some(session_id.to_string());
+        }
+    }
+    // Otherwise find the wallet session whose completed DKG produced this key_group.
+    engine_state
+        .sessions
+        .iter()
+        .find(|(_, session)| {
+            session
+                .dkg_result
+                .as_ref()
+                .map_or(false, |dkg| dkg.key_group == key_group)
+        })
+        .map(|(id, _)| id.clone())
+}
+
 pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) {
     let ttl_seconds = interactive_session_ttl_seconds();
     let now = now_unix();
