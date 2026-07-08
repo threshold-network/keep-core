@@ -69,6 +69,26 @@ func (pk *PrivateKey) Marshal() []byte {
 	return (*btcec.PrivateKey)(pk).Serialize()
 }
 
+// Zero best-effort scrubs the private key's secret scalar in place, so a
+// short-lived key (a one-time or per-attempt ephemeral) does not linger in the
+// heap - and thus a core dump or swap file - after its single use. big.Int does
+// not expose zeroization, so this wipes the backing words of D directly. Callers
+// that hold an ephemeral key should Zero() it as soon as they are done with it.
+func (pk *PrivateKey) Zero() {
+	if pk == nil {
+		return
+	}
+	d := (*btcec.PrivateKey)(pk).D
+	if d == nil {
+		return
+	}
+	words := d.Bits()
+	for i := range words {
+		words[i] = 0
+	}
+	d.SetInt64(0)
+}
+
 // Marshal turns a `PublicKey` into a slice of bytes.
 func (pk *PublicKey) Marshal() []byte {
 	return (*btcec.PublicKey)(pk).SerializeCompressed()

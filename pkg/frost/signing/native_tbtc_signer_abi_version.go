@@ -14,8 +14,12 @@ import (
 // fine and its extras are ignored). Bump these in lockstep with the Rust constants, in
 // the SAME PR that bumps ci/frost-signer-pin.env to the lib commit that provides them.
 const (
-	requiredTBTCSignerABIMajor    uint32 = 1
-	requiredTBTCSignerABIMinMinor uint32 = 0
+	requiredTBTCSignerABIMajor uint32 = 1
+	// Minor 1: this build's distributed-DKG path calls
+	// frost_tbtc_persist_distributed_dkg_key_package, added in signer ABI 1.1. A
+	// lib reporting 1.0 lacks the symbol, so require >= 1 to fail closed at the
+	// ABI preflight rather than mid-DKG at the dlsym.
+	requiredTBTCSignerABIMinMinor uint32 = 1
 )
 
 // ErrTBTCSignerABIIncompatible marks a linked libfrost_tbtc whose FFI contract version

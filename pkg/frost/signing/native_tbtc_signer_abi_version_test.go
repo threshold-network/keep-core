@@ -7,7 +7,7 @@ import (
 
 func TestCheckABIContractCompatibility(t *testing.T) {
 	// req = major 1, min minor 2, to exercise every branch (the too-old-minor branch is
-	// unreachable against the real requiredTBTCSignerABIMinMinor of 0).
+	// unreachable against the real requiredTBTCSignerABIMinMinor of 1).
 	const reqMajor, reqMinMinor = uint32(1), uint32(2)
 	tests := []struct {
 		name           string

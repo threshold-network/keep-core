@@ -5,6 +5,35 @@ import (
 	"testing"
 )
 
+func TestPrivateKeyZero(t *testing.T) {
+	keyPair, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	allZero := func(b []byte) bool {
+		for _, x := range b {
+			if x != 0 {
+				return false
+			}
+		}
+		return true
+	}
+
+	if allZero(keyPair.PrivateKey.Marshal()) {
+		t.Fatal("a freshly generated private key must not be all-zero")
+	}
+
+	keyPair.PrivateKey.Zero()
+	if scrubbed := keyPair.PrivateKey.Marshal(); !allZero(scrubbed) {
+		t.Fatalf("Zero() must scrub the secret scalar; got [%x]", scrubbed)
+	}
+
+	// Zero is nil-safe.
+	var nilKey *PrivateKey
+	nilKey.Zero()
+}
+
 func TestMarshalUnmarshalPublicKey(t *testing.T) {
 	keyPair, err := GenerateKeyPair()
 	if err != nil {

@@ -43,6 +43,22 @@ func executeFrostDKGIfPossible(
 		return
 	}
 
+	// Distributed DKG produces signing material usable ONLY via the interactive
+	// path; with interactive signing disabled, signing would route to the coarse
+	// path, which cannot reconstruct a distributed key, and every signature would
+	// fail. Refuse to run rather than create an unsignable wallet, coupling the DKG
+	// switch to the signing switch.
+	if !frostsigning.InteractiveSigningOptInEnabled() {
+		logger.Errorf(
+			"FROST DKG with seed [0x%x] selected this operator, but the distributed "+
+				"DKG requires interactive signing (%s) to be enabled; refusing to run to "+
+				"avoid creating a wallet that cannot sign",
+			event.Seed,
+			frostsigning.InteractiveSigningOptInEnvVar,
+		)
+		return
+	}
+
 	membershipValidator := group.NewMembershipValidator(
 		logger,
 		groupSelectionResult.OperatorsAddresses,
@@ -96,6 +112,16 @@ func executeFrostDKGIfPossible(
 		defer cancelDkgCtx()
 
 		sessionID := fmt.Sprintf("%s-%s", channelName, "attempt-1")
+
+		// Capture DKG round messages off the channel BEFORE the readiness barrier below.
+		// announceFrostDKGReadiness releases every peer once the quorum announces, but a
+		// node installs its DKG receiver only later, inside executeDistributedFrostDKG.
+		// A peer released ahead of a slower node can broadcast round-1 before that node
+		// is receiving; the transport would drop it (no subscriber) and not retransmit,
+		// stalling the DKG. The prebuffer catches those from before the barrier so they
+		// are replayed once the receiver is up.
+		dkgPrebuffer := frostsigning.StartDKGMessagePrebuffer(dkgCtx, channel)
+
 		activeMemberIndexes, misbehavedMembersIndices, err :=
 			announceFrostDKGReadiness(
 				dkgCtx,
@@ -139,12 +165,18 @@ func executeFrostDKGIfPossible(
 			return
 		}
 
-		executionResult, err := executeFrostDKG(
+		executionResult, err := executeDistributedFrostDKG(
+			dkgCtx,
 			nativeTBTCSignerEngine,
-			event,
+			node,
+			channel,
+			activeMemberIndexes,
 			tbtcSignerMemberIndexes,
+			localActiveMemberIndexes,
+			groupSelectionResult,
 			signatureThreshold,
 			sessionID,
+			dkgPrebuffer,
 		)
 		if err != nil {
 			dkgLogger.Errorf("FROST DKG execution failed: [%v]", err)
@@ -243,6 +275,140 @@ func executeFrostDKG(
 	}
 
 	return nil, fmt.Errorf("native tbtc-signer engine is unavailable")
+}
+
+// executeDistributedFrostDKG runs a real distributed FROST DKG for this node's
+// local seats over the wallet broadcast channel, persists each seat's key package
+// as signing material, and returns the shared group output key plus the signer
+// material (the same for every local seat; the differing secret key packages live
+// in the engine's per-seat session store). It replaces the transitional
+// trusted-dealer executeTBTCSignerFROSTDKG/RunDKGWithSeed.
+func executeDistributedFrostDKG(
+	dkgCtx context.Context,
+	nativeEngine frostsigning.NativeTBTCSignerEngine,
+	node *node,
+	channel net.BroadcastChannel,
+	activeMemberIndexes []group.MemberIndex,
+	tbtcSignerMemberIndexes []group.MemberIndex,
+	localActiveMemberIndexes []group.MemberIndex,
+	groupSelectionResult *GroupSelectionResult,
+	signatureThreshold int,
+	sessionID string,
+	prebuffer *frostsigning.DKGMessagePrebuffer,
+) (*frostDKGExecutionResult, error) {
+	if nativeEngine == nil {
+		return nil, fmt.Errorf("native tbtc-signer engine is unavailable")
+	}
+	distributedEngine, ok := nativeEngine.(frostsigning.NativeTBTCSignerDistributedDKGEngine)
+	if !ok {
+		return nil, fmt.Errorf("native tbtc-signer engine does not support distributed DKG")
+	}
+	if signatureThreshold <= 0 || signatureThreshold > int(^uint16(0)) {
+		return nil, fmt.Errorf("invalid tbtc-signer DKG threshold [%d]", signatureThreshold)
+	}
+
+	// Canonical FROST identifiers over the FULL participant set (the final compact
+	// DKG member space), matching what the persist op and the signing path expect.
+	identifierByID := make(map[group.MemberIndex]string, len(tbtcSignerMemberIndexes))
+	for _, memberIndex := range tbtcSignerMemberIndexes {
+		identifierByID[memberIndex] = frostsigning.CanonicalFROSTIdentifier(uint16(memberIndex))
+	}
+
+	// Remap this node's local seats from the ORIGINAL sortition space to the FINAL
+	// compact DKG member space the runner and persist op operate in (the same
+	// mapping registerFrostSignerWithMaterial uses). finalSigningGroup sorts its
+	// operating-members argument in place, so pass a copy.
+	finalSigningGroupOperators, finalSigningGroupMembersIndexes, err := finalSigningGroup(
+		groupSelectionResult.OperatorsAddresses,
+		append([]group.MemberIndex{}, activeMemberIndexes...),
+		node.groupParameters,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve the final signing group: [%v]", err)
+	}
+	localDKGMemberIndexes := make([]group.MemberIndex, 0, len(localActiveMemberIndexes))
+	for _, localSeat := range localActiveMemberIndexes {
+		finalSeat, ok := finalSigningGroupMembersIndexes[localSeat]
+		if !ok {
+			return nil, fmt.Errorf("local seat [%v] is missing from the final signing group", localSeat)
+		}
+		localDKGMemberIndexes = append(localDKGMemberIndexes, finalSeat)
+	}
+
+	// The runner broadcasts FINAL compact member indexes as the transport sender,
+	// so the DKG bus must authenticate them against a validator indexed by the SAME
+	// final space - not the original sortition-ordered membership (which would
+	// reject shifted seats when readiness compacts the active set, stalling the
+	// DKG). finalSigningGroupOperators[i] is the operator for final member i+1.
+	finalMembershipValidator := group.NewMembershipValidator(
+		logger,
+		finalSigningGroupOperators,
+		node.chain.Signing(),
+	)
+
+	// Each seat's per-DKG round-2 sealing key is a fresh ephemeral generated inside
+	// the orchestration (not this node's operator key), so operator-key material
+	// never reaches the runner; the operator key stays bound to the channel, which
+	// authenticates every seat's round-1 broadcast (and the ephemeral key riding
+	// in it) via finalMembershipValidator.
+	persistBySeat, err := frostsigning.RunDistributedDKGForSeats(
+		dkgCtx,
+		logger,
+		channel,
+		finalMembershipValidator,
+		distributedEngine,
+		sessionID,
+		tbtcSignerMemberIndexes,
+		localDKGMemberIndexes,
+		identifierByID,
+		uint16(signatureThreshold),
+		prebuffer,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Every local seat shares the same group key; build the output key + material
+	// once from any persisted result.
+	var persisted *frostsigning.NativeTBTCSignerDKGResult
+	for _, seatResult := range persistBySeat {
+		persisted = seatResult
+		break
+	}
+	if persisted == nil {
+		return nil, fmt.Errorf("distributed DKG produced no persisted result")
+	}
+
+	outputKey, err := outputKeyFromTBTCSignerDKGResult(persisted)
+	if err != nil {
+		return nil, err
+	}
+
+	// A populated participant list + threshold are required for dkg-persisted
+	// signer material; there is no dealer seed for a distributed DKG.
+	participants, err := nativeTBTCSignerDKGParticipants(tbtcSignerMemberIndexes)
+	if err != nil {
+		return nil, err
+	}
+
+	payload, err := json.Marshal(frostsigning.NativeTBTCSignerMaterialPayload{
+		KeyGroup:         persisted.KeyGroup,
+		TaprootOutputKey: hex.EncodeToString(outputKey[:]),
+		KeyGroupSource:   frostsigning.NativeTBTCSignerKeyGroupSourceDKGPersisted,
+		DKGParticipants:  participants,
+		DKGThreshold:     uint16(signatureThreshold),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("cannot marshal tbtc-signer material: [%w]", err)
+	}
+
+	return &frostDKGExecutionResult{
+		outputKey: outputKey,
+		signerMaterial: &frostsigning.NativeSignerMaterial{
+			Format:  frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
+			Payload: payload,
+		},
+	}, nil
 }
 
 func finalFrostDKGMemberIndexes(
