@@ -118,6 +118,14 @@ pub(crate) struct SessionState {
     // Keyed by member_identifier; each entry is independent (own attempt, nonces,
     // replace/round2/expiry). Was Option (one member per session).
     pub(crate) interactive_signing: BTreeMap<u16, InteractiveSigningState>,
+    // The key_group this per-signing session signs for, set at InteractiveSessionOpen.
+    // Interactive signing runs under a fresh RoastSessionID per message, so a wallet's
+    // DKG material lives under a DIFFERENT (wallet/DKG) session; this binds the signing
+    // session to its wallet key so Round2/Aggregate resolve the same material by
+    // key_group. Transient (re-set on every Open); deliberately NOT persisted, because
+    // the in-memory interactive attempt it serves does not survive a restart either -
+    // a restart forces a fresh Open, which re-sets it.
+    pub(crate) bound_key_group: Option<String>,
     pub(crate) consumed_interactive_attempt_markers: HashSet<String>,
     // Phase 7.2b InteractiveAggregate completion markers: an attempt whose
     // aggregate signature has been produced is recorded here so a repeat

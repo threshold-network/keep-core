@@ -207,15 +207,18 @@ pub(crate) fn enforce_stateless_nonce_primitives_disabled_in_production(
 }
 
 pub fn generate_nonces_and_commitments(
-    request: GenerateNoncesAndCommitmentsRequest,
+    mut request: GenerateNoncesAndCommitmentsRequest,
 ) -> Result<GenerateNoncesAndCommitmentsResult, EngineError> {
+    // key_package_hex is the serialized SECRET signing share. Hold it zeroizing so
+    // serde's owned String is wiped on EVERY return path, not left to drop un-wiped.
+    let key_package_hex = Zeroizing::new(std::mem::take(&mut request.key_package_hex));
     enforce_provenance_gate()?;
     enforce_stateless_nonce_primitives_disabled_in_production("GenerateNoncesAndCommitments")?;
 
     let key_package = decode_key_package(
         "GenerateNoncesAndCommitments",
         &request.key_package_identifier,
-        &request.key_package_hex,
+        &key_package_hex,
     )?;
     let mut rng = zeroizing_rng_from_os();
     let (mut nonces, commitments) = frost::round1::commit(key_package.signing_share(), &mut rng);
@@ -268,7 +271,13 @@ pub fn new_signing_package(
     })
 }
 
-pub fn sign_share(request: SignShareRequest) -> Result<SignShareResult, EngineError> {
+pub fn sign_share(mut request: SignShareRequest) -> Result<SignShareResult, EngineError> {
+    // The two SECRET request fields - the one-time signing nonces and this seat's
+    // signing key package - are held zeroizing so serde's owned Strings are wiped on
+    // EVERY return path (every decode/deserialize below can fail first), not left to
+    // drop un-wiped. signing_package_hex is public, so it stays in request.
+    let nonces_hex = Zeroizing::new(std::mem::take(&mut request.nonces_hex));
+    let key_package_hex = Zeroizing::new(std::mem::take(&mut request.key_package_hex));
     enforce_provenance_gate()?;
     enforce_stateless_nonce_primitives_disabled_in_production("SignShare")?;
 
@@ -280,17 +289,18 @@ pub fn sign_share(request: SignShareRequest) -> Result<SignShareResult, EngineEr
     let signing_package = frost::SigningPackage::deserialize(&signing_package_bytes)
         .map_err(|e| EngineError::Validation(format!("SignShare: invalid signing package: {e}")))?;
 
-    let mut nonces_bytes = decode_hex_field("SignShare", "nonces_hex", &request.nonces_hex)?;
+    let mut nonces_bytes = decode_hex_field("SignShare", "nonces_hex", &nonces_hex)?;
     let nonces_result = frost::round1::SigningNonces::deserialize(&nonces_bytes);
     nonces_bytes.zeroize();
     let mut nonces = nonces_result
         .map_err(|e| EngineError::Validation(format!("SignShare: invalid nonces: {e}")))?;
 
-    let key_package = match decode_key_package(
+    let key_package_result = decode_key_package(
         "SignShare",
         &request.key_package_identifier,
-        &request.key_package_hex,
-    ) {
+        &key_package_hex,
+    );
+    let key_package = match key_package_result {
         Ok(key_package) => key_package,
         Err(err) => {
             nonces.zeroize();

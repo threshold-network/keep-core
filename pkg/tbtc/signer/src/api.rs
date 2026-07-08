@@ -89,6 +89,20 @@ pub struct DkgPart3Result {
     pub public_key_package: NativeFrostPublicKeyPackage,
 }
 
+/// Persists the result of a DISTRIBUTED FROST DKG for one seat: this node's own
+/// key package (from Part3) plus the group public key package, into the engine
+/// session state that the interactive signing path loads. Unlike the dealer
+/// `run_dkg`, a distributed node holds only its OWN secret key package.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct PersistDistributedDkgKeyPackageRequest {
+    pub session_id: String,
+    pub participant_identifier: u16,
+    pub threshold: u16,
+    pub participant_count: u16,
+    pub key_package: NativeFrostKeyPackage,
+    pub public_key_package: NativeFrostPublicKeyPackage,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct NativeFrostCommitment {
     pub identifier: String,

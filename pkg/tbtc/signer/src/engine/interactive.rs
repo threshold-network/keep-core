@@ -145,130 +145,164 @@ pub fn interactive_session_open(
     // attempt context against the DKG threshold/key group - mirroring
     // the coarse start_sign_round - all under one immutable borrow,
     // then do the mutable install.
-    let (key_package, canonical_included_participants) = {
-        let session = guard.sessions.get(&request.session_id).ok_or_else(|| {
-            EngineError::SessionNotFound {
+    // The DKG key material is a WALLET-level asset keyed by key_group, not by the
+    // per-signing session_id: interactive signing runs under a fresh RoastSessionID
+    // per message, while the wallet key lives under the session its DKG completed in.
+    // Resolve that wallet session by key_group so ANY signing session can reach the
+    // material (and the wallet-level policy gates below); the per-signing state
+    // (consumed markers, live attempt, nonces) still lives under request.session_id,
+    // and the attempt context is still validated against request.session_id so
+    // coordinator/attempt derivation is unchanged. DkgNotReady now means "no wallet
+    // key for this key_group" rather than "this exact session lacks DKG".
+    let wallet_session_id =
+        resolve_wallet_session_id(&guard, &request.session_id, &request.key_group).ok_or_else(
+            || EngineError::DkgNotReady {
                 session_id: request.session_id.clone(),
-            }
-        })?;
-        let dkg = session
-            .dkg_result
-            .as_ref()
-            .ok_or_else(|| EngineError::DkgNotReady {
-                session_id: request.session_id.clone(),
-            })?;
-        if request.key_group != dkg.key_group {
-            return Err(EngineError::Validation(
-                "key_group does not match DKG output for this session".to_string(),
-            ));
-        }
-        if request.threshold != dkg.threshold {
-            return Err(EngineError::Validation(format!(
-                "threshold [{}] does not match the DKG threshold [{}] for this session",
-                request.threshold, dkg.threshold
-            )));
-        }
-        let dkg_key_packages = session
-            .dkg_key_packages
-            .as_ref()
-            .ok_or_else(|| EngineError::Internal("missing DKG key package cache".to_string()))?;
-        let key_package = dkg_key_packages
-            .get(&request.member_identifier)
-            .ok_or_else(|| {
-                EngineError::Validation(
-                    "member_identifier is not a DKG participant for this session".to_string(),
-                )
-            })?
-            .clone();
-
-        // Lifecycle + quarantine + signing-policy-firewall gates (frozen
-        // spec section 5: Open "checks policy gates"). The SAME helper
-        // runs again at Round2 (the share-release moment) so a policy
-        // change recorded after Open - emergency rekey, finalization,
-        // quarantine, or a re-bound policy-checked tx - cannot let a
-        // share escape. At Open only this node's own member is known to
-        // sign; Round2 re-checks quarantine over the actual chosen
-        // subset.
-        enforce_interactive_signing_gates(
-            &request.session_id,
-            &[request.member_identifier],
-            &request.message_hex,
-            session.emergency_rekey_event.as_ref(),
-            session.finalize_request_fingerprint.is_some(),
-            session.tx_result.as_ref(),
-            &guard.quarantined_operator_identifiers,
-            auto_quarantine_config.as_ref(),
+            },
         )?;
-
-        // Strict-mode-only attempt context: required, fully validated
-        // against the DKG threshold/key group, coordinator recomputed
-        // per RFC-21 Annex A.
-        let canonical_included_participants = validate_attempt_context(
-            &request.session_id,
-            &dkg.key_group,
-            &message_bytes,
-            &message_digest_hex,
-            dkg.threshold,
-            Some(&request.attempt_context),
-            true,
-        )?
-        .ok_or_else(|| {
-            EngineError::Internal(
-                "strict attempt context validation returned no participants".to_string(),
-            )
-        })?;
-        if !canonical_included_participants.contains(&request.member_identifier) {
-            return Err(EngineError::Validation(
-                "member_identifier must be included in attempt_context.included_participants"
-                    .to_string(),
-            ));
-        }
-        // Every included participant must be a real DKG member of this
-        // session. Otherwise a caller could pad the included set with
-        // phantom identifiers to bias the RFC-21 coordinator/attempt
-        // derivation, and Round2 could release a share under an attempt
-        // context that is not a genuine DKG subset.
-        for participant in &canonical_included_participants {
-            if !dkg_key_packages.contains_key(participant) {
+    let (key_package, canonical_included_participants) =
+        {
+            let session = guard.sessions.get(&wallet_session_id).ok_or_else(|| {
+                EngineError::SessionNotFound {
+                    session_id: wallet_session_id.clone(),
+                }
+            })?;
+            let dkg = session
+                .dkg_result
+                .as_ref()
+                .ok_or_else(|| EngineError::DkgNotReady {
+                    session_id: request.session_id.clone(),
+                })?;
+            if request.key_group != dkg.key_group {
+                return Err(EngineError::Validation(
+                    "key_group does not match DKG output for this session".to_string(),
+                ));
+            }
+            if request.threshold != dkg.threshold {
                 return Err(EngineError::Validation(format!(
-                    "attempt_context.included_participants contains [{participant}], \
-                     which is not a DKG participant for this session"
+                    "threshold [{}] does not match the DKG threshold [{}] for this session",
+                    request.threshold, dkg.threshold
                 )));
             }
-        }
-        (key_package, canonical_included_participants)
-    };
+            let dkg_key_packages = session.dkg_key_packages.as_ref().ok_or_else(|| {
+                EngineError::Internal("missing DKG key package cache".to_string())
+            })?;
+            // The public key package carries a verifying share for EVERY DKG
+            // participant, so it is the authoritative participant set. A distributed
+            // DKG node holds only its OWN secret key package (dkg_key_packages has a
+            // single entry), so the included-participants membership check below must
+            // use the public package, not dkg_key_packages.
+            let dkg_public_key_package =
+                session.dkg_public_key_package.as_ref().ok_or_else(|| {
+                    EngineError::Internal("missing DKG public key package".to_string())
+                })?;
+            let key_package = dkg_key_packages
+                .get(&request.member_identifier)
+                .ok_or_else(|| {
+                    EngineError::Validation(
+                        "member_identifier is not a DKG participant for this session".to_string(),
+                    )
+                })?
+                .clone();
+
+            // Lifecycle + quarantine + signing-policy-firewall gates (frozen
+            // spec section 5: Open "checks policy gates"). The SAME helper
+            // runs again at Round2 (the share-release moment) so a policy
+            // change recorded after Open - emergency rekey, finalization,
+            // quarantine, or a re-bound policy-checked tx - cannot let a
+            // share escape. At Open only this node's own member is known to
+            // sign; Round2 re-checks quarantine over the actual chosen
+            // subset.
+            enforce_interactive_signing_gates(
+                &request.session_id,
+                &[request.member_identifier],
+                &request.message_hex,
+                session.emergency_rekey_event.as_ref(),
+                session.finalize_request_fingerprint.is_some(),
+                session.tx_result.as_ref(),
+                &guard.quarantined_operator_identifiers,
+                auto_quarantine_config.as_ref(),
+            )?;
+
+            // Strict-mode-only attempt context: required, fully validated
+            // against the DKG threshold/key group, coordinator recomputed
+            // per RFC-21 Annex A.
+            let canonical_included_participants = validate_attempt_context(
+                &request.session_id,
+                &dkg.key_group,
+                &message_bytes,
+                &message_digest_hex,
+                dkg.threshold,
+                Some(&request.attempt_context),
+                true,
+            )?
+            .ok_or_else(|| {
+                EngineError::Internal(
+                    "strict attempt context validation returned no participants".to_string(),
+                )
+            })?;
+            if !canonical_included_participants.contains(&request.member_identifier) {
+                return Err(EngineError::Validation(
+                    "member_identifier must be included in attempt_context.included_participants"
+                        .to_string(),
+                ));
+            }
+            // Every included participant must be a real DKG member of this
+            // session. Otherwise a caller could pad the included set with
+            // phantom identifiers to bias the RFC-21 coordinator/attempt
+            // derivation, and Round2 could release a share under an attempt
+            // context that is not a genuine DKG subset. Checked against the public
+            // key package (the full participant set) so it holds for a distributed
+            // DKG node, which caches only its own secret key package.
+            for participant in &canonical_included_participants {
+                let participant_frost_identifier =
+                    participant_identifier_to_frost_identifier(*participant)?;
+                if !dkg_public_key_package
+                    .verifying_shares()
+                    .contains_key(&participant_frost_identifier)
+                {
+                    return Err(EngineError::Validation(format!(
+                        "attempt_context.included_participants contains [{participant}], \
+                     which is not a DKG participant for this session"
+                    )));
+                }
+            }
+            (key_package, canonical_included_participants)
+        };
 
     // Disposition over the (now-confirmed) existing session: consumed
     // marker, idempotent/conflicting reopen of this exact attempt, and
     // the live attempt (id + number) for the replacement decision.
     let member_identifier = request.member_identifier;
-    let (already_consumed, matching_attempt_idempotent, live_attempt) = {
-        let session = guard
-            .sessions
-            .get(&request.session_id)
-            .expect("session existed under the held engine lock");
-        // Per-member consumed check: this member's composite marker, or a legacy
-        // bare attempt_id marker (fail-closed for the whole attempt).
-        let already_consumed = interactive_attempt_consumed(
-            &session.consumed_interactive_attempt_markers,
-            &attempt_id,
-            member_identifier,
-        );
-        // Disposition is scoped to THIS member's live entry; sibling seats are
-        // independent and on their own attempt timelines.
-        let live = session.interactive_signing.get(&member_identifier);
-        let matching_attempt_idempotent = live
-            .filter(|interactive| interactive.attempt_context.attempt_id == attempt_id)
-            .map(|interactive| interactive.open_request_fingerprint == request_fingerprint);
-        let live_attempt = live.map(|interactive| {
-            (
-                interactive.attempt_context.attempt_id.clone(),
-                interactive.attempt_context.attempt_number,
-            )
-        });
-        (already_consumed, matching_attempt_idempotent, live_attempt)
-    };
+    let (already_consumed, matching_attempt_idempotent, live_attempt) =
+        match guard.sessions.get(&request.session_id) {
+            Some(session) => {
+                // Per-member consumed check: this member's composite marker, or a legacy
+                // bare attempt_id marker (fail-closed for the whole attempt).
+                let already_consumed = interactive_attempt_consumed(
+                    &session.consumed_interactive_attempt_markers,
+                    &attempt_id,
+                    member_identifier,
+                );
+                // Disposition is scoped to THIS member's live entry; sibling seats are
+                // independent and on their own attempt timelines.
+                let live = session.interactive_signing.get(&member_identifier);
+                let matching_attempt_idempotent = live
+                    .filter(|interactive| interactive.attempt_context.attempt_id == attempt_id)
+                    .map(|interactive| interactive.open_request_fingerprint == request_fingerprint);
+                let live_attempt = live.map(|interactive| {
+                    (
+                        interactive.attempt_context.attempt_id.clone(),
+                        interactive.attempt_context.attempt_number,
+                    )
+                });
+                (already_consumed, matching_attempt_idempotent, live_attempt)
+            }
+            // A fresh per-signing session (a distinct RoastSessionID that is not the
+            // wallet's DKG session) does not exist yet: no consumed markers, no live
+            // attempt. It is created at the install below.
+            None => (false, None, None),
+        };
 
     if already_consumed {
         return Err(EngineError::ConsumedNonceReplay {
@@ -343,10 +377,47 @@ pub fn interactive_session_open(
         }
     }
 
+    // A per-signing session is keyed by RoastSessionID (message/root/start-block), NOT
+    // by key_group, so two DIFFERENT wallets signing the same digest at the same block
+    // on a node that holds members of both could collide on one session id. A session
+    // belongs to exactly ONE wallet key for its lifetime: reject an Open whose key_group
+    // differs from the session's ESTABLISHED one - its DKG key group when it is a
+    // co-located DKG session, else the key group bound by a prior Open. Rejecting
+    // regardless of live members keeps bound_key_group and dkg_result mutually
+    // consistent so Round2/Aggregate/verify_share always resolve the right wallet. This
+    // closes both (a) the rebind window that outlived a member's Round2 (the live-entry
+    // set is empty in the consumed-but-unaggregated gap) and (b) binding through another
+    // wallet's idle DKG session (where dkg_result would otherwise win over bound_key_group
+    // and sign B's share against A's material, bypassing B's rekey/finalization gates).
+    if let Some(existing) = guard.sessions.get(&request.session_id) {
+        let established = existing
+            .dkg_result
+            .as_ref()
+            .map(|dkg| dkg.key_group.as_str())
+            .or(existing.bound_key_group.as_deref());
+        if let Some(established) = established {
+            if established != request.key_group {
+                return Err(EngineError::SessionConflict {
+                    session_id: request.session_id.clone(),
+                });
+            }
+        }
+    }
+
+    // Create the per-signing session on first Open if it is distinct from the wallet
+    // DKG session (the production case). Its DKG material is NOT copied here - it stays
+    // the single wallet copy, resolved by key_group; only per-signing state lives here.
+    // Bound by the SAME total-session cap as every other session-creating path (a fresh
+    // RoastSessionID per message would otherwise let the registry grow unbounded and
+    // then be rejected on reload); a reopen of an existing session is exempt.
+    ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
     let session = guard
         .sessions
-        .get_mut(&request.session_id)
-        .expect("session existed under the held engine lock");
+        .entry(request.session_id.clone())
+        .or_insert_with(SessionState::default);
+    // Bind this signing session to the wallet key it signs for, so Round2 and Aggregate
+    // resolve the same wallet material by key_group.
+    session.bound_key_group = Some(request.key_group.clone());
 
     // Replace only THIS member's prior entry (zeroizing its old nonces); sibling
     // seats' entries are untouched.
@@ -492,6 +563,36 @@ pub fn interactive_round2(
     let auto_quarantine_config = load_auto_quarantine_config()?;
     let quarantined_operator_identifiers = guard.quarantined_operator_identifiers.clone();
 
+    // Wallet-level policy gates (emergency rekey / finalization / tx-binding) live on
+    // the WALLET (DKG) session, NOT this per-signing session. Resolve them by the
+    // key_group this session serves (its own DKG when co-located, else the key_group
+    // bound at Open) so the Round2 kill-switch re-check - the share-release moment -
+    // fires for cross-session interactive signing too. Read here (before the mutable
+    // per-signing borrow) into owned locals; if read from the empty per-signing
+    // session a rekey/finalization recorded AFTER Open would silently fail OPEN.
+    let (wallet_emergency_rekey, wallet_finalized, wallet_tx_result) = {
+        let bound_key_group = guard.sessions.get(&request.session_id).and_then(|session| {
+            session
+                .dkg_result
+                .as_ref()
+                .map(|dkg| dkg.key_group.clone())
+                .or_else(|| session.bound_key_group.clone())
+        });
+        match bound_key_group
+            .and_then(|key_group| {
+                resolve_wallet_session_id(&guard, &request.session_id, &key_group)
+            })
+            .and_then(|wallet_session_id| guard.sessions.get(&wallet_session_id))
+        {
+            Some(wallet) => (
+                wallet.emergency_rekey_event.clone(),
+                wallet.finalize_request_fingerprint.is_some(),
+                wallet.tx_result.clone(),
+            ),
+            None => (None, false, None),
+        }
+    };
+
     let session = guard.sessions.get_mut(&request.session_id).ok_or_else(|| {
         EngineError::SessionNotFound {
             session_id: request.session_id.clone(),
@@ -579,9 +680,9 @@ pub fn interactive_round2(
             &request.session_id,
             &[request.member_identifier],
             &bound_message_hex,
-            session.emergency_rekey_event.as_ref(),
-            session.finalize_request_fingerprint.is_some(),
-            session.tx_result.as_ref(),
+            wallet_emergency_rekey.as_ref(),
+            wallet_finalized,
+            wallet_tx_result.as_ref(),
             &quarantined_operator_identifiers,
             auto_quarantine_config.as_ref(),
         )?;
@@ -775,30 +876,54 @@ pub fn interactive_aggregate(
     // and so a caller cannot substitute verifying material. The session
     // must exist with completed DKG.
     let public_key_package = {
-        let session = guard.sessions.get(&request.session_id).ok_or_else(|| {
-            EngineError::SessionNotFound {
-                session_id: request.session_id.clone(),
+        // The completion marker is per-signing-session state; read it - and the wallet
+        // key_group this session serves - from request.session_id.
+        let key_group = {
+            let session = guard.sessions.get(&request.session_id).ok_or_else(|| {
+                EngineError::SessionNotFound {
+                    session_id: request.session_id.clone(),
+                }
+            })?;
+            // Reject a completed attempt: re-aggregation is not a recovery path (a
+            // lost signature is recovered with a fresh attempt), and the marker is
+            // durable so a completed attempt stays rejected across a restart.
+            if interactive_attempt_aggregated(
+                &session.aggregated_interactive_attempt_markers,
+                &attempt_id,
+                &aggregated_message_digest,
+                taproot_merkle_root.as_ref(),
+            ) {
+                return Err(EngineError::InteractiveAttemptAlreadyAggregated {
+                    session_id: request.session_id.clone(),
+                    attempt_id,
+                });
             }
-        })?;
-        // Reject a completed attempt: re-aggregation is not a recovery path (a
-        // lost signature is recovered with a fresh attempt), and the marker is
-        // durable so a completed attempt stays rejected across a restart.
-        if interactive_attempt_aggregated(
-            &session.aggregated_interactive_attempt_markers,
-            &attempt_id,
-            &aggregated_message_digest,
-            taproot_merkle_root.as_ref(),
-        ) {
-            return Err(EngineError::InteractiveAttemptAlreadyAggregated {
+            // The wallet key this signing session serves: its own DKG (co-located) or
+            // the key_group bound at Open (distinct per-signing RoastSessionID).
+            session
+                .dkg_result
+                .as_ref()
+                .map(|dkg| dkg.key_group.clone())
+                .or_else(|| session.bound_key_group.clone())
+                .ok_or_else(|| EngineError::DkgNotReady {
+                    session_id: request.session_id.clone(),
+                })?
+        };
+        // The group's public key package (the verifying shares used to check each
+        // contribution) is a WALLET-level asset resolved by key_group, so a per-signing
+        // session can verify shares. Read from the engine's own DKG state, not the
+        // request, so a caller cannot substitute verifying material.
+        let wallet_session_id = resolve_wallet_session_id(&guard, &request.session_id, &key_group)
+            .ok_or_else(|| EngineError::DkgNotReady {
                 session_id: request.session_id.clone(),
-                attempt_id,
-            });
-        }
-        if session.dkg_result.is_none() {
-            return Err(EngineError::DkgNotReady {
-                session_id: request.session_id.clone(),
-            });
-        }
+            })?;
+        let session =
+            guard
+                .sessions
+                .get(&wallet_session_id)
+                .ok_or_else(|| EngineError::SessionNotFound {
+                    session_id: wallet_session_id.clone(),
+                })?;
         session
             .dkg_public_key_package
             .as_ref()
@@ -1244,6 +1369,47 @@ pub(crate) fn zeroize_interactive_round1(interactive: &mut InteractiveSigningSta
 // acting, so an abandoned session's nonces are destroyed the first
 // time anything touches the engine after expiry. Expiry has abort
 // semantics - the durable consumption markers are untouched.
+/// Resolve the session that holds the DKG key material for `key_group`.
+///
+/// Interactive signing runs under a fresh RoastSessionID per message, but a wallet's
+/// DKG key material is a WALLET-level asset that lives under the session its DKG
+/// completed in. This returns that wallet session so any per-signing session can reach
+/// the material by key_group:
+///  - prefer `session_id` itself if it already holds this wallet's DKG output (the
+///    co-located case: DKG and signing share one session, as in the coarse path and
+///    the single-session tests);
+///  - otherwise find the session whose completed DKG produced `key_group`.
+///
+/// Returns None when no completed DKG for `key_group` exists (i.e. no wallet key), which
+/// callers map to DkgNotReady.
+pub(crate) fn resolve_wallet_session_id(
+    engine_state: &EngineState,
+    session_id: &str,
+    key_group: &str,
+) -> Option<String> {
+    // Prefer the request's own session (the co-located DKG+signing case).
+    if let Some(session) = engine_state.sessions.get(session_id) {
+        if session
+            .dkg_result
+            .as_ref()
+            .is_some_and(|dkg| dkg.key_group == key_group)
+        {
+            return Some(session_id.to_string());
+        }
+    }
+    // Otherwise find the wallet session whose completed DKG produced this key_group.
+    engine_state
+        .sessions
+        .iter()
+        .find(|(_, session)| {
+            session
+                .dkg_result
+                .as_ref()
+                .is_some_and(|dkg| dkg.key_group == key_group)
+        })
+        .map(|(id, _)| id.clone())
+}
+
 pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) {
     let ttl_seconds = interactive_session_ttl_seconds();
     let now = now_unix();

@@ -705,6 +705,7 @@ fn persisted_session_state_fixture() -> PersistedSessionState {
         emergency_rekey_event: None,
         consumed_interactive_attempt_markers: vec![],
         aggregated_interactive_attempt_markers: vec![],
+        bound_key_group: None,
     }
 }
 
@@ -967,6 +968,402 @@ fn canary_rollout_status_rejects_when_provenance_gate_requires_attestation() {
     assert_eq!(reason_code, "missing_attestation_status");
 
     clear_state_storage_policy_overrides();
+}
+
+// Real per-seat distributed-DKG material in the native (Go-facing) form the
+// persist op takes: each member's OWN key package plus the shared public key
+// package. Dealer-generated here for brevity, but shaped like a distributed
+// Part3 output (one key package per member + one public key package).
+fn sample_distributed_dkg_native_material(
+    seed: u8,
+) -> (
+    crate::api::NativeFrostPublicKeyPackage,
+    BTreeMap<u16, crate::api::NativeFrostKeyPackage>,
+) {
+    let identifiers = [1_u16, 2, 3]
+        .iter()
+        .map(|m| participant_identifier_to_frost_identifier(*m).expect("frost identifier"))
+        .collect::<Vec<_>>();
+    let rng = ZeroizingChaCha20Rng::from_seed([seed; 32]);
+    let (shares, public_key_package) = frost::keys::generate_with_dealer(
+        3,
+        2,
+        frost::keys::IdentifierList::Custom(&identifiers),
+        rng,
+    )
+    .expect("generate_with_dealer");
+
+    // Normalize to even-Y exactly as dkg_part3 does, so this material matches a
+    // real distributed DKG's output (the x-only verifying key is even-Y per
+    // BIP-340); raw generate_with_dealer output is odd-Y for some seeds.
+    let is_even_y = public_key_package.has_even_y();
+    let public_key_package = public_key_package.into_even_y(Some(is_even_y));
+    let native_public =
+        native_public_key_package_from_frost(&public_key_package).expect("native public package");
+
+    let mut native_key_packages = BTreeMap::new();
+    for member in [1_u16, 2, 3] {
+        let frost_id =
+            participant_identifier_to_frost_identifier(member).expect("frost identifier");
+        let share = shares.get(&frost_id).expect("share for member").clone();
+        let key_package = frost::keys::KeyPackage::try_from(share)
+            .expect("key package")
+            .into_even_y(Some(is_even_y));
+        native_key_packages.insert(
+            member,
+            crate::api::NativeFrostKeyPackage {
+                identifier: frost_identifier_to_go_string(*key_package.identifier()),
+                data_hex: hex::encode(key_package.serialize().expect("serialize key package")),
+            },
+        );
+    }
+
+    (native_public, native_key_packages)
+}
+
+// A multi-seat operator persists several local seats of the SAME distributed DKG
+// into one session; the key packages must accumulate (not overwrite), so every
+// local seat can later open an interactive signing session.
+#[test]
+fn persist_distributed_dkg_key_package_accumulates_seats_under_one_session() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(7);
+    let session_id = "session-distributed-persist-accumulate".to_string();
+
+    let result1 =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: session_id.clone(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+            public_key_package: native_public.clone(),
+        })
+        .expect("persist seat 1");
+    assert_eq!(result1.threshold, 2);
+    assert_eq!(result1.participant_count, 3);
+    assert!(!result1.key_group.is_empty());
+
+    let result2 =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: session_id.clone(),
+            participant_identifier: 2,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&2).expect("seat 2").clone(),
+            public_key_package: native_public.clone(),
+        })
+        .expect("persist seat 2");
+    assert_eq!(
+        result2.key_group, result1.key_group,
+        "sibling seats of one DKG must share the key group"
+    );
+
+    let guard = state().expect("state").lock().expect("engine lock");
+    let session = guard.sessions.get(&session_id).expect("session exists");
+    let key_packages = session
+        .dkg_key_packages
+        .as_ref()
+        .expect("key packages present");
+    assert!(
+        key_packages.contains_key(&1) && key_packages.contains_key(&2),
+        "both accumulated seats must be stored (got {:?})",
+        key_packages.keys().collect::<Vec<_>>()
+    );
+    assert!(session.dkg_public_key_package.is_some());
+}
+
+// The op rejects a key package whose own identifier does not match the claimed
+// participant, and refuses to install a DIFFERENT DKG's key group over a session
+// that already holds one.
+#[test]
+fn persist_distributed_dkg_key_package_rejects_mismatched_and_conflicting_inputs() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(7);
+
+    let mismatch =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: "session-persist-mismatch".to_string(),
+            participant_identifier: 2, // the key package below is seat 1's
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+            public_key_package: native_public.clone(),
+        })
+        .expect_err("identifier mismatch must be rejected");
+    assert!(
+        matches!(mismatch, EngineError::Validation(_)),
+        "got {mismatch:?}"
+    );
+
+    // A threshold that disagrees with the key package's embedded min_signers (the
+    // material is 2-of-3) must be rejected at persist, not burned at share release.
+    let threshold_mismatch =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: "session-persist-threshold-mismatch".to_string(),
+            participant_identifier: 1,
+            threshold: 3,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+            public_key_package: native_public.clone(),
+        })
+        .expect_err("a threshold disagreeing with the key package must be rejected");
+    assert!(
+        matches!(threshold_mismatch, EngineError::Validation(_)),
+        "got {threshold_mismatch:?}"
+    );
+
+    let session_id = "session-persist-conflict".to_string();
+    persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+        session_id: session_id.clone(),
+        participant_identifier: 1,
+        threshold: 2,
+        participant_count: 3,
+        key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+        public_key_package: native_public.clone(),
+    })
+    .expect("first DKG persists");
+
+    let (other_public, other_key_packages) = sample_distributed_dkg_native_material(9);
+    let conflict =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: session_id.clone(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: other_key_packages.get(&1).expect("seat 1").clone(),
+            public_key_package: other_public,
+        })
+        .expect_err("a different key group for the same session must conflict");
+    assert!(
+        matches!(conflict, EngineError::SessionConflict { .. }),
+        "got {conflict:?}"
+    );
+}
+
+// The op writes durable signing material, so it enforces the DKG admission policy
+// over the participant set DERIVED from the public key package: a group that
+// includes a non-allowlisted participant is rejected before anything is stored.
+#[test]
+fn persist_distributed_dkg_key_package_enforces_admission_policy() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_ENFORCE_ADMISSION_POLICY_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_ADMISSION_ALLOWLIST_IDENTIFIERS_ENV, "1,2");
+
+    // The group's members are 1, 2, 3 (from the public key package); member 3 is
+    // not on the allowlist, so persistence must be refused.
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(7);
+    let err =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: "session-persist-admission".to_string(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+            public_key_package: native_public,
+        })
+        .expect_err("a group with a non-allowlisted participant must be rejected");
+
+    let EngineError::AdmissionPolicyRejected { reason_code, .. } = err else {
+        panic!("unexpected error variant: {err:?}");
+    };
+    assert_eq!(reason_code, "participant_identifier_not_allowlisted");
+
+    // Restore the global policy env so later tests see the default configuration
+    // (reset_for_tests does not clear the admission overrides).
+    clear_state_storage_policy_overrides();
+}
+
+// A distributed DKG whose group includes an auto-quarantined operator must be
+// refused before persistence, exactly as the dealer run_dkg refuses it.
+#[test]
+fn persist_distributed_dkg_key_package_rejects_quarantined_participant() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    std::env::set_var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV, "2");
+    std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY_ENV, "1");
+    std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_INVALID_SHARE_PENALTY_ENV, "2");
+
+    // Operator 3, a member of the group below (members 1,2,3), is auto-quarantined.
+    {
+        let mut guard = state().expect("state").lock().expect("engine lock");
+        guard.quarantined_operator_identifiers.insert(3);
+    }
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(7);
+    let err =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: "session-persist-quarantine".to_string(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+            public_key_package: native_public,
+        })
+        .expect_err("a group including a quarantined operator must be rejected");
+    assert!(
+        matches!(err, EngineError::QuarantinePolicyRejected { ref reason_code, .. }
+            if reason_code == "operator_auto_quarantined"),
+        "unexpected error: {err:?}"
+    );
+
+    clear_state_storage_policy_overrides();
+}
+
+// The op writes signing material to durable state, so it must enforce the same
+// provenance gate run_dkg and the interactive path do: an unattested runtime
+// cannot install distributed-DKG signing material.
+#[test]
+fn persist_distributed_dkg_key_package_rejects_when_provenance_gate_requires_attestation() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    std::env::set_var(TBTC_SIGNER_ENFORCE_PROVENANCE_GATE_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_PROVENANCE_TRUST_ROOT_ENV, "sigstore-main");
+    std::env::set_var(TBTC_SIGNER_MIN_APPROVED_VERSION_ENV, "0.1.0");
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(7);
+    let err =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: "session-persist-provenance".to_string(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+            public_key_package: native_public,
+        })
+        .expect_err("expected provenance gate rejection");
+
+    let EngineError::ProvenanceGateRejected { reason_code, .. } = err else {
+        panic!("unexpected error variant: {err:?}");
+    };
+    assert_eq!(reason_code, "missing_attestation_status");
+
+    clear_state_storage_policy_overrides();
+}
+
+// A key package whose SECRET signing share does not derive to its (public)
+// verifying share must be rejected: it would open interactive attempts and burn
+// them, producing shares that never verify. Crafted with seat 1's identity and
+// verifying share (so it matches the public package) but seat 2's signing share.
+#[test]
+fn persist_distributed_dkg_key_package_rejects_signing_share_not_deriving_to_public() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let identifiers = [1_u16, 2, 3]
+        .iter()
+        .map(|m| participant_identifier_to_frost_identifier(*m).expect("frost id"))
+        .collect::<Vec<_>>();
+    let rng = ZeroizingChaCha20Rng::from_seed([7_u8; 32]);
+    let (shares, public_key_package) = frost::keys::generate_with_dealer(
+        3,
+        2,
+        frost::keys::IdentifierList::Custom(&identifiers),
+        rng,
+    )
+    .expect("generate_with_dealer");
+    let is_even_y = public_key_package.has_even_y();
+    let public_key_package = public_key_package.into_even_y(Some(is_even_y));
+    let native_public =
+        native_public_key_package_from_frost(&public_key_package).expect("native public");
+
+    let key_package_of = |member: u16| {
+        let id = participant_identifier_to_frost_identifier(member).expect("frost id");
+        frost::keys::KeyPackage::try_from(shares.get(&id).expect("share").clone())
+            .expect("key package")
+            .into_even_y(Some(is_even_y))
+    };
+    let key_package_1 = key_package_of(1);
+    let key_package_2 = key_package_of(2);
+
+    // Seat 1's identity + verifying share, but seat 2's signing share.
+    let corrupt = frost::keys::KeyPackage::new(
+        *key_package_1.identifier(),
+        *key_package_2.signing_share(),
+        *key_package_1.verifying_share(),
+        *key_package_1.verifying_key(),
+        *key_package_1.min_signers(),
+    );
+    let corrupt_data = corrupt.serialize().expect("serialize corrupt key package");
+
+    let err =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: "session-persist-share-mismatch".to_string(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: crate::api::NativeFrostKeyPackage {
+                identifier: frost_identifier_to_go_string(*key_package_1.identifier()),
+                data_hex: hex::encode(corrupt_data),
+            },
+            public_key_package: native_public,
+        })
+        .expect_err("a signing share not deriving to its verifying share must be rejected");
+    assert!(matches!(err, EngineError::Validation(_)), "got {err:?}");
+}
+
+// A second seat of the SAME session (same group key) must carry the SAME public
+// key package. A package with the same group verifying key but a different
+// verifying-shares map must be rejected on accumulate, or later signing would use
+// public material inconsistent with the newly stored key.
+#[test]
+fn persist_distributed_dkg_key_package_rejects_mismatched_public_package_on_accumulate() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(7);
+    let session_id = "session-persist-accumulate-mismatch".to_string();
+
+    persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+        session_id: session_id.clone(),
+        participant_identifier: 1,
+        threshold: 2,
+        participant_count: 3,
+        key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+        public_key_package: native_public.clone(),
+    })
+    .expect("first seat persists");
+
+    // Same group verifying key (so the same key group), but a different shares map:
+    // give seat 3 seat 2's verifying share. Seat 1's own share is unchanged, so its
+    // key package still validates - only the accumulate public-package check fails.
+    let mut tampered = native_public.clone();
+    let id2 = frost_identifier_to_go_string(
+        participant_identifier_to_frost_identifier(2).expect("frost id"),
+    );
+    let id3 = frost_identifier_to_go_string(
+        participant_identifier_to_frost_identifier(3).expect("frost id"),
+    );
+    let share2 = tampered
+        .verifying_shares
+        .get(&id2)
+        .expect("share 2")
+        .clone();
+    tampered.verifying_shares.insert(id3, share2);
+
+    let err =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: session_id.clone(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+            public_key_package: tampered,
+        })
+        .expect_err("a mismatched public package for the same session must be rejected");
+    assert!(matches!(err, EngineError::Validation(_)), "got {err:?}");
 }
 
 #[test]
@@ -7805,6 +8202,208 @@ fn persisted_engine_state_rejects_session_registry_over_limit() {
 }
 
 #[test]
+fn persisted_session_state_round_trip_preserves_bound_key_group() {
+    // A cross-session signing session has no dkg_result, so bound_key_group is the only
+    // durable link back to the wallet DKG. It MUST survive a persist/reload: otherwise an
+    // InteractiveAggregate/verify_share that runs after a restart (past a member's Round2,
+    // where the live state is already gone) would resolve neither dkg_result nor
+    // bound_key_group and return DkgNotReady, stranding the collected shares.
+    let session = SessionState {
+        bound_key_group: Some("wallet-key-group".to_string()),
+        ..Default::default()
+    };
+    let persisted = PersistedSessionState::try_from(&session).expect("serialize");
+    assert_eq!(
+        persisted.bound_key_group.as_deref(),
+        Some("wallet-key-group")
+    );
+    let restored = SessionState::try_from(persisted).expect("deserialize");
+    assert_eq!(
+        restored.bound_key_group.as_deref(),
+        Some("wallet-key-group"),
+        "bound_key_group must survive persist/reload for cross-session signing"
+    );
+}
+
+#[test]
+fn interactive_open_cross_session_respects_the_session_cap() {
+    // A fresh RoastSessionID per message must not let Open grow the session registry
+    // past TBTC_SIGNER_MAX_SESSIONS: otherwise the cross-session path could build an
+    // over-limit registry that the reload path (see the test above) then rejects,
+    // stranding the node's persisted state. Open enforces the SAME total-session cap as
+    // every other session-creating path; a reopen of an existing session stays exempt.
+    let _guard = lock_test_state();
+    reset_for_tests();
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "1");
+
+    let wallet_session = "wallet-dkg-session-cap";
+    let key_group = "cross-session-cap-key-group";
+    let message = [0x23u8; 32];
+    let included = [1u16, 2];
+
+    // The wallet DKG session fills the cap (1 of 1).
+    ensure_interactive_dkg_session(wallet_session, key_group);
+
+    // A distinct signing session would be a SECOND session -> rejected by the cap,
+    // BEFORE any per-signing state is installed.
+    let attempt_context =
+        interactive_test_attempt_context("roast-over-cap", key_group, &message, &included, 1);
+    let err = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: "roast-over-cap".to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        attempt_context,
+    })
+    .expect_err("a new cross-session Open at the session cap must be rejected");
+    assert!(
+        matches!(err, EngineError::Internal(ref m) if m.contains("reached max")),
+        "unexpected error: {err:?}"
+    );
+    // The over-cap session must NOT have been created.
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        assert!(
+            !guard.sessions.contains_key("roast-over-cap"),
+            "a capped-out Open must not create the session"
+        );
+    }
+
+    std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
+}
+
+#[test]
+fn interactive_open_refuses_to_rebind_a_live_session_to_a_different_key_group() {
+    // A per-signing session is keyed by RoastSessionID (message/root/start-block), NOT
+    // key_group, so two wallets can collide on one session id. While a member is
+    // mid-signing under one wallet key, an Open for a DIFFERENT key group on the same
+    // session id must be REJECTED - not silently rebind bound_key_group and make the
+    // live member's Round2/Aggregate resolve the wrong wallet material.
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let wallet_a = "wallet-dkg-a-rebind";
+    let wallet_b = "wallet-dkg-b-rebind";
+    let key_group_a = "key-group-a-rebind";
+    let key_group_b = "key-group-b-rebind";
+    let shared_session = "roast-collision-session";
+    let message = [0x24u8; 32];
+    let included = [1u16, 2];
+
+    ensure_interactive_dkg_session(wallet_a, key_group_a);
+    ensure_interactive_dkg_session(wallet_b, key_group_b);
+
+    // Member 1 opens under wallet A on the shared session and runs Round1 (a LIVE entry).
+    let ctx_a =
+        interactive_test_attempt_context(shared_session, key_group_a, &message, &included, 1);
+    let opened_a = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: shared_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group_a.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        attempt_context: ctx_a,
+    })
+    .expect("wallet A opens on the shared session");
+    interactive_round1(InteractiveRound1Request {
+        session_id: shared_session.to_string(),
+        attempt_id: opened_a.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("wallet A round 1 leaves a live entry");
+
+    // Wallet B tries to open the SAME session id while A is live -> rejected.
+    let ctx_b =
+        interactive_test_attempt_context(shared_session, key_group_b, &message, &included, 1);
+    let err = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: shared_session.to_string(),
+        member_identifier: 2,
+        message_hex: hex::encode(message),
+        key_group: key_group_b.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        attempt_context: ctx_b,
+    })
+    .expect_err("a different key group must not rebind a live session");
+    assert!(
+        matches!(err, EngineError::SessionConflict { .. }),
+        "unexpected error: {err:?}"
+    );
+
+    // Wallet A's binding and live entry are intact - not corrupted by B's attempt.
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(shared_session).expect("shared session");
+        assert_eq!(session.bound_key_group.as_deref(), Some(key_group_a));
+        assert!(
+            session.interactive_signing.contains_key(&1),
+            "wallet A's live member entry must survive B's rejected open"
+        );
+    }
+}
+
+#[test]
+fn interactive_open_refuses_to_bind_through_another_wallets_dkg_session() {
+    // If request.session_id names wallet A's (idle) DKG session but the request's
+    // key_group is wallet B, Open must NOT install B into A's session: with dkg_result
+    // A present, later Round2/Aggregate/verify_share would resolve A's material while
+    // signing B's share (wrong wallet, bypassing B's rekey/finalization gates). A
+    // session belongs to ONE key group for its lifetime, so the mismatch is rejected -
+    // even with no live members (dkg_result establishes the binding).
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let wallet_a = "wallet-a-dkg-bind";
+    let wallet_b = "wallet-b-dkg-bind";
+    let key_group_a = "key-group-a-dkg-bind";
+    let key_group_b = "key-group-b-dkg-bind";
+    let message = [0x25u8; 32];
+    let included = [1u16, 2];
+
+    // wallet_a is an IDLE DKG session (dkg_result A, no live interactive entries);
+    // wallet_b provides key_group B's material so its wallet resolution succeeds.
+    ensure_interactive_dkg_session(wallet_a, key_group_a);
+    ensure_interactive_dkg_session(wallet_b, key_group_b);
+
+    // Open wallet A's DKG session id but for key_group B -> rejected.
+    let ctx = interactive_test_attempt_context(wallet_a, key_group_b, &message, &included, 1);
+    let err = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: wallet_a.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group_b.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        attempt_context: ctx,
+    })
+    .expect_err("binding through another wallet's DKG session must be rejected");
+    assert!(
+        matches!(err, EngineError::SessionConflict { .. }),
+        "unexpected error: {err:?}"
+    );
+
+    // Wallet A's DKG session is untouched: no B binding installed.
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(wallet_a).expect("wallet A session");
+        assert_eq!(
+            session
+                .dkg_result
+                .as_ref()
+                .map(|dkg| dkg.key_group.as_str()),
+            Some(key_group_a)
+        );
+        assert!(
+            session.bound_key_group.is_none(),
+            "no cross-wallet binding may be installed on wallet A's session"
+        );
+    }
+}
+
+#[test]
 fn max_sessions_limit_env_parser_is_strict_positive() {
     let _guard = lock_test_state();
     clear_state_storage_policy_overrides();
@@ -12776,6 +13375,148 @@ fn interactive_session_full_round_trip_aggregates_bip340() {
 }
 
 #[test]
+fn interactive_signs_across_sessions_by_key_group() {
+    // PRODUCTION SHAPE: a wallet's DKG material is persisted under its DKG session,
+    // but interactive ROAST signing runs under a DIFFERENT, per-message session (the
+    // RoastSessionID). The engine must resolve the wallet key by key_group so signing
+    // under a distinct session still works - otherwise distributed-DKG wallets, which
+    // are signable ONLY via the interactive path, could never sign. The single-session
+    // tests miss this because they persist and sign under one id.
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let wallet_session = "wallet-dkg-session";
+    let signing_session = "roast-signing-session";
+    let key_group = "cross-session-key-group";
+    let message = [0x5au8; 32];
+    let included = [1u16, 2];
+
+    // The DKG material lives ONLY under the wallet (DKG) session.
+    ensure_interactive_dkg_session(wallet_session, key_group);
+
+    // All signing runs under a DISTINCT session id, with the attempt context derived
+    // from THAT signing session (coordinator/attempt id bind to the RoastSessionID,
+    // unchanged by this fix).
+    let open_under_signing_session = |member: u16| {
+        let attempt_context =
+            interactive_test_attempt_context(signing_session, key_group, &message, &included, 1);
+        interactive_session_open(InteractiveSessionOpenRequest {
+            session_id: signing_session.to_string(),
+            member_identifier: member,
+            message_hex: hex::encode(message),
+            key_group: key_group.to_string(),
+            threshold: 2,
+            taproot_merkle_root_hex: None,
+            attempt_context,
+        })
+        .unwrap_or_else(|e| panic!("member {member} opens under the signing session: {e:?}"))
+    };
+    let opened1 = open_under_signing_session(1);
+    let opened2 = open_under_signing_session(2);
+    assert_eq!(opened1.attempt_id, opened2.attempt_id);
+
+    // The wallet material must NOT be copied into the signing session (no secret
+    // duplication): the signing session holds only per-signing state, bound to the
+    // wallet key by key_group.
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let signing = guard
+            .sessions
+            .get(signing_session)
+            .expect("signing session created on open");
+        assert!(
+            signing.dkg_key_packages.is_none() && signing.dkg_result.is_none(),
+            "signing session must not hold a copy of the wallet DKG material"
+        );
+        assert_eq!(
+            signing.bound_key_group.as_deref(),
+            Some(key_group),
+            "signing session is bound to the wallet key it signs for"
+        );
+    }
+
+    let round1_m1 = interactive_round1(InteractiveRound1Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened1.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("member 1 round 1 under the signing session");
+    let round1_m2 = interactive_round1(InteractiveRound1Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened2.attempt_id.clone(),
+        member_identifier: 2,
+    })
+    .expect("member 2 round 1 under the signing session");
+
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1_m1.commitments_hex.clone(),
+            },
+            NativeFrostCommitment {
+                identifier: key_packages[&2].identifier.clone(),
+                data_hex: round1_m2.commitments_hex.clone(),
+            },
+        ],
+    );
+
+    let round2_m1 = interactive_round2(InteractiveRound2Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened1.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect("member 1 round 2 under the signing session");
+    let round2_m2 = interactive_round2(InteractiveRound2Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened2.attempt_id.clone(),
+        member_identifier: 2,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect("member 2 round 2 under the signing session");
+
+    // interactive_aggregate resolves the group public key by key_group from the wallet
+    // session and produces a valid BIP-340 signature over the distinct signing session.
+    let aggregated = interactive_aggregate(InteractiveAggregateRequest {
+        session_id: signing_session.to_string(),
+        attempt_id: opened1.attempt_id.clone(),
+        signing_package_hex: signing_package_hex.clone(),
+        signature_shares: vec![
+            crate::api::NativeFrostSignatureShare {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round2_m1.signature_share_hex,
+            },
+            crate::api::NativeFrostSignatureShare {
+                identifier: key_packages[&2].identifier.clone(),
+                data_hex: round2_m2.signature_share_hex,
+            },
+        ],
+        taproot_merkle_root_hex: None,
+    })
+    .expect("interactive aggregate resolves wallet material by key_group across sessions");
+
+    let public_key_package = dkg_part3(
+        deterministic_interactive_dkg_fixture(0)
+            .part3_requests
+            .remove(&1)
+            .expect("fixture participant 1"),
+    )
+    .expect("public key package")
+    .public_key_package;
+
+    let signature_bytes = hex::decode(aggregated.signature_hex).expect("signature hex");
+    let signature = SchnorrSignature::from_slice(&signature_bytes).expect("BIP340 signature");
+    let public_key_bytes = hex::decode(public_key_package.verifying_key).expect("key hex");
+    let public_key = XOnlyPublicKey::from_slice(&public_key_bytes).expect("x-only key");
+    Secp256k1::verification_only()
+        .verify_schnorr(&signature, &SecpMessage::from_digest(message), &public_key)
+        .expect("cross-session interactive signing produces a valid BIP-340 signature");
+}
+
+#[test]
 fn interactive_multi_seat_two_members_one_process_aggregate_bip340() {
     // Multi-seat: ONE process drives TWO local members through the interactive
     // session API for the SAME session and attempt - the case the pre-multi-seat
@@ -14597,6 +15338,186 @@ fn interactive_round2_rechecks_gates_at_share_release() {
 }
 
 #[test]
+fn interactive_round2_rechecks_gates_at_share_release_across_sessions() {
+    // The cross-session counterpart of the above: the emergency-rekey kill switch is
+    // recorded on the WALLET (DKG) session, but signing runs under a DISTINCT
+    // per-message session. Round2 must STILL block the share - the wallet-level gate
+    // has to be resolved by key_group, not read from the (empty) per-signing session.
+    // This is the exact fail-open the state-split risked for distributed-DKG wallets,
+    // whose only signing path is interactive.
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let wallet_session = "wallet-dkg-session-rekey";
+    let signing_session = "roast-signing-session-rekey";
+    let key_group = "cross-session-rekey-key-group";
+    let message = [0x21u8; 32];
+    let included = [1u16, 2];
+
+    // DKG material lives ONLY under the wallet session.
+    ensure_interactive_dkg_session(wallet_session, key_group);
+
+    // Open + Round1 under the distinct signing session (gates clear at Open).
+    let attempt_context =
+        interactive_test_attempt_context(signing_session, key_group, &message, &included, 1);
+    let opened = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: signing_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        attempt_context,
+    })
+    .expect("opens under the signing session");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1 under the signing session");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+
+    // Kill switch recorded on the WALLET session AFTER Open/Round1 - NOT on the
+    // signing session the operator is driving.
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        let session = guard
+            .sessions
+            .get_mut(wallet_session)
+            .expect("wallet session exists");
+        session.emergency_rekey_event = Some(EmergencyRekeyEvent {
+            reason: "post-open rekey on the wallet session".to_string(),
+            triggered_at_unix: now_unix(),
+        });
+    }
+
+    // Round2 under the signing session MUST block - the wallet-level rekey gate is
+    // resolved by key_group from the wallet session, not the empty signing session.
+    let blocked = interactive_round2(InteractiveRound2Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect_err("a wallet-session emergency rekey must block a cross-session Round2 share");
+    assert!(
+        matches!(blocked, EngineError::LifecyclePolicyRejected { ref reason_code, .. }
+            if reason_code == "emergency_rekey_required"),
+        "unexpected error: {blocked:?}"
+    );
+
+    // The rejection must be fail-closed WITHOUT consuming the nonce: clearing the
+    // kill switch on the wallet session lets the same attempt complete.
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        assert!(
+            !guard
+                .sessions
+                .get(signing_session)
+                .expect("signing session exists")
+                .consumed_interactive_attempt_markers
+                .contains(&interactive_consumed_marker(&opened.attempt_id, 1)),
+            "a cross-session gate rejection must not consume the attempt"
+        );
+        guard
+            .sessions
+            .get_mut(wallet_session)
+            .expect("wallet session exists")
+            .emergency_rekey_event = None;
+    }
+
+    interactive_round2(InteractiveRound2Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened.attempt_id,
+        member_identifier: 1,
+        signing_package_hex,
+    })
+    .expect("the cross-session attempt completes once the wallet kill switch clears");
+}
+
+#[test]
+fn trigger_emergency_rekey_on_signing_session_records_on_wallet_session() {
+    // Defense in depth (writer side): emergency rekey is a WALLET-level kill switch,
+    // and interactive Round2 resolves it from the wallet session by key_group. If a
+    // caller triggers it on a per-signing session (a distinct RoastSessionID bound to a
+    // wallet key), the event must land on the WALLET session - where a reader looks -
+    // not on the ephemeral signing session. This makes the writer and reader keying
+    // impossible to diverge.
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let wallet_session = "wallet-dkg-session-rekey-writer";
+    let signing_session = "roast-signing-session-rekey-writer";
+    let key_group = "cross-session-rekey-writer-key-group";
+    let message = [0x22u8; 32];
+    let included = [1u16, 2];
+
+    ensure_interactive_dkg_session(wallet_session, key_group);
+
+    // Open under the distinct signing session so it is bound to the wallet key.
+    let attempt_context =
+        interactive_test_attempt_context(signing_session, key_group, &message, &included, 1);
+    interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: signing_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        attempt_context,
+    })
+    .expect("opens under the signing session");
+
+    // Trigger the kill switch on the SIGNING session id.
+    let result = trigger_emergency_rekey(TriggerEmergencyRekeyRequest {
+        session_id: signing_session.to_string(),
+        reason: "compromise detected".to_string(),
+    })
+    .expect("emergency rekey triggers");
+
+    // It must have been recorded on the resolved WALLET session, where Round2 reads it.
+    assert_eq!(
+        result.session_id, wallet_session,
+        "the rekey must be recorded on the resolved wallet session"
+    );
+    let guard = state().expect("state").lock().expect("lock");
+    assert!(
+        guard
+            .sessions
+            .get(wallet_session)
+            .expect("wallet session")
+            .emergency_rekey_event
+            .is_some(),
+        "the wallet session must hold the kill switch"
+    );
+    assert!(
+        guard
+            .sessions
+            .get(signing_session)
+            .expect("signing session")
+            .emergency_rekey_event
+            .is_none(),
+        "the ephemeral signing session must NOT hold the kill switch"
+    );
+}
+
+#[test]
 fn interactive_open_rejects_threshold_below_key_package_min_signers() {
     let _guard = lock_test_state();
     reset_for_tests();
@@ -14640,11 +15561,11 @@ fn interactive_open_requires_an_existing_dkg_session() {
     let _guard = lock_test_state();
     reset_for_tests();
 
-    // Key material is resolved from engine DKG state, never the request,
-    // so an interactive open against a session with no DKG fails closed
-    // - the interactive path cannot create a session or sign with
-    // caller-supplied material. (This is also why interactive opens
-    // cannot churn empty registry entries.)
+    // Key material is resolved from engine DKG state by key_group, never the
+    // request, so an interactive open when NO wallet key exists for that
+    // key_group fails closed with DkgNotReady - the interactive path never
+    // signs with caller-supplied material. (It MAY create a per-signing session
+    // bound to an EXISTING wallet key, but only then.)
     let attempt_context = interactive_test_attempt_context(
         "interactive-no-dkg",
         "interactive-test-key-group",
@@ -14661,9 +15582,9 @@ fn interactive_open_requires_an_existing_dkg_session() {
         taproot_merkle_root_hex: None,
         attempt_context,
     })
-    .expect_err("interactive open without a DKG session must fail closed");
+    .expect_err("interactive open with no wallet key for the key_group must fail closed");
     assert!(
-        matches!(err, EngineError::SessionNotFound { .. }),
+        matches!(err, EngineError::DkgNotReady { .. }),
         "unexpected error: {err:?}"
     );
 

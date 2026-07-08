@@ -75,14 +75,14 @@ use crate::api::{
     InteractiveSessionAbortRequest, InteractiveSessionAbortResult, InteractiveSessionOpenRequest,
     InteractiveSessionOpenResult, NativeFrostCommitment, NativeFrostKeyPackage,
     NativeFrostPublicKeyPackage, NativeFrostSignatureShare, NewSigningPackageRequest,
-    NewSigningPackageResult, ParticipantFrostIdentifier, PromoteCanaryRequest, PromoteCanaryResult,
-    QuarantineStatusRequest, QuarantineStatusResult, RefreshCadenceStatusRequest,
-    RefreshCadenceStatusResult, RefreshSharesRequest, RefreshSharesResult,
-    RoastLivenessPolicyResult, RollbackCanaryRequest, RollbackCanaryResult, RoundContribution,
-    RoundState, RunDkgRequest, ShareMaterial, SignShareRequest, SignShareResult, SignatureResult,
-    SignerHardeningMetricsResult, StartSignRoundRequest, TransactionResult, TranscriptAuditRecord,
-    TranscriptAuditRequest, TranscriptAuditResult, TriggerEmergencyRekeyRequest,
-    TriggerEmergencyRekeyResult, VerifyBlameProofRequest,
+    NewSigningPackageResult, ParticipantFrostIdentifier, PersistDistributedDkgKeyPackageRequest,
+    PromoteCanaryRequest, PromoteCanaryResult, QuarantineStatusRequest, QuarantineStatusResult,
+    RefreshCadenceStatusRequest, RefreshCadenceStatusResult, RefreshSharesRequest,
+    RefreshSharesResult, RoastLivenessPolicyResult, RollbackCanaryRequest, RollbackCanaryResult,
+    RoundContribution, RoundState, RunDkgRequest, ShareMaterial, SignShareRequest, SignShareResult,
+    SignatureResult, SignerHardeningMetricsResult, StartSignRoundRequest, TransactionResult,
+    TranscriptAuditRecord, TranscriptAuditRequest, TranscriptAuditResult,
+    TriggerEmergencyRekeyRequest, TriggerEmergencyRekeyResult, VerifyBlameProofRequest,
 };
 use crate::errors::EngineError;
 use crate::go_math_rand::select_coordinator_identifier;

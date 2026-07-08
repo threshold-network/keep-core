@@ -13,10 +13,10 @@ use api::{
     FinalizeSignRoundRequest, FrostTbtcAbiVersionResult, GenerateNoncesAndCommitmentsRequest,
     InitSignerConfigRequest, InteractiveAggregateRequest, InteractiveRound1Request,
     InteractiveRound2Request, InteractiveSessionAbortRequest, InteractiveSessionOpenRequest,
-    NewSigningPackageRequest, PromoteCanaryRequest, QuarantineStatusRequest,
-    RefreshCadenceStatusRequest, RefreshSharesRequest, RollbackCanaryRequest, RunDkgRequest,
-    SignShareRequest, StartSignRoundRequest, TranscriptAuditRequest, TriggerEmergencyRekeyRequest,
-    VerifyBlameProofRequest,
+    NewSigningPackageRequest, PersistDistributedDkgKeyPackageRequest, PromoteCanaryRequest,
+    QuarantineStatusRequest, RefreshCadenceStatusRequest, RefreshSharesRequest,
+    RollbackCanaryRequest, RunDkgRequest, SignShareRequest, StartSignRoundRequest,
+    TranscriptAuditRequest, TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
 };
 use ffi::{
     ffi_entry, free_buffer, parse_request, serialize_response, success_from_string,
@@ -38,7 +38,10 @@ const TBTC_SIGNER_VERSION: &str = "tbtc-signer/0.1.0-bootstrap";
 /// a new field or enum value can appear in an existing response that an old bridge does
 /// not tolerate, that is a MAJOR bump.
 const TBTC_SIGNER_ABI_MAJOR: u32 = 1;
-const TBTC_SIGNER_ABI_MINOR: u32 = 0;
+// Minor 1 adds the additive, backward-compatible symbol
+// frost_tbtc_persist_distributed_dkg_key_package; a bridge that needs it must
+// require abi_minor >= 1 so it fail-closes against an older lib lacking the symbol.
+const TBTC_SIGNER_ABI_MINOR: u32 = 1;
 use engine::TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV;
 #[cfg(test)]
 use engine::TBTC_SIGNER_PROFILE_ENV;
@@ -278,6 +281,19 @@ pub extern "C" fn frost_tbtc_dkg_part3(
     ffi_entry(|| {
         let request: DkgPart3Request = parse_request(request_ptr, request_len)?;
         let response = engine::dkg_part3(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_persist_distributed_dkg_key_package(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: PersistDistributedDkgKeyPackageRequest =
+            parse_request(request_ptr, request_len)?;
+        let response = engine::persist_distributed_dkg_key_package(request)?;
         serialize_response(&response)
     })
 }
@@ -851,12 +867,13 @@ mod tests {
                 attempt_id: "ffi-smoke-attempt".to_string(),
             },
         };
-        // No DKG session exists, so Open fails closed with session_not_found
-        // (key material is resolved from engine DKG state, never the request).
+        // No wallet key exists for this key_group, so Open fails closed with
+        // dkg_not_ready (key material is resolved from engine DKG state by
+        // key_group, never the request).
         let (status, payload) = call_ffi(&open, super::frost_tbtc_interactive_session_open);
         assert_ne!(status, 0);
         let error: ErrorResponse = serde_json::from_slice(&payload).expect("open error payload");
-        assert_eq!(error.code, "session_not_found");
+        assert_eq!(error.code, "dkg_not_ready");
 
         let round1 = crate::api::InteractiveRound1Request {
             session_id: "ffi-interactive-smoke-missing".to_string(),
@@ -1163,9 +1180,10 @@ mod tests {
             serde_json::from_slice(&payload).expect("abi version payload decode");
         // The enforced FFI contract starts at 1.0; bump deliberately per the
         // TBTC_SIGNER_ABI_MAJOR / TBTC_SIGNER_ABI_MINOR rules. This test pins the
-        // current value so an accidental bump is caught.
+        // current value so an accidental bump is caught. Minor is 1 since adding
+        // frost_tbtc_persist_distributed_dkg_key_package (additive symbol).
         assert_eq!(abi.abi_major, 1);
-        assert_eq!(abi.abi_minor, 0);
+        assert_eq!(abi.abi_minor, 1);
     }
 
     #[test]
