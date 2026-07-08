@@ -83,6 +83,7 @@ func RunDistributedDKGForSeats(
 	localMemberIndexes []group.MemberIndex,
 	identifierByID map[group.MemberIndex]string,
 	threshold uint16,
+	prebuffer *DKGMessagePrebuffer,
 ) (map[group.MemberIndex]*NativeTBTCSignerDKGResult, error) {
 	if len(localMemberIndexes) == 0 {
 		return nil, fmt.Errorf("no local seats to run the distributed DKG for")
@@ -130,6 +131,15 @@ func RunDistributedDKGForSeats(
 	// messages - so no peer's early round-1 is handled with no subscriber and
 	// dropped (which the transport would not retransmit).
 	bus.Start()
+
+	// Replay anything the prebuffer captured BEFORE the readiness barrier: a peer that
+	// the barrier released ahead of us may have broadcast its round-1 before this node
+	// reached Start, and the transport would neither deliver (no subscriber yet) nor
+	// retransmit it. The prebuffer caught those off the channel from before the barrier;
+	// feed them through now (deduped against live delivery by content hash).
+	if prebuffer != nil {
+		bus.Replay(prebuffer.Drain())
+	}
 
 	type seatOutcome struct {
 		member  group.MemberIndex

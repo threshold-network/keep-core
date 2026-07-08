@@ -112,6 +112,16 @@ func executeFrostDKGIfPossible(
 		defer cancelDkgCtx()
 
 		sessionID := fmt.Sprintf("%s-%s", channelName, "attempt-1")
+
+		// Capture DKG round messages off the channel BEFORE the readiness barrier below.
+		// announceFrostDKGReadiness releases every peer once the quorum announces, but a
+		// node installs its DKG receiver only later, inside executeDistributedFrostDKG.
+		// A peer released ahead of a slower node can broadcast round-1 before that node
+		// is receiving; the transport would drop it (no subscriber) and not retransmit,
+		// stalling the DKG. The prebuffer catches those from before the barrier so they
+		// are replayed once the receiver is up.
+		dkgPrebuffer := frostsigning.StartDKGMessagePrebuffer(dkgCtx, channel)
+
 		activeMemberIndexes, misbehavedMembersIndices, err :=
 			announceFrostDKGReadiness(
 				dkgCtx,
@@ -166,6 +176,7 @@ func executeFrostDKGIfPossible(
 			groupSelectionResult,
 			signatureThreshold,
 			sessionID,
+			dkgPrebuffer,
 		)
 		if err != nil {
 			dkgLogger.Errorf("FROST DKG execution failed: [%v]", err)
@@ -283,6 +294,7 @@ func executeDistributedFrostDKG(
 	groupSelectionResult *GroupSelectionResult,
 	signatureThreshold int,
 	sessionID string,
+	prebuffer *frostsigning.DKGMessagePrebuffer,
 ) (*frostDKGExecutionResult, error) {
 	if nativeEngine == nil {
 		return nil, fmt.Errorf("native tbtc-signer engine is unavailable")
@@ -350,6 +362,7 @@ func executeDistributedFrostDKG(
 		localDKGMemberIndexes,
 		identifierByID,
 		uint16(signatureThreshold),
+		prebuffer,
 	)
 	if err != nil {
 		return nil, err

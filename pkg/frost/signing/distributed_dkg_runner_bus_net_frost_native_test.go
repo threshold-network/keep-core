@@ -169,6 +169,35 @@ func TestBroadcastChannelDKGBus_CarriesWireEphemeralKey(t *testing.T) {
 	}
 }
 
+// TestBroadcastChannelDKGBus_ReplayDeliversAndDedups covers the prebuffer rescue path:
+// a round-1 message captured before Start (by the prebuffer, from before the readiness
+// barrier) is delivered when Replayed, and Replaying it again - as if it also arrived
+// live - is deduplicated by content, so a member never sees the same round-1 twice.
+func TestBroadcastChannelDKGBus_ReplayDeliversAndDedups(t *testing.T) {
+	f := newDKGBusAuthFixture(t, 8)
+	sub := f.bus.Subscribe(1)
+
+	msg := dkgRound1Msg(1, f.operatorA, "sess", "prebuffered-round1")
+	f.bus.Replay([]net.Message{msg})
+
+	select {
+	case delivered := <-sub.round1:
+		if string(delivered.Payload) != "prebuffered-round1" {
+			t.Fatalf("unexpected replayed payload: %q", delivered.Payload)
+		}
+	default:
+		t.Fatal("a replayed round-1 message must be delivered")
+	}
+
+	// The same message arriving live (or replayed again) must NOT redeliver.
+	f.bus.Replay([]net.Message{msg})
+	select {
+	case dup := <-sub.round1:
+		t.Fatalf("a duplicate replay must be deduped, got: %q", dup.Payload)
+	default:
+	}
+}
+
 func TestBroadcastChannelDKGBus_RejectsSpoofedSeat(t *testing.T) {
 	f := newDKGBusAuthFixture(t, 8)
 	sub := f.bus.Subscribe(1)

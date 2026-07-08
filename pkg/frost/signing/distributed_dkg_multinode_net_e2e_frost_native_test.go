@@ -113,6 +113,7 @@ func TestDistributedDKG_MultiNode_NetTransport(t *testing.T) {
 				[]group.MemberIndex{member}, // one seat per node
 				identifierByID,
 				threshold,
+				nil, // no prebuffer: this test subscribes before Start (no readiness barrier)
 			)
 			outcomes <- nodeOutcome{member: member, persist: persist, err: err}
 		}()

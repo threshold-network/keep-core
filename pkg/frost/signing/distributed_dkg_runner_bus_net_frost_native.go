@@ -213,6 +213,69 @@ func (b *broadcastChannelDKGBus) Start() {
 	b.channel.Recv(b.ctx, b.handleMessage)
 }
 
+// Replay pushes messages a DKGMessagePrebuffer captured before Start (from before the
+// readiness barrier) through the same handleMessage path as live delivery. Any that
+// also arrived live are dropped by handleMessage's content-hash dedup, so this is safe
+// to call right after Start. This closes the cross-node window where a peer's round-1
+// broadcast (after the barrier released it) outran a slower peer's Start.
+func (b *broadcastChannelDKGBus) Replay(messages []net.Message) {
+	for _, m := range messages {
+		b.handleMessage(m)
+	}
+}
+
+// DKGMessagePrebuffer captures inbound DKG transport messages from the moment DKG setup
+// begins - BEFORE the cross-node readiness-announcement barrier releases peers - and
+// holds them until the bus is Started and every seat has Subscribed, at which point the
+// orchestrator Replays them. Without it, a fast peer's round-1 broadcast can arrive at a
+// slower peer before that peer installed its DKG receiver; the transport drops it and
+// marks the pubsub sequence seen, suppressing retransmission and stalling collectRound1.
+type DKGMessagePrebuffer struct {
+	mu       sync.Mutex
+	messages []net.Message
+	capacity int
+}
+
+// StartDKGMessagePrebuffer registers the DKG transport unmarshalers (so inbound DKG
+// messages decode even before the bus exists) and starts capturing them off the channel.
+// Call it BEFORE the readiness barrier. It captures at most a bounded number of messages
+// (a DKG's round-1/round-2 traffic is small; the bound guards against unbounded growth
+// from a misbehaving or noisy channel).
+func StartDKGMessagePrebuffer(
+	ctx context.Context,
+	channel net.BroadcastChannel,
+) *DKGMessagePrebuffer {
+	registerDKGTransportUnmarshalers(channel)
+	pb := &DKGMessagePrebuffer{capacity: 4096}
+	channel.Recv(ctx, func(m net.Message) {
+		// Only DKG transport messages; announcement/other traffic is ignored.
+		if _, ok := m.Payload().(*dkgTransportMessage); !ok {
+			return
+		}
+		pb.mu.Lock()
+		defer pb.mu.Unlock()
+		if len(pb.messages) < pb.capacity {
+			pb.messages = append(pb.messages, m)
+		}
+	})
+	return pb
+}
+
+// Drain returns the captured messages and clears the buffer. The channel Recv handler
+// stays registered (the transport has no unsubscribe), but once the live bus is running
+// its content-hash dedup makes any further captures harmless; callers Drain exactly once
+// right after Start.
+func (pb *DKGMessagePrebuffer) Drain() []net.Message {
+	if pb == nil {
+		return nil
+	}
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	messages := pb.messages
+	pb.messages = nil
+	return messages
+}
+
 // Subscribe registers a receiver and returns its typed streams. The orchestrator
 // subscribes in its constructor, before broadcasting.
 func (b *broadcastChannelDKGBus) Subscribe(member group.MemberIndex) *dkgBusSubscriber {

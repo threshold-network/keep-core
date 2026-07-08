@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/keep-network/keep-core/pkg/crypto/ephemeral"
+	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
@@ -118,6 +119,13 @@ type DKGBus interface {
 	// dropped, and the transport may have already marked it seen and never
 	// retransmit it, stalling the DKG.
 	Start()
+	// Replay feeds messages captured by a DKGMessagePrebuffer - which starts intaking
+	// BEFORE the cross-node readiness barrier - through the receive path, so a peer's
+	// round-1 broadcast that arrived before this node installed its receiver (the
+	// window between the barrier releasing peers and Start) is not lost. Call after
+	// Start and after every seat has Subscribed; messages are deduplicated by content,
+	// so any that also arrived live are ignored.
+	Replay(messages []net.Message)
 }
 
 // dkgBusSubscriber exposes one member's typed round streams. member is the seat
@@ -581,6 +589,10 @@ func (b *inProcessDKGBus) Subscribe(member group.MemberIndex) *dkgBusSubscriber 
 // Start is a no-op: the in-process bus delivers synchronously in Broadcast, so
 // there is no inbound-receive handler to defer.
 func (b *inProcessDKGBus) Start() {}
+
+// Replay is a no-op: the in-process bus has no real transport and no readiness
+// barrier, so there is no pre-barrier window to rescue messages from.
+func (b *inProcessDKGBus) Replay(_ []net.Message) {}
 
 func (b *inProcessDKGBus) Broadcast(msg dkgMessage) {
 	b.mu.Lock()
