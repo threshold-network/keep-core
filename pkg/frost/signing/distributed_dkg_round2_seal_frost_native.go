@@ -55,6 +55,9 @@ func sealRound2Share(share []byte, recipient *ephemeral.PublicKey) (*sealedRound
 	if err != nil {
 		return nil, fmt.Errorf("distributed dkg: generate ephemeral key: %w", err)
 	}
+	// Scrub the one-time sender ephemeral after sealing so it does not linger at
+	// rest; only its PUBLIC half travels in the envelope.
+	defer oneTime.PrivateKey.Zero()
 	ciphertext, err := oneTime.PrivateKey.Ecdh(recipient).Encrypt(share)
 	if err != nil {
 		return nil, fmt.Errorf("distributed dkg: seal round-2 share: %w", err)
@@ -65,8 +68,8 @@ func sealRound2Share(share []byte, recipient *ephemeral.PublicKey) (*sealedRound
 	}, nil
 }
 
-// openRound2Share recovers a round-2 share sealed to us, using our static
-// (operator) private key and the ephemeral public key carried in the envelope.
+// openRound2Share recovers a round-2 share sealed to us, using our per-DKG
+// ephemeral private key and the ephemeral public key carried in the envelope.
 // A share sealed to another member, or a tampered envelope, fails to open (the
 // underlying box is authenticated) rather than yielding a wrong share.
 func openRound2Share(sealed *sealedRound2Share, self *ephemeral.PrivateKey) ([]byte, error) {

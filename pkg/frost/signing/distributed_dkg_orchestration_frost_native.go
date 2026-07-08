@@ -63,10 +63,11 @@ func CanonicalFROSTIdentifier(participantIdentifier uint16) string {
 //
 // memberIndexes is the FULL participant set (the final compact DKG member space);
 // localMemberIndexes are this node's seats in that same space; identifierByID must
-// map EVERY member in memberIndexes to its CanonicalFROSTIdentifier. selfOperatorKey
-// is this node's operator key (shared by all its local seats): round-2 shares are
-// ECIES-sealed to peers' operator keys learned from their authenticated round-1
-// broadcasts, so the channel MUST be the membership-validated wallet channel.
+// map EVERY member in memberIndexes to its CanonicalFROSTIdentifier. Round-2 shares
+// are ECIES-sealed to peers' per-DKG EPHEMERAL keys (generated here, one per local
+// seat) learned from their authenticated round-1 broadcasts, so the channel MUST be
+// the membership-validated wallet channel; the operator key stays bound to that
+// channel and never reaches the DKG.
 //
 // One orchestrator runs per local seat. All local runners are constructed (and
 // thereby subscribed to the shared bus) BEFORE any of them starts, so no

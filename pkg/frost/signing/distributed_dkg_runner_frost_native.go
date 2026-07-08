@@ -263,6 +263,11 @@ func newDistributedDKGRunner(
 func (r *distributedDKGRunner) Run(ctx context.Context) (*NativeFROSTDKGResult, error) {
 	n := len(r.memberIndexes)
 
+	// Scrub this seat's per-DKG ephemeral private key when the DKG concludes: it
+	// exists only to open round-2 shares during this Run, and forward secrecy
+	// depends on it not lingering at rest (in a later core dump or swap file).
+	defer r.selfKey.Zero()
+
 	// ---- Round 1: our public package broadcast; secret kept local. ----
 	part1, err := r.engine.Part1(r.identifier, uint16(n), r.threshold)
 	if err != nil {
@@ -423,9 +428,10 @@ func (r *distributedDKGRunner) collectRound1(
 			if pkg.Identifier != r.identifierByID[msg.Sender] {
 				continue
 			}
-			// Learn this sender's round-2 sealing key from its authenticated operator
-			// public key. A sender whose key we cannot parse is skipped, not counted:
-			// we could not seal a round-2 share to it, so it must not fill a slot.
+			// Learn this sender's round-2 sealing key: its per-DKG EPHEMERAL public
+			// key, carried on (and authenticated with) its round-1 message. A sender
+			// whose key we cannot parse is skipped, not counted: we could not seal a
+			// round-2 share to it, so it must not fill a slot.
 			recipientKey, err := ephemeral.UnmarshalPublicKey(msg.SenderPublicKey)
 			if err != nil {
 				continue
