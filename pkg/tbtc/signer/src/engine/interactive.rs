@@ -532,6 +532,36 @@ pub fn interactive_round2(
     let auto_quarantine_config = load_auto_quarantine_config()?;
     let quarantined_operator_identifiers = guard.quarantined_operator_identifiers.clone();
 
+    // Wallet-level policy gates (emergency rekey / finalization / tx-binding) live on
+    // the WALLET (DKG) session, NOT this per-signing session. Resolve them by the
+    // key_group this session serves (its own DKG when co-located, else the key_group
+    // bound at Open) so the Round2 kill-switch re-check - the share-release moment -
+    // fires for cross-session interactive signing too. Read here (before the mutable
+    // per-signing borrow) into owned locals; if read from the empty per-signing
+    // session a rekey/finalization recorded AFTER Open would silently fail OPEN.
+    let (wallet_emergency_rekey, wallet_finalized, wallet_tx_result) = {
+        let bound_key_group = guard.sessions.get(&request.session_id).and_then(|session| {
+            session
+                .dkg_result
+                .as_ref()
+                .map(|dkg| dkg.key_group.clone())
+                .or_else(|| session.bound_key_group.clone())
+        });
+        match bound_key_group
+            .and_then(|key_group| {
+                resolve_wallet_session_id(&guard, &request.session_id, &key_group)
+            })
+            .and_then(|wallet_session_id| guard.sessions.get(&wallet_session_id))
+        {
+            Some(wallet) => (
+                wallet.emergency_rekey_event.clone(),
+                wallet.finalize_request_fingerprint.is_some(),
+                wallet.tx_result.clone(),
+            ),
+            None => (None, false, None),
+        }
+    };
+
     let session = guard.sessions.get_mut(&request.session_id).ok_or_else(|| {
         EngineError::SessionNotFound {
             session_id: request.session_id.clone(),
@@ -619,9 +649,9 @@ pub fn interactive_round2(
             &request.session_id,
             &[request.member_identifier],
             &bound_message_hex,
-            session.emergency_rekey_event.as_ref(),
-            session.finalize_request_fingerprint.is_some(),
-            session.tx_result.as_ref(),
+            wallet_emergency_rekey.as_ref(),
+            wallet_finalized,
+            wallet_tx_result.as_ref(),
             &quarantined_operator_identifiers,
             auto_quarantine_config.as_ref(),
         )?;

@@ -13933,6 +13933,120 @@ fn interactive_round2_rechecks_gates_at_share_release() {
 }
 
 #[test]
+fn interactive_round2_rechecks_gates_at_share_release_across_sessions() {
+    // The cross-session counterpart of the above: the emergency-rekey kill switch is
+    // recorded on the WALLET (DKG) session, but signing runs under a DISTINCT
+    // per-message session. Round2 must STILL block the share - the wallet-level gate
+    // has to be resolved by key_group, not read from the (empty) per-signing session.
+    // This is the exact fail-open the state-split risked for distributed-DKG wallets,
+    // whose only signing path is interactive.
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let wallet_session = "wallet-dkg-session-rekey";
+    let signing_session = "roast-signing-session-rekey";
+    let key_group = "cross-session-rekey-key-group";
+    let message = [0x21u8; 32];
+    let included = [1u16, 2];
+
+    // DKG material lives ONLY under the wallet session.
+    ensure_interactive_dkg_session(wallet_session, key_group);
+
+    // Open + Round1 under the distinct signing session (gates clear at Open).
+    let attempt_context =
+        interactive_test_attempt_context(signing_session, key_group, &message, &included, 1);
+    let opened = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: signing_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        attempt_context,
+    })
+    .expect("opens under the signing session");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1 under the signing session");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+
+    // Kill switch recorded on the WALLET session AFTER Open/Round1 - NOT on the
+    // signing session the operator is driving.
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        let session = guard
+            .sessions
+            .get_mut(wallet_session)
+            .expect("wallet session exists");
+        session.emergency_rekey_event = Some(EmergencyRekeyEvent {
+            reason: "post-open rekey on the wallet session".to_string(),
+            triggered_at_unix: now_unix(),
+        });
+    }
+
+    // Round2 under the signing session MUST block - the wallet-level rekey gate is
+    // resolved by key_group from the wallet session, not the empty signing session.
+    let blocked = interactive_round2(InteractiveRound2Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect_err("a wallet-session emergency rekey must block a cross-session Round2 share");
+    assert!(
+        matches!(blocked, EngineError::LifecyclePolicyRejected { ref reason_code, .. }
+            if reason_code == "emergency_rekey_required"),
+        "unexpected error: {blocked:?}"
+    );
+
+    // The rejection must be fail-closed WITHOUT consuming the nonce: clearing the
+    // kill switch on the wallet session lets the same attempt complete.
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        assert!(
+            !guard
+                .sessions
+                .get(signing_session)
+                .expect("signing session exists")
+                .consumed_interactive_attempt_markers
+                .contains(&interactive_consumed_marker(&opened.attempt_id, 1)),
+            "a cross-session gate rejection must not consume the attempt"
+        );
+        guard
+            .sessions
+            .get_mut(wallet_session)
+            .expect("wallet session exists")
+            .emergency_rekey_event = None;
+    }
+
+    interactive_round2(InteractiveRound2Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened.attempt_id,
+        member_identifier: 1,
+        signing_package_hex,
+    })
+    .expect("the cross-session attempt completes once the wallet kill switch clears");
+}
+
+#[test]
 fn interactive_open_rejects_threshold_below_key_package_min_signers() {
     let _guard = lock_test_state();
     reset_for_tests();
