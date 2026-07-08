@@ -309,6 +309,20 @@ pub fn persist_distributed_dkg_key_package(
         Some(_) => {}
     }
 
+    // The checks above only trust the PUBLIC verifying share embedded in the key
+    // package; Round2 signs with the embedded SECRET signing share, and
+    // deserialization does not prove the signing scalar derives to that public
+    // share. Verify signing_share -> verifying_share, so a corrupt or malformed
+    // key package cannot be stored and then burn signing attempts producing shares
+    // that never verify.
+    if frost::keys::VerifyingShare::from(key_package.signing_share().clone())
+        != *key_package.verifying_share()
+    {
+        return Err(EngineError::Validation(format!(
+            "{OP}: key package signing share does not derive to its verifying share"
+        )));
+    }
+
     let key_group = public_key_package
         .verifying_key()
         .serialize()
@@ -336,6 +350,23 @@ pub fn persist_distributed_dkg_key_package(
             return Err(EngineError::SessionConflict {
                 session_id: request.session_id,
             });
+        }
+        // Same group key is NOT enough: a sibling seat of the SAME distributed DKG
+        // must carry the SAME threshold, participant count, and public key package.
+        // Otherwise a second seat could be validated against a different submitted
+        // public package while the session keeps the first, so later signing would
+        // use public material inconsistent with this seat's key.
+        if existing.threshold != request.threshold
+            || existing.participant_count != request.participant_count
+        {
+            return Err(EngineError::Validation(format!(
+                "{OP}: threshold/participant_count does not match the stored DKG for this session"
+            )));
+        }
+        if session.dkg_public_key_package.as_ref() != Some(&public_key_package) {
+            return Err(EngineError::Validation(format!(
+                "{OP}: public key package does not match the stored DKG for this session"
+            )));
         }
     } else {
         session.dkg_result = Some(DkgResult {

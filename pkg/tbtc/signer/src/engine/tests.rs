@@ -1152,6 +1152,119 @@ fn persist_distributed_dkg_key_package_rejects_when_provenance_gate_requires_att
     clear_state_storage_policy_overrides();
 }
 
+// A key package whose SECRET signing share does not derive to its (public)
+// verifying share must be rejected: it would open interactive attempts and burn
+// them, producing shares that never verify. Crafted with seat 1's identity and
+// verifying share (so it matches the public package) but seat 2's signing share.
+#[test]
+fn persist_distributed_dkg_key_package_rejects_signing_share_not_deriving_to_public() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let identifiers = [1_u16, 2, 3]
+        .iter()
+        .map(|m| participant_identifier_to_frost_identifier(*m).expect("frost id"))
+        .collect::<Vec<_>>();
+    let rng = ZeroizingChaCha20Rng::from_seed([7_u8; 32]);
+    let (shares, public_key_package) = frost::keys::generate_with_dealer(
+        3,
+        2,
+        frost::keys::IdentifierList::Custom(&identifiers),
+        rng,
+    )
+    .expect("generate_with_dealer");
+    let is_even_y = public_key_package.has_even_y();
+    let public_key_package = public_key_package.into_even_y(Some(is_even_y));
+    let native_public =
+        native_public_key_package_from_frost(&public_key_package).expect("native public");
+
+    let key_package_of = |member: u16| {
+        let id = participant_identifier_to_frost_identifier(member).expect("frost id");
+        frost::keys::KeyPackage::try_from(shares.get(&id).expect("share").clone())
+            .expect("key package")
+            .into_even_y(Some(is_even_y))
+    };
+    let key_package_1 = key_package_of(1);
+    let key_package_2 = key_package_of(2);
+
+    // Seat 1's identity + verifying share, but seat 2's signing share.
+    let corrupt = frost::keys::KeyPackage::new(
+        *key_package_1.identifier(),
+        key_package_2.signing_share().clone(),
+        *key_package_1.verifying_share(),
+        key_package_1.verifying_key().clone(),
+        *key_package_1.min_signers(),
+    );
+    let corrupt_data = corrupt.serialize().expect("serialize corrupt key package");
+
+    let err =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: "session-persist-share-mismatch".to_string(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: crate::api::NativeFrostKeyPackage {
+                identifier: frost_identifier_to_go_string(*key_package_1.identifier()),
+                data_hex: hex::encode(corrupt_data),
+            },
+            public_key_package: native_public,
+        })
+        .expect_err("a signing share not deriving to its verifying share must be rejected");
+    assert!(matches!(err, EngineError::Validation(_)), "got {err:?}");
+}
+
+// A second seat of the SAME session (same group key) must carry the SAME public
+// key package. A package with the same group verifying key but a different
+// verifying-shares map must be rejected on accumulate, or later signing would use
+// public material inconsistent with the newly stored key.
+#[test]
+fn persist_distributed_dkg_key_package_rejects_mismatched_public_package_on_accumulate() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(7);
+    let session_id = "session-persist-accumulate-mismatch".to_string();
+
+    persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+        session_id: session_id.clone(),
+        participant_identifier: 1,
+        threshold: 2,
+        participant_count: 3,
+        key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+        public_key_package: native_public.clone(),
+    })
+    .expect("first seat persists");
+
+    // Same group verifying key (so the same key group), but a different shares map:
+    // give seat 3 seat 2's verifying share. Seat 1's own share is unchanged, so its
+    // key package still validates - only the accumulate public-package check fails.
+    let mut tampered = native_public.clone();
+    let id2 = frost_identifier_to_go_string(
+        participant_identifier_to_frost_identifier(2).expect("frost id"),
+    );
+    let id3 = frost_identifier_to_go_string(
+        participant_identifier_to_frost_identifier(3).expect("frost id"),
+    );
+    let share2 = tampered
+        .verifying_shares
+        .get(&id2)
+        .expect("share 2")
+        .clone();
+    tampered.verifying_shares.insert(id3, share2);
+
+    let err =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: session_id.clone(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+            public_key_package: tampered,
+        })
+        .expect_err("a mismatched public package for the same session must be rejected");
+    assert!(matches!(err, EngineError::Validation(_)), "got {err:?}");
+}
+
 #[test]
 fn run_dkg_accepts_valid_signed_provenance_attestation() {
     let _guard = lock_test_state();
