@@ -144,7 +144,6 @@ func executeFrostDKGIfPossible(
 			nativeTBTCSignerEngine,
 			node,
 			channel,
-			membershipValidator,
 			activeMemberIndexes,
 			tbtcSignerMemberIndexes,
 			localActiveMemberIndexes,
@@ -262,7 +261,6 @@ func executeDistributedFrostDKG(
 	nativeEngine frostsigning.NativeTBTCSignerEngine,
 	node *node,
 	channel net.BroadcastChannel,
-	membershipValidator *group.MembershipValidator,
 	activeMemberIndexes []group.MemberIndex,
 	tbtcSignerMemberIndexes []group.MemberIndex,
 	localActiveMemberIndexes []group.MemberIndex,
@@ -292,7 +290,7 @@ func executeDistributedFrostDKG(
 	// compact DKG member space the runner and persist op operate in (the same
 	// mapping registerFrostSignerWithMaterial uses). finalSigningGroup sorts its
 	// operating-members argument in place, so pass a copy.
-	_, finalSigningGroupMembersIndexes, err := finalSigningGroup(
+	finalSigningGroupOperators, finalSigningGroupMembersIndexes, err := finalSigningGroup(
 		groupSelectionResult.OperatorsAddresses,
 		append([]group.MemberIndex{}, activeMemberIndexes...),
 		node.groupParameters,
@@ -309,6 +307,17 @@ func executeDistributedFrostDKG(
 		localDKGMemberIndexes = append(localDKGMemberIndexes, finalSeat)
 	}
 
+	// The runner broadcasts FINAL compact member indexes as the transport sender,
+	// so the DKG bus must authenticate them against a validator indexed by the SAME
+	// final space - not the original sortition-ordered membership (which would
+	// reject shifted seats when readiness compacts the active set, stalling the
+	// DKG). finalSigningGroupOperators[i] is the operator for final member i+1.
+	finalMembershipValidator := group.NewMembershipValidator(
+		logger,
+		finalSigningGroupOperators,
+		node.chain.Signing(),
+	)
+
 	// This node's operator key, shared by all its local seats.
 	operatorPrivateKey, _, err := node.chain.OperatorKeyPair()
 	if err != nil {
@@ -319,7 +328,7 @@ func executeDistributedFrostDKG(
 		dkgCtx,
 		logger,
 		channel,
-		membershipValidator,
+		finalMembershipValidator,
 		distributedEngine,
 		sessionID,
 		tbtcSignerMemberIndexes,

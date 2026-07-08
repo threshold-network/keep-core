@@ -105,6 +105,11 @@ type DKGBus interface {
 	// Subscribe registers a receiver for the given seat up front (before any
 	// Broadcast); round-2 messages addressed to that seat are routed to it.
 	Subscribe(member group.MemberIndex) *dkgBusSubscriber
+	// Start begins delivering inbound messages. It MUST be called only after every
+	// local seat has Subscribed: a message handled before any subscriber exists is
+	// dropped, and the transport may have already marked it seen and never
+	// retransmit it, stalling the DKG.
+	Start()
 }
 
 // dkgBusSubscriber exposes one member's typed round streams. member is the seat
@@ -557,6 +562,10 @@ func (b *inProcessDKGBus) Subscribe(member group.MemberIndex) *dkgBusSubscriber 
 	b.mu.Unlock()
 	return s
 }
+
+// Start is a no-op: the in-process bus delivers synchronously in Broadcast, so
+// there is no inbound-receive handler to defer.
+func (b *inProcessDKGBus) Start() {}
 
 func (b *inProcessDKGBus) Broadcast(msg dkgMessage) {
 	b.mu.Lock()

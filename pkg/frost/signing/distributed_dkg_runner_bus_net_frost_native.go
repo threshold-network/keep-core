@@ -176,9 +176,17 @@ func NewBroadcastChannelDKGBus(
 	}
 
 	registerDKGTransportUnmarshalers(channel)
-	channel.Recv(ctx, b.handleMessage)
 
 	return b, nil
+}
+
+// Start installs the channel Recv handler that demuxes inbound messages to
+// subscribers. It is deferred out of the constructor so the orchestrator can
+// Subscribe every local seat FIRST: a message handled before any subscriber
+// exists is dropped, and the transport's retransmission layer may have already
+// marked it seen, so it would never be redelivered and the DKG would stall.
+func (b *broadcastChannelDKGBus) Start() {
+	b.channel.Recv(b.ctx, b.handleMessage)
 }
 
 // Subscribe registers a receiver and returns its typed streams. The orchestrator

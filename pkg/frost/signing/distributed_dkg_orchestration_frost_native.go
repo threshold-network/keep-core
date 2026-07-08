@@ -127,6 +127,11 @@ func RunDistributedDKGForSeats(
 		runners[seat] = runner
 	}
 
+	// Only now that every local seat is subscribed, begin delivering inbound
+	// messages - so no peer's early round-1 is handled with no subscriber and
+	// dropped (which the transport would not retransmit).
+	bus.Start()
+
 	type seatOutcome struct {
 		member  group.MemberIndex
 		persist *NativeTBTCSignerDKGResult
