@@ -146,6 +146,15 @@ func RunDistributedDKGForSeats(
 				outcomes <- seatOutcome{member: seat, err: fmt.Errorf("distributed DKG for seat [%v] failed: [%w]", seat, err)}
 				return
 			}
+			// dkgResult.KeyPackage.Data is this seat's long-term SECRET share. The engine
+			// holds the authoritative copy after PersistDistributedDKGKeyPackage; scrub the
+			// Go-side copy when this goroutine returns (on the persist-success AND
+			// persist-error paths) so it does not linger in the heap - and thus a later
+			// core dump or swap - past persistence. The returned persist result carries
+			// only public material (key group), so scrubbing does not affect it.
+			if dkgResult.KeyPackage != nil {
+				defer zeroBytes(dkgResult.KeyPackage.Data)
+			}
 			persisted, err := engine.PersistDistributedDKGKeyPackage(
 				session,
 				uint16(seat),
