@@ -379,21 +379,28 @@ pub fn interactive_session_open(
 
     // A per-signing session is keyed by RoastSessionID (message/root/start-block), NOT
     // by key_group, so two DIFFERENT wallets signing the same digest at the same block
-    // on a node that holds members of both could collide on one session id. Refuse to
-    // rebind the session to a different wallet key while ANY member is mid-signing under
-    // the current one - otherwise that live member's Round2/Aggregate would resolve the
-    // wrong wallet material by key_group (an isolation break). An idle session (no live
-    // members) may rebind freely; same-key-group co-signers are unaffected.
+    // on a node that holds members of both could collide on one session id. A session
+    // belongs to exactly ONE wallet key for its lifetime: reject an Open whose key_group
+    // differs from the session's ESTABLISHED one - its DKG key group when it is a
+    // co-located DKG session, else the key group bound by a prior Open. Rejecting
+    // regardless of live members keeps bound_key_group and dkg_result mutually
+    // consistent so Round2/Aggregate/verify_share always resolve the right wallet. This
+    // closes both (a) the rebind window that outlived a member's Round2 (the live-entry
+    // set is empty in the consumed-but-unaggregated gap) and (b) binding through another
+    // wallet's idle DKG session (where dkg_result would otherwise win over bound_key_group
+    // and sign B's share against A's material, bypassing B's rekey/finalization gates).
     if let Some(existing) = guard.sessions.get(&request.session_id) {
-        if !existing.interactive_signing.is_empty()
-            && existing
-                .bound_key_group
-                .as_deref()
-                .is_some_and(|bound| bound != request.key_group)
-        {
-            return Err(EngineError::SessionConflict {
-                session_id: request.session_id.clone(),
-            });
+        let established = existing
+            .dkg_result
+            .as_ref()
+            .map(|dkg| dkg.key_group.as_str())
+            .or(existing.bound_key_group.as_deref());
+        if let Some(established) = established {
+            if established != request.key_group {
+                return Err(EngineError::SessionConflict {
+                    session_id: request.session_id.clone(),
+                });
+            }
         }
     }
 

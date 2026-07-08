@@ -7619,6 +7619,64 @@ fn interactive_open_refuses_to_rebind_a_live_session_to_a_different_key_group() 
 }
 
 #[test]
+fn interactive_open_refuses_to_bind_through_another_wallets_dkg_session() {
+    // If request.session_id names wallet A's (idle) DKG session but the request's
+    // key_group is wallet B, Open must NOT install B into A's session: with dkg_result
+    // A present, later Round2/Aggregate/verify_share would resolve A's material while
+    // signing B's share (wrong wallet, bypassing B's rekey/finalization gates). A
+    // session belongs to ONE key group for its lifetime, so the mismatch is rejected -
+    // even with no live members (dkg_result establishes the binding).
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let wallet_a = "wallet-a-dkg-bind";
+    let wallet_b = "wallet-b-dkg-bind";
+    let key_group_a = "key-group-a-dkg-bind";
+    let key_group_b = "key-group-b-dkg-bind";
+    let message = [0x25u8; 32];
+    let included = [1u16, 2];
+
+    // wallet_a is an IDLE DKG session (dkg_result A, no live interactive entries);
+    // wallet_b provides key_group B's material so its wallet resolution succeeds.
+    ensure_interactive_dkg_session(wallet_a, key_group_a);
+    ensure_interactive_dkg_session(wallet_b, key_group_b);
+
+    // Open wallet A's DKG session id but for key_group B -> rejected.
+    let ctx = interactive_test_attempt_context(wallet_a, key_group_b, &message, &included, 1);
+    let err = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: wallet_a.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group_b.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        attempt_context: ctx,
+    })
+    .expect_err("binding through another wallet's DKG session must be rejected");
+    assert!(
+        matches!(err, EngineError::SessionConflict { .. }),
+        "unexpected error: {err:?}"
+    );
+
+    // Wallet A's DKG session is untouched: no B binding installed.
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(wallet_a).expect("wallet A session");
+        assert_eq!(
+            session
+                .dkg_result
+                .as_ref()
+                .map(|dkg| dkg.key_group.as_str()),
+            Some(key_group_a)
+        );
+        assert!(
+            session.bound_key_group.is_none(),
+            "no cross-wallet binding may be installed on wallet A's session"
+        );
+    }
+}
+
+#[test]
 fn max_sessions_limit_env_parser_is_strict_positive() {
     let _guard = lock_test_state();
     clear_state_storage_policy_overrides();

@@ -202,6 +202,10 @@ pub fn persist_distributed_dkg_key_package(
     mut request: PersistDistributedDkgKeyPackageRequest,
 ) -> Result<DkgResult, EngineError> {
     const OP: &str = "persist_distributed_dkg_key_package";
+    // data_hex is the serialized SECRET signing share. Move it into a zeroizing holder
+    // BEFORE any fallible check (validation, admission, quarantine can all return first),
+    // so serde's owned String is wiped on EVERY return path rather than dropped un-wiped.
+    let data_hex = Zeroizing::new(std::mem::take(&mut request.key_package.data_hex));
     validate_session_id(&request.session_id)?;
     // Gate BEFORE decoding or persisting any key material: this op writes signing
     // material to durable state that interactive signing trusts after restart, so
@@ -284,16 +288,7 @@ pub fn persist_distributed_dkg_key_package(
         auto_quarantine_config.as_ref(),
     )?;
 
-    let key_package = decode_key_package(
-        OP,
-        &request.key_package.identifier,
-        &request.key_package.data_hex,
-    )?;
-    // data_hex is the serialized SECRET signing share. serde owns this String
-    // independently of the C-side request buffer the Go caller scrubs, so wipe it here
-    // (decode_key_package already zeroized the decoded bytes); otherwise it would sit
-    // in freed Rust heap until reallocation.
-    request.key_package.data_hex.zeroize();
+    let key_package = decode_key_package(OP, &request.key_package.identifier, &data_hex)?;
 
     // The key package must belong to this participant AND be consistent with the
     // group public key package: matching identifier, embedded threshold, group
