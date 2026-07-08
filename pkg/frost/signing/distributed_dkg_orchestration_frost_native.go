@@ -122,7 +122,7 @@ func RunDistributedDKGForSeats(
 			selfPublicKey,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("cannot create the distributed DKG runner for seat [%v]: [%v]", seat, err)
+			return nil, fmt.Errorf("cannot create the distributed DKG runner for seat [%v]: [%w]", seat, err)
 		}
 		runners[seat] = runner
 	}
@@ -144,7 +144,7 @@ func RunDistributedDKGForSeats(
 		go func() {
 			dkgResult, err := runner.Run(ctx)
 			if err != nil {
-				outcomes <- seatOutcome{member: seat, err: fmt.Errorf("distributed DKG for seat [%v] failed: [%v]", seat, err)}
+				outcomes <- seatOutcome{member: seat, err: fmt.Errorf("distributed DKG for seat [%v] failed: [%w]", seat, err)}
 				return
 			}
 			persisted, err := engine.PersistDistributedDKGKeyPackage(
@@ -156,7 +156,7 @@ func RunDistributedDKGForSeats(
 				dkgResult.PublicKeyPackage,
 			)
 			if err != nil {
-				outcomes <- seatOutcome{member: seat, err: fmt.Errorf("cannot persist the key package for seat [%v]: [%v]", seat, err)}
+				outcomes <- seatOutcome{member: seat, err: fmt.Errorf("cannot persist the key package for seat [%v]: [%w]", seat, err)}
 				return
 			}
 			outcomes <- seatOutcome{member: seat, persist: persisted}
