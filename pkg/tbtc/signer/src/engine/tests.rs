@@ -1119,6 +1119,45 @@ fn persist_distributed_dkg_key_package_enforces_admission_policy() {
     clear_state_storage_policy_overrides();
 }
 
+// A distributed DKG whose group includes an auto-quarantined operator must be
+// refused before persistence, exactly as the dealer run_dkg refuses it.
+#[test]
+fn persist_distributed_dkg_key_package_rejects_quarantined_participant() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    std::env::set_var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV, "2");
+    std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY_ENV, "1");
+    std::env::set_var(TBTC_SIGNER_AUTO_QUARANTINE_INVALID_SHARE_PENALTY_ENV, "2");
+
+    // Operator 3, a member of the group below (members 1,2,3), is auto-quarantined.
+    {
+        let mut guard = state().expect("state").lock().expect("engine lock");
+        guard.quarantined_operator_identifiers.insert(3);
+    }
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(7);
+    let err =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: "session-persist-quarantine".to_string(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+            public_key_package: native_public,
+        })
+        .expect_err("a group including a quarantined operator must be rejected");
+    assert!(
+        matches!(err, EngineError::QuarantinePolicyRejected { ref reason_code, .. }
+            if reason_code == "operator_auto_quarantined"),
+        "unexpected error: {err:?}"
+    );
+
+    clear_state_storage_policy_overrides();
+}
+
 // The op writes signing material to durable state, so it must enforce the same
 // provenance gate run_dkg and the interactive path do: an unattested runtime
 // cannot install distributed-DKG signing material.

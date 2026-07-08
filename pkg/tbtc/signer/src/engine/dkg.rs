@@ -264,6 +264,26 @@ pub fn persist_distributed_dkg_key_package(
         request.threshold,
     )?;
 
+    // Enforce operator quarantine over the same derived participant set, exactly
+    // as the dealer run_dkg does: a distributed DKG whose group includes a
+    // quarantined operator must not be persisted and then trusted by later
+    // interactive signing sessions.
+    let auto_quarantine_config = load_auto_quarantine_config()?;
+    let quarantined_operator_identifiers = {
+        let guard = state()?
+            .lock()
+            .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+        guard.quarantined_operator_identifiers.clone()
+    };
+    let participant_identifiers: Vec<u16> =
+        admission_participant_identifiers.iter().copied().collect();
+    enforce_not_quarantined_identifiers(
+        &request.session_id,
+        &participant_identifiers,
+        &quarantined_operator_identifiers,
+        auto_quarantine_config.as_ref(),
+    )?;
+
     let key_package = decode_key_package(
         OP,
         &request.key_package.identifier,
