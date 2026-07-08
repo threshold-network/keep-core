@@ -7499,6 +7499,55 @@ fn persisted_engine_state_rejects_session_registry_over_limit() {
 }
 
 #[test]
+fn interactive_open_cross_session_respects_the_session_cap() {
+    // A fresh RoastSessionID per message must not let Open grow the session registry
+    // past TBTC_SIGNER_MAX_SESSIONS: otherwise the cross-session path could build an
+    // over-limit registry that the reload path (see the test above) then rejects,
+    // stranding the node's persisted state. Open enforces the SAME total-session cap as
+    // every other session-creating path; a reopen of an existing session stays exempt.
+    let _guard = lock_test_state();
+    reset_for_tests();
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "1");
+
+    let wallet_session = "wallet-dkg-session-cap";
+    let key_group = "cross-session-cap-key-group";
+    let message = [0x23u8; 32];
+    let included = [1u16, 2];
+
+    // The wallet DKG session fills the cap (1 of 1).
+    ensure_interactive_dkg_session(wallet_session, key_group);
+
+    // A distinct signing session would be a SECOND session -> rejected by the cap,
+    // BEFORE any per-signing state is installed.
+    let attempt_context =
+        interactive_test_attempt_context("roast-over-cap", key_group, &message, &included, 1);
+    let err = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: "roast-over-cap".to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        attempt_context,
+    })
+    .expect_err("a new cross-session Open at the session cap must be rejected");
+    assert!(
+        matches!(err, EngineError::Internal(ref m) if m.contains("reached max")),
+        "unexpected error: {err:?}"
+    );
+    // The over-cap session must NOT have been created.
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        assert!(
+            !guard.sessions.contains_key("roast-over-cap"),
+            "a capped-out Open must not create the session"
+        );
+    }
+
+    std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
+}
+
+#[test]
 fn max_sessions_limit_env_parser_is_strict_positive() {
     let _guard = lock_test_state();
     clear_state_storage_policy_overrides();

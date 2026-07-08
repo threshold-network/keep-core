@@ -380,6 +380,10 @@ pub fn interactive_session_open(
     // Create the per-signing session on first Open if it is distinct from the wallet
     // DKG session (the production case). Its DKG material is NOT copied here - it stays
     // the single wallet copy, resolved by key_group; only per-signing state lives here.
+    // Bound by the SAME total-session cap as every other session-creating path (a fresh
+    // RoastSessionID per message would otherwise let the registry grow unbounded and
+    // then be rejected on reload); a reopen of an existing session is exempt.
+    ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
     let session = guard
         .sessions
         .entry(request.session_id.clone())
