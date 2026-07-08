@@ -222,14 +222,36 @@ pub fn persist_distributed_dkg_key_package(
     }
 
     let public_key_package = native_public_key_package_to_frost(OP, &request.public_key_package)?;
+
+    // Enforce the SAME DKG admission policy the dealer run_dkg enforces, over the
+    // participant set derived from the group public key package (its verifying
+    // shares are keyed by each member's canonical FROST identifier). Otherwise a
+    // caller could persist a package that omits a required participant or includes
+    // a non-allowlisted one, and interactive signing would later trust it.
+    let admission_participant_identifiers: HashSet<u16> = public_key_package
+        .verifying_shares()
+        .keys()
+        .filter_map(|identifier| frost_identifier_to_u16(*identifier))
+        .collect();
+    enforce_admission_policy_for(
+        &request.session_id,
+        public_key_package.verifying_shares().len(),
+        &admission_participant_identifiers,
+        request.threshold,
+    )?;
+
     let key_package = decode_key_package(
         OP,
         &request.key_package.identifier,
         &request.key_package.data_hex,
     )?;
 
-    // The key package must belong to this participant and be a genuine member of
-    // the group (present in the public key package).
+    // The key package must belong to this participant AND be consistent with the
+    // group public key package: matching identifier, embedded threshold, group
+    // verifying key, and this participant's verifying share. An inconsistent
+    // package (e.g. min_signers 3 vs a stored threshold of 2, or a share from a
+    // different DKG) would let interactive signing open an attempt it can never
+    // complete and burn it at share release.
     let frost_identifier =
         participant_identifier_to_frost_identifier(request.participant_identifier)?;
     if *key_package.identifier() != frost_identifier {
@@ -237,13 +259,30 @@ pub fn persist_distributed_dkg_key_package(
             "{OP}: key package identifier does not match participant_identifier"
         )));
     }
-    if !public_key_package
-        .verifying_shares()
-        .contains_key(&frost_identifier)
-    {
+    if *key_package.min_signers() != request.threshold {
         return Err(EngineError::Validation(format!(
-            "{OP}: participant_identifier is not a member of the public key package"
+            "{OP}: key package min_signers [{}] does not match threshold [{}]",
+            *key_package.min_signers(),
+            request.threshold
         )));
+    }
+    if key_package.verifying_key() != public_key_package.verifying_key() {
+        return Err(EngineError::Validation(format!(
+            "{OP}: key package group verifying key does not match the public key package"
+        )));
+    }
+    match public_key_package.verifying_shares().get(&frost_identifier) {
+        None => {
+            return Err(EngineError::Validation(format!(
+                "{OP}: participant_identifier is not a member of the public key package"
+            )))
+        }
+        Some(verifying_share) if verifying_share != key_package.verifying_share() => {
+            return Err(EngineError::Validation(format!(
+                "{OP}: key package verifying share does not match the public key package"
+            )))
+        }
+        Some(_) => {}
     }
 
     let key_group = public_key_package

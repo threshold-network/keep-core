@@ -1038,6 +1038,23 @@ fn persist_distributed_dkg_key_package_rejects_mismatched_and_conflicting_inputs
         "got {mismatch:?}"
     );
 
+    // A threshold that disagrees with the key package's embedded min_signers (the
+    // material is 2-of-3) must be rejected at persist, not burned at share release.
+    let threshold_mismatch =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: "session-persist-threshold-mismatch".to_string(),
+            participant_identifier: 1,
+            threshold: 3,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+            public_key_package: native_public.clone(),
+        })
+        .expect_err("a threshold disagreeing with the key package must be rejected");
+    assert!(
+        matches!(threshold_mismatch, EngineError::Validation(_)),
+        "got {threshold_mismatch:?}"
+    );
+
     let session_id = "session-persist-conflict".to_string();
     persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
         session_id: session_id.clone(),
@@ -1064,6 +1081,37 @@ fn persist_distributed_dkg_key_package_rejects_mismatched_and_conflicting_inputs
         matches!(conflict, EngineError::SessionConflict { .. }),
         "got {conflict:?}"
     );
+}
+
+// The op writes durable signing material, so it enforces the DKG admission policy
+// over the participant set DERIVED from the public key package: a group that
+// includes a non-allowlisted participant is rejected before anything is stored.
+#[test]
+fn persist_distributed_dkg_key_package_enforces_admission_policy() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    std::env::set_var(TBTC_SIGNER_ENFORCE_ADMISSION_POLICY_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_ADMISSION_ALLOWLIST_IDENTIFIERS_ENV, "1,2");
+
+    // The group's members are 1, 2, 3 (from the public key package); member 3 is
+    // not on the allowlist, so persistence must be refused.
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(7);
+    let err =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: "session-persist-admission".to_string(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+            public_key_package: native_public,
+        })
+        .expect_err("a group with a non-allowlisted participant must be rejected");
+
+    let EngineError::AdmissionPolicyRejected { reason_code, .. } = err else {
+        panic!("unexpected error variant: {err:?}");
+    };
+    assert_eq!(reason_code, "participant_identifier_not_allowlisted");
 }
 
 // The op writes signing material to durable state, so it must enforce the same

@@ -38,7 +38,10 @@ const TBTC_SIGNER_VERSION: &str = "tbtc-signer/0.1.0-bootstrap";
 /// a new field or enum value can appear in an existing response that an old bridge does
 /// not tolerate, that is a MAJOR bump.
 const TBTC_SIGNER_ABI_MAJOR: u32 = 1;
-const TBTC_SIGNER_ABI_MINOR: u32 = 0;
+// Minor 1 adds the additive, backward-compatible symbol
+// frost_tbtc_persist_distributed_dkg_key_package; a bridge that needs it must
+// require abi_minor >= 1 so it fail-closes against an older lib lacking the symbol.
+const TBTC_SIGNER_ABI_MINOR: u32 = 1;
 use engine::TBTC_SIGNER_ALLOW_BOOTSTRAP_ENV;
 #[cfg(test)]
 use engine::TBTC_SIGNER_PROFILE_ENV;
@@ -1176,9 +1179,10 @@ mod tests {
             serde_json::from_slice(&payload).expect("abi version payload decode");
         // The enforced FFI contract starts at 1.0; bump deliberately per the
         // TBTC_SIGNER_ABI_MAJOR / TBTC_SIGNER_ABI_MINOR rules. This test pins the
-        // current value so an accidental bump is caught.
+        // current value so an accidental bump is caught. Minor is 1 since adding
+        // frost_tbtc_persist_distributed_dkg_key_package (additive symbol).
         assert_eq!(abi.abi_major, 1);
-        assert_eq!(abi.abi_minor, 0);
+        assert_eq!(abi.abi_minor, 1);
     }
 
     #[test]

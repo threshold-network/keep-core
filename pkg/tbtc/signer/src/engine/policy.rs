@@ -175,53 +175,69 @@ pub(crate) fn reject_admission_policy(
 }
 
 pub(crate) fn enforce_admission_policy(request: &RunDkgRequest) -> Result<(), EngineError> {
+    let participant_identifiers: HashSet<u16> = request
+        .participants
+        .iter()
+        .map(|participant| participant.identifier)
+        .collect();
+    enforce_admission_policy_for(
+        &request.session_id,
+        request.participants.len(),
+        &participant_identifiers,
+        request.threshold,
+    )
+}
+
+/// Admission checks over the raw participant primitives, shared by the dealer
+/// `run_dkg` and the distributed-DKG persist path (which derives the participant
+/// identifiers from the group public key package rather than a dealer request).
+pub(crate) fn enforce_admission_policy_for(
+    session_id: &str,
+    participant_count: usize,
+    participant_identifiers: &HashSet<u16>,
+    threshold: u16,
+) -> Result<(), EngineError> {
     let policy = match load_admission_policy_config() {
         Ok(Some(policy)) => policy,
         Ok(None) => return Ok(()),
         Err(error) => {
             return reject_admission_policy(
-                &request.session_id,
+                session_id,
                 "invalid_policy_configuration",
                 error.to_string(),
             )
         }
     };
 
-    if request.participants.len() < policy.min_participants {
+    if participant_count < policy.min_participants {
         return reject_admission_policy(
-            &request.session_id,
+            session_id,
             "participant_count_below_policy_minimum",
             format!(
                 "participant count [{}] below policy minimum [{}]",
-                request.participants.len(),
-                policy.min_participants
+                participant_count, policy.min_participants
             ),
         );
     }
 
-    if request.threshold < policy.min_threshold {
+    if threshold < policy.min_threshold {
         return reject_admission_policy(
-            &request.session_id,
+            session_id,
             "threshold_below_policy_minimum",
             format!(
                 "threshold [{}] below policy minimum [{}]",
-                request.threshold, policy.min_threshold
+                threshold, policy.min_threshold
             ),
         );
     }
 
-    let participant_identifiers: HashSet<u16> = request
-        .participants
-        .iter()
-        .map(|participant| participant.identifier)
-        .collect();
     if let Some(required_identifier) = policy
         .required_identifiers
         .iter()
         .find(|identifier| !participant_identifiers.contains(identifier))
     {
         return reject_admission_policy(
-            &request.session_id,
+            session_id,
             "required_identifier_missing",
             format!(
                 "required identifier [{}] missing from request",
@@ -236,7 +252,7 @@ pub(crate) fn enforce_admission_policy(request: &RunDkgRequest) -> Result<(), En
             .find(|identifier| !allowlist_identifiers.contains(identifier))
         {
             return reject_admission_policy(
-                &request.session_id,
+                session_id,
                 "participant_identifier_not_allowlisted",
                 format!(
                     "participant identifier [{}] not present in configured allowlist",
@@ -246,7 +262,7 @@ pub(crate) fn enforce_admission_policy(request: &RunDkgRequest) -> Result<(), En
         }
     }
 
-    log_policy_decision("admission_policy", &request.session_id, "allow", "ok");
+    log_policy_decision("admission_policy", session_id, "allow", "ok");
     Ok(())
 }
 
