@@ -176,6 +176,18 @@ func TestDistributedDKG_PersistThenInteractiveSign(t *testing.T) {
 		frostIDByMember[group.MemberIndex(id.ParticipantIdentifier)] = id.FrostIdentifier
 	}
 
+	// The node builds DKG identifiers with CanonicalFROSTIdentifier; it must equal
+	// what the engine derives for the same participant, or the DKG shares under an
+	// identifier the signing path cannot look up.
+	for _, m := range signingMembers {
+		if got := CanonicalFROSTIdentifier(uint16(m)); got != frostIDByMember[m] {
+			t.Fatalf(
+				"CanonicalFROSTIdentifier(%d) = %s, but the engine derived %s",
+				m, got, frostIDByMember[m],
+			)
+		}
+	}
+
 	// Open + Round1 for each signing seat ON ITS OWN engine (its persisted state).
 	var attemptID string
 	commitments := make([]nativeFROSTCommitment, 0, len(signingMembers))
