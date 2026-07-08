@@ -703,6 +703,7 @@ fn persisted_session_state_fixture() -> PersistedSessionState {
         emergency_rekey_event: None,
         consumed_interactive_attempt_markers: vec![],
         aggregated_interactive_attempt_markers: vec![],
+        bound_key_group: None,
     }
 }
 
@@ -7496,6 +7497,30 @@ fn persisted_engine_state_rejects_session_registry_over_limit() {
     expect_internal_error_contains(err, "persisted session registry size [3] exceeds max [2]");
 
     clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn persisted_session_state_round_trip_preserves_bound_key_group() {
+    // A cross-session signing session has no dkg_result, so bound_key_group is the only
+    // durable link back to the wallet DKG. It MUST survive a persist/reload: otherwise an
+    // InteractiveAggregate/verify_share that runs after a restart (past a member's Round2,
+    // where the live state is already gone) would resolve neither dkg_result nor
+    // bound_key_group and return DkgNotReady, stranding the collected shares.
+    let session = SessionState {
+        bound_key_group: Some("wallet-key-group".to_string()),
+        ..Default::default()
+    };
+    let persisted = PersistedSessionState::try_from(&session).expect("serialize");
+    assert_eq!(
+        persisted.bound_key_group.as_deref(),
+        Some("wallet-key-group")
+    );
+    let restored = SessionState::try_from(persisted).expect("deserialize");
+    assert_eq!(
+        restored.bound_key_group.as_deref(),
+        Some("wallet-key-group"),
+        "bound_key_group must survive persist/reload for cross-session signing"
+    );
 }
 
 #[test]

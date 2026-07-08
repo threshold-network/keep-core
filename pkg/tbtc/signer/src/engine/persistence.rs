@@ -63,6 +63,15 @@ pub(crate) struct PersistedSessionState {
     // deserializes to an empty set.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) aggregated_interactive_attempt_markers: Vec<String>,
+    // The wallet key_group a per-signing (cross-session) attempt is bound to. Durable
+    // ALONGSIDE the interactive markers: for a distributed-DKG wallet the signing
+    // session has no dkg_result, so this is the ONLY link back to the wallet DKG. It
+    // must survive a restart between Round2 (shares consumed, markers written) and
+    // InteractiveAggregate, or Aggregate/verify_share would resolve neither dkg_result
+    // nor bound_key_group and return DkgNotReady, stranding the collected shares. Public
+    // (a key group id), not secret. serde(default) keeps pre-existing state loadable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) bound_key_group: Option<String>,
 }
 
 // Hand-written Debug: `sign_message_hex` is `SecretString`
@@ -126,6 +135,7 @@ impl std::fmt::Debug for PersistedSessionState {
                 "aggregated_interactive_attempt_markers",
                 &self.aggregated_interactive_attempt_markers,
             )
+            .field("bound_key_group", &self.bound_key_group)
             .finish()
     }
 }
@@ -1448,9 +1458,11 @@ impl TryFrom<PersistedSessionState> for SessionState {
             // construction after a restart, so the attempt fails safe and
             // only the consumption markers survive. Empty map (no live members).
             interactive_signing: BTreeMap::new(),
-            // Transient, like the live interactive state above: re-set on the next
-            // Open, which must precede any Round2/Aggregate in a fresh process.
-            bound_key_group: None,
+            // Restore the wallet binding: for a cross-session signing session it is the
+            // only durable link to the wallet DKG, needed so an InteractiveAggregate that
+            // runs after a restart (past a member's Round2) can still resolve the wallet
+            // by key_group. Public data; survives with the consumed/aggregate markers.
+            bound_key_group: persisted.bound_key_group,
             consumed_interactive_attempt_markers,
             aggregated_interactive_attempt_markers,
         })
@@ -1594,6 +1606,7 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             emergency_rekey_event: session_state.emergency_rekey_event.clone(),
             consumed_interactive_attempt_markers,
             aggregated_interactive_attempt_markers,
+            bound_key_group: session_state.bound_key_group.clone(),
         })
     }
 }
