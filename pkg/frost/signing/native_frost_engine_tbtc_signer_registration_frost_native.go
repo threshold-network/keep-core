@@ -852,6 +852,11 @@ func (bttse *buildTaggedTBTCSignerEngine) GenerateNoncesAndCommitments(
 	if err != nil {
 		return nil, "", nil, err
 	}
+	// requestPayload serializes this seat's SECRET signing key package. Scrub the
+	// Go-side buffer after use (the C-heap copy is wiped in the call helper), matching
+	// Sign / Part2 / Part3 / PersistDistributedDKGKeyPackage - this was the lone
+	// secret-bearing op missing the request scrub.
+	defer zeroBytes(requestPayload)
 
 	responsePayload, err := callBuildTaggedTBTCSignerGenerateNoncesAndCommitments(
 		requestPayload,
