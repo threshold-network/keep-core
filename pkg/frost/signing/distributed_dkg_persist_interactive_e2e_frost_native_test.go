@@ -45,9 +45,13 @@ func TestDistributedDKG_PersistThenInteractiveSign(t *testing.T) {
 	sessionID := fmt.Sprintf("real-cgo-distributed-persist-%d", realCgoSessionSeq.Add(1))
 	message := bytesOf(0x42, 32)
 
-	// Per-seat engines: each node has its OWN engine + persisted state, as
-	// production deploys them. (The dealer path and the multi-seat interactive
-	// test put every key package in one engine; a real distributed node does not.)
+	// One engine handle per seat. NOTE: in-process these are all handles to the
+	// SAME global engine state, so persisting each seat ACCUMULATES its key
+	// package into one shared session - that is what lets the seats sign together
+	// here, and it exercises the multi-seat-operator accumulate path. In
+	// production each node is a separate process with its own state holding only
+	// its own seat; that single-seat case (a node opening a session whose included
+	// set spans peers it does not hold) is covered separately at the end.
 	engines := make(map[group.MemberIndex]*buildTaggedTBTCSignerEngine, n)
 	for _, m := range members {
 		engines[m] = &buildTaggedTBTCSignerEngine{}
@@ -250,4 +254,38 @@ func TestDistributedDKG_PersistThenInteractiveSign(t *testing.T) {
 		"distributed DKG -> persist -> interactive %d-of-%d signature verifies under group key %s…",
 		threshold, n, keyGroup[:16],
 	)
+
+	// ---- Single-seat-node coverage: a node that persisted ONLY its own key
+	// package must still OPEN a session whose included set spans OTHER members it
+	// does not hold - OPEN validates the included set against the public key
+	// package's verifying shares, not the local key-package map. This is the real
+	// distributed-node scenario the all-seats-accumulated path above does not
+	// exercise (there every included member is already in dkg_key_packages). ----
+	soloSession := sessionID + "-solo"
+	soloResult, err := engines[members[0]].PersistDistributedDKGKeyPackage(
+		soloSession,
+		uint16(members[0]),
+		threshold,
+		uint16(n),
+		outcomes[members[0]].result.KeyPackage,
+		outcomes[members[0]].result.PublicKeyPackage,
+	)
+	if err != nil {
+		t.Fatalf("persist single seat into a fresh session: %v", err)
+	}
+	soloDerived, err := engines[members[0]].DeriveInteractiveAttemptContext(
+		soloSession, message, soloResult.KeyGroup, threshold, 0, includedParticipants,
+	)
+	if err != nil {
+		t.Fatalf("derive single-seat attempt context: %v", err)
+	}
+	// members[1] is a DKG participant (present in the public key package) but was
+	// NOT persisted into soloSession, so its member entry is absent from that
+	// session's key-package map; the open must still succeed.
+	if _, err := engines[members[0]].InteractiveSessionOpen(
+		soloSession, uint16(members[0]), message, soloResult.KeyGroup, threshold, nil, soloDerived.AttemptContext,
+	); err != nil {
+		t.Fatalf("single-seat open with an included set spanning peers must succeed: %v", err)
+	}
+	t.Logf("single-seat node (only its own key package) opened a session spanning peers via the public key package")
 }
