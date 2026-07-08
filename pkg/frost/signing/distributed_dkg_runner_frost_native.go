@@ -37,11 +37,17 @@ import (
 //     to me) -> this node's long-term KeyPackage (its secret share) + the group
 //     PublicKeyPackage (agreed identically by every honest member).
 //
-// Round-2 packages carry secret-share material and MUST be delivered
-// confidentially per recipient in production (Phase 1 encrypts them to the
-// recipient's operator key, reusing the pkg/tecdsa/dkg ephemeral-ECDH envelope).
-// Here they are addressed but not yet encrypted; the bus abstraction keeps that
-// change local to the transport.
+// Round-2 packages carry secret-share material and are delivered confidentially
+// per recipient: each share is ECIES-sealed to the recipient's STATIC operator
+// key (a fresh sender ephemeral per message; see
+// distributed_dkg_round2_seal_frost_native.go). NOTE the forward-secrecy scope:
+// this gives per-message secrecy on the SENDER side only. Unlike pkg/tecdsa/dkg,
+// which runs a two-sided per-DKG EPHEMERAL key exchange, the recipient key here
+// is long-lived, so an observer who records the round-2 broadcasts and LATER
+// obtains recipients' operator private keys can recover the shares addressed to
+// them. Closing that gap would require an ephemeral-key-exchange round (a
+// deliberate trade-off deferred here); the bus abstraction keeps any such change
+// local to the transport.
 
 // distributedDKGEngine is the subset of the native FROST engine the DKG
 // orchestrator needs. *buildTaggedTBTCSignerEngine satisfies it.

@@ -5,7 +5,6 @@ package signing
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -112,14 +111,10 @@ func TestDistributedDKG_PersistThenInteractiveSign(t *testing.T) {
 	wg.Wait()
 
 	for _, m := range members {
-		if errors.Is(outcomes[m].err, ErrNativeCryptographyUnavailable) {
-			t.Skip("linked tbtc-signer FFI symbols unavailable")
-		}
+		// Skips in dev when the lib is absent/stale, fails under the require-cgo gate.
+		skipFrostUnavailable(t, fmt.Sprintf("distributed DKG (member %d)", m), outcomes[m].err)
 	}
 	for _, m := range members {
-		if outcomes[m].err != nil {
-			t.Fatalf("member %d distributed DKG failed: %v", m, outcomes[m].err)
-		}
 		if outcomes[m].result == nil || outcomes[m].result.KeyPackage == nil ||
 			outcomes[m].result.PublicKeyPackage == nil {
 			t.Fatalf("member %d produced an incomplete DKG result", m)

@@ -5,7 +5,6 @@ package signing
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -123,12 +122,14 @@ func TestDistributedDKG_MultiNode_NetTransport(t *testing.T) {
 
 	results := make(map[group.MemberIndex]*NativeTBTCSignerDKGResult, n)
 	for outcome := range outcomes {
-		if errors.Is(outcome.err, ErrNativeCryptographyUnavailable) {
-			t.Skip("linked tbtc-signer FFI symbols unavailable")
-		}
-		if outcome.err != nil {
-			t.Fatalf("node for seat %d failed: %v", outcome.member, outcome.err)
-		}
+		// Skips in dev when the lib is absent/stale, but FAILS under the require-cgo
+		// gate (and fatals on any other error), so the cgo job cannot silently drop
+		// this coverage.
+		skipFrostUnavailable(
+			t,
+			fmt.Sprintf("multi-node distributed DKG (seat %d)", outcome.member),
+			outcome.err,
+		)
 		seatResult, ok := outcome.persist[outcome.member]
 		if !ok {
 			t.Fatalf("node for seat %d returned no persist result for its own seat", outcome.member)

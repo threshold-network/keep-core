@@ -43,6 +43,22 @@ func executeFrostDKGIfPossible(
 		return
 	}
 
+	// Distributed DKG produces signing material usable ONLY via the interactive
+	// path; with interactive signing disabled, signing would route to the coarse
+	// path, which cannot reconstruct a distributed key, and every signature would
+	// fail. Refuse to run rather than create an unsignable wallet, coupling the DKG
+	// switch to the signing switch.
+	if !frostsigning.InteractiveSigningOptInEnabled() {
+		logger.Errorf(
+			"FROST DKG with seed [0x%x] selected this operator, but the distributed "+
+				"DKG requires interactive signing (%s) to be enabled; refusing to run to "+
+				"avoid creating a wallet that cannot sign",
+			event.Seed,
+			frostsigning.InteractiveSigningOptInEnvVar,
+		)
+		return
+	}
+
 	membershipValidator := group.NewMembershipValidator(
 		logger,
 		groupSelectionResult.OperatorsAddresses,
