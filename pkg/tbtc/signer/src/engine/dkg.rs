@@ -199,7 +199,7 @@ pub fn run_dkg(request: RunDkgRequest) -> Result<DkgResult, EngineError> {
 /// one session (same key group). There is NO production gate: this is the real
 /// distributed path, not the transitional dealer one.
 pub fn persist_distributed_dkg_key_package(
-    request: PersistDistributedDkgKeyPackageRequest,
+    mut request: PersistDistributedDkgKeyPackageRequest,
 ) -> Result<DkgResult, EngineError> {
     const OP: &str = "persist_distributed_dkg_key_package";
     validate_session_id(&request.session_id)?;
@@ -289,6 +289,11 @@ pub fn persist_distributed_dkg_key_package(
         &request.key_package.identifier,
         &request.key_package.data_hex,
     )?;
+    // data_hex is the serialized SECRET signing share. serde owns this String
+    // independently of the C-side request buffer the Go caller scrubs, so wipe it here
+    // (decode_key_package already zeroized the decoded bytes); otherwise it would sit
+    // in freed Rust heap until reallocation.
+    request.key_package.data_hex.zeroize();
 
     // The key package must belong to this participant AND be consistent with the
     // group public key package: matching identifier, embedded threshold, group
@@ -335,9 +340,15 @@ pub fn persist_distributed_dkg_key_package(
     // share. Verify signing_share -> verifying_share, so a corrupt or malformed
     // key package cannot be stored and then burn signing attempts producing shares
     // that never verify.
-    if frost::keys::VerifyingShare::from(key_package.signing_share().clone())
-        != *key_package.verifying_share()
-    {
+    // signing_share() is Copy (frost-core SigningShare is Copy + DefaultIsZeroes, NOT
+    // ZeroizeOnDrop), so bind the extracted copy and zeroize it right after the check -
+    // otherwise the secret scalar lingers as un-wiped stack residue. (The copy frost's
+    // own by-value VerifyingShare::from makes internally is beyond our reach.)
+    let mut signing_share = *key_package.signing_share();
+    let derives_to_verifying_share =
+        frost::keys::VerifyingShare::from(signing_share) == *key_package.verifying_share();
+    signing_share.zeroize();
+    if !derives_to_verifying_share {
         return Err(EngineError::Validation(format!(
             "{OP}: key package signing share does not derive to its verifying share"
         )));

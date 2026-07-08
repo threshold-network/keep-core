@@ -7548,6 +7548,77 @@ fn interactive_open_cross_session_respects_the_session_cap() {
 }
 
 #[test]
+fn interactive_open_refuses_to_rebind_a_live_session_to_a_different_key_group() {
+    // A per-signing session is keyed by RoastSessionID (message/root/start-block), NOT
+    // key_group, so two wallets can collide on one session id. While a member is
+    // mid-signing under one wallet key, an Open for a DIFFERENT key group on the same
+    // session id must be REJECTED - not silently rebind bound_key_group and make the
+    // live member's Round2/Aggregate resolve the wrong wallet material.
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let wallet_a = "wallet-dkg-a-rebind";
+    let wallet_b = "wallet-dkg-b-rebind";
+    let key_group_a = "key-group-a-rebind";
+    let key_group_b = "key-group-b-rebind";
+    let shared_session = "roast-collision-session";
+    let message = [0x24u8; 32];
+    let included = [1u16, 2];
+
+    ensure_interactive_dkg_session(wallet_a, key_group_a);
+    ensure_interactive_dkg_session(wallet_b, key_group_b);
+
+    // Member 1 opens under wallet A on the shared session and runs Round1 (a LIVE entry).
+    let ctx_a =
+        interactive_test_attempt_context(shared_session, key_group_a, &message, &included, 1);
+    let opened_a = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: shared_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group_a.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        attempt_context: ctx_a,
+    })
+    .expect("wallet A opens on the shared session");
+    interactive_round1(InteractiveRound1Request {
+        session_id: shared_session.to_string(),
+        attempt_id: opened_a.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("wallet A round 1 leaves a live entry");
+
+    // Wallet B tries to open the SAME session id while A is live -> rejected.
+    let ctx_b =
+        interactive_test_attempt_context(shared_session, key_group_b, &message, &included, 1);
+    let err = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: shared_session.to_string(),
+        member_identifier: 2,
+        message_hex: hex::encode(message),
+        key_group: key_group_b.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        attempt_context: ctx_b,
+    })
+    .expect_err("a different key group must not rebind a live session");
+    assert!(
+        matches!(err, EngineError::SessionConflict { .. }),
+        "unexpected error: {err:?}"
+    );
+
+    // Wallet A's binding and live entry are intact - not corrupted by B's attempt.
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(shared_session).expect("shared session");
+        assert_eq!(session.bound_key_group.as_deref(), Some(key_group_a));
+        assert!(
+            session.interactive_signing.contains_key(&1),
+            "wallet A's live member entry must survive B's rejected open"
+        );
+    }
+}
+
+#[test]
 fn max_sessions_limit_env_parser_is_strict_positive() {
     let _guard = lock_test_state();
     clear_state_storage_policy_overrides();

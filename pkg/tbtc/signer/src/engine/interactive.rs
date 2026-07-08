@@ -377,6 +377,26 @@ pub fn interactive_session_open(
         }
     }
 
+    // A per-signing session is keyed by RoastSessionID (message/root/start-block), NOT
+    // by key_group, so two DIFFERENT wallets signing the same digest at the same block
+    // on a node that holds members of both could collide on one session id. Refuse to
+    // rebind the session to a different wallet key while ANY member is mid-signing under
+    // the current one - otherwise that live member's Round2/Aggregate would resolve the
+    // wrong wallet material by key_group (an isolation break). An idle session (no live
+    // members) may rebind freely; same-key-group co-signers are unaffected.
+    if let Some(existing) = guard.sessions.get(&request.session_id) {
+        if !existing.interactive_signing.is_empty()
+            && existing
+                .bound_key_group
+                .as_deref()
+                .is_some_and(|bound| bound != request.key_group)
+        {
+            return Err(EngineError::SessionConflict {
+                session_id: request.session_id.clone(),
+            });
+        }
+    }
+
     // Create the per-signing session on first Open if it is distinct from the wallet
     // DKG session (the production case). Its DKG material is NOT copied here - it stays
     // the single wallet copy, resolved by key_group; only per-signing state lives here.

@@ -173,15 +173,20 @@ pub fn dkg_part3(request: DkgPart3Request) -> Result<DkgPart3Result, EngineError
 }
 
 pub fn generate_nonces_and_commitments(
-    request: GenerateNoncesAndCommitmentsRequest,
+    mut request: GenerateNoncesAndCommitmentsRequest,
 ) -> Result<GenerateNoncesAndCommitmentsResult, EngineError> {
     enforce_provenance_gate()?;
 
-    let key_package = decode_key_package(
+    let key_package_result = decode_key_package(
         "GenerateNoncesAndCommitments",
         &request.key_package_identifier,
         &request.key_package_hex,
-    )?;
+    );
+    // key_package_hex is the serialized SECRET signing share. serde owns this String
+    // independently of the C-side buffer the Go caller scrubs; wipe it on both the
+    // success and error paths (decode already zeroized the decoded bytes).
+    request.key_package_hex.zeroize();
+    let key_package = key_package_result?;
     let mut rng = zeroizing_rng_from_os();
     let (mut nonces, commitments) = frost::round1::commit(key_package.signing_share(), &mut rng);
     let commitment_bytes = match commitments.serialize() {
@@ -233,7 +238,7 @@ pub fn new_signing_package(
     })
 }
 
-pub fn sign_share(request: SignShareRequest) -> Result<SignShareResult, EngineError> {
+pub fn sign_share(mut request: SignShareRequest) -> Result<SignShareResult, EngineError> {
     enforce_provenance_gate()?;
 
     let signing_package_bytes = decode_hex_field(
@@ -244,17 +249,23 @@ pub fn sign_share(request: SignShareRequest) -> Result<SignShareResult, EngineEr
     let signing_package = frost::SigningPackage::deserialize(&signing_package_bytes)
         .map_err(|e| EngineError::Validation(format!("SignShare: invalid signing package: {e}")))?;
 
-    let mut nonces_bytes = decode_hex_field("SignShare", "nonces_hex", &request.nonces_hex)?;
+    let nonces_bytes_result = decode_hex_field("SignShare", "nonces_hex", &request.nonces_hex);
+    // nonces_hex is the serialized one-time signing NONCES (secret); scrub serde's copy.
+    request.nonces_hex.zeroize();
+    let mut nonces_bytes = nonces_bytes_result?;
     let nonces_result = frost::round1::SigningNonces::deserialize(&nonces_bytes);
     nonces_bytes.zeroize();
     let mut nonces = nonces_result
         .map_err(|e| EngineError::Validation(format!("SignShare: invalid nonces: {e}")))?;
 
-    let key_package = match decode_key_package(
+    let key_package_result = decode_key_package(
         "SignShare",
         &request.key_package_identifier,
         &request.key_package_hex,
-    ) {
+    );
+    // key_package_hex is the serialized SECRET signing share; scrub serde's copy.
+    request.key_package_hex.zeroize();
+    let key_package = match key_package_result {
         Ok(key_package) => key_package,
         Err(err) => {
             nonces.zeroize();
