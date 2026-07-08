@@ -198,6 +198,39 @@ func TestBroadcastChannelDKGBus_ReplayDeliversAndDedups(t *testing.T) {
 	}
 }
 
+// TestDKGMessagePrebuffer_DrainAndForwardHandsOff covers the race-free handoff: draining
+// delivers the already-captured messages to the sink AND installs the sink so any message
+// the capture handler catches around the drain instant is forwarded live rather than
+// buffered-then-lost. (The handler's forward branch is exercised end-to-end by the
+// multi-node e2e; here we pin the DrainAndForward contract deterministically.)
+func TestDKGMessagePrebuffer_DrainAndForwardHandsOff(t *testing.T) {
+	f := newDKGBusAuthFixture(t, 8)
+
+	pb := &DKGMessagePrebuffer{capacity: 10}
+	pb.messages = []net.Message{dkgRound1Msg(1, f.operatorA, "sess", "buffered-round1")}
+
+	var forwarded []net.Message
+	pb.DrainAndForward(func(m net.Message) { forwarded = append(forwarded, m) })
+
+	if len(forwarded) != 1 {
+		t.Fatalf("the buffered message must be delivered to the sink on handoff; got %d", len(forwarded))
+	}
+	if payload := forwarded[0].Payload().(*dkgTransportMessage).payload; string(payload) != "buffered-round1" {
+		t.Fatalf("unexpected drained payload: %q", payload)
+	}
+	if pb.messages != nil {
+		t.Fatal("the buffer must be cleared after DrainAndForward")
+	}
+	if pb.forward == nil {
+		t.Fatal("the forward sink must be installed so post-handoff captures are forwarded, not lost")
+	}
+	// A capture arriving after handoff goes to the sink (what the Recv handler does).
+	pb.forward(dkgRound1Msg(2, f.operatorB, "sess", "post-handoff-round1"))
+	if len(forwarded) != 2 {
+		t.Fatal("a post-handoff capture must be forwarded to the sink")
+	}
+}
+
 func TestBroadcastChannelDKGBus_RejectsSpoofedSeat(t *testing.T) {
 	f := newDKGBusAuthFixture(t, 8)
 	sub := f.bus.Subscribe(1)

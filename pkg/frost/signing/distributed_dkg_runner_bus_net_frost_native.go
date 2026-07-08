@@ -224,16 +224,29 @@ func (b *broadcastChannelDKGBus) Replay(messages []net.Message) {
 	}
 }
 
+// Deliver feeds a single message through the same receive path as live delivery. It is
+// the per-message sink a DKGMessagePrebuffer forwards to at handoff (DrainAndForward),
+// deduped by handleMessage's content hash.
+func (b *broadcastChannelDKGBus) Deliver(message net.Message) {
+	b.handleMessage(message)
+}
+
 // DKGMessagePrebuffer captures inbound DKG transport messages from the moment DKG setup
 // begins - BEFORE the cross-node readiness-announcement barrier releases peers - and
 // holds them until the bus is Started and every seat has Subscribed, at which point the
-// orchestrator Replays them. Without it, a fast peer's round-1 broadcast can arrive at a
-// slower peer before that peer installed its DKG receiver; the transport drops it and
-// marks the pubsub sequence seen, suppressing retransmission and stalling collectRound1.
+// orchestrator hands off via DrainAndForward. Without it, a fast peer's round-1 broadcast
+// can arrive at a slower peer before that peer installed its DKG receiver; the transport
+// drops it and marks the pubsub sequence seen, suppressing retransmission and stalling
+// collectRound1.
 type DKGMessagePrebuffer struct {
 	mu       sync.Mutex
 	messages []net.Message
 	capacity int
+	// forward, once set by DrainAndForward, is where the capture handler sends every
+	// subsequent message instead of buffering it. This makes the handoff race-free: the
+	// handler and DrainAndForward share mu, so a message is EITHER in the drained buffer
+	// OR forwarded live - never dropped in the window around the handoff.
+	forward func(net.Message)
 }
 
 // StartDKGMessagePrebuffer registers the DKG transport unmarshalers (so inbound DKG
@@ -253,27 +266,42 @@ func StartDKGMessagePrebuffer(
 			return
 		}
 		pb.mu.Lock()
-		defer pb.mu.Unlock()
-		if len(pb.messages) < pb.capacity {
-			pb.messages = append(pb.messages, m)
+		forward := pb.forward
+		if forward == nil {
+			if len(pb.messages) < pb.capacity {
+				pb.messages = append(pb.messages, m)
+			}
+			pb.mu.Unlock()
+			return
 		}
+		pb.mu.Unlock()
+		// Post-handoff: forward straight to the live bus (deduped there). Called OUTSIDE
+		// the lock so the sink cannot contend with a concurrent DrainAndForward.
+		forward(m)
 	})
 	return pb
 }
 
-// Drain returns the captured messages and clears the buffer. The channel Recv handler
-// stays registered (the transport has no unsubscribe), but once the live bus is running
-// its content-hash dedup makes any further captures harmless; callers Drain exactly once
-// right after Start.
-func (pb *DKGMessagePrebuffer) Drain() []net.Message {
-	if pb == nil {
-		return nil
+// DrainAndForward hands the prebuffer off to the live bus with no lost-message window: it
+// snapshots-and-clears the captured messages AND installs sink as the destination for any
+// further captures, atomically under one lock. Because the capture handler takes the same
+// lock, every message is EITHER in the snapshot (then delivered through sink below) OR
+// forwarded to sink by the handler - so a message received before Start but delivered by
+// the channel's Recv goroutine around the handoff cannot be dropped. Call once, right
+// after Start and after every seat has Subscribed; the bus dedups by content hash, so
+// messages that also arrive live are ignored.
+func (pb *DKGMessagePrebuffer) DrainAndForward(sink func(net.Message)) {
+	if pb == nil || sink == nil {
+		return
 	}
 	pb.mu.Lock()
-	defer pb.mu.Unlock()
-	messages := pb.messages
+	buffered := pb.messages
 	pb.messages = nil
-	return messages
+	pb.forward = sink
+	pb.mu.Unlock()
+	for _, m := range buffered {
+		sink(m)
+	}
 }
 
 // Subscribe registers a receiver and returns its typed streams. The orchestrator

@@ -119,13 +119,18 @@ type DKGBus interface {
 	// dropped, and the transport may have already marked it seen and never
 	// retransmit it, stalling the DKG.
 	Start()
-	// Replay feeds messages captured by a DKGMessagePrebuffer - which starts intaking
-	// BEFORE the cross-node readiness barrier - through the receive path, so a peer's
-	// round-1 broadcast that arrived before this node installed its receiver (the
+	// Replay feeds a batch of messages captured by a DKGMessagePrebuffer - which starts
+	// intaking BEFORE the cross-node readiness barrier - through the receive path, so a
+	// peer's round-1 broadcast that arrived before this node installed its receiver (the
 	// window between the barrier releasing peers and Start) is not lost. Call after
 	// Start and after every seat has Subscribed; messages are deduplicated by content,
 	// so any that also arrived live are ignored.
 	Replay(messages []net.Message)
+	// Deliver feeds ONE message through the receive path. It is the sink a
+	// DKGMessagePrebuffer forwards to at handoff (DrainAndForward), so a message the
+	// prebuffer captures around the drain instant is delivered live rather than dropped.
+	// Deduplicated by content, like Replay.
+	Deliver(message net.Message)
 }
 
 // dkgBusSubscriber exposes one member's typed round streams. member is the seat
@@ -593,6 +598,9 @@ func (b *inProcessDKGBus) Start() {}
 // Replay is a no-op: the in-process bus has no real transport and no readiness
 // barrier, so there is no pre-barrier window to rescue messages from.
 func (b *inProcessDKGBus) Replay(_ []net.Message) {}
+
+// Deliver is a no-op for the same reason: no prebuffer forwards to the in-process bus.
+func (b *inProcessDKGBus) Deliver(_ net.Message) {}
 
 func (b *inProcessDKGBus) Broadcast(msg dkgMessage) {
 	b.mu.Lock()

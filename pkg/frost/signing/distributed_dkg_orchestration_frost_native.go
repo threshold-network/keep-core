@@ -132,13 +132,14 @@ func RunDistributedDKGForSeats(
 	// dropped (which the transport would not retransmit).
 	bus.Start()
 
-	// Replay anything the prebuffer captured BEFORE the readiness barrier: a peer that
-	// the barrier released ahead of us may have broadcast its round-1 before this node
-	// reached Start, and the transport would neither deliver (no subscriber yet) nor
-	// retransmit it. The prebuffer caught those off the channel from before the barrier;
-	// feed them through now (deduped against live delivery by content hash).
+	// Hand the prebuffer off to the live bus. It caught round-1 messages a peer broadcast
+	// after the readiness barrier released it but before this node reached Start (which
+	// the transport would neither deliver - no subscriber yet - nor retransmit). Draining
+	// and forwarding is race-free: the captured buffer is delivered AND any message the
+	// prebuffer catches around the drain instant is forwarded live, so none is lost in the
+	// handoff window. Deduped against live delivery by content hash.
 	if prebuffer != nil {
-		bus.Replay(prebuffer.Drain())
+		prebuffer.DrainAndForward(bus.Deliver)
 	}
 
 	type seatOutcome struct {
