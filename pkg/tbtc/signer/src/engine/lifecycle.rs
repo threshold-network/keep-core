@@ -132,15 +132,37 @@ pub fn trigger_emergency_rekey(
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    let session = guard.sessions.get_mut(&request.session_id).ok_or_else(|| {
-        EngineError::SessionNotFound {
-            session_id: request.session_id.clone(),
-        }
-    })?;
+
+    // Emergency rekey is a WALLET-level kill switch, and interactive Round2 reads it
+    // from the wallet (DKG) session resolved by key_group. Defense in depth: if a
+    // caller passes a per-signing session id (a distinct RoastSessionID bound to a
+    // wallet key but holding no DKG of its own), record the event on the WALLET session
+    // it serves, so the writer lands the kill switch exactly where every reader looks -
+    // the writer and reader can never diverge. A session that already holds the DKG
+    // resolves to itself, so co-located callers are unchanged.
+    let target_session_id = guard
+        .sessions
+        .get(&request.session_id)
+        .and_then(|session| {
+            if session.dkg_result.is_some() {
+                None
+            } else {
+                session.bound_key_group.clone()
+            }
+        })
+        .and_then(|key_group| resolve_wallet_session_id(&guard, &request.session_id, &key_group))
+        .unwrap_or_else(|| request.session_id.clone());
+
+    let session =
+        guard
+            .sessions
+            .get_mut(&target_session_id)
+            .ok_or_else(|| EngineError::SessionNotFound {
+                session_id: request.session_id.clone(),
+            })?;
     if session.emergency_rekey_event.is_some() {
         return Err(EngineError::Validation(format!(
-            "emergency rekey already triggered for session [{}]; event is immutable",
-            request.session_id
+            "emergency rekey already triggered for session [{target_session_id}]; event is immutable"
         )));
     }
     let triggered_at_unix = now_unix();
@@ -151,11 +173,11 @@ pub fn trigger_emergency_rekey(
     persist_engine_state_to_storage(&guard)?;
 
     Ok(TriggerEmergencyRekeyResult {
-        session_id: request.session_id.clone(),
+        session_id: target_session_id.clone(),
         emergency_rekey_required: true,
         reason: reason.to_string(),
         triggered_at_unix,
-        recommended_new_session_id: format!("{}-rekey-{}", request.session_id, triggered_at_unix),
+        recommended_new_session_id: format!("{target_session_id}-rekey-{triggered_at_unix}"),
     })
 }
 

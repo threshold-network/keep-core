@@ -160,115 +160,115 @@ pub fn interactive_session_open(
                 session_id: request.session_id.clone(),
             },
         )?;
-    let (key_package, canonical_included_participants) = {
-        let session = guard.sessions.get(&wallet_session_id).ok_or_else(|| {
-            EngineError::SessionNotFound {
-                session_id: wallet_session_id.clone(),
-            }
-        })?;
-        let dkg = session
-            .dkg_result
-            .as_ref()
-            .ok_or_else(|| EngineError::DkgNotReady {
-                session_id: request.session_id.clone(),
+    let (key_package, canonical_included_participants) =
+        {
+            let session = guard.sessions.get(&wallet_session_id).ok_or_else(|| {
+                EngineError::SessionNotFound {
+                    session_id: wallet_session_id.clone(),
+                }
             })?;
-        if request.key_group != dkg.key_group {
-            return Err(EngineError::Validation(
-                "key_group does not match DKG output for this session".to_string(),
-            ));
-        }
-        if request.threshold != dkg.threshold {
-            return Err(EngineError::Validation(format!(
-                "threshold [{}] does not match the DKG threshold [{}] for this session",
-                request.threshold, dkg.threshold
-            )));
-        }
-        let dkg_key_packages = session
-            .dkg_key_packages
-            .as_ref()
-            .ok_or_else(|| EngineError::Internal("missing DKG key package cache".to_string()))?;
-        // The public key package carries a verifying share for EVERY DKG
-        // participant, so it is the authoritative participant set. A distributed
-        // DKG node holds only its OWN secret key package (dkg_key_packages has a
-        // single entry), so the included-participants membership check below must
-        // use the public package, not dkg_key_packages.
-        let dkg_public_key_package = session
-            .dkg_public_key_package
-            .as_ref()
-            .ok_or_else(|| EngineError::Internal("missing DKG public key package".to_string()))?;
-        let key_package = dkg_key_packages
-            .get(&request.member_identifier)
-            .ok_or_else(|| {
-                EngineError::Validation(
-                    "member_identifier is not a DKG participant for this session".to_string(),
-                )
-            })?
-            .clone();
-
-        // Lifecycle + quarantine + signing-policy-firewall gates (frozen
-        // spec section 5: Open "checks policy gates"). The SAME helper
-        // runs again at Round2 (the share-release moment) so a policy
-        // change recorded after Open - emergency rekey, finalization,
-        // quarantine, or a re-bound policy-checked tx - cannot let a
-        // share escape. At Open only this node's own member is known to
-        // sign; Round2 re-checks quarantine over the actual chosen
-        // subset.
-        enforce_interactive_signing_gates(
-            &request.session_id,
-            &[request.member_identifier],
-            &request.message_hex,
-            session.emergency_rekey_event.as_ref(),
-            session.finalize_request_fingerprint.is_some(),
-            session.tx_result.as_ref(),
-            &guard.quarantined_operator_identifiers,
-            auto_quarantine_config.as_ref(),
-        )?;
-
-        // Strict-mode-only attempt context: required, fully validated
-        // against the DKG threshold/key group, coordinator recomputed
-        // per RFC-21 Annex A.
-        let canonical_included_participants = validate_attempt_context(
-            &request.session_id,
-            &dkg.key_group,
-            &message_bytes,
-            &message_digest_hex,
-            dkg.threshold,
-            Some(&request.attempt_context),
-            true,
-        )?
-        .ok_or_else(|| {
-            EngineError::Internal(
-                "strict attempt context validation returned no participants".to_string(),
-            )
-        })?;
-        if !canonical_included_participants.contains(&request.member_identifier) {
-            return Err(EngineError::Validation(
-                "member_identifier must be included in attempt_context.included_participants"
-                    .to_string(),
-            ));
-        }
-        // Every included participant must be a real DKG member of this
-        // session. Otherwise a caller could pad the included set with
-        // phantom identifiers to bias the RFC-21 coordinator/attempt
-        // derivation, and Round2 could release a share under an attempt
-        // context that is not a genuine DKG subset. Checked against the public
-        // key package (the full participant set) so it holds for a distributed
-        // DKG node, which caches only its own secret key package.
-        for participant in &canonical_included_participants {
-            let participant_frost_identifier =
-                participant_identifier_to_frost_identifier(*participant)?;
-            if !dkg_public_key_package
-                .verifying_shares()
-                .contains_key(&participant_frost_identifier)
-            {
+            let dkg = session
+                .dkg_result
+                .as_ref()
+                .ok_or_else(|| EngineError::DkgNotReady {
+                    session_id: request.session_id.clone(),
+                })?;
+            if request.key_group != dkg.key_group {
+                return Err(EngineError::Validation(
+                    "key_group does not match DKG output for this session".to_string(),
+                ));
+            }
+            if request.threshold != dkg.threshold {
                 return Err(EngineError::Validation(format!(
-                    "attempt_context.included_participants contains [{participant}], \
-                     which is not a DKG participant for this session"
+                    "threshold [{}] does not match the DKG threshold [{}] for this session",
+                    request.threshold, dkg.threshold
                 )));
             }
-        }
-        (key_package, canonical_included_participants)
-    };
+            let dkg_key_packages = session.dkg_key_packages.as_ref().ok_or_else(|| {
+                EngineError::Internal("missing DKG key package cache".to_string())
+            })?;
+            // The public key package carries a verifying share for EVERY DKG
+            // participant, so it is the authoritative participant set. A distributed
+            // DKG node holds only its OWN secret key package (dkg_key_packages has a
+            // single entry), so the included-participants membership check below must
+            // use the public package, not dkg_key_packages.
+            let dkg_public_key_package =
+                session.dkg_public_key_package.as_ref().ok_or_else(|| {
+                    EngineError::Internal("missing DKG public key package".to_string())
+                })?;
+            let key_package = dkg_key_packages
+                .get(&request.member_identifier)
+                .ok_or_else(|| {
+                    EngineError::Validation(
+                        "member_identifier is not a DKG participant for this session".to_string(),
+                    )
+                })?
+                .clone();
+
+            // Lifecycle + quarantine + signing-policy-firewall gates (frozen
+            // spec section 5: Open "checks policy gates"). The SAME helper
+            // runs again at Round2 (the share-release moment) so a policy
+            // change recorded after Open - emergency rekey, finalization,
+            // quarantine, or a re-bound policy-checked tx - cannot let a
+            // share escape. At Open only this node's own member is known to
+            // sign; Round2 re-checks quarantine over the actual chosen
+            // subset.
+            enforce_interactive_signing_gates(
+                &request.session_id,
+                &[request.member_identifier],
+                &request.message_hex,
+                session.emergency_rekey_event.as_ref(),
+                session.finalize_request_fingerprint.is_some(),
+                session.tx_result.as_ref(),
+                &guard.quarantined_operator_identifiers,
+                auto_quarantine_config.as_ref(),
+            )?;
+
+            // Strict-mode-only attempt context: required, fully validated
+            // against the DKG threshold/key group, coordinator recomputed
+            // per RFC-21 Annex A.
+            let canonical_included_participants = validate_attempt_context(
+                &request.session_id,
+                &dkg.key_group,
+                &message_bytes,
+                &message_digest_hex,
+                dkg.threshold,
+                Some(&request.attempt_context),
+                true,
+            )?
+            .ok_or_else(|| {
+                EngineError::Internal(
+                    "strict attempt context validation returned no participants".to_string(),
+                )
+            })?;
+            if !canonical_included_participants.contains(&request.member_identifier) {
+                return Err(EngineError::Validation(
+                    "member_identifier must be included in attempt_context.included_participants"
+                        .to_string(),
+                ));
+            }
+            // Every included participant must be a real DKG member of this
+            // session. Otherwise a caller could pad the included set with
+            // phantom identifiers to bias the RFC-21 coordinator/attempt
+            // derivation, and Round2 could release a share under an attempt
+            // context that is not a genuine DKG subset. Checked against the public
+            // key package (the full participant set) so it holds for a distributed
+            // DKG node, which caches only its own secret key package.
+            for participant in &canonical_included_participants {
+                let participant_frost_identifier =
+                    participant_identifier_to_frost_identifier(*participant)?;
+                if !dkg_public_key_package
+                    .verifying_shares()
+                    .contains_key(&participant_frost_identifier)
+                {
+                    return Err(EngineError::Validation(format!(
+                        "attempt_context.included_participants contains [{participant}], \
+                     which is not a DKG participant for this session"
+                    )));
+                }
+            }
+            (key_package, canonical_included_participants)
+        };
 
     // Disposition over the (now-confirmed) existing session: consumed
     // marker, idempotent/conflicting reopen of this exact attempt, and
@@ -875,11 +875,13 @@ pub fn interactive_aggregate(
             .ok_or_else(|| EngineError::DkgNotReady {
                 session_id: request.session_id.clone(),
             })?;
-        let session = guard.sessions.get(&wallet_session_id).ok_or_else(|| {
-            EngineError::SessionNotFound {
-                session_id: wallet_session_id.clone(),
-            }
-        })?;
+        let session =
+            guard
+                .sessions
+                .get(&wallet_session_id)
+                .ok_or_else(|| EngineError::SessionNotFound {
+                    session_id: wallet_session_id.clone(),
+                })?;
         session
             .dkg_public_key_package
             .as_ref()

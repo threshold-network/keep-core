@@ -14047,6 +14047,72 @@ fn interactive_round2_rechecks_gates_at_share_release_across_sessions() {
 }
 
 #[test]
+fn trigger_emergency_rekey_on_signing_session_records_on_wallet_session() {
+    // Defense in depth (writer side): emergency rekey is a WALLET-level kill switch,
+    // and interactive Round2 resolves it from the wallet session by key_group. If a
+    // caller triggers it on a per-signing session (a distinct RoastSessionID bound to a
+    // wallet key), the event must land on the WALLET session - where a reader looks -
+    // not on the ephemeral signing session. This makes the writer and reader keying
+    // impossible to diverge.
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let wallet_session = "wallet-dkg-session-rekey-writer";
+    let signing_session = "roast-signing-session-rekey-writer";
+    let key_group = "cross-session-rekey-writer-key-group";
+    let message = [0x22u8; 32];
+    let included = [1u16, 2];
+
+    ensure_interactive_dkg_session(wallet_session, key_group);
+
+    // Open under the distinct signing session so it is bound to the wallet key.
+    let attempt_context =
+        interactive_test_attempt_context(signing_session, key_group, &message, &included, 1);
+    interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: signing_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        attempt_context,
+    })
+    .expect("opens under the signing session");
+
+    // Trigger the kill switch on the SIGNING session id.
+    let result = trigger_emergency_rekey(TriggerEmergencyRekeyRequest {
+        session_id: signing_session.to_string(),
+        reason: "compromise detected".to_string(),
+    })
+    .expect("emergency rekey triggers");
+
+    // It must have been recorded on the resolved WALLET session, where Round2 reads it.
+    assert_eq!(
+        result.session_id, wallet_session,
+        "the rekey must be recorded on the resolved wallet session"
+    );
+    let guard = state().expect("state").lock().expect("lock");
+    assert!(
+        guard
+            .sessions
+            .get(wallet_session)
+            .expect("wallet session")
+            .emergency_rekey_event
+            .is_some(),
+        "the wallet session must hold the kill switch"
+    );
+    assert!(
+        guard
+            .sessions
+            .get(signing_session)
+            .expect("signing session")
+            .emergency_rekey_event
+            .is_none(),
+        "the ephemeral signing session must NOT hold the kill switch"
+    );
+}
+
+#[test]
 fn interactive_open_rejects_threshold_below_key_package_min_signers() {
     let _guard = lock_test_state();
     reset_for_tests();
