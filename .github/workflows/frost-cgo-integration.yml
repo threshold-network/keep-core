@@ -85,7 +85,8 @@ jobs:
           # fail with a clear message (the require-cgo run below would also catch it).
           missing=0
           for sym in \
-            frost_tbtc_run_dkg \
+            frost_tbtc_persist_distributed_dkg_key_package \
+            frost_tbtc_dkg_part1 \
             frost_tbtc_derive_interactive_attempt_context \
             frost_tbtc_interactive_session_open \
             frost_tbtc_interactive_session_abort \

@@ -13,13 +13,6 @@ type NativeTBTCSignerDKGResult struct {
 	CreatedAtUnix    uint64 `json:"createdAtUnix"`
 }
 
-// NativeTBTCSignerRoundContribution is a participant contribution consumed by
-// tbtc-signer during signature finalization.
-type NativeTBTCSignerRoundContribution struct {
-	Identifier uint16 `json:"identifier"`
-	Data       []byte `json:"data"`
-}
-
 // NativeTBTCSignerTxInput describes an unsigned transaction input consumed by
 // BuildTaprootTx.
 type NativeTBTCSignerTxInput struct {
@@ -40,17 +33,6 @@ type NativeTBTCSignerTxOutput struct {
 type NativeTBTCSignerTxResult struct {
 	SessionID string `json:"sessionID"`
 	TxHex     string `json:"txHex"`
-}
-
-// NativeTBTCSignerRoundState captures coarse session round metadata returned by
-// StartSignRound.
-type NativeTBTCSignerRoundState struct {
-	SessionID             string                             `json:"sessionID"`
-	RoundID               string                             `json:"roundID"`
-	RequiredContributions uint16                             `json:"requiredContributions"`
-	MessageDigestHex      string                             `json:"messageDigestHex"`
-	SigningParticipants   []uint16                           `json:"signingParticipants"`
-	OwnContribution       *NativeTBTCSignerRoundContribution `json:"ownContribution"`
 }
 
 // NativeShareVerificationVerdict is the typed result of a single-share FROST
@@ -127,27 +109,11 @@ type NativeFROSTParticipantIdentifier struct {
 	FrostIdentifier       string
 }
 
-// NativeTBTCSignerEngine executes coarse, session-keyed tbtc-signer
-// operations.
+// NativeTBTCSignerEngine executes session-keyed tbtc-signer operations for the
+// go-forward (interactive / distributed-DKG) paths. The transitional coarse
+// signing round methods (RunDKG / StartSignRound / FinalizeSignRound) and the
+// dealer-seeded DKG helper have been removed with the coarse-FROST path.
 type NativeTBTCSignerEngine interface {
-	RunDKG(
-		sessionID string,
-		participants []NativeTBTCSignerDKGParticipant,
-		threshold uint16,
-	) (*NativeTBTCSignerDKGResult, error)
-	StartSignRound(
-		sessionID string,
-		memberIdentifier uint16,
-		message []byte,
-		keyGroup string,
-		signingParticipants []uint16,
-		taprootMerkleRoot *[32]byte,
-	) (*NativeTBTCSignerRoundState, error)
-	FinalizeSignRound(
-		sessionID string,
-		roundContributions []NativeTBTCSignerRoundContribution,
-		taprootMerkleRoot *[32]byte,
-	) ([]byte, error)
 	BuildTaprootTx(
 		sessionID string,
 		inputs []NativeTBTCSignerTxInput,
@@ -161,18 +127,6 @@ type NativeTBTCSignerEngine interface {
 		memberIdentifier uint16,
 		taprootMerkleRoot *[32]byte,
 	) (NativeShareVerificationVerdict, error)
-}
-
-// NativeTBTCSignerSeededDKGEngine is implemented by tbtc-signer engines that
-// can pin development dealer DKG to an externally supplied seed. Production
-// distributed DKG does not rely on this helper.
-type NativeTBTCSignerSeededDKGEngine interface {
-	RunDKGWithSeed(
-		sessionID string,
-		participants []NativeTBTCSignerDKGParticipant,
-		threshold uint16,
-		dkgSeedHex string,
-	) (*NativeTBTCSignerDKGResult, error)
 }
 
 var nativeTBTCSignerEngine NativeTBTCSignerEngine

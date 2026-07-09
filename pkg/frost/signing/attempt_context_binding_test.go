@@ -99,7 +99,7 @@ func TestAttemptContextHashField_FromArrayDoesNotAliasCaller(t *testing.T) {
 }
 
 func TestBuildTaggedTBTCSignerRoundContributionMessage_OptionalFieldRoundTrip(t *testing.T) {
-	withHash := &buildTaggedTBTCSignerRoundContributionMessage{
+	withHash := &testRoundContributionMessage{
 		SenderIDValue:          3,
 		SessionIDValue:         "session-3",
 		ContributionIdentifier: 1,
@@ -110,7 +110,7 @@ func TestBuildTaggedTBTCSignerRoundContributionMessage_OptionalFieldRoundTrip(t 
 	if err != nil {
 		t.Fatalf("marshal failed: %v", err)
 	}
-	decoded := &buildTaggedTBTCSignerRoundContributionMessage{}
+	decoded := &testRoundContributionMessage{}
 	if err := decoded.Unmarshal(data); err != nil {
 		t.Fatalf("unmarshal failed: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestBuildTaggedTBTCSignerRoundContributionMessage_BackwardCompatWithOldJSON
 		"contributionData":"qrs="
 	}`)
 
-	decoded := &buildTaggedTBTCSignerRoundContributionMessage{}
+	decoded := &testRoundContributionMessage{}
 	if err := decoded.Unmarshal(oldJSON); err != nil {
 		t.Fatalf("unmarshal of old-format JSON failed: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestBuildTaggedTBTCSignerRoundContributionMessage_RejectsWrongLengthHashFie
 		"attemptContextHash":"AAEC"
 	}`)
 
-	decoded := &buildTaggedTBTCSignerRoundContributionMessage{}
+	decoded := &testRoundContributionMessage{}
 	err := decoded.Unmarshal(badJSON)
 	if err == nil {
 		t.Fatal("expected wrong-length validation error")
@@ -154,7 +154,7 @@ func TestBuildTaggedTBTCSignerRoundContributionMessage_RejectsWrongLengthHashFie
 }
 
 func TestBuildTaggedTBTCSignerRoundContributionMessagesEqual_HashFieldDifferentiates(t *testing.T) {
-	base := &buildTaggedTBTCSignerRoundContributionMessage{
+	base := &testRoundContributionMessage{
 		SenderIDValue:          1,
 		SessionIDValue:         "session-1",
 		ContributionIdentifier: 1,
@@ -168,24 +168,24 @@ func TestBuildTaggedTBTCSignerRoundContributionMessagesEqual_HashFieldDifferenti
 	withHashB := *base
 	withHashB.SetAttemptContextHash(otherHash)
 
-	if buildTaggedTBTCSignerRoundContributionMessagesEqual(base, &withHashA) {
+	if testRoundContributionMessagesEqual(base, &withHashA) {
 		t.Fatal("base (no hash) vs with-hash must compare unequal")
 	}
-	if buildTaggedTBTCSignerRoundContributionMessagesEqual(&withHashA, &withHashB) {
+	if testRoundContributionMessagesEqual(&withHashA, &withHashB) {
 		t.Fatal("messages with different hashes must compare unequal")
 	}
 	withHashAClone := *base
 	withHashAClone.SetAttemptContextHash(pinnedAttemptContextHash)
-	if !buildTaggedTBTCSignerRoundContributionMessagesEqual(&withHashA, &withHashAClone) {
+	if !testRoundContributionMessagesEqual(&withHashA, &withHashAClone) {
 		t.Fatal("messages with the same hash must compare equal")
 	}
-	if !buildTaggedTBTCSignerRoundContributionMessagesEqual(base, base) {
+	if !testRoundContributionMessagesEqual(base, base) {
 		t.Fatal("identical-pointer comparison must be equal")
 	}
 }
 
 func TestBuildTaggedTBTCSignerRoundContributionMessage_JSONEncoderOmitsAbsentField(t *testing.T) {
-	original := &buildTaggedTBTCSignerRoundContributionMessage{
+	original := &testRoundContributionMessage{
 		SenderIDValue:          1,
 		SessionIDValue:         "s",
 		ContributionIdentifier: 1,

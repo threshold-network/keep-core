@@ -9,37 +9,6 @@ import (
 
 type mockNativeTBTCSignerEngine struct{}
 
-func (mntse *mockNativeTBTCSignerEngine) RunDKG(
-	sessionID string,
-	participants []NativeTBTCSignerDKGParticipant,
-	threshold uint16,
-) (*NativeTBTCSignerDKGResult, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (mntse *mockNativeTBTCSignerEngine) StartSignRound(
-	sessionID string,
-	memberIdentifier uint16,
-	message []byte,
-	keyGroup string,
-	signingParticipants []uint16,
-	taprootMerkleRoot *[32]byte,
-) (*NativeTBTCSignerRoundState, error) {
-	_ = memberIdentifier
-	_ = signingParticipants
-	_ = taprootMerkleRoot
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (mntse *mockNativeTBTCSignerEngine) FinalizeSignRound(
-	sessionID string,
-	roundContributions []NativeTBTCSignerRoundContribution,
-	taprootMerkleRoot *[32]byte,
-) ([]byte, error) {
-	_ = taprootMerkleRoot
-	return nil, fmt.Errorf("not implemented")
-}
-
 func (mntse *mockNativeTBTCSignerEngine) BuildTaprootTx(
 	sessionID string,
 	inputs []NativeTBTCSignerTxInput,

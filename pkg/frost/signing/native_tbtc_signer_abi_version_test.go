@@ -7,7 +7,8 @@ import (
 
 func TestCheckABIContractCompatibility(t *testing.T) {
 	// req = major 1, min minor 2, to exercise every branch (the too-old-minor branch is
-	// unreachable against the real requiredTBTCSignerABIMinMinor of 1).
+	// unreachable against the real requiredTBTCSignerABIMinMinor of 0, since no minor is
+	// below zero).
 	const reqMajor, reqMinMinor = uint32(1), uint32(2)
 	tests := []struct {
 		name           string
@@ -89,9 +90,10 @@ func TestParseTBTCSignerABIVersion(t *testing.T) {
 }
 
 func TestCheckTBTCSignerABICompatibility_CurrentContract(t *testing.T) {
-	// Pins the bridge's current required contract (major 1, min minor 0): the matching
-	// lib version is compatible; a different major is not. A regression here means the
-	// required constants drifted from what the bridge actually speaks.
+	// Pins the bridge's current required contract (major 2, min minor 0 - major bumped
+	// to 2 when the coarse-FROST FFI symbols were removed): the matching lib version is
+	// compatible; a different major is not. A regression here means the required
+	// constants drifted from what the bridge actually speaks.
 	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, requiredTBTCSignerABIMinMinor); err != nil {
 		t.Fatalf("the required contract version must be self-compatible: %v", err)
 	}

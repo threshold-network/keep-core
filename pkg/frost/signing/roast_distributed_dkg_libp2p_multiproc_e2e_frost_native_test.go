@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"sort"
 	"strconv"
 	"sync"
 	"testing"
@@ -26,13 +25,12 @@ import (
 	"github.com/keep-network/keep-core/pkg/operator"
 )
 
-// This file closes the key-CUSTODY gap that the dealer-DKG shape-(B) harness
-// (roast_shapeb_libp2p_multiproc_e2e_frost_native_test.go) left open. There, DKG was the
-// centralized dev "dealer" call (frost_tbtc_run_dkg) run once and the encrypted key group
-// COPIED into every worker, so each worker physically held the whole key group. That is
-// the transitional dealer path, which the engine HARD-DISABLES in production
-// (enforce_bootstrap_dealer_dkg_disabled_in_production: "production requires distributed
-// DKG wiring").
+// This file closes the key-CUSTODY gap that the shape-(B) harness
+// (roast_shapeb_libp2p_multiproc_e2e_frost_native_test.go) left open. There, the
+// distributed DKG is run ONCE in the orchestrator process and the encrypted key group is
+// COPIED into every worker, so each worker physically holds the whole key group - a
+// key-custody shortcut. Here, each node runs the distributed DKG as a SEPARATE process,
+// so no node ever holds more than its own share.
 //
 // Here every worker runs the REAL distributed FROST DKG (frost_tbtc_dkg_part1/2/3) over
 // real libp2p and ends up holding ONLY ITS OWN key package - no node ever sees the whole
@@ -68,8 +66,7 @@ const (
 	phaseRound1   = "dkg-r1"
 	phaseRound2   = "dkg-r2"
 	phaseGroupKey = "dkg-groupkey"
-	phaseCommit   = "sign-commit"
-	phaseShare    = "sign-share"
+	phaseDone     = "dkg-done"
 )
 
 type ddkgMember struct {
@@ -204,25 +201,21 @@ func runDdkgOrchestrator(t *testing.T, n int, threshold uint16) {
 		if skip := extractPrefixed(r.output, ddkgSkipPrefix); skip != "" {
 			t.Skipf("member %d skipped: %s", r.index, skip)
 		}
-		sig := extractPrefixed(r.output, ddkgSigPrefix)
-		if sig == "" {
-			t.Fatalf("member %d produced no signature (err=%v):\n%s", r.index, r.err, indentTail(r.output, 40))
-		}
-		raw, err := hex.DecodeString(sig)
-		if err != nil || len(raw) != 64 {
-			t.Fatalf("member %d emitted a bad signature %q (decErr=%v len=%d)", r.index, sig, err, len(raw))
+		groupKey := extractPrefixed(r.output, ddkgVKeyPrefix)
+		if groupKey == "" {
+			t.Fatalf("member %d produced no group key (err=%v):\n%s", r.index, r.err, indentTail(r.output, 40))
 		}
 		if winning == "" {
-			winning = sig
-		} else if sig != winning {
-			t.Fatalf("member %d produced a different signature than a peer:\n  got  %s\n  want %s", r.index, sig, winning)
+			winning = groupKey
+		} else if groupKey != winning {
+			t.Fatalf("member %d derived a different group key than a peer:\n  got  %s\n  want %s", r.index, groupKey, winning)
 		}
 		winners++
 	}
 	if winners != n {
-		t.Fatalf("expected all %d distributed-DKG nodes to aggregate the signature, got %d", n, winners)
+		t.Fatalf("expected all %d distributed-DKG nodes to agree on the group key, got %d", n, winners)
 	}
-	t.Logf("distributed-DKG: %d separate-process nodes ran real FROST part1/2/3 over libp2p (each holding ONLY its own share) and threshold-signed to the same BIP-340 signature %s…", n, winning[:16])
+	t.Logf("distributed-DKG: %d separate-process nodes ran real FROST part1/2/3 over libp2p (each holding ONLY its own share) and agreed on the same group verifying key %s…", n, winning[:16])
 }
 
 func runDdkgWorker(t *testing.T, idxStr string) {
@@ -432,7 +425,6 @@ func runDdkgWorker(t *testing.T, idxStr string) {
 		fmt.Printf("%spart3: %v\n", ddkgErrPrefix, err)
 		return
 	}
-	myKeyPackage := dkgResult.KeyPackage
 	groupPublicKey := dkgResult.PublicKeyPackage
 
 	// ---- agreement check: every node must derive the same group verifying key ----
@@ -440,7 +432,7 @@ func runDdkgWorker(t *testing.T, idxStr string) {
 		fmt.Printf("%ssend groupkey: %v\n", ddkgErrPrefix, err)
 		return
 	}
-	gkRaw, err := collector.collect(ctx, phaseGroupKey, others, 30*time.Second)
+	gkRaw, err := collector.collect(ctx, phaseGroupKey, others, 90*time.Second)
 	if err != nil {
 		fmt.Printf("%scollect groupkey: %v\n", ddkgErrPrefix, err)
 		return
@@ -452,94 +444,31 @@ func runDdkgWorker(t *testing.T, idxStr string) {
 		}
 	}
 
-	// ---- threshold sign (low-level path): commit -> share -> aggregate, all over libp2p ----
-	nonces, commitmentID, commitmentData, err := engine.GenerateNoncesAndCommitments(
-		myKeyPackage.Identifier, myKeyPackage.Data,
-	)
-	if err != nil {
-		if reportFrostSubprocessSkip("generate nonces and commitments", err) {
-			return
-		}
-		fmt.Printf("%sgenerate nonces: %v\n", ddkgErrPrefix, err)
+	// The transitional low-level threshold-sign phase (GenerateNoncesAndCommitments/
+	// NewSigningPackage/Sign/Aggregate) was removed together with the coarse-FROST
+	// signing path; production signing is interactive-only. This e2e now proves the
+	// distributed DKG itself over real libp2p + real OS processes: each node emits
+	// the group verifying key it derived so the orchestrator can confirm all n nodes
+	// agreed on the SAME key while each holds ONLY its own share.
+	//
+	// Final barrier: with the group-key exchange now the LAST phase, the fastest
+	// process must NOT return (and tear down its libp2p host) before every peer has
+	// collected its group-key broadcast above - otherwise a slower peer flakes
+	// "collect groupkey: got n-1 of n" under CI load. Each node acks completion and
+	// waits for all peers' acks (a node can only ack after passing the group-key
+	// collect, so no ack arrives until that peer already has every group key); a
+	// short grace then covers delivery of the final acks before any host closes.
+	if err := ddkgSend(ctx, channel, phaseDone, index, 0, []byte("done")); err != nil {
+		fmt.Printf("%ssend done: %v\n", ddkgErrPrefix, err)
 		return
 	}
-	if err := ddkgSend(ctx, channel, phaseCommit, index, 0,
-		mustJSON(nativeFROSTCommitment{Identifier: commitmentID, Data: commitmentData})); err != nil {
-		fmt.Printf("%ssend commitment: %v\n", ddkgErrPrefix, err)
+	if _, err := collector.collect(ctx, phaseDone, others, 90*time.Second); err != nil {
+		fmt.Printf("%scollect done: %v\n", ddkgErrPrefix, err)
 		return
 	}
-	commitRaw, err := collector.collect(ctx, phaseCommit, others, 45*time.Second)
-	if err != nil {
-		fmt.Printf("%scollect commitments: %v\n", ddkgErrPrefix, err)
-		return
-	}
-	commitments := []nativeFROSTCommitment{{Identifier: commitmentID, Data: commitmentData}}
-	for _, idx := range others {
-		var c nativeFROSTCommitment
-		if err := json.Unmarshal(commitRaw[idx], &c); err != nil {
-			fmt.Printf("%sdecode commitment from %d: %v\n", ddkgErrPrefix, idx, err)
-			return
-		}
-		commitments = append(commitments, c)
-	}
-	// Deterministic order across nodes so every node builds the SAME signing package.
-	sort.Slice(commitments, func(i, j int) bool { return commitments[i].Identifier < commitments[j].Identifier })
+	time.Sleep(2 * time.Second)
 
-	message, err := hex.DecodeString(cfg.MessageHex)
-	if err != nil {
-		fmt.Printf("%sbad message: %v\n", ddkgErrPrefix, err)
-		return
-	}
-	signingPackage, err := engine.NewSigningPackage(message, commitments)
-	if err != nil {
-		if reportFrostSubprocessSkip("new signing package", err) {
-			return
-		}
-		fmt.Printf("%snew signing package: %v\n", ddkgErrPrefix, err)
-		return
-	}
-	shareID, shareData, err := engine.Sign(signingPackage, nonces, myKeyPackage.Identifier, myKeyPackage.Data)
-	if err != nil {
-		if reportFrostSubprocessSkip("sign", err) {
-			return
-		}
-		fmt.Printf("%ssign: %v\n", ddkgErrPrefix, err)
-		return
-	}
-	if err := ddkgSend(ctx, channel, phaseShare, index, 0,
-		mustJSON(nativeFROSTSignatureShare{Identifier: shareID, Data: shareData})); err != nil {
-		fmt.Printf("%ssend share: %v\n", ddkgErrPrefix, err)
-		return
-	}
-	shareRaw, err := collector.collect(ctx, phaseShare, others, 45*time.Second)
-	if err != nil {
-		fmt.Printf("%scollect shares: %v\n", ddkgErrPrefix, err)
-		return
-	}
-	shares := []nativeFROSTSignatureShare{{Identifier: shareID, Data: shareData}}
-	for _, idx := range others {
-		var s nativeFROSTSignatureShare
-		if err := json.Unmarshal(shareRaw[idx], &s); err != nil {
-			fmt.Printf("%sdecode share from %d: %v\n", ddkgErrPrefix, idx, err)
-			return
-		}
-		shares = append(shares, s)
-	}
-	sort.Slice(shares, func(i, j int) bool { return shares[i].Identifier < shares[j].Identifier })
-
-	signature, err := engine.Aggregate(signingPackage, shares, groupPublicKey)
-	if err != nil {
-		if reportFrostSubprocessSkip("aggregate", err) {
-			return
-		}
-		fmt.Printf("%saggregate: %v\n", ddkgErrPrefix, err)
-		return
-	}
-	if len(signature) != 64 {
-		fmt.Printf("%sunexpected signature length %d\n", ddkgErrPrefix, len(signature))
-		return
-	}
-	fmt.Printf("%s%s\n", ddkgSigPrefix, hex.EncodeToString(signature))
+	fmt.Printf("%s%s\n", ddkgVKeyPrefix, groupPublicKey.VerifyingKey)
 }
 
 // ---- collector ----
