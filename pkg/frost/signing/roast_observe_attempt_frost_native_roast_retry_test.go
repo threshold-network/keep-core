@@ -37,6 +37,9 @@ func registerObserveTestCoordinator() {
 		Signer:      roast.NoOpSigner(),
 		Verifier:    roast.NoOpSignatureVerifier(),
 		SelfMember:  2,
+		// Must match the key group the observe request's signer material yields, so
+		// the wallet-scoped lookup in ObserveAttemptForTransition resolves.
+		KeyGroupID: "tbtc-signer-observe-group",
 	})
 }
 

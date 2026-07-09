@@ -35,6 +35,11 @@ type RoastRetryDeps struct {
 	// but receivers need it independently so they can correlate
 	// AttemptHandles with their own snapshots in later Phase-4 PRs.
 	SelfMember uint32
+	// KeyGroupID is the FROST key-group handle (AttemptContext.KeyGroupID) of the
+	// wallet these deps belong to; it scopes the registration so a multi-wallet node
+	// does not collide on the 1..N seat indices every wallet reuses. Carried in the
+	// default build too so callers can set it without conditional compilation.
+	KeyGroupID string
 }
 
 // RegisterRoastRetryCoordinator is a no-op in the default build.
@@ -56,6 +61,13 @@ func RegisteredRoastRetryCoordinatorForMember(_ group.MemberIndex) (RoastRetryDe
 	return RoastRetryDeps{}, false
 }
 
+// RegisteredRoastRetryCoordinatorForKeyGroupMember returns (zero, false) in the
+// default build: with no ROAST-retry plumbing active, the wallet-scoped lookup has
+// nothing to return, so coordinator-driving paths fall back to legacy.
+func RegisteredRoastRetryCoordinatorForKeyGroupMember(_ string, _ group.MemberIndex) (RoastRetryDeps, bool) {
+	return RoastRetryDeps{}, false
+}
+
 // RegisteredRoastRetryCoordinator returns (zero, false) in the
 // default build, signalling to receivers that ROAST-retry plumbing
 // is not active and they should continue to use the Phase-2
@@ -67,7 +79,7 @@ func RegisteredRoastRetryCoordinator() (RoastRetryDeps, bool) {
 // registeredRoastRetryMemberCount returns 0 in the default build: no seats are
 // ever registered, so BeginOrchestrationForSession's partial-registration
 // fail-closed branch (count>0) is never reached here.
-func registeredRoastRetryMemberCount() int { return 0 }
+func registeredRoastRetryMemberCount(_ string) int { return 0 }
 
 // ResetRoastRetryRegistrationForTest is a no-op in the default
 // build. Exposed so tests can call it unconditionally regardless of

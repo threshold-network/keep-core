@@ -152,7 +152,7 @@ func BeginOrchestrationForSession(
 	// member-keyed the handle binding below (SetCurrentAttemptHandleForSession), so a
 	// fully-registered multi-seat operator now proceeds per-seat with isolated
 	// bindings -- the PR2b-1.5 `count > 1` fail-closed guard that stood here is gone.
-	deps, ok := RegisteredRoastRetryCoordinatorForMember(member)
+	deps, ok := RegisteredRoastRetryCoordinatorForKeyGroupMember(ctx.KeyGroupID, member)
 	if !ok {
 		// THIS seat has no registered coordinator. Whether that means legacy fallback
 		// or fail-closed hinges on whether the PROCESS is ROAST-active, which is
@@ -167,7 +167,7 @@ func BeginOrchestrationForSession(
 		//     handle binding does NOTHING here: a seat with no coordinator cannot
 		//     participate in ROAST regardless of key shape, so this fail-closed
 		//     survives PR2b-2 (only the fully-registered multi-seat guard was retired).
-		if registeredRoastRetryMemberCount() == 0 {
+		if registeredRoastRetryMemberCount(ctx.KeyGroupID) == 0 {
 			return roast.AttemptHandle{}, nil, fmt.Errorf(
 				"%w: caller should fall back to legacy behaviour",
 				ErrNoRoastRetryCoordinatorRegistered,

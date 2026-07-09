@@ -14,7 +14,9 @@ func cleanupTestContext(t *testing.T, members []group.MemberIndex) attempt.Attem
 	t.Helper()
 	ctx, err := attempt.NewAttemptContext(
 		"orchestration-cleanup-test",
-		"key-group",
+		// Empty key group to match the default (unscoped) coordinator registration
+		// this test uses; the wallet-scoped lookup/count then resolves under "".
+		"",
 		[]byte{0x01, 0x02, 0x03},
 		[attempt.MessageDigestLength]byte{0xab},
 		0,

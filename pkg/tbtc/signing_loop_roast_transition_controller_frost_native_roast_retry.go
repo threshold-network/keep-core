@@ -81,7 +81,20 @@ func newRoastTransitionExchangeForRequest(
 	if !signing.RoastRetryActiveForMember(template.MemberIndex) {
 		return nil
 	}
-	deps, ok := signing.RegisteredRoastRetryCoordinatorForMember(template.MemberIndex)
+	// Scope the coordinator lookup to this wallet's key group so a multi-wallet
+	// operator's transition exchange uses the coordinator bound to the RIGHT wallet's
+	// seat, not whichever wallet last registered template.MemberIndex.
+	signerMaterial, err := template.NativeSignerMaterial()
+	if err != nil {
+		return nil
+	}
+	keyGroupID, err := signing.KeyGroupIDFromSignerMaterial(signerMaterial)
+	if err != nil {
+		return nil
+	}
+	deps, ok := signing.RegisteredRoastRetryCoordinatorForKeyGroupMember(
+		keyGroupID, template.MemberIndex,
+	)
 	if !ok || deps.Coordinator == nil {
 		return nil
 	}

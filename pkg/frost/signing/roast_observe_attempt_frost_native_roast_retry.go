@@ -46,16 +46,25 @@ func ObserveAttemptForTransition(
 		return zeroHash, nil
 	}
 
-	deps, ok := RegisteredRoastRetryCoordinatorForMember(request.MemberIndex)
-	if !ok || deps.Coordinator == nil {
-		// No coordinator registered for this seat -- static fallback.
-		return zeroHash, nil
-	}
-
+	// Decode the signer material first: its key-group handle scopes the coordinator
+	// lookup to THIS wallet, so a multi-wallet node observes with the coordinator
+	// bound to the right wallet's seat rather than whichever wallet last registered
+	// this seat index.
 	signerMaterial, err := request.NativeSignerMaterial()
 	if err != nil {
 		// Material not extractable (e.g. a UniFFI v1 deployment) -- deterministic
 		// static fallback.
+		return zeroHash, nil
+	}
+	keyGroupID, err := KeyGroupIDFromSignerMaterial(signerMaterial)
+	if err != nil {
+		// No derivable key-group handle -- deterministic static fallback.
+		return zeroHash, nil
+	}
+
+	deps, ok := RegisteredRoastRetryCoordinatorForKeyGroupMember(keyGroupID, request.MemberIndex)
+	if !ok || deps.Coordinator == nil {
+		// No coordinator registered for this wallet's seat -- static fallback.
 		return zeroHash, nil
 	}
 

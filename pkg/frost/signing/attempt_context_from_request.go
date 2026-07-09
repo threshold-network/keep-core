@@ -186,6 +186,23 @@ func membersDifference(all, remove []group.MemberIndex) []group.MemberIndex {
 	return out
 }
 
+// KeyGroupIDFromSignerMaterial returns the canonical FROST key-group handle for the
+// given native signer material -- the exact string BuildAttemptContextFromRequest
+// stores as AttemptContext.KeyGroupID. ROAST-retry wiring uses it to scope the
+// coordinator registry by wallet key group at the registration and lookup sites that
+// hold signer material rather than a fully-built AttemptContext (the interactive
+// drive registration and the transition-controller). Returns an error for material
+// whose format has no derivable key-group handle.
+func KeyGroupIDFromSignerMaterial(signerMaterial *NativeSignerMaterial) (string, error) {
+	if signerMaterial == nil {
+		return "", fmt.Errorf("key group id: signer material is nil")
+	}
+	// deriveKeyGroupID ignores the DKG public key for the only supported format
+	// (FrostTBTCSignerV1, whose KeyGroup string is the handle); pass nil rather than
+	// re-extracting it, and let deriveKeyGroupID reject unsupported formats.
+	return deriveKeyGroupID(signerMaterial, nil)
+}
+
 // deriveKeyGroupID computes the AttemptContext KeyGroupID field
 // from the signer material plus the already-extracted DKG group
 // public key. The derivation is format-aware:

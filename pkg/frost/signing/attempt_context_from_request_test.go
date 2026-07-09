@@ -247,3 +247,36 @@ func TestMessageDigestFromBigInt_SmokeTestSha256Length(t *testing.T) {
 		)
 	}
 }
+
+// TestKeyGroupIDFromSignerMaterial pins the exported helper the ROAST-retry wiring
+// uses to scope the coordinator registry by wallet: it returns the same KeyGroup
+// handle BuildAttemptContextFromRequest stores as AttemptContext.KeyGroupID for
+// supported material, and errors (not panics) for unsupported/nil material.
+func TestKeyGroupIDFromSignerMaterial(t *testing.T) {
+	supported := newTestRequestWithTBTCSignerV1Material(t, 1)
+	got, err := KeyGroupIDFromSignerMaterial(supported.SignerMaterial)
+	if err != nil {
+		t.Fatalf("supported material: unexpected error: %v", err)
+	}
+	if got != "tbtc-group-A" {
+		t.Fatalf("key group id = %q, want tbtc-group-A", got)
+	}
+
+	// The helper must agree with what BuildAttemptContextFromRequest derives.
+	ctx, err := BuildAttemptContextFromRequest(supported)
+	if err != nil {
+		t.Fatalf("build attempt context: %v", err)
+	}
+	if got != ctx.KeyGroupID {
+		t.Fatalf("helper key group %q disagrees with AttemptContext.KeyGroupID %q", got, ctx.KeyGroupID)
+	}
+
+	if _, err := KeyGroupIDFromSignerMaterial(nil); err == nil {
+		t.Fatal("nil material must return an error")
+	}
+
+	unsupported := newTestRequestWithUnsupportedUniFFIV2Material(t, 0)
+	if _, err := KeyGroupIDFromSignerMaterial(unsupported.SignerMaterial); err == nil {
+		t.Fatal("unsupported material format must return an error")
+	}
+}

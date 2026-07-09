@@ -17,7 +17,10 @@ func newOrchestrationTestContext(t *testing.T) attempt.AttemptContext {
 	t.Helper()
 	ctx, err := attempt.NewAttemptContext(
 		"orchestration-session",
-		"key-group-orchestration",
+		// Empty key group: these tests register via the default (unscoped) helper, so
+		// the context's key group must match "" for the wallet-scoped lookup/count to
+		// resolve. Cross-key-group isolation is covered by the dedicated scoping test.
+		"",
 		[]byte{0x01, 0x02},
 		[attempt.MessageDigestLength]byte{0x77},
 		0,
