@@ -43,8 +43,8 @@ import (
 // framing - and crucially, because every process has its own engine, EVERY node
 // aggregates the BIP-340 signature independently (n winners, not one).
 //
-// KEY MATERIAL: the engine's DKG is a single centralized FFI call
-// (frost_tbtc_run_dkg), so this harness runs DKG ONCE in the orchestrator, which
+// KEY MATERIAL: this harness runs the distributed FROST DKG (Part1/2/3 via
+// runRealCgoDKGKeyGroup; the engine has no dealer DKG) ONCE in the orchestrator, which
 // persists the encrypted key packages to a bootstrap state file (fixed dev state-
 // encryption key), then copies that file into each worker's isolated state dir. Each
 // worker's fresh engine loads it and opens the interactive session for its own member.
@@ -109,7 +109,7 @@ func TestRealCgoInteractiveSigning_Libp2pMultiProc_ShapeB(t *testing.T) {
 	runShapeBOrchestrator(t, 3, 2)
 }
 
-// runShapeBBootstrap runs the centralized DKG in its OWN process so the orchestrator
+// runShapeBBootstrap runs the distributed DKG (once, in the orchestrator) in its OWN process so the orchestrator
 // process never binds the process-global engine (the engine binds its state lock to the
 // first path it sees and refuses to switch - which would otherwise collide with the
 // in-process shape-(A) tests that run earlier in the same `go test` binary). It persists

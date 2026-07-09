@@ -3,17 +3,19 @@
 package signing
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
-	"github.com/keep-network/keep-core/pkg/chain/local_v1"
-	"github.com/keep-network/keep-core/pkg/operator"
+	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
 // realCgoSessionSeq gives each invocation a unique session id so that in-process
@@ -53,12 +55,15 @@ var realCgoSessionSeq atomic.Uint64
 // real-crypto round-1 / FFI-bridge / persisted-state integration test, not a full
 // interactive end-to-end signature.
 //
-// The DKG -> interactive keyGroup glue is RunDKG: InteractiveSessionOpen resolves
-// the signing key by a keyGroup IDENTIFIER (engine-internal persisted material),
-// not KeyPackage bytes. RunDKG runs the full DKG and PERSISTS the result, keyed by
-// the SESSION ID, under a returned keyGroup the interactive path resolves - the
-// same flow production uses. Open then requires a completed DKG session of the
-// same session_id, so RunDKG and the interactive flow share one session id.
+// The DKG -> interactive keyGroup glue is the distributed DKG + persist:
+// InteractiveSessionOpen resolves the signing key by a keyGroup IDENTIFIER
+// (engine-internal persisted material), not KeyPackage bytes. runRealCgoDKGKeyGroup
+// runs a real distributed FROST DKG (Part1/2/3) for the participants and PERSISTS
+// each seat's key package (PersistDistributedDKGKeyPackage), keyed by the SESSION
+// ID, under a keyGroup the interactive path resolves - the same distributed flow
+// production uses (the trusted-dealer RunDKG was removed with the coarse path).
+// Open then requires a completed, persisted DKG under the same session_id, so the
+// DKG setup and the interactive flow share one session id.
 //
 // To run it, link the signer library so the frost_tbtc_* symbols resolve, e.g.:
 //
@@ -338,12 +343,15 @@ func skipFrostUnavailable(t *testing.T, op string, err error) {
 	t.Fatalf("%s: %v", op, err)
 }
 
-// runRealCgoDKGKeyGroup runs a full real FROST DKG over the participants via
-// RunDKG under sessionID, which persists the result (keyed by that session id) and
-// returns the keyGroup the signing path resolves. It skips the test if the linked
-// tbtc-signer FFI symbols are absent. Each participant carries a freshly generated
-// operator public key (the DKG's per-participant identifying key), so the request
-// is well-formed.
+// runRealCgoDKGKeyGroup runs a real distributed FROST DKG (Part1/2/3 exchanged over
+// an in-process bus) for the participants and PERSISTS each seat's key package under
+// sessionID via PersistDistributedDKGKeyPackage, returning the keyGroup the
+// interactive/ROAST signing path resolves. It replaces the removed trusted-dealer
+// RunDKG glue: the go-forward engine has no dealer DKG, so setup now uses the same
+// distributed keygen the production node runs, keyed by the interactive session id.
+// Participants carry canonical FROST identifiers so the persist op and the
+// interactive member lookup agree. It skips the test if the linked tbtc-signer FFI
+// symbols are absent.
 func runRealCgoDKGKeyGroup(
 	t *testing.T,
 	engine *buildTaggedTBTCSignerEngine,
@@ -353,24 +361,93 @@ func runRealCgoDKGKeyGroup(
 ) string {
 	t.Helper()
 
-	participants := make([]NativeTBTCSignerDKGParticipant, 0, len(participantIDs))
+	members := make([]group.MemberIndex, 0, len(participantIDs))
+	identifiers := make(map[group.MemberIndex]string, len(participantIDs))
 	for _, id := range participantIDs {
-		_, publicKey, err := operator.GenerateKeyPair(local_v1.DefaultCurve)
-		if err != nil {
-			t.Fatalf("operator key (participant %d): %v", id, err)
-		}
-		participants = append(participants, NativeTBTCSignerDKGParticipant{
-			Identifier:   uint16(id),
-			PublicKeyHex: hex.EncodeToString(operator.MarshalUncompressed(publicKey)),
-		})
+		m := group.MemberIndex(id)
+		members = append(members, m)
+		identifiers[m] = CanonicalFROSTIdentifier(uint16(m))
 	}
 
-	result, err := engine.RunDKG(sessionID, participants, threshold)
-	skipFrostUnavailable(t, "run DKG", err)
-	if result.KeyGroup == "" {
-		t.Fatal("RunDKG returned an empty key group")
+	priv, pub := dkgTestKeys(t, members)
+	bus := NewInProcessDKGBus(len(members) * 8)
+
+	// Construct every runner (and thereby subscribe it to the shared bus) before any
+	// starts, so no seat's round-1 broadcast is missed once the bus loops it back.
+	runners := make(map[group.MemberIndex]*distributedDKGRunner, len(members))
+	for _, m := range members {
+		runner, err := newDistributedDKGRunner(
+			m, sessionID, members, identifiers, threshold, engine, bus, priv[m], pub[m],
+		)
+		if err != nil {
+			t.Fatalf("new distributed DKG runner (member %d): %v", m, err)
+		}
+		runners[m] = runner
 	}
-	return result.KeyGroup
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	type seatOutcome struct {
+		result *NativeFROSTDKGResult
+		err    error
+	}
+	outcomes := make(map[group.MemberIndex]*seatOutcome, len(members))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, m := range members {
+		m := m
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result, err := runners[m].Run(ctx)
+			mu.Lock()
+			outcomes[m] = &seatOutcome{result: result, err: err}
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	for _, m := range members {
+		skipFrostUnavailable(t, fmt.Sprintf("distributed DKG (member %d)", m), outcomes[m].err)
+		if outcomes[m].result == nil ||
+			outcomes[m].result.KeyPackage == nil ||
+			outcomes[m].result.PublicKeyPackage == nil {
+			t.Fatalf("member %d produced an incomplete distributed DKG result", m)
+		}
+	}
+
+	// Persist every seat's key package under sessionID so the interactive signing
+	// path resolves each local member's key by session id. The removed dealer RunDKG
+	// persisted all seats in one call; the distributed DKG persists per seat.
+	var keyGroup string
+	for _, m := range members {
+		persisted, err := engine.PersistDistributedDKGKeyPackage(
+			sessionID,
+			uint16(m),
+			threshold,
+			uint16(len(members)),
+			outcomes[m].result.KeyPackage,
+			outcomes[m].result.PublicKeyPackage,
+		)
+		skipFrostUnavailable(
+			t,
+			fmt.Sprintf("persist distributed DKG key package (member %d)", m),
+			err,
+		)
+		if persisted == nil || persisted.KeyGroup == "" {
+			t.Fatalf("member %d persisted DKG result has an empty key group", m)
+		}
+		if keyGroup == "" {
+			keyGroup = persisted.KeyGroup
+		} else if persisted.KeyGroup != keyGroup {
+			t.Fatalf(
+				"member %d persisted a different key group (%s != %s)",
+				m, persisted.KeyGroup, keyGroup,
+			)
+		}
+	}
+	return keyGroup
 }
 
 // uint16sOf widens member ids to the uint16 participant list the engine's

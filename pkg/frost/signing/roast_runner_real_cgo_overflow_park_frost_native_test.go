@@ -57,14 +57,14 @@ import (
 // primitive-produced overflow - not a hand-set counter.
 func recordRealOverflow(t *testing.T, flooder group.MemberIndex, floodCount int) (attempt.Evidence, int) {
 	t.Helper()
-	ch := make(chan *buildTaggedTBTCSignerRoundContributionMessage, 1)
-	ch <- &buildTaggedTBTCSignerRoundContributionMessage{SenderIDValue: 0xff} // fill it; no consumer drains
+	ch := make(chan *testRoundContributionMessage, 1)
+	ch <- &testRoundContributionMessage{SenderIDValue: 0xff} // fill it; no consumer drains
 	recorder := attempt.NewBoundedRecorder()
 
 	rejected := 0
 	for i := 0; i < floodCount; i++ {
 		enqueued := enqueueOrRecordOverflow(
-			&buildTaggedTBTCSignerRoundContributionMessage{SenderIDValue: uint32(flooder)},
+			&testRoundContributionMessage{SenderIDValue: uint32(flooder)},
 			ch,
 			recorder,
 		)

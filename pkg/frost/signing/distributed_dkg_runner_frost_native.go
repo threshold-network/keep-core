@@ -15,11 +15,10 @@ import (
 
 // This file wires the real DISTRIBUTED FROST DKG (three-round Pedersen DKG:
 // Part1 -> Part2 -> Part3) into a per-member, bus-driven orchestrator - the shape
-// the tBTC node needs. Today the node's wallet-DKG path
-// (pkg/tbtc executeTBTCSignerFROSTDKG -> RunDKGWithSeed) is a transitional
-// TRUSTED-DEALER key generation (frost::keys::generate_with_dealer seeded by the
-// public on-chain seed), which the Rust signer HARD-DISABLES under
-// TBTC_SIGNER_PROFILE=production ("production requires distributed DKG wiring").
+// the tBTC node needs. The node's wallet-DKG path historically used a
+// transitional TRUSTED-DEALER key generation (frost::keys::generate_with_dealer
+// seeded by the public on-chain seed); that dealer path has been REMOVED, and
+// this distributed DKG is now the only wallet-DKG path.
 // The distributed-DKG crypto already exists (engine Part1/Part2/Part3 over the
 // tbtc-signer FFI); what was missing is an orchestrator that exchanges the round
 // packages between nodes so each node ends up with its OWN secret share of a

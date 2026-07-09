@@ -5,10 +5,6 @@ package tbtc
 import (
 	"bytes"
 	"encoding/hex"
-	"encoding/json"
-	"fmt"
-	"math/big"
-	"strings"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -131,51 +127,6 @@ func TestOutputKeyFromTBTCSignerDKGResult_AcceptsCompressedKeyGroup(
 	}
 }
 
-func TestExecuteFrostDKG_UsesTBTCSignerMaterial(t *testing.T) {
-	tbtcSignerEngine := &testNativeTBTCSignerSeededDKGEngine{}
-
-	result, err := executeFrostDKG(
-		tbtcSignerEngine,
-		&FrostDKGStartedEvent{Seed: big.NewInt(0x1234)},
-		[]group.MemberIndex{1, 2, 3},
-		2,
-		"test-session",
-	)
-	if err != nil {
-		t.Fatalf("unexpected DKG error: [%v]", err)
-	}
-
-	if !tbtcSignerEngine.runDKGWithSeedCalled {
-		t.Fatal("expected tbtc-signer DKG engine to be used")
-	}
-	if result.signerMaterial == nil {
-		t.Fatal("expected signer material")
-	}
-	assertTBTCSignerDKGParticipantIdentifiers(
-		t,
-		tbtcSignerEngine.runDKGWithSeedParticipants,
-		[]uint16{1, 2, 3},
-	)
-	if result.signerMaterial.Format !=
-		frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1 {
-		t.Fatalf(
-			"unexpected signer material format\nexpected: [%s]\nactual:   [%s]",
-			frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
-			result.signerMaterial.Format,
-		)
-	}
-
-	var payload frostsigning.NativeTBTCSignerMaterialPayload
-	if err := json.Unmarshal(result.signerMaterial.Payload, &payload); err != nil {
-		t.Fatalf("unexpected signer material payload decode error: [%v]", err)
-	}
-	assertTBTCSignerDKGParticipantIdentifiers(
-		t,
-		payload.DKGParticipants,
-		[]uint16{1, 2, 3},
-	)
-}
-
 func TestFinalFrostDKGMemberIndexes_NormalizesToFinalSigningGroupIndexes(
 	t *testing.T,
 ) {
@@ -228,135 +179,6 @@ func TestFinalFrostDKGMemberIndexes_NormalizesToFinalSigningGroupIndexes(
 				"active member indexes should not be mutated\nexpected: [%v]\nactual:   [%v]",
 				expectedActive,
 				activeMemberIndexes,
-			)
-		}
-	}
-}
-
-func TestExecuteFrostDKG_RequiresTBTCSignerMaterial(t *testing.T) {
-	_, err := executeFrostDKG(
-		nil,
-		&FrostDKGStartedEvent{Seed: big.NewInt(0x1234)},
-		[]group.MemberIndex{1, 2, 3},
-		2,
-		"test-session",
-	)
-	if err == nil {
-		t.Fatal("expected missing tbtc-signer engine error")
-	}
-	if !strings.Contains(err.Error(), "native tbtc-signer engine is unavailable") {
-		t.Fatalf("unexpected error: [%v]", err)
-	}
-}
-
-type testNativeTBTCSignerSeededDKGEngine struct {
-	runDKGWithSeedCalled       bool
-	runDKGWithSeedParticipants []frostsigning.NativeTBTCSignerDKGParticipant
-}
-
-func (tntsde *testNativeTBTCSignerSeededDKGEngine) RunDKG(
-	string,
-	[]frostsigning.NativeTBTCSignerDKGParticipant,
-	uint16,
-) (*frostsigning.NativeTBTCSignerDKGResult, error) {
-	return nil, fmt.Errorf("unseeded RunDKG should not be used")
-}
-
-func (tntsde *testNativeTBTCSignerSeededDKGEngine) RunDKGWithSeed(
-	sessionID string,
-	participants []frostsigning.NativeTBTCSignerDKGParticipant,
-	threshold uint16,
-	dkgSeedHex string,
-) (*frostsigning.NativeTBTCSignerDKGResult, error) {
-	tntsde.runDKGWithSeedCalled = true
-	tntsde.runDKGWithSeedParticipants = append(
-		[]frostsigning.NativeTBTCSignerDKGParticipant{},
-		participants...,
-	)
-
-	if sessionID != "test-session" {
-		return nil, fmt.Errorf("unexpected session ID: [%s]", sessionID)
-	}
-	if len(participants) != 3 {
-		return nil, fmt.Errorf("unexpected participant count: [%d]", len(participants))
-	}
-	if threshold != 2 {
-		return nil, fmt.Errorf("unexpected threshold: [%d]", threshold)
-	}
-	if dkgSeedHex == "" {
-		return nil, fmt.Errorf("expected DKG seed")
-	}
-
-	return &frostsigning.NativeTBTCSignerDKGResult{
-		SessionID:        sessionID,
-		KeyGroup:         "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-		ParticipantCount: uint16(len(participants)),
-		Threshold:        threshold,
-		CreatedAtUnix:    1,
-	}, nil
-}
-
-func (tntsde *testNativeTBTCSignerSeededDKGEngine) StartSignRound(
-	string,
-	uint16,
-	[]byte,
-	string,
-	[]uint16,
-	*[32]byte,
-) (*frostsigning.NativeTBTCSignerRoundState, error) {
-	return nil, fmt.Errorf("StartSignRound should not be used")
-}
-
-func (tntsde *testNativeTBTCSignerSeededDKGEngine) FinalizeSignRound(
-	string,
-	[]frostsigning.NativeTBTCSignerRoundContribution,
-	*[32]byte,
-) ([]byte, error) {
-	return nil, fmt.Errorf("FinalizeSignRound should not be used")
-}
-
-func (tntsde *testNativeTBTCSignerSeededDKGEngine) BuildTaprootTx(
-	string,
-	[]frostsigning.NativeTBTCSignerTxInput,
-	[]frostsigning.NativeTBTCSignerTxOutput,
-	*string,
-) (*frostsigning.NativeTBTCSignerTxResult, error) {
-	return nil, fmt.Errorf("BuildTaprootTx should not be used")
-}
-
-func (tntsde *testNativeTBTCSignerSeededDKGEngine) VerifySignatureShare(
-	string,
-	[]byte,
-	[]byte,
-	uint16,
-	*[32]byte,
-) (frostsigning.NativeShareVerificationVerdict, error) {
-	return frostsigning.NativeShareVerdictIndeterminate,
-		fmt.Errorf("VerifySignatureShare should not be used")
-}
-
-func assertTBTCSignerDKGParticipantIdentifiers(
-	t *testing.T,
-	participants []frostsigning.NativeTBTCSignerDKGParticipant,
-	expected []uint16,
-) {
-	t.Helper()
-
-	if len(participants) != len(expected) {
-		t.Fatalf(
-			"unexpected participant count\nexpected: [%d]\nactual:   [%d]",
-			len(expected),
-			len(participants),
-		)
-	}
-
-	for i := range expected {
-		if participants[i].Identifier != expected[i] {
-			t.Fatalf(
-				"unexpected participant identifier at [%d]\nexpected: [%d]\nactual:   [%d]",
-				i,
-				expected[i],
-				participants[i].Identifier,
 			)
 		}
 	}

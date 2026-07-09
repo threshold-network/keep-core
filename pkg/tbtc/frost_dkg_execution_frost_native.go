@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/big"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"go.uber.org/zap"
@@ -257,32 +256,12 @@ type frostDKGExecutionResult struct {
 	signerMaterial *frostsigning.NativeSignerMaterial
 }
 
-func executeFrostDKG(
-	nativeTBTCSignerEngine frostsigning.NativeTBTCSignerEngine,
-	event *FrostDKGStartedEvent,
-	dkgMemberIndexes []group.MemberIndex,
-	signatureThreshold int,
-	sessionID string,
-) (*frostDKGExecutionResult, error) {
-	if nativeTBTCSignerEngine != nil {
-		return executeTBTCSignerFROSTDKG(
-			nativeTBTCSignerEngine,
-			event,
-			dkgMemberIndexes,
-			signatureThreshold,
-			sessionID,
-		)
-	}
-
-	return nil, fmt.Errorf("native tbtc-signer engine is unavailable")
-}
-
 // executeDistributedFrostDKG runs a real distributed FROST DKG for this node's
 // local seats over the wallet broadcast channel, persists each seat's key package
 // as signing material, and returns the shared group output key plus the signer
 // material (the same for every local seat; the differing secret key packages live
-// in the engine's per-seat session store). It replaces the transitional
-// trusted-dealer executeTBTCSignerFROSTDKG/RunDKGWithSeed.
+// in the engine's per-seat session store). It is the only DKG path: the
+// transitional trusted-dealer seeded DKG has been removed with the coarse path.
 func executeDistributedFrostDKG(
 	dkgCtx context.Context,
 	nativeEngine frostsigning.NativeTBTCSignerEngine,
@@ -454,75 +433,6 @@ func finalFrostDKGMemberIndexes(
 	return dkgMemberIndexes, nil
 }
 
-func executeTBTCSignerFROSTDKG(
-	nativeEngine frostsigning.NativeTBTCSignerEngine,
-	event *FrostDKGStartedEvent,
-	dkgMemberIndexes []group.MemberIndex,
-	signatureThreshold int,
-	sessionID string,
-) (*frostDKGExecutionResult, error) {
-	if nativeEngine == nil {
-		return nil, fmt.Errorf("native tbtc-signer engine is unavailable")
-	}
-
-	seededEngine, ok := nativeEngine.(frostsigning.NativeTBTCSignerSeededDKGEngine)
-	if !ok {
-		return nil, fmt.Errorf("native tbtc-signer engine does not support seeded DKG")
-	}
-
-	dkgSeedHex, err := frostDKGSeedHex(event.Seed)
-	if err != nil {
-		return nil, err
-	}
-
-	participants, err := nativeTBTCSignerDKGParticipants(dkgMemberIndexes)
-	if err != nil {
-		return nil, err
-	}
-
-	if signatureThreshold <= 0 || signatureThreshold > int(^uint16(0)) {
-		return nil, fmt.Errorf(
-			"invalid tbtc-signer DKG threshold [%d]",
-			signatureThreshold,
-		)
-	}
-
-	dkgResult, err := seededEngine.RunDKGWithSeed(
-		sessionID,
-		participants,
-		uint16(signatureThreshold),
-		dkgSeedHex,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("tbtc-signer RunDKG failed: [%w]", err)
-	}
-
-	outputKey, err := outputKeyFromTBTCSignerDKGResult(dkgResult)
-	if err != nil {
-		return nil, err
-	}
-
-	payload, err := json.Marshal(frostsigning.NativeTBTCSignerMaterialPayload{
-		KeyGroup:         dkgResult.KeyGroup,
-		TaprootOutputKey: hex.EncodeToString(outputKey[:]),
-		KeyGroupSource:   frostsigning.NativeTBTCSignerKeyGroupSourceDKGPersisted,
-		DKGSeedHex:       dkgSeedHex,
-		DKGParticipants:  participants,
-		DKGThreshold:     uint16(signatureThreshold),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("cannot marshal tbtc-signer material: [%w]", err)
-	}
-
-	return &frostDKGExecutionResult{
-		outputKey: outputKey,
-		signerMaterial: &frostsigning.NativeSignerMaterial{
-			Format:  frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
-			Payload: payload,
-		},
-	}, nil
-}
-
 func nativeTBTCSignerDKGParticipants(
 	activeMemberIndexes []group.MemberIndex,
 ) ([]frostsigning.NativeTBTCSignerDKGParticipant, error) {
@@ -552,20 +462,6 @@ func nativeTBTCSignerDKGParticipants(
 	}
 
 	return participants, nil
-}
-
-func frostDKGSeedHex(seed *big.Int) (string, error) {
-	if seed == nil {
-		return "", fmt.Errorf("FROST DKG seed is nil")
-	}
-	if seed.Sign() < 0 || len(seed.Bytes()) > frost.OutputKeySize {
-		return "", fmt.Errorf("FROST DKG seed must fit in %d bytes", frost.OutputKeySize)
-	}
-
-	seedBytes := make([]byte, frost.OutputKeySize)
-	seed.FillBytes(seedBytes)
-
-	return hex.EncodeToString(seedBytes), nil
 }
 
 func outputKeyFromTBTCSignerDKGResult(

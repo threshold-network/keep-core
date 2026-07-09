@@ -5,13 +5,11 @@ package signing
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
@@ -20,9 +18,8 @@ import (
 // drives the real three-round FROST DKG so that n nodes, each contributing their
 // own secret entropy and exchanging only round packages over a message bus, end
 // up agreeing on ONE group key while each holds a DISTINCT secret share that no
-// node ever saw in full. This is the shape the tBTC node needs to replace the
-// transitional trusted-dealer keygen (RunDKGWithSeed), which the Rust signer
-// hard-disables in production ("production requires distributed DKG wiring").
+// node ever saw in full. This is the shape the tBTC node uses now that the
+// transitional trusted-dealer keygen has been removed.
 //
 // It is the message-passing analogue of the inline single-goroutine DKG in
 // native_frost_engine_..._test.go: the crypto (Part1/Part2/Part3) is identical,
@@ -31,9 +28,8 @@ import (
 // (round-1 broadcast, round-2 per-recipient routing, round collection), not just
 // the engine. Part3 cryptographically verifies each round-2 package against its
 // sender's round-1 commitment, so a misrouted or dropped package fails the run;
-// a passing run therefore proves the routing is correct. The final threshold
-// signature, verified against the group key, proves the shares are a real,
-// functional t-of-n key rather than unrelated per-node material.
+// a passing run therefore proves the routing is correct, and that the seats agree
+// on one group key while each holds a distinct secret share.
 
 func TestDistributedDKGRunner_ThreeSeatsAgreeOnGroupKeyWithDistinctShares(t *testing.T) {
 	setupRealCgoSignerState(t)
@@ -148,61 +144,14 @@ func TestDistributedDKGRunner_ThreeSeatsAgreeOnGroupKeyWithDistinctShares(t *tes
 	}
 	t.Logf("3 seats agreed on group key %s… with 3 distinct shares (bus-orchestrated distributed DKG)", groupKey[:16])
 
-	// ---- GOLD: a real t-of-n threshold signature over the DKG output verifies
-	// against the group key, proving the bus-orchestrated shares are a functional
-	// threshold key (not just distinct blobs). ----
-	signers := members[:threshold] // any t of the n
-	message := bytesOf(0x42, 32)
-
-	commitments := make([]nativeFROSTCommitment, 0, len(signers))
-	noncesBySigner := make(map[group.MemberIndex][]byte, len(signers))
-	for _, m := range signers {
-		kp := outcomes[m].result.KeyPackage
-		nonces, commitmentIdentifier, commitmentData, err := engine.GenerateNoncesAndCommitments(kp.Identifier, kp.Data)
-		if err != nil {
-			t.Fatalf("member %d nonce generation: %v", m, err)
-		}
-		commitments = append(commitments, nativeFROSTCommitment{Identifier: commitmentIdentifier, Data: commitmentData})
-		noncesBySigner[m] = nonces
-	}
-
-	signingPackage, err := engine.NewSigningPackage(message, commitments)
-	if err != nil {
-		t.Fatalf("new signing package: %v", err)
-	}
-
-	shares := make([]nativeFROSTSignatureShare, 0, len(signers))
-	for _, m := range signers {
-		kp := outcomes[m].result.KeyPackage
-		shareIdentifier, shareData, err := engine.Sign(signingPackage, noncesBySigner[m], kp.Identifier, kp.Data)
-		if err != nil {
-			t.Fatalf("member %d sign: %v", m, err)
-		}
-		shares = append(shares, nativeFROSTSignatureShare{Identifier: shareIdentifier, Data: shareData})
-	}
-
-	signatureBytes, err := engine.Aggregate(signingPackage, shares, outcomes[members[0]].result.PublicKeyPackage)
-	if err != nil {
-		t.Fatalf("aggregate: %v", err)
-	}
-	if len(signatureBytes) != 64 {
-		t.Fatalf("aggregate signature length = %d, want 64", len(signatureBytes))
-	}
-
-	groupKeyBytes, err := hex.DecodeString(groupKey)
-	if err != nil {
-		t.Fatalf("decode group key: %v", err)
-	}
-	publicKey, err := schnorr.ParsePubKey(groupKeyBytes)
-	if err != nil {
-		t.Fatalf("parse group key: %v", err)
-	}
-	signature, err := schnorr.ParseSignature(signatureBytes)
-	if err != nil {
-		t.Fatalf("parse signature: %v", err)
-	}
-	if !signature.Verify(message, publicKey) {
-		t.Fatal("threshold signature does not verify under the distributed-DKG group key")
-	}
-	t.Logf("threshold signature by %d-of-%d verifies under the distributed-DKG group key", threshold, n)
+	// NOTE: this test previously followed the DKG with a standalone t-of-n FROST
+	// threshold signature (engine.GenerateNoncesAndCommitments/Sign/Aggregate) to
+	// prove the shares form a functional key. Those standalone FROST-primitive
+	// engine ops were removed together with the coarse-FROST signing path; signing
+	// over a DKG'd key is now exercised only through the interactive ROAST path
+	// (see the interactive-signing tests). The assertions above still prove the
+	// distributed property: 3 seats agree on ONE group key while each holds a
+	// DISTINCT secret share, and Part3 cryptographically verifies every round-2
+	// package against its sender's round-1 commitment, so a passing run proves the
+	// orchestration and share structure are correct.
 }

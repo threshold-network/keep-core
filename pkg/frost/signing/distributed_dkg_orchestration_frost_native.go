@@ -19,8 +19,7 @@ import (
 // DKG orchestration needs but the base NativeTBTCSignerEngine interface does not
 // expose: the stateless three-round FROST primitives plus the op that persists a
 // seat's own key package as signing material. The node type-asserts
-// CurrentNativeTBTCSignerEngine() to this, mirroring how the transitional dealer
-// path asserts NativeTBTCSignerSeededDKGEngine for RunDKGWithSeed.
+// CurrentNativeTBTCSignerEngine() to this.
 type NativeTBTCSignerDistributedDKGEngine interface {
 	Part1(participantIdentifier string, maxSigners, minSigners uint16) (*NativeFROSTDKGPart1Result, error)
 	Part2(
@@ -58,8 +57,8 @@ func CanonicalFROSTIdentifier(participantIdentifier uint16) string {
 // RunDistributedDKGForSeats runs a real distributed FROST DKG for every local
 // seat of this node over the wallet broadcast channel and persists each seat's
 // resulting key package as signing material, returning the per-seat persist
-// result (all sharing the same group key). It replaces the transitional
-// trusted-dealer RunDKGWithSeed for the node's wallet DKG.
+// result (all sharing the same group key). It is the node's wallet-DKG path
+// (the transitional trusted-dealer path has been removed).
 //
 // memberIndexes is the FULL participant set (the final compact DKG member space);
 // localMemberIndexes are this node's seats in that same space; identifierByID must

@@ -166,7 +166,7 @@ func TestVerifyMessageAttemptContextHash_RealMessageTypeIntegration(t *testing.T
 	SetCurrentAttemptHandleForSession("session-real-msg", 1, roast.AttemptHandle{}, ctx)
 
 	expected := ctx.Hash()
-	msg := &buildTaggedTBTCSignerRoundContributionMessage{
+	msg := &testRoundContributionMessage{
 		SenderIDValue:          1,
 		SessionIDValue:         "session-real-msg",
 		ContributionIdentifier: 1,
@@ -236,7 +236,7 @@ func TestSetMessageAttemptContextHashIfBound_AllOutboundMessageTypes(t *testing.
 	expected := ctx.Hash()
 
 	messages := []attemptContextHashCarrier{
-		&buildTaggedTBTCSignerRoundContributionMessage{},
+		&testRoundContributionMessage{},
 	}
 
 	for _, msg := range messages {
