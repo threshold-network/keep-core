@@ -1,4 +1,4 @@
-// Stateless FROST primitives: dkg_part1..3, nonces, signing package, share, aggregate.
+// Stateless FROST primitives: dkg_part1..3 and signing-package assembly.
 
 use super::*;
 
@@ -172,82 +172,6 @@ pub fn dkg_part3(request: DkgPart3Request) -> Result<DkgPart3Result, EngineError
     Ok(result)
 }
 
-/// The stateless `generate_nonces_and_commitments` / `sign_share` FFI
-/// primitives hand a one-time signing nonce pair out to the host and later
-/// accept it back as opaque `nonces_hex`. That leaves nonce custody -- and
-/// the single-use invariant -- entirely with the caller (the `SignShareRequest`
-/// contract even states the caller "is cryptographically responsible for
-/// single use"). A host bug or compromise that replays one `nonces_hex`
-/// across two distinct signing packages produces two Schnorr shares under
-/// the same nonce, which algebraically solves for the long-term secret
-/// share. Unlike the deterministic StartSignRound/FinalizeSignRound path --
-/// which is already fenced off in production by
-/// `enforce_transitional_signing_disabled_in_production` -- these primitives
-/// had no production gate, so a production signer could be driven through
-/// them and inherit that blast radius. Fail closed under the production
-/// profile: production signing must use the interactive FROST path
-/// (`interactive.rs`), where the engine retains nonce custody and enforces
-/// durable single-use consumption markers. Non-production profiles keep the
-/// primitives available for the transitional/host-orchestrated flow and for
-/// tests.
-pub(crate) fn enforce_stateless_nonce_primitives_disabled_in_production(
-    operation: &str,
-) -> Result<(), EngineError> {
-    if signer_profile_is_production() {
-        return Err(EngineError::LifecyclePolicyRejected {
-            session_id: operation.to_string(),
-            reason_code: "stateless_nonce_primitives_disabled_in_production".to_string(),
-            detail: format!(
-                "stateless host-custody nonce primitive [{operation}] is disabled when {TBTC_SIGNER_PROFILE_ENV}={TBTC_SIGNER_PROFILE_PRODUCTION}; production signing must use the interactive FROST path, which keeps nonce custody inside the engine and enforces single-use nonces"
-            ),
-        });
-    }
-
-    Ok(())
-}
-
-pub fn generate_nonces_and_commitments(
-    mut request: GenerateNoncesAndCommitmentsRequest,
-) -> Result<GenerateNoncesAndCommitmentsResult, EngineError> {
-    // key_package_hex is the serialized SECRET signing share. Hold it zeroizing so
-    // serde's owned String is wiped on EVERY return path, not left to drop un-wiped.
-    let key_package_hex = Zeroizing::new(std::mem::take(&mut request.key_package_hex));
-    enforce_provenance_gate()?;
-    enforce_stateless_nonce_primitives_disabled_in_production("GenerateNoncesAndCommitments")?;
-
-    let key_package = decode_key_package(
-        "GenerateNoncesAndCommitments",
-        &request.key_package_identifier,
-        &key_package_hex,
-    )?;
-    let mut rng = zeroizing_rng_from_os();
-    let (mut nonces, commitments) = frost::round1::commit(key_package.signing_share(), &mut rng);
-    let commitment_bytes = match commitments.serialize() {
-        Ok(commitment_bytes) => commitment_bytes,
-        Err(err) => {
-            nonces.zeroize();
-            return Err(EngineError::Internal(format!(
-                "failed to serialize signing commitments: {err}"
-            )));
-        }
-    };
-    let nonces_bytes_result = nonces.serialize();
-    nonces.zeroize();
-    let mut nonces_bytes = nonces_bytes_result
-        .map_err(|e| EngineError::Internal(format!("failed to serialize signing nonces: {e}")))?;
-
-    let result = GenerateNoncesAndCommitmentsResult {
-        nonces_hex: hex::encode(&nonces_bytes),
-        commitment: NativeFrostCommitment {
-            identifier: frost_identifier_to_go_string(*key_package.identifier()),
-            data_hex: hex::encode(commitment_bytes),
-        },
-    };
-    nonces_bytes.zeroize();
-
-    Ok(result)
-}
-
 pub fn new_signing_package(
     request: NewSigningPackageRequest,
 ) -> Result<NewSigningPackageResult, EngineError> {
@@ -268,81 +192,5 @@ pub fn new_signing_package(
 
     Ok(NewSigningPackageResult {
         signing_package_hex: hex::encode(signing_package_bytes),
-    })
-}
-
-pub fn sign_share(mut request: SignShareRequest) -> Result<SignShareResult, EngineError> {
-    // The two SECRET request fields - the one-time signing nonces and this seat's
-    // signing key package - are held zeroizing so serde's owned Strings are wiped on
-    // EVERY return path (every decode/deserialize below can fail first), not left to
-    // drop un-wiped. signing_package_hex is public, so it stays in request.
-    let nonces_hex = Zeroizing::new(std::mem::take(&mut request.nonces_hex));
-    let key_package_hex = Zeroizing::new(std::mem::take(&mut request.key_package_hex));
-    enforce_provenance_gate()?;
-    enforce_stateless_nonce_primitives_disabled_in_production("SignShare")?;
-
-    let signing_package_bytes = decode_hex_field(
-        "SignShare",
-        "signing_package_hex",
-        &request.signing_package_hex,
-    )?;
-    let signing_package = frost::SigningPackage::deserialize(&signing_package_bytes)
-        .map_err(|e| EngineError::Validation(format!("SignShare: invalid signing package: {e}")))?;
-
-    let mut nonces_bytes = decode_hex_field("SignShare", "nonces_hex", &nonces_hex)?;
-    let nonces_result = frost::round1::SigningNonces::deserialize(&nonces_bytes);
-    nonces_bytes.zeroize();
-    let mut nonces = nonces_result
-        .map_err(|e| EngineError::Validation(format!("SignShare: invalid nonces: {e}")))?;
-
-    let key_package_result = decode_key_package(
-        "SignShare",
-        &request.key_package_identifier,
-        &key_package_hex,
-    );
-    let key_package = match key_package_result {
-        Ok(key_package) => key_package,
-        Err(err) => {
-            nonces.zeroize();
-            return Err(err);
-        }
-    };
-    let signature_share_result = frost::round2::sign(&signing_package, &nonces, &key_package);
-    nonces.zeroize();
-    let signature_share = signature_share_result
-        .map_err(|e| EngineError::Validation(format!("SignShare failed: {e}")))?;
-    let mut signature_share_bytes = signature_share.serialize();
-    let result = SignShareResult {
-        signature_share: NativeFrostSignatureShare {
-            identifier: frost_identifier_to_go_string(*key_package.identifier()),
-            data_hex: hex::encode(&signature_share_bytes),
-        },
-    };
-    signature_share_bytes.zeroize();
-
-    Ok(result)
-}
-
-pub fn aggregate(request: AggregateRequest) -> Result<AggregateResult, EngineError> {
-    enforce_provenance_gate()?;
-
-    let signing_package_bytes = decode_hex_field(
-        "Aggregate",
-        "signing_package_hex",
-        &request.signing_package_hex,
-    )?;
-    let signing_package = frost::SigningPackage::deserialize(&signing_package_bytes)
-        .map_err(|e| EngineError::Validation(format!("Aggregate: invalid signing package: {e}")))?;
-    let signature_shares = decode_signature_share_map("Aggregate", &request.signature_shares)?;
-    let public_key_package =
-        native_public_key_package_to_frost("Aggregate", &request.public_key_package)?;
-    let signature = frost::aggregate(&signing_package, &signature_shares, &public_key_package)
-        .map_err(|e| EngineError::Validation(format!("Aggregate failed: {e}")))?;
-    let signature_bytes = signature
-        .serialize()
-        .map_err(|e| EngineError::Internal(format!("failed to serialize aggregate: {e}")))?;
-
-    Ok(AggregateResult {
-        signature_hex: hex::encode(signature_bytes),
     })
 }

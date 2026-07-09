@@ -30,10 +30,6 @@ pub enum EngineError {
         reason_code: String,
         detail: String,
     },
-    #[error(
-        "synthetic contributions rejected for session {session_id}: bootstrap-only finalize payload is not allowed"
-    )]
-    SyntheticContributionRejected { session_id: String },
     #[error("session conflict for {session_id}: repeated call must use identical payload")]
     SessionConflict { session_id: String },
     #[error("session finalized for {session_id}: start_sign_round requires a new session_id")]
@@ -44,31 +40,6 @@ pub enum EngineError {
     DkgNotReady { session_id: String },
     #[error("sign round not started for session {session_id}")]
     SignRoundNotStarted { session_id: String },
-    /// Returned when an `attempt_id` that has already been consumed for a sign
-    /// attempt in this session arrives again. Distinct from the generic
-    /// `Validation` error so cross-language callers can match on the
-    /// `consumed_attempt_replay` code instead of substring-matching the
-    /// message wording.
-    #[error(
-        "attempt_id [{attempt_id}] already consumed for sign attempt in session [{session_id}]"
-    )]
-    ConsumedAttemptReplay {
-        session_id: String,
-        attempt_id: String,
-    },
-    /// Returned when a derived `round_id` (a function of session, key group,
-    /// message digest, signing-participants fingerprint, and attempt context)
-    /// has already been consumed for a sign contribution. Distinct from
-    /// `ConsumedAttemptReplay` because a single attempt context can produce
-    /// multiple round IDs through canonicalization disagreements; callers
-    /// match on `consumed_round_replay` rather than the message.
-    #[error(
-        "round_id [{round_id}] already consumed for sign contribution in session [{session_id}]"
-    )]
-    ConsumedRoundReplay {
-        session_id: String,
-        round_id: String,
-    },
     /// Returned when an interactive attempt whose nonce handle was already
     /// consumed (a signature share was released, or release was durably
     /// committed) is touched again - a second Round2 with the same handle,
@@ -129,14 +100,11 @@ impl EngineError {
             Self::SigningPolicyRejected { .. } => "signing_policy_rejected",
             Self::QuarantinePolicyRejected { .. } => "quarantine_policy_rejected",
             Self::LifecyclePolicyRejected { .. } => "lifecycle_policy_rejected",
-            Self::SyntheticContributionRejected { .. } => "synthetic_contribution_rejected",
             Self::SessionConflict { .. } => "session_conflict",
             Self::SessionFinalized { .. } => "session_finalized",
             Self::SessionNotFound { .. } => "session_not_found",
             Self::DkgNotReady { .. } => "dkg_not_ready",
             Self::SignRoundNotStarted { .. } => "sign_round_not_started",
-            Self::ConsumedAttemptReplay { .. } => "consumed_attempt_replay",
-            Self::ConsumedRoundReplay { .. } => "consumed_round_replay",
             Self::ConsumedNonceReplay { .. } => "consumed_nonce_replay",
             Self::InteractiveAttemptAlreadyAggregated { .. } => {
                 "interactive_attempt_already_aggregated"
@@ -154,17 +122,14 @@ impl EngineError {
             Self::SigningPolicyRejected { .. } => "recoverable",
             Self::QuarantinePolicyRejected { .. } => "recoverable",
             Self::LifecyclePolicyRejected { .. } => "recoverable",
-            Self::SyntheticContributionRejected { .. } => "recoverable",
             Self::SessionConflict { .. } => "recoverable",
             Self::DkgNotReady { .. } => "recoverable",
             Self::SignRoundNotStarted { .. } => "recoverable",
-            // ConsumedAttemptReplay / ConsumedRoundReplay are recoverable in
-            // the sense that a fresh attempt with a new identifier can be
-            // started. They cannot be retried with the same identifier — the
-            // consumer (keep-core) treats them as a signal to mint a new
-            // attempt_id rather than retransmit.
-            Self::ConsumedAttemptReplay { .. } => "recoverable",
-            Self::ConsumedRoundReplay { .. } => "recoverable",
+            // ConsumedNonceReplay is recoverable in the sense that a fresh
+            // attempt with a new identifier can be started. It cannot be
+            // retried with the same identifier — the consumer (keep-core)
+            // treats it as a signal to mint a new attempt_id rather than
+            // retransmit.
             Self::ConsumedNonceReplay { .. } => "recoverable",
             // The aggregate is deterministic over public data and the attempt
             // is durably marked complete; a re-aggregation request is a benign
@@ -197,37 +162,6 @@ impl EngineError {
 #[cfg(test)]
 mod tests {
     use super::EngineError;
-
-    #[test]
-    fn consumed_attempt_replay_has_stable_code_and_message_format() {
-        let err = EngineError::ConsumedAttemptReplay {
-            session_id: "session-a".to_string(),
-            attempt_id: "attempt-1".to_string(),
-        };
-        assert_eq!(err.code(), "consumed_attempt_replay");
-        assert_eq!(err.recovery_class(), "recoverable");
-        // Wire wording must remain stable across releases so legacy keep-core
-        // builds that substring-match the message keep working until they
-        // migrate to the code field.
-        assert_eq!(
-            err.to_string(),
-            "attempt_id [attempt-1] already consumed for sign attempt in session [session-a]",
-        );
-    }
-
-    #[test]
-    fn consumed_round_replay_has_stable_code_and_message_format() {
-        let err = EngineError::ConsumedRoundReplay {
-            session_id: "session-a".to_string(),
-            round_id: "round-1".to_string(),
-        };
-        assert_eq!(err.code(), "consumed_round_replay");
-        assert_eq!(err.recovery_class(), "recoverable");
-        assert_eq!(
-            err.to_string(),
-            "round_id [round-1] already consumed for sign contribution in session [session-a]",
-        );
-    }
 
     #[test]
     fn interactive_attempt_already_aggregated_has_stable_code_and_message_format() {

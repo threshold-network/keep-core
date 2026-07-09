@@ -23,6 +23,10 @@ pub(crate) fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
     output
 }
 
+// Test-only: the production coarse-FROST callers (round-id/seed derivation)
+// were removed with the transitional signing path; only unit tests still
+// exercise this length-prefixed domain-separation helper.
+#[cfg(test)]
 pub(crate) fn deterministic_seed(parts: &[&[u8]]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     for part in parts {

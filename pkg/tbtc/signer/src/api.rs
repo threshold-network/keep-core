@@ -1,20 +1,4 @@
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroizing;
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct DkgParticipant {
-    pub identifier: u16,
-    pub public_key_hex: String,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct RunDkgRequest {
-    pub session_id: String,
-    pub participants: Vec<DkgParticipant>,
-    pub threshold: u16,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dkg_seed_hex: Option<String>,
-}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DkgResult {
@@ -116,24 +100,6 @@ pub struct NativeFrostSignatureShare {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct GenerateNoncesAndCommitmentsRequest {
-    pub key_package_identifier: String,
-    pub key_package_hex: String,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct GenerateNoncesAndCommitmentsResult {
-    /// Secret one-time FROST signing nonces serialized as hex.
-    ///
-    /// The caller owns this secret after it crosses the FFI boundary. It must
-    /// be supplied to `SignShareRequest::nonces_hex` at most once and erased by
-    /// the caller immediately afterward. Reuse for another signing package or
-    /// message can reveal the private signing share.
-    pub nonces_hex: String,
-    pub commitment: NativeFrostCommitment,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct NewSigningPackageRequest {
     pub message_hex: String,
     pub commitments: Vec<NativeFrostCommitment>,
@@ -144,43 +110,11 @@ pub struct NewSigningPackageResult {
     pub signing_package_hex: String,
 }
 
-#[derive(Clone, Deserialize, PartialEq, Eq, Serialize)]
-pub struct SignShareRequest {
-    pub signing_package_hex: String,
-    /// Secret one-time nonces returned by `GenerateNoncesAndCommitmentsResult`.
-    ///
-    /// This stateless endpoint cannot remember consumed nonces across FFI
-    /// calls. The caller is cryptographically responsible for single use.
-    /// Wrapped in `Zeroizing` so the deserialized secret is wiped from the heap
-    /// on drop rather than lingering in freed memory after the share is produced.
-    pub nonces_hex: Zeroizing<String>,
-    pub key_package_identifier: String,
-    /// Secret private key-package material; `Zeroizing` so it is wiped on drop.
-    pub key_package_hex: Zeroizing<String>,
-}
-
-// Custom Debug redacts the secret fields (the derive would print them verbatim).
-impl std::fmt::Debug for SignShareRequest {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SignShareRequest")
-            .field("signing_package_hex", &self.signing_package_hex)
-            .field("nonces_hex", &"<redacted>")
-            .field("key_package_identifier", &self.key_package_identifier)
-            .field("key_package_hex", &"<redacted>")
-            .finish()
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct SignShareResult {
-    pub signature_share: NativeFrostSignatureShare,
-}
-
 // Phase 7.1 hardened interactive signing session (frozen spec
-// docs/phase-7-interactive-session-spec-freeze.md, section 5). Unlike
-// the stateless primitives above, secret nonces NEVER appear in these
-// requests or results: the engine generates, holds, consumes, and
-// zeroizes them internally, keyed by (session_id, attempt_id).
+// docs/phase-7-interactive-session-spec-freeze.md, section 5). Secret
+// nonces NEVER appear in these requests or results: the engine
+// generates, holds, consumes, and zeroizes them internally, keyed by
+// (session_id, attempt_id).
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct InteractiveSessionOpenRequest {
@@ -286,18 +220,6 @@ pub struct InteractiveSessionAbortResult {
     pub aborted: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct AggregateRequest {
-    pub signing_package_hex: String,
-    pub signature_shares: Vec<NativeFrostSignatureShare>,
-    pub public_key_package: NativeFrostPublicKeyPackage,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct AggregateResult {
-    pub signature_hex: String,
-}
-
 /// The verdict of a single-share verification (VerifySignatureShare). It is a
 /// deliberate THREE-way value, not pass/fail: the boundary between a
 /// member-attributable failure (blame) and a not-the-member's-fault failure
@@ -344,22 +266,6 @@ pub struct VerifySignatureShareResult {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct StartSignRoundRequest {
-    pub session_id: String,
-    pub member_identifier: u16,
-    pub message_hex: String,
-    pub key_group: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub taproot_merkle_root_hex: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub signing_participants: Option<Vec<u16>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attempt_context: Option<AttemptContext>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attempt_transition_evidence: Option<AttemptTransitionEvidence>,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct RoundContribution {
     pub identifier: u16,
     pub signature_share_hex: String,
@@ -390,16 +296,6 @@ pub struct RoundState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt_transition_telemetry: Option<AttemptTransitionTelemetry>,
     pub own_contribution: RoundContribution,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct FinalizeSignRoundRequest {
-    pub session_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub taproot_merkle_root_hex: Option<String>,
-    pub round_contributions: Vec<RoundContribution>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attempt_context: Option<AttemptContext>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -448,26 +344,6 @@ pub struct DeriveInteractiveAttemptContextResult {
 pub struct ParticipantFrostIdentifier {
     pub participant_identifier: u16,
     pub frost_identifier: String,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct AttemptExclusionEvidence {
-    pub reason: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub excluded_member_identifiers: Vec<u16>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub invalid_share_proof_fingerprint: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub struct AttemptTransitionEvidence {
-    pub from_attempt_number: u32,
-    pub from_attempt_id: String,
-    pub from_coordinator_identifier: u16,
-    pub previous_round_id: String,
-    pub previous_sign_request_fingerprint: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exclusion_evidence: Option<AttemptExclusionEvidence>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]

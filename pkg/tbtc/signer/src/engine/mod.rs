@@ -9,16 +9,14 @@
 //! - [`audit`] — Forensics: transcript audit, blame-proof verification, differential fuzzing references.
 //! - [`codec`] — Hex/struct codecs and Go<->frost identifier conversions.
 //! - [`config`] — TBTC_SIGNER_* environment surface: constant names, defaults, and parsers.
-//! - [`dkg`] — run_dkg session flow and production gates for the transitional dealer path.
-//! - [`frost_ops`] — Stateless FROST primitives: dkg_part1..3, nonces, signing package, share, aggregate.
+//! - [`dkg`] — distributed-DKG key-package persistence (`persist_distributed_dkg_key_package`).
+//! - [`frost_ops`] — Stateless FROST primitives: dkg_part1..3 and signing-package assembly.
 //! - [`interactive`] — Phase 7.1 hardened interactive signing session: engine-held nonce custody, Round1/Round2, consumption markers.
 //! - [`lifecycle`] — Operational lifecycle: canary rollout, refresh cadence/shares, emergency rekey, quarantine status.
-//! - [`nonce`] — Deterministic round-nonce binding (round-nonce-v3 transcript seed).
 //! - [`persistence`] — Encrypted state-file persistence: envelope codec, key providers, corruption recovery, persisted<->live conversions.
 //! - [`policy`] — Admission, signing-policy firewall, rate limiting, and auto-quarantine enforcement.
 //! - [`provenance`] — Runtime provenance attestation gate.
 //! - [`roast`] — ROAST/RFC-21 attempt machinery: request fingerprints, round/attempt ids, attempt-context and transition-evidence validation.
-//! - [`signing`] — start/finalize sign-round session flows and bootstrap synthetic contributions.
 //! - [`state`] — In-memory engine/session state, the state-file lock, and registry capacity guards.
 //! - [`telemetry`] — Hardening telemetry: latency trackers and metrics reporting.
 //! - [`transaction`] — Taproot transaction building.
@@ -62,14 +60,11 @@ use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::api::{
-    AggregateRequest, AggregateResult, AttemptContext, AttemptExclusionEvidence,
-    AttemptTransitionEvidence, AttemptTransitionTelemetry, BlameProofVerificationResult,
-    BuildTaprootTxRequest, CanaryRolloutStatusResult, DeriveInteractiveAttemptContextRequest,
-    DeriveInteractiveAttemptContextResult, DifferentialDivergence, DifferentialFuzzRequest,
-    DifferentialFuzzResult, DkgPart1Request, DkgPart1Result, DkgPart2Request, DkgPart2Result,
-    DkgPart3Request, DkgPart3Result, DkgResult, DkgRound1Package, DkgRound2Package,
-    FinalizeSignRoundRequest, GenerateNoncesAndCommitmentsRequest,
-    GenerateNoncesAndCommitmentsResult, InitSignerConfigRequest, InitSignerConfigResult,
+    AttemptContext, BlameProofVerificationResult, BuildTaprootTxRequest, CanaryRolloutStatusResult,
+    DeriveInteractiveAttemptContextRequest, DeriveInteractiveAttemptContextResult,
+    DifferentialDivergence, DifferentialFuzzRequest, DifferentialFuzzResult, DkgPart1Request,
+    DkgPart1Result, DkgPart2Request, DkgPart2Result, DkgPart3Request, DkgPart3Result, DkgResult,
+    DkgRound1Package, DkgRound2Package, InitSignerConfigRequest, InitSignerConfigResult,
     InteractiveAggregateRequest, InteractiveAggregateResult, InteractiveRound1Request,
     InteractiveRound1Result, InteractiveRound2Request, InteractiveRound2Result,
     InteractiveSessionAbortRequest, InteractiveSessionAbortResult, InteractiveSessionOpenRequest,
@@ -79,8 +74,7 @@ use crate::api::{
     PromoteCanaryRequest, PromoteCanaryResult, QuarantineStatusRequest, QuarantineStatusResult,
     RefreshCadenceStatusRequest, RefreshCadenceStatusResult, RefreshSharesRequest,
     RefreshSharesResult, RoastLivenessPolicyResult, RollbackCanaryRequest, RollbackCanaryResult,
-    RoundContribution, RoundState, RunDkgRequest, ShareMaterial, SignShareRequest, SignShareResult,
-    SignatureResult, SignerHardeningMetricsResult, StartSignRoundRequest, TransactionResult,
+    RoundState, ShareMaterial, SignatureResult, SignerHardeningMetricsResult, TransactionResult,
     TranscriptAuditRecord, TranscriptAuditRequest, TranscriptAuditResult,
     TriggerEmergencyRekeyRequest, TriggerEmergencyRekeyResult, VerifyBlameProofRequest,
 };
@@ -95,12 +89,10 @@ mod frost_ops;
 mod init_config;
 mod interactive;
 mod lifecycle;
-mod nonce;
 mod persistence;
 mod policy;
 mod provenance;
 mod roast;
-mod signing;
 mod state;
 mod telemetry;
 #[cfg(test)]
@@ -118,12 +110,10 @@ pub(crate) use frost_ops::*;
 pub(crate) use init_config::*;
 pub(crate) use interactive::*;
 pub(crate) use lifecycle::*;
-pub(crate) use nonce::*;
 pub(crate) use persistence::*;
 pub(crate) use policy::*;
 pub(crate) use provenance::*;
 pub(crate) use roast::*;
-pub(crate) use signing::*;
 pub(crate) use state::*;
 pub(crate) use telemetry::*;
 #[cfg(test)]

@@ -34,8 +34,3 @@ bitcoin = "0.32"
 criterion = "0.5"
 pretty_assertions = "1.4"
 proptest = "1.6"
-
-[[bench]]
-name = "phase5_roast"
-harness = false
-required-features = ["bench-restart-hook"]

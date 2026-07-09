@@ -264,8 +264,16 @@ session-handle registry's TTL. Without this, a flood of
 When all three hold: delete the transitional
 `StartSignRound`/`FinalizeSignRound` deterministic flow and the
 `RoundNonceBinding` machinery (`src/engine/nonce.rs`), migrate the
-tests that pin them, and update the gates doc. The freeze marker in
-`nonce.rs` names this document as its trigger definition.
+tests that pin them, and update the gates doc.
+
+**EXECUTED (2026-07-09):** the deletion has been performed — `nonce.rs`
+and `signing.rs` are removed, the trusted-dealer `run_dkg` and the
+stateless coarse FFI ops are gone, the six coarse extern-"C" symbols are
+removed, and `TBTC_SIGNER_ABI_MAJOR` was bumped 1 → 2 (minor reset to 0)
+with the Go bridge and `ci/frost-signer-pin.env` updated in lockstep.
+See the EXECUTED note under Decision 6 in
+`roast-phase-5-security-rollout-gates.md` for the full inventory. The
+former freeze marker lived in the now-deleted `nonce.rs`.
 
 ## 8. Bounded concurrency (reserved, not built)
 

@@ -141,6 +141,28 @@ architecture questions:
    interactive session flow is designed t-of-included-native from the
    start; no first-t-responsive retrofit of the transitional finalize
    contract is needed or wanted.
+   **EXECUTED (2026-07-09).** The transitional coarse-FROST path has
+   been DELETED (spec §7). Removed from the signer crate: the
+   `StartSignRound`/`FinalizeSignRound` deterministic flow (`signing.rs`),
+   the `RoundNonceBinding` machinery (`nonce.rs`, whole file), the
+   trusted-dealer `run_dkg` + its production gates + the stateless
+   `generate_nonces_and_commitments`/`sign_share`/`aggregate` FFI ops
+   (and the #4129 production gate that fenced them), plus the sign-round
+   persist-pending marker mechanism that only the coarse round used. The
+   six coarse extern-"C" wrappers are gone. Removing exported symbols is
+   an incompatible ABI change: **`TBTC_SIGNER_ABI_MAJOR` 1 → 2, minor
+   reset to 0**; the Go bridge's required-ABI constants and
+   `ci/frost-signer-pin.env` were bumped in lockstep. Preserved and
+   unaffected: the interactive path (OS-random nonce custody), the
+   distributed-DKG persist path (`persist_distributed_dkg_key_package` +
+   `dkg_part1/2/3`), and the Go tECDSA routing. Coarse-coupled tests were
+   migrated (interop/firewall coverage onto frost-crate primitives / the
+   interactive entry point) or removed, and the provenance-gate
+   status/runtime-version negative-branch coverage was re-established
+   directly against `enforce_provenance_gate()`. Follow-up: the
+   transcript-audit/blame FFIs remain as API surface but lost their
+   coarse-coupled integration tests; re-establish coverage when the
+   interactive blame instrumentation (Decision 4 / Phase 7.4) lands.
 7. **Init-config demand is process-fatal.** Setting
    `TBTC_SIGNER_INIT_CONFIG_PATH` demands config-mode FROST operation;
    any state in which the FROST-native engine does not come up under a
