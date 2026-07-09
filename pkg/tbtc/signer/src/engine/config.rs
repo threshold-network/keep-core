@@ -164,10 +164,6 @@ pub(crate) const TBTC_SIGNER_AUTO_QUARANTINE_DAO_ALLOWLIST_IDENTIFIERS_ENV: &str
 
 pub(crate) const TBTC_SIGNER_DEFAULT_AUTO_QUARANTINE_FAULT_THRESHOLD: u64 = 3;
 
-pub(crate) const TBTC_SIGNER_DEFAULT_AUTO_QUARANTINE_TIMEOUT_PENALTY: u64 = 1;
-
-pub(crate) const TBTC_SIGNER_DEFAULT_AUTO_QUARANTINE_INVALID_SHARE_PENALTY: u64 = 2;
-
 pub(crate) const TBTC_SIGNER_REFRESH_CADENCE_SECONDS_ENV: &str =
     "TBTC_SIGNER_REFRESH_CADENCE_SECONDS";
 
@@ -367,6 +363,12 @@ pub(crate) fn truthy_env_flag(raw_value: &str) -> bool {
     )
 }
 
+// Test-only: the interactive signing path always validates the attempt
+// context in strict mode (it hardcodes strict = true), so production no
+// longer routes the strict-mode decision through this helper. It remains
+// as the tested source of truth for the "production forces strict, else
+// honor the env flag" policy.
+#[cfg(test)]
 pub(crate) fn roast_strict_mode_enabled() -> bool {
     if signer_profile_is_production() {
         return true;

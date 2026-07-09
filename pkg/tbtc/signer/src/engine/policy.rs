@@ -55,8 +55,6 @@ pub(crate) struct SigningPolicyFirewallConfig {
 #[derive(Clone, Debug)]
 pub(crate) struct AutoQuarantineConfig {
     pub(crate) fault_threshold: u64,
-    pub(crate) timeout_penalty: u64,
-    pub(crate) invalid_share_penalty: u64,
     pub(crate) dao_allowlist_identifiers: HashSet<u16>,
 }
 
@@ -197,23 +195,9 @@ pub(crate) fn reject_admission_policy(
     })
 }
 
-pub(crate) fn enforce_admission_policy(request: &RunDkgRequest) -> Result<(), EngineError> {
-    let participant_identifiers: HashSet<u16> = request
-        .participants
-        .iter()
-        .map(|participant| participant.identifier)
-        .collect();
-    enforce_admission_policy_for(
-        &request.session_id,
-        request.participants.len(),
-        &participant_identifiers,
-        request.threshold,
-    )
-}
-
-/// Admission checks over the raw participant primitives, shared by the dealer
-/// `run_dkg` and the distributed-DKG persist path (which derives the participant
-/// identifiers from the group public key package rather than a dealer request).
+/// Admission checks over the raw participant primitives, used by the
+/// distributed-DKG persist path (which derives the participant identifiers from
+/// the group public key package).
 pub(crate) fn enforce_admission_policy_for(
     session_id: &str,
     participant_count: usize,
@@ -385,14 +369,6 @@ pub(crate) fn load_auto_quarantine_config() -> Result<Option<AutoQuarantineConfi
         TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV,
         TBTC_SIGNER_DEFAULT_AUTO_QUARANTINE_FAULT_THRESHOLD,
     )?;
-    let timeout_penalty = parse_u64_from_env_with_default(
-        TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY_ENV,
-        TBTC_SIGNER_DEFAULT_AUTO_QUARANTINE_TIMEOUT_PENALTY,
-    )?;
-    let invalid_share_penalty = parse_u64_from_env_with_default(
-        TBTC_SIGNER_AUTO_QUARANTINE_INVALID_SHARE_PENALTY_ENV,
-        TBTC_SIGNER_DEFAULT_AUTO_QUARANTINE_INVALID_SHARE_PENALTY,
-    )?;
     let dao_allowlist_identifiers =
         parse_identifier_set_from_env(TBTC_SIGNER_AUTO_QUARANTINE_DAO_ALLOWLIST_IDENTIFIERS_ENV)?
             .unwrap_or_default();
@@ -403,23 +379,9 @@ pub(crate) fn load_auto_quarantine_config() -> Result<Option<AutoQuarantineConfi
             TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV
         )));
     }
-    if timeout_penalty == 0 {
-        return Err(EngineError::Internal(format!(
-            "env [{}] must be positive",
-            TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY_ENV
-        )));
-    }
-    if invalid_share_penalty == 0 {
-        return Err(EngineError::Internal(format!(
-            "env [{}] must be positive",
-            TBTC_SIGNER_AUTO_QUARANTINE_INVALID_SHARE_PENALTY_ENV
-        )));
-    }
 
     Ok(Some(AutoQuarantineConfig {
         fault_threshold,
-        timeout_penalty,
-        invalid_share_penalty,
         dao_allowlist_identifiers,
     }))
 }

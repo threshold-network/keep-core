@@ -477,19 +477,3 @@ pub(crate) fn ensure_consumed_registry_insert_capacity(
 
     Ok(())
 }
-
-pub(crate) fn ensure_attempt_transition_record_insert_capacity(
-    records: &[TranscriptAuditRecord],
-    session_id: &str,
-) -> Result<(), EngineError> {
-    if records.len() >= TBTC_SIGNER_MAX_ATTEMPT_TRANSITION_RECORDS_PER_SESSION {
-        return Err(EngineError::Internal(format!(
-            "attempt_transition_records size [{}] reached max [{}] for session [{}]; use a new session_id",
-            records.len(),
-            TBTC_SIGNER_MAX_ATTEMPT_TRANSITION_RECORDS_PER_SESSION,
-            session_id
-        )));
-    }
-
-    Ok(())
-}

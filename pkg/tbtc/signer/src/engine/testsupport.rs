@@ -86,7 +86,6 @@ pub fn reset_for_tests() {
     if let Ok(mut limiter) = build_tx_rate_limiter_state().lock() {
         *limiter = BuildTxRateLimiterState::default();
     }
-    clear_sign_round_persist_pending();
 
     if let Ok(state) = state() {
         if let Ok(mut guard) = state.lock() {

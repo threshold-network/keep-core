@@ -84,10 +84,7 @@ pub(crate) struct HardeningTelemetryState {
 
 #[derive(Clone, Copy)]
 pub(crate) enum HardeningOperation {
-    RunDkg,
-    StartSignRound,
     BuildTaprootTx,
-    FinalizeSignRound,
     RefreshShares,
     // Interactive Open/Abort are O(1) registry mutations and record
     // call/success counters only; the cryptographic rounds and the
@@ -142,15 +139,8 @@ where
 
 pub(crate) fn record_hardening_operation_latency(operation: HardeningOperation, duration_ms: u64) {
     record_hardening_telemetry(|telemetry| match operation {
-        HardeningOperation::RunDkg => telemetry.run_dkg_latency.record(duration_ms),
-        HardeningOperation::StartSignRound => {
-            telemetry.start_sign_round_latency.record(duration_ms)
-        }
         HardeningOperation::BuildTaprootTx => {
             telemetry.build_taproot_tx_latency.record(duration_ms)
-        }
-        HardeningOperation::FinalizeSignRound => {
-            telemetry.finalize_sign_round_latency.record(duration_ms)
         }
         HardeningOperation::RefreshShares => telemetry.refresh_shares_latency.record(duration_ms),
         HardeningOperation::InteractiveRound1 => {
