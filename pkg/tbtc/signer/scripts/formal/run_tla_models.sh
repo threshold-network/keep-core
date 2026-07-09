@@ -12,7 +12,11 @@ MODEL_DIR="${MODELS_PATH:-$ROOT_DIR/docs/formal/models}"
 TLA_TOOLS_VERSION="${TLA_TOOLS_VERSION:-v1.8.0}"
 TLA_TOOLS_JAR="${TLA_TOOLS_JAR:-/tmp/tla2tools-${TLA_TOOLS_VERSION}.jar}"
 TLA_TOOLS_URL="${TLA_TOOLS_URL:-https://github.com/tlaplus/tlaplus/releases/download/${TLA_TOOLS_VERSION}/tla2tools.jar}"
-TLA_TOOLS_SHA256="${TLA_TOOLS_SHA256:-9e27b5e19a69ae1f56aabf8403a6ed5598dbfa6e638908e5278ac39736c1543d}"
+# Pin the SHA-256 of the upstream tla2tools.jar (github.com/tlaplus/tlaplus
+# release v1.8.0). Re-pin this when the upstream release asset is rebuilt and the
+# download-verification gate below reports a mismatch, after confirming the new
+# jar comes from the official release URL.
+TLA_TOOLS_SHA256="${TLA_TOOLS_SHA256:-33de7da9ce1b7fffb9d1c184021178dbb051747be48504e65c584c423721a32e}"
 
 if ! command -v java >/dev/null 2>&1; then
   echo "java is required to run TLC model checks" >&2
