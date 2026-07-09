@@ -21,6 +21,16 @@ type fixedTestSigner struct{}
 
 func (fixedTestSigner) Sign(_ []byte) ([]byte, error) { return []byte{0x01}, nil }
 
+// passThroughAggregateOnce is the test injection for interactiveSigningRunner's
+// aggregateOnce. Each test runner simulates a SEPARATE operator process (its own
+// fake engine), so the process-global aggregate memo — which exists only to let a
+// multi-seat operator's local seats share one aggregation — must be bypassed so
+// each runner aggregates against its own engine. The memo's dedup behaviour is
+// covered directly by the TestAggregateInteractiveOnce_* cases.
+func passThroughAggregateOnce(_ string, aggregate func() ([]byte, error)) ([]byte, error) {
+	return aggregate()
+}
+
 type harness struct {
 	bus         RunnerBus
 	runners     []*interactiveSigningRunner
@@ -81,6 +91,12 @@ func buildInteractiveSigningHarness(t *testing.T, n int, threshold uint16) harne
 		if err != nil {
 			t.Fatalf("runner (member %d): %v", member, err)
 		}
+		// Each harness runner simulates a SEPARATE operator (its own engine); in
+		// production those would be separate processes with separate memos. Bypass
+		// the process-global aggregate memo so each runner aggregates against its
+		// own engine independently (the memo's own dedup behaviour is covered by
+		// TestAggregateInteractiveOnce_*).
+		runner.aggregateOnce = passThroughAggregateOnce
 		h.coords = append(h.coords, coord)
 		h.collectors = append(h.collectors, collector)
 		h.engines = append(h.engines, engine)
@@ -406,6 +422,10 @@ func TestInteractiveSigningRunner_AbortsNativeAttemptOnEarlyExit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runner: %v", err)
 	}
+	// See passThroughAggregateOnce: this single-runner test simulates one operator
+	// process; bypass the shared aggregate memo so it neither leaks a result to
+	// another test nor suppresses this test's own engine aggregate call.
+	runner.aggregateOnce = passThroughAggregateOnce
 
 	// No second node ever broadcasts, so Run blocks waiting for round 1 to reach
 	// the threshold (as coordinator) or for the coordinator's package (otherwise)
@@ -454,6 +474,10 @@ func TestInteractiveSigningRunner_RejectsEngineCoordinatorMismatch(t *testing.T)
 	if err != nil {
 		t.Fatalf("runner: %v", err)
 	}
+	// See passThroughAggregateOnce: this single-runner test simulates one operator
+	// process; bypass the shared aggregate memo so it neither leaks a result to
+	// another test nor suppresses this test's own engine aggregate call.
+	runner.aggregateOnce = passThroughAggregateOnce
 
 	runCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -634,6 +658,10 @@ func buildEquivocationRunner(t *testing.T, included []group.MemberIndex) (
 	if err != nil {
 		t.Fatalf("runner: %v", err)
 	}
+	// See passThroughAggregateOnce: this single-runner test simulates one operator
+	// process; bypass the shared aggregate memo so it neither leaks a result to
+	// another test nor suppresses this test's own engine aggregate call.
+	runner.aggregateOnce = passThroughAggregateOnce
 	return runner, collector, ctx.Hash(), ara.ElectedCoordinator()
 }
 
@@ -1063,6 +1091,10 @@ func TestInteractiveSigningRunner_ObserverAggregatesAndAbortsWithoutSigning(t *t
 	if err != nil {
 		t.Fatalf("runner: %v", err)
 	}
+	// See passThroughAggregateOnce: this single-runner test simulates one operator
+	// process; bypass the shared aggregate memo so it neither leaks a result to
+	// another test nor suppresses this test's own engine aggregate call.
+	runner.aggregateOnce = passThroughAggregateOnce
 
 	// Pre-inject the coordinator's signed package (signer_ids = the two signers,
 	// excluding the observer) plus both signers' shares, so the observer's await
