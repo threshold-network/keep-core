@@ -330,6 +330,19 @@ type BridgeChain interface {
 		redeemerOutputScript bitcoin.Script,
 	) (*RedemptionRequest, bool, error)
 
+	// GetRedemptionParameters gets the current value of parameters relevant
+	// for the redemption process.
+	GetRedemptionParameters() (
+		dustThreshold uint64,
+		treasuryFeeDivisor uint64,
+		txMaxFee uint64,
+		txMaxTotalFee uint64,
+		timeout uint32,
+		timeoutSlashingAmount *big.Int,
+		timeoutNotifierRewardMultiplier uint32,
+		err error,
+	)
+
 	// GetDepositRequest gets the on-chain deposit request for the given
 	// funding transaction hash and output index. The returned bool value
 	// indicates whether the request was found or not.

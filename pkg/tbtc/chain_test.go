@@ -46,6 +46,16 @@ type movingFundsParameters = struct {
 	sweepTimeoutNotifierRewardMultiplier uint32
 }
 
+type redemptionParameters = struct {
+	dustThreshold                   uint64
+	treasuryFeeDivisor              uint64
+	txMaxFee                        uint64
+	txMaxTotalFee                   uint64
+	timeout                         uint32
+	timeoutSlashingAmount           *big.Int
+	timeoutNotifierRewardMultiplier uint32
+}
+
 type localChain struct {
 	frostWalletRegistryAvailable bool
 
@@ -101,6 +111,9 @@ type localChain struct {
 
 	redemptionProposalValidationsMutex sync.Mutex
 	redemptionProposalValidations      map[[32]byte]bool
+
+	redemptionParametersMutex sync.Mutex
+	redemptionParameters      redemptionParameters
 
 	movingFundsProposalValidationsMutex sync.Mutex
 	movingFundsProposalValidations      map[[32]byte]bool
@@ -1236,6 +1249,52 @@ func (lc *localChain) setRedemptionProposalValidationResult(
 	return nil
 }
 
+func (lc *localChain) GetRedemptionParameters() (
+	dustThreshold uint64,
+	treasuryFeeDivisor uint64,
+	txMaxFee uint64,
+	txMaxTotalFee uint64,
+	timeout uint32,
+	timeoutSlashingAmount *big.Int,
+	timeoutNotifierRewardMultiplier uint32,
+	err error,
+) {
+	lc.redemptionParametersMutex.Lock()
+	defer lc.redemptionParametersMutex.Unlock()
+
+	return lc.redemptionParameters.dustThreshold,
+		lc.redemptionParameters.treasuryFeeDivisor,
+		lc.redemptionParameters.txMaxFee,
+		lc.redemptionParameters.txMaxTotalFee,
+		lc.redemptionParameters.timeout,
+		lc.redemptionParameters.timeoutSlashingAmount,
+		lc.redemptionParameters.timeoutNotifierRewardMultiplier,
+		nil
+}
+
+func (lc *localChain) setRedemptionParameters(
+	dustThreshold uint64,
+	treasuryFeeDivisor uint64,
+	txMaxFee uint64,
+	txMaxTotalFee uint64,
+	timeout uint32,
+	timeoutSlashingAmount *big.Int,
+	timeoutNotifierRewardMultiplier uint32,
+) {
+	lc.redemptionParametersMutex.Lock()
+	defer lc.redemptionParametersMutex.Unlock()
+
+	lc.redemptionParameters = redemptionParameters{
+		dustThreshold:                   dustThreshold,
+		treasuryFeeDivisor:              treasuryFeeDivisor,
+		txMaxFee:                        txMaxFee,
+		txMaxTotalFee:                   txMaxTotalFee,
+		timeout:                         timeout,
+		timeoutSlashingAmount:           timeoutSlashingAmount,
+		timeoutNotifierRewardMultiplier: timeoutNotifierRewardMultiplier,
+	}
+}
+
 func buildRedemptionProposalValidationKey(
 	walletPublicKeyHash [20]byte,
 	proposal *RedemptionProposal,
@@ -1584,13 +1643,16 @@ func ConnectWithKey(
 		depositSweepProposalValidations:          make(map[[32]byte]bool),
 		pendingRedemptionRequests:                make(map[[32]byte]*RedemptionRequest),
 		redemptionProposalValidations:            make(map[[32]byte]bool),
-		movingFundsProposalValidations:           make(map[[32]byte]bool),
-		movedFundsSweepProposalValidations:       make(map[[32]byte]bool),
-		heartbeatProposalValidations:             make(map[[16]byte]bool),
-		depositRequests:                          make(map[[32]byte]*DepositChainRequest),
-		eligibleStakes:                           make(map[chain.Address]*big.Int),
-		blockCounter:                             blockCounter,
-		operatorPrivateKey:                       operatorPrivateKey,
+		redemptionParameters: redemptionParameters{
+			txMaxTotalFee: ^uint64(0),
+		},
+		movingFundsProposalValidations:     make(map[[32]byte]bool),
+		movedFundsSweepProposalValidations: make(map[[32]byte]bool),
+		heartbeatProposalValidations:       make(map[[16]byte]bool),
+		depositRequests:                    make(map[[32]byte]*DepositChainRequest),
+		eligibleStakes:                     make(map[chain.Address]*big.Int),
+		blockCounter:                       blockCounter,
+		operatorPrivateKey:                 operatorPrivateKey,
 	}
 
 	return localChain
