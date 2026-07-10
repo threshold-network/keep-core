@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
-	"sort"
 	"testing"
 	"time"
 
@@ -122,26 +121,8 @@ func TestCoordinationWindow_Index(t *testing.T) {
 }
 
 func TestWatchCoordinationWindows(t *testing.T) {
-	watchBlocksFn := func(ctx context.Context) <-chan uint64 {
-		blocksChan := make(chan uint64)
-
-		go func() {
-			// Emit a deterministic sequence that spans two coordination windows.
-			// This avoids relying on real-time ticker scheduling that can be slow
-			// in loaded/containerized environments.
-			for _, block := range []uint64{899, 900, 901, 1799, 1800, 1801} {
-				select {
-				case blocksChan <- block:
-				case <-ctx.Done():
-					return
-				}
-			}
-
-			// Keep the goroutine alive until cancellation so the channel is not
-			// closed unexpectedly while watchCoordinationWindows is selecting.
-			<-ctx.Done()
-		}()
-
+	blocksChan := make(chan uint64)
+	watchBlocksFn := func(_ context.Context) <-chan uint64 {
 		return blocksChan
 	}
 
@@ -152,43 +133,42 @@ func TestWatchCoordinationWindows(t *testing.T) {
 		windowsChan <- window
 	}
 
-	ctx, cancelCtx := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancelCtx := context.WithCancel(context.Background())
 	defer cancelCtx()
 
 	go watchCoordinationWindows(ctx, watchBlocksFn, onWindowFn)
 
-	receivedWindows := make([]*coordinationWindow, 0, 2)
-	expectedWindows := 2
-
-	for len(receivedWindows) < expectedWindows {
+	sendBlock := func(block uint64) {
+		t.Helper()
 		select {
-		case window := <-windowsChan:
-			receivedWindows = append(receivedWindows, window)
-		case <-ctx.Done():
-			t.Fatalf(
-				"timeout waiting for windows: got %d, expected %d",
-				len(receivedWindows),
-				expectedWindows,
-			)
+		case blocksChan <- block:
+		case <-time.After(1 * time.Second):
+			t.Fatalf("timeout sending block [%d]", block)
 		}
 	}
 
-	testutils.AssertIntsEqual(t, "received windows", 2, len(receivedWindows))
-	sort.Slice(receivedWindows, func(i, j int) bool {
-		return receivedWindows[i].coordinationBlock < receivedWindows[j].coordinationBlock
-	})
-	testutils.AssertIntsEqual(
-		t,
-		"first window",
-		900,
-		int(receivedWindows[0].coordinationBlock),
-	)
-	testutils.AssertIntsEqual(
-		t,
-		"second window",
-		1800,
-		int(receivedWindows[1].coordinationBlock),
-	)
+	expectWindow := func(expectedBlock uint64) {
+		t.Helper()
+		select {
+		case window := <-windowsChan:
+			testutils.AssertIntsEqual(
+				t,
+				"coordination block",
+				int(expectedBlock),
+				int(window.coordinationBlock),
+			)
+		case <-time.After(1 * time.Second):
+			t.Fatalf("timeout waiting for window [%d]", expectedBlock)
+		}
+	}
+
+	sendBlock(899)
+	sendBlock(900)
+	expectWindow(900)
+	sendBlock(900)
+	sendBlock(901)
+	sendBlock(1800)
+	expectWindow(1800)
 }
 
 func TestCoordinationExecutor_Coordinate(t *testing.T) {
