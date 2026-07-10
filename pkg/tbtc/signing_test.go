@@ -20,7 +20,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
 
-func TestSigningSessionID_LegacyFormat(t *testing.T) {
+func TestSigningSessionID_KeyPathFormatStaysWithinSignerLimit(t *testing.T) {
 	message, ok := new(big.Int).SetString(
 		"ac692bb7fddf3f7e1e050a83cf3ffb6e8e69888ce980281aa39da169525750ef",
 		16,
@@ -29,15 +29,32 @@ func TestSigningSessionID_LegacyFormat(t *testing.T) {
 		t.Fatal("failed to build test message")
 	}
 
-	sessionID := signingSessionID(message, nil, 25300, 12, "kg-a")
+	// A full-length persisted FROST key group (66 hex chars) -- the case that would
+	// blow the 128-char signer session-id limit if the key-path branch concatenated the
+	// 64-hex message + key group instead of hashing.
+	keyGroup := strings.Repeat("ab", 33) // 66 hex chars
+	sessionID := signingSessionID(message, nil, 25300, 12, keyGroup)
 
-	expected := "ac692bb7fddf3f7e1e050a83cf3ffb6e8e69888ce980281aa39da169525750ef-12-kg-a"
-	if sessionID != expected {
-		t.Fatalf(
-			"unexpected signing session ID\nexpected: [%s]\nactual:   [%s]",
-			expected,
-			sessionID,
-		)
+	if len(sessionID) > 128 {
+		t.Fatalf("key-path signing session ID exceeds signer limit: [%d] (%s)", len(sessionID), sessionID)
+	}
+	if !strings.HasPrefix(sessionID, "kp-") {
+		t.Fatalf("unexpected key-path signing session ID prefix: [%s]", sessionID)
+	}
+	if !strings.HasSuffix(sessionID, "-12") {
+		t.Fatalf("unexpected key-path signing session ID attempt suffix: [%s]", sessionID)
+	}
+	// Binds message, attempt number, and key group (start block is not part of the
+	// attempt-specific key-path id, matching the pre-key-group behaviour).
+	if signingSessionID(message, nil, 25300, 13, keyGroup) == sessionID {
+		t.Fatal("key-path signing session ID must bind the attempt number")
+	}
+	other, _ := new(big.Int).SetString("01", 16)
+	if signingSessionID(other, nil, 25300, 12, keyGroup) == sessionID {
+		t.Fatal("key-path signing session ID must bind the message")
+	}
+	if signingSessionID(message, nil, 25300, 12, keyGroup+"cd") == sessionID {
+		t.Fatal("key-path signing session ID must bind the key group")
 	}
 }
 
@@ -102,6 +119,12 @@ func TestRoastSessionID_StableAndBinds(t *testing.T) {
 	keyPath := roastSessionID(message, nil, 25300, "kg-a")
 	if !strings.HasPrefix(keyPath, "roast-") {
 		t.Fatalf("roast session id must be namespaced; got [%s]", keyPath)
+	}
+	// This id is passed to the native signer as the interactive session id, so it must
+	// stay within the 128-char limit even with a full-length (66 hex) FROST key group --
+	// the key-path branch hashes rather than concatenating for exactly this reason.
+	if long := roastSessionID(message, nil, 25300, strings.Repeat("ab", 33)); len(long) > 128 {
+		t.Fatalf("key-path roast session id exceeds signer limit: [%d] (%s)", len(long), long)
 	}
 	if roastSessionID(message, nil, 28900, "kg-a") == keyPath {
 		t.Fatal("key-path roast session id must bind the start block")

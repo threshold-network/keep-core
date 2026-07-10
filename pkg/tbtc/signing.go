@@ -57,9 +57,16 @@ func signingSessionID(
 	// collision would let one wallet overwrite the other's in-flight binding. Group-
 	// uniform per wallet, so it stays identical across a wallet's honest nodes.
 	if taprootMerkleRoot == nil {
-		// message.Text(16) is hex and attemptNumber is decimal (hyphen-free), so
-		// keyGroupID as the trailing field keeps the id injective.
-		return fmt.Sprintf("%v-%v-%v", message.Text(16), attemptNumber, keyGroupID)
+		// Hash the key-path branch too: a full-length FROST key group (64/66 hex)
+		// concatenated onto the 64-hex message would push the id past the native
+		// signer's session-id length limit (128). The taproot branch below hashes for
+		// the same reason. "kp-" keeps key-path ids disjoint from the taproot "tr-"; the
+		// attempt number stays a readable suffix.
+		keyPathDigest := sha256.New()
+		keyPathDigest.Write([]byte(message.Text(16)))
+		keyPathDigest.Write([]byte{0})
+		keyPathDigest.Write([]byte(keyGroupID))
+		return fmt.Sprintf("kp-%x-%v", keyPathDigest.Sum(nil), attemptNumber)
 	}
 
 	var startBlockBytes [8]byte
@@ -101,9 +108,22 @@ func roastSessionID(
 	// while staying identical across every honest node of one wallet (all derive the
 	// same key group). Empty for legacy/non-native wallets (which do not drive ROAST).
 	if taprootMerkleRoot == nil {
-		// message.Text(16) is hex and startBlock is decimal (both hyphen-free), so
-		// keyGroupID as the trailing field keeps the id injective.
-		return fmt.Sprintf("roast-%v-%v-%v", message.Text(16), startBlock, keyGroupID)
+		// Hash the key-path branch too: this id is passed to the native signer as the
+		// interactive session id (driveInteractiveRoastSigningIfEnabled ->
+		// NewActiveRoastAttempt -> InteractiveSessionOpen), and a full-length FROST key
+		// group (64/66 hex) concatenated onto the 64-hex message would exceed the
+		// signer's 128-char session-id limit and block signing. The taproot branch below
+		// hashes for the same reason. "roast-kp-" keeps key-path ids disjoint from the
+		// taproot "roast-tr-".
+		var keyPathStartBlock [8]byte
+		binary.BigEndian.PutUint64(keyPathStartBlock[:], startBlock)
+		keyPathDigest := sha256.New()
+		keyPathDigest.Write([]byte(message.Text(16)))
+		keyPathDigest.Write([]byte{0})
+		keyPathDigest.Write(keyPathStartBlock[:])
+		keyPathDigest.Write([]byte{0})
+		keyPathDigest.Write([]byte(keyGroupID))
+		return fmt.Sprintf("roast-kp-%x", keyPathDigest.Sum(nil))
 	}
 
 	var startBlockBytes [8]byte
