@@ -63,6 +63,10 @@ func TestConsumeRoastTransitionForSelection_FailsClosedNoRecord(t *testing.T) {
 		Signer:      roast.NoOpSigner(),
 		Verifier:    roast.NoOpSignatureVerifier(),
 		SelfMember:  1,
+		// The selector scopes its coordinator lookup by the transition record's key
+		// group (newExchangeTestContext uses "exchange-key-group"); register under
+		// the same handle so tests with a record reach their intended assertion.
+		KeyGroupID: "exchange-key-group",
 	})
 
 	// Active ROAST, a retry, but no record -> a transition was expected -> fail
@@ -89,6 +93,10 @@ func TestConsumeRoastTransitionForSelection_PartialRegistrationFailsClosed(t *te
 		Signer:      roast.NoOpSigner(),
 		Verifier:    roast.NoOpSignatureVerifier(),
 		SelfMember:  1,
+		// The selector scopes its coordinator lookup by the transition record's key
+		// group (newExchangeTestContext uses "exchange-key-group"); register under
+		// the same handle so tests with a record reach their intended assertion.
+		KeyGroupID: "exchange-key-group",
 	})
 
 	_, _, err := ConsumeRoastTransitionForSelection("session", 2, 1, 3)
@@ -105,6 +113,10 @@ func TestConsumeRoastTransitionForSelection_FailsClosedStaleRecord(t *testing.T)
 		Signer:      roast.NoOpSigner(),
 		Verifier:    roast.NoOpSignatureVerifier(),
 		SelfMember:  1,
+		// The selector scopes its coordinator lookup by the transition record's key
+		// group (newExchangeTestContext uses "exchange-key-group"); register under
+		// the same handle so tests with a record reach their intended assertion.
+		KeyGroupID: "exchange-key-group",
 	})
 
 	// A record fresh for retry 1 (prev attempt 0) but we select for retry 3.
@@ -153,6 +165,7 @@ func TestConsumeRoastTransitionForSelection_CarriesParking(t *testing.T) {
 		Signer:      fixedSigner{},
 		Verifier:    roast.NoOpSignatureVerifier(),
 		SelfMember:  uint32(elected),
+		KeyGroupID:  "exchange-key-group",
 	})
 	handle, _ := coord.BeginAttempt(prevCtx)
 	for _, m := range included {
@@ -221,6 +234,7 @@ func TestConsumeRoastTransitionForSelection_ConsumesFreshRecord(t *testing.T) {
 		Signer:      fixedSigner{},
 		Verifier:    roast.NoOpSignatureVerifier(),
 		SelfMember:  uint32(elected),
+		KeyGroupID:  "exchange-key-group",
 	})
 	handle, err := coord.BeginAttempt(prevCtx)
 	if err != nil {
@@ -255,5 +269,85 @@ func TestConsumeRoastTransitionForSelection_ConsumesFreshRecord(t *testing.T) {
 	}
 	if len(parked) != 0 {
 		t.Fatalf("expected no parked members, got %v", parked)
+	}
+}
+
+// TestConsumeRoastTransitionForSelection_UsesRecordKeyGroupCoordinator is the
+// multi-wallet regression for the selector: when two wallets seat this operator at
+// the SAME member index, selection must drive NextAttempt on the coordinator of the
+// wallet the transition record belongs to -- not an arbitrary same-seat entry. The
+// record's PreviousHandle was minted by that wallet's coordinator, so a wrong
+// coordinator would reject the handle (ErrUnknownAttempt) and fail closed. A
+// seat-only scan would pick a coordinator by map order, making this flaky; the
+// wallet-scoped lookup makes it deterministic.
+func TestConsumeRoastTransitionForSelection_UsesRecordKeyGroupCoordinator(t *testing.T) {
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
+	resetSelectionRegistries(t)
+
+	roastSessionID := "multiwallet-consume-session"
+	included := []group.MemberIndex{1, 2, 3}
+	dkgKey := []byte{0x0a, 0x0b}
+	prevCtx := newExchangeTestContext(t, roastSessionID, included, dkgKey)
+	hash := prevCtx.Hash()
+
+	probe := roast.NewInMemoryCoordinatorWithSigning(0, fixedSigner{}, roast.NoOpSignatureVerifier())
+	probeHandle, err := probe.BeginAttempt(prevCtx)
+	if err != nil {
+		t.Fatalf("probe begin attempt: %v", err)
+	}
+	elected, err := probe.SelectedCoordinator(probeHandle)
+	if err != nil {
+		t.Fatalf("selected coordinator: %v", err)
+	}
+
+	// The RIGHT wallet's coordinator, under the record's key group.
+	coord := roast.NewInMemoryCoordinatorWithSigning(
+		elected, fixedSigner{}, roast.NoOpSignatureVerifier(),
+	)
+	RegisterRoastRetryCoordinator(RoastRetryDeps{
+		Coordinator: coord,
+		Signer:      fixedSigner{},
+		Verifier:    roast.NoOpSignatureVerifier(),
+		SelfMember:  uint32(elected),
+		KeyGroupID:  "exchange-key-group",
+	})
+	// A DECOY wallet's coordinator at the SAME seat under a DIFFERENT key group. It
+	// never saw this attempt, so if selection wrongly picked it NextAttempt would
+	// fail with ErrUnknownAttempt.
+	decoy := roast.NewInMemoryCoordinatorWithSigning(
+		elected, fixedSigner{}, roast.NoOpSignatureVerifier(),
+	)
+	RegisterRoastRetryCoordinator(RoastRetryDeps{
+		Coordinator: decoy,
+		Signer:      fixedSigner{},
+		Verifier:    roast.NoOpSignatureVerifier(),
+		SelfMember:  uint32(elected),
+		KeyGroupID:  "other-wallet-key-group",
+	})
+
+	handle, err := coord.BeginAttempt(prevCtx)
+	if err != nil {
+		t.Fatalf("begin attempt: %v", err)
+	}
+	for _, m := range included {
+		if err := coord.RecordEvidence(handle, signedForcedSnapshot(m, hash)); err != nil {
+			t.Fatalf("record evidence for member %d: %v", m, err)
+		}
+	}
+	bundle, err := coord.AggregateBundle(handle)
+	if err != nil {
+		t.Fatalf("aggregate bundle: %v", err)
+	}
+	RecordRoastTransition(roastSessionID, elected, RoastTransitionRecord{
+		Bundle:            bundle,
+		PreviousHandle:    handle,
+		PreviousContext:   prevCtx, // KeyGroupID == "exchange-key-group"
+		DkgGroupPublicKey: dkgKey,
+	})
+
+	// Selection must resolve coord (the record's key group), not the decoy; if it
+	// used the decoy, NextAttempt would fail closed with an unknown handle.
+	if _, _, err := ConsumeRoastTransitionForSelection(roastSessionID, elected, 1, 3); err != nil {
+		t.Fatalf("selection must use the record's key-group coordinator and succeed; got %v", err)
 	}
 }

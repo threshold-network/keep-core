@@ -154,19 +154,22 @@ func BeginOrchestrationForSession(
 	// bindings -- the PR2b-1.5 `count > 1` fail-closed guard that stood here is gone.
 	deps, ok := RegisteredRoastRetryCoordinatorForKeyGroupMember(ctx.KeyGroupID, member)
 	if !ok {
-		// THIS seat has no registered coordinator. Whether that means legacy fallback
-		// or fail-closed hinges on whether the PROCESS is ROAST-active, which is
-		// group-uniform (the selector uses any-entry RoastRetryActive()):
-		//   - count == 0: no seat is registered anywhere, so ROAST is inactive
-		//     process-wide -- a uniform condition every honest node decides
+		// THIS seat has no registered coordinator for THIS wallet's key group. Whether
+		// that means legacy fallback or fail-closed hinges on whether ROAST is active
+		// for THIS wallet, which is group-uniform for a key group (every honest node in
+		// the wallet's group sees the same per-key-group registration state). The count
+		// is scoped to ctx.KeyGroupID so a second, independently-configured wallet on
+		// this node never perturbs the decision:
+		//   - count == 0: no seat of THIS wallet is registered, so ROAST is inactive
+		//     for this wallet -- a uniform condition every honest node decides
 		//     identically -> safe legacy fallback (the static sentinel).
-		//   - count > 0: a sibling seat IS ROAST-active (a partially-registered
-		//     operator). Advertising the legacy fallback for THIS seat while the
-		//     sibling drives bound ROAST would fracture the attempt (some seats bound,
-		//     one seat legacy-shuffle) -> fail CLOSED (terminal). Member-keying the
-		//     handle binding does NOTHING here: a seat with no coordinator cannot
-		//     participate in ROAST regardless of key shape, so this fail-closed
-		//     survives PR2b-2 (only the fully-registered multi-seat guard was retired).
+		//   - count > 0: a sibling seat of THIS wallet IS ROAST-active (a partially-
+		//     registered operator). Advertising the legacy fallback for THIS seat while
+		//     the sibling drives bound ROAST would fracture the attempt (some seats
+		//     bound, one seat legacy-shuffle) -> fail CLOSED (terminal). A seat with no
+		//     coordinator cannot participate in ROAST regardless of key shape, so this
+		//     fail-closed survives PR2b-2 (only the fully-registered multi-seat guard
+		//     was retired).
 		if registeredRoastRetryMemberCount(ctx.KeyGroupID) == 0 {
 			return roast.AttemptHandle{}, nil, fmt.Errorf(
 				"%w: caller should fall back to legacy behaviour",

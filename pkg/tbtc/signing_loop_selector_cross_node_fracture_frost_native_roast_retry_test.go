@@ -126,6 +126,10 @@ func TestROASTSelector_CrossNodeLegacyFractureFailsClosed(t *testing.T) {
 			Signer:      fracFixedSigner{},
 			Verifier:    roast.NoOpSignatureVerifier(),
 			SelfMember:  uint32(elected),
+			// The selector resolves the coordinator by the transition record's key
+			// group (prevCtx uses "frac-key-group"); register under the same handle so
+			// the wallet-scoped lookup resolves for recordedSession.
+			KeyGroupID: "frac-key-group",
 		})
 	}
 	registerNodeA()
