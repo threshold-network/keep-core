@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -170,23 +169,23 @@ func buildRealCgoNetHarness(
 }
 
 // runAllAndAssertRealSignature runs every seat's runner concurrently against the shared
-// engine and asserts the shape-(A) outcome.
+// engine and asserts every co-resident seat obtains the SAME real BIP-340 signature.
 //
-// Because all seats share ONE engine and the engine's aggregate completion marker is
-// per-ATTEMPT (keyed by attempt_id, message, and taproot root - NOT per member), the
-// first seat to reach InteractiveAggregate produces the signature and marks the attempt
-// finalized; every co-resident seat then observes interactive_attempt_already_aggregated.
-// That is the shared-engine boundary, not a protocol failure: in production each node has
-// its own engine and aggregates the shares it collected independently. Crucially, every
-// seat still drives its FULL transport (broadcasting its commitments and share, and
-// collecting peers' commitments/package/shares over the real pkg/net bus) BEFORE the
-// aggregate step - so the transport seam this test exists for is exercised by all seats
-// regardless of which one wins the aggregate.
+// All seats share ONE process-global engine session AND the runner's per-(session,attempt)
+// aggregate memo (aggregateInteractiveOnce). The first seat to reach InteractiveAggregate
+// runs the single real engine aggregate and marks the attempt finalized; every sibling seat
+// then receives that same result from the memo instead of hitting the engine's per-attempt
+// idempotency marker. So NO seat surfaces interactive_attempt_already_aggregated any more
+// (the memo intercepts the co-resident collision) - all seats reach Succeeded with the
+// identical signature. In production each node has its own engine and aggregates the shares
+// it collected independently; the memo only dedups the co-resident seats of ONE operator.
+// Crucially, every seat still drives its FULL transport (broadcasting its commitments and
+// share, and collecting peers' commitments/package/shares over the real pkg/net bus) BEFORE
+// the aggregate step - so the transport seam this test exists for is exercised by all seats.
 //
-// So the assertions are: exactly one seat aggregates a real 64-byte BIP-340 signature and
-// reaches Succeeded (the engine produced the signature once, through the full runner +
-// transport stack), and every other seat reached aggregate and observed the per-attempt
-// idempotency marker - no seat fails for any other reason.
+// So the assertion is: EVERY seat aggregates the same real 64-byte BIP-340 signature and
+// reaches Succeeded, and no seat fails for any reason (an aggregate error - including the
+// idempotency marker - would fail the test, asserting the memo prevented the collision).
 func (h realCgoNetSigningHarness) runAllAndAssertRealSignature(t *testing.T, ctx context.Context) {
 	t.Helper()
 	sigs := make([][]byte, len(h.runners))
@@ -201,51 +200,34 @@ func (h realCgoNetSigningHarness) runAllAndAssertRealSignature(t *testing.T, ctx
 	}
 	wg.Wait()
 
-	var winningSignature []byte
-	winners := 0
+	var sharedSignature []byte
 	for i := range h.runners {
 		member := i + 1
-		switch {
-		case errs[i] == nil:
-			if len(sigs[i]) != 64 {
-				t.Fatalf("seat %d: expected a 64-byte BIP-340 signature, got %d bytes", member, len(sigs[i]))
-			}
-			winners++
-			if winningSignature == nil {
-				winningSignature = sigs[i]
-			} else if !bytes.Equal(sigs[i], winningSignature) {
-				t.Fatalf("seat %d produced a different signature than another aggregating seat", member)
-			}
-			state, err := h.coords[i].State(h.handles[i])
-			if err != nil {
-				t.Fatalf("seat %d state: %v", member, err)
-			}
-			if state != roast.AttemptStateSucceeded {
-				t.Fatalf("seat %d aggregated but did not reach Succeeded, got %v", member, state)
-			}
-		case isInteractiveAlreadyAggregated(errs[i]):
-			// Expected shared-engine outcome: this seat completed all transport and
-			// reached aggregate, where a co-resident seat had already finalized the
-			// attempt. The per-attempt idempotency marker is exactly what rejects it.
-		default:
-			t.Fatalf("seat %d run failed for an unexpected reason: %v", member, errs[i])
+		// With the per-(session,attempt) aggregate memo, the first local seat to reach
+		// step 9 runs the single real engine aggregate and every co-resident seat
+		// receives that same result, so ALL seats succeed with the identical BIP-340
+		// signature and none surfaces interactive_attempt_already_aggregated. An
+		// aggregate error here (idempotency marker or otherwise) fails the test,
+		// asserting the memo intercepted the shared-engine collision.
+		if errs[i] != nil {
+			t.Fatalf("seat %d run failed: %v", member, errs[i])
+		}
+		if len(sigs[i]) != 64 {
+			t.Fatalf("seat %d: expected a 64-byte BIP-340 signature, got %d bytes", member, len(sigs[i]))
+		}
+		if sharedSignature == nil {
+			sharedSignature = sigs[i]
+		} else if !bytes.Equal(sigs[i], sharedSignature) {
+			t.Fatalf("seat %d produced a different signature than another aggregating seat", member)
+		}
+		state, err := h.coords[i].State(h.handles[i])
+		if err != nil {
+			t.Fatalf("seat %d state: %v", member, err)
+		}
+		if state != roast.AttemptStateSucceeded {
+			t.Fatalf("seat %d aggregated but did not reach Succeeded, got %v", member, state)
 		}
 	}
-	if winners != 1 {
-		t.Fatalf(
-			"expected exactly one seat to aggregate the signature against the shared engine, got %d",
-			winners,
-		)
-	}
-}
-
-// isInteractiveAlreadyAggregated reports whether an aggregate error is the engine's
-// per-attempt idempotency refusal - the expected outcome when a co-resident seat (sharing
-// the single process-global engine) already finalized the attempt. Matched on the error
-// text surfaced through the FFI bridge; test-only shared-engine detection, not production
-// control flow.
-func isInteractiveAlreadyAggregated(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "interactive_attempt_already_aggregated")
 }
 
 // TestRealCgoInteractiveSigning_NetTransport_FullIncludedRound runs a complete interactive
