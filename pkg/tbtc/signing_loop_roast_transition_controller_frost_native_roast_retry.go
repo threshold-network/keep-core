@@ -75,21 +75,21 @@ func newRoastTransitionExchangeForRequest(
 	logger log.StandardLogger,
 	template *signing.Request,
 ) roastTransitionExchange {
-	// RFC-21 Phase 7.3 PR2b-1.5: gate + fetch deps for THIS seat, so a multi-seat
-	// operator's exchange uses the coordinator bound to template.MemberIndex (the
-	// elected-but-not-process-default seat can then collect + aggregate).
-	if !signing.RoastRetryActiveForMember(template.MemberIndex) {
-		return nil
-	}
-	// Scope the coordinator lookup to this wallet's key group so a multi-wallet
-	// operator's transition exchange uses the coordinator bound to the RIGHT wallet's
-	// seat, not whichever wallet last registered template.MemberIndex.
+	// RFC-21 Phase 7.3 PR2b-1.5: gate + fetch deps for THIS seat of THIS wallet, so a
+	// multi-seat operator's exchange uses the coordinator bound to template.MemberIndex.
+	// Scope BOTH the activation gate and the lookup to the wallet's key group so a
+	// sibling wallet that merely reuses the same 1..N member index cannot activate an
+	// exchange for -- or hand the wrong coordinator to -- a wallet this node did not
+	// register under that key group. Derive the key group first (the gate needs it).
 	signerMaterial, err := template.NativeSignerMaterial()
 	if err != nil {
 		return nil
 	}
 	keyGroupID, err := signing.KeyGroupIDFromSignerMaterial(signerMaterial)
 	if err != nil {
+		return nil
+	}
+	if !signing.RoastRetryActiveForKeyGroupMember(keyGroupID, template.MemberIndex) {
 		return nil
 	}
 	deps, ok := signing.RegisteredRoastRetryCoordinatorForKeyGroupMember(

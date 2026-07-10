@@ -280,3 +280,22 @@ func TestKeyGroupIDFromSignerMaterial(t *testing.T) {
 		t.Fatal("unsupported material format must return an error")
 	}
 }
+
+// TestKeyGroupIDFromSignerMaterial_RejectsEmptyKeyGroup pins the Codex P3 fix:
+// FrostTBTCSignerV1 material with an EMPTY key group must be an ERROR, not a "" handle
+// -- otherwise it would register/scope ROAST under the unscoped "" key while the actual
+// AttemptContext construction later fails the same material, an inconsistency. Erroring
+// keeps malformed material on the uniform static/legacy fallback.
+func TestKeyGroupIDFromSignerMaterial_RejectsEmptyKeyGroup(t *testing.T) {
+	payload, err := json.Marshal(&NativeTBTCSignerMaterialPayload{KeyGroup: ""})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	material := &NativeSignerMaterial{
+		Format:  NativeSignerMaterialFormatFrostTBTCSignerV1,
+		Payload: payload,
+	}
+	if _, err := KeyGroupIDFromSignerMaterial(material); err == nil {
+		t.Fatal("material with an empty key group must be rejected, not returned as an empty handle")
+	}
+}

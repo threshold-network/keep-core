@@ -495,11 +495,20 @@ func (srl *signingRetryLoop) start(
 			// pre-selection skip or whenever a member is parked, binding signing
 			// messages and transition bundles to different context hashes. ROAST
 			// inactive keeps the block-paced attemptCounter (legacy, unchanged). The
-			// gate is the PER-SEAT RoastRetryActiveForMember predicate (PR2b-1.5): a
-			// multi-seat operator may have one seat registered and another not, so
-			// activation is a per-member property; it stays deterministic per seat.
+			// gate is PER-SEAT AND PER-WALLET (RoastRetryActiveForKeyGroupMember): a
+			// multi-seat operator may have one seat registered and another not, and a
+			// node may control two wallets that reuse the same 1..N member index. Scoping
+			// by THIS wallet's key group keeps the decision group-uniform -- it must match
+			// the participant selector's per-key-group activation, or a wallet that fell
+			// back to LEGACY selection would number its attempt with the ROAST counter
+			// (and desync from peers that do not also control the sibling wallet that
+			// happened to register the same seat). Empty key group (legacy/non-native)
+			// yields false -> legacy numbering.
 			activeAttemptNumber := srl.attemptCounter
-			if signing.RoastRetryActiveForMember(srl.signingGroupMemberIndex) {
+			if signing.RoastRetryActiveForKeyGroupMember(
+				srl.roastKeyGroupID,
+				srl.signingGroupMemberIndex,
+			) {
 				activeAttemptNumber = committedRoastAttemptNumber + 1
 			}
 

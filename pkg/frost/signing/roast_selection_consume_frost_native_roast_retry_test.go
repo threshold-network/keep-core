@@ -381,3 +381,31 @@ func TestConsumeRoastTransitionForSelection_UnregisteredWalletFallsBackToLegacy(
 		)
 	}
 }
+
+// TestRoastRetryActiveForKeyGroupMember_ScopesByKeyGroup pins the Codex P2 fix: the
+// active-attempt/exchange gate is per-wallet, so a seat registered under one wallet
+// does NOT make the SAME member index "active" for a different wallet that reuses it.
+func TestRoastRetryActiveForKeyGroupMember_ScopesByKeyGroup(t *testing.T) {
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
+	resetSelectionRegistries(t)
+
+	// Member 1 registered ONLY under wallet-A.
+	RegisterRoastRetryCoordinatorForMember(1, RoastRetryDeps{
+		Coordinator: roast.NewInMemoryCoordinator(),
+		SelfMember:  1,
+		KeyGroupID:  "wallet-A",
+	})
+
+	if !RoastRetryActiveForKeyGroupMember("wallet-A", 1) {
+		t.Fatal("seat 1 must be active for its own key group wallet-A")
+	}
+	// The SAME seat under a DIFFERENT wallet is NOT active -- a sibling wallet sharing
+	// the member index must not flip this wallet's numbering/exchange decision.
+	if RoastRetryActiveForKeyGroupMember("wallet-B", 1) {
+		t.Fatal("seat 1 must NOT be active for wallet-B, which never registered it")
+	}
+	// Contrast: the seat-only predicate stays true for ANY key group (the bug source).
+	if !RoastRetryActiveForMember(1) {
+		t.Fatal("seat-only predicate must still find seat 1 under some key group")
+	}
+}

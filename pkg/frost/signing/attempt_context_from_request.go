@@ -224,6 +224,15 @@ func deriveKeyGroupID(
 		if err != nil {
 			return "", fmt.Errorf("derive key group id: %w", err)
 		}
+		// Reject an empty handle here, matching the empty-key-group rejection
+		// ExtractDkgGroupPublicKeyFromMaterial applies (dkg_group_pubkey_extraction.go).
+		// Otherwise malformed material would register/scope ROAST under the unscoped ""
+		// key while the actual AttemptContext construction later fails on the same
+		// material -- an inconsistency. Erroring here keeps malformed material on the
+		// documented static/legacy fallback everywhere.
+		if payload.KeyGroup == "" {
+			return "", fmt.Errorf("derive key group id: empty key group handle")
+		}
 		return payload.KeyGroup, nil
 	default:
 		return "", fmt.Errorf(

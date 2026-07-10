@@ -108,3 +108,21 @@ func RoastRetryActiveForMember(member group.MemberIndex) bool {
 	_, ok := RegisteredRoastRetryCoordinatorForMember(member)
 	return ok
 }
+
+// RoastRetryActiveForKeyGroupMember reports whether ROAST retry is runtime-active
+// for a specific seat of a SPECIFIC wallet: readiness opt-in AND the producer is
+// built in AND this seat has a coordinator registered UNDER THAT WALLET'S key group.
+// Unlike RoastRetryActiveForMember (which matches the seat under ANY key group), this
+// is group-uniform per wallet -- every honest node in the wallet's group derives the
+// same key group from the shared signer material and sees the same per-key-group
+// registration state. Fracture-sensitive per-attempt decisions (the active-attempt
+// numbering, the transition exchange) MUST use this so a sibling wallet that merely
+// reuses the same 1..N member index cannot flip this wallet's decision on a node that
+// controls both wallets. Always false in builds without the frost_roast_retry tag.
+func RoastRetryActiveForKeyGroupMember(keyGroupID string, member group.MemberIndex) bool {
+	if !readinessAndProducerReady() {
+		return false
+	}
+	_, ok := RegisteredRoastRetryCoordinatorForKeyGroupMember(keyGroupID, member)
+	return ok
+}
