@@ -3,6 +3,7 @@
 package signing
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -253,29 +254,36 @@ func TestRealCgoInteractiveSigning_InvalidShareBlameForcesPermanentExclusion(t *
 	for i, s := range seats2 {
 		dones[i] = runSeatAsync(s, ctx2)
 	}
+	// With the per-(session,attempt) aggregate memo, every co-resident surviving-subset
+	// seat receives the single real engine aggregate's result, so ALL succeed with the
+	// identical signature and none surfaces interactive_attempt_already_aggregated (that
+	// error now fails the test).
 	winners := 0
+	var sharedSignature []byte
 	for i := range dones {
 		<-dones[i].done
-		switch {
-		case dones[i].err == nil:
-			if len(dones[i].sig) != 64 {
-				t.Fatalf("attempt 2 seat %d: want a 64-byte signature, got %d", seats2[i].member, len(dones[i].sig))
-			}
-			winners++
-			state, err := seats2[i].coord.State(seats2[i].handle)
-			if err != nil {
-				t.Fatalf("attempt 2 seat %d state: %v", seats2[i].member, err)
-			}
-			if state != roast.AttemptStateSucceeded {
-				t.Fatalf("attempt 2 seat %d not Succeeded: %v", seats2[i].member, state)
-			}
-		case isInteractiveAlreadyAggregated(dones[i].err):
-		default:
-			t.Fatalf("attempt 2 seat %d failed unexpectedly: %v", seats2[i].member, dones[i].err)
+		if dones[i].err != nil {
+			t.Fatalf("attempt 2 seat %d failed: %v", seats2[i].member, dones[i].err)
+		}
+		if len(dones[i].sig) != 64 {
+			t.Fatalf("attempt 2 seat %d: want a 64-byte signature, got %d", seats2[i].member, len(dones[i].sig))
+		}
+		if sharedSignature == nil {
+			sharedSignature = dones[i].sig
+		} else if !bytes.Equal(dones[i].sig, sharedSignature) {
+			t.Fatalf("attempt 2 seat %d produced a different signature than another aggregating seat", seats2[i].member)
+		}
+		winners++
+		state, err := seats2[i].coord.State(seats2[i].handle)
+		if err != nil {
+			t.Fatalf("attempt 2 seat %d state: %v", seats2[i].member, err)
+		}
+		if state != roast.AttemptStateSucceeded {
+			t.Fatalf("attempt 2 seat %d not Succeeded: %v", seats2[i].member, state)
 		}
 	}
-	if winners != 1 {
-		t.Fatalf("attempt 2: expected exactly one seat to aggregate the surviving-subset signature, got %d", winners)
+	if winners != len(seats2) {
+		t.Fatalf("attempt 2: expected every surviving-subset seat to aggregate the shared signature, got %d of %d", winners, len(seats2))
 	}
 }
 

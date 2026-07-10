@@ -98,6 +98,12 @@ func newDriveFixture(t *testing.T) driveFixture {
 	})
 	t.Cleanup(ResetRoastRetryRegistrationForTest)
 	t.Cleanup(ResetInteractiveSigningEngineProviderForTest)
+	// Every drive fixture reuses the same (roastSessionID, attemptSessionID), so it
+	// maps to one process-global aggregate-memo key. Clear it between drive tests or
+	// a prior case's memoized success leaks in and suppresses this case's own engine
+	// aggregate (e.g. an aggregateErr case would never reach its error). Real nodes
+	// mint a unique session id per attempt, so this collision is test-only.
+	t.Cleanup(ResetInteractiveAggregateMemoForTest)
 
 	// The handle is minted by the registered coordinator - exactly the handle
 	// the executor entry threads into the drive for this Execute.

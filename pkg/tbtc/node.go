@@ -493,6 +493,14 @@ func (n *node) getSigningExecutor(
 		len(signers),
 	)
 
+	// Register a ROAST-retry coordinator for each local seat of this wallet so
+	// the interactive FROST signing path can run for it. This must happen before
+	// the executor is used: the executor entry's BeginOrchestrationForSession
+	// looks the coordinator up per member, and an absent coordinator makes the
+	// interactive drive fall through (fail-closed under interactive-only mode).
+	// No-op unless built with frost_native && frost_roast_retry.
+	registerRoastRetryCoordinatorForSeats(n, signers)
+
 	blockCounter, err := n.chain.BlockCounter()
 	if err != nil {
 		return nil, false, fmt.Errorf(

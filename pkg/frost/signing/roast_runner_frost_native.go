@@ -64,6 +64,13 @@ type interactiveSigningRunner struct {
 	// sub is established at construction (before any Run broadcasts) so a node
 	// never misses a peer message broadcast before it subscribed.
 	sub *RunnerBusSubscriber
+	// aggregateOnce memoizes the interactive aggregation per (session, attempt)
+	// within the process so a multi-seat operator's local seats share one result
+	// instead of colliding on the engine's per-attempt anti-replay marker. Defaults
+	// to the process-global memo (aggregateInteractiveOnce); tests that simulate
+	// several operators in ONE process inject a pass-through so each runner
+	// aggregates against its own (separate) engine independently.
+	aggregateOnce func(key string, aggregate func() ([]byte, error)) ([]byte, error)
 }
 
 func newInteractiveSigningRunner(
@@ -125,6 +132,7 @@ func newInteractiveSigningRunner(
 		signer:          signer,
 		bus:             bus,
 		sub:             bus.Subscribe(),
+		aggregateOnce:   aggregateInteractiveOnce,
 	}, nil
 }
 
@@ -327,13 +335,25 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 	// the same signature; an observer aggregates against its own open session
 	// without having contributed a share. A share-verification failure surfaces
 	// the typed error with candidate culprits for the (separate) blame path.
-	signature, err := r.engine.InteractiveAggregate(
-		binding.SessionID(),
-		attemptID,
-		pkg.SigningPackageBytes,
-		toFrostSignatureShares(shares, frostIdentifiers),
-		binding.TaprootMerkleRoot(),
-	)
+	//
+	// A multi-seat operator runs one runner per LOCAL seat against the SHARED
+	// per-process engine session, so two local seats would both try to aggregate
+	// this attempt: the first succeeds, the second hits the engine's per-attempt
+	// anti-replay marker (InteractiveAttemptAlreadyAggregated) even though the
+	// deterministic signature already exists. Memoize per (session, attempt) so
+	// sibling local seats share one aggregation result and the coordinator seat
+	// obtains the signature regardless of which local seat computed it first. In a
+	// single-seat process this is a plain pass-through (one caller per key).
+	aggregateKey := binding.SessionID() + "|" + attemptID
+	signature, err := r.aggregateOnce(aggregateKey, func() ([]byte, error) {
+		return r.engine.InteractiveAggregate(
+			binding.SessionID(),
+			attemptID,
+			pkg.SigningPackageBytes,
+			toFrostSignatureShares(shares, frostIdentifiers),
+			binding.TaprootMerkleRoot(),
+		)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("roast runner: aggregate: %w", err)
 	}
