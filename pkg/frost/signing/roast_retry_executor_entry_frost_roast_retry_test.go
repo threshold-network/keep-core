@@ -51,6 +51,7 @@ func TestEntry_StaticFallback_ReadinessOptInUnset(t *testing.T) {
 		Signer:      roast.NoOpSigner(),
 		Verifier:    roast.NoOpSignatureVerifier(),
 		SelfMember:  1,
+		KeyGroupID:  "tbtc-signer-entry-retry-group",
 	})
 
 	_, cleanup, err := attemptRoastRetryOrchestrationFromRequest(
@@ -95,6 +96,7 @@ func TestEntry_HappyPath_ActivatesOrchestration(t *testing.T) {
 		Signer:      roast.NoOpSigner(),
 		Verifier:    roast.NoOpSignatureVerifier(),
 		SelfMember:  1,
+		KeyGroupID:  "tbtc-signer-entry-retry-group",
 	})
 
 	req := newEntryRetryTestRequest(t)
@@ -134,6 +136,7 @@ func TestEntry_HardFail_RuntimeBeginAttemptFailure(t *testing.T) {
 		Signer:     roast.NoOpSigner(),
 		Verifier:   roast.NoOpSignatureVerifier(),
 		SelfMember: 1,
+		KeyGroupID: "tbtc-signer-entry-retry-group",
 	})
 
 	_, cleanup, err := attemptRoastRetryOrchestrationFromRequest(

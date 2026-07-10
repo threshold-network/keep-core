@@ -40,7 +40,12 @@ type signingParticipantSelector interface {
 	// keys its freshness/consume off so block-timing skips do not break
 	// the transition chain. honestThreshold is the group's signing
 	// threshold. sessionID is the STABLE ROAST session id and
-	// memberIndex is the local signer's member.
+	// memberIndex is the local signer's member. keyGroupID is THIS
+	// wallet's FROST key-group handle; the ROAST selector uses it to
+	// scope the ROAST-vs-legacy activation decision PER WALLET so a
+	// registration-skipped wallet stays on legacy even when a sibling
+	// wallet is ROAST-active (empty for legacy/non-native material, and
+	// ignored by the legacy selector).
 	Select(
 		readyMembersIndexes []group.MemberIndex,
 		signingGroupOperators chain.Addresses,
@@ -50,6 +55,7 @@ type signingParticipantSelector interface {
 		honestThreshold uint,
 		sessionID string,
 		memberIndex group.MemberIndex,
+		keyGroupID string,
 	) (participantSelection, error)
 }
 

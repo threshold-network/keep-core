@@ -3,6 +3,8 @@
 package tbtc
 
 import (
+	"fmt"
+
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/frost/roast"
 	"github.com/keep-network/keep-core/pkg/frost/signing"
@@ -57,15 +59,27 @@ func (s operatorKeyRoastSigner) Sign(payload []byte) ([]byte, error) {
 // be adopted by the whole operator set together, because an upgraded verifier
 // rejects a peer that still emits bare (non-enveloped) signatures.
 //
-// KNOWN LIMITATION (single-wallet only): the retry registry is keyed by member
-// index alone (RegisterRoastRetryCoordinatorForMember), not by wallet+member. A
-// node controlling more than one FROST wallet would register overlapping seat
-// indices (each wallet's group is 1..N), and the later registration replaces the
-// earlier — so this wiring is correct only while a node controls a single FROST
-// wallet, which matches the current experimental deployment. Making the registry
-// wallet-scoped is a prerequisite for multi-wallet FROST.
+// The registry is scoped by the wallet's FROST key-group handle, so a node
+// controlling more than one FROST wallet does not collide on the 1..N seat indices
+// each wallet's group reuses: the interactive drive's lookup is keyed by the
+// attempt's KeyGroupID, and this registration keys by the same handle derived from
+// the wallet's signer material (see registrationKeyGroupIDForSigner).
 func registerRoastRetryCoordinatorForSeats(n *node, signers []*signer) {
 	if len(signers) == 0 {
+		return
+	}
+
+	// Derive the wallet's FROST key-group handle once (all seats of a wallet share
+	// it). Without it the registration cannot be scoped to match the drive's
+	// wallet-scoped lookup, so leave the wallet on the legacy path rather than
+	// register a coordinator the drive can never find.
+	keyGroupID, err := registrationKeyGroupIDForSigner(signers[0])
+	if err != nil {
+		logger.Warnf(
+			"skipping ROAST-retry coordinator registration: cannot derive FROST "+
+				"key-group id for wallet: [%v]",
+			err,
+		)
 		return
 	}
 
@@ -96,7 +110,44 @@ func registerRoastRetryCoordinatorForSeats(n *node, signers []*signer) {
 				Signer:      operatorSigner,
 				Verifier:    verifier,
 				SelfMember:  uint32(member),
+				KeyGroupID:  keyGroupID,
 			},
 		)
 	}
+}
+
+// registrationKeyGroupIDForSigner returns the wallet's FROST key-group handle from
+// a seat's signer material — the same string BuildAttemptContextFromRequest stores
+// as AttemptContext.KeyGroupID, so registration and the interactive drive's lookup
+// agree on the registry key. Errors if the seat carries non-native (e.g. legacy
+// tECDSA) material, which has no FROST key-group handle.
+func registrationKeyGroupIDForSigner(s *signer) (string, error) {
+	// Normalize via the shared helper so a resolver that returns a VALUE-form
+	// NativeSignerMaterial (accepted by Request.NativeSignerMaterial() for signing) is
+	// also accepted here, rather than being silently dropped to legacy. A []byte /
+	// UniFFIv1 material is correctly rejected: it has no FROST key-group handle and
+	// cannot drive interactive ROAST signing, so the wallet stays on legacy.
+	material, ok := nativeSignerMaterialFromSigner(s)
+	if !ok {
+		return "", fmt.Errorf(
+			"signer material is not native FROST signer material (got %T)",
+			s.signingMaterial(),
+		)
+	}
+	return signing.KeyGroupIDFromSignerMaterial(material)
+}
+
+// roastSelectorKeyGroupID returns the wallet's FROST key-group handle for the
+// participant selector's PER-WALLET ROAST activation gate
+// (signing.ConsumeRoastTransitionForSelection). It returns "" when the seat's
+// material has no derivable handle (non-native/malformed) — the same condition
+// under which registerRoastRetryCoordinatorForSeats skips registration — so the
+// selector's count("") lookup finds no coordinator and the wallet correctly stays
+// on legacy selection instead of failing closed.
+func roastSelectorKeyGroupID(s *signer) string {
+	keyGroupID, err := registrationKeyGroupIDForSigner(s)
+	if err != nil {
+		return ""
+	}
+	return keyGroupID
 }

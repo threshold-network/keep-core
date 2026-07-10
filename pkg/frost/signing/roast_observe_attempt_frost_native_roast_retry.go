@@ -36,26 +36,35 @@ func ObserveAttemptForTransition(
 		return zeroHash, fmt.Errorf("observe attempt: request is nil")
 	}
 
-	// Respect the per-seat readiness + registration gate, exactly as the selector
-	// and BeginOrchestrationForSession do: when THIS seat has no registered
-	// coordinator (or readiness is opted out), observing is pointless (nothing
-	// consumes the binding) and must stay inert. A deterministic static condition
-	// every honest node sees identically per seat. RFC-21 Phase 7.3 PR2b-1.5: a
-	// multi-seat operator observes per local seat with that seat's coordinator.
-	if !RoastRetryActiveForMember(request.MemberIndex) {
-		return zeroHash, nil
-	}
-
-	deps, ok := RegisteredRoastRetryCoordinatorForMember(request.MemberIndex)
-	if !ok || deps.Coordinator == nil {
-		// No coordinator registered for this seat -- static fallback.
-		return zeroHash, nil
-	}
-
+	// Decode the signer material first: its key-group handle scopes BOTH the activation
+	// gate and the coordinator lookup to THIS wallet, so a sibling wallet reusing this
+	// seat index neither activates observe for -- nor hands the wrong coordinator to --
+	// a wallet this node did not register under that key group. Matches the participant
+	// selector and the transition exchange.
 	signerMaterial, err := request.NativeSignerMaterial()
 	if err != nil {
 		// Material not extractable (e.g. a UniFFI v1 deployment) -- deterministic
 		// static fallback.
+		return zeroHash, nil
+	}
+	keyGroupID, err := KeyGroupIDFromSignerMaterial(signerMaterial)
+	if err != nil {
+		// No derivable key-group handle -- deterministic static fallback.
+		return zeroHash, nil
+	}
+
+	// Per-seat, per-wallet readiness + registration gate, exactly as the selector and
+	// BeginOrchestrationForSession: when THIS seat has no coordinator for THIS wallet's
+	// key group (or readiness is opted out), observing is pointless (nothing consumes
+	// the binding) and must stay inert. A deterministic static condition every honest
+	// node of the wallet sees identically.
+	if !RoastRetryActiveForKeyGroupMember(keyGroupID, request.MemberIndex) {
+		return zeroHash, nil
+	}
+
+	deps, ok := RegisteredRoastRetryCoordinatorForKeyGroupMember(keyGroupID, request.MemberIndex)
+	if !ok || deps.Coordinator == nil {
+		// No coordinator registered for this wallet's seat -- static fallback.
 		return zeroHash, nil
 	}
 

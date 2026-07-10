@@ -48,9 +48,25 @@ func signingSessionID(
 	taprootMerkleRoot *[32]byte,
 	startBlock uint64,
 	attemptNumber uint,
+	keyGroupID string,
 ) string {
+	// keyGroupID makes the attempt-specific session id WALLET-unique, like
+	// roastSessionID: it is otherwise derived from message/root/(block) and would
+	// collide across two FROST wallets on one node that reuse a member index and sign
+	// the same message. request.SessionID keys the session-handle registry, so a
+	// collision would let one wallet overwrite the other's in-flight binding. Group-
+	// uniform per wallet, so it stays identical across a wallet's honest nodes.
 	if taprootMerkleRoot == nil {
-		return fmt.Sprintf("%v-%v", message.Text(16), attemptNumber)
+		// Hash the key-path branch too: a full-length FROST key group (64/66 hex)
+		// concatenated onto the 64-hex message would push the id past the native
+		// signer's session-id length limit (128). The taproot branch below hashes for
+		// the same reason. "kp-" keeps key-path ids disjoint from the taproot "tr-"; the
+		// attempt number stays a readable suffix.
+		keyPathDigest := sha256.New()
+		keyPathDigest.Write([]byte(message.Text(16)))
+		keyPathDigest.Write([]byte{0})
+		keyPathDigest.Write([]byte(keyGroupID))
+		return fmt.Sprintf("kp-%x-%v", keyPathDigest.Sum(nil), attemptNumber)
 	}
 
 	var startBlockBytes [8]byte
@@ -62,6 +78,8 @@ func signingSessionID(
 	sessionDigest.Write(taprootMerkleRoot[:])
 	sessionDigest.Write([]byte{0})
 	sessionDigest.Write(startBlockBytes[:])
+	sessionDigest.Write([]byte{0})
+	sessionDigest.Write([]byte(keyGroupID))
 
 	return fmt.Sprintf("tr-%x-%v", sessionDigest.Sum(nil), attemptNumber)
 }
@@ -78,14 +96,34 @@ func roastSessionID(
 	message *big.Int,
 	taprootMerkleRoot *[32]byte,
 	startBlock uint64,
+	keyGroupID string,
 ) string {
+	// keyGroupID makes the stable ROAST session id WALLET-unique. It is derived from
+	// message/root/startBlock -- NOT the wallet -- so on a node controlling two FROST
+	// wallets that reuse the same 1..N member index, two wallets signing the SAME
+	// message at the same start block (both key-path, nil merkle root) would otherwise
+	// collide on the session-keyed ROAST registries (transition record, session-handle,
+	// interactive-engine namespace), letting one wallet overwrite the other's state and
+	// break its ROAST retry. Folding the group-uniform key group in disambiguates them
+	// while staying identical across every honest node of one wallet (all derive the
+	// same key group). Empty for legacy/non-native wallets (which do not drive ROAST).
 	if taprootMerkleRoot == nil {
-		// startBlock is included so two independent signings of the SAME message
-		// at different start blocks get distinct stable ids (and so distinct
-		// transition-record / interactive-engine namespaces); without it a later
-		// signing could collide with retained ROAST state from an earlier one.
-		// The taproot branch below already binds startBlock.
-		return fmt.Sprintf("roast-%v-%v", message.Text(16), startBlock)
+		// Hash the key-path branch too: this id is passed to the native signer as the
+		// interactive session id (driveInteractiveRoastSigningIfEnabled ->
+		// NewActiveRoastAttempt -> InteractiveSessionOpen), and a full-length FROST key
+		// group (64/66 hex) concatenated onto the 64-hex message would exceed the
+		// signer's 128-char session-id limit and block signing. The taproot branch below
+		// hashes for the same reason. "roast-kp-" keeps key-path ids disjoint from the
+		// taproot "roast-tr-".
+		var keyPathStartBlock [8]byte
+		binary.BigEndian.PutUint64(keyPathStartBlock[:], startBlock)
+		keyPathDigest := sha256.New()
+		keyPathDigest.Write([]byte(message.Text(16)))
+		keyPathDigest.Write([]byte{0})
+		keyPathDigest.Write(keyPathStartBlock[:])
+		keyPathDigest.Write([]byte{0})
+		keyPathDigest.Write([]byte(keyGroupID))
+		return fmt.Sprintf("roast-kp-%x", keyPathDigest.Sum(nil))
 	}
 
 	var startBlockBytes [8]byte
@@ -97,6 +135,8 @@ func roastSessionID(
 	sessionDigest.Write(taprootMerkleRoot[:])
 	sessionDigest.Write([]byte{0})
 	sessionDigest.Write(startBlockBytes[:])
+	sessionDigest.Write([]byte{0})
+	sessionDigest.Write([]byte(keyGroupID))
 
 	return fmt.Sprintf("roast-tr-%x", sessionDigest.Sum(nil))
 }
@@ -352,11 +392,18 @@ func (se *signingExecutor) signWithTaprootMerkleRoot(
 	wg.Add(len(se.signers))
 	signingOutcomeChan := make(chan *signingOutcome, len(se.signers))
 
+	// roastKeyGroupID is THIS wallet's FROST key-group handle (empty for
+	// legacy/non-native/underivable). All of the executor's signers belong to one
+	// wallet, so any seat yields it. It both scopes ROAST-vs-legacy activation (per
+	// seat, below) AND makes roastSID wallet-unique so a sibling wallet reusing a
+	// member index cannot collide on the session-keyed ROAST registries.
+	roastKeyGroupID := roastSelectorKeyGroupID(se.signers[0])
+
 	// roastSID is the STABLE ROAST session id (no attempt number) shared by every
 	// signer's retry loop and signing request, so the ROAST participant selector
 	// and transition-record registry are keyed consistently across this signing's
 	// attempts. Computed once; constant across signers and attempts.
-	roastSID := roastSessionID(message, taprootMerkleRoot, startBlock)
+	roastSID := roastSessionID(message, taprootMerkleRoot, startBlock, roastKeyGroupID)
 
 	for _, currentSigner := range se.signers {
 		go func(signer *signer) {
@@ -417,6 +464,13 @@ func (se *signingExecutor) signWithTaprootMerkleRoot(
 				loopTimeoutBlock,
 				se.waitForBlockFn,
 			)
+
+			// Scope ROAST-vs-legacy selection activation to THIS wallet's key group so
+			// a wallet whose ROAST registration was skipped (non-native/malformed
+			// material) keeps falling back to legacy even when a sibling wallet on this
+			// node is ROAST-active. The same handle also made roastSID wallet-unique
+			// above; reuse it so selection scoping and session scoping never disagree.
+			retryLoop.setRoastKeyGroupID(roastKeyGroupID)
 
 			// RFC-21 Phase 7.3 PR2b-1b: install the per-signer ROAST transition
 			// controller, scoped to loopCtx (the session lifetime). It observes
@@ -517,6 +571,7 @@ func (se *signingExecutor) signWithTaprootMerkleRoot(
 						taprootMerkleRoot,
 						startBlock,
 						attempt.number,
+						roastKeyGroupID,
 					)
 
 					result, err := signing.ExecuteRequest(

@@ -95,6 +95,10 @@ func newDriveFixture(t *testing.T) driveFixture {
 		Signer:      signer,
 		Verifier:    verifier,
 		SelfMember:  1,
+		// The drive looks up by attemptCtx.KeyGroupID, which the fixture's signer
+		// material yields as keyGroup; register under the same handle so the
+		// wallet-scoped lookup resolves.
+		KeyGroupID: keyGroup,
 	})
 	t.Cleanup(ResetRoastRetryRegistrationForTest)
 	t.Cleanup(ResetInteractiveSigningEngineProviderForTest)

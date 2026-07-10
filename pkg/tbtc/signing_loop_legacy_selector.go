@@ -43,6 +43,7 @@ func (legacySigningParticipantSelector) Select(
 	honestThreshold uint,
 	_ string,
 	_ group.MemberIndex,
+	_ string, // keyGroupID: only the ROAST selector scopes activation per wallet
 ) (participantSelection, error) {
 	// Build the input the retry shuffle expects: one operator address
 	// per ready member (an operator controlling k ready members appears

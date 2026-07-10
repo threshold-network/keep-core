@@ -135,6 +135,15 @@ type signingRetryLoop struct {
 	// case the loop runs no transition steps.
 	transitionController roastTransitionController
 
+	// roastKeyGroupID is THIS wallet's FROST key-group handle, passed to the
+	// participant selector so it scopes the ROAST-vs-legacy activation decision PER
+	// WALLET: a wallet whose ROAST coordinator registration was skipped (non-native or
+	// malformed signer material) must keep falling back to legacy selection even when
+	// a sibling wallet on the same node is ROAST-active. Empty in the default build,
+	// for legacy/non-native wallets, and whenever the key group cannot be derived; the
+	// legacy selector ignores it.
+	roastKeyGroupID string
+
 	// attemptOutcomeReporter, when non-nil, receives the terminal outcome
 	// of every network-wide signing attempt this loop observes (RFC-21
 	// Annex B implied-f liveness alerting). An outcome is reported when an
@@ -190,6 +199,14 @@ func (srl *signingRetryLoop) setTransitionController(
 	controller roastTransitionController,
 ) {
 	srl.transitionController = controller
+}
+
+// setRoastKeyGroupID installs THIS wallet's FROST key-group handle so the
+// participant selector can scope ROAST activation per wallet. Empty is the safe
+// default (legacy/non-native wallets, or when the handle cannot be derived); see
+// the roastKeyGroupID field.
+func (srl *signingRetryLoop) setRoastKeyGroupID(keyGroupID string) {
+	srl.roastKeyGroupID = keyGroupID
 }
 
 func (srl *signingRetryLoop) reportAttemptOutcome(success bool) {
@@ -478,11 +495,20 @@ func (srl *signingRetryLoop) start(
 			// pre-selection skip or whenever a member is parked, binding signing
 			// messages and transition bundles to different context hashes. ROAST
 			// inactive keeps the block-paced attemptCounter (legacy, unchanged). The
-			// gate is the PER-SEAT RoastRetryActiveForMember predicate (PR2b-1.5): a
-			// multi-seat operator may have one seat registered and another not, so
-			// activation is a per-member property; it stays deterministic per seat.
+			// gate is PER-SEAT AND PER-WALLET (RoastRetryActiveForKeyGroupMember): a
+			// multi-seat operator may have one seat registered and another not, and a
+			// node may control two wallets that reuse the same 1..N member index. Scoping
+			// by THIS wallet's key group keeps the decision group-uniform -- it must match
+			// the participant selector's per-key-group activation, or a wallet that fell
+			// back to LEGACY selection would number its attempt with the ROAST counter
+			// (and desync from peers that do not also control the sibling wallet that
+			// happened to register the same seat). Empty key group (legacy/non-native)
+			// yields false -> legacy numbering.
 			activeAttemptNumber := srl.attemptCounter
-			if signing.RoastRetryActiveForMember(srl.signingGroupMemberIndex) {
+			if signing.RoastRetryActiveForKeyGroupMember(
+				srl.roastKeyGroupID,
+				srl.signingGroupMemberIndex,
+			) {
 				activeAttemptNumber = committedRoastAttemptNumber + 1
 			}
 
@@ -640,6 +666,7 @@ func (srl *signingRetryLoop) performMembersSelection(
 		uint(srl.groupParameters.HonestThreshold),
 		srl.roastSessionID,
 		srl.signingGroupMemberIndex,
+		srl.roastKeyGroupID,
 	)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf(

@@ -20,7 +20,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
 
-func TestSigningSessionID_LegacyFormat(t *testing.T) {
+func TestSigningSessionID_KeyPathFormatStaysWithinSignerLimit(t *testing.T) {
 	message, ok := new(big.Int).SetString(
 		"ac692bb7fddf3f7e1e050a83cf3ffb6e8e69888ce980281aa39da169525750ef",
 		16,
@@ -29,15 +29,32 @@ func TestSigningSessionID_LegacyFormat(t *testing.T) {
 		t.Fatal("failed to build test message")
 	}
 
-	sessionID := signingSessionID(message, nil, 25300, 12)
+	// A full-length persisted FROST key group (66 hex chars) -- the case that would
+	// blow the 128-char signer session-id limit if the key-path branch concatenated the
+	// 64-hex message + key group instead of hashing.
+	keyGroup := strings.Repeat("ab", 33) // 66 hex chars
+	sessionID := signingSessionID(message, nil, 25300, 12, keyGroup)
 
-	expected := "ac692bb7fddf3f7e1e050a83cf3ffb6e8e69888ce980281aa39da169525750ef-12"
-	if sessionID != expected {
-		t.Fatalf(
-			"unexpected signing session ID\nexpected: [%s]\nactual:   [%s]",
-			expected,
-			sessionID,
-		)
+	if len(sessionID) > 128 {
+		t.Fatalf("key-path signing session ID exceeds signer limit: [%d] (%s)", len(sessionID), sessionID)
+	}
+	if !strings.HasPrefix(sessionID, "kp-") {
+		t.Fatalf("unexpected key-path signing session ID prefix: [%s]", sessionID)
+	}
+	if !strings.HasSuffix(sessionID, "-12") {
+		t.Fatalf("unexpected key-path signing session ID attempt suffix: [%s]", sessionID)
+	}
+	// Binds message, attempt number, and key group (start block is not part of the
+	// attempt-specific key-path id, matching the pre-key-group behaviour).
+	if signingSessionID(message, nil, 25300, 13, keyGroup) == sessionID {
+		t.Fatal("key-path signing session ID must bind the attempt number")
+	}
+	other, _ := new(big.Int).SetString("01", 16)
+	if signingSessionID(other, nil, 25300, 12, keyGroup) == sessionID {
+		t.Fatal("key-path signing session ID must bind the message")
+	}
+	if signingSessionID(message, nil, 25300, 12, keyGroup+"cd") == sessionID {
+		t.Fatal("key-path signing session ID must bind the key group")
 	}
 }
 
@@ -55,7 +72,7 @@ func TestSigningSessionID_TaprootFormatStaysWithinSignerLimit(t *testing.T) {
 		merkleRoot[i] = byte(i + 1)
 	}
 
-	sessionID := signingSessionID(message, &merkleRoot, 25300, 12)
+	sessionID := signingSessionID(message, &merkleRoot, 25300, 12, "kg-a")
 
 	if len(sessionID) > 128 {
 		t.Fatalf("Taproot signing session ID exceeds signer limit: [%d]", len(sessionID))
@@ -69,16 +86,22 @@ func TestSigningSessionID_TaprootFormatStaysWithinSignerLimit(t *testing.T) {
 
 	changedMerkleRoot := merkleRoot
 	changedMerkleRoot[0] ^= 0xff
-	if signingSessionID(message, &changedMerkleRoot, 25300, 12) == sessionID {
+	if signingSessionID(message, &changedMerkleRoot, 25300, 12, "kg-a") == sessionID {
 		t.Fatal("expected Taproot signing session ID to bind the merkle root")
 	}
 
-	if signingSessionID(message, &merkleRoot, 25300, 13) == sessionID {
+	if signingSessionID(message, &merkleRoot, 25300, 13, "kg-a") == sessionID {
 		t.Fatal("expected Taproot signing session ID to bind the attempt number")
 	}
 
-	if signingSessionID(message, &merkleRoot, 28900, 12) == sessionID {
+	if signingSessionID(message, &merkleRoot, 28900, 12, "kg-a") == sessionID {
 		t.Fatal("expected Taproot signing session ID to bind the signing start block")
+	}
+
+	// A DIFFERENT wallet key group must yield a DIFFERENT id, so two wallets on one
+	// node reusing a member index never collide on the session-handle registry.
+	if signingSessionID(message, &merkleRoot, 25300, 12, "kg-b") == sessionID {
+		t.Fatal("expected Taproot signing session ID to bind the key group (multi-wallet)")
 	}
 }
 
@@ -91,41 +114,55 @@ func TestRoastSessionID_StableAndBinds(t *testing.T) {
 		t.Fatal("failed to build test message")
 	}
 
-	// Key-path (nil root): the stable id binds message + startBlock, but takes
-	// no attempt number (stable across attempts by construction).
-	keyPath := roastSessionID(message, nil, 25300)
+	// Key-path (nil root): the stable id binds message + startBlock + key group, but
+	// takes no attempt number (stable across attempts by construction).
+	keyPath := roastSessionID(message, nil, 25300, "kg-a")
 	if !strings.HasPrefix(keyPath, "roast-") {
 		t.Fatalf("roast session id must be namespaced; got [%s]", keyPath)
 	}
-	if roastSessionID(message, nil, 28900) == keyPath {
+	// This id is passed to the native signer as the interactive session id, so it must
+	// stay within the 128-char limit even with a full-length (66 hex) FROST key group --
+	// the key-path branch hashes rather than concatenating for exactly this reason.
+	if long := roastSessionID(message, nil, 25300, strings.Repeat("ab", 33)); len(long) > 128 {
+		t.Fatalf("key-path roast session id exceeds signer limit: [%d] (%s)", len(long), long)
+	}
+	if roastSessionID(message, nil, 28900, "kg-a") == keyPath {
 		t.Fatal("key-path roast session id must bind the start block")
 	}
 	other, _ := new(big.Int).SetString("01", 16)
-	if roastSessionID(other, nil, 25300) == keyPath {
+	if roastSessionID(other, nil, 25300, "kg-a") == keyPath {
 		t.Fatal("key-path roast session id must bind the message")
 	}
+	// A DIFFERENT wallet key group must yield a DIFFERENT id, so two wallets on one
+	// node reusing a member index never collide on the session-keyed ROAST registries.
+	if roastSessionID(message, nil, 25300, "kg-b") == keyPath {
+		t.Fatal("key-path roast session id must bind the key group (multi-wallet)")
+	}
 
-	// Taproot branch: binds root + startBlock.
+	// Taproot branch: binds root + startBlock + key group.
 	var merkleRoot [32]byte
 	for i := range merkleRoot {
 		merkleRoot[i] = byte(i + 1)
 	}
-	taproot := roastSessionID(message, &merkleRoot, 25300)
+	taproot := roastSessionID(message, &merkleRoot, 25300, "kg-a")
 	if !strings.HasPrefix(taproot, "roast-tr-") {
 		t.Fatalf("unexpected taproot roast session id prefix; got [%s]", taproot)
 	}
 	changed := merkleRoot
 	changed[0] ^= 0xff
-	if roastSessionID(message, &changed, 25300) == taproot {
+	if roastSessionID(message, &changed, 25300, "kg-a") == taproot {
 		t.Fatal("taproot roast session id must bind the merkle root")
 	}
-	if roastSessionID(message, &merkleRoot, 28900) == taproot {
+	if roastSessionID(message, &merkleRoot, 28900, "kg-a") == taproot {
 		t.Fatal("taproot roast session id must bind the start block")
+	}
+	if roastSessionID(message, &merkleRoot, 25300, "kg-b") == taproot {
+		t.Fatal("taproot roast session id must bind the key group (multi-wallet)")
 	}
 
 	// The stable roast id must be disjoint from any attempt-specific
 	// signingSessionID so they never share a registry namespace.
-	if keyPath == signingSessionID(message, nil, 25300, 12) {
+	if keyPath == signingSessionID(message, nil, 25300, 12, "kg-a") {
 		t.Fatal("roast and signing session ids must not collide")
 	}
 }
