@@ -34,7 +34,7 @@ func TestConsumeRoastTransitionForSelection_FallbackWhenNoProducer(t *testing.T)
 	// roastAttemptNumber 1 (> 0): with a producer this expects a transition and
 	// fail-closes when none exists; without a producer it must fall back to legacy
 	// (the deterministic, group-wide outcome every no-producer node reaches).
-	_, _, err := ConsumeRoastTransitionForSelection("session", 1, 1, 3)
+	_, _, err := ConsumeRoastTransitionForSelection("session", 1, 1, 3, "")
 	if !errors.Is(err, ErrRoastSelectionFallBackToLegacy) {
 		t.Fatalf("a no-producer build must fall back to legacy, not fail closed; got %v", err)
 	}

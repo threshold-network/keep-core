@@ -418,6 +418,13 @@ func (se *signingExecutor) signWithTaprootMerkleRoot(
 				se.waitForBlockFn,
 			)
 
+			// Scope ROAST-vs-legacy selection activation to THIS wallet's key group so
+			// a wallet whose ROAST registration was skipped (non-native/malformed
+			// material) keeps falling back to legacy even when a sibling wallet on this
+			// node is ROAST-active. Empty (default build, non-native, or underivable)
+			// leaves the selector on its process-uniform behaviour.
+			retryLoop.setRoastKeyGroupID(roastSelectorKeyGroupID(signer))
+
 			// RFC-21 Phase 7.3 PR2b-1b: install the per-signer ROAST transition
 			// controller, scoped to loopCtx (the session lifetime). It observes
 			// every attempt so this seat can verify the attempt's transition bundle

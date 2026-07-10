@@ -135,6 +135,15 @@ type signingRetryLoop struct {
 	// case the loop runs no transition steps.
 	transitionController roastTransitionController
 
+	// roastKeyGroupID is THIS wallet's FROST key-group handle, passed to the
+	// participant selector so it scopes the ROAST-vs-legacy activation decision PER
+	// WALLET: a wallet whose ROAST coordinator registration was skipped (non-native or
+	// malformed signer material) must keep falling back to legacy selection even when
+	// a sibling wallet on the same node is ROAST-active. Empty in the default build,
+	// for legacy/non-native wallets, and whenever the key group cannot be derived; the
+	// legacy selector ignores it.
+	roastKeyGroupID string
+
 	// attemptOutcomeReporter, when non-nil, receives the terminal outcome
 	// of every network-wide signing attempt this loop observes (RFC-21
 	// Annex B implied-f liveness alerting). An outcome is reported when an
@@ -190,6 +199,14 @@ func (srl *signingRetryLoop) setTransitionController(
 	controller roastTransitionController,
 ) {
 	srl.transitionController = controller
+}
+
+// setRoastKeyGroupID installs THIS wallet's FROST key-group handle so the
+// participant selector can scope ROAST activation per wallet. Empty is the safe
+// default (legacy/non-native wallets, or when the handle cannot be derived); see
+// the roastKeyGroupID field.
+func (srl *signingRetryLoop) setRoastKeyGroupID(keyGroupID string) {
+	srl.roastKeyGroupID = keyGroupID
 }
 
 func (srl *signingRetryLoop) reportAttemptOutcome(success bool) {
@@ -640,6 +657,7 @@ func (srl *signingRetryLoop) performMembersSelection(
 		uint(srl.groupParameters.HonestThreshold),
 		srl.roastSessionID,
 		srl.signingGroupMemberIndex,
+		srl.roastKeyGroupID,
 	)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf(

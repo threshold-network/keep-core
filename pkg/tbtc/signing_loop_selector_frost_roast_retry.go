@@ -46,12 +46,14 @@ func (s roastSigningParticipantSelector) Select(
 	honestThreshold uint,
 	sessionID string,
 	memberIndex group.MemberIndex,
+	keyGroupID string,
 ) (participantSelection, error) {
 	included, parked, err := signing.ConsumeRoastTransitionForSelection(
 		sessionID,
 		memberIndex,
 		roastAttemptNumber,
 		honestThreshold,
+		keyGroupID,
 	)
 	if err == nil {
 		return participantSelection{
@@ -60,8 +62,8 @@ func (s roastSigningParticipantSelector) Select(
 		}, nil
 	}
 
-	// Initial ROAST attempt or ROAST retry inactive: a uniform legacy fallback
-	// every honest node makes identically.
+	// Initial ROAST attempt or ROAST retry inactive for THIS wallet: a uniform legacy
+	// fallback every honest node makes identically.
 	if errors.Is(err, signing.ErrRoastSelectionFallBackToLegacy) {
 		return s.legacy.Select(
 			readyMembersIndexes,
@@ -72,6 +74,7 @@ func (s roastSigningParticipantSelector) Select(
 			honestThreshold,
 			sessionID,
 			memberIndex,
+			keyGroupID,
 		)
 	}
 

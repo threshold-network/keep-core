@@ -125,6 +125,7 @@ func (s parkingSelector) Select(
 	_ uint,
 	_ string,
 	_ group.MemberIndex,
+	_ string,
 ) (participantSelection, error) {
 	return participantSelection{
 		includedMembersIndexes:          s.included,

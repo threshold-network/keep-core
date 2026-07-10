@@ -33,6 +33,7 @@ func (r *recordingSelector) Select(
 	_ uint,
 	_ string,
 	_ group.MemberIndex,
+	_ string,
 ) (participantSelection, error) {
 	r.calls++
 	if r.err != nil {
@@ -57,7 +58,7 @@ func TestLegacySigningParticipantSelector_DelegatesToRetryShuffle(t *testing.T) 
 	sel := legacySigningParticipantSelector{}
 	// Args: ready, operators, seed, retryCount, roastAttemptNumber, honestThreshold,
 	// sessionID, memberIndex.
-	selection, err := sel.Select(readyMembers, operators, 42, 0, 0, 3, "session-x", 1)
+	selection, err := sel.Select(readyMembers, operators, 42, 0, 0, 3, "session-x", 1, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -88,6 +89,7 @@ func TestLegacySigningParticipantSelector_PropagatesErrors(t *testing.T) {
 		99, // honest threshold higher than member count
 		"session-x",
 		1,
+		"",
 	)
 	if err == nil {
 		t.Fatal("expected error from retry shuffle")

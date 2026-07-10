@@ -57,6 +57,7 @@ func ConsumeRoastTransitionForSelection(
 	member group.MemberIndex,
 	roastAttemptNumber uint,
 	threshold uint,
+	keyGroupID string,
 ) (included []group.MemberIndex, transientlyParked []group.MemberIndex, err error) {
 	// The initial ROAST attempt has no prior transition: uniform legacy/initial
 	// selection.
@@ -64,58 +65,47 @@ func ConsumeRoastTransitionForSelection(
 		return nil, nil, ErrRoastSelectionFallBackToLegacy
 	}
 
-	// The legacy-fallback decision is PROCESS-level (group-uniform), NOT per-member:
-	// readiness opted out, NO coordinator registered ANYWHERE in this process, or no
-	// transition producer built in (frost_roast_retry && !frost_native) -> a uniform
-	// legacy fallback every honest node makes identically. It must NOT be
-	// RoastRetryActiveForMember here: a multi-seat operator with member A registered
-	// and member B not would otherwise drive A via the transition and B via the
-	// legacy shuffle for the SAME attempt -> divergent included sets (fracture). The
-	// fallback sentinel is only safe when uniform (RFC-21 Phase 7.3 PR2b-1.5, Codex
-	// P2-1).
-	if !RoastRetryActive() {
+	// Build/env readiness is group-uniform (readiness opt-in AND the transition
+	// producer is built in). If not ready, a uniform legacy fallback every honest node
+	// makes identically.
+	if !readinessAndProducerReady() {
 		return nil, nil, ErrRoastSelectionFallBackToLegacy
 	}
-	// Coarse partial-registration gate (BOOLEAN only): THIS seat must be
-	// ROAST-registered under SOME key group. A totally-unregistered seat under active
-	// ROAST is partial registration (a wiring bug) and FAILS CLOSED -- never legacy:
-	// falling back to legacy here while registered sibling seats select from the
-	// transition would split the included set (the fracture the sentinel must not
-	// enable). This scan must NOT supply the coordinator used below: on a multi-wallet
-	// node it could return a DIFFERENT wallet's entry (seat indices reuse 1..N); the
-	// coordinator that actually drives NextAttempt is resolved per key group.
-	if _, ok := RegisteredRoastRetryCoordinatorForMember(member); !ok {
+
+	// Per-WALLET activation, NOT process-wide: is ANY seat of THIS wallet's key group
+	// registered? This is group-uniform per key group -- every honest node derives the
+	// same keyGroupID from the wallet's shared signer material and sees the same
+	// registration state. count==0 means THIS wallet is ROAST-inactive on this node
+	// (its coordinator registration was skipped for non-native/malformed material, or
+	// it is a legacy wallet), so it must fall back to LEGACY -- not fail closed. Scoping
+	// to keyGroupID is exactly what stops a sibling ROAST wallet from forcing this
+	// wallet's retry to fail closed (Codex P2 / RFC-21 Phase 7.3). Mirrors
+	// BeginOrchestrationForSession's count==0 legacy vs count>0 fail-closed split.
+	if registeredRoastRetryMemberCount(keyGroupID) == 0 {
+		return nil, nil, ErrRoastSelectionFallBackToLegacy
+	}
+
+	// THIS wallet IS ROAST-active, so THIS seat must have its own coordinator for the
+	// wallet's key group. A missing one is partial registration (a wiring bug) and
+	// FAILS CLOSED -- never legacy: a registered sibling seat of the SAME wallet driving
+	// the transition while this seat legacy-shuffles would split the included set (the
+	// fracture the sentinel must not enable). record.PreviousHandle (below) was minted
+	// by THIS coordinator, so NextAttempt runs on the right instance.
+	deps, ok := RegisteredRoastRetryCoordinatorForKeyGroupMember(keyGroupID, member)
+	if !ok || deps.Coordinator == nil {
 		return nil, nil, fmt.Errorf(
-			"roast selection: seat %d has no registered coordinator under active ROAST retry; fail closed",
+			"roast selection: seat %d has no coordinator for its key group under active ROAST retry; fail closed",
 			member,
 		)
 	}
 
 	// A retry expects a transition from the prior COMMITTED attempt of THIS wallet's
 	// session; its absence under active ROAST is fail-closed, never a legacy fallback.
-	// The record also carries the wallet's key group, which scopes the authoritative
-	// coordinator lookup below.
 	record, ok := RoastTransitionForSession(roastSessionID, member)
 	if !ok {
 		return nil, nil, fmt.Errorf(
 			"roast selection: no transition record for roast attempt %d; fail closed",
 			roastAttemptNumber,
-		)
-	}
-
-	// Authoritative, wallet-scoped coordinator: record.PreviousHandle was minted by
-	// THIS wallet's coordinator, so NextAttempt must run on the same instance. The
-	// seat-only scan above could name a different wallet's coordinator on a
-	// multi-wallet node, and NextAttempt would then reject the foreign handle
-	// (ErrUnknownAttempt) -- fail-closed but wrong-for-the-reason. Look it up by the
-	// record's key group so the right coordinator drives selection.
-	deps, ok := RegisteredRoastRetryCoordinatorForKeyGroupMember(
-		record.PreviousContext.KeyGroupID, member,
-	)
-	if !ok || deps.Coordinator == nil {
-		return nil, nil, fmt.Errorf(
-			"roast selection: seat %d has no coordinator for the transition's key group under active ROAST retry; fail closed",
-			member,
 		)
 	}
 

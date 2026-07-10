@@ -36,7 +36,7 @@ func TestConsumeRoastTransitionForSelection_FallbackInitialAttempt(t *testing.T)
 	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
 	resetSelectionRegistries(t)
 
-	if _, _, err := ConsumeRoastTransitionForSelection("session", 1, 0, 3); !errors.Is(
+	if _, _, err := ConsumeRoastTransitionForSelection("session", 1, 0, 3, ""); !errors.Is(
 		err, ErrRoastSelectionFallBackToLegacy,
 	) {
 		t.Fatalf("retry 0 must request the legacy fallback, got %v", err)
@@ -48,7 +48,7 @@ func TestConsumeRoastTransitionForSelection_FallbackInactiveRoast(t *testing.T) 
 	resetSelectionRegistries(t)
 
 	// No coordinator registered -> inactive -> uniform legacy fallback.
-	if _, _, err := ConsumeRoastTransitionForSelection("session", 1, 1, 3); !errors.Is(
+	if _, _, err := ConsumeRoastTransitionForSelection("session", 1, 1, 3, ""); !errors.Is(
 		err, ErrRoastSelectionFallBackToLegacy,
 	) {
 		t.Fatalf("inactive ROAST must request the legacy fallback, got %v", err)
@@ -71,7 +71,7 @@ func TestConsumeRoastTransitionForSelection_FailsClosedNoRecord(t *testing.T) {
 
 	// Active ROAST, a retry, but no record -> a transition was expected -> fail
 	// closed (NOT the legacy-fallback sentinel).
-	_, _, err := ConsumeRoastTransitionForSelection("session", 1, 1, 3)
+	_, _, err := ConsumeRoastTransitionForSelection("session", 1, 1, 3, "exchange-key-group")
 	if err == nil || errors.Is(err, ErrRoastSelectionFallBackToLegacy) {
 		t.Fatalf("a missing expected transition must fail closed, got %v", err)
 	}
@@ -99,7 +99,7 @@ func TestConsumeRoastTransitionForSelection_PartialRegistrationFailsClosed(t *te
 		KeyGroupID: "exchange-key-group",
 	})
 
-	_, _, err := ConsumeRoastTransitionForSelection("session", 2, 1, 3)
+	_, _, err := ConsumeRoastTransitionForSelection("session", 2, 1, 3, "exchange-key-group")
 	if err == nil || errors.Is(err, ErrRoastSelectionFallBackToLegacy) {
 		t.Fatalf("partial registration must fail closed, not fall back to legacy; got %v", err)
 	}
@@ -126,7 +126,7 @@ func TestConsumeRoastTransitionForSelection_FailsClosedStaleRecord(t *testing.T)
 		PreviousContext: prevCtx,
 	})
 
-	_, _, err := ConsumeRoastTransitionForSelection("session", 1, 3, 3)
+	_, _, err := ConsumeRoastTransitionForSelection("session", 1, 3, 3, "exchange-key-group")
 	if err == nil || errors.Is(err, ErrRoastSelectionFallBackToLegacy) {
 		t.Fatalf("a stale record must fail closed, got %v", err)
 	}
@@ -188,7 +188,7 @@ func TestConsumeRoastTransitionForSelection_CarriesParking(t *testing.T) {
 	})
 
 	// threshold 2 so the 2-member next set stays feasible.
-	includedSet, parked, err := ConsumeRoastTransitionForSelection(roastSessionID, elected, 1, 2)
+	includedSet, parked, err := ConsumeRoastTransitionForSelection(roastSessionID, elected, 1, 2, "exchange-key-group")
 	if err != nil {
 		t.Fatalf("consume must succeed: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestConsumeRoastTransitionForSelection_ConsumesFreshRecord(t *testing.T) {
 	})
 
 	// Consume for roast attempt 1 (prevCtx.AttemptNumber 0 + 1 == 1).
-	includedSet, parked, err := ConsumeRoastTransitionForSelection(roastSessionID, elected, 1, 3)
+	includedSet, parked, err := ConsumeRoastTransitionForSelection(roastSessionID, elected, 1, 3, "exchange-key-group")
 	if err != nil {
 		t.Fatalf("consume must succeed for a fresh record: %v", err)
 	}
@@ -347,7 +347,37 @@ func TestConsumeRoastTransitionForSelection_UsesRecordKeyGroupCoordinator(t *tes
 
 	// Selection must resolve coord (the record's key group), not the decoy; if it
 	// used the decoy, NextAttempt would fail closed with an unknown handle.
-	if _, _, err := ConsumeRoastTransitionForSelection(roastSessionID, elected, 1, 3); err != nil {
+	if _, _, err := ConsumeRoastTransitionForSelection(roastSessionID, elected, 1, 3, "exchange-key-group"); err != nil {
 		t.Fatalf("selection must use the record's key-group coordinator and succeed; got %v", err)
+	}
+}
+
+// TestConsumeRoastTransitionForSelection_UnregisteredWalletFallsBackToLegacy is the
+// Codex P2 regression: a wallet whose ROAST coordinator registration was skipped
+// (non-native/malformed material -> keyGroupID with no registrations) must fall back
+// to LEGACY selection on its retries, NOT fail closed -- even though a SIBLING wallet
+// on the same node is ROAST-registered and makes activation true process-wide. The
+// per-key-group count is what keeps the sibling from forcing this wallet closed.
+func TestConsumeRoastTransitionForSelection_UnregisteredWalletFallsBackToLegacy(t *testing.T) {
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
+	resetSelectionRegistries(t)
+
+	// Wallet A IS ROAST-registered, so RoastRetryActive() is true process-wide.
+	RegisterRoastRetryCoordinator(RoastRetryDeps{
+		Coordinator: roast.NewInMemoryCoordinator(),
+		Signer:      roast.NoOpSigner(),
+		Verifier:    roast.NoOpSignatureVerifier(),
+		SelfMember:  1,
+		KeyGroupID:  "wallet-A",
+	})
+
+	// Wallet B (key group "wallet-B") has NO registration. Its retry (attempt 1) must
+	// return the legacy-fallback sentinel, not a fail-closed error.
+	_, _, err := ConsumeRoastTransitionForSelection("wallet-b-session", 1, 1, 3, "wallet-B")
+	if !errors.Is(err, ErrRoastSelectionFallBackToLegacy) {
+		t.Fatalf(
+			"an unregistered wallet must fall back to legacy despite a sibling ROAST wallet; got %v",
+			err,
+		)
 	}
 }

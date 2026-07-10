@@ -158,7 +158,7 @@ func TestROASTSelector_CrossNodeLegacyFractureFailsClosed(t *testing.T) {
 
 	// ROAST-config node: consumes the transition -> the full 5-member set (all
 	// submitted evidence, none silence-parked).
-	sRoast, err := roastSel.Select(ready, ops, seed, 1, 1, honestThreshold, recordedSession, elected)
+	sRoast, err := roastSel.Select(ready, ops, seed, 1, 1, honestThreshold, recordedSession, elected, "frac-key-group")
 	if err != nil {
 		t.Fatalf("ROAST selection must succeed with a fresh record: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestROASTSelector_CrossNodeLegacyFractureFailsClosed(t *testing.T) {
 		t.Fatalf("expected the full %d-member ROAST set, got %v", len(ready), sRoast.includedMembersIndexes)
 	}
 	// legacy-config node: trims to the honest threshold via a seeded shuffle.
-	sLegacy, err := legacySigningParticipantSelector{}.Select(ready, ops, seed, 1, 1, honestThreshold, recordedSession, elected)
+	sLegacy, err := legacySigningParticipantSelector{}.Select(ready, ops, seed, 1, 1, honestThreshold, recordedSession, elected, "frac-key-group")
 	if err != nil {
 		t.Fatalf("legacy selection failed: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestROASTSelector_CrossNodeLegacyFractureFailsClosed(t *testing.T) {
 	if signing.RoastRetryActive() {
 		t.Fatalf("precondition: registry must be empty (RoastRetryActive false)")
 	}
-	legacyB, err := roastSel.Select(ready, ops, seed, 1, 1, honestThreshold, freshSess, memberB)
+	legacyB, err := roastSel.Select(ready, ops, seed, 1, 1, honestThreshold, freshSess, memberB, "frac-key-group")
 	if err != nil {
 		t.Fatalf("node B must fall back to legacy when ROAST is inactive: %v", err)
 	}
@@ -219,15 +219,15 @@ func TestROASTSelector_CrossNodeLegacyFractureFailsClosed(t *testing.T) {
 	}
 
 	// Node B: unregistered seat under active ROAST -> partial-registration fail-closed.
-	gotB, errB := roastSel.Select(ready, ops, seed, 1, 1, honestThreshold, freshSess, memberB)
-	assertFailClosed("node B (would-be legacy)", gotB, errB, "no registered coordinator")
+	gotB, errB := roastSel.Select(ready, ops, seed, 1, 1, honestThreshold, freshSess, memberB, "frac-key-group")
+	assertFailClosed("node B (would-be legacy)", gotB, errB, "no coordinator for its key group")
 	// The guard specifically suppressed the divergent legacy set node B had emitted.
 	if fracSameMembers(gotB.includedMembersIndexes, legacyB.includedMembersIndexes) {
 		t.Fatalf("guard failed: node B still emitted the divergent legacy set %v", legacyB.includedMembersIndexes)
 	}
 
 	// Node A: registered ROAST seat, but no record for freshSess -> missing-record fail-closed.
-	gotA, errA := roastSel.Select(ready, ops, seed, 1, 1, honestThreshold, freshSess, elected)
+	gotA, errA := roastSel.Select(ready, ops, seed, 1, 1, honestThreshold, freshSess, elected, "frac-key-group")
 	assertFailClosed("node A (ROAST-active)", gotA, errA, "no transition record")
 
 	// NEITHER produced a NextAttempt set, so they cannot have converged on
@@ -240,9 +240,9 @@ func TestROASTSelector_CrossNodeLegacyFractureFailsClosed(t *testing.T) {
 
 	// Determinism: the fail-closed decision is a stable per-seat function of
 	// registry state, not order/timing dependent.
-	gotB2, errB2 := roastSel.Select(ready, ops, seed, 1, 1, honestThreshold, freshSess, memberB)
-	assertFailClosed("node B (repeat)", gotB2, errB2, "no registered coordinator")
-	gotA2, errA2 := roastSel.Select(ready, ops, seed, 1, 1, honestThreshold, freshSess, elected)
+	gotB2, errB2 := roastSel.Select(ready, ops, seed, 1, 1, honestThreshold, freshSess, memberB, "frac-key-group")
+	assertFailClosed("node B (repeat)", gotB2, errB2, "no coordinator for its key group")
+	gotA2, errA2 := roastSel.Select(ready, ops, seed, 1, 1, honestThreshold, freshSess, elected, "frac-key-group")
 	assertFailClosed("node A (repeat)", gotA2, errA2, "no transition record")
 	t.Logf("both nodes fail closed deterministically (node A: missing record; node B: unregistered seat)")
 }

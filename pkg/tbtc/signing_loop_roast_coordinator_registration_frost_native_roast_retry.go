@@ -122,7 +122,12 @@ func registerRoastRetryCoordinatorForSeats(n *node, signers []*signer) {
 // agree on the registry key. Errors if the seat carries non-native (e.g. legacy
 // tECDSA) material, which has no FROST key-group handle.
 func registrationKeyGroupIDForSigner(s *signer) (string, error) {
-	material, ok := s.signingMaterial().(*signing.NativeSignerMaterial)
+	// Normalize via the shared helper so a resolver that returns a VALUE-form
+	// NativeSignerMaterial (accepted by Request.NativeSignerMaterial() for signing) is
+	// also accepted here, rather than being silently dropped to legacy. A []byte /
+	// UniFFIv1 material is correctly rejected: it has no FROST key-group handle and
+	// cannot drive interactive ROAST signing, so the wallet stays on legacy.
+	material, ok := nativeSignerMaterialFromSigner(s)
 	if !ok {
 		return "", fmt.Errorf(
 			"signer material is not native FROST signer material (got %T)",
@@ -130,4 +135,19 @@ func registrationKeyGroupIDForSigner(s *signer) (string, error) {
 		)
 	}
 	return signing.KeyGroupIDFromSignerMaterial(material)
+}
+
+// roastSelectorKeyGroupID returns the wallet's FROST key-group handle for the
+// participant selector's PER-WALLET ROAST activation gate
+// (signing.ConsumeRoastTransitionForSelection). It returns "" when the seat's
+// material has no derivable handle (non-native/malformed) — the same condition
+// under which registerRoastRetryCoordinatorForSeats skips registration — so the
+// selector's count("") lookup finds no coordinator and the wallet correctly stays
+// on legacy selection instead of failing closed.
+func roastSelectorKeyGroupID(s *signer) string {
+	keyGroupID, err := registrationKeyGroupIDForSigner(s)
+	if err != nil {
+		return ""
+	}
+	return keyGroupID
 }

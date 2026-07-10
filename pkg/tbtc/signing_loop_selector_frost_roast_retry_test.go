@@ -46,7 +46,7 @@ func TestROASTSelector_InitialAttemptUsesLegacy(t *testing.T) {
 	got, err := sel.Select(
 		[]group.MemberIndex{1, 2, 3, 4, 5},
 		selectorTestMembers(),
-		42, 0, 0, 3, "session", 1,
+		42, 0, 0, 3, "session", 1, "",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -89,7 +89,7 @@ func TestROASTSelector_FailsClosedWhenTransitionMissing(t *testing.T) {
 	_, err := sel.Select(
 		[]group.MemberIndex{1, 2, 3, 4, 5},
 		selectorTestMembers(),
-		42, 1, 1, 3, "session", 1,
+		42, 1, 1, 3, "session", 1, "",
 	)
 	if err == nil {
 		t.Fatal("expected a fail-closed error when an expected transition is missing")
