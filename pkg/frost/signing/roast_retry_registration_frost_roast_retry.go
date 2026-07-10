@@ -102,12 +102,13 @@ func RegisteredRoastRetryCoordinatorForKeyGroupMember(
 
 // RegisteredRoastRetryCoordinatorForMember returns SOME registered entry for the
 // given seat across ANY wallet key group, and true, or the zero value and false if
-// no wallet has that seat registered. It is the seat-only view used by the coarse
-// ROAST-vs-legacy activation gate (RoastRetryActiveForMember) at call sites that do
-// not have a KeyGroupID in scope, and by tests. It must NOT be used to obtain the
-// deps to aggregate with on a multi-wallet node -- that is what
-// RegisteredRoastRetryCoordinatorForKeyGroupMember is for; a seat present in more
-// than one wallet returns an arbitrary one here.
+// no wallet has that seat registered. It is a seat-only view kept only for tests to
+// assert registry membership: NO production path uses it any more -- every
+// activation/selection/exchange decision is wallet-scoped via
+// RegisteredRoastRetryCoordinatorForKeyGroupMember / RoastRetryActiveForKeyGroupMember,
+// because a seat-only match makes a sibling wallet reusing the member index look active
+// (the cross-wallet fracture class). It must NOT be reintroduced on any fracture-
+// sensitive path; a seat present in more than one wallet returns an arbitrary one here.
 func RegisteredRoastRetryCoordinatorForMember(member group.MemberIndex) (RoastRetryDeps, bool) {
 	roastRetryRegistrationMu.RLock()
 	defer roastRetryRegistrationMu.RUnlock()

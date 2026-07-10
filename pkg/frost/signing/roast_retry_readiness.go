@@ -78,9 +78,9 @@ func RoastRetryReadinessOptInEnabled() bool {
 // Always false in builds without the frost_roast_retry tag (the registration and
 // producer default stubs both report unavailable).
 // readinessAndProducerReady is the build+env prefix shared by RoastRetryActive and
-// RoastRetryActiveForMember: the readiness opt-in is set AND the transition producer
-// is built in (frost_native). Both gates additionally require a registered
-// coordinator (any entry / the specific member's).
+// RoastRetryActiveForKeyGroupMember: the readiness opt-in is set AND the transition
+// producer is built in (frost_native). Both gates additionally require a registered
+// coordinator (any entry / this wallet-seat's).
 func readinessAndProducerReady() bool {
 	return RoastRetryReadinessOptInEnabled() && roastTransitionProducerAvailable()
 }
@@ -93,32 +93,18 @@ func RoastRetryActive() bool {
 	return ok
 }
 
-// RoastRetryActiveForMember reports whether ROAST retry is runtime-active for a
-// SPECIFIC local seat: readiness opt-in AND the producer is built in AND THIS
-// member has a coordinator registered. Member-aware paths (the per-seat signing
-// loop, the per-member selector, observe, and the exchange) use it so a multi-seat
-// operator activates ROAST per seat -- a seat with no registered coordinator stays
-// on the legacy path rather than fail-closing. Always false in builds without the
-// frost_roast_retry tag (the per-member registration default stub reports
-// not-registered). RFC-21 Phase 7.3 PR2b-1.5.
-func RoastRetryActiveForMember(member group.MemberIndex) bool {
-	if !readinessAndProducerReady() {
-		return false
-	}
-	_, ok := RegisteredRoastRetryCoordinatorForMember(member)
-	return ok
-}
-
 // RoastRetryActiveForKeyGroupMember reports whether ROAST retry is runtime-active
 // for a specific seat of a SPECIFIC wallet: readiness opt-in AND the producer is
 // built in AND this seat has a coordinator registered UNDER THAT WALLET'S key group.
-// Unlike RoastRetryActiveForMember (which matches the seat under ANY key group), this
-// is group-uniform per wallet -- every honest node in the wallet's group derives the
-// same key group from the shared signer material and sees the same per-key-group
-// registration state. Fracture-sensitive per-attempt decisions (the active-attempt
-// numbering, the transition exchange) MUST use this so a sibling wallet that merely
-// reuses the same 1..N member index cannot flip this wallet's decision on a node that
-// controls both wallets. Always false in builds without the frost_roast_retry tag.
+// It is group-uniform per wallet -- every honest node in the wallet's group derives
+// the same key group from the shared signer material and sees the same per-key-group
+// registration state. Every fracture-sensitive per-attempt decision (participant
+// selection, the active-attempt numbering, the transition exchange, observe) uses it
+// so a sibling wallet that merely reuses the same 1..N member index cannot flip this
+// wallet's decision on a node that controls both wallets. (There is deliberately NO
+// seat-only "active for member under any key group" variant: it would reintroduce
+// that cross-wallet fracture on the numbering path.) Always false in builds without
+// the frost_roast_retry tag.
 func RoastRetryActiveForKeyGroupMember(keyGroupID string, member group.MemberIndex) bool {
 	if !readinessAndProducerReady() {
 		return false

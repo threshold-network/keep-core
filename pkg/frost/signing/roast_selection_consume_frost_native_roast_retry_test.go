@@ -404,8 +404,10 @@ func TestRoastRetryActiveForKeyGroupMember_ScopesByKeyGroup(t *testing.T) {
 	if RoastRetryActiveForKeyGroupMember("wallet-B", 1) {
 		t.Fatal("seat 1 must NOT be active for wallet-B, which never registered it")
 	}
-	// Contrast: the seat-only predicate stays true for ANY key group (the bug source).
-	if !RoastRetryActiveForMember(1) {
-		t.Fatal("seat-only predicate must still find seat 1 under some key group")
+	// Contrast: the seat-only registry scan still finds seat 1 under SOME key group,
+	// which is exactly why activation must NOT key off it -- it cannot tell wallet-A
+	// from wallet-B (hence there is no seat-only RoastRetryActive*ForMember predicate).
+	if _, ok := RegisteredRoastRetryCoordinatorForMember(1); !ok {
+		t.Fatal("seat-only scan must still find seat 1 under some key group")
 	}
 }

@@ -79,34 +79,6 @@ func TestRoastRetryActive_GatesOnReadinessAndRegistration(t *testing.T) {
 	}
 }
 
-// TestRoastRetryActiveForMember_GatesPerMember asserts per-member activation: a
-// seat with a registered coordinator is active (given readiness + a producer); a
-// seat WITHOUT one is inactive even when a sibling seat is registered.
-func TestRoastRetryActiveForMember_GatesPerMember(t *testing.T) {
-	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
-	ResetRoastRetryRegistrationForTest()
-	t.Cleanup(ResetRoastRetryRegistrationForTest)
-
-	RegisterRoastRetryCoordinatorForMember(1, RoastRetryDeps{
-		Coordinator: roast.NewInMemoryCoordinatorWithSigning(1, roast.NoOpSigner(), roast.NoOpSignatureVerifier()),
-		SelfMember:  1,
-	})
-
-	// Member 1 active iff a producer is built in; member 2 (unregistered) never.
-	if RoastRetryActiveForMember(1) != roastTransitionProducerAvailable() {
-		t.Fatalf("member 1: active must equal producer availability (%v); got %v",
-			roastTransitionProducerAvailable(), RoastRetryActiveForMember(1))
-	}
-	if RoastRetryActiveForMember(2) {
-		t.Fatal("member 2 (unregistered) must be inactive even with a sibling registered")
-	}
-
-	t.Setenv(RoastRetryReadinessOptInEnvVar, "false")
-	if RoastRetryActiveForMember(1) {
-		t.Fatal("readiness off must yield inactive even for a registered member")
-	}
-}
-
 // TestRoastRetryRegistration_PerMemberOverwriteAndCoexist asserts the per-member
 // registry semantics (PR2b-1.5): registering the SAME member twice overwrites that
 // member's entry, while DIFFERENT members coexist (a multi-seat operator registers
