@@ -589,8 +589,10 @@ func TestMovingFundsAction_ProposeMovingFunds(t *testing.T) {
 	txMaxTotalFee := uint64(6000)
 
 	var tests = map[string]struct {
-		fee              int64
-		expectedProposal *tbtc.MovingFundsProposal
+		fee                 int64
+		sourceTaproot       bool
+		taprootTargetsCount int
+		expectedProposal    *tbtc.MovingFundsProposal
 	}{
 		"fee provided": {
 			fee: 10000,
@@ -604,6 +606,15 @@ func TestMovingFundsAction_ProposeMovingFunds(t *testing.T) {
 			expectedProposal: &tbtc.MovingFundsProposal{
 				TargetWallets:    targetWallets,
 				MovingFundsTxFee: big.NewInt(4300),
+			},
+		},
+		"fee estimated from mixed Taproot and legacy scripts": {
+			fee:                 0,
+			sourceTaproot:       true,
+			taprootTargetsCount: 2,
+			expectedProposal: &tbtc.MovingFundsProposal{
+				TargetWallets:    targetWallets,
+				MovingFundsTxFee: big.NewInt(4625),
 			},
 		},
 	}
@@ -626,6 +637,39 @@ func TestMovingFundsAction_ProposeMovingFunds(t *testing.T) {
 				&tbtc.WalletChainData{
 					MovingFundsRequestedAt: time.Now().Add(-25 * time.Hour),
 				},
+			)
+			for i, targetWallet := range targetWallets {
+				walletData := &tbtc.WalletChainData{}
+				if i < test.taprootTargetsCount {
+					walletData.WalletID[0] = byte(i + 1)
+				}
+				tbtcChain.SetWallet(targetWallet, walletData)
+			}
+
+			var sourceWalletOutputScript bitcoin.Script
+			var err error
+			if test.sourceTaproot {
+				sourceWalletOutputScript, err = bitcoin.PayToTaproot([32]byte{0xff})
+			} else {
+				sourceWalletOutputScript, err = bitcoin.PayToWitnessPublicKeyHash(
+					walletPublicKeyHash,
+				)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			sourceTransactionOutputs := make([]*bitcoin.TransactionOutput, 12)
+			for i := range sourceTransactionOutputs {
+				sourceTransactionOutputs[i] = &bitcoin.TransactionOutput{}
+			}
+			sourceTransactionOutputs[walletMainUtxo.Outpoint.OutputIndex] =
+				&bitcoin.TransactionOutput{
+					Value:           walletMainUtxo.Value,
+					PublicKeyScript: sourceWalletOutputScript,
+				}
+			btcChain.SetTransaction(
+				walletMainUtxo.Outpoint.TransactionHash,
+				&bitcoin.Transaction{Outputs: sourceTransactionOutputs},
 			)
 
 			// Simulate the wallet was not chosen as a target wallet for another
@@ -651,7 +695,7 @@ func TestMovingFundsAction_ProposeMovingFunds(t *testing.T) {
 				0,
 			)
 
-			err := tbtcChain.SetMovingFundsProposalValidationResult(
+			err = tbtcChain.SetMovingFundsProposalValidationResult(
 				walletPublicKeyHash,
 				walletMainUtxo,
 				test.expectedProposal,
@@ -681,18 +725,55 @@ func TestMovingFundsAction_ProposeMovingFunds(t *testing.T) {
 	}
 }
 
-func TestEstimateMovingFundsFee(t *testing.T) {
+func TestEstimateMovingFundsFeeForScripts(t *testing.T) {
+	legacyWalletScript, err := bitcoin.PayToWitnessPublicKeyHash([20]byte{0x01})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taprootWalletScript, err := bitcoin.PayToTaproot([32]byte{0x02})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var tests = map[string]struct {
+		sourceScript  bitcoin.Script
+		targetScripts []bitcoin.Script
 		txMaxTotalFee uint64
 		expectedFee   uint64
 		expectedError error
 	}{
-		"estimated fee correct": {
+		"legacy scripts": {
+			sourceScript: legacyWalletScript,
+			targetScripts: []bitcoin.Script{
+				legacyWalletScript,
+				legacyWalletScript,
+				legacyWalletScript,
+				legacyWalletScript,
+			},
 			txMaxTotalFee: 6000,
 			expectedFee:   3248,
 			expectedError: nil,
 		},
+		"mixed Taproot and legacy scripts": {
+			sourceScript: taprootWalletScript,
+			targetScripts: []bitcoin.Script{
+				taprootWalletScript,
+				taprootWalletScript,
+				legacyWalletScript,
+				legacyWalletScript,
+			},
+			txMaxTotalFee: 6000,
+			expectedFee:   3456,
+			expectedError: nil,
+		},
 		"estimated fee too high": {
+			sourceScript: legacyWalletScript,
+			targetScripts: []bitcoin.Script{
+				legacyWalletScript,
+				legacyWalletScript,
+				legacyWalletScript,
+				legacyWalletScript,
+			},
 			txMaxTotalFee: 3000,
 			expectedFee:   0,
 			expectedError: tbtcpg.ErrFeeTooHigh,
@@ -704,11 +785,10 @@ func TestEstimateMovingFundsFee(t *testing.T) {
 			btcChain := tbtcpg.NewLocalBitcoinChain()
 			btcChain.SetEstimateSatPerVByteFee(1, 16)
 
-			targetWalletsCount := 4
-
-			actualFee, err := tbtcpg.EstimateMovingFundsFee(
+			actualFee, err := tbtcpg.EstimateMovingFundsFeeForScripts(
 				btcChain,
-				targetWalletsCount,
+				test.sourceScript,
+				test.targetScripts,
 				test.txMaxTotalFee,
 			)
 
@@ -726,6 +806,18 @@ func TestEstimateMovingFundsFee(t *testing.T) {
 			)
 		})
 	}
+}
+
+func TestEstimateMovingFundsFee(t *testing.T) {
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+	btcChain.SetEstimateSatPerVByteFee(1, 16)
+
+	actualFee, err := tbtcpg.EstimateMovingFundsFee(btcChain, 4, 6000)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertUintsEqual(t, "fee", 3248, uint64(actualFee))
 }
 
 type walletInfo struct {

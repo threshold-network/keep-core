@@ -57,6 +57,7 @@ type localChain struct {
 	submittedMovedFundsSweepProofs           []*submittedMovedFundsSweepProof
 	pastRedemptionRequestedEvents            map[[32]byte][]*tbtc.RedemptionRequestedEvent
 	pastDepositRevealedEvents                map[[32]byte][]*tbtc.DepositRevealedEvent
+	pastTaprootDepositRevealedEvents         map[[32]byte][]*tbtc.TaprootDepositRevealedEvent
 	pastMovingFundsCommitmentSubmittedEvents map[[32]byte][]*tbtc.MovingFundsCommitmentSubmittedEvent
 
 	txProofDifficultyFactor *big.Int
@@ -76,6 +77,7 @@ func newLocalChain() *localChain {
 		submittedMovingFundsProofs:               make([]*submittedMovingFundsProof, 0),
 		pastRedemptionRequestedEvents:            make(map[[32]byte][]*tbtc.RedemptionRequestedEvent),
 		pastDepositRevealedEvents:                make(map[[32]byte][]*tbtc.DepositRevealedEvent),
+		pastTaprootDepositRevealedEvents:         make(map[[32]byte][]*tbtc.TaprootDepositRevealedEvent),
 		pastMovingFundsCommitmentSubmittedEvents: make(map[[32]byte][]*tbtc.MovingFundsCommitmentSubmittedEvent),
 	}
 }
@@ -474,6 +476,40 @@ func (lc *localChain) addPastDepositRevealedEvent(
 
 	lc.pastDepositRevealedEvents[eventsKey] = append(
 		lc.pastDepositRevealedEvents[eventsKey],
+		event,
+	)
+
+	return nil
+}
+
+func (lc *localChain) PastTaprootDepositRevealedEvents(
+	filter *tbtc.DepositRevealedEventFilter,
+) ([]*tbtc.TaprootDepositRevealedEvent, error) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	eventsKey, err := buildPastDepositRevealedEventsKey(filter)
+	if err != nil {
+		return nil, err
+	}
+
+	return lc.pastTaprootDepositRevealedEvents[eventsKey], nil
+}
+
+func (lc *localChain) addPastTaprootDepositRevealedEvent(
+	filter *tbtc.DepositRevealedEventFilter,
+	event *tbtc.TaprootDepositRevealedEvent,
+) error {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	eventsKey, err := buildPastDepositRevealedEventsKey(filter)
+	if err != nil {
+		return err
+	}
+
+	lc.pastTaprootDepositRevealedEvents[eventsKey] = append(
+		lc.pastTaprootDepositRevealedEvents[eventsKey],
 		event,
 	)
 

@@ -1,6 +1,7 @@
 package tbtcpg_test
 
 import (
+	"math/big"
 	"reflect"
 	"testing"
 	"time"
@@ -455,6 +456,207 @@ func TestDepositSweepTask_ProposeDepositsSweep(t *testing.T) {
 				t.Errorf("invalid deposit sweep proposal: %v", diff)
 			}
 		})
+	}
+}
+
+func TestDepositSweepTask_TaprootMarkerControlsFirstSweepFeeEstimation(t *testing.T) {
+	currentBlock := uint64(300000)
+	filterStartBlock := currentBlock - tbtcpg.DepositSweepLookBackBlocks
+	revealBlock := uint64(290000)
+	walletPublicKeyHash := hexToByte20(
+		"7670343fc00ccc2d0cd65360e6ad400697ea0fed",
+	)
+
+	tbtcChain := tbtcpg.NewLocalChain()
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+	blockCounter := tbtcpg.NewMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	tbtcChain.SetBlockCounter(blockCounter)
+	tbtcChain.SetDepositMinAge(3600)
+	tbtcChain.SetDepositParameters(0, 0, 2500, 0)
+	tbtcChain.SetWallet(walletPublicKeyHash, &tbtc.WalletChainData{})
+	btcChain.SetEstimateSatPerVByteFee(1, 20)
+
+	fundingTxHash := setupVaultGroupingDeposit(
+		t,
+		tbtcChain,
+		btcChain,
+		walletPublicKeyHash,
+		filterStartBlock,
+		"7711111111111111111111111111111111111111111111111111111111111111",
+		0,
+		revealBlock,
+		nil,
+	)
+
+	legacyEvent := &tbtc.DepositRevealedEvent{
+		BlockNumber:         revealBlock,
+		WalletPublicKeyHash: walletPublicKeyHash,
+		FundingTxHash:       fundingTxHash,
+		FundingOutputIndex:  0,
+	}
+	taprootEvent := &tbtc.TaprootDepositRevealedEvent{
+		BlockNumber:         revealBlock,
+		WalletPublicKeyHash: walletPublicKeyHash,
+		FundingTxHash:       fundingTxHash,
+		FundingOutputIndex:  0,
+	}
+
+	broadFilter := &tbtc.DepositRevealedEventFilter{
+		StartBlock:          filterStartBlock,
+		WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+	}
+	if err := tbtcChain.AddPastTaprootDepositRevealedEvent(
+		broadFilter,
+		taprootEvent,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	task := tbtcpg.NewDepositSweepTask(tbtcChain, btcChain)
+	deposits, err := task.FindDepositsToSweep(
+		&testutils.MockLogger{},
+		walletPublicKeyHash,
+		1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deposits) != 1 {
+		t.Fatalf("expected one deposit, got [%d]", len(deposits))
+	}
+	if !deposits[0].IsTaproot {
+		t.Fatal("Taproot marker was lost while building the deposit reference")
+	}
+
+	// With no main UTXO, the first-sweep P2TR shape is 111 vbytes and costs
+	// 2220 sats at 20 sat/vbyte. Including a nonexistent P2TR main-UTXO input
+	// would produce 169 vbytes and exceed the 2500-sat per-deposit maximum.
+	expectedProposal := &tbtc.DepositSweepProposal{
+		DepositsKeys: []struct {
+			FundingTxHash      bitcoin.Hash
+			FundingOutputIndex uint32
+		}{
+			{
+				FundingTxHash:      fundingTxHash,
+				FundingOutputIndex: 0,
+			},
+		},
+		SweepTxFee:           big.NewInt(2220),
+		DepositsRevealBlocks: []*big.Int{big.NewInt(int64(revealBlock))},
+	}
+
+	exactFilter := &tbtc.DepositRevealedEventFilter{
+		StartBlock:          revealBlock,
+		EndBlock:            &revealBlock,
+		WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+	}
+	if err := tbtcChain.AddPastDepositRevealedEvent(
+		exactFilter,
+		legacyEvent,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := tbtcChain.AddPastTaprootDepositRevealedEvent(
+		exactFilter,
+		taprootEvent,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := tbtcChain.SetDepositSweepProposalValidationResult(
+		walletPublicKeyHash,
+		expectedProposal,
+		nil,
+		true,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	proposal, err := task.ProposeDepositsSweep(
+		&testutils.MockLogger{},
+		walletPublicKeyHash,
+		deposits,
+		0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := deep.Equal(expectedProposal, proposal); diff != nil {
+		t.Errorf("invalid Taproot deposit sweep proposal: %v", diff)
+	}
+
+	// An existing main UTXO adds a second P2TR input to the sweep. At 20
+	// sat/vbyte, the 169-vbyte transaction costs 3380 sats. This exercises the
+	// hasMainUtxo fee-estimation branch rather than just snapshot propagation.
+	mainUtxoHash := [32]byte{0xaa, 0xbb, 0xcc}
+	tbtcChain.SetWallet(
+		walletPublicKeyHash,
+		&tbtc.WalletChainData{MainUtxoHash: mainUtxoHash},
+	)
+	tbtcChain.SetDepositParameters(0, 0, 4000, 0)
+	expectedEstimatedProposalWithMainUtxo := &tbtc.DepositSweepProposal{
+		DepositsKeys:         expectedProposal.DepositsKeys,
+		SweepTxFee:           big.NewInt(3380),
+		DepositsRevealBlocks: expectedProposal.DepositsRevealBlocks,
+		MainUtxoHash:         mainUtxoHash,
+	}
+	if err := tbtcChain.SetDepositSweepProposalValidationResult(
+		walletPublicKeyHash,
+		expectedEstimatedProposalWithMainUtxo,
+		nil,
+		true,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	proposal, err = task.ProposeDepositsSweep(
+		&testutils.MockLogger{},
+		walletPublicKeyHash,
+		deposits,
+		0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proposal.SweepTxFee.Cmp(expectedEstimatedProposalWithMainUtxo.SweepTxFee) != 0 {
+		t.Fatalf(
+			"unexpected Taproot sweep fee with main UTXO\nexpected: [%v]\nactual:   [%v]",
+			expectedEstimatedProposalWithMainUtxo.SweepTxFee,
+			proposal.SweepTxFee,
+		)
+	}
+	if diff := deep.Equal(expectedEstimatedProposalWithMainUtxo, proposal); diff != nil {
+		t.Errorf("invalid Taproot sweep proposal with main UTXO: %v", diff)
+	}
+
+	// Even when the fee is supplied explicitly, capture the main UTXO state
+	// that execution must revalidate before signing.
+	expectedProposalWithMainUtxo := &tbtc.DepositSweepProposal{
+		DepositsKeys:         expectedProposal.DepositsKeys,
+		SweepTxFee:           big.NewInt(2000),
+		DepositsRevealBlocks: expectedProposal.DepositsRevealBlocks,
+		MainUtxoHash:         mainUtxoHash,
+	}
+	if err := tbtcChain.SetDepositSweepProposalValidationResult(
+		walletPublicKeyHash,
+		expectedProposalWithMainUtxo,
+		nil,
+		true,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	proposal, err = task.ProposeDepositsSweep(
+		&testutils.MockLogger{},
+		walletPublicKeyHash,
+		deposits,
+		2000,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := deep.Equal(expectedProposalWithMainUtxo, proposal); diff != nil {
+		t.Errorf("invalid Taproot main UTXO snapshot: %v", diff)
 	}
 }
 

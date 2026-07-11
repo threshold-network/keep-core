@@ -105,6 +105,7 @@ type DepositReference struct {
 	FundingOutputIndex uint32
 	RevealBlock        uint64
 	Vault              *chain.Address
+	IsTaproot          bool
 }
 
 // Deposit holds some detailed data about a deposit.
@@ -352,6 +353,7 @@ func findDeposits(
 					FundingTxHash:      event.FundingTxHash,
 					FundingOutputIndex: event.FundingOutputIndex,
 					RevealBlock:        event.BlockNumber,
+					IsTaproot:          event.IsTaproot,
 				},
 				WalletPublicKeyHash: event.WalletPublicKeyHash,
 				DepositKey:          hexutils.Encode(depositKey.Bytes()),
@@ -549,6 +551,7 @@ func (dst *DepositSweepTask) FindDepositsToSweep(
 			FundingOutputIndex: deposit.FundingOutputIndex,
 			RevealBlock:        deposit.RevealBlock,
 			Vault:              deposit.Vault,
+			IsTaproot:          deposit.IsTaproot,
 		}
 	}
 
@@ -566,7 +569,34 @@ func (dst *DepositSweepTask) ProposeDepositsSweep(
 		return nil, fmt.Errorf("deposits list is empty")
 	}
 
+	isTaproot := deposits[0].IsTaproot
+	for i, deposit := range deposits[1:] {
+		if deposit.IsTaproot != isTaproot {
+			return nil, fmt.Errorf(
+				"cannot mix legacy and Taproot deposits in one sweep proposal (deposit [%d])",
+				i+1,
+			)
+		}
+	}
+
 	taskLogger.Infof("preparing a deposit sweep proposal")
+	mainUtxoHash := [32]byte{}
+	if isTaproot {
+		walletData, err := dst.chain.GetWallet(walletPublicKeyHash)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot get wallet data for Taproot sweep main UTXO snapshot: [%w]",
+				err,
+			)
+		}
+		if walletData == nil {
+			return nil, fmt.Errorf(
+				"cannot get wallet data for Taproot sweep main UTXO snapshot: wallet data is nil",
+			)
+		}
+
+		mainUtxoHash = walletData.MainUtxoHash
+	}
 
 	// Estimate fee if it's missing.
 	if fee <= 0 {
@@ -577,10 +607,17 @@ func (dst *DepositSweepTask) ProposeDepositsSweep(
 			return nil, fmt.Errorf("cannot get deposit tx max fee: [%w]", err)
 		}
 
+		hasMainUtxo := true
+		if isTaproot {
+			hasMainUtxo = mainUtxoHash != [32]byte{}
+		}
+
 		estimatedFee, _, err := estimateDepositsSweepFee(
 			dst.btcChain,
 			len(deposits),
 			perDepositMaxFee,
+			isTaproot,
+			hasMainUtxo,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("cannot estimate sweep transaction fee: [%v]", err)
@@ -613,6 +650,7 @@ func (dst *DepositSweepTask) ProposeDepositsSweep(
 		DepositsKeys:         depositsKeys,
 		SweepTxFee:           big.NewInt(fee),
 		DepositsRevealBlocks: depositsRevealBlocks,
+		MainUtxoHash:         mainUtxoHash,
 	}
 
 	taskLogger.Infof("validating the deposit sweep proposal")
@@ -690,6 +728,8 @@ func EstimateDepositsSweepFee(
 			btcChain,
 			depositsCountKey,
 			perDepositMaxFee,
+			false,
+			true,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -715,15 +755,39 @@ func estimateDepositsSweepFee(
 	btcChain bitcoin.Chain,
 	depositsCount int,
 	perDepositMaxFee uint64,
+	isTaproot bool,
+	hasMainUtxo bool,
 ) (int64, int64, error) {
-	transactionSize, err := bitcoin.NewTransactionSizeEstimator().
-		// 1 P2WPKH main UTXO input.
-		AddPublicKeyHashInputs(1, true).
-		// depositsCount P2WSH deposit inputs.
-		AddScriptHashInputs(depositsCount, depositScriptByteSize, true).
-		// 1 P2WPKH output.
-		AddPublicKeyHashOutputs(1, true).
-		VirtualSize()
+	sizeEstimator := bitcoin.NewTransactionSizeEstimator()
+	if isTaproot {
+		taprootOutputScript, err := bitcoin.PayToTaproot([32]byte{})
+		if err != nil {
+			return 0, 0, fmt.Errorf(
+				"cannot construct Taproot output script placeholder: [%v]",
+				err,
+			)
+		}
+
+		inputsCount := depositsCount
+		if hasMainUtxo {
+			inputsCount++
+		}
+
+		for i := 0; i < inputsCount; i++ {
+			sizeEstimator.AddPublicKeyScriptInput(taprootOutputScript)
+		}
+		sizeEstimator.AddOutputScript(taprootOutputScript)
+	} else {
+		sizeEstimator.
+			// 1 P2WPKH main UTXO input.
+			AddPublicKeyHashInputs(1, true).
+			// depositsCount P2WSH deposit inputs.
+			AddScriptHashInputs(depositsCount, depositScriptByteSize, true).
+			// 1 P2WPKH output.
+			AddPublicKeyHashOutputs(1, true)
+	}
+
+	transactionSize, err := sizeEstimator.VirtualSize()
 	if err != nil {
 		return 0, 0, fmt.Errorf("cannot estimate transaction virtual size: [%v]", err)
 	}

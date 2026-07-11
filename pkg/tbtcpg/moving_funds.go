@@ -602,9 +602,32 @@ func (mft *MovingFundsTask) ProposeMovingFunds(
 			)
 		}
 
-		estimatedFee, err := EstimateMovingFundsFee(
+		sourceWalletOutputScript, err := movingFundsMainUTXOOutputScript(
 			mft.btcChain,
-			len(targetWallets),
+			mainUTXO,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot resolve moving funds source wallet output: [%w]",
+				err,
+			)
+		}
+
+		targetWalletOutputScripts, err := movingFundsTargetWalletOutputScripts(
+			mft.chain,
+			targetWallets,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot resolve moving funds target wallet outputs: [%w]",
+				err,
+			)
+		}
+
+		estimatedFee, err := EstimateMovingFundsFeeForScripts(
+			mft.btcChain,
+			sourceWalletOutputScript,
+			targetWalletOutputScripts,
 			txMaxTotalFee,
 		)
 		if err != nil {
@@ -646,16 +669,124 @@ func (mft *MovingFundsTask) ActionType() tbtc.WalletActionType {
 	return tbtc.ActionMovingFunds
 }
 
-// EstimateMovingFundsFee estimates fee for the moving funds transaction that
-// moves funds from the source wallet to target wallets.
+func movingFundsMainUTXOOutputScript(
+	btcChain bitcoin.Chain,
+	mainUTXO *bitcoin.UnspentTransactionOutput,
+) (bitcoin.Script, error) {
+	if mainUTXO == nil || mainUTXO.Outpoint == nil {
+		return nil, fmt.Errorf("main UTXO is nil")
+	}
+
+	transaction, err := btcChain.GetTransaction(
+		mainUTXO.Outpoint.TransactionHash,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot get main UTXO transaction: [%w]", err)
+	}
+	if transaction == nil {
+		return nil, fmt.Errorf("main UTXO transaction is nil")
+	}
+
+	outputIndex := mainUTXO.Outpoint.OutputIndex
+	if outputIndex >= uint32(len(transaction.Outputs)) {
+		return nil, fmt.Errorf(
+			"main UTXO output index [%d] out of range for transaction with [%d] outputs",
+			outputIndex,
+			len(transaction.Outputs),
+		)
+	}
+	if transaction.Outputs[outputIndex] == nil {
+		return nil, fmt.Errorf("main UTXO transaction output [%d] is nil", outputIndex)
+	}
+
+	return transaction.Outputs[outputIndex].PublicKeyScript, nil
+}
+
+func movingFundsTargetWalletOutputScripts(
+	chain Chain,
+	targetWallets [][20]byte,
+) ([]bitcoin.Script, error) {
+	outputScripts := make([]bitcoin.Script, len(targetWallets))
+
+	for i, targetWallet := range targetWallets {
+		walletData, err := chain.GetWallet(targetWallet)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot get target wallet [%d] chain data: [%w]",
+				i,
+				err,
+			)
+		}
+		if walletData == nil {
+			return nil, fmt.Errorf("target wallet [%d] chain data is nil", i)
+		}
+
+		outputScript, err := tbtc.WalletOutputScript(
+			targetWallet,
+			walletData.WalletID,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot compute target wallet [%d] output script: [%w]",
+				i,
+				err,
+			)
+		}
+
+		outputScripts[i] = outputScript
+	}
+
+	return outputScripts, nil
+}
+
+// EstimateMovingFundsFee estimates a legacy P2WPKH moving-funds transaction
+// fee. Call EstimateMovingFundsFeeForScripts when the source or any target may
+// use another output script type.
 func EstimateMovingFundsFee(
 	btcChain bitcoin.Chain,
 	targetWalletsCount int,
 	txMaxTotalFee uint64,
 ) (int64, error) {
+	if targetWalletsCount <= 0 {
+		return 0, fmt.Errorf("target wallets count must be positive")
+	}
+
+	legacyWalletOutputScript, err := bitcoin.PayToWitnessPublicKeyHash([20]byte{})
+	if err != nil {
+		return 0, fmt.Errorf("cannot construct legacy wallet output script: [%v]", err)
+	}
+
+	targetWalletOutputScripts := make([]bitcoin.Script, targetWalletsCount)
+	for i := range targetWalletOutputScripts {
+		targetWalletOutputScripts[i] = legacyWalletOutputScript
+	}
+
+	return EstimateMovingFundsFeeForScripts(
+		btcChain,
+		legacyWalletOutputScript,
+		targetWalletOutputScripts,
+		txMaxTotalFee,
+	)
+}
+
+// EstimateMovingFundsFeeForScripts estimates fee for a moving-funds
+// transaction using the resolved source and target wallet output scripts.
+func EstimateMovingFundsFeeForScripts(
+	btcChain bitcoin.Chain,
+	sourceWalletOutputScript bitcoin.Script,
+	targetWalletOutputScripts []bitcoin.Script,
+	txMaxTotalFee uint64,
+) (int64, error) {
+	if len(targetWalletOutputScripts) == 0 {
+		return 0, fmt.Errorf("target wallet output scripts list is empty")
+	}
+
 	sizeEstimator := bitcoin.NewTransactionSizeEstimator().
-		AddPublicKeyHashInputs(1, true).
-		AddPublicKeyHashOutputs(targetWalletsCount, true)
+		AddPublicKeyScriptInput(sourceWalletOutputScript)
+
+	for _, targetWalletOutputScript := range targetWalletOutputScripts {
+		sizeEstimator.AddOutputScript(targetWalletOutputScript)
+	}
 
 	transactionSize, err := sizeEstimator.VirtualSize()
 	if err != nil {

@@ -318,6 +318,7 @@ func (dsp *DepositSweepProposal) Marshal() ([]byte, error) {
 			DepositsKeys:         depositsKeys,
 			SweepTxFee:           dsp.SweepTxFee.Bytes(),
 			DepositsRevealBlocks: depositsRevealBlocks,
+			MainUtxoHash:         append([]byte{}, dsp.MainUtxoHash[:]...),
 		},
 	)
 }
@@ -365,6 +366,13 @@ func (dsp *DepositSweepProposal) Unmarshal(bytes []byte) error {
 	dsp.DepositsKeys = depositsKeys
 	dsp.SweepTxFee = new(big.Int).SetBytes(pbMsg.SweepTxFee)
 	dsp.DepositsRevealBlocks = depositsRevealBlocks
+	if len(pbMsg.MainUtxoHash) != 0 && len(pbMsg.MainUtxoHash) != 32 {
+		return fmt.Errorf(
+			"failed to unmarshal main UTXO hash: invalid length [%v]",
+			len(pbMsg.MainUtxoHash),
+		)
+	}
+	copy(dsp.MainUtxoHash[:], pbMsg.MainUtxoHash)
 
 	return nil
 }

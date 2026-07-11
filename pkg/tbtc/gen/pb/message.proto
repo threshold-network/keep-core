@@ -36,6 +36,7 @@ message DepositSweepProposal {
     repeated DepositKey depositsKeys = 1;
     bytes sweepTxFee = 2;
     repeated uint64 depositsRevealBlocks = 3;
+    bytes mainUtxoHash = 4;
 }
 
 message RedemptionProposal {

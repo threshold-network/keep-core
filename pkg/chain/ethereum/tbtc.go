@@ -1927,7 +1927,7 @@ func pastNewWalletRegisteredEvents(
 	bridge any,
 	pastLegacyEvents pastNewWalletRegisteredEventsFn,
 ) ([]*tbtc.NewWalletRegisteredEvent, error) {
-	convertedEvents, err := pastNewWalletRegisteredV2Events(
+	v2Events, err := pastNewWalletRegisteredV2Events(
 		startBlock,
 		endBlock,
 		walletID,
@@ -1939,28 +1939,63 @@ func pastNewWalletRegisteredEvents(
 		return nil, err
 	}
 
-	// Fallback for legacy deployments that do not emit NewWalletRegisteredV2.
-	if len(convertedEvents) == 0 && len(walletID) == 0 {
-		legacyEvents, err := pastLegacyEvents(
-			startBlock,
-			endBlock,
-			ecdsaWalletID,
-			walletPublicKeyHash,
-		)
-		if err != nil {
-			return nil, err
+	legacyEvents, err := pastLegacyEvents(
+		startBlock,
+		endBlock,
+		ecdsaWalletID,
+		walletPublicKeyHash,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	convertedEvents := make(
+		[]*tbtc.NewWalletRegisteredEvent,
+		0,
+		len(v2Events)+len(legacyEvents),
+	)
+	seenRegistrations := make(map[[20]byte]struct{})
+
+	appendUnique := func(event *tbtc.NewWalletRegisteredEvent) {
+		// The Bridge keys wallet state by public key hash. Compatibility legacy
+		// events cannot carry a FROST wallet's canonical x-only wallet ID, so
+		// the public key hash is the common identity available in both event
+		// versions.
+		if _, exists := seenRegistrations[event.WalletPublicKeyHash]; exists {
+			return
 		}
 
-		for _, event := range legacyEvents {
-			convertedEvent := &tbtc.NewWalletRegisteredEvent{
-				WalletID:            tbtc.DeriveLegacyWalletID(event.WalletPubKeyHash),
-				EcdsaWalletID:       event.EcdsaWalletID,
-				WalletPublicKeyHash: event.WalletPubKeyHash,
-				BlockNumber:         event.Raw.BlockNumber,
-			}
+		seenRegistrations[event.WalletPublicKeyHash] = struct{}{}
+		convertedEvents = append(convertedEvents, event)
+	}
 
-			convertedEvents = append(convertedEvents, convertedEvent)
+	// V2 events are appended first so they win over compatibility legacy
+	// events emitted for the same registration.
+	for _, event := range v2Events {
+		appendUnique(event)
+	}
+
+	for _, event := range legacyEvents {
+		// A genuine legacy ECDSA registration always carries a non-zero ECDSA
+		// wallet ID. A zero value can only be a compatibility event for a
+		// scheme whose canonical wallet ID is not present in this legacy event;
+		// synthesizing a padded-PKH ID would invent the wrong identity.
+		if event.EcdsaWalletID == [32]byte{} {
+			continue
 		}
+
+		convertedEvent := &tbtc.NewWalletRegisteredEvent{
+			WalletID:            tbtc.DeriveLegacyWalletID(event.WalletPubKeyHash),
+			EcdsaWalletID:       event.EcdsaWalletID,
+			WalletPublicKeyHash: event.WalletPubKeyHash,
+			BlockNumber:         event.Raw.BlockNumber,
+		}
+
+		if len(walletID) > 0 && !containsWalletID(walletID, convertedEvent.WalletID) {
+			continue
+		}
+
+		appendUnique(convertedEvent)
 	}
 
 	sort.SliceStable(
@@ -1971,6 +2006,16 @@ func pastNewWalletRegisteredEvents(
 	)
 
 	return convertedEvents, nil
+}
+
+func containsWalletID(walletIDs [][32]byte, walletID [32]byte) bool {
+	for _, candidate := range walletIDs {
+		if candidate == walletID {
+			return true
+		}
+	}
+
+	return false
 }
 
 func pastNewWalletRegisteredV2Events(
