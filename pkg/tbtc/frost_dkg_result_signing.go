@@ -127,7 +127,9 @@ func signAndCollectFrostDKGResultSignatures(
 		}
 	}
 
-	expectedSignaturesCount, err := frostDKGSignatureThreshold(node.groupParameters)
+	expectedSignaturesCount, err := frostDKGSignatureThreshold(
+		node.frostGroupParameters,
+	)
 	if err != nil {
 		return nil, err
 	}

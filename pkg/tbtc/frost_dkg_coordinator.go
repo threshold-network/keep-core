@@ -62,13 +62,17 @@ func handleFrostDKGStarted(
 	event *FrostDKGStartedEvent,
 	waitForConfirmation bool,
 ) {
-	if ok := deduplicator.notifyDKGStarted(event.Seed); !ok {
+	lease, ok := deduplicator.beginDKGStarted(event.Seed)
+	if !ok {
 		logger.Infof(
-			"FROST DKG started event with seed [0x%x] has already been processed",
+			"FROST DKG started event with seed [0x%x] is already completed or "+
+				"being processed",
 			event.Seed,
 		)
 		return
 	}
+	completed := false
+	defer func() { lease.finish(completed) }()
 
 	if waitForConfirmation {
 		confirmationBlock := event.BlockNumber + dkgStartedConfirmationBlocks
@@ -82,6 +86,10 @@ func handleFrostDKGStarted(
 
 		if err := node.waitForBlockHeight(ctx, confirmationBlock); err != nil {
 			logger.Errorf("failed to confirm FROST DKG started event: [%v]", err)
+			return
+		}
+		if ctx.Err() != nil {
+			logger.Errorf("stopping FROST DKG started event handling: [%v]", ctx.Err())
 			return
 		}
 	}
@@ -98,6 +106,7 @@ func handleFrostDKGStarted(
 			event.Seed,
 			event.BlockNumber,
 		)
+		completed = true
 		return
 	}
 
@@ -121,6 +130,33 @@ func handleFrostDKGStarted(
 	}
 
 	lastEvent := pastEvents[len(pastEvents)-1]
+	if lastEvent.Seed.Cmp(event.Seed) != 0 {
+		logger.Infof(
+			"FROST DKG started event with seed [0x%x] was superseded by seed "+
+				"[0x%x]; transferring handling to the latest event",
+			event.Seed,
+			lastEvent.Seed,
+		)
+
+		// Mark the triggering event as terminal before re-entering so stale
+		// subscription replays remain suppressed. The recursive handler must
+		// acquire a fresh lease for the resolved seed before it performs any
+		// membership or DKG work. If another handler already owns or completed
+		// that seed, beginDKGStarted suppresses this path; if it previously
+		// failed and released its lease, this path safely becomes the retry.
+		completed = true
+		lease.finish(completed)
+		handleFrostDKGStarted(
+			ctx,
+			node,
+			frostChain,
+			deduplicator,
+			lastEvent,
+			waitForConfirmation,
+		)
+		return
+	}
+
 	memberIndexes, groupSelectionResult, err := localFrostMembership(
 		node,
 		frostChain,
@@ -137,10 +173,11 @@ func handleFrostDKGStarted(
 			lastEvent.Seed,
 			lastEvent.BlockNumber,
 		)
+		completed = true
 		return
 	}
 
-	executeFrostDKGIfPossible(
+	completed = executeFrostDKGIfPossible(
 		ctx,
 		node,
 		frostChain,
@@ -227,20 +264,23 @@ func handleFrostDKGResultSubmitted(
 	deduplicator *deduplicator,
 	event *FrostDKGResultSubmittedEvent,
 ) {
-	if ok := deduplicator.notifyDKGResultSubmitted(
+	lease, ok := deduplicator.beginDKGResultSubmitted(
 		event.Seed,
 		event.ResultHash,
 		event.BlockNumber,
-	); !ok {
+	)
+	if !ok {
 		logger.Infof(
 			"FROST DKG result with hash [0x%x] for seed [0x%x] at block [%v] "+
-				"has already been processed",
+				"is already completed or being processed",
 			event.ResultHash,
 			event.Seed,
 			event.BlockNumber,
 		)
 		return
 	}
+	completed := false
+	defer func() { lease.finish(completed) }()
 
 	valid, reason, err := frostChain.IsFrostDKGResultValid(event.Result)
 	if err != nil {
@@ -258,7 +298,7 @@ func handleFrostDKGResultSubmitted(
 			event.ResultHash,
 			reason,
 		)
-		challengeInvalidFrostDKGResult(ctx, node, frostChain, event)
+		completed = challengeInvalidFrostDKGResult(ctx, node, frostChain, event)
 		return
 	}
 
@@ -273,12 +313,21 @@ func handleFrostDKGResultSubmitted(
 				"selected group and will not approve",
 			event.ResultHash,
 		)
+		completed = true
 		return
 	}
 
 	params, err := frostChain.FrostDKGParameters()
 	if err != nil {
 		logger.Errorf("failed to get FROST DKG parameters: [%v]", err)
+		return
+	}
+	if params == nil {
+		logger.Errorf("FROST DKG parameters are nil")
+		return
+	}
+	if ctx.Err() != nil {
+		logger.Errorf("stopping FROST DKG result handling: [%v]", ctx.Err())
 		return
 	}
 
@@ -306,6 +355,7 @@ func handleFrostDKGResultSubmitted(
 			approvalBlock,
 		)
 	}
+	completed = true
 }
 
 func challengeInvalidFrostDKGResult(
@@ -313,7 +363,7 @@ func challengeInvalidFrostDKGResult(
 	node *node,
 	frostChain FrostDKGChain,
 	event *FrostDKGResultSubmittedEvent,
-) {
+) bool {
 	for attempt := uint64(1); ; attempt++ {
 		select {
 		case <-ctx.Done():
@@ -321,21 +371,21 @@ func challengeInvalidFrostDKGResult(
 				"stopping FROST DKG challenge confirmation: [%v]",
 				ctx.Err(),
 			)
-			return
+			return false
 		default:
 		}
 
 		state, err := frostChain.GetFrostDKGState()
 		if err != nil {
 			logger.Errorf("failed to check FROST DKG state before challenge: [%v]", err)
-			return
+			return false
 		}
 		if state != Challenge {
 			logger.Infof(
 				"invalid FROST DKG result [0x%x] challenged successfully",
 				event.ResultHash,
 			)
-			return
+			return true
 		}
 
 		if err := frostChain.ChallengeFrostDKGResult(event.Result); err != nil {
@@ -346,7 +396,7 @@ func challengeInvalidFrostDKGResult(
 						"operator",
 					event.ResultHash,
 				)
-				return
+				return true
 			}
 
 			logger.Errorf(
@@ -360,7 +410,7 @@ func challengeInvalidFrostDKGResult(
 					stateErr,
 				)
 			}
-			return
+			return false
 		}
 
 		currentBlock, err := currentFrostDKGBlock(node)
@@ -369,7 +419,7 @@ func challengeInvalidFrostDKGResult(
 				"failed to get current block after FROST DKG challenge: [%v]",
 				err,
 			)
-			return
+			return false
 		}
 
 		confirmationBlock := currentBlock + dkgResultChallengeConfirmationBlocks
@@ -386,27 +436,27 @@ func challengeInvalidFrostDKGResult(
 				"failed to wait for FROST DKG challenge confirmation: [%v]",
 				err,
 			)
-			return
+			return false
 		}
 		if ctx.Err() != nil {
 			logger.Errorf(
 				"stopping FROST DKG challenge confirmation: [%v]",
 				ctx.Err(),
 			)
-			return
+			return false
 		}
 
 		state, err = frostChain.GetFrostDKGState()
 		if err != nil {
 			logger.Errorf("failed to check FROST DKG state after challenge: [%v]", err)
-			return
+			return false
 		}
 		if state != Challenge {
 			logger.Infof(
 				"invalid FROST DKG result [0x%x] challenged successfully",
 				event.ResultHash,
 			)
-			return
+			return true
 		}
 
 		logger.Infof(
@@ -438,6 +488,14 @@ func scheduleFrostDKGResultApproval(
 			memberIndex,
 			approvalBlock,
 			err,
+		)
+		return
+	}
+	if ctx.Err() != nil {
+		logger.Errorf(
+			"stopping FROST DKG result approval for member [%d]: [%v]",
+			memberIndex,
+			ctx.Err(),
 		)
 		return
 	}
@@ -533,7 +591,7 @@ func frostDKGRecoveryStartBlock(
 
 	lookBackBlocks, err := frostDKGRecoveryLookBackBlocks(
 		params,
-		node.groupParameters,
+		node.frostGroupParameters,
 	)
 	if err != nil {
 		return 0, err

@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"math/big"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/keep-network/keep-common/pkg/cache"
@@ -39,6 +40,9 @@ type deduplicator struct {
 	dkgSeedCache       *cache.TimeCache
 	dkgResultHashCache *cache.TimeCache
 	walletClosedCache  *cache.TimeCache
+
+	mutex      sync.Mutex
+	inProgress map[string]struct{}
 }
 
 func newDeduplicator() *deduplicator {
@@ -46,6 +50,85 @@ func newDeduplicator() *deduplicator {
 		dkgSeedCache:       cache.NewTimeCache(DKGSeedCachePeriod),
 		dkgResultHashCache: cache.NewTimeCache(DKGResultHashCachePeriod),
 		walletClosedCache:  cache.NewTimeCache(WalletClosedCachePeriod),
+		inProgress:         make(map[string]struct{}),
+	}
+}
+
+// deduplicationLease suppresses concurrent handling of an event without
+// marking it permanently handled up front. Completing the lease moves the key
+// to the long-lived cache; releasing it after an error lets a subscription or
+// recovery replay retry the work.
+type deduplicationLease struct {
+	owner         *deduplicator
+	cache         *cache.TimeCache
+	cacheKey      string
+	inProgressKey string
+}
+
+func (d *deduplicator) beginDKGStarted(
+	seed *big.Int,
+) (*deduplicationLease, bool) {
+	cacheKey := seed.Text(16)
+	return d.begin(
+		d.dkgSeedCache,
+		cacheKey,
+		"dkg-started:"+cacheKey,
+	)
+}
+
+func (d *deduplicator) beginDKGResultSubmitted(
+	seed *big.Int,
+	resultHash DKGChainResultHash,
+	block uint64,
+) (*deduplicationLease, bool) {
+	cacheKey := dkgResultSubmittedCacheKey(seed, resultHash, block)
+	return d.begin(
+		d.dkgResultHashCache,
+		cacheKey,
+		"dkg-result-submitted:"+cacheKey,
+	)
+}
+
+func (d *deduplicator) begin(
+	completedCache *cache.TimeCache,
+	cacheKey string,
+	inProgressKey string,
+) (*deduplicationLease, bool) {
+	completedCache.Sweep()
+
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	if completedCache.Has(cacheKey) {
+		return nil, false
+	}
+	if _, ok := d.inProgress[inProgressKey]; ok {
+		return nil, false
+	}
+	if d.inProgress == nil {
+		d.inProgress = make(map[string]struct{})
+	}
+
+	d.inProgress[inProgressKey] = struct{}{}
+	return &deduplicationLease{
+		owner:         d,
+		cache:         completedCache,
+		cacheKey:      cacheKey,
+		inProgressKey: inProgressKey,
+	}, true
+}
+
+func (dl *deduplicationLease) finish(completed bool) {
+	dl.owner.mutex.Lock()
+	defer dl.owner.mutex.Unlock()
+
+	if _, ok := dl.owner.inProgress[dl.inProgressKey]; !ok {
+		return
+	}
+
+	delete(dl.owner.inProgress, dl.inProgressKey)
+	if completed {
+		dl.cache.Add(dl.cacheKey)
 	}
 }
 
@@ -59,16 +142,9 @@ func (d *deduplicator) notifyDKGStarted(
 
 	// The cache key is the hexadecimal representation of the seed.
 	cacheKey := newDKGSeed.Text(16)
-	// If the key is not in the cache, that means the seed was not handled
-	// yet and the client should proceed with the execution.
-	if !d.dkgSeedCache.Has(cacheKey) {
-		d.dkgSeedCache.Add(cacheKey)
-		return true
-	}
 
-	// Otherwise, the DKG seed is a duplicate and the client should not proceed
-	// with the execution.
-	return false
+	// Add performs the presence check and insertion atomically.
+	return d.dkgSeedCache.Add(cacheKey)
 }
 
 // notifyDKGResultSubmitted notifies the client wants to start some actions
@@ -81,20 +157,24 @@ func (d *deduplicator) notifyDKGResultSubmitted(
 ) bool {
 	d.dkgResultHashCache.Sweep()
 
-	cacheKey := newDKGResultSeed.Text(16) +
-		hex.EncodeToString(newDKGResultHash[:]) +
-		strconv.Itoa(int(newDKGResultBlock))
+	cacheKey := dkgResultSubmittedCacheKey(
+		newDKGResultSeed,
+		newDKGResultHash,
+		newDKGResultBlock,
+	)
 
-	// If the key is not in the cache, that means the result was not handled
-	// yet and the client should proceed with the execution.
-	if !d.dkgResultHashCache.Has(cacheKey) {
-		d.dkgResultHashCache.Add(cacheKey)
-		return true
-	}
+	// Add performs the presence check and insertion atomically.
+	return d.dkgResultHashCache.Add(cacheKey)
+}
 
-	// Otherwise, the DKG result is a duplicate and the client should not
-	// proceed with the execution.
-	return false
+func dkgResultSubmittedCacheKey(
+	seed *big.Int,
+	resultHash DKGChainResultHash,
+	block uint64,
+) string {
+	return seed.Text(16) +
+		hex.EncodeToString(resultHash[:]) +
+		strconv.FormatUint(block, 10)
 }
 
 func (d *deduplicator) notifyWalletClosed(

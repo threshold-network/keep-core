@@ -51,6 +51,31 @@ func TestNotifyDKGStarted(t *testing.T) {
 	}
 }
 
+func TestDKGStartedDeduplicationLease(t *testing.T) {
+	deduplicator := newDeduplicator()
+	seed := big.NewInt(100)
+
+	lease, ok := deduplicator.beginDKGStarted(seed)
+	if !ok {
+		t.Fatal("expected first handler to acquire the event")
+	}
+
+	if _, ok := deduplicator.beginDKGStarted(seed); ok {
+		t.Fatal("expected in-progress duplicate to be suppressed")
+	}
+
+	lease.finish(false)
+	lease, ok = deduplicator.beginDKGStarted(seed)
+	if !ok {
+		t.Fatal("expected released event to be retryable")
+	}
+
+	lease.finish(true)
+	if _, ok := deduplicator.beginDKGStarted(seed); ok {
+		t.Fatal("expected completed event to be suppressed")
+	}
+}
+
 func TestNotifyDKGResultSubmitted(t *testing.T) {
 	deduplicator := deduplicator{
 		dkgResultHashCache: cache.NewTimeCache(testDKGResultHashCachePeriod),

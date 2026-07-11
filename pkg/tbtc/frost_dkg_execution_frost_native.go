@@ -30,7 +30,7 @@ func executeFrostDKGIfPossible(
 	event *FrostDKGStartedEvent,
 	memberIndexes []group.MemberIndex,
 	groupSelectionResult *GroupSelectionResult,
-) {
+) bool {
 	nativeTBTCSignerEngine := frostsigning.CurrentNativeTBTCSignerEngine()
 	if nativeTBTCSignerEngine == nil {
 		logger.Infof(
@@ -39,7 +39,7 @@ func executeFrostDKGIfPossible(
 			event.Seed,
 			memberIndexes,
 		)
-		return
+		return false
 	}
 
 	// Distributed DKG produces signing material usable ONLY via the interactive
@@ -55,7 +55,7 @@ func executeFrostDKGIfPossible(
 			event.Seed,
 			frostsigning.InteractiveSigningOptInEnvVar,
 		)
-		return
+		return false
 	}
 
 	membershipValidator := group.NewMembershipValidator(
@@ -68,7 +68,7 @@ func executeFrostDKGIfPossible(
 	channel, err := node.netProvider.BroadcastChannelFor(channelName)
 	if err != nil {
 		logger.Errorf("failed to get FROST DKG broadcast channel: [%v]", err)
-		return
+		return false
 	}
 
 	registerFrostDKGResultSigningUnmarshaller(channel)
@@ -76,19 +76,25 @@ func executeFrostDKGIfPossible(
 
 	if err := channel.SetFilter(membershipValidator.IsInGroup); err != nil {
 		logger.Errorf("failed to set FROST DKG broadcast channel filter: [%v]", err)
-		return
+		return false
 	}
 
 	params, err := frostChain.FrostDKGParameters()
 	if err != nil {
 		logger.Errorf("failed to get FROST DKG parameters: [%v]", err)
-		return
+		return false
+	}
+	if params == nil {
+		logger.Errorf("FROST DKG parameters are nil")
+		return false
 	}
 
-	signatureThreshold, err := frostDKGSignatureThreshold(node.groupParameters)
+	signatureThreshold, err := frostDKGSignatureThreshold(
+		node.frostGroupParameters,
+	)
 	if err != nil {
 		logger.Errorf("invalid FROST DKG group parameters: [%v]", err)
-		return
+		return false
 	}
 
 	fullMembers := frostFullMembers(groupSelectionResult)
@@ -157,7 +163,7 @@ func executeFrostDKGIfPossible(
 		tbtcSignerMemberIndexes, err := finalFrostDKGMemberIndexes(
 			activeMemberIndexes,
 			groupSelectionResult,
-			node.groupParameters,
+			node.frostGroupParameters,
 		)
 		if err != nil {
 			dkgLogger.Errorf("failed to resolve final FROST DKG member indexes: [%v]", err)
@@ -249,6 +255,8 @@ func executeFrostDKGIfPossible(
 			return
 		}
 	}()
+
+	return true
 }
 
 type frostDKGExecutionResult struct {
@@ -300,7 +308,7 @@ func executeDistributedFrostDKG(
 	finalSigningGroupOperators, finalSigningGroupMembersIndexes, err := finalSigningGroup(
 		groupSelectionResult.OperatorsAddresses,
 		append([]group.MemberIndex{}, activeMemberIndexes...),
-		node.groupParameters,
+		node.frostGroupParameters,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("cannot resolve the final signing group: [%v]", err)
@@ -541,11 +549,11 @@ func announceFrostDKGReadiness(
 		return nil, nil, ctx.Err()
 	}
 
-	if len(activeMemberIndexes) < node.groupParameters.GroupQuorum {
+	if len(activeMemberIndexes) < node.frostGroupParameters.GroupQuorum {
 		return nil, nil, fmt.Errorf(
 			"FROST DKG readiness quorum not reached: [%d] active members, quorum [%d]",
 			len(activeMemberIndexes),
-			node.groupParameters.GroupQuorum,
+			node.frostGroupParameters.GroupQuorum,
 		)
 	}
 
@@ -604,7 +612,7 @@ func registerFrostSignerWithMaterial(
 		finalSigningGroup(
 			groupSelectionResult.OperatorsAddresses,
 			append([]group.MemberIndex{}, activeMemberIndexes...),
-			node.groupParameters,
+			node.frostGroupParameters,
 		)
 	if err != nil {
 		return fmt.Errorf("failed to resolve final FROST signing group members: [%w]", err)
