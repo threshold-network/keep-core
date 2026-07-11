@@ -62,6 +62,7 @@ pub(crate) fn establish_clean_signer_test_env() {
 pub fn reset_for_tests() {
     clear_installed_signer_config_for_tests();
     clear_persist_fault_injection_for_tests();
+    clear_persistence_pending_operations();
     std::env::set_var(
         TBTC_SIGNER_STATE_KEY_PROVIDER_ENV,
         TBTC_SIGNER_STATE_KEY_PROVIDER_ENV_DEFAULT,
@@ -101,6 +102,7 @@ pub fn reset_for_tests() {
 
 #[cfg(test)]
 pub fn reload_state_from_storage_for_tests() {
+    clear_persistence_pending_operations();
     let loaded_state = load_engine_state_from_storage().expect("load engine state from storage");
     let state = state().expect("engine state should initialize");
     let mut guard = state.lock().expect("engine lock");
@@ -109,6 +111,7 @@ pub fn reload_state_from_storage_for_tests() {
 
 #[cfg(test)]
 pub fn simulate_process_restart_for_tests() {
+    clear_persistence_pending_operations();
     if let Ok(mut lock_slot) = state_file_lock_slot().lock() {
         *lock_slot = None;
     }

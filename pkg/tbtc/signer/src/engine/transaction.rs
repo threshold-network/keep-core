@@ -34,6 +34,16 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
 
+    // A post-replacement failure left the accepted artifact fail-closed in
+    // memory and on the replacement state file, but directory durability is
+    // unconfirmed. Flush that exact state before either the cache-hit return or
+    // a conflicting request is considered.
+    if let Some(pending_operation) = pending_build_taproot_tx_operation(&request.session_id) {
+        persist_engine_state_to_storage(&guard)
+            .map_err(PersistEngineStateError::into_engine_error)?;
+        clear_persistence_pending_operation(&pending_operation);
+    }
+
     if let Some(session) = guard.sessions.get(&request.session_id) {
         if let Some(emergency_rekey_event) = session.emergency_rekey_event.as_ref() {
             return Err(EngineError::LifecyclePolicyRejected {
@@ -245,13 +255,41 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
     // BuildTaprootTx is keyed into the shared session namespace for idempotency
     // caching only; this session entry may intentionally not have DKG/signing
     // state populated.
+    let build_session_id = result.session_id.clone();
+    let accepted_request_fingerprint = request_fingerprint.clone();
+    let previous_build_state = guard.sessions.get(&build_session_id).map(|session| {
+        (
+            session.build_tx_request_fingerprint.clone(),
+            session.tx_result.clone(),
+        )
+    });
     let session = guard
         .sessions
-        .entry(result.session_id.clone())
+        .entry(build_session_id.clone())
         .or_insert_with(SessionState::default);
     session.build_tx_request_fingerprint = Some(request_fingerprint);
     session.tx_result = Some(result.clone());
-    persist_engine_state_to_storage(&guard)?;
+    if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
+        let state_file_replaced = persist_error.state_file_replaced();
+        let persist_error = persist_error.into_engine_error();
+        if state_file_replaced {
+            mark_persistence_pending(PersistencePendingOperation::BuildTaprootTx {
+                session_id: build_session_id,
+                request_fingerprint: accepted_request_fingerprint,
+            });
+        } else if let Some((previous_fingerprint, previous_result)) = previous_build_state {
+            let session = guard.sessions.get_mut(&build_session_id).ok_or_else(|| {
+                EngineError::Internal(format!(
+                    "build transaction session [{build_session_id}] disappeared while rolling back a failed persist: {persist_error}"
+                ))
+            })?;
+            session.build_tx_request_fingerprint = previous_fingerprint;
+            session.tx_result = previous_result;
+        } else {
+            guard.sessions.remove(&build_session_id);
+        }
+        return Err(persist_error);
+    }
     record_hardening_telemetry(|telemetry| {
         telemetry.build_taproot_tx_success_total =
             telemetry.build_taproot_tx_success_total.saturating_add(1);

@@ -159,6 +159,21 @@ pub fn trigger_emergency_rekey(
         .and_then(|key_group| resolve_wallet_session_id(&guard, &request.session_id, &key_group))
         .unwrap_or_else(|| request.session_id.clone());
 
+    if let Some(pending_operation) = pending_emergency_rekey_operation(&target_session_id) {
+        let matching_result = match &pending_operation {
+            PersistencePendingOperation::EmergencyRekey { result } if result.reason == reason => {
+                Some(result.clone())
+            }
+            _ => None,
+        };
+        persist_engine_state_to_storage(&guard)
+            .map_err(PersistEngineStateError::into_engine_error)?;
+        clear_persistence_pending_operation(&pending_operation);
+        if let Some(result) = matching_result {
+            return Ok(result);
+        }
+    }
+
     let session =
         guard
             .sessions
@@ -172,19 +187,37 @@ pub fn trigger_emergency_rekey(
         )));
     }
     let triggered_at_unix = now_unix();
-    session.emergency_rekey_event = Some(EmergencyRekeyEvent {
-        reason: reason.to_string(),
-        triggered_at_unix,
-    });
-    persist_engine_state_to_storage(&guard)?;
-
-    Ok(TriggerEmergencyRekeyResult {
+    let previous_emergency_rekey_event =
+        session.emergency_rekey_event.replace(EmergencyRekeyEvent {
+            reason: reason.to_string(),
+            triggered_at_unix,
+        });
+    let result = TriggerEmergencyRekeyResult {
         session_id: target_session_id.clone(),
         emergency_rekey_required: true,
         reason: reason.to_string(),
         triggered_at_unix,
         recommended_new_session_id: format!("{target_session_id}-rekey-{triggered_at_unix}"),
-    })
+    };
+    if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
+        let state_file_replaced = persist_error.state_file_replaced();
+        let persist_error = persist_error.into_engine_error();
+        if state_file_replaced {
+            mark_persistence_pending(PersistencePendingOperation::EmergencyRekey {
+                result: result.clone(),
+            });
+        } else {
+            let rollback_session = guard.sessions.get_mut(&target_session_id).ok_or_else(|| {
+                EngineError::Internal(format!(
+                    "emergency rekey session [{target_session_id}] disappeared while rolling back a failed persist: {persist_error}"
+                ))
+            })?;
+            rollback_session.emergency_rekey_event = previous_emergency_rekey_event;
+        }
+        return Err(persist_error);
+    }
+
+    Ok(result)
 }
 
 pub fn canary_rollout_status() -> Result<CanaryRolloutStatusResult, EngineError> {
@@ -248,6 +281,22 @@ pub fn promote_canary(request: PromoteCanaryRequest) -> Result<PromoteCanaryResu
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    if let Some(pending_operation) = pending_canary_operation() {
+        let matching_result = match &pending_operation {
+            PersistencePendingOperation::CanaryPromotion { result }
+                if result.to_percent == request.target_percent =>
+            {
+                Some(result.clone())
+            }
+            _ => None,
+        };
+        persist_engine_state_to_storage(&guard)
+            .map_err(PersistEngineStateError::into_engine_error)?;
+        clear_persistence_pending_operation(&pending_operation);
+        if let Some(result) = matching_result {
+            return Ok(result);
+        }
+    }
     let current_percent = guard.canary_rollout.current_percent;
 
     if request.target_percent == current_percent {
@@ -277,6 +326,7 @@ pub fn promote_canary(request: PromoteCanaryRequest) -> Result<PromoteCanaryResu
         );
     }
 
+    let previous_canary_rollout = guard.canary_rollout.clone();
     guard.canary_rollout.previous_percent = current_percent;
     guard.canary_rollout.current_percent = request.target_percent;
     guard.canary_rollout.config_version = guard.canary_rollout.config_version.saturating_add(1);
@@ -287,7 +337,18 @@ pub fn promote_canary(request: PromoteCanaryRequest) -> Result<PromoteCanaryResu
         config_version: guard.canary_rollout.config_version,
         promoted_at_unix: guard.canary_rollout.last_action_unix,
     };
-    persist_engine_state_to_storage(&guard)?;
+    if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
+        let state_file_replaced = persist_error.state_file_replaced();
+        let persist_error = persist_error.into_engine_error();
+        if state_file_replaced {
+            mark_persistence_pending(PersistencePendingOperation::CanaryPromotion {
+                result: result.clone(),
+            });
+        } else {
+            guard.canary_rollout = previous_canary_rollout;
+        }
+        return Err(persist_error);
+    }
     record_hardening_telemetry(|telemetry| {
         telemetry.canary_promotions_total = telemetry.canary_promotions_total.saturating_add(1);
     });
@@ -309,6 +370,21 @@ pub fn rollback_canary(
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    if let Some(pending_operation) = pending_canary_operation() {
+        let matching_result = match &pending_operation {
+            PersistencePendingOperation::CanaryRollback { result } if result.reason == reason => {
+                Some(result.clone())
+            }
+            _ => None,
+        };
+        persist_engine_state_to_storage(&guard)
+            .map_err(PersistEngineStateError::into_engine_error)?;
+        clear_persistence_pending_operation(&pending_operation);
+        if let Some(result) = matching_result {
+            return Ok(result);
+        }
+    }
+    let previous_canary_rollout = guard.canary_rollout.clone();
     let from_percent = guard.canary_rollout.current_percent;
     let to_percent = guard.canary_rollout.previous_percent.min(from_percent);
     guard.canary_rollout.current_percent = to_percent;
@@ -322,7 +398,18 @@ pub fn rollback_canary(
         reason: reason.to_string(),
         rolled_back_at_unix: guard.canary_rollout.last_action_unix,
     };
-    persist_engine_state_to_storage(&guard)?;
+    if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
+        let state_file_replaced = persist_error.state_file_replaced();
+        let persist_error = persist_error.into_engine_error();
+        if state_file_replaced {
+            mark_persistence_pending(PersistencePendingOperation::CanaryRollback {
+                result: result.clone(),
+            });
+        } else {
+            guard.canary_rollout = previous_canary_rollout;
+        }
+        return Err(persist_error);
+    }
     record_hardening_telemetry(|telemetry| {
         telemetry.canary_rollbacks_total = telemetry.canary_rollbacks_total.saturating_add(1);
     });
@@ -407,6 +494,27 @@ pub fn refresh_shares(request: RefreshSharesRequest) -> Result<RefreshSharesResu
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
 
+    if let Some(pending_operation) = pending_refresh_operation(&request.session_id) {
+        persist_engine_state_to_storage(&guard)
+            .map_err(PersistEngineStateError::into_engine_error)?;
+        clear_persistence_pending_operation(&pending_operation);
+    }
+
+    if let Some(emergency_rekey_event) = guard
+        .sessions
+        .get(&request.session_id)
+        .and_then(|session| session.emergency_rekey_event.as_ref())
+    {
+        return Err(EngineError::LifecyclePolicyRejected {
+            session_id: request.session_id.clone(),
+            reason_code: "emergency_rekey_required".to_string(),
+            detail: format!(
+                "refresh blocked: emergency rekey required since [{}]: {}",
+                emergency_rekey_event.triggered_at_unix, emergency_rekey_event.reason
+            ),
+        });
+    }
+
     if let Some(session) = guard.sessions.get(&request.session_id) {
         if let Some(emergency_rekey_event) = session.emergency_rekey_event.as_ref() {
             return Err(EngineError::LifecyclePolicyRejected {
@@ -445,6 +553,18 @@ pub fn refresh_shares(request: RefreshSharesRequest) -> Result<RefreshSharesResu
         }
     }
     ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
+
+    let refresh_session_id = request.session_id.clone();
+    let accepted_request_fingerprint = request_fingerprint.clone();
+    let previous_refresh_epoch_counter = guard.refresh_epoch_counter;
+    let previous_refresh_state = guard.sessions.get(&refresh_session_id).map(|session| {
+        (
+            session.refresh_request_fingerprint.clone(),
+            session.refresh_result.clone(),
+            session.refresh_history.clone(),
+            session.refresh_count,
+        )
+    });
 
     let mut new_shares: Vec<ShareMaterial> = request
         .current_shares
@@ -558,7 +678,33 @@ pub fn refresh_shares(request: RefreshSharesRequest) -> Result<RefreshSharesResu
         let excess = session.refresh_history.len() - MAX_REFRESH_HISTORY;
         session.refresh_history.drain(0..excess);
     }
-    persist_engine_state_to_storage(&guard)?;
+    if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
+        let state_file_replaced = persist_error.state_file_replaced();
+        let persist_error = persist_error.into_engine_error();
+        if state_file_replaced {
+            mark_persistence_pending(PersistencePendingOperation::RefreshShares {
+                session_id: refresh_session_id.clone(),
+                request_fingerprint: accepted_request_fingerprint,
+            });
+        } else {
+            guard.refresh_epoch_counter = previous_refresh_epoch_counter;
+            if let Some((request_fingerprint, result, history, count)) = previous_refresh_state {
+                let rollback_session =
+                    guard.sessions.get_mut(&refresh_session_id).ok_or_else(|| {
+                        EngineError::Internal(format!(
+                            "refresh session [{refresh_session_id}] disappeared while rolling back a failed persist: {persist_error}"
+                        ))
+                    })?;
+                rollback_session.refresh_request_fingerprint = request_fingerprint;
+                rollback_session.refresh_result = result;
+                rollback_session.refresh_history = history;
+                rollback_session.refresh_count = count;
+            } else {
+                guard.sessions.remove(&refresh_session_id);
+            }
+        }
+        return Err(persist_error);
+    }
     record_hardening_telemetry(|telemetry| {
         telemetry.refresh_shares_success_total =
             telemetry.refresh_shares_success_total.saturating_add(1);

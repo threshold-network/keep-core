@@ -208,6 +208,331 @@ pub(crate) enum PersistFaultInjectionPoint {
     AfterRenameBeforeDirectorySync,
 }
 
+#[derive(Debug)]
+pub(crate) struct PersistEngineStateError {
+    error: EngineError,
+    state_file_replaced: bool,
+}
+
+impl PersistEngineStateError {
+    fn before_state_file_replacement(error: EngineError) -> Self {
+        Self {
+            error,
+            state_file_replaced: false,
+        }
+    }
+
+    fn after_state_file_replacement(error: EngineError) -> Self {
+        Self {
+            error,
+            state_file_replaced: true,
+        }
+    }
+
+    pub(crate) fn state_file_replaced(&self) -> bool {
+        self.state_file_replaced
+    }
+
+    pub(crate) fn into_engine_error(self) -> EngineError {
+        self.error
+    }
+}
+
+impl std::fmt::Display for PersistEngineStateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PersistencePendingOperation {
+    BuildTaprootTx {
+        session_id: String,
+        request_fingerprint: String,
+    },
+    EmergencyRekey {
+        result: TriggerEmergencyRekeyResult,
+    },
+    CanaryPromotion {
+        result: PromoteCanaryResult,
+    },
+    CanaryRollback {
+        result: RollbackCanaryResult,
+    },
+    RefreshShares {
+        session_id: String,
+        request_fingerprint: String,
+    },
+    InteractiveRound2 {
+        session_id: String,
+        consumed_marker: String,
+    },
+    InteractiveAggregate {
+        session_id: String,
+        aggregated_marker: String,
+    },
+}
+
+static PERSISTENCE_PENDING_OPERATIONS: OnceLock<Mutex<Vec<PersistencePendingOperation>>> =
+    OnceLock::new();
+
+fn persistence_pending_operations() -> &'static Mutex<Vec<PersistencePendingOperation>> {
+    PERSISTENCE_PENDING_OPERATIONS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn persistence_pending_same_slot(
+    existing: &PersistencePendingOperation,
+    replacement: &PersistencePendingOperation,
+) -> bool {
+    match (existing, replacement) {
+        (
+            PersistencePendingOperation::BuildTaprootTx {
+                session_id: existing,
+                ..
+            },
+            PersistencePendingOperation::BuildTaprootTx {
+                session_id: replacement,
+                ..
+            },
+        ) => existing == replacement,
+        (
+            PersistencePendingOperation::EmergencyRekey { result: existing },
+            PersistencePendingOperation::EmergencyRekey {
+                result: replacement,
+            },
+        ) => existing.session_id == replacement.session_id,
+        (
+            PersistencePendingOperation::CanaryPromotion { .. }
+            | PersistencePendingOperation::CanaryRollback { .. },
+            PersistencePendingOperation::CanaryPromotion { .. }
+            | PersistencePendingOperation::CanaryRollback { .. },
+        ) => true,
+        (
+            PersistencePendingOperation::RefreshShares {
+                session_id: existing,
+                ..
+            },
+            PersistencePendingOperation::RefreshShares {
+                session_id: replacement,
+                ..
+            },
+        ) => existing == replacement,
+        (
+            PersistencePendingOperation::InteractiveRound2 {
+                session_id: existing_session,
+                consumed_marker: existing_marker,
+            },
+            PersistencePendingOperation::InteractiveRound2 {
+                session_id: replacement_session,
+                consumed_marker: replacement_marker,
+            },
+        ) => existing_session == replacement_session && existing_marker == replacement_marker,
+        (
+            PersistencePendingOperation::InteractiveAggregate {
+                session_id: existing_session,
+                aggregated_marker: existing_marker,
+            },
+            PersistencePendingOperation::InteractiveAggregate {
+                session_id: replacement_session,
+                aggregated_marker: replacement_marker,
+            },
+        ) => existing_session == replacement_session && existing_marker == replacement_marker,
+        _ => false,
+    }
+}
+
+pub(crate) fn mark_persistence_pending(operation: PersistencePendingOperation) {
+    let mut pending = persistence_pending_operations()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    pending.retain(|existing| !persistence_pending_same_slot(existing, &operation));
+    pending.push(operation);
+}
+
+#[cfg(any(test, feature = "bench-restart-hook"))]
+pub(crate) fn clear_persistence_pending_operations() {
+    persistence_pending_operations()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+}
+
+pub(crate) fn clear_persistence_pending_operation(operation: &PersistencePendingOperation) {
+    persistence_pending_operations()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|pending| pending != operation);
+}
+
+fn clear_snapshot_covered_marker_operations() {
+    // Round2/Aggregate pending entries cache no result; once any complete state
+    // snapshot succeeds, their retained markers are durable and the normal
+    // replay gates are sufficient. Lifecycle/build/refresh entries additionally
+    // preserve the original operation result, so keep those until that caller
+    // retries (one bounded slot per session, plus one canary slot).
+    persistence_pending_operations()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|pending| {
+            !matches!(
+                pending,
+                PersistencePendingOperation::InteractiveRound2 { .. }
+                    | PersistencePendingOperation::InteractiveAggregate { .. }
+            )
+        });
+}
+
+pub(crate) fn pending_build_taproot_tx_operation(
+    session_id: &str,
+) -> Option<PersistencePendingOperation> {
+    persistence_pending_operations()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|operation| {
+            matches!(
+                operation,
+                PersistencePendingOperation::BuildTaprootTx {
+                    session_id: pending_session,
+                    ..
+                } if pending_session == session_id
+            )
+        })
+        .cloned()
+}
+
+pub(crate) fn pending_emergency_rekey_operation(
+    session_id: &str,
+) -> Option<PersistencePendingOperation> {
+    persistence_pending_operations()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|operation| match operation {
+            PersistencePendingOperation::EmergencyRekey { result } => {
+                result.session_id == session_id
+            }
+            _ => false,
+        })
+        .cloned()
+}
+
+#[cfg(test)]
+pub(crate) fn pending_emergency_rekey_result(
+    session_id: &str,
+    reason: &str,
+) -> Option<TriggerEmergencyRekeyResult> {
+    match pending_emergency_rekey_operation(session_id) {
+        Some(PersistencePendingOperation::EmergencyRekey { result }) if result.reason == reason => {
+            Some(result)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn pending_canary_operation() -> Option<PersistencePendingOperation> {
+    persistence_pending_operations()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|operation| {
+            matches!(
+                operation,
+                PersistencePendingOperation::CanaryPromotion { .. }
+                    | PersistencePendingOperation::CanaryRollback { .. }
+            )
+        })
+        .cloned()
+}
+
+#[cfg(test)]
+pub(crate) fn pending_canary_promotion_result(target_percent: u8) -> Option<PromoteCanaryResult> {
+    match pending_canary_operation() {
+        Some(PersistencePendingOperation::CanaryPromotion { result })
+            if result.to_percent == target_percent =>
+        {
+            Some(result)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn pending_canary_rollback_result(reason: &str) -> Option<RollbackCanaryResult> {
+    match pending_canary_operation() {
+        Some(PersistencePendingOperation::CanaryRollback { result }) if result.reason == reason => {
+            Some(result)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn pending_refresh_operation(session_id: &str) -> Option<PersistencePendingOperation> {
+    persistence_pending_operations()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|operation| {
+            matches!(
+                operation,
+                PersistencePendingOperation::RefreshShares {
+                    session_id: pending_session,
+                    ..
+                } if pending_session == session_id
+            )
+        })
+        .cloned()
+}
+
+#[cfg(test)]
+pub(crate) fn refresh_persistence_pending(session_id: &str, request_fingerprint: &str) -> bool {
+    matches!(
+        pending_refresh_operation(session_id),
+        Some(PersistencePendingOperation::RefreshShares {
+            request_fingerprint: pending_fingerprint,
+            ..
+        }) if pending_fingerprint == request_fingerprint
+    )
+}
+
+pub(crate) fn interactive_round2_persistence_pending(
+    session_id: &str,
+    consumed_marker: &str,
+) -> bool {
+    persistence_pending_operations()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .any(|operation| {
+            matches!(
+                operation,
+                PersistencePendingOperation::InteractiveRound2 {
+                    session_id: pending_session,
+                    consumed_marker: pending_marker,
+                } if pending_session == session_id && pending_marker == consumed_marker
+            )
+        })
+}
+
+pub(crate) fn interactive_aggregate_persistence_pending(
+    session_id: &str,
+    aggregated_marker: &str,
+) -> bool {
+    persistence_pending_operations()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .any(|operation| {
+            matches!(
+                operation,
+                PersistencePendingOperation::InteractiveAggregate {
+                    session_id: pending_session,
+                    aggregated_marker: pending_marker,
+                } if pending_session == session_id && pending_marker == aggregated_marker
+            )
+        })
+}
+
 #[cfg(any(test, feature = "bench-restart-hook"))]
 pub fn reload_state_from_storage_for_benchmarks() -> Result<(), EngineError> {
     if !bench_restart_hook_enabled() {
@@ -220,6 +545,7 @@ pub fn reload_state_from_storage_for_benchmarks() -> Result<(), EngineError> {
     if let Ok(mut lock_slot) = state_file_lock_slot().lock() {
         *lock_slot = None;
     }
+    clear_persistence_pending_operations();
     ensure_state_file_lock()?;
 
     let loaded_state = load_engine_state_from_storage()?;
@@ -949,8 +1275,17 @@ pub(crate) fn decode_persisted_state_storage_format(
 
 pub(crate) fn load_engine_state_from_storage() -> Result<EngineState, EngineError> {
     let path = active_state_file_path()?;
-    if !path.exists() {
-        return Ok(EngineState::default());
+    match fs::symlink_metadata(&path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(EngineState::default())
+        }
+        Err(error) => {
+            return Err(EngineError::Internal(format!(
+                "failed to inspect signer state file [{}]: {error}",
+                path.display()
+            )))
+        }
     }
 
     let mut bytes = fs::read(&path).map_err(|e| {
@@ -960,12 +1295,11 @@ pub(crate) fn load_engine_state_from_storage() -> Result<EngineState, EngineErro
         ))
     })?;
     if bytes.is_empty() {
-        eprintln!(
-            "warning: signer state file [{}] exists but is empty; initializing with clean state",
-            path.display()
-        );
         bytes.zeroize();
-        return Ok(EngineState::default());
+        return recover_or_fail_from_corrupted_state_file(
+            &path,
+            format!("signer state file [{}] exists but is empty", path.display()),
+        );
     }
 
     let decoded_format = decode_persisted_state_storage_format(&bytes);
@@ -987,17 +1321,27 @@ pub(crate) fn load_engine_state_from_storage() -> Result<EngineState, EngineErro
         }
     };
 
-    let engine_state: EngineState = persisted.try_into().or_else(|e| {
-        recover_or_fail_from_corrupted_state_file(
-            &path,
-            format!(
-                "failed to validate signer state file [{}]: {e}",
-                path.display()
-            ),
-        )
-    })?;
+    let (engine_state, recovered_from_corruption): (EngineState, bool) = match persisted.try_into()
+    {
+        Ok(engine_state) => (engine_state, false),
+        Err(error) => (
+            recover_or_fail_from_corrupted_state_file(
+                &path,
+                format!(
+                    "failed to validate signer state file [{}]: {error}",
+                    path.display()
+                ),
+            )?,
+            true,
+        ),
+    };
 
-    if should_rewrite_state && path.exists() {
+    // Quarantine-and-reset intentionally renames the corrupt file away. Do not
+    // recreate it as a migrated clean state during the same load; the next real
+    // mutation will create a fresh encrypted state file. This explicit recovery
+    // outcome replaces the former `Path::exists` probe without hiding metadata
+    // errors or treating dangling symlinks as first initialization.
+    if should_rewrite_state && !recovered_from_corruption {
         persist_engine_state_to_storage(&engine_state).map_err(|e| {
             EngineError::Internal(format!(
                 "loaded legacy signer state file [{}] but failed to migrate to current encrypted envelope: {e}",
@@ -1075,7 +1419,7 @@ pub(crate) fn clear_persist_fault_injection_for_tests() {
 // rejects on restart.
 pub(crate) fn persist_engine_state_to_storage(
     engine_state: &EngineState,
-) -> Result<(), EngineError> {
+) -> Result<(), PersistEngineStateError> {
     // Resolves the state-encryption key (which, for the `command` provider,
     // spawns the KMS/HSM subprocess) and then persists. Hot paths call this at
     // the persist site WITH the ENGINE_STATE guard held, so key resolution is
@@ -1085,19 +1429,25 @@ pub(crate) fn persist_engine_state_to_storage(
     // lose a rotation race against there. Sites that write a durable marker before
     // persisting instead resolve the key explicitly before the marker and call
     // persist_engine_state_to_storage_with_key.
-    let key_material = state_encryption_key_material()?;
+    let key_material = state_encryption_key_material()
+        .map_err(PersistEngineStateError::before_state_file_replacement)?;
     persist_engine_state_to_storage_with_key(engine_state, &key_material)
 }
 
 pub(crate) fn persist_engine_state_to_storage_with_key(
     engine_state: &EngineState,
     key_material: &StateEncryptionKeyMaterial,
-) -> Result<(), EngineError> {
-    let path = active_state_file_path()?;
-    let persisted: PersistedEngineState = engine_state.try_into()?;
-    let mut bytes = encode_encrypted_state_envelope(&persisted, key_material)?;
+) -> Result<(), PersistEngineStateError> {
+    let path =
+        active_state_file_path().map_err(PersistEngineStateError::before_state_file_replacement)?;
+    let persisted: PersistedEngineState = engine_state
+        .try_into()
+        .map_err(PersistEngineStateError::before_state_file_replacement)?;
+    let mut bytes = encode_encrypted_state_envelope(&persisted, key_material)
+        .map_err(PersistEngineStateError::before_state_file_replacement)?;
     drop(persisted);
     let temp_path = path.with_extension(format!("tmp-{}", std::process::id()));
+    let mut state_file_replaced = false;
     let persist_result = (|| -> Result<(), EngineError> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
@@ -1143,6 +1493,7 @@ pub(crate) fn persist_engine_state_to_storage_with_key(
                 path.display()
             ))
         })?;
+        state_file_replaced = true;
         maybe_inject_persist_fault(PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync)?;
 
         if let Some(parent) = path.parent() {
@@ -1168,7 +1519,18 @@ pub(crate) fn persist_engine_state_to_storage_with_key(
     }
 
     bytes.zeroize();
-    persist_result
+    match persist_result {
+        Ok(()) => {
+            clear_snapshot_covered_marker_operations();
+            Ok(())
+        }
+        Err(error) if state_file_replaced => {
+            Err(PersistEngineStateError::after_state_file_replacement(error))
+        }
+        Err(error) => Err(PersistEngineStateError::before_state_file_replacement(
+            error,
+        )),
+    }
 }
 
 impl TryFrom<PersistedEngineState> for EngineState {
