@@ -174,6 +174,28 @@ type InactivityClaimChain interface {
 	GetInactivityClaimNonce(walletID [32]byte) (*big.Int, error)
 }
 
+// WalletInactivityClaimChain defines the complete chain surface used while
+// executing an inactivity claim for a wallet. Implementations can bind this
+// surface to a specific wallet registry and sortition pool. This is important
+// during the ECDSA-to-FROST migration, when both registries are active and use
+// independent wallet and operator identifiers.
+type WalletInactivityClaimChain interface {
+	InactivityClaimChain
+
+	// GetOperatorID returns the operator identifier from the sortition pool
+	// associated with the wallet registry handling the inactivity claim.
+	GetOperatorID(operatorAddress chain.Address) (chain.OperatorID, error)
+
+	// BlockCounter returns the chain's block counter.
+	BlockCounter() (chain.BlockCounter, error)
+
+	// Signing returns the chain's signer.
+	Signing() chain.Signing
+
+	// GetWallet gets the Bridge data needed to resolve the registry wallet ID.
+	GetWallet(walletPublicKeyHash [20]byte) (*WalletChainData, error)
+}
+
 // DKGChainResultHash represents a hash of the DKGChainResult. The algorithm
 // used is specific to the chain.
 type DKGChainResultHash [32]byte
@@ -235,10 +257,21 @@ type DKGParameters struct {
 	ApprovePrecedencePeriodBlocks uint64
 }
 
+// WalletScheme identifies the registry and cryptographic scheme used by a
+// wallet.
+type WalletScheme uint8
+
+const (
+	WalletSchemeUnknown WalletScheme = iota
+	WalletSchemeECDSA
+	WalletSchemeFROST
+)
+
 // WalletClosedEvent represents a wallet closed event. It is emitted when the
 // wallet is closed in the wallet registry.
 type WalletClosedEvent struct {
 	WalletID    [32]byte
+	Scheme      WalletScheme
 	BlockNumber uint64
 }
 
@@ -263,7 +296,8 @@ type BridgeChain interface {
 
 	// OnWalletClosed registers a callback that is invoked when an on-chain
 	// notification of the wallet closed is seen. The notification occurs when
-	// the wallet is closed or terminated.
+	// the wallet is closed or terminated. The event identifies the registry
+	// scheme that emitted it.
 	OnWalletClosed(
 		func(event *WalletClosedEvent),
 	) subscription.EventSubscription

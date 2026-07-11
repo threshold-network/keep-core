@@ -71,6 +71,10 @@ type localChain struct {
 	walletsMutex sync.Mutex
 	wallets      map[[20]byte]*WalletChainData
 
+	walletRegistrationChecksMutex sync.Mutex
+	ecdsaWalletRegistrationChecks int
+	frostWalletRegistrationChecks int
+
 	inactivityNonceMutex sync.Mutex
 	inactivityNonces     map[[32]byte]uint64
 
@@ -953,6 +957,10 @@ func (lc *localChain) WalletPublicKeyHashForWalletID(
 }
 
 func (lc *localChain) IsWalletRegistered(EcdsaWalletID [32]byte) (bool, error) {
+	lc.walletRegistrationChecksMutex.Lock()
+	lc.ecdsaWalletRegistrationChecks++
+	lc.walletRegistrationChecksMutex.Unlock()
+
 	lc.walletsMutex.Lock()
 	defer lc.walletsMutex.Unlock()
 
@@ -974,6 +982,10 @@ func (lc *localChain) FrostWalletRegistryAvailable() bool {
 }
 
 func (lc *localChain) IsFrostWalletRegistered(walletID [32]byte) (bool, error) {
+	lc.walletRegistrationChecksMutex.Lock()
+	lc.frostWalletRegistrationChecks++
+	lc.walletRegistrationChecksMutex.Unlock()
+
 	lc.walletsMutex.Lock()
 	defer lc.walletsMutex.Unlock()
 
@@ -987,7 +999,7 @@ func (lc *localChain) IsFrostWalletRegistered(walletID [32]byte) (bool, error) {
 		}
 	}
 
-	return false, fmt.Errorf("wallet not found")
+	return false, nil
 }
 
 func (lc *localChain) setWallet(

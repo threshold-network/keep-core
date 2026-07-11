@@ -22,9 +22,9 @@ import (
 // views bind the sortition.Chain surface to one specific pool/registry with NO
 // hasFrostAuthorization() switch, so the caller can run one MonitorPool per pool.
 //
-// They are used ONLY by the pool-monitoring loops; TbtcChain's own
-// sortition.Chain methods (consumed by the heartbeat and other callers) are left
-// unchanged, so this introduces no behavior change outside the monitor loops.
+// The pool-monitoring loops use these views directly. Wallet heartbeat actions
+// also select the view matching the executing wallet, so a process-wide FROST
+// configuration cannot redirect a draining legacy wallet's authorization check.
 // GetOperatorID stays bound to whichever pool the view targets, matching the
 // per-pool member IDs (the legacy view's GetOperatorID equals TbtcChain's
 // deliberately-ECDSA-bound GetOperatorID).
@@ -214,8 +214,9 @@ func (c *frostSortitionChain) UpdateOperatorStatus() error {
 }
 
 // LegacyECDSASortitionChain returns a sortition.Chain bound explicitly to the
-// legacy ECDSA sortition pool, for ECDSA pool monitoring during the FROST
-// migration drain (independent of whether FROST authorization is configured).
+// legacy ECDSA sortition pool, for pool monitoring and legacy wallet actions
+// during the FROST migration drain (independent of whether FROST authorization
+// is configured).
 func (tc *TbtcChain) LegacyECDSASortitionChain() sortition.Chain {
 	return &ecdsaSortitionChain{
 		sortitionPoolView: sortitionPoolView{
@@ -229,7 +230,7 @@ func (tc *TbtcChain) LegacyECDSASortitionChain() sortition.Chain {
 // FrostSortitionChain returns a sortition.Chain bound explicitly to the FROST
 // sortition pool, and a flag reporting whether FROST authorization is configured
 // for this node. When the flag is false, the returned chain is nil and FROST
-// pool monitoring must not be started.
+// pool monitoring or wallet actions must not be started.
 func (tc *TbtcChain) FrostSortitionChain() (sortition.Chain, bool) {
 	if !tc.hasFrostAuthorization() {
 		return nil, false

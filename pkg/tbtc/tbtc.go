@@ -494,28 +494,34 @@ func Initialize(
 
 	_ = chain.OnWalletClosed(func(event *WalletClosedEvent) {
 		go func() {
-			if ok := deduplicator.notifyWalletClosed(
-				event.WalletID,
-			); !ok {
+			if event == nil {
+				logger.Error("received nil WalletClosed event")
+				return
+			}
+
+			processed, err := processWalletClosureEvent(
+				deduplicator,
+				event,
+				func(walletID [32]byte, walletScheme WalletScheme) error {
+					logger.Infof(
+						"Wallet with ID [0x%x] has been closed at block [%v]; "+
+							"proceeding with handling wallet closure",
+						walletID,
+						event.BlockNumber,
+					)
+
+					return node.handleWalletClosure(walletID, walletScheme)
+				},
+			)
+			if !processed {
 				logger.Warnf(
 					"Wallet closure for wallet with ID [0x%x] at block [%v] "+
-						"has been already processed",
+						"is already being processed or has been processed",
 					event.WalletID,
 					event.BlockNumber,
 				)
 				return
 			}
-
-			logger.Infof(
-				"Wallet with ID [0x%x] has been closed at block [%v]; "+
-					"proceeding with handling wallet closure",
-				event.WalletID,
-				event.BlockNumber,
-			)
-
-			err := node.handleWalletClosure(
-				event.WalletID,
-			)
 			if err != nil {
 				logger.Errorf(
 					"Failure while handling wallet closure with ID [0x%x]: [%v]",
@@ -527,6 +533,56 @@ func Initialize(
 	})
 
 	return nil
+}
+
+// processWalletClosureEvent suppresses concurrent live/polled duplicates while
+// allowing a replay to retry failed closure handling. A closure is retained in
+// the long-lived deduplication cache only after handling succeeds.
+func processWalletClosureEvent(
+	deduplicator *deduplicator,
+	event *WalletClosedEvent,
+	handle func(walletID [32]byte, walletScheme WalletScheme) error,
+) (bool, error) {
+	if event == nil {
+		return false, fmt.Errorf("wallet closure event is nil")
+	}
+
+	if event.Scheme == WalletSchemeUnknown {
+		logger.Debugf(
+			"wallet closure event for wallet [0x%x] has no scheme; "+
+				"treating it as a legacy ECDSA wallet",
+			event.WalletID,
+		)
+	}
+
+	walletScheme := normalizeWalletScheme(event.Scheme)
+	lease, ok := deduplicator.beginWalletClosed(walletScheme, event.WalletID)
+	if !ok {
+		return false, nil
+	}
+
+	leaseActive := true
+	// Release the lease if handling panics while a pending replay is keeping it
+	// active. Successful and ordinary error paths finish it explicitly.
+	defer func() {
+		if leaseActive {
+			lease.release()
+		}
+	}()
+
+	for {
+		err := handle(event.WalletID, walletScheme)
+		if err == nil {
+			lease.finish(true)
+			leaseActive = false
+			return true, nil
+		}
+
+		if !lease.finish(false) {
+			leaseActive = false
+			return true, err
+		}
+	}
 }
 
 func shouldMonitorLegacySortitionPool(config Config) bool {

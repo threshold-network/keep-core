@@ -768,6 +768,29 @@ func (n *node) groupParametersForSigners(
 	return n.groupParameters, nil
 }
 
+// heartbeatMinimumActiveMembers selects the activity threshold for the wallet
+// scheme handled by the signing executor. Legacy ECDSA heartbeats retain their
+// historical fixed threshold while FROST heartbeats use the independent
+// activeThreshold configured on FrostDkgValidator. The validator configuration
+// may change after a wallet is created, making the current active threshold
+// larger than the persisted wallet's signing group, so cap the threshold at
+// that wallet's actual member count.
+func heartbeatMinimumActiveMembers(
+	signingExecutor *signingExecutor,
+	signingGroupMembersCount int,
+) int {
+	if signingExecutor.usesSchnorrSignatures() {
+		minimumActiveMembers := signingExecutor.groupParameters.GroupQuorum
+		if signingGroupMembersCount < minimumActiveMembers {
+			return signingGroupMembersCount
+		}
+
+		return minimumActiveMembers
+	}
+
+	return heartbeatSigningMinimumActiveMembers
+}
+
 // handleHeartbeatProposal handles an incoming heartbeat proposal by
 // orchestrating and dispatching an appropriate wallet action.
 func (n *node) handleHeartbeatProposal(
@@ -838,6 +861,10 @@ func (n *node) handleHeartbeatProposal(
 		n.chain,
 		wallet,
 		signingExecutor,
+		heartbeatMinimumActiveMembers(
+			signingExecutor,
+			len(wallet.signingGroupOperators),
+		),
 		proposal,
 		n.heartbeatFailureCounter,
 		inactivityClaimExecutor,
@@ -1519,6 +1546,10 @@ type frostWalletRegistryAvailability interface {
 	FrostWalletRegistryAvailable() bool
 }
 
+type frostWalletRegistrationChain interface {
+	IsFrostWalletRegistered(walletID [32]byte) (bool, error)
+}
+
 func (n *node) frostWalletRegistryAvailable() bool {
 	frostChain, ok := n.chain.(frostWalletRegistryAvailability)
 
@@ -1526,7 +1557,12 @@ func (n *node) frostWalletRegistryAvailable() bool {
 }
 
 // handleWalletClosure handles the wallet termination or closing process.
-func (n *node) handleWalletClosure(walletID [32]byte) error {
+func (n *node) handleWalletClosure(
+	walletID [32]byte,
+	walletScheme WalletScheme,
+) error {
+	walletScheme = normalizeWalletScheme(walletScheme)
+
 	blockCounter, err := n.chain.BlockCounter()
 	if err != nil {
 		return fmt.Errorf("error getting block counter [%w]", err)
@@ -1537,11 +1573,27 @@ func (n *node) handleWalletClosure(walletID [32]byte) error {
 		return fmt.Errorf("error getting current block [%w]", err)
 	}
 
-	// To verify there was no chain reorg and the wallet is really closed check
-	// if it is registered. Both terminated and closed wallets are removed
-	// from the ECDSA registry.
+	// To verify there was no chain reorg and the wallet is really closed, check
+	// registration in the registry that emitted the closure event.
 	stateCheck := func() (bool, error) {
-		isRegistered, err := n.chain.IsWalletRegistered(walletID)
+		var isRegistered bool
+		var err error
+
+		switch walletScheme {
+		case WalletSchemeECDSA:
+			isRegistered, err = n.chain.IsWalletRegistered(walletID)
+		case WalletSchemeFROST:
+			frostChain, ok := n.chain.(frostWalletRegistrationChain)
+			if !ok {
+				return false, fmt.Errorf(
+					"chain does not support FROST wallet registration checks",
+				)
+			}
+
+			isRegistered, err = frostChain.IsFrostWalletRegistered(walletID)
+		default:
+			return false, fmt.Errorf("unsupported wallet scheme [%v]", walletScheme)
+		}
 		if err != nil {
 			return false, err
 		}
@@ -1570,10 +1622,10 @@ func (n *node) handleWalletClosure(walletID [32]byte) error {
 
 	walletPublicKeyHash, err := n.chain.WalletPublicKeyHashForWalletID(walletID)
 	if err != nil {
-		// WalletClosed events still carry ECDSA wallet IDs from the legacy
-		// registry path. Until closure events are emitted with canonical IDs,
-		// canonical wallet-ID resolution is expected to miss and we use the
-		// local registry fallback below.
+		// Legacy WalletClosed events carry ECDSA registry IDs rather than
+		// canonical Bridge IDs, and canonical resolution can therefore miss.
+		// The local registry fallback also protects custom chain adapters that
+		// cannot resolve a FROST ID through the Bridge.
 		logger.Debugf(
 			"cannot resolve wallet public key hash for wallet ID [0x%x]: [%v]; "+
 				"falling back to local wallet ID matching",

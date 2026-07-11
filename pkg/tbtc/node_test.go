@@ -79,6 +79,90 @@ func TestNode_GroupParametersForSignersUsesWalletScheme(t *testing.T) {
 	}
 }
 
+func TestHeartbeatMinimumActiveMembersUsesWalletScheme(t *testing.T) {
+	tests := map[string]struct {
+		executor                 *signingExecutor
+		signingGroupMembersCount int
+		expected                 int
+	}{
+		"legacy ECDSA wallet": {
+			executor: &signingExecutor{
+				signers: []*signer{
+					{privateKeyShare: &tecdsa.PrivateKeyShare{}},
+				},
+				groupParameters: &GroupParameters{
+					GroupSize:       100,
+					GroupQuorum:     90,
+					HonestThreshold: 51,
+				},
+			},
+			// A small actual group must not alter the legacy fixed threshold.
+			signingGroupMembersCount: 5,
+			expected:                 heartbeatSigningMinimumActiveMembers,
+		},
+		"native FROST wallet uses active threshold": {
+			executor: &signingExecutor{
+				signers: []*signer{
+					{
+						signerMaterial: &frostsigning.NativeSignerMaterial{
+							Format: frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
+							Payload: []byte(`{
+								"keyGroup":"key-group",
+								"keyGroupSource":"dkg-persisted"
+							}`),
+						},
+					},
+				},
+				groupParameters: &GroupParameters{
+					GroupSize:       5,
+					GroupQuorum:     4,
+					HonestThreshold: 3,
+				},
+			},
+			signingGroupMembersCount: 5,
+			expected:                 4,
+		},
+		"native FROST wallet caps threshold at actual group size": {
+			executor: &signingExecutor{
+				signers: []*signer{
+					{
+						signerMaterial: &frostsigning.NativeSignerMaterial{
+							Format: frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
+							Payload: []byte(`{
+								"keyGroup":"key-group",
+								"keyGroupSource":"dkg-persisted"
+							}`),
+						},
+					},
+				},
+				groupParameters: &GroupParameters{
+					GroupSize:       5,
+					GroupQuorum:     4,
+					HonestThreshold: 3,
+				},
+			},
+			signingGroupMembersCount: 3,
+			expected:                 3,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			actual := heartbeatMinimumActiveMembers(
+				test.executor,
+				test.signingGroupMembersCount,
+			)
+			if actual != test.expected {
+				t.Errorf(
+					"unexpected minimum active members\nexpected: [%d]\nactual:   [%d]",
+					test.expected,
+					actual,
+				)
+			}
+		})
+	}
+}
+
 func TestNode_GetSigningExecutor(t *testing.T) {
 	groupParameters := &GroupParameters{
 		GroupSize:       5,
@@ -1342,12 +1426,74 @@ func TestHandleWalletClosure_ArchivesWallet(t *testing.T) {
 		State:         StateClosed,
 	})
 
-	if err := n.handleWalletClosure(walletID); err != nil {
+	if err := n.handleWalletClosure(walletID, WalletSchemeECDSA); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if keys := n.walletRegistry.getWalletsPublicKeys(); len(keys) != 0 {
 		t.Errorf("expected empty registry after closure handling, got %d wallets", len(keys))
+	}
+}
+
+func TestHandleWalletClosure_FrostEventChecksFrostRegistry(t *testing.T) {
+	n, signer, lc := setupNodeForClosureTests(t)
+
+	walletPublicKeyHash := bitcoin.PublicKeyHash(signer.wallet.publicKey)
+	frostWalletID := [32]byte{0xaa, 0xbb, 0xcc}
+	lc.setWallet(walletPublicKeyHash, &WalletChainData{
+		WalletID: frostWalletID,
+		State:    StateClosed,
+	})
+
+	lc.walletRegistrationChecksMutex.Lock()
+	lc.ecdsaWalletRegistrationChecks = 0
+	lc.frostWalletRegistrationChecks = 0
+	lc.walletRegistrationChecksMutex.Unlock()
+
+	if err := n.handleWalletClosure(
+		frostWalletID,
+		WalletSchemeFROST,
+	); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	lc.walletRegistrationChecksMutex.Lock()
+	ecdsaChecks := lc.ecdsaWalletRegistrationChecks
+	frostChecks := lc.frostWalletRegistrationChecks
+	lc.walletRegistrationChecksMutex.Unlock()
+	if frostChecks == 0 {
+		t.Fatal("FROST closure must be confirmed against FrostWalletRegistry")
+	}
+	if ecdsaChecks != 0 {
+		t.Fatalf(
+			"FROST closure must not query the ECDSA registry; got [%d] checks",
+			ecdsaChecks,
+		)
+	}
+
+	if keys := n.walletRegistry.getWalletsPublicKeys(); len(keys) != 0 {
+		t.Errorf("expected empty registry after FROST closure, got %d wallets", len(keys))
+	}
+}
+
+func TestHandleWalletClosure_UnknownSchemeDefaultsToEcdsa(t *testing.T) {
+	n, signer, lc := setupNodeForClosureTests(t)
+
+	walletPublicKeyHash := bitcoin.PublicKeyHash(signer.wallet.publicKey)
+	walletID, err := lc.CalculateWalletID(signer.wallet.publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lc.setWallet(walletPublicKeyHash, &WalletChainData{
+		EcdsaWalletID: walletID,
+		State:         StateClosed,
+	})
+
+	if err := n.handleWalletClosure(
+		walletID,
+		WalletSchemeUnknown,
+	); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -1369,7 +1515,10 @@ func TestHandleWalletClosure_SkipsUncontrolledWallet(t *testing.T) {
 		State:         StateClosed,
 	})
 
-	if err := n.handleWalletClosure(uncontrolledID); err != nil {
+	if err := n.handleWalletClosure(
+		uncontrolledID,
+		WalletSchemeECDSA,
+	); err != nil {
 		t.Fatalf("unexpected error for uncontrolled wallet: %v", err)
 	}
 
@@ -1391,7 +1540,7 @@ func TestHandleWalletClosure_ReturnsErrorWhenNotConfirmed(t *testing.T) {
 	}
 
 	// wallet is StateLive → IsWalletRegistered returns true → stateCheck = false
-	if err := n.handleWalletClosure(walletID); err == nil {
+	if err := n.handleWalletClosure(walletID, WalletSchemeECDSA); err == nil {
 		t.Fatal("expected error for unconfirmed closure, got nil")
 	}
 }

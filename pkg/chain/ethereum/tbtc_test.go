@@ -2,6 +2,7 @@ package ethereum
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"encoding/hex"
 	"errors"
@@ -285,6 +286,193 @@ func TestCalculateInactivityClaimHash(t *testing.T) {
 		expectedHash,
 		hex.EncodeToString(hash[:]),
 	)
+}
+
+func TestCalculateFrostInactivityClaimHash(t *testing.T) {
+	chainID := big.NewInt(31337)
+	nonce := big.NewInt(3)
+
+	xOnlyOutputKeyBytes, err := hex.DecodeString(
+		"9a0544440cc47779235ccb76d669590c2cd20c7e431f97e17a1093faf03291c4",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var xOnlyOutputKey [32]byte
+	copy(xOnlyOutputKey[:], xOnlyOutputKeyBytes)
+
+	inactiveMembersIndexes := []*big.Int{
+		big.NewInt(1), big.NewInt(2), big.NewInt(30),
+	}
+
+	hash, err := calculateFrostInactivityClaimHash(
+		chainID,
+		nonce,
+		xOnlyOutputKey,
+		inactiveMembersIndexes,
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Vector generated from FrostInactivity.verifyClaim's exact Solidity
+	// encoding: abi.encode(uint256,uint256,bytes32,uint256[],bool). The bytes32
+	// key is static; using the legacy dynamic bytes public key changes this hash.
+	expectedHash := "4e42a992e062421b59b57f6904544d68d65b6a8434a2d579b3d1d74a3f1a0b59"
+
+	testutils.AssertStringsEqual(
+		t,
+		"FROST inactivity hash",
+		expectedHash,
+		hex.EncodeToString(hash[:]),
+	)
+}
+
+func TestInactivityClaimChainForWalletBindsRegistryAndPool(t *testing.T) {
+	tc, ecdsaPool, frostPool, _ := newTbtcChainForSortitionViewTest(true)
+
+	legacyView, err := tc.InactivityClaimChainForWallet(tbtcpkg.WalletSchemeECDSA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacyView != tc {
+		t.Fatal("legacy inactivity view must remain bound to TbtcChain")
+	}
+	if tc.sortitionPool != ecdsaPool {
+		t.Fatal("legacy inactivity view must use the ECDSA operator ID pool")
+	}
+
+	frostView, err := tc.InactivityClaimChainForWallet(tbtcpkg.WalletSchemeFROST)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typedFrostView, ok := frostView.(*frostInactivityClaimChain)
+	if !ok {
+		t.Fatalf("expected *frostInactivityClaimChain, got [%T]", frostView)
+	}
+	if typedFrostView.TbtcChain != tc {
+		t.Fatal("FROST inactivity view must reference the owning chain")
+	}
+	if typedFrostView.frostSortitionPool != frostPool {
+		t.Fatal("FROST inactivity view must use the FROST operator ID pool")
+	}
+	if typedFrostView.frostSortitionPool == ecdsaPool {
+		t.Fatal("FROST inactivity view must not use the ECDSA operator ID pool")
+	}
+}
+
+func TestConvertFrostWalletClosedEventMarksFrostScheme(t *testing.T) {
+	walletID := [32]byte{0xaa, 0xbb, 0xcc}
+	event := convertFrostWalletClosedEvent(
+		&frostabi.FrostWalletRegistryWalletClosed{
+			WalletID: walletID,
+			Raw: types.Log{
+				BlockNumber: 123,
+			},
+		},
+	)
+
+	if event.WalletID != walletID {
+		t.Fatalf("unexpected wallet ID [0x%x]", event.WalletID)
+	}
+	if event.Scheme != tbtcpkg.WalletSchemeFROST {
+		t.Fatalf("unexpected wallet scheme [%v]", event.Scheme)
+	}
+	if event.BlockNumber != 123 {
+		t.Fatalf("unexpected block number [%v]", event.BlockNumber)
+	}
+}
+
+func TestConvertFrostWalletClosedEventRejectsNil(t *testing.T) {
+	if event := convertFrostWalletClosedEvent(nil); event != nil {
+		t.Fatalf("expected nil event, got [%+v]", event)
+	}
+}
+
+func TestHandleFrostWalletClosedEventsStopsAfterCancellation(t *testing.T) {
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	events := make(chan *tbtcpkg.WalletClosedEvent, 1)
+	events <- &tbtcpkg.WalletClosedEvent{WalletID: [32]byte{0xaa}}
+	cancelCtx()
+
+	handled := false
+	handleFrostWalletClosedEvents(
+		ctx,
+		events,
+		func(event *tbtcpkg.WalletClosedEvent) {
+			handled = true
+		},
+	)
+
+	if handled {
+		t.Fatal("handler invoked after cancellation")
+	}
+}
+
+func TestConvertFrostInactivityClaimedEvent(t *testing.T) {
+	walletID := [32]byte{0xaa, 0xbb, 0xcc}
+	nonce := big.NewInt(17)
+	notifier := common.HexToAddress("0x1234567890123456789012345678901234567890")
+
+	event := convertFrostInactivityClaimedEvent(
+		&frostabi.FrostWalletRegistryInactivityClaimed{
+			WalletID: walletID,
+			Nonce:    nonce,
+			Notifier: notifier,
+			Raw: types.Log{
+				BlockNumber: 123,
+			},
+		},
+	)
+
+	if event.WalletID != walletID {
+		t.Fatalf("unexpected wallet ID [0x%x]", event.WalletID)
+	}
+	if event.Nonce.Cmp(nonce) != 0 {
+		t.Fatalf("unexpected nonce [%v]", event.Nonce)
+	}
+	if event.Notifier != chain.Address(notifier.Hex()) {
+		t.Fatalf("unexpected notifier [%v]", event.Notifier)
+	}
+	if event.BlockNumber != 123 {
+		t.Fatalf("unexpected block number [%v]", event.BlockNumber)
+	}
+}
+
+func TestConvertFrostInactivityClaimedEventRejectsNil(t *testing.T) {
+	if event := convertFrostInactivityClaimedEvent(nil); event != nil {
+		t.Fatalf("expected nil event, got [%+v]", event)
+	}
+}
+
+func TestEmitFrostInactivityClaimedEventStopsAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		emitFrostInactivityClaimedEvent(
+			ctx,
+			make(chan *tbtcpkg.InactivityClaimedEvent),
+			&tbtcpkg.InactivityClaimedEvent{},
+		)
+		close(done)
+	}()
+
+	<-done
+}
+
+func TestFrostInactivityClaimChainRejectsNilInputs(t *testing.T) {
+	if _, err := convertFrostInactivityClaimToABI(nil); err == nil {
+		t.Fatal("expected nil inactivity claim error")
+	}
+
+	view := &frostInactivityClaimChain{}
+	err := view.SubmitInactivityClaim(&tbtcpkg.InactivityClaim{}, nil, nil)
+	if err == nil || err.Error() != "inactivity claim nonce is nil" {
+		t.Fatalf("unexpected nil nonce error: [%v]", err)
+	}
 }
 
 func TestCalculateWalletID(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
+	"github.com/keep-network/keep-core/pkg/sortition"
 )
 
 const (
@@ -75,14 +76,24 @@ type heartbeatInactivityClaimExecutor interface {
 	) error
 }
 
+// walletSortitionChainProvider supplies sortition views pinned to one wallet
+// scheme. It prevents a process-wide FROST configuration switch from changing
+// the authorization checks performed for legacy ECDSA wallets during the
+// migration drain.
+type walletSortitionChainProvider interface {
+	LegacyECDSASortitionChain() sortition.Chain
+	FrostSortitionChain() (sortition.Chain, bool)
+}
+
 // heartbeatAction is a walletAction implementation handling heartbeat requests
 // from the wallet coordinator.
 type heartbeatAction struct {
 	logger log.StandardLogger
 	chain  Chain
 
-	executingWallet wallet
-	signingExecutor heartbeatSigningExecutor
+	executingWallet      wallet
+	signingExecutor      heartbeatSigningExecutor
+	minimumActiveMembers int
 
 	proposal       *HeartbeatProposal
 	failureCounter *heartbeatFailureCounter
@@ -100,6 +111,7 @@ func newHeartbeatAction(
 	chain Chain,
 	executingWallet wallet,
 	signingExecutor heartbeatSigningExecutor,
+	minimumActiveMembers int,
 	proposal *HeartbeatProposal,
 	failureCounter *heartbeatFailureCounter,
 	inactivityClaimExecutor heartbeatInactivityClaimExecutor,
@@ -112,6 +124,7 @@ func newHeartbeatAction(
 		chain:                   chain,
 		executingWallet:         executingWallet,
 		signingExecutor:         signingExecutor,
+		minimumActiveMembers:    minimumActiveMembers,
 		proposal:                proposal,
 		failureCounter:          failureCounter,
 		inactivityClaimExecutor: inactivityClaimExecutor,
@@ -185,7 +198,7 @@ func (ha *heartbeatAction) execute() error {
 	// If the number of active members during signing was enough, we can
 	// consider the heartbeat procedure as successful.
 	activeMembersCount := len(activityReport.activeMembers)
-	if activeMembersCount >= heartbeatSigningMinimumActiveMembers {
+	if activeMembersCount >= ha.minimumActiveMembers {
 		ha.logger.Infof(
 			"heartbeat generated signature [%s] for message [0x%x]",
 			signature,
@@ -205,7 +218,7 @@ func (ha *heartbeatAction) execute() error {
 			"threshold was not met ([%d/%d] members participated); "+
 			"counting it as inactivity failure",
 		activeMembersCount,
-		heartbeatSigningMinimumActiveMembers,
+		ha.minimumActiveMembers,
 	)
 
 	// Increment the heartbeat inactivity failure counter.
@@ -268,7 +281,12 @@ func (ha *heartbeatAction) actionType() WalletActionType {
 }
 
 func (ha *heartbeatAction) isOperatorUnstaking() (bool, error) {
-	stakingProvider, isRegistered, err := ha.chain.OperatorToStakingProvider()
+	stakingChain, err := ha.sortitionChain()
+	if err != nil {
+		return false, err
+	}
+
+	stakingProvider, isRegistered, err := stakingChain.OperatorToStakingProvider()
 	if err != nil {
 		return false, fmt.Errorf(
 			"failed to get staking provider for operator [%v]",
@@ -282,7 +300,7 @@ func (ha *heartbeatAction) isOperatorUnstaking() (bool, error) {
 
 	// Eligible stake is defined as the currently authorized stake minus the
 	// pending authorization decrease.
-	eligibleStake, err := ha.chain.EligibleStake(stakingProvider)
+	eligibleStake, err := stakingChain.EligibleStake(stakingProvider)
 	if err != nil {
 		return false, fmt.Errorf(
 			"failed to check eligible stake for operator [%v]",
@@ -292,6 +310,46 @@ func (ha *heartbeatAction) isOperatorUnstaking() (bool, error) {
 
 	// The operator is considered unstaking if their eligible stake is `0`.
 	return eligibleStake.Cmp(big.NewInt(0)) == 0, nil
+}
+
+func (ha *heartbeatAction) sortitionChain() (sortition.Chain, error) {
+	provider, ok := ha.chain.(walletSortitionChainProvider)
+	if !ok {
+		// Backward compatibility for non-Ethereum chains and test chains that
+		// expose only one registry.
+		return ha.chain, nil
+	}
+
+	walletPublicKeyHash := bitcoin.PublicKeyHash(ha.executingWallet.publicKey)
+	walletData, err := ha.chain.GetWallet(walletPublicKeyHash)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to get wallet data for authorization check [%v]",
+			err,
+		)
+	}
+
+	walletScheme, _, err := walletSchemeAndRegistryID(walletData)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to resolve wallet scheme for authorization check [%v]",
+			err,
+		)
+	}
+
+	switch walletScheme {
+	case WalletSchemeECDSA:
+		return provider.LegacyECDSASortitionChain(), nil
+	case WalletSchemeFROST:
+		frostChain, configured := provider.FrostSortitionChain()
+		if !configured || frostChain == nil {
+			return nil, fmt.Errorf("FROST sortition chain is not configured")
+		}
+
+		return frostChain, nil
+	default:
+		return nil, fmt.Errorf("unsupported wallet scheme [%v]", walletScheme)
+	}
 }
 
 // heartbeatFailureCounter holds counters keeping track of consecutive

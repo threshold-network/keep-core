@@ -41,8 +41,9 @@ type deduplicator struct {
 	dkgResultHashCache *cache.TimeCache
 	walletClosedCache  *cache.TimeCache
 
-	mutex      sync.Mutex
-	inProgress map[string]struct{}
+	mutex          sync.Mutex
+	inProgress     map[string]struct{}
+	pendingReplays map[string]struct{}
 }
 
 func newDeduplicator() *deduplicator {
@@ -51,6 +52,7 @@ func newDeduplicator() *deduplicator {
 		dkgResultHashCache: cache.NewTimeCache(DKGResultHashCachePeriod),
 		walletClosedCache:  cache.NewTimeCache(WalletClosedCachePeriod),
 		inProgress:         make(map[string]struct{}),
+		pendingReplays:     make(map[string]struct{}),
 	}
 }
 
@@ -73,6 +75,7 @@ func (d *deduplicator) beginDKGStarted(
 		d.dkgSeedCache,
 		cacheKey,
 		"dkg-started:"+cacheKey,
+		false,
 	)
 }
 
@@ -86,6 +89,20 @@ func (d *deduplicator) beginDKGResultSubmitted(
 		d.dkgResultHashCache,
 		cacheKey,
 		"dkg-result-submitted:"+cacheKey,
+		false,
+	)
+}
+
+func (d *deduplicator) beginWalletClosed(
+	walletScheme WalletScheme,
+	walletID [32]byte,
+) (*deduplicationLease, bool) {
+	cacheKey := walletClosedCacheKey(walletScheme, walletID)
+	return d.begin(
+		d.walletClosedCache,
+		cacheKey,
+		"wallet-closed:"+cacheKey,
+		true,
 	)
 }
 
@@ -93,6 +110,7 @@ func (d *deduplicator) begin(
 	completedCache *cache.TimeCache,
 	cacheKey string,
 	inProgressKey string,
+	preserveConcurrentReplay bool,
 ) (*deduplicationLease, bool) {
 	completedCache.Sweep()
 
@@ -103,6 +121,12 @@ func (d *deduplicator) begin(
 		return nil, false
 	}
 	if _, ok := d.inProgress[inProgressKey]; ok {
+		if preserveConcurrentReplay {
+			if d.pendingReplays == nil {
+				d.pendingReplays = make(map[string]struct{})
+			}
+			d.pendingReplays[inProgressKey] = struct{}{}
+		}
 		return nil, false
 	}
 	if d.inProgress == nil {
@@ -118,18 +142,38 @@ func (d *deduplicator) begin(
 	}, true
 }
 
-func (dl *deduplicationLease) finish(completed bool) {
+// finish releases the lease. When handling failed and a concurrent replay was
+// recorded, it keeps the lease active and asks the owner to retry immediately.
+func (dl *deduplicationLease) finish(completed bool) bool {
 	dl.owner.mutex.Lock()
 	defer dl.owner.mutex.Unlock()
 
 	if _, ok := dl.owner.inProgress[dl.inProgressKey]; !ok {
-		return
+		return false
+	}
+
+	if completed {
+		delete(dl.owner.inProgress, dl.inProgressKey)
+		delete(dl.owner.pendingReplays, dl.inProgressKey)
+		dl.cache.Add(dl.cacheKey)
+		return false
+	}
+
+	if _, ok := dl.owner.pendingReplays[dl.inProgressKey]; ok {
+		delete(dl.owner.pendingReplays, dl.inProgressKey)
+		return true
 	}
 
 	delete(dl.owner.inProgress, dl.inProgressKey)
-	if completed {
-		dl.cache.Add(dl.cacheKey)
-	}
+	return false
+}
+
+func (dl *deduplicationLease) release() {
+	dl.owner.mutex.Lock()
+	defer dl.owner.mutex.Unlock()
+
+	delete(dl.owner.inProgress, dl.inProgressKey)
+	delete(dl.owner.pendingReplays, dl.inProgressKey)
 }
 
 // notifyDKGStarted notifies the client wants to start the distributed key
@@ -177,22 +221,10 @@ func dkgResultSubmittedCacheKey(
 		strconv.FormatUint(block, 10)
 }
 
-func (d *deduplicator) notifyWalletClosed(
-	WalletID [32]byte,
-) bool {
-	d.walletClosedCache.Sweep()
-
-	// Use wallet ID converted to string as the cache key.
-	cacheKey := hex.EncodeToString(WalletID[:])
-
-	// If the key is not in the cache, that means the wallet closure was not
-	// handled yet and the client should proceed with the execution.
-	if !d.walletClosedCache.Has(cacheKey) {
-		d.walletClosedCache.Add(cacheKey)
-		return true
-	}
-
-	// Otherwise, the wallet closure is a duplicate and the client should not
-	// proceed with the execution.
-	return false
+func walletClosedCacheKey(
+	walletScheme WalletScheme,
+	walletID [32]byte,
+) string {
+	return strconv.Itoa(int(normalizeWalletScheme(walletScheme))) + ":" +
+		hex.EncodeToString(walletID[:])
 }
