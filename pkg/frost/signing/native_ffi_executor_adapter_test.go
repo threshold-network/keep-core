@@ -199,6 +199,8 @@ func TestNativeExecutionFFIExecutorAdapter_Execute_DelegatesToPrimitive(
 		IncludedMembersIndexes: []group.MemberIndex{1, 2, 3},
 		ExcludedMembersIndexes: []group.MemberIndex{4},
 	}
+	heartbeatMessage := [16]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01}
+	signingIntent := NewHeartbeatSigningIntent(heartbeatMessage)
 
 	result, err := executor.Execute(context.Background(), nil, &Request{
 		Message:            big.NewInt(123),
@@ -210,7 +212,8 @@ func TestNativeExecutionFFIExecutorAdapter_Execute_DelegatesToPrimitive(
 			Format:  NativeSignerMaterialFormatFrostUniFFIV1,
 			Payload: []byte{0xaa},
 		},
-		Attempt: attempt,
+		SigningIntent: signingIntent,
+		Attempt:       attempt,
 	})
 	if err != nil {
 		t.Fatalf("unexpected execute error: [%v]", err)
@@ -238,6 +241,50 @@ func TestNativeExecutionFFIExecutorAdapter_Execute_DelegatesToPrimitive(
 
 	if primitive.lastRequest.Attempt == attempt {
 		t.Fatal("expected attempt clone in primitive request")
+	}
+	if primitive.lastRequest.SigningIntent == signingIntent {
+		t.Fatal("expected signing intent clone in primitive request")
+	}
+	gotHeartbeatMessage, ok := primitive.lastRequest.SigningIntent.HeartbeatMessage()
+	if !ok || gotHeartbeatMessage != heartbeatMessage {
+		t.Fatalf(
+			"unexpected heartbeat signing intent: got [%x], present [%v], want [%x]",
+			gotHeartbeatMessage,
+			ok,
+			heartbeatMessage,
+		)
+	}
+}
+
+func TestNativeExecutionFFIExecutorAdapter_Execute_GenericSigningIntentIsNil(
+	t *testing.T,
+) {
+	primitive := &mockNativeExecutionFFISigningPrimitive{
+		signature: &frost.Signature{},
+	}
+	executor, err := NewNativeExecutionFFIExecutorAdapter(primitive)
+	if err != nil {
+		t.Fatalf("unexpected adapter setup error: [%v]", err)
+	}
+
+	_, err = executor.Execute(context.Background(), nil, &Request{
+		Message: big.NewInt(1),
+		SignerMaterial: &NativeSignerMaterial{
+			Format:  NativeSignerMaterialFormatFrostUniFFIV1,
+			Payload: []byte{0xaa},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected execute error: [%v]", err)
+	}
+	if primitive.lastRequest == nil {
+		t.Fatal("expected primitive request")
+	}
+	if primitive.lastRequest.SigningIntent != nil {
+		t.Fatalf(
+			"generic signing must keep signing intent nil, got [%+v]",
+			primitive.lastRequest.SigningIntent,
+		)
 	}
 }
 

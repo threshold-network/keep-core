@@ -15,6 +15,9 @@ import (
 	"testing"
 	"time"
 
+	btcec2 "github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/btcec/v2/schnorr"
+	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
@@ -22,6 +25,21 @@ import (
 // repeats (go test -count=N) over the shared, process-stable signer state path add
 // a fresh DKG session instead of conflicting on a fixed one.
 var realCgoSessionSeq atomic.Uint64
+
+type realCgoSingleTransactionChain struct {
+	bitcoin.Chain
+	transaction *bitcoin.Transaction
+}
+
+func (rcstc *realCgoSingleTransactionChain) GetTransaction(
+	transactionHash bitcoin.Hash,
+) (*bitcoin.Transaction, error) {
+	if rcstc.transaction == nil || rcstc.transaction.Hash() != transactionHash {
+		return nil, fmt.Errorf("transaction [%s] not found", transactionHash)
+	}
+
+	return rcstc.transaction, nil
+}
 
 // This file is the REAL-cgo interactive signing test: a full FROST DKG that
 // PERSISTS a key group, followed by one signer's interactive ROAST contribution
@@ -120,6 +138,7 @@ func TestRealCgoInteractiveSigning_MemberContribution(t *testing.T) {
 		keyGroup,
 		threshold,
 		nil, // key-path spend
+		nil, // generic signing has no typed intent
 		derived.AttemptContext,
 	)
 	skipFrostUnavailable(t, "interactive session open", err)
@@ -137,16 +156,18 @@ func TestRealCgoInteractiveSigning_MemberContribution(t *testing.T) {
 	}
 }
 
-// TestRealCgoInteractiveSigning_MultiSeatAggregate drives TWO local seats through the
-// FULL interactive signing flow in ONE process against the real cgo engine, producing a
-// real 2-of-3 BIP-340 signature. This is the payoff of the multi-seat engine fix
+// TestRealCgoInteractiveSigning_MultiSeatHeartbeatAggregate drives TWO local seats
+// through the FULL typed-heartbeat signing flow in ONE process against the real cgo
+// engine, producing a real 2-of-3 BIP-340 signature while the policy firewall is on.
+// This is also the payoff of the multi-seat engine fix
 // (member-keyed interactive_signing): before it, the second seat's InteractiveSessionOpen
 // failed with SessionConflict, so a single process could only drive one seat's
 // contribution (see _MemberContribution). Now both seats Open, Round1, and Round2
 // independently and their shares aggregate. Skip-guarded; runs only against a linked,
 // CURRENT libfrost_tbtc that includes the multi-seat fix.
-func TestRealCgoInteractiveSigning_MultiSeatAggregate(t *testing.T) {
+func TestRealCgoInteractiveSigning_MultiSeatHeartbeatAggregate(t *testing.T) {
 	setupRealCgoSignerState(t)
+	t.Setenv("TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL", "true")
 
 	engine := &buildTaggedTBTCSignerEngine{}
 
@@ -155,7 +176,13 @@ func TestRealCgoInteractiveSigning_MultiSeatAggregate(t *testing.T) {
 	participantIDs := []byte{1, 2, 3}
 	// Both seats are LOCAL members in this one process (the multi-seat case).
 	signingMembers := []byte{1, 2}
-	message := bytesOf(0x42, 32)
+	heartbeatMessage := [16]byte{
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+	}
+	heartbeatDigest := bitcoin.ComputeHash(heartbeatMessage[:])
+	message := heartbeatDigest[:]
+	signingIntent := NewHeartbeatSigningIntent(heartbeatMessage)
 
 	keyGroup := runRealCgoDKGKeyGroup(t, engine, sessionID, participantIDs, threshold)
 
@@ -184,7 +211,8 @@ func TestRealCgoInteractiveSigning_MultiSeatAggregate(t *testing.T) {
 			message,
 			keyGroup,
 			threshold,
-			nil, // key-path spend
+			nil, // a heartbeat must not carry a Taproot merkle root
+			signingIntent,
 			derived.AttemptContext,
 		)
 		if isPreMultiSeatConflict(err) {
@@ -247,6 +275,191 @@ func TestRealCgoInteractiveSigning_MultiSeatAggregate(t *testing.T) {
 	skipFrostUnavailable(t, "interactive aggregate", err)
 	if len(signature) != 64 {
 		t.Fatalf("unexpected multi-seat interactive signature length: %d", len(signature))
+	}
+}
+
+func TestRealCgoBuildTaprootTxMatchesGoBIP341Sighash(t *testing.T) {
+	setupRealCgoSignerState(t)
+	t.Setenv("TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL", "true")
+	t.Setenv("TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES", "p2wpkh")
+	t.Setenv("TBTC_SIGNER_POLICY_MAX_OUTPUT_COUNT", "64")
+	t.Setenv("TBTC_SIGNER_POLICY_MAX_OUTPUT_VALUE_SATS", "100000000")
+	t.Setenv("TBTC_SIGNER_POLICY_MAX_TOTAL_OUTPUT_VALUE_SATS", "100000000")
+
+	engine := &buildTaggedTBTCSignerEngine{}
+	signingSessionID := fmt.Sprintf(
+		"real-cgo-bip341-signing-%d",
+		realCgoSessionSeq.Add(1),
+	)
+
+	privateKeyBytes := bytesOf(0x01, 32)
+	_, publicKey := btcec2.PrivKeyFromBytes(privateKeyBytes)
+	var taprootOutputKey [32]byte
+	copy(taprootOutputKey[:], schnorr.SerializePubKey(publicKey))
+	prevoutScript, err := bitcoin.PayToTaproot(taprootOutputKey)
+	if err != nil {
+		t.Fatalf("build P2TR prevout script: %v", err)
+	}
+	var outputPublicKeyHash [20]byte
+	copy(outputPublicKeyHash[:], bytesOf(0x02, 20))
+	outputScript, err := bitcoin.PayToWitnessPublicKeyHash(outputPublicKeyHash)
+	if err != nil {
+		t.Fatalf("build P2WPKH output script: %v", err)
+	}
+
+	previousTransaction := &bitcoin.Transaction{
+		Version: 1,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: bitcoin.Hash{
+						0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+						0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+						0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+						0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
+					},
+					OutputIndex: 0,
+				},
+				SignatureScript: []byte{0x51},
+				Sequence:        0xffffffff,
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{Value: 100_000, PublicKeyScript: prevoutScript},
+		},
+		Locktime: 0,
+	}
+	txIDHex := previousTransaction.Hash().Hex(bitcoin.ReversedByteOrder)
+	const inputValue = int64(100_000)
+	const outputValue = int64(90_000)
+
+	result, err := engine.BuildTaprootTx(
+		signingSessionID,
+		[]NativeTBTCSignerTxInput{
+			{
+				TxIDHex:         txIDHex,
+				Vout:            0,
+				ValueSats:       uint64(inputValue),
+				ScriptPubKeyHex: hex.EncodeToString(prevoutScript),
+			},
+		},
+		[]NativeTBTCSignerTxOutput{
+			{
+				ScriptPubKeyHex: hex.EncodeToString(outputScript),
+				ValueSats:       uint64(outputValue),
+			},
+		},
+		nil,
+	)
+	skipFrostUnavailable(t, "BIP-341 BuildTaprootTx", err)
+
+	if len(result.TaprootKeySpendSighashesHex) != 1 {
+		t.Fatalf(
+			"BuildTaprootTx returned %d sighashes, want 1",
+			len(result.TaprootKeySpendSighashesHex),
+		)
+	}
+
+	referenceBuilder := bitcoin.NewTransactionBuilder(
+		&realCgoSingleTransactionChain{transaction: previousTransaction},
+	)
+	if err := referenceBuilder.AddTaprootKeyPathInput(
+		&bitcoin.UnspentTransactionOutput{
+			Outpoint: &bitcoin.TransactionOutpoint{
+				TransactionHash: previousTransaction.Hash(),
+				OutputIndex:     0,
+			},
+			Value: inputValue,
+		},
+	); err != nil {
+		t.Fatalf("add reference P2TR input: %v", err)
+	}
+	referenceBuilder.AddOutput(
+		&bitcoin.TransactionOutput{
+			Value:           outputValue,
+			PublicKeyScript: outputScript,
+		},
+	)
+	expectedUnsignedTransaction := referenceBuilder.UnsignedTransaction()
+	expectedTxHex := hex.EncodeToString(expectedUnsignedTransaction.Serialize())
+	if result.TxHex != expectedTxHex {
+		t.Fatalf(
+			"BuildTaprootTx returned a different unsigned transaction: Rust=%s Go=%s txid=%s",
+			result.TxHex,
+			expectedTxHex,
+			txIDHex,
+		)
+	}
+
+	expectedSighashes, err := referenceBuilder.ComputeSignatureHashes()
+	if err != nil {
+		t.Fatalf("calculate Go BIP-341 sighash: %v", err)
+	}
+	if len(expectedSighashes) != 1 {
+		t.Fatalf("Go builder returned %d sighashes, want 1", len(expectedSighashes))
+	}
+	expectedSighashHex := fmt.Sprintf("%064x", expectedSighashes[0])
+	if result.TaprootKeySpendSighashesHex[0] != expectedSighashHex {
+		t.Fatalf(
+			"cross-language BIP-341 sighash mismatch: Rust=%s Go=%s txid=%s tx=%s",
+			result.TaprootKeySpendSighashesHex[0],
+			expectedSighashHex,
+			txIDHex,
+			result.TxHex,
+		)
+	}
+
+	// Complete the production ownership path: DKG material remains on the
+	// long-lived wallet session, while BuildTaprootTx and the interactive flow
+	// share a distinct per-signing ROAST session. With the firewall enabled,
+	// Open can succeed only if it reads the BIP-341 artifact from that signing
+	// session and resolves only wallet lifecycle/key material through keyGroup.
+	walletSessionID := fmt.Sprintf(
+		"real-cgo-bip341-wallet-%d",
+		realCgoSessionSeq.Add(1),
+	)
+	const threshold = 2
+	const localMember = uint16(1)
+	includedMembers := []byte{1, 2}
+	keyGroup := runRealCgoDKGKeyGroup(
+		t,
+		engine,
+		walletSessionID,
+		[]byte{1, 2, 3},
+		threshold,
+	)
+	message, err := hex.DecodeString(result.TaprootKeySpendSighashesHex[0])
+	if err != nil {
+		t.Fatalf("decode Rust BIP-341 message: %v", err)
+	}
+	derived, err := engine.DeriveInteractiveAttemptContext(
+		signingSessionID,
+		message,
+		keyGroup,
+		threshold,
+		0,
+		uint16sOf(includedMembers),
+	)
+	skipFrostUnavailable(t, "derive policy-bound interactive attempt", err)
+	opened, err := engine.InteractiveSessionOpen(
+		signingSessionID,
+		localMember,
+		message,
+		keyGroup,
+		threshold,
+		nil,
+		nil,
+		derived.AttemptContext,
+	)
+	skipFrostUnavailable(t, "open policy-bound interactive session", err)
+	commitment, err := engine.InteractiveRound1(
+		signingSessionID,
+		opened.AttemptID,
+		localMember,
+	)
+	skipFrostUnavailable(t, "policy-bound interactive round 1", err)
+	if len(commitment) == 0 {
+		t.Fatal("policy-bound interactive round 1 returned an empty commitment")
 	}
 }
 

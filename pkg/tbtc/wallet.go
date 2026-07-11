@@ -305,6 +305,16 @@ type taprootTweakedWalletSigningExecutor interface {
 	) ([]*frost.Signature, error)
 }
 
+type taprootPolicyBoundWalletSigningExecutor interface {
+	signBatchWithTaprootTransaction(
+		ctx context.Context,
+		messages []*big.Int,
+		taprootMerkleRoots []*[32]byte,
+		startBlock uint64,
+		unsignedTx *bitcoin.TransactionBuilder,
+	) ([]*frost.Signature, error)
+}
+
 // walletTransactionExecutor is a component allowing to sign and broadcast
 // wallet Bitcoin transactions.
 type walletTransactionExecutor struct {
@@ -344,13 +354,17 @@ func (wte *walletTransactionExecutor) signTransaction(
 	signingStartBlock uint64,
 	signingTimeoutBlock uint64,
 ) (*bitcoin.Transaction, error) {
+	usesSchnorrSignatures := wte.usesSchnorrSignatures()
+
 	// The native tbtc-signer BuildTaprootTx parity/substitution path applies
-	// only to Taproot transactions: the native builder is a Taproot builder, so
-	// running it for a legacy (non-Taproot) ECDSA redemption/sweep/moving-funds
-	// transaction is meaningless, and a hard error from it would otherwise fail
-	// the signing of that legacy transaction. FROST/Schnorr wallets sign
-	// exclusively all-Taproot transactions (enforced below).
-	if unsignedTx.HasOnlyTaprootKeyPathInputs() {
+	// only to Taproot transactions that do not use the mandatory policy-bound
+	// Schnorr path below. That path calls BuildTaprootTx under the exact ROAST
+	// session before every signature; running this preflight first under a
+	// buildtx-* session would consume one extra token from the signer's global
+	// policy rate limiter, and its artifact cannot authorize the ROAST session.
+	// The native builder is meaningless for legacy transactions, so those skip
+	// this path as before.
+	if unsignedTx.HasOnlyTaprootKeyPathInputs() && !usesSchnorrSignatures {
 		if err := wte.maybeSubstituteNativeBuildTaprootTx(
 			signTxLogger,
 			unsignedTx,
@@ -376,7 +390,7 @@ func (wte *walletTransactionExecutor) signTransaction(
 		)
 	}
 
-	if wte.usesSchnorrSignatures() &&
+	if usesSchnorrSignatures &&
 		!unsignedTx.HasOnlyTaprootKeyPathInputs() {
 		return nil, fmt.Errorf(
 			"cannot apply FROST signatures to non-taproot transaction inputs",
@@ -394,7 +408,22 @@ func (wte *walletTransactionExecutor) signTransaction(
 
 	var signatures []*frost.Signature
 	taprootMerkleRoots := unsignedTx.TaprootKeyPathInputMerkleRoots()
-	if hasTaprootMerkleRoots(taprootMerkleRoots) {
+	policyBoundSigningExecutor, policyBindingAvailable :=
+		wte.signingExecutor.(taprootPolicyBoundWalletSigningExecutor)
+	if usesSchnorrSignatures {
+		if !policyBindingAvailable {
+			return nil, fmt.Errorf(
+				"Schnorr signing executor does not support transaction policy binding",
+			)
+		}
+		signatures, err = policyBoundSigningExecutor.signBatchWithTaprootTransaction(
+			signingCtx,
+			sigHashes,
+			taprootMerkleRoots,
+			signingStartBlock,
+			unsignedTx,
+		)
+	} else if hasTaprootMerkleRoots(taprootMerkleRoots) {
 		tweakedSigningExecutor, ok := wte.signingExecutor.(taprootTweakedWalletSigningExecutor)
 		if !ok {
 			return nil, fmt.Errorf(

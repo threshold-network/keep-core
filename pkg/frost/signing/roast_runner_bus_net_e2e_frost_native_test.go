@@ -114,7 +114,7 @@ func buildInteractiveSigningNetHarness(
 		engine.coordinatorIdentifier = uint16(ara.ElectedCoordinator())
 		collector := roast.NewRound2Collector(verifier)
 		runner, err := newInteractiveSigningRunner(
-			ara, member, threshold, engine, collector, coord, signer, bus,
+			ara, member, threshold, nil, engine, collector, coord, signer, bus,
 		)
 		if err != nil {
 			t.Fatalf("runner (seat %d): %v", member, err)

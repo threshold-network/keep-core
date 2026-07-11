@@ -156,7 +156,7 @@ func TestRealCgoInteractiveSigning_InvalidShareBlameForcesPermanentExclusion(t *
 			t.Fatalf("active attempt (seat %d): %v", member, err)
 		}
 		collector := roast.NewRound2Collector(verifier)
-		runner, err := newInteractiveSigningRunner(binding, member, threshold, eng, collector, coord, signer, bus)
+		runner, err := newInteractiveSigningRunner(binding, member, threshold, nil, eng, collector, coord, signer, bus)
 		if err != nil {
 			t.Fatalf("runner (seat %d): %v", member, err)
 		}

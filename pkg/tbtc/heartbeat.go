@@ -56,9 +56,9 @@ func (hp *HeartbeatProposal) ValidityBlocks() uint64 {
 // heartbeatSigningExecutor is an interface meant to decouple the specific
 // implementation of the signing executor from the heartbeat action.
 type heartbeatSigningExecutor interface {
-	sign(
+	signHeartbeat(
 		ctx context.Context,
-		message *big.Int,
+		message [16]byte,
 		startBlock uint64,
 	) (*frost.Signature, *signingActivityReport, uint64, error)
 }
@@ -153,9 +153,6 @@ func (ha *heartbeatAction) execute() error {
 		return fmt.Errorf("heartbeat proposal is invalid: [%v]", err)
 	}
 
-	messageBytes := bitcoin.ComputeHash(ha.proposal.Message[:])
-	messageToSign := new(big.Int).SetBytes(messageBytes[:])
-
 	// Just in case. This should never happen.
 	if ha.expiryBlock < heartbeatInactivityClaimValidityBlocks {
 		return fmt.Errorf("invalid proposal expiry block")
@@ -168,9 +165,9 @@ func (ha *heartbeatAction) execute() error {
 	)
 	defer cancelHeartbeatSigningCtx()
 
-	signature, activityReport, _, err := ha.signingExecutor.sign(
+	signature, activityReport, _, err := ha.signingExecutor.signHeartbeat(
 		heartbeatSigningCtx,
-		messageToSign,
+		ha.proposal.Message,
 		ha.startBlock,
 	)
 	if err != nil {
@@ -247,7 +244,7 @@ func (ha *heartbeatAction) execute() error {
 		// period of time. This is a desired outcome for unstaking members as well.
 		activityReport.inactiveMembers,
 		true,
-		messageToSign,
+		heartbeatSigningMessage(ha.proposal.Message),
 	)
 	if err != nil {
 		return fmt.Errorf(

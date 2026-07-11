@@ -535,8 +535,10 @@ func TestNativeBuildTaprootTxSigningSubstitutionEnabled(t *testing.T) {
 // The native tbtc-signer BuildTaprootTx parity/substitution path is gated on the
 // transaction being all-Taproot. The substitution LOGIC itself (observational
 // logging, divergence rejection, matching-IO acceptance) is covered directly by
-// the TestEvaluateNativeUnsignedTransactionForSigning_* tests; these two tests
-// cover the signTransaction gate: skip for legacy, invoke for Taproot.
+// the TestEvaluateNativeUnsignedTransactionForSigning_* tests. The tests below
+// cover the signTransaction gate: skip for legacy, run for an eligible
+// non-policy-bound Taproot path, and skip the redundant preflight when
+// policy-bound Schnorr signing performs the mandatory build.
 func TestWalletTransactionExecutor_SignTransaction_SkipsNativeBuildForLegacyTransaction(
 	t *testing.T,
 ) {
@@ -597,16 +599,15 @@ func TestWalletTransactionExecutor_SignTransaction_SkipsNativeBuildForLegacyTran
 	}
 }
 
-func TestWalletTransactionExecutor_SignTransaction_SubstitutesNativeBuildForTaprootTransaction(
+func TestWalletTransactionExecutor_SignTransaction_SubstitutesNativeBuildForNonPolicyBoundTaprootTransaction(
 	t *testing.T,
 ) {
 	unsignedTx, privateKey := buildTaprootKeyPathUnsignedTxForTest(t)
 
 	// The native builder returns a transaction structurally identical to the
-	// Go-built one, so substitution mode accepts it and substitutes -- this
-	// exercises the ReplaceUnsignedTransaction call and the substitution info
-	// log in the real signTransaction caller. Returning a non-empty hex also
-	// proves the gate invoked the native build for an all-Taproot transaction.
+	// Go-built one, so substitution mode accepts it. The executor deliberately
+	// does not advertise Schnorr policy binding, keeping this path eligible for
+	// the observational/substitution preflight.
 	nativeUnsignedTxHex := hex.EncodeToString(
 		unsignedTx.UnsignedTransaction().Serialize(bitcoin.Standard),
 	)
@@ -618,11 +619,11 @@ func TestWalletTransactionExecutor_SignTransaction_SubstitutesNativeBuildForTapr
 		nativeBuildTaprootTxSigningSubstitutionEnabledFn = originalSigningSubstitutionEnabledFn
 	})
 
-	nativeBuildCalled := false
+	preflightBuildCalls := 0
 	buildTaprootTxViaNativeSignerFn = func(
 		unsignedTx *bitcoin.TransactionBuilder,
 	) (string, error) {
-		nativeBuildCalled = true
+		preflightBuildCalls++
 		return nativeUnsignedTxHex, nil
 	}
 	nativeBuildTaprootTxSigningSubstitutionEnabledFn = func() bool {
@@ -631,8 +632,10 @@ func TestWalletTransactionExecutor_SignTransaction_SubstitutesNativeBuildForTapr
 
 	wte := &walletTransactionExecutor{
 		executingWallet: generateWallet(big.NewInt(111)),
-		signingExecutor: &deterministicSchnorrSigningExecutorForTaproot{
-			privateKey: privateKey,
+		signingExecutor: &nonPolicyBoundTaprootSigningExecutor{
+			delegate: &deterministicSchnorrSigningExecutorForTaproot{
+				privateKey: privateKey,
+			},
 		},
 		waitForBlockFn: func(ctx context.Context, block uint64) error {
 			return nil
@@ -645,10 +648,8 @@ func TestWalletTransactionExecutor_SignTransaction_SubstitutesNativeBuildForTapr
 		t.Fatalf("unexpected signTransaction error: [%v]", err)
 	}
 
-	if !nativeBuildCalled {
-		t.Fatal(
-			"native BuildTaprootTx must be invoked for an all-Taproot transaction",
-		)
+	if preflightBuildCalls != 1 {
+		t.Fatalf("unexpected observational BuildTaprootTx calls: [%d]", preflightBuildCalls)
 	}
 	if !containsLoggedMessage(
 		logger.infoMessages,
@@ -658,6 +659,94 @@ func TestWalletTransactionExecutor_SignTransaction_SubstitutesNativeBuildForTapr
 	}
 	if len(tx.Inputs) != 1 || len(tx.Inputs[0].Witness) == 0 {
 		t.Fatal("expected the substituted transaction to be signed with a taproot witness")
+	}
+}
+
+func TestWalletTransactionExecutor_SignTransaction_PolicyBoundSchnorrChargesOnlyMandatoryNativeBuild(
+	t *testing.T,
+) {
+	unsignedTx, privateKey := buildTaprootKeyPathUnsignedTxForTest(t)
+
+	// Model the signer's global BuildTaprootTx rate limiter at its supported
+	// minimum. The policy-bound signing call must consume the one token; the
+	// observational parity/substitution preflight must not run first and consume
+	// it under a different session.
+	availableBuildTokens := 1
+	consumeBuildToken := func() error {
+		if availableBuildTokens == 0 {
+			return errors.New("signer policy rate limit exceeded")
+		}
+
+		availableBuildTokens--
+		return nil
+	}
+
+	nativeUnsignedTxHex := hex.EncodeToString(
+		unsignedTx.UnsignedTransaction().Serialize(bitcoin.Standard),
+	)
+
+	originalBuildTaprootTxViaNativeSignerFn := buildTaprootTxViaNativeSignerFn
+	originalSigningSubstitutionEnabledFn := nativeBuildTaprootTxSigningSubstitutionEnabledFn
+	t.Cleanup(func() {
+		buildTaprootTxViaNativeSignerFn = originalBuildTaprootTxViaNativeSignerFn
+		nativeBuildTaprootTxSigningSubstitutionEnabledFn = originalSigningSubstitutionEnabledFn
+	})
+
+	preflightBuildCalls := 0
+	buildTaprootTxViaNativeSignerFn = func(
+		unsignedTx *bitcoin.TransactionBuilder,
+	) (string, error) {
+		preflightBuildCalls++
+		if err := consumeBuildToken(); err != nil {
+			return "", err
+		}
+
+		return nativeUnsignedTxHex, nil
+	}
+	// Even an explicitly enabled substitution flag must not reintroduce the
+	// redundant preflight on the mandatory policy-bound path.
+	nativeBuildTaprootTxSigningSubstitutionEnabledFn = func() bool {
+		return true
+	}
+	mandatoryBuildCalls := 0
+
+	wte := &walletTransactionExecutor{
+		executingWallet: generateWallet(big.NewInt(111)),
+		signingExecutor: &deterministicSchnorrSigningExecutorForTaproot{
+			privateKey: privateKey,
+			beforePolicyBinding: func() error {
+				mandatoryBuildCalls++
+				return consumeBuildToken()
+			},
+		},
+		waitForBlockFn: func(ctx context.Context, block uint64) error {
+			return nil
+		},
+	}
+
+	logger := &warningCaptureLogger{}
+	tx, err := wte.signTransaction(logger, unsignedTx, 0, 0)
+	if err != nil {
+		t.Fatalf("unexpected signTransaction error: [%v]", err)
+	}
+
+	if preflightBuildCalls != 0 {
+		t.Fatalf("unexpected observational BuildTaprootTx calls: [%d]", preflightBuildCalls)
+	}
+	if mandatoryBuildCalls != 1 {
+		t.Fatalf("unexpected mandatory BuildTaprootTx calls: [%d]", mandatoryBuildCalls)
+	}
+	if availableBuildTokens != 0 {
+		t.Fatalf("unexpected remaining BuildTaprootTx tokens: [%d]", availableBuildTokens)
+	}
+	if containsLoggedMessage(
+		logger.infoMessages,
+		"substituted Go unsigned transaction with native tbtc-signer BuildTaprootTx output",
+	) {
+		t.Fatalf("policy-bound Schnorr signing must not run substitution: [%v]", logger.infoMessages)
+	}
+	if len(tx.Inputs) != 1 || len(tx.Inputs[0].Witness) == 0 {
+		t.Fatal("expected the transaction to be signed with a taproot witness")
 	}
 }
 
@@ -1434,7 +1523,24 @@ func (desefbts *deterministicECDSASigningExecutorForBuildTaprootTxSubstitution) 
 }
 
 type deterministicSchnorrSigningExecutorForTaproot struct {
-	privateKey *btcec2.PrivateKey
+	privateKey          *btcec2.PrivateKey
+	beforePolicyBinding func() error
+}
+
+// nonPolicyBoundTaprootSigningExecutor returns valid Schnorr signature bytes
+// without implementing schnorrWalletSigningExecutor or the mandatory policy-
+// binding interface. This preserves coverage for the legacy all-Taproot
+// observational/substitution caller path.
+type nonPolicyBoundTaprootSigningExecutor struct {
+	delegate *deterministicSchnorrSigningExecutorForTaproot
+}
+
+func (npbtse *nonPolicyBoundTaprootSigningExecutor) signBatch(
+	ctx context.Context,
+	messages []*big.Int,
+	startBlock uint64,
+) ([]*frost.Signature, error) {
+	return npbtse.delegate.signBatch(ctx, messages, startBlock)
 }
 
 func (dsseft *deterministicSchnorrSigningExecutorForTaproot) signBatch(
@@ -1466,6 +1572,22 @@ func (dsseft *deterministicSchnorrSigningExecutorForTaproot) signBatch(
 
 func (dsseft *deterministicSchnorrSigningExecutorForTaproot) usesSchnorrSignatures() bool {
 	return true
+}
+
+func (dsseft *deterministicSchnorrSigningExecutorForTaproot) signBatchWithTaprootTransaction(
+	ctx context.Context,
+	messages []*big.Int,
+	taprootMerkleRoots []*[32]byte,
+	startBlock uint64,
+	unsignedTx *bitcoin.TransactionBuilder,
+) ([]*frost.Signature, error) {
+	if dsseft.beforePolicyBinding != nil {
+		if err := dsseft.beforePolicyBinding(); err != nil {
+			return nil, err
+		}
+	}
+
+	return dsseft.signBatch(ctx, messages, startBlock)
 }
 
 type taprootMerkleRootRecordingSchnorrSigningExecutor struct {
@@ -1523,6 +1645,21 @@ func (tmrrsse *taprootMerkleRootRecordingSchnorrSigningExecutor) signBatchWithTa
 
 func (tmrrsse *taprootMerkleRootRecordingSchnorrSigningExecutor) usesSchnorrSignatures() bool {
 	return true
+}
+
+func (tmrrsse *taprootMerkleRootRecordingSchnorrSigningExecutor) signBatchWithTaprootTransaction(
+	ctx context.Context,
+	messages []*big.Int,
+	taprootMerkleRoots []*[32]byte,
+	startBlock uint64,
+	unsignedTx *bitcoin.TransactionBuilder,
+) ([]*frost.Signature, error) {
+	return tmrrsse.signBatchWithTaprootMerkleRoots(
+		ctx,
+		messages,
+		taprootMerkleRoots,
+		startBlock,
+	)
 }
 
 type unexpectedSigningExecutorForBuildTaprootTxError struct{}

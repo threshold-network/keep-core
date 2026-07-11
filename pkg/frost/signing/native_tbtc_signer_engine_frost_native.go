@@ -16,9 +16,10 @@ type NativeTBTCSignerDKGResult struct {
 // NativeTBTCSignerTxInput describes an unsigned transaction input consumed by
 // BuildTaprootTx.
 type NativeTBTCSignerTxInput struct {
-	TxIDHex   string `json:"txIDHex"`
-	Vout      uint32 `json:"vout"`
-	ValueSats uint64 `json:"valueSats"`
+	TxIDHex         string `json:"txIDHex"`
+	Vout            uint32 `json:"vout"`
+	ValueSats       uint64 `json:"valueSats"`
+	ScriptPubKeyHex string `json:"scriptPubKeyHex"`
 }
 
 // NativeTBTCSignerTxOutput describes an unsigned transaction output consumed
@@ -31,8 +32,9 @@ type NativeTBTCSignerTxOutput struct {
 // NativeTBTCSignerTxResult captures unsigned transaction metadata returned by
 // BuildTaprootTx.
 type NativeTBTCSignerTxResult struct {
-	SessionID string `json:"sessionID"`
-	TxHex     string `json:"txHex"`
+	SessionID                   string   `json:"sessionID"`
+	TxHex                       string   `json:"txHex"`
+	TaprootKeySpendSighashesHex []string `json:"taprootKeySpendSighashesHex"`
 }
 
 // NativeShareVerificationVerdict is the typed result of a single-share FROST

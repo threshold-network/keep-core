@@ -179,7 +179,7 @@ func TestDistributedDKG_MultiNode_NetTransport(t *testing.T) {
 	commitments := make([]nativeFROSTCommitment, 0, len(signingMembers))
 	for _, m := range signingMembers {
 		open, err := engine.InteractiveSessionOpen(
-			signingSession, uint16(m), message, keyGroup, threshold, nil, derived.AttemptContext,
+			signingSession, uint16(m), message, keyGroup, threshold, nil, nil, derived.AttemptContext,
 		)
 		if err != nil {
 			t.Fatalf("interactive session open (member %d): %v", m, err)

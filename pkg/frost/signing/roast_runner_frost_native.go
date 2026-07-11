@@ -50,6 +50,7 @@ type interactiveSigningRunner struct {
 	// message inconsistent with the attempt it is bound to.
 	messageDigest []byte
 	threshold     uint16
+	signingIntent *SigningIntent
 	// includedMembers is the attempt's included set as a lookup, cached at
 	// construction. It gates which shares the collector retains as evidence (any
 	// included member's, even a non-signer observer's divergent share), distinct
@@ -77,6 +78,7 @@ func newInteractiveSigningRunner(
 	attempt *ActiveRoastAttempt,
 	member group.MemberIndex,
 	threshold uint16,
+	signingIntent *SigningIntent,
 	engine interactiveSigningEngine,
 	collector *roast.Round2Collector,
 	coordinator roast.Coordinator,
@@ -125,6 +127,7 @@ func newInteractiveSigningRunner(
 		member:          member,
 		messageDigest:   append([]byte(nil), attemptCtx.MessageDigest[:]...),
 		threshold:       threshold,
+		signingIntent:   cloneSigningIntent(signingIntent),
 		includedMembers: setOf(attemptCtx.IncludedSet),
 		engine:          engine,
 		collector:       collector,
@@ -190,6 +193,7 @@ func (r *interactiveSigningRunner) Run(ctx context.Context) ([]byte, error) {
 		attemptCtx.KeyGroupID,
 		r.threshold,
 		binding.TaprootMerkleRoot(),
+		r.signingIntent,
 		derived.AttemptContext,
 	)
 	if err != nil {
