@@ -356,6 +356,36 @@ pub(crate) fn config_values_from_request(
         TBTC_SIGNER_CANARY_MAX_POLICY_REJECT_RATE_BPS_ENV,
         request.canary_max_policy_reject_rate_bps,
     );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_CANARY_MAX_INTERACTIVE_ROUND1_P95_MS_ENV,
+        request.canary_max_interactive_round1_p95_ms,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_CANARY_MAX_INTERACTIVE_ROUND2_P95_MS_ENV,
+        request.canary_max_interactive_round2_p95_ms,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_CANARY_MAX_INTERACTIVE_AGGREGATE_P95_MS_ENV,
+        request.canary_max_interactive_aggregate_p95_ms,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_CANARY_MIN_SAMPLES_ENV,
+        request.canary_min_samples,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_CANARY_MIN_POLICY_SAMPLES_ENV,
+        request.canary_min_policy_samples,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_CANARY_MAX_SAMPLE_AGE_SECONDS_ENV,
+        request.canary_max_sample_age_seconds,
+    );
 
     insert_u64(
         &mut values,

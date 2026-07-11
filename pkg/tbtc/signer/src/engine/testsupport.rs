@@ -112,6 +112,9 @@ pub fn reload_state_from_storage_for_tests() {
 #[cfg(test)]
 pub fn simulate_process_restart_for_tests() {
     clear_persistence_pending_operations();
+    if let Ok(mut telemetry) = hardening_telemetry_state().lock() {
+        *telemetry = HardeningTelemetryState::default();
+    }
     if let Ok(mut lock_slot) = state_file_lock_slot().lock() {
         *lock_slot = None;
     }

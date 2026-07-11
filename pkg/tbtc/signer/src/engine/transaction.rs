@@ -232,7 +232,18 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
             total_output_value_sats, total_input_value_sats
         )));
     }
-    enforce_signing_policy_firewall(&request.session_id, &outputs, total_output_value_sats)?;
+    if let Err(error) =
+        enforce_signing_policy_firewall(&request.session_id, &outputs, total_output_value_sats)
+    {
+        if matches!(error, EngineError::SigningPolicyRejected { .. }) {
+            record_canary_policy_outcome(true);
+        }
+        return Err(error);
+    }
+    // Count only first-time artifact decisions. Cache hits are intentionally
+    // excluded so cheap idempotent replays cannot dilute the rolling policy
+    // rejection rate used by promotion control.
+    record_canary_policy_outcome(false);
 
     let tx = Transaction {
         // Match the Go host TransactionBuilder's canonical unsigned transaction.

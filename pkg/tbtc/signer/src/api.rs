@@ -815,6 +815,18 @@ pub struct InitSignerConfigRequest {
     pub canary_max_finalize_sign_round_p95_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canary_max_policy_reject_rate_bps: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary_max_interactive_round1_p95_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary_max_interactive_round2_p95_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary_max_interactive_aggregate_p95_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary_min_samples: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary_min_policy_samples: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary_max_sample_age_seconds: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]

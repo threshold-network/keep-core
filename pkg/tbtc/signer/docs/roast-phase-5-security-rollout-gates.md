@@ -42,9 +42,18 @@ Required before stage 1 canary:
 
 Recommended stages:
 
-1. Stage 1: 5% signer fleet / limited wallet cohort, hold for 24h.
-2. Stage 2: 25% signer fleet / broader cohort, hold for 24h.
+1. Stage 1: 10% signer fleet / limited wallet cohort, hold for 24h.
+2. Stage 2: 50% signer fleet / broader cohort, hold for 24h.
 3. Stage 3: 100% rollout after Phase 5 acceptance criteria remain green.
+
+The executable promotion gate requires, for each stage, at least 100 successful
+samples from Interactive Round1, Interactive Round2, and Interactive Aggregate,
+plus 100 first-time `BuildTaprootTx` policy decisions. Only samples from the
+last hour count by default. Evidence is process-local and resets after every
+promotion/rollback; a restart therefore blocks promotion until the current
+stage rebuilds its window. Fast failures and idempotent replays are excluded.
+Operators can tune the bounded minimum/window and the three per-operation p95
+thresholds with the `TBTC_SIGNER_CANARY_*` knobs documented in `README.md`.
 
 ## Cryptographic Dependency Audit Status (Gate 1 Input)
 
@@ -313,10 +322,8 @@ Immediate rollout pause and incident response escalation:
 Before final sign-off, collect and archive:
 
 1. Security review packet with explicit GO/Conditional GO decision.
-2. Benchmark output for:
-   - happy path
-   - single-member failure
-   - coordinator-timeout recovery
+2. Successful interactive Round1/Round2/Aggregate latency-window snapshot for
+   the stage being promoted (minimum sample count and p95 values included).
 3. Chaos/failure-matrix results for:
    - network delay/duplication
    - process crash during active attempt
@@ -326,25 +333,17 @@ Before final sign-off, collect and archive:
 6. Baseline calibration worksheet:
    - `pkg/tbtc/signer/docs/roast-phase-5-baseline-calibration.md`
 
-## Initial Benchmark Scaffold (Implemented)
+## Benchmark Harness Status
 
-- Benchmark harness added at `pkg/tbtc/signer/benches/phase5_roast.rs`.
-- Run command:
-  `cd pkg/tbtc/signer && cargo bench --features bench-restart-hook --bench phase5_roast`
-- Current benchmark groups:
-  - `phase5/ffi_run_dkg`
-  - `phase5/ffi_start_sign_round`
-  - `phase5/ffi_finalize_sign_round`
-  - `phase5/ffi_start_sign_round_recovery`
-    - `timeout_transition_authorized`
-    - `invalid_share_proof_transition_with_rotation`
-  - `phase5/ffi_start_sign_round_replay_guard`
-    - `stale_attempt_rejected_after_transition`
-  - `phase5/ffi_start_sign_round_restart_paths`
-    - `authorized_transition_after_reload`
-    - `stale_attempt_rejected_after_reload`
-- Phase 5 benchmark and chaos evidence is summarized in this rollout gate
-  packet.
+The former `phase5_roast` Criterion harness was coupled to the deleted coarse
+StartSignRound/FinalizeSignRound path and no longer exists. It is not an
+executable rollout gate. Current release evidence comes from the exact-filter
+interactive chaos suite plus the fresh production-shaped latency windows above.
+An interactive Criterion harness may be added separately, but documentation and
+release checklists must not invoke the retired command.
+
+Phase 5 latency-window and chaos evidence is summarized in this rollout gate
+packet.
 
 ## Chaos/Failure Injection Suite (Implemented)
 
@@ -353,20 +352,20 @@ Before final sign-off, collect and archive:
 - Run command:
   `cd pkg/tbtc/signer && ./scripts/run_phase5_chaos_suite.sh`
 - Scenario pass/fail criteria:
-  - `stale_payload_replay_or_duplication`:
-    stale attempt payloads remain fail-closed after authorized advancement and
-    reload.
-  - `restart_recovery_authorized_transition`:
-    authorized transition succeeds after restart/reload with deterministic
-    attempt context.
-  - `process_crash_active_attempt`:
-    consumed-attempt replay guard survives simulated crash and cache loss.
-  - `persist_fault_pre_rename`:
-    previous durable state remains intact after injected pre-rename persist
-    fault.
-  - `persist_fault_post_rename`:
-    renamed durable state remains loadable after injected post-rename persist
-    fault.
+  - `stale_interactive_attempt_replay`: a newer member attempt replaces only
+    its own live state and a stale reopen fails closed.
+  - `round2_state_key_outage_recovery`: a state-key failure releases no share,
+    does not burn the attempt, and permits retry.
+  - `process_restart_consumed_attempt`: a consumed interactive attempt marker
+    rejects replay across a simulated restart.
+  - `round2_persist_fault_pre_rename`: a pre-rename persist fault releases no
+    share, rolls back the marker, and preserves retry.
+  - `round2_persist_fault_post_rename`: an after-rename persist fault releases
+    no share, consumes the attempt, destroys live nonces, and survives a
+    simulated restart before any successful repair.
+  - `aggregate_persist_fault_post_rename`: an after-rename aggregate fault
+    retains completion, destroys sibling nonces, and survives a simulated
+    restart before any successful repair.
 
 ## Rollout Runbook (Implemented)
 

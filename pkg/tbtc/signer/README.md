@@ -301,28 +301,13 @@ Failure-mode responses:
   lifecycle events before re-encrypting the state. Do not delete an arbitrary
   duplicate and restart.
 
-## Benchmarks (Phase 5 Scaffold)
+## Benchmarks
 
-Run the Phase 5 benchmark harness:
-
-```bash
-cd pkg/tbtc/signer
-cargo bench --features bench-restart-hook --bench phase5_roast
-```
-
-Current benchmark groups:
-
-- `phase5/ffi_run_dkg` (`RunDKG` happy path)
-- `phase5/ffi_start_sign_round` (`StartSignRound` happy path)
-- `phase5/ffi_finalize_sign_round` (bootstrap finalize happy path)
-- `phase5/ffi_start_sign_round_recovery`:
-  - `timeout_transition_authorized`
-  - `invalid_share_proof_transition_with_rotation`
-- `phase5/ffi_start_sign_round_replay_guard`:
-  - `stale_attempt_rejected_after_transition`
-- `phase5/ffi_start_sign_round_restart_paths`:
-  - `authorized_transition_after_reload`
-  - `stale_attempt_rejected_after_reload`
+The coarse-path `phase5_roast` Criterion target was retired with
+StartSignRound/FinalizeSignRound. There is currently no supported benchmark
+command. Promotion evidence comes from fresh interactive latency windows and the
+exact-filter chaos suite below; do not archive a missing benchmark as a passed
+rollout gate.
 
 ## Chaos Suite (Phase 5)
 
@@ -335,20 +320,20 @@ cd pkg/tbtc/signer
 
 Scenario coverage and pass criteria:
 
-- `stale_payload_replay_or_duplication`: stale attempt payloads remain fail-closed
-  after authorized advancement and reload.
-- `restart_recovery_authorized_transition`: authorized transition succeeds after
-  restart/reload with deterministic attempt context.
-- `process_crash_active_attempt`: consumed-attempt replay guard survives
-  simulated crash and cache loss.
-- `persist_fault_pre_rename`: previous durable state remains intact after
-  injected pre-rename persist fault, including transaction-build,
-  distributed-DKG, refresh, rollout, and emergency-rekey mutations.
-- `persist_fault_post_rename`: renamed durable state remains loadable after
-  injected post-rename persist fault. The engine retains fail-closed markers and
-  operation-specific pending results; retries must repair persistence before an
-  idempotent/cache response is returned, and one healthy operation cannot erase
-  another operation's retry record.
+- `stale_interactive_attempt_replay`: a newer member attempt replaces only its
+  own live state and a stale reopen fails closed.
+- `round2_state_key_outage_recovery`: a state-key failure releases no share,
+  does not burn the attempt, and permits retry.
+- `process_restart_consumed_attempt`: a consumed interactive attempt marker
+  rejects replay across a simulated restart.
+- `round2_persist_fault_pre_rename`: a pre-rename persist fault releases no
+  share, rolls back the marker, and preserves retry.
+- `round2_persist_fault_post_rename`: an after-rename persist fault releases no
+  share, consumes the attempt, destroys live nonces, and survives a simulated
+  restart before any successful repair.
+- `aggregate_persist_fault_post_rename`: an after-rename aggregate fault retains
+  completion, destroys sibling nonces, and survives a simulated restart before
+  any successful repair.
 
 `PersistDistributedDkgKeyPackage` has no cached-success fast path. A
 pre-replacement error restores the prior seat/session state; a post-replacement
@@ -356,7 +341,13 @@ error is never acknowledged as success, and every caller retry executes another
 complete state snapshot. Hosts must retry a reported DKG persistence error before
 treating that DKG seat as installed.
 
-The post-rename fault tests model a process restart after the replacement file is
+The wider unit suite also injects pre-replacement failures into transaction
+builds, distributed-DKG persistence, refresh, rollout, and emergency rekey. It
+verifies operation-specific pending results: retries repair persistence before
+returning cached success, and one healthy operation cannot erase another
+operation's retry record.
+
+Post-rename fault tests model a process restart after the replacement file is
 visible. They do not emulate sudden power loss that also loses an unsynced
 directory entry; operators must use the supported local durable filesystem and
 storage guarantees for that hardware-level failure boundary.
@@ -394,7 +385,11 @@ storage guarantees for that hardware-level failure boundary.
   - counters for differential-fuzz runs/critical divergences and canary
     promotions/rollbacks
   - p95 latency and sample-count fields for `run_dkg`, `start_sign_round`,
-    `build_taproot_tx`, `finalize_sign_round`, and `refresh_shares`
+    `build_taproot_tx`, `finalize_sign_round`, and `refresh_shares`. The coarse
+    start/finalize fields are retained for ABI compatibility; production
+    promotion reads the live `interactive_round1`, `interactive_round2`, and
+    `interactive_aggregate` p95/sample fields. Interactive fields contain only
+    successful samples younger than the configured canary evidence window.
 - Coordinator timeout policy config:
   - env var: `TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS`
   - valid range: `1000..=300000`
@@ -490,9 +485,31 @@ storage guarantees for that hardware-level failure boundary.
   - `RollbackCanary` restores the previous cohort with persisted config
     versioning.
   - SLO gate env vars:
-    - `TBTC_SIGNER_CANARY_MAX_START_SIGN_ROUND_P95_MS`
-    - `TBTC_SIGNER_CANARY_MAX_FINALIZE_SIGN_ROUND_P95_MS`
+    - `TBTC_SIGNER_CANARY_MAX_INTERACTIVE_ROUND1_P95_MS`
+    - `TBTC_SIGNER_CANARY_MAX_INTERACTIVE_ROUND2_P95_MS`
+    - `TBTC_SIGNER_CANARY_MAX_INTERACTIVE_AGGREGATE_P95_MS`
+    - `TBTC_SIGNER_CANARY_MIN_SAMPLES` (interactive-operation minimum;
+      default `100`, maximum `256`)
+    - `TBTC_SIGNER_CANARY_MIN_POLICY_SAMPLES` (first-time
+      `BuildTaprootTx` policy-decision minimum; defaults to the interactive
+      minimum when unset, maximum `256`)
+    - `TBTC_SIGNER_CANARY_MAX_SAMPLE_AGE_SECONDS` (default `3600`, maximum
+      `604800`)
     - `TBTC_SIGNER_CANARY_MAX_POLICY_REJECT_RATE_BPS`
+    - Legacy `...MAX_START_SIGN_ROUND_P95_MS` and
+      `...MAX_FINALIZE_SIGN_ROUND_P95_MS` remain fallback aliases when the
+      corresponding interactive knob is absent, malformed, or non-positive.
+      The old start threshold is applied independently to Round1 and Round2;
+      prefer the explicit knobs. Positive sample-count and sample-age values
+      above their supported maxima clamp to those maxima; malformed and zero
+      values retain the documented default/fallback behavior.
+  - Promotion requires independently configured minimum fresh sample counts
+    for each interactive operation and for first-time `BuildTaprootTx` policy
+    outcomes. Rejections and idempotent replays do not dilute latency/policy
+    windows. Evidence age uses the process monotonic clock; Unix timestamps are
+    retained only for diagnostic reporting. Evidence resets after every
+    promotion or rollback, and a process restart leaves the next promotion
+    blocked until the current stage collects fresh evidence.
 - Known limitations (P0 scope):
   - Policy gates default to disabled in non-production profiles
     (provenance/admission/signing enforcement gates require explicit `=true`

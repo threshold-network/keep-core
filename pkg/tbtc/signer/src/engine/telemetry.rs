@@ -6,32 +6,127 @@ pub(crate) static HARDENING_TELEMETRY: OnceLock<Mutex<HardeningTelemetryState>> 
 
 pub(crate) const HARDENING_LATENCY_SAMPLE_WINDOW: usize = 256;
 
+fn canary_sample_is_fresh(
+    observed_at: Instant,
+    evaluated_at: Instant,
+    max_age_seconds: u64,
+) -> bool {
+    evaluated_at
+        .checked_duration_since(observed_at)
+        .is_some_and(|age| age <= Duration::from_secs(max_age_seconds))
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HardeningLatencySample {
+    pub(crate) duration_ms: u64,
+    pub(crate) observed_at: Instant,
+}
+
 #[derive(Default)]
 pub(crate) struct HardeningLatencyTracker {
-    pub(crate) samples_ms: VecDeque<u64>,
+    pub(crate) samples: VecDeque<HardeningLatencySample>,
 }
 
 impl HardeningLatencyTracker {
     pub(crate) fn record(&mut self, duration_ms: u64) {
-        if self.samples_ms.len() >= HARDENING_LATENCY_SAMPLE_WINDOW {
-            self.samples_ms.pop_front();
+        self.record_at(duration_ms, Instant::now());
+    }
+
+    pub(crate) fn record_at(&mut self, duration_ms: u64, observed_at: Instant) {
+        if self.samples.len() >= HARDENING_LATENCY_SAMPLE_WINDOW {
+            self.samples.pop_front();
         }
-        self.samples_ms.push_back(duration_ms);
+        self.samples.push_back(HardeningLatencySample {
+            duration_ms,
+            observed_at,
+        });
     }
 
     pub(crate) fn p95_ms(&self) -> u64 {
-        if self.samples_ms.is_empty() {
+        Self::p95(self.samples.iter().map(|sample| sample.duration_ms))
+    }
+
+    pub(crate) fn fresh_p95_ms(&self, evaluated_at: Instant, max_age_seconds: u64) -> u64 {
+        Self::p95(
+            self.samples
+                .iter()
+                .filter(|sample| {
+                    canary_sample_is_fresh(sample.observed_at, evaluated_at, max_age_seconds)
+                })
+                .map(|sample| sample.duration_ms),
+        )
+    }
+
+    fn p95(samples: impl Iterator<Item = u64>) -> u64 {
+        let mut sorted_samples = samples.collect::<Vec<_>>();
+        if sorted_samples.is_empty() {
             return 0;
         }
-
-        let mut sorted_samples = self.samples_ms.iter().copied().collect::<Vec<_>>();
         sorted_samples.sort_unstable();
         let p95_index = (sorted_samples.len() * 95).div_ceil(100).saturating_sub(1);
         sorted_samples[p95_index]
     }
 
     pub(crate) fn sample_count(&self) -> u64 {
-        self.samples_ms.len() as u64
+        self.samples.len() as u64
+    }
+
+    pub(crate) fn fresh_sample_count(&self, evaluated_at: Instant, max_age_seconds: u64) -> u64 {
+        self.samples
+            .iter()
+            .filter(|sample| {
+                canary_sample_is_fresh(sample.observed_at, evaluated_at, max_age_seconds)
+            })
+            .count() as u64
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.samples.clear();
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HardeningPolicyOutcomeSample {
+    pub(crate) rejected: bool,
+    pub(crate) observed_at: Instant,
+}
+
+#[derive(Default)]
+pub(crate) struct HardeningPolicyOutcomeTracker {
+    pub(crate) samples: VecDeque<HardeningPolicyOutcomeSample>,
+}
+
+impl HardeningPolicyOutcomeTracker {
+    pub(crate) fn record(&mut self, rejected: bool) {
+        self.record_at(rejected, Instant::now());
+    }
+
+    pub(crate) fn record_at(&mut self, rejected: bool, observed_at: Instant) {
+        if self.samples.len() >= HARDENING_LATENCY_SAMPLE_WINDOW {
+            self.samples.pop_front();
+        }
+        self.samples.push_back(HardeningPolicyOutcomeSample {
+            rejected,
+            observed_at,
+        });
+    }
+
+    pub(crate) fn fresh_snapshot(&self, evaluated_at: Instant, max_age_seconds: u64) -> (u64, u64) {
+        let mut sample_count = 0u64;
+        let mut rejected_count = 0u64;
+        for sample in self.samples.iter().filter(|sample| {
+            canary_sample_is_fresh(sample.observed_at, evaluated_at, max_age_seconds)
+        }) {
+            sample_count = sample_count.saturating_add(1);
+            if sample.rejected {
+                rejected_count = rejected_count.saturating_add(1);
+            }
+        }
+        (sample_count, rejected_count)
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.samples.clear();
     }
 }
 
@@ -80,6 +175,11 @@ pub(crate) struct HardeningTelemetryState {
     pub(crate) interactive_round1_latency: HardeningLatencyTracker,
     pub(crate) interactive_round2_latency: HardeningLatencyTracker,
     pub(crate) interactive_aggregate_latency: HardeningLatencyTracker,
+    pub(crate) canary_policy_outcomes: HardeningPolicyOutcomeTracker,
+    // Incremented whenever rollout-stage evidence is reset. A successful
+    // interactive operation that straddles that boundary must not be credited
+    // to the new stage.
+    pub(crate) canary_evidence_epoch: u64,
     pub(crate) last_updated_unix: u64,
 }
 
@@ -98,6 +198,8 @@ pub(crate) enum HardeningOperation {
 pub(crate) struct HardeningOperationLatencyGuard {
     pub(crate) operation: HardeningOperation,
     pub(crate) started_at: Instant,
+    pub(crate) record_on_drop: bool,
+    pub(crate) canary_evidence_epoch: Option<u64>,
 }
 
 impl HardeningOperationLatencyGuard {
@@ -105,17 +207,39 @@ impl HardeningOperationLatencyGuard {
         Self {
             operation,
             started_at: Instant::now(),
+            record_on_drop: true,
+            canary_evidence_epoch: None,
         }
+    }
+
+    pub(crate) fn success_only(operation: HardeningOperation) -> Self {
+        Self {
+            operation,
+            started_at: Instant::now(),
+            record_on_drop: false,
+            canary_evidence_epoch: current_canary_evidence_epoch(),
+        }
+    }
+
+    pub(crate) fn mark_success(&mut self) {
+        self.record_on_drop = true;
     }
 }
 
 impl Drop for HardeningOperationLatencyGuard {
     fn drop(&mut self) {
+        if !self.record_on_drop {
+            return;
+        }
         // Record latency with millisecond precision and ceil semantics so
         // sub-millisecond calls still contribute non-zero samples.
         let elapsed_micros = self.started_at.elapsed().as_micros();
         let elapsed_ms = elapsed_micros.div_ceil(1000).clamp(1, u64::MAX as u128) as u64;
-        record_hardening_operation_latency(self.operation, elapsed_ms);
+        record_hardening_operation_latency_for_epoch(
+            self.operation,
+            elapsed_ms,
+            self.canary_evidence_epoch,
+        );
     }
 }
 
@@ -138,25 +262,56 @@ where
     }
 }
 
+fn current_canary_evidence_epoch() -> Option<u64> {
+    match hardening_telemetry_state().lock() {
+        Ok(telemetry) => Some(telemetry.canary_evidence_epoch),
+        Err(error) => {
+            eprintln!("warning: hardening telemetry mutex poisoned: {error}");
+            None
+        }
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn record_hardening_operation_latency(operation: HardeningOperation, duration_ms: u64) {
-    record_hardening_telemetry(|telemetry| match operation {
-        HardeningOperation::BuildTaprootTx => {
-            telemetry.build_taproot_tx_latency.record(duration_ms)
+    record_hardening_operation_latency_for_epoch(operation, duration_ms, None);
+}
+
+fn record_hardening_operation_latency_for_epoch(
+    operation: HardeningOperation,
+    duration_ms: u64,
+    expected_canary_evidence_epoch: Option<u64>,
+) {
+    record_hardening_telemetry(|telemetry| {
+        if expected_canary_evidence_epoch
+            .is_some_and(|expected| expected != telemetry.canary_evidence_epoch)
+        {
+            return;
         }
-        HardeningOperation::RefreshShares => telemetry.refresh_shares_latency.record(duration_ms),
-        HardeningOperation::InteractiveRound1 => {
-            telemetry.interactive_round1_latency.record(duration_ms)
-        }
-        HardeningOperation::InteractiveRound2 => {
-            telemetry.interactive_round2_latency.record(duration_ms)
-        }
-        HardeningOperation::InteractiveAggregate => {
-            telemetry.interactive_aggregate_latency.record(duration_ms)
+
+        match operation {
+            HardeningOperation::BuildTaprootTx => {
+                telemetry.build_taproot_tx_latency.record(duration_ms)
+            }
+            HardeningOperation::RefreshShares => {
+                telemetry.refresh_shares_latency.record(duration_ms)
+            }
+            HardeningOperation::InteractiveRound1 => {
+                telemetry.interactive_round1_latency.record(duration_ms)
+            }
+            HardeningOperation::InteractiveRound2 => {
+                telemetry.interactive_round2_latency.record(duration_ms)
+            }
+            HardeningOperation::InteractiveAggregate => {
+                telemetry.interactive_aggregate_latency.record(duration_ms)
+            }
         }
     });
 }
 
 pub fn hardening_metrics() -> SignerHardeningMetricsResult {
+    let metrics_now = Instant::now();
+    let canary_max_sample_age = canary_max_sample_age_seconds();
     let mut result = SignerHardeningMetricsResult {
         runtime_version: TBTC_SIGNER_RUNTIME_VERSION.to_string(),
         provenance_enforced: provenance_gate_enforced(),
@@ -282,18 +437,24 @@ pub fn hardening_metrics() -> SignerHardeningMetricsResult {
             result.interactive_aggregate_calls_total = telemetry.interactive_aggregate_calls_total;
             result.interactive_aggregate_success_total =
                 telemetry.interactive_aggregate_success_total;
-            result.interactive_round1_latency_p95_ms =
-                telemetry.interactive_round1_latency.p95_ms();
-            result.interactive_round1_latency_samples =
-                telemetry.interactive_round1_latency.sample_count();
-            result.interactive_round2_latency_p95_ms =
-                telemetry.interactive_round2_latency.p95_ms();
-            result.interactive_round2_latency_samples =
-                telemetry.interactive_round2_latency.sample_count();
-            result.interactive_aggregate_latency_p95_ms =
-                telemetry.interactive_aggregate_latency.p95_ms();
-            result.interactive_aggregate_latency_samples =
-                telemetry.interactive_aggregate_latency.sample_count();
+            result.interactive_round1_latency_p95_ms = telemetry
+                .interactive_round1_latency
+                .fresh_p95_ms(metrics_now, canary_max_sample_age);
+            result.interactive_round1_latency_samples = telemetry
+                .interactive_round1_latency
+                .fresh_sample_count(metrics_now, canary_max_sample_age);
+            result.interactive_round2_latency_p95_ms = telemetry
+                .interactive_round2_latency
+                .fresh_p95_ms(metrics_now, canary_max_sample_age);
+            result.interactive_round2_latency_samples = telemetry
+                .interactive_round2_latency
+                .fresh_sample_count(metrics_now, canary_max_sample_age);
+            result.interactive_aggregate_latency_p95_ms = telemetry
+                .interactive_aggregate_latency
+                .fresh_p95_ms(metrics_now, canary_max_sample_age);
+            result.interactive_aggregate_latency_samples = telemetry
+                .interactive_aggregate_latency
+                .fresh_sample_count(metrics_now, canary_max_sample_age);
             result.last_updated_unix = telemetry.last_updated_unix;
         }
         Err(error) => {
@@ -328,50 +489,170 @@ pub fn hardening_metrics() -> SignerHardeningMetricsResult {
     result
 }
 
-pub(crate) fn canary_policy_reject_rate_bps(metrics: &SignerHardeningMetricsResult) -> u64 {
-    if metrics.build_taproot_tx_calls_total == 0 {
-        return 0;
-    }
-
-    metrics
-        .build_taproot_tx_policy_reject_total
-        .saturating_mul(TBTC_SIGNER_MAX_POLICY_REJECT_RATE_BPS)
-        .saturating_div(metrics.build_taproot_tx_calls_total)
+pub(crate) fn record_canary_policy_outcome(rejected: bool) {
+    record_hardening_telemetry(|telemetry| {
+        telemetry.canary_policy_outcomes.record(rejected);
+    });
 }
 
-pub(crate) fn canary_promotion_gate_failures(
-    metrics: &SignerHardeningMetricsResult,
-) -> Vec<String> {
+pub(crate) fn reset_canary_promotion_evidence() {
+    record_hardening_telemetry(|telemetry| {
+        telemetry.interactive_round1_latency.clear();
+        telemetry.interactive_round2_latency.clear();
+        telemetry.interactive_aggregate_latency.clear();
+        telemetry.canary_policy_outcomes.clear();
+        telemetry.canary_evidence_epoch = telemetry.canary_evidence_epoch.saturating_add(1);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn seed_canary_promotion_evidence_for_tests(
+    round1_latency_ms: u64,
+    round2_latency_ms: u64,
+    aggregate_latency_ms: u64,
+    policy_rejects: u64,
+) {
+    let interactive_sample_count = canary_min_samples();
+    let policy_sample_count = canary_min_policy_samples();
+    record_hardening_telemetry(|telemetry| {
+        for _ in 0..interactive_sample_count {
+            telemetry
+                .interactive_round1_latency
+                .record(round1_latency_ms);
+            telemetry
+                .interactive_round2_latency
+                .record(round2_latency_ms);
+            telemetry
+                .interactive_aggregate_latency
+                .record(aggregate_latency_ms);
+        }
+        for index in 0..policy_sample_count {
+            telemetry
+                .canary_policy_outcomes
+                .record(index < policy_rejects);
+        }
+    });
+}
+
+pub(crate) fn canary_promotion_gate_failures() -> Vec<String> {
     let mut failures = Vec::new();
 
-    let max_start_sign_round_p95_ms = canary_max_start_sign_round_p95_ms();
-    if metrics.start_sign_round_latency_samples > 0
-        && metrics.start_sign_round_latency_p95_ms > max_start_sign_round_p95_ms
-    {
-        failures.push(format!(
-            "start_sign_round p95 latency [{}ms] exceeds canary gate [{}ms]",
-            metrics.start_sign_round_latency_p95_ms, max_start_sign_round_p95_ms
-        ));
-    }
-
-    let max_finalize_sign_round_p95_ms = canary_max_finalize_sign_round_p95_ms();
-    if metrics.finalize_sign_round_latency_samples > 0
-        && metrics.finalize_sign_round_latency_p95_ms > max_finalize_sign_round_p95_ms
-    {
-        failures.push(format!(
-            "finalize_sign_round p95 latency [{}ms] exceeds canary gate [{}ms]",
-            metrics.finalize_sign_round_latency_p95_ms, max_finalize_sign_round_p95_ms
-        ));
+    // Each rollout stage needs its own non-vacuous window of recent successful
+    // production operations. Telemetry is process-local by design, so a restart
+    // clears the window and blocks promotion until fresh evidence accumulates.
+    let minimum_samples = canary_min_samples();
+    let minimum_policy_samples = canary_min_policy_samples();
+    let now = Instant::now();
+    let max_age = canary_max_sample_age_seconds();
+    let (
+        round1_sample_count,
+        round1_p95_ms,
+        round2_sample_count,
+        round2_p95_ms,
+        aggregate_sample_count,
+        aggregate_p95_ms,
+        policy_sample_count,
+        policy_reject_count,
+    ) = hardening_telemetry_state()
+        .lock()
+        .map(|telemetry| {
+            let (policy_sample_count, policy_reject_count) = telemetry
+                .canary_policy_outcomes
+                .fresh_snapshot(now, max_age);
+            (
+                telemetry
+                    .interactive_round1_latency
+                    .fresh_sample_count(now, max_age),
+                telemetry
+                    .interactive_round1_latency
+                    .fresh_p95_ms(now, max_age),
+                telemetry
+                    .interactive_round2_latency
+                    .fresh_sample_count(now, max_age),
+                telemetry
+                    .interactive_round2_latency
+                    .fresh_p95_ms(now, max_age),
+                telemetry
+                    .interactive_aggregate_latency
+                    .fresh_sample_count(now, max_age),
+                telemetry
+                    .interactive_aggregate_latency
+                    .fresh_p95_ms(now, max_age),
+                policy_sample_count,
+                policy_reject_count,
+            )
+        })
+        .unwrap_or_else(|error| {
+            eprintln!("warning: hardening telemetry mutex poisoned: {error}");
+            (0, 0, 0, 0, 0, 0, 0, 0)
+        });
+    for (operation, sample_count, p95_ms, max_p95_ms) in [
+        (
+            "interactive_round1",
+            round1_sample_count,
+            round1_p95_ms,
+            canary_max_interactive_round1_p95_ms(),
+        ),
+        (
+            "interactive_round2",
+            round2_sample_count,
+            round2_p95_ms,
+            canary_max_interactive_round2_p95_ms(),
+        ),
+        (
+            "interactive_aggregate",
+            aggregate_sample_count,
+            aggregate_p95_ms,
+            canary_max_interactive_aggregate_p95_ms(),
+        ),
+    ] {
+        if sample_count < minimum_samples {
+            failures.push(format!(
+                "{operation} fresh successful samples [{sample_count}] below canary minimum [{minimum_samples}]"
+            ));
+        } else if p95_ms > max_p95_ms {
+            failures.push(format!(
+                "{operation} p95 latency [{p95_ms}ms] exceeds canary gate [{max_p95_ms}ms]"
+            ));
+        }
     }
 
     let max_policy_reject_rate_bps = canary_max_policy_reject_rate_bps();
-    let policy_reject_rate_bps = canary_policy_reject_rate_bps(metrics);
-    if policy_reject_rate_bps > max_policy_reject_rate_bps {
+    if policy_sample_count < minimum_policy_samples {
         failures.push(format!(
-            "build_taproot_tx policy reject rate [{}bps] exceeds canary gate [{}bps]",
-            policy_reject_rate_bps, max_policy_reject_rate_bps
+            "build_taproot_tx fresh policy samples [{policy_sample_count}] below canary policy minimum [{minimum_policy_samples}]"
         ));
+    } else {
+        let policy_reject_rate_bps = policy_reject_count
+            .saturating_mul(TBTC_SIGNER_MAX_POLICY_REJECT_RATE_BPS)
+            .saturating_div(policy_sample_count);
+        if policy_reject_rate_bps > max_policy_reject_rate_bps {
+            failures.push(format!(
+                "build_taproot_tx policy reject rate [{}bps] exceeds canary gate [{}bps]",
+                policy_reject_rate_bps, max_policy_reject_rate_bps
+            ));
+        }
     }
 
     failures
+}
+
+#[cfg(test)]
+pub(crate) fn canary_missing_evidence_gate_failures() -> Vec<String> {
+    let minimum_samples = canary_min_samples();
+    let minimum_policy_samples = canary_min_policy_samples();
+    vec![
+        format!(
+            "interactive_round1 fresh successful samples [0] below canary minimum [{minimum_samples}]"
+        ),
+        format!(
+            "interactive_round2 fresh successful samples [0] below canary minimum [{minimum_samples}]"
+        ),
+        format!(
+            "interactive_aggregate fresh successful samples [0] below canary minimum [{minimum_samples}]"
+        ),
+        format!(
+            "build_taproot_tx fresh policy samples [0] below canary policy minimum [{minimum_policy_samples}]"
+        ),
+    ]
 }

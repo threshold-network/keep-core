@@ -499,7 +499,8 @@ pub fn interactive_round1(
         telemetry.interactive_round1_calls_total =
             telemetry.interactive_round1_calls_total.saturating_add(1);
     });
-    let _latency_guard = HardeningOperationLatencyGuard::new(HardeningOperation::InteractiveRound1);
+    let mut latency_guard =
+        HardeningOperationLatencyGuard::success_only(HardeningOperation::InteractiveRound1);
     enforce_provenance_gate()?;
     validate_session_id(&request.session_id)?;
 
@@ -557,6 +558,7 @@ pub fn interactive_round1(
         commitments_hex: commitments_hex.clone(),
     });
 
+    latency_guard.mark_success();
     record_hardening_telemetry(|telemetry| {
         telemetry.interactive_round1_success_total =
             telemetry.interactive_round1_success_total.saturating_add(1);
@@ -572,7 +574,8 @@ pub fn interactive_round2(
         telemetry.interactive_round2_calls_total =
             telemetry.interactive_round2_calls_total.saturating_add(1);
     });
-    let _latency_guard = HardeningOperationLatencyGuard::new(HardeningOperation::InteractiveRound2);
+    let mut latency_guard =
+        HardeningOperationLatencyGuard::success_only(HardeningOperation::InteractiveRound2);
     enforce_provenance_gate()?;
     validate_session_id(&request.session_id)?;
 
@@ -875,6 +878,7 @@ pub fn interactive_round2(
     let signature_share_hex = hex::encode(&signature_share_bytes);
     signature_share_bytes.zeroize();
 
+    latency_guard.mark_success();
     record_hardening_telemetry(|telemetry| {
         telemetry.interactive_round2_success_total =
             telemetry.interactive_round2_success_total.saturating_add(1);
@@ -895,8 +899,8 @@ pub fn interactive_aggregate(
             .interactive_aggregate_calls_total
             .saturating_add(1);
     });
-    let _latency_guard =
-        HardeningOperationLatencyGuard::new(HardeningOperation::InteractiveAggregate);
+    let mut latency_guard =
+        HardeningOperationLatencyGuard::success_only(HardeningOperation::InteractiveAggregate);
     enforce_provenance_gate()?;
     validate_session_id(&request.session_id)?;
     let attempt_id = canonical_attempt_id(&request.attempt_id);
@@ -1185,6 +1189,7 @@ pub fn interactive_aggregate(
     );
     drop(guard);
 
+    latency_guard.mark_success();
     record_hardening_telemetry(|telemetry| {
         telemetry.interactive_aggregate_success_total = telemetry
             .interactive_aggregate_success_total
