@@ -114,6 +114,13 @@ pub fn interactive_session_open(
     // rejected as a SessionConflict instead of returning idempotent.
     // The decoded message_bytes are unaffected by hex casing.
     request.message_hex = request.message_hex.to_ascii_lowercase();
+    if let Some(InteractiveSigningIntent::Heartbeat { message_hex }) =
+        request.signing_intent.as_mut()
+    {
+        // The intent is part of the Open fingerprint. Treat hex casing as a
+        // wire-format detail so an otherwise identical retry is idempotent.
+        *message_hex = message_hex.to_ascii_lowercase();
+    }
     let message_digest_hex = hash_hex(&message_bytes);
     let taproot_merkle_root =
         canonicalize_taproot_merkle_root_hex(&mut request.taproot_merkle_root_hex)?;
@@ -217,9 +224,18 @@ pub fn interactive_session_open(
                 &request.session_id,
                 &[request.member_identifier],
                 &request.message_hex,
+                guard
+                    .sessions
+                    .get(&request.session_id)
+                    .and_then(|signing_session| signing_session.emergency_rekey_event.as_ref()),
                 session.emergency_rekey_event.as_ref(),
                 session.finalize_request_fingerprint.is_some(),
-                session.tx_result.as_ref(),
+                guard
+                    .sessions
+                    .get(&request.session_id)
+                    .and_then(|signing_session| signing_session.tx_result.as_ref()),
+                taproot_merkle_root.as_ref(),
+                request.signing_intent.as_ref(),
                 &guard.quarantined_operator_identifiers,
                 auto_quarantine_config.as_ref(),
             )?;
@@ -411,6 +427,27 @@ pub fn interactive_session_open(
     // RoastSessionID per message would otherwise let the registry grow unbounded and
     // then be rejected on reload); a reopen of an existing session is exempt.
     ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
+
+    // A typed heartbeat never passes through BuildTaprootTx, so charge its own
+    // per-wallet policy budget at the last fallible boundary before installing
+    // live signing state. All validation and the exact-retry return above have
+    // already run: malformed/conflicting Opens cannot burn a token, an
+    // idempotent retry is free, and Round2 only rechecks the stored intent.
+    if matches!(
+        request.signing_intent.as_ref(),
+        Some(InteractiveSigningIntent::Heartbeat { .. })
+    ) {
+        let wallet_session = guard.sessions.get_mut(&wallet_session_id).ok_or_else(|| {
+            EngineError::SessionNotFound {
+                session_id: wallet_session_id.clone(),
+            }
+        })?;
+        enforce_heartbeat_rate_limit(
+            &request.session_id,
+            &mut wallet_session.heartbeat_rate_limiter,
+        )?;
+    }
+
     let session = guard
         .sessions
         .entry(request.session_id.clone())
@@ -435,6 +472,7 @@ pub fn interactive_session_open(
             threshold: request.threshold,
             message_bytes: Zeroizing::new(message_bytes),
             taproot_merkle_root,
+            signing_intent: request.signing_intent,
             key_package,
             opened_at_unix: now_unix(),
             round1: None,
@@ -563,14 +601,22 @@ pub fn interactive_round2(
     let auto_quarantine_config = load_auto_quarantine_config()?;
     let quarantined_operator_identifiers = guard.quarantined_operator_identifiers.clone();
 
-    // Wallet-level policy gates (emergency rekey / finalization / tx-binding) live on
-    // the WALLET (DKG) session, NOT this per-signing session. Resolve them by the
-    // key_group this session serves (its own DKG when co-located, else the key_group
-    // bound at Open) so the Round2 kill-switch re-check - the share-release moment -
-    // fires for cross-session interactive signing too. Read here (before the mutable
-    // per-signing borrow) into owned locals; if read from the empty per-signing
-    // session a rekey/finalization recorded AFTER Open would silently fail OPEN.
-    let (wallet_emergency_rekey, wallet_finalized, wallet_tx_result) = {
+    // Finalization is a WALLET-level gate resolved from the DKG session by key_group.
+    // Emergency rekey is normally wallet-level too, but an event triggered after
+    // BuildTaprootTx and before Open binds the signing session must still be read from
+    // that signing session. The policy-checked transaction is likewise per-signing-flow
+    // state. Clone both signing-session values before the mutable borrow below.
+    let (signing_tx_result, signing_emergency_rekey) = guard
+        .sessions
+        .get(&request.session_id)
+        .map(|session| {
+            (
+                session.tx_result.clone(),
+                session.emergency_rekey_event.clone(),
+            )
+        })
+        .unwrap_or((None, None));
+    let (wallet_emergency_rekey, wallet_finalized) = {
         let bound_key_group = guard.sessions.get(&request.session_id).and_then(|session| {
             session
                 .dkg_result
@@ -587,9 +633,8 @@ pub fn interactive_round2(
             Some(wallet) => (
                 wallet.emergency_rekey_event.clone(),
                 wallet.finalize_request_fingerprint.is_some(),
-                wallet.tx_result.clone(),
             ),
-            None => (None, false, None),
+            None => (None, false),
         }
     };
 
@@ -680,9 +725,12 @@ pub fn interactive_round2(
             &request.session_id,
             &[request.member_identifier],
             &bound_message_hex,
+            signing_emergency_rekey.as_ref(),
             wallet_emergency_rekey.as_ref(),
             wallet_finalized,
-            wallet_tx_result.as_ref(),
+            signing_tx_result.as_ref(),
+            interactive.taproot_merkle_root.as_ref(),
+            interactive.signing_intent.as_ref(),
             &quarantined_operator_identifiers,
             auto_quarantine_config.as_ref(),
         )?;
@@ -1296,13 +1344,23 @@ fn enforce_interactive_signing_gates(
     session_id: &str,
     quarantine_identifiers: &[u16],
     message_hex: &str,
-    emergency_rekey_event: Option<&EmergencyRekeyEvent>,
+    signing_emergency_rekey_event: Option<&EmergencyRekeyEvent>,
+    wallet_emergency_rekey_event: Option<&EmergencyRekeyEvent>,
     session_finalized: bool,
     tx_result: Option<&TransactionResult>,
+    taproot_merkle_root: Option<&[u8; 32]>,
+    signing_intent: Option<&InteractiveSigningIntent>,
     quarantined_operator_identifiers: &HashSet<u16>,
     auto_quarantine_config: Option<&AutoQuarantineConfig>,
 ) -> Result<(), EngineError> {
-    if let Some(emergency_rekey_event) = emergency_rekey_event {
+    // A rekey triggered before Open may live on the per-signing session because
+    // BuildTaprootTx has created it but Open has not yet bound it to a key_group.
+    // Once bound, new events are redirected to the wallet session. Treat either
+    // location as authoritative so the transition between ownership domains can
+    // never clear the kill switch.
+    if let Some(emergency_rekey_event) =
+        signing_emergency_rekey_event.or(wallet_emergency_rekey_event)
+    {
         return Err(EngineError::LifecyclePolicyRejected {
             session_id: session_id.to_string(),
             reason_code: "emergency_rekey_required".to_string(),
@@ -1323,7 +1381,13 @@ fn enforce_interactive_signing_gates(
         quarantined_operator_identifiers,
         auto_quarantine_config,
     )?;
-    enforce_signing_message_binding_to_policy_checked_build_tx(session_id, message_hex, tx_result)
+    enforce_signing_message_binding_to_policy_checked_build_tx(
+        session_id,
+        message_hex,
+        taproot_merkle_root,
+        tx_result,
+        signing_intent,
+    )
 }
 
 // Canonical key form for an attempt_id at the round entry points,

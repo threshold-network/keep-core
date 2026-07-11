@@ -92,11 +92,14 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
     }
     ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
 
-    // BuildTaprootTx is an assembly-only step. `input.value_sats` values are
-    // trusted caller-supplied metadata and are not verified against chain state.
+    // BuildTaprootTx is an assembly-only step. Input prevout values and scripts
+    // are trusted caller-supplied metadata and are not verified against chain
+    // state. Both are nevertheless required because BIP-341 SIGHASH_DEFAULT
+    // commits to the ordered prevout TxOuts for every input.
     let mut total_input_value_sats = 0u64;
     let mut seen_input_keys = HashSet::new();
     let mut inputs = Vec::with_capacity(request.inputs.len());
+    let mut prevouts = Vec::with_capacity(request.inputs.len());
     for input in request.inputs {
         if input.value_sats > BITCOIN_MAX_MONEY_SATS {
             return Err(EngineError::Validation(format!(
@@ -133,12 +136,39 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
             vout: input.vout,
         };
 
+        let script_pubkey_bytes = hex::decode(&input.script_pubkey_hex).map_err(|_| {
+            EngineError::Validation(format!(
+                "invalid input script_pubkey_hex [{}]",
+                input.script_pubkey_hex
+            ))
+        })?;
+        let script_pubkey = ScriptBuf::from_bytes(script_pubkey_bytes);
+        if let Some(script_error) = script_pubkey
+            .instructions()
+            .find_map(|instruction| instruction.err())
+        {
+            return Err(EngineError::Validation(format!(
+                "invalid input script_pubkey_hex [{}]: {script_error}",
+                input.script_pubkey_hex
+            )));
+        }
+        if !script_pubkey.is_p2tr() {
+            return Err(EngineError::Validation(format!(
+                "input script_pubkey_hex [{}] is not a P2TR prevout",
+                input.script_pubkey_hex
+            )));
+        }
+
         inputs.push(TxIn {
             previous_output,
             script_sig: ScriptBuf::new(),
             // Use final sequence for deterministic non-RBF transaction assembly.
             sequence: Sequence::MAX,
             witness: Witness::new(),
+        });
+        prevouts.push(TxOut {
+            value: Amount::from_sat(input.value_sats),
+            script_pubkey,
         });
     }
 
@@ -195,16 +225,21 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
     enforce_signing_policy_firewall(&request.session_id, &outputs, total_output_value_sats)?;
 
     let tx = Transaction {
-        // Version 2 + zero locktime are bootstrap defaults for immediate-spend txs.
-        version: Version::TWO,
+        // Match the Go host TransactionBuilder's canonical unsigned transaction.
+        // Transaction-version drift changes every BIP-341 sighash and makes the
+        // policy artifact unusable even when all inputs and outputs agree.
+        version: Version::ONE,
         lock_time: LockTime::ZERO,
         input: inputs,
         output: outputs,
     };
 
+    let taproot_key_spend_sighashes_hex = policy_bound_signing_messages_hex(&tx, &prevouts)?;
+
     let result = TransactionResult {
         session_id: request.session_id,
         tx_hex: serialize_hex(&tx),
+        taproot_key_spend_sighashes_hex,
     };
 
     // BuildTaprootTx is keyed into the shared session namespace for idempotency

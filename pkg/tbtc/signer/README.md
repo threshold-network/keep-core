@@ -290,6 +290,16 @@ Failure-mode responses:
 - Suspected provider compromise: stop the signer, preserve logs and state
   artifacts, rotate through the offline process above, and require security-owner
   approval before returning to service.
+- Upgrade reports `duplicate persisted DKG key_group [...] owned by sessions [...]`:
+  stop the signer and preserve the
+  encrypted state plus its matching key material. ABI-3 deliberately rejects
+  legacy state that stores one wallet group under multiple session IDs because
+  automatically choosing a copy could drop seats or a lifecycle kill switch.
+  There is no online deduplication path. Restore a known-good pre-upgrade backup
+  and regenerate a single canonical wallet session (re-DKG when necessary), or
+  run an approved offline migration that explicitly merges all local seats and
+  lifecycle events before re-encrypting the state. Do not delete an arbitrary
+  duplicate and restart.
 
 ## Benchmarks (Phase 5 Scaffold)
 
@@ -358,7 +368,8 @@ Scenario coverage and pass criteria:
   - runtime version and enforcement flags for provenance/admission/policy gates
   - counters for DKG calls/successes/admission rejects
   - counters for start-sign-round calls/successes
-  - counters for build-tx calls/successes/policy rejects
+  - counters for build-tx calls/successes/policy rejects and the separate
+    `heartbeat_signing_policy_reject_total` counter
   - counters for refresh-shares calls/successes
   - counters for transcript-audit and blame-proof verification calls/successes
   - counters for finalize calls/successes and attempt transition/failover events
@@ -398,16 +409,45 @@ Scenario coverage and pass criteria:
   - `TBTC_SIGNER_POLICY_MAX_TOTAL_OUTPUT_VALUE_SATS` (defaults to
     permissive/unbounded when unset)
   - `TBTC_SIGNER_POLICY_ALLOWED_UTC_START_HOUR` / `TBTC_SIGNER_POLICY_ALLOWED_UTC_END_HOUR`
-    - Note: setting `ALLOWED_UTC_START_HOUR == ALLOWED_UTC_END_HOUR` opens a
-      24-hour window (all hours permitted).
+    - Equal start/end bounds are rejected; omit both variables for an unrestricted
+      24-hour window.
   - `TBTC_SIGNER_POLICY_RATE_LIMIT_PER_MINUTE`
-  - Signing-path binding: when the firewall is enabled, `StartSignRound.message_hex`
-    must equal `sha256(tx_hex_bytes)` from the same-session `BuildTaprootTx`
-    result; `FinalizeSignRound` re-validates the same binding.
-  - `BuildTaprootTx` currently accepts caller-derived `script_pubkey_hex`
-    outputs; until full script-tree construction lands, keep the firewall
-    enabled and restrict `TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES` to the
-    intended output classes, such as `p2tr`.
+  - `TBTC_SIGNER_POLICY_HEARTBEAT_RATE_LIMIT_PER_MINUTE` (positive per-wallet
+    accepted-Open limit; defaults to `60` per minute). Heartbeat and build-tx
+    budgets are independent. A new non-idempotent heartbeat Open charges one
+    token; its exact Open retry and Round2 policy recheck do not.
+  - Signing-path binding: each input to `BuildTaprootTx` carries its spent
+    output's `script_pubkey_hex` alongside `value_sats`. The result records one
+    BIP-341 key-spend `SIGHASH_DEFAULT` message per input, in input order.
+    `InteractiveSessionOpen.message_hex` must match one of those messages from
+    the same per-signing `session_id`, and `InteractiveRound2` reruns the binding
+    immediately before releasing a share.
+  - ABI 3.1 adds the only non-transaction authorization: an optional, typed
+    heartbeat intent on Interactive Open. The signer decodes the raw message as
+    exactly 16 bytes, requires the protocol's eight-byte `ff` prefix, rejects a
+    Taproot root or simultaneous transaction artifact, independently derives
+    its Hash256 signing message, and repeats that check at Round2. The intent is
+    transient with the live nonce state, so restart requires a fresh Open.
+    ABI 3.2 adds the independent per-wallet heartbeat rate-limit config and
+    dedicated heartbeat policy-rejection metric.
+  - ABI-3 migration is intentionally fail closed. A pre-ABI-3 in-flight ROAST
+    session has no stored BIP-341 sighashes and must be abandoned and restarted
+    under a fresh `session_id`; its cached fingerprint cannot be upgraded in
+    place. Each transaction input is bound in its own signing session by the Go
+    host, so an N-input sweep consumes N policy rate-limit tokens.
+  - The current FROST wallet executor accepts only all-P2TR input sets. This
+    matches `BuildTaprootTx`'s P2TR-prevout requirement; mixed legacy/Taproot
+    transactions require a separate hybrid signature-assembly design.
+  - Open and Round2 also deserialize the cached transaction and rerun the active
+    non-rate script-class, output-count/value, and UTC-window policy. A restart
+    under stricter policy therefore cannot sign an older accepted artifact.
+    The ordered sighash list itself is trusted only as part of the authenticated
+    AEAD state envelope; its shape is checked at both release gates, while the
+    input prevouts are not duplicated in persisted session state.
+  - `BuildTaprootTx` currently accepts caller-derived output scripts and P2TR
+    prevout scripts; until full script-tree construction lands, keep the
+    firewall enabled and restrict `TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES`
+    to the intended output classes, such as `p2tr`.
 - Transcript accountability / quarantine config:
   - `TBTC_SIGNER_ENABLE_AUTO_QUARANTINE`
   - `TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD`

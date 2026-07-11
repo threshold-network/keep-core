@@ -84,7 +84,7 @@ pub fn reset_for_tests() {
         *telemetry = HardeningTelemetryState::default();
     }
     if let Ok(mut limiter) = build_tx_rate_limiter_state().lock() {
-        *limiter = BuildTxRateLimiterState::default();
+        *limiter = PolicyRateLimiterState::default();
     }
 
     if let Ok(state) = state() {

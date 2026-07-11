@@ -26,9 +26,11 @@
 use bitcoin::{
     absolute::LockTime,
     consensus::encode::{deserialize, serialize_hex},
+    hashes::Hash as BitcoinHash,
     secp256k1::{
         schnorr::Signature as SchnorrSignature, Message as SecpMessage, Secp256k1, XOnlyPublicKey,
     },
+    sighash::{Prevouts, SighashCache, TapSighashType},
     transaction::Version,
     Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness,
 };
@@ -68,13 +70,14 @@ use crate::api::{
     InteractiveAggregateRequest, InteractiveAggregateResult, InteractiveRound1Request,
     InteractiveRound1Result, InteractiveRound2Request, InteractiveRound2Result,
     InteractiveSessionAbortRequest, InteractiveSessionAbortResult, InteractiveSessionOpenRequest,
-    InteractiveSessionOpenResult, NativeFrostCommitment, NativeFrostKeyPackage,
-    NativeFrostPublicKeyPackage, NativeFrostSignatureShare, NewSigningPackageRequest,
-    NewSigningPackageResult, ParticipantFrostIdentifier, PersistDistributedDkgKeyPackageRequest,
-    PromoteCanaryRequest, PromoteCanaryResult, QuarantineStatusRequest, QuarantineStatusResult,
-    RefreshCadenceStatusRequest, RefreshCadenceStatusResult, RefreshSharesRequest,
-    RefreshSharesResult, RoastLivenessPolicyResult, RollbackCanaryRequest, RollbackCanaryResult,
-    RoundState, ShareMaterial, SignatureResult, SignerHardeningMetricsResult, TransactionResult,
+    InteractiveSessionOpenResult, InteractiveSigningIntent, NativeFrostCommitment,
+    NativeFrostKeyPackage, NativeFrostPublicKeyPackage, NativeFrostSignatureShare,
+    NewSigningPackageRequest, NewSigningPackageResult, ParticipantFrostIdentifier,
+    PersistDistributedDkgKeyPackageRequest, PromoteCanaryRequest, PromoteCanaryResult,
+    QuarantineStatusRequest, QuarantineStatusResult, RefreshCadenceStatusRequest,
+    RefreshCadenceStatusResult, RefreshSharesRequest, RefreshSharesResult,
+    RoastLivenessPolicyResult, RollbackCanaryRequest, RollbackCanaryResult, RoundState,
+    ShareMaterial, SignatureResult, SignerHardeningMetricsResult, TransactionResult,
     TranscriptAuditRecord, TranscriptAuditRequest, TranscriptAuditResult,
     TriggerEmergencyRekeyRequest, TriggerEmergencyRekeyResult, VerifyBlameProofRequest,
 };

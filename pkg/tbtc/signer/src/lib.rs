@@ -33,14 +33,17 @@ const TBTC_SIGNER_VERSION: &str = "tbtc-signer/0.1.0-bootstrap";
 /// change. A minor bump is valid ONLY if old consumers safely ignore the addition - if
 /// a new field or enum value can appear in an existing response that an old bridge does
 /// not tolerate, that is a MAJOR bump.
-// Major 2: the transitional coarse-FROST FFI surface was REMOVED - the exported
-// symbols frost_tbtc_run_dkg, frost_tbtc_start_sign_round,
-// frost_tbtc_finalize_sign_round, frost_tbtc_generate_nonces_and_commitments,
-// frost_tbtc_sign_share, and frost_tbtc_aggregate no longer exist. Removing
-// exported symbols is an INCOMPATIBLE contract change (a bridge that resolves
-// them would fail), so this is a major bump; the minor resets to 0.
-const TBTC_SIGNER_ABI_MAJOR: u32 = 2;
-const TBTC_SIGNER_ABI_MINOR: u32 = 0;
+// Major 3: BuildTaprootTx inputs now require the spent output's script_pubkey_hex
+// and results carry the ordered BIP-341 key-spend SIGHASH_DEFAULT messages. The
+// required request field is an incompatible wire-contract change, so bridges and
+// the signer library must move from major 2 to major 3 in lockstep.
+const TBTC_SIGNER_ABI_MAJOR: u32 = 3;
+// Minor 1 adds an optional, narrowly typed heartbeat intent to Interactive Open.
+// ABI-3.0 callers remain valid because an absent intent preserves transaction-only
+// signing-policy behavior.
+// Minor 2 adds the optional heartbeat rate-limit config field and a dedicated
+// heartbeat policy-rejection metric. Older callers safely omit/ignore both.
+const TBTC_SIGNER_ABI_MINOR: u32 = 2;
 #[cfg(test)]
 use engine::TBTC_SIGNER_PROFILE_ENV;
 
@@ -436,6 +439,10 @@ mod tests {
         (result.status_code, response_bytes)
     }
 
+    fn taproot_prevout_script_hex() -> String {
+        format!("5120{}", "33".repeat(32))
+    }
+
     struct EnvVarGuard {
         key: &'static str,
         previous_value: Option<String>,
@@ -491,6 +498,7 @@ mod tests {
             key_group: "ffi-smoke-key-group".to_string(),
             threshold: 2,
             taproot_merkle_root_hex: None,
+            signing_intent: None,
             attempt_context: crate::api::AttemptContext {
                 attempt_number: 1,
                 coordinator_identifier: 1,
@@ -748,10 +756,27 @@ mod tests {
             serde_json::from_slice(&payload).expect("abi version payload decode");
         // The enforced FFI contract starts at 1.0; bump deliberately per the
         // TBTC_SIGNER_ABI_MAJOR / TBTC_SIGNER_ABI_MINOR rules. This test pins the
-        // current value so an accidental bump is caught. Major bumped to 2 when the
-        // transitional coarse-FROST FFI symbols were removed; the minor reset to 0.
-        assert_eq!(abi.abi_major, 2);
-        assert_eq!(abi.abi_minor, 0);
+        // current value so an accidental bump is caught. BuildTaprootTx now requires
+        // prevout scripts and returns BIP-341 SIGHASH_DEFAULT messages; the
+        // incompatible request shape is ABI 3. Optional typed heartbeat intent is
+        // the first backward-compatible minor addition; its independent rate-limit
+        // config and rejection metric are the second.
+        assert_eq!(abi.abi_major, 3);
+        assert_eq!(abi.abi_minor, 2);
+    }
+
+    #[test]
+    fn interactive_heartbeat_intent_has_the_pinned_wire_shape() {
+        let intent = crate::api::InteractiveSigningIntent::Heartbeat {
+            message_hex: "ff".repeat(8) + &"00".repeat(8),
+        };
+        assert_eq!(
+            serde_json::to_value(intent).expect("heartbeat intent serializes"),
+            serde_json::json!({
+                "type": "heartbeat",
+                "message_hex": "ffffffffffffffff0000000000000000"
+            })
+        );
     }
 
     #[test]
@@ -766,6 +791,7 @@ mod tests {
         assert!(!metrics_before.runtime_version.is_empty());
         assert_eq!(metrics_before.build_taproot_tx_calls_total, 0);
         assert_eq!(metrics_before.build_taproot_tx_success_total, 0);
+        assert_eq!(metrics_before.heartbeat_signing_policy_reject_total, 0);
         assert_eq!(metrics_before.refresh_shares_calls_total, 0);
         assert_eq!(metrics_before.refresh_shares_success_total, 0);
         assert_eq!(metrics_before.build_taproot_tx_latency_samples, 0);
@@ -777,6 +803,7 @@ mod tests {
                 txid_hex: "11".repeat(32),
                 vout: 0,
                 value_sats: 10_000,
+                script_pubkey_hex: taproot_prevout_script_hex(),
             }],
             outputs: vec![crate::api::TxOutput {
                 script_pubkey_hex: format!("5120{}", "22".repeat(32)),
@@ -944,6 +971,7 @@ mod tests {
                 txid_hex: "11".repeat(32),
                 vout: 0,
                 value_sats: 10_000,
+                script_pubkey_hex: taproot_prevout_script_hex(),
             }],
             outputs: vec![crate::api::TxOutput {
                 script_pubkey_hex: format!("5120{}", "22".repeat(32)),
@@ -998,6 +1026,7 @@ mod tests {
                 txid_hex: "11".repeat(32),
                 vout: 1,
                 value_sats: 10_000,
+                script_pubkey_hex: taproot_prevout_script_hex(),
             }],
             outputs: vec![crate::api::TxOutput {
                 script_pubkey_hex: format!("5120{}", "22".repeat(32)),
@@ -1027,6 +1056,7 @@ mod tests {
                 txid_hex: "11".repeat(32),
                 vout: 1,
                 value_sats: 10_000,
+                script_pubkey_hex: taproot_prevout_script_hex(),
             }],
             outputs: vec![crate::api::TxOutput {
                 script_pubkey_hex: format!("5120{}", "22".repeat(32)),
@@ -1056,6 +1086,7 @@ mod tests {
                 txid_hex: "11".repeat(32),
                 vout: 1,
                 value_sats: 10_000,
+                script_pubkey_hex: taproot_prevout_script_hex(),
             }],
             outputs: vec![crate::api::TxOutput {
                 script_pubkey_hex: format!("5120{}", "22".repeat(32)),
@@ -1085,6 +1116,7 @@ mod tests {
                 txid_hex: "11".repeat(32),
                 vout: 1,
                 value_sats: 10_000,
+                script_pubkey_hex: taproot_prevout_script_hex(),
             }],
             outputs: vec![crate::api::TxOutput {
                 script_pubkey_hex: format!("5120{}", "22".repeat(32)),
@@ -1119,6 +1151,7 @@ mod tests {
                 txid_hex: "11".repeat(32),
                 vout: 1,
                 value_sats: 2_100_000_000_000_000,
+                script_pubkey_hex: taproot_prevout_script_hex(),
             }],
             outputs: max_money_outputs,
             script_tree_hex: None,
@@ -1144,6 +1177,7 @@ mod tests {
                 txid_hex: format!("{:064x}", index + 1),
                 vout: 0,
                 value_sats: 2_100_000_000_000_000,
+                script_pubkey_hex: taproot_prevout_script_hex(),
             })
             .collect();
 
@@ -1178,6 +1212,7 @@ mod tests {
                 txid_hex: "11".repeat(32),
                 vout: 1,
                 value_sats: 2_100_000_000_000_000,
+                script_pubkey_hex: taproot_prevout_script_hex(),
             }],
             outputs: vec![crate::api::TxOutput {
                 script_pubkey_hex: format!("5120{}", "22".repeat(32)),
@@ -1207,6 +1242,7 @@ mod tests {
                 txid_hex: "11".repeat(32),
                 vout: 1,
                 value_sats: 2_100_000_000_000_001,
+                script_pubkey_hex: taproot_prevout_script_hex(),
             }],
             outputs: vec![crate::api::TxOutput {
                 script_pubkey_hex: format!("5120{}", "22".repeat(32)),
@@ -1236,6 +1272,7 @@ mod tests {
                 txid_hex: "zz".to_string(),
                 vout: 1,
                 value_sats: 10_000,
+                script_pubkey_hex: taproot_prevout_script_hex(),
             }],
             outputs: vec![crate::api::TxOutput {
                 script_pubkey_hex: format!("5120{}", "22".repeat(32)),
@@ -1264,6 +1301,7 @@ mod tests {
                 txid_hex: "11".repeat(32),
                 vout: 1,
                 value_sats: 10_000,
+                script_pubkey_hex: taproot_prevout_script_hex(),
             }],
             outputs: vec![crate::api::TxOutput {
                 // OP_PUSHDATA1 length=2 with only one data byte.
@@ -1295,11 +1333,13 @@ mod tests {
                     txid_hex: "11".repeat(32),
                     vout: 1,
                     value_sats: 10_000,
+                    script_pubkey_hex: taproot_prevout_script_hex(),
                 },
                 crate::api::TxInput {
                     txid_hex: "11".repeat(32),
                     vout: 1,
                     value_sats: 10_000,
+                    script_pubkey_hex: taproot_prevout_script_hex(),
                 },
             ],
             outputs: vec![crate::api::TxOutput {
@@ -1416,6 +1456,7 @@ mod tests {
         let request = crate::api::InitSignerConfigRequest {
             profile: Some("development".to_string()),
             roast_coordinator_timeout_ms: Some(45_000),
+            policy_heartbeat_rate_limit_per_minute: Some(12),
             ..crate::api::InitSignerConfigRequest::default()
         };
         let (status, response_bytes) = call_ffi(&request, crate::frost_tbtc_init_signer_config);
@@ -1430,7 +1471,7 @@ mod tests {
             serde_json::from_slice(&response_bytes).expect("response parses");
         assert!(response.installed);
         assert!(!response.idempotent);
-        assert_eq!(response.configured_key_count, 2);
+        assert_eq!(response.configured_key_count, 3);
         assert!(!response.config_fingerprint.is_empty());
 
         // Clear the installed snapshot so env-driven tests are unaffected.

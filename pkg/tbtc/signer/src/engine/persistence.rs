@@ -1183,8 +1183,20 @@ impl TryFrom<PersistedEngineState> for EngineState {
         }
 
         let mut sessions = HashMap::new();
+        let mut key_group_owners = HashMap::<String, String>::new();
         for (session_id, session_state) in persisted.sessions {
-            sessions.insert(session_id, session_state.try_into()?);
+            let session_state: SessionState = session_state.try_into()?;
+            if let Some(dkg_result) = session_state.dkg_result.as_ref() {
+                if let Some(existing_owner) =
+                    key_group_owners.insert(dkg_result.key_group.clone(), session_id.clone())
+                {
+                    return Err(EngineError::Internal(format!(
+                        "duplicate persisted DKG key_group [{}] owned by sessions [{}] and [{}]",
+                        dkg_result.key_group, existing_owner, session_id
+                    )));
+                }
+            }
+            sessions.insert(session_id, session_state);
         }
         ensure_session_registry_persisted_bound(sessions.len())?;
         let mut quarantined_operator_identifiers = HashSet::new();
@@ -1525,6 +1537,7 @@ impl TryFrom<PersistedSessionState> for SessionState {
                 .max(persisted.refresh_history.len() as u64),
             refresh_history: persisted.refresh_history,
             emergency_rekey_event: persisted.emergency_rekey_event,
+            heartbeat_rate_limiter: PolicyRateLimiterState::default(),
             // Live interactive state never restores: nonces are gone by
             // construction after a restart, so the attempt fails safe and
             // only the consumption markers survive. Empty map (no live members).

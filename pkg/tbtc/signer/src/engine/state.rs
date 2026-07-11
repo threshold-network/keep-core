@@ -65,6 +65,11 @@ pub(crate) struct InteractiveSigningState {
     pub(crate) threshold: u16,
     pub(crate) message_bytes: SecretBytes,
     pub(crate) taproot_merkle_root: Option<[u8; 32]>,
+    /// Validated non-transaction authorization for this live attempt. It is
+    /// deliberately transient alongside the nonce state: after a restart no
+    /// Round2 share can be released, so the host must open and validate a fresh
+    /// intent rather than relying on a durable generic-message allowlist.
+    pub(crate) signing_intent: Option<InteractiveSigningIntent>,
     pub(crate) key_package: frost::keys::KeyPackage,
     pub(crate) opened_at_unix: u64,
     pub(crate) round1: Option<InteractiveRound1State>,
@@ -113,6 +118,10 @@ pub(crate) struct SessionState {
     /// sessions). Backfilled from history length when first incremented.
     pub(crate) refresh_count: u64,
     pub(crate) emergency_rekey_event: Option<EmergencyRekeyEvent>,
+    /// Transient per-wallet budget for accepted heartbeat Opens. Like the
+    /// process-global BuildTaprootTx limiter, this operational throttle resets on
+    /// restart and is never written into the encrypted session state.
+    pub(crate) heartbeat_rate_limiter: PolicyRateLimiterState,
     // Multi-seat: a process-global engine may hold several LOCAL members (seats)
     // signing the same session concurrently, each on its own attempt timeline.
     // Keyed by member_identifier; each entry is independent (own attempt, nonces,
@@ -122,9 +131,9 @@ pub(crate) struct SessionState {
     // Interactive signing runs under a fresh RoastSessionID per message, so a wallet's
     // DKG material lives under a DIFFERENT (wallet/DKG) session; this binds the signing
     // session to its wallet key so Round2/Aggregate resolve the same material by
-    // key_group. Transient (re-set on every Open); deliberately NOT persisted, because
-    // the in-memory interactive attempt it serves does not survive a restart either -
-    // a restart forces a fresh Open, which re-sets it.
+    // key_group. Persisted even though live nonce state is not: Aggregate may run
+    // after restart using only public material, and the full-lifetime role binding
+    // prevents this per-signing session from later becoming an unrelated DKG owner.
     pub(crate) bound_key_group: Option<String>,
     pub(crate) consumed_interactive_attempt_markers: HashSet<String>,
     // Phase 7.2b InteractiveAggregate completion markers: an attempt whose

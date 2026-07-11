@@ -116,6 +116,18 @@ pub struct NewSigningPackageResult {
 // generates, holds, consumes, and zeroizes them internally, keyed by
 // (session_id, attempt_id).
 
+/// Narrow non-transaction signing intents accepted by the production signing
+/// policy firewall. This enum is internally tagged so the wire shape is
+/// explicit and future variants cannot be confused with an arbitrary message
+/// allowlist.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InteractiveSigningIntent {
+    /// A tBTC wallet heartbeat message. `message_hex` is the raw 16-byte
+    /// heartbeat preimage, not the 32-byte digest being signed.
+    Heartbeat { message_hex: String },
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct InteractiveSessionOpenRequest {
     pub session_id: String,
@@ -129,6 +141,8 @@ pub struct InteractiveSessionOpenRequest {
     pub threshold: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub taproot_merkle_root_hex: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_intent: Option<InteractiveSigningIntent>,
     /// Required: interactive sessions are strict-mode only; there is
     /// no legacy-shape fallback on this path.
     pub attempt_context: AttemptContext,
@@ -427,6 +441,10 @@ pub struct TxInput {
     pub txid_hex: String,
     pub vout: u32,
     pub value_sats: u64,
+    /// Script pubkey of the output being spent. BIP-341 SIGHASH_DEFAULT commits
+    /// to every input's ordered prevout amount and script pubkey, so the signer
+    /// cannot derive the messages it is allowed to sign without this metadata.
+    pub script_pubkey_hex: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -448,6 +466,11 @@ pub struct BuildTaprootTxRequest {
 pub struct TransactionResult {
     pub session_id: String,
     pub tx_hex: String,
+    /// One BIP-341 key-spend SIGHASH_DEFAULT message per transaction input, in
+    /// input order. `serde(default)` lets pre-ABI-3 persisted state decode so the
+    /// policy gate can reject its empty legacy artifact explicitly and fail closed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub taproot_key_spend_sighashes_hex: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -609,6 +632,8 @@ pub struct SignerHardeningMetricsResult {
     pub build_taproot_tx_calls_total: u64,
     pub build_taproot_tx_success_total: u64,
     pub build_taproot_tx_policy_reject_total: u64,
+    #[serde(default)]
+    pub heartbeat_signing_policy_reject_total: u64,
     pub finalize_sign_round_calls_total: u64,
     pub finalize_sign_round_success_total: u64,
     pub refresh_shares_calls_total: u64,
@@ -772,6 +797,8 @@ pub struct InitSignerConfigRequest {
     pub policy_allowed_utc_end_hour: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_rate_limit_per_minute: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_heartbeat_rate_limit_per_minute: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_auto_quarantine: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
