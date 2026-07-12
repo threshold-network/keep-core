@@ -3155,13 +3155,13 @@ fn canary_promotion_ignores_samples_older_than_the_configured_window() {
         let mut telemetry = hardening_telemetry_state()
             .lock()
             .expect("hardening telemetry lock");
-        for sample in &mut telemetry.interactive_round1_latency.samples {
+        for sample in &mut telemetry.canary_interactive_round1_latency.samples {
             sample.observed_at = stale_at;
         }
-        for sample in &mut telemetry.interactive_round2_latency.samples {
+        for sample in &mut telemetry.canary_interactive_round2_latency.samples {
             sample.observed_at = stale_at;
         }
-        for sample in &mut telemetry.interactive_aggregate_latency.samples {
+        for sample in &mut telemetry.canary_interactive_aggregate_latency.samples {
             sample.observed_at = stale_at;
         }
         for sample in &mut telemetry.canary_policy_outcomes.samples {
@@ -3170,12 +3170,70 @@ fn canary_promotion_ignores_samples_older_than_the_configured_window() {
     }
 
     let metrics = hardening_metrics();
-    assert_eq!(metrics.interactive_round1_latency_samples, 0);
-    assert_eq!(metrics.interactive_round2_latency_samples, 0);
-    assert_eq!(metrics.interactive_aggregate_latency_samples, 0);
+    assert_eq!(
+        metrics.interactive_round1_latency_samples,
+        canary_min_samples()
+    );
+    assert_eq!(
+        metrics.interactive_round2_latency_samples,
+        canary_min_samples()
+    );
+    assert_eq!(
+        metrics.interactive_aggregate_latency_samples,
+        canary_min_samples()
+    );
+    assert_eq!(metrics.interactive_round1_latency_p95_ms, 1);
+    assert_eq!(metrics.interactive_round2_latency_p95_ms, 1);
+    assert_eq!(metrics.interactive_aggregate_latency_p95_ms, 1);
     assert_eq!(
         canary_promotion_gate_failures(),
         canary_missing_evidence_gate_failures()
+    );
+}
+
+#[test]
+fn canary_evidence_reset_preserves_abi_latency_metrics() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_CANARY_MIN_SAMPLES_ENV, "1");
+
+    seed_canary_promotion_evidence_for_tests(7, 8, 9, 0);
+    let before = hardening_metrics();
+    assert!(canary_promotion_gate_failures().is_empty());
+
+    reset_canary_promotion_evidence();
+
+    let after = hardening_metrics();
+    assert_eq!(after.interactive_round1_latency_samples, 1);
+    assert_eq!(after.interactive_round1_latency_p95_ms, 7);
+    assert_eq!(after.interactive_round2_latency_samples, 1);
+    assert_eq!(after.interactive_round2_latency_p95_ms, 8);
+    assert_eq!(after.interactive_aggregate_latency_samples, 1);
+    assert_eq!(after.interactive_aggregate_latency_p95_ms, 9);
+    assert_eq!(
+        (
+            after.interactive_round1_latency_samples,
+            after.interactive_round1_latency_p95_ms,
+            after.interactive_round2_latency_samples,
+            after.interactive_round2_latency_p95_ms,
+            after.interactive_aggregate_latency_samples,
+            after.interactive_aggregate_latency_p95_ms,
+        ),
+        (
+            before.interactive_round1_latency_samples,
+            before.interactive_round1_latency_p95_ms,
+            before.interactive_round2_latency_samples,
+            before.interactive_round2_latency_p95_ms,
+            before.interactive_aggregate_latency_samples,
+            before.interactive_aggregate_latency_p95_ms,
+        ),
+        "rollout evidence reset must not change established ABI-3 metrics",
+    );
+    assert_eq!(
+        canary_promotion_gate_failures(),
+        canary_missing_evidence_gate_failures(),
+        "the separate promotion window must still reset fail closed",
     );
 }
 
@@ -3194,7 +3252,19 @@ fn canary_promotion_ignores_interactive_latency_from_the_prior_stage() {
     operation.mark_success();
     drop(operation);
 
-    assert_eq!(hardening_metrics().interactive_round1_latency_samples, 0);
+    assert_eq!(
+        hardening_metrics().interactive_round1_latency_samples,
+        1,
+        "the completed call remains visible through the ABI-3 rolling metric",
+    );
+    let telemetry = hardening_telemetry_state()
+        .lock()
+        .expect("hardening telemetry lock");
+    assert_eq!(
+        telemetry.canary_interactive_round1_latency.sample_count(),
+        0,
+        "a completion from the prior stage must not enter new-stage evidence",
+    );
 }
 
 #[test]
@@ -7770,6 +7840,14 @@ fn interactive_round1_is_idempotent_until_consumed() {
     })
     .expect("round 1");
     assert_eq!(hardening_metrics().interactive_round1_latency_samples, 1);
+    assert_eq!(
+        hardening_telemetry_state()
+            .lock()
+            .expect("hardening telemetry lock")
+            .canary_interactive_round1_latency
+            .sample_count(),
+        1,
+    );
     let second = interactive_round1(InteractiveRound1Request {
         session_id: session_id.to_string(),
         attempt_id: opened.attempt_id.clone(),
@@ -7782,8 +7860,17 @@ fn interactive_round1_is_idempotent_until_consumed() {
     );
     assert_eq!(
         hardening_metrics().interactive_round1_latency_samples,
+        2,
+        "the ABI-3 rolling metric includes the idempotent call"
+    );
+    assert_eq!(
+        hardening_telemetry_state()
+            .lock()
+            .expect("hardening telemetry lock")
+            .canary_interactive_round1_latency
+            .sample_count(),
         1,
-        "an idempotent replay must not dilute the promotion latency window"
+        "an idempotent replay must not dilute the promotion latency window",
     );
 
     let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
@@ -7822,8 +7909,17 @@ fn interactive_round1_is_idempotent_until_consumed() {
     assert_eq!(replay.code(), "consumed_nonce_replay");
     assert_eq!(
         hardening_metrics().interactive_round1_latency_samples,
+        3,
+        "the ABI-3 rolling metric includes the rejected call"
+    );
+    assert_eq!(
+        hardening_telemetry_state()
+            .lock()
+            .expect("hardening telemetry lock")
+            .canary_interactive_round1_latency
+            .sample_count(),
         1,
-        "a fail-fast rejection must not enter the successful latency window"
+        "a fail-fast rejection must not enter the successful promotion window",
     );
 }
 

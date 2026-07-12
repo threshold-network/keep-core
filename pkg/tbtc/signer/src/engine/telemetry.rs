@@ -175,6 +175,13 @@ pub(crate) struct HardeningTelemetryState {
     pub(crate) interactive_round1_latency: HardeningLatencyTracker,
     pub(crate) interactive_round2_latency: HardeningLatencyTracker,
     pub(crate) interactive_aggregate_latency: HardeningLatencyTracker,
+    // Promotion evidence is intentionally separate from the ABI-3 latency
+    // metrics above. The public metrics retain the full rolling window of all
+    // calls, while these trackers contain only successful operations from the
+    // current rollout stage and may be cleared between stages.
+    pub(crate) canary_interactive_round1_latency: HardeningLatencyTracker,
+    pub(crate) canary_interactive_round2_latency: HardeningLatencyTracker,
+    pub(crate) canary_interactive_aggregate_latency: HardeningLatencyTracker,
     pub(crate) canary_policy_outcomes: HardeningPolicyOutcomeTracker,
     // Incremented whenever rollout-stage evidence is reset. A successful
     // interactive operation that straddles that boundary must not be credited
@@ -198,7 +205,7 @@ pub(crate) enum HardeningOperation {
 pub(crate) struct HardeningOperationLatencyGuard {
     pub(crate) operation: HardeningOperation,
     pub(crate) started_at: Instant,
-    pub(crate) record_on_drop: bool,
+    pub(crate) record_canary_on_drop: bool,
     pub(crate) canary_evidence_epoch: Option<u64>,
 }
 
@@ -207,7 +214,7 @@ impl HardeningOperationLatencyGuard {
         Self {
             operation,
             started_at: Instant::now(),
-            record_on_drop: true,
+            record_canary_on_drop: false,
             canary_evidence_epoch: None,
         }
     }
@@ -216,21 +223,18 @@ impl HardeningOperationLatencyGuard {
         Self {
             operation,
             started_at: Instant::now(),
-            record_on_drop: false,
+            record_canary_on_drop: false,
             canary_evidence_epoch: current_canary_evidence_epoch(),
         }
     }
 
     pub(crate) fn mark_success(&mut self) {
-        self.record_on_drop = true;
+        self.record_canary_on_drop = true;
     }
 }
 
 impl Drop for HardeningOperationLatencyGuard {
     fn drop(&mut self) {
-        if !self.record_on_drop {
-            return;
-        }
         // Record latency with millisecond precision and ceil semantics so
         // sub-millisecond calls still contribute non-zero samples.
         let elapsed_micros = self.started_at.elapsed().as_micros();
@@ -238,6 +242,7 @@ impl Drop for HardeningOperationLatencyGuard {
         record_hardening_operation_latency_for_epoch(
             self.operation,
             elapsed_ms,
+            self.record_canary_on_drop,
             self.canary_evidence_epoch,
         );
     }
@@ -274,21 +279,16 @@ fn current_canary_evidence_epoch() -> Option<u64> {
 
 #[cfg(test)]
 pub(crate) fn record_hardening_operation_latency(operation: HardeningOperation, duration_ms: u64) {
-    record_hardening_operation_latency_for_epoch(operation, duration_ms, None);
+    record_hardening_operation_latency_for_epoch(operation, duration_ms, true, None);
 }
 
 fn record_hardening_operation_latency_for_epoch(
     operation: HardeningOperation,
     duration_ms: u64,
+    record_canary_success: bool,
     expected_canary_evidence_epoch: Option<u64>,
 ) {
     record_hardening_telemetry(|telemetry| {
-        if expected_canary_evidence_epoch
-            .is_some_and(|expected| expected != telemetry.canary_evidence_epoch)
-        {
-            return;
-        }
-
         match operation {
             HardeningOperation::BuildTaprootTx => {
                 telemetry.build_taproot_tx_latency.record(duration_ms)
@@ -306,12 +306,30 @@ fn record_hardening_operation_latency_for_epoch(
                 telemetry.interactive_aggregate_latency.record(duration_ms)
             }
         }
+
+        if !record_canary_success
+            || expected_canary_evidence_epoch
+                .is_some_and(|expected| expected != telemetry.canary_evidence_epoch)
+        {
+            return;
+        }
+
+        match operation {
+            HardeningOperation::InteractiveRound1 => telemetry
+                .canary_interactive_round1_latency
+                .record(duration_ms),
+            HardeningOperation::InteractiveRound2 => telemetry
+                .canary_interactive_round2_latency
+                .record(duration_ms),
+            HardeningOperation::InteractiveAggregate => telemetry
+                .canary_interactive_aggregate_latency
+                .record(duration_ms),
+            HardeningOperation::BuildTaprootTx | HardeningOperation::RefreshShares => {}
+        }
     });
 }
 
 pub fn hardening_metrics() -> SignerHardeningMetricsResult {
-    let metrics_now = Instant::now();
-    let canary_max_sample_age = canary_max_sample_age_seconds();
     let mut result = SignerHardeningMetricsResult {
         runtime_version: TBTC_SIGNER_RUNTIME_VERSION.to_string(),
         provenance_enforced: provenance_gate_enforced(),
@@ -437,24 +455,18 @@ pub fn hardening_metrics() -> SignerHardeningMetricsResult {
             result.interactive_aggregate_calls_total = telemetry.interactive_aggregate_calls_total;
             result.interactive_aggregate_success_total =
                 telemetry.interactive_aggregate_success_total;
-            result.interactive_round1_latency_p95_ms = telemetry
-                .interactive_round1_latency
-                .fresh_p95_ms(metrics_now, canary_max_sample_age);
-            result.interactive_round1_latency_samples = telemetry
-                .interactive_round1_latency
-                .fresh_sample_count(metrics_now, canary_max_sample_age);
-            result.interactive_round2_latency_p95_ms = telemetry
-                .interactive_round2_latency
-                .fresh_p95_ms(metrics_now, canary_max_sample_age);
-            result.interactive_round2_latency_samples = telemetry
-                .interactive_round2_latency
-                .fresh_sample_count(metrics_now, canary_max_sample_age);
-            result.interactive_aggregate_latency_p95_ms = telemetry
-                .interactive_aggregate_latency
-                .fresh_p95_ms(metrics_now, canary_max_sample_age);
-            result.interactive_aggregate_latency_samples = telemetry
-                .interactive_aggregate_latency
-                .fresh_sample_count(metrics_now, canary_max_sample_age);
+            result.interactive_round1_latency_p95_ms =
+                telemetry.interactive_round1_latency.p95_ms();
+            result.interactive_round1_latency_samples =
+                telemetry.interactive_round1_latency.sample_count();
+            result.interactive_round2_latency_p95_ms =
+                telemetry.interactive_round2_latency.p95_ms();
+            result.interactive_round2_latency_samples =
+                telemetry.interactive_round2_latency.sample_count();
+            result.interactive_aggregate_latency_p95_ms =
+                telemetry.interactive_aggregate_latency.p95_ms();
+            result.interactive_aggregate_latency_samples =
+                telemetry.interactive_aggregate_latency.sample_count();
             result.last_updated_unix = telemetry.last_updated_unix;
         }
         Err(error) => {
@@ -497,9 +509,9 @@ pub(crate) fn record_canary_policy_outcome(rejected: bool) {
 
 pub(crate) fn reset_canary_promotion_evidence() {
     record_hardening_telemetry(|telemetry| {
-        telemetry.interactive_round1_latency.clear();
-        telemetry.interactive_round2_latency.clear();
-        telemetry.interactive_aggregate_latency.clear();
+        telemetry.canary_interactive_round1_latency.clear();
+        telemetry.canary_interactive_round2_latency.clear();
+        telemetry.canary_interactive_aggregate_latency.clear();
         telemetry.canary_policy_outcomes.clear();
         telemetry.canary_evidence_epoch = telemetry.canary_evidence_epoch.saturating_add(1);
     });
@@ -520,10 +532,19 @@ pub(crate) fn seed_canary_promotion_evidence_for_tests(
                 .interactive_round1_latency
                 .record(round1_latency_ms);
             telemetry
+                .canary_interactive_round1_latency
+                .record(round1_latency_ms);
+            telemetry
                 .interactive_round2_latency
                 .record(round2_latency_ms);
             telemetry
+                .canary_interactive_round2_latency
+                .record(round2_latency_ms);
+            telemetry
                 .interactive_aggregate_latency
+                .record(aggregate_latency_ms);
+            telemetry
+                .canary_interactive_aggregate_latency
                 .record(aggregate_latency_ms);
         }
         for index in 0..policy_sample_count {
@@ -561,22 +582,22 @@ pub(crate) fn canary_promotion_gate_failures() -> Vec<String> {
                 .fresh_snapshot(now, max_age);
             (
                 telemetry
-                    .interactive_round1_latency
+                    .canary_interactive_round1_latency
                     .fresh_sample_count(now, max_age),
                 telemetry
-                    .interactive_round1_latency
+                    .canary_interactive_round1_latency
                     .fresh_p95_ms(now, max_age),
                 telemetry
-                    .interactive_round2_latency
+                    .canary_interactive_round2_latency
                     .fresh_sample_count(now, max_age),
                 telemetry
-                    .interactive_round2_latency
+                    .canary_interactive_round2_latency
                     .fresh_p95_ms(now, max_age),
                 telemetry
-                    .interactive_aggregate_latency
+                    .canary_interactive_aggregate_latency
                     .fresh_sample_count(now, max_age),
                 telemetry
-                    .interactive_aggregate_latency
+                    .canary_interactive_aggregate_latency
                     .fresh_p95_ms(now, max_age),
                 policy_sample_count,
                 policy_reject_count,

@@ -387,9 +387,11 @@ storage guarantees for that hardware-level failure boundary.
   - p95 latency and sample-count fields for `run_dkg`, `start_sign_round`,
     `build_taproot_tx`, `finalize_sign_round`, and `refresh_shares`. The coarse
     start/finalize fields are retained for ABI compatibility; production
-    promotion reads the live `interactive_round1`, `interactive_round2`, and
-    `interactive_aggregate` p95/sample fields. Interactive fields contain only
-    successful samples younger than the configured canary evidence window.
+    signing also reports `interactive_round1`, `interactive_round2`, and
+    `interactive_aggregate` latency over each operation's full retained rolling
+    window of calls, including failed and idempotent calls, preserving the ABI-3
+    metric contract. Canary promotion reads separate internal evidence windows
+    containing only fresh, successful samples from the current rollout stage.
 - Coordinator timeout policy config:
   - env var: `TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS`
   - valid range: `1000..=300000`
