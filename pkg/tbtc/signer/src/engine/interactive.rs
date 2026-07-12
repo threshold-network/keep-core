@@ -590,11 +590,24 @@ pub fn interactive_round2(
     // The live state and markers are keyed on the canonical (lowercase)
     // attempt_id; the wire form may differ in casing.
     let attempt_id = canonical_attempt_id(&request.attempt_id);
+    let consumed_marker = interactive_consumed_marker(&attempt_id, request.member_identifier);
 
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
     sweep_expired_interactive_state(&mut guard);
+
+    // An earlier marker write may have replaced the state file but failed its
+    // directory sync. Flush that fail-closed marker before consulting the replay
+    // gate; after a successful write, the marker below rejects the retry.
+    if interactive_round2_persistence_pending(&request.session_id, &consumed_marker) {
+        persist_engine_state_to_storage(&guard)
+            .map_err(PersistEngineStateError::into_engine_error)?;
+        clear_persistence_pending_operation(&PersistencePendingOperation::InteractiveRound2 {
+            session_id: request.session_id.clone(),
+            consumed_marker: consumed_marker.clone(),
+        });
+    }
 
     // Quarantine inputs must be read before the session is borrowed
     // mutably from the same guard below.
@@ -695,7 +708,6 @@ pub fn interactive_round2(
 
     // Per-member consumed marker (composite): independent seats consume their own
     // nonces for the same attempt without colliding.
-    let consumed_marker = interactive_consumed_marker(&attempt_id, request.member_identifier);
     ensure_consumed_registry_insert_capacity(
         &session.consumed_interactive_attempt_markers,
         &consumed_marker,
@@ -770,12 +782,13 @@ pub fn interactive_round2(
         auto_quarantine_config.as_ref(),
     )?;
 
-    // Consumption-before-release: the durable marker is persisted
-    // BEFORE the share is computed and returned. If persistence fails,
-    // the marker is rolled back and the nonces remain live - no share
-    // has left the engine. If share computation fails after the marker
-    // persisted, the attempt is dead (fail closed): the marker stays,
-    // the nonces are destroyed, and no share was released.
+    // Consumption-before-release: the durable marker is persisted BEFORE the
+    // share is computed and returned. A failure before state-file replacement
+    // rolls the marker back and leaves the nonces live. A failure after replacement
+    // keeps the marker fail-closed, destroys the nonces, and records a pending
+    // retry that must re-persist before the replay gate runs. No failure path
+    // releases a share. If share computation itself later fails, the already-
+    // durable marker likewise stays and the nonces are destroyed.
     // Resolve the state-encryption key under the held ENGINE_STATE guard, in the
     // same serialized order as the write, and BEFORE inserting the marker.
     // Resolving under the guard makes key selection match the write order, so the
@@ -791,13 +804,28 @@ pub fn interactive_round2(
     if let Err(persist_error) =
         persist_engine_state_to_storage_with_key(&guard, &resolved_state_key)
     {
+        let state_file_replaced = persist_error.state_file_replaced();
+        let persist_error = persist_error.into_engine_error();
         let session = guard
             .sessions
             .get_mut(&request.session_id)
             .expect("session existed under the held engine lock");
-        session
-            .consumed_interactive_attempt_markers
-            .remove(&consumed_marker);
+        if state_file_replaced {
+            mark_persistence_pending(PersistencePendingOperation::InteractiveRound2 {
+                session_id: request.session_id.clone(),
+                consumed_marker: consumed_marker.clone(),
+            });
+            if let Some(mut removed) = session
+                .interactive_signing
+                .remove(&request.member_identifier)
+            {
+                zeroize_interactive_round1(&mut removed);
+            }
+        } else {
+            session
+                .consumed_interactive_attempt_markers
+                .remove(&consumed_marker);
+        }
         return Err(persist_error);
     }
 
@@ -912,6 +940,17 @@ pub fn interactive_aggregate(
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    // A prior completion-marker write may have replaced the state file but failed
+    // its directory sync. Re-persist that fail-closed marker before the completed
+    // attempt check so a retry repairs durability and is then rejected normally.
+    if interactive_aggregate_persistence_pending(&request.session_id, &aggregated_marker) {
+        persist_engine_state_to_storage(&guard)
+            .map_err(PersistEngineStateError::into_engine_error)?;
+        clear_persistence_pending_operation(&PersistencePendingOperation::InteractiveAggregate {
+            session_id: request.session_id.clone(),
+            aggregated_marker: aggregated_marker.clone(),
+        });
+    }
     // Aggregate takes the engine lock like every other interactive entry
     // point, so it sweeps expired interactive state too: the TTL
     // guarantee (a nonce handle gone within the TTL of inactivity) must
@@ -1056,8 +1095,10 @@ pub fn interactive_aggregate(
     // InteractiveAggregate is rejected rather than recomputed (Phase 7.2b design
     // section 6). The engine lock was dropped for the aggregation crypto above;
     // re-acquire it, re-check the marker (a concurrent aggregate may have
-    // completed first), insert it, and persist before reporting success; on
-    // persist failure roll the marker back and fail closed.
+    // completed first), insert it, and persist before reporting success. A
+    // pre-replacement failure rolls the marker back; a post-replacement failure
+    // retains it, destroys matching live nonces, and records a pending retry that
+    // is flushed before the next completion-marker check.
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
@@ -1101,13 +1142,28 @@ pub fn interactive_aggregate(
     if let Err(persist_error) =
         persist_engine_state_to_storage_with_key(&guard, &resolved_state_key)
     {
+        let state_file_replaced = persist_error.state_file_replaced();
+        let persist_error = persist_error.into_engine_error();
         let session = guard
             .sessions
             .get_mut(&request.session_id)
             .expect("session existed under the held engine lock");
-        session
-            .aggregated_interactive_attempt_markers
-            .remove(&aggregated_marker);
+        if state_file_replaced {
+            mark_persistence_pending(PersistencePendingOperation::InteractiveAggregate {
+                session_id: request.session_id.clone(),
+                aggregated_marker: aggregated_marker.clone(),
+            });
+            remove_finalized_interactive_members(
+                session,
+                &attempt_id,
+                &aggregated_message_digest,
+                taproot_merkle_root.as_ref(),
+            );
+        } else {
+            session
+                .aggregated_interactive_attempt_markers
+                .remove(&aggregated_marker);
+        }
         return Err(persist_error);
     }
 
@@ -1121,26 +1177,12 @@ pub fn interactive_aggregate(
         .sessions
         .get_mut(&request.session_id)
         .expect("session existed under the held engine lock");
-    let finalized_members: Vec<u16> = session
-        .interactive_signing
-        .iter()
-        .filter(|(_, entry)| {
-            // Match the FULL finalized identity (attempt_id + message + root), not
-            // just (attempt_id, root): a mismatched aggregate (a valid package for a
-            // different message submitted under this attempt id) must NOT delete the
-            // live nonce state of the real, differently-messaged attempt - mirroring
-            // the message binding the completion marker already enforces.
-            entry.attempt_context.attempt_id == attempt_id
-                && hash_hex(&entry.message_bytes) == aggregated_message_digest
-                && entry.taproot_merkle_root == taproot_merkle_root
-        })
-        .map(|(member, _)| *member)
-        .collect();
-    for member in &finalized_members {
-        if let Some(mut removed) = session.interactive_signing.remove(member) {
-            zeroize_interactive_round1(&mut removed);
-        }
-    }
+    remove_finalized_interactive_members(
+        session,
+        &attempt_id,
+        &aggregated_message_digest,
+        taproot_merkle_root.as_ref(),
+    );
     drop(guard);
 
     record_hardening_telemetry(|telemetry| {
@@ -1421,6 +1463,32 @@ fn round2_signing_subset(
         }
     }
     Ok(subset)
+}
+
+fn remove_finalized_interactive_members(
+    session: &mut SessionState,
+    attempt_id: &str,
+    message_digest: &str,
+    taproot_merkle_root: Option<&[u8; 32]>,
+) {
+    let finalized_members: Vec<u16> = session
+        .interactive_signing
+        .iter()
+        .filter(|(_, entry)| {
+            // Match the FULL finalized identity (attempt_id + message + root), not
+            // just (attempt_id, root): a mismatched aggregate must not destroy the
+            // live nonce state of a differently-messaged attempt.
+            entry.attempt_context.attempt_id == attempt_id
+                && hash_hex(&entry.message_bytes) == message_digest
+                && entry.taproot_merkle_root.as_ref() == taproot_merkle_root
+        })
+        .map(|(member, _)| *member)
+        .collect();
+    for member in finalized_members {
+        if let Some(mut removed) = session.interactive_signing.remove(&member) {
+            zeroize_interactive_round1(&mut removed);
+        }
+    }
 }
 
 pub(crate) fn zeroize_interactive_round1(interactive: &mut InteractiveSigningState) {

@@ -808,6 +808,112 @@ fn idempotent_build_tx_replay_survives_state_key_outage() {
 }
 
 #[test]
+fn build_taproot_tx_persist_failures_roll_back_or_retry_durably() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("build_tx_persist_durability");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let existing_session = "session-build-tx-existing-state-rollback";
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        guard.sessions.insert(
+            existing_session.to_string(),
+            SessionState {
+                bound_key_group: Some("existing-wallet-binding".to_string()),
+                ..Default::default()
+            },
+        );
+    }
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    build_taproot_tx(build_policy_test_request(existing_session))
+        .expect_err("pre-replacement failure must restore an existing session's build fields");
+    clear_persist_fault_injection_for_tests();
+    {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        let session = &guard.sessions[existing_session];
+        assert_eq!(
+            session.bound_key_group.as_deref(),
+            Some("existing-wallet-binding")
+        );
+        assert!(session.build_tx_request_fingerprint.is_none());
+        assert!(session.tx_result.is_none());
+    }
+
+    let pre_replace_session = "session-build-tx-pre-replace-failure";
+    let pre_replace_request = build_policy_test_request(pre_replace_session);
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let pre_replace_error = build_taproot_tx(pre_replace_request.clone())
+        .expect_err("a pre-replacement failure must not cache success");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        pre_replace_error,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        assert!(
+            !guard.sessions.contains_key(pre_replace_session),
+            "a first-use BuildTaprootTx session must be removed on rollback"
+        );
+    }
+    let pre_replace_result =
+        build_taproot_tx(pre_replace_request).expect("retry performs and persists the build");
+
+    let post_replace_session = "session-build-tx-post-replace-failure";
+    let post_replace_request = build_policy_test_request(post_replace_session);
+    let post_replace_fingerprint = fingerprint(&post_replace_request).expect("request fingerprint");
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    let post_replace_error = build_taproot_tx(post_replace_request.clone())
+        .expect_err("a post-replacement failure must report unconfirmed durability");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        post_replace_error,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    assert!(matches!(
+        pending_build_taproot_tx_operation(post_replace_session),
+        Some(PersistencePendingOperation::BuildTaprootTx {
+            request_fingerprint,
+            ..
+        }) if request_fingerprint == post_replace_fingerprint
+    ));
+
+    // Prove the cache-hit retry attempts persistence before returning success.
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let retry_error = build_taproot_tx(post_replace_request.clone())
+        .expect_err("retry must not return cached success while persistence still fails");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        retry_error,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    assert!(pending_build_taproot_tx_operation(post_replace_session).is_some());
+
+    let post_replace_result = build_taproot_tx(post_replace_request.clone())
+        .expect("retry repairs persistence then returns the cached artifact");
+    assert!(pending_build_taproot_tx_operation(post_replace_session).is_none());
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    assert_eq!(
+        build_taproot_tx(post_replace_request).expect("durable cached retry after restart"),
+        post_replace_result
+    );
+    assert_eq!(
+        build_taproot_tx(build_policy_test_request(pre_replace_session))
+            .expect("pre-replacement retry also survived restart"),
+        pre_replace_result
+    );
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn production_profile_forces_provenance_gate_without_env_flag() {
     let _guard = lock_test_state();
     reset_for_tests();
@@ -1046,6 +1152,138 @@ fn persist_distributed_dkg_key_package_rejects_a_bound_signing_session() {
         session.bound_key_group.as_deref(),
         Some("original-wallet-key-group")
     );
+}
+
+#[test]
+fn persist_distributed_dkg_key_package_pre_replace_failure_rolls_back() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("distributed_dkg_persist_rollback");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let session_id = "session-distributed-dkg-persist-rollback";
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(23);
+    let request = crate::api::PersistDistributedDkgKeyPackageRequest {
+        session_id: session_id.to_string(),
+        participant_identifier: 1,
+        threshold: 2,
+        participant_count: 3,
+        key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+        public_key_package: native_public,
+    };
+
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let error = persist_distributed_dkg_key_package(request.clone())
+        .expect_err("pre-replacement DKG persist fault must roll back");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        error,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        assert!(
+            !guard.sessions.contains_key(session_id),
+            "failed first persistence must not leave in-memory-only DKG material"
+        );
+    }
+
+    let result = persist_distributed_dkg_key_package(request)
+        .expect("retry installs and persists the distributed DKG package");
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    let guard = state().expect("engine state").lock().expect("engine lock");
+    let session = guard
+        .sessions
+        .get(session_id)
+        .expect("reloaded DKG session");
+    assert_eq!(session.dkg_result.as_ref(), Some(&result));
+    assert!(session
+        .dkg_key_packages
+        .as_ref()
+        .is_some_and(|packages| packages.contains_key(&1)));
+    drop(guard);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn distributed_dkg_pre_replace_rollback_preserves_existing_seats() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("distributed_dkg_existing_seat_rollback");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let session_id = "session-distributed-dkg-existing-seat-rollback";
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(29);
+    let request_for = |participant_identifier| crate::api::PersistDistributedDkgKeyPackageRequest {
+        session_id: session_id.to_string(),
+        participant_identifier,
+        threshold: 2,
+        participant_count: 3,
+        key_package: native_key_packages
+            .get(&participant_identifier)
+            .expect("local seat")
+            .clone(),
+        public_key_package: native_public.clone(),
+    };
+
+    let baseline = persist_distributed_dkg_key_package(request_for(1))
+        .expect("persist baseline distributed-DKG seat");
+    let baseline_key_package = {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        guard.sessions[session_id]
+            .dkg_key_packages
+            .as_ref()
+            .expect("key packages")[&1]
+            .serialize()
+            .expect("serialize baseline key package")
+    };
+
+    // Replacing the same seat before a failed write must restore the prior
+    // secret package rather than dropping the session's only local seat.
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    persist_distributed_dkg_key_package(request_for(1))
+        .expect_err("same-seat persist fault must restore the existing package");
+    clear_persist_fault_injection_for_tests();
+    {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        let session = &guard.sessions[session_id];
+        assert_eq!(session.dkg_result.as_ref(), Some(&baseline));
+        assert_eq!(
+            session
+                .dkg_key_packages
+                .as_ref()
+                .expect("restored key packages")[&1]
+                .serialize()
+                .expect("serialize restored key package"),
+            baseline_key_package
+        );
+    }
+
+    // Adding a sibling seat before a failed write must leave the prior seat set
+    // untouched; a subsequent healthy retry can then add it normally.
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    persist_distributed_dkg_key_package(request_for(2))
+        .expect_err("sibling-seat persist fault must roll back only the new seat");
+    clear_persist_fault_injection_for_tests();
+    {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        let packages = guard.sessions[session_id]
+            .dkg_key_packages
+            .as_ref()
+            .expect("baseline key packages");
+        assert!(packages.contains_key(&1));
+        assert!(!packages.contains_key(&2));
+    }
+    persist_distributed_dkg_key_package(request_for(2))
+        .expect("healthy retry adds the sibling seat");
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
 }
 
 // The op rejects a key package whose own identifier does not match the claimed
@@ -2009,6 +2247,577 @@ fn canary_promotion_and_rollback_controls_persist_across_reload() {
     let metrics = hardening_metrics();
     assert!(metrics.canary_promotions_total >= 2);
     assert!(metrics.canary_rollbacks_total >= 1);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn emergency_rekey_persist_failure_rolls_back_and_retry_is_durable() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("emergency_rekey_persist_retry");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let session_id = "session-emergency-rekey-persist-retry";
+    ensure_interactive_dkg_session(session_id, "emergency-rekey-persist-key-group");
+    {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        persist_engine_state_to_storage(&guard).expect("persist baseline wallet session");
+    }
+
+    let request = TriggerEmergencyRekeyRequest {
+        session_id: session_id.to_string(),
+        reason: "compromise containment".to_string(),
+    };
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let err = trigger_emergency_rekey(request.clone())
+        .expect_err("injected persist fault must fail emergency rekey");
+    clear_persist_fault_injection_for_tests();
+    assert!(
+        matches!(err, EngineError::Internal(ref message) if message.contains("injected persist fault")),
+        "unexpected error: {err:?}"
+    );
+
+    {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        assert!(
+            guard
+                .sessions
+                .get(session_id)
+                .expect("wallet session")
+                .emergency_rekey_event
+                .is_none(),
+            "a failed persist must not strand an in-memory-only kill switch"
+        );
+    }
+
+    trigger_emergency_rekey(request).expect("retry persists emergency rekey");
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+
+    {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        let event = guard
+            .sessions
+            .get(session_id)
+            .expect("reloaded wallet session")
+            .emergency_rekey_event
+            .as_ref()
+            .expect("durable emergency rekey event");
+        assert_eq!(event.reason, "compromise containment");
+    }
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn emergency_rekey_different_reason_retry_repairs_pending_persistence() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("emergency_rekey_pending_different_reason");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let session_id = "session-emergency-rekey-pending-different-reason";
+    ensure_interactive_dkg_session(session_id, "emergency-rekey-different-reason-key-group");
+    let original_request = TriggerEmergencyRekeyRequest {
+        session_id: session_id.to_string(),
+        reason: "key compromise".to_string(),
+    };
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    trigger_emergency_rekey(original_request)
+        .expect_err("post-replacement fault leaves a pending emergency rekey");
+    clear_persist_fault_injection_for_tests();
+    assert!(pending_emergency_rekey_operation(session_id).is_some());
+
+    // A healthy full-state write makes the state durable, but must not erase the
+    // original operation's cached retry result.
+    {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        persist_engine_state_to_storage(&guard).expect("unrelated full-state write");
+    }
+    assert!(pending_emergency_rekey_operation(session_id).is_some());
+
+    let changed_reason_request = TriggerEmergencyRekeyRequest {
+        session_id: session_id.to_string(),
+        reason: "key-compromise".to_string(),
+    };
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let retry_error = trigger_emergency_rekey(changed_reason_request.clone())
+        .expect_err("different-reason retry must attempt the pending durability repair");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        retry_error,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    assert!(pending_emergency_rekey_operation(session_id).is_some());
+
+    let immutable_error = trigger_emergency_rekey(changed_reason_request)
+        .expect_err("after repair, a changed reason remains an immutable-event conflict");
+    assert!(matches!(
+        immutable_error,
+        EngineError::Validation(ref message) if message.contains("already triggered")
+    ));
+    assert!(pending_emergency_rekey_operation(session_id).is_none());
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    let guard = state().expect("engine state").lock().expect("engine lock");
+    assert_eq!(
+        guard.sessions[session_id]
+            .emergency_rekey_event
+            .as_ref()
+            .expect("durable rekey event")
+            .reason,
+        "key compromise"
+    );
+    drop(guard);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn emergency_rekey_post_replace_state_survives_immediate_process_restart() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("emergency_rekey_post_replace_restart");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let session_id = "session-emergency-rekey-post-replace-restart";
+    ensure_interactive_dkg_session(session_id, "emergency-rekey-restart-key-group");
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    trigger_emergency_rekey(TriggerEmergencyRekeyRequest {
+        session_id: session_id.to_string(),
+        reason: "restart-window containment".to_string(),
+    })
+    .expect_err("post-replacement fault must report failure before restart");
+    clear_persist_fault_injection_for_tests();
+
+    // Simulate process death before an in-process retry can flush the pending
+    // registry. On filesystems where rename completed, the replacement image is
+    // loaded and the kill switch remains active.
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    let guard = state().expect("engine state").lock().expect("engine lock");
+    assert_eq!(
+        guard.sessions[session_id]
+            .emergency_rekey_event
+            .as_ref()
+            .expect("post-replacement event survives restart")
+            .reason,
+        "restart-window containment"
+    );
+    drop(guard);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn refresh_shares_persist_failure_rolls_back_and_retry_is_durable() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("refresh_shares_persist_retry");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let session_id = "session-refresh-persist-retry";
+    let first_request = RefreshSharesRequest {
+        session_id: session_id.to_string(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "aaaa".to_string(),
+        }],
+    };
+    let second_request = RefreshSharesRequest {
+        session_id: session_id.to_string(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "bbbb".to_string(),
+        }],
+    };
+    let first_result = refresh_shares(first_request).expect("persist first refresh");
+
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let err = refresh_shares(second_request.clone())
+        .expect_err("injected persist fault must fail second refresh");
+    clear_persist_fault_injection_for_tests();
+    assert!(
+        matches!(err, EngineError::Internal(ref message) if message.contains("injected persist fault")),
+        "unexpected error: {err:?}"
+    );
+
+    {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard.sessions.get(session_id).expect("refresh session");
+        assert_eq!(guard.refresh_epoch_counter, 1);
+        assert_eq!(session.refresh_result.as_ref(), Some(&first_result));
+        assert_eq!(session.refresh_history.len(), 1);
+        assert_eq!(session.refresh_count, 1);
+    }
+
+    let second_result =
+        refresh_shares(second_request.clone()).expect("retry persists second refresh");
+    assert_eq!(second_result.refresh_epoch, 2);
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard
+            .sessions
+            .get(session_id)
+            .expect("reloaded refresh session");
+        assert_eq!(guard.refresh_epoch_counter, 2);
+        assert_eq!(session.refresh_result.as_ref(), Some(&second_result));
+        assert_eq!(session.refresh_history.len(), 2);
+        assert_eq!(session.refresh_count, 2);
+    }
+    assert_eq!(
+        refresh_shares(second_request).expect("durable idempotent refresh retry"),
+        second_result
+    );
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn first_refresh_pre_replace_failure_removes_new_session() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("first_refresh_persist_rollback");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let session_id = "session-first-refresh-persist-rollback";
+    let request = RefreshSharesRequest {
+        session_id: session_id.to_string(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "abcd".to_string(),
+        }],
+    };
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let error = refresh_shares(request.clone())
+        .expect_err("first refresh must roll back when state was not replaced");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        error,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        assert_eq!(guard.refresh_epoch_counter, 0);
+        assert!(!guard.sessions.contains_key(session_id));
+    }
+
+    let result = refresh_shares(request).expect("retry performs the first refresh");
+    assert_eq!(result.refresh_epoch, 1);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn pending_refresh_retry_rechecks_emergency_rekey_before_returning_shares() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("pending_refresh_rekey_gate");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let session_id = "session-pending-refresh-rekey-gate";
+    let request = RefreshSharesRequest {
+        session_id: session_id.to_string(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "beef".to_string(),
+        }],
+    };
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    refresh_shares(request.clone())
+        .expect_err("post-replacement refresh fault leaves a pending result");
+    clear_persist_fault_injection_for_tests();
+    assert!(pending_refresh_operation(session_id).is_some());
+
+    trigger_emergency_rekey(TriggerEmergencyRekeyRequest {
+        session_id: session_id.to_string(),
+        reason: "kill switch after refresh failure".to_string(),
+    })
+    .expect("persist emergency rekey");
+
+    let error = refresh_shares(request)
+        .expect_err("a pending refresh retry must not bypass the active kill switch");
+    assert!(matches!(
+        error,
+        EngineError::LifecyclePolicyRejected { ref reason_code, .. }
+            if reason_code == "emergency_rekey_required"
+    ));
+    assert!(pending_refresh_operation(session_id).is_none());
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn canary_promotion_persist_failure_rolls_back_and_retry_is_durable() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("canary_promotion_persist_retry");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let request = PromoteCanaryRequest { target_percent: 50 };
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let err = promote_canary(request.clone())
+        .expect_err("injected persist fault must fail canary promotion");
+    clear_persist_fault_injection_for_tests();
+    assert!(
+        matches!(err, EngineError::Internal(ref message) if message.contains("injected persist fault")),
+        "unexpected error: {err:?}"
+    );
+
+    let rolled_back_status = canary_rollout_status().expect("canary status after failed persist");
+    assert_eq!(rolled_back_status.current_percent, 10);
+    assert_eq!(rolled_back_status.previous_percent, 10);
+    assert_eq!(rolled_back_status.config_version, 1);
+
+    let promoted = promote_canary(request).expect("retry persists canary promotion");
+    assert_eq!(promoted.from_percent, 10);
+    assert_eq!(promoted.to_percent, 50);
+    assert_eq!(promoted.config_version, 2);
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    let reloaded_status = canary_rollout_status().expect("reloaded canary status");
+    assert_eq!(reloaded_status.current_percent, 50);
+    assert_eq!(reloaded_status.previous_percent, 10);
+    assert_eq!(reloaded_status.config_version, 2);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn canary_rollback_persist_failure_rolls_back_and_retry_is_durable() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("canary_rollback_persist_retry");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    promote_canary(PromoteCanaryRequest { target_percent: 50 })
+        .expect("persist baseline canary promotion");
+    let request = RollbackCanaryRequest {
+        reason: "rollback persist drill".to_string(),
+    };
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let err = rollback_canary(request.clone())
+        .expect_err("injected persist fault must fail canary rollback");
+    clear_persist_fault_injection_for_tests();
+    assert!(
+        matches!(err, EngineError::Internal(ref message) if message.contains("injected persist fault")),
+        "unexpected error: {err:?}"
+    );
+
+    let rolled_back_status = canary_rollout_status().expect("canary status after failed rollback");
+    assert_eq!(rolled_back_status.current_percent, 50);
+    assert_eq!(rolled_back_status.previous_percent, 10);
+    assert_eq!(rolled_back_status.config_version, 2);
+
+    let rollback = rollback_canary(request).expect("retry persists canary rollback");
+    assert_eq!(rollback.from_percent, 50);
+    assert_eq!(rollback.to_percent, 10);
+    assert_eq!(rollback.config_version, 3);
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    let reloaded_status = canary_rollout_status().expect("reloaded rollback status");
+    assert_eq!(reloaded_status.current_percent, 10);
+    assert_eq!(reloaded_status.previous_percent, 10);
+    assert_eq!(reloaded_status.config_version, 3);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn lifecycle_post_rename_persist_failures_remain_fail_closed_and_retry_durably() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("lifecycle_post_rename_retry");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let rekey_session = "session-emergency-rekey-post-rename";
+    ensure_interactive_dkg_session(rekey_session, "emergency-rekey-post-rename-key-group");
+    {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        persist_engine_state_to_storage(&guard).expect("persist baseline wallet session");
+    }
+    let rekey_request = TriggerEmergencyRekeyRequest {
+        session_id: rekey_session.to_string(),
+        reason: "post-rename containment".to_string(),
+    };
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    let rekey_error = trigger_emergency_rekey(rekey_request.clone())
+        .expect_err("post-rename fault must report emergency rekey failure");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        rekey_error,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    assert!(pending_emergency_rekey_result(rekey_session, "post-rename containment").is_some());
+    {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        assert!(
+            guard.sessions[rekey_session]
+                .emergency_rekey_event
+                .is_some(),
+            "a replaced state file keeps the in-memory kill switch fail closed"
+        );
+    }
+    let rekey_result =
+        trigger_emergency_rekey(rekey_request).expect("same rekey retry flushes pending state");
+    assert_eq!(rekey_result.session_id, rekey_session);
+    assert!(pending_emergency_rekey_result(rekey_session, "post-rename containment").is_none());
+
+    let refresh_session = "session-refresh-post-rename";
+    let refresh_request = RefreshSharesRequest {
+        session_id: refresh_session.to_string(),
+        current_shares: vec![ShareMaterial {
+            identifier: 1,
+            encrypted_share_hex: "cafe".to_string(),
+        }],
+    };
+    let refresh_fingerprint = fingerprint(&canonicalize_refresh_shares_request_for_fingerprint(
+        &refresh_request,
+    ))
+    .expect("refresh request fingerprint");
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    let refresh_error = refresh_shares(refresh_request.clone())
+        .expect_err("post-rename fault must report refresh failure");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        refresh_error,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    assert!(refresh_persistence_pending(
+        refresh_session,
+        &refresh_fingerprint
+    ));
+    let pending_refresh_result = {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        assert_eq!(guard.refresh_epoch_counter, 1);
+        guard.sessions[refresh_session]
+            .refresh_result
+            .clone()
+            .expect("fail-closed refresh cache")
+    };
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    refresh_shares(refresh_request.clone())
+        .expect_err("a failed pending refresh flush must not return cached success");
+    clear_persist_fault_injection_for_tests();
+    assert!(refresh_persistence_pending(
+        refresh_session,
+        &refresh_fingerprint
+    ));
+    let retried_refresh =
+        refresh_shares(refresh_request).expect("same refresh retry flushes pending state");
+    assert_eq!(retried_refresh, pending_refresh_result);
+    assert!(!refresh_persistence_pending(
+        refresh_session,
+        &refresh_fingerprint
+    ));
+
+    let promotion_request = PromoteCanaryRequest { target_percent: 50 };
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    let promotion_error = promote_canary(promotion_request.clone())
+        .expect_err("post-rename fault must report promotion failure");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        promotion_error,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    assert!(pending_canary_promotion_result(50).is_some());
+    let pending_promotion_status = canary_rollout_status().expect("pending promotion status");
+    assert_eq!(pending_promotion_status.current_percent, 50);
+    assert_eq!(pending_promotion_status.config_version, 2);
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    promote_canary(promotion_request.clone())
+        .expect_err("a failed pending promotion flush must not report success");
+    clear_persist_fault_injection_for_tests();
+    assert!(pending_canary_promotion_result(50).is_some());
+    let promotion_result =
+        promote_canary(promotion_request).expect("same promotion retry flushes pending state");
+    assert_eq!(promotion_result.from_percent, 10);
+    assert_eq!(promotion_result.to_percent, 50);
+    assert_eq!(promotion_result.config_version, 2);
+    assert!(pending_canary_promotion_result(50).is_none());
+
+    let rollback_request = RollbackCanaryRequest {
+        reason: "post-rename rollback".to_string(),
+    };
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    let rollback_error = rollback_canary(rollback_request.clone())
+        .expect_err("post-rename fault must report rollback failure");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        rollback_error,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    assert!(pending_canary_rollback_result("post-rename rollback").is_some());
+    let pending_rollback_status = canary_rollout_status().expect("pending rollback status");
+    assert_eq!(pending_rollback_status.current_percent, 10);
+    assert_eq!(pending_rollback_status.config_version, 3);
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    rollback_canary(rollback_request.clone())
+        .expect_err("a failed pending rollback flush must not report success");
+    clear_persist_fault_injection_for_tests();
+    assert!(pending_canary_rollback_result("post-rename rollback").is_some());
+    let rollback_result =
+        rollback_canary(rollback_request).expect("same rollback retry flushes pending state");
+    assert_eq!(rollback_result.from_percent, 50);
+    assert_eq!(rollback_result.to_percent, 10);
+    assert_eq!(rollback_result.config_version, 3);
+    assert!(pending_canary_rollback_result("post-rename rollback").is_none());
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    let guard = state().expect("engine state").lock().expect("engine lock");
+    assert!(guard.sessions[rekey_session]
+        .emergency_rekey_event
+        .is_some());
+    assert_eq!(
+        guard.sessions[refresh_session]
+            .refresh_result
+            .as_ref()
+            .expect("durable refresh result"),
+        &pending_refresh_result
+    );
+    assert_eq!(guard.canary_rollout.current_percent, 10);
+    assert_eq!(guard.canary_rollout.config_version, 3);
+    drop(guard);
 
     reset_for_tests();
     cleanup_test_state_artifacts(&state_path);
@@ -4184,6 +4993,70 @@ fn corrupt_state_file_fails_closed_by_default() {
 }
 
 #[test]
+fn empty_state_file_fails_closed_by_default() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("empty_state_fail_closed");
+    reset_for_tests();
+
+    std::fs::write(&state_path, b"").expect("truncate state file to zero bytes");
+
+    let err = match load_engine_state_from_storage() {
+        Ok(_) => panic!("empty state must be corruption"),
+        Err(err) => err,
+    };
+    assert!(matches!(err, EngineError::Internal(_)));
+    let err_message = err.to_string();
+    assert!(err_message.contains("exists but is empty"));
+    assert!(err_message.contains("refusing to continue with corrupted signer state file"));
+    assert!(err_message.contains(TBTC_SIGNER_STATE_CORRUPTION_POLICY_ENV));
+    assert_eq!(
+        std::fs::metadata(&state_path)
+            .expect("empty state file remains")
+            .len(),
+        0
+    );
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[cfg(unix)]
+#[test]
+fn dangling_state_file_symlink_fails_closed() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("dangling_state_symlink");
+    reset_for_tests();
+
+    let missing_target = state_path.with_extension("missing-target");
+    let _ = std::fs::remove_file(&missing_target);
+    std::fs::remove_file(&state_path).expect("remove initialized state file");
+    std::os::unix::fs::symlink(&missing_target, &state_path)
+        .expect("create dangling state symlink");
+
+    let err = match load_engine_state_from_storage() {
+        Ok(_) => panic!("a dangling state symlink must not initialize clean state"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(err, EngineError::Internal(ref message) if message.contains("failed to read signer state file")),
+        "unexpected error: {err:?}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&state_path)
+            .expect("dangling symlink metadata")
+            .file_type()
+            .is_symlink(),
+        "the failed load must not replace or reinterpret the dangling symlink"
+    );
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    let _ = std::fs::remove_file(&missing_target);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn corrupt_state_file_quarantines_and_resets_when_enabled() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("corrupt_state_quarantine_reset");
@@ -4205,6 +5078,38 @@ fn corrupt_state_file_quarantines_and_resets_when_enabled() {
     assert_eq!(backups.len(), 1);
     let backup_contents = std::fs::read(&backups[0]).expect("read backup file contents");
     assert_eq!(backup_contents, b"{invalid-state");
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn empty_state_file_quarantines_and_resets_when_enabled() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("empty_state_quarantine_reset");
+    reset_for_tests();
+
+    std::env::set_var(
+        TBTC_SIGNER_STATE_CORRUPTION_POLICY_ENV,
+        TBTC_SIGNER_STATE_CORRUPTION_POLICY_QUARANTINE_AND_RESET,
+    );
+    std::fs::write(&state_path, b"").expect("truncate state file to zero bytes");
+
+    let loaded = load_engine_state_from_storage().expect("quarantine empty state file");
+    assert!(loaded.sessions.is_empty());
+    assert_eq!(loaded.refresh_epoch_counter, 0);
+    assert!(!state_path.exists());
+
+    let backups =
+        sorted_corrupted_state_backups(&state_path).expect("list corrupted state backups");
+    assert_eq!(backups.len(), 1);
+    assert_eq!(
+        std::fs::metadata(&backups[0])
+            .expect("empty backup exists")
+            .len(),
+        0
+    );
 
     reset_for_tests();
     cleanup_test_state_artifacts(&state_path);
@@ -6903,6 +7808,117 @@ fn interactive_round2_persist_fault_leaves_nonces_live() {
 }
 
 #[test]
+fn interactive_round2_post_rename_persist_failure_consumes_attempt_and_retry_flushes() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("interactive_round2_post_rename");
+    reset_for_tests();
+
+    let key_packages = interactive_test_key_packages();
+    let session_id = "interactive-round2-post-rename";
+    let key_group = "interactive-test-key-group";
+    let message = [0x72u8; 32];
+    let included = [1u16, 2];
+
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("opens");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+    let round2_request = InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex,
+    };
+    let consumed_marker = interactive_consumed_marker(&opened.attempt_id, 1);
+
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    let faulted = interactive_round2(round2_request.clone())
+        .expect_err("post-rename persist fault must release no share");
+    clear_persist_fault_injection_for_tests();
+    assert!(
+        matches!(faulted, EngineError::Internal(ref message) if message.contains("injected persist fault")),
+        "unexpected error: {faulted:?}"
+    );
+
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(session_id).expect("session exists");
+        assert!(session
+            .consumed_interactive_attempt_markers
+            .contains(&consumed_marker));
+        assert!(
+            !session.interactive_signing.contains_key(&1),
+            "post-rename failure must destroy the live nonce-bearing member state"
+        );
+    }
+    assert!(interactive_round2_persistence_pending(
+        session_id,
+        &consumed_marker
+    ));
+
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let failed_flush = interactive_round2(round2_request.clone())
+        .expect_err("a failed pending-marker flush must not reach the replay gate");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        failed_flush,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    assert!(interactive_round2_persistence_pending(
+        session_id,
+        &consumed_marker
+    ));
+
+    // Crash before any successful in-process repair. The pending registry is
+    // memory-only and disappears; the replacement image must carry the marker.
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        assert!(guard.sessions[session_id]
+            .consumed_interactive_attempt_markers
+            .contains(&consumed_marker));
+        assert!(guard.sessions[session_id].interactive_signing.is_empty());
+    }
+
+    let retry = interactive_round2(round2_request)
+        .expect_err("restart retry rejects the durable consumed attempt");
+    assert!(
+        matches!(retry, EngineError::ConsumedNonceReplay { .. }),
+        "unexpected retry error: {retry:?}"
+    );
+    assert!(!interactive_round2_persistence_pending(
+        session_id,
+        &consumed_marker
+    ));
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn interactive_open_idempotency_conflict_and_replacement() {
     let _guard = lock_test_state();
     reset_for_tests();
@@ -8933,6 +9949,154 @@ fn interactive_aggregate_completion_marker_survives_process_restart() {
         "unexpected error: {err:?}"
     );
     assert_eq!(err.code(), "interactive_attempt_already_aggregated");
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn interactive_aggregate_post_rename_persist_failure_finalizes_attempt_and_retry_flushes() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("interactive_aggregate_post_rename");
+    reset_for_tests();
+
+    let session_id = "interactive-aggregate-post-rename";
+    let key_group = "interactive-test-key-group";
+    let message = [0x50u8; 32];
+    let included = [1u16, 2, 3];
+    let key_packages = ensure_interactive_dkg_session(session_id, key_group);
+
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("member 1 opens");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("member 1 round 1");
+
+    let sibling = open_interactive_for_test(session_id, key_group, &message, &included, 1, 3, 2)
+        .expect("unsigned sibling opens");
+    assert_eq!(sibling.attempt_id, opened.attempt_id);
+    interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: sibling.attempt_id,
+        member_identifier: 3,
+    })
+    .expect("unsigned sibling creates live nonces");
+
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment.clone(),
+        ],
+    );
+    let round2 = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect("member 1 round 2 share");
+    let member2_share = sign_share(SignShareRequest {
+        signing_package_hex: signing_package_hex.clone(),
+        nonces_hex: member2.nonces_hex,
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 share");
+
+    let aggregate_request = InteractiveAggregateRequest {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        signing_package_hex,
+        signature_shares: vec![
+            crate::api::NativeFrostSignatureShare {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round2.signature_share_hex,
+            },
+            member2_share.signature_share,
+        ],
+        taproot_merkle_root_hex: None,
+    };
+    let aggregated_marker =
+        interactive_aggregated_marker(&opened.attempt_id, &hash_hex(&message), None);
+
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    let faulted = interactive_aggregate(aggregate_request.clone())
+        .expect_err("post-rename persist fault must report aggregate failure");
+    clear_persist_fault_injection_for_tests();
+    assert!(
+        matches!(faulted, EngineError::Internal(ref text) if text.contains("injected persist fault")),
+        "unexpected error: {faulted:?}"
+    );
+
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(session_id).expect("session exists");
+        assert!(session
+            .aggregated_interactive_attempt_markers
+            .contains(&aggregated_marker));
+        assert!(
+            !session.interactive_signing.contains_key(&3),
+            "a retained completion marker must destroy an unsigned sibling's live nonces"
+        );
+    }
+    assert!(interactive_aggregate_persistence_pending(
+        session_id,
+        &aggregated_marker
+    ));
+
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let failed_flush = interactive_aggregate(aggregate_request.clone())
+        .expect_err("a failed pending completion flush must not reach the completion gate");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        failed_flush,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    assert!(interactive_aggregate_persistence_pending(
+        session_id,
+        &aggregated_marker
+    ));
+
+    // Crash before a successful in-process repair. Reload must retain the
+    // completion marker and cannot resurrect the unsigned sibling's nonces.
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        assert!(guard.sessions[session_id]
+            .aggregated_interactive_attempt_markers
+            .contains(&aggregated_marker));
+        assert!(guard.sessions[session_id].interactive_signing.is_empty());
+    }
+
+    let retry = interactive_aggregate(aggregate_request)
+        .expect_err("restart retry rejects the durable completed attempt");
+    assert!(
+        matches!(
+            retry,
+            EngineError::InteractiveAttemptAlreadyAggregated { .. }
+        ),
+        "unexpected retry error: {retry:?}"
+    );
+    assert!(!interactive_aggregate_persistence_pending(
+        session_id,
+        &aggregated_marker
+    ));
 
     reset_for_tests();
     cleanup_test_state_artifacts(&state_path);

@@ -342,9 +342,24 @@ Scenario coverage and pass criteria:
 - `process_crash_active_attempt`: consumed-attempt replay guard survives
   simulated crash and cache loss.
 - `persist_fault_pre_rename`: previous durable state remains intact after
-  injected pre-rename persist fault.
+  injected pre-rename persist fault, including transaction-build,
+  distributed-DKG, refresh, rollout, and emergency-rekey mutations.
 - `persist_fault_post_rename`: renamed durable state remains loadable after
-  injected post-rename persist fault.
+  injected post-rename persist fault. The engine retains fail-closed markers and
+  operation-specific pending results; retries must repair persistence before an
+  idempotent/cache response is returned, and one healthy operation cannot erase
+  another operation's retry record.
+
+`PersistDistributedDkgKeyPackage` has no cached-success fast path. A
+pre-replacement error restores the prior seat/session state; a post-replacement
+error is never acknowledged as success, and every caller retry executes another
+complete state snapshot. Hosts must retry a reported DKG persistence error before
+treating that DKG seat as installed.
+
+The post-rename fault tests model a process restart after the replacement file is
+visible. They do not emulate sudden power loss that also loses an unsynced
+directory entry; operators must use the supported local durable filesystem and
+storage guarantees for that hardware-level failure boundary.
 
 ## FFI contract
 
