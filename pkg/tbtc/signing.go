@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/frost/roast"
@@ -42,6 +43,43 @@ const (
 // errSigningExecutorBusy is an error returned when the signing executor
 // cannot execute the requested signature due to an ongoing signing.
 var errSigningExecutorBusy = fmt.Errorf("signing executor is busy")
+
+var bindTaprootTxViaNativeSignerFn = bindTaprootTxViaNativeSigner
+
+func bindTaprootPolicyArtifactForSigning(
+	message *big.Int,
+	taprootMerkleRoot *[32]byte,
+	startBlock uint64,
+	keyGroupID string,
+	unsignedTx *bitcoin.TransactionBuilder,
+	inputIndex int,
+) (string, error) {
+	if unsignedTx == nil {
+		return "", nil
+	}
+	if keyGroupID == "" {
+		return "", fmt.Errorf(
+			"cannot bind transaction policy without a FROST key-group identifier",
+		)
+	}
+
+	roastSID := roastSessionID(
+		message,
+		taprootMerkleRoot,
+		startBlock,
+		keyGroupID,
+	)
+	if err := bindTaprootTxViaNativeSignerFn(
+		roastSID,
+		unsignedTx,
+		inputIndex,
+		message,
+	); err != nil {
+		return "", err
+	}
+
+	return roastSID, nil
+}
 
 func signingSessionID(
 	message *big.Int,
@@ -236,10 +274,58 @@ func (se *signingExecutor) signBatchWithTaprootMerkleRoots(
 	taprootMerkleRoots []*[32]byte,
 	startBlock uint64,
 ) ([]*frost.Signature, error) {
+	return se.signBatchWithTaprootPolicy(
+		ctx,
+		messages,
+		taprootMerkleRoots,
+		startBlock,
+		nil,
+	)
+}
+
+// signBatchWithTaprootTransaction binds each input's policy-checked transaction
+// artifact under the exact stable ROAST session used for that input's signing.
+// Batch items after the first derive their start block dynamically, so this
+// binding must happen inside the sequential loop rather than as a wallet-level
+// preflight.
+func (se *signingExecutor) signBatchWithTaprootTransaction(
+	ctx context.Context,
+	messages []*big.Int,
+	taprootMerkleRoots []*[32]byte,
+	startBlock uint64,
+	unsignedTx *bitcoin.TransactionBuilder,
+) ([]*frost.Signature, error) {
+	if unsignedTx == nil {
+		return nil, fmt.Errorf("unsigned transaction builder is nil")
+	}
+
+	return se.signBatchWithTaprootPolicy(
+		ctx,
+		messages,
+		taprootMerkleRoots,
+		startBlock,
+		unsignedTx,
+	)
+}
+
+func (se *signingExecutor) signBatchWithTaprootPolicy(
+	ctx context.Context,
+	messages []*big.Int,
+	taprootMerkleRoots []*[32]byte,
+	startBlock uint64,
+	unsignedTx *bitcoin.TransactionBuilder,
+) ([]*frost.Signature, error) {
 	if taprootMerkleRoots != nil && len(taprootMerkleRoots) != len(messages) {
 		return nil, fmt.Errorf(
 			"taproot merkle roots count [%v] does not match messages count [%v]",
 			len(taprootMerkleRoots),
+			len(messages),
+		)
+	}
+	if unsignedTx != nil && len(unsignedTx.UnsignedTransaction().Inputs) != len(messages) {
+		return nil, fmt.Errorf(
+			"unsigned transaction input count [%v] does not match messages count [%v]",
+			len(unsignedTx.UnsignedTransaction().Inputs),
 			len(messages),
 		)
 	}
@@ -282,6 +368,7 @@ func (se *signingExecutor) signBatchWithTaprootMerkleRoots(
 	signingStartBlock := startBlock // start block for the first signing
 	signatures := make([]*frost.Signature, len(messages))
 	endBlocks := make([]uint64, len(messages))
+	roastKeyGroupID := roastSelectorKeyGroupID(se.signers[0])
 
 	for i, message := range messages {
 		signingBatchMessageLogger := signingBatchLogger.With(
@@ -300,11 +387,28 @@ func (se *signingExecutor) signBatchWithTaprootMerkleRoots(
 			taprootMerkleRoot = taprootMerkleRoots[i]
 		}
 
-		signature, _, endBlock, err := se.signWithTaprootMerkleRoot(
+		policyBoundRoastSID, err := bindTaprootPolicyArtifactForSigning(
+			message,
+			taprootMerkleRoot,
+			signingStartBlock,
+			roastKeyGroupID,
+			unsignedTx,
+			i,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot bind input [%d] to the native signer policy artifact: [%w]",
+				i,
+				err,
+			)
+		}
+
+		signature, _, endBlock, err := se.signWithTaprootMerkleRootForSession(
 			ctx,
 			message,
 			taprootMerkleRoot,
 			signingStartBlock,
+			policyBoundRoastSID,
 		)
 		if err != nil {
 			// Error metrics are recorded in the sign() method for all error paths.
@@ -339,11 +443,70 @@ func (se *signingExecutor) sign(
 	return se.signWithTaprootMerkleRoot(ctx, message, nil, startBlock)
 }
 
+// signHeartbeat computes the canonical SHA256d heartbeat message exactly as the
+// generic path historically did, while retaining the raw 16-byte proposal as a
+// typed authorization intent for the native signing-policy firewall.
+func (se *signingExecutor) signHeartbeat(
+	ctx context.Context,
+	heartbeatMessage [16]byte,
+	startBlock uint64,
+) (*frost.Signature, *signingActivityReport, uint64, error) {
+	messageToSign := heartbeatSigningMessage(heartbeatMessage)
+
+	return se.signWithTaprootMerkleRootForSessionAndIntent(
+		ctx,
+		messageToSign,
+		nil,
+		startBlock,
+		"",
+		signing.NewHeartbeatSigningIntent(heartbeatMessage),
+	)
+}
+
+func heartbeatSigningMessage(heartbeatMessage [16]byte) *big.Int {
+	messageBytes := bitcoin.ComputeHash(heartbeatMessage[:])
+	return new(big.Int).SetBytes(messageBytes[:])
+}
+
 func (se *signingExecutor) signWithTaprootMerkleRoot(
 	ctx context.Context,
 	message *big.Int,
 	taprootMerkleRoot *[32]byte,
 	startBlock uint64,
+) (*frost.Signature, *signingActivityReport, uint64, error) {
+	return se.signWithTaprootMerkleRootForSession(
+		ctx,
+		message,
+		taprootMerkleRoot,
+		startBlock,
+		"",
+	)
+}
+
+func (se *signingExecutor) signWithTaprootMerkleRootForSession(
+	ctx context.Context,
+	message *big.Int,
+	taprootMerkleRoot *[32]byte,
+	startBlock uint64,
+	policyBoundRoastSessionID string,
+) (*frost.Signature, *signingActivityReport, uint64, error) {
+	return se.signWithTaprootMerkleRootForSessionAndIntent(
+		ctx,
+		message,
+		taprootMerkleRoot,
+		startBlock,
+		policyBoundRoastSessionID,
+		nil,
+	)
+}
+
+func (se *signingExecutor) signWithTaprootMerkleRootForSessionAndIntent(
+	ctx context.Context,
+	message *big.Int,
+	taprootMerkleRoot *[32]byte,
+	startBlock uint64,
+	policyBoundRoastSessionID string,
+	signingIntent *signing.SigningIntent,
 ) (*frost.Signature, *signingActivityReport, uint64, error) {
 	if lockAcquired := se.lock.TryAcquire(1); !lockAcquired {
 		// Record failure metrics for lock acquisition failure
@@ -403,7 +566,10 @@ func (se *signingExecutor) signWithTaprootMerkleRoot(
 	// signer's retry loop and signing request, so the ROAST participant selector
 	// and transition-record registry are keyed consistently across this signing's
 	// attempts. Computed once; constant across signers and attempts.
-	roastSID := roastSessionID(message, taprootMerkleRoot, startBlock, roastKeyGroupID)
+	roastSID := policyBoundRoastSessionID
+	if roastSID == "" {
+		roastSID = roastSessionID(message, taprootMerkleRoot, startBlock, roastKeyGroupID)
+	}
 
 	for _, currentSigner := range se.signers {
 		go func(signer *signer) {
@@ -485,6 +651,7 @@ func (se *signingExecutor) signWithTaprootMerkleRoot(
 				&signing.Request{
 					Message:           message,
 					RoastSessionID:    roastSID,
+					SigningIntent:     signingIntent,
 					MemberIndex:       signer.signingGroupMemberIndex,
 					SignerMaterial:    signer.signingMaterial(),
 					TaprootMerkleRoot: taprootMerkleRoot,
@@ -581,6 +748,7 @@ func (se *signingExecutor) signWithTaprootMerkleRoot(
 							Message:           message,
 							SessionID:         sessionID,
 							RoastSessionID:    roastSID,
+							SigningIntent:     signingIntent,
 							MemberIndex:       signer.signingGroupMemberIndex,
 							SignerMaterial:    signer.signingMaterial(),
 							PrivateKeyShare:   signer.privateKeyShare,

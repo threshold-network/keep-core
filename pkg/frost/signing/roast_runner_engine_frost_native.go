@@ -39,6 +39,7 @@ type interactiveSigningEngine interface {
 		keyGroup string,
 		threshold uint16,
 		taprootMerkleRoot *[32]byte,
+		signingIntent *SigningIntent,
 		attemptContext NativeInteractiveAttemptContext,
 	) (*NativeInteractiveSessionOpenResult, error)
 

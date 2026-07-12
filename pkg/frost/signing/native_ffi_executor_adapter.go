@@ -17,6 +17,7 @@ type NativeExecutionFFISigningRequest struct {
 	Message             *big.Int
 	SessionID           string
 	RoastSessionID      string
+	SigningIntent       *SigningIntent
 	MemberIndex         group.MemberIndex
 	GroupSize           int
 	DishonestThreshold  int
@@ -104,6 +105,7 @@ func (nefea *nativeExecutionFFIExecutorAdapter) Execute(
 		Message:             request.Message,
 		SessionID:           request.SessionID,
 		RoastSessionID:      request.RoastSessionID,
+		SigningIntent:       cloneSigningIntent(request.SigningIntent),
 		MemberIndex:         request.MemberIndex,
 		GroupSize:           request.GroupSize,
 		DishonestThreshold:  request.DishonestThreshold,

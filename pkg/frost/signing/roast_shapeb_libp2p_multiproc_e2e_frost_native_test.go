@@ -429,7 +429,7 @@ func runShapeBWorker(t *testing.T, idxStr string) {
 	// This worker's OWN engine, loaded from its OWN copied state dir.
 	engine := &buildTaggedTBTCSignerEngine{}
 	runner, err := newInteractiveSigningRunner(
-		ara, member, cfg.Threshold2uint16(), engine, collector, coord, signer, bus,
+		ara, member, cfg.Threshold2uint16(), nil, engine, collector, coord, signer, bus,
 	)
 	if err != nil {
 		if reportFrostSubprocessSkip("interactive signing runner setup", err) {

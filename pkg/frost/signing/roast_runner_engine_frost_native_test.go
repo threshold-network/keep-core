@@ -41,6 +41,7 @@ type fakeInteractiveSigningEngine struct {
 	aggregateCalls            int
 	abortCalls                int
 	deriveCalls               int
+	lastOpenSigningIntent     *SigningIntent
 	lastAggregateShares       []nativeFROSTSignatureShare
 	lastNewPackageCommitments []nativeFROSTCommitment
 }
@@ -100,6 +101,12 @@ func (f *fakeInteractiveSigningEngine) round2CallCount() int {
 	return f.round2Calls
 }
 
+func (f *fakeInteractiveSigningEngine) openSigningIntent() *SigningIntent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return cloneSigningIntent(f.lastOpenSigningIntent)
+}
+
 // newPackageCommitments returns a copy of the commitments the engine last built a
 // signing package over - the chosen t-subset for the coordinator.
 func (f *fakeInteractiveSigningEngine) newPackageCommitments() []nativeFROSTCommitment {
@@ -139,10 +146,12 @@ func (f *fakeInteractiveSigningEngine) InteractiveSessionOpen(
 	keyGroup string,
 	threshold uint16,
 	taprootMerkleRoot *[32]byte,
+	signingIntent *SigningIntent,
 	attemptContext NativeInteractiveAttemptContext,
 ) (*NativeInteractiveSessionOpenResult, error) {
 	f.mu.Lock()
 	f.openCalls++
+	f.lastOpenSigningIntent = cloneSigningIntent(signingIntent)
 	f.mu.Unlock()
 	return &NativeInteractiveSessionOpenResult{
 		SessionID:  sessionID,
@@ -205,7 +214,7 @@ func (f *fakeInteractiveSigningEngine) InteractiveAggregate(
 func TestFakeInteractiveSigningEngine_Programmable(t *testing.T) {
 	engine := newFakeInteractiveSigningEngine()
 
-	open, err := engine.InteractiveSessionOpen("s", 1, []byte("m"), "kg", 2, nil, NativeInteractiveAttemptContext{})
+	open, err := engine.InteractiveSessionOpen("s", 1, []byte("m"), "kg", 2, nil, nil, NativeInteractiveAttemptContext{})
 	if err != nil || open.AttemptID != "attempt-1" {
 		t.Fatalf("unexpected open result: %+v err=%v", open, err)
 	}

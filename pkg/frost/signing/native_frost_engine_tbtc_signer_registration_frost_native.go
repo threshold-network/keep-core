@@ -426,9 +426,10 @@ type buildTaggedTBTCSignerBuildTaprootTxRequest struct {
 }
 
 type buildTaggedTBTCSignerBuildTaprootTxInput struct {
-	TxIDHex   string `json:"txid_hex"`
-	Vout      uint32 `json:"vout"`
-	ValueSats uint64 `json:"value_sats"`
+	TxIDHex         string `json:"txid_hex"`
+	Vout            uint32 `json:"vout"`
+	ValueSats       uint64 `json:"value_sats"`
+	ScriptPubKeyHex string `json:"script_pubkey_hex"`
 }
 
 type buildTaggedTBTCSignerBuildTaprootTxOutput struct {
@@ -437,8 +438,9 @@ type buildTaggedTBTCSignerBuildTaprootTxOutput struct {
 }
 
 type buildTaggedTBTCSignerBuildTaprootTxResponse struct {
-	SessionID string `json:"session_id"`
-	TxHex     string `json:"tx_hex"`
+	SessionID                   string   `json:"session_id"`
+	TxHex                       string   `json:"tx_hex"`
+	TaprootKeySpendSighashesHex []string `json:"taproot_key_spend_sighashes_hex"`
 }
 
 const buildTaggedTBTCSignerUnavailableStatusCode = -1
@@ -1478,13 +1480,20 @@ func buildTaggedTBTCSignerBuildTaprootTxRequestPayload(
 				fmt.Sprintf("input [%d] txid hex is empty", i),
 			)
 		}
+		if input.ScriptPubKeyHex == "" {
+			return nil, buildTaggedTBTCSignerOperationError(
+				"BuildTaprootTx",
+				fmt.Sprintf("input [%d] script pubkey hex is empty", i),
+			)
+		}
 
 		requestInputs = append(
 			requestInputs,
 			buildTaggedTBTCSignerBuildTaprootTxInput{
-				TxIDHex:   input.TxIDHex,
-				Vout:      input.Vout,
-				ValueSats: input.ValueSats,
+				TxIDHex:         input.TxIDHex,
+				Vout:            input.Vout,
+				ValueSats:       input.ValueSats,
+				ScriptPubKeyHex: input.ScriptPubKeyHex,
 			},
 		)
 	}
@@ -1573,10 +1582,26 @@ func decodeBuildTaggedTBTCSignerBuildTaprootTxResponse(
 			fmt.Sprintf("response tx hex is invalid: %v", err),
 		)
 	}
+	if len(response.TaprootKeySpendSighashesHex) == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"BuildTaprootTx",
+			"response taproot key-spend sighashes are empty",
+		)
+	}
+	for i, sighashHex := range response.TaprootKeySpendSighashesHex {
+		sighash, err := hex.DecodeString(sighashHex)
+		if err != nil || len(sighash) != 32 {
+			return nil, buildTaggedTBTCSignerOperationError(
+				"BuildTaprootTx",
+				fmt.Sprintf("response taproot key-spend sighash [%d] is not 32-byte hex", i),
+			)
+		}
+	}
 
 	return &NativeTBTCSignerTxResult{
-		SessionID: response.SessionID,
-		TxHex:     response.TxHex,
+		SessionID:                   response.SessionID,
+		TxHex:                       response.TxHex,
+		TaprootKeySpendSighashesHex: append([]string(nil), response.TaprootKeySpendSighashesHex...),
 	}, nil
 }
 
@@ -1852,7 +1877,13 @@ type buildTaggedTBTCSignerInteractiveSessionOpenRequest struct {
 	KeyGroup             string                                         `json:"key_group"`
 	Threshold            uint16                                         `json:"threshold"`
 	TaprootMerkleRootHex *string                                        `json:"taproot_merkle_root_hex,omitempty"`
+	SigningIntent        *buildTaggedTBTCSignerSigningIntent            `json:"signing_intent,omitempty"`
 	AttemptContext       buildTaggedTBTCSignerInteractiveAttemptContext `json:"attempt_context"`
+}
+
+type buildTaggedTBTCSignerSigningIntent struct {
+	Type       string `json:"type"`
+	MessageHex string `json:"message_hex"`
 }
 
 type buildTaggedTBTCSignerInteractiveSessionOpenResponse struct {
@@ -1901,6 +1932,7 @@ func (bttse *buildTaggedTBTCSignerEngine) InteractiveSessionOpen(
 	keyGroup string,
 	threshold uint16,
 	taprootMerkleRoot *[32]byte,
+	signingIntent *SigningIntent,
 	attemptContext NativeInteractiveAttemptContext,
 ) (*NativeInteractiveSessionOpenResult, error) {
 	requestPayload, err := buildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(
@@ -1910,6 +1942,7 @@ func (bttse *buildTaggedTBTCSignerEngine) InteractiveSessionOpen(
 		keyGroup,
 		threshold,
 		taprootMerkleRoot,
+		signingIntent,
 		attemptContext,
 	)
 	if err != nil {
@@ -1997,6 +2030,7 @@ func buildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(
 	keyGroup string,
 	threshold uint16,
 	taprootMerkleRoot *[32]byte,
+	signingIntent *SigningIntent,
 	attemptContext NativeInteractiveAttemptContext,
 ) ([]byte, error) {
 	if sessionID == "" {
@@ -2043,6 +2077,21 @@ func buildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(
 		taprootMerkleRootHex = &encoded
 	}
 
+	var wireSigningIntent *buildTaggedTBTCSignerSigningIntent
+	if signingIntent != nil {
+		heartbeatMessage, ok := signingIntent.HeartbeatMessage()
+		if !ok {
+			return nil, buildTaggedTBTCSignerOperationError(
+				"InteractiveSessionOpen",
+				"signing intent has an unsupported type",
+			)
+		}
+		wireSigningIntent = &buildTaggedTBTCSignerSigningIntent{
+			Type:       "heartbeat",
+			MessageHex: hex.EncodeToString(heartbeatMessage[:]),
+		}
+	}
+
 	return buildTaggedTBTCSignerMarshalRequest(
 		"InteractiveSessionOpen",
 		buildTaggedTBTCSignerInteractiveSessionOpenRequest{
@@ -2052,6 +2101,7 @@ func buildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(
 			KeyGroup:             keyGroup,
 			Threshold:            threshold,
 			TaprootMerkleRootHex: taprootMerkleRootHex,
+			SigningIntent:        wireSigningIntent,
 			AttemptContext: buildTaggedTBTCSignerInteractiveAttemptContext{
 				AttemptNumber:                   wireAttemptNumber,
 				CoordinatorIdentifier:           attemptContext.CoordinatorIdentifier,

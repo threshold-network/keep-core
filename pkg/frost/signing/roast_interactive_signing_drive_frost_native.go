@@ -135,6 +135,7 @@ func driveInteractiveRoastSigningIfEnabled(
 		active,
 		request.MemberIndex,
 		threshold,
+		request.SigningIntent,
 		engine,
 		collector,
 		deps.Coordinator,

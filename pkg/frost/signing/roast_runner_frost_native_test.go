@@ -45,8 +45,20 @@ type harness struct {
 // buildInteractiveSigningHarness wires n nodes - each with its own coordinator,
 // collector, and fake engine - to one shared in-process bus. Every node
 // subscribes in its constructor, so all are wired before any Run broadcasts.
-func buildInteractiveSigningHarness(t *testing.T, n int, threshold uint16) harness {
+func buildInteractiveSigningHarness(
+	t *testing.T,
+	n int,
+	threshold uint16,
+	signingIntents ...*SigningIntent,
+) harness {
 	t.Helper()
+	if len(signingIntents) > 1 {
+		t.Fatal("at most one signing intent may be supplied")
+	}
+	var signingIntent *SigningIntent
+	if len(signingIntents) == 1 {
+		signingIntent = signingIntents[0]
+	}
 	included := make([]group.MemberIndex, 0, n)
 	for i := 1; i <= n; i++ {
 		included = append(included, group.MemberIndex(i))
@@ -83,7 +95,7 @@ func buildInteractiveSigningHarness(t *testing.T, n int, threshold uint16) harne
 		// coordinator the binding did).
 		engine.coordinatorIdentifier = uint16(ara.ElectedCoordinator())
 		runner, err := newInteractiveSigningRunner(
-			ara, member, threshold,
+			ara, member, threshold, signingIntent,
 			engine,
 			collector,
 			coord, signer, bus,
@@ -104,6 +116,44 @@ func buildInteractiveSigningHarness(t *testing.T, n int, threshold uint16) harne
 		h.runners = append(h.runners, runner)
 	}
 	return h
+}
+
+func TestInteractiveSigningRunner_PassesHeartbeatIntentToOpen(t *testing.T) {
+	heartbeatMessage := [16]byte{
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+		0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+	}
+	h := buildInteractiveSigningHarness(
+		t,
+		2,
+		2,
+		NewHeartbeatSigningIntent(heartbeatMessage),
+	)
+	h.runAndAssertAllSucceed(t)
+
+	for i, engine := range h.engines {
+		intentMessage, ok := engine.openSigningIntent().HeartbeatMessage()
+		if !ok || intentMessage != heartbeatMessage {
+			t.Fatalf(
+				"engine %d Open received heartbeat [%x], present [%v], want [%x]",
+				i+1,
+				intentMessage,
+				ok,
+				heartbeatMessage,
+			)
+		}
+	}
+}
+
+func TestInteractiveSigningRunner_GenericOpenHasNoSigningIntent(t *testing.T) {
+	h := buildInteractiveSigningHarness(t, 2, 2)
+	h.runAndAssertAllSucceed(t)
+
+	for i, engine := range h.engines {
+		if intent := engine.openSigningIntent(); intent != nil {
+			t.Fatalf("engine %d generic Open received signing intent [%+v]", i+1, intent)
+		}
+	}
 }
 
 // runAll runs every node concurrently and asserts each reaches a successful
@@ -417,7 +467,7 @@ func TestInteractiveSigningRunner_AbortsNativeAttemptOnEarlyExit(t *testing.T) {
 	engine := newFakeInteractiveSigningEngine()
 	engine.coordinatorIdentifier = uint16(ara.ElectedCoordinator())
 	runner, err := newInteractiveSigningRunner(
-		ara, 1, 2, engine, roast.NewRound2Collector(verifier), coord, signer, bus,
+		ara, 1, 2, nil, engine, roast.NewRound2Collector(verifier), coord, signer, bus,
 	)
 	if err != nil {
 		t.Fatalf("runner: %v", err)
@@ -469,7 +519,7 @@ func TestInteractiveSigningRunner_RejectsEngineCoordinatorMismatch(t *testing.T)
 	// Engine derives a coordinator the binding did NOT elect.
 	engine.coordinatorIdentifier = uint16(ara.ElectedCoordinator()) + 100
 	runner, err := newInteractiveSigningRunner(
-		ara, 1, 2, engine, roast.NewRound2Collector(verifier), coord, signer, bus,
+		ara, 1, 2, nil, engine, roast.NewRound2Collector(verifier), coord, signer, bus,
 	)
 	if err != nil {
 		t.Fatalf("runner: %v", err)
@@ -653,7 +703,7 @@ func buildEquivocationRunner(t *testing.T, included []group.MemberIndex) (
 	}
 	collector := roast.NewRound2Collector(verifier)
 	runner, err := newInteractiveSigningRunner(
-		ara, included[0], 2, newFakeInteractiveSigningEngine(), collector, coord, signer, bus,
+		ara, included[0], 2, nil, newFakeInteractiveSigningEngine(), collector, coord, signer, bus,
 	)
 	if err != nil {
 		t.Fatalf("runner: %v", err)
@@ -979,38 +1029,38 @@ func TestNewInteractiveSigningRunner_RejectsInvalidConstruction(t *testing.T) {
 	collector := roast.NewRound2Collector(verifier)
 
 	// Sanity: the baseline constructs.
-	if _, err := newInteractiveSigningRunner(ara, 1, 2, engine, collector, coord, signer, bus); err != nil {
+	if _, err := newInteractiveSigningRunner(ara, 1, 2, nil, engine, collector, coord, signer, bus); err != nil {
 		t.Fatalf("baseline construction failed: %v", err)
 	}
 
 	tests := map[string]func() (*interactiveSigningRunner, error){
 		"nil attempt": func() (*interactiveSigningRunner, error) {
-			return newInteractiveSigningRunner(nil, 1, 2, engine, collector, coord, signer, bus)
+			return newInteractiveSigningRunner(nil, 1, 2, nil, engine, collector, coord, signer, bus)
 		},
 		"nil engine": func() (*interactiveSigningRunner, error) {
-			return newInteractiveSigningRunner(ara, 1, 2, nil, collector, coord, signer, bus)
+			return newInteractiveSigningRunner(ara, 1, 2, nil, nil, collector, coord, signer, bus)
 		},
 		"nil collector": func() (*interactiveSigningRunner, error) {
-			return newInteractiveSigningRunner(ara, 1, 2, engine, nil, coord, signer, bus)
+			return newInteractiveSigningRunner(ara, 1, 2, nil, engine, nil, coord, signer, bus)
 		},
 		"nil coordinator": func() (*interactiveSigningRunner, error) {
-			return newInteractiveSigningRunner(ara, 1, 2, engine, collector, nil, signer, bus)
+			return newInteractiveSigningRunner(ara, 1, 2, nil, engine, collector, nil, signer, bus)
 		},
 		"nil signer": func() (*interactiveSigningRunner, error) {
-			return newInteractiveSigningRunner(ara, 1, 2, engine, collector, coord, nil, bus)
+			return newInteractiveSigningRunner(ara, 1, 2, nil, engine, collector, coord, nil, bus)
 		},
 		"nil bus": func() (*interactiveSigningRunner, error) {
-			return newInteractiveSigningRunner(ara, 1, 2, engine, collector, coord, signer, nil)
+			return newInteractiveSigningRunner(ara, 1, 2, nil, engine, collector, coord, signer, nil)
 		},
 		"zero threshold": func() (*interactiveSigningRunner, error) {
-			return newInteractiveSigningRunner(ara, 1, 0, engine, collector, coord, signer, bus)
+			return newInteractiveSigningRunner(ara, 1, 0, nil, engine, collector, coord, signer, bus)
 		},
 		"member not included": func() (*interactiveSigningRunner, error) {
-			return newInteractiveSigningRunner(ara, 99, 2, engine, collector, coord, signer, bus)
+			return newInteractiveSigningRunner(ara, 99, 2, nil, engine, collector, coord, signer, bus)
 		},
 		"threshold exceeds included set": func() (*interactiveSigningRunner, error) {
 			// included set has 3 members; a threshold of 4 can never form a subset.
-			return newInteractiveSigningRunner(ara, 1, 4, engine, collector, coord, signer, bus)
+			return newInteractiveSigningRunner(ara, 1, 4, nil, engine, collector, coord, signer, bus)
 		},
 	}
 	for name, build := range tests {
@@ -1086,7 +1136,7 @@ func TestInteractiveSigningRunner_ObserverAggregatesAndAbortsWithoutSigning(t *t
 	engine := newFakeInteractiveSigningEngine()
 	engine.coordinatorIdentifier = uint16(ara.ElectedCoordinator())
 	runner, err := newInteractiveSigningRunner(
-		ara, observer, 2, engine, roast.NewRound2Collector(verifier), coord, signer, bus,
+		ara, observer, 2, nil, engine, roast.NewRound2Collector(verifier), coord, signer, bus,
 	)
 	if err != nil {
 		t.Fatalf("runner: %v", err)

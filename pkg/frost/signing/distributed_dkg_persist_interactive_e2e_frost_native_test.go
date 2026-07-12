@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -30,11 +31,10 @@ import (
 //	  -> InteractiveSessionOpen / Round1 / Round2 / Aggregate
 //	  -> a BIP-340 signature that verifies under the DKG group key.
 //
-// Crucially, each seat runs on its OWN engine with its OWN persisted state -
-// exactly how nodes deploy, and unlike the dealer path (and the multi-seat
-// interactive test) where every key package lives in one engine. A distributed
-// node holds only its own secret key package; that this still opens, releases a
-// share, and aggregates into a valid threshold signature is the whole point.
+// The in-process engine handles share one Rust state, so the test accumulates
+// seats under one canonical wallet session. It also proves that attempting to
+// create a second owner for that key group fails closed; real nodes naturally
+// hold one local seat in separate processes/state files.
 func TestDistributedDKG_PersistThenInteractiveSign(t *testing.T) {
 	setupRealCgoSignerState(t)
 
@@ -49,8 +49,8 @@ func TestDistributedDKG_PersistThenInteractiveSign(t *testing.T) {
 	// package into one shared session - that is what lets the seats sign together
 	// here, and it exercises the multi-seat-operator accumulate path. In
 	// production each node is a separate process with its own state holding only
-	// its own seat; that single-seat case (a node opening a session whose included
-	// set spans peers it does not hold) is covered separately at the end.
+	// its own seat. The duplicate-owner assertion at the end protects that wallet
+	// ownership invariant inside this shared-state harness.
 	engines := make(map[group.MemberIndex]*buildTaggedTBTCSignerEngine, n)
 	for _, m := range members {
 		engines[m] = &buildTaggedTBTCSignerEngine{}
@@ -188,7 +188,7 @@ func TestDistributedDKG_PersistThenInteractiveSign(t *testing.T) {
 	commitments := make([]nativeFROSTCommitment, 0, len(signingMembers))
 	for _, m := range signingMembers {
 		open, err := engines[m].InteractiveSessionOpen(
-			sessionID, uint16(m), message, keyGroup, threshold, nil, derived.AttemptContext,
+			sessionID, uint16(m), message, keyGroup, threshold, nil, nil, derived.AttemptContext,
 		)
 		if err != nil {
 			t.Fatalf("interactive session open (member %d): %v", m, err)
@@ -262,14 +262,14 @@ func TestDistributedDKG_PersistThenInteractiveSign(t *testing.T) {
 		threshold, n, keyGroup[:16],
 	)
 
-	// ---- Single-seat-node coverage: a node that persisted ONLY its own key
-	// package must still OPEN a session whose included set spans OTHER members it
-	// does not hold - OPEN validates the included set against the public key
-	// package's verifying shares, not the local key-package map. This is the real
-	// distributed-node scenario the all-seats-accumulated path above does not
-	// exercise (there every included member is already in dkg_key_packages). ----
+	// A key group has exactly one wallet-session owner. Re-persisting the same
+	// distributed package under another session used to create two nondeterministic
+	// owners; Open/Round2 could then resolve different lifecycle state after reload.
+	// The single-seat production topology is one process/state file per node, so it
+	// does not need (and must not manufacture) a duplicate owner in this shared-state
+	// in-process harness.
 	soloSession := sessionID + "-solo"
-	soloResult, err := engines[members[0]].PersistDistributedDKGKeyPackage(
+	_, err = engines[members[0]].PersistDistributedDKGKeyPackage(
 		soloSession,
 		uint16(members[0]),
 		threshold,
@@ -277,22 +277,11 @@ func TestDistributedDKG_PersistThenInteractiveSign(t *testing.T) {
 		outcomes[members[0]].result.KeyPackage,
 		outcomes[members[0]].result.PublicKeyPackage,
 	)
-	if err != nil {
-		t.Fatalf("persist single seat into a fresh session: %v", err)
+	if err == nil {
+		t.Fatal("persisting a duplicate key-group owner must fail closed")
 	}
-	soloDerived, err := engines[members[0]].DeriveInteractiveAttemptContext(
-		soloSession, message, soloResult.KeyGroup, threshold, 0, includedParticipants,
-	)
-	if err != nil {
-		t.Fatalf("derive single-seat attempt context: %v", err)
+	if !strings.Contains(err.Error(), "session_conflict") {
+		t.Fatalf("duplicate key-group owner returned an unexpected error: %v", err)
 	}
-	// members[1] is a DKG participant (present in the public key package) but was
-	// NOT persisted into soloSession, so its member entry is absent from that
-	// session's key-package map; the open must still succeed.
-	if _, err := engines[members[0]].InteractiveSessionOpen(
-		soloSession, uint16(members[0]), message, soloResult.KeyGroup, threshold, nil, soloDerived.AttemptContext,
-	); err != nil {
-		t.Fatalf("single-seat open with an included set spanning peers must succeed: %v", err)
-	}
-	t.Logf("single-seat node (only its own key package) opened a session spanning peers via the public key package")
+	t.Log("duplicate distributed key-group owner rejected")
 }

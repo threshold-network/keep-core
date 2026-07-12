@@ -299,7 +299,7 @@ func TestRealCgoInteractiveSigning_DoubleSignedShareIsDetectedAsEquivocation(t *
 			t.Fatalf("active attempt (seat %d): %v", member, err)
 		}
 		collector := roast.NewRound2Collector(verifier)
-		runner, err := newInteractiveSigningRunner(binding, member, threshold, engine, collector, coord, signer, bus)
+		runner, err := newInteractiveSigningRunner(binding, member, threshold, nil, engine, collector, coord, signer, bus)
 		if err != nil {
 			t.Fatalf("runner (seat %d): %v", member, err)
 		}

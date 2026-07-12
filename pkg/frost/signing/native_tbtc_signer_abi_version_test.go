@@ -7,8 +7,7 @@ import (
 
 func TestCheckABIContractCompatibility(t *testing.T) {
 	// req = major 1, min minor 2, to exercise every branch (the too-old-minor branch is
-	// unreachable against the real requiredTBTCSignerABIMinMinor of 0, since no minor is
-	// below zero).
+	// kept parameterized so every compatibility branch remains explicit.
 	const reqMajor, reqMinMinor = uint32(1), uint32(2)
 	tests := []struct {
 		name           string
@@ -51,8 +50,8 @@ func TestParseTBTCSignerABIVersion(t *testing.T) {
 		}
 	})
 
-	// Both fields are REQUIRED: a missing field must be rejected, not zero-filled - else
-	// a partial lib omitting abi_minor would default to 0 and pass the (>= 0) rule.
+	// Both fields are REQUIRED: a missing field must be rejected, not silently
+	// zero-filled into a partial compatibility response.
 	rejected := map[string]string{
 		"missing abi_minor": `{"abi_major":1}`,
 		"missing abi_major": `{"abi_minor":0}`,
@@ -90,15 +89,27 @@ func TestParseTBTCSignerABIVersion(t *testing.T) {
 }
 
 func TestCheckTBTCSignerABICompatibility_CurrentContract(t *testing.T) {
-	// Pins the bridge's current required contract (major 2, min minor 0 - major bumped
-	// to 2 when the coarse-FROST FFI symbols were removed): the matching lib version is
-	// compatible; a different major is not. A regression here means the required
-	// constants drifted from what the bridge actually speaks.
+	// Pins the bridge's current required contract: major 3 adds the BIP-341
+	// transaction artifact, minor 1 adds heartbeat intent authorization, and
+	// minor 2 adds heartbeat rate limiting/metrics; minor 3 adds canary-evidence
+	// configuration. The matching library version is compatible; a different
+	// major is not. A regression here means the required constants drifted from
+	// what the bridge actually speaks.
+	if requiredTBTCSignerABIMajor != 3 || requiredTBTCSignerABIMinMinor != 3 {
+		t.Fatalf(
+			"unexpected required tbtc-signer ABI: [%d.%d]",
+			requiredTBTCSignerABIMajor,
+			requiredTBTCSignerABIMinMinor,
+		)
+	}
 	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, requiredTBTCSignerABIMinMinor); err != nil {
 		t.Fatalf("the required contract version must be self-compatible: %v", err)
 	}
 	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor+1, requiredTBTCSignerABIMinMinor); err == nil {
 		t.Fatal("a higher major must be incompatible")
+	}
+	if err := checkTBTCSignerABICompatibility(2, 0); err == nil {
+		t.Fatal("an ABI-2 signer without the BIP-341 transaction artifact must be incompatible")
 	}
 	// Any minor >= the required minimum is accepted (additive).
 	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, requiredTBTCSignerABIMinMinor+3); err != nil {

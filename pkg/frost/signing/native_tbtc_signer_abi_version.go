@@ -14,19 +14,19 @@ import (
 // fine and its extras are ignored). Bump these in lockstep with the Rust constants, in
 // the SAME PR that bumps ci/frost-signer-pin.env to the lib commit that provides them.
 const (
-	// Major 2: the coarse-FROST signing path and its FFI symbols
-	// (frost_tbtc_run_dkg, frost_tbtc_sign_share, frost_tbtc_aggregate,
-	// frost_tbtc_generate_nonces_and_commitments, frost_tbtc_start_sign_round,
-	// frost_tbtc_finalize_sign_round) were removed. Dropping exported symbols is a
-	// breaking ABI change, so the lib's abi_major moves 1 -> 2 in lockstep and this
-	// bridge requires exactly 2: a lib still reporting major 1 exposes the retired
-	// coarse contract and must not be linked.
-	requiredTBTCSignerABIMajor uint32 = 2
-	// Minor 0: frost_tbtc_persist_distributed_dkg_key_package - which the
-	// distributed-DKG path calls - is baseline in major 2 (it was added in 1.1 and
-	// carried forward), so the minimum minor for major 2 is 0. Additive minor bumps
-	// on major 2 remain backward compatible and their extras are ignored.
-	requiredTBTCSignerABIMinMinor uint32 = 0
+	// Major 3: BuildTaprootTx now requires every input's spent-output
+	// scriptPubKey and returns the ordered BIP-341 SIGHASH_DEFAULT key-spend
+	// messages. The required request field and changed response semantics are an
+	// incompatible JSON/crypto-contract change, so an ABI-2 library must not be
+	// linked by this bridge.
+	requiredTBTCSignerABIMajor uint32 = 3
+	// Minor 1 adds the typed heartbeat signing intent required to authorize
+	// non-transaction messages while the signing-policy firewall is on. Minor 2
+	// adds the heartbeat rate-limit configuration and dedicated rejection metric.
+	// Minor 3 adds the canary-evidence configuration, including its independent
+	// policy-sample minimum, and pins this bridge to the complete
+	// durability/rollout-assurance signer stack.
+	requiredTBTCSignerABIMinMinor uint32 = 3
 )
 
 // ErrTBTCSignerABIIncompatible marks a linked libfrost_tbtc whose FFI contract version
@@ -39,11 +39,11 @@ var ErrTBTCSignerABIIncompatible = errors.New(
 // parseTBTCSignerABIVersion decodes the frozen {abi_major, abi_minor} root compatibility
 // surface from the lib's frost_tbtc_abi_version response and rejects anything malformed
 // as incompatible. BOTH fields are required: pointer fields distinguish "absent" from a
-// legitimate zero, because Go's json.Unmarshal silently zero-fills a missing field - and
-// a missing abi_minor would otherwise default to 0 and pass the (>= 0) rule, letting a
-// partial/broken lib bypass the fail-closed guard. Extra/unknown fields are tolerated by
-// design (an additive minor bump may add fields old bridges ignore). Pure (no cgo), so
-// it is unit-tested in the default build.
+// legitimate zero, because Go's json.Unmarshal silently zero-fills a missing field.
+// Both fields remain mandatory even when that zero would fail today's minimum: accepting
+// a partial version response would weaken the frozen compatibility contract. Extra/unknown
+// fields are tolerated by design (an additive minor bump may add fields old bridges ignore).
+// Pure (no cgo), so it is unit-tested in the default build.
 func parseTBTCSignerABIVersion(payload []byte) (major, minor uint32, err error) {
 	var decoded struct {
 		AbiMajor *uint32 `json:"abi_major"`

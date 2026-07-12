@@ -171,7 +171,7 @@ func TestRealCgoInteractiveSigning_DropoutForcesNextAttemptAndReshuffledSubsetFi
 		}
 		collector := roast.NewRound2Collector(verifier)
 		runner, err := newInteractiveSigningRunner(
-			binding, member, threshold, engine, collector, coord, signer, bus,
+			binding, member, threshold, nil, engine, collector, coord, signer, bus,
 		)
 		if err != nil {
 			t.Fatalf("runner (seat %d): %v", member, err)

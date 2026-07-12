@@ -155,7 +155,7 @@ func buildRealCgoNetHarness(
 		// SAME engine instance for every seat - the multi-seat path keys interactive
 		// state by member, so one engine serves all local seats.
 		runner, err := newInteractiveSigningRunner(
-			ara, member, threshold, engine, collector, coord, signer, bus,
+			ara, member, threshold, nil, engine, collector, coord, signer, bus,
 		)
 		if err != nil {
 			t.Fatalf("runner (seat %d): %v", member, err)

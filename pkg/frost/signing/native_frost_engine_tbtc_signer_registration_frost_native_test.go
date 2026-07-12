@@ -67,7 +67,12 @@ func TestRegisterBuildTaggedTBTCSignerEngine(t *testing.T) {
 	_, err = engine.BuildTaprootTx(
 		"session-1",
 		[]NativeTBTCSignerTxInput{
-			{TxIDHex: "11", Vout: 0, ValueSats: 1},
+			{
+				TxIDHex:         "11",
+				Vout:            0,
+				ValueSats:       1,
+				ScriptPubKeyHex: "5120" + strings.Repeat("22", 32),
+			},
 		},
 		[]NativeTBTCSignerTxOutput{
 			{ScriptPubKeyHex: "0014", ValueSats: 1},
@@ -285,9 +290,10 @@ func TestBuildTaggedTBTCSignerBuildTaprootTxRequestPayload(t *testing.T) {
 		"session-buildtx-1",
 		[]NativeTBTCSignerTxInput{
 			{
-				TxIDHex:   strings.Repeat("11", 32),
-				Vout:      3,
-				ValueSats: 1000,
+				TxIDHex:         strings.Repeat("11", 32),
+				Vout:            3,
+				ValueSats:       1000,
+				ScriptPubKeyHex: "5120" + strings.Repeat("22", 32),
 			},
 		},
 		[]NativeTBTCSignerTxOutput{
@@ -330,6 +336,13 @@ func TestBuildTaggedTBTCSignerBuildTaprootTxRequestPayload(t *testing.T) {
 			request.Inputs[0].TxIDHex,
 		)
 	}
+	if request.Inputs[0].ScriptPubKeyHex != "5120"+strings.Repeat("22", 32) {
+		t.Fatalf(
+			"unexpected input script pubkey\nexpected: [%v]\nactual:   [%v]",
+			"5120"+strings.Repeat("22", 32),
+			request.Inputs[0].ScriptPubKeyHex,
+		)
+	}
 
 	if len(request.Outputs) != 1 {
 		t.Fatalf(
@@ -368,7 +381,7 @@ func TestBuildTaggedTBTCSignerBuildTaprootTxRequestPayload_RejectsInvalidInput(
 			name:      "empty session id",
 			sessionID: "",
 			inputs: []NativeTBTCSignerTxInput{
-				{TxIDHex: strings.Repeat("11", 32), Vout: 0, ValueSats: 1},
+				{TxIDHex: strings.Repeat("11", 32), Vout: 0, ValueSats: 1, ScriptPubKeyHex: "5120" + strings.Repeat("22", 32)},
 			},
 			outputs: []NativeTBTCSignerTxOutput{
 				{ScriptPubKeyHex: "0014aa", ValueSats: 1},
@@ -386,7 +399,7 @@ func TestBuildTaggedTBTCSignerBuildTaprootTxRequestPayload_RejectsInvalidInput(
 			name:      "empty outputs",
 			sessionID: "session-1",
 			inputs: []NativeTBTCSignerTxInput{
-				{TxIDHex: strings.Repeat("11", 32), Vout: 0, ValueSats: 1},
+				{TxIDHex: strings.Repeat("11", 32), Vout: 0, ValueSats: 1, ScriptPubKeyHex: "5120" + strings.Repeat("22", 32)},
 			},
 			outputs: nil,
 		},
@@ -394,7 +407,17 @@ func TestBuildTaggedTBTCSignerBuildTaprootTxRequestPayload_RejectsInvalidInput(
 			name:      "input txid empty",
 			sessionID: "session-1",
 			inputs: []NativeTBTCSignerTxInput{
-				{TxIDHex: "", Vout: 0, ValueSats: 1},
+				{TxIDHex: "", Vout: 0, ValueSats: 1, ScriptPubKeyHex: "5120" + strings.Repeat("22", 32)},
+			},
+			outputs: []NativeTBTCSignerTxOutput{
+				{ScriptPubKeyHex: "0014aa", ValueSats: 1},
+			},
+		},
+		{
+			name:      "input script empty",
+			sessionID: "session-1",
+			inputs: []NativeTBTCSignerTxInput{
+				{TxIDHex: strings.Repeat("11", 32), Vout: 0, ValueSats: 1},
 			},
 			outputs: []NativeTBTCSignerTxOutput{
 				{ScriptPubKeyHex: "0014aa", ValueSats: 1},
@@ -404,7 +427,7 @@ func TestBuildTaggedTBTCSignerBuildTaprootTxRequestPayload_RejectsInvalidInput(
 			name:      "output script empty",
 			sessionID: "session-1",
 			inputs: []NativeTBTCSignerTxInput{
-				{TxIDHex: strings.Repeat("11", 32), Vout: 0, ValueSats: 1},
+				{TxIDHex: strings.Repeat("11", 32), Vout: 0, ValueSats: 1, ScriptPubKeyHex: "5120" + strings.Repeat("22", 32)},
 			},
 			outputs: []NativeTBTCSignerTxOutput{
 				{ScriptPubKeyHex: "", ValueSats: 1},
@@ -414,7 +437,7 @@ func TestBuildTaggedTBTCSignerBuildTaprootTxRequestPayload_RejectsInvalidInput(
 			name:      "script tree empty string",
 			sessionID: "session-1",
 			inputs: []NativeTBTCSignerTxInput{
-				{TxIDHex: strings.Repeat("11", 32), Vout: 0, ValueSats: 1},
+				{TxIDHex: strings.Repeat("11", 32), Vout: 0, ValueSats: 1, ScriptPubKeyHex: "5120" + strings.Repeat("22", 32)},
 			},
 			outputs: []NativeTBTCSignerTxOutput{
 				{ScriptPubKeyHex: "0014aa", ValueSats: 1},
@@ -455,7 +478,7 @@ func TestBuildTaggedTBTCSignerBuildTaprootTxRequestPayload_RejectsInvalidInput(
 
 func TestDecodeBuildTaggedTBTCSignerBuildTaprootTxResponse(t *testing.T) {
 	result, err := decodeBuildTaggedTBTCSignerBuildTaprootTxResponse(
-		[]byte(`{"session_id":"session-buildtx-1","tx_hex":"deadbeef"}`),
+		[]byte(`{"session_id":"session-buildtx-1","tx_hex":"deadbeef","taproot_key_spend_sighashes_hex":["1111111111111111111111111111111111111111111111111111111111111111"]}`),
 	)
 	if err != nil {
 		t.Fatalf("unexpected decode error: [%v]", err)
@@ -475,6 +498,32 @@ func TestDecodeBuildTaggedTBTCSignerBuildTaprootTxResponse(t *testing.T) {
 			"deadbeef",
 			result.TxHex,
 		)
+	}
+	if len(result.TaprootKeySpendSighashesHex) != 1 ||
+		result.TaprootKeySpendSighashesHex[0] != strings.Repeat("11", 32) {
+		t.Fatalf(
+			"unexpected taproot key-spend sighashes: [%v]",
+			result.TaprootKeySpendSighashesHex,
+		)
+	}
+}
+
+func TestDecodeBuildTaggedTBTCSignerBuildTaprootTxResponseRejectsMissingOrInvalidSighash(
+	t *testing.T,
+) {
+	for name, payload := range map[string]string{
+		"missing": `{"session_id":"session-buildtx-1","tx_hex":"deadbeef"}`,
+		"short":   `{"session_id":"session-buildtx-1","tx_hex":"deadbeef","taproot_key_spend_sighashes_hex":["11"]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := decodeBuildTaggedTBTCSignerBuildTaprootTxResponse([]byte(payload))
+			if err == nil {
+				t.Fatal("missing or malformed BIP-341 sighash must be rejected")
+			}
+			if !errors.Is(err, ErrNativeBridgeOperationFailed) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 
@@ -709,6 +758,7 @@ func TestBuildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(t *testing.T)
 		"key-group-1",
 		2,
 		nil,
+		nil,
 		testInteractiveAttemptContext(),
 	)
 	if err != nil {
@@ -738,6 +788,9 @@ func TestBuildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(t *testing.T)
 	if request.TaprootMerkleRootHex != nil {
 		t.Fatalf("expected omitted taproot root, got: [%v]", *request.TaprootMerkleRootHex)
 	}
+	if request.SigningIntent != nil {
+		t.Fatalf("generic signing must omit signing_intent, got: [%+v]", request.SigningIntent)
+	}
 	// Wire attempt_number is 1-based: the RFC-21 0-based 3 serializes as 4.
 	if request.AttemptContext.AttemptNumber != 4 ||
 		request.AttemptContext.CoordinatorIdentifier != 2 ||
@@ -760,7 +813,7 @@ func TestBuildTaggedTBTCSignerInteractiveSessionOpenRequestPayload_FirstAttemptI
 	ctx.AttemptNumber = 0 // RFC-21 first attempt
 
 	payload, err := buildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(
-		"session-1", 2, []byte{0xab}, "key-group-1", 2, nil, ctx,
+		"session-1", 2, []byte{0xab}, "key-group-1", 2, nil, nil, ctx,
 	)
 	if err != nil {
 		t.Fatalf("unexpected payload build error: [%v]", err)
@@ -784,7 +837,7 @@ func TestBuildTaggedTBTCSignerInteractiveSessionOpenRequestPayload_TaprootMerkle
 	root[31] = 0xcd
 
 	payload, err := buildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(
-		"session-1", 2, []byte{0xab}, "key-group-1", 2, &root, testInteractiveAttemptContext(),
+		"session-1", 2, []byte{0xab}, "key-group-1", 2, &root, nil, testInteractiveAttemptContext(),
 	)
 	if err != nil {
 		t.Fatalf("unexpected payload build error: [%v]", err)
@@ -799,6 +852,45 @@ func TestBuildTaggedTBTCSignerInteractiveSessionOpenRequestPayload_TaprootMerkle
 	}
 	if *request.TaprootMerkleRootHex != hex.EncodeToString(root[:]) {
 		t.Fatalf("unexpected taproot root hex: [%s]", *request.TaprootMerkleRootHex)
+	}
+}
+
+func TestBuildTaggedTBTCSignerInteractiveSessionOpenRequestPayload_HeartbeatIntent(t *testing.T) {
+	heartbeatMessage := [16]byte{
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+		0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+	}
+	payload, err := buildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(
+		"session-1",
+		2,
+		[]byte{0xab},
+		"key-group-1",
+		2,
+		nil,
+		NewHeartbeatSigningIntent(heartbeatMessage),
+		testInteractiveAttemptContext(),
+	)
+	if err != nil {
+		t.Fatalf("unexpected payload build error: [%v]", err)
+	}
+
+	var request buildTaggedTBTCSignerInteractiveSessionOpenRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("cannot decode request payload: [%v]", err)
+	}
+	if request.SigningIntent == nil {
+		t.Fatal("heartbeat signing must include signing_intent")
+	}
+	if request.SigningIntent.Type != "heartbeat" {
+		t.Fatalf("unexpected signing intent type: [%s]", request.SigningIntent.Type)
+	}
+	wantMessageHex := "ffffffffffffffff0001020304050607"
+	if request.SigningIntent.MessageHex != wantMessageHex {
+		t.Fatalf(
+			"unexpected heartbeat intent message: got [%s], want [%s]",
+			request.SigningIntent.MessageHex,
+			wantMessageHex,
+		)
 	}
 }
 
@@ -828,7 +920,7 @@ func TestBuildTaggedTBTCSignerInteractiveSessionOpenRequestPayload_RejectsInvali
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			_, err := buildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(
-				test.sessionID, test.member, test.message, test.keyGroup, test.threshold, nil, test.ctx,
+				test.sessionID, test.member, test.message, test.keyGroup, test.threshold, nil, nil, test.ctx,
 			)
 			if err == nil {
 				t.Fatal("expected invalid input to be rejected")
@@ -837,6 +929,13 @@ func TestBuildTaggedTBTCSignerInteractiveSessionOpenRequestPayload_RejectsInvali
 				t.Fatalf("expected ErrNativeBridgeOperationFailed, got: [%v]", err)
 			}
 		})
+	}
+
+	_, err := buildTaggedTBTCSignerInteractiveSessionOpenRequestPayload(
+		"s", 2, []byte{0xab}, "kg", 2, nil, &SigningIntent{}, ctx,
+	)
+	if err == nil {
+		t.Fatal("an unsupported signing intent must fail closed")
 	}
 }
 

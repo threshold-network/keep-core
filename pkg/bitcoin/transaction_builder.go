@@ -665,9 +665,10 @@ func (tb *TransactionBuilder) UnsignedTransaction() *Transaction {
 // UnsignedTransactionInput carries canonical unsigned input metadata extracted
 // from the builder state.
 type UnsignedTransactionInput struct {
-	TxIDHex   string
-	Vout      uint32
-	ValueSats uint64
+	TxIDHex         string
+	Vout            uint32
+	ValueSats       uint64
+	ScriptPubKeyHex string
 }
 
 // UnsignedTransactionOutput carries canonical unsigned output metadata
@@ -707,6 +708,9 @@ func (tb *TransactionBuilder) UnsignedTransactionIO() (
 				TxIDHex:   input.PreviousOutPoint.Hash.String(),
 				Vout:      input.PreviousOutPoint.Index,
 				ValueSats: uint64(value),
+				ScriptPubKeyHex: hex.EncodeToString(
+					tb.sigHashArgs[i].publicKeyScript,
+				),
 			},
 		)
 	}

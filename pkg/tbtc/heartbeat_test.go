@@ -43,12 +43,6 @@ func TestHeartbeatAction_HappyPath(t *testing.T) {
 	heartbeatFailureCounter := newHeartbeatFailureCounter()
 	heartbeatFailureCounter.increment(walletPublicKeyStr)
 
-	// sha256(sha256(messageToSign))
-	sha256d, err := hex.DecodeString("38d30dacec5083c902952ce99fc0287659ad0b1ca2086827a8e78b0bef2c8bc1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	hostChain := Connect()
 	hostChain.setOperatorsEligibleStake(big.NewInt(100000))
 	hostChain.setHeartbeatProposalValidationResult(proposal, true)
@@ -90,12 +84,13 @@ func TestHeartbeatAction_HappyPath(t *testing.T) {
 		0,
 		uint64(heartbeatFailureCounter.get(walletPublicKeyStr)),
 	)
-	testutils.AssertBigIntsEqual(
-		t,
-		"message to sign",
-		new(big.Int).SetBytes(sha256d),
-		mockExecutor.requestedMessage,
-	)
+	if mockExecutor.requestedMessage != proposal.Message {
+		t.Fatalf(
+			"heartbeat signing received message [%x], want raw proposal [%x]",
+			mockExecutor.requestedMessage,
+			proposal.Message,
+		)
+	}
 	testutils.AssertUintsEqual(
 		t,
 		"start block",
@@ -164,12 +159,9 @@ func TestHeartbeatAction_OperatorUnstaking(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	testutils.AssertBigIntsEqual(
-		t,
-		"message to sign",
-		nil, // sign not called
-		mockExecutor.requestedMessage,
-	)
+	if mockExecutor.signCalled {
+		t.Fatal("heartbeat signing must not be called for an unstaking operator")
+	}
 }
 
 func TestHeartbeatAction_LegacyWalletUsesEcdsaStakeInDualStack(t *testing.T) {
@@ -762,15 +754,17 @@ type mockHeartbeatSigningExecutor struct {
 	shouldFail           bool
 	activeOperatorsCount uint32
 
-	requestedMessage    *big.Int
+	requestedMessage    [16]byte
 	requestedStartBlock uint64
+	signCalled          bool
 }
 
-func (mhse *mockHeartbeatSigningExecutor) sign(
+func (mhse *mockHeartbeatSigningExecutor) signHeartbeat(
 	ctx context.Context,
-	message *big.Int,
+	message [16]byte,
 	startBlock uint64,
 ) (*frost.Signature, *signingActivityReport, uint64, error) {
+	mhse.signCalled = true
 	mhse.requestedMessage = message
 	mhse.requestedStartBlock = startBlock
 

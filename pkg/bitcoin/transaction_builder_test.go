@@ -1162,7 +1162,10 @@ func TestTransactionBuilder_UnsignedTransactionIO(t *testing.T) {
 	const expectedTxIDHex = "201f1e1d1c1b1a191817161514131211100f0e0d0c0b0a090807060504030201"
 
 	builder.internal.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&txHash, 7), nil, nil))
-	builder.sigHashArgs = append(builder.sigHashArgs, &inputSigHashArgs{value: 1234})
+	builder.sigHashArgs = append(builder.sigHashArgs, &inputSigHashArgs{
+		value:           1234,
+		publicKeyScript: hexToSlice(t, "5120"+strings.Repeat("22", 32)),
+	})
 	builder.AddOutput(&TransactionOutput{
 		Value:           1000,
 		PublicKeyScript: hexToSlice(t, "0014deadbeef"),
@@ -1191,6 +1194,14 @@ func TestTransactionBuilder_UnsignedTransactionIO(t *testing.T) {
 
 	if inputs[0].ValueSats != 1234 {
 		t.Fatalf("unexpected input value: [%d]", inputs[0].ValueSats)
+	}
+
+	if inputs[0].ScriptPubKeyHex != "5120"+strings.Repeat("22", 32) {
+		t.Fatalf(
+			"unexpected input script\nexpected: [%v]\nactual:   [%v]",
+			"5120"+strings.Repeat("22", 32),
+			inputs[0].ScriptPubKeyHex,
+		)
 	}
 
 	if len(outputs) != 1 {

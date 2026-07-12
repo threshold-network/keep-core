@@ -13,6 +13,11 @@ import (
 type Request struct {
 	Message   *big.Int
 	SessionID string
+	// SigningIntent carries a narrowly typed authorization artifact for messages
+	// that are not transaction sighashes. It is nil for generic and transaction
+	// signing. Today the only supported value is a heartbeat intent created with
+	// NewHeartbeatSigningIntent.
+	SigningIntent *SigningIntent
 	// RoastSessionID is the STABLE per-signing ROAST session id (derived from
 	// message+root+startBlock, WITHOUT the attempt number), used for ROAST
 	// orchestration, AttemptContext.SessionID, the transition-record registry,
@@ -38,6 +43,45 @@ type Request struct {
 	Channel             net.BroadcastChannel
 	MembershipValidator *group.MembershipValidator
 	Attempt             *Attempt
+}
+
+// SigningIntent is a closed, immutable signing-intent value. Its fields stay
+// private so callers cannot manufacture an unvalidated intent shape; exported
+// constructors are the only way to create one.
+type SigningIntent struct {
+	heartbeatMessage *[16]byte
+}
+
+// NewHeartbeatSigningIntent authorizes the canonical heartbeat signing message
+// derived from the exact 16-byte proposal payload. The payload is copied so it
+// cannot be changed while a concurrent signing attempt is in flight.
+func NewHeartbeatSigningIntent(message [16]byte) *SigningIntent {
+	messageCopy := message
+	return &SigningIntent{heartbeatMessage: &messageCopy}
+}
+
+// HeartbeatMessage returns the raw heartbeat proposal payload carried by this
+// intent. The returned array is a copy.
+func (si *SigningIntent) HeartbeatMessage() ([16]byte, bool) {
+	if si == nil || si.heartbeatMessage == nil {
+		return [16]byte{}, false
+	}
+
+	return *si.heartbeatMessage, true
+}
+
+func cloneSigningIntent(intent *SigningIntent) *SigningIntent {
+	if intent == nil {
+		return nil
+	}
+
+	cloned := *intent
+	if intent.heartbeatMessage != nil {
+		messageCopy := *intent.heartbeatMessage
+		cloned.heartbeatMessage = &messageCopy
+	}
+
+	return &cloned
 }
 
 // LegacyPrivateKeyShare resolves the tECDSA private key share required by the

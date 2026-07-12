@@ -197,6 +197,33 @@ func TestSigningExecutor_Sign(t *testing.T) {
 	}
 }
 
+func TestSigningExecutor_SignHeartbeatUsesCanonicalSHA256d(t *testing.T) {
+	executor := setupSigningExecutor(t)
+
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	defer cancelCtx()
+
+	heartbeatMessage := [16]byte{
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+	}
+	messageHash := bitcoin.ComputeHash(heartbeatMessage[:])
+	messageToSign := new(big.Int).SetBytes(messageHash[:])
+
+	signature, _, _, err := executor.signHeartbeat(ctx, heartbeatMessage, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ecdsa.Verify(
+		executor.wallet().publicKey,
+		messageToSign.Bytes(),
+		new(big.Int).SetBytes(signature.R[:]),
+		new(big.Int).SetBytes(signature.S[:]),
+	) {
+		t.Fatalf("heartbeat signature does not verify over SHA256d [%x]", messageHash)
+	}
+}
+
 func TestSigningExecutor_Sign_Busy(t *testing.T) {
 	executor := setupSigningExecutor(t)
 
