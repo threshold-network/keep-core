@@ -8,18 +8,88 @@ use super::*;
 /// window (retries older than this many refreshes are no longer recognized).
 const MAX_REFRESH_HISTORY: usize = 256;
 
-pub(crate) fn canary_max_start_sign_round_p95_ms() -> u64 {
-    signer_env_var(TBTC_SIGNER_CANARY_MAX_START_SIGN_ROUND_P95_MS_ENV)
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(TBTC_SIGNER_DEFAULT_CANARY_MAX_START_SIGN_ROUND_P95_MS)
+#[cfg(test)]
+static CANARY_PROMOTION_HOLD_NEXT_LOCK: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+static CANARY_PROMOTION_LOCK_HELD: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+static CANARY_PROMOTION_RELEASE_LOCK: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
+#[cfg(test)]
+static CANARY_PROMOTION_LOCK_ATTEMPTS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn arm_canary_promotion_lock_hold_for_tests() {
+    use std::sync::atomic::Ordering;
+    CANARY_PROMOTION_LOCK_ATTEMPTS.store(0, Ordering::SeqCst);
+    CANARY_PROMOTION_LOCK_HELD.store(false, Ordering::SeqCst);
+    CANARY_PROMOTION_RELEASE_LOCK.store(false, Ordering::SeqCst);
+    CANARY_PROMOTION_HOLD_NEXT_LOCK.store(true, Ordering::SeqCst);
 }
 
-pub(crate) fn canary_max_finalize_sign_round_p95_ms() -> u64 {
-    signer_env_var(TBTC_SIGNER_CANARY_MAX_FINALIZE_SIGN_ROUND_P95_MS_ENV)
+#[cfg(test)]
+pub(crate) fn canary_promotion_lock_attempts_for_tests() -> usize {
+    CANARY_PROMOTION_LOCK_ATTEMPTS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[cfg(test)]
+pub(crate) fn canary_promotion_lock_held_for_tests() -> bool {
+    CANARY_PROMOTION_LOCK_HELD.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[cfg(test)]
+pub(crate) fn release_canary_promotion_lock_for_tests() {
+    CANARY_PROMOTION_RELEASE_LOCK.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn maybe_hold_canary_promotion_lock_for_tests() {
+    use std::sync::atomic::Ordering;
+    if CANARY_PROMOTION_HOLD_NEXT_LOCK.swap(false, Ordering::SeqCst) {
+        CANARY_PROMOTION_LOCK_HELD.store(true, Ordering::SeqCst);
+        while !CANARY_PROMOTION_RELEASE_LOCK.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+    }
+}
+
+fn positive_signer_env_u64(name: &str) -> Option<u64> {
+    signer_env_var(name)
         .and_then(|value| value.trim().parse::<u64>().ok())
         .filter(|value| *value > 0)
-        .unwrap_or(TBTC_SIGNER_DEFAULT_CANARY_MAX_FINALIZE_SIGN_ROUND_P95_MS)
+}
+
+fn canary_latency_threshold_ms(primary: &str, legacy: &str, default: u64) -> u64 {
+    positive_signer_env_u64(primary)
+        .or_else(|| positive_signer_env_u64(legacy))
+        .unwrap_or(default)
+}
+
+pub(crate) fn canary_max_interactive_round1_p95_ms() -> u64 {
+    canary_latency_threshold_ms(
+        TBTC_SIGNER_CANARY_MAX_INTERACTIVE_ROUND1_P95_MS_ENV,
+        TBTC_SIGNER_CANARY_MAX_START_SIGN_ROUND_P95_MS_ENV,
+        TBTC_SIGNER_DEFAULT_CANARY_MAX_START_SIGN_ROUND_P95_MS,
+    )
+}
+
+pub(crate) fn canary_max_interactive_round2_p95_ms() -> u64 {
+    canary_latency_threshold_ms(
+        TBTC_SIGNER_CANARY_MAX_INTERACTIVE_ROUND2_P95_MS_ENV,
+        TBTC_SIGNER_CANARY_MAX_START_SIGN_ROUND_P95_MS_ENV,
+        TBTC_SIGNER_DEFAULT_CANARY_MAX_START_SIGN_ROUND_P95_MS,
+    )
+}
+
+pub(crate) fn canary_max_interactive_aggregate_p95_ms() -> u64 {
+    canary_latency_threshold_ms(
+        TBTC_SIGNER_CANARY_MAX_INTERACTIVE_AGGREGATE_P95_MS_ENV,
+        TBTC_SIGNER_CANARY_MAX_FINALIZE_SIGN_ROUND_P95_MS_ENV,
+        TBTC_SIGNER_DEFAULT_CANARY_MAX_FINALIZE_SIGN_ROUND_P95_MS,
+    )
 }
 
 pub(crate) fn canary_max_policy_reject_rate_bps() -> u64 {
@@ -27,6 +97,26 @@ pub(crate) fn canary_max_policy_reject_rate_bps() -> u64 {
         .and_then(|value| value.trim().parse::<u64>().ok())
         .filter(|value| *value <= TBTC_SIGNER_MAX_POLICY_REJECT_RATE_BPS)
         .unwrap_or(TBTC_SIGNER_DEFAULT_CANARY_MAX_POLICY_REJECT_RATE_BPS)
+}
+
+pub(crate) fn canary_min_samples() -> u64 {
+    positive_signer_env_u64(TBTC_SIGNER_CANARY_MIN_SAMPLES_ENV)
+        .map(|value| value.min(TBTC_SIGNER_MAX_CANARY_MIN_SAMPLES))
+        .unwrap_or(TBTC_SIGNER_DEFAULT_CANARY_MIN_SAMPLES)
+}
+
+pub(crate) fn canary_min_policy_samples() -> u64 {
+    positive_signer_env_u64(TBTC_SIGNER_CANARY_MIN_POLICY_SAMPLES_ENV)
+        .map(|value| value.min(TBTC_SIGNER_MAX_CANARY_MIN_SAMPLES))
+        // Preserve the pre-knob safety posture unless an operator explicitly
+        // tunes the lower-volume policy evidence window independently.
+        .unwrap_or_else(canary_min_samples)
+}
+
+pub(crate) fn canary_max_sample_age_seconds() -> u64 {
+    positive_signer_env_u64(TBTC_SIGNER_CANARY_MAX_SAMPLE_AGE_SECONDS_ENV)
+        .map(|value| value.min(TBTC_SIGNER_MAX_CANARY_SAMPLE_AGE_SECONDS))
+        .unwrap_or(TBTC_SIGNER_DEFAULT_CANARY_MAX_SAMPLE_AGE_SECONDS)
 }
 
 pub(crate) fn next_canary_percent(current_percent: u8) -> Option<u8> {
@@ -222,36 +312,18 @@ pub fn trigger_emergency_rekey(
 
 pub fn canary_rollout_status() -> Result<CanaryRolloutStatusResult, EngineError> {
     enforce_provenance_gate()?;
-    let metrics = hardening_metrics();
-    let gate_failures = canary_promotion_gate_failures(&metrics);
+    let guard = state()?
+        .lock()
+        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    // Snapshot rollout state and its process-local evidence under the same
+    // engine lock used by PromoteCanary. This avoids reporting one stage with
+    // another stage's evidence during a concurrent transition.
+    let gate_failures = canary_promotion_gate_failures();
     let gate_passed = gate_failures.is_empty();
-    let (current_percent, previous_percent, config_version, last_action_unix) =
-        if let Ok(state) = state() {
-            if let Ok(guard) = state.lock() {
-                (
-                    guard.canary_rollout.current_percent,
-                    guard.canary_rollout.previous_percent,
-                    guard.canary_rollout.config_version,
-                    guard.canary_rollout.last_action_unix,
-                )
-            } else {
-                let default = CanaryRolloutState::default();
-                (
-                    default.current_percent,
-                    default.previous_percent,
-                    default.config_version,
-                    default.last_action_unix,
-                )
-            }
-        } else {
-            let default = CanaryRolloutState::default();
-            (
-                default.current_percent,
-                default.previous_percent,
-                default.config_version,
-                default.last_action_unix,
-            )
-        };
+    let current_percent = guard.canary_rollout.current_percent;
+    let previous_percent = guard.canary_rollout.previous_percent;
+    let config_version = guard.canary_rollout.config_version;
+    let last_action_unix = guard.canary_rollout.last_action_unix;
 
     Ok(CanaryRolloutStatusResult {
         current_percent,
@@ -276,11 +348,13 @@ pub fn promote_canary(request: PromoteCanaryRequest) -> Result<PromoteCanaryResu
         ));
     }
 
-    let metrics = hardening_metrics();
-    let gate_failures = canary_promotion_gate_failures(&metrics);
+    #[cfg(test)]
+    CANARY_PROMOTION_LOCK_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    #[cfg(test)]
+    maybe_hold_canary_promotion_lock_for_tests();
     if let Some(pending_operation) = pending_canary_operation() {
         let matching_result = match &pending_operation {
             PersistencePendingOperation::CanaryPromotion { result }
@@ -293,6 +367,7 @@ pub fn promote_canary(request: PromoteCanaryRequest) -> Result<PromoteCanaryResu
         persist_engine_state_to_storage(&guard)
             .map_err(PersistEngineStateError::into_engine_error)?;
         clear_persistence_pending_operation(&pending_operation);
+        reset_canary_promotion_evidence();
         if let Some(result) = matching_result {
             return Ok(result);
         }
@@ -318,6 +393,11 @@ pub fn promote_canary(request: PromoteCanaryRequest) -> Result<PromoteCanaryResu
             ),
         );
     }
+    // This snapshot is deliberately taken while the rollout-state lock is held
+    // and immediately before mutation. Concurrent 50%/100% requests therefore
+    // cannot reuse one stage's evidence, and samples cannot age out while a
+    // request waits for the state lock.
+    let gate_failures = canary_promotion_gate_failures();
     if !gate_failures.is_empty() {
         return reject_lifecycle_policy(
             "canary-rollout",
@@ -344,6 +424,11 @@ pub fn promote_canary(request: PromoteCanaryRequest) -> Result<PromoteCanaryResu
             mark_persistence_pending(PersistencePendingOperation::CanaryPromotion {
                 result: result.clone(),
             });
+            // The replacement state already moved to the next cohort. Treat it
+            // as the active stage immediately even though directory durability
+            // still needs repair; prior-stage evidence must not authorize the
+            // following promotion while the retry is pending.
+            reset_canary_promotion_evidence();
         } else {
             guard.canary_rollout = previous_canary_rollout;
         }
@@ -352,6 +437,7 @@ pub fn promote_canary(request: PromoteCanaryRequest) -> Result<PromoteCanaryResu
     record_hardening_telemetry(|telemetry| {
         telemetry.canary_promotions_total = telemetry.canary_promotions_total.saturating_add(1);
     });
+    reset_canary_promotion_evidence();
 
     Ok(result)
 }
@@ -380,6 +466,7 @@ pub fn rollback_canary(
         persist_engine_state_to_storage(&guard)
             .map_err(PersistEngineStateError::into_engine_error)?;
         clear_persistence_pending_operation(&pending_operation);
+        reset_canary_promotion_evidence();
         if let Some(result) = matching_result {
             return Ok(result);
         }
@@ -405,6 +492,7 @@ pub fn rollback_canary(
             mark_persistence_pending(PersistencePendingOperation::CanaryRollback {
                 result: result.clone(),
             });
+            reset_canary_promotion_evidence();
         } else {
             guard.canary_rollout = previous_canary_rollout;
         }
@@ -413,6 +501,7 @@ pub fn rollback_canary(
     record_hardening_telemetry(|telemetry| {
         telemetry.canary_rollbacks_total = telemetry.canary_rollbacks_total.saturating_add(1);
     });
+    reset_canary_promotion_evidence();
 
     Ok(result)
 }

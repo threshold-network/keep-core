@@ -43,7 +43,10 @@ const TBTC_SIGNER_ABI_MAJOR: u32 = 3;
 // signing-policy behavior.
 // Minor 2 adds the optional heartbeat rate-limit config field and a dedicated
 // heartbeat policy-rejection metric. Older callers safely omit/ignore both.
-const TBTC_SIGNER_ABI_MINOR: u32 = 2;
+// Minor 3 adds optional canary-evidence configuration, including an independent
+// policy-evidence sample minimum. Every field is optional and defaults fail
+// closed; an absent policy minimum retains the interactive minimum.
+const TBTC_SIGNER_ABI_MINOR: u32 = 3;
 #[cfg(test)]
 use engine::TBTC_SIGNER_PROFILE_ENV;
 
@@ -760,9 +763,10 @@ mod tests {
         // prevout scripts and returns BIP-341 SIGHASH_DEFAULT messages; the
         // incompatible request shape is ABI 3. Optional typed heartbeat intent is
         // the first backward-compatible minor addition; its independent rate-limit
-        // config and rejection metric are the second.
+        // config and rejection metric are the second. Canary evidence configuration,
+        // including its independent policy-sample minimum, is the third.
         assert_eq!(abi.abi_major, 3);
-        assert_eq!(abi.abi_minor, 2);
+        assert_eq!(abi.abi_minor, 3);
     }
 
     #[test]
@@ -915,6 +919,7 @@ mod tests {
     fn canary_rollout_promote_and_rollback_roundtrip() {
         let _guard = crate::engine::lock_test_state();
         crate::engine::reset_for_tests();
+        crate::engine::seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
 
         let (status_initial, payload_initial) = call_ffi_no_input(frost_tbtc_canary_rollout_status);
         assert_eq!(status_initial, 0);
@@ -932,6 +937,7 @@ mod tests {
         assert_eq!(promoted_50.from_percent, 10);
         assert_eq!(promoted_50.to_percent, 50);
 
+        crate::engine::seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
         let promote_100 = PromoteCanaryRequest {
             target_percent: 100,
         };

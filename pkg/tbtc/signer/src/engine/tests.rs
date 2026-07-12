@@ -622,6 +622,12 @@ fn clear_state_storage_policy_overrides() {
     std::env::remove_var(TBTC_SIGNER_CANARY_MAX_START_SIGN_ROUND_P95_MS_ENV);
     std::env::remove_var(TBTC_SIGNER_CANARY_MAX_FINALIZE_SIGN_ROUND_P95_MS_ENV);
     std::env::remove_var(TBTC_SIGNER_CANARY_MAX_POLICY_REJECT_RATE_BPS_ENV);
+    std::env::remove_var(TBTC_SIGNER_CANARY_MAX_INTERACTIVE_ROUND1_P95_MS_ENV);
+    std::env::remove_var(TBTC_SIGNER_CANARY_MAX_INTERACTIVE_ROUND2_P95_MS_ENV);
+    std::env::remove_var(TBTC_SIGNER_CANARY_MAX_INTERACTIVE_AGGREGATE_P95_MS_ENV);
+    std::env::remove_var(TBTC_SIGNER_CANARY_MIN_SAMPLES_ENV);
+    std::env::remove_var(TBTC_SIGNER_CANARY_MIN_POLICY_SAMPLES_ENV);
+    std::env::remove_var(TBTC_SIGNER_CANARY_MAX_SAMPLE_AGE_SECONDS_ENV);
     std::env::remove_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV);
     std::env::remove_var(TBTC_SIGNER_STATE_KEY_COMMAND_TIMEOUT_SECS_ENV);
     std::env::set_var(TBTC_SIGNER_PROFILE_ENV, TBTC_SIGNER_PROFILE_DEVELOPMENT);
@@ -2218,13 +2224,22 @@ fn canary_promotion_and_rollback_controls_persist_across_reload() {
 
     let initial_status = canary_rollout_status().expect("canary rollout status");
     assert_eq!(initial_status.current_percent, 10);
-    assert_eq!(initial_status.recommended_next_percent, Some(50));
+    assert!(!initial_status.promotion_gate_passed);
+    assert_eq!(initial_status.recommended_next_percent, None);
+
+    seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
+    let ready_10 = canary_rollout_status().expect("10% stage has fresh evidence");
+    assert!(ready_10.promotion_gate_passed);
+    assert_eq!(ready_10.recommended_next_percent, Some(50));
 
     let promoted_50 =
         promote_canary(PromoteCanaryRequest { target_percent: 50 }).expect("promote canary to 50%");
     assert_eq!(promoted_50.from_percent, 10);
     assert_eq!(promoted_50.to_percent, 50);
 
+    let after_50 = canary_rollout_status().expect("promotion resets stage evidence");
+    assert!(!after_50.promotion_gate_passed);
+    seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
     let promoted_100 = promote_canary(PromoteCanaryRequest {
         target_percent: 100,
     })
@@ -2578,6 +2593,7 @@ fn canary_promotion_persist_failure_rolls_back_and_retry_is_durable() {
     let state_path = configure_test_state_path("canary_promotion_persist_retry");
     reset_for_tests();
     clear_state_storage_policy_overrides();
+    seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
 
     let request = PromoteCanaryRequest { target_percent: 50 };
     set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
@@ -2618,6 +2634,7 @@ fn canary_rollback_persist_failure_rolls_back_and_retry_is_durable() {
     reset_for_tests();
     clear_state_storage_policy_overrides();
 
+    seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
     promote_canary(PromoteCanaryRequest { target_percent: 50 })
         .expect("persist baseline canary promotion");
     let request = RollbackCanaryRequest {
@@ -2747,6 +2764,7 @@ fn lifecycle_post_rename_persist_failures_remain_fail_closed_and_retry_durably()
     ));
 
     let promotion_request = PromoteCanaryRequest { target_percent: 50 };
+    seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
     set_persist_fault_injection_for_tests(
         PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
     );
@@ -2761,6 +2779,7 @@ fn lifecycle_post_rename_persist_failures_remain_fail_closed_and_retry_durably()
     let pending_promotion_status = canary_rollout_status().expect("pending promotion status");
     assert_eq!(pending_promotion_status.current_percent, 50);
     assert_eq!(pending_promotion_status.config_version, 2);
+    assert!(!pending_promotion_status.promotion_gate_passed);
     set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
     promote_canary(promotion_request.clone())
         .expect_err("a failed pending promotion flush must not report success");
@@ -2790,6 +2809,7 @@ fn lifecycle_post_rename_persist_failures_remain_fail_closed_and_retry_durably()
     let pending_rollback_status = canary_rollout_status().expect("pending rollback status");
     assert_eq!(pending_rollback_status.current_percent, 10);
     assert_eq!(pending_rollback_status.config_version, 3);
+    assert!(!pending_rollback_status.promotion_gate_passed);
     set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
     rollback_canary(rollback_request.clone())
         .expect_err("a failed pending rollback flush must not report success");
@@ -2829,6 +2849,10 @@ fn canary_promotion_halts_when_policy_reject_rate_exceeds_gate() {
     let _guard = lock_test_state();
     reset_for_tests();
     clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_CANARY_MIN_SAMPLES_ENV, "1");
+    record_hardening_operation_latency(HardeningOperation::InteractiveRound1, 1);
+    record_hardening_operation_latency(HardeningOperation::InteractiveRound2, 1);
+    record_hardening_operation_latency(HardeningOperation::InteractiveAggregate, 1);
 
     std::env::set_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV, "true");
     std::env::set_var(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV, "p2wpkh");
@@ -2848,6 +2872,421 @@ fn canary_promotion_halts_when_policy_reject_rate_exceeds_gate() {
         panic!("unexpected error variant");
     };
     assert_eq!(reason_code, "canary_slo_gate_failed");
+}
+
+#[test]
+fn canary_promotion_halts_when_interactive_latency_exceeds_gate() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("canary_interactive_latency_gate");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    std::env::set_var(TBTC_SIGNER_CANARY_MIN_SAMPLES_ENV, "1");
+    std::env::set_var(TBTC_SIGNER_CANARY_MAX_INTERACTIVE_ROUND1_P95_MS_ENV, "10");
+    std::env::set_var(TBTC_SIGNER_CANARY_MAX_INTERACTIVE_ROUND2_P95_MS_ENV, "10");
+    std::env::set_var(
+        TBTC_SIGNER_CANARY_MAX_INTERACTIVE_AGGREGATE_P95_MS_ENV,
+        "20",
+    );
+    record_hardening_operation_latency(HardeningOperation::InteractiveRound1, 11);
+    record_hardening_operation_latency(HardeningOperation::InteractiveRound2, 12);
+    record_hardening_operation_latency(HardeningOperation::InteractiveAggregate, 21);
+    record_canary_policy_outcome(false);
+
+    let failures = canary_promotion_gate_failures();
+    assert_eq!(
+        failures,
+        vec![
+            "interactive_round1 p95 latency [11ms] exceeds canary gate [10ms]",
+            "interactive_round2 p95 latency [12ms] exceeds canary gate [10ms]",
+            "interactive_aggregate p95 latency [21ms] exceeds canary gate [20ms]",
+        ]
+    );
+
+    let err = promote_canary(PromoteCanaryRequest { target_percent: 50 })
+        .expect_err("interactive signing latency must block canary promotion");
+    let EngineError::LifecyclePolicyRejected { reason_code, .. } = err else {
+        panic!("unexpected error variant");
+    };
+    assert_eq!(reason_code, "canary_slo_gate_failed");
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn canary_interactive_knobs_override_legacy_threshold_aliases() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    std::env::set_var(TBTC_SIGNER_CANARY_MAX_START_SIGN_ROUND_P95_MS_ENV, "10");
+    std::env::set_var(TBTC_SIGNER_CANARY_MAX_FINALIZE_SIGN_ROUND_P95_MS_ENV, "20");
+    assert_eq!(canary_max_interactive_round1_p95_ms(), 10);
+    assert_eq!(canary_max_interactive_round2_p95_ms(), 10);
+    assert_eq!(canary_max_interactive_aggregate_p95_ms(), 20);
+
+    std::env::set_var(TBTC_SIGNER_CANARY_MAX_INTERACTIVE_ROUND1_P95_MS_ENV, "11");
+    std::env::set_var(TBTC_SIGNER_CANARY_MAX_INTERACTIVE_ROUND2_P95_MS_ENV, "12");
+    std::env::set_var(
+        TBTC_SIGNER_CANARY_MAX_INTERACTIVE_AGGREGATE_P95_MS_ENV,
+        "21",
+    );
+    assert_eq!(canary_max_interactive_round1_p95_ms(), 11);
+    assert_eq!(canary_max_interactive_round2_p95_ms(), 12);
+    assert_eq!(canary_max_interactive_aggregate_p95_ms(), 21);
+
+    // A malformed or non-positive explicit knob must not shadow a valid
+    // legacy alias. Operators can therefore recover from a bad new-name
+    // value without silently falling back to the much looser built-in
+    // latency threshold.
+    std::env::set_var(
+        TBTC_SIGNER_CANARY_MAX_INTERACTIVE_ROUND1_P95_MS_ENV,
+        "not-a-number",
+    );
+    std::env::set_var(TBTC_SIGNER_CANARY_MAX_INTERACTIVE_ROUND2_P95_MS_ENV, "0");
+    std::env::set_var(
+        TBTC_SIGNER_CANARY_MAX_INTERACTIVE_AGGREGATE_P95_MS_ENV,
+        "not-a-number",
+    );
+    assert_eq!(canary_max_interactive_round1_p95_ms(), 10);
+    assert_eq!(canary_max_interactive_round2_p95_ms(), 10);
+    assert_eq!(canary_max_interactive_aggregate_p95_ms(), 20);
+
+    std::env::set_var(TBTC_SIGNER_CANARY_MIN_SAMPLES_ENV, "0");
+    assert_eq!(canary_min_samples(), TBTC_SIGNER_DEFAULT_CANARY_MIN_SAMPLES);
+    std::env::set_var(TBTC_SIGNER_CANARY_MIN_SAMPLES_ENV, "256");
+    assert_eq!(canary_min_samples(), 256);
+
+    std::env::set_var(TBTC_SIGNER_CANARY_MIN_SAMPLES_ENV, "257");
+    assert_eq!(canary_min_samples(), TBTC_SIGNER_MAX_CANARY_MIN_SAMPLES);
+    std::env::set_var(TBTC_SIGNER_CANARY_MIN_POLICY_SAMPLES_ENV, "0");
+    assert_eq!(
+        canary_min_policy_samples(),
+        TBTC_SIGNER_MAX_CANARY_MIN_SAMPLES,
+        "a zero policy minimum retains the interactive fallback",
+    );
+    std::env::set_var(TBTC_SIGNER_CANARY_MIN_POLICY_SAMPLES_ENV, "257");
+    assert_eq!(
+        canary_min_policy_samples(),
+        TBTC_SIGNER_MAX_CANARY_MIN_SAMPLES
+    );
+    std::env::set_var(TBTC_SIGNER_CANARY_MAX_SAMPLE_AGE_SECONDS_ENV, "604801");
+    assert_eq!(
+        canary_max_sample_age_seconds(),
+        TBTC_SIGNER_MAX_CANARY_SAMPLE_AGE_SECONDS
+    );
+}
+
+#[test]
+fn canary_policy_evidence_minimum_is_independent_from_interactive_minimum() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    std::env::set_var(TBTC_SIGNER_CANARY_MIN_SAMPLES_ENV, "2");
+    assert_eq!(
+        canary_min_policy_samples(),
+        2,
+        "an absent policy minimum must preserve the prior fail-closed minimum",
+    );
+    std::env::set_var(TBTC_SIGNER_CANARY_MIN_POLICY_SAMPLES_ENV, "1");
+
+    record_hardening_operation_latency(HardeningOperation::InteractiveRound1, 1);
+    record_hardening_operation_latency(HardeningOperation::InteractiveRound2, 1);
+    record_hardening_operation_latency(HardeningOperation::InteractiveAggregate, 1);
+    record_canary_policy_outcome(false);
+
+    assert_eq!(
+        canary_promotion_gate_failures(),
+        vec![
+            "interactive_round1 fresh successful samples [1] below canary minimum [2]",
+            "interactive_round2 fresh successful samples [1] below canary minimum [2]",
+            "interactive_aggregate fresh successful samples [1] below canary minimum [2]",
+        ],
+        "the lower policy minimum must not weaken interactive evidence",
+    );
+
+    record_hardening_operation_latency(HardeningOperation::InteractiveRound1, 1);
+    record_hardening_operation_latency(HardeningOperation::InteractiveRound2, 1);
+    record_hardening_operation_latency(HardeningOperation::InteractiveAggregate, 1);
+    assert!(
+        canary_promotion_gate_failures().is_empty(),
+        "one policy outcome should remain sufficient after interactive evidence reaches its own minimum",
+    );
+}
+
+#[test]
+fn canary_evidence_freshness_fails_closed_when_clock_precedes_observation() {
+    let evaluated_at = Instant::now();
+    let observed_at = evaluated_at + Duration::from_secs(1);
+
+    let mut latency = HardeningLatencyTracker::default();
+    latency.record_at(7, observed_at);
+    assert_eq!(latency.fresh_sample_count(evaluated_at, 60), 0);
+    assert_eq!(latency.fresh_p95_ms(evaluated_at, 60), 0);
+
+    let mut policy = HardeningPolicyOutcomeTracker::default();
+    policy.record_at(false, observed_at);
+    assert_eq!(policy.fresh_snapshot(evaluated_at, 60), (0, 0));
+}
+
+#[test]
+fn canary_promotion_requires_fresh_minimum_evidence_after_restart() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("canary_restart_evidence_gate");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let empty = canary_rollout_status().expect("empty-evidence status");
+    assert!(!empty.promotion_gate_passed);
+    assert_eq!(empty.gate_failures, canary_missing_evidence_gate_failures());
+
+    seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
+    promote_canary(PromoteCanaryRequest { target_percent: 50 })
+        .expect("fresh minimum evidence promotes to 50%");
+    seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
+    assert!(
+        canary_rollout_status()
+            .expect("50% stage evidence")
+            .promotion_gate_passed
+    );
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    let restarted = canary_rollout_status().expect("status after process restart");
+    assert_eq!(restarted.current_percent, 50);
+    assert!(!restarted.promotion_gate_passed);
+    assert_eq!(
+        restarted.gate_failures,
+        canary_missing_evidence_gate_failures()
+    );
+    let error = promote_canary(PromoteCanaryRequest {
+        target_percent: 100,
+    })
+    .expect_err("persisted rollout state must not promote on empty post-restart telemetry");
+    assert!(matches!(
+        error,
+        EngineError::LifecyclePolicyRejected { ref reason_code, .. }
+            if reason_code == "canary_slo_gate_failed"
+    ));
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn concurrent_canary_promotions_cannot_reuse_prior_stage_evidence() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
+
+    struct CanaryPromotionLockReleaseGuard;
+    impl Drop for CanaryPromotionLockReleaseGuard {
+        fn drop(&mut self) {
+            release_canary_promotion_lock_for_tests();
+        }
+    }
+
+    arm_canary_promotion_lock_hold_for_tests();
+    let release_guard = CanaryPromotionLockReleaseGuard;
+    let promote_50 =
+        std::thread::spawn(|| promote_canary(PromoteCanaryRequest { target_percent: 50 }));
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !canary_promotion_lock_held_for_tests() {
+        assert!(
+            Instant::now() < deadline,
+            "50% promotion did not acquire the rollout-state lock"
+        );
+        std::thread::yield_now();
+    }
+
+    let promote_100 = std::thread::spawn(|| {
+        promote_canary(PromoteCanaryRequest {
+            target_percent: 100,
+        })
+    });
+    while canary_promotion_lock_attempts_for_tests() < 2 {
+        assert!(
+            Instant::now() < deadline,
+            "100% promotion did not reach the rollout-state lock"
+        );
+        std::thread::yield_now();
+    }
+
+    release_canary_promotion_lock_for_tests();
+    drop(release_guard);
+    let first = promote_50
+        .join()
+        .expect("50% promotion thread")
+        .expect("50% promotion succeeds with stage-10 evidence");
+    assert_eq!(first.to_percent, 50);
+
+    let second = promote_100
+        .join()
+        .expect("100% promotion thread")
+        .expect_err("100% promotion must wait for fresh stage-50 evidence");
+    assert!(matches!(
+        second,
+        EngineError::LifecyclePolicyRejected { ref reason_code, .. }
+            if reason_code == "canary_slo_gate_failed"
+    ));
+    let status = canary_rollout_status().expect("rollout status after concurrent requests");
+    assert_eq!(status.current_percent, 50);
+    assert!(!status.promotion_gate_passed);
+}
+
+#[test]
+fn canary_promotion_ignores_samples_older_than_the_configured_window() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
+
+    std::env::set_var(TBTC_SIGNER_CANARY_MAX_SAMPLE_AGE_SECONDS_ENV, "1");
+    let stale_at = Instant::now()
+        .checked_sub(Duration::from_secs(2))
+        .expect("monotonic clock must support a two-second test offset");
+    {
+        let mut telemetry = hardening_telemetry_state()
+            .lock()
+            .expect("hardening telemetry lock");
+        for sample in &mut telemetry.canary_interactive_round1_latency.samples {
+            sample.observed_at = stale_at;
+        }
+        for sample in &mut telemetry.canary_interactive_round2_latency.samples {
+            sample.observed_at = stale_at;
+        }
+        for sample in &mut telemetry.canary_interactive_aggregate_latency.samples {
+            sample.observed_at = stale_at;
+        }
+        for sample in &mut telemetry.canary_policy_outcomes.samples {
+            sample.observed_at = stale_at;
+        }
+    }
+
+    let metrics = hardening_metrics();
+    assert_eq!(
+        metrics.interactive_round1_latency_samples,
+        canary_min_samples()
+    );
+    assert_eq!(
+        metrics.interactive_round2_latency_samples,
+        canary_min_samples()
+    );
+    assert_eq!(
+        metrics.interactive_aggregate_latency_samples,
+        canary_min_samples()
+    );
+    assert_eq!(metrics.interactive_round1_latency_p95_ms, 1);
+    assert_eq!(metrics.interactive_round2_latency_p95_ms, 1);
+    assert_eq!(metrics.interactive_aggregate_latency_p95_ms, 1);
+    assert_eq!(
+        canary_promotion_gate_failures(),
+        canary_missing_evidence_gate_failures()
+    );
+}
+
+#[test]
+fn canary_evidence_reset_preserves_abi_latency_metrics() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_CANARY_MIN_SAMPLES_ENV, "1");
+
+    seed_canary_promotion_evidence_for_tests(7, 8, 9, 0);
+    let before = hardening_metrics();
+    assert!(canary_promotion_gate_failures().is_empty());
+
+    reset_canary_promotion_evidence();
+
+    let after = hardening_metrics();
+    assert_eq!(after.interactive_round1_latency_samples, 1);
+    assert_eq!(after.interactive_round1_latency_p95_ms, 7);
+    assert_eq!(after.interactive_round2_latency_samples, 1);
+    assert_eq!(after.interactive_round2_latency_p95_ms, 8);
+    assert_eq!(after.interactive_aggregate_latency_samples, 1);
+    assert_eq!(after.interactive_aggregate_latency_p95_ms, 9);
+    assert_eq!(
+        (
+            after.interactive_round1_latency_samples,
+            after.interactive_round1_latency_p95_ms,
+            after.interactive_round2_latency_samples,
+            after.interactive_round2_latency_p95_ms,
+            after.interactive_aggregate_latency_samples,
+            after.interactive_aggregate_latency_p95_ms,
+        ),
+        (
+            before.interactive_round1_latency_samples,
+            before.interactive_round1_latency_p95_ms,
+            before.interactive_round2_latency_samples,
+            before.interactive_round2_latency_p95_ms,
+            before.interactive_aggregate_latency_samples,
+            before.interactive_aggregate_latency_p95_ms,
+        ),
+        "rollout evidence reset must not change established ABI-3 metrics",
+    );
+    assert_eq!(
+        canary_promotion_gate_failures(),
+        canary_missing_evidence_gate_failures(),
+        "the separate promotion window must still reset fail closed",
+    );
+}
+
+#[test]
+fn canary_promotion_ignores_interactive_latency_from_the_prior_stage() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    // Model an operation that began in the current rollout stage, completed
+    // while promotion reset the evidence window, and dropped its success guard
+    // only after the new stage began collecting samples.
+    let mut operation =
+        HardeningOperationLatencyGuard::success_only(HardeningOperation::InteractiveRound1);
+    reset_canary_promotion_evidence();
+    operation.mark_success();
+    drop(operation);
+
+    assert_eq!(
+        hardening_metrics().interactive_round1_latency_samples,
+        1,
+        "the completed call remains visible through the ABI-3 rolling metric",
+    );
+    let telemetry = hardening_telemetry_state()
+        .lock()
+        .expect("hardening telemetry lock");
+    assert_eq!(
+        telemetry.canary_interactive_round1_latency.sample_count(),
+        0,
+        "a completion from the prior stage must not enter new-stage evidence",
+    );
+}
+
+#[test]
+fn idempotent_build_replays_do_not_dilute_canary_policy_outcomes() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let request = build_policy_test_request("session-canary-policy-cache-dilution");
+    build_taproot_tx(request.clone()).expect("first artifact decision");
+    for _ in 0..HARDENING_LATENCY_SAMPLE_WINDOW {
+        build_taproot_tx(request.clone()).expect("idempotent build replay");
+    }
+
+    let telemetry = hardening_telemetry_state()
+        .lock()
+        .expect("hardening telemetry lock");
+    let (sample_count, rejected_count) = telemetry
+        .canary_policy_outcomes
+        .fresh_snapshot(Instant::now(), canary_max_sample_age_seconds());
+    assert_eq!(sample_count, 1);
+    assert_eq!(rejected_count, 0);
 }
 
 #[test]
@@ -5629,15 +6068,27 @@ fn init_signer_config_overrides_environment_for_covered_knobs() {
         profile: Some("development".to_string()),
         roast_coordinator_timeout_ms: Some(60_000),
         policy_heartbeat_rate_limit_per_minute: Some(7),
+        canary_max_interactive_round1_p95_ms: Some(101),
+        canary_max_interactive_round2_p95_ms: Some(202),
+        canary_max_interactive_aggregate_p95_ms: Some(303),
+        canary_min_samples: Some(42),
+        canary_min_policy_samples: Some(7),
+        canary_max_sample_age_seconds: Some(900),
         ..InitSignerConfigRequest::default()
     })
     .expect("install config");
     assert!(result.installed);
     assert!(!result.idempotent);
-    assert_eq!(result.configured_key_count, 3);
+    assert_eq!(result.configured_key_count, 9);
 
     assert_eq!(roast_coordinator_timeout_ms(), 60_000);
     assert_eq!(heartbeat_rate_limit_per_minute().unwrap(), 7);
+    assert_eq!(canary_max_interactive_round1_p95_ms(), 101);
+    assert_eq!(canary_max_interactive_round2_p95_ms(), 202);
+    assert_eq!(canary_max_interactive_aggregate_p95_ms(), 303);
+    assert_eq!(canary_min_samples(), 42);
+    assert_eq!(canary_min_policy_samples(), 7);
+    assert_eq!(canary_max_sample_age_seconds(), 900);
     std::env::remove_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV);
 }
 
@@ -7388,6 +7839,15 @@ fn interactive_round1_is_idempotent_until_consumed() {
         member_identifier: 1,
     })
     .expect("round 1");
+    assert_eq!(hardening_metrics().interactive_round1_latency_samples, 1);
+    assert_eq!(
+        hardening_telemetry_state()
+            .lock()
+            .expect("hardening telemetry lock")
+            .canary_interactive_round1_latency
+            .sample_count(),
+        1,
+    );
     let second = interactive_round1(InteractiveRound1Request {
         session_id: session_id.to_string(),
         attempt_id: opened.attempt_id.clone(),
@@ -7397,6 +7857,20 @@ fn interactive_round1_is_idempotent_until_consumed() {
     assert_eq!(
         first.commitments_hex, second.commitments_hex,
         "round 1 must be idempotent until the nonces are consumed"
+    );
+    assert_eq!(
+        hardening_metrics().interactive_round1_latency_samples,
+        2,
+        "the ABI-3 rolling metric includes the idempotent call"
+    );
+    assert_eq!(
+        hardening_telemetry_state()
+            .lock()
+            .expect("hardening telemetry lock")
+            .canary_interactive_round1_latency
+            .sample_count(),
+        1,
+        "an idempotent replay must not dilute the promotion latency window",
     );
 
     let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
@@ -7433,6 +7907,20 @@ fn interactive_round1_is_idempotent_until_consumed() {
         "unexpected error: {replay:?}"
     );
     assert_eq!(replay.code(), "consumed_nonce_replay");
+    assert_eq!(
+        hardening_metrics().interactive_round1_latency_samples,
+        3,
+        "the ABI-3 rolling metric includes the rejected call"
+    );
+    assert_eq!(
+        hardening_telemetry_state()
+            .lock()
+            .expect("hardening telemetry lock")
+            .canary_interactive_round1_latency
+            .sample_count(),
+        1,
+        "a fail-fast rejection must not enter the successful promotion window",
+    );
 }
 
 #[test]
