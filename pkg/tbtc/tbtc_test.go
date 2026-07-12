@@ -1,6 +1,10 @@
 package tbtc
 
-import "testing"
+import (
+	"errors"
+	"testing"
+	"time"
+)
 
 func TestShouldMonitorLegacySortitionPool(t *testing.T) {
 	if !shouldMonitorLegacySortitionPool(Config{}) {
@@ -27,5 +31,140 @@ func TestShouldRunLegacyECDSA(t *testing.T) {
 
 	if shouldRunLegacyECDSA(Config{DisableLegacyECDSA: true}) {
 		t.Fatal("expected legacy ECDSA to be disabled")
+	}
+}
+
+func TestProcessWalletClosureEventRetriesAfterFailure(t *testing.T) {
+	deduplicator := newDeduplicator()
+	event := &WalletClosedEvent{
+		WalletID: [32]byte{0xaa},
+		Scheme:   WalletSchemeFROST,
+	}
+
+	attempts := 0
+	handle := func(_ [32]byte, scheme WalletScheme) error {
+		attempts++
+		if scheme != WalletSchemeFROST {
+			t.Fatalf("unexpected wallet scheme [%v]", scheme)
+		}
+		if attempts == 1 {
+			return errors.New("transient failure")
+		}
+
+		return nil
+	}
+
+	processed, err := processWalletClosureEvent(deduplicator, event, handle)
+	if !processed || err == nil {
+		t.Fatalf("expected first handling attempt to fail, got [%v, %v]", processed, err)
+	}
+
+	processed, err = processWalletClosureEvent(deduplicator, event, handle)
+	if !processed || err != nil {
+		t.Fatalf("expected replay to succeed, got [%v, %v]", processed, err)
+	}
+
+	processed, err = processWalletClosureEvent(deduplicator, event, handle)
+	if processed || err != nil {
+		t.Fatalf("expected successful event to be deduplicated, got [%v, %v]", processed, err)
+	}
+	if attempts != 2 {
+		t.Fatalf("unexpected handling attempts [%v]", attempts)
+	}
+}
+
+func TestProcessWalletClosureEventScopesDeduplicationByScheme(t *testing.T) {
+	deduplicator := newDeduplicator()
+	walletID := [32]byte{0xbb}
+	handledSchemes := make([]WalletScheme, 0, 2)
+	handle := func(_ [32]byte, scheme WalletScheme) error {
+		handledSchemes = append(handledSchemes, scheme)
+		return nil
+	}
+
+	for _, scheme := range []WalletScheme{WalletSchemeFROST, WalletSchemeUnknown} {
+		processed, err := processWalletClosureEvent(
+			deduplicator,
+			&WalletClosedEvent{WalletID: walletID, Scheme: scheme},
+			handle,
+		)
+		if !processed || err != nil {
+			t.Fatalf("expected scheme [%v] to be processed, got [%v, %v]", scheme, processed, err)
+		}
+	}
+
+	expected := []WalletScheme{WalletSchemeFROST, WalletSchemeECDSA}
+	for i := range expected {
+		if handledSchemes[i] != expected[i] {
+			t.Fatalf(
+				"unexpected handled scheme at index [%v]: expected [%v], got [%v]",
+				i,
+				expected[i],
+				handledSchemes[i],
+			)
+		}
+	}
+}
+
+func TestProcessWalletClosureEventPreservesConcurrentReplay(t *testing.T) {
+	deduplicator := newDeduplicator()
+	event := &WalletClosedEvent{
+		WalletID: [32]byte{0xcc},
+		Scheme:   WalletSchemeFROST,
+	}
+
+	firstAttemptStarted := make(chan struct{})
+	releaseFirstAttempt := make(chan struct{})
+	attempts := 0
+	handle := func(_ [32]byte, _ WalletScheme) error {
+		attempts++
+		if attempts == 1 {
+			close(firstAttemptStarted)
+			<-releaseFirstAttempt
+			return errors.New("transient failure")
+		}
+
+		return nil
+	}
+
+	type processingResult struct {
+		processed bool
+		err       error
+	}
+	result := make(chan processingResult, 1)
+	go func() {
+		processed, err := processWalletClosureEvent(deduplicator, event, handle)
+		result <- processingResult{processed: processed, err: err}
+	}()
+
+	<-firstAttemptStarted
+	processed, err := processWalletClosureEvent(
+		deduplicator,
+		event,
+		func(_ [32]byte, _ WalletScheme) error {
+			t.Fatal("concurrent replay must not start a second handler")
+			return nil
+		},
+	)
+	if processed || err != nil {
+		t.Fatalf("expected concurrent replay to be queued, got [%v, %v]", processed, err)
+	}
+
+	close(releaseFirstAttempt)
+	select {
+	case actual := <-result:
+		if !actual.processed || actual.err != nil {
+			t.Fatalf(
+				"expected queued replay to recover the failure, got [%v, %v]",
+				actual.processed,
+				actual.err,
+			)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for queued wallet closure replay")
+	}
+
+	if attempts != 2 {
+		t.Fatalf("expected two handling attempts, got [%v]", attempts)
 	}
 }

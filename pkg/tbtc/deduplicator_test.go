@@ -12,7 +12,6 @@ import (
 const (
 	testDKGSeedCachePeriod       = 1 * time.Second
 	testDKGResultHashCachePeriod = 1 * time.Second
-	testWalletClosedCachePeriod  = 1 * time.Second
 )
 
 func TestNotifyDKGStarted(t *testing.T) {
@@ -136,42 +135,6 @@ func TestNotifyDKGResultSubmitted(t *testing.T) {
 
 	// Add the original parameters again.
 	canProcess = deduplicator.notifyDKGResultSubmitted(big.NewInt(100), hash1, 500)
-	if !canProcess {
-		t.Fatal("should be allowed to process")
-	}
-}
-
-func TestNotifyWalletClosed(t *testing.T) {
-	deduplicator := deduplicator{
-		walletClosedCache: cache.NewTimeCache(testWalletClosedCachePeriod),
-	}
-
-	wallet1 := [32]byte{1}
-	wallet2 := [32]byte{2}
-
-	// Add the first wallet ID.
-	canProcess := deduplicator.notifyWalletClosed(wallet1)
-	if !canProcess {
-		t.Fatal("should be allowed to process")
-	}
-
-	// Add the second wallet ID.
-	canProcess = deduplicator.notifyWalletClosed(wallet2)
-	if !canProcess {
-		t.Fatal("should be allowed to process")
-	}
-
-	// Add the first wallet ID before caching period elapses.
-	canProcess = deduplicator.notifyWalletClosed(wallet1)
-	if canProcess {
-		t.Fatal("should not be allowed to process")
-	}
-
-	// Wait until caching period elapses.
-	time.Sleep(testWalletClosedCachePeriod)
-
-	// Add the first wallet ID again.
-	canProcess = deduplicator.notifyWalletClosed(wallet1)
 	if !canProcess {
 		t.Fatal("should be allowed to process")
 	}

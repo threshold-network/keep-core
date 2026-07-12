@@ -32,6 +32,16 @@ const (
 // execution in progress.
 var errInactivityClaimExecutorBusy = fmt.Errorf("inactivity claim executor is busy")
 
+// walletInactivityClaimChainProvider supplies a wallet-scheme-bound inactivity
+// chain. Ethereum implements this interface with separate ECDSA and FROST
+// registry/sortition-pool views. Chains that do not implement it retain the
+// legacy ECDSA behavior.
+type walletInactivityClaimChainProvider interface {
+	InactivityClaimChainForWallet(
+		walletScheme WalletScheme,
+	) (WalletInactivityClaimChain, error)
+}
+
 type inactivityClaimExecutor struct {
 	lock *semaphore.Weighted
 
@@ -95,9 +105,28 @@ func (ice *inactivityClaimExecutor) claimInactivity(
 		return fmt.Errorf("could not get registry data on wallet: [%v]", err)
 	}
 
-	nonce, err := ice.chain.GetInactivityClaimNonce(
-		walletRegistryData.EcdsaWalletID,
-	)
+	walletScheme, walletID, err := walletSchemeAndRegistryID(walletRegistryData)
+	if err != nil {
+		return fmt.Errorf("could not resolve wallet registry: [%v]", err)
+	}
+	if walletScheme == WalletSchemeFROST {
+		var xOnlyOutputKey [32]byte
+		wallet.publicKey.X.FillBytes(xOnlyOutputKey[:])
+		if walletID != xOnlyOutputKey {
+			return fmt.Errorf(
+				"FROST wallet ID [0x%x] does not match x-only output key [0x%x]",
+				walletID,
+				xOnlyOutputKey,
+			)
+		}
+	}
+
+	inactivityChain, err := ice.inactivityChain(walletScheme)
+	if err != nil {
+		return fmt.Errorf("could not resolve inactivity claim chain: [%v]", err)
+	}
+
+	nonce, err := inactivityChain.GetInactivityClaimNonce(walletID)
 	if err != nil {
 		return fmt.Errorf("could not get nonce for wallet: [%v]", err)
 	}
@@ -109,7 +138,7 @@ func (ice *inactivityClaimExecutor) claimInactivity(
 		heartbeatFailed,
 	)
 
-	groupMembers, err := ice.getWalletOperatorsIDs()
+	groupMembers, err := ice.getWalletOperatorsIDs(inactivityChain)
 	if err != nil {
 		return fmt.Errorf("could not get wallet members info: [%v]", err)
 	}
@@ -132,8 +161,13 @@ func (ice *inactivityClaimExecutor) claimInactivity(
 			signerCtx, cancelSignerCtx := context.WithCancel(ctx)
 			defer cancelSignerCtx()
 
-			subscription := ice.chain.OnInactivityClaimed(
+			subscription := inactivityChain.OnInactivityClaimed(
 				func(event *InactivityClaimedEvent) {
+					if event == nil || event.Nonce == nil ||
+						event.WalletID != walletID || event.Nonce.Cmp(nonce) < 0 {
+						return
+					}
+
 					defer cancelSignerCtx()
 
 					execLogger.Infof(
@@ -160,6 +194,8 @@ func (ice *inactivityClaimExecutor) claimInactivity(
 				),
 				groupMembers,
 				ice.membershipValidator,
+				inactivityChain,
+				walletID,
 				claim,
 			)
 			if err != nil {
@@ -188,7 +224,37 @@ func (ice *inactivityClaimExecutor) claimInactivity(
 	return nil
 }
 
-func (ice *inactivityClaimExecutor) getWalletOperatorsIDs() ([]uint32, error) {
+func (ice *inactivityClaimExecutor) inactivityChain(
+	walletScheme WalletScheme,
+) (WalletInactivityClaimChain, error) {
+	provider, ok := ice.chain.(walletInactivityClaimChainProvider)
+	if ok {
+		inactivityChain, err := provider.InactivityClaimChainForWallet(walletScheme)
+		if err != nil {
+			return nil, err
+		}
+		if inactivityChain == nil {
+			return nil, fmt.Errorf(
+				"wallet inactivity claim chain is nil for scheme [%v]",
+				walletScheme,
+			)
+		}
+
+		return inactivityChain, nil
+	}
+
+	if walletScheme == WalletSchemeFROST {
+		return nil, fmt.Errorf(
+			"chain does not provide a FROST inactivity claim view",
+		)
+	}
+
+	return ice.chain, nil
+}
+
+func (ice *inactivityClaimExecutor) getWalletOperatorsIDs(
+	inactivityChain WalletInactivityClaimChain,
+) ([]uint32, error) {
 	// Cache mapping operator addresses to their wallet member IDs. It helps to
 	// limit the number of calls to the ETH client if some operator addresses
 	// occur on the list multiple times.
@@ -200,7 +266,7 @@ func (ice *inactivityClaimExecutor) getWalletOperatorsIDs() ([]uint32, error) {
 		// Search for the operator address in the cache. Store the operator
 		// address in the cache if it's not there.
 		if operatorID, found := operatorIDCache[operatorAddress]; !found {
-			fetchedOperatorID, err := ice.chain.GetOperatorID(operatorAddress)
+			fetchedOperatorID, err := inactivityChain.GetOperatorID(operatorAddress)
 			if err != nil {
 				return nil, fmt.Errorf("could not get operator ID: [%w]", err)
 			}
@@ -223,6 +289,8 @@ func (ice *inactivityClaimExecutor) publishInactivityClaim(
 	dishonestThreshold int,
 	groupMembers []uint32,
 	membershipValidator *group.MembershipValidator,
+	inactivityChain WalletInactivityClaimChain,
+	walletID [32]byte,
 	inactivityClaim *inactivity.ClaimPreimage,
 ) error {
 	return inactivity.PublishClaim(
@@ -234,12 +302,13 @@ func (ice *inactivityClaimExecutor) publishInactivityClaim(
 		groupSize,
 		dishonestThreshold,
 		membershipValidator,
-		newInactivityClaimSigner(ice.chain),
-		newInactivityClaimSubmitter(
+		newInactivityClaimSigner(inactivityChain),
+		newInactivityClaimSubmitterForWallet(
 			inactivityLogger,
-			ice.chain,
+			inactivityChain,
 			ice.groupParameters,
 			groupMembers,
+			walletID,
 			ice.waitForBlockFn,
 		),
 		inactivityClaim,
@@ -255,11 +324,11 @@ func (ice *inactivityClaimExecutor) wallet() wallet {
 // inactivityClaimSigner is responsible for signing the inactivity claim and
 // verification of signatures generated by other group members.
 type inactivityClaimSigner struct {
-	chain Chain
+	chain WalletInactivityClaimChain
 }
 
 func newInactivityClaimSigner(
-	chain Chain,
+	chain WalletInactivityClaimChain,
 ) *inactivityClaimSigner {
 	return &inactivityClaimSigner{
 		chain: chain,
@@ -317,9 +386,10 @@ func (ics *inactivityClaimSigner) VerifySignature(
 type inactivityClaimSubmitter struct {
 	inactivityLogger log.StandardLogger
 
-	chain           Chain
+	chain           WalletInactivityClaimChain
 	groupParameters *GroupParameters
 	groupMembers    []uint32
+	walletID        [32]byte
 
 	waitForBlockFn waitForBlockFn
 }
@@ -331,11 +401,30 @@ func newInactivityClaimSubmitter(
 	groupMembers []uint32,
 	waitForBlockFn waitForBlockFn,
 ) *inactivityClaimSubmitter {
+	return newInactivityClaimSubmitterForWallet(
+		inactivityLogger,
+		chain,
+		groupParameters,
+		groupMembers,
+		[32]byte{},
+		waitForBlockFn,
+	)
+}
+
+func newInactivityClaimSubmitterForWallet(
+	inactivityLogger log.StandardLogger,
+	chain WalletInactivityClaimChain,
+	groupParameters *GroupParameters,
+	groupMembers []uint32,
+	walletID [32]byte,
+	waitForBlockFn waitForBlockFn,
+) *inactivityClaimSubmitter {
 	return &inactivityClaimSubmitter{
 		inactivityLogger: inactivityLogger,
 		chain:            chain,
 		groupParameters:  groupParameters,
 		groupMembers:     groupMembers,
+		walletID:         walletID,
 		waitForBlockFn:   waitForBlockFn,
 	}
 }
@@ -358,17 +447,23 @@ func (ics *inactivityClaimSubmitter) SubmitClaim(
 	// The inactivity nonce at the beginning of the execution process.
 	inactivityNonce := claim.Nonce
 
-	walletPublicKeyHash := bitcoin.PublicKeyHash(claim.WalletPublicKey)
+	walletID := ics.walletID
+	if walletID == ([32]byte{}) {
+		// Backward-compatible constructor path used by legacy callers and tests.
+		walletPublicKeyHash := bitcoin.PublicKeyHash(claim.WalletPublicKey)
+		walletRegistryData, err := ics.chain.GetWallet(walletPublicKeyHash)
+		if err != nil {
+			return fmt.Errorf("could not get registry data on wallet: [%v]", err)
+		}
 
-	walletRegistryData, err := ics.chain.GetWallet(walletPublicKeyHash)
-	if err != nil {
-		return fmt.Errorf("could not get registry data on wallet: [%v]", err)
+		_, walletID, err = walletSchemeAndRegistryID(walletRegistryData)
+		if err != nil {
+			return fmt.Errorf("could not resolve wallet registry: [%v]", err)
+		}
 	}
 
-	ecdsaWalletID := walletRegistryData.EcdsaWalletID
-
 	currentNonce, err := ics.chain.GetInactivityClaimNonce(
-		ecdsaWalletID,
+		walletID,
 	)
 	if err != nil {
 		return fmt.Errorf("could not get nonce for wallet: [%v]", err)
@@ -385,7 +480,7 @@ func (ics *inactivityClaimSubmitter) SubmitClaim(
 	}
 
 	chainClaim, err := ics.chain.AssembleInactivityClaim(
-		ecdsaWalletID,
+		walletID,
 		claim.InactiveMembersIndexes,
 		signatures,
 		claim.HeartbeatFailed,
@@ -438,7 +533,7 @@ func (ics *inactivityClaimSubmitter) SubmitClaim(
 
 	// Re-check the nonce after the delay wait. Another member may have
 	// submitted the claim while we were waiting.
-	currentNonce, err = ics.chain.GetInactivityClaimNonce(ecdsaWalletID)
+	currentNonce, err = ics.chain.GetInactivityClaimNonce(walletID)
 	if err != nil {
 		return fmt.Errorf("could not get nonce for wallet: [%v]", err)
 	}
@@ -472,7 +567,7 @@ func (ics *inactivityClaimSubmitter) SubmitClaim(
 	// submission if another member submits the same claim first. In that
 	// case, treat this as expected and return without error.
 	currentNonce, nonceErr := ics.chain.GetInactivityClaimNonce(
-		ecdsaWalletID,
+		walletID,
 	)
 	if nonceErr == nil && currentNonce.Cmp(inactivityNonce) > 0 {
 		ics.inactivityLogger.Infof(

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/operator"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/protocol/inactivity"
+	"github.com/keep-network/keep-core/pkg/subscription"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
 
@@ -61,6 +63,304 @@ func TestInactivityClaimExecutor_ClaimInactivity(t *testing.T) {
 		expectedNonceDiff,
 		nonceDiff,
 	)
+}
+
+func TestInactivityClaimExecutor_ClaimInactivity_FrostRegistry(t *testing.T) {
+	operatorPrivateKey, operatorPublicKey, err := operator.GenerateKeyPair(
+		local_v1.DefaultCurve,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	baseChain := ConnectWithKey(operatorPrivateKey)
+	frostChain := &recordingFrostInactivityChain{localChain: baseChain}
+	dualStackChain := &dualStackInactivityChain{
+		localChain: baseChain,
+		frostChain: frostChain,
+	}
+
+	localProvider := local.ConnectWithKey(operatorPublicKey)
+	operatorAddress, err := baseChain.Signing().PublicKeyToAddress(operatorPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testData, err := tecdsatest.LoadPrivateKeyShareTestFixtures(1)
+	if err != nil {
+		t.Fatalf("failed to load test data: [%v]", err)
+	}
+	privateKeyShare := tecdsa.NewPrivateKeyShare(testData[0])
+	walletSigner := &signer{
+		wallet: wallet{
+			publicKey:             privateKeyShare.PublicKey(),
+			signingGroupOperators: []chain.Address{operatorAddress},
+		},
+		signingGroupMemberIndex: 1,
+		privateKeyShare:         privateKeyShare,
+	}
+
+	var frostWalletID [32]byte
+	walletSigner.wallet.publicKey.X.FillBytes(frostWalletID[:])
+	baseChain.setWallet(
+		bitcoin.PublicKeyHash(walletSigner.wallet.publicKey),
+		&WalletChainData{
+			WalletID: frostWalletID,
+			State:    StateLive,
+		},
+	)
+
+	broadcastChannel, err := localProvider.BroadcastChannelFor(
+		"test-frost-inactivity",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inactivity.RegisterUnmarshallers(broadcastChannel)
+
+	membershipValidator := group.NewMembershipValidator(
+		logger,
+		walletSigner.wallet.signingGroupOperators,
+		baseChain.Signing(),
+	)
+	if err := broadcastChannel.SetFilter(membershipValidator.IsInGroup); err != nil {
+		t.Fatal(err)
+	}
+
+	executor := newInactivityClaimExecutor(
+		dualStackChain,
+		[]*signer{walletSigner},
+		broadcastChannel,
+		membershipValidator,
+		&GroupParameters{
+			GroupSize:       1,
+			GroupQuorum:     1,
+			HonestThreshold: 1,
+		},
+		generator.NewProtocolLatch(),
+		func(context.Context, uint64) error { return nil },
+	)
+
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelCtx()
+
+	err = executor.claimInactivity(
+		ctx,
+		[]group.MemberIndex{1},
+		true,
+		big.NewInt(100),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nonce, err := baseChain.GetInactivityClaimNonce(frostWalletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nonce.Uint64() != 1 {
+		t.Fatalf("expected FROST inactivity nonce 1, got [%v]", nonce)
+	}
+
+	dualStackChain.mutex.Lock()
+	requestedSchemes := append([]WalletScheme{}, dualStackChain.requestedSchemes...)
+	dualStackChain.mutex.Unlock()
+	if !reflect.DeepEqual(requestedSchemes, []WalletScheme{WalletSchemeFROST}) {
+		t.Fatalf("unexpected inactivity chain requests: [%v]", requestedSchemes)
+	}
+
+	frostChain.mutex.Lock()
+	defer frostChain.mutex.Unlock()
+	if frostChain.operatorIDCalls == 0 ||
+		frostChain.hashCalls == 0 ||
+		frostChain.subscriptionCalls == 0 ||
+		frostChain.assembleCalls == 0 ||
+		frostChain.submitCalls == 0 {
+		t.Fatalf(
+			"FROST backend was not used for every inactivity operation: %+v",
+			frostChain,
+		)
+	}
+	if !reflect.DeepEqual(frostChain.submittedGroupMembers, []uint32{777}) {
+		t.Fatalf(
+			"unexpected FROST group member IDs: [%v]",
+			frostChain.submittedGroupMembers,
+		)
+	}
+	for _, walletID := range frostChain.walletIDs {
+		if walletID != frostWalletID {
+			t.Fatalf(
+				"inactivity operation used wallet ID [0x%x], expected [0x%x]",
+				walletID,
+				frostWalletID,
+			)
+		}
+	}
+}
+
+type dualStackInactivityChain struct {
+	*localChain
+	frostChain *recordingFrostInactivityChain
+
+	mutex            sync.Mutex
+	requestedSchemes []WalletScheme
+}
+
+type inactivityClaimChainProviderStub struct {
+	Chain
+	inactivityClaimChain WalletInactivityClaimChain
+	err                  error
+}
+
+func (iccp *inactivityClaimChainProviderStub) InactivityClaimChainForWallet(
+	walletScheme WalletScheme,
+) (WalletInactivityClaimChain, error) {
+	return iccp.inactivityClaimChain, iccp.err
+}
+
+func TestInactivityClaimExecutor_InactivityChainRoutingGuards(t *testing.T) {
+	legacyChain := &localChain{}
+	executor := &inactivityClaimExecutor{chain: legacyChain}
+
+	selectedChain, err := executor.inactivityChain(WalletSchemeECDSA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selectedChain != legacyChain {
+		t.Fatal("legacy chain fallback returned a different chain")
+	}
+
+	_, err = executor.inactivityChain(WalletSchemeFROST)
+	if err == nil ||
+		err.Error() != "chain does not provide a FROST inactivity claim view" {
+		t.Fatalf("unexpected missing FROST view error: [%v]", err)
+	}
+
+	executor.chain = &inactivityClaimChainProviderStub{Chain: legacyChain}
+	_, err = executor.inactivityChain(WalletSchemeFROST)
+	expectedError := fmt.Sprintf(
+		"wallet inactivity claim chain is nil for scheme [%v]",
+		WalletSchemeFROST,
+	)
+	if err == nil || err.Error() != expectedError {
+		t.Fatalf("unexpected nil FROST view error: [%v]", err)
+	}
+
+	providerErr := fmt.Errorf("provider failed")
+	executor.chain = &inactivityClaimChainProviderStub{
+		Chain: legacyChain,
+		err:   providerErr,
+	}
+	_, err = executor.inactivityChain(WalletSchemeFROST)
+	if err != providerErr {
+		t.Fatalf("expected provider error, got [%v]", err)
+	}
+}
+
+func (dsic *dualStackInactivityChain) InactivityClaimChainForWallet(
+	walletScheme WalletScheme,
+) (WalletInactivityClaimChain, error) {
+	dsic.mutex.Lock()
+	dsic.requestedSchemes = append(dsic.requestedSchemes, walletScheme)
+	dsic.mutex.Unlock()
+
+	switch walletScheme {
+	case WalletSchemeECDSA:
+		return dsic.localChain, nil
+	case WalletSchemeFROST:
+		return dsic.frostChain, nil
+	default:
+		return nil, fmt.Errorf("unsupported wallet scheme [%v]", walletScheme)
+	}
+}
+
+type recordingFrostInactivityChain struct {
+	*localChain
+
+	mutex                 sync.Mutex
+	operatorIDCalls       int
+	hashCalls             int
+	subscriptionCalls     int
+	assembleCalls         int
+	submitCalls           int
+	walletIDs             [][32]byte
+	submittedGroupMembers []uint32
+}
+
+func (rfic *recordingFrostInactivityChain) GetOperatorID(
+	operatorAddress chain.Address,
+) (chain.OperatorID, error) {
+	rfic.mutex.Lock()
+	rfic.operatorIDCalls++
+	rfic.mutex.Unlock()
+
+	return 777, nil
+}
+
+func (rfic *recordingFrostInactivityChain) CalculateInactivityClaimHash(
+	claim *inactivity.ClaimPreimage,
+) (inactivity.ClaimHash, error) {
+	rfic.mutex.Lock()
+	rfic.hashCalls++
+	rfic.mutex.Unlock()
+
+	return rfic.localChain.CalculateInactivityClaimHash(claim)
+}
+
+func (rfic *recordingFrostInactivityChain) OnInactivityClaimed(
+	handler func(event *InactivityClaimedEvent),
+) subscription.EventSubscription {
+	rfic.mutex.Lock()
+	rfic.subscriptionCalls++
+	rfic.mutex.Unlock()
+
+	return rfic.localChain.OnInactivityClaimed(handler)
+}
+
+func (rfic *recordingFrostInactivityChain) GetInactivityClaimNonce(
+	walletID [32]byte,
+) (*big.Int, error) {
+	rfic.recordWalletID(walletID)
+	return rfic.localChain.GetInactivityClaimNonce(walletID)
+}
+
+func (rfic *recordingFrostInactivityChain) AssembleInactivityClaim(
+	walletID [32]byte,
+	inactiveMembersIndices []group.MemberIndex,
+	signatures map[group.MemberIndex][]byte,
+	heartbeatFailed bool,
+) (*InactivityClaim, error) {
+	rfic.mutex.Lock()
+	rfic.assembleCalls++
+	rfic.walletIDs = append(rfic.walletIDs, walletID)
+	rfic.mutex.Unlock()
+
+	return rfic.localChain.AssembleInactivityClaim(
+		walletID,
+		inactiveMembersIndices,
+		signatures,
+		heartbeatFailed,
+	)
+}
+
+func (rfic *recordingFrostInactivityChain) SubmitInactivityClaim(
+	claim *InactivityClaim,
+	nonce *big.Int,
+	groupMembers []uint32,
+) error {
+	rfic.mutex.Lock()
+	rfic.submitCalls++
+	rfic.walletIDs = append(rfic.walletIDs, claim.WalletID)
+	rfic.submittedGroupMembers = append([]uint32{}, groupMembers...)
+	rfic.mutex.Unlock()
+
+	return rfic.localChain.SubmitInactivityClaim(claim, nonce, groupMembers)
+}
+
+func (rfic *recordingFrostInactivityChain) recordWalletID(walletID [32]byte) {
+	rfic.mutex.Lock()
+	defer rfic.mutex.Unlock()
+	rfic.walletIDs = append(rfic.walletIDs, walletID)
 }
 
 func TestInactivityClaimExecutor_ClaimInactivity_Busy(t *testing.T) {

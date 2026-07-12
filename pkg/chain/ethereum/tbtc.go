@@ -2344,16 +2344,26 @@ func resolveWalletPublicKeyHashForWalletID(
 func (tc *TbtcChain) OnWalletClosed(
 	handler func(event *tbtc.WalletClosedEvent),
 ) subscription.EventSubscription {
-	onEvent := func(
+	onEcdsaEvent := func(
 		walletID [32]byte,
 		blockNumber uint64,
 	) {
 		handler(&tbtc.WalletClosedEvent{
 			WalletID:    walletID,
+			Scheme:      tbtc.WalletSchemeECDSA,
 			BlockNumber: blockNumber,
 		})
 	}
-	return tc.walletRegistry.WalletClosedEvent(nil, nil).OnEvent(onEvent)
+
+	ecdsaSubscription := tc.walletRegistry.WalletClosedEvent(nil, nil).OnEvent(
+		onEcdsaEvent,
+	)
+	frostSubscription := tc.onFrostWalletClosed(handler)
+
+	return subscription.NewEventSubscription(func() {
+		ecdsaSubscription.Unsubscribe()
+		frostSubscription.Unsubscribe()
+	})
 }
 
 func (tc *TbtcChain) ComputeMainUtxoHash(
