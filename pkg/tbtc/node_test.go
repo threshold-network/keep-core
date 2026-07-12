@@ -14,12 +14,70 @@ import (
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
+	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/generator"
 	"github.com/keep-network/keep-core/pkg/internal/tecdsatest"
 	"github.com/keep-network/keep-core/pkg/net/local"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
+
+func TestNode_GroupParametersForSignersUsesWalletScheme(t *testing.T) {
+	ecdsaGroupParameters := &GroupParameters{
+		GroupSize:       100,
+		GroupQuorum:     90,
+		HonestThreshold: 51,
+	}
+	frostGroupParameters := &GroupParameters{
+		GroupSize:       5,
+		GroupQuorum:     4,
+		HonestThreshold: 3,
+	}
+	node := &node{
+		groupParameters:      ecdsaGroupParameters,
+		frostGroupParameters: frostGroupParameters,
+	}
+
+	tests := map[string]struct {
+		signer   *signer
+		expected *GroupParameters
+	}{
+		"legacy ECDSA wallet": {
+			signer: &signer{
+				privateKeyShare: &tecdsa.PrivateKeyShare{},
+			},
+			expected: ecdsaGroupParameters,
+		},
+		"native FROST wallet": {
+			signer: &signer{
+				signerMaterial: &frostsigning.NativeSignerMaterial{
+					Format: frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
+					Payload: []byte(`{
+						"keyGroup":"key-group",
+						"keyGroupSource":"dkg-persisted"
+					}`),
+				},
+			},
+			expected: frostGroupParameters,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			actual, err := node.groupParametersForSigners([]*signer{test.signer})
+			if err != nil {
+				t.Fatalf("unexpected error: [%v]", err)
+			}
+			if actual != test.expected {
+				t.Fatalf(
+					"unexpected group parameters\nexpected: [%+v]\nactual:   [%+v]",
+					test.expected,
+					actual,
+				)
+			}
+		})
+	}
+}
 
 func TestNode_GetSigningExecutor(t *testing.T) {
 	groupParameters := &GroupParameters{

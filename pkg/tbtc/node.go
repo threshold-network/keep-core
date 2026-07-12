@@ -53,7 +53,12 @@ const (
 
 // node represents the current state of an ECDSA node.
 type node struct {
+	// groupParameters contains the legacy ECDSA wallet parameters.
 	groupParameters *GroupParameters
+	// frostGroupParameters contains the independently configured FROST wallet
+	// parameters. FROST DKG must not use the legacy validator's constants: the
+	// two registries can deliberately use different group sizes and thresholds.
+	frostGroupParameters *GroupParameters
 
 	chain          Chain
 	btcChain       bitcoin.Chain
@@ -175,7 +180,11 @@ func newNode(
 	scheduler.RegisterProtocol(latch)
 
 	node := &node{
-		groupParameters:          groupParameters,
+		groupParameters: groupParameters,
+		// Initialize this field for chains without FROST support and for tests that
+		// construct a node directly. Initialize replaces it with the parameters
+		// loaded from FrostDkgValidator whenever FROST is enabled.
+		frostGroupParameters:     groupParameters,
 		chain:                    chain,
 		btcChain:                 btcChain,
 		netProvider:              netProvider,
@@ -509,11 +518,16 @@ func (n *node) getSigningExecutor(
 		)
 	}
 
+	walletGroupParameters, err := n.groupParametersForSigners(signers)
+	if err != nil {
+		return nil, false, err
+	}
+
 	executor := newSigningExecutor(
 		signers,
 		broadcastChannel,
 		membershipValidator,
-		n.groupParameters,
+		walletGroupParameters,
 		n.protocolLatch,
 		blockCounter.CurrentBlock,
 		n.waitForBlockHeight,
@@ -708,12 +722,17 @@ func (n *node) getInactivityClaimExecutor(
 		len(signers),
 	)
 
+	walletGroupParameters, err := n.groupParametersForSigners(signers)
+	if err != nil {
+		return nil, false, err
+	}
+
 	executor := newInactivityClaimExecutor(
 		n.chain,
 		signers,
 		broadcastChannel,
 		membershipValidator,
-		n.groupParameters,
+		walletGroupParameters,
 		n.protocolLatch,
 		n.waitForBlockHeight,
 	)
@@ -721,6 +740,32 @@ func (n *node) getInactivityClaimExecutor(
 	n.inactivityClaimExecutors[executorKey] = executor
 
 	return executor, true, nil
+}
+
+// groupParametersForSigners selects parameters from the registry that created
+// the wallet. Native Schnorr signer material denotes a FROST wallet; legacy
+// material denotes an ECDSA wallet. All signers in this slice belong to the
+// same wallet, so the first signer is sufficient to identify the scheme.
+func (n *node) groupParametersForSigners(
+	signers []*signer,
+) (*GroupParameters, error) {
+	if len(signers) == 0 {
+		return nil, fmt.Errorf("cannot select group parameters without signers")
+	}
+
+	if signingMaterialUsesSchnorrSignatures(signers[0].signingMaterial()) {
+		if n.frostGroupParameters == nil {
+			return nil, fmt.Errorf("FROST group parameters are not configured")
+		}
+
+		return n.frostGroupParameters, nil
+	}
+
+	if n.groupParameters == nil {
+		return nil, fmt.Errorf("ECDSA group parameters are not configured")
+	}
+
+	return n.groupParameters, nil
 }
 
 // handleHeartbeatProposal handles an incoming heartbeat proposal by

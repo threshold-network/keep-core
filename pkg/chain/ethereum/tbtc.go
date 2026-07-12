@@ -423,7 +423,8 @@ func connectFrostDkgValidator(
 	if frostDkgValidatorAddress == (common.Address{}) {
 		logger.Infof(
 			"%s contract address not configured; pre-submit FROST digest "+
-				"view checks disabled",
+				"view checks disabled (the address is required when the FROST "+
+				"wallet registry is enabled)",
 			FrostDkgValidatorContractName,
 		)
 		return nil, nil
@@ -457,6 +458,43 @@ func (tc *TbtcChain) EcdsaWalletGroupParametersFromChain(
 		ctx,
 		tc.baseChain.client,
 		tc.ecdsaDkgValidatorAddress,
+	)
+}
+
+// FrostWalletGroupParametersFromChain mirrors FrostDkgValidator sizing
+// constants. FROST and ECDSA validators are independent and may deliberately
+// use different group sizes and thresholds, so callers must not reuse the
+// legacy ECDSA parameters for FROST protocols.
+func (tc *TbtcChain) FrostWalletGroupParametersFromChain(
+	ctx context.Context,
+) (*tbtc.GroupParameters, error) {
+	if tc.frostWalletRegistry == nil {
+		return nil, nil
+	}
+	if tc.frostDkgValidator == nil {
+		return nil, fmt.Errorf(
+			"FrostDkgValidator is required when FrostWalletRegistry is configured",
+		)
+	}
+
+	callOpts := &bind.CallOpts{Context: ctx, From: tc.key.Address}
+	groupSize, err := tc.frostDkgValidator.GroupSize(callOpts)
+	if err != nil {
+		return nil, fmt.Errorf("read FrostDkgValidator groupSize: %w", err)
+	}
+	activeThreshold, err := tc.frostDkgValidator.ActiveThreshold(callOpts)
+	if err != nil {
+		return nil, fmt.Errorf("read FrostDkgValidator activeThreshold: %w", err)
+	}
+	groupThreshold, err := tc.frostDkgValidator.GroupThreshold(callOpts)
+	if err != nil {
+		return nil, fmt.Errorf("read FrostDkgValidator groupThreshold: %w", err)
+	}
+
+	return walletGroupParametersFromValidatorValues(
+		groupSize,
+		activeThreshold,
+		groupThreshold,
 	)
 }
 

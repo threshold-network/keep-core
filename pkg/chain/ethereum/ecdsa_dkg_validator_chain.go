@@ -102,17 +102,33 @@ func ecdsaWalletGroupParametersFromValidator(
 		return nil, err
 	}
 
-	groupSize, err := bigIntPositiveIntLimited("groupSize", gsBig, maxReasonableTBTCGroupSize)
+	return walletGroupParametersFromValidatorValues(gsBig, atBig, gtBig)
+}
+
+func walletGroupParametersFromValidatorValues(
+	groupSizeValue *big.Int,
+	activeThresholdValue *big.Int,
+	groupThresholdValue *big.Int,
+) (*tbtc.GroupParameters, error) {
+	groupSize, err := bigIntPositiveIntLimited(
+		"groupSize",
+		groupSizeValue,
+		maxReasonableTBTCGroupSize,
+	)
 	if err != nil {
 		return nil, err
 	}
-	groupQuorum, err := bigIntPositiveIntLimited("activeThreshold", atBig, maxReasonableTBTCGroupSize)
+	groupQuorum, err := bigIntPositiveIntLimited(
+		"activeThreshold",
+		activeThresholdValue,
+		maxReasonableTBTCGroupSize,
+	)
 	if err != nil {
 		return nil, err
 	}
 	honestThreshold, err := bigIntPositiveIntLimited(
 		"groupThreshold",
-		gtBig,
+		groupThresholdValue,
 		maxReasonableTBTCGroupSize,
 	)
 	if err != nil {

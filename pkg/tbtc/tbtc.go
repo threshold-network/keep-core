@@ -141,6 +141,7 @@ func Initialize(
 	ethereumNetwork ethereum.Network,
 ) error {
 	groupParameters := defaultGroupParameters(ethereumNetwork)
+	var frostGroupParameters *GroupParameters
 
 	if ethChain, ok := chain.(interface {
 		EcdsaWalletGroupParametersFromChain(context.Context) (*GroupParameters, error)
@@ -164,6 +165,44 @@ func Initialize(
 			)
 		}
 	}
+	frostGroupParameters = groupParameters
+
+	if frostChain, ok := chain.(FrostDKGChain); ok &&
+		frostChain.FrostWalletRegistryAvailable() {
+		parameterSource, ok := chain.(interface {
+			FrostWalletGroupParametersFromChain(context.Context) (*GroupParameters, error)
+		})
+		if !ok {
+			return fmt.Errorf(
+				"cannot read TBTC FROST group sizing: chain does not expose " +
+					"FrostDkgValidator parameters",
+			)
+		}
+
+		gp, err := parameterSource.FrostWalletGroupParametersFromChain(ctx)
+		if err != nil {
+			return fmt.Errorf(
+				"cannot read TBTC FROST group sizing from FROST validator: [%w]",
+				err,
+			)
+		}
+		if gp == nil {
+			return fmt.Errorf(
+				"cannot read TBTC FROST group sizing from FROST validator: " +
+					"parameters are nil",
+			)
+		}
+
+		frostGroupParameters = gp
+		logger.Infof(
+			"TBTC FROST group parameters from validator contract (size=[%v] "+
+				"groupQuorum/activeThreshold=[%v] "+
+				"honestThreshold/groupThreshold=[%v])",
+			gp.GroupSize,
+			gp.GroupQuorum,
+			gp.HonestThreshold,
+		)
+	}
 
 	node, err := newNode(
 		groupParameters,
@@ -179,6 +218,7 @@ func Initialize(
 	if err != nil {
 		return fmt.Errorf("cannot set up TBTC node: [%v]", err)
 	}
+	node.frostGroupParameters = frostGroupParameters
 
 	// Note: the FROST signing-backend guard runs inside newNode above (right
 	// after the backend is configured and before the legacy pre-params pool is
