@@ -60,6 +60,10 @@ type DepositSweepProposal struct {
 	}
 	SweepTxFee           *big.Int
 	DepositsRevealBlocks []*big.Int
+	// MainUtxoHash is the wallet main UTXO snapshot used to size a Taproot
+	// sweep. A zero value means the proposal was sized without a main UTXO.
+	// Taproot execution fails closed if the current hash no longer matches.
+	MainUtxoHash [32]byte
 }
 
 func (dsp *DepositSweepProposal) ActionType() WalletActionType {
@@ -175,6 +179,19 @@ func (dsa *depositSweepAction) execute() error {
 		)
 	}
 
+	if err := validateDepositSweepMainUtxoSnapshot(
+		dsa.chain,
+		dsa.proposal,
+		validatedDeposits,
+		walletMainUtxo,
+	); err != nil {
+		if dsa.metricsRecorder != nil {
+			dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_failed_total", 1)
+			dsa.metricsRecorder.RecordDuration("deposit_sweep_execution_duration_seconds", time.Since(executionStartTime))
+		}
+		return fmt.Errorf("wallet main UTXO snapshot validation failed: [%v]", err)
+	}
+
 	err = EnsureWalletSyncedBetweenChainsForPublicKey(
 		dsa.wallet().publicKey,
 		walletMainUtxo,
@@ -267,6 +284,40 @@ func (dsa *depositSweepAction) execute() error {
 	if dsa.metricsRecorder != nil {
 		dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_success_total", 1)
 		dsa.metricsRecorder.RecordDuration("deposit_sweep_execution_duration_seconds", time.Since(executionStartTime))
+	}
+
+	return nil
+}
+
+func validateDepositSweepMainUtxoSnapshot(
+	chain interface {
+		ComputeMainUtxoHash(
+			mainUtxo *bitcoin.UnspentTransactionOutput,
+		) [32]byte
+	},
+	proposal *DepositSweepProposal,
+	deposits []*Deposit,
+	mainUtxo *bitcoin.UnspentTransactionOutput,
+) error {
+	if proposal == nil {
+		return fmt.Errorf("deposit sweep proposal is nil")
+	}
+	if len(deposits) == 0 || !deposits[0].IsTaproot() {
+		return nil
+	}
+
+	currentMainUtxoHash := [32]byte{}
+	if mainUtxo != nil {
+		currentMainUtxoHash = chain.ComputeMainUtxoHash(mainUtxo)
+	}
+
+	if proposal.MainUtxoHash != currentMainUtxoHash {
+		return fmt.Errorf(
+			"wallet main UTXO changed after Taproot sweep fee sizing: "+
+				"expected [0x%x], current [0x%x]",
+			proposal.MainUtxoHash,
+			currentMainUtxoHash,
+		)
 	}
 
 	return nil

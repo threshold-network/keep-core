@@ -214,12 +214,8 @@ func getWalletTransactions(
 	transactionLimit int,
 	btcChain bitcoin.Chain,
 ) ([]*bitcoin.Transaction, error) {
-	scriptChain, ok := btcChain.(transactionsForPublicKeyScriptsChain)
-	if !ok {
-		return btcChain.GetTransactionsForPublicKeyHash(
-			walletPublicKeyHash,
-			transactionLimit,
-		)
+	if wallet == nil {
+		return nil, fmt.Errorf("wallet chain data is nil")
 	}
 
 	publicKeyScripts, err := walletPublicKeyScripts(
@@ -228,6 +224,24 @@ func getWalletTransactions(
 	)
 	if err != nil {
 		return nil, err
+	}
+
+	scriptChain, ok := btcChain.(transactionsForPublicKeyScriptsChain)
+	if !ok {
+		if len(publicKeyScripts) == 1 &&
+			bitcoin.GetScriptType(publicKeyScripts[0]) == bitcoin.P2TRScript {
+			return nil, fmt.Errorf(
+				"bitcoin chain does not support transaction lookup by " +
+					"public key script required for P2TR wallet",
+			)
+		}
+
+		// Older bitcoin.Chain implementations can still discover legacy
+		// P2PKH/P2WPKH wallet transactions by public key hash.
+		return btcChain.GetTransactionsForPublicKeyHash(
+			walletPublicKeyHash,
+			transactionLimit,
+		)
 	}
 
 	return scriptChain.GetTransactionsForPublicKeyScripts(

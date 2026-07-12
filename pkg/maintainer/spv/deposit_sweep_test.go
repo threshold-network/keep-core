@@ -560,3 +560,148 @@ func TestGetUnprovenDepositSweepTransactions(t *testing.T) {
 		t.Errorf("invalid unproven transaction hashes: %v", diff)
 	}
 }
+
+func TestGetUnprovenDepositSweepTransactions_DiscoversTaprootWallet(t *testing.T) {
+	testGetUnprovenDepositSweepTransactionsDiscoversTaprootWallet(t, true)
+}
+
+func TestGetUnprovenDepositSweepTransactions_DiscoversTaprootOnlyWallet(
+	t *testing.T,
+) {
+	testGetUnprovenDepositSweepTransactionsDiscoversTaprootWallet(t, false)
+}
+
+func testGetUnprovenDepositSweepTransactionsDiscoversTaprootWallet(
+	t *testing.T,
+	includeCompatibilityReveal bool,
+) {
+	t.Helper()
+
+	historyDepth := uint64(5)
+	currentBlock := uint64(1000)
+	filter := &tbtc.DepositRevealedEventFilter{
+		StartBlock: currentBlock - historyDepth,
+	}
+
+	btcChain := newLocalBitcoinChain()
+	spvChain := newLocalChain()
+	blockCounter := newMockBlockCounter()
+	blockCounter.SetCurrentBlock(currentBlock)
+	spvChain.setBlockCounter(blockCounter)
+
+	walletPublicKeyHash := [20]byte{0x01}
+	walletID := [32]byte{0x02}
+	walletOutputScript, err := bitcoin.PayToTaproot(walletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spvChain.setWallet(
+		walletPublicKeyHash,
+		&tbtc.WalletChainData{
+			WalletID: walletID,
+			State:    tbtc.StateLive,
+		},
+	)
+
+	depositOutputScript, err := bitcoin.PayToTaproot([32]byte{0x03})
+	if err != nil {
+		t.Fatal(err)
+	}
+	depositTransaction := &bitcoin.Transaction{
+		Version: 2,
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           100000,
+				PublicKeyScript: depositOutputScript,
+			},
+		},
+	}
+	sweepTransaction := &bitcoin.Transaction{
+		Version: 2,
+		Inputs: []*bitcoin.TransactionInput{
+			{
+				Outpoint: &bitcoin.TransactionOutpoint{
+					TransactionHash: depositTransaction.Hash(),
+					OutputIndex:     0,
+				},
+				Witness: [][]byte{make([]byte, 64)},
+			},
+		},
+		Outputs: []*bitcoin.TransactionOutput{
+			{
+				Value:           99000,
+				PublicKeyScript: walletOutputScript,
+			},
+		},
+	}
+
+	for _, transaction := range []*bitcoin.Transaction{
+		depositTransaction,
+		sweepTransaction,
+	} {
+		if err := btcChain.BroadcastTransaction(transaction); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spvChain.setDepositRequest(
+		depositTransaction.Hash(),
+		0,
+		&tbtc.DepositChainRequest{
+			RevealedAt: time.Unix(100000, 0),
+			SweptAt:    time.Unix(0, 0),
+		},
+	)
+
+	// A compatibility legacy event may identify the same wallet as the native
+	// Taproot event. Discovery must work without that compatibility event and,
+	// when it is present, still query the wallet only once.
+	if includeCompatibilityReveal {
+		if err := spvChain.addPastDepositRevealedEvent(
+			filter,
+			&tbtc.DepositRevealedEvent{
+				WalletPublicKeyHash: walletPublicKeyHash,
+				BlockNumber:         currentBlock - 2,
+			},
+		); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		// The local chain requires an explicit result for legacy event queries.
+		// Register an empty result so this case contains only the Taproot reveal.
+		eventsKey, err := buildPastDepositRevealedEventsKey(filter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		spvChain.pastDepositRevealedEvents[eventsKey] = nil
+	}
+	if err := spvChain.addPastTaprootDepositRevealedEvent(
+		filter,
+		&tbtc.TaprootDepositRevealedEvent{
+			WalletPublicKeyHash: walletPublicKeyHash,
+			BlockNumber:         currentBlock - 1,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	transactions, err := getUnprovenDepositSweepTransactions(
+		historyDepth,
+		10,
+		btcChain,
+		spvChain,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(transactions) != 1 {
+		t.Fatalf("expected one Taproot sweep transaction, got [%d]", len(transactions))
+	}
+	if transactions[0].Hash() != sweepTransaction.Hash() {
+		t.Fatalf(
+			"unexpected sweep transaction\nexpected: [%x]\nactual:   [%x]",
+			sweepTransaction.Hash(),
+			transactions[0].Hash(),
+		)
+	}
+}

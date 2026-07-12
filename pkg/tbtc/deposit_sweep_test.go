@@ -249,6 +249,179 @@ func TestDepositSweepAction_Execute(t *testing.T) {
 	}
 }
 
+func TestDepositSweepAction_Execute_MainUtxoSnapshotMismatchRecordsMetrics(
+	t *testing.T,
+) {
+	scenarios, err := test.LoadDepositSweepTestScenarios()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	scenario := scenarios[0]
+	if scenario.WalletMainUtxo == nil {
+		t.Fatal("test scenario must have a wallet main UTXO")
+	}
+
+	hostChain := &depositSweepSnapshotChain{localChain: Connect()}
+	bitcoinChain := newLocalBitcoinChain()
+	for _, transaction := range scenario.InputTransactions {
+		if err := bitcoinChain.BroadcastTransaction(transaction); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	wallet := wallet{publicKey: scenario.WalletPublicKey}
+	walletPublicKeyHash := bitcoin.PublicKeyHash(wallet.publicKey)
+	deposit := scenario.Deposits[0]
+	fundingTxHash := deposit.Utxo.Outpoint.TransactionHash
+	fundingOutputIndex := deposit.Utxo.Outpoint.OutputIndex
+
+	revealBlock := uint64(100)
+	filter := &DepositRevealedEventFilter{
+		StartBlock:          revealBlock,
+		EndBlock:            &revealBlock,
+		WalletPublicKeyHash: [][20]byte{walletPublicKeyHash},
+	}
+	if err := hostChain.setPastDepositRevealedEvents(
+		filter,
+		[]*DepositRevealedEvent{},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	var walletXOnlyPublicKey [32]byte
+	walletXBytes := wallet.publicKey.X.Bytes()
+	copy(walletXOnlyPublicKey[len(walletXOnlyPublicKey)-len(walletXBytes):], walletXBytes)
+	taprootEvent := &TaprootDepositRevealedEvent{
+		FundingTxHash:        fundingTxHash,
+		FundingOutputIndex:   fundingOutputIndex,
+		Depositor:            deposit.Depositor,
+		Amount:               uint64(deposit.Utxo.Value),
+		BlindingFactor:       deposit.BlindingFactor,
+		WalletPublicKeyHash:  deposit.WalletPublicKeyHash,
+		WalletXOnlyPublicKey: walletXOnlyPublicKey,
+		RefundPublicKeyHash:  deposit.RefundPublicKeyHash,
+		RefundXOnlyPublicKey: [32]byte{0x01},
+		RefundLocktime:       deposit.RefundLocktime,
+		Vault:                deposit.Vault,
+		BlockNumber:          revealBlock,
+	}
+	if err := hostChain.setPastTaprootDepositRevealedEvents(
+		filter,
+		[]*TaprootDepositRevealedEvent{taprootEvent},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	hostChain.setDepositRequest(
+		fundingTxHash,
+		fundingOutputIndex,
+		&DepositChainRequest{
+			Depositor: deposit.Depositor,
+			Amount:    uint64(deposit.Utxo.Value),
+			Vault:     deposit.Vault,
+			ExtraData: deposit.ExtraData,
+		},
+	)
+
+	proposal := &DepositSweepProposal{
+		DepositsKeys: []struct {
+			FundingTxHash      bitcoin.Hash
+			FundingOutputIndex uint32
+		}{
+			{
+				FundingTxHash:      fundingTxHash,
+				FundingOutputIndex: fundingOutputIndex,
+			},
+		},
+		SweepTxFee:           big.NewInt(scenario.Fee),
+		DepositsRevealBlocks: []*big.Int{big.NewInt(int64(revealBlock))},
+		// MainUtxoHash deliberately remains zero to represent a proposal made
+		// before the wallet's previous sweep was proven.
+	}
+
+	hostChain.setWallet(walletPublicKeyHash, &WalletChainData{
+		MainUtxoHash: hostChain.ComputeMainUtxoHash(scenario.WalletMainUtxo),
+	})
+
+	action := newDepositSweepAction(
+		logger.With(),
+		hostChain,
+		bitcoinChain,
+		wallet,
+		newMockWalletSigningExecutor(),
+		proposal,
+		100,
+		100+depositSweepProposalValidityBlocks,
+		func(ctx context.Context, blockHeight uint64) error { return nil },
+	)
+	action.requiredFundingTxConfirmations = 1
+
+	metrics := &depositSweepMetricsRecorder{
+		counters:  make(map[string]float64),
+		durations: make(map[string][]time.Duration),
+	}
+	action.setMetricsRecorder(metrics)
+
+	err = action.execute()
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"wallet main UTXO snapshot validation failed",
+	) {
+		t.Fatalf("unexpected execution error: [%v]", err)
+	}
+
+	if actual := metrics.counters["deposit_sweep_executions_total"]; actual != 1 {
+		t.Errorf("unexpected execution attempts count: [%v]", actual)
+	}
+	if actual := metrics.counters["deposit_sweep_executions_failed_total"]; actual != 1 {
+		t.Errorf("unexpected failed executions count: [%v]", actual)
+	}
+	if actual := metrics.counters["deposit_sweep_executions_success_total"]; actual != 0 {
+		t.Errorf("unexpected successful executions count: [%v]", actual)
+	}
+	if actual := len(metrics.durations["deposit_sweep_execution_duration_seconds"]); actual != 1 {
+		t.Errorf("unexpected execution durations count: [%v]", actual)
+	}
+	if actual := len(metrics.durations["deposit_sweep_tx_signing_duration_seconds"]); actual != 0 {
+		t.Errorf("unexpected signing durations count: [%v]", actual)
+	}
+}
+
+type depositSweepMetricsRecorder struct {
+	counters  map[string]float64
+	durations map[string][]time.Duration
+}
+
+func (dsmr *depositSweepMetricsRecorder) IncrementCounter(
+	name string,
+	value float64,
+) {
+	dsmr.counters[name] += value
+}
+
+func (dsmr *depositSweepMetricsRecorder) RecordDuration(
+	name string,
+	duration time.Duration,
+) {
+	dsmr.durations[name] = append(dsmr.durations[name], duration)
+}
+
+type depositSweepSnapshotChain struct {
+	*localChain
+}
+
+func (dssc *depositSweepSnapshotChain) ValidateTaprootDepositSweepProposal(
+	walletPublicKeyHash [20]byte,
+	proposal *DepositSweepProposal,
+	depositsExtraInfo []struct {
+		*Deposit
+		FundingTx *bitcoin.Transaction
+	},
+) error {
+	return nil
+}
+
 func TestAssembleDepositSweepTransaction(t *testing.T) {
 	scenarios, err := test.LoadDepositSweepTestScenarios()
 	if err != nil {
@@ -327,6 +500,76 @@ func TestAssembleDepositSweepTransaction(t *testing.T) {
 				scenario.ExpectedSweepTransactionWitnessHash.Hex(bitcoin.InternalByteOrder),
 				transaction.WitnessHash().Hex(bitcoin.InternalByteOrder),
 			)
+		})
+	}
+}
+
+func TestValidateDepositSweepMainUtxoSnapshot(t *testing.T) {
+	hostChain := Connect()
+	mainUtxo := &bitcoin.UnspentTransactionOutput{
+		Outpoint: &bitcoin.TransactionOutpoint{
+			TransactionHash: bitcoin.Hash{0xaa},
+			OutputIndex:     1,
+		},
+		Value: 100000,
+	}
+	mainUtxoHash := hostChain.ComputeMainUtxoHash(mainUtxo)
+
+	walletKey := [32]byte{0x01}
+	refundKey := [32]byte{0x02}
+	taprootDeposit := &Deposit{
+		WalletXOnlyPublicKey: &walletKey,
+		RefundXOnlyPublicKey: &refundKey,
+	}
+
+	tests := map[string]struct {
+		proposal *DepositSweepProposal
+		deposits []*Deposit
+		mainUtxo *bitcoin.UnspentTransactionOutput
+		wantErr  bool
+	}{
+		"unchanged first sweep": {
+			proposal: &DepositSweepProposal{},
+			deposits: []*Deposit{taprootDeposit},
+		},
+		"unchanged existing main UTXO": {
+			proposal: &DepositSweepProposal{MainUtxoHash: mainUtxoHash},
+			deposits: []*Deposit{taprootDeposit},
+			mainUtxo: mainUtxo,
+		},
+		"main UTXO registered after proposal": {
+			proposal: &DepositSweepProposal{},
+			deposits: []*Deposit{taprootDeposit},
+			mainUtxo: mainUtxo,
+			wantErr:  true,
+		},
+		"main UTXO changed after proposal": {
+			proposal: &DepositSweepProposal{MainUtxoHash: [32]byte{0xff}},
+			deposits: []*Deposit{taprootDeposit},
+			mainUtxo: mainUtxo,
+			wantErr:  true,
+		},
+		"legacy sweep does not require snapshot": {
+			proposal: &DepositSweepProposal{},
+			deposits: []*Deposit{{}},
+			mainUtxo: mainUtxo,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := validateDepositSweepMainUtxoSnapshot(
+				hostChain,
+				test.proposal,
+				test.deposits,
+				test.mainUtxo,
+			)
+			if test.wantErr && err == nil {
+				t.Fatal("expected main UTXO snapshot mismatch")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("unexpected snapshot validation error: [%v]", err)
+			}
 		})
 	}
 }

@@ -167,6 +167,7 @@ func TestCoordinationMessage_MarshalingRoundtrip(t *testing.T) {
 					big.NewInt(100),
 					big.NewInt(300),
 				},
+				MainUtxoHash: [32]byte{0xaa, 0xbb, 0xcc},
 			},
 		},
 		"with redemption proposal": {

@@ -10,6 +10,12 @@ import (
 	"testing"
 )
 
+// publicKeyHashOnlyBitcoinChain exposes only the base bitcoin.Chain interface,
+// hiding the local chain's optional public-key-script transaction lookup.
+type publicKeyHashOnlyBitcoinChain struct {
+	bitcoin.Chain
+}
+
 func TestSubmitRedemptionProof(t *testing.T) {
 	bytesFromHex := func(str string) []byte {
 		value, err := hex.DecodeString(str)
@@ -591,6 +597,67 @@ func TestGetUnprovenRedemptionTransactions_TaprootWallet(t *testing.T) {
 			transactions[0].Hash(),
 		)
 	}
+}
+
+func TestGetWalletTransactions_WithoutPublicKeyScriptLookup(t *testing.T) {
+	t.Run("rejects P2TR wallet", func(t *testing.T) {
+		btcChain := &publicKeyHashOnlyBitcoinChain{
+			Chain: newLocalBitcoinChain(),
+		}
+
+		_, err := getWalletTransactions(
+			[20]byte{0x01},
+			&tbtc.WalletChainData{WalletID: [32]byte{0x02}},
+			10,
+			btcChain,
+		)
+		if err == nil {
+			t.Fatal("expected unsupported P2TR transaction lookup error")
+		}
+
+		expectedError := "bitcoin chain does not support transaction lookup by " +
+			"public key script required for P2TR wallet"
+		if err.Error() != expectedError {
+			t.Fatalf(
+				"unexpected error\nexpected: [%v]\nactual:   [%v]",
+				expectedError,
+				err,
+			)
+		}
+	})
+
+	t.Run("retains public key hash fallback for legacy wallet", func(t *testing.T) {
+		localChain := newLocalBitcoinChain()
+		walletPublicKeyHash := [20]byte{0x03}
+		walletOutputScript, err := bitcoin.PayToWitnessPublicKeyHash(
+			walletPublicKeyHash,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		transaction := &bitcoin.Transaction{
+			Outputs: []*bitcoin.TransactionOutput{
+				{PublicKeyScript: walletOutputScript},
+			},
+		}
+		if err := localChain.BroadcastTransaction(transaction); err != nil {
+			t.Fatal(err)
+		}
+
+		transactions, err := getWalletTransactions(
+			walletPublicKeyHash,
+			&tbtc.WalletChainData{},
+			10,
+			&publicKeyHashOnlyBitcoinChain{Chain: localChain},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(transactions) != 1 || transactions[0].Hash() != transaction.Hash() {
+			t.Fatalf("legacy public key hash fallback returned wrong transactions")
+		}
+	})
 }
 
 func TestGetUnprovenRedemptionTransactions_TaprootWalletIgnoresLegacyAliases(

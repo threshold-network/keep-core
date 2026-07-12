@@ -92,6 +92,7 @@ func (psts *ProposeSweepTestScenario) DepositsReferences() []*tbtcpg.DepositRefe
 			FundingOutputIndex: d.FundingOutputIndex,
 			RevealBlock:        d.RevealBlock,
 			Vault:              d.Vault,
+			IsTaproot:          d.IsTaproot,
 		}
 	}
 

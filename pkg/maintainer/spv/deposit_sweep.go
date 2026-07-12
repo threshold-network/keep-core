@@ -264,12 +264,9 @@ func getUnprovenDepositSweepTransactions(
 	// searched for.
 	startBlock := currentBlock - historyDepth
 
-	events, err :=
-		spvChain.PastDepositRevealedEvents(
-			&tbtc.DepositRevealedEventFilter{
-				StartBlock: startBlock,
-			},
-		)
+	filter := &tbtc.DepositRevealedEventFilter{StartBlock: startBlock}
+
+	events, err := spvChain.PastDepositRevealedEvents(filter)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"failed to get past deposit revealed events: [%v]",
@@ -277,13 +274,35 @@ func getUnprovenDepositSweepTransactions(
 		)
 	}
 
-	// There will often be multiple events emitted for a single wallet. Prepare
-	// a list of unique wallet public key hashes.
+	taprootEvents, err := spvChain.PastTaprootDepositRevealedEvents(filter)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to get past Taproot deposit revealed events: [%v]",
+			err,
+		)
+	}
+
+	// There will often be multiple events emitted for a single wallet, and a
+	// Taproot reveal may have a compatibility legacy reveal. Prepare one list
+	// of unique wallet public key hashes across both event streams.
 	walletPublicKeyHashes := uniqueWalletPublicKeyHashes(
 		events,
 	)
+	seenWallets := make(map[[20]byte]struct{}, len(walletPublicKeyHashes))
+	for _, walletPublicKeyHash := range walletPublicKeyHashes {
+		seenWallets[walletPublicKeyHash] = struct{}{}
+	}
+	for _, walletPublicKeyHash := range uniqueWalletPublicKeyHashes(taprootEvents) {
+		if _, exists := seenWallets[walletPublicKeyHash]; exists {
+			continue
+		}
+
+		seenWallets[walletPublicKeyHash] = struct{}{}
+		walletPublicKeyHashes = append(walletPublicKeyHashes, walletPublicKeyHash)
+	}
 
 	unprovenDepositSweepTransactions := []*bitcoin.Transaction{}
+	seenTransactions := make(map[bitcoin.Hash]struct{})
 
 	for _, walletPublicKeyHash := range walletPublicKeyHashes {
 		wallet, err := spvChain.GetWallet(walletPublicKeyHash)
@@ -304,9 +323,11 @@ func getUnprovenDepositSweepTransactions(
 			continue
 		}
 
-		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+		walletTransactions, err := getWalletTransactions(
 			walletPublicKeyHash,
+			wallet,
 			transactionLimit,
+			btcChain,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -316,6 +337,11 @@ func getUnprovenDepositSweepTransactions(
 		}
 
 		for _, transaction := range walletTransactions {
+			transactionHash := transaction.Hash()
+			if _, exists := seenTransactions[transactionHash]; exists {
+				continue
+			}
+
 			isUnproven, err :=
 				isUnprovenDepositSweepTransaction(
 					transaction,
@@ -332,6 +358,7 @@ func getUnprovenDepositSweepTransactions(
 			}
 
 			if isUnproven {
+				seenTransactions[transactionHash] = struct{}{}
 				unprovenDepositSweepTransactions = append(
 					unprovenDepositSweepTransactions,
 					transaction,
