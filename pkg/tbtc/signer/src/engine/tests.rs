@@ -612,6 +612,7 @@ fn clear_state_storage_policy_overrides() {
     std::env::remove_var(TBTC_SIGNER_POLICY_ALLOWED_UTC_START_HOUR_ENV);
     std::env::remove_var(TBTC_SIGNER_POLICY_ALLOWED_UTC_END_HOUR_ENV);
     std::env::remove_var(TBTC_SIGNER_POLICY_RATE_LIMIT_PER_MINUTE_ENV);
+    std::env::remove_var(TBTC_SIGNER_POLICY_HEARTBEAT_RATE_LIMIT_PER_MINUTE_ENV);
     std::env::remove_var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV);
     std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_FAULT_THRESHOLD_ENV);
     std::env::remove_var(TBTC_SIGNER_AUTO_QUARANTINE_TIMEOUT_PENALTY_ENV);
@@ -963,6 +964,90 @@ fn persist_distributed_dkg_key_package_accumulates_seats_under_one_session() {
     assert!(session.dkg_public_key_package.is_some());
 }
 
+#[test]
+fn persist_distributed_dkg_key_package_rejects_second_key_group_owner() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(17);
+    persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+        session_id: "wallet-owner-a".to_string(),
+        participant_identifier: 1,
+        threshold: 2,
+        participant_count: 3,
+        key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+        public_key_package: native_public.clone(),
+    })
+    .expect("first wallet owner persists");
+
+    let duplicate =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: "wallet-owner-b".to_string(),
+            participant_identifier: 2,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&2).expect("seat 2").clone(),
+            public_key_package: native_public,
+        })
+        .expect_err("one key_group must not have two wallet-session owners");
+    assert!(
+        matches!(duplicate, EngineError::SessionConflict { ref session_id }
+            if session_id == "wallet-owner-b"),
+        "unexpected error: {duplicate:?}"
+    );
+
+    let guard = state().expect("state").lock().expect("engine lock");
+    assert!(guard.sessions.contains_key("wallet-owner-a"));
+    assert!(!guard.sessions.contains_key("wallet-owner-b"));
+}
+
+#[test]
+fn persist_distributed_dkg_key_package_rejects_a_bound_signing_session() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let session_id = "roast-session-already-bound";
+    {
+        let mut guard = state().expect("state").lock().expect("engine lock");
+        guard.sessions.insert(
+            session_id.to_string(),
+            SessionState {
+                bound_key_group: Some("original-wallet-key-group".to_string()),
+                ..Default::default()
+            },
+        );
+    }
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(19);
+    let error =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: session_id.to_string(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("seat 1").clone(),
+            public_key_package: native_public,
+        })
+        .expect_err("a per-signing session must never become a DKG wallet owner");
+    assert!(
+        matches!(error, EngineError::SessionConflict { session_id: ref rejected }
+            if rejected == session_id),
+        "unexpected error: {error:?}"
+    );
+
+    let guard = state().expect("state").lock().expect("engine lock");
+    let session = guard
+        .sessions
+        .get(session_id)
+        .expect("bound session remains");
+    assert!(session.dkg_result.is_none());
+    assert!(session.dkg_key_packages.is_none());
+    assert_eq!(
+        session.bound_key_group.as_deref(),
+        Some("original-wallet-key-group")
+    );
+}
+
 // The op rejects a key package whose own identifier does not match the claimed
 // participant, and refuses to install a DIFFERENT DKG's key group over a session
 // that already holds one.
@@ -1271,6 +1356,10 @@ fn provenance_gate_rejects_runtime_prerelease_for_release_minimum() {
     ));
 }
 
+fn taproot_prevout_script_hex() -> String {
+    format!("5120{}", "33".repeat(32))
+}
+
 fn build_policy_test_request(session_id: &str) -> BuildTaprootTxRequest {
     BuildTaprootTxRequest {
         session_id: session_id.to_string(),
@@ -1278,6 +1367,7 @@ fn build_policy_test_request(session_id: &str) -> BuildTaprootTxRequest {
             txid_hex: "11".repeat(32),
             vout: 0,
             value_sats: 10_000,
+            script_pubkey_hex: taproot_prevout_script_hex(),
         }],
         outputs: vec![crate::api::TxOutput {
             script_pubkey_hex: format!("5120{}", "22".repeat(32)),
@@ -1285,6 +1375,174 @@ fn build_policy_test_request(session_id: &str) -> BuildTaprootTxRequest {
         }],
         script_tree_hex: None,
     }
+}
+
+#[test]
+fn build_taproot_tx_rejects_invalid_or_non_p2tr_prevout_scripts() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    for (case, script_pubkey_hex, expected_detail) in [
+        ("empty", "", "not a P2TR prevout"),
+        ("non-hex", "zz", "invalid input script_pubkey_hex"),
+        ("malformed", "4c", "invalid input script_pubkey_hex"),
+        (
+            "non-p2tr",
+            "00141111111111111111111111111111111111111111",
+            "not a P2TR prevout",
+        ),
+    ] {
+        let mut request = build_policy_test_request(&format!("session-prevout-{case}"));
+        request.inputs[0].script_pubkey_hex = script_pubkey_hex.to_string();
+
+        let error = build_taproot_tx(request)
+            .expect_err("an invalid or non-P2TR prevout script must fail closed");
+        let EngineError::Validation(detail) = error else {
+            panic!("unexpected error variant: {error:?}");
+        };
+        assert!(
+            detail.contains(expected_detail),
+            "case [{case}] returned unexpected validation detail: {detail}"
+        );
+    }
+}
+
+#[test]
+fn signing_policy_firewall_rejects_every_malformed_cached_artifact_shape() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV, "p2tr");
+    configure_required_signing_policy_limits_for_tests();
+
+    let session_id = "session-invalid-policy-artifact";
+    let valid = build_taproot_tx(build_policy_test_request(session_id))
+        .expect("build a valid policy artifact");
+    let message = valid.taproot_key_spend_sighashes_hex[0].clone();
+
+    let mut cases = Vec::new();
+
+    let mut wrong_session = valid.clone();
+    wrong_session.session_id = "different-session".to_string();
+    cases.push(("wrong session", wrong_session));
+
+    let mut non_hex_tx = valid.clone();
+    non_hex_tx.tx_hex = "zz".to_string();
+    cases.push(("non-hex transaction", non_hex_tx));
+
+    let mut invalid_tx = valid.clone();
+    invalid_tx.tx_hex = "00".to_string();
+    cases.push(("invalid transaction", invalid_tx));
+
+    let mut legacy_empty_sighashes = valid.clone();
+    legacy_empty_sighashes
+        .taproot_key_spend_sighashes_hex
+        .clear();
+    cases.push(("pre-ABI-3 empty sighash list", legacy_empty_sighashes));
+
+    let mut non_hex_sighash = valid.clone();
+    non_hex_sighash.taproot_key_spend_sighashes_hex[0] = "zz".to_string();
+    cases.push(("non-hex sighash", non_hex_sighash));
+
+    let mut short_sighash = valid;
+    short_sighash.taproot_key_spend_sighashes_hex[0] = "00".to_string();
+    cases.push(("short sighash", short_sighash));
+
+    for (case, artifact) in cases {
+        let error = enforce_signing_message_binding_to_policy_checked_build_tx(
+            session_id,
+            &message,
+            None,
+            Some(&artifact),
+            None,
+        )
+        .expect_err("a malformed policy artifact must fail closed");
+        assert!(
+            matches!(error, EngineError::SigningPolicyRejected { ref reason_code, .. }
+                if reason_code == "invalid_policy_checked_build_tx_artifact"),
+            "case [{case}] returned unexpected error: {error:?}"
+        );
+    }
+
+    let metrics = hardening_metrics();
+    assert_eq!(metrics.build_taproot_tx_policy_reject_total, 6);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn build_taproot_tx_records_ordered_bip341_key_spend_sighashes() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let request = BuildTaprootTxRequest {
+        session_id: "session-bip341-policy-messages".to_string(),
+        inputs: vec![
+            crate::api::TxInput {
+                txid_hex: "11".repeat(32),
+                vout: 0,
+                value_sats: 10_000,
+                script_pubkey_hex: taproot_prevout_script_hex(),
+            },
+            crate::api::TxInput {
+                txid_hex: "22".repeat(32),
+                vout: 1,
+                value_sats: 11_000,
+                script_pubkey_hex: format!("5120{}", "44".repeat(32)),
+            },
+        ],
+        outputs: vec![crate::api::TxOutput {
+            script_pubkey_hex: format!("5120{}", "55".repeat(32)),
+            value_sats: 20_000,
+        }],
+        script_tree_hex: None,
+    };
+    let result = build_taproot_tx(request.clone()).expect("build policy transaction");
+
+    assert_eq!(result.taproot_key_spend_sighashes_hex.len(), 2);
+    assert_ne!(
+        result.taproot_key_spend_sighashes_hex[0], result.taproot_key_spend_sighashes_hex[1],
+        "BIP-341 commits to the input index"
+    );
+    assert!(result
+        .taproot_key_spend_sighashes_hex
+        .iter()
+        .all(|sighash| sighash.len() == 64 && hex::decode(sighash).is_ok()));
+
+    let tx_bytes = hex::decode(&result.tx_hex).expect("transaction hex");
+    let tx: Transaction = deserialize(&tx_bytes).expect("transaction decode");
+    assert_eq!(
+        tx.version,
+        Version::ONE,
+        "BuildTaprootTx must match the Go host's canonical transaction version"
+    );
+    let prevouts = request
+        .inputs
+        .iter()
+        .map(|input| TxOut {
+            value: Amount::from_sat(input.value_sats),
+            script_pubkey: ScriptBuf::from_bytes(
+                hex::decode(&input.script_pubkey_hex).expect("prevout script hex"),
+            ),
+        })
+        .collect::<Vec<_>>();
+    let mut cache = SighashCache::new(&tx);
+    for (input_index, recorded) in result.taproot_key_spend_sighashes_hex.iter().enumerate() {
+        let expected = cache
+            .taproot_key_spend_signature_hash(
+                input_index,
+                &Prevouts::All(&prevouts),
+                TapSighashType::Default,
+            )
+            .expect("BIP-341 sighash");
+        assert_eq!(recorded, &hex::encode(expected.to_byte_array()));
+    }
+    assert!(
+        !result
+            .taproot_key_spend_sighashes_hex
+            .contains(&hash_hex(&tx_bytes)),
+        "SHA256(unsigned_tx) is not a BIP-341 signing message"
+    );
 }
 
 #[test]
@@ -1467,11 +1725,13 @@ fn build_taproot_tx_rejects_total_input_value_above_bitcoin_max_money() {
                 txid_hex: "11".repeat(32),
                 vout: 0,
                 value_sats: BITCOIN_MAX_MONEY_SATS,
+                script_pubkey_hex: taproot_prevout_script_hex(),
             },
             crate::api::TxInput {
                 txid_hex: "22".repeat(32),
                 vout: 0,
                 value_sats: 1,
+                script_pubkey_hex: taproot_prevout_script_hex(),
             },
         ],
         outputs: vec![crate::api::TxOutput {
@@ -1508,6 +1768,7 @@ fn build_taproot_tx_rejects_total_output_value_above_bitcoin_max_money() {
             txid_hex: "11".repeat(32),
             vout: 0,
             value_sats: BITCOIN_MAX_MONEY_SATS,
+            script_pubkey_hex: taproot_prevout_script_hex(),
         }],
         outputs: vec![
             crate::api::TxOutput {
@@ -1640,6 +1901,7 @@ fn hardening_metrics_count_calls_before_provenance_gate_rejection() {
             txid_hex: "11".repeat(32),
             vout: 0,
             value_sats: 10_000,
+            script_pubkey_hex: taproot_prevout_script_hex(),
         }],
         outputs: vec![crate::api::TxOutput {
             script_pubkey_hex: format!("0014{}", "33".repeat(20)),
@@ -2634,6 +2896,43 @@ fn persisted_engine_state_rejects_session_registry_over_limit() {
 }
 
 #[test]
+fn persisted_engine_state_rejects_duplicate_dkg_key_group_owners() {
+    let mut owner_a = persisted_session_state_fixture();
+    owner_a.dkg_result = Some(DkgResult {
+        session_id: "persisted-wallet-a".to_string(),
+        key_group: "duplicate-wallet-key-group".to_string(),
+        participant_count: 3,
+        threshold: 2,
+        created_at_unix: 1,
+    });
+    let mut owner_b = persisted_session_state_fixture();
+    owner_b.dkg_result = Some(DkgResult {
+        session_id: "persisted-wallet-b".to_string(),
+        key_group: "duplicate-wallet-key-group".to_string(),
+        participant_count: 3,
+        threshold: 2,
+        created_at_unix: 1,
+    });
+
+    let persisted = PersistedEngineState {
+        schema_version: PERSISTED_STATE_SCHEMA_VERSION,
+        sessions: HashMap::from([
+            ("persisted-wallet-a".to_string(), owner_a),
+            ("persisted-wallet-b".to_string(), owner_b),
+        ]),
+        refresh_epoch_counter: 0,
+        operator_fault_scores: BTreeMap::new(),
+        quarantined_operator_identifiers: vec![],
+        canary_rollout: CanaryRolloutState::default(),
+    };
+
+    let err = EngineState::try_from(persisted)
+        .err()
+        .expect("duplicate persisted key_group owners must fail closed");
+    expect_internal_error_contains(err, "duplicate persisted DKG key_group");
+}
+
+#[test]
 fn persisted_session_state_round_trip_preserves_bound_key_group() {
     // A cross-session signing session has no dkg_result, so bound_key_group is the only
     // durable link back to the wallet DKG. It MUST survive a persist/reload: otherwise an
@@ -2687,6 +2986,7 @@ fn interactive_open_cross_session_respects_the_session_cap() {
         key_group: key_group.to_string(),
         threshold: 2,
         taproot_merkle_root_hex: None,
+        signing_intent: None,
         attempt_context,
     })
     .expect_err("a new cross-session Open at the session cap must be rejected");
@@ -2737,6 +3037,7 @@ fn interactive_open_refuses_to_rebind_a_live_session_to_a_different_key_group() 
         key_group: key_group_a.to_string(),
         threshold: 2,
         taproot_merkle_root_hex: None,
+        signing_intent: None,
         attempt_context: ctx_a,
     })
     .expect("wallet A opens on the shared session");
@@ -2757,6 +3058,7 @@ fn interactive_open_refuses_to_rebind_a_live_session_to_a_different_key_group() 
         key_group: key_group_b.to_string(),
         threshold: 2,
         taproot_merkle_root_hex: None,
+        signing_intent: None,
         attempt_context: ctx_b,
     })
     .expect_err("a different key group must not rebind a live session");
@@ -2809,6 +3111,7 @@ fn interactive_open_refuses_to_bind_through_another_wallets_dkg_session() {
         key_group: key_group_b.to_string(),
         threshold: 2,
         taproot_merkle_root_hex: None,
+        signing_intent: None,
         attempt_context: ctx,
     })
     .expect_err("binding through another wallet's DKG session must be rejected");
@@ -2910,6 +3213,7 @@ fn build_taproot_tx_rejects_new_session_when_session_registry_is_at_capacity() {
             txid_hex: "11".repeat(32),
             vout: 0,
             value_sats: 10_000,
+            script_pubkey_hex: taproot_prevout_script_hex(),
         }],
         outputs: vec![crate::api::TxOutput {
             script_pubkey_hex: format!("5120{}", "22".repeat(32)),
@@ -2926,6 +3230,7 @@ fn build_taproot_tx_rejects_new_session_when_session_registry_is_at_capacity() {
             txid_hex: "33".repeat(32),
             vout: 0,
             value_sats: 10_000,
+            script_pubkey_hex: taproot_prevout_script_hex(),
         }],
         outputs: vec![crate::api::TxOutput {
             script_pubkey_hex: format!("5120{}", "44".repeat(32)),
@@ -3646,6 +3951,7 @@ fn restart_reload_recovers_persisted_state_across_operation_types() {
             txid_hex: "11".repeat(32),
             vout: 0,
             value_sats: 10_000,
+            script_pubkey_hex: taproot_prevout_script_hex(),
         }],
         outputs: vec![crate::api::TxOutput {
             script_pubkey_hex: format!("5120{}", "22".repeat(32)),
@@ -3814,6 +4120,7 @@ fn build_taproot_tx_idempotency_persists_across_storage_reload() {
             txid_hex: "11".repeat(32),
             vout: 0,
             value_sats: 10_000,
+            script_pubkey_hex: taproot_prevout_script_hex(),
         }],
         outputs: vec![crate::api::TxOutput {
             script_pubkey_hex: format!("5120{}", "22".repeat(32)),
@@ -3835,6 +4142,7 @@ fn build_taproot_tx_idempotency_persists_across_storage_reload() {
             txid_hex: "11".repeat(32),
             vout: 0,
             value_sats: 10_000,
+            script_pubkey_hex: taproot_prevout_script_hex(),
         }],
         outputs: vec![crate::api::TxOutput {
             script_pubkey_hex: format!("5120{}", "22".repeat(32)),
@@ -4407,19 +4715,51 @@ fn init_signer_config_overrides_environment_for_covered_knobs() {
 
     std::env::set_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV, "120000");
     assert_eq!(roast_coordinator_timeout_ms(), 120_000);
+    assert_eq!(
+        heartbeat_rate_limit_per_minute().unwrap(),
+        TBTC_SIGNER_DEFAULT_POLICY_HEARTBEAT_RATE_LIMIT_PER_MINUTE
+    );
 
     let result = init_signer_config(InitSignerConfigRequest {
         profile: Some("development".to_string()),
         roast_coordinator_timeout_ms: Some(60_000),
+        policy_heartbeat_rate_limit_per_minute: Some(7),
         ..InitSignerConfigRequest::default()
     })
     .expect("install config");
     assert!(result.installed);
     assert!(!result.idempotent);
-    assert_eq!(result.configured_key_count, 2);
+    assert_eq!(result.configured_key_count, 3);
 
     assert_eq!(roast_coordinator_timeout_ms(), 60_000);
+    assert_eq!(heartbeat_rate_limit_per_minute().unwrap(), 7);
     std::env::remove_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV);
+}
+
+#[test]
+fn init_signer_config_rejects_zero_heartbeat_rate_limit_without_installing() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    let _clear = InstalledConfigClearGuard;
+    clear_state_storage_policy_overrides();
+
+    let error = init_signer_config(InitSignerConfigRequest {
+        profile: Some("development".to_string()),
+        policy_heartbeat_rate_limit_per_minute: Some(0),
+        ..InitSignerConfigRequest::default()
+    })
+    .expect_err("a zero heartbeat rate limit must fail init");
+    assert!(
+        error
+            .to_string()
+            .contains(TBTC_SIGNER_POLICY_HEARTBEAT_RATE_LIMIT_PER_MINUTE_ENV),
+        "unexpected error: {error}"
+    );
+
+    // Failed candidate validation must not install a snapshot.
+    std::env::set_var(TBTC_SIGNER_POLICY_HEARTBEAT_RATE_LIMIT_PER_MINUTE_ENV, "9");
+    assert_eq!(heartbeat_rate_limit_per_minute().unwrap(), 9);
+    std::env::remove_var(TBTC_SIGNER_POLICY_HEARTBEAT_RATE_LIMIT_PER_MINUTE_ENV);
 }
 
 #[test]
@@ -5030,6 +5370,23 @@ fn interactive_test_attempt_context(
     }
 }
 
+fn heartbeat_message_for_test(nonce: u64) -> [u8; 16] {
+    let mut message = [0xff; 16];
+    message[8..].copy_from_slice(&nonce.to_be_bytes());
+    message
+}
+
+fn heartbeat_signing_message_for_test(heartbeat_message: &[u8]) -> [u8; 32] {
+    let first_digest = Sha256::digest(heartbeat_message);
+    Sha256::digest(first_digest).into()
+}
+
+fn heartbeat_signing_intent_for_test(message: &[u8]) -> InteractiveSigningIntent {
+    InteractiveSigningIntent::Heartbeat {
+        message_hex: hex::encode(message),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn open_interactive_for_test(
     session_id: &str,
@@ -5057,6 +5414,7 @@ fn open_interactive_for_test(
         key_group: key_group.to_string(),
         threshold,
         taproot_merkle_root_hex: None,
+        signing_intent: None,
         attempt_context,
     })
 }
@@ -5299,6 +5657,7 @@ fn interactive_signs_across_sessions_by_key_group() {
             key_group: key_group.to_string(),
             threshold: 2,
             taproot_merkle_root_hex: None,
+            signing_intent: None,
             attempt_context,
         })
         .unwrap_or_else(|e| panic!("member {member} opens under the signing session: {e:?}"))
@@ -6574,6 +6933,7 @@ fn interactive_open_idempotency_conflict_and_replacement() {
         taproot_merkle_root_hex: Some(
             "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
         ),
+        signing_intent: None,
         attempt_context,
     })
     .expect_err("conflicting reopen of a live attempt must fail closed");
@@ -6794,6 +7154,548 @@ fn interactive_open_signing_policy_firewall_rejects_without_policy_checked_build
 }
 
 #[test]
+fn interactive_heartbeat_intent_opens_and_releases_round2_share_under_firewall() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_POLICY_HEARTBEAT_RATE_LIMIT_PER_MINUTE_ENV, "1");
+
+    let wallet_session = "wallet-heartbeat-intent-success";
+    let signing_session = "roast-heartbeat-intent-success";
+    let key_group = "heartbeat-intent-success-key-group";
+    let included = [1u16, 2];
+    let heartbeat_message = heartbeat_message_for_test(1);
+    let signing_message = heartbeat_signing_message_for_test(&heartbeat_message);
+    let key_packages = ensure_interactive_dkg_session(wallet_session, key_group);
+
+    let opened = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: signing_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(signing_message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        signing_intent: Some(heartbeat_signing_intent_for_test(&heartbeat_message)),
+        attempt_context: interactive_test_attempt_context(
+            signing_session,
+            key_group,
+            &signing_message,
+            &included,
+            1,
+        ),
+    })
+    .expect("a valid heartbeat intent authorizes Open without a transaction artifact");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("heartbeat round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 heartbeat commitments");
+    let signing_package_hex = interactive_package_for_test(
+        &signing_message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+
+    let round2 = interactive_round2(InteractiveRound2Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened.attempt_id,
+        member_identifier: 1,
+        signing_package_hex,
+    })
+    .expect("Round2 rechecks and accepts the stored heartbeat intent");
+    assert!(!round2.signature_share_hex.is_empty());
+
+    let guard = state().expect("state").lock().expect("engine lock");
+    let session = guard
+        .sessions
+        .get(signing_session)
+        .expect("heartbeat signing session");
+    assert!(session.tx_result.is_none());
+    assert!(session.interactive_signing.is_empty());
+    drop(guard);
+
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn interactive_heartbeat_rate_limit_is_per_wallet_and_retry_safe() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("heartbeat_rate_limit");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    // Heartbeat authorization is independently rate-limited even when the
+    // transaction policy firewall is disabled. Keep the BuildTaprootTx bucket at
+    // one token too so the final assertion proves the two budgets are disjoint.
+    std::env::set_var(TBTC_SIGNER_POLICY_HEARTBEAT_RATE_LIMIT_PER_MINUTE_ENV, "1");
+    std::env::set_var(TBTC_SIGNER_POLICY_RATE_LIMIT_PER_MINUTE_ENV, "1");
+
+    let wallet_a_session = "wallet-heartbeat-rate-limit-a";
+    let wallet_a_key_group = "heartbeat-rate-limit-key-group-a";
+    let wallet_b_session = "wallet-heartbeat-rate-limit-b";
+    let wallet_b_key_group = "heartbeat-rate-limit-key-group-b";
+    let included = [1u16, 2];
+    ensure_interactive_dkg_session(wallet_a_session, wallet_a_key_group);
+    ensure_interactive_dkg_session(wallet_b_session, wallet_b_key_group);
+
+    let heartbeat_open_request = |session_id: &str, key_group: &str, nonce: u64| {
+        let heartbeat_message = heartbeat_message_for_test(nonce);
+        let signing_message = heartbeat_signing_message_for_test(&heartbeat_message);
+        InteractiveSessionOpenRequest {
+            session_id: session_id.to_string(),
+            member_identifier: 1,
+            message_hex: hex::encode(signing_message),
+            key_group: key_group.to_string(),
+            threshold: 2,
+            taproot_merkle_root_hex: None,
+            signing_intent: Some(heartbeat_signing_intent_for_test(&heartbeat_message)),
+            attempt_context: interactive_test_attempt_context(
+                session_id,
+                key_group,
+                &signing_message,
+                &included,
+                1,
+            ),
+        }
+    };
+
+    let first_wallet_a_request =
+        heartbeat_open_request("roast-heartbeat-rate-limit-a-1", wallet_a_key_group, 10);
+    let first_wallet_a = interactive_session_open(first_wallet_a_request.clone())
+        .expect("the first wallet-A heartbeat Open has one token");
+    assert!(!first_wallet_a.idempotent);
+
+    let wallet_a_retry = interactive_session_open(first_wallet_a_request)
+        .expect("an exact Open retry must not charge another heartbeat token");
+    assert!(wallet_a_retry.idempotent);
+
+    let wallet_a_limited = interactive_session_open(heartbeat_open_request(
+        "roast-heartbeat-rate-limit-a-2",
+        wallet_a_key_group,
+        11,
+    ))
+    .expect_err("a fresh wallet-A heartbeat Open must exhaust its one-token budget");
+    assert!(matches!(
+        wallet_a_limited,
+        EngineError::SigningPolicyRejected { ref reason_code, .. }
+            if reason_code == "heartbeat_rate_limit_per_minute_exceeded"
+    ));
+    let metrics_after_limit = hardening_metrics();
+    assert_eq!(metrics_after_limit.heartbeat_signing_policy_reject_total, 1);
+    assert_eq!(metrics_after_limit.build_taproot_tx_policy_reject_total, 0);
+
+    let wallet_b = interactive_session_open(heartbeat_open_request(
+        "roast-heartbeat-rate-limit-b-1",
+        wallet_b_key_group,
+        12,
+    ))
+    .expect("wallet B must have an independent heartbeat budget");
+    assert!(!wallet_b.idempotent);
+
+    std::env::set_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV, "p2tr");
+    configure_required_signing_policy_limits_for_tests();
+    build_taproot_tx(build_policy_test_request(
+        "session-heartbeat-rate-limit-build-tx-budget",
+    ))
+    .expect("heartbeat Opens must not consume the BuildTaprootTx token bucket");
+    let metrics_after_build = hardening_metrics();
+    assert_eq!(metrics_after_build.heartbeat_signing_policy_reject_total, 1);
+    assert_eq!(metrics_after_build.build_taproot_tx_policy_reject_total, 0);
+
+    clear_state_storage_policy_overrides();
+    cleanup_test_state_artifacts(&state_path);
+}
+
+#[test]
+fn interactive_heartbeat_intent_rejects_malformed_ambiguous_or_tweaked_requests() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV, "p2tr");
+    configure_required_signing_policy_limits_for_tests();
+
+    let wallet_session = "wallet-heartbeat-intent-negative";
+    let key_group = "heartbeat-intent-negative-key-group";
+    let included = [1u16, 2];
+    ensure_interactive_dkg_session(wallet_session, key_group);
+    let heartbeat_message = heartbeat_message_for_test(2);
+    let signing_message = heartbeat_signing_message_for_test(&heartbeat_message);
+
+    let mut wrong_prefix = heartbeat_message;
+    wrong_prefix[0] = 0;
+    let mismatched_message = heartbeat_message_for_test(3);
+    let cases = vec![
+        (
+            "non-hex",
+            InteractiveSigningIntent::Heartbeat {
+                message_hex: "zz".repeat(16),
+            },
+            None,
+            "invalid_heartbeat_signing_intent",
+        ),
+        (
+            "wrong-prefix",
+            heartbeat_signing_intent_for_test(&wrong_prefix),
+            None,
+            "invalid_heartbeat_signing_intent",
+        ),
+        (
+            "short-message",
+            heartbeat_signing_intent_for_test(&heartbeat_message[..15]),
+            None,
+            "invalid_heartbeat_signing_intent",
+        ),
+        (
+            "digest-mismatch",
+            heartbeat_signing_intent_for_test(&mismatched_message),
+            None,
+            "heartbeat_signing_message_mismatch",
+        ),
+        (
+            "taproot-root",
+            heartbeat_signing_intent_for_test(&heartbeat_message),
+            Some("11".repeat(32)),
+            "invalid_heartbeat_signing_intent",
+        ),
+    ];
+
+    for (case, signing_intent, taproot_merkle_root_hex, expected_reason) in cases {
+        let signing_session = format!("roast-heartbeat-intent-{case}");
+        let error = interactive_session_open(InteractiveSessionOpenRequest {
+            session_id: signing_session.clone(),
+            member_identifier: 1,
+            message_hex: hex::encode(signing_message),
+            key_group: key_group.to_string(),
+            threshold: 2,
+            taproot_merkle_root_hex,
+            signing_intent: Some(signing_intent),
+            attempt_context: interactive_test_attempt_context(
+                &signing_session,
+                key_group,
+                &signing_message,
+                &included,
+                1,
+            ),
+        })
+        .expect_err("invalid heartbeat intent must fail closed at Open");
+        assert!(
+            matches!(error, EngineError::SigningPolicyRejected { ref reason_code, .. }
+                if reason_code == expected_reason),
+            "case [{case}] returned unexpected error: {error:?}"
+        );
+    }
+
+    let ambiguous_session = "roast-heartbeat-intent-ambiguous";
+    build_taproot_tx(build_policy_test_request(ambiguous_session))
+        .expect("seed a transaction artifact on the ambiguous session");
+    let ambiguous = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: ambiguous_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(signing_message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        signing_intent: Some(heartbeat_signing_intent_for_test(&heartbeat_message)),
+        attempt_context: interactive_test_attempt_context(
+            ambiguous_session,
+            key_group,
+            &signing_message,
+            &included,
+            1,
+        ),
+    })
+    .expect_err("transaction and heartbeat authorizations must not coexist");
+    assert!(matches!(
+        ambiguous,
+        EngineError::SigningPolicyRejected { ref reason_code, .. }
+            if reason_code == "ambiguous_signing_policy_artifact"
+    ));
+
+    let metrics = hardening_metrics();
+    assert_eq!(metrics.heartbeat_signing_policy_reject_total, 6);
+    assert_eq!(metrics.build_taproot_tx_policy_reject_total, 0);
+
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn interactive_round2_rechecks_stored_heartbeat_intent_before_share_release() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV, "true");
+
+    let wallet_session = "wallet-heartbeat-intent-round2-recheck";
+    let signing_session = "roast-heartbeat-intent-round2-recheck";
+    let key_group = "heartbeat-intent-round2-recheck-key-group";
+    let included = [1u16, 2];
+    let heartbeat_message = heartbeat_message_for_test(4);
+    let signing_message = heartbeat_signing_message_for_test(&heartbeat_message);
+    let key_packages = ensure_interactive_dkg_session(wallet_session, key_group);
+
+    let opened = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: signing_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(signing_message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        signing_intent: Some(heartbeat_signing_intent_for_test(&heartbeat_message)),
+        attempt_context: interactive_test_attempt_context(
+            signing_session,
+            key_group,
+            &signing_message,
+            &included,
+            1,
+        ),
+    })
+    .expect("valid heartbeat Open");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("heartbeat round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 heartbeat commitments");
+    let signing_package_hex = interactive_package_for_test(
+        &signing_message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+
+    {
+        let mut guard = state().expect("state").lock().expect("engine lock");
+        guard
+            .sessions
+            .get_mut(signing_session)
+            .expect("heartbeat signing session")
+            .interactive_signing
+            .get_mut(&1)
+            .expect("live heartbeat attempt")
+            .signing_intent = Some(heartbeat_signing_intent_for_test(
+            &heartbeat_message_for_test(5),
+        ));
+    }
+
+    let error = interactive_round2(InteractiveRound2Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex,
+    })
+    .expect_err("Round2 must recheck the stored heartbeat intent");
+    assert!(matches!(
+        error,
+        EngineError::SigningPolicyRejected { ref reason_code, .. }
+            if reason_code == "heartbeat_signing_message_mismatch"
+    ));
+    let guard = state().expect("state").lock().expect("engine lock");
+    let session = &guard.sessions[signing_session];
+    assert!(session.interactive_signing[&1].round1.is_some());
+    assert!(!interactive_attempt_consumed(
+        &session.consumed_interactive_attempt_markers,
+        &opened.attempt_id,
+        1,
+    ));
+    drop(guard);
+
+    let metrics = hardening_metrics();
+    assert_eq!(metrics.heartbeat_signing_policy_reject_total, 1);
+    assert_eq!(metrics.build_taproot_tx_policy_reject_total, 0);
+
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn interactive_open_cross_session_respects_wallet_emergency_rekey() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let wallet_session = "wallet-rekeyed-before-cross-session-open";
+    let signing_session = "roast-blocked-before-open";
+    let key_group = "cross-session-open-rekey-key-group";
+    let message = [0xc2u8; 32];
+    let included = [1u16, 2];
+    ensure_interactive_dkg_session(wallet_session, key_group);
+    {
+        let mut guard = state().expect("state").lock().expect("engine lock");
+        guard
+            .sessions
+            .get_mut(wallet_session)
+            .expect("wallet session")
+            .emergency_rekey_event = Some(EmergencyRekeyEvent {
+            reason: "wallet compromised before Open".to_string(),
+            triggered_at_unix: now_unix(),
+        });
+    }
+
+    let error = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: signing_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        signing_intent: None,
+        attempt_context: interactive_test_attempt_context(
+            signing_session,
+            key_group,
+            &message,
+            &included,
+            1,
+        ),
+    })
+    .expect_err("a wallet emergency rekey must block a distinct signing session at Open");
+    assert!(
+        matches!(error, EngineError::LifecyclePolicyRejected { ref reason_code, .. }
+            if reason_code == "emergency_rekey_required"),
+        "unexpected error: {error:?}"
+    );
+
+    let guard = state().expect("state").lock().expect("engine lock");
+    assert!(
+        !guard.sessions.contains_key(signing_session),
+        "Open must reject before allocating or burning a signing-session nonce"
+    );
+}
+
+#[test]
+fn interactive_open_uses_signing_session_bip341_artifact_and_current_policy() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV, "p2tr");
+    configure_required_signing_policy_limits_for_tests();
+
+    let wallet_session = "wallet-policy-artifact-owner";
+    let signing_session = "roast-policy-artifact-signing";
+    let key_group = "policy-artifact-key-group";
+    let included = [1u16, 2];
+    ensure_interactive_dkg_session(wallet_session, key_group);
+
+    let tx_result = build_taproot_tx(build_policy_test_request(signing_session))
+        .expect("BuildTaprootTx stores the artifact on the signing session");
+    reload_state_from_storage_for_tests();
+    let signing_message =
+        hex::decode(&tx_result.taproot_key_spend_sighashes_hex[0]).expect("BIP-341 sighash hex");
+    let open_request = InteractiveSessionOpenRequest {
+        session_id: signing_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(&signing_message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        signing_intent: None,
+        attempt_context: interactive_test_attempt_context(
+            signing_session,
+            key_group,
+            &signing_message,
+            &included,
+            1,
+        ),
+    };
+    interactive_session_open(open_request.clone())
+        .expect("cross-session Open uses the signing session's Build artifact");
+
+    let unsigned_tx_hash = hash_hex(&hex::decode(&tx_result.tx_hex).expect("tx hex"));
+    let old_binding = enforce_signing_message_binding_to_policy_checked_build_tx(
+        signing_session,
+        &unsigned_tx_hash,
+        None,
+        Some(&tx_result),
+        None,
+    )
+    .expect_err("SHA256(unsigned_tx) must not authorize a BIP-341 signature");
+    assert!(matches!(
+        old_binding,
+        EngineError::SigningPolicyRejected { ref reason_code, .. }
+            if reason_code == "signing_message_not_bound_to_policy_checked_build_tx"
+    ));
+
+    // The artifact was accepted under p2tr, but every Open rechecks the active
+    // non-rate policy before returning even for an otherwise idempotent retry.
+    std::env::set_var(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV, "p2wpkh");
+    let tightened = interactive_session_open(open_request)
+        .expect_err("a stricter active policy must reject the cached transaction");
+    assert!(matches!(
+        tightened,
+        EngineError::SigningPolicyRejected { ref reason_code, .. }
+            if reason_code == "script_class_not_allowlisted"
+    ));
+
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn interactive_open_does_not_use_wallet_session_transaction_artifact() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV, "p2tr");
+    configure_required_signing_policy_limits_for_tests();
+
+    let wallet_session = "wallet-with-wrong-scope-artifact";
+    let signing_session = "roast-without-own-artifact";
+    let key_group = "wrong-scope-artifact-key-group";
+    let included = [1u16, 2];
+    ensure_interactive_dkg_session(wallet_session, key_group);
+    let wallet_tx = build_taproot_tx(build_policy_test_request(wallet_session))
+        .expect("wallet-scoped Build artifact");
+    let message =
+        hex::decode(&wallet_tx.taproot_key_spend_sighashes_hex[0]).expect("BIP-341 sighash hex");
+
+    let err = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: signing_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(&message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        signing_intent: None,
+        attempt_context: interactive_test_attempt_context(
+            signing_session,
+            key_group,
+            &message,
+            &included,
+            1,
+        ),
+    })
+    .expect_err("a wallet-session artifact must not authorize a fresh signing flow");
+    assert!(matches!(
+        err,
+        EngineError::SigningPolicyRejected { ref reason_code, .. }
+            if reason_code == "missing_policy_checked_build_tx"
+    ));
+
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn interactive_consumed_marker_is_case_insensitive() {
     let _guard = lock_test_state();
     reset_for_tests();
@@ -6817,6 +7719,7 @@ fn interactive_consumed_marker_is_case_insensitive() {
         key_group: key_group.to_string(),
         threshold: 2,
         taproot_merkle_root_hex: None,
+        signing_intent: None,
         attempt_context: canonical.clone(),
     })
     .expect("canonical open");
@@ -6862,6 +7765,7 @@ fn interactive_consumed_marker_is_case_insensitive() {
         key_group: key_group.to_string(),
         threshold: 2,
         taproot_merkle_root_hex: None,
+        signing_intent: None,
         attempt_context: recased_context,
     })
     .expect_err("a re-cased consumed attempt must fail closed");
@@ -7156,6 +8060,102 @@ fn interactive_round2_rechecks_gates_at_share_release() {
 }
 
 #[test]
+fn interactive_round2_rechecks_signing_session_transaction_against_current_policy() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_ENFORCE_SIGNING_POLICY_FIREWALL_ENV, "true");
+    std::env::set_var(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV, "p2tr");
+    configure_required_signing_policy_limits_for_tests();
+
+    let wallet_session = "wallet-round2-policy-owner";
+    let signing_session = "roast-round2-policy-signing";
+    let key_group = "round2-policy-key-group";
+    let included = [1u16, 2];
+    let key_packages = ensure_interactive_dkg_session(wallet_session, key_group);
+    let tx_result = build_taproot_tx(build_policy_test_request(signing_session))
+        .expect("signing-session Build artifact");
+    let message =
+        hex::decode(&tx_result.taproot_key_spend_sighashes_hex[0]).expect("BIP-341 sighash hex");
+
+    let opened = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: signing_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(&message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        signing_intent: None,
+        attempt_context: interactive_test_attempt_context(
+            signing_session,
+            key_group,
+            &message,
+            &included,
+            1,
+        ),
+    })
+    .expect("Open accepts current policy");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+
+    std::env::set_var(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV, "p2wpkh");
+    let blocked = interactive_round2(InteractiveRound2Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect_err("Round2 must reject a transaction disallowed by current policy");
+    assert!(matches!(
+        blocked,
+        EngineError::SigningPolicyRejected { ref reason_code, .. }
+            if reason_code == "script_class_not_allowlisted"
+    ));
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let signing = guard
+            .sessions
+            .get(signing_session)
+            .expect("signing session");
+        assert!(!interactive_attempt_consumed(
+            &signing.consumed_interactive_attempt_markers,
+            &opened.attempt_id,
+            1,
+        ));
+    }
+
+    std::env::set_var(TBTC_SIGNER_POLICY_ALLOWED_SCRIPT_CLASSES_ENV, "p2tr");
+    interactive_round2(InteractiveRound2Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened.attempt_id,
+        member_identifier: 1,
+        signing_package_hex,
+    })
+    .expect("same live nonces complete once policy allows the transaction");
+
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn interactive_round2_rechecks_gates_at_share_release_across_sessions() {
     // The cross-session counterpart of the above: the emergency-rekey kill switch is
     // recorded on the WALLET (DKG) session, but signing runs under a DISTINCT
@@ -7186,6 +8186,7 @@ fn interactive_round2_rechecks_gates_at_share_release_across_sessions() {
         key_group: key_group.to_string(),
         threshold: 2,
         taproot_merkle_root_hex: None,
+        signing_intent: None,
         attempt_context,
     })
     .expect("opens under the signing session");
@@ -7240,8 +8241,9 @@ fn interactive_round2_rechecks_gates_at_share_release_across_sessions() {
         "unexpected error: {blocked:?}"
     );
 
-    // The rejection must be fail-closed WITHOUT consuming the nonce: clearing the
-    // kill switch on the wallet session lets the same attempt complete.
+    // The rejection must be fail-closed WITHOUT consuming the nonce. Clear the wallet
+    // event, then prove that the same reader also honors an event stored directly on
+    // the per-signing session.
     {
         let mut guard = state().expect("state").lock().expect("lock");
         assert!(
@@ -7258,6 +8260,42 @@ fn interactive_round2_rechecks_gates_at_share_release_across_sessions() {
             .get_mut(wallet_session)
             .expect("wallet session exists")
             .emergency_rekey_event = None;
+        let signing = guard
+            .sessions
+            .get_mut(signing_session)
+            .expect("signing session exists");
+        signing.emergency_rekey_event = Some(EmergencyRekeyEvent {
+            reason: "post-open rekey on the signing session".to_string(),
+            triggered_at_unix: now_unix(),
+        });
+    }
+
+    let signing_session_blocked = interactive_round2(InteractiveRound2Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect_err("a signing-session emergency rekey must also block Round2");
+    assert!(
+        matches!(signing_session_blocked, EngineError::LifecyclePolicyRejected { ref reason_code, .. }
+            if reason_code == "emergency_rekey_required"),
+        "unexpected error: {signing_session_blocked:?}"
+    );
+
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        let signing = guard
+            .sessions
+            .get_mut(signing_session)
+            .expect("signing session exists");
+        assert!(
+            !signing
+                .consumed_interactive_attempt_markers
+                .contains(&interactive_consumed_marker(&opened.attempt_id, 1)),
+            "a signing-session gate rejection must not consume the attempt"
+        );
+        signing.emergency_rekey_event = None;
     }
 
     interactive_round2(InteractiveRound2Request {
@@ -7266,7 +8304,65 @@ fn interactive_round2_rechecks_gates_at_share_release_across_sessions() {
         member_identifier: 1,
         signing_package_hex,
     })
-    .expect("the cross-session attempt completes once the wallet kill switch clears");
+    .expect("the cross-session attempt completes once both kill switches clear");
+}
+
+#[test]
+fn interactive_open_rejects_signing_session_rekey_before_wallet_binding() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let wallet_session = "wallet-dkg-session-pre-open-rekey";
+    let signing_session = "roast-signing-session-pre-open-rekey";
+    let key_group = "pre-open-rekey-key-group";
+    let included = [1u16, 2];
+
+    ensure_interactive_dkg_session(wallet_session, key_group);
+    let tx_result = build_taproot_tx(build_policy_test_request(signing_session))
+        .expect("BuildTaprootTx creates the per-signing session");
+    let message = hex::decode(&tx_result.taproot_key_spend_sighashes_hex[0])
+        .expect("BIP-341 sighash decodes");
+
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let signing = guard
+            .sessions
+            .get(signing_session)
+            .expect("BuildTaprootTx signing session exists");
+        assert!(
+            signing.bound_key_group.is_none(),
+            "BuildTaprootTx must precede the Open wallet binding"
+        );
+    }
+
+    let rekey = trigger_emergency_rekey(TriggerEmergencyRekeyRequest {
+        session_id: signing_session.to_string(),
+        reason: "compromise detected before Open".to_string(),
+    })
+    .expect("emergency rekey triggers on the unbound signing session");
+    assert_eq!(
+        rekey.session_id, signing_session,
+        "without a wallet binding, the event remains on the signing session"
+    );
+
+    let attempt_context =
+        interactive_test_attempt_context(signing_session, key_group, &message, &included, 1);
+    let blocked = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: signing_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        signing_intent: None,
+        attempt_context,
+    })
+    .expect_err("the signing-session emergency rekey must block Open");
+    assert!(
+        matches!(blocked, EngineError::LifecyclePolicyRejected { ref reason_code, .. }
+            if reason_code == "emergency_rekey_required"),
+        "unexpected error: {blocked:?}"
+    );
 }
 
 #[test]
@@ -7298,6 +8394,7 @@ fn trigger_emergency_rekey_on_signing_session_records_on_wallet_session() {
         key_group: key_group.to_string(),
         threshold: 2,
         taproot_merkle_root_hex: None,
+        signing_intent: None,
         attempt_context,
     })
     .expect("opens under the signing session");
@@ -7398,6 +8495,7 @@ fn interactive_open_requires_an_existing_dkg_session() {
         key_group: "interactive-test-key-group".to_string(),
         threshold: 2,
         taproot_merkle_root_hex: None,
+        signing_intent: None,
         attempt_context,
     })
     .expect_err("interactive open with no wallet key for the key_group must fail closed");
@@ -7423,6 +8521,7 @@ fn interactive_open_requires_an_existing_dkg_session() {
         key_group: "interactive-test-key-group".to_string(),
         threshold: 2,
         taproot_merkle_root_hex: None,
+        signing_intent: None,
         attempt_context: absent_member,
     })
     .expect_err("a non-DKG-participant member must be rejected");
@@ -7546,6 +8645,7 @@ fn interactive_open_rejects_phantom_included_participant() {
         key_group: key_group.to_string(),
         threshold: 2,
         taproot_merkle_root_hex: None,
+        signing_intent: None,
         attempt_context,
     })
     .expect_err("a phantom included participant must be rejected");
@@ -8290,6 +9390,7 @@ fn interactive_session_open_is_idempotent_across_message_hex_casing() {
         key_group: key_group.to_string(),
         threshold: 2,
         taproot_merkle_root_hex: None,
+        signing_intent: None,
         attempt_context,
     })
     .expect("re-cased reopen of an identical attempt must be accepted");

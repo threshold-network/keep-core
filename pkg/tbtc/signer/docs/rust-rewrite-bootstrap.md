@@ -100,15 +100,20 @@ rewrite architecture.
   - added FFI coverage for enabled/disabled bootstrap finalize behavior and
     strict env-flag parsing.
 - Replaced placeholder `BuildTaprootTx` behavior with `rust-bitcoin` transaction
-  assembly for unsigned version-2 transactions:
-  - validates non-empty input/output sets and parses input txids/output scripts,
+  assembly for unsigned version-1 transactions:
+  - validates non-empty input/output sets and parses input txids, P2TR prevout
+    scripts, and output scripts,
   - validates `value_sats` accounting to reject overspend payloads
     (`output_total > input_total`),
   - validates input/output value-sum arithmetic for `u64` overflow safety,
   - validates per-input/per-output `value_sats` against Bitcoin max-money
     bounds and rejects duplicate input outpoints (`txid:vout`),
-  - returns serialized transaction hex built via `bitcoin::Transaction`,
+  - returns serialized transaction hex plus the ordered BIP-341 key-spend
+    `SIGHASH_DEFAULT` messages derived from the transaction and all prevouts,
   - adds session-keyed idempotency/conflict semantics for repeated build calls,
+  - binds interactive Open/Round2 to the Build artifact stored on the fresh
+    per-signing session while resolving DKG/lifecycle state from the unique
+    wallet session, and rechecks active non-rate policy before share release,
   - explicitly rejects `script_tree_hex` until full script-tree semantics are
     implemented (no silent ignore behavior).
 - Wired keep-core wallet orchestration to route unsigned transaction shape data

@@ -75,6 +75,59 @@ pub(crate) fn differential_case_count(case_count: u32) -> u32 {
     case_count.min(TBTC_SIGNER_DIFFERENTIAL_FUZZ_MAX_CASES)
 }
 
+// Independent BIP-341 SIGHASH_DEFAULT/key-spend construction for the
+// differential fuzzer. This deliberately does not call rust-bitcoin's sighash
+// module: the production path uses SighashCache, while this reference follows
+// the SigMsg field order directly and uses consensus serialization only for the
+// committed transaction primitives.
+fn reference_bip341_key_spend_sighash_default(
+    tx: &Transaction,
+    prevouts: &[TxOut],
+    input_index: usize,
+) -> Result<String, EngineError> {
+    if prevouts.len() != tx.input.len() || input_index >= tx.input.len() {
+        return Err(EngineError::Internal(
+            "invalid differential BIP-341 reference inputs".to_string(),
+        ));
+    }
+
+    let mut prevouts_hasher = Sha256::new();
+    let mut amounts_hasher = Sha256::new();
+    let mut script_pubkeys_hasher = Sha256::new();
+    let mut sequences_hasher = Sha256::new();
+    for (input, prevout) in tx.input.iter().zip(prevouts) {
+        prevouts_hasher.update(bitcoin::consensus::serialize(&input.previous_output));
+        amounts_hasher.update(prevout.value.to_sat().to_le_bytes());
+        script_pubkeys_hasher.update(bitcoin::consensus::serialize(&prevout.script_pubkey));
+        sequences_hasher.update(input.sequence.0.to_le_bytes());
+    }
+
+    let mut outputs_hasher = Sha256::new();
+    for output in &tx.output {
+        outputs_hasher.update(bitcoin::consensus::serialize(output));
+    }
+
+    let mut sig_msg = Vec::with_capacity(175);
+    sig_msg.push(0x00); // SIGHASH_DEFAULT.
+    sig_msg.extend_from_slice(&tx.version.0.to_le_bytes());
+    sig_msg.extend_from_slice(&tx.lock_time.to_consensus_u32().to_le_bytes());
+    sig_msg.extend_from_slice(&prevouts_hasher.finalize());
+    sig_msg.extend_from_slice(&amounts_hasher.finalize());
+    sig_msg.extend_from_slice(&script_pubkeys_hasher.finalize());
+    sig_msg.extend_from_slice(&sequences_hasher.finalize());
+    sig_msg.extend_from_slice(&outputs_hasher.finalize());
+    sig_msg.push(0x00); // ext_flag=0, annex_present=0.
+    sig_msg.extend_from_slice(&(input_index as u32).to_le_bytes());
+
+    let tag_hash = Sha256::digest(b"TapSighash");
+    let mut tagged_hasher = Sha256::new();
+    tagged_hasher.update(tag_hash);
+    tagged_hasher.update(tag_hash);
+    tagged_hasher.update([0x00]); // Epoch byte.
+    tagged_hasher.update(sig_msg);
+    Ok(hex::encode(tagged_hasher.finalize()))
+}
+
 pub fn run_differential_fuzzing(
     request: DifferentialFuzzRequest,
 ) -> Result<DifferentialFuzzResult, EngineError> {
@@ -163,8 +216,16 @@ pub fn run_differential_fuzzing(
         let mut witness_program = [0_u8; 32];
         rng.fill_bytes(&mut witness_program);
         script_pubkey.extend_from_slice(&witness_program);
+        let script_pubkey = ScriptBuf::from_bytes(script_pubkey);
+        let output_value_sats = (rng.next_u32() as u64 % 1_000_000) + 1;
+        let prevouts = vec![TxOut {
+            value: Amount::from_sat(output_value_sats.saturating_add(1_000)),
+            script_pubkey: script_pubkey.clone(),
+        }];
         let tx = Transaction {
-            version: Version::TWO,
+            // Match the production BuildTaprootTx shape. The reference leg below
+            // constructs BIP-341 SigMsg directly rather than calling SighashCache.
+            version: Version::ONE,
             lock_time: LockTime::ZERO,
             input: vec![TxIn {
                 previous_output: OutPoint {
@@ -176,21 +237,17 @@ pub fn run_differential_fuzzing(
                 witness: Witness::default(),
             }],
             output: vec![TxOut {
-                value: Amount::from_sat((rng.next_u32() as u64 % 1_000_000) + 1),
-                script_pubkey: ScriptBuf::from_bytes(script_pubkey),
+                value: Amount::from_sat(output_value_sats),
+                script_pubkey,
             }],
         };
-        let tx_hex = serialize_hex(&tx);
-        let primary_message_digest_hex = policy_bound_signing_message_hex(&tx_hex)?;
-        let tx_bytes = hex::decode(&tx_hex).map_err(|_| {
-            EngineError::Internal("failed to decode differential tx hex".to_string())
-        })?;
-        let tx_roundtrip: Transaction = deserialize(&tx_bytes).map_err(|error| {
-            EngineError::Internal(format!("failed to deserialize differential tx: {error}"))
-        })?;
+        let primary_message_digests_hex = policy_bound_signing_messages_hex(&tx, &prevouts)?;
+        let primary_message_digest_hex = primary_message_digests_hex
+            .first()
+            .ok_or_else(|| EngineError::Internal("missing differential sighash".to_string()))?;
         let reference_message_digest_hex =
-            hash_hex(&bitcoin::consensus::encode::serialize(&tx_roundtrip));
-        if primary_message_digest_hex != reference_message_digest_hex {
+            reference_bip341_key_spend_sighash_default(&tx, &prevouts, 0)?;
+        if primary_message_digest_hex != &reference_message_digest_hex {
             critical_divergence_count = critical_divergence_count.saturating_add(1);
             divergences.push(DifferentialDivergence {
                 case_index,

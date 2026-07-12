@@ -12,22 +12,23 @@ pub(crate) const BITCOIN_MAX_MONEY_SATS: u64 = 2_100_000_000_000_000;
 /// an authorized coordinator getting an unusual/unauthorized script signed. The
 /// numeric caps default to permissive bounds (operators tighten them per wallet
 /// sizing) -- a too-tight static cap would false-reject legitimate large
-/// redemptions/sweeps, and `enforce_signing_message_binding_to_policy_checked_build_tx`
-/// remains the primary control that the signed digest matches a policy-checked tx.
+/// redemptions/sweeps. Transaction signing remains bound to a policy-checked
+/// build artifact; the only non-transaction alternative is the narrow heartbeat
+/// intent validated independently at Open and Round2.
 pub(crate) const DEFAULT_ALLOWED_SCRIPT_CLASSES: &[&str] =
     &["p2pkh", "p2sh", "p2wpkh", "p2wsh", "p2tr"];
 pub(crate) const DEFAULT_MAX_OUTPUT_COUNT: usize = 10_000;
 
 pub(crate) static POLICY_GATE_WARNING_EMITTED: OnceLock<()> = OnceLock::new();
 
-pub(crate) static BUILD_TX_RATE_LIMITER: OnceLock<Mutex<BuildTxRateLimiterState>> = OnceLock::new();
+pub(crate) static BUILD_TX_RATE_LIMITER: OnceLock<Mutex<PolicyRateLimiterState>> = OnceLock::new();
 
 pub(crate) const BUILD_TX_RATE_LIMIT_TOKEN_SCALE: u128 = 1_000_000;
 
 pub(crate) const BUILD_TX_RATE_LIMIT_SECONDS_PER_MINUTE: u128 = 60;
 
 #[derive(Default)]
-pub(crate) struct BuildTxRateLimiterState {
+pub(crate) struct PolicyRateLimiterState {
     pub(crate) last_refill_unix: u64,
     pub(crate) token_microunits: u128,
     pub(crate) configured_rate_limit_per_minute: u64,
@@ -58,8 +59,8 @@ pub(crate) struct AutoQuarantineConfig {
     pub(crate) dao_allowlist_identifiers: HashSet<u16>,
 }
 
-pub(crate) fn build_tx_rate_limiter_state() -> &'static Mutex<BuildTxRateLimiterState> {
-    BUILD_TX_RATE_LIMITER.get_or_init(|| Mutex::new(BuildTxRateLimiterState::default()))
+pub(crate) fn build_tx_rate_limiter_state() -> &'static Mutex<PolicyRateLimiterState> {
+    BUILD_TX_RATE_LIMITER.get_or_init(|| Mutex::new(PolicyRateLimiterState::default()))
 }
 
 pub(crate) fn provenance_gate_enforced() -> bool {
@@ -354,6 +355,21 @@ pub(crate) fn load_signing_policy_firewall_config(
     }))
 }
 
+pub(crate) fn heartbeat_rate_limit_per_minute() -> Result<u64, EngineError> {
+    let rate_limit_per_minute = parse_u64_from_env_with_default(
+        TBTC_SIGNER_POLICY_HEARTBEAT_RATE_LIMIT_PER_MINUTE_ENV,
+        TBTC_SIGNER_DEFAULT_POLICY_HEARTBEAT_RATE_LIMIT_PER_MINUTE,
+    )?;
+    if rate_limit_per_minute == 0 {
+        return Err(EngineError::Internal(format!(
+            "env [{}] must be positive",
+            TBTC_SIGNER_POLICY_HEARTBEAT_RATE_LIMIT_PER_MINUTE_ENV
+        )));
+    }
+
+    Ok(rate_limit_per_minute)
+}
+
 pub(crate) fn auto_quarantine_enabled() -> bool {
     signer_env_var(TBTC_SIGNER_ENABLE_AUTO_QUARANTINE_ENV)
         .map(|raw_value| truthy_env_flag(&raw_value))
@@ -414,16 +430,23 @@ pub(crate) fn reject_lifecycle_policy<T>(
     })
 }
 
-pub(crate) fn reject_signing_policy(
+fn reject_signing_policy_with_metric(
     session_id: &str,
     reason_code: &str,
     detail: impl Into<String>,
+    heartbeat: bool,
 ) -> Result<(), EngineError> {
     let detail = detail.into();
     record_hardening_telemetry(|telemetry| {
-        telemetry.build_taproot_tx_policy_reject_total = telemetry
-            .build_taproot_tx_policy_reject_total
-            .saturating_add(1);
+        if heartbeat {
+            telemetry.heartbeat_signing_policy_reject_total = telemetry
+                .heartbeat_signing_policy_reject_total
+                .saturating_add(1);
+        } else {
+            telemetry.build_taproot_tx_policy_reject_total = telemetry
+                .build_taproot_tx_policy_reject_total
+                .saturating_add(1);
+        }
     });
     log_policy_decision("signing_policy_firewall", session_id, "reject", reason_code);
     Err(EngineError::SigningPolicyRejected {
@@ -431,6 +454,22 @@ pub(crate) fn reject_signing_policy(
         reason_code: reason_code.to_string(),
         detail,
     })
+}
+
+pub(crate) fn reject_signing_policy(
+    session_id: &str,
+    reason_code: &str,
+    detail: impl Into<String>,
+) -> Result<(), EngineError> {
+    reject_signing_policy_with_metric(session_id, reason_code, detail, false)
+}
+
+fn reject_heartbeat_signing_policy(
+    session_id: &str,
+    reason_code: &str,
+    detail: impl Into<String>,
+) -> Result<(), EngineError> {
+    reject_signing_policy_with_metric(session_id, reason_code, detail, true)
 }
 
 pub(crate) fn current_utc_hour() -> u8 {
@@ -448,14 +487,10 @@ pub(crate) fn utc_hour_in_window(hour: u8, start_hour: u8, end_hour: u8) -> bool
     hour >= start_hour || hour < end_hour
 }
 
-pub(crate) fn enforce_build_tx_rate_limit(
-    session_id: &str,
+fn consume_policy_rate_limit_token(
+    limiter: &mut PolicyRateLimiterState,
     rate_limit_per_minute: u64,
-) -> Result<(), EngineError> {
-    let mut limiter = build_tx_rate_limiter_state()
-        .lock()
-        .map_err(|_| EngineError::Internal("build tx rate limiter mutex poisoned".to_string()))?;
-
+) -> bool {
     let now = now_unix();
     let max_tokens =
         (rate_limit_per_minute as u128).saturating_mul(BUILD_TX_RATE_LIMIT_TOKEN_SCALE);
@@ -484,6 +519,24 @@ pub(crate) fn enforce_build_tx_rate_limit(
     }
 
     if limiter.token_microunits < BUILD_TX_RATE_LIMIT_TOKEN_SCALE {
+        return false;
+    }
+
+    limiter.token_microunits = limiter
+        .token_microunits
+        .saturating_sub(BUILD_TX_RATE_LIMIT_TOKEN_SCALE);
+    true
+}
+
+pub(crate) fn enforce_build_tx_rate_limit(
+    session_id: &str,
+    rate_limit_per_minute: u64,
+) -> Result<(), EngineError> {
+    let mut limiter = build_tx_rate_limiter_state()
+        .lock()
+        .map_err(|_| EngineError::Internal("build tx rate limiter mutex poisoned".to_string()))?;
+
+    if !consume_policy_rate_limit_token(&mut limiter, rate_limit_per_minute) {
         return reject_signing_policy(
             session_id,
             "rate_limit_per_minute_exceeded",
@@ -491,9 +544,35 @@ pub(crate) fn enforce_build_tx_rate_limit(
         );
     }
 
-    limiter.token_microunits = limiter
-        .token_microunits
-        .saturating_sub(BUILD_TX_RATE_LIMIT_TOKEN_SCALE);
+    Ok(())
+}
+
+pub(crate) fn enforce_heartbeat_rate_limit(
+    session_id: &str,
+    limiter: &mut PolicyRateLimiterState,
+) -> Result<(), EngineError> {
+    let rate_limit_per_minute = match heartbeat_rate_limit_per_minute() {
+        Ok(rate_limit_per_minute) => rate_limit_per_minute,
+        Err(error) => {
+            return reject_heartbeat_signing_policy(
+                session_id,
+                "invalid_policy_configuration",
+                error.to_string(),
+            )
+        }
+    };
+
+    if !consume_policy_rate_limit_token(limiter, rate_limit_per_minute) {
+        return reject_heartbeat_signing_policy(
+            session_id,
+            "heartbeat_rate_limit_per_minute_exceeded",
+            format!(
+                "heartbeat rate limit [{}] per minute exceeded",
+                rate_limit_per_minute
+            ),
+        );
+    }
+
     Ok(())
 }
 
@@ -619,18 +698,169 @@ pub(crate) fn recheck_signing_policy_firewall_without_rate_limit(
     enforce_signing_policy_firewall_inner(session_id, outputs, total_output_value_sats, false)
 }
 
-pub(crate) fn policy_bound_signing_message_hex(tx_hex: &str) -> Result<String, EngineError> {
-    let tx_bytes = hex::decode(tx_hex).map_err(|_| {
-        EngineError::Internal("policy-checked build tx hex is not valid hex".to_string())
-    })?;
-    Ok(hash_hex(&tx_bytes))
+pub(crate) fn policy_bound_signing_messages_hex(
+    tx: &Transaction,
+    prevouts: &[TxOut],
+) -> Result<Vec<String>, EngineError> {
+    if prevouts.len() != tx.input.len() {
+        return Err(EngineError::Internal(format!(
+            "BIP-341 prevout count [{}] does not match transaction input count [{}]",
+            prevouts.len(),
+            tx.input.len()
+        )));
+    }
+
+    let prevouts = Prevouts::All(prevouts);
+    let mut sighash_cache = SighashCache::new(tx);
+    (0..tx.input.len())
+        .map(|input_index| {
+            sighash_cache
+                .taproot_key_spend_signature_hash(
+                    input_index,
+                    &prevouts,
+                    TapSighashType::Default,
+                )
+                .map(|sighash| hex::encode(sighash.to_byte_array()))
+                .map_err(|error| {
+                    EngineError::Internal(format!(
+                        "failed to derive BIP-341 key-spend sighash for input [{input_index}]: {error}"
+                    ))
+                })
+        })
+        .collect()
+}
+
+fn invalid_policy_checked_build_tx_artifact(
+    session_id: &str,
+    detail: impl Into<String>,
+) -> EngineError {
+    let detail = detail.into();
+    record_hardening_telemetry(|telemetry| {
+        telemetry.build_taproot_tx_policy_reject_total = telemetry
+            .build_taproot_tx_policy_reject_total
+            .saturating_add(1);
+    });
+    log_policy_decision(
+        "signing_policy_firewall",
+        session_id,
+        "reject",
+        "invalid_policy_checked_build_tx_artifact",
+    );
+    EngineError::SigningPolicyRejected {
+        session_id: session_id.to_string(),
+        reason_code: "invalid_policy_checked_build_tx_artifact".to_string(),
+        detail,
+    }
+}
+
+fn enforce_heartbeat_signing_intent(
+    session_id: &str,
+    signing_message_hex: &str,
+    taproot_merkle_root: Option<&[u8; 32]>,
+    heartbeat_message_hex: &str,
+) -> Result<(), EngineError> {
+    if taproot_merkle_root.is_some() {
+        return reject_heartbeat_signing_policy(
+            session_id,
+            "invalid_heartbeat_signing_intent",
+            "heartbeat signing intent must not carry a Taproot merkle root",
+        );
+    }
+
+    let heartbeat_message = match hex::decode(heartbeat_message_hex) {
+        Ok(message) => message,
+        Err(_) => {
+            return reject_heartbeat_signing_policy(
+                session_id,
+                "invalid_heartbeat_signing_intent",
+                "heartbeat signing intent message_hex must be valid hex",
+            )
+        }
+    };
+    if heartbeat_message.len() != 16 {
+        return reject_heartbeat_signing_policy(
+            session_id,
+            "invalid_heartbeat_signing_intent",
+            format!(
+                "heartbeat signing intent must decode to exactly 16 bytes, got [{}]",
+                heartbeat_message.len()
+            ),
+        );
+    }
+    if heartbeat_message[..8] != [0xff; 8] {
+        return reject_heartbeat_signing_policy(
+            session_id,
+            "invalid_heartbeat_signing_intent",
+            "heartbeat signing intent must start with eight 0xff bytes",
+        );
+    }
+
+    let signing_message = match hex::decode(signing_message_hex) {
+        Ok(message) => message,
+        Err(_) => {
+            return reject_heartbeat_signing_policy(
+                session_id,
+                "invalid_heartbeat_signing_intent",
+                "heartbeat signing message must be valid hex",
+            )
+        }
+    };
+    if signing_message.len() != 32 {
+        return reject_heartbeat_signing_policy(
+            session_id,
+            "invalid_heartbeat_signing_intent",
+            format!(
+                "heartbeat signing message must be exactly 32 bytes, got [{}]",
+                signing_message.len()
+            ),
+        );
+    }
+
+    // Match Bitcoin's Hash256 convention used by the Go host and the on-chain
+    // heartbeat contract: SHA256(SHA256(raw 16-byte heartbeat message)). Rust
+    // derives this independently from the narrow preimage instead of trusting a
+    // caller-supplied digest allowlist.
+    let first_digest = Sha256::digest(&heartbeat_message);
+    let heartbeat_digest = Sha256::digest(first_digest);
+    if signing_message.as_slice() != heartbeat_digest.as_slice() {
+        return reject_heartbeat_signing_policy(
+            session_id,
+            "heartbeat_signing_message_mismatch",
+            "signing message does not equal Hash256 of the authorized heartbeat message",
+        );
+    }
+
+    Ok(())
 }
 
 pub(crate) fn enforce_signing_message_binding_to_policy_checked_build_tx(
     session_id: &str,
     signing_message_hex: &str,
+    taproot_merkle_root: Option<&[u8; 32]>,
     tx_result: Option<&TransactionResult>,
+    signing_intent: Option<&InteractiveSigningIntent>,
 ) -> Result<(), EngineError> {
+    if let Some(signing_intent) = signing_intent {
+        if tx_result.is_some() {
+            return reject_heartbeat_signing_policy(
+                session_id,
+                "ambiguous_signing_policy_artifact",
+                "a signing session cannot carry both a transaction artifact and a non-transaction signing intent",
+            );
+        }
+
+        return match signing_intent {
+            InteractiveSigningIntent::Heartbeat { message_hex } => {
+                enforce_heartbeat_signing_intent(
+                    session_id,
+                    signing_message_hex,
+                    taproot_merkle_root,
+                    message_hex,
+                )
+            }
+        };
+    }
+
     if !signing_policy_firewall_enforced() {
         return Ok(());
     }
@@ -646,20 +876,100 @@ pub(crate) fn enforce_signing_message_binding_to_policy_checked_build_tx(
         }
     };
 
-    let expected_signing_message_hex = policy_bound_signing_message_hex(&tx_result.tx_hex)
-        .map_err(|error| EngineError::SigningPolicyRejected {
-            session_id: session_id.to_string(),
-            reason_code: "invalid_policy_checked_build_tx_artifact".to_string(),
-            detail: error.to_string(),
+    if tx_result.session_id != session_id {
+        return Err(invalid_policy_checked_build_tx_artifact(
+            session_id,
+            format!(
+                "policy-checked build tx belongs to session [{}], not signing session [{}]",
+                tx_result.session_id, session_id
+            ),
+        ));
+    }
+
+    let tx_bytes = hex::decode(&tx_result.tx_hex).map_err(|_| {
+        invalid_policy_checked_build_tx_artifact(
+            session_id,
+            "policy-checked build tx hex is not valid hex",
+        )
+    })?;
+    let tx: Transaction = deserialize(&tx_bytes).map_err(|error| {
+        invalid_policy_checked_build_tx_artifact(
+            session_id,
+            format!("policy-checked build tx is not a valid transaction: {error}"),
+        )
+    })?;
+
+    if tx_result.taproot_key_spend_sighashes_hex.len() != tx.input.len()
+        || tx_result.taproot_key_spend_sighashes_hex.is_empty()
+    {
+        return Err(invalid_policy_checked_build_tx_artifact(
+            session_id,
+            format!(
+                "policy-checked BIP-341 sighash count [{}] does not match transaction input count [{}]",
+                tx_result.taproot_key_spend_sighashes_hex.len(),
+                tx.input.len()
+            ),
+        ));
+    }
+    for sighash_hex in &tx_result.taproot_key_spend_sighashes_hex {
+        let sighash_bytes = hex::decode(sighash_hex).map_err(|_| {
+            invalid_policy_checked_build_tx_artifact(
+                session_id,
+                "policy-checked BIP-341 sighash is not valid hex",
+            )
         })?;
+        if sighash_bytes.len() != 32 {
+            return Err(invalid_policy_checked_build_tx_artifact(
+                session_id,
+                format!(
+                    "policy-checked BIP-341 sighash length [{}] is not 32 bytes",
+                    sighash_bytes.len()
+                ),
+            ));
+        }
+    }
+
+    // The ordered sighashes are trusted because the complete persisted state is
+    // authenticated by the encrypted AEAD envelope. Prevouts are intentionally not
+    // duplicated in SessionState, so Open/Round2 shape-check this sealed list rather
+    // than re-deriving it. A forged plaintext artifact is rejected at state load.
+    // Re-run every current non-rate policy gate at Open and again at Round2 so a
+    // restart with stricter script/value/time policy cannot authorize stale state.
+    let total_output_value_sats = tx.output.iter().try_fold(0u64, |total, output| {
+        total.checked_add(output.value.to_sat()).ok_or_else(|| {
+            invalid_policy_checked_build_tx_artifact(
+                session_id,
+                "policy-checked build tx output total overflowed u64 bounds",
+            )
+        })
+    })?;
+    if total_output_value_sats > BITCOIN_MAX_MONEY_SATS {
+        return Err(invalid_policy_checked_build_tx_artifact(
+            session_id,
+            format!(
+                "policy-checked build tx output total [{}] exceeds Bitcoin max money [{}]",
+                total_output_value_sats, BITCOIN_MAX_MONEY_SATS
+            ),
+        ));
+    }
+    recheck_signing_policy_firewall_without_rate_limit(
+        session_id,
+        &tx.output,
+        total_output_value_sats,
+    )?;
+
     let signing_message_hex = signing_message_hex.trim().to_ascii_lowercase();
-    if signing_message_hex != expected_signing_message_hex {
+    if !tx_result
+        .taproot_key_spend_sighashes_hex
+        .iter()
+        .any(|expected| expected.eq_ignore_ascii_case(&signing_message_hex))
+    {
         return reject_signing_policy(
             session_id,
             "signing_message_not_bound_to_policy_checked_build_tx",
             format!(
-                "signing message [{}] does not match policy-checked build tx digest [{}]",
-                signing_message_hex, expected_signing_message_hex
+                "signing message [{}] is not an authorized BIP-341 key-spend sighash for the policy-checked transaction",
+                signing_message_hex
             ),
         );
     }

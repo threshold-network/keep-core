@@ -175,6 +175,7 @@ fn reinit_result(
 fn validate_candidate_config() -> Result<(), EngineError> {
     load_admission_policy_config()?;
     load_signing_policy_firewall_config()?;
+    heartbeat_rate_limit_per_minute()?;
     load_auto_quarantine_config()?;
     // Production (explicit or by profile-omission default) requires an
     // explicit state path; surfacing this at init beats failing the first
@@ -319,6 +320,11 @@ pub(crate) fn config_values_from_request(
         &mut values,
         TBTC_SIGNER_POLICY_RATE_LIMIT_PER_MINUTE_ENV,
         request.policy_rate_limit_per_minute,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_POLICY_HEARTBEAT_RATE_LIMIT_PER_MINUTE_ENV,
+        request.policy_heartbeat_rate_limit_per_minute,
     );
     insert_u64(
         &mut values,

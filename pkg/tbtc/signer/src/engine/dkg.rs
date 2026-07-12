@@ -176,6 +176,38 @@ pub fn persist_distributed_dkg_key_package(
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
     ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
 
+    // A group verifying key identifies one wallet. Keeping the same key_group in
+    // two sessions would make wallet lookup depend on randomized HashMap order and
+    // could split local seats or wallet-level kill switches across the copies.
+    // Reject the second owner before mutating either session; same-session
+    // multi-seat accumulation remains valid below.
+    if guard.sessions.iter().any(|(session_id, session)| {
+        session_id != &request.session_id
+            && session
+                .dkg_result
+                .as_ref()
+                .is_some_and(|dkg| dkg.key_group == key_group)
+    }) {
+        return Err(EngineError::SessionConflict {
+            session_id: request.session_id,
+        });
+    }
+
+    // A session first created by Interactive Open is a per-signing flow, not a
+    // wallet owner. Installing unrelated DKG material into that namespace would
+    // make dkg_result take precedence over bound_key_group during Round2 and
+    // could route share release around the original wallet's lifecycle gates.
+    // Keep the two roles disjoint for the full lifetime of the session.
+    if guard
+        .sessions
+        .get(&request.session_id)
+        .is_some_and(|session| session.dkg_result.is_none() && session.bound_key_group.is_some())
+    {
+        return Err(EngineError::SessionConflict {
+            session_id: request.session_id,
+        });
+    }
+
     let session = guard
         .sessions
         .entry(request.session_id.clone())
