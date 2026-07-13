@@ -759,7 +759,20 @@ fn evaluate_admission(
 
     let required_attestation_status = trimmed_lowercase(&policy.required_attestation_status);
     let candidate_attestation_status = trimmed_lowercase(&candidate.attestation_status);
-    if candidate_attestation_status != required_attestation_status {
+    if required_attestation_status.is_empty() {
+        reasons.push(AdmissionReason {
+            code: "required_attestation_status_missing".to_string(),
+            detail: "policy required_attestation_status must be non-empty".to_string(),
+        });
+    }
+    if candidate_attestation_status.is_empty() {
+        reasons.push(AdmissionReason {
+            code: "attestation_status_missing".to_string(),
+            detail: "candidate attestation_status must be non-empty".to_string(),
+        });
+    } else if !required_attestation_status.is_empty()
+        && candidate_attestation_status != required_attestation_status
+    {
         reasons.push(AdmissionReason {
             code: "attestation_status_not_approved".to_string(),
             detail: format!(
@@ -1062,6 +1075,74 @@ mod tests {
             .reasons
             .iter()
             .any(|reason| reason.code == "attestation_status_not_approved"));
+    }
+
+    #[test]
+    fn evaluate_admission_rejects_empty_required_and_candidate_attestation_statuses() {
+        let mut policy = baseline_policy();
+        policy.required_attestation_status = "  \t".to_string();
+        let mut candidate = baseline_candidate();
+        candidate.attestation_status = " \n ".to_string();
+
+        let decision = evaluate_admission(&policy, &candidate, &baseline_existing(), 1_700_000_000);
+        assert_eq!(decision.decision, "reject");
+        assert!(decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "required_attestation_status_missing"));
+        assert!(decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "attestation_status_missing"));
+    }
+
+    #[test]
+    fn evaluate_admission_reports_empty_attestation_fields_before_mismatch() {
+        let mut empty_candidate = baseline_candidate();
+        empty_candidate.attestation_status = "   ".to_string();
+        let candidate_decision = evaluate_admission(
+            &baseline_policy(),
+            &empty_candidate,
+            &baseline_existing(),
+            1_700_000_000,
+        );
+        assert!(candidate_decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "attestation_status_missing"));
+        assert!(!candidate_decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "attestation_status_not_approved"));
+
+        let mut empty_policy = baseline_policy();
+        empty_policy.required_attestation_status = "\t".to_string();
+        let policy_decision = evaluate_admission(
+            &empty_policy,
+            &baseline_candidate(),
+            &baseline_existing(),
+            1_700_000_000,
+        );
+        assert!(policy_decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "required_attestation_status_missing"));
+        assert!(!policy_decision
+            .reasons
+            .iter()
+            .any(|reason| reason.code == "attestation_status_not_approved"));
+    }
+
+    #[test]
+    fn evaluate_admission_normalizes_non_empty_attestation_statuses() {
+        let mut policy = baseline_policy();
+        policy.required_attestation_status = " Approved ".to_string();
+        let mut candidate = baseline_candidate();
+        candidate.attestation_status = "APPROVED".to_string();
+
+        let decision = evaluate_admission(&policy, &candidate, &baseline_existing(), 1_700_000_000);
+        assert_eq!(decision.decision, "allow");
+        assert!(decision.reasons.is_empty());
     }
 
     #[test]
