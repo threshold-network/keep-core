@@ -159,13 +159,15 @@ type broadcastChannelRunnerBus struct {
 
 	mu          sync.Mutex
 	subscribers []*RunnerBusSubscriber
+	startOnce   sync.Once
 }
 
 // NewBroadcastChannelRunnerBus returns a RunnerBus over the given wallet signing
-// broadcast channel. It registers the runner message unmarshalers and installs
-// a receive handler for the lifetime of ctx; cancel ctx (e.g. at session end)
-// to stop receiving. The channel and membershipValidator are the ones the
-// existing signing.Request already carries; this adapter does not create them.
+// broadcast channel. It registers the runner message unmarshalers; the first
+// Subscribe installs the receive handler for the lifetime of ctx, after that
+// subscriber has been registered. Cancel ctx (e.g. at session end) to stop
+// receiving. The channel and membershipValidator are the ones the existing
+// signing.Request already carries; this adapter does not create them.
 func NewBroadcastChannelRunnerBus(
 	ctx context.Context,
 	logger log.StandardLogger,
@@ -195,14 +197,17 @@ func NewBroadcastChannelRunnerBus(
 	}
 
 	registerRunnerTransportUnmarshalers(channel)
-	channel.Recv(ctx, b.handleMessage)
 
 	return b, nil
 }
 
 // Subscribe registers a receiver and returns its typed streams. Subscribing
 // before any Broadcast is the caller's responsibility (the runner subscribes in
-// its constructor).
+// its constructor). The first subscription starts inbound delivery only AFTER
+// the subscriber is visible to handleMessage. Starting Recv in the bus
+// constructor would leave a window where a message is handled with zero
+// subscribers and dropped; pkg/net would then suppress its retransmissions as
+// already seen, permanently losing it for this signing attempt.
 func (b *broadcastChannelRunnerBus) Subscribe() *RunnerBusSubscriber {
 	s := &RunnerBusSubscriber{
 		commitments:       make(chan RunnerMessage, b.streamBuffer),
@@ -216,6 +221,10 @@ func (b *broadcastChannelRunnerBus) Subscribe() *RunnerBusSubscriber {
 	b.mu.Lock()
 	b.subscribers = append(b.subscribers, s)
 	b.mu.Unlock()
+
+	b.startOnce.Do(func() {
+		b.channel.Recv(b.ctx, b.handleMessage)
+	})
 
 	return s
 }

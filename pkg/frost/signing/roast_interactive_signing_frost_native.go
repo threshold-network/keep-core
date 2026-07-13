@@ -48,6 +48,18 @@ func registeredInteractiveSigningEngine() interactiveSigningEngine {
 	return provider()
 }
 
+// InteractiveSigningReady reports whether this process has every pre-wallet
+// prerequisite needed to sign material produced by distributed DKG: both
+// operator opt-ins, the ROAST transition producer, and an interactive engine.
+// It intentionally does not require a wallet-scoped coordinator registration;
+// that registration can happen only after DKG has persisted the wallet's key
+// group and is enforced by the signing path when the wallet is used.
+func InteractiveSigningReady() bool {
+	return InteractiveSigningOptInEnabled() &&
+		RoastRetryInfrastructureReady() &&
+		registeredInteractiveSigningEngine() != nil
+}
+
 // ResetInteractiveSigningEngineProviderForTest clears the registered provider.
 // Tests defer it so a registration does not leak into other tests.
 func ResetInteractiveSigningEngineProviderForTest() {

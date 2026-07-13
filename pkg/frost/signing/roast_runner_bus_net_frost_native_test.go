@@ -25,6 +25,37 @@ type fakeNetMessage struct {
 	payload         interface{}
 }
 
+// immediateRecvBroadcastChannel invokes its receive handler synchronously from
+// Recv. It models the worst-case ordering for the production adapter: an
+// already-arrived peer message is ready at the exact instant receiving starts.
+// If Recv starts before Subscribe registers its stream, that message is lost.
+type immediateRecvBroadcastChannel struct {
+	message   net.Message
+	recvCalls int
+}
+
+func (c *immediateRecvBroadcastChannel) Name() string { return "runner-bus-test" }
+func (c *immediateRecvBroadcastChannel) Send(
+	context.Context,
+	net.TaggedMarshaler,
+	...net.RetransmissionStrategy,
+) error {
+	return nil
+}
+func (c *immediateRecvBroadcastChannel) Recv(
+	_ context.Context,
+	handler func(net.Message),
+) {
+	c.recvCalls++
+	if c.message != nil {
+		handler(c.message)
+	}
+}
+func (c *immediateRecvBroadcastChannel) SetUnmarshaler(func() net.TaggedUnmarshaler) {}
+func (c *immediateRecvBroadcastChannel) SetFilter(net.BroadcastChannelFilter) error {
+	return nil
+}
+
 func (m fakeNetMessage) TransportSenderID() net.TransportIdentifier { return nil }
 func (m fakeNetMessage) SenderPublicKey() []byte                    { return m.senderPublicKey }
 func (m fakeNetMessage) Payload() interface{}                       { return m.payload }
@@ -42,6 +73,7 @@ func (m fakeNetMessage) Type() string {
 // authenticated public-key bytes and an outsider's key (not in the group).
 type runnerBusAuthFixture struct {
 	bus        *broadcastChannelRunnerBus
+	validator  *group.MembershipValidator
 	operatorA  []byte // seats 1 and 3
 	operatorB  []byte // seat 2
 	outsider   []byte // not selected
@@ -71,17 +103,61 @@ func newRunnerBusAuthFixture(t *testing.T, streamSize int) runnerBusAuthFixture 
 	)
 
 	bus := &broadcastChannelRunnerBus{
+		ctx:                 context.Background(),
 		logger:              &testutils.MockLogger{},
+		channel:             &immediateRecvBroadcastChannel{},
 		membershipValidator: validator,
 		streamBuffer:        streamSize,
 		seenBound:           defaultRunnerBusSeenBound,
 	}
 	return runnerBusAuthFixture{
 		bus:        bus,
+		validator:  validator,
 		operatorA:  operatorA,
 		operatorB:  operatorB,
 		outsider:   outsider,
 		streamSize: streamSize,
+	}
+}
+
+func TestBroadcastChannelRunnerBus_StartsReceivingAfterSubscribe(t *testing.T) {
+	f := newRunnerBusAuthFixture(t, 8)
+	channel := &immediateRecvBroadcastChannel{
+		message: shareMessage(1, f.operatorA, "already-arrived-share"),
+	}
+
+	bus, err := NewBroadcastChannelRunnerBus(
+		context.Background(),
+		&testutils.MockLogger{},
+		channel,
+		f.validator,
+	)
+	if err != nil {
+		t.Fatalf("new runner bus: %v", err)
+	}
+	if channel.recvCalls != 0 {
+		t.Fatalf("constructor started receiving before a subscriber existed")
+	}
+
+	// Recv synchronously delivers channel.message. Subscribe must register the
+	// stream before it starts Recv or this message would be dropped forever.
+	sub := bus.Subscribe()
+	if channel.recvCalls != 1 {
+		t.Fatalf("expected Subscribe to start receiving once, got [%d] calls", channel.recvCalls)
+	}
+	select {
+	case msg := <-sub.Shares():
+		if string(msg.Payload) != "already-arrived-share" {
+			t.Fatalf("unexpected payload: [%q]", msg.Payload)
+		}
+	default:
+		t.Fatal("message delivered as Recv started was lost before subscription")
+	}
+
+	// Additional subscribers must not install duplicate handlers.
+	bus.Subscribe()
+	if channel.recvCalls != 1 {
+		t.Fatalf("expected receiving to start once, got [%d] calls", channel.recvCalls)
 	}
 }
 

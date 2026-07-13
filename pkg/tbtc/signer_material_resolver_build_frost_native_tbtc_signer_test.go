@@ -3,30 +3,18 @@
 package tbtc
 
 import (
-	"strings"
+	"bytes"
 	"testing"
 
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
+	"github.com/keep-network/keep-core/pkg/tbtc/gen/pb"
+	"github.com/keep-network/keep-core/pkg/tecdsa"
+	"google.golang.org/protobuf/proto"
 )
 
-// TestRegisterSignerMaterialResolverForBuild_DefaultProviderRefusesScaffoldWithoutOptIn
-// asserts the cgo frost_tbtc_signer resolver REFUSES to surface scaffold-era
-// signer material unless the operator opts in via AcceptScaffoldKeyGroupEnvVar.
-//
-// This is cgo-only behaviour: only the frost_tbtc_signer (cgo) resolver carries
-// the resolver-level refusal guard. The non-cgo frost_native resolver
-// intentionally PERMITS scaffold resolution -- it is the transitional build, and
-// the deeper native_ffi_primitive guard refuses scaffold material at signing
-// time instead. The migration tests in signer_material_encoding_frost_native_test.go
-// (tagged for the non-cgo build) assert that permissive behaviour. This test
-// therefore lives behind the cgo tag so it exercises the resolver whose contract
-// it describes; previously it was tagged plain frost_native and failed under any
-// non-cgo frost_native build.
-func TestRegisterSignerMaterialResolverForBuild_DefaultProviderRefusesScaffoldWithoutOptIn(
+func TestRegisterSignerMaterialResolverForBuild_DefaultProviderPreservesLegacyShare(
 	t *testing.T,
 ) {
-	// Force the env var to "" so a stray external value cannot suppress the
-	// scaffold refusal during this regression test.
 	t.Setenv(frostsigning.AcceptScaffoldKeyGroupEnvVar, "")
 
 	UnregisterSignerMaterialResolver()
@@ -40,25 +28,102 @@ func TestRegisterSignerMaterialResolverForBuild_DefaultProviderRefusesScaffoldWi
 	}
 
 	privateKeyShare := createMockSigner(t).privateKeyShare
-	_, err = resolveSignerMaterial(privateKeyShare)
-	if err == nil {
-		t.Fatal(
-			"expected scaffold-refusal error from default resolver without opt-in",
+	resolvedSignerMaterial, err := resolveSignerMaterial(privateKeyShare)
+	if err != nil {
+		t.Fatalf("unexpected resolver error: [%v]", err)
+	}
+
+	resolvedPrivateKeyShare, ok := resolvedSignerMaterial.(*tecdsa.PrivateKeyShare)
+	if !ok {
+		t.Fatalf(
+			"unexpected resolved signer material type\nexpected: [%T]\nactual:   [%T]",
+			&tecdsa.PrivateKeyShare{},
+			resolvedSignerMaterial,
 		)
 	}
 
-	if !strings.Contains(err.Error(), frostsigning.AcceptScaffoldKeyGroupEnvVar) {
+	if resolvedPrivateKeyShare != privateKeyShare {
 		t.Fatalf(
-			"expected scaffold-refusal error to reference %s; got: [%v]",
-			frostsigning.AcceptScaffoldKeyGroupEnvVar,
-			err,
+			"unexpected resolved private key share\nexpected: [%v]\nactual:   [%v]",
+			privateKeyShare,
+			resolvedPrivateKeyShare,
 		)
 	}
-	if !strings.Contains(err.Error(), frostsigning.NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey) {
+}
+
+func TestSignerMarshalling_LegacyRoundtripStaysOnLegacyBridgeInTBTCSignerBuild(
+	t *testing.T,
+) {
+	t.Setenv(frostsigning.AcceptScaffoldKeyGroupEnvVar, "")
+
+	UnregisterSignerMaterialResolver()
+	UnregisterSignerMaterialResolverProviderForBuild()
+	t.Cleanup(UnregisterSignerMaterialResolver)
+	t.Cleanup(UnregisterSignerMaterialResolverProviderForBuild)
+
+	if err := RegisterSignerMaterialResolverForBuild(); err != nil {
+		t.Fatalf("unexpected build resolver registration error: [%v]", err)
+	}
+
+	legacySigner := createMockSigner(t)
+	legacySigner.signerMaterial = legacySigner.privateKeyShare
+
+	legacyPrivateKeyShareBytes, err := legacySigner.privateKeyShare.Marshal()
+	if err != nil {
+		t.Fatalf("unexpected private key share marshal error: [%v]", err)
+	}
+
+	encodedSigner, err := legacySigner.Marshal()
+	if err != nil {
+		t.Fatalf("unexpected signer marshal error: [%v]", err)
+	}
+
+	unmarshaledSigner := &signer{}
+	if err := unmarshaledSigner.Unmarshal(encodedSigner); err != nil {
+		t.Fatalf("unexpected signer unmarshal error: [%v]", err)
+	}
+
+	resolvedPrivateKeyShare, ok := unmarshaledSigner.signerMaterial.(*tecdsa.PrivateKeyShare)
+	if !ok {
 		t.Fatalf(
-			"expected scaffold-refusal error to reference %s; got: [%v]",
-			frostsigning.NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey,
-			err,
+			"unexpected signer material type after legacy unmarshal\nexpected: [%T]\nactual:   [%T]",
+			&tecdsa.PrivateKeyShare{},
+			unmarshaledSigner.signerMaterial,
+		)
+	}
+
+	resolvedPrivateKeyShareBytes, err := resolvedPrivateKeyShare.Marshal()
+	if err != nil {
+		t.Fatalf("unexpected resolved private key share marshal error: [%v]", err)
+	}
+
+	if !bytes.Equal(legacyPrivateKeyShareBytes, resolvedPrivateKeyShareBytes) {
+		t.Fatalf(
+			"unexpected resolved private key share\nexpected: [%x]\nactual:   [%x]",
+			legacyPrivateKeyShareBytes,
+			resolvedPrivateKeyShareBytes,
+		)
+	}
+
+	roundtripEncodedSigner, err := unmarshaledSigner.Marshal()
+	if err != nil {
+		t.Fatalf("unexpected roundtrip signer marshal error: [%v]", err)
+	}
+
+	roundtripPBSigner := &pb.Signer{}
+	if err := proto.Unmarshal(roundtripEncodedSigner, roundtripPBSigner); err != nil {
+		t.Fatalf("unexpected roundtrip proto unmarshal error: [%v]", err)
+	}
+
+	if bytes.HasPrefix(roundtripPBSigner.PrivateKeyShare, signerMaterialEnvelopePrefix) {
+		t.Fatal("expected legacy signer material to remain outside the native envelope")
+	}
+
+	if !bytes.Equal(legacyPrivateKeyShareBytes, roundtripPBSigner.PrivateKeyShare) {
+		t.Fatalf(
+			"unexpected roundtrip private key share\nexpected: [%x]\nactual:   [%x]",
+			legacyPrivateKeyShareBytes,
+			roundtripPBSigner.PrivateKeyShare,
 		)
 	}
 }
