@@ -113,6 +113,7 @@ func init() {
 					URL:                 server,
 					RequestTimeout:      requestTimeout,
 					RequestRetryTimeout: requestRetryTimeout,
+					Network:             network,
 				},
 				network: network,
 			}
@@ -155,6 +156,23 @@ func init() {
 	)
 	if err != nil {
 		panic(err)
+	}
+}
+
+func TestConfigsCarryNetwork_Integration(t *testing.T) {
+	for name, testConfig := range testConfigs {
+		t.Run(name, func(t *testing.T) {
+			if testConfig.network == bitcoin.Unknown {
+				t.Fatal("test network must be explicit")
+			}
+			if testConfig.clientConfig.Network != testConfig.network {
+				t.Fatalf(
+					"unexpected client network [%v]; expected [%v]",
+					testConfig.clientConfig.Network,
+					testConfig.network,
+				)
+			}
+		})
 	}
 }
 
