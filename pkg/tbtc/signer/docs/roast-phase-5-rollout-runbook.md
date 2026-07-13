@@ -22,8 +22,9 @@ This runbook is paired with:
 Before Stage 1 canary:
 
 1. Security/correctness gate checks are green.
-2. Benchmark suite is current:
-   - `cd pkg/tbtc/signer && cargo bench --features bench-restart-hook --bench phase5_roast`
+2. Fresh interactive latency-window evidence is available for the stage being
+   promoted, including the required sample counts and p95 values. The retired
+   coarse-path `phase5_roast` benchmark is not a rollout gate.
 3. Chaos/failure suite is green:
    - `cd pkg/tbtc/signer && ./scripts/run_phase5_chaos_suite.sh`
 4. Pre-ROAST baseline window captured for:
