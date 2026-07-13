@@ -9,6 +9,7 @@ import {
   walletRegistryFixture,
   initializeWalletOwner,
   updateWalletRegistryParams,
+  setupAllowlist,
 } from "./fixtures"
 
 import type { IWalletOwner } from "../typechain/IWalletOwner"
@@ -109,27 +110,14 @@ describe("WalletRegistry - Custom Errors", () => {
 
     await updateWalletRegistryParams(walletRegistryGovernance, governance)
 
-    await t.connect(deployer).mint(owner.address, stakedAmount)
-    await t.connect(owner).approve(staking.address, stakedAmount)
-    await staking
-      .connect(owner)
-      .stake(
-        stakingProvider.address,
-        beneficiary.address,
-        authorizer.address,
-        stakedAmount
-      )
+    const allowlist = await setupAllowlist(walletRegistry, deployer)
+    await allowlist
+      .connect(deployer)
+      .addStakingProvider(stakingProvider.address, stakedAmount)
 
     minimumAuthorization = await walletRegistry.minimumAuthorization()
 
     // Authorize and register operator
-    await staking
-      .connect(authorizer)
-      .increaseAuthorization(
-        stakingProvider.address,
-        walletRegistry.address,
-        minimumAuthorization
-      )
     await walletRegistry
       .connect(stakingProvider)
       .registerOperator(operator.address)

@@ -239,6 +239,15 @@ var cmdFlagsTests = map[string]struct {
 		expectedValueFromFlag: true,
 		defaultValue:          false,
 	},
+	"maintainer.bitcoinDifficulty.idleOnPreflightFailure": {
+		readValueFunc: func(c *config.Config) interface{} {
+			return c.Maintainer.BitcoinDifficulty.IdleOnPreflightFailure
+		},
+		flagName:              "--bitcoinDifficulty.idleOnPreflightFailure",
+		flagValue:             "",
+		expectedValueFromFlag: true,
+		defaultValue:          false,
+	},
 	"maintainer.spv": {
 		readValueFunc:         func(c *config.Config) interface{} { return c.Maintainer.Spv.Enabled },
 		flagName:              "--spv",

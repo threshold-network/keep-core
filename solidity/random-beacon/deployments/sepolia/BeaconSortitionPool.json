@@ -1,0 +1,1188 @@
+{
+  "address": "0x2c4153Fd90957D0440F9a0681c437341099A1530",
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "contract IERC20WithPermit",
+          "name": "_rewardToken",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "_poolWeightDivisor",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "address[]",
+          "name": "operators",
+          "type": "address[]"
+        }
+      ],
+      "name": "BetaOperatorsAdded",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [],
+      "name": "ChaosnetDeactivated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "oldChaosnetOwner",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "newChaosnetOwner",
+          "type": "address"
+        }
+      ],
+      "name": "ChaosnetOwnerRoleTransferred",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "uint32[]",
+          "name": "ids",
+          "type": "uint32[]"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "until",
+          "type": "uint256"
+        }
+      ],
+      "name": "IneligibleForRewards",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "previousOwner",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "newOwner",
+          "type": "address"
+        }
+      ],
+      "name": "OwnershipTransferred",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "uint32",
+          "name": "id",
+          "type": "uint32"
+        }
+      ],
+      "name": "RewardEligibilityRestored",
+      "type": "event"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address[]",
+          "name": "operators",
+          "type": "address[]"
+        }
+      ],
+      "name": "addBetaOperators",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        }
+      ],
+      "name": "canRestoreRewardEligibility",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "chaosnetOwner",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "deactivateChaosnet",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        }
+      ],
+      "name": "getAvailableRewards",
+      "outputs": [
+        {
+          "internalType": "uint96",
+          "name": "",
+          "type": "uint96"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "id",
+          "type": "uint32"
+        }
+      ],
+      "name": "getIDOperator",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32[]",
+          "name": "ids",
+          "type": "uint32[]"
+        }
+      ],
+      "name": "getIDOperators",
+      "outputs": [
+        {
+          "internalType": "address[]",
+          "name": "",
+          "type": "address[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        }
+      ],
+      "name": "getOperatorID",
+      "outputs": [
+        {
+          "internalType": "uint32",
+          "name": "",
+          "type": "uint32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        }
+      ],
+      "name": "getPoolWeight",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "ineligibleEarnedRewards",
+      "outputs": [
+        {
+          "internalType": "uint96",
+          "name": "",
+          "type": "uint96"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "authorizedStake",
+          "type": "uint256"
+        }
+      ],
+      "name": "insertOperator",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "isBetaOperator",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "isChaosnetActive",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        }
+      ],
+      "name": "isEligibleForRewards",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "isLocked",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        }
+      ],
+      "name": "isOperatorInPool",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        }
+      ],
+      "name": "isOperatorRegistered",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "authorizedStake",
+          "type": "uint256"
+        }
+      ],
+      "name": "isOperatorUpToDate",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "lock",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "operatorsInPool",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "owner",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "poolWeightDivisor",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "sender",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "amount",
+          "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "token",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes",
+          "name": "",
+          "type": "bytes"
+        }
+      ],
+      "name": "receiveApproval",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "renounceOwnership",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        }
+      ],
+      "name": "restoreRewardEligibility",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "rewardToken",
+      "outputs": [
+        {
+          "internalType": "contract IERC20WithPermit",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        }
+      ],
+      "name": "rewardsEligibilityRestorableAt",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "groupSize",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "seed",
+          "type": "bytes32"
+        }
+      ],
+      "name": "selectGroup",
+      "outputs": [
+        {
+          "internalType": "uint32[]",
+          "name": "",
+          "type": "uint32[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32[]",
+          "name": "operators",
+          "type": "uint32[]"
+        },
+        {
+          "internalType": "uint256",
+          "name": "until",
+          "type": "uint256"
+        }
+      ],
+      "name": "setRewardIneligibility",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "totalWeight",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "newChaosnetOwner",
+          "type": "address"
+        }
+      ],
+      "name": "transferChaosnetOwnerRole",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "newOwner",
+          "type": "address"
+        }
+      ],
+      "name": "transferOwnership",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "unlock",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "authorizedStake",
+          "type": "uint256"
+        }
+      ],
+      "name": "updateOperatorStatus",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "recipient",
+          "type": "address"
+        }
+      ],
+      "name": "withdrawIneligible",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "operator",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "beneficiary",
+          "type": "address"
+        }
+      ],
+      "name": "withdrawRewards",
+      "outputs": [
+        {
+          "internalType": "uint96",
+          "name": "",
+          "type": "uint96"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ],
+  "transactionHash": "0x067c84e74d6c338f3dee16457c508b5d6c5af56eccea0a10ac6abb0bbca22ad4",
+  "receipt": {
+    "to": null,
+    "from": "0xb9B8a92677fcad86dc8d36fe947184283B03b3C8",
+    "contractAddress": "0x2c4153Fd90957D0440F9a0681c437341099A1530",
+    "transactionIndex": 132,
+    "gasUsed": "2487449",
+    "logsBloom": "0x00000000000000000000000000000000000000000000000000800000000000000000000080000000002000080000000000000000000000000000000000000000000000000000000000004000000800000001000000000000000000000000000000000000020000000000000000000800000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000008000000000000004000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000200000",
+    "blockHash": "0xe9942b3a3e611f082d3d69fea334310119364f391a80e3ea8cf1b81d011b3128",
+    "transactionHash": "0x067c84e74d6c338f3dee16457c508b5d6c5af56eccea0a10ac6abb0bbca22ad4",
+    "logs": [
+      {
+        "transactionIndex": 132,
+        "blockNumber": 10769889,
+        "transactionHash": "0x067c84e74d6c338f3dee16457c508b5d6c5af56eccea0a10ac6abb0bbca22ad4",
+        "address": "0x2c4153Fd90957D0440F9a0681c437341099A1530",
+        "topics": [
+          "0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0",
+          "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "0x000000000000000000000000b9b8a92677fcad86dc8d36fe947184283b03b3c8"
+        ],
+        "data": "0x",
+        "logIndex": 558,
+        "blockHash": "0xe9942b3a3e611f082d3d69fea334310119364f391a80e3ea8cf1b81d011b3128"
+      },
+      {
+        "transactionIndex": 132,
+        "blockNumber": 10769889,
+        "transactionHash": "0x067c84e74d6c338f3dee16457c508b5d6c5af56eccea0a10ac6abb0bbca22ad4",
+        "address": "0x2c4153Fd90957D0440F9a0681c437341099A1530",
+        "topics": [
+          "0xf7d2871c195d5dcbeca7c9bfb4f7ae4149d0915a5d3d03c8c2286c9a24e932be"
+        ],
+        "data": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000b9b8a92677fcad86dc8d36fe947184283b03b3c8",
+        "logIndex": 559,
+        "blockHash": "0xe9942b3a3e611f082d3d69fea334310119364f391a80e3ea8cf1b81d011b3128"
+      }
+    ],
+    "blockNumber": 10769889,
+    "cumulativeGasUsed": "24758043",
+    "status": 1,
+    "byzantium": true
+  },
+  "args": [
+    "0x4f261630173D2FA1e2b081c460636DE9672B7149",
+    "1000000000000000000"
+  ],
+  "numDeployments": 1,
+  "solcInputHash": "1e5eb1acf61a0ac700a4d3fd49dd4f7b",
+  "metadata": "{\"compiler\":{\"version\":\"0.8.17+commit.8df45f5f\"},\"language\":\"Solidity\",\"output\":{\"abi\":[{\"inputs\":[{\"internalType\":\"contract IERC20WithPermit\",\"name\":\"_rewardToken\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"_poolWeightDivisor\",\"type\":\"uint256\"}],\"stateMutability\":\"nonpayable\",\"type\":\"constructor\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address[]\",\"name\":\"operators\",\"type\":\"address[]\"}],\"name\":\"BetaOperatorsAdded\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[],\"name\":\"ChaosnetDeactivated\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"address\",\"name\":\"oldChaosnetOwner\",\"type\":\"address\"},{\"indexed\":false,\"internalType\":\"address\",\"name\":\"newChaosnetOwner\",\"type\":\"address\"}],\"name\":\"ChaosnetOwnerRoleTransferred\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"internalType\":\"uint32[]\",\"name\":\"ids\",\"type\":\"uint32[]\"},{\"indexed\":false,\"internalType\":\"uint256\",\"name\":\"until\",\"type\":\"uint256\"}],\"name\":\"IneligibleForRewards\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"address\",\"name\":\"previousOwner\",\"type\":\"address\"},{\"indexed\":true,\"internalType\":\"address\",\"name\":\"newOwner\",\"type\":\"address\"}],\"name\":\"OwnershipTransferred\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"internalType\":\"address\",\"name\":\"operator\",\"type\":\"address\"},{\"indexed\":true,\"internalType\":\"uint32\",\"name\":\"id\",\"type\":\"uint32\"}],\"name\":\"RewardEligibilityRestored\",\"type\":\"event\"},{\"inputs\":[{\"internalType\":\"address[]\",\"name\":\"operators\",\"type\":\"address[]\"}],\"name\":\"addBetaOperators\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"operator\",\"type\":\"address\"}],\"name\":\"canRestoreRewardEligibility\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"chaosnetOwner\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"deactivateChaosnet\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"operator\",\"type\":\"address\"}],\"name\":\"getAvailableRewards\",\"outputs\":[{\"internalType\":\"uint96\",\"name\":\"\",\"type\":\"uint96\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint32\",\"name\":\"id\",\"type\":\"uint32\"}],\"name\":\"getIDOperator\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint32[]\",\"name\":\"ids\",\"type\":\"uint32[]\"}],\"name\":\"getIDOperators\",\"outputs\":[{\"internalType\":\"address[]\",\"name\":\"\",\"type\":\"address[]\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"operator\",\"type\":\"address\"}],\"name\":\"getOperatorID\",\"outputs\":[{\"internalType\":\"uint32\",\"name\":\"\",\"type\":\"uint32\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"operator\",\"type\":\"address\"}],\"name\":\"getPoolWeight\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"ineligibleEarnedRewards\",\"outputs\":[{\"internalType\":\"uint96\",\"name\":\"\",\"type\":\"uint96\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"operator\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"authorizedStake\",\"type\":\"uint256\"}],\"name\":\"insertOperator\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"name\":\"isBetaOperator\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"isChaosnetActive\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"operator\",\"type\":\"address\"}],\"name\":\"isEligibleForRewards\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"isLocked\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"operator\",\"type\":\"address\"}],\"name\":\"isOperatorInPool\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"operator\",\"type\":\"address\"}],\"name\":\"isOperatorRegistered\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"operator\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"authorizedStake\",\"type\":\"uint256\"}],\"name\":\"isOperatorUpToDate\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"lock\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"operatorsInPool\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"owner\",\"outputs\":[{\"internalType\":\"address\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"poolWeightDivisor\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"sender\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"amount\",\"type\":\"uint256\"},{\"internalType\":\"address\",\"name\":\"token\",\"type\":\"address\"},{\"internalType\":\"bytes\",\"name\":\"\",\"type\":\"bytes\"}],\"name\":\"receiveApproval\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"renounceOwnership\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"operator\",\"type\":\"address\"}],\"name\":\"restoreRewardEligibility\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"rewardToken\",\"outputs\":[{\"internalType\":\"contract IERC20WithPermit\",\"name\":\"\",\"type\":\"address\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"operator\",\"type\":\"address\"}],\"name\":\"rewardsEligibilityRestorableAt\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint256\",\"name\":\"groupSize\",\"type\":\"uint256\"},{\"internalType\":\"bytes32\",\"name\":\"seed\",\"type\":\"bytes32\"}],\"name\":\"selectGroup\",\"outputs\":[{\"internalType\":\"uint32[]\",\"name\":\"\",\"type\":\"uint32[]\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"uint32[]\",\"name\":\"operators\",\"type\":\"uint32[]\"},{\"internalType\":\"uint256\",\"name\":\"until\",\"type\":\"uint256\"}],\"name\":\"setRewardIneligibility\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"totalWeight\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"newChaosnetOwner\",\"type\":\"address\"}],\"name\":\"transferChaosnetOwnerRole\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"newOwner\",\"type\":\"address\"}],\"name\":\"transferOwnership\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"unlock\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"operator\",\"type\":\"address\"},{\"internalType\":\"uint256\",\"name\":\"authorizedStake\",\"type\":\"uint256\"}],\"name\":\"updateOperatorStatus\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"recipient\",\"type\":\"address\"}],\"name\":\"withdrawIneligible\",\"outputs\":[],\"stateMutability\":\"nonpayable\",\"type\":\"function\"},{\"inputs\":[{\"internalType\":\"address\",\"name\":\"operator\",\"type\":\"address\"},{\"internalType\":\"address\",\"name\":\"beneficiary\",\"type\":\"address\"}],\"name\":\"withdrawRewards\",\"outputs\":[{\"internalType\":\"uint96\",\"name\":\"\",\"type\":\"uint96\"}],\"stateMutability\":\"nonpayable\",\"type\":\"function\"}],\"devdoc\":{\"kind\":\"dev\",\"methods\":{\"getIDOperator(uint32)\":{\"params\":{\"id\":\"ID of the operator\"},\"returns\":{\"_0\":\"the address of the operator\"}},\"getIDOperators(uint32[])\":{\"params\":{\"ids\":\"the array of the operator ids\"},\"returns\":{\"_0\":\"an array of the associated operator addresses\"}},\"getOperatorID(address)\":{\"params\":{\"operator\":\"Address of the operator.\"},\"returns\":{\"_0\":\"the ID number of the given operator address\"}},\"insertOperator(address,uint256)\":{\"details\":\"Can be called only by the contract owner.\",\"params\":{\"authorizedStake\":\"Inserted operator's authorized stake for the application.\",\"operator\":\"Address of the inserted operator.\"}},\"isOperatorRegistered(address)\":{\"params\":{\"operator\":\"the address of the operator\"},\"returns\":{\"_0\":\"whether or not the operator is already registered in the pool\"}},\"lock()\":{\"details\":\"Can be called only by the contract owner.\"},\"operatorsInPool()\":{\"returns\":{\"_0\":\"the number of operators in the pool\"}},\"owner()\":{\"details\":\"Returns the address of the current owner.\"},\"renounceOwnership()\":{\"details\":\"Leaves the contract without owner. It will not be possible to call `onlyOwner` functions anymore. Can only be called by the current owner. NOTE: Renouncing ownership will leave the contract without an owner, thereby removing any functionality that is only available to the owner.\"},\"selectGroup(uint256,bytes32)\":{\"params\":{\"groupSize\":\"Size of the requested group\",\"seed\":\"Pseudo-random number used to select operators to group\"},\"returns\":{\"_0\":\"selected Members of the selected group\"}},\"totalWeight()\":{\"returns\":{\"_0\":\"the total weight of the pool\"}},\"transferOwnership(address)\":{\"details\":\"Transfers ownership of the contract to a new account (`newOwner`). Can only be called by the current owner.\"},\"unlock()\":{\"details\":\"Can be called only by the contract owner.\"},\"updateOperatorStatus(address,uint256)\":{\"details\":\"Can be called only by the contract owner.\",\"params\":{\"authorizedStake\":\"Operator's authorized stake for the application.\",\"operator\":\"Address of the updated operator.\"}},\"withdrawIneligible(address)\":{\"details\":\"Can be called only by the owner.\"},\"withdrawRewards(address,address)\":{\"details\":\"Can be called only be the owner. Does not validate if the provided      beneficiary is associated with the provided operator - this needs to      be done by the owner calling this function.\",\"returns\":{\"_0\":\"The amount of rewards withdrawn in this call.\"}}},\"title\":\"Sortition Pool\",\"version\":1},\"userdoc\":{\"kind\":\"user\",\"methods\":{\"addBetaOperators(address[])\":{\"notice\":\"Adds beta operator to chaosnet. Can be called only by the chaosnet owner when the chaosnet is active. Once the operator is added as a beta operator, it can not be removed.\"},\"canRestoreRewardEligibility(address)\":{\"notice\":\"Returns whether the operator is able to restore their eligibility         for rewards right away.\"},\"chaosnetOwner()\":{\"notice\":\"Address controlling chaosnet status and beta operator addresses.\"},\"deactivateChaosnet()\":{\"notice\":\"Deactivates the chaosnet. Can be called only by the chaosnet owner. Once deactivated chaosnet can not be activated again.\"},\"getAvailableRewards(address)\":{\"notice\":\"Returns the amount of rewards withdrawable for the given operator.\"},\"getIDOperator(uint32)\":{\"notice\":\"Get the operator address corresponding to the given ID number. A zero address means the ID number has not been allocated yet.\"},\"getIDOperators(uint32[])\":{\"notice\":\"Gets the operator addresses corresponding to the given ID numbers. A zero address means the ID number has not been allocated yet. This function works just like getIDOperator except that it allows to fetch operator addresses for multiple IDs in one call.\"},\"getOperatorID(address)\":{\"notice\":\"Return the ID number of the given operator address. An ID number of 0 means the operator has not been allocated an ID number yet.\"},\"getPoolWeight(address)\":{\"notice\":\"Return the weight of the operator in the pool, which may or may not be out of date.\"},\"insertOperator(address,uint256)\":{\"notice\":\"Inserts an operator to the pool. Reverts if the operator is already present. Reverts if the operator is not eligible because of their authorized stake. Reverts if the chaosnet is active and the operator is not a beta operator.\"},\"isBetaOperator(address)\":{\"notice\":\"Indicates if the given operator is a beta operator for chaosnet.\"},\"isChaosnetActive()\":{\"notice\":\"Indicates if the chaosnet is active. The chaosnet is active after the contract deployment and can be ended with a call to `deactivateChaosnet()`. Once deactivated chaosnet can not be activated again.\"},\"isEligibleForRewards(address)\":{\"notice\":\"Returns whether the operator is eligible for rewards or not.\"},\"isOperatorInPool(address)\":{\"notice\":\"Return whether the operator is present in the pool.\"},\"isOperatorRegistered(address)\":{\"notice\":\"Checks if operator is already registered in the pool.\"},\"isOperatorUpToDate(address,uint256)\":{\"notice\":\"Return whether the operator's weight in the pool matches their eligible weight.\"},\"lock()\":{\"notice\":\"Locks the sortition pool. In locked state, members cannot be         inserted and removed from the pool. Members statuses cannot         be updated as well.\"},\"operatorsInPool()\":{\"notice\":\"Sum the number of operators in each trunk.\"},\"restoreRewardEligibility(address)\":{\"notice\":\"Restores reward eligibility for the operator.\"},\"rewardsEligibilityRestorableAt(address)\":{\"notice\":\"Returns the time the operator's reward eligibility can be restored.\"},\"selectGroup(uint256,bytes32)\":{\"notice\":\"Selects a new group of operators of the provided size based on the provided pseudo-random seed. At least one operator has to be registered in the pool, otherwise the function fails reverting the transaction.\"},\"setRewardIneligibility(uint32[],uint256)\":{\"notice\":\"Set the given operators as ineligible for rewards.         The operators can restore their eligibility at the given time.\"},\"totalWeight()\":{\"notice\":\"Convenience method to return the total weight of the pool\"},\"transferChaosnetOwnerRole(address)\":{\"notice\":\"Transfers the chaosnet owner role to another non-zero address.\"},\"unlock()\":{\"notice\":\"Unlocks the sortition pool. Removes all restrictions set by         the `lock` method.\"},\"updateOperatorStatus(address,uint256)\":{\"notice\":\"Update the operator's weight if present and eligible, or remove from the pool if present and ineligible.\"},\"withdrawIneligible(address)\":{\"notice\":\"Withdraws rewards not allocated to operators marked as ineligible         to the given recipient address.\"},\"withdrawRewards(address,address)\":{\"notice\":\"Withdraws all available rewards for the given operator to the         given beneficiary.\"}},\"notice\":\"A logarithmic data structure used to store the pool of eligible operators weighted by their stakes. It allows to select a group of operators based on the provided pseudo-random seed.\",\"version\":1}},\"settings\":{\"compilationTarget\":{\"@keep-network/sortition-pools/contracts/SortitionPool.sol\":\"SortitionPool\"},\"evmVersion\":\"london\",\"libraries\":{},\"metadata\":{\"bytecodeHash\":\"ipfs\",\"useLiteralContent\":true},\"optimizer\":{\"enabled\":true,\"runs\":200},\"remappings\":[]},\"sources\":{\"@keep-network/sortition-pools/contracts/Branch.sol\":{\"content\":\"pragma solidity 0.8.17;\\n\\nimport \\\"./Constants.sol\\\";\\n\\n/// @notice The implicit 8-ary trees of the sortition pool\\n/// rely on packing 8 \\\"slots\\\" of 32-bit values into each uint256.\\n/// The Branch library permits efficient calculations on these slots.\\nlibrary Branch {\\n  /// @notice Calculate the right shift required\\n  /// to make the 32 least significant bits of an uint256\\n  /// be the bits of the `position`th slot\\n  /// when treating the uint256 as a uint32[8].\\n  ///\\n  /// @dev Not used for efficiency reasons,\\n  /// but left to illustrate the meaning of a common pattern.\\n  /// I wish solidity had macros, even C macros.\\n  function slotShift(uint256 position) internal pure returns (uint256) {\\n    unchecked {\\n      return position * Constants.SLOT_WIDTH;\\n    }\\n  }\\n\\n  /// @notice Return the `position`th slot of the `node`,\\n  /// treating `node` as a uint32[32].\\n  function getSlot(uint256 node, uint256 position)\\n    internal\\n    pure\\n    returns (uint256)\\n  {\\n    unchecked {\\n      uint256 shiftBits = position * Constants.SLOT_WIDTH;\\n      // Doing a bitwise AND with `SLOT_MAX`\\n      // clears all but the 32 least significant bits.\\n      // Because of the right shift by `slotShift(position)` bits,\\n      // those 32 bits contain the 32 bits in the `position`th slot of `node`.\\n      return (node >> shiftBits) & Constants.SLOT_MAX;\\n    }\\n  }\\n\\n  /// @notice Return `node` with the `position`th slot set to zero.\\n  function clearSlot(uint256 node, uint256 position)\\n    internal\\n    pure\\n    returns (uint256)\\n  {\\n    unchecked {\\n      uint256 shiftBits = position * Constants.SLOT_WIDTH;\\n      // Shifting `SLOT_MAX` left by `slotShift(position)` bits\\n      // gives us a number where all bits of the `position`th slot are set,\\n      // and all other bits are unset.\\n      //\\n      // Using a bitwise NOT on this number,\\n      // we get a uint256 where all bits are set\\n      // except for those of the `position`th slot.\\n      //\\n      // Bitwise ANDing the original `node` with this number\\n      // sets the bits of `position`th slot to zero,\\n      // leaving all other bits unchanged.\\n      return node & ~(Constants.SLOT_MAX << shiftBits);\\n    }\\n  }\\n\\n  /// @notice Return `node` with the `position`th slot set to `weight`.\\n  ///\\n  /// @param weight The weight of of the node.\\n  /// Safely truncated to a 32-bit number,\\n  /// but this should never be called with an overflowing weight regardless.\\n  function setSlot(\\n    uint256 node,\\n    uint256 position,\\n    uint256 weight\\n  ) internal pure returns (uint256) {\\n    unchecked {\\n      uint256 shiftBits = position * Constants.SLOT_WIDTH;\\n      // Clear the `position`th slot like in `clearSlot()`.\\n      uint256 clearedNode = node & ~(Constants.SLOT_MAX << shiftBits);\\n      // Bitwise AND `weight` with `SLOT_MAX`\\n      // to clear all but the 32 least significant bits.\\n      //\\n      // Shift this left by `slotShift(position)` bits\\n      // to obtain a uint256 with all bits unset\\n      // except in the `position`th slot\\n      // which contains the 32-bit value of `weight`.\\n      uint256 shiftedWeight = (weight & Constants.SLOT_MAX) << shiftBits;\\n      // When we bitwise OR these together,\\n      // all other slots except the `position`th one come from the left argument,\\n      // and the `position`th gets filled with `weight` from the right argument.\\n      return clearedNode | shiftedWeight;\\n    }\\n  }\\n\\n  /// @notice Calculate the summed weight of all slots in the `node`.\\n  function sumWeight(uint256 node) internal pure returns (uint256 sum) {\\n    unchecked {\\n      sum = node & Constants.SLOT_MAX;\\n      // Iterate through each slot\\n      // by shifting `node` right in increments of 32 bits,\\n      // and adding the 32 least significant bits to the `sum`.\\n      uint256 newNode = node >> Constants.SLOT_WIDTH;\\n      while (newNode > 0) {\\n        sum += (newNode & Constants.SLOT_MAX);\\n        newNode = newNode >> Constants.SLOT_WIDTH;\\n      }\\n      return sum;\\n    }\\n  }\\n\\n  /// @notice Pick a slot in `node` that corresponds to `index`.\\n  /// Treats the node like an array of virtual stakers,\\n  /// the number of virtual stakers in each slot corresponding to its weight,\\n  /// and picks which slot contains the `index`th virtual staker.\\n  ///\\n  /// @dev Requires that `index` be lower than `sumWeight(node)`.\\n  /// However, this is not enforced for performance reasons.\\n  /// If `index` exceeds the permitted range,\\n  /// `pickWeightedSlot()` returns the rightmost slot\\n  /// and an excessively high `newIndex`.\\n  ///\\n  /// @return slot The slot of `node` containing the `index`th virtual staker.\\n  ///\\n  /// @return newIndex The index of the `index`th virtual staker of `node`\\n  /// within the returned slot.\\n  function pickWeightedSlot(uint256 node, uint256 index)\\n    internal\\n    pure\\n    returns (uint256 slot, uint256 newIndex)\\n  {\\n    unchecked {\\n      newIndex = index;\\n      uint256 newNode = node;\\n      uint256 currentSlotWeight = newNode & Constants.SLOT_MAX;\\n      while (newIndex >= currentSlotWeight) {\\n        newIndex -= currentSlotWeight;\\n        slot++;\\n        newNode = newNode >> Constants.SLOT_WIDTH;\\n        currentSlotWeight = newNode & Constants.SLOT_MAX;\\n      }\\n      return (slot, newIndex);\\n    }\\n  }\\n}\\n\",\"keccak256\":\"0xa7fb1c9c9789f30493e9a40e24a24f46875dc5e7630b4f67478167759f6d1882\"},\"@keep-network/sortition-pools/contracts/Chaosnet.sol\":{\"content\":\"pragma solidity 0.8.17;\\n\\n/// @title Chaosnet\\n/// @notice This is a beta staker program for stakers willing to go the extra\\n/// mile with monitoring, share their logs with the dev team, and allow to more\\n/// carefully monitor the bootstrapping network. As the network matures, the\\n/// beta program will be ended.\\ncontract Chaosnet {\\n  /// @notice Indicates if the chaosnet is active. The chaosnet is active\\n  /// after the contract deployment and can be ended with a call to\\n  /// `deactivateChaosnet()`. Once deactivated chaosnet can not be activated\\n  /// again.\\n  bool public isChaosnetActive;\\n\\n  /// @notice Indicates if the given operator is a beta operator for chaosnet.\\n  mapping(address => bool) public isBetaOperator;\\n\\n  /// @notice Address controlling chaosnet status and beta operator addresses.\\n  address public chaosnetOwner;\\n\\n  event BetaOperatorsAdded(address[] operators);\\n\\n  event ChaosnetOwnerRoleTransferred(\\n    address oldChaosnetOwner,\\n    address newChaosnetOwner\\n  );\\n\\n  event ChaosnetDeactivated();\\n\\n  constructor() {\\n    _transferChaosnetOwner(msg.sender);\\n    isChaosnetActive = true;\\n  }\\n\\n  modifier onlyChaosnetOwner() {\\n    require(msg.sender == chaosnetOwner, \\\"Not the chaosnet owner\\\");\\n    _;\\n  }\\n\\n  modifier onlyOnChaosnet() {\\n    require(isChaosnetActive, \\\"Chaosnet is not active\\\");\\n    _;\\n  }\\n\\n  /// @notice Adds beta operator to chaosnet. Can be called only by the\\n  /// chaosnet owner when the chaosnet is active. Once the operator is added\\n  /// as a beta operator, it can not be removed.\\n  function addBetaOperators(address[] calldata operators)\\n    public\\n    onlyOnChaosnet\\n    onlyChaosnetOwner\\n  {\\n    for (uint256 i = 0; i < operators.length; i++) {\\n      isBetaOperator[operators[i]] = true;\\n    }\\n\\n    emit BetaOperatorsAdded(operators);\\n  }\\n\\n  /// @notice Deactivates the chaosnet. Can be called only by the chaosnet\\n  /// owner. Once deactivated chaosnet can not be activated again.\\n  function deactivateChaosnet() public onlyOnChaosnet onlyChaosnetOwner {\\n    isChaosnetActive = false;\\n    emit ChaosnetDeactivated();\\n  }\\n\\n  /// @notice Transfers the chaosnet owner role to another non-zero address.\\n  function transferChaosnetOwnerRole(address newChaosnetOwner)\\n    public\\n    onlyChaosnetOwner\\n  {\\n    require(\\n      newChaosnetOwner != address(0),\\n      \\\"New chaosnet owner must not be zero address\\\"\\n    );\\n    _transferChaosnetOwner(newChaosnetOwner);\\n  }\\n\\n  function _transferChaosnetOwner(address newChaosnetOwner) internal {\\n    address oldChaosnetOwner = chaosnetOwner;\\n    chaosnetOwner = newChaosnetOwner;\\n    emit ChaosnetOwnerRoleTransferred(oldChaosnetOwner, newChaosnetOwner);\\n  }\\n}\\n\",\"keccak256\":\"0xeaf7bdd5626f88c329793a012621039692ce1b6e1f13013997ddb13d7e3032df\"},\"@keep-network/sortition-pools/contracts/Constants.sol\":{\"content\":\"pragma solidity 0.8.17;\\n\\nlibrary Constants {\\n  ////////////////////////////////////////////////////////////////////////////\\n  // Parameters for configuration\\n\\n  // How many bits a position uses per level of the tree;\\n  // each branch of the tree contains 2**SLOT_BITS slots.\\n  uint256 constant SLOT_BITS = 3;\\n  uint256 constant LEVELS = 7;\\n  ////////////////////////////////////////////////////////////////////////////\\n\\n  ////////////////////////////////////////////////////////////////////////////\\n  // Derived constants, do not touch\\n  uint256 constant SLOT_COUNT = 2**SLOT_BITS;\\n  uint256 constant SLOT_WIDTH = 256 / SLOT_COUNT;\\n  uint256 constant LAST_SLOT = SLOT_COUNT - 1;\\n  uint256 constant SLOT_MAX = (2**SLOT_WIDTH) - 1;\\n  uint256 constant POOL_CAPACITY = SLOT_COUNT**LEVELS;\\n\\n  uint256 constant ID_WIDTH = SLOT_WIDTH;\\n  uint256 constant ID_MAX = SLOT_MAX;\\n\\n  uint256 constant BLOCKHEIGHT_WIDTH = 96 - ID_WIDTH;\\n  uint256 constant BLOCKHEIGHT_MAX = (2**BLOCKHEIGHT_WIDTH) - 1;\\n\\n  uint256 constant SLOT_POINTER_MAX = (2**SLOT_BITS) - 1;\\n  uint256 constant LEAF_FLAG = 1 << 255;\\n\\n  uint256 constant WEIGHT_WIDTH = 256 / SLOT_COUNT;\\n  ////////////////////////////////////////////////////////////////////////////\\n}\\n\",\"keccak256\":\"0xaef690ced707935745ff1482b7bb9bd9eb77bf6a39c717465e64cf12db8a7d39\"},\"@keep-network/sortition-pools/contracts/Leaf.sol\":{\"content\":\"pragma solidity 0.8.17;\\n\\nimport \\\"./Constants.sol\\\";\\n\\nlibrary Leaf {\\n  function make(\\n    address _operator,\\n    uint256 _creationBlock,\\n    uint256 _id\\n  ) internal pure returns (uint256) {\\n    assert(_creationBlock <= type(uint64).max);\\n    assert(_id <= type(uint32).max);\\n    // Converting a bytesX type into a larger type\\n    // adds zero bytes on the right.\\n    uint256 op = uint256(bytes32(bytes20(_operator)));\\n    // Bitwise AND the id to erase\\n    // all but the 32 least significant bits\\n    uint256 uid = _id & Constants.ID_MAX;\\n    // Erase all but the 64 least significant bits,\\n    // then shift left by 32 bits to make room for the id\\n    uint256 cb = (_creationBlock & Constants.BLOCKHEIGHT_MAX) <<\\n      Constants.ID_WIDTH;\\n    // Bitwise OR them all together to get\\n    // [address operator || uint64 creationBlock || uint32 id]\\n    return (op | cb | uid);\\n  }\\n\\n  function operator(uint256 leaf) internal pure returns (address) {\\n    // Converting a bytesX type into a smaller type\\n    // truncates it on the right.\\n    return address(bytes20(bytes32(leaf)));\\n  }\\n\\n  /// @notice Return the block number the leaf was created in.\\n  function creationBlock(uint256 leaf) internal pure returns (uint256) {\\n    return ((leaf >> Constants.ID_WIDTH) & Constants.BLOCKHEIGHT_MAX);\\n  }\\n\\n  function id(uint256 leaf) internal pure returns (uint32) {\\n    // Id is stored in the 32 least significant bits.\\n    // Bitwise AND ensures that we only get the contents of those bits.\\n    return uint32(leaf & Constants.ID_MAX);\\n  }\\n}\\n\",\"keccak256\":\"0xbd107a1a43e48884885e5e966ffcbcd8fa5e89863715d717bb4006e9f89cdc2b\"},\"@keep-network/sortition-pools/contracts/Position.sol\":{\"content\":\"pragma solidity 0.8.17;\\n\\nimport \\\"./Constants.sol\\\";\\n\\nlibrary Position {\\n  // Return the last 3 bits of a position number,\\n  // corresponding to its slot in its parent\\n  function slot(uint256 a) internal pure returns (uint256) {\\n    return a & Constants.SLOT_POINTER_MAX;\\n  }\\n\\n  // Return the parent of a position number\\n  function parent(uint256 a) internal pure returns (uint256) {\\n    return a >> Constants.SLOT_BITS;\\n  }\\n\\n  // Return the location of the child of a at the given slot\\n  function child(uint256 a, uint256 s) internal pure returns (uint256) {\\n    return (a << Constants.SLOT_BITS) | (s & Constants.SLOT_POINTER_MAX); // slot(s)\\n  }\\n\\n  // Return the uint p as a flagged position uint:\\n  // the least significant 21 bits contain the position\\n  // and the 22nd bit is set as a flag\\n  // to distinguish the position 0x000000 from an empty field.\\n  function setFlag(uint256 p) internal pure returns (uint256) {\\n    return p | Constants.LEAF_FLAG;\\n  }\\n\\n  // Turn a flagged position into an unflagged position\\n  // by removing the flag at the 22nd least significant bit.\\n  //\\n  // We shouldn't _actually_ need this\\n  // as all position-manipulating code should ignore non-position bits anyway\\n  // but it's cheap to call so might as well do it.\\n  function unsetFlag(uint256 p) internal pure returns (uint256) {\\n    return p & (~Constants.LEAF_FLAG);\\n  }\\n}\\n\",\"keccak256\":\"0xd3a927908080ac21353a92a6bce3d69e94a5c30f6b51f16b271b6cc679f110e2\"},\"@keep-network/sortition-pools/contracts/RNG.sol\":{\"content\":\"pragma solidity 0.8.17;\\n\\nimport \\\"./Leaf.sol\\\";\\nimport \\\"./Constants.sol\\\";\\n\\nlibrary RNG {\\n  /// @notice Get an index in the range `[0 .. range-1]`\\n  /// and the new state of the RNG,\\n  /// using the provided `state` of the RNG.\\n  ///\\n  /// @param range The upper bound of the index, exclusive.\\n  ///\\n  /// @param state The previous state of the RNG.\\n  /// The initial state needs to be obtained\\n  /// from a trusted randomness oracle (the random beacon),\\n  /// or from a chain of earlier calls to `RNG.getIndex()`\\n  /// on an originally trusted seed.\\n  ///\\n  /// @dev Calculates the number of bits required for the desired range,\\n  /// takes the least significant bits of `state`\\n  /// and checks if the obtained index is within the desired range.\\n  /// The original state is hashed with `keccak256` to get a new state.\\n  /// If the index is outside the range,\\n  /// the function retries until it gets a suitable index.\\n  ///\\n  /// @return index A random integer between `0` and `range - 1`, inclusive.\\n  ///\\n  /// @return newState The new state of the RNG.\\n  /// When `getIndex()` is called one or more times,\\n  /// care must be taken to always use the output `state`\\n  /// of the most recent call as the input `state` of a subsequent call.\\n  /// At the end of a transaction calling `RNG.getIndex()`,\\n  /// the previous stored state must be overwritten with the latest output.\\n  function getIndex(\\n    uint256 range,\\n    bytes32 state,\\n    uint256 bits\\n  ) internal view returns (uint256, bytes32) {\\n    bool found = false;\\n    uint256 index = 0;\\n    bytes32 newState = state;\\n    while (!found) {\\n      index = truncate(bits, uint256(newState));\\n      newState = keccak256(abi.encodePacked(newState, address(this)));\\n      if (index < range) {\\n        found = true;\\n      }\\n    }\\n    return (index, newState);\\n  }\\n\\n  /// @notice Calculate how many bits are required\\n  /// for an index in the range `[0 .. range-1]`.\\n  ///\\n  /// @param range The upper bound of the desired range, exclusive.\\n  ///\\n  /// @return uint The smallest number of bits\\n  /// that can contain the number `range-1`.\\n  function bitsRequired(uint256 range) internal pure returns (uint256) {\\n    unchecked {\\n      if (range == 1) {\\n        return 0;\\n      }\\n\\n      uint256 bits = Constants.WEIGHT_WIDTH - 1;\\n\\n      // Left shift by `bits`,\\n      // so we have a 1 in the (bits + 1)th least significant bit\\n      // and 0 in other bits.\\n      // If this number is equal or greater than `range`,\\n      // the range [0, range-1] fits in `bits` bits.\\n      //\\n      // Because we loop from high bits to low bits,\\n      // we find the highest number of bits that doesn't fit the range,\\n      // and return that number + 1.\\n      while (1 << bits >= range) {\\n        bits--;\\n      }\\n\\n      return bits + 1;\\n    }\\n  }\\n\\n  /// @notice Truncate `input` to the `bits` least significant bits.\\n  function truncate(uint256 bits, uint256 input)\\n    internal\\n    pure\\n    returns (uint256)\\n  {\\n    unchecked {\\n      return input & ((1 << bits) - 1);\\n    }\\n  }\\n}\\n\",\"keccak256\":\"0x67f87f589cd5123ffa32f883ea2f09b0e56258508bae82b8c655b3c27c71eb5e\"},\"@keep-network/sortition-pools/contracts/Rewards.sol\":{\"content\":\"pragma solidity 0.8.17;\\n\\n/// @title Rewards\\n/// @notice Rewards are allocated proportionally to operators\\n/// present in the pool at payout based on their weight in the pool.\\n///\\n/// To facilitate this, we use a global accumulator value\\n/// to track the total rewards one unit of weight would've earned\\n/// since the creation of the pool.\\n///\\n/// Whenever a reward is paid, the accumulator is increased\\n/// by the size of the reward divided by the total weight\\n/// of all eligible operators in the pool.\\n///\\n/// Each operator has an individual accumulator value,\\n/// set to equal the global accumulator when the operator joins the pool.\\n/// This accumulator reflects the amount of rewards\\n/// that have already been accounted for with that operator.\\n///\\n/// Whenever an operator's weight in the pool changes,\\n/// we can update the amount of rewards the operator has earned\\n/// by subtracting the operator's accumulator from the global accumulator.\\n/// This gives us the amount of rewards one unit of weight has earned\\n/// since the last time the operator's rewards have been updated.\\n/// Then we multiply that by the operator's previous (pre-change) weight\\n/// to determine how much rewards in total the operator has earned,\\n/// and add this to the operator's earned rewards.\\n/// Finally, we set the operator's accumulator to the global accumulator value.\\ncontract Rewards {\\n  struct OperatorRewards {\\n    // The state of the global accumulator\\n    // when the operator's rewards were last updated\\n    uint96 accumulated;\\n    // The amount of rewards collected by the operator after the latest update.\\n    // The amount the operator could withdraw may equal `available`\\n    // or it may be greater, if more rewards have been paid in since then.\\n    // To evaulate the most recent amount including rewards potentially paid\\n    // since the last update, use `availableRewards` function.\\n    uint96 available;\\n    // If nonzero, the operator is ineligible for rewards\\n    // and may only re-enable rewards after the specified timestamp.\\n    // XXX: unsigned 32-bit integer unix seconds, will break around 2106\\n    uint32 ineligibleUntil;\\n    // Locally cached weight of the operator,\\n    // used to reduce the cost of setting operators ineligible.\\n    uint32 weight;\\n  }\\n\\n  // The global accumulator of how much rewards\\n  // a hypothetical operator of weight 1 would have earned\\n  // since the creation of the pool.\\n  uint96 internal globalRewardAccumulator;\\n  // If the amount of reward tokens paid in\\n  // does not divide cleanly by pool weight,\\n  // the difference is recorded as rounding dust\\n  // and added to the next reward.\\n  uint96 internal rewardRoundingDust;\\n\\n  // The amount of rewards that would've been earned by ineligible operators\\n  // had they not been ineligible.\\n  uint96 public ineligibleEarnedRewards;\\n\\n  // Ineligibility times are calculated from this offset,\\n  // set at contract creation.\\n  uint256 internal immutable ineligibleOffsetStart;\\n\\n  mapping(uint32 => OperatorRewards) internal operatorRewards;\\n\\n  constructor() {\\n    // solhint-disable-next-line not-rely-on-time\\n    ineligibleOffsetStart = block.timestamp;\\n  }\\n\\n  /// @notice Return whether the operator is eligible for rewards or not.\\n  function isEligibleForRewards(uint32 operator) internal view returns (bool) {\\n    return operatorRewards[operator].ineligibleUntil == 0;\\n  }\\n\\n  /// @notice Return the time the operator's reward eligibility can be restored.\\n  function rewardsEligibilityRestorableAt(uint32 operator)\\n    internal\\n    view\\n    returns (uint256)\\n  {\\n    uint32 until = operatorRewards[operator].ineligibleUntil;\\n    require(until != 0, \\\"Operator already eligible\\\");\\n    return (uint256(until) + ineligibleOffsetStart);\\n  }\\n\\n  /// @notice Return whether the operator is able to restore their eligibility\\n  ///         for rewards right away.\\n  function canRestoreRewardEligibility(uint32 operator)\\n    internal\\n    view\\n    returns (bool)\\n  {\\n    // solhint-disable-next-line not-rely-on-time\\n    return rewardsEligibilityRestorableAt(operator) <= block.timestamp;\\n  }\\n\\n  /// @notice Internal function for updating the global state of rewards.\\n  function addRewards(uint96 rewardAmount, uint32 currentPoolWeight) internal {\\n    require(currentPoolWeight > 0, \\\"No recipients in pool\\\");\\n\\n    uint96 totalAmount = rewardAmount + rewardRoundingDust;\\n    uint96 perWeightReward = totalAmount / currentPoolWeight;\\n    uint96 newRoundingDust = totalAmount % currentPoolWeight;\\n\\n    globalRewardAccumulator += perWeightReward;\\n    rewardRoundingDust = newRoundingDust;\\n  }\\n\\n  /// @notice Internal function for updating the operator's reward state.\\n  function updateOperatorRewards(uint32 operator, uint32 newWeight) internal {\\n    uint96 acc = globalRewardAccumulator;\\n    OperatorRewards memory o = operatorRewards[operator];\\n    uint96 accruedRewards = (acc - o.accumulated) * uint96(o.weight);\\n    if (o.ineligibleUntil == 0) {\\n      // If operator is not ineligible, update their earned rewards\\n      o.available += accruedRewards;\\n    } else {\\n      // If ineligible, put the rewards into the ineligible pot\\n      ineligibleEarnedRewards += accruedRewards;\\n    }\\n    // In any case, update their accumulator and weight\\n    o.accumulated = acc;\\n    o.weight = newWeight;\\n    operatorRewards[operator] = o;\\n  }\\n\\n  /// @notice Set the amount of withdrawable tokens to zero\\n  /// and return the previous withdrawable amount.\\n  /// @dev Does not update the withdrawable amount,\\n  /// but should usually be accompanied by an update.\\n  function withdrawOperatorRewards(uint32 operator)\\n    internal\\n    returns (uint96 withdrawable)\\n  {\\n    OperatorRewards storage o = operatorRewards[operator];\\n    withdrawable = o.available;\\n    o.available = 0;\\n  }\\n\\n  /// @notice Set the amount of ineligible-earned tokens to zero\\n  /// and return the previous amount.\\n  function withdrawIneligibleRewards() internal returns (uint96 withdrawable) {\\n    withdrawable = ineligibleEarnedRewards;\\n    ineligibleEarnedRewards = 0;\\n  }\\n\\n  /// @notice Set the given operators as ineligible for rewards.\\n  /// The operators can restore their eligibility at the given time.\\n  function setIneligible(uint32[] memory operators, uint256 until) internal {\\n    OperatorRewards memory o = OperatorRewards(0, 0, 0, 0);\\n    uint96 globalAcc = globalRewardAccumulator;\\n    uint96 accrued = 0;\\n    // Record ineligibility as seconds after contract creation\\n    uint32 _until = uint32(until - ineligibleOffsetStart);\\n\\n    for (uint256 i = 0; i < operators.length; i++) {\\n      uint32 operator = operators[i];\\n      OperatorRewards storage r = operatorRewards[operator];\\n      o.available = r.available;\\n      o.accumulated = r.accumulated;\\n      o.ineligibleUntil = r.ineligibleUntil;\\n      o.weight = r.weight;\\n\\n      if (o.ineligibleUntil != 0) {\\n        // If operator is already ineligible,\\n        // don't earn rewards or shorten its ineligibility\\n        if (o.ineligibleUntil < _until) {\\n          o.ineligibleUntil = _until;\\n        }\\n      } else {\\n        // The operator becomes ineligible -> earn rewards\\n        o.ineligibleUntil = _until;\\n        accrued = (globalAcc - o.accumulated) * uint96(o.weight);\\n        o.available += accrued;\\n      }\\n      o.accumulated = globalAcc;\\n\\n      r.available = o.available;\\n      r.accumulated = o.accumulated;\\n      r.ineligibleUntil = o.ineligibleUntil;\\n      r.weight = o.weight;\\n    }\\n  }\\n\\n  /// @notice Restore the given operator's eligibility for rewards.\\n  function restoreEligibility(uint32 operator) internal {\\n    // solhint-disable-next-line not-rely-on-time\\n    require(canRestoreRewardEligibility(operator), \\\"Operator still ineligible\\\");\\n    uint96 acc = globalRewardAccumulator;\\n    OperatorRewards memory o = operatorRewards[operator];\\n    uint96 accruedRewards = (acc - o.accumulated) * uint96(o.weight);\\n    ineligibleEarnedRewards += accruedRewards;\\n    o.accumulated = acc;\\n    o.ineligibleUntil = 0;\\n    operatorRewards[operator] = o;\\n  }\\n\\n  /// @notice Returns the amount of rewards currently available for withdrawal\\n  ///         for the given operator.\\n  function availableRewards(uint32 operator) internal view returns (uint96) {\\n    uint96 acc = globalRewardAccumulator;\\n    OperatorRewards memory o = operatorRewards[operator];\\n    if (o.ineligibleUntil == 0) {\\n      // If operator is not ineligible, calculate newly accrued rewards and add\\n      // them to the available ones, calculated during the last update.\\n      uint96 accruedRewards = (acc - o.accumulated) * uint96(o.weight);\\n      return o.available + accruedRewards;\\n    } else {\\n      // If ineligible, return only the rewards calculated during the last\\n      // update.\\n      return o.available;\\n    }\\n  }\\n}\\n\",\"keccak256\":\"0x3a10abb408b44335a092387b2c7ee01db3b27997f1f2c888d9b7a2d92934c4e2\"},\"@keep-network/sortition-pools/contracts/SortitionPool.sol\":{\"content\":\"pragma solidity 0.8.17;\\n\\nimport \\\"@thesis/solidity-contracts/contracts/token/IERC20WithPermit.sol\\\";\\nimport \\\"@thesis/solidity-contracts/contracts/token/IReceiveApproval.sol\\\";\\n\\nimport \\\"@openzeppelin/contracts/access/Ownable.sol\\\";\\n\\nimport \\\"./RNG.sol\\\";\\nimport \\\"./SortitionTree.sol\\\";\\nimport \\\"./Rewards.sol\\\";\\nimport \\\"./Chaosnet.sol\\\";\\n\\n/// @title Sortition Pool\\n/// @notice A logarithmic data structure used to store the pool of eligible\\n/// operators weighted by their stakes. It allows to select a group of operators\\n/// based on the provided pseudo-random seed.\\ncontract SortitionPool is\\n  SortitionTree,\\n  Rewards,\\n  Ownable,\\n  Chaosnet,\\n  IReceiveApproval\\n{\\n  using Branch for uint256;\\n  using Leaf for uint256;\\n  using Position for uint256;\\n\\n  IERC20WithPermit public immutable rewardToken;\\n\\n  uint256 public immutable poolWeightDivisor;\\n\\n  bool public isLocked;\\n\\n  event IneligibleForRewards(uint32[] ids, uint256 until);\\n\\n  event RewardEligibilityRestored(address indexed operator, uint32 indexed id);\\n\\n  /// @notice Reverts if called while pool is locked.\\n  modifier onlyUnlocked() {\\n    require(!isLocked, \\\"Sortition pool locked\\\");\\n    _;\\n  }\\n\\n  /// @notice Reverts if called while pool is unlocked.\\n  modifier onlyLocked() {\\n    require(isLocked, \\\"Sortition pool unlocked\\\");\\n    _;\\n  }\\n\\n  constructor(IERC20WithPermit _rewardToken, uint256 _poolWeightDivisor) {\\n    rewardToken = _rewardToken;\\n    poolWeightDivisor = _poolWeightDivisor;\\n  }\\n\\n  function receiveApproval(\\n    address sender,\\n    uint256 amount,\\n    address token,\\n    bytes calldata\\n  ) external override {\\n    require(token == address(rewardToken), \\\"Unsupported token\\\");\\n    rewardToken.transferFrom(sender, address(this), amount);\\n    Rewards.addRewards(uint96(amount), uint32(root.sumWeight()));\\n  }\\n\\n  /// @notice Withdraws all available rewards for the given operator to the\\n  ///         given beneficiary.\\n  /// @dev Can be called only be the owner. Does not validate if the provided\\n  ///      beneficiary is associated with the provided operator - this needs to\\n  ///      be done by the owner calling this function.\\n  /// @return The amount of rewards withdrawn in this call.\\n  function withdrawRewards(address operator, address beneficiary)\\n    public\\n    onlyOwner\\n    returns (uint96)\\n  {\\n    uint32 id = getOperatorID(operator);\\n    Rewards.updateOperatorRewards(id, uint32(getPoolWeight(operator)));\\n    uint96 earned = Rewards.withdrawOperatorRewards(id);\\n    rewardToken.transfer(beneficiary, uint256(earned));\\n    return earned;\\n  }\\n\\n  /// @notice Withdraws rewards not allocated to operators marked as ineligible\\n  ///         to the given recipient address.\\n  /// @dev Can be called only by the owner.\\n  function withdrawIneligible(address recipient) public onlyOwner {\\n    uint96 earned = Rewards.withdrawIneligibleRewards();\\n    rewardToken.transfer(recipient, uint256(earned));\\n  }\\n\\n  /// @notice Locks the sortition pool. In locked state, members cannot be\\n  ///         inserted and removed from the pool. Members statuses cannot\\n  ///         be updated as well.\\n  /// @dev Can be called only by the contract owner.\\n  function lock() public onlyOwner {\\n    isLocked = true;\\n  }\\n\\n  /// @notice Unlocks the sortition pool. Removes all restrictions set by\\n  ///         the `lock` method.\\n  /// @dev Can be called only by the contract owner.\\n  function unlock() public onlyOwner {\\n    isLocked = false;\\n  }\\n\\n  /// @notice Inserts an operator to the pool. Reverts if the operator is\\n  /// already present. Reverts if the operator is not eligible because of their\\n  /// authorized stake. Reverts if the chaosnet is active and the operator is\\n  /// not a beta operator.\\n  /// @dev Can be called only by the contract owner.\\n  /// @param operator Address of the inserted operator.\\n  /// @param authorizedStake Inserted operator's authorized stake for the application.\\n  function insertOperator(address operator, uint256 authorizedStake)\\n    public\\n    onlyOwner\\n    onlyUnlocked\\n  {\\n    uint256 weight = getWeight(authorizedStake);\\n    require(weight > 0, \\\"Operator not eligible\\\");\\n\\n    if (isChaosnetActive) {\\n      require(isBetaOperator[operator], \\\"Not beta operator for chaosnet\\\");\\n    }\\n\\n    _insertOperator(operator, weight);\\n    uint32 id = getOperatorID(operator);\\n    Rewards.updateOperatorRewards(id, uint32(weight));\\n  }\\n\\n  /// @notice Update the operator's weight if present and eligible,\\n  /// or remove from the pool if present and ineligible.\\n  /// @dev Can be called only by the contract owner.\\n  /// @param operator Address of the updated operator.\\n  /// @param authorizedStake Operator's authorized stake for the application.\\n  function updateOperatorStatus(address operator, uint256 authorizedStake)\\n    public\\n    onlyOwner\\n    onlyUnlocked\\n  {\\n    uint256 weight = getWeight(authorizedStake);\\n\\n    uint32 id = getOperatorID(operator);\\n    Rewards.updateOperatorRewards(id, uint32(weight));\\n\\n    if (weight == 0) {\\n      _removeOperator(operator);\\n    } else {\\n      updateOperator(operator, weight);\\n    }\\n  }\\n\\n  /// @notice Set the given operators as ineligible for rewards.\\n  ///         The operators can restore their eligibility at the given time.\\n  function setRewardIneligibility(uint32[] calldata operators, uint256 until)\\n    public\\n    onlyOwner\\n  {\\n    Rewards.setIneligible(operators, until);\\n    emit IneligibleForRewards(operators, until);\\n  }\\n\\n  /// @notice Restores reward eligibility for the operator.\\n  function restoreRewardEligibility(address operator) public {\\n    uint32 id = getOperatorID(operator);\\n    Rewards.restoreEligibility(id);\\n    emit RewardEligibilityRestored(operator, id);\\n  }\\n\\n  /// @notice Returns whether the operator is eligible for rewards or not.\\n  function isEligibleForRewards(address operator) public view returns (bool) {\\n    uint32 id = getOperatorID(operator);\\n    return Rewards.isEligibleForRewards(id);\\n  }\\n\\n  /// @notice Returns the time the operator's reward eligibility can be restored.\\n  function rewardsEligibilityRestorableAt(address operator)\\n    public\\n    view\\n    returns (uint256)\\n  {\\n    uint32 id = getOperatorID(operator);\\n    return Rewards.rewardsEligibilityRestorableAt(id);\\n  }\\n\\n  /// @notice Returns whether the operator is able to restore their eligibility\\n  ///         for rewards right away.\\n  function canRestoreRewardEligibility(address operator)\\n    public\\n    view\\n    returns (bool)\\n  {\\n    uint32 id = getOperatorID(operator);\\n    return Rewards.canRestoreRewardEligibility(id);\\n  }\\n\\n  /// @notice Returns the amount of rewards withdrawable for the given operator.\\n  function getAvailableRewards(address operator) public view returns (uint96) {\\n    uint32 id = getOperatorID(operator);\\n    return availableRewards(id);\\n  }\\n\\n  /// @notice Return whether the operator is present in the pool.\\n  function isOperatorInPool(address operator) public view returns (bool) {\\n    return getFlaggedLeafPosition(operator) != 0;\\n  }\\n\\n  /// @notice Return whether the operator's weight in the pool\\n  /// matches their eligible weight.\\n  function isOperatorUpToDate(address operator, uint256 authorizedStake)\\n    public\\n    view\\n    returns (bool)\\n  {\\n    return getWeight(authorizedStake) == getPoolWeight(operator);\\n  }\\n\\n  /// @notice Return the weight of the operator in the pool,\\n  /// which may or may not be out of date.\\n  function getPoolWeight(address operator) public view returns (uint256) {\\n    uint256 flaggedPosition = getFlaggedLeafPosition(operator);\\n    if (flaggedPosition == 0) {\\n      return 0;\\n    } else {\\n      uint256 leafPosition = flaggedPosition.unsetFlag();\\n      uint256 leafWeight = getLeafWeight(leafPosition);\\n      return leafWeight;\\n    }\\n  }\\n\\n  /// @notice Selects a new group of operators of the provided size based on\\n  /// the provided pseudo-random seed. At least one operator has to be\\n  /// registered in the pool, otherwise the function fails reverting the\\n  /// transaction.\\n  /// @param groupSize Size of the requested group\\n  /// @param seed Pseudo-random number used to select operators to group\\n  /// @return selected Members of the selected group\\n  function selectGroup(uint256 groupSize, bytes32 seed)\\n    public\\n    view\\n    onlyLocked\\n    returns (uint32[] memory)\\n  {\\n    uint256 _root = root;\\n\\n    bytes32 rngState = seed;\\n    uint256 rngRange = _root.sumWeight();\\n    require(rngRange > 0, \\\"Not enough operators in pool\\\");\\n    uint256 currentIndex;\\n\\n    uint256 bits = RNG.bitsRequired(rngRange);\\n\\n    uint32[] memory selected = new uint32[](groupSize);\\n\\n    for (uint256 i = 0; i < groupSize; i++) {\\n      (currentIndex, rngState) = RNG.getIndex(rngRange, rngState, bits);\\n\\n      uint256 leafPosition = pickWeightedLeaf(currentIndex, _root);\\n\\n      uint256 leaf = leaves[leafPosition];\\n      selected[i] = leaf.id();\\n    }\\n    return selected;\\n  }\\n\\n  function getWeight(uint256 authorization) internal view returns (uint256) {\\n    return authorization / poolWeightDivisor;\\n  }\\n}\\n\",\"keccak256\":\"0xab42e7c5b1828f42a73f699eb2dc96d4f793572a6323b8b1fbd7c5e0c065bda7\"},\"@keep-network/sortition-pools/contracts/SortitionTree.sol\":{\"content\":\"pragma solidity 0.8.17;\\n\\nimport \\\"./Branch.sol\\\";\\nimport \\\"./Position.sol\\\";\\nimport \\\"./Leaf.sol\\\";\\nimport \\\"./Constants.sol\\\";\\n\\ncontract SortitionTree {\\n  using Branch for uint256;\\n  using Position for uint256;\\n  using Leaf for uint256;\\n\\n  // implicit tree\\n  // root 8\\n  // level2 64\\n  // level3 512\\n  // level4 4k\\n  // level5 32k\\n  // level6 256k\\n  // level7 2M\\n  uint256 internal root;\\n\\n  // A 2-index mapping from layer => (index (0-index) => branch). For example,\\n  // to access the 6th branch in the 2nd layer (right below the root node; the\\n  // first branch layer), call branches[2][5]. Mappings are used in place of\\n  // arrays for efficiency. The root is the first layer, the branches occupy\\n  // layers 2 through 7, and layer 8 is for the leaves. Following this\\n  // convention, the first index in `branches` is `2`, and the last index is\\n  // `7`.\\n  mapping(uint256 => mapping(uint256 => uint256)) internal branches;\\n\\n  // A 0-index mapping from index => leaf, acting as an array. For example, to\\n  // access the 42nd leaf, call leaves[41].\\n  mapping(uint256 => uint256) internal leaves;\\n\\n  // the flagged (see setFlag() and unsetFlag() in Position.sol) positions\\n  // of all operators present in the pool\\n  mapping(address => uint256) internal flaggedLeafPosition;\\n\\n  // the leaf after the rightmost occupied leaf of each stack\\n  uint256 internal rightmostLeaf;\\n\\n  // the empty leaves in each stack\\n  // between 0 and the rightmost occupied leaf\\n  uint256[] internal emptyLeaves;\\n\\n  // Each operator has an uint32 ID number\\n  // which is allocated when they first join the pool\\n  // and remains unchanged even if they leave and rejoin the pool.\\n  mapping(address => uint32) internal operatorID;\\n\\n  // The idAddress array records the address corresponding to each ID number.\\n  // The ID number 0 is initialized with a zero address and is not used.\\n  address[] internal idAddress;\\n\\n  constructor() {\\n    root = 0;\\n    rightmostLeaf = 0;\\n    idAddress.push();\\n  }\\n\\n  /// @notice Return the ID number of the given operator address. An ID number\\n  /// of 0 means the operator has not been allocated an ID number yet.\\n  /// @param operator Address of the operator.\\n  /// @return the ID number of the given operator address\\n  function getOperatorID(address operator) public view returns (uint32) {\\n    return operatorID[operator];\\n  }\\n\\n  /// @notice Get the operator address corresponding to the given ID number. A\\n  /// zero address means the ID number has not been allocated yet.\\n  /// @param id ID of the operator\\n  /// @return the address of the operator\\n  function getIDOperator(uint32 id) public view returns (address) {\\n    return idAddress.length > id ? idAddress[id] : address(0);\\n  }\\n\\n  /// @notice Gets the operator addresses corresponding to the given ID\\n  /// numbers. A zero address means the ID number has not been allocated yet.\\n  /// This function works just like getIDOperator except that it allows to fetch\\n  /// operator addresses for multiple IDs in one call.\\n  /// @param ids the array of the operator ids\\n  /// @return an array of the associated operator addresses\\n  function getIDOperators(uint32[] calldata ids)\\n    public\\n    view\\n    returns (address[] memory)\\n  {\\n    uint256 idCount = idAddress.length;\\n\\n    address[] memory operators = new address[](ids.length);\\n    for (uint256 i = 0; i < ids.length; i++) {\\n      uint32 id = ids[i];\\n      operators[i] = idCount > id ? idAddress[id] : address(0);\\n    }\\n    return operators;\\n  }\\n\\n  /// @notice Checks if operator is already registered in the pool.\\n  /// @param operator the address of the operator\\n  /// @return whether or not the operator is already registered in the pool\\n  function isOperatorRegistered(address operator) public view returns (bool) {\\n    return getFlaggedLeafPosition(operator) != 0;\\n  }\\n\\n  /// @notice Sum the number of operators in each trunk.\\n  /// @return the number of operators in the pool\\n  function operatorsInPool() public view returns (uint256) {\\n    // Get the number of leaves that might be occupied;\\n    // if `rightmostLeaf` equals `firstLeaf()` the tree must be empty,\\n    // otherwise the difference between these numbers\\n    // gives the number of leaves that may be occupied.\\n    uint256 nPossiblyUsedLeaves = rightmostLeaf;\\n    // Get the number of empty leaves\\n    // not accounted for by the `rightmostLeaf`\\n    uint256 nEmptyLeaves = emptyLeaves.length;\\n\\n    return (nPossiblyUsedLeaves - nEmptyLeaves);\\n  }\\n\\n  /// @notice Convenience method to return the total weight of the pool\\n  /// @return the total weight of the pool\\n  function totalWeight() public view returns (uint256) {\\n    return root.sumWeight();\\n  }\\n\\n  /// @notice Give the operator a new ID number.\\n  /// Does not check if the operator already has an ID number.\\n  /// @param operator the address of the operator\\n  /// @return a new ID for that operator\\n  function allocateOperatorID(address operator) internal returns (uint256) {\\n    uint256 id = idAddress.length;\\n\\n    require(id <= type(uint32).max, \\\"Pool capacity exceeded\\\");\\n\\n    operatorID[operator] = uint32(id);\\n    idAddress.push(operator);\\n    return id;\\n  }\\n\\n  /// @notice Inserts an operator into the sortition pool\\n  /// @param operator the address of an operator to insert\\n  /// @param weight how much weight that operator has in the pool\\n  function _insertOperator(address operator, uint256 weight) internal {\\n    require(\\n      !isOperatorRegistered(operator),\\n      \\\"Operator is already registered in the pool\\\"\\n    );\\n\\n    // Fetch the operator's ID, and if they don't have one, allocate them one.\\n    uint256 id = getOperatorID(operator);\\n    if (id == 0) {\\n      id = allocateOperatorID(operator);\\n    }\\n\\n    // Determine which leaf to insert them into\\n    uint256 position = getEmptyLeafPosition();\\n    // Record the block the operator was inserted in\\n    uint256 theLeaf = Leaf.make(operator, block.number, id);\\n\\n    // Update the leaf, and propagate the weight changes all the way up to the\\n    // root.\\n    root = setLeaf(position, theLeaf, weight, root);\\n\\n    // Without position flags,\\n    // the position 0x000000 would be treated as empty\\n    flaggedLeafPosition[operator] = position.setFlag();\\n  }\\n\\n  /// @notice Remove an operator (and their weight) from the pool.\\n  /// @param operator the address of the operator to remove\\n  function _removeOperator(address operator) internal {\\n    uint256 flaggedPosition = getFlaggedLeafPosition(operator);\\n    require(flaggedPosition != 0, \\\"Operator is not registered in the pool\\\");\\n    uint256 unflaggedPosition = flaggedPosition.unsetFlag();\\n\\n    // Update the leaf, and propagate the weight changes all the way up to the\\n    // root.\\n    root = removeLeaf(unflaggedPosition, root);\\n    removeLeafPositionRecord(operator);\\n  }\\n\\n  /// @notice Update an operator's weight in the pool.\\n  /// @param operator the address of the operator to update\\n  /// @param weight the new weight\\n  function updateOperator(address operator, uint256 weight) internal {\\n    require(\\n      isOperatorRegistered(operator),\\n      \\\"Operator is not registered in the pool\\\"\\n    );\\n\\n    uint256 flaggedPosition = getFlaggedLeafPosition(operator);\\n    uint256 unflaggedPosition = flaggedPosition.unsetFlag();\\n    root = updateLeaf(unflaggedPosition, weight, root);\\n  }\\n\\n  /// @notice Helper method to remove a leaf position record for an operator.\\n  /// @param operator the address of the operator to remove the record for\\n  function removeLeafPositionRecord(address operator) internal {\\n    flaggedLeafPosition[operator] = 0;\\n  }\\n\\n  /// @notice Removes the data and weight from a particular leaf.\\n  /// @param position the leaf index to remove\\n  /// @param _root the root node containing the leaf\\n  /// @return the updated root node\\n  function removeLeaf(uint256 position, uint256 _root)\\n    internal\\n    returns (uint256)\\n  {\\n    uint256 rightmostSubOne = rightmostLeaf - 1;\\n    bool isRightmost = position == rightmostSubOne;\\n\\n    // Clears out the data in the leaf node, and then propagates the weight\\n    // changes all the way up to the root.\\n    uint256 newRoot = setLeaf(position, 0, 0, _root);\\n\\n    // Infer if need to fall back on emptyLeaves yet\\n    if (isRightmost) {\\n      rightmostLeaf = rightmostSubOne;\\n    } else {\\n      emptyLeaves.push(position);\\n    }\\n    return newRoot;\\n  }\\n\\n  /// @notice Updates the tree to give a particular leaf a new weight.\\n  /// @param position the index of the leaf to update\\n  /// @param weight the new weight\\n  /// @param _root the root node containing the leaf\\n  /// @return the updated root node\\n  function updateLeaf(\\n    uint256 position,\\n    uint256 weight,\\n    uint256 _root\\n  ) internal returns (uint256) {\\n    if (getLeafWeight(position) != weight) {\\n      return updateTree(position, weight, _root);\\n    } else {\\n      return _root;\\n    }\\n  }\\n\\n  /// @notice Places a leaf into a particular position, with a given weight and\\n  /// propagates that change.\\n  /// @param position the index to place the leaf in\\n  /// @param theLeaf the new leaf to place in the position\\n  /// @param leafWeight the weight of the leaf\\n  /// @param _root the root containing the new leaf\\n  /// @return the updated root node\\n  function setLeaf(\\n    uint256 position,\\n    uint256 theLeaf,\\n    uint256 leafWeight,\\n    uint256 _root\\n  ) internal returns (uint256) {\\n    // set leaf\\n    leaves[position] = theLeaf;\\n\\n    return (updateTree(position, leafWeight, _root));\\n  }\\n\\n  /// @notice Propagates a weight change at a position through the tree,\\n  /// eventually returning the updated root.\\n  /// @param position the index of leaf to update\\n  /// @param weight the new weight of the leaf\\n  /// @param _root the root node containing the leaf\\n  /// @return the updated root node\\n  function updateTree(\\n    uint256 position,\\n    uint256 weight,\\n    uint256 _root\\n  ) internal returns (uint256) {\\n    uint256 childSlot;\\n    uint256 treeNode;\\n    uint256 newNode;\\n    uint256 nodeWeight = weight;\\n\\n    uint256 parent = position;\\n    // set levels 7 to 2\\n    for (uint256 level = Constants.LEVELS; level >= 2; level--) {\\n      childSlot = parent.slot();\\n      parent = parent.parent();\\n      treeNode = branches[level][parent];\\n      newNode = treeNode.setSlot(childSlot, nodeWeight);\\n      branches[level][parent] = newNode;\\n      nodeWeight = newNode.sumWeight();\\n    }\\n\\n    // set level Root\\n    childSlot = parent.slot();\\n    return _root.setSlot(childSlot, nodeWeight);\\n  }\\n\\n  /// @notice Retrieves the next available empty leaf position. Tries to fill\\n  /// left to right first, ignoring leaf removals, and then fills\\n  /// most-recent-removals first.\\n  /// @return the position of the empty leaf\\n  function getEmptyLeafPosition() internal returns (uint256) {\\n    uint256 rLeaf = rightmostLeaf;\\n    bool spaceOnRight = (rLeaf + 1) < Constants.POOL_CAPACITY;\\n    if (spaceOnRight) {\\n      rightmostLeaf = rLeaf + 1;\\n      return rLeaf;\\n    } else {\\n      uint256 emptyLeafCount = emptyLeaves.length;\\n      require(emptyLeafCount > 0, \\\"Pool is full\\\");\\n      uint256 emptyLeaf = emptyLeaves[emptyLeafCount - 1];\\n      emptyLeaves.pop();\\n      return emptyLeaf;\\n    }\\n  }\\n\\n  /// @notice Gets the flagged leaf position for an operator.\\n  /// @param operator the address of the operator\\n  /// @return the leaf position of that operator\\n  function getFlaggedLeafPosition(address operator)\\n    internal\\n    view\\n    returns (uint256)\\n  {\\n    return flaggedLeafPosition[operator];\\n  }\\n\\n  /// @notice Gets the weight of a leaf at a particular position.\\n  /// @param position the index of the leaf\\n  /// @return the weight of the leaf at that position\\n  function getLeafWeight(uint256 position) internal view returns (uint256) {\\n    uint256 slot = position.slot();\\n    uint256 parent = position.parent();\\n\\n    // A leaf's weight information is stored a 32-bit slot in the branch layer\\n    // directly above the leaf layer. To access it, we calculate that slot and\\n    // parent position, and always know the hard-coded layer index.\\n    uint256 node = branches[Constants.LEVELS][parent];\\n    return node.getSlot(slot);\\n  }\\n\\n  /// @notice Picks a leaf given a random index.\\n  /// @param index a number in `[0, _root.totalWeight())` used to decide\\n  /// between leaves\\n  /// @param _root the root of the tree\\n  function pickWeightedLeaf(uint256 index, uint256 _root)\\n    internal\\n    view\\n    returns (uint256 leafPosition)\\n  {\\n    uint256 currentIndex = index;\\n    uint256 currentNode = _root;\\n    uint256 currentPosition = 0;\\n    uint256 currentSlot;\\n\\n    require(index < currentNode.sumWeight(), \\\"Index exceeds weight\\\");\\n\\n    // get root slot\\n    (currentSlot, currentIndex) = currentNode.pickWeightedSlot(currentIndex);\\n\\n    // get slots from levels 2 to 7\\n    for (uint256 level = 2; level <= Constants.LEVELS; level++) {\\n      currentPosition = currentPosition.child(currentSlot);\\n      currentNode = branches[level][currentPosition];\\n      (currentSlot, currentIndex) = currentNode.pickWeightedSlot(currentIndex);\\n    }\\n\\n    // get leaf position\\n    leafPosition = currentPosition.child(currentSlot);\\n  }\\n}\\n\",\"keccak256\":\"0x51daeca62ef52be78a1a9de4d2a1c5900c873165f59eda14d5965d7d7da90a03\"},\"@openzeppelin/contracts/access/Ownable.sol\":{\"content\":\"// SPDX-License-Identifier: MIT\\n// OpenZeppelin Contracts (last updated v4.7.0) (access/Ownable.sol)\\n\\npragma solidity ^0.8.0;\\n\\nimport \\\"../utils/Context.sol\\\";\\n\\n/**\\n * @dev Contract module which provides a basic access control mechanism, where\\n * there is an account (an owner) that can be granted exclusive access to\\n * specific functions.\\n *\\n * By default, the owner account will be the one that deploys the contract. This\\n * can later be changed with {transferOwnership}.\\n *\\n * This module is used through inheritance. It will make available the modifier\\n * `onlyOwner`, which can be applied to your functions to restrict their use to\\n * the owner.\\n */\\nabstract contract Ownable is Context {\\n    address private _owner;\\n\\n    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);\\n\\n    /**\\n     * @dev Initializes the contract setting the deployer as the initial owner.\\n     */\\n    constructor() {\\n        _transferOwnership(_msgSender());\\n    }\\n\\n    /**\\n     * @dev Throws if called by any account other than the owner.\\n     */\\n    modifier onlyOwner() {\\n        _checkOwner();\\n        _;\\n    }\\n\\n    /**\\n     * @dev Returns the address of the current owner.\\n     */\\n    function owner() public view virtual returns (address) {\\n        return _owner;\\n    }\\n\\n    /**\\n     * @dev Throws if the sender is not the owner.\\n     */\\n    function _checkOwner() internal view virtual {\\n        require(owner() == _msgSender(), \\\"Ownable: caller is not the owner\\\");\\n    }\\n\\n    /**\\n     * @dev Leaves the contract without owner. It will not be possible to call\\n     * `onlyOwner` functions anymore. Can only be called by the current owner.\\n     *\\n     * NOTE: Renouncing ownership will leave the contract without an owner,\\n     * thereby removing any functionality that is only available to the owner.\\n     */\\n    function renounceOwnership() public virtual onlyOwner {\\n        _transferOwnership(address(0));\\n    }\\n\\n    /**\\n     * @dev Transfers ownership of the contract to a new account (`newOwner`).\\n     * Can only be called by the current owner.\\n     */\\n    function transferOwnership(address newOwner) public virtual onlyOwner {\\n        require(newOwner != address(0), \\\"Ownable: new owner is the zero address\\\");\\n        _transferOwnership(newOwner);\\n    }\\n\\n    /**\\n     * @dev Transfers ownership of the contract to a new account (`newOwner`).\\n     * Internal function without access restriction.\\n     */\\n    function _transferOwnership(address newOwner) internal virtual {\\n        address oldOwner = _owner;\\n        _owner = newOwner;\\n        emit OwnershipTransferred(oldOwner, newOwner);\\n    }\\n}\\n\",\"keccak256\":\"0xa94b34880e3c1b0b931662cb1c09e5dfa6662f31cba80e07c5ee71cd135c9673\",\"license\":\"MIT\"},\"@openzeppelin/contracts/token/ERC20/IERC20.sol\":{\"content\":\"// SPDX-License-Identifier: MIT\\n// OpenZeppelin Contracts (last updated v4.6.0) (token/ERC20/IERC20.sol)\\n\\npragma solidity ^0.8.0;\\n\\n/**\\n * @dev Interface of the ERC20 standard as defined in the EIP.\\n */\\ninterface IERC20 {\\n    /**\\n     * @dev Emitted when `value` tokens are moved from one account (`from`) to\\n     * another (`to`).\\n     *\\n     * Note that `value` may be zero.\\n     */\\n    event Transfer(address indexed from, address indexed to, uint256 value);\\n\\n    /**\\n     * @dev Emitted when the allowance of a `spender` for an `owner` is set by\\n     * a call to {approve}. `value` is the new allowance.\\n     */\\n    event Approval(address indexed owner, address indexed spender, uint256 value);\\n\\n    /**\\n     * @dev Returns the amount of tokens in existence.\\n     */\\n    function totalSupply() external view returns (uint256);\\n\\n    /**\\n     * @dev Returns the amount of tokens owned by `account`.\\n     */\\n    function balanceOf(address account) external view returns (uint256);\\n\\n    /**\\n     * @dev Moves `amount` tokens from the caller's account to `to`.\\n     *\\n     * Returns a boolean value indicating whether the operation succeeded.\\n     *\\n     * Emits a {Transfer} event.\\n     */\\n    function transfer(address to, uint256 amount) external returns (bool);\\n\\n    /**\\n     * @dev Returns the remaining number of tokens that `spender` will be\\n     * allowed to spend on behalf of `owner` through {transferFrom}. This is\\n     * zero by default.\\n     *\\n     * This value changes when {approve} or {transferFrom} are called.\\n     */\\n    function allowance(address owner, address spender) external view returns (uint256);\\n\\n    /**\\n     * @dev Sets `amount` as the allowance of `spender` over the caller's tokens.\\n     *\\n     * Returns a boolean value indicating whether the operation succeeded.\\n     *\\n     * IMPORTANT: Beware that changing an allowance with this method brings the risk\\n     * that someone may use both the old and the new allowance by unfortunate\\n     * transaction ordering. One possible solution to mitigate this race\\n     * condition is to first reduce the spender's allowance to 0 and set the\\n     * desired value afterwards:\\n     * https://github.com/ethereum/EIPs/issues/20#issuecomment-263524729\\n     *\\n     * Emits an {Approval} event.\\n     */\\n    function approve(address spender, uint256 amount) external returns (bool);\\n\\n    /**\\n     * @dev Moves `amount` tokens from `from` to `to` using the\\n     * allowance mechanism. `amount` is then deducted from the caller's\\n     * allowance.\\n     *\\n     * Returns a boolean value indicating whether the operation succeeded.\\n     *\\n     * Emits a {Transfer} event.\\n     */\\n    function transferFrom(\\n        address from,\\n        address to,\\n        uint256 amount\\n    ) external returns (bool);\\n}\\n\",\"keccak256\":\"0x9750c6b834f7b43000631af5cc30001c5f547b3ceb3635488f140f60e897ea6b\",\"license\":\"MIT\"},\"@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol\":{\"content\":\"// SPDX-License-Identifier: MIT\\n// OpenZeppelin Contracts v4.4.1 (token/ERC20/extensions/IERC20Metadata.sol)\\n\\npragma solidity ^0.8.0;\\n\\nimport \\\"../IERC20.sol\\\";\\n\\n/**\\n * @dev Interface for the optional metadata functions from the ERC20 standard.\\n *\\n * _Available since v4.1._\\n */\\ninterface IERC20Metadata is IERC20 {\\n    /**\\n     * @dev Returns the name of the token.\\n     */\\n    function name() external view returns (string memory);\\n\\n    /**\\n     * @dev Returns the symbol of the token.\\n     */\\n    function symbol() external view returns (string memory);\\n\\n    /**\\n     * @dev Returns the decimals places of the token.\\n     */\\n    function decimals() external view returns (uint8);\\n}\\n\",\"keccak256\":\"0x8de418a5503946cabe331f35fe242d3201a73f67f77aaeb7110acb1f30423aca\",\"license\":\"MIT\"},\"@openzeppelin/contracts/utils/Context.sol\":{\"content\":\"// SPDX-License-Identifier: MIT\\n// OpenZeppelin Contracts v4.4.1 (utils/Context.sol)\\n\\npragma solidity ^0.8.0;\\n\\n/**\\n * @dev Provides information about the current execution context, including the\\n * sender of the transaction and its data. While these are generally available\\n * via msg.sender and msg.data, they should not be accessed in such a direct\\n * manner, since when dealing with meta-transactions the account sending and\\n * paying for execution may not be the actual sender (as far as an application\\n * is concerned).\\n *\\n * This contract is only required for intermediate, library-like contracts.\\n */\\nabstract contract Context {\\n    function _msgSender() internal view virtual returns (address) {\\n        return msg.sender;\\n    }\\n\\n    function _msgData() internal view virtual returns (bytes calldata) {\\n        return msg.data;\\n    }\\n}\\n\",\"keccak256\":\"0xe2e337e6dde9ef6b680e07338c493ebea1b5fd09b43424112868e9cc1706bca7\",\"license\":\"MIT\"},\"@thesis/solidity-contracts/contracts/token/IApproveAndCall.sol\":{\"content\":\"// SPDX-License-Identifier: MIT\\n\\npragma solidity ^0.8.4;\\n\\n/// @notice An interface that should be implemented by tokens supporting\\n///         `approveAndCall`/`receiveApproval` pattern.\\ninterface IApproveAndCall {\\n    /// @notice Executes `receiveApproval` function on spender as specified in\\n    ///         `IReceiveApproval` interface. Approves spender to withdraw from\\n    ///         the caller multiple times, up to the `amount`. If this\\n    ///         function is called again, it overwrites the current allowance\\n    ///         with `amount`. Reverts if the approval reverted or if\\n    ///         `receiveApproval` call on the spender reverted.\\n    function approveAndCall(\\n        address spender,\\n        uint256 amount,\\n        bytes memory extraData\\n    ) external returns (bool);\\n}\\n\",\"keccak256\":\"0x393d18ef81a57dcc96fff4c340cc2945deaebb37b9796c322cf2bc96872c3df8\",\"license\":\"MIT\"},\"@thesis/solidity-contracts/contracts/token/IERC20WithPermit.sol\":{\"content\":\"// SPDX-License-Identifier: MIT\\n\\npragma solidity ^0.8.4;\\n\\nimport \\\"@openzeppelin/contracts/token/ERC20/IERC20.sol\\\";\\nimport \\\"@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol\\\";\\n\\nimport \\\"./IApproveAndCall.sol\\\";\\n\\n/// @title  IERC20WithPermit\\n/// @notice Burnable ERC20 token with EIP2612 permit functionality. User can\\n///         authorize a transfer of their token with a signature conforming\\n///         EIP712 standard instead of an on-chain transaction from their\\n///         address. Anyone can submit this signature on the user's behalf by\\n///         calling the permit function, as specified in EIP2612 standard,\\n///         paying gas fees, and possibly performing other actions in the same\\n///         transaction.\\ninterface IERC20WithPermit is IERC20, IERC20Metadata, IApproveAndCall {\\n    /// @notice EIP2612 approval made with secp256k1 signature.\\n    ///         Users can authorize a transfer of their tokens with a signature\\n    ///         conforming EIP712 standard, rather than an on-chain transaction\\n    ///         from their address. Anyone can submit this signature on the\\n    ///         user's behalf by calling the permit function, paying gas fees,\\n    ///         and possibly performing other actions in the same transaction.\\n    /// @dev    The deadline argument can be set to `type(uint256).max to create\\n    ///         permits that effectively never expire.\\n    function permit(\\n        address owner,\\n        address spender,\\n        uint256 amount,\\n        uint256 deadline,\\n        uint8 v,\\n        bytes32 r,\\n        bytes32 s\\n    ) external;\\n\\n    /// @notice Destroys `amount` tokens from the caller.\\n    function burn(uint256 amount) external;\\n\\n    /// @notice Destroys `amount` of tokens from `account`, deducting the amount\\n    ///         from caller's allowance.\\n    function burnFrom(address account, uint256 amount) external;\\n\\n    /// @notice Returns hash of EIP712 Domain struct with the token name as\\n    ///         a signing domain and token contract as a verifying contract.\\n    ///         Used to construct EIP2612 signature provided to `permit`\\n    ///         function.\\n    /* solhint-disable-next-line func-name-mixedcase */\\n    function DOMAIN_SEPARATOR() external view returns (bytes32);\\n\\n    /// @notice Returns the current nonce for EIP2612 permission for the\\n    ///         provided token owner for a replay protection. Used to construct\\n    ///         EIP2612 signature provided to `permit` function.\\n    function nonce(address owner) external view returns (uint256);\\n\\n    /// @notice Returns EIP2612 Permit message hash. Used to construct EIP2612\\n    ///         signature provided to `permit` function.\\n    /* solhint-disable-next-line func-name-mixedcase */\\n    function PERMIT_TYPEHASH() external pure returns (bytes32);\\n}\\n\",\"keccak256\":\"0xdac9a5086c19a7128b505a7be1ab0ac1aa314f6989cb88d2417e9d7383f89fa9\",\"license\":\"MIT\"},\"@thesis/solidity-contracts/contracts/token/IReceiveApproval.sol\":{\"content\":\"// SPDX-License-Identifier: MIT\\n\\npragma solidity ^0.8.4;\\n\\n/// @notice An interface that should be implemented by contracts supporting\\n///         `approveAndCall`/`receiveApproval` pattern.\\ninterface IReceiveApproval {\\n    /// @notice Receives approval to spend tokens. Called as a result of\\n    ///         `approveAndCall` call on the token.\\n    function receiveApproval(\\n        address from,\\n        uint256 amount,\\n        address token,\\n        bytes calldata extraData\\n    ) external;\\n}\\n\",\"keccak256\":\"0x6a30d83ad230548b1e7839737affc8489a035314209de14b89dbef7fb0f66395\",\"license\":\"MIT\"}},\"version\":1}",
+  "bytecode": "0x60e06040523480156200001157600080fd5b5060405162002c7138038062002c71833981016040819052620000349162000140565b6000808055600481905560078054600101815590524260805262000058336200008d565b6200006333620000df565b600b805460ff60a01b1916600160a01b1790556001600160a01b0390911660a05260c0526200017c565b600b80546001600160a01b038381166001600160a01b0319831681179093556040519116919082907f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e090600090a35050565b600d80546001600160a01b038381166001600160a01b031983168117909355604080519190921680825260208201939093527ff7d2871c195d5dcbeca7c9bfb4f7ae4149d0915a5d3d03c8c2286c9a24e932be910160405180910390a15050565b600080604083850312156200015457600080fd5b82516001600160a01b03811681146200016c57600080fd5b6020939093015192949293505050565b60805160a05160c051612a9b620001d6600039600081816102a6015261139001526000818161050101528181610ac801528181610b6701528181610cfb0152610fb10152600081816113040152611aa50152612a9b6000f3fe608060405234801561001057600080fd5b506004361061021b5760003560e01c806396c82e5711610125578063dc7520c5116100ad578063f2fde38b1161007c578063f2fde38b146104e9578063f7186ce014610329578063f7c618c1146104fc578063f7f9a8fa14610523578063f83d08ba1461054357600080fd5b8063dc7520c5146104b3578063e20981ca146104c6578063e7bfd899146104d9578063f23baf4a146104e157600080fd5b8063a9649414116100f4578063a964941414610453578063b0f3828e14610466578063b2f3db4d1461047a578063c0a3f9eb1461048d578063c545b3a9146104a057600080fd5b806396c82e571461041c578063a4e2d63414610424578063a69df4b514610438578063a7a7d3911461044057600080fd5b80636b1906f8116101a8578063873e31fa11610177578063873e31fa146103a75780638871ca5d146103d25780638da5cb5b146103e55780638f4ffcb1146103f6578063942f68921461040957600080fd5b80636b1906f8146103295780636c2530b914610354578063715018a6146103745780637c2cf6cd1461037c57600080fd5b806343a3db30116101ef57806343a3db30146102a15780634de824f0146102c85780635757ed5b146102db5780635a48b46b146102ee578063660186e61461031657600080fd5b8062983b7314610220578063241a418814610246578063398ece9c1461025b5780633e723fc91461028e575b600080fd5b61023361022e3660046123d2565b61054b565b6040519081526020015b60405180910390f35b6102596102543660046123ed565b610569565b005b61027e6102693660046123d2565b600c6020526000908152604090205460ff1681565b604051901515815260200161023d565b61025961029c36600461245c565b6106be565b6102337f000000000000000000000000000000000000000000000000000000000000000081565b61027e6102d63660046123ed565b6107ea565b6102336102e93660046123d2565b610808565b6103016102fc3660046123d2565b610856565b60405163ffffffff909116815260200161023d565b61027e6103243660046123d2565b610877565b61027e6103373660046123d2565b6001600160a01b0316600090815260036020526040902054151590565b61036761036236600461249e565b6108ac565b60405161023d91906124c0565b610259610a4e565b600d5461038f906001600160a01b031681565b6040516001600160a01b03909116815260200161023d565b6103ba6103b53660046123d2565b610a62565b6040516001600160601b03909116815260200161023d565b61038f6103e036600461251e565b610a79565b600b546001600160a01b031661038f565b610259610404366004612539565b610ac6565b6102596104173660046125d4565b610bf0565b610233610c76565b600d5461027e90600160a01b900460ff1681565b610259610c88565b6009546103ba906001600160601b031681565b6102596104613660046123d2565b610c9f565b600b5461027e90600160a01b900460ff1681565b6102596104883660046123d2565b610d6f565b61027e61049b3660046123d2565b610dc5565b6102596104ae3660046123d2565b610ddc565b6102596104c13660046123ed565b610e7c565b6103ba6104d4366004612620565b610f1a565b610233611029565b610259611044565b6102596104f73660046123d2565b6110f8565b61038f7f000000000000000000000000000000000000000000000000000000000000000081565b61053661053136600461245c565b61116e565b60405161023d9190612653565b610259611271565b60008061055783610856565b90506105628161128e565b9392505050565b61057161132f565b600d54600160a01b900460ff16156105c85760405162461bcd60e51b815260206004820152601560248201527414dbdc9d1a5d1a5bdb881c1bdbdb081b1bd8dad959605a1b60448201526064015b60405180910390fd5b60006105d382611389565b90506000811161061d5760405162461bcd60e51b81526020600482015260156024820152744f70657261746f72206e6f7420656c696769626c6560581b60448201526064016105bf565b600b54600160a01b900460ff1615610697576001600160a01b0383166000908152600c602052604090205460ff166106975760405162461bcd60e51b815260206004820152601e60248201527f4e6f742062657461206f70657261746f7220666f72206368616f736e6574000060448201526064016105bf565b6106a183826113b5565b60006106ac84610856565b90506106b881836114ab565b50505050565b600b54600160a01b900460ff166107105760405162461bcd60e51b81526020600482015260166024820152754368616f736e6574206973206e6f742061637469766560501b60448201526064016105bf565b600d546001600160a01b0316331461073a5760405162461bcd60e51b81526004016105bf90612694565b60005b818110156107ac576001600c600085858581811061075d5761075d6126c4565b905060200201602081019061077291906123d2565b6001600160a01b031681526020810191909152604001600020805460ff1916911515919091179055806107a4816126f0565b91505061073d565b507f79b60dc9f29a0514f5ce9bf1e89b7add7a22440cde3b203c03a842e3b534071b82826040516107de929190612709565b60405180910390a15050565b60006107f583610808565b6107fe83611389565b1490505b92915050565b6001600160a01b038116600090815260036020526040812054806000036108325750600092915050565b6001600160ff1b038116600061084782611631565b95945050505050565b50919050565b6001600160a01b031660009081526006602052604090205463ffffffff1690565b60008061088383610856565b90506105628163ffffffff9081166000908152600a6020526040902054600160c01b9004161590565b600d54606090600160a01b900460ff166109085760405162461bcd60e51b815260206004820152601760248201527f536f72746974696f6e20706f6f6c20756e6c6f636b656400000000000000000060448201526064016105bf565b600080549083906109188361168e565b90506000811161096a5760405162461bcd60e51b815260206004820152601c60248201527f4e6f7420656e6f756768206f70657261746f727320696e20706f6f6c0000000060448201526064016105bf565b600080610976836116b5565b905060008867ffffffffffffffff81111561099357610993612755565b6040519080825280602002602001820160405280156109bc578160200160208202803683370190505b50905060005b89811015610a41576109d58587856116e7565b9650935060006109e5858961175f565b600081815260026020526040902054909150610a008161182a565b848481518110610a1257610a126126c4565b602002602001019063ffffffff16908163ffffffff168152505050508080610a39906126f0565b9150506109c2565b5098975050505050505050565b610a5661132f565b610a606000611863565b565b600080610a6e83610856565b9050610562816118b5565b60075460009063ffffffff831610610a92576000610802565b60078263ffffffff1681548110610aab57610aab6126c4565b6000918252602090912001546001600160a01b031692915050565b7f00000000000000000000000000000000000000000000000000000000000000006001600160a01b0316836001600160a01b031614610b3b5760405162461bcd60e51b81526020600482015260116024820152702ab739bab83837b93a32b2103a37b5b2b760791b60448201526064016105bf565b6040516323b872dd60e01b81526001600160a01b038681166004830152306024830152604482018690527f000000000000000000000000000000000000000000000000000000000000000016906323b872dd906064016020604051808303816000875af1158015610bb0573d6000803e3d6000fd5b505050506040513d601f19601f82011682018060405250810190610bd4919061276b565b50610be984610be460005461168e565b611963565b5050505050565b610bf861132f565b610c36838380806020026020016040519081016040528093929190818152602001838360200280828437600092019190915250859250611a6b915050565b7f01f5838e3dde8cf4817b958fe95be92bdfeccb34317e1d9f58d1cfe5230de231838383604051610c699392919061278d565b60405180910390a1505050565b6000610c8360005461168e565b905090565b610c9061132f565b600d805460ff60a01b19169055565b610ca761132f565b6000610cca600980546001600160601b031981169091556001600160601b031690565b60405163a9059cbb60e01b81526001600160a01b0384811660048301526001600160601b03831660248301529192507f00000000000000000000000000000000000000000000000000000000000000009091169063a9059cbb906044016020604051808303816000875af1158015610d46573d6000803e3d6000fd5b505050506040513d601f19601f82011682018060405250810190610d6a919061276b565b505050565b6000610d7a82610856565b9050610d8581611c6d565b60405163ffffffff8216906001600160a01b038416907fe61e9f0f049b3bfae1ae903a5e3018c02a008aa0d238ffddf23a4fb4c027853690600090a35050565b600080610dd183610856565b905061056281611e09565b600d546001600160a01b03163314610e065760405162461bcd60e51b81526004016105bf90612694565b6001600160a01b038116610e705760405162461bcd60e51b815260206004820152602b60248201527f4e6577206368616f736e6574206f776e6572206d757374206e6f74206265207a60448201526a65726f206164647265737360a81b60648201526084016105bf565b610e7981611e1d565b50565b610e8461132f565b600d54600160a01b900460ff1615610ed65760405162461bcd60e51b815260206004820152601560248201527414dbdc9d1a5d1a5bdb881c1bdbdb081b1bd8dad959605a1b60448201526064016105bf565b6000610ee182611389565b90506000610eee84610856565b9050610efa81836114ab565b81600003610f1057610f0b84611e77565b6106b8565b6106b88483611eeb565b6000610f2461132f565b6000610f2f84610856565b9050610f4381610f3e86610808565b6114ab565b63ffffffff81166000908152600a6020526040812080546bffffffffffffffffffffffff60601b198116909155600160601b90046001600160601b031660405163a9059cbb60e01b81526001600160a01b0386811660048301526001600160601b03831660248301529192507f00000000000000000000000000000000000000000000000000000000000000009091169063a9059cbb906044016020604051808303816000875af1158015610ffc573d6000803e3d6000fd5b505050506040513d601f19601f82011682018060405250810190611020919061276b565b50949350505050565b6004546005546000919061103d81836127de565b9250505090565b600b54600160a01b900460ff166110965760405162461bcd60e51b81526020600482015260166024820152754368616f736e6574206973206e6f742061637469766560501b60448201526064016105bf565b600d546001600160a01b031633146110c05760405162461bcd60e51b81526004016105bf90612694565b600b805460ff60a01b191690556040517fbea11dc6cfde2788be7e8a6ceef5c8d181bb1c628ba6d71675fca0e754367c7490600090a1565b61110061132f565b6001600160a01b0381166111655760405162461bcd60e51b815260206004820152602660248201527f4f776e61626c653a206e6577206f776e657220697320746865207a65726f206160448201526564647265737360d01b60648201526084016105bf565b610e7981611863565b60075460609060008367ffffffffffffffff81111561118f5761118f612755565b6040519080825280602002602001820160405280156111b8578160200160208202803683370190505b50905060005b848110156110205760008686838181106111da576111da6126c4565b90506020020160208101906111ef919061251e565b90508063ffffffff168411611205576000611234565b60078163ffffffff168154811061121e5761121e6126c4565b6000918252602090912001546001600160a01b03165b838381518110611246576112466126c4565b6001600160a01b03909216602092830291909101909101525080611269816126f0565b9150506111be565b61127961132f565b600d805460ff60a01b1916600160a01b179055565b63ffffffff8082166000908152600a60205260408120549091600160c01b909104168082036112ff5760405162461bcd60e51b815260206004820152601960248201527f4f70657261746f7220616c726561647920656c696769626c650000000000000060448201526064016105bf565b6105627f000000000000000000000000000000000000000000000000000000000000000063ffffffff83166127f1565b600b546001600160a01b03163314610a605760405162461bcd60e51b815260206004820181905260248201527f4f776e61626c653a2063616c6c6572206973206e6f7420746865206f776e657260448201526064016105bf565b60006108027f00000000000000000000000000000000000000000000000000000000000000008361281a565b6001600160a01b0382166000908152600360205260409020541561142e5760405162461bcd60e51b815260206004820152602a60248201527f4f70657261746f7220697320616c7265616479207265676973746572656420696044820152691b881d1a19481c1bdbdb60b21b60648201526084016105bf565b600061143983610856565b63ffffffff169050806000036114555761145283611f5c565b90505b600061145f61201f565b9050600061146e854385612102565b905061147e8282866000546121db565b600055600160ff1b82176001600160a01b0390951660009081526003602052604090209490945550505050565b60085463ffffffff8084166000908152600a60209081526040808320815160808101835290546001600160601b03818116808452600160601b8304821695840195909552600160c01b8204871693830193909352600160e01b9004909416606085018190529416939061151e908561282e565b6115289190612855565b9050816040015163ffffffff1660000361155f57808260200181815161154e9190612880565b6001600160601b03169052506115a2565b6009805482919060009061157d9084906001600160601b0316612880565b92506101000a8154816001600160601b0302191690836001600160601b031602179055505b506001600160601b03918216815263ffffffff928316606082019081529383166000908152600a60209081526040918290208351815492850151939094015196518616600160e01b026001600160e01b0397909616600160c01b02969096166001600160c01b03928516600160601b026001600160c01b03199092169390941692909217919091171617179055565b60008061163d836121f7565b9050600061164b8460031c90565b60008181527fdc686ec4a0ff239c70e7c7c36e8f853eced3bc8618f48d2b816da2a74311237e602052604090205490915061084781846020021c63ffffffff1690565b63ffffffff8116602082901c5b80156108505763ffffffff8116919091019060201c61169b565b6000816001036116c757506000919050565b601f5b82816001901b106116de57600019016116ca565b60010192915050565b6000808080855b82611752576000196001871b0181169150803060405160200161172892919091825260601b6001600160601b031916602082015260340190565b6040516020818303038152906040528051906020012090508782101561174d57600192505b6116ee565b9097909650945050505050565b60008282828061176e8361168e565b87106117b35760405162461bcd60e51b8152602060048201526014602482015273125b99195e08195e18d959591cc81dd95a59da1d60621b60448201526064016105bf565b6117bd8385612207565b9450905060025b60078111611814576117d6838361223e565b6000828152600160209081526040808320848452909152902054945092506117fe8486612207565b955091508061180c816126f0565b9150506117c4565b5061181f828261223e565b979650505050505050565b6000600161183a60036002612984565b6118469061010061281a565b611851906002612984565b61185b91906127de565b909116919050565b600b80546001600160a01b038381166001600160a01b0319831681179093556040519116919082907f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e090600090a35050565b60085463ffffffff8083166000908152600a60209081526040808320815160808101835290546001600160601b038181168352600160601b8204811694830194909452600160c01b81048616928201839052600160e01b9004909416606085015291931691908303611958576060810151815160009163ffffffff169061193c908561282e565b6119469190612855565b90508082602001516108479190612880565b602001519392505050565b60008163ffffffff16116119b15760405162461bcd60e51b8152602060048201526015602482015274139bc81c9958da5c1a595b9d1cc81a5b881c1bdbdb605a1b60448201526064016105bf565b6008546000906119d190600160601b90046001600160601b031684612880565b905060006119e563ffffffff841683612990565b905060006119f963ffffffff8516846129b6565b600880549192508391600090611a199084906001600160601b0316612880565b92506101000a8154816001600160601b0302191690836001600160601b03160217905550806008600c6101000a8154816001600160601b0302191690836001600160601b031602179055505050505050565b604080516080810182526000808252602082018190529181018290526060810182905260085490916001600160601b039091169080611aca7f0000000000000000000000000000000000000000000000000000000000000000866127de565b905060005b8651811015611c64576000878281518110611aec57611aec6126c4565b60209081029190910181015163ffffffff8082166000908152600a845260409081902080546001600160601b03600160601b82048116968d01969096529485168b52600160c01b85048316918b01829052600160e01b90940490911660608a015290925015611b7f578363ffffffff16876040015163ffffffff161015611b7a5763ffffffff841660408801525b611bcb565b63ffffffff808516604089015260608801518851911690611ba0908861282e565b611baa9190612855565b94508487602001818151611bbe9190612880565b6001600160601b03169052505b6001600160601b038681168089526020890151835460408b015160608c01516001600160e01b0319909216600160601b93909516929092027fffffffff00000000ffffffffffffffffffffffff0000000000000000000000001693909317909117600160c01b63ffffffff92831602176001600160e01b0316600160e01b91909216021790555080611c5c816126f0565b915050611acf565b50505050505050565b611c7681611e09565b611cc25760405162461bcd60e51b815260206004820152601960248201527f4f70657261746f72207374696c6c20696e656c696769626c650000000000000060448201526064016105bf565b60085463ffffffff8083166000908152600a60209081526040808320815160808101835290546001600160601b03818116808452600160601b8304821695840195909552600160c01b8204871693830193909352600160e01b90049094166060850181905294169390611d35908561282e565b611d3f9190612855565b600980549192508291600090611d5f9084906001600160601b0316612880565b82546001600160601b039182166101009390930a928302928202191691909117909155938416835250506000604080830182815263ffffffff9586168352600a602090815291909220835181549285015193516060909501518716600160e01b026001600160e01b0395909716600160c01b02949094166001600160c01b03938616600160601b026001600160c01b03199093169490951693909317171691909117919091179055565b600042611e158361128e565b111592915050565b600d80546001600160a01b038381166001600160a01b031983168117909355604080519190921680825260208201939093527ff7d2871c195d5dcbeca7c9bfb4f7ae4149d0915a5d3d03c8c2286c9a24e932be91016107de565b6001600160a01b03811660009081526003602052604081205490819003611eb05760405162461bcd60e51b81526004016105bf906129dc565b60006001600160ff1b0382169050611eca81600054612268565b600055610d6a836001600160a01b0316600090815260036020526040812055565b6001600160a01b038216600090815260036020526040902054611f205760405162461bcd60e51b81526004016105bf906129dc565b6001600160a01b03821660009081526003602052604081205490546001600160ff1b03821690611f5390829085906122dd565b60005550505050565b60075460009063ffffffff811115611faf5760405162461bcd60e51b8152602060048201526016602482015275141bdbdb0818d85c1858da5d1e48195e18d95959195960521b60448201526064016105bf565b6001600160a01b03929092166000818152600660205260408120805463ffffffff191663ffffffff86161790556007805460018101825591527fa66cc928b5edb82af9bd49922954155ab7b0942694bea4ce44661d9a8736c6880180546001600160a01b03191690911790555090565b60045460009081600761203460036002612984565b61203e9190612984565b6120498360016127f1565b10905080156120665761205d8260016127f1565b60045550919050565b600554806120a55760405162461bcd60e51b815260206004820152600c60248201526b141bdbdb081a5cc8199d5b1b60a21b60448201526064016105bf565b600060056120b46001846127de565b815481106120c4576120c46126c4565b9060005260206000200154905060058054806120e2576120e2612a22565b600190038181906000526020600020016000905590558094505050505090565b600067ffffffffffffffff83111561211c5761211c612a38565b63ffffffff82111561213057612130612a38565b6001600160601b0319606085901b166000600161214f60036002612984565b61215b9061010061281a565b612166906002612984565b61217091906127de565b84169050600061218260036002612984565b61218e9061010061281a565b600161219c60036002612984565b6121a89061010061281a565b6121b39060606127de565b6121be906002612984565b6121c891906127de565b8716901b92909217179150509392505050565b6000848152600260205260408120849055610847858484612307565b6000600161185160036002612984565b6000818363ffffffff81165b80831061223457600193909301929091039060201c63ffffffff8116612213565b50505b9250929050565b6000600161224e60036002612984565b61225891906127de565b8216600384901b17905092915050565b600080600160045461227a91906127de565b9050838114600061228d868280886121db565b9050811561229f576004839055610847565b600580546001810182556000919091527f036b6384b5eca791c62761152d0c79bb0604c104a5fb6f4eb0703f3154bb3db00186905595945050505050565b6000826122e985611631565b14612300576122f9848484612307565b9050610562565b5080610562565b6000808080858760075b6002811061238857612322826121f7565b955061232e8260031c90565b60008281526001602090815260408083208484528252909120805463ffffffff928a0283811b198216938816901b9290921790819055909650945091506123748461168e565b92508061238081612a4e565b915050612311565b50612392816121f7565b945063ffffffff6020860281811b198916918416901b179998505050505050505050565b80356001600160a01b03811681146123cd57600080fd5b919050565b6000602082840312156123e457600080fd5b610562826123b6565b6000806040838503121561240057600080fd5b612409836123b6565b946020939093013593505050565b60008083601f84011261242957600080fd5b50813567ffffffffffffffff81111561244157600080fd5b6020830191508360208260051b850101111561223757600080fd5b6000806020838503121561246f57600080fd5b823567ffffffffffffffff81111561248657600080fd5b61249285828601612417565b90969095509350505050565b600080604083850312156124b157600080fd5b50508035926020909101359150565b6020808252825182820181905260009190848201906040850190845b818110156124fe57835163ffffffff16835292840192918401916001016124dc565b50909695505050505050565b803563ffffffff811681146123cd57600080fd5b60006020828403121561253057600080fd5b6105628261250a565b60008060008060006080868803121561255157600080fd5b61255a866123b6565b94506020860135935061256f604087016123b6565b9250606086013567ffffffffffffffff8082111561258c57600080fd5b818801915088601f8301126125a057600080fd5b8135818111156125af57600080fd5b8960208285010111156125c157600080fd5b9699959850939650602001949392505050565b6000806000604084860312156125e957600080fd5b833567ffffffffffffffff81111561260057600080fd5b61260c86828701612417565b909790965060209590950135949350505050565b6000806040838503121561263357600080fd5b61263c836123b6565b915061264a602084016123b6565b90509250929050565b6020808252825182820181905260009190848201906040850190845b818110156124fe5783516001600160a01b03168352928401929184019160010161266f565b6020808252601690820152752737ba103a34329031b430b7b9b732ba1037bbb732b960511b604082015260600190565b634e487b7160e01b600052603260045260246000fd5b634e487b7160e01b600052601160045260246000fd5b600060018201612702576127026126da565b5060010190565b60208082528181018390526000908460408401835b8681101561274a576001600160a01b03612737846123b6565b168252918301919083019060010161271e565b509695505050505050565b634e487b7160e01b600052604160045260246000fd5b60006020828403121561277d57600080fd5b8151801515811461056257600080fd5b6040808252810183905260008460608301825b868110156127cb5763ffffffff6127b68461250a565b168252602092830192909101906001016127a0565b5060209390930193909352509392505050565b81810381811115610802576108026126da565b80820180821115610802576108026126da565b634e487b7160e01b600052601260045260246000fd5b60008261282957612829612804565b500490565b6001600160601b0382811682821603908082111561284e5761284e6126da565b5092915050565b6001600160601b03818116838216028082169190828114612878576128786126da565b505092915050565b6001600160601b0381811683821601908082111561284e5761284e6126da565b600181815b808511156128db5781600019048211156128c1576128c16126da565b808516156128ce57918102915b93841c93908002906128a5565b509250929050565b6000826128f257506001610802565b816128ff57506000610802565b8160018114612915576002811461291f5761293b565b6001915050610802565b60ff841115612930576129306126da565b50506001821b610802565b5060208310610133831016604e8410600b841016171561295e575081810a610802565b61296883836128a0565b806000190482111561297c5761297c6126da565b029392505050565b600061056283836128e3565b60006001600160601b03808416806129aa576129aa612804565b92169190910492915050565b60006001600160601b03808416806129d0576129d0612804565b92169190910692915050565b60208082526026908201527f4f70657261746f72206973206e6f74207265676973746572656420696e20746860408201526519481c1bdbdb60d21b606082015260800190565b634e487b7160e01b600052603160045260246000fd5b634e487b7160e01b600052600160045260246000fd5b600081612a5d57612a5d6126da565b50600019019056fea26469706673582212200777efb6bbaffaf3c12f9366651c0738fd0510bf19a96c3af0a337226cca78d364736f6c63430008110033",
+  "deployedBytecode": "0x608060405234801561001057600080fd5b506004361061021b5760003560e01c806396c82e5711610125578063dc7520c5116100ad578063f2fde38b1161007c578063f2fde38b146104e9578063f7186ce014610329578063f7c618c1146104fc578063f7f9a8fa14610523578063f83d08ba1461054357600080fd5b8063dc7520c5146104b3578063e20981ca146104c6578063e7bfd899146104d9578063f23baf4a146104e157600080fd5b8063a9649414116100f4578063a964941414610453578063b0f3828e14610466578063b2f3db4d1461047a578063c0a3f9eb1461048d578063c545b3a9146104a057600080fd5b806396c82e571461041c578063a4e2d63414610424578063a69df4b514610438578063a7a7d3911461044057600080fd5b80636b1906f8116101a8578063873e31fa11610177578063873e31fa146103a75780638871ca5d146103d25780638da5cb5b146103e55780638f4ffcb1146103f6578063942f68921461040957600080fd5b80636b1906f8146103295780636c2530b914610354578063715018a6146103745780637c2cf6cd1461037c57600080fd5b806343a3db30116101ef57806343a3db30146102a15780634de824f0146102c85780635757ed5b146102db5780635a48b46b146102ee578063660186e61461031657600080fd5b8062983b7314610220578063241a418814610246578063398ece9c1461025b5780633e723fc91461028e575b600080fd5b61023361022e3660046123d2565b61054b565b6040519081526020015b60405180910390f35b6102596102543660046123ed565b610569565b005b61027e6102693660046123d2565b600c6020526000908152604090205460ff1681565b604051901515815260200161023d565b61025961029c36600461245c565b6106be565b6102337f000000000000000000000000000000000000000000000000000000000000000081565b61027e6102d63660046123ed565b6107ea565b6102336102e93660046123d2565b610808565b6103016102fc3660046123d2565b610856565b60405163ffffffff909116815260200161023d565b61027e6103243660046123d2565b610877565b61027e6103373660046123d2565b6001600160a01b0316600090815260036020526040902054151590565b61036761036236600461249e565b6108ac565b60405161023d91906124c0565b610259610a4e565b600d5461038f906001600160a01b031681565b6040516001600160a01b03909116815260200161023d565b6103ba6103b53660046123d2565b610a62565b6040516001600160601b03909116815260200161023d565b61038f6103e036600461251e565b610a79565b600b546001600160a01b031661038f565b610259610404366004612539565b610ac6565b6102596104173660046125d4565b610bf0565b610233610c76565b600d5461027e90600160a01b900460ff1681565b610259610c88565b6009546103ba906001600160601b031681565b6102596104613660046123d2565b610c9f565b600b5461027e90600160a01b900460ff1681565b6102596104883660046123d2565b610d6f565b61027e61049b3660046123d2565b610dc5565b6102596104ae3660046123d2565b610ddc565b6102596104c13660046123ed565b610e7c565b6103ba6104d4366004612620565b610f1a565b610233611029565b610259611044565b6102596104f73660046123d2565b6110f8565b61038f7f000000000000000000000000000000000000000000000000000000000000000081565b61053661053136600461245c565b61116e565b60405161023d9190612653565b610259611271565b60008061055783610856565b90506105628161128e565b9392505050565b61057161132f565b600d54600160a01b900460ff16156105c85760405162461bcd60e51b815260206004820152601560248201527414dbdc9d1a5d1a5bdb881c1bdbdb081b1bd8dad959605a1b60448201526064015b60405180910390fd5b60006105d382611389565b90506000811161061d5760405162461bcd60e51b81526020600482015260156024820152744f70657261746f72206e6f7420656c696769626c6560581b60448201526064016105bf565b600b54600160a01b900460ff1615610697576001600160a01b0383166000908152600c602052604090205460ff166106975760405162461bcd60e51b815260206004820152601e60248201527f4e6f742062657461206f70657261746f7220666f72206368616f736e6574000060448201526064016105bf565b6106a183826113b5565b60006106ac84610856565b90506106b881836114ab565b50505050565b600b54600160a01b900460ff166107105760405162461bcd60e51b81526020600482015260166024820152754368616f736e6574206973206e6f742061637469766560501b60448201526064016105bf565b600d546001600160a01b0316331461073a5760405162461bcd60e51b81526004016105bf90612694565b60005b818110156107ac576001600c600085858581811061075d5761075d6126c4565b905060200201602081019061077291906123d2565b6001600160a01b031681526020810191909152604001600020805460ff1916911515919091179055806107a4816126f0565b91505061073d565b507f79b60dc9f29a0514f5ce9bf1e89b7add7a22440cde3b203c03a842e3b534071b82826040516107de929190612709565b60405180910390a15050565b60006107f583610808565b6107fe83611389565b1490505b92915050565b6001600160a01b038116600090815260036020526040812054806000036108325750600092915050565b6001600160ff1b038116600061084782611631565b95945050505050565b50919050565b6001600160a01b031660009081526006602052604090205463ffffffff1690565b60008061088383610856565b90506105628163ffffffff9081166000908152600a6020526040902054600160c01b9004161590565b600d54606090600160a01b900460ff166109085760405162461bcd60e51b815260206004820152601760248201527f536f72746974696f6e20706f6f6c20756e6c6f636b656400000000000000000060448201526064016105bf565b600080549083906109188361168e565b90506000811161096a5760405162461bcd60e51b815260206004820152601c60248201527f4e6f7420656e6f756768206f70657261746f727320696e20706f6f6c0000000060448201526064016105bf565b600080610976836116b5565b905060008867ffffffffffffffff81111561099357610993612755565b6040519080825280602002602001820160405280156109bc578160200160208202803683370190505b50905060005b89811015610a41576109d58587856116e7565b9650935060006109e5858961175f565b600081815260026020526040902054909150610a008161182a565b848481518110610a1257610a126126c4565b602002602001019063ffffffff16908163ffffffff168152505050508080610a39906126f0565b9150506109c2565b5098975050505050505050565b610a5661132f565b610a606000611863565b565b600080610a6e83610856565b9050610562816118b5565b60075460009063ffffffff831610610a92576000610802565b60078263ffffffff1681548110610aab57610aab6126c4565b6000918252602090912001546001600160a01b031692915050565b7f00000000000000000000000000000000000000000000000000000000000000006001600160a01b0316836001600160a01b031614610b3b5760405162461bcd60e51b81526020600482015260116024820152702ab739bab83837b93a32b2103a37b5b2b760791b60448201526064016105bf565b6040516323b872dd60e01b81526001600160a01b038681166004830152306024830152604482018690527f000000000000000000000000000000000000000000000000000000000000000016906323b872dd906064016020604051808303816000875af1158015610bb0573d6000803e3d6000fd5b505050506040513d601f19601f82011682018060405250810190610bd4919061276b565b50610be984610be460005461168e565b611963565b5050505050565b610bf861132f565b610c36838380806020026020016040519081016040528093929190818152602001838360200280828437600092019190915250859250611a6b915050565b7f01f5838e3dde8cf4817b958fe95be92bdfeccb34317e1d9f58d1cfe5230de231838383604051610c699392919061278d565b60405180910390a1505050565b6000610c8360005461168e565b905090565b610c9061132f565b600d805460ff60a01b19169055565b610ca761132f565b6000610cca600980546001600160601b031981169091556001600160601b031690565b60405163a9059cbb60e01b81526001600160a01b0384811660048301526001600160601b03831660248301529192507f00000000000000000000000000000000000000000000000000000000000000009091169063a9059cbb906044016020604051808303816000875af1158015610d46573d6000803e3d6000fd5b505050506040513d601f19601f82011682018060405250810190610d6a919061276b565b505050565b6000610d7a82610856565b9050610d8581611c6d565b60405163ffffffff8216906001600160a01b038416907fe61e9f0f049b3bfae1ae903a5e3018c02a008aa0d238ffddf23a4fb4c027853690600090a35050565b600080610dd183610856565b905061056281611e09565b600d546001600160a01b03163314610e065760405162461bcd60e51b81526004016105bf90612694565b6001600160a01b038116610e705760405162461bcd60e51b815260206004820152602b60248201527f4e6577206368616f736e6574206f776e6572206d757374206e6f74206265207a60448201526a65726f206164647265737360a81b60648201526084016105bf565b610e7981611e1d565b50565b610e8461132f565b600d54600160a01b900460ff1615610ed65760405162461bcd60e51b815260206004820152601560248201527414dbdc9d1a5d1a5bdb881c1bdbdb081b1bd8dad959605a1b60448201526064016105bf565b6000610ee182611389565b90506000610eee84610856565b9050610efa81836114ab565b81600003610f1057610f0b84611e77565b6106b8565b6106b88483611eeb565b6000610f2461132f565b6000610f2f84610856565b9050610f4381610f3e86610808565b6114ab565b63ffffffff81166000908152600a6020526040812080546bffffffffffffffffffffffff60601b198116909155600160601b90046001600160601b031660405163a9059cbb60e01b81526001600160a01b0386811660048301526001600160601b03831660248301529192507f00000000000000000000000000000000000000000000000000000000000000009091169063a9059cbb906044016020604051808303816000875af1158015610ffc573d6000803e3d6000fd5b505050506040513d601f19601f82011682018060405250810190611020919061276b565b50949350505050565b6004546005546000919061103d81836127de565b9250505090565b600b54600160a01b900460ff166110965760405162461bcd60e51b81526020600482015260166024820152754368616f736e6574206973206e6f742061637469766560501b60448201526064016105bf565b600d546001600160a01b031633146110c05760405162461bcd60e51b81526004016105bf90612694565b600b805460ff60a01b191690556040517fbea11dc6cfde2788be7e8a6ceef5c8d181bb1c628ba6d71675fca0e754367c7490600090a1565b61110061132f565b6001600160a01b0381166111655760405162461bcd60e51b815260206004820152602660248201527f4f776e61626c653a206e6577206f776e657220697320746865207a65726f206160448201526564647265737360d01b60648201526084016105bf565b610e7981611863565b60075460609060008367ffffffffffffffff81111561118f5761118f612755565b6040519080825280602002602001820160405280156111b8578160200160208202803683370190505b50905060005b848110156110205760008686838181106111da576111da6126c4565b90506020020160208101906111ef919061251e565b90508063ffffffff168411611205576000611234565b60078163ffffffff168154811061121e5761121e6126c4565b6000918252602090912001546001600160a01b03165b838381518110611246576112466126c4565b6001600160a01b03909216602092830291909101909101525080611269816126f0565b9150506111be565b61127961132f565b600d805460ff60a01b1916600160a01b179055565b63ffffffff8082166000908152600a60205260408120549091600160c01b909104168082036112ff5760405162461bcd60e51b815260206004820152601960248201527f4f70657261746f7220616c726561647920656c696769626c650000000000000060448201526064016105bf565b6105627f000000000000000000000000000000000000000000000000000000000000000063ffffffff83166127f1565b600b546001600160a01b03163314610a605760405162461bcd60e51b815260206004820181905260248201527f4f776e61626c653a2063616c6c6572206973206e6f7420746865206f776e657260448201526064016105bf565b60006108027f00000000000000000000000000000000000000000000000000000000000000008361281a565b6001600160a01b0382166000908152600360205260409020541561142e5760405162461bcd60e51b815260206004820152602a60248201527f4f70657261746f7220697320616c7265616479207265676973746572656420696044820152691b881d1a19481c1bdbdb60b21b60648201526084016105bf565b600061143983610856565b63ffffffff169050806000036114555761145283611f5c565b90505b600061145f61201f565b9050600061146e854385612102565b905061147e8282866000546121db565b600055600160ff1b82176001600160a01b0390951660009081526003602052604090209490945550505050565b60085463ffffffff8084166000908152600a60209081526040808320815160808101835290546001600160601b03818116808452600160601b8304821695840195909552600160c01b8204871693830193909352600160e01b9004909416606085018190529416939061151e908561282e565b6115289190612855565b9050816040015163ffffffff1660000361155f57808260200181815161154e9190612880565b6001600160601b03169052506115a2565b6009805482919060009061157d9084906001600160601b0316612880565b92506101000a8154816001600160601b0302191690836001600160601b031602179055505b506001600160601b03918216815263ffffffff928316606082019081529383166000908152600a60209081526040918290208351815492850151939094015196518616600160e01b026001600160e01b0397909616600160c01b02969096166001600160c01b03928516600160601b026001600160c01b03199092169390941692909217919091171617179055565b60008061163d836121f7565b9050600061164b8460031c90565b60008181527fdc686ec4a0ff239c70e7c7c36e8f853eced3bc8618f48d2b816da2a74311237e602052604090205490915061084781846020021c63ffffffff1690565b63ffffffff8116602082901c5b80156108505763ffffffff8116919091019060201c61169b565b6000816001036116c757506000919050565b601f5b82816001901b106116de57600019016116ca565b60010192915050565b6000808080855b82611752576000196001871b0181169150803060405160200161172892919091825260601b6001600160601b031916602082015260340190565b6040516020818303038152906040528051906020012090508782101561174d57600192505b6116ee565b9097909650945050505050565b60008282828061176e8361168e565b87106117b35760405162461bcd60e51b8152602060048201526014602482015273125b99195e08195e18d959591cc81dd95a59da1d60621b60448201526064016105bf565b6117bd8385612207565b9450905060025b60078111611814576117d6838361223e565b6000828152600160209081526040808320848452909152902054945092506117fe8486612207565b955091508061180c816126f0565b9150506117c4565b5061181f828261223e565b979650505050505050565b6000600161183a60036002612984565b6118469061010061281a565b611851906002612984565b61185b91906127de565b909116919050565b600b80546001600160a01b038381166001600160a01b0319831681179093556040519116919082907f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e090600090a35050565b60085463ffffffff8083166000908152600a60209081526040808320815160808101835290546001600160601b038181168352600160601b8204811694830194909452600160c01b81048616928201839052600160e01b9004909416606085015291931691908303611958576060810151815160009163ffffffff169061193c908561282e565b6119469190612855565b90508082602001516108479190612880565b602001519392505050565b60008163ffffffff16116119b15760405162461bcd60e51b8152602060048201526015602482015274139bc81c9958da5c1a595b9d1cc81a5b881c1bdbdb605a1b60448201526064016105bf565b6008546000906119d190600160601b90046001600160601b031684612880565b905060006119e563ffffffff841683612990565b905060006119f963ffffffff8516846129b6565b600880549192508391600090611a199084906001600160601b0316612880565b92506101000a8154816001600160601b0302191690836001600160601b03160217905550806008600c6101000a8154816001600160601b0302191690836001600160601b031602179055505050505050565b604080516080810182526000808252602082018190529181018290526060810182905260085490916001600160601b039091169080611aca7f0000000000000000000000000000000000000000000000000000000000000000866127de565b905060005b8651811015611c64576000878281518110611aec57611aec6126c4565b60209081029190910181015163ffffffff8082166000908152600a845260409081902080546001600160601b03600160601b82048116968d01969096529485168b52600160c01b85048316918b01829052600160e01b90940490911660608a015290925015611b7f578363ffffffff16876040015163ffffffff161015611b7a5763ffffffff841660408801525b611bcb565b63ffffffff808516604089015260608801518851911690611ba0908861282e565b611baa9190612855565b94508487602001818151611bbe9190612880565b6001600160601b03169052505b6001600160601b038681168089526020890151835460408b015160608c01516001600160e01b0319909216600160601b93909516929092027fffffffff00000000ffffffffffffffffffffffff0000000000000000000000001693909317909117600160c01b63ffffffff92831602176001600160e01b0316600160e01b91909216021790555080611c5c816126f0565b915050611acf565b50505050505050565b611c7681611e09565b611cc25760405162461bcd60e51b815260206004820152601960248201527f4f70657261746f72207374696c6c20696e656c696769626c650000000000000060448201526064016105bf565b60085463ffffffff8083166000908152600a60209081526040808320815160808101835290546001600160601b03818116808452600160601b8304821695840195909552600160c01b8204871693830193909352600160e01b90049094166060850181905294169390611d35908561282e565b611d3f9190612855565b600980549192508291600090611d5f9084906001600160601b0316612880565b82546001600160601b039182166101009390930a928302928202191691909117909155938416835250506000604080830182815263ffffffff9586168352600a602090815291909220835181549285015193516060909501518716600160e01b026001600160e01b0395909716600160c01b02949094166001600160c01b03938616600160601b026001600160c01b03199093169490951693909317171691909117919091179055565b600042611e158361128e565b111592915050565b600d80546001600160a01b038381166001600160a01b031983168117909355604080519190921680825260208201939093527ff7d2871c195d5dcbeca7c9bfb4f7ae4149d0915a5d3d03c8c2286c9a24e932be91016107de565b6001600160a01b03811660009081526003602052604081205490819003611eb05760405162461bcd60e51b81526004016105bf906129dc565b60006001600160ff1b0382169050611eca81600054612268565b600055610d6a836001600160a01b0316600090815260036020526040812055565b6001600160a01b038216600090815260036020526040902054611f205760405162461bcd60e51b81526004016105bf906129dc565b6001600160a01b03821660009081526003602052604081205490546001600160ff1b03821690611f5390829085906122dd565b60005550505050565b60075460009063ffffffff811115611faf5760405162461bcd60e51b8152602060048201526016602482015275141bdbdb0818d85c1858da5d1e48195e18d95959195960521b60448201526064016105bf565b6001600160a01b03929092166000818152600660205260408120805463ffffffff191663ffffffff86161790556007805460018101825591527fa66cc928b5edb82af9bd49922954155ab7b0942694bea4ce44661d9a8736c6880180546001600160a01b03191690911790555090565b60045460009081600761203460036002612984565b61203e9190612984565b6120498360016127f1565b10905080156120665761205d8260016127f1565b60045550919050565b600554806120a55760405162461bcd60e51b815260206004820152600c60248201526b141bdbdb081a5cc8199d5b1b60a21b60448201526064016105bf565b600060056120b46001846127de565b815481106120c4576120c46126c4565b9060005260206000200154905060058054806120e2576120e2612a22565b600190038181906000526020600020016000905590558094505050505090565b600067ffffffffffffffff83111561211c5761211c612a38565b63ffffffff82111561213057612130612a38565b6001600160601b0319606085901b166000600161214f60036002612984565b61215b9061010061281a565b612166906002612984565b61217091906127de565b84169050600061218260036002612984565b61218e9061010061281a565b600161219c60036002612984565b6121a89061010061281a565b6121b39060606127de565b6121be906002612984565b6121c891906127de565b8716901b92909217179150509392505050565b6000848152600260205260408120849055610847858484612307565b6000600161185160036002612984565b6000818363ffffffff81165b80831061223457600193909301929091039060201c63ffffffff8116612213565b50505b9250929050565b6000600161224e60036002612984565b61225891906127de565b8216600384901b17905092915050565b600080600160045461227a91906127de565b9050838114600061228d868280886121db565b9050811561229f576004839055610847565b600580546001810182556000919091527f036b6384b5eca791c62761152d0c79bb0604c104a5fb6f4eb0703f3154bb3db00186905595945050505050565b6000826122e985611631565b14612300576122f9848484612307565b9050610562565b5080610562565b6000808080858760075b6002811061238857612322826121f7565b955061232e8260031c90565b60008281526001602090815260408083208484528252909120805463ffffffff928a0283811b198216938816901b9290921790819055909650945091506123748461168e565b92508061238081612a4e565b915050612311565b50612392816121f7565b945063ffffffff6020860281811b198916918416901b179998505050505050505050565b80356001600160a01b03811681146123cd57600080fd5b919050565b6000602082840312156123e457600080fd5b610562826123b6565b6000806040838503121561240057600080fd5b612409836123b6565b946020939093013593505050565b60008083601f84011261242957600080fd5b50813567ffffffffffffffff81111561244157600080fd5b6020830191508360208260051b850101111561223757600080fd5b6000806020838503121561246f57600080fd5b823567ffffffffffffffff81111561248657600080fd5b61249285828601612417565b90969095509350505050565b600080604083850312156124b157600080fd5b50508035926020909101359150565b6020808252825182820181905260009190848201906040850190845b818110156124fe57835163ffffffff16835292840192918401916001016124dc565b50909695505050505050565b803563ffffffff811681146123cd57600080fd5b60006020828403121561253057600080fd5b6105628261250a565b60008060008060006080868803121561255157600080fd5b61255a866123b6565b94506020860135935061256f604087016123b6565b9250606086013567ffffffffffffffff8082111561258c57600080fd5b818801915088601f8301126125a057600080fd5b8135818111156125af57600080fd5b8960208285010111156125c157600080fd5b9699959850939650602001949392505050565b6000806000604084860312156125e957600080fd5b833567ffffffffffffffff81111561260057600080fd5b61260c86828701612417565b909790965060209590950135949350505050565b6000806040838503121561263357600080fd5b61263c836123b6565b915061264a602084016123b6565b90509250929050565b6020808252825182820181905260009190848201906040850190845b818110156124fe5783516001600160a01b03168352928401929184019160010161266f565b6020808252601690820152752737ba103a34329031b430b7b9b732ba1037bbb732b960511b604082015260600190565b634e487b7160e01b600052603260045260246000fd5b634e487b7160e01b600052601160045260246000fd5b600060018201612702576127026126da565b5060010190565b60208082528181018390526000908460408401835b8681101561274a576001600160a01b03612737846123b6565b168252918301919083019060010161271e565b509695505050505050565b634e487b7160e01b600052604160045260246000fd5b60006020828403121561277d57600080fd5b8151801515811461056257600080fd5b6040808252810183905260008460608301825b868110156127cb5763ffffffff6127b68461250a565b168252602092830192909101906001016127a0565b5060209390930193909352509392505050565b81810381811115610802576108026126da565b80820180821115610802576108026126da565b634e487b7160e01b600052601260045260246000fd5b60008261282957612829612804565b500490565b6001600160601b0382811682821603908082111561284e5761284e6126da565b5092915050565b6001600160601b03818116838216028082169190828114612878576128786126da565b505092915050565b6001600160601b0381811683821601908082111561284e5761284e6126da565b600181815b808511156128db5781600019048211156128c1576128c16126da565b808516156128ce57918102915b93841c93908002906128a5565b509250929050565b6000826128f257506001610802565b816128ff57506000610802565b8160018114612915576002811461291f5761293b565b6001915050610802565b60ff841115612930576129306126da565b50506001821b610802565b5060208310610133831016604e8410600b841016171561295e575081810a610802565b61296883836128a0565b806000190482111561297c5761297c6126da565b029392505050565b600061056283836128e3565b60006001600160601b03808416806129aa576129aa612804565b92169190910492915050565b60006001600160601b03808416806129d0576129d0612804565b92169190910692915050565b60208082526026908201527f4f70657261746f72206973206e6f74207265676973746572656420696e20746860408201526519481c1bdbdb60d21b606082015260800190565b634e487b7160e01b600052603160045260246000fd5b634e487b7160e01b600052600160045260246000fd5b600081612a5d57612a5d6126da565b50600019019056fea26469706673582212200777efb6bbaffaf3c12f9366651c0738fd0510bf19a96c3af0a337226cca78d364736f6c63430008110033",
+  "devdoc": {
+    "kind": "dev",
+    "methods": {
+      "getIDOperator(uint32)": {
+        "params": {
+          "id": "ID of the operator"
+        },
+        "returns": {
+          "_0": "the address of the operator"
+        }
+      },
+      "getIDOperators(uint32[])": {
+        "params": {
+          "ids": "the array of the operator ids"
+        },
+        "returns": {
+          "_0": "an array of the associated operator addresses"
+        }
+      },
+      "getOperatorID(address)": {
+        "params": {
+          "operator": "Address of the operator."
+        },
+        "returns": {
+          "_0": "the ID number of the given operator address"
+        }
+      },
+      "insertOperator(address,uint256)": {
+        "details": "Can be called only by the contract owner.",
+        "params": {
+          "authorizedStake": "Inserted operator's authorized stake for the application.",
+          "operator": "Address of the inserted operator."
+        }
+      },
+      "isOperatorRegistered(address)": {
+        "params": {
+          "operator": "the address of the operator"
+        },
+        "returns": {
+          "_0": "whether or not the operator is already registered in the pool"
+        }
+      },
+      "lock()": {
+        "details": "Can be called only by the contract owner."
+      },
+      "operatorsInPool()": {
+        "returns": {
+          "_0": "the number of operators in the pool"
+        }
+      },
+      "owner()": {
+        "details": "Returns the address of the current owner."
+      },
+      "renounceOwnership()": {
+        "details": "Leaves the contract without owner. It will not be possible to call `onlyOwner` functions anymore. Can only be called by the current owner. NOTE: Renouncing ownership will leave the contract without an owner, thereby removing any functionality that is only available to the owner."
+      },
+      "selectGroup(uint256,bytes32)": {
+        "params": {
+          "groupSize": "Size of the requested group",
+          "seed": "Pseudo-random number used to select operators to group"
+        },
+        "returns": {
+          "_0": "selected Members of the selected group"
+        }
+      },
+      "totalWeight()": {
+        "returns": {
+          "_0": "the total weight of the pool"
+        }
+      },
+      "transferOwnership(address)": {
+        "details": "Transfers ownership of the contract to a new account (`newOwner`). Can only be called by the current owner."
+      },
+      "unlock()": {
+        "details": "Can be called only by the contract owner."
+      },
+      "updateOperatorStatus(address,uint256)": {
+        "details": "Can be called only by the contract owner.",
+        "params": {
+          "authorizedStake": "Operator's authorized stake for the application.",
+          "operator": "Address of the updated operator."
+        }
+      },
+      "withdrawIneligible(address)": {
+        "details": "Can be called only by the owner."
+      },
+      "withdrawRewards(address,address)": {
+        "details": "Can be called only be the owner. Does not validate if the provided      beneficiary is associated with the provided operator - this needs to      be done by the owner calling this function.",
+        "returns": {
+          "_0": "The amount of rewards withdrawn in this call."
+        }
+      }
+    },
+    "title": "Sortition Pool",
+    "version": 1
+  },
+  "userdoc": {
+    "kind": "user",
+    "methods": {
+      "addBetaOperators(address[])": {
+        "notice": "Adds beta operator to chaosnet. Can be called only by the chaosnet owner when the chaosnet is active. Once the operator is added as a beta operator, it can not be removed."
+      },
+      "canRestoreRewardEligibility(address)": {
+        "notice": "Returns whether the operator is able to restore their eligibility         for rewards right away."
+      },
+      "chaosnetOwner()": {
+        "notice": "Address controlling chaosnet status and beta operator addresses."
+      },
+      "deactivateChaosnet()": {
+        "notice": "Deactivates the chaosnet. Can be called only by the chaosnet owner. Once deactivated chaosnet can not be activated again."
+      },
+      "getAvailableRewards(address)": {
+        "notice": "Returns the amount of rewards withdrawable for the given operator."
+      },
+      "getIDOperator(uint32)": {
+        "notice": "Get the operator address corresponding to the given ID number. A zero address means the ID number has not been allocated yet."
+      },
+      "getIDOperators(uint32[])": {
+        "notice": "Gets the operator addresses corresponding to the given ID numbers. A zero address means the ID number has not been allocated yet. This function works just like getIDOperator except that it allows to fetch operator addresses for multiple IDs in one call."
+      },
+      "getOperatorID(address)": {
+        "notice": "Return the ID number of the given operator address. An ID number of 0 means the operator has not been allocated an ID number yet."
+      },
+      "getPoolWeight(address)": {
+        "notice": "Return the weight of the operator in the pool, which may or may not be out of date."
+      },
+      "insertOperator(address,uint256)": {
+        "notice": "Inserts an operator to the pool. Reverts if the operator is already present. Reverts if the operator is not eligible because of their authorized stake. Reverts if the chaosnet is active and the operator is not a beta operator."
+      },
+      "isBetaOperator(address)": {
+        "notice": "Indicates if the given operator is a beta operator for chaosnet."
+      },
+      "isChaosnetActive()": {
+        "notice": "Indicates if the chaosnet is active. The chaosnet is active after the contract deployment and can be ended with a call to `deactivateChaosnet()`. Once deactivated chaosnet can not be activated again."
+      },
+      "isEligibleForRewards(address)": {
+        "notice": "Returns whether the operator is eligible for rewards or not."
+      },
+      "isOperatorInPool(address)": {
+        "notice": "Return whether the operator is present in the pool."
+      },
+      "isOperatorRegistered(address)": {
+        "notice": "Checks if operator is already registered in the pool."
+      },
+      "isOperatorUpToDate(address,uint256)": {
+        "notice": "Return whether the operator's weight in the pool matches their eligible weight."
+      },
+      "lock()": {
+        "notice": "Locks the sortition pool. In locked state, members cannot be         inserted and removed from the pool. Members statuses cannot         be updated as well."
+      },
+      "operatorsInPool()": {
+        "notice": "Sum the number of operators in each trunk."
+      },
+      "restoreRewardEligibility(address)": {
+        "notice": "Restores reward eligibility for the operator."
+      },
+      "rewardsEligibilityRestorableAt(address)": {
+        "notice": "Returns the time the operator's reward eligibility can be restored."
+      },
+      "selectGroup(uint256,bytes32)": {
+        "notice": "Selects a new group of operators of the provided size based on the provided pseudo-random seed. At least one operator has to be registered in the pool, otherwise the function fails reverting the transaction."
+      },
+      "setRewardIneligibility(uint32[],uint256)": {
+        "notice": "Set the given operators as ineligible for rewards.         The operators can restore their eligibility at the given time."
+      },
+      "totalWeight()": {
+        "notice": "Convenience method to return the total weight of the pool"
+      },
+      "transferChaosnetOwnerRole(address)": {
+        "notice": "Transfers the chaosnet owner role to another non-zero address."
+      },
+      "unlock()": {
+        "notice": "Unlocks the sortition pool. Removes all restrictions set by         the `lock` method."
+      },
+      "updateOperatorStatus(address,uint256)": {
+        "notice": "Update the operator's weight if present and eligible, or remove from the pool if present and ineligible."
+      },
+      "withdrawIneligible(address)": {
+        "notice": "Withdraws rewards not allocated to operators marked as ineligible         to the given recipient address."
+      },
+      "withdrawRewards(address,address)": {
+        "notice": "Withdraws all available rewards for the given operator to the         given beneficiary."
+      }
+    },
+    "notice": "A logarithmic data structure used to store the pool of eligible operators weighted by their stakes. It allows to select a group of operators based on the provided pseudo-random seed.",
+    "version": 1
+  },
+  "storageLayout": {
+    "storage": [
+      {
+        "astId": 1997,
+        "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+        "label": "root",
+        "offset": 0,
+        "slot": "0",
+        "type": "t_uint256"
+      },
+      {
+        "astId": 2003,
+        "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+        "label": "branches",
+        "offset": 0,
+        "slot": "1",
+        "type": "t_mapping(t_uint256,t_mapping(t_uint256,t_uint256))"
+      },
+      {
+        "astId": 2007,
+        "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+        "label": "leaves",
+        "offset": 0,
+        "slot": "2",
+        "type": "t_mapping(t_uint256,t_uint256)"
+      },
+      {
+        "astId": 2011,
+        "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+        "label": "flaggedLeafPosition",
+        "offset": 0,
+        "slot": "3",
+        "type": "t_mapping(t_address,t_uint256)"
+      },
+      {
+        "astId": 2013,
+        "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+        "label": "rightmostLeaf",
+        "offset": 0,
+        "slot": "4",
+        "type": "t_uint256"
+      },
+      {
+        "astId": 2016,
+        "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+        "label": "emptyLeaves",
+        "offset": 0,
+        "slot": "5",
+        "type": "t_array(t_uint256)dyn_storage"
+      },
+      {
+        "astId": 2020,
+        "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+        "label": "operatorID",
+        "offset": 0,
+        "slot": "6",
+        "type": "t_mapping(t_address,t_uint32)"
+      },
+      {
+        "astId": 2023,
+        "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+        "label": "idAddress",
+        "offset": 0,
+        "slot": "7",
+        "type": "t_array(t_address)dyn_storage"
+      },
+      {
+        "astId": 810,
+        "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+        "label": "globalRewardAccumulator",
+        "offset": 0,
+        "slot": "8",
+        "type": "t_uint96"
+      },
+      {
+        "astId": 812,
+        "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+        "label": "rewardRoundingDust",
+        "offset": 12,
+        "slot": "8",
+        "type": "t_uint96"
+      },
+      {
+        "astId": 814,
+        "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+        "label": "ineligibleEarnedRewards",
+        "offset": 0,
+        "slot": "9",
+        "type": "t_uint96"
+      },
+      {
+        "astId": 821,
+        "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+        "label": "operatorRewards",
+        "offset": 0,
+        "slot": "10",
+        "type": "t_mapping(t_uint32,t_struct(OperatorRewards)808_storage)"
+      },
+      {
+        "astId": 3888,
+        "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+        "label": "_owner",
+        "offset": 0,
+        "slot": "11",
+        "type": "t_address"
+      },
+      {
+        "astId": 231,
+        "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+        "label": "isChaosnetActive",
+        "offset": 20,
+        "slot": "11",
+        "type": "t_bool"
+      },
+      {
+        "astId": 236,
+        "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+        "label": "isBetaOperator",
+        "offset": 0,
+        "slot": "12",
+        "type": "t_mapping(t_address,t_bool)"
+      },
+      {
+        "astId": 239,
+        "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+        "label": "chaosnetOwner",
+        "offset": 0,
+        "slot": "13",
+        "type": "t_address"
+      },
+      {
+        "astId": 1363,
+        "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+        "label": "isLocked",
+        "offset": 20,
+        "slot": "13",
+        "type": "t_bool"
+      }
+    ],
+    "types": {
+      "t_address": {
+        "encoding": "inplace",
+        "label": "address",
+        "numberOfBytes": "20"
+      },
+      "t_array(t_address)dyn_storage": {
+        "base": "t_address",
+        "encoding": "dynamic_array",
+        "label": "address[]",
+        "numberOfBytes": "32"
+      },
+      "t_array(t_uint256)dyn_storage": {
+        "base": "t_uint256",
+        "encoding": "dynamic_array",
+        "label": "uint256[]",
+        "numberOfBytes": "32"
+      },
+      "t_bool": {
+        "encoding": "inplace",
+        "label": "bool",
+        "numberOfBytes": "1"
+      },
+      "t_mapping(t_address,t_bool)": {
+        "encoding": "mapping",
+        "key": "t_address",
+        "label": "mapping(address => bool)",
+        "numberOfBytes": "32",
+        "value": "t_bool"
+      },
+      "t_mapping(t_address,t_uint256)": {
+        "encoding": "mapping",
+        "key": "t_address",
+        "label": "mapping(address => uint256)",
+        "numberOfBytes": "32",
+        "value": "t_uint256"
+      },
+      "t_mapping(t_address,t_uint32)": {
+        "encoding": "mapping",
+        "key": "t_address",
+        "label": "mapping(address => uint32)",
+        "numberOfBytes": "32",
+        "value": "t_uint32"
+      },
+      "t_mapping(t_uint256,t_mapping(t_uint256,t_uint256))": {
+        "encoding": "mapping",
+        "key": "t_uint256",
+        "label": "mapping(uint256 => mapping(uint256 => uint256))",
+        "numberOfBytes": "32",
+        "value": "t_mapping(t_uint256,t_uint256)"
+      },
+      "t_mapping(t_uint256,t_uint256)": {
+        "encoding": "mapping",
+        "key": "t_uint256",
+        "label": "mapping(uint256 => uint256)",
+        "numberOfBytes": "32",
+        "value": "t_uint256"
+      },
+      "t_mapping(t_uint32,t_struct(OperatorRewards)808_storage)": {
+        "encoding": "mapping",
+        "key": "t_uint32",
+        "label": "mapping(uint32 => struct Rewards.OperatorRewards)",
+        "numberOfBytes": "32",
+        "value": "t_struct(OperatorRewards)808_storage"
+      },
+      "t_struct(OperatorRewards)808_storage": {
+        "encoding": "inplace",
+        "label": "struct Rewards.OperatorRewards",
+        "members": [
+          {
+            "astId": 801,
+            "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+            "label": "accumulated",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_uint96"
+          },
+          {
+            "astId": 803,
+            "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+            "label": "available",
+            "offset": 12,
+            "slot": "0",
+            "type": "t_uint96"
+          },
+          {
+            "astId": 805,
+            "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+            "label": "ineligibleUntil",
+            "offset": 24,
+            "slot": "0",
+            "type": "t_uint32"
+          },
+          {
+            "astId": 807,
+            "contract": "@keep-network/sortition-pools/contracts/SortitionPool.sol:SortitionPool",
+            "label": "weight",
+            "offset": 28,
+            "slot": "0",
+            "type": "t_uint32"
+          }
+        ],
+        "numberOfBytes": "32"
+      },
+      "t_uint256": {
+        "encoding": "inplace",
+        "label": "uint256",
+        "numberOfBytes": "32"
+      },
+      "t_uint32": {
+        "encoding": "inplace",
+        "label": "uint32",
+        "numberOfBytes": "4"
+      },
+      "t_uint96": {
+        "encoding": "inplace",
+        "label": "uint96",
+        "numberOfBytes": "12"
+      }
+    }
+  }
+}

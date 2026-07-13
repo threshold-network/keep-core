@@ -1,0 +1,4 @@
+# Default Electrum URLs for Bitcoin testnet4 (one is chosen at random at startup).
+# Override with --bitcoin.electrum.url or bitcoin.electrum.url in the config file.
+# Hostname must have a TLS cert valid for that hostname; bare IPs need an IP SAN.
+ssl://mempool.space:40002

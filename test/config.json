@@ -42,7 +42,8 @@
     "Maintainer": {
         "BitcoinDifficulty": {
             "Enabled": true,
-            "DisableProxy": true
+            "DisableProxy": true,
+            "IdleOnPreflightFailure": true
         },
         "Spv": {
             "Enabled": true,

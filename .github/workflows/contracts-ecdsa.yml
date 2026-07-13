@@ -56,11 +56,10 @@ jobs:
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
           node-version: "18.15.0"
-          cache: "yarn"
-          cache-dependency-path: solidity/ecdsa/yarn.lock
 
-      - name: Install dependencies
-        run: yarn install
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: ./solidity/ecdsa
 
       - name: Build
         run: yarn build
@@ -83,8 +82,6 @@ jobs:
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
           node-version: "18.15.0"
-          cache: "yarn"
-          cache-dependency-path: solidity/ecdsa/yarn.lock
 
       - uses: actions/setup-python@v4
         with:
@@ -103,8 +100,9 @@ jobs:
           SLITHER_VERSION: 0.8.3
         run: pip3 install slither-analyzer==$SLITHER_VERSION
 
-      - name: Install dependencies
-        run: yarn install
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: ./solidity/ecdsa
 
       # As a workaround for a slither issue https://github.com/crytic/slither/issues/1140
       # we disable compilation of dependencies when running slither.
@@ -126,11 +124,10 @@ jobs:
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
           node-version: "18.15.0"
-          cache: "yarn"
-          cache-dependency-path: solidity/ecdsa/yarn.lock
 
-      - name: Install dependencies
-        run: yarn install
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: ./solidity/ecdsa
 
       - name: Build solidity contracts
         run: yarn build
@@ -154,11 +151,10 @@ jobs:
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
           node-version: "18.15.0"
-          cache: "yarn"
-          cache-dependency-path: solidity/ecdsa/yarn.lock
 
-      - name: Install dependencies
-        run: yarn install --frozen-lockfile
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: ./solidity/ecdsa
 
       - name: Deploy contracts
         run: yarn deploy:test
@@ -188,12 +184,11 @@ jobs:
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
           node-version: "18.15.0"
-          cache: "yarn"
-          cache-dependency-path: solidity/ecdsa/yarn.lock
           registry-url: "https://registry.npmjs.org"
 
-      - name: Install dependencies
-        run: yarn install --frozen-lockfile
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: ./solidity/ecdsa
 
       - name: Get upstream packages versions
         uses: keep-network/ci/actions/upstream-builds-query@v2
@@ -206,7 +201,7 @@ jobs:
 
       - name: Resolve latest contracts
         run: |
-          yarn upgrade \
+          yarn up \
             @threshold-network/solidity-contracts@${{ steps.upstream-builds-query.outputs.threshold-contracts-version }} \
             @keep-network/random-beacon@${{ steps.upstream-builds-query.outputs.random-beacon-version }} \
             @keep-network/sortition-pools
@@ -217,7 +212,7 @@ jobs:
       # test environment it should be used temporarily only.
       - name: Use Sortition Pool forked contracts
         run: |
-          yarn upgrade @keep-network/sortition-pools@github:keep-network/sortition-pools#test-fork
+          yarn up @keep-network/sortition-pools@github:keep-network/sortition-pools#test-fork
 
       - name: Configure tenderly
         env:
@@ -289,12 +284,11 @@ jobs:
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877
           node-version: "18.15.0"
-          cache: "yarn"
-          cache-dependency-path: solidity/ecdsa/yarn.lock
           registry-url: "https://registry.npmjs.org"
 
-      - name: Install dependencies
-        run: yarn install --frozen-lockfile
+      - uses: ./.github/actions/install-yarn-deps
+        with:
+          working-directory: ./solidity/ecdsa
 
       - name: Get upstream packages versions
         uses: keep-network/ci/actions/upstream-builds-query@v2
@@ -307,7 +301,7 @@ jobs:
 
       - name: Resolve latest contracts
         run: |
-          yarn upgrade \
+          yarn up \
             @threshold-network/solidity-contracts@${{ steps.upstream-builds-query.outputs.threshold-contracts-version }} \
             @keep-network/random-beacon@${{ steps.upstream-builds-query.outputs.random-beacon-version }} \
             @keep-network/sortition-pools

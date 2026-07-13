@@ -5,7 +5,9 @@ package ethereum
 
 import (
 	"fmt"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,12 +16,15 @@ import (
 	"github.com/keep-network/keep-core/internal/testutils"
 )
 
-// TODO: Include integration test in the CI.
-// To run the tests execute `go test -v -tags=integration ./...`
-
-const ethereumURL = "https://mainnet.infura.io/v3/f41c6e3d505d44c182a5e5adefdaa43f"
+// To run the tests execute:
+// ETHEREUM_MAINNET_RPC_URL=<url> go test -v -tags=integration ./...
 
 func TestBaseChain_GetBlockNumberByTimestamp(t *testing.T) {
+	ethereumURL := os.Getenv("ETHEREUM_MAINNET_RPC_URL")
+	if ethereumURL == "" {
+		t.Skip("ETHEREUM_MAINNET_RPC_URL not set; skipping integration test")
+	}
+
 	client, err := ethclient.Dial(ethereumURL)
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +71,9 @@ func TestBaseChain_GetBlockNumberByTimestamp(t *testing.T) {
 	for testName, test := range tests {
 		t.Run(testName, func(t *testing.T) {
 			blockNumber, err := bc.GetBlockNumberByTimestamp(test.timestamp)
+			if shouldSkipEthereumIntegrationError(err) {
+				t.Skipf("skipping due to transient Ethereum provider error: %v", err)
+			}
 
 			if !reflect.DeepEqual(err, test.expectedError) {
 				t.Errorf(
@@ -83,4 +91,15 @@ func TestBaseChain_GetBlockNumberByTimestamp(t *testing.T) {
 			)
 		})
 	}
+}
+
+func shouldSkipEthereumIntegrationError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errorMessage := err.Error()
+
+	return strings.Contains(errorMessage, "429 Too Many Requests") ||
+		strings.Contains(errorMessage, "\"message\":\"Too Many Requests\"")
 }

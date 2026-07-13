@@ -88,9 +88,10 @@ const (
 	Unknown Network = iota
 	Mainnet
 	Testnet
+	Testnet4
 	Regtest
 )
 
 func (n Network) String() string {
-	return []string{"unknown", "mainnet", "testnet", "regtest"}[n]
+	return []string{"unknown", "mainnet", "testnet", "testnet4", "regtest"}[n]
 }

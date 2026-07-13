@@ -429,17 +429,19 @@ func (bc *baseChain) GetBlockHashByNumber(blockNumber uint64) (
 
 // currentBlock fetches the current block.
 func (bc *baseChain) currentBlock() (*types.Block, error) {
-	currentBlockNumber, err := bc.blockCounter.CurrentBlock()
+	// Use the latest header instead of block counter state. Some modern mainnet
+	// blocks contain transaction types not supported by older block-counting
+	// code paths, while this method only needs the latest block number/time as an
+	// entrypoint for timestamp search.
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelCtx()
+
+	header, err := bc.client.HeaderByNumber(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	currentBlock, err := bc.blockByNumber(currentBlockNumber)
-	if err != nil {
-		return nil, err
-	}
-
-	return currentBlock, nil
+	return types.NewBlockWithHeader(header), nil
 }
 
 // blockByNumber returns the block for the given block number. Times out

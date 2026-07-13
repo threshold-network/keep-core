@@ -10,6 +10,7 @@ import (
 
 	"github.com/ipfs/go-log"
 
+	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-common/pkg/persistence"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/generator"
@@ -42,6 +43,36 @@ type GroupParameters struct {
 // misconduct to the protocol, including inactivity.
 func (gp *GroupParameters) DishonestThreshold() int {
 	return gp.GroupSize - gp.HonestThreshold
+}
+
+// defaultGroupParameters returns network-based defaults: mainnet-style on
+// Ethereum mainnet, and 3/3/2 on Sepolia / developer when no validator override
+// is used. When EcdsaDkgValidator is configured in ethereum.ContractAddresses
+// (developer.ecdsaDkgValidatorAddress alias), Initialize replaces these with
+// values read from that contract on-chain (groupSize/activeThreshold/groupThreshold).
+func defaultGroupParameters(n ethereum.Network) *GroupParameters {
+	switch n {
+	case ethereum.Sepolia, ethereum.Developer:
+		logger.Warnf(
+			"TBTC group parameters: testnet/small group (size=3, quorum=3, "+
+				"honest=2) for %s; quorum equals size so all three operators "+
+				"must remain online for DKG to progress. Configure an "+
+				"EcdsaDkgValidator contract address to override these defaults "+
+				"with on-chain values.",
+			n,
+		)
+		return &GroupParameters{
+			GroupSize:       3,
+			GroupQuorum:     3,
+			HonestThreshold: 2,
+		}
+	default:
+		return &GroupParameters{
+			GroupSize:       100,
+			GroupQuorum:     90,
+			HonestThreshold: 51,
+		}
+	}
 }
 
 const (
@@ -82,11 +113,31 @@ func Initialize(
 	config Config,
 	clientInfo *clientinfo.Registry,
 	perfMetrics *clientinfo.PerformanceMetrics,
+	ethereumNetwork ethereum.Network,
 ) error {
-	groupParameters := &GroupParameters{
-		GroupSize:       100,
-		GroupQuorum:     90,
-		HonestThreshold: 51,
+	groupParameters := defaultGroupParameters(ethereumNetwork)
+
+	if ethChain, ok := chain.(interface {
+		EcdsaWalletGroupParametersFromChain(context.Context) (*GroupParameters, error)
+	}); ok {
+		gp, err := ethChain.EcdsaWalletGroupParametersFromChain(ctx)
+		if err != nil {
+			return fmt.Errorf(
+				"cannot read TBTC group sizing from ECDSA validator: [%w]",
+				err,
+			)
+		}
+		if gp != nil {
+			groupParameters = gp
+			logger.Infof(
+				"TBTC ECDSA group parameters from validator contract (size=[%v] "+
+					"groupQuorum/activeThreshold=[%v] "+
+					"honestThreshold/groupThreshold=[%v]); overrides network defaults",
+				gp.GroupSize,
+				gp.GroupQuorum,
+				gp.HonestThreshold,
+			)
+		}
 	}
 
 	node, err := newNode(

@@ -2,33 +2,39 @@
  * Test Fixtures for WalletRegistry Test Suite
  *
  * This module provides test fixtures for the WalletRegistry contract with support
- * for dual-mode authorization testing (TokenStaking + Allowlist).
+ * for dual-mode authorization testing (TokenStaking + Allowlist). The `useAllowlist`
+ * option is REQUIRED at every call site so each test is explicit about which
+ * authorization path it exercises — silently inheriting a default has caused
+ * regressions in the past where a test renamed/added later picked up the wrong path.
  *
  * ## Usage Examples
  *
- * ### Default Mode (TokenStaking Authorization)
+ * ### TokenStaking Authorization (legacy path)
  * ```typescript
- * const { walletRegistry, operators, staking } = await walletRegistryFixture()
- * // Uses TokenStaking for operator authorization (legacy path)
+ * const { walletRegistry, operators, staking } = await walletRegistryFixture({ useAllowlist: false })
+ * // Uses TokenStaking for operator authorization
  * // Operators registered via TokenStaking.increaseAuthorization()
  * ```
  *
- * ### Allowlist Mode (Post-Upgrade Authorization)
+ * ### Allowlist Authorization (post-upgrade / TIP-092 path)
  * ```typescript
  * const { walletRegistry, operators, allowlist } = await walletRegistryFixture({ useAllowlist: true })
- * // Uses Allowlist for operator authorization (TIP-092 compliant path)
+ * // Uses Allowlist for operator authorization
  * // Operators registered via Allowlist.addStakingProvider()
  * // WalletRegistry.initializeV2() called with allowlist address
  * ```
  *
  * ## Authorization Modes
  *
- * - **TokenStaking Mode (default)**: Pre-upgrade authorization via TokenStaking contract
+ * Both modes are explicit: every call site must pass `useAllowlist` and no
+ * mode is inherited from a default.
+ *
+ * - **TokenStaking Mode (explicit `useAllowlist: false`)**: Pre-upgrade authorization via TokenStaking contract
  *   - Notification rewards configured
  *   - Operators stake via TokenStaking.stake()
  *   - Authorization via TokenStaking.increaseAuthorization()
  *
- * - **Allowlist Mode (opt-in)**: Post-upgrade authorization via Allowlist contract
+ * - **Allowlist Mode (explicit `useAllowlist: true`)**: Post-upgrade authorization via Allowlist contract
  *   - Notification rewards NOT configured (not needed)
  *   - Operators authorized via Allowlist.addStakingProvider()
  *   - WalletRegistry.initializeV2() sets allowlist address
@@ -89,20 +95,22 @@ export const params = {
 }
 
 /**
- * Creates a WalletRegistry test fixture factory with optional dual-mode support.
+ * Creates a WalletRegistry test fixture factory with dual-mode authorization support.
  *
  * This is an internal factory function that wraps deployments.createFixture() to enable
  * parameterized fixture creation. The factory pattern is needed because deployments.createFixture()
  * expects a function receiving HardhatRuntimeEnvironment, which doesn't support custom parameters.
  *
- * @param options - Configuration options for the fixture
- * @param options.useAllowlist - If true, configures Allowlist mode; if false/undefined, uses TokenStaking mode (default: false)
+ * @param options - Configuration options for the fixture (required)
+ * @param options.useAllowlist - If true, Allowlist mode; if false, legacy TokenStaking stake path. No default — every caller must be explicit.
  * @returns A fixture function that can be called to deploy and configure the test environment
  *
  * @internal
  */
-const createWalletRegistryFixture = (options?: { useAllowlist?: boolean }) =>
-  deployments.createFixture(
+const createWalletRegistryFixture = (options: { useAllowlist: boolean }) => {
+  const { useAllowlist } = options
+
+  return deployments.createFixture(
     async (): Promise<{
       tToken: T
       walletRegistry: WalletRegistryStub & WalletRegistry
@@ -158,7 +166,7 @@ const createWalletRegistryFixture = (options?: { useAllowlist?: boolean }) =>
       // In Allowlist mode, the WalletRegistry uses the Allowlist contract for authorization
       // routing instead of TokenStaking. This supports TIP-092 compliant testing.
       let allowlist: Allowlist | undefined
-      if (options?.useAllowlist) {
+      if (useAllowlist) {
         allowlist = await setupAllowlist(walletRegistry, deployer)
       }
 
@@ -175,7 +183,7 @@ const createWalletRegistryFixture = (options?: { useAllowlist?: boolean }) =>
       // Notification rewards are only needed when using TokenStaking for authorization.
       // In Allowlist mode, authorization routing goes through the Allowlist contract,
       // so TokenStaking notification rewards are not required.
-      if (!options?.useAllowlist) {
+      if (!useAllowlist) {
         await updateTokenStakingParams(tToken, staking, deployer)
       }
 
@@ -205,35 +213,35 @@ const createWalletRegistryFixture = (options?: { useAllowlist?: boolean }) =>
       }
     }
   )
+}
 
 /**
  * Creates and loads a WalletRegistry test fixture with dual-mode authorization support.
  *
  * This is the main entry point for test files to load the WalletRegistry fixture.
- * It supports both TokenStaking (default) and Allowlist authorization modes for
- * comprehensive testing of the dual-mode authorization routing implementation.
+ * It supports TokenStaking and Allowlist authorization modes for comprehensive testing
+ * of the dual-mode authorization routing implementation. The `useAllowlist` option is
+ * REQUIRED at every call site — no default — so each test is explicit about which
+ * authorization path it exercises.
  *
- * @param options - Configuration options for the fixture
- * @param options.useAllowlist - If true, configures Allowlist mode; if false/undefined, uses TokenStaking mode (default: false)
+ * @param options - Configuration options for the fixture (required)
+ * @param options.useAllowlist - If true, Allowlist mode; if false, legacy stake path
  * @returns Promise resolving to fixture with all deployed contracts, signers, and test operators
  *
  * @example
- * // TokenStaking mode (default - legacy authorization path)
- * const { walletRegistry, operators, staking } = await walletRegistryFixture()
- *
- * @example
- * // Allowlist mode (TIP-092 compliant authorization path)
  * const { walletRegistry, operators, allowlist } = await walletRegistryFixture({ useAllowlist: true })
  *
+ * @example
+ * const { walletRegistry, operators, staking } = await walletRegistryFixture({ useAllowlist: false }) // Legacy TokenStaking mode
+ *
  * @remarks
- * - Default mode uses TokenStaking for authorization (backward compatible with existing tests)
  * - Allowlist mode calls walletRegistry.initializeV2() to enable dual-mode routing
  * - In Allowlist mode, TokenStaking notification rewards are NOT configured (not needed)
  * - Fixture uses hardhat-deploy's snapshot/restore for efficient test isolation
- * - Performance: ~5 seconds (TokenStaking mode), ~7 seconds (Allowlist mode)
+ * - Performance: ~7 seconds (Allowlist mode), ~5 seconds (TokenStaking mode)
  */
-export async function walletRegistryFixture(options?: {
-  useAllowlist?: boolean
+export async function walletRegistryFixture(options: {
+  useAllowlist: boolean
 }) {
   const fixture = createWalletRegistryFixture(options)
   return fixture()
@@ -392,7 +400,7 @@ async function fundReimbursementPool(
  *
  * @internal
  */
-async function setupAllowlist(
+export async function setupAllowlist(
   walletRegistry: WalletRegistry,
   deployer: SignerWithAddress
 ): Promise<Allowlist> {

@@ -4,11 +4,18 @@ cache/
 export/
 hardhat-dependency-compiler/
 export.json
+gasReporterOutput.json
 
 # Contract artifacts
 artifacts/
 deployments/*
 !deployments/mainnet
+!deployments/sepolia
 
 # OpenZeppelin
 .openzeppelin/unknown-*.json
+
+# Yarn Berry runtime state
+.yarn/install-state.gz
+.yarn/cache/
+.yarn/build-state.yml

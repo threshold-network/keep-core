@@ -38,6 +38,7 @@ EthereumMetricsTick = "1m27s"
 [maintainer.BitcoinDifficulty]
 Enabled = true
 DisableProxy = true
+IdleOnPreflightFailure = true
 
 [maintainer.Spv]
 Enabled = true

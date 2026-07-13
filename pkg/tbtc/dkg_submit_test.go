@@ -709,3 +709,131 @@ func TestSubmitResult_TooFewSignatures(t *testing.T) {
 		)
 	}
 }
+
+// TestSubmitResult_StateChangesDuringWait is a regression test for a TOCTOU
+// race between the initial DKG-state check and the on-chain submission: a
+// member can finish its index-based wait only to discover the chain has
+// already accepted another member's result. The submitter must detect this
+// post-wait and abort cleanly instead of attempting a doomed submission.
+func TestSubmitResult_StateChangesDuringWait(t *testing.T) {
+	groupParameters := &GroupParameters{
+		GroupSize:       5,
+		GroupQuorum:     4,
+		HonestThreshold: 3,
+	}
+
+	localChain := Connect()
+
+	if err := localChain.startDKG(); err != nil {
+		t.Fatal(err)
+	}
+
+	operatorAddress, err := localChain.operatorAddress()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	operatorID, err := localChain.GetOperatorID(operatorAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var operatorsIDs chain.OperatorIDs
+	var operatorsAddresses chain.Addresses
+
+	for memberIndex := uint8(1); int(memberIndex) <= groupParameters.GroupSize; memberIndex++ {
+		operatorsIDs = append(operatorsIDs, operatorID)
+		operatorsAddresses = append(operatorsAddresses, operatorAddress)
+	}
+
+	groupSelectionResult := &GroupSelectionResult{
+		OperatorsIDs:       operatorsIDs,
+		OperatorsAddresses: operatorsAddresses,
+	}
+
+	if err = localChain.setDKGResultValidity(true); err != nil {
+		t.Fatal(err)
+	}
+
+	testData, err := tecdsatest.LoadPrivateKeyShareTestFixtures(1)
+	if err != nil {
+		t.Fatalf("failed to load test data: [%v]", err)
+	}
+	result := &dkg.Result{
+		Group:           group.NewGroup(groupParameters.DishonestThreshold(), groupParameters.GroupSize),
+		PrivateKeyShare: tecdsa.NewPrivateKeyShare(testData[0]),
+	}
+	signatures := map[group.MemberIndex][]byte{
+		1: []byte("signature 1"),
+		2: []byte("signature 2"),
+		3: []byte("signature 3"),
+		4: []byte("signature 4"),
+	}
+
+	// Pre-assemble a DKG chain result we can submit from inside the hook to
+	// simulate another member winning the race during our wait window.
+	groupPublicKey, err := result.GroupPublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	competitorResult, err := localChain.AssembleDKGResult(
+		group.MemberIndex(1),
+		groupPublicKey,
+		result.Group.OperatingMemberIndexes(),
+		result.MisbehavedMembersIndexes(),
+		signatures,
+		groupSelectionResult,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// hookedWaitForBlockFn submits a competing DKG result the first time it
+	// is invoked, then delegates to the standard test waiter. This mimics a
+	// peer that wins the submission race while we are blocked on our delay.
+	var hookFired bool
+	hookedWaitForBlockFn := func(ctx context.Context, block uint64) error {
+		if !hookFired {
+			hookFired = true
+			if submitErr := localChain.SubmitDKGResult(competitorResult); submitErr != nil {
+				return fmt.Errorf("competitor submission failed: %w", submitErr)
+			}
+		}
+		return testWaitForBlockFn(localChain)(ctx, block)
+	}
+
+	dkgResultSubmitter := newDkgResultSubmitter(
+		&testutils.MockLogger{},
+		localChain,
+		groupParameters,
+		groupSelectionResult,
+		hookedWaitForBlockFn,
+	)
+
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	defer cancelCtx()
+
+	// memberIndex=2 yields a non-zero delay so the wait actually fires and
+	// the post-wait re-check is exercised.
+	err = dkgResultSubmitter.SubmitResult(
+		ctx,
+		group.MemberIndex(2),
+		result,
+		signatures,
+	)
+	if err != nil {
+		t.Fatalf(
+			"expected nil error after losing the submission race, got: %v",
+			err,
+		)
+	}
+
+	if localChain.dkgResult.SubmitterMemberIndex != group.MemberIndex(1) {
+		t.Errorf(
+			"competitor's submission was overwritten\nexpected submitter: %v\nactual submitter:   %v",
+			group.MemberIndex(1),
+			localChain.dkgResult.SubmitterMemberIndex,
+		)
+	}
+}

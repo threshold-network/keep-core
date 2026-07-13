@@ -591,7 +591,7 @@ func TestSubmitClaim_AnotherMemberSubmitsClaim(t *testing.T) {
 		claim,
 		signatures,
 	)
-	if err != nil {
+	if firstMemberErr != nil {
 		t.Fatal(firstMemberErr)
 	}
 
@@ -603,6 +603,101 @@ func TestSubmitClaim_AnotherMemberSubmitsClaim(t *testing.T) {
 
 	expectedNonce := big.NewInt(1)
 
+	nonce, err := chain.GetInactivityClaimNonce(ecdsaWalletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertBigIntsEqual(
+		t,
+		"inactivity nonce",
+		expectedNonce,
+		nonce,
+	)
+}
+
+func TestSubmitClaim_StaleNonceAfterDelayTreatedAsSubmitted(t *testing.T) {
+	testData, err := tecdsatest.LoadPrivateKeyShareTestFixtures(1)
+	if err != nil {
+		t.Fatalf("failed to load test data: [%v]", err)
+	}
+	privateKeyShare := tecdsa.NewPrivateKeyShare(testData[0])
+
+	publicKey := privateKeyShare.PublicKey()
+	walletPublicKeyHash := bitcoin.PublicKeyHash(publicKey)
+	ecdsaWalletID := [32]byte{1, 2, 3}
+
+	chain := Connect()
+
+	chain.setWallet(
+		walletPublicKeyHash,
+		&WalletChainData{
+			EcdsaWalletID: ecdsaWalletID,
+		},
+	)
+
+	groupParameters := &GroupParameters{
+		GroupSize:       5,
+		GroupQuorum:     4,
+		HonestThreshold: 3,
+	}
+
+	groupMembers := []uint32{1, 2, 2, 3, 5}
+
+	claim := inactivity.NewClaimPreimage(
+		big.NewInt(0),
+		publicKey,
+		[]group.MemberIndex{11, 22, 33},
+		true,
+	)
+
+	signatures := map[group.MemberIndex][]byte{
+		1: []byte("signature 1"),
+		2: []byte("signature 2"),
+		3: []byte("signature 3"),
+		4: []byte("signature 4"),
+	}
+
+	firstMemberSubmitter := newInactivityClaimSubmitter(
+		&testutils.MockLogger{},
+		chain,
+		groupParameters,
+		groupMembers,
+		func(context.Context, uint64) error { return nil },
+	)
+
+	var firstMemberSubmitErr error
+	secondMemberSubmitter := newInactivityClaimSubmitter(
+		&testutils.MockLogger{},
+		chain,
+		groupParameters,
+		groupMembers,
+		func(ctx context.Context, _ uint64) error {
+			// Simulate another member submitting while this member is delayed.
+			firstMemberSubmitErr = firstMemberSubmitter.SubmitClaim(
+				ctx,
+				group.MemberIndex(1),
+				claim,
+				signatures,
+			)
+			return nil
+		},
+	)
+
+	err = secondMemberSubmitter.SubmitClaim(
+		context.Background(),
+		group.MemberIndex(2),
+		claim,
+		signatures,
+	)
+	if err != nil {
+		t.Fatalf("expected stale nonce to be treated as already submitted: %v", err)
+	}
+	if firstMemberSubmitErr != nil {
+		t.Fatalf("first member submission failed: %v", firstMemberSubmitErr)
+	}
+
+	expectedNonce := big.NewInt(1)
 	nonce, err := chain.GetInactivityClaimNonce(ecdsaWalletID)
 	if err != nil {
 		t.Fatal(err)
@@ -843,4 +938,115 @@ func TestSubmitClaim_TooFewSignatures(t *testing.T) {
 			err,
 		)
 	}
+}
+
+// TestSubmitClaim_NonceChangesDuringWait is a regression test for the TOCTOU
+// race between the initial nonce read and the on-chain claim submission: a
+// member that wakes from its index-based delay must re-read the nonce and
+// abort if a competing member has already submitted, instead of attempting
+// a doomed submission that the chain would reject with "wrong nonce".
+func TestSubmitClaim_NonceChangesDuringWait(t *testing.T) {
+	testData, err := tecdsatest.LoadPrivateKeyShareTestFixtures(1)
+	if err != nil {
+		t.Fatalf("failed to load test data: [%v]", err)
+	}
+	privateKeyShare := tecdsa.NewPrivateKeyShare(testData[0])
+
+	publicKey := privateKeyShare.PublicKey()
+	walletPublicKeyHash := bitcoin.PublicKeyHash(publicKey)
+	ecdsaWalletID := [32]byte{1, 2, 3}
+
+	localChain := Connect()
+
+	localChain.setWallet(
+		walletPublicKeyHash,
+		&WalletChainData{
+			EcdsaWalletID: ecdsaWalletID,
+		},
+	)
+
+	groupParameters := &GroupParameters{
+		GroupSize:       5,
+		GroupQuorum:     4,
+		HonestThreshold: 3,
+	}
+
+	groupMembers := []uint32{1, 2, 2, 3, 5}
+
+	signatures := map[group.MemberIndex][]byte{
+		1: []byte("signature 1"),
+		2: []byte("signature 2"),
+		3: []byte("signature 3"),
+		4: []byte("signature 4"),
+	}
+
+	competitorClaim := &InactivityClaim{
+		WalletID: ecdsaWalletID,
+	}
+
+	// Simulate a competing member submitting on the first wait invocation.
+	// The local chain's SubmitInactivityClaim bumps the nonce, so the
+	// post-wait re-check should observe the change and abort.
+	var hookFired bool
+	hookedWaitForBlockFn := func(ctx context.Context, block uint64) error {
+		if !hookFired {
+			hookFired = true
+			if submitErr := localChain.SubmitInactivityClaim(
+				competitorClaim,
+				big.NewInt(0),
+				groupMembers,
+			); submitErr != nil {
+				return fmt.Errorf("competitor submission failed: %w", submitErr)
+			}
+		}
+		return testWaitForBlockFn(localChain)(ctx, block)
+	}
+
+	inactivityClaimSubmitter := newInactivityClaimSubmitter(
+		&testutils.MockLogger{},
+		localChain,
+		groupParameters,
+		groupMembers,
+		hookedWaitForBlockFn,
+	)
+
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	defer cancelCtx()
+
+	claim := inactivity.NewClaimPreimage(
+		big.NewInt(0),
+		publicKey,
+		[]group.MemberIndex{11, 22, 33},
+		true,
+	)
+
+	// memberIndex=2 produces a non-zero submission delay so the wait fires
+	// and the post-wait nonce re-check is exercised.
+	err = inactivityClaimSubmitter.SubmitClaim(
+		ctx,
+		group.MemberIndex(2),
+		claim,
+		signatures,
+	)
+	if err != nil {
+		t.Fatalf(
+			"expected nil error after losing the submission race, got: %v",
+			err,
+		)
+	}
+
+	// The competitor's submission bumped the nonce to 1; our member must not
+	// have advanced it further.
+	finalNonce, err := localChain.GetInactivityClaimNonce(ecdsaWalletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedNonce := big.NewInt(1)
+	testutils.AssertBigIntsEqual(
+		t,
+		"inactivity nonce",
+		expectedNonce,
+		finalNonce,
+	)
 }

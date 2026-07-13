@@ -42,7 +42,7 @@ jobs:
       needs.docs-detect-changes.outputs.path-filter == 'true'
         || github.event_name == 'push'
         || github.event_name == 'workflow_dispatch'
-    uses: keep-network/ci/.github/workflows/reusable-solidity-docs.yml@main
+    uses: ./.github/workflows/reusable-solidity-docs.yml
     with:
       projectDir: /solidity/ecdsa
       publish: false
@@ -71,7 +71,7 @@ jobs:
   contracts-docs-publish:
     name: Publish contracts documentation
     needs: contracts-docs-prepublish-wait
-    uses: keep-network/ci/.github/workflows/reusable-solidity-docs.yml@main
+    uses: ./.github/workflows/reusable-solidity-docs.yml
     with:
       projectDir: /solidity/ecdsa
       publish: true

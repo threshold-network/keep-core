@@ -2,6 +2,7 @@ package libp2p
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync/atomic"
 	"time"
@@ -23,6 +24,17 @@ const (
 	// authProtocolID is the ID of the authentication protocol.
 	authProtocolID = "keep"
 )
+
+// keepHandshakeTimeout bounds the post-TLS Keep authentication handshake
+// (Act 1 + Act 2 + Act 3). Chosen to match go-libp2p's upgrader default
+// accept timeout (15s, defined as `defaultAcceptTimeout` in
+// github.com/libp2p/go-libp2p/p2p/net/upgrader, configurable via
+// upgrader.WithAcceptTimeout), comfortably above realistic single-RTT
+// budgets across global peers while preventing indefinite stalls that
+// would otherwise saturate the resource-manager transient-inbound slot
+// pool. Declared as `var` (not `const`) solely to allow test code to
+// shorten it under `t.Cleanup`.
+var keepHandshakeTimeout = 15 * time.Second
 
 // Compile time assertions of custom types
 var _ sec.SecureTransport = (*transport)(nil)
@@ -94,6 +106,35 @@ func (t *transport) getMetricsRecorder() MetricsRecorder {
 	return nil
 }
 
+// applyHandshakeDeadline sets an absolute read+write deadline on conn that is
+// the minimum of (now+keepHandshakeTimeout) and any deadline already attached
+// to ctx. It returns a cleanup function that restores the connection to a
+// no-deadline state — callers MUST invoke the cleanup on success so that
+// subsequent application I/O is not subject to the handshake budget.
+//
+// The deadline is absolute (per net.Conn semantics): once set, it does not
+// extend with successful intermediate reads, which is exactly the property we
+// want — a partial-byte trickle attack cannot keep the connection alive past
+// the cap.
+//
+// Returns an error only if SetDeadline fails on the underlying connection,
+// which would itself indicate a closed or non-functional connection. Callers
+// should propagate this error.
+func applyHandshakeDeadline(ctx context.Context, conn net.Conn) (clear func(), err error) {
+	deadline := time.Now().Add(keepHandshakeTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return nil, fmt.Errorf("set handshake deadline: %w", err)
+	}
+	return func() {
+		// Best-effort clear; the only failure mode is a closed connection,
+		// in which case the deadline is irrelevant anyway.
+		_ = conn.SetDeadline(time.Time{})
+	}, nil
+}
+
 // SecureInbound secures an inbound connection.
 func (t *transport) SecureInbound(
 	ctx context.Context,
@@ -105,7 +146,14 @@ func (t *transport) SecureInbound(
 		return nil, err
 	}
 
-	return newAuthenticatedInboundConnection(
+	clear, err := applyHandshakeDeadline(ctx, encryptedConnection)
+	if err != nil {
+		_ = encryptedConnection.Close()
+		return nil, fmt.Errorf("inbound handshake setup: %w", err)
+	}
+	defer clear()
+
+	ac, err := newAuthenticatedInboundConnection(
 		encryptedConnection,
 		encryptedConnection.ConnState(),
 		t.localPeerID,
@@ -114,6 +162,13 @@ func (t *transport) SecureInbound(
 		t.authProtocolID,
 		t.getMetricsRecorder(),
 	)
+	if err != nil {
+		// newAuthenticatedInboundConnection already closes the conn on its
+		// internal failure paths; the deferred clear() above is a no-op on
+		// a closed conn (SetDeadline returns an error which we swallow).
+		return nil, err
+	}
+	return ac, nil
 }
 
 // SecureOutbound secures an outbound connection.
@@ -131,7 +186,14 @@ func (t *transport) SecureOutbound(
 		return nil, err
 	}
 
-	return newAuthenticatedOutboundConnection(
+	clear, err := applyHandshakeDeadline(ctx, encryptedConnection)
+	if err != nil {
+		_ = encryptedConnection.Close()
+		return nil, fmt.Errorf("outbound handshake setup: %w", err)
+	}
+	defer clear()
+
+	ac, err := newAuthenticatedOutboundConnection(
 		encryptedConnection,
 		encryptedConnection.ConnState(),
 		t.localPeerID,
@@ -141,6 +203,10 @@ func (t *transport) SecureOutbound(
 		t.authProtocolID,
 		t.getMetricsRecorder(),
 	)
+	if err != nil {
+		return nil, err
+	}
+	return ac, nil
 }
 
 // ID is the protocol ID of the security protocol.

@@ -207,6 +207,12 @@ func TestReadConfigFromFile(t *testing.T) {
 			readValueFunc: func(c *Config) interface{} { return c.Maintainer.BitcoinDifficulty.DisableProxy },
 			expectedValue: true,
 		},
+		"Maintainer.BitcoinDifficulty.IdleOnPreflightFailure": {
+			readValueFunc: func(c *Config) interface{} {
+				return c.Maintainer.BitcoinDifficulty.IdleOnPreflightFailure
+			},
+			expectedValue: true,
+		},
 		"Maintainer.Spv.Enabled": {
 			readValueFunc: func(c *Config) interface{} { return c.Maintainer.Spv.Enabled },
 			expectedValue: true,

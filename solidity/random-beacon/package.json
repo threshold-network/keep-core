@@ -14,9 +14,10 @@
     "export.json"
   ],
   "scripts": {
+    "install:deps": "corepack enable && corepack prepare yarn@4.8.1 --activate && yarn install",
     "clean": "hardhat clean && rm -rf cache/ export/ external/npm typechain/ export.json",
     "build": "hardhat compile",
-    "test": "hardhat check-accounts-count && USE_EXTERNAL_DEPLOY=true TEST_USE_STUBS_BEACON=true hardhat test",
+    "test": "hardhat typechain && hardhat check-accounts-count && USE_EXTERNAL_DEPLOY=true TEST_USE_STUBS_BEACON=true hardhat test",
     "deploy": "hardhat deploy --export export.json",
     "deploy:test": "USE_EXTERNAL_DEPLOY=true hardhat deploy",
     "format": "npm run lint",
@@ -36,7 +37,7 @@
     "@keep-network/sortition-pools": "^2.0.0-pre.16",
     "@openzeppelin/contracts": "4.7.3",
     "@thesis/solidity-contracts": "github:thesis/solidity-contracts#4985bcf",
-    "@threshold-network/solidity-contracts": "development"
+    "@threshold-network/solidity-contracts": "1.3.0-dev.14"
   },
   "devDependencies": {
     "@defi-wonderland/smock": "^2.0.7",
@@ -47,7 +48,7 @@
     "@nomiclabs/hardhat-waffle": "^2.0.1",
     "@openzeppelin/hardhat-upgrades": "^1.20.0",
     "@tenderly/hardhat-tenderly": "1.0.12",
-    "@thesis-co/eslint-config": "github:thesis/eslint-config#v0.2.0",
+    "@thesis-co/eslint-config": "https://codeload.github.com/thesis/eslint-config/tar.gz/e63608fab2a1ad5c8fe89873bf0d4d4f9ef4a081",
     "@typechain/ethers-v5": "^9.0.0",
     "@typechain/hardhat": "^4.0.0",
     "@types/chai": "^4.2.22",
@@ -57,6 +58,7 @@
     "eslint": "^7.32.0",
     "ethereum-waffle": "^3.4.0",
     "ethers": "^5.4.7",
+    "fs-extra": "^11.2.0",
     "hardhat": "^2.10.0",
     "hardhat-contract-sizer": "^2.5.1",
     "hardhat-dependency-compiler": "^1.1.2",
@@ -65,13 +67,17 @@
     "prettier": "^2.4.1",
     "prettier-plugin-solidity": "^1.0.0-beta.18",
     "solhint": "^3.3.6",
-    "solhint-config-keep": "github:keep-network/solhint-config-keep",
+    "solhint-config-keep": "https://codeload.github.com/keep-network/solhint-config-keep/tar.gz/5e1751e58c0f1c507305ffc8c7f6c58047657ada",
     "solidity-docgen": "^0.6.0-beta.35",
     "ts-node": "^10.2.1",
     "typechain": "^7.0.0",
     "typescript": "^4.4.3"
   },
   "engines": {
-    "node": ">= 14.0.0"
-  }
+    "node": ">=18.15.0"
+  },
+  "resolutions": {
+    "ethereumjs-abi": "npm:0.6.8"
+  },
+  "packageManager": "yarn@4.8.1+sha512.bc946f2a022d7a1a38adfc15b36a66a3807a67629789496c3714dd1703d2e6c6b1c69ff9ec3b43141ac7a1dd853b7685638eb0074300386a59c18df351ef8ff6"
 }

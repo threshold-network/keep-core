@@ -1,6 +1,10 @@
 package electrum
 
-import "time"
+import (
+	"time"
+
+	"github.com/keep-network/keep-core/pkg/bitcoin"
+)
 
 const (
 	// DefaultConnectTimeout is a default timeout used for a single attempt of
@@ -36,4 +40,10 @@ type Config struct {
 	// An Electrum server may disconnect clients that have not sent any requests
 	// for roughly 10 minutes.
 	KeepAliveInterval time.Duration
+	// Network is the Bitcoin network this connection operates on. It is set
+	// internally from the resolved client configuration, not decoded from the
+	// config file (`mapstructure:"-"`), so it cannot be used to alter
+	// network-sensitive client behavior such as the low-fee estimate fallback.
+	// A zero value (bitcoin.Unknown) disables that fallback (fail-safe).
+	Network bitcoin.Network `mapstructure:"-"`
 }

@@ -36,7 +36,7 @@ import { ethers, helpers } from "hardhat"
 import { params } from "../fixtures"
 import { testConfig } from "../../hardhat.config"
 
-import type { BigNumber, BigNumberish } from "ethers"
+import type { BigNumber, BigNumberish, Contract } from "ethers"
 import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers"
 import type {
   WalletRegistry,
@@ -45,6 +45,21 @@ import type {
   TokenStaking,
   Allowlist,
 } from "../../typechain"
+
+/** Minimal ABI for legacy TokenStaking methods not present on the generated typechain ABI. */
+const legacyTokenStakingIface = new ethers.utils.Interface([
+  "function stake(address,address,address,uint96)",
+  "function increaseAuthorization(address,address,uint96)",
+  "function approveApplication(address)",
+  "function processSlashing(uint256)",
+])
+
+export function legacyTokenStakingAt(
+  staking: Pick<TokenStaking, "address">,
+  signer: SignerWithAddress
+): Contract {
+  return new ethers.Contract(staking.address, legacyTokenStakingIface, signer)
+}
 
 export type OperatorID = number
 export type Operator = {
@@ -229,20 +244,16 @@ export async function stake(
   await t.connect(deployer).mint(owner.address, stakeAmount)
   await t.connect(owner).approve(staking.address, stakeAmount)
 
-  await staking
-    .connect(owner)
-    .stake(
-      stakingProvider.address,
-      beneficiary.address,
-      authorizer.address,
-      stakeAmount
-    )
+  await legacyTokenStakingAt(staking, owner).stake(
+    stakingProvider.address,
+    beneficiary.address,
+    authorizer.address,
+    stakeAmount
+  )
 
-  await staking
-    .connect(authorizer)
-    .increaseAuthorization(
-      stakingProvider.address,
-      randomBeacon.address,
-      stakeAmount
-    )
+  await legacyTokenStakingAt(staking, authorizer).increaseAuthorization(
+    stakingProvider.address,
+    randomBeacon.address,
+    stakeAmount
+  )
 }

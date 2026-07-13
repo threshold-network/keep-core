@@ -1,3 +1,6 @@
+import verifyOnEtherscanOrContinue from "./etherscanVerification"
+import verifyOnTenderlyOrContinue from "./tenderlyVerification"
+
 import type { HardhatRuntimeEnvironment } from "hardhat/types"
 import type { DeployFunction } from "hardhat-deploy/types"
 
@@ -58,23 +61,30 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
     deployer
   )
 
-  if (hre.network.tags.etherscan) {
-    await helpers.etherscan.verify(EcdsaInactivity)
+  if (
+    hre.network.tags.etherscan &&
+    process.env.DISABLE_HARDHAT_VERIFY !== "true"
+  ) {
+    await verifyOnEtherscanOrContinue(hre, async () => {
+      await helpers.etherscan.verify(EcdsaInactivity)
 
-    // We use `verify` instead of `verify:verify` as the `verify` task is defined
-    // in "@openzeppelin/hardhat-upgrades" to perform Etherscan verification
-    // of Proxy and Implementation contracts.
-    await hre.run("verify", {
-      address: proxyDeployment.address,
-      constructorArgsParams: proxyDeployment.args,
+      // We use `verify` instead of `verify:verify` as the `verify` task is defined
+      // in "@openzeppelin/hardhat-upgrades" to perform Etherscan verification
+      // of Proxy and Implementation contracts.
+      await hre.run("verify", {
+        address: proxyDeployment.address,
+        constructorArgsParams: proxyDeployment.args,
+      })
     })
   }
 
   if (hre.network.tags.tenderly) {
-    await hre.tenderly.verify({
-      name: "WalletRegistry",
-      address: walletRegistry.address,
-    })
+    await verifyOnTenderlyOrContinue(hre, () =>
+      hre.tenderly.verify({
+        name: "WalletRegistry",
+        address: walletRegistry.address,
+      })
+    )
   }
 
   return true

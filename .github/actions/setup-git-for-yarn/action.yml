@@ -1,0 +1,48 @@
+name: Setup Git for Yarn (git dependencies)
+description: >
+  Configure Git so Yarn can clone dependencies (e.g. thesis/eslint-config) on
+  GitHub-hosted runners. Sets GIT_CONFIG_GLOBAL and GIT_CONFIG_NOSYSTEM to avoid
+  broken system config ("invalid key core.autocrlf" / unable to write config).
+runs:
+  using: composite
+  steps:
+    - name: Configure Git for Yarn clones
+      shell: bash
+      run: |
+        set -euo pipefail
+        SAFE_TMP="${RUNNER_TEMP:-/tmp}"
+        WRAPPER_DIR="${RUNNER_TEMP:-/tmp}/git-clean-bin"
+        SAFE_HOME="${SAFE_TMP}/git-clean-home"
+        SAFE_XDG_CONFIG_HOME="${SAFE_TMP}/git-clean-xdg-config"
+        REAL_GIT="$(command -v git)"
+
+        mkdir -p "$WRAPPER_DIR" "$SAFE_HOME" "$SAFE_XDG_CONFIG_HOME"
+        printf '%s\n' \
+          '#!/usr/bin/env bash' \
+          'set -euo pipefail' \
+          'unset GIT_CONFIG_PARAMETERS' \
+          "while IFS='=' read -r key _; do" \
+          '  case "$key" in' \
+          '    GIT_CONFIG_*) unset "$key" ;;' \
+          '  esac' \
+          'done < <(env)' \
+          "export HOME=\"${SAFE_HOME}\"" \
+          "export XDG_CONFIG_HOME=\"${SAFE_XDG_CONFIG_HOME}\"" \
+          'export GIT_CONFIG_GLOBAL=/dev/null' \
+          'export GIT_CONFIG_NOSYSTEM=1' \
+          'export GIT_CONFIG_SYSTEM=/dev/null' \
+          'export GIT_CONFIG_COUNT=0' \
+          "if ! pwd >/dev/null 2>&1; then cd \"${SAFE_TMP}\"; fi" \
+          "exec \"${REAL_GIT}\" \"\$@\"" \
+          >"${WRAPPER_DIR}/git"
+        chmod +x "${WRAPPER_DIR}/git"
+        # Only export the git-binary indirection vars to the job env. The
+        # wrapper itself re-creates a clean GIT_CONFIG_* environment on every
+        # invocation, so downstream steps that legitimately need to write
+        # global git config (e.g. docs publish setting user.email/name) are
+        # not silently redirected to /dev/null.
+        {
+          echo "GIT=${WRAPPER_DIR}/git"
+          echo "npm_config_git=${WRAPPER_DIR}/git"
+        } >> "$GITHUB_ENV"
+        echo "${WRAPPER_DIR}" >> "$GITHUB_PATH"

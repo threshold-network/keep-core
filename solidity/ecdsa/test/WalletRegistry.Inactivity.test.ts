@@ -57,7 +57,7 @@ describe("WalletRegistry - Inactivity", () => {
   before(async () => {
     // eslint-disable-next-line @typescript-eslint/no-extra-semi
     ;({ walletRegistry, sortitionPool, randomBeacon, walletOwner, thirdParty } =
-      await walletRegistryFixture())
+      await walletRegistryFixture({ useAllowlist: true }))
     ;({ members, walletID } = await createNewWallet(
       walletRegistry,
       walletOwner.wallet,

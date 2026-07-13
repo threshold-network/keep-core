@@ -44,6 +44,7 @@ func initializeContractAddressesAliases() {
 	aliasEthereumContract(chainEthereum.LightRelayContractName)
 	aliasEthereumContract(chainEthereum.LightRelayMaintainerProxyContractName)
 	aliasEthereumContract(chainEthereum.WalletProposalValidatorContractName)
+	aliasEthereumContract(chainEthereum.EcdsaDkgValidatorContractName)
 }
 
 // resolveContractsAddresses verifies if contracts addresses are configured, if not

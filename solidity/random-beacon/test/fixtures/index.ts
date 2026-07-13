@@ -126,12 +126,21 @@ async function updateTokenStakingParams(
   // slashing in test suites.
   const initialNotifierTreasury = to1e18(9_000_000) // 9MM T
   await t.connect(deployer).approve(staking.address, initialNotifierTreasury)
-  await staking
-    .connect(deployer)
-    .pushNotificationReward(initialNotifierTreasury)
-  await staking
-    .connect(deployer)
-    .setNotificationReward(constants.tokenStakingNotificationReward)
+
+  // Compatibility: Threshold TokenStaking variant may not expose these methods.
+  const stakingAsRecord = staking.connect(deployer) as unknown as Record<
+    string,
+    (...args: unknown[]) => Promise<unknown>
+  >
+
+  if (typeof stakingAsRecord.pushNotificationReward === "function") {
+    await stakingAsRecord.pushNotificationReward(initialNotifierTreasury)
+  }
+  if (typeof stakingAsRecord.setNotificationReward === "function") {
+    await stakingAsRecord.setNotificationReward(
+      constants.tokenStakingNotificationReward
+    )
+  }
 }
 
 async function setFixtureParameters(randomBeacon: RandomBeaconStub) {

@@ -3,6 +3,7 @@ build/
 cache/
 deployments/
 export/
+external/
 hardhat-dependency-compiler/
 typechain/
 export.json
