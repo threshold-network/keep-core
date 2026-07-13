@@ -25,9 +25,10 @@ rewrite architecture.
   - `frost_tbtc_start_sign_round`
   - `frost_tbtc_finalize_sign_round`
   - `frost_tbtc_build_taproot_tx`
-  - `frost_tbtc_refresh_shares` (retained for ABI compatibility but currently
-    fails closed; the one-shot request cannot perform cryptographic FROST share
-    refresh)
+  - `frost_tbtc_refresh_shares` (symbol retained, but ABI 4.0 fails closed; the
+    one-shot request cannot perform cryptographic FROST share refresh, and the
+    major bump prevents ABI-3 consumers from accepting the changed response
+    semantics)
 - Implemented idempotency and conflict checks for retried operations under the
   same session ID.
 - Added file-backed persistent session-state adapter with atomic writes and

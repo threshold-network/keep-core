@@ -10,7 +10,7 @@ in `docs/rust-rewrite-bootstrap.md`.
   - `StartSignRound`
   - `FinalizeSignRound`
   - `BuildTaprootTx`
-  - `RefreshShares` (ABI retained, but fail-closed with
+  - `RefreshShares` (symbol retained in ABI 4.0, but fail-closed with
     `cryptographic_refresh_not_supported` until a multi-round FROST refresh
     protocol is implemented; metadata from the retired synthetic stub cannot
     postpone cadence or establish key continuity)
@@ -447,6 +447,11 @@ storage guarantees for that hardware-level failure boundary.
     transient with the live nonce state, so restart requires a fresh Open.
     ABI 3.2 adds the independent per-wallet heartbeat rate-limit config and
     dedicated heartbeat policy-rejection metric.
+  - ABI 4.0 reserves `RefreshShares` as fail-closed until a real multi-round,
+    zero-constant FROST refresh protocol exists. Because valid refresh requests
+    now return terminal `cryptographic_refresh_not_supported` instead of a
+    synthetic success result, ABI-3 bridges must reject this library during
+    compatibility negotiation.
   - ABI-3 migration is intentionally fail closed. A pre-ABI-3 in-flight ROAST
     session has no stored BIP-341 sighashes and must be abandoned and restarted
     under a fresh `session_id`; its cached fingerprint cannot be upgraded in
