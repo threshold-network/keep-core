@@ -37,6 +37,22 @@ func testTaprootWalletMainUtxo(
 ) *bitcoin.UnspentTransactionOutput {
 	t.Helper()
 
+	return testTaprootWalletMainUtxoWithValue(
+		t,
+		bitcoinChain,
+		walletPublicKey,
+		100000,
+	)
+}
+
+func testTaprootWalletMainUtxoWithValue(
+	t *testing.T,
+	bitcoinChain bitcoin.Chain,
+	walletPublicKey *ecdsa.PublicKey,
+	value int64,
+) *bitcoin.UnspentTransactionOutput {
+	t.Helper()
+
 	walletXOnlyPublicKey, err := walletXOnlyPublicKey(walletPublicKey)
 	if err != nil {
 		t.Fatalf("cannot extract wallet x-only public key: [%v]", err)
@@ -63,7 +79,7 @@ func testTaprootWalletMainUtxo(
 		},
 		Outputs: []*bitcoin.TransactionOutput{
 			{
-				Value:           100000,
+				Value:           value,
 				PublicKeyScript: taprootScript,
 			},
 		},
@@ -78,6 +94,6 @@ func testTaprootWalletMainUtxo(
 			TransactionHash: fundingTx.Hash(),
 			OutputIndex:     0,
 		},
-		Value: 100000,
+		Value: value,
 	}
 }

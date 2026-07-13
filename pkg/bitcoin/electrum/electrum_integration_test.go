@@ -113,6 +113,7 @@ func init() {
 					URL:                 server,
 					RequestTimeout:      requestTimeout,
 					RequestRetryTimeout: requestRetryTimeout,
+					Network:             network,
 				},
 				network: network,
 			}
