@@ -77,9 +77,9 @@ use crate::api::{
     QuarantineStatusRequest, QuarantineStatusResult, RefreshCadenceStatusRequest,
     RefreshCadenceStatusResult, RefreshSharesRequest, RefreshSharesResult,
     RoastLivenessPolicyResult, RollbackCanaryRequest, RollbackCanaryResult, RoundState,
-    ShareMaterial, SignatureResult, SignerHardeningMetricsResult, TransactionResult,
-    TranscriptAuditRecord, TranscriptAuditRequest, TranscriptAuditResult,
-    TriggerEmergencyRekeyRequest, TriggerEmergencyRekeyResult, VerifyBlameProofRequest,
+    SignatureResult, SignerHardeningMetricsResult, TransactionResult, TranscriptAuditRecord,
+    TranscriptAuditRequest, TranscriptAuditResult, TriggerEmergencyRekeyRequest,
+    TriggerEmergencyRekeyResult, VerifyBlameProofRequest,
 };
 use crate::errors::EngineError;
 use crate::go_math_rand::select_coordinator_identifier;

@@ -10,7 +10,10 @@ in `docs/rust-rewrite-bootstrap.md`.
   - `StartSignRound`
   - `FinalizeSignRound`
   - `BuildTaprootTx`
-  - `RefreshShares`
+  - `RefreshShares` (ABI retained, but fail-closed with
+    `cryptographic_refresh_not_supported` until a multi-round FROST refresh
+    protocol is implemented; metadata from the retired synthetic stub cannot
+    postpone cadence or establish key continuity)
 - Exposes fine-grained interactive (member-custodied nonce) signing via:
   - `InteractiveSessionOpen`
   - `InteractiveRound1`
@@ -361,7 +364,9 @@ storage guarantees for that hardware-level failure boundary.
   `{"code":"...","message":"...","recovery_class":"..."}` JSON in `buffer`.
 - `recovery_class` values:
   - `recoverable`: caller can retry with corrected/updated input.
-  - `terminal`: session state is terminal for the current operation/session.
+  - `terminal`: the current operation/session cannot succeed in this runtime;
+    retry only after changing runtime capability or starting the documented
+    replacement flow.
 - `frost_tbtc_roast_liveness_policy` response:
   - `coordinator_timeout_ms`: effective coordinator-timeout policy in
     milliseconds.

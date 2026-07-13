@@ -259,10 +259,6 @@ pub(crate) enum PersistencePendingOperation {
     CanaryRollback {
         result: RollbackCanaryResult,
     },
-    RefreshShares {
-        session_id: String,
-        request_fingerprint: String,
-    },
     InteractiveRound2 {
         session_id: String,
         consumed_marker: String,
@@ -307,16 +303,6 @@ fn persistence_pending_same_slot(
             PersistencePendingOperation::CanaryPromotion { .. }
             | PersistencePendingOperation::CanaryRollback { .. },
         ) => true,
-        (
-            PersistencePendingOperation::RefreshShares {
-                session_id: existing,
-                ..
-            },
-            PersistencePendingOperation::RefreshShares {
-                session_id: replacement,
-                ..
-            },
-        ) => existing == replacement,
         (
             PersistencePendingOperation::InteractiveRound2 {
                 session_id: existing_session,
@@ -465,34 +451,6 @@ pub(crate) fn pending_canary_rollback_result(reason: &str) -> Option<RollbackCan
         }
         _ => None,
     }
-}
-
-pub(crate) fn pending_refresh_operation(session_id: &str) -> Option<PersistencePendingOperation> {
-    persistence_pending_operations()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .iter()
-        .find(|operation| {
-            matches!(
-                operation,
-                PersistencePendingOperation::RefreshShares {
-                    session_id: pending_session,
-                    ..
-                } if pending_session == session_id
-            )
-        })
-        .cloned()
-}
-
-#[cfg(test)]
-pub(crate) fn refresh_persistence_pending(session_id: &str, request_fingerprint: &str) -> bool {
-    matches!(
-        pending_refresh_operation(session_id),
-        Some(PersistencePendingOperation::RefreshShares {
-            request_fingerprint: pending_fingerprint,
-            ..
-        }) if pending_fingerprint == request_fingerprint
-    )
 }
 
 pub(crate) fn interactive_round2_persistence_pending(
@@ -1890,10 +1848,10 @@ impl TryFrom<PersistedSessionState> for SessionState {
             tx_result: persisted.tx_result,
             refresh_request_fingerprint: persisted.refresh_request_fingerprint,
             refresh_result: persisted.refresh_result,
-            // Backfill from history length for state written before refresh_count
-            // existed (serde defaults it to 0), so refresh_cadence_status reports
-            // the true total immediately after upgrade rather than 0 until the next
-            // refresh. Evaluated before refresh_history is moved below.
+            // Preserve the legacy synthetic count losslessly for schema
+            // compatibility and diagnostics. Lifecycle status deliberately
+            // ignores it until a versioned cryptographic refresh protocol exists.
+            // Evaluated before refresh_history is moved below.
             refresh_count: persisted
                 .refresh_count
                 .max(persisted.refresh_history.len() as u64),

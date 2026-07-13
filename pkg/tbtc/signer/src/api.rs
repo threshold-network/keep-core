@@ -485,6 +485,10 @@ pub struct RefreshSharesRequest {
     pub current_shares: Vec<ShareMaterial>,
 }
 
+/// Reserved response shape for a future cryptographic share-refresh protocol.
+/// The current one-shot endpoint always rejects because it cannot safely run
+/// the required multi-round FROST refresh, returning the terminal error code
+/// `cryptographic_refresh_not_supported`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct RefreshSharesResult {
     pub session_id: String,
@@ -500,11 +504,17 @@ pub struct RefreshCadenceStatusRequest {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct RefreshCadenceStatusResult {
     pub session_id: String,
+    /// Number of cryptographically valid refreshes. Always zero until the
+    /// versioned multi-round protocol is implemented.
     pub refresh_count: u64,
+    /// Epoch of the last cryptographically valid refresh. Always zero while
+    /// `RefreshShares` is reserved and fail-closed.
     pub last_refresh_epoch: u64,
     pub cadence_seconds: u64,
     pub next_refresh_due_unix: u64,
     pub overdue: bool,
+    /// False when persisted metadata from the retired synthetic refresh stub is
+    /// detected; that metadata never establishes key continuity.
     pub continuity_preserved: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuity_reference_key_group: Option<String>,

@@ -28,20 +28,6 @@ pub(crate) fn fingerprint<T: serde::Serialize>(value: &T) -> Result<String, Engi
     Ok(value_fingerprint)
 }
 
-pub(crate) fn canonicalize_refresh_shares_request_for_fingerprint(
-    request: &RefreshSharesRequest,
-) -> RefreshSharesRequest {
-    let mut canonical_request = request.clone();
-    canonical_request
-        .current_shares
-        .sort_unstable_by(|left, right| {
-            left.identifier
-                .cmp(&right.identifier)
-                .then_with(|| left.encrypted_share_hex.cmp(&right.encrypted_share_hex))
-        });
-    canonical_request
-}
-
 pub(crate) fn canonicalize_taproot_merkle_root_hex(
     taproot_merkle_root_hex: &mut Option<String>,
 ) -> Result<Option<[u8; 32]>, EngineError> {

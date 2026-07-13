@@ -41,6 +41,11 @@ TbtcSignerResult frost_tbtc_persist_distributed_dkg_key_package(const uint8_t* r
 
 TbtcSignerResult frost_tbtc_new_signing_package(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_build_taproot_tx(const uint8_t* request_ptr, size_t request_len);
+/*
+ * Reserved ABI: fails closed with terminal error code
+ * `cryptographic_refresh_not_supported` until a multi-round, zero-constant
+ * FROST refresh protocol is implemented.
+ */
 TbtcSignerResult frost_tbtc_refresh_shares(const uint8_t* request_ptr, size_t request_len);
 
 /*
