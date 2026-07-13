@@ -217,8 +217,31 @@ func (rt *RedemptionTask) ProposeRedemption(
 	if fee <= 0 {
 		taskLogger.Infof("estimating redemption transaction fee")
 
-		estimatedFee, err := EstimateRedemptionFee(
+		walletChainData, err := rt.chain.GetWallet(walletPublicKeyHash)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot get redeeming wallet's chain data: [%w]",
+				err,
+			)
+		}
+		if walletChainData == nil {
+			return nil, fmt.Errorf("redeeming wallet's chain data is nil")
+		}
+
+		walletOutputScript, err := tbtc.WalletOutputScript(
+			walletPublicKeyHash,
+			walletChainData.WalletID,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot compute redeeming wallet's output script: [%w]",
+				err,
+			)
+		}
+
+		estimatedFee, err := EstimateRedemptionFeeForWalletScript(
 			rt.btcChain,
+			walletOutputScript,
 			redeemersOutputScripts,
 		)
 		if err != nil {
@@ -466,17 +489,37 @@ redemptionRequestedLoop:
 	return result, nil
 }
 
-// EstimateRedemptionFee estimates fee for the redemption transaction that pays
-// the provided redeemers output scripts.
+// EstimateRedemptionFee estimates fee for a legacy P2WPKH redemption
+// transaction that pays the provided redeemers output scripts. Call
+// EstimateRedemptionFeeForWalletScript when the redeeming wallet may use
+// another output script type.
 func EstimateRedemptionFee(
 	btcChain bitcoin.Chain,
 	redeemersOutputScripts []bitcoin.Script,
 ) (int64, error) {
+	legacyWalletOutputScript, err := bitcoin.PayToWitnessPublicKeyHash([20]byte{})
+	if err != nil {
+		return 0, fmt.Errorf("cannot construct legacy wallet output script: [%v]", err)
+	}
+
+	return EstimateRedemptionFeeForWalletScript(
+		btcChain,
+		legacyWalletOutputScript,
+		redeemersOutputScripts,
+	)
+}
+
+// EstimateRedemptionFeeForWalletScript estimates fee for a redemption
+// transaction using the resolved redeeming wallet output script for both the
+// main UTXO input and the possible change output.
+func EstimateRedemptionFeeForWalletScript(
+	btcChain bitcoin.Chain,
+	walletOutputScript bitcoin.Script,
+	redeemersOutputScripts []bitcoin.Script,
+) (int64, error) {
 	sizeEstimator := bitcoin.NewTransactionSizeEstimator().
-		// 1 P2WPKH main UTXO input.
-		AddPublicKeyHashInputs(1, true).
-		// 1 P2WPKH change output.
-		AddPublicKeyHashOutputs(1, true)
+		AddPublicKeyScriptInput(walletOutputScript).
+		AddOutputScript(walletOutputScript)
 
 	for _, script := range redeemersOutputScripts {
 		switch bitcoin.GetScriptType(script) {
