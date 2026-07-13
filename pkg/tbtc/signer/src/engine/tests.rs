@@ -2340,6 +2340,80 @@ fn legacy_synthetic_refresh_metadata_cannot_postpone_cadence_or_claim_continuity
 }
 
 #[test]
+fn unanchored_legacy_refresh_session_is_immediately_overdue_after_restart() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("unanchored_legacy_refresh");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_REFRESH_CADENCE_SECONDS_ENV, "60");
+
+    let session_id = "session-unanchored-legacy-refresh";
+    let plain_session_id = "session-unanchored-without-refresh-artifacts";
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard.sessions.entry(session_id.to_string()).or_default();
+        assert!(session.dkg_result.is_none());
+        session.refresh_request_fingerprint = Some("legacy-refresh-only-request".to_string());
+        session.refresh_result = Some(RefreshSharesResult {
+            session_id: session_id.to_string(),
+            refresh_epoch: 1,
+            new_shares: vec![crate::api::ShareMaterial {
+                identifier: 1,
+                encrypted_share_hex: "aa".repeat(32),
+            }],
+        });
+        session.refresh_history = vec![RefreshHistoryRecord {
+            refresh_epoch: 1,
+            refreshed_at_unix: now_unix(),
+            share_count: 1,
+            key_group: None,
+            request_fingerprint: Some("legacy-refresh-only-request".to_string()),
+        }];
+        session.refresh_count = 1;
+        guard.refresh_epoch_counter = 1;
+        guard
+            .sessions
+            .entry(plain_session_id.to_string())
+            .or_default();
+        persist_engine_state_to_storage(&guard).expect("persist refresh-only legacy session");
+    }
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+
+    let status = refresh_cadence_status(RefreshCadenceStatusRequest {
+        session_id: session_id.to_string(),
+    })
+    .expect("refresh cadence status");
+    assert_eq!(status.refresh_count, 0);
+    assert_eq!(status.last_refresh_epoch, 0);
+    assert_eq!(status.next_refresh_due_unix, 0);
+    assert!(status.overdue);
+    assert!(!status.continuity_preserved);
+    assert!(status.continuity_reference_key_group.is_none());
+
+    let plain_status = refresh_cadence_status(RefreshCadenceStatusRequest {
+        session_id: plain_session_id.to_string(),
+    })
+    .expect("plain session cadence status");
+    assert!(!plain_status.overdue);
+    assert!(plain_status.continuity_preserved);
+    assert_eq!(hardening_metrics().refresh_cadence_overdue_sessions, 1);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn refresh_cadence_overdue_sentinel_survives_clock_rollback() {
+    assert!(refresh_cadence_is_overdue(0, 0));
+    assert!(refresh_cadence_is_overdue(101, 100));
+    assert!(!refresh_cadence_is_overdue(100, 100));
+    assert!(!refresh_cadence_is_overdue(99, 100));
+}
+
+#[test]
 fn differential_fuzzing_reports_no_unresolved_critical_divergence() {
     let _guard = lock_test_state();
     reset_for_tests();

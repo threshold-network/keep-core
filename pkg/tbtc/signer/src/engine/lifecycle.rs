@@ -152,11 +152,23 @@ pub(crate) fn refresh_cadence_due_unix(
     session: &SessionState,
     cadence_seconds: u64,
 ) -> Option<u64> {
-    session
-        .dkg_result
-        .as_ref()
-        .map(|result| result.created_at_unix)
-        .map(|anchor| anchor.saturating_add(cadence_seconds))
+    if let Some(dkg_result) = session.dkg_result.as_ref() {
+        return Some(dkg_result.created_at_unix.saturating_add(cadence_seconds));
+    }
+
+    // The retired synthetic RefreshShares path could create a persisted session
+    // without ever running DKG. Such state has no trustworthy cadence anchor and
+    // must fail closed instead of receiving a new `now + cadence` deadline on
+    // every query. Unix epoch is the explicit "already due" sentinel shared by
+    // status and telemetry.
+    legacy_synthetic_refresh_artifacts_present(session).then_some(0)
+}
+
+pub(crate) fn refresh_cadence_is_overdue(now_unix: u64, due_unix: u64) -> bool {
+    // A zero deadline is the explicit sentinel for unanchored legacy synthetic
+    // refresh state. It remains overdue even if the system clock rolls back to
+    // or before UNIX_EPOCH and `now_unix()` saturates to zero.
+    due_unix == 0 || now_unix > due_unix
 }
 
 pub fn refresh_cadence_status(
@@ -179,7 +191,7 @@ pub fn refresh_cadence_status(
     let now = now_unix();
     let next_refresh_due_unix = refresh_cadence_due_unix(session, cadence_seconds)
         .unwrap_or_else(|| now.saturating_add(cadence_seconds));
-    let overdue = now > next_refresh_due_unix;
+    let overdue = refresh_cadence_is_overdue(now, next_refresh_due_unix);
     let continuity_reference_key_group = refresh_continuity_reference_key_group(session);
     let emergency_rekey_reason = session
         .emergency_rekey_event

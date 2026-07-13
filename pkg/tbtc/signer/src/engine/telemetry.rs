@@ -490,7 +490,7 @@ pub fn hardening_metrics() -> SignerHardeningMetricsResult {
                 .values()
                 .filter(|session| {
                     refresh_cadence_due_unix(session, cadence_seconds)
-                        .is_some_and(|due_unix| now > due_unix)
+                        .is_some_and(|due_unix| refresh_cadence_is_overdue(now, due_unix))
                 })
                 .count() as u64;
         }

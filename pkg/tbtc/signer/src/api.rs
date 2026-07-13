@@ -511,6 +511,8 @@ pub struct RefreshCadenceStatusResult {
     /// `RefreshShares` is reserved and fail-closed.
     pub last_refresh_epoch: u64,
     pub cadence_seconds: u64,
+    /// Durable DKG creation deadline, or zero when untrusted legacy refresh
+    /// metadata has no DKG anchor and must be treated as immediately overdue.
     pub next_refresh_due_unix: u64,
     pub overdue: bool,
     /// False when persisted metadata from the retired synthetic refresh stub is

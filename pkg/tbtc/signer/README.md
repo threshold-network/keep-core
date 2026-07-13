@@ -13,7 +13,8 @@ in `docs/rust-rewrite-bootstrap.md`.
   - `RefreshShares` (symbol retained in ABI 4.0, but fail-closed with
     `cryptographic_refresh_not_supported` until a multi-round FROST refresh
     protocol is implemented; metadata from the retired synthetic stub cannot
-    postpone cadence or establish key continuity)
+    postpone cadence or establish key continuity, and an unanchored legacy
+    refresh-only session is immediately overdue)
 - Exposes fine-grained interactive (member-custodied nonce) signing via:
   - `InteractiveSessionOpen`
   - `InteractiveRound1`
