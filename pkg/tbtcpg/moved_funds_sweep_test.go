@@ -346,26 +346,38 @@ func TestMovedFundsSweepAction_ProposeMovedFundsSweep(t *testing.T) {
 
 	movingFundsTxOutputIndex := uint32(1)
 
-	hasMainUtxo := true
-
 	var tests = map[string]struct {
 		fee              int64
+		walletID         [32]byte
+		hasMainUtxo      bool
 		expectedProposal *tbtc.MovedFundsSweepProposal
 	}{
 		"fee provided": {
-			fee: 10000,
+			fee:         10000,
+			hasMainUtxo: true,
 			expectedProposal: &tbtc.MovedFundsSweepProposal{
 				MovingFundsTxHash:        movingFundsTxHash,
 				MovingFundsTxOutputIndex: movingFundsTxOutputIndex,
 				SweepTxFee:               big.NewInt(10000),
 			},
 		},
-		"fee estimated": {
-			fee: 0, // trigger fee estimation
+		"legacy fee estimated": {
+			fee:         0, // trigger fee estimation
+			hasMainUtxo: true,
 			expectedProposal: &tbtc.MovedFundsSweepProposal{
 				MovingFundsTxHash:        movingFundsTxHash,
 				MovingFundsTxOutputIndex: movingFundsTxOutputIndex,
 				SweepTxFee:               big.NewInt(4450),
+			},
+		},
+		"fresh FROST wallet fee estimated": {
+			fee:         0, // trigger fee estimation
+			walletID:    [32]byte{0x01},
+			hasMainUtxo: false,
+			expectedProposal: &tbtc.MovedFundsSweepProposal{
+				MovingFundsTxHash:        movingFundsTxHash,
+				MovingFundsTxOutputIndex: movingFundsTxOutputIndex,
+				SweepTxFee:               big.NewInt(2775),
 			},
 		},
 	}
@@ -391,7 +403,28 @@ func TestMovedFundsSweepAction_ProposeMovedFundsSweep(t *testing.T) {
 				0,
 			)
 
-			err := tbtcChain.SetMovedFundsSweepProposalValidationResult(
+			walletOutputScript, err := tbtc.WalletOutputScript(
+				walletPublicKeyHash,
+				test.walletID,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			tbtcChain.SetWallet(
+				walletPublicKeyHash,
+				&tbtc.WalletChainData{WalletID: test.walletID},
+			)
+			movingFundsTxOutputs := make([]*bitcoin.TransactionOutput, 2)
+			movingFundsTxOutputs[movingFundsTxOutputIndex] = &bitcoin.TransactionOutput{
+				PublicKeyScript: walletOutputScript,
+			}
+			btcChain.SetTransaction(
+				movingFundsTxHash,
+				&bitcoin.Transaction{Outputs: movingFundsTxOutputs},
+			)
+
+			err = tbtcChain.SetMovedFundsSweepProposalValidationResult(
 				walletPublicKeyHash,
 				test.expectedProposal,
 				true,
@@ -407,7 +440,7 @@ func TestMovedFundsSweepAction_ProposeMovedFundsSweep(t *testing.T) {
 				walletPublicKeyHash,
 				movingFundsTxHash,
 				movingFundsTxOutputIndex,
-				hasMainUtxo,
+				test.hasMainUtxo,
 				test.fee,
 			)
 			if err != nil {
@@ -421,30 +454,63 @@ func TestMovedFundsSweepAction_ProposeMovedFundsSweep(t *testing.T) {
 	}
 }
 
-func TestEstimateMovedFundsSweepFee(t *testing.T) {
+func TestEstimateMovedFundsSweepFeeForScripts(t *testing.T) {
+	legacyWalletScript, err := bitcoin.PayToWitnessPublicKeyHash([20]byte{0x01})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taprootWalletScript, err := bitcoin.PayToTaproot([32]byte{0x02})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var tests = map[string]struct {
-		sweepTxMaxTotalFee uint64
-		hasMainUtxo        bool
-		expectedFee        uint64
-		expectedError      error
+		movedFundsOutputScript bitcoin.Script
+		walletOutputScript     bitcoin.Script
+		sweepTxMaxTotalFee     uint64
+		hasMainUtxo            bool
+		expectedFee            uint64
+		expectedError          error
 	}{
-		"estimated fee correct, one input": {
-			sweepTxMaxTotalFee: 3000,
-			hasMainUtxo:        false,
-			expectedFee:        1760,
-			expectedError:      nil,
+		"legacy scripts, one input": {
+			movedFundsOutputScript: legacyWalletScript,
+			walletOutputScript:     legacyWalletScript,
+			sweepTxMaxTotalFee:     3000,
+			hasMainUtxo:            false,
+			expectedFee:            1760,
+			expectedError:          nil,
 		},
-		"estimated fee correct, two inputs": {
-			sweepTxMaxTotalFee: 3000,
-			hasMainUtxo:        true,
-			expectedFee:        2848,
-			expectedError:      nil,
+		"legacy scripts, two inputs": {
+			movedFundsOutputScript: legacyWalletScript,
+			walletOutputScript:     legacyWalletScript,
+			sweepTxMaxTotalFee:     3000,
+			hasMainUtxo:            true,
+			expectedFee:            2848,
+			expectedError:          nil,
 		},
-		"estimated fee too high": {
-			sweepTxMaxTotalFee: 2500,
-			hasMainUtxo:        true,
-			expectedFee:        0,
-			expectedError:      tbtcpg.ErrSweepTxFeeTooHigh,
+		"Taproot scripts, one input": {
+			movedFundsOutputScript: taprootWalletScript,
+			walletOutputScript:     taprootWalletScript,
+			sweepTxMaxTotalFee:     3000,
+			hasMainUtxo:            false,
+			expectedFee:            1776,
+			expectedError:          nil,
+		},
+		"Taproot scripts, two inputs": {
+			movedFundsOutputScript: taprootWalletScript,
+			walletOutputScript:     taprootWalletScript,
+			sweepTxMaxTotalFee:     3000,
+			hasMainUtxo:            true,
+			expectedFee:            2704,
+			expectedError:          nil,
+		},
+		"estimated Taproot fee too high": {
+			movedFundsOutputScript: taprootWalletScript,
+			walletOutputScript:     taprootWalletScript,
+			sweepTxMaxTotalFee:     2700,
+			hasMainUtxo:            true,
+			expectedFee:            0,
+			expectedError:          tbtcpg.ErrSweepTxFeeTooHigh,
 		},
 	}
 
@@ -453,8 +519,10 @@ func TestEstimateMovedFundsSweepFee(t *testing.T) {
 			btcChain := tbtcpg.NewLocalBitcoinChain()
 			btcChain.SetEstimateSatPerVByteFee(1, 16)
 
-			actualFee, err := tbtcpg.EstimateMovedFundsSweepFee(
+			actualFee, err := tbtcpg.EstimateMovedFundsSweepFeeForScripts(
 				btcChain,
+				test.movedFundsOutputScript,
+				test.walletOutputScript,
 				test.hasMainUtxo,
 				test.sweepTxMaxTotalFee,
 			)
@@ -473,6 +541,18 @@ func TestEstimateMovedFundsSweepFee(t *testing.T) {
 			)
 		})
 	}
+}
+
+func TestEstimateMovedFundsSweepFee(t *testing.T) {
+	btcChain := tbtcpg.NewLocalBitcoinChain()
+	btcChain.SetEstimateSatPerVByteFee(1, 16)
+
+	actualFee, err := tbtcpg.EstimateMovedFundsSweepFee(btcChain, true, 3000)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testutils.AssertUintsEqual(t, "fee", 2848, uint64(actualFee))
 }
 
 func hashFromString(str string) bitcoin.Hash {

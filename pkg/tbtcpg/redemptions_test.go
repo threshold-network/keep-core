@@ -42,6 +42,27 @@ func TestEstimateRedemptionFee(t *testing.T) {
 
 	expectedFee := 4000 // transactionVirtualSize * satPerVByteFee = 250 * 16 = 4000
 	testutils.AssertIntsEqual(t, "fee", expectedFee, int(actualFee))
+
+	taprootWalletOutputScript, err := bitcoin.PayToTaproot([32]byte{0x01})
+	if err != nil {
+		t.Fatal(err)
+	}
+	btcChain.SetEstimateSatPerVByteFee(1, 1)
+
+	actualTaprootFee, err := tbtcpg.EstimateRedemptionFeeForWalletScript(
+		btcChain,
+		taprootWalletOutputScript,
+		redeemersOutputScripts,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The P2TR main UTXO input and change output make this transaction one
+	// virtual byte larger than the legacy P2WPKH shape. At the minimum relay
+	// rate, the old shape would underpay by exactly one satoshi.
+	expectedTaprootFee := 251 // transactionVirtualSize * satPerVByteFee = 251 * 1 = 251
+	testutils.AssertIntsEqual(t, "Taproot fee", expectedTaprootFee, int(actualTaprootFee))
 }
 
 func TestRedemptionAction_FindPendingRedemptions(t *testing.T) {
@@ -245,6 +266,7 @@ func TestRedemptionAction_ProposeRedemption(t *testing.T) {
 
 	var tests = map[string]struct {
 		fee              int64
+		walletID         [32]byte
 		expectedProposal *tbtc.RedemptionProposal
 	}{
 		"fee provided": {
@@ -261,6 +283,14 @@ func TestRedemptionAction_ProposeRedemption(t *testing.T) {
 				RedemptionTxFee:        big.NewInt(4300),
 			},
 		},
+		"fee estimated for FROST wallet": {
+			fee:      0, // trigger fee estimation
+			walletID: [32]byte{0x01},
+			expectedProposal: &tbtc.RedemptionProposal{
+				RedeemersOutputScripts: redeemersOutputScripts,
+				RedemptionTxFee:        big.NewInt(4325),
+			},
+		},
 	}
 
 	for testName, test := range tests {
@@ -269,6 +299,10 @@ func TestRedemptionAction_ProposeRedemption(t *testing.T) {
 			btcChain := tbtcpg.NewLocalBitcoinChain()
 
 			btcChain.SetEstimateSatPerVByteFee(1, 25)
+			tbtcChain.SetWallet(
+				walletPublicKeyHash,
+				&tbtc.WalletChainData{WalletID: test.walletID},
+			)
 
 			for _, script := range redeemersOutputScripts {
 				tbtcChain.SetPendingRedemptionRequest(
