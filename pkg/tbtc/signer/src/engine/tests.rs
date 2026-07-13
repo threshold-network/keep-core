@@ -2672,6 +2672,105 @@ fn canary_rollback_persist_failure_rolls_back_and_retry_is_durable() {
 }
 
 #[test]
+fn canary_post_rename_recovery_preserves_evidence_and_records_transitions() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("canary_post_rename_recovery_bookkeeping");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let baseline_metrics = hardening_metrics();
+    seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
+    let promotion_request = PromoteCanaryRequest { target_percent: 50 };
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    promote_canary(promotion_request.clone())
+        .expect_err("post-rename fault must leave the promotion pending");
+    clear_persist_fault_injection_for_tests();
+
+    assert!(pending_canary_promotion_result(50).is_some());
+    assert_eq!(
+        hardening_metrics().canary_promotions_total,
+        baseline_metrics.canary_promotions_total,
+        "an unconfirmed transition must not be counted yet"
+    );
+    seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
+    assert!(
+        canary_rollout_status()
+            .expect("active 50% stage status before recovery")
+            .promotion_gate_passed,
+        "operations after the rename must count toward the active 50% stage"
+    );
+
+    let promotion =
+        promote_canary(promotion_request).expect("matching retry repairs promotion durability");
+    assert_eq!(promotion.from_percent, 10);
+    assert_eq!(promotion.to_percent, 50);
+    assert!(pending_canary_promotion_result(50).is_none());
+    assert!(
+        canary_rollout_status()
+            .expect("active 50% stage status after recovery")
+            .promotion_gate_passed,
+        "confirming durability must preserve current-stage evidence"
+    );
+    assert_eq!(
+        hardening_metrics().canary_promotions_total,
+        baseline_metrics.canary_promotions_total.saturating_add(1),
+        "recovery must record the completed promotion exactly once"
+    );
+
+    let rollback_request = RollbackCanaryRequest {
+        reason: "post-rename recovery bookkeeping".to_string(),
+    };
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    rollback_canary(rollback_request.clone())
+        .expect_err("post-rename fault must leave the rollback pending");
+    clear_persist_fault_injection_for_tests();
+
+    assert!(pending_canary_rollback_result("post-rename recovery bookkeeping").is_some());
+    assert_eq!(
+        hardening_metrics().canary_rollbacks_total,
+        baseline_metrics.canary_rollbacks_total,
+        "an unconfirmed rollback must not be counted yet"
+    );
+    seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
+    assert!(
+        canary_rollout_status()
+            .expect("active rolled-back stage status before recovery")
+            .promotion_gate_passed,
+        "operations after the rename must count toward the rolled-back stage"
+    );
+
+    let rollback =
+        rollback_canary(rollback_request).expect("matching retry repairs rollback durability");
+    assert_eq!(rollback.from_percent, 50);
+    assert_eq!(rollback.to_percent, 10);
+    assert!(pending_canary_rollback_result("post-rename recovery bookkeeping").is_none());
+    assert!(
+        canary_rollout_status()
+            .expect("active rolled-back stage status after recovery")
+            .promotion_gate_passed,
+        "confirming rollback durability must preserve current-stage evidence"
+    );
+    let recovered_metrics = hardening_metrics();
+    assert_eq!(
+        recovered_metrics.canary_promotions_total,
+        baseline_metrics.canary_promotions_total.saturating_add(1)
+    );
+    assert_eq!(
+        recovered_metrics.canary_rollbacks_total,
+        baseline_metrics.canary_rollbacks_total.saturating_add(1),
+        "recovery must record the completed rollback exactly once"
+    );
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn lifecycle_post_rename_persist_failures_remain_fail_closed_and_retry_durably() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("lifecycle_post_rename_retry");

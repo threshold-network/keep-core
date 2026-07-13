@@ -340,6 +340,18 @@ pub fn canary_rollout_status() -> Result<CanaryRolloutStatusResult, EngineError>
     })
 }
 
+fn record_recovered_canary_transition(pending_operation: &PersistencePendingOperation) {
+    record_hardening_telemetry(|telemetry| match pending_operation {
+        PersistencePendingOperation::CanaryPromotion { .. } => {
+            telemetry.canary_promotions_total = telemetry.canary_promotions_total.saturating_add(1);
+        }
+        PersistencePendingOperation::CanaryRollback { .. } => {
+            telemetry.canary_rollbacks_total = telemetry.canary_rollbacks_total.saturating_add(1);
+        }
+        _ => {}
+    });
+}
+
 pub fn promote_canary(request: PromoteCanaryRequest) -> Result<PromoteCanaryResult, EngineError> {
     enforce_provenance_gate()?;
     if !matches!(request.target_percent, 10 | 50 | 100) {
@@ -366,8 +378,12 @@ pub fn promote_canary(request: PromoteCanaryRequest) -> Result<PromoteCanaryResu
         };
         persist_engine_state_to_storage(&guard)
             .map_err(PersistEngineStateError::into_engine_error)?;
+        // The post-replacement error path already activated the new stage and
+        // reset prior-stage evidence. This retry confirms durability only, so
+        // preserve evidence accumulated since that transition and count the
+        // recovered operation exactly once before clearing its pending marker.
+        record_recovered_canary_transition(&pending_operation);
         clear_persistence_pending_operation(&pending_operation);
-        reset_canary_promotion_evidence();
         if let Some(result) = matching_result {
             return Ok(result);
         }
@@ -465,8 +481,10 @@ pub fn rollback_canary(
         };
         persist_engine_state_to_storage(&guard)
             .map_err(PersistEngineStateError::into_engine_error)?;
+        // See promote_canary: repairing directory durability does not start a
+        // second rollout stage and must not discard current-stage evidence.
+        record_recovered_canary_transition(&pending_operation);
         clear_persistence_pending_operation(&pending_operation);
-        reset_canary_promotion_evidence();
         if let Some(result) = matching_result {
             return Ok(result);
         }
