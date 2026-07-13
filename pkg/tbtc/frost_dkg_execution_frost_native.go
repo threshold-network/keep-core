@@ -42,18 +42,21 @@ func executeFrostDKGIfPossible(
 		return false
 	}
 
-	// Distributed DKG produces signing material usable ONLY via the interactive
-	// path; with interactive signing disabled, signing would route to the coarse
-	// path, which cannot reconstruct a distributed key, and every signature would
-	// fail. Refuse to run rather than create an unsignable wallet, coupling the DKG
-	// switch to the signing switch.
-	if !frostsigning.InteractiveSigningOptInEnabled() {
+	// Distributed DKG produces signing material usable ONLY via the complete
+	// interactive ROAST path. The interactive audit flag alone is insufficient:
+	// without the ROAST readiness opt-in or a build containing the transition
+	// producer, orchestration takes its static fallback and reaches the removed
+	// coarse primitive. Refuse to run rather than create an unsignable wallet.
+	if !frostsigning.InteractiveSigningReady() {
 		logger.Errorf(
 			"FROST DKG with seed [0x%x] selected this operator, but the distributed "+
-				"DKG requires interactive signing (%s) to be enabled; refusing to run to "+
-				"avoid creating a wallet that cannot sign",
+				"DKG requires the complete interactive ROAST signing path (%s=true, "+
+				"%s=true, a frost_native+frost_roast_retry build, and a registered "+
+				"interactive engine); refusing to run to avoid creating a wallet that "+
+				"cannot sign",
 			event.Seed,
 			frostsigning.InteractiveSigningOptInEnvVar,
+			frostsigning.RoastRetryReadinessOptInEnvVar,
 		)
 		return false
 	}

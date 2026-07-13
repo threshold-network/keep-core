@@ -76,6 +76,44 @@ func TestRegisterInteractiveSigningEngineProvider(t *testing.T) {
 	}
 }
 
+func TestInteractiveSigningReady_RequiresCompletePath(t *testing.T) {
+	ResetInteractiveSigningEngineProviderForTest()
+	t.Cleanup(ResetInteractiveSigningEngineProviderForTest)
+
+	t.Setenv(InteractiveSigningOptInEnvVar, "true")
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
+	RegisterInteractiveSigningEngineProvider(
+		func() interactiveSigningEngine { return newFakeInteractiveSigningEngine() },
+	)
+
+	if actual, expected := InteractiveSigningReady(), roastTransitionProducerAvailable(); actual != expected {
+		t.Fatalf(
+			"unexpected complete-path readiness\nexpected: [%t]\nactual:   [%t]",
+			expected,
+			actual,
+		)
+	}
+
+	t.Setenv(InteractiveSigningOptInEnvVar, "")
+	if InteractiveSigningReady() {
+		t.Fatal("interactive signing must not be ready without its operator opt-in")
+	}
+
+	t.Setenv(InteractiveSigningOptInEnvVar, "true")
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "")
+	if InteractiveSigningReady() {
+		t.Fatal("interactive signing must not be ready without ROAST retry opt-in")
+	}
+
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
+	RegisterInteractiveSigningEngineProvider(
+		func() interactiveSigningEngine { return nil },
+	)
+	if InteractiveSigningReady() {
+		t.Fatal("interactive signing must not be ready without an engine")
+	}
+}
+
 func TestInteractiveRoastSigningThreshold(t *testing.T) {
 	// The persisted DKG threshold is returned verbatim - NOT derived from the
 	// per-attempt dishonest threshold.

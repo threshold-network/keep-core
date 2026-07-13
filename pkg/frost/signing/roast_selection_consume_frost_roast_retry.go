@@ -68,7 +68,7 @@ func ConsumeRoastTransitionForSelection(
 	// Build/env readiness is group-uniform (readiness opt-in AND the transition
 	// producer is built in). If not ready, a uniform legacy fallback every honest node
 	// makes identically.
-	if !readinessAndProducerReady() {
+	if !RoastRetryInfrastructureReady() {
 		return nil, nil, ErrRoastSelectionFallBackToLegacy
 	}
 

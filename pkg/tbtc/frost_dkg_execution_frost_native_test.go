@@ -4,7 +4,9 @@ package tbtc
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
+	"math/big"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -12,6 +14,67 @@ import (
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
+
+func TestExecuteFrostDKGIfPossible_RequiresRoastRetryReadiness(t *testing.T) {
+	t.Setenv(frostsigning.InteractiveSigningOptInEnvVar, "true")
+	t.Setenv(frostsigning.RoastRetryReadinessOptInEnvVar, "")
+	registerFrostDKGReadinessTestEngine(t)
+
+	executed := executeFrostDKGIfPossible(
+		context.Background(),
+		nil,
+		nil,
+		&FrostDKGStartedEvent{Seed: big.NewInt(100)},
+		[]group.MemberIndex{1},
+		nil,
+	)
+
+	if executed {
+		t.Fatal("DKG must not execute without ROAST retry readiness")
+	}
+}
+
+type frostDKGReadinessTestEngine struct{}
+
+func (*frostDKGReadinessTestEngine) BuildTaprootTx(
+	string,
+	[]frostsigning.NativeTBTCSignerTxInput,
+	[]frostsigning.NativeTBTCSignerTxOutput,
+	*string,
+) (*frostsigning.NativeTBTCSignerTxResult, error) {
+	return nil, nil
+}
+
+func (*frostDKGReadinessTestEngine) VerifySignatureShare(
+	string,
+	[]byte,
+	[]byte,
+	uint16,
+	*[32]byte,
+) (frostsigning.NativeShareVerificationVerdict, error) {
+	return frostsigning.NativeShareVerdictValid, nil
+}
+
+func registerFrostDKGReadinessTestEngine(t *testing.T) {
+	t.Helper()
+
+	previous := frostsigning.CurrentNativeTBTCSignerEngine()
+	frostsigning.UnregisterNativeTBTCSignerEngine()
+	if err := frostsigning.RegisterNativeTBTCSignerEngine(
+		&frostDKGReadinessTestEngine{},
+	); err != nil {
+		t.Fatalf("failed to register native engine: [%v]", err)
+	}
+
+	t.Cleanup(func() {
+		frostsigning.UnregisterNativeTBTCSignerEngine()
+		if previous != nil {
+			if err := frostsigning.RegisterNativeTBTCSignerEngine(previous); err != nil {
+				t.Errorf("failed to restore native engine: [%v]", err)
+			}
+		}
+	})
+}
 
 func TestLowestLocalActiveMemberIndex(t *testing.T) {
 	testCases := map[string]struct {

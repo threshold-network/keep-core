@@ -61,6 +61,20 @@ func RoastRetryReadinessOptInEnabled() bool {
 	return strings.EqualFold(value, "true")
 }
 
+// RoastRetryInfrastructureReady reports whether this process can support the
+// ROAST retry path before any wallet-scoped coordinator exists: the operator
+// readiness opt-in is set AND the transition producer is present in this build.
+// The producer requires both frost_native and frost_roast_retry.
+//
+// This is deliberately weaker than RoastRetryActive: a newly selected DKG member
+// must verify that the signing infrastructure exists before creating a wallet,
+// but that wallet's coordinators cannot be registered until its DKG material has
+// been persisted. Once the wallet exists, the active gates below additionally
+// require the appropriate coordinator registration.
+func RoastRetryInfrastructureReady() bool {
+	return RoastRetryReadinessOptInEnabled() && roastTransitionProducerAvailable()
+}
+
 // RoastRetryActive reports whether ROAST retry orchestration is runtime-active:
 // the readiness opt-in is set, a coordinator is registered, AND this build
 // contains the transition producer (frost_native). It is the deterministic,
@@ -77,16 +91,8 @@ func RoastRetryReadinessOptInEnabled() bool {
 // can never be created instead of using the uniform legacy shuffle (Codex P2-1).
 // Always false in builds without the frost_roast_retry tag (the registration and
 // producer default stubs both report unavailable).
-// readinessAndProducerReady is the build+env prefix shared by RoastRetryActive and
-// RoastRetryActiveForKeyGroupMember: the readiness opt-in is set AND the transition
-// producer is built in (frost_native). Both gates additionally require a registered
-// coordinator (any entry / this wallet-seat's).
-func readinessAndProducerReady() bool {
-	return RoastRetryReadinessOptInEnabled() && roastTransitionProducerAvailable()
-}
-
 func RoastRetryActive() bool {
-	if !readinessAndProducerReady() {
+	if !RoastRetryInfrastructureReady() {
 		return false
 	}
 	_, ok := RegisteredRoastRetryCoordinator()
@@ -106,7 +112,7 @@ func RoastRetryActive() bool {
 // that cross-wallet fracture on the numbering path.) Always false in builds without
 // the frost_roast_retry tag.
 func RoastRetryActiveForKeyGroupMember(keyGroupID string, member group.MemberIndex) bool {
-	if !readinessAndProducerReady() {
+	if !RoastRetryInfrastructureReady() {
 		return false
 	}
 	_, ok := RegisteredRoastRetryCoordinatorForKeyGroupMember(keyGroupID, member)

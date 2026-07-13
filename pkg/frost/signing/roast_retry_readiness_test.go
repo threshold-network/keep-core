@@ -70,6 +70,22 @@ func TestRoastRetryReadinessOptInEnabled_MirrorsEnsureResult(t *testing.T) {
 	}
 }
 
+func TestRoastRetryInfrastructureReady_RequiresOptInAndProducer(t *testing.T) {
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "true")
+	if actual, expected := RoastRetryInfrastructureReady(), roastTransitionProducerAvailable(); actual != expected {
+		t.Fatalf(
+			"unexpected infrastructure readiness with opt-in enabled\nexpected: [%t]\nactual:   [%t]",
+			expected,
+			actual,
+		)
+	}
+
+	t.Setenv(RoastRetryReadinessOptInEnvVar, "")
+	if RoastRetryInfrastructureReady() {
+		t.Fatal("infrastructure must not be ready without the operator opt-in")
+	}
+}
+
 func TestRoastRetryReadinessOptInEnvVar_MatchesRFC(t *testing.T) {
 	const expected = "KEEP_CORE_FROST_ROAST_RETRY_ENABLED"
 	if RoastRetryReadinessOptInEnvVar != expected {
