@@ -113,9 +113,9 @@ pub(crate) struct SessionState {
     pub(crate) refresh_request_fingerprint: Option<String>,
     pub(crate) refresh_result: Option<RefreshSharesResult>,
     pub(crate) refresh_history: Vec<RefreshHistoryRecord>,
-    /// Monotonic count of accepted refreshes, independent of refresh_history
-    /// pruning (refresh_history is capped, so its length undercounts long-lived
-    /// sessions). Backfilled from history length when first incremented.
+    /// Legacy count written by the retired synthetic refresh implementation.
+    /// Retained only so existing pre-release state remains decodable; lifecycle
+    /// status deliberately treats it as non-authoritative.
     pub(crate) refresh_count: u64,
     pub(crate) emergency_rekey_event: Option<EmergencyRekeyEvent>,
     /// Transient per-wallet budget for accepted heartbeat Opens. Like the
@@ -162,9 +162,9 @@ pub(crate) struct RefreshHistoryRecord {
     pub(crate) share_count: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) key_group: Option<String>,
-    /// Fingerprint of the refresh request that produced this record, used to
-    /// reject stale / out-of-order retries of an already-accepted refresh.
-    /// Optional for backward compatibility with state written before this field.
+    /// Legacy request fingerprint retained for persisted-schema compatibility.
+    /// No record produced by the retired one-shot implementation represents a
+    /// cryptographically valid share refresh.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) request_fingerprint: Option<String>,
 }

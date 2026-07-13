@@ -30,6 +30,10 @@ pub enum EngineError {
         reason_code: String,
         detail: String,
     },
+    #[error(
+        "cryptographic share refresh is not supported for session {session_id}: a multi-round, zero-constant FROST refresh protocol is required"
+    )]
+    CryptographicRefreshNotSupported { session_id: String },
     #[error("session conflict for {session_id}: repeated call must use identical payload")]
     SessionConflict { session_id: String },
     #[error("session finalized for {session_id}: start_sign_round requires a new session_id")]
@@ -100,6 +104,7 @@ impl EngineError {
             Self::SigningPolicyRejected { .. } => "signing_policy_rejected",
             Self::QuarantinePolicyRejected { .. } => "quarantine_policy_rejected",
             Self::LifecyclePolicyRejected { .. } => "lifecycle_policy_rejected",
+            Self::CryptographicRefreshNotSupported { .. } => "cryptographic_refresh_not_supported",
             Self::SessionConflict { .. } => "session_conflict",
             Self::SessionFinalized { .. } => "session_finalized",
             Self::SessionNotFound { .. } => "session_not_found",
@@ -122,6 +127,7 @@ impl EngineError {
             Self::SigningPolicyRejected { .. } => "recoverable",
             Self::QuarantinePolicyRejected { .. } => "recoverable",
             Self::LifecyclePolicyRejected { .. } => "recoverable",
+            Self::CryptographicRefreshNotSupported { .. } => "terminal",
             Self::SessionConflict { .. } => "recoverable",
             Self::DkgNotReady { .. } => "recoverable",
             Self::SignRoundNotStarted { .. } => "recoverable",
@@ -218,6 +224,17 @@ mod tests {
             EngineError::Internal("panic".to_string()).recovery_class(),
             "terminal"
         );
+        let unsupported_refresh = EngineError::CryptographicRefreshNotSupported {
+            session_id: "session-refresh".to_string(),
+        };
+        assert_eq!(
+            unsupported_refresh.code(),
+            "cryptographic_refresh_not_supported"
+        );
+        assert_eq!(unsupported_refresh.recovery_class(), "terminal");
+        assert!(unsupported_refresh
+            .to_string()
+            .contains("multi-round, zero-constant FROST refresh protocol"));
     }
 
     #[test]

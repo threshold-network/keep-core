@@ -756,20 +756,16 @@ fn expect_internal_error_contains(err: EngineError, expected_substring: &str) {
     );
 }
 
-fn state_mutation_request(session_id: &str) -> RefreshSharesRequest {
-    RefreshSharesRequest {
-        session_id: session_id.to_string(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "1111".to_string(),
-        }],
-    }
-}
-
-fn mutate_state_for_key_provider_test(
-    session_id: &str,
-) -> Result<RefreshSharesResult, EngineError> {
-    refresh_shares(state_mutation_request(session_id))
+fn persist_state_for_key_provider_test(session_id: &str) -> Result<(), EngineError> {
+    let mut guard = state()?
+        .lock()
+        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    guard
+        .sessions
+        .entry(session_id.to_string())
+        .or_default()
+        .bound_key_group = Some("state-key-provider-test".to_string());
+    persist_engine_state_to_storage(&guard).map_err(PersistEngineStateError::into_engine_error)
 }
 
 // Regression for resolving the state-key (a KMS/HSM subprocess for the `command`
@@ -2169,30 +2165,252 @@ fn hardening_metrics_count_calls_before_provenance_gate_rejection() {
 }
 
 #[test]
-fn hardening_metrics_track_start_sign_round_and_refresh_shares_counters() {
+fn refresh_shares_fails_closed_without_mutating_wallet_state() {
     let _guard = lock_test_state();
+    let state_path = configure_test_state_path("refresh_shares_fail_closed");
     reset_for_tests();
     clear_state_storage_policy_overrides();
 
-    let _ = build_taproot_tx(build_policy_test_request("session-metrics-build-tx"))
-        .expect("build taproot tx");
+    let session_id = "session-refresh-fail-closed";
+    ensure_interactive_dkg_session(session_id, "refresh-fail-closed-key-group");
+    let persisted_state_before = std::fs::read(&state_path).expect("read baseline state");
+    let (key_packages_before, public_key_package_before, dkg_result_before) = {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard.sessions.get(session_id).expect("wallet session");
+        (
+            session.dkg_key_packages.clone(),
+            session.dkg_public_key_package.clone(),
+            session.dkg_result.clone(),
+        )
+    };
 
-    let _ = refresh_shares(RefreshSharesRequest {
-        session_id: "session-metrics-refresh-only".to_string(),
-        current_shares: vec![ShareMaterial {
+    let error = refresh_shares(RefreshSharesRequest {
+        session_id: session_id.to_string(),
+        current_shares: vec![crate::api::ShareMaterial {
             identifier: 1,
             encrypted_share_hex: "aaaa".to_string(),
         }],
     })
-    .expect("refresh shares");
+    .expect_err("RefreshShares must reject until a cryptographic protocol is implemented");
+    assert!(matches!(
+        error,
+        EngineError::CryptographicRefreshNotSupported { ref session_id }
+            if session_id == "session-refresh-fail-closed"
+    ));
+
+    {
+        let guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard.sessions.get(session_id).expect("wallet session");
+        assert_eq!(guard.refresh_epoch_counter, 0);
+        assert!(session.refresh_request_fingerprint.is_none());
+        assert!(session.refresh_result.is_none());
+        assert!(session.refresh_history.is_empty());
+        assert_eq!(session.refresh_count, 0);
+        assert_eq!(session.dkg_key_packages, key_packages_before);
+        assert_eq!(session.dkg_public_key_package, public_key_package_before);
+        assert_eq!(session.dkg_result, dkg_result_before);
+    }
+    assert_eq!(
+        std::fs::read(&state_path).expect("read state after rejection"),
+        persisted_state_before,
+    );
 
     let metrics = hardening_metrics();
-    assert_eq!(metrics.build_taproot_tx_calls_total, 1);
-    assert_eq!(metrics.build_taproot_tx_success_total, 1);
     assert_eq!(metrics.refresh_shares_calls_total, 1);
-    assert_eq!(metrics.refresh_shares_success_total, 1);
+    assert_eq!(metrics.refresh_shares_success_total, 0);
 
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
     clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn first_refresh_deadline_survives_restart_and_becomes_overdue() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("first_refresh_deadline");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_REFRESH_CADENCE_SECONDS_ENV, "60");
+
+    let overdue_session_id = "session-first-refresh-overdue";
+    let fresh_session_id = "session-first-refresh-fresh";
+    ensure_interactive_dkg_session(overdue_session_id, "first-refresh-overdue-key-group");
+    ensure_interactive_dkg_session(fresh_session_id, "first-refresh-fresh-key-group");
+
+    let created_at_unix = now_unix().saturating_sub(600);
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        guard
+            .sessions
+            .get_mut(overdue_session_id)
+            .expect("overdue wallet session")
+            .dkg_result
+            .as_mut()
+            .expect("DKG result")
+            .created_at_unix = created_at_unix;
+        persist_engine_state_to_storage(&guard).expect("persist DKG creation anchors");
+    }
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+
+    let status = refresh_cadence_status(RefreshCadenceStatusRequest {
+        session_id: overdue_session_id.to_string(),
+    })
+    .expect("refresh cadence status");
+    assert_eq!(status.refresh_count, 0);
+    assert_eq!(status.last_refresh_epoch, 0);
+    assert_eq!(status.next_refresh_due_unix, created_at_unix + 60);
+    assert!(status.overdue);
+
+    let fresh_status = refresh_cadence_status(RefreshCadenceStatusRequest {
+        session_id: fresh_session_id.to_string(),
+    })
+    .expect("fresh refresh cadence status");
+    assert!(!fresh_status.overdue);
+    assert_eq!(hardening_metrics().refresh_cadence_overdue_sessions, 1);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn legacy_synthetic_refresh_metadata_cannot_postpone_cadence_or_claim_continuity() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("legacy_synthetic_refresh_metadata");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_REFRESH_CADENCE_SECONDS_ENV, "60");
+
+    let session_id = "session-legacy-synthetic-refresh";
+    let key_group = "legacy-synthetic-refresh-key-group";
+    ensure_interactive_dkg_session(session_id, key_group);
+    let created_at_unix = now_unix().saturating_sub(600);
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard.sessions.get_mut(session_id).expect("wallet session");
+        session
+            .dkg_result
+            .as_mut()
+            .expect("DKG result")
+            .created_at_unix = created_at_unix;
+        session.refresh_request_fingerprint = Some("legacy-synthetic-request".to_string());
+        session.refresh_result = Some(RefreshSharesResult {
+            session_id: session_id.to_string(),
+            refresh_epoch: 1,
+            new_shares: vec![crate::api::ShareMaterial {
+                identifier: 1,
+                encrypted_share_hex: "synthetic-hash".to_string(),
+            }],
+        });
+        session.refresh_history = vec![RefreshHistoryRecord {
+            refresh_epoch: 1,
+            refreshed_at_unix: now_unix(),
+            share_count: 1,
+            key_group: Some(key_group.to_string()),
+            request_fingerprint: Some("legacy-synthetic-request".to_string()),
+        }];
+        session.refresh_count = 1;
+        guard.refresh_epoch_counter = 1;
+        persist_engine_state_to_storage(&guard).expect("persist legacy synthetic metadata");
+    }
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+
+    let status = refresh_cadence_status(RefreshCadenceStatusRequest {
+        session_id: session_id.to_string(),
+    })
+    .expect("refresh cadence status");
+    assert_eq!(status.refresh_count, 0);
+    assert_eq!(status.last_refresh_epoch, 0);
+    assert_eq!(status.next_refresh_due_unix, created_at_unix + 60);
+    assert!(status.overdue);
+    assert!(!status.continuity_preserved);
+    assert_eq!(
+        status.continuity_reference_key_group.as_deref(),
+        Some(key_group)
+    );
+    assert_eq!(hardening_metrics().refresh_cadence_overdue_sessions, 1);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn unanchored_legacy_refresh_session_is_immediately_overdue_after_restart() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("unanchored_legacy_refresh");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_REFRESH_CADENCE_SECONDS_ENV, "60");
+
+    let session_id = "session-unanchored-legacy-refresh";
+    let plain_session_id = "session-unanchored-without-refresh-artifacts";
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        let session = guard.sessions.entry(session_id.to_string()).or_default();
+        assert!(session.dkg_result.is_none());
+        session.refresh_request_fingerprint = Some("legacy-refresh-only-request".to_string());
+        session.refresh_result = Some(RefreshSharesResult {
+            session_id: session_id.to_string(),
+            refresh_epoch: 1,
+            new_shares: vec![crate::api::ShareMaterial {
+                identifier: 1,
+                encrypted_share_hex: "aa".repeat(32),
+            }],
+        });
+        session.refresh_history = vec![RefreshHistoryRecord {
+            refresh_epoch: 1,
+            refreshed_at_unix: now_unix(),
+            share_count: 1,
+            key_group: None,
+            request_fingerprint: Some("legacy-refresh-only-request".to_string()),
+        }];
+        session.refresh_count = 1;
+        guard.refresh_epoch_counter = 1;
+        guard
+            .sessions
+            .entry(plain_session_id.to_string())
+            .or_default();
+        persist_engine_state_to_storage(&guard).expect("persist refresh-only legacy session");
+    }
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+
+    let status = refresh_cadence_status(RefreshCadenceStatusRequest {
+        session_id: session_id.to_string(),
+    })
+    .expect("refresh cadence status");
+    assert_eq!(status.refresh_count, 0);
+    assert_eq!(status.last_refresh_epoch, 0);
+    assert_eq!(status.next_refresh_due_unix, 0);
+    assert!(status.overdue);
+    assert!(!status.continuity_preserved);
+    assert!(status.continuity_reference_key_group.is_none());
+
+    let plain_status = refresh_cadence_status(RefreshCadenceStatusRequest {
+        session_id: plain_session_id.to_string(),
+    })
+    .expect("plain session cadence status");
+    assert!(!plain_status.overdue);
+    assert!(plain_status.continuity_preserved);
+    assert_eq!(hardening_metrics().refresh_cadence_overdue_sessions, 1);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn refresh_cadence_overdue_sentinel_survives_clock_rollback() {
+    assert!(refresh_cadence_is_overdue(0, 0));
+    assert!(refresh_cadence_is_overdue(101, 100));
+    assert!(!refresh_cadence_is_overdue(100, 100));
+    assert!(!refresh_cadence_is_overdue(99, 100));
 }
 
 #[test]
@@ -2439,155 +2657,6 @@ fn emergency_rekey_post_replace_state_survives_immediate_process_restart() {
 }
 
 #[test]
-fn refresh_shares_persist_failure_rolls_back_and_retry_is_durable() {
-    let _guard = lock_test_state();
-    let state_path = configure_test_state_path("refresh_shares_persist_retry");
-    reset_for_tests();
-    clear_state_storage_policy_overrides();
-
-    let session_id = "session-refresh-persist-retry";
-    let first_request = RefreshSharesRequest {
-        session_id: session_id.to_string(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "aaaa".to_string(),
-        }],
-    };
-    let second_request = RefreshSharesRequest {
-        session_id: session_id.to_string(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "bbbb".to_string(),
-        }],
-    };
-    let first_result = refresh_shares(first_request).expect("persist first refresh");
-
-    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
-    let err = refresh_shares(second_request.clone())
-        .expect_err("injected persist fault must fail second refresh");
-    clear_persist_fault_injection_for_tests();
-    assert!(
-        matches!(err, EngineError::Internal(ref message) if message.contains("injected persist fault")),
-        "unexpected error: {err:?}"
-    );
-
-    {
-        let guard = state().expect("engine state").lock().expect("engine lock");
-        let session = guard.sessions.get(session_id).expect("refresh session");
-        assert_eq!(guard.refresh_epoch_counter, 1);
-        assert_eq!(session.refresh_result.as_ref(), Some(&first_result));
-        assert_eq!(session.refresh_history.len(), 1);
-        assert_eq!(session.refresh_count, 1);
-    }
-
-    let second_result =
-        refresh_shares(second_request.clone()).expect("retry persists second refresh");
-    assert_eq!(second_result.refresh_epoch, 2);
-
-    simulate_process_restart_for_tests();
-    reload_state_from_storage_for_tests();
-    {
-        let guard = state().expect("engine state").lock().expect("engine lock");
-        let session = guard
-            .sessions
-            .get(session_id)
-            .expect("reloaded refresh session");
-        assert_eq!(guard.refresh_epoch_counter, 2);
-        assert_eq!(session.refresh_result.as_ref(), Some(&second_result));
-        assert_eq!(session.refresh_history.len(), 2);
-        assert_eq!(session.refresh_count, 2);
-    }
-    assert_eq!(
-        refresh_shares(second_request).expect("durable idempotent refresh retry"),
-        second_result
-    );
-
-    reset_for_tests();
-    cleanup_test_state_artifacts(&state_path);
-    clear_state_storage_policy_overrides();
-}
-
-#[test]
-fn first_refresh_pre_replace_failure_removes_new_session() {
-    let _guard = lock_test_state();
-    let state_path = configure_test_state_path("first_refresh_persist_rollback");
-    reset_for_tests();
-    clear_state_storage_policy_overrides();
-
-    let session_id = "session-first-refresh-persist-rollback";
-    let request = RefreshSharesRequest {
-        session_id: session_id.to_string(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "abcd".to_string(),
-        }],
-    };
-    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
-    let error = refresh_shares(request.clone())
-        .expect_err("first refresh must roll back when state was not replaced");
-    clear_persist_fault_injection_for_tests();
-    assert!(matches!(
-        error,
-        EngineError::Internal(ref message) if message.contains("injected persist fault")
-    ));
-    {
-        let guard = state().expect("engine state").lock().expect("engine lock");
-        assert_eq!(guard.refresh_epoch_counter, 0);
-        assert!(!guard.sessions.contains_key(session_id));
-    }
-
-    let result = refresh_shares(request).expect("retry performs the first refresh");
-    assert_eq!(result.refresh_epoch, 1);
-
-    reset_for_tests();
-    cleanup_test_state_artifacts(&state_path);
-    clear_state_storage_policy_overrides();
-}
-
-#[test]
-fn pending_refresh_retry_rechecks_emergency_rekey_before_returning_shares() {
-    let _guard = lock_test_state();
-    let state_path = configure_test_state_path("pending_refresh_rekey_gate");
-    reset_for_tests();
-    clear_state_storage_policy_overrides();
-
-    let session_id = "session-pending-refresh-rekey-gate";
-    let request = RefreshSharesRequest {
-        session_id: session_id.to_string(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "beef".to_string(),
-        }],
-    };
-    set_persist_fault_injection_for_tests(
-        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
-    );
-    refresh_shares(request.clone())
-        .expect_err("post-replacement refresh fault leaves a pending result");
-    clear_persist_fault_injection_for_tests();
-    assert!(pending_refresh_operation(session_id).is_some());
-
-    trigger_emergency_rekey(TriggerEmergencyRekeyRequest {
-        session_id: session_id.to_string(),
-        reason: "kill switch after refresh failure".to_string(),
-    })
-    .expect("persist emergency rekey");
-
-    let error = refresh_shares(request)
-        .expect_err("a pending refresh retry must not bypass the active kill switch");
-    assert!(matches!(
-        error,
-        EngineError::LifecyclePolicyRejected { ref reason_code, .. }
-            if reason_code == "emergency_rekey_required"
-    ));
-    assert!(pending_refresh_operation(session_id).is_none());
-
-    reset_for_tests();
-    cleanup_test_state_artifacts(&state_path);
-    clear_state_storage_policy_overrides();
-}
-
-#[test]
 fn canary_promotion_persist_failure_rolls_back_and_retry_is_durable() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("canary_promotion_persist_retry");
@@ -2812,56 +2881,6 @@ fn lifecycle_post_rename_persist_failures_remain_fail_closed_and_retry_durably()
     assert_eq!(rekey_result.session_id, rekey_session);
     assert!(pending_emergency_rekey_result(rekey_session, "post-rename containment").is_none());
 
-    let refresh_session = "session-refresh-post-rename";
-    let refresh_request = RefreshSharesRequest {
-        session_id: refresh_session.to_string(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "cafe".to_string(),
-        }],
-    };
-    let refresh_fingerprint = fingerprint(&canonicalize_refresh_shares_request_for_fingerprint(
-        &refresh_request,
-    ))
-    .expect("refresh request fingerprint");
-    set_persist_fault_injection_for_tests(
-        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
-    );
-    let refresh_error = refresh_shares(refresh_request.clone())
-        .expect_err("post-rename fault must report refresh failure");
-    clear_persist_fault_injection_for_tests();
-    assert!(matches!(
-        refresh_error,
-        EngineError::Internal(ref message) if message.contains("injected persist fault")
-    ));
-    assert!(refresh_persistence_pending(
-        refresh_session,
-        &refresh_fingerprint
-    ));
-    let pending_refresh_result = {
-        let guard = state().expect("engine state").lock().expect("engine lock");
-        assert_eq!(guard.refresh_epoch_counter, 1);
-        guard.sessions[refresh_session]
-            .refresh_result
-            .clone()
-            .expect("fail-closed refresh cache")
-    };
-    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
-    refresh_shares(refresh_request.clone())
-        .expect_err("a failed pending refresh flush must not return cached success");
-    clear_persist_fault_injection_for_tests();
-    assert!(refresh_persistence_pending(
-        refresh_session,
-        &refresh_fingerprint
-    ));
-    let retried_refresh =
-        refresh_shares(refresh_request).expect("same refresh retry flushes pending state");
-    assert_eq!(retried_refresh, pending_refresh_result);
-    assert!(!refresh_persistence_pending(
-        refresh_session,
-        &refresh_fingerprint
-    ));
-
     let promotion_request = PromoteCanaryRequest { target_percent: 50 };
     seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
     set_persist_fault_injection_for_tests(
@@ -2927,13 +2946,6 @@ fn lifecycle_post_rename_persist_failures_remain_fail_closed_and_retry_durably()
     assert!(guard.sessions[rekey_session]
         .emergency_rekey_event
         .is_some());
-    assert_eq!(
-        guard.sessions[refresh_session]
-            .refresh_result
-            .as_ref()
-            .expect("durable refresh result"),
-        &pending_refresh_result
-    );
     assert_eq!(guard.canary_rollout.current_percent, 10);
     assert_eq!(guard.canary_rollout.config_version, 3);
     drop(guard);
@@ -4600,140 +4612,6 @@ fn build_taproot_tx_rejects_new_session_when_session_registry_is_at_capacity() {
 }
 
 #[test]
-fn refresh_shares_rejects_new_session_when_session_registry_is_at_capacity() {
-    let _guard = lock_test_state();
-    let state_path = configure_test_state_path("refresh_session_capacity");
-    reset_for_tests();
-    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "1");
-
-    let first_request = RefreshSharesRequest {
-        session_id: "session-refresh-capacity-a".to_string(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "aa11".to_string(),
-        }],
-    };
-    refresh_shares(first_request.clone()).expect("first refresh");
-    refresh_shares(first_request).expect("idempotent refresh at capacity");
-
-    let second_request = RefreshSharesRequest {
-        session_id: "session-refresh-capacity-b".to_string(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "bb22".to_string(),
-        }],
-    };
-    let err = refresh_shares(second_request).expect_err("expected session cap rejection");
-    let EngineError::Internal(message) = err else {
-        panic!("unexpected error variant");
-    };
-    assert!(
-        message.contains("session registry size [1] reached max [1]"),
-        "unexpected internal message: {message}"
-    );
-
-    reset_for_tests();
-    cleanup_test_state_artifacts(&state_path);
-    clear_state_storage_policy_overrides();
-}
-
-#[test]
-fn refresh_shares_retry_is_share_order_insensitive() {
-    let _guard = lock_test_state();
-    let state_path = configure_test_state_path("refresh_share_order_retry");
-    reset_for_tests();
-
-    let request = RefreshSharesRequest {
-        session_id: "session-refresh-share-order-retry".to_string(),
-        current_shares: vec![
-            ShareMaterial {
-                identifier: 3,
-                encrypted_share_hex: "cccc".to_string(),
-            },
-            ShareMaterial {
-                identifier: 1,
-                encrypted_share_hex: "aaaa".to_string(),
-            },
-            ShareMaterial {
-                identifier: 2,
-                encrypted_share_hex: "bbbb".to_string(),
-            },
-        ],
-    };
-    let mut retry_request = request.clone();
-    retry_request.current_shares.reverse();
-
-    let first_result = refresh_shares(request).expect("initial refresh");
-    let retry_result = refresh_shares(retry_request).expect("equivalent refresh retry");
-
-    assert_eq!(first_result, retry_result);
-
-    reset_for_tests();
-    cleanup_test_state_artifacts(&state_path);
-    clear_state_storage_policy_overrides();
-}
-
-#[test]
-fn refresh_shares_rejects_duplicate_current_share_identifiers() {
-    let _guard = lock_test_state();
-    let state_path = configure_test_state_path("refresh_duplicate_share_identifier");
-    reset_for_tests();
-
-    let err = refresh_shares(RefreshSharesRequest {
-        session_id: "session-refresh-duplicate-share-id".to_string(),
-        current_shares: vec![
-            ShareMaterial {
-                identifier: 1,
-                encrypted_share_hex: "aaaa".to_string(),
-            },
-            ShareMaterial {
-                identifier: 1,
-                encrypted_share_hex: "bbbb".to_string(),
-            },
-        ],
-    })
-    .expect_err("expected duplicate share identifier rejection");
-    let EngineError::Validation(message) = err else {
-        panic!("unexpected error variant");
-    };
-    assert!(
-        message.contains("current_shares contains duplicate identifier [1]"),
-        "unexpected validation message: {message}"
-    );
-
-    reset_for_tests();
-    cleanup_test_state_artifacts(&state_path);
-    clear_state_storage_policy_overrides();
-}
-
-#[test]
-fn refresh_shares_rejects_zero_current_share_identifier() {
-    let _guard = lock_test_state();
-    let state_path = configure_test_state_path("refresh_zero_share_identifier");
-    reset_for_tests();
-
-    let err = refresh_shares(RefreshSharesRequest {
-        session_id: "session-refresh-zero-share-id".to_string(),
-        current_shares: vec![ShareMaterial {
-            identifier: 0,
-            encrypted_share_hex: "aaaa".to_string(),
-        }],
-    })
-    .expect_err("expected zero share identifier rejection");
-    let EngineError::Validation(message) = err else {
-        panic!("unexpected error variant");
-    };
-    assert!(
-        message.contains("current_shares identifiers must be non-zero"),
-        "unexpected validation message: {message}"
-    );
-
-    reset_for_tests();
-    cleanup_test_state_artifacts(&state_path);
-    clear_state_storage_policy_overrides();
-}
-
-#[test]
 fn persisted_session_state_rejects_empty_consumed_attempt_id() {
     let mut persisted = persisted_session_state_fixture();
     persisted.consumed_attempt_ids = vec!["".to_string()];
@@ -4903,331 +4781,6 @@ fn persisted_session_state_rejects_consumed_finalize_request_registry_over_limit
 }
 
 #[test]
-fn refresh_shares_allows_new_fingerprint_but_rejects_stale_retry() {
-    let _guard = lock_test_state();
-    let state_path = configure_test_state_path("refresh_stale_retry");
-    reset_for_tests();
-
-    let session_id = "session-refresh-stale".to_string();
-    let req_a = RefreshSharesRequest {
-        session_id: session_id.clone(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "aaaa".to_string(),
-        }],
-    };
-    let req_b = RefreshSharesRequest {
-        session_id: session_id.clone(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "bbbb".to_string(),
-        }],
-    };
-
-    // First refresh A.
-    assert_eq!(
-        refresh_shares(req_a.clone())
-            .expect("refresh A")
-            .refresh_epoch,
-        1
-    );
-    // Idempotent replay of A (most recent) returns the cached result, no new epoch.
-    assert_eq!(
-        refresh_shares(req_a.clone())
-            .expect("idempotent replay of A")
-            .refresh_epoch,
-        1
-    );
-    // A genuinely new fingerprint B is a real subsequent periodic refresh.
-    assert_eq!(
-        refresh_shares(req_b.clone())
-            .expect("refresh B")
-            .refresh_epoch,
-        2
-    );
-    // Idempotent replay of B (now most recent) returns the cached result.
-    assert_eq!(
-        refresh_shares(req_b)
-            .expect("idempotent replay of B")
-            .refresh_epoch,
-        2
-    );
-    // A stale retry of A (already accepted, no longer most recent) is rejected --
-    // it must NOT re-derive old shares or bump the epoch forward.
-    let err = refresh_shares(req_a).expect_err("stale retry of A must be rejected");
-    assert!(matches!(err, EngineError::SessionConflict { .. }));
-
-    reset_for_tests();
-    cleanup_test_state_artifacts(&state_path);
-    clear_state_storage_policy_overrides();
-}
-
-#[test]
-fn refresh_shares_rejects_legacy_fingerprint_with_empty_history() {
-    let _guard = lock_test_state();
-    let state_path = configure_test_state_path("refresh_legacy_empty_history");
-    reset_for_tests();
-
-    let session_id = "session-refresh-legacy-empty".to_string();
-    let req_a = RefreshSharesRequest {
-        session_id: session_id.clone(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "aaaa".to_string(),
-        }],
-    };
-    let req_b = RefreshSharesRequest {
-        session_id: session_id.clone(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "bbbb".to_string(),
-        }],
-    };
-
-    refresh_shares(req_a.clone()).expect("refresh A");
-
-    // Simulate state written before refresh_history existed: the fingerprint and
-    // cached result are set, but refresh_history is empty.
-    {
-        let mut guard = state().expect("engine state").lock().expect("engine lock");
-        let session = guard.sessions.get_mut(&session_id).expect("session state");
-        session.refresh_history.clear();
-        assert!(session.refresh_request_fingerprint.is_some());
-        assert!(session.refresh_result.is_some());
-        persist_engine_state_to_storage(&guard).expect("persist legacy-shaped state");
-    }
-    reload_state_from_storage_for_tests();
-
-    // Refresh B must synthesize a history record for A (no record to backfill onto)
-    // before overwriting the fingerprint, so a delayed retry of A is rejected.
-    refresh_shares(req_b).expect("refresh B");
-    let err = refresh_shares(req_a).expect_err("stale retry of A must be rejected");
-    assert!(matches!(err, EngineError::SessionConflict { .. }));
-
-    reset_for_tests();
-    cleanup_test_state_artifacts(&state_path);
-    clear_state_storage_policy_overrides();
-}
-
-#[test]
-fn refresh_shares_rejects_legacy_fingerprint_with_empty_history_and_no_result() {
-    let _guard = lock_test_state();
-    let state_path = configure_test_state_path("refresh_legacy_empty_history_no_result");
-    reset_for_tests();
-
-    let session_id = "session-refresh-legacy-empty-no-result".to_string();
-    let req_a = RefreshSharesRequest {
-        session_id: session_id.clone(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "aaaa".to_string(),
-        }],
-    };
-    let req_b = RefreshSharesRequest {
-        session_id: session_id.clone(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "bbbb".to_string(),
-        }],
-    };
-
-    refresh_shares(req_a.clone()).expect("refresh A");
-
-    // Simulate a truncated/legacy blob that kept A's fingerprint but whose
-    // refresh_result deserialized to None and whose refresh_history is empty.
-    // The synthesize branch must still preserve A's fingerprint even without a
-    // cached result to derive the epoch/share_count from.
-    {
-        let mut guard = state().expect("engine state").lock().expect("engine lock");
-        let session = guard.sessions.get_mut(&session_id).expect("session state");
-        session.refresh_history.clear();
-        session.refresh_result = None;
-        assert!(session.refresh_request_fingerprint.is_some());
-        persist_engine_state_to_storage(&guard).expect("persist legacy-shaped state");
-    }
-    reload_state_from_storage_for_tests();
-
-    // Refresh B synthesizes a history record carrying A's fingerprint (falling
-    // back to a below-B epoch since there is no cached result) before
-    // overwriting the fingerprint, so a delayed retry of A is still rejected as
-    // stale instead of being re-executed as a new refresh.
-    assert_eq!(refresh_shares(req_b).expect("refresh B").refresh_epoch, 2);
-    let err = refresh_shares(req_a).expect_err("stale retry of A must be rejected");
-    assert!(matches!(err, EngineError::SessionConflict { .. }));
-
-    reset_for_tests();
-    cleanup_test_state_artifacts(&state_path);
-    clear_state_storage_policy_overrides();
-}
-
-#[test]
-fn refresh_shares_rejects_legacy_pre_upgrade_fingerprint_after_new_refresh() {
-    let _guard = lock_test_state();
-    let state_path = configure_test_state_path("refresh_legacy_fingerprint");
-    reset_for_tests();
-
-    let session_id = "session-refresh-legacy".to_string();
-    let req_a = RefreshSharesRequest {
-        session_id: session_id.clone(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "aaaa".to_string(),
-        }],
-    };
-    let req_b = RefreshSharesRequest {
-        session_id: session_id.clone(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "bbbb".to_string(),
-        }],
-    };
-
-    // Accept refresh A.
-    refresh_shares(req_a.clone()).expect("refresh A");
-
-    // Simulate state written before RefreshHistoryRecord.request_fingerprint
-    // existed: A's history record deserializes with None, so A's fingerprint
-    // survives only in session.refresh_request_fingerprint.
-    {
-        let mut guard = state().expect("engine state").lock().expect("engine lock");
-        let session = guard.sessions.get_mut(&session_id).expect("session state");
-        for record in session.refresh_history.iter_mut() {
-            record.request_fingerprint = None;
-        }
-        persist_engine_state_to_storage(&guard).expect("persist legacy-shaped state");
-    }
-    reload_state_from_storage_for_tests();
-
-    // A new refresh B is accepted and overwrites refresh_request_fingerprint; the
-    // backfill must move A's fingerprint into history before that overwrite.
-    assert_eq!(refresh_shares(req_b).expect("refresh B").refresh_epoch, 2);
-
-    // A delayed retry of the pre-upgrade refresh A must be rejected as stale, not
-    // re-executed as a new epoch.
-    let err = refresh_shares(req_a).expect_err("stale legacy retry of A must be rejected");
-    assert!(matches!(err, EngineError::SessionConflict { .. }));
-
-    reset_for_tests();
-    cleanup_test_state_artifacts(&state_path);
-    clear_state_storage_policy_overrides();
-}
-
-#[test]
-fn refresh_count_backfills_from_history_on_legacy_load() {
-    let _guard = lock_test_state();
-    let state_path = configure_test_state_path("refresh_count_legacy_load");
-    reset_for_tests();
-
-    let session_id = "session-refresh-count-legacy".to_string();
-    for hex in ["aaaa", "bbbb"] {
-        refresh_shares(RefreshSharesRequest {
-            session_id: session_id.clone(),
-            current_shares: vec![ShareMaterial {
-                identifier: 1,
-                encrypted_share_hex: hex.to_string(),
-            }],
-        })
-        .expect("refresh");
-    }
-
-    // Simulate state written before refresh_count existed: the field deserializes
-    // to 0 even though refresh_history already holds accepted refreshes.
-    {
-        let mut guard = state().expect("engine state").lock().expect("engine lock");
-        let session = guard.sessions.get_mut(&session_id).expect("session state");
-        assert_eq!(session.refresh_count, 2);
-        assert_eq!(session.refresh_history.len(), 2);
-        session.refresh_count = 0;
-        persist_engine_state_to_storage(&guard).expect("persist legacy-shaped state");
-    }
-    reload_state_from_storage_for_tests();
-
-    // On load, refresh_count is backfilled from history length, so cadence status
-    // reports the true total immediately -- not 0 until the next refresh.
-    let status = refresh_cadence_status(RefreshCadenceStatusRequest {
-        session_id: session_id.clone(),
-    })
-    .expect("cadence status");
-    assert_eq!(status.refresh_count, 2);
-
-    reset_for_tests();
-    cleanup_test_state_artifacts(&state_path);
-    clear_state_storage_policy_overrides();
-}
-
-#[test]
-fn refresh_cadence_status_count_survives_history_pruning() {
-    let _guard = lock_test_state();
-    let state_path = configure_test_state_path("refresh_count_pruning");
-    reset_for_tests();
-
-    let session_id = "session-refresh-count".to_string();
-    for hex in ["aaaa", "bbbb", "cccc"] {
-        refresh_shares(RefreshSharesRequest {
-            session_id: session_id.clone(),
-            current_shares: vec![ShareMaterial {
-                identifier: 1,
-                encrypted_share_hex: hex.to_string(),
-            }],
-        })
-        .expect("refresh");
-    }
-
-    // Simulate the MAX_REFRESH_HISTORY prune (drop older records) without touching
-    // the monotonic refresh_count.
-    {
-        let mut guard = state().expect("engine state").lock().expect("engine lock");
-        let session = guard.sessions.get_mut(&session_id).expect("session state");
-        assert_eq!(session.refresh_count, 3);
-        session.refresh_history.drain(0..2);
-    }
-
-    let status = refresh_cadence_status(RefreshCadenceStatusRequest {
-        session_id: session_id.clone(),
-    })
-    .expect("cadence status");
-    // Reports the true total (3), not the pruned history window (1).
-    assert_eq!(status.refresh_count, 3);
-
-    reset_for_tests();
-    cleanup_test_state_artifacts(&state_path);
-    clear_state_storage_policy_overrides();
-}
-
-#[test]
-fn refresh_epoch_counter_persists_across_storage_reload() {
-    let _guard = lock_test_state();
-    let state_path = configure_test_state_path("refresh_epoch_counter");
-    reset_for_tests();
-
-    let first_result = refresh_shares(RefreshSharesRequest {
-        session_id: "session-persisted-refresh-1".to_string(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "aaaa".to_string(),
-        }],
-    })
-    .expect("first refresh");
-    assert_eq!(first_result.refresh_epoch, 1);
-
-    reload_state_from_storage_for_tests();
-
-    let second_result = refresh_shares(RefreshSharesRequest {
-        session_id: "session-persisted-refresh-2".to_string(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "bbbb".to_string(),
-        }],
-    })
-    .expect("second refresh");
-    assert_eq!(second_result.refresh_epoch, 2);
-
-    reset_for_tests();
-    cleanup_test_state_artifacts(&state_path);
-    clear_state_storage_policy_overrides();
-}
-
-#[test]
 fn state_lock_path_is_bound_and_rejects_in_process_path_switch() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("state_lock_path_binding");
@@ -5238,25 +4791,13 @@ fn state_lock_path_is_bound_and_rejects_in_process_path_switch() {
     cleanup_test_state_artifacts(&alternate_state_path);
     reset_for_tests();
 
-    refresh_shares(RefreshSharesRequest {
-        session_id: "session-lock-path-initial".to_string(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "aaaa".to_string(),
-        }],
-    })
-    .expect("initial refresh");
+    persist_state_for_key_provider_test("session-lock-path-initial")
+        .expect("initial state persist");
 
     std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, &alternate_state_path);
 
-    let err = refresh_shares(RefreshSharesRequest {
-        session_id: "session-lock-path-switch".to_string(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "bbbb".to_string(),
-        }],
-    })
-    .expect_err("expected path switch rejection");
+    let err = persist_state_for_key_provider_test("session-lock-path-switch")
+        .expect_err("expected path switch rejection");
     let EngineError::Internal(message) = err else {
         panic!("unexpected error variant");
     };
@@ -5308,16 +4849,6 @@ fn restart_reload_recovers_persisted_state_across_operation_types() {
     };
     let build_result = build_taproot_tx(build_request.clone()).expect("build taproot tx");
 
-    // Operation type 3: share refresh.
-    let refresh_request = RefreshSharesRequest {
-        session_id: "session-restart-refresh".to_string(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "abba".to_string(),
-        }],
-    };
-    let refresh_result = refresh_shares(refresh_request.clone()).expect("refresh shares");
-
     simulate_process_restart_for_tests();
     reload_state_from_storage_for_tests();
 
@@ -5325,7 +4856,6 @@ fn restart_reload_recovers_persisted_state_across_operation_types() {
         let guard = state().expect("engine state").lock().expect("engine lock");
         assert!(guard.sessions.contains_key("session-restart-dkg"));
         assert!(guard.sessions.contains_key("session-restart-buildtx"));
-        assert!(guard.sessions.contains_key("session-restart-refresh"));
     }
 
     // The persisted DKG session survives the restart: a sibling seat
@@ -5345,9 +4875,6 @@ fn restart_reload_recovers_persisted_state_across_operation_types() {
     // Idempotent retries of the persisted operations return the same result.
     let build_retry_result = build_taproot_tx(build_request).expect("retry build taproot tx");
     assert_eq!(build_result, build_retry_result);
-
-    let refresh_retry_result = refresh_shares(refresh_request).expect("retry refresh shares");
-    assert_eq!(refresh_result, refresh_retry_result);
 
     // A brand-new operation on a fresh session works post-restart.
     let (new_public, new_key_packages) = sample_distributed_dkg_native_material(11);
@@ -5431,14 +4958,8 @@ fn persisted_state_file_uses_owner_only_permissions() {
     let state_path = configure_test_state_path("state_file_permissions");
     reset_for_tests();
 
-    refresh_shares(RefreshSharesRequest {
-        session_id: "session-state-file-permissions".to_string(),
-        current_shares: vec![ShareMaterial {
-            identifier: 1,
-            encrypted_share_hex: "aaaa".to_string(),
-        }],
-    })
-    .expect("persist state via refresh");
+    persist_state_for_key_provider_test("session-state-file-permissions")
+        .expect("persist signer state");
 
     let mode = std::fs::metadata(&state_path)
         .expect("state file metadata")
@@ -5906,7 +5427,7 @@ fn env_key_provider_is_rejected_in_production_profile() {
         TBTC_SIGNER_STATE_KEY_PROVIDER_ENV_DEFAULT,
     );
 
-    let err = mutate_state_for_key_provider_test("session-production-rejects-env-provider")
+    let err = persist_state_for_key_provider_test("session-production-rejects-env-provider")
         .expect_err("production profile should reject env provider");
     expect_internal_error_contains(err, "is not allowed in profile [production]");
 
@@ -5933,7 +5454,7 @@ fn production_profile_rejects_implicit_temp_state_path() {
         format!("printf '{}\\n'", TEST_STATE_ENCRYPTION_KEY_HEX),
     );
 
-    let err = mutate_state_for_key_provider_test("session-production-rejects-implicit-state-path")
+    let err = persist_state_for_key_provider_test("session-production-rejects-implicit-state-path")
         .expect_err("production profile should reject implicit state path");
     expect_internal_error_contains(
         err,
@@ -5952,7 +5473,7 @@ fn unknown_state_key_provider_is_rejected() {
 
     std::env::set_var(TBTC_SIGNER_STATE_KEY_PROVIDER_ENV, "hsm");
 
-    let err = mutate_state_for_key_provider_test("session-unknown-state-key-provider")
+    let err = persist_state_for_key_provider_test("session-unknown-state-key-provider")
         .expect_err("unsupported state key provider should fail closed");
     expect_internal_error_contains(err, "unsupported state key provider");
 
@@ -5976,7 +5497,7 @@ fn command_key_provider_rejects_non_zero_exit() {
     std::env::set_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV, "exit 17");
 
     let err =
-        mutate_state_for_key_provider_test("session-production-command-provider-non-zero-exit")
+        persist_state_for_key_provider_test("session-production-command-provider-non-zero-exit")
             .expect_err("non-zero command exit should fail closed");
     expect_internal_error_contains(err, "exited with non-zero status");
 
@@ -6002,7 +5523,7 @@ fn command_key_provider_rejects_bad_output() {
         "printf 'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\\n'",
     );
 
-    let err = mutate_state_for_key_provider_test("session-production-command-provider-bad-output")
+    let err = persist_state_for_key_provider_test("session-production-command-provider-bad-output")
         .expect_err("bad command output should fail closed");
     expect_internal_error_contains(err, "must be valid hex");
 
@@ -6032,7 +5553,7 @@ fn command_key_provider_drains_large_stderr_without_deadlock() {
         ),
     );
 
-    mutate_state_for_key_provider_test("session-production-command-provider-large-stderr")
+    persist_state_for_key_provider_test("session-production-command-provider-large-stderr")
         .expect("large stderr from state key command should not deadlock");
 
     reset_for_tests();
@@ -6058,7 +5579,7 @@ fn command_key_provider_times_out_fail_closed() {
         format!("sleep 2; printf '{}\\n'", TEST_STATE_ENCRYPTION_KEY_HEX),
     );
 
-    let err = mutate_state_for_key_provider_test("session-production-command-provider-timeout")
+    let err = persist_state_for_key_provider_test("session-production-command-provider-timeout")
         .expect_err("state key command timeout should fail closed");
     expect_internal_error_contains(err, "timed out");
 
@@ -6088,7 +5609,7 @@ fn command_key_provider_times_out_when_background_descendant_keeps_pipe_open() {
 
     let started_at = Instant::now();
     let err =
-        mutate_state_for_key_provider_test("session-production-command-provider-background-pipe")
+        persist_state_for_key_provider_test("session-production-command-provider-background-pipe")
             .expect_err("state key command pipe timeout should fail closed");
     assert!(
         started_at.elapsed() < Duration::from_secs(4),
@@ -6118,7 +5639,7 @@ fn command_key_provider_survives_restart_with_stable_key() {
         format!("printf '{}\\n'", TEST_STATE_ENCRYPTION_KEY_HEX),
     );
 
-    mutate_state_for_key_provider_test("session-production-command-provider")
+    persist_state_for_key_provider_test("session-production-command-provider")
         .expect("seed encrypted state with command provider");
 
     simulate_process_restart_for_tests();

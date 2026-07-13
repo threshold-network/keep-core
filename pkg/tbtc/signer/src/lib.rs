@@ -37,16 +37,17 @@ const TBTC_SIGNER_VERSION: &str = "tbtc-signer/0.1.0-bootstrap";
 // and results carry the ordered BIP-341 key-spend SIGHASH_DEFAULT messages. The
 // required request field is an incompatible wire-contract change, so bridges and
 // the signer library must move from major 2 to major 3 in lockstep.
-const TBTC_SIGNER_ABI_MAJOR: u32 = 3;
-// Minor 1 adds an optional, narrowly typed heartbeat intent to Interactive Open.
-// ABI-3.0 callers remain valid because an absent intent preserves transaction-only
-// signing-policy behavior.
-// Minor 2 adds the optional heartbeat rate-limit config field and a dedicated
-// heartbeat policy-rejection metric. Older callers safely omit/ignore both.
-// Minor 3 adds optional canary-evidence configuration, including an independent
-// policy-evidence sample minimum. Every field is optional and defaults fail
-// closed; an absent policy minimum retains the interactive minimum.
-const TBTC_SIGNER_ABI_MINOR: u32 = 3;
+// Major 4: RefreshShares no longer returns synthetic replacement material for a
+// valid request. It fails closed with a terminal
+// cryptographic_refresh_not_supported error until a real multi-round protocol
+// exists. Changing status_code from success to error and replacing the response
+// JSON meaning is incompatible, so ABI-3 bridges must reject the library during
+// negotiation rather than discovering the change at refresh time.
+const TBTC_SIGNER_ABI_MAJOR: u32 = 4;
+// Major bumps reset the additive minor version. ABI 3.1-3.3 introduced the typed
+// heartbeat intent, its rate-limit configuration/metric, and optional canary
+// evidence configuration; all remain present in ABI 4.0.
+const TBTC_SIGNER_ABI_MINOR: u32 = 0;
 #[cfg(test)]
 use engine::TBTC_SIGNER_PROFILE_ENV;
 
@@ -398,7 +399,7 @@ mod tests {
         DkgPart3Request, DkgPart3Result, DkgRound1Package, DkgRound2Package, ErrorResponse,
         FrostTbtcAbiVersionResult, PromoteCanaryRequest, QuarantineStatusRequest,
         QuarantineStatusResult, RefreshCadenceStatusRequest, RefreshCadenceStatusResult,
-        RefreshSharesRequest, RoastLivenessPolicyResult, RollbackCanaryRequest, ShareMaterial,
+        RefreshSharesRequest, RoastLivenessPolicyResult, RollbackCanaryRequest,
         SignerHardeningMetricsResult, TransactionResult, TranscriptAuditRequest,
         TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
     };
@@ -759,14 +760,11 @@ mod tests {
             serde_json::from_slice(&payload).expect("abi version payload decode");
         // The enforced FFI contract starts at 1.0; bump deliberately per the
         // TBTC_SIGNER_ABI_MAJOR / TBTC_SIGNER_ABI_MINOR rules. This test pins the
-        // current value so an accidental bump is caught. BuildTaprootTx now requires
-        // prevout scripts and returns BIP-341 SIGHASH_DEFAULT messages; the
-        // incompatible request shape is ABI 3. Optional typed heartbeat intent is
-        // the first backward-compatible minor addition; its independent rate-limit
-        // config and rejection metric are the second. Canary evidence configuration,
-        // including its independent policy-sample minimum, is the third.
-        assert_eq!(abi.abi_major, 3);
-        assert_eq!(abi.abi_minor, 3);
+        // current value so an accidental bump is caught. ABI 4 changes a valid
+        // RefreshShares call from a synthetic success response to a terminal error,
+        // forcing ABI-3 consumers to fail closed during compatibility negotiation.
+        assert_eq!(abi.abi_major, 4);
+        assert_eq!(abi.abi_minor, 0);
     }
 
     #[test]
@@ -1364,70 +1362,30 @@ mod tests {
     }
 
     #[test]
-    fn refresh_shares_is_idempotent() {
+    fn refresh_shares_rejects_without_returning_synthetic_material() {
         let _guard = crate::engine::lock_test_state();
         crate::engine::reset_for_tests();
 
         let request = RefreshSharesRequest {
             session_id: "session-refresh".to_string(),
-            current_shares: vec![
-                ShareMaterial {
-                    identifier: 1,
-                    encrypted_share_hex: "abcd".to_string(),
-                },
-                ShareMaterial {
-                    identifier: 2,
-                    encrypted_share_hex: "ef01".to_string(),
-                },
-            ],
-        };
-
-        let (status_first, payload_first) = call_ffi(&request, frost_tbtc_refresh_shares);
-        let (status_second, payload_second) = call_ffi(&request, frost_tbtc_refresh_shares);
-
-        assert_eq!(status_first, 0);
-        assert_eq!(status_second, 0);
-        assert_eq!(payload_first, payload_second);
-    }
-
-    #[test]
-    fn refresh_shares_uses_monotonic_epoch_counter() {
-        let _guard = crate::engine::lock_test_state();
-        crate::engine::reset_for_tests();
-
-        let request_first = RefreshSharesRequest {
-            session_id: "session-refresh-epoch-1".to_string(),
-            current_shares: vec![ShareMaterial {
+            current_shares: vec![crate::api::ShareMaterial {
                 identifier: 1,
-                encrypted_share_hex: "1111".to_string(),
+                encrypted_share_hex: "abcd".to_string(),
             }],
         };
 
-        let request_second = RefreshSharesRequest {
-            session_id: "session-refresh-epoch-2".to_string(),
-            current_shares: vec![ShareMaterial {
-                identifier: 1,
-                encrypted_share_hex: "2222".to_string(),
-            }],
-        };
+        let (status, payload) = call_ffi(&request, frost_tbtc_refresh_shares);
+        assert_eq!(status, 1);
 
-        let (status_first, payload_first) = call_ffi(&request_first, frost_tbtc_refresh_shares);
-        let (status_first_retry, payload_first_retry) =
-            call_ffi(&request_first, frost_tbtc_refresh_shares);
-        let (status_second, payload_second) = call_ffi(&request_second, frost_tbtc_refresh_shares);
-
-        assert_eq!(status_first, 0);
-        assert_eq!(status_first_retry, 0);
-        assert_eq!(payload_first, payload_first_retry);
-        assert_eq!(status_second, 0);
-
-        let first_result: crate::api::RefreshSharesResult =
-            serde_json::from_slice(&payload_first).expect("first refresh payload decode");
-        let second_result: crate::api::RefreshSharesResult =
-            serde_json::from_slice(&payload_second).expect("second refresh payload decode");
-
-        assert_eq!(first_result.refresh_epoch, 1);
-        assert_eq!(second_result.refresh_epoch, 2);
+        let error: ErrorResponse = serde_json::from_slice(&payload).expect("error payload");
+        assert_eq!(error.code, "cryptographic_refresh_not_supported");
+        assert_eq!(error.recovery_class, "terminal");
+        assert!(error
+            .message
+            .contains("cryptographic share refresh is not supported"));
+        assert!(error
+            .message
+            .contains("zero-constant FROST refresh protocol"));
     }
 
     #[test]

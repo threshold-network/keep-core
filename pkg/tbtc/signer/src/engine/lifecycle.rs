@@ -2,12 +2,6 @@
 
 use super::*;
 
-/// Upper bound on per-session `refresh_history` length. Older records are
-/// dropped once this is exceeded, bounding persisted-state size for a long-lived
-/// / frequently-refreshed session. Also bounds the stale-fingerprint detection
-/// window (retries older than this many refreshes are no longer recognized).
-const MAX_REFRESH_HISTORY: usize = 256;
-
 #[cfg(test)]
 static CANARY_PROMOTION_HOLD_NEXT_LOCK: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -136,36 +130,45 @@ pub(crate) fn refresh_continuity_reference_key_group(session: &SessionState) -> 
         .dkg_result
         .as_ref()
         .map(|result| result.key_group.clone())
-        .or_else(|| {
-            session
-                .refresh_history
-                .iter()
-                .find_map(|record| record.key_group.clone())
-        })
+}
+
+/// Returns whether this session contains metadata written by the retired
+/// synthetic `RefreshShares` implementation. No cryptographically valid refresh
+/// record can exist until a versioned multi-round protocol is implemented, so
+/// these fields are retained only for persisted-schema compatibility and must
+/// never establish cadence or continuity.
+pub(crate) fn legacy_synthetic_refresh_artifacts_present(session: &SessionState) -> bool {
+    session.refresh_request_fingerprint.is_some()
+        || session.refresh_result.is_some()
+        || !session.refresh_history.is_empty()
+        || session.refresh_count != 0
 }
 
 pub(crate) fn refresh_history_continuity_preserved(session: &SessionState) -> bool {
-    let mut last_refresh_epoch = 0_u64;
-    let mut reference_key_group: Option<&str> = None;
+    !legacy_synthetic_refresh_artifacts_present(session)
+}
 
-    for refresh_record in &session.refresh_history {
-        if refresh_record.refresh_epoch == 0 || refresh_record.refresh_epoch <= last_refresh_epoch {
-            return false;
-        }
-        last_refresh_epoch = refresh_record.refresh_epoch;
-
-        if let Some(record_key_group) = refresh_record.key_group.as_deref() {
-            if let Some(reference_key_group) = reference_key_group {
-                if !record_key_group.eq_ignore_ascii_case(reference_key_group) {
-                    return false;
-                }
-            } else {
-                reference_key_group = Some(record_key_group);
-            }
-        }
+pub(crate) fn refresh_cadence_due_unix(
+    session: &SessionState,
+    cadence_seconds: u64,
+) -> Option<u64> {
+    if let Some(dkg_result) = session.dkg_result.as_ref() {
+        return Some(dkg_result.created_at_unix.saturating_add(cadence_seconds));
     }
 
-    true
+    // The retired synthetic RefreshShares path could create a persisted session
+    // without ever running DKG. Such state has no trustworthy cadence anchor and
+    // must fail closed instead of receiving a new `now + cadence` deadline on
+    // every query. Unix epoch is the explicit "already due" sentinel shared by
+    // status and telemetry.
+    legacy_synthetic_refresh_artifacts_present(session).then_some(0)
+}
+
+pub(crate) fn refresh_cadence_is_overdue(now_unix: u64, due_unix: u64) -> bool {
+    // A zero deadline is the explicit sentinel for unanchored legacy synthetic
+    // refresh state. It remains overdue even if the system clock rolls back to
+    // or before UNIX_EPOCH and `now_unix()` saturates to zero.
+    due_unix == 0 || now_unix > due_unix
 }
 
 pub fn refresh_cadence_status(
@@ -185,12 +188,10 @@ pub fn refresh_cadence_status(
                 session_id: request.session_id.clone(),
             })?;
     let cadence_seconds = refresh_cadence_seconds();
-    let last_refresh_record = session.refresh_history.last();
     let now = now_unix();
-    let next_refresh_due_unix = last_refresh_record
-        .map(|record| record.refreshed_at_unix.saturating_add(cadence_seconds))
+    let next_refresh_due_unix = refresh_cadence_due_unix(session, cadence_seconds)
         .unwrap_or_else(|| now.saturating_add(cadence_seconds));
-    let overdue = now > next_refresh_due_unix;
+    let overdue = refresh_cadence_is_overdue(now, next_refresh_due_unix);
     let continuity_reference_key_group = refresh_continuity_reference_key_group(session);
     let emergency_rekey_reason = session
         .emergency_rekey_event
@@ -199,10 +200,10 @@ pub fn refresh_cadence_status(
 
     Ok(RefreshCadenceStatusResult {
         session_id: request.session_id,
-        refresh_count: session.refresh_count,
-        last_refresh_epoch: last_refresh_record
-            .map(|record| record.refresh_epoch)
-            .unwrap_or(0),
+        // No cryptographically valid refresh can be reported by this build.
+        // Legacy synthetic metadata is deliberately ignored.
+        refresh_count: 0,
+        last_refresh_epoch: 0,
         cadence_seconds,
         next_refresh_due_unix,
         overdue,
@@ -574,248 +575,13 @@ pub fn refresh_shares(request: RefreshSharesRequest) -> Result<RefreshSharesResu
     enforce_provenance_gate()?;
     validate_session_id(&request.session_id)?;
 
-    if request.current_shares.is_empty() {
-        return Err(EngineError::Validation(
-            "current_shares must not be empty".to_string(),
-        ));
-    }
-    let mut unique_share_identifiers = HashSet::new();
-    for share in &request.current_shares {
-        if share.identifier == 0 {
-            return Err(EngineError::Validation(
-                "current_shares identifiers must be non-zero".to_string(),
-            ));
-        }
-        if !unique_share_identifiers.insert(share.identifier) {
-            return Err(EngineError::Validation(format!(
-                "current_shares contains duplicate identifier [{}]",
-                share.identifier
-            )));
-        }
-    }
-
-    let request_fingerprint = fingerprint(&canonicalize_refresh_shares_request_for_fingerprint(
-        &request,
-    ))?;
-    let mut guard = state()?
-        .lock()
-        .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-
-    if let Some(pending_operation) = pending_refresh_operation(&request.session_id) {
-        persist_engine_state_to_storage(&guard)
-            .map_err(PersistEngineStateError::into_engine_error)?;
-        clear_persistence_pending_operation(&pending_operation);
-    }
-
-    if let Some(emergency_rekey_event) = guard
-        .sessions
-        .get(&request.session_id)
-        .and_then(|session| session.emergency_rekey_event.as_ref())
-    {
-        return Err(EngineError::LifecyclePolicyRejected {
-            session_id: request.session_id.clone(),
-            reason_code: "emergency_rekey_required".to_string(),
-            detail: format!(
-                "refresh blocked: emergency rekey required since [{}]: {}",
-                emergency_rekey_event.triggered_at_unix, emergency_rekey_event.reason
-            ),
-        });
-    }
-
-    if let Some(session) = guard.sessions.get(&request.session_id) {
-        if let Some(emergency_rekey_event) = session.emergency_rekey_event.as_ref() {
-            return Err(EngineError::LifecyclePolicyRejected {
-                session_id: request.session_id.clone(),
-                reason_code: "emergency_rekey_required".to_string(),
-                detail: format!(
-                    "refresh blocked: emergency rekey required since [{}]: {}",
-                    emergency_rekey_event.triggered_at_unix, emergency_rekey_event.reason
-                ),
-            });
-        }
-
-        if let Some(existing) = &session.refresh_request_fingerprint {
-            if existing == &request_fingerprint {
-                // Idempotent replay of the *same* (most-recent) refresh request:
-                // return the cached result.
-                return session
-                    .refresh_result
-                    .clone()
-                    .ok_or_else(|| EngineError::Internal("missing refresh cache".to_string()));
-            }
-
-            // A fingerprint we have already accepted before (but which is no
-            // longer the most recent) is a stale / out-of-order retry, not a new
-            // refresh. Reject it rather than re-deriving the older share set and
-            // bumping the epoch forward, which would roll the session back behind
-            // a newer refresh. A genuinely new fingerprint falls through to
-            // perform the refresh (supporting repeatable periodic reshares).
-            if session.refresh_history.iter().any(|record| {
-                record.request_fingerprint.as_deref() == Some(request_fingerprint.as_str())
-            }) {
-                return Err(EngineError::SessionConflict {
-                    session_id: request.session_id.clone(),
-                });
-            }
-        }
-    }
-    ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
-
-    let refresh_session_id = request.session_id.clone();
-    let accepted_request_fingerprint = request_fingerprint.clone();
-    let previous_refresh_epoch_counter = guard.refresh_epoch_counter;
-    let previous_refresh_state = guard.sessions.get(&refresh_session_id).map(|session| {
-        (
-            session.refresh_request_fingerprint.clone(),
-            session.refresh_result.clone(),
-            session.refresh_history.clone(),
-            session.refresh_count,
-        )
-    });
-
-    let mut new_shares: Vec<ShareMaterial> = request
-        .current_shares
-        .into_iter()
-        .map(|share| ShareMaterial {
-            identifier: share.identifier,
-            encrypted_share_hex: hash_hex(
-                format!(
-                    "refresh:{}:{}:{}",
-                    request.session_id, share.identifier, share.encrypted_share_hex
-                )
-                .as_bytes(),
-            ),
-        })
-        .collect();
-
-    new_shares.sort_by_key(|share| share.identifier);
-
-    guard.refresh_epoch_counter = guard.refresh_epoch_counter.saturating_add(1);
-    let refresh_epoch = guard.refresh_epoch_counter;
-
-    let result = RefreshSharesResult {
+    log_policy_decision(
+        "lifecycle_policy",
+        &request.session_id,
+        "reject",
+        "cryptographic_refresh_not_supported",
+    );
+    Err(EngineError::CryptographicRefreshNotSupported {
         session_id: request.session_id,
-        refresh_epoch,
-        new_shares,
-    };
-
-    let session = guard
-        .sessions
-        .entry(result.session_id.clone())
-        .or_insert_with(SessionState::default);
-    if let Some(emergency_rekey_event) = session.emergency_rekey_event.as_ref() {
-        return Err(EngineError::LifecyclePolicyRejected {
-            session_id: result.session_id.clone(),
-            reason_code: "emergency_rekey_required".to_string(),
-            detail: format!(
-                "refresh blocked: emergency rekey required since [{}]: {}",
-                emergency_rekey_event.triggered_at_unix, emergency_rekey_event.reason
-            ),
-        });
-    }
-    // Preserve the previously-accepted fingerprint before overwriting it. If the
-    // last accepted refresh predates RefreshHistoryRecord.request_fingerprint
-    // (loaded from legacy state, where history records deserialize with None), its
-    // fingerprint lives only in refresh_request_fingerprint; backfill it onto the
-    // most-recent history record so a delayed retry of it is still recognized as
-    // stale instead of being re-executed as a new refresh.
-    if let Some(previous_fingerprint) = session.refresh_request_fingerprint.clone() {
-        let already_tracked = session.refresh_history.iter().any(|record| {
-            record.request_fingerprint.as_deref() == Some(previous_fingerprint.as_str())
-        });
-        if !already_tracked {
-            if let Some(last) = session.refresh_history.last_mut() {
-                if last.request_fingerprint.is_none() {
-                    last.request_fingerprint = Some(previous_fingerprint);
-                }
-            } else {
-                // Legacy/degraded state can carry a fingerprint with an EMPTY
-                // history (refresh_history postdates refresh_request_fingerprint),
-                // so there is no record to backfill onto. Synthesize one carrying
-                // the fingerprint so a delayed retry is still recognized for
-                // stale-retry rejection instead of being re-executed as a new
-                // refresh (which would advance the epoch). Prefer the cached
-                // result's epoch/share_count; when the result is absent (a
-                // truncated/legacy blob that kept only the fingerprint, or a
-                // corrupt state where refresh_result deserialized to None) fall
-                // back to an epoch one below the new refresh so the history stays
-                // strictly increasing, and a zero share_count. refresh_epoch_counter
-                // is persisted, so a prior accepted refresh implies refresh_epoch >= 2
-                // and the fallback stays non-zero.
-                let previous_result = session.refresh_result.clone();
-                let synthesized_epoch = previous_result
-                    .as_ref()
-                    .map(|previous| previous.refresh_epoch)
-                    .filter(|&epoch| epoch != 0 && epoch < refresh_epoch)
-                    .unwrap_or_else(|| refresh_epoch.saturating_sub(1).max(1));
-                let synthesized_share_count = previous_result
-                    .as_ref()
-                    .map(|previous| previous.new_shares.len().min(u16::MAX as usize) as u16)
-                    .unwrap_or(0);
-                session.refresh_history.push(RefreshHistoryRecord {
-                    refresh_epoch: synthesized_epoch,
-                    refreshed_at_unix: now_unix(),
-                    share_count: synthesized_share_count,
-                    key_group: session.dkg_result.as_ref().map(|dkg| dkg.key_group.clone()),
-                    request_fingerprint: Some(previous_fingerprint),
-                });
-            }
-        }
-    }
-    // Monotonic total refresh count, independent of refresh_history pruning;
-    // backfilled from the retained history length for sessions written before
-    // this field existed.
-    session.refresh_count = session
-        .refresh_count
-        .max(session.refresh_history.len() as u64)
-        .saturating_add(1);
-    session.refresh_request_fingerprint = Some(request_fingerprint.clone());
-    session.refresh_result = Some(result.clone());
-    session.refresh_history.push(RefreshHistoryRecord {
-        refresh_epoch,
-        refreshed_at_unix: now_unix(),
-        share_count: result.new_shares.len().min(u16::MAX as usize) as u16,
-        key_group: session.dkg_result.as_ref().map(|dkg| dkg.key_group.clone()),
-        request_fingerprint: Some(request_fingerprint),
-    });
-    // Bound per-session history growth (state-at-rest size + stale-detection
-    // window). Keep the most recent records; epochs stay strictly increasing so
-    // refresh_history_continuity_preserved still holds.
-    if session.refresh_history.len() > MAX_REFRESH_HISTORY {
-        let excess = session.refresh_history.len() - MAX_REFRESH_HISTORY;
-        session.refresh_history.drain(0..excess);
-    }
-    if let Err(persist_error) = persist_engine_state_to_storage(&guard) {
-        let state_file_replaced = persist_error.state_file_replaced();
-        let persist_error = persist_error.into_engine_error();
-        if state_file_replaced {
-            mark_persistence_pending(PersistencePendingOperation::RefreshShares {
-                session_id: refresh_session_id.clone(),
-                request_fingerprint: accepted_request_fingerprint,
-            });
-        } else {
-            guard.refresh_epoch_counter = previous_refresh_epoch_counter;
-            if let Some((request_fingerprint, result, history, count)) = previous_refresh_state {
-                let rollback_session =
-                    guard.sessions.get_mut(&refresh_session_id).ok_or_else(|| {
-                        EngineError::Internal(format!(
-                            "refresh session [{refresh_session_id}] disappeared while rolling back a failed persist: {persist_error}"
-                        ))
-                    })?;
-                rollback_session.refresh_request_fingerprint = request_fingerprint;
-                rollback_session.refresh_result = result;
-                rollback_session.refresh_history = history;
-                rollback_session.refresh_count = count;
-            } else {
-                guard.sessions.remove(&refresh_session_id);
-            }
-        }
-        return Err(persist_error);
-    }
-    record_hardening_telemetry(|telemetry| {
-        telemetry.refresh_shares_success_total =
-            telemetry.refresh_shares_success_total.saturating_add(1);
-    });
-
-    Ok(result)
+    })
 }

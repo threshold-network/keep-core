@@ -483,16 +483,14 @@ pub fn hardening_metrics() -> SignerHardeningMetricsResult {
                 .values()
                 .filter(|session| session.emergency_rekey_event.is_some())
                 .count() as u64;
+            let now = now_unix();
+            let cadence_seconds = refresh_cadence_seconds();
             result.refresh_cadence_overdue_sessions = engine_state
                 .sessions
                 .values()
                 .filter(|session| {
-                    session.refresh_history.last().is_some_and(|last_refresh| {
-                        now_unix()
-                            > last_refresh
-                                .refreshed_at_unix
-                                .saturating_add(refresh_cadence_seconds())
-                    })
+                    refresh_cadence_due_unix(session, cadence_seconds)
+                        .is_some_and(|due_unix| refresh_cadence_is_overdue(now, due_unix))
                 })
                 .count() as u64;
         }

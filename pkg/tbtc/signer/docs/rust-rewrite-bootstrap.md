@@ -25,7 +25,10 @@ rewrite architecture.
   - `frost_tbtc_start_sign_round`
   - `frost_tbtc_finalize_sign_round`
   - `frost_tbtc_build_taproot_tx`
-  - `frost_tbtc_refresh_shares`
+  - `frost_tbtc_refresh_shares` (symbol retained, but ABI 4.0 fails closed; the
+    one-shot request cannot perform cryptographic FROST share refresh, and the
+    major bump prevents ABI-3 consumers from accepting the changed response
+    semantics)
 - Implemented idempotency and conflict checks for retried operations under the
   same session ID.
 - Added file-backed persistent session-state adapter with atomic writes and
@@ -286,8 +289,10 @@ rewrite architecture.
   t-of-n contribution handling and filter signing-package commitments to actual
   contributing participants; complete keep-core cohort-selection wiring and
   non-full-cohort integration coverage.
-- Refresh epoch policy: keep `refresh_epoch` monotonic via internal counter
-  semantics (do not use wall-clock values for refresh ordering).
+- Share refresh: add a multi-round, zero-constant FROST refresh protocol before
+  enabling `RefreshShares`; the retained one-shot ABI must fail closed rather
+  than manufacture replacement share bytes. Persisted metadata from the retired
+  synthetic stub is non-authoritative for refresh cadence and key continuity.
 
 ## Validation command
 
