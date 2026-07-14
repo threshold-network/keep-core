@@ -141,11 +141,17 @@ pub(crate) struct SessionState {
     // retry's BuildTaprootTx policy artifact keep working. Old retired entries
     // are evicted FIFO-by-time once the separate retirement budget is full.
     pub(crate) retired_interactive_at_unix: Option<u64>,
+    // Transient refcount pin for Aggregate's unlocked cryptographic section.
+    // The session owns one reference; an in-flight Aggregate clones it while
+    // holding the engine lock, and compaction skips any session with a clone.
+    // Never persisted: no operation can remain in flight across a restart.
+    pub(crate) aggregate_eviction_pin: Arc<()>,
     pub(crate) consumed_interactive_attempt_markers: HashSet<String>,
-    // Fixed-size SHA-256 bindings written atomically with Round2 consumption.
-    // Each marker authorizes Aggregate for exactly one
-    // (attempt_id, signing package, taproot root) tuple, including after a
-    // restart when the live nonce state is intentionally absent.
+    // Fixed-size SHA-256 bindings. Round2 writes an exact
+    // (attempt_id, signing package, taproot root) authorization; successful
+    // Aggregate replaces it with a package/root completion identity so the
+    // same attempt-less FROST package cannot fill completion storage under
+    // fresh canonical attempt ids. Both survive restart.
     pub(crate) authorized_interactive_aggregate_markers: HashSet<String>,
     // Phase 7.2b InteractiveAggregate completion markers: an attempt whose
     // aggregate signature has been produced is recorded here so a repeat
@@ -512,6 +518,7 @@ pub(crate) fn per_message_interactive_session(session: &SessionState) -> bool {
         interactive_signing,
         bound_key_group,
         retired_interactive_at_unix,
+        aggregate_eviction_pin,
         consumed_interactive_attempt_markers,
         authorized_interactive_aggregate_markers,
         aggregated_interactive_attempt_markers,
@@ -539,6 +546,7 @@ pub(crate) fn per_message_interactive_session(session: &SessionState) -> bool {
         heartbeat_rate_limiter,
         interactive_signing,
         retired_interactive_at_unix,
+        aggregate_eviction_pin,
         consumed_interactive_attempt_markers,
         authorized_interactive_aggregate_markers,
         aggregated_interactive_attempt_markers,
@@ -595,6 +603,7 @@ pub(crate) fn compact_retired_per_message_sessions(
             .filter_map(|(session_id, session)| {
                 if protected_session_id == Some(session_id.as_str())
                     || pending_session_ids.contains(session_id)
+                    || Arc::strong_count(&session.aggregate_eviction_pin) > 1
                 {
                     return None;
                 }

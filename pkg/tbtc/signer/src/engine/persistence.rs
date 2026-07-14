@@ -76,7 +76,8 @@ pub(crate) struct PersistedSessionState {
     pub(crate) bound_key_group: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) retired_interactive_at_unix: Option<u64>,
-    // Fixed-size exact Aggregate authorizations written with Round2.
+    // Fixed-size exact Aggregate authorizations and successful-package replay
+    // identities (see SessionState).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) authorized_interactive_aggregate_markers: Vec<String>,
 }
@@ -1967,6 +1968,7 @@ impl TryFrom<PersistedSessionState> for SessionState {
             // by key_group. Public data; survives with the consumed/aggregate markers.
             bound_key_group: persisted.bound_key_group,
             retired_interactive_at_unix: persisted.retired_interactive_at_unix,
+            aggregate_eviction_pin: Arc::new(()),
             consumed_interactive_attempt_markers,
             authorized_interactive_aggregate_markers,
             aggregated_interactive_attempt_markers,

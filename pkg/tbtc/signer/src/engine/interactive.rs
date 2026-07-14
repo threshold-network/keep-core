@@ -18,6 +18,45 @@
 
 use super::*;
 
+#[cfg(test)]
+static INTERACTIVE_AGGREGATE_HOLD_AFTER_UNLOCK: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+static INTERACTIVE_AGGREGATE_UNLOCK_HELD: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+static INTERACTIVE_AGGREGATE_RELEASE_AFTER_UNLOCK: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
+
+#[cfg(test)]
+pub(crate) fn arm_interactive_aggregate_unlock_hold_for_tests() {
+    use std::sync::atomic::Ordering;
+    INTERACTIVE_AGGREGATE_UNLOCK_HELD.store(false, Ordering::SeqCst);
+    INTERACTIVE_AGGREGATE_RELEASE_AFTER_UNLOCK.store(false, Ordering::SeqCst);
+    INTERACTIVE_AGGREGATE_HOLD_AFTER_UNLOCK.store(true, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn interactive_aggregate_unlock_held_for_tests() -> bool {
+    INTERACTIVE_AGGREGATE_UNLOCK_HELD.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[cfg(test)]
+pub(crate) fn release_interactive_aggregate_unlock_for_tests() {
+    INTERACTIVE_AGGREGATE_RELEASE_AFTER_UNLOCK.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn maybe_hold_interactive_aggregate_after_unlock_for_tests() {
+    use std::sync::atomic::Ordering;
+    if INTERACTIVE_AGGREGATE_HOLD_AFTER_UNLOCK.swap(false, Ordering::SeqCst) {
+        INTERACTIVE_AGGREGATE_UNLOCK_HELD.store(true, Ordering::SeqCst);
+        while !INTERACTIVE_AGGREGATE_RELEASE_AFTER_UNLOCK.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+    }
+}
+
 // Multi-seat: a session's interactive consumed-nonce markers are keyed per
 // (attempt_id, member_identifier), so independent local seats can each consume
 // their own nonces for the same attempt without colliding. The marker is written
@@ -26,7 +65,10 @@ use super::*;
 // possibly reloaded from durable state) are honored FAIL-CLOSED on read: a bare
 // marker means the attempt is consumed for every member.
 pub(crate) fn interactive_consumed_marker(attempt_id: &str, member_identifier: u16) -> String {
-    format!("m{member_identifier}@{attempt_id}@v2")
+    // Keep the schema-1 wire representation understood by the immediately
+    // previous signer. A binary rollback must continue to see the attempt as
+    // consumed and fail closed rather than releasing a second share.
+    format!("m{member_identifier}@{attempt_id}")
 }
 
 pub(crate) fn interactive_attempt_consumed(
@@ -35,9 +77,9 @@ pub(crate) fn interactive_attempt_consumed(
     member_identifier: u16,
 ) -> bool {
     markers.contains(&interactive_consumed_marker(attempt_id, member_identifier))
-        // Pre-v2 multi-seat marker. It remains a replay blocker after upgrade,
-        // but does not authorize Aggregate because it has no package binding.
-        || markers.contains(&format!("m{member_identifier}@{attempt_id}"))
+        // Transitional marker written by an unreleased intermediate build.
+        // Continue honoring it fail-closed when upgrading that state.
+        || markers.contains(&format!("m{member_identifier}@{attempt_id}@v2"))
         || markers.contains(attempt_id)
 }
 
@@ -70,11 +112,41 @@ pub(crate) fn interactive_aggregate_authorization_marker(
     Ok(hex::encode(hasher.finalize()))
 }
 
-// A live authorization is exact only when this engine still holds a Round1
-// commitment included in the package. Open context alone cannot bind a FROST
-// package to attempt_number because the package carries no attempt id. Durable
-// authorization therefore comes from Round2; this live path supports a local
-// participating coordinator before its own Round2 call.
+// Session-scoped identity for a successfully aggregated canonical package.
+// It deliberately excludes attempt_id: the inner FROST package does not carry
+// one, so a non-signing coordinator can validate only the live coordinator
+// context plus package shape. Persisting this identity prevents the same valid
+// package/share set from being replayed under fresh canonical attempts to fill
+// the bounded completion registry.
+pub(crate) fn interactive_aggregate_package_completion_marker(
+    signing_package: &frost::SigningPackage,
+    taproot_merkle_root: Option<&[u8; 32]>,
+) -> Result<String, EngineError> {
+    let signing_package_bytes = signing_package.serialize().map_err(|error| {
+        EngineError::Internal(format!(
+            "failed to serialize signing package for Aggregate completion: {error}"
+        ))
+    })?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"tbtc-signer/interactive-aggregate-package-completion/v1");
+    match taproot_merkle_root {
+        Some(root) => {
+            hasher.update([1]);
+            hasher.update(root);
+        }
+        None => hasher.update([0]),
+    }
+    hasher.update((signing_package_bytes.len() as u64).to_be_bytes());
+    hasher.update(&signing_package_bytes);
+    Ok(hex::encode(hasher.finalize()))
+}
+
+// A signer proves live authorization with the exact Round1 commitment included
+// in the package. The elected coordinator is also allowed to aggregate a strict
+// first-t package that omits it: its validated live attempt authorizes the
+// common message/threshold/included-subset shape, while the package-completion
+// marker above prevents cross-attempt reuse of that otherwise attempt-less
+// FROST package. An omitted non-coordinator never receives this fallback.
 fn interactive_aggregate_has_live_authorization(
     session: &SessionState,
     attempt_id: &str,
@@ -89,7 +161,22 @@ fn interactive_aggregate_has_live_authorization(
         match verify_round2_signing_package(interactive, signing_package) {
             Ok(()) => return Ok(true),
             Err(error @ EngineError::Internal(_)) => return Err(error),
-            Err(_) => {}
+            Err(_) => {
+                let own_identifier =
+                    participant_identifier_to_frost_identifier(interactive.member_identifier)?;
+                let is_omitted_coordinator = interactive.member_identifier
+                    == interactive.attempt_context.coordinator_identifier
+                    && !signing_package
+                        .signing_commitments()
+                        .contains_key(&own_identifier);
+                if is_omitted_coordinator {
+                    match verify_interactive_signing_package_context(interactive, signing_package) {
+                        Ok(()) => return Ok(true),
+                        Err(error @ EngineError::Internal(_)) => return Err(error),
+                        Err(_) => {}
+                    }
+                }
+            }
         }
     }
     Ok(false)
@@ -1021,6 +1108,10 @@ pub fn interactive_aggregate(
         &signing_package,
         taproot_merkle_root.as_ref(),
     )?;
+    let aggregate_package_completion_marker = interactive_aggregate_package_completion_marker(
+        &signing_package,
+        taproot_merkle_root.as_ref(),
+    )?;
 
     let mut guard = state()?
         .lock()
@@ -1043,10 +1134,10 @@ pub fn interactive_aggregate(
     // the request - consistent with the no-secret-on-the-FFI discipline
     // and so a caller cannot substitute verifying material. The session
     // must exist with completed DKG.
-    let public_key_package = {
+    let (public_key_package, aggregate_eviction_pin) = {
         // The completion marker is per-signing-session state; read it - and the wallet
         // key_group this session serves - from request.session_id.
-        let key_group = {
+        let (key_group, aggregate_eviction_pin) = {
             let session = guard.sessions.get(&request.session_id).ok_or_else(|| {
                 EngineError::SessionNotFound {
                     session_id: request.session_id.clone(),
@@ -1081,16 +1172,26 @@ pub fn interactive_aggregate(
                     request.session_id
                 )));
             }
+            if session
+                .authorized_interactive_aggregate_markers
+                .contains(&aggregate_package_completion_marker)
+            {
+                return Err(EngineError::Validation(format!(
+                    "InteractiveAggregate: signing package was already aggregated in session [{}]",
+                    request.session_id
+                )));
+            }
             // The wallet key this signing session serves: its own DKG (co-located) or
             // the key_group bound at Open (distinct per-signing RoastSessionID).
-            session
+            let key_group = session
                 .dkg_result
                 .as_ref()
                 .map(|dkg| dkg.key_group.clone())
                 .or_else(|| session.bound_key_group.clone())
                 .ok_or_else(|| EngineError::DkgNotReady {
                     session_id: request.session_id.clone(),
-                })?
+                })?;
+            (key_group, Arc::clone(&session.aggregate_eviction_pin))
         };
         // The group's public key package (the verifying shares used to check each
         // contribution) is a WALLET-level asset resolved by key_group, so a per-signing
@@ -1107,15 +1208,18 @@ pub fn interactive_aggregate(
                 .ok_or_else(|| EngineError::SessionNotFound {
                     session_id: wallet_session_id.clone(),
                 })?;
-        session
+        let public_key_package = session
             .dkg_public_key_package
             .as_ref()
             .ok_or_else(|| {
                 EngineError::Internal("missing DKG public key package cache".to_string())
             })?
-            .clone()
+            .clone();
+        (public_key_package, aggregate_eviction_pin)
     };
     drop(guard);
+    #[cfg(test)]
+    maybe_hold_interactive_aggregate_after_unlock_for_tests();
 
     // Aggregation uses only public material (commitments, shares,
     // verifying shares), so no policy gate runs here - the secret-bearing
@@ -1232,12 +1336,36 @@ pub fn interactive_aggregate(
             request.session_id
         )));
     }
+    if session
+        .authorized_interactive_aggregate_markers
+        .contains(&aggregate_package_completion_marker)
+    {
+        return Err(EngineError::Validation(format!(
+            "InteractiveAggregate: signing package was already aggregated in session [{}]",
+            request.session_id
+        )));
+    }
     ensure_consumed_registry_insert_capacity(
         &session.aggregated_interactive_attempt_markers,
         &aggregated_marker,
         "aggregated_interactive_attempt_markers",
         &request.session_id,
     )?;
+    // A Round2 authorization is no longer needed once its exact package has
+    // completed, so replace it in-place with the package replay marker. A
+    // coordinator omitted from the signing subset has no Round2 authorization
+    // to replace and therefore consumes one normal bounded slot.
+    let replaces_aggregate_authorization = session
+        .authorized_interactive_aggregate_markers
+        .contains(&aggregate_authorization_marker);
+    if !replaces_aggregate_authorization {
+        ensure_consumed_registry_insert_capacity(
+            &session.authorized_interactive_aggregate_markers,
+            &aggregate_package_completion_marker,
+            "authorized_interactive_aggregate_markers",
+            &request.session_id,
+        )?;
+    }
     // Resolve the state-encryption key under the held ENGINE_STATE guard, in the
     // same serialized order as the write, and BEFORE inserting the marker.
     // Resolving under the guard makes key selection match the write order, so the
@@ -1250,6 +1378,12 @@ pub fn interactive_aggregate(
     session
         .aggregated_interactive_attempt_markers
         .insert(aggregated_marker.clone());
+    let removed_aggregate_authorization = session
+        .authorized_interactive_aggregate_markers
+        .remove(&aggregate_authorization_marker);
+    session
+        .authorized_interactive_aggregate_markers
+        .insert(aggregate_package_completion_marker.clone());
     if let Err(persist_error) =
         persist_engine_state_to_storage_with_key(&guard, &resolved_state_key)
     {
@@ -1274,6 +1408,14 @@ pub fn interactive_aggregate(
             session
                 .aggregated_interactive_attempt_markers
                 .remove(&aggregated_marker);
+            session
+                .authorized_interactive_aggregate_markers
+                .remove(&aggregate_package_completion_marker);
+            if removed_aggregate_authorization {
+                session
+                    .authorized_interactive_aggregate_markers
+                    .insert(aggregate_authorization_marker.clone());
+            }
         }
         if state_file_replaced {
             retire_idle_per_message_sessions(&mut guard, Some(&request.session_id));
@@ -1299,6 +1441,9 @@ pub fn interactive_aggregate(
     );
     retire_idle_per_message_sessions(&mut guard, Some(&request.session_id));
     drop(guard);
+    // Keep the target unevictable through both lock sections and the durable
+    // completion write. Error returns and unwinding release the clone by RAII.
+    drop(aggregate_eviction_pin);
 
     latency_guard.mark_success();
     record_hardening_telemetry(|telemetry| {
@@ -1416,9 +1561,9 @@ fn interactive_state_for_attempt_mut<'session>(
     Ok(interactive)
 }
 
-// The frozen spec's Round2 checks (a)-(f). Returns Ok only when every
-// check passes; the caller consumes the nonces strictly afterwards.
-fn verify_round2_signing_package(
+// Checks shared by a signer releasing a share and an elected coordinator
+// aggregating a strict first-t package that does not include itself.
+fn verify_interactive_signing_package_context(
     interactive: &InteractiveSigningState,
     signing_package: &frost::SigningPackage,
 ) -> Result<(), EngineError> {
@@ -1458,6 +1603,18 @@ fn verify_round2_signing_package(
             ));
         }
     }
+
+    Ok(())
+}
+
+// The frozen spec's Round2 checks (a)-(f). Returns Ok only when every
+// check passes; the caller consumes the nonces strictly afterwards.
+fn verify_round2_signing_package(
+    interactive: &InteractiveSigningState,
+    signing_package: &frost::SigningPackage,
+) -> Result<(), EngineError> {
+    verify_interactive_signing_package_context(interactive, signing_package)?;
+    let package_commitments = signing_package.signing_commitments();
 
     // (a) this member must be in the chosen subset.
     let own_identifier = participant_identifier_to_frost_identifier(interactive.member_identifier)?;
