@@ -38,6 +38,44 @@ pub(crate) fn interactive_attempt_consumed(
         || markers.contains(attempt_id)
 }
 
+// Aggregate is a public operation, so both signers (whose Round2 consumption
+// marker is durable) and observers (whose live Open state remains until
+// aggregation) may run it. Require one of those existing bindings before an
+// aggregate attempt can create durable completion state. Without this check a
+// caller could replay one valid package/share set under arbitrary attempt ids,
+// filling the bounded marker registry without ever opening those attempts.
+pub(crate) fn interactive_aggregate_attempt_is_bound(
+    session: &SessionState,
+    attempt_id: &str,
+) -> bool {
+    if session
+        .interactive_signing
+        .values()
+        .any(|interactive| interactive.attempt_context.attempt_id == attempt_id)
+    {
+        return true;
+    }
+
+    session
+        .consumed_interactive_attempt_markers
+        .iter()
+        .any(|marker| {
+            if marker == attempt_id {
+                // Legacy single-seat marker.
+                return true;
+            }
+
+            let Some((member, marker_attempt_id)) = marker.split_once('@') else {
+                return false;
+            };
+            member
+                .strip_prefix('m')
+                .and_then(|member| member.parse::<u16>().ok())
+                .is_some()
+                && marker_attempt_id == attempt_id
+        })
+}
+
 // The aggregate completion marker binds attempt_id to the AGGREGATED message digest,
 // so the durable "this attempt is final" record cannot be set for one attempt id via
 // a valid aggregate over a DIFFERENT message - which would otherwise let a replayed
@@ -426,7 +464,7 @@ pub fn interactive_session_open(
     // Bound by the SAME total-session cap as every other session-creating path (a fresh
     // RoastSessionID per message would otherwise let the registry grow unbounded and
     // then be rejected on reload); a reopen of an existing session is exempt.
-    ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
+    ensure_session_insert_capacity(&mut guard.sessions, &request.session_id)?;
 
     // A typed heartbeat never passes through BuildTaprootTx, so charge its own
     // per-wallet policy budget at the last fallible boundary before installing
@@ -903,16 +941,7 @@ pub fn interactive_aggregate(
         HardeningOperationLatencyGuard::success_only(HardeningOperation::InteractiveAggregate);
     enforce_provenance_gate()?;
     validate_session_id(&request.session_id)?;
-    let attempt_id = canonical_attempt_id(&request.attempt_id);
-    // The completion marker persists attempt_id, and the reload path rejects an
-    // empty key; reject an empty attempt_id here too so a malformed (or
-    // malicious) request cannot write durable state that fails to reload after
-    // a restart.
-    if attempt_id.is_empty() {
-        return Err(EngineError::Validation(
-            "InteractiveAggregate: attempt_id must not be empty".to_string(),
-        ));
-    }
+    let attempt_id = canonical_aggregate_attempt_id(&request.attempt_id)?;
 
     let mut signing_package_bytes = decode_hex_field(
         "InteractiveAggregate",
@@ -988,6 +1017,12 @@ pub fn interactive_aggregate(
                     session_id: request.session_id.clone(),
                     attempt_id,
                 });
+            }
+            if !interactive_aggregate_attempt_is_bound(session, &attempt_id) {
+                return Err(EngineError::Validation(format!(
+                    "InteractiveAggregate: attempt_id [{attempt_id}] is not bound to an open or consumed attempt for session [{}]",
+                    request.session_id
+                )));
             }
             // The wallet key this signing session serves: its own DKG (co-located) or
             // the key_group bound at Open (distinct per-signing RoastSessionID).
@@ -1252,6 +1287,9 @@ pub fn interactive_session_abort(
         }
         None => false,
     };
+    // An Open-only per-message shell carries no durable replay or policy state;
+    // once its last member is aborted it can be recreated safely on a retry.
+    reclaim_per_message_sessions(&mut guard.sessions, false);
 
     // Only count a success when live interactive state was actually
     // aborted. A no-op call (no session, or an attempt_id filter that
@@ -1446,6 +1484,17 @@ fn canonical_attempt_id(attempt_id: &str) -> String {
     attempt_id.to_ascii_lowercase()
 }
 
+fn canonical_aggregate_attempt_id(attempt_id: &str) -> Result<String, EngineError> {
+    if attempt_id.len() != 64 || !attempt_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(EngineError::Validation(
+            "InteractiveAggregate: attempt_id must be exactly 64 hexadecimal characters"
+                .to_string(),
+        ));
+    }
+
+    Ok(canonical_attempt_id(attempt_id))
+}
+
 // The chosen signing subset as Go u16 identifiers: the included
 // participants whose commitment appears in the signing package. The
 // caller MUST have run verify_round2_signing_package first (which
@@ -1569,6 +1618,10 @@ pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) {
             }
         }
     }
+    // Expiry has abort semantics. Reclaim only empty Open-created shells here;
+    // consumed-but-unaggregated sessions and BuildTaprootTx policy artifacts
+    // must survive for restart/outer-loop retry.
+    reclaim_per_message_sessions(&mut engine_state.sessions, false);
 }
 
 pub(crate) fn max_live_interactive_sessions_limit() -> usize {

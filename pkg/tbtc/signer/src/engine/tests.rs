@@ -4612,6 +4612,57 @@ fn build_taproot_tx_rejects_new_session_when_session_registry_is_at_capacity() {
 }
 
 #[test]
+fn per_message_session_compaction_preserves_wallet_and_inflight_state() {
+    let mut sessions = HashMap::new();
+
+    let mut wallet = SessionState::default();
+    wallet.dkg_result = Some(DkgResult {
+        session_id: "wallet".to_string(),
+        key_group: "wallet-key-group".to_string(),
+        participant_count: 3,
+        threshold: 2,
+        created_at_unix: now_unix(),
+    });
+    sessions.insert("wallet".to_string(), wallet);
+
+    let mut open_only = SessionState::default();
+    open_only.bound_key_group = Some("wallet-key-group".to_string());
+    sessions.insert("open-only".to_string(), open_only);
+
+    let mut consumed = SessionState::default();
+    consumed.bound_key_group = Some("wallet-key-group".to_string());
+    consumed
+        .consumed_interactive_attempt_markers
+        .insert(format!("m1@{}", "11".repeat(32)));
+    sessions.insert("consumed".to_string(), consumed);
+
+    let mut completed = SessionState::default();
+    completed.bound_key_group = Some("wallet-key-group".to_string());
+    completed
+        .aggregated_interactive_attempt_markers
+        .insert(format!("{}@{}@keypath", "22".repeat(32), "33".repeat(32)));
+    sessions.insert("completed".to_string(), completed);
+
+    let mut retry_policy = SessionState::default();
+    retry_policy.bound_key_group = Some("wallet-key-group".to_string());
+    retry_policy.build_tx_request_fingerprint = Some("policy-fingerprint".to_string());
+    sessions.insert("retry-policy".to_string(), retry_policy);
+
+    assert_eq!(reclaim_per_message_sessions(&mut sessions, false), 1);
+    assert!(!sessions.contains_key("open-only"));
+    assert!(sessions.contains_key("wallet"));
+    assert!(sessions.contains_key("consumed"));
+    assert!(sessions.contains_key("completed"));
+    assert!(sessions.contains_key("retry-policy"));
+
+    assert_eq!(reclaim_per_message_sessions(&mut sessions, true), 1);
+    assert!(!sessions.contains_key("completed"));
+    assert!(sessions.contains_key("wallet"));
+    assert!(sessions.contains_key("consumed"));
+    assert!(sessions.contains_key("retry-policy"));
+}
+
+#[test]
 fn persisted_session_state_rejects_empty_consumed_attempt_id() {
     let mut persisted = persisted_session_state_fixture();
     persisted.consumed_attempt_ids = vec!["".to_string()];
@@ -6608,7 +6659,9 @@ fn interactive_signs_across_sessions_by_key_group() {
     // are signable ONLY via the interactive path, could never sign. The single-session
     // tests miss this because they persist and sign under one id.
     let _guard = lock_test_state();
+    let state_path = configure_test_state_path("interactive_cross_session_compaction");
     reset_for_tests();
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
 
     let key_packages = interactive_test_key_packages();
     let wallet_session = "wallet-dkg-session";
@@ -6740,6 +6793,41 @@ fn interactive_signs_across_sessions_by_key_group() {
     Secp256k1::verification_only()
         .verify_schnorr(&signature, &SecpMessage::from_digest(message), &public_key)
         .expect("cross-session interactive signing produces a valid BIP-340 signature");
+
+    // The completed per-message entry and its typed replay tombstone survive a
+    // restart while there is still capacity. Once a new durable session needs
+    // that slot, admission compacts the terminal entry without touching the
+    // wallet/DKG owner, and the ensuing BuildTaprootTx persist makes the
+    // compaction crash-durable.
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        assert_eq!(guard.sessions.len(), 2);
+        assert!(guard.sessions.contains_key(wallet_session));
+        assert!(guard.sessions.contains_key(signing_session));
+    }
+
+    let next_session = "next-roast-signing-session";
+    build_taproot_tx(build_policy_test_request(next_session))
+        .expect("a new message reclaims the completed per-message registry slot");
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        assert_eq!(guard.sessions.len(), 2);
+        assert!(guard.sessions.contains_key(wallet_session));
+        assert!(guard.sessions.contains_key(next_session));
+        assert!(
+            !guard.sessions.contains_key(signing_session),
+            "the completed per-message tombstone must be durably compacted"
+        );
+    }
+
+    std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
 }
 
 #[test]
@@ -9933,8 +10021,36 @@ fn interactive_aggregate_rejects_repeat_aggregate_of_completed_attempt() {
         taproot_merkle_root_hex: None,
     };
 
-    // First aggregate completes the attempt.
-    interactive_aggregate(aggregate_request.clone()).expect("first interactive aggregate");
+    // First aggregate completes the attempt. The wire remains case-insensitive:
+    // a canonical 64-hex id is normalized before lookup and response emission.
+    let mut recased_request = aggregate_request.clone();
+    recased_request.attempt_id = recased_request.attempt_id.to_ascii_uppercase();
+    let aggregate = interactive_aggregate(recased_request).expect("first interactive aggregate");
+    assert_eq!(aggregate.attempt_id, opened.attempt_id);
+
+    // A valid package/share set cannot be replayed under a different, merely
+    // well-formed id. Only an id established by Open (live observer) or Round2
+    // (durable signer marker) may create completion state, so this replay cannot
+    // consume another bounded marker slot.
+    let mut unbound_request = aggregate_request.clone();
+    unbound_request.attempt_id = "aa".repeat(32);
+    assert_ne!(unbound_request.attempt_id, opened.attempt_id);
+    let err = interactive_aggregate(unbound_request)
+        .expect_err("an unbound aggregate attempt id must be rejected");
+    assert!(
+        matches!(err, EngineError::Validation(ref message) if message.contains("is not bound")),
+        "unexpected error: {err:?}"
+    );
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        assert_eq!(
+            guard.sessions[session_id]
+                .aggregated_interactive_attempt_markers
+                .len(),
+            1,
+            "an unbound replay must not consume aggregate-marker capacity"
+        );
+    }
 
     // Re-aggregating a completed attempt is rejected by the durable completion
     // marker rather than recomputed (re-aggregation is not a recovery path; a
@@ -9955,27 +10071,34 @@ fn interactive_aggregate_rejects_repeat_aggregate_of_completed_attempt() {
 }
 
 #[test]
-fn interactive_aggregate_rejects_empty_attempt_id() {
+fn interactive_aggregate_rejects_noncanonical_attempt_ids() {
     let _guard = lock_test_state();
     reset_for_tests();
 
-    // An empty attempt_id must be rejected before anything is persisted: the
-    // completion record is keyed by attempt_id and the reload path rejects an
-    // empty key, so persisting one would brick restart. The guard runs before
-    // the signing-package/share decode, so the placeholder inputs are never
-    // reached.
-    let err = interactive_aggregate(InteractiveAggregateRequest {
-        session_id: "interactive-aggregate-empty-attempt".to_string(),
-        attempt_id: String::new(),
-        signing_package_hex: String::new(),
-        signature_shares: vec![],
-        taproot_merkle_root_hex: None,
-    })
-    .expect_err("an empty attempt_id must be rejected");
-    assert!(
-        matches!(err, EngineError::Validation(ref m) if m.contains("attempt_id must not be empty")),
-        "unexpected error: {err:?}"
-    );
+    // Completion markers persist attempt_id verbatim as part of their key. The
+    // canonical derivation is a SHA-256 digest, so reject empty, oversized, and
+    // non-hex ids before decoding the other aggregate inputs or touching state.
+    for attempt_id in [
+        String::new(),
+        "a".repeat(63),
+        "a".repeat(65),
+        format!("0x{}", "aa".repeat(31)),
+        "zz".repeat(32),
+    ] {
+        let err = interactive_aggregate(InteractiveAggregateRequest {
+            session_id: "interactive-aggregate-invalid-attempt".to_string(),
+            attempt_id,
+            signing_package_hex: String::new(),
+            signature_shares: vec![],
+            taproot_merkle_root_hex: None,
+        })
+        .expect_err("a noncanonical attempt_id must be rejected");
+        assert!(
+            matches!(err, EngineError::Validation(ref message)
+                if message.contains("exactly 64 hexadecimal characters")),
+            "unexpected error: {err:?}"
+        );
+    }
 }
 
 #[test]
@@ -10515,7 +10638,7 @@ fn interactive_aggregate_sweeps_expired_sessions() {
     // SessionNotFound.
     let err = interactive_aggregate(InteractiveAggregateRequest {
         session_id: "interactive-aggregate-sweep-missing".to_string(),
-        attempt_id: "missing".to_string(),
+        attempt_id: "00".repeat(32),
         signing_package_hex: parseable_package,
         signature_shares: vec![parseable_share.signature_share],
         taproot_merkle_root_hex: None,

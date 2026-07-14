@@ -447,8 +447,110 @@ pub(crate) fn ensure_session_registry_persisted_bound(
     Ok(())
 }
 
+// A per-message interactive session is safe to reclaim once it has no live
+// nonce state and either completed aggregation or never accumulated any
+// durable/non-interactive state. Keep this predicate exhaustive: adding a new
+// SessionState field must force an explicit decision about whether reclaiming a
+// session carrying that field is safe.
+pub(crate) fn reclaimable_per_message_session(
+    session: &SessionState,
+    include_completed: bool,
+) -> bool {
+    let SessionState {
+        dkg_request_fingerprint,
+        dkg_key_packages,
+        dkg_public_key_package,
+        dkg_result,
+        sign_request_fingerprint,
+        sign_message_bytes,
+        round_state,
+        active_attempt_context,
+        attempt_transition_records,
+        consumed_attempt_ids,
+        consumed_sign_round_ids,
+        finalize_request_fingerprint,
+        signature_result,
+        consumed_finalize_round_ids,
+        consumed_finalize_request_fingerprints,
+        build_tx_request_fingerprint,
+        tx_result,
+        refresh_request_fingerprint,
+        refresh_result,
+        refresh_history,
+        refresh_count,
+        emergency_rekey_event,
+        heartbeat_rate_limiter,
+        interactive_signing,
+        bound_key_group,
+        consumed_interactive_attempt_markers,
+        aggregated_interactive_attempt_markers,
+    } = session;
+
+    // Open-created per-message sessions are bound to a wallet key but never own
+    // DKG material. Wallet/DKG sessions are permanent and must not be compacted.
+    let per_message_role = bound_key_group.is_some()
+        && dkg_request_fingerprint.is_none()
+        && dkg_key_packages.is_none()
+        && dkg_public_key_package.is_none()
+        && dkg_result.is_none();
+    if !per_message_role || !interactive_signing.is_empty() {
+        return false;
+    }
+
+    // These fields belong to other session workflows. Their presence makes the
+    // role ambiguous, so retain the entry. BuildTaprootTx fields are handled
+    // separately below because they are the policy artifact for this same
+    // per-message signing flow.
+    let carries_other_workflow_state = sign_request_fingerprint.is_some()
+        || sign_message_bytes.is_some()
+        || round_state.is_some()
+        || active_attempt_context.is_some()
+        || !attempt_transition_records.is_empty()
+        || !consumed_attempt_ids.is_empty()
+        || !consumed_sign_round_ids.is_empty()
+        || finalize_request_fingerprint.is_some()
+        || signature_result.is_some()
+        || !consumed_finalize_round_ids.is_empty()
+        || !consumed_finalize_request_fingerprints.is_empty()
+        || refresh_request_fingerprint.is_some()
+        || refresh_result.is_some()
+        || !refresh_history.is_empty()
+        || *refresh_count != 0
+        || emergency_rekey_event.is_some()
+        || heartbeat_rate_limiter.last_refill_unix != 0
+        || heartbeat_rate_limiter.token_microunits != 0
+        || heartbeat_rate_limiter.configured_rate_limit_per_minute != 0;
+    if carries_other_workflow_state {
+        return false;
+    }
+
+    // Successful aggregation is terminal for this per-message flow. Preserve
+    // its completion tombstone until capacity pressure requires compaction, so
+    // immediate/restart retries retain their existing typed error semantics.
+    if include_completed && !aggregated_interactive_attempt_markers.is_empty() {
+        return true;
+    }
+
+    // Abort/TTL shells with no consumed share and no transaction-policy artifact
+    // are safe to recreate from Open. A BuildTaprootTx artifact must survive a
+    // failed attempt because the outer retry loop reuses this stable session ID.
+    aggregated_interactive_attempt_markers.is_empty()
+        && consumed_interactive_attempt_markers.is_empty()
+        && build_tx_request_fingerprint.is_none()
+        && tx_result.is_none()
+}
+
+pub(crate) fn reclaim_per_message_sessions(
+    sessions: &mut HashMap<String, SessionState>,
+    include_completed: bool,
+) -> usize {
+    let before = sessions.len();
+    sessions.retain(|_, session| !reclaimable_per_message_session(session, include_completed));
+    before.saturating_sub(sessions.len())
+}
+
 pub(crate) fn ensure_session_insert_capacity(
-    sessions: &HashMap<String, SessionState>,
+    sessions: &mut HashMap<String, SessionState>,
     session_id: &str,
 ) -> Result<(), EngineError> {
     if sessions.contains_key(session_id) {
@@ -456,6 +558,12 @@ pub(crate) fn ensure_session_insert_capacity(
     }
 
     let max_sessions = max_sessions_limit();
+    if sessions.len() >= max_sessions {
+        // Completed per-message sessions are bounded tombstones, not wallet
+        // ownership state. Compact them only when a new session needs a slot;
+        // the caller's ensuing durable mutation persists the compacted map.
+        reclaim_per_message_sessions(sessions, true);
+    }
     if sessions.len() >= max_sessions {
         return Err(EngineError::Internal(format!(
             "session registry size [{}] reached max [{max_sessions}]; use an existing session_id or increase {}",
