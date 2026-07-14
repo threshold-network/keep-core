@@ -174,7 +174,6 @@ pub fn persist_distributed_dkg_key_package(
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
 
     // A group verifying key identifies one wallet. Keeping the same key_group in
     // two sessions would make wallet lookup depend on randomized HashMap order and
@@ -208,6 +207,11 @@ pub fn persist_distributed_dkg_key_package(
         });
     }
 
+    // Reserve a total-registry slot only after every rejection that can apply
+    // to a fresh DKG session. If the ensuing durable write fails before file
+    // replacement, restore any retired tombstone evicted for this slot.
+    let compacted_retired_sessions =
+        ensure_session_insert_capacity(&mut guard, &request.session_id)?;
     let dkg_session_id = request.session_id.clone();
     let session_existed = guard.sessions.contains_key(&dkg_session_id);
     let session = guard
@@ -296,6 +300,7 @@ pub fn persist_distributed_dkg_key_package(
             } else {
                 guard.sessions.remove(&dkg_session_id);
             }
+            restore_compacted_retired_sessions(&mut guard, compacted_retired_sessions);
         }
         return Err(persist_error);
     }

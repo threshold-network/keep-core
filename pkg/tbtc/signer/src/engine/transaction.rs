@@ -100,8 +100,10 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
             });
         }
     }
-    ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
-
+    // Capacity rejection must precede policy rate-limit consumption. This is a
+    // read-only preflight; the transactional reservation still occurs after all
+    // request validation, immediately before the durable mutation.
+    ensure_session_insert_admission_capacity(&guard, &request.session_id)?;
     // BuildTaprootTx is an assembly-only step. Input prevout values and scripts
     // are trusted caller-supplied metadata and are not verified against chain
     // state. Both are nevertheless required because BIP-341 SIGHASH_DEFAULT
@@ -267,6 +269,9 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
     // caching only; this session entry may intentionally not have DKG/signing
     // state populated.
     let build_session_id = result.session_id.clone();
+    // All request and policy validation is complete. Reserve the durable
+    // session slot now so a rejected request cannot evict a replay tombstone.
+    let compacted_retired_sessions = ensure_session_insert_capacity(&mut guard, &build_session_id)?;
     let accepted_request_fingerprint = request_fingerprint.clone();
     let previous_build_state = guard.sessions.get(&build_session_id).map(|session| {
         (
@@ -298,6 +303,9 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
             session.tx_result = previous_result;
         } else {
             guard.sessions.remove(&build_session_id);
+        }
+        if !state_file_replaced {
+            restore_compacted_retired_sessions(&mut guard, compacted_retired_sessions);
         }
         return Err(persist_error);
     }

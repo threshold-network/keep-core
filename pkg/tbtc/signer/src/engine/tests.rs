@@ -918,6 +918,119 @@ fn build_taproot_tx_persist_failures_roll_back_or_retry_durably() {
 }
 
 #[test]
+fn build_taproot_tx_restores_evicted_retirement_on_pre_replace_failure() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("build_tx_retired_slot_rollback");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
+
+    let retired_session = "build-slot-retired-replay-tombstone";
+    let consumed_marker = interactive_consumed_marker(&hash_hex(b"build-slot-attempt"), 1);
+    {
+        let mut guard = state().expect("state").lock().expect("engine lock");
+        guard.sessions.insert(
+            "build-slot-active-owner".to_string(),
+            SessionState::default(),
+        );
+        guard.sessions.insert(
+            retired_session.to_string(),
+            SessionState {
+                bound_key_group: Some("build-slot-wallet-key".to_string()),
+                retired_interactive_at_unix: Some(1),
+                consumed_interactive_attempt_markers: HashSet::from([consumed_marker.clone()]),
+                ..Default::default()
+            },
+        );
+        persist_engine_state_to_storage(&guard).expect("persist full shared session budget");
+    }
+
+    let newcomer = "build-slot-new-active";
+    let request = build_policy_test_request(newcomer);
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let faulted = build_taproot_tx(request.clone())
+        .expect_err("pre-replacement Build fault rolls back slot reservation");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        faulted,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    {
+        let guard = state().expect("state").lock().expect("engine lock");
+        assert_eq!(guard.sessions.len(), 2);
+        assert!(!guard.sessions.contains_key(newcomer));
+        assert!(guard.sessions[retired_session]
+            .consumed_interactive_attempt_markers
+            .contains(&consumed_marker));
+    }
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    build_taproot_tx(request).expect("healthy retry evicts the retired slot and persists");
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    {
+        let guard = state().expect("state").lock().expect("engine lock");
+        assert_eq!(guard.sessions.len(), 2);
+        assert!(guard.sessions.contains_key("build-slot-active-owner"));
+        assert!(guard.sessions.contains_key(newcomer));
+        assert!(!guard.sessions.contains_key(retired_session));
+    }
+
+    std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn build_taproot_tx_capacity_preflight_does_not_consume_policy_rate_token() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("build_tx_capacity_rate_preflight");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
+    std::env::set_var(TBTC_SIGNER_POLICY_RATE_LIMIT_PER_MINUTE_ENV, "1");
+
+    let retired_session = "build-rate-protected-retired";
+    let aggregate_pin = {
+        let mut guard = state().expect("state").lock().expect("engine lock");
+        guard.sessions.insert(
+            "build-rate-active-owner".to_string(),
+            SessionState::default(),
+        );
+        guard.sessions.insert(
+            retired_session.to_string(),
+            SessionState {
+                bound_key_group: Some("build-rate-wallet-key".to_string()),
+                retired_interactive_at_unix: Some(1),
+                ..Default::default()
+            },
+        );
+        Arc::clone(&guard.sessions[retired_session].aggregate_eviction_pin)
+    };
+
+    let request = build_policy_test_request("build-rate-new-active");
+    let rejected = build_taproot_tx(request.clone())
+        .expect_err("a pinned full registry must reject before policy charging");
+    assert!(matches!(
+        rejected,
+        EngineError::Internal(ref message)
+            if message.contains("no retired session is available for eviction")
+    ));
+
+    drop(aggregate_pin);
+    build_taproot_tx(request)
+        .expect("the first policy token remains available after capacity recovers");
+
+    std::env::remove_var(TBTC_SIGNER_POLICY_RATE_LIMIT_PER_MINUTE_ENV);
+    std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn production_profile_forces_provenance_gate_without_env_flag() {
     let _guard = lock_test_state();
     reset_for_tests();
@@ -1159,11 +1272,32 @@ fn persist_distributed_dkg_key_package_rejects_a_bound_signing_session() {
 }
 
 #[test]
-fn persist_distributed_dkg_key_package_pre_replace_failure_rolls_back() {
+fn persist_distributed_dkg_key_package_pre_replace_failure_restores_retired_slot() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("distributed_dkg_persist_rollback");
     reset_for_tests();
     clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
+
+    let retired_session = "distributed-dkg-retired-replay-tombstone";
+    let consumed_marker = interactive_consumed_marker(&hash_hex(b"distributed-dkg-attempt"), 1);
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        guard.sessions.insert(
+            "distributed-dkg-active-owner".to_string(),
+            SessionState::default(),
+        );
+        guard.sessions.insert(
+            retired_session.to_string(),
+            SessionState {
+                bound_key_group: Some("distributed-dkg-retired-key".to_string()),
+                retired_interactive_at_unix: Some(1),
+                consumed_interactive_attempt_markers: HashSet::from([consumed_marker.clone()]),
+                ..Default::default()
+            },
+        );
+        persist_engine_state_to_storage(&guard).expect("persist full shared session budget");
+    }
 
     let session_id = "session-distributed-dkg-persist-rollback";
     let (native_public, native_key_packages) = sample_distributed_dkg_native_material(23);
@@ -1190,6 +1324,10 @@ fn persist_distributed_dkg_key_package_pre_replace_failure_rolls_back() {
             !guard.sessions.contains_key(session_id),
             "failed first persistence must not leave in-memory-only DKG material"
         );
+        assert!(guard.sessions[retired_session]
+            .consumed_interactive_attempt_markers
+            .contains(&consumed_marker));
+        assert_eq!(guard.sessions.len(), 2);
     }
 
     let result = persist_distributed_dkg_key_package(request)
@@ -1206,8 +1344,12 @@ fn persist_distributed_dkg_key_package_pre_replace_failure_rolls_back() {
         .dkg_key_packages
         .as_ref()
         .is_some_and(|packages| packages.contains_key(&1)));
+    assert_eq!(guard.sessions.len(), 2);
+    assert!(guard.sessions.contains_key("distributed-dkg-active-owner"));
+    assert!(!guard.sessions.contains_key(retired_session));
     drop(guard);
 
+    std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
     reset_for_tests();
     cleanup_test_state_artifacts(&state_path);
     clear_state_storage_policy_overrides();
@@ -4257,8 +4399,10 @@ fn persisted_engine_state_rejects_session_registry_over_limit() {
 }
 
 #[test]
-fn persisted_engine_state_migrates_idle_per_message_entries_before_active_bound_check() {
+fn persisted_engine_state_compacts_migrated_idle_entries_to_legacy_total_bound() {
     let _guard = lock_test_state();
+    let state_path = configure_test_state_path("migrated_idle_total_bound_rewrite");
+    reset_for_tests();
     clear_state_storage_policy_overrides();
     std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
 
@@ -4292,21 +4436,50 @@ fn persisted_engine_state_migrates_idle_per_message_entries_before_active_bound_
         canary_rollout: CanaryRolloutState::default(),
     };
 
-    let loaded = EngineState::try_from(persisted)
-        .expect("legacy idle per-message entries migrate out of the active budget");
-    assert_eq!(loaded.sessions.len(), 3);
+    let loaded = EngineState::try_from(persisted.clone())
+        .expect("idle per-message entries migrate and compact to the shared total budget");
+    assert_eq!(loaded.sessions.len(), 2);
     assert_eq!(active_session_count(&loaded.sessions), 1);
-    assert_eq!(retired_interactive_session_count(&loaded.sessions), 2);
+    assert_eq!(retired_interactive_session_count(&loaded.sessions), 1);
     assert!(loaded.sessions["wallet"]
         .retired_interactive_at_unix
         .is_none());
+    assert!(!loaded.sessions.contains_key("aborted-message"));
     assert!(loaded.sessions["consumed-message"]
         .retired_interactive_at_unix
         .is_some());
-    assert!(loaded.sessions["aborted-message"]
-        .retired_interactive_at_unix
-        .is_some());
 
+    let encoded = PersistedEngineState::try_from(&loaded).expect("compacted state encodes");
+    assert!(
+        encoded.sessions.len() <= 2,
+        "the immediately previous schema-1 reader enforces this total bound"
+    );
+
+    // Exercise the real load path with a current encrypted envelope emitted by
+    // the flawed intermediate writer. Startup must replace the oversized file,
+    // not merely compact its in-memory copy, so an immediate rollback can read it.
+    let key_material = state_encryption_key_material().expect("test state key");
+    let oversized_envelope =
+        encode_encrypted_state_envelope(&persisted, &key_material).expect("oversized envelope");
+    std::fs::write(&state_path, oversized_envelope.as_slice())
+        .expect("write intermediate oversized state");
+    let reloaded = load_engine_state_from_storage().expect("load compacts and rewrites state");
+    assert_eq!(reloaded.sessions.len(), 2);
+
+    let rewritten_bytes = std::fs::read(&state_path).expect("read rewritten state");
+    let rewritten = match decode_persisted_state_storage_format(&rewritten_bytes)
+        .expect("decode rewritten state")
+    {
+        PersistedStateStorageFormat::EncryptedEnvelope { persisted, .. } => persisted,
+        PersistedStateStorageFormat::LegacyPlaintext(_) => {
+            panic!("rewrite must retain the encrypted envelope")
+        }
+    };
+    assert_eq!(rewritten.sessions.len(), 2);
+
+    std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
     clear_state_storage_policy_overrides();
 }
 
@@ -4671,7 +4844,7 @@ fn build_taproot_tx_rejects_new_session_when_session_registry_is_at_capacity() {
 fn per_message_session_retirement_preserves_wallet_routing_and_retry_state() {
     let _guard = lock_test_state();
     clear_state_storage_policy_overrides();
-    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "4");
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "5");
 
     let mut engine_state = EngineState::default();
     engine_state.sessions.insert(
@@ -4756,7 +4929,7 @@ fn per_message_session_retirement_preserves_wallet_routing_and_retry_state() {
 }
 
 #[test]
-fn retired_per_message_session_tier_evicts_oldest_at_its_own_bound() {
+fn retired_per_message_sessions_share_the_total_bound_and_yield_to_admission() {
     let _guard = lock_test_state();
     clear_state_storage_policy_overrides();
     std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
@@ -4786,9 +4959,78 @@ fn retired_per_message_session_tier_evicts_oldest_at_its_own_bound() {
     assert!(engine_state.sessions.contains_key("newest"));
     assert_eq!(active_session_count(&engine_state.sessions), 0);
     assert_eq!(retired_interactive_session_count(&engine_state.sessions), 2);
-    ensure_session_insert_capacity(&engine_state.sessions, "fresh-active")
+    let reserved = ensure_session_insert_capacity(&mut engine_state, "fresh-active")
         .expect("bounded retirement cannot block active admission");
+    assert_eq!(
+        reserved
+            .iter()
+            .map(|(session_id, _)| session_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["middle"]
+    );
+    engine_state
+        .sessions
+        .insert("fresh-active".to_string(), SessionState::default());
+    assert_eq!(engine_state.sessions.len(), 2);
+    assert!(engine_state.sessions.contains_key("newest"));
+    assert!(engine_state.sessions.contains_key("fresh-active"));
 
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn session_slot_reservation_preserves_pinned_and_persistence_pending_tombstones() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "1");
+
+    let retired_session = "protected-retired-session";
+    let aggregated_marker = interactive_aggregated_marker(
+        &hash_hex(b"protected-attempt"),
+        &hash_hex(b"protected-message"),
+        None,
+    );
+    let mut engine_state = EngineState::default();
+    engine_state.sessions.insert(
+        retired_session.to_string(),
+        SessionState {
+            bound_key_group: Some("protected-retired-key".to_string()),
+            retired_interactive_at_unix: Some(1),
+            aggregated_interactive_attempt_markers: HashSet::from([aggregated_marker.clone()]),
+            ..Default::default()
+        },
+    );
+
+    let aggregate_pin = Arc::clone(&engine_state.sessions[retired_session].aggregate_eviction_pin);
+    let pinned_error = match ensure_session_insert_capacity(&mut engine_state, "new-active") {
+        Ok(_) => panic!("an in-flight Aggregate pin must block eviction"),
+        Err(error) => error,
+    };
+    assert!(matches!(pinned_error, EngineError::Internal(_)));
+    assert!(engine_state.sessions.contains_key(retired_session));
+    drop(aggregate_pin);
+
+    let pending = PersistencePendingOperation::InteractiveAggregate {
+        session_id: retired_session.to_string(),
+        aggregated_marker,
+    };
+    mark_persistence_pending(pending.clone());
+    let pending_error = match ensure_session_insert_capacity(&mut engine_state, "new-active") {
+        Ok(_) => panic!("an uncovered persistence marker must block eviction"),
+        Err(error) => error,
+    };
+    assert!(matches!(pending_error, EngineError::Internal(_)));
+    assert!(engine_state.sessions.contains_key(retired_session));
+    clear_persistence_pending_operation(&pending);
+
+    let removed = ensure_session_insert_capacity(&mut engine_state, "new-active")
+        .expect("the slot becomes available after both protections release");
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].0, retired_session);
+    assert!(engine_state.sessions.is_empty());
+
+    std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
     clear_state_storage_policy_overrides();
 }
 
@@ -6870,7 +7112,7 @@ fn interactive_signs_across_sessions_by_key_group() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("interactive_cross_session_compaction");
     reset_for_tests();
-    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "3");
 
     let key_packages = interactive_test_key_packages();
     let wallet_session = "wallet-dkg-session";
@@ -7026,10 +7268,9 @@ fn interactive_signs_across_sessions_by_key_group() {
         .verify_schnorr(&signature, &SecpMessage::from_digest(message), &public_key)
         .expect("cross-session interactive signing produces a valid BIP-340 signature");
 
-    // The completed per-message entry moves into the separately bounded
-    // retirement tier. It retains wallet routing, exact Aggregate
-    // authorization, and typed replay markers across restart without consuming
-    // an active slot, so the next ordinary message is still admitted.
+    // With spare room in the shared total budget, the completed per-message
+    // entry retains wallet routing, exact Aggregate authorization, and typed
+    // replay markers across restart while the next message is admitted.
     simulate_process_restart_for_tests();
     reload_state_from_storage_for_tests();
     {
@@ -7062,7 +7303,7 @@ fn per_message_abort_and_expiry_retire_without_losing_policy_artifacts() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("interactive_cross_session_abort_expiry_retirement");
     reset_for_tests();
-    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "4");
 
     let wallet_session = "retirement-wallet";
     let key_group = "retirement-wallet-key-group";
@@ -7094,11 +7335,28 @@ fn per_message_abort_and_expiry_retire_without_losing_policy_artifacts() {
         member_identifier: 1,
     })
     .expect("aborted flow round 1");
-    interactive_session_abort(InteractiveSessionAbortRequest {
+    let aborted = interactive_session_abort(InteractiveSessionAbortRequest {
         session_id: aborted_session.to_string(),
         attempt_id: Some(aborted_open.attempt_id),
     })
     .expect("abort retires the idle per-message entry");
+    assert!(aborted.aborted);
+
+    // The successful Abort itself is the durability boundary. Restart before
+    // any unrelated writer can accidentally flush the in-memory binding and
+    // retirement metadata; the Build-only shell must not return as an unbound
+    // active entry that consumes the shared session budget.
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = &guard.sessions[aborted_session];
+        assert_eq!(session.bound_key_group.as_deref(), Some(key_group));
+        assert!(session.retired_interactive_at_unix.is_some());
+        assert!(session.build_tx_request_fingerprint.is_some());
+        assert!(session.tx_result.is_some());
+        assert!(session.interactive_signing.is_empty());
+    }
     build_taproot_tx(aborted_build_request)
         .expect("retired abort entry retains its BuildTaprootTx cache");
 
@@ -7108,7 +7366,7 @@ fn per_message_abort_and_expiry_retire_without_losing_policy_artifacts() {
     let expired_open = open(expired_session, &[0x72; 32]).expect("expired flow opens");
     interactive_round1(InteractiveRound1Request {
         session_id: expired_session.to_string(),
-        attempt_id: expired_open.attempt_id,
+        attempt_id: expired_open.attempt_id.clone(),
         member_identifier: 1,
     })
     .expect("expired flow round 1");
@@ -7125,11 +7383,27 @@ fn per_message_abort_and_expiry_retire_without_losing_policy_artifacts() {
             .opened_at_unix
             .saturating_sub(interactive_session_ttl_seconds() + 1);
     }
-    interactive_session_abort(InteractiveSessionAbortRequest {
-        session_id: "retirement-sweep-trigger".to_string(),
-        attempt_id: None,
+    let expired = interactive_round1(InteractiveRound1Request {
+        session_id: expired_session.to_string(),
+        attempt_id: expired_open.attempt_id,
+        member_identifier: 1,
     })
-    .expect("unrelated abort sweeps the expired flow");
+    .expect_err("Round1 sweeps and rejects the expired flow");
+    assert!(matches!(expired, EngineError::SessionNotFound { .. }));
+
+    // Sweep-triggered expiry has Abort semantics and must be durable without a
+    // later Build/Round2 write accidentally closing the crash window.
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = &guard.sessions[expired_session];
+        assert_eq!(session.bound_key_group.as_deref(), Some(key_group));
+        assert!(session.retired_interactive_at_unix.is_some());
+        assert!(session.build_tx_request_fingerprint.is_some());
+        assert!(session.tx_result.is_some());
+        assert!(session.interactive_signing.is_empty());
+    }
 
     let next_session = "retirement-next-message";
     build_taproot_tx(build_policy_test_request(next_session))
@@ -7158,12 +7432,301 @@ fn per_message_abort_and_expiry_retire_without_losing_policy_artifacts() {
 }
 
 #[test]
-fn interactive_round2_pre_replace_failure_restores_compacted_tombstones() {
+fn first_open_persists_per_message_binding_before_restart() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("interactive_first_open_binding_restart");
+    reset_for_tests();
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
+
+    let wallet_session = "first-open-wallet";
+    let signing_session = "first-open-message";
+    let next_session = "first-open-next-message";
+    let key_group = "first-open-key-group";
+    let message = [0x79u8; 32];
+    let included = [1u16, 2];
+    ensure_interactive_dkg_session(wallet_session, key_group);
+    build_taproot_tx(build_policy_test_request(signing_session))
+        .expect("Build persists the initially unbound per-message shell");
+
+    interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: signing_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        signing_intent: None,
+        attempt_context: interactive_test_attempt_context(
+            signing_session,
+            key_group,
+            &message,
+            &included,
+            1,
+        ),
+    })
+    .expect("the first Open durably binds the Build shell");
+
+    // No Round1, Abort, expiry, or unrelated writer closes this window: Open
+    // itself must be the durability boundary for the session's per-message role.
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = &guard.sessions[signing_session];
+        assert_eq!(session.bound_key_group.as_deref(), Some(key_group));
+        assert!(session.retired_interactive_at_unix.is_some());
+        assert!(session.interactive_signing.is_empty());
+        assert!(session.build_tx_request_fingerprint.is_some());
+        assert!(session.tx_result.is_some());
+    }
+
+    build_taproot_tx(build_policy_test_request(next_session))
+        .expect("the restarted Open shell yields its retired registry slot");
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        assert!(guard.sessions.contains_key(wallet_session));
+        assert!(guard.sessions.contains_key(next_session));
+        assert!(!guard.sessions.contains_key(signing_session));
+        assert_eq!(guard.sessions.len(), 2);
+    }
+
+    std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn first_open_binding_persist_failures_are_transactional_and_repairable() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("interactive_first_open_binding_faults");
+    reset_for_tests();
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "3");
+
+    let wallet_session = "first-open-fault-wallet";
+    let pre_replace_session = "first-open-fault-pre";
+    let post_replace_session = "first-open-fault-post";
+    let retired_session = "first-open-fault-retired";
+    let key_group = "first-open-fault-key-group";
+    let included = [1u16, 2];
+    ensure_interactive_dkg_session(wallet_session, key_group);
+    let retired_marker = interactive_consumed_marker(&hash_hex(b"retired-attempt"), 1);
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        guard.sessions.insert(
+            retired_session.to_string(),
+            SessionState {
+                bound_key_group: Some(key_group.to_string()),
+                retired_interactive_at_unix: Some(1),
+                consumed_interactive_attempt_markers: HashSet::from([retired_marker.clone()]),
+                ..Default::default()
+            },
+        );
+    }
+    build_taproot_tx(build_policy_test_request(post_replace_session))
+        .expect("persist baseline wallet, retired tombstone, and Build shell");
+
+    let request_for = |session_id: &str, message: [u8; 32]| InteractiveSessionOpenRequest {
+        session_id: session_id.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        signing_intent: None,
+        attempt_context: interactive_test_attempt_context(
+            session_id, key_group, &message, &included, 1,
+        ),
+    };
+
+    let pre_replace_request = request_for(pre_replace_session, [0x81; 32]);
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let pre_replace = interactive_session_open(pre_replace_request.clone())
+        .expect_err("a pre-replacement binding fault must roll Open back");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        pre_replace,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        assert!(!guard.sessions.contains_key(pre_replace_session));
+        let restored = &guard.sessions[retired_session];
+        assert_eq!(restored.retired_interactive_at_unix, Some(1));
+        assert!(restored
+            .consumed_interactive_attempt_markers
+            .contains(&retired_marker));
+        assert_eq!(guard.sessions.len(), 3);
+    }
+    interactive_session_open(pre_replace_request)
+        .expect("a healthy retry evicts the restored tombstone and opens");
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        assert!(!guard.sessions.contains_key(retired_session));
+        assert!(guard.sessions[pre_replace_session]
+            .interactive_signing
+            .contains_key(&1));
+        assert_eq!(guard.sessions.len(), 3);
+    }
+
+    let post_replace_request = request_for(post_replace_session, [0x82; 32]);
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    let post_replace = interactive_session_open(post_replace_request.clone())
+        .expect_err("a post-replacement binding fault reports uncertain durability");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        post_replace,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = &guard.sessions[post_replace_session];
+        assert_eq!(session.bound_key_group.as_deref(), Some(key_group));
+        assert!(session.retired_interactive_at_unix.is_some());
+        assert!(session.interactive_signing.is_empty());
+    }
+    assert!(interactive_state_persistence_pending());
+
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    interactive_session_open(post_replace_request.clone())
+        .expect_err("retry must repair the uncertain binding before reopening");
+    clear_persist_fault_injection_for_tests();
+    assert!(interactive_state_persistence_pending());
+    interactive_session_open(post_replace_request)
+        .expect("a healthy retry repairs, reactivates, and opens the session");
+    assert!(!interactive_state_persistence_pending());
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = &guard.sessions[post_replace_session];
+        assert_eq!(session.bound_key_group.as_deref(), Some(key_group));
+        assert!(session.retired_interactive_at_unix.is_none());
+        assert!(session.interactive_signing.contains_key(&1));
+        assert_eq!(guard.sessions.len(), 3);
+    }
+
+    std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn partial_member_expiry_persists_binding_before_restart() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("interactive_partial_expiry_binding_restart");
+    reset_for_tests();
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
+
+    let wallet_session = "partial-expiry-wallet";
+    let signing_session = "partial-expiry-message";
+    let next_session = "partial-expiry-next-message";
+    let key_group = "partial-expiry-key-group";
+    let message = [0x7au8; 32];
+    let included = [1u16, 2];
+    ensure_interactive_dkg_session(wallet_session, key_group);
+    build_taproot_tx(build_policy_test_request(signing_session))
+        .expect("Build persists the initially unbound per-message shell");
+
+    let open = |member_identifier| {
+        interactive_session_open(InteractiveSessionOpenRequest {
+            session_id: signing_session.to_string(),
+            member_identifier,
+            message_hex: hex::encode(message),
+            key_group: key_group.to_string(),
+            threshold: 2,
+            taproot_merkle_root_hex: None,
+            signing_intent: None,
+            attempt_context: interactive_test_attempt_context(
+                signing_session,
+                key_group,
+                &message,
+                &included,
+                1,
+            ),
+        })
+    };
+    let member_1 = open(1).expect("member 1 opens");
+    let member_2 = open(2).expect("member 2 opens");
+    assert_eq!(member_1.attempt_id, member_2.attempt_id);
+    for member_identifier in included {
+        interactive_round1(InteractiveRound1Request {
+            session_id: signing_session.to_string(),
+            attempt_id: member_1.attempt_id.clone(),
+            member_identifier,
+        })
+        .expect("both members create nonce state");
+    }
+
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        let member = guard
+            .sessions
+            .get_mut(signing_session)
+            .expect("signing session remains live")
+            .interactive_signing
+            .get_mut(&1)
+            .expect("member 1 remains live");
+        member.opened_at_unix = member
+            .opened_at_unix
+            .saturating_sub(interactive_session_ttl_seconds() + 1);
+    }
+    let expired = interactive_round1(InteractiveRound1Request {
+        session_id: signing_session.to_string(),
+        attempt_id: member_1.attempt_id,
+        member_identifier: 1,
+    })
+    .expect_err("the expired member is removed before Round1 lookup");
+    assert!(matches!(expired, EngineError::SessionNotFound { .. }));
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = &guard.sessions[signing_session];
+        assert_eq!(session.bound_key_group.as_deref(), Some(key_group));
+        assert!(session.retired_interactive_at_unix.is_none());
+        assert!(!session.interactive_signing.contains_key(&1));
+        assert!(session.interactive_signing.contains_key(&2));
+    }
+
+    // The partial sweep is itself a durability boundary. Although member 2 is
+    // still live in memory, live nonces intentionally disappear at restart;
+    // the persisted binding lets load classify the shell as retired instead
+    // of restoring the old unbound Build entry as an active capacity leak.
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = &guard.sessions[signing_session];
+        assert_eq!(session.bound_key_group.as_deref(), Some(key_group));
+        assert!(session.retired_interactive_at_unix.is_some());
+        assert!(session.interactive_signing.is_empty());
+        assert!(session.build_tx_request_fingerprint.is_some());
+        assert!(session.tx_result.is_some());
+    }
+
+    build_taproot_tx(build_policy_test_request(next_session))
+        .expect("retired partial-expiry shell yields its shared registry slot");
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        assert!(guard.sessions.contains_key(wallet_session));
+        assert!(guard.sessions.contains_key(next_session));
+        assert!(!guard.sessions.contains_key(signing_session));
+        assert_eq!(guard.sessions.len(), 2);
+    }
+
+    std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn interactive_round2_pre_replace_failure_restores_staged_retirement() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("round2_retirement_compaction_rollback");
     reset_for_tests();
     clear_state_storage_policy_overrides();
-    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "3");
 
     let key_packages = interactive_test_key_packages();
     let wallet_session = "wallet-round2-compaction-rollback";
@@ -7242,9 +7805,9 @@ fn interactive_round2_pre_replace_failure_restores_compacted_tombstones() {
     ));
     {
         let guard = state().expect("state").lock().expect("engine lock");
-        assert!(guard.sessions.contains_key("retired-oldest"));
+        assert!(!guard.sessions.contains_key("retired-oldest"));
         assert!(guard.sessions.contains_key("retired-newer"));
-        assert_eq!(retired_interactive_session_count(&guard.sessions), 2);
+        assert_eq!(retired_interactive_session_count(&guard.sessions), 1);
         let signing = &guard.sessions[signing_session];
         assert!(signing.retired_interactive_at_unix.is_none());
         assert!(signing.interactive_signing.contains_key(&1));
@@ -7277,7 +7840,7 @@ fn interactive_aggregate_pins_a_retired_session_while_the_engine_lock_is_release
     let state_path = configure_test_state_path("interactive_aggregate_retirement_pin");
     reset_for_tests();
     clear_state_storage_policy_overrides();
-    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "3");
 
     let wallet_session = "wallet-aggregate-retirement-pin";
     let signing_session = "roast-aggregate-retirement-pin";
@@ -7457,7 +8020,7 @@ fn retired_compaction_preserves_pending_marker_sessions_until_snapshot_covers_th
     let state_path = configure_test_state_path("retired_pending_marker_compaction");
     reset_for_tests();
     clear_state_storage_policy_overrides();
-    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "3");
 
     let key_packages = interactive_test_key_packages();
     let wallet_session = "wallet-retired-pending-marker";
@@ -9027,6 +9590,116 @@ fn interactive_abort_destroys_nonces_and_is_idempotent() {
     let reopened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
         .expect("an aborted (never consumed) attempt may reopen");
     assert_eq!(reopened.attempt_id, opened.attempt_id);
+}
+
+#[test]
+fn interactive_abort_persist_failures_are_retryable_before_replace_and_fail_closed_after() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("interactive_abort_persist_durability");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let wallet_session = "interactive-abort-persist-wallet";
+    let key_group = "interactive-abort-persist-key-group";
+    let included = [1u16, 2];
+    ensure_interactive_dkg_session(wallet_session, key_group);
+
+    let open_round1 = |session_id: &str, message: [u8; 32]| {
+        let opened = interactive_session_open(InteractiveSessionOpenRequest {
+            session_id: session_id.to_string(),
+            member_identifier: 1,
+            message_hex: hex::encode(message),
+            key_group: key_group.to_string(),
+            threshold: 2,
+            taproot_merkle_root_hex: None,
+            signing_intent: None,
+            attempt_context: interactive_test_attempt_context(
+                session_id, key_group, &message, &included, 1,
+            ),
+        })
+        .expect("per-message session opens");
+        interactive_round1(InteractiveRound1Request {
+            session_id: session_id.to_string(),
+            attempt_id: opened.attempt_id.clone(),
+            member_identifier: 1,
+        })
+        .expect("per-message session reaches Round1");
+        opened
+    };
+
+    let retryable_session = "interactive-abort-pre-replace";
+    let retryable = open_round1(retryable_session, [0xa2; 32]);
+    let retryable_request = InteractiveSessionAbortRequest {
+        session_id: retryable_session.to_string(),
+        attempt_id: Some(retryable.attempt_id),
+    };
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let pre_replace = interactive_session_abort(retryable_request.clone())
+        .expect_err("a pre-replacement Abort fault must not consume live nonces");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        pre_replace,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    {
+        let guard = state().expect("state").lock().expect("engine lock");
+        let session = &guard.sessions[retryable_session];
+        assert!(session.interactive_signing.contains_key(&1));
+        assert!(session.retired_interactive_at_unix.is_none());
+    }
+    assert!(
+        interactive_session_abort(retryable_request)
+            .expect("Abort retry persists and succeeds")
+            .aborted
+    );
+
+    let fail_closed_session = "interactive-abort-post-replace";
+    let fail_closed = open_round1(fail_closed_session, [0xa3; 32]);
+    let fail_closed_request = InteractiveSessionAbortRequest {
+        session_id: fail_closed_session.to_string(),
+        attempt_id: Some(fail_closed.attempt_id),
+    };
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    let post_replace = interactive_session_abort(fail_closed_request.clone())
+        .expect_err("a post-replacement Abort fault reports uncertain directory durability");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        post_replace,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    {
+        let guard = state().expect("state").lock().expect("engine lock");
+        let session = &guard.sessions[fail_closed_session];
+        assert!(session.interactive_signing.is_empty());
+        assert!(session.retired_interactive_at_unix.is_some());
+    }
+    assert!(interactive_state_persistence_pending());
+
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    interactive_session_abort(fail_closed_request.clone())
+        .expect_err("an idempotent retry must attempt the pending durability repair");
+    clear_persist_fault_injection_for_tests();
+    assert!(interactive_state_persistence_pending());
+    let repaired = interactive_session_abort(fail_closed_request)
+        .expect("a healthy idempotent retry repairs Abort durability");
+    assert!(!repaired.aborted);
+    assert!(!interactive_state_persistence_pending());
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    {
+        let guard = state().expect("state").lock().expect("engine lock");
+        let session = &guard.sessions[fail_closed_session];
+        assert_eq!(session.bound_key_group.as_deref(), Some(key_group));
+        assert!(session.retired_interactive_at_unix.is_some());
+        assert!(session.interactive_signing.is_empty());
+    }
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
 }
 
 #[test]

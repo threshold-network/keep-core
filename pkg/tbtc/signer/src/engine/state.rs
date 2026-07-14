@@ -135,11 +135,11 @@ pub(crate) struct SessionState {
     // after restart using only public material, and the full-lifetime role binding
     // prevents this per-signing session from later becoming an unrelated DKG owner.
     pub(crate) bound_key_group: Option<String>,
-    // Idle per-message entries move into a bounded persisted retirement tier
-    // instead of consuming the active-session budget forever. The full entry is
-    // retained temporarily so delayed Aggregate/verify-share calls and an outer
-    // retry's BuildTaprootTx policy artifact keep working. Old retired entries
-    // are evicted FIFO-by-time once the separate retirement budget is full.
+    // Idle per-message entries use the unoccupied portion of the shared persisted
+    // session budget. The full entry is retained temporarily so delayed
+    // Aggregate/verify-share calls and an outer retry's BuildTaprootTx policy
+    // artifact keep working. Old retired entries are evicted FIFO-by-time when a
+    // new active session needs their slot.
     pub(crate) retired_interactive_at_unix: Option<u64>,
     // Transient refcount pin for Aggregate's unlocked cryptographic section.
     // The session owns one reference; an in-flight Aggregate clones it while
@@ -458,6 +458,7 @@ pub(crate) fn active_session_count(sessions: &HashMap<String, SessionState>) -> 
         .count()
 }
 
+#[cfg(test)]
 pub(crate) fn retired_interactive_session_count(sessions: &HashMap<String, SessionState>) -> usize {
     sessions
         .values()
@@ -469,17 +470,10 @@ pub(crate) fn ensure_session_registry_persisted_bound(
     sessions: &HashMap<String, SessionState>,
 ) -> Result<(), EngineError> {
     let max_sessions = max_sessions_limit();
-    let active_count = active_session_count(sessions);
-    if active_count > max_sessions {
+    let session_count = sessions.len();
+    if session_count > max_sessions {
         return Err(EngineError::Internal(format!(
-            "persisted session registry size [{active_count}] exceeds max [{max_sessions}]"
-        )));
-    }
-
-    let retired_count = retired_interactive_session_count(sessions);
-    if retired_count > max_sessions {
-        return Err(EngineError::Internal(format!(
-            "persisted retired interactive session registry size [{retired_count}] exceeds max [{max_sessions}]"
+            "persisted session registry size [{session_count}] exceeds max [{max_sessions}]"
         )));
     }
 
@@ -563,9 +557,16 @@ pub(crate) fn retire_idle_per_message_sessions(
     engine_state: &mut EngineState,
     protected_session_id: Option<&str>,
 ) -> usize {
+    retire_idle_per_message_session_ids(engine_state, protected_session_id).len()
+}
+
+pub(crate) fn retire_idle_per_message_session_ids(
+    engine_state: &mut EngineState,
+    protected_session_id: Option<&str>,
+) -> Vec<String> {
     let retired_at = now_unix().max(1);
     let pending_session_ids = persistence_pending_session_ids();
-    let mut newly_retired = 0;
+    let mut newly_retired = Vec::new();
     for (session_id, session) in &mut engine_state.sessions {
         if !pending_session_ids.contains(session_id)
             && session.retired_interactive_at_unix.is_none()
@@ -573,7 +574,7 @@ pub(crate) fn retire_idle_per_message_sessions(
             && per_message_interactive_session(session)
         {
             session.retired_interactive_at_unix = Some(retired_at);
-            newly_retired += 1;
+            newly_retired.push(session_id.clone());
         }
     }
 
@@ -581,6 +582,7 @@ pub(crate) fn retire_idle_per_message_sessions(
         engine_state,
         protected_session_id,
     ));
+    newly_retired.retain(|session_id| engine_state.sessions.contains_key(session_id));
     newly_retired
 }
 
@@ -588,7 +590,18 @@ pub(crate) fn compact_retired_per_message_sessions(
     engine_state: &mut EngineState,
     protected_session_id: Option<&str>,
 ) -> Vec<(String, SessionState)> {
-    let max_retired = max_sessions_limit();
+    compact_retired_per_message_sessions_to_total(
+        engine_state,
+        max_sessions_limit(),
+        protected_session_id,
+    )
+}
+
+fn compact_retired_per_message_sessions_to_total(
+    engine_state: &mut EngineState,
+    max_total_sessions: usize,
+    protected_session_id: Option<&str>,
+) -> Vec<(String, SessionState)> {
     // A post-replacement persistence failure leaves the replacement snapshot's
     // marker in memory and records a process-local repair operation. Evicting
     // that session before a later successful snapshot would persist the
@@ -596,7 +609,11 @@ pub(crate) fn compact_retired_per_message_sessions(
     // session-scoped pending operation until a successful snapshot covers it.
     let pending_session_ids = persistence_pending_session_ids();
     let mut removed = Vec::new();
-    while retired_interactive_session_count(&engine_state.sessions) > max_retired {
+    // Schema version 1 readers predating retirement enforce this same bound on
+    // the TOTAL map. Retired tombstones therefore consume only the portion of
+    // the shared budget not occupied by active sessions; preserving a separate
+    // retired allowance would make an emergency binary rollback fail at load.
+    while engine_state.sessions.len() > max_total_sessions {
         let oldest = engine_state
             .sessions
             .iter()
@@ -637,17 +654,56 @@ pub(crate) fn restore_compacted_retired_sessions(
     }
 }
 
+fn has_evictable_retired_session(engine_state: &EngineState) -> bool {
+    let pending_session_ids = persistence_pending_session_ids();
+    engine_state.sessions.iter().any(|(session_id, session)| {
+        session.retired_interactive_at_unix.is_some()
+            && !pending_session_ids.contains(session_id)
+            && Arc::strong_count(&session.aggregate_eviction_pin) == 1
+    })
+}
+
+pub(crate) fn ensure_session_insert_admission_capacity(
+    engine_state: &EngineState,
+    session_id: &str,
+) -> Result<(), EngineError> {
+    if engine_state.sessions.contains_key(session_id) {
+        return Ok(());
+    }
+
+    let max_sessions = max_sessions_limit();
+    let active_count = active_session_count(&engine_state.sessions);
+    if active_count >= max_sessions {
+        return Err(EngineError::Internal(format!(
+            "active session registry size [{active_count}] reached max [{max_sessions}]; use an existing session_id or increase {}",
+            TBTC_SIGNER_MAX_SESSIONS_ENV
+        )));
+    }
+    if engine_state.sessions.len() >= max_sessions && !has_evictable_retired_session(engine_state) {
+        return Err(EngineError::Internal(format!(
+            "session registry size [{}] reached max [{max_sessions}] and no retired session is available for eviction; use an existing session_id or increase {}",
+            engine_state.sessions.len(),
+            TBTC_SIGNER_MAX_SESSIONS_ENV
+        )));
+    }
+
+    Ok(())
+}
+
 pub(crate) fn ensure_interactive_session_admission_capacity(
     engine_state: &EngineState,
     session_id: &str,
 ) -> Result<(), EngineError> {
-    let needs_active_slot = engine_state
-        .sessions
-        .get(session_id)
+    let existing_session = engine_state.sessions.get(session_id);
+    let needs_active_slot = existing_session
         .map(|session| session.retired_interactive_at_unix.is_some())
         .unwrap_or(true);
     if !needs_active_slot {
         return Ok(());
+    }
+
+    if existing_session.is_none() {
+        return ensure_session_insert_admission_capacity(engine_state, session_id);
     }
 
     let max_sessions = max_sessions_limit();
@@ -692,23 +748,33 @@ pub(crate) fn reactivate_retired_per_message_session(
 }
 
 pub(crate) fn ensure_session_insert_capacity(
-    sessions: &HashMap<String, SessionState>,
+    engine_state: &mut EngineState,
     session_id: &str,
-) -> Result<(), EngineError> {
-    if sessions.contains_key(session_id) {
-        return Ok(());
+) -> Result<Vec<(String, SessionState)>, EngineError> {
+    if engine_state.sessions.contains_key(session_id) {
+        return Ok(Vec::new());
     }
 
+    ensure_session_insert_admission_capacity(engine_state, session_id)?;
     let max_sessions = max_sessions_limit();
-    let active_count = active_session_count(sessions);
-    if active_count >= max_sessions {
+    // Reserve one slot for the caller's insertion. The returned tombstones let
+    // durable callers restore the exact pre-call map if persistence fails before
+    // replacing the state file.
+    let compacted = compact_retired_per_message_sessions_to_total(
+        engine_state,
+        max_sessions.saturating_sub(1),
+        None,
+    );
+    if engine_state.sessions.len() >= max_sessions {
+        restore_compacted_retired_sessions(engine_state, compacted);
         return Err(EngineError::Internal(format!(
-            "active session registry size [{active_count}] reached max [{max_sessions}]; use an existing session_id or increase {}",
+            "session registry size [{}] reached max [{max_sessions}] and no retired session is available for eviction; use an existing session_id or increase {}",
+            engine_state.sessions.len(),
             TBTC_SIGNER_MAX_SESSIONS_ENV
         )));
     }
 
-    Ok(())
+    Ok(compacted)
 }
 
 pub(crate) fn ensure_consumed_registry_insert_capacity(

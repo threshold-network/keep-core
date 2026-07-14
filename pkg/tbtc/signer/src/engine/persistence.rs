@@ -281,6 +281,9 @@ pub(crate) enum PersistencePendingOperation {
         session_id: String,
         aggregated_marker: String,
     },
+    InteractiveState {
+        session_id: String,
+    },
 }
 
 static PERSISTENCE_PENDING_OPERATIONS: OnceLock<Mutex<Vec<PersistencePendingOperation>>> =
@@ -337,6 +340,14 @@ fn persistence_pending_same_slot(
                 aggregated_marker: replacement_marker,
             },
         ) => existing_session == replacement_session && existing_marker == replacement_marker,
+        (
+            PersistencePendingOperation::InteractiveState {
+                session_id: existing_session,
+            },
+            PersistencePendingOperation::InteractiveState {
+                session_id: replacement_session,
+            },
+        ) => existing_session == replacement_session,
         _ => false,
     }
 }
@@ -372,7 +383,8 @@ pub(crate) fn persistence_pending_session_ids() -> HashSet<String> {
         .filter_map(|operation| match operation {
             PersistencePendingOperation::BuildTaprootTx { session_id, .. }
             | PersistencePendingOperation::InteractiveRound2 { session_id, .. }
-            | PersistencePendingOperation::InteractiveAggregate { session_id, .. } => {
+            | PersistencePendingOperation::InteractiveAggregate { session_id, .. }
+            | PersistencePendingOperation::InteractiveState { session_id } => {
                 Some(session_id.clone())
             }
             PersistencePendingOperation::EmergencyRekey { result } => {
@@ -384,10 +396,13 @@ pub(crate) fn persistence_pending_session_ids() -> HashSet<String> {
         .collect()
 }
 
-fn clear_snapshot_covered_marker_operations(engine_state: &EngineState) {
+fn clear_snapshot_covered_operations(engine_state: &EngineState) {
     // Round2/Aggregate pending entries cache no result. Clear one only when the
     // successful snapshot actually contains its fail-closed marker; merely
     // writing some other snapshot must never erase a repair obligation.
+    // InteractiveState carries no replay marker, so any snapshot still containing
+    // its protected session covers the binding/retirement state that was uncertain
+    // after an Open, Abort, or expiry write replaced the file.
     // Lifecycle/build/refresh entries additionally preserve the original
     // operation result, so keep those until that caller retries (one bounded
     // slot per session, plus one canary slot).
@@ -417,6 +432,9 @@ fn clear_snapshot_covered_marker_operations(engine_state: &EngineState) {
                         .aggregated_interactive_attempt_markers
                         .contains(aggregated_marker)
                 }),
+            PersistencePendingOperation::InteractiveState { session_id } => {
+                !engine_state.sessions.contains_key(session_id)
+            }
             _ => true,
         });
 }
@@ -540,6 +558,19 @@ pub(crate) fn interactive_aggregate_persistence_pending(
                     session_id: pending_session,
                     aggregated_marker: pending_marker,
                 } if pending_session == session_id && pending_marker == aggregated_marker
+            )
+        })
+}
+
+pub(crate) fn interactive_state_persistence_pending() -> bool {
+    persistence_pending_operations()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .any(|operation| {
+            matches!(
+                operation,
+                PersistencePendingOperation::InteractiveState { .. }
             )
         })
 }
@@ -1332,6 +1363,12 @@ pub(crate) fn load_engine_state_from_storage() -> Result<EngineState, EngineErro
         }
     };
 
+    // An intermediate schema-1 writer allowed independent active and retired
+    // allowances. Conversion below can safely compact its retired excess, but
+    // the old oversized envelope must also be replaced immediately; otherwise
+    // an emergency rollback before the next ordinary write still fails the
+    // previous reader's total-count validation.
+    let session_registry_requires_rewrite = persisted.sessions.len() > max_sessions_limit();
     let (engine_state, recovered_from_corruption): (EngineState, bool) = match persisted.try_into()
     {
         Ok(engine_state) => (engine_state, false),
@@ -1352,10 +1389,10 @@ pub(crate) fn load_engine_state_from_storage() -> Result<EngineState, EngineErro
     // mutation will create a fresh encrypted state file. This explicit recovery
     // outcome replaces the former `Path::exists` probe without hiding metadata
     // errors or treating dangling symlinks as first initialization.
-    if should_rewrite_state && !recovered_from_corruption {
+    if (should_rewrite_state || session_registry_requires_rewrite) && !recovered_from_corruption {
         persist_engine_state_to_storage(&engine_state).map_err(|e| {
             EngineError::Internal(format!(
-                "loaded legacy signer state file [{}] but failed to migrate to current encrypted envelope: {e}",
+                "loaded signer state file [{}] but failed to rewrite its migrated state: {e}",
                 path.display()
             ))
         })?;
@@ -1532,7 +1569,7 @@ pub(crate) fn persist_engine_state_to_storage_with_key(
     bytes.zeroize();
     match persist_result {
         Ok(()) => {
-            clear_snapshot_covered_marker_operations(engine_state);
+            clear_snapshot_covered_operations(engine_state);
             Ok(())
         }
         Err(error) if state_file_replaced => {

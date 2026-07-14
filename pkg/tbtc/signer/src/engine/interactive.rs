@@ -284,7 +284,7 @@ pub fn interactive_session_open(
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    sweep_expired_interactive_state(&mut guard);
+    sweep_expired_interactive_state_durably(&mut guard)?;
 
     let auto_quarantine_config = load_auto_quarantine_config()?;
 
@@ -564,45 +564,130 @@ pub fn interactive_session_open(
         }
     }
 
-    // Admission/reactivation is fallible at a full active tier. Preflight it
-    // before charging the wallet's heartbeat budget; the engine lock prevents
-    // the count from changing before the actual install below.
+    // Admission/reactivation is fallible at active capacity, or when every
+    // retired slot at the shared total bound is protected. Preflight it before
+    // charging the wallet's heartbeat budget; the engine lock prevents the
+    // registry from changing before the actual install below.
     ensure_interactive_session_admission_capacity(&guard, &request.session_id)?;
 
+    // A BuildTaprootTx-backed signing shell is persisted before its first Open.
+    // Make the first wallet binding durable before reporting Open success, or a
+    // crash would reload that old unbound shell as an active non-retirable entry.
+    // A co-located DKG session already has a durable wallet role and needs no
+    // additional write here; a previously bound per-message session likewise
+    // reuses its durable identity.
+    let persists_new_per_message_binding = match guard.sessions.get(&request.session_id) {
+        Some(session) => session.dkg_result.is_none() && session.bound_key_group.is_none(),
+        None => true,
+    };
+    let resolved_binding_state_key = if persists_new_per_message_binding {
+        Some(state_encryption_key_material()?)
+    } else {
+        None
+    };
+
     // A typed heartbeat never passes through BuildTaprootTx, so charge its own
-    // per-wallet policy budget at the last fallible boundary before installing
-    // live signing state. All validation and the exact-retry return above have
-    // already run: malformed/conflicting Opens cannot burn a token, an
-    // idempotent retry is free, and Round2 only rechecks the stored intent.
-    if matches!(
+    // per-wallet policy budget only after all validation and the exact-retry
+    // return above. If the new binding cannot be persisted before replacement,
+    // the limiter snapshot is restored along with the session registry, so a
+    // durability failure cannot burn the caller's only legitimate token.
+    let is_heartbeat = matches!(
         request.signing_intent.as_ref(),
         Some(InteractiveSigningIntent::Heartbeat { .. })
-    ) {
+    );
+    let previous_heartbeat_rate_limiter = if is_heartbeat {
         let wallet_session = guard.sessions.get_mut(&wallet_session_id).ok_or_else(|| {
             EngineError::SessionNotFound {
                 session_id: wallet_session_id.clone(),
             }
         })?;
+        let previous = wallet_session.heartbeat_rate_limiter.clone();
         enforce_heartbeat_rate_limit(
             &request.session_id,
             &mut wallet_session.heartbeat_rate_limiter,
         )?;
-    }
+        Some(previous)
+    } else {
+        None
+    };
 
     // Create (or reactivate) the per-signing session only after every other
     // fallible gate. A rejected heartbeat must not pull an idle tombstone back
     // into the active budget. DKG material remains solely in the wallet session.
+    let session_existed = guard.sessions.contains_key(&request.session_id);
+    let (previous_bound_key_group, previous_retired_at) = guard
+        .sessions
+        .get(&request.session_id)
+        .map(|session| {
+            (
+                session.bound_key_group.clone(),
+                session.retired_interactive_at_unix,
+            )
+        })
+        .unwrap_or((None, None));
     reactivate_retired_per_message_session(&mut guard, &request.session_id)?;
-    ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
+    let compacted_retired_sessions =
+        ensure_session_insert_capacity(&mut guard, &request.session_id)?;
+
+    {
+        let session = guard
+            .sessions
+            .entry(request.session_id.clone())
+            .or_insert_with(SessionState::default);
+        // Bind this signing session to the wallet key it signs for, so Round2 and
+        // Aggregate resolve the same wallet material by key_group.
+        session.bound_key_group = Some(request.key_group.clone());
+    }
+
+    if let Some(resolved_state_key) = resolved_binding_state_key.as_ref() {
+        if let Err(persist_error) =
+            persist_engine_state_to_storage_with_key(&guard, resolved_state_key)
+        {
+            let state_file_replaced = persist_error.state_file_replaced();
+            let persist_error = persist_error.into_engine_error();
+
+            if let Some(previous) = previous_heartbeat_rate_limiter {
+                guard
+                    .sessions
+                    .get_mut(&wallet_session_id)
+                    .expect("wallet session existed while rolling back Open")
+                    .heartbeat_rate_limiter = previous;
+            }
+
+            if state_file_replaced {
+                let session = guard
+                    .sessions
+                    .get_mut(&request.session_id)
+                    .expect("Open session existed after state-file replacement");
+                if session.interactive_signing.is_empty()
+                    && per_message_interactive_session(session)
+                {
+                    session.retired_interactive_at_unix = Some(now_unix().max(1));
+                }
+                mark_persistence_pending(PersistencePendingOperation::InteractiveState {
+                    session_id: request.session_id.clone(),
+                });
+            } else {
+                if session_existed {
+                    let session = guard
+                        .sessions
+                        .get_mut(&request.session_id)
+                        .expect("Open session existed while rolling back binding");
+                    session.bound_key_group = previous_bound_key_group;
+                    session.retired_interactive_at_unix = previous_retired_at;
+                } else {
+                    guard.sessions.remove(&request.session_id);
+                }
+                restore_compacted_retired_sessions(&mut guard, compacted_retired_sessions);
+            }
+            return Err(persist_error);
+        }
+    }
 
     let session = guard
         .sessions
-        .entry(request.session_id.clone())
-        .or_insert_with(SessionState::default);
-    // Bind this signing session to the wallet key it signs for, so Round2 and Aggregate
-    // resolve the same wallet material by key_group.
-    session.bound_key_group = Some(request.key_group.clone());
-
+        .get_mut(&request.session_id)
+        .expect("Open session existed after binding persistence");
     // Replace only THIS member's prior entry (zeroizing its old nonces); sibling
     // seats' entries are untouched.
     if let Some(mut replaced) = session.interactive_signing.remove(&member_identifier) {
@@ -658,7 +743,7 @@ pub fn interactive_round1(
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    sweep_expired_interactive_state(&mut guard);
+    sweep_expired_interactive_state_durably(&mut guard)?;
 
     let session = guard.sessions.get_mut(&request.session_id).ok_or_else(|| {
         EngineError::SessionNotFound {
@@ -745,7 +830,7 @@ pub fn interactive_round2(
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    sweep_expired_interactive_state(&mut guard);
+    sweep_expired_interactive_state_durably(&mut guard)?;
 
     // An earlier marker write may have replaced the state file but failed its
     // directory sync. Flush that fail-closed marker before consulting the replay
@@ -1116,6 +1201,9 @@ pub fn interactive_aggregate(
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    // Sweep first so a failure while repairing any prior completion marker can
+    // never postpone destruction of newly expired nonce handles.
+    sweep_expired_interactive_state_durably(&mut guard)?;
     // A prior completion-marker write may have replaced the state file but failed
     // its directory sync. Re-persist that fail-closed marker before the completed
     // attempt check so a retry repairs durability and is then rejected normally.
@@ -1123,12 +1211,6 @@ pub fn interactive_aggregate(
         persist_engine_state_to_storage(&guard)
             .map_err(PersistEngineStateError::into_engine_error)?;
     }
-    // Aggregate takes the engine lock like every other interactive entry
-    // point, so it sweeps expired interactive state too: the TTL
-    // guarantee (a nonce handle gone within the TTL of inactivity) must
-    // hold even when the only post-expiry traffic is aggregate calls.
-    sweep_expired_interactive_state(&mut guard);
-
     // Resolve the group's public key package (the verifying shares used
     // to check each contribution) from the session's own DKG state, not
     // the request - consistent with the no-secret-on-the-FFI discipline
@@ -1480,16 +1562,19 @@ pub fn interactive_session_abort(
     // Abort takes the lock like every other entry point, so it sweeps
     // expired interactive state too: the TTL guarantee (nonces gone
     // within the TTL of inactivity) must hold even when the only
-    // post-expiry traffic is aborts for other sessions.
-    sweep_expired_interactive_state(&mut guard);
+    // post-expiry traffic is aborts for other sessions. The durable helper also
+    // repairs a prior post-rename Abort snapshot before an idempotent retry can
+    // return `aborted: false` without writing.
+    sweep_expired_interactive_state_durably(&mut guard)?;
 
-    let aborted = match guard.sessions.get_mut(&request.session_id) {
+    let members_to_abort = match guard.sessions.get(&request.session_id) {
         Some(session) => {
             // Abort has no member parameter, so it is session-level over the map:
-            // remove every member entry matching the optional attempt filter,
-            // zeroizing each entry's nonces. Sibling members on a non-matching
-            // attempt survive. Aborted iff at least one entry was removed.
-            let members_to_abort: Vec<u16> = session
+            // select every member entry matching the optional attempt filter.
+            // Keep the nonce-bearing entries live until the durable retirement
+            // snapshot has replaced the state file, so a pre-replacement failure
+            // remains cleanly retryable.
+            session
                 .interactive_signing
                 .iter()
                 .filter(|(_, interactive)| {
@@ -1498,38 +1583,97 @@ pub fn interactive_session_abort(
                             == Some(interactive.attempt_context.attempt_id.as_str())
                 })
                 .map(|(member, _)| *member)
-                .collect();
+                .collect::<Vec<_>>()
+        }
+        None => Vec::new(),
+    };
+
+    if members_to_abort.is_empty() {
+        return Ok(InteractiveSessionAbortResult {
+            session_id: request.session_id,
+            aborted: false,
+        });
+    }
+
+    // Resolve the key before staging retirement. A key-provider outage must not
+    // consume the live nonces or turn a retryable attempt into an inert shell.
+    let resolved_state_key = state_encryption_key_material()?;
+    let (retires_session, previous_retired_at) = {
+        let session = guard
+            .sessions
+            .get_mut(&request.session_id)
+            .expect("selected abort session existed under the held engine lock");
+        let retires_session = members_to_abort.len() == session.interactive_signing.len()
+            && per_message_interactive_session(session);
+        let previous_retired_at = session.retired_interactive_at_unix;
+        if retires_session {
+            session.retired_interactive_at_unix = Some(now_unix().max(1));
+        }
+        (retires_session, previous_retired_at)
+    };
+    let compacted_retired_sessions =
+        compact_retired_per_message_sessions(&mut guard, Some(&request.session_id));
+
+    // Interactive nonce state is intentionally never serialized. Persist while
+    // it is still held in memory: the snapshot durably carries the Open binding,
+    // policy artifact, and (for a last-member Abort) retirement timestamp. Only
+    // after replacement is it safe to destroy the selected nonce handles and
+    // report success.
+    if let Err(persist_error) =
+        persist_engine_state_to_storage_with_key(&guard, &resolved_state_key)
+    {
+        let state_file_replaced = persist_error.state_file_replaced();
+        let persist_error = persist_error.into_engine_error();
+        if state_file_replaced {
+            let session = guard
+                .sessions
+                .get_mut(&request.session_id)
+                .expect("abort session existed after state-file replacement");
             for member in &members_to_abort {
                 if let Some(mut removed) = session.interactive_signing.remove(member) {
                     zeroize_interactive_round1(&mut removed);
                 }
             }
-            !members_to_abort.is_empty()
+            mark_persistence_pending(PersistencePendingOperation::InteractiveState {
+                session_id: request.session_id.clone(),
+            });
+        } else {
+            if retires_session {
+                guard
+                    .sessions
+                    .get_mut(&request.session_id)
+                    .expect("abort session existed while rolling back retirement")
+                    .retired_interactive_at_unix = previous_retired_at;
+            }
+            restore_compacted_retired_sessions(&mut guard, compacted_retired_sessions);
         }
-        None => false,
-    };
-    // Once the last live member is aborted, move a production per-message
-    // entry into the separately bounded retirement tier. Its BuildTaprootTx
-    // artifact and replay markers remain available for a delayed outer retry,
-    // without consuming the active-session budget indefinitely.
-    retire_idle_per_message_sessions(&mut guard, None);
+        return Err(persist_error);
+    }
+
+    let session = guard
+        .sessions
+        .get_mut(&request.session_id)
+        .expect("abort session existed after durable retirement");
+    for member in &members_to_abort {
+        if let Some(mut removed) = session.interactive_signing.remove(member) {
+            zeroize_interactive_round1(&mut removed);
+        }
+    }
 
     // Only count a success when live interactive state was actually
     // aborted. A no-op call (no session, or an attempt_id filter that
     // matched nothing) returns aborted == false and must not inflate the
     // success counter - the calls_total counter at the top already
     // records that the entry point ran.
-    if aborted {
-        record_hardening_telemetry(|telemetry| {
-            telemetry.interactive_session_abort_success_total = telemetry
-                .interactive_session_abort_success_total
-                .saturating_add(1);
-        });
-    }
+    record_hardening_telemetry(|telemetry| {
+        telemetry.interactive_session_abort_success_total = telemetry
+            .interactive_session_abort_success_total
+            .saturating_add(1);
+    });
 
     Ok(InteractiveSessionAbortResult {
         session_id: request.session_id,
-        aborted,
+        aborted: true,
     })
 }
 
@@ -1831,14 +1975,15 @@ pub(crate) fn resolve_wallet_session_id(
         .map(|(id, _)| id.clone())
 }
 
-pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) {
+pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) -> Vec<String> {
     let ttl_seconds = interactive_session_ttl_seconds();
     let now = now_unix();
-    // Interactive sessions always ride a DKG-populated session (Open
-    // requires existing DKG state), so expiry only clears the live
-    // attempt's nonces; the session itself - DKG material, consumed
-    // markers - is retained for future signing.
-    for session in engine_state.sessions.values_mut() {
+    let mut changed_session_ids = HashSet::new();
+    // Open requires an existing wallet DKG, but production signing normally
+    // uses a distinct per-message session bound to that wallet. Expiry clears
+    // each live attempt's nonces; retirement below retains its bounded policy
+    // and replay state until active admission needs the shared slot.
+    for (session_id, session) in &mut engine_state.sessions {
         // Per-member expiry: each seat's entry expires independently by its own
         // opened_at_unix; non-expired sibling seats in the same session survive.
         let expired_members: Vec<u16> = session
@@ -1847,6 +1992,9 @@ pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) {
             .filter(|(_, interactive)| now.saturating_sub(interactive.opened_at_unix) > ttl_seconds)
             .map(|(member, _)| *member)
             .collect();
+        if !expired_members.is_empty() {
+            changed_session_ids.insert(session_id.clone());
+        }
         for member in &expired_members {
             if let Some(mut removed) = session.interactive_signing.remove(member) {
                 zeroize_interactive_round1(&mut removed);
@@ -1855,7 +2003,58 @@ pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) {
     }
     // Expiry has abort semantics. Retire idle per-message entries while
     // retaining their bounded policy/replay tombstones for delayed retries.
-    retire_idle_per_message_sessions(engine_state, None);
+    changed_session_ids.extend(retire_idle_per_message_session_ids(engine_state, None));
+    changed_session_ids.retain(|session_id| engine_state.sessions.contains_key(session_id));
+    changed_session_ids.into_iter().collect()
+}
+
+pub(crate) fn sweep_expired_interactive_state_durably(
+    engine_state: &mut EngineState,
+) -> Result<(), EngineError> {
+    // Persist every session whose live member set changed, not only sessions
+    // whose last member expired. Open binds a Build-backed per-message shell
+    // in memory, while live interactive state is intentionally omitted from
+    // snapshots. If one sibling expired and another remained live, skipping
+    // this write would let a crash reload the old unbound shell; persisting the
+    // binding lets load classify it as retired once the nonces disappear.
+    let changed_session_ids = sweep_expired_interactive_state(engine_state);
+    let repairs_pending_interactive_state = interactive_state_persistence_pending();
+    // An existing Abort/expiry repair must be retried even when this sweep found
+    // no additional expiry. Avoid key-provider/filesystem work on the ordinary
+    // no-op fast path.
+    if changed_session_ids.is_empty() && !repairs_pending_interactive_state {
+        return Ok(());
+    }
+
+    if let Err(persist_error) = persist_engine_state_to_storage(engine_state) {
+        for session_id in changed_session_ids {
+            mark_persistence_pending(PersistencePendingOperation::InteractiveState { session_id });
+        }
+        return Err(persist_error.into_engine_error());
+    }
+
+    // Pending sessions are deliberately excluded from retirement until a
+    // successful snapshot covers their uncertain post-rename state. If this
+    // sweep expired the last surviving sibling of such an Abort, the write above
+    // cleared its protection; classify and persist that now-idle session before
+    // returning from the same entry point.
+    if repairs_pending_interactive_state {
+        let retired_after_repair = sweep_expired_interactive_state(engine_state);
+        if let Err(persist_error) = if retired_after_repair.is_empty() {
+            Ok(())
+        } else {
+            persist_engine_state_to_storage(engine_state)
+        } {
+            for session_id in retired_after_repair {
+                mark_persistence_pending(PersistencePendingOperation::InteractiveState {
+                    session_id,
+                });
+            }
+            return Err(persist_error.into_engine_error());
+        }
+    }
+
+    Ok(())
 }
 
 pub(crate) fn max_live_interactive_sessions_limit() -> usize {

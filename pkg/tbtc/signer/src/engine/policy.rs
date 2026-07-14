@@ -27,7 +27,7 @@ pub(crate) const BUILD_TX_RATE_LIMIT_TOKEN_SCALE: u128 = 1_000_000;
 
 pub(crate) const BUILD_TX_RATE_LIMIT_SECONDS_PER_MINUTE: u128 = 60;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct PolicyRateLimiterState {
     pub(crate) last_refill_unix: u64,
     pub(crate) token_microunits: u128,
