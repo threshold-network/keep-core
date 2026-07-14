@@ -5358,6 +5358,115 @@ fn restart_reload_recovers_persisted_state_across_operation_types() {
 }
 
 #[test]
+fn first_engine_state_load_is_serialized_across_callers() {
+    let engine_state = std::sync::Arc::new(OnceLock::<Mutex<EngineState>>::new());
+    let initialization_lock = std::sync::Arc::new(Mutex::new(()));
+    let initial_miss_barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let load_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    let callers = (0..2)
+        .map(|_| {
+            let engine_state = std::sync::Arc::clone(&engine_state);
+            let initialization_lock = std::sync::Arc::clone(&initialization_lock);
+            let initial_miss_barrier = std::sync::Arc::clone(&initial_miss_barrier);
+            let load_count = std::sync::Arc::clone(&load_count);
+
+            std::thread::spawn(move || {
+                let initialized = initialize_engine_state_with_loader(
+                    &engine_state,
+                    &initialization_lock,
+                    || {
+                        // Both callers must pass the optimistic OnceLock check
+                        // before either may enter the serialized loader path.
+                        initial_miss_barrier.wait();
+                    },
+                    || {
+                        let invocation =
+                            load_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Ok(EngineState {
+                            refresh_epoch_counter: invocation as u64 + 41,
+                            ..EngineState::default()
+                        })
+                    },
+                )
+                .expect("concurrent initialization");
+
+                let state_pointer = std::ptr::from_ref(initialized) as usize;
+                let refresh_epoch_counter = initialized
+                    .lock()
+                    .expect("initialized engine state lock")
+                    .refresh_epoch_counter;
+                (state_pointer, refresh_epoch_counter)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let results = callers
+        .into_iter()
+        .map(|caller| caller.join().expect("initialization caller"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        load_count.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "only one first caller may load or migrate persistent state"
+    );
+    assert_eq!(results[0].0, results[1].0);
+    assert_eq!(results[0].1, 41);
+    assert_eq!(results[1].1, 41);
+}
+
+#[test]
+fn failed_engine_state_load_remains_retryable() {
+    let engine_state = OnceLock::<Mutex<EngineState>>::new();
+    let initialization_lock = Mutex::new(());
+    let load_count = std::sync::atomic::AtomicUsize::new(0);
+
+    let first_error = match initialize_engine_state_with_loader(
+        &engine_state,
+        &initialization_lock,
+        || {},
+        || {
+            load_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(EngineError::Internal(
+                "intentional first-load failure".to_string(),
+            ))
+        },
+    ) {
+        Ok(_) => panic!("failed loader must not initialize engine state"),
+        Err(error) => error,
+    };
+    expect_internal_error_contains(first_error, "intentional first-load failure");
+    assert!(
+        engine_state.get().is_none(),
+        "a fallible load must leave the OnceLock unset"
+    );
+
+    let initialized = initialize_engine_state_with_loader(
+        &engine_state,
+        &initialization_lock,
+        || {},
+        || {
+            load_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(EngineState {
+                refresh_epoch_counter: 73,
+                ..EngineState::default()
+            })
+        },
+    )
+    .expect("retry after failed state load");
+
+    assert_eq!(load_count.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(
+        initialized
+            .lock()
+            .expect("initialized engine state lock")
+            .refresh_epoch_counter,
+        73
+    );
+}
+
+#[test]
 #[cfg(unix)]
 fn state_lock_rejects_multi_process_contention() {
     let _guard = lock_test_state();
