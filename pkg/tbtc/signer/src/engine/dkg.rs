@@ -174,7 +174,7 @@ pub fn persist_distributed_dkg_key_package(
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    ensure_session_insert_capacity(&mut guard.sessions, &request.session_id)?;
+    ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
 
     // A group verifying key identifies one wallet. Keeping the same key_group in
     // two sessions would make wallet lookup depend on randomized HashMap order and

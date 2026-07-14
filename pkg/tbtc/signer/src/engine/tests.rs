@@ -743,6 +743,8 @@ fn persisted_session_state_fixture() -> PersistedSessionState {
         consumed_interactive_attempt_markers: vec![],
         aggregated_interactive_attempt_markers: vec![],
         bound_key_group: None,
+        retired_interactive_at_unix: None,
+        authorized_interactive_aggregate_markers: vec![],
     }
 }
 
@@ -4255,6 +4257,60 @@ fn persisted_engine_state_rejects_session_registry_over_limit() {
 }
 
 #[test]
+fn persisted_engine_state_migrates_idle_per_message_entries_before_active_bound_check() {
+    let _guard = lock_test_state();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
+
+    let mut wallet = persisted_session_state_fixture();
+    wallet.dkg_result = Some(DkgResult {
+        session_id: "wallet".to_string(),
+        key_group: "wallet-key-group".to_string(),
+        participant_count: 3,
+        threshold: 2,
+        created_at_unix: 1,
+    });
+    let mut consumed_message = persisted_session_state_fixture();
+    consumed_message.bound_key_group = Some("wallet-key-group".to_string());
+    consumed_message.consumed_interactive_attempt_markers =
+        vec![interactive_consumed_marker(&"11".repeat(32), 1)];
+    consumed_message.authorized_interactive_aggregate_markers = vec!["22".repeat(32)];
+    let mut aborted_message = persisted_session_state_fixture();
+    aborted_message.bound_key_group = Some("wallet-key-group".to_string());
+    aborted_message.build_tx_request_fingerprint = Some("policy-fingerprint".to_string());
+
+    let persisted = PersistedEngineState {
+        schema_version: PERSISTED_STATE_SCHEMA_VERSION,
+        sessions: HashMap::from([
+            ("wallet".to_string(), wallet),
+            ("consumed-message".to_string(), consumed_message),
+            ("aborted-message".to_string(), aborted_message),
+        ]),
+        refresh_epoch_counter: 0,
+        operator_fault_scores: BTreeMap::new(),
+        quarantined_operator_identifiers: vec![],
+        canary_rollout: CanaryRolloutState::default(),
+    };
+
+    let loaded = EngineState::try_from(persisted)
+        .expect("legacy idle per-message entries migrate out of the active budget");
+    assert_eq!(loaded.sessions.len(), 3);
+    assert_eq!(active_session_count(&loaded.sessions), 1);
+    assert_eq!(retired_interactive_session_count(&loaded.sessions), 2);
+    assert!(loaded.sessions["wallet"]
+        .retired_interactive_at_unix
+        .is_none());
+    assert!(loaded.sessions["consumed-message"]
+        .retired_interactive_at_unix
+        .is_some());
+    assert!(loaded.sessions["aborted-message"]
+        .retired_interactive_at_unix
+        .is_some());
+
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn persisted_engine_state_rejects_duplicate_dkg_key_group_owners() {
     let mut owner_a = persisted_session_state_fixture();
     owner_a.dkg_result = Some(DkgResult {
@@ -4612,54 +4668,166 @@ fn build_taproot_tx_rejects_new_session_when_session_registry_is_at_capacity() {
 }
 
 #[test]
-fn per_message_session_compaction_preserves_wallet_and_inflight_state() {
-    let mut sessions = HashMap::new();
+fn per_message_session_retirement_preserves_wallet_routing_and_retry_state() {
+    let _guard = lock_test_state();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "4");
 
-    let mut wallet = SessionState::default();
-    wallet.dkg_result = Some(DkgResult {
-        session_id: "wallet".to_string(),
-        key_group: "wallet-key-group".to_string(),
-        participant_count: 3,
-        threshold: 2,
-        created_at_unix: now_unix(),
-    });
-    sessions.insert("wallet".to_string(), wallet);
+    let mut engine_state = EngineState::default();
+    engine_state.sessions.insert(
+        "wallet".to_string(),
+        SessionState {
+            dkg_result: Some(DkgResult {
+                session_id: "wallet".to_string(),
+                key_group: "wallet-key-group".to_string(),
+                participant_count: 3,
+                threshold: 2,
+                created_at_unix: now_unix(),
+            }),
+            ..Default::default()
+        },
+    );
+    engine_state.sessions.insert(
+        "open-only".to_string(),
+        SessionState {
+            bound_key_group: Some("wallet-key-group".to_string()),
+            ..Default::default()
+        },
+    );
+    engine_state.sessions.insert(
+        "consumed".to_string(),
+        SessionState {
+            bound_key_group: Some("wallet-key-group".to_string()),
+            consumed_interactive_attempt_markers: HashSet::from([interactive_consumed_marker(
+                &"11".repeat(32),
+                1,
+            )]),
+            authorized_interactive_aggregate_markers: HashSet::from(["22".repeat(32)]),
+            ..Default::default()
+        },
+    );
+    engine_state.sessions.insert(
+        "completed".to_string(),
+        SessionState {
+            bound_key_group: Some("wallet-key-group".to_string()),
+            aggregated_interactive_attempt_markers: HashSet::from([format!(
+                "{}@{}@keypath",
+                "33".repeat(32),
+                "44".repeat(32)
+            )]),
+            ..Default::default()
+        },
+    );
+    engine_state.sessions.insert(
+        "retry-policy".to_string(),
+        SessionState {
+            bound_key_group: Some("wallet-key-group".to_string()),
+            build_tx_request_fingerprint: Some("policy-fingerprint".to_string()),
+            ..Default::default()
+        },
+    );
 
-    let mut open_only = SessionState::default();
-    open_only.bound_key_group = Some("wallet-key-group".to_string());
-    sessions.insert("open-only".to_string(), open_only);
+    assert_eq!(retire_idle_per_message_sessions(&mut engine_state, None), 4);
+    assert_eq!(active_session_count(&engine_state.sessions), 1);
+    assert_eq!(retired_interactive_session_count(&engine_state.sessions), 4);
+    assert!(engine_state.sessions["wallet"]
+        .retired_interactive_at_unix
+        .is_none());
+    assert_eq!(
+        engine_state.sessions["retry-policy"].build_tx_request_fingerprint,
+        Some("policy-fingerprint".to_string())
+    );
+    assert!(engine_state.sessions["consumed"]
+        .authorized_interactive_aggregate_markers
+        .contains(&"22".repeat(32)));
 
-    let mut consumed = SessionState::default();
-    consumed.bound_key_group = Some("wallet-key-group".to_string());
-    consumed
-        .consumed_interactive_attempt_markers
-        .insert(format!("m1@{}", "11".repeat(32)));
-    sessions.insert("consumed".to_string(), consumed);
+    reactivate_retired_per_message_session(&mut engine_state, "retry-policy")
+        .expect("retired retry state reactivates");
+    assert_eq!(active_session_count(&engine_state.sessions), 2);
+    assert!(engine_state.sessions["retry-policy"]
+        .retired_interactive_at_unix
+        .is_none());
+    assert_eq!(
+        engine_state.sessions["retry-policy"].build_tx_request_fingerprint,
+        Some("policy-fingerprint".to_string())
+    );
 
-    let mut completed = SessionState::default();
-    completed.bound_key_group = Some("wallet-key-group".to_string());
-    completed
-        .aggregated_interactive_attempt_markers
-        .insert(format!("{}@{}@keypath", "22".repeat(32), "33".repeat(32)));
-    sessions.insert("completed".to_string(), completed);
+    clear_state_storage_policy_overrides();
+}
 
-    let mut retry_policy = SessionState::default();
-    retry_policy.bound_key_group = Some("wallet-key-group".to_string());
-    retry_policy.build_tx_request_fingerprint = Some("policy-fingerprint".to_string());
-    sessions.insert("retry-policy".to_string(), retry_policy);
+#[test]
+fn retired_per_message_session_tier_evicts_oldest_at_its_own_bound() {
+    let _guard = lock_test_state();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
 
-    assert_eq!(reclaim_per_message_sessions(&mut sessions, false), 1);
-    assert!(!sessions.contains_key("open-only"));
-    assert!(sessions.contains_key("wallet"));
-    assert!(sessions.contains_key("consumed"));
-    assert!(sessions.contains_key("completed"));
-    assert!(sessions.contains_key("retry-policy"));
+    let mut engine_state = EngineState::default();
+    for (session_id, retired_at) in [("oldest", 1), ("middle", 2), ("newest", 3)] {
+        engine_state.sessions.insert(
+            session_id.to_string(),
+            SessionState {
+                bound_key_group: Some("wallet-key-group".to_string()),
+                retired_interactive_at_unix: Some(retired_at),
+                consumed_interactive_attempt_markers: HashSet::from([interactive_consumed_marker(
+                    &hash_hex(session_id.as_bytes()),
+                    1,
+                )]),
+                ..Default::default()
+            },
+        );
+    }
 
-    assert_eq!(reclaim_per_message_sessions(&mut sessions, true), 1);
-    assert!(!sessions.contains_key("completed"));
-    assert!(sessions.contains_key("wallet"));
-    assert!(sessions.contains_key("consumed"));
-    assert!(sessions.contains_key("retry-policy"));
+    assert_eq!(
+        compact_retired_per_message_sessions(&mut engine_state, Some("newest")).len(),
+        1
+    );
+    assert!(!engine_state.sessions.contains_key("oldest"));
+    assert!(engine_state.sessions.contains_key("middle"));
+    assert!(engine_state.sessions.contains_key("newest"));
+    assert_eq!(active_session_count(&engine_state.sessions), 0);
+    assert_eq!(retired_interactive_session_count(&engine_state.sessions), 2);
+    ensure_session_insert_capacity(&engine_state.sessions, "fresh-active")
+        .expect("bounded retirement cannot block active admission");
+
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn idle_per_message_session_stays_active_while_marker_persistence_is_pending() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let session_id = "pending-idle-per-message";
+    let aggregated_marker = interactive_aggregated_marker(
+        &hash_hex(b"pending-idle-attempt"),
+        &hash_hex(b"pending-idle-message"),
+        None,
+    );
+    let pending_operation = PersistencePendingOperation::InteractiveAggregate {
+        session_id: session_id.to_string(),
+        aggregated_marker: aggregated_marker.clone(),
+    };
+    let mut engine_state = EngineState::default();
+    engine_state.sessions.insert(
+        session_id.to_string(),
+        SessionState {
+            bound_key_group: Some("pending-idle-key-group".to_string()),
+            aggregated_interactive_attempt_markers: HashSet::from([aggregated_marker]),
+            ..Default::default()
+        },
+    );
+    mark_persistence_pending(pending_operation.clone());
+
+    assert_eq!(retire_idle_per_message_sessions(&mut engine_state, None), 0);
+    assert!(engine_state.sessions[session_id]
+        .retired_interactive_at_unix
+        .is_none());
+
+    clear_persistence_pending_operation(&pending_operation);
+    assert_eq!(retire_idle_per_message_sessions(&mut engine_state, None), 1);
+    assert!(engine_state.sessions[session_id]
+        .retired_interactive_at_unix
+        .is_some());
 }
 
 #[test]
@@ -6757,6 +6925,29 @@ fn interactive_signs_across_sessions_by_key_group() {
     })
     .expect("member 2 round 2 under the signing session");
 
+    // Non-coordinator signers stop after Round2. The now-idle outer entry must
+    // leave the active budget immediately, while its exact package
+    // authorization remains durable for a delayed coordinator Aggregate.
+    let next_session = "next-roast-signing-session";
+    build_taproot_tx(build_policy_test_request(next_session))
+        .expect("a new message uses the active slot freed after Round2");
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        assert_eq!(active_session_count(&guard.sessions), 2);
+        assert_eq!(retired_interactive_session_count(&guard.sessions), 1);
+        assert!(guard.sessions[signing_session]
+            .retired_interactive_at_unix
+            .is_some());
+        assert_eq!(
+            guard.sessions[signing_session]
+                .authorized_interactive_aggregate_markers
+                .len(),
+            1
+        );
+    }
+
     // interactive_aggregate resolves the group public key by key_group from the wallet
     // session and produces a valid BIP-340 signature over the distinct signing session.
     let aggregated = interactive_aggregate(InteractiveAggregateRequest {
@@ -6794,40 +6985,423 @@ fn interactive_signs_across_sessions_by_key_group() {
         .verify_schnorr(&signature, &SecpMessage::from_digest(message), &public_key)
         .expect("cross-session interactive signing produces a valid BIP-340 signature");
 
-    // The completed per-message entry and its typed replay tombstone survive a
-    // restart while there is still capacity. Once a new durable session needs
-    // that slot, admission compacts the terminal entry without touching the
-    // wallet/DKG owner, and the ensuing BuildTaprootTx persist makes the
-    // compaction crash-durable.
+    // The completed per-message entry moves into the separately bounded
+    // retirement tier. It retains wallet routing, exact Aggregate
+    // authorization, and typed replay markers across restart without consuming
+    // an active slot, so the next ordinary message is still admitted.
     simulate_process_restart_for_tests();
     reload_state_from_storage_for_tests();
     {
         let guard = state().expect("state").lock().expect("lock");
-        assert_eq!(guard.sessions.len(), 2);
+        assert_eq!(guard.sessions.len(), 3);
         assert!(guard.sessions.contains_key(wallet_session));
         assert!(guard.sessions.contains_key(signing_session));
-    }
-
-    let next_session = "next-roast-signing-session";
-    build_taproot_tx(build_policy_test_request(next_session))
-        .expect("a new message reclaims the completed per-message registry slot");
-    simulate_process_restart_for_tests();
-    reload_state_from_storage_for_tests();
-    {
-        let guard = state().expect("state").lock().expect("lock");
-        assert_eq!(guard.sessions.len(), 2);
-        assert!(guard.sessions.contains_key(wallet_session));
         assert!(guard.sessions.contains_key(next_session));
-        assert!(
-            !guard.sessions.contains_key(signing_session),
-            "the completed per-message tombstone must be durably compacted"
+        assert!(guard.sessions[signing_session]
+            .retired_interactive_at_unix
+            .is_some());
+        assert_eq!(
+            guard.sessions[signing_session]
+                .authorized_interactive_aggregate_markers
+                .len(),
+            1
         );
+        assert_eq!(active_session_count(&guard.sessions), 2);
+        assert_eq!(retired_interactive_session_count(&guard.sessions), 1);
     }
 
     std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
     reset_for_tests();
     cleanup_test_state_artifacts(&state_path);
     clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn per_message_abort_and_expiry_retire_without_losing_policy_artifacts() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("interactive_cross_session_abort_expiry_retirement");
+    reset_for_tests();
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
+
+    let wallet_session = "retirement-wallet";
+    let key_group = "retirement-wallet-key-group";
+    let included = [1u16, 2];
+    ensure_interactive_dkg_session(wallet_session, key_group);
+
+    let open = |session_id: &str, message: &[u8; 32]| {
+        interactive_session_open(InteractiveSessionOpenRequest {
+            session_id: session_id.to_string(),
+            member_identifier: 1,
+            message_hex: hex::encode(message),
+            key_group: key_group.to_string(),
+            threshold: 2,
+            taproot_merkle_root_hex: None,
+            signing_intent: None,
+            attempt_context: interactive_test_attempt_context(
+                session_id, key_group, message, &included, 1,
+            ),
+        })
+    };
+
+    let aborted_session = "retired-aborted-message";
+    let aborted_build_request = build_policy_test_request(aborted_session);
+    build_taproot_tx(aborted_build_request.clone()).expect("aborted flow builds policy artifact");
+    let aborted_open = open(aborted_session, &[0x71; 32]).expect("aborted flow opens");
+    interactive_round1(InteractiveRound1Request {
+        session_id: aborted_session.to_string(),
+        attempt_id: aborted_open.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("aborted flow round 1");
+    interactive_session_abort(InteractiveSessionAbortRequest {
+        session_id: aborted_session.to_string(),
+        attempt_id: Some(aborted_open.attempt_id),
+    })
+    .expect("abort retires the idle per-message entry");
+    build_taproot_tx(aborted_build_request)
+        .expect("retired abort entry retains its BuildTaprootTx cache");
+
+    let expired_session = "retired-expired-message";
+    build_taproot_tx(build_policy_test_request(expired_session))
+        .expect("expired flow builds policy artifact");
+    let expired_open = open(expired_session, &[0x72; 32]).expect("expired flow opens");
+    interactive_round1(InteractiveRound1Request {
+        session_id: expired_session.to_string(),
+        attempt_id: expired_open.attempt_id,
+        member_identifier: 1,
+    })
+    .expect("expired flow round 1");
+    {
+        let mut guard = state().expect("state").lock().expect("lock");
+        let interactive = guard
+            .sessions
+            .get_mut(expired_session)
+            .expect("expired session exists")
+            .interactive_signing
+            .get_mut(&1)
+            .expect("expired flow remains live");
+        interactive.opened_at_unix = interactive
+            .opened_at_unix
+            .saturating_sub(interactive_session_ttl_seconds() + 1);
+    }
+    interactive_session_abort(InteractiveSessionAbortRequest {
+        session_id: "retirement-sweep-trigger".to_string(),
+        attempt_id: None,
+    })
+    .expect("unrelated abort sweeps the expired flow");
+
+    let next_session = "retirement-next-message";
+    build_taproot_tx(build_policy_test_request(next_session))
+        .expect("retired abort and expiry entries do not exhaust active admission");
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        assert_eq!(active_session_count(&guard.sessions), 2);
+        assert_eq!(retired_interactive_session_count(&guard.sessions), 2);
+        for retired_session in [aborted_session, expired_session] {
+            let session = &guard.sessions[retired_session];
+            assert!(session.retired_interactive_at_unix.is_some());
+            assert!(session.build_tx_request_fingerprint.is_some());
+            assert!(session.tx_result.is_some());
+            assert!(session.interactive_signing.is_empty());
+        }
+        assert!(guard.sessions.contains_key(wallet_session));
+        assert!(guard.sessions.contains_key(next_session));
+    }
+
+    std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn interactive_round2_pre_replace_failure_restores_compacted_tombstones() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("round2_retirement_compaction_rollback");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
+
+    let key_packages = interactive_test_key_packages();
+    let wallet_session = "wallet-round2-compaction-rollback";
+    let signing_session = "roast-round2-compaction-rollback";
+    let key_group = "round2-compaction-rollback-key-group";
+    let message = [0x73u8; 32];
+    let included = [1u16, 2];
+    ensure_interactive_dkg_session(wallet_session, key_group);
+    {
+        let mut guard = state().expect("state").lock().expect("engine lock");
+        for (session_id, retired_at) in [("retired-oldest", 1), ("retired-newer", 2)] {
+            guard.sessions.insert(
+                session_id.to_string(),
+                SessionState {
+                    bound_key_group: Some(key_group.to_string()),
+                    retired_interactive_at_unix: Some(retired_at),
+                    ..Default::default()
+                },
+            );
+        }
+        persist_engine_state_to_storage(&guard).expect("persist initial retired tier");
+    }
+
+    let opened = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: signing_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        signing_intent: None,
+        attempt_context: interactive_test_attempt_context(
+            signing_session,
+            key_group,
+            &message,
+            &included,
+            1,
+        ),
+    })
+    .expect("signing session opens");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("member 1 round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 commitments");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+    let round2_request = InteractiveRound2Request {
+        session_id: signing_session.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex,
+    };
+
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let faulted = interactive_round2(round2_request.clone())
+        .expect_err("the injected pre-replacement fault must fail Round2");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        faulted,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    {
+        let guard = state().expect("state").lock().expect("engine lock");
+        assert!(guard.sessions.contains_key("retired-oldest"));
+        assert!(guard.sessions.contains_key("retired-newer"));
+        assert_eq!(retired_interactive_session_count(&guard.sessions), 2);
+        let signing = &guard.sessions[signing_session];
+        assert!(signing.retired_interactive_at_unix.is_none());
+        assert!(signing.interactive_signing.contains_key(&1));
+        assert!(!interactive_attempt_consumed(
+            &signing.consumed_interactive_attempt_markers,
+            &opened.attempt_id,
+            1,
+        ));
+    }
+
+    interactive_round2(round2_request)
+        .expect("the same live nonces remain usable once persistence recovers");
+    {
+        let guard = state().expect("state").lock().expect("engine lock");
+        assert!(!guard.sessions.contains_key("retired-oldest"));
+        assert!(guard.sessions.contains_key("retired-newer"));
+        assert!(guard.sessions[signing_session]
+            .retired_interactive_at_unix
+            .is_some());
+        assert_eq!(retired_interactive_session_count(&guard.sessions), 2);
+    }
+
+    clear_state_storage_policy_overrides();
+    cleanup_test_state_artifacts(&state_path);
+}
+
+#[test]
+fn retired_compaction_preserves_pending_marker_sessions_until_snapshot_covers_them() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("retired_pending_marker_compaction");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
+
+    let key_packages = interactive_test_key_packages();
+    let wallet_session = "wallet-retired-pending-marker";
+    let round2_session = "a-round2-pending-marker";
+    let aggregate_session = "b-aggregate-pending-marker";
+    let evictable_session = "c-evictable-retired-marker";
+    let key_group = "retired-pending-marker-key-group";
+    let message = [0x74u8; 32];
+    let included = [1u16, 2];
+    ensure_interactive_dkg_session(wallet_session, key_group);
+
+    let opened = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: round2_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        signing_intent: None,
+        attempt_context: interactive_test_attempt_context(
+            round2_session,
+            key_group,
+            &message,
+            &included,
+            1,
+        ),
+    })
+    .expect("pending-marker session opens");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: round2_session.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("pending-marker member round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("pending-marker member 2 commitments");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+    let round2_request = InteractiveRound2Request {
+        session_id: round2_session.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex,
+    };
+    let consumed_marker = interactive_consumed_marker(&opened.attempt_id, 1);
+
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    let faulted = interactive_round2(round2_request.clone())
+        .expect_err("the injected post-replacement fault must leave a pending marker");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        faulted,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    assert!(interactive_round2_persistence_pending(
+        round2_session,
+        &consumed_marker
+    ));
+
+    let aggregated_marker = interactive_aggregated_marker(
+        &hash_hex(b"aggregate-attempt"),
+        &hash_hex(b"aggregate-message"),
+        None,
+    );
+    {
+        let mut guard = state().expect("state").lock().expect("engine lock");
+        guard
+            .sessions
+            .get_mut(round2_session)
+            .expect("Round2 pending session exists")
+            .retired_interactive_at_unix = Some(1);
+        guard.sessions.insert(
+            aggregate_session.to_string(),
+            SessionState {
+                bound_key_group: Some(key_group.to_string()),
+                retired_interactive_at_unix: Some(2),
+                aggregated_interactive_attempt_markers: HashSet::from([aggregated_marker.clone()]),
+                ..Default::default()
+            },
+        );
+        guard.sessions.insert(
+            evictable_session.to_string(),
+            SessionState {
+                bound_key_group: Some(key_group.to_string()),
+                retired_interactive_at_unix: Some(3),
+                ..Default::default()
+            },
+        );
+    }
+    mark_persistence_pending(PersistencePendingOperation::InteractiveAggregate {
+        session_id: aggregate_session.to_string(),
+        aggregated_marker: aggregated_marker.clone(),
+    });
+    assert!(interactive_aggregate_persistence_pending(
+        aggregate_session,
+        &aggregated_marker
+    ));
+
+    {
+        let mut guard = state().expect("state").lock().expect("engine lock");
+        let removed = compact_retired_per_message_sessions(&mut guard, None);
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].0, evictable_session);
+        assert!(guard.sessions.contains_key(round2_session));
+        assert!(guard.sessions.contains_key(aggregate_session));
+        persist_engine_state_to_storage(&guard)
+            .expect("a successful snapshot covers both protected markers");
+    }
+    assert!(!interactive_round2_persistence_pending(
+        round2_session,
+        &consumed_marker
+    ));
+    assert!(!interactive_aggregate_persistence_pending(
+        aggregate_session,
+        &aggregated_marker
+    ));
+
+    let uncovered_session = "missing-pending-marker-session";
+    let uncovered_marker = interactive_consumed_marker(&hash_hex(b"missing-attempt"), 1);
+    let uncovered_operation = PersistencePendingOperation::InteractiveRound2 {
+        session_id: uncovered_session.to_string(),
+        consumed_marker: uncovered_marker.clone(),
+    };
+    mark_persistence_pending(uncovered_operation.clone());
+    {
+        let guard = state().expect("state").lock().expect("engine lock");
+        persist_engine_state_to_storage(&guard)
+            .expect("an unrelated snapshot can succeed without the missing marker");
+    }
+    assert!(
+        interactive_round2_persistence_pending(uncovered_session, &uncovered_marker),
+        "a snapshot that omits the exact marker must not clear its repair obligation"
+    );
+    clear_persistence_pending_operation(&uncovered_operation);
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    {
+        let guard = state().expect("state").lock().expect("engine lock");
+        assert!(guard.sessions[round2_session]
+            .consumed_interactive_attempt_markers
+            .contains(&consumed_marker));
+        assert!(guard.sessions[aggregate_session]
+            .aggregated_interactive_attempt_markers
+            .contains(&aggregated_marker));
+    }
+    let replay = interactive_round2(round2_request)
+        .expect_err("the covered Round2 marker remains fail-closed after restart");
+    assert!(matches!(replay, EngineError::ConsumedNonceReplay { .. }));
+
+    clear_state_storage_policy_overrides();
+    cleanup_test_state_artifacts(&state_path);
 }
 
 #[test]
@@ -7365,12 +7939,10 @@ fn interactive_round2_completion_marker_binds_taproot_root() {
 }
 
 #[test]
-fn interactive_aggregate_cleanup_is_message_bound() {
-    // The aggregate's finalized-sibling cleanup matches the full identity
-    // (attempt_id + message + root). A mismatched aggregate - a VALID package for a
-    // DIFFERENT message submitted under a live attempt's id - must NOT delete that
-    // attempt's live nonce state (its message differs), mirroring the completion
-    // marker's message binding.
+fn interactive_aggregate_rejects_mismatched_message_without_cleanup() {
+    // Aggregate authorization binds the canonical signing package, including
+    // its message. A valid package for another message cannot create completion
+    // state or delete the authorized attempt's live nonce state.
     let _guard = lock_test_state();
     reset_for_tests();
 
@@ -7421,14 +7993,18 @@ fn interactive_aggregate_cleanup_is_message_bound() {
         key_package_hex: key_packages[&2].data_hex.clone(),
     })
     .expect("stateless share 2 over B");
-    interactive_aggregate(InteractiveAggregateRequest {
+    let err = interactive_aggregate(InteractiveAggregateRequest {
         session_id: session_id.to_string(),
         attempt_id: opened.attempt_id.clone(),
         signing_package_hex: package_b,
         signature_shares: vec![share1_b.signature_share, share2_b.signature_share],
         taproot_merkle_root_hex: None,
     })
-    .expect("aggregate over message B succeeds under message A's attempt id");
+    .expect_err("aggregate over message B must not use message A's attempt id");
+    assert!(
+        matches!(err, EngineError::Validation(ref message) if message.contains("not authorized")),
+        "unexpected error: {err:?}"
+    );
 
     // The live message-A seat must survive: the cleanup is message-bound.
     {
@@ -7438,6 +8014,7 @@ fn interactive_aggregate_cleanup_is_message_bound() {
             session.interactive_signing.contains_key(&1),
             "a mismatched-message aggregate must not delete the live message-A seat"
         );
+        assert!(session.aggregated_interactive_attempt_markers.is_empty());
     }
 }
 
@@ -8439,6 +9016,77 @@ fn interactive_heartbeat_intent_opens_and_releases_round2_share_under_firewall()
     drop(guard);
 
     clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn interactive_heartbeat_capacity_rejection_does_not_consume_wallet_token() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("heartbeat_capacity_preflight");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
+    std::env::set_var(TBTC_SIGNER_POLICY_HEARTBEAT_RATE_LIMIT_PER_MINUTE_ENV, "1");
+
+    let wallet_session = "wallet-heartbeat-capacity-preflight";
+    let key_group = "heartbeat-capacity-preflight-key-group";
+    let signing_session = "roast-heartbeat-capacity-preflight";
+    let included = [1u16, 2];
+    ensure_interactive_dkg_session(wallet_session, key_group);
+    {
+        let mut guard = state().expect("state").lock().expect("engine lock");
+        guard.sessions.insert(
+            "active-capacity-filler".to_string(),
+            SessionState::default(),
+        );
+        assert_eq!(active_session_count(&guard.sessions), 2);
+    }
+
+    let heartbeat_message = heartbeat_message_for_test(100);
+    let signing_message = heartbeat_signing_message_for_test(&heartbeat_message);
+    let request = InteractiveSessionOpenRequest {
+        session_id: signing_session.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(signing_message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        signing_intent: Some(heartbeat_signing_intent_for_test(&heartbeat_message)),
+        attempt_context: interactive_test_attempt_context(
+            signing_session,
+            key_group,
+            &signing_message,
+            &included,
+            1,
+        ),
+    };
+
+    let rejected = interactive_session_open(request.clone())
+        .expect_err("a full active tier must reject a fresh heartbeat session");
+    assert!(matches!(
+        rejected,
+        EngineError::Internal(ref message) if message.contains("active session registry size")
+    ));
+    {
+        let mut guard = state().expect("state").lock().expect("engine lock");
+        let limiter = &guard.sessions[wallet_session].heartbeat_rate_limiter;
+        assert_eq!(limiter.last_refill_unix, 0);
+        assert_eq!(limiter.token_microunits, 0);
+        assert_eq!(limiter.configured_rate_limit_per_minute, 0);
+        guard.sessions.remove("active-capacity-filler");
+    }
+
+    interactive_session_open(request)
+        .expect("the capacity-rejected call must leave the wallet's token available");
+    {
+        let guard = state().expect("state").lock().expect("engine lock");
+        let limiter = &guard.sessions[wallet_session].heartbeat_rate_limiter;
+        assert_eq!(limiter.configured_rate_limit_per_minute, 1);
+        assert_eq!(limiter.token_microunits, 0);
+    }
+
+    clear_state_storage_policy_overrides();
+    cleanup_test_state_artifacts(&state_path);
 }
 
 #[test]
@@ -10029,16 +10677,35 @@ fn interactive_aggregate_rejects_repeat_aggregate_of_completed_attempt() {
     assert_eq!(aggregate.attempt_id, opened.attempt_id);
 
     // A valid package/share set cannot be replayed under a different, merely
-    // well-formed id. Only an id established by Open (live observer) or Round2
-    // (durable signer marker) may create completion state, so this replay cannot
-    // consume another bounded marker slot.
+    // well-formed id.
     let mut unbound_request = aggregate_request.clone();
     unbound_request.attempt_id = "aa".repeat(32);
     assert_ne!(unbound_request.attempt_id, opened.attempt_id);
     let err = interactive_aggregate(unbound_request)
         .expect_err("an unbound aggregate attempt id must be rejected");
     assert!(
-        matches!(err, EngineError::Validation(ref message) if message.contains("is not bound")),
+        matches!(err, EngineError::Validation(ref message) if message.contains("not authorized")),
+        "unexpected error: {err:?}"
+    );
+
+    // Merely opening the next canonical attempt (and even producing fresh
+    // Round1 commitments) must not authorize the prior attempt's package. The
+    // old ID-only binding allowed this loop to add one completion marker per
+    // Open until the 128-entry cap blocked legitimate work.
+    let reopened = open_interactive_for_test(session_id, key_group, &message, &included, 2, 1, 2)
+        .expect("next canonical attempt opens");
+    interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: reopened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("next canonical attempt produces fresh commitments");
+    let mut rebound_replay = aggregate_request.clone();
+    rebound_replay.attempt_id = reopened.attempt_id;
+    let err = interactive_aggregate(rebound_replay)
+        .expect_err("a fresh Open must not authorize an old signing package");
+    assert!(
+        matches!(err, EngineError::Validation(ref message) if message.contains("not authorized")),
         "unexpected error: {err:?}"
     );
     {
@@ -10048,7 +10715,7 @@ fn interactive_aggregate_rejects_repeat_aggregate_of_completed_attempt() {
                 .aggregated_interactive_attempt_markers
                 .len(),
             1,
-            "an unbound replay must not consume aggregate-marker capacity"
+            "a replay under a freshly opened canonical id must not consume marker capacity"
         );
     }
 
@@ -10469,11 +11136,12 @@ fn interactive_aggregate_names_all_invalid_share_culprits() {
     let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
         .expect("opens");
 
-    let real1 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
-        key_package_identifier: key_packages[&1].identifier.clone(),
-        key_package_hex: key_packages[&1].data_hex.clone(),
+    let real1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
     })
-    .expect("member 1 nonces");
+    .expect("member 1 live authorization commitment");
     let real2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
         key_package_identifier: key_packages[&2].identifier.clone(),
         key_package_hex: key_packages[&2].data_hex.clone(),
@@ -10481,7 +11149,13 @@ fn interactive_aggregate_names_all_invalid_share_culprits() {
     .expect("member 2 nonces");
     let signing_package_hex = interactive_package_for_test(
         &message,
-        vec![real1.commitment.clone(), real2.commitment.clone()],
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: real1.commitments_hex,
+            },
+            real2.commitment.clone(),
+        ],
     );
 
     // Each member signs a different (2-party) package over another message, so
@@ -11119,17 +11793,27 @@ fn verify_signature_share_tweaked_root_matches_aggregate() {
     let included = [1u16, 2];
     let key_packages = ensure_interactive_dkg_session(session_id, key_group);
 
-    // The attempt's opened root is independent of the root passed to verify /
-    // aggregate (both take it as a parameter), so open with None and drive the
-    // tweaked path purely through the verify/aggregate root arguments.
-    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
-        .expect("opens");
-
-    let member1 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
-        key_package_identifier: key_packages[&1].identifier.clone(),
-        key_package_hex: key_packages[&1].data_hex.clone(),
+    let taproot_merkle_root = [0x11u8; 32];
+    let taproot_merkle_root_hex = hex::encode(taproot_merkle_root);
+    let opened = interactive_session_open(InteractiveSessionOpenRequest {
+        session_id: session_id.to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode(message),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: Some(taproot_merkle_root_hex.clone()),
+        signing_intent: None,
+        attempt_context: interactive_test_attempt_context(
+            session_id, key_group, &message, &included, 1,
+        ),
     })
-    .expect("member 1 nonces");
+    .expect("opens with the tweaked root");
+    let member1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("member 1 interactive nonces");
     let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
         key_package_identifier: key_packages[&2].identifier.clone(),
         key_package_hex: key_packages[&2].data_hex.clone(),
@@ -11137,11 +11821,14 @@ fn verify_signature_share_tweaked_root_matches_aggregate() {
     .expect("member 2 nonces");
     let signing_package_hex = interactive_package_for_test(
         &message,
-        vec![member1.commitment.clone(), member2.commitment.clone()],
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: member1.commitments_hex.clone(),
+            },
+            member2.commitment.clone(),
+        ],
     );
-
-    let taproot_merkle_root = [0x11u8; 32];
-    let taproot_merkle_root_hex = hex::encode(taproot_merkle_root);
 
     // Produce a TWEAKED round-2 share: sign_with_tweak signs under a
     // taproot-tweaked key package, exactly the production taproot signing path.
@@ -11167,11 +11854,14 @@ fn verify_signature_share_tweaked_root_matches_aggregate() {
         hex::encode(share.serialize())
     };
 
-    let share1 = sign_tweaked(
-        &key_packages[&1].data_hex,
-        &member1.nonces_hex,
-        &signing_package_hex,
-    );
+    let share1 = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect("member 1 tweaked Round2 share")
+    .signature_share_hex;
     let share2 = sign_tweaked(
         &key_packages[&2].data_hex,
         &member2.nonces_hex,
@@ -11221,7 +11911,7 @@ fn verify_signature_share_tweaked_root_matches_aggregate() {
             bogus_member2.commitment.clone(),
             NativeFrostCommitment {
                 identifier: key_packages[&1].identifier.clone(),
-                data_hex: member1.commitment.data_hex.clone(),
+                data_hex: member1.commitments_hex,
             },
         ],
     );

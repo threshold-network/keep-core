@@ -100,7 +100,7 @@ pub fn build_taproot_tx(request: BuildTaprootTxRequest) -> Result<TransactionRes
             });
         }
     }
-    ensure_session_insert_capacity(&mut guard.sessions, &request.session_id)?;
+    ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
 
     // BuildTaprootTx is an assembly-only step. Input prevout values and scripts
     // are trusted caller-supplied metadata and are not verified against chain

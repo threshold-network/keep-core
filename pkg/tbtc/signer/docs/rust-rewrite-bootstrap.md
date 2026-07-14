@@ -204,11 +204,17 @@ rewrite architecture.
   - reject over-limit runtime insertions and over-limit persisted payloads
     instead of evicting entries (no silent replay-protection weakening).
 - Added fail-closed global session-registry bounds:
-  - bounded total persisted session count via `TBTC_SIGNER_MAX_SESSIONS`
-    (default `1024`),
-  - reject over-limit persisted state payloads during decode/encode, and reject
-    new runtime session creation at capacity while preserving idempotent retries
-    for existing `session_id` values.
+  - bounded active session count via `TBTC_SIGNER_MAX_SESSIONS` (default
+    `1024`),
+  - idle per-message interactive sessions move into a separately bounded
+    persisted retirement tier of the same size, retaining delayed-retry routing,
+    policy artifacts, and replay/aggregate authorization tombstones without
+    exhausting active admission; the oldest retired entry is evicted when that
+    tier reaches its bound,
+  - reject over-limit active persisted state, compact an over-limit retired tier
+    to its bound during load, reject over-limit state during encode, and reject
+    new runtime session creation at active capacity while preserving idempotent
+    retries for existing `session_id` values.
 - Bootstrap dealer-model constraint: the current engine holds all generated key
   packages for a session in one process. This is temporary bootstrap behavior
   and does not provide production threshold key isolation.

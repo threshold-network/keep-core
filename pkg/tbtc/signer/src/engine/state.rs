@@ -135,7 +135,18 @@ pub(crate) struct SessionState {
     // after restart using only public material, and the full-lifetime role binding
     // prevents this per-signing session from later becoming an unrelated DKG owner.
     pub(crate) bound_key_group: Option<String>,
+    // Idle per-message entries move into a bounded persisted retirement tier
+    // instead of consuming the active-session budget forever. The full entry is
+    // retained temporarily so delayed Aggregate/verify-share calls and an outer
+    // retry's BuildTaprootTx policy artifact keep working. Old retired entries
+    // are evicted FIFO-by-time once the separate retirement budget is full.
+    pub(crate) retired_interactive_at_unix: Option<u64>,
     pub(crate) consumed_interactive_attempt_markers: HashSet<String>,
+    // Fixed-size SHA-256 bindings written atomically with Round2 consumption.
+    // Each marker authorizes Aggregate for exactly one
+    // (attempt_id, signing package, taproot root) tuple, including after a
+    // restart when the live nonce state is intentionally absent.
+    pub(crate) authorized_interactive_aggregate_markers: HashSet<String>,
     // Phase 7.2b InteractiveAggregate completion markers: an attempt whose
     // aggregate signature has been produced is recorded here so a repeat
     // InteractiveAggregate is rejected (re-aggregation is not a recovery path;
@@ -434,28 +445,46 @@ pub(crate) fn ensure_consumed_registry_persisted_bound(
     Ok(())
 }
 
+pub(crate) fn active_session_count(sessions: &HashMap<String, SessionState>) -> usize {
+    sessions
+        .values()
+        .filter(|session| session.retired_interactive_at_unix.is_none())
+        .count()
+}
+
+pub(crate) fn retired_interactive_session_count(sessions: &HashMap<String, SessionState>) -> usize {
+    sessions
+        .values()
+        .filter(|session| session.retired_interactive_at_unix.is_some())
+        .count()
+}
+
 pub(crate) fn ensure_session_registry_persisted_bound(
-    session_count: usize,
+    sessions: &HashMap<String, SessionState>,
 ) -> Result<(), EngineError> {
     let max_sessions = max_sessions_limit();
-    if session_count > max_sessions {
+    let active_count = active_session_count(sessions);
+    if active_count > max_sessions {
         return Err(EngineError::Internal(format!(
-            "persisted session registry size [{session_count}] exceeds max [{max_sessions}]"
+            "persisted session registry size [{active_count}] exceeds max [{max_sessions}]"
+        )));
+    }
+
+    let retired_count = retired_interactive_session_count(sessions);
+    if retired_count > max_sessions {
+        return Err(EngineError::Internal(format!(
+            "persisted retired interactive session registry size [{retired_count}] exceeds max [{max_sessions}]"
         )));
     }
 
     Ok(())
 }
 
-// A per-message interactive session is safe to reclaim once it has no live
-// nonce state and either completed aggregation or never accumulated any
-// durable/non-interactive state. Keep this predicate exhaustive: adding a new
-// SessionState field must force an explicit decision about whether reclaiming a
-// session carrying that field is safe.
-pub(crate) fn reclaimable_per_message_session(
-    session: &SessionState,
-    include_completed: bool,
-) -> bool {
+// Production interactive signing uses one outer session per message. Such a
+// session is bound to a wallet key but never owns DKG material; DKG installation
+// enforces that role split. Keep this match exhaustive so a future SessionState
+// field forces an explicit retirement-safety decision here.
+pub(crate) fn per_message_interactive_session(session: &SessionState) -> bool {
     let SessionState {
         dkg_request_fingerprint,
         dkg_key_packages,
@@ -482,75 +511,179 @@ pub(crate) fn reclaimable_per_message_session(
         heartbeat_rate_limiter,
         interactive_signing,
         bound_key_group,
+        retired_interactive_at_unix,
         consumed_interactive_attempt_markers,
+        authorized_interactive_aggregate_markers,
         aggregated_interactive_attempt_markers,
     } = session;
 
-    // Open-created per-message sessions are bound to a wallet key but never own
-    // DKG material. Wallet/DKG sessions are permanent and must not be compacted.
-    let per_message_role = bound_key_group.is_some()
+    let _ = (
+        sign_request_fingerprint,
+        sign_message_bytes,
+        round_state,
+        active_attempt_context,
+        attempt_transition_records,
+        consumed_attempt_ids,
+        consumed_sign_round_ids,
+        finalize_request_fingerprint,
+        signature_result,
+        consumed_finalize_round_ids,
+        consumed_finalize_request_fingerprints,
+        build_tx_request_fingerprint,
+        tx_result,
+        refresh_request_fingerprint,
+        refresh_result,
+        refresh_history,
+        refresh_count,
+        emergency_rekey_event,
+        heartbeat_rate_limiter,
+        interactive_signing,
+        retired_interactive_at_unix,
+        consumed_interactive_attempt_markers,
+        authorized_interactive_aggregate_markers,
+        aggregated_interactive_attempt_markers,
+    );
+
+    bound_key_group.is_some()
         && dkg_request_fingerprint.is_none()
         && dkg_key_packages.is_none()
         && dkg_public_key_package.is_none()
-        && dkg_result.is_none();
-    if !per_message_role || !interactive_signing.is_empty() {
-        return false;
-    }
-
-    // These fields belong to other session workflows. Their presence makes the
-    // role ambiguous, so retain the entry. BuildTaprootTx fields are handled
-    // separately below because they are the policy artifact for this same
-    // per-message signing flow.
-    let carries_other_workflow_state = sign_request_fingerprint.is_some()
-        || sign_message_bytes.is_some()
-        || round_state.is_some()
-        || active_attempt_context.is_some()
-        || !attempt_transition_records.is_empty()
-        || !consumed_attempt_ids.is_empty()
-        || !consumed_sign_round_ids.is_empty()
-        || finalize_request_fingerprint.is_some()
-        || signature_result.is_some()
-        || !consumed_finalize_round_ids.is_empty()
-        || !consumed_finalize_request_fingerprints.is_empty()
-        || refresh_request_fingerprint.is_some()
-        || refresh_result.is_some()
-        || !refresh_history.is_empty()
-        || *refresh_count != 0
-        || emergency_rekey_event.is_some()
-        || heartbeat_rate_limiter.last_refill_unix != 0
-        || heartbeat_rate_limiter.token_microunits != 0
-        || heartbeat_rate_limiter.configured_rate_limit_per_minute != 0;
-    if carries_other_workflow_state {
-        return false;
-    }
-
-    // Successful aggregation is terminal for this per-message flow. Preserve
-    // its completion tombstone until capacity pressure requires compaction, so
-    // immediate/restart retries retain their existing typed error semantics.
-    if include_completed && !aggregated_interactive_attempt_markers.is_empty() {
-        return true;
-    }
-
-    // Abort/TTL shells with no consumed share and no transaction-policy artifact
-    // are safe to recreate from Open. A BuildTaprootTx artifact must survive a
-    // failed attempt because the outer retry loop reuses this stable session ID.
-    aggregated_interactive_attempt_markers.is_empty()
-        && consumed_interactive_attempt_markers.is_empty()
-        && build_tx_request_fingerprint.is_none()
-        && tx_result.is_none()
+        && dkg_result.is_none()
 }
 
-pub(crate) fn reclaim_per_message_sessions(
-    sessions: &mut HashMap<String, SessionState>,
-    include_completed: bool,
+pub(crate) fn retire_idle_per_message_sessions(
+    engine_state: &mut EngineState,
+    protected_session_id: Option<&str>,
 ) -> usize {
-    let before = sessions.len();
-    sessions.retain(|_, session| !reclaimable_per_message_session(session, include_completed));
-    before.saturating_sub(sessions.len())
+    let retired_at = now_unix().max(1);
+    let pending_session_ids = persistence_pending_session_ids();
+    let mut newly_retired = 0;
+    for (session_id, session) in &mut engine_state.sessions {
+        if !pending_session_ids.contains(session_id)
+            && session.retired_interactive_at_unix.is_none()
+            && session.interactive_signing.is_empty()
+            && per_message_interactive_session(session)
+        {
+            session.retired_interactive_at_unix = Some(retired_at);
+            newly_retired += 1;
+        }
+    }
+
+    drop(compact_retired_per_message_sessions(
+        engine_state,
+        protected_session_id,
+    ));
+    newly_retired
+}
+
+pub(crate) fn compact_retired_per_message_sessions(
+    engine_state: &mut EngineState,
+    protected_session_id: Option<&str>,
+) -> Vec<(String, SessionState)> {
+    let max_retired = max_sessions_limit();
+    // A post-replacement persistence failure leaves the replacement snapshot's
+    // marker in memory and records a process-local repair operation. Evicting
+    // that session before a later successful snapshot would persist the
+    // marker's absence and then clear the repair record. Protect every
+    // session-scoped pending operation until a successful snapshot covers it.
+    let pending_session_ids = persistence_pending_session_ids();
+    let mut removed = Vec::new();
+    while retired_interactive_session_count(&engine_state.sessions) > max_retired {
+        let oldest = engine_state
+            .sessions
+            .iter()
+            .filter_map(|(session_id, session)| {
+                if protected_session_id == Some(session_id.as_str())
+                    || pending_session_ids.contains(session_id)
+                {
+                    return None;
+                }
+                session
+                    .retired_interactive_at_unix
+                    .map(|retired_at| (retired_at, session_id.clone()))
+            })
+            .min();
+        let Some((_, oldest_session_id)) = oldest else {
+            break;
+        };
+        let removed_session = engine_state
+            .sessions
+            .remove(&oldest_session_id)
+            .expect("selected retired session existed under the held engine lock");
+        removed.push((oldest_session_id, removed_session));
+    }
+    removed
+}
+
+pub(crate) fn restore_compacted_retired_sessions(
+    engine_state: &mut EngineState,
+    removed: Vec<(String, SessionState)>,
+) {
+    for (session_id, session) in removed {
+        let previous = engine_state.sessions.insert(session_id, session);
+        debug_assert!(
+            previous.is_none(),
+            "a compacted retired session must not be recreated while the engine lock is held"
+        );
+    }
+}
+
+pub(crate) fn ensure_interactive_session_admission_capacity(
+    engine_state: &EngineState,
+    session_id: &str,
+) -> Result<(), EngineError> {
+    let needs_active_slot = engine_state
+        .sessions
+        .get(session_id)
+        .map(|session| session.retired_interactive_at_unix.is_some())
+        .unwrap_or(true);
+    if !needs_active_slot {
+        return Ok(());
+    }
+
+    let max_sessions = max_sessions_limit();
+    let active_count = active_session_count(&engine_state.sessions);
+    if active_count >= max_sessions {
+        return Err(EngineError::Internal(format!(
+            "active session registry size [{active_count}] reached max [{max_sessions}]; abort idle sessions or increase {}",
+            TBTC_SIGNER_MAX_SESSIONS_ENV
+        )));
+    }
+
+    Ok(())
+}
+
+pub(crate) fn reactivate_retired_per_message_session(
+    engine_state: &mut EngineState,
+    session_id: &str,
+) -> Result<(), EngineError> {
+    let is_retired = engine_state
+        .sessions
+        .get(session_id)
+        .is_some_and(|session| session.retired_interactive_at_unix.is_some());
+    if !is_retired {
+        return Ok(());
+    }
+
+    let max_sessions = max_sessions_limit();
+    let active_count = active_session_count(&engine_state.sessions);
+    if active_count >= max_sessions {
+        return Err(EngineError::Internal(format!(
+            "active session registry size [{active_count}] reached max [{max_sessions}]; abort idle sessions or increase {}",
+            TBTC_SIGNER_MAX_SESSIONS_ENV
+        )));
+    }
+
+    engine_state
+        .sessions
+        .get_mut(session_id)
+        .expect("retired session existed under the held engine lock")
+        .retired_interactive_at_unix = None;
+    Ok(())
 }
 
 pub(crate) fn ensure_session_insert_capacity(
-    sessions: &mut HashMap<String, SessionState>,
+    sessions: &HashMap<String, SessionState>,
     session_id: &str,
 ) -> Result<(), EngineError> {
     if sessions.contains_key(session_id) {
@@ -558,16 +691,10 @@ pub(crate) fn ensure_session_insert_capacity(
     }
 
     let max_sessions = max_sessions_limit();
-    if sessions.len() >= max_sessions {
-        // Completed per-message sessions are bounded tombstones, not wallet
-        // ownership state. Compact them only when a new session needs a slot;
-        // the caller's ensuing durable mutation persists the compacted map.
-        reclaim_per_message_sessions(sessions, true);
-    }
-    if sessions.len() >= max_sessions {
+    let active_count = active_session_count(sessions);
+    if active_count >= max_sessions {
         return Err(EngineError::Internal(format!(
-            "session registry size [{}] reached max [{max_sessions}]; use an existing session_id or increase {}",
-            sessions.len(),
+            "active session registry size [{active_count}] reached max [{max_sessions}]; use an existing session_id or increase {}",
             TBTC_SIGNER_MAX_SESSIONS_ENV
         )));
     }

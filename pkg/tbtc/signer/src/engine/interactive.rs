@@ -26,7 +26,7 @@ use super::*;
 // possibly reloaded from durable state) are honored FAIL-CLOSED on read: a bare
 // marker means the attempt is consumed for every member.
 pub(crate) fn interactive_consumed_marker(attempt_id: &str, member_identifier: u16) -> String {
-    format!("m{member_identifier}@{attempt_id}")
+    format!("m{member_identifier}@{attempt_id}@v2")
 }
 
 pub(crate) fn interactive_attempt_consumed(
@@ -35,45 +35,64 @@ pub(crate) fn interactive_attempt_consumed(
     member_identifier: u16,
 ) -> bool {
     markers.contains(&interactive_consumed_marker(attempt_id, member_identifier))
+        // Pre-v2 multi-seat marker. It remains a replay blocker after upgrade,
+        // but does not authorize Aggregate because it has no package binding.
+        || markers.contains(&format!("m{member_identifier}@{attempt_id}"))
         || markers.contains(attempt_id)
 }
 
-// Aggregate is a public operation, so both signers (whose Round2 consumption
-// marker is durable) and observers (whose live Open state remains until
-// aggregation) may run it. Require one of those existing bindings before an
-// aggregate attempt can create durable completion state. Without this check a
-// caller could replay one valid package/share set under arbitrary attempt ids,
-// filling the bounded marker registry without ever opening those attempts.
-pub(crate) fn interactive_aggregate_attempt_is_bound(
+// Fixed-size, exact authorization written atomically with the Round2 consumed
+// marker. Hash canonical package bytes rather than caller-provided hex so
+// alternate encodings cannot create distinct persistent records.
+pub(crate) fn interactive_aggregate_authorization_marker(
+    attempt_id: &str,
+    signing_package: &frost::SigningPackage,
+    taproot_merkle_root: Option<&[u8; 32]>,
+) -> Result<String, EngineError> {
+    let signing_package_bytes = signing_package.serialize().map_err(|error| {
+        EngineError::Internal(format!(
+            "failed to serialize signing package for Aggregate authorization: {error}"
+        ))
+    })?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"tbtc-signer/interactive-aggregate-authorization/v1");
+    hasher.update((attempt_id.len() as u64).to_be_bytes());
+    hasher.update(attempt_id.as_bytes());
+    match taproot_merkle_root {
+        Some(root) => {
+            hasher.update([1]);
+            hasher.update(root);
+        }
+        None => hasher.update([0]),
+    }
+    hasher.update((signing_package_bytes.len() as u64).to_be_bytes());
+    hasher.update(&signing_package_bytes);
+    Ok(hex::encode(hasher.finalize()))
+}
+
+// A live authorization is exact only when this engine still holds a Round1
+// commitment included in the package. Open context alone cannot bind a FROST
+// package to attempt_number because the package carries no attempt id. Durable
+// authorization therefore comes from Round2; this live path supports a local
+// participating coordinator before its own Round2 call.
+fn interactive_aggregate_has_live_authorization(
     session: &SessionState,
     attempt_id: &str,
-) -> bool {
-    if session
-        .interactive_signing
-        .values()
-        .any(|interactive| interactive.attempt_context.attempt_id == attempt_id)
-    {
-        return true;
+    signing_package: &frost::SigningPackage,
+    taproot_merkle_root: Option<&[u8; 32]>,
+) -> Result<bool, EngineError> {
+    for interactive in session.interactive_signing.values().filter(|interactive| {
+        interactive.attempt_context.attempt_id == attempt_id
+            && interactive.taproot_merkle_root.as_ref() == taproot_merkle_root
+            && interactive.round1.is_some()
+    }) {
+        match verify_round2_signing_package(interactive, signing_package) {
+            Ok(()) => return Ok(true),
+            Err(error @ EngineError::Internal(_)) => return Err(error),
+            Err(_) => {}
+        }
     }
-
-    session
-        .consumed_interactive_attempt_markers
-        .iter()
-        .any(|marker| {
-            if marker == attempt_id {
-                // Legacy single-seat marker.
-                return true;
-            }
-
-            let Some((member, marker_attempt_id)) = marker.split_once('@') else {
-                return false;
-            };
-            member
-                .strip_prefix('m')
-                .and_then(|member| member.parse::<u16>().ok())
-                .is_some()
-                && marker_attempt_id == attempt_id
-        })
+    Ok(false)
 }
 
 // The aggregate completion marker binds attempt_id to the AGGREGATED message digest,
@@ -458,13 +477,10 @@ pub fn interactive_session_open(
         }
     }
 
-    // Create the per-signing session on first Open if it is distinct from the wallet
-    // DKG session (the production case). Its DKG material is NOT copied here - it stays
-    // the single wallet copy, resolved by key_group; only per-signing state lives here.
-    // Bound by the SAME total-session cap as every other session-creating path (a fresh
-    // RoastSessionID per message would otherwise let the registry grow unbounded and
-    // then be rejected on reload); a reopen of an existing session is exempt.
-    ensure_session_insert_capacity(&mut guard.sessions, &request.session_id)?;
+    // Admission/reactivation is fallible at a full active tier. Preflight it
+    // before charging the wallet's heartbeat budget; the engine lock prevents
+    // the count from changing before the actual install below.
+    ensure_interactive_session_admission_capacity(&guard, &request.session_id)?;
 
     // A typed heartbeat never passes through BuildTaprootTx, so charge its own
     // per-wallet policy budget at the last fallible boundary before installing
@@ -485,6 +501,12 @@ pub fn interactive_session_open(
             &mut wallet_session.heartbeat_rate_limiter,
         )?;
     }
+
+    // Create (or reactivate) the per-signing session only after every other
+    // fallible gate. A rejected heartbeat must not pull an idle tombstone back
+    // into the active budget. DKG material remains solely in the wallet session.
+    reactivate_retired_per_message_session(&mut guard, &request.session_id)?;
+    ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
 
     let session = guard
         .sessions
@@ -644,10 +666,6 @@ pub fn interactive_round2(
     if interactive_round2_persistence_pending(&request.session_id, &consumed_marker) {
         persist_engine_state_to_storage(&guard)
             .map_err(PersistEngineStateError::into_engine_error)?;
-        clear_persistence_pending_operation(&PersistencePendingOperation::InteractiveRound2 {
-            session_id: request.session_id.clone(),
-            consumed_marker: consumed_marker.clone(),
-        });
     }
 
     // Quarantine inputs must be read before the session is borrowed
@@ -822,6 +840,17 @@ pub fn interactive_round2(
         &quarantined_operator_identifiers,
         auto_quarantine_config.as_ref(),
     )?;
+    let aggregate_authorization_marker = interactive_aggregate_authorization_marker(
+        &attempt_id,
+        &signing_package,
+        interactive.taproot_merkle_root.as_ref(),
+    )?;
+    ensure_consumed_registry_insert_capacity(
+        &session.authorized_interactive_aggregate_markers,
+        &aggregate_authorization_marker,
+        "authorized_interactive_aggregate_markers",
+        &request.session_id,
+    )?;
 
     // Consumption-before-release: the durable marker is persisted BEFORE the
     // share is computed and returned. A failure before state-file replacement
@@ -842,6 +871,17 @@ pub fn interactive_round2(
     session
         .consumed_interactive_attempt_markers
         .insert(consumed_marker.clone());
+    session
+        .authorized_interactive_aggregate_markers
+        .insert(aggregate_authorization_marker.clone());
+    let retires_session =
+        session.interactive_signing.len() == 1 && per_message_interactive_session(session);
+    let compacted_retired_sessions = if retires_session {
+        session.retired_interactive_at_unix = Some(now_unix().max(1));
+        compact_retired_per_message_sessions(&mut guard, Some(&request.session_id))
+    } else {
+        Vec::new()
+    };
     if let Err(persist_error) =
         persist_engine_state_to_storage_with_key(&guard, &resolved_state_key)
     {
@@ -866,6 +906,13 @@ pub fn interactive_round2(
             session
                 .consumed_interactive_attempt_markers
                 .remove(&consumed_marker);
+            session
+                .authorized_interactive_aggregate_markers
+                .remove(&aggregate_authorization_marker);
+            if retires_session {
+                session.retired_interactive_at_unix = None;
+            }
+            restore_compacted_retired_sessions(&mut guard, compacted_retired_sessions);
         }
         return Err(persist_error);
     }
@@ -969,6 +1016,11 @@ pub fn interactive_aggregate(
         &aggregated_message_digest,
         taproot_merkle_root.as_ref(),
     );
+    let aggregate_authorization_marker = interactive_aggregate_authorization_marker(
+        &attempt_id,
+        &signing_package,
+        taproot_merkle_root.as_ref(),
+    )?;
 
     let mut guard = state()?
         .lock()
@@ -979,10 +1031,6 @@ pub fn interactive_aggregate(
     if interactive_aggregate_persistence_pending(&request.session_id, &aggregated_marker) {
         persist_engine_state_to_storage(&guard)
             .map_err(PersistEngineStateError::into_engine_error)?;
-        clear_persistence_pending_operation(&PersistencePendingOperation::InteractiveAggregate {
-            session_id: request.session_id.clone(),
-            aggregated_marker: aggregated_marker.clone(),
-        });
     }
     // Aggregate takes the engine lock like every other interactive entry
     // point, so it sweeps expired interactive state too: the TTL
@@ -1018,9 +1066,18 @@ pub fn interactive_aggregate(
                     attempt_id,
                 });
             }
-            if !interactive_aggregate_attempt_is_bound(session, &attempt_id) {
+            let authorized = session
+                .authorized_interactive_aggregate_markers
+                .contains(&aggregate_authorization_marker)
+                || interactive_aggregate_has_live_authorization(
+                    session,
+                    &attempt_id,
+                    &signing_package,
+                    taproot_merkle_root.as_ref(),
+                )?;
+            if !authorized {
                 return Err(EngineError::Validation(format!(
-                    "InteractiveAggregate: attempt_id [{attempt_id}] is not bound to an open or consumed attempt for session [{}]",
+                    "InteractiveAggregate: package is not authorized for attempt_id [{attempt_id}] in session [{}]",
                     request.session_id
                 )));
             }
@@ -1160,6 +1217,21 @@ pub fn interactive_aggregate(
             attempt_id,
         });
     }
+    let authorized = session
+        .authorized_interactive_aggregate_markers
+        .contains(&aggregate_authorization_marker)
+        || interactive_aggregate_has_live_authorization(
+            session,
+            &attempt_id,
+            &signing_package,
+            taproot_merkle_root.as_ref(),
+        )?;
+    if !authorized {
+        return Err(EngineError::Validation(format!(
+            "InteractiveAggregate: package authorization changed before completion for attempt_id [{attempt_id}] in session [{}]",
+            request.session_id
+        )));
+    }
     ensure_consumed_registry_insert_capacity(
         &session.aggregated_interactive_attempt_markers,
         &aggregated_marker,
@@ -1203,6 +1275,9 @@ pub fn interactive_aggregate(
                 .aggregated_interactive_attempt_markers
                 .remove(&aggregated_marker);
         }
+        if state_file_replaced {
+            retire_idle_per_message_sessions(&mut guard, Some(&request.session_id));
+        }
         return Err(persist_error);
     }
 
@@ -1222,6 +1297,7 @@ pub fn interactive_aggregate(
         &aggregated_message_digest,
         taproot_merkle_root.as_ref(),
     );
+    retire_idle_per_message_sessions(&mut guard, Some(&request.session_id));
     drop(guard);
 
     latency_guard.mark_success();
@@ -1287,9 +1363,11 @@ pub fn interactive_session_abort(
         }
         None => false,
     };
-    // An Open-only per-message shell carries no durable replay or policy state;
-    // once its last member is aborted it can be recreated safely on a retry.
-    reclaim_per_message_sessions(&mut guard.sessions, false);
+    // Once the last live member is aborted, move a production per-message
+    // entry into the separately bounded retirement tier. Its BuildTaprootTx
+    // artifact and replay markers remain available for a delayed outer retry,
+    // without consuming the active-session budget indefinitely.
+    retire_idle_per_message_sessions(&mut guard, None);
 
     // Only count a success when live interactive state was actually
     // aborted. A no-op call (no session, or an attempt_id filter that
@@ -1618,10 +1696,9 @@ pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) {
             }
         }
     }
-    // Expiry has abort semantics. Reclaim only empty Open-created shells here;
-    // consumed-but-unaggregated sessions and BuildTaprootTx policy artifacts
-    // must survive for restart/outer-loop retry.
-    reclaim_per_message_sessions(&mut engine_state.sessions, false);
+    // Expiry has abort semantics. Retire idle per-message entries while
+    // retaining their bounded policy/replay tombstones for delayed retries.
+    retire_idle_per_message_sessions(engine_state, None);
 }
 
 pub(crate) fn max_live_interactive_sessions_limit() -> usize {
