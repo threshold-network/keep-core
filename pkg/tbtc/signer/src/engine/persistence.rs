@@ -216,6 +216,10 @@ pub(crate) static PERSIST_FAULT_INJECTION_POINT: OnceLock<
     Mutex<Option<PersistFaultInjectionPoint>>,
 > = OnceLock::new();
 
+#[cfg(test)]
+static STATE_FILE_PARENT_DIRECTORY_SYNCS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PersistFaultInjectionPoint {
     AfterTempSyncBeforeRename,
@@ -607,6 +611,62 @@ pub(crate) fn corrupted_state_backup_prefix(path: &Path) -> String {
     format!("{state_filename}.corrupt-")
 }
 
+/// Returns the state file's parent directory in a form suitable for filesystem
+/// directory operations. `Path::parent` represents a one-component relative
+/// path's parent as an empty path, but APIs such as `File::open` and `read_dir`
+/// do not interpret that empty path as the current directory.
+pub(crate) fn state_file_parent_directory(path: &Path) -> Option<&Path> {
+    path.parent().map(|parent| {
+        if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        }
+    })
+}
+
+/// Synchronizes the directory entry containing the state file. Callers use
+/// this after an atomic replacement, or when replay proves the replacement
+/// already happened but its directory sync was not acknowledged.
+pub(crate) fn sync_state_file_parent_directory(path: &Path) -> Result<(), EngineError> {
+    let Some(parent) = state_file_parent_directory(path) else {
+        return Ok(());
+    };
+    let directory = fs::File::open(parent).map_err(|e| {
+        EngineError::Internal(format!(
+            "failed to open signer state directory [{}] for sync: {e}",
+            parent.display()
+        ))
+    })?;
+    directory.sync_all().map_err(|e| {
+        EngineError::Internal(format!(
+            "failed to sync signer state directory [{}]: {e}",
+            parent.display()
+        ))
+    })?;
+    #[cfg(test)]
+    STATE_FILE_PARENT_DIRECTORY_SYNCS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
+}
+
+/// Repairs directory durability for an existing state-file entry while
+/// preserving no-op behavior before the first state file has been created.
+pub(crate) fn sync_existing_state_file_parent_directory(path: &Path) -> Result<(), EngineError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => sync_state_file_parent_directory(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(EngineError::Internal(format!(
+            "failed to inspect signer state file [{}] before directory sync: {error}",
+            path.display()
+        ))),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn state_file_parent_directory_syncs_for_tests() -> usize {
+    STATE_FILE_PARENT_DIRECTORY_SYNCS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 pub(crate) fn corrupted_state_backup_path(path: &Path) -> PathBuf {
     let backup_prefix = corrupted_state_backup_prefix(path);
     let backup_filename = format!(
@@ -627,7 +687,7 @@ pub(crate) fn corrupted_state_backup_path(path: &Path) -> PathBuf {
 }
 
 pub(crate) fn sorted_corrupted_state_backups(path: &Path) -> Result<Vec<PathBuf>, EngineError> {
-    let Some(parent) = path.parent() else {
+    let Some(parent) = state_file_parent_directory(path) else {
         return Ok(Vec::new());
     };
     let backup_prefix = corrupted_state_backup_prefix(path);
@@ -1497,7 +1557,7 @@ pub(crate) fn persist_engine_state_to_storage_with_key(
     let temp_path = path.with_extension(format!("tmp-{}", std::process::id()));
     let mut state_file_replaced = false;
     let persist_result = (|| -> Result<(), EngineError> {
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = state_file_parent_directory(&path) {
             fs::create_dir_all(parent).map_err(|e| {
                 EngineError::Internal(format!(
                     "failed to create signer state directory [{}]: {e}",
@@ -1544,20 +1604,7 @@ pub(crate) fn persist_engine_state_to_storage_with_key(
         state_file_replaced = true;
         maybe_inject_persist_fault(PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync)?;
 
-        if let Some(parent) = path.parent() {
-            let directory = fs::File::open(parent).map_err(|e| {
-                EngineError::Internal(format!(
-                    "failed to open signer state directory [{}] for sync: {e}",
-                    parent.display()
-                ))
-            })?;
-            directory.sync_all().map_err(|e| {
-                EngineError::Internal(format!(
-                    "failed to sync signer state directory [{}]: {e}",
-                    parent.display()
-                ))
-            })?;
-        }
+        sync_state_file_parent_directory(&path)?;
 
         Ok(())
     })();
