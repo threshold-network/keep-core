@@ -7249,6 +7249,11 @@ fn interactive_package_for_test(
     .signing_package_hex
 }
 
+fn interactive_last_activity_at_for_test(session_id: &str, member_identifier: u16) -> Instant {
+    let guard = state().expect("state").lock().expect("lock");
+    guard.sessions[session_id].interactive_signing[&member_identifier].last_activity_at
+}
+
 fn stateless_package_and_shares_for_test(
     message_bytes: &[u8],
     signer_ids: &[u16],
@@ -7305,6 +7310,12 @@ fn interactive_round2_state_key_failure_does_not_burn_attempt() {
     let key_group = "interactive-round2-key-failure-group";
     let message = [0x42u8; 32];
     let included = [1u16, 2];
+    let ttl_seconds = interactive_session_ttl_seconds();
+    let margin_seconds = ttl_seconds / 4;
+    assert!(
+        margin_seconds > 0,
+        "the configured interactive TTL must provide a synthetic test margin"
+    );
 
     let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
         .expect("interactive session opens");
@@ -7329,6 +7340,36 @@ fn interactive_round2_state_key_failure_does_not_burn_attempt() {
             member2.commitment.clone(),
         ],
     );
+    let rejected_signing_package_hex = interactive_package_for_test(
+        &[0x43u8; 32],
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+
+    // Advance well within the TTL. Invalid traffic must not refresh this live
+    // handle, while the later retry-preserving key failure must refresh it at
+    // failure completion.
+    let prior_activity = interactive_last_activity_at_for_test(session_id, 1);
+    advance_interactive_clock_for_tests(ttl_seconds / 2);
+
+    let rejected = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: rejected_signing_package_hex,
+    })
+    .expect_err("a wrong-message Round2 package must be rejected");
+    assert!(matches!(rejected, EngineError::Validation(_)));
+    assert_eq!(
+        interactive_last_activity_at_for_test(session_id, 1),
+        prior_activity,
+        "invalid Round2 traffic must not refresh activity"
+    );
 
     // Make the state-key command fail, then attempt Round2.
     std::env::set_var(
@@ -7337,6 +7378,7 @@ fn interactive_round2_state_key_failure_does_not_burn_attempt() {
     );
     std::env::set_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV, "exit 7");
 
+    let round2_started_at = interactive_now();
     let err = interactive_round2(InteractiveRound2Request {
         session_id: session_id.to_string(),
         attempt_id: opened.attempt_id.clone(),
@@ -7344,11 +7386,12 @@ fn interactive_round2_state_key_failure_does_not_burn_attempt() {
         signing_package_hex: signing_package_hex.clone(),
     })
     .expect_err("round 2 must fail when the state-key command fails");
+    let failure_returned_at = interactive_now();
     assert!(matches!(err, EngineError::Internal(_)), "got {err:?}");
 
     // The consumption marker must NOT be set: the failed Round2 must not burn
     // the attempt.
-    {
+    let refreshed_activity = {
         let guard = state().expect("state").lock().expect("lock");
         let session = guard.sessions.get(session_id).expect("session exists");
         assert!(
@@ -7357,9 +7400,30 @@ fn interactive_round2_state_key_failure_does_not_burn_attempt() {
                 .contains(&interactive_consumed_marker(&opened.attempt_id, 1)),
             "a Round2 that failed at the state-key step must not leave a consumption marker"
         );
-    }
+        let interactive = session
+            .interactive_signing
+            .get(&1)
+            .expect("key failure leaves the nonce handle retryable");
+        assert!(interactive.round1.is_some(), "Round1 nonces remain live");
+        interactive.last_activity_at
+    };
+    assert!(
+        refreshed_activity > prior_activity,
+        "validated retry-preserving Round2 failure must advance activity"
+    );
+    assert!(
+        refreshed_activity >= round2_started_at && refreshed_activity <= failure_returned_at,
+        "Round2 failure activity must fall within the failed call"
+    );
 
-    // Restore a working key; the same attempt must still release its share.
+    // Model substantial but sub-TTL inactivity from the failed call without
+    // sleeping, then restore a working key. The same attempt must release its
+    // share rather than being swept on retry.
+    advance_interactive_clock_for_tests(margin_seconds);
+    assert!(
+        interactive_now().saturating_duration_since(refreshed_activity)
+            < Duration::from_secs(ttl_seconds)
+    );
     std::env::remove_var(TBTC_SIGNER_STATE_KEY_COMMAND_ENV);
     std::env::remove_var(TBTC_SIGNER_STATE_KEY_PROVIDER_ENV);
 
@@ -7751,19 +7815,7 @@ fn per_message_abort_and_expiry_retire_without_losing_policy_artifacts() {
         member_identifier: 1,
     })
     .expect("expired flow round 1");
-    {
-        let mut guard = state().expect("state").lock().expect("lock");
-        let interactive = guard
-            .sessions
-            .get_mut(expired_session)
-            .expect("expired session exists")
-            .interactive_signing
-            .get_mut(&1)
-            .expect("expired flow remains live");
-        interactive.opened_at_unix = interactive
-            .opened_at_unix
-            .saturating_sub(interactive_session_ttl_seconds() + 1);
-    }
+    advance_interactive_clock_for_tests(interactive_session_ttl_seconds().saturating_add(1));
     let expired = interactive_round1(InteractiveRound1Request {
         session_id: expired_session.to_string(),
         attempt_id: expired_open.attempt_id,
@@ -8040,19 +8092,15 @@ fn partial_member_expiry_persists_binding_before_restart() {
         .expect("both members create nonce state");
     }
 
-    {
-        let mut guard = state().expect("state").lock().expect("lock");
-        let member = guard
-            .sessions
-            .get_mut(signing_session)
-            .expect("signing session remains live")
-            .interactive_signing
-            .get_mut(&1)
-            .expect("member 1 remains live");
-        member.opened_at_unix = member
-            .opened_at_unix
-            .saturating_sub(interactive_session_ttl_seconds() + 1);
-    }
+    let ttl_seconds = interactive_session_ttl_seconds();
+    advance_interactive_clock_for_tests(ttl_seconds / 2);
+    interactive_round1(InteractiveRound1Request {
+        session_id: signing_session.to_string(),
+        attempt_id: member_1.attempt_id.clone(),
+        member_identifier: 2,
+    })
+    .expect("member 2 activity refreshes independently");
+    advance_interactive_clock_for_tests(ttl_seconds / 2 + 1);
     let expired = interactive_round1(InteractiveRound1Request {
         session_id: signing_session.to_string(),
         attempt_id: member_1.attempt_id,
@@ -9671,6 +9719,9 @@ fn interactive_round2_persist_fault_leaves_nonces_live() {
     let key_group = "interactive-test-key-group";
     let message = [0x71u8; 32];
     let included = [1u16, 2];
+    let ttl_seconds = interactive_session_ttl_seconds();
+    let margin_seconds = ttl_seconds / 4;
+    assert!(margin_seconds > 0);
 
     let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
         .expect("opens");
@@ -9695,10 +9746,13 @@ fn interactive_round2_persist_fault_leaves_nonces_live() {
             member2.commitment,
         ],
     );
+    let prior_activity = interactive_last_activity_at_for_test(session_id, 1);
+    advance_interactive_clock_for_tests(ttl_seconds / 2);
 
     // Consumption-before-release: if the durable marker cannot be
     // persisted, NO share leaves the engine and the nonces stay live.
     set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let fault_started_at = interactive_now();
     let faulted = interactive_round2(InteractiveRound2Request {
         session_id: session_id.to_string(),
         attempt_id: opened.attempt_id.clone(),
@@ -9706,13 +9760,14 @@ fn interactive_round2_persist_fault_leaves_nonces_live() {
         signing_package_hex: signing_package_hex.clone(),
     })
     .expect_err("injected persist fault must fail round 2");
+    let fault_returned_at = interactive_now();
     clear_persist_fault_injection_for_tests();
     assert!(
         matches!(faulted, EngineError::Internal(ref m) if m.contains("injected persist fault")),
         "unexpected error: {faulted:?}"
     );
 
-    {
+    let refreshed_activity = {
         let guard = state().expect("state").lock().expect("lock");
         let session = guard.sessions.get(session_id).expect("session exists");
         assert!(
@@ -9721,10 +9776,29 @@ fn interactive_round2_persist_fault_leaves_nonces_live() {
                 .contains(&interactive_consumed_marker(&opened.attempt_id, 1)),
             "a failed persist must roll the consumption marker back"
         );
-    }
+        let interactive = session
+            .interactive_signing
+            .get(&1)
+            .expect("pre-replacement failure leaves the nonce retryable");
+        assert!(interactive.round1.is_some(), "Round1 nonces remain live");
+        interactive.last_activity_at
+    };
+    assert!(
+        refreshed_activity > prior_activity,
+        "pre-replacement failure completion must advance activity"
+    );
+    assert!(
+        refreshed_activity >= fault_started_at && refreshed_activity <= fault_returned_at,
+        "persistence-failure activity must fall within the failed call"
+    );
 
     // The same attempt completes once persistence recovers - the
     // nonces were never consumed by the failed call.
+    advance_interactive_clock_for_tests(margin_seconds);
+    assert!(
+        interactive_now().saturating_duration_since(refreshed_activity)
+            < Duration::from_secs(ttl_seconds)
+    );
     interactive_round2(InteractiveRound2Request {
         session_id: session_id.to_string(),
         attempt_id: opened.attempt_id.clone(),
@@ -10084,6 +10158,23 @@ fn interactive_abort_persist_failures_are_retryable_before_replace_and_fail_clos
 }
 
 #[test]
+fn reset_for_tests_clears_interactive_clock_offset() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let baseline = interactive_now();
+    advance_interactive_clock_for_tests(3_600);
+    let advanced = interactive_now();
+    assert!(advanced.saturating_duration_since(baseline) >= Duration::from_secs(3_600));
+
+    reset_for_tests();
+    assert!(
+        interactive_now() < advanced,
+        "engine reset must clear the test-only interactive clock offset"
+    );
+}
+
+#[test]
 fn interactive_session_ttl_expiry_has_abort_semantics() {
     let _guard = lock_test_state();
     reset_for_tests();
@@ -10104,18 +10195,7 @@ fn interactive_session_ttl_expiry_has_abort_semantics() {
 
     // Age the session past the TTL directly; the next entry point's
     // lazy sweep must destroy the nonces with abort semantics.
-    {
-        let mut guard = state().expect("state").lock().expect("lock");
-        let session = guard.sessions.get_mut(session_id).expect("session exists");
-        let interactive = session
-            .interactive_signing
-            .values_mut()
-            .next()
-            .expect("live interactive state");
-        interactive.opened_at_unix = interactive
-            .opened_at_unix
-            .saturating_sub(interactive_session_ttl_seconds() + 1);
-    }
+    advance_interactive_clock_for_tests(interactive_session_ttl_seconds().saturating_add(1));
 
     let expired = interactive_round1(InteractiveRound1Request {
         session_id: session_id.to_string(),
@@ -10132,6 +10212,172 @@ fn interactive_session_ttl_expiry_has_abort_semantics() {
     // never released a share, so reopening is allowed.
     open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
         .expect("an expired (never consumed) attempt may reopen");
+}
+
+#[test]
+fn interactive_inactivity_ttl_refreshes_on_idempotent_open() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let session_id = "interactive-ttl-idempotent-open";
+    let key_group = "interactive-test-key-group";
+    let message = [0xa2u8; 32];
+    let included = [1u16, 2];
+
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("opens");
+    let ttl_seconds = interactive_session_ttl_seconds();
+    let recent_margin_seconds = ttl_seconds / 4;
+    assert!(
+        recent_margin_seconds > 0,
+        "the configured interactive TTL must provide a synthetic test margin"
+    );
+    let prior_activity = interactive_last_activity_at_for_test(session_id, 1);
+
+    // Advance by half the TTL without sleeping. The exact retry is legitimate
+    // activity and must advance the monotonic timestamp.
+    advance_interactive_clock_for_tests(ttl_seconds / 2);
+
+    let retry_started_at = interactive_now();
+    let retry = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("an exact Open retry remains live");
+    assert!(retry.idempotent);
+    let refreshed_activity = {
+        let guard = state().expect("state").lock().expect("lock");
+        guard.sessions[session_id].interactive_signing[&1].last_activity_at
+    };
+    assert!(
+        refreshed_activity > prior_activity,
+        "an idempotent Open must advance the member's activity instant"
+    );
+    assert!(
+        refreshed_activity >= retry_started_at,
+        "the refreshed activity instant must belong to the retry"
+    );
+
+    // Model substantial but still sub-TTL inactivity from the observed retry
+    // instant. This stays far from the expiry boundary and requires no sleep.
+    advance_interactive_clock_for_tests(recent_margin_seconds);
+    assert!(
+        interactive_now().saturating_duration_since(refreshed_activity)
+            < Duration::from_secs(ttl_seconds),
+        "the synthetic activity must remain comfortably inside the TTL"
+    );
+
+    interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id,
+        member_identifier: 1,
+    })
+    .expect("recent idempotent Open activity keeps the attempt live");
+}
+
+#[test]
+fn interactive_inactivity_ttl_refreshes_fresh_round1_per_member_before_round2() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let session_id = "interactive-ttl-round1-round2";
+    let key_group = "interactive-test-key-group";
+    let message = [0xa3u8; 32];
+    let included = [1u16, 2];
+    let key_packages = interactive_test_key_packages();
+    let ttl_seconds = interactive_session_ttl_seconds();
+    let margin_seconds = ttl_seconds / 4;
+    assert!(
+        margin_seconds > 0,
+        "the configured interactive TTL must provide a synthetic test margin"
+    );
+
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("member 1 opens");
+    open_interactive_for_test(session_id, key_group, &message, &included, 1, 2, 2)
+        .expect("member 2 opens");
+    let round1_member_2 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 2,
+    })
+    .expect("member 2 round 1");
+
+    // Member 1 has not run Round1 yet. Advance it well within the TTL, then
+    // prove rejected traffic cannot refresh its original Open activity.
+    let prior_activity = interactive_last_activity_at_for_test(session_id, 1);
+    advance_interactive_clock_for_tests(ttl_seconds / 2);
+    let rejected_attempt_id = hash_hex(b"rejected-ttl-round1-attempt");
+    assert_ne!(rejected_attempt_id, opened.attempt_id);
+    let rejected = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: rejected_attempt_id,
+        member_identifier: 1,
+    })
+    .expect_err("a wrong-attempt Round1 must be rejected");
+    assert_eq!(
+        interactive_last_activity_at_for_test(session_id, 1),
+        prior_activity,
+        "rejected traffic must not refresh the member's activity instant"
+    );
+    assert!(matches!(rejected, EngineError::Validation(_)));
+
+    // A first, successful Round1 must advance the monotonic activity instant.
+    let round1_started_at = interactive_now();
+    let round1_member_1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("member 1 fresh round 1");
+    let refreshed_activity = interactive_last_activity_at_for_test(session_id, 1);
+    assert!(
+        refreshed_activity > prior_activity,
+        "fresh Round1 must advance the member's activity instant"
+    );
+    assert!(
+        refreshed_activity >= round1_started_at,
+        "the refreshed activity instant must belong to fresh Round1"
+    );
+
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1_member_1.commitments_hex,
+            },
+            NativeFrostCommitment {
+                identifier: key_packages[&2].identifier.clone(),
+                data_hex: round1_member_2.commitments_hex,
+            },
+        ],
+    );
+
+    // Advance far enough that member 2, idle since offset zero, is beyond the
+    // TTL while member 1's fresh Round1 remains comfortably live.
+    advance_interactive_clock_for_tests(ttl_seconds / 2 + margin_seconds);
+    let synthetic_now = interactive_now();
+    let idle_activity = interactive_last_activity_at_for_test(session_id, 2);
+    assert!(
+        synthetic_now.saturating_duration_since(refreshed_activity)
+            < Duration::from_secs(ttl_seconds)
+    );
+    assert!(
+        synthetic_now.saturating_duration_since(idle_activity) > Duration::from_secs(ttl_seconds)
+    );
+
+    interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id,
+        member_identifier: 1,
+        signing_package_hex,
+    })
+    .expect("recent Round1 activity keeps member 1 live through Round2");
+
+    let guard = state().expect("state").lock().expect("lock");
+    let session = guard.sessions.get(session_id).expect("session remains");
+    assert!(
+        !session.interactive_signing.contains_key(&2),
+        "the genuinely idle sibling expires on the same sweep"
+    );
 }
 
 #[test]
@@ -11008,21 +11254,7 @@ fn interactive_abort_sweeps_expired_sessions() {
         member_identifier: 1,
     })
     .expect("round 1");
-    {
-        let mut guard = state().expect("state").lock().expect("lock");
-        let session = guard
-            .sessions
-            .get_mut("interactive-abort-sweep-a")
-            .expect("session A exists");
-        let interactive = session
-            .interactive_signing
-            .values_mut()
-            .next()
-            .expect("live interactive state");
-        interactive.opened_at_unix = interactive
-            .opened_at_unix
-            .saturating_sub(interactive_session_ttl_seconds() + 1);
-    }
+    advance_interactive_clock_for_tests(interactive_session_ttl_seconds().saturating_add(1));
 
     // An abort for a DIFFERENT session is the only post-expiry traffic;
     // it must still sweep session A's expired nonces (the TTL guarantee
@@ -12998,20 +13230,7 @@ fn interactive_aggregate_sweeps_expired_sessions() {
         member_identifier: 1,
     })
     .expect("round 1");
-    {
-        let mut guard = state().expect("state").lock().expect("lock");
-        let interactive = guard
-            .sessions
-            .get_mut("interactive-aggregate-sweep-a")
-            .expect("session A")
-            .interactive_signing
-            .values_mut()
-            .next()
-            .expect("live interactive state");
-        interactive.opened_at_unix = interactive
-            .opened_at_unix
-            .saturating_sub(interactive_session_ttl_seconds() + 1);
-    }
+    advance_interactive_clock_for_tests(interactive_session_ttl_seconds().saturating_add(1));
 
     // A parseable threshold-sized package + share so the aggregate call
     // reaches the lock and the sweep (it then fails on the missing

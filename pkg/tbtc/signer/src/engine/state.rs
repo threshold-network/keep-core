@@ -71,7 +71,12 @@ pub(crate) struct InteractiveSigningState {
     /// intent rather than relying on a durable generic-message allowlist.
     pub(crate) signing_intent: Option<InteractiveSigningIntent>,
     pub(crate) key_package: frost::keys::KeyPackage,
-    pub(crate) opened_at_unix: u64,
+    /// Monotonic time of the last successful activity for this member's live
+    /// attempt. Exact Open and Round1 retries refresh it, as does a validated
+    /// Round2 whose retry-preserving durability work fails. Rejected traffic
+    /// does not extend nonce residency. This state is transient, so `Instant`
+    /// never crosses the persistence boundary.
+    pub(crate) last_activity_at: Instant,
     pub(crate) round1: Option<InteractiveRound1State>,
 }
 

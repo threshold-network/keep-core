@@ -60,6 +60,7 @@ pub(crate) fn establish_clean_signer_test_env() {
 
 #[cfg(test)]
 pub fn reset_for_tests() {
+    reset_interactive_clock_for_tests();
     clear_installed_signer_config_for_tests();
     clear_persist_fault_injection_for_tests();
     clear_persistence_pending_operations();

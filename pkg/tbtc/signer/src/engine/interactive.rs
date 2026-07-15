@@ -19,6 +19,41 @@
 use super::*;
 
 #[cfg(test)]
+static INTERACTIVE_CLOCK_OFFSET_SECONDS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn interactive_now() -> Instant {
+    #[cfg(test)]
+    {
+        let offset_seconds =
+            INTERACTIVE_CLOCK_OFFSET_SECONDS.load(std::sync::atomic::Ordering::SeqCst);
+        Instant::now()
+            .checked_add(Duration::from_secs(offset_seconds))
+            .expect("interactive test clock offset fits the monotonic clock")
+    }
+    #[cfg(not(test))]
+    {
+        Instant::now()
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn advance_interactive_clock_for_tests(seconds: u64) {
+    INTERACTIVE_CLOCK_OFFSET_SECONDS
+        .fetch_update(
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+            |current| current.checked_add(seconds),
+        )
+        .expect("interactive test clock offset does not overflow");
+}
+
+#[cfg(test)]
+pub(crate) fn reset_interactive_clock_for_tests() {
+    INTERACTIVE_CLOCK_OFFSET_SECONDS.store(0, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(test)]
 static INTERACTIVE_AGGREGATE_HOLD_AFTER_UNLOCK: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 #[cfg(test)]
@@ -473,6 +508,14 @@ pub fn interactive_session_open(
 
     match matching_attempt_idempotent {
         Some(true) => {
+            let interactive = guard
+                .sessions
+                .get_mut(&request.session_id)
+                .expect("idempotent Open session exists")
+                .interactive_signing
+                .get_mut(&member_identifier)
+                .expect("idempotent Open member exists");
+            interactive.last_activity_at = interactive_now();
             return Ok(InteractiveSessionOpenResult {
                 session_id: request.session_id,
                 attempt_id,
@@ -706,7 +749,7 @@ pub fn interactive_session_open(
             taproot_merkle_root,
             signing_intent: request.signing_intent,
             key_package,
-            opened_at_unix: now_unix(),
+            last_activity_at: interactive_now(),
             round1: None,
         },
     );
@@ -769,12 +812,15 @@ pub fn interactive_round1(
         request.member_identifier,
     )?;
 
-    if let Some(round1) = interactive.round1.as_ref() {
+    if let Some(commitments_hex) = interactive
+        .round1
+        .as_ref()
+        .map(|round1| round1.commitments_hex.clone())
+    {
         // Idempotent until consumed: the commitments are public and
         // re-sending them is safe; the nonces never leave.
-        return Ok(InteractiveRound1Result {
-            commitments_hex: round1.commitments_hex.clone(),
-        });
+        interactive.last_activity_at = interactive_now();
+        return Ok(InteractiveRound1Result { commitments_hex });
     }
 
     let mut rng = zeroizing_rng_from_os();
@@ -789,6 +835,7 @@ pub fn interactive_round1(
         nonces,
         commitments_hex: commitments_hex.clone(),
     });
+    interactive.last_activity_at = interactive_now();
 
     latency_guard.mark_success();
     record_hardening_telemetry(|telemetry| {
@@ -1039,7 +1086,20 @@ pub fn interactive_round2(
     // tagged with an old key id that decode rejects on restart. Resolving before
     // the marker also keeps a key-provider outage failing the attempt cleanly (no
     // marker written) rather than escaping the rollback below via `?`.
-    let resolved_state_key = state_encryption_key_material()?;
+    let resolved_state_key = match state_encryption_key_material() {
+        Ok(key) => key,
+        Err(error) => {
+            // Key-provider commands can run long enough to cross the TTL. The
+            // validated request still leaves this nonce handle retryable, so
+            // measure its inactivity from failure completion, not command start.
+            session
+                .interactive_signing
+                .get_mut(&request.member_identifier)
+                .expect("validated Round2 interactive state remains retryable")
+                .last_activity_at = interactive_now();
+            return Err(error);
+        }
+    };
     session
         .consumed_interactive_attempt_markers
         .insert(consumed_marker.clone());
@@ -1084,6 +1144,14 @@ pub fn interactive_round2(
             if retires_session {
                 session.retired_interactive_at_unix = None;
             }
+            // A pre-replacement failure deliberately leaves the nonce handle
+            // retryable. Persistence may itself be slow, so restart inactivity
+            // at failure completion before releasing the engine lock.
+            session
+                .interactive_signing
+                .get_mut(&request.member_identifier)
+                .expect("pre-replacement Round2 failure leaves interactive state")
+                .last_activity_at = interactive_now();
             restore_compacted_retired_sessions(&mut guard, compacted_retired_sessions);
         }
         return Err(persist_error);
@@ -1986,8 +2054,8 @@ pub(crate) fn resolve_wallet_session_id(
 }
 
 pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) -> Vec<String> {
-    let ttl_seconds = interactive_session_ttl_seconds();
-    let now = now_unix();
+    let ttl = Duration::from_secs(interactive_session_ttl_seconds());
+    let now = interactive_now();
     let mut changed_session_ids = HashSet::new();
     // Open requires an existing wallet DKG, but production signing normally
     // uses a distinct per-message session bound to that wallet. Expiry clears
@@ -1995,11 +2063,14 @@ pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) ->
     // and replay state until active admission needs the shared slot.
     for (session_id, session) in &mut engine_state.sessions {
         // Per-member expiry: each seat's entry expires independently by its own
-        // opened_at_unix; non-expired sibling seats in the same session survive.
+        // last successful activity; non-expired sibling seats in the same session
+        // survive. Rejected traffic cannot keep nonce state resident.
         let expired_members: Vec<u16> = session
             .interactive_signing
             .iter()
-            .filter(|(_, interactive)| now.saturating_sub(interactive.opened_at_unix) > ttl_seconds)
+            .filter(|(_, interactive)| {
+                now.saturating_duration_since(interactive.last_activity_at) > ttl
+            })
             .map(|(member, _)| *member)
             .collect();
         if !expired_members.is_empty() {
