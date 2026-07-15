@@ -14,6 +14,7 @@ const SECONDS_PER_DAY: u64 = 86_400;
 const DEFAULT_DAO_OVERRIDE_MAX_TTL_SECONDS: u64 = 7 * SECONDS_PER_DAY;
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AdmissionPolicyV1 {
     #[serde(default)]
     max_operators_per_provider: Option<usize>,
@@ -935,6 +936,38 @@ mod tests {
                 region: "europe-west1".to_string(),
             },
         ]
+    }
+
+    #[test]
+    fn admission_policy_deserialization_rejects_unknown_fields() {
+        let valid_policy_json = include_str!("../../scripts/admission-policy-v1.sample.json");
+        let typo_policy_json = valid_policy_json.replace(
+            "\"max_operators_per_provider\"",
+            "\"max_operator_per_provider\"",
+        );
+        assert_ne!(typo_policy_json, valid_policy_json);
+
+        let error = serde_json::from_str::<AdmissionPolicyV1>(&typo_policy_json)
+            .expect_err("a misspelled security policy field must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `max_operator_per_provider`"),
+            "unexpected parse error: {error}"
+        );
+    }
+
+    #[test]
+    fn admission_policy_deserialization_accepts_supported_fields() {
+        let policy = serde_json::from_str::<AdmissionPolicyV1>(include_str!(
+            "../../scripts/admission-policy-v1.sample.json"
+        ))
+        .expect("the shipped admission policy sample should remain valid");
+
+        assert_eq!(policy.max_operators_per_provider, Some(2));
+        assert_eq!(policy.max_operators_per_region, Some(2));
+        assert_eq!(policy.dao_override_max_ttl_seconds, Some(604_800));
     }
 
     fn sign_override_payload(payload_json: String) -> (String, AdmissionOverrideArtifact) {
