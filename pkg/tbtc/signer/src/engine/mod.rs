@@ -48,7 +48,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 use std::str::FromStr;
-use std::sync::{mpsc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use frost_secp256k1_tr::{
@@ -76,7 +76,7 @@ use crate::api::{
     PersistDistributedDkgKeyPackageRequest, PromoteCanaryRequest, PromoteCanaryResult,
     QuarantineStatusRequest, QuarantineStatusResult, RefreshCadenceStatusRequest,
     RefreshCadenceStatusResult, RefreshSharesRequest, RefreshSharesResult,
-    RoastLivenessPolicyResult, RollbackCanaryRequest, RollbackCanaryResult, RoundState,
+    RoastLivenessPolicyResult, RollbackCanaryRequest, RollbackCanaryResult, RoundState, SecretHex,
     SignatureResult, SignerHardeningMetricsResult, TransactionResult, TranscriptAuditRecord,
     TranscriptAuditRequest, TranscriptAuditResult, TriggerEmergencyRekeyRequest,
     TriggerEmergencyRekeyResult, VerifyBlameProofRequest,

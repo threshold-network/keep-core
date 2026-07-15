@@ -18,6 +18,45 @@
 
 use super::*;
 
+#[cfg(test)]
+static INTERACTIVE_AGGREGATE_HOLD_AFTER_UNLOCK: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+static INTERACTIVE_AGGREGATE_UNLOCK_HELD: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+static INTERACTIVE_AGGREGATE_RELEASE_AFTER_UNLOCK: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
+
+#[cfg(test)]
+pub(crate) fn arm_interactive_aggregate_unlock_hold_for_tests() {
+    use std::sync::atomic::Ordering;
+    INTERACTIVE_AGGREGATE_UNLOCK_HELD.store(false, Ordering::SeqCst);
+    INTERACTIVE_AGGREGATE_RELEASE_AFTER_UNLOCK.store(false, Ordering::SeqCst);
+    INTERACTIVE_AGGREGATE_HOLD_AFTER_UNLOCK.store(true, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn interactive_aggregate_unlock_held_for_tests() -> bool {
+    INTERACTIVE_AGGREGATE_UNLOCK_HELD.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[cfg(test)]
+pub(crate) fn release_interactive_aggregate_unlock_for_tests() {
+    INTERACTIVE_AGGREGATE_RELEASE_AFTER_UNLOCK.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn maybe_hold_interactive_aggregate_after_unlock_for_tests() {
+    use std::sync::atomic::Ordering;
+    if INTERACTIVE_AGGREGATE_HOLD_AFTER_UNLOCK.swap(false, Ordering::SeqCst) {
+        INTERACTIVE_AGGREGATE_UNLOCK_HELD.store(true, Ordering::SeqCst);
+        while !INTERACTIVE_AGGREGATE_RELEASE_AFTER_UNLOCK.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+    }
+}
+
 // Multi-seat: a session's interactive consumed-nonce markers are keyed per
 // (attempt_id, member_identifier), so independent local seats can each consume
 // their own nonces for the same attempt without colliding. The marker is written
@@ -26,6 +65,9 @@ use super::*;
 // possibly reloaded from durable state) are honored FAIL-CLOSED on read: a bare
 // marker means the attempt is consumed for every member.
 pub(crate) fn interactive_consumed_marker(attempt_id: &str, member_identifier: u16) -> String {
+    // Keep the schema-1 wire representation understood by the immediately
+    // previous signer. A binary rollback must continue to see the attempt as
+    // consumed and fail closed rather than releasing a second share.
     format!("m{member_identifier}@{attempt_id}")
 }
 
@@ -35,7 +77,109 @@ pub(crate) fn interactive_attempt_consumed(
     member_identifier: u16,
 ) -> bool {
     markers.contains(&interactive_consumed_marker(attempt_id, member_identifier))
+        // Transitional marker written by an unreleased intermediate build.
+        // Continue honoring it fail-closed when upgrading that state.
+        || markers.contains(&format!("m{member_identifier}@{attempt_id}@v2"))
         || markers.contains(attempt_id)
+}
+
+// Fixed-size, exact authorization written atomically with the Round2 consumed
+// marker. Hash canonical package bytes rather than caller-provided hex so
+// alternate encodings cannot create distinct persistent records.
+pub(crate) fn interactive_aggregate_authorization_marker(
+    attempt_id: &str,
+    signing_package: &frost::SigningPackage,
+    taproot_merkle_root: Option<&[u8; 32]>,
+) -> Result<String, EngineError> {
+    let signing_package_bytes = signing_package.serialize().map_err(|error| {
+        EngineError::Internal(format!(
+            "failed to serialize signing package for Aggregate authorization: {error}"
+        ))
+    })?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"tbtc-signer/interactive-aggregate-authorization/v1");
+    hasher.update((attempt_id.len() as u64).to_be_bytes());
+    hasher.update(attempt_id.as_bytes());
+    match taproot_merkle_root {
+        Some(root) => {
+            hasher.update([1]);
+            hasher.update(root);
+        }
+        None => hasher.update([0]),
+    }
+    hasher.update((signing_package_bytes.len() as u64).to_be_bytes());
+    hasher.update(&signing_package_bytes);
+    Ok(hex::encode(hasher.finalize()))
+}
+
+// Session-scoped identity for a successfully aggregated canonical package.
+// It deliberately excludes attempt_id: the inner FROST package does not carry
+// one, so a non-signing coordinator can validate only the live coordinator
+// context plus package shape. Persisting this identity prevents the same valid
+// package/share set from being replayed under fresh canonical attempts to fill
+// the bounded completion registry.
+pub(crate) fn interactive_aggregate_package_completion_marker(
+    signing_package: &frost::SigningPackage,
+    taproot_merkle_root: Option<&[u8; 32]>,
+) -> Result<String, EngineError> {
+    let signing_package_bytes = signing_package.serialize().map_err(|error| {
+        EngineError::Internal(format!(
+            "failed to serialize signing package for Aggregate completion: {error}"
+        ))
+    })?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"tbtc-signer/interactive-aggregate-package-completion/v1");
+    match taproot_merkle_root {
+        Some(root) => {
+            hasher.update([1]);
+            hasher.update(root);
+        }
+        None => hasher.update([0]),
+    }
+    hasher.update((signing_package_bytes.len() as u64).to_be_bytes());
+    hasher.update(&signing_package_bytes);
+    Ok(hex::encode(hasher.finalize()))
+}
+
+// A signer proves live authorization with the exact Round1 commitment included
+// in the package. The elected coordinator is also allowed to aggregate a strict
+// first-t package that omits it: its validated live attempt authorizes the
+// common message/threshold/included-subset shape, while the package-completion
+// marker above prevents cross-attempt reuse of that otherwise attempt-less
+// FROST package. An omitted non-coordinator never receives this fallback.
+fn interactive_aggregate_has_live_authorization(
+    session: &SessionState,
+    attempt_id: &str,
+    signing_package: &frost::SigningPackage,
+    taproot_merkle_root: Option<&[u8; 32]>,
+) -> Result<bool, EngineError> {
+    for interactive in session.interactive_signing.values().filter(|interactive| {
+        interactive.attempt_context.attempt_id == attempt_id
+            && interactive.taproot_merkle_root.as_ref() == taproot_merkle_root
+            && interactive.round1.is_some()
+    }) {
+        match verify_round2_signing_package(interactive, signing_package) {
+            Ok(()) => return Ok(true),
+            Err(error @ EngineError::Internal(_)) => return Err(error),
+            Err(_) => {
+                let own_identifier =
+                    participant_identifier_to_frost_identifier(interactive.member_identifier)?;
+                let is_omitted_coordinator = interactive.member_identifier
+                    == interactive.attempt_context.coordinator_identifier
+                    && !signing_package
+                        .signing_commitments()
+                        .contains_key(&own_identifier);
+                if is_omitted_coordinator {
+                    match verify_interactive_signing_package_context(interactive, signing_package) {
+                        Ok(()) => return Ok(true),
+                        Err(error @ EngineError::Internal(_)) => return Err(error),
+                        Err(_) => {}
+                    }
+                }
+            }
+        }
+    }
+    Ok(false)
 }
 
 // The aggregate completion marker binds attempt_id to the AGGREGATED message digest,
@@ -140,7 +284,7 @@ pub fn interactive_session_open(
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    sweep_expired_interactive_state(&mut guard);
+    sweep_expired_interactive_state_durably(&mut guard)?;
 
     let auto_quarantine_config = load_auto_quarantine_config()?;
 
@@ -420,42 +564,130 @@ pub fn interactive_session_open(
         }
     }
 
-    // Create the per-signing session on first Open if it is distinct from the wallet
-    // DKG session (the production case). Its DKG material is NOT copied here - it stays
-    // the single wallet copy, resolved by key_group; only per-signing state lives here.
-    // Bound by the SAME total-session cap as every other session-creating path (a fresh
-    // RoastSessionID per message would otherwise let the registry grow unbounded and
-    // then be rejected on reload); a reopen of an existing session is exempt.
-    ensure_session_insert_capacity(&guard.sessions, &request.session_id)?;
+    // Admission/reactivation is fallible at active capacity, or when every
+    // retired slot at the shared total bound is protected. Preflight it before
+    // charging the wallet's heartbeat budget; the engine lock prevents the
+    // registry from changing before the actual install below.
+    ensure_interactive_session_admission_capacity(&guard, &request.session_id)?;
+
+    // A BuildTaprootTx-backed signing shell is persisted before its first Open.
+    // Make the first wallet binding durable before reporting Open success, or a
+    // crash would reload that old unbound shell as an active non-retirable entry.
+    // A co-located DKG session already has a durable wallet role and needs no
+    // additional write here; a previously bound per-message session likewise
+    // reuses its durable identity.
+    let persists_new_per_message_binding = match guard.sessions.get(&request.session_id) {
+        Some(session) => session.dkg_result.is_none() && session.bound_key_group.is_none(),
+        None => true,
+    };
+    let resolved_binding_state_key = if persists_new_per_message_binding {
+        Some(state_encryption_key_material()?)
+    } else {
+        None
+    };
 
     // A typed heartbeat never passes through BuildTaprootTx, so charge its own
-    // per-wallet policy budget at the last fallible boundary before installing
-    // live signing state. All validation and the exact-retry return above have
-    // already run: malformed/conflicting Opens cannot burn a token, an
-    // idempotent retry is free, and Round2 only rechecks the stored intent.
-    if matches!(
+    // per-wallet policy budget only after all validation and the exact-retry
+    // return above. If the new binding cannot be persisted before replacement,
+    // the limiter snapshot is restored along with the session registry, so a
+    // durability failure cannot burn the caller's only legitimate token.
+    let is_heartbeat = matches!(
         request.signing_intent.as_ref(),
         Some(InteractiveSigningIntent::Heartbeat { .. })
-    ) {
+    );
+    let previous_heartbeat_rate_limiter = if is_heartbeat {
         let wallet_session = guard.sessions.get_mut(&wallet_session_id).ok_or_else(|| {
             EngineError::SessionNotFound {
                 session_id: wallet_session_id.clone(),
             }
         })?;
+        let previous = wallet_session.heartbeat_rate_limiter.clone();
         enforce_heartbeat_rate_limit(
             &request.session_id,
             &mut wallet_session.heartbeat_rate_limiter,
         )?;
+        Some(previous)
+    } else {
+        None
+    };
+
+    // Create (or reactivate) the per-signing session only after every other
+    // fallible gate. A rejected heartbeat must not pull an idle tombstone back
+    // into the active budget. DKG material remains solely in the wallet session.
+    let session_existed = guard.sessions.contains_key(&request.session_id);
+    let (previous_bound_key_group, previous_retired_at) = guard
+        .sessions
+        .get(&request.session_id)
+        .map(|session| {
+            (
+                session.bound_key_group.clone(),
+                session.retired_interactive_at_unix,
+            )
+        })
+        .unwrap_or((None, None));
+    reactivate_retired_per_message_session(&mut guard, &request.session_id)?;
+    let compacted_retired_sessions =
+        ensure_session_insert_capacity(&mut guard, &request.session_id)?;
+
+    {
+        let session = guard
+            .sessions
+            .entry(request.session_id.clone())
+            .or_insert_with(SessionState::default);
+        // Bind this signing session to the wallet key it signs for, so Round2 and
+        // Aggregate resolve the same wallet material by key_group.
+        session.bound_key_group = Some(request.key_group.clone());
+    }
+
+    if let Some(resolved_state_key) = resolved_binding_state_key.as_ref() {
+        if let Err(persist_error) =
+            persist_engine_state_to_storage_with_key(&guard, resolved_state_key)
+        {
+            let state_file_replaced = persist_error.state_file_replaced();
+            let persist_error = persist_error.into_engine_error();
+
+            if let Some(previous) = previous_heartbeat_rate_limiter {
+                guard
+                    .sessions
+                    .get_mut(&wallet_session_id)
+                    .expect("wallet session existed while rolling back Open")
+                    .heartbeat_rate_limiter = previous;
+            }
+
+            if state_file_replaced {
+                let session = guard
+                    .sessions
+                    .get_mut(&request.session_id)
+                    .expect("Open session existed after state-file replacement");
+                if session.interactive_signing.is_empty()
+                    && per_message_interactive_session(session)
+                {
+                    session.retired_interactive_at_unix = Some(now_unix().max(1));
+                }
+                mark_persistence_pending(PersistencePendingOperation::InteractiveState {
+                    session_id: request.session_id.clone(),
+                });
+            } else {
+                if session_existed {
+                    let session = guard
+                        .sessions
+                        .get_mut(&request.session_id)
+                        .expect("Open session existed while rolling back binding");
+                    session.bound_key_group = previous_bound_key_group;
+                    session.retired_interactive_at_unix = previous_retired_at;
+                } else {
+                    guard.sessions.remove(&request.session_id);
+                }
+                restore_compacted_retired_sessions(&mut guard, compacted_retired_sessions);
+            }
+            return Err(persist_error);
+        }
     }
 
     let session = guard
         .sessions
-        .entry(request.session_id.clone())
-        .or_insert_with(SessionState::default);
-    // Bind this signing session to the wallet key it signs for, so Round2 and Aggregate
-    // resolve the same wallet material by key_group.
-    session.bound_key_group = Some(request.key_group.clone());
-
+        .get_mut(&request.session_id)
+        .expect("Open session existed after binding persistence");
     // Replace only THIS member's prior entry (zeroizing its old nonces); sibling
     // seats' entries are untouched.
     if let Some(mut replaced) = session.interactive_signing.remove(&member_identifier) {
@@ -511,7 +743,7 @@ pub fn interactive_round1(
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    sweep_expired_interactive_state(&mut guard);
+    sweep_expired_interactive_state_durably(&mut guard)?;
 
     let session = guard.sessions.get_mut(&request.session_id).ok_or_else(|| {
         EngineError::SessionNotFound {
@@ -598,7 +830,7 @@ pub fn interactive_round2(
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
-    sweep_expired_interactive_state(&mut guard);
+    sweep_expired_interactive_state_durably(&mut guard)?;
 
     // An earlier marker write may have replaced the state file but failed its
     // directory sync. Flush that fail-closed marker before consulting the replay
@@ -606,10 +838,6 @@ pub fn interactive_round2(
     if interactive_round2_persistence_pending(&request.session_id, &consumed_marker) {
         persist_engine_state_to_storage(&guard)
             .map_err(PersistEngineStateError::into_engine_error)?;
-        clear_persistence_pending_operation(&PersistencePendingOperation::InteractiveRound2 {
-            session_id: request.session_id.clone(),
-            consumed_marker: consumed_marker.clone(),
-        });
     }
 
     // Quarantine inputs must be read before the session is borrowed
@@ -784,6 +1012,17 @@ pub fn interactive_round2(
         &quarantined_operator_identifiers,
         auto_quarantine_config.as_ref(),
     )?;
+    let aggregate_authorization_marker = interactive_aggregate_authorization_marker(
+        &attempt_id,
+        &signing_package,
+        interactive.taproot_merkle_root.as_ref(),
+    )?;
+    ensure_consumed_registry_insert_capacity(
+        &session.authorized_interactive_aggregate_markers,
+        &aggregate_authorization_marker,
+        "authorized_interactive_aggregate_markers",
+        &request.session_id,
+    )?;
 
     // Consumption-before-release: the durable marker is persisted BEFORE the
     // share is computed and returned. A failure before state-file replacement
@@ -804,6 +1043,17 @@ pub fn interactive_round2(
     session
         .consumed_interactive_attempt_markers
         .insert(consumed_marker.clone());
+    session
+        .authorized_interactive_aggregate_markers
+        .insert(aggregate_authorization_marker.clone());
+    let retires_session =
+        session.interactive_signing.len() == 1 && per_message_interactive_session(session);
+    let compacted_retired_sessions = if retires_session {
+        session.retired_interactive_at_unix = Some(now_unix().max(1));
+        compact_retired_per_message_sessions(&mut guard, Some(&request.session_id))
+    } else {
+        Vec::new()
+    };
     if let Err(persist_error) =
         persist_engine_state_to_storage_with_key(&guard, &resolved_state_key)
     {
@@ -828,6 +1078,13 @@ pub fn interactive_round2(
             session
                 .consumed_interactive_attempt_markers
                 .remove(&consumed_marker);
+            session
+                .authorized_interactive_aggregate_markers
+                .remove(&aggregate_authorization_marker);
+            if retires_session {
+                session.retired_interactive_at_unix = None;
+            }
+            restore_compacted_retired_sessions(&mut guard, compacted_retired_sessions);
         }
         return Err(persist_error);
     }
@@ -903,16 +1160,7 @@ pub fn interactive_aggregate(
         HardeningOperationLatencyGuard::success_only(HardeningOperation::InteractiveAggregate);
     enforce_provenance_gate()?;
     validate_session_id(&request.session_id)?;
-    let attempt_id = canonical_attempt_id(&request.attempt_id);
-    // The completion marker persists attempt_id, and the reload path rejects an
-    // empty key; reject an empty attempt_id here too so a malformed (or
-    // malicious) request cannot write durable state that fails to reload after
-    // a restart.
-    if attempt_id.is_empty() {
-        return Err(EngineError::Validation(
-            "InteractiveAggregate: attempt_id must not be empty".to_string(),
-        ));
-    }
+    let attempt_id = canonical_aggregate_attempt_id(&request.attempt_id)?;
 
     let mut signing_package_bytes = decode_hex_field(
         "InteractiveAggregate",
@@ -940,36 +1188,38 @@ pub fn interactive_aggregate(
         &aggregated_message_digest,
         taproot_merkle_root.as_ref(),
     );
+    let aggregate_authorization_marker = interactive_aggregate_authorization_marker(
+        &attempt_id,
+        &signing_package,
+        taproot_merkle_root.as_ref(),
+    )?;
+    let aggregate_package_completion_marker = interactive_aggregate_package_completion_marker(
+        &signing_package,
+        taproot_merkle_root.as_ref(),
+    )?;
 
     let mut guard = state()?
         .lock()
         .map_err(|_| EngineError::Internal("engine lock poisoned".to_string()))?;
+    // Sweep first so a failure while repairing any prior completion marker can
+    // never postpone destruction of newly expired nonce handles.
+    sweep_expired_interactive_state_durably(&mut guard)?;
     // A prior completion-marker write may have replaced the state file but failed
     // its directory sync. Re-persist that fail-closed marker before the completed
     // attempt check so a retry repairs durability and is then rejected normally.
     if interactive_aggregate_persistence_pending(&request.session_id, &aggregated_marker) {
         persist_engine_state_to_storage(&guard)
             .map_err(PersistEngineStateError::into_engine_error)?;
-        clear_persistence_pending_operation(&PersistencePendingOperation::InteractiveAggregate {
-            session_id: request.session_id.clone(),
-            aggregated_marker: aggregated_marker.clone(),
-        });
     }
-    // Aggregate takes the engine lock like every other interactive entry
-    // point, so it sweeps expired interactive state too: the TTL
-    // guarantee (a nonce handle gone within the TTL of inactivity) must
-    // hold even when the only post-expiry traffic is aggregate calls.
-    sweep_expired_interactive_state(&mut guard);
-
     // Resolve the group's public key package (the verifying shares used
     // to check each contribution) from the session's own DKG state, not
     // the request - consistent with the no-secret-on-the-FFI discipline
     // and so a caller cannot substitute verifying material. The session
     // must exist with completed DKG.
-    let public_key_package = {
+    let (public_key_package, aggregate_eviction_pin) = {
         // The completion marker is per-signing-session state; read it - and the wallet
         // key_group this session serves - from request.session_id.
-        let key_group = {
+        let (key_group, aggregate_eviction_pin) = {
             let session = guard.sessions.get(&request.session_id).ok_or_else(|| {
                 EngineError::SessionNotFound {
                     session_id: request.session_id.clone(),
@@ -989,16 +1239,41 @@ pub fn interactive_aggregate(
                     attempt_id,
                 });
             }
+            let authorized = session
+                .authorized_interactive_aggregate_markers
+                .contains(&aggregate_authorization_marker)
+                || interactive_aggregate_has_live_authorization(
+                    session,
+                    &attempt_id,
+                    &signing_package,
+                    taproot_merkle_root.as_ref(),
+                )?;
+            if !authorized {
+                return Err(EngineError::Validation(format!(
+                    "InteractiveAggregate: package is not authorized for attempt_id [{attempt_id}] in session [{}]",
+                    request.session_id
+                )));
+            }
+            if session
+                .authorized_interactive_aggregate_markers
+                .contains(&aggregate_package_completion_marker)
+            {
+                return Err(EngineError::Validation(format!(
+                    "InteractiveAggregate: signing package was already aggregated in session [{}]",
+                    request.session_id
+                )));
+            }
             // The wallet key this signing session serves: its own DKG (co-located) or
             // the key_group bound at Open (distinct per-signing RoastSessionID).
-            session
+            let key_group = session
                 .dkg_result
                 .as_ref()
                 .map(|dkg| dkg.key_group.clone())
                 .or_else(|| session.bound_key_group.clone())
                 .ok_or_else(|| EngineError::DkgNotReady {
                     session_id: request.session_id.clone(),
-                })?
+                })?;
+            (key_group, Arc::clone(&session.aggregate_eviction_pin))
         };
         // The group's public key package (the verifying shares used to check each
         // contribution) is a WALLET-level asset resolved by key_group, so a per-signing
@@ -1015,15 +1290,18 @@ pub fn interactive_aggregate(
                 .ok_or_else(|| EngineError::SessionNotFound {
                     session_id: wallet_session_id.clone(),
                 })?;
-        session
+        let public_key_package = session
             .dkg_public_key_package
             .as_ref()
             .ok_or_else(|| {
                 EngineError::Internal("missing DKG public key package cache".to_string())
             })?
-            .clone()
+            .clone();
+        (public_key_package, aggregate_eviction_pin)
     };
     drop(guard);
+    #[cfg(test)]
+    maybe_hold_interactive_aggregate_after_unlock_for_tests();
 
     // Aggregation uses only public material (commitments, shares,
     // verifying shares), so no policy gate runs here - the secret-bearing
@@ -1125,12 +1403,51 @@ pub fn interactive_aggregate(
             attempt_id,
         });
     }
+    let authorized = session
+        .authorized_interactive_aggregate_markers
+        .contains(&aggregate_authorization_marker)
+        || interactive_aggregate_has_live_authorization(
+            session,
+            &attempt_id,
+            &signing_package,
+            taproot_merkle_root.as_ref(),
+        )?;
+    if !authorized {
+        return Err(EngineError::Validation(format!(
+            "InteractiveAggregate: package authorization changed before completion for attempt_id [{attempt_id}] in session [{}]",
+            request.session_id
+        )));
+    }
+    if session
+        .authorized_interactive_aggregate_markers
+        .contains(&aggregate_package_completion_marker)
+    {
+        return Err(EngineError::Validation(format!(
+            "InteractiveAggregate: signing package was already aggregated in session [{}]",
+            request.session_id
+        )));
+    }
     ensure_consumed_registry_insert_capacity(
         &session.aggregated_interactive_attempt_markers,
         &aggregated_marker,
         "aggregated_interactive_attempt_markers",
         &request.session_id,
     )?;
+    // A Round2 authorization is no longer needed once its exact package has
+    // completed, so replace it in-place with the package replay marker. A
+    // coordinator omitted from the signing subset has no Round2 authorization
+    // to replace and therefore consumes one normal bounded slot.
+    let replaces_aggregate_authorization = session
+        .authorized_interactive_aggregate_markers
+        .contains(&aggregate_authorization_marker);
+    if !replaces_aggregate_authorization {
+        ensure_consumed_registry_insert_capacity(
+            &session.authorized_interactive_aggregate_markers,
+            &aggregate_package_completion_marker,
+            "authorized_interactive_aggregate_markers",
+            &request.session_id,
+        )?;
+    }
     // Resolve the state-encryption key under the held ENGINE_STATE guard, in the
     // same serialized order as the write, and BEFORE inserting the marker.
     // Resolving under the guard makes key selection match the write order, so the
@@ -1143,6 +1460,12 @@ pub fn interactive_aggregate(
     session
         .aggregated_interactive_attempt_markers
         .insert(aggregated_marker.clone());
+    let removed_aggregate_authorization = session
+        .authorized_interactive_aggregate_markers
+        .remove(&aggregate_authorization_marker);
+    session
+        .authorized_interactive_aggregate_markers
+        .insert(aggregate_package_completion_marker.clone());
     if let Err(persist_error) =
         persist_engine_state_to_storage_with_key(&guard, &resolved_state_key)
     {
@@ -1153,20 +1476,41 @@ pub fn interactive_aggregate(
             .get_mut(&request.session_id)
             .expect("session existed under the held engine lock");
         if state_file_replaced {
-            mark_persistence_pending(PersistencePendingOperation::InteractiveAggregate {
-                session_id: request.session_id.clone(),
-                aggregated_marker: aggregated_marker.clone(),
-            });
             remove_finalized_interactive_members(
                 session,
                 &attempt_id,
                 &aggregated_message_digest,
                 taproot_merkle_root.as_ref(),
             );
+            // Stage retirement BEFORE registering the pending operation. Generic
+            // retirement deliberately skips pending sessions to protect uncertain
+            // markers from eviction; registering first would therefore strand this
+            // now-idle shell as active. With retirement staged first, the pending
+            // operation protects the tombstone and any later successful full-state
+            // snapshot (the exact retry or an unrelated writer) durably covers both
+            // the completion marker and retirement before clearing pending.
+            if session.interactive_signing.is_empty() && per_message_interactive_session(session) {
+                session.retired_interactive_at_unix = Some(now_unix().max(1));
+            }
+            mark_persistence_pending(PersistencePendingOperation::InteractiveAggregate {
+                session_id: request.session_id.clone(),
+                aggregated_marker: aggregated_marker.clone(),
+            });
         } else {
             session
                 .aggregated_interactive_attempt_markers
                 .remove(&aggregated_marker);
+            session
+                .authorized_interactive_aggregate_markers
+                .remove(&aggregate_package_completion_marker);
+            if removed_aggregate_authorization {
+                session
+                    .authorized_interactive_aggregate_markers
+                    .insert(aggregate_authorization_marker.clone());
+            }
+        }
+        if state_file_replaced {
+            retire_idle_per_message_sessions(&mut guard, Some(&request.session_id));
         }
         return Err(persist_error);
     }
@@ -1187,7 +1531,11 @@ pub fn interactive_aggregate(
         &aggregated_message_digest,
         taproot_merkle_root.as_ref(),
     );
+    retire_idle_per_message_sessions(&mut guard, Some(&request.session_id));
     drop(guard);
+    // Keep the target unevictable through both lock sections and the durable
+    // completion write. Error returns and unwinding release the clone by RAII.
+    drop(aggregate_eviction_pin);
 
     latency_guard.mark_success();
     record_hardening_telemetry(|telemetry| {
@@ -1224,16 +1572,19 @@ pub fn interactive_session_abort(
     // Abort takes the lock like every other entry point, so it sweeps
     // expired interactive state too: the TTL guarantee (nonces gone
     // within the TTL of inactivity) must hold even when the only
-    // post-expiry traffic is aborts for other sessions.
-    sweep_expired_interactive_state(&mut guard);
+    // post-expiry traffic is aborts for other sessions. The durable helper also
+    // repairs a prior post-rename Abort snapshot before an idempotent retry can
+    // return `aborted: false` without writing.
+    sweep_expired_interactive_state_durably(&mut guard)?;
 
-    let aborted = match guard.sessions.get_mut(&request.session_id) {
+    let members_to_abort = match guard.sessions.get(&request.session_id) {
         Some(session) => {
             // Abort has no member parameter, so it is session-level over the map:
-            // remove every member entry matching the optional attempt filter,
-            // zeroizing each entry's nonces. Sibling members on a non-matching
-            // attempt survive. Aborted iff at least one entry was removed.
-            let members_to_abort: Vec<u16> = session
+            // select every member entry matching the optional attempt filter.
+            // Keep the nonce-bearing entries live until the durable retirement
+            // snapshot has replaced the state file, so a pre-replacement failure
+            // remains cleanly retryable.
+            session
                 .interactive_signing
                 .iter()
                 .filter(|(_, interactive)| {
@@ -1242,33 +1593,97 @@ pub fn interactive_session_abort(
                             == Some(interactive.attempt_context.attempt_id.as_str())
                 })
                 .map(|(member, _)| *member)
-                .collect();
+                .collect::<Vec<_>>()
+        }
+        None => Vec::new(),
+    };
+
+    if members_to_abort.is_empty() {
+        return Ok(InteractiveSessionAbortResult {
+            session_id: request.session_id,
+            aborted: false,
+        });
+    }
+
+    // Resolve the key before staging retirement. A key-provider outage must not
+    // consume the live nonces or turn a retryable attempt into an inert shell.
+    let resolved_state_key = state_encryption_key_material()?;
+    let (retires_session, previous_retired_at) = {
+        let session = guard
+            .sessions
+            .get_mut(&request.session_id)
+            .expect("selected abort session existed under the held engine lock");
+        let retires_session = members_to_abort.len() == session.interactive_signing.len()
+            && per_message_interactive_session(session);
+        let previous_retired_at = session.retired_interactive_at_unix;
+        if retires_session {
+            session.retired_interactive_at_unix = Some(now_unix().max(1));
+        }
+        (retires_session, previous_retired_at)
+    };
+    let compacted_retired_sessions =
+        compact_retired_per_message_sessions(&mut guard, Some(&request.session_id));
+
+    // Interactive nonce state is intentionally never serialized. Persist while
+    // it is still held in memory: the snapshot durably carries the Open binding,
+    // policy artifact, and (for a last-member Abort) retirement timestamp. Only
+    // after replacement is it safe to destroy the selected nonce handles and
+    // report success.
+    if let Err(persist_error) =
+        persist_engine_state_to_storage_with_key(&guard, &resolved_state_key)
+    {
+        let state_file_replaced = persist_error.state_file_replaced();
+        let persist_error = persist_error.into_engine_error();
+        if state_file_replaced {
+            let session = guard
+                .sessions
+                .get_mut(&request.session_id)
+                .expect("abort session existed after state-file replacement");
             for member in &members_to_abort {
                 if let Some(mut removed) = session.interactive_signing.remove(member) {
                     zeroize_interactive_round1(&mut removed);
                 }
             }
-            !members_to_abort.is_empty()
+            mark_persistence_pending(PersistencePendingOperation::InteractiveState {
+                session_id: request.session_id.clone(),
+            });
+        } else {
+            if retires_session {
+                guard
+                    .sessions
+                    .get_mut(&request.session_id)
+                    .expect("abort session existed while rolling back retirement")
+                    .retired_interactive_at_unix = previous_retired_at;
+            }
+            restore_compacted_retired_sessions(&mut guard, compacted_retired_sessions);
         }
-        None => false,
-    };
+        return Err(persist_error);
+    }
+
+    let session = guard
+        .sessions
+        .get_mut(&request.session_id)
+        .expect("abort session existed after durable retirement");
+    for member in &members_to_abort {
+        if let Some(mut removed) = session.interactive_signing.remove(member) {
+            zeroize_interactive_round1(&mut removed);
+        }
+    }
 
     // Only count a success when live interactive state was actually
     // aborted. A no-op call (no session, or an attempt_id filter that
     // matched nothing) returns aborted == false and must not inflate the
     // success counter - the calls_total counter at the top already
     // records that the entry point ran.
-    if aborted {
-        record_hardening_telemetry(|telemetry| {
-            telemetry.interactive_session_abort_success_total = telemetry
-                .interactive_session_abort_success_total
-                .saturating_add(1);
-        });
-    }
+    record_hardening_telemetry(|telemetry| {
+        telemetry.interactive_session_abort_success_total = telemetry
+            .interactive_session_abort_success_total
+            .saturating_add(1);
+    });
 
     Ok(InteractiveSessionAbortResult {
         session_id: request.session_id,
-        aborted,
+        aborted: true,
     })
 }
 
@@ -1300,9 +1715,9 @@ fn interactive_state_for_attempt_mut<'session>(
     Ok(interactive)
 }
 
-// The frozen spec's Round2 checks (a)-(f). Returns Ok only when every
-// check passes; the caller consumes the nonces strictly afterwards.
-fn verify_round2_signing_package(
+// Checks shared by a signer releasing a share and an elected coordinator
+// aggregating a strict first-t package that does not include itself.
+fn verify_interactive_signing_package_context(
     interactive: &InteractiveSigningState,
     signing_package: &frost::SigningPackage,
 ) -> Result<(), EngineError> {
@@ -1342,6 +1757,18 @@ fn verify_round2_signing_package(
             ));
         }
     }
+
+    Ok(())
+}
+
+// The frozen spec's Round2 checks (a)-(f). Returns Ok only when every
+// check passes; the caller consumes the nonces strictly afterwards.
+fn verify_round2_signing_package(
+    interactive: &InteractiveSigningState,
+    signing_package: &frost::SigningPackage,
+) -> Result<(), EngineError> {
+    verify_interactive_signing_package_context(interactive, signing_package)?;
+    let package_commitments = signing_package.signing_commitments();
 
     // (a) this member must be in the chosen subset.
     let own_identifier = participant_identifier_to_frost_identifier(interactive.member_identifier)?;
@@ -1446,6 +1873,17 @@ fn canonical_attempt_id(attempt_id: &str) -> String {
     attempt_id.to_ascii_lowercase()
 }
 
+fn canonical_aggregate_attempt_id(attempt_id: &str) -> Result<String, EngineError> {
+    if attempt_id.len() != 64 || !attempt_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(EngineError::Validation(
+            "InteractiveAggregate: attempt_id must be exactly 64 hexadecimal characters"
+                .to_string(),
+        ));
+    }
+
+    Ok(canonical_attempt_id(attempt_id))
+}
+
 // The chosen signing subset as Go u16 identifiers: the included
 // participants whose commitment appears in the signing package. The
 // caller MUST have run verify_round2_signing_package first (which
@@ -1547,14 +1985,15 @@ pub(crate) fn resolve_wallet_session_id(
         .map(|(id, _)| id.clone())
 }
 
-pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) {
+pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) -> Vec<String> {
     let ttl_seconds = interactive_session_ttl_seconds();
     let now = now_unix();
-    // Interactive sessions always ride a DKG-populated session (Open
-    // requires existing DKG state), so expiry only clears the live
-    // attempt's nonces; the session itself - DKG material, consumed
-    // markers - is retained for future signing.
-    for session in engine_state.sessions.values_mut() {
+    let mut changed_session_ids = HashSet::new();
+    // Open requires an existing wallet DKG, but production signing normally
+    // uses a distinct per-message session bound to that wallet. Expiry clears
+    // each live attempt's nonces; retirement below retains its bounded policy
+    // and replay state until active admission needs the shared slot.
+    for (session_id, session) in &mut engine_state.sessions {
         // Per-member expiry: each seat's entry expires independently by its own
         // opened_at_unix; non-expired sibling seats in the same session survive.
         let expired_members: Vec<u16> = session
@@ -1563,12 +2002,69 @@ pub(crate) fn sweep_expired_interactive_state(engine_state: &mut EngineState) {
             .filter(|(_, interactive)| now.saturating_sub(interactive.opened_at_unix) > ttl_seconds)
             .map(|(member, _)| *member)
             .collect();
+        if !expired_members.is_empty() {
+            changed_session_ids.insert(session_id.clone());
+        }
         for member in &expired_members {
             if let Some(mut removed) = session.interactive_signing.remove(member) {
                 zeroize_interactive_round1(&mut removed);
             }
         }
     }
+    // Expiry has abort semantics. Retire idle per-message entries while
+    // retaining their bounded policy/replay tombstones for delayed retries.
+    changed_session_ids.extend(retire_idle_per_message_session_ids(engine_state, None));
+    changed_session_ids.retain(|session_id| engine_state.sessions.contains_key(session_id));
+    changed_session_ids.into_iter().collect()
+}
+
+pub(crate) fn sweep_expired_interactive_state_durably(
+    engine_state: &mut EngineState,
+) -> Result<(), EngineError> {
+    // Persist every session whose live member set changed, not only sessions
+    // whose last member expired. Open binds a Build-backed per-message shell
+    // in memory, while live interactive state is intentionally omitted from
+    // snapshots. If one sibling expired and another remained live, skipping
+    // this write would let a crash reload the old unbound shell; persisting the
+    // binding lets load classify it as retired once the nonces disappear.
+    let changed_session_ids = sweep_expired_interactive_state(engine_state);
+    let repairs_pending_interactive_state = interactive_state_persistence_pending();
+    // An existing Abort/expiry repair must be retried even when this sweep found
+    // no additional expiry. Avoid key-provider/filesystem work on the ordinary
+    // no-op fast path.
+    if changed_session_ids.is_empty() && !repairs_pending_interactive_state {
+        return Ok(());
+    }
+
+    if let Err(persist_error) = persist_engine_state_to_storage(engine_state) {
+        for session_id in changed_session_ids {
+            mark_persistence_pending(PersistencePendingOperation::InteractiveState { session_id });
+        }
+        return Err(persist_error.into_engine_error());
+    }
+
+    // Pending sessions are deliberately excluded from retirement until a
+    // successful snapshot covers their uncertain post-rename state. If this
+    // sweep expired the last surviving sibling of such an Abort, the write above
+    // cleared its protection; classify and persist that now-idle session before
+    // returning from the same entry point.
+    if repairs_pending_interactive_state {
+        let retired_after_repair = sweep_expired_interactive_state(engine_state);
+        if let Err(persist_error) = if retired_after_repair.is_empty() {
+            Ok(())
+        } else {
+            persist_engine_state_to_storage(engine_state)
+        } {
+            for session_id in retired_after_repair {
+                mark_persistence_pending(PersistencePendingOperation::InteractiveState {
+                    session_id,
+                });
+            }
+            return Err(persist_error.into_engine_error());
+        }
+    }
+
+    Ok(())
 }
 
 pub(crate) fn max_live_interactive_sessions_limit() -> usize {

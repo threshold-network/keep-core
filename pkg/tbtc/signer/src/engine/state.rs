@@ -135,7 +135,24 @@ pub(crate) struct SessionState {
     // after restart using only public material, and the full-lifetime role binding
     // prevents this per-signing session from later becoming an unrelated DKG owner.
     pub(crate) bound_key_group: Option<String>,
+    // Idle per-message entries use the unoccupied portion of the shared persisted
+    // session budget. The full entry is retained temporarily so delayed
+    // Aggregate/verify-share calls and an outer retry's BuildTaprootTx policy
+    // artifact keep working. Old retired entries are evicted FIFO-by-time when a
+    // new active session needs their slot.
+    pub(crate) retired_interactive_at_unix: Option<u64>,
+    // Transient refcount pin for Aggregate's unlocked cryptographic section.
+    // The session owns one reference; an in-flight Aggregate clones it while
+    // holding the engine lock, and compaction skips any session with a clone.
+    // Never persisted: no operation can remain in flight across a restart.
+    pub(crate) aggregate_eviction_pin: Arc<()>,
     pub(crate) consumed_interactive_attempt_markers: HashSet<String>,
+    // Fixed-size SHA-256 bindings. Round2 writes an exact
+    // (attempt_id, signing package, taproot root) authorization; successful
+    // Aggregate replaces it with a package/root completion identity so the
+    // same attempt-less FROST package cannot fill completion storage under
+    // fresh canonical attempt ids. Both survive restart.
+    pub(crate) authorized_interactive_aggregate_markers: HashSet<String>,
     // Phase 7.2b InteractiveAggregate completion markers: an attempt whose
     // aggregate signature has been produced is recorded here so a repeat
     // InteractiveAggregate is rejected (re-aggregation is not a recovery path;
@@ -199,6 +216,15 @@ pub(crate) const TBTC_SIGNER_MAX_CONSUMED_REGISTRY_ENTRIES_PER_SESSION: usize = 
 pub(crate) const TBTC_SIGNER_MAX_ATTEMPT_TRANSITION_RECORDS_PER_SESSION: usize = 256;
 
 pub(crate) static ENGINE_STATE: OnceLock<Mutex<EngineState>> = OnceLock::new();
+
+// Loading can rewrite a legacy or stale encrypted envelope in place. A
+// OnceLock serializes only the final in-memory installation, so it does not by
+// itself prevent concurrent first callers from racing those fallible storage
+// reads and migrations. Keep that entire path behind a process-local mutex
+// that is deliberately separate from STATE_FILE_LOCK: the loader resolves the
+// active path through STATE_FILE_LOCK and would deadlock if its slot guard were
+// held here.
+static ENGINE_STATE_INITIALIZATION_LOCK: Mutex<()> = Mutex::new(());
 
 pub(crate) static STATE_FILE_LOCK: OnceLock<Mutex<Option<StateFileLock>>> = OnceLock::new();
 
@@ -310,12 +336,50 @@ pub(crate) fn state() -> Result<&'static Mutex<EngineState>, EngineError> {
     ensure_state_file_lock()?;
     warn_disabled_policy_gates();
 
-    if let Some(state) = ENGINE_STATE.get() {
+    initialize_engine_state_with_loader(
+        &ENGINE_STATE,
+        &ENGINE_STATE_INITIALIZATION_LOCK,
+        || {},
+        load_engine_state_from_storage,
+    )
+}
+
+/// Installs the first engine state while serializing the complete fallible load
+/// path, not just the final OnceLock write.
+///
+/// `after_initial_miss` is a no-op in production and lets concurrency tests
+/// deterministically place multiple callers past the optimistic fast path.
+/// The loader runs under `initialization_lock`; a failed load leaves
+/// `engine_state` unset so a later call can retry.
+pub(crate) fn initialize_engine_state_with_loader<'state, AfterInitialMiss, Load>(
+    engine_state: &'state OnceLock<Mutex<EngineState>>,
+    initialization_lock: &Mutex<()>,
+    after_initial_miss: AfterInitialMiss,
+    load: Load,
+) -> Result<&'state Mutex<EngineState>, EngineError>
+where
+    AfterInitialMiss: FnOnce(),
+    Load: FnOnce() -> Result<EngineState, EngineError>,
+{
+    if let Some(state) = engine_state.get() {
         return Ok(state);
     }
 
-    let loaded_state = load_engine_state_from_storage()?;
-    Ok(ENGINE_STATE.get_or_init(|| Mutex::new(loaded_state)))
+    after_initial_miss();
+
+    // The mutex protects no data of its own. Recovering its guard after a
+    // panic is safe, and the second OnceLock check determines whether the
+    // previous caller completed installation before panicking.
+    let _initialization_guard = initialization_lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    if let Some(state) = engine_state.get() {
+        return Ok(state);
+    }
+
+    let loaded_state = load()?;
+    Ok(engine_state.get_or_init(|| Mutex::new(loaded_state)))
 }
 
 pub(crate) fn state_file_path() -> Result<PathBuf, EngineError> {
@@ -434,10 +498,26 @@ pub(crate) fn ensure_consumed_registry_persisted_bound(
     Ok(())
 }
 
+pub(crate) fn active_session_count(sessions: &HashMap<String, SessionState>) -> usize {
+    sessions
+        .values()
+        .filter(|session| session.retired_interactive_at_unix.is_none())
+        .count()
+}
+
+#[cfg(test)]
+pub(crate) fn retired_interactive_session_count(sessions: &HashMap<String, SessionState>) -> usize {
+    sessions
+        .values()
+        .filter(|session| session.retired_interactive_at_unix.is_some())
+        .count()
+}
+
 pub(crate) fn ensure_session_registry_persisted_bound(
-    session_count: usize,
+    sessions: &HashMap<String, SessionState>,
 ) -> Result<(), EngineError> {
     let max_sessions = max_sessions_limit();
+    let session_count = sessions.len();
     if session_count > max_sessions {
         return Err(EngineError::Internal(format!(
             "persisted session registry size [{session_count}] exceeds max [{max_sessions}]"
@@ -447,24 +527,301 @@ pub(crate) fn ensure_session_registry_persisted_bound(
     Ok(())
 }
 
-pub(crate) fn ensure_session_insert_capacity(
-    sessions: &HashMap<String, SessionState>,
+// Production interactive signing uses one outer session per message. Such a
+// session is bound to a wallet key but never owns DKG material; DKG installation
+// enforces that role split. Keep this match exhaustive so a future SessionState
+// field forces an explicit retirement-safety decision here.
+pub(crate) fn per_message_interactive_session(session: &SessionState) -> bool {
+    let SessionState {
+        dkg_request_fingerprint,
+        dkg_key_packages,
+        dkg_public_key_package,
+        dkg_result,
+        sign_request_fingerprint,
+        sign_message_bytes,
+        round_state,
+        active_attempt_context,
+        attempt_transition_records,
+        consumed_attempt_ids,
+        consumed_sign_round_ids,
+        finalize_request_fingerprint,
+        signature_result,
+        consumed_finalize_round_ids,
+        consumed_finalize_request_fingerprints,
+        build_tx_request_fingerprint,
+        tx_result,
+        refresh_request_fingerprint,
+        refresh_result,
+        refresh_history,
+        refresh_count,
+        emergency_rekey_event,
+        heartbeat_rate_limiter,
+        interactive_signing,
+        bound_key_group,
+        retired_interactive_at_unix,
+        aggregate_eviction_pin,
+        consumed_interactive_attempt_markers,
+        authorized_interactive_aggregate_markers,
+        aggregated_interactive_attempt_markers,
+    } = session;
+
+    let _ = (
+        sign_request_fingerprint,
+        sign_message_bytes,
+        round_state,
+        active_attempt_context,
+        attempt_transition_records,
+        consumed_attempt_ids,
+        consumed_sign_round_ids,
+        finalize_request_fingerprint,
+        signature_result,
+        consumed_finalize_round_ids,
+        consumed_finalize_request_fingerprints,
+        build_tx_request_fingerprint,
+        tx_result,
+        refresh_request_fingerprint,
+        refresh_result,
+        refresh_history,
+        refresh_count,
+        emergency_rekey_event,
+        heartbeat_rate_limiter,
+        interactive_signing,
+        retired_interactive_at_unix,
+        aggregate_eviction_pin,
+        consumed_interactive_attempt_markers,
+        authorized_interactive_aggregate_markers,
+        aggregated_interactive_attempt_markers,
+    );
+
+    bound_key_group.is_some()
+        && dkg_request_fingerprint.is_none()
+        && dkg_key_packages.is_none()
+        && dkg_public_key_package.is_none()
+        && dkg_result.is_none()
+}
+
+pub(crate) fn retire_idle_per_message_sessions(
+    engine_state: &mut EngineState,
+    protected_session_id: Option<&str>,
+) -> usize {
+    retire_idle_per_message_session_ids(engine_state, protected_session_id).len()
+}
+
+pub(crate) fn retire_idle_per_message_session_ids(
+    engine_state: &mut EngineState,
+    protected_session_id: Option<&str>,
+) -> Vec<String> {
+    let retired_at = now_unix().max(1);
+    let pending_session_ids = persistence_pending_session_ids();
+    let mut newly_retired = Vec::new();
+    for (session_id, session) in &mut engine_state.sessions {
+        if !pending_session_ids.contains(session_id)
+            && session.retired_interactive_at_unix.is_none()
+            && session.interactive_signing.is_empty()
+            && per_message_interactive_session(session)
+        {
+            session.retired_interactive_at_unix = Some(retired_at);
+            newly_retired.push(session_id.clone());
+        }
+    }
+
+    drop(compact_retired_per_message_sessions(
+        engine_state,
+        protected_session_id,
+    ));
+    newly_retired.retain(|session_id| engine_state.sessions.contains_key(session_id));
+    newly_retired
+}
+
+pub(crate) fn compact_retired_per_message_sessions(
+    engine_state: &mut EngineState,
+    protected_session_id: Option<&str>,
+) -> Vec<(String, SessionState)> {
+    compact_retired_per_message_sessions_to_total(
+        engine_state,
+        max_sessions_limit(),
+        protected_session_id,
+    )
+}
+
+fn compact_retired_per_message_sessions_to_total(
+    engine_state: &mut EngineState,
+    max_total_sessions: usize,
+    protected_session_id: Option<&str>,
+) -> Vec<(String, SessionState)> {
+    // A post-replacement persistence failure leaves the replacement snapshot's
+    // marker in memory and records a process-local repair operation. Evicting
+    // that session before a later successful snapshot would persist the
+    // marker's absence and then clear the repair record. Protect every
+    // session-scoped pending operation until a successful snapshot covers it.
+    let pending_session_ids = persistence_pending_session_ids();
+    let mut removed = Vec::new();
+    // Schema version 1 readers predating retirement enforce this same bound on
+    // the TOTAL map. Retired tombstones therefore consume only the portion of
+    // the shared budget not occupied by active sessions; preserving a separate
+    // retired allowance would make an emergency binary rollback fail at load.
+    while engine_state.sessions.len() > max_total_sessions {
+        let oldest = engine_state
+            .sessions
+            .iter()
+            .filter_map(|(session_id, session)| {
+                if protected_session_id == Some(session_id.as_str())
+                    || pending_session_ids.contains(session_id)
+                    || Arc::strong_count(&session.aggregate_eviction_pin) > 1
+                {
+                    return None;
+                }
+                session
+                    .retired_interactive_at_unix
+                    .map(|retired_at| (retired_at, session_id.clone()))
+            })
+            .min();
+        let Some((_, oldest_session_id)) = oldest else {
+            break;
+        };
+        let removed_session = engine_state
+            .sessions
+            .remove(&oldest_session_id)
+            .expect("selected retired session existed under the held engine lock");
+        removed.push((oldest_session_id, removed_session));
+    }
+    removed
+}
+
+pub(crate) fn restore_compacted_retired_sessions(
+    engine_state: &mut EngineState,
+    removed: Vec<(String, SessionState)>,
+) {
+    for (session_id, session) in removed {
+        let previous = engine_state.sessions.insert(session_id, session);
+        debug_assert!(
+            previous.is_none(),
+            "a compacted retired session must not be recreated while the engine lock is held"
+        );
+    }
+}
+
+fn has_evictable_retired_session(engine_state: &EngineState) -> bool {
+    let pending_session_ids = persistence_pending_session_ids();
+    engine_state.sessions.iter().any(|(session_id, session)| {
+        session.retired_interactive_at_unix.is_some()
+            && !pending_session_ids.contains(session_id)
+            && Arc::strong_count(&session.aggregate_eviction_pin) == 1
+    })
+}
+
+pub(crate) fn ensure_session_insert_admission_capacity(
+    engine_state: &EngineState,
     session_id: &str,
 ) -> Result<(), EngineError> {
-    if sessions.contains_key(session_id) {
+    if engine_state.sessions.contains_key(session_id) {
         return Ok(());
     }
 
     let max_sessions = max_sessions_limit();
-    if sessions.len() >= max_sessions {
+    let active_count = active_session_count(&engine_state.sessions);
+    if active_count >= max_sessions {
         return Err(EngineError::Internal(format!(
-            "session registry size [{}] reached max [{max_sessions}]; use an existing session_id or increase {}",
-            sessions.len(),
+            "active session registry size [{active_count}] reached max [{max_sessions}]; use an existing session_id or increase {}",
+            TBTC_SIGNER_MAX_SESSIONS_ENV
+        )));
+    }
+    if engine_state.sessions.len() >= max_sessions && !has_evictable_retired_session(engine_state) {
+        return Err(EngineError::Internal(format!(
+            "session registry size [{}] reached max [{max_sessions}] and no retired session is available for eviction; use an existing session_id or increase {}",
+            engine_state.sessions.len(),
             TBTC_SIGNER_MAX_SESSIONS_ENV
         )));
     }
 
     Ok(())
+}
+
+pub(crate) fn ensure_interactive_session_admission_capacity(
+    engine_state: &EngineState,
+    session_id: &str,
+) -> Result<(), EngineError> {
+    let existing_session = engine_state.sessions.get(session_id);
+    let needs_active_slot = existing_session
+        .map(|session| session.retired_interactive_at_unix.is_some())
+        .unwrap_or(true);
+    if !needs_active_slot {
+        return Ok(());
+    }
+
+    if existing_session.is_none() {
+        return ensure_session_insert_admission_capacity(engine_state, session_id);
+    }
+
+    let max_sessions = max_sessions_limit();
+    let active_count = active_session_count(&engine_state.sessions);
+    if active_count >= max_sessions {
+        return Err(EngineError::Internal(format!(
+            "active session registry size [{active_count}] reached max [{max_sessions}]; abort idle sessions or increase {}",
+            TBTC_SIGNER_MAX_SESSIONS_ENV
+        )));
+    }
+
+    Ok(())
+}
+
+pub(crate) fn reactivate_retired_per_message_session(
+    engine_state: &mut EngineState,
+    session_id: &str,
+) -> Result<(), EngineError> {
+    let is_retired = engine_state
+        .sessions
+        .get(session_id)
+        .is_some_and(|session| session.retired_interactive_at_unix.is_some());
+    if !is_retired {
+        return Ok(());
+    }
+
+    let max_sessions = max_sessions_limit();
+    let active_count = active_session_count(&engine_state.sessions);
+    if active_count >= max_sessions {
+        return Err(EngineError::Internal(format!(
+            "active session registry size [{active_count}] reached max [{max_sessions}]; abort idle sessions or increase {}",
+            TBTC_SIGNER_MAX_SESSIONS_ENV
+        )));
+    }
+
+    engine_state
+        .sessions
+        .get_mut(session_id)
+        .expect("retired session existed under the held engine lock")
+        .retired_interactive_at_unix = None;
+    Ok(())
+}
+
+pub(crate) fn ensure_session_insert_capacity(
+    engine_state: &mut EngineState,
+    session_id: &str,
+) -> Result<Vec<(String, SessionState)>, EngineError> {
+    if engine_state.sessions.contains_key(session_id) {
+        return Ok(Vec::new());
+    }
+
+    ensure_session_insert_admission_capacity(engine_state, session_id)?;
+    let max_sessions = max_sessions_limit();
+    // Reserve one slot for the caller's insertion. The returned tombstones let
+    // durable callers restore the exact pre-call map if persistence fails before
+    // replacing the state file.
+    let compacted = compact_retired_per_message_sessions_to_total(
+        engine_state,
+        max_sessions.saturating_sub(1),
+        None,
+    );
+    if engine_state.sessions.len() >= max_sessions {
+        restore_compacted_retired_sessions(engine_state, compacted);
+        return Err(EngineError::Internal(format!(
+            "session registry size [{}] reached max [{max_sessions}] and no retired session is available for eviction; use an existing session_id or increase {}",
+            engine_state.sessions.len(),
+            TBTC_SIGNER_MAX_SESSIONS_ENV
+        )));
+    }
+
+    Ok(compacted)
 }
 
 pub(crate) fn ensure_consumed_registry_insert_capacity(

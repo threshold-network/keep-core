@@ -74,6 +74,12 @@ pub(crate) struct PersistedSessionState {
     // (a key group id), not secret. serde(default) keeps pre-existing state loadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) bound_key_group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) retired_interactive_at_unix: Option<u64>,
+    // Fixed-size exact Aggregate authorizations and successful-package replay
+    // identities (see SessionState).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) authorized_interactive_aggregate_markers: Vec<String>,
 }
 
 // Hand-written Debug: `sign_message_hex` is `SecretString`
@@ -138,6 +144,14 @@ impl std::fmt::Debug for PersistedSessionState {
                 &self.aggregated_interactive_attempt_markers,
             )
             .field("bound_key_group", &self.bound_key_group)
+            .field(
+                "retired_interactive_at_unix",
+                &self.retired_interactive_at_unix,
+            )
+            .field(
+                "authorized_interactive_aggregate_markers",
+                &self.authorized_interactive_aggregate_markers,
+            )
             .finish()
     }
 }
@@ -267,6 +281,9 @@ pub(crate) enum PersistencePendingOperation {
         session_id: String,
         aggregated_marker: String,
     },
+    InteractiveState {
+        session_id: String,
+    },
 }
 
 static PERSISTENCE_PENDING_OPERATIONS: OnceLock<Mutex<Vec<PersistencePendingOperation>>> =
@@ -323,6 +340,14 @@ fn persistence_pending_same_slot(
                 aggregated_marker: replacement_marker,
             },
         ) => existing_session == replacement_session && existing_marker == replacement_marker,
+        (
+            PersistencePendingOperation::InteractiveState {
+                session_id: existing_session,
+            },
+            PersistencePendingOperation::InteractiveState {
+                session_id: replacement_session,
+            },
+        ) => existing_session == replacement_session,
         _ => false,
     }
 }
@@ -350,21 +375,67 @@ pub(crate) fn clear_persistence_pending_operation(operation: &PersistencePending
         .retain(|pending| pending != operation);
 }
 
-fn clear_snapshot_covered_marker_operations() {
-    // Round2/Aggregate pending entries cache no result; once any complete state
-    // snapshot succeeds, their retained markers are durable and the normal
-    // replay gates are sufficient. Lifecycle/build/refresh entries additionally
-    // preserve the original operation result, so keep those until that caller
-    // retries (one bounded slot per session, plus one canary slot).
+pub(crate) fn persistence_pending_session_ids() -> HashSet<String> {
     persistence_pending_operations()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .retain(|pending| {
-            !matches!(
-                pending,
-                PersistencePendingOperation::InteractiveRound2 { .. }
-                    | PersistencePendingOperation::InteractiveAggregate { .. }
-            )
+        .iter()
+        .filter_map(|operation| match operation {
+            PersistencePendingOperation::BuildTaprootTx { session_id, .. }
+            | PersistencePendingOperation::InteractiveRound2 { session_id, .. }
+            | PersistencePendingOperation::InteractiveAggregate { session_id, .. }
+            | PersistencePendingOperation::InteractiveState { session_id } => {
+                Some(session_id.clone())
+            }
+            PersistencePendingOperation::EmergencyRekey { result } => {
+                Some(result.session_id.clone())
+            }
+            PersistencePendingOperation::CanaryPromotion { .. }
+            | PersistencePendingOperation::CanaryRollback { .. } => None,
+        })
+        .collect()
+}
+
+fn clear_snapshot_covered_operations(engine_state: &EngineState) {
+    // Round2/Aggregate pending entries cache no result. Clear one only when the
+    // successful snapshot actually contains its fail-closed marker; merely
+    // writing some other snapshot must never erase a repair obligation.
+    // InteractiveState carries no replay marker, so any snapshot still containing
+    // its protected session covers the binding/retirement state that was uncertain
+    // after an Open, Abort, or expiry write replaced the file.
+    // Lifecycle/build/refresh entries additionally preserve the original
+    // operation result, so keep those until that caller retries (one bounded
+    // slot per session, plus one canary slot).
+    persistence_pending_operations()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|pending| match pending {
+            PersistencePendingOperation::InteractiveRound2 {
+                session_id,
+                consumed_marker,
+            } => !engine_state
+                .sessions
+                .get(session_id)
+                .is_some_and(|session| {
+                    session
+                        .consumed_interactive_attempt_markers
+                        .contains(consumed_marker)
+                }),
+            PersistencePendingOperation::InteractiveAggregate {
+                session_id,
+                aggregated_marker,
+            } => !engine_state
+                .sessions
+                .get(session_id)
+                .is_some_and(|session| {
+                    session
+                        .aggregated_interactive_attempt_markers
+                        .contains(aggregated_marker)
+                }),
+            PersistencePendingOperation::InteractiveState { session_id } => {
+                !engine_state.sessions.contains_key(session_id)
+            }
+            _ => true,
         });
 }
 
@@ -487,6 +558,19 @@ pub(crate) fn interactive_aggregate_persistence_pending(
                     session_id: pending_session,
                     aggregated_marker: pending_marker,
                 } if pending_session == session_id && pending_marker == aggregated_marker
+            )
+        })
+}
+
+pub(crate) fn interactive_state_persistence_pending() -> bool {
+    persistence_pending_operations()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .any(|operation| {
+            matches!(
+                operation,
+                PersistencePendingOperation::InteractiveState { .. }
             )
         })
 }
@@ -1279,6 +1363,12 @@ pub(crate) fn load_engine_state_from_storage() -> Result<EngineState, EngineErro
         }
     };
 
+    // An intermediate schema-1 writer allowed independent active and retired
+    // allowances. Conversion below can safely compact its retired excess, but
+    // the old oversized envelope must also be replaced immediately; otherwise
+    // an emergency rollback before the next ordinary write still fails the
+    // previous reader's total-count validation.
+    let session_registry_requires_rewrite = persisted.sessions.len() > max_sessions_limit();
     let (engine_state, recovered_from_corruption): (EngineState, bool) = match persisted.try_into()
     {
         Ok(engine_state) => (engine_state, false),
@@ -1299,10 +1389,10 @@ pub(crate) fn load_engine_state_from_storage() -> Result<EngineState, EngineErro
     // mutation will create a fresh encrypted state file. This explicit recovery
     // outcome replaces the former `Path::exists` probe without hiding metadata
     // errors or treating dangling symlinks as first initialization.
-    if should_rewrite_state && !recovered_from_corruption {
+    if (should_rewrite_state || session_registry_requires_rewrite) && !recovered_from_corruption {
         persist_engine_state_to_storage(&engine_state).map_err(|e| {
             EngineError::Internal(format!(
-                "loaded legacy signer state file [{}] but failed to migrate to current encrypted envelope: {e}",
+                "loaded signer state file [{}] but failed to rewrite its migrated state: {e}",
                 path.display()
             ))
         })?;
@@ -1479,7 +1569,7 @@ pub(crate) fn persist_engine_state_to_storage_with_key(
     bytes.zeroize();
     match persist_result {
         Ok(()) => {
-            clear_snapshot_covered_marker_operations();
+            clear_snapshot_covered_operations(engine_state);
             Ok(())
         }
         Err(error) if state_file_replaced => {
@@ -1518,7 +1608,19 @@ impl TryFrom<PersistedEngineState> for EngineState {
             }
             sessions.insert(session_id, session_state);
         }
-        ensure_session_registry_persisted_bound(sessions.len())?;
+        // State written before the retirement tier existed restores no live
+        // interactive nonces by construction. Classify its idle, bound
+        // per-message entries into the retired tier during load so a full
+        // legacy registry cannot remain permanently wedged after upgrade.
+        let migration_retired_at = now_unix().max(1);
+        for session in sessions.values_mut() {
+            if session.retired_interactive_at_unix.is_none()
+                && session.interactive_signing.is_empty()
+                && per_message_interactive_session(session)
+            {
+                session.retired_interactive_at_unix = Some(migration_retired_at);
+            }
+        }
         let mut quarantined_operator_identifiers = HashSet::new();
         for operator_identifier in persisted.quarantined_operator_identifiers {
             if operator_identifier == 0 {
@@ -1559,13 +1661,19 @@ impl TryFrom<PersistedEngineState> for EngineState {
             ));
         }
 
-        Ok(EngineState {
+        let mut engine_state = EngineState {
             sessions,
             refresh_epoch_counter: persisted.refresh_epoch_counter,
             operator_fault_scores: persisted.operator_fault_scores,
             quarantined_operator_identifiers,
             canary_rollout,
-        })
+        };
+        drop(compact_retired_per_message_sessions(
+            &mut engine_state,
+            None,
+        ));
+        ensure_session_registry_persisted_bound(&engine_state.sessions)?;
+        Ok(engine_state)
     }
 }
 
@@ -1573,7 +1681,7 @@ impl TryFrom<&EngineState> for PersistedEngineState {
     type Error = EngineError;
 
     fn try_from(engine_state: &EngineState) -> Result<Self, Self::Error> {
-        ensure_session_registry_persisted_bound(engine_state.sessions.len())?;
+        ensure_session_registry_persisted_bound(&engine_state.sessions)?;
         let mut sessions = HashMap::new();
         for (session_id, session_state) in &engine_state.sessions {
             sessions.insert(session_id.clone(), session_state.try_into()?);
@@ -1777,6 +1885,29 @@ impl TryFrom<PersistedSessionState> for SessionState {
             "consumed_interactive_attempt_markers",
         )?;
 
+        let mut authorized_interactive_aggregate_markers = HashSet::new();
+        for authorization_marker in persisted.authorized_interactive_aggregate_markers {
+            let canonical_sha256 = authorization_marker.len() == 64
+                && authorization_marker
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+            if !canonical_sha256 {
+                return Err(EngineError::Internal(
+                    "persisted interactive Aggregate authorization marker must be canonical 64-character lowercase hex"
+                        .to_string(),
+                ));
+            }
+            if !authorized_interactive_aggregate_markers.insert(authorization_marker.clone()) {
+                return Err(EngineError::Internal(format!(
+                    "duplicate persisted interactive Aggregate authorization marker [{authorization_marker}]"
+                )));
+            }
+        }
+        ensure_consumed_registry_persisted_bound(
+            authorized_interactive_aggregate_markers.len(),
+            "authorized_interactive_aggregate_markers",
+        )?;
+
         let mut aggregated_interactive_attempt_markers = HashSet::new();
         for attempt_marker in persisted.aggregated_interactive_attempt_markers {
             if attempt_marker.is_empty() {
@@ -1828,7 +1959,13 @@ impl TryFrom<PersistedSessionState> for SessionState {
             }
         }
 
-        Ok(SessionState {
+        if persisted.retired_interactive_at_unix == Some(0) {
+            return Err(EngineError::Internal(
+                "persisted retired_interactive_at_unix must be positive".to_string(),
+            ));
+        }
+
+        let session = SessionState {
             dkg_request_fingerprint: persisted.dkg_request_fingerprint,
             dkg_key_packages,
             dkg_public_key_package,
@@ -1867,9 +2004,20 @@ impl TryFrom<PersistedSessionState> for SessionState {
             // runs after a restart (past a member's Round2) can still resolve the wallet
             // by key_group. Public data; survives with the consumed/aggregate markers.
             bound_key_group: persisted.bound_key_group,
+            retired_interactive_at_unix: persisted.retired_interactive_at_unix,
+            aggregate_eviction_pin: Arc::new(()),
             consumed_interactive_attempt_markers,
+            authorized_interactive_aggregate_markers,
             aggregated_interactive_attempt_markers,
-        })
+        };
+        if session.retired_interactive_at_unix.is_some()
+            && !per_message_interactive_session(&session)
+        {
+            return Err(EngineError::Internal(
+                "persisted retired interactive session must have the per-message role".to_string(),
+            ));
+        }
+        Ok(session)
     }
 }
 
@@ -1940,6 +2088,10 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             session_state.consumed_interactive_attempt_markers.len(),
             "consumed_interactive_attempt_markers",
         )?;
+        ensure_consumed_registry_persisted_bound(
+            session_state.authorized_interactive_aggregate_markers.len(),
+            "authorized_interactive_aggregate_markers",
+        )?;
         if session_state.attempt_transition_records.len()
             > TBTC_SIGNER_MAX_ATTEMPT_TRANSITION_RECORDS_PER_SESSION
         {
@@ -1985,6 +2137,12 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             .cloned()
             .collect::<Vec<_>>();
         aggregated_interactive_attempt_markers.sort_unstable();
+        let mut authorized_interactive_aggregate_markers = session_state
+            .authorized_interactive_aggregate_markers
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        authorized_interactive_aggregate_markers.sort_unstable();
 
         Ok(PersistedSessionState {
             dkg_request_fingerprint: session_state.dkg_request_fingerprint.clone(),
@@ -2012,6 +2170,8 @@ impl TryFrom<&SessionState> for PersistedSessionState {
             consumed_interactive_attempt_markers,
             aggregated_interactive_attempt_markers,
             bound_key_group: session_state.bound_key_group.clone(),
+            retired_interactive_at_unix: session_state.retired_interactive_at_unix,
+            authorized_interactive_aggregate_markers,
         })
     }
 }

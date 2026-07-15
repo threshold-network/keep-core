@@ -89,7 +89,7 @@ pub fn verify_signature_share(
         // guarantee (an abandoned interactive nonce handle gone within the TTL of
         // inactivity) must hold even when the only post-expiry traffic is
         // verify-share blame rechecks. Mirrors InteractiveAggregate.
-        sweep_expired_interactive_state(&mut guard);
+        sweep_expired_interactive_state_durably(&mut guard)?;
         // The public key package is a WALLET-level asset resolved by key_group, so a
         // per-signing session (a distinct RoastSessionID) can be blame-checked. The
         // key_group is this signing session's own DKG (co-located) or the one bound at

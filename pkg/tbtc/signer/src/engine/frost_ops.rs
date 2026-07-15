@@ -46,7 +46,7 @@ pub fn dkg_part1(request: DkgPart1Request) -> Result<DkgPart1Result, EngineError
         .map_err(|e| EngineError::Internal(format!("failed to serialize DKG part1 secret: {e}")))?;
 
     let result = DkgPart1Result {
-        secret_package_hex: hex::encode(&secret_package_bytes),
+        secret_package_hex: SecretHex::new(hex::encode(&secret_package_bytes)),
         package: DkgRound1Package {
             identifier: frost_identifier_to_go_string(identifier),
             package_hex: hex::encode(package_bytes),
@@ -63,7 +63,7 @@ pub fn dkg_part2(request: DkgPart2Request) -> Result<DkgPart2Result, EngineError
     let mut secret_package_bytes = decode_hex_field(
         "DKGPart2",
         "secret_package_hex",
-        &request.secret_package_hex,
+        request.secret_package_hex.expose_secret(),
     )?;
     let secret_package_result =
         frost::keys::dkg::round1::SecretPackage::deserialize(&secret_package_bytes);
@@ -96,7 +96,7 @@ pub fn dkg_part2(request: DkgPart2Request) -> Result<DkgPart2Result, EngineError
         packages.push(DkgRound2Package {
             identifier: frost_identifier_to_go_string(identifier),
             sender_identifier: None,
-            package_hex: hex::encode(&package_bytes),
+            package_hex: SecretHex::new(hex::encode(&package_bytes)),
         });
         package_bytes.zeroize();
     }
@@ -107,7 +107,7 @@ pub fn dkg_part2(request: DkgPart2Request) -> Result<DkgPart2Result, EngineError
         .map_err(|e| EngineError::Internal(format!("failed to serialize DKG part2 secret: {e}")))?;
 
     let result = DkgPart2Result {
-        secret_package_hex: hex::encode(&round2_secret_package_bytes),
+        secret_package_hex: SecretHex::new(hex::encode(&round2_secret_package_bytes)),
         packages,
     };
     round2_secret_package_bytes.zeroize();
@@ -121,7 +121,7 @@ pub fn dkg_part3(request: DkgPart3Request) -> Result<DkgPart3Result, EngineError
     let mut secret_package_bytes = decode_hex_field(
         "DKGPart3",
         "secret_package_hex",
-        &request.secret_package_hex,
+        request.secret_package_hex.expose_secret(),
     )?;
     let secret_package_result =
         frost::keys::dkg::round2::SecretPackage::deserialize(&secret_package_bytes);
@@ -163,7 +163,7 @@ pub fn dkg_part3(request: DkgPart3Request) -> Result<DkgPart3Result, EngineError
     let result = DkgPart3Result {
         key_package: NativeFrostKeyPackage {
             identifier: frost_identifier_to_go_string(*key_package.identifier()),
-            data_hex: hex::encode(&key_package_bytes),
+            data_hex: SecretHex::new(hex::encode(&key_package_bytes)),
         },
         public_key_package: native_public_key_package,
     };

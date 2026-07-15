@@ -229,7 +229,7 @@ pub(crate) fn decode_round2_package_map(
         let mut package_bytes = decode_hex_field(
             operation,
             &format!("round2_packages[{index}].package_hex"),
-            &package.package_hex,
+            package.package_hex.expose_secret(),
         )?;
         let round2_package_result = frost::keys::dkg::round2::Package::deserialize(&package_bytes);
         package_bytes.zeroize();
