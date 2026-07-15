@@ -12168,6 +12168,191 @@ fn interactive_aggregate_post_rename_persist_failure_finalizes_attempt_and_retry
 }
 
 #[test]
+fn interactive_aggregate_post_rename_repair_retires_session_and_releases_capacity() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("interactive_aggregate_post_rename");
+    reset_for_tests();
+    std::env::set_var(TBTC_SIGNER_MAX_SESSIONS_ENV, "2");
+
+    let wallet_session_id = "interactive-aggregate-post-rename-wallet";
+    let session_id = "interactive-aggregate-post-rename";
+    let next_session_id = "interactive-aggregate-post-rename-next";
+    let key_group = "interactive-test-key-group";
+    let message = [0x50u8; 32];
+    let included = [1u16, 2, 3];
+    let key_packages = ensure_interactive_dkg_session(wallet_session_id, key_group);
+    build_taproot_tx(build_policy_test_request(session_id))
+        .expect("Build persists the cross-session policy shell");
+
+    let open_member = |member_identifier| {
+        interactive_session_open(InteractiveSessionOpenRequest {
+            session_id: session_id.to_string(),
+            member_identifier,
+            message_hex: hex::encode(message),
+            key_group: key_group.to_string(),
+            threshold: 2,
+            taproot_merkle_root_hex: None,
+            signing_intent: None,
+            attempt_context: interactive_test_attempt_context(
+                session_id, key_group, &message, &included, 1,
+            ),
+        })
+    };
+    let opened = open_member(1).expect("member 1 opens");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("member 1 round 1");
+
+    let sibling = open_member(3).expect("unsigned sibling opens");
+    assert_eq!(sibling.attempt_id, opened.attempt_id);
+    interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: sibling.attempt_id,
+        member_identifier: 3,
+    })
+    .expect("unsigned sibling creates live nonces");
+
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment.clone(),
+        ],
+    );
+    let round2 = interactive_round2(InteractiveRound2Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    })
+    .expect("member 1 round 2 share");
+    let member2_share = sign_share(SignShareRequest {
+        signing_package_hex: signing_package_hex.clone(),
+        nonces_hex: member2.nonces_hex,
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 share");
+
+    let aggregate_request = InteractiveAggregateRequest {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id.clone(),
+        signing_package_hex,
+        signature_shares: vec![
+            crate::api::NativeFrostSignatureShare {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round2.signature_share_hex,
+            },
+            member2_share.signature_share,
+        ],
+        taproot_merkle_root_hex: None,
+    };
+    let aggregated_marker =
+        interactive_aggregated_marker(&opened.attempt_id, &hash_hex(&message), None);
+
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    let faulted = interactive_aggregate(aggregate_request.clone())
+        .expect_err("post-rename persist fault must report aggregate failure");
+    clear_persist_fault_injection_for_tests();
+    assert!(
+        matches!(faulted, EngineError::Internal(ref text) if text.contains("injected persist fault")),
+        "unexpected error: {faulted:?}"
+    );
+
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = guard.sessions.get(session_id).expect("session exists");
+        assert!(session
+            .aggregated_interactive_attempt_markers
+            .contains(&aggregated_marker));
+        assert!(
+            !session.interactive_signing.contains_key(&3),
+            "a retained completion marker must destroy an unsigned sibling's live nonces"
+        );
+    }
+    assert!(interactive_aggregate_persistence_pending(
+        session_id,
+        &aggregated_marker
+    ));
+
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let failed_flush = interactive_aggregate(aggregate_request.clone())
+        .expect_err("a failed pending completion flush must not reach the completion gate");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        failed_flush,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    assert!(interactive_aggregate_persistence_pending(
+        session_id,
+        &aggregated_marker
+    ));
+
+    // A different successful full-state writer is allowed to cover and clear
+    // the Aggregate repair. Retirement must already be staged so this unrelated
+    // snapshot cannot clear pending while leaving an active, nonce-free shell.
+    build_taproot_tx(build_policy_test_request(wallet_session_id))
+        .expect("an unrelated wallet Build persists the full engine snapshot");
+    assert!(!interactive_aggregate_persistence_pending(
+        session_id,
+        &aggregated_marker
+    ));
+
+    // With pending already cleared by the unrelated writer, the exact retry
+    // still rejects the completed attempt and must not duplicate its marker.
+    let retry = interactive_aggregate(aggregate_request)
+        .expect_err("in-process retry rejects the completed attempt");
+    assert!(
+        matches!(
+            retry,
+            EngineError::InteractiveAttemptAlreadyAggregated { .. }
+        ),
+        "unexpected retry error: {retry:?}"
+    );
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        let session = &guard.sessions[session_id];
+        assert!(session
+            .aggregated_interactive_attempt_markers
+            .contains(&aggregated_marker));
+        assert_eq!(session.aggregated_interactive_attempt_markers.len(), 1);
+        assert!(session.interactive_signing.is_empty());
+        assert!(
+            session.retired_interactive_at_unix.is_some(),
+            "repair must retire the completed per-message session immediately"
+        );
+        assert_eq!(active_session_count(&guard.sessions), 1);
+    }
+    build_taproot_tx(build_policy_test_request(next_session_id))
+        .expect("the repaired Aggregate session yields its shared registry slot");
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        assert!(guard.sessions.contains_key(wallet_session_id));
+        assert!(guard.sessions.contains_key(next_session_id));
+        assert!(!guard.sessions.contains_key(session_id));
+        assert_eq!(guard.sessions.len(), 2);
+    }
+
+    std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn interactive_aggregate_rejects_invalid_share_fail_closed() {
     let _guard = lock_test_state();
     reset_for_tests();

@@ -1476,16 +1476,26 @@ pub fn interactive_aggregate(
             .get_mut(&request.session_id)
             .expect("session existed under the held engine lock");
         if state_file_replaced {
-            mark_persistence_pending(PersistencePendingOperation::InteractiveAggregate {
-                session_id: request.session_id.clone(),
-                aggregated_marker: aggregated_marker.clone(),
-            });
             remove_finalized_interactive_members(
                 session,
                 &attempt_id,
                 &aggregated_message_digest,
                 taproot_merkle_root.as_ref(),
             );
+            // Stage retirement BEFORE registering the pending operation. Generic
+            // retirement deliberately skips pending sessions to protect uncertain
+            // markers from eviction; registering first would therefore strand this
+            // now-idle shell as active. With retirement staged first, the pending
+            // operation protects the tombstone and any later successful full-state
+            // snapshot (the exact retry or an unrelated writer) durably covers both
+            // the completion marker and retirement before clearing pending.
+            if session.interactive_signing.is_empty() && per_message_interactive_session(session) {
+                session.retired_interactive_at_unix = Some(now_unix().max(1));
+            }
+            mark_persistence_pending(PersistencePendingOperation::InteractiveAggregate {
+                session_id: request.session_id.clone(),
+                aggregated_marker: aggregated_marker.clone(),
+            });
         } else {
             session
                 .aggregated_interactive_attempt_markers
