@@ -415,6 +415,67 @@ func TestInitializeRequiresSignerApprovalVerifierWhenConfigured(t *testing.T) {
 	}
 }
 
+// verifierOnlyEngine implements Engine and SignerApprovalVerifier but NOT
+// CurrentBlockHeightProvider, so it can verify signer approval certificates yet
+// cannot supply the height needed to enforce their expiration.
+type verifierOnlyEngine struct{}
+
+func (verifierOnlyEngine) OnSubmit(context.Context, *Job) (*Transition, error) {
+	return &Transition{State: JobStatePending, Detail: "queued"}, nil
+}
+
+func (verifierOnlyEngine) OnPoll(context.Context, *Job) (*Transition, error) {
+	return nil, nil
+}
+
+func (verifierOnlyEngine) VerifySignerApproval(RouteSubmitRequest) error {
+	return nil
+}
+
+func TestInitializeRejectsVerifierEngineWithoutBlockProvider(t *testing.T) {
+	handle := newMemoryHandle()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, enabled, err := Initialize(
+		ctx,
+		Config{Port: availableLoopbackPort(t)},
+		handle,
+		verifierOnlyEngine{},
+	)
+	if err == nil || enabled {
+		t.Fatalf(
+			"expected startup to fail for a verifier engine without a block provider, got enabled=%v err=%v",
+			enabled,
+			err,
+		)
+	}
+	if !strings.Contains(err.Error(), "CurrentBlockHeightProvider") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInitializeAcceptsEngineProvidingVerifierAndBlockProvider(t *testing.T) {
+	handle := newMemoryHandle()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server, enabled, err := Initialize(
+		ctx,
+		Config{Port: availableLoopbackPort(t)},
+		handle,
+		&scriptedVerifierEngine{},
+	)
+	if err != nil || !enabled || server == nil {
+		t.Fatalf(
+			"expected startup to succeed for an engine with both interfaces, got enabled=%v server=%v err=%v",
+			enabled,
+			server != nil,
+			err,
+		)
+	}
+}
+
 func TestIsLoopbackListenAddressAcceptsBracketedIPv6Loopback(t *testing.T) {
 	if !isLoopbackListenAddress("[::1]") {
 		t.Fatal("expected bracketed IPv6 loopback address to be recognized")

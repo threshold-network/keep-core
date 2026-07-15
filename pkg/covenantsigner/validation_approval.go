@@ -171,16 +171,20 @@ func normalizeSignerApprovalCertificate(
 		}
 	}
 
-	if signerApproval.EndBlock != nil {
-		if err := validateUint32Range(
-			"request.signerApproval.endBlock",
-			*signerApproval.EndBlock,
-		); err != nil {
-			return nil, err
-		}
-		endBlock := *signerApproval.EndBlock
-		normalizedSignerApproval.EndBlock = &endBlock
+	// EndBlock is mandatory for certificate v2: it is the inclusive last valid
+	// host-chain block and is bound into the threshold signature. A missing or
+	// null value must fail closed rather than be treated as "never expires".
+	if signerApproval.EndBlock == nil {
+		return nil, &inputError{"request.signerApproval.endBlock is required"}
 	}
+	if err := validateUint32Range(
+		"request.signerApproval.endBlock",
+		*signerApproval.EndBlock,
+	); err != nil {
+		return nil, err
+	}
+	endBlock := *signerApproval.EndBlock
+	normalizedSignerApproval.EndBlock = &endBlock
 
 	return normalizedSignerApproval, nil
 }

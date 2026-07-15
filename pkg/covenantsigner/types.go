@@ -201,7 +201,13 @@ type SignerApprovalCertificate struct {
 	Signature          string   `json:"signature"`
 	ActiveMembers      []uint32 `json:"activeMembers,omitempty"`
 	InactiveMembers    []uint32 `json:"inactiveMembers,omitempty"`
-	EndBlock           *uint64  `json:"endBlock,omitempty"`
+	// EndBlock is the inclusive last valid host-chain (Ethereum) block for the
+	// certificate. It is required for certificate v2 and is bound into the
+	// threshold signature; a certificate is expired only once the current
+	// host-chain block strictly exceeds EndBlock. The pointer is retained so
+	// omission can be detected and rejected; it is not optional and is never
+	// treated as "never expires". omitempty is intentionally absent.
+	EndBlock *uint64 `json:"endBlock"`
 }
 
 type SigningRequirements struct {

@@ -63,7 +63,7 @@
           ]
         },
         "signerApproval": {
-          "certificateVersion": 1,
+          "certificateVersion": 2,
           "signatureAlgorithm": "tecdsa-secp256k1",
           "approvalDigest": "0xa6ffb42318a8e8b3b9669324ee5ad393133afcc9cc81044739cbaa77d5fa34c9",
           "walletPublicKey": "0x04d140d1eedb94f53ce43e0f4d68e8e0de6d6f2a444ef98f2a0e6c0f7fca02ef7dc4cb14e7b0f7c23787c93ca4d978f312c64379f38d9f52f86d1a89f0f8572f9f",
@@ -92,7 +92,7 @@
           "custodianRequired": true
         }
       },
-      "expectedRequestDigest": "0x8538a608ffbc3264655f9d87e334bfb7fa0d46e37cb6ffdb7c98b803eec900c8"
+      "expectedRequestDigest": "0x81e134d0bf0d1a7d41ec2c32d4ea555a77558f06bbe0941d0519e52a1132e28c"
     },
     "self_v1": {
       "expectedApprovalDigest": "0x4820468d065bc627dabac7860ef473ed28806d6352ba3459ff4edfb81e6bb752",
@@ -151,7 +151,7 @@
           ]
         },
         "signerApproval": {
-          "certificateVersion": 1,
+          "certificateVersion": 2,
           "signatureAlgorithm": "tecdsa-secp256k1",
           "approvalDigest": "0x4820468d065bc627dabac7860ef473ed28806d6352ba3459ff4edfb81e6bb752",
           "walletPublicKey": "0x04d140d1eedb94f53ce43e0f4d68e8e0de6d6f2a444ef98f2a0e6c0f7fca02ef7dc4cb14e7b0f7c23787c93ca4d978f312c64379f38d9f52f86d1a89f0f8572f9f",
@@ -177,7 +177,7 @@
           "custodianRequired": false
         }
       },
-      "expectedRequestDigest": "0x2da9d108af3d175865ee0654843a2c61eaf7fcbcf5d48afd807044725f310d17"
+      "expectedRequestDigest": "0x5eb10d5df3818f646b79f1feee1decd34949a688ca44f47c52d2a7b5d3aaf5d1"
     },
     "self_v1_presign": {
       "expectedApprovalDigest": "0x4820468d065bc627dabac7860ef473ed28806d6352ba3459ff4edfb81e6bb752",
@@ -236,7 +236,7 @@
           ]
         },
         "signerApproval": {
-          "certificateVersion": 1,
+          "certificateVersion": 2,
           "signatureAlgorithm": "tecdsa-secp256k1",
           "approvalDigest": "0x4820468d065bc627dabac7860ef473ed28806d6352ba3459ff4edfb81e6bb752",
           "walletPublicKey": "0x04d140d1eedb94f53ce43e0f4d68e8e0de6d6f2a444ef98f2a0e6c0f7fca02ef7dc4cb14e7b0f7c23787c93ca4d978f312c64379f38d9f52f86d1a89f0f8572f9f",
@@ -262,7 +262,13 @@
           "custodianRequired": false
         }
       },
-      "expectedRequestDigest": "0x4399f8651fea31ab227bffd3db96daa969612e9e5195394df3f349af4713cf03"
+      "expectedRequestDigest": "0x9c53f8df7ffbeece1ba9652bca402ce51561a94083355b3f1809c087d1598e97"
     }
+  },
+  "certificateV2SigningDigestVector": {
+    "signingDomain": "covenant-signer-approval-certificate-v2:",
+    "approvalDigest": "0xa6ffb42318a8e8b3b9669324ee5ad393133afcc9cc81044739cbaa77d5fa34c9",
+    "endBlock": 123,
+    "expectedSigningDigest": "0xcad878c7508ef7b6170ed841aa75d3c7325cd255b1d02251f833de979306e021"
   }
 }

@@ -18,6 +18,13 @@ import (
 	"github.com/keep-network/keep-core/pkg/covenantsigner"
 )
 
+// testSignerApprovalEndBlock is an explicit, comfortably-future host-chain
+// expiration block used when issuing v2 certificates in tests. It sits far
+// above any block the local counter reaches during a test run, so issuance
+// succeeds (signing completes well before it) and the certificate stays valid
+// unless a test deliberately advances the expiry clock past it.
+const testSignerApprovalEndBlock = uint64(1_000_000)
+
 func validStructuredSignerApprovalVerificationRequest(
 	t *testing.T,
 	node *node,
@@ -123,6 +130,7 @@ func validStructuredSignerApprovalVerificationRequest(
 		context.Background(),
 		testArtifactApprovalDigest(t, request.ArtifactApprovals.Payload),
 		startBlock,
+		testSignerApprovalEndBlock,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -156,6 +164,7 @@ func TestSigningExecutorCanIssueSignerApprovalCertificateForArbitraryDigest(t *t
 		context.Background(),
 		approvalDigest[:],
 		startBlock,
+		testSignerApprovalEndBlock,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -201,11 +210,13 @@ func TestSigningExecutorCanIssueSignerApprovalCertificateForArbitraryDigest(t *t
 			certificate.ActiveMembers,
 		)
 	}
-	if certificate.EndBlock == nil || *certificate.EndBlock < startBlock {
+	// Issuance must return the explicitly requested expiration block, not the
+	// block at which signing happened to complete.
+	if certificate.EndBlock == nil || *certificate.EndBlock != testSignerApprovalEndBlock {
 		t.Fatalf(
-			"expected end block [%v] to be >= start block [%v]",
+			"expected end block [%v], got [%v]",
+			testSignerApprovalEndBlock,
 			certificate.EndBlock,
-			startBlock,
 		)
 	}
 }
@@ -240,6 +251,7 @@ func TestSigningExecutorIssueSignerApprovalCertificateFailsWhenWalletRegistryUna
 		context.Background(),
 		approvalDigest[:],
 		startBlock,
+		testSignerApprovalEndBlock,
 	)
 	if err == nil || !strings.Contains(
 		err.Error(),
@@ -270,6 +282,7 @@ func TestSignerApprovalCertificateVerificationRejectsTamperedDigest(t *testing.T
 		context.Background(),
 		approvalDigest[:],
 		startBlock,
+		testSignerApprovalEndBlock,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -296,6 +309,191 @@ func TestSignerApprovalCertificateVerificationRejectsTamperedDigest(t *testing.T
 	tampered.ApprovalDigest = "0x" + hex.EncodeToString(tamperedDigest[:])
 	if err := verifySignerApprovalCertificate(&tampered, expectedSignerSetHash); err == nil {
 		t.Fatal("expected tampered approval digest to fail verification")
+	}
+}
+
+// issueTestSignerApprovalCertificate issues a genuinely threshold-signed v2
+// certificate for the given approval digest and expiration block, and returns
+// it alongside the signer set hash it should verify against.
+func issueTestSignerApprovalCertificate(
+	t *testing.T,
+	executor *signingExecutor,
+	approvalDigest []byte,
+	endBlock uint64,
+) (*covenantsigner.SignerApprovalCertificate, string) {
+	t.Helper()
+
+	startBlock, err := executor.getCurrentBlockFn()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	certificate, err := executor.issueSignerApprovalCertificate(
+		context.Background(),
+		approvalDigest,
+		startBlock,
+		endBlock,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	walletChainData, err := executor.chain.GetWallet(
+		bitcoin.PublicKeyHash(executor.wallet().publicKey),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedSignerSetHash, err := computeSignerApprovalCertificateSignerSetHash(
+		executor.wallet().publicKey,
+		walletChainData,
+		executor.groupParameters,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return certificate, expectedSignerSetHash
+}
+
+func requireCovenantSigningExecutor(
+	t *testing.T,
+	node *node,
+	walletPublicKey *ecdsa.PublicKey,
+) *signingExecutor {
+	t.Helper()
+
+	executor, ok, err := node.getSigningExecutor(walletPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("node is supposed to control wallet signers")
+	}
+
+	return executor
+}
+
+func TestSignerApprovalCertificateVerificationAcceptsIntactV2Certificate(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	executor := requireCovenantSigningExecutor(t, node, walletPublicKey)
+
+	approvalDigest := sha256.Sum256([]byte("intact-v2-certificate"))
+	certificate, expectedSignerSetHash := issueTestSignerApprovalCertificate(
+		t, executor, approvalDigest[:], testSignerApprovalEndBlock,
+	)
+
+	if certificate.CertificateVersion != 2 {
+		t.Fatalf("expected certificate version 2, got %d", certificate.CertificateVersion)
+	}
+	if err := verifySignerApprovalCertificate(certificate, expectedSignerSetHash); err != nil {
+		t.Fatalf("expected intact v2 certificate to verify, got %v", err)
+	}
+}
+
+func TestSignerApprovalCertificateVerificationRejectsTamperedEndBlock(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	executor := requireCovenantSigningExecutor(t, node, walletPublicKey)
+
+	approvalDigest := sha256.Sum256([]byte("end-block-binding"))
+	certificate, expectedSignerSetHash := issueTestSignerApprovalCertificate(
+		t, executor, approvalDigest[:], testSignerApprovalEndBlock,
+	)
+
+	// Changing the certified expiration by a single block must invalidate the
+	// signature because EndBlock is bound into the signed digest.
+	tampered := *certificate
+	tamperedEndBlock := testSignerApprovalEndBlock + 1
+	tampered.EndBlock = &tamperedEndBlock
+	if err := verifySignerApprovalCertificate(&tampered, expectedSignerSetHash); err == nil {
+		t.Fatal("expected tampered end block to fail verification")
+	}
+}
+
+func TestSignerApprovalCertificateVerificationRejectsMissingEndBlock(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	executor := requireCovenantSigningExecutor(t, node, walletPublicKey)
+
+	approvalDigest := sha256.Sum256([]byte("missing-end-block"))
+	certificate, expectedSignerSetHash := issueTestSignerApprovalCertificate(
+		t, executor, approvalDigest[:], testSignerApprovalEndBlock,
+	)
+
+	missing := *certificate
+	missing.EndBlock = nil
+	err := verifySignerApprovalCertificate(&missing, expectedSignerSetHash)
+	if err == nil || !strings.Contains(err.Error(), "missing the required expiration block") {
+		t.Fatalf("expected missing end block error, got %v", err)
+	}
+}
+
+func TestSignerApprovalCertificateVerificationRejectsCertificateVersionOne(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	executor := requireCovenantSigningExecutor(t, node, walletPublicKey)
+
+	approvalDigest := sha256.Sum256([]byte("certificate-version"))
+	certificate, expectedSignerSetHash := issueTestSignerApprovalCertificate(
+		t, executor, approvalDigest[:], testSignerApprovalEndBlock,
+	)
+
+	downgraded := *certificate
+	downgraded.CertificateVersion = 1
+	err := verifySignerApprovalCertificate(&downgraded, expectedSignerSetHash)
+	if err == nil || !strings.Contains(err.Error(), "unsupported certificate version") {
+		t.Fatalf("expected unsupported certificate version error, got %v", err)
+	}
+}
+
+func TestSigningExecutorIssueSignerApprovalCertificateFailsWhenSigningCompletesAfterExpiry(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	executor := requireCovenantSigningExecutor(t, node, walletPublicKey)
+
+	startBlock, err := executor.getCurrentBlockFn()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	approvalDigest := sha256.Sum256([]byte("expiry-before-completion"))
+	// Requesting expiry at the signing start block guarantees the completion
+	// block (strictly later, since signing spans several blocks) is past the
+	// requested expiry, so issuance must refuse to produce a born-expired
+	// certificate.
+	_, err = executor.issueSignerApprovalCertificate(
+		context.Background(),
+		approvalDigest[:],
+		startBlock,
+		startBlock,
+	)
+	if err == nil || !strings.Contains(err.Error(), "after the requested certificate expiration block") {
+		t.Fatalf("expected signing-after-expiry error, got %v", err)
+	}
+}
+
+// TestSignerApprovalCertificateDigestVectorMatchesContract pins the exact
+// domain string, byte ordering, and cross-language representation of the v2
+// signing digest. The same values are recorded in the covenantsigner contract
+// vector testdata for external producers and consumers.
+func TestSignerApprovalCertificateDigestVectorMatchesContract(t *testing.T) {
+	if signerApprovalCertificateSigningDomain != "covenant-signer-approval-certificate-v2:" {
+		t.Fatalf("unexpected signing domain: %s", signerApprovalCertificateSigningDomain)
+	}
+
+	approvalDigest, err := hex.DecodeString(
+		"a6ffb42318a8e8b3b9669324ee5ad393133afcc9cc81044739cbaa77d5fa34c9",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	digest, err := computeSignerApprovalCertificateDigest(approvalDigest, 123)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const expected = "0xcad878c7508ef7b6170ed841aa75d3c7325cd255b1d02251f833de979306e021"
+	if actual := "0x" + hex.EncodeToString(digest); actual != expected {
+		t.Fatalf("expected certificate digest %s, got %s", expected, actual)
 	}
 }
 

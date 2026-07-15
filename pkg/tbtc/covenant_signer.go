@@ -25,6 +25,12 @@ type covenantSignerEngine struct {
 	minimumActiveOutpointConfirmations uint
 }
 
+var (
+	_ covenantsigner.Engine                     = (*covenantSignerEngine)(nil)
+	_ covenantsigner.SignerApprovalVerifier     = (*covenantSignerEngine)(nil)
+	_ covenantsigner.CurrentBlockHeightProvider = (*covenantSignerEngine)(nil)
+)
+
 // defaultMinActiveOutpointConfirmations is the confirmation threshold applied
 // when the operator config does not specify a custom value. It aligns with
 // DepositSweepRequiredFundingTxConfirmations to ensure consistent reorg safety
@@ -219,6 +225,35 @@ func (cse *covenantSignerEngine) OnPoll(
 	*covenantsigner.Job,
 ) (*covenantsigner.Transition, error) {
 	return nil, nil
+}
+
+// CurrentBlockHeight returns the current height of the tBTC host/anchoring
+// chain (the Ethereum chain), which is the block-number domain used by
+// SignerApprovalCertificate.EndBlock. It intentionally reads node.chain, not
+// the Bitcoin chain, so certificate expiration is evaluated against the same
+// chain the issuer measured EndBlock against.
+func (cse *covenantSignerEngine) CurrentBlockHeight(ctx context.Context) (uint64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	blockCounter, err := cse.node.chain.BlockCounter()
+	if err != nil {
+		return 0, fmt.Errorf(
+			"cannot get host chain block counter for signer approval expiration: %w",
+			err,
+		)
+	}
+
+	currentBlock, err := blockCounter.CurrentBlock()
+	if err != nil {
+		return 0, fmt.Errorf(
+			"cannot get host chain block height for signer approval expiration: %w",
+			err,
+		)
+	}
+
+	return currentBlock, nil
 }
 
 func (cse *covenantSignerEngine) submitSelfV1(

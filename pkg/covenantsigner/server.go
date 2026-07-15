@@ -69,6 +69,18 @@ func Initialize(
 	if err := validateRequiredApprovalTrustRoots(config, service); err != nil {
 		return nil, false, err
 	}
+	// An engine that verifies signer approval certificates must also provide the
+	// host-chain height used to enforce their expiration. Without a provider,
+	// expiry would fail open, so reject this configuration before opening the
+	// listener rather than accepting certificates that can never expire.
+	if service.signerApprovalVerifier != nil && service.currentBlockProvider == nil {
+		return nil, false, fmt.Errorf(
+			"covenant signer engine implements SignerApprovalVerifier but not " +
+				"CurrentBlockHeightProvider; signer approval certificate " +
+				"expiration cannot be enforced -- use an engine that also " +
+				"provides the current host-chain block height",
+		)
+	}
 	if service.signerApprovalVerifier == nil {
 		hasTrustRoots := len(service.depositorTrustRoots) > 0 ||
 			len(service.custodianTrustRoots) > 0 ||
