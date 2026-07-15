@@ -490,9 +490,22 @@ pub fn rollback_canary(
             return Ok(result);
         }
     }
-    let previous_canary_rollout = guard.canary_rollout.clone();
     let from_percent = guard.canary_rollout.current_percent;
     let to_percent = guard.canary_rollout.previous_percent.min(from_percent);
+
+    if to_percent == from_percent {
+        let state_path = active_state_file_path()?;
+        sync_existing_state_file_parent_directory(&state_path)?;
+        return Ok(RollbackCanaryResult {
+            from_percent,
+            to_percent,
+            config_version: guard.canary_rollout.config_version,
+            reason: reason.to_string(),
+            rolled_back_at_unix: guard.canary_rollout.last_action_unix,
+        });
+    }
+
+    let previous_canary_rollout = guard.canary_rollout.clone();
     guard.canary_rollout.current_percent = to_percent;
     guard.canary_rollout.previous_percent = to_percent;
     guard.canary_rollout.config_version = guard.canary_rollout.config_version.saturating_add(1);

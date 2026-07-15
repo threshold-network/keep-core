@@ -2632,6 +2632,189 @@ fn canary_promotion_and_rollback_controls_persist_across_reload() {
 }
 
 #[test]
+fn completed_canary_rollback_retries_are_idempotent() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("completed_canary_rollback_retry");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
+    promote_canary(PromoteCanaryRequest { target_percent: 50 })
+        .expect("promote canary before rollback");
+    let request = RollbackCanaryRequest {
+        reason: "lost rollback response".to_string(),
+    };
+    let completed = rollback_canary(request.clone()).expect("complete canary rollback");
+    assert_eq!(completed.from_percent, 50);
+    assert_eq!(completed.to_percent, 10);
+
+    seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
+    let status_before_retry = canary_rollout_status().expect("canary status before rollback retry");
+    assert!(status_before_retry.promotion_gate_passed);
+    let rollback_count_before_retry = hardening_metrics().canary_rollbacks_total;
+
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let first_retry = rollback_canary(request.clone())
+        .expect("completed rollback retry must not attempt persistence");
+    let second_retry =
+        rollback_canary(request).expect("repeated completed rollback retry is stable");
+    clear_persist_fault_injection_for_tests();
+
+    assert_eq!(first_retry.from_percent, 10);
+    assert_eq!(first_retry.to_percent, 10);
+    assert_eq!(first_retry.config_version, completed.config_version);
+    assert_eq!(
+        first_retry.rolled_back_at_unix,
+        completed.rolled_back_at_unix
+    );
+    assert_eq!(second_retry, first_retry);
+    assert_eq!(
+        canary_rollout_status().expect("canary status after rollback retries"),
+        status_before_retry,
+        "rollback retries must not mutate rollout state or reset promotion evidence"
+    );
+    assert_eq!(
+        hardening_metrics().canary_rollbacks_total,
+        rollback_count_before_retry,
+        "rollback retries must not be counted again"
+    );
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn fresh_canary_rollback_noop_does_not_require_a_state_parent_directory() {
+    let _guard = lock_test_state();
+    clear_state_storage_policy_overrides();
+
+    let missing_parent = std::env::temp_dir().join(format!(
+        "frost_tbtc_missing_state_parent_{}",
+        std::process::id()
+    ));
+    let state_path = missing_parent.join("state.json");
+    cleanup_test_state_artifacts(&state_path);
+    let _ = std::fs::remove_dir(&missing_parent);
+    std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, &state_path);
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    let _ = std::fs::remove_dir(&missing_parent);
+    assert!(!missing_parent.exists());
+
+    let status_before = canary_rollout_status().expect("fresh canary rollout status");
+    let directory_syncs_before = state_file_parent_directory_syncs_for_tests();
+    let rollback = rollback_canary(RollbackCanaryRequest {
+        reason: "fresh state no-op".to_string(),
+    })
+    .expect("fresh-state rollback no-op");
+
+    assert_eq!(rollback.from_percent, 10);
+    assert_eq!(rollback.to_percent, 10);
+    assert_eq!(rollback.config_version, status_before.config_version);
+    assert_eq!(
+        canary_rollout_status().expect("fresh canary status after no-op"),
+        status_before
+    );
+    assert_eq!(
+        state_file_parent_directory_syncs_for_tests(),
+        directory_syncs_before,
+        "an absent state file must not trigger a parent-directory sync"
+    );
+    assert!(
+        !missing_parent.exists(),
+        "a fresh-state no-op must not create persistence directories"
+    );
+
+    std::env::remove_var(TBTC_SIGNER_STATE_PATH_ENV);
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    let _ = std::fs::remove_dir(&missing_parent);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn completed_canary_rollback_retry_after_restart_repairs_directory_durability() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("completed_canary_rollback_restart_retry");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
+    promote_canary(PromoteCanaryRequest { target_percent: 50 })
+        .expect("promote canary before rollback");
+    let request = RollbackCanaryRequest {
+        reason: "lost rollback response across restart".to_string(),
+    };
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    let rollback_error = rollback_canary(request.clone())
+        .expect_err("post-rename rollback failure must remain unacknowledged");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        rollback_error,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    assert!(pending_canary_rollback_result(&request.reason).is_some());
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    assert!(
+        pending_canary_rollback_result(&request.reason).is_none(),
+        "the process-local pending marker must be absent after restart"
+    );
+    seed_canary_promotion_evidence_for_tests(1, 1, 1, 0);
+    let status_before_retry =
+        canary_rollout_status().expect("reloaded rollback state before retry");
+    assert_eq!(status_before_retry.current_percent, 10);
+    assert_eq!(status_before_retry.previous_percent, 10);
+    assert_eq!(status_before_retry.config_version, 3);
+    assert!(status_before_retry.promotion_gate_passed);
+    let rollback_count_before_retry = hardening_metrics().canary_rollbacks_total;
+    let persisted_bytes_before_retry =
+        std::fs::read(&state_path).expect("read replacement state before retry");
+    let directory_syncs_before_retry = state_file_parent_directory_syncs_for_tests();
+
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let retry_result = rollback_canary(request);
+    clear_persist_fault_injection_for_tests();
+    let retry = retry_result.expect("state-based retry repairs parent-directory durability");
+
+    assert_eq!(retry.from_percent, 10);
+    assert_eq!(retry.to_percent, 10);
+    assert_eq!(retry.config_version, status_before_retry.config_version);
+    assert_eq!(
+        retry.rolled_back_at_unix,
+        status_before_retry.last_action_unix
+    );
+    assert_eq!(
+        state_file_parent_directory_syncs_for_tests(),
+        directory_syncs_before_retry.saturating_add(1),
+        "the retry must sync the existing state file's parent directory"
+    );
+    assert_eq!(
+        std::fs::read(&state_path).expect("read state after retry"),
+        persisted_bytes_before_retry,
+        "the directory durability repair must not rewrite the state file"
+    );
+    assert_eq!(
+        canary_rollout_status().expect("canary status after restarted rollback retry"),
+        status_before_retry,
+        "the retry must not mutate rollout state or reset promotion evidence"
+    );
+    assert_eq!(
+        hardening_metrics().canary_rollbacks_total,
+        rollback_count_before_retry,
+        "the retry must not count another rollback"
+    );
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
 fn emergency_rekey_persist_failure_rolls_back_and_retry_is_durable() {
     let _guard = lock_test_state();
     let state_path = configure_test_state_path("emergency_rekey_persist_retry");
@@ -5616,6 +5799,93 @@ fn corrupt_state_file_fails_closed_by_default() {
     assert!(err_message.contains("refusing to continue with corrupted signer state file"));
     assert!(err_message.contains(TBTC_SIGNER_STATE_CORRUPTION_POLICY_ENV));
     assert!(state_path.exists());
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn state_file_parent_directory_normalizes_only_bare_paths() {
+    assert_eq!(
+        state_file_parent_directory(Path::new("state.json")),
+        Some(Path::new("."))
+    );
+
+    let nested_state_path = Path::new("nested/state.json");
+    assert_eq!(
+        state_file_parent_directory(nested_state_path),
+        nested_state_path.parent()
+    );
+
+    let absolute_state_path = std::env::temp_dir().join("nested").join("state.json");
+    assert!(absolute_state_path.is_absolute());
+    assert_eq!(
+        state_file_parent_directory(&absolute_state_path),
+        absolute_state_path.parent()
+    );
+}
+
+#[test]
+fn bare_state_path_persists_and_syncs_current_directory() {
+    let _guard = lock_test_state();
+    let state_path = PathBuf::from(format!(
+        "frost_tbtc_engine_state_bare_persist_{}.json",
+        std::process::id()
+    ));
+    assert_eq!(state_path.parent(), Some(Path::new("")));
+
+    clear_state_storage_policy_overrides();
+    cleanup_test_state_artifacts(&state_path);
+    std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, &state_path);
+    reset_for_tests();
+
+    {
+        let mut guard = state().expect("engine state").lock().expect("engine lock");
+        guard.refresh_epoch_counter = 41;
+        persist_engine_state_to_storage(&guard)
+            .expect("persist state through a one-component path");
+    }
+
+    assert!(state_path.exists(), "bare state path should be replaced");
+    let loaded = load_engine_state_from_storage().expect("load persisted bare-path state");
+    assert_eq!(loaded.refresh_epoch_counter, 41);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn bare_state_path_corruption_quarantine_enumerates_current_directory() {
+    let _guard = lock_test_state();
+    let state_path = PathBuf::from(format!(
+        "frost_tbtc_engine_state_bare_corrupt_{}.json",
+        std::process::id()
+    ));
+    assert_eq!(state_path.parent(), Some(Path::new("")));
+
+    clear_state_storage_policy_overrides();
+    cleanup_test_state_artifacts(&state_path);
+    std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, &state_path);
+    reset_for_tests();
+    std::env::set_var(
+        TBTC_SIGNER_STATE_CORRUPTION_POLICY_ENV,
+        TBTC_SIGNER_STATE_CORRUPTION_POLICY_QUARANTINE_AND_RESET,
+    );
+    std::fs::write(&state_path, b"{invalid-bare-state")
+        .expect("write corrupt one-component state path");
+
+    let loaded = load_engine_state_from_storage().expect("quarantine corrupt bare-path state");
+    assert!(loaded.sessions.is_empty());
+    assert!(!state_path.exists());
+
+    let backups = sorted_corrupted_state_backups(&state_path).expect("enumerate bare-path backups");
+    assert_eq!(backups.len(), 1);
+    assert_eq!(
+        std::fs::read(&backups[0]).expect("read quarantined bare-path state"),
+        b"{invalid-bare-state"
+    );
 
     reset_for_tests();
     cleanup_test_state_artifacts(&state_path);
