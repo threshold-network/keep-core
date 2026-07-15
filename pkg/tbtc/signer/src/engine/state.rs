@@ -217,6 +217,15 @@ pub(crate) const TBTC_SIGNER_MAX_ATTEMPT_TRANSITION_RECORDS_PER_SESSION: usize =
 
 pub(crate) static ENGINE_STATE: OnceLock<Mutex<EngineState>> = OnceLock::new();
 
+// Loading can rewrite a legacy or stale encrypted envelope in place. A
+// OnceLock serializes only the final in-memory installation, so it does not by
+// itself prevent concurrent first callers from racing those fallible storage
+// reads and migrations. Keep that entire path behind a process-local mutex
+// that is deliberately separate from STATE_FILE_LOCK: the loader resolves the
+// active path through STATE_FILE_LOCK and would deadlock if its slot guard were
+// held here.
+static ENGINE_STATE_INITIALIZATION_LOCK: Mutex<()> = Mutex::new(());
+
 pub(crate) static STATE_FILE_LOCK: OnceLock<Mutex<Option<StateFileLock>>> = OnceLock::new();
 
 pub(crate) static STATE_PATH_OVERRIDE_WARNED: OnceLock<()> = OnceLock::new();
@@ -327,12 +336,50 @@ pub(crate) fn state() -> Result<&'static Mutex<EngineState>, EngineError> {
     ensure_state_file_lock()?;
     warn_disabled_policy_gates();
 
-    if let Some(state) = ENGINE_STATE.get() {
+    initialize_engine_state_with_loader(
+        &ENGINE_STATE,
+        &ENGINE_STATE_INITIALIZATION_LOCK,
+        || {},
+        load_engine_state_from_storage,
+    )
+}
+
+/// Installs the first engine state while serializing the complete fallible load
+/// path, not just the final OnceLock write.
+///
+/// `after_initial_miss` is a no-op in production and lets concurrency tests
+/// deterministically place multiple callers past the optimistic fast path.
+/// The loader runs under `initialization_lock`; a failed load leaves
+/// `engine_state` unset so a later call can retry.
+pub(crate) fn initialize_engine_state_with_loader<'state, AfterInitialMiss, Load>(
+    engine_state: &'state OnceLock<Mutex<EngineState>>,
+    initialization_lock: &Mutex<()>,
+    after_initial_miss: AfterInitialMiss,
+    load: Load,
+) -> Result<&'state Mutex<EngineState>, EngineError>
+where
+    AfterInitialMiss: FnOnce(),
+    Load: FnOnce() -> Result<EngineState, EngineError>,
+{
+    if let Some(state) = engine_state.get() {
         return Ok(state);
     }
 
-    let loaded_state = load_engine_state_from_storage()?;
-    Ok(ENGINE_STATE.get_or_init(|| Mutex::new(loaded_state)))
+    after_initial_miss();
+
+    // The mutex protects no data of its own. Recovering its guard after a
+    // panic is safe, and the second OnceLock check determines whether the
+    // previous caller completed installation before panicking.
+    let _initialization_guard = initialization_lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    if let Some(state) = engine_state.get() {
+        return Ok(state);
+    }
+
+    let loaded_state = load()?;
+    Ok(engine_state.get_or_init(|| Mutex::new(loaded_state)))
 }
 
 pub(crate) fn state_file_path() -> Result<PathBuf, EngineError> {

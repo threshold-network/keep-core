@@ -647,7 +647,7 @@ mod tests {
             let result: DkgPart1Result =
                 serde_json::from_slice(&payload).expect("part1 response decode");
             assert_eq!(result.package.identifier, participant_identifiers[&id]);
-            assert!(!result.secret_package_hex.is_empty());
+            assert!(!result.secret_package_hex.expose_secret().is_empty());
             assert!(!result.package.package_hex.is_empty());
             part1_results.insert(id, result);
         }

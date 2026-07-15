@@ -30,7 +30,7 @@ use std::{
 #[derive(Clone, Debug)]
 struct GenerateNoncesAndCommitmentsRequest {
     key_package_identifier: String,
-    key_package_hex: String,
+    key_package_hex: SecretHex,
 }
 
 #[derive(Clone, Debug)]
@@ -44,7 +44,7 @@ struct SignShareRequest {
     signing_package_hex: String,
     nonces_hex: String,
     key_package_identifier: String,
-    key_package_hex: String,
+    key_package_hex: SecretHex,
 }
 
 #[derive(Clone, Debug)]
@@ -67,13 +67,13 @@ struct AggregateResult {
 fn generate_nonces_and_commitments(
     mut request: GenerateNoncesAndCommitmentsRequest,
 ) -> Result<GenerateNoncesAndCommitmentsResult, EngineError> {
-    let key_package_hex = Zeroizing::new(std::mem::take(&mut request.key_package_hex));
+    let key_package_hex = std::mem::take(&mut request.key_package_hex);
     enforce_provenance_gate()?;
 
     let key_package = decode_key_package(
         "GenerateNoncesAndCommitments",
         &request.key_package_identifier,
-        &key_package_hex,
+        key_package_hex.expose_secret(),
     )?;
     let mut rng = zeroizing_rng_from_os();
     let (mut nonces, commitments) = frost::round1::commit(key_package.signing_share(), &mut rng);
@@ -105,7 +105,7 @@ fn generate_nonces_and_commitments(
 
 fn sign_share(mut request: SignShareRequest) -> Result<SignShareResult, EngineError> {
     let nonces_hex = Zeroizing::new(std::mem::take(&mut request.nonces_hex));
-    let key_package_hex = Zeroizing::new(std::mem::take(&mut request.key_package_hex));
+    let key_package_hex = std::mem::take(&mut request.key_package_hex);
     enforce_provenance_gate()?;
 
     let signing_package_bytes = decode_hex_field(
@@ -125,7 +125,7 @@ fn sign_share(mut request: SignShareRequest) -> Result<SignShareResult, EngineEr
     let key_package_result = decode_key_package(
         "SignShare",
         &request.key_package_identifier,
-        &key_package_hex,
+        key_package_hex.expose_secret(),
     );
     let key_package = match key_package_result {
         Ok(key_package) => key_package,
@@ -437,7 +437,7 @@ fn deterministic_interactive_dkg_fixture(seed: u8) -> InteractiveDkgFixture {
                     sender_identifier: Some(frost_identifier_to_go_string(
                         participant_identifiers[&sender_id],
                     )),
-                    package_hex: hex::encode(package.serialize().expect("round2 package")),
+                    package_hex: hex::encode(package.serialize().expect("round2 package")).into(),
                 });
         }
     }
@@ -468,7 +468,7 @@ fn deterministic_interactive_dkg_fixture(seed: u8) -> InteractiveDkgFixture {
         part3_requests.insert(
             id,
             DkgPart3Request {
-                secret_package_hex: hex::encode(secret_package_bytes),
+                secret_package_hex: hex::encode(secret_package_bytes).into(),
                 round1_packages: round1_packages_for(id),
                 round2_packages: round2_packages_by_recipient
                     .get(&id)
@@ -1125,7 +1125,8 @@ fn sample_distributed_dkg_native_material(
             member,
             crate::api::NativeFrostKeyPackage {
                 identifier: frost_identifier_to_go_string(*key_package.identifier()),
-                data_hex: hex::encode(key_package.serialize().expect("serialize key package")),
+                data_hex: hex::encode(key_package.serialize().expect("serialize key package"))
+                    .into(),
             },
         );
     }
@@ -1663,7 +1664,7 @@ fn persist_distributed_dkg_key_package_rejects_signing_share_not_deriving_to_pub
             participant_count: 3,
             key_package: crate::api::NativeFrostKeyPackage {
                 identifier: frost_identifier_to_go_string(*key_package_1.identifier()),
-                data_hex: hex::encode(corrupt_data),
+                data_hex: hex::encode(corrupt_data).into(),
             },
             public_key_package: native_public,
         })
@@ -5357,6 +5358,115 @@ fn restart_reload_recovers_persisted_state_across_operation_types() {
 }
 
 #[test]
+fn first_engine_state_load_is_serialized_across_callers() {
+    let engine_state = std::sync::Arc::new(OnceLock::<Mutex<EngineState>>::new());
+    let initialization_lock = std::sync::Arc::new(Mutex::new(()));
+    let initial_miss_barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let load_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    let callers = (0..2)
+        .map(|_| {
+            let engine_state = std::sync::Arc::clone(&engine_state);
+            let initialization_lock = std::sync::Arc::clone(&initialization_lock);
+            let initial_miss_barrier = std::sync::Arc::clone(&initial_miss_barrier);
+            let load_count = std::sync::Arc::clone(&load_count);
+
+            std::thread::spawn(move || {
+                let initialized = initialize_engine_state_with_loader(
+                    &engine_state,
+                    &initialization_lock,
+                    || {
+                        // Both callers must pass the optimistic OnceLock check
+                        // before either may enter the serialized loader path.
+                        initial_miss_barrier.wait();
+                    },
+                    || {
+                        let invocation =
+                            load_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Ok(EngineState {
+                            refresh_epoch_counter: invocation as u64 + 41,
+                            ..EngineState::default()
+                        })
+                    },
+                )
+                .expect("concurrent initialization");
+
+                let state_pointer = std::ptr::from_ref(initialized) as usize;
+                let refresh_epoch_counter = initialized
+                    .lock()
+                    .expect("initialized engine state lock")
+                    .refresh_epoch_counter;
+                (state_pointer, refresh_epoch_counter)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let results = callers
+        .into_iter()
+        .map(|caller| caller.join().expect("initialization caller"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        load_count.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "only one first caller may load or migrate persistent state"
+    );
+    assert_eq!(results[0].0, results[1].0);
+    assert_eq!(results[0].1, 41);
+    assert_eq!(results[1].1, 41);
+}
+
+#[test]
+fn failed_engine_state_load_remains_retryable() {
+    let engine_state = OnceLock::<Mutex<EngineState>>::new();
+    let initialization_lock = Mutex::new(());
+    let load_count = std::sync::atomic::AtomicUsize::new(0);
+
+    let first_error = match initialize_engine_state_with_loader(
+        &engine_state,
+        &initialization_lock,
+        || {},
+        || {
+            load_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(EngineError::Internal(
+                "intentional first-load failure".to_string(),
+            ))
+        },
+    ) {
+        Ok(_) => panic!("failed loader must not initialize engine state"),
+        Err(error) => error,
+    };
+    expect_internal_error_contains(first_error, "intentional first-load failure");
+    assert!(
+        engine_state.get().is_none(),
+        "a fallible load must leave the OnceLock unset"
+    );
+
+    let initialized = initialize_engine_state_with_loader(
+        &engine_state,
+        &initialization_lock,
+        || {},
+        || {
+            load_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(EngineState {
+                refresh_epoch_counter: 73,
+                ..EngineState::default()
+            })
+        },
+    )
+    .expect("retry after failed state load");
+
+    assert_eq!(load_count.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(
+        initialized
+            .lock()
+            .expect("initialized engine state lock")
+            .refresh_epoch_counter,
+        73
+    );
+}
+
+#[test]
 #[cfg(unix)]
 fn state_lock_rejects_multi_process_contention() {
     let _guard = lock_test_state();
@@ -6749,7 +6859,8 @@ fn ensure_interactive_dkg_session(
         let mut frost_key_packages = BTreeMap::new();
         for (id, key_package) in &native {
             let deserialized = frost::keys::KeyPackage::deserialize(
-                &hex::decode(&key_package.data_hex).expect("fixture key package hex decodes"),
+                &hex::decode(key_package.data_hex.expose_secret())
+                    .expect("fixture key package hex decodes"),
             )
             .expect("fixture key package deserializes");
             frost_key_packages.insert(*id, deserialized);
@@ -13220,7 +13331,7 @@ fn verify_signature_share_tweaked_root_matches_aggregate() {
     .expect("member 1 tweaked Round2 share")
     .signature_share_hex;
     let share2 = sign_tweaked(
-        &key_packages[&2].data_hex,
+        key_packages[&2].data_hex.expose_secret(),
         &member2.nonces_hex,
         &signing_package_hex,
     );
@@ -13273,7 +13384,7 @@ fn verify_signature_share_tweaked_root_matches_aggregate() {
         ],
     );
     let bogus_share2 = sign_tweaked(
-        &key_packages[&2].data_hex,
+        key_packages[&2].data_hex.expose_secret(),
         &bogus_member2.nonces_hex,
         &other_package_hex,
     );

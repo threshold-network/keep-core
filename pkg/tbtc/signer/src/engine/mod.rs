@@ -76,7 +76,7 @@ use crate::api::{
     PersistDistributedDkgKeyPackageRequest, PromoteCanaryRequest, PromoteCanaryResult,
     QuarantineStatusRequest, QuarantineStatusResult, RefreshCadenceStatusRequest,
     RefreshCadenceStatusResult, RefreshSharesRequest, RefreshSharesResult,
-    RoastLivenessPolicyResult, RollbackCanaryRequest, RollbackCanaryResult, RoundState,
+    RoastLivenessPolicyResult, RollbackCanaryRequest, RollbackCanaryResult, RoundState, SecretHex,
     SignatureResult, SignerHardeningMetricsResult, TransactionResult, TranscriptAuditRecord,
     TranscriptAuditRequest, TranscriptAuditResult, TriggerEmergencyRekeyRequest,
     TriggerEmergencyRekeyResult, VerifyBlameProofRequest,

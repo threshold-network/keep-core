@@ -16,10 +16,10 @@ pub fn persist_distributed_dkg_key_package(
     mut request: PersistDistributedDkgKeyPackageRequest,
 ) -> Result<DkgResult, EngineError> {
     const OP: &str = "persist_distributed_dkg_key_package";
-    // data_hex is the serialized SECRET signing share. Move it into a zeroizing holder
-    // BEFORE any fallible check (validation, admission, quarantine can all return first),
-    // so serde's owned String is wiped on EVERY return path rather than dropped un-wiped.
-    let data_hex = Zeroizing::new(std::mem::take(&mut request.key_package.data_hex));
+    // data_hex is the serialized SECRET signing share. Move its redacting,
+    // zeroizing holder out BEFORE any fallible check so it is wiped on every
+    // return path and the rest of the request no longer retains it.
+    let data_hex = std::mem::take(&mut request.key_package.data_hex);
     validate_session_id(&request.session_id)?;
     // Gate BEFORE decoding or persisting any key material: this op writes signing
     // material to durable state that interactive signing trusts after restart, so
@@ -102,7 +102,11 @@ pub fn persist_distributed_dkg_key_package(
         auto_quarantine_config.as_ref(),
     )?;
 
-    let key_package = decode_key_package(OP, &request.key_package.identifier, &data_hex)?;
+    let key_package = decode_key_package(
+        OP,
+        &request.key_package.identifier,
+        data_hex.expose_secret(),
+    )?;
 
     // The key package must belong to this participant AND be consistent with the
     // group public key package: matching identifier, embedded threshold, group

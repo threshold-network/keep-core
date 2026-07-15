@@ -1,4 +1,46 @@
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+
+/// A hex-encoded secret whose owned Rust allocation is wiped on drop and whose
+/// `Debug` representation never exposes its contents. Serde remains transparent
+/// so the C-ABI JSON contract continues to carry an ordinary string.
+#[derive(Clone, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct SecretHex(Zeroizing<String>);
+
+impl SecretHex {
+    pub fn new(value: String) -> Self {
+        Self(Zeroizing::new(value))
+    }
+
+    /// Borrows the secret for the narrow decode/serialization boundary without
+    /// creating another unmanaged `String` allocation.
+    pub fn expose_secret(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl From<String> for SecretHex {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl fmt::Debug for SecretHex {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("<redacted>")
+    }
+}
+
+impl Zeroize for SecretHex {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for SecretHex {}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DkgResult {
@@ -20,7 +62,7 @@ pub struct DkgRound2Package {
     pub identifier: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender_identifier: Option<String>,
-    pub package_hex: String,
+    pub package_hex: SecretHex,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -32,26 +74,26 @@ pub struct DkgPart1Request {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DkgPart1Result {
-    pub secret_package_hex: String,
+    pub secret_package_hex: SecretHex,
     pub package: DkgRound1Package,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DkgPart2Request {
-    pub secret_package_hex: String,
+    pub secret_package_hex: SecretHex,
     pub round1_packages: Vec<DkgRound1Package>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DkgPart2Result {
-    pub secret_package_hex: String,
+    pub secret_package_hex: SecretHex,
     pub packages: Vec<DkgRound2Package>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct NativeFrostKeyPackage {
     pub identifier: String,
-    pub data_hex: String,
+    pub data_hex: SecretHex,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -62,7 +104,7 @@ pub struct NativeFrostPublicKeyPackage {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct DkgPart3Request {
-    pub secret_package_hex: String,
+    pub secret_package_hex: SecretHex,
     pub round1_packages: Vec<DkgRound1Package>,
     pub round2_packages: Vec<DkgRound2Package>,
 }
@@ -847,4 +889,173 @@ pub struct InitSignerConfigResult {
     pub idempotent: bool,
     pub config_fingerprint: String,
     pub configured_key_count: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SECRET_SENTINEL: &str =
+        "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+    fn secret_hex() -> SecretHex {
+        SecretHex::new(SECRET_SENTINEL.to_string())
+    }
+
+    fn round1_package() -> DkgRound1Package {
+        DkgRound1Package {
+            identifier: "round1-identifier".to_string(),
+            package_hex: "public-round1-package".to_string(),
+        }
+    }
+
+    fn round2_package() -> DkgRound2Package {
+        DkgRound2Package {
+            identifier: "round2-recipient".to_string(),
+            sender_identifier: Some("round2-sender".to_string()),
+            package_hex: secret_hex(),
+        }
+    }
+
+    fn public_key_package() -> NativeFrostPublicKeyPackage {
+        NativeFrostPublicKeyPackage {
+            verifying_shares: std::collections::BTreeMap::new(),
+            verifying_key: "public-verifying-key".to_string(),
+        }
+    }
+
+    fn key_package() -> NativeFrostKeyPackage {
+        NativeFrostKeyPackage {
+            identifier: "key-package-identifier".to_string(),
+            data_hex: secret_hex(),
+        }
+    }
+
+    #[test]
+    fn dkg_secret_hex_zeroizes_and_is_zeroize_on_drop() {
+        fn assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
+
+        assert_zeroize_on_drop::<SecretHex>();
+
+        let mut secret = secret_hex();
+        secret.zeroize();
+        assert!(secret.expose_secret().is_empty());
+    }
+
+    #[test]
+    fn dkg_secret_fields_preserve_json_string_wire_shape() {
+        let encoded_holder =
+            serde_json::to_string(&secret_hex()).expect("secret holder serializes");
+        assert_eq!(encoded_holder, format!("\"{SECRET_SENTINEL}\""));
+        let decoded_holder: SecretHex =
+            serde_json::from_str(&encoded_holder).expect("secret holder deserializes");
+        assert_eq!(decoded_holder.expose_secret(), SECRET_SENTINEL);
+
+        let serialized_fields = [
+            serde_json::to_value(DkgRound2Package {
+                identifier: "recipient".to_string(),
+                sender_identifier: Some("sender".to_string()),
+                package_hex: secret_hex(),
+            })
+            .expect("round2 package serializes")["package_hex"]
+                .clone(),
+            serde_json::to_value(DkgPart1Result {
+                secret_package_hex: secret_hex(),
+                package: round1_package(),
+            })
+            .expect("part1 result serializes")["secret_package_hex"]
+                .clone(),
+            serde_json::to_value(DkgPart2Request {
+                secret_package_hex: secret_hex(),
+                round1_packages: vec![round1_package()],
+            })
+            .expect("part2 request serializes")["secret_package_hex"]
+                .clone(),
+            serde_json::to_value(DkgPart2Result {
+                secret_package_hex: secret_hex(),
+                packages: vec![round2_package()],
+            })
+            .expect("part2 result serializes")["secret_package_hex"]
+                .clone(),
+            serde_json::to_value(DkgPart3Request {
+                secret_package_hex: secret_hex(),
+                round1_packages: vec![round1_package()],
+                round2_packages: vec![round2_package()],
+            })
+            .expect("part3 request serializes")["secret_package_hex"]
+                .clone(),
+            serde_json::to_value(key_package()).expect("key package serializes")["data_hex"]
+                .clone(),
+        ];
+
+        for serialized_field in serialized_fields {
+            assert_eq!(serialized_field, serde_json::json!(SECRET_SENTINEL));
+        }
+    }
+
+    #[test]
+    fn dkg_secret_fields_redact_direct_and_nested_debug_output() {
+        let rendered = [
+            format!("{:?}", round2_package()),
+            format!(
+                "{:?}",
+                DkgPart1Result {
+                    secret_package_hex: secret_hex(),
+                    package: round1_package(),
+                }
+            ),
+            format!(
+                "{:?}",
+                DkgPart2Request {
+                    secret_package_hex: secret_hex(),
+                    round1_packages: vec![round1_package()],
+                }
+            ),
+            format!(
+                "{:?}",
+                DkgPart2Result {
+                    secret_package_hex: secret_hex(),
+                    packages: vec![round2_package()],
+                }
+            ),
+            format!("{:?}", key_package()),
+            format!(
+                "{:?}",
+                DkgPart3Request {
+                    secret_package_hex: secret_hex(),
+                    round1_packages: vec![round1_package()],
+                    round2_packages: vec![round2_package()],
+                }
+            ),
+            format!(
+                "{:?}",
+                DkgPart3Result {
+                    key_package: key_package(),
+                    public_key_package: public_key_package(),
+                }
+            ),
+            format!(
+                "{:?}",
+                PersistDistributedDkgKeyPackageRequest {
+                    session_id: "debug-redaction-session".to_string(),
+                    participant_identifier: 1,
+                    threshold: 2,
+                    participant_count: 3,
+                    key_package: key_package(),
+                    public_key_package: public_key_package(),
+                }
+            ),
+        ];
+
+        for rendered_value in rendered {
+            assert!(
+                !rendered_value.contains(SECRET_SENTINEL),
+                "Debug output leaked DKG secret material: {rendered_value}"
+            );
+            assert!(
+                rendered_value.contains("<redacted>"),
+                "Debug output did not mark DKG secret material as redacted: {rendered_value}"
+            );
+        }
+    }
 }
