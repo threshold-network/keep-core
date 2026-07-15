@@ -3936,3 +3936,155 @@ func TestServicePollRechecksStoredCertificateAfterOnPoll(t *testing.T) {
 		t.Fatalf("expected post-OnPoll expiration rejection, got %v", err)
 	}
 }
+
+// TestServiceSubmitRechecksCertificateBeforeOnSubmit verifies that when the
+// host-chain block advances past EndBlock while the signer verifier runs, the
+// pre-OnSubmit recheck rejects the now-expired certificate and Engine.OnSubmit
+// is never invoked. This guards against engine signing starting under an
+// authorization that expired during validation.
+func TestServiceSubmitRechecksCertificateBeforeOnSubmit(t *testing.T) {
+	handle := newMemoryHandle()
+	request := structuredSignerApprovalRequest(TemplateSelfV1)
+	endBlock := *request.SignerApproval.EndBlock
+
+	submitCalled := false
+	engine := &scriptedEngine{
+		submit: func(*Job) (*Transition, error) {
+			submitCalled = true
+			return &Transition{State: JobStateArtifactReady, Detail: "signed"}, nil
+		},
+		// Valid at the up-front height fetch and the initial validation.
+		currentBlockHeight: endBlock,
+	}
+
+	// The verifier advances the host chain one block past EndBlock, simulating
+	// expiry reached during validation, before OnSubmit can run.
+	service, err := NewService(handle, engine, WithSignerApprovalVerifier(
+		SignerApprovalVerifierFunc(func(RouteSubmitRequest) error {
+			engine.currentBlockHeight = endBlock + 1
+			return nil
+		}),
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "recheck_before",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(err.Error(), "signer approval certificate has expired") {
+		t.Fatalf("expected pre-OnSubmit expiration rejection, got %v", err)
+	}
+	if submitCalled {
+		t.Fatal("Engine.OnSubmit must not be called once the certificate expired during validation")
+	}
+}
+
+// TestServiceSubmitRechecksCertificateAfterOnSubmit verifies that when the
+// host-chain block advances past EndBlock during OnSubmit itself, the
+// post-OnSubmit recheck rejects the now-expired certificate: no ready artifact
+// is persisted or returned even though threshold signing produced one.
+func TestServiceSubmitRechecksCertificateAfterOnSubmit(t *testing.T) {
+	handle := newMemoryHandle()
+	request := structuredSignerApprovalRequest(TemplateSelfV1)
+	endBlock := *request.SignerApproval.EndBlock
+
+	engine := &scriptedEngine{
+		// Valid at the up-front fetch, the initial validation, and the
+		// pre-OnSubmit recheck.
+		currentBlockHeight: endBlock,
+	}
+	// OnSubmit advances the host chain one block past EndBlock, simulating expiry
+	// reached while threshold signing was in flight, and returns a ready artifact.
+	engine.submit = func(*Job) (*Transition, error) {
+		engine.currentBlockHeight = endBlock + 1
+		return &Transition{
+			State:          JobStateArtifactReady,
+			Detail:         "signed",
+			PSBTHash:       "0xdeadbeef",
+			TransactionHex: "0xabcd",
+		}, nil
+	}
+
+	service, err := NewService(handle, engine, WithSignerApprovalVerifier(
+		SignerApprovalVerifierFunc(func(RouteSubmitRequest) error {
+			return nil
+		}),
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "recheck_after",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(err.Error(), "signer approval certificate has expired") {
+		t.Fatalf("expected post-OnSubmit expiration rejection, got result=%+v err=%v", result, err)
+	}
+
+	// The ready artifact produced by OnSubmit must not have been persisted; the
+	// job must remain in its pre-signing submitted state.
+	stored, ok, storeErr := service.store.GetByRouteRequest(TemplateSelfV1, "recheck_after")
+	if storeErr != nil {
+		t.Fatal(storeErr)
+	}
+	if !ok {
+		t.Fatal("expected the submitted job to remain persisted")
+	}
+	if stored.State != JobStateSubmitted {
+		t.Fatalf(
+			"expected stored job to remain %q after post-OnSubmit expiry, got %q",
+			JobStateSubmitted,
+			stored.State,
+		)
+	}
+}
+
+// TestServicePollAcceptsCertificateBeforeEndBlock verifies that Poll proceeds
+// normally when the current block is strictly below EndBlock, complementing the
+// inclusive-boundary (currentBlock == EndBlock) case in
+// TestServicePollAcceptsValidCertificate.
+func TestServicePollAcceptsCertificateBeforeEndBlock(t *testing.T) {
+	handle := newMemoryHandle()
+	engine := &scriptedEngine{
+		submit: func(*Job) (*Transition, error) {
+			return &Transition{State: JobStatePending, Detail: "queued"}, nil
+		},
+		poll: func(*Job) (*Transition, error) {
+			return &Transition{State: JobStatePending, Detail: "polling"}, nil
+		},
+	}
+	service, err := NewService(handle, engine, WithSignerApprovalVerifier(SignerApprovalVerifierFunc(func(RouteSubmitRequest) error {
+		return nil
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := structuredSignerApprovalRequest(TemplateSelfV1)
+	// Pin the provider strictly below EndBlock: valid, well before expiry.
+	engine.currentBlockHeight = *request.SignerApproval.EndBlock - 1
+
+	submitResult, err := service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "before_end",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.Poll(context.Background(), TemplateSelfV1, SignerPollInput{
+		RouteRequestID: "before_end",
+		RequestID:      submitResult.RequestID,
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err != nil {
+		t.Fatalf("expected no error for a certificate before EndBlock, got %v", err)
+	}
+}

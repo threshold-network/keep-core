@@ -476,6 +476,57 @@ func TestInitializeAcceptsEngineProvidingVerifierAndBlockProvider(t *testing.T) 
 	}
 }
 
+// TestInitializeReleasesStoreLockWhenVerifierEngineRejected verifies that a
+// startup rejected for the verifier-without-block-provider mismatch releases the
+// store's advisory file lock rather than leaking it. A corrected retry in the
+// same process, reusing the same data directory, must be able to acquire the
+// lock and start.
+func TestInitializeReleasesStoreLockWhenVerifierEngineRejected(t *testing.T) {
+	dataDir := t.TempDir()
+	port := availableLoopbackPort(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// First attempt: a verifier-only engine cannot enforce certificate
+	// expiration and is rejected. The advisory lock acquired while creating the
+	// store must be released on this error path.
+	_, enabled, err := Initialize(
+		ctx,
+		Config{Port: port, DataDir: dataDir},
+		newMemoryHandle(),
+		verifierOnlyEngine{},
+	)
+	if err == nil || enabled {
+		t.Fatalf(
+			"expected verifier-only engine to be rejected, got enabled=%v err=%v",
+			enabled,
+			err,
+		)
+	}
+	if !strings.Contains(err.Error(), "CurrentBlockHeightProvider") {
+		t.Fatalf("unexpected rejection error: %v", err)
+	}
+
+	// Second attempt: an engine providing both interfaces, reusing the same data
+	// directory. It can only acquire the store's exclusive lock if the failed
+	// attempt released it.
+	server, enabled, err := Initialize(
+		ctx,
+		Config{Port: port, DataDir: dataDir},
+		newMemoryHandle(),
+		&scriptedVerifierEngine{},
+	)
+	if err != nil || !enabled || server == nil {
+		t.Fatalf(
+			"expected retry to acquire the released store lock, got enabled=%v server=%v err=%v",
+			enabled,
+			server != nil,
+			err,
+		)
+	}
+}
+
 func TestIsLoopbackListenAddressAcceptsBracketedIPv6Loopback(t *testing.T) {
 	if !isLoopbackListenAddress("[::1]") {
 		t.Fatal("expected bracketed IPv6 loopback address to be recognized")
