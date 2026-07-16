@@ -4044,6 +4044,135 @@ func TestServiceSubmitRechecksCertificateAfterOnSubmit(t *testing.T) {
 	}
 }
 
+// heightHookEngine is an Engine whose OnSubmit and CurrentBlockHeight behavior
+// are supplied as closures, letting a test advance the host-chain height at a
+// precise point in Submit's control flow. It also implements
+// CurrentBlockHeightProvider so NewService wires it as the block-height source.
+type heightHookEngine struct {
+	onSubmit func(*Job) (*Transition, error)
+	onHeight func() (uint64, error)
+}
+
+func (e *heightHookEngine) OnSubmit(_ context.Context, job *Job) (*Transition, error) {
+	return e.onSubmit(job)
+}
+
+func (e *heightHookEngine) OnPoll(context.Context, *Job) (*Transition, error) {
+	return nil, nil
+}
+
+func (e *heightHookEngine) CurrentBlockHeight(context.Context) (uint64, error) {
+	return e.onHeight()
+}
+
+// TestServiceSubmitRechecksCertificateUnderLockBeforePersist proves the TOCTOU
+// race between Submit's post-OnSubmit timeliness check and the durable persist
+// is closed: the check that gates the persist now runs under s.mutex, so an
+// expiry that becomes visible only while this submit waits to acquire the mutex
+// is caught before a ready artifact is stored or returned.
+//
+// The interleaving reproduced here mirrors the confirmed bug. A concurrent
+// goroutine plays the role of a Poll that holds s.mutex during its own
+// block-height RPC: it takes the mutex and advances the chain one block past
+// EndBlock while this submit is on its way to the lock. Submit's outside-lock
+// fast-path recheck observes a still-valid height (== EndBlock) and passes, so
+// with the old code — whose only post-OnSubmit check was before s.mutex.Lock()
+// — the ready artifact would be persisted under an authorization that has since
+// expired. With the fix, the authoritative recheck runs after the mutex is
+// acquired, re-fetches the now-advanced height, and rejects.
+func TestServiceSubmitRechecksCertificateUnderLockBeforePersist(t *testing.T) {
+	handle := newMemoryHandle()
+	request := structuredSignerApprovalRequest(TemplateSelfV1)
+	endBlock := *request.SignerApproval.EndBlock
+
+	var service *Service
+
+	// height is the current host-chain height reported to Submit. It starts
+	// valid (== EndBlock) and is advanced to EndBlock+1 by the concurrent
+	// goroutine below. Every access is ordered: the reads before the goroutine
+	// is launched happen-before it via the `go` statement, and the advancing
+	// write plus the in-lock read are both serialized by service.mutex.
+	height := endBlock
+
+	onSubmitReturned := false
+	pollLaunched := false
+	pollHasLock := make(chan struct{})
+
+	engine := &heightHookEngine{
+		onSubmit: func(*Job) (*Transition, error) {
+			// The pre-OnSubmit recheck already observed a valid height; mark that
+			// subsequent block-height reads belong to the post-OnSubmit path.
+			onSubmitReturned = true
+			return &Transition{
+				State:          JobStateArtifactReady,
+				Detail:         "signed",
+				PSBTHash:       "0xdeadbeef",
+				TransactionHex: "0xabcd",
+			}, nil
+		},
+		onHeight: func() (uint64, error) {
+			// The first block-height read after OnSubmit is Submit's outside-lock
+			// fast-path recheck. Snapshot the still-valid height for it, then
+			// launch the concurrent "Poll": it takes s.mutex before this submit
+			// reaches s.mutex.Lock() (guaranteed by waiting for pollHasLock here)
+			// and advances the chain past EndBlock under the lock. Because the
+			// Poll holds the mutex first, this submit acquires it only afterwards
+			// and its authoritative in-lock recheck necessarily observes the
+			// advanced, expired height.
+			if onSubmitReturned && !pollLaunched {
+				pollLaunched = true
+				snapshot := height
+				go func() {
+					service.mutex.Lock()
+					close(pollHasLock)
+					height = endBlock + 1
+					service.mutex.Unlock()
+				}()
+				<-pollHasLock
+				return snapshot, nil
+			}
+			return height, nil
+		},
+	}
+
+	var err error
+	service, err = NewService(handle, engine, WithSignerApprovalVerifier(
+		SignerApprovalVerifierFunc(func(RouteSubmitRequest) error { return nil }),
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := service.Submit(context.Background(), TemplateSelfV1, SignerSubmitInput{
+		RouteRequestID: "under_lock",
+		Stage:          StageSignerCoordination,
+		Request:        request,
+	})
+	if err == nil || !strings.Contains(err.Error(), "signer approval certificate has expired") {
+		t.Fatalf("expected in-lock expiration rejection, got result=%+v err=%v", result, err)
+	}
+
+	// The ready artifact produced by OnSubmit must not have been persisted: the
+	// authoritative recheck runs under s.mutex immediately before the Put, so the
+	// expiry that became visible only while this submit waited for the lock is
+	// caught before the artifact is durably stored or returned. The job must
+	// remain in its pre-signing submitted state.
+	stored, ok, storeErr := service.store.GetByRouteRequest(TemplateSelfV1, "under_lock")
+	if storeErr != nil {
+		t.Fatal(storeErr)
+	}
+	if !ok {
+		t.Fatal("expected the submitted job to remain persisted")
+	}
+	if stored.State != JobStateSubmitted {
+		t.Fatalf(
+			"expected stored job to remain %q after in-lock expiry, got %q",
+			JobStateSubmitted,
+			stored.State,
+		)
+	}
+}
+
 // TestServicePollAcceptsCertificateBeforeEndBlock verifies that Poll proceeds
 // normally when the current block is strictly below EndBlock, complementing the
 // inclusive-boundary (currentBlock == EndBlock) case in

@@ -490,10 +490,12 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 	}
 
 	// OnSubmit performs synchronous threshold signing that can span several
-	// blocks. Re-verify timeliness before applying, persisting, or returning its
-	// result so a certificate that expired while signing was in flight is
-	// rejected rather than honored, mirroring Poll's post-OnPoll recheck. Fails
-	// closed on a missing or errored provider.
+	// blocks. Fast-path recheck: fail a certificate that already expired while
+	// signing was in flight before contending for the mutex and store. This runs
+	// before s.mutex.Lock(), so it is advisory only and cannot close the race on
+	// its own: the chain may still advance past EndBlock while this submit blocks
+	// acquiring the lock. The authoritative recheck below runs under the mutex,
+	// atomically with the persist. Fails closed on a missing or errored provider.
 	if err := s.ensureStoredCertificateTimely(job); err != nil {
 		return StepResult{}, err
 	}
@@ -521,6 +523,19 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 	// a transition computed from an older snapshot.
 	if !sameJobRevision(currentJob, job) || isTerminalJobState(currentJob.State) {
 		return mapJobResult(currentJob), nil
+	}
+
+	// Authoritative timeliness recheck, performed under s.mutex immediately
+	// before the persist. The fast-path recheck above runs before
+	// s.mutex.Lock(), so the chain can advance past EndBlock while this submit
+	// blocks acquiring the mutex (for example behind a concurrent Poll holding it
+	// during its own block-height RPC). Re-fetching the height here, atomically
+	// with the Put below, guarantees a ready artifact is never persisted or
+	// returned under an authorization that expired during that wait. Mirrors
+	// Poll, whose post-OnPoll recheck likewise runs under the mutex via
+	// loadPollJob. Fails closed on a missing or errored provider.
+	if err := s.ensureStoredCertificateTimely(job); err != nil {
+		return StepResult{}, err
 	}
 
 	applyTransition(currentJob, transition, s.now())
