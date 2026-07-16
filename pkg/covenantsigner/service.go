@@ -474,27 +474,8 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 		defer func() { <-s.inFlightSlots }()
 	}
 
-	// Re-verify certificate timeliness immediately before engine signing. The
-	// certificate may have expired while the verifier ran or while this submit
-	// waited for an in-flight slot, so the height fetched up front can be stale.
-	// Rechecking here ensures OnSubmit never begins threshold signing under an
-	// authorization that has already expired. Fails closed on a missing or
-	// errored provider.
-	if err := s.ensureStoredCertificateTimely(job); err != nil {
-		return StepResult{}, err
-	}
-
 	transition, err := s.engine.OnSubmit(ctx, job)
 	if err != nil {
-		return StepResult{}, err
-	}
-
-	// OnSubmit performs synchronous threshold signing that can span several
-	// blocks. Re-verify timeliness before applying, persisting, or returning its
-	// result so a certificate that expired while signing was in flight is
-	// rejected rather than honored, mirroring Poll's post-OnPoll recheck. Fails
-	// closed on a missing or errored provider.
-	if err := s.ensureStoredCertificateTimely(job); err != nil {
 		return StepResult{}, err
 	}
 

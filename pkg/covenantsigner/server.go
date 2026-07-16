@@ -34,7 +34,7 @@ func Initialize(
 	config Config,
 	handle persistence.BasicHandle,
 	engine Engine,
-) (_ *Server, _ bool, retErr error) {
+) (*Server, bool, error) {
 	if config.Port == 0 {
 		return nil, false, nil
 	}
@@ -66,21 +66,6 @@ func Initialize(
 	if err != nil {
 		return nil, false, err
 	}
-	// Release the store's advisory file lock if initialization fails after the
-	// service (and its store) were created but before the server takes ownership
-	// of it. Without this, a rejected configuration would leak the lock and block
-	// a corrected retry in the same process. On success retErr is nil and the
-	// server's shutdown path owns closing the service instead.
-	defer func() {
-		if retErr != nil {
-			if closeErr := service.Close(); closeErr != nil {
-				logger.Warnf(
-					"failed to close covenant signer service after initialization failure: [%v]",
-					closeErr,
-				)
-			}
-		}
-	}()
 	if err := validateRequiredApprovalTrustRoots(config, service); err != nil {
 		return nil, false, err
 	}
