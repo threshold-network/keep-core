@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/btcsuite/btcd/blockchain"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 
 	"github.com/ipfs/go-log/v2"
@@ -21,6 +22,9 @@ var logger = log.Logger("keep-maintainer-spv")
 
 // The length of the Bitcoin difficulty epoch in blocks.
 const difficultyEpochLength = 2016
+
+// minDifficultyTarget matches the Bridge's BTCUtils.DIFF1_TARGET.
+var minDifficultyTarget = blockchain.CompactToBig(0x1d00ffff)
 
 func Initialize(
 	ctx context.Context,
@@ -387,13 +391,22 @@ func getProofInfo(
 			)
 		}
 
+		headerTarget := header.Target()
+		if headerTarget.Sign() <= 0 {
+			return false, 0, 0, fmt.Errorf(
+				"invalid target [%v] for block header at height [%v]",
+				headerTarget,
+				blockHeight,
+			)
+		}
+
 		headerDiff := header.Difficulty()
 		headerCount++
 		observedDiff.Add(observedDiff, headerDiff)
 
 		if requestedDiff == nil {
 			// Still looking for the decisive header.
-			if skipMinDifficulty && headerDiff.Cmp(one) == 0 {
+			if skipMinDifficulty && headerTarget.Cmp(minDifficultyTarget) == 0 {
 				continue
 			}
 
