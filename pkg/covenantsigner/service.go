@@ -119,15 +119,6 @@ func NewService(
 	if verifier, ok := engine.(SignerApprovalVerifier); ok {
 		service.signerApprovalVerifier = verifier
 	}
-	// Auto-detect the host-chain block provider so production correctness does
-	// not depend on callers remembering the otherwise-redundant
-	// WithCurrentBlockProvider option. An explicit option may still override
-	// this (e.g. for test doubles).
-	if provider, ok := engine.(CurrentBlockHeightProvider); ok {
-		service.currentBlockProvider = func() (uint64, error) {
-			return provider.CurrentBlockHeight(context.Background())
-		}
-	}
 	for _, option := range options {
 		option(service)
 	}
@@ -260,54 +251,6 @@ func sameJobRevision(current *Job, snapshot *Job) bool {
 		reflect.DeepEqual(current.Handoff, snapshot.Handoff)
 }
 
-// currentBlockForRequest returns the current host-chain height used to evaluate
-// the request's certificate expiration, or nil when the request carries no
-// signer approval certificate or no block-height provider is configured. When
-// a certificate is present without a provider, nil is returned so that
-// validateCommonRequest can fail the request closed. Provider errors are
-// propagated so callers fail closed rather than proceeding blind.
-func (s *Service) currentBlockForRequest(request RouteSubmitRequest) (*uint64, error) {
-	if request.SignerApproval == nil || s.currentBlockProvider == nil {
-		return nil, nil
-	}
-
-	currentBlock, err := s.currentBlockProvider()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get current block height: %w", err)
-	}
-
-	return &currentBlock, nil
-}
-
-// ensureStoredCertificateTimely rejects a stored job whose signer approval
-// certificate has expired at the current host-chain height. It fails closed
-// when a certificate is present but its expiration block or a block-height
-// provider is missing, and propagates provider errors.
-func (s *Service) ensureStoredCertificateTimely(job *Job) error {
-	signerApproval := job.Request.SignerApproval
-	if signerApproval == nil {
-		return nil
-	}
-	if signerApproval.EndBlock == nil {
-		return &inputError{"stored signer approval certificate is missing endBlock"}
-	}
-	if s.currentBlockProvider == nil {
-		return &inputError{
-			"signer approval certificate cannot be verified without a current block height provider",
-		}
-	}
-
-	currentBlock, err := s.currentBlockProvider()
-	if err != nil {
-		return fmt.Errorf("failed to get current block height: %w", err)
-	}
-	if certificateExpired(currentBlock, *signerApproval.EndBlock) {
-		return &inputError{"signer approval certificate has expired"}
-	}
-
-	return nil
-}
-
 func (s *Service) loadPollJob(route TemplateID, input SignerPollInput) (*Job, error) {
 	job, ok, err := s.store.GetByRequestID(input.RequestID)
 	if err != nil {
@@ -329,14 +272,24 @@ func (s *Service) loadPollJob(route TemplateID, input SignerPollInput) (*Job, er
 		return nil, errJobNotFound
 	}
 
-	// Reject the poll if the stored job's signer approval certificate has
-	// expired since submit, to avoid producing a signature under an
-	// authorization that is no longer valid. loadPollJob is called both before
-	// and after OnPoll, so this guards against expiry reached while signing
-	// work is in flight. The comparison is inclusive (currentBlock > EndBlock);
-	// see certificateExpired.
-	if err := s.ensureStoredCertificateTimely(job); err != nil {
-		return nil, err
+	// Check if the signer approval certificate has expired since submit.
+	// If expired, reject the poll to avoid producing a signature with an
+	// authorization that is no longer valid.
+	//
+	// NOTE: The >= comparison is intentional. A certificate with
+	// EndBlock=100 is considered expired when the current block is
+	// 100 or greater. This is because EndBlock is a closed interval:
+	// the signature is valid only up to and including EndBlock.
+	if s.currentBlockProvider != nil && job.Request.SignerApproval != nil && job.Request.SignerApproval.EndBlock != nil {
+		currentBlock, err := s.currentBlockProvider()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get current block height: %w", err)
+		}
+		if currentBlock >= *job.Request.SignerApproval.EndBlock {
+			return nil, &inputError{
+				"signer approval certificate has expired",
+			}
+		}
 	}
 
 	digest, err := requestDigest(
@@ -418,14 +371,6 @@ func (s *Service) createOrDedup(
 }
 
 func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubmitInput) (StepResult, error) {
-	// Resolve the current host-chain height up front so certificate expiry is
-	// enforced during Submit validation. Fetching before validation means a
-	// provider error fails the submit closed instead of proceeding to sign.
-	currentBlock, err := s.currentBlockForRequest(input.Request)
-	if err != nil {
-		return StepResult{}, err
-	}
-
 	submitValidationOptions := validationOptions{
 		migrationPlanQuoteTrustRoots:      s.migrationPlanQuoteTrustRoots,
 		depositorTrustRoots:               s.depositorTrustRoots,
@@ -433,7 +378,6 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 		requireFreshMigrationPlanQuote:    true,
 		migrationPlanQuoteVerificationNow: s.now(),
 		signerApprovalVerifier:            s.signerApprovalVerifier,
-		currentBlock:                      currentBlock,
 	}
 	if err := validateSubmitInput(route, input, submitValidationOptions); err != nil {
 		return StepResult{}, err
@@ -513,20 +457,20 @@ func (s *Service) Submit(ctx context.Context, route TemplateID, input SignerSubm
 }
 
 func (s *Service) Poll(ctx context.Context, route TemplateID, input SignerPollInput) (StepResult, error) {
-	// Validate the resubmitted request against the actual current host-chain
-	// height. When no provider is configured this returns nil so a certificate-
-	// bearing request fails closed rather than being checked against a synthetic
-	// zero block.
-	currentBlock, err := s.currentBlockForRequest(input.Request)
-	if err != nil {
-		return StepResult{}, err
+	var currentBlock uint64
+	if s.currentBlockProvider != nil {
+		blockHeight, err := s.currentBlockProvider()
+		if err != nil {
+			return StepResult{}, fmt.Errorf("failed to get current block height: %w", err)
+		}
+		currentBlock = blockHeight
 	}
 	if err := validatePollInput(
 		route,
 		input,
 		validationOptions{
 			policyIndependentDigest: true,
-			currentBlock:            currentBlock,
+			currentBlock:            &currentBlock,
 		},
 	); err != nil {
 		return StepResult{}, err

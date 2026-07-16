@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"math/big"
@@ -32,14 +31,9 @@ var (
 )
 
 const (
-	signerApprovalCertificateVersion            uint32 = 2
+	signerApprovalCertificateVersion            uint32 = 1
 	signerApprovalCertificateSignatureAlgorithm        = "tecdsa-secp256k1"
 	signerApprovalCertificateSignerSetDomain           = "covenant-signer-set-v1:"
-	// signerApprovalCertificateSigningDomain domain-separates the digest that
-	// the wallet threshold signature commits to for a v2 signer approval
-	// certificate. The trailing ":v2" versioning is part of the wire contract
-	// and must match every cross-language producer and consumer.
-	signerApprovalCertificateSigningDomain = "covenant-signer-approval-certificate-v2:"
 )
 
 type signerApprovalCertificateSignerSetPayload struct {
@@ -68,51 +62,10 @@ func ensureWalletRegistryDataAvailable(
 	return nil
 }
 
-// computeSignerApprovalCertificateDigest derives the digest that the wallet
-// threshold signature commits to for a v2 signer approval certificate. It binds
-// the artifact approval digest to the certificate's inclusive expiration block
-// so that neither the approved artifact nor the expiration can be altered
-// without invalidating the signature. The byte layout is fixed for
-// cross-language reproduction:
-//
-//	SHA256(
-//	    "covenant-signer-approval-certificate-v2:" ||
-//	    approvalDigest (32 bytes) ||
-//	    endBlock (uint64, big-endian)
-//	)
-func computeSignerApprovalCertificateDigest(
-	approvalDigest []byte,
-	endBlock uint64,
-) ([]byte, error) {
-	if len(approvalDigest) != sha256.Size {
-		return nil, fmt.Errorf(
-			"approval digest must be exactly %d bytes",
-			sha256.Size,
-		)
-	}
-
-	var endBlockBytes [8]byte
-	binary.BigEndian.PutUint64(endBlockBytes[:], endBlock)
-
-	hasher := sha256.New()
-	hasher.Write([]byte(signerApprovalCertificateSigningDomain))
-	hasher.Write(approvalDigest)
-	hasher.Write(endBlockBytes[:])
-
-	return hasher.Sum(nil), nil
-}
-
-// issueSignerApprovalCertificate produces a v2 signer approval certificate for
-// the given artifact approval digest. The requestedEndBlock is the explicit,
-// inclusive last host-chain block at which the certificate remains valid; it is
-// chosen before threshold signing and bound into the signed digest. Issuance
-// fails if signing completes after requestedEndBlock, because a certificate
-// must not be born already expired.
 func (se *signingExecutor) issueSignerApprovalCertificate(
 	ctx context.Context,
 	approvalDigest []byte,
 	startBlock uint64,
-	requestedEndBlock uint64,
 ) (*covenantsigner.SignerApprovalCertificate, error) {
 	if len(approvalDigest) != sha256.Size {
 		return nil, fmt.Errorf(
@@ -136,32 +89,13 @@ func (se *signingExecutor) issueSignerApprovalCertificate(
 		return nil, err
 	}
 
-	certificateDigest, err := computeSignerApprovalCertificateDigest(
-		approvalDigest,
-		requestedEndBlock,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	signature, activityReport, signingCompletionBlock, err := se.sign(
+	signature, activityReport, endBlock, err := se.sign(
 		ctx,
-		new(big.Int).SetBytes(certificateDigest),
+		new(big.Int).SetBytes(approvalDigest),
 		startBlock,
 	)
 	if err != nil {
 		return nil, err
-	}
-
-	// The block returned by sign is the completion block, not the expiry. The
-	// requested expiration must be at or after it; equality remains valid.
-	if signingCompletionBlock > requestedEndBlock {
-		return nil, fmt.Errorf(
-			"signing completed at block %d, after the requested certificate "+
-				"expiration block %d",
-			signingCompletionBlock,
-			requestedEndBlock,
-		)
 	}
 
 	return buildSignerApprovalCertificate(
@@ -171,7 +105,7 @@ func (se *signingExecutor) issueSignerApprovalCertificate(
 		approvalDigest,
 		signature,
 		activityReport,
-		requestedEndBlock,
+		endBlock,
 	)
 }
 
@@ -305,12 +239,6 @@ func verifySignerApprovalCertificate(
 	if strings.ToLower(expectedSignerSetHash) != strings.ToLower(certificate.SignerSetHash) {
 		return fmt.Errorf("signer set hash does not match the expected signer set")
 	}
-	// Certificate v2 requires an explicit inclusive expiration block bound into
-	// the signed digest. A missing endBlock cannot be reconstructed and must
-	// fail closed rather than verify a signature over an unbound approval.
-	if certificate.EndBlock == nil {
-		return fmt.Errorf("certificate is missing the required expiration block")
-	}
 
 	approvalDigest, err := decodeSignerApprovalCertificateHex(
 		certificate.ApprovalDigest,
@@ -319,18 +247,6 @@ func verifySignerApprovalCertificate(
 	if err != nil {
 		return fmt.Errorf("invalid approval digest: %w", err)
 	}
-
-	// Reconstruct the signed digest from the approval digest and the certified
-	// expiration block. Tampering with either input yields a different digest
-	// and fails signature verification below.
-	certificateDigest, err := computeSignerApprovalCertificateDigest(
-		approvalDigest,
-		*certificate.EndBlock,
-	)
-	if err != nil {
-		return fmt.Errorf("cannot compute certificate digest: %w", err)
-	}
-
 	signatureBytes, err := decodeSignerApprovalCertificateHex(
 		certificate.Signature,
 		0,
@@ -361,7 +277,7 @@ func verifySignerApprovalCertificate(
 		return fmt.Errorf("threshold signature S value is not low-S normalized")
 	}
 
-	if !ecdsa.Verify(walletPublicKey, certificateDigest, parsedSignature.R, parsedSignature.S) {
+	if !ecdsa.Verify(walletPublicKey, approvalDigest, parsedSignature.R, parsedSignature.S) {
 		return fmt.Errorf("threshold signature does not verify against wallet public key")
 	}
 

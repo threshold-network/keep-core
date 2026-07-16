@@ -40,13 +40,11 @@ type Engine interface {
 	OnPoll(ctx context.Context, job *Job) (*Transition, error)
 }
 
-// CurrentBlockHeightProvider returns the current height of the host/anchoring
-// chain in the same block-number domain as SignerApprovalCertificate.EndBlock.
-// For tBTC this is the Ethereum chain, not the Bitcoin chain. The service uses
-// it to check signer approval certificate expiration during Submit and Poll.
-// Engines that accept signer-approval certificates must provide it: expiration
-// must not fail open when it is absent, so the service rejects certificate-
-// bearing requests that cannot be checked against a current height.
+// CurrentBlockHeightProvider is an optional interface implemented by Engines
+// that can provide the current Bitcoin block height. When implemented, the
+// service uses it to check signer approval certificate expiration during
+// Submit and Poll. Engines that do not implement this interface are assumed
+// to never have signer approvals expire.
 type CurrentBlockHeightProvider interface {
 	CurrentBlockHeight(ctx context.Context) (uint64, error)
 }

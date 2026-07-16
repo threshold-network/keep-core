@@ -20,7 +20,7 @@ const (
 	canonicalAnchorValueSats           uint64 = 330
 	migrationTransactionPlanVersion    uint32 = 1
 	artifactApprovalVersion            uint32 = 1
-	signerApprovalCertificateVersion   uint32 = 2
+	signerApprovalCertificateVersion   uint32 = 1
 	migrationPlanQuoteVersion          uint32 = 1
 	migrationPlanQuoteSignatureVersion uint32 = 1
 )
@@ -447,35 +447,32 @@ func validateCommonRequest(
 	}
 
 	if request.SignerApproval != nil {
-		// Certificate v2 carries an explicit inclusive expiration block that is
-		// bound into the threshold signature. Enforce expiry unconditionally
-		// against the current host-chain height before any signature
-		// verification: an expired certificate is rejected outright and never
-		// re-verified, because re-verifying only proves the same expired
-		// authorization; renewal requires a fresh certificate with a later
-		// signed EndBlock.
-		if request.SignerApproval.EndBlock == nil {
-			return &inputError{"request.signerApproval.endBlock is required"}
-		}
-		if options.currentBlock == nil {
-			// Fail closed: a certificate with an expiration block cannot be
-			// honored without a current host-chain height to compare against.
-			return &inputError{
-				"request.signerApproval cannot be verified without a current block height provider",
+		if options.policyIndependentDigest {
+			// Check if the signer approval certificate has expired. If
+			// EndBlock is set and the current block height has reached or
+			// passed it, the certificate is expired and must be re-verified
+			// to ensure the signer's authorization is still valid.
+			//
+			// NOTE: The >= comparison is intentional. A certificate with
+			// EndBlock=N is considered expired when the current block is
+			// N or greater, because EndBlock uses a closed interval: the
+			// signature is valid only up to and including EndBlock.
+			if request.SignerApproval.EndBlock != nil &&
+				options.currentBlock != nil &&
+				*options.currentBlock >= *request.SignerApproval.EndBlock {
+				// Certificate expired. When no verifier is present (Poll flow),
+				// return the expiration error directly. When a verifier is
+				// present (Submit flow), fall through to re-verify in case the
+				// signer's authorization was renewed.
+				if options.signerApprovalVerifier == nil {
+					return &inputError{
+						"signer approval certificate has expired",
+					}
+				}
+			} else {
+				return nil
 			}
 		}
-		if certificateExpired(*options.currentBlock, *request.SignerApproval.EndBlock) {
-			return &inputError{"signer approval certificate has expired"}
-		}
-
-		// Poll re-validates the resubmitted request with a policy-independent
-		// digest and no verifier; the stored job was already signature-verified
-		// at Submit time and is re-checked for expiry separately. Submit falls
-		// through to signature verification below.
-		if options.policyIndependentDigest {
-			return nil
-		}
-
 		if options.signerApprovalVerifier == nil {
 			return &inputError{
 				"request.signerApproval cannot be verified by this signer deployment",
@@ -495,14 +492,6 @@ func validateCommonRequest(
 	}
 
 	return nil
-}
-
-// certificateExpired reports whether a signer approval certificate whose
-// inclusive last valid block is endBlock has expired at currentBlock. EndBlock
-// is a closed interval: the certificate remains valid up to and including
-// endBlock and is expired only once currentBlock strictly exceeds it.
-func certificateExpired(currentBlock uint64, endBlock uint64) bool {
-	return currentBlock > endBlock
 }
 
 func validateSubmitInput(
