@@ -147,19 +147,27 @@ func TestGetProofInfo(t *testing.T) {
 			expectedAccumulatedConfirmations: 0,
 			expectedRequiredConfirmations:    0,
 		},
-		// A run of minimum-difficulty headers longer than maxProofHeaders
-		// never reaches a decisive header.
-		"minimum difficulty run exceeds header bound": {
-			transactionConfirmations: 150,
+		// Long testnet4 runs of minimum-difficulty headers must not prevent a
+		// proof from reaching a later decisive header. The Bridge consumes the
+		// full header chain, so the maintainer must do the same. After 144 DIFF1
+		// headers, the previous-epoch difficulty 16 header binds the requested
+		// difficulty and brings the observed total above 6*16=96.
+		"decisive header follows long minimum difficulty run": {
+			transactionConfirmations: 145,
 			currentEpochDifficulty:   diff(32),
 			previousEpochDifficulty:  diff(16),
-			headerDifficultyAt:       func(uint) *big.Int { return diff(1) },
-			headersFrom:              proofStart,
-			headersTo:                proofStart + 149,
+			headerDifficultyAt: func(h uint) *big.Int {
+				if h < proofStart+144 {
+					return diff(1)
+				}
+				return diff(16)
+			},
+			headersFrom: proofStart,
+			headersTo:   proofStart + 144,
 
-			expectedIsProofWithinRelayRange:  false,
-			expectedAccumulatedConfirmations: 0,
-			expectedRequiredConfirmations:    0,
+			expectedIsProofWithinRelayRange:  true,
+			expectedAccumulatedConfirmations: 145,
+			expectedRequiredConfirmations:    145,
 		},
 		// The chain tip is reached before enough difficulty is accumulated.
 		// The reported requirement is one header more than currently exists,
