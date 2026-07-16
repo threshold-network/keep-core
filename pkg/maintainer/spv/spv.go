@@ -20,9 +20,6 @@ import (
 
 var logger = log.Logger("keep-maintainer-spv")
 
-// The length of the Bitcoin difficulty epoch in blocks.
-const difficultyEpochLength = 2016
-
 // minDifficultyTarget matches the Bridge's BTCUtils.DIFF1_TARGET.
 var minDifficultyTarget = blockchain.CompactToBig(0x1d00ffff)
 
