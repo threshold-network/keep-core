@@ -21,6 +21,18 @@ import (
 // This will ensure that deposit sweep transaction fees are not underestimated.
 const depositScriptByteSize = 126
 
+// minSweepTxSatPerVByteFee is the minimum fee rate, in sat/vByte, applied to
+// deposit sweep transactions. A fee oracle can return an unusably low estimate
+// (down to the 1 sat/vByte relay floor enforced by the Electrum client) in an
+// uncongested mempool. Because a sweep consolidates significant wallet value
+// and is not RBF-enabled, it cannot be replaced once broadcast, so a floor-rate
+// sweep can get stuck in the mempool and jam the wallet: no new sweep can be
+// built while the previous one is unconfirmed. This minimum keeps the sweep fee
+// safely above the relay floor while remaining far below the Bridge's
+// per-deposit maximum fee. The value is intentionally conservative and could be
+// made configurable; see threshold-network/keep-core#4171.
+const minSweepTxSatPerVByteFee = 5
+
 // DepositSweepLookBackBlocks is the look-back period in blocks used
 // when searching for submitted deposit-related events. It's equal to
 // 30 days assuming 12 seconds per block.
@@ -636,6 +648,14 @@ func estimateDepositsSweepFee(
 	totalFee, err := feeEstimator.EstimateFee(transactionSize)
 	if err != nil {
 		return 0, 0, fmt.Errorf("cannot estimate transaction fee: [%v]", err)
+	}
+
+	// Clamp the estimated fee up to a safe minimum so the sweep is never
+	// broadcast near the 1 sat/vByte relay floor, which can leave it stuck in
+	// the mempool and jam the wallet (see minSweepTxSatPerVByteFee). The
+	// Bridge's maximum-fee check below still bounds the result from above.
+	if minTotalFee := minSweepTxSatPerVByteFee * transactionSize; totalFee < minTotalFee {
+		totalFee = minTotalFee
 	}
 
 	// Compute the maximum possible total fee for the entire sweep transaction.
