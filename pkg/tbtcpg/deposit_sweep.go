@@ -650,19 +650,29 @@ func estimateDepositsSweepFee(
 		return 0, 0, fmt.Errorf("cannot estimate transaction fee: [%v]", err)
 	}
 
-	// Clamp the estimated fee up to a safe minimum so the sweep is never
-	// broadcast near the 1 sat/vByte relay floor, which can leave it stuck in
-	// the mempool and jam the wallet (see minSweepTxSatPerVByteFee). The
-	// Bridge's maximum-fee check below still bounds the result from above.
-	if minTotalFee := minSweepTxSatPerVByteFee * transactionSize; totalFee < minTotalFee {
-		totalFee = minTotalFee
-	}
-
 	// Compute the maximum possible total fee for the entire sweep transaction.
 	totalMaxFee := uint64(depositsCount) * perDepositMaxFee
 
+	// A genuine fee estimate that exceeds the Bridge maximum is an error (the
+	// sweep is not economical to perform). This is checked before the minimum
+	// below is applied so that raising the fee to the minimum can never itself
+	// trigger this error.
 	if uint64(totalFee) > totalMaxFee {
 		return 0, 0, fmt.Errorf("estimated fee exceeds the maximum fee")
+	}
+
+	// Clamp the estimated fee up to a safe minimum so the sweep is never
+	// broadcast near the 1 sat/vByte relay floor, which can leave it stuck in
+	// the mempool and jam the wallet (see minSweepTxSatPerVByteFee). The minimum
+	// is itself bounded by the Bridge maximum above, so it can never exceed the
+	// cap. In practice the minimum is orders of magnitude below the cap; the
+	// bound only guards against future parameter changes.
+	minTotalFee := minSweepTxSatPerVByteFee * transactionSize
+	if uint64(minTotalFee) > totalMaxFee {
+		minTotalFee = int64(totalMaxFee)
+	}
+	if totalFee < minTotalFee {
+		totalFee = minTotalFee
 	}
 
 	// Compute the actual sat/vbyte fee for informational purposes.
