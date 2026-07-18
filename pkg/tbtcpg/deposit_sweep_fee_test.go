@@ -1,6 +1,7 @@
 package tbtcpg_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -27,7 +28,7 @@ func TestEstimateDepositsSweepFee_MinimumFloorAndBuffer(t *testing.T) {
 		estimateSatPerVByte    int64
 		perDepositMaxFee       uint64
 		expectedSatPerVByteFee int64
-		expectError            bool
+		expectErrorContains    string
 	}{
 		"low estimate is raised to the minimum floor": {
 			estimateSatPerVByte:    1,
@@ -42,9 +43,11 @@ func TestEstimateDepositsSweepFee_MinimumFloorAndBuffer(t *testing.T) {
 		"minimum floor above the cap returns an error": {
 			estimateSatPerVByte: 1,
 			// Cap sits below 5*size (the floor) but above the raw fee (1*size),
-			// so the minimum-fee check must error rather than lower the fee.
-			perDepositMaxFee: uint64(3 * size),
-			expectError:      true,
+			// so the minimum-fee check must error rather than lower the fee. The
+			// substring pins this to the floor-exceeds-cap branch specifically,
+			// distinguishing it from the raw-fee-exceeds-cap error.
+			perDepositMaxFee:    uint64(3 * size),
+			expectErrorContains: "minimum safe sweep fee",
 		},
 	}
 
@@ -58,9 +61,15 @@ func TestEstimateDepositsSweepFee_MinimumFloorAndBuffer(t *testing.T) {
 
 			fees, err := tbtcpg.EstimateDepositsSweepFee(tbtcChain, btcChain, 1)
 
-			if test.expectError {
+			if test.expectErrorContains != "" {
 				if err == nil {
 					t.Fatalf("expected an error, got fee result [%v]", fees)
+				}
+				if !strings.Contains(err.Error(), test.expectErrorContains) {
+					t.Fatalf(
+						"expected error containing [%s]; got [%v]",
+						test.expectErrorContains, err,
+					)
 				}
 				return
 			}
