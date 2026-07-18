@@ -653,26 +653,38 @@ func estimateDepositsSweepFee(
 	// Compute the maximum possible total fee for the entire sweep transaction.
 	totalMaxFee := uint64(depositsCount) * perDepositMaxFee
 
-	// A genuine fee estimate that exceeds the Bridge maximum is an error (the
-	// sweep is not economical to perform). This is checked before the minimum
-	// below is applied so that raising the fee to the minimum can never itself
-	// trigger this error.
+	// A raw estimate already above the Bridge maximum means the sweep is
+	// uneconomical to perform; return an error.
 	if uint64(totalFee) > totalMaxFee {
 		return 0, 0, fmt.Errorf("estimated fee exceeds the maximum fee")
 	}
 
-	// Clamp the estimated fee up to a safe minimum so the sweep is never
-	// broadcast near the 1 sat/vByte relay floor, which can leave it stuck in
-	// the mempool and jam the wallet (see minSweepTxSatPerVByteFee). The minimum
-	// is itself bounded by the Bridge maximum above, so it can never exceed the
-	// cap. In practice the minimum is orders of magnitude below the cap; the
-	// bound only guards against future parameter changes.
-	minTotalFee := minSweepTxSatPerVByteFee * transactionSize
-	if uint64(minTotalFee) > totalMaxFee {
-		minTotalFee = int64(totalMaxFee)
+	// A sweep must never be broadcast below a safe minimum fee rate, or it may
+	// get stuck in the mempool and jam the wallet (see minSweepTxSatPerVByteFee).
+	// If even that minimum fee exceeds the Bridge maximum, a safe sweep cannot be
+	// constructed; return an error rather than silently broadcasting an
+	// underpriced transaction.
+	if uint64(minSweepTxSatPerVByteFee*transactionSize) > totalMaxFee {
+		return 0, 0, fmt.Errorf(
+			"minimum safe sweep fee [%d] exceeds the maximum fee [%d]",
+			minSweepTxSatPerVByteFee*transactionSize,
+			totalMaxFee,
+		)
 	}
-	if totalFee < minTotalFee {
-		totalFee = minTotalFee
+
+	// Add a 25% buffer over the oracle estimate so there is margin during the
+	// estimate-to-broadcast delay and the fee stays adaptive under congestion
+	// (see threshold-network/keep-core#4171), then enforce the minimum floor and
+	// bound the result by the Bridge maximum (which the floor cannot exceed, per
+	// the check above).
+	rate := totalFee / transactionSize
+	rate = (rate*5 + 3) / 4 // ceil(rate * 1.25)
+	if rate < minSweepTxSatPerVByteFee {
+		rate = minSweepTxSatPerVByteFee
+	}
+	totalFee = rate * transactionSize
+	if uint64(totalFee) > totalMaxFee {
+		totalFee = int64(totalMaxFee)
 	}
 
 	// Compute the actual sat/vbyte fee for informational purposes.
