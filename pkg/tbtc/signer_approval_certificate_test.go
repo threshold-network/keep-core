@@ -1047,7 +1047,13 @@ func TestVerifySignerApprovalCertificateRejectsUnsupportedVersion(t *testing.T) 
 		covenantsigner.TemplateSelfV1,
 	)
 
-	expectedSignerSetHash := expectedSignerSetHashForWallet(t, node, walletPublicKey)
+	// The version gate is checked before the signer-set hash is examined, so the
+	// expected hash passed here is a deliberately arbitrary, non-empty
+	// placeholder: its value must not affect the outcome. Were the version check
+	// ever reordered after the hash comparison, this mismatching hash would
+	// surface as a "signer set hash does not match" error and fail the assertion
+	// below, catching the reordering.
+	arbitrarySignerSetHash := "0x" + strings.Repeat("ab", 32)
 
 	// An unset (0), the superseded (1), and a future (3) version must all be
 	// rejected; only 2 is supported.
@@ -1055,7 +1061,7 @@ func TestVerifySignerApprovalCertificateRejectsUnsupportedVersion(t *testing.T) 
 		certificate := *request.SignerApproval
 		certificate.CertificateVersion = unsupportedVersion
 
-		err := verifySignerApprovalCertificate(&certificate, expectedSignerSetHash)
+		err := verifySignerApprovalCertificate(&certificate, arbitrarySignerSetHash)
 		if err == nil || !strings.Contains(err.Error(), "unsupported certificate version") {
 			t.Fatalf(
 				"expected unsupported certificate version error for version %d, got %v",
@@ -1080,50 +1086,19 @@ func TestVerifySignerApprovalCertificateRejectsUnsupportedSignatureAlgorithm(t *
 		covenantsigner.TemplateSelfV1,
 	)
 
-	expectedSignerSetHash := expectedSignerSetHashForWallet(t, node, walletPublicKey)
+	// The algorithm gate is checked before the signer-set hash is examined, so
+	// the expected hash passed here is a deliberately arbitrary, non-empty
+	// placeholder: its value must not affect the outcome. Were the algorithm
+	// check ever reordered after the hash comparison, this mismatching hash would
+	// surface as a "signer set hash does not match" error and fail the assertion
+	// below, catching the reordering.
+	arbitrarySignerSetHash := "0x" + strings.Repeat("ab", 32)
 
 	certificate := *request.SignerApproval
 	certificate.SignatureAlgorithm = "ed25519"
 
-	err := verifySignerApprovalCertificate(&certificate, expectedSignerSetHash)
+	err := verifySignerApprovalCertificate(&certificate, arbitrarySignerSetHash)
 	if err == nil || !strings.Contains(err.Error(), "unsupported signature algorithm") {
 		t.Fatalf("expected unsupported signature algorithm error, got %v", err)
 	}
-}
-
-// expectedSignerSetHashForWallet recomputes the signer-set hash the verifier
-// expects for the wallet the test node controls, mirroring the inline block used
-// by the other verifySignerApprovalCertificate tests.
-func expectedSignerSetHashForWallet(
-	t *testing.T,
-	node *node,
-	walletPublicKey *ecdsa.PublicKey,
-) string {
-	t.Helper()
-
-	walletExecutor, ok, err := node.getSigningExecutor(walletPublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok {
-		t.Fatal("node is supposed to control wallet signers")
-	}
-
-	walletChainData, err := walletExecutor.chain.GetWallet(
-		bitcoin.PublicKeyHash(walletPublicKey),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	expectedSignerSetHash, err := computeSignerApprovalCertificateSignerSetHash(
-		walletPublicKey,
-		walletChainData,
-		walletExecutor.groupParameters,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return expectedSignerSetHash
 }
