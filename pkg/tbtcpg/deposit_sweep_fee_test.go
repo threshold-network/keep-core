@@ -40,6 +40,13 @@ func TestEstimateDepositsSweepFee_MinimumFloorAndBuffer(t *testing.T) {
 			perDepositMaxFee:       100000,
 			expectedSatPerVByteFee: 25, // ceil(20*1.25) = 25
 		},
+		"buffered estimate above the cap is bounded to the cap": {
+			estimateSatPerVByte: 20,
+			// ceil(20*1.25)=25 sat/vByte buffered fee exceeds the 22*size cap,
+			// so it is bounded down to the cap (rate 22), not the buffered 25.
+			perDepositMaxFee:       uint64(22 * size),
+			expectedSatPerVByteFee: 22,
+		},
 		"minimum floor above the cap returns an error": {
 			estimateSatPerVByte: 1,
 			// Cap sits below 5*size (the floor) but above the raw fee (1*size),
