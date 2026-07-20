@@ -100,7 +100,7 @@ func TestEstimateDepositsSweepFee_MinimumFloorAndBuffer(t *testing.T) {
 			// substring pins this to the floor-exceeds-cap branch specifically,
 			// distinguishing it from the raw-fee-exceeds-cap error.
 			perDepositMaxFee:    uint64(3 * size1),
-			expectErrorContains: "minimum safe sweep fee",
+			expectErrorContains: "minimum safe transaction fee",
 		},
 		"multi-deposit minimum floor above the cap returns an error": {
 			depositsCount:       3,
@@ -111,7 +111,7 @@ func TestEstimateDepositsSweepFee_MinimumFloorAndBuffer(t *testing.T) {
 			// the cap, so the raw-fee check passes and the floor branch is the
 			// one exercised.
 			perDepositMaxFee:    uint64(size3),
-			expectErrorContains: "minimum safe sweep fee",
+			expectErrorContains: "minimum safe transaction fee",
 		},
 	}
 
