@@ -31,6 +31,14 @@ const depositScriptByteSize = 126
 // safely above the relay floor while remaining far below the Bridge's
 // per-deposit maximum fee. The value is intentionally conservative and could be
 // made configurable; see threshold-network/keep-core#4171.
+//
+// NOTE: this static floor and the 25% buffer applied below are a stopgap for
+// the current fire-and-forget, non-RBF sweep path: because a stuck sweep cannot
+// be fee-bumped, the fee must be right on the first broadcast. Once RBF /
+// fee-bumping lands (Part B, tracked in #4171) the safety net shifts to
+// monitor-and-bump, and this policy should be revisited rather than carried
+// forward unchanged: the defensive buffer can be dropped and the floor relaxed
+// toward the live estimate, keeping only a small relay-propagation minimum.
 const minSweepTxSatPerVByteFee = 5
 
 // DepositSweepLookBackBlocks is the look-back period in blocks used
@@ -677,6 +685,13 @@ func estimateDepositsSweepFee(
 	// (see threshold-network/keep-core#4171), then enforce the minimum floor and
 	// bound the result by the Bridge maximum (which the floor cannot exceed, per
 	// the check above).
+	//
+	// Caveat: transactionSize assumes all deposit inputs are witness (P2WSH), per
+	// this function's doc comment. A sweep that includes legacy P2SH deposits has
+	// a larger on-wire vsize than estimated here, so the effective on-wire rate
+	// can land slightly below the floor for such (rare) sweeps. It still dominates
+	// the 1 sat/vByte relay floor this fix targets; a fully accurate floor would
+	// require deposit-type-aware sizing.
 	rate := totalFee / transactionSize
 	rate = (rate*5 + 3) / 4 // ceil(rate * 1.25)
 	if rate < minSweepTxSatPerVByteFee {
