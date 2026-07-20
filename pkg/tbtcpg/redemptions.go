@@ -210,16 +210,25 @@ func (rt *RedemptionTask) ProposeRedemption(
 
 	taskLogger.Infof("preparing a redemption proposal")
 
-	// Estimate fee if it's missing. Do not check the estimated fee against
-	// the maximum total and per-request fees allowed by the Bridge. This
-	// is done during the on-chain validation of the proposal so there is no
-	// need to do it here.
+	// Estimate fee if it's missing. The per-request maximum fee is still
+	// checked during the on-chain validation of the proposal; here we bound
+	// the estimate by the maximum total fee only so the safe-minimum floor
+	// (see EstimateRedemptionFee) cannot produce a fee the Bridge would reject.
 	if fee <= 0 {
 		taskLogger.Infof("estimating redemption transaction fee")
+
+		_, _, _, txMaxTotalFee, _, _, _, err := rt.chain.GetRedemptionParameters()
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot get redemption tx max total fee: [%w]",
+				err,
+			)
+		}
 
 		estimatedFee, err := EstimateRedemptionFee(
 			rt.btcChain,
 			redeemersOutputScripts,
+			txMaxTotalFee,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -462,10 +471,14 @@ redemptionRequestedLoop:
 }
 
 // EstimateRedemptionFee estimates fee for the redemption transaction that pays
-// the provided redeemers output scripts.
+// the provided redeemers output scripts. The estimated fee is floored at a safe
+// minimum rate and bounded above by txMaxTotalFee (the Bridge maximum), so a
+// non-RBF redemption is never broadcast below the floor where it could get stuck
+// and jam the wallet.
 func EstimateRedemptionFee(
 	btcChain bitcoin.Chain,
 	redeemersOutputScripts []bitcoin.Script,
+	txMaxTotalFee uint64,
 ) (int64, error) {
 	sizeEstimator := bitcoin.NewTransactionSizeEstimator().
 		// 1 P2WPKH main UTXO input.
@@ -498,6 +511,20 @@ func EstimateRedemptionFee(
 	totalFee, err := feeEstimator.EstimateFee(transactionSize)
 	if err != nil {
 		return 0, fmt.Errorf("cannot estimate transaction fee: [%v]", err)
+	}
+
+	// A raw estimate already above the Bridge maximum means the redemption is
+	// uneconomical to perform at the required fee; return an error rather than
+	// clamping to the maximum and broadcasting an underpriced transaction.
+	if uint64(totalFee) > txMaxTotalFee {
+		return 0, fmt.Errorf("estimated fee exceeds the maximum fee")
+	}
+
+	// Enforce the safe minimum fee rate and buffer, bounded by the Bridge
+	// maximum.
+	totalFee, err = applyWalletTxFeeFloor(totalFee, transactionSize, txMaxTotalFee)
+	if err != nil {
+		return 0, err
 	}
 
 	return totalFee, nil

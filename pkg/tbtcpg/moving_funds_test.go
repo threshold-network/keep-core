@@ -568,8 +568,10 @@ func TestMovingFundsAction_ProposeMovingFunds(t *testing.T) {
 		"fee estimated": {
 			fee: 0, // trigger fee estimation
 			expectedProposal: &tbtc.MovingFundsProposal{
-				TargetWallets:    targetWallets,
-				MovingFundsTxFee: big.NewInt(4300),
+				TargetWallets: targetWallets,
+				// raw 4300 (172 vByte * 25 sat/vByte), buffered to
+				// ceil(25*1.25)=32 sat/vByte * 172 = 5504, below the 6000 cap.
+				MovingFundsTxFee: big.NewInt(5504),
 			},
 		},
 	}
@@ -655,7 +657,9 @@ func TestEstimateMovingFundsFee(t *testing.T) {
 	}{
 		"estimated fee correct": {
 			txMaxTotalFee: 6000,
-			expectedFee:   3248,
+			// raw 3248 (203 vByte * 16 sat/vByte), buffered to
+			// ceil(16*1.25)=20 sat/vByte * 203 = 4060, below the cap.
+			expectedFee:   4060,
 			expectedError: nil,
 		},
 		"estimated fee too high": {

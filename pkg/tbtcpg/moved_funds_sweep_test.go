@@ -365,7 +365,9 @@ func TestMovedFundsSweepAction_ProposeMovedFundsSweep(t *testing.T) {
 			expectedProposal: &tbtc.MovedFundsSweepProposal{
 				MovingFundsTxHash:        movingFundsTxHash,
 				MovingFundsTxOutputIndex: movingFundsTxOutputIndex,
-				SweepTxFee:               big.NewInt(4450),
+				// raw 4450 (178 vByte * 25 sat/vByte), buffered to
+				// ceil(25*1.25)=32 sat/vByte * 178 = 5696, below the 6000 cap.
+				SweepTxFee: big.NewInt(5696),
 			},
 		},
 	}
@@ -431,14 +433,18 @@ func TestEstimateMovedFundsSweepFee(t *testing.T) {
 		"estimated fee correct, one input": {
 			sweepTxMaxTotalFee: 3000,
 			hasMainUtxo:        false,
-			expectedFee:        1760,
-			expectedError:      nil,
+			// raw 1760 (110 vByte * 16 sat/vByte), buffered to
+			// ceil(16*1.25)=20 sat/vByte * 110 = 2200, below the cap.
+			expectedFee:   2200,
+			expectedError: nil,
 		},
 		"estimated fee correct, two inputs": {
 			sweepTxMaxTotalFee: 3000,
 			hasMainUtxo:        true,
-			expectedFee:        2848,
-			expectedError:      nil,
+			// raw 2848 (178 vByte * 16 sat/vByte); buffered 20 sat/vByte * 178
+			// = 3560 exceeds the 3000 cap, so it is bounded down to the cap.
+			expectedFee:   3000,
+			expectedError: nil,
 		},
 		"estimated fee too high": {
 			sweepTxMaxTotalFee: 2500,

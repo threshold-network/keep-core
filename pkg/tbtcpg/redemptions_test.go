@@ -3,6 +3,7 @@ package tbtcpg_test
 import (
 	"encoding/hex"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/go-test/deep"
@@ -24,9 +25,6 @@ func TestEstimateRedemptionFee(t *testing.T) {
 		return bytes
 	}
 
-	btcChain := tbtcpg.NewLocalBitcoinChain()
-	btcChain.SetEstimateSatPerVByteFee(1, 16)
-
 	redeemersOutputScripts := []bitcoin.Script{
 		fromHex("76a9142cd680318747b720d67bf4246eb7403b476adb3488ac"),                   // P2PKH
 		fromHex("0014e6f9d74726b19b75f16fe1e9feaec048aa4fa1d0"),                         // P2WPKH
@@ -34,13 +32,61 @@ func TestEstimateRedemptionFee(t *testing.T) {
 		fromHex("0020ef0b4d985752aa5ef6243e4c6f6bebc2a007e7d671ef27d4b1d0db8dcc93bc1c"), // P2WSH
 	}
 
-	actualFee, err := tbtcpg.EstimateRedemptionFee(btcChain, redeemersOutputScripts)
-	if err != nil {
-		t.Fatal(err)
+	// The fixture above yields a 250 vByte redemption transaction.
+	const vsize = 250
+
+	tests := map[string]struct {
+		estimateSatPerVByte int64
+		txMaxTotalFee       uint64
+		expectedFee         int
+		expectErrorContains string
+	}{
+		"estimate above the floor is buffered by 25%": {
+			estimateSatPerVByte: 16,
+			txMaxTotalFee:       100000,
+			expectedFee:         5000, // ceil(16*1.25)=20 sat/vByte * 250 vByte
+		},
+		"low estimate is raised to the minimum floor": {
+			estimateSatPerVByte: 1,
+			txMaxTotalFee:       100000,
+			expectedFee:         1250, // max(5, ceil(1*1.25)=2)=5 sat/vByte * 250 vByte
+		},
+		"minimum floor above the cap returns an error": {
+			estimateSatPerVByte: 1,
+			txMaxTotalFee:       uint64(3 * vsize), // below the 5 sat/vByte floor
+			expectErrorContains: "minimum safe transaction fee",
+		},
 	}
 
-	expectedFee := 4000 // transactionVirtualSize * satPerVByteFee = 250 * 16 = 4000
-	testutils.AssertIntsEqual(t, "fee", expectedFee, int(actualFee))
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			btcChain := tbtcpg.NewLocalBitcoinChain()
+			btcChain.SetEstimateSatPerVByteFee(1, tc.estimateSatPerVByte)
+
+			actualFee, err := tbtcpg.EstimateRedemptionFee(
+				btcChain,
+				redeemersOutputScripts,
+				tc.txMaxTotalFee,
+			)
+
+			if tc.expectErrorContains != "" {
+				if err == nil {
+					t.Fatalf("expected an error, got fee [%d]", actualFee)
+				}
+				if !strings.Contains(err.Error(), tc.expectErrorContains) {
+					t.Fatalf(
+						"expected error containing [%s]; got [%v]",
+						tc.expectErrorContains, err,
+					)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			testutils.AssertIntsEqual(t, "fee", tc.expectedFee, int(actualFee))
+		})
+	}
 }
 
 func TestRedemptionAction_FindPendingRedemptions(t *testing.T) {
@@ -168,7 +214,9 @@ func TestRedemptionAction_ProposeRedemption(t *testing.T) {
 			fee: 0, // trigger fee estimation
 			expectedProposal: &tbtc.RedemptionProposal{
 				RedeemersOutputScripts: redeemersOutputScripts,
-				RedemptionTxFee:        big.NewInt(4300),
+				// raw 4300 (172 vByte * 25 sat/vByte), buffered to
+				// ceil(25*1.25)=32 sat/vByte * 172 = 5504, below the cap.
+				RedemptionTxFee: big.NewInt(5504),
 			},
 		},
 	}
@@ -179,6 +227,10 @@ func TestRedemptionAction_ProposeRedemption(t *testing.T) {
 			btcChain := tbtcpg.NewLocalBitcoinChain()
 
 			btcChain.SetEstimateSatPerVByteFee(1, 25)
+
+			// Fee estimation bounds the safe-minimum floor by the redemption
+			// tx max total fee; set a cap comfortably above the buffered fee.
+			tbtcChain.SetRedemptionParameters(0, 0, 0, 6000, 0, nil, 0)
 
 			for _, script := range redeemersOutputScripts {
 				tbtcChain.SetPendingRedemptionRequest(
