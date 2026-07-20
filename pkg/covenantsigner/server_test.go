@@ -1080,3 +1080,64 @@ func TestSubmitHandlerPreservesServiceContextValues(t *testing.T) {
 		)
 	}
 }
+
+// TestServerAcceptsBodyExactlyAtLimit asserts the request-body size guard is an
+// inclusive cap: a body of exactly maxRequestBodyBytes must pass, since
+// http.MaxBytesReader only rejects bodies strictly larger than the limit. This
+// complements the maxRequestBodyBytes+1 rejection in TestServerBoundaryErrorMatrix
+// and pins the exact boundary so an off-by-one in the cap would be caught.
+func TestServerAcceptsBodyExactlyAtLimit(t *testing.T) {
+	handle := newMemoryHandle()
+	service, err := NewService(handle, &scriptedEngine{
+		submit: func(*Job) (*Transition, error) {
+			return &Transition{State: JobStatePending, Detail: "queued"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(newHandler(service, context.Background(), "test-token", true))
+	defer server.Close()
+
+	// Build a well-formed submit envelope padded to exactly maxRequestBodyBytes
+	// by stretching the facadeRequestId string field.
+	prefix := `{"routeRequestId":"ors_exact","stage":"SIGNER_COORDINATION","request":{"facadeRequestId":"`
+	suffix := `"}}`
+	pad := maxRequestBodyBytes - len(prefix) - len(suffix)
+	if pad <= 0 {
+		t.Fatalf("test assumption broken: prefix+suffix already exceed the body limit")
+	}
+	body := []byte(prefix + strings.Repeat("a", pad) + suffix)
+	if len(body) != maxRequestBodyBytes {
+		t.Fatalf("expected body of exactly %d bytes, got %d", maxRequestBodyBytes, len(body))
+	}
+
+	request, err := http.NewRequest(
+		http.MethodPost,
+		server.URL+"/v1/self_v1/signer/requests",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer test-token")
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+
+	// The body may still be rejected on its contents, but it must not be
+	// rejected by the size guard, which surfaces as "malformed request body".
+	responseBody, _ := io.ReadAll(response.Body)
+	if strings.Contains(string(responseBody), "malformed request body") {
+		t.Fatalf(
+			"body exactly at the limit was rejected as malformed (size guard fired): %d %s",
+			response.StatusCode,
+			string(responseBody),
+		)
+	}
+}
