@@ -1031,3 +1031,99 @@ func TestSignerApprovalCertificateSigningDigestMatchesCrossLanguageVectorAboveUi
 		)
 	}
 }
+
+// TestVerifySignerApprovalCertificateRejectsUnsupportedVersion asserts the
+// certificate version is a hard gate: only version 2 is accepted, and any other
+// value (an unset zero, the superseded version 1, or a future version 3) is
+// rejected before the signature is checked. This pins the version-negotiation
+// contract so a future format bump cannot be silently accepted by an unupgraded
+// verifier.
+func TestVerifySignerApprovalCertificateRejectsUnsupportedVersion(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+
+	expectedSignerSetHash := expectedSignerSetHashForWallet(t, node, walletPublicKey)
+
+	// An unset (0), the superseded (1), and a future (3) version must all be
+	// rejected; only 2 is supported.
+	for _, unsupportedVersion := range []uint32{0, 1, 3} {
+		certificate := *request.SignerApproval
+		certificate.CertificateVersion = unsupportedVersion
+
+		err := verifySignerApprovalCertificate(&certificate, expectedSignerSetHash)
+		if err == nil || !strings.Contains(err.Error(), "unsupported certificate version") {
+			t.Fatalf(
+				"expected unsupported certificate version error for version %d, got %v",
+				unsupportedVersion,
+				err,
+			)
+		}
+	}
+}
+
+// TestVerifySignerApprovalCertificateRejectsUnsupportedSignatureAlgorithm
+// asserts the signature-algorithm field is a hard gate: only the tECDSA
+// secp256k1 algorithm is accepted. This prevents a certificate from claiming a
+// different (potentially weaker or unverifiable) algorithm than the one the
+// verifier actually checks.
+func TestVerifySignerApprovalCertificateRejectsUnsupportedSignatureAlgorithm(t *testing.T) {
+	node, _, walletPublicKey := setupCovenantSignerTestNode(t)
+	request := validStructuredSignerApprovalVerificationRequest(
+		t,
+		node,
+		walletPublicKey,
+		covenantsigner.TemplateSelfV1,
+	)
+
+	expectedSignerSetHash := expectedSignerSetHashForWallet(t, node, walletPublicKey)
+
+	certificate := *request.SignerApproval
+	certificate.SignatureAlgorithm = "ed25519"
+
+	err := verifySignerApprovalCertificate(&certificate, expectedSignerSetHash)
+	if err == nil || !strings.Contains(err.Error(), "unsupported signature algorithm") {
+		t.Fatalf("expected unsupported signature algorithm error, got %v", err)
+	}
+}
+
+// expectedSignerSetHashForWallet recomputes the signer-set hash the verifier
+// expects for the wallet the test node controls, mirroring the inline block used
+// by the other verifySignerApprovalCertificate tests.
+func expectedSignerSetHashForWallet(
+	t *testing.T,
+	node *node,
+	walletPublicKey *ecdsa.PublicKey,
+) string {
+	t.Helper()
+
+	walletExecutor, ok, err := node.getSigningExecutor(walletPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("node is supposed to control wallet signers")
+	}
+
+	walletChainData, err := walletExecutor.chain.GetWallet(
+		bitcoin.PublicKeyHash(walletPublicKey),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedSignerSetHash, err := computeSignerApprovalCertificateSignerSetHash(
+		walletPublicKey,
+		walletChainData,
+		walletExecutor.groupParameters,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return expectedSignerSetHash
+}
