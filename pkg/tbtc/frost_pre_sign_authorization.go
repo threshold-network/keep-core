@@ -1349,6 +1349,7 @@ type frostPreSignAuthorizationGate interface {
 type thresholdFrostPreSignAuthorizationGate struct {
 	backend             FrostPreSignAuthorizationBackend
 	activationProfile   FrostPreSignActivationProfile
+	storeBinding        *frostDurableSessionStoreBinding
 	signing             chain.Signing
 	broadcastChannel    net.BroadcastChannel
 	membershipValidator *group.MembershipValidator
@@ -1360,6 +1361,7 @@ type thresholdFrostPreSignAuthorizationGate struct {
 func newThresholdFrostPreSignAuthorizationGate(
 	backend FrostPreSignAuthorizationBackend,
 	activationProfile FrostPreSignActivationProfile,
+	storeBinding *frostDurableSessionStoreBinding,
 	signing chain.Signing,
 	broadcastChannel net.BroadcastChannel,
 	membershipValidator *group.MembershipValidator,
@@ -1371,6 +1373,9 @@ func newThresholdFrostPreSignAuthorizationGate(
 	}
 	if err := activationProfile.validate(); err != nil {
 		return nil, err
+	}
+	if _, err := storeBinding.verify(); err != nil {
+		return nil, fmt.Errorf("FROST durable session store is not activation-ready: [%w]", err)
 	}
 	if signing == nil {
 		return nil, fmt.Errorf("FROST pre-sign Ethereum signer is nil")
@@ -1403,6 +1408,7 @@ func newThresholdFrostPreSignAuthorizationGate(
 	return &thresholdFrostPreSignAuthorizationGate{
 		backend:             backend,
 		activationProfile:   activationProfile,
+		storeBinding:        storeBinding,
 		signing:             signing,
 		broadcastChannel:    broadcastChannel,
 		membershipValidator: membershipValidator,
@@ -1418,6 +1424,9 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) authorize(
 ) (*frostPreSignAuthorization, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("FROST pre-sign authorization context is nil")
+	}
+	if _, err := tfpsag.storeBinding.verify(); err != nil {
+		return nil, fmt.Errorf("FROST durable session store binding failed: [%w]", err)
 	}
 	if err := transaction.validate(); err != nil {
 		return nil, err
@@ -1505,6 +1514,9 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) revalidate(
 	ctx context.Context,
 	authorization *frostPreSignAuthorization,
 ) error {
+	if _, err := tfpsag.storeBinding.verify(); err != nil {
+		return fmt.Errorf("FROST durable session store binding failed: [%w]", err)
+	}
 	if authorization == nil || authorization.proposal == nil {
 		return fmt.Errorf("FROST pre-sign authorization is nil")
 	}

@@ -67,6 +67,7 @@ type node struct {
 
 	frostPreSignAuthorizationBackend FrostPreSignAuthorizationBackend
 	frostPreSignActivationProfile    FrostPreSignActivationProfile
+	frostDurableSessionStoreBinding  *frostDurableSessionStoreBinding
 	bitcoinBroadcastOutbox           *bitcoinBroadcastOutbox
 	frostRetainedGroupJournal        *frostRetainedGroupJournal
 	frostActivationHandshakeExporter *frostActivationHandshakeExporter
@@ -310,9 +311,6 @@ func newNode(
 		if err != nil {
 			return nil, fmt.Errorf("cannot initialize durable Bitcoin broadcast outbox: [%w]", err)
 		}
-		node.frostPreSignAuthorizationBackend = backend
-		node.frostPreSignActivationProfile = verifiedActivationProfile
-		node.bitcoinBroadcastOutbox = outbox
 		manifestSource, ok := chain.(FrostPreSignActivationRuntimeManifestSource)
 		if !ok {
 			_ = outbox.close()
@@ -331,6 +329,17 @@ func newNode(
 		if err != nil {
 			_ = outbox.close()
 			return nil, fmt.Errorf("cannot read authenticated FROST runtime manifest: [%w]", err)
+		}
+		storeBinding, err := newFrostDurableSessionStoreBinding(
+			runtimeManifest.DurableSessionStoreFingerprint,
+			signing.ReadNativeTBTCSignerDurableStoreIdentity,
+		)
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot bind the active FROST durable session store to the signed manifest: [%w]",
+				err,
+			)
 		}
 		if config.FrostRetainedGroupHistorySource == nil {
 			_ = outbox.close()
@@ -357,6 +366,7 @@ func newNode(
 			config.FrostActivationHandshakePrivateKeyPath,
 			runtimeManifest,
 			pointVerifier,
+			storeBinding,
 			outbox,
 			journal,
 		)
@@ -365,6 +375,10 @@ func newNode(
 			_ = outbox.close()
 			return nil, fmt.Errorf("cannot initialize FROST activation handshake: [%w]", err)
 		}
+		node.frostPreSignAuthorizationBackend = backend
+		node.frostPreSignActivationProfile = verifiedActivationProfile
+		node.frostDurableSessionStoreBinding = storeBinding
+		node.bitcoinBroadcastOutbox = outbox
 		node.frostActivationHandshakeExporter = exporter
 	}
 
@@ -681,6 +695,7 @@ func (n *node) getSigningExecutor(
 		gate, err := newThresholdFrostPreSignAuthorizationGate(
 			n.frostPreSignAuthorizationBackend,
 			n.frostPreSignActivationProfile,
+			n.frostDurableSessionStoreBinding,
 			n.chain.Signing(),
 			broadcastChannel,
 			membershipValidator,

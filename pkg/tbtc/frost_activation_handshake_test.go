@@ -128,6 +128,7 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 		privateKeyPath,
 		manifest,
 		verifier,
+		testFrostDurableSessionStoreBinding(t),
 		outbox,
 		journal,
 	)
@@ -269,6 +270,7 @@ func TestFrostActivationHandshakeExporter_FailsClosed(t *testing.T) {
 		privateKeyPath,
 		manifest,
 		&testFrostActivationPointVerifier{},
+		testFrostDurableSessionStoreBinding(t),
 		outbox,
 		journal,
 	)
@@ -322,7 +324,7 @@ func testFrostActivationRuntimeManifest(
 		ReservationProtocolID:            [32]byte{0x12},
 		BitcoinOutboxProtocolID:          [32]byte{0x13},
 		SigningPolicyHash:                [32]byte{0x14},
-		DurableSessionStoreFingerprint:   frostActivationHex32([32]byte{0x09}),
+		DurableSessionStoreFingerprint:   frostActivationHex32(testFrostDurableSessionStoreIdentity().Fingerprint),
 		CompleteRouterAddress:            [20]byte{0x15},
 		AuthorizationRegistryAddress:     [20]byte{0x16},
 		AttestationSignerKeyHash:         keyHash,

@@ -79,6 +79,7 @@ typedef TbtcSignerResult (*tbtc_init_signer_config_fn)(
   const uint8_t* request_ptr,
   size_t request_len
 );
+typedef TbtcSignerResult (*tbtc_durable_store_identity_fn)(void);
 typedef void (*tbtc_free_buffer_fn)(uint8_t* ptr, size_t len);
 
 static TbtcSignerResult unavailable_tbtc_signer_result(void) {
@@ -280,6 +281,19 @@ static TbtcSignerResult tbtc_signer_init_signer_config(const uint8_t* request_pt
   }
 
   return init_signer_config(request_ptr, request_len);
+}
+
+static TbtcSignerResult tbtc_signer_durable_store_identity(void) {
+  tbtc_durable_store_identity_fn durable_store_identity =
+    (tbtc_durable_store_identity_fn)dlsym(
+      RTLD_DEFAULT,
+      "frost_tbtc_durable_store_identity"
+    );
+  if (durable_store_identity == NULL) {
+    return unavailable_tbtc_signer_result();
+  }
+
+  return durable_store_identity();
 }
 
 static void tbtc_signer_free_buffer(uint8_t* ptr, size_t len) {
@@ -1848,6 +1862,36 @@ func InstallNativeTBTCSignerConfig(
 	}
 
 	return result, nil
+}
+
+// ReadNativeTBTCSignerDurableStoreIdentity asks the linked signer for the
+// identity of the store it has actually opened and locked. A stale library
+// without frost_tbtc_durable_store_identity fails closed; config JSON is not a
+// substitute for this runtime readback.
+func ReadNativeTBTCSignerDurableStoreIdentity() (
+	*NativeTBTCSignerDurableStoreIdentity,
+	error,
+) {
+	if err := ensureTBTCSignerABICompatible(); err != nil {
+		return nil, err
+	}
+
+	responsePayload, err := parseBuildTaggedTBTCSignerResult(
+		"DurableStoreIdentity",
+		C.tbtc_signer_durable_store_identity(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	identity, err := DecodeNativeTBTCSignerDurableStoreIdentity(responsePayload)
+	if err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"DurableStoreIdentity",
+			err.Error(),
+		)
+	}
+	return identity, nil
 }
 
 // ----------------------------------------------------------------------------

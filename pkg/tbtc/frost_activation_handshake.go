@@ -127,6 +127,7 @@ type frostActivationHandshakeExporter struct {
 	publicKeySPKI string
 	manifest      FrostPreSignActivationRuntimeManifest
 	pointVerifier FrostPreSignActivationPointVerifier
+	storeBinding  *frostDurableSessionStoreBinding
 	outbox        *bitcoinBroadcastOutbox
 	journal       *frostRetainedGroupJournal
 
@@ -141,6 +142,7 @@ func newFrostActivationHandshakeExporter(
 	privateKeyPath string,
 	manifest FrostPreSignActivationRuntimeManifest,
 	pointVerifier FrostPreSignActivationPointVerifier,
+	storeBinding *frostDurableSessionStoreBinding,
 	outbox *bitcoinBroadcastOutbox,
 	journal *frostRetainedGroupJournal,
 ) (*frostActivationHandshakeExporter, error) {
@@ -161,8 +163,14 @@ func newFrostActivationHandshakeExporter(
 		durableSessionStoreFingerprintErr != nil || durableSessionStoreFingerprint == [32]byte{} ||
 		durableSessionStoreFingerprint == manifest.CanonicalJournal.StoreFingerprint ||
 		durableSessionStoreFingerprint == manifest.QuarantineJournal.StoreFingerprint ||
-		pointVerifier == nil || outbox == nil || journal == nil {
+		pointVerifier == nil || storeBinding == nil || outbox == nil || journal == nil {
 		return nil, fmt.Errorf("FROST activation handshake dependencies are invalid")
+	}
+	boundStoreFingerprint, err := storeBinding.verify()
+	if err != nil || boundStoreFingerprint != durableSessionStoreFingerprint {
+		return nil, fmt.Errorf(
+			"FROST activation handshake durable session store is not bound to the signed manifest",
+		)
 	}
 	privateKey, publicKeyDER, err := loadFrostActivationAttestationKey(privateKeyPath)
 	if err != nil {
@@ -177,6 +185,7 @@ func newFrostActivationHandshakeExporter(
 		publicKeySPKI: base64.StdEncoding.EncodeToString(publicKeyDER),
 		manifest:      manifest,
 		pointVerifier: pointVerifier,
+		storeBinding:  storeBinding,
 		outbox:        outbox,
 		journal:       journal,
 	}
@@ -401,12 +410,19 @@ func (fahe *frostActivationHandshakeExporter) attest(
 	if err := fahe.pointVerifier.VerifyFrostPreSignActivationPoint(ctx, finality); err != nil {
 		return nil, fmt.Errorf("FROST activation point changed during readiness reconciliation: [%w]", err)
 	}
+	durableSessionStoreFingerprint, err := fahe.storeBinding.verify()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"FROST durable session store changed during readiness reconciliation: [%w]",
+			err,
+		)
+	}
 	state := frostActivationHandshakeState{
 		ProtocolID:                       frostActivationHex32(fahe.manifest.SignerProtocolID),
 		ReservationProtocolID:            frostActivationHex32(fahe.manifest.ReservationProtocolID),
 		BitcoinOutboxProtocolID:          frostActivationHex32(fahe.manifest.BitcoinOutboxProtocolID),
 		SigningPolicyHash:                frostActivationHex32(fahe.manifest.SigningPolicyHash),
-		DurableSessionStoreFingerprint:   fahe.manifest.DurableSessionStoreFingerprint,
+		DurableSessionStoreFingerprint:   frostActivationHex32(durableSessionStoreFingerprint),
 		CompleteRouterAddress:            frostActivationHex20(fahe.manifest.CompleteRouterAddress),
 		AuthorizationRegistryAddress:     frostActivationHex20(fahe.manifest.AuthorizationRegistryAddress),
 		Threshold:                        fahe.manifest.Threshold,

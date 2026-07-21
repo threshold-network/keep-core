@@ -215,6 +215,7 @@ func TestThresholdFrostPreSignAuthorizationGate_RevalidatesCurrentFinalizedState
 	gate := &thresholdFrostPreSignAuthorizationGate{
 		backend:           backend,
 		activationProfile: activationProfileForTestProposal(proposal),
+		storeBinding:      testFrostDurableSessionStoreBinding(t),
 	}
 	authorization := &frostPreSignAuthorization{
 		ActivationProfileHash: gate.activationProfile.ProfileHash,
@@ -503,6 +504,7 @@ func TestThresholdFrostPreSignAuthorizationGate_ProfileMismatchPrecedesSeatSigna
 	gate := &thresholdFrostPreSignAuthorizationGate{
 		backend:           &testFrostPreSignAuthorizationBackend{proposal: proposal},
 		activationProfile: profile,
+		storeBinding:      testFrostDurableSessionStoreBinding(t),
 		signing:           countingSigner,
 		wallet: wallet{
 			signingGroupOperators: make(
