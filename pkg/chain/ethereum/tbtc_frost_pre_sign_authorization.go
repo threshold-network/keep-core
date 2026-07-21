@@ -168,28 +168,50 @@ type frostPreSignManifestEthereum struct {
 	FrostArchive                    json.RawMessage               `json:"frostArchive"`
 }
 
+type frostPreSignManifestCanonicalJournal struct {
+	StoreID                   string                    `json:"storeID"`
+	StoreFingerprint          string                    `json:"storeFingerprint"`
+	ClusterFingerprint        string                    `json:"clusterFingerprint"`
+	Checkpoint                frostPreSignManifestPoint `json:"checkpoint"`
+	DescriptorSetHash         string                    `json:"descriptorSetHash"`
+	SourceTrustDomainID       string                    `json:"sourceTrustDomainID"`
+	SourceEndpointFingerprint string                    `json:"sourceEndpointFingerprint"`
+	SourceOperatorFingerprint string                    `json:"sourceOperatorFingerprint"`
+	MinimumGeneration         uint64                    `json:"minimumGeneration"`
+}
+
+type frostPreSignManifestQuarantineJournal struct {
+	ProtocolID         string `json:"protocolID"`
+	StoreID            string `json:"storeID"`
+	StoreFingerprint   string `json:"storeFingerprint"`
+	ClusterFingerprint string `json:"clusterFingerprint"`
+	MinimumGeneration  uint64 `json:"minimumGeneration"`
+}
+
 type frostPreSignManifestFrostSigner struct {
-	TrustDomainID                       string `json:"trustDomainID"`
-	DurableSessionStoreFingerprint      string `json:"durableSessionStoreFingerprint"`
-	ProtocolID                          string `json:"protocolID"`
-	ReservationProtocolID               string `json:"reservationProtocolID"`
-	BitcoinOutboxProtocolID             string `json:"bitcoinOutboxProtocolID"`
-	SigningPolicyHash                   string `json:"signingPolicyHash"`
-	CompleteRouterAddress               string `json:"completeRouterAddress"`
-	AuthorizationRegistryAddress        string `json:"authorizationRegistryAddress"`
-	AttestationSignerKeyHash            string `json:"attestationSignerKeyHash"`
-	HandshakeEndpointFingerprint        string `json:"handshakeEndpointFingerprint"`
-	HandshakeOperatorFingerprint        string `json:"handshakeOperatorFingerprint"`
-	Threshold                           uint64 `json:"threshold"`
-	MaximumGroupSize                    uint64 `json:"maximumGroupSize"`
-	RetainedGroupInventoryProtocolID    string `json:"retainedGroupInventoryProtocolID"`
-	ExactRetainedGroupInventoryRequired bool   `json:"exactRetainedGroupInventoryRequired"`
-	FinalizedReservationReceiptRequired bool   `json:"finalizedReservationReceiptRequired"`
-	ExactReservationIdentityRequired    bool   `json:"exactReservationIdentityRequired"`
-	AuthorizationRootRequired           bool   `json:"authorizationRootRequired"`
-	DurableSessionPersistenceRequired   bool   `json:"durableSessionPersistenceRequired"`
-	DurableBitcoinOutboxRequired        bool   `json:"durableBitcoinOutboxRequired"`
-	QuarantineFailClosed                bool   `json:"quarantineFailClosed"`
+	TrustDomainID                       string                                `json:"trustDomainID"`
+	DurableSessionStoreFingerprint      string                                `json:"durableSessionStoreFingerprint"`
+	ProtocolID                          string                                `json:"protocolID"`
+	ReservationProtocolID               string                                `json:"reservationProtocolID"`
+	BitcoinOutboxProtocolID             string                                `json:"bitcoinOutboxProtocolID"`
+	SigningPolicyHash                   string                                `json:"signingPolicyHash"`
+	CompleteRouterAddress               string                                `json:"completeRouterAddress"`
+	AuthorizationRegistryAddress        string                                `json:"authorizationRegistryAddress"`
+	AttestationSignerKeyHash            string                                `json:"attestationSignerKeyHash"`
+	HandshakeEndpointFingerprint        string                                `json:"handshakeEndpointFingerprint"`
+	HandshakeOperatorFingerprint        string                                `json:"handshakeOperatorFingerprint"`
+	Threshold                           uint64                                `json:"threshold"`
+	MaximumGroupSize                    uint64                                `json:"maximumGroupSize"`
+	RetainedGroupInventoryProtocolID    string                                `json:"retainedGroupInventoryProtocolID"`
+	CanonicalJournal                    frostPreSignManifestCanonicalJournal  `json:"canonicalJournal"`
+	QuarantineJournal                   frostPreSignManifestQuarantineJournal `json:"quarantineJournal"`
+	ExactRetainedGroupInventoryRequired bool                                  `json:"exactRetainedGroupInventoryRequired"`
+	FinalizedReservationReceiptRequired bool                                  `json:"finalizedReservationReceiptRequired"`
+	ExactReservationIdentityRequired    bool                                  `json:"exactReservationIdentityRequired"`
+	AuthorizationRootRequired           bool                                  `json:"authorizationRootRequired"`
+	DurableSessionPersistenceRequired   bool                                  `json:"durableSessionPersistenceRequired"`
+	DurableBitcoinOutboxRequired        bool                                  `json:"durableBitcoinOutboxRequired"`
+	QuarantineFailClosed                bool                                  `json:"quarantineFailClosed"`
 }
 
 type frostPreSignActivationManifest struct {
@@ -567,10 +589,93 @@ func validateFrostPreSignActivationManifest(
 		"signing policy":                    frost.SigningPolicyHash,
 		"attestation signer key":            frost.AttestationSignerKeyHash,
 		"retained group inventory protocol": frost.RetainedGroupInventoryProtocolID,
+		"quarantine journal protocol":       frost.QuarantineJournal.ProtocolID,
 	} {
 		if _, err := frostPreSignParseBytes32(value); err != nil {
 			return fmt.Errorf("invalid FROST activation %s: [%w]", name, err)
 		}
+	}
+	durableSessionStoreFingerprint, err := frostPreSignParseBytes32(
+		frost.DurableSessionStoreFingerprint,
+	)
+	if err != nil || durableSessionStoreFingerprint == [32]byte{} {
+		return fmt.Errorf("invalid FROST durable session store fingerprint")
+	}
+	journal := frost.CanonicalJournal
+	if strings.TrimSpace(journal.StoreID) == "" || len(journal.StoreID) > 255 ||
+		strings.TrimSpace(journal.SourceTrustDomainID) == "" ||
+		len(journal.SourceTrustDomainID) > 128 ||
+		journal.Checkpoint.BlockNumber == 0 ||
+		journal.Checkpoint.BlockNumber > manifest.Ethereum.Checkpoint.BlockNumber {
+		return fmt.Errorf("FROST canonical retained-group journal manifest is incomplete")
+	}
+	journalCheckpointHash, err := frostPreSignParseBytes32(journal.Checkpoint.BlockHash)
+	if err != nil || journalCheckpointHash == [32]byte{} {
+		return fmt.Errorf("invalid FROST canonical journal checkpoint hash: [%w]", err)
+	}
+	journalValues := map[string]string{
+		"store fingerprint":           journal.StoreFingerprint,
+		"cluster fingerprint":         journal.ClusterFingerprint,
+		"descriptor set hash":         journal.DescriptorSetHash,
+		"source endpoint fingerprint": journal.SourceEndpointFingerprint,
+		"source operator fingerprint": journal.SourceOperatorFingerprint,
+	}
+	parsedJournalValues := make(map[string][32]byte, len(journalValues))
+	for name, value := range journalValues {
+		parsed, err := frostPreSignParseBytes32(value)
+		if err != nil || parsed == [32]byte{} {
+			return fmt.Errorf("invalid FROST canonical journal %s", name)
+		}
+		parsedJournalValues[name] = parsed
+	}
+	for name, value := range map[string]string{
+		"Ethereum source endpoint":   manifest.Ethereum.SourceEndpointFingerprint,
+		"Ethereum verifier endpoint": manifest.Ethereum.VerifierEndpointFingerprint,
+		"runtime handshake endpoint": frost.HandshakeEndpointFingerprint,
+	} {
+		parsed, err := frostPreSignParseBytes32(value)
+		if err != nil || parsed == parsedJournalValues["source endpoint fingerprint"] {
+			return fmt.Errorf("FROST canonical journal source endpoint is not independent of %s", name)
+		}
+	}
+	for name, value := range map[string]string{
+		"Ethereum source operator":   manifest.Ethereum.SourceOperatorFingerprint,
+		"Ethereum verifier operator": manifest.Ethereum.VerifierOperatorFingerprint,
+		"runtime handshake operator": frost.HandshakeOperatorFingerprint,
+	} {
+		parsed, err := frostPreSignParseBytes32(value)
+		if err != nil || parsed == parsedJournalValues["source operator fingerprint"] {
+			return fmt.Errorf("FROST canonical journal source operator is not independent of %s", name)
+		}
+	}
+	for name, value := range map[string]string{
+		"Ethereum source":   manifest.Ethereum.SourceTrustDomainID,
+		"Ethereum verifier": manifest.Ethereum.VerifierTrustDomainID,
+		"runtime signer":    frost.TrustDomainID,
+	} {
+		if strings.TrimSpace(value) == "" || value == journal.SourceTrustDomainID {
+			return fmt.Errorf("FROST canonical journal source trust domain is not independent of %s", name)
+		}
+	}
+	quarantine := frost.QuarantineJournal
+	if strings.TrimSpace(quarantine.StoreID) == "" || len(quarantine.StoreID) > 255 {
+		return fmt.Errorf("FROST quarantine journal manifest is incomplete")
+	}
+	quarantineStoreFingerprint, err := frostPreSignParseBytes32(quarantine.StoreFingerprint)
+	if err != nil || quarantineStoreFingerprint == [32]byte{} {
+		return fmt.Errorf("invalid FROST quarantine journal store fingerprint")
+	}
+	quarantineClusterFingerprint, err := frostPreSignParseBytes32(quarantine.ClusterFingerprint)
+	if err != nil || quarantineClusterFingerprint == [32]byte{} {
+		return fmt.Errorf("invalid FROST quarantine journal cluster fingerprint")
+	}
+	if journal.StoreID == manifest.Ethereum.StoreID ||
+		journal.StoreID == quarantine.StoreID ||
+		parsedJournalValues["store fingerprint"] == quarantineStoreFingerprint ||
+		parsedJournalValues["cluster fingerprint"] == quarantineClusterFingerprint ||
+		durableSessionStoreFingerprint == parsedJournalValues["store fingerprint"] ||
+		durableSessionStoreFingerprint == quarantineStoreFingerprint {
+		return fmt.Errorf("FROST canonical journal storage identities are not independent")
 	}
 	return nil
 }
@@ -1201,7 +1306,11 @@ func (adapter *frostPreSignEthereumAdapter) verifyDeploymentAt(
 	if err != nil || validatorBridge != common.Address(profile.BridgeAddress) {
 		return fmt.Errorf("proposal validator Bridge crosslink mismatch: [%w]", err)
 	}
-	return nil
+	// Bracket every historical deployment read with a second finalized-head
+	// and exact-hash check. A target header that exists is not sufficient: the
+	// target must remain at or below the RPC's independently reported finalized
+	// tip for the entire read set.
+	return adapter.requireCanonicalFinality(ctx, finality)
 }
 
 func (adapter *frostPreSignEthereumAdapter) verifyLinkedLibrariesAt(
@@ -1268,6 +1377,16 @@ func (adapter *frostPreSignEthereumAdapter) requireCanonicalFinality(
 	if finality == nil || finality.BlockNumber == 0 || finality.BlockHash == [32]byte{} {
 		return fmt.Errorf("Ethereum finality checkpoint is invalid")
 	}
+	before, err := frostPreSignCurrentFinality(ctx, adapter.chain.client)
+	if err != nil {
+		return err
+	}
+	if finality.BlockNumber > before.BlockNumber {
+		return fmt.Errorf("Ethereum checkpoint [%d] is above finalized head [%d]", finality.BlockNumber, before.BlockNumber)
+	}
+	if finality.BlockNumber == before.BlockNumber && finality.BlockHash != before.BlockHash {
+		return fmt.Errorf("Ethereum checkpoint disagrees with finalized head")
+	}
 	header, err := adapter.chain.client.HeaderByNumber(
 		ctx,
 		new(big.Int).SetUint64(finality.BlockNumber),
@@ -1277,6 +1396,26 @@ func (adapter *frostPreSignEthereumAdapter) requireCanonicalFinality(
 	}
 	if header == nil || [32]byte(header.Hash()) != finality.BlockHash {
 		return fmt.Errorf("finalized Ethereum block hash mismatch")
+	}
+	after, err := frostPreSignCurrentFinality(ctx, adapter.chain.client)
+	if err != nil {
+		return err
+	}
+	if after.BlockNumber < before.BlockNumber ||
+		finality.BlockNumber > after.BlockNumber ||
+		(finality.BlockNumber == after.BlockNumber && finality.BlockHash != after.BlockHash) ||
+		(before.BlockNumber == after.BlockNumber && before.BlockHash != after.BlockHash) {
+		return fmt.Errorf("Ethereum finalized head changed inconsistently while verifying checkpoint")
+	}
+	headerAfter, err := adapter.chain.client.HeaderByNumber(
+		ctx,
+		new(big.Int).SetUint64(finality.BlockNumber),
+	)
+	if err != nil {
+		return fmt.Errorf("cannot bracket finalized Ethereum header: [%w]", err)
+	}
+	if headerAfter == nil || [32]byte(headerAfter.Hash()) != finality.BlockHash {
+		return fmt.Errorf("finalized Ethereum block hash changed while verifying checkpoint")
 	}
 	return nil
 }
@@ -1384,6 +1523,44 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 	if err != nil {
 		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
 	}
+	quarantine := frost.QuarantineJournal
+	quarantineJournalProtocolID, err := parse(quarantine.ProtocolID)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
+	journal := frost.CanonicalJournal
+	storeFingerprint, err := parse(journal.StoreFingerprint)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
+	clusterFingerprint, err := parse(journal.ClusterFingerprint)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
+	descriptorSetHash, err := parse(journal.DescriptorSetHash)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
+	sourceEndpointFingerprint, err := parse(journal.SourceEndpointFingerprint)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
+	sourceOperatorFingerprint, err := parse(journal.SourceOperatorFingerprint)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
+	quarantineStoreFingerprint, err := parse(quarantine.StoreFingerprint)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
+	quarantineClusterFingerprint, err := parse(quarantine.ClusterFingerprint)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
+	checkpointHash, err := parse(journal.Checkpoint.BlockHash)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
 	return tbtc.FrostPreSignActivationRuntimeManifest{
 		ManifestHash:                     adapter.profile.ActivationManifestHash,
 		SignerProtocolID:                 signerProtocolID,
@@ -1397,6 +1574,27 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 		Threshold:                        frost.Threshold,
 		MaximumGroupSize:                 frost.MaximumGroupSize,
 		RetainedGroupInventoryProtocolID: retainedGroupInventoryProtocolID,
+		CanonicalJournal: tbtc.FrostRetainedGroupCanonicalJournalManifest{
+			StoreID:            journal.StoreID,
+			StoreFingerprint:   storeFingerprint,
+			ClusterFingerprint: clusterFingerprint,
+			Checkpoint: tbtc.FrostPreSignFinality{
+				BlockNumber: journal.Checkpoint.BlockNumber,
+				BlockHash:   checkpointHash,
+			},
+			DescriptorSetHash:         descriptorSetHash,
+			SourceTrustDomainID:       journal.SourceTrustDomainID,
+			SourceEndpointFingerprint: sourceEndpointFingerprint,
+			SourceOperatorFingerprint: sourceOperatorFingerprint,
+			MinimumGeneration:         journal.MinimumGeneration,
+		},
+		QuarantineJournal: tbtc.FrostRetainedGroupQuarantineJournalManifest{
+			ProtocolID:         quarantineJournalProtocolID,
+			StoreID:            quarantine.StoreID,
+			StoreFingerprint:   quarantineStoreFingerprint,
+			ClusterFingerprint: quarantineClusterFingerprint,
+			MinimumGeneration:  quarantine.MinimumGeneration,
+		},
 	}, nil
 }
 

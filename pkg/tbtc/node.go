@@ -68,6 +68,7 @@ type node struct {
 	frostPreSignAuthorizationBackend FrostPreSignAuthorizationBackend
 	frostPreSignActivationProfile    FrostPreSignActivationProfile
 	bitcoinBroadcastOutbox           *bitcoinBroadcastOutbox
+	frostRetainedGroupJournal        *frostRetainedGroupJournal
 	frostActivationHandshakeExporter *frostActivationHandshakeExporter
 
 	// walletDispatcher ensures only one action is executed by a wallet at
@@ -331,15 +332,36 @@ func newNode(
 			_ = outbox.close()
 			return nil, fmt.Errorf("cannot read authenticated FROST runtime manifest: [%w]", err)
 		}
+		if config.FrostRetainedGroupHistorySource == nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot enable FROST activation handshake without an independent retained-group history source",
+			)
+		}
+		journal, err := newFrostRetainedGroupJournal(
+			config.FrostRetainedGroupJournalDirectory,
+			runtimeManifest.ManifestHash,
+			runtimeManifest.CanonicalJournal,
+			runtimeManifest.QuarantineJournal,
+			config.FrostRetainedGroupHistorySource,
+			walletRegistry,
+			operatorAddress,
+		)
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf("cannot initialize canonical FROST retained-group journal: [%w]", err)
+		}
+		node.frostRetainedGroupJournal = journal
 		exporter, err := newFrostActivationHandshakeExporter(
 			config.FrostActivationHandshakeURL,
 			config.FrostActivationHandshakePrivateKeyPath,
-			config.FrostActivationReadinessSnapshotPath,
 			runtimeManifest,
 			pointVerifier,
 			outbox,
+			journal,
 		)
 		if err != nil {
+			_ = journal.close()
 			_ = outbox.close()
 			return nil, fmt.Errorf("cannot initialize FROST activation handshake: [%w]", err)
 		}

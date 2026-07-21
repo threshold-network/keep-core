@@ -158,9 +158,14 @@ type Config struct {
 	// FrostActivationHandshakePrivateKeyPath contains one owner-only PKCS#8
 	// Ed25519 private key whose SPKI hash is pinned by the signed manifest.
 	FrostActivationHandshakePrivateKeyPath string
-	// FrostActivationReadinessSnapshotPath contains the exact independently
-	// reconciled retained FROST group inventory and durable signer-store identity.
-	FrostActivationReadinessSnapshotPath string
+	// FrostRetainedGroupJournalDirectory is the exclusively owned durable root
+	// whose distinct canonical lifecycle/DKG and quarantine sub-journals feed
+	// the activation handshake.
+	FrostRetainedGroupJournalDirectory string
+	// FrostRetainedGroupHistorySource is an independently authenticated,
+	// receipt-complete source. It must not share the primary Ethereum adapter's
+	// trust domain, endpoint, operator, or history store.
+	FrostRetainedGroupHistorySource FrostRetainedGroupHistorySource
 }
 
 // Initialize kicks off the TBTC by initializing internal state, ensuring
@@ -267,6 +272,7 @@ func Initialize(
 
 	if node.bitcoinBroadcastOutbox != nil {
 		if err := node.bitcoinBroadcastOutbox.start(ctx); err != nil {
+			_ = node.frostRetainedGroupJournal.close()
 			_ = node.bitcoinBroadcastOutbox.close()
 			return fmt.Errorf(
 				"cannot replay durable Bitcoin broadcast outbox before coordination: [%w]",
@@ -274,18 +280,28 @@ func Initialize(
 			)
 		}
 		if err := node.frostActivationHandshakeExporter.start(ctx); err != nil {
+			_ = node.frostRetainedGroupJournal.close()
 			_ = node.bitcoinBroadcastOutbox.close()
 			return fmt.Errorf(
 				"cannot start FROST activation handshake exporter: [%w]",
 				err,
 			)
 		}
+		go func() {
+			<-ctx.Done()
+			_ = node.frostActivationHandshakeExporter.close()
+			_ = node.frostRetainedGroupJournal.close()
+			_ = node.bitcoinBroadcastOutbox.close()
+		}()
 	}
 
 	err = node.runCoordinationLayer(ctx)
 	if err != nil {
 		if node.frostActivationHandshakeExporter != nil {
 			_ = node.frostActivationHandshakeExporter.close()
+		}
+		if node.frostRetainedGroupJournal != nil {
+			_ = node.frostRetainedGroupJournal.close()
 		}
 		if node.bitcoinBroadcastOutbox != nil {
 			_ = node.bitcoinBroadcastOutbox.close()

@@ -1313,6 +1313,8 @@ type FrostPreSignActivationRuntimeManifest struct {
 	Threshold                        uint64
 	MaximumGroupSize                 uint64
 	RetainedGroupInventoryProtocolID [32]byte
+	CanonicalJournal                 FrostRetainedGroupCanonicalJournalManifest
+	QuarantineJournal                FrostRetainedGroupQuarantineJournalManifest
 }
 
 type FrostPreSignActivationRuntimeManifestSource interface {

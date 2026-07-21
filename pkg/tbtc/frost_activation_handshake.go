@@ -27,10 +27,8 @@ import (
 )
 
 const (
-	frostActivationHandshakeSchema         = "tbtc-p2tr-production-activation-handshake/v1"
-	frostActivationReadinessSnapshotSchema = "tbtc-p2tr-frost-signer-readiness-snapshot/v1"
-	frostActivationInventorySchema         = "tbtc-p2tr-frost-wallet-group-inventory/v1"
-	frostActivationMaximumJSONSize         = 64 * 1024
+	frostActivationHandshakeSchema = "tbtc-p2tr-production-activation-handshake/v1"
+	frostActivationInventorySchema = "tbtc-p2tr-frost-wallet-group-inventory/v1"
 )
 
 type frostActivationEthereumPoint struct {
@@ -49,6 +47,20 @@ type frostActivationHandshakeRequest struct {
 	Challenge frostActivationChallenge `json:"challenge"`
 }
 
+type frostActivationCanonicalJournalState struct {
+	StoreID                   string                       `json:"storeID"`
+	StoreFingerprint          string                       `json:"storeFingerprint"`
+	ClusterFingerprint        string                       `json:"clusterFingerprint"`
+	Checkpoint                frostActivationEthereumPoint `json:"checkpoint"`
+	Current                   frostActivationEthereumPoint `json:"current"`
+	DescriptorSetHash         string                       `json:"descriptorSetHash"`
+	SourceTrustDomainID       string                       `json:"sourceTrustDomainID"`
+	SourceEndpointFingerprint string                       `json:"sourceEndpointFingerprint"`
+	SourceOperatorFingerprint string                       `json:"sourceOperatorFingerprint"`
+	Generation                uint64                       `json:"generation"`
+	Complete                  bool                         `json:"complete"`
+}
+
 type frostActivationWalletGroupInventory struct {
 	Schema                   string                       `json:"schema"`
 	Point                    frostActivationEthereumPoint `json:"point"`
@@ -62,31 +74,37 @@ type frostActivationWalletGroupInventory struct {
 	Complete                 bool                         `json:"complete"`
 }
 
-type frostActivationReadinessSnapshot struct {
-	Schema                         string                              `json:"schema"`
-	ManifestHash                   string                              `json:"manifestHash"`
-	DurableSessionStoreFingerprint string                              `json:"durableSessionStoreFingerprint"`
-	FrostWalletGroupInventory      frostActivationWalletGroupInventory `json:"frostWalletGroupInventory"`
+type frostActivationQuarantineJournalState struct {
+	ProtocolID             string `json:"protocolID"`
+	StoreID                string `json:"storeID"`
+	StoreFingerprint       string `json:"storeFingerprint"`
+	ClusterFingerprint     string `json:"clusterFingerprint"`
+	Root                   string `json:"root"`
+	Generation             uint64 `json:"generation"`
+	CurrentQuarantineCount uint64 `json:"currentQuarantineCount"`
+	Complete               bool   `json:"complete"`
 }
 
 type frostActivationHandshakeState struct {
-	ProtocolID                                string                              `json:"protocolID"`
-	ReservationProtocolID                     string                              `json:"reservationProtocolID"`
-	BitcoinOutboxProtocolID                   string                              `json:"bitcoinOutboxProtocolID"`
-	SigningPolicyHash                         string                              `json:"signingPolicyHash"`
-	DurableSessionStoreFingerprint            string                              `json:"durableSessionStoreFingerprint"`
-	CompleteRouterAddress                     string                              `json:"completeRouterAddress"`
-	AuthorizationRegistryAddress              string                              `json:"authorizationRegistryAddress"`
-	Threshold                                 uint64                              `json:"threshold"`
-	MaximumGroupSize                          uint64                              `json:"maximumGroupSize"`
-	RetainedGroupInventoryProtocolID          string                              `json:"retainedGroupInventoryProtocolID"`
-	FrostWalletGroupInventory                 frostActivationWalletGroupInventory `json:"frostWalletGroupInventory"`
-	FinalizedReservationReadbackEnforced      bool                                `json:"finalizedReservationReadbackEnforced"`
-	ExactTransactionAuthorizationRootEnforced bool                                `json:"exactTransactionAuthorizationRootEnforced"`
-	NonceShareGateEnforced                    bool                                `json:"nonceShareGateEnforced"`
-	DurableBitcoinOutboxRecovered             bool                                `json:"durableBitcoinOutboxRecovered"`
-	QuarantineFailClosed                      bool                                `json:"quarantineFailClosed"`
-	Healthy                                   bool                                `json:"healthy"`
+	ProtocolID                                string                                `json:"protocolID"`
+	ReservationProtocolID                     string                                `json:"reservationProtocolID"`
+	BitcoinOutboxProtocolID                   string                                `json:"bitcoinOutboxProtocolID"`
+	SigningPolicyHash                         string                                `json:"signingPolicyHash"`
+	DurableSessionStoreFingerprint            string                                `json:"durableSessionStoreFingerprint"`
+	CompleteRouterAddress                     string                                `json:"completeRouterAddress"`
+	AuthorizationRegistryAddress              string                                `json:"authorizationRegistryAddress"`
+	Threshold                                 uint64                                `json:"threshold"`
+	MaximumGroupSize                          uint64                                `json:"maximumGroupSize"`
+	RetainedGroupInventoryProtocolID          string                                `json:"retainedGroupInventoryProtocolID"`
+	FrostWalletGroupInventory                 frostActivationWalletGroupInventory   `json:"frostWalletGroupInventory"`
+	CanonicalJournal                          frostActivationCanonicalJournalState  `json:"canonicalJournal"`
+	QuarantineJournal                         frostActivationQuarantineJournalState `json:"quarantineJournal"`
+	FinalizedReservationReadbackEnforced      bool                                  `json:"finalizedReservationReadbackEnforced"`
+	ExactTransactionAuthorizationRootEnforced bool                                  `json:"exactTransactionAuthorizationRootEnforced"`
+	NonceShareGateEnforced                    bool                                  `json:"nonceShareGateEnforced"`
+	DurableBitcoinOutboxRecovered             bool                                  `json:"durableBitcoinOutboxRecovered"`
+	QuarantineFailClosed                      bool                                  `json:"quarantineFailClosed"`
+	Healthy                                   bool                                  `json:"healthy"`
 }
 
 type frostActivationHandshakePayload struct {
@@ -105,12 +123,12 @@ type frostActivationSignedHandshake struct {
 
 type frostActivationHandshakeExporter struct {
 	endpoint      *url.URL
-	readinessPath string
 	privateKey    ed25519.PrivateKey
 	publicKeySPKI string
 	manifest      FrostPreSignActivationRuntimeManifest
 	pointVerifier FrostPreSignActivationPointVerifier
 	outbox        *bitcoinBroadcastOutbox
+	journal       *frostRetainedGroupJournal
 
 	mutex    sync.Mutex
 	listener net.Listener
@@ -121,22 +139,29 @@ type frostActivationHandshakeExporter struct {
 func newFrostActivationHandshakeExporter(
 	endpoint string,
 	privateKeyPath string,
-	readinessPath string,
 	manifest FrostPreSignActivationRuntimeManifest,
 	pointVerifier FrostPreSignActivationPointVerifier,
 	outbox *bitcoinBroadcastOutbox,
+	journal *frostRetainedGroupJournal,
 ) (*frostActivationHandshakeExporter, error) {
 	parsedEndpoint, err := validateFrostActivationHandshakeEndpoint(endpoint)
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(readinessPath) == "" {
-		return nil, fmt.Errorf("FROST activation readiness snapshot path is empty")
-	}
+	durableSessionStoreFingerprint, durableSessionStoreFingerprintErr :=
+		parseFrostActivationHex32(manifest.DurableSessionStoreFingerprint)
 	if manifest.ManifestHash == [32]byte{} ||
 		manifest.AttestationSignerKeyHash == [32]byte{} ||
 		manifest.Threshold != 51 || manifest.MaximumGroupSize != 100 ||
-		pointVerifier == nil || outbox == nil {
+		manifest.CanonicalJournal.StoreFingerprint == [32]byte{} ||
+		manifest.QuarantineJournal.ProtocolID == [32]byte{} ||
+		manifest.CanonicalJournal.StoreID == manifest.QuarantineJournal.StoreID ||
+		manifest.CanonicalJournal.StoreFingerprint == manifest.QuarantineJournal.StoreFingerprint ||
+		manifest.CanonicalJournal.ClusterFingerprint == manifest.QuarantineJournal.ClusterFingerprint ||
+		durableSessionStoreFingerprintErr != nil || durableSessionStoreFingerprint == [32]byte{} ||
+		durableSessionStoreFingerprint == manifest.CanonicalJournal.StoreFingerprint ||
+		durableSessionStoreFingerprint == manifest.QuarantineJournal.StoreFingerprint ||
+		pointVerifier == nil || outbox == nil || journal == nil {
 		return nil, fmt.Errorf("FROST activation handshake dependencies are invalid")
 	}
 	privateKey, publicKeyDER, err := loadFrostActivationAttestationKey(privateKeyPath)
@@ -148,15 +173,12 @@ func newFrostActivationHandshakeExporter(
 	}
 	exporter := &frostActivationHandshakeExporter{
 		endpoint:      parsedEndpoint,
-		readinessPath: readinessPath,
 		privateKey:    privateKey,
 		publicKeySPKI: base64.StdEncoding.EncodeToString(publicKeyDER),
 		manifest:      manifest,
 		pointVerifier: pointVerifier,
 		outbox:        outbox,
-	}
-	if _, err := exporter.readReadinessSnapshot(); err != nil {
-		return nil, err
+		journal:       journal,
 	}
 	return exporter, nil
 }
@@ -221,59 +243,6 @@ func readSecureFrostActivationFile(filePath string, limit int64) ([]byte, error)
 		return nil, fmt.Errorf("secure activation file size is invalid")
 	}
 	return data, nil
-}
-
-func (fahe *frostActivationHandshakeExporter) readReadinessSnapshot() (
-	*frostActivationReadinessSnapshot,
-	error,
-) {
-	data, err := readSecureFrostActivationFile(
-		fahe.readinessPath,
-		frostActivationMaximumJSONSize,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("cannot read FROST readiness snapshot: [%w]", err)
-	}
-	snapshot := &frostActivationReadinessSnapshot{}
-	if err := decodeStrictFrostActivationJSON(data, snapshot); err != nil {
-		return nil, fmt.Errorf("cannot decode FROST readiness snapshot: [%w]", err)
-	}
-	if snapshot.Schema != frostActivationReadinessSnapshotSchema ||
-		snapshot.ManifestHash != frostActivationHex32(fahe.manifest.ManifestHash) ||
-		snapshot.DurableSessionStoreFingerprint != fahe.manifest.DurableSessionStoreFingerprint {
-		return nil, fmt.Errorf("FROST readiness snapshot differs from signed activation manifest")
-	}
-	if err := validateFrostActivationInventory(snapshot.FrostWalletGroupInventory); err != nil {
-		return nil, err
-	}
-	return snapshot, nil
-}
-
-func validateFrostActivationInventory(
-	inventory frostActivationWalletGroupInventory,
-) error {
-	if inventory.Schema != frostActivationInventorySchema || !inventory.Complete ||
-		inventory.MembershipAmbiguityCount != 0 || inventory.GroupSizeViolationCount != 0 ||
-		inventory.Point.BlockNumber == 0 {
-		return fmt.Errorf("FROST retained-group inventory is incomplete or ambiguous")
-	}
-	if _, err := parseFrostActivationHex32(inventory.Point.BlockHash); err != nil {
-		return fmt.Errorf("invalid FROST inventory block hash: [%w]", err)
-	}
-	root, err := parseFrostActivationHex32(inventory.InventoryRoot)
-	if err != nil || root == [32]byte{} {
-		return fmt.Errorf("invalid FROST inventory root")
-	}
-	if inventory.WalletCount == 0 {
-		if inventory.MinimumActualGroupSize != 0 || inventory.MaximumActualGroupSize != 0 {
-			return fmt.Errorf("empty FROST inventory has nonzero group bounds")
-		}
-	} else if inventory.MinimumActualGroupSize < 51 ||
-		inventory.MinimumActualGroupSize > inventory.MaximumActualGroupSize ||
-		inventory.MaximumActualGroupSize > 100 {
-		return fmt.Errorf("FROST inventory group bounds are invalid")
-	}
-	return nil
 }
 
 func (fahe *frostActivationHandshakeExporter) start(ctx context.Context) error {
@@ -395,19 +364,31 @@ func (fahe *frostActivationHandshakeExporter) attest(
 	if err != nil || request.Challenge.EthereumPoint.BlockNumber == 0 {
 		return nil, fmt.Errorf("FROST activation challenge Ethereum point is invalid")
 	}
-	snapshot, err := fahe.readReadinessSnapshot()
-	if err != nil {
-		return nil, err
-	}
-	if snapshot.FrostWalletGroupInventory.Point != request.Challenge.EthereumPoint {
-		return nil, fmt.Errorf("FROST readiness inventory is not at the challenged point")
-	}
 	finality := FrostPreSignFinality{
 		BlockNumber: request.Challenge.EthereumPoint.BlockNumber,
 		BlockHash:   blockHash,
 	}
 	if err := fahe.pointVerifier.VerifyFrostPreSignActivationPoint(ctx, finality); err != nil {
 		return nil, fmt.Errorf("cannot verify FROST activation point: [%w]", err)
+	}
+	journalSnapshot, err := fahe.journal.reconcile(ctx, finality)
+	if err != nil {
+		return nil, fmt.Errorf("cannot reconcile canonical FROST retained groups: [%w]", err)
+	}
+	journalManifest := fahe.manifest.CanonicalJournal
+	quarantineManifest := fahe.manifest.QuarantineJournal
+	if !journalSnapshot.Complete || journalSnapshot.CurrentPoint != finality ||
+		journalSnapshot.StoreID != journalManifest.StoreID ||
+		journalSnapshot.StoreFingerprint != journalManifest.StoreFingerprint ||
+		journalSnapshot.ClusterFingerprint != journalManifest.ClusterFingerprint ||
+		journalSnapshot.SnapshotGeneration < journalManifest.MinimumGeneration ||
+		journalSnapshot.QuarantineProtocolID != quarantineManifest.ProtocolID ||
+		journalSnapshot.QuarantineStoreID != quarantineManifest.StoreID ||
+		journalSnapshot.QuarantineStoreFingerprint != quarantineManifest.StoreFingerprint ||
+		journalSnapshot.QuarantineClusterFingerprint != quarantineManifest.ClusterFingerprint ||
+		journalSnapshot.QuarantineGeneration < quarantineManifest.MinimumGeneration ||
+		journalSnapshot.QuarantineRoot == [32]byte{} || journalSnapshot.QuarantineCount != 0 {
+		return nil, fmt.Errorf("canonical FROST retained-group journal is not activation-ready")
 	}
 	outboxSnapshot, err := fahe.outbox.activationSnapshot()
 	if err != nil {
@@ -417,18 +398,58 @@ func (fahe *frostActivationHandshakeExporter) attest(
 		outboxSnapshot.QuarantineCount != 0 {
 		return nil, fmt.Errorf("durable Bitcoin outbox is not activation-ready")
 	}
+	if err := fahe.pointVerifier.VerifyFrostPreSignActivationPoint(ctx, finality); err != nil {
+		return nil, fmt.Errorf("FROST activation point changed during readiness reconciliation: [%w]", err)
+	}
 	state := frostActivationHandshakeState{
-		ProtocolID:                                frostActivationHex32(fahe.manifest.SignerProtocolID),
-		ReservationProtocolID:                     frostActivationHex32(fahe.manifest.ReservationProtocolID),
-		BitcoinOutboxProtocolID:                   frostActivationHex32(fahe.manifest.BitcoinOutboxProtocolID),
-		SigningPolicyHash:                         frostActivationHex32(fahe.manifest.SigningPolicyHash),
-		DurableSessionStoreFingerprint:            snapshot.DurableSessionStoreFingerprint,
-		CompleteRouterAddress:                     frostActivationHex20(fahe.manifest.CompleteRouterAddress),
-		AuthorizationRegistryAddress:              frostActivationHex20(fahe.manifest.AuthorizationRegistryAddress),
-		Threshold:                                 fahe.manifest.Threshold,
-		MaximumGroupSize:                          fahe.manifest.MaximumGroupSize,
-		RetainedGroupInventoryProtocolID:          frostActivationHex32(fahe.manifest.RetainedGroupInventoryProtocolID),
-		FrostWalletGroupInventory:                 snapshot.FrostWalletGroupInventory,
+		ProtocolID:                       frostActivationHex32(fahe.manifest.SignerProtocolID),
+		ReservationProtocolID:            frostActivationHex32(fahe.manifest.ReservationProtocolID),
+		BitcoinOutboxProtocolID:          frostActivationHex32(fahe.manifest.BitcoinOutboxProtocolID),
+		SigningPolicyHash:                frostActivationHex32(fahe.manifest.SigningPolicyHash),
+		DurableSessionStoreFingerprint:   fahe.manifest.DurableSessionStoreFingerprint,
+		CompleteRouterAddress:            frostActivationHex20(fahe.manifest.CompleteRouterAddress),
+		AuthorizationRegistryAddress:     frostActivationHex20(fahe.manifest.AuthorizationRegistryAddress),
+		Threshold:                        fahe.manifest.Threshold,
+		MaximumGroupSize:                 fahe.manifest.MaximumGroupSize,
+		RetainedGroupInventoryProtocolID: frostActivationHex32(fahe.manifest.RetainedGroupInventoryProtocolID),
+		FrostWalletGroupInventory: frostActivationWalletGroupInventory{
+			Schema:                   frostActivationInventorySchema,
+			Point:                    request.Challenge.EthereumPoint,
+			SnapshotGeneration:       journalSnapshot.SnapshotGeneration,
+			InventoryRoot:            frostActivationHex32(journalSnapshot.InventoryRoot),
+			WalletCount:              journalSnapshot.WalletCount,
+			MinimumActualGroupSize:   journalSnapshot.MinimumActualGroupSize,
+			MaximumActualGroupSize:   journalSnapshot.MaximumActualGroupSize,
+			MembershipAmbiguityCount: 0,
+			GroupSizeViolationCount:  0,
+			Complete:                 true,
+		},
+		CanonicalJournal: frostActivationCanonicalJournalState{
+			StoreID:            journalSnapshot.StoreID,
+			StoreFingerprint:   frostActivationHex32(journalSnapshot.StoreFingerprint),
+			ClusterFingerprint: frostActivationHex32(journalSnapshot.ClusterFingerprint),
+			Checkpoint: frostActivationEthereumPoint{
+				BlockNumber: journalManifest.Checkpoint.BlockNumber,
+				BlockHash:   frostActivationHex32(journalManifest.Checkpoint.BlockHash),
+			},
+			Current:                   request.Challenge.EthereumPoint,
+			DescriptorSetHash:         frostActivationHex32(journalManifest.DescriptorSetHash),
+			SourceTrustDomainID:       journalManifest.SourceTrustDomainID,
+			SourceEndpointFingerprint: frostActivationHex32(journalManifest.SourceEndpointFingerprint),
+			SourceOperatorFingerprint: frostActivationHex32(journalManifest.SourceOperatorFingerprint),
+			Generation:                journalSnapshot.SnapshotGeneration,
+			Complete:                  true,
+		},
+		QuarantineJournal: frostActivationQuarantineJournalState{
+			ProtocolID:             frostActivationHex32(journalSnapshot.QuarantineProtocolID),
+			StoreID:                journalSnapshot.QuarantineStoreID,
+			StoreFingerprint:       frostActivationHex32(journalSnapshot.QuarantineStoreFingerprint),
+			ClusterFingerprint:     frostActivationHex32(journalSnapshot.QuarantineClusterFingerprint),
+			Root:                   frostActivationHex32(journalSnapshot.QuarantineRoot),
+			Generation:             journalSnapshot.QuarantineGeneration,
+			CurrentQuarantineCount: journalSnapshot.QuarantineCount,
+			Complete:               true,
+		},
 		FinalizedReservationReadbackEnforced:      true,
 		ExactTransactionAuthorizationRootEnforced: true,
 		NonceShareGateEnforced:                    true,
