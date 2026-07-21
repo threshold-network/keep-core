@@ -717,6 +717,24 @@ func newNode(
 				"cannot enable FROST activation handshake without an independent retained-group history source",
 			)
 		}
+		evidenceBinder, ok := config.FrostRetainedGroupHistorySource.(FrostRetainedGroupActivationEvidenceBinder)
+		if !ok {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot enable FROST activation handshake without a manifest-bound retained-group evidence source",
+			)
+		}
+		if err := evidenceBinder.BindFrostRetainedGroupActivationEvidence(
+			verifiedActivationProfile,
+			runtimeManifest.ManifestHash,
+			runtimeManifest.CanonicalJournal.DescriptorSetHash,
+		); err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot bind retained-group evidence to the authenticated activation manifest: [%w]",
+				err,
+			)
+		}
 		journal, err := newFrostRetainedGroupJournal(
 			config.FrostRetainedGroupJournalDirectory,
 			runtimeManifest.ManifestHash,

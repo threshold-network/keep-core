@@ -165,7 +165,12 @@ type Config struct {
 	// FrostRetainedGroupHistorySource is an independently authenticated,
 	// receipt-complete source. It must not share the primary Ethereum adapter's
 	// trust domain, endpoint, operator, or history store.
-	FrostRetainedGroupHistorySource FrostRetainedGroupHistorySource
+	FrostRetainedGroupHistorySource FrostRetainedGroupHistorySource `mapstructure:"-"`
+	// FrostRetainedGroupHistory configures the production signed, paginated
+	// retained-group export and its independent finalized Ethereum verifier.
+	// The start command constructs FrostRetainedGroupHistorySource from this
+	// configuration before TBTC initialization whenever FROST activation is on.
+	FrostRetainedGroupHistory FrostRetainedGroupHistorySourceConfig
 	// FrostNativeSignerAnchorURL is the exact authenticated checkpoint-service
 	// endpoint. HTTPS uses normal PKIX validation plus the manifest-pinned leaf
 	// SPKI. Plain HTTP is accepted only for a canonical numeric loopback host.

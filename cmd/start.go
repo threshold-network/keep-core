@@ -162,6 +162,25 @@ func start(cmd *cobra.Command) error {
 			btcChain,
 		)
 
+		var retainedGroupHistorySource interface{ Close() }
+		if clientConfig.Tbtc.EnableFrostPreSignAuthorization {
+			source, err := tbtc.NewFrostRetainedGroupHistorySource(
+				ctx,
+				clientConfig.Tbtc.FrostRetainedGroupHistory,
+				clientConfig.Ethereum.URL,
+				uint64(clientConfig.Ethereum.Network.ChainID()),
+			)
+			if err != nil {
+				return fmt.Errorf(
+					"cannot initialize independent FROST retained-group history source: [%w]",
+					err,
+				)
+			}
+			retainedGroupHistorySource = source
+			defer retainedGroupHistorySource.Close()
+			clientConfig.Tbtc.FrostRetainedGroupHistorySource = source
+		}
+
 		err = tbtc.Initialize(
 			ctx,
 			tbtcChain,

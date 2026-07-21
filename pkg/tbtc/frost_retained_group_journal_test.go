@@ -200,6 +200,9 @@ func newJournalTestFixture(t *testing.T) *journalTestFixture {
 		WalletPublicKeyHash:     walletPKH,
 		OperatorIDs:             append([]uint32{}, operatorIDs...),
 		RetainedGroupHash:       [32]byte{0x93},
+		DkgResultHash:           [32]byte{0x94},
+		DkgSubmissionPoint:      FrostRetainedGroupEventPoint{BlockNumber: 2, BlockHash: [32]byte{0x02}, TransactionHash: [32]byte{0xa1}, TransactionIndex: 0, LogIndex: 1},
+		DkgApprovalPoint:        FrostRetainedGroupEventPoint{BlockNumber: 2, BlockHash: [32]byte{0x02}, TransactionHash: [32]byte{0xa2}, TransactionIndex: 1, LogIndex: 3},
 		CreationPoint:           FrostRetainedGroupEventPoint{BlockNumber: 2, BlockHash: [32]byte{0x02}, TransactionHash: [32]byte{0xa2}, TransactionIndex: 1, LogIndex: 4},
 		BridgeRegistrationPoint: FrostRetainedGroupEventPoint{BlockNumber: 2, BlockHash: [32]byte{0x02}, TransactionHash: [32]byte{0xa2}, TransactionIndex: 1, LogIndex: 5},
 	}
@@ -314,7 +317,7 @@ func TestFrostRetainedGroupJournal_ReconcilesAndRejectsRewrittenHistory(
 		t.Fatalf("unexpected journal snapshot: %+v", snapshot)
 	}
 
-	fixture.source.mutations[0].OperatorIDs[0] = 51
+	fixture.source.mutations[0].OperatorIDs[0] = 52
 	if _, err := journal.reconcile(context.Background(), fixture.target); err == nil ||
 		!strings.Contains(err.Error(), "rewrote, omitted, or reordered") {
 		t.Fatalf("expected canonical prefix rewrite failure, got [%v]", err)
@@ -525,6 +528,26 @@ func TestApplyFrostRetainedGroupMutations_EnforcesLifecycleAndRegistryClosure(
 		[]FrostRetainedGroupMutation{fixture.admission, directClose},
 	); err == nil {
 		t.Fatal("expected Live -> Closed transition to fail")
+	}
+}
+
+func TestApplyFrostRetainedGroupMutations_RejectsDuplicateAdmissionMember(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	duplicate := fixture.admission
+	duplicate.OperatorIDs = append([]uint32{}, fixture.admission.OperatorIDs...)
+	duplicate.OperatorIDs[1] = duplicate.OperatorIDs[0]
+	state := frostRetainedGroupJournalState{
+		Schema:       frostRetainedGroupJournalStateSchema,
+		CurrentPoint: fixture.manifest.Checkpoint,
+		Wallets:      []frostRetainedGroupWalletState{},
+	}
+	if err := applyFrostRetainedGroupMutations(
+		&state,
+		[]FrostRetainedGroupMutation{duplicate},
+	); err == nil || !strings.Contains(err.Error(), "duplicate operator ID") {
+		t.Fatalf("expected duplicate admission member rejection, got [%v]", err)
 	}
 }
 

@@ -93,6 +93,17 @@ func (readiness *testFrostProductionSignerReadiness) verifyFrostProductionSigner
 	}, nil
 }
 
+func (source *testFrostRetainedGroupHistorySource) BindFrostRetainedGroupActivationEvidence(
+	_ FrostPreSignActivationProfile,
+	_ [32]byte,
+	descriptorSetHash [32]byte,
+) error {
+	if descriptorSetHash != source.manifest.DescriptorSetHash {
+		return fmt.Errorf("descriptor set mismatch")
+	}
+	return nil
+}
+
 func (source *testFrostRetainedGroupHistorySource) Identity(
 	context.Context,
 ) (FrostRetainedGroupHistoryIdentity, error) {

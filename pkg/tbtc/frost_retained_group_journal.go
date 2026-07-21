@@ -130,6 +130,9 @@ type FrostRetainedGroupMutation struct {
 	WalletPublicKeyHash     [20]byte                       `json:"walletPublicKeyHash"`
 	OperatorIDs             []uint32                       `json:"operatorIDs,omitempty"`
 	RetainedGroupHash       [32]byte                       `json:"retainedGroupHash,omitempty"`
+	DkgResultHash           [32]byte                       `json:"dkgResultHash,omitempty"`
+	DkgSubmissionPoint      FrostRetainedGroupEventPoint   `json:"dkgSubmissionPoint,omitempty"`
+	DkgApprovalPoint        FrostRetainedGroupEventPoint   `json:"dkgApprovalPoint,omitempty"`
 	CreationPoint           FrostRetainedGroupEventPoint   `json:"creationPoint,omitempty"`
 	BridgeRegistrationPoint FrostRetainedGroupEventPoint   `json:"bridgeRegistrationPoint,omitempty"`
 	QuarantineID            [32]byte                       `json:"quarantineID,omitempty"`
@@ -1248,18 +1251,30 @@ func applyFrostRetainedGroupMutations(
 		case FrostRetainedGroupAdmissionMutation:
 			if mutation.WalletID == [32]byte{} || mutation.WalletPublicKeyHash == [20]byte{} ||
 				len(mutation.OperatorIDs) < 51 || len(mutation.OperatorIDs) > 100 ||
-				mutation.RetainedGroupHash == [32]byte{} ||
+				mutation.RetainedGroupHash == [32]byte{} || mutation.DkgResultHash == [32]byte{} ||
+				!mutation.DkgSubmissionPoint.valid() || !mutation.DkgApprovalPoint.valid() ||
 				!mutation.CreationPoint.valid() || !mutation.BridgeRegistrationPoint.valid() ||
 				mutation.Point != mutation.BridgeRegistrationPoint ||
+				compareFrostRetainedGroupEventPoints(mutation.DkgSubmissionPoint, mutation.DkgApprovalPoint) >= 0 ||
+				!sameFrostRetainedGroupTransaction(mutation.DkgApprovalPoint, mutation.CreationPoint) ||
+				compareFrostRetainedGroupEventPoints(mutation.DkgApprovalPoint, mutation.CreationPoint) >= 0 ||
 				!sameFrostRetainedGroupTransaction(mutation.CreationPoint, mutation.BridgeRegistrationPoint) ||
 				compareFrostRetainedGroupEventPoints(mutation.CreationPoint, mutation.BridgeRegistrationPoint) >= 0 ||
 				wallet.WalletID != [32]byte{} || mutation.QuarantineID != [32]byte{} {
 				return fmt.Errorf("invalid or duplicate FROST retained-group admission")
 			}
-			for _, operatorID := range mutation.OperatorIDs {
-				if operatorID == 0 {
-					return fmt.Errorf("FROST retained-group admission contains zero operator ID")
+			for _, existingWallet := range wallets {
+				if existingWallet.WalletID != [32]byte{} &&
+					existingWallet.WalletPublicKeyHash == mutation.WalletPublicKeyHash {
+					return fmt.Errorf("FROST retained-group admission reuses a wallet public-key hash")
 				}
+			}
+			seenOperatorIDs := make(map[uint32]bool, len(mutation.OperatorIDs))
+			for _, operatorID := range mutation.OperatorIDs {
+				if operatorID == 0 || seenOperatorIDs[operatorID] {
+					return fmt.Errorf("FROST retained-group admission contains zero or duplicate operator ID")
+				}
+				seenOperatorIDs[operatorID] = true
 			}
 			wallets[mutation.WalletID] = frostRetainedGroupWalletState{
 				WalletID:                mutation.WalletID,
