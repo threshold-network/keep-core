@@ -17,6 +17,7 @@ type NativeExecutionFFISigningRequest struct {
 	Message             *big.Int
 	SessionID           string
 	RoastSessionID      string
+	AuthorizationGuard  func(context.Context) error
 	SigningIntent       *SigningIntent
 	MemberIndex         group.MemberIndex
 	GroupSize           int
@@ -105,6 +106,7 @@ func (nefea *nativeExecutionFFIExecutorAdapter) Execute(
 		Message:             request.Message,
 		SessionID:           request.SessionID,
 		RoastSessionID:      request.RoastSessionID,
+		AuthorizationGuard:  request.AuthorizationGuard,
 		SigningIntent:       cloneSigningIntent(request.SigningIntent),
 		MemberIndex:         request.MemberIndex,
 		GroupSize:           request.GroupSize,
@@ -153,6 +155,9 @@ func (nefea *nativeExecutionFFIExecutorAdapter) Execute(
 		return nil, orchErr
 	}
 	if interactiveSignature != nil {
+		if err := validateAuthorizationGuard(ctx, request.AuthorizationGuard); err != nil {
+			return nil, err
+		}
 		return &Result{
 			Signature: interactiveSignature,
 			Attempt:   cloneAttempt(request.Attempt),
@@ -175,6 +180,9 @@ func (nefea *nativeExecutionFFIExecutorAdapter) Execute(
 		)
 	}
 
+	if err := validateAuthorizationGuard(ctx, request.AuthorizationGuard); err != nil {
+		return nil, err
+	}
 	signature, err := nefea.primitive.Sign(ctx, logger, ffiRequest)
 	if err != nil {
 		return nil, err
@@ -182,6 +190,9 @@ func (nefea *nativeExecutionFFIExecutorAdapter) Execute(
 
 	if signature == nil {
 		return nil, fmt.Errorf("native FFI signing primitive returned nil signature")
+	}
+	if err := validateAuthorizationGuard(ctx, request.AuthorizationGuard); err != nil {
+		return nil, err
 	}
 
 	return &Result{

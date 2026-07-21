@@ -110,6 +110,7 @@ func newMovingFundsAction(
 		signingExecutor,
 		waitForBlockFn,
 	)
+	transactionExecutor.action = ActionMovingFunds
 
 	return &movingFundsAction{
 		logger:                           logger,
@@ -235,6 +236,12 @@ func (mfa *movingFundsAction) execute() error {
 		return fmt.Errorf("invalid proposal expiry block")
 	}
 
+	mfa.transactionExecutor.frostPreSignActionContext = &FrostPreSignActionContext{
+		MovingFunds: &FrostPreSignMovingFundsActionContext{
+			Proposal: mfa.proposal,
+			MainUtxo: walletMainUtxo,
+		},
+	}
 	movingFundsTx, err := mfa.transactionExecutor.signTransaction(
 		signTxLogger,
 		unsignedMovingFundsTx,

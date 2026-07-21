@@ -678,6 +678,33 @@ func TestCoordinationExecutor_GetActionsChecklist(t *testing.T) {
 	}
 }
 
+func TestCoordinationExecutor_GetActionsChecklist_SuppressesFrostHeartbeat(
+	t *testing.T,
+) {
+	window := newCoordinationWindow(3600)
+	seed := sha256.Sum256(
+		big.NewInt(int64(window.coordinationBlock) + 2).Bytes(),
+	)
+	executor := &coordinationExecutor{suppressHeartbeat: true}
+	checklist := executor.getActionsChecklist(
+		window.index(),
+		seed,
+		window.coordinationBlock,
+	)
+	if slices.Contains(checklist, ActionHeartbeat) {
+		t.Fatal("transaction-only FROST coordination proposed a heartbeat")
+	}
+	expected := []WalletActionType{
+		ActionRedemption,
+		ActionDepositSweep,
+		ActionMovedFundsSweep,
+		ActionMovingFunds,
+	}
+	if diff := deep.Equal(checklist, expected); diff != nil {
+		t.Fatalf("unexpected FROST action checklist: [%v]", diff)
+	}
+}
+
 // TestCoordinationExecutor_GetActionsChecklist_PostActivation verifies
 // post-activation behavior where DepositSweep and MovedFundsSweep appear
 // on every coordination window, MovingFunds remains gated to every 4th

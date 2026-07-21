@@ -315,6 +315,27 @@ type taprootPolicyBoundWalletSigningExecutor interface {
 	) ([]*frost.Signature, error)
 }
 
+type authorizedTaprootPolicyBoundWalletSigningExecutor interface {
+	signBatchWithAuthorizedTaprootTransaction(
+		ctx context.Context,
+		messages []*big.Int,
+		taprootMerkleRoots []*[32]byte,
+		startBlock uint64,
+		unsignedTx *bitcoin.TransactionBuilder,
+		authorizationID [32]byte,
+		authorizationGuard func(context.Context) error,
+	) ([]*frost.Signature, error)
+}
+
+type frostTransactionSafetyProvider interface {
+	frostPreSignGate() frostPreSignAuthorizationGate
+	bitcoinOutbox() *bitcoinBroadcastOutbox
+}
+
+type signingCurrentBlockProvider interface {
+	currentSigningBlock() (uint64, error)
+}
+
 // walletTransactionExecutor is a component allowing to sign and broadcast
 // wallet Bitcoin transactions.
 type walletTransactionExecutor struct {
@@ -324,6 +345,122 @@ type walletTransactionExecutor struct {
 	signingExecutor walletSigningExecutor
 
 	waitForBlockFn waitForBlockFn
+
+	action                            WalletActionType
+	frostPreSignActionContext         *FrostPreSignActionContext
+	preSignAuthorizationGate          frostPreSignAuthorizationGate
+	broadcastOutbox                   *bitcoinBroadcastOutbox
+	frostAuthorizationMonitorInterval time.Duration
+}
+
+const defaultFrostAuthorizationMonitorInterval = time.Second
+
+// frostPreSignAuthorizationMonitor keeps the pinned Ethereum authorization
+// live for the entire native signing window. All explicit nonce/share guards
+// and the periodic monitor serialize through validationMutex so a backend never
+// observes overlapping reads for one authorization.
+type frostPreSignAuthorizationMonitor struct {
+	gate          frostPreSignAuthorizationGate
+	authorization *frostPreSignAuthorization
+	ctx           context.Context
+	cancel        context.CancelFunc
+	interval      time.Duration
+
+	validationMutex  sync.Mutex
+	errorMutex       sync.Mutex
+	authorizationErr error
+	done             chan struct{}
+}
+
+func newFrostPreSignAuthorizationMonitor(
+	parent context.Context,
+	gate frostPreSignAuthorizationGate,
+	authorization *frostPreSignAuthorization,
+	interval time.Duration,
+) *frostPreSignAuthorizationMonitor {
+	if interval <= 0 {
+		interval = defaultFrostAuthorizationMonitorInterval
+	}
+	ctx, cancel := context.WithCancel(parent)
+	monitor := &frostPreSignAuthorizationMonitor{
+		gate:          gate,
+		authorization: authorization,
+		ctx:           ctx,
+		cancel:        cancel,
+		interval:      interval,
+		done:          make(chan struct{}),
+	}
+	go monitor.run()
+	return monitor
+}
+
+func (fpsam *frostPreSignAuthorizationMonitor) run() {
+	defer close(fpsam.done)
+	ticker := time.NewTicker(fpsam.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-fpsam.ctx.Done():
+			return
+		case <-ticker.C:
+			_ = fpsam.revalidate(fpsam.ctx)
+		}
+	}
+}
+
+func (fpsam *frostPreSignAuthorizationMonitor) revalidate(
+	ctx context.Context,
+) error {
+	if err := fpsam.err(); err != nil {
+		return err
+	}
+	fpsam.validationMutex.Lock()
+	defer fpsam.validationMutex.Unlock()
+	if err := fpsam.err(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := fpsam.gate.revalidate(ctx, fpsam.authorization); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		authorizationErr := fmt.Errorf(
+			"FROST finalized authorization changed during native signing: [%w]",
+			err,
+		)
+		fpsam.errorMutex.Lock()
+		if fpsam.authorizationErr == nil {
+			fpsam.authorizationErr = authorizationErr
+		}
+		authorizationErr = fpsam.authorizationErr
+		fpsam.errorMutex.Unlock()
+		fpsam.cancel()
+		return authorizationErr
+	}
+	return nil
+}
+
+func (fpsam *frostPreSignAuthorizationMonitor) validateNow() error {
+	return fpsam.revalidate(fpsam.ctx)
+}
+
+func (fpsam *frostPreSignAuthorizationMonitor) guard(
+	ctx context.Context,
+) error {
+	return fpsam.revalidate(ctx)
+}
+
+func (fpsam *frostPreSignAuthorizationMonitor) err() error {
+	fpsam.errorMutex.Lock()
+	defer fpsam.errorMutex.Unlock()
+	return fpsam.authorizationErr
+}
+
+func (fpsam *frostPreSignAuthorizationMonitor) stop() {
+	fpsam.cancel()
+	<-fpsam.done
 }
 
 var buildTaprootTxViaNativeSignerFn = buildTaprootTxViaNativeSigner
@@ -337,12 +474,17 @@ func newWalletTransactionExecutor(
 	signingExecutor walletSigningExecutor,
 	waitForBlockFn waitForBlockFn,
 ) *walletTransactionExecutor {
-	return &walletTransactionExecutor{
+	executor := &walletTransactionExecutor{
 		btcChain:        btcChain,
 		executingWallet: executingWallet,
 		signingExecutor: signingExecutor,
 		waitForBlockFn:  waitForBlockFn,
 	}
+	if provider, ok := signingExecutor.(frostTransactionSafetyProvider); ok {
+		executor.preSignAuthorizationGate = provider.frostPreSignGate()
+		executor.broadcastOutbox = provider.bitcoinOutbox()
+	}
+	return executor
 }
 
 // signTransaction performs signing of an unsigned Bitcoin transaction
@@ -397,52 +539,164 @@ func (wte *walletTransactionExecutor) signTransaction(
 		)
 	}
 
-	signTxLogger.Infof("signing transaction's sig hashes")
-
-	signingCtx, cancelSigningCtx := withCancelOnBlock(
-		context.Background(),
-		signingTimeoutBlock,
-		wte.waitForBlockFn,
-	)
-	defer cancelSigningCtx()
-
 	var signatures []*frost.Signature
+	var authorization *frostPreSignAuthorization
+	var authorizationMonitor *frostPreSignAuthorizationMonitor
+	effectiveSigningStartBlock := signingStartBlock
 	taprootMerkleRoots := unsignedTx.TaprootKeyPathInputMerkleRoots()
-	policyBoundSigningExecutor, policyBindingAvailable :=
-		wte.signingExecutor.(taprootPolicyBoundWalletSigningExecutor)
+
 	if usesSchnorrSignatures {
-		if !policyBindingAvailable {
-			return nil, fmt.Errorf(
-				"Schnorr signing executor does not support transaction policy binding",
-			)
-		}
-		signatures, err = policyBoundSigningExecutor.signBatchWithTaprootTransaction(
-			signingCtx,
-			sigHashes,
-			taprootMerkleRoots,
-			signingStartBlock,
-			unsignedTx,
-		)
-	} else if hasTaprootMerkleRoots(taprootMerkleRoots) {
-		tweakedSigningExecutor, ok := wte.signingExecutor.(taprootTweakedWalletSigningExecutor)
+		authorizedSigningExecutor, ok :=
+			wte.signingExecutor.(authorizedTaprootPolicyBoundWalletSigningExecutor)
 		if !ok {
 			return nil, fmt.Errorf(
-				"taproot tweaked signing requires signer support",
+				"Schnorr signing executor does not support finalized transaction authorization binding",
+			)
+		}
+		if wte.preSignAuthorizationGate == nil {
+			return nil, fmt.Errorf(
+				"FROST signing is disabled: pre-sign authorization gate is unavailable",
+			)
+		}
+		if wte.broadcastOutbox == nil {
+			return nil, fmt.Errorf(
+				"FROST signing is disabled: durable Bitcoin broadcast outbox is unavailable",
+			)
+		}
+		currentBlockProvider, ok := wte.signingExecutor.(signingCurrentBlockProvider)
+		if !ok {
+			return nil, fmt.Errorf(
+				"FROST signing is disabled: current anchoring block source is unavailable",
 			)
 		}
 
-		signatures, err = tweakedSigningExecutor.signBatchWithTaprootMerkleRoots(
+		preSignTransaction, buildErr := newFrostPreSignTransaction(
+			wte.action,
+			bitcoin.PublicKeyHash(wte.executingWallet.publicKey),
+			unsignedTx,
+			sigHashes,
+		)
+		if buildErr != nil {
+			return nil, fmt.Errorf("cannot build FROST pre-sign proposal: [%w]", buildErr)
+		}
+		preSignTransaction.ActionContext = cloneFrostPreSignActionContext(
+			wte.frostPreSignActionContext,
+		)
+
+		authorizationCtx, cancelAuthorizationCtx := withCancelOnBlock(
+			context.Background(),
+			signingTimeoutBlock,
+			wte.waitForBlockFn,
+		)
+		authorization, err = wte.preSignAuthorizationGate.authorize(
+			authorizationCtx,
+			preSignTransaction,
+		)
+		if err == nil {
+			err = wte.preSignAuthorizationGate.revalidate(
+				authorizationCtx,
+				authorization,
+			)
+		}
+		if err == nil {
+			err = authorizationCtx.Err()
+		}
+		cancelAuthorizationCtx()
+		if err != nil {
+			return nil, fmt.Errorf(
+				"FROST pre-sign authorization failed before nonce generation: [%w]",
+				err,
+			)
+		}
+
+		effectiveSigningStartBlock, err = currentBlockProvider.currentSigningBlock()
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot determine fresh post-authorization signing block: [%w]",
+				err,
+			)
+		}
+		if effectiveSigningStartBlock < authorization.Finality.BlockNumber {
+			effectiveSigningStartBlock = authorization.Finality.BlockNumber
+		}
+		if effectiveSigningStartBlock >= signingTimeoutBlock {
+			return nil, fmt.Errorf(
+				"FROST authorization finalized at/after signing timeout block [%d]",
+				signingTimeoutBlock,
+			)
+		}
+
+		// Create a fresh absolute-timeout context after finality. Reusing the
+		// pre-authorization session start can make ROAST windows stale before the
+		// first native bind/nonce operation.
+		signingCtx, cancelSigningCtx := withCancelOnBlock(
+			context.Background(),
+			signingTimeoutBlock,
+			wte.waitForBlockFn,
+		)
+		defer cancelSigningCtx()
+		if err := wte.preSignAuthorizationGate.revalidate(
 			signingCtx,
+			authorization,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"FROST finalized authorization changed before native signing: [%w]",
+				err,
+			)
+		}
+		authorizationMonitor = newFrostPreSignAuthorizationMonitor(
+			signingCtx,
+			wte.preSignAuthorizationGate,
+			authorization,
+			wte.frostAuthorizationMonitorInterval,
+		)
+		defer authorizationMonitor.stop()
+
+		signTxLogger.Infof("signing transaction's sig hashes")
+		signatures, err = authorizedSigningExecutor.signBatchWithAuthorizedTaprootTransaction(
+			authorizationMonitor.ctx,
 			sigHashes,
 			taprootMerkleRoots,
-			signingStartBlock,
+			effectiveSigningStartBlock,
+			unsignedTx,
+			authorization.AuthorizationID,
+			authorizationMonitor.guard,
 		)
+		if authorizationErr := authorizationMonitor.err(); authorizationErr != nil {
+			err = authorizationErr
+		} else if err == nil {
+			err = authorizationMonitor.validateNow()
+		}
 	} else {
-		signatures, err = wte.signingExecutor.signBatch(
-			signingCtx,
-			sigHashes,
-			signingStartBlock,
+		signTxLogger.Infof("signing transaction's sig hashes")
+		signingCtx, cancelSigningCtx := withCancelOnBlock(
+			context.Background(),
+			signingTimeoutBlock,
+			wte.waitForBlockFn,
 		)
+		defer cancelSigningCtx()
+
+		if hasTaprootMerkleRoots(taprootMerkleRoots) {
+			tweakedSigningExecutor, ok := wte.signingExecutor.(taprootTweakedWalletSigningExecutor)
+			if !ok {
+				return nil, fmt.Errorf(
+					"taproot tweaked signing requires signer support",
+				)
+			}
+
+			signatures, err = tweakedSigningExecutor.signBatchWithTaprootMerkleRoots(
+				signingCtx,
+				sigHashes,
+				taprootMerkleRoots,
+				effectiveSigningStartBlock,
+			)
+		} else {
+			signatures, err = wte.signingExecutor.signBatch(
+				signingCtx,
+				sigHashes,
+				effectiveSigningStartBlock,
+			)
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -473,8 +727,43 @@ func (wte *walletTransactionExecutor) signTransaction(
 			)
 		}
 
-		signTxLogger.Infof("transaction created successfully")
+		if usesSchnorrSignatures {
+			if err := authorizationMonitor.validateNow(); err != nil {
+				return nil, err
+			}
+			proposal := authorization.proposal
+			if err := wte.broadcastOutbox.enqueue(
+				tx,
+				proposal.Transaction.WalletPublicKeyHash,
+				proposal.WalletID,
+				proposal.Transaction.Action,
+				proposal.Transaction.TransactionHash,
+				bitcoinBroadcastAuthorization{
+					ActivationProfileHash:     authorization.ActivationProfileHash,
+					AuthorizationID:           authorization.AuthorizationID,
+					ReservationID:             authorization.ReservationID,
+					AuthorizationRoot:         authorization.VariantRoot,
+					SnapshotHash:              proposal.SnapshotHash,
+					ResourceHash:              proposal.ResourceHash,
+					OrderedInputRoot:          proposal.OrderedInputRoot,
+					LockedPlanHash:            proposal.computeLockedPlanHash(),
+					VariantApplyPlanHash:      proposal.ApplyPlanHash,
+					FeeLimitSnapshot:          proposal.FeeLimitSnapshot,
+					FinalizedBlock:            authorization.Finality.BlockNumber,
+					FinalizedBlockHash:        authorization.Finality.BlockHash,
+					FinalizedTransactionIndex: authorization.Finality.TransactionIndex,
+					FinalizedLogIndex:         authorization.Finality.LogIndex,
+					VariantSequence:           authorization.VariantSequence,
+				},
+			); err != nil {
+				return nil, fmt.Errorf(
+					"cannot durably enqueue signed FROST transaction: [%w]",
+					err,
+				)
+			}
+		}
 
+		signTxLogger.Infof("transaction created successfully")
 		return tx, nil
 	}
 
@@ -907,7 +1196,20 @@ func (wte *walletTransactionExecutor) broadcastTransaction(
 				broadcastAttempt,
 			)
 
-			err := wte.btcChain.BroadcastTransaction(tx)
+			var err error
+			if wte.usesSchnorrSignatures() {
+				if wte.broadcastOutbox == nil {
+					return fmt.Errorf(
+						"FROST Bitcoin broadcast requires the durable authorized outbox",
+					)
+				}
+				err = wte.broadcastOutbox.broadcastTransaction(
+					broadcastCtx,
+					txHash,
+				)
+			} else {
+				err = wte.btcChain.BroadcastTransaction(tx)
+			}
 			if err != nil {
 				broadcastTxLogger.Warnf(
 					"broadcasting failed: [%v]; transaction could be "+

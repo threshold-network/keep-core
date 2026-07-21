@@ -65,6 +65,11 @@ type node struct {
 	netProvider    net.Provider
 	walletRegistry *walletRegistry
 
+	frostPreSignAuthorizationBackend FrostPreSignAuthorizationBackend
+	frostPreSignActivationProfile    FrostPreSignActivationProfile
+	bitcoinBroadcastOutbox           *bitcoinBroadcastOutbox
+	frostActivationHandshakeExporter *frostActivationHandshakeExporter
+
 	// walletDispatcher ensures only one action is executed by a wallet at
 	// a time. All possible activities of a created wallet must be represented
 	// by appropriate actions dispatched through this component.
@@ -229,6 +234,116 @@ func newNode(
 			scheduler,
 			node.waitForBlockHeight,
 		)
+	}
+
+	if config.EnableFrostPreSignAuthorization {
+		activationProfile := config.FrostPreSignActivationProfile
+		if configurator, ok := chain.(FrostPreSignAuthorizationConfigurator); ok {
+			if config.FrostPreSignActivationManifestPath == "" {
+				return nil, fmt.Errorf(
+					"cannot enable production FROST pre-sign authorization without an activation manifest",
+				)
+			}
+			configuredProfile, err := configurator.ConfigureFrostPreSignAuthorization(
+				context.Background(),
+				config.FrostPreSignActivationManifestPath,
+				config.FrostPreSignActivationEnvelopeSignerKeyHash,
+				config.FrostPreSignLinkedLibraryDescriptorSetHash,
+			)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"cannot configure production FROST pre-sign authorization: [%w]",
+					err,
+				)
+			}
+			if activationProfile != nil &&
+				*activationProfile != *configuredProfile {
+				return nil, fmt.Errorf(
+					"configured FROST activation profile differs from the verified manifest",
+				)
+			}
+			activationProfile = configuredProfile
+		}
+		if activationProfile == nil {
+			return nil, fmt.Errorf(
+				"cannot enable FROST pre-sign authorization without a local activation profile",
+			)
+		}
+		verifiedActivationProfile := *activationProfile
+		if err := verifiedActivationProfile.validate(); err != nil {
+			return nil, fmt.Errorf(
+				"cannot enable FROST pre-sign authorization with invalid activation profile: [%w]",
+				err,
+			)
+		}
+		frostChain, ok := chain.(FrostDKGChain)
+		if !ok || !frostChain.FrostWalletRegistryAvailable() {
+			return nil, fmt.Errorf(
+				"cannot enable FROST pre-sign authorization without a configured FROST wallet registry",
+			)
+		}
+		backend, ok := chain.(FrostPreSignAuthorizationBackend)
+		if !ok {
+			return nil, fmt.Errorf(
+				"cannot enable FROST pre-sign authorization: anchoring chain does not implement the authorization backend",
+			)
+		}
+		canonicalBitcoinChain, ok := btcChain.(canonicalBitcoinBroadcastChain)
+		if !ok {
+			return nil, fmt.Errorf(
+				"cannot enable FROST pre-sign authorization: Bitcoin backend is not an authenticated canonical transaction index",
+			)
+		}
+		authorizationStatusSource, ok := chain.(FrostBitcoinBroadcastAuthorizationStatusSource)
+		if !ok {
+			return nil, fmt.Errorf(
+				"cannot enable FROST pre-sign authorization: anchoring chain does not implement canonical broadcast-authorization revalidation",
+			)
+		}
+		outbox, err := newBitcoinBroadcastOutbox(
+			config.BitcoinBroadcastOutboxDirectory,
+			canonicalBitcoinChain,
+			authorizationStatusSource,
+			verifiedActivationProfile.ProfileHash,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("cannot initialize durable Bitcoin broadcast outbox: [%w]", err)
+		}
+		node.frostPreSignAuthorizationBackend = backend
+		node.frostPreSignActivationProfile = verifiedActivationProfile
+		node.bitcoinBroadcastOutbox = outbox
+		manifestSource, ok := chain.(FrostPreSignActivationRuntimeManifestSource)
+		if !ok {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot enable FROST activation handshake: chain does not expose the authenticated runtime manifest",
+			)
+		}
+		pointVerifier, ok := chain.(FrostPreSignActivationPointVerifier)
+		if !ok {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot enable FROST activation handshake: chain cannot verify exact finalized deployment points",
+			)
+		}
+		runtimeManifest, err := manifestSource.FrostPreSignActivationRuntimeManifest()
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf("cannot read authenticated FROST runtime manifest: [%w]", err)
+		}
+		exporter, err := newFrostActivationHandshakeExporter(
+			config.FrostActivationHandshakeURL,
+			config.FrostActivationHandshakePrivateKeyPath,
+			config.FrostActivationReadinessSnapshotPath,
+			runtimeManifest,
+			pointVerifier,
+			outbox,
+		)
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf("cannot initialize FROST activation handshake: [%w]", err)
+		}
+		node.frostActivationHandshakeExporter = exporter
 	}
 
 	return node, nil
@@ -533,6 +648,32 @@ func (n *node) getSigningExecutor(
 		n.waitForBlockHeight,
 		signingAttemptsLimit,
 	)
+	if n.frostPreSignAuthorizationBackend != nil {
+		localMemberIndexes := make([]group.MemberIndex, 0, len(signers))
+		for _, signer := range signers {
+			localMemberIndexes = append(
+				localMemberIndexes,
+				signer.signingGroupMemberIndex,
+			)
+		}
+		gate, err := newThresholdFrostPreSignAuthorizationGate(
+			n.frostPreSignAuthorizationBackend,
+			n.frostPreSignActivationProfile,
+			n.chain.Signing(),
+			broadcastChannel,
+			membershipValidator,
+			wallet,
+			localMemberIndexes,
+		)
+		if err != nil {
+			return nil, false, fmt.Errorf(
+				"cannot create FROST pre-sign authorization gate: [%w]",
+				err,
+			)
+		}
+		executor.preSignAuthorizationGate = gate
+		executor.broadcastOutbox = n.bitcoinBroadcastOutbox
+	}
 
 	// Wire metrics recorder if available
 	if n.performanceMetrics != nil {
@@ -637,6 +778,9 @@ func (n *node) getCoordinationExecutor(
 		membershipValidator,
 		n.protocolLatch,
 		n.waitForBlockHeight,
+	)
+	executor.suppressHeartbeat = signingMaterialUsesSchnorrSignatures(
+		signers[0].signingMaterial(),
 	)
 
 	// Wire metrics recorder if available
@@ -802,6 +946,15 @@ func (n *node) handleHeartbeatProposal(
 	walletPublicKeyBytes, err := marshalPublicKey(wallet.publicKey)
 	if err != nil {
 		logger.Errorf("cannot marshal wallet public key: [%v]", err)
+		return
+	}
+	signers := n.walletRegistry.getSigners(wallet.publicKey)
+	if len(signers) > 0 &&
+		signingMaterialUsesSchnorrSignatures(signers[0].signingMaterial()) {
+		logger.Infof(
+			"ignoring heartbeat request for transaction-only FROST wallet [0x%x]",
+			walletPublicKeyBytes,
+		)
 		return
 	}
 
@@ -1718,8 +1871,8 @@ func withCancelOnBlock(
 	go func() {
 		defer cancelBlockCtx()
 
-		err := waitForBlockFn(ctx, block)
-		if err != nil {
+		err := waitForBlockFn(blockCtx, block)
+		if err != nil && blockCtx.Err() == nil {
 			logger.Errorf(
 				"failed to wait for block [%v]; "+
 					"context cancelled earlier than expected",

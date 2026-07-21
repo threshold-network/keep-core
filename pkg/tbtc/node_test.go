@@ -855,6 +855,59 @@ func TestNode_HandleHeartbeatProposal_DispatchesAction(t *testing.T) {
 	}
 }
 
+func TestNode_HandleHeartbeatProposal_SuppressesFrostWallet(t *testing.T) {
+	n, signer := setupNodeForHandlerTests(t)
+	registeredSigners := n.walletRegistry.getSigners(signer.wallet.publicKey)
+	if len(registeredSigners) == 0 {
+		t.Fatal("test wallet has no registered signer")
+	}
+	registeredSigners[0].signerMaterial = &frostsigning.NativeSignerMaterial{
+		Format: frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
+		Payload: []byte(`{
+			"keyGroup":"frost-heartbeat-filter-test",
+			"keyGroupSource":"dkg-persisted"
+		}`),
+	}
+
+	n.handleHeartbeatProposal(
+		signer.wallet,
+		&HeartbeatProposal{Message: [16]byte{0x04}},
+		10,
+		100,
+	)
+	if count := dispatchedActionsCount(n); count != 0 {
+		t.Fatalf("FROST heartbeat reached wallet dispatch: [%d]", count)
+	}
+	if len(n.signingExecutors) != 0 || len(n.inactivityClaimExecutors) != 0 {
+		t.Fatal("FROST heartbeat created signing/inactivity side effects")
+	}
+}
+
+func TestNode_GetCoordinationExecutorSuppressesFrostHeartbeat(t *testing.T) {
+	n, signer := setupNodeForHandlerTests(t)
+	registeredSigners := n.walletRegistry.getSigners(signer.wallet.publicKey)
+	if len(registeredSigners) == 0 {
+		t.Fatal("test wallet has no registered signer")
+	}
+	registeredSigners[0].signerMaterial = &frostsigning.NativeSignerMaterial{
+		Format: frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
+		Payload: []byte(`{
+			"keyGroup":"frost-coordination-filter-test",
+			"keyGroupSource":"dkg-persisted"
+		}`),
+	}
+	executor, ok, err := n.getCoordinationExecutor(signer.wallet.publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || executor == nil {
+		t.Fatal("FROST coordination executor was not created")
+	}
+	if !executor.suppressHeartbeat {
+		t.Fatal("FROST coordination executor did not suppress heartbeat")
+	}
+}
+
 // TestNode_HandleDepositSweepProposal_WalletNotControlled verifies that
 // handleDepositSweepProposal skips dispatch for an uncontrolled wallet.
 func TestNode_HandleDepositSweepProposal_WalletNotControlled(t *testing.T) {

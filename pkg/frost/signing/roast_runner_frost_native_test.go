@@ -231,6 +231,67 @@ func TestInteractiveSigningRunner_HappyPath(t *testing.T) {
 	buildInteractiveSigningHarness(t, 3, 2).runAndAssertAllSucceed(t)
 }
 
+func TestInteractiveSigningRunner_RevalidatesAfterRound1BeforeCommitmentRelease(
+	t *testing.T,
+) {
+	h := buildInteractiveSigningHarness(t, 1, 1)
+	observer := h.bus.Subscribe()
+	guardCalls := 0
+	h.runners[0].authorizationGuard = func(context.Context) error {
+		guardCalls++
+		// Initial, pre-open, and pre-round-1 checks pass. Invalidate while the
+		// native round-1 operation is in flight.
+		if guardCalls == 4 {
+			return fmt.Errorf("reservation settled during round 1")
+		}
+		return nil
+	}
+
+	if _, err := h.runners[0].Run(context.Background()); err == nil {
+		t.Fatal("expected the post-round-1 authorization guard to fail")
+	}
+	select {
+	case <-observer.Commitments():
+		t.Fatal("round-1 commitment escaped after authorization invalidation")
+	default:
+	}
+	if h.engines[0].abortCallCount() != 1 {
+		t.Fatal("invalidated round-1 session was not aborted")
+	}
+}
+
+func TestInteractiveSigningRunner_RevalidatesAfterRound2BeforeShareRelease(
+	t *testing.T,
+) {
+	h := buildInteractiveSigningHarness(t, 1, 1)
+	observer := h.bus.Subscribe()
+	guardCalls := 0
+	h.runners[0].authorizationGuard = func(context.Context) error {
+		guardCalls++
+		// Invalidate during native round 2. The produced share must never be
+		// envelope-signed or broadcast.
+		if guardCalls == 6 {
+			return fmt.Errorf("reservation conflicted during round 2")
+		}
+		return nil
+	}
+
+	if _, err := h.runners[0].Run(context.Background()); err == nil {
+		t.Fatal("expected the post-round-2 authorization guard to fail")
+	}
+	if h.engines[0].round2CallCount() != 1 {
+		t.Fatal("test did not reach native round 2")
+	}
+	select {
+	case <-observer.Shares():
+		t.Fatal("signature share escaped after authorization invalidation")
+	default:
+	}
+	if h.engines[0].abortCallCount() != 1 {
+		t.Fatal("invalidated round-2 session was not aborted")
+	}
+}
+
 // A non-responsive (offline) included member must NOT stall the attempt: the
 // coordinator finalizes over the first t responsive committers. Group size 3,
 // threshold 2, one NON-COORDINATOR member never runs (never commits), so the two

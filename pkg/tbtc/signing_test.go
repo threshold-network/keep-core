@@ -167,6 +167,112 @@ func TestRoastSessionID_StableAndBinds(t *testing.T) {
 	}
 }
 
+func TestFrostSigningSessionIDs_BindFinalizedAuthorization(t *testing.T) {
+	message := big.NewInt(1)
+	var merkleRoot [32]byte
+	merkleRoot[0] = 2
+	authorizationA := [32]byte{0xa1}
+	authorizationB := [32]byte{0xb2}
+
+	for _, root := range []*[32]byte{nil, &merkleRoot} {
+		attemptA := signingSessionIDWithAuthorization(
+			message,
+			root,
+			25300,
+			12,
+			strings.Repeat("ab", 33),
+			&authorizationA,
+		)
+		attemptAReplay := signingSessionIDWithAuthorization(
+			message,
+			root,
+			25300,
+			12,
+			strings.Repeat("ab", 33),
+			&authorizationA,
+		)
+		attemptB := signingSessionIDWithAuthorization(
+			message,
+			root,
+			25300,
+			12,
+			strings.Repeat("ab", 33),
+			&authorizationB,
+		)
+		if attemptA != attemptAReplay || attemptA == attemptB {
+			t.Fatal("attempt session ID is not deterministically bound to authorization")
+		}
+		if len(attemptA) > 128 || len(attemptB) > 128 {
+			t.Fatal("authorization-bound attempt session ID exceeds signer limit")
+		}
+
+		roastA := roastSessionIDWithAuthorization(
+			message,
+			root,
+			25300,
+			strings.Repeat("ab", 33),
+			&authorizationA,
+		)
+		roastAReplay := roastSessionIDWithAuthorization(
+			message,
+			root,
+			25300,
+			strings.Repeat("ab", 33),
+			&authorizationA,
+		)
+		roastB := roastSessionIDWithAuthorization(
+			message,
+			root,
+			25300,
+			strings.Repeat("ab", 33),
+			&authorizationB,
+		)
+		if roastA != roastAReplay || roastA == roastB {
+			t.Fatal("ROAST session ID is not deterministically bound to authorization")
+		}
+		if len(roastA) > 128 || len(roastB) > 128 {
+			t.Fatal("authorization-bound ROAST session ID exceeds signer limit")
+		}
+	}
+}
+
+func TestSigningExecutor_UnauthorizedFrostPathFailsBeforeNativePolicyBinding(t *testing.T) {
+	executor := &signingExecutor{
+		signers: []*signer{{signerMaterial: struct{}{}}},
+	}
+	originalBind := bindTaprootTxViaNativeSignerFn
+	t.Cleanup(func() { bindTaprootTxViaNativeSignerFn = originalBind })
+	bindCalls := 0
+	bindTaprootTxViaNativeSignerFn = func(
+		roastSessionID string,
+		unsignedTx *bitcoin.TransactionBuilder,
+		inputIndex int,
+		message *big.Int,
+	) error {
+		bindCalls++
+		return nil
+	}
+
+	_, err := executor.signBatchWithTaprootTransaction(
+		context.Background(),
+		[]*big.Int{big.NewInt(1)},
+		[]*[32]byte{nil},
+		1,
+		bitcoin.NewTransactionBuilder(newLocalBitcoinChain()),
+	)
+	if err == nil || !strings.Contains(err.Error(), "finalized transaction authorization") {
+		t.Fatalf("unexpected unauthorized FROST result: [%v]", err)
+	}
+	if bindCalls != 0 {
+		t.Fatal("unauthorized FROST path reached native policy binding")
+	}
+
+	_, _, _, err = executor.signHeartbeat(context.Background(), [16]byte{1}, 1)
+	if err == nil || !strings.Contains(err.Error(), "heartbeat signing is disabled") {
+		t.Fatalf("unexpected FROST heartbeat result: [%v]", err)
+	}
+}
+
 func TestSigningExecutor_Sign(t *testing.T) {
 	executor := setupSigningExecutor(t)
 

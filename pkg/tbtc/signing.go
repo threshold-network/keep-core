@@ -54,6 +54,26 @@ func bindTaprootPolicyArtifactForSigning(
 	unsignedTx *bitcoin.TransactionBuilder,
 	inputIndex int,
 ) (string, error) {
+	return bindTaprootPolicyArtifactForAuthorizedSigning(
+		message,
+		taprootMerkleRoot,
+		startBlock,
+		keyGroupID,
+		unsignedTx,
+		inputIndex,
+		nil,
+	)
+}
+
+func bindTaprootPolicyArtifactForAuthorizedSigning(
+	message *big.Int,
+	taprootMerkleRoot *[32]byte,
+	startBlock uint64,
+	keyGroupID string,
+	unsignedTx *bitcoin.TransactionBuilder,
+	inputIndex int,
+	authorizationID *[32]byte,
+) (string, error) {
 	if unsignedTx == nil {
 		return "", nil
 	}
@@ -63,11 +83,16 @@ func bindTaprootPolicyArtifactForSigning(
 		)
 	}
 
-	roastSID := roastSessionID(
+	if authorizationID != nil && *authorizationID == [32]byte{} {
+		return "", fmt.Errorf("pre-sign authorization ID is zero")
+	}
+
+	roastSID := roastSessionIDWithAuthorization(
 		message,
 		taprootMerkleRoot,
 		startBlock,
 		keyGroupID,
+		authorizationID,
 	)
 	if err := bindTaprootTxViaNativeSignerFn(
 		roastSID,
@@ -88,6 +113,24 @@ func signingSessionID(
 	attemptNumber uint,
 	keyGroupID string,
 ) string {
+	return signingSessionIDWithAuthorization(
+		message,
+		taprootMerkleRoot,
+		startBlock,
+		attemptNumber,
+		keyGroupID,
+		nil,
+	)
+}
+
+func signingSessionIDWithAuthorization(
+	message *big.Int,
+	taprootMerkleRoot *[32]byte,
+	startBlock uint64,
+	attemptNumber uint,
+	keyGroupID string,
+	authorizationID *[32]byte,
+) string {
 	// keyGroupID makes the attempt-specific session id WALLET-unique, like
 	// roastSessionID: it is otherwise derived from message/root/(block) and would
 	// collide across two FROST wallets on one node that reuse a member index and sign
@@ -104,6 +147,10 @@ func signingSessionID(
 		keyPathDigest.Write([]byte(message.Text(16)))
 		keyPathDigest.Write([]byte{0})
 		keyPathDigest.Write([]byte(keyGroupID))
+		if authorizationID != nil {
+			keyPathDigest.Write([]byte{0})
+			keyPathDigest.Write(authorizationID[:])
+		}
 		return fmt.Sprintf("kp-%x-%v", keyPathDigest.Sum(nil), attemptNumber)
 	}
 
@@ -118,6 +165,10 @@ func signingSessionID(
 	sessionDigest.Write(startBlockBytes[:])
 	sessionDigest.Write([]byte{0})
 	sessionDigest.Write([]byte(keyGroupID))
+	if authorizationID != nil {
+		sessionDigest.Write([]byte{0})
+		sessionDigest.Write(authorizationID[:])
+	}
 
 	return fmt.Sprintf("tr-%x-%v", sessionDigest.Sum(nil), attemptNumber)
 }
@@ -135,6 +186,22 @@ func roastSessionID(
 	taprootMerkleRoot *[32]byte,
 	startBlock uint64,
 	keyGroupID string,
+) string {
+	return roastSessionIDWithAuthorization(
+		message,
+		taprootMerkleRoot,
+		startBlock,
+		keyGroupID,
+		nil,
+	)
+}
+
+func roastSessionIDWithAuthorization(
+	message *big.Int,
+	taprootMerkleRoot *[32]byte,
+	startBlock uint64,
+	keyGroupID string,
+	authorizationID *[32]byte,
 ) string {
 	// keyGroupID makes the stable ROAST session id WALLET-unique. It is derived from
 	// message/root/startBlock -- NOT the wallet -- so on a node controlling two FROST
@@ -161,6 +228,10 @@ func roastSessionID(
 		keyPathDigest.Write(keyPathStartBlock[:])
 		keyPathDigest.Write([]byte{0})
 		keyPathDigest.Write([]byte(keyGroupID))
+		if authorizationID != nil {
+			keyPathDigest.Write([]byte{0})
+			keyPathDigest.Write(authorizationID[:])
+		}
 		return fmt.Sprintf("roast-kp-%x", keyPathDigest.Sum(nil))
 	}
 
@@ -175,6 +246,10 @@ func roastSessionID(
 	sessionDigest.Write(startBlockBytes[:])
 	sessionDigest.Write([]byte{0})
 	sessionDigest.Write([]byte(keyGroupID))
+	if authorizationID != nil {
+		sessionDigest.Write([]byte{0})
+		sessionDigest.Write(authorizationID[:])
+	}
 
 	return fmt.Sprintf("roast-tr-%x", sessionDigest.Sum(nil))
 }
@@ -211,6 +286,9 @@ type signingExecutor struct {
 	// signing-attempt liveness gauges. It is shared across all wallets'
 	// executors of this node (acquired from the metrics recorder).
 	livenessTracker *clientinfo.SigningAttemptLivenessTracker
+
+	preSignAuthorizationGate frostPreSignAuthorizationGate
+	broadcastOutbox          *bitcoinBroadcastOutbox
 }
 
 // signingLivenessTrackerProvider is implemented by metrics recorders that
@@ -254,6 +332,21 @@ func (se *signingExecutor) usesSchnorrSignatures() bool {
 	return false
 }
 
+func (se *signingExecutor) frostPreSignGate() frostPreSignAuthorizationGate {
+	return se.preSignAuthorizationGate
+}
+
+func (se *signingExecutor) bitcoinOutbox() *bitcoinBroadcastOutbox {
+	return se.broadcastOutbox
+}
+
+func (se *signingExecutor) currentSigningBlock() (uint64, error) {
+	if se.getCurrentBlockFn == nil {
+		return 0, fmt.Errorf("current signing block source is nil")
+	}
+	return se.getCurrentBlockFn()
+}
+
 // signBatch performs the signing process for each message from the given
 // messages batch, one after another. If at least one message cannot be signed,
 // this function returns an error. If all messages were signed successfully,
@@ -280,6 +373,8 @@ func (se *signingExecutor) signBatchWithTaprootMerkleRoots(
 		taprootMerkleRoots,
 		startBlock,
 		nil,
+		nil,
+		nil,
 	)
 }
 
@@ -305,6 +400,41 @@ func (se *signingExecutor) signBatchWithTaprootTransaction(
 		taprootMerkleRoots,
 		startBlock,
 		unsignedTx,
+		nil,
+		nil,
+	)
+}
+
+// signBatchWithAuthorizedTaprootTransaction is the only wallet-transaction
+// entry point that may reach native FROST signing. authorizationID is folded
+// into both the stable ROAST namespace and every attempt session namespace.
+func (se *signingExecutor) signBatchWithAuthorizedTaprootTransaction(
+	ctx context.Context,
+	messages []*big.Int,
+	taprootMerkleRoots []*[32]byte,
+	startBlock uint64,
+	unsignedTx *bitcoin.TransactionBuilder,
+	authorizationID [32]byte,
+	authorizationGuard func(context.Context) error,
+) ([]*frost.Signature, error) {
+	if authorizationID == [32]byte{} {
+		return nil, fmt.Errorf("pre-sign authorization ID is zero")
+	}
+	if unsignedTx == nil {
+		return nil, fmt.Errorf("unsigned transaction builder is nil")
+	}
+	if authorizationGuard == nil {
+		return nil, fmt.Errorf("pre-sign authorization guard is nil")
+	}
+
+	return se.signBatchWithTaprootPolicy(
+		ctx,
+		messages,
+		taprootMerkleRoots,
+		startBlock,
+		unsignedTx,
+		&authorizationID,
+		authorizationGuard,
 	)
 }
 
@@ -314,7 +444,17 @@ func (se *signingExecutor) signBatchWithTaprootPolicy(
 	taprootMerkleRoots []*[32]byte,
 	startBlock uint64,
 	unsignedTx *bitcoin.TransactionBuilder,
+	authorizationID *[32]byte,
+	authorizationGuard func(context.Context) error,
 ) ([]*frost.Signature, error) {
+	// This check must precede policy-artifact binding: binding enters the native
+	// signer and may allocate session state even before nonce generation.
+	if se.usesSchnorrSignatures() &&
+		(authorizationID == nil || *authorizationID == [32]byte{}) {
+		return nil, fmt.Errorf(
+			"FROST signing requires a finalized transaction authorization",
+		)
+	}
 	if taprootMerkleRoots != nil && len(taprootMerkleRoots) != len(messages) {
 		return nil, fmt.Errorf(
 			"taproot merkle roots count [%v] does not match messages count [%v]",
@@ -387,13 +527,26 @@ func (se *signingExecutor) signBatchWithTaprootPolicy(
 			taprootMerkleRoot = taprootMerkleRoots[i]
 		}
 
-		policyBoundRoastSID, err := bindTaprootPolicyArtifactForSigning(
+		if authorizationID != nil {
+			if authorizationGuard == nil {
+				return nil, fmt.Errorf("pre-sign authorization guard is nil")
+			}
+			if err := authorizationGuard(ctx); err != nil {
+				return nil, fmt.Errorf(
+					"pre-sign authorization invalid before input [%d] policy binding: [%w]",
+					i,
+					err,
+				)
+			}
+		}
+		policyBoundRoastSID, err := bindTaprootPolicyArtifactForAuthorizedSigning(
 			message,
 			taprootMerkleRoot,
 			signingStartBlock,
 			roastKeyGroupID,
 			unsignedTx,
 			i,
+			authorizationID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -403,13 +556,27 @@ func (se *signingExecutor) signBatchWithTaprootPolicy(
 			)
 		}
 
-		signature, _, endBlock, err := se.signWithTaprootMerkleRootForSession(
-			ctx,
-			message,
-			taprootMerkleRoot,
-			signingStartBlock,
-			policyBoundRoastSID,
-		)
+		var signature *frost.Signature
+		var endBlock uint64
+		if authorizationID != nil {
+			signature, _, endBlock, err = se.signWithTaprootMerkleRootForAuthorizedSession(
+				ctx,
+				message,
+				taprootMerkleRoot,
+				signingStartBlock,
+				policyBoundRoastSID,
+				authorizationID,
+				authorizationGuard,
+			)
+		} else {
+			signature, _, endBlock, err = se.signWithTaprootMerkleRootForSession(
+				ctx,
+				message,
+				taprootMerkleRoot,
+				signingStartBlock,
+				policyBoundRoastSID,
+			)
+		}
 		if err != nil {
 			// Error metrics are recorded in the sign() method for all error paths.
 			return nil, err
@@ -451,6 +618,11 @@ func (se *signingExecutor) signHeartbeat(
 	heartbeatMessage [16]byte,
 	startBlock uint64,
 ) (*frost.Signature, *signingActivityReport, uint64, error) {
+	if se.usesSchnorrSignatures() {
+		return nil, nil, 0, fmt.Errorf(
+			"FROST heartbeat signing is disabled; the finalized pre-sign registry authorizes only reserved Bitcoin transactions",
+		)
+	}
 	messageToSign := heartbeatSigningMessage(heartbeatMessage)
 
 	return se.signWithTaprootMerkleRootForSessionAndIntent(
@@ -500,6 +672,30 @@ func (se *signingExecutor) signWithTaprootMerkleRootForSession(
 	)
 }
 
+func (se *signingExecutor) signWithTaprootMerkleRootForAuthorizedSession(
+	ctx context.Context,
+	message *big.Int,
+	taprootMerkleRoot *[32]byte,
+	startBlock uint64,
+	policyBoundRoastSessionID string,
+	authorizationID *[32]byte,
+	authorizationGuard func(context.Context) error,
+) (*frost.Signature, *signingActivityReport, uint64, error) {
+	if authorizationID == nil || *authorizationID == [32]byte{} {
+		return nil, nil, 0, fmt.Errorf("pre-sign authorization ID is missing")
+	}
+	return se.signWithTaprootMerkleRootForSessionIntentAndAuthorization(
+		ctx,
+		message,
+		taprootMerkleRoot,
+		startBlock,
+		policyBoundRoastSessionID,
+		nil,
+		authorizationID,
+		authorizationGuard,
+	)
+}
+
 func (se *signingExecutor) signWithTaprootMerkleRootForSessionAndIntent(
 	ctx context.Context,
 	message *big.Int,
@@ -508,6 +704,36 @@ func (se *signingExecutor) signWithTaprootMerkleRootForSessionAndIntent(
 	policyBoundRoastSessionID string,
 	signingIntent *signing.SigningIntent,
 ) (*frost.Signature, *signingActivityReport, uint64, error) {
+	return se.signWithTaprootMerkleRootForSessionIntentAndAuthorization(
+		ctx,
+		message,
+		taprootMerkleRoot,
+		startBlock,
+		policyBoundRoastSessionID,
+		signingIntent,
+		nil,
+		nil,
+	)
+}
+
+func (se *signingExecutor) signWithTaprootMerkleRootForSessionIntentAndAuthorization(
+	ctx context.Context,
+	message *big.Int,
+	taprootMerkleRoot *[32]byte,
+	startBlock uint64,
+	policyBoundRoastSessionID string,
+	signingIntent *signing.SigningIntent,
+	authorizationID *[32]byte,
+	authorizationGuard func(context.Context) error,
+) (*frost.Signature, *signingActivityReport, uint64, error) {
+	if se.usesSchnorrSignatures() &&
+		(authorizationID == nil ||
+			*authorizationID == [32]byte{} ||
+			authorizationGuard == nil) {
+		return nil, nil, 0, fmt.Errorf(
+			"FROST signing requires a finalized transaction authorization",
+		)
+	}
 	if lockAcquired := se.lock.TryAcquire(1); !lockAcquired {
 		// Record failure metrics for lock acquisition failure
 		if se.metricsRecorder != nil {
@@ -568,7 +794,13 @@ func (se *signingExecutor) signWithTaprootMerkleRootForSessionAndIntent(
 	// attempts. Computed once; constant across signers and attempts.
 	roastSID := policyBoundRoastSessionID
 	if roastSID == "" {
-		roastSID = roastSessionID(message, taprootMerkleRoot, startBlock, roastKeyGroupID)
+		roastSID = roastSessionIDWithAuthorization(
+			message,
+			taprootMerkleRoot,
+			startBlock,
+			roastKeyGroupID,
+			authorizationID,
+		)
 	}
 
 	for _, currentSigner := range se.signers {
@@ -649,13 +881,14 @@ func (se *signingExecutor) signWithTaprootMerkleRootForSessionAndIntent(
 				loopCtx,
 				signingLogger,
 				&signing.Request{
-					Message:           message,
-					RoastSessionID:    roastSID,
-					SigningIntent:     signingIntent,
-					MemberIndex:       signer.signingGroupMemberIndex,
-					SignerMaterial:    signer.signingMaterial(),
-					TaprootMerkleRoot: taprootMerkleRoot,
-					GroupSize:         wallet.groupSize(),
+					Message:            message,
+					RoastSessionID:     roastSID,
+					SigningIntent:      signingIntent,
+					AuthorizationGuard: authorizationGuard,
+					MemberIndex:        signer.signingGroupMemberIndex,
+					SignerMaterial:     signer.signingMaterial(),
+					TaprootMerkleRoot:  taprootMerkleRoot,
+					GroupSize:          wallet.groupSize(),
 					DishonestThreshold: wallet.groupDishonestThreshold(
 						se.groupParameters.HonestThreshold,
 					),
@@ -733,27 +966,29 @@ func (se *signingExecutor) signWithTaprootMerkleRootForSessionAndIntent(
 						se.waitForBlockFn,
 					)
 
-					sessionID := signingSessionID(
+					sessionID := signingSessionIDWithAuthorization(
 						message,
 						taprootMerkleRoot,
 						startBlock,
 						attempt.number,
 						roastKeyGroupID,
+						authorizationID,
 					)
 
 					result, err := signing.ExecuteRequest(
 						attemptCtx,
 						signingAttemptLogger,
 						&signing.Request{
-							Message:           message,
-							SessionID:         sessionID,
-							RoastSessionID:    roastSID,
-							SigningIntent:     signingIntent,
-							MemberIndex:       signer.signingGroupMemberIndex,
-							SignerMaterial:    signer.signingMaterial(),
-							PrivateKeyShare:   signer.privateKeyShare,
-							TaprootMerkleRoot: taprootMerkleRoot,
-							GroupSize:         wallet.groupSize(),
+							Message:            message,
+							SessionID:          sessionID,
+							RoastSessionID:     roastSID,
+							AuthorizationGuard: authorizationGuard,
+							SigningIntent:      signingIntent,
+							MemberIndex:        signer.signingGroupMemberIndex,
+							SignerMaterial:     signer.signingMaterial(),
+							PrivateKeyShare:    signer.privateKeyShare,
+							TaprootMerkleRoot:  taprootMerkleRoot,
+							GroupSize:          wallet.groupSize(),
 							DishonestThreshold: wallet.groupDishonestThreshold(
 								se.groupParameters.HonestThreshold,
 							),

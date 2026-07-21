@@ -60,6 +60,9 @@ func ExecuteRequest(
 
 	clonedRequest := *request
 	clonedRequest.Attempt = cloneAttempt(request.Attempt)
+	if err := validateAuthorizationGuard(ctx, clonedRequest.AuthorizationGuard); err != nil {
+		return nil, err
+	}
 
 	return currentExecutionBackend().Execute(
 		ctx,

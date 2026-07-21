@@ -121,6 +121,46 @@ type Config struct {
 	// ECDSA drain and after the legacy pool is retired. This flag is an opt-out
 	// for operators that manage FROST pool membership out of band.
 	DisableFrostSortitionPoolMonitoring bool
+	// EnableFrostPreSignAuthorization activates finalized on-chain authorization
+	// for reserved FROST Bitcoin transactions. When false, FROST wallet
+	// transaction signing remains fail-closed before native nonce generation.
+	// Enabling does not select a permissive default adapter: the configured
+	// chain must provide the deployment-specific authorization backend and the
+	// Bitcoin chain must provide authenticated canonical status, or startup
+	// fails before coordination.
+	EnableFrostPreSignAuthorization bool
+	// FrostPreSignActivationManifestPath points at the strict production
+	// manifest whose chain, contract, runtime-code, crosslink, and protocol
+	// commitments are verified at a finalized Ethereum block during startup.
+	// Production chain adapters reject activation without this file.
+	FrostPreSignActivationManifestPath string
+	// FrostPreSignActivationEnvelopeSignerKeyHash is the lowercase 0x-prefixed
+	// SHA-256 digest of the DER SubjectPublicKeyInfo for the Ed25519 activation
+	// authority. It authenticates the signed production manifest independently
+	// of the runtime handshake key embedded in that manifest.
+	FrostPreSignActivationEnvelopeSignerKeyHash string
+	// FrostPreSignLinkedLibraryDescriptorSetHash independently pins the
+	// compiler-derived recursive Solidity link layout expected by this signer
+	// build. It must match the signed manifest's global descriptor-set hash.
+	FrostPreSignLinkedLibraryDescriptorSetHash string
+	// FrostPreSignActivationProfile pins the reviewed chain, contract addresses,
+	// runtime code hashes, and protocol/policy identifiers independently of the
+	// anchoring backend. It is mandatory when activation is enabled.
+	FrostPreSignActivationProfile *FrostPreSignActivationProfile
+	// BitcoinBroadcastOutboxDirectory is the exclusively owned crash-safe
+	// journal for signed FROST Bitcoin transactions. It is mandatory when
+	// EnableFrostPreSignAuthorization is true and must reside on durable local
+	// storage supporting fsync, atomic rename, and advisory file locks.
+	BitcoinBroadcastOutboxDirectory string
+	// FrostActivationHandshakeURL is the exact numeric-loopback HTTP URL used
+	// by the independent activation auditor for nonce-bound signer readiness.
+	FrostActivationHandshakeURL string
+	// FrostActivationHandshakePrivateKeyPath contains one owner-only PKCS#8
+	// Ed25519 private key whose SPKI hash is pinned by the signed manifest.
+	FrostActivationHandshakePrivateKeyPath string
+	// FrostActivationReadinessSnapshotPath contains the exact independently
+	// reconciled retained FROST group inventory and durable signer-store identity.
+	FrostActivationReadinessSnapshotPath string
 }
 
 // Initialize kicks off the TBTC by initializing internal state, ensuring
@@ -225,8 +265,31 @@ func Initialize(
 	// started), so an invalid backend fails Initialize with no protocol or
 	// pre-params side effects.
 
+	if node.bitcoinBroadcastOutbox != nil {
+		if err := node.bitcoinBroadcastOutbox.start(ctx); err != nil {
+			_ = node.bitcoinBroadcastOutbox.close()
+			return fmt.Errorf(
+				"cannot replay durable Bitcoin broadcast outbox before coordination: [%w]",
+				err,
+			)
+		}
+		if err := node.frostActivationHandshakeExporter.start(ctx); err != nil {
+			_ = node.bitcoinBroadcastOutbox.close()
+			return fmt.Errorf(
+				"cannot start FROST activation handshake exporter: [%w]",
+				err,
+			)
+		}
+	}
+
 	err = node.runCoordinationLayer(ctx)
 	if err != nil {
+		if node.frostActivationHandshakeExporter != nil {
+			_ = node.frostActivationHandshakeExporter.close()
+		}
+		if node.bitcoinBroadcastOutbox != nil {
+			_ = node.bitcoinBroadcastOutbox.close()
+		}
 		return fmt.Errorf("cannot run coordination layer: [%w]", err)
 	}
 
