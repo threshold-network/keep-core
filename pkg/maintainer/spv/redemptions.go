@@ -9,13 +9,6 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-// getGlobalMetricsRecorder returns the global metrics recorder if set.
-func getGlobalMetricsRecorder() interface {
-	IncrementCounter(name string, value float64)
-} {
-	return getMetricsRecorder()
-}
-
 // SubmitRedemptionProof prepares redemption proof for the given transaction
 // and submits it to the on-chain contract. If the number of required
 // confirmations is `0`, an error is returned.
@@ -31,7 +24,7 @@ func SubmitRedemptionProof(
 		btcChain,
 		spvChain,
 		bitcoin.AssembleSpvProof,
-		getGlobalMetricsRecorder(),
+		getMetricsRecorder(),
 	)
 }
 
