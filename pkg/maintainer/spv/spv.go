@@ -19,13 +19,51 @@ import (
 
 var logger = log.Logger("keep-maintainer-spv")
 
-// The length of the Bitcoin difficulty epoch in blocks.
-const difficultyEpochLength = 2016
-
 // The maximum number of block headers allowed in a single SPV proof. Bounds
 // the forward walk over headers when computing required confirmations
 // (relevant on testnet4 where long runs of minimum-difficulty blocks occur).
+//
+// 144 is one day's worth of blocks at Bitcoin's ~10-minute target spacing. In a
+// normal epoch every header contributes the full epoch difficulty, so a proof
+// needs only a handful of headers (txProofDifficultyFactor headers, typically
+// 6); the bound leaves ample margin. It exists solely to cap the walk against a
+// pathological run of leading minimum-difficulty (DIFF1) headers. Note the
+// proof window is anchored at a fixed start block and does not slide, so a run
+// of leading DIFF1 headers longer than this bound makes the transaction
+// permanently unprovable rather than merely delayed (see proofSkipReason).
 const maxProofHeaders = 144
+
+// minDifficultyTarget is the Bitcoin minimum-difficulty target (compact bits
+// 0x1d00ffff). It mirrors the Bridge's BitcoinTx.MIN_DIFFICULTY_TARGET and is
+// used to detect testnet4 BIP94 minimum-difficulty (DIFF1) headers by exact
+// target equality, matching the on-chain skip predicate.
+var minDifficultyTarget, _ = new(big.Int).SetString(
+	"ffff0000000000000000000000000000000000000000000000000000",
+	16,
+)
+
+// proofSkipReason explains why an SPV proof cannot be assembled for a
+// transaction in the current cycle. It lets callers log and record metrics with
+// the specific cause instead of collapsing every skip into one generic message.
+type proofSkipReason int
+
+const (
+	// proofSkipNone means the proof is within the relay's difficulty range and
+	// should be assembled once enough confirmations accumulate.
+	proofSkipNone proofSkipReason = iota
+	// proofSkipOutsideRelayRange means the decisive header matched neither the
+	// current nor the previous relay epoch difficulty. The Bridge would revert
+	// with "Not at current or previous difficulty". This is usually transient -
+	// the transaction's epoch is not yet proven in the relay - and resolves as
+	// the relay advances.
+	proofSkipOutsideRelayRange
+	// proofSkipExceededMaxHeaders means no decisive header was found and not
+	// enough difficulty accumulated within maxProofHeaders. Because the proof
+	// window is anchored at a fixed start block, a run of leading
+	// minimum-difficulty (DIFF1) headers longer than the bound is permanently
+	// unprovable rather than merely delayed, hence it is signalled separately.
+	proofSkipExceededMaxHeaders
+)
 
 func Initialize(
 	ctx context.Context,
@@ -208,7 +246,7 @@ func (sm *spvMaintainer) proveTransactions(
 			transactionHashStr,
 		)
 
-		isProofWithinRelayRange, accumulatedConfirmations, requiredConfirmations, err := getProofInfo(
+		accumulatedConfirmations, requiredConfirmations, skipReason, err := getProofInfo(
 			transaction.Hash(),
 			sm.btcChain,
 			sm.spvChain,
@@ -218,16 +256,42 @@ func (sm *spvMaintainer) proveTransactions(
 			return fmt.Errorf("failed to get proof info: [%v]", err)
 		}
 
-		if !isProofWithinRelayRange {
+		switch skipReason {
+		case proofSkipOutsideRelayRange:
 			// The required proof goes outside the previous and current
 			// difficulty epochs as seen by the relay. Skip the transaction. It
-			// will most likely be proven later.
+			// will most likely be proven later, once the relay advances.
 			logger.Warnf(
 				"skipped proving transaction [%s]; the range "+
 					"of the required proof goes outside the previous and "+
 					"current difficulty epochs as seen by the relay",
 				transactionHashStr,
 			)
+			if recorder := getMetricsRecorder(); recorder != nil {
+				recorder.IncrementCounter(
+					"spv_proof_skipped_outside_relay_range_total",
+					1,
+				)
+			}
+			continue
+		case proofSkipExceededMaxHeaders:
+			// No decisive header was found and not enough difficulty
+			// accumulated within maxProofHeaders. Unlike the range skip above,
+			// this transaction may be permanently unprovable if it is buried
+			// under a run of minimum-difficulty blocks longer than the bound.
+			logger.Errorf(
+				"skipped proving transaction [%s]; could not find a decisive "+
+					"header or accumulate enough difficulty within [%d] "+
+					"headers; the transaction may be permanently unprovable",
+				transactionHashStr,
+				maxProofHeaders,
+			)
+			if recorder := getMetricsRecorder(); recorder != nil {
+				recorder.IncrementCounter(
+					"spv_proof_skipped_exceeded_max_headers_total",
+					1,
+				)
+			}
 			continue
 		}
 
@@ -306,21 +370,22 @@ func isInputCurrentWalletsMainUTXO(
 	return bytes.Equal(mainUtxoHash[:], wallet.MainUtxoHash[:]), nil
 }
 
-// getProofInfo returns information about the SPV proof. It includes the
-// information whether the transaction proof range is within the previous and
-// current difficulty epochs as seen by the relay, the accumulated number of
-// confirmations and the required number of confirmations.
+// getProofInfo returns information about the SPV proof: the accumulated number
+// of confirmations, the required number of confirmations, and a proofSkipReason
+// indicating whether the proof can be assembled (proofSkipNone) or why it must
+// be skipped this cycle. The confirmation counts are meaningful only when the
+// reason is proofSkipNone.
 func getProofInfo(
 	transactionHash bitcoin.Hash,
 	btcChain bitcoin.Chain,
 	spvChain Chain,
 	btcDiffChain btcdiff.Chain,
 ) (
-	bool, uint, uint, error,
+	uint, uint, proofSkipReason, error,
 ) {
 	latestBlockHeight, err := btcChain.GetLatestBlockHeight()
 	if err != nil {
-		return false, 0, 0, fmt.Errorf(
+		return 0, 0, proofSkipNone, fmt.Errorf(
 			"failed to get latest block height: [%v]",
 			err,
 		)
@@ -330,7 +395,7 @@ func getProofInfo(
 		transactionHash,
 	)
 	if err != nil {
-		return false, 0, 0, fmt.Errorf(
+		return 0, 0, proofSkipNone, fmt.Errorf(
 			"failed to get transaction confirmations: [%v]",
 			err,
 		)
@@ -338,7 +403,7 @@ func getProofInfo(
 
 	txProofDifficultyFactor, err := spvChain.TxProofDifficultyFactor()
 	if err != nil {
-		return false, 0, 0, fmt.Errorf(
+		return 0, 0, proofSkipNone, fmt.Errorf(
 			"failed to get transaction proof difficulty factor: [%v]",
 			err,
 		)
@@ -347,7 +412,7 @@ func getProofInfo(
 	currentEpochDifficulty, previousEpochDifficulty, err :=
 		btcDiffChain.GetCurrentAndPrevEpochDifficulty()
 	if err != nil {
-		return false, 0, 0, fmt.Errorf(
+		return 0, 0, proofSkipNone, fmt.Errorf(
 			"failed to get Bitcoin epoch difficulties: [%v]",
 			err,
 		)
@@ -371,15 +436,17 @@ func getProofInfo(
 		previousEpochDifficulty.Cmp(one) > 0
 
 	var requestedDiff *big.Int
+	var totalDifficultyRequired *big.Int
 	observedDiff := big.NewInt(0)
 	headerCount := uint(0)
 
 	for {
 		if headerCount >= maxProofHeaders {
 			// Could not find a decisive header or accumulate enough
-			// difficulty within a sane number of headers. Skip the
-			// transaction; it may become provable later.
-			return false, 0, 0, nil
+			// difficulty within the header bound. Signal the distinct cause;
+			// with a fixed proof window this may be permanent rather than
+			// merely delayed.
+			return 0, 0, proofSkipExceededMaxHeaders, nil
 		}
 
 		blockHeight := proofStartBlock + uint64(headerCount)
@@ -387,12 +454,12 @@ func getProofInfo(
 			// Not enough mined blocks yet to assemble the proof. Report the
 			// number of headers needed so far plus one more; the caller will
 			// see accumulated < required and skip the transaction for now.
-			return true, accumulatedConfirmations, headerCount + 1, nil
+			return accumulatedConfirmations, headerCount + 1, proofSkipNone, nil
 		}
 
 		header, err := btcChain.GetBlockHeader(uint(blockHeight))
 		if err != nil {
-			return false, 0, 0, fmt.Errorf(
+			return 0, 0, proofSkipNone, fmt.Errorf(
 				"failed to get block header at height [%v]: [%v]",
 				blockHeight,
 				err,
@@ -404,8 +471,12 @@ func getProofInfo(
 		observedDiff.Add(observedDiff, headerDiff)
 
 		if requestedDiff == nil {
-			// Still looking for the decisive header.
-			if skipMinDifficulty && headerDiff.Cmp(one) == 0 {
+			// Still looking for the decisive header. Skip minimum-difficulty
+			// (DIFF1) headers by exact target equality, mirroring the Bridge's
+			// target == MIN_DIFFICULTY_TARGET predicate. Their work is still
+			// added to observedDiff above.
+			if skipMinDifficulty &&
+				header.Target().Cmp(minDifficultyTarget) == 0 {
 				continue
 			}
 
@@ -418,16 +489,17 @@ func getProofInfo(
 				// difficulty". The transaction is either too fresh (its epoch
 				// is not yet proven in the relay) or too old. Skip it; it may
 				// be proven in the future.
-				return false, 0, 0, nil
+				return 0, 0, proofSkipOutsideRelayRange, nil
 			}
+
+			totalDifficultyRequired = new(big.Int).Mul(
+				requestedDiff,
+				txProofDifficultyFactor,
+			)
 		}
 
-		totalDifficultyRequired := new(big.Int).Mul(
-			requestedDiff,
-			txProofDifficultyFactor,
-		)
 		if observedDiff.Cmp(totalDifficultyRequired) >= 0 {
-			return true, accumulatedConfirmations, headerCount, nil
+			return accumulatedConfirmations, headerCount, proofSkipNone, nil
 		}
 	}
 }

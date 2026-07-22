@@ -28,7 +28,7 @@ func TestGetProofInfo(t *testing.T) {
 		previousEpochDifficulty          *big.Int
 		headerDifficultyAt               func(uint) *big.Int
 		headersFrom, headersTo           uint
-		expectedIsProofWithinRelayRange  bool
+		expectedSkipReason               proofSkipReason
 		expectedAccumulatedConfirmations uint
 		expectedRequiredConfirmations    uint
 	}{
@@ -42,7 +42,7 @@ func TestGetProofInfo(t *testing.T) {
 			headersFrom:              proofStart,
 			headersTo:                proofStart + 19,
 
-			expectedIsProofWithinRelayRange:  true,
+			expectedSkipReason:               proofSkipNone,
 			expectedAccumulatedConfirmations: 20,
 			expectedRequiredConfirmations:    6,
 		},
@@ -55,7 +55,7 @@ func TestGetProofInfo(t *testing.T) {
 			headersFrom:              proofStart,
 			headersTo:                proofStart + 19,
 
-			expectedIsProofWithinRelayRange:  true,
+			expectedSkipReason:               proofSkipNone,
 			expectedAccumulatedConfirmations: 20,
 			expectedRequiredConfirmations:    6,
 		},
@@ -75,7 +75,7 @@ func TestGetProofInfo(t *testing.T) {
 			headersFrom: proofStart,
 			headersTo:   proofStart + 30,
 
-			expectedIsProofWithinRelayRange:  true,
+			expectedSkipReason:               proofSkipNone,
 			expectedAccumulatedConfirmations: 31,
 			expectedRequiredConfirmations:    10,
 		},
@@ -93,7 +93,7 @@ func TestGetProofInfo(t *testing.T) {
 			headersFrom: proofStart,
 			headersTo:   proofStart + 30,
 
-			expectedIsProofWithinRelayRange:  true,
+			expectedSkipReason:               proofSkipNone,
 			expectedAccumulatedConfirmations: 31,
 			expectedRequiredConfirmations:    4,
 		},
@@ -114,7 +114,7 @@ func TestGetProofInfo(t *testing.T) {
 			headersFrom: proofStart,
 			headersTo:   proofStart + 30,
 
-			expectedIsProofWithinRelayRange:  true,
+			expectedSkipReason:               proofSkipNone,
 			expectedAccumulatedConfirmations: 31,
 			expectedRequiredConfirmations:    8,
 		},
@@ -128,7 +128,7 @@ func TestGetProofInfo(t *testing.T) {
 			headersFrom:              proofStart,
 			headersTo:                proofStart + 19,
 
-			expectedIsProofWithinRelayRange:  true,
+			expectedSkipReason:               proofSkipNone,
 			expectedAccumulatedConfirmations: 20,
 			expectedRequiredConfirmations:    6,
 		},
@@ -143,7 +143,7 @@ func TestGetProofInfo(t *testing.T) {
 			headersFrom:              proofStart,
 			headersTo:                proofStart + 19,
 
-			expectedIsProofWithinRelayRange:  false,
+			expectedSkipReason:               proofSkipOutsideRelayRange,
 			expectedAccumulatedConfirmations: 0,
 			expectedRequiredConfirmations:    0,
 		},
@@ -157,7 +157,7 @@ func TestGetProofInfo(t *testing.T) {
 			headersFrom:              proofStart,
 			headersTo:                proofStart + 149,
 
-			expectedIsProofWithinRelayRange:  false,
+			expectedSkipReason:               proofSkipExceededMaxHeaders,
 			expectedAccumulatedConfirmations: 0,
 			expectedRequiredConfirmations:    0,
 		},
@@ -172,7 +172,111 @@ func TestGetProofInfo(t *testing.T) {
 			headersFrom:              proofStart,
 			headersTo:                proofStart + 2,
 
-			expectedIsProofWithinRelayRange:  true,
+			expectedSkipReason:               proofSkipNone,
+			expectedAccumulatedConfirmations: 3,
+			expectedRequiredConfirmations:    4,
+		},
+		// The decisive header matches the current (not previous) epoch on an
+		// epoch-spanning proof. Complements the "difficulty drops/raises" cases
+		// (which bind to the previous epoch) by exercising the current-epoch
+		// binding branch on asymmetric difficulties. Proof starts in the current
+		// epoch (32) for two blocks, then drops to the previous epoch's value
+		// (16). Required total is 6*32=192; 2*32 + 8*16 = 192 -> 10 headers.
+		"decisive header binds current epoch": {
+			transactionConfirmations: 31,
+			currentEpochDifficulty:   diff(32),
+			previousEpochDifficulty:  diff(16),
+			headerDifficultyAt: func(h uint) *big.Int {
+				if h < proofStart+2 {
+					return diff(32)
+				}
+				return diff(16)
+			},
+			headersFrom: proofStart,
+			headersTo:   proofStart + 30,
+
+			expectedSkipReason:               proofSkipNone,
+			expectedAccumulatedConfirmations: 31,
+			expectedRequiredConfirmations:    10,
+		},
+		// A minimum-difficulty (DIFF1) header appearing after the decisive
+		// header is accumulated like any other header and does not re-enter the
+		// skip/binding logic (that runs only until the decisive header is
+		// found). Decisive header 32 binds requestedDiff; the interior DIFF1
+		// contributes its work to the observed difficulty. Required total is
+		// 6*32=192; 32 + 1 + 5*32 = 193 >= 192 -> 7 headers.
+		"minimum difficulty header after decisive header is counted": {
+			transactionConfirmations: 20,
+			currentEpochDifficulty:   diff(32),
+			previousEpochDifficulty:  diff(16),
+			headerDifficultyAt: func(h uint) *big.Int {
+				if h == proofStart+1 {
+					return diff(1)
+				}
+				return diff(32)
+			},
+			headersFrom: proofStart,
+			headersTo:   proofStart + 19,
+
+			expectedSkipReason:               proofSkipNone,
+			expectedAccumulatedConfirmations: 20,
+			expectedRequiredConfirmations:    7,
+		},
+		// The decisive header sits exactly at the header bound: 143 leading
+		// DIFF1 headers (skipped for binding but contributing 1 each) followed
+		// by the decisive header at position maxProofHeaders. Required total is
+		// 6*16=96; 143*1 + 16 = 159 >= 96 -> exactly 144 headers, at the bound.
+		"decisive header exactly at header bound is proven": {
+			transactionConfirmations: maxProofHeaders,
+			currentEpochDifficulty:   diff(16),
+			previousEpochDifficulty:  diff(32),
+			headerDifficultyAt: func(h uint) *big.Int {
+				if h < proofStart+maxProofHeaders-1 {
+					return diff(1)
+				}
+				return diff(16)
+			},
+			headersFrom: proofStart,
+			headersTo:   proofStart + maxProofHeaders - 1,
+
+			expectedSkipReason:               proofSkipNone,
+			expectedAccumulatedConfirmations: maxProofHeaders,
+			expectedRequiredConfirmations:    maxProofHeaders,
+		},
+		// The decisive header sits one past the header bound: maxProofHeaders
+		// leading DIFF1 headers exhaust the walk before the decisive header at
+		// position maxProofHeaders+1 is ever examined. This is the off-by-one
+		// companion to the case above and must be signalled as exceeded.
+		"decisive header just past header bound is skipped": {
+			transactionConfirmations: maxProofHeaders + 1,
+			currentEpochDifficulty:   diff(16),
+			previousEpochDifficulty:  diff(32),
+			headerDifficultyAt: func(h uint) *big.Int {
+				if h < proofStart+maxProofHeaders {
+					return diff(1)
+				}
+				return diff(16)
+			},
+			headersFrom: proofStart,
+			headersTo:   proofStart + maxProofHeaders,
+
+			expectedSkipReason:               proofSkipExceededMaxHeaders,
+			expectedAccumulatedConfirmations: 0,
+			expectedRequiredConfirmations:    0,
+		},
+		// The chain tip is reached while still skipping leading DIFF1 headers,
+		// before any decisive header is bound (requestedDiff is still nil). The
+		// proof is within range and the caller is told to wait for one more
+		// header than currently exists.
+		"chain tip reached before decisive header": {
+			transactionConfirmations: 3,
+			currentEpochDifficulty:   diff(32),
+			previousEpochDifficulty:  diff(16),
+			headerDifficultyAt:       func(uint) *big.Int { return diff(1) },
+			headersFrom:              proofStart,
+			headersTo:                proofStart + 2,
+
+			expectedSkipReason:               proofSkipNone,
 			expectedAccumulatedConfirmations: 3,
 			expectedRequiredConfirmations:    4,
 		},
@@ -206,14 +310,15 @@ func TestGetProofInfo(t *testing.T) {
 
 			localChain.setTxProofDifficultyFactor(big.NewInt(6))
 			localChain.setCurrentEpoch(392)
+			// Note the setter's parameter order is (previous, current).
 			localChain.setCurrentAndPrevEpochDifficulty(
-				test.currentEpochDifficulty,
 				test.previousEpochDifficulty,
+				test.currentEpochDifficulty,
 			)
 
-			isProofWithinRelayRange,
-				accumulatedConfirmations,
+			accumulatedConfirmations,
 				requiredConfirmations,
+				skipReason,
 				err :=
 				getProofInfo(
 					transactionHash,
@@ -225,11 +330,11 @@ func TestGetProofInfo(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			testutils.AssertBoolsEqual(
+			testutils.AssertIntsEqual(
 				t,
-				"is proof within range",
-				test.expectedIsProofWithinRelayRange,
-				isProofWithinRelayRange,
+				"skip reason",
+				int(test.expectedSkipReason),
+				int(skipReason),
 			)
 
 			testutils.AssertUintsEqual(
