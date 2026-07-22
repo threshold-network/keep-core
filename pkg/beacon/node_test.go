@@ -5,10 +5,71 @@ import (
 	"math/big"
 	"testing"
 
+	"go.uber.org/zap"
+
 	"github.com/keep-network/keep-core/pkg/chain/local_v1"
+	"github.com/keep-network/keep-core/pkg/net"
+	"github.com/keep-network/keep-core/pkg/operator"
 )
 
 var relayEntryTimeout = uint64(15)
+
+// filterErrorChannel is a broadcast channel whose SetFilter result is
+// controllable, used to exercise the membership-filter abort path.
+type filterErrorChannel struct {
+	net.BroadcastChannel
+	setFilterErr error
+}
+
+func (c *filterErrorChannel) SetFilter(net.BroadcastChannelFilter) error {
+	return c.setFilterErr
+}
+
+func (c *filterErrorChannel) Name() string {
+	return "test-channel"
+}
+
+// TestSetBroadcastChannelFilter verifies that the membership filter is required
+// before a node proceeds on a group channel: when the filter cannot be set the
+// helper surfaces the error so the caller aborts, rather than proceeding on an
+// unfiltered channel that would accept messages from operators outside the
+// group.
+func TestSetBroadcastChannelFilter(t *testing.T) {
+	filter := func(*operator.PublicKey) bool { return true }
+
+	tests := map[string]struct {
+		setFilterErr error
+		expectError  bool
+	}{
+		"filter set successfully": {
+			setFilterErr: nil,
+			expectError:  false,
+		},
+		"filter cannot be set": {
+			setFilterErr: fmt.Errorf("cannot set filter"),
+			expectError:  true,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			channel := &filterErrorChannel{setFilterErr: test.setFilterErr}
+
+			err := setBroadcastChannelFilter(
+				zap.NewNop().Sugar(),
+				channel,
+				filter,
+			)
+
+			if test.expectError && err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if !test.expectError && err != nil {
+				t.Fatalf("unexpected error: [%v]", err)
+			}
+		})
+	}
+}
 
 func TestMonitorRelayEntryOnChain_EntrySubmitted(t *testing.T) {
 	localChain := local_v1.Connect(5, 3)
