@@ -210,10 +210,14 @@ func (rt *RedemptionTask) ProposeRedemption(
 
 	taskLogger.Infof("preparing a redemption proposal")
 
-	// Estimate fee if it's missing. The per-request maximum fee is still
-	// checked during the on-chain validation of the proposal; here we bound
-	// the estimate by the maximum total fee only so the safe-minimum floor
-	// (see EstimateRedemptionFee) cannot produce a fee the Bridge would reject.
+	// Estimate fee if it's missing. Here we bound the estimate by the maximum
+	// total fee only. The per-request maximum fee (TxMaxFee, snapshotted per
+	// request at request creation) is enforced solely by the on-chain
+	// validation of the proposal and is not checked here. Note that the
+	// safe-minimum floor (see EstimateRedemptionFee) raises the total fee and
+	// therefore each request's fee share, so it can push a share above that
+	// request's per-request maximum even while the total stays within
+	// txMaxTotalFee; such a proposal is rejected only by on-chain validation.
 	if fee <= 0 {
 		taskLogger.Infof("estimating redemption transaction fee")
 
@@ -472,9 +476,10 @@ redemptionRequestedLoop:
 
 // EstimateRedemptionFee estimates fee for the redemption transaction that pays
 // the provided redeemers output scripts. The estimated fee is floored at a safe
-// minimum rate and bounded above by txMaxTotalFee (the Bridge maximum), so a
-// non-RBF redemption is never broadcast below the floor where it could get stuck
-// and jam the wallet.
+// minimum rate and bounded above by txMaxTotalFee (the Bridge total-fee
+// maximum), so a non-RBF redemption is not proposed below the floor where it
+// could get stuck and jam the wallet. Only the total fee is bounded here; the
+// per-request maximum fee is enforced separately by on-chain validation.
 func EstimateRedemptionFee(
 	btcChain bitcoin.Chain,
 	redeemersOutputScripts []bitcoin.Script,

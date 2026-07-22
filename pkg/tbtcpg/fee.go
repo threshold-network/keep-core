@@ -29,12 +29,20 @@ const minWalletTxSatPerVByteFee = 5
 //   - adds a 25% buffer over the oracle estimate so there is margin during the
 //     estimate-to-broadcast delay and the fee stays adaptive under congestion,
 //   - enforces a floor of minWalletTxSatPerVByteFee sat/vByte, and
-//   - bounds the result by maxTotalFee (the Bridge maximum for the transaction).
+//   - bounds the result by maxTotalFee (the Bridge maximum total fee for the
+//     transaction).
 //
 // It returns an error if the minimum floor alone would exceed maxTotalFee - a
 // safe transaction cannot be built, so the caller must not broadcast an
 // underpriced one. estimatedFee is the raw oracle fee and txVsize is the
 // estimated transaction virtual size, both in the usual sat / vByte units.
+//
+// maxTotalFee bounds only the total transaction fee. Where the Bridge also
+// enforces a per-request cap (e.g. the redemption TxMaxFee), satisfying that
+// cap is the caller's or on-chain validation's responsibility; this helper is
+// unaware of it. Callers are expected to reject a raw estimate already above
+// maxTotalFee before calling (all current callers do); the result is in any
+// case clamped down to maxTotalFee.
 //
 // The buffer and floor are applied to the estimated vsize; a transaction whose
 // real on-wire vsize is larger than estimated (e.g. a deposit sweep containing
@@ -65,6 +73,9 @@ func applyWalletTxFeeFloor(
 		rate = minWalletTxSatPerVByteFee
 	}
 
+	// Clamp down to the Bridge maximum total fee. This can never drop the fee
+	// below the floor: the floor-vs-cap guard above already guaranteed
+	// maxTotalFee is at least the minimum floor total.
 	totalFee := rate * txVsize
 	if uint64(totalFee) > maxTotalFee {
 		totalFee = int64(maxTotalFee)
