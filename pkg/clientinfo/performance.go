@@ -136,6 +136,16 @@ func (pm *PerformanceMetrics) registerCounterMetrics() {
 		MetricRedemptionProposalGenerationSuccessTotal,
 		MetricRedemptionProposalBroadcastTotal,
 		MetricRedemptionProposalBroadcastFailedTotal,
+		MetricRedemptionProofSubmissionsTotal,
+		MetricRedemptionProofSubmissionsSuccessTotal,
+		MetricRedemptionProofSubmissionsFailedTotal,
+		MetricDepositSweepProofSubmissionsTotal,
+		MetricDepositSweepProofSubmissionsSuccessTotal,
+		MetricDepositSweepProofSubmissionsFailedTotal,
+		MetricWalletActionsTotal,
+		MetricWalletActionSuccessTotal,
+		MetricWalletActionFailedTotal,
+		MetricWalletHeartbeatFailuresTotal,
 		MetricCoordinationWindowsDetectedTotal,
 		MetricCoordinationProceduresExecutedTotal,
 		MetricCoordinationFailedTotal,
@@ -565,6 +575,15 @@ const (
 	MetricRedemptionProposalGenerationSuccessTotal = "redemption_proposal_generation_success_total"
 	MetricRedemptionProposalBroadcastTotal         = "redemption_proposal_broadcast_total"
 	MetricRedemptionProposalBroadcastFailedTotal   = "redemption_proposal_broadcast_failed_total"
+	// Redemption Proof Submission Metrics (SPV maintainer)
+	MetricRedemptionProofSubmissionsTotal        = "redemption_proof_submissions_total"
+	MetricRedemptionProofSubmissionsSuccessTotal = "redemption_proof_submissions_success_total"
+	MetricRedemptionProofSubmissionsFailedTotal  = "redemption_proof_submissions_failed_total"
+
+	// Deposit Sweep Proof Submission Metrics (SPV maintainer)
+	MetricDepositSweepProofSubmissionsTotal        = "deposit_sweep_proof_submissions_total"
+	MetricDepositSweepProofSubmissionsSuccessTotal = "deposit_sweep_proof_submissions_success_total"
+	MetricDepositSweepProofSubmissionsFailedTotal  = "deposit_sweep_proof_submissions_failed_total"
 	// Wallet Action Metrics (aggregate)
 	MetricWalletActionsTotal                 = "wallet_actions_total"
 	MetricWalletActionSuccessTotal           = "wallet_action_success_total"
