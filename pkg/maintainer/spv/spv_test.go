@@ -909,7 +909,6 @@ func TestUnprovenSearchStartBlock(t *testing.T) {
 		})
 	}
 }
-
 // stubTransactionChain overrides GetTransactionsForPublicKeyHash on the local
 // Bitcoin chain so that collectUnprovenWalletTransactions can be exercised with
 // a controlled set of transactions and error, independently of how the local
