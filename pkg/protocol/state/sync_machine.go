@@ -72,7 +72,7 @@ func (sm *SyncMachine) Execute(startBlockHeight uint64) (SyncState, uint64, erro
 	err := sm.blockCounter.WaitForBlockHeight(startBlockHeight)
 	if err != nil {
 		cancelCtx()
-		return nil, 0, fmt.Errorf("failed to wait for the execution start block")
+		return nil, 0, fmt.Errorf("failed to wait for the execution start block: [%w]", err)
 	}
 
 	lastStateEndBlockHeight := startBlockHeight

@@ -1,8 +1,9 @@
 //go:build tools
 
-// tools.go: Build-time dependencies required for Ethereum bindings generation
-// These are imported to ensure they remain in go.mod and go.sum even though
-// they're not directly used in the runtime code.
+// tools.go pins indirect dependencies that would otherwise be dropped by
+// `go mod tidy`. They are anchored here with blank imports so they remain in
+// go.mod and go.sum for reproducible builds, even though they are not
+// referenced directly by runtime or generated code.
 package tools
 
 import (
