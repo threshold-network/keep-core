@@ -392,24 +392,10 @@ func EstimateMovedFundsSweepFee(
 		AddPublicKeyHashInputs(inputCount, true).
 		AddPublicKeyHashOutputs(1, true)
 
-	transactionSize, err := sizeEstimator.VirtualSize()
-	if err != nil {
-		return 0, fmt.Errorf(
-			"cannot estimate transaction virtual size: [%v]",
-			err,
-		)
-	}
-
-	feeEstimator := bitcoin.NewTransactionFeeEstimator(btcChain)
-
-	totalFee, err := feeEstimator.EstimateFee(transactionSize)
-	if err != nil {
-		return 0, fmt.Errorf("cannot estimate transaction fee: [%v]", err)
-	}
-
-	if uint64(totalFee) > sweepTxMaxTotalFee {
-		return 0, ErrSweepTxFeeTooHigh
-	}
-
-	return totalFee, nil
+	return estimateCappedFee(
+		btcChain,
+		sizeEstimator,
+		sweepTxMaxTotalFee,
+		ErrSweepTxFeeTooHigh,
+	)
 }

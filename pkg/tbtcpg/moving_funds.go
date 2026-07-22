@@ -626,17 +626,15 @@ func (mft *MovingFundsTask) ActionType() tbtc.WalletActionType {
 	return tbtc.ActionMovingFunds
 }
 
-// EstimateMovingFundsFee estimates fee for the moving funds transaction that
-// moves funds from the source wallet to target wallets.
-func EstimateMovingFundsFee(
+// estimateCappedFee estimates the transaction fee for a transaction of the
+// virtual size produced by the given size estimator. It returns feeTooHighErr
+// if the estimated fee exceeds maxTotalFee.
+func estimateCappedFee(
 	btcChain bitcoin.Chain,
-	targetWalletsCount int,
-	txMaxTotalFee uint64,
+	sizeEstimator *bitcoin.TransactionSizeEstimator,
+	maxTotalFee uint64,
+	feeTooHighErr error,
 ) (int64, error) {
-	sizeEstimator := bitcoin.NewTransactionSizeEstimator().
-		AddPublicKeyHashInputs(1, true).
-		AddPublicKeyHashOutputs(targetWalletsCount, true)
-
 	transactionSize, err := sizeEstimator.VirtualSize()
 	if err != nil {
 		return 0, fmt.Errorf(
@@ -652,9 +650,23 @@ func EstimateMovingFundsFee(
 		return 0, fmt.Errorf("cannot estimate transaction fee: [%v]", err)
 	}
 
-	if uint64(totalFee) > txMaxTotalFee {
-		return 0, ErrFeeTooHigh
+	if uint64(totalFee) > maxTotalFee {
+		return 0, feeTooHighErr
 	}
 
 	return totalFee, nil
+}
+
+// EstimateMovingFundsFee estimates fee for the moving funds transaction that
+// moves funds from the source wallet to target wallets.
+func EstimateMovingFundsFee(
+	btcChain bitcoin.Chain,
+	targetWalletsCount int,
+	txMaxTotalFee uint64,
+) (int64, error) {
+	sizeEstimator := bitcoin.NewTransactionSizeEstimator().
+		AddPublicKeyHashInputs(1, true).
+		AddPublicKeyHashOutputs(targetWalletsCount, true)
+
+	return estimateCappedFee(btcChain, sizeEstimator, txMaxTotalFee, ErrFeeTooHigh)
 }
