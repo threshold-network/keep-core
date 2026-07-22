@@ -363,21 +363,6 @@ func ValidateMovingFundsProposal(
 	return nil
 }
 
-// ValidateMovingFundsSafetyMargin checks if the moving funds safety margin
-// is in force.
-//
-// Wallets that just entered the MovingFunds state may have received some last
-// minute deposits just before. Even though deposit sweep typically occurs
-// before moving funds, such deposits may not be mature enough or have enough
-// confirmations to be swept yet. MovingFunds wallets cannot receive new
-// deposits so, it makes sense to preserve a safety margin before moving
-// funds to give the last minute deposits a chance to become eligible for
-// deposit sweep.
-//
-// Similarly, wallets that just entered the MovingFunds state may have become
-// target wallets for another moving funds wallets. It makes sense to preserve
-// a safety margin to allow the wallet to merge the moved funds from another
-// wallets. In this case a longer safety margin should be used.
 // movingFundsSafetyMarginChain is the chain interface required to evaluate the
 // moving funds safety margin and to determine whether a wallet is a pending
 // moving funds target.
@@ -406,6 +391,21 @@ type movingFundsSafetyMarginChain interface {
 	) ([]*MovingFundsCommitmentSubmittedEvent, error)
 }
 
+// ValidateMovingFundsSafetyMargin checks if the moving funds safety margin
+// is in force.
+//
+// Wallets that just entered the MovingFunds state may have received some last
+// minute deposits just before. Even though deposit sweep typically occurs
+// before moving funds, such deposits may not be mature enough or have enough
+// confirmations to be swept yet. MovingFunds wallets cannot receive new
+// deposits so, it makes sense to preserve a safety margin before moving
+// funds to give the last minute deposits a chance to become eligible for
+// deposit sweep.
+//
+// Similarly, wallets that just entered the MovingFunds state may have become
+// target wallets for another moving funds wallets. It makes sense to preserve
+// a safety margin to allow the wallet to merge the moved funds from another
+// wallets. In this case a longer safety margin should be used.
 func ValidateMovingFundsSafetyMargin(
 	walletPublicKeyHash [20]byte,
 	chain movingFundsSafetyMarginChain,
