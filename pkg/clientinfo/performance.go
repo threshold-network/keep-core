@@ -156,6 +156,7 @@ func (pm *PerformanceMetrics) registerCounterMetrics() {
 		MetricDepositSweepProofSubmissionsTotal,
 		MetricDepositSweepProofSubmissionsSuccessTotal,
 		MetricDepositSweepProofSubmissionsFailedTotal,
+
 		MetricCoordinationWindowsDetectedTotal,
 		MetricCoordinationProceduresExecutedTotal,
 		MetricCoordinationFailedTotal,
