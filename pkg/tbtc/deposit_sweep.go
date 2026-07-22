@@ -52,13 +52,16 @@ const (
 	depositSweepBroadcastCheckDelay = 1 * time.Minute
 )
 
+// DepositKey identifies a deposit by the outpoint of its funding transaction.
+type DepositKey struct {
+	FundingTxHash      bitcoin.Hash
+	FundingOutputIndex uint32
+}
+
 // DepositSweepProposal represents a deposit sweep proposal issued by a
 // wallet's coordination leader.
 type DepositSweepProposal struct {
-	DepositsKeys []struct {
-		FundingTxHash      bitcoin.Hash
-		FundingOutputIndex uint32
-	}
+	DepositsKeys         []DepositKey
 	SweepTxFee           *big.Int
 	DepositsRevealBlocks []*big.Int
 }

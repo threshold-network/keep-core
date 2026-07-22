@@ -507,18 +507,12 @@ func (dst *DepositSweepTask) ProposeDepositsSweep(
 
 	taskLogger.Infof("sweep transaction fee: [%d]", fee)
 
-	depositsKeys := make([]struct {
-		FundingTxHash      bitcoin.Hash
-		FundingOutputIndex uint32
-	}, len(deposits))
+	depositsKeys := make([]tbtc.DepositKey, len(deposits))
 
 	depositsRevealBlocks := make([]*big.Int, len(deposits))
 
 	for i, deposit := range deposits {
-		depositsKeys[i] = struct {
-			FundingTxHash      bitcoin.Hash
-			FundingOutputIndex uint32
-		}{
+		depositsKeys[i] = tbtc.DepositKey{
 			FundingTxHash:      deposit.FundingTxHash,
 			FundingOutputIndex: deposit.FundingOutputIndex,
 		}

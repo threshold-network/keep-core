@@ -36,18 +36,18 @@ const (
 
 // ParseWalletActionType parses the given value into a WalletActionType.
 func ParseWalletActionType(value uint8) (WalletActionType, error) {
-	switch value {
-	case 0:
+	switch WalletActionType(value) {
+	case ActionNoop:
 		return ActionNoop, nil
-	case 1:
+	case ActionHeartbeat:
 		return ActionHeartbeat, nil
-	case 2:
+	case ActionDepositSweep:
 		return ActionDepositSweep, nil
-	case 3:
+	case ActionRedemption:
 		return ActionRedemption, nil
-	case 4:
+	case ActionMovingFunds:
 		return ActionMovingFunds, nil
-	case 5:
+	case ActionMovedFundsSweep:
 		return ActionMovedFundsSweep, nil
 	default:
 		return 0, fmt.Errorf("unknown wallet action type [%v]", value)
