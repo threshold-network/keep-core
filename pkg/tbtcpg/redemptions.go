@@ -292,7 +292,7 @@ func (rt *RedemptionTask) ProposeRedemption(
 }
 
 func findPendingRedemptions(
-	fnLogger log.StandardLogger,
+	taskLogger log.StandardLogger,
 	chain Chain,
 	walletPublicKeyHash [20]byte,
 	currentBlockNumber uint64,
@@ -362,9 +362,9 @@ func findPendingRedemptions(
 		eventsSet[hexutils.Encode(redemptionKey.Bytes())] = event
 	}
 
-	fnLogger.Infof("found [%d] RedemptionRequested events", len(eventsSet))
+	taskLogger.Infof("found [%d] RedemptionRequested events", len(eventsSet))
 
-	fnLogger.Infof("checking pending redemptions details")
+	taskLogger.Infof("checking pending redemptions details")
 
 	pendingRedemptions := make([]*RedemptionRequest, 0)
 
@@ -373,7 +373,7 @@ redemptionRequestedLoop:
 	for redemptionKey, event := range eventsSet {
 		eventIndex++
 
-		fnLogger.Debugf(
+		taskLogger.Debugf(
 			"getting pending redemption details [%s]",
 			redemptionKey,
 		)
@@ -391,7 +391,7 @@ redemptionRequestedLoop:
 			)
 		}
 		if !found {
-			fnLogger.Infof(
+			taskLogger.Infof(
 				"redemption request [%s] is no longer pending",
 				redemptionKey,
 			)
@@ -450,7 +450,7 @@ redemptionRequestedLoop:
 			minAge = delay
 		}
 
-		fnLogger.Infof(
+		taskLogger.Infof(
 			"minimum age for redemption request [%s] is [%v]",
 			redemption.RedemptionKey,
 			minAge,
@@ -467,7 +467,7 @@ redemptionRequestedLoop:
 
 		// Check if timeout passed for the redemption request.
 		if pendingRedemption.RequestedAt.Before(redemptionRequestsRangeStartTimestamp) {
-			fnLogger.Infof(
+			taskLogger.Infof(
 				"redemption request [%s] has already timed out",
 				pendingRedemption.RedemptionKey,
 			)
@@ -487,7 +487,7 @@ redemptionRequestedLoop:
 
 		// Check if enough time elapsed since the redemption request.
 		if pendingRedemption.RequestedAt.After(rangeEndTimestamp) {
-			fnLogger.Infof(
+			taskLogger.Infof(
 				"redemption request [%s] is not old enough",
 				pendingRedemption.RedemptionKey,
 			)
