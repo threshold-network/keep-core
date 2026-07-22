@@ -27,7 +27,7 @@ func SubmitDepositSweepProof(
 		btcChain,
 		spvChain,
 		bitcoin.AssembleSpvProof,
-		getMetricsRecorder(),
+		nil,
 	)
 }
 
@@ -252,19 +252,10 @@ func getUnprovenDepositSweepTransactions(
 	[]*bitcoin.Transaction,
 	error,
 ) {
-	blockCounter, err := spvChain.BlockCounter()
+	startBlock, err := unprovenSearchStartBlock(historyDepth, spvChain)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get block counter: [%v]", err)
+		return nil, err
 	}
-
-	currentBlock, err := blockCounter.CurrentBlock()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get current block: [%v]", err)
-	}
-
-	// Calculate the starting block of the range in which the events will be
-	// searched for.
-	startBlock := currentBlock - historyDepth
 
 	events, err :=
 		spvChain.PastDepositRevealedEvents(
@@ -306,40 +297,28 @@ func getUnprovenDepositSweepTransactions(
 			continue
 		}
 
-		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+		unproven, err := collectUnprovenWalletTransactions(
 			walletPublicKeyHash,
 			transactionLimit,
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"failed to get transactions for wallet: [%v]",
-				err,
-			)
-		}
-
-		for _, transaction := range walletTransactions {
-			isUnproven, err :=
-				isUnprovenDepositSweepTransaction(
+			btcChain,
+			func(transaction *bitcoin.Transaction) (bool, error) {
+				return isUnprovenDepositSweepTransaction(
 					transaction,
 					walletPublicKeyHash,
 					btcChain,
 					spvChain,
 				)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"failed to check if transaction is an unproven deposit sweep "+
-						"transaction: [%v]",
-					err,
-				)
-			}
-
-			if isUnproven {
-				unprovenDepositSweepTransactions = append(
-					unprovenDepositSweepTransactions,
-					transaction,
-				)
-			}
+			},
+			false,
+		)
+		if err != nil {
+			return nil, err
 		}
+
+		unprovenDepositSweepTransactions = append(
+			unprovenDepositSweepTransactions,
+			unproven...,
+		)
 	}
 
 	return unprovenDepositSweepTransactions, nil
