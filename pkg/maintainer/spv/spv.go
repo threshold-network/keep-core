@@ -16,7 +16,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
-	"sync"
 	"time"
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
@@ -54,33 +53,6 @@ func Initialize(
 	go spvMaintainer.startControlLoop(ctx)
 }
 
-// globalMetricsRecorder is a package-level variable to access metrics recorder
-// from proof submission functions.
-var (
-	globalMetricsRecorderMu sync.RWMutex
-	globalMetricsRecorder   interface {
-		IncrementCounter(name string, value float64)
-	}
-)
-
-// SetMetricsRecorder sets the metrics recorder for the SPV maintainer.
-// This allows recording metrics for proof submissions.
-func SetMetricsRecorder(recorder interface {
-	IncrementCounter(name string, value float64)
-}) {
-	globalMetricsRecorderMu.Lock()
-	defer globalMetricsRecorderMu.Unlock()
-	globalMetricsRecorder = recorder
-}
-
-// getMetricsRecorder safely retrieves the metrics recorder.
-func getMetricsRecorder() interface {
-	IncrementCounter(name string, value float64)
-} {
-	globalMetricsRecorderMu.RLock()
-	defer globalMetricsRecorderMu.RUnlock()
-	return globalMetricsRecorder
-}
 
 // proofTypes holds the information about proof types supported by the
 // SPV maintainer.
@@ -465,6 +437,71 @@ func uniqueWalletPublicKeyHashes[T walletEvent](events []T) [][20]byte {
 	}
 
 	return publicKeyHashes
+}
+
+// unprovenSearchStartBlock returns the starting block of the range in which
+// the events used to find unproven transactions are searched for. It is
+// derived from the current chain tip and the configured history depth.
+func unprovenSearchStartBlock(
+	historyDepth uint64,
+	spvChain Chain,
+) (uint64, error) {
+	blockCounter, err := spvChain.BlockCounter()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get block counter: [%v]", err)
+	}
+
+	currentBlock, err := blockCounter.CurrentBlock()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get current block: [%v]", err)
+	}
+
+	return currentBlock - historyDepth, nil
+}
+
+// collectUnprovenWalletTransactions returns the recent transactions of the
+// wallet identified by lookupPublicKeyHash that satisfy the isUnproven
+// predicate. When stopAtFirstMatch is true it returns as soon as the first
+// matching transaction is found, which is sufficient for wallet operations
+// that can have at most one unproven transaction at a time.
+func collectUnprovenWalletTransactions(
+	lookupPublicKeyHash [20]byte,
+	transactionLimit int,
+	btcChain bitcoin.Chain,
+	isUnproven func(transaction *bitcoin.Transaction) (bool, error),
+	stopAtFirstMatch bool,
+) ([]*bitcoin.Transaction, error) {
+	walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+		lookupPublicKeyHash,
+		transactionLimit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to get transactions for wallet: [%v]",
+			err,
+		)
+	}
+
+	var unprovenTransactions []*bitcoin.Transaction
+
+	for _, transaction := range walletTransactions {
+		matched, err := isUnproven(transaction)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"failed to check if transaction is unproven: [%v]",
+				err,
+			)
+		}
+
+		if matched {
+			unprovenTransactions = append(unprovenTransactions, transaction)
+			if stopAtFirstMatch {
+				break
+			}
+		}
+	}
+
+	return unprovenTransactions, nil
 }
 
 // spvProofAssembler is a type representing a function that is used
