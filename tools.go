@@ -1,7 +1,7 @@
 //go:build tools
 
-// tools.go pins indirect dependencies that would otherwise be dropped by
-// `go mod tidy`. They are anchored here with blank imports so they remain in
+// tools.go pins build-time-only dependencies that would otherwise be dropped
+// by `go mod tidy`. They are anchored here with blank imports so they remain in
 // go.mod and go.sum for reproducible builds, even though they are not
 // referenced directly by runtime or generated code.
 package tools
