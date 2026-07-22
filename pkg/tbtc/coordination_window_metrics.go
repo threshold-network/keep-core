@@ -218,16 +218,13 @@ func (cwm *coordinationWindowMetrics) recordWalletCoordination(
 		wm.WalletsFailed++
 	}
 
-	// Track leader
 	leaderStr := leader.String()
 	wm.Leaders[leaderStr]++
 
-	// Track action type
 	if actionType != "" {
 		wm.ActionTypes[actionType]++
 	}
 
-	// Track faults
 	faultDetails := make([]faultDetail, 0, len(faults))
 	for _, fault := range faults {
 		faultTypeStr := fault.faultType.String()
