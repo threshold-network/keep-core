@@ -380,34 +380,6 @@ type movingFundsSafetyMarginChain interface {
 // target wallets for another moving funds wallets. It makes sense to preserve
 // a safety margin to allow the wallet to merge the moved funds from another
 // wallets. In this case a longer safety margin should be used.
-// movingFundsSafetyMarginChain is the chain interface required to evaluate the
-// moving funds safety margin and to determine whether a wallet is a pending
-// moving funds target.
-type movingFundsSafetyMarginChain interface {
-	BlockCounter() (chain.BlockCounter, error)
-
-	GetWallet(walletPublicKeyHash [20]byte) (*WalletChainData, error)
-
-	GetMovingFundsParameters() (
-		txMaxTotalFee uint64,
-		dustThreshold uint64,
-		timeoutResetDelay uint32,
-		timeout uint32,
-		timeoutSlashingAmount *big.Int,
-		timeoutNotifierRewardMultiplier uint32,
-		commitmentGasOffset uint16,
-		sweepTxMaxTotalFee uint64,
-		sweepTimeout uint32,
-		sweepTimeoutSlashingAmount *big.Int,
-		sweepTimeoutNotifierRewardMultiplier uint32,
-		err error,
-	)
-
-	PastMovingFundsCommitmentSubmittedEvents(
-		filter *MovingFundsCommitmentSubmittedEventFilter,
-	) ([]*MovingFundsCommitmentSubmittedEvent, error)
-}
-
 func ValidateMovingFundsSafetyMargin(
 	walletPublicKeyHash [20]byte,
 	chain movingFundsSafetyMarginChain,
