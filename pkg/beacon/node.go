@@ -135,11 +135,14 @@ func (n *node) JoinDKGIfEligible(
 
 		err = broadcastChannel.SetFilter(membershipValidator.IsInGroup)
 		if err != nil {
+			// Abort instead of proceeding on an unfiltered channel, which
+			// would accept messages from operators outside the selected group.
 			dkgLogger.Errorf(
 				"could not set filter for channel [%v]: [%v]",
 				broadcastChannel.Name(),
 				err,
 			)
+			return
 		}
 
 		for _, index := range indexes {
@@ -360,11 +363,14 @@ func (n *node) GenerateRelayEntry(
 
 	err = channel.SetFilter(membershipValidator.IsInGroup)
 	if err != nil {
+		// Abort instead of proceeding on an unfiltered channel, which would
+		// accept messages from operators outside the signing group.
 		relayLogger.Errorf(
 			"could not set filter for channel [%v]: [%v]",
 			channel.Name(),
 			err,
 		)
+		return
 	}
 
 	blockCounter, err := n.beaconChain.BlockCounter()
