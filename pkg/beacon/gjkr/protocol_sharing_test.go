@@ -188,7 +188,7 @@ func initializeQualifiedMembersGroup(dishonestThreshold, groupSize int) (
 	[]*QualifiedMember,
 	error,
 ) {
-	sharesJustifyingMembers, err := initializeSharesJustifyingMemberGroup(
+	sharesJustifyingMembers, _, err := initializeSharesJustifyingMemberGroup(
 		dishonestThreshold,
 		groupSize,
 	)
