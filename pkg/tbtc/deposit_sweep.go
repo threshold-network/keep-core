@@ -50,14 +50,15 @@ const (
 	// the transaction is known on the Bitcoin chain. This delay is needed
 	// as spreading the transaction over the Bitcoin network takes time.
 	depositSweepBroadcastCheckDelay = 1 * time.Minute
-	// minSweepTxSatPerVByteFee mirrors tbtcpg.minWalletTxSatPerVByteFee, the safe
+	// minSweepTxSatPerVByteFee mirrors tbtcpg.MinWalletTxSatPerVByteFee, the safe
 	// minimum sweep fee rate. It is duplicated here because pkg/tbtcpg imports
 	// pkg/tbtc, so this package cannot import the canonical constant without a
-	// dependency cycle; keep the two in sync. It backs a follower-side soft
-	// (log-only) check that the leader's proposed sweep fee is not below the
-	// floor (see threshold-network/keep-core#4171).
+	// dependency cycle; keep the two in sync (guarded by TestSweepFeeConstants
+	// MirrorTbtcpg). It backs a follower-side soft (log-only) check that the
+	// leader's proposed sweep fee is not below the floor (see
+	// threshold-network/keep-core#4171).
 	minSweepTxSatPerVByteFee = 5
-	// depositScriptByteSize mirrors tbtcpg.depositScriptByteSize, the worst-case
+	// depositScriptByteSize mirrors tbtcpg.DepositScriptByteSize, the worst-case
 	// deposit script size used to estimate the sweep transaction virtual size.
 	depositScriptByteSize = 126
 )
