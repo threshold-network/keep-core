@@ -148,6 +148,12 @@ func (pm *PerformanceMetrics) registerCounterMetrics() {
 		MetricRedemptionProposalGenerationSuccessTotal,
 		MetricRedemptionProposalBroadcastTotal,
 		MetricRedemptionProposalBroadcastFailedTotal,
+		MetricRedemptionProofSubmissionsTotal,
+		MetricRedemptionProofSubmissionsSuccessTotal,
+		MetricRedemptionProofSubmissionsFailedTotal,
+		MetricDepositSweepProofSubmissionsTotal,
+		MetricDepositSweepProofSubmissionsSuccessTotal,
+		MetricDepositSweepProofSubmissionsFailedTotal,
 		MetricCoordinationWindowsDetectedTotal,
 		MetricCoordinationProceduresExecutedTotal,
 		MetricCoordinationFailedTotal,
@@ -597,7 +603,6 @@ const (
 	// transactions whose SPV proofs were skipped because the chain header
 	// count exceeded the configured maximum.
 	MetricSpvProofSkippedExceededMaxHeadersTotal = "spv_proof_skipped_exceeded_max_headers_total"
-
 	// Wallet Action Metrics (aggregate)
 	MetricWalletActionsTotal                 = "wallet_actions_total"
 	MetricWalletActionSuccessTotal           = "wallet_action_success_total"
