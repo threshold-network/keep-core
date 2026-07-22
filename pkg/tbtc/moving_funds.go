@@ -398,20 +398,7 @@ type movingFundsSafetyMarginChain interface {
 
 	GetWallet(walletPublicKeyHash [20]byte) (*WalletChainData, error)
 
-	GetMovingFundsParameters() (
-		txMaxTotalFee uint64,
-		dustThreshold uint64,
-		timeoutResetDelay uint32,
-		timeout uint32,
-		timeoutSlashingAmount *big.Int,
-		timeoutNotifierRewardMultiplier uint32,
-		commitmentGasOffset uint16,
-		sweepTxMaxTotalFee uint64,
-		sweepTimeout uint32,
-		sweepTimeoutSlashingAmount *big.Int,
-		sweepTimeoutNotifierRewardMultiplier uint32,
-		err error,
-	)
+	GetMovingFundsParameters() (MovingFundsParameters, error)
 
 	PastMovingFundsCommitmentSubmittedEvents(
 		filter *MovingFundsCommitmentSubmittedEventFilter,

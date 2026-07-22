@@ -96,7 +96,7 @@ func TestSubmitDepositSweepProof(t *testing.T) {
 		btcChain,
 		spvChain,
 		mockSpvProofAssembler,
-		getMetricsRecorder(),
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
