@@ -2,6 +2,7 @@ package spv
 
 import (
 	"encoding/hex"
+	"fmt"
 	"math/big"
 	"reflect"
 	"strings"
@@ -468,6 +469,151 @@ func TestIsInputCurrentWalletsMainUTXO(t *testing.T) {
 				test.expectedIsCurrentMainUtxo,
 				isCurrentMainUtxo,
 			)
+		})
+	}
+}
+
+// stubTransactionChain overrides GetTransactionsForPublicKeyHash on the local
+// Bitcoin chain so that collectUnprovenWalletTransactions can be exercised with
+// a controlled set of transactions and error, independently of how the local
+// chain filters by public key hash.
+type stubTransactionChain struct {
+	*localBitcoinChain
+	transactions []*bitcoin.Transaction
+	err          error
+}
+
+func (s *stubTransactionChain) GetTransactionsForPublicKeyHash(
+	_ [20]byte,
+	_ int,
+) ([]*bitcoin.Transaction, error) {
+	return s.transactions, s.err
+}
+
+func TestCollectUnprovenWalletTransactions(t *testing.T) {
+	// Distinct transactions identified by pointer. Empty Transaction values
+	// compare equal under reflect.DeepEqual, so assertions below rely on
+	// pointer identity, not value equality.
+	tx1 := &bitcoin.Transaction{}
+	tx2 := &bitcoin.Transaction{}
+	tx3 := &bitcoin.Transaction{}
+
+	// matches returns a predicate reporting a transaction as unproven when it
+	// is one of the given transactions (compared by pointer).
+	matches := func(unproven ...*bitcoin.Transaction) func(*bitcoin.Transaction) (bool, error) {
+		return func(transaction *bitcoin.Transaction) (bool, error) {
+			for _, u := range unproven {
+				if transaction == u {
+					return true, nil
+				}
+			}
+			return false, nil
+		}
+	}
+
+	predicateErr := fmt.Errorf("predicate failure")
+	chainErr := fmt.Errorf("chain failure")
+
+	tests := map[string]struct {
+		transactions     []*bitcoin.Transaction
+		isUnproven       func(*bitcoin.Transaction) (bool, error)
+		stopAtFirstMatch bool
+		chainErr         error
+		expectedResult   []*bitcoin.Transaction
+		expectedErr      string
+	}{
+		"returns all matches when not stopping at first match": {
+			transactions:     []*bitcoin.Transaction{tx1, tx2, tx3},
+			isUnproven:       matches(tx1, tx3),
+			stopAtFirstMatch: false,
+			expectedResult:   []*bitcoin.Transaction{tx1, tx3},
+		},
+		"returns only the first match when stopping at first match": {
+			transactions:     []*bitcoin.Transaction{tx1, tx2, tx3},
+			isUnproven:       matches(tx2, tx3),
+			stopAtFirstMatch: true,
+			expectedResult:   []*bitcoin.Transaction{tx2},
+		},
+		"returns nothing when no transaction matches": {
+			transactions:     []*bitcoin.Transaction{tx1, tx2, tx3},
+			isUnproven:       matches(),
+			stopAtFirstMatch: false,
+			expectedResult:   nil,
+		},
+		"propagates the chain error": {
+			transactions: []*bitcoin.Transaction{tx1},
+			isUnproven:   matches(tx1),
+			chainErr:     chainErr,
+			expectedErr:  "failed to get transactions for wallet",
+		},
+		"propagates the predicate error": {
+			transactions: []*bitcoin.Transaction{tx1},
+			isUnproven: func(*bitcoin.Transaction) (bool, error) {
+				return false, predicateErr
+			},
+			expectedErr: "failed to check if transaction is unproven",
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			btcChain := &stubTransactionChain{
+				localBitcoinChain: newLocalBitcoinChain(),
+				transactions:      test.transactions,
+				err:               test.chainErr,
+			}
+
+			result, err := collectUnprovenWalletTransactions(
+				[20]byte{},
+				len(test.transactions),
+				btcChain,
+				test.isUnproven,
+				test.stopAtFirstMatch,
+			)
+
+			if test.expectedErr != "" {
+				if result != nil {
+					t.Errorf(
+						"expected nil result on error, got [%v]",
+						result,
+					)
+				}
+				if err == nil {
+					t.Fatalf(
+						"expected error containing [%s], got nil",
+						test.expectedErr,
+					)
+				}
+				if !strings.Contains(err.Error(), test.expectedErr) {
+					t.Errorf(
+						"unexpected error\nexpected to contain: [%s]\nactual:              [%v]",
+						test.expectedErr,
+						err,
+					)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: [%v]", err)
+			}
+
+			testutils.AssertIntsEqual(
+				t,
+				"number of unproven transactions",
+				len(test.expectedResult),
+				len(result),
+			)
+
+			for i, expected := range test.expectedResult {
+				if result[i] != expected {
+					t.Errorf(
+						"unexpected transaction at index [%d]; "+
+							"pointer identity mismatch",
+						i,
+					)
+				}
+			}
 		})
 	}
 }
