@@ -394,7 +394,17 @@ func Connect(
 
 // SetMetricsRecorder sets the metrics recorder for the provider and wires it
 // into network components.
-func (p *provider) SetMetricsRecorder(recorder fullMetricsRecorder) {
+//
+// The parameter is an anonymous interface rather than the named
+// fullMetricsRecorder on purpose: callers (e.g. cmd.start) wire metrics via a
+// structural type assertion against this exact signature to avoid importing the
+// unexported provider type. Changing it to a named type would silently break
+// that assertion.
+func (p *provider) SetMetricsRecorder(recorder interface {
+	IncrementCounter(name string, value float64)
+	SetGauge(name string, value float64)
+	RecordDuration(name string, duration time.Duration)
+}) {
 	p.metricsRecorder.Store(recorder)
 	if p.broadcastChannelManager != nil {
 		p.broadcastChannelManager.setMetricsRecorder(recorder)
