@@ -166,7 +166,7 @@ func FindDeposits(
 // The filterStartBlock parameter controls the earliest block from which
 // deposit-revealed events are queried.
 func findDeposits(
-	fnLogger log.StandardLogger,
+	taskLogger log.StandardLogger,
 	chain Chain,
 	btcChain bitcoin.Chain,
 	walletPublicKeyHash [20]byte,
@@ -175,7 +175,7 @@ func findDeposits(
 	skipUnconfirmed bool,
 	filterStartBlock uint64,
 ) ([]*Deposit, error) {
-	fnLogger.Infof("reading revealed deposits from chain")
+	taskLogger.Infof("reading revealed deposits from chain")
 
 	depositMinAgeSeconds, err := chain.GetDepositMinAge()
 	if err != nil {
@@ -201,14 +201,14 @@ func findDeposits(
 		)
 	}
 
-	fnLogger.Infof("found [%d] DepositRevealed events", len(depositRevealedEvents))
+	taskLogger.Infof("found [%d] DepositRevealed events", len(depositRevealedEvents))
 
 	// Take the oldest first
 	sort.SliceStable(depositRevealedEvents, func(i, j int) bool {
 		return depositRevealedEvents[i].BlockNumber < depositRevealedEvents[j].BlockNumber
 	})
 
-	fnLogger.Infof("getting deposits details")
+	taskLogger.Infof("getting deposits details")
 
 	resultSliceCapacity := len(depositRevealedEvents)
 	if maxNumberOfDeposits > 0 {
@@ -227,7 +227,7 @@ func findDeposits(
 		depositKey := chain.BuildDepositKey(event.FundingTxHash, event.FundingOutputIndex)
 		depositKeyStr := depositKey.Text(16)
 
-		fnLogger.Debugf("getting details of deposit [%s]", depositKeyStr)
+		taskLogger.Debugf("getting details of deposit [%s]", depositKeyStr)
 
 		depositRequest, found, err := chain.GetDepositRequest(
 			event.FundingTxHash,
@@ -249,26 +249,26 @@ func findDeposits(
 
 		matureAt := depositRequest.RevealedAt.Add(depositMinAge)
 		if !timeNow.After(matureAt) {
-			fnLogger.Infof("deposit [%s] is not old enough", depositKeyStr)
+			taskLogger.Infof("deposit [%s] is not old enough", depositKeyStr)
 			continue
 		}
 
 		isSwept := depositRequest.SweptAt.Unix() != 0
 		if skipSwept && isSwept {
-			fnLogger.Debugf("deposit [%s] is already swept", depositKeyStr)
+			taskLogger.Debugf("deposit [%s] is already swept", depositKeyStr)
 			continue
 		}
 
 		confirmations, err := btcChain.GetTransactionConfirmations(event.FundingTxHash)
 		if err != nil {
-			fnLogger.Errorf(
+			taskLogger.Errorf(
 				"failed to get bitcoin transaction confirmations: [%v]",
 				err,
 			)
 		}
 
 		if skipUnconfirmed && confirmations < tbtc.DepositSweepRequiredFundingTxConfirmations {
-			fnLogger.Debugf(
+			taskLogger.Debugf(
 				"deposit [%s] funding transaction doesn't have enough confirmations: [%d/%d]",
 				depositKeyStr,
 				confirmations,
@@ -604,7 +604,7 @@ func EstimateDepositsSweepFee(
 	} else {
 		sweepMaxSize, err := chain.GetDepositSweepMaxSize()
 		if err != nil {
-			return nil, fmt.Errorf("cannot get sweep max size: [%v]", sweepMaxSize)
+			return nil, fmt.Errorf("cannot get sweep max size: [%v]", err)
 		}
 
 		for i := 1; i <= int(sweepMaxSize); i++ {
