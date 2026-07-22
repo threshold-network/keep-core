@@ -78,7 +78,7 @@ func TestSubmitRedemptionProof(t *testing.T) {
 		btcChain,
 		spvChain,
 		mockSpvProofAssembler,
-		getMetricsRecorder(),
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)

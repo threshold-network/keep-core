@@ -133,19 +133,10 @@ func getUnprovenMovingFundsTransactions(
 	[]*bitcoin.Transaction,
 	error,
 ) {
-	blockCounter, err := spvChain.BlockCounter()
+	startBlock, err := unprovenSearchStartBlock(historyDepth, spvChain)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get block counter: [%v]", err)
+		return nil, err
 	}
-
-	currentBlock, err := blockCounter.CurrentBlock()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get current block: [%v]", err)
-	}
-
-	// Calculate the starting block of the range in which the events will be
-	// searched for.
-	startBlock := currentBlock - historyDepth
 
 	// The `MovingFundsCommitmentSubmitted` event can only be emitted once for
 	// a given wallet. Therefore there will always be only one event for a wallet.
@@ -197,41 +188,29 @@ func getUnprovenMovingFundsTransactions(
 		// source wallet.
 		targetWalletPublicKeyHash := targetWallets[0]
 
-		walletTransactions, err := btcChain.GetTransactionsForPublicKeyHash(
+		unproven, err := collectUnprovenWalletTransactions(
 			targetWalletPublicKeyHash,
 			transactionLimit,
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"failed to get transactions for wallet: [%v]",
-				err,
-			)
-		}
-
-		for _, transaction := range walletTransactions {
-			isUnproven, err :=
-				isUnprovenMovingFundsTransaction(
+			btcChain,
+			func(transaction *bitcoin.Transaction) (bool, error) {
+				return isUnprovenMovingFundsTransaction(
 					transaction,
 					walletPublicKeyHash,
 					targetWallets,
 					btcChain,
 					spvChain,
 				)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"failed to check if transaction is an unproven moving funds "+
-						"transaction: [%v]",
-					err,
-				)
-			}
-
-			if isUnproven {
-				unprovenMovingFundsTransactions = append(
-					unprovenMovingFundsTransactions,
-					transaction,
-				)
-			}
+			},
+			false,
+		)
+		if err != nil {
+			return nil, err
 		}
+
+		unprovenMovingFundsTransactions = append(
+			unprovenMovingFundsTransactions,
+			unproven...,
+		)
 	}
 
 	return unprovenMovingFundsTransactions, nil
