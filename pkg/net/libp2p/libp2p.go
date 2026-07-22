@@ -394,11 +394,7 @@ func Connect(
 
 // SetMetricsRecorder sets the metrics recorder for the provider and wires it
 // into network components.
-func (p *provider) SetMetricsRecorder(recorder interface {
-	IncrementCounter(name string, value float64)
-	SetGauge(name string, value float64)
-	RecordDuration(name string, duration time.Duration)
-}) {
+func (p *provider) SetMetricsRecorder(recorder fullMetricsRecorder) {
 	p.metricsRecorder.Store(recorder)
 	if p.broadcastChannelManager != nil {
 		p.broadcastChannelManager.setMetricsRecorder(recorder)
@@ -583,18 +579,10 @@ func buildNotifiee(libp2pHost host.Host, p *provider) libp2pnet.Notifiee {
 
 		logger.Infof("established connection to [%v]", peerMultiaddress)
 
-		var recorder interface {
-			IncrementCounter(name string, value float64)
-			SetGauge(name string, value float64)
-			RecordDuration(name string, duration time.Duration)
-		}
+		var recorder fullMetricsRecorder
 		if p.metricsRecorder != nil {
 			if metricsRecorderValue := p.metricsRecorder.Load(); metricsRecorderValue != nil {
-				recorder = metricsRecorderValue.(interface {
-					IncrementCounter(name string, value float64)
-					SetGauge(name string, value float64)
-					RecordDuration(name string, duration time.Duration)
-				})
+				recorder = metricsRecorderValue.(fullMetricsRecorder)
 				recorder.IncrementCounter(clientinfo.MetricPeerConnectionsTotal, 1)
 			}
 		}
@@ -625,11 +613,7 @@ func buildNotifiee(libp2pHost host.Host, p *provider) libp2pnet.Notifiee {
 
 		if p.metricsRecorder != nil {
 			if metricsRecorderValue := p.metricsRecorder.Load(); metricsRecorderValue != nil {
-				recorder := metricsRecorderValue.(interface {
-					IncrementCounter(name string, value float64)
-					SetGauge(name string, value float64)
-					RecordDuration(name string, duration time.Duration)
-				})
+				recorder := metricsRecorderValue.(fullMetricsRecorder)
 				recorder.IncrementCounter(clientinfo.MetricPeerDisconnectionsTotal, 1)
 			}
 		}
@@ -650,11 +634,7 @@ func executePingTest(
 	libp2pHost host.Host,
 	peerID peer.ID,
 	peerMultiaddress string,
-	metricsRecorder interface {
-		IncrementCounter(name string, value float64)
-		SetGauge(name string, value float64)
-		RecordDuration(name string, duration time.Duration)
-	},
+	metricsRecorder fullMetricsRecorder,
 ) {
 	logger.Infof("starting ping test for [%v]", peerMultiaddress)
 
