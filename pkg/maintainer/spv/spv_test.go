@@ -27,7 +27,9 @@ func TestGetProofInfo(t *testing.T) {
 		currentEpochDifficulty           *big.Int
 		previousEpochDifficulty          *big.Int
 		headerDifficultyAt               func(uint) *big.Int
+		headerAt                         func(uint) *bitcoin.BlockHeader
 		headersFrom, headersTo           uint
+		expectedError                    string
 		expectedIsProofWithinRelayRange  bool
 		expectedAccumulatedConfirmations uint
 		expectedRequiredConfirmations    uint
@@ -147,19 +149,62 @@ func TestGetProofInfo(t *testing.T) {
 			expectedAccumulatedConfirmations: 0,
 			expectedRequiredConfirmations:    0,
 		},
-		// A run of minimum-difficulty headers longer than maxProofHeaders
-		// never reaches a decisive header.
-		"minimum difficulty run exceeds header bound": {
-			transactionConfirmations: 150,
+		// This header's target is harder than the exact DIFF1 target, but its
+		// integer difficulty rounds down to one. The Bridge does not skip it;
+		// it treats it as the decisive header and rejects it because it matches
+		// neither relay epoch difficulty. The maintainer must do the same.
+		"non-DIFF1 target rounding to difficulty one is not skipped": {
+			transactionConfirmations: 1,
 			currentEpochDifficulty:   diff(32),
 			previousEpochDifficulty:  diff(16),
-			headerDifficultyAt:       func(uint) *big.Int { return diff(1) },
-			headersFrom:              proofStart,
-			headersTo:                proofStart + 149,
+			headerAt: func(uint) *bitcoin.BlockHeader {
+				return &bitcoin.BlockHeader{Bits: 0x1d00aaaa}
+			},
+			headersFrom: proofStart,
+			headersTo:   proofStart,
 
 			expectedIsProofWithinRelayRange:  false,
 			expectedAccumulatedConfirmations: 0,
 			expectedRequiredConfirmations:    0,
+		},
+		// Compact bits can decode to a zero target. Reject it before calling
+		// BlockHeader.Difficulty, which would otherwise divide by zero.
+		"zero target is rejected": {
+			transactionConfirmations: 1,
+			currentEpochDifficulty:   diff(32),
+			previousEpochDifficulty:  diff(16),
+			headerAt: func(uint) *bitcoin.BlockHeader {
+				return &bitcoin.BlockHeader{Bits: 0}
+			},
+			headersFrom:   proofStart,
+			headersTo:     proofStart,
+			expectedError: "invalid target [0] for block header at height [790270]",
+
+			expectedIsProofWithinRelayRange:  false,
+			expectedAccumulatedConfirmations: 0,
+			expectedRequiredConfirmations:    0,
+		},
+		// Long testnet4 runs of minimum-difficulty headers must not prevent a
+		// proof from reaching a later decisive header. The Bridge consumes the
+		// full header chain, so the maintainer must do the same. After 144 DIFF1
+		// headers, the previous-epoch difficulty 16 header binds the requested
+		// difficulty and brings the observed total above 6*16=96.
+		"decisive header follows long minimum difficulty run": {
+			transactionConfirmations: 145,
+			currentEpochDifficulty:   diff(32),
+			previousEpochDifficulty:  diff(16),
+			headerDifficultyAt: func(h uint) *big.Int {
+				if h < proofStart+144 {
+					return diff(1)
+				}
+				return diff(16)
+			},
+			headersFrom: proofStart,
+			headersTo:   proofStart + 144,
+
+			expectedIsProofWithinRelayRange:  true,
+			expectedAccumulatedConfirmations: 145,
+			expectedRequiredConfirmations:    145,
 		},
 		// The chain tip is reached before enough difficulty is accumulated.
 		// The reported requirement is one header more than currently exists,
@@ -191,13 +236,21 @@ func TestGetProofInfo(t *testing.T) {
 			localChain := newLocalChain()
 
 			btcChain := newLocalBitcoinChain()
-			if err := populateBlockHeaders(
-				btcChain,
-				test.headersFrom,
-				test.headersTo,
-				test.headerDifficultyAt,
-			); err != nil {
-				t.Fatal(err)
+			if test.headerAt != nil {
+				for h := test.headersFrom; h <= test.headersTo; h++ {
+					if err := btcChain.addBlockHeader(h, test.headerAt(h)); err != nil {
+						t.Fatal(err)
+					}
+				}
+			} else {
+				if err := populateBlockHeaders(
+					btcChain,
+					test.headersFrom,
+					test.headersTo,
+					test.headerDifficultyAt,
+				); err != nil {
+					t.Fatal(err)
+				}
 			}
 			btcChain.addTransactionConfirmations(
 				transactionHash,
@@ -221,7 +274,18 @@ func TestGetProofInfo(t *testing.T) {
 					localChain,
 					localChain,
 				)
-			if err != nil {
+			if test.expectedError != "" {
+				if err == nil {
+					t.Fatalf("expected error containing [%v]", test.expectedError)
+				}
+				if !strings.Contains(err.Error(), test.expectedError) {
+					t.Fatalf(
+						"unexpected error\nexpected to contain: [%v]\nactual: [%v]",
+						test.expectedError,
+						err,
+					)
+				}
+			} else if err != nil {
 				t.Fatal(err)
 			}
 

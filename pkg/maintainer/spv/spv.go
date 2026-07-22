@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/btcsuite/btcd/blockchain"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 
 	"github.com/ipfs/go-log/v2"
@@ -19,13 +20,8 @@ import (
 
 var logger = log.Logger("keep-maintainer-spv")
 
-// The length of the Bitcoin difficulty epoch in blocks.
-const difficultyEpochLength = 2016
-
-// The maximum number of block headers allowed in a single SPV proof. Bounds
-// the forward walk over headers when computing required confirmations
-// (relevant on testnet4 where long runs of minimum-difficulty blocks occur).
-const maxProofHeaders = 144
+// minDifficultyTarget matches the Bridge's BTCUtils.DIFF1_TARGET.
+var minDifficultyTarget = blockchain.CompactToBig(0x1d00ffff)
 
 func Initialize(
 	ctx context.Context,
@@ -375,13 +371,6 @@ func getProofInfo(
 	headerCount := uint(0)
 
 	for {
-		if headerCount >= maxProofHeaders {
-			// Could not find a decisive header or accumulate enough
-			// difficulty within a sane number of headers. Skip the
-			// transaction; it may become provable later.
-			return false, 0, 0, nil
-		}
-
 		blockHeight := proofStartBlock + uint64(headerCount)
 		if blockHeight > uint64(latestBlockHeight) {
 			// Not enough mined blocks yet to assemble the proof. Report the
@@ -399,13 +388,22 @@ func getProofInfo(
 			)
 		}
 
+		headerTarget := header.Target()
+		if headerTarget.Sign() <= 0 {
+			return false, 0, 0, fmt.Errorf(
+				"invalid target [%v] for block header at height [%v]",
+				headerTarget,
+				blockHeight,
+			)
+		}
+
 		headerDiff := header.Difficulty()
 		headerCount++
 		observedDiff.Add(observedDiff, headerDiff)
 
 		if requestedDiff == nil {
 			// Still looking for the decisive header.
-			if skipMinDifficulty && headerDiff.Cmp(one) == 0 {
+			if skipMinDifficulty && headerTarget.Cmp(minDifficultyTarget) == 0 {
 				continue
 			}
 
