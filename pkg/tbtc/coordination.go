@@ -603,15 +603,12 @@ func (ce *coordinationExecutor) getActionsChecklist(
 	// proposal generator performs a full-history chain scan.
 	if coordinationBlock < DepositSweepEveryWindowActivationBlock {
 		if windowIndex%frequencyWindows == 0 {
-			actions = append(actions, ActionDepositSweep)
-		}
-
-		if windowIndex%frequencyWindows == 0 {
-			actions = append(actions, ActionMovedFundsSweep)
-		}
-
-		if windowIndex%frequencyWindows == 0 {
-			actions = append(actions, ActionMovingFunds)
+			actions = append(
+				actions,
+				ActionDepositSweep,
+				ActionMovedFundsSweep,
+				ActionMovingFunds,
+			)
 		}
 	} else {
 		actions = append(actions, ActionDepositSweep)
