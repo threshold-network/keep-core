@@ -14,7 +14,7 @@ import (
 // returns an error rather than silently broadcasting an underpriced sweep.
 func TestEstimateDepositsSweepFee_MinimumFloorAndBuffer(t *testing.T) {
 	// Virtual size of a one-deposit sweep, used to size the cap for the error
-	// case relative to the minimum floor. 126 == depositScriptByteSize.
+	// case relative to the minimum floor. 126 == DepositScriptByteSize.
 	size, err := bitcoin.NewTransactionSizeEstimator().
 		AddPublicKeyHashInputs(1, true).
 		AddScriptHashInputs(1, 126, true).

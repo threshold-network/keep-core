@@ -17,9 +17,10 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-// Use the worst-case 126-byte deposit script with embedded extra data for estimation.
-// This will ensure that deposit sweep transaction fees are not underestimated.
-const depositScriptByteSize = 126
+// DepositScriptByteSize is the worst-case 126-byte deposit script with embedded
+// extra data used for transaction size estimation. This ensures that deposit
+// sweep transaction fees are not underestimated.
+const DepositScriptByteSize = 126
 
 // DepositSweepLookBackBlocks is the look-back period in blocks used
 // when searching for submitted deposit-related events. It's equal to
@@ -623,7 +624,7 @@ func estimateDepositsSweepFee(
 		// 1 P2WPKH main UTXO input.
 		AddPublicKeyHashInputs(1, true).
 		// depositsCount P2WSH deposit inputs.
-		AddScriptHashInputs(depositsCount, depositScriptByteSize, true).
+		AddScriptHashInputs(depositsCount, DepositScriptByteSize, true).
 		// 1 P2WPKH output.
 		AddPublicKeyHashOutputs(1, true).
 		VirtualSize()

@@ -2,7 +2,7 @@ package tbtcpg
 
 import "fmt"
 
-// minWalletTxSatPerVByteFee is the minimum fee rate, in sat/vByte, applied to
+// MinWalletTxSatPerVByteFee is the minimum fee rate, in sat/vByte, applied to
 // wallet Bitcoin transactions (deposit sweeps, redemptions, moving funds, moved
 // funds sweeps). A fee oracle can return an unusably low estimate (down to the
 // 1 sat/vByte relay floor enforced by the Electrum client) in an uncongested
@@ -22,13 +22,13 @@ import "fmt"
 // revisited rather than carried forward unchanged: the defensive buffer can be
 // dropped and the floor relaxed toward the live estimate, keeping only a small
 // relay-propagation minimum.
-const minWalletTxSatPerVByteFee = 5
+const MinWalletTxSatPerVByteFee = 5
 
 // applyWalletTxFeeFloor raises a raw oracle fee estimate to a safe value for a
 // non-RBF wallet transaction. It:
 //   - adds a 25% buffer over the oracle estimate so there is margin during the
 //     estimate-to-broadcast delay and the fee stays adaptive under congestion,
-//   - enforces a floor of minWalletTxSatPerVByteFee sat/vByte, and
+//   - enforces a floor of MinWalletTxSatPerVByteFee sat/vByte, and
 //   - bounds the result by maxTotalFee (the Bridge maximum for the transaction).
 //
 // It returns an error if the minimum floor alone would exceed maxTotalFee - a
@@ -51,18 +51,18 @@ func applyWalletTxFeeFloor(
 
 	// If even the minimum floor exceeds the Bridge maximum, a safe transaction
 	// cannot be constructed; error rather than silently broadcast underpriced.
-	if uint64(minWalletTxSatPerVByteFee*txVsize) > maxTotalFee {
+	if uint64(MinWalletTxSatPerVByteFee*txVsize) > maxTotalFee {
 		return 0, fmt.Errorf(
 			"minimum safe transaction fee [%d] exceeds the maximum fee [%d]",
-			minWalletTxSatPerVByteFee*txVsize,
+			MinWalletTxSatPerVByteFee*txVsize,
 			maxTotalFee,
 		)
 	}
 
 	rate := estimatedFee / txVsize
 	rate = (rate*5 + 3) / 4 // ceil(rate * 1.25)
-	if rate < minWalletTxSatPerVByteFee {
-		rate = minWalletTxSatPerVByteFee
+	if rate < MinWalletTxSatPerVByteFee {
+		rate = MinWalletTxSatPerVByteFee
 	}
 
 	totalFee := rate * txVsize
