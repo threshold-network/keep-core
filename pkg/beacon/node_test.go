@@ -18,7 +18,7 @@ import (
 var relayEntryTimeout = uint64(15)
 
 // filterErrorChannel is a broadcast channel whose SetFilter result is
-// controllable.
+// controllable, used to exercise the membership-filter abort path.
 type filterErrorChannel struct {
 	net.BroadcastChannel
 	setFilterErr error
@@ -32,9 +32,11 @@ func (c *filterErrorChannel) Name() string {
 	return "test-channel"
 }
 
-// TestSetBroadcastChannelFilter verifies that setBroadcastChannelFilter
-// propagates the success or error result from the broadcast channel's
-// SetFilter method.
+// TestSetBroadcastChannelFilter verifies that the membership filter is required
+// before a node proceeds on a group channel: when the filter cannot be set the
+// helper surfaces the error so the caller aborts, rather than proceeding on an
+// unfiltered channel that would accept messages from operators outside the
+// group.
 func TestSetBroadcastChannelFilter(t *testing.T) {
 	filter := func(*operator.PublicKey) bool { return true }
 
