@@ -23,6 +23,7 @@ func SubmitRedemptionProof(
 		btcChain,
 		spvChain,
 		bitcoin.AssembleSpvProof,
+		getMetricsRecorder(),
 	)
 }
 
