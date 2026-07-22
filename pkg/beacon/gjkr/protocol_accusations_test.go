@@ -540,6 +540,7 @@ func findCoefficientsJustifyingMemberByID(
 	return nil
 }
 
+
 // initializeSharesJustifyingMemberGroup initializes a group of shares
 // justifying members with simulated received shares and commitments. It also
 // returns the received `t_ji` shares keyed by receiver then sender member
