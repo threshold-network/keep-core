@@ -134,7 +134,7 @@ func TestResolveSecretSharesAccusations(t *testing.T) {
 	}
 	for testName, test := range tests {
 		t.Run(testName, func(t *testing.T) {
-			members, err := initializeSharesJustifyingMemberGroup(
+			members, receivedSharesT, err := initializeSharesJustifyingMemberGroup(
 				dishonestThreshold,
 				groupSize,
 			)
@@ -145,7 +145,7 @@ func TestResolveSecretSharesAccusations(t *testing.T) {
 
 			accuser := findSharesJustifyingMemberByID(members, test.accuserID)
 			modifiedShareS := accuser.receivedQualifiedSharesS[test.accusedID]
-			modifiedShareT := accuser.receivedQualifiedSharesT[test.accusedID]
+			modifiedShareT := receivedSharesT[test.accuserID][test.accusedID]
 
 			if test.modifyShareS != nil {
 				modifiedShareS = test.modifyShareS(modifiedShareS)
@@ -422,7 +422,7 @@ func TestResolveSecretSharesAccusationsIncorrectAccussedMemberId(t *testing.T) {
 
 	for testName, test := range tests {
 		t.Run(testName, func(t *testing.T) {
-			members, err := initializeSharesJustifyingMemberGroup(
+			members, _, err := initializeSharesJustifyingMemberGroup(
 				dishonestThreshold,
 				groupSize,
 			)
@@ -545,14 +545,20 @@ func findCoefficientsJustifyingMemberByID(
 // It generates coefficients for each group member, calculates commitments and
 // shares for each peer member individually. At the end it stores values for each
 // member just like they would be received from peers.
+// initializeSharesJustifyingMemberGroup initializes a group of shares
+// justifying members with simulated received shares and commitments. It also
+// returns the received `t_ji` shares keyed by receiver then sender member
+// index; these are not stored on the member (only `s_ji` is production state)
+// but some accusation tests need them to reconstruct the peer shares message.
 func initializeSharesJustifyingMemberGroup(dishonestThreshold, groupSize int) (
 	[]*SharesJustifyingMember,
+	map[group.MemberIndex]map[group.MemberIndex]*big.Int,
 	error,
 ) {
 	commitmentsVerifyingMembers, err :=
 		initializeCommitmentsVerifiyingMembersGroup(dishonestThreshold, groupSize)
 	if err != nil {
-		return nil, fmt.Errorf("group initialization failed [%s]", err)
+		return nil, nil, fmt.Errorf("group initialization failed [%s]", err)
 	}
 
 	var sharesJustifyingMembers []*SharesJustifyingMember
@@ -567,14 +573,18 @@ func initializeSharesJustifyingMemberGroup(dishonestThreshold, groupSize int) (
 	groupCoefficientsB := make(map[group.MemberIndex][]*big.Int, groupSize)
 	groupCommitments := make(map[group.MemberIndex][]*bn256.G1, groupSize)
 
+	// receivedSharesT keeps the `t_ji` shares received by each member from its
+	// peers, keyed by receiver then sender member index.
+	receivedSharesT := make(map[group.MemberIndex]map[group.MemberIndex]*big.Int)
+
 	for _, m := range sharesJustifyingMembers {
 		memberCoefficientsA, err := generatePolynomial(dishonestThreshold)
 		if err != nil {
-			return nil, fmt.Errorf("polynomial generation failed [%s]", err)
+			return nil, nil, fmt.Errorf("polynomial generation failed [%s]", err)
 		}
 		memberCoefficientsB, err := generatePolynomial(dishonestThreshold)
 		if err != nil {
-			return nil, fmt.Errorf("polynomial generation failed [%s]", err)
+			return nil, nil, fmt.Errorf("polynomial generation failed [%s]", err)
 		}
 
 		// polynomial is of degree dishonestThreshold so it has
@@ -598,13 +608,16 @@ func initializeSharesJustifyingMemberGroup(dishonestThreshold, groupSize int) (
 		for _, p := range sharesJustifyingMembers {
 			if m.ID != p.ID {
 				p.receivedQualifiedSharesS[m.ID] = m.evaluateMemberShare(p.ID, groupCoefficientsA[m.ID])
-				p.receivedQualifiedSharesT[m.ID] = m.evaluateMemberShare(p.ID, groupCoefficientsB[m.ID])
+				if receivedSharesT[p.ID] == nil {
+					receivedSharesT[p.ID] = make(map[group.MemberIndex]*big.Int)
+				}
+				receivedSharesT[p.ID][m.ID] = m.evaluateMemberShare(p.ID, groupCoefficientsB[m.ID])
 				p.receivedPeerCommitments[m.ID] = groupCommitments[m.ID]
 			}
 		}
 	}
 
-	return sharesJustifyingMembers, nil
+	return sharesJustifyingMembers, receivedSharesT, nil
 }
 
 // initializePointsJustifyingMemberGroup generates a group of members and
