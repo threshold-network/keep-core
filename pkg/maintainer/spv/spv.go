@@ -52,18 +52,27 @@ const (
 	proofSkipExceededMaxHeaders
 )
 
+// MetricsRecorder records counter metrics for SPV proof submissions. It is
+// satisfied by *clientinfo.PerformanceMetrics. A nil recorder disables metrics
+// recording; all call sites guard against it.
+type MetricsRecorder interface {
+	IncrementCounter(name string, value float64)
+}
+
 func Initialize(
 	ctx context.Context,
 	config Config,
 	spvChain Chain,
 	btcDiffChain btcdiff.Chain,
 	btcChain bitcoin.Chain,
+	metricsRecorder MetricsRecorder,
 ) {
 	spvMaintainer := &spvMaintainer{
-		config:       config,
-		spvChain:     spvChain,
-		btcDiffChain: btcDiffChain,
-		btcChain:     btcChain,
+		config:          config,
+		spvChain:        spvChain,
+		btcDiffChain:    btcDiffChain,
+		btcChain:        btcChain,
+		metricsRecorder: metricsRecorder,
 	}
 
 	go spvMaintainer.startControlLoop(ctx)
@@ -94,10 +103,11 @@ var proofTypes = map[tbtc.WalletActionType]struct {
 }
 
 type spvMaintainer struct {
-	config       Config
-	spvChain     Chain
-	btcDiffChain btcdiff.Chain
-	btcChain     bitcoin.Chain
+	config          Config
+	spvChain        Chain
+	btcDiffChain    btcdiff.Chain
+	btcChain        bitcoin.Chain
+	metricsRecorder MetricsRecorder
 }
 
 func (sm *spvMaintainer) startControlLoop(ctx context.Context) {
@@ -175,6 +185,7 @@ type transactionProofSubmitter func(
 	requiredConfirmations uint,
 	btcChain bitcoin.Chain,
 	spvChain Chain,
+	metricsRecorder MetricsRecorder,
 ) error
 
 // proveTransactions gets unproven Bitcoin transactions using the provided
@@ -275,6 +286,7 @@ func (sm *spvMaintainer) proveTransactions(
 			requiredConfirmations,
 			sm.btcChain,
 			sm.spvChain,
+			sm.metricsRecorder,
 		)
 		if err != nil {
 			return err
