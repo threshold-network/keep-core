@@ -540,11 +540,6 @@ func findCoefficientsJustifyingMemberByID(
 	return nil
 }
 
-// InitializeSharesJustifyingMemberGroup generates a group of members and simulates
-// shares calculation and commitments sharing betwen members (Phases 3 and 4).
-// It generates coefficients for each group member, calculates commitments and
-// shares for each peer member individually. At the end it stores values for each
-// member just like they would be received from peers.
 // initializeSharesJustifyingMemberGroup initializes a group of shares
 // justifying members with simulated received shares and commitments. It also
 // returns the received `t_ji` shares keyed by receiver then sender member
