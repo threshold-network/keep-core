@@ -50,6 +50,56 @@ func TestSubmitRedemptionProofRecordsFailureMetrics(t *testing.T) {
 	)
 }
 
+// TestSubmitRedemptionProofRecordsAssembleFailureMetrics verifies that a
+// failure occurring after the initial attempt is counted as a failure and not a
+// success. Here the SPV proof assembler errors out, exercising a deeper
+// failed-counter branch than the early zero-confirmations reject. The
+// parse-inputs and on-chain-submit branches share this same guard idiom; the
+// local chain double cannot be forced to fail the on-chain submit, so that
+// branch is left to the shared pattern.
+func TestSubmitRedemptionProofRecordsAssembleFailureMetrics(t *testing.T) {
+	recorder := newFakeMetricsRecorder()
+
+	failingAssembler := func(
+		bitcoin.Hash,
+		uint,
+		bitcoin.Chain,
+	) (*bitcoin.Transaction, *bitcoin.SpvProof, error) {
+		return nil, nil, fmt.Errorf("error while assembling spv proof")
+	}
+
+	err := submitRedemptionProof(
+		bitcoin.Hash{},
+		6, // non-zero, so the failure comes from proof assembly
+		nil,
+		nil,
+		failingAssembler,
+		recorder,
+	)
+	if err == nil {
+		t.Fatal("expected an error from the failing proof assembler")
+	}
+
+	testutils.AssertIntsEqual(
+		t,
+		"total submissions counter",
+		1,
+		int(recorder.counters[clientinfo.MetricRedemptionProofSubmissionsTotal]),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"failed counter",
+		1,
+		int(recorder.counters[clientinfo.MetricRedemptionProofSubmissionsFailedTotal]),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"success counter",
+		0,
+		int(recorder.counters[clientinfo.MetricRedemptionProofSubmissionsSuccessTotal]),
+	)
+}
+
 func TestSubmitRedemptionProof(t *testing.T) {
 	bytesFromHex := func(str string) []byte {
 		value, err := hex.DecodeString(str)
@@ -112,13 +162,15 @@ func TestSubmitRedemptionProof(t *testing.T) {
 		return nil, nil, fmt.Errorf("error while assembling spv proof")
 	}
 
+	recorder := newFakeMetricsRecorder()
+
 	err = submitRedemptionProof(
 		redemptionTransaction.Hash(),
 		requiredConfirmations,
 		btcChain,
 		spvChain,
 		mockSpvProofAssembler,
-		nil,
+		recorder,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -150,6 +202,27 @@ func TestSubmitRedemptionProof(t *testing.T) {
 	}
 
 	testutils.AssertBytesEqual(t, bytesFromHex("03b74d6893ad46dfdd01b9e0e3b3385f4fce2d1e"), submittedProof.walletPublicKeyHash[:])
+
+	// A successful submission must record one attempt and one success, and
+	// must not record a failure.
+	testutils.AssertIntsEqual(
+		t,
+		"total submissions counter",
+		1,
+		int(recorder.counters[clientinfo.MetricRedemptionProofSubmissionsTotal]),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"success counter",
+		1,
+		int(recorder.counters[clientinfo.MetricRedemptionProofSubmissionsSuccessTotal]),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"failed counter",
+		0,
+		int(recorder.counters[clientinfo.MetricRedemptionProofSubmissionsFailedTotal]),
+	)
 }
 
 func TestGetUnprovenRedemptionTransactions(t *testing.T) {
