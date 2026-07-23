@@ -148,6 +148,45 @@ func TestGetBlockNumberByTimestamp(t *testing.T) {
 	}
 }
 
+// TestGetBlockNumberByTimestamp_ForwardCompensation exercises the forward
+// compensation loop in GetBlockNumberByTimestamp. When the actual block spacing
+// (15s) is greater than the assumed averageBlockTime (13s), the initial backward
+// jump overshoots below the target timestamp, so the search must walk forward
+// block by block to converge. The main table above uses a 12s spacing, where the
+// backward jump always lands at or after the target and the forward loop never
+// runs.
+func TestGetBlockNumberByTimestamp_ForwardCompensation(t *testing.T) {
+	const (
+		baseTime = uint64(1_600_000_000)
+		spacing  = uint64(15)
+		latest   = uint64(100)
+	)
+
+	bc := &baseChain{
+		client: newTimestampMockClient(baseTime, spacing, latest),
+	}
+
+	// Target a point 7s after block 50 (t=+757), between block 50 (t=+750) and
+	// block 51 (t=+765). The backward jump from the tip lands on block 43
+	// (t=+645, before the target), so the forward loop walks 43->51 and the
+	// closer-block tie-break then selects block 50 (7s away vs. 8s).
+	timestamp := baseTime + 50*spacing + 7
+	expectedBlock := uint64(50)
+
+	block, err := bc.GetBlockNumberByTimestamp(timestamp)
+	if err != nil {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+
+	if block != expectedBlock {
+		t.Errorf(
+			"unexpected block number\nexpected: [%d]\nactual:   [%d]",
+			expectedBlock,
+			block,
+		)
+	}
+}
+
 func TestCloserBlock(t *testing.T) {
 	block := func(number, time uint64) *types.Block {
 		return types.NewBlockWithHeader(&types.Header{
