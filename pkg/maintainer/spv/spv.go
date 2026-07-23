@@ -11,6 +11,7 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
 
+	"github.com/btcsuite/btcd/blockchain"
 	"github.com/ipfs/go-log/v2"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -33,14 +34,12 @@ var logger = log.Logger("keep-maintainer-spv")
 // permanently unprovable rather than merely delayed (see proofSkipReason).
 const maxProofHeaders = 144
 
-// minDifficultyTarget is the Bitcoin minimum-difficulty target (compact bits
-// 0x1d00ffff). It mirrors the Bridge's BitcoinTx.MIN_DIFFICULTY_TARGET and is
-// used to detect testnet4 BIP94 minimum-difficulty (DIFF1) headers by exact
-// target equality, matching the on-chain skip predicate.
-var minDifficultyTarget, _ = new(big.Int).SetString(
-	"ffff0000000000000000000000000000000000000000000000000000",
-	16,
-)
+// minDifficultyTarget is the Bitcoin minimum-difficulty target, decoded from
+// compact bits 0x1d00ffff. It mirrors the Bridge's
+// BitcoinTx.MIN_DIFFICULTY_TARGET and is used to detect testnet4 BIP94
+// minimum-difficulty (DIFF1) headers by exact target equality, matching the
+// on-chain skip predicate.
+var minDifficultyTarget = blockchain.CompactToBig(0x1d00ffff)
 
 // proofSkipReason explains why an SPV proof cannot be assembled for a
 // transaction in the current cycle. It lets callers log and record metrics with
@@ -293,6 +292,17 @@ func (sm *spvMaintainer) proveTransactions(
 				)
 			}
 			continue
+		case proofSkipNone:
+			// The proof is within range and assemblable; proceed to the
+			// confirmation check and submission below.
+		default:
+			// Defensive: a skip reason getProofInfo does not currently emit
+			// must never silently fall through to proof submission.
+			return fmt.Errorf(
+				"unexpected proof skip reason [%d] for transaction [%s]",
+				skipReason,
+				transactionHashStr,
+			)
 		}
 
 		if accumulatedConfirmations < requiredConfirmations {
