@@ -211,6 +211,56 @@ func TestSubmitDepositSweepProofRecordsFailureMetrics(t *testing.T) {
 	)
 }
 
+// TestSubmitDepositSweepProofRecordsAssembleFailureMetrics verifies that a
+// failure occurring after the initial attempt is counted as a failure and not a
+// success. Here the SPV proof assembler errors out, exercising a deeper
+// failed-counter branch than the early zero-confirmations reject. The
+// parse-inputs and on-chain-submit branches share this same guard idiom; the
+// local chain double cannot be forced to fail the on-chain submit, so that
+// branch is left to the shared pattern.
+func TestSubmitDepositSweepProofRecordsAssembleFailureMetrics(t *testing.T) {
+	recorder := newFakeMetricsRecorder()
+
+	failingAssembler := func(
+		bitcoin.Hash,
+		uint,
+		bitcoin.Chain,
+	) (*bitcoin.Transaction, *bitcoin.SpvProof, error) {
+		return nil, nil, fmt.Errorf("error while assembling spv proof")
+	}
+
+	err := submitDepositSweepProof(
+		bitcoin.Hash{},
+		6, // non-zero, so the failure comes from proof assembly
+		nil,
+		nil,
+		failingAssembler,
+		recorder,
+	)
+	if err == nil {
+		t.Fatal("expected an error from the failing proof assembler")
+	}
+
+	testutils.AssertIntsEqual(
+		t,
+		"total submissions counter",
+		1,
+		int(recorder.counters[clientinfo.MetricDepositSweepProofSubmissionsTotal]),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"failed counter",
+		1,
+		int(recorder.counters[clientinfo.MetricDepositSweepProofSubmissionsFailedTotal]),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"success counter",
+		0,
+		int(recorder.counters[clientinfo.MetricDepositSweepProofSubmissionsSuccessTotal]),
+	)
+}
+
 func TestGetUnprovenDepositSweepTransactions(t *testing.T) {
 	bytesFromHex := func(str string) []byte {
 		value, err := hex.DecodeString(str)
