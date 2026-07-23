@@ -2,6 +2,7 @@ package ethereum
 
 import (
 	"context"
+	"errors"
 	"math/big"
 	"testing"
 
@@ -64,11 +65,7 @@ func (m *timestampMockClient) BlockByNumber(
 	return types.NewBlockWithHeader(header), nil
 }
 
-var errBlockOutOfRange = &blockOutOfRangeError{}
-
-type blockOutOfRangeError struct{}
-
-func (e *blockOutOfRangeError) Error() string { return "block out of range" }
+var errBlockOutOfRange = errors.New("block out of range")
 
 func TestGetBlockNumberByTimestamp(t *testing.T) {
 	const (
