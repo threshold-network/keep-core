@@ -516,6 +516,7 @@ func unprovenSearchStartBlock(
 	if historyDepth > currentBlock {
 		return 0, nil
 	}
+
 	return currentBlock - historyDepth, nil
 }
 
