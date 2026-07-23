@@ -197,6 +197,42 @@ For each action type, the following metrics are available:
 *Description*: Total count of coordination duration samples
 *Labels*: None
 
+=== SPV Proof Submission Metrics (Maintainer)
+
+These metrics are recorded by the SPV maintainer (the `maintainer` command) when
+it submits Bitcoin SPV proofs to the host chain. They require the client info
+endpoint to be configured.
+
+==== `performance_deposit_sweep_proof_submissions_total`
+*Type*: Counter
+*Description*: Total number of deposit sweep proof submissions attempted
+*Labels*: None
+
+==== `performance_deposit_sweep_proof_submissions_success_total`
+*Type*: Counter
+*Description*: Total number of successful deposit sweep proof submissions
+*Labels*: None
+
+==== `performance_deposit_sweep_proof_submissions_failed_total`
+*Type*: Counter
+*Description*: Total number of failed deposit sweep proof submissions
+*Labels*: None
+
+==== `performance_redemption_proof_submissions_total`
+*Type*: Counter
+*Description*: Total number of redemption proof submissions attempted
+*Labels*: None
+
+==== `performance_redemption_proof_submissions_success_total`
+*Type*: Counter
+*Description*: Total number of successful redemption proof submissions
+*Labels*: None
+
+==== `performance_redemption_proof_submissions_failed_total`
+*Type*: Counter
+*Description*: Total number of failed redemption proof submissions
+*Labels*: None
+
 === Network Metrics
 
 ==== `performance_incoming_message_queue_size`
