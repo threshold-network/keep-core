@@ -49,17 +49,20 @@ const (
 	// the transaction is known on the Bitcoin chain. This delay is needed
 	// as spreading the transaction over the Bitcoin network takes time.
 	depositSweepBroadcastCheckDelay = 1 * time.Minute
-	// minSweepTxSatPerVByteFee mirrors tbtcpg.MinWalletTxSatPerVByteFee, the safe
+	// MinSweepTxSatPerVByteFee mirrors tbtcpg.MinWalletTxSatPerVByteFee, the safe
 	// minimum sweep fee rate. It is duplicated here because pkg/tbtcpg imports
 	// pkg/tbtc, so this package cannot import the canonical constant without a
-	// dependency cycle; keep the two in sync (guarded by TestSweepFeeConstants
-	// MirrorTbtcpg). It backs a follower-side soft (log-only) check that the
-	// leader's proposed sweep fee is not below the floor (see
-	// threshold-network/keep-core#4171).
-	minSweepTxSatPerVByteFee = 5
-	// depositScriptByteSize mirrors tbtcpg.DepositScriptByteSize, the worst-case
+	// dependency cycle; keep the two in sync. It is exported so the external
+	// tbtc_test package can compare it against the canonical tbtcpg value
+	// (guarded by TestSweepFeeConstantsMirrorTbtcpg). It backs a follower-side
+	// soft (log-only) check that the leader's proposed sweep fee is not below
+	// the floor (see threshold-network/keep-core#4171).
+	MinSweepTxSatPerVByteFee = 5
+	// DepositScriptByteSize mirrors tbtcpg.DepositScriptByteSize, the worst-case
 	// deposit script size used to estimate the sweep transaction virtual size.
-	depositScriptByteSize = 126
+	// Exported alongside MinSweepTxSatPerVByteFee for the same cross-package
+	// drift guard.
+	DepositScriptByteSize = 126
 )
 
 // DepositSweepProposal represents a deposit sweep proposal issued by a
@@ -486,25 +489,37 @@ func ValidateDepositSweepProposal(
 	// coordinated all-nodes upgrade.
 	if sweepTxSize, sizeErr := bitcoin.NewTransactionSizeEstimator().
 		AddPublicKeyHashInputs(1, true).
-		AddScriptHashInputs(len(proposal.DepositsKeys), depositScriptByteSize, true).
+		AddScriptHashInputs(len(proposal.DepositsKeys), DepositScriptByteSize, true).
 		AddPublicKeyHashOutputs(1, true).
 		VirtualSize(); sizeErr != nil {
 		validateProposalLogger.Warnf(
 			"cannot estimate sweep tx size for the fee sanity check: [%v]",
 			sizeErr,
 		)
-	} else if minSweepTxFee := int64(minSweepTxSatPerVByteFee) * sweepTxSize; proposal.SweepTxFee != nil &&
-		proposal.SweepTxFee.Int64() < minSweepTxFee {
-		validateProposalLogger.Warnf(
-			"proposed sweep tx fee [%v] is below the safe minimum [%d] "+
-				"([%d] sat/vByte * [%d] vByte); the leader may be underpricing "+
-				"the sweep, which risks it getting stuck in the mempool and "+
-				"jamming the wallet",
-			proposal.SweepTxFee,
-			minSweepTxFee,
-			minSweepTxSatPerVByteFee,
-			sweepTxSize,
-		)
+	} else {
+		minSweepTxFee := big.NewInt(int64(MinSweepTxSatPerVByteFee) * sweepTxSize)
+
+		switch {
+		case proposal.SweepTxFee == nil:
+			validateProposalLogger.Warnf(
+				"proposal has no sweep tx fee set; expected at least the safe "+
+					"minimum [%d] ([%d] sat/vByte * [%d] vByte)",
+				minSweepTxFee,
+				MinSweepTxSatPerVByteFee,
+				sweepTxSize,
+			)
+		case proposal.SweepTxFee.Cmp(minSweepTxFee) < 0:
+			validateProposalLogger.Warnf(
+				"proposed sweep tx fee [%v] is below the safe minimum [%d] "+
+					"([%d] sat/vByte * [%d] vByte); the leader may be underpricing "+
+					"the sweep, which risks it getting stuck in the mempool and "+
+					"jamming the wallet",
+				proposal.SweepTxFee,
+				minSweepTxFee,
+				MinSweepTxSatPerVByteFee,
+				sweepTxSize,
+			)
+		}
 	}
 
 	deposits := make([]*Deposit, len(depositExtraInfo))
