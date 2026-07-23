@@ -484,6 +484,14 @@ func unprovenSearchStartBlock(
 		return 0, fmt.Errorf("failed to get current block: [%v]", err)
 	}
 
+	// Guard against unsigned underflow on short chains (e.g. early test
+	// networks) where the configured history depth can exceed the current
+	// tip; clamp the search start to the genesis block instead of wrapping
+	// around to a near-maximum block number.
+	if historyDepth > currentBlock {
+		return 0, nil
+	}
+
 	return currentBlock - historyDepth, nil
 }
 
