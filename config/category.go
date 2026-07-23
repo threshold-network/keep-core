@@ -30,6 +30,7 @@ var StartCmdCategories = []Category{
 var MaintainerCategories = []Category{
 	Ethereum,
 	BitcoinElectrum,
+	ClientInfo,
 	Maintainer,
 }
 

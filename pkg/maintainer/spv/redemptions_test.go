@@ -6,9 +6,49 @@ import (
 	"github.com/go-test/deep"
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 	"testing"
 )
+
+// TestSubmitRedemptionProofRecordsFailureMetrics verifies that a rejected
+// submission (here, zero required confirmations) records both an attempt and a
+// failure, but no success. This is the metrics seam that the maintainer boot
+// path activates in production by passing a real recorder.
+func TestSubmitRedemptionProofRecordsFailureMetrics(t *testing.T) {
+	recorder := newFakeMetricsRecorder()
+
+	err := submitRedemptionProof(
+		bitcoin.Hash{},
+		0, // zero required confirmations forces an early failure
+		nil,
+		nil,
+		nil,
+		recorder,
+	)
+	if err == nil {
+		t.Fatal("expected an error for zero required confirmations")
+	}
+
+	testutils.AssertIntsEqual(
+		t,
+		"total submissions counter",
+		1,
+		int(recorder.counters[clientinfo.MetricRedemptionProofSubmissionsTotal]),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"failed counter",
+		1,
+		int(recorder.counters[clientinfo.MetricRedemptionProofSubmissionsFailedTotal]),
+	)
+	testutils.AssertIntsEqual(
+		t,
+		"success counter",
+		0,
+		int(recorder.counters[clientinfo.MetricRedemptionProofSubmissionsSuccessTotal]),
+	)
+}
 
 func TestSubmitRedemptionProof(t *testing.T) {
 	bytesFromHex := func(str string) []byte {
