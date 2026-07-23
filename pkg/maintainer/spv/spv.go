@@ -22,8 +22,9 @@ var logger = log.Logger("keep-maintainer-spv")
 const difficultyEpochLength = 2016
 
 // MetricsRecorder records counter metrics for SPV proof submissions. It is
-// satisfied by *clientinfo.PerformanceMetrics. A nil recorder disables metrics
-// recording; all call sites guard against it.
+// satisfied by *clientinfo.PerformanceMetrics. A nil MetricsRecorder is a valid
+// argument that disables metrics recording: callers must treat nil as "metrics
+// off" and guard every invocation against it.
 type MetricsRecorder interface {
 	IncrementCounter(name string, value float64)
 }
