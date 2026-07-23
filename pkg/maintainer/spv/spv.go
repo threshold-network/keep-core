@@ -53,7 +53,6 @@ func Initialize(
 	go spvMaintainer.startControlLoop(ctx)
 }
 
-
 // proofTypes holds the information about proof types supported by the
 // SPV maintainer.
 var proofTypes = map[tbtc.WalletActionType]struct {
