@@ -5,9 +5,22 @@
 //! a stable exclusively-locked lock file, and the no-follow directory handle
 //! through which every state operation is performed.
 //!
-//! This stable v1 identity proves which local store is open; it intentionally
+//! This stable v2 identity proves which local store is open; it intentionally
 //! does not claim pre-start state freshness or key-package inventory. A caller
 //! must reconcile those through the separate inventory/witness contract.
+//!
+//! # Stable identity versus volatile descriptors (transcript v2)
+//!
+//! The store fingerprint that anchors the state-commitment chain binds ONLY the
+//! stable, fsynced `.store-id` bytes. Path, device, and inode descriptors are
+//! still validated on every access - they are the real defense against store
+//! substitution - and are still reported for diagnostics, but they are NOT part
+//! of any committed transcript. Under the retired v1 transcript they were: a
+//! deleted lock file, a restore-from-backup at the same path, a renamed
+//! directory, or a remount that moved `st_dev` silently invalidated every
+//! committed record and left the signer unstartable, with `rm .state-witness`
+//! (a generation-1 re-genesis, i.e. exactly the rollback the journal exists to
+//! detect) as the only remaining operator action.
 
 use super::*;
 
@@ -20,13 +33,13 @@ use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 
 pub(crate) const TBTC_SIGNER_DURABLE_STORE_IDENTITY_SCHEMA: &str =
-    "tbtc-signer-durable-session-store-identity/v1";
+    "tbtc-signer-durable-session-store-identity/v2";
 pub(crate) const TBTC_SIGNER_DURABLE_STORE_BACKEND: &str = "encrypted-file-v1";
 pub(crate) const TBTC_SIGNER_DURABLE_STORE_ID_SUFFIX: &str = ".store-id";
 pub(crate) const TBTC_SIGNER_STATE_WITNESS_SUFFIX: &str = ".state-witness";
 
 const TBTC_SIGNER_DURABLE_STORE_FINGERPRINT_DOMAIN: &[u8] =
-    b"tbtc-signer-durable-session-store-fingerprint-v1\0";
+    b"tbtc-signer-durable-session-store-fingerprint-v2\0";
 const TBTC_SIGNER_DURABLE_STORE_PATH_FINGERPRINT_DOMAIN: &[u8] =
     b"tbtc-signer-durable-session-store-canonical-path-v1\0";
 const TBTC_SIGNER_DURABLE_STORE_FILESYSTEM_FINGERPRINT_DOMAIN: &[u8] =
@@ -34,9 +47,13 @@ const TBTC_SIGNER_DURABLE_STORE_FILESYSTEM_FINGERPRINT_DOMAIN: &[u8] =
 const TBTC_SIGNER_DURABLE_STORE_LOCK_FINGERPRINT_DOMAIN: &[u8] =
     b"tbtc-signer-durable-session-store-lock-v1\0";
 const TBTC_SIGNER_STATE_IMAGE_DIGEST_DOMAIN: &[u8] = b"tbtc-signer-durable-state-image-digest-v1\0";
-const TBTC_SIGNER_STATE_WITNESS_GENESIS_DOMAIN: &[u8] = b"tbtc-signer-state-witness-genesis-v1\0";
-const TBTC_SIGNER_STATE_COMMITMENT_DOMAIN: &[u8] = b"tbtc-signer-state-witness-commitment-v1\0";
-const TBTC_SIGNER_STATE_WITNESS_MAGIC: &[u8; 16] = b"TBTCWITNESSv1\0\0\0";
+const TBTC_SIGNER_STATE_WITNESS_GENESIS_DOMAIN: &[u8] = b"tbtc-signer-state-witness-genesis-v2\0";
+const TBTC_SIGNER_STATE_COMMITMENT_DOMAIN: &[u8] = b"tbtc-signer-state-witness-commitment-v2\0";
+const TBTC_SIGNER_STATE_WITNESS_MAGIC: &[u8; 16] = b"TBTCWITNESSv2\0\0\0";
+/// The retired v1 journal magic. It is never written and never repaired; it is
+/// recognized only so a v1 store fails closed with an actionable migration
+/// error instead of a generic "invalid commitment".
+const TBTC_SIGNER_STATE_WITNESS_MAGIC_V1: &[u8; 16] = b"TBTCWITNESSv1\0\0\0";
 pub(crate) const TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH: usize = 48;
 /// The journal is a fixed-width header followed by fixed-width records; the
 /// tests build on-disk fixtures from this geometry, so it is part of the
@@ -55,9 +72,16 @@ struct OpenedObjectIdentity {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DurableStoreIdentity {
     pub(crate) store_id: [u8; 32],
+    /// Diagnostic-only descriptors. They are recomputed and CHECKED on every
+    /// store access, but deliberately do not enter the state-commitment
+    /// transcript: each of them changes under benign operations (lock-file
+    /// cleanup, restore-from-backup, directory rename, remount).
     pub(crate) canonical_path_fingerprint: [u8; 32],
     pub(crate) filesystem_fingerprint: [u8; 32],
     pub(crate) lock_fingerprint: [u8; 32],
+    /// The stable transcript anchor: a function of `store_id` alone. This is
+    /// the value bound into every state commitment and into the witness
+    /// genesis root.
     pub(crate) fingerprint: [u8; 32],
 }
 
@@ -237,12 +261,12 @@ impl StateFileLock {
                 &lock_identity.inode.to_be_bytes(),
             ],
         );
-        let fingerprint = durable_store_fingerprint(
-            &store_id,
-            &canonical_path_fingerprint,
-            &filesystem_fingerprint,
-            &lock_fingerprint,
-        );
+        // Only the stable store ID anchors the committed transcript. The three
+        // descriptor fingerprints above stay in the identity for diagnostics
+        // and are enforced by `revalidate_store_entries`, but binding them into
+        // the commitment would make every committed record unverifiable after a
+        // benign lock-file, path, inode, or device change.
+        let fingerprint = durable_store_fingerprint(&store_id);
         let identity = DurableStoreIdentity {
             store_id,
             canonical_path_fingerprint,
@@ -931,16 +955,39 @@ fn state_witness_file_name(state_name: &OsStr) -> OsString {
     name
 }
 
-pub(crate) fn durable_store_fingerprint(
+/// The Go/Rust v2 store fingerprint: the stable anchor of the state-commitment
+/// transcript.
+///
+/// Inputs are the two compile-time contract constants and the 32 fsynced
+/// `.store-id` bytes, length-prefixed exactly as `hash_fields` prescribes.
+/// Nothing volatile (path, device, inode, lock file) may ever be added here:
+/// this value is recomputed on every start and every committed record must
+/// still verify under it.
+pub(crate) fn durable_store_fingerprint(store_id: &[u8; 32]) -> [u8; 32] {
+    hash_fields(
+        TBTC_SIGNER_DURABLE_STORE_FINGERPRINT_DOMAIN,
+        &[
+            TBTC_SIGNER_DURABLE_STORE_IDENTITY_SCHEMA.as_bytes(),
+            TBTC_SIGNER_DURABLE_STORE_BACKEND.as_bytes(),
+            store_id,
+        ],
+    )
+}
+
+/// The retired v1 fingerprint transcript, kept only so the frozen cross-language
+/// v1 vector stays pinned and so v1 journal fixtures can be built for the
+/// rejection-path regression tests.
+#[cfg(test)]
+pub(crate) fn durable_store_fingerprint_v1(
     store_id: &[u8; 32],
     canonical_path_fingerprint: &[u8; 32],
     filesystem_fingerprint: &[u8; 32],
     lock_fingerprint: &[u8; 32],
 ) -> [u8; 32] {
     hash_fields(
-        TBTC_SIGNER_DURABLE_STORE_FINGERPRINT_DOMAIN,
+        b"tbtc-signer-durable-session-store-fingerprint-v1\0",
         &[
-            TBTC_SIGNER_DURABLE_STORE_IDENTITY_SCHEMA.as_bytes(),
+            b"tbtc-signer-durable-session-store-identity/v1",
             TBTC_SIGNER_DURABLE_STORE_BACKEND.as_bytes(),
             store_id,
             canonical_path_fingerprint,
@@ -963,8 +1010,9 @@ fn state_commitment(
     previous_commitment: &[u8; 32],
     state_image_digest: &[u8; 32],
 ) -> [u8; 32] {
-    // Frozen Go/Rust v1 transcript: fields are fixed-width and therefore are
+    // Frozen Go/Rust v2 transcript: fields are fixed-width and therefore are
     // concatenated directly, without the length prefixes used by hash_fields.
+    // `store_fingerprint` MUST be the stable `durable_store_fingerprint`.
     let mut digest = Sha256::new();
     digest.update(TBTC_SIGNER_STATE_COMMITMENT_DOMAIN);
     digest.update(store_fingerprint);
@@ -979,6 +1027,69 @@ fn state_witness_genesis(store_fingerprint: &[u8; 32]) -> [u8; 32] {
     digest.update(TBTC_SIGNER_STATE_WITNESS_GENESIS_DOMAIN);
     digest.update(store_fingerprint);
     digest.finalize().into()
+}
+
+/// The retired v1 commitment transcript, retained for the frozen v1 vectors and
+/// for building v1 journal fixtures in the rejection-path regression tests.
+#[cfg(test)]
+pub(crate) fn state_commitment_v1(
+    store_fingerprint: &[u8; 32],
+    generation: u64,
+    previous_commitment: &[u8; 32],
+    state_image_digest: &[u8; 32],
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"tbtc-signer-state-witness-commitment-v1\0");
+    digest.update(store_fingerprint);
+    digest.update(generation.to_be_bytes());
+    digest.update(previous_commitment);
+    digest.update(state_image_digest);
+    digest.finalize().into()
+}
+
+/// The retired v1 genesis transcript. See [`state_commitment_v1`].
+#[cfg(test)]
+pub(crate) fn state_witness_genesis_v1(store_fingerprint: &[u8; 32]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"tbtc-signer-state-witness-genesis-v1\0");
+    digest.update(store_fingerprint);
+    digest.finalize().into()
+}
+
+/// Builds a complete, well-formed v1 journal image (header + PREPARE + COMMIT)
+/// for the v1 rejection-path regression test. Only the v1 magic is needed to
+/// recognize such a journal, but a fixture that is otherwise valid proves the
+/// rejection is driven by the transcript version and not by incidental damage.
+#[cfg(test)]
+pub(crate) fn encode_v1_state_witness_genesis_journal(
+    store_id: &[u8; 32],
+    v1_store_fingerprint: &[u8; 32],
+    state_image_digest: &[u8; 32],
+) -> Vec<u8> {
+    let previous_commitment = state_witness_genesis_v1(v1_store_fingerprint);
+    let genesis = StateWitness {
+        generation: 1,
+        previous_commitment,
+        commitment: state_commitment_v1(
+            v1_store_fingerprint,
+            1,
+            &previous_commitment,
+            state_image_digest,
+        ),
+        state_image_digest: *state_image_digest,
+    };
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(TBTC_SIGNER_STATE_WITNESS_MAGIC_V1);
+    bytes.extend_from_slice(store_id);
+    bytes.extend_from_slice(&encode_state_witness_record(
+        TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
+        &genesis,
+    ));
+    bytes.extend_from_slice(&encode_state_witness_record(
+        TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
+        &genesis,
+    ));
+    bytes
 }
 
 fn hash_fields(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
@@ -1309,8 +1420,17 @@ fn parse_state_witness_journal(
     expected_store_id: &[u8; 32],
     store_fingerprint: &[u8; 32],
 ) -> Result<(Vec<StateWitness>, Option<StateWitness>), EngineError> {
-    if bytes.len() < TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH
-        || &bytes[..TBTC_SIGNER_STATE_WITNESS_MAGIC.len()] != TBTC_SIGNER_STATE_WITNESS_MAGIC
+    if is_retired_v1_state_witness_journal(bytes) {
+        return Err(retired_v1_state_witness_journal_error());
+    }
+    if bytes.len() < TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH {
+        return Err(truncated_state_witness_journal_error(format!(
+            "signer state witness journal is [{}] bytes, shorter than its \
+             {TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH}-byte header",
+            bytes.len()
+        )));
+    }
+    if &bytes[..TBTC_SIGNER_STATE_WITNESS_MAGIC.len()] != TBTC_SIGNER_STATE_WITNESS_MAGIC
         || &bytes[TBTC_SIGNER_STATE_WITNESS_MAGIC.len()..TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH]
             != expected_store_id
     {
@@ -1321,7 +1441,7 @@ fn parse_state_witness_journal(
     let records = &bytes[TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH..];
     let complete_records = records.chunks_exact(TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH);
     if records.is_empty() || !complete_records.remainder().is_empty() {
-        return Err(EngineError::Internal(
+        return Err(truncated_state_witness_journal_error(
             "signer state witness journal contains a missing or partial record".to_string(),
         ));
     }
@@ -1416,11 +1536,47 @@ fn parse_state_witness_journal(
         }
     }
     if history.is_empty() {
-        return Err(EngineError::Internal(
+        return Err(truncated_state_witness_journal_error(
             "signer state witness journal has no committed genesis record".to_string(),
         ));
     }
     Ok((history, pending))
+}
+
+/// True when the journal carries the retired v1 magic. The store ID is not
+/// consulted: a v1 journal must be recognized even when the caller cannot
+/// recompute the v1 fingerprint any more, which is precisely the situation the
+/// v2 transcript exists to fix.
+fn is_retired_v1_state_witness_journal(bytes: &[u8]) -> bool {
+    bytes.len() >= TBTC_SIGNER_STATE_WITNESS_MAGIC_V1.len()
+        && &bytes[..TBTC_SIGNER_STATE_WITNESS_MAGIC_V1.len()] == TBTC_SIGNER_STATE_WITNESS_MAGIC_V1
+}
+
+fn retired_v1_state_witness_journal_error() -> EngineError {
+    EngineError::Internal(format!(
+        "signer state witness journal uses the retired v1 state-commitment transcript \
+         (magic [{}]); this build commits under v2, whose store fingerprint binds only the \
+         stable {TBTC_SIGNER_DURABLE_STORE_ID_SUFFIX} bytes. The journal was left byte-for-byte \
+         intact. Run the documented v1->v2 witness re-anchor before starting this build; do NOT \
+         delete the journal, which would silently re-genesis the anti-rollback chain at \
+         generation 1",
+        String::from_utf8_lossy(TBTC_SIGNER_STATE_WITNESS_MAGIC_V1).trim_end_matches('\0')
+    ))
+}
+
+/// A short journal is never a torn create: the header, PREPARE, and COMMIT of a
+/// genesis journal are written to a temp file, fsynced, and renamed into place
+/// as one unit, and every later record is appended and fsynced as one
+/// fixed-width unit whose torn remainder is repaired in place. Fail closed and
+/// say what an operator can actually do.
+fn truncated_state_witness_journal_error(detail: String) -> EngineError {
+    EngineError::Internal(format!(
+        "{detail}. The journal is created atomically and appended one fsynced fixed-width \
+         record at a time, so this is damage from outside the signer, not a torn write. \
+         Restore {TBTC_SIGNER_STATE_WITNESS_SUFFIX} together with the state image it commits \
+         to, or run the documented re-anchor procedure; deleting the journal would silently \
+         re-genesis the anti-rollback chain at generation 1"
+    ))
 }
 
 #[cfg(unix)]
@@ -1796,12 +1952,15 @@ fn unlinkat_entry(directory_fd: RawFd, name: &OsStr) -> Result<(), EngineError> 
 mod witness_transcript_tests {
     use super::*;
 
+    /// The live cross-language transcript. The Go bridge must reproduce these
+    /// bytes exactly; `store_fingerprint` here is a `durable_store_fingerprint`
+    /// output, which under v2 is a function of the `.store-id` bytes alone.
     #[test]
-    fn state_witness_transcripts_match_frozen_go_v1_vectors() {
+    fn state_witness_transcripts_match_frozen_go_v2_vectors() {
         let store_fingerprint = [0x11; 32];
         assert_eq!(
             hex::encode(state_witness_genesis(&store_fingerprint)),
-            "639ab6bce7b111044aa40cbe05d2a79a789c47d83e0dbf5ac83af3e2c8717775"
+            "44085b42d29bf25f06207142f9e2db58eaf86f88d92b6e18104161ce59e98a89"
         );
         assert_eq!(
             hex::encode(state_commitment(
@@ -1810,7 +1969,87 @@ mod witness_transcript_tests {
                 &[0x22; 32],
                 &[0x33; 32],
             )),
+            "ea5eb04a4776357e59875f683390a2ff4b7dd511ad394e588dfab147f94fa867"
+        );
+    }
+
+    /// End-to-end v2 chain vector: the `.store-id` bytes derive the store
+    /// fingerprint, the fingerprint derives the genesis root, and the genesis
+    /// record commits over it. The Go bridge must reproduce all three.
+    #[test]
+    fn state_witness_chain_matches_frozen_go_v2_vector() {
+        let fingerprint = durable_store_fingerprint(&[0x11; 32]);
+        assert_eq!(
+            hex::encode(fingerprint),
+            "8bb8d21c69e78916e8f165b0c861c0d84c5d7af5393f75b0321fe048f772abba"
+        );
+        let genesis_root = state_witness_genesis(&fingerprint);
+        assert_eq!(
+            hex::encode(genesis_root),
+            "3179b8bc6614b0951b703f9c418b17cf7cd8b7f1bef1f86587385d4c150efab2"
+        );
+        assert_eq!(
+            hex::encode(state_commitment(
+                &fingerprint,
+                1,
+                &genesis_root,
+                &[0x33; 32]
+            )),
+            "5387626d5314b17b324f9a7df1ab16fcbf10917a137527bf33c71847e1b77da0"
+        );
+    }
+
+    /// Regression guard for the rejection path: the retired v1 transcript must
+    /// keep producing its frozen bytes so v1 journal fixtures stay realistic,
+    /// and it must be distinct from v2 in both the genesis root and the
+    /// commitment.
+    #[test]
+    fn retired_v1_transcript_vectors_stay_frozen_and_distinct() {
+        let store_fingerprint = [0x11; 32];
+        assert_eq!(
+            hex::encode(state_witness_genesis_v1(&store_fingerprint)),
+            "639ab6bce7b111044aa40cbe05d2a79a789c47d83e0dbf5ac83af3e2c8717775"
+        );
+        assert_eq!(
+            hex::encode(state_commitment_v1(
+                &store_fingerprint,
+                42,
+                &[0x22; 32],
+                &[0x33; 32],
+            )),
             "903d154bca4b0e46f2cadda81db9559bdf2d719956065266f55bd845e64b7ced"
+        );
+        assert_ne!(
+            state_witness_genesis(&store_fingerprint),
+            state_witness_genesis_v1(&store_fingerprint)
+        );
+        assert_ne!(
+            state_commitment(&store_fingerprint, 42, &[0x22; 32], &[0x33; 32]),
+            state_commitment_v1(&store_fingerprint, 42, &[0x22; 32], &[0x33; 32])
+        );
+    }
+
+    #[test]
+    fn retired_v1_journals_are_recognized_by_magic_alone() {
+        let journal =
+            encode_v1_state_witness_genesis_journal(&[0x24; 32], &[0x11; 32], &[0x33; 32]);
+        assert!(is_retired_v1_state_witness_journal(&journal));
+        assert!(!is_retired_v1_state_witness_journal(
+            TBTC_SIGNER_STATE_WITNESS_MAGIC
+        ));
+
+        let error = parse_state_witness_journal(&journal, &[0x24; 32], &[0x11; 32])
+            .expect_err("a v1 journal must fail closed");
+        let EngineError::Internal(message) = error else {
+            panic!("unexpected error variant");
+        };
+        assert!(
+            message.contains("retired v1 state-commitment transcript"),
+            "unexpected v1 rejection message: {message}"
+        );
+        assert!(
+            message.contains("re-anchor"),
+            "the v1 rejection must be actionable: {message}"
         );
     }
 }
