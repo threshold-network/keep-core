@@ -672,6 +672,91 @@ pub struct FrostTbtcAbiVersionResult {
     pub abi_minor: u32,
 }
 
+/// Runtime identity of the exact durable session store the signer opened and
+/// locked. The affirmative safety claims are mandatory on the Go side; this
+/// response is emitted only after descriptor/path revalidation succeeds.
+/// This stable identity does not attest state freshness or key inventory.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct DurableStoreIdentityResult {
+    pub schema: String,
+    pub backend: String,
+    pub store_id: String,
+    pub canonical_path_fingerprint: String,
+    pub filesystem_fingerprint: String,
+    pub lock_fingerprint: String,
+    pub fingerprint: String,
+    pub durable: bool,
+    pub exclusive_lock_held: bool,
+    pub symlink_free: bool,
+    pub replacement_protected: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetainedKeyPackageInventoryPackage {
+    pub participant_seat: u16,
+    pub key_package_commitment: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetainedKeyPackageInventoryEntry {
+    pub wallet_id: String,
+    pub key_group: String,
+    pub threshold: u16,
+    pub participant_count: u16,
+    pub share_epoch: u64,
+    pub public_key_package_commitment: String,
+    pub key_packages: Vec<RetainedKeyPackageInventoryPackage>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetainedKeyPackageInventoryResult {
+    pub schema: String,
+    pub store_fingerprint: String,
+    pub state_generation: u64,
+    pub state_commitment: String,
+    pub previous_state_commitment: String,
+    pub state_image_digest: String,
+    pub inventory_commitment: String,
+    pub entries: Vec<RetainedKeyPackageInventoryEntry>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StateWitnessProofRequest {
+    pub schema: String,
+    pub store_fingerprint: String,
+    pub ancestor_generation: u64,
+    pub ancestor_commitment: String,
+    pub target_generation: u64,
+    pub target_commitment: String,
+    pub maximum_entries: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateWitnessProofEntry {
+    pub generation: u64,
+    pub previous_state_commitment: String,
+    pub state_commitment: String,
+    pub state_image_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateWitnessProofResult {
+    pub schema: String,
+    pub store_fingerprint: String,
+    pub ancestor_generation: u64,
+    pub ancestor_commitment: String,
+    pub target_generation: u64,
+    pub target_commitment: String,
+    pub complete: bool,
+    pub entries: Vec<StateWitnessProofEntry>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct SignerHardeningMetricsResult {
     pub runtime_version: String,

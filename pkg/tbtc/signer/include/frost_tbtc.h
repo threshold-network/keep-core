@@ -20,6 +20,27 @@ typedef struct {
 
 TbtcSignerResult frost_tbtc_version(void);
 TbtcSignerResult frost_tbtc_abi_version(void);
+/*
+ * Returns the exact descriptor-bound durable session-store identity using the
+ * tbtc-signer-durable-session-store-identity/v1 JSON schema. The call opens and
+ * exclusively locks the store before reading any signer state and fails closed
+ * if a live path, lock, store-ID, or state entry no longer matches its held
+ * no-follow descriptor. This stable v1 identity does not attest pre-start
+ * state freshness or the installed key-package inventory.
+ */
+TbtcSignerResult frost_tbtc_durable_store_identity(void);
+/*
+ * Returns the validated public-only retained FROST key-package inventory and
+ * the exact dynamic state-witness tip using
+ * tbtc-signer-retained-key-package-inventory/v1.
+ */
+TbtcSignerResult frost_tbtc_retained_key_package_inventory(void);
+/*
+ * Returns up to maximumEntries contiguous witness transitions from a known
+ * ancestor to an exact historical target. Callers must persist accepted tips
+ * independently of this signer store to detect a coordinated local rollback.
+ */
+TbtcSignerResult frost_tbtc_state_witness_proof(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_init_signer_config(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_roast_liveness_policy(void);
 TbtcSignerResult frost_tbtc_hardening_metrics(void);

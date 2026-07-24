@@ -36,13 +36,9 @@ use bitcoin::{
 };
 use chacha20poly1305::aead::{Aead, KeyInit, OsRng, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-#[cfg(unix)]
-use libc::{flock, EAGAIN, EWOULDBLOCK, LOCK_EX, LOCK_NB};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{Read, Write};
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -91,12 +87,14 @@ mod dkg;
 mod frost_ops;
 mod init_config;
 mod interactive;
+mod inventory;
 mod lifecycle;
 mod persistence;
 mod policy;
 mod provenance;
 mod roast;
 mod state;
+mod store;
 mod telemetry;
 #[cfg(test)]
 mod tests;
@@ -112,12 +110,14 @@ pub(crate) use dkg::*;
 pub(crate) use frost_ops::*;
 pub(crate) use init_config::*;
 pub(crate) use interactive::*;
+pub(crate) use inventory::*;
 pub(crate) use lifecycle::*;
 pub(crate) use persistence::*;
 pub(crate) use policy::*;
 pub(crate) use provenance::*;
 pub(crate) use roast::*;
 pub(crate) use state::*;
+pub(crate) use store::*;
 pub(crate) use telemetry::*;
 #[cfg(test)]
 pub(crate) use testsupport::*;
