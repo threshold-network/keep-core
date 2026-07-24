@@ -1205,53 +1205,94 @@ fn openat_regular(
     Ok(unsafe { fs::File::from_raw_fd(fd) })
 }
 
+/// Creates a store entry whose ENTIRE content is written in one all-or-nothing
+/// step.
+///
+/// `O_CREAT|O_EXCL` followed by a plain write is not atomic: a hard kill in that
+/// window leaves a short file at the final name, and every short length of the
+/// store ID and of the genesis journal is fatal on the next start - inside
+/// `acquire`, where the corruption policy cannot reach. The complete image is
+/// therefore written to a temp entry in the same directory, fsynced, renamed
+/// over the target, and the DIRECTORY is fsynced so the rename itself is
+/// durable. A crash anywhere before the rename leaves the target absent, which
+/// is a state the opener already handles by creating it.
+///
+/// The temp entry is created with `openat` + `O_EXCL` + `O_NOFOLLOW` under the
+/// held no-follow directory descriptor and mode 0600, so it is never a
+/// symlink-following hazard, and the returned descriptor is the one that
+/// survives the rename - no reopen by name is involved.
+#[cfg(unix)]
+fn create_entry_atomically(
+    directory: &fs::File,
+    name: &OsStr,
+    bytes: &[u8],
+    label: &str,
+) -> Result<(fs::File, OpenedObjectIdentity), EngineError> {
+    let temp_name = unique_temp_name(name)?;
+    let temp_file = openat_regular(
+        directory.as_raw_fd(),
+        &temp_name,
+        libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+        0o600,
+        label,
+    )?;
+
+    let outcome = (|| -> Result<OpenedObjectIdentity, EngineError> {
+        validate_owned_unlinked_regular(&temp_file, label)?;
+        set_owner_only_permissions(&temp_file, label)?;
+        validate_secure_regular_file(&temp_file, label)?;
+        write_file_at(&temp_file, bytes, label)?;
+        temp_file.sync_all().map_err(|error| {
+            EngineError::Internal(format!("failed to sync new {label}: {error}"))
+        })?;
+        // Publish only over an absent name. The exclusive store lock is held,
+        // so nothing that participates in this protocol can be racing us here;
+        // an entry that appeared anyway is not ours to overwrite.
+        ensure_entry_absent(directory.as_raw_fd(), name, label)?;
+        renameat_same_directory(directory.as_raw_fd(), &temp_name, name, label)?;
+        directory.sync_all().map_err(|error| {
+            EngineError::Internal(format!(
+                "failed to sync signer state directory after publishing {label}: {error}"
+            ))
+        })?;
+        let identity = descriptor_identity(&temp_file, label)?;
+        validate_live_entry(directory, name, identity, label)?;
+        Ok(identity)
+    })();
+
+    match outcome {
+        Ok(identity) => Ok((temp_file, identity)),
+        Err(error) => {
+            let _ = unlinkat_entry(directory.as_raw_fd(), &temp_name);
+            Err(error)
+        }
+    }
+}
+
 #[cfg(unix)]
 fn open_or_create_store_id(
     directory: &fs::File,
     name: &OsStr,
 ) -> Result<(fs::File, [u8; 32], OpenedObjectIdentity), EngineError> {
-    let existing = openat_optional(
-        directory.as_raw_fd(),
-        name,
-        libc::O_RDWR,
-        "signer durable store ID file",
-    )?;
-    let (file, created) = match existing {
-        Some(file) => (file, false),
-        None => (
-            openat_regular(
-                directory.as_raw_fd(),
-                name,
-                libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
-                0o600,
-                "signer durable store ID file",
-            )?,
-            true,
-        ),
-    };
-    validate_owned_unlinked_regular(&file, "signer durable store ID file")?;
-    set_owner_only_permissions(&file, "signer durable store ID file")?;
-    validate_secure_regular_file(&file, "signer durable store ID file")?;
+    const LABEL: &str = "signer durable store ID file";
 
-    let store_id = if created {
-        let mut id = [0u8; 32];
-        loop {
-            OsRng.fill_bytes(&mut id);
-            if id != [0u8; 32] {
-                break;
-            }
+    if let Some(file) = openat_optional(directory.as_raw_fd(), name, libc::O_RDWR, LABEL)? {
+        validate_owned_unlinked_regular(&file, LABEL)?;
+        set_owner_only_permissions(&file, LABEL)?;
+        validate_secure_regular_file(&file, LABEL)?;
+        let store_id = read_store_id(&file)?;
+        let identity = descriptor_identity(&file, LABEL)?;
+        return Ok((file, store_id, identity));
+    }
+
+    let mut store_id = [0u8; 32];
+    loop {
+        OsRng.fill_bytes(&mut store_id);
+        if store_id != [0u8; 32] {
+            break;
         }
-        write_file_at(&file, &id, "signer durable store ID file")?;
-        file.sync_all().map_err(|error| {
-            EngineError::Internal(format!(
-                "failed to sync signer durable store ID file: {error}"
-            ))
-        })?;
-        id
-    } else {
-        read_store_id(&file)?
-    };
-    let identity = descriptor_identity(&file, "signer durable store ID file")?;
+    }
+    let (file, identity) = create_entry_atomically(directory, name, &store_id, LABEL)?;
     Ok((file, store_id, identity))
 }
 
@@ -1273,79 +1314,62 @@ fn open_or_create_state_witness(
     store_identity: &DurableStoreIdentity,
     current_state_file: Option<&fs::File>,
 ) -> Result<OpenedStateWitnessJournal, EngineError> {
-    let existing = openat_optional(
-        directory.as_raw_fd(),
-        name,
-        libc::O_RDWR,
-        "signer state witness journal",
-    )?;
-    let (file, created) = match existing {
-        Some(file) => (file, false),
-        None => (
-            openat_regular(
-                directory.as_raw_fd(),
-                name,
-                libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
-                0o600,
-                "signer state witness journal",
-            )?,
-            true,
-        ),
-    };
-    validate_owned_unlinked_regular(&file, "signer state witness journal")?;
-    set_owner_only_permissions(&file, "signer state witness journal")?;
-    validate_secure_regular_file(&file, "signer state witness journal")?;
+    const LABEL: &str = "signer state witness journal";
 
-    let (history, pending, length) = if created {
-        let digest = current_state_image_digest(current_state_file)?;
-        let genesis_root = state_witness_genesis(&store_identity.fingerprint);
-        let genesis = StateWitness {
-            generation: 1,
-            previous_commitment: genesis_root,
-            commitment: state_commitment(&store_identity.fingerprint, 1, &genesis_root, &digest),
-            state_image_digest: digest,
-        };
-        let mut bytes = Vec::with_capacity(
-            TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + 2 * TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
-        );
-        bytes.extend_from_slice(TBTC_SIGNER_STATE_WITNESS_MAGIC);
-        bytes.extend_from_slice(&store_identity.store_id);
-        bytes.extend_from_slice(&encode_state_witness_record(
-            TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
-            &genesis,
-        ));
-        bytes.extend_from_slice(&encode_state_witness_record(
-            TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
-            &genesis,
-        ));
-        write_file_at(&file, &bytes, "signer state witness journal")?;
-        file.sync_all().map_err(|error| {
-            EngineError::Internal(format!(
-                "failed to sync initialized signer state witness journal: {error}"
-            ))
-        })?;
-        (vec![genesis], None, bytes.len())
-    } else {
+    if let Some(file) = openat_optional(directory.as_raw_fd(), name, libc::O_RDWR, LABEL)? {
+        validate_owned_unlinked_regular(&file, LABEL)?;
+        set_owner_only_permissions(&file, LABEL)?;
+        validate_secure_regular_file(&file, LABEL)?;
+
         // The journal is a fixed header followed by fixed-width records, each
-        // appended and fsynced individually. A crash can therefore leave at
-        // most one torn trailing record - bytes past the last complete record
-        // boundary - and those bytes are the only thing that may be discarded,
-        // after the truncation itself is made durable. Every record that
-        // survives is then parsed and validated in full, so a COMPLETE record
-        // with invalid content still fails closed instead of being truncated
-        // away. Any PREPARE that survives the repair is returned to the caller,
-        // which reconciles it against the held state image before use.
-        let bytes = read_file_at(&file, "signer state witness journal")?;
+        // appended and fsynced individually, and the genesis header+PREPARE+
+        // COMMIT image is published by an atomic rename. A crash can therefore
+        // leave at most one torn trailing record - bytes past the last complete
+        // record boundary - and those bytes are the only thing that may be
+        // discarded, after the truncation itself is made durable. Every record
+        // that survives is then parsed and validated in full, so a COMPLETE
+        // record with invalid content still fails closed instead of being
+        // truncated away. Any PREPARE that survives the repair is returned to
+        // the caller, which reconciles it against the held state image.
+        let bytes = read_file_at(&file, LABEL)?;
         let bytes = truncate_incomplete_witness_record(&file, &store_identity.store_id, bytes)?;
         let (history, pending) = parse_state_witness_journal(
             &bytes,
             &store_identity.store_id,
             &store_identity.fingerprint,
         )?;
-        (history, pending, bytes.len())
+        let identity = descriptor_identity(&file, LABEL)?;
+        return Ok((file, identity, history, pending, bytes.len()));
+    }
+
+    // Genesis is the one write that is not a single fixed-width record, so it
+    // is the one write `truncate_incomplete_witness_record` cannot repair: a
+    // short genesis is fatal at every length (0-47 fails the header, 48-152
+    // has no complete record, 153-257 has no committed genesis). Publish it
+    // atomically so the window does not exist.
+    let digest = current_state_image_digest(current_state_file)?;
+    let genesis_root = state_witness_genesis(&store_identity.fingerprint);
+    let genesis = StateWitness {
+        generation: 1,
+        previous_commitment: genesis_root,
+        commitment: state_commitment(&store_identity.fingerprint, 1, &genesis_root, &digest),
+        state_image_digest: digest,
     };
-    let identity = descriptor_identity(&file, "signer state witness journal")?;
-    Ok((file, identity, history, pending, length))
+    let mut bytes = Vec::with_capacity(
+        TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + 2 * TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
+    );
+    bytes.extend_from_slice(TBTC_SIGNER_STATE_WITNESS_MAGIC);
+    bytes.extend_from_slice(&store_identity.store_id);
+    bytes.extend_from_slice(&encode_state_witness_record(
+        TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE,
+        &genesis,
+    ));
+    bytes.extend_from_slice(&encode_state_witness_record(
+        TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT,
+        &genesis,
+    ));
+    let (file, identity) = create_entry_atomically(directory, name, &bytes, LABEL)?;
+    Ok((file, identity, vec![genesis], None, bytes.len()))
 }
 
 /// Removes an incomplete trailing journal record, and nothing else.
@@ -1584,7 +1608,11 @@ fn read_store_id(file: &fs::File) -> Result<[u8; 32], EngineError> {
     let bytes = read_file_at(file, "signer durable store ID file")?;
     if bytes.len() != 32 {
         return Err(EngineError::Internal(format!(
-            "signer durable store ID file has invalid length [{}], expected 32",
+            "signer durable store ID file has invalid length [{}], expected 32. The store ID is \
+             written to a temp entry, fsynced, and renamed into place, so a short file is not a \
+             torn create: restore {TBTC_SIGNER_DURABLE_STORE_ID_SUFFIX} from the store's backup. \
+             Replacing it with fresh bytes would orphan the state-witness journal, which binds \
+             this exact store ID",
             bytes.len()
         )));
     }
