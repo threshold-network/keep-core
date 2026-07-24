@@ -93,6 +93,81 @@ pub(crate) struct StateWitness {
     pub(crate) state_image_digest: [u8; 32],
 }
 
+/// Cheap, exact evidence that a file has not been written since it was last
+/// inspected: size plus the mtime and ctime pairs. Any write moves at least one
+/// of them, and ctime cannot be back-dated by an unprivileged writer. A stamp
+/// mismatch never admits anything - it only forces a full re-verification.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FileChangeStamp {
+    size: u64,
+    modified_seconds: u64,
+    modified_nanoseconds: u64,
+    changed_seconds: u64,
+    changed_nanoseconds: u64,
+}
+
+/// The verified prefix of the append-only witness journal.
+///
+/// The journal is append-only, so verification is incremental: the bytes below
+/// `verified_length` have already been parsed and matched against the in-memory
+/// history, and only newly appended bytes need to be read back. The anchor -
+/// last verified commitment and generation - plus the exact trailing record
+/// bytes and the file change stamp are what a later access re-checks in O(1)
+/// before trusting the prefix.
+///
+/// This cache lives only in the `StateFileLock` instance, so it is never a
+/// trust anchor across process restarts: a fresh open always re-parses and
+/// re-hashes the entire journal.
+#[cfg(unix)]
+#[derive(Clone, Debug)]
+struct WitnessJournalPrefix {
+    identity: OpenedObjectIdentity,
+    stamp: FileChangeStamp,
+    verified_length: usize,
+    history_length: usize,
+    tip_generation: u64,
+    tip_commitment: [u8; 32],
+    tail_record: [u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH],
+}
+
+/// Counts full journal re-parses. The incremental path must keep this flat as
+/// the journal grows; the test suite asserts exactly that.
+#[cfg(all(test, unix))]
+pub(crate) static WITNESS_FULL_VERIFICATIONS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Counts verifications served from the verified prefix.
+#[cfg(all(test, unix))]
+pub(crate) static WITNESS_INCREMENTAL_VERIFICATIONS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Counts journal bytes read for verification. This is the direct measure of
+/// the fix: it must grow with the bytes appended, not with accesses times
+/// journal length.
+#[cfg(all(test, unix))]
+pub(crate) static WITNESS_VERIFIED_BYTES_READ: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(all(test, unix))]
+pub(crate) fn reset_witness_verification_counters() {
+    use std::sync::atomic::Ordering;
+    WITNESS_FULL_VERIFICATIONS.store(0, Ordering::SeqCst);
+    WITNESS_INCREMENTAL_VERIFICATIONS.store(0, Ordering::SeqCst);
+    WITNESS_VERIFIED_BYTES_READ.store(0, Ordering::SeqCst);
+}
+
+/// `(full re-parses, incremental verifications, journal bytes read)`.
+#[cfg(all(test, unix))]
+pub(crate) fn witness_verification_counters() -> (u64, u64, u64) {
+    use std::sync::atomic::Ordering;
+    (
+        WITNESS_FULL_VERIFICATIONS.load(Ordering::SeqCst),
+        WITNESS_INCREMENTAL_VERIFICATIONS.load(Ordering::SeqCst),
+        WITNESS_VERIFIED_BYTES_READ.load(Ordering::SeqCst),
+    )
+}
+
 /// A process-lifetime handle to the exact durable store opened by the signer.
 ///
 /// The public path fields are retained for diagnostics and existing tests. All
@@ -117,6 +192,15 @@ pub(crate) struct StateFileLock {
     witness_history: Vec<StateWitness>,
     pending_witness: Option<StateWitness>,
     witness_length: usize,
+    /// The verified prefix of the journal. `None` means "nothing is cached",
+    /// which forces the next verification to parse the whole journal. It is
+    /// deliberately `None` on every fresh open.
+    #[cfg(unix)]
+    witness_prefix: Option<WitnessJournalPrefix>,
+    /// Bytes of the most recently appended record, used to verify the append
+    /// read-back and to anchor the cached prefix.
+    #[cfg(unix)]
+    last_appended_record: [u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH],
     current_state_file: Option<fs::File>,
     current_state_identity: Option<OpenedObjectIdentity>,
     identity: DurableStoreIdentity,
@@ -311,6 +395,8 @@ impl StateFileLock {
             witness_history,
             pending_witness,
             witness_length,
+            witness_prefix: None,
+            last_appended_record: [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH],
             current_state_file,
             current_state_identity,
             identity,
@@ -563,7 +649,7 @@ impl StateFileLock {
     }
 
     #[cfg(unix)]
-    pub(crate) fn revalidate_store_entries(&self) -> Result<(), EngineError> {
+    pub(crate) fn revalidate_store_entries(&mut self) -> Result<(), EngineError> {
         if !self.lock_held {
             return Err(EngineError::Internal(
                 "signer durable store exclusive lock is no longer held".to_string(),
@@ -630,7 +716,97 @@ impl StateFileLock {
             "signer state witness journal",
         )?;
         validate_secure_regular_file(&self.witness_file, "signer state witness journal")?;
-        let witness_bytes = read_file_at(&self.witness_file, "signer state witness journal")?;
+        self.verify_state_witness_journal()
+    }
+
+    /// Verifies the journal against the in-memory history.
+    ///
+    /// The journal is append-only and is written only by this process while the
+    /// exclusive lock is held, so re-reading and re-hashing every record ever
+    /// written on every access is pure waste that grows without bound in
+    /// lifetime persist count. Instead the verified prefix is cached and the
+    /// O(1) anchor - file identity, change stamp, header, trailing record, and
+    /// the last verified generation/commitment - is re-checked. ANY mismatch,
+    /// including a file whose identity moved underneath, falls through to a
+    /// full re-parse, which is what produces the precise failure. Bytes
+    /// appended since the last verification are read back and checked at append
+    /// time, so no byte is ever trusted without having been read from disk.
+    ///
+    /// The cache is per-`StateFileLock`, so a tampered prefix is still caught
+    /// in full on any fresh open.
+    #[cfg(unix)]
+    fn verify_state_witness_journal(&mut self) -> Result<(), EngineError> {
+        let stamp = witness_change_stamp(&self.witness_file)?;
+        if let Some(prefix) = self.witness_prefix.as_ref() {
+            let tip = self
+                .witness_history
+                .last()
+                .map(|tip| (tip.generation, tip.commitment));
+            if prefix.identity == self.witness_identity
+                && prefix.stamp == stamp
+                && prefix.verified_length == self.witness_length
+                && prefix.history_length == self.witness_history.len()
+                && tip == Some((prefix.tip_generation, prefix.tip_commitment))
+                && self.witness_anchor_matches(prefix)?
+            {
+                #[cfg(test)]
+                WITNESS_INCREMENTAL_VERIFICATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return Ok(());
+            }
+        }
+        self.verify_state_witness_journal_fully()
+    }
+
+    /// Re-reads the two fixed anchors of the cached prefix: the header, which
+    /// binds this store's ID, and the trailing record. Returns `false` - never
+    /// an error - when either differs, so the caller falls back to the full
+    /// parse that reports the real problem.
+    #[cfg(unix)]
+    fn witness_anchor_matches(&self, prefix: &WitnessJournalPrefix) -> Result<bool, EngineError> {
+        const LABEL: &str = "signer state witness journal";
+        if prefix.verified_length
+            < TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH
+        {
+            return Ok(false);
+        }
+        let header = read_file_range_at(
+            &self.witness_file,
+            0,
+            TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH,
+            LABEL,
+        )?;
+        if &header[..TBTC_SIGNER_STATE_WITNESS_MAGIC.len()] != TBTC_SIGNER_STATE_WITNESS_MAGIC
+            || header[TBTC_SIGNER_STATE_WITNESS_MAGIC.len()..] != self.identity.store_id
+        {
+            return Ok(false);
+        }
+        let tail = read_file_range_at(
+            &self.witness_file,
+            prefix.verified_length - TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
+            TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
+            LABEL,
+        )?;
+        #[cfg(test)]
+        WITNESS_VERIFIED_BYTES_READ.fetch_add(
+            (header.len() + tail.len()) as u64,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        Ok(tail == prefix.tail_record)
+    }
+
+    #[cfg(unix)]
+    fn verify_state_witness_journal_fully(&mut self) -> Result<(), EngineError> {
+        const LABEL: &str = "signer state witness journal";
+        #[cfg(test)]
+        WITNESS_FULL_VERIFICATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+        let before = witness_change_stamp(&self.witness_file)?;
+        let witness_bytes = read_file_at(&self.witness_file, LABEL)?;
+        #[cfg(test)]
+        WITNESS_VERIFIED_BYTES_READ.fetch_add(
+            witness_bytes.len() as u64,
+            std::sync::atomic::Ordering::SeqCst,
+        );
         if witness_bytes.len() != self.witness_length {
             return Err(EngineError::Internal(
                 "signer state witness journal length changed outside the locked store".to_string(),
@@ -646,11 +822,94 @@ impl StateFileLock {
                 "signer state witness journal changed outside the locked store".to_string(),
             ));
         }
+
+        // Only cache a prefix whose bytes provably did not move while they were
+        // being read.
+        let after = witness_change_stamp(&self.witness_file)?;
+        let tail_start = witness_bytes
+            .len()
+            .checked_sub(TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH);
+        self.witness_prefix = match (before == after, tail_start) {
+            (true, Some(start)) => self.build_witness_prefix(after, &witness_bytes[start..]),
+            _ => None,
+        };
+        Ok(())
+    }
+
+    /// Builds the cached prefix from the current in-memory model. Returns
+    /// `None` when there is nothing to anchor to, which simply disables the
+    /// incremental path.
+    #[cfg(unix)]
+    fn build_witness_prefix(
+        &self,
+        stamp: FileChangeStamp,
+        tail_record: &[u8],
+    ) -> Option<WitnessJournalPrefix> {
+        let tip = self.witness_history.last()?;
+        if tail_record.len() != TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH
+            || self.witness_length
+                < TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH
+        {
+            return None;
+        }
+        let mut tail = [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH];
+        tail.copy_from_slice(tail_record);
+        Some(WitnessJournalPrefix {
+            identity: self.witness_identity,
+            stamp,
+            verified_length: self.witness_length,
+            history_length: self.witness_history.len(),
+            tip_generation: tip.generation,
+            tip_commitment: tip.commitment,
+            tail_record: tail,
+        })
+    }
+
+    /// Reads back the record that was just appended and extends the verified
+    /// prefix over it. This is the "verify only the bytes appended since"
+    /// half of the incremental scheme: every journal byte is still read from
+    /// disk and checked exactly once.
+    #[cfg(unix)]
+    fn extend_witness_prefix(&mut self) -> Result<(), EngineError> {
+        const LABEL: &str = "signer state witness journal";
+        if self.witness_prefix.is_none() {
+            // Nothing verified yet; the next access parses the whole journal.
+            return Ok(());
+        }
+        let Some(appended_offset) = self
+            .witness_length
+            .checked_sub(TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH)
+        else {
+            self.witness_prefix = None;
+            return Ok(());
+        };
+        let before = witness_change_stamp(&self.witness_file)?;
+        let appended = read_file_range_at(
+            &self.witness_file,
+            appended_offset,
+            TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
+            LABEL,
+        )?;
+        #[cfg(test)]
+        WITNESS_VERIFIED_BYTES_READ
+            .fetch_add(appended.len() as u64, std::sync::atomic::Ordering::SeqCst);
+        if appended != self.last_appended_record {
+            return Err(EngineError::Internal(
+                "signer state witness journal read-back does not match the appended record"
+                    .to_string(),
+            ));
+        }
+        let after = witness_change_stamp(&self.witness_file)?;
+        self.witness_prefix = if before == after {
+            self.build_witness_prefix(after, &self.last_appended_record)
+        } else {
+            None
+        };
         Ok(())
     }
 
     #[cfg(unix)]
-    pub(crate) fn validate_state_image(&self) -> Result<(), EngineError> {
+    pub(crate) fn validate_state_image(&mut self) -> Result<(), EngineError> {
         self.revalidate_store_entries()?;
         let current_digest = current_state_image_digest(self.current_state_file.as_ref())?;
         let history = &self.witness_history;
@@ -668,26 +927,26 @@ impl StateFileLock {
     }
 
     #[cfg(unix)]
-    fn revalidate(&self) -> Result<(), EngineError> {
+    fn revalidate(&mut self) -> Result<(), EngineError> {
         self.validate_state_image()
     }
 
     #[cfg(not(unix))]
-    pub(crate) fn revalidate_store_entries(&self) -> Result<(), EngineError> {
+    pub(crate) fn revalidate_store_entries(&mut self) -> Result<(), EngineError> {
         Err(EngineError::Internal(
             "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
         ))
     }
 
     #[cfg(not(unix))]
-    pub(crate) fn validate_state_image(&self) -> Result<(), EngineError> {
+    pub(crate) fn validate_state_image(&mut self) -> Result<(), EngineError> {
         Err(EngineError::Internal(
             "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
         ))
     }
 
     #[cfg(not(unix))]
-    fn revalidate(&self) -> Result<(), EngineError> {
+    fn revalidate(&mut self) -> Result<(), EngineError> {
         Err(EngineError::Internal(
             "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
         ))
@@ -794,7 +1053,7 @@ impl StateFileLock {
         }
         self.append_witness_record(TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE, &witness)?;
         self.pending_witness = Some(witness);
-        Ok(())
+        self.extend_witness_prefix()
     }
 
     #[cfg(unix)]
@@ -805,7 +1064,7 @@ impl StateFileLock {
         self.append_witness_record(TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT, &pending)?;
         self.witness_history.push(pending);
         self.pending_witness = None;
-        Ok(())
+        self.extend_witness_prefix()
     }
 
     #[cfg(unix)]
@@ -815,7 +1074,7 @@ impl StateFileLock {
         })?;
         self.append_witness_record(TBTC_SIGNER_STATE_WITNESS_RECORD_ABORT, &pending)?;
         self.pending_witness = None;
-        Ok(())
+        self.extend_witness_prefix()
     }
 
     #[cfg(unix)]
@@ -879,6 +1138,7 @@ impl StateFileLock {
             ))
         })?;
         self.witness_length += record.len();
+        self.last_appended_record.copy_from_slice(&record);
         Ok(())
     }
 
@@ -1867,6 +2127,51 @@ fn read_file_at(file: &fs::File, label: &str) -> Result<Vec<u8>, EngineError> {
         offset += read;
     }
     Ok(bytes)
+}
+
+/// Reads an exact byte range. Unlike `read_file_at` this never depends on - and
+/// never pays for - the total file length, which is what makes verifying only
+/// the newly appended journal bytes cheap.
+#[cfg(unix)]
+fn read_file_range_at(
+    file: &fs::File,
+    offset: usize,
+    length: usize,
+    label: &str,
+) -> Result<Vec<u8>, EngineError> {
+    use std::os::unix::fs::FileExt;
+
+    let mut bytes = vec![0u8; length];
+    let mut read_total = 0usize;
+    while read_total < length {
+        let position = offset
+            .checked_add(read_total)
+            .ok_or_else(|| EngineError::Internal(format!("opened {label} read offset overflow")))?;
+        let read = file
+            .read_at(&mut bytes[read_total..], position as u64)
+            .map_err(|error| {
+                EngineError::Internal(format!("failed to read opened {label}: {error}"))
+            })?;
+        if read == 0 {
+            return Err(EngineError::Internal(format!(
+                "opened {label} was truncated while being read"
+            )));
+        }
+        read_total += read;
+    }
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn witness_change_stamp(file: &fs::File) -> Result<FileChangeStamp, EngineError> {
+    let stat = descriptor_stat(file, "signer state witness journal")?;
+    Ok(FileChangeStamp {
+        size: widen_stat_field(stat.st_size),
+        modified_seconds: widen_stat_field(stat.st_mtime),
+        modified_nanoseconds: widen_stat_field(stat.st_mtime_nsec),
+        changed_seconds: widen_stat_field(stat.st_ctime),
+        changed_nanoseconds: widen_stat_field(stat.st_ctime_nsec),
+    })
 }
 
 #[cfg(unix)]
