@@ -23,10 +23,11 @@ const (
 	// Minor 1 adds the typed heartbeat signing intent required to authorize
 	// non-transaction messages while the signing-policy firewall is on. Minor 2
 	// adds the heartbeat rate-limit configuration and dedicated rejection metric.
-	// Minor 3 adds the canary-evidence configuration, including its independent
-	// policy-sample minimum, and pins this bridge to the complete
-	// durability/rollout-assurance signer stack.
-	requiredTBTCSignerABIMinMinor uint32 = 3
+	// Minor 3 adds the canary-evidence configuration. Minor 4 adds descriptor-
+	// bound durable-store identity. Minor 5 adds exact retained key-package
+	// inventory plus the append-only state-witness proof required to detect
+	// rollback of key packages and durable replay markers.
+	requiredTBTCSignerABIMinMinor uint32 = 5
 )
 
 // ErrTBTCSignerABIIncompatible marks a linked libfrost_tbtc whose FFI contract version

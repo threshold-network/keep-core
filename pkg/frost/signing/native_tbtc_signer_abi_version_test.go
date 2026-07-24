@@ -91,11 +91,12 @@ func TestParseTBTCSignerABIVersion(t *testing.T) {
 func TestCheckTBTCSignerABICompatibility_CurrentContract(t *testing.T) {
 	// Pins the bridge's current required contract: major 3 adds the BIP-341
 	// transaction artifact, minor 1 adds heartbeat intent authorization, and
-	// minor 2 adds heartbeat rate limiting/metrics; minor 3 adds canary-evidence
-	// configuration. The matching library version is compatible; a different
+	// minor 2 adds heartbeat rate limiting/metrics; minor 3 adds canary-evidence,
+	// minor 4 adds runtime store identity, and minor 5 adds retained-key inventory
+	// and state-witness proofs. The matching library version is compatible; a different
 	// major is not. A regression here means the required constants drifted from
 	// what the bridge actually speaks.
-	if requiredTBTCSignerABIMajor != 3 || requiredTBTCSignerABIMinMinor != 3 {
+	if requiredTBTCSignerABIMajor != 3 || requiredTBTCSignerABIMinMinor != 5 {
 		t.Fatalf(
 			"unexpected required tbtc-signer ABI: [%d.%d]",
 			requiredTBTCSignerABIMajor,

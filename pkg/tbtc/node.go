@@ -68,6 +68,7 @@ type node struct {
 	frostPreSignAuthorizationBackend FrostPreSignAuthorizationBackend
 	frostPreSignActivationProfile    FrostPreSignActivationProfile
 	frostDurableSessionStoreBinding  *frostDurableSessionStoreBinding
+	frostProductionSignerReadiness   frostProductionSignerReadinessVerifier
 	bitcoinBroadcastOutbox           *bitcoinBroadcastOutbox
 	frostRetainedGroupJournal        *frostRetainedGroupJournal
 	frostActivationHandshakeExporter *frostActivationHandshakeExporter
@@ -239,6 +240,11 @@ func newNode(
 	}
 
 	if config.EnableFrostPreSignAuthorization {
+		if !currentFrostInteractiveSigningReadiness() {
+			return nil, fmt.Errorf(
+				"cannot enable FROST pre-sign authorization: interactive native signer is not ready",
+			)
+		}
 		activationProfile := config.FrostPreSignActivationProfile
 		if configurator, ok := chain.(FrostPreSignAuthorizationConfigurator); ok {
 			if config.FrostPreSignActivationManifestPath == "" {
@@ -341,6 +347,19 @@ func newNode(
 				err,
 			)
 		}
+		inventoryBinding, err := newFrostNativeSignerInventoryBinding(
+			storeBinding,
+			config.FrostNativeSignerStateWitnessAnchorSource,
+			signing.ReadNativeTBTCSignerRetainedKeyPackageInventory,
+			signing.ReadNativeTBTCSignerStateWitnessProof,
+		)
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot bind the native FROST key-package inventory and rollback witness: [%w]",
+				err,
+			)
+		}
 		if config.FrostRetainedGroupHistorySource == nil {
 			_ = outbox.close()
 			return nil, fmt.Errorf(
@@ -361,6 +380,44 @@ func newNode(
 			return nil, fmt.Errorf("cannot initialize canonical FROST retained-group journal: [%w]", err)
 		}
 		node.frostRetainedGroupJournal = journal
+		readiness, err := newFrostProductionSignerReadiness(
+			currentFrostInteractiveSigningReadiness,
+			journal,
+			inventoryBinding,
+		)
+		if err != nil {
+			_ = journal.close()
+			_ = outbox.close()
+			return nil, fmt.Errorf("cannot initialize FROST signer readiness: [%w]", err)
+		}
+		startupFinality, err := backend.CurrentFrostPreSignFinality(context.Background())
+		if err != nil {
+			_ = journal.close()
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot obtain the startup FROST signer-readiness checkpoint: [%w]",
+				err,
+			)
+		}
+		if startupFinality == nil || startupFinality.BlockNumber == 0 ||
+			startupFinality.BlockHash == [32]byte{} {
+			_ = journal.close()
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot obtain a valid startup FROST signer-readiness checkpoint",
+			)
+		}
+		if _, err := readiness.verifyFrostProductionSignerReadiness(
+			context.Background(),
+			*startupFinality,
+		); err != nil {
+			_ = journal.close()
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot enable FROST pre-sign authorization with an unready signer: [%w]",
+				err,
+			)
+		}
 		exporter, err := newFrostActivationHandshakeExporter(
 			config.FrostActivationHandshakeURL,
 			config.FrostActivationHandshakePrivateKeyPath,
@@ -368,7 +425,7 @@ func newNode(
 			pointVerifier,
 			storeBinding,
 			outbox,
-			journal,
+			readiness,
 		)
 		if err != nil {
 			_ = journal.close()
@@ -378,6 +435,7 @@ func newNode(
 		node.frostPreSignAuthorizationBackend = backend
 		node.frostPreSignActivationProfile = verifiedActivationProfile
 		node.frostDurableSessionStoreBinding = storeBinding
+		node.frostProductionSignerReadiness = readiness
 		node.bitcoinBroadcastOutbox = outbox
 		node.frostActivationHandshakeExporter = exporter
 	}
@@ -696,6 +754,7 @@ func (n *node) getSigningExecutor(
 			n.frostPreSignAuthorizationBackend,
 			n.frostPreSignActivationProfile,
 			n.frostDurableSessionStoreBinding,
+			n.frostProductionSignerReadiness,
 			n.chain.Signing(),
 			broadcastChannel,
 			membershipValidator,

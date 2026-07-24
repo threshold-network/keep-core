@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	frostActivationHandshakeSchema = "tbtc-p2tr-production-activation-handshake/v1"
+	frostActivationHandshakeSchema = "tbtc-p2tr-production-activation-handshake/v2"
 	frostActivationInventorySchema = "tbtc-p2tr-frost-wallet-group-inventory/v1"
 )
 
@@ -85,6 +85,20 @@ type frostActivationQuarantineJournalState struct {
 	Complete               bool   `json:"complete"`
 }
 
+type frostActivationNativeSignerState struct {
+	Schema                      string `json:"schema"`
+	StoreFingerprint            string `json:"storeFingerprint"`
+	StateGeneration             uint64 `json:"stateGeneration"`
+	StateCommitment             string `json:"stateCommitment"`
+	PreviousStateCommitment     string `json:"previousStateCommitment"`
+	StateImageDigest            string `json:"stateImageDigest"`
+	InventoryCommitment         string `json:"inventoryCommitment"`
+	RetainedWalletCount         uint64 `json:"retainedWalletCount"`
+	RetainedKeyPackageCount     uint64 `json:"retainedKeyPackageCount"`
+	ExternalRollbackAnchorBound bool   `json:"externalRollbackAnchorBound"`
+	Complete                    bool   `json:"complete"`
+}
+
 type frostActivationHandshakeState struct {
 	ProtocolID                                string                                `json:"protocolID"`
 	ReservationProtocolID                     string                                `json:"reservationProtocolID"`
@@ -99,6 +113,8 @@ type frostActivationHandshakeState struct {
 	FrostWalletGroupInventory                 frostActivationWalletGroupInventory   `json:"frostWalletGroupInventory"`
 	CanonicalJournal                          frostActivationCanonicalJournalState  `json:"canonicalJournal"`
 	QuarantineJournal                         frostActivationQuarantineJournalState `json:"quarantineJournal"`
+	NativeSignerState                         frostActivationNativeSignerState      `json:"nativeSignerState"`
+	InteractiveSigningReady                   bool                                  `json:"interactiveSigningReady"`
 	FinalizedReservationReadbackEnforced      bool                                  `json:"finalizedReservationReadbackEnforced"`
 	ExactTransactionAuthorizationRootEnforced bool                                  `json:"exactTransactionAuthorizationRootEnforced"`
 	NonceShareGateEnforced                    bool                                  `json:"nonceShareGateEnforced"`
@@ -129,7 +145,7 @@ type frostActivationHandshakeExporter struct {
 	pointVerifier FrostPreSignActivationPointVerifier
 	storeBinding  *frostDurableSessionStoreBinding
 	outbox        *bitcoinBroadcastOutbox
-	journal       *frostRetainedGroupJournal
+	readiness     frostProductionSignerReadinessVerifier
 
 	mutex    sync.Mutex
 	listener net.Listener
@@ -144,7 +160,7 @@ func newFrostActivationHandshakeExporter(
 	pointVerifier FrostPreSignActivationPointVerifier,
 	storeBinding *frostDurableSessionStoreBinding,
 	outbox *bitcoinBroadcastOutbox,
-	journal *frostRetainedGroupJournal,
+	readiness frostProductionSignerReadinessVerifier,
 ) (*frostActivationHandshakeExporter, error) {
 	parsedEndpoint, err := validateFrostActivationHandshakeEndpoint(endpoint)
 	if err != nil {
@@ -163,7 +179,7 @@ func newFrostActivationHandshakeExporter(
 		durableSessionStoreFingerprintErr != nil || durableSessionStoreFingerprint == [32]byte{} ||
 		durableSessionStoreFingerprint == manifest.CanonicalJournal.StoreFingerprint ||
 		durableSessionStoreFingerprint == manifest.QuarantineJournal.StoreFingerprint ||
-		pointVerifier == nil || storeBinding == nil || outbox == nil || journal == nil {
+		pointVerifier == nil || storeBinding == nil || outbox == nil || readiness == nil {
 		return nil, fmt.Errorf("FROST activation handshake dependencies are invalid")
 	}
 	boundStoreFingerprint, err := storeBinding.verify()
@@ -187,7 +203,7 @@ func newFrostActivationHandshakeExporter(
 		pointVerifier: pointVerifier,
 		storeBinding:  storeBinding,
 		outbox:        outbox,
-		journal:       journal,
+		readiness:     readiness,
 	}
 	return exporter, nil
 }
@@ -380,9 +396,14 @@ func (fahe *frostActivationHandshakeExporter) attest(
 	if err := fahe.pointVerifier.VerifyFrostPreSignActivationPoint(ctx, finality); err != nil {
 		return nil, fmt.Errorf("cannot verify FROST activation point: [%w]", err)
 	}
-	journalSnapshot, err := fahe.journal.reconcile(ctx, finality)
+	readinessSnapshot, err := fahe.readiness.verifyFrostProductionSignerReadiness(ctx, finality)
 	if err != nil {
-		return nil, fmt.Errorf("cannot reconcile canonical FROST retained groups: [%w]", err)
+		return nil, fmt.Errorf("cannot verify production FROST signer readiness: [%w]", err)
+	}
+	journalSnapshot := readinessSnapshot.Journal
+	nativeSignerSnapshot := readinessSnapshot.Inventory
+	if journalSnapshot == nil || nativeSignerSnapshot == nil {
+		return nil, fmt.Errorf("production FROST signer readiness snapshot is incomplete")
 	}
 	journalManifest := fahe.manifest.CanonicalJournal
 	quarantineManifest := fahe.manifest.QuarantineJournal
@@ -466,13 +487,34 @@ func (fahe *frostActivationHandshakeExporter) attest(
 			CurrentQuarantineCount: journalSnapshot.QuarantineCount,
 			Complete:               true,
 		},
+		NativeSignerState: frostActivationNativeSignerState{
+			Schema:                      nativeSignerSnapshot.Schema,
+			StoreFingerprint:            frostActivationHex32(nativeSignerSnapshot.StoreFingerprint),
+			StateGeneration:             nativeSignerSnapshot.StateGeneration,
+			StateCommitment:             frostActivationHex32(nativeSignerSnapshot.StateCommitment),
+			PreviousStateCommitment:     frostActivationHex32(nativeSignerSnapshot.PreviousStateCommitment),
+			StateImageDigest:            frostActivationHex32(nativeSignerSnapshot.StateImageDigest),
+			InventoryCommitment:         frostActivationHex32(nativeSignerSnapshot.InventoryCommitment),
+			RetainedWalletCount:         nativeSignerSnapshot.WalletCount,
+			RetainedKeyPackageCount:     nativeSignerSnapshot.KeyPackageCount,
+			ExternalRollbackAnchorBound: true,
+			Complete:                    true,
+		},
+		InteractiveSigningReady:                   readinessSnapshot.InteractiveSigningReady,
 		FinalizedReservationReadbackEnforced:      true,
 		ExactTransactionAuthorizationRootEnforced: true,
-		NonceShareGateEnforced:                    true,
-		DurableBitcoinOutboxRecovered:             true,
-		QuarantineFailClosed:                      true,
-		Healthy:                                   true,
+		NonceShareGateEnforced: readinessSnapshot.InteractiveSigningReady &&
+			nativeSignerSnapshot.StateGeneration > 0 &&
+			nativeSignerSnapshot.StateCommitment != [32]byte{},
+		DurableBitcoinOutboxRecovered: outboxSnapshot.Recovered,
+		QuarantineFailClosed:          journalSnapshot.QuarantineCount == 0,
 	}
+	state.Healthy = state.InteractiveSigningReady &&
+		state.NonceShareGateEnforced &&
+		state.DurableBitcoinOutboxRecovered &&
+		state.QuarantineFailClosed &&
+		state.NativeSignerState.Complete &&
+		state.NativeSignerState.ExternalRollbackAnchorBound
 	payload := frostActivationHandshakePayload{
 		Kind:          "frost-signer",
 		Nonce:         request.Challenge.Nonce,

@@ -3,6 +3,7 @@ package tbtc
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"math/big"
 	"strings"
 	"sync"
@@ -12,6 +13,26 @@ import (
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
+
+type testFrostProductionAuthorizationReadiness struct {
+	err    error
+	calls  uint64
+	points []FrostPreSignFinality
+}
+
+func (readiness *testFrostProductionAuthorizationReadiness) verifyFrostProductionSignerReadiness(
+	_ context.Context,
+	point FrostPreSignFinality,
+) (*frostProductionSignerReadinessSnapshot, error) {
+	readiness.calls++
+	readiness.points = append(readiness.points, point)
+	if readiness.err != nil {
+		return nil, readiness.err
+	}
+	return &frostProductionSignerReadinessSnapshot{
+		InteractiveSigningReady: true,
+	}, nil
+}
 
 func testFrostPreSignTransaction(
 	t *testing.T,
@@ -213,9 +234,10 @@ func TestThresholdFrostPreSignAuthorizationGate_RevalidatesCurrentFinalizedState
 		},
 	}
 	gate := &thresholdFrostPreSignAuthorizationGate{
-		backend:           backend,
-		activationProfile: activationProfileForTestProposal(proposal),
-		storeBinding:      testFrostDurableSessionStoreBinding(t),
+		backend:             backend,
+		activationProfile:   activationProfileForTestProposal(proposal),
+		storeBinding:        testFrostDurableSessionStoreBinding(t),
+		productionReadiness: &testFrostProductionAuthorizationReadiness{},
 	}
 	authorization := &frostPreSignAuthorization{
 		ActivationProfileHash: gate.activationProfile.ProfileHash,
@@ -239,6 +261,54 @@ func TestThresholdFrostPreSignAuthorizationGate_RevalidatesCurrentFinalizedState
 	if err := gate.revalidate(context.Background(), authorization); err == nil ||
 		!strings.Contains(err.Error(), "transaction variant") {
 		t.Fatalf("superseded current authorization was accepted: [%v]", err)
+	}
+}
+
+func TestThresholdFrostPreSignAuthorizationGate_RefusesUnreadyInteractiveSigner(
+	t *testing.T,
+) {
+	unsignedTx, _ := buildTaprootKeyPathUnsignedTxForTest(t)
+	transaction := testFrostPreSignTransaction(t, unsignedTx)
+	proposal := completeTestFrostPreSignProposal(transaction)
+	currentFinality := &FrostPreSignFinality{
+		BlockNumber: 101,
+		BlockHash:   [32]byte{0x73},
+	}
+	for _, condition := range []string{
+		"all interactive flags absent",
+		"interactive engine absent",
+		"interactive-only gate absent",
+	} {
+		t.Run(condition, func(t *testing.T) {
+			readiness := &testFrostProductionAuthorizationReadiness{
+				err: fmt.Errorf("%s", condition),
+			}
+			gate := &thresholdFrostPreSignAuthorizationGate{
+				backend: &testFrostPreSignAuthorizationBackend{
+					proposal:        proposal,
+					currentFinality: currentFinality,
+				},
+				activationProfile:   activationProfileForTestProposal(proposal),
+				storeBinding:        testFrostDurableSessionStoreBinding(t),
+				productionReadiness: readiness,
+			}
+			if _, err := gate.authorize(context.Background(), transaction); err == nil ||
+				!strings.Contains(err.Error(), "not authorization-ready") {
+				t.Fatalf("authorization accepted unready signer: [%v]", err)
+			}
+			if readiness.calls != 1 {
+				t.Fatalf("authorization readiness called [%d] times", readiness.calls)
+			}
+
+			authorization := &frostPreSignAuthorization{proposal: proposal}
+			if err := gate.revalidate(context.Background(), authorization); err == nil ||
+				!strings.Contains(err.Error(), "not authorization-ready") {
+				t.Fatalf("revalidation accepted unready signer: [%v]", err)
+			}
+			if readiness.calls != 2 {
+				t.Fatalf("revalidation readiness called [%d] total times", readiness.calls)
+			}
+		})
 	}
 }
 
@@ -501,11 +571,16 @@ func TestThresholdFrostPreSignAuthorizationGate_ProfileMismatchPrecedesSeatSigna
 	countingSigner := &countingFrostPreSignChainSigning{
 		Signing: Connect().Signing(),
 	}
+	currentFinality := &FrostPreSignFinality{BlockNumber: 9, BlockHash: [32]byte{0x70}}
 	gate := &thresholdFrostPreSignAuthorizationGate{
-		backend:           &testFrostPreSignAuthorizationBackend{proposal: proposal},
-		activationProfile: profile,
-		storeBinding:      testFrostDurableSessionStoreBinding(t),
-		signing:           countingSigner,
+		backend: &testFrostPreSignAuthorizationBackend{
+			proposal:        proposal,
+			currentFinality: currentFinality,
+		},
+		activationProfile:   profile,
+		storeBinding:        testFrostDurableSessionStoreBinding(t),
+		productionReadiness: &testFrostProductionAuthorizationReadiness{},
+		signing:             countingSigner,
 		wallet: wallet{
 			signingGroupOperators: make(
 				[]chain.Address,

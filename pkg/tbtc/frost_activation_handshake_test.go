@@ -45,6 +45,43 @@ type testFrostRetainedGroupHistorySource struct {
 	target   FrostPreSignFinality
 }
 
+type testFrostProductionSignerReadiness struct {
+	journal     *frostRetainedGroupJournal
+	interactive bool
+	err         error
+	calls       uint64
+}
+
+func (readiness *testFrostProductionSignerReadiness) verifyFrostProductionSignerReadiness(
+	ctx context.Context,
+	point FrostPreSignFinality,
+) (*frostProductionSignerReadinessSnapshot, error) {
+	readiness.calls++
+	if readiness.err != nil {
+		return nil, readiness.err
+	}
+	if !readiness.interactive {
+		return nil, fmt.Errorf("interactive signer is not ready")
+	}
+	journalSnapshot, err := readiness.journal.reconcile(ctx, point)
+	if err != nil {
+		return nil, err
+	}
+	return &frostProductionSignerReadinessSnapshot{
+		Journal: journalSnapshot,
+		Inventory: &frostNativeSignerInventorySnapshot{
+			Schema:                  "tbtc-signer-retained-key-package-inventory/v1",
+			StoreFingerprint:        testFrostDurableSessionStoreIdentity().Fingerprint,
+			StateGeneration:         7,
+			StateCommitment:         [32]byte{0x31},
+			PreviousStateCommitment: [32]byte{0x30},
+			StateImageDigest:        [32]byte{0x33},
+			InventoryCommitment:     [32]byte{0x32},
+		},
+		InteractiveSigningReady: true,
+	}, nil
+}
+
 func (source *testFrostRetainedGroupHistorySource) Identity(
 	context.Context,
 ) (FrostRetainedGroupHistoryIdentity, error) {
@@ -123,6 +160,10 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 		records:   make(map[bitcoin.Hash]*bitcoinBroadcastOutboxRecord),
 		recovered: true,
 	}
+	readiness := &testFrostProductionSignerReadiness{
+		journal:     journal,
+		interactive: true,
+	}
 	exporter, err := newFrostActivationHandshakeExporter(
 		endpoint,
 		privateKeyPath,
@@ -130,7 +171,7 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 		verifier,
 		testFrostDurableSessionStoreBinding(t),
 		outbox,
-		journal,
+		readiness,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -165,6 +206,8 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 		handshake.Payload.Nonce != request.Challenge.Nonce ||
 		handshake.Payload.ManifestHash != request.Challenge.ManifestHash ||
 		!handshake.Payload.State.Healthy ||
+		!handshake.Payload.State.InteractiveSigningReady ||
+		!handshake.Payload.State.NonceShareGateEnforced ||
 		!handshake.Payload.State.DurableBitcoinOutboxRecovered ||
 		verifier.point.BlockNumber != point.BlockNumber ||
 		frostActivationHex32(verifier.point.BlockHash) != point.BlockHash ||
@@ -184,6 +227,7 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 		"completeRouterAddress", "durableBitcoinOutboxRecovered", "durableSessionStoreFingerprint",
 		"exactTransactionAuthorizationRootEnforced", "finalizedReservationReadbackEnforced",
 		"frostWalletGroupInventory", "healthy", "maximumGroupSize", "nonceShareGateEnforced",
+		"interactiveSigningReady", "nativeSignerState",
 		"protocolID", "quarantineFailClosed", "quarantineJournal", "reservationProtocolID",
 		"retainedGroupInventoryProtocolID", "signingPolicyHash", "threshold",
 	})
@@ -200,6 +244,11 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 	assertFrostActivationObjectKeys(t, handshake.Payload.State.QuarantineJournal, []string{
 		"clusterFingerprint", "complete", "currentQuarantineCount", "generation",
 		"protocolID", "root", "storeFingerprint", "storeID",
+	})
+	assertFrostActivationObjectKeys(t, handshake.Payload.State.NativeSignerState, []string{
+		"complete", "externalRollbackAnchorBound", "inventoryCommitment",
+		"previousStateCommitment", "retainedKeyPackageCount", "retainedWalletCount",
+		"schema", "stateCommitment", "stateGeneration", "stateImageDigest", "storeFingerprint",
 	})
 }
 
@@ -265,6 +314,7 @@ func TestFrostActivationHandshakeExporter_FailsClosed(t *testing.T) {
 		},
 		recovered: true,
 	}
+	readiness := &testFrostProductionSignerReadiness{journal: journal, interactive: true}
 	exporter, err := newFrostActivationHandshakeExporter(
 		endpoint,
 		privateKeyPath,
@@ -272,7 +322,7 @@ func TestFrostActivationHandshakeExporter_FailsClosed(t *testing.T) {
 		&testFrostActivationPointVerifier{},
 		testFrostDurableSessionStoreBinding(t),
 		outbox,
-		journal,
+		readiness,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -296,6 +346,17 @@ func TestFrostActivationHandshakeExporter_FailsClosed(t *testing.T) {
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("quarantined outbox returned status [%d]", response.StatusCode)
+	}
+	response.Body.Close()
+
+	outbox.mutex.Lock()
+	outbox.records = make(map[bitcoin.Hash]*bitcoinBroadcastOutboxRecord)
+	outbox.mutex.Unlock()
+	readiness.interactive = false
+	response = postTestFrostActivationHandshake(t, endpoint, request)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("unready interactive signer returned status [%d]", response.StatusCode)
 	}
 }
 

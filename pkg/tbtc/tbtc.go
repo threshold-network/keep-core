@@ -166,6 +166,11 @@ type Config struct {
 	// receipt-complete source. It must not share the primary Ethereum adapter's
 	// trust domain, endpoint, operator, or history store.
 	FrostRetainedGroupHistorySource FrostRetainedGroupHistorySource
+	// FrostNativeSignerStateWitnessAnchorSource reads the independently durable,
+	// dynamic signer-state tip last accepted by the activation/watchtower system.
+	// It must not be backed by the native signer state directory. Production
+	// activation refuses to start without this rollback boundary.
+	FrostNativeSignerStateWitnessAnchorSource FrostNativeSignerStateWitnessAnchorSource
 }
 
 // Initialize kicks off the TBTC by initializing internal state, ensuring
