@@ -57,9 +57,22 @@ func TestEstimateRedemptionFee(t *testing.T) {
 			txMaxTotalFee:       uint64(3 * vsize), // below the 5 sat/vByte floor
 			expectErrorContains: "minimum safe transaction fee",
 		},
+		"buffered fee above the cap is bounded to the cap": {
+			// raw 4000 (250 vByte * 16 sat/vByte) is at or below the cap, so it
+			// passes the raw-estimate check; the 25% buffer lifts it to 5000,
+			// which is then bounded down to the cap rather than erroring.
+			estimateSatPerVByte: 16,
+			txMaxTotalFee:       4500, // between the raw 4000 and buffered 5000
+			expectedFee:         4500,
+		},
 		"raw estimate above the cap returns an error": {
-			estimateSatPerVByte: 16,   // raw 16*250 = 4000
-			txMaxTotalFee:       3000, // below the raw estimate
+			// raw 5000 (250 vByte * 20 sat/vByte) already exceeds the cap, so the
+			// redemption is uneconomical and errors before the floor is applied,
+			// rather than broadcasting an underpriced transaction. This trades
+			// liveness (the redemption is not attempted this round) for not
+			// broadcasting a fee the Bridge would reject.
+			estimateSatPerVByte: 20,
+			txMaxTotalFee:       4000, // below the raw 5000 estimate
 			expectErrorContains: "estimated fee exceeds the maximum fee",
 		},
 	}
