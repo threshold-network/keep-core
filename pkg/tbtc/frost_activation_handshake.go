@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -28,9 +29,21 @@ import (
 )
 
 const (
-	frostActivationHandshakeSchema          = "tbtc-p2tr-production-activation-handshake/v3"
-	frostActivationInventorySchema          = "tbtc-p2tr-frost-wallet-group-inventory/v1"
-	frostActivationHandshakeSignatureDomain = "tbtc-p2tr-production-activation-handshake-signature/v3\x00"
+	frostActivationHandshakeSchema                = "tbtc-p2tr-production-activation-handshake/v3"
+	frostActivationInventorySchema                = "tbtc-p2tr-frost-wallet-group-inventory/v1"
+	frostActivationHandshakeSignatureDomain       = "tbtc-p2tr-production-activation-handshake-signature/v3\x00"
+	frostActivationHandshakeReconciliationTimeout = frostRetainedGroupMaximumReconciliationDuration
+	frostActivationHandshakeRequestTimeout        = 5 * time.Second
+	frostActivationHandshakeQuickCheckTimeout     = 2 * time.Second
+	frostActivationHandshakeRetryAfter            = "1"
+)
+
+var errFrostActivationReconciliationPending = errors.New(
+	"FROST activation reconciliation is pending",
+)
+
+var errFrostActivationJournalBusy = errors.New(
+	"FROST activation journal live-state check is busy",
 )
 
 type frostActivationEthereumPoint struct {
@@ -161,12 +174,47 @@ type frostActivationHandshakeExporter struct {
 	pointVerifier FrostPreSignActivationPointVerifier
 	storeBinding  *frostDurableSessionStoreBinding
 	outbox        *bitcoinBroadcastOutbox
+	journal       *frostRetainedGroupJournal
 	readiness     frostProductionSignerReadinessVerifier
 
-	mutex    sync.Mutex
-	listener net.Listener
-	server   *http.Server
-	closed   bool
+	mutex                sync.Mutex
+	listener             net.Listener
+	server               *http.Server
+	reconciliationCancel context.CancelFunc
+	closed               bool
+
+	reconciliationMutex        sync.Mutex
+	reconciliationWake         chan struct{}
+	reconciliationSequence     uint64
+	reconciliationDesired      *frostActivationReconciliationJob
+	reconciliationActive       *frostActivationReconciliationJob
+	reconciliationActiveCancel context.CancelFunc
+	reconciliationCompleted    *frostActivationReconciliationCache
+}
+
+type frostActivationReconciliationJob struct {
+	sequence uint64
+	point    FrostPreSignFinality
+}
+
+type frostActivationJournalStamp struct {
+	bindingHash          [32]byte
+	canonicalPoint       FrostPreSignFinality
+	canonicalGeneration  uint64
+	canonicalBatchRoot   [32]byte
+	canonicalInventory   [32]byte
+	quarantinePoint      FrostPreSignFinality
+	quarantineGeneration uint64
+	quarantineBatchRoot  [32]byte
+	quarantineRoot       [32]byte
+}
+
+type frostActivationReconciliationCache struct {
+	point                   FrostPreSignFinality
+	journal                 frostRetainedGroupJournalSnapshot
+	inventory               frostNativeSignerInventorySnapshot
+	interactiveSigningReady bool
+	stamp                   frostActivationJournalStamp
 }
 
 func newFrostActivationHandshakeExporter(
@@ -228,15 +276,17 @@ func newFrostActivationHandshakeExporter(
 		)
 	}
 	exporter := &frostActivationHandshakeExporter{
-		endpoint:      parsedEndpoint,
-		privateKey:    privateKey,
-		publicKeySPKI: base64.StdEncoding.EncodeToString(publicKeyDER),
-		manifest:      manifest,
-		bindingHash:   bindingHash,
-		pointVerifier: pointVerifier,
-		storeBinding:  storeBinding,
-		outbox:        outbox,
-		readiness:     readiness,
+		endpoint:           parsedEndpoint,
+		privateKey:         privateKey,
+		publicKeySPKI:      base64.StdEncoding.EncodeToString(publicKeyDER),
+		manifest:           manifest,
+		bindingHash:        bindingHash,
+		pointVerifier:      pointVerifier,
+		storeBinding:       storeBinding,
+		outbox:             outbox,
+		journal:            journal,
+		readiness:          readiness,
+		reconciliationWake: make(chan struct{}, 1),
 	}
 	return exporter, nil
 }
@@ -320,12 +370,15 @@ func (fahe *frostActivationHandshakeExporter) start(ctx context.Context) error {
 		Handler:           http.HandlerFunc(fahe.serveHTTP),
 		ReadHeaderTimeout: 2 * time.Second,
 		ReadTimeout:       3 * time.Second,
-		WriteTimeout:      3 * time.Second,
+		WriteTimeout:      frostActivationHandshakeRequestTimeout + time.Second,
 		IdleTimeout:       5 * time.Second,
 		MaxHeaderBytes:    4096,
 	}
+	reconciliationContext, reconciliationCancel := context.WithCancel(ctx)
 	fahe.listener = listener
 	fahe.server = server
+	fahe.reconciliationCancel = reconciliationCancel
+	go fahe.reconciliationWorker(reconciliationContext)
 	go func() {
 		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			logger.Errorf("FROST activation handshake exporter failed: [%v]", err)
@@ -349,12 +402,307 @@ func (fahe *frostActivationHandshakeExporter) close() error {
 		return nil
 	}
 	fahe.closed = true
+	if fahe.reconciliationCancel != nil {
+		fahe.reconciliationCancel()
+	}
 	if fahe.server == nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	return fahe.server.Shutdown(ctx)
+}
+
+func (fahe *frostActivationHandshakeExporter) reconciliationWorker(
+	ctx context.Context,
+) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-fahe.reconciliationWake:
+		}
+		for {
+			job, reconciliationContext, cancel := fahe.takeReconciliationJob(ctx)
+			if job == nil {
+				break
+			}
+			cache, err := fahe.reconcileActivationState(
+				reconciliationContext,
+				job.point,
+			)
+			cancel()
+			if !fahe.completeReconciliationJob(job, cache, err) {
+				break
+			}
+		}
+	}
+}
+
+func (fahe *frostActivationHandshakeExporter) takeReconciliationJob(
+	ctx context.Context,
+) (
+	*frostActivationReconciliationJob,
+	context.Context,
+	context.CancelFunc,
+) {
+	fahe.reconciliationMutex.Lock()
+	defer fahe.reconciliationMutex.Unlock()
+	if fahe.reconciliationDesired == nil {
+		return nil, nil, nil
+	}
+	job := fahe.reconciliationDesired
+	fahe.reconciliationDesired = nil
+	reconciliationContext, cancel := context.WithTimeout(
+		ctx,
+		frostActivationHandshakeReconciliationTimeout,
+	)
+	fahe.reconciliationActive = job
+	fahe.reconciliationActiveCancel = cancel
+	return job, reconciliationContext, cancel
+}
+
+func (fahe *frostActivationHandshakeExporter) completeReconciliationJob(
+	job *frostActivationReconciliationJob,
+	cache *frostActivationReconciliationCache,
+	reconciliationErr error,
+) bool {
+	fahe.reconciliationMutex.Lock()
+	if fahe.reconciliationActive != nil &&
+		fahe.reconciliationActive.sequence == job.sequence {
+		fahe.reconciliationActive = nil
+		fahe.reconciliationActiveCancel = nil
+	}
+	if reconciliationErr == nil && cache != nil &&
+		fahe.reconciliationSequence == job.sequence &&
+		fahe.reconciliationDesired == nil {
+		fahe.reconciliationCompleted = cache
+	}
+	hasDesired := fahe.reconciliationDesired != nil
+	fahe.reconciliationMutex.Unlock()
+	if reconciliationErr != nil {
+		logger.Warnf(
+			"background FROST activation reconciliation failed for block [%d]: [%v]",
+			job.point.BlockNumber,
+			reconciliationErr,
+		)
+	}
+	return hasDesired
+}
+
+func (fahe *frostActivationHandshakeExporter) queueReconciliation(
+	point FrostPreSignFinality,
+	force bool,
+) {
+	fahe.reconciliationMutex.Lock()
+	if force || (fahe.reconciliationCompleted != nil &&
+		fahe.reconciliationCompleted.point != point) {
+		fahe.reconciliationCompleted = nil
+	}
+	if fahe.reconciliationDesired != nil &&
+		fahe.reconciliationDesired.point == point {
+		fahe.reconciliationMutex.Unlock()
+		return
+	}
+	if !force && fahe.reconciliationDesired == nil &&
+		fahe.reconciliationActive != nil &&
+		fahe.reconciliationActive.point == point {
+		fahe.reconciliationMutex.Unlock()
+		return
+	}
+	fahe.reconciliationSequence++
+	job := &frostActivationReconciliationJob{
+		sequence: fahe.reconciliationSequence,
+		point:    point,
+	}
+	fahe.reconciliationDesired = job
+	if fahe.reconciliationActiveCancel != nil {
+		fahe.reconciliationActiveCancel()
+	}
+	fahe.reconciliationMutex.Unlock()
+	select {
+	case fahe.reconciliationWake <- struct{}{}:
+	default:
+	}
+}
+
+func (fahe *frostActivationHandshakeExporter) cachedReconciliation(
+	point FrostPreSignFinality,
+) *frostActivationReconciliationCache {
+	fahe.reconciliationMutex.Lock()
+	defer fahe.reconciliationMutex.Unlock()
+	if fahe.reconciliationCompleted == nil ||
+		fahe.reconciliationCompleted.point != point {
+		return nil
+	}
+	cache := *fahe.reconciliationCompleted
+	return &cache
+}
+
+func (fahe *frostActivationHandshakeExporter) reconcileActivationState(
+	ctx context.Context,
+	finality FrostPreSignFinality,
+) (*frostActivationReconciliationCache, error) {
+	if err := fahe.pointVerifier.VerifyFrostPreSignActivationPoint(
+		ctx,
+		finality,
+	); err != nil {
+		return nil, fmt.Errorf("cannot verify FROST activation point: [%w]", err)
+	}
+	readinessSnapshot, err := fahe.readiness.verifyFrostProductionSignerReadiness(
+		ctx,
+		finality,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot verify production FROST signer readiness: [%w]",
+			err,
+		)
+	}
+	journalSnapshot := readinessSnapshot.Journal
+	inventorySnapshot := readinessSnapshot.Inventory
+	if journalSnapshot == nil || inventorySnapshot == nil {
+		return nil, fmt.Errorf(
+			"production FROST signer readiness snapshot is incomplete",
+		)
+	}
+	if err := fahe.validateActivationJournalSnapshot(
+		journalSnapshot,
+		finality,
+	); err != nil {
+		return nil, err
+	}
+	if err := fahe.pointVerifier.VerifyFrostPreSignActivationPoint(
+		ctx,
+		finality,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"FROST activation point changed during readiness reconciliation: [%w]",
+			err,
+		)
+	}
+	stamp, err := fahe.tryJournalStamp()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot read canonical FROST retained-group journal after reconciliation: [%w]",
+			err,
+		)
+	}
+	if !frostActivationStampMatchesSnapshot(
+		stamp,
+		journalSnapshot,
+		finality,
+	) {
+		return nil, fmt.Errorf(
+			"canonical FROST retained-group journal changed after reconciliation",
+		)
+	}
+	return &frostActivationReconciliationCache{
+		point:                   finality,
+		journal:                 *journalSnapshot,
+		inventory:               *inventorySnapshot,
+		interactiveSigningReady: readinessSnapshot.InteractiveSigningReady,
+		stamp:                   stamp,
+	}, nil
+}
+
+func (fahe *frostActivationHandshakeExporter) validateActivationJournalSnapshot(
+	journalSnapshot *frostRetainedGroupJournalSnapshot,
+	finality FrostPreSignFinality,
+) error {
+	if journalSnapshot == nil {
+		return fmt.Errorf("canonical FROST retained-group journal snapshot is nil")
+	}
+	journalManifest := fahe.manifest.CanonicalJournal
+	quarantineManifest := fahe.manifest.QuarantineJournal
+	if journalSnapshot.Schema != frostRetainedGroupJournalSnapshotSchema ||
+		journalSnapshot.BindingHash != fahe.bindingHash ||
+		!journalSnapshot.Complete || journalSnapshot.CurrentPoint != finality ||
+		journalSnapshot.StoreID != journalManifest.StoreID ||
+		journalSnapshot.StoreFingerprint != journalManifest.StoreFingerprint ||
+		journalSnapshot.ClusterFingerprint != journalManifest.ClusterFingerprint ||
+		journalSnapshot.SnapshotGeneration < journalManifest.MinimumGeneration ||
+		journalSnapshot.QuarantineProtocolID != quarantineManifest.ProtocolID ||
+		journalSnapshot.QuarantineStoreID != quarantineManifest.StoreID ||
+		journalSnapshot.QuarantineStoreFingerprint != quarantineManifest.StoreFingerprint ||
+		journalSnapshot.QuarantineClusterFingerprint != quarantineManifest.ClusterFingerprint ||
+		journalSnapshot.QuarantineGeneration < quarantineManifest.MinimumGeneration ||
+		journalSnapshot.QuarantineRoot == [32]byte{} ||
+		journalSnapshot.QuarantineCount != 0 {
+		return fmt.Errorf(
+			"canonical FROST retained-group journal is not activation-ready",
+		)
+	}
+	return nil
+}
+
+func (fahe *frostActivationHandshakeExporter) tryJournalStamp() (
+	frostActivationJournalStamp,
+	error,
+) {
+	if !fahe.journal.mutex.TryLock() {
+		return frostActivationJournalStamp{}, errFrostActivationJournalBusy
+	}
+	defer fahe.journal.mutex.Unlock()
+	return fahe.journalStampLocked()
+}
+
+func (fahe *frostActivationHandshakeExporter) journalStampLocked() (
+	frostActivationJournalStamp,
+	error,
+) {
+	journal := fahe.journal
+	if journal.closed ||
+		journal.metadata.BindingHash != fahe.bindingHash ||
+		journal.quarantineMetadata.BindingHash != fahe.bindingHash ||
+		journal.state.BindingHash != fahe.bindingHash ||
+		journal.quarantineState.BindingHash != fahe.bindingHash {
+		return frostActivationJournalStamp{}, fmt.Errorf(
+			"canonical FROST retained-group journal binding is not live",
+		)
+	}
+	return frostActivationJournalStamp{
+		bindingHash:          fahe.bindingHash,
+		canonicalPoint:       journal.state.CurrentPoint,
+		canonicalGeneration:  journal.state.SnapshotGeneration,
+		canonicalBatchRoot:   journal.state.BatchRoot,
+		canonicalInventory:   journal.state.InventoryRoot,
+		quarantinePoint:      journal.quarantineState.CurrentPoint,
+		quarantineGeneration: journal.quarantineState.Generation,
+		quarantineBatchRoot:  journal.quarantineState.BatchRoot,
+		quarantineRoot:       journal.quarantineState.Root,
+	}, nil
+}
+
+func frostActivationStampMatchesSnapshot(
+	stamp frostActivationJournalStamp,
+	snapshot *frostRetainedGroupJournalSnapshot,
+	point FrostPreSignFinality,
+) bool {
+	return snapshot != nil &&
+		stamp.bindingHash == snapshot.BindingHash &&
+		stamp.canonicalPoint == point &&
+		stamp.quarantinePoint == point &&
+		stamp.canonicalGeneration == snapshot.SnapshotGeneration &&
+		stamp.canonicalBatchRoot == snapshot.BatchRoot &&
+		stamp.canonicalInventory == snapshot.InventoryRoot &&
+		stamp.quarantineGeneration == snapshot.QuarantineGeneration &&
+		stamp.quarantineRoot == snapshot.QuarantineRoot
+}
+
+func (fahe *frostActivationHandshakeExporter) verifyActivationPointQuick(
+	ctx context.Context,
+	point FrostPreSignFinality,
+) error {
+	quickContext, cancel := context.WithTimeout(
+		ctx,
+		frostActivationHandshakeQuickCheckTimeout,
+	)
+	defer cancel()
+	return fahe.pointVerifier.VerifyFrostPreSignActivationPoint(
+		quickContext,
+		point,
+	)
 }
 
 func (fahe *frostActivationHandshakeExporter) serveHTTP(
@@ -389,9 +737,20 @@ func (fahe *frostActivationHandshakeExporter) serveHTTP(
 		http.Error(responseWriter, "invalid request", http.StatusBadRequest)
 		return
 	}
-	handshake, err := fahe.attest(request.Context(), handshakeRequest)
+	attestationContext, cancel := context.WithTimeout(
+		request.Context(),
+		frostActivationHandshakeRequestTimeout,
+	)
+	defer cancel()
+	handshake, err := fahe.attest(attestationContext, handshakeRequest)
 	if err != nil {
 		logger.Warnf("refusing FROST activation handshake: [%v]", err)
+		if errors.Is(err, errFrostActivationReconciliationPending) {
+			responseWriter.Header().Set(
+				"Retry-After",
+				frostActivationHandshakeRetryAfter,
+			)
+		}
 		http.Error(responseWriter, "activation state is not ready", http.StatusServiceUnavailable)
 		return
 	}
@@ -430,18 +789,32 @@ func (fahe *frostActivationHandshakeExporter) attest(
 		BlockNumber: request.Challenge.EthereumPoint.BlockNumber,
 		BlockHash:   blockHash,
 	}
-	if err := fahe.pointVerifier.VerifyFrostPreSignActivationPoint(ctx, finality); err != nil {
-		return nil, fmt.Errorf("cannot verify FROST activation point: [%w]", err)
+	reconciliation := fahe.cachedReconciliation(finality)
+	if reconciliation == nil {
+		fahe.queueReconciliation(finality, false)
+		return nil, errFrostActivationReconciliationPending
 	}
-	readinessSnapshot, err := fahe.readiness.verifyFrostProductionSignerReadiness(ctx, finality)
-	if err != nil {
-		return nil, fmt.Errorf("cannot verify production FROST signer readiness: [%w]", err)
+	liveStamp, stampErr := fahe.tryJournalStamp()
+	if errors.Is(stampErr, errFrostActivationJournalBusy) {
+		return nil, errFrostActivationReconciliationPending
 	}
-	journalSnapshot := readinessSnapshot.Journal
-	nativeSignerSnapshot := readinessSnapshot.Inventory
-	if journalSnapshot == nil || nativeSignerSnapshot == nil {
-		return nil, fmt.Errorf("production FROST signer readiness snapshot is incomplete")
+	if stampErr != nil || liveStamp != reconciliation.stamp {
+		fahe.queueReconciliation(finality, true)
+		return nil, fmt.Errorf(
+			"%w: canonical or quarantine journal generation changed",
+			errFrostActivationReconciliationPending,
+		)
 	}
+	if err := fahe.verifyActivationPointQuick(ctx, finality); err != nil {
+		fahe.queueReconciliation(finality, true)
+		return nil, fmt.Errorf(
+			"%w: cannot verify cached FROST activation point: [%v]",
+			errFrostActivationReconciliationPending,
+			err,
+		)
+	}
+	journalSnapshot := &reconciliation.journal
+	nativeSignerSnapshot := &reconciliation.inventory
 	if !nativeSignerSnapshot.ExternalRollbackAnchorBound ||
 		nativeSignerSnapshot.TrustCertificateSequence == 0 ||
 		nativeSignerSnapshot.TrustCertificateDigest == [32]byte{} ||
@@ -474,21 +847,6 @@ func (fahe *frostActivationHandshakeExporter) attest(
 		)
 	}
 	journalManifest := fahe.manifest.CanonicalJournal
-	quarantineManifest := fahe.manifest.QuarantineJournal
-	if journalSnapshot.BindingHash != fahe.bindingHash ||
-		!journalSnapshot.Complete || journalSnapshot.CurrentPoint != finality ||
-		journalSnapshot.StoreID != journalManifest.StoreID ||
-		journalSnapshot.StoreFingerprint != journalManifest.StoreFingerprint ||
-		journalSnapshot.ClusterFingerprint != journalManifest.ClusterFingerprint ||
-		journalSnapshot.SnapshotGeneration < journalManifest.MinimumGeneration ||
-		journalSnapshot.QuarantineProtocolID != quarantineManifest.ProtocolID ||
-		journalSnapshot.QuarantineStoreID != quarantineManifest.StoreID ||
-		journalSnapshot.QuarantineStoreFingerprint != quarantineManifest.StoreFingerprint ||
-		journalSnapshot.QuarantineClusterFingerprint != quarantineManifest.ClusterFingerprint ||
-		journalSnapshot.QuarantineGeneration < quarantineManifest.MinimumGeneration ||
-		journalSnapshot.QuarantineRoot == [32]byte{} || journalSnapshot.QuarantineCount != 0 {
-		return nil, fmt.Errorf("canonical FROST retained-group journal is not activation-ready")
-	}
 	outboxSnapshot, err := fahe.outbox.activationSnapshot()
 	if err != nil {
 		return nil, err
@@ -496,9 +854,6 @@ func (fahe *frostActivationHandshakeExporter) attest(
 	if !outboxSnapshot.Recovered || outboxSnapshot.AmbiguousReservationCount != 0 ||
 		outboxSnapshot.QuarantineCount != 0 {
 		return nil, fmt.Errorf("durable Bitcoin outbox is not activation-ready")
-	}
-	if err := fahe.pointVerifier.VerifyFrostPreSignActivationPoint(ctx, finality); err != nil {
-		return nil, fmt.Errorf("FROST activation point changed during readiness reconciliation: [%w]", err)
 	}
 	durableSessionStoreFingerprint, err := fahe.storeBinding.verify()
 	if err != nil {
@@ -579,10 +934,10 @@ func (fahe *frostActivationHandshakeExporter) attest(
 			AnchorRotationWarning:         nativeSignerSnapshot.AnchorRotationWarning,
 			Complete:                      true,
 		},
-		InteractiveSigningReady:                   readinessSnapshot.InteractiveSigningReady,
+		InteractiveSigningReady:                   reconciliation.interactiveSigningReady,
 		FinalizedReservationReadbackEnforced:      true,
 		ExactTransactionAuthorizationRootEnforced: true,
-		NonceShareGateEnforced: readinessSnapshot.InteractiveSigningReady &&
+		NonceShareGateEnforced: reconciliation.interactiveSigningReady &&
 			nativeSignerSnapshot.StateGeneration > 0 &&
 			nativeSignerSnapshot.StateCommitment != [32]byte{},
 		DurableBitcoinOutboxRecovered: outboxSnapshot.Recovered,
@@ -604,7 +959,32 @@ func (fahe *frostActivationHandshakeExporter) attest(
 	if err != nil {
 		return nil, err
 	}
+	if err := fahe.verifyActivationPointQuick(ctx, finality); err != nil {
+		fahe.queueReconciliation(finality, true)
+		return nil, fmt.Errorf(
+			"%w: cached FROST activation point changed before signing: [%v]",
+			errFrostActivationReconciliationPending,
+			err,
+		)
+	}
+	if !fahe.journal.mutex.TryLock() {
+		return nil, fmt.Errorf(
+			"%w: %v",
+			errFrostActivationReconciliationPending,
+			errFrostActivationJournalBusy,
+		)
+	}
+	signingStamp, stampErr := fahe.journalStampLocked()
+	if stampErr != nil || signingStamp != reconciliation.stamp {
+		fahe.journal.mutex.Unlock()
+		fahe.queueReconciliation(finality, true)
+		return nil, fmt.Errorf(
+			"%w: canonical or quarantine journal generation changed before signing",
+			errFrostActivationReconciliationPending,
+		)
+	}
 	signature := ed25519.Sign(fahe.privateKey, signatureTranscript)
+	fahe.journal.mutex.Unlock()
 	return &frostActivationSignedHandshake{
 		Payload:             payload,
 		SignerPublicKeySPKI: fahe.publicKeySPKI,

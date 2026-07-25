@@ -19,6 +19,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 )
 
 type testFrostActivationPointVerifier struct {
+	mutex sync.Mutex
 	err   error
 	point FrostPreSignFinality
 	calls uint64
@@ -36,14 +38,38 @@ func (tfapv *testFrostActivationPointVerifier) VerifyFrostPreSignActivationPoint
 	ctx context.Context,
 	point FrostPreSignFinality,
 ) error {
+	tfapv.mutex.Lock()
+	defer tfapv.mutex.Unlock()
 	tfapv.point = point
 	tfapv.calls++
 	return tfapv.err
 }
 
+func (tfapv *testFrostActivationPointVerifier) snapshot() (
+	FrostPreSignFinality,
+	uint64,
+) {
+	tfapv.mutex.Lock()
+	defer tfapv.mutex.Unlock()
+	return tfapv.point, tfapv.calls
+}
+
+func (tfapv *testFrostActivationPointVerifier) setError(err error) {
+	tfapv.mutex.Lock()
+	defer tfapv.mutex.Unlock()
+	tfapv.err = err
+}
+
 type testFrostRetainedGroupHistorySource struct {
-	manifest FrostRetainedGroupCanonicalJournalManifest
-	target   FrostPreSignFinality
+	mutex        sync.Mutex
+	manifest     FrostRetainedGroupCanonicalJournalManifest
+	target       FrostPreSignFinality
+	readCalls    uint64
+	readStarted  chan struct{}
+	readRelease  <-chan struct{}
+	readDeadline time.Time
+	hasDeadline  bool
+	readOnce     sync.Once
 }
 
 type testFrostProductionSignerReadiness struct {
@@ -125,6 +151,8 @@ func (source *testFrostRetainedGroupHistorySource) Identity(
 func (source *testFrostRetainedGroupHistorySource) FinalizedHead(
 	context.Context,
 ) (FrostPreSignFinality, error) {
+	source.mutex.Lock()
+	defer source.mutex.Unlock()
 	return source.target, nil
 }
 
@@ -136,10 +164,28 @@ func (source *testFrostRetainedGroupHistorySource) VerifyPoint(
 }
 
 func (source *testFrostRetainedGroupHistorySource) ReadCompleteHistory(
-	_ context.Context,
+	ctx context.Context,
 	from FrostPreSignFinality,
 	to FrostPreSignFinality,
 ) (*FrostRetainedGroupHistory, error) {
+	source.mutex.Lock()
+	source.readCalls++
+	readStarted := source.readStarted
+	readRelease := source.readRelease
+	source.readDeadline, source.hasDeadline = ctx.Deadline()
+	source.mutex.Unlock()
+	if readStarted != nil {
+		source.readOnce.Do(func() {
+			close(readStarted)
+		})
+	}
+	if readRelease != nil {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-readRelease:
+		}
+	}
 	return &FrostRetainedGroupHistory{
 		From:              from,
 		To:                to,
@@ -147,6 +193,29 @@ func (source *testFrostRetainedGroupHistorySource) ReadCompleteHistory(
 		EmptyAtFrom:       true,
 		DescriptorSetHash: source.manifest.DescriptorSetHash,
 	}, nil
+}
+
+func (source *testFrostRetainedGroupHistorySource) readCallCount() uint64 {
+	source.mutex.Lock()
+	defer source.mutex.Unlock()
+	return source.readCalls
+}
+
+func (source *testFrostRetainedGroupHistorySource) reconciliationDeadline() (
+	time.Time,
+	bool,
+) {
+	source.mutex.Lock()
+	defer source.mutex.Unlock()
+	return source.readDeadline, source.hasDeadline
+}
+
+func (source *testFrostRetainedGroupHistorySource) setTarget(
+	target FrostPreSignFinality,
+) {
+	source.mutex.Lock()
+	defer source.mutex.Unlock()
+	source.target = target
 }
 
 func (source *testFrostRetainedGroupHistorySource) ResolveOperatorID(
@@ -225,15 +294,30 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 		},
 	}
 	response := postTestFrostActivationHandshake(t, endpoint, request)
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
+	if response.StatusCode != http.StatusServiceUnavailable ||
+		response.Header.Get("Retry-After") != frostActivationHandshakeRetryAfter {
 		body, _ := io.ReadAll(response.Body)
-		t.Fatalf("unexpected status [%d]: %s", response.StatusCode, body)
+		response.Body.Close()
+		t.Fatalf(
+			"initial asynchronous response was [%d] Retry-After [%s]: %s",
+			response.StatusCode,
+			response.Header.Get("Retry-After"),
+			body,
+		)
 	}
+	response.Body.Close()
+	response = awaitTestFrostActivationHandshake(
+		t,
+		endpoint,
+		request,
+		http.StatusOK,
+	)
+	defer response.Body.Close()
 	handshake := &frostActivationSignedHandshake{}
 	if err := json.NewDecoder(response.Body).Decode(handshake); err != nil {
 		t.Fatal(err)
 	}
+	verifiedPoint, verifierCalls := verifier.snapshot()
 	if handshake.Payload.Kind != "frost-signer" ||
 		handshake.Payload.Nonce != request.Challenge.Nonce ||
 		handshake.Payload.ManifestHash != request.Challenge.ManifestHash ||
@@ -244,9 +328,9 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 		!handshake.Payload.State.InteractiveSigningReady ||
 		!handshake.Payload.State.NonceShareGateEnforced ||
 		!handshake.Payload.State.DurableBitcoinOutboxRecovered ||
-		verifier.point.BlockNumber != point.BlockNumber ||
-		frostActivationHex32(verifier.point.BlockHash) != point.BlockHash ||
-		verifier.calls != 2 {
+		verifiedPoint.BlockNumber != point.BlockNumber ||
+		frostActivationHex32(verifiedPoint.BlockHash) != point.BlockHash ||
+		verifierCalls != 4 {
 		t.Fatalf("unexpected handshake: %+v", handshake)
 	}
 	canonicalPayload, err := canonicalFrostActivationValue(handshake.Payload)
@@ -389,9 +473,29 @@ func TestFrostActivationHandshakeExporter_FailsClosed(t *testing.T) {
 		},
 	}
 	response := postTestFrostActivationHandshake(t, endpoint, request)
+	if response.StatusCode != http.StatusServiceUnavailable ||
+		response.Header.Get("Retry-After") != frostActivationHandshakeRetryAfter {
+		response.Body.Close()
+		t.Fatalf(
+			"initial reconciliation did not return retryable service unavailable",
+		)
+	}
+	response.Body.Close()
+	awaitTestFrostActivationReconciliation(
+		t,
+		exporter,
+		FrostPreSignFinality{
+			BlockNumber: point.BlockNumber,
+			BlockHash:   [32]byte{0x11},
+		},
+	)
+	response = postTestFrostActivationHandshake(t, endpoint, request)
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("quarantined outbox returned status [%d]", response.StatusCode)
+	}
+	if response.Header.Get("Retry-After") != "" {
+		t.Fatal("non-reconciliation readiness failure advertised a retry interval")
 	}
 	response.Body.Close()
 
@@ -399,10 +503,289 @@ func TestFrostActivationHandshakeExporter_FailsClosed(t *testing.T) {
 	outbox.records = make(map[bitcoin.Hash]*bitcoinBroadcastOutboxRecord)
 	outbox.mutex.Unlock()
 	readiness.interactive = false
+	journal.mutex.Lock()
+	journal.state.SnapshotGeneration++
+	var rootErr error
+	journal.state.InventoryRoot, _, _, _, rootErr =
+		frostRetainedGroupInventoryRoot(journal.state)
+	journal.mutex.Unlock()
+	if rootErr != nil {
+		t.Fatal(rootErr)
+	}
+	response = postTestFrostActivationHandshake(t, endpoint, request)
+	response.Body.Close()
+	settleDeadline := time.Now().Add(2 * time.Second)
+	for {
+		exporter.reconciliationMutex.Lock()
+		idle := exporter.reconciliationDesired == nil &&
+			exporter.reconciliationActive == nil
+		cached := exporter.reconciliationCompleted != nil
+		exporter.reconciliationMutex.Unlock()
+		if idle {
+			if cached {
+				t.Fatal("unready interactive signer cached reconciliation state")
+			}
+			break
+		}
+		if time.Now().After(settleDeadline) {
+			t.Fatal("background reconciliation did not settle")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	response = postTestFrostActivationHandshake(t, endpoint, request)
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("unready interactive signer returned status [%d]", response.StatusCode)
+	}
+}
+
+func TestFrostActivationHandshakeExporter_RejectsUnboundOrLegacyChallenge(
+	t *testing.T,
+) {
+	point := frostActivationEthereumPoint{
+		BlockNumber: 123,
+		BlockHash:   frostActivationHex32([32]byte{0x44}),
+	}
+	_, _, source, _, endpoint, request :=
+		startTestFrostActivationHandshakeExporter(t, point)
+
+	testCases := map[string]func(*frostActivationHandshakeRequest){
+		"legacy schema": func(request *frostActivationHandshakeRequest) {
+			request.Schema = "tbtc-p2tr-production-activation-handshake/v1"
+		},
+		"different binding": func(request *frostActivationHandshakeRequest) {
+			request.Challenge.BindingHash = frostActivationHex32([32]byte{0xff})
+		},
+	}
+	for name, mutate := range testCases {
+		t.Run(name, func(t *testing.T) {
+			candidate := request
+			mutate(&candidate)
+			response := postTestFrostActivationHandshake(t, endpoint, candidate)
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusServiceUnavailable {
+				t.Fatalf("unbound challenge returned [%d]", response.StatusCode)
+			}
+			if response.Header.Get("Retry-After") != "" {
+				t.Fatal("invalid transcript was treated as pending reconciliation")
+			}
+		})
+	}
+	if source.readCallCount() != 0 {
+		t.Fatal("invalid transcript started retained-history reconciliation")
+	}
+}
+
+func TestFrostActivationHandshakeExporter_ReconciliationIsAsynchronousAndGenerationBound(
+	t *testing.T,
+) {
+	point := frostActivationEthereumPoint{
+		BlockNumber: 123,
+		BlockHash:   frostActivationHex32([32]byte{0x44}),
+	}
+	_, journal, source, verifier, endpoint, request :=
+		startTestFrostActivationHandshakeExporter(t, point)
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	source.mutex.Lock()
+	source.readStarted = make(chan struct{})
+	readStarted := source.readStarted
+	source.readRelease = release
+	source.mutex.Unlock()
+
+	startedAt := time.Now()
+	response := postTestFrostActivationHandshake(t, endpoint, request)
+	elapsed := time.Since(startedAt)
+	if response.StatusCode != http.StatusServiceUnavailable ||
+		response.Header.Get("Retry-After") != frostActivationHandshakeRetryAfter {
+		response.Body.Close()
+		t.Fatalf("initial reconciliation response was not retryable: [%d]", response.StatusCode)
+	}
+	response.Body.Close()
+	if elapsed >= time.Second {
+		t.Fatalf("reconciliation held the HTTP request for [%v]", elapsed)
+	}
+	select {
+	case <-readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("background reconciliation did not start")
+	}
+	reconciliationDeadline, hasDeadline := source.reconciliationDeadline()
+	remaining := time.Until(reconciliationDeadline)
+	if !hasDeadline || remaining <= 0 ||
+		remaining > frostActivationHandshakeReconciliationTimeout {
+		t.Fatalf(
+			"background reconciliation deadline is not bounded: [%v] [%v]",
+			hasDeadline,
+			remaining,
+		)
+	}
+
+	response = postTestFrostActivationHandshake(t, endpoint, request)
+	if response.StatusCode != http.StatusServiceUnavailable ||
+		response.Header.Get("Retry-After") != frostActivationHandshakeRetryAfter {
+		response.Body.Close()
+		t.Fatalf("in-flight reconciliation response was not retryable: [%d]", response.StatusCode)
+	}
+	response.Body.Close()
+	if source.readCallCount() != 1 {
+		t.Fatalf(
+			"same-point requests started [%d] reconciliations",
+			source.readCallCount(),
+		)
+	}
+
+	close(release)
+	response = awaitTestFrostActivationHandshake(
+		t,
+		endpoint,
+		request,
+		http.StatusOK,
+	)
+	response.Body.Close()
+	if source.readCallCount() != 1 {
+		t.Fatalf("completed exact-point cache was not reused")
+	}
+
+	journal.mutex.Lock()
+	response = postTestFrostActivationHandshake(t, endpoint, request)
+	journal.mutex.Unlock()
+	if response.StatusCode != http.StatusServiceUnavailable ||
+		response.Header.Get("Retry-After") != frostActivationHandshakeRetryAfter {
+		response.Body.Close()
+		t.Fatalf("busy live-state check was not retryable: [%d]", response.StatusCode)
+	}
+	response.Body.Close()
+	response = awaitTestFrostActivationHandshake(
+		t,
+		endpoint,
+		request,
+		http.StatusOK,
+	)
+	response.Body.Close()
+	if source.readCallCount() != 1 {
+		t.Fatal("a transient live-state lock invalidated the completed cache")
+	}
+
+	journal.mutex.Lock()
+	journal.state.SnapshotGeneration++
+	canonicalGeneration := journal.state.SnapshotGeneration
+	var rootErr error
+	journal.state.InventoryRoot, _, _, _, rootErr =
+		frostRetainedGroupInventoryRoot(journal.state)
+	journal.mutex.Unlock()
+	if rootErr != nil {
+		t.Fatal(rootErr)
+	}
+	response = postTestFrostActivationHandshake(t, endpoint, request)
+	if response.StatusCode != http.StatusServiceUnavailable ||
+		response.Header.Get("Retry-After") != frostActivationHandshakeRetryAfter {
+		response.Body.Close()
+		t.Fatalf("canonical generation drift reused stale cache: [%d]", response.StatusCode)
+	}
+	response.Body.Close()
+	response = awaitTestFrostActivationHandshake(
+		t,
+		endpoint,
+		request,
+		http.StatusOK,
+	)
+	handshake := &frostActivationSignedHandshake{}
+	if err := json.NewDecoder(response.Body).Decode(handshake); err != nil {
+		response.Body.Close()
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if handshake.Payload.State.CanonicalJournal.Generation != canonicalGeneration {
+		t.Fatalf(
+			"reconciled generation is [%d], expected [%d]",
+			handshake.Payload.State.CanonicalJournal.Generation,
+			canonicalGeneration,
+		)
+	}
+
+	journal.mutex.Lock()
+	journal.quarantineState.Generation++
+	quarantineGeneration := journal.quarantineState.Generation
+	journal.mutex.Unlock()
+	response = postTestFrostActivationHandshake(t, endpoint, request)
+	if response.StatusCode != http.StatusServiceUnavailable ||
+		response.Header.Get("Retry-After") != frostActivationHandshakeRetryAfter {
+		response.Body.Close()
+		t.Fatalf("quarantine generation drift reused stale cache: [%d]", response.StatusCode)
+	}
+	response.Body.Close()
+	response = awaitTestFrostActivationHandshake(
+		t,
+		endpoint,
+		request,
+		http.StatusOK,
+	)
+	handshake = &frostActivationSignedHandshake{}
+	if err := json.NewDecoder(response.Body).Decode(handshake); err != nil {
+		response.Body.Close()
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if handshake.Payload.State.QuarantineJournal.Generation != quarantineGeneration {
+		t.Fatalf(
+			"reconciled quarantine generation is [%d], expected [%d]",
+			handshake.Payload.State.QuarantineJournal.Generation,
+			quarantineGeneration,
+		)
+	}
+
+	nextPoint := FrostPreSignFinality{
+		BlockNumber: point.BlockNumber + 1,
+		BlockHash:   [32]byte{0x45},
+	}
+	source.setTarget(nextPoint)
+	journal.mutex.Lock()
+	journal.state.CurrentPoint = nextPoint
+	journal.state.InventoryRoot, _, _, _, rootErr =
+		frostRetainedGroupInventoryRoot(journal.state)
+	journal.quarantineState.CurrentPoint = nextPoint
+	journal.mutex.Unlock()
+	if rootErr != nil {
+		t.Fatal(rootErr)
+	}
+	request.Challenge.EthereumPoint = frostActivationEthereumPoint{
+		BlockNumber: nextPoint.BlockNumber,
+		BlockHash:   frostActivationHex32(nextPoint.BlockHash),
+	}
+	response = postTestFrostActivationHandshake(t, endpoint, request)
+	if response.StatusCode != http.StatusServiceUnavailable ||
+		response.Header.Get("Retry-After") != frostActivationHandshakeRetryAfter {
+		response.Body.Close()
+		t.Fatalf("different finality point reused stale cache: [%d]", response.StatusCode)
+	}
+	response.Body.Close()
+	response = awaitTestFrostActivationHandshake(
+		t,
+		endpoint,
+		request,
+		http.StatusOK,
+	)
+	response.Body.Close()
+	if source.readCallCount() != 4 {
+		t.Fatalf(
+			"expected one reconciliation per cache invalidation, got [%d]",
+			source.readCallCount(),
+		)
+	}
+
+	verifier.setError(fmt.Errorf("exact point no longer canonical"))
+	response = postTestFrostActivationHandshake(t, endpoint, request)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusServiceUnavailable ||
+		response.Header.Get("Retry-After") != frostActivationHandshakeRetryAfter {
+		t.Fatalf("failed quick point check signed cached state: [%d]", response.StatusCode)
 	}
 }
 
@@ -515,6 +898,87 @@ func testFrostActivationRuntimeManifest(
 	}
 }
 
+func startTestFrostActivationHandshakeExporter(
+	t *testing.T,
+	point frostActivationEthereumPoint,
+) (
+	*frostActivationHandshakeExporter,
+	*frostRetainedGroupJournal,
+	*testFrostRetainedGroupHistorySource,
+	*testFrostActivationPointVerifier,
+	string,
+	frostActivationHandshakeRequest,
+) {
+	t.Helper()
+	directory := t.TempDir()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKeyDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKeyPath := filepath.Join(directory, "attestation-key.pem")
+	if err := os.WriteFile(privateKeyPath, pem.EncodeToMemory(&pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: privateKeyDER,
+	}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	publicKeyDER, err := x509.MarshalPKIXPublicKey(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := testFrostActivationRuntimeManifest(sha256.Sum256(publicKeyDER))
+	journal := testFrostRetainedGroupJournal(t, manifest, point)
+	source, ok := journal.source.(*testFrostRetainedGroupHistorySource)
+	if !ok {
+		t.Fatal("unexpected retained-group history source")
+	}
+	endpoint := testLoopbackEndpoint(t)
+	verifier := &testFrostActivationPointVerifier{}
+	outbox := &bitcoinBroadcastOutbox{
+		records:   make(map[bitcoin.Hash]*bitcoinBroadcastOutboxRecord),
+		recovered: true,
+	}
+	readiness := &testFrostProductionSignerReadiness{
+		journal:     journal,
+		interactive: true,
+	}
+	exporter, err := newFrostActivationHandshakeExporter(
+		endpoint,
+		privateKeyPath,
+		manifest,
+		verifier,
+		testFrostDurableSessionStoreBinding(t),
+		outbox,
+		journal,
+		readiness,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := exporter.start(ctx); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cancel()
+		_ = exporter.close()
+	})
+	return exporter, journal, source, verifier, endpoint, frostActivationHandshakeRequest{
+		Schema: frostActivationHandshakeSchema,
+		Challenge: frostActivationChallenge{
+			Nonce:         frostActivationHex32([32]byte{0x77}),
+			ManifestHash:  frostActivationHex32(manifest.ManifestHash),
+			BindingHash:   frostActivationHex32(journal.metadata.BindingHash),
+			EthereumPoint: point,
+		},
+	}
+}
+
 func testFrostRetainedGroupJournal(
 	t *testing.T,
 	manifest FrostPreSignActivationRuntimeManifest,
@@ -617,4 +1081,47 @@ func postTestFrostActivationHandshake(
 		t.Fatal(err)
 	}
 	return response
+}
+
+func awaitTestFrostActivationHandshake(
+	t *testing.T,
+	endpoint string,
+	request frostActivationHandshakeRequest,
+	status int,
+) *http.Response {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		response := postTestFrostActivationHandshake(t, endpoint, request)
+		if response.StatusCode == status {
+			return response
+		}
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		if response.StatusCode != http.StatusServiceUnavailable ||
+			time.Now().After(deadline) {
+			t.Fatalf(
+				"handshake did not reach status [%d]; last status [%d]: %s",
+				status,
+				response.StatusCode,
+				body,
+			)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func awaitTestFrostActivationReconciliation(
+	t *testing.T,
+	exporter *frostActivationHandshakeExporter,
+	point FrostPreSignFinality,
+) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for exporter.cachedReconciliation(point) == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("activation reconciliation did not complete")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
