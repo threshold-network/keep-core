@@ -19,9 +19,9 @@ const (
 	// the signer actually opened and locked. It is deliberately not the
 	// fingerprint of the signer init configuration, which cannot prove where
 	// session replay markers and key packages are being persisted.
-	NativeTBTCSignerDurableStoreIdentitySchema = "tbtc-signer-durable-session-store-identity/v1"
+	NativeTBTCSignerDurableStoreIdentitySchema = "tbtc-signer-durable-session-store-identity/v2"
 
-	nativeTBTCSignerDurableStoreIdentityDomain = "tbtc-signer-durable-session-store-fingerprint-v1\x00"
+	nativeTBTCSignerDurableStoreIdentityDomain = "tbtc-signer-durable-session-store-fingerprint-v2\x00"
 )
 
 var nativeTBTCSignerStoreBackendPattern = regexp.MustCompile(
@@ -35,10 +35,12 @@ var nativeTBTCSignerStoreBackendPattern = regexp.MustCompile(
 // signer, not copied from configuration text.
 //
 // The state file itself is atomically replaced on every write, so its inode is
-// not a stable store identity. The signer-side contract instead binds the
-// persistent store ID, canonical opened path, storage root, and exclusive lock
-// object. It must fail readback if a symlink or replacement makes those opened
-// identities differ from the live path lookup.
+// not a stable store identity. The v2 committed identity binds the backend and
+// persistent store ID. Canonical opened-path, storage-root, and exclusive-lock
+// fingerprints remain mandatory runtime diagnostics: the signer must fail
+// readback if a symlink or replacement makes those opened identities differ
+// from the live path lookup, while a safe restore may change them across
+// process restarts without changing the stable committed identity.
 type NativeTBTCSignerDurableStoreIdentity struct {
 	Schema                   string
 	Backend                  string
@@ -164,8 +166,12 @@ func decodeNativeTBTCSignerStoreBytes32(value string) ([32]byte, error) {
 
 // ComputeNativeTBTCSignerDurableStoreFingerprint derives the manifest-bound
 // fingerprint from runtime store identity, not signer configuration content.
-// All variable-width fields are length-prefixed to keep the transcript
-// unambiguous.
+// The v2 transcript binds only the schema, backend, and fsynced stable StoreID.
+// The path, filesystem, and lock fingerprints remain mandatory diagnostics and
+// are revalidated by the signer, but must not enter a cross-restart commitment:
+// their path, device, and inode values can change after a safe restore, rename,
+// remount, or advisory-lock recreation. All variable-width committed fields are
+// length-prefixed to keep the transcript unambiguous.
 func ComputeNativeTBTCSignerDurableStoreFingerprint(
 	identity *NativeTBTCSignerDurableStoreIdentity,
 ) ([32]byte, error) {
@@ -180,19 +186,10 @@ func ComputeNativeTBTCSignerDurableStoreFingerprint(
 	}
 
 	digest := sha256.New()
-	digest.Write([]byte(nativeTBTCSignerDurableStoreIdentityDomain))
+	_, _ = digest.Write([]byte(nativeTBTCSignerDurableStoreIdentityDomain))
 	writeNativeTBTCSignerStoreFingerprintField(digest, []byte(identity.Schema))
 	writeNativeTBTCSignerStoreFingerprintField(digest, []byte(identity.Backend))
 	writeNativeTBTCSignerStoreFingerprintField(digest, identity.StoreID[:])
-	writeNativeTBTCSignerStoreFingerprintField(
-		digest,
-		identity.CanonicalPathFingerprint[:],
-	)
-	writeNativeTBTCSignerStoreFingerprintField(
-		digest,
-		identity.FilesystemFingerprint[:],
-	)
-	writeNativeTBTCSignerStoreFingerprintField(digest, identity.LockFingerprint[:])
 
 	var result [32]byte
 	copy(result[:], digest.Sum(nil))

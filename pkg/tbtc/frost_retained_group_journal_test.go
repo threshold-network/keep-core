@@ -122,6 +122,15 @@ func newJournalTestFixture(t *testing.T) *journalTestFixture {
 	walletPKH := [20]byte{0x92}
 	localOperator := operatorAddrs[6]
 	publicKey := &ecdsa.PublicKey{Curve: elliptic.P256()}
+	signerMaterialPayload, err := json.Marshal(
+		frostsigning.NativeTBTCSignerMaterialPayload{
+			KeyGroup:       fmt.Sprintf("%x", walletID),
+			KeyGroupSource: frostsigning.NativeTBTCSignerKeyGroupSourceDKGPersisted,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	localSigner := &signer{
 		wallet: wallet{
 			publicKey:             publicKey,
@@ -129,8 +138,8 @@ func newJournalTestFixture(t *testing.T) *journalTestFixture {
 		},
 		signingGroupMemberIndex: group.MemberIndex(7),
 		signerMaterial: &frostsigning.NativeSignerMaterial{
-			Format:  frostsigning.NativeSignerMaterialFormatFrostUniFFIV1,
-			Payload: []byte{0x01},
+			Format:  frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
+			Payload: signerMaterialPayload,
 		},
 	}
 	registry := &walletRegistry{
@@ -210,6 +219,38 @@ func newJournalTestFixture(t *testing.T) *journalTestFixture {
 		registry:      registry,
 		source:        source,
 		admission:     admission,
+	}
+}
+
+func TestFrostLocalSessionSnapshotBindsExactSignerMaterial(t *testing.T) {
+	fixture := newJournalTestFixture(t)
+	sessions, err := fixture.registry.frostLocalSessionSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedKeyGroup := fmt.Sprintf("%x", fixture.walletID)
+	if len(sessions) != 1 || sessions[0].WalletID != fixture.walletID ||
+		sessions[0].KeyGroup != expectedKeyGroup {
+		t.Fatalf("unexpected local FROST session snapshot: [%+v]", sessions)
+	}
+
+	mismatchedPayload, err := json.Marshal(
+		frostsigning.NativeTBTCSignerMaterialPayload{
+			KeyGroup:       strings.Repeat("22", 32),
+			KeyGroupSource: frostsigning.NativeTBTCSignerKeyGroupSourceDKGPersisted,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.registry.walletCache["wallet"].signers[0].signerMaterial =
+		&frostsigning.NativeSignerMaterial{
+			Format:  frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
+			Payload: mismatchedPayload,
+		}
+	if _, err := fixture.registry.frostLocalSessionSnapshot(); err == nil ||
+		!strings.Contains(err.Error(), "does not identify its wallet") {
+		t.Fatalf("mismatched local key-group material was accepted: [%v]", err)
 	}
 }
 

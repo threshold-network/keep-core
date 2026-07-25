@@ -1944,6 +1944,7 @@ func cloneFrostRetainedGroupQuarantineState(
 type frostLocalSessionSnapshot struct {
 	WalletID            [32]byte
 	WalletPublicKeyHash [20]byte
+	KeyGroup            string
 	OperatorAddresses   []chain.Address
 	ControlledSeats     []group.MemberIndex
 }
@@ -1957,6 +1958,13 @@ func (wr *walletRegistry) frostLocalSessionSnapshot() (
 	}
 	wr.mutex.Lock()
 	defer wr.mutex.Unlock()
+	return wr.frostLocalSessionSnapshotLocked()
+}
+
+func (wr *walletRegistry) frostLocalSessionSnapshotLocked() (
+	[]frostLocalSessionSnapshot,
+	error,
+) {
 	result := make([]frostLocalSessionSnapshot, 0)
 	for _, value := range wr.walletCache {
 		if value == nil || len(value.signers) == 0 {
@@ -1997,6 +2005,31 @@ func (wr *walletRegistry) frostLocalSessionSnapshot() (
 				if signer.wallet.signingGroupOperators[index] != session.OperatorAddresses[index] {
 					return nil, fmt.Errorf("FROST local session operators disagree")
 				}
+			}
+			var material *frostsigning.NativeSignerMaterial
+			switch value := signer.signingMaterial().(type) {
+			case *frostsigning.NativeSignerMaterial:
+				material = value
+			case frostsigning.NativeSignerMaterial:
+				valueCopy := value
+				material = &valueCopy
+			default:
+				return nil, fmt.Errorf("FROST local session signer material is unavailable")
+			}
+			keyGroup, err := frostKeyGroupFromSignerMaterial(
+				material,
+				session.WalletID,
+			)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"FROST local session key-group handle does not identify its wallet: [%w]",
+					err,
+				)
+			}
+			if session.KeyGroup == "" {
+				session.KeyGroup = keyGroup
+			} else if session.KeyGroup != keyGroup {
+				return nil, fmt.Errorf("FROST local session key-group handles disagree")
 			}
 			if _, exists := seenSeats[signer.signingGroupMemberIndex]; exists {
 				return nil, fmt.Errorf("FROST local session repeats a controlled seat")

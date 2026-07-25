@@ -57,6 +57,7 @@ type frostNativeSignerStateWitnessProofReader func(
 
 type frostNativeSignerInventoryExpectation struct {
 	WalletID         [32]byte
+	KeyGroup         string
 	Threshold        uint16
 	ParticipantCount uint16
 	ShareEpoch       uint64
@@ -269,6 +270,16 @@ func verifyFrostNativeSignerInventoryEntries(
 	for index := range expectedCopy {
 		actualEntry := actual[index]
 		expectedEntry := expectedCopy[index]
+		if expectedEntry.KeyGroup == "" {
+			return fmt.Errorf(
+				"canonical local signer key-group binding is empty",
+			)
+		}
+		if actualEntry.KeyGroup != expectedEntry.KeyGroup {
+			return fmt.Errorf(
+				"native retained key group differs from exact local signer material",
+			)
+		}
 		if actualEntry.WalletID != expectedEntry.WalletID ||
 			actualEntry.Threshold != expectedEntry.Threshold ||
 			actualEntry.ParticipantCount != expectedEntry.ParticipantCount ||
@@ -331,7 +342,8 @@ func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerRead
 	if err != nil {
 		return nil, fmt.Errorf("cannot reconcile canonical FROST retained groups: [%w]", err)
 	}
-	expected, err := readiness.journal.nativeSignerInventoryExpectations(ctx, point)
+	expected, registryRevision, err :=
+		readiness.journal.nativeSignerInventoryExpectations(ctx, point)
 	if err != nil {
 		return nil, err
 	}
@@ -346,6 +358,13 @@ func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerRead
 	if *firstInventory != *secondInventory {
 		return nil, fmt.Errorf("native signer state changed during readiness reconciliation")
 	}
+	if !readiness.journal.walletRegistry.frostReadinessRevisionMatches(
+		registryRevision,
+	) {
+		return nil, fmt.Errorf(
+			"local FROST signer registry changed during readiness reconciliation",
+		)
+	}
 	if !readiness.interactiveSigningReady() {
 		return nil, fmt.Errorf("interactive FROST signing engine became unavailable during reconciliation")
 	}
@@ -359,19 +378,31 @@ func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerRead
 func (journal *frostRetainedGroupJournal) nativeSignerInventoryExpectations(
 	ctx context.Context,
 	point FrostPreSignFinality,
-) ([]frostNativeSignerInventoryExpectation, error) {
+) ([]frostNativeSignerInventoryExpectation, uint64, error) {
 	if journal == nil || ctx == nil {
-		return nil, fmt.Errorf("FROST retained-group journal expectation context is invalid")
+		return nil, 0, fmt.Errorf("FROST retained-group journal expectation context is invalid")
 	}
 	localOperatorID, err := journal.source.ResolveOperatorID(ctx, journal.operatorAddress, point)
 	if err != nil || localOperatorID == 0 {
-		return nil, fmt.Errorf("cannot resolve local operator for native signer inventory: [%w]", err)
+		return nil, 0, fmt.Errorf("cannot resolve local operator for native signer inventory: [%w]", err)
+	}
+	sessions, retainedKeyGroups, registryRevision, err :=
+		journal.walletRegistry.frostReadinessMaterialSnapshot()
+	if err != nil {
+		return nil, 0, fmt.Errorf("cannot resolve local FROST signer material: [%w]", err)
+	}
+	sessionsByWallet := make(map[[32]byte]frostLocalSessionSnapshot, len(sessions))
+	for _, session := range sessions {
+		if _, exists := sessionsByWallet[session.WalletID]; exists {
+			return nil, 0, fmt.Errorf("duplicate FROST local session wallet ID")
+		}
+		sessionsByWallet[session.WalletID] = session
 	}
 
 	journal.mutex.Lock()
 	defer journal.mutex.Unlock()
 	if journal.closed || journal.state.CurrentPoint != point {
-		return nil, fmt.Errorf("canonical retained-group journal moved during native signer reconciliation")
+		return nil, 0, fmt.Errorf("canonical retained-group journal moved during native signer reconciliation")
 	}
 	expected := make([]frostNativeSignerInventoryExpectation, 0)
 	for _, wallet := range journal.state.Wallets {
@@ -384,13 +415,39 @@ func (journal *frostRetainedGroupJournal) nativeSignerInventoryExpectations(
 		if len(seats) == 0 {
 			continue
 		}
+		keyGroup, hasBinding := retainedKeyGroups[wallet.WalletID]
+		if !hasBinding || keyGroup == "" {
+			return nil, 0, fmt.Errorf(
+				"canonical FROST retained group has no durable local key-group binding",
+			)
+		}
+		session, hasSession := sessionsByWallet[wallet.WalletID]
+		if wallet.Lifecycle.terminal() {
+			if hasSession {
+				return nil, 0, fmt.Errorf(
+					"canonical terminal FROST retained group still has an active local session",
+				)
+			}
+		} else {
+			if !hasSession || session.KeyGroup == "" {
+				return nil, 0, fmt.Errorf(
+					"canonical live FROST retained group has no resolved local key-group handle",
+				)
+			}
+			if session.KeyGroup != keyGroup {
+				return nil, 0, fmt.Errorf(
+					"active FROST key-group handle differs from durable local binding",
+				)
+			}
+		}
 		expected = append(expected, frostNativeSignerInventoryExpectation{
 			WalletID:         wallet.WalletID,
+			KeyGroup:         keyGroup,
 			Threshold:        frostPreSignAuthorizationThreshold,
 			ParticipantCount: uint16(len(wallet.OperatorIDs)),
 			ShareEpoch:       0,
 			ParticipantSeats: seats,
 		})
 	}
-	return expected, nil
+	return expected, registryRevision, nil
 }

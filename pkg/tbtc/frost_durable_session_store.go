@@ -14,9 +14,11 @@ type frostDurableSessionStoreIdentityReader func() (
 
 // frostDurableSessionStoreBinding pins the store libfrost_tbtc actually has
 // open to the fingerprint in the authenticated activation manifest. It is
-// checked at startup and again at every authorization/readiness boundary, so
-// path, backend, lock, or storage replacement cannot be hidden by echoing the
-// manifest value.
+// checked at startup and again at every authorization/readiness boundary. The
+// v2 manifest identity is the stable schema/backend/store ID tuple. Runtime
+// path, filesystem, and lock diagnostics are mandatory safety evidence and
+// are pinned to their startup readback for the life of this process, but may
+// legitimately change across a safe restore or restart.
 type frostDurableSessionStoreBinding struct {
 	expectedFingerprint [32]byte
 	readIdentity        frostDurableSessionStoreIdentityReader

@@ -20,7 +20,8 @@ const (
 	NativeTBTCSignerStateWitnessProofMaximumEntries uint16 = 256
 
 	nativeTBTCSignerRetainedKeyPackageInventoryCommitmentDomain = "tbtc-signer-retained-key-package-inventory-commitment-v1\x00"
-	nativeTBTCSignerStateWitnessCommitmentDomain                = "tbtc-signer-state-witness-commitment-v1\x00"
+	nativeTBTCSignerStateWitnessGenesisDomain                   = "tbtc-signer-state-witness-genesis-v2\x00"
+	nativeTBTCSignerStateWitnessCommitmentDomain                = "tbtc-signer-state-witness-commitment-v2\x00"
 )
 
 // NativeTBTCSignerRetainedKeyPackage identifies one locally held key package.
@@ -153,16 +154,24 @@ func DecodeNativeTBTCSignerRetainedKeyPackageInventory(
 		entry.WalletID = walletID
 
 		if entryWire.KeyGroup != strings.ToLower(entryWire.KeyGroup) ||
-			len(entryWire.KeyGroup) != 64 || strings.HasPrefix(entryWire.KeyGroup, "0x") {
-			return nil, fmt.Errorf("retained key group is not canonical lowercase x-only hex")
+			(len(entryWire.KeyGroup) != 64 && len(entryWire.KeyGroup) != 66) ||
+			strings.HasPrefix(entryWire.KeyGroup, "0x") {
+			return nil, fmt.Errorf(
+				"retained key group is not canonical lowercase x-only or compressed SEC1 hex",
+			)
 		}
-		keyGroupBytes, err := hex.DecodeString(entryWire.KeyGroup)
-		if err != nil || len(keyGroupBytes) != 32 {
-			return nil, fmt.Errorf("retained key group is not canonical lowercase x-only hex")
+		outputKey, err := TaprootOutputKeyFromTBTCSignerKey(entryWire.KeyGroup)
+		if err != nil || len(outputKey) != len(walletID) {
+			return nil, fmt.Errorf(
+				"retained key group is not canonical lowercase x-only or compressed SEC1 hex",
+			)
 		}
-		if !bytes.Equal(keyGroupBytes, walletID[:]) {
+		if !bytes.Equal(outputKey, walletID[:]) {
 			return nil, fmt.Errorf("retained key group does not identify its wallet")
 		}
+		// Keep the exact Rust key-group handle. It is part of the inventory
+		// commitment and is also the lookup key used by interactive signing; the
+		// x-only projection above is only the canonical wallet identity.
 		entry.KeyGroup = entryWire.KeyGroup
 		entry.Threshold = entryWire.Threshold
 		entry.ParticipantCount = entryWire.ParticipantCount
@@ -222,21 +231,37 @@ func ComputeNativeTBTCSignerRetainedKeyPackageInventoryCommitment(
 	entries []NativeTBTCSignerRetainedKeyGroup,
 ) [32]byte {
 	digest := sha256.New()
-	digest.Write([]byte(nativeTBTCSignerRetainedKeyPackageInventoryCommitmentDomain))
+	_, _ = digest.Write(
+		[]byte(nativeTBTCSignerRetainedKeyPackageInventoryCommitmentDomain),
+	)
 	writeNativeTBTCSignerUint32(digest, uint32(len(entries)))
 	for _, entry := range entries {
-		digest.Write(entry.WalletID[:])
+		_, _ = digest.Write(entry.WalletID[:])
 		writeNativeTBTCSignerStoreFingerprintField(digest, []byte(entry.KeyGroup))
 		writeNativeTBTCSignerUint16(digest, entry.Threshold)
 		writeNativeTBTCSignerUint16(digest, entry.ParticipantCount)
 		writeNativeTBTCSignerUint64(digest, entry.ShareEpoch)
-		digest.Write(entry.PublicKeyPackageCommitment[:])
+		_, _ = digest.Write(entry.PublicKeyPackageCommitment[:])
 		writeNativeTBTCSignerUint32(digest, uint32(len(entry.KeyPackages)))
 		for _, keyPackage := range entry.KeyPackages {
 			writeNativeTBTCSignerUint16(digest, keyPackage.ParticipantSeat)
-			digest.Write(keyPackage.KeyPackageCommitment[:])
+			_, _ = digest.Write(keyPackage.KeyPackageCommitment[:])
 		}
 	}
+	var result [32]byte
+	copy(result[:], digest.Sum(nil))
+	return result
+}
+
+// ComputeNativeTBTCSignerStateWitnessGenesis derives the root preceding a
+// store's first state-witness record. It is exported so independent anchor
+// implementations and cross-language tests can reproduce the Rust transcript.
+func ComputeNativeTBTCSignerStateWitnessGenesis(
+	storeFingerprint [32]byte,
+) [32]byte {
+	digest := sha256.New()
+	_, _ = digest.Write([]byte(nativeTBTCSignerStateWitnessGenesisDomain))
+	_, _ = digest.Write(storeFingerprint[:])
 	var result [32]byte
 	copy(result[:], digest.Sum(nil))
 	return result
@@ -251,11 +276,11 @@ func ComputeNativeTBTCSignerStateWitnessCommitment(
 	stateImageDigest [32]byte,
 ) [32]byte {
 	digest := sha256.New()
-	digest.Write([]byte(nativeTBTCSignerStateWitnessCommitmentDomain))
-	digest.Write(storeFingerprint[:])
+	_, _ = digest.Write([]byte(nativeTBTCSignerStateWitnessCommitmentDomain))
+	_, _ = digest.Write(storeFingerprint[:])
 	writeNativeTBTCSignerUint64(digest, generation)
-	digest.Write(previousStateCommitment[:])
-	digest.Write(stateImageDigest[:])
+	_, _ = digest.Write(previousStateCommitment[:])
+	_, _ = digest.Write(stateImageDigest[:])
 	var result [32]byte
 	copy(result[:], digest.Sum(nil))
 	return result

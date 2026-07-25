@@ -4,7 +4,6 @@ package signing
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -326,50 +325,6 @@ func decodeBuildTaggedLegacyPrivateKeyShare(
 	}
 
 	return privateKeyShare, nil
-}
-
-func decodeBuildTaggedTBTCSignerMaterialPayload(
-	signerMaterial *NativeSignerMaterial,
-) (*NativeTBTCSignerMaterialPayload, error) {
-	if signerMaterial == nil {
-		return nil, fmt.Errorf(
-			"%w: signer material is nil",
-			ErrNativeCryptographyUnavailable,
-		)
-	}
-
-	if signerMaterial.Format != NativeSignerMaterialFormatFrostTBTCSignerV1 {
-		return nil, fmt.Errorf(
-			"%w: unsupported signer material format: [%s]",
-			ErrNativeCryptographyUnavailable,
-			signerMaterial.Format,
-		)
-	}
-
-	if len(signerMaterial.Payload) == 0 {
-		return nil, fmt.Errorf(
-			"%w: signer material payload is empty",
-			ErrNativeCryptographyUnavailable,
-		)
-	}
-
-	var payload NativeTBTCSignerMaterialPayload
-	if err := json.Unmarshal(signerMaterial.Payload, &payload); err != nil {
-		return nil, fmt.Errorf(
-			"%w: cannot unmarshal tbtc-signer payload: [%v]",
-			ErrNativeCryptographyUnavailable,
-			err,
-		)
-	}
-
-	if payload.KeyGroup == "" {
-		return nil, fmt.Errorf(
-			"%w: tbtc-signer key group is empty",
-			ErrNativeCryptographyUnavailable,
-		)
-	}
-
-	return &payload, nil
 }
 
 // decodeBuildTaggedTBTCSignerSignature decodes and canonicality-checks a

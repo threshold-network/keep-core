@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -80,6 +81,7 @@ func TestVerifyFrostNativeSignerInventoryEntriesRejectsMismatch(t *testing.T) {
 	expected := []frostNativeSignerInventoryExpectation{
 		{
 			WalletID:         walletID,
+			KeyGroup:         hex.EncodeToString(walletID[:]),
 			Threshold:        51,
 			ParticipantCount: 100,
 			ShareEpoch:       0,
@@ -96,6 +98,10 @@ func TestVerifyFrostNativeSignerInventoryEntriesRejectsMismatch(t *testing.T) {
 		},
 		"wrong wallet": func(entries []frostsigning.NativeTBTCSignerRetainedKeyGroup) []frostsigning.NativeTBTCSignerRetainedKeyGroup {
 			entries[0].WalletID[0] ^= 0xff
+			return entries
+		},
+		"wrong key group": func(entries []frostsigning.NativeTBTCSignerRetainedKeyGroup) []frostsigning.NativeTBTCSignerRetainedKeyGroup {
+			entries[0].KeyGroup = strings.Repeat("09", 32)
 			return entries
 		},
 		"wrong participant seat": func(entries []frostsigning.NativeTBTCSignerRetainedKeyGroup) []frostsigning.NativeTBTCSignerRetainedKeyGroup {
@@ -209,6 +215,7 @@ func TestFrostNativeSignerInventoryBindingRequiresAnchoredDescendant(t *testing.
 	expected := []frostNativeSignerInventoryExpectation{
 		{
 			WalletID:         walletID,
+			KeyGroup:         hex.EncodeToString(walletID[:]),
 			Threshold:        51,
 			ParticipantCount: 100,
 			ParticipantSeats: []uint16{2},
@@ -249,8 +256,16 @@ func TestFrostRetainedGroupJournalNativeInventoryExpectationsIncludeTerminalGrou
 	}
 	operatorIDs[1] = 1
 	operatorIDs[2] = 1
+	terminalWalletID := [32]byte{0x62}
+	terminalKeyGroup := hex.EncodeToString(terminalWalletID[:])
 	journal := &frostRetainedGroupJournal{
-		source:          &testFrostRetainedGroupHistorySource{},
+		source: &testFrostRetainedGroupHistorySource{},
+		walletRegistry: &walletRegistry{
+			walletCache: make(map[string]*walletCacheValue),
+			retainedFrostKeyGroups: map[[32]byte]string{
+				terminalWalletID: terminalKeyGroup,
+			},
+		},
 		operatorAddress: "0x01",
 		state: frostRetainedGroupJournalState{
 			CurrentPoint: point,
@@ -268,14 +283,115 @@ func TestFrostRetainedGroupJournalNativeInventoryExpectationsIncludeTerminalGrou
 			},
 		},
 	}
-	expected, err := journal.nativeSignerInventoryExpectations(context.Background(), point)
+	expected, _, err := journal.nativeSignerInventoryExpectations(context.Background(), point)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(expected) != 1 || expected[0].WalletID != [32]byte{0x62} ||
+	if len(expected) != 1 || expected[0].WalletID != terminalWalletID ||
+		expected[0].KeyGroup != terminalKeyGroup ||
 		expected[0].ParticipantCount != 51 || expected[0].ShareEpoch != 0 ||
 		len(expected[0].ParticipantSeats) != 2 ||
 		expected[0].ParticipantSeats[0] != 2 || expected[0].ParticipantSeats[1] != 3 {
 		t.Fatalf("unexpected native inventory expectations: %+v", expected)
+	}
+
+	journal.walletRegistry.retainedFrostKeyGroups = nil
+	if _, _, err := journal.nativeSignerInventoryExpectations(
+		context.Background(),
+		point,
+	); err == nil || !strings.Contains(err.Error(), "no durable local key-group binding") {
+		t.Fatalf("terminal group without durable key-group binding was accepted: [%v]", err)
+	}
+}
+
+func TestFrostProductionSignerReadinessRejectsConcurrentRegistryChange(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	keyGroup := hex.EncodeToString(fixture.walletID[:])
+	fixture.registry.retainedFrostKeyGroups = map[[32]byte]string{
+		fixture.walletID: keyGroup,
+	}
+	journalDirectory := t.TempDir()
+	if err := os.Chmod(journalDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	journal := fixture.openJournal(t, journalDirectory)
+
+	storeBinding := testFrostDurableSessionStoreBinding(t)
+	storeFingerprint, err := storeBinding.verify()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateCommitment := [32]byte{0x71}
+	entries := []frostsigning.NativeTBTCSignerRetainedKeyGroup{{
+		WalletID:         fixture.walletID,
+		KeyGroup:         keyGroup,
+		Threshold:        frostPreSignAuthorizationThreshold,
+		ParticipantCount: uint16(len(fixture.operatorIDs)),
+		KeyPackages: []frostsigning.NativeTBTCSignerRetainedKeyPackage{{
+			ParticipantSeat: 7,
+		}},
+	}}
+	inventory := &frostsigning.NativeTBTCSignerRetainedKeyPackageInventory{
+		Schema:              frostsigning.NativeTBTCSignerRetainedKeyPackageInventorySchema,
+		StoreFingerprint:    storeFingerprint,
+		StateGeneration:     1,
+		StateCommitment:     stateCommitment,
+		InventoryCommitment: frostsigning.ComputeNativeTBTCSignerRetainedKeyPackageInventoryCommitment(entries),
+		Entries:             entries,
+	}
+	anchorSource := &testFrostNativeSignerStateWitnessAnchorSource{
+		anchor: &FrostNativeSignerStateWitnessAnchor{
+			StoreFingerprint: storeFingerprint,
+			Generation:       1,
+			Commitment:       stateCommitment,
+		},
+	}
+	inventoryReads := 0
+	inventoryBinding, err := newFrostNativeSignerInventoryBinding(
+		storeBinding,
+		anchorSource,
+		func() (*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory, error) {
+			inventoryReads++
+			if inventoryReads == 2 {
+				fixture.registry.mutex.Lock()
+				fixture.registry.revision++
+				fixture.registry.mutex.Unlock()
+			}
+			return inventory, nil
+		},
+		func(
+			request *frostsigning.NativeTBTCSignerStateWitnessProofRequest,
+		) (*frostsigning.NativeTBTCSignerStateWitnessProof, error) {
+			return &frostsigning.NativeTBTCSignerStateWitnessProof{
+				Schema:             frostsigning.NativeTBTCSignerStateWitnessProofSchema,
+				StoreFingerprint:   request.StoreFingerprint,
+				AncestorGeneration: request.AncestorGeneration,
+				AncestorCommitment: request.AncestorCommitment,
+				TargetGeneration:   request.TargetGeneration,
+				TargetCommitment:   request.TargetCommitment,
+				Complete:           true,
+			}, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readiness, err := newFrostProductionSignerReadiness(
+		func() bool { return true },
+		journal,
+		inventoryBinding,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = readiness.verifyFrostProductionSignerReadiness(
+		context.Background(),
+		fixture.target,
+	)
+	if err == nil || !strings.Contains(err.Error(), "registry changed") {
+		t.Fatalf("concurrent local registry change was accepted: [%v]", err)
 	}
 }

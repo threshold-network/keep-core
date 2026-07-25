@@ -37,15 +37,11 @@ func TestFrostDurableSessionStoreBindingRejectsRuntimeIdentityMismatch(
 ) {
 	original := testFrostDurableSessionStoreIdentity()
 	tests := map[string]func(*signing.NativeTBTCSignerDurableStoreIdentity){
-		"wrong path": func(identity *signing.NativeTBTCSignerDurableStoreIdentity) {
-			identity.CanonicalPathFingerprint[0] ^= 0xff
-		},
 		"wrong backend": func(identity *signing.NativeTBTCSignerDurableStoreIdentity) {
 			identity.Backend = "encrypted-database-v1"
 		},
-		"replacement": func(identity *signing.NativeTBTCSignerDurableStoreIdentity) {
-			identity.FilesystemFingerprint[0] ^= 0xff
-			identity.LockFingerprint[0] ^= 0xff
+		"wrong store ID": func(identity *signing.NativeTBTCSignerDurableStoreIdentity) {
+			identity.StoreID[0] ^= 0xff
 		},
 	}
 	for name, mutate := range tests {
@@ -68,6 +64,38 @@ func TestFrostDurableSessionStoreBindingRejectsRuntimeIdentityMismatch(
 				t.Fatalf("expected manifest binding failure, got [%v]", err)
 			}
 		})
+	}
+}
+
+func TestFrostDurableSessionStoreBindingAllowsDiagnosticChangeAcrossRestartButNotRuntime(
+	t *testing.T,
+) {
+	original := testFrostDurableSessionStoreIdentity()
+	restarted := *original
+	restarted.CanonicalPathFingerprint[0] ^= 0xff
+	restarted.FilesystemFingerprint[0] ^= 0xff
+	restarted.LockFingerprint[0] ^= 0xff
+	restarted.Fingerprint, _ =
+		signing.ComputeNativeTBTCSignerDurableStoreFingerprint(&restarted)
+
+	current := restarted
+	binding, err := newFrostDurableSessionStoreBinding(
+		frostActivationHex32(original.Fingerprint),
+		func() (*signing.NativeTBTCSignerDurableStoreIdentity, error) {
+			readback := current
+			return &readback, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("safe restart diagnostics changed stable v2 identity: [%v]", err)
+	}
+
+	current.LockFingerprint[0] ^= 0xff
+	current.Fingerprint, _ =
+		signing.ComputeNativeTBTCSignerDurableStoreFingerprint(&current)
+	if _, err := binding.verify(); err == nil ||
+		!strings.Contains(err.Error(), "changed after startup") {
+		t.Fatalf("runtime diagnostic replacement was accepted: [%v]", err)
 	}
 }
 
