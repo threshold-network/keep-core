@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"strings"
 )
@@ -462,20 +463,20 @@ func nativeTBTCSignerBytes32(value [32]byte) string {
 	return "0x" + hex.EncodeToString(value[:])
 }
 
-func writeNativeTBTCSignerUint16(destination nativeTBTCSignerStoreFingerprintWriter, value uint16) {
+func writeNativeTBTCSignerUint16(destination hash.Hash, value uint16) {
 	var encoded [2]byte
 	binary.BigEndian.PutUint16(encoded[:], value)
-	destination.Write(encoded[:])
+	_, _ = destination.Write(encoded[:])
 }
 
-func writeNativeTBTCSignerUint32(destination nativeTBTCSignerStoreFingerprintWriter, value uint32) {
+func writeNativeTBTCSignerUint32(destination hash.Hash, value uint32) {
 	var encoded [4]byte
 	binary.BigEndian.PutUint32(encoded[:], value)
-	destination.Write(encoded[:])
+	_, _ = destination.Write(encoded[:])
 }
 
-func writeNativeTBTCSignerUint64(destination nativeTBTCSignerStoreFingerprintWriter, value uint64) {
+func writeNativeTBTCSignerUint64(destination hash.Hash, value uint64) {
 	var encoded [8]byte
 	binary.BigEndian.PutUint64(encoded[:], value)
-	destination.Write(encoded[:])
+	_, _ = destination.Write(encoded[:])
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"regexp"
 	"strings"
@@ -198,16 +199,15 @@ func ComputeNativeTBTCSignerDurableStoreFingerprint(
 	return result, nil
 }
 
-type nativeTBTCSignerStoreFingerprintWriter interface {
-	Write([]byte) (int, error)
-}
-
 func writeNativeTBTCSignerStoreFingerprintField(
-	destination nativeTBTCSignerStoreFingerprintWriter,
+	destination hash.Hash,
 	value []byte,
 ) {
 	var length [4]byte
 	binary.BigEndian.PutUint32(length[:], uint32(len(value)))
-	destination.Write(length[:])
-	destination.Write(value)
+	// hash.Hash.Write is documented to never return an error. Discard both
+	// results explicitly so this infallible transcript operation cannot be
+	// mistaken for an unchecked fallible write.
+	_, _ = destination.Write(length[:])
+	_, _ = destination.Write(value)
 }

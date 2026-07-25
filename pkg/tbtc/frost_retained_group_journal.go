@@ -3,9 +3,11 @@ package tbtc
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -937,6 +939,9 @@ func readFrostRetainedGroupEnvelopeAt(
 	name string,
 	target interface{},
 ) error {
+	if err := validateFrostRetainedGroupJournalFileName(name); err != nil {
+		return err
+	}
 	file, err := openSecureBitcoinBroadcastFile(filepath.Join(directory, name), unix.O_RDONLY, 0600)
 	if err != nil {
 		return err
@@ -973,6 +978,9 @@ func persistFrostRetainedGroupEnvelopeAt(
 	payload interface{},
 	replace bool,
 ) error {
+	if err := validateFrostRetainedGroupJournalFileName(name); err != nil {
+		return err
+	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -984,36 +992,39 @@ func persistFrostRetainedGroupEnvelopeAt(
 	if err != nil {
 		return err
 	}
-	finalPath := filepath.Join(directory, name)
-	if info, err := os.Lstat(finalPath); err == nil {
-		if !replace {
-			return fmt.Errorf("immutable journal file already exists: [%s]", name)
-		}
-		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
-			info.Mode().Perm() != 0600 {
-			return fmt.Errorf("journal destination is unsafe: [%s]", name)
-		}
-		if err := validateBitcoinBroadcastOwner(info); err != nil {
-			return err
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	temporary, err := os.CreateTemp(directory, name+"-*"+frostRetainedGroupJournalTempSuffix)
+
+	directoryFile, err := openFrostRetainedGroupJournalDirectory(directory)
 	if err != nil {
 		return err
 	}
-	temporaryPath := temporary.Name()
+	defer directoryFile.Close()
+	directoryDescriptor := int(directoryFile.Fd())
+
+	if exists, err := validateFrostRetainedGroupJournalFileAt(
+		directoryDescriptor,
+		name,
+	); err != nil {
+		return err
+	} else if exists {
+		if !replace {
+			return fmt.Errorf("immutable journal file already exists: [%s]", name)
+		}
+	}
+
+	temporary, temporaryName, err := createFrostRetainedGroupJournalTemporaryFileAt(
+		directoryDescriptor,
+		directory,
+		name,
+	)
+	if err != nil {
+		return err
+	}
 	remove := true
 	defer func() {
 		if remove {
-			_ = os.Remove(temporaryPath)
+			_ = unix.Unlinkat(directoryDescriptor, temporaryName, 0)
 		}
 	}()
-	if err := temporary.Chmod(0600); err != nil {
-		_ = temporary.Close()
-		return err
-	}
 	if _, err := temporary.Write(envelopeBytes); err != nil {
 		_ = temporary.Close()
 		return err
@@ -1029,20 +1040,181 @@ func persistFrostRetainedGroupEnvelopeAt(
 		// Link is an atomic no-replace publication: unlike Rename it cannot
 		// overwrite an immutable batch or metadata file that appeared after
 		// the destination check above.
-		if err := os.Link(temporaryPath, finalPath); err != nil {
+		if err := unix.Linkat(
+			directoryDescriptor,
+			temporaryName,
+			directoryDescriptor,
+			name,
+			0,
+		); err != nil {
 			return fmt.Errorf("cannot publish immutable journal file [%s]: [%w]", name, err)
 		}
-		if err := os.Remove(temporaryPath); err != nil {
+		if err := unix.Unlinkat(directoryDescriptor, temporaryName, 0); err != nil {
 			return err
 		}
 		remove = false
-		return syncDirectory(directory)
+		return directoryFile.Sync()
 	}
-	if err := os.Rename(temporaryPath, finalPath); err != nil {
+	if err := unix.Renameat(
+		directoryDescriptor,
+		temporaryName,
+		directoryDescriptor,
+		name,
+	); err != nil {
 		return err
 	}
 	remove = false
-	return syncDirectory(directory)
+	return directoryFile.Sync()
+}
+
+func validateFrostRetainedGroupJournalFileName(name string) error {
+	if !filepath.IsLocal(name) || filepath.Base(name) != name {
+		return fmt.Errorf("FROST retained-group journal file name is not local: [%s]", name)
+	}
+	if name == frostRetainedGroupJournalMetadataFile ||
+		name == frostRetainedGroupJournalStateFile {
+		return nil
+	}
+	if !strings.HasPrefix(name, frostRetainedGroupJournalBatchPrefix) ||
+		!strings.HasSuffix(name, frostRetainedGroupJournalFileSuffix) {
+		return fmt.Errorf("unsupported FROST retained-group journal file name: [%s]", name)
+	}
+	sequenceText := strings.TrimSuffix(
+		strings.TrimPrefix(name, frostRetainedGroupJournalBatchPrefix),
+		frostRetainedGroupJournalFileSuffix,
+	)
+	if len(sequenceText) != 20 {
+		return fmt.Errorf("noncanonical FROST retained-group journal batch name: [%s]", name)
+	}
+	sequence, err := strconv.ParseUint(sequenceText, 10, 64)
+	if err != nil || sequence == 0 ||
+		frostRetainedGroupBatchFileName(sequence) != name {
+		return fmt.Errorf("noncanonical FROST retained-group journal batch name: [%s]", name)
+	}
+	return nil
+}
+
+func openFrostRetainedGroupJournalDirectory(directory string) (*os.File, error) {
+	if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
+		return nil, fmt.Errorf("FROST retained-group journal directory is not canonical")
+	}
+	fd, err := unix.Open(
+		directory,
+		unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW,
+		0,
+	)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), directory)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("cannot wrap FROST retained-group journal directory descriptor")
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
+		info.Mode().Perm() != 0700 {
+		_ = file.Close()
+		return nil, fmt.Errorf("FROST retained-group journal directory is unsafe")
+	}
+	if err := validateBitcoinBroadcastOwner(info); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
+func validateFrostRetainedGroupJournalFileAt(
+	directoryDescriptor int,
+	name string,
+) (bool, error) {
+	var info unix.Stat_t
+	err := unix.Fstatat(
+		directoryDescriptor,
+		name,
+		&info,
+		unix.AT_SYMLINK_NOFOLLOW,
+	)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if uint32(info.Mode)&unix.S_IFMT != unix.S_IFREG ||
+		uint32(info.Mode)&0777 != 0600 {
+		return false, fmt.Errorf("journal destination is unsafe: [%s]", name)
+	}
+	if info.Uid != uint32(os.Geteuid()) {
+		return false, fmt.Errorf(
+			"Bitcoin broadcast storage is owned by uid [%d], expected [%d]",
+			info.Uid,
+			os.Geteuid(),
+		)
+	}
+	return true, nil
+}
+
+func createFrostRetainedGroupJournalTemporaryFileAt(
+	directoryDescriptor int,
+	directory string,
+	finalName string,
+) (*os.File, string, error) {
+	const maximumAttempts = 128
+	var entropy [16]byte
+	for attempt := 0; attempt < maximumAttempts; attempt++ {
+		if _, err := io.ReadFull(rand.Reader, entropy[:]); err != nil {
+			return nil, "", fmt.Errorf("cannot generate journal temporary file name: [%w]", err)
+		}
+		name := finalName + "-" + hex.EncodeToString(entropy[:]) +
+			frostRetainedGroupJournalTempSuffix
+		fd, err := unix.Openat(
+			directoryDescriptor,
+			name,
+			unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW,
+			0600,
+		)
+		if errors.Is(err, unix.EEXIST) {
+			continue
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		file := os.NewFile(uintptr(fd), filepath.Join(directory, name))
+		if file == nil {
+			_ = unix.Close(fd)
+			_ = unix.Unlinkat(directoryDescriptor, name, 0)
+			return nil, "", fmt.Errorf("cannot wrap journal temporary file descriptor")
+		}
+		if err := file.Chmod(0600); err != nil {
+			_ = file.Close()
+			_ = unix.Unlinkat(directoryDescriptor, name, 0)
+			return nil, "", err
+		}
+		info, err := file.Stat()
+		if err != nil {
+			_ = file.Close()
+			_ = unix.Unlinkat(directoryDescriptor, name, 0)
+			return nil, "", err
+		}
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
+			info.Mode().Perm() != 0600 {
+			_ = file.Close()
+			_ = unix.Unlinkat(directoryDescriptor, name, 0)
+			return nil, "", fmt.Errorf("journal temporary file is unsafe")
+		}
+		if err := validateBitcoinBroadcastOwner(info); err != nil {
+			_ = file.Close()
+			_ = unix.Unlinkat(directoryDescriptor, name, 0)
+			return nil, "", err
+		}
+		return file, name, nil
+	}
+	return nil, "", fmt.Errorf("cannot allocate a unique journal temporary file")
 }
 
 func applyFrostRetainedGroupMutations(

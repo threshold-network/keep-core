@@ -1,6 +1,7 @@
 package tbtc
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -541,6 +542,157 @@ func TestFrostRetainedGroupJournal_RejectsSymlinkEntry(t *testing.T) {
 		fixture.localOperator,
 	); err == nil || !strings.Contains(err.Error(), "unsafe entry") {
 		t.Fatalf("expected symlink rejection, got [%v]", err)
+	}
+}
+
+func TestPersistFrostRetainedGroupEnvelopeAt_RestrictsFilesToJournal(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "journal")
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	outsidePath := filepath.Join(root, "outside.json")
+	outsideContents := []byte("must not change")
+	if err := os.WriteFile(outsidePath, outsideContents, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	invalidNames := []string{
+		"../outside.json",
+		filepath.Join("nested", frostRetainedGroupJournalStateFile),
+		outsidePath,
+		".",
+		frostRetainedGroupJournalLockFile,
+		"batch-1.json",
+		"batch-00000000000000000000.json",
+		"batch-00000000000000000001.json/../../outside.json",
+		frostRetainedGroupJournalStateFile + "\x00",
+	}
+	for _, name := range invalidNames {
+		t.Run(name, func(t *testing.T) {
+			err := persistFrostRetainedGroupEnvelopeAt(
+				directory,
+				name,
+				map[string]uint64{"generation": 1},
+				true,
+			)
+			if err == nil {
+				t.Fatalf("expected unsafe journal file name [%q] to be rejected", name)
+			}
+			actual, readErr := os.ReadFile(outsidePath)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if !bytes.Equal(actual, outsideContents) {
+				t.Fatalf("unsafe journal file name [%q] modified an outside file", name)
+			}
+		})
+	}
+	if err := persistFrostRetainedGroupEnvelopeAt(
+		".",
+		frostRetainedGroupJournalStateFile,
+		map[string]uint64{"generation": 1},
+		true,
+	); err == nil {
+		t.Fatal("expected a noncanonical journal directory to be rejected")
+	}
+
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("rejected paths left files in the journal directory: [%v]", entries)
+	}
+}
+
+func TestPersistFrostRetainedGroupEnvelopeAt_PreservesInternalFiles(
+	t *testing.T,
+) {
+	directory := filepath.Join(t.TempDir(), "journal")
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	type payload struct {
+		Generation uint64 `json:"generation"`
+	}
+
+	tests := []struct {
+		name    string
+		replace bool
+		value   uint64
+	}{
+		{frostRetainedGroupJournalMetadataFile, false, 1},
+		{frostRetainedGroupJournalStateFile, true, 2},
+		{frostRetainedGroupBatchFileName(1), false, 3},
+	}
+	for _, test := range tests {
+		if err := persistFrostRetainedGroupEnvelopeAt(
+			directory,
+			test.name,
+			payload{Generation: test.value},
+			test.replace,
+		); err != nil {
+			t.Fatalf("cannot persist legitimate journal file [%s]: [%v]", test.name, err)
+		}
+		var actual payload
+		if err := readFrostRetainedGroupEnvelopeAt(
+			directory,
+			test.name,
+			&actual,
+		); err != nil {
+			t.Fatalf("cannot read legitimate journal file [%s]: [%v]", test.name, err)
+		}
+		if actual.Generation != test.value {
+			t.Fatalf("unexpected journal file [%s] payload: [%+v]", test.name, actual)
+		}
+		info, err := os.Lstat(filepath.Join(directory, test.name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+			t.Fatalf("legitimate journal file [%s] is not private and regular", test.name)
+		}
+	}
+
+	if err := persistFrostRetainedGroupEnvelopeAt(
+		directory,
+		frostRetainedGroupJournalMetadataFile,
+		payload{Generation: 4},
+		false,
+	); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected immutable journal replacement to fail, got [%v]", err)
+	}
+	if err := persistFrostRetainedGroupEnvelopeAt(
+		directory,
+		frostRetainedGroupJournalStateFile,
+		payload{Generation: 5},
+		true,
+	); err != nil {
+		t.Fatal(err)
+	}
+	var replaced payload
+	if err := readFrostRetainedGroupEnvelopeAt(
+		directory,
+		frostRetainedGroupJournalStateFile,
+		&replaced,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if replaced.Generation != 5 {
+		t.Fatalf("replaceable journal state was not updated: [%+v]", replaced)
+	}
+
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), frostRetainedGroupJournalTempSuffix) {
+			t.Fatalf("successful persistence left temporary file [%s]", entry.Name())
+		}
 	}
 }
 
