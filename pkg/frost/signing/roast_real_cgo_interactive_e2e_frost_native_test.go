@@ -486,6 +486,7 @@ func setupRealCgoSignerState(t *testing.T) {
 		t.Fatalf("create signer state dir: %v", err)
 	}
 	t.Setenv("TBTC_SIGNER_STATE_PATH", filepath.Join(stateDir, "signer-state"))
+	setupRealCgoSignerStateAnchor(t)
 }
 
 // isPreMultiSeatConflict reports whether an InteractiveSessionOpen error is the

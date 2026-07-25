@@ -11,22 +11,91 @@ import (
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 )
 
-type testFrostNativeSignerStateWitnessAnchorSource struct {
-	anchor *FrostNativeSignerStateWitnessAnchor
+type testFrostNativeSignerStateWitnessAnchorStore struct {
+	record *FrostNativeSignerStateWitnessAnchorRecord
 	err    error
 }
 
-func (source *testFrostNativeSignerStateWitnessAnchorSource) ReadFrostNativeSignerStateWitnessAnchor(
+func (store *testFrostNativeSignerStateWitnessAnchorStore) ReadFrostNativeSignerStateWitnessAnchor(
 	context.Context,
-) (*FrostNativeSignerStateWitnessAnchor, error) {
-	if source.err != nil {
-		return nil, source.err
+) (*FrostNativeSignerStateWitnessAnchorRecord, error) {
+	if store.err != nil {
+		return nil, store.err
 	}
-	if source.anchor == nil {
+	if store.record == nil {
 		return nil, nil
 	}
-	result := *source.anchor
+	result := *store.record
 	return &result, nil
+}
+
+func (store *testFrostNativeSignerStateWitnessAnchorStore) CompareAndSwapFrostNativeSignerStateWitnessAnchor(
+	context.Context,
+	FrostNativeSignerStateWitnessCheckpoint,
+	FrostNativeSignerStateWitnessCheckpoint,
+	[]frostsigning.NativeTBTCSignerStateWitnessProofEntry,
+) (*FrostNativeSignerStateWitnessAnchorCASResult, error) {
+	return nil, fmt.Errorf("unexpected test anchor CAS")
+}
+
+func (store *testFrostNativeSignerStateWitnessAnchorStore) ReadFrostNativeSignerStateWitnessAnchorHistory(
+	context.Context,
+	FrostNativeSignerStateWitnessAnchorReference,
+) (*FrostNativeSignerStateWitnessAnchorHistory, error) {
+	return nil, fmt.Errorf("unexpected test anchor history read")
+}
+
+func testFrostNativeSignerInventoryAnchorBinding(
+	storeFingerprint [32]byte,
+	checkpoint FrostNativeSignerStateWitnessCheckpoint,
+) (
+	*frostNativeSignerAnchorBinding,
+	*testFrostNativeSignerStateWitnessAnchorStore,
+) {
+	bindingHash := [32]byte{0xa1}
+	eventRoot := [32]byte{0xa2}
+	acknowledgementDigest := [32]byte{0xa3}
+	tip := &frostsigning.NativeTBTCSignerStateWitnessTip{
+		Schema:                      frostsigning.NativeTBTCSignerStateWitnessTipSchema,
+		StoreFingerprint:            checkpoint.StoreFingerprint,
+		Generation:                  checkpoint.Generation,
+		PreviousStateCommitment:     checkpoint.PreviousStateCommitment,
+		StateImageDigest:            checkpoint.StateImageDigest,
+		StateCommitment:             checkpoint.StateCommitment,
+		WitnessBaseGeneration:       checkpoint.Generation,
+		WitnessBaseCommitment:       checkpoint.StateCommitment,
+		AnchorBindingHash:           bindingHash,
+		AnchorServiceEpoch:          1,
+		AnchorRevision:              1,
+		AnchorEventRoot:             eventRoot,
+		AnchorAcknowledgementDigest: acknowledgementDigest,
+	}
+	store := &testFrostNativeSignerStateWitnessAnchorStore{
+		record: &FrostNativeSignerStateWitnessAnchorRecord{
+			Checkpoint:            checkpoint,
+			BindingHash:           bindingHash,
+			AcknowledgementDigest: acknowledgementDigest,
+			OperationID:           [32]byte{0xa4},
+			TransitionDigest:      [32]byte{0xa5},
+			ServiceEpoch:          1,
+			Revision:              1,
+			EventRoot:             eventRoot,
+			AcknowledgementJSON:   []byte(`{"test":"ack"}`),
+		},
+	}
+	return &frostNativeSignerAnchorBinding{
+		store:       store,
+		identity:    FrostNativeSignerAnchorIdentity{SignerStoreFingerprint: storeFingerprint},
+		bindingHash: bindingHash,
+		floor: FrostNativeSignerAnchorManifest{
+			MinimumServiceEpoch: 1,
+			MinimumRevision:     1,
+		},
+		readTip: func() (*frostsigning.NativeTBTCSignerStateWitnessTip, error) {
+			result := *tip
+			return &result, nil
+		},
+	}, store
 }
 
 func TestCompleteFrostInteractiveSigningReadiness_RequiresEveryRuntimeGate(
@@ -127,7 +196,7 @@ func TestVerifyFrostNativeSignerInventoryEntriesRejectsMismatch(t *testing.T) {
 	}
 }
 
-func TestFrostNativeSignerInventoryBindingRequiresAnchoredDescendant(t *testing.T) {
+func TestFrostNativeSignerInventoryBindingRequiresExactAuthenticatedAnchor(t *testing.T) {
 	storeBinding := testFrostDurableSessionStoreBinding(t)
 	storeFingerprint, err := storeBinding.verify()
 	if err != nil {
@@ -166,48 +235,21 @@ func TestFrostNativeSignerInventoryBindingRequiresAnchoredDescendant(t *testing.
 		),
 		Entries: entries,
 	}
-	anchorSource := &testFrostNativeSignerStateWitnessAnchorSource{
-		anchor: &FrostNativeSignerStateWitnessAnchor{
-			StoreFingerprint: storeFingerprint,
-			Generation:       1,
-			Commitment:       ancestor,
-		},
+	checkpoint := FrostNativeSignerStateWitnessCheckpoint{
+		StoreFingerprint:        storeFingerprint,
+		Generation:              2,
+		PreviousStateCommitment: ancestor,
+		StateImageDigest:        stateImage,
+		StateCommitment:         target,
 	}
-	proofReader := func(
-		request *frostsigning.NativeTBTCSignerStateWitnessProofRequest,
-	) (*frostsigning.NativeTBTCSignerStateWitnessProof, error) {
-		proof := &frostsigning.NativeTBTCSignerStateWitnessProof{
-			Schema:             frostsigning.NativeTBTCSignerStateWitnessProofSchema,
-			StoreFingerprint:   request.StoreFingerprint,
-			AncestorGeneration: request.AncestorGeneration,
-			AncestorCommitment: request.AncestorCommitment,
-			TargetGeneration:   request.TargetGeneration,
-			TargetCommitment:   request.TargetCommitment,
-			Complete:           true,
-		}
-		if request.AncestorGeneration == request.TargetGeneration {
-			return proof, nil
-		}
-		if request.AncestorGeneration != 1 || request.AncestorCommitment != ancestor {
-			return nil, fmt.Errorf("unknown ancestor")
-		}
-		proof.Entries = []frostsigning.NativeTBTCSignerStateWitnessProofEntry{
-			{
-				Generation:              2,
-				PreviousStateCommitment: ancestor,
-				StateCommitment:         target,
-				StateImageDigest:        stateImage,
-			},
-		}
-		return proof, nil
-	}
+	anchorBinding, anchorStore :=
+		testFrostNativeSignerInventoryAnchorBinding(storeFingerprint, checkpoint)
 	binding, err := newFrostNativeSignerInventoryBinding(
 		storeBinding,
-		anchorSource,
+		anchorBinding,
 		func() (*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory, error) {
 			return inventory, nil
 		},
-		proofReader,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -225,23 +267,39 @@ func TestFrostNativeSignerInventoryBindingRequiresAnchoredDescendant(t *testing.
 		t.Fatalf("anchored descendant inventory was rejected: [%v]", err)
 	}
 
-	anchorSource.anchor = &FrostNativeSignerStateWitnessAnchor{
-		StoreFingerprint: storeFingerprint,
-		Generation:       2,
-		Commitment:       [32]byte{0xff},
+	forkImage := [32]byte{0xff}
+	anchorStore.record.Checkpoint = FrostNativeSignerStateWitnessCheckpoint{
+		StoreFingerprint:        storeFingerprint,
+		Generation:              2,
+		PreviousStateCommitment: ancestor,
+		StateImageDigest:        forkImage,
+		StateCommitment: frostsigning.ComputeNativeTBTCSignerStateWitnessCommitment(
+			storeFingerprint,
+			2,
+			ancestor,
+			forkImage,
+		),
 	}
 	if _, err := binding.verify(context.Background(), expected); err == nil ||
-		!strings.Contains(err.Error(), "equal state-witness generations") {
+		!strings.Contains(err.Error(), "differs from the authenticated remote anchor") {
 		t.Fatalf("equal-generation rollback fork was accepted: [%v]", err)
 	}
 
-	anchorSource.anchor = &FrostNativeSignerStateWitnessAnchor{
-		StoreFingerprint: storeFingerprint,
-		Generation:       3,
-		Commitment:       [32]byte{0xfe},
+	aheadImage := [32]byte{0xfe}
+	anchorStore.record.Checkpoint = FrostNativeSignerStateWitnessCheckpoint{
+		StoreFingerprint:        storeFingerprint,
+		Generation:              3,
+		PreviousStateCommitment: target,
+		StateImageDigest:        aheadImage,
+		StateCommitment: frostsigning.ComputeNativeTBTCSignerStateWitnessCommitment(
+			storeFingerprint,
+			3,
+			target,
+			aheadImage,
+		),
 	}
 	if _, err := binding.verify(context.Background(), expected); err == nil ||
-		!strings.Contains(err.Error(), "ancestry bounds") {
+		!strings.Contains(err.Error(), "differs from the authenticated remote anchor") {
 		t.Fatalf("lower-generation rolled-back signer state was accepted: [%v]", err)
 	}
 }
@@ -323,7 +381,14 @@ func TestFrostProductionSignerReadinessRejectsConcurrentRegistryChange(
 	if err != nil {
 		t.Fatal(err)
 	}
-	stateCommitment := [32]byte{0x71}
+	previousStateCommitment := [32]byte{0x71}
+	stateImageDigest := [32]byte{0x72}
+	stateCommitment := frostsigning.ComputeNativeTBTCSignerStateWitnessCommitment(
+		storeFingerprint,
+		1,
+		previousStateCommitment,
+		stateImageDigest,
+	)
 	entries := []frostsigning.NativeTBTCSignerRetainedKeyGroup{{
 		WalletID:         fixture.walletID,
 		KeyGroup:         keyGroup,
@@ -334,24 +399,28 @@ func TestFrostProductionSignerReadinessRejectsConcurrentRegistryChange(
 		}},
 	}}
 	inventory := &frostsigning.NativeTBTCSignerRetainedKeyPackageInventory{
-		Schema:              frostsigning.NativeTBTCSignerRetainedKeyPackageInventorySchema,
-		StoreFingerprint:    storeFingerprint,
-		StateGeneration:     1,
-		StateCommitment:     stateCommitment,
-		InventoryCommitment: frostsigning.ComputeNativeTBTCSignerRetainedKeyPackageInventoryCommitment(entries),
-		Entries:             entries,
+		Schema:                  frostsigning.NativeTBTCSignerRetainedKeyPackageInventorySchema,
+		StoreFingerprint:        storeFingerprint,
+		StateGeneration:         1,
+		StateCommitment:         stateCommitment,
+		PreviousStateCommitment: previousStateCommitment,
+		StateImageDigest:        stateImageDigest,
+		InventoryCommitment:     frostsigning.ComputeNativeTBTCSignerRetainedKeyPackageInventoryCommitment(entries),
+		Entries:                 entries,
 	}
-	anchorSource := &testFrostNativeSignerStateWitnessAnchorSource{
-		anchor: &FrostNativeSignerStateWitnessAnchor{
-			StoreFingerprint: storeFingerprint,
-			Generation:       1,
-			Commitment:       stateCommitment,
-		},
+	checkpoint := FrostNativeSignerStateWitnessCheckpoint{
+		StoreFingerprint:        storeFingerprint,
+		Generation:              1,
+		PreviousStateCommitment: previousStateCommitment,
+		StateImageDigest:        stateImageDigest,
+		StateCommitment:         stateCommitment,
 	}
+	anchorBinding, _ :=
+		testFrostNativeSignerInventoryAnchorBinding(storeFingerprint, checkpoint)
 	inventoryReads := 0
 	inventoryBinding, err := newFrostNativeSignerInventoryBinding(
 		storeBinding,
-		anchorSource,
+		anchorBinding,
 		func() (*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory, error) {
 			inventoryReads++
 			if inventoryReads == 2 {
@@ -360,19 +429,6 @@ func TestFrostProductionSignerReadinessRejectsConcurrentRegistryChange(
 				fixture.registry.mutex.Unlock()
 			}
 			return inventory, nil
-		},
-		func(
-			request *frostsigning.NativeTBTCSignerStateWitnessProofRequest,
-		) (*frostsigning.NativeTBTCSignerStateWitnessProof, error) {
-			return &frostsigning.NativeTBTCSignerStateWitnessProof{
-				Schema:             frostsigning.NativeTBTCSignerStateWitnessProofSchema,
-				StoreFingerprint:   request.StoreFingerprint,
-				AncestorGeneration: request.AncestorGeneration,
-				AncestorCommitment: request.AncestorCommitment,
-				TargetGeneration:   request.TargetGeneration,
-				TargetCommitment:   request.TargetCommitment,
-				Complete:           true,
-			}, nil
 		},
 	)
 	if err != nil {

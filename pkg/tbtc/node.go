@@ -347,11 +347,116 @@ func newNode(
 				err,
 			)
 		}
+		anchorManifest := runtimeManifest.NativeSignerAnchor
+		clientPrivateKey, err := loadFrostNativeSignerAnchorClientPrivateKey(
+			config.FrostNativeSignerAnchorClientPrivateKeyPath,
+		)
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot load FROST native signer anchor client key: [%w]",
+				err,
+			)
+		}
+		defer zeroFrostNativeSignerKeyBytes(clientPrivateKey)
+		onlineKeySPKI, onlinePublicKey, err :=
+			loadFrostNativeSignerAnchorOnlinePublicKeySPKI(
+				config.FrostNativeSignerAnchorOnlinePublicKeyPath,
+			)
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot load FROST native signer anchor online key: [%w]",
+				err,
+			)
+		}
+		installedAnchorConfig, err :=
+			signing.ReadInstalledNativeTBTCSignerStateAnchorConfig()
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot verify installed native signer anchor configuration: [%w]",
+				err,
+			)
+		}
+		onlineRawKey := [32]byte{}
+		copy(onlineRawKey[:], onlinePublicKey)
+		expectedAnchorBindingHash :=
+			ComputeFrostNativeSignerAnchorBindingHash(anchorManifest.Identity)
+		if installedAnchorConfig.BindingHash != expectedAnchorBindingHash ||
+			installedAnchorConfig.ResponsePublicKey != onlineRawKey ||
+			installedAnchorConfig.ResponsePublicKeySPKISHA256 !=
+				anchorManifest.Identity.OnlineKeyHash ||
+			installedAnchorConfig.WitnessMaximumRecords !=
+				anchorManifest.WitnessMaximumRecords ||
+			installedAnchorConfig.WitnessRotationThresholdRecords !=
+				anchorManifest.WitnessRotationThresholdRecords {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"installed native signer anchor configuration differs from the signed manifest",
+			)
+		}
+		anchorClient, err := NewFrostNativeSignerAnchorClient(
+			FrostNativeSignerAnchorClientConfig{
+				Endpoint:            config.FrostNativeSignerAnchorURL,
+				RequestTimeout:      config.FrostNativeSignerAnchorRequestTimeout,
+				ClientPrivateKey:    clientPrivateKey,
+				OnlinePublicKeySPKI: onlineKeySPKI,
+				Identity:            anchorManifest.Identity,
+			},
+		)
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot initialize authenticated native signer anchor client: [%w]",
+				err,
+			)
+		}
+		anchorBinding, err := newFrostNativeSignerAnchorBinding(
+			anchorClient,
+			anchorManifest,
+			signing.ReadNativeTBTCSignerStateWitnessTip,
+			signing.ReadNativeTBTCSignerStateWitnessProof,
+			signing.AcknowledgeNativeTBTCSignerStateWitnessCheckpoint,
+			signing.RecoverNativeTBTCSignerStateWitnessCheckpoint,
+		)
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot bind authenticated native signer anchor: [%w]",
+				err,
+			)
+		}
+		startupSignerTip, err := anchorBinding.reconcileStartup(
+			context.Background(),
+		)
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot reconcile startup native signer anchor: [%w]",
+				err,
+			)
+		}
+		if err := signing.InstallNativeTBTCSignerStateAnchorBarrier(
+			signing.NativeTBTCSignerStateAnchorBarrierConfig{
+				InitialTip:                startupSignerTip,
+				ExpectedAnchorBindingHash: expectedAnchorBindingHash,
+				MinimumAnchorServiceEpoch: anchorManifest.MinimumServiceEpoch,
+				ReadTip:                   signing.ReadNativeTBTCSignerStateWitnessTip,
+				Committer:                 anchorBinding,
+				Timeout:                   config.FrostNativeSignerAnchorRequestTimeout,
+			},
+		); err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot install native signer protocol-output barrier: [%w]",
+				err,
+			)
+		}
 		inventoryBinding, err := newFrostNativeSignerInventoryBinding(
 			storeBinding,
-			config.FrostNativeSignerStateWitnessAnchorSource,
+			anchorBinding,
 			signing.ReadNativeTBTCSignerRetainedKeyPackageInventory,
-			signing.ReadNativeTBTCSignerStateWitnessProof,
 		)
 		if err != nil {
 			_ = outbox.close()

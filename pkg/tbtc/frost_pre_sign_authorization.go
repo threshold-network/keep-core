@@ -1467,6 +1467,22 @@ type FrostPreSignActivationRuntimeManifest struct {
 	RetainedGroupInventoryProtocolID [32]byte
 	CanonicalJournal                 FrostRetainedGroupCanonicalJournalManifest
 	QuarantineJournal                FrostRetainedGroupQuarantineJournalManifest
+	NativeSignerAnchor               FrostNativeSignerAnchorManifest
+}
+
+// FrostNativeSignerAnchorManifest carries the authenticated service identity
+// and the offline-reviewed monotonic floor. Online startup may accept this
+// exact state or a signed/proven descendant, never an arbitrary same-store
+// stream head.
+type FrostNativeSignerAnchorManifest struct {
+	Identity                        FrostNativeSignerAnchorIdentity
+	MinimumServiceEpoch             uint64
+	MinimumRevision                 uint64
+	MinimumEventRoot                [32]byte
+	MinimumAcknowledgementDigest    [32]byte
+	MinimumCheckpoint               FrostNativeSignerStateWitnessCheckpoint
+	WitnessMaximumRecords           uint64
+	WitnessRotationThresholdRecords uint64
 }
 
 type FrostPreSignActivationRuntimeManifestSource interface {

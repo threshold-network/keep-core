@@ -23,29 +23,6 @@ func completeFrostInteractiveSigningReadiness(
 		nativeExecutionAvailable && nativeBackendSelected
 }
 
-// FrostNativeSignerStateWitnessAnchor is an independently durable accepted
-// tip of the native signer's append-only state-witness chain. It is dynamic
-// state and deliberately is not folded into the immutable activation manifest
-// or stable store identity.
-type FrostNativeSignerStateWitnessAnchor struct {
-	StoreFingerprint [32]byte
-	Generation       uint64
-	Commitment       [32]byte
-}
-
-// FrostNativeSignerStateWitnessAnchorSource supplies the last state witness
-// accepted by the independent activation/watchtower system. Its backing store
-// must be outside the signer state directory and must atomically persist an
-// accepted handshake before treating that handshake as active.
-//
-// A local signer file cannot implement this interface safely: coordinated
-// rollback of that file and the signer state would otherwise be invisible.
-type FrostNativeSignerStateWitnessAnchorSource interface {
-	ReadFrostNativeSignerStateWitnessAnchor(
-		context.Context,
-	) (*FrostNativeSignerStateWitnessAnchor, error)
-}
-
 type frostNativeSignerInventoryReader func() (
 	*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory,
 	error,
@@ -65,34 +42,32 @@ type frostNativeSignerInventoryExpectation struct {
 }
 
 type frostNativeSignerInventorySnapshot struct {
-	Schema                  string
-	StoreFingerprint        [32]byte
-	StateGeneration         uint64
-	StateCommitment         [32]byte
-	PreviousStateCommitment [32]byte
-	StateImageDigest        [32]byte
-	InventoryCommitment     [32]byte
-	WalletCount             uint64
-	KeyPackageCount         uint64
+	Schema                      string
+	StoreFingerprint            [32]byte
+	StateGeneration             uint64
+	StateCommitment             [32]byte
+	PreviousStateCommitment     [32]byte
+	StateImageDigest            [32]byte
+	InventoryCommitment         [32]byte
+	WalletCount                 uint64
+	KeyPackageCount             uint64
+	ExternalRollbackAnchorBound bool
 }
 
 type frostNativeSignerInventoryBinding struct {
 	storeBinding  *frostDurableSessionStoreBinding
-	anchorSource  FrostNativeSignerStateWitnessAnchorSource
+	anchorBinding *frostNativeSignerAnchorBinding
 	readInventory frostNativeSignerInventoryReader
-	readProof     frostNativeSignerStateWitnessProofReader
 
-	mutex    sync.Mutex
-	baseline *FrostNativeSignerStateWitnessAnchor
+	mutex sync.Mutex
 }
 
 func newFrostNativeSignerInventoryBinding(
 	storeBinding *frostDurableSessionStoreBinding,
-	anchorSource FrostNativeSignerStateWitnessAnchorSource,
+	anchorBinding *frostNativeSignerAnchorBinding,
 	readInventory frostNativeSignerInventoryReader,
-	readProof frostNativeSignerStateWitnessProofReader,
 ) (*frostNativeSignerInventoryBinding, error) {
-	if storeBinding == nil || anchorSource == nil || readInventory == nil || readProof == nil {
+	if storeBinding == nil || anchorBinding == nil || readInventory == nil {
 		return nil, fmt.Errorf("FROST native signer inventory dependencies are incomplete")
 	}
 	if _, err := storeBinding.verify(); err != nil {
@@ -100,9 +75,8 @@ func newFrostNativeSignerInventoryBinding(
 	}
 	return &frostNativeSignerInventoryBinding{
 		storeBinding:  storeBinding,
-		anchorSource:  anchorSource,
+		anchorBinding: anchorBinding,
 		readInventory: readInventory,
-		readProof:     readProof,
 	}, nil
 }
 
@@ -123,14 +97,6 @@ func (binding *frostNativeSignerInventoryBinding) verify(
 	if err != nil {
 		return nil, fmt.Errorf("FROST native signer store binding failed: [%w]", err)
 	}
-	anchor, err := binding.anchorSource.ReadFrostNativeSignerStateWitnessAnchor(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("cannot read independent native signer state-witness anchor: [%w]", err)
-	}
-	if err := validateFrostNativeSignerStateWitnessAnchor(anchor, storeFingerprint); err != nil {
-		return nil, err
-	}
-
 	inventory, err := binding.readInventory()
 	if err != nil {
 		return nil, fmt.Errorf("cannot read native retained key-package inventory: [%w]", err)
@@ -138,110 +104,51 @@ func (binding *frostNativeSignerInventoryBinding) verify(
 	if inventory == nil || inventory.StoreFingerprint != storeFingerprint {
 		return nil, fmt.Errorf("native retained key-package inventory is absent or belongs to another store")
 	}
-	target := FrostNativeSignerStateWitnessAnchor{
-		StoreFingerprint: inventory.StoreFingerprint,
-		Generation:       inventory.StateGeneration,
-		Commitment:       inventory.StateCommitment,
+	target := FrostNativeSignerStateWitnessCheckpoint{
+		StoreFingerprint:        inventory.StoreFingerprint,
+		Generation:              inventory.StateGeneration,
+		PreviousStateCommitment: inventory.PreviousStateCommitment,
+		StateImageDigest:        inventory.StateImageDigest,
+		StateCommitment:         inventory.StateCommitment,
 	}
-	if err := binding.verifyAncestry(anchor, &target); err != nil {
-		return nil, fmt.Errorf("native signer state does not descend from the independent anchor: [%w]", err)
+	localTip, err := binding.anchorBinding.readTip()
+	if err != nil {
+		return nil, fmt.Errorf("cannot read native signer state tip: [%w]", err)
 	}
-	if binding.baseline != nil {
-		if err := binding.verifyAncestry(binding.baseline, &target); err != nil {
-			return nil, fmt.Errorf("native signer state does not descend from the process baseline: [%w]", err)
-		}
+	if localTip == nil || frostNativeSignerCheckpointFromTip(*localTip) != target {
+		return nil, fmt.Errorf(
+			"native signer inventory and state-witness tip identify different checkpoints",
+		)
+	}
+	if err := binding.anchorBinding.VerifyNativeTBTCSignerStateTip(
+		ctx,
+		*localTip,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"native signer state is not bound to the authenticated external anchor: [%w]",
+			err,
+		)
 	}
 	if err := verifyFrostNativeSignerInventoryEntries(inventory.Entries, expected); err != nil {
 		return nil, err
 	}
 
-	binding.baseline = &FrostNativeSignerStateWitnessAnchor{
-		StoreFingerprint: target.StoreFingerprint,
-		Generation:       target.Generation,
-		Commitment:       target.Commitment,
-	}
 	keyPackageCount := uint64(0)
 	for _, entry := range inventory.Entries {
 		keyPackageCount += uint64(len(entry.KeyPackages))
 	}
 	return &frostNativeSignerInventorySnapshot{
-		Schema:                  inventory.Schema,
-		StoreFingerprint:        inventory.StoreFingerprint,
-		StateGeneration:         inventory.StateGeneration,
-		StateCommitment:         inventory.StateCommitment,
-		PreviousStateCommitment: inventory.PreviousStateCommitment,
-		StateImageDigest:        inventory.StateImageDigest,
-		InventoryCommitment:     inventory.InventoryCommitment,
-		WalletCount:             uint64(len(inventory.Entries)),
-		KeyPackageCount:         keyPackageCount,
+		Schema:                      inventory.Schema,
+		StoreFingerprint:            inventory.StoreFingerprint,
+		StateGeneration:             inventory.StateGeneration,
+		StateCommitment:             inventory.StateCommitment,
+		PreviousStateCommitment:     inventory.PreviousStateCommitment,
+		StateImageDigest:            inventory.StateImageDigest,
+		InventoryCommitment:         inventory.InventoryCommitment,
+		WalletCount:                 uint64(len(inventory.Entries)),
+		KeyPackageCount:             keyPackageCount,
+		ExternalRollbackAnchorBound: true,
 	}, nil
-}
-
-func validateFrostNativeSignerStateWitnessAnchor(
-	anchor *FrostNativeSignerStateWitnessAnchor,
-	storeFingerprint [32]byte,
-) error {
-	if anchor == nil || anchor.StoreFingerprint != storeFingerprint ||
-		anchor.Generation == 0 || anchor.Commitment == [32]byte{} {
-		return fmt.Errorf("independent native signer state-witness anchor is invalid")
-	}
-	return nil
-}
-
-func (binding *frostNativeSignerInventoryBinding) verifyAncestry(
-	ancestor *FrostNativeSignerStateWitnessAnchor,
-	target *FrostNativeSignerStateWitnessAnchor,
-) error {
-	if ancestor == nil || target == nil ||
-		ancestor.StoreFingerprint != target.StoreFingerprint ||
-		ancestor.Generation == 0 || target.Generation == 0 ||
-		ancestor.Commitment == [32]byte{} || target.Commitment == [32]byte{} ||
-		target.Generation < ancestor.Generation {
-		return fmt.Errorf("state-witness ancestry bounds are invalid")
-	}
-	if target.Generation == ancestor.Generation && target.Commitment != ancestor.Commitment {
-		return fmt.Errorf("equal state-witness generations have different commitments")
-	}
-
-	cursorGeneration := ancestor.Generation
-	cursorCommitment := ancestor.Commitment
-	for page := 0; page < frostNativeSignerStateWitnessMaximumPages; page++ {
-		request := &frostsigning.NativeTBTCSignerStateWitnessProofRequest{
-			Schema:             frostsigning.NativeTBTCSignerStateWitnessProofRequestSchema,
-			StoreFingerprint:   target.StoreFingerprint,
-			AncestorGeneration: cursorGeneration,
-			AncestorCommitment: cursorCommitment,
-			TargetGeneration:   target.Generation,
-			TargetCommitment:   target.Commitment,
-			MaximumEntries:     frostsigning.NativeTBTCSignerStateWitnessProofMaximumEntries,
-		}
-		proof, err := binding.readProof(request)
-		if err != nil {
-			return fmt.Errorf("cannot read native signer state-witness proof: [%w]", err)
-		}
-		if proof == nil || proof.Schema != frostsigning.NativeTBTCSignerStateWitnessProofSchema ||
-			proof.StoreFingerprint != request.StoreFingerprint ||
-			proof.AncestorGeneration != request.AncestorGeneration ||
-			proof.AncestorCommitment != request.AncestorCommitment ||
-			proof.TargetGeneration != request.TargetGeneration ||
-			proof.TargetCommitment != request.TargetCommitment ||
-			len(proof.Entries) > int(request.MaximumEntries) {
-			return fmt.Errorf("native signer returned a proof for different ancestry bounds")
-		}
-		if proof.Complete {
-			return nil
-		}
-		if len(proof.Entries) == 0 {
-			return fmt.Errorf("native signer state-witness proof made no progress")
-		}
-		last := proof.Entries[len(proof.Entries)-1]
-		cursorGeneration = last.Generation
-		cursorCommitment = last.StateCommitment
-	}
-	return fmt.Errorf(
-		"native signer state-witness ancestry exceeds the bounded proof window [%d]",
-		frostNativeSignerStateWitnessMaximumPages*int(frostsigning.NativeTBTCSignerStateWitnessProofMaximumEntries),
-	)
 }
 
 func verifyFrostNativeSignerInventoryEntries(

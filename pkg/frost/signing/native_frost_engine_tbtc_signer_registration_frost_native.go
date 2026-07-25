@@ -296,7 +296,17 @@ static TbtcSignerResult tbtc_signer_durable_store_identity(void) {
   return durable_store_identity();
 }
 
-static void tbtc_signer_free_buffer(uint8_t* ptr, size_t len) {
+static int tbtc_signer_free_buffer_available(void) {
+  return dlsym(RTLD_DEFAULT, "frost_tbtc_free_buffer") != NULL;
+}
+
+static void tbtc_signer_scrub_and_free_buffer(uint8_t* ptr, size_t len) {
+  if (ptr != NULL) {
+    volatile uint8_t* cursor = (volatile uint8_t*)ptr;
+    for (size_t index = 0; index < len; index++) {
+      cursor[index] = 0;
+    }
+  }
   tbtc_free_buffer_fn free_buffer = (tbtc_free_buffer_fn)dlsym(
     RTLD_DEFAULT,
     "frost_tbtc_free_buffer"
@@ -1620,6 +1630,9 @@ func decodeBuildTaggedTBTCSignerBuildTaprootTxResponse(
 }
 
 func callBuildTaggedTBTCSignerVersion() ([]byte, error) {
+	if err := ensureTBTCSignerFreeBufferAvailable(); err != nil {
+		return nil, err
+	}
 	result := C.tbtc_signer_version()
 	return parseBuildTaggedTBTCSignerResult("Version", result)
 }
@@ -1630,6 +1643,9 @@ func callBuildTaggedTBTCSignerVersion() ([]byte, error) {
 // incompatibility. It deliberately does NOT pass through callBuildTaggedTBTCSignerOperation
 // (it takes no request and must not recurse into the ABI gate).
 func callBuildTaggedTBTCSignerABIVersion() ([]byte, error) {
+	if err := ensureTBTCSignerFreeBufferAvailable(); err != nil {
+		return nil, err
+	}
 	result := C.tbtc_signer_abi_version()
 	return parseBuildTaggedTBTCSignerResult("ABIVersion", result)
 }
@@ -1738,19 +1754,45 @@ func callBuildTaggedTBTCSignerOperation(
 		)
 	}
 
-	requestPtr := C.CBytes(requestPayload)
-	requestLen := len(requestPayload)
-	defer func() {
-		// Scrub the secret request bytes from the C heap before releasing them.
-		// The request payload can carry signing-share / nonce material, and a
-		// plain C.free does not overwrite; this mirrors the Go-side zeroBytes
-		// hygiene applied to the caller's own copy.
-		zeroBytes(unsafe.Slice((*byte)(requestPtr), requestLen))
-		C.free(requestPtr)
-	}()
+	var result C.TbtcSignerResult
+	return executeNativeTBTCSignerStateAnchoredOutput(
+		operation,
+		func() {
+			requestPtr := C.CBytes(requestPayload)
+			requestLen := len(requestPayload)
+			defer func() {
+				// Scrub secret request bytes immediately after the native call.
+				zeroBytes(unsafe.Slice((*byte)(requestPtr), requestLen))
+				C.free(requestPtr)
+			}()
+			result = call(
+				(*C.uint8_t)(requestPtr),
+				C.size_t(requestLen),
+			)
+		},
+		func() ([]byte, error) {
+			return parseBuildTaggedTBTCSignerResult(operation, result)
+		},
+		func() {
+			discardBuildTaggedTBTCSignerResult(result)
+		},
+	)
+}
 
-	result := call((*C.uint8_t)(requestPtr), C.size_t(len(requestPayload)))
-	return parseBuildTaggedTBTCSignerResult(operation, result)
+func discardBuildTaggedTBTCSignerResult(result C.TbtcSignerResult) {
+	if result.buffer.ptr != nil {
+		C.tbtc_signer_scrub_and_free_buffer(result.buffer.ptr, result.buffer.len)
+	}
+}
+
+func ensureTBTCSignerFreeBufferAvailable() error {
+	if C.tbtc_signer_free_buffer_available() == 0 {
+		return fmt.Errorf(
+			"%w: tbtc-signer buffer release symbol is unavailable",
+			ErrNativeCryptographyUnavailable,
+		)
+	}
+	return nil
 }
 
 func parseBuildTaggedTBTCSignerResult(
@@ -1763,7 +1805,10 @@ func parseBuildTaggedTBTCSignerResult(
 	// `result.buffer.ptr == nil`, so skip the deferred free in that case to
 	// avoid handing a NULL pointer to Rust's `frost_tbtc_free_buffer`.
 	if result.buffer.ptr != nil {
-		defer C.tbtc_signer_free_buffer(result.buffer.ptr, result.buffer.len)
+		defer C.tbtc_signer_scrub_and_free_buffer(
+			result.buffer.ptr,
+			result.buffer.len,
+		)
 	}
 
 	statusCode := int32(result.status_code)
@@ -1827,13 +1872,31 @@ func buildTaggedTBTCSignerResultStatusError(
 func callBuildTaggedTBTCSignerInitSignerConfig(
 	requestPayload []byte,
 ) ([]byte, error) {
-	return callBuildTaggedTBTCSignerOperation(
-		"InitSignerConfig",
-		requestPayload,
-		func(requestPtr *C.uint8_t, requestLen C.size_t) C.TbtcSignerResult {
-			return C.tbtc_signer_init_signer_config(requestPtr, requestLen)
-		},
+	// This dedicated helper is the sole compile-time bootstrap exception to the
+	// process-global state anchor. InitSignerConfig must open/lock the durable
+	// store before its tip can be reconciled, and the Rust ABI guarantees an
+	// initial or config-identical install neither mutates signer state nor emits
+	// protocol material.
+	if err := ensureTBTCSignerABICompatible(); err != nil {
+		return nil, err
+	}
+	if len(requestPayload) == 0 {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"InitSignerConfig",
+			"request payload is empty",
+		)
+	}
+	requestPtr := C.CBytes(requestPayload)
+	requestLen := len(requestPayload)
+	defer func() {
+		zeroBytes(unsafe.Slice((*byte)(requestPtr), requestLen))
+		C.free(requestPtr)
+	}()
+	result := C.tbtc_signer_init_signer_config(
+		(*C.uint8_t)(requestPtr),
+		C.size_t(requestLen),
 	)
+	return parseBuildTaggedTBTCSignerResult("InitSignerConfig", result)
 }
 
 // InstallNativeTBTCSignerConfig installs the tbtc-signer's init-time

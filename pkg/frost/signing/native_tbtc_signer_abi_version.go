@@ -30,7 +30,11 @@ const (
 	// symbols and response types, so ABI-4.0 callers remain valid and ignore
 	// them. Their first public contract uses the v2 stable-store and witness
 	// transcripts; bridges that consume them must require at least 4.1.
-	requiredTBTCSignerABIMinMinor uint32 = 1
+	//
+	// Minor 2 adds the constant-size state-witness tip and signed checkpoint
+	// acknowledgement symbols required by the protocol-output barrier. This
+	// build must reject 4.1 before it can reach a missing symbol via dlsym.
+	requiredTBTCSignerABIMinMinor uint32 = 2
 )
 
 // ErrTBTCSignerABIIncompatible marks a linked libfrost_tbtc whose FFI contract version

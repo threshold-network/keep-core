@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestRealCgoSignerReadinessReadbacks exercises every ABI-4.1 readiness
+// TestRealCgoSignerReadinessReadbacks exercises every ABI-4.2 readiness
 // readback against the actually linked libfrost_tbtc. Pure Go decoder tests
 // cannot detect a stale library that reports a compatible-looking ABI version
 // while omitting a symbol or emitting a different transcript.

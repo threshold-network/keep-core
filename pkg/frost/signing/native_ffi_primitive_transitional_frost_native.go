@@ -51,7 +51,7 @@ func installConfiguredTBTCSignerInitConfig() error {
 		return nil
 	}
 
-	configJSON, err := os.ReadFile(configPath)
+	configJSON, err := readSecureNativeTBTCSignerInitConfig(configPath)
 	if err != nil {
 		err = fmt.Errorf(
 			"read tbtc-signer init config [%s]: %w",
@@ -66,6 +66,7 @@ func installConfiguredTBTCSignerInitConfig() error {
 		)
 		return err
 	}
+	defer zeroBytes(configJSON)
 
 	result, err := InstallNativeTBTCSignerConfig(configJSON)
 	if err != nil {
@@ -78,6 +79,22 @@ func installConfiguredTBTCSignerInitConfig() error {
 				"engine registration fails closed and the process will "+
 				"terminate at the end of registration (config-mode demand "+
 				"unmet): [%v]",
+			err,
+		)
+		return err
+	}
+	if err := recordNativeTBTCSignerInstalledStateAnchorConfig(
+		configJSON,
+		result.ConfigFingerprint,
+	); err != nil {
+		err = fmt.Errorf(
+			"bind installed tbtc-signer anchor config from [%s]: %w",
+			configPath,
+			err,
+		)
+		registrationLogger.Errorf(
+			"tbtc-signer anchor config binding failed; FROST-native engine "+
+				"registration fails closed: [%v]",
 			err,
 		)
 		return err

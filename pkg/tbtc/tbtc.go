@@ -166,11 +166,19 @@ type Config struct {
 	// receipt-complete source. It must not share the primary Ethereum adapter's
 	// trust domain, endpoint, operator, or history store.
 	FrostRetainedGroupHistorySource FrostRetainedGroupHistorySource
-	// FrostNativeSignerStateWitnessAnchorSource reads the independently durable,
-	// dynamic signer-state tip last accepted by the activation/watchtower system.
-	// It must not be backed by the native signer state directory. Production
-	// activation refuses to start without this rollback boundary.
-	FrostNativeSignerStateWitnessAnchorSource FrostNativeSignerStateWitnessAnchorSource
+	// FrostNativeSignerAnchorURL is the exact authenticated checkpoint-service
+	// endpoint. HTTPS uses normal PKIX validation plus the manifest-pinned leaf
+	// SPKI. Plain HTTP is accepted only for a canonical numeric loopback host.
+	FrostNativeSignerAnchorURL string
+	// FrostNativeSignerAnchorClientPrivateKeyPath contains the owner-only PKCS#8
+	// Ed25519 key authorized by the signed activation manifest.
+	FrostNativeSignerAnchorClientPrivateKeyPath string
+	// FrostNativeSignerAnchorOnlinePublicKeyPath contains the DER SubjectPublicKeyInfo
+	// for the online Ed25519 service key pinned by the signed manifest.
+	FrostNativeSignerAnchorOnlinePublicKeyPath string
+	// FrostNativeSignerAnchorRequestTimeout bounds each authenticated Read/CAS.
+	// Zero selects the protocol client's conservative production default.
+	FrostNativeSignerAnchorRequestTimeout time.Duration
 }
 
 // Initialize kicks off the TBTC by initializing internal state, ensuring

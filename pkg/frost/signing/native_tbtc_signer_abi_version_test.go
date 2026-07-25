@@ -93,10 +93,11 @@ func TestCheckTBTCSignerABICompatibility_CurrentContract(t *testing.T) {
 	// identity schema and the state-witness transcript to v2, so that state
 	// commitments bind only the stable `.store-id` and no longer break when a
 	// benign filesystem change alters the lock file, directory inode, or device.
-	// Minor 1 adds the identity, retained inventory, and state-witness proof
-	// readbacks to the already deployed ABI-4 surface. The matching library
-	// version is compatible; ABI 4.0 and a different major are not.
-	if requiredTBTCSignerABIMajor != 4 || requiredTBTCSignerABIMinMinor != 1 {
+	// Minor 2 adds the constant-size state tip and signed external-anchor
+	// acknowledgement required before any protocol output can leave Go. The
+	// matching library version is compatible; ABI 4.1 and a different major
+	// are not.
+	if requiredTBTCSignerABIMajor != 4 || requiredTBTCSignerABIMinMinor != 2 {
 		t.Fatalf(
 			"unexpected required tbtc-signer ABI: [%d.%d]",
 			requiredTBTCSignerABIMajor,
@@ -108,6 +109,9 @@ func TestCheckTBTCSignerABICompatibility_CurrentContract(t *testing.T) {
 	}
 	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, 0); err == nil {
 		t.Fatal("ABI 4.0 without readiness readbacks must be incompatible")
+	}
+	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor, 1); err == nil {
+		t.Fatal("ABI 4.1 without the output-barrier tip/ack symbols must be incompatible")
 	}
 	if err := checkTBTCSignerABICompatibility(requiredTBTCSignerABIMajor+1, requiredTBTCSignerABIMinMinor); err == nil {
 		t.Fatal("a higher major must be incompatible")

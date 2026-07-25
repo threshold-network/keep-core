@@ -405,6 +405,11 @@ func (fahe *frostActivationHandshakeExporter) attest(
 	if journalSnapshot == nil || nativeSignerSnapshot == nil {
 		return nil, fmt.Errorf("production FROST signer readiness snapshot is incomplete")
 	}
+	if !nativeSignerSnapshot.ExternalRollbackAnchorBound {
+		return nil, fmt.Errorf(
+			"native signer state lacks an authenticated external rollback anchor",
+		)
+	}
 	journalManifest := fahe.manifest.CanonicalJournal
 	quarantineManifest := fahe.manifest.QuarantineJournal
 	if !journalSnapshot.Complete || journalSnapshot.CurrentPoint != finality ||
@@ -497,7 +502,7 @@ func (fahe *frostActivationHandshakeExporter) attest(
 			InventoryCommitment:         frostActivationHex32(nativeSignerSnapshot.InventoryCommitment),
 			RetainedWalletCount:         nativeSignerSnapshot.WalletCount,
 			RetainedKeyPackageCount:     nativeSignerSnapshot.KeyPackageCount,
-			ExternalRollbackAnchorBound: true,
+			ExternalRollbackAnchorBound: nativeSignerSnapshot.ExternalRollbackAnchorBound,
 			Complete:                    true,
 		},
 		InteractiveSigningReady:                   readinessSnapshot.InteractiveSigningReady,

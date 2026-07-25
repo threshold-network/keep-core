@@ -70,13 +70,14 @@ func (readiness *testFrostProductionSignerReadiness) verifyFrostProductionSigner
 	return &frostProductionSignerReadinessSnapshot{
 		Journal: journalSnapshot,
 		Inventory: &frostNativeSignerInventorySnapshot{
-			Schema:                  "tbtc-signer-retained-key-package-inventory/v1",
-			StoreFingerprint:        testFrostDurableSessionStoreIdentity().Fingerprint,
-			StateGeneration:         7,
-			StateCommitment:         [32]byte{0x31},
-			PreviousStateCommitment: [32]byte{0x30},
-			StateImageDigest:        [32]byte{0x33},
-			InventoryCommitment:     [32]byte{0x32},
+			Schema:                      "tbtc-signer-retained-key-package-inventory/v1",
+			StoreFingerprint:            testFrostDurableSessionStoreIdentity().Fingerprint,
+			StateGeneration:             7,
+			StateCommitment:             [32]byte{0x31},
+			PreviousStateCommitment:     [32]byte{0x30},
+			StateImageDigest:            [32]byte{0x33},
+			InventoryCommitment:         [32]byte{0x32},
+			ExternalRollbackAnchorBound: true,
 		},
 		InteractiveSigningReady: true,
 	}, nil
