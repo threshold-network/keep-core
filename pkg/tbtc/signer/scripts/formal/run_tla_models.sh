@@ -16,7 +16,7 @@ TLA_TOOLS_URL="${TLA_TOOLS_URL:-https://github.com/tlaplus/tlaplus/releases/down
 # release v1.8.0). Re-pin this when the upstream release asset is rebuilt and the
 # download-verification gate below reports a mismatch, after confirming the new
 # jar comes from the official release URL.
-TLA_TOOLS_SHA256="${TLA_TOOLS_SHA256:-150b0294c3d407c15f0c971351ccd4ae8c6d885397546dff87871a14be2b4ee4}"
+TLA_TOOLS_SHA256="${TLA_TOOLS_SHA256:-cc4803dce2a8ffaf0f5920a9dc39df4b5ee34ab4cb53fb58ac557277a7e516b3}"
 
 if ! command -v java >/dev/null 2>&1; then
   echo "java is required to run TLC model checks" >&2
