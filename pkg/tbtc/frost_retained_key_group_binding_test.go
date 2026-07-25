@@ -2,13 +2,13 @@ package tbtc
 
 import (
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 
+	btcec2 "github.com/btcsuite/btcd/btcec/v2"
 	"github.com/keep-network/keep-common/pkg/persistence"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
@@ -48,8 +48,10 @@ func frostBindingSignerMaterial(t *testing.T, keyGroup string) *frostsigning.Nat
 }
 
 func frostBindingWalletPublicKey() *ecdsa.PublicKey {
-	x, y := elliptic.P256().ScalarBaseMult([]byte{1})
-	return &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
+	privateKeyBytes := make([]byte, 32)
+	privateKeyBytes[len(privateKeyBytes)-1] = 1
+	_, publicKey := btcec2.PrivKeyFromBytes(privateKeyBytes)
+	return publicKey.ToECDSA()
 }
 
 func TestWalletRegistryArchiveFrostWalletPersistsExactKeyGroupBinding(
