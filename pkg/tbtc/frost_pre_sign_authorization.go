@@ -722,7 +722,7 @@ type FrostPreSignActivationProfile struct {
 // ComputeHash returns the canonical activation-profile commitment.
 func (fpsap FrostPreSignActivationProfile) ComputeHash() [32]byte {
 	hasher := sha256.New()
-	hasher.Write([]byte("tbtc-frost-pre-sign-activation-profile-v4"))
+	hasher.Write([]byte("tbtc-frost-pre-sign-activation-profile-v5"))
 	hasher.Write(fpsap.DomainChainID[:])
 	hasher.Write(fpsap.ActivationManifestHash[:])
 	hasher.Write(fpsap.ImplementationSetHash[:])
@@ -1300,8 +1300,160 @@ type FrostPreSignActivationPointVerifier interface {
 // FrostPreSignActivationRuntimeManifest is the signer-facing subset of the
 // authenticated production activation envelope. It is immutable for the
 // process lifetime and feeds the nonce-bound runtime status exporter.
+type FrostPreSignLinkedLibraryReference struct {
+	Start  uint64
+	Length uint64
+}
+
+type FrostPreSignLinkedLibraryEvidence struct {
+	ProtocolRole                string
+	Address                     [20]byte
+	RuntimeCodeHash             [32]byte
+	References                  []FrostPreSignLinkedLibraryReference
+	LinkedLibraryDescriptorHash [32]byte
+	LinkedLibraries             []FrostPreSignLinkedLibraryEvidence
+}
+
+type FrostPreSignDeploymentDescriptorEvidence struct {
+	Address                     [20]byte
+	RuntimeCodeHash             [32]byte
+	Upgradeability              string
+	ImplementationAddress       [20]byte
+	ImplementationCodeHash      [32]byte
+	AdminAddress                [20]byte
+	AdminCodeHash               [32]byte
+	ImplementationSlotValue     [32]byte
+	AdminSlotValue              [32]byte
+	LinkedLibraryDescriptorHash [32]byte
+	LinkedLibraries             []FrostPreSignLinkedLibraryEvidence
+	DescriptorHash              [32]byte
+}
+
+type FrostPreSignDeploymentEpochEvidence struct {
+	Start      FrostPreSignFinality
+	End        *FrostPreSignFinality
+	Descriptor FrostPreSignDeploymentDescriptorEvidence
+}
+
+type FrostPreSignDeploymentEvidence struct {
+	Role                    string
+	Name                    string
+	DeploymentBlock         uint64
+	RelevantEventStartBlock uint64
+	Current                 FrostPreSignDeploymentDescriptorEvidence
+	HistoricalEpochs        []FrostPreSignDeploymentEpochEvidence
+}
+
+func (descriptor FrostPreSignDeploymentDescriptorEvidence) ComputeHash() [32]byte {
+	hasher := sha256.New()
+	hasher.Write([]byte("tbtc-frost-deployment-descriptor-v1\x00"))
+	hasher.Write(descriptor.Address[:])
+	hasher.Write(descriptor.RuntimeCodeHash[:])
+	frostPreSignWriteCommitmentString(hasher, descriptor.Upgradeability)
+	hasher.Write(descriptor.ImplementationAddress[:])
+	hasher.Write(descriptor.ImplementationCodeHash[:])
+	hasher.Write(descriptor.AdminAddress[:])
+	hasher.Write(descriptor.AdminCodeHash[:])
+	hasher.Write(descriptor.ImplementationSlotValue[:])
+	hasher.Write(descriptor.AdminSlotValue[:])
+	hasher.Write(descriptor.LinkedLibraryDescriptorHash[:])
+	frostPreSignWriteCommitmentUint64(hasher, uint64(len(descriptor.LinkedLibraries)))
+	for _, library := range descriptor.LinkedLibraries {
+		frostPreSignWriteLinkedLibraryCommitment(hasher, library)
+	}
+	result := [32]byte{}
+	copy(result[:], hasher.Sum(nil))
+	return result
+}
+
+func ComputeFrostPreSignDeploymentEvidenceHash(
+	deployments []FrostPreSignDeploymentEvidence,
+) [32]byte {
+	hasher := sha256.New()
+	hasher.Write([]byte("tbtc-frost-pre-sign-deployment-set-v2\x00"))
+	for _, deployment := range deployments {
+		frostPreSignWriteCommitmentString(hasher, deployment.Role)
+		frostPreSignWriteCommitmentString(hasher, deployment.Name)
+		frostPreSignWriteCommitmentUint64(hasher, deployment.DeploymentBlock)
+		frostPreSignWriteCommitmentUint64(
+			hasher,
+			deployment.RelevantEventStartBlock,
+		)
+		currentHash := deployment.Current.ComputeHash()
+		hasher.Write(currentHash[:])
+		frostPreSignWriteCommitmentUint64(
+			hasher,
+			uint64(len(deployment.HistoricalEpochs)),
+		)
+		for _, epoch := range deployment.HistoricalEpochs {
+			frostPreSignWriteCommitmentUint64(hasher, epoch.Start.BlockNumber)
+			hasher.Write(epoch.Start.BlockHash[:])
+			if epoch.End == nil {
+				hasher.Write([]byte{0})
+			} else {
+				hasher.Write([]byte{1})
+				frostPreSignWriteCommitmentUint64(
+					hasher,
+					epoch.End.BlockNumber,
+				)
+				hasher.Write(epoch.End.BlockHash[:])
+			}
+			descriptorHash := epoch.Descriptor.ComputeHash()
+			hasher.Write(descriptorHash[:])
+		}
+	}
+	result := [32]byte{}
+	copy(result[:], hasher.Sum(nil))
+	return result
+}
+
+func frostPreSignWriteLinkedLibraryCommitment(
+	hasher interface{ Write([]byte) (int, error) },
+	library FrostPreSignLinkedLibraryEvidence,
+) {
+	frostPreSignWriteCommitmentString(hasher, library.ProtocolRole)
+	_, _ = hasher.Write(library.Address[:])
+	_, _ = hasher.Write(library.RuntimeCodeHash[:])
+	_, _ = hasher.Write(library.LinkedLibraryDescriptorHash[:])
+	frostPreSignWriteCommitmentUint64(hasher, uint64(len(library.References)))
+	for _, reference := range library.References {
+		frostPreSignWriteCommitmentUint64(hasher, reference.Start)
+		frostPreSignWriteCommitmentUint64(hasher, reference.Length)
+	}
+	frostPreSignWriteCommitmentUint64(
+		hasher,
+		uint64(len(library.LinkedLibraries)),
+	)
+	for _, child := range library.LinkedLibraries {
+		frostPreSignWriteLinkedLibraryCommitment(hasher, child)
+	}
+}
+
+func frostPreSignWriteCommitmentString(
+	hasher interface{ Write([]byte) (int, error) },
+	value string,
+) {
+	frostPreSignWriteCommitmentUint64(hasher, uint64(len(value)))
+	_, _ = hasher.Write([]byte(value))
+}
+
+func frostPreSignWriteCommitmentUint64(
+	hasher interface{ Write([]byte) (int, error) },
+	value uint64,
+) {
+	buffer := [8]byte{}
+	binary.BigEndian.PutUint64(buffer[:], value)
+	_, _ = hasher.Write(buffer[:])
+}
+
 type FrostPreSignActivationRuntimeManifest struct {
 	ManifestHash                     [32]byte
+	DomainChainID                    [32]byte
+	GenesisBlockHash                 [32]byte
+	ProfileHash                      [32]byte
+	ImplementationSetHash            [32]byte
+	LinkedLibraryDescriptorSetHash   [32]byte
+	Deployments                      []FrostPreSignDeploymentEvidence
 	SignerProtocolID                 [32]byte
 	ReservationProtocolID            [32]byte
 	BitcoinOutboxProtocolID          [32]byte

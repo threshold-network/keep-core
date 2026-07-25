@@ -20,6 +20,7 @@ func testFrostJournalActivationManifest() *frostPreSignActivationManifest {
 		manifestHash:       [32]byte{0x99},
 		Ethereum: frostPreSignManifestEthereum{
 			ChainID:                         1,
+			GenesisBlockHash:                testManifestHex32(0x30),
 			Checkpoint:                      frostPreSignManifestPoint{BlockNumber: 10, BlockHash: checkpointHash},
 			StoreID:                         "primary-store",
 			SourceTrustDomainID:             "primary-source",

@@ -23,6 +23,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -32,7 +33,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-const frostPreSignManifestVersion = "tbtc-p2tr-fraud-production-activation/v2"
+const frostPreSignManifestVersion = "tbtc-p2tr-fraud-production-activation/v3"
 
 const frostPreSignBridgeABIJSON = `[
  {"type":"function","name":"previewP2TRTransactionAuthorization","stateMutability":"view","inputs":[{"name":"payload","type":"bytes"}],"outputs":[{"name":"","type":"bytes"}]},
@@ -62,6 +63,7 @@ const frostPreSignCrosslinkABIJSON = `[
  {"type":"function","name":"preauthorizationProtocolID","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"bytes32"}]},
  {"type":"function","name":"signingPolicyHash","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"bytes32"}]},
  {"type":"function","name":"sortitionPool","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"address"}]},
+ {"type":"function","name":"getOperatorID","stateMutability":"view","inputs":[{"name":"operator","type":"address"}],"outputs":[{"name":"","type":"uint32"}]},
  {"type":"function","name":"getWallet","stateMutability":"view","inputs":[{"name":"walletID","type":"bytes32"}],"outputs":[{"name":"","type":"tuple","components":[{"name":"membersIdsHash","type":"bytes32"},{"name":"xOnlyOutputKey","type":"bytes32"}]}]}
 ]`
 
@@ -119,17 +121,28 @@ type frostPreSignManifestLinkedLibrary struct {
 	LinkedLibraries             []frostPreSignManifestLinkedLibrary `json:"linkedLibraries"`
 }
 
-type frostPreSignManifestContract struct {
+type frostPreSignManifestDeploymentEpoch struct {
+	Start                       frostPreSignManifestPoint           `json:"start"`
+	End                         *frostPreSignManifestPoint          `json:"end,omitempty"`
 	Address                     string                              `json:"address"`
 	RuntimeCodeHash             string                              `json:"runtimeCodeHash"`
-	ProtocolID                  string                              `json:"protocolID"`
-	DeploymentBlock             uint64                              `json:"deploymentBlock"`
-	RelevantEventStartBlock     uint64                              `json:"relevantEventStartBlock"`
-	BridgeAddress               *string                             `json:"bridgeAddress,omitempty"`
-	SigningPolicyHash           *string                             `json:"signingPolicyHash,omitempty"`
 	LinkedLibraryDescriptorHash string                              `json:"linkedLibraryDescriptorHash"`
 	LinkedLibraries             []frostPreSignManifestLinkedLibrary `json:"linkedLibraries"`
 	Upgradeability              frostPreSignManifestUpgradeability  `json:"upgradeability"`
+}
+
+type frostPreSignManifestContract struct {
+	Address                     string                                `json:"address"`
+	RuntimeCodeHash             string                                `json:"runtimeCodeHash"`
+	ProtocolID                  string                                `json:"protocolID"`
+	DeploymentBlock             uint64                                `json:"deploymentBlock"`
+	RelevantEventStartBlock     uint64                                `json:"relevantEventStartBlock"`
+	BridgeAddress               *string                               `json:"bridgeAddress,omitempty"`
+	SigningPolicyHash           *string                               `json:"signingPolicyHash,omitempty"`
+	LinkedLibraryDescriptorHash string                                `json:"linkedLibraryDescriptorHash"`
+	LinkedLibraries             []frostPreSignManifestLinkedLibrary   `json:"linkedLibraries"`
+	Upgradeability              frostPreSignManifestUpgradeability    `json:"upgradeability"`
+	HistoricalDeploymentEpochs  []frostPreSignManifestDeploymentEpoch `json:"historicalDeploymentEpochs"`
 }
 
 type frostPreSignManifestContracts struct {
@@ -145,6 +158,7 @@ type frostPreSignManifestContracts struct {
 
 type frostPreSignManifestEthereum struct {
 	ChainID                         uint64                        `json:"chainID"`
+	GenesisBlockHash                string                        `json:"genesisBlockHash"`
 	Checkpoint                      frostPreSignManifestPoint     `json:"checkpoint"`
 	ScanStartBlock                  uint64                        `json:"scanStartBlock"`
 	ConfirmationDepth               uint64                        `json:"confirmationDepth"`
@@ -231,6 +245,8 @@ type frostPreSignActivationManifest struct {
 type frostPreSignDeploymentPin struct {
 	role                        string
 	name                        string
+	deploymentBlock             uint64
+	relevantEventStartBlock     uint64
 	address                     [20]byte
 	runtimeCodeHash             [32]byte
 	upgradeability              string
@@ -242,6 +258,13 @@ type frostPreSignDeploymentPin struct {
 	adminSlotValue              [32]byte
 	linkedLibraryDescriptorHash [32]byte
 	linkedLibraries             []frostPreSignLinkedLibraryPin
+	historicalEpochs            []frostPreSignDeploymentEpochPin
+}
+
+type frostPreSignDeploymentEpochPin struct {
+	start      tbtc.FrostPreSignFinality
+	end        *tbtc.FrostPreSignFinality
+	descriptor frostPreSignDeploymentPin
 }
 
 type frostPreSignLinkedLibraryPin struct {
@@ -259,10 +282,24 @@ type frostPreSignEthereumAdapter struct {
 	manifest    frostPreSignActivationManifest
 	deployments []frostPreSignDeploymentPin
 	bridge      *bind.BoundContract
-	registry    *bind.BoundContract
-	router      *bind.BoundContract
 
 	mutex sync.RWMutex
+}
+
+type frostPreSignExactHashReader interface {
+	HeaderByHash(context.Context, common.Hash) (*types.Header, error)
+	CodeAtHash(context.Context, common.Address, common.Hash) ([]byte, error)
+	StorageAtHash(
+		context.Context,
+		common.Address,
+		common.Hash,
+		common.Hash,
+	) ([]byte, error)
+	CallContractAtHash(
+		context.Context,
+		geth.CallMsg,
+		common.Hash,
+	) ([]byte, error)
 }
 
 type frostPreSignBitcoinTxInfo struct {
@@ -468,6 +505,127 @@ func loadFrostPreSignActivationManifest(
 	return manifest, nil
 }
 
+type frostPreSignCanonicalHashReader struct {
+	headerReader interface {
+		HeaderByHash(context.Context, common.Hash) (*types.Header, error)
+	}
+	rpcClient *rpc.Client
+}
+
+func (reader *frostPreSignCanonicalHashReader) HeaderByHash(
+	ctx context.Context,
+	blockHash common.Hash,
+) (*types.Header, error) {
+	return reader.headerReader.HeaderByHash(ctx, blockHash)
+}
+
+func (reader *frostPreSignCanonicalHashReader) CodeAtHash(
+	ctx context.Context,
+	account common.Address,
+	blockHash common.Hash,
+) ([]byte, error) {
+	var result hexutil.Bytes
+	err := reader.rpcClient.CallContext(
+		ctx,
+		&result,
+		"eth_getCode",
+		account,
+		rpc.BlockNumberOrHashWithHash(blockHash, true),
+	)
+	return result, err
+}
+
+func (reader *frostPreSignCanonicalHashReader) StorageAtHash(
+	ctx context.Context,
+	account common.Address,
+	key common.Hash,
+	blockHash common.Hash,
+) ([]byte, error) {
+	var result hexutil.Bytes
+	err := reader.rpcClient.CallContext(
+		ctx,
+		&result,
+		"eth_getStorageAt",
+		account,
+		key,
+		rpc.BlockNumberOrHashWithHash(blockHash, true),
+	)
+	return result, err
+}
+
+func (reader *frostPreSignCanonicalHashReader) CallContractAtHash(
+	ctx context.Context,
+	message geth.CallMsg,
+	blockHash common.Hash,
+) ([]byte, error) {
+	var result hexutil.Bytes
+	err := reader.rpcClient.CallContext(
+		ctx,
+		&result,
+		"eth_call",
+		frostPreSignCallArgument(message),
+		rpc.BlockNumberOrHashWithHash(blockHash, true),
+	)
+	return result, err
+}
+
+func frostPreSignCallArgument(message geth.CallMsg) map[string]interface{} {
+	result := map[string]interface{}{
+		"from": message.From,
+		"to":   message.To,
+	}
+	if len(message.Data) > 0 {
+		result["input"] = hexutil.Bytes(message.Data)
+	}
+	if message.Value != nil {
+		result["value"] = (*hexutil.Big)(message.Value)
+	}
+	if message.Gas != 0 {
+		result["gas"] = hexutil.Uint64(message.Gas)
+	}
+	if message.GasPrice != nil {
+		result["gasPrice"] = (*hexutil.Big)(message.GasPrice)
+	}
+	if message.GasFeeCap != nil {
+		result["maxFeePerGas"] = (*hexutil.Big)(message.GasFeeCap)
+	}
+	if message.GasTipCap != nil {
+		result["maxPriorityFeePerGas"] = (*hexutil.Big)(message.GasTipCap)
+	}
+	if message.AccessList != nil {
+		result["accessList"] = message.AccessList
+	}
+	if message.BlobGasFeeCap != nil {
+		result["maxFeePerBlobGas"] = (*hexutil.Big)(message.BlobGasFeeCap)
+	}
+	if message.BlobHashes != nil {
+		result["blobVersionedHashes"] = message.BlobHashes
+	}
+	return result
+}
+
+func (adapter *frostPreSignEthereumAdapter) exactHashReader() (
+	frostPreSignExactHashReader,
+	error,
+) {
+	headerReader, ok := adapter.chain.client.(interface {
+		HeaderByHash(context.Context, common.Hash) (*types.Header, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("Ethereum client does not expose exact-block-hash headers")
+	}
+	rpcProvider, ok := adapter.chain.client.(interface {
+		Client() *rpc.Client
+	})
+	if !ok || rpcProvider.Client() == nil {
+		return nil, fmt.Errorf("Ethereum client does not expose canonical EIP-1898 reads")
+	}
+	return &frostPreSignCanonicalHashReader{
+		headerReader: headerReader,
+		rpcClient:    rpcProvider.Client(),
+	}, nil
+}
+
 func frostPreSignDecodeStrictJSON(data []byte, target interface{}) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -566,6 +724,12 @@ func validateFrostPreSignActivationManifest(
 		len(manifest.Environment) == 0 || len(manifest.Environment) > 64 ||
 		manifest.Ethereum.ChainID == 0 || manifest.manifestHash == [32]byte{} {
 		return fmt.Errorf("FROST activation payload is incomplete")
+	}
+	genesisHash, err := frostPreSignParseBytes32(
+		manifest.Ethereum.GenesisBlockHash,
+	)
+	if err != nil || genesisHash == [32]byte{} {
+		return fmt.Errorf("FROST activation genesis block hash is invalid")
 	}
 	if _, err := frostPreSignParseBytes32(manifest.ActivationID); err != nil {
 		return fmt.Errorf("invalid FROST activation ID: [%w]", err)
@@ -702,6 +866,18 @@ func newFrostPreSignEthereumAdapter(
 		common.Address(profile.FrostRegistry) != tc.frostWalletRegistryAddr {
 		return nil, fmt.Errorf("activation manifest differs from configured Bridge/FROST registry")
 	}
+	expectedGenesisHash, err := frostPreSignParseBytes32(
+		manifest.Ethereum.GenesisBlockHash,
+	)
+	if err != nil {
+		return nil, err
+	}
+	genesisHeader, err := tc.client.HeaderByNumber(ctx, big.NewInt(0))
+	if err != nil || genesisHeader == nil ||
+		genesisHeader.Number == nil || genesisHeader.Number.Sign() != 0 ||
+		genesisHeader.Hash() != common.Hash(expectedGenesisHash) {
+		return nil, fmt.Errorf("activation manifest genesis block differs from connected Ethereum chain: [%w]", err)
+	}
 	finality, err := frostPreSignCurrentFinality(ctx, tc.client)
 	if err != nil {
 		return nil, err
@@ -713,14 +889,6 @@ func newFrostPreSignEthereumAdapter(
 		deployments: deployments,
 		bridge: bind.NewBoundContract(
 			common.Address(profile.BridgeAddress), frostPreSignBridgeABI,
-			tc.client, tc.client, tc.client,
-		),
-		registry: bind.NewBoundContract(
-			common.Address(profile.RegistryAddress), frostPreSignRegistryABI,
-			tc.client, tc.client, tc.client,
-		),
-		router: bind.NewBoundContract(
-			common.Address(profile.CompleteRouter), frostPreSignCrosslinkABI,
 			tc.client, tc.client, tc.client,
 		),
 	}
@@ -829,6 +997,115 @@ func frostPreSignProfileFromManifest(
 }
 
 func frostPreSignDeploymentPinFromManifest(
+	role string,
+	name string,
+	contract frostPreSignManifestContract,
+) (frostPreSignDeploymentPin, error) {
+	pin, err := frostPreSignDeploymentDescriptorPinFromManifest(
+		role,
+		name,
+		contract,
+	)
+	if err != nil {
+		return pin, err
+	}
+	pin.deploymentBlock = contract.DeploymentBlock
+	pin.relevantEventStartBlock = contract.RelevantEventStartBlock
+	if len(contract.HistoricalDeploymentEpochs) == 0 ||
+		len(contract.HistoricalDeploymentEpochs) > 64 {
+		return pin, fmt.Errorf("%s historical deployment epochs are missing or exceed the limit", name)
+	}
+	pin.historicalEpochs = make(
+		[]frostPreSignDeploymentEpochPin,
+		0,
+		len(contract.HistoricalDeploymentEpochs),
+	)
+	for index, manifestEpoch := range contract.HistoricalDeploymentEpochs {
+		epochContract := frostPreSignManifestContract{
+			Address:                     manifestEpoch.Address,
+			RuntimeCodeHash:             manifestEpoch.RuntimeCodeHash,
+			ProtocolID:                  contract.ProtocolID,
+			DeploymentBlock:             contract.DeploymentBlock,
+			RelevantEventStartBlock:     contract.RelevantEventStartBlock,
+			LinkedLibraryDescriptorHash: manifestEpoch.LinkedLibraryDescriptorHash,
+			LinkedLibraries:             manifestEpoch.LinkedLibraries,
+			Upgradeability:              manifestEpoch.Upgradeability,
+		}
+		descriptor, err := frostPreSignDeploymentDescriptorPinFromManifest(
+			role,
+			fmt.Sprintf("%s historical epoch %d", name, index),
+			epochContract,
+		)
+		if err != nil {
+			return pin, err
+		}
+		descriptor.name = name
+		start, err := frostPreSignManifestFinality(manifestEpoch.Start)
+		if err != nil {
+			return pin, fmt.Errorf("invalid %s historical epoch [%d] start: [%w]", name, index, err)
+		}
+		var end *tbtc.FrostPreSignFinality
+		if manifestEpoch.End != nil {
+			parsedEnd, err := frostPreSignManifestFinality(*manifestEpoch.End)
+			if err != nil {
+				return pin, fmt.Errorf("invalid %s historical epoch [%d] end: [%w]", name, index, err)
+			}
+			end = &parsedEnd
+		}
+		if index == 0 && start.BlockNumber != contract.DeploymentBlock {
+			return pin, fmt.Errorf("%s historical epochs do not start at deployment", name)
+		}
+		if end != nil && end.BlockNumber < start.BlockNumber {
+			return pin, fmt.Errorf("%s historical epoch [%d] has an inverted range", name, index)
+		}
+		if index+1 < len(contract.HistoricalDeploymentEpochs) && end == nil {
+			return pin, fmt.Errorf("%s historical epoch [%d] is open before the final epoch", name, index)
+		}
+		if index+1 == len(contract.HistoricalDeploymentEpochs) && end != nil {
+			return pin, fmt.Errorf("%s final historical deployment epoch is not open", name)
+		}
+		if index > 0 {
+			previous := pin.historicalEpochs[index-1]
+			if previous.end == nil ||
+				previous.end.BlockNumber == ^uint64(0) ||
+				previous.end.BlockNumber+1 != start.BlockNumber {
+				return pin, fmt.Errorf("%s historical deployment epochs have a gap or overlap", name)
+			}
+		}
+		pin.historicalEpochs = append(
+			pin.historicalEpochs,
+			frostPreSignDeploymentEpochPin{
+				start:      start,
+				end:        end,
+				descriptor: descriptor,
+			},
+		)
+	}
+	lastEpoch := pin.historicalEpochs[len(pin.historicalEpochs)-1]
+	if contract.RelevantEventStartBlock < pin.historicalEpochs[0].start.BlockNumber ||
+		(lastEpoch.end != nil &&
+			contract.RelevantEventStartBlock > lastEpoch.end.BlockNumber) ||
+		frostPreSignDeploymentDescriptorHash(pin) !=
+			frostPreSignDeploymentDescriptorHash(lastEpoch.descriptor) {
+		return pin, fmt.Errorf("%s historical deployment epochs do not cover events or current descriptor", name)
+	}
+	return pin, nil
+}
+
+func frostPreSignManifestFinality(
+	point frostPreSignManifestPoint,
+) (tbtc.FrostPreSignFinality, error) {
+	blockHash, err := frostPreSignParseBytes32(point.BlockHash)
+	if err != nil || point.BlockNumber == 0 || blockHash == [32]byte{} {
+		return tbtc.FrostPreSignFinality{}, fmt.Errorf("manifest point is invalid")
+	}
+	return tbtc.FrostPreSignFinality{
+		BlockNumber: point.BlockNumber,
+		BlockHash:   blockHash,
+	}, nil
+}
+
+func frostPreSignDeploymentDescriptorPinFromManifest(
 	role string,
 	name string,
 	contract frostPreSignManifestContract,
@@ -1042,10 +1319,17 @@ func frostPreSignLinkedLibraryInventoryHash(
 func frostPreSignLinkedLibraryDescriptorSetHash(
 	deployments []frostPreSignDeploymentPin,
 ) ([32]byte, error) {
-	type contractDescriptor struct {
-		ContractRole    string                                `json:"contractRole"`
+	type epochDescriptor struct {
+		StartBlock      uint64                                `json:"startBlock"`
+		EndBlock        *uint64                               `json:"endBlock"`
 		CodeKind        string                                `json:"codeKind"`
 		LinkedLibraries []frostPreSignLinkedLibraryDescriptor `json:"linkedLibraries"`
+	}
+	type contractDescriptor struct {
+		ContractRole     string                                `json:"contractRole"`
+		CodeKind         string                                `json:"codeKind"`
+		LinkedLibraries  []frostPreSignLinkedLibraryDescriptor `json:"linkedLibraries"`
+		HistoricalEpochs []epochDescriptor                     `json:"historicalEpochs"`
 	}
 	contracts := make([]contractDescriptor, 0, len(deployments))
 	for _, deployment := range deployments {
@@ -1053,17 +1337,40 @@ func frostPreSignLinkedLibraryDescriptorSetHash(
 		if deployment.upgradeability == "eip1967" {
 			codeKind = "implementation-runtime"
 		}
+		historicalEpochs := make(
+			[]epochDescriptor,
+			0,
+			len(deployment.historicalEpochs),
+		)
+		for _, epoch := range deployment.historicalEpochs {
+			epochCodeKind := "runtime"
+			if epoch.descriptor.upgradeability == "eip1967" {
+				epochCodeKind = "implementation-runtime"
+			}
+			var endBlock *uint64
+			if epoch.end != nil {
+				value := epoch.end.BlockNumber
+				endBlock = &value
+			}
+			historicalEpochs = append(historicalEpochs, epochDescriptor{
+				StartBlock:      epoch.start.BlockNumber,
+				EndBlock:        endBlock,
+				CodeKind:        epochCodeKind,
+				LinkedLibraries: frostPreSignLinkedLibraryDescriptors(epoch.descriptor.linkedLibraries),
+			})
+		}
 		contracts = append(contracts, contractDescriptor{
-			ContractRole:    deployment.role,
-			CodeKind:        codeKind,
-			LinkedLibraries: frostPreSignLinkedLibraryDescriptors(deployment.linkedLibraries),
+			ContractRole:     deployment.role,
+			CodeKind:         codeKind,
+			LinkedLibraries:  frostPreSignLinkedLibraryDescriptors(deployment.linkedLibraries),
+			HistoricalEpochs: historicalEpochs,
 		})
 	}
 	sort.Slice(contracts, func(i, j int) bool {
 		return contracts[i].ContractRole < contracts[j].ContractRole
 	})
 	canonical, err := frostPreSignCanonicalValue(map[string]interface{}{
-		"schema":    "tbtc-p2tr-linked-library-descriptor-set/v1",
+		"schema":    "tbtc-p2tr-linked-library-descriptor-set/v2",
 		"contracts": contracts,
 	})
 	if err != nil {
@@ -1086,25 +1393,88 @@ func frostPreSignSlotValueBindsAddress(value [32]byte, address [20]byte) bool {
 
 func frostPreSignDeploymentSetHash(deployments []frostPreSignDeploymentPin) [32]byte {
 	hasher := sha256.New()
-	hasher.Write([]byte("tbtc-frost-pre-sign-deployment-set-v1\x00"))
+	hasher.Write([]byte("tbtc-frost-pre-sign-deployment-set-v2\x00"))
 	for _, deployment := range deployments {
-		hasher.Write([]byte(deployment.name))
-		hasher.Write([]byte{0})
-		hasher.Write(deployment.address[:])
-		hasher.Write(deployment.runtimeCodeHash[:])
-		hasher.Write([]byte(deployment.upgradeability))
-		hasher.Write([]byte{0})
-		hasher.Write(deployment.implementationAddress[:])
-		hasher.Write(deployment.implementationCodeHash[:])
-		hasher.Write(deployment.adminAddress[:])
-		hasher.Write(deployment.adminCodeHash[:])
-		hasher.Write(deployment.implementationSlotValue[:])
-		hasher.Write(deployment.adminSlotValue[:])
-		hasher.Write(deployment.linkedLibraryDescriptorHash[:])
+		frostPreSignWriteHashString(hasher, deployment.role)
+		frostPreSignWriteHashString(hasher, deployment.name)
+		frostPreSignWriteHashUint64(hasher, deployment.deploymentBlock)
+		frostPreSignWriteHashUint64(hasher, deployment.relevantEventStartBlock)
+		descriptorHash := frostPreSignDeploymentDescriptorHash(deployment)
+		hasher.Write(descriptorHash[:])
+		frostPreSignWriteHashUint64(hasher, uint64(len(deployment.historicalEpochs)))
+		for _, epoch := range deployment.historicalEpochs {
+			frostPreSignWriteHashUint64(hasher, epoch.start.BlockNumber)
+			hasher.Write(epoch.start.BlockHash[:])
+			if epoch.end == nil {
+				hasher.Write([]byte{0})
+			} else {
+				hasher.Write([]byte{1})
+				frostPreSignWriteHashUint64(hasher, epoch.end.BlockNumber)
+				hasher.Write(epoch.end.BlockHash[:])
+			}
+			epochDescriptorHash := frostPreSignDeploymentDescriptorHash(
+				epoch.descriptor,
+			)
+			hasher.Write(epochDescriptorHash[:])
+		}
 	}
 	result := [32]byte{}
 	copy(result[:], hasher.Sum(nil))
 	return result
+}
+
+func frostPreSignDeploymentDescriptorHash(
+	deployment frostPreSignDeploymentPin,
+) [32]byte {
+	hasher := sha256.New()
+	hasher.Write([]byte("tbtc-frost-deployment-descriptor-v1\x00"))
+	hasher.Write(deployment.address[:])
+	hasher.Write(deployment.runtimeCodeHash[:])
+	frostPreSignWriteHashString(hasher, deployment.upgradeability)
+	hasher.Write(deployment.implementationAddress[:])
+	hasher.Write(deployment.implementationCodeHash[:])
+	hasher.Write(deployment.adminAddress[:])
+	hasher.Write(deployment.adminCodeHash[:])
+	hasher.Write(deployment.implementationSlotValue[:])
+	hasher.Write(deployment.adminSlotValue[:])
+	hasher.Write(deployment.linkedLibraryDescriptorHash[:])
+	frostPreSignWriteHashUint64(hasher, uint64(len(deployment.linkedLibraries)))
+	for _, library := range deployment.linkedLibraries {
+		frostPreSignWriteLinkedLibraryHash(hasher, library)
+	}
+	result := [32]byte{}
+	copy(result[:], hasher.Sum(nil))
+	return result
+}
+
+func frostPreSignWriteLinkedLibraryHash(
+	hasher io.Writer,
+	library frostPreSignLinkedLibraryPin,
+) {
+	frostPreSignWriteHashString(hasher, library.protocolRole)
+	_, _ = hasher.Write(library.address[:])
+	_, _ = hasher.Write(library.runtimeCodeHash[:])
+	_, _ = hasher.Write(library.linkedLibraryDescriptorHash[:])
+	frostPreSignWriteHashUint64(hasher, uint64(len(library.references)))
+	for _, reference := range library.references {
+		frostPreSignWriteHashUint64(hasher, reference.Start)
+		frostPreSignWriteHashUint64(hasher, reference.Length)
+	}
+	frostPreSignWriteHashUint64(hasher, uint64(len(library.linkedLibraries)))
+	for _, child := range library.linkedLibraries {
+		frostPreSignWriteLinkedLibraryHash(hasher, child)
+	}
+}
+
+func frostPreSignWriteHashString(hasher io.Writer, value string) {
+	frostPreSignWriteHashUint64(hasher, uint64(len(value)))
+	_, _ = hasher.Write([]byte(value))
+}
+
+func frostPreSignWriteHashUint64(hasher io.Writer, value uint64) {
+	buffer := [8]byte{}
+	binary.BigEndian.PutUint64(buffer[:], value)
+	_, _ = hasher.Write(buffer[:])
 }
 
 func frostPreSignParseAddress(value string) ([20]byte, error) {
@@ -1158,26 +1528,19 @@ func (adapter *frostPreSignEthereumAdapter) verifyDeploymentAt(
 	if err := adapter.requireCanonicalFinality(ctx, finality); err != nil {
 		return err
 	}
-	block := new(big.Int).SetUint64(finality.BlockNumber)
-	profile := adapter.profile
-	storageReader, ok := adapter.chain.client.(interface {
-		StorageAt(
-			context.Context,
-			common.Address,
-			common.Hash,
-			*big.Int,
-		) ([]byte, error)
-	})
-	if !ok {
-		return fmt.Errorf("Ethereum client does not expose finalized storage reads")
+	exactReader, err := adapter.exactHashReader()
+	if err != nil {
+		return err
 	}
+	blockHash := common.Hash(finality.BlockHash)
+	profile := adapter.profile
 	implementationSlot := frostPreSignEIP1967Slot("eip1967.proxy.implementation")
 	adminSlot := frostPreSignEIP1967Slot("eip1967.proxy.admin")
 	for _, expected := range adapter.deployments {
-		code, err := adapter.chain.client.CodeAt(
+		code, err := exactReader.CodeAtHash(
 			ctx,
 			common.Address(expected.address),
-			block,
+			blockHash,
 		)
 		if err != nil {
 			return fmt.Errorf("cannot read %s runtime code: [%w]", expected.name, err)
@@ -1187,20 +1550,20 @@ func (adapter *frostPreSignEthereumAdapter) verifyDeploymentAt(
 			return fmt.Errorf("%s runtime code hash mismatch", expected.name)
 		}
 		ownerCode := code
-		implementationValue, err := storageReader.StorageAt(
+		implementationValue, err := exactReader.StorageAtHash(
 			ctx,
 			common.Address(expected.address),
 			implementationSlot,
-			block,
+			blockHash,
 		)
 		if err != nil || len(implementationValue) != 32 {
 			return fmt.Errorf("cannot read %s EIP-1967 implementation slot: [%w]", expected.name, err)
 		}
-		adminValue, err := storageReader.StorageAt(
+		adminValue, err := exactReader.StorageAtHash(
 			ctx,
 			common.Address(expected.address),
 			adminSlot,
-			block,
+			blockHash,
 		)
 		if err != nil || len(adminValue) != 32 {
 			return fmt.Errorf("cannot read %s EIP-1967 admin slot: [%w]", expected.name, err)
@@ -1216,20 +1579,20 @@ func (adapter *frostPreSignEthereumAdapter) verifyDeploymentAt(
 				!bytes.Equal(adminValue, expected.adminSlotValue[:]) {
 				return fmt.Errorf("%s EIP-1967 slot value mismatch", expected.name)
 			}
-			implementationCode, err := adapter.chain.client.CodeAt(
+			implementationCode, err := exactReader.CodeAtHash(
 				ctx,
 				common.Address(expected.implementationAddress),
-				block,
+				blockHash,
 			)
 			if err != nil || len(implementationCode) == 0 ||
 				[32]byte(crypto.Keccak256Hash(implementationCode)) != expected.implementationCodeHash {
 				return fmt.Errorf("%s implementation runtime code hash mismatch: [%w]", expected.name, err)
 			}
 			ownerCode = implementationCode
-			adminCode, err := adapter.chain.client.CodeAt(
+			adminCode, err := exactReader.CodeAtHash(
 				ctx,
 				common.Address(expected.adminAddress),
-				block,
+				blockHash,
 			)
 			if err != nil || [32]byte(crypto.Keccak256Hash(adminCode)) != expected.adminCodeHash {
 				return fmt.Errorf("%s admin runtime code hash mismatch: [%w]", expected.name, err)
@@ -1242,21 +1605,40 @@ func (adapter *frostPreSignEthereumAdapter) verifyDeploymentAt(
 			expected.name,
 			ownerCode,
 			expected.linkedLibraries,
-			block,
+			blockHash,
+			exactReader,
 		); err != nil {
 			return err
 		}
 	}
 
-	bridgeRouter, err := adapter.callAddressAt(ctx, adapter.bridge, "p2trFraudRouter", block)
+	bridgeRouter, err := adapter.callAddressAtHash(
+		ctx,
+		common.Address(profile.BridgeAddress),
+		frostPreSignBridgeABI,
+		"p2trFraudRouter",
+		blockHash,
+	)
 	if err != nil || bridgeRouter != common.Address(profile.CompleteRouter) {
 		return fmt.Errorf("Bridge COMPLETE router crosslink mismatch: [%w]", err)
 	}
-	routerBridge, err := adapter.callAddressAt(ctx, adapter.router, "bridge", block)
+	routerBridge, err := adapter.callAddressAtHash(
+		ctx,
+		common.Address(profile.CompleteRouter),
+		frostPreSignCrosslinkABI,
+		"bridge",
+		blockHash,
+	)
 	if err != nil || routerBridge != common.Address(profile.BridgeAddress) {
 		return fmt.Errorf("COMPLETE router Bridge crosslink mismatch: [%w]", err)
 	}
-	routerRegistry, err := adapter.callAddressAt(ctx, adapter.router, "authorizationRegistry", block)
+	routerRegistry, err := adapter.callAddressAtHash(
+		ctx,
+		common.Address(profile.CompleteRouter),
+		frostPreSignCrosslinkABI,
+		"authorizationRegistry",
+		blockHash,
+	)
 	if err != nil || routerRegistry != common.Address(profile.RegistryAddress) {
 		return fmt.Errorf("COMPLETE router registry crosslink mismatch: [%w]", err)
 	}
@@ -1265,13 +1647,25 @@ func (adapter *frostPreSignEthereumAdapter) verifyDeploymentAt(
 		"preauthorizationProtocolID": profile.ReservationProtocolID,
 		"signingPolicyHash":          profile.SigningPolicyHash,
 	} {
-		actual, err := adapter.callBytes32At(ctx, adapter.router, method, block)
+		actual, err := adapter.callBytes32AtHash(
+			ctx,
+			common.Address(profile.CompleteRouter),
+			frostPreSignCrosslinkABI,
+			method,
+			blockHash,
+		)
 		if err != nil || actual != expected {
 			return fmt.Errorf("COMPLETE router %s mismatch: [%w]", method, err)
 		}
 	}
 
-	config, err := adapter.callAt(ctx, adapter.registry, "protocolConfig", block)
+	config, err := adapter.callAtHash(
+		ctx,
+		common.Address(profile.RegistryAddress),
+		frostPreSignRegistryABI,
+		"protocolConfig",
+		blockHash,
+	)
 	if err != nil || len(config) != 6 {
 		return fmt.Errorf("cannot read authorization registry protocol config: [%w]", err)
 	}
@@ -1290,19 +1684,23 @@ func (adapter *frostPreSignEthereumAdapter) verifyDeploymentAt(
 		return fmt.Errorf("authorization registry protocol config mismatch")
 	}
 
-	frostContract := bind.NewBoundContract(
-		common.Address(profile.FrostRegistry), frostPreSignCrosslinkABI,
-		adapter.chain.client, adapter.chain.client, adapter.chain.client,
+	sortitionPool, err := adapter.callAddressAtHash(
+		ctx,
+		common.Address(profile.FrostRegistry),
+		frostPreSignCrosslinkABI,
+		"sortitionPool",
+		blockHash,
 	)
-	sortitionPool, err := adapter.callAddressAt(ctx, frostContract, "sortitionPool", block)
 	if err != nil || sortitionPool != common.Address(profile.SortitionPool) {
 		return fmt.Errorf("FROST registry sortition pool crosslink mismatch: [%w]", err)
 	}
-	validatorContract := bind.NewBoundContract(
-		common.Address(profile.ProposalValidator), frostPreSignCrosslinkABI,
-		adapter.chain.client, adapter.chain.client, adapter.chain.client,
+	validatorBridge, err := adapter.callAddressAtHash(
+		ctx,
+		common.Address(profile.ProposalValidator),
+		frostPreSignCrosslinkABI,
+		"bridge",
+		blockHash,
 	)
-	validatorBridge, err := adapter.callAddressAt(ctx, validatorContract, "bridge", block)
 	if err != nil || validatorBridge != common.Address(profile.BridgeAddress) {
 		return fmt.Errorf("proposal validator Bridge crosslink mismatch: [%w]", err)
 	}
@@ -1318,7 +1716,8 @@ func (adapter *frostPreSignEthereumAdapter) verifyLinkedLibrariesAt(
 	owner string,
 	ownerCode []byte,
 	libraries []frostPreSignLinkedLibraryPin,
-	block *big.Int,
+	blockHash common.Hash,
+	reader frostPreSignExactHashReader,
 ) error {
 	for _, library := range libraries {
 		for _, reference := range library.references {
@@ -1337,10 +1736,10 @@ func (adapter *frostPreSignEthereumAdapter) verifyLinkedLibrariesAt(
 				)
 			}
 		}
-		libraryCode, err := adapter.chain.client.CodeAt(
+		libraryCode, err := reader.CodeAtHash(
 			ctx,
 			common.Address(library.address),
-			block,
+			blockHash,
 		)
 		if err != nil || len(libraryCode) == 0 ||
 			[32]byte(crypto.Keccak256Hash(libraryCode)) != library.runtimeCodeHash {
@@ -1356,7 +1755,8 @@ func (adapter *frostPreSignEthereumAdapter) verifyLinkedLibrariesAt(
 			owner+"/"+library.protocolRole,
 			libraryCode,
 			library.linkedLibraries,
-			block,
+			blockHash,
+			reader,
 		); err != nil {
 			return err
 		}
@@ -1386,6 +1786,23 @@ func (adapter *frostPreSignEthereumAdapter) requireCanonicalFinality(
 	}
 	if finality.BlockNumber == before.BlockNumber && finality.BlockHash != before.BlockHash {
 		return fmt.Errorf("Ethereum checkpoint disagrees with finalized head")
+	}
+	exactReader, err := adapter.exactHashReader()
+	if err != nil {
+		return err
+	}
+	exactHeader, err := exactReader.HeaderByHash(
+		ctx,
+		common.Hash(finality.BlockHash),
+	)
+	if err != nil {
+		return fmt.Errorf("cannot read exact finalized Ethereum header: [%w]", err)
+	}
+	if exactHeader == nil || exactHeader.Number == nil ||
+		!exactHeader.Number.IsUint64() ||
+		exactHeader.Number.Uint64() != finality.BlockNumber ||
+		exactHeader.Hash() != common.Hash(finality.BlockHash) {
+		return fmt.Errorf("exact finalized Ethereum header mismatch")
 	}
 	header, err := adapter.chain.client.HeaderByNumber(
 		ctx,
@@ -1417,55 +1834,98 @@ func (adapter *frostPreSignEthereumAdapter) requireCanonicalFinality(
 	if headerAfter == nil || [32]byte(headerAfter.Hash()) != finality.BlockHash {
 		return fmt.Errorf("finalized Ethereum block hash changed while verifying checkpoint")
 	}
+	exactHeaderAfter, err := exactReader.HeaderByHash(
+		ctx,
+		common.Hash(finality.BlockHash),
+	)
+	if err != nil {
+		return fmt.Errorf("cannot bracket exact finalized Ethereum header: [%w]", err)
+	}
+	if exactHeaderAfter == nil || exactHeaderAfter.Number == nil ||
+		!exactHeaderAfter.Number.IsUint64() ||
+		exactHeaderAfter.Number.Uint64() != finality.BlockNumber ||
+		exactHeaderAfter.Hash() != common.Hash(finality.BlockHash) {
+		return fmt.Errorf("exact finalized Ethereum header changed while verifying checkpoint")
+	}
 	return nil
 }
 
-func (adapter *frostPreSignEthereumAdapter) callAt(
+func (adapter *frostPreSignEthereumAdapter) callAtHash(
 	ctx context.Context,
-	contract *bind.BoundContract,
+	address common.Address,
+	contractABI abi.ABI,
 	method string,
-	block *big.Int,
+	blockHash common.Hash,
 	parameters ...interface{},
 ) ([]interface{}, error) {
-	if contract == nil {
-		return nil, fmt.Errorf("contract binding is nil")
+	if address == (common.Address{}) || blockHash == (common.Hash{}) {
+		return nil, fmt.Errorf("exact-hash contract call identity is incomplete")
 	}
-	var result []interface{}
-	err := contract.Call(
-		&bind.CallOpts{
-			Context:     ctx,
-			From:        adapter.chain.key.Address,
-			BlockNumber: block,
+	exactReader, err := adapter.exactHashReader()
+	if err != nil {
+		return nil, err
+	}
+	callData, err := contractABI.Pack(method, parameters...)
+	if err != nil {
+		return nil, fmt.Errorf("cannot encode exact-hash call [%s]: [%w]", method, err)
+	}
+	output, err := exactReader.CallContractAtHash(
+		ctx,
+		geth.CallMsg{
+			From: adapter.chain.key.Address,
+			To:   &address,
+			Data: callData,
 		},
-		&result,
-		method,
-		parameters...,
+		blockHash,
 	)
-	return result, err
+	if err != nil {
+		return nil, err
+	}
+	abiMethod, ok := contractABI.Methods[method]
+	if !ok {
+		return nil, fmt.Errorf("exact-hash call method [%s] is absent", method)
+	}
+	return abiMethod.Outputs.Unpack(output)
 }
 
-func (adapter *frostPreSignEthereumAdapter) callAddressAt(
+func (adapter *frostPreSignEthereumAdapter) callAddressAtHash(
 	ctx context.Context,
-	contract *bind.BoundContract,
+	address common.Address,
+	contractABI abi.ABI,
 	method string,
-	block *big.Int,
+	blockHash common.Hash,
 	parameters ...interface{},
 ) (common.Address, error) {
-	result, err := adapter.callAt(ctx, contract, method, block, parameters...)
+	result, err := adapter.callAtHash(
+		ctx,
+		address,
+		contractABI,
+		method,
+		blockHash,
+		parameters...,
+	)
 	if err != nil || len(result) != 1 {
 		return common.Address{}, err
 	}
 	return *abi.ConvertType(result[0], new(common.Address)).(*common.Address), nil
 }
 
-func (adapter *frostPreSignEthereumAdapter) callBytes32At(
+func (adapter *frostPreSignEthereumAdapter) callBytes32AtHash(
 	ctx context.Context,
-	contract *bind.BoundContract,
+	address common.Address,
+	contractABI abi.ABI,
 	method string,
-	block *big.Int,
+	blockHash common.Hash,
 	parameters ...interface{},
 ) ([32]byte, error) {
-	result, err := adapter.callAt(ctx, contract, method, block, parameters...)
+	result, err := adapter.callAtHash(
+		ctx,
+		address,
+		contractABI,
+		method,
+		blockHash,
+		parameters...,
+	)
 	if err != nil || len(result) != 1 {
 		return [32]byte{}, err
 	}
@@ -1523,6 +1983,16 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 	if err != nil {
 		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
 	}
+	linkedLibraryDescriptorSetHash, err := parse(
+		adapter.manifest.Ethereum.LinkedLibraryDescriptorSetHash,
+	)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
+	genesisBlockHash, err := parse(adapter.manifest.Ethereum.GenesisBlockHash)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
 	quarantine := frost.QuarantineJournal
 	quarantineJournalProtocolID, err := parse(quarantine.ProtocolID)
 	if err != nil {
@@ -1563,6 +2033,12 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 	}
 	return tbtc.FrostPreSignActivationRuntimeManifest{
 		ManifestHash:                     adapter.profile.ActivationManifestHash,
+		DomainChainID:                    adapter.profile.DomainChainID,
+		GenesisBlockHash:                 genesisBlockHash,
+		ProfileHash:                      adapter.profile.ProfileHash,
+		ImplementationSetHash:            adapter.profile.ImplementationSetHash,
+		LinkedLibraryDescriptorSetHash:   linkedLibraryDescriptorSetHash,
+		Deployments:                      frostPreSignRuntimeDeploymentEvidence(adapter.deployments),
 		SignerProtocolID:                 signerProtocolID,
 		ReservationProtocolID:            adapter.profile.ReservationProtocolID,
 		BitcoinOutboxProtocolID:          bitcoinOutboxProtocolID,
@@ -1598,6 +2074,87 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 	}, nil
 }
 
+func frostPreSignRuntimeDeploymentEvidence(
+	deployments []frostPreSignDeploymentPin,
+) []tbtc.FrostPreSignDeploymentEvidence {
+	result := make([]tbtc.FrostPreSignDeploymentEvidence, 0, len(deployments))
+	for _, deployment := range deployments {
+		epochs := make(
+			[]tbtc.FrostPreSignDeploymentEpochEvidence,
+			0,
+			len(deployment.historicalEpochs),
+		)
+		for _, epoch := range deployment.historicalEpochs {
+			var end *tbtc.FrostPreSignFinality
+			if epoch.end != nil {
+				copied := *epoch.end
+				end = &copied
+			}
+			epochs = append(epochs, tbtc.FrostPreSignDeploymentEpochEvidence{
+				Start:      epoch.start,
+				End:        end,
+				Descriptor: frostPreSignRuntimeDeploymentDescriptor(epoch.descriptor),
+			})
+		}
+		result = append(result, tbtc.FrostPreSignDeploymentEvidence{
+			Role:                    deployment.role,
+			Name:                    deployment.name,
+			DeploymentBlock:         deployment.deploymentBlock,
+			RelevantEventStartBlock: deployment.relevantEventStartBlock,
+			Current:                 frostPreSignRuntimeDeploymentDescriptor(deployment),
+			HistoricalEpochs:        epochs,
+		})
+	}
+	return result
+}
+
+func frostPreSignRuntimeDeploymentDescriptor(
+	deployment frostPreSignDeploymentPin,
+) tbtc.FrostPreSignDeploymentDescriptorEvidence {
+	return tbtc.FrostPreSignDeploymentDescriptorEvidence{
+		Address:                     deployment.address,
+		RuntimeCodeHash:             deployment.runtimeCodeHash,
+		Upgradeability:              deployment.upgradeability,
+		ImplementationAddress:       deployment.implementationAddress,
+		ImplementationCodeHash:      deployment.implementationCodeHash,
+		AdminAddress:                deployment.adminAddress,
+		AdminCodeHash:               deployment.adminCodeHash,
+		ImplementationSlotValue:     deployment.implementationSlotValue,
+		AdminSlotValue:              deployment.adminSlotValue,
+		LinkedLibraryDescriptorHash: deployment.linkedLibraryDescriptorHash,
+		LinkedLibraries:             frostPreSignRuntimeLinkedLibraries(deployment.linkedLibraries),
+		DescriptorHash:              frostPreSignDeploymentDescriptorHash(deployment),
+	}
+}
+
+func frostPreSignRuntimeLinkedLibraries(
+	libraries []frostPreSignLinkedLibraryPin,
+) []tbtc.FrostPreSignLinkedLibraryEvidence {
+	result := make([]tbtc.FrostPreSignLinkedLibraryEvidence, 0, len(libraries))
+	for _, library := range libraries {
+		references := make(
+			[]tbtc.FrostPreSignLinkedLibraryReference,
+			0,
+			len(library.references),
+		)
+		for _, reference := range library.references {
+			references = append(references, tbtc.FrostPreSignLinkedLibraryReference{
+				Start:  reference.Start,
+				Length: reference.Length,
+			})
+		}
+		result = append(result, tbtc.FrostPreSignLinkedLibraryEvidence{
+			ProtocolRole:                library.protocolRole,
+			Address:                     library.address,
+			RuntimeCodeHash:             library.runtimeCodeHash,
+			References:                  references,
+			LinkedLibraryDescriptorHash: library.linkedLibraryDescriptorHash,
+			LinkedLibraries:             frostPreSignRuntimeLinkedLibraries(library.linkedLibraries),
+		})
+	}
+	return result
+}
+
 func (adapter *frostPreSignEthereumAdapter) prepare(
 	ctx context.Context,
 	transaction *tbtc.FrostPreSignTransaction,
@@ -1613,8 +2170,8 @@ func (adapter *frostPreSignEthereumAdapter) prepare(
 	if err := adapter.verifyDeploymentAt(ctx, finality); err != nil {
 		return nil, err
 	}
-	block := new(big.Int).SetUint64(finality.BlockNumber)
-	members, err := adapter.resolveWalletMembersAt(ctx, walletOperators, block)
+	blockHash := common.Hash(finality.BlockHash)
+	members, err := adapter.resolveWalletMembersAt(ctx, walletOperators, blockHash)
 	if err != nil {
 		return nil, err
 	}
@@ -1641,11 +2198,12 @@ func (adapter *frostPreSignEthereumAdapter) prepare(
 	if err != nil {
 		return nil, fmt.Errorf("cannot encode COMPLETE preview payload: [%w]", err)
 	}
-	result, err := adapter.callAt(
+	result, err := adapter.callAtHash(
 		ctx,
-		adapter.bridge,
+		common.Address(adapter.profile.BridgeAddress),
+		frostPreSignBridgeABI,
 		"previewP2TRTransactionAuthorization",
-		block,
+		blockHash,
 		payload,
 	)
 	if err != nil || len(result) != 1 {
@@ -1673,7 +2231,7 @@ func (adapter *frostPreSignEthereumAdapter) prepare(
 		ctx,
 		transaction,
 		preview.WalletID,
-		block,
+		blockHash,
 	)
 	if err != nil {
 		return nil, err
@@ -1686,6 +2244,9 @@ func (adapter *frostPreSignEthereumAdapter) prepare(
 		return nil, fmt.Errorf("COMPLETE preview resource commitments differ from local derivation")
 	}
 
+	if err := adapter.requireCanonicalFinality(ctx, finality); err != nil {
+		return nil, fmt.Errorf("preparation finality changed during exact-hash reads: [%w]", err)
+	}
 	profile := adapter.profile
 	return &tbtc.FrostPreSignAuthorizationProposal{
 		Transaction:               transaction,
@@ -1735,7 +2296,7 @@ func (tc *TbtcChain) frostPreSignAdapter() (*frostPreSignEthereumAdapter, error)
 func (adapter *frostPreSignEthereumAdapter) resolveWalletMembersAt(
 	ctx context.Context,
 	operators []chain.Address,
-	block *big.Int,
+	blockHash common.Hash,
 ) ([]uint32, error) {
 	if len(operators) < 51 || len(operators) > 100 {
 		return nil, fmt.Errorf("invalid FROST wallet seat count [%d]", len(operators))
@@ -1748,14 +2309,19 @@ func (adapter *frostPreSignEthereumAdapter) resolveWalletMembersAt(
 			if !common.IsHexAddress(operator.String()) {
 				return nil, fmt.Errorf("invalid FROST wallet operator address [%s]", operator)
 			}
-			var err error
-			id, err = adapter.chain.frostSortitionPool.GetOperatorIDAtBlock(
-				common.HexToAddress(operator.String()),
-				block,
+			operatorAddress := common.HexToAddress(operator.String())
+			callResult, err := adapter.callAtHash(
+				ctx,
+				common.Address(adapter.profile.SortitionPool),
+				frostPreSignCrosslinkABI,
+				"getOperatorID",
+				blockHash,
+				operatorAddress,
 			)
-			if err != nil {
+			if err != nil || len(callResult) != 1 {
 				return nil, fmt.Errorf("cannot resolve finalized FROST seat [%d]: [%w]", i+1, err)
 			}
+			id = *abi.ConvertType(callResult[0], new(uint32)).(*uint32)
 			if id == 0 {
 				return nil, fmt.Errorf("FROST wallet seat [%d] has no sortition-pool ID", i+1)
 			}
@@ -1899,7 +2465,7 @@ func (adapter *frostPreSignEthereumAdapter) deriveResourcesAt(
 	ctx context.Context,
 	transaction *tbtc.FrostPreSignTransaction,
 	walletID [32]byte,
-	block *big.Int,
+	blockHash common.Hash,
 ) ([][32]byte, [32]byte, error) {
 	bitcoinTx := &bitcoin.Transaction{}
 	if err := bitcoinTx.Deserialize(transaction.RawTransaction); err != nil {
@@ -1958,7 +2524,14 @@ func (adapter *frostPreSignEthereumAdapter) deriveResourcesAt(
 		}
 	case tbtc.FrostPreSignActionMovingFunds:
 		for _, target := range transaction.ActionContext.MovingFunds.Proposal.TargetWallets {
-			targetID, err := adapter.callBytes32At(ctx, adapter.bridge, "walletID", block, target)
+			targetID, err := adapter.callBytes32AtHash(
+				ctx,
+				common.Address(adapter.profile.BridgeAddress),
+				frostPreSignBridgeABI,
+				"walletID",
+				blockHash,
+				target,
+			)
 			if err != nil || targetID == [32]byte{} {
 				return nil, [32]byte{}, fmt.Errorf("cannot resolve moving-funds target wallet ID: [%w]", err)
 			}
@@ -2306,13 +2879,14 @@ func (adapter *frostPreSignEthereumAdapter) readAuthorizationState(
 	if err := adapter.verifyDeploymentAt(ctx, &finality); err != nil {
 		return nil, err
 	}
-	block := new(big.Int).SetUint64(finality.BlockNumber)
+	blockHash := common.Hash(finality.BlockHash)
 
-	lifecycle, err := adapter.callAt(
+	lifecycle, err := adapter.callAtHash(
 		ctx,
-		adapter.bridge,
+		common.Address(adapter.profile.BridgeAddress),
+		frostPreSignBridgeABI,
 		"frostLifecycleContext",
-		block,
+		blockHash,
 		proposal.Transaction.WalletPublicKeyHash,
 	)
 	if err != nil || len(lifecycle) != 2 {
@@ -2321,11 +2895,12 @@ func (adapter *frostPreSignEthereumAdapter) readAuthorizationState(
 	lifecycleRegistry := *abi.ConvertType(lifecycle[0], new(common.Address)).(*common.Address)
 	lifecycleWalletID := *abi.ConvertType(lifecycle[1], new([32]byte)).(*[32]byte)
 
-	walletResult, err := adapter.callAt(
+	walletResult, err := adapter.callAtHash(
 		ctx,
-		adapter.bridge,
+		common.Address(adapter.profile.BridgeAddress),
+		frostPreSignBridgeABI,
 		"wallets",
-		block,
+		blockHash,
 		proposal.Transaction.WalletPublicKeyHash,
 	)
 	if err != nil || len(walletResult) != 1 {
@@ -2333,15 +2908,12 @@ func (adapter *frostPreSignEthereumAdapter) readAuthorizationState(
 	}
 	wallet := *abi.ConvertType(walletResult[0], new(frostPreSignWalletABI)).(*frostPreSignWalletABI)
 
-	frostContract := bind.NewBoundContract(
-		common.Address(adapter.profile.FrostRegistry), frostPreSignCrosslinkABI,
-		adapter.chain.client, adapter.chain.client, adapter.chain.client,
-	)
-	frostWalletResult, err := adapter.callAt(
+	frostWalletResult, err := adapter.callAtHash(
 		ctx,
-		frostContract,
+		common.Address(adapter.profile.FrostRegistry),
+		frostPreSignCrosslinkABI,
 		"getWallet",
-		block,
+		blockHash,
 		proposal.WalletID,
 	)
 	if err != nil || len(frostWalletResult) != 1 {
@@ -2352,47 +2924,54 @@ func (adapter *frostPreSignEthereumAdapter) readAuthorizationState(
 		new(frostPreSignRegistryWalletABI),
 	).(*frostPreSignRegistryWalletABI)
 
-	activeReservation, err := adapter.callBytes32At(
+	activeReservation, err := adapter.callBytes32AtHash(
 		ctx,
-		adapter.registry,
+		common.Address(adapter.profile.RegistryAddress),
+		frostPreSignRegistryABI,
 		"activeReservation",
-		block,
+		blockHash,
 		proposal.Transaction.WalletPublicKeyHash,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read finalized active reservation: [%w]", err)
 	}
-	reservation, err := adapter.callAt(
+	reservation, err := adapter.callAtHash(
 		ctx,
-		adapter.registry,
+		common.Address(adapter.profile.RegistryAddress),
+		frostPreSignRegistryABI,
 		"getReservation",
-		block,
+		blockHash,
 		proposal.ReservationID,
 	)
 	if err != nil || len(reservation) != 11 {
 		return nil, fmt.Errorf("cannot read finalized reservation: [%w]", err)
 	}
-	variant, err := adapter.callAt(
+	variant, err := adapter.callAtHash(
 		ctx,
-		adapter.registry,
+		common.Address(adapter.profile.RegistryAddress),
+		frostPreSignRegistryABI,
 		"getAuthorizedVariantStatus",
-		block,
+		blockHash,
 		[32]byte(proposal.Transaction.TransactionHash),
 	)
 	if err != nil || len(variant) != 6 {
 		return nil, fmt.Errorf("cannot read finalized authorized variant: [%w]", err)
 	}
-	latest, err := adapter.callAt(
+	latest, err := adapter.callAtHash(
 		ctx,
-		adapter.registry,
+		common.Address(adapter.profile.RegistryAddress),
+		frostPreSignRegistryABI,
 		"latestAuthorizedVariant",
-		block,
+		blockHash,
 		proposal.ReservationID,
 	)
 	if err != nil || len(latest) != 3 {
 		return nil, fmt.Errorf("cannot read finalized latest variant: [%w]", err)
 	}
 
+	if err := adapter.requireCanonicalFinality(ctx, &finality); err != nil {
+		return nil, fmt.Errorf("authorization-state finality changed during exact-hash reads: [%w]", err)
+	}
 	profile := adapter.profile
 	return &tbtc.FrostPreSignAuthorizationState{
 		Finality:                           finality,
@@ -2479,18 +3058,20 @@ func (adapter *frostPreSignEthereumAdapter) canonicalBroadcastStatus(
 	if err := adapter.requireCanonicalFinality(ctx, &historical); err != nil {
 		return nil, err
 	}
-	historicalBlock := new(big.Int).SetUint64(request.FinalizedBlock)
 	if err := adapter.validateHistoricalBroadcastEvent(ctx, request); err != nil {
 		return nil, err
 	}
 	canonical, err := adapter.validateBroadcastAuthorizationAt(
 		ctx,
 		request,
-		historicalBlock,
+		common.Hash(request.FinalizedBlockHash),
 		true,
 	)
 	if err != nil {
 		return nil, err
+	}
+	if err := adapter.requireCanonicalFinality(ctx, &historical); err != nil {
+		return nil, fmt.Errorf("historical broadcast finality changed during exact-hash reads: [%w]", err)
 	}
 	if !canonical {
 		return &tbtc.FrostBitcoinBroadcastAuthorizationStatus{
@@ -2512,11 +3093,14 @@ func (adapter *frostPreSignEthereumAdapter) canonicalBroadcastStatus(
 		allowed, err = adapter.validateBroadcastAuthorizationAt(
 			ctx,
 			request,
-			new(big.Int).SetUint64(current.BlockNumber),
+			common.Hash(current.BlockHash),
 			false,
 		)
 		if err != nil {
 			return nil, err
+		}
+		if err := adapter.requireCanonicalFinality(ctx, current); err != nil {
+			return nil, fmt.Errorf("current broadcast finality changed during exact-hash reads: [%w]", err)
 		}
 	}
 	return &tbtc.FrostBitcoinBroadcastAuthorizationStatus{
@@ -2555,34 +3139,37 @@ func (adapter *frostPreSignEthereumAdapter) validateHistoricalBroadcastEvent(
 func (adapter *frostPreSignEthereumAdapter) validateBroadcastAuthorizationAt(
 	ctx context.Context,
 	request *tbtc.FrostBitcoinBroadcastAuthorizationStatusRequest,
-	block *big.Int,
+	blockHash common.Hash,
 	requirePlan bool,
 ) (bool, error) {
-	reservation, err := adapter.callAt(
+	reservation, err := adapter.callAtHash(
 		ctx,
-		adapter.registry,
+		common.Address(adapter.profile.RegistryAddress),
+		frostPreSignRegistryABI,
 		"getReservation",
-		block,
+		blockHash,
 		request.ReservationID,
 	)
 	if err != nil || len(reservation) != 11 {
 		return false, fmt.Errorf("cannot read canonical broadcast reservation: [%w]", err)
 	}
-	variant, err := adapter.callAt(
+	variant, err := adapter.callAtHash(
 		ctx,
-		adapter.registry,
+		common.Address(adapter.profile.RegistryAddress),
+		frostPreSignRegistryABI,
 		"getAuthorizedVariantStatus",
-		block,
+		blockHash,
 		[32]byte(request.TransactionHash),
 	)
 	if err != nil || len(variant) != 6 {
 		return false, fmt.Errorf("cannot read canonical broadcast variant: [%w]", err)
 	}
-	latest, err := adapter.callAt(
+	latest, err := adapter.callAtHash(
 		ctx,
-		adapter.registry,
+		common.Address(adapter.profile.RegistryAddress),
+		frostPreSignRegistryABI,
 		"latestAuthorizedVariant",
-		block,
+		blockHash,
 		request.ReservationID,
 	)
 	if err != nil || len(latest) != 3 {
@@ -2643,11 +3230,12 @@ func (adapter *frostPreSignEthereumAdapter) validateBroadcastAuthorizationAt(
 			ApplyPlanData2:   data2,
 			FeeLimitSnapshot: feeLimit,
 		}
-		digest, err := adapter.callBytes32At(
+		digest, err := adapter.callBytes32AtHash(
 			ctx,
-			adapter.registry,
+			common.Address(adapter.profile.RegistryAddress),
+			frostPreSignRegistryABI,
 			"preAuthorizationDigest",
-			block,
+			blockHash,
 			preAuthorization,
 			[32]byte(request.TransactionHash),
 			variantRoot,
