@@ -3,9 +3,11 @@ package tbtc
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"math/big"
+	"sort"
 	"strings"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -25,44 +27,51 @@ import (
 type FrostRetainedGroupActivationEvidenceBinder interface {
 	BindFrostRetainedGroupActivationEvidence(
 		FrostPreSignActivationProfile,
-		[32]byte,
-		[32]byte,
+		FrostPreSignActivationRuntimeManifest,
 	) error
 }
 
-type frostRetainedGroupContractPin struct {
-	address  common.Address
-	codeHash common.Hash
+type FrostRetainedGroupProtocolBindingSource interface {
+	FrostRetainedGroupProtocolBindingHash() ([32]byte, error)
 }
 
 type frostRetainedGroupEvidenceProfile struct {
-	manifestHash      [32]byte
-	descriptorSetHash [32]byte
-	bridge            frostRetainedGroupContractPin
-	registry          frostRetainedGroupContractPin
-	sortitionPool     frostRetainedGroupContractPin
-	bridgeABI         ethabi.ABI
-	registryABI       ethabi.ABI
+	manifestHash                   [32]byte
+	profileHash                    [32]byte
+	implementationSetHash          [32]byte
+	descriptorSetHash              [32]byte
+	linkedLibraryDescriptorSetHash [32]byte
+	inventoryProtocolID            [32]byte
+	quarantineProtocolID           [32]byte
+	domainChainID                  [32]byte
+	genesisBlockHash               [32]byte
+	bindingHash                    [32]byte
+	deployments                    map[string]FrostPreSignDeploymentEvidence
+	bridgeABI                      ethabi.ABI
+	registryABI                    ethabi.ABI
 }
 
 type frostRetainedGroupReceiptCache map[common.Hash]*types.Receipt
 
 type frostRetainedGroupCodeCacheKey struct {
-	address     common.Address
-	blockNumber uint64
+	address        common.Address
+	blockHash      common.Hash
+	codeHash       common.Hash
+	descriptorHash common.Hash
+	verified       bool
 }
 
-type frostRetainedGroupCodeCache map[frostRetainedGroupCodeCacheKey]struct{}
+type frostRetainedGroupCodeCache map[frostRetainedGroupCodeCacheKey][]byte
 
 var _ FrostRetainedGroupActivationEvidenceBinder = (*signedFrostRetainedGroupHistorySource)(nil)
+var _ FrostRetainedGroupProtocolBindingSource = (*signedFrostRetainedGroupHistorySource)(nil)
 
 // BindFrostRetainedGroupActivationEvidence is deliberately one-shot. The
 // profile and descriptor are supplied only after the activation envelope has
 // been signature-checked and converted to its immutable runtime manifest.
 func (source *signedFrostRetainedGroupHistorySource) BindFrostRetainedGroupActivationEvidence(
 	profile FrostPreSignActivationProfile,
-	manifestHash [32]byte,
-	descriptorSetHash [32]byte,
+	runtimeManifest FrostPreSignActivationRuntimeManifest,
 ) error {
 	if source == nil {
 		return fmt.Errorf("retained-group history source is nil")
@@ -70,9 +79,105 @@ func (source *signedFrostRetainedGroupHistorySource) BindFrostRetainedGroupActiv
 	if err := profile.ValidateForProduction(); err != nil {
 		return fmt.Errorf("retained-group activation profile is invalid: [%w]", err)
 	}
-	if manifestHash == [32]byte{} || descriptorSetHash == [32]byte{} ||
-		profile.ActivationManifestHash != manifestHash {
+	if runtimeManifest.ManifestHash == [32]byte{} ||
+		runtimeManifest.ProfileHash == [32]byte{} ||
+		runtimeManifest.GenesisBlockHash == [32]byte{} ||
+		runtimeManifest.ImplementationSetHash == [32]byte{} ||
+		runtimeManifest.LinkedLibraryDescriptorSetHash == [32]byte{} ||
+		runtimeManifest.EndpointIdentitySetHash == [32]byte{} ||
+		runtimeManifest.CanonicalJournal.DescriptorSetHash == [32]byte{} ||
+		runtimeManifest.RetainedGroupInventoryProtocolID == [32]byte{} ||
+		runtimeManifest.QuarantineJournal.ProtocolID == [32]byte{} ||
+		profile.ActivationManifestHash != runtimeManifest.ManifestHash ||
+		profile.ProfileHash != runtimeManifest.ProfileHash ||
+		profile.ImplementationSetHash != runtimeManifest.ImplementationSetHash ||
+		profile.DomainChainID != runtimeManifest.DomainChainID ||
+		profile.ReservationProtocolID != runtimeManifest.ReservationProtocolID ||
+		profile.SigningPolicyHash != runtimeManifest.SigningPolicyHash ||
+		runtimeManifest.SignerProtocolID == [32]byte{} ||
+		runtimeManifest.BitcoinOutboxProtocolID == [32]byte{} ||
+		runtimeManifest.CanonicalJournal.Checkpoint.BlockNumber == 0 ||
+		runtimeManifest.CanonicalJournal.Checkpoint.BlockHash == [32]byte{} ||
+		strings.TrimSpace(runtimeManifest.CanonicalJournal.StoreID) == "" ||
+		runtimeManifest.CanonicalJournal.StoreFingerprint == [32]byte{} ||
+		runtimeManifest.CanonicalJournal.ClusterFingerprint == [32]byte{} ||
+		strings.TrimSpace(runtimeManifest.QuarantineJournal.StoreID) == "" ||
+		runtimeManifest.QuarantineJournal.StoreFingerprint == [32]byte{} ||
+		runtimeManifest.QuarantineJournal.ClusterFingerprint == [32]byte{} ||
+		runtimeManifest.CanonicalJournal.SourceTrustDomainID !=
+			source.identity.TrustDomainID ||
+		runtimeManifest.CanonicalJournal.SourceEndpointFingerprint !=
+			source.identity.EndpointFingerprint ||
+		runtimeManifest.CanonicalJournal.SourceOperatorFingerprint !=
+			source.identity.OperatorFingerprint ||
+		new(big.Int).SetBytes(runtimeManifest.DomainChainID[:]).BitLen() > 64 ||
+		new(big.Int).SetBytes(runtimeManifest.DomainChainID[:]).Uint64() !=
+			source.chainID ||
+		ComputeFrostPreSignDeploymentEvidenceHash(runtimeManifest.Deployments) !=
+			profile.ImplementationSetHash {
 		return fmt.Errorf("retained-group evidence does not match the signed activation manifest")
+	}
+	deployments, err := validateFrostRetainedGroupDeploymentEvidence(
+		runtimeManifest.Deployments,
+	)
+	if err != nil {
+		return err
+	}
+	for role, expected := range map[string]struct {
+		address  [20]byte
+		codeHash [32]byte
+	}{
+		"bridge": {
+			address:  profile.BridgeAddress,
+			codeHash: profile.BridgeCodeHash,
+		},
+		"completeRouter": {
+			address:  profile.CompleteRouter,
+			codeHash: profile.CompleteRouterCodeHash,
+		},
+		"authorizationRegistry": {
+			address:  profile.RegistryAddress,
+			codeHash: profile.RegistryCodeHash,
+		},
+		"frostWalletRegistry": {
+			address:  profile.FrostRegistry,
+			codeHash: profile.FrostRegistryCodeHash,
+		},
+		"frostProposalValidator": {
+			address:  profile.ProposalValidator,
+			codeHash: profile.ProposalValidatorCodeHash,
+		},
+		"frostSortitionPool": {
+			address:  profile.SortitionPool,
+			codeHash: profile.SortitionPoolCodeHash,
+		},
+	} {
+		deployment := deployments[role]
+		if deployment.Current.Address != expected.address ||
+			deployment.Current.RuntimeCodeHash != expected.codeHash {
+			return fmt.Errorf(
+				"retained-group deployment [%s] differs from the activation profile",
+				role,
+			)
+		}
+	}
+	linkedLibraryDescriptorSetHash, err :=
+		frostRetainedGroupLinkedLibraryDescriptorSetHash(
+			runtimeManifest.Deployments,
+		)
+	if err != nil ||
+		linkedLibraryDescriptorSetHash !=
+			runtimeManifest.LinkedLibraryDescriptorSetHash {
+		return fmt.Errorf(
+			"retained-group linked-library descriptor set differs from the signed activation manifest",
+		)
+	}
+	bindingHash, err := source.computeProtocolBinding(
+		profile,
+		runtimeManifest,
+	)
+	if err != nil {
+		return err
 	}
 	parsedBridgeABI, err := ethabi.JSON(strings.NewReader(bridgeabi.BridgeMetaData.ABI))
 	if err != nil {
@@ -83,22 +188,19 @@ func (source *signedFrostRetainedGroupHistorySource) BindFrostRetainedGroupActiv
 		return fmt.Errorf("cannot parse pinned FROST registry ABI: [%w]", err)
 	}
 	evidence := &frostRetainedGroupEvidenceProfile{
-		manifestHash:      manifestHash,
-		descriptorSetHash: descriptorSetHash,
-		bridge: frostRetainedGroupContractPin{
-			address:  common.Address(profile.BridgeAddress),
-			codeHash: common.Hash(profile.BridgeCodeHash),
-		},
-		registry: frostRetainedGroupContractPin{
-			address:  common.Address(profile.FrostRegistry),
-			codeHash: common.Hash(profile.FrostRegistryCodeHash),
-		},
-		sortitionPool: frostRetainedGroupContractPin{
-			address:  common.Address(profile.SortitionPool),
-			codeHash: common.Hash(profile.SortitionPoolCodeHash),
-		},
-		bridgeABI:   parsedBridgeABI,
-		registryABI: parsedRegistryABI,
+		manifestHash:                   runtimeManifest.ManifestHash,
+		profileHash:                    runtimeManifest.ProfileHash,
+		implementationSetHash:          runtimeManifest.ImplementationSetHash,
+		descriptorSetHash:              runtimeManifest.CanonicalJournal.DescriptorSetHash,
+		linkedLibraryDescriptorSetHash: runtimeManifest.LinkedLibraryDescriptorSetHash,
+		inventoryProtocolID:            runtimeManifest.RetainedGroupInventoryProtocolID,
+		quarantineProtocolID:           runtimeManifest.QuarantineJournal.ProtocolID,
+		domainChainID:                  runtimeManifest.DomainChainID,
+		genesisBlockHash:               runtimeManifest.GenesisBlockHash,
+		bindingHash:                    bindingHash,
+		deployments:                    deployments,
+		bridgeABI:                      parsedBridgeABI,
+		registryABI:                    parsedRegistryABI,
 	}
 	for name, event := range map[string]struct {
 		contract *ethabi.ABI
@@ -133,6 +235,465 @@ func (source *signedFrostRetainedGroupHistorySource) BindFrostRetainedGroupActiv
 	return nil
 }
 
+func (source *signedFrostRetainedGroupHistorySource) computeProtocolBinding(
+	profile FrostPreSignActivationProfile,
+	runtimeManifest FrostPreSignActivationRuntimeManifest,
+) ([32]byte, error) {
+	binding := frostRetainedGroupProtocolBinding{
+		Schema:           "tbtc-frost-retained-group-protocol-binding/v2",
+		ChainID:          source.chainID,
+		DomainChainID:    frostActivationHex32(runtimeManifest.DomainChainID),
+		GenesisBlockHash: frostActivationHex32(runtimeManifest.GenesisBlockHash),
+		Checkpoint: frostRetainedGroupWireBlockPoint{
+			BlockNumber: runtimeManifest.CanonicalJournal.Checkpoint.BlockNumber,
+			BlockHash: frostActivationHex32(
+				runtimeManifest.CanonicalJournal.Checkpoint.BlockHash,
+			),
+		},
+		ManifestHash:                   frostActivationHex32(runtimeManifest.ManifestHash),
+		ProfileHash:                    frostActivationHex32(runtimeManifest.ProfileHash),
+		ImplementationSetHash:          frostActivationHex32(runtimeManifest.ImplementationSetHash),
+		DescriptorSetHash:              frostActivationHex32(runtimeManifest.CanonicalJournal.DescriptorSetHash),
+		LinkedLibraryDescriptorSetHash: frostActivationHex32(runtimeManifest.LinkedLibraryDescriptorSetHash),
+		EndpointIdentitySetHash:        frostActivationHex32(runtimeManifest.EndpointIdentitySetHash),
+		SignerProtocolID:               frostActivationHex32(runtimeManifest.SignerProtocolID),
+		ReservationProtocolID:          frostActivationHex32(runtimeManifest.ReservationProtocolID),
+		EvidenceProtocolID:             frostActivationHex32(profile.EvidenceProtocolID),
+		BitcoinOutboxProtocolID:        frostActivationHex32(runtimeManifest.BitcoinOutboxProtocolID),
+		InventoryProtocolID:            frostActivationHex32(runtimeManifest.RetainedGroupInventoryProtocolID),
+		QuarantineProtocolID:           frostActivationHex32(runtimeManifest.QuarantineJournal.ProtocolID),
+		SigningPolicyHash:              frostActivationHex32(runtimeManifest.SigningPolicyHash),
+		CanonicalStoreID:               runtimeManifest.CanonicalJournal.StoreID,
+		CanonicalStoreFingerprint: frostActivationHex32(
+			runtimeManifest.CanonicalJournal.StoreFingerprint,
+		),
+		CanonicalClusterFingerprint: frostActivationHex32(
+			runtimeManifest.CanonicalJournal.ClusterFingerprint,
+		),
+		QuarantineStoreID: runtimeManifest.QuarantineJournal.StoreID,
+		QuarantineStoreFingerprint: frostActivationHex32(
+			runtimeManifest.QuarantineJournal.StoreFingerprint,
+		),
+		QuarantineClusterFingerprint: frostActivationHex32(
+			runtimeManifest.QuarantineJournal.ClusterFingerprint,
+		),
+		SourceIdentity: frostRetainedGroupWireIdentity{
+			TrustDomainID: source.identity.TrustDomainID,
+			EndpointFingerprint: frostActivationHex32(
+				source.identity.EndpointFingerprint,
+			),
+			OperatorFingerprint: frostActivationHex32(
+				source.identity.OperatorFingerprint,
+			),
+		},
+	}
+	return frostRetainedGroupDomainHash(
+		frostRetainedGroupProtocolBindingDomain,
+		binding,
+	)
+}
+
+func validateFrostRetainedGroupDeploymentEvidence(
+	deployments []FrostPreSignDeploymentEvidence,
+) (map[string]FrostPreSignDeploymentEvidence, error) {
+	requiredRoles := map[string]bool{
+		"bridge":                  false,
+		"completeRouter":          false,
+		"authorizationRegistry":   false,
+		"frostWalletRegistry":     false,
+		"frostProposalValidator":  false,
+		"frostSortitionPool":      false,
+		"ecdsaFraudRouter":        false,
+		"ecdsaCutoverCoordinator": false,
+	}
+	if len(deployments) != len(requiredRoles) {
+		return nil, fmt.Errorf("retained-group deployment evidence is incomplete")
+	}
+	result := make(map[string]FrostPreSignDeploymentEvidence, len(deployments))
+	for _, deployment := range deployments {
+		if _, required := requiredRoles[deployment.Role]; !required ||
+			requiredRoles[deployment.Role] ||
+			strings.TrimSpace(deployment.Name) == "" ||
+			deployment.DeploymentBlock == 0 ||
+			deployment.RelevantEventStartBlock < deployment.DeploymentBlock ||
+			len(deployment.HistoricalEpochs) == 0 ||
+			len(deployment.HistoricalEpochs) > 64 {
+			return nil, fmt.Errorf("retained-group deployment [%s] is invalid", deployment.Role)
+		}
+		requiredRoles[deployment.Role] = true
+		if err := validateFrostRetainedGroupDeploymentDescriptor(
+			deployment.Current,
+		); err != nil {
+			return nil, fmt.Errorf("invalid current %s deployment descriptor: [%w]", deployment.Role, err)
+		}
+		for index, epoch := range deployment.HistoricalEpochs {
+			if epoch.Start.BlockNumber == 0 || epoch.Start.BlockHash == [32]byte{} ||
+				(index == 0 &&
+					epoch.Start.BlockNumber != deployment.DeploymentBlock) ||
+				(index+1 < len(deployment.HistoricalEpochs) && epoch.End == nil) ||
+				(index+1 == len(deployment.HistoricalEpochs) && epoch.End != nil) {
+				return nil, fmt.Errorf("retained-group %s epoch [%d] range is invalid", deployment.Role, index)
+			}
+			if epoch.End != nil &&
+				(epoch.End.BlockNumber < epoch.Start.BlockNumber ||
+					epoch.End.BlockHash == [32]byte{}) {
+				return nil, fmt.Errorf("retained-group %s epoch [%d] end is invalid", deployment.Role, index)
+			}
+			if index > 0 {
+				previous := deployment.HistoricalEpochs[index-1]
+				if previous.End == nil ||
+					previous.End.BlockNumber == ^uint64(0) ||
+					previous.End.BlockNumber+1 != epoch.Start.BlockNumber {
+					return nil, fmt.Errorf("retained-group %s epochs have a gap or overlap", deployment.Role)
+				}
+			}
+			if err := validateFrostRetainedGroupDeploymentDescriptor(
+				epoch.Descriptor,
+			); err != nil {
+				return nil, fmt.Errorf("invalid %s epoch [%d] descriptor: [%w]", deployment.Role, index, err)
+			}
+		}
+		if deployment.RelevantEventStartBlock <
+			deployment.HistoricalEpochs[0].Start.BlockNumber ||
+			deployment.Current.DescriptorHash !=
+				deployment.HistoricalEpochs[len(deployment.HistoricalEpochs)-1].Descriptor.DescriptorHash {
+			return nil, fmt.Errorf("retained-group %s epochs do not cover the event range", deployment.Role)
+		}
+		result[deployment.Role] = cloneFrostRetainedGroupDeploymentEvidence(
+			deployment,
+		)
+	}
+	return result, nil
+}
+
+func validateFrostRetainedGroupDeploymentDescriptor(
+	descriptor FrostPreSignDeploymentDescriptorEvidence,
+) error {
+	if descriptor.Address == [20]byte{} ||
+		descriptor.RuntimeCodeHash == [32]byte{} ||
+		descriptor.LinkedLibraryDescriptorHash == [32]byte{} ||
+		descriptor.DescriptorHash == [32]byte{} ||
+		descriptor.ComputeHash() != descriptor.DescriptorHash {
+		return fmt.Errorf("deployment descriptor identity or commitment is invalid")
+	}
+	switch descriptor.Upgradeability {
+	case "immutable":
+		if descriptor.ImplementationAddress != [20]byte{} ||
+			descriptor.ImplementationCodeHash != [32]byte{} ||
+			descriptor.AdminAddress != [20]byte{} ||
+			descriptor.AdminCodeHash != [32]byte{} ||
+			descriptor.ImplementationSlotValue != [32]byte{} ||
+			descriptor.AdminSlotValue != [32]byte{} {
+			return fmt.Errorf("immutable deployment descriptor contains proxy fields")
+		}
+	case "eip1967":
+		if descriptor.ImplementationAddress == [20]byte{} ||
+			descriptor.ImplementationCodeHash == [32]byte{} ||
+			descriptor.AdminAddress == [20]byte{} ||
+			descriptor.AdminCodeHash == [32]byte{} ||
+			descriptor.ImplementationAddress == descriptor.AdminAddress ||
+			descriptor.ImplementationAddress == descriptor.Address ||
+			descriptor.AdminAddress == descriptor.Address ||
+			!frostRetainedGroupSlotValueBindsAddress(
+				descriptor.ImplementationSlotValue,
+				descriptor.ImplementationAddress,
+			) ||
+			!frostRetainedGroupSlotValueBindsAddress(
+				descriptor.AdminSlotValue,
+				descriptor.AdminAddress,
+			) {
+			return fmt.Errorf("EIP-1967 deployment descriptor is incomplete")
+		}
+	default:
+		return fmt.Errorf("unsupported upgradeability [%s]", descriptor.Upgradeability)
+	}
+	count := 0
+	if err := validateFrostRetainedGroupLinkedLibraries(
+		descriptor.LinkedLibraries,
+		0,
+		&count,
+	); err != nil {
+		return err
+	}
+	computedDescriptorHash, err :=
+		frostRetainedGroupLinkedLibraryInventoryHash(
+			descriptor.LinkedLibraries,
+		)
+	if err != nil ||
+		computedDescriptorHash != descriptor.LinkedLibraryDescriptorHash {
+		return fmt.Errorf("linked-library descriptor hash mismatch")
+	}
+	return nil
+}
+
+func validateFrostRetainedGroupLinkedLibraries(
+	libraries []FrostPreSignLinkedLibraryEvidence,
+	depth int,
+	count *int,
+) error {
+	if count == nil || depth > 16 {
+		return fmt.Errorf("linked-library evidence is too deep")
+	}
+	roles := make(map[string]bool)
+	addresses := make(map[[20]byte]bool)
+	var previousRole string
+	for index, library := range libraries {
+		(*count)++
+		if *count > 256 ||
+			!frostRetainedGroupValidProtocolRole(library.ProtocolRole) ||
+			(index > 0 && library.ProtocolRole <= previousRole) ||
+			roles[library.ProtocolRole] || addresses[library.Address] ||
+			library.Address == [20]byte{} ||
+			library.RuntimeCodeHash == [32]byte{} ||
+			library.LinkedLibraryDescriptorHash == [32]byte{} ||
+			len(library.References) == 0 {
+			return fmt.Errorf("linked-library evidence is noncanonical")
+		}
+		roles[library.ProtocolRole] = true
+		addresses[library.Address] = true
+		previousRole = library.ProtocolRole
+		for referenceIndex, reference := range library.References {
+			if reference.Length != 20 ||
+				reference.Start > ^uint64(0)-reference.Length ||
+				(referenceIndex > 0 &&
+					library.References[referenceIndex-1].Start+
+						library.References[referenceIndex-1].Length >
+						reference.Start) {
+				return fmt.Errorf("linked-library references are noncanonical")
+			}
+		}
+		if err := validateFrostRetainedGroupLinkedLibraries(
+			library.LinkedLibraries,
+			depth+1,
+			count,
+		); err != nil {
+			return err
+		}
+		computedDescriptorHash, err :=
+			frostRetainedGroupLinkedLibraryInventoryHash(
+				library.LinkedLibraries,
+			)
+		if err != nil ||
+			computedDescriptorHash != library.LinkedLibraryDescriptorHash {
+			return fmt.Errorf(
+				"linked-library [%s] descriptor hash mismatch",
+				library.ProtocolRole,
+			)
+		}
+	}
+	return nil
+}
+
+func frostRetainedGroupValidProtocolRole(value string) bool {
+	if len(value) == 0 || len(value) > 255 {
+		return false
+	}
+	for _, character := range []byte(value) {
+		if (character >= 'A' && character <= 'Z') ||
+			(character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') ||
+			strings.ContainsRune("._:/-", rune(character)) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+type frostRetainedGroupLinkedLibraryReferenceCommitment struct {
+	Start  uint64 `json:"start"`
+	Length uint64 `json:"length"`
+}
+
+type frostRetainedGroupLinkedLibraryDescriptorCommitment struct {
+	ProtocolRole    string                                                `json:"protocolRole"`
+	References      []frostRetainedGroupLinkedLibraryReferenceCommitment  `json:"references"`
+	LinkedLibraries []frostRetainedGroupLinkedLibraryDescriptorCommitment `json:"linkedLibraries"`
+}
+
+func frostRetainedGroupLinkedLibraryDescriptors(
+	libraries []FrostPreSignLinkedLibraryEvidence,
+) []frostRetainedGroupLinkedLibraryDescriptorCommitment {
+	result := make(
+		[]frostRetainedGroupLinkedLibraryDescriptorCommitment,
+		0,
+		len(libraries),
+	)
+	for _, library := range libraries {
+		references := make(
+			[]frostRetainedGroupLinkedLibraryReferenceCommitment,
+			0,
+			len(library.References),
+		)
+		for _, reference := range library.References {
+			references = append(
+				references,
+				frostRetainedGroupLinkedLibraryReferenceCommitment{
+					Start:  reference.Start,
+					Length: reference.Length,
+				},
+			)
+		}
+		result = append(
+			result,
+			frostRetainedGroupLinkedLibraryDescriptorCommitment{
+				ProtocolRole: library.ProtocolRole,
+				References:   references,
+				LinkedLibraries: frostRetainedGroupLinkedLibraryDescriptors(
+					library.LinkedLibraries,
+				),
+			},
+		)
+	}
+	return result
+}
+
+func frostRetainedGroupLinkedLibraryInventoryHash(
+	libraries []FrostPreSignLinkedLibraryEvidence,
+) ([32]byte, error) {
+	canonical, err := canonicalFrostActivationValue(map[string]interface{}{
+		"schema": "tbtc-p2tr-linked-library-inventory/v1",
+		"linkedLibraries": frostRetainedGroupLinkedLibraryDescriptors(
+			libraries,
+		),
+	})
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return sha256.Sum256(canonical), nil
+}
+
+func frostRetainedGroupLinkedLibraryDescriptorSetHash(
+	deployments []FrostPreSignDeploymentEvidence,
+) ([32]byte, error) {
+	type epochDescriptor struct {
+		StartBlock      uint64                                                `json:"startBlock"`
+		EndBlock        *uint64                                               `json:"endBlock"`
+		CodeKind        string                                                `json:"codeKind"`
+		LinkedLibraries []frostRetainedGroupLinkedLibraryDescriptorCommitment `json:"linkedLibraries"`
+	}
+	type contractDescriptor struct {
+		ContractRole     string                                                `json:"contractRole"`
+		CodeKind         string                                                `json:"codeKind"`
+		LinkedLibraries  []frostRetainedGroupLinkedLibraryDescriptorCommitment `json:"linkedLibraries"`
+		HistoricalEpochs []epochDescriptor                                     `json:"historicalEpochs"`
+	}
+	contracts := make([]contractDescriptor, 0, len(deployments))
+	for _, deployment := range deployments {
+		codeKind := "runtime"
+		if deployment.Current.Upgradeability == "eip1967" {
+			codeKind = "implementation-runtime"
+		}
+		historicalEpochs := make(
+			[]epochDescriptor,
+			0,
+			len(deployment.HistoricalEpochs),
+		)
+		for _, epoch := range deployment.HistoricalEpochs {
+			epochCodeKind := "runtime"
+			if epoch.Descriptor.Upgradeability == "eip1967" {
+				epochCodeKind = "implementation-runtime"
+			}
+			var endBlock *uint64
+			if epoch.End != nil {
+				value := epoch.End.BlockNumber
+				endBlock = &value
+			}
+			historicalEpochs = append(
+				historicalEpochs,
+				epochDescriptor{
+					StartBlock: epoch.Start.BlockNumber,
+					EndBlock:   endBlock,
+					CodeKind:   epochCodeKind,
+					LinkedLibraries: frostRetainedGroupLinkedLibraryDescriptors(
+						epoch.Descriptor.LinkedLibraries,
+					),
+				},
+			)
+		}
+		contracts = append(
+			contracts,
+			contractDescriptor{
+				ContractRole: deployment.Role,
+				CodeKind:     codeKind,
+				LinkedLibraries: frostRetainedGroupLinkedLibraryDescriptors(
+					deployment.Current.LinkedLibraries,
+				),
+				HistoricalEpochs: historicalEpochs,
+			},
+		)
+	}
+	sort.Slice(contracts, func(i, j int) bool {
+		return contracts[i].ContractRole < contracts[j].ContractRole
+	})
+	canonical, err := canonicalFrostActivationValue(map[string]interface{}{
+		"schema":    "tbtc-p2tr-linked-library-descriptor-set/v2",
+		"contracts": contracts,
+	})
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return sha256.Sum256(canonical), nil
+}
+
+func frostRetainedGroupSlotValueBindsAddress(
+	value [32]byte,
+	address [20]byte,
+) bool {
+	return bytes.Equal(value[:12], make([]byte, 12)) &&
+		bytes.Equal(value[12:], address[:])
+}
+
+func cloneFrostRetainedGroupDeploymentEvidence(
+	deployment FrostPreSignDeploymentEvidence,
+) FrostPreSignDeploymentEvidence {
+	result := deployment
+	result.Current = cloneFrostRetainedGroupDeploymentDescriptor(
+		deployment.Current,
+	)
+	result.HistoricalEpochs = make(
+		[]FrostPreSignDeploymentEpochEvidence,
+		len(deployment.HistoricalEpochs),
+	)
+	for index, epoch := range deployment.HistoricalEpochs {
+		result.HistoricalEpochs[index] = epoch
+		if epoch.End != nil {
+			end := *epoch.End
+			result.HistoricalEpochs[index].End = &end
+		}
+		result.HistoricalEpochs[index].Descriptor =
+			cloneFrostRetainedGroupDeploymentDescriptor(epoch.Descriptor)
+	}
+	return result
+}
+
+func cloneFrostRetainedGroupDeploymentDescriptor(
+	descriptor FrostPreSignDeploymentDescriptorEvidence,
+) FrostPreSignDeploymentDescriptorEvidence {
+	result := descriptor
+	result.LinkedLibraries = cloneFrostRetainedGroupLinkedLibraries(
+		descriptor.LinkedLibraries,
+	)
+	return result
+}
+
+func cloneFrostRetainedGroupLinkedLibraries(
+	libraries []FrostPreSignLinkedLibraryEvidence,
+) []FrostPreSignLinkedLibraryEvidence {
+	result := make([]FrostPreSignLinkedLibraryEvidence, len(libraries))
+	for index, library := range libraries {
+		result[index] = library
+		result[index].References = append(
+			[]FrostPreSignLinkedLibraryReference{},
+			library.References...,
+		)
+		result[index].LinkedLibraries = cloneFrostRetainedGroupLinkedLibraries(
+			library.LinkedLibraries,
+		)
+	}
+	return result
+}
+
 func (source *signedFrostRetainedGroupHistorySource) activationEvidence() (
 	*frostRetainedGroupEvidenceProfile,
 	error,
@@ -146,6 +707,17 @@ func (source *signedFrostRetainedGroupHistorySource) activationEvidence() (
 		return nil, fmt.Errorf("retained-group history source is not bound to the signed activation manifest")
 	}
 	return source.evidence, nil
+}
+
+func (source *signedFrostRetainedGroupHistorySource) FrostRetainedGroupProtocolBindingHash() (
+	[32]byte,
+	error,
+) {
+	evidence, err := source.activationEvidence()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return evidence.bindingHash, nil
 }
 
 func (source *signedFrostRetainedGroupHistorySource) verifyHistoryEvidence(
@@ -196,7 +768,7 @@ func (source *signedFrostRetainedGroupHistorySource) verifyMutationEvidence(
 		log, err := source.authenticatedEventLog(
 			ctx,
 			mutation.Point,
-			evidence.bridge,
+			evidence.deployments["bridge"],
 			evidence.bridgeABI.Events[eventName].ID,
 			receipts,
 			code,
@@ -213,7 +785,7 @@ func (source *signedFrostRetainedGroupHistorySource) verifyMutationEvidence(
 		log, err := source.authenticatedEventLog(
 			ctx,
 			mutation.Point,
-			evidence.registry,
+			evidence.deployments["frostWalletRegistry"],
 			evidence.registryABI.Events["WalletClosed"].ID,
 			receipts,
 			code,
@@ -249,7 +821,7 @@ func (source *signedFrostRetainedGroupHistorySource) verifyAdmissionEvidence(
 	submissionLog, err := source.authenticatedEventLog(
 		ctx,
 		mutation.DkgSubmissionPoint,
-		evidence.registry,
+		evidence.deployments["frostWalletRegistry"],
 		evidence.registryABI.Events["DkgResultSubmitted"].ID,
 		receipts,
 		code,
@@ -301,7 +873,7 @@ func (source *signedFrostRetainedGroupHistorySource) verifyAdmissionEvidence(
 	approvalLog, err := source.authenticatedEventLog(
 		ctx,
 		mutation.DkgApprovalPoint,
-		evidence.registry,
+		evidence.deployments["frostWalletRegistry"],
 		evidence.registryABI.Events["DkgResultApproved"].ID,
 		receipts,
 		code,
@@ -319,7 +891,7 @@ func (source *signedFrostRetainedGroupHistorySource) verifyAdmissionEvidence(
 	creationLog, err := source.authenticatedEventLog(
 		ctx,
 		mutation.CreationPoint,
-		evidence.registry,
+		evidence.deployments["frostWalletRegistry"],
 		evidence.registryABI.Events["WalletCreated"].ID,
 		receipts,
 		code,
@@ -336,7 +908,7 @@ func (source *signedFrostRetainedGroupHistorySource) verifyAdmissionEvidence(
 	registrationLog, err := source.authenticatedEventLog(
 		ctx,
 		mutation.BridgeRegistrationPoint,
-		evidence.bridge,
+		evidence.deployments["bridge"],
 		evidence.bridgeABI.Events["NewWalletRegisteredV2"].ID,
 		receipts,
 		code,
@@ -386,16 +958,30 @@ func frostRetainedGroupDecodeDkgSubmission(
 func (source *signedFrostRetainedGroupHistorySource) authenticatedEventLog(
 	ctx context.Context,
 	point FrostRetainedGroupEventPoint,
-	pin frostRetainedGroupContractPin,
+	deployment FrostPreSignDeploymentEvidence,
 	topic common.Hash,
 	receipts frostRetainedGroupReceiptCache,
 	code frostRetainedGroupCodeCache,
 ) (*types.Log, error) {
-	if !point.valid() || pin.address == (common.Address{}) || pin.codeHash == (common.Hash{}) ||
-		topic == (common.Hash{}) {
+	if !point.valid() || topic == (common.Hash{}) {
 		return nil, fmt.Errorf("event evidence descriptor is incomplete")
 	}
-	if err := source.authenticateContractCode(ctx, pin, point.BlockNumber, code); err != nil {
+	descriptor, err := frostRetainedGroupDeploymentDescriptorAt(
+		deployment,
+		point.BlockNumber,
+		point.BlockHash,
+		true,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := source.authenticateContractDeployment(
+		ctx,
+		descriptor,
+		point.BlockNumber,
+		point.BlockHash,
+		code,
+	); err != nil {
 		return nil, err
 	}
 	transactionHash := common.Hash(point.TransactionHash)
@@ -405,7 +991,9 @@ func (source *signedFrostRetainedGroupHistorySource) authenticatedEventLog(
 			return nil, fmt.Errorf("retained-group evidence exceeds the receipt limit")
 		}
 		var err error
-		receipt, err = source.verifier.TransactionReceipt(ctx, transactionHash)
+		requestContext, cancel := source.requestContext(ctx)
+		receipt, err = source.verifier.TransactionReceipt(requestContext, transactionHash)
+		cancel()
 		if err != nil {
 			return nil, fmt.Errorf("cannot read transaction receipt [%s]: [%w]", transactionHash.Hex(), err)
 		}
@@ -433,7 +1021,8 @@ func (source *signedFrostRetainedGroupHistorySource) authenticatedEventLog(
 		}
 		matched = candidate
 	}
-	if matched == nil || matched.Removed || matched.Address != pin.address ||
+	if matched == nil || matched.Removed ||
+		matched.Address != common.Address(descriptor.Address) ||
 		matched.BlockNumber != point.BlockNumber || matched.BlockHash != common.Hash(point.BlockHash) ||
 		matched.TxHash != transactionHash || matched.TxIndex != uint(point.TransactionIndex) ||
 		len(matched.Topics) == 0 || matched.Topics[0] != topic {
@@ -442,29 +1031,254 @@ func (source *signedFrostRetainedGroupHistorySource) authenticatedEventLog(
 	return matched, nil
 }
 
-func (source *signedFrostRetainedGroupHistorySource) authenticateContractCode(
-	ctx context.Context,
-	pin frostRetainedGroupContractPin,
+func frostRetainedGroupDeploymentDescriptorAt(
+	deployment FrostPreSignDeploymentEvidence,
 	blockNumber uint64,
+	blockHash [32]byte,
+	rejectTransitionBlock bool,
+) (FrostPreSignDeploymentDescriptorEvidence, error) {
+	if blockNumber < deployment.RelevantEventStartBlock || blockHash == [32]byte{} {
+		return FrostPreSignDeploymentDescriptorEvidence{},
+			fmt.Errorf("retained-group point is outside the authenticated deployment range")
+	}
+	matchIndex := -1
+	for index, epoch := range deployment.HistoricalEpochs {
+		if blockNumber < epoch.Start.BlockNumber ||
+			(epoch.End != nil && blockNumber > epoch.End.BlockNumber) {
+			continue
+		}
+		if matchIndex >= 0 {
+			return FrostPreSignDeploymentDescriptorEvidence{},
+				fmt.Errorf("retained-group point matches multiple deployment epochs")
+		}
+		matchIndex = index
+	}
+	if matchIndex < 0 {
+		return FrostPreSignDeploymentDescriptorEvidence{},
+			fmt.Errorf("retained-group point has no authenticated deployment epoch")
+	}
+	epoch := deployment.HistoricalEpochs[matchIndex]
+	if (blockNumber == epoch.Start.BlockNumber &&
+		blockHash != epoch.Start.BlockHash) ||
+		(epoch.End != nil && blockNumber == epoch.End.BlockNumber &&
+			blockHash != epoch.End.BlockHash) {
+		return FrostPreSignDeploymentDescriptorEvidence{},
+			fmt.Errorf("retained-group point conflicts with a signed deployment boundary")
+	}
+	if rejectTransitionBlock && matchIndex > 0 &&
+		blockNumber == epoch.Start.BlockNumber {
+		return FrostPreSignDeploymentDescriptorEvidence{},
+			fmt.Errorf("retained-group event occurs in an implementation-transition block")
+	}
+	return epoch.Descriptor, nil
+}
+
+func (source *signedFrostRetainedGroupHistorySource) authenticateContractDeployment(
+	ctx context.Context,
+	descriptor FrostPreSignDeploymentDescriptorEvidence,
+	blockNumber uint64,
+	blockHash [32]byte,
 	cache frostRetainedGroupCodeCache,
 ) error {
-	key := frostRetainedGroupCodeCacheKey{address: pin.address, blockNumber: blockNumber}
-	if _, ok := cache[key]; ok {
+	if blockNumber == 0 || blockHash == [32]byte{} {
+		return fmt.Errorf("retained-group contract deployment point is invalid")
+	}
+	verifiedKey := frostRetainedGroupCodeCacheKey{
+		address:        common.Address(descriptor.Address),
+		blockHash:      common.Hash(blockHash),
+		codeHash:       common.Hash(descriptor.RuntimeCodeHash),
+		descriptorHash: common.Hash(descriptor.DescriptorHash),
+		verified:       true,
+	}
+	if _, ok := cache[verifiedKey]; ok {
 		return nil
+	}
+	proxyCode, err := source.readAuthenticatedCode(
+		ctx,
+		common.Address(descriptor.Address),
+		common.Hash(descriptor.RuntimeCodeHash),
+		common.Hash(descriptor.DescriptorHash),
+		blockNumber,
+		common.Hash(blockHash),
+		cache,
+	)
+	if err != nil {
+		return err
+	}
+	implementationSlot := frostRetainedGroupEIP1967Slot(
+		"eip1967.proxy.implementation",
+	)
+	adminSlot := frostRetainedGroupEIP1967Slot("eip1967.proxy.admin")
+	requestContext, cancel := source.requestContext(ctx)
+	implementationValue, err := source.verifier.StorageAtHash(
+		requestContext,
+		common.Address(descriptor.Address),
+		implementationSlot,
+		common.Hash(blockHash),
+	)
+	cancel()
+	if err != nil || len(implementationValue) != 32 {
+		return fmt.Errorf("cannot read retained-group EIP-1967 implementation slot: [%w]", err)
+	}
+	requestContext, cancel = source.requestContext(ctx)
+	adminValue, err := source.verifier.StorageAtHash(
+		requestContext,
+		common.Address(descriptor.Address),
+		adminSlot,
+		common.Hash(blockHash),
+	)
+	cancel()
+	if err != nil || len(adminValue) != 32 {
+		return fmt.Errorf("cannot read retained-group EIP-1967 admin slot: [%w]", err)
+	}
+	ownerCode := proxyCode
+	switch descriptor.Upgradeability {
+	case "immutable":
+		if !bytes.Equal(implementationValue, make([]byte, 32)) ||
+			!bytes.Equal(adminValue, make([]byte, 32)) {
+			return fmt.Errorf("immutable retained-group deployment has populated EIP-1967 slots")
+		}
+	case "eip1967":
+		if !bytes.Equal(implementationValue, descriptor.ImplementationSlotValue[:]) ||
+			!bytes.Equal(adminValue, descriptor.AdminSlotValue[:]) {
+			return fmt.Errorf("retained-group EIP-1967 slot value mismatch")
+		}
+		ownerCode, err = source.readAuthenticatedCode(
+			ctx,
+			common.Address(descriptor.ImplementationAddress),
+			common.Hash(descriptor.ImplementationCodeHash),
+			common.Hash(descriptor.DescriptorHash),
+			blockNumber,
+			common.Hash(blockHash),
+			cache,
+		)
+		if err != nil {
+			return fmt.Errorf("retained-group implementation authentication failed: [%w]", err)
+		}
+		if _, err := source.readAuthenticatedCode(
+			ctx,
+			common.Address(descriptor.AdminAddress),
+			common.Hash(descriptor.AdminCodeHash),
+			common.Hash(descriptor.DescriptorHash),
+			blockNumber,
+			common.Hash(blockHash),
+			cache,
+		); err != nil {
+			return fmt.Errorf("retained-group admin authentication failed: [%w]", err)
+		}
+	default:
+		return fmt.Errorf("retained-group deployment upgradeability is unsupported")
+	}
+	if err := source.authenticateLinkedLibraries(
+		ctx,
+		ownerCode,
+		descriptor.LinkedLibraries,
+		common.Hash(descriptor.DescriptorHash),
+		blockNumber,
+		common.Hash(blockHash),
+		cache,
+	); err != nil {
+		return err
 	}
 	if len(cache) >= frostRetainedGroupMaximumEvidenceCodePoints {
 		return fmt.Errorf("retained-group evidence exceeds the contract-code point limit")
 	}
-	code, err := source.verifier.CodeAt(ctx, pin.address, new(big.Int).SetUint64(blockNumber))
+	cache[verifiedKey] = []byte{1}
+	return nil
+}
+
+func (source *signedFrostRetainedGroupHistorySource) readAuthenticatedCode(
+	ctx context.Context,
+	address common.Address,
+	expectedHash common.Hash,
+	descriptorHash common.Hash,
+	blockNumber uint64,
+	blockHash common.Hash,
+	cache frostRetainedGroupCodeCache,
+) ([]byte, error) {
+	key := frostRetainedGroupCodeCacheKey{
+		address:        address,
+		blockHash:      blockHash,
+		codeHash:       expectedHash,
+		descriptorHash: descriptorHash,
+	}
+	if cached, ok := cache[key]; ok {
+		return cached, nil
+	}
+	if len(cache) >= frostRetainedGroupMaximumEvidenceCodePoints {
+		return nil, fmt.Errorf("retained-group evidence exceeds the contract-code point limit")
+	}
+	requestContext, cancel := source.requestContext(ctx)
+	code, err := source.verifier.CodeAtHash(
+		requestContext,
+		address,
+		blockHash,
+	)
+	cancel()
 	if err != nil {
-		return fmt.Errorf("cannot read pinned contract code at block [%d]: [%w]", blockNumber, err)
+		return nil, fmt.Errorf("cannot read pinned contract code at block [%d]: [%w]", blockNumber, err)
 	}
 	if len(code) == 0 || len(code) > frostRetainedGroupMaximumContractCodeBytes ||
-		crypto.Keccak256Hash(code) != pin.codeHash {
-		return fmt.Errorf("contract code at block [%d] differs from the signed activation manifest", blockNumber)
+		crypto.Keccak256Hash(code) != expectedHash {
+		return nil, fmt.Errorf("contract code at block [%d] differs from the signed activation manifest", blockNumber)
 	}
-	cache[key] = struct{}{}
+	copied := append([]byte{}, code...)
+	cache[key] = copied
+	return copied, nil
+}
+
+func (source *signedFrostRetainedGroupHistorySource) authenticateLinkedLibraries(
+	ctx context.Context,
+	ownerCode []byte,
+	libraries []FrostPreSignLinkedLibraryEvidence,
+	descriptorHash common.Hash,
+	blockNumber uint64,
+	blockHash common.Hash,
+	cache frostRetainedGroupCodeCache,
+) error {
+	for _, library := range libraries {
+		for _, reference := range library.References {
+			if reference.Start > uint64(len(ownerCode)) ||
+				reference.Start+reference.Length < reference.Start ||
+				reference.Start+reference.Length > uint64(len(ownerCode)) ||
+				!bytes.Equal(
+					ownerCode[int(reference.Start):int(reference.Start+reference.Length)],
+					library.Address[:],
+				) {
+				return fmt.Errorf("retained-group linked-library reference [%s:%d] mismatch", library.ProtocolRole, reference.Start)
+			}
+		}
+		libraryCode, err := source.readAuthenticatedCode(
+			ctx,
+			common.Address(library.Address),
+			common.Hash(library.RuntimeCodeHash),
+			descriptorHash,
+			blockNumber,
+			blockHash,
+			cache,
+		)
+		if err != nil {
+			return fmt.Errorf("retained-group linked library [%s] authentication failed: [%w]", library.ProtocolRole, err)
+		}
+		if err := source.authenticateLinkedLibraries(
+			ctx,
+			libraryCode,
+			library.LinkedLibraries,
+			descriptorHash,
+			blockNumber,
+			blockHash,
+			cache,
+		); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func frostRetainedGroupEIP1967Slot(label string) common.Hash {
+	value := crypto.Keccak256Hash([]byte(label)).Big()
+	value.Sub(value, big.NewInt(1))
+	return common.BigToHash(value)
 }
 
 func (source *signedFrostRetainedGroupHistorySource) resolveOperatorIDAt(
@@ -476,10 +1290,21 @@ func (source *signedFrostRetainedGroupHistorySource) resolveOperatorIDAt(
 	if evidence == nil || operator == (common.Address{}) {
 		return 0, fmt.Errorf("operator-resolution evidence is incomplete")
 	}
-	if err := source.authenticateContractCode(
-		ctx,
-		evidence.sortitionPool,
+	deployment := evidence.deployments["frostSortitionPool"]
+	descriptor, err := frostRetainedGroupDeploymentDescriptorAt(
+		deployment,
 		at.BlockNumber,
+		at.BlockHash,
+		false,
+	)
+	if err != nil {
+		return 0, err
+	}
+	if err := source.authenticateContractDeployment(
+		ctx,
+		descriptor,
+		at.BlockNumber,
+		at.BlockHash,
 		make(frostRetainedGroupCodeCache),
 	); err != nil {
 		return 0, err
@@ -489,12 +1314,14 @@ func (source *signedFrostRetainedGroupHistorySource) resolveOperatorIDAt(
 	callData := make([]byte, 4+32)
 	copy(callData[:4], []byte{0x5a, 0x48, 0xb4, 0x6b})
 	copy(callData[4+12:], operator[:])
-	to := evidence.sortitionPool.address
-	output, err := source.verifier.CallContract(
-		ctx,
+	to := common.Address(descriptor.Address)
+	requestContext, cancel := source.requestContext(ctx)
+	output, err := source.verifier.CallContractAtHash(
+		requestContext,
 		ethereum.CallMsg{To: &to, Data: callData},
-		new(big.Int).SetUint64(at.BlockNumber),
+		common.Hash(at.BlockHash),
 	)
+	cancel()
 	if err != nil {
 		return 0, err
 	}

@@ -1453,6 +1453,7 @@ type FrostPreSignActivationRuntimeManifest struct {
 	ProfileHash                      [32]byte
 	ImplementationSetHash            [32]byte
 	LinkedLibraryDescriptorSetHash   [32]byte
+	EndpointIdentitySetHash          [32]byte
 	Deployments                      []FrostPreSignDeploymentEvidence
 	SignerProtocolID                 [32]byte
 	ReservationProtocolID            [32]byte

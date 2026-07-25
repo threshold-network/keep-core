@@ -726,8 +726,7 @@ func newNode(
 		}
 		if err := evidenceBinder.BindFrostRetainedGroupActivationEvidence(
 			verifiedActivationProfile,
-			runtimeManifest.ManifestHash,
-			runtimeManifest.CanonicalJournal.DescriptorSetHash,
+			runtimeManifest,
 		); err != nil {
 			_ = outbox.close()
 			return nil, fmt.Errorf(
@@ -735,9 +734,27 @@ func newNode(
 				err,
 			)
 		}
+		bindingSource, ok :=
+			config.FrostRetainedGroupHistorySource.(FrostRetainedGroupProtocolBindingSource)
+		if !ok {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot enable FROST activation handshake without a protocol-bound retained-group source",
+			)
+		}
+		retainedGroupBindingHash, err :=
+			bindingSource.FrostRetainedGroupProtocolBindingHash()
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot read retained-group protocol binding: [%w]",
+				err,
+			)
+		}
 		journal, err := newFrostRetainedGroupJournal(
 			config.FrostRetainedGroupJournalDirectory,
 			runtimeManifest.ManifestHash,
+			retainedGroupBindingHash,
 			runtimeManifest.CanonicalJournal,
 			runtimeManifest.QuarantineJournal,
 			config.FrostRetainedGroupHistorySource,
@@ -794,6 +811,7 @@ func newNode(
 			pointVerifier,
 			storeBinding,
 			outbox,
+			journal,
 			readiness,
 		)
 		if err != nil {

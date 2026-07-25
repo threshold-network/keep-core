@@ -22,8 +22,10 @@ import (
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/keep-network/keep-core/pkg/chain"
 	frostabi "github.com/keep-network/keep-core/pkg/chain/ethereum/frost/gen/abi"
 	frostregistry "github.com/keep-network/keep-core/pkg/frost/registry"
@@ -40,11 +42,94 @@ type frostRetainedGroupHistoryTestVerifier struct {
 	reorgHeader    *types.Header
 	receipts       map[common.Hash]*types.Receipt
 	code           map[common.Address][]byte
+	storage        map[common.Address]map[common.Hash][]byte
 	sortitionPool  common.Address
 	operator       common.Address
 	operatorAt     uint64
 	operatorID     uint32
 	closed         bool
+}
+
+type frostRetainedGroupCanonicalRPCTestAPI struct {
+	points []rpc.BlockNumberOrHash
+}
+
+func (api *frostRetainedGroupCanonicalRPCTestAPI) GetCode(
+	_ context.Context,
+	_ common.Address,
+	point rpc.BlockNumberOrHash,
+) (hexutil.Bytes, error) {
+	api.points = append(api.points, point)
+	return hexutil.Bytes{0x01}, nil
+}
+
+func (api *frostRetainedGroupCanonicalRPCTestAPI) GetStorageAt(
+	_ context.Context,
+	_ common.Address,
+	_ common.Hash,
+	point rpc.BlockNumberOrHash,
+) (hexutil.Bytes, error) {
+	api.points = append(api.points, point)
+	return make(hexutil.Bytes, 32), nil
+}
+
+func (api *frostRetainedGroupCanonicalRPCTestAPI) Call(
+	_ context.Context,
+	_ map[string]interface{},
+	point rpc.BlockNumberOrHash,
+) (hexutil.Bytes, error) {
+	api.points = append(api.points, point)
+	return make(hexutil.Bytes, 32), nil
+}
+
+func TestCanonicalFrostRetainedGroupEthereumVerifier_RequiresCanonicalHashState(
+	t *testing.T,
+) {
+	server := rpc.NewServer()
+	api := &frostRetainedGroupCanonicalRPCTestAPI{}
+	if err := server.RegisterName("eth", api); err != nil {
+		t.Fatal(err)
+	}
+	client := rpc.DialInProc(server)
+	defer client.Close()
+	verifier := &canonicalFrostRetainedGroupEthereumVerifier{
+		rpcClient: client,
+	}
+	blockHash := common.HexToHash("0x1234")
+	address := common.HexToAddress(
+		"0x1111111111111111111111111111111111111111",
+	)
+	if _, err := verifier.CodeAtHash(
+		context.Background(),
+		address,
+		blockHash,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifier.StorageAtHash(
+		context.Background(),
+		address,
+		common.Hash{},
+		blockHash,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifier.CallContractAtHash(
+		context.Background(),
+		ethereum.CallMsg{To: &address, Data: []byte{0x01}},
+		blockHash,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.points) != 3 {
+		t.Fatalf("unexpected exact-hash call count [%d]", len(api.points))
+	}
+	for _, point := range api.points {
+		if point.BlockHash == nil || *point.BlockHash != blockHash ||
+			!point.RequireCanonical || point.BlockNumber != nil {
+			t.Fatalf("state read did not require canonical hash [%+v]", point)
+		}
+	}
 }
 
 func (verifier *frostRetainedGroupHistoryTestVerifier) ChainID(
@@ -71,6 +156,29 @@ func (verifier *frostRetainedGroupHistoryTestVerifier) HeaderByNumber(
 	return verifier.headers[blockNumber], nil
 }
 
+func (verifier *frostRetainedGroupHistoryTestVerifier) HeaderByHash(
+	_ context.Context,
+	hash common.Hash,
+) (*types.Header, error) {
+	verifier.mutex.Lock()
+	defer verifier.mutex.Unlock()
+	for blockNumber, header := range verifier.headers {
+		if header.Hash() != hash {
+			continue
+		}
+		verifier.reads[blockNumber]++
+		if blockNumber == verifier.reorgBlock && verifier.reorgHeader != nil &&
+			verifier.reads[blockNumber] > verifier.reorgAfterRead {
+			if verifier.reorgHeader.Hash() == hash {
+				return verifier.reorgHeader, nil
+			}
+			return nil, nil
+		}
+		return header, nil
+	}
+	return nil, nil
+}
+
 func (verifier *frostRetainedGroupHistoryTestVerifier) Close() {
 	verifier.mutex.Lock()
 	defer verifier.mutex.Unlock()
@@ -88,11 +196,14 @@ func (verifier *frostRetainedGroupHistoryTestVerifier) TransactionReceipt(
 	return receipt, nil
 }
 
-func (verifier *frostRetainedGroupHistoryTestVerifier) CodeAt(
+func (verifier *frostRetainedGroupHistoryTestVerifier) CodeAtHash(
 	_ context.Context,
 	address common.Address,
-	_ *big.Int,
+	hash common.Hash,
 ) ([]byte, error) {
+	if _, err := verifier.HeaderByHash(context.Background(), hash); err != nil {
+		return nil, err
+	}
 	code := verifier.code[address]
 	if len(code) == 0 {
 		return nil, fmt.Errorf("missing code")
@@ -100,13 +211,30 @@ func (verifier *frostRetainedGroupHistoryTestVerifier) CodeAt(
 	return append([]byte{}, code...), nil
 }
 
-func (verifier *frostRetainedGroupHistoryTestVerifier) CallContract(
+func (verifier *frostRetainedGroupHistoryTestVerifier) StorageAtHash(
+	_ context.Context,
+	address common.Address,
+	slot common.Hash,
+	blockHash common.Hash,
+) ([]byte, error) {
+	if _, err := verifier.HeaderByHash(context.Background(), blockHash); err != nil {
+		return nil, err
+	}
+	if slots := verifier.storage[address]; slots != nil {
+		if value := slots[slot]; value != nil {
+			return append([]byte{}, value...), nil
+		}
+	}
+	return make([]byte, 32), nil
+}
+
+func (verifier *frostRetainedGroupHistoryTestVerifier) CallContractAtHash(
 	_ context.Context,
 	call ethereum.CallMsg,
-	block *big.Int,
+	blockHash common.Hash,
 ) ([]byte, error) {
-	if call.To == nil || *call.To != verifier.sortitionPool || block == nil ||
-		!block.IsUint64() || block.Uint64() != verifier.operatorAt || len(call.Data) != 36 ||
+	if call.To == nil || *call.To != verifier.sortitionPool ||
+		blockHash != verifier.headers[verifier.operatorAt].Hash() || len(call.Data) != 36 ||
 		!bytes.Equal(call.Data[:4], []byte{0x5a, 0x48, 0xb4, 0x6b}) ||
 		!bytes.Equal(call.Data[4:16], make([]byte, 12)) ||
 		!bytes.Equal(call.Data[16:], verifier.operator[:]) {
@@ -124,6 +252,7 @@ type frostRetainedGroupHistoryTestExport struct {
 	historyResponder  func(frostRetainedGroupHistoryPageRequest) interface{}
 	operatorResponder func(frostRetainedGroupOperatorQuery) interface{}
 	corruptSignature  bool
+	bindingHash       [32]byte
 }
 
 func (export *frostRetainedGroupHistoryTestExport) ServeHTTP(
@@ -169,7 +298,8 @@ func (export *frostRetainedGroupHistoryTestExport) ServeHTTP(
 		signature[0] ^= 0xff
 	}
 	envelope := frostRetainedGroupSignedEnvelope{
-		Schema:              "tbtc-frost-retained-group-signed-envelope/v1",
+		Schema:              "tbtc-frost-retained-group-signed-envelope/v2",
+		BindingHash:         frostActivationHex32(export.bindingHash),
 		Payload:             json.RawMessage(canonical),
 		PayloadSHA256:       frostActivationHex32(payloadHash),
 		SignerPublicKeySPKI: base64.StdEncoding.EncodeToString(export.publicKeyDER),
@@ -190,6 +320,7 @@ type frostRetainedGroupHistorySourceFixture struct {
 	source            *signedFrostRetainedGroupHistorySource
 	identity          FrostRetainedGroupHistoryIdentity
 	profile           FrostPreSignActivationProfile
+	runtimeManifest   FrostPreSignActivationRuntimeManifest
 	from              FrostPreSignFinality
 	to                FrostPreSignFinality
 	descriptorSetHash [32]byte
@@ -225,10 +356,12 @@ func newFrostRetainedGroupHistorySourceFixture(
 	bridgeCode := []byte{0x60, 0x01, 0x60, 0x02}
 	registryCode := []byte{0x60, 0x03, 0x60, 0x04}
 	sortitionPoolCode := []byte{0x60, 0x05, 0x60, 0x06}
-	profile := frostRetainedGroupHistoryTestProfile(
+	profile, runtimeManifest := frostRetainedGroupHistoryTestProfile(
+		t,
 		bridgeCode,
 		registryCode,
 		sortitionPoolCode,
+		headers[1].Hash(),
 	)
 	operatorAddress := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	verifier := &frostRetainedGroupHistoryTestVerifier{
@@ -238,6 +371,7 @@ func newFrostRetainedGroupHistorySourceFixture(
 		reads:         make(map[uint64]int),
 		receipts:      make(map[common.Hash]*types.Receipt),
 		code:          make(map[common.Address][]byte),
+		storage:       make(map[common.Address]map[common.Hash][]byte),
 		sortitionPool: common.Address(profile.SortitionPool),
 		operator:      operatorAddress,
 		operatorAt:    6,
@@ -262,6 +396,8 @@ func newFrostRetainedGroupHistorySourceFixture(
 		EndpointFingerprint: [32]byte{0x31},
 		OperatorFingerprint: operatorFingerprint,
 	}
+	runtimeManifest.CanonicalJournal.SourceOperatorFingerprint =
+		identity.OperatorFingerprint
 	source, err := newSignedFrostRetainedGroupHistorySource(
 		context.Background(),
 		endpoint,
@@ -270,6 +406,7 @@ func newFrostRetainedGroupHistorySourceFixture(
 		1,
 		identity,
 		operatorFingerprint,
+		frostRetainedGroupDefaultTimeout,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -277,11 +414,11 @@ func newFrostRetainedGroupHistorySourceFixture(
 	descriptorSetHash := [32]byte{0x42}
 	if err := source.BindFrostRetainedGroupActivationEvidence(
 		profile,
-		profile.ActivationManifestHash,
-		descriptorSetHash,
+		runtimeManifest,
 	); err != nil {
 		t.Fatal(err)
 	}
+	export.bindingHash = source.evidence.bindingHash
 	t.Cleanup(source.Close)
 	fixture := &frostRetainedGroupHistorySourceFixture{
 		t:                 t,
@@ -291,6 +428,7 @@ func newFrostRetainedGroupHistorySourceFixture(
 		source:            source,
 		identity:          identity,
 		profile:           profile,
+		runtimeManifest:   runtimeManifest,
 		from:              FrostPreSignFinality{BlockNumber: 1, BlockHash: headers[1].Hash()},
 		to:                FrostPreSignFinality{BlockNumber: 6, BlockHash: headers[6].Hash()},
 		descriptorSetHash: descriptorSetHash,
@@ -308,14 +446,23 @@ func newFrostRetainedGroupHistorySourceFixture(
 }
 
 func frostRetainedGroupHistoryTestProfile(
+	t *testing.T,
 	bridgeCode []byte,
 	registryCode []byte,
 	sortitionPoolCode []byte,
-) FrostPreSignActivationProfile {
+	deploymentBlockHash common.Hash,
+) (FrostPreSignActivationProfile, FrostPreSignActivationRuntimeManifest) {
+	t.Helper()
+	emptyLinkedLibraryDescriptorHash, err :=
+		frostRetainedGroupLinkedLibraryInventoryHash(
+			[]FrostPreSignLinkedLibraryEvidence{},
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
 	profile := FrostPreSignActivationProfile{
-		DomainChainID:             [32]byte{0x01},
+		DomainChainID:             [32]byte{31: 0x01},
 		ActivationManifestHash:    [32]byte{0x02},
-		ImplementationSetHash:     [32]byte{0x03},
 		BridgeAddress:             [20]byte{0x11},
 		RegistryAddress:           [20]byte{0x12},
 		CompleteRouter:            [20]byte{0x13},
@@ -332,8 +479,83 @@ func frostRetainedGroupHistoryTestProfile(
 		EvidenceProtocolID:        frostCompleteEvidenceProtocolID(),
 		SigningPolicyHash:         frostPreSignSigningPolicyHash(),
 	}
+	inputs := []struct {
+		role     string
+		name     string
+		address  [20]byte
+		codeHash [32]byte
+	}{
+		{"bridge", "Bridge", profile.BridgeAddress, profile.BridgeCodeHash},
+		{"completeRouter", "COMPLETE router", profile.CompleteRouter, profile.CompleteRouterCodeHash},
+		{"authorizationRegistry", "authorization registry", profile.RegistryAddress, profile.RegistryCodeHash},
+		{"frostWalletRegistry", "FROST wallet registry", profile.FrostRegistry, profile.FrostRegistryCodeHash},
+		{"frostProposalValidator", "proposal validator", profile.ProposalValidator, profile.ProposalValidatorCodeHash},
+		{"frostSortitionPool", "sortition pool", profile.SortitionPool, profile.SortitionPoolCodeHash},
+		{"ecdsaFraudRouter", "ECDSA fraud router", [20]byte{0x17}, [32]byte{0x27}},
+		{"ecdsaCutoverCoordinator", "ECDSA cutover coordinator", [20]byte{0x18}, [32]byte{0x28}},
+	}
+	deployments := make([]FrostPreSignDeploymentEvidence, 0, len(inputs))
+	for _, input := range inputs {
+		descriptor := FrostPreSignDeploymentDescriptorEvidence{
+			Address:                     input.address,
+			RuntimeCodeHash:             input.codeHash,
+			Upgradeability:              "immutable",
+			LinkedLibraryDescriptorHash: emptyLinkedLibraryDescriptorHash,
+		}
+		descriptor.DescriptorHash = descriptor.ComputeHash()
+		deployments = append(deployments, FrostPreSignDeploymentEvidence{
+			Role:                    input.role,
+			Name:                    input.name,
+			DeploymentBlock:         1,
+			RelevantEventStartBlock: 1,
+			Current:                 descriptor,
+			HistoricalEpochs: []FrostPreSignDeploymentEpochEvidence{{
+				Start: FrostPreSignFinality{
+					BlockNumber: 1,
+					BlockHash:   [32]byte(deploymentBlockHash),
+				},
+				Descriptor: descriptor,
+			}},
+		})
+	}
+	profile.ImplementationSetHash =
+		ComputeFrostPreSignDeploymentEvidenceHash(deployments)
 	profile.ProfileHash = profile.ComputeHash()
-	return profile
+	linkedLibraryDescriptorSetHash, err :=
+		frostRetainedGroupLinkedLibraryDescriptorSetHash(deployments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return profile, FrostPreSignActivationRuntimeManifest{
+		ManifestHash:                     profile.ActivationManifestHash,
+		DomainChainID:                    profile.DomainChainID,
+		GenesisBlockHash:                 [32]byte{0x39},
+		ProfileHash:                      profile.ProfileHash,
+		ImplementationSetHash:            profile.ImplementationSetHash,
+		LinkedLibraryDescriptorSetHash:   linkedLibraryDescriptorSetHash,
+		EndpointIdentitySetHash:          [32]byte{0x3a},
+		Deployments:                      deployments,
+		SignerProtocolID:                 [32]byte{0x45},
+		ReservationProtocolID:            profile.ReservationProtocolID,
+		BitcoinOutboxProtocolID:          [32]byte{0x46},
+		SigningPolicyHash:                profile.SigningPolicyHash,
+		RetainedGroupInventoryProtocolID: [32]byte{0x43},
+		CanonicalJournal: FrostRetainedGroupCanonicalJournalManifest{
+			StoreID:                   "canonical-test-store",
+			StoreFingerprint:          [32]byte{0x47},
+			ClusterFingerprint:        [32]byte{0x48},
+			Checkpoint:                FrostPreSignFinality{BlockNumber: 1, BlockHash: [32]byte(deploymentBlockHash)},
+			DescriptorSetHash:         [32]byte{0x42},
+			SourceTrustDomainID:       "independent-retained-history-test",
+			SourceEndpointFingerprint: [32]byte{0x31},
+		},
+		QuarantineJournal: FrostRetainedGroupQuarantineJournalManifest{
+			ProtocolID:         [32]byte{0x44},
+			StoreID:            "quarantine-test-store",
+			StoreFingerprint:   [32]byte{0x49},
+			ClusterFingerprint: [32]byte{0x4a},
+		},
+	}
 }
 
 func frostRetainedGroupHistoryTestMutations(
@@ -486,6 +708,12 @@ func (fixture *frostRetainedGroupHistorySourceFixture) installReceipts() {
 	if err != nil {
 		fixture.t.Fatal(err)
 	}
+	registryAddress := common.Address(
+		evidence.deployments["frostWalletRegistry"].Current.Address,
+	)
+	bridgeAddress := common.Address(
+		evidence.deployments["bridge"].Current.Address,
+	)
 	admission := fixture.mutations[0]
 	dkgResult, dkgData, dkgResultHash := frostRetainedGroupHistoryTestDkgResultWithMisbehaved(
 		fixture.t,
@@ -507,7 +735,7 @@ func (fixture *frostRetainedGroupHistorySourceFixture) installReceipts() {
 	fixture.mutations[0] = admission
 	submissionLog := frostRetainedGroupHistoryTestLog(
 		admission.DkgSubmissionPoint,
-		evidence.registry.address,
+		registryAddress,
 		[]common.Hash{
 			evidence.registryABI.Events["DkgResultSubmitted"].ID,
 			common.Hash(admission.DkgResultHash),
@@ -520,7 +748,7 @@ func (fixture *frostRetainedGroupHistorySourceFixture) installReceipts() {
 
 	approvalLog := frostRetainedGroupHistoryTestLog(
 		admission.DkgApprovalPoint,
-		evidence.registry.address,
+		registryAddress,
 		[]common.Hash{
 			evidence.registryABI.Events["DkgResultApproved"].ID,
 			common.Hash(admission.DkgResultHash),
@@ -530,7 +758,7 @@ func (fixture *frostRetainedGroupHistorySourceFixture) installReceipts() {
 	)
 	creationLog := frostRetainedGroupHistoryTestLog(
 		admission.CreationPoint,
-		evidence.registry.address,
+		registryAddress,
 		[]common.Hash{
 			evidence.registryABI.Events["WalletCreated"].ID,
 			common.Hash(admission.WalletID),
@@ -540,7 +768,7 @@ func (fixture *frostRetainedGroupHistorySourceFixture) installReceipts() {
 	)
 	registrationLog := frostRetainedGroupHistoryTestLog(
 		admission.BridgeRegistrationPoint,
-		evidence.bridge.address,
+		bridgeAddress,
 		[]common.Hash{
 			evidence.bridgeABI.Events["NewWalletRegisteredV2"].ID,
 			common.Hash(admission.WalletID),
@@ -560,7 +788,7 @@ func (fixture *frostRetainedGroupHistorySourceFixture) installReceipts() {
 	closing := fixture.mutations[1]
 	closingLog := frostRetainedGroupHistoryTestLog(
 		closing.Point,
-		evidence.bridge.address,
+		bridgeAddress,
 		[]common.Hash{
 			evidence.bridgeABI.Events["WalletClosing"].ID,
 			{},
@@ -575,7 +803,7 @@ func (fixture *frostRetainedGroupHistorySourceFixture) installReceipts() {
 	registryClosure := fixture.mutations[3]
 	closedLog := frostRetainedGroupHistoryTestLog(
 		closed.Point,
-		evidence.bridge.address,
+		bridgeAddress,
 		[]common.Hash{
 			evidence.bridgeABI.Events["WalletClosed"].ID,
 			{},
@@ -585,7 +813,7 @@ func (fixture *frostRetainedGroupHistorySourceFixture) installReceipts() {
 	)
 	registryClosureLog := frostRetainedGroupHistoryTestLog(
 		registryClosure.Point,
-		evidence.registry.address,
+		registryAddress,
 		[]common.Hash{
 			evidence.registryABI.Events["WalletClosed"].ID,
 			common.Hash(registryClosure.WalletID),
@@ -683,6 +911,7 @@ func (fixture *frostRetainedGroupHistorySourceFixture) historyPages(
 		}
 		page := &frostRetainedGroupHistoryPagePayload{
 			Schema:            frostRetainedGroupHistoryPageSchema,
+			BindingHash:       frostActivationHex32(fixture.source.evidence.bindingHash),
 			Identity:          identity,
 			ChainID:           1,
 			QueryHash:         frostActivationHex32(queryHash),
@@ -705,13 +934,18 @@ func (fixture *frostRetainedGroupHistorySourceFixture) historyPages(
 		}
 		previousPageHash = sha256.Sum256(canonical)
 	}
-	historyRoot, err := frostRetainedGroupHistoryRoot(queryHash, wireMutations)
+	historyRoot, err := frostRetainedGroupHistoryRoot(
+		fixture.source.evidence.bindingHash,
+		queryHash,
+		wireMutations,
+	)
 	if err != nil {
 		fixture.t.Fatal(err)
 	}
 	pages[len(pages)-1].Receipt = &frostRetainedGroupHistoryReceipt{
 		PageCount:     uint64(len(pages)),
 		MutationCount: uint64(len(wireMutations)),
+		BindingHash:   frostActivationHex32(fixture.source.evidence.bindingHash),
 		HistoryRoot:   frostActivationHex32(historyRoot),
 	}
 	return pages
@@ -720,6 +954,10 @@ func (fixture *frostRetainedGroupHistorySourceFixture) historyPages(
 func (fixture *frostRetainedGroupHistorySourceFixture) historyResponse(
 	request frostRetainedGroupHistoryPageRequest,
 ) interface{} {
+	if request.BindingHash !=
+		frostActivationHex32(fixture.source.evidence.bindingHash) {
+		return nil
+	}
 	pages := fixture.historyPages(request.Query)
 	for _, page := range pages {
 		if page.Cursor == request.Cursor {
@@ -747,6 +985,9 @@ func (fixture *frostRetainedGroupHistorySourceFixture) operatorResponse(
 	}
 	payload := &frostRetainedGroupOperatorReceiptPayload{
 		Schema: frostRetainedGroupOperatorReceiptSchema,
+		BindingHash: frostActivationHex32(
+			fixture.source.evidence.bindingHash,
+		),
 		Identity: frostRetainedGroupWireIdentity{
 			TrustDomainID:       fixture.identity.TrustDomainID,
 			EndpointFingerprint: frostActivationHex32(fixture.identity.EndpointFingerprint),
@@ -795,6 +1036,226 @@ func TestSignedFrostRetainedGroupHistorySource_ReadsCompletePaginatedHistory(
 	}
 }
 
+func TestSignedFrostRetainedGroupHistorySource_ProtocolBindingCommitsRuntime(
+	t *testing.T,
+) {
+	fixture := newFrostRetainedGroupHistorySourceFixture(t)
+	baseline := fixture.source.evidence.bindingHash
+	testCases := map[string]func(
+		*FrostPreSignActivationProfile,
+		*FrostPreSignActivationRuntimeManifest,
+	){
+		"domain chain": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.DomainChainID[31] ^= 0xff
+		},
+		"genesis": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.GenesisBlockHash[0] ^= 0xff
+		},
+		"checkpoint": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.CanonicalJournal.Checkpoint.BlockHash[0] ^= 0xff
+		},
+		"manifest": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.ManifestHash[0] ^= 0xff
+		},
+		"profile": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.ProfileHash[0] ^= 0xff
+		},
+		"implementation": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.ImplementationSetHash[0] ^= 0xff
+		},
+		"descriptor": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.CanonicalJournal.DescriptorSetHash[0] ^= 0xff
+		},
+		"linked libraries": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.LinkedLibraryDescriptorSetHash[0] ^= 0xff
+		},
+		"endpoint identities": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.EndpointIdentitySetHash[0] ^= 0xff
+		},
+		"protocol": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.SignerProtocolID[0] ^= 0xff
+		},
+		"evidence protocol": func(
+			profile *FrostPreSignActivationProfile,
+			_ *FrostPreSignActivationRuntimeManifest,
+		) {
+			profile.EvidenceProtocolID[0] ^= 0xff
+		},
+		"canonical store": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.CanonicalJournal.StoreID += "-other"
+		},
+		"canonical cluster": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.CanonicalJournal.ClusterFingerprint[0] ^= 0xff
+		},
+		"quarantine store": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.QuarantineJournal.StoreFingerprint[0] ^= 0xff
+		},
+	}
+	for name, mutate := range testCases {
+		t.Run(name, func(t *testing.T) {
+			profile := fixture.profile
+			runtime := fixture.runtimeManifest
+			mutate(&profile, &runtime)
+			binding, err := fixture.source.computeProtocolBinding(profile, runtime)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if binding == baseline {
+				t.Fatalf("%s was omitted from the protocol binding", name)
+			}
+		})
+	}
+}
+
+func TestSignedFrostRetainedGroupHistorySource_RejectsInconsistentRuntimeEvidence(
+	t *testing.T,
+) {
+	testCases := map[string]struct {
+		mutate   func(*FrostPreSignActivationProfile, *FrostPreSignActivationRuntimeManifest)
+		expected string
+	}{
+		"profile role": {
+			mutate: func(
+				profile *FrostPreSignActivationProfile,
+				runtime *FrostPreSignActivationRuntimeManifest,
+			) {
+				for index := range runtime.Deployments {
+					deployment := &runtime.Deployments[index]
+					if deployment.Role != "bridge" {
+						continue
+					}
+					deployment.Current.Address[0] ^= 0xff
+					deployment.Current.DescriptorHash =
+						deployment.Current.ComputeHash()
+					last := len(deployment.HistoricalEpochs) - 1
+					deployment.HistoricalEpochs[last].Descriptor =
+						cloneFrostRetainedGroupDeploymentDescriptor(
+							deployment.Current,
+						)
+				}
+				profile.ImplementationSetHash =
+					ComputeFrostPreSignDeploymentEvidenceHash(
+						runtime.Deployments,
+					)
+				profile.ProfileHash = profile.ComputeHash()
+				runtime.ImplementationSetHash =
+					profile.ImplementationSetHash
+				runtime.ProfileHash = profile.ProfileHash
+			},
+			expected: "differs from the activation profile",
+		},
+		"recursive descriptor": {
+			mutate: func(
+				profile *FrostPreSignActivationProfile,
+				runtime *FrostPreSignActivationRuntimeManifest,
+			) {
+				for index := range runtime.Deployments {
+					deployment := &runtime.Deployments[index]
+					if deployment.Role != "bridge" {
+						continue
+					}
+					deployment.Current.LinkedLibraryDescriptorHash[0] ^= 0xff
+					deployment.Current.DescriptorHash =
+						deployment.Current.ComputeHash()
+					last := len(deployment.HistoricalEpochs) - 1
+					deployment.HistoricalEpochs[last].Descriptor =
+						cloneFrostRetainedGroupDeploymentDescriptor(
+							deployment.Current,
+						)
+				}
+				profile.ImplementationSetHash =
+					ComputeFrostPreSignDeploymentEvidenceHash(
+						runtime.Deployments,
+					)
+				profile.ProfileHash = profile.ComputeHash()
+				runtime.ImplementationSetHash =
+					profile.ImplementationSetHash
+				runtime.ProfileHash = profile.ProfileHash
+			},
+			expected: "linked-library descriptor hash mismatch",
+		},
+		"global descriptor set": {
+			mutate: func(
+				_ *FrostPreSignActivationProfile,
+				runtime *FrostPreSignActivationRuntimeManifest,
+			) {
+				runtime.LinkedLibraryDescriptorSetHash[0] ^= 0xff
+			},
+			expected: "descriptor set differs",
+		},
+	}
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			fixture := newFrostRetainedGroupHistorySourceFixture(t)
+			profile := fixture.profile
+			runtime := fixture.runtimeManifest
+			runtime.Deployments = make(
+				[]FrostPreSignDeploymentEvidence,
+				len(fixture.runtimeManifest.Deployments),
+			)
+			for index, deployment := range fixture.runtimeManifest.Deployments {
+				runtime.Deployments[index] =
+					cloneFrostRetainedGroupDeploymentEvidence(deployment)
+			}
+			testCase.mutate(&profile, &runtime)
+			unbound := &signedFrostRetainedGroupHistorySource{
+				chainID:  fixture.source.chainID,
+				identity: fixture.source.identity,
+			}
+			err := unbound.BindFrostRetainedGroupActivationEvidence(
+				profile,
+				runtime,
+			)
+			if err == nil || !strings.Contains(err.Error(), testCase.expected) {
+				t.Fatalf(
+					"expected %s inconsistency rejection, got [%v]",
+					name,
+					err,
+				)
+			}
+		})
+	}
+}
+
 func TestSignedFrostRetainedGroupHistorySource_DecodesCanonicalVerifiedBytes(
 	t *testing.T,
 ) {
@@ -810,7 +1271,8 @@ func TestSignedFrostRetainedGroupHistorySource_DecodesCanonicalVerifiedBytes(
 		append([]byte(frostRetainedGroupHistorySignatureDomain), canonical...),
 	)
 	envelope := &frostRetainedGroupSignedEnvelope{
-		Schema:              "tbtc-frost-retained-group-signed-envelope/v1",
+		Schema:              "tbtc-frost-retained-group-signed-envelope/v2",
+		BindingHash:         frostActivationHex32(fixture.source.evidence.bindingHash),
 		Payload:             raw,
 		PayloadSHA256:       frostActivationHex32(payloadHash),
 		SignerPublicKeySPKI: base64.StdEncoding.EncodeToString(fixture.export.publicKeyDER),
@@ -830,12 +1292,84 @@ func TestSignedFrostRetainedGroupHistorySource_DecodesCanonicalVerifiedBytes(
 	}
 }
 
+func TestSignedFrostRetainedGroupHistorySource_RejectsCrossBindingEnvelopeAndRoot(
+	t *testing.T,
+) {
+	t.Run("signed envelope", func(t *testing.T) {
+		fixture := newFrostRetainedGroupHistorySourceFixture(t)
+		raw := json.RawMessage(`{"bindingHash":"0x01"}`)
+		canonical, err := canonicalFrostActivationValue(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payloadHash := sha256.Sum256(canonical)
+		signature := ed25519.Sign(
+			fixture.export.privateKey,
+			append([]byte(frostRetainedGroupHistorySignatureDomain), canonical...),
+		)
+		envelope := &frostRetainedGroupSignedEnvelope{
+			Schema:              "tbtc-frost-retained-group-signed-envelope/v2",
+			BindingHash:         frostActivationHex32([32]byte{0xff}),
+			Payload:             raw,
+			PayloadSHA256:       frostActivationHex32(payloadHash),
+			SignerPublicKeySPKI: base64.StdEncoding.EncodeToString(fixture.export.publicKeyDER),
+			SignatureAlgorithm:  "ed25519",
+			Signature:           base64.StdEncoding.EncodeToString(signature),
+		}
+		capture := json.RawMessage{}
+		err = fixture.source.verifySignedEnvelope(envelope, &capture)
+		if err == nil || !strings.Contains(err.Error(), "malformed") {
+			t.Fatalf("expected cross-binding envelope rejection, got [%v]", err)
+		}
+	})
+
+	t.Run("history root", func(t *testing.T) {
+		fixture := newFrostRetainedGroupHistorySourceFixture(t)
+		fixture.pageMutator = func(page *frostRetainedGroupHistoryPagePayload) {
+			if !page.Complete {
+				return
+			}
+			queryHash, err := parseFrostActivationHex32(page.QueryHash)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutationHashes := make([][32]byte, 0, len(fixture.mutations))
+			for _, mutation := range fixture.mutations {
+				canonical, err := canonicalFrostActivationValue(
+					frostRetainedGroupMutationToWire(mutation),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				mutationHashes = append(mutationHashes, sha256.Sum256(canonical))
+			}
+			page.Receipt.HistoryRoot = frostActivationHex32(
+				frostRetainedGroupHistoryRootFromHashes(
+					[32]byte{0xfe},
+					queryHash,
+					mutationHashes,
+				),
+			)
+		}
+		_, err := fixture.source.ReadCompleteHistory(
+			context.Background(),
+			fixture.from,
+			fixture.to,
+		)
+		if err == nil ||
+			!strings.Contains(err.Error(), "does not cover the exact mutation sequence") {
+			t.Fatalf("expected cross-binding history-root rejection, got [%v]", err)
+		}
+	})
+}
+
 func TestSignedFrostRetainedGroupHistorySource_RejectsDuplicateSignedPayloadKey(
 	t *testing.T,
 ) {
 	fixture := newFrostRetainedGroupHistorySourceFixture(t)
 	envelope := &frostRetainedGroupSignedEnvelope{
-		Schema:              "tbtc-frost-retained-group-signed-envelope/v1",
+		Schema:              "tbtc-frost-retained-group-signed-envelope/v2",
+		BindingHash:         frostActivationHex32(fixture.source.evidence.bindingHash),
 		Payload:             json.RawMessage(`{"schema":"v1","schema":"v2"}`),
 		PayloadSHA256:       frostActivationHex32([32]byte{0x01}),
 		SignerPublicKeySPKI: base64.StdEncoding.EncodeToString(fixture.export.publicKeyDER),
@@ -853,7 +1387,7 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsNonExactSignedPayloadKey(
 	t *testing.T,
 ) {
 	fixture := newFrostRetainedGroupHistorySourceFixture(t)
-	payload := json.RawMessage(`{"Schema":"tbtc-frost-retained-group-history-page/v1"}`)
+	payload := json.RawMessage(`{"Schema":"tbtc-frost-retained-group-history-page/v2"}`)
 	canonical, err := canonicalFrostActivationValue(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -864,7 +1398,8 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsNonExactSignedPayloadKey(
 		append([]byte(frostRetainedGroupHistorySignatureDomain), canonical...),
 	)
 	envelope := &frostRetainedGroupSignedEnvelope{
-		Schema:              "tbtc-frost-retained-group-signed-envelope/v1",
+		Schema:              "tbtc-frost-retained-group-signed-envelope/v2",
+		BindingHash:         frostActivationHex32(fixture.source.evidence.bindingHash),
 		Payload:             payload,
 		PayloadSHA256:       frostActivationHex32(payloadHash),
 		SignerPublicKeySPKI: base64.StdEncoding.EncodeToString(fixture.export.publicKeyDER),
@@ -1119,6 +1654,14 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsIdentityCheckpointAndRecei
 		"manifest descriptor": func(page *frostRetainedGroupHistoryPagePayload) {
 			page.DescriptorSetHash = frostActivationHex32([32]byte{0xdd})
 		},
+		"protocol binding": func(page *frostRetainedGroupHistoryPagePayload) {
+			page.BindingHash = frostActivationHex32([32]byte{0xdc})
+		},
+		"receipt binding": func(page *frostRetainedGroupHistoryPagePayload) {
+			if page.Complete {
+				page.Receipt.BindingHash = frostActivationHex32([32]byte{0xdb})
+			}
+		},
 		"receipt": func(page *frostRetainedGroupHistoryPagePayload) {
 			if page.Complete {
 				page.Receipt.HistoryRoot = frostActivationHex32([32]byte{0xee})
@@ -1186,6 +1729,176 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsManifestCodeDrift(
 	}
 }
 
+func TestSignedFrostRetainedGroupHistorySource_RejectsDeploymentTransitionEvent(
+	t *testing.T,
+) {
+	fixture := newFrostRetainedGroupHistorySourceFixture(t)
+	deployment := cloneFrostRetainedGroupDeploymentEvidence(
+		fixture.source.evidence.deployments["bridge"],
+	)
+	firstEnd := FrostPreSignFinality{
+		BlockNumber: 2,
+		BlockHash:   fixture.verifier.headers[2].Hash(),
+	}
+	deployment.HistoricalEpochs = []FrostPreSignDeploymentEpochEvidence{
+		{
+			Start:      deployment.HistoricalEpochs[0].Start,
+			End:        &firstEnd,
+			Descriptor: deployment.HistoricalEpochs[0].Descriptor,
+		},
+		{
+			Start: FrostPreSignFinality{
+				BlockNumber: 3,
+				BlockHash:   fixture.verifier.headers[3].Hash(),
+			},
+			Descriptor: deployment.Current,
+		},
+	}
+
+	if _, err := frostRetainedGroupDeploymentDescriptorAt(
+		deployment,
+		3,
+		fixture.verifier.headers[3].Hash(),
+		true,
+	); err == nil || !strings.Contains(err.Error(), "implementation-transition block") {
+		t.Fatalf("expected implementation-transition event rejection, got [%v]", err)
+	}
+	if _, err := frostRetainedGroupDeploymentDescriptorAt(
+		deployment,
+		3,
+		fixture.verifier.headers[3].Hash(),
+		false,
+	); err != nil {
+		t.Fatalf("expected exact transition state read to select the new epoch: [%v]", err)
+	}
+	if _, err := frostRetainedGroupDeploymentDescriptorAt(
+		deployment,
+		2,
+		[32]byte{0xff},
+		false,
+	); err == nil || !strings.Contains(err.Error(), "signed deployment boundary") {
+		t.Fatalf("expected exact epoch-boundary hash rejection, got [%v]", err)
+	}
+}
+
+func TestSignedFrostRetainedGroupHistorySource_RejectsEIP1967SlotDrift(
+	t *testing.T,
+) {
+	fixture := newFrostRetainedGroupHistorySourceFixture(t)
+	descriptor := cloneFrostRetainedGroupDeploymentDescriptor(
+		fixture.source.evidence.deployments["bridge"].Current,
+	)
+	proxyAddress := common.Address(descriptor.Address)
+	implementationAddress := common.HexToAddress(
+		"0x2222222222222222222222222222222222222222",
+	)
+	adminAddress := common.HexToAddress(
+		"0x3333333333333333333333333333333333333333",
+	)
+	implementationCode := []byte{0x60, 0x51}
+	adminCode := []byte{0x60, 0x52}
+	implementationSlotValue := [32]byte{}
+	copy(implementationSlotValue[12:], implementationAddress[:])
+	adminSlotValue := [32]byte{}
+	copy(adminSlotValue[12:], adminAddress[:])
+
+	descriptor.Upgradeability = "eip1967"
+	descriptor.ImplementationAddress = [20]byte(implementationAddress)
+	descriptor.ImplementationCodeHash = [32]byte(
+		crypto.Keccak256Hash(implementationCode),
+	)
+	descriptor.AdminAddress = [20]byte(adminAddress)
+	descriptor.AdminCodeHash = [32]byte(crypto.Keccak256Hash(adminCode))
+	descriptor.ImplementationSlotValue = implementationSlotValue
+	descriptor.AdminSlotValue = adminSlotValue
+	descriptor.DescriptorHash = descriptor.ComputeHash()
+	fixture.verifier.code[implementationAddress] = implementationCode
+	fixture.verifier.code[adminAddress] = adminCode
+	fixture.verifier.storage[proxyAddress] = map[common.Hash][]byte{
+		frostRetainedGroupEIP1967Slot("eip1967.proxy.implementation"): make(
+			[]byte,
+			32,
+		),
+		frostRetainedGroupEIP1967Slot("eip1967.proxy.admin"): append(
+			[]byte{},
+			adminSlotValue[:]...,
+		),
+	}
+
+	err := fixture.source.authenticateContractDeployment(
+		context.Background(),
+		descriptor,
+		2,
+		fixture.verifier.headers[2].Hash(),
+		make(frostRetainedGroupCodeCache),
+	)
+	if err == nil || !strings.Contains(err.Error(), "slot value mismatch") {
+		t.Fatalf("expected EIP-1967 slot-drift rejection, got [%v]", err)
+	}
+}
+
+func TestSignedFrostRetainedGroupHistorySource_RejectsLinkedLibraryDrift(
+	t *testing.T,
+) {
+	testCases := map[string]struct {
+		copyReference bool
+		actualCode    []byte
+		expected      string
+	}{
+		"reference": {
+			actualCode: []byte{0x60, 0x61},
+			expected:   "reference",
+		},
+		"runtime code": {
+			copyReference: true,
+			actualCode:    []byte{0xff},
+			expected:      "signed activation manifest",
+		},
+	}
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			fixture := newFrostRetainedGroupHistorySourceFixture(t)
+			descriptor := cloneFrostRetainedGroupDeploymentDescriptor(
+				fixture.source.evidence.deployments["bridge"].Current,
+			)
+			ownerAddress := common.Address(descriptor.Address)
+			libraryAddress := common.HexToAddress(
+				"0x4444444444444444444444444444444444444444",
+			)
+			expectedLibraryCode := []byte{0x60, 0x61}
+			ownerCode := make([]byte, 24)
+			if testCase.copyReference {
+				copy(ownerCode[2:], libraryAddress[:])
+			}
+			descriptor.RuntimeCodeHash = [32]byte(crypto.Keccak256Hash(ownerCode))
+			descriptor.LinkedLibraries = []FrostPreSignLinkedLibraryEvidence{{
+				ProtocolRole:                "bridge-library",
+				Address:                     [20]byte(libraryAddress),
+				RuntimeCodeHash:             [32]byte(crypto.Keccak256Hash(expectedLibraryCode)),
+				LinkedLibraryDescriptorHash: [32]byte{0x67},
+				References: []FrostPreSignLinkedLibraryReference{{
+					Start:  2,
+					Length: 20,
+				}},
+			}}
+			descriptor.DescriptorHash = descriptor.ComputeHash()
+			fixture.verifier.code[ownerAddress] = ownerCode
+			fixture.verifier.code[libraryAddress] = testCase.actualCode
+
+			err := fixture.source.authenticateContractDeployment(
+				context.Background(),
+				descriptor,
+				2,
+				fixture.verifier.headers[2].Hash(),
+				make(frostRetainedGroupCodeCache),
+			)
+			if err == nil || !strings.Contains(err.Error(), testCase.expected) {
+				t.Fatalf("expected linked-library %s drift rejection, got [%v]", name, err)
+			}
+		})
+	}
+}
+
 func TestSignedFrostRetainedGroupHistorySource_RejectsWrongEndpointAndReorg(
 	t *testing.T,
 ) {
@@ -1231,6 +1944,21 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsWrongEndpointAndReorg(
 func TestSignedFrostRetainedGroupHistorySource_RejectsWrongOperatorReceipt(
 	t *testing.T,
 ) {
+	t.Run("wrong binding", func(t *testing.T) {
+		fixture := newFrostRetainedGroupHistorySourceFixture(t)
+		fixture.operatorMutator = func(payload *frostRetainedGroupOperatorReceiptPayload) {
+			payload.BindingHash = frostActivationHex32([32]byte{0x98})
+		}
+		_, err := fixture.source.ResolveOperatorID(
+			context.Background(),
+			chain.Address("0x1111111111111111111111111111111111111111"),
+			fixture.to,
+		)
+		if err == nil || !strings.Contains(err.Error(), "differently bound") {
+			t.Fatalf("expected operator binding rejection, got [%v]", err)
+		}
+	})
+
 	t.Run("wrong point", func(t *testing.T) {
 		fixture := newFrostRetainedGroupHistorySourceFixture(t)
 		fixture.operatorMutator = func(payload *frostRetainedGroupOperatorReceiptPayload) {

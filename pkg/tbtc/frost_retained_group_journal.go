@@ -207,6 +207,7 @@ type FrostRetainedGroupQuarantineJournalManifest struct {
 type frostRetainedGroupJournalMetadata struct {
 	Schema                    string               `json:"schema"`
 	ManifestHash              [32]byte             `json:"manifestHash"`
+	BindingHash               [32]byte             `json:"bindingHash"`
 	StoreID                   string               `json:"storeID"`
 	StoreFingerprint          [32]byte             `json:"storeFingerprint"`
 	ClusterFingerprint        [32]byte             `json:"clusterFingerprint"`
@@ -242,6 +243,7 @@ type frostRetainedGroupQuarantineState struct {
 
 type frostRetainedGroupJournalState struct {
 	Schema             string                          `json:"schema"`
+	BindingHash        [32]byte                        `json:"bindingHash"`
 	BatchSequence      uint64                          `json:"batchSequence"`
 	CurrentPoint       FrostPreSignFinality            `json:"currentPoint"`
 	SnapshotGeneration uint64                          `json:"snapshotGeneration"`
@@ -252,6 +254,7 @@ type frostRetainedGroupJournalState struct {
 
 type frostRetainedGroupJournalBatch struct {
 	Schema         string                       `json:"schema"`
+	BindingHash    [32]byte                     `json:"bindingHash"`
 	Sequence       uint64                       `json:"sequence"`
 	From           FrostPreSignFinality         `json:"from"`
 	To             FrostPreSignFinality         `json:"to"`
@@ -263,6 +266,7 @@ type frostRetainedGroupJournalBatch struct {
 type frostRetainedGroupQuarantineMetadata struct {
 	Schema             string               `json:"schema"`
 	ManifestHash       [32]byte             `json:"manifestHash"`
+	BindingHash        [32]byte             `json:"bindingHash"`
 	ProtocolID         [32]byte             `json:"protocolID"`
 	StoreID            string               `json:"storeID"`
 	StoreFingerprint   [32]byte             `json:"storeFingerprint"`
@@ -272,6 +276,7 @@ type frostRetainedGroupQuarantineMetadata struct {
 
 type frostRetainedGroupQuarantineJournalState struct {
 	Schema        string                              `json:"schema"`
+	BindingHash   [32]byte                            `json:"bindingHash"`
 	BatchSequence uint64                              `json:"batchSequence"`
 	CurrentPoint  FrostPreSignFinality                `json:"currentPoint"`
 	Generation    uint64                              `json:"generation"`
@@ -282,6 +287,7 @@ type frostRetainedGroupQuarantineJournalState struct {
 
 type frostRetainedGroupQuarantineJournalBatch struct {
 	Schema         string                       `json:"schema"`
+	BindingHash    [32]byte                     `json:"bindingHash"`
 	Sequence       uint64                       `json:"sequence"`
 	From           FrostPreSignFinality         `json:"from"`
 	To             FrostPreSignFinality         `json:"to"`
@@ -297,6 +303,7 @@ type frostRetainedGroupEnvelope struct {
 
 type frostRetainedGroupJournalSnapshot struct {
 	Schema                       string
+	BindingHash                  [32]byte
 	StoreID                      string
 	StoreFingerprint             [32]byte
 	ClusterFingerprint           [32]byte
@@ -344,6 +351,7 @@ type frostRetainedGroupJournal struct {
 func newFrostRetainedGroupJournal(
 	directory string,
 	manifestHash [32]byte,
+	bindingHash [32]byte,
 	manifest FrostRetainedGroupCanonicalJournalManifest,
 	quarantineManifest FrostRetainedGroupQuarantineJournalManifest,
 	source FrostRetainedGroupHistorySource,
@@ -351,6 +359,7 @@ func newFrostRetainedGroupJournal(
 	operatorAddress chain.Address,
 ) (*frostRetainedGroupJournal, error) {
 	if strings.TrimSpace(directory) == "" || manifestHash == [32]byte{} ||
+		bindingHash == [32]byte{} ||
 		strings.TrimSpace(manifest.StoreID) == "" ||
 		manifest.StoreFingerprint == [32]byte{} ||
 		manifest.ClusterFingerprint == [32]byte{} ||
@@ -413,6 +422,7 @@ func newFrostRetainedGroupJournal(
 		metadata: frostRetainedGroupJournalMetadata{
 			Schema:                    frostRetainedGroupJournalMetadataSchema,
 			ManifestHash:              manifestHash,
+			BindingHash:               bindingHash,
 			StoreID:                   manifest.StoreID,
 			StoreFingerprint:          manifest.StoreFingerprint,
 			ClusterFingerprint:        manifest.ClusterFingerprint,
@@ -425,6 +435,7 @@ func newFrostRetainedGroupJournal(
 		quarantineMetadata: frostRetainedGroupQuarantineMetadata{
 			Schema:             frostRetainedGroupQuarantineMetadataSchema,
 			ManifestHash:       manifestHash,
+			BindingHash:        bindingHash,
 			ProtocolID:         quarantineManifest.ProtocolID,
 			StoreID:            quarantineManifest.StoreID,
 			StoreFingerprint:   quarantineManifest.StoreFingerprint,
@@ -577,6 +588,7 @@ func (frgj *frostRetainedGroupJournal) initialize() error {
 
 	initial := frostRetainedGroupJournalState{
 		Schema:       frostRetainedGroupJournalStateSchema,
+		BindingHash:  frgj.metadata.BindingHash,
 		CurrentPoint: frgj.metadata.Checkpoint,
 		Wallets:      []frostRetainedGroupWalletState{},
 	}
@@ -747,6 +759,7 @@ func (frgj *frostRetainedGroupJournal) initializeQuarantine() error {
 
 	initial := frostRetainedGroupQuarantineJournalState{
 		Schema:       frostRetainedGroupQuarantineStateSchema,
+		BindingHash:  frgj.quarantineMetadata.BindingHash,
 		CurrentPoint: frgj.quarantineMetadata.Checkpoint,
 		Root:         sha256.Sum256([]byte(frostRetainedGroupQuarantineDomain)),
 		Quarantines:  []frostRetainedGroupQuarantineState{},
@@ -864,6 +877,7 @@ func validateFrostRetainedGroupBatch(
 		return frostRetainedGroupLegacySchemaError("canonical batch")
 	}
 	if batch.Schema != frostRetainedGroupJournalBatchSchema ||
+		batch.BindingHash == [32]byte{} || batch.BindingHash != prior.BindingHash ||
 		batch.Sequence != prior.BatchSequence+1 || batch.From != prior.CurrentPoint ||
 		batch.PriorBatchRoot != prior.BatchRoot || batch.To.BlockNumber < batch.From.BlockNumber ||
 		batch.To.BlockHash == [32]byte{} || batch.Checksum == [32]byte{} {
@@ -897,6 +911,7 @@ func validateFrostRetainedGroupQuarantineBatch(
 		return frostRetainedGroupLegacySchemaError("quarantine batch")
 	}
 	if batch.Schema != frostRetainedGroupQuarantineBatchSchema ||
+		batch.BindingHash == [32]byte{} || batch.BindingHash != prior.BindingHash ||
 		batch.Sequence != prior.BatchSequence+1 || batch.From != prior.CurrentPoint ||
 		batch.PriorBatchRoot != prior.BatchRoot || batch.To.BlockNumber < batch.From.BlockNumber ||
 		batch.To.BlockHash == [32]byte{} || batch.Checksum == [32]byte{} {
@@ -1803,6 +1818,7 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 		}
 		batch := frostRetainedGroupJournalBatch{
 			Schema:         frostRetainedGroupJournalBatchSchema,
+			BindingHash:    frgj.metadata.BindingHash,
 			Sequence:       frgj.state.BatchSequence + 1,
 			From:           frgj.state.CurrentPoint,
 			To:             target,
@@ -1851,6 +1867,7 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 		}
 		batch := frostRetainedGroupQuarantineJournalBatch{
 			Schema:         frostRetainedGroupQuarantineBatchSchema,
+			BindingHash:    frgj.quarantineMetadata.BindingHash,
 			Sequence:       frgj.quarantineState.BatchSequence + 1,
 			From:           frgj.quarantineState.CurrentPoint,
 			To:             target,
@@ -1928,6 +1945,7 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 	}
 	return &frostRetainedGroupJournalSnapshot{
 		Schema:                       frostRetainedGroupJournalSnapshotSchema,
+		BindingHash:                  frgj.metadata.BindingHash,
 		StoreID:                      frgj.metadata.StoreID,
 		StoreFingerprint:             frgj.metadata.StoreFingerprint,
 		ClusterFingerprint:           frgj.metadata.ClusterFingerprint,

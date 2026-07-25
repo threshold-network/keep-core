@@ -41,6 +41,7 @@ type frostActivationEthereumPoint struct {
 type frostActivationChallenge struct {
 	Nonce         string                       `json:"nonce"`
 	ManifestHash  string                       `json:"manifestHash"`
+	BindingHash   string                       `json:"bindingHash"`
 	EthereumPoint frostActivationEthereumPoint `json:"ethereumPoint"`
 }
 
@@ -53,6 +54,7 @@ type frostActivationCanonicalJournalState struct {
 	StoreID                   string                       `json:"storeID"`
 	StoreFingerprint          string                       `json:"storeFingerprint"`
 	ClusterFingerprint        string                       `json:"clusterFingerprint"`
+	BindingHash               string                       `json:"bindingHash"`
 	Checkpoint                frostActivationEthereumPoint `json:"checkpoint"`
 	Current                   frostActivationEthereumPoint `json:"current"`
 	DescriptorSetHash         string                       `json:"descriptorSetHash"`
@@ -139,6 +141,7 @@ type frostActivationHandshakePayload struct {
 	Kind          string                        `json:"kind"`
 	Nonce         string                        `json:"nonce"`
 	ManifestHash  string                        `json:"manifestHash"`
+	BindingHash   string                        `json:"bindingHash"`
 	EthereumPoint frostActivationEthereumPoint  `json:"ethereumPoint"`
 	State         frostActivationHandshakeState `json:"state"`
 }
@@ -154,6 +157,7 @@ type frostActivationHandshakeExporter struct {
 	privateKey    ed25519.PrivateKey
 	publicKeySPKI string
 	manifest      FrostPreSignActivationRuntimeManifest
+	bindingHash   [32]byte
 	pointVerifier FrostPreSignActivationPointVerifier
 	storeBinding  *frostDurableSessionStoreBinding
 	outbox        *bitcoinBroadcastOutbox
@@ -172,6 +176,7 @@ func newFrostActivationHandshakeExporter(
 	pointVerifier FrostPreSignActivationPointVerifier,
 	storeBinding *frostDurableSessionStoreBinding,
 	outbox *bitcoinBroadcastOutbox,
+	journal *frostRetainedGroupJournal,
 	readiness frostProductionSignerReadinessVerifier,
 ) (*frostActivationHandshakeExporter, error) {
 	parsedEndpoint, err := validateFrostActivationHandshakeEndpoint(endpoint)
@@ -191,7 +196,8 @@ func newFrostActivationHandshakeExporter(
 		durableSessionStoreFingerprintErr != nil || durableSessionStoreFingerprint == [32]byte{} ||
 		durableSessionStoreFingerprint == manifest.CanonicalJournal.StoreFingerprint ||
 		durableSessionStoreFingerprint == manifest.QuarantineJournal.StoreFingerprint ||
-		pointVerifier == nil || storeBinding == nil || outbox == nil || readiness == nil {
+		pointVerifier == nil || storeBinding == nil || outbox == nil ||
+		journal == nil || readiness == nil {
 		return nil, fmt.Errorf("FROST activation handshake dependencies are invalid")
 	}
 	boundStoreFingerprint, err := storeBinding.verify()
@@ -207,11 +213,26 @@ func newFrostActivationHandshakeExporter(
 	if sha256.Sum256(publicKeyDER) != manifest.AttestationSignerKeyHash {
 		return nil, fmt.Errorf("FROST activation attestation key differs from signed manifest")
 	}
+	journal.mutex.Lock()
+	bindingHash := journal.metadata.BindingHash
+	journalBindingValid := bindingHash != [32]byte{} &&
+		journal.metadata.ManifestHash == manifest.ManifestHash &&
+		journal.quarantineMetadata.ManifestHash == manifest.ManifestHash &&
+		journal.quarantineMetadata.BindingHash == bindingHash &&
+		journal.state.BindingHash == bindingHash &&
+		journal.quarantineState.BindingHash == bindingHash
+	journal.mutex.Unlock()
+	if !journalBindingValid {
+		return nil, fmt.Errorf(
+			"FROST activation handshake journal binding differs from signed runtime state",
+		)
+	}
 	exporter := &frostActivationHandshakeExporter{
 		endpoint:      parsedEndpoint,
 		privateKey:    privateKey,
 		publicKeySPKI: base64.StdEncoding.EncodeToString(publicKeyDER),
 		manifest:      manifest,
+		bindingHash:   bindingHash,
 		pointVerifier: pointVerifier,
 		storeBinding:  storeBinding,
 		outbox:        outbox,
@@ -397,6 +418,10 @@ func (fahe *frostActivationHandshakeExporter) attest(
 	if err != nil || manifestHash != fahe.manifest.ManifestHash {
 		return nil, fmt.Errorf("FROST activation challenge manifest hash mismatch")
 	}
+	bindingHash, err := parseFrostActivationHex32(request.Challenge.BindingHash)
+	if err != nil || bindingHash != fahe.bindingHash {
+		return nil, fmt.Errorf("FROST activation challenge binding hash mismatch")
+	}
 	blockHash, err := parseFrostActivationHex32(request.Challenge.EthereumPoint.BlockHash)
 	if err != nil || request.Challenge.EthereumPoint.BlockNumber == 0 {
 		return nil, fmt.Errorf("FROST activation challenge Ethereum point is invalid")
@@ -450,7 +475,8 @@ func (fahe *frostActivationHandshakeExporter) attest(
 	}
 	journalManifest := fahe.manifest.CanonicalJournal
 	quarantineManifest := fahe.manifest.QuarantineJournal
-	if !journalSnapshot.Complete || journalSnapshot.CurrentPoint != finality ||
+	if journalSnapshot.BindingHash != fahe.bindingHash ||
+		!journalSnapshot.Complete || journalSnapshot.CurrentPoint != finality ||
 		journalSnapshot.StoreID != journalManifest.StoreID ||
 		journalSnapshot.StoreFingerprint != journalManifest.StoreFingerprint ||
 		journalSnapshot.ClusterFingerprint != journalManifest.ClusterFingerprint ||
@@ -508,6 +534,7 @@ func (fahe *frostActivationHandshakeExporter) attest(
 			StoreID:            journalSnapshot.StoreID,
 			StoreFingerprint:   frostActivationHex32(journalSnapshot.StoreFingerprint),
 			ClusterFingerprint: frostActivationHex32(journalSnapshot.ClusterFingerprint),
+			BindingHash:        frostActivationHex32(journalSnapshot.BindingHash),
 			Checkpoint: frostActivationEthereumPoint{
 				BlockNumber: journalManifest.Checkpoint.BlockNumber,
 				BlockHash:   frostActivationHex32(journalManifest.Checkpoint.BlockHash),
@@ -567,6 +594,7 @@ func (fahe *frostActivationHandshakeExporter) attest(
 		Kind:          "frost-signer",
 		Nonce:         request.Challenge.Nonce,
 		ManifestHash:  request.Challenge.ManifestHash,
+		BindingHash:   request.Challenge.BindingHash,
 		EthereumPoint: request.Challenge.EthereumPoint,
 		State:         state,
 	}

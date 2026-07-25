@@ -2221,6 +2221,12 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 	if err != nil {
 		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
 	}
+	endpointIdentitySetHash, err := frostPreSignEndpointIdentitySetHash(
+		adapter.manifest,
+	)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
 	quarantine := frost.QuarantineJournal
 	quarantineJournalProtocolID, err := parse(quarantine.ProtocolID)
 	if err != nil {
@@ -2272,6 +2278,7 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 		ProfileHash:                      adapter.profile.ProfileHash,
 		ImplementationSetHash:            adapter.profile.ImplementationSetHash,
 		LinkedLibraryDescriptorSetHash:   linkedLibraryDescriptorSetHash,
+		EndpointIdentitySetHash:          endpointIdentitySetHash,
 		Deployments:                      frostPreSignRuntimeDeploymentEvidence(adapter.deployments),
 		SignerProtocolID:                 signerProtocolID,
 		ReservationProtocolID:            adapter.profile.ReservationProtocolID,
@@ -2308,6 +2315,101 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 			MinimumGeneration:  quarantine.MinimumGeneration,
 		},
 	}, nil
+}
+
+func frostPreSignEndpointIdentitySetHash(
+	manifest frostPreSignActivationManifest,
+) ([32]byte, error) {
+	ethereum := manifest.Ethereum
+	frost := manifest.FrostSigner
+	type identity struct {
+		role                string
+		trustDomainID       string
+		endpointFingerprint string
+		operatorFingerprint string
+		storeID             string
+		storeFingerprint    string
+		clusterFingerprint  string
+	}
+	identities := []identity{
+		{
+			role:                "ethereum-source",
+			trustDomainID:       ethereum.SourceTrustDomainID,
+			endpointFingerprint: ethereum.SourceEndpointFingerprint,
+			operatorFingerprint: ethereum.SourceOperatorFingerprint,
+			storeID:             ethereum.SourceHistoryStoreID,
+			storeFingerprint:    ethereum.SourceHistoryStoreFingerprint,
+		},
+		{
+			role:                "ethereum-verifier",
+			trustDomainID:       ethereum.VerifierTrustDomainID,
+			endpointFingerprint: ethereum.VerifierEndpointFingerprint,
+			operatorFingerprint: ethereum.VerifierOperatorFingerprint,
+			storeID:             ethereum.VerifierHistoryStoreID,
+			storeFingerprint:    ethereum.VerifierHistoryStoreFingerprint,
+		},
+		{
+			role:                "retained-group-export",
+			trustDomainID:       frost.CanonicalJournal.SourceTrustDomainID,
+			endpointFingerprint: frost.CanonicalJournal.SourceEndpointFingerprint,
+			operatorFingerprint: frost.CanonicalJournal.SourceOperatorFingerprint,
+			storeID:             frost.CanonicalJournal.StoreID,
+			storeFingerprint:    frost.CanonicalJournal.StoreFingerprint,
+			clusterFingerprint:  frost.CanonicalJournal.ClusterFingerprint,
+		},
+		{
+			role:                "runtime-handshake",
+			trustDomainID:       frost.TrustDomainID,
+			endpointFingerprint: frost.HandshakeEndpointFingerprint,
+			operatorFingerprint: frost.HandshakeOperatorFingerprint,
+		},
+	}
+	hasher := sha256.New()
+	hasher.Write([]byte("tbtc-frost-endpoint-identity-set-v1\x00"))
+	for _, entry := range identities {
+		endpointFingerprint, err := frostPreSignParseBytes32(
+			entry.endpointFingerprint,
+		)
+		if err != nil {
+			return [32]byte{}, err
+		}
+		operatorFingerprint, err := frostPreSignParseBytes32(
+			entry.operatorFingerprint,
+		)
+		if err != nil {
+			return [32]byte{}, err
+		}
+		frostPreSignWriteHashString(hasher, entry.role)
+		frostPreSignWriteHashString(hasher, entry.trustDomainID)
+		hasher.Write(endpointFingerprint[:])
+		hasher.Write(operatorFingerprint[:])
+		frostPreSignWriteHashString(hasher, entry.storeID)
+		if entry.storeFingerprint == "" {
+			hasher.Write(make([]byte, 32))
+		} else {
+			storeFingerprint, err := frostPreSignParseBytes32(
+				entry.storeFingerprint,
+			)
+			if err != nil {
+				return [32]byte{}, err
+			}
+			hasher.Write(storeFingerprint[:])
+		}
+		if entry.clusterFingerprint == "" {
+			hasher.Write(make([]byte, 32))
+		} else {
+			clusterFingerprint, err := frostPreSignParseBytes32(
+				entry.clusterFingerprint,
+			)
+			if err != nil {
+				return [32]byte{}, err
+			}
+			hasher.Write(clusterFingerprint[:])
+		}
+	}
+	result := [32]byte{}
+	copy(result[:], hasher.Sum(nil))
+	return result, nil
 }
 
 func frostPreSignRuntimeDeploymentEvidence(

@@ -96,13 +96,20 @@ func (readiness *testFrostProductionSignerReadiness) verifyFrostProductionSigner
 
 func (source *testFrostRetainedGroupHistorySource) BindFrostRetainedGroupActivationEvidence(
 	_ FrostPreSignActivationProfile,
-	_ [32]byte,
-	descriptorSetHash [32]byte,
+	runtimeManifest FrostPreSignActivationRuntimeManifest,
 ) error {
-	if descriptorSetHash != source.manifest.DescriptorSetHash {
+	if runtimeManifest.CanonicalJournal.DescriptorSetHash !=
+		source.manifest.DescriptorSetHash {
 		return fmt.Errorf("descriptor set mismatch")
 	}
 	return nil
+}
+
+func (source *testFrostRetainedGroupHistorySource) FrostRetainedGroupProtocolBindingHash() (
+	[32]byte,
+	error,
+) {
+	return source.manifest.DescriptorSetHash, nil
 }
 
 func (source *testFrostRetainedGroupHistorySource) Identity(
@@ -194,6 +201,7 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 		verifier,
 		testFrostDurableSessionStoreBinding(t),
 		outbox,
+		journal,
 		readiness,
 	)
 	if err != nil {
@@ -212,6 +220,7 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 		Challenge: frostActivationChallenge{
 			Nonce:         frostActivationHex32(nonce),
 			ManifestHash:  frostActivationHex32(manifest.ManifestHash),
+			BindingHash:   frostActivationHex32(journal.metadata.BindingHash),
 			EthereumPoint: point,
 		},
 	}
@@ -228,6 +237,9 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 	if handshake.Payload.Kind != "frost-signer" ||
 		handshake.Payload.Nonce != request.Challenge.Nonce ||
 		handshake.Payload.ManifestHash != request.Challenge.ManifestHash ||
+		handshake.Payload.BindingHash != request.Challenge.BindingHash ||
+		handshake.Payload.State.CanonicalJournal.BindingHash !=
+			request.Challenge.BindingHash ||
 		!handshake.Payload.State.Healthy ||
 		!handshake.Payload.State.InteractiveSigningReady ||
 		!handshake.Payload.State.NonceShareGateEnforced ||
@@ -264,8 +276,8 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 		"snapshotGeneration", "walletCount",
 	})
 	assertFrostActivationObjectKeys(t, handshake.Payload.State.CanonicalJournal, []string{
-		"checkpoint", "clusterFingerprint", "complete", "current", "descriptorSetHash",
-		"generation", "sourceEndpointFingerprint", "sourceOperatorFingerprint",
+		"bindingHash", "checkpoint", "clusterFingerprint", "complete", "current",
+		"descriptorSetHash", "generation", "sourceEndpointFingerprint", "sourceOperatorFingerprint",
 		"sourceTrustDomainID", "storeFingerprint", "storeID",
 	})
 	assertFrostActivationObjectKeys(t, handshake.Payload.State.QuarantineJournal, []string{
@@ -354,6 +366,7 @@ func TestFrostActivationHandshakeExporter_FailsClosed(t *testing.T) {
 		&testFrostActivationPointVerifier{},
 		testFrostDurableSessionStoreBinding(t),
 		outbox,
+		journal,
 		readiness,
 	)
 	if err != nil {
@@ -371,6 +384,7 @@ func TestFrostActivationHandshakeExporter_FailsClosed(t *testing.T) {
 		Challenge: frostActivationChallenge{
 			Nonce:         frostActivationHex32([32]byte{0x22}),
 			ManifestHash:  frostActivationHex32(manifest.ManifestHash),
+			BindingHash:   frostActivationHex32(journal.metadata.BindingHash),
 			EthereumPoint: point,
 		},
 	}
@@ -512,8 +526,10 @@ func testFrostRetainedGroupJournal(
 		t.Fatal(err)
 	}
 	target := FrostPreSignFinality{BlockNumber: point.BlockNumber, BlockHash: blockHash}
+	bindingHash := [32]byte{0x28}
 	state := frostRetainedGroupJournalState{
 		Schema:             frostRetainedGroupJournalStateSchema,
+		BindingHash:        bindingHash,
 		CurrentPoint:       target,
 		SnapshotGeneration: 9,
 		Wallets:            []frostRetainedGroupWalletState{},
@@ -529,6 +545,9 @@ func testFrostRetainedGroupJournal(
 	}
 	return &frostRetainedGroupJournal{
 		metadata: frostRetainedGroupJournalMetadata{
+			Schema:                    frostRetainedGroupJournalMetadataSchema,
+			ManifestHash:              manifest.ManifestHash,
+			BindingHash:               bindingHash,
 			StoreID:                   manifest.CanonicalJournal.StoreID,
 			StoreFingerprint:          manifest.CanonicalJournal.StoreFingerprint,
 			ClusterFingerprint:        manifest.CanonicalJournal.ClusterFingerprint,
@@ -541,6 +560,7 @@ func testFrostRetainedGroupJournal(
 		quarantineMetadata: frostRetainedGroupQuarantineMetadata{
 			Schema:             frostRetainedGroupQuarantineMetadataSchema,
 			ManifestHash:       manifest.ManifestHash,
+			BindingHash:        bindingHash,
 			ProtocolID:         manifest.QuarantineJournal.ProtocolID,
 			StoreID:            manifest.QuarantineJournal.StoreID,
 			StoreFingerprint:   manifest.QuarantineJournal.StoreFingerprint,
@@ -555,6 +575,7 @@ func testFrostRetainedGroupJournal(
 		state:                       state,
 		quarantineState: frostRetainedGroupQuarantineJournalState{
 			Schema:       frostRetainedGroupQuarantineStateSchema,
+			BindingHash:  bindingHash,
 			CurrentPoint: target,
 			Root:         quarantineRoot,
 			Quarantines:  []frostRetainedGroupQuarantineState{},

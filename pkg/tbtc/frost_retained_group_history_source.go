@@ -23,22 +23,25 @@ import (
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/gorilla/websocket"
 	"github.com/keep-network/keep-core/pkg/chain"
 )
 
 const (
-	frostRetainedGroupHistoryPageSchema      = "tbtc-frost-retained-group-history-page/v1"
-	frostRetainedGroupOperatorReceiptSchema  = "tbtc-frost-retained-group-operator-receipt/v1"
-	frostRetainedGroupHistoryRequestSchema   = "tbtc-frost-retained-group-history-request/v1"
-	frostRetainedGroupOperatorRequestSchema  = "tbtc-frost-retained-group-operator-request/v1"
-	frostRetainedGroupHistorySignatureDomain = "tbtc-frost-retained-group-export-signature-v1\x00"
+	frostRetainedGroupHistoryPageSchema      = "tbtc-frost-retained-group-history-page/v2"
+	frostRetainedGroupOperatorReceiptSchema  = "tbtc-frost-retained-group-operator-receipt/v2"
+	frostRetainedGroupHistoryRequestSchema   = "tbtc-frost-retained-group-history-request/v2"
+	frostRetainedGroupOperatorRequestSchema  = "tbtc-frost-retained-group-operator-request/v2"
+	frostRetainedGroupHistorySignatureDomain = "tbtc-frost-retained-group-export-signature-v2\x00"
 	frostRetainedGroupHistoryEndpointDomain  = "tbtc-frost-retained-group-endpoints-v1\x00"
-	frostRetainedGroupHistoryQueryDomain     = "tbtc-frost-retained-group-history-query-v1\x00"
-	frostRetainedGroupOperatorQueryDomain    = "tbtc-frost-retained-group-operator-query-v1\x00"
-	frostRetainedGroupHistoryRootDomain      = "tbtc-frost-retained-group-export-history-root-v1\x00"
+	frostRetainedGroupHistoryQueryDomain     = "tbtc-frost-retained-group-history-query-v2\x00"
+	frostRetainedGroupOperatorQueryDomain    = "tbtc-frost-retained-group-operator-query-v2\x00"
+	frostRetainedGroupHistoryRootDomain      = "tbtc-frost-retained-group-export-history-root-v2\x00"
+	frostRetainedGroupProtocolBindingDomain  = "tbtc-frost-retained-group-protocol-binding-v2\x00"
 
 	frostRetainedGroupMaximumResponseBytes          = 1024 * 1024
 	frostRetainedGroupMaximumAggregateResponseBytes = 16 * 1024 * 1024
@@ -72,14 +75,106 @@ type FrostRetainedGroupHistorySourceConfig struct {
 type frostRetainedGroupEthereumVerifier interface {
 	ChainID(context.Context) (*big.Int, error)
 	HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
+	HeaderByHash(context.Context, common.Hash) (*types.Header, error)
 	TransactionReceipt(context.Context, common.Hash) (*types.Receipt, error)
-	CodeAt(context.Context, common.Address, *big.Int) ([]byte, error)
-	CallContract(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error)
+	CodeAtHash(context.Context, common.Address, common.Hash) ([]byte, error)
+	StorageAtHash(context.Context, common.Address, common.Hash, common.Hash) ([]byte, error)
+	CallContractAtHash(context.Context, ethereum.CallMsg, common.Hash) ([]byte, error)
 	Close()
 }
 
 type frostRetainedGroupHTTPClient interface {
 	Do(*http.Request) (*http.Response, error)
+}
+
+type canonicalFrostRetainedGroupEthereumVerifier struct {
+	*ethclient.Client
+	rpcClient *rpc.Client
+}
+
+func (verifier *canonicalFrostRetainedGroupEthereumVerifier) CodeAtHash(
+	ctx context.Context,
+	account common.Address,
+	blockHash common.Hash,
+) ([]byte, error) {
+	var result hexutil.Bytes
+	err := verifier.rpcClient.CallContext(
+		ctx,
+		&result,
+		"eth_getCode",
+		account,
+		rpc.BlockNumberOrHashWithHash(blockHash, true),
+	)
+	return result, err
+}
+
+func (verifier *canonicalFrostRetainedGroupEthereumVerifier) StorageAtHash(
+	ctx context.Context,
+	account common.Address,
+	key common.Hash,
+	blockHash common.Hash,
+) ([]byte, error) {
+	var result hexutil.Bytes
+	err := verifier.rpcClient.CallContext(
+		ctx,
+		&result,
+		"eth_getStorageAt",
+		account,
+		key,
+		rpc.BlockNumberOrHashWithHash(blockHash, true),
+	)
+	return result, err
+}
+
+func (verifier *canonicalFrostRetainedGroupEthereumVerifier) CallContractAtHash(
+	ctx context.Context,
+	message ethereum.CallMsg,
+	blockHash common.Hash,
+) ([]byte, error) {
+	var result hexutil.Bytes
+	err := verifier.rpcClient.CallContext(
+		ctx,
+		&result,
+		"eth_call",
+		frostRetainedGroupCallArgument(message),
+		rpc.BlockNumberOrHashWithHash(blockHash, true),
+	)
+	return result, err
+}
+
+func frostRetainedGroupCallArgument(message ethereum.CallMsg) map[string]interface{} {
+	result := map[string]interface{}{
+		"from": message.From,
+		"to":   message.To,
+	}
+	if len(message.Data) > 0 {
+		result["input"] = hexutil.Bytes(message.Data)
+	}
+	if message.Value != nil {
+		result["value"] = (*hexutil.Big)(message.Value)
+	}
+	if message.Gas != 0 {
+		result["gas"] = hexutil.Uint64(message.Gas)
+	}
+	if message.GasPrice != nil {
+		result["gasPrice"] = (*hexutil.Big)(message.GasPrice)
+	}
+	if message.GasFeeCap != nil {
+		result["maxFeePerGas"] = (*hexutil.Big)(message.GasFeeCap)
+	}
+	if message.GasTipCap != nil {
+		result["maxPriorityFeePerGas"] = (*hexutil.Big)(message.GasTipCap)
+	}
+	if message.AccessList != nil {
+		result["accessList"] = message.AccessList
+	}
+	if message.BlobGasFeeCap != nil {
+		result["maxFeePerBlobGas"] = (*hexutil.Big)(message.BlobGasFeeCap)
+	}
+	if message.BlobHashes != nil {
+		result["blobVersionedHashes"] = message.BlobHashes
+	}
+	return result
 }
 
 // signedFrostRetainedGroupHistorySource consumes independently signed,
@@ -101,12 +196,14 @@ type signedFrostRetainedGroupHistorySource struct {
 	maximumResponseBytes uint64
 	maximumUniqueBlocks  uint64
 	maximumReadDuration  time.Duration
+	requestTimeout       time.Duration
 }
 
 var _ FrostRetainedGroupHistorySource = (*signedFrostRetainedGroupHistorySource)(nil)
 
 type frostRetainedGroupSignedEnvelope struct {
 	Schema              string          `json:"schema"`
+	BindingHash         string          `json:"bindingHash"`
 	Payload             json.RawMessage `json:"payload"`
 	PayloadSHA256       string          `json:"payloadSha256"`
 	SignerPublicKeySPKI string          `json:"signerPublicKeySpki"`
@@ -127,6 +224,39 @@ type frostRetainedGroupWireFinality struct {
 	TransactionIndex      uint32 `json:"transactionIndex"`
 	LogIndex              uint32 `json:"logIndex"`
 	AuthorizationSequence string `json:"authorizationSequence"`
+}
+
+type frostRetainedGroupWireBlockPoint struct {
+	BlockNumber uint64 `json:"blockNumber"`
+	BlockHash   string `json:"blockHash"`
+}
+
+type frostRetainedGroupProtocolBinding struct {
+	Schema                         string                           `json:"schema"`
+	ChainID                        uint64                           `json:"chainID"`
+	DomainChainID                  string                           `json:"domainChainID"`
+	GenesisBlockHash               string                           `json:"genesisBlockHash"`
+	Checkpoint                     frostRetainedGroupWireBlockPoint `json:"checkpoint"`
+	ManifestHash                   string                           `json:"manifestHash"`
+	ProfileHash                    string                           `json:"profileHash"`
+	ImplementationSetHash          string                           `json:"implementationSetHash"`
+	DescriptorSetHash              string                           `json:"descriptorSetHash"`
+	LinkedLibraryDescriptorSetHash string                           `json:"linkedLibraryDescriptorSetHash"`
+	EndpointIdentitySetHash        string                           `json:"endpointIdentitySetHash"`
+	SignerProtocolID               string                           `json:"signerProtocolID"`
+	ReservationProtocolID          string                           `json:"reservationProtocolID"`
+	EvidenceProtocolID             string                           `json:"evidenceProtocolID"`
+	BitcoinOutboxProtocolID        string                           `json:"bitcoinOutboxProtocolID"`
+	InventoryProtocolID            string                           `json:"inventoryProtocolID"`
+	QuarantineProtocolID           string                           `json:"quarantineProtocolID"`
+	SigningPolicyHash              string                           `json:"signingPolicyHash"`
+	CanonicalStoreID               string                           `json:"canonicalStoreID"`
+	CanonicalStoreFingerprint      string                           `json:"canonicalStoreFingerprint"`
+	CanonicalClusterFingerprint    string                           `json:"canonicalClusterFingerprint"`
+	QuarantineStoreID              string                           `json:"quarantineStoreID"`
+	QuarantineStoreFingerprint     string                           `json:"quarantineStoreFingerprint"`
+	QuarantineClusterFingerprint   string                           `json:"quarantineClusterFingerprint"`
+	SourceIdentity                 frostRetainedGroupWireIdentity   `json:"sourceIdentity"`
 }
 
 type frostRetainedGroupWireEventPoint struct {
@@ -156,24 +286,28 @@ type frostRetainedGroupWireMutation struct {
 }
 
 type frostRetainedGroupHistoryQuery struct {
-	Schema string                         `json:"schema"`
-	From   frostRetainedGroupWireFinality `json:"from"`
-	To     frostRetainedGroupWireFinality `json:"to"`
+	Schema      string                         `json:"schema"`
+	BindingHash string                         `json:"bindingHash"`
+	From        frostRetainedGroupWireFinality `json:"from"`
+	To          frostRetainedGroupWireFinality `json:"to"`
 }
 
 type frostRetainedGroupHistoryPageRequest struct {
-	Query  frostRetainedGroupHistoryQuery `json:"query"`
-	Cursor string                         `json:"cursor"`
+	BindingHash string                         `json:"bindingHash"`
+	Query       frostRetainedGroupHistoryQuery `json:"query"`
+	Cursor      string                         `json:"cursor"`
 }
 
 type frostRetainedGroupHistoryReceipt struct {
 	PageCount     uint64 `json:"pageCount"`
 	MutationCount uint64 `json:"mutationCount"`
+	BindingHash   string `json:"bindingHash"`
 	HistoryRoot   string `json:"historyRoot"`
 }
 
 type frostRetainedGroupHistoryPagePayload struct {
 	Schema            string                            `json:"schema"`
+	BindingHash       string                            `json:"bindingHash"`
 	Identity          frostRetainedGroupWireIdentity    `json:"identity"`
 	ChainID           uint64                            `json:"chainID"`
 	QueryHash         string                            `json:"queryHash"`
@@ -193,12 +327,14 @@ type frostRetainedGroupHistoryPagePayload struct {
 
 type frostRetainedGroupOperatorQuery struct {
 	Schema          string                         `json:"schema"`
+	BindingHash     string                         `json:"bindingHash"`
 	OperatorAddress string                         `json:"operatorAddress"`
 	At              frostRetainedGroupWireFinality `json:"at"`
 }
 
 type frostRetainedGroupOperatorReceiptPayload struct {
 	Schema          string                         `json:"schema"`
+	BindingHash     string                         `json:"bindingHash"`
 	Identity        frostRetainedGroupWireIdentity `json:"identity"`
 	ChainID         uint64                         `json:"chainID"`
 	QueryHash       string                         `json:"queryHash"`
@@ -252,16 +388,37 @@ func NewFrostRetainedGroupHistorySource(
 	if expectedChainID == 0 {
 		return nil, fmt.Errorf("retained-group history expected chain ID is zero")
 	}
-	verifier, err := ethclient.DialContext(ctx, canonicalEthereum)
+	httpTransport := http.DefaultTransport.(*http.Transport).Clone()
+	httpTransport.Proxy = nil
+	rpcHTTPClient := &http.Client{
+		Transport: httpTransport,
+		Timeout:   timeout,
+	}
+	rpcClient, err := rpc.DialOptions(
+		ctx,
+		canonicalEthereum,
+		rpc.WithHTTPClient(rpcHTTPClient),
+		rpc.WithWebsocketDialer(websocket.Dialer{
+			HandshakeTimeout: timeout,
+			Proxy:            nil,
+		}),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("cannot connect independent retained-group Ethereum verifier: [%w]", err)
 	}
+	verifier := &canonicalFrostRetainedGroupEthereumVerifier{
+		Client:    ethclient.NewClient(rpcClient),
+		rpcClient: rpcClient,
+	}
+	exportTransport := http.DefaultTransport.(*http.Transport).Clone()
+	exportTransport.Proxy = nil
 	source, err := newSignedFrostRetainedGroupHistorySource(
 		ctx,
 		endpoint,
 		verifier,
 		&http.Client{
-			Timeout: timeout,
+			Transport: exportTransport,
+			Timeout:   timeout,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return fmt.Errorf("retained-group export redirects are forbidden")
 			},
@@ -269,6 +426,7 @@ func NewFrostRetainedGroupHistorySource(
 		expectedChainID,
 		identity,
 		signerHash,
+		timeout,
 	)
 	if err != nil {
 		verifier.Close()
@@ -285,14 +443,18 @@ func newSignedFrostRetainedGroupHistorySource(
 	chainID uint64,
 	identity FrostRetainedGroupHistoryIdentity,
 	signerHash [32]byte,
+	requestTimeout time.Duration,
 ) (*signedFrostRetainedGroupHistorySource, error) {
 	if exportEndpoint == nil || verifier == nil || httpClient == nil || chainID == 0 ||
 		strings.TrimSpace(identity.TrustDomainID) == "" ||
 		identity.EndpointFingerprint == [32]byte{} || signerHash == [32]byte{} ||
-		identity.OperatorFingerprint != signerHash {
+		identity.OperatorFingerprint != signerHash ||
+		requestTimeout < time.Second || requestTimeout > time.Minute {
 		return nil, fmt.Errorf("retained-group history source configuration is incomplete")
 	}
-	actualChainID, err := verifier.ChainID(ctx)
+	requestContext, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	actualChainID, err := verifier.ChainID(requestContext)
 	if err != nil {
 		return nil, fmt.Errorf("cannot identify independent retained-group Ethereum verifier: [%w]", err)
 	}
@@ -311,6 +473,7 @@ func newSignedFrostRetainedGroupHistorySource(
 		maximumResponseBytes: frostRetainedGroupMaximumAggregateResponseBytes,
 		maximumUniqueBlocks:  frostRetainedGroupMaximumUniqueBlocks,
 		maximumReadDuration:  frostRetainedGroupMaximumReconciliationDuration,
+		requestTimeout:       requestTimeout,
 	}
 	if _, err := source.FinalizedHead(ctx); err != nil {
 		return nil, fmt.Errorf("independent retained-group Ethereum verifier has no usable finalized head: [%w]", err)
@@ -432,6 +595,12 @@ func (source *signedFrostRetainedGroupHistorySource) Close() {
 	}
 }
 
+func (source *signedFrostRetainedGroupHistorySource) requestContext(
+	ctx context.Context,
+) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, source.requestTimeout)
+}
+
 func (source *signedFrostRetainedGroupHistorySource) Identity(
 	ctx context.Context,
 ) (FrostRetainedGroupHistoryIdentity, error) {
@@ -452,8 +621,10 @@ func (source *signedFrostRetainedGroupHistorySource) FinalizedHead(
 	if ctx == nil {
 		return FrostPreSignFinality{}, fmt.Errorf("retained-group finalized-head context is nil")
 	}
+	requestContext, cancel := source.requestContext(ctx)
+	defer cancel()
 	header, err := source.verifier.HeaderByNumber(
-		ctx,
+		requestContext,
 		big.NewInt(int64(rpc.FinalizedBlockNumber)),
 	)
 	if err != nil {
@@ -489,9 +660,11 @@ func (source *signedFrostRetainedGroupHistorySource) verifyPointAtFinalizedHead(
 		point.BlockNumber > head.BlockNumber {
 		return fmt.Errorf("retained-group point is invalid or not finalized")
 	}
-	header, err := source.verifier.HeaderByNumber(
-		ctx,
-		new(big.Int).SetUint64(point.BlockNumber),
+	requestContext, cancel := source.requestContext(ctx)
+	defer cancel()
+	header, err := source.verifier.HeaderByHash(
+		requestContext,
+		common.Hash(point.BlockHash),
 	)
 	if err != nil {
 		return err
@@ -499,6 +672,21 @@ func (source *signedFrostRetainedGroupHistorySource) verifyPointAtFinalizedHead(
 	if header == nil || header.Number == nil || !header.Number.IsUint64() ||
 		header.Number.Uint64() != point.BlockNumber || header.Hash() != common.Hash(point.BlockHash) {
 		return fmt.Errorf("retained-group point does not match the independent canonical chain")
+	}
+	canonicalContext, canonicalCancel := source.requestContext(ctx)
+	defer canonicalCancel()
+	canonicalHeader, err := source.verifier.HeaderByNumber(
+		canonicalContext,
+		new(big.Int).SetUint64(point.BlockNumber),
+	)
+	if err != nil {
+		return err
+	}
+	if canonicalHeader == nil || canonicalHeader.Number == nil ||
+		!canonicalHeader.Number.IsUint64() ||
+		canonicalHeader.Number.Uint64() != point.BlockNumber ||
+		canonicalHeader.Hash() != common.Hash(point.BlockHash) {
+		return fmt.Errorf("retained-group point is not canonical by height")
 	}
 	if point.BlockNumber == head.BlockNumber && point.BlockHash != head.BlockHash {
 		return fmt.Errorf("retained-group point conflicts with the finalized head")
@@ -542,9 +730,10 @@ func (source *signedFrostRetainedGroupHistorySource) ReadCompleteHistory(
 	}
 
 	query := frostRetainedGroupHistoryQuery{
-		Schema: frostRetainedGroupHistoryRequestSchema,
-		From:   frostRetainedGroupFinalityToWire(from),
-		To:     frostRetainedGroupFinalityToWire(to),
+		Schema:      frostRetainedGroupHistoryRequestSchema,
+		BindingHash: frostActivationHex32(evidence.bindingHash),
+		From:        frostRetainedGroupFinalityToWire(from),
+		To:          frostRetainedGroupFinalityToWire(to),
 	}
 	queryHash, err := frostRetainedGroupDomainHash(
 		frostRetainedGroupHistoryQueryDomain,
@@ -571,7 +760,11 @@ func (source *signedFrostRetainedGroupHistorySource) ReadCompleteHistory(
 			return nil, fmt.Errorf("retained-group history cursor repeated")
 		}
 		seenCursors[cursor] = true
-		request := frostRetainedGroupHistoryPageRequest{Query: query, Cursor: cursor}
+		request := frostRetainedGroupHistoryPageRequest{
+			BindingHash: frostActivationHex32(evidence.bindingHash),
+			Query:       query,
+			Cursor:      cursor,
+		}
 		payload := &frostRetainedGroupHistoryPagePayload{}
 		responseBytes, err := source.postSigned(ctx, "history", request, payload)
 		if err != nil {
@@ -628,7 +821,9 @@ func (source *signedFrostRetainedGroupHistorySource) ReadCompleteHistory(
 		if payload.Complete {
 			if payload.Receipt == nil || payload.NextCursor != "" ||
 				payload.Receipt.PageCount != pageIndex+1 ||
-				payload.Receipt.MutationCount != uint64(len(mutations)) {
+				payload.Receipt.MutationCount != uint64(len(mutations)) ||
+				payload.Receipt.BindingHash !=
+					frostActivationHex32(evidence.bindingHash) {
 				return nil, fmt.Errorf("retained-group final history receipt is inconsistent")
 			}
 			receiptRoot, err := parseFrostActivationHex32(payload.Receipt.HistoryRoot)
@@ -636,6 +831,7 @@ func (source *signedFrostRetainedGroupHistorySource) ReadCompleteHistory(
 				return nil, fmt.Errorf("retained-group history receipt root is invalid")
 			}
 			computedRoot := frostRetainedGroupHistoryRootFromHashes(
+				evidence.bindingHash,
 				queryHash,
 				mutationHashes,
 			)
@@ -698,7 +894,12 @@ func (source *signedFrostRetainedGroupHistorySource) validateHistoryPage(
 	snapshotID [32]byte,
 	descriptorSetHash [32]byte,
 ) ([32]byte, error) {
+	evidence, evidenceErr := source.activationEvidence()
+	if evidenceErr != nil {
+		return [32]byte{}, evidenceErr
+	}
 	if payload == nil || payload.Schema != frostRetainedGroupHistoryPageSchema ||
+		payload.BindingHash != frostActivationHex32(evidence.bindingHash) ||
 		payload.ChainID != source.chainID || payload.PageIndex != pageIndex ||
 		payload.Cursor != cursor || !payload.EmptyAtFrom ||
 		!source.validWireIdentity(payload.Identity) {
@@ -713,8 +914,7 @@ func (source *signedFrostRetainedGroupHistorySource) validateHistoryPage(
 		return [32]byte{}, fmt.Errorf("retained-group history snapshot changed between pages")
 	}
 	pageDescriptorSetHash, err := parseFrostActivationHex32(payload.DescriptorSetHash)
-	evidence, evidenceErr := source.activationEvidence()
-	if err != nil || evidenceErr != nil || pageDescriptorSetHash != evidence.descriptorSetHash ||
+	if err != nil || pageDescriptorSetHash != evidence.descriptorSetHash ||
 		(pageIndex > 0 && pageDescriptorSetHash != descriptorSetHash) {
 		return [32]byte{}, fmt.Errorf("retained-group descriptor set differs from the signed activation manifest")
 	}
@@ -748,6 +948,9 @@ func (source *signedFrostRetainedGroupHistorySource) ResolveOperatorID(
 	if ctx == nil {
 		return 0, fmt.Errorf("retained-group operator-resolution context is nil")
 	}
+	resolveContext, cancel := context.WithTimeout(ctx, source.maximumReadDuration)
+	defer cancel()
+	ctx = resolveContext
 	evidence, err := source.activationEvidence()
 	if err != nil {
 		return 0, err
@@ -765,6 +968,7 @@ func (source *signedFrostRetainedGroupHistorySource) ResolveOperatorID(
 	}
 	query := frostRetainedGroupOperatorQuery{
 		Schema:          frostRetainedGroupOperatorRequestSchema,
+		BindingHash:     frostActivationHex32(evidence.bindingHash),
 		OperatorAddress: canonicalAddress,
 		At:              frostRetainedGroupFinalityToWire(at),
 	}
@@ -779,6 +983,7 @@ func (source *signedFrostRetainedGroupHistorySource) ResolveOperatorID(
 	declaredQueryHash, err := parseFrostActivationHex32(payload.QueryHash)
 	receiptAt, pointErr := frostRetainedGroupFinalityFromWire(payload.At)
 	if payload.Schema != frostRetainedGroupOperatorReceiptSchema ||
+		payload.BindingHash != frostActivationHex32(evidence.bindingHash) ||
 		payload.ChainID != source.chainID || !source.validWireIdentity(payload.Identity) ||
 		err != nil || declaredQueryHash != queryHash || pointErr != nil || receiptAt != at ||
 		payload.OperatorAddress != canonicalAddress || !payload.Found || payload.OperatorID == 0 {
@@ -816,6 +1021,8 @@ func (source *signedFrostRetainedGroupHistorySource) postSigned(
 	requestPayload interface{},
 	responsePayload interface{},
 ) (uint64, error) {
+	requestContext, cancel := source.requestContext(ctx)
+	defer cancel()
 	requestBody, err := json.Marshal(requestPayload)
 	if err != nil {
 		return 0, err
@@ -823,7 +1030,7 @@ func (source *signedFrostRetainedGroupHistorySource) postSigned(
 	endpoint := *source.exportEndpoint
 	endpoint.Path = path.Join(endpoint.Path, operation)
 	request, err := http.NewRequestWithContext(
-		ctx,
+		requestContext,
 		http.MethodPost,
 		endpoint.String(),
 		bytes.NewReader(requestBody),
@@ -866,7 +1073,10 @@ func (source *signedFrostRetainedGroupHistorySource) verifySignedEnvelope(
 	envelope *frostRetainedGroupSignedEnvelope,
 	target interface{},
 ) error {
-	if envelope == nil || envelope.Schema != "tbtc-frost-retained-group-signed-envelope/v1" ||
+	evidence, evidenceErr := source.activationEvidence()
+	if envelope == nil || evidenceErr != nil ||
+		envelope.Schema != "tbtc-frost-retained-group-signed-envelope/v2" ||
+		envelope.BindingHash != frostActivationHex32(evidence.bindingHash) ||
 		envelope.SignatureAlgorithm != "ed25519" || len(envelope.Payload) == 0 {
 		return fmt.Errorf("retained-group signed envelope is malformed")
 	}
@@ -928,6 +1138,7 @@ func frostRetainedGroupDomainHash(domain string, value interface{}) ([32]byte, e
 }
 
 func frostRetainedGroupHistoryRoot(
+	bindingHash [32]byte,
 	queryHash [32]byte,
 	mutations []frostRetainedGroupWireMutation,
 ) ([32]byte, error) {
@@ -939,15 +1150,21 @@ func frostRetainedGroupHistoryRoot(
 		}
 		hashes = append(hashes, sha256.Sum256(canonical))
 	}
-	return frostRetainedGroupHistoryRootFromHashes(queryHash, hashes), nil
+	return frostRetainedGroupHistoryRootFromHashes(
+		bindingHash,
+		queryHash,
+		hashes,
+	), nil
 }
 
 func frostRetainedGroupHistoryRootFromHashes(
+	bindingHash [32]byte,
 	queryHash [32]byte,
 	mutationHashes [][32]byte,
 ) [32]byte {
 	hasher := sha256.New()
 	hasher.Write([]byte(frostRetainedGroupHistoryRootDomain))
+	hasher.Write(bindingHash[:])
 	hasher.Write(queryHash[:])
 	count := make([]byte, 8)
 	for i := uint(0); i < 8; i++ {

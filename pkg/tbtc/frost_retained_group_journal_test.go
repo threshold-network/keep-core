@@ -94,6 +94,7 @@ type journalTestFixture struct {
 	manifest      FrostRetainedGroupCanonicalJournalManifest
 	quarantine    FrostRetainedGroupQuarantineJournalManifest
 	manifestHash  [32]byte
+	bindingHash   [32]byte
 	checkpoint    FrostPreSignFinality
 	target        FrostPreSignFinality
 	later         FrostPreSignFinality
@@ -213,6 +214,7 @@ func newJournalTestFixture(t *testing.T) *journalTestFixture {
 		manifest:      manifest,
 		quarantine:    quarantine,
 		manifestHash:  [32]byte{0x42},
+		bindingHash:   [32]byte{0x44},
 		checkpoint:    checkpoint,
 		target:        target,
 		later:         later,
@@ -290,6 +292,7 @@ func (fixture *journalTestFixture) openJournal(
 	journal, err := newFrostRetainedGroupJournal(
 		directory,
 		fixture.manifestHash,
+		fixture.bindingHash,
 		fixture.manifest,
 		fixture.quarantine,
 		fixture.source,
@@ -308,6 +311,7 @@ func (fixture *journalTestFixture) openJournalError(
 	journal, err := newFrostRetainedGroupJournal(
 		directory,
 		fixture.manifestHash,
+		fixture.bindingHash,
 		fixture.manifest,
 		fixture.quarantine,
 		fixture.source,
@@ -548,6 +552,114 @@ func TestFrostRetainedGroupJournal_RejectsAuthenticatedV1Fixtures(
 				!strings.Contains(err.Error(), "schema v1 is not safely migratable") ||
 				!strings.Contains(err.Error(), "signed activation manifest") {
 				t.Fatalf("expected explicit manifest-pinned v1 rejection, got [%v]", err)
+			}
+		})
+	}
+}
+
+func TestFrostRetainedGroupJournal_RejectsCrossBindingBatchReplay(
+	t *testing.T,
+) {
+	testCases := map[string]struct {
+		addQuarantine bool
+		directory     string
+	}{
+		"canonical": {
+			directory: frostRetainedGroupCanonicalDirectory,
+		},
+		"quarantine": {
+			addQuarantine: true,
+			directory:     frostRetainedGroupQuarantineDirectory,
+		},
+	}
+
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			fixture := newJournalTestFixture(t)
+			if testCase.addQuarantine {
+				fixture.source.mutations = append(
+					fixture.source.mutations,
+					FrostRetainedGroupMutation{
+						Point: FrostRetainedGroupEventPoint{
+							BlockNumber:      5,
+							BlockHash:        [32]byte{0x05},
+							TransactionHash:  [32]byte{0xa5},
+							TransactionIndex: 1,
+							LogIndex:         1,
+						},
+						Kind:         FrostRetainedGroupQuarantineMutation,
+						WalletID:     fixture.walletID,
+						QuarantineID: [32]byte{0x61},
+						EvidenceHash: [32]byte{0x62},
+						Reason:       "binding replay test",
+					},
+				)
+			}
+
+			rootDirectory := filepath.Join(t.TempDir(), "journal")
+			journal := fixture.openJournal(t, rootDirectory)
+			if _, err := journal.reconcile(context.Background(), fixture.target); err != nil {
+				t.Fatal(err)
+			}
+			if err := journal.close(); err != nil {
+				t.Fatal(err)
+			}
+
+			directory := filepath.Join(rootDirectory, testCase.directory)
+			batchName := frostRetainedGroupBatchFileName(1)
+			if testCase.addQuarantine {
+				batch := frostRetainedGroupQuarantineJournalBatch{}
+				if err := readFrostRetainedGroupEnvelopeAt(
+					directory,
+					batchName,
+					&batch,
+				); err != nil {
+					t.Fatal(err)
+				}
+				batch.BindingHash = [32]byte{0xff}
+				batch.Checksum = [32]byte{}
+				payload, err := frostRetainedGroupCanonicalValue(batch)
+				if err != nil {
+					t.Fatal(err)
+				}
+				batch.Checksum = sha256.Sum256(payload)
+				if err := persistFrostRetainedGroupEnvelopeAt(
+					directory,
+					batchName,
+					&batch,
+					true,
+				); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				batch := frostRetainedGroupJournalBatch{}
+				if err := readFrostRetainedGroupEnvelopeAt(
+					directory,
+					batchName,
+					&batch,
+				); err != nil {
+					t.Fatal(err)
+				}
+				batch.BindingHash = [32]byte{0xff}
+				batch.Checksum = [32]byte{}
+				payload, err := frostRetainedGroupCanonicalValue(batch)
+				if err != nil {
+					t.Fatal(err)
+				}
+				batch.Checksum = sha256.Sum256(payload)
+				if err := persistFrostRetainedGroupEnvelopeAt(
+					directory,
+					batchName,
+					&batch,
+					true,
+				); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			err := fixture.openJournalError(rootDirectory)
+			if err == nil || !strings.Contains(err.Error(), "batch header is invalid") {
+				t.Fatalf("expected cross-binding batch replay rejection, got [%v]", err)
 			}
 		})
 	}
@@ -888,6 +1000,7 @@ func TestFrostRetainedGroupJournal_RejectsIdentityMismatchAndConcurrentOwner(
 	if _, err := newFrostRetainedGroupJournal(
 		directory,
 		fixture.manifestHash,
+		fixture.bindingHash,
 		fixture.manifest,
 		fixture.quarantine,
 		fixture.source,
@@ -906,6 +1019,7 @@ func TestFrostRetainedGroupJournal_RejectsIdentityMismatchAndConcurrentOwner(
 	if _, err := newFrostRetainedGroupJournal(
 		otherDirectory,
 		fixture.manifestHash,
+		fixture.bindingHash,
 		fixture.manifest,
 		fixture.quarantine,
 		fixture.source,
@@ -928,6 +1042,7 @@ func TestFrostRetainedGroupJournal_RejectsSymlinkEntry(t *testing.T) {
 	if _, err := newFrostRetainedGroupJournal(
 		directory,
 		fixture.manifestHash,
+		fixture.bindingHash,
 		fixture.manifest,
 		fixture.quarantine,
 		fixture.source,
@@ -1140,6 +1255,7 @@ func TestFrostRetainedGroupJournal_RejectsCorruptOrPublicStoreFiles(t *testing.T
 		if _, err := newFrostRetainedGroupJournal(
 			directory,
 			fixture.manifestHash,
+			fixture.bindingHash,
 			fixture.manifest,
 			fixture.quarantine,
 			fixture.source,
@@ -1164,6 +1280,7 @@ func TestFrostRetainedGroupJournal_RejectsCorruptOrPublicStoreFiles(t *testing.T
 		if _, err := newFrostRetainedGroupJournal(
 			directory,
 			fixture.manifestHash,
+			fixture.bindingHash,
 			fixture.manifest,
 			fixture.quarantine,
 			fixture.source,
