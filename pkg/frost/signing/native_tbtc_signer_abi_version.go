@@ -19,15 +19,27 @@ const (
 	// messages. The required request field and changed response semantics are an
 	// incompatible JSON/crypto-contract change, so an ABI-2 library must not be
 	// linked by this bridge.
-	requiredTBTCSignerABIMajor uint32 = 3
-	// Minor 1 adds the typed heartbeat signing intent required to authorize
-	// non-transaction messages while the signing-policy firewall is on. Minor 2
-	// adds the heartbeat rate-limit configuration and dedicated rejection metric.
-	// Minor 3 adds the canary-evidence configuration. Minor 4 adds descriptor-
-	// bound durable-store identity. Minor 5 adds exact retained key-package
-	// inventory plus the append-only state-witness proof required to detect
-	// rollback of key packages and durable replay markers.
-	requiredTBTCSignerABIMinMinor uint32 = 5
+	//
+	// Major 4: the durable-store identity schema moved to
+	// `tbtc-signer-durable-session-store-identity/v2` and the state-witness
+	// transcript to v2. `durable_store_fingerprint` now binds ONLY the stable
+	// `.store-id`; the canonical-path, filesystem and lock fingerprints are still
+	// reported and still enforced at open, but no longer enter any committed
+	// transcript. Under ABI 3 they did, so a benign filesystem change - deleting
+	// the advisory lock file, restoring the data directory from backup, renaming
+	// it, or remounting where st_dev is unstable - made every committed record
+	// unverifiable and the signer unstartable, with no in-band recovery. The
+	// symbol set is unchanged, but the VALUES of existing wire fields differ, so
+	// an ABI-3 library must not be linked by this bridge and an ABI-3 journal is
+	// rejected by magic with a migration error rather than silently reset.
+	requiredTBTCSignerABIMajor uint32 = 4
+	// Minor 0 is the initial ABI-4 surface: it carries forward every symbol added
+	// through ABI 3.5 (typed heartbeat signing intent, heartbeat rate-limit
+	// configuration and rejection metric, canary evidence, descriptor-bound
+	// durable-store identity, and exact retained key-package inventory plus the
+	// append-only state-witness proof required to detect rollback of key packages
+	// and durable replay markers) under the v2 identity and transcript schemas.
+	requiredTBTCSignerABIMinMinor uint32 = 0
 )
 
 // ErrTBTCSignerABIIncompatible marks a linked libfrost_tbtc whose FFI contract version
