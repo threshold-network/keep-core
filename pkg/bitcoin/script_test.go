@@ -1,16 +1,13 @@
 package bitcoin
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"encoding/hex"
 	"fmt"
 	"reflect"
 	"testing"
 
-	"github.com/btcsuite/btcd/btcec"
-
 	"github.com/keep-network/keep-core/internal/testutils"
+	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
 )
 
 func TestNewScriptFromVarLenData(t *testing.T) {
@@ -161,11 +158,9 @@ func TestPublicKeyHash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	x, y := elliptic.Unmarshal(btcec.S256(), publicKeyBytes)
-	publicKey := &ecdsa.PublicKey{
-		Curve: btcec.S256(),
-		X:     x,
-		Y:     y,
+	publicKey, err := secp256k1.Unmarshal(publicKeyBytes)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	result := PublicKeyHash(publicKey)

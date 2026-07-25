@@ -541,6 +541,11 @@ describe("WalletRegistry - Dual-Mode Authorization", () => {
       const fromAmount = ethers.utils.parseEther("0")
       const toAmount = ethers.utils.parseEther("40000")
 
+      await ethers.provider.send("hardhat_setBalance", [
+        stakingContract.address,
+        "0x56BC75E2D63100000", // 100 ETH in hex
+      ])
+
       // Legacy staking works without any initialization
       await expect(
         walletRegistry

@@ -1,4 +1,4 @@
-import { ethers, waffle, helpers } from "hardhat"
+import { ethers, helpers } from "hardhat"
 import { expect } from "chai"
 
 import { constants, dkgState, params, walletRegistryFixture } from "./fixtures"
@@ -38,7 +38,7 @@ const { mineBlocks, mineBlocksTo } = helpers.time
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
 
 const { keccak256 } = ethers.utils
-const { provider } = waffle
+const { provider } = ethers
 
 describe.skip("TokenStaking Integration (DEPRECATED TIP-092)", () => {
   /**

@@ -1,6 +1,6 @@
 /* eslint-disable no-await-in-loop */
 
-import { ethers, waffle } from "hardhat"
+import { ethers } from "hardhat"
 import { expect } from "chai"
 import { BigNumber } from "ethers"
 
@@ -15,7 +15,7 @@ import type {
   ResultStruct,
 } from "../../typechain/EcdsaDkg"
 
-const { provider } = waffle
+const { provider } = ethers
 
 // default Hardhat's networks blockchain, see https://hardhat.org/config/
 export const hardhatNetworkId = 31337
@@ -287,8 +287,8 @@ export interface DkgResultSubmittedEventArgs {
   result: ResultStruct
 }
 
-// This is a workaround for a bug in ethereum-waffle library that doesn't let
-// verify events that have an array nested in a struct.
+// Decode this event explicitly. The assertion was introduced as a workaround
+// for Waffle's inability to verify events with an array nested in a struct.
 // See: https://github.com/EthWorks/Waffle/issues/245
 export async function expectDkgResultSubmittedEvent(
   tx: ContractTransaction,

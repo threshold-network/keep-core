@@ -152,7 +152,7 @@ describe("Allowlist", () => {
 
         await expect(
           allowlist.connect(governance).addStakingProvider(ZERO_ADDRESS, weight)
-        ).to.be.revertedWith("ZeroAddress")
+        ).to.be.revertedWithCustomError(allowlist, "ZeroAddress")
       })
 
       it("should revert if weight is zero", async () => {
@@ -160,7 +160,7 @@ describe("Allowlist", () => {
           allowlist
             .connect(governance)
             .addStakingProvider(stakingProvider1.address, 0)
-        ).to.be.revertedWith("ZeroWeight")
+        ).to.be.revertedWithCustomError(allowlist, "ZeroWeight")
       })
     })
 
@@ -352,7 +352,7 @@ describe("Allowlist", () => {
           allowlist
             .connect(walletRegistry.wallet)
             .approveAuthorizationDecrease(stakingProvider2.address)
-        ).to.be.revertedWith("NoDecreasePending")
+        ).to.be.revertedWithCustomError(allowlist, "NoDecreasePending")
       })
     })
 

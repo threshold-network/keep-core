@@ -6,7 +6,6 @@ import (
 
 	"github.com/keep-network/keep-core/pkg/tbtc"
 
-	"github.com/btcsuite/btcd/txscript"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -156,10 +155,10 @@ func parseDepositSweepTransactionInputs(
 
 		publicKeyScript := previousTransaction.Outputs[outpointIndex].PublicKeyScript
 		value := previousTransaction.Outputs[outpointIndex].Value
-		scriptClass := txscript.GetScriptClass(publicKeyScript)
+		scriptType := bitcoin.GetScriptType(publicKeyScript)
 
-		if scriptClass == txscript.PubKeyHashTy ||
-			scriptClass == txscript.WitnessV0PubKeyHashTy {
+		if scriptType == bitcoin.P2PKHScript ||
+			scriptType == bitcoin.P2WPKHScript {
 			// The input is P2PKH or P2WPKH, so we found main UTXO. There should
 			// be at most one main UTXO. If any input of this kind has already
 			// been found, report an error.
@@ -177,8 +176,8 @@ func parseDepositSweepTransactionInputs(
 						"inputs",
 				)
 			}
-		} else if scriptClass == txscript.ScriptHashTy ||
-			scriptClass == txscript.WitnessV0ScriptHashTy {
+		} else if scriptType == bitcoin.P2SHScript ||
+			scriptType == bitcoin.P2WSHScript {
 			// The input is P2SH or P2WSH, so we found a deposit input. All
 			// the deposits should have the same vault set or no vault at all.
 			// If the vault if different than the vault from any previous

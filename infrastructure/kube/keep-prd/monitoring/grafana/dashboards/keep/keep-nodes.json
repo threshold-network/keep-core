@@ -970,6 +970,221 @@
             ],
             "title": "Uptime (experimental)",
             "type": "state-timeline"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "P09205B1DD12FB1C6"
+            },
+            "description": "Inbound network join requests across all monitored nodes, with the failure-reason breakdown. A high failure share is expected: unrecognized peers probing the network are rejected by the on-chain firewall check. Investigate when the mix shifts (e.g. firewall rpc error or timeout growth) or when bursts coincide with peer loss.",
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "axisCenteredZero": false,
+                        "axisColorMode": "text",
+                        "axisLabel": "",
+                        "axisPlacement": "auto",
+                        "barAlignment": 0,
+                        "drawStyle": "line",
+                        "fillOpacity": 0,
+                        "gradientMode": "none",
+                        "hideFrom": {
+                            "legend": false,
+                            "tooltip": false,
+                            "viz": false
+                        },
+                        "lineInterpolation": "linear",
+                        "lineStyle": {
+                            "fill": "solid"
+                        },
+                        "lineWidth": 1,
+                        "pointSize": 5,
+                        "scaleDistribution": {
+                            "type": "linear"
+                        },
+                        "showPoints": "auto",
+                        "spanNulls": false,
+                        "stacking": {
+                            "group": "A",
+                            "mode": "none"
+                        },
+                        "thresholdsStyle": {
+                            "mode": "off"
+                        }
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            }
+                        ]
+                    },
+                    "unit": "none"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 20,
+                "w": 11,
+                "x": 0,
+                "y": 81
+            },
+            "id": 15,
+            "interval": "1m",
+            "options": {
+                "legend": {
+                    "calcs": [
+                        "last"
+                    ],
+                    "displayMode": "table",
+                    "placement": "right",
+                    "showLegend": true,
+                    "sortBy": "Last",
+                    "sortDesc": true
+                },
+                "tooltip": {
+                    "mode": "multi",
+                    "sort": "desc"
+                }
+            },
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "P09205B1DD12FB1C6"
+                    },
+                    "editorMode": "code",
+                    "exemplar": false,
+                    "expr": "sum(increase(performance_network_join_requests_total{job=\"keep-discovered-nodes\"}[10m]))",
+                    "format": "time_series",
+                    "hide": false,
+                    "instant": false,
+                    "interval": "",
+                    "legendFormat": "total",
+                    "range": true,
+                    "refId": "A"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "P09205B1DD12FB1C6"
+                    },
+                    "editorMode": "code",
+                    "exemplar": false,
+                    "expr": "sum(increase(performance_network_join_requests_success_total{job=\"keep-discovered-nodes\"}[10m]))",
+                    "format": "time_series",
+                    "hide": false,
+                    "instant": false,
+                    "interval": "",
+                    "legendFormat": "success",
+                    "range": true,
+                    "refId": "B"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "P09205B1DD12FB1C6"
+                    },
+                    "editorMode": "code",
+                    "exemplar": false,
+                    "expr": "sum(increase(performance_network_join_requests_failed_total{job=\"keep-discovered-nodes\"}[10m]))",
+                    "format": "time_series",
+                    "hide": false,
+                    "instant": false,
+                    "interval": "",
+                    "legendFormat": "failed",
+                    "range": true,
+                    "refId": "C"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "P09205B1DD12FB1C6"
+                    },
+                    "editorMode": "code",
+                    "exemplar": false,
+                    "expr": "sum(increase(performance_network_join_requests_failed_timeout_total{job=\"keep-discovered-nodes\"}[10m]))",
+                    "format": "time_series",
+                    "hide": false,
+                    "instant": false,
+                    "interval": "",
+                    "legendFormat": "failed: timeout",
+                    "range": true,
+                    "refId": "D"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "P09205B1DD12FB1C6"
+                    },
+                    "editorMode": "code",
+                    "exemplar": false,
+                    "expr": "sum(increase(performance_network_join_requests_failed_eof_reset_total{job=\"keep-discovered-nodes\"}[10m]))",
+                    "format": "time_series",
+                    "hide": false,
+                    "instant": false,
+                    "interval": "",
+                    "legendFormat": "failed: eof/reset",
+                    "range": true,
+                    "refId": "E"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "P09205B1DD12FB1C6"
+                    },
+                    "editorMode": "code",
+                    "exemplar": false,
+                    "expr": "sum(increase(performance_network_join_requests_failed_protocol_crypto_total{job=\"keep-discovered-nodes\"}[10m]))",
+                    "format": "time_series",
+                    "hide": false,
+                    "instant": false,
+                    "interval": "",
+                    "legendFormat": "failed: protocol/crypto",
+                    "range": true,
+                    "refId": "F"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "P09205B1DD12FB1C6"
+                    },
+                    "editorMode": "code",
+                    "exemplar": false,
+                    "expr": "sum(increase(performance_network_join_requests_failed_firewall_unrecognized_total{job=\"keep-discovered-nodes\"}[10m]))",
+                    "format": "time_series",
+                    "hide": false,
+                    "instant": false,
+                    "interval": "",
+                    "legendFormat": "failed: firewall unrecognized",
+                    "range": true,
+                    "refId": "G"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "P09205B1DD12FB1C6"
+                    },
+                    "editorMode": "code",
+                    "exemplar": false,
+                    "expr": "sum(increase(performance_network_join_requests_failed_firewall_rpc_error_total{job=\"keep-discovered-nodes\"}[10m]))",
+                    "format": "time_series",
+                    "hide": false,
+                    "instant": false,
+                    "interval": "",
+                    "legendFormat": "failed: firewall rpc error",
+                    "range": true,
+                    "refId": "H"
+                }
+            ],
+            "title": "Network Join Requests (per 10m)",
+            "type": "timeseries"
         }
     ],
     "refresh": false,

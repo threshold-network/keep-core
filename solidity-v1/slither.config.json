@@ -1,4 +1,0 @@
-{
-    "filter_paths": "contracts/stubs",
-    "detectors_to_exclude": "assembly,timestamp,solc-version"
-}

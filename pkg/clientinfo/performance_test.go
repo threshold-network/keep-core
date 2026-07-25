@@ -372,3 +372,61 @@ func TestContextCancelation(t *testing.T) {
 	pm.SetGauge(MetricIncomingMessageQueueSize, 5)
 	pm.RecordDuration("signing_duration_seconds", 100*time.Millisecond)
 }
+
+// TestNetworkJoinFailureMetricName tests per-reason join failure counter
+// name generation.
+func TestNetworkJoinFailureMetricName(t *testing.T) {
+	tests := map[string]string{
+		JoinFailureReasonTimeout:              "network_join_requests_failed_timeout_total",
+		JoinFailureReasonEOFReset:             "network_join_requests_failed_eof_reset_total",
+		JoinFailureReasonProtocolCrypto:       "network_join_requests_failed_protocol_crypto_total",
+		JoinFailureReasonFirewallUnrecognized: "network_join_requests_failed_firewall_unrecognized_total",
+		JoinFailureReasonFirewallRPCError:     "network_join_requests_failed_firewall_rpc_error_total",
+	}
+
+	for reason, expectedName := range tests {
+		if actualName := NetworkJoinFailureMetricName(reason); actualName != expectedName {
+			t.Errorf(
+				"unexpected metric name for reason %s\nexpected: %s\nactual: %s",
+				reason,
+				expectedName,
+				actualName,
+			)
+		}
+	}
+}
+
+// TestJoinFailureAndOnChainCountersRegistered tests that the per-reason join
+// failure counters and the firewall on-chain checks counter are registered
+// upfront so they appear in the metrics endpoint before any increment.
+func TestJoinFailureAndOnChainCountersRegistered(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	pm := NewPerformanceMetrics(ctx, registry)
+
+	expectedCounters := []string{MetricFirewallOnChainChecksTotal}
+	for _, reason := range GetAllNetworkJoinFailureReasons() {
+		expectedCounters = append(expectedCounters, NetworkJoinFailureMetricName(reason))
+	}
+
+	for _, counterName := range expectedCounters {
+		pm.countersMutex.RLock()
+		_, exists := pm.counters[counterName]
+		pm.countersMutex.RUnlock()
+		if !exists {
+			t.Errorf("counter %s should be registered upfront", counterName)
+			continue
+		}
+
+		if value := pm.GetCounterValue(counterName); value != 0 {
+			t.Errorf("counter %s should start at 0, got %v", counterName, value)
+		}
+
+		pm.IncrementCounter(counterName, 1)
+		if value := pm.GetCounterValue(counterName); value != 1 {
+			t.Errorf("counter %s should increment to 1, got %v", counterName, value)
+		}
+	}
+}

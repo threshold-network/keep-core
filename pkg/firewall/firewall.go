@@ -2,9 +2,11 @@ package firewall
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/keep-network/keep-common/pkg/cache"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/operator"
 )
@@ -66,9 +68,41 @@ const (
 	NegativeIsRecognizedCachePeriod = 1 * time.Hour
 )
 
-var errNotRecognized = fmt.Errorf(
+// ErrNotRecognized is returned by Validate when the remote peer is not
+// recognized by any application. It lets callers tell a genuine
+// non-recognition apart from an application/RPC error during validation.
+var ErrNotRecognized = fmt.Errorf(
 	"remote peer has not been recognized by any application",
 )
+
+// globalMetricsRecorder allows recording firewall metrics without threading
+// a recorder through construction; the firewall is created before the
+// metrics subsystem. It can be nil if metrics are not enabled.
+var (
+	globalMetricsRecorderMu sync.RWMutex
+	globalMetricsRecorder   interface {
+		IncrementCounter(name string, value float64)
+	}
+)
+
+// SetMetricsRecorder sets the metrics recorder used by firewall validation.
+// It should be called once during startup, after metrics are initialized.
+func SetMetricsRecorder(recorder interface {
+	IncrementCounter(name string, value float64)
+}) {
+	globalMetricsRecorderMu.Lock()
+	defer globalMetricsRecorderMu.Unlock()
+	globalMetricsRecorder = recorder
+}
+
+// getMetricsRecorder safely retrieves the metrics recorder.
+func getMetricsRecorder() interface {
+	IncrementCounter(name string, value float64)
+} {
+	globalMetricsRecorderMu.RLock()
+	defer globalMetricsRecorderMu.RUnlock()
+	return globalMetricsRecorder
+}
 
 func AnyApplicationPolicy(
 	applications []Application,
@@ -115,11 +149,18 @@ func (aap *anyApplicationPolicy) Validate(
 	remotePeerPublicKeyHex := remotePeerPublicKey.String()
 
 	if aap.negativeResultCache.Has(remotePeerPublicKeyHex) {
-		return errNotRecognized
+		return ErrNotRecognized
 	}
 
 	validationSuccessful := false
 	for _, application := range aap.applications {
+		// Count the live on-chain check. The negative-cache short-circuit
+		// above and the allowlist bypass issue no chain call and are
+		// intentionally not counted here.
+		if recorder := getMetricsRecorder(); recorder != nil {
+			recorder.IncrementCounter(clientinfo.MetricFirewallOnChainChecksTotal, 1)
+		}
+
 		isRecognized, err := application.IsRecognized(remotePeerPublicKey)
 		if err != nil {
 			return fmt.Errorf(
@@ -137,7 +178,7 @@ func (aap *anyApplicationPolicy) Validate(
 		// Add this address to the negative result cache.
 		// `IsRecognized` will not be called again for the entire caching period.
 		aap.negativeResultCache.Add(remotePeerPublicKeyHex)
-		return errNotRecognized
+		return ErrNotRecognized
 	}
 
 	return nil

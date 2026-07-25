@@ -13,75 +13,168 @@ import (
 )
 
 func TestGetProofInfo(t *testing.T) {
+	// The proof start block in all test cases. Derived from the latest block
+	// height and the number of transaction confirmations:
+	// proofStartBlock = latestBlockHeight - transactionConfirmations + 1.
+	const proofStart = 790270
+
+	// Difficulties are powers of two so they round-trip exactly through the
+	// Bitcoin compact (Bits) encoding used by blockHeaderWithDifficulty.
+	diff := func(d int64) *big.Int { return big.NewInt(d) }
+
 	tests := map[string]struct {
-		latestBlockHeight                uint
 		transactionConfirmations         uint
-		currentEpoch                     uint64
 		currentEpochDifficulty           *big.Int
 		previousEpochDifficulty          *big.Int
+		headerDifficultyAt               func(uint) *big.Int
+		headersFrom, headersTo           uint
 		expectedIsProofWithinRelayRange  bool
 		expectedAccumulatedConfirmations uint
 		expectedRequiredConfirmations    uint
 	}{
+		// All proof headers carry the current epoch difficulty. With factor 6,
+		// six headers of difficulty 32 reach 6*32.
 		"proof entirely within current epoch": {
-			latestBlockHeight:                790277,
-			transactionConfirmations:         3,
-			currentEpoch:                     392,
-			currentEpochDifficulty:           nil, // not needed
-			previousEpochDifficulty:          nil, // not needed
+			transactionConfirmations: 20,
+			currentEpochDifficulty:   diff(32),
+			previousEpochDifficulty:  diff(16),
+			headerDifficultyAt:       func(uint) *big.Int { return diff(32) },
+			headersFrom:              proofStart,
+			headersTo:                proofStart + 19,
+
 			expectedIsProofWithinRelayRange:  true,
-			expectedAccumulatedConfirmations: 3,
+			expectedAccumulatedConfirmations: 20,
 			expectedRequiredConfirmations:    6,
 		},
+		// All proof headers carry the previous epoch difficulty.
 		"proof entirely within previous epoch": {
-			latestBlockHeight:                790300,
-			transactionConfirmations:         2041,
-			currentEpoch:                     392,
-			currentEpochDifficulty:           nil, // not needed
-			previousEpochDifficulty:          nil, // not needed
-			expectedAccumulatedConfirmations: 2041,
+			transactionConfirmations: 20,
+			currentEpochDifficulty:   diff(32),
+			previousEpochDifficulty:  diff(16),
+			headerDifficultyAt:       func(uint) *big.Int { return diff(16) },
+			headersFrom:              proofStart,
+			headersTo:                proofStart + 19,
+
 			expectedIsProofWithinRelayRange:  true,
+			expectedAccumulatedConfirmations: 20,
 			expectedRequiredConfirmations:    6,
 		},
+		// Proof starts in the previous epoch (difficulty 32) two blocks before
+		// the epoch boundary and continues in the current epoch (difficulty
+		// 16). Required total is 6*32=192; 2*32 + 8*16 = 192 -> 10 headers.
 		"proof spans previous and current epochs and difficulty drops": {
-			latestBlockHeight:                790300,
-			transactionConfirmations:         31,
-			currentEpoch:                     392,
-			currentEpochDifficulty:           big.NewInt(50000000000000),
-			previousEpochDifficulty:          big.NewInt(30000000000000),
+			transactionConfirmations: 31,
+			currentEpochDifficulty:   diff(16),
+			previousEpochDifficulty:  diff(32),
+			headerDifficultyAt: func(h uint) *big.Int {
+				if h < 790272 {
+					return diff(32)
+				}
+				return diff(16)
+			},
+			headersFrom: proofStart,
+			headersTo:   proofStart + 30,
+
 			expectedIsProofWithinRelayRange:  true,
 			expectedAccumulatedConfirmations: 31,
-			expectedRequiredConfirmations:    9,
+			expectedRequiredConfirmations:    10,
 		},
+		// Required total is 6*16=96; 2*16 + 2*32 = 96 -> 4 headers.
 		"proof spans previous and current epochs and difficulty raises": {
-			latestBlockHeight:                790300,
-			transactionConfirmations:         31,
-			currentEpoch:                     392,
-			currentEpochDifficulty:           big.NewInt(30000000000000),
-			previousEpochDifficulty:          big.NewInt(60000000000000),
+			transactionConfirmations: 31,
+			currentEpochDifficulty:   diff(32),
+			previousEpochDifficulty:  diff(16),
+			headerDifficultyAt: func(h uint) *big.Int {
+				if h < 790272 {
+					return diff(16)
+				}
+				return diff(32)
+			},
+			headersFrom: proofStart,
+			headersTo:   proofStart + 30,
+
 			expectedIsProofWithinRelayRange:  true,
 			expectedAccumulatedConfirmations: 31,
 			expectedRequiredConfirmations:    4,
 		},
-		"proof begins outside previous epoch": {
-			latestBlockHeight:                790300,
-			transactionConfirmations:         2048,
-			currentEpoch:                     392,
-			currentEpochDifficulty:           nil, // not needed
-			previousEpochDifficulty:          nil, // not needed
+		// Transaction mined in minimum-difficulty (DIFF1) blocks (testnet4
+		// BIP94). Leading DIFF1 headers are skipped when binding to the relay
+		// difficulty but still contribute their work. Required total is
+		// 6*32=192; 1+1+6*32=194 >= 192 -> 8 headers.
+		"leading minimum difficulty headers are skipped": {
+			transactionConfirmations: 31,
+			currentEpochDifficulty:   diff(32),
+			previousEpochDifficulty:  diff(16),
+			headerDifficultyAt: func(h uint) *big.Int {
+				if h < 790272 {
+					return diff(1)
+				}
+				return diff(32)
+			},
+			headersFrom: proofStart,
+			headersTo:   proofStart + 30,
+
+			expectedIsProofWithinRelayRange:  true,
+			expectedAccumulatedConfirmations: 31,
+			expectedRequiredConfirmations:    8,
+		},
+		// When the relay epoch difficulty is minimum (test/dev setups),
+		// minimum-difficulty headers are not skipped and match directly.
+		"epoch difficulty is minimum": {
+			transactionConfirmations: 20,
+			currentEpochDifficulty:   diff(1),
+			previousEpochDifficulty:  diff(1),
+			headerDifficultyAt:       func(uint) *big.Int { return diff(1) },
+			headersFrom:              proofStart,
+			headersTo:                proofStart + 19,
+
+			expectedIsProofWithinRelayRange:  true,
+			expectedAccumulatedConfirmations: 20,
+			expectedRequiredConfirmations:    6,
+		},
+		// The decisive header difficulty matches neither the current nor the
+		// previous relay epoch difficulty. The Bridge would revert, so the
+		// transaction is reported as outside the relay range.
+		"decisive header matches no epoch difficulty": {
+			transactionConfirmations: 20,
+			currentEpochDifficulty:   diff(32),
+			previousEpochDifficulty:  diff(16),
+			headerDifficultyAt:       func(uint) *big.Int { return diff(8) },
+			headersFrom:              proofStart,
+			headersTo:                proofStart + 19,
+
 			expectedIsProofWithinRelayRange:  false,
 			expectedAccumulatedConfirmations: 0,
 			expectedRequiredConfirmations:    0,
 		},
-		"proof ends outside current epoch": {
-			latestBlockHeight:                792285,
-			transactionConfirmations:         3,
-			currentEpoch:                     392,
-			currentEpochDifficulty:           nil, // not needed
-			previousEpochDifficulty:          nil, // not needed
+		// A run of minimum-difficulty headers longer than maxProofHeaders
+		// never reaches a decisive header.
+		"minimum difficulty run exceeds header bound": {
+			transactionConfirmations: 150,
+			currentEpochDifficulty:   diff(32),
+			previousEpochDifficulty:  diff(16),
+			headerDifficultyAt:       func(uint) *big.Int { return diff(1) },
+			headersFrom:              proofStart,
+			headersTo:                proofStart + 149,
+
 			expectedIsProofWithinRelayRange:  false,
 			expectedAccumulatedConfirmations: 0,
 			expectedRequiredConfirmations:    0,
+		},
+		// The chain tip is reached before enough difficulty is accumulated.
+		// The reported requirement is one header more than currently exists,
+		// so the caller waits for more confirmations.
+		"not enough mined blocks yet": {
+			transactionConfirmations: 3,
+			currentEpochDifficulty:   diff(32),
+			previousEpochDifficulty:  diff(16),
+			headerDifficultyAt:       func(uint) *big.Int { return diff(32) },
+			headersFrom:              proofStart,
+			headersTo:                proofStart + 2,
+
+			expectedIsProofWithinRelayRange:  true,
+			expectedAccumulatedConfirmations: 3,
+			expectedRequiredConfirmations:    4,
 		},
 	}
 
@@ -98,17 +191,21 @@ func TestGetProofInfo(t *testing.T) {
 			localChain := newLocalChain()
 
 			btcChain := newLocalBitcoinChain()
-			btcChain.addBlockHeader(
-				test.latestBlockHeight,
-				&bitcoin.BlockHeader{},
-			)
+			if err := populateBlockHeaders(
+				btcChain,
+				test.headersFrom,
+				test.headersTo,
+				test.headerDifficultyAt,
+			); err != nil {
+				t.Fatal(err)
+			}
 			btcChain.addTransactionConfirmations(
 				transactionHash,
 				test.transactionConfirmations,
 			)
 
 			localChain.setTxProofDifficultyFactor(big.NewInt(6))
-			localChain.setCurrentEpoch(test.currentEpoch)
+			localChain.setCurrentEpoch(392)
 			localChain.setCurrentAndPrevEpochDifficulty(
 				test.currentEpochDifficulty,
 				test.previousEpochDifficulty,

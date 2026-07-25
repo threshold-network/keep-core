@@ -104,6 +104,10 @@ func start(cmd *cobra.Command) error {
 		}); ok {
 			setter.SetMetricsRecorder(perfMetrics)
 		}
+
+		// Wire performance metrics into firewall validation so live
+		// on-chain IsRecognized calls are counted.
+		firewall.SetMetricsRecorder(perfMetrics)
 	}
 
 	// Initialize beacon and tbtc only for non-bootstrap nodes.

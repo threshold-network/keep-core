@@ -2,14 +2,12 @@ package bitcoin
 
 import (
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"encoding/hex"
 	"reflect"
 	"testing"
 
-	"github.com/btcsuite/btcd/btcec"
-
 	"github.com/keep-network/keep-core/internal/testutils"
+	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
 )
 
 func TestTransaction_SerializeRoundtrip(t *testing.T) {
@@ -296,10 +294,9 @@ func hexToHash(t *testing.T, hex string) Hash {
 }
 
 func hexToPublicKet(t *testing.T, hex string) *ecdsa.PublicKey {
-	x, y := elliptic.Unmarshal(btcec.S256(), hexToSlice(t, hex))
-	return &ecdsa.PublicKey{
-		Curve: btcec.S256(),
-		X:     x,
-		Y:     y,
+	publicKey, err := secp256k1.Unmarshal(hexToSlice(t, hex))
+	if err != nil {
+		t.Fatal(err)
 	}
+	return publicKey
 }

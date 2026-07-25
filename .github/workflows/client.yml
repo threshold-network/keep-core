@@ -7,12 +7,10 @@ on:
     branches:
       - main
     paths-ignore:
-      - "docs-v1/**"
       - "docs/**"
       - "infrastructure/**"
       - "scripts/**"
       - "solidity/**"
-      - "solidity-v1/**"
   pull_request:
   workflow_dispatch:
     inputs:
@@ -45,7 +43,7 @@ jobs:
         with:
           filters: |
             path-filter:
-              - './!((docs-v1|docs|infrastructure|scripts|solidity|solidity-v1)/**)'
+              - './!((docs|infrastructure|scripts|solidity)/**)'
 
   electrum-integration-detect-changes:
     runs-on: ubuntu-latest

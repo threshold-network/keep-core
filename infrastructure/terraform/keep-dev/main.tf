@@ -144,22 +144,6 @@ module "gke_cluster" {
   labels = "${local.labels}"
 }
 
-resource "google_compute_address" "eth_tx_ropsten_loadbalancer_ip" {
-  name         = "${var.eth_tx_ropsten_loadbalancer_name}"
-  project      = "${module.project.project_id}"
-  region       = "${var.region_data["region"]}"
-  address_type = "${upper(var.eth_tx_ropsten_loadbalancer_address_type)}"
-  labels       = "${local.labels}"
-}
-
-resource "google_compute_address" "eth_miner_ropsten_loadbalancer_ip" {
-  name         = "${var.eth_miner_ropsten_loadbalancer_name}"
-  project      = "${module.project.project_id}"
-  region       = "${var.region_data["region"]}"
-  address_type = "${upper(var.eth_miner_ropsten_loadbalancer_address_type)}"
-  labels       = "${local.labels}"
-}
-
 /* Using this module will create a data read and an update for the
  * prometheus-to-sd resource on each Terraform planand apply run.  These
  * updates will do nothing and are an artifact of the depends_on in the

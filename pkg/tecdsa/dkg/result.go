@@ -2,10 +2,10 @@ package dkg
 
 import (
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"fmt"
 	"sort"
 
+	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
@@ -42,11 +42,7 @@ func (r *Result) GroupPublicKeyBytes() ([]byte, error) {
 		return nil, err
 	}
 
-	return elliptic.Marshal(
-		publicKey.Curve,
-		publicKey.X,
-		publicKey.Y,
-	), nil
+	return secp256k1.Marshal(publicKey), nil
 }
 
 // MisbehavedMembersIndexes returns the indexes of group members that misbehaved

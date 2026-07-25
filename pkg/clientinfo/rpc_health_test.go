@@ -1,10 +1,16 @@
 package clientinfo
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	log2 "github.com/ipfs/go-log/v2"
 
 	keepclientinfo "github.com/keep-network/keep-common/pkg/clientinfo"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
@@ -329,6 +335,193 @@ func TestRPCHealthChecker_BitcoinHealthTransition(t *testing.T) {
 	}
 	if lastSuccess.IsZero() {
 		t.Error("expected lastSuccess to be updated on recovery")
+	}
+}
+
+// --- log capture helper ---
+
+type capturedLogEntry struct {
+	Level   string `json:"level"`
+	Logger  string `json:"logger"`
+	Message string `json:"msg"`
+}
+
+// captureLogs runs fn while capturing log entries emitted by the given
+// logger subsystem and returns the captured entries.
+func captureLogs(t *testing.T, subsystem string, fn func()) []capturedLogEntry {
+	t.Helper()
+
+	if err := log2.SetLogLevel(subsystem, "debug"); err != nil {
+		t.Fatal(err)
+	}
+
+	pipe := log2.NewPipeReader()
+
+	var mutex sync.Mutex
+	var entries []capturedLogEntry
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		scanner := bufio.NewScanner(pipe)
+		for scanner.Scan() {
+			var entry capturedLogEntry
+			if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+				continue
+			}
+			if entry.Logger != subsystem {
+				continue
+			}
+			mutex.Lock()
+			entries = append(entries, entry)
+			mutex.Unlock()
+		}
+	}()
+
+	fn()
+
+	if err := pipe.Close(); err != nil {
+		t.Logf("could not close log pipe reader: %v", err)
+	}
+	<-done
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	return append([]capturedLogEntry(nil), entries...)
+}
+
+func countLogEntries(
+	entries []capturedLogEntry,
+	level string,
+	messageFragment string,
+) int {
+	count := 0
+	for _, entry := range entries {
+		if entry.Level == level &&
+			strings.Contains(entry.Message, messageFragment) {
+			count++
+		}
+	}
+	return count
+}
+
+// --- Bitcoin benign -32602 header error tests ---
+
+func TestRPCHealthChecker_BitcoinBenignHeaderError_LoggedAtDebugAndCounted(t *testing.T) {
+	btc := &fakeBitcoinChain{
+		latestHeight: 800000,
+		headerErr: fmt.Errorf(
+			"failed to get block header: [errNo: -32602, errMsg: Invalid params]",
+		),
+	}
+	checker := newTestChecker(nil, btc)
+
+	entries := captureLogs(t, "keep-rpc-health", func() {
+		checker.checkBitcoinHealth(context.Background())
+	})
+
+	if warns := countLogEntries(entries, "warn", "GetBlockHeader"); warns != 0 {
+		t.Errorf(
+			"known-benign -32602 header error should not be logged "+
+				"at warning level, got %d warning entries",
+			warns,
+		)
+	}
+	if debugs := countLogEntries(entries, "debug", "known-benign"); debugs != 1 {
+		t.Errorf(
+			"expected 1 debug entry for known-benign -32602 header error, "+
+				"got %d",
+			debugs,
+		)
+	}
+
+	if count := checker.GetBitcoinBenignHeaderErrorCount(); count != 1 {
+		t.Errorf("expected benign error count 1, got %v", count)
+	}
+
+	// Health state semantics are unchanged: the check still records the
+	// error and reports unhealthy.
+	healthy, _, _, lastErr, _ := checker.GetBitcoinHealthStatus()
+	if healthy {
+		t.Error("expected unhealthy when GetBlockHeader fails")
+	}
+	if lastErr == nil {
+		t.Error("expected error to be stored for benign header failure")
+	}
+
+	// A subsequent benign failure increments the counter again.
+	checker.checkBitcoinHealth(context.Background())
+	if count := checker.GetBitcoinBenignHeaderErrorCount(); count != 2 {
+		t.Errorf("expected benign error count 2 after second check, got %v", count)
+	}
+}
+
+func TestRPCHealthChecker_BitcoinOtherHeaderErrors_StillLoggedAtWarn(t *testing.T) {
+	tests := map[string]error{
+		"other JSON-RPC error code": fmt.Errorf(
+			"failed to get block header: [errNo: -32600, errMsg: Invalid request]",
+		),
+		"adjacent JSON-RPC error code": fmt.Errorf(
+			"failed to get block header: [errNo: -326020, errMsg: Invalid params]",
+		),
+		"unrelated message containing the benign code digits": fmt.Errorf(
+			"connection reset by peer at offset -32602",
+		),
+		"non JSON-RPC error": fmt.Errorf("connection refused"),
+	}
+
+	for testName, headerErr := range tests {
+		t.Run(testName, func(t *testing.T) {
+			btc := &fakeBitcoinChain{
+				latestHeight: 800000,
+				headerErr:    headerErr,
+			}
+			checker := newTestChecker(nil, btc)
+
+			entries := captureLogs(t, "keep-rpc-health", func() {
+				checker.checkBitcoinHealth(context.Background())
+			})
+
+			if warns := countLogEntries(entries, "warn", "GetBlockHeader"); warns != 1 {
+				t.Errorf(
+					"expected 1 warning entry for non-benign header error, "+
+						"got %d",
+					warns,
+				)
+			}
+
+			if count := checker.GetBitcoinBenignHeaderErrorCount(); count != 0 {
+				t.Errorf(
+					"benign error count should not change for non-benign "+
+						"errors, got %v",
+					count,
+				)
+			}
+		})
+	}
+}
+
+func TestIsKnownBenignBtcHeaderError(t *testing.T) {
+	tests := map[string]struct {
+		err      error
+		expected bool
+	}{
+		"nil error":                      {nil, false},
+		"-32602 code":                    {fmt.Errorf("errNo: -32602, errMsg: Invalid params"), true},
+		"-32602 code wrapped":            {fmt.Errorf("failed to get block header: [errNo: -32602, errMsg: x]"), true},
+		"-32602 code at end of message":  {fmt.Errorf("errNo: -32602"), true},
+		"other JSON-RPC code":            {fmt.Errorf("errNo: -32600, errMsg: Invalid request"), false},
+		"adjacent longer numeric code":   {fmt.Errorf("errNo: -326020, errMsg: Invalid params"), false},
+		"digits outside the errNo field": {fmt.Errorf("connection reset by peer at offset -32602"), false},
+		"unrelated error message":        {fmt.Errorf("connection refused"), false},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			if actual := isKnownBenignBtcHeaderError(test.err); actual != test.expected {
+				t.Errorf("expected %v, got %v", test.expected, actual)
+			}
+		})
 	}
 }
 

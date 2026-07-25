@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"encoding/hex"
 	"fmt"
 	"math/big"
@@ -17,6 +16,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/clientinfo"
+	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tecdsa"
 	"go.uber.org/zap"
@@ -502,11 +502,7 @@ func (w *wallet) membersByOperator(operator chain.Address) []group.MemberIndex {
 }
 
 func (w *wallet) String() string {
-	publicKey := elliptic.Marshal(
-		w.publicKey.Curve,
-		w.publicKey.X,
-		w.publicKey.Y,
-	)
+	publicKey := secp256k1.Marshal(w.publicKey)
 
 	return fmt.Sprintf("public key [0x%x]", publicKey)
 }
