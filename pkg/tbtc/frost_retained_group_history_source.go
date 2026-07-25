@@ -32,16 +32,16 @@ import (
 )
 
 const (
-	frostRetainedGroupHistoryPageSchema      = "tbtc-frost-retained-group-history-page/v2"
-	frostRetainedGroupOperatorReceiptSchema  = "tbtc-frost-retained-group-operator-receipt/v2"
-	frostRetainedGroupHistoryRequestSchema   = "tbtc-frost-retained-group-history-request/v2"
-	frostRetainedGroupOperatorRequestSchema  = "tbtc-frost-retained-group-operator-request/v2"
-	frostRetainedGroupHistorySignatureDomain = "tbtc-frost-retained-group-export-signature-v2\x00"
+	frostRetainedGroupHistoryPageSchema      = "tbtc-frost-retained-group-history-page/v3"
+	frostRetainedGroupOperatorReceiptSchema  = "tbtc-frost-retained-group-operator-receipt/v3"
+	frostRetainedGroupHistoryRequestSchema   = "tbtc-frost-retained-group-history-request/v3"
+	frostRetainedGroupOperatorRequestSchema  = "tbtc-frost-retained-group-operator-request/v3"
+	frostRetainedGroupHistorySignatureDomain = "tbtc-frost-retained-group-export-signature-v3\x00"
 	frostRetainedGroupHistoryEndpointDomain  = "tbtc-frost-retained-group-endpoints-v1\x00"
-	frostRetainedGroupHistoryQueryDomain     = "tbtc-frost-retained-group-history-query-v2\x00"
-	frostRetainedGroupOperatorQueryDomain    = "tbtc-frost-retained-group-operator-query-v2\x00"
-	frostRetainedGroupHistoryRootDomain      = "tbtc-frost-retained-group-export-history-root-v2\x00"
-	frostRetainedGroupProtocolBindingDomain  = "tbtc-frost-retained-group-protocol-binding-v2\x00"
+	frostRetainedGroupHistoryQueryDomain     = "tbtc-frost-retained-group-history-query-v3\x00"
+	frostRetainedGroupOperatorQueryDomain    = "tbtc-frost-retained-group-operator-query-v3\x00"
+	frostRetainedGroupHistoryRootDomain      = "tbtc-frost-retained-group-export-history-root-v3\x00"
+	frostRetainedGroupProtocolBindingDomain  = "tbtc-frost-retained-group-protocol-binding-v3\x00"
 
 	frostRetainedGroupMaximumResponseBytes          = 1024 * 1024
 	frostRetainedGroupMaximumAggregateResponseBytes = 16 * 1024 * 1024
@@ -249,6 +249,10 @@ type frostRetainedGroupProtocolBinding struct {
 	BitcoinOutboxProtocolID        string                           `json:"bitcoinOutboxProtocolID"`
 	InventoryProtocolID            string                           `json:"inventoryProtocolID"`
 	QuarantineProtocolID           string                           `json:"quarantineProtocolID"`
+	LiftProtocolID                 string                           `json:"liftProtocolID"`
+	TombstoneProtocolID            string                           `json:"tombstoneProtocolID"`
+	LiftAuthoritySetHash           string                           `json:"liftAuthoritySetHash"`
+	CheckpointAuthoritySetHash     string                           `json:"checkpointAuthoritySetHash"`
 	SigningPolicyHash              string                           `json:"signingPolicyHash"`
 	CanonicalStoreID               string                           `json:"canonicalStoreID"`
 	CanonicalStoreFingerprint      string                           `json:"canonicalStoreFingerprint"`
@@ -267,22 +271,72 @@ type frostRetainedGroupWireEventPoint struct {
 	LogIndex         uint32 `json:"logIndex"`
 }
 
+type frostRetainedGroupWireQuarantineRaisedRecord struct {
+	QuarantineID     string                           `json:"quarantineID"`
+	WalletID         string                           `json:"walletID"`
+	EvidenceHash     string                           `json:"evidenceHash"`
+	Reason           string                           `json:"reason"`
+	RecoveryRequired bool                             `json:"recoveryRequired"`
+	RaisedAt         frostRetainedGroupWireEventPoint `json:"raisedAt"`
+}
+
+type frostRetainedGroupWireQuarantineLiftBody struct {
+	Schema                 string                                       `json:"schema"`
+	ProtocolBindingHash    string                                       `json:"protocolBindingHash"`
+	ManifestHash           string                                       `json:"manifestHash"`
+	ProfileHash            string                                       `json:"profileHash"`
+	ImplementationSetHash  string                                       `json:"implementationSetHash"`
+	ChainID                uint64                                       `json:"chainID"`
+	DomainChainID          string                                       `json:"domainChainID"`
+	GenesisBlockHash       string                                       `json:"genesisBlockHash"`
+	QuarantineProtocolID   string                                       `json:"quarantineProtocolID"`
+	LiftProtocolID         string                                       `json:"liftProtocolID"`
+	TombstoneProtocolID    string                                       `json:"tombstoneProtocolID"`
+	AuthoritySetHash       string                                       `json:"authoritySetHash"`
+	QuarantineID           string                                       `json:"quarantineID"`
+	WalletID               string                                       `json:"walletID"`
+	OriginalRaisedRecord   frostRetainedGroupWireQuarantineRaisedRecord `json:"originalRaisedRecord"`
+	PriorGeneration        uint64                                       `json:"priorGeneration"`
+	PriorEventRoot         string                                       `json:"priorEventRoot"`
+	PriorActiveRoot        string                                       `json:"priorActiveRoot"`
+	PriorTombstoneRoot     string                                       `json:"priorTombstoneRoot"`
+	LiftPoint              frostRetainedGroupWireEventPoint             `json:"liftPoint"`
+	ResolutionEvidenceHash string                                       `json:"resolutionEvidenceHash"`
+	ResolutionFinality     frostRetainedGroupWireFinality               `json:"resolutionFinality"`
+	NotBeforeBlock         uint64                                       `json:"notBeforeBlock"`
+	ExpiresAtBlock         uint64                                       `json:"expiresAtBlock"`
+}
+
+type frostRetainedGroupWireQuarantineLiftSignature struct {
+	AuthorityID         string `json:"authorityID"`
+	SignerPublicKeySPKI string `json:"signerPublicKeySpki"`
+	Signature           string `json:"signature"`
+}
+
+type frostRetainedGroupWireQuarantineLiftCertificate struct {
+	Schema     string                                          `json:"schema"`
+	Body       frostRetainedGroupWireQuarantineLiftBody        `json:"body"`
+	BodyHash   string                                          `json:"bodyHash"`
+	Signatures []frostRetainedGroupWireQuarantineLiftSignature `json:"signatures"`
+}
+
 type frostRetainedGroupWireMutation struct {
-	Point                   frostRetainedGroupWireEventPoint `json:"point"`
-	Kind                    string                           `json:"kind"`
-	WalletID                string                           `json:"walletID"`
-	WalletPublicKeyHash     string                           `json:"walletPublicKeyHash"`
-	OperatorIDs             []uint32                         `json:"operatorIDs"`
-	RetainedGroupHash       string                           `json:"retainedGroupHash"`
-	DkgResultHash           string                           `json:"dkgResultHash"`
-	DkgSubmissionPoint      frostRetainedGroupWireEventPoint `json:"dkgSubmissionPoint"`
-	DkgApprovalPoint        frostRetainedGroupWireEventPoint `json:"dkgApprovalPoint"`
-	CreationPoint           frostRetainedGroupWireEventPoint `json:"creationPoint"`
-	BridgeRegistrationPoint frostRetainedGroupWireEventPoint `json:"bridgeRegistrationPoint"`
-	QuarantineID            string                           `json:"quarantineID"`
-	EvidenceHash            string                           `json:"evidenceHash"`
-	AuthenticationHash      string                           `json:"authenticationHash"`
-	Reason                  string                           `json:"reason"`
+	Point                   frostRetainedGroupWireEventPoint                 `json:"point"`
+	Kind                    string                                           `json:"kind"`
+	WalletID                string                                           `json:"walletID"`
+	WalletPublicKeyHash     string                                           `json:"walletPublicKeyHash"`
+	OperatorIDs             []uint32                                         `json:"operatorIDs"`
+	RetainedGroupHash       string                                           `json:"retainedGroupHash"`
+	DkgResultHash           string                                           `json:"dkgResultHash"`
+	DkgSubmissionPoint      frostRetainedGroupWireEventPoint                 `json:"dkgSubmissionPoint"`
+	DkgApprovalPoint        frostRetainedGroupWireEventPoint                 `json:"dkgApprovalPoint"`
+	CreationPoint           frostRetainedGroupWireEventPoint                 `json:"creationPoint"`
+	BridgeRegistrationPoint frostRetainedGroupWireEventPoint                 `json:"bridgeRegistrationPoint"`
+	QuarantineID            string                                           `json:"quarantineID"`
+	EvidenceHash            string                                           `json:"evidenceHash"`
+	LiftCertificateHash     string                                           `json:"liftCertificateHash"`
+	LiftCertificate         *frostRetainedGroupWireQuarantineLiftCertificate `json:"liftCertificate"`
+	Reason                  string                                           `json:"reason"`
 }
 
 type frostRetainedGroupHistoryQuery struct {
@@ -846,7 +900,10 @@ func (source *signedFrostRetainedGroupHistorySource) ReadCompleteHistory(
 				EmptyAtFrom:       true,
 				DescriptorSetHash: descriptorSetHash,
 			}
-			if err := validateCompleteFrostRetainedGroupHistory(history); err != nil {
+			if err := validateCompleteFrostRetainedGroupHistory(
+				history,
+				evidence.liftPolicy,
+			); err != nil {
 				return nil, err
 			}
 			for blockNumber, blockHash := range blockHashes {
@@ -1306,7 +1363,15 @@ func frostRetainedGroupMutationFromWire(
 	if err != nil {
 		return FrostRetainedGroupMutation{}, err
 	}
-	authenticationHash, err := parseFrostActivationHex32(mutation.AuthenticationHash)
+	liftCertificateHash, err := parseFrostActivationHex32(
+		mutation.LiftCertificateHash,
+	)
+	if err != nil {
+		return FrostRetainedGroupMutation{}, err
+	}
+	liftCertificate, err := frostRetainedGroupLiftCertificateFromWire(
+		mutation.LiftCertificate,
+	)
 	if err != nil {
 		return FrostRetainedGroupMutation{}, err
 	}
@@ -1333,7 +1398,8 @@ func frostRetainedGroupMutationFromWire(
 		BridgeRegistrationPoint: registrationPoint,
 		QuarantineID:            quarantineID,
 		EvidenceHash:            evidenceHash,
-		AuthenticationHash:      authenticationHash,
+		LiftCertificateHash:     liftCertificateHash,
+		LiftCertificate:         liftCertificate,
 		Reason:                  mutation.Reason,
 	}, nil
 }
@@ -1355,9 +1421,273 @@ func frostRetainedGroupMutationToWire(
 		BridgeRegistrationPoint: frostRetainedGroupEventPointToWire(mutation.BridgeRegistrationPoint),
 		QuarantineID:            frostActivationHex32(mutation.QuarantineID),
 		EvidenceHash:            frostActivationHex32(mutation.EvidenceHash),
-		AuthenticationHash:      frostActivationHex32(mutation.AuthenticationHash),
+		LiftCertificateHash:     frostActivationHex32(mutation.LiftCertificateHash),
+		LiftCertificate:         frostRetainedGroupLiftCertificateToWire(mutation.LiftCertificate),
 		Reason:                  mutation.Reason,
 	}
+}
+
+func frostRetainedGroupLiftCertificateToWire(
+	certificate *FrostRetainedGroupQuarantineLiftCertificate,
+) *frostRetainedGroupWireQuarantineLiftCertificate {
+	if certificate == nil {
+		return nil
+	}
+	body := certificate.Body
+	signatures := make(
+		[]frostRetainedGroupWireQuarantineLiftSignature,
+		len(certificate.Signatures),
+	)
+	for index, signature := range certificate.Signatures {
+		signatures[index] = frostRetainedGroupWireQuarantineLiftSignature{
+			AuthorityID:         signature.AuthorityID,
+			SignerPublicKeySPKI: signature.SignerPublicKeySPKI,
+			Signature:           signature.Signature,
+		}
+	}
+	return &frostRetainedGroupWireQuarantineLiftCertificate{
+		Schema: certificate.Schema,
+		Body: frostRetainedGroupWireQuarantineLiftBody{
+			Schema:                body.Schema,
+			ProtocolBindingHash:   frostActivationHex32(body.ProtocolBindingHash),
+			ManifestHash:          frostActivationHex32(body.ManifestHash),
+			ProfileHash:           frostActivationHex32(body.ProfileHash),
+			ImplementationSetHash: frostActivationHex32(body.ImplementationSetHash),
+			ChainID:               body.ChainID,
+			DomainChainID:         frostActivationHex32(body.DomainChainID),
+			GenesisBlockHash:      frostActivationHex32(body.GenesisBlockHash),
+			QuarantineProtocolID:  frostActivationHex32(body.QuarantineProtocolID),
+			LiftProtocolID:        frostActivationHex32(body.LiftProtocolID),
+			TombstoneProtocolID:   frostActivationHex32(body.TombstoneProtocolID),
+			AuthoritySetHash:      frostActivationHex32(body.AuthoritySetHash),
+			QuarantineID:          frostActivationHex32(body.QuarantineID),
+			WalletID:              frostActivationHex32(body.WalletID),
+			OriginalRaisedRecord: frostRetainedGroupWireQuarantineRaisedRecord{
+				QuarantineID: frostActivationHex32(
+					body.OriginalRaisedRecord.QuarantineID,
+				),
+				WalletID: frostActivationHex32(
+					body.OriginalRaisedRecord.WalletID,
+				),
+				EvidenceHash: frostActivationHex32(
+					body.OriginalRaisedRecord.EvidenceHash,
+				),
+				Reason:           body.OriginalRaisedRecord.Reason,
+				RecoveryRequired: body.OriginalRaisedRecord.RecoveryRequired,
+				RaisedAt: frostRetainedGroupEventPointToWire(
+					body.OriginalRaisedRecord.RaisedAt,
+				),
+			},
+			PriorGeneration:        body.PriorGeneration,
+			PriorEventRoot:         frostActivationHex32(body.PriorEventRoot),
+			PriorActiveRoot:        frostActivationHex32(body.PriorActiveRoot),
+			PriorTombstoneRoot:     frostActivationHex32(body.PriorTombstoneRoot),
+			LiftPoint:              frostRetainedGroupEventPointToWire(body.LiftPoint),
+			ResolutionEvidenceHash: frostActivationHex32(body.ResolutionEvidenceHash),
+			ResolutionFinality: frostRetainedGroupFinalityToWire(
+				body.ResolutionFinality,
+			),
+			NotBeforeBlock: body.NotBeforeBlock,
+			ExpiresAtBlock: body.ExpiresAtBlock,
+		},
+		BodyHash:   frostActivationHex32(certificate.BodyHash),
+		Signatures: signatures,
+	}
+}
+
+func frostRetainedGroupLiftCertificateFromWire(
+	certificate *frostRetainedGroupWireQuarantineLiftCertificate,
+) (*FrostRetainedGroupQuarantineLiftCertificate, error) {
+	if certificate == nil {
+		return nil, nil
+	}
+	body := certificate.Body
+	parse := func(name string, value string) ([32]byte, error) {
+		parsed, err := parseFrostActivationHex32(value)
+		if err != nil {
+			return [32]byte{}, fmt.Errorf(
+				"invalid FROST quarantine lift %s: [%w]",
+				name,
+				err,
+			)
+		}
+		return parsed, nil
+	}
+	protocolBindingHash, err := parse(
+		"protocol binding hash",
+		body.ProtocolBindingHash,
+	)
+	if err != nil {
+		return nil, err
+	}
+	manifestHash, err := parse("manifest hash", body.ManifestHash)
+	if err != nil {
+		return nil, err
+	}
+	profileHash, err := parse("profile hash", body.ProfileHash)
+	if err != nil {
+		return nil, err
+	}
+	implementationSetHash, err := parse(
+		"implementation set hash",
+		body.ImplementationSetHash,
+	)
+	if err != nil {
+		return nil, err
+	}
+	domainChainID, err := parse("domain chain ID", body.DomainChainID)
+	if err != nil {
+		return nil, err
+	}
+	genesisBlockHash, err := parse("genesis block hash", body.GenesisBlockHash)
+	if err != nil {
+		return nil, err
+	}
+	quarantineProtocolID, err := parse(
+		"quarantine protocol ID",
+		body.QuarantineProtocolID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	liftProtocolID, err := parse("lift protocol ID", body.LiftProtocolID)
+	if err != nil {
+		return nil, err
+	}
+	tombstoneProtocolID, err := parse(
+		"tombstone protocol ID",
+		body.TombstoneProtocolID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	authoritySetHash, err := parse("authority set hash", body.AuthoritySetHash)
+	if err != nil {
+		return nil, err
+	}
+	quarantineID, err := parse("quarantine ID", body.QuarantineID)
+	if err != nil {
+		return nil, err
+	}
+	walletID, err := parse("wallet ID", body.WalletID)
+	if err != nil {
+		return nil, err
+	}
+	raisedQuarantineID, err := parse(
+		"raised quarantine ID",
+		body.OriginalRaisedRecord.QuarantineID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	raisedWalletID, err := parse(
+		"raised wallet ID",
+		body.OriginalRaisedRecord.WalletID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	raisedEvidenceHash, err := parse(
+		"raised evidence hash",
+		body.OriginalRaisedRecord.EvidenceHash,
+	)
+	if err != nil {
+		return nil, err
+	}
+	raisedAt, err := frostRetainedGroupEventPointFromWire(
+		body.OriginalRaisedRecord.RaisedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("invalid FROST quarantine raised point: [%w]", err)
+	}
+	priorEventRoot, err := parse("prior event root", body.PriorEventRoot)
+	if err != nil {
+		return nil, err
+	}
+	priorActiveRoot, err := parse("prior active root", body.PriorActiveRoot)
+	if err != nil {
+		return nil, err
+	}
+	priorTombstoneRoot, err := parse(
+		"prior tombstone root",
+		body.PriorTombstoneRoot,
+	)
+	if err != nil {
+		return nil, err
+	}
+	liftPoint, err := frostRetainedGroupEventPointFromWire(body.LiftPoint)
+	if err != nil {
+		return nil, fmt.Errorf("invalid FROST quarantine lift point: [%w]", err)
+	}
+	resolutionEvidenceHash, err := parse(
+		"resolution evidence hash",
+		body.ResolutionEvidenceHash,
+	)
+	if err != nil {
+		return nil, err
+	}
+	resolutionFinality, err := frostRetainedGroupFinalityFromWire(
+		body.ResolutionFinality,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"invalid FROST quarantine resolution finality: [%w]",
+			err,
+		)
+	}
+	bodyHash, err := parse("body hash", certificate.BodyHash)
+	if err != nil {
+		return nil, err
+	}
+	signatures := make(
+		[]FrostRetainedGroupQuarantineLiftSignature,
+		len(certificate.Signatures),
+	)
+	for index, signature := range certificate.Signatures {
+		signatures[index] = FrostRetainedGroupQuarantineLiftSignature{
+			AuthorityID:         signature.AuthorityID,
+			SignerPublicKeySPKI: signature.SignerPublicKeySPKI,
+			Signature:           signature.Signature,
+		}
+	}
+	return &FrostRetainedGroupQuarantineLiftCertificate{
+		Schema: certificate.Schema,
+		Body: FrostRetainedGroupQuarantineLiftBody{
+			Schema:                body.Schema,
+			ProtocolBindingHash:   protocolBindingHash,
+			ManifestHash:          manifestHash,
+			ProfileHash:           profileHash,
+			ImplementationSetHash: implementationSetHash,
+			ChainID:               body.ChainID,
+			DomainChainID:         domainChainID,
+			GenesisBlockHash:      genesisBlockHash,
+			QuarantineProtocolID:  quarantineProtocolID,
+			LiftProtocolID:        liftProtocolID,
+			TombstoneProtocolID:   tombstoneProtocolID,
+			AuthoritySetHash:      authoritySetHash,
+			QuarantineID:          quarantineID,
+			WalletID:              walletID,
+			OriginalRaisedRecord: FrostRetainedGroupQuarantineRaisedRecord{
+				QuarantineID:     raisedQuarantineID,
+				WalletID:         raisedWalletID,
+				EvidenceHash:     raisedEvidenceHash,
+				Reason:           body.OriginalRaisedRecord.Reason,
+				RecoveryRequired: body.OriginalRaisedRecord.RecoveryRequired,
+				RaisedAt:         raisedAt,
+			},
+			PriorGeneration:        body.PriorGeneration,
+			PriorEventRoot:         priorEventRoot,
+			PriorActiveRoot:        priorActiveRoot,
+			PriorTombstoneRoot:     priorTombstoneRoot,
+			LiftPoint:              liftPoint,
+			ResolutionEvidenceHash: resolutionEvidenceHash,
+			ResolutionFinality:     resolutionFinality,
+			NotBeforeBlock:         body.NotBeforeBlock,
+			ExpiresAtBlock:         body.ExpiresAtBlock,
+		},
+		BodyHash:   bodyHash,
+		Signatures: signatures,
+	}, nil
 }
 
 func parseFrostRetainedGroupHex20(value string) ([20]byte, error) {
@@ -1392,6 +1722,22 @@ func addFrostRetainedGroupMutationBlockHashes(
 			return fmt.Errorf("retained-group history contains conflicting hashes for block [%d]", point.BlockNumber)
 		}
 		blocks[point.BlockNumber] = point.BlockHash
+	}
+	if mutation.LiftCertificate != nil {
+		finality := mutation.LiftCertificate.Body.ResolutionFinality
+		if finality.BlockNumber == 0 || finality.BlockHash == [32]byte{} {
+			return fmt.Errorf(
+				"retained-group quarantine lift resolution finality is invalid",
+			)
+		}
+		if existing, ok := blocks[finality.BlockNumber]; ok &&
+			existing != finality.BlockHash {
+			return fmt.Errorf(
+				"retained-group history contains conflicting hashes for block [%d]",
+				finality.BlockNumber,
+			)
+		}
+		blocks[finality.BlockNumber] = finality.BlockHash
 	}
 	return nil
 }

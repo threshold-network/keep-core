@@ -195,11 +195,22 @@ type frostPreSignManifestCanonicalJournal struct {
 }
 
 type frostPreSignManifestQuarantineJournal struct {
-	ProtocolID         string `json:"protocolID"`
-	StoreID            string `json:"storeID"`
-	StoreFingerprint   string `json:"storeFingerprint"`
-	ClusterFingerprint string `json:"clusterFingerprint"`
-	MinimumGeneration  uint64 `json:"minimumGeneration"`
+	ProtocolID                   string                              `json:"protocolID"`
+	LiftProtocolID               string                              `json:"liftProtocolID"`
+	TombstoneProtocolID          string                              `json:"tombstoneProtocolID"`
+	CheckpointAuthorityThreshold uint64                              `json:"checkpointAuthorityThreshold"`
+	CheckpointAuthorities        []frostPreSignManifestLiftAuthority `json:"checkpointAuthorities"`
+	LiftAuthorityThreshold       uint64                              `json:"liftAuthorityThreshold"`
+	LiftAuthorities              []frostPreSignManifestLiftAuthority `json:"liftAuthorities"`
+	StoreID                      string                              `json:"storeID"`
+	StoreFingerprint             string                              `json:"storeFingerprint"`
+	ClusterFingerprint           string                              `json:"clusterFingerprint"`
+	MinimumGeneration            uint64                              `json:"minimumGeneration"`
+}
+
+type frostPreSignManifestLiftAuthority struct {
+	AuthorityID       string `json:"authorityID"`
+	PublicKeySPKIHash string `json:"publicKeySpkiHash"`
 }
 
 type frostPreSignManifestNativeSignerAnchor struct {
@@ -260,6 +271,7 @@ type frostPreSignActivationManifest struct {
 	FrostSigner                  frostPreSignManifestFrostSigner `json:"frostSigner"`
 	manifestHash                 [32]byte
 	activationAuthorityPublicKey [32]byte
+	activationAuthorityKeyHash   [32]byte
 }
 
 type frostPreSignDeploymentPin struct {
@@ -520,6 +532,7 @@ func loadFrostPreSignActivationManifest(
 	}
 	manifest.manifestHash = payloadHash
 	copy(manifest.activationAuthorityPublicKey[:], publicKey)
+	manifest.activationAuthorityKeyHash = trustedKeyHash
 	if err := validateFrostPreSignActivationManifest(manifest); err != nil {
 		return nil, err
 	}
@@ -809,9 +822,12 @@ func validateFrostPreSignActivationManifest(
 		"attestation signer key":            frost.AttestationSignerKeyHash,
 		"retained group inventory protocol": frost.RetainedGroupInventoryProtocolID,
 		"quarantine journal protocol":       frost.QuarantineJournal.ProtocolID,
+		"quarantine lift protocol":          frost.QuarantineJournal.LiftProtocolID,
+		"quarantine tombstone protocol":     frost.QuarantineJournal.TombstoneProtocolID,
 	} {
-		if _, err := frostPreSignParseBytes32(value); err != nil {
-			return fmt.Errorf("invalid FROST activation %s: [%w]", name, err)
+		parsed, err := frostPreSignParseBytes32(value)
+		if err != nil || parsed == [32]byte{} {
+			return fmt.Errorf("invalid FROST activation %s", name)
 		}
 	}
 	durableSessionStoreFingerprint, err := frostPreSignParseBytes32(
@@ -925,6 +941,11 @@ func validateFrostPreSignActivationManifest(
 	quarantine := frost.QuarantineJournal
 	if strings.TrimSpace(quarantine.StoreID) == "" || len(quarantine.StoreID) > 255 {
 		return fmt.Errorf("FROST quarantine journal manifest is incomplete")
+	}
+	if err := validateFrostPreSignQuarantineLiftAuthorities(
+		manifest,
+	); err != nil {
+		return err
 	}
 	quarantineStoreFingerprint, err := frostPreSignParseBytes32(quarantine.StoreFingerprint)
 	if err != nil || quarantineStoreFingerprint == [32]byte{} {
@@ -1070,6 +1091,125 @@ func frostPreSignNativeSignerAnchorManifest(
 	result.WitnessRotationThresholdRecords =
 		anchor.WitnessRotationThresholdRecords
 	return result, nil
+}
+
+func validateFrostPreSignQuarantineLiftAuthorities(
+	manifest *frostPreSignActivationManifest,
+) error {
+	if manifest == nil {
+		return fmt.Errorf("FROST quarantine lift manifest is nil")
+	}
+	frost := manifest.FrostSigner
+	quarantine := frost.QuarantineJournal
+	quarantineProtocolID, _ := frostPreSignParseBytes32(quarantine.ProtocolID)
+	liftProtocolID, _ := frostPreSignParseBytes32(quarantine.LiftProtocolID)
+	tombstoneProtocolID, _ := frostPreSignParseBytes32(quarantine.TombstoneProtocolID)
+	if quarantineProtocolID == liftProtocolID ||
+		quarantineProtocolID == tombstoneProtocolID ||
+		liftProtocolID == tombstoneProtocolID {
+		return fmt.Errorf("FROST quarantine protocol identities are not distinct")
+	}
+
+	forbidden := make(map[[32]byte]string)
+	for name, value := range map[string]string{
+		"runtime attestation":      frost.AttestationSignerKeyHash,
+		"runtime exporter":         frost.HandshakeOperatorFingerprint,
+		"retained history source":  frost.CanonicalJournal.SourceOperatorFingerprint,
+		"primary history source":   manifest.Ethereum.SourceOperatorFingerprint,
+		"primary history verifier": manifest.Ethereum.VerifierOperatorFingerprint,
+	} {
+		hash, err := frostPreSignParseBytes32(value)
+		if err != nil || hash == [32]byte{} {
+			return fmt.Errorf("FROST %s role key is invalid", name)
+		}
+		forbidden[hash] = name
+	}
+	if manifest.activationAuthorityKeyHash == [32]byte{} {
+		return fmt.Errorf("FROST activation authority key is unavailable")
+	}
+	forbidden[manifest.activationAuthorityKeyHash] = "activation"
+
+	checkpointHashes, err := validateFrostPreSignManifestAuthoritySet(
+		"checkpoint",
+		quarantine.CheckpointAuthorityThreshold,
+		quarantine.CheckpointAuthorities,
+		forbidden,
+	)
+	if err != nil {
+		return err
+	}
+	for hash := range checkpointHashes {
+		forbidden[hash] = "checkpoint authority"
+	}
+	if _, err := validateFrostPreSignManifestAuthoritySet(
+		"quarantine lift",
+		quarantine.LiftAuthorityThreshold,
+		quarantine.LiftAuthorities,
+		forbidden,
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateFrostPreSignManifestAuthoritySet(
+	name string,
+	threshold uint64,
+	authorities []frostPreSignManifestLiftAuthority,
+	forbidden map[[32]byte]string,
+) (map[[32]byte]bool, error) {
+	if threshold < 2 || len(authorities) < 3 ||
+		threshold > uint64(len(authorities)) ||
+		threshold <= uint64(len(authorities))/2 {
+		return nil, fmt.Errorf(
+			"FROST %s authority set must be a production strict majority of at least 2-of-3",
+			name,
+		)
+	}
+	seenHashes := make(map[[32]byte]bool, len(authorities))
+	previousID := ""
+	for index, authority := range authorities {
+		if !validFrostPreSignLiftAuthorityID(authority.AuthorityID) ||
+			(index > 0 && authority.AuthorityID <= previousID) {
+			return nil, fmt.Errorf(
+				"FROST %s authority IDs are not canonical and strictly sorted",
+				name,
+			)
+		}
+		previousID = authority.AuthorityID
+		keyHash, err := frostPreSignParseBytes32(authority.PublicKeySPKIHash)
+		if err != nil || keyHash == [32]byte{} || seenHashes[keyHash] {
+			return nil, fmt.Errorf(
+				"FROST %s authority SPKI hashes are invalid or duplicate",
+				name,
+			)
+		}
+		if role, exists := forbidden[keyHash]; exists {
+			return nil, fmt.Errorf(
+				"FROST %s authority [%s] aliases the %s role",
+				name,
+				authority.AuthorityID,
+				role,
+			)
+		}
+		seenHashes[keyHash] = true
+	}
+	return seenHashes, nil
+}
+
+func validFrostPreSignLiftAuthorityID(value string) bool {
+	if value == "" || len(value) > 64 {
+		return false
+	}
+	for index := range value {
+		character := value[index]
+		if !((character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') ||
+			(index > 0 && (character == '-' || character == '_'))) {
+			return false
+		}
+	}
+	return true
 }
 
 func newFrostPreSignEthereumAdapter(
@@ -2232,6 +2372,54 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 	if err != nil {
 		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
 	}
+	quarantineLiftProtocolID, err := parse(quarantine.LiftProtocolID)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
+	quarantineTombstoneProtocolID, err := parse(quarantine.TombstoneProtocolID)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
+	liftAuthorities := make(
+		[]tbtc.FrostRetainedGroupAuthority,
+		len(quarantine.LiftAuthorities),
+	)
+	for index, authority := range quarantine.LiftAuthorities {
+		publicKeySPKIHash, err := parse(authority.PublicKeySPKIHash)
+		if err != nil {
+			return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+		}
+		liftAuthorities[index] = tbtc.FrostRetainedGroupAuthority{
+			AuthorityID:       authority.AuthorityID,
+			PublicKeySPKIHash: publicKeySPKIHash,
+		}
+	}
+	checkpointAuthorities := make(
+		[]tbtc.FrostRetainedGroupAuthority,
+		len(quarantine.CheckpointAuthorities),
+	)
+	for index, authority := range quarantine.CheckpointAuthorities {
+		publicKeySPKIHash, err := parse(authority.PublicKeySPKIHash)
+		if err != nil {
+			return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+		}
+		checkpointAuthorities[index] = tbtc.FrostRetainedGroupAuthority{
+			AuthorityID:       authority.AuthorityID,
+			PublicKeySPKIHash: publicKeySPKIHash,
+		}
+	}
+	verifierOperatorFingerprint, err := parse(
+		adapter.manifest.Ethereum.VerifierOperatorFingerprint,
+	)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
+	handshakeOperatorFingerprint, err := parse(
+		adapter.manifest.FrostSigner.HandshakeOperatorFingerprint,
+	)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
 	journal := frost.CanonicalJournal
 	storeFingerprint, err := parse(journal.StoreFingerprint)
 	if err != nil {
@@ -2273,6 +2461,9 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 	}
 	return tbtc.FrostPreSignActivationRuntimeManifest{
 		ManifestHash:                     adapter.profile.ActivationManifestHash,
+		ActivationAuthorityKeyHash:       adapter.manifest.activationAuthorityKeyHash,
+		VerifierOperatorFingerprint:      verifierOperatorFingerprint,
+		HandshakeOperatorFingerprint:     handshakeOperatorFingerprint,
 		DomainChainID:                    adapter.profile.DomainChainID,
 		GenesisBlockHash:                 genesisBlockHash,
 		ProfileHash:                      adapter.profile.ProfileHash,
@@ -2308,11 +2499,17 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 			MinimumGeneration:         journal.MinimumGeneration,
 		},
 		QuarantineJournal: tbtc.FrostRetainedGroupQuarantineJournalManifest{
-			ProtocolID:         quarantineJournalProtocolID,
-			StoreID:            quarantine.StoreID,
-			StoreFingerprint:   quarantineStoreFingerprint,
-			ClusterFingerprint: quarantineClusterFingerprint,
-			MinimumGeneration:  quarantine.MinimumGeneration,
+			ProtocolID:                   quarantineJournalProtocolID,
+			LiftProtocolID:               quarantineLiftProtocolID,
+			TombstoneProtocolID:          quarantineTombstoneProtocolID,
+			CheckpointAuthorityThreshold: quarantine.CheckpointAuthorityThreshold,
+			CheckpointAuthorities:        checkpointAuthorities,
+			LiftAuthorityThreshold:       quarantine.LiftAuthorityThreshold,
+			LiftAuthorities:              liftAuthorities,
+			StoreID:                      quarantine.StoreID,
+			StoreFingerprint:             quarantineStoreFingerprint,
+			ClusterFingerprint:           quarantineClusterFingerprint,
+			MinimumGeneration:            quarantine.MinimumGeneration,
 		},
 	}, nil
 }

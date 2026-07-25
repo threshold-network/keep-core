@@ -15,11 +15,12 @@ func testManifestHex32(value byte) string {
 func testFrostJournalActivationManifest() *frostPreSignActivationManifest {
 	checkpointHash := testManifestHex32(0x02)
 	manifest := &frostPreSignActivationManifest{
-		Schema:             frostPreSignManifestVersion,
-		ActivationSequence: 1,
-		ActivationID:       testManifestHex32(0x01),
-		Environment:        "test",
-		manifestHash:       [32]byte{0x99},
+		Schema:                     frostPreSignManifestVersion,
+		ActivationSequence:         1,
+		ActivationID:               testManifestHex32(0x01),
+		Environment:                "test",
+		manifestHash:               [32]byte{0x99},
+		activationAuthorityKeyHash: [32]byte{0x40},
 		Ethereum: frostPreSignManifestEthereum{
 			ChainID:                         1,
 			GenesisBlockHash:                testManifestHex32(0x30),
@@ -68,7 +69,21 @@ func testFrostJournalActivationManifest() *frostPreSignActivationManifest {
 				MinimumGeneration:         7,
 			},
 			QuarantineJournal: frostPreSignManifestQuarantineJournal{
-				ProtocolID:         testManifestHex32(0x25),
+				ProtocolID:                   testManifestHex32(0x25),
+				LiftProtocolID:               testManifestHex32(0x29),
+				TombstoneProtocolID:          testManifestHex32(0x2a),
+				CheckpointAuthorityThreshold: 2,
+				CheckpointAuthorities: []frostPreSignManifestLiftAuthority{
+					{AuthorityID: "checkpoint-1", PublicKeySPKIHash: testManifestHex32(0x2b)},
+					{AuthorityID: "checkpoint-2", PublicKeySPKIHash: testManifestHex32(0x2c)},
+					{AuthorityID: "checkpoint-3", PublicKeySPKIHash: testManifestHex32(0x2d)},
+				},
+				LiftAuthorityThreshold: 2,
+				LiftAuthorities: []frostPreSignManifestLiftAuthority{
+					{AuthorityID: "authority-1", PublicKeySPKIHash: testManifestHex32(0x36)},
+					{AuthorityID: "authority-2", PublicKeySPKIHash: testManifestHex32(0x37)},
+					{AuthorityID: "authority-3", PublicKeySPKIHash: testManifestHex32(0x38)},
+				},
 				StoreID:            "quarantine-journal-store",
 				StoreFingerprint:   testManifestHex32(0x26),
 				ClusterFingerprint: testManifestHex32(0x27),
@@ -188,6 +203,92 @@ func TestValidateFrostPreSignActivationManifest_CanonicalJournal(t *testing.T) {
 		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
 			!strings.Contains(err.Error(), "authority keys are not independent") {
 			t.Fatalf("expected native anchor authority failure, got [%v]", err)
+		}
+	})
+}
+
+func TestValidateFrostPreSignActivationManifest_QuarantineAuthoritySets(
+	t *testing.T,
+) {
+	t.Run("2-of-3 lift authority set", func(t *testing.T) {
+		if err := validateFrostPreSignActivationManifest(
+			testFrostJournalActivationManifest(),
+		); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("3-of-4 lift authority set", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.QuarantineJournal.LiftAuthorityThreshold = 3
+		manifest.FrostSigner.QuarantineJournal.LiftAuthorities = append(
+			manifest.FrostSigner.QuarantineJournal.LiftAuthorities,
+			frostPreSignManifestLiftAuthority{
+				AuthorityID:       "authority-4",
+				PublicKeySPKIHash: testManifestHex32(0x39),
+			},
+		)
+		if err := validateFrostPreSignActivationManifest(manifest); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("2-of-4 is not a strict majority", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.QuarantineJournal.LiftAuthorities = append(
+			manifest.FrostSigner.QuarantineJournal.LiftAuthorities,
+			frostPreSignManifestLiftAuthority{
+				AuthorityID:       "authority-4",
+				PublicKeySPKIHash: testManifestHex32(0x39),
+			},
+		)
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "strict majority") {
+			t.Fatalf("expected 2-of-4 rejection, got [%v]", err)
+		}
+	})
+	t.Run("unsorted authority IDs", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		authorities := manifest.FrostSigner.QuarantineJournal.LiftAuthorities
+		authorities[0], authorities[1] = authorities[1], authorities[0]
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "strictly sorted") {
+			t.Fatalf("expected unsorted authority rejection, got [%v]", err)
+		}
+	})
+	t.Run("duplicate authority key", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		authorities := manifest.FrostSigner.QuarantineJournal.LiftAuthorities
+		authorities[1].PublicKeySPKIHash = authorities[0].PublicKeySPKIHash
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "duplicate") {
+			t.Fatalf("expected duplicate authority-key rejection, got [%v]", err)
+		}
+	})
+	t.Run("activation role alias", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.QuarantineJournal.LiftAuthorities[0].
+			PublicKeySPKIHash = testManifestHex32(0x40)
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "aliases the activation role") {
+			t.Fatalf("expected activation-role alias rejection, got [%v]", err)
+		}
+	})
+	t.Run("checkpoint role alias", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.QuarantineJournal.LiftAuthorities[0].
+			PublicKeySPKIHash = manifest.FrostSigner.QuarantineJournal.
+			CheckpointAuthorities[0].PublicKeySPKIHash
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "checkpoint authority") {
+			t.Fatalf("expected checkpoint-role alias rejection, got [%v]", err)
+		}
+	})
+	t.Run("protocol identity alias", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.QuarantineJournal.LiftProtocolID =
+			manifest.FrostSigner.QuarantineJournal.ProtocolID
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "not distinct") {
+			t.Fatalf("expected protocol-identity alias rejection, got [%v]", err)
 		}
 	})
 }

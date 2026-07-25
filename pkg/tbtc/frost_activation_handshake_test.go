@@ -365,8 +365,9 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 		"sourceTrustDomainID", "storeFingerprint", "storeID",
 	})
 	assertFrostActivationObjectKeys(t, handshake.Payload.State.QuarantineJournal, []string{
-		"clusterFingerprint", "complete", "currentQuarantineCount", "generation",
-		"protocolID", "root", "storeFingerprint", "storeID",
+		"activeRoot", "clusterFingerprint", "complete", "currentQuarantineCount",
+		"generation", "protocolID", "root", "storeFingerprint", "storeID",
+		"tombstoneCount", "tombstoneRoot",
 	})
 	assertFrostActivationObjectKeys(t, handshake.Payload.State.NativeSignerState, []string{
 		"anchorRotationWarning", "anchorServiceEpoch", "certifiedFloorGeneration",
@@ -378,6 +379,109 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 		"stateImageDigest", "storeFingerprint",
 		"trustCertificateDigest", "trustCertificateSequence",
 	})
+}
+
+func TestFrostActivationHandshakeExporter_PermitsAndAttestsTombstones(
+	t *testing.T,
+) {
+	point := frostActivationEthereumPoint{
+		BlockNumber: 123,
+		BlockHash:   frostActivationHex32([32]byte{0x44}),
+	}
+	_, journal, _, _, endpoint, request :=
+		startTestFrostActivationHandshakeExporter(t, point)
+	raisedRecord := FrostRetainedGroupQuarantineRaisedRecord{
+		QuarantineID:     [32]byte{0x51},
+		WalletID:         [32]byte{0x52},
+		EvidenceHash:     [32]byte{0x53},
+		Reason:           "resolved quarantine",
+		RecoveryRequired: true,
+		RaisedAt: FrostRetainedGroupEventPoint{
+			BlockNumber:      100,
+			BlockHash:        [32]byte{0x64},
+			TransactionHash:  [32]byte{0xa1},
+			TransactionIndex: 1,
+			LogIndex:         1,
+		},
+	}
+	liftedAt := FrostRetainedGroupEventPoint{
+		BlockNumber:      120,
+		BlockHash:        [32]byte{0x78},
+		TransactionHash:  [32]byte{0xa2},
+		TransactionIndex: 1,
+		LogIndex:         1,
+	}
+	certificateHash := [32]byte{0x54}
+	quarantine := frostRetainedGroupQuarantineState{
+		RaisedRecord:        raisedRecord,
+		Status:              frostRetainedGroupQuarantineLifted,
+		LiftCertificateHash: certificateHash,
+		LiftedAt:            liftedAt,
+	}
+	tombstone := frostRetainedGroupQuarantineTombstone{
+		QuarantineID:           raisedRecord.QuarantineID,
+		WalletID:               raisedRecord.WalletID,
+		LiftCertificateHash:    certificateHash,
+		LiftedAt:               liftedAt,
+		ResolutionEvidenceHash: [32]byte{0x55},
+		ResolutionFinality: FrostPreSignFinality{
+			BlockNumber: 110,
+			BlockHash:   [32]byte{0x6e},
+		},
+	}
+	journal.quarantineState.Generation = 2
+	journal.quarantineState.Quarantines =
+		[]frostRetainedGroupQuarantineState{quarantine}
+	journal.quarantineState.Tombstones =
+		[]frostRetainedGroupQuarantineTombstone{tombstone}
+	var err error
+	journal.quarantineState.ActiveRoot, err =
+		frostRetainedGroupQuarantineActiveRoot(
+			journal.metadata.BindingHash,
+			map[[32]byte]frostRetainedGroupQuarantineState{
+				raisedRecord.QuarantineID: quarantine,
+			},
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.quarantineState.TombstoneRoot, err =
+		frostRetainedGroupQuarantineTombstoneRoot(
+			journal.metadata.BindingHash,
+			map[[32]byte]frostRetainedGroupQuarantineTombstone{
+				raisedRecord.QuarantineID: tombstone,
+			},
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := postTestFrostActivationHandshake(t, endpoint, request)
+	if response.StatusCode != http.StatusServiceUnavailable ||
+		response.Header.Get("Retry-After") !=
+			frostActivationHandshakeRetryAfter {
+		response.Body.Close()
+		t.Fatalf("initial tombstone reconciliation returned [%d]", response.StatusCode)
+	}
+	response.Body.Close()
+	response = awaitTestFrostActivationHandshake(
+		t,
+		endpoint,
+		request,
+		http.StatusOK,
+	)
+	defer response.Body.Close()
+	handshake := &frostActivationSignedHandshake{}
+	if err := json.NewDecoder(response.Body).Decode(handshake); err != nil {
+		t.Fatal(err)
+	}
+	attestation := handshake.Payload.State.QuarantineJournal
+	if attestation.CurrentQuarantineCount != 0 ||
+		attestation.TombstoneCount != 1 ||
+		attestation.TombstoneRoot !=
+			frostActivationHex32(journal.quarantineState.TombstoneRoot) {
+		t.Fatalf("tombstoned ready state was not attested: %+v", attestation)
+	}
 }
 
 func assertFrostActivationObjectKeys(
@@ -550,8 +654,11 @@ func TestFrostActivationHandshakeExporter_RejectsUnboundOrLegacyChallenge(
 		startTestFrostActivationHandshakeExporter(t, point)
 
 	testCases := map[string]func(*frostActivationHandshakeRequest){
-		"legacy schema": func(request *frostActivationHandshakeRequest) {
+		"legacy v1 schema": func(request *frostActivationHandshakeRequest) {
 			request.Schema = "tbtc-p2tr-production-activation-handshake/v1"
+		},
+		"legacy v2 schema": func(request *frostActivationHandshakeRequest) {
+			request.Schema = "tbtc-p2tr-production-activation-handshake/v2"
 		},
 		"different binding": func(request *frostActivationHandshakeRequest) {
 			request.Challenge.BindingHash = frostActivationHex32([32]byte{0xff})
@@ -863,6 +970,13 @@ func testFrostActivationRuntimeManifest(
 ) FrostPreSignActivationRuntimeManifest {
 	return FrostPreSignActivationRuntimeManifest{
 		ManifestHash:                     [32]byte{0x10},
+		ActivationAuthorityKeyHash:       [32]byte{0x30},
+		VerifierOperatorFingerprint:      [32]byte{0x31},
+		HandshakeOperatorFingerprint:     [32]byte{0x37},
+		DomainChainID:                    [32]byte{31: 0x01},
+		GenesisBlockHash:                 [32]byte{0x32},
+		ProfileHash:                      [32]byte{0x33},
+		ImplementationSetHash:            [32]byte{0x34},
 		SignerProtocolID:                 [32]byte{0x11},
 		ReservationProtocolID:            [32]byte{0x12},
 		BitcoinOutboxProtocolID:          [32]byte{0x13},
@@ -889,7 +1003,21 @@ func testFrostActivationRuntimeManifest(
 			MinimumGeneration:         1,
 		},
 		QuarantineJournal: FrostRetainedGroupQuarantineJournalManifest{
-			ProtocolID:         [32]byte{0x25},
+			ProtocolID:                   [32]byte{0x25},
+			LiftProtocolID:               [32]byte{0x35},
+			TombstoneProtocolID:          [32]byte{0x36},
+			CheckpointAuthorityThreshold: 2,
+			CheckpointAuthorities: []FrostRetainedGroupAuthority{
+				{AuthorityID: "checkpoint-1", PublicKeySPKIHash: [32]byte{0x40}},
+				{AuthorityID: "checkpoint-2", PublicKeySPKIHash: [32]byte{0x41}},
+				{AuthorityID: "checkpoint-3", PublicKeySPKIHash: [32]byte{0x42}},
+			},
+			LiftAuthorityThreshold: 2,
+			LiftAuthorities: []FrostRetainedGroupAuthority{
+				{AuthorityID: "lift-1", PublicKeySPKIHash: [32]byte{0x43}},
+				{AuthorityID: "lift-2", PublicKeySPKIHash: [32]byte{0x44}},
+				{AuthorityID: "lift-3", PublicKeySPKIHash: [32]byte{0x45}},
+			},
 			StoreID:            "quarantine-store-id",
 			StoreFingerprint:   [32]byte{0x26},
 			ClusterFingerprint: [32]byte{0x27},
@@ -999,6 +1127,27 @@ func testFrostRetainedGroupJournal(
 		Wallets:            []frostRetainedGroupWalletState{},
 	}
 	quarantineRoot := sha256.Sum256([]byte(frostRetainedGroupQuarantineDomain))
+	liftPolicy, err := frostRetainedGroupLiftPolicyFromRuntimeManifest(
+		bindingHash,
+		manifest,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeRoot, err := frostRetainedGroupQuarantineActiveRoot(
+		bindingHash,
+		map[[32]byte]frostRetainedGroupQuarantineState{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tombstoneRoot, err := frostRetainedGroupQuarantineTombstoneRoot(
+		bindingHash,
+		map[[32]byte]frostRetainedGroupQuarantineTombstone{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	state.InventoryRoot, _, _, _, err = frostRetainedGroupInventoryRoot(state)
 	if err != nil {
 		t.Fatal(err)
@@ -1022,10 +1171,18 @@ func testFrostRetainedGroupJournal(
 			SourceOperatorFingerprint: manifest.CanonicalJournal.SourceOperatorFingerprint,
 		},
 		quarantineMetadata: frostRetainedGroupQuarantineMetadata{
-			Schema:             frostRetainedGroupQuarantineMetadataSchema,
-			ManifestHash:       manifest.ManifestHash,
-			BindingHash:        bindingHash,
-			ProtocolID:         manifest.QuarantineJournal.ProtocolID,
+			Schema:                 frostRetainedGroupQuarantineMetadataSchema,
+			ManifestHash:           manifest.ManifestHash,
+			BindingHash:            bindingHash,
+			ProtocolID:             manifest.QuarantineJournal.ProtocolID,
+			LiftProtocolID:         manifest.QuarantineJournal.LiftProtocolID,
+			TombstoneProtocolID:    manifest.QuarantineJournal.TombstoneProtocolID,
+			LiftAuthoritySetHash:   liftPolicy.AuthoritySetHash,
+			LiftAuthorityThreshold: liftPolicy.AuthorityThreshold,
+			LiftAuthorities: append(
+				[]FrostRetainedGroupAuthority{},
+				liftPolicy.Authorities...,
+			),
 			StoreID:            manifest.QuarantineJournal.StoreID,
 			StoreFingerprint:   manifest.QuarantineJournal.StoreFingerprint,
 			ClusterFingerprint: manifest.QuarantineJournal.ClusterFingerprint,
@@ -1037,12 +1194,17 @@ func testFrostRetainedGroupJournal(
 		walletRegistry:              &walletRegistry{walletCache: make(map[string]*walletCacheValue)},
 		operatorAddress:             chain.Address("0x01"),
 		state:                       state,
+		liftPolicy:                  liftPolicy,
+		liftCertificates:            make(map[[32]byte]FrostRetainedGroupQuarantineLiftCertificate),
 		quarantineState: frostRetainedGroupQuarantineJournalState{
-			Schema:       frostRetainedGroupQuarantineStateSchema,
-			BindingHash:  bindingHash,
-			CurrentPoint: target,
-			Root:         quarantineRoot,
-			Quarantines:  []frostRetainedGroupQuarantineState{},
+			Schema:        frostRetainedGroupQuarantineStateSchema,
+			BindingHash:   bindingHash,
+			CurrentPoint:  target,
+			Root:          quarantineRoot,
+			ActiveRoot:    activeRoot,
+			TombstoneRoot: tombstoneRoot,
+			Quarantines:   []frostRetainedGroupQuarantineState{},
+			Tombstones:    []frostRetainedGroupQuarantineTombstone{},
 		},
 	}
 }

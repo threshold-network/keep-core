@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -91,21 +94,24 @@ func (jhs *journalHistorySource) ResolveOperatorID(
 }
 
 type journalTestFixture struct {
-	manifest      FrostRetainedGroupCanonicalJournalManifest
-	quarantine    FrostRetainedGroupQuarantineJournalManifest
-	manifestHash  [32]byte
-	bindingHash   [32]byte
-	checkpoint    FrostPreSignFinality
-	target        FrostPreSignFinality
-	later         FrostPreSignFinality
-	walletID      [32]byte
-	walletPKH     [20]byte
-	operatorIDs   []uint32
-	operatorAddrs []chain.Address
-	localOperator chain.Address
-	registry      *walletRegistry
-	source        *journalHistorySource
-	admission     FrostRetainedGroupMutation
+	manifest           FrostRetainedGroupCanonicalJournalManifest
+	quarantine         FrostRetainedGroupQuarantineJournalManifest
+	runtime            FrostPreSignActivationRuntimeManifest
+	manifestHash       [32]byte
+	bindingHash        [32]byte
+	liftPrivateKeys    []ed25519.PrivateKey
+	liftPublicKeySPKIs []string
+	checkpoint         FrostPreSignFinality
+	target             FrostPreSignFinality
+	later              FrostPreSignFinality
+	walletID           [32]byte
+	walletPKH          [20]byte
+	operatorIDs        []uint32
+	operatorAddrs      []chain.Address
+	localOperator      chain.Address
+	registry           *walletRegistry
+	source             *journalHistorySource
+	admission          FrostRetainedGroupMutation
 }
 
 func newJournalTestFixture(t *testing.T) *journalTestFixture {
@@ -165,11 +171,56 @@ func newJournalTestFixture(t *testing.T) *journalTestFixture {
 		SourceOperatorFingerprint: [32]byte{0x35},
 		MinimumGeneration:         1,
 	}
+	checkpointAuthorities := make([]FrostRetainedGroupAuthority, 3)
+	for index := range checkpointAuthorities {
+		authority, _, _ := journalTestAuthority(
+			t,
+			fmt.Sprintf("checkpoint-%d", index+1),
+			byte(0x60+index),
+		)
+		checkpointAuthorities[index] = authority
+	}
+	liftAuthorities := make([]FrostRetainedGroupAuthority, 3)
+	liftPrivateKeys := make([]ed25519.PrivateKey, 3)
+	liftPublicKeySPKIs := make([]string, 3)
+	for index := range liftAuthorities {
+		authority, privateKey, publicKeySPKI := journalTestAuthority(
+			t,
+			fmt.Sprintf("lift-%d", index+1),
+			byte(0x70+index),
+		)
+		liftAuthorities[index] = authority
+		liftPrivateKeys[index] = privateKey
+		liftPublicKeySPKIs[index] = publicKeySPKI
+	}
 	quarantine := FrostRetainedGroupQuarantineJournalManifest{
-		ProtocolID:         [32]byte{0x41},
-		StoreID:            "quarantine-store-uuid",
-		StoreFingerprint:   [32]byte{0x42},
-		ClusterFingerprint: [32]byte{0x43},
+		ProtocolID:                   [32]byte{0x41},
+		LiftProtocolID:               [32]byte{0x45},
+		TombstoneProtocolID:          [32]byte{0x46},
+		CheckpointAuthorityThreshold: 2,
+		CheckpointAuthorities:        checkpointAuthorities,
+		LiftAuthorityThreshold:       2,
+		LiftAuthorities:              liftAuthorities,
+		StoreID:                      "quarantine-store-uuid",
+		StoreFingerprint:             [32]byte{0x42},
+		ClusterFingerprint:           [32]byte{0x43},
+	}
+	manifestHash := [32]byte{0x42}
+	bindingHash := [32]byte{0x44}
+	domainChainID := [32]byte{}
+	domainChainID[31] = 1
+	runtime := FrostPreSignActivationRuntimeManifest{
+		ManifestHash:                 manifestHash,
+		ActivationAuthorityKeyHash:   [32]byte{0x47},
+		VerifierOperatorFingerprint:  [32]byte{0x48},
+		HandshakeOperatorFingerprint: [32]byte{0x4d},
+		DomainChainID:                domainChainID,
+		GenesisBlockHash:             [32]byte{0x49},
+		ProfileHash:                  [32]byte{0x4a},
+		ImplementationSetHash:        [32]byte{0x4b},
+		AttestationSignerKeyHash:     [32]byte{0x4c},
+		CanonicalJournal:             manifest,
+		QuarantineJournal:            quarantine,
 	}
 	source := &journalHistorySource{
 		identity: FrostRetainedGroupHistoryIdentity{
@@ -211,21 +262,24 @@ func newJournalTestFixture(t *testing.T) *journalTestFixture {
 	}
 	source.mutations = []FrostRetainedGroupMutation{admission}
 	return &journalTestFixture{
-		manifest:      manifest,
-		quarantine:    quarantine,
-		manifestHash:  [32]byte{0x42},
-		bindingHash:   [32]byte{0x44},
-		checkpoint:    checkpoint,
-		target:        target,
-		later:         later,
-		walletID:      walletID,
-		walletPKH:     walletPKH,
-		operatorIDs:   operatorIDs,
-		operatorAddrs: operatorAddrs,
-		localOperator: localOperator,
-		registry:      registry,
-		source:        source,
-		admission:     admission,
+		manifest:           manifest,
+		quarantine:         quarantine,
+		runtime:            runtime,
+		manifestHash:       manifestHash,
+		bindingHash:        bindingHash,
+		liftPrivateKeys:    liftPrivateKeys,
+		liftPublicKeySPKIs: liftPublicKeySPKIs,
+		checkpoint:         checkpoint,
+		target:             target,
+		later:              later,
+		walletID:           walletID,
+		walletPKH:          walletPKH,
+		operatorIDs:        operatorIDs,
+		operatorAddrs:      operatorAddrs,
+		localOperator:      localOperator,
+		registry:           registry,
+		source:             source,
+		admission:          admission,
 	}
 }
 
@@ -284,6 +338,157 @@ func TestFrostLocalSessionSnapshotBindsExactSignerMaterial(t *testing.T) {
 	}
 }
 
+func journalTestAuthority(
+	t *testing.T,
+	authorityID string,
+	seedByte byte,
+) (FrostRetainedGroupAuthority, ed25519.PrivateKey, string) {
+	t.Helper()
+	seed := make([]byte, ed25519.SeedSize)
+	seed[0] = seedByte
+	privateKey := ed25519.NewKeyFromSeed(seed)
+	publicKeyDER, err := x509.MarshalPKIXPublicKey(privateKey.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return FrostRetainedGroupAuthority{
+			AuthorityID:       authorityID,
+			PublicKeySPKIHash: sha256.Sum256(publicKeyDER),
+		},
+		privateKey,
+		base64.StdEncoding.EncodeToString(publicKeyDER)
+}
+
+func (fixture *journalTestFixture) liftMutation(
+	t *testing.T,
+	journal *frostRetainedGroupJournal,
+	quarantine FrostRetainedGroupMutation,
+	point FrostRetainedGroupEventPoint,
+) FrostRetainedGroupMutation {
+	t.Helper()
+	var raisedRecord FrostRetainedGroupQuarantineRaisedRecord
+	for _, existing := range journal.quarantineState.Quarantines {
+		if existing.RaisedRecord.QuarantineID == quarantine.QuarantineID {
+			raisedRecord = existing.RaisedRecord
+			break
+		}
+	}
+	if raisedRecord.QuarantineID == [32]byte{} {
+		t.Fatal("active quarantine is absent from the durable journal")
+	}
+	resolutionFinality := FrostPreSignFinality{
+		BlockNumber: 14,
+		BlockHash:   [32]byte{0x0e},
+	}
+	fixture.source.points[resolutionFinality.BlockNumber] =
+		resolutionFinality.BlockHash
+	body := FrostRetainedGroupQuarantineLiftBody{
+		Schema:                 frostRetainedGroupLiftBodySchema,
+		ProtocolBindingHash:    journal.liftPolicy.ProtocolBindingHash,
+		ManifestHash:           journal.liftPolicy.ManifestHash,
+		ProfileHash:            journal.liftPolicy.ProfileHash,
+		ImplementationSetHash:  journal.liftPolicy.ImplementationSetHash,
+		ChainID:                journal.liftPolicy.ChainID,
+		DomainChainID:          journal.liftPolicy.DomainChainID,
+		GenesisBlockHash:       journal.liftPolicy.GenesisBlockHash,
+		QuarantineProtocolID:   journal.liftPolicy.QuarantineProtocolID,
+		LiftProtocolID:         journal.liftPolicy.LiftProtocolID,
+		TombstoneProtocolID:    journal.liftPolicy.TombstoneProtocolID,
+		AuthoritySetHash:       journal.liftPolicy.AuthoritySetHash,
+		QuarantineID:           quarantine.QuarantineID,
+		WalletID:               quarantine.WalletID,
+		OriginalRaisedRecord:   raisedRecord,
+		PriorGeneration:        journal.quarantineState.Generation,
+		PriorEventRoot:         journal.quarantineState.Root,
+		PriorActiveRoot:        journal.quarantineState.ActiveRoot,
+		PriorTombstoneRoot:     journal.quarantineState.TombstoneRoot,
+		LiftPoint:              point,
+		ResolutionEvidenceHash: [32]byte{0x53},
+		ResolutionFinality:     resolutionFinality,
+		NotBeforeBlock:         14,
+		ExpiresAtBlock:         19,
+	}
+	lift := FrostRetainedGroupMutation{
+		Point:        point,
+		Kind:         FrostRetainedGroupQuarantineLiftMutation,
+		WalletID:     quarantine.WalletID,
+		QuarantineID: quarantine.QuarantineID,
+		LiftCertificate: &FrostRetainedGroupQuarantineLiftCertificate{
+			Schema: frostRetainedGroupLiftCertificateSchema,
+			Body:   body,
+		},
+	}
+	authorityIndexes := make([]int, journal.liftPolicy.AuthorityThreshold)
+	for index := range authorityIndexes {
+		authorityIndexes[index] = index
+	}
+	fixture.resignLiftMutation(t, &lift, authorityIndexes)
+	return lift
+}
+
+func (fixture *journalTestFixture) resignLiftMutation(
+	t *testing.T,
+	mutation *FrostRetainedGroupMutation,
+	authorityIndexes []int,
+) {
+	t.Helper()
+	if mutation == nil || mutation.LiftCertificate == nil {
+		t.Fatal("lift mutation certificate is nil")
+	}
+	bodyHash, err := frostRetainedGroupLiftBodyHash(
+		mutation.LiftCertificate.Body,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signatureHash := frostRetainedGroupLiftSignatureHash(bodyHash)
+	signatures := make(
+		[]FrostRetainedGroupQuarantineLiftSignature,
+		len(authorityIndexes),
+	)
+	for index, authorityIndex := range authorityIndexes {
+		if authorityIndex < 0 ||
+			authorityIndex >= len(fixture.runtime.QuarantineJournal.LiftAuthorities) ||
+			authorityIndex >= len(fixture.liftPrivateKeys) ||
+			authorityIndex >= len(fixture.liftPublicKeySPKIs) {
+			t.Fatalf("invalid lift authority index [%d]", authorityIndex)
+		}
+		authority := fixture.runtime.QuarantineJournal.
+			LiftAuthorities[authorityIndex]
+		signatures[index] = FrostRetainedGroupQuarantineLiftSignature{
+			AuthorityID:         authority.AuthorityID,
+			SignerPublicKeySPKI: fixture.liftPublicKeySPKIs[authorityIndex],
+			Signature: base64.StdEncoding.EncodeToString(
+				ed25519.Sign(
+					fixture.liftPrivateKeys[authorityIndex],
+					signatureHash[:],
+				),
+			),
+		}
+	}
+	mutation.LiftCertificate.Schema = frostRetainedGroupLiftCertificateSchema
+	mutation.LiftCertificate.BodyHash = bodyHash
+	mutation.LiftCertificate.Signatures = signatures
+	refreshJournalTestLiftCertificateHash(t, mutation)
+}
+
+func refreshJournalTestLiftCertificateHash(
+	t *testing.T,
+	mutation *FrostRetainedGroupMutation,
+) {
+	t.Helper()
+	if mutation == nil || mutation.LiftCertificate == nil {
+		t.Fatal("lift mutation certificate is nil")
+	}
+	certificateHash, err := frostRetainedGroupLiftCertificateHash(
+		*mutation.LiftCertificate,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation.LiftCertificateHash = certificateHash
+}
+
 func (fixture *journalTestFixture) openJournal(
 	t *testing.T,
 	directory string,
@@ -291,10 +496,8 @@ func (fixture *journalTestFixture) openJournal(
 	t.Helper()
 	journal, err := newFrostRetainedGroupJournal(
 		directory,
-		fixture.manifestHash,
 		fixture.bindingHash,
-		fixture.manifest,
-		fixture.quarantine,
+		fixture.runtime,
 		fixture.source,
 		fixture.registry,
 		fixture.localOperator,
@@ -310,10 +513,8 @@ func (fixture *journalTestFixture) openJournalError(
 ) error {
 	journal, err := newFrostRetainedGroupJournal(
 		directory,
-		fixture.manifestHash,
 		fixture.bindingHash,
-		fixture.manifest,
-		fixture.quarantine,
+		fixture.runtime,
 		fixture.source,
 		fixture.registry,
 		fixture.localOperator,
@@ -321,6 +522,56 @@ func (fixture *journalTestFixture) openJournalError(
 	if journal != nil {
 		_ = journal.close()
 	}
+	return err
+}
+
+func (fixture *journalTestFixture) openActiveQuarantine(
+	t *testing.T,
+	directory string,
+) (*frostRetainedGroupJournal, FrostRetainedGroupMutation) {
+	t.Helper()
+	quarantine := FrostRetainedGroupMutation{
+		Point: FrostRetainedGroupEventPoint{
+			BlockNumber:      5,
+			BlockHash:        [32]byte{0x05},
+			TransactionHash:  [32]byte{0xa5},
+			TransactionIndex: 1,
+			LogIndex:         1,
+		},
+		Kind:         FrostRetainedGroupRecoveryRequiredMutation,
+		WalletID:     fixture.walletID,
+		QuarantineID: [32]byte{0x51},
+		EvidenceHash: [32]byte{0x52},
+		Reason:       "manual recovery is required",
+	}
+	fixture.source.mutations = append(fixture.source.mutations, quarantine)
+	journal := fixture.openJournal(t, directory)
+	snapshot, err := journal.reconcile(context.Background(), fixture.target)
+	if err != nil {
+		_ = journal.close()
+		t.Fatal(err)
+	}
+	if snapshot.QuarantineCount != 1 ||
+		snapshot.QuarantineTombstoneCount != 0 {
+		_ = journal.close()
+		t.Fatalf("unexpected active quarantine snapshot: %+v", snapshot)
+	}
+	return journal, quarantine
+}
+
+func validateJournalTestLift(
+	journal *frostRetainedGroupJournal,
+	lift FrostRetainedGroupMutation,
+) error {
+	if journal == nil || len(journal.quarantineState.Quarantines) != 1 {
+		return fmt.Errorf("journal does not contain exactly one quarantine")
+	}
+	_, err := validateFrostRetainedGroupLiftCertificate(
+		journal.liftPolicy,
+		journal.quarantineState,
+		lift,
+		journal.quarantineState.Quarantines[0],
+	)
 	return err
 }
 
@@ -392,168 +643,216 @@ func TestFrostRetainedGroupJournal_IntegratesCommittedOrphanBatchExactlyOnce(
 	}
 }
 
-func TestFrostRetainedGroupJournal_RejectsAuthenticatedV1Fixtures(
+func TestFrostRetainedGroupJournal_RejectsAuthenticatedPriorSchemaFixtures(
 	t *testing.T,
 ) {
-	testCases := map[string]func(*testing.T, string){
-		"canonical metadata": func(t *testing.T, directory string) {
-			path := filepath.Join(directory, frostRetainedGroupCanonicalDirectory)
-			metadata := frostRetainedGroupJournalMetadata{}
-			if err := readFrostRetainedGroupEnvelopeAt(
-				path,
-				frostRetainedGroupJournalMetadataFile,
-				&metadata,
-			); err != nil {
-				t.Fatal(err)
-			}
-			metadata.Schema = frostRetainedGroupJournalMetadataSchemaV1
-			if err := persistFrostRetainedGroupEnvelopeAt(
-				path,
-				frostRetainedGroupJournalMetadataFile,
-				&metadata,
-				true,
-			); err != nil {
-				t.Fatal(err)
-			}
+	type legacyFixture struct {
+		schemas [2]string
+		mutate  func(*testing.T, string, string)
+	}
+	testCases := map[string]legacyFixture{
+		"canonical metadata": {
+			schemas: [2]string{
+				frostRetainedGroupJournalMetadataSchemaV1,
+				frostRetainedGroupJournalMetadataSchemaV2,
+			},
+			mutate: func(t *testing.T, directory string, schema string) {
+				path := filepath.Join(directory, frostRetainedGroupCanonicalDirectory)
+				metadata := frostRetainedGroupJournalMetadata{}
+				if err := readFrostRetainedGroupEnvelopeAt(
+					path,
+					frostRetainedGroupJournalMetadataFile,
+					&metadata,
+				); err != nil {
+					t.Fatal(err)
+				}
+				metadata.Schema = schema
+				if err := persistFrostRetainedGroupEnvelopeAt(
+					path,
+					frostRetainedGroupJournalMetadataFile,
+					&metadata,
+					true,
+				); err != nil {
+					t.Fatal(err)
+				}
+			},
 		},
-		"canonical state": func(t *testing.T, directory string) {
-			path := filepath.Join(directory, frostRetainedGroupCanonicalDirectory)
-			state := frostRetainedGroupJournalState{}
-			if err := readFrostRetainedGroupEnvelopeAt(
-				path,
-				frostRetainedGroupJournalStateFile,
-				&state,
-			); err != nil {
-				t.Fatal(err)
-			}
-			state.Schema = frostRetainedGroupJournalStateSchemaV1
-			if err := persistFrostRetainedGroupEnvelopeAt(
-				path,
-				frostRetainedGroupJournalStateFile,
-				&state,
-				true,
-			); err != nil {
-				t.Fatal(err)
-			}
+		"canonical state": {
+			schemas: [2]string{
+				frostRetainedGroupJournalStateSchemaV1,
+				frostRetainedGroupJournalStateSchemaV2,
+			},
+			mutate: func(t *testing.T, directory string, schema string) {
+				path := filepath.Join(directory, frostRetainedGroupCanonicalDirectory)
+				state := frostRetainedGroupJournalState{}
+				if err := readFrostRetainedGroupEnvelopeAt(
+					path,
+					frostRetainedGroupJournalStateFile,
+					&state,
+				); err != nil {
+					t.Fatal(err)
+				}
+				state.Schema = schema
+				if err := persistFrostRetainedGroupEnvelopeAt(
+					path,
+					frostRetainedGroupJournalStateFile,
+					&state,
+					true,
+				); err != nil {
+					t.Fatal(err)
+				}
+			},
 		},
-		"canonical batch with pre-evidence admission": func(t *testing.T, directory string) {
-			path := filepath.Join(directory, frostRetainedGroupCanonicalDirectory)
-			name := frostRetainedGroupBatchFileName(1)
-			batch := frostRetainedGroupJournalBatch{}
-			if err := readFrostRetainedGroupEnvelopeAt(path, name, &batch); err != nil {
-				t.Fatal(err)
-			}
-			batch.Schema = frostRetainedGroupJournalBatchSchemaV1
-			for index := range batch.Mutations {
-				batch.Mutations[index].DkgResultHash = [32]byte{}
-				batch.Mutations[index].DkgSubmissionPoint = FrostRetainedGroupEventPoint{}
-				batch.Mutations[index].DkgApprovalPoint = FrostRetainedGroupEventPoint{}
-			}
-			batch.Checksum = [32]byte{}
-			payload, err := frostRetainedGroupCanonicalValue(batch)
-			if err != nil {
-				t.Fatal(err)
-			}
-			batch.Checksum = sha256.Sum256(payload)
-			if err := persistFrostRetainedGroupEnvelopeAt(path, name, &batch, true); err != nil {
-				t.Fatal(err)
-			}
+		"canonical batch": {
+			schemas: [2]string{
+				frostRetainedGroupJournalBatchSchemaV1,
+				frostRetainedGroupJournalBatchSchemaV2,
+			},
+			mutate: func(t *testing.T, directory string, schema string) {
+				path := filepath.Join(directory, frostRetainedGroupCanonicalDirectory)
+				name := frostRetainedGroupBatchFileName(1)
+				batch := frostRetainedGroupJournalBatch{}
+				if err := readFrostRetainedGroupEnvelopeAt(path, name, &batch); err != nil {
+					t.Fatal(err)
+				}
+				batch.Schema = schema
+				if schema == frostRetainedGroupJournalBatchSchemaV1 {
+					for index := range batch.Mutations {
+						batch.Mutations[index].DkgResultHash = [32]byte{}
+						batch.Mutations[index].DkgSubmissionPoint = FrostRetainedGroupEventPoint{}
+						batch.Mutations[index].DkgApprovalPoint = FrostRetainedGroupEventPoint{}
+					}
+				}
+				batch.Checksum = [32]byte{}
+				payload, err := frostRetainedGroupCanonicalValue(batch)
+				if err != nil {
+					t.Fatal(err)
+				}
+				batch.Checksum = sha256.Sum256(payload)
+				if err := persistFrostRetainedGroupEnvelopeAt(path, name, &batch, true); err != nil {
+					t.Fatal(err)
+				}
+			},
 		},
-		"quarantine metadata": func(t *testing.T, directory string) {
-			path := filepath.Join(directory, frostRetainedGroupQuarantineDirectory)
-			metadata := frostRetainedGroupQuarantineMetadata{}
-			if err := readFrostRetainedGroupEnvelopeAt(
-				path,
-				frostRetainedGroupJournalMetadataFile,
-				&metadata,
-			); err != nil {
-				t.Fatal(err)
-			}
-			metadata.Schema = frostRetainedGroupQuarantineMetadataV1
-			if err := persistFrostRetainedGroupEnvelopeAt(
-				path,
-				frostRetainedGroupJournalMetadataFile,
-				&metadata,
-				true,
-			); err != nil {
-				t.Fatal(err)
-			}
+		"quarantine metadata": {
+			schemas: [2]string{
+				frostRetainedGroupQuarantineMetadataV1,
+				frostRetainedGroupQuarantineMetadataV2,
+			},
+			mutate: func(t *testing.T, directory string, schema string) {
+				path := filepath.Join(directory, frostRetainedGroupQuarantineDirectory)
+				metadata := frostRetainedGroupQuarantineMetadata{}
+				if err := readFrostRetainedGroupEnvelopeAt(
+					path,
+					frostRetainedGroupJournalMetadataFile,
+					&metadata,
+				); err != nil {
+					t.Fatal(err)
+				}
+				metadata.Schema = schema
+				if err := persistFrostRetainedGroupEnvelopeAt(
+					path,
+					frostRetainedGroupJournalMetadataFile,
+					&metadata,
+					true,
+				); err != nil {
+					t.Fatal(err)
+				}
+			},
 		},
-		"quarantine state": func(t *testing.T, directory string) {
-			path := filepath.Join(directory, frostRetainedGroupQuarantineDirectory)
-			state := frostRetainedGroupQuarantineJournalState{}
-			if err := readFrostRetainedGroupEnvelopeAt(
-				path,
-				frostRetainedGroupJournalStateFile,
-				&state,
-			); err != nil {
-				t.Fatal(err)
-			}
-			state.Schema = frostRetainedGroupQuarantineStateV1
-			if err := persistFrostRetainedGroupEnvelopeAt(
-				path,
-				frostRetainedGroupJournalStateFile,
-				&state,
-				true,
-			); err != nil {
-				t.Fatal(err)
-			}
+		"quarantine state": {
+			schemas: [2]string{
+				frostRetainedGroupQuarantineStateV1,
+				frostRetainedGroupQuarantineStateV2,
+			},
+			mutate: func(t *testing.T, directory string, schema string) {
+				path := filepath.Join(directory, frostRetainedGroupQuarantineDirectory)
+				state := frostRetainedGroupQuarantineJournalState{}
+				if err := readFrostRetainedGroupEnvelopeAt(
+					path,
+					frostRetainedGroupJournalStateFile,
+					&state,
+				); err != nil {
+					t.Fatal(err)
+				}
+				state.Schema = schema
+				if err := persistFrostRetainedGroupEnvelopeAt(
+					path,
+					frostRetainedGroupJournalStateFile,
+					&state,
+					true,
+				); err != nil {
+					t.Fatal(err)
+				}
+			},
 		},
-		"quarantine batch": func(t *testing.T, directory string) {
-			path := filepath.Join(directory, frostRetainedGroupQuarantineDirectory)
-			name := frostRetainedGroupBatchFileName(1)
-			batch := frostRetainedGroupQuarantineJournalBatch{}
-			if err := readFrostRetainedGroupEnvelopeAt(path, name, &batch); err != nil {
-				t.Fatal(err)
-			}
-			batch.Schema = frostRetainedGroupQuarantineBatchV1
-			batch.Checksum = [32]byte{}
-			payload, err := frostRetainedGroupCanonicalValue(batch)
-			if err != nil {
-				t.Fatal(err)
-			}
-			batch.Checksum = sha256.Sum256(payload)
-			if err := persistFrostRetainedGroupEnvelopeAt(path, name, &batch, true); err != nil {
-				t.Fatal(err)
-			}
+		"quarantine batch": {
+			schemas: [2]string{
+				frostRetainedGroupQuarantineBatchV1,
+				frostRetainedGroupQuarantineBatchV2,
+			},
+			mutate: func(t *testing.T, directory string, schema string) {
+				path := filepath.Join(directory, frostRetainedGroupQuarantineDirectory)
+				name := frostRetainedGroupBatchFileName(1)
+				batch := frostRetainedGroupWireQuarantineJournalBatch{}
+				if err := readFrostRetainedGroupEnvelopeAt(path, name, &batch); err != nil {
+					t.Fatal(err)
+				}
+				batch.Schema = schema
+				batch.Checksum = frostActivationHex32([32]byte{})
+				payload, err := frostRetainedGroupCanonicalValue(batch)
+				if err != nil {
+					t.Fatal(err)
+				}
+				batch.Checksum = frostActivationHex32(sha256.Sum256(payload))
+				if err := persistFrostRetainedGroupEnvelopeAt(path, name, &batch, true); err != nil {
+					t.Fatal(err)
+				}
+			},
 		},
 	}
 
-	for name, mutate := range testCases {
-		t.Run(name, func(t *testing.T) {
-			fixture := newJournalTestFixture(t)
-			quarantine := FrostRetainedGroupMutation{
-				Point: FrostRetainedGroupEventPoint{
-					BlockNumber:      5,
-					BlockHash:        [32]byte{0x05},
-					TransactionHash:  [32]byte{0xa5},
-					TransactionIndex: 1,
-					LogIndex:         1,
-				},
-				Kind:         FrostRetainedGroupQuarantineMutation,
-				WalletID:     fixture.walletID,
-				QuarantineID: [32]byte{0x61},
-				EvidenceHash: [32]byte{0x62},
-				Reason:       "authenticated v1 fixture",
-			}
-			fixture.source.mutations = append(fixture.source.mutations, quarantine)
-			directory := filepath.Join(t.TempDir(), "journal")
-			journal := fixture.openJournal(t, directory)
-			if _, err := journal.reconcile(context.Background(), fixture.target); err != nil {
-				t.Fatal(err)
-			}
-			if err := journal.close(); err != nil {
-				t.Fatal(err)
-			}
+	for componentName, testCase := range testCases {
+		for versionIndex, schema := range testCase.schemas {
+			t.Run(fmt.Sprintf("%s/v%d", componentName, versionIndex+1), func(t *testing.T) {
+				fixture := newJournalTestFixture(t)
+				quarantine := FrostRetainedGroupMutation{
+					Point: FrostRetainedGroupEventPoint{
+						BlockNumber:      5,
+						BlockHash:        [32]byte{0x05},
+						TransactionHash:  [32]byte{0xa5},
+						TransactionIndex: 1,
+						LogIndex:         1,
+					},
+					Kind:         FrostRetainedGroupQuarantineMutation,
+					WalletID:     fixture.walletID,
+					QuarantineID: [32]byte{0x61},
+					EvidenceHash: [32]byte{0x62},
+					Reason:       "authenticated prior-schema fixture",
+				}
+				fixture.source.mutations = append(fixture.source.mutations, quarantine)
+				directory := filepath.Join(t.TempDir(), "journal")
+				journal := fixture.openJournal(t, directory)
+				if _, err := journal.reconcile(context.Background(), fixture.target); err != nil {
+					t.Fatal(err)
+				}
+				if err := journal.close(); err != nil {
+					t.Fatal(err)
+				}
 
-			mutate(t, directory)
-			err := fixture.openJournalError(directory)
-			if err == nil ||
-				!strings.Contains(err.Error(), "schema v1 is not safely migratable") ||
-				!strings.Contains(err.Error(), "signed activation manifest") {
-				t.Fatalf("expected explicit manifest-pinned v1 rejection, got [%v]", err)
-			}
-		})
+				testCase.mutate(t, directory, schema)
+				err := fixture.openJournalError(directory)
+				if err == nil ||
+					!strings.Contains(err.Error(), "prior FROST retained-group") ||
+					!strings.Contains(err.Error(), "not safely migratable") ||
+					!strings.Contains(err.Error(), "new empty v3") {
+					t.Fatalf(
+						"expected explicit manifest-pinned prior-schema rejection, got [%v]",
+						err,
+					)
+				}
+			})
+		}
 	}
 }
 
@@ -608,7 +907,7 @@ func TestFrostRetainedGroupJournal_RejectsCrossBindingBatchReplay(
 			directory := filepath.Join(rootDirectory, testCase.directory)
 			batchName := frostRetainedGroupBatchFileName(1)
 			if testCase.addQuarantine {
-				batch := frostRetainedGroupQuarantineJournalBatch{}
+				batch := frostRetainedGroupWireQuarantineJournalBatch{}
 				if err := readFrostRetainedGroupEnvelopeAt(
 					directory,
 					batchName,
@@ -616,13 +915,13 @@ func TestFrostRetainedGroupJournal_RejectsCrossBindingBatchReplay(
 				); err != nil {
 					t.Fatal(err)
 				}
-				batch.BindingHash = [32]byte{0xff}
-				batch.Checksum = [32]byte{}
+				batch.BindingHash = frostActivationHex32([32]byte{0xff})
+				batch.Checksum = frostActivationHex32([32]byte{})
 				payload, err := frostRetainedGroupCanonicalValue(batch)
 				if err != nil {
 					t.Fatal(err)
 				}
-				batch.Checksum = sha256.Sum256(payload)
+				batch.Checksum = frostActivationHex32(sha256.Sum256(payload))
 				if err := persistFrostRetainedGroupEnvelopeAt(
 					directory,
 					batchName,
@@ -712,27 +1011,442 @@ func TestFrostRetainedGroupJournal_QuarantineAndAuthenticatedLiftAreIndependent(
 			t.Fatalf("independent journal metadata is not durable and private: [%s] [%v]", metadataPath, err)
 		}
 	}
-	lift := FrostRetainedGroupMutation{
-		Point: FrostRetainedGroupEventPoint{
+	lift := fixture.liftMutation(
+		t,
+		journal,
+		quarantine,
+		FrostRetainedGroupEventPoint{
 			BlockNumber:      15,
 			BlockHash:        [32]byte{0x0f},
 			TransactionHash:  [32]byte{0xaf},
 			TransactionIndex: 2,
 			LogIndex:         3,
 		},
-		Kind:               FrostRetainedGroupQuarantineLiftMutation,
-		WalletID:           fixture.walletID,
-		QuarantineID:       quarantine.QuarantineID,
-		AuthenticationHash: [32]byte{0x53},
-	}
+	)
 	fixture.source.mutations = append(fixture.source.mutations, lift)
 	second, err := journal.reconcile(context.Background(), fixture.later)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if second.SnapshotGeneration != 1 || second.QuarantineGeneration != 2 ||
-		second.QuarantineCount != 0 || second.QuarantineRoot == first.QuarantineRoot {
+		second.QuarantineCount != 0 || second.QuarantineTombstoneCount != 1 ||
+		second.QuarantineRoot == first.QuarantineRoot ||
+		second.QuarantineActiveRoot == first.QuarantineActiveRoot ||
+		second.QuarantineTombstoneRoot == first.QuarantineTombstoneRoot {
 		t.Fatalf("unexpected lifted snapshot: %+v", second)
+	}
+	if len(journal.quarantineState.Quarantines) != 1 ||
+		journal.quarantineState.Quarantines[0].Status != frostRetainedGroupQuarantineLifted ||
+		len(journal.quarantineState.Tombstones) != 1 {
+		t.Fatal("lift did not retain its immutable record and permanent tombstone")
+	}
+}
+
+func TestFrostRetainedGroupJournal_LiftCertificateRejectsBypasses(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	journal, quarantine := fixture.openActiveQuarantine(
+		t,
+		filepath.Join(t.TempDir(), "journal"),
+	)
+	defer journal.close()
+	lift := fixture.liftMutation(
+		t,
+		journal,
+		quarantine,
+		FrostRetainedGroupEventPoint{
+			BlockNumber:      15,
+			BlockHash:        [32]byte{0x0f},
+			TransactionHash:  [32]byte{0xaf},
+			TransactionIndex: 2,
+			LogIndex:         3,
+		},
+	)
+	if err := validateJournalTestLift(journal, lift); err != nil {
+		t.Fatalf("valid lift certificate was rejected: [%v]", err)
+	}
+
+	substitutions := map[string]struct {
+		mutate func(*FrostRetainedGroupMutation)
+		resign bool
+	}{
+		"unsigned body substitution": {
+			mutate: func(candidate *FrostRetainedGroupMutation) {
+				candidate.LiftCertificate.Body.ManifestHash[0] ^= 0xff
+			},
+		},
+		"signed manifest substitution": {
+			mutate: func(candidate *FrostRetainedGroupMutation) {
+				candidate.LiftCertificate.Body.ManifestHash[0] ^= 0xff
+			},
+			resign: true,
+		},
+		"signed quarantine ID substitution": {
+			mutate: func(candidate *FrostRetainedGroupMutation) {
+				candidate.LiftCertificate.Body.QuarantineID[0] ^= 0xff
+			},
+			resign: true,
+		},
+		"signed wallet substitution": {
+			mutate: func(candidate *FrostRetainedGroupMutation) {
+				candidate.LiftCertificate.Body.WalletID[0] ^= 0xff
+			},
+			resign: true,
+		},
+		"signed raised evidence substitution": {
+			mutate: func(candidate *FrostRetainedGroupMutation) {
+				candidate.LiftCertificate.Body.OriginalRaisedRecord.
+					EvidenceHash[0] ^= 0xff
+			},
+			resign: true,
+		},
+		"signed raised reason substitution": {
+			mutate: func(candidate *FrostRetainedGroupMutation) {
+				candidate.LiftCertificate.Body.OriginalRaisedRecord.Reason +=
+					" altered"
+			},
+			resign: true,
+		},
+		"signed recovery flag substitution": {
+			mutate: func(candidate *FrostRetainedGroupMutation) {
+				candidate.LiftCertificate.Body.OriginalRaisedRecord.
+					RecoveryRequired = false
+			},
+			resign: true,
+		},
+		"signed prior generation substitution": {
+			mutate: func(candidate *FrostRetainedGroupMutation) {
+				candidate.LiftCertificate.Body.PriorGeneration++
+			},
+			resign: true,
+		},
+		"signed prior event root substitution": {
+			mutate: func(candidate *FrostRetainedGroupMutation) {
+				candidate.LiftCertificate.Body.PriorEventRoot[0] ^= 0xff
+			},
+			resign: true,
+		},
+		"signed prior active root substitution": {
+			mutate: func(candidate *FrostRetainedGroupMutation) {
+				candidate.LiftCertificate.Body.PriorActiveRoot[0] ^= 0xff
+			},
+			resign: true,
+		},
+		"signed prior tombstone root substitution": {
+			mutate: func(candidate *FrostRetainedGroupMutation) {
+				candidate.LiftCertificate.Body.PriorTombstoneRoot[0] ^= 0xff
+			},
+			resign: true,
+		},
+		"signed lift point substitution": {
+			mutate: func(candidate *FrostRetainedGroupMutation) {
+				candidate.LiftCertificate.Body.LiftPoint.
+					TransactionHash[0] ^= 0xff
+			},
+			resign: true,
+		},
+		"future resolution finality": {
+			mutate: func(candidate *FrostRetainedGroupMutation) {
+				candidate.LiftCertificate.Body.ResolutionFinality =
+					FrostPreSignFinality{
+						BlockNumber: 16,
+						BlockHash:   [32]byte{0x10},
+					}
+			},
+			resign: true,
+		},
+		"resolution finality before quarantine": {
+			mutate: func(candidate *FrostRetainedGroupMutation) {
+				candidate.LiftCertificate.Body.ResolutionFinality =
+					FrostPreSignFinality{
+						BlockNumber: 4,
+						BlockHash:   [32]byte{0x04},
+					}
+			},
+			resign: true,
+		},
+		"same-height conflicting resolution hash": {
+			mutate: func(candidate *FrostRetainedGroupMutation) {
+				candidate.LiftCertificate.Body.ResolutionFinality =
+					FrostPreSignFinality{
+						BlockNumber: 15,
+						BlockHash:   [32]byte{0xee},
+					}
+			},
+			resign: true,
+		},
+		"unsafe canonical JSON integer": {
+			mutate: func(candidate *FrostRetainedGroupMutation) {
+				candidate.LiftCertificate.Body.ExpiresAtBlock =
+					frostRetainedGroupMaximumCanonicalJSONInteger + 1
+			},
+		},
+		"certificate reference substitution": {
+			mutate: func(candidate *FrostRetainedGroupMutation) {
+				candidate.LiftCertificateHash[0] ^= 0xff
+			},
+		},
+	}
+	for name, testCase := range substitutions {
+		t.Run(name, func(t *testing.T) {
+			candidate := cloneFrostRetainedGroupMutations(
+				[]FrostRetainedGroupMutation{lift},
+			)[0]
+			testCase.mutate(&candidate)
+			if testCase.resign {
+				fixture.resignLiftMutation(t, &candidate, []int{0, 1})
+			}
+			if err := validateJournalTestLift(journal, candidate); err == nil {
+				t.Fatal("substituted lift certificate was accepted")
+			}
+		})
+	}
+
+	irrelevantFields := map[string]func(*FrostRetainedGroupMutation){
+		"wallet public key hash": func(candidate *FrostRetainedGroupMutation) {
+			candidate.WalletPublicKeyHash = [20]byte{0x99}
+		},
+		"whitespace reason": func(candidate *FrostRetainedGroupMutation) {
+			candidate.Reason = " "
+		},
+	}
+	for name, mutate := range irrelevantFields {
+		t.Run("irrelevant "+name, func(t *testing.T) {
+			candidate := cloneFrostRetainedGroupMutations(
+				[]FrostRetainedGroupMutation{lift},
+			)[0]
+			mutate(&candidate)
+			state := cloneFrostRetainedGroupQuarantineState(
+				journal.quarantineState,
+			)
+			if err := applyFrostRetainedGroupQuarantineMutations(
+				&state,
+				[]FrostRetainedGroupMutation{candidate},
+				journal.liftPolicy,
+			); err == nil {
+				t.Fatal("lift with an unsigned irrelevant field was accepted")
+			}
+		})
+	}
+
+	t.Run("insufficient quorum", func(t *testing.T) {
+		candidate := cloneFrostRetainedGroupMutations(
+			[]FrostRetainedGroupMutation{lift},
+		)[0]
+		fixture.resignLiftMutation(t, &candidate, []int{0})
+		if err := validateJournalTestLift(journal, candidate); err == nil {
+			t.Fatal("one-of-three lift quorum was accepted")
+		}
+	})
+	t.Run("unsorted signatures", func(t *testing.T) {
+		candidate := cloneFrostRetainedGroupMutations(
+			[]FrostRetainedGroupMutation{lift},
+		)[0]
+		fixture.resignLiftMutation(t, &candidate, []int{1, 0})
+		if err := validateJournalTestLift(journal, candidate); err == nil {
+			t.Fatal("unsorted lift signatures were accepted")
+		}
+	})
+	t.Run("duplicate signatures", func(t *testing.T) {
+		candidate := cloneFrostRetainedGroupMutations(
+			[]FrostRetainedGroupMutation{lift},
+		)[0]
+		fixture.resignLiftMutation(t, &candidate, []int{0, 0})
+		if err := validateJournalTestLift(journal, candidate); err == nil {
+			t.Fatal("duplicate lift signatures were accepted")
+		}
+	})
+	t.Run("unknown extra signature", func(t *testing.T) {
+		candidate := cloneFrostRetainedGroupMutations(
+			[]FrostRetainedGroupMutation{lift},
+		)[0]
+		fixture.resignLiftMutation(t, &candidate, []int{0, 1})
+		_, unknownPrivateKey, unknownSPKI := journalTestAuthority(
+			t,
+			"zz-unknown",
+			0x7f,
+		)
+		signatureHash := frostRetainedGroupLiftSignatureHash(
+			candidate.LiftCertificate.BodyHash,
+		)
+		candidate.LiftCertificate.Signatures = append(
+			candidate.LiftCertificate.Signatures,
+			FrostRetainedGroupQuarantineLiftSignature{
+				AuthorityID:         "zz-unknown",
+				SignerPublicKeySPKI: unknownSPKI,
+				Signature: base64.StdEncoding.EncodeToString(
+					ed25519.Sign(unknownPrivateKey, signatureHash[:]),
+				),
+			},
+		)
+		refreshJournalTestLiftCertificateHash(t, &candidate)
+		if err := validateJournalTestLift(journal, candidate); err == nil {
+			t.Fatal("unknown extra lift signature was accepted")
+		}
+	})
+	t.Run("invalid extra signature", func(t *testing.T) {
+		candidate := cloneFrostRetainedGroupMutations(
+			[]FrostRetainedGroupMutation{lift},
+		)[0]
+		fixture.resignLiftMutation(t, &candidate, []int{0, 1, 2})
+		signature, err := base64.StdEncoding.Strict().DecodeString(
+			candidate.LiftCertificate.Signatures[2].Signature,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		signature[0] ^= 0xff
+		candidate.LiftCertificate.Signatures[2].Signature =
+			base64.StdEncoding.EncodeToString(signature)
+		refreshJournalTestLiftCertificateHash(t, &candidate)
+		if err := validateJournalTestLift(journal, candidate); err == nil {
+			t.Fatal("invalid extra lift signature was accepted")
+		}
+	})
+	t.Run("noncanonical base64", func(t *testing.T) {
+		candidate := cloneFrostRetainedGroupMutations(
+			[]FrostRetainedGroupMutation{lift},
+		)[0]
+		candidate.LiftCertificate.Signatures[0].SignerPublicKeySPKI =
+			"\n" + candidate.LiftCertificate.Signatures[0].SignerPublicKeySPKI
+		refreshJournalTestLiftCertificateHash(t, &candidate)
+		if err := validateJournalTestLift(journal, candidate); err == nil {
+			t.Fatal("noncanonical base64 lift credential was accepted")
+		}
+	})
+}
+
+func TestFrostRetainedGroupJournal_LiftAuthorityStrictMajority(
+	t *testing.T,
+) {
+	addFourthAuthority := func(
+		t *testing.T,
+		fixture *journalTestFixture,
+		threshold uint64,
+	) {
+		authority, privateKey, publicKeySPKI := journalTestAuthority(
+			t,
+			"lift-4",
+			0x73,
+		)
+		authorities := append(
+			[]FrostRetainedGroupAuthority{},
+			fixture.runtime.QuarantineJournal.LiftAuthorities...,
+		)
+		authorities = append(authorities, authority)
+		fixture.runtime.QuarantineJournal.LiftAuthorityThreshold = threshold
+		fixture.runtime.QuarantineJournal.LiftAuthorities = authorities
+		fixture.quarantine = fixture.runtime.QuarantineJournal
+		fixture.liftPrivateKeys = append(
+			fixture.liftPrivateKeys,
+			privateKey,
+		)
+		fixture.liftPublicKeySPKIs = append(
+			fixture.liftPublicKeySPKIs,
+			publicKeySPKI,
+		)
+	}
+	t.Run("2-of-4 rejected", func(t *testing.T) {
+		fixture := newJournalTestFixture(t)
+		addFourthAuthority(t, fixture, 2)
+		err := fixture.openJournalError(
+			filepath.Join(t.TempDir(), "journal"),
+		)
+		if err == nil || !strings.Contains(err.Error(), "strict majority") {
+			t.Fatalf("expected 2-of-4 policy rejection, got [%v]", err)
+		}
+	})
+	t.Run("3-of-4 accepted", func(t *testing.T) {
+		fixture := newJournalTestFixture(t)
+		addFourthAuthority(t, fixture, 3)
+		journal, quarantine := fixture.openActiveQuarantine(
+			t,
+			filepath.Join(t.TempDir(), "journal"),
+		)
+		defer journal.close()
+		lift := fixture.liftMutation(
+			t,
+			journal,
+			quarantine,
+			FrostRetainedGroupEventPoint{
+				BlockNumber:      15,
+				BlockHash:        [32]byte{0x0f},
+				TransactionHash:  [32]byte{0xaf},
+				TransactionIndex: 2,
+				LogIndex:         3,
+			},
+		)
+		if len(lift.LiftCertificate.Signatures) != 3 {
+			t.Fatal("3-of-4 policy did not produce three signatures")
+		}
+		if err := validateJournalTestLift(journal, lift); err != nil {
+			t.Fatalf("valid 3-of-4 lift was rejected: [%v]", err)
+		}
+	})
+}
+
+func TestFrostRetainedGroupJournal_LiftCertificateFrozenWireVector(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	journal, quarantine := fixture.openActiveQuarantine(
+		t,
+		filepath.Join(t.TempDir(), "journal"),
+	)
+	defer journal.close()
+	lift := fixture.liftMutation(
+		t,
+		journal,
+		quarantine,
+		FrostRetainedGroupEventPoint{
+			BlockNumber:      15,
+			BlockHash:        [32]byte{0x0f},
+			TransactionHash:  [32]byte{0xaf},
+			TransactionIndex: 2,
+			LogIndex:         3,
+		},
+	)
+	wire := frostRetainedGroupLiftCertificateToWire(lift.LiftCertificate)
+	canonical, err := frostRetainedGroupCanonicalValue(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(
+		string(canonical),
+		`"protocolBindingHash":[`,
+	) || !strings.Contains(
+		string(canonical),
+		`"protocolBindingHash":"0x`,
+	) {
+		t.Fatal("lift certificate did not use the explicit hex32 wire contract")
+	}
+	vectors := map[string]struct {
+		actual   [32]byte
+		expected string
+	}{
+		"authority set": {
+			actual:   journal.liftPolicy.AuthoritySetHash,
+			expected: "b08dcb52b095337400460f2df2a4b490c1d59e9995a0980489eb0d5540a2ee57",
+		},
+		"body": {
+			actual:   lift.LiftCertificate.BodyHash,
+			expected: "a39727457786e7ad6bf67f3ea3cd7777c766e54d761684324bfdfa19c8030686",
+		},
+		"certificate": {
+			actual:   lift.LiftCertificateHash,
+			expected: "7000fbb0730db155daa390ba9f8a0641ebc20ce7ee1ccee34b9ff987d7501e0d",
+		},
+	}
+	for name, vector := range vectors {
+		if fmt.Sprintf("%x", vector.actual) != vector.expected {
+			t.Fatalf(
+				"%s wire vector changed: got [%x], expected [%s]",
+				name,
+				vector.actual,
+				vector.expected,
+			)
+		}
 	}
 }
 
@@ -788,6 +1502,250 @@ func TestFrostRetainedGroupJournal_IntegratesQuarantineOrphanBatchExactlyOnce(
 		restarted.quarantineState.BatchSequence != 1 ||
 		len(restarted.quarantineMutations) != 1 {
 		t.Fatalf("quarantine orphan batch was not integrated exactly once: %+v", restarted.quarantineState)
+	}
+}
+
+func TestFrostRetainedGroupJournal_LiftCrashRecoveryAndContentAddressing(
+	t *testing.T,
+) {
+	liftPoint := FrostRetainedGroupEventPoint{
+		BlockNumber:      15,
+		BlockHash:        [32]byte{0x0f},
+		TransactionHash:  [32]byte{0xaf},
+		TransactionIndex: 2,
+		LogIndex:         3,
+	}
+	t.Run("certificate-only orphan is inert", func(t *testing.T) {
+		fixture := newJournalTestFixture(t)
+		directory := filepath.Join(t.TempDir(), "journal")
+		journal, quarantine := fixture.openActiveQuarantine(
+			t,
+			directory,
+		)
+		lift := fixture.liftMutation(t, journal, quarantine, liftPoint)
+		fixture.source.mutations = append(fixture.source.mutations, lift)
+		journal.persistFailureHook = func(stage string) error {
+			switch stage {
+			case "after-batch-before-state":
+				return nil
+			case "after-quarantine-lift-certificate-before-batch":
+				return fmt.Errorf("simulated certificate-only crash")
+			default:
+				t.Fatalf("unexpected failure stage [%s]", stage)
+				return nil
+			}
+		}
+		if _, err := journal.reconcile(
+			context.Background(),
+			fixture.later,
+		); err == nil || !strings.Contains(err.Error(), "certificate-only") {
+			t.Fatalf("expected certificate-only crash, got [%v]", err)
+		}
+		if err := journal.close(); err != nil {
+			t.Fatal(err)
+		}
+
+		restarted := fixture.openJournal(t, directory)
+		defer restarted.close()
+		if len(restarted.liftCertificates) != 1 ||
+			frostRetainedGroupActiveQuarantineCount(
+				restarted.quarantineState,
+			) != 1 ||
+			len(restarted.quarantineState.Tombstones) != 0 {
+			t.Fatal("certificate-only orphan changed quarantine state")
+		}
+		snapshot, err := restarted.reconcile(
+			context.Background(),
+			fixture.later,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.QuarantineCount != 0 ||
+			snapshot.QuarantineTombstoneCount != 1 {
+			t.Fatalf("certificate-only recovery did not lift exactly once: %+v", snapshot)
+		}
+	})
+
+	t.Run("certificate and batch orphan integrate exactly once", func(t *testing.T) {
+		fixture := newJournalTestFixture(t)
+		directory := filepath.Join(t.TempDir(), "journal")
+		journal, quarantine := fixture.openActiveQuarantine(
+			t,
+			directory,
+		)
+		lift := fixture.liftMutation(t, journal, quarantine, liftPoint)
+		fixture.source.mutations = append(fixture.source.mutations, lift)
+		journal.persistFailureHook = func(stage string) error {
+			switch stage {
+			case "after-batch-before-state",
+				"after-quarantine-lift-certificate-before-batch":
+				return nil
+			case "after-quarantine-batch-before-state":
+				return fmt.Errorf("simulated certificate-and-batch crash")
+			default:
+				t.Fatalf("unexpected failure stage [%s]", stage)
+				return nil
+			}
+		}
+		if _, err := journal.reconcile(
+			context.Background(),
+			fixture.later,
+		); err == nil || !strings.Contains(err.Error(), "certificate-and-batch") {
+			t.Fatalf("expected certificate-and-batch crash, got [%v]", err)
+		}
+		if err := journal.close(); err != nil {
+			t.Fatal(err)
+		}
+
+		restarted := fixture.openJournal(t, directory)
+		defer restarted.close()
+		if frostRetainedGroupActiveQuarantineCount(
+			restarted.quarantineState,
+		) != 0 ||
+			len(restarted.quarantineState.Tombstones) != 1 ||
+			restarted.quarantineState.BatchSequence != 2 {
+			t.Fatalf(
+				"certificate-and-batch orphan was not integrated: %+v",
+				restarted.quarantineState,
+			)
+		}
+		snapshot, err := restarted.reconcile(
+			context.Background(),
+			fixture.later,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.QuarantineCount != 0 ||
+			snapshot.QuarantineTombstoneCount != 1 ||
+			restarted.quarantineState.BatchSequence != 2 {
+			t.Fatalf("orphan lift was not integrated exactly once: %+v", snapshot)
+		}
+	})
+
+	t.Run("conflicting valid certificate orphan has a distinct digest", func(t *testing.T) {
+		fixture := newJournalTestFixture(t)
+		directory := filepath.Join(t.TempDir(), "journal")
+		journal, quarantine := fixture.openActiveQuarantine(
+			t,
+			directory,
+		)
+		firstLift := fixture.liftMutation(t, journal, quarantine, liftPoint)
+		fixture.source.mutations = append(
+			fixture.source.mutations,
+			firstLift,
+		)
+		journal.persistFailureHook = func(stage string) error {
+			switch stage {
+			case "after-batch-before-state":
+				return nil
+			case "after-quarantine-lift-certificate-before-batch":
+				return fmt.Errorf("simulated first certificate crash")
+			default:
+				t.Fatalf("unexpected failure stage [%s]", stage)
+				return nil
+			}
+		}
+		if _, err := journal.reconcile(
+			context.Background(),
+			fixture.later,
+		); err == nil {
+			t.Fatal("expected first certificate crash")
+		}
+		if err := journal.close(); err != nil {
+			t.Fatal(err)
+		}
+
+		restarted := fixture.openJournal(t, directory)
+		defer restarted.close()
+		secondLift := cloneFrostRetainedGroupMutations(
+			[]FrostRetainedGroupMutation{firstLift},
+		)[0]
+		fixture.resignLiftMutation(t, &secondLift, []int{0, 2})
+		if secondLift.LiftCertificateHash == firstLift.LiftCertificateHash {
+			t.Fatal("different quorum certificates have the same full digest")
+		}
+		fixture.source.mutations[len(fixture.source.mutations)-1] =
+			secondLift
+		snapshot, err := restarted.reconcile(
+			context.Background(),
+			fixture.later,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(restarted.liftCertificates) != 2 ||
+			snapshot.QuarantineTombstoneCount != 1 ||
+			restarted.quarantineState.Tombstones[0].LiftCertificateHash !=
+				secondLift.LiftCertificateHash {
+			t.Fatal("content-addressed conflicting certificate handling failed")
+		}
+	})
+}
+
+func TestFrostRetainedGroupJournal_TombstoneRejectsReplayAndReraise(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	directory := filepath.Join(t.TempDir(), "journal")
+	journal, quarantine := fixture.openActiveQuarantine(t, directory)
+	lift := fixture.liftMutation(
+		t,
+		journal,
+		quarantine,
+		FrostRetainedGroupEventPoint{
+			BlockNumber:      15,
+			BlockHash:        [32]byte{0x0f},
+			TransactionHash:  [32]byte{0xaf},
+			TransactionIndex: 2,
+			LogIndex:         3,
+		},
+	)
+	fixture.source.mutations = append(fixture.source.mutations, lift)
+	if _, err := journal.reconcile(
+		context.Background(),
+		fixture.later,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	replayState := cloneFrostRetainedGroupQuarantineState(
+		journal.quarantineState,
+	)
+	if err := applyFrostRetainedGroupQuarantineMutations(
+		&replayState,
+		[]FrostRetainedGroupMutation{lift},
+		journal.liftPolicy,
+	); err == nil {
+		t.Fatal("tombstoned lift replay was accepted")
+	}
+	reraise := quarantine
+	reraise.Point = FrostRetainedGroupEventPoint{
+		BlockNumber:      18,
+		BlockHash:        [32]byte{0x12},
+		TransactionHash:  [32]byte{0xb2},
+		TransactionIndex: 1,
+		LogIndex:         1,
+	}
+	reraise.EvidenceHash = [32]byte{0x54}
+	if err := applyFrostRetainedGroupQuarantineMutations(
+		&replayState,
+		[]FrostRetainedGroupMutation{reraise},
+		journal.liftPolicy,
+	); err == nil {
+		t.Fatal("tombstoned quarantine ID was raised again")
+	}
+	if err := journal.close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted := fixture.openJournal(t, directory)
+	defer restarted.close()
+	if len(restarted.quarantineState.Quarantines) != 1 ||
+		restarted.quarantineState.Quarantines[0].Status !=
+			frostRetainedGroupQuarantineLifted ||
+		len(restarted.quarantineState.Tombstones) != 1 {
+		t.Fatal("lifted record or permanent tombstone was lost on restart")
 	}
 }
 
@@ -870,6 +1828,14 @@ func TestApplyFrostRetainedGroupMutations_EnforcesWalletLimit(t *testing.T) {
 func TestValidateCompleteFrostRetainedGroupHistory_EnforcesMutationLimit(
 	t *testing.T,
 ) {
+	fixture := newJournalTestFixture(t)
+	policy, err := frostRetainedGroupLiftPolicyFromRuntimeManifest(
+		fixture.bindingHash,
+		fixture.runtime,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	history := &FrostRetainedGroupHistory{
 		From: FrostPreSignFinality{BlockNumber: 1, BlockHash: [32]byte{1}},
 		To:   FrostPreSignFinality{BlockNumber: 2, BlockHash: [32]byte{2}},
@@ -878,7 +1844,7 @@ func TestValidateCompleteFrostRetainedGroupHistory_EnforcesMutationLimit(
 			frostRetainedGroupMaximumMutations+1,
 		),
 	}
-	err := validateCompleteFrostRetainedGroupHistory(history)
+	err = validateCompleteFrostRetainedGroupHistory(history, policy)
 	if err == nil || !strings.Contains(err.Error(), "mutation limit") {
 		t.Fatalf("expected aggregate mutation limit rejection, got [%v]", err)
 	}
@@ -999,10 +1965,8 @@ func TestFrostRetainedGroupJournal_RejectsIdentityMismatchAndConcurrentOwner(
 	defer journal.close()
 	if _, err := newFrostRetainedGroupJournal(
 		directory,
-		fixture.manifestHash,
 		fixture.bindingHash,
-		fixture.manifest,
-		fixture.quarantine,
+		fixture.runtime,
 		fixture.source,
 		fixture.registry,
 		fixture.localOperator,
@@ -1018,10 +1982,8 @@ func TestFrostRetainedGroupJournal_RejectsIdentityMismatchAndConcurrentOwner(
 	}
 	if _, err := newFrostRetainedGroupJournal(
 		otherDirectory,
-		fixture.manifestHash,
 		fixture.bindingHash,
-		fixture.manifest,
-		fixture.quarantine,
+		fixture.runtime,
 		fixture.source,
 		fixture.registry,
 		fixture.localOperator,
@@ -1041,10 +2003,8 @@ func TestFrostRetainedGroupJournal_RejectsSymlinkEntry(t *testing.T) {
 	}
 	if _, err := newFrostRetainedGroupJournal(
 		directory,
-		fixture.manifestHash,
 		fixture.bindingHash,
-		fixture.manifest,
-		fixture.quarantine,
+		fixture.runtime,
 		fixture.source,
 		fixture.registry,
 		fixture.localOperator,
@@ -1254,10 +2214,8 @@ func TestFrostRetainedGroupJournal_RejectsCorruptOrPublicStoreFiles(t *testing.T
 		}
 		if _, err := newFrostRetainedGroupJournal(
 			directory,
-			fixture.manifestHash,
 			fixture.bindingHash,
-			fixture.manifest,
-			fixture.quarantine,
+			fixture.runtime,
 			fixture.source,
 			fixture.registry,
 			fixture.localOperator,
@@ -1279,10 +2237,8 @@ func TestFrostRetainedGroupJournal_RejectsCorruptOrPublicStoreFiles(t *testing.T
 		}
 		if _, err := newFrostRetainedGroupJournal(
 			directory,
-			fixture.manifestHash,
 			fixture.bindingHash,
-			fixture.manifest,
-			fixture.quarantine,
+			fixture.runtime,
 			fixture.source,
 			fixture.registry,
 			fixture.localOperator,

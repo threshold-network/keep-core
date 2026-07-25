@@ -526,8 +526,21 @@ func frostRetainedGroupHistoryTestProfile(
 	if err != nil {
 		t.Fatal(err)
 	}
+	checkpointAuthorities := []FrostRetainedGroupAuthority{
+		{AuthorityID: "checkpoint-1", PublicKeySPKIHash: [32]byte{0x51}},
+		{AuthorityID: "checkpoint-2", PublicKeySPKIHash: [32]byte{0x52}},
+		{AuthorityID: "checkpoint-3", PublicKeySPKIHash: [32]byte{0x53}},
+	}
+	liftAuthorities := []FrostRetainedGroupAuthority{
+		{AuthorityID: "lift-1", PublicKeySPKIHash: [32]byte{0x54}},
+		{AuthorityID: "lift-2", PublicKeySPKIHash: [32]byte{0x55}},
+		{AuthorityID: "lift-3", PublicKeySPKIHash: [32]byte{0x56}},
+	}
 	return profile, FrostPreSignActivationRuntimeManifest{
 		ManifestHash:                     profile.ActivationManifestHash,
+		ActivationAuthorityKeyHash:       [32]byte{0x35},
+		VerifierOperatorFingerprint:      [32]byte{0x36},
+		HandshakeOperatorFingerprint:     [32]byte{0x38},
 		DomainChainID:                    profile.DomainChainID,
 		GenesisBlockHash:                 [32]byte{0x39},
 		ProfileHash:                      profile.ProfileHash,
@@ -539,6 +552,7 @@ func frostRetainedGroupHistoryTestProfile(
 		ReservationProtocolID:            profile.ReservationProtocolID,
 		BitcoinOutboxProtocolID:          [32]byte{0x46},
 		SigningPolicyHash:                profile.SigningPolicyHash,
+		AttestationSignerKeyHash:         [32]byte{0x37},
 		RetainedGroupInventoryProtocolID: [32]byte{0x43},
 		CanonicalJournal: FrostRetainedGroupCanonicalJournalManifest{
 			StoreID:                   "canonical-test-store",
@@ -550,10 +564,16 @@ func frostRetainedGroupHistoryTestProfile(
 			SourceEndpointFingerprint: [32]byte{0x31},
 		},
 		QuarantineJournal: FrostRetainedGroupQuarantineJournalManifest{
-			ProtocolID:         [32]byte{0x44},
-			StoreID:            "quarantine-test-store",
-			StoreFingerprint:   [32]byte{0x49},
-			ClusterFingerprint: [32]byte{0x4a},
+			ProtocolID:                   [32]byte{0x44},
+			LiftProtocolID:               [32]byte{0x4b},
+			TombstoneProtocolID:          [32]byte{0x4c},
+			CheckpointAuthorityThreshold: 2,
+			CheckpointAuthorities:        checkpointAuthorities,
+			LiftAuthorityThreshold:       2,
+			LiftAuthorities:              liftAuthorities,
+			StoreID:                      "quarantine-test-store",
+			StoreFingerprint:             [32]byte{0x49},
+			ClusterFingerprint:           [32]byte{0x4a},
 		},
 	}
 }
@@ -1129,11 +1149,52 @@ func TestSignedFrostRetainedGroupHistorySource_ProtocolBindingCommitsRuntime(
 		) {
 			runtime.QuarantineJournal.StoreFingerprint[0] ^= 0xff
 		},
+		"quarantine protocol": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.QuarantineJournal.ProtocolID[0] ^= 0xff
+		},
+		"quarantine lift protocol": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.QuarantineJournal.LiftProtocolID[0] ^= 0xff
+		},
+		"quarantine tombstone protocol": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.QuarantineJournal.TombstoneProtocolID[0] ^= 0xff
+		},
+		"checkpoint authority set": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.QuarantineJournal.CheckpointAuthorities[0].
+				PublicKeySPKIHash[0] ^= 0xff
+		},
+		"lift authority set": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.QuarantineJournal.LiftAuthorities[0].
+				PublicKeySPKIHash[0] ^= 0xff
+		},
 	}
 	for name, mutate := range testCases {
 		t.Run(name, func(t *testing.T) {
 			profile := fixture.profile
 			runtime := fixture.runtimeManifest
+			runtime.QuarantineJournal.CheckpointAuthorities = append(
+				[]FrostRetainedGroupAuthority{},
+				fixture.runtimeManifest.QuarantineJournal.
+					CheckpointAuthorities...,
+			)
+			runtime.QuarantineJournal.LiftAuthorities = append(
+				[]FrostRetainedGroupAuthority{},
+				fixture.runtimeManifest.QuarantineJournal.LiftAuthorities...,
+			)
 			mutate(&profile, &runtime)
 			binding, err := fixture.source.computeProtocolBinding(profile, runtime)
 			if err != nil {

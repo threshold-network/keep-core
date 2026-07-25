@@ -1448,6 +1448,9 @@ func frostPreSignWriteCommitmentUint64(
 
 type FrostPreSignActivationRuntimeManifest struct {
 	ManifestHash                     [32]byte
+	ActivationAuthorityKeyHash       [32]byte
+	VerifierOperatorFingerprint      [32]byte
+	HandshakeOperatorFingerprint     [32]byte
 	DomainChainID                    [32]byte
 	GenesisBlockHash                 [32]byte
 	ProfileHash                      [32]byte

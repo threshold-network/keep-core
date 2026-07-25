@@ -97,8 +97,11 @@ type frostActivationQuarantineJournalState struct {
 	StoreFingerprint       string `json:"storeFingerprint"`
 	ClusterFingerprint     string `json:"clusterFingerprint"`
 	Root                   string `json:"root"`
+	ActiveRoot             string `json:"activeRoot"`
+	TombstoneRoot          string `json:"tombstoneRoot"`
 	Generation             uint64 `json:"generation"`
 	CurrentQuarantineCount uint64 `json:"currentQuarantineCount"`
+	TombstoneCount         uint64 `json:"tombstoneCount"`
 	Complete               bool   `json:"complete"`
 }
 
@@ -198,15 +201,17 @@ type frostActivationReconciliationJob struct {
 }
 
 type frostActivationJournalStamp struct {
-	bindingHash          [32]byte
-	canonicalPoint       FrostPreSignFinality
-	canonicalGeneration  uint64
-	canonicalBatchRoot   [32]byte
-	canonicalInventory   [32]byte
-	quarantinePoint      FrostPreSignFinality
-	quarantineGeneration uint64
-	quarantineBatchRoot  [32]byte
-	quarantineRoot       [32]byte
+	bindingHash             [32]byte
+	canonicalPoint          FrostPreSignFinality
+	canonicalGeneration     uint64
+	canonicalBatchRoot      [32]byte
+	canonicalInventory      [32]byte
+	quarantinePoint         FrostPreSignFinality
+	quarantineGeneration    uint64
+	quarantineBatchRoot     [32]byte
+	quarantineRoot          [32]byte
+	quarantineActiveRoot    [32]byte
+	quarantineTombstoneRoot [32]byte
 }
 
 type frostActivationReconciliationCache struct {
@@ -628,6 +633,8 @@ func (fahe *frostActivationHandshakeExporter) validateActivationJournalSnapshot(
 		journalSnapshot.QuarantineClusterFingerprint != quarantineManifest.ClusterFingerprint ||
 		journalSnapshot.QuarantineGeneration < quarantineManifest.MinimumGeneration ||
 		journalSnapshot.QuarantineRoot == [32]byte{} ||
+		journalSnapshot.QuarantineActiveRoot == [32]byte{} ||
+		journalSnapshot.QuarantineTombstoneRoot == [32]byte{} ||
 		journalSnapshot.QuarantineCount != 0 {
 		return fmt.Errorf(
 			"canonical FROST retained-group journal is not activation-ready",
@@ -662,15 +669,17 @@ func (fahe *frostActivationHandshakeExporter) journalStampLocked() (
 		)
 	}
 	return frostActivationJournalStamp{
-		bindingHash:          fahe.bindingHash,
-		canonicalPoint:       journal.state.CurrentPoint,
-		canonicalGeneration:  journal.state.SnapshotGeneration,
-		canonicalBatchRoot:   journal.state.BatchRoot,
-		canonicalInventory:   journal.state.InventoryRoot,
-		quarantinePoint:      journal.quarantineState.CurrentPoint,
-		quarantineGeneration: journal.quarantineState.Generation,
-		quarantineBatchRoot:  journal.quarantineState.BatchRoot,
-		quarantineRoot:       journal.quarantineState.Root,
+		bindingHash:             fahe.bindingHash,
+		canonicalPoint:          journal.state.CurrentPoint,
+		canonicalGeneration:     journal.state.SnapshotGeneration,
+		canonicalBatchRoot:      journal.state.BatchRoot,
+		canonicalInventory:      journal.state.InventoryRoot,
+		quarantinePoint:         journal.quarantineState.CurrentPoint,
+		quarantineGeneration:    journal.quarantineState.Generation,
+		quarantineBatchRoot:     journal.quarantineState.BatchRoot,
+		quarantineRoot:          journal.quarantineState.Root,
+		quarantineActiveRoot:    journal.quarantineState.ActiveRoot,
+		quarantineTombstoneRoot: journal.quarantineState.TombstoneRoot,
 	}, nil
 }
 
@@ -687,7 +696,9 @@ func frostActivationStampMatchesSnapshot(
 		stamp.canonicalBatchRoot == snapshot.BatchRoot &&
 		stamp.canonicalInventory == snapshot.InventoryRoot &&
 		stamp.quarantineGeneration == snapshot.QuarantineGeneration &&
-		stamp.quarantineRoot == snapshot.QuarantineRoot
+		stamp.quarantineRoot == snapshot.QuarantineRoot &&
+		stamp.quarantineActiveRoot == snapshot.QuarantineActiveRoot &&
+		stamp.quarantineTombstoneRoot == snapshot.QuarantineTombstoneRoot
 }
 
 func (fahe *frostActivationHandshakeExporter) verifyActivationPointQuick(
@@ -908,8 +919,11 @@ func (fahe *frostActivationHandshakeExporter) attest(
 			StoreFingerprint:       frostActivationHex32(journalSnapshot.QuarantineStoreFingerprint),
 			ClusterFingerprint:     frostActivationHex32(journalSnapshot.QuarantineClusterFingerprint),
 			Root:                   frostActivationHex32(journalSnapshot.QuarantineRoot),
+			ActiveRoot:             frostActivationHex32(journalSnapshot.QuarantineActiveRoot),
+			TombstoneRoot:          frostActivationHex32(journalSnapshot.QuarantineTombstoneRoot),
 			Generation:             journalSnapshot.QuarantineGeneration,
 			CurrentQuarantineCount: journalSnapshot.QuarantineCount,
+			TombstoneCount:         journalSnapshot.QuarantineTombstoneCount,
 			Complete:               true,
 		},
 		NativeSignerState: frostActivationNativeSignerState{

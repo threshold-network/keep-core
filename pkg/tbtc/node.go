@@ -753,10 +753,8 @@ func newNode(
 		}
 		journal, err := newFrostRetainedGroupJournal(
 			config.FrostRetainedGroupJournalDirectory,
-			runtimeManifest.ManifestHash,
 			retainedGroupBindingHash,
-			runtimeManifest.CanonicalJournal,
-			runtimeManifest.QuarantineJournal,
+			runtimeManifest,
 			config.FrostRetainedGroupHistorySource,
 			walletRegistry,
 			operatorAddress,

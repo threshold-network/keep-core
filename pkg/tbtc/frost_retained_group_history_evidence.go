@@ -46,6 +46,7 @@ type frostRetainedGroupEvidenceProfile struct {
 	domainChainID                  [32]byte
 	genesisBlockHash               [32]byte
 	bindingHash                    [32]byte
+	liftPolicy                     frostRetainedGroupQuarantineLiftPolicy
 	deployments                    map[string]FrostPreSignDeploymentEvidence
 	bridgeABI                      ethabi.ABI
 	registryABI                    ethabi.ABI
@@ -179,6 +180,16 @@ func (source *signedFrostRetainedGroupHistorySource) BindFrostRetainedGroupActiv
 	if err != nil {
 		return err
 	}
+	liftPolicy, err := frostRetainedGroupLiftPolicyFromRuntimeManifest(
+		bindingHash,
+		runtimeManifest,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"retained-group quarantine lift policy is invalid: [%w]",
+			err,
+		)
+	}
 	parsedBridgeABI, err := ethabi.JSON(strings.NewReader(bridgeabi.BridgeMetaData.ABI))
 	if err != nil {
 		return fmt.Errorf("cannot parse pinned Bridge ABI: [%w]", err)
@@ -198,6 +209,7 @@ func (source *signedFrostRetainedGroupHistorySource) BindFrostRetainedGroupActiv
 		domainChainID:                  runtimeManifest.DomainChainID,
 		genesisBlockHash:               runtimeManifest.GenesisBlockHash,
 		bindingHash:                    bindingHash,
+		liftPolicy:                     liftPolicy,
 		deployments:                    deployments,
 		bridgeABI:                      parsedBridgeABI,
 		registryABI:                    parsedRegistryABI,
@@ -239,8 +251,23 @@ func (source *signedFrostRetainedGroupHistorySource) computeProtocolBinding(
 	profile FrostPreSignActivationProfile,
 	runtimeManifest FrostPreSignActivationRuntimeManifest,
 ) ([32]byte, error) {
+	liftAuthoritySetHash, err := frostRetainedGroupLiftAuthoritySetHash(
+		runtimeManifest.QuarantineJournal.LiftAuthorityThreshold,
+		runtimeManifest.QuarantineJournal.LiftAuthorities,
+	)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	checkpointAuthoritySetHash, err := frostRetainedGroupAuthoritySetHash(
+		"tbtc-frost-retained-group-checkpoint-authority-set/v1",
+		runtimeManifest.QuarantineJournal.CheckpointAuthorityThreshold,
+		runtimeManifest.QuarantineJournal.CheckpointAuthorities,
+	)
+	if err != nil {
+		return [32]byte{}, err
+	}
 	binding := frostRetainedGroupProtocolBinding{
-		Schema:           "tbtc-frost-retained-group-protocol-binding/v2",
+		Schema:           "tbtc-frost-retained-group-protocol-binding/v3",
 		ChainID:          source.chainID,
 		DomainChainID:    frostActivationHex32(runtimeManifest.DomainChainID),
 		GenesisBlockHash: frostActivationHex32(runtimeManifest.GenesisBlockHash),
@@ -262,6 +289,10 @@ func (source *signedFrostRetainedGroupHistorySource) computeProtocolBinding(
 		BitcoinOutboxProtocolID:        frostActivationHex32(runtimeManifest.BitcoinOutboxProtocolID),
 		InventoryProtocolID:            frostActivationHex32(runtimeManifest.RetainedGroupInventoryProtocolID),
 		QuarantineProtocolID:           frostActivationHex32(runtimeManifest.QuarantineJournal.ProtocolID),
+		LiftProtocolID:                 frostActivationHex32(runtimeManifest.QuarantineJournal.LiftProtocolID),
+		TombstoneProtocolID:            frostActivationHex32(runtimeManifest.QuarantineJournal.TombstoneProtocolID),
+		LiftAuthoritySetHash:           frostActivationHex32(liftAuthoritySetHash),
+		CheckpointAuthoritySetHash:     frostActivationHex32(checkpointAuthoritySetHash),
 		SigningPolicyHash:              frostActivationHex32(runtimeManifest.SigningPolicyHash),
 		CanonicalStoreID:               runtimeManifest.CanonicalJournal.StoreID,
 		CanonicalStoreFingerprint: frostActivationHex32(
@@ -749,6 +780,23 @@ func (source *signedFrostRetainedGroupHistorySource) verifyMutationEvidence(
 	// records, not Ethereum events. Their Point is only a canonical finalized
 	// ordering anchor and is deliberately never presented as receipt evidence.
 	if isFrostRetainedGroupQuarantineMutation(mutation.Kind) {
+		if mutation.Kind == FrostRetainedGroupQuarantineLiftMutation {
+			if _, err := validateFrostRetainedGroupLiftCertificateShape(
+				evidence.liftPolicy,
+				mutation.LiftCertificate,
+			); err != nil {
+				return err
+			}
+			if err := source.VerifyPoint(
+				ctx,
+				mutation.LiftCertificate.Body.ResolutionFinality,
+			); err != nil {
+				return fmt.Errorf(
+					"quarantine lift resolution finality is not canonical: [%w]",
+					err,
+				)
+			}
+		}
 		return nil
 	}
 
