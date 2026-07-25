@@ -77,7 +77,3 @@ output "nat_gateway_zone_b_route_tag" {
 output "nat_gateway_zone_c_route_tag" {
   value = "${module.nat_gateway_zone_c.routing_tag_zonal}"
 }
-
-output "eth_tx_ropsten_loadbalancer_external_ip" {
-  value = "${google_compute_address.eth_tx_ropsten_loadbalancer_ip.address}"
-}

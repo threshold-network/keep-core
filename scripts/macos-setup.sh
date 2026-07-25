@@ -28,9 +28,8 @@ brew list jq &>/dev/null || brew install jq
 echo "Installing pre-commit and specified hooks..."
 pre-commit install --install-hooks
 
-echo "Installing solidity npm and requirements..."
+echo "Installing npm..."
 brew list npm &>/dev/null || brew install npm
-cd ../solidity-v1 && npm install && cd ../scripts
 
 if ! [ -x "$(command -v protoc-gen-go)" ]; then
   echo 'WARNING: protoc-gen-go command is not available'

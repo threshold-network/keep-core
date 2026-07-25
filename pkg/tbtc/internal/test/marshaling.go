@@ -2,15 +2,15 @@ package test
 
 import (
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"time"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
-	"github.com/keep-network/keep-core/pkg/tecdsa"
+	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
 )
 
 // UnmarshalJSON implements a custom JSON unmarshaling logic to produce a
@@ -51,15 +51,13 @@ func (dsts *DepositSweepTestScenario) UnmarshalJSON(data []byte) error {
 	dsts.Title = unmarshaled.Title
 
 	// Unmarshal wallet public key.
-	x, y := elliptic.Unmarshal(
-		tecdsa.Curve,
+	walletPublicKey, err := secp256k1.Unmarshal(
 		hexToSlice(unmarshaled.WalletPublicKey),
 	)
-	dsts.WalletPublicKey = &ecdsa.PublicKey{
-		Curve: tecdsa.Curve,
-		X:     x,
-		Y:     y,
+	if err != nil {
+		return fmt.Errorf("cannot unmarshal wallet public key: [%w]", err)
 	}
+	dsts.WalletPublicKey = walletPublicKey
 
 	// Unmarshal wallet private key.
 	dsts.WalletPrivateKey = new(big.Int).SetBytes(
@@ -193,15 +191,13 @@ func (rts *RedemptionTestScenario) UnmarshalJSON(data []byte) error {
 	rts.Title = unmarshaled.Title
 
 	// Unmarshal wallet public key.
-	x, y := elliptic.Unmarshal(
-		tecdsa.Curve,
+	walletPublicKey, err := secp256k1.Unmarshal(
 		hexToSlice(unmarshaled.WalletPublicKey),
 	)
-	rts.WalletPublicKey = &ecdsa.PublicKey{
-		Curve: tecdsa.Curve,
-		X:     x,
-		Y:     y,
+	if err != nil {
+		return fmt.Errorf("cannot unmarshal wallet public key: [%w]", err)
 	}
+	rts.WalletPublicKey = walletPublicKey
 
 	// Unmarshal wallet private key.
 	rts.WalletPrivateKey = new(big.Int).SetBytes(
@@ -299,15 +295,13 @@ func (mfts *MovingFundsTestScenario) UnmarshalJSON(data []byte) error {
 	mfts.Title = unmarshaled.Title
 
 	// Unmarshal wallet public key.
-	x, y := elliptic.Unmarshal(
-		tecdsa.Curve,
+	walletPublicKey, err := secp256k1.Unmarshal(
 		hexToSlice(unmarshaled.WalletPublicKey),
 	)
-	mfts.WalletPublicKey = &ecdsa.PublicKey{
-		Curve: tecdsa.Curve,
-		X:     x,
-		Y:     y,
+	if err != nil {
+		return fmt.Errorf("cannot unmarshal wallet public key: [%w]", err)
 	}
+	mfts.WalletPublicKey = walletPublicKey
 
 	// Unmarshal wallet main UTXO.
 	mfts.WalletMainUtxo = unmarshaled.WalletMainUtxo.convert()
@@ -391,15 +385,13 @@ func (mfts *MovedFundsSweepTestScenario) UnmarshalJSON(data []byte) error {
 	mfts.Title = unmarshaled.Title
 
 	// Unmarshal wallet public key.
-	x, y := elliptic.Unmarshal(
-		tecdsa.Curve,
+	walletPublicKey, err := secp256k1.Unmarshal(
 		hexToSlice(unmarshaled.WalletPublicKey),
 	)
-	mfts.WalletPublicKey = &ecdsa.PublicKey{
-		Curve: tecdsa.Curve,
-		X:     x,
-		Y:     y,
+	if err != nil {
+		return fmt.Errorf("cannot unmarshal wallet public key: [%w]", err)
 	}
+	mfts.WalletPublicKey = walletPublicKey
 
 	// Unmarshal wallet main UTXO.
 	mfts.MovedFundsUtxo = unmarshaled.MovedFundsUtxo.convert()

@@ -1,5 +1,4 @@
 groups:
-  # TODO: Define some common rules to record: https://prometheus.io/docs/prometheus/latest/configuration/recording_rules/
   - name: keep-network-join-requests
     rules:
       # Fires only when an abnormal burst of inbound join-request failures

@@ -2,12 +2,12 @@ package tbtc
 
 import (
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"encoding/hex"
 	"fmt"
 	"sync"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
 
 	"github.com/keep-network/keep-common/pkg/persistence"
 )
@@ -373,11 +373,7 @@ func (ws *walletStorage) loadSigners() map[string][]*signer {
 // getWalletStorageKey compute the wallet storage key that is used to identify
 // the given wallet for caching and storage purposes.
 func getWalletStorageKey(walletPublicKey *ecdsa.PublicKey) string {
-	walletPublicKeyBytes := elliptic.Marshal(
-		walletPublicKey.Curve,
-		walletPublicKey.X,
-		walletPublicKey.Y,
-	)
+	walletPublicKeyBytes := secp256k1.Marshal(walletPublicKey)
 
 	// Strip the 04 prefix to limit the key length to 128 characters in order
 	// to make it usable as a directory name.

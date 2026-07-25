@@ -3,6 +3,7 @@ package clientinfo
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sync"
 	"time"
 
@@ -13,6 +14,28 @@ import (
 )
 
 var rpcHealthLogger = log.Logger("keep-rpc-health")
+
+// benignBtcHeaderErrorPattern matches the JSON-RPC error code -32602
+// ("invalid params") returned by some Electrum servers that reject the
+// `cp_height` parameter of `blockchain.block.header`. The condition is
+// known-benign: the endpoint is reachable and serving data
+// (GetLatestBlockHeight already succeeded in the same check), the server
+// just does not support that parameter. Such errors are counted and logged
+// at debug level instead of warning to avoid flooding logs on every
+// health-check tick.
+//
+// The underlying JSON-RPC error type is not exported by the Electrum client
+// library, so the code is matched against the library's serialized error
+// form (`errNo: %d, errMsg: %s`). The match is anchored to the `errNo`
+// field with token boundaries so adjacent codes (e.g. -326020) or the
+// digits appearing elsewhere in an unrelated message do not match.
+var benignBtcHeaderErrorPattern = regexp.MustCompile(`\berrNo: -32602\b`)
+
+// isKnownBenignBtcHeaderError returns true if the GetBlockHeader health-check
+// error is the known-benign JSON-RPC -32602 ("invalid params") response.
+func isKnownBenignBtcHeaderError(err error) bool {
+	return err != nil && benignBtcHeaderErrorPattern.MatchString(err.Error())
+}
 
 // RPCHealthChecker performs periodic health checks on Ethereum and Bitcoin RPC endpoints
 // by making actual RPC calls (not just ICMP ping) to verify the services are working.
@@ -33,7 +56,11 @@ type RPCHealthChecker struct {
 	btcLastSuccess  time.Time
 	btcLastError    error
 	btcLastDuration time.Duration // Last successful RPC call duration
-	btcMutex        sync.RWMutex
+	// Count of known-benign -32602 GetBlockHeader errors observed. Kept as
+	// a counter so the condition remains observable through metrics even
+	// though it is no longer logged at warning level.
+	btcBenignHeaderErrors float64
+	btcMutex              sync.RWMutex
 
 	// Configuration
 	checkInterval time.Duration
@@ -221,15 +248,29 @@ func (r *RPCHealthChecker) checkBitcoinHealth(ctx context.Context) {
 	_, err = r.btcChain.GetBlockHeader(latestHeight)
 	if err != nil {
 		headerErr := fmt.Errorf("failed to get block header for height %d: %w", latestHeight, err)
+		benign := isKnownBenignBtcHeaderError(err)
 		r.btcMutex.Lock()
 		r.btcLastCheck = startTime
 		r.btcLastError = headerErr
+		if benign {
+			r.btcBenignHeaderErrors++
+		}
 		r.btcMutex.Unlock()
-		rpcHealthLogger.Warnf(
-			"Bitcoin RPC health check failed (GetBlockHeader): [%v] (duration: %v)",
-			headerErr,
-			time.Since(startTime),
-		)
+		if benign {
+			rpcHealthLogger.Debugf(
+				"Bitcoin RPC health check failed (GetBlockHeader) with "+
+					"known-benign -32602 response (server does not support "+
+					"the cp_height parameter): [%v] (duration: %v)",
+				headerErr,
+				time.Since(startTime),
+			)
+		} else {
+			rpcHealthLogger.Warnf(
+				"Bitcoin RPC health check failed (GetBlockHeader): [%v] (duration: %v)",
+				headerErr,
+				time.Since(startTime),
+			)
+		}
 		return
 	}
 
@@ -267,6 +308,15 @@ func (r *RPCHealthChecker) GetBitcoinHealthStatus() (isHealthy bool, lastCheck t
 	return isHealthy, r.btcLastCheck, r.btcLastSuccess, r.btcLastError, r.btcLastDuration
 }
 
+// GetBitcoinBenignHeaderErrorCount returns the number of known-benign -32602
+// GetBlockHeader errors observed by the Bitcoin health check.
+func (r *RPCHealthChecker) GetBitcoinBenignHeaderErrorCount() float64 {
+	r.btcMutex.RLock()
+	defer r.btcMutex.RUnlock()
+
+	return r.btcBenignHeaderErrors
+}
+
 // registerMetrics registers metrics observers for RPC health status.
 func (r *RPCHealthChecker) registerMetrics() {
 	// Ethereum RPC response time
@@ -287,6 +337,17 @@ func (r *RPCHealthChecker) registerMetrics() {
 			"rpc_btc_response_time_seconds": func() float64 {
 				_, _, _, _, lastDuration := r.GetBitcoinHealthStatus()
 				return lastDuration.Seconds()
+			},
+		},
+	)
+
+	// Known-benign -32602 GetBlockHeader errors. Kept observable as a
+	// counter since they are no longer logged at warning level.
+	r.registry.ObserveApplicationSource(
+		"performance",
+		map[string]Source{
+			"rpc_btc_health_check_benign_errors_total": func() float64 {
+				return r.GetBitcoinBenignHeaderErrorCount()
 			},
 		},
 	)

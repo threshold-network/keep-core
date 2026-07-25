@@ -168,26 +168,6 @@ variable "gke_subnet" {
   }
 }
 
-variable "eth_tx_ropsten_loadbalancer_name" {
-  description = "The name for your ropsten tx node IP."
-  default     = "keep-dev-eth-tx-ropsten-loadbalancer-external-ip"
-}
-
-variable "eth_tx_ropsten_loadbalancer_address_type" {
-  description = "Internet facing or not. internal or external"
-  default     = "external"
-}
-
-variable "eth_miner_ropsten_loadbalancer_name" {
-  description = "The name for your ropsten miner IP."
-  default     = "keep-dev-eth-miner-ropsten-loadbalancer-external-ip"
-}
-
-variable "eth_miner_ropsten_loadbalancer_address_type" {
-  description = "Internet facing or not. internal or external"
-  default     = "external"
-}
-
 # gke_metrics
 variable "gke_metrics_namespace" {
   default = "metrics"

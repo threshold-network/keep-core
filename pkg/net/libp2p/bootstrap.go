@@ -70,8 +70,14 @@ func Bootstrap(
 	periodic := func(worker goprocess.Process) {
 		ctx := goprocessctx.OnClosingContext(worker)
 
+		// bootstrapRound returns an error only when the node ends the
+		// round connected to zero well-known peers (true isolation risk).
+		// The round already logged that outcome at warning level with the
+		// full unreachable/total ratio -- it is the single owner of the
+		// round summary log -- so the error is only traced here at debug
+		// level to avoid emitting a duplicate warning for the same round.
 		if err := bootstrapRound(ctx, host, cfg); err != nil {
-			logger.Warnf("bootstrap round error: [%v]", err)
+			logger.Debugf("well-known peers connection round error: [%v]", err)
 		}
 
 		<-doneWithRound
@@ -109,18 +115,21 @@ func bootstrapRound(
 	ctx, cancel := context.WithTimeout(ctx, cfg.ConnectionTimeout)
 	defer cancel()
 
-	logger.Debugf("starting bootstrap round")
+	logger.Debugf("starting well-known peers connection round")
 
-	// get bootstrap peers from config. retrieving them here makes
+	// get well-known peers from config. retrieving them here makes
 	// sure we remain observant of changes to client configuration.
 	peers := cfg.BootstrapPeers()
 
 	if len(peers) == 0 {
-		logger.Debugf("bootstrap round skipped; no bootstrap peers in config")
+		logger.Debugf(
+			"well-known peers connection round skipped; " +
+				"no well-known peers in config",
+		)
 		return nil
 	}
 
-	// filter out bootstrap nodes we are already connected to
+	// filter out well-known peers we are already connected to
 	var notConnected []peer.AddrInfo
 	for _, p := range peers {
 		if host.Network().Connectedness(p.ID) != network.Connected {
@@ -128,32 +137,66 @@ func bootstrapRound(
 		}
 	}
 
-	// if connected to all bootstrap peer candidates, exit
+	// if connected to all well-known peer candidates, exit
 	if len(notConnected) < 1 {
 		logger.Debugf(
-			"bootstrap round skipped; " +
-				"connected to all bootstrap peers from config",
+			"well-known peers connection round skipped; " +
+				"connected to all well-known peers from config",
 		)
 		return nil
 	}
 
-	logger.Debugf("bootstrapping to nodes: [%v]", notConnected)
+	logger.Debugf("connecting to well-known peers: [%v]", notConnected)
 
-	return bootstrapConnect(ctx, host, notConnected)
+	return bootstrapConnect(ctx, host, notConnected, peers)
 }
 
+// wellknownPeerDialFailure pairs a well-known peer with its dial error so
+// failure logs can be emitted after the round completes, once the node's
+// actual post-round connectivity is known.
+type wellknownPeerDialFailure struct {
+	peerID peer.ID
+	err    error
+}
+
+// connectedWellknownPeersCount returns the number of the given well-known
+// peers the host is currently connected to.
+func connectedWellknownPeersCount(ph host.Host, peers []peer.AddrInfo) int {
+	connectedCount := 0
+	for _, p := range peers {
+		if ph.Network().Connectedness(p.ID) == network.Connected {
+			connectedCount++
+		}
+	}
+	return connectedCount
+}
+
+// bootstrapConnect dials the given not-yet-connected well-known peers.
+// allPeers is the complete set of well-known peers from the config. Once
+// every dial attempt has finished -- even when none of them failed -- the
+// node's connectivity to the complete well-known peer set is queried live
+// and is the sole source of the round summary and its severity: the summary
+// reports how many of the configured well-known peers the node actually
+// ends the round not connected to, with dial failures logged only as
+// per-peer diagnostic details. WARN severity and a returned error are
+// reserved for a node that ends the round connected to zero well-known
+// peers (true isolation risk), while partial unreachability on an
+// otherwise-connected node is logged at info level. This function owns the
+// round summary log -- callers must not log the returned error above debug
+// level, or an isolated round would emit duplicate warnings.
 func bootstrapConnect(
 	ctx context.Context,
 	ph host.Host,
-	peers []peer.AddrInfo,
+	notConnected []peer.AddrInfo,
+	allPeers []peer.AddrInfo,
 ) error {
-	if len(peers) < 1 {
+	if len(notConnected) < 1 {
 		return ErrNotEnoughBootstrapPeers
 	}
 
-	errs := make(chan error, len(peers))
+	failures := make(chan wellknownPeerDialFailure, len(notConnected))
 	var wg sync.WaitGroup
-	for _, p := range peers {
+	for _, p := range notConnected {
 
 		// performed asynchronously because when performed synchronously, if
 		// one `Connect` call hangs, subsequent calls are more likely to
@@ -164,38 +207,80 @@ func bootstrapConnect(
 		go func(p peer.AddrInfo) {
 			defer wg.Done()
 
-			logger.Debugf("trying to establish connection with bootstrap peer [%v]", p.ID)
+			logger.Debugf("trying to establish connection with well-known peer [%v]", p.ID)
 
 			ph.Peerstore().AddAddrs(p.ID, p.Addrs, peerstore.PermanentAddrTTL)
 
 			if err := ph.Connect(ctx, p); err != nil {
-				logger.Warnf(
-					"could not establish connection with bootstrap peer [%v]: [%v]",
-					p.ID,
-					err,
-				)
-				errs <- err
+				failures <- wellknownPeerDialFailure{peerID: p.ID, err: err}
 				return
 			}
 
-			logger.Debugf("established connection with bootstrap peer [%v]", p.ID)
+			logger.Debugf("established connection with well-known peer [%v]", p.ID)
 		}(p)
 	}
 	wg.Wait()
 
-	// our failure condition is when no connection attempt succeeded.
-	// So drain the errs channel, counting the results.
-	close(errs)
-	count := 0
-	var err error
-	for err = range errs {
-		if err != nil {
-			count++
+	// drain the failures channel, collecting the failed connection attempts.
+	close(failures)
+	var dialFailures []wellknownPeerDialFailure
+	for failure := range failures {
+		dialFailures = append(dialFailures, failure)
+	}
+
+	// Connectivity is queried live over the complete well-known peer set
+	// after every dial batch -- including one with zero dial failures --
+	// instead of being derived from dial results and the pre-round snapshot:
+	// peers may have connected or dropped concurrently while dials were in
+	// flight, and only the node's actual post-round connectivity determines
+	// whether unreachable peers are routine churn or an isolation risk.
+	connectedCount := connectedWellknownPeersCount(ph, allPeers)
+	unreachableCount := len(allPeers) - connectedCount
+	isolated := connectedCount == 0
+
+	for _, failure := range dialFailures {
+		if isolated {
+			logger.Warnf(
+				"could not establish connection with well-known peer [%v]: [%v]",
+				failure.peerID,
+				failure.err,
+			)
+		} else {
+			logger.Debugf(
+				"could not establish connection with well-known peer [%v]: [%v]",
+				failure.peerID,
+				failure.err,
+			)
 		}
 	}
-	if count == len(peers) {
-		return fmt.Errorf("all bootstrap attempts failed")
+
+	if unreachableCount == 0 {
+		logger.Debugf(
+			"connected to all %d well-known peers from config",
+			len(allPeers),
+		)
+		return nil
 	}
+
+	if isolated {
+		summary := fmt.Sprintf(
+			"%d of %d well-known peers unreachable; "+
+				"node is not connected to any well-known peer",
+			unreachableCount,
+			len(allPeers),
+		)
+		logger.Warn(summary)
+		return errors.New(summary)
+	}
+
+	logger.Infof(
+		"%d of %d well-known peers unreachable; "+
+			"connected to %d well-known peer(s)",
+		unreachableCount,
+		len(allPeers),
+		connectedCount,
+	)
+
 	return nil
 }
 

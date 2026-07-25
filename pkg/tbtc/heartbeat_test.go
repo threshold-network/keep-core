@@ -59,7 +59,7 @@ func TestHeartbeatAction_HappyPath(t *testing.T) {
 		logger,
 		hostChain,
 		wallet{
-			publicKey: unmarshalPublicKey(walletPublicKeyHex),
+			publicKey: mustUnmarshalPublicKey(t, walletPublicKeyHex),
 		},
 		mockExecutor,
 		minimumActiveMembers,
@@ -140,7 +140,7 @@ func TestHeartbeatAction_OperatorUnstaking(t *testing.T) {
 		logger,
 		hostChain,
 		wallet{
-			publicKey: unmarshalPublicKey(walletPublicKeyHex),
+			publicKey: mustUnmarshalPublicKey(t, walletPublicKeyHex),
 		},
 		mockExecutor,
 		heartbeatSigningMinimumActiveMembers,
@@ -172,7 +172,7 @@ func TestHeartbeatAction_LegacyWalletUsesEcdsaStakeInDualStack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	walletPublicKey := unmarshalPublicKey(walletPublicKeyHex)
+	walletPublicKey := mustUnmarshalPublicKey(t, walletPublicKeyHex)
 
 	baseChain := Connect()
 	baseChain.setWallet(
@@ -226,7 +226,7 @@ func TestHeartbeatAction_FrostWalletUsesFrostStakeInDualStack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	walletPublicKey := unmarshalPublicKey(walletPublicKeyHex)
+	walletPublicKey := mustUnmarshalPublicKey(t, walletPublicKeyHex)
 
 	baseChain := Connect()
 	baseChain.setWallet(
@@ -346,7 +346,7 @@ func TestHeartbeatAction_Failure_SigningError(t *testing.T) {
 		logger,
 		hostChain,
 		wallet{
-			publicKey: unmarshalPublicKey(walletPublicKeyHex),
+			publicKey: mustUnmarshalPublicKey(t, walletPublicKeyHex),
 		},
 		mockExecutor,
 		heartbeatSigningMinimumActiveMembers,
@@ -428,7 +428,7 @@ func TestHeartbeatAction_Failure_TooFewActiveOperators(t *testing.T) {
 		logger,
 		hostChain,
 		wallet{
-			publicKey: unmarshalPublicKey(walletPublicKeyHex),
+			publicKey: mustUnmarshalPublicKey(t, walletPublicKeyHex),
 		},
 		mockExecutor,
 		minimumActiveMembers,
@@ -509,7 +509,7 @@ func TestHeartbeatAction_Failure_CounterExceeded(t *testing.T) {
 		logger,
 		hostChain,
 		wallet{
-			publicKey: unmarshalPublicKey(walletPublicKeyHex),
+			publicKey: mustUnmarshalPublicKey(t, walletPublicKeyHex),
 		},
 		mockExecutor,
 		heartbeatSigningMinimumActiveMembers,
@@ -591,7 +591,7 @@ func TestHeartbeatAction_Failure_InactivityExecutionFailure(t *testing.T) {
 		logger,
 		hostChain,
 		wallet{
-			publicKey: unmarshalPublicKey(walletPublicKeyHex),
+			publicKey: mustUnmarshalPublicKey(t, walletPublicKeyHex),
 		},
 		mockExecutor,
 		heartbeatSigningMinimumActiveMembers,

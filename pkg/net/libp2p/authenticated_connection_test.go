@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"reflect"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -13,6 +16,10 @@ import (
 	libp2pnetwork "github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 
+	"golang.org/x/time/rate"
+
+	"github.com/keep-network/keep-core/pkg/clientinfo"
+	"github.com/keep-network/keep-core/pkg/firewall"
 	keepNet "github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/net/gen/pb"
 	"github.com/keep-network/keep-core/pkg/net/security/handshake"
@@ -313,6 +320,439 @@ func createTestConnectionConfig(t *testing.T) *testConnectionConfig {
 // on one end should be matched with writes on the other).
 func newConnPair() (net.Conn, net.Conn) {
 	return net.Pipe()
+}
+
+// --- join failure reason classification tests ---
+
+func TestClassifyHandshakeFailure(t *testing.T) {
+	tests := map[string]struct {
+		err            error
+		expectedReason string
+	}{
+		"deadline exceeded": {
+			err:            fmt.Errorf("read failed: %w", os.ErrDeadlineExceeded),
+			expectedReason: clientinfo.JoinFailureReasonTimeout,
+		},
+		"net op error with deadline exceeded": {
+			err:            &net.OpError{Op: "read", Err: os.ErrDeadlineExceeded},
+			expectedReason: clientinfo.JoinFailureReasonTimeout,
+		},
+		"eof": {
+			err:            io.EOF,
+			expectedReason: clientinfo.JoinFailureReasonEOFReset,
+		},
+		"unexpected eof wrapped": {
+			err:            fmt.Errorf("receive failed: %w", io.ErrUnexpectedEOF),
+			expectedReason: clientinfo.JoinFailureReasonEOFReset,
+		},
+		"closed pipe": {
+			err:            fmt.Errorf("send failed: %w", io.ErrClosedPipe),
+			expectedReason: clientinfo.JoinFailureReasonEOFReset,
+		},
+		"closed network connection": {
+			err:            fmt.Errorf("read failed: %w", net.ErrClosed),
+			expectedReason: clientinfo.JoinFailureReasonEOFReset,
+		},
+		"connection reset by peer": {
+			err:            &net.OpError{Op: "read", Err: syscall.ECONNRESET},
+			expectedReason: clientinfo.JoinFailureReasonEOFReset,
+		},
+		"broken pipe": {
+			err:            &net.OpError{Op: "write", Err: syscall.EPIPE},
+			expectedReason: clientinfo.JoinFailureReasonEOFReset,
+		},
+		"signature verification failure": {
+			err:            fmt.Errorf("invalid signature [0xff] on message from sender"),
+			expectedReason: clientinfo.JoinFailureReasonProtocolCrypto,
+		},
+		"pinned identity mismatch": {
+			err:            fmt.Errorf("pinned identity does not match sender identity"),
+			expectedReason: clientinfo.JoinFailureReasonProtocolCrypto,
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			actualReason := classifyHandshakeFailure(test.err)
+			if actualReason != test.expectedReason {
+				t.Errorf(
+					"unexpected failure reason\nexpected: %s\nactual: %s",
+					test.expectedReason,
+					actualReason,
+				)
+			}
+		})
+	}
+}
+
+// --- join request metrics and failure log tests ---
+
+type fakeMetricsRecorder struct {
+	mutex    sync.Mutex
+	counters map[string]float64
+}
+
+func newFakeMetricsRecorder() *fakeMetricsRecorder {
+	return &fakeMetricsRecorder{
+		counters: make(map[string]float64),
+	}
+}
+
+func (f *fakeMetricsRecorder) IncrementCounter(name string, value float64) {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	f.counters[name] += value
+}
+
+func (f *fakeMetricsRecorder) RecordDuration(name string, duration time.Duration) {}
+
+func (f *fakeMetricsRecorder) counterValue(name string) float64 {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	return f.counters[name]
+}
+
+func (f *fakeMetricsRecorder) assertCounters(
+	t *testing.T,
+	expected map[string]float64,
+) {
+	t.Helper()
+	for name, expectedValue := range expected {
+		if actualValue := f.counterValue(name); actualValue != expectedValue {
+			t.Errorf(
+				"unexpected value of counter [%s]\nexpected: %v\nactual: %v",
+				name,
+				expectedValue,
+				actualValue,
+			)
+		}
+	}
+}
+
+// notRecognizedFirewall rejects every peer with the firewall's sentinel
+// non-recognition error.
+type notRecognizedFirewall struct{}
+
+func (f *notRecognizedFirewall) Validate(
+	remotePeerOperatorPublicKey *operator.PublicKey,
+) error {
+	return firewall.ErrNotRecognized
+}
+
+// erroringFirewall fails every validation with an application/RPC error.
+type erroringFirewall struct{}
+
+func (f *erroringFirewall) Validate(
+	remotePeerOperatorPublicKey *operator.PublicKey,
+) error {
+	return fmt.Errorf(
+		"could not validate if remote peer is recognized by application: " +
+			"[rpc timeout]",
+	)
+}
+
+func connectInitiatorAndResponderWithRecorder(
+	initiator *testConnectionConfig,
+	responder *testConnectionConfig,
+	firewall keepNet.Firewall,
+	recorder MetricsRecorder,
+) (inboundError error, outboundError error) {
+	initiatorConn, responderConn := newConnPair()
+
+	done := make(chan struct{})
+
+	go func() {
+		_, outboundError = newAuthenticatedOutboundConnection(
+			initiatorConn,
+			libp2pnetwork.ConnectionState{},
+			initiator.peerID,
+			initiator.networkPrivateKey,
+			responder.peerID,
+			firewall,
+			authProtocolID,
+			recorder,
+		)
+		done <- struct{}{}
+	}()
+
+	_, inboundError = newAuthenticatedInboundConnection(
+		responderConn,
+		libp2pnetwork.ConnectionState{},
+		responder.peerID,
+		responder.networkPrivateKey,
+		firewall,
+		authProtocolID,
+		recorder,
+	)
+
+	<-done // handshake is done
+
+	return
+}
+
+func TestInboundConnectionFirewallUnrecognizedReason(t *testing.T) {
+	initiator := createTestConnectionConfig(t)
+	responder := createTestConnectionConfig(t)
+
+	recorder := newFakeMetricsRecorder()
+
+	// Reset the shared package-level limiter so the throttled failure log
+	// lines below are emitted deterministically, independent of other tests
+	// that share the limiter.
+	connectionFailureLogLimiter = newConnectionFailureLogLimiter()
+
+	var inboundError error
+	entries := captureLogs(t, "keep-libp2p", func() {
+		inboundError, _ = connectInitiatorAndResponderWithRecorder(
+			initiator,
+			responder,
+			&notRecognizedFirewall{},
+			recorder,
+		)
+	})
+
+	if inboundError == nil {
+		t.Fatal("expected inbound connection to be rejected by the firewall")
+	}
+
+	recorder.assertCounters(t, map[string]float64{
+		clientinfo.MetricNetworkJoinRequestsTotal:        1,
+		clientinfo.MetricNetworkJoinRequestsFailedTotal:  1,
+		clientinfo.MetricNetworkJoinRequestsSuccessTotal: 0,
+		clientinfo.MetricFirewallRejectionsTotal:         1,
+		clientinfo.NetworkJoinFailureMetricName(
+			clientinfo.JoinFailureReasonFirewallUnrecognized,
+		): 1,
+		clientinfo.NetworkJoinFailureMetricName(
+			clientinfo.JoinFailureReasonFirewallRPCError,
+		): 0,
+	})
+
+	inboundLogs := countLogEntries(
+		entries,
+		"info",
+		"inbound connection rejected by firewall with reason "+
+			"[firewall_unrecognized]",
+	)
+	if inboundLogs != 1 {
+		t.Errorf(
+			"expected 1 inbound firewall rejection log entry, got %d",
+			inboundLogs,
+		)
+	}
+
+	outboundLogs := countLogEntries(
+		entries,
+		"info",
+		"outbound connection rejected by firewall with reason "+
+			"[firewall_unrecognized]",
+	)
+	if outboundLogs != 1 {
+		t.Errorf(
+			"expected 1 outbound firewall rejection log entry, got %d",
+			outboundLogs,
+		)
+	}
+}
+
+func TestInboundConnectionFirewallRPCErrorReason(t *testing.T) {
+	initiator := createTestConnectionConfig(t)
+	responder := createTestConnectionConfig(t)
+
+	recorder := newFakeMetricsRecorder()
+
+	inboundError, _ := connectInitiatorAndResponderWithRecorder(
+		initiator,
+		responder,
+		&erroringFirewall{},
+		recorder,
+	)
+
+	if inboundError == nil {
+		t.Fatal("expected inbound connection to be rejected by the firewall")
+	}
+
+	recorder.assertCounters(t, map[string]float64{
+		clientinfo.MetricNetworkJoinRequestsTotal:        1,
+		clientinfo.MetricNetworkJoinRequestsFailedTotal:  1,
+		clientinfo.MetricNetworkJoinRequestsSuccessTotal: 0,
+		clientinfo.MetricFirewallRejectionsTotal:         1,
+		clientinfo.NetworkJoinFailureMetricName(
+			clientinfo.JoinFailureReasonFirewallRPCError,
+		): 1,
+		clientinfo.NetworkJoinFailureMetricName(
+			clientinfo.JoinFailureReasonFirewallUnrecognized,
+		): 0,
+	})
+}
+
+func TestInboundConnectionHandshakeEOFReason(t *testing.T) {
+	responder := createTestConnectionConfig(t)
+
+	recorder := newFakeMetricsRecorder()
+
+	// Reset the shared package-level limiter so the throttled failure log
+	// line below is emitted deterministically, independent of other tests
+	// that share the limiter.
+	connectionFailureLogLimiter = newConnectionFailureLogLimiter()
+
+	initiatorConn, responderConn := newConnPair()
+
+	// The initiator drops the connection without sending anything, so the
+	// responder's handshake fails with a closed-connection error.
+	go func() {
+		_ = initiatorConn.Close()
+	}()
+
+	var inboundError error
+	entries := captureLogs(t, "keep-libp2p", func() {
+		_, inboundError = newAuthenticatedInboundConnection(
+			responderConn,
+			libp2pnetwork.ConnectionState{},
+			responder.peerID,
+			responder.networkPrivateKey,
+			newMockFirewall(),
+			authProtocolID,
+			recorder,
+		)
+	})
+
+	if inboundError == nil {
+		t.Fatal("expected inbound connection handshake to fail")
+	}
+
+	recorder.assertCounters(t, map[string]float64{
+		clientinfo.MetricNetworkJoinRequestsTotal:        1,
+		clientinfo.MetricNetworkJoinRequestsFailedTotal:  1,
+		clientinfo.MetricNetworkJoinRequestsSuccessTotal: 0,
+		clientinfo.MetricFirewallRejectionsTotal:         0,
+		clientinfo.NetworkJoinFailureMetricName(
+			clientinfo.JoinFailureReasonEOFReset,
+		): 1,
+	})
+
+	handshakeLogs := countLogEntries(
+		entries,
+		"info",
+		"inbound connection handshake failed with reason [eof_reset]",
+	)
+	if handshakeLogs != 1 {
+		t.Errorf(
+			"expected 1 inbound handshake failure log entry, got %d",
+			handshakeLogs,
+		)
+	}
+}
+
+// TestConnectionFailureLogThrottling verifies that the INFO-level
+// connection-failure log line is rate limited so a burst of failures from the
+// same source cannot flood the logs, while the per-reason failure metrics are
+// still incremented for every single failure.
+func TestConnectionFailureLogThrottling(t *testing.T) {
+	responder := createTestConnectionConfig(t)
+
+	// Install a strict limiter that admits only a small burst of log lines and
+	// does not refill within the test window, then restore the production
+	// limiter afterwards.
+	const allowedLogLines = 2
+	originalLimiter := connectionFailureLogLimiter
+	connectionFailureLogLimiter = rate.NewLimiter(rate.Every(time.Hour), allowedLogLines)
+	defer func() { connectionFailureLogLimiter = originalLimiter }()
+
+	recorder := newFakeMetricsRecorder()
+
+	const failureCount = 10
+
+	entries := captureLogs(t, "keep-libp2p", func() {
+		for i := 0; i < failureCount; i++ {
+			initiatorConn, responderConn := newConnPair()
+
+			// The initiator drops the connection without sending anything, so
+			// the responder's handshake fails with a closed-connection error.
+			go func() { _ = initiatorConn.Close() }()
+
+			_, inboundError := newAuthenticatedInboundConnection(
+				responderConn,
+				libp2pnetwork.ConnectionState{},
+				responder.peerID,
+				responder.networkPrivateKey,
+				newMockFirewall(),
+				authProtocolID,
+				recorder,
+			)
+			if inboundError == nil {
+				t.Fatalf(
+					"expected inbound handshake failure on attempt %d", i,
+				)
+			}
+		}
+	})
+
+	// The failure metrics are incremented once per failure regardless of
+	// whether the log line was emitted - throttling the log must not hide the
+	// observability signal.
+	recorder.assertCounters(t, map[string]float64{
+		clientinfo.MetricNetworkJoinRequestsTotal:       failureCount,
+		clientinfo.MetricNetworkJoinRequestsFailedTotal: failureCount,
+		clientinfo.NetworkJoinFailureMetricName(
+			clientinfo.JoinFailureReasonEOFReset,
+		): failureCount,
+	})
+
+	// The log line is throttled to the limiter's burst even though every one of
+	// the failures above was recorded in the metrics.
+	loggedLines := countLogEntries(
+		entries,
+		"info",
+		"inbound connection handshake failed with reason [eof_reset]",
+	)
+	if loggedLines != allowedLogLines {
+		t.Errorf(
+			"expected connection-failure log throttled to %d lines, got %d",
+			allowedLogLines,
+			loggedLines,
+		)
+	}
+}
+
+func TestInboundConnectionSuccessfulJoinCounters(t *testing.T) {
+	initiator := createTestConnectionConfig(t)
+	responder := createTestConnectionConfig(t)
+
+	firewall := newMockFirewall()
+	if err := firewall.updatePeer(initiator.networkPublicKey, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := firewall.updatePeer(responder.networkPublicKey, true); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := newFakeMetricsRecorder()
+
+	inboundError, outboundError := connectInitiatorAndResponderWithRecorder(
+		initiator,
+		responder,
+		firewall,
+		recorder,
+	)
+
+	if inboundError != nil {
+		t.Fatal(inboundError)
+	}
+	if outboundError != nil {
+		t.Fatal(outboundError)
+	}
+
+	expected := map[string]float64{
+		clientinfo.MetricNetworkJoinRequestsTotal:        1,
+		clientinfo.MetricNetworkJoinRequestsSuccessTotal: 1,
+		clientinfo.MetricNetworkJoinRequestsFailedTotal:  0,
+		clientinfo.MetricFirewallRejectionsTotal:         0,
+	}
+	for _, reason := range clientinfo.GetAllNetworkJoinFailureReasons() {
+		expected[clientinfo.NetworkJoinFailureMetricName(reason)] = 0
+	}
+	recorder.assertCounters(t, expected)
 }
 
 func newMockFirewall() *mockFirewall {

@@ -3,7 +3,6 @@ package tbtc
 import (
 	"bytes"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -18,6 +17,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/local_v1"
+	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
 	"github.com/keep-network/keep-core/pkg/internal/byteutils"
 	"github.com/keep-network/keep-core/pkg/operator"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
@@ -413,11 +413,7 @@ func (lc *localChain) AssembleDKGResult(
 	signatures map[group.MemberIndex][]byte,
 	groupSelectionResult *GroupSelectionResult,
 ) (*DKGChainResult, error) {
-	groupPublicKeyBytes := elliptic.Marshal(
-		groupPublicKey.Curve,
-		groupPublicKey.X,
-		groupPublicKey.Y,
-	)
+	groupPublicKeyBytes := secp256k1.Marshal(groupPublicKey)
 
 	signingMembersIndexes := make([]group.MemberIndex, 0)
 	signaturesConcatenation := make([]byte, 0)

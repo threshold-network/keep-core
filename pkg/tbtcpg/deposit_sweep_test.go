@@ -529,9 +529,10 @@ func TestDepositSweepTask_TaprootMarkerControlsFirstSweepFeeEstimation(t *testin
 		t.Fatal("Taproot marker was lost while building the deposit reference")
 	}
 
-	// With no main UTXO, the first-sweep P2TR shape is 111 vbytes and costs
-	// 2220 sats at 20 sat/vbyte. Including a nonexistent P2TR main-UTXO input
-	// would produce 169 vbytes and exceed the 2500-sat per-deposit maximum.
+	// With no main UTXO, the first-sweep P2TR shape is 111 vbytes. Its raw fee
+	// is 2220 sats at 20 sat/vbyte; the 25% safety buffer reaches 2775 sats and
+	// is bounded to the 2500-sat per-deposit maximum. Including a nonexistent
+	// P2TR main-UTXO input would make even the raw fee exceed that maximum.
 	expectedProposal := &tbtc.DepositSweepProposal{
 		DepositsKeys: []struct {
 			FundingTxHash      bitcoin.Hash
@@ -542,7 +543,7 @@ func TestDepositSweepTask_TaprootMarkerControlsFirstSweepFeeEstimation(t *testin
 				FundingOutputIndex: 0,
 			},
 		},
-		SweepTxFee:           big.NewInt(2220),
+		SweepTxFee:           big.NewInt(2500),
 		DepositsRevealBlocks: []*big.Int{big.NewInt(int64(revealBlock))},
 	}
 
@@ -585,9 +586,10 @@ func TestDepositSweepTask_TaprootMarkerControlsFirstSweepFeeEstimation(t *testin
 		t.Errorf("invalid Taproot deposit sweep proposal: %v", diff)
 	}
 
-	// An existing main UTXO adds a second P2TR input to the sweep. At 20
-	// sat/vbyte, the 169-vbyte transaction costs 3380 sats. This exercises the
-	// hasMainUtxo fee-estimation branch rather than just snapshot propagation.
+	// An existing main UTXO adds a second P2TR input to the sweep. Its raw fee is
+	// 3380 sats at 20 sat/vbyte; the buffered fee is bounded to the configured
+	// 4000-sat maximum. This exercises the hasMainUtxo fee-estimation branch
+	// rather than just snapshot propagation.
 	mainUtxoHash := [32]byte{0xaa, 0xbb, 0xcc}
 	tbtcChain.SetWallet(
 		walletPublicKeyHash,
@@ -596,7 +598,7 @@ func TestDepositSweepTask_TaprootMarkerControlsFirstSweepFeeEstimation(t *testin
 	tbtcChain.SetDepositParameters(0, 0, 4000, 0)
 	expectedEstimatedProposalWithMainUtxo := &tbtc.DepositSweepProposal{
 		DepositsKeys:         expectedProposal.DepositsKeys,
-		SweepTxFee:           big.NewInt(3380),
+		SweepTxFee:           big.NewInt(4000),
 		DepositsRevealBlocks: expectedProposal.DepositsRevealBlocks,
 		MainUtxoHash:         mainUtxoHash,
 	}

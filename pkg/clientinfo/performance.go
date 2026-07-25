@@ -145,7 +145,13 @@ func (pm *PerformanceMetrics) registerAllMetrics() {
 		MetricNetworkJoinRequestsSuccessTotal,
 		MetricNetworkJoinRequestsFailedTotal,
 		MetricFirewallRejectionsTotal,
+		MetricFirewallOnChainChecksTotal,
 		MetricWalletDispatcherRejectedTotal,
+	}
+
+	// Register per-reason network join failure counters
+	for _, reason := range GetAllNetworkJoinFailureReasons() {
+		counters = append(counters, NetworkJoinFailureMetricName(reason))
 	}
 
 	// First, initialize all counters in the map
@@ -714,6 +720,7 @@ const (
 	MetricNetworkJoinRequestsFailedTotal  = "network_join_requests_failed_total"  // Failed joins (handshake failure)
 	MetricNetworkHandshakeDurationSeconds = "network_handshake_duration_seconds"  // Handshake duration
 	MetricFirewallRejectionsTotal         = "firewall_rejections_total"           // Firewall rejections
+	MetricFirewallOnChainChecksTotal      = "firewall_onchain_checks_total"       // Live on-chain IsRecognized calls
 
 	// Wallet Dispatcher Metrics
 	MetricWalletDispatcherActiveActions = "wallet_dispatcher_active_actions"
@@ -728,11 +735,52 @@ const (
 	MetricSwapUtilizationPercent = "swap_utilization_percent"
 )
 
+// Network join request failure reasons. These are the low-cardinality
+// dimensions of MetricNetworkJoinRequestsFailedTotal, exposed as per-reason
+// counters generated with NetworkJoinFailureMetricName. They tell apart the
+// distinct causes that the aggregate failed-joins counter conflates.
+const (
+	// JoinFailureReasonTimeout is a handshake aborted by an I/O deadline.
+	JoinFailureReasonTimeout = "timeout"
+	// JoinFailureReasonEOFReset is a connection closed or reset mid-handshake.
+	JoinFailureReasonEOFReset = "eof_reset"
+	// JoinFailureReasonProtocolCrypto is a handshake protocol violation or a
+	// cryptographic failure (bad signature, key mismatch, malformed message).
+	JoinFailureReasonProtocolCrypto = "protocol_crypto"
+	// JoinFailureReasonFirewallUnrecognized is a peer rejected because no
+	// application recognizes its operator (including negative-cache hits).
+	JoinFailureReasonFirewallUnrecognized = "firewall_unrecognized"
+	// JoinFailureReasonFirewallRPCError is a firewall validation aborted by
+	// an application/RPC error rather than a genuine non-recognition.
+	JoinFailureReasonFirewallRPCError = "firewall_rpc_error"
+)
+
 // WalletActionMetricName generates a metric name for a specific wallet action type.
 // actionType should be the string representation of the action (e.g., "heartbeat", "deposit_sweep").
 // metricType should be one of: "total", "success_total", "failed_total", "duration_seconds"
 func WalletActionMetricName(actionType string, metricType string) string {
 	return fmt.Sprintf("wallet_action_%s_%s", actionType, metricType)
+}
+
+// NetworkJoinFailureMetricName generates the per-reason counter name for a
+// network join request failure. reason should be one of the
+// JoinFailureReason* constants.
+// Format: network_join_requests_failed_{reason}_total
+// Example: network_join_requests_failed_timeout_total
+func NetworkJoinFailureMetricName(reason string) string {
+	return fmt.Sprintf("network_join_requests_failed_%s_total", reason)
+}
+
+// GetAllNetworkJoinFailureReasons returns all network join request failure
+// reasons that should be tracked.
+func GetAllNetworkJoinFailureReasons() []string {
+	return []string{
+		JoinFailureReasonTimeout,
+		JoinFailureReasonEOFReset,
+		JoinFailureReasonProtocolCrypto,
+		JoinFailureReasonFirewallUnrecognized,
+		JoinFailureReasonFirewallRPCError,
+	}
 }
 
 // GetAllWalletActionTypes returns all wallet action types that should be tracked.

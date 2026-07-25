@@ -41,7 +41,7 @@ blockchain. The basic functioning of the relay is:
 == Prior Work
 
 Smart contracts for the first version of the random beacon are available in
-link:https://github.com/keep-network/keep-core/tree/main/solidity-v1[`solidity-v1` directory].
+link:https://github.com/threshold-network/keep-core-v1/tree/main/solidity[the `keep-core-v1` repository].
 The new version uses the same approach for BLS signatures as v1 but replaces
 ticket-based group selection with an optimistic sortition pool call. It also
 redesigns staker rewards and offers a more operator-friendly approach for

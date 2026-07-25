@@ -1,5 +1,5 @@
 /* eslint-disable no-underscore-dangle */
-import { ethers, helpers, waffle } from "hardhat"
+import { ethers, helpers } from "hardhat"
 import { expect } from "chai"
 
 import ecdsaData from "./data/ecdsa"
@@ -20,7 +20,7 @@ import type {
 import type { Operator, OperatorID } from "./utils/operators"
 
 const { createSnapshot, restoreSnapshot } = helpers.snapshot
-const { provider } = waffle
+const { provider } = ethers
 
 describe("WalletRegistry - Inactivity", () => {
   let walletRegistry: WalletRegistry

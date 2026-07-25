@@ -3,7 +3,6 @@ package dkg
 import (
 	"bytes"
 	"context"
-	"crypto/elliptic"
 	"encoding/hex"
 	"fmt"
 	"math/big"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/crypto/ephemeral"
+	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
@@ -1013,11 +1013,7 @@ func TestTssFinalize(t *testing.T) {
 
 		groupPublicKey := member.Result().PrivateKeyShare.PublicKey()
 
-		groupPublicKeyBytes := elliptic.Marshal(
-			groupPublicKey.Curve,
-			groupPublicKey.X,
-			groupPublicKey.Y,
-		)
+		groupPublicKeyBytes := secp256k1.Marshal(groupPublicKey)
 
 		groupPublicKeys[hex.EncodeToString(groupPublicKeyBytes)] = true
 	}

@@ -16,7 +16,7 @@ configMapGenerator:
       - config/tbtc-v2-guardian-0-keyfile
   - name: electrum-api-testnet
     literals:
-      - electrumx-url-wss=wss://electrumx-server.test.tbtc.network:8443
+      - electrumx-url-wss=wss://electrum.testnet.boar.network:443/QxbJgaSLUHqrgAa9BW7bDpnGPxrlhnCa
 
 secretGenerator:
   - name: tbtc-v2-maintainer-eth-accounts-password

@@ -6,16 +6,19 @@ import (
 	"encoding/hex"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 
 	fuzz "github.com/google/gofuzz"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/internal/pbutils"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
+	"github.com/keep-network/keep-core/pkg/tbtc/gen/pb"
 )
 
 func TestSignerMarshalling(t *testing.T) {
@@ -44,6 +47,34 @@ func TestSignerMarshalling_NonTECDSAKey(t *testing.T) {
 	_, err := signer.Marshal()
 
 	testutils.AssertErrorsSame(t, errIncompatiblePublicKey, err)
+}
+
+func TestSignerUnmarshalling_InvalidPublicKey(t *testing.T) {
+	marshaled, err := proto.Marshal(&pb.Signer{
+		Wallet: &pb.Wallet{PublicKey: []byte{0x04}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = (&signer{}).Unmarshal(marshaled)
+	if err == nil {
+		t.Fatal("expected an error for a malformed wallet public key")
+	}
+	if !strings.Contains(err.Error(), "cannot unmarshal wallet public key") {
+		t.Fatalf("unexpected error: [%v]", err)
+	}
+}
+
+func mustUnmarshalPublicKey(t *testing.T, bytes []byte) *ecdsa.PublicKey {
+	t.Helper()
+
+	publicKey, err := unmarshalPublicKey(bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return publicKey
 }
 
 func TestSigningDoneMessage_MarshalingRoundtrip(t *testing.T) {

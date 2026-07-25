@@ -69,3 +69,13 @@ out/
 data/
 logs/
 storage/
+.ralph/
+__pycache__/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+target/
+dist/
+.DS_Store

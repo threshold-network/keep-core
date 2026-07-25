@@ -42,25 +42,21 @@ type testConfig struct {
 	network      bitcoin.Network
 }
 
-// init propagates each test config's Bitcoin network into its Electrum
-// connection config. In production the network is injected during config
-// resolution; mirroring that here ensures the integration tests exercise the
-// same network-gated behavior (e.g. the low-fee estimate fallback) instead of
-// leaving Config.Network at its zero value (bitcoin.Unknown), which would
-// disable the fallback.
-func init() {
-	for key, tc := range testConfigs {
-		tc.clientConfig.Network = tc.network
-		testConfigs[key] = tc
-	}
-}
-
 // Servers details were taken from a public Electrum servers list published
 // at https://1209k.com/bitcoin-eye/ele.php?chain=tbtc.
+//
+// Every clientConfig must set Network explicitly, mirroring production config
+// resolution (config/electrum.go): the client gates network-dependent behavior
+// — e.g. the low-fee estimate fallback in EstimateSatPerVByteFee — on
+// Config.Network, and the zero value (bitcoin.Unknown) fails closed like
+// mainnet. Do not rely on post-registration propagation: an init-order bug
+// once left entries registered by a later init (the embedded servers) with an
+// unset Network.
 var testConfigs = map[string]testConfig{
 	"electrs-esplora tcp": {
 		clientConfig: electrum.Config{
 			URL:                 "tcp://electrum.blockstream.info:60001",
+			Network:             bitcoin.Testnet,
 			RequestTimeout:      requestTimeout * 2,
 			RequestRetryTimeout: requestRetryTimeout * 2,
 		},
@@ -69,6 +65,7 @@ var testConfigs = map[string]testConfig{
 	"electrs-esplora ssl": {
 		clientConfig: electrum.Config{
 			URL:                 "ssl://electrum.blockstream.info:60002",
+			Network:             bitcoin.Testnet,
 			RequestTimeout:      requestTimeout * 2,
 			RequestRetryTimeout: requestRetryTimeout * 2,
 		},
@@ -77,6 +74,7 @@ var testConfigs = map[string]testConfig{
 	"electrumx wss": {
 		clientConfig: electrum.Config{
 			URL:                 "wss://electrum.testnet.boar.network:443/QxbJgaSLUHqrgAa9BW7bDpnGPxrlhnCa",
+			Network:             bitcoin.Testnet,
 			RequestTimeout:      requestTimeout,
 			RequestRetryTimeout: requestRetryTimeout,
 		},
@@ -84,7 +82,8 @@ var testConfigs = map[string]testConfig{
 	},
 	"fulcrum tcp": {
 		clientConfig: electrum.Config{
-			URL:                 "tcp://blackie.c3-soft.com:57005",
+			URL:                 "tcp://testnet.aranguren.org:51001",
+			Network:             bitcoin.Testnet,
 			RequestTimeout:      requestTimeout * 2,
 			RequestRetryTimeout: requestRetryTimeout * 2,
 		},
@@ -111,9 +110,9 @@ func init() {
 			testConfigs[serverName] = testConfig{
 				clientConfig: electrum.Config{
 					URL:                 server,
+					Network:             network,
 					RequestTimeout:      requestTimeout,
 					RequestRetryTimeout: requestRetryTimeout,
-					Network:             network,
 				},
 				network: network,
 			}

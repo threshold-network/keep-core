@@ -283,7 +283,7 @@ func TestCoordinationExecutor_Coordinate(t *testing.T) {
 	operator3 := generateOperator(3)
 
 	coordinatedWallet := wallet{
-		publicKey: unmarshalPublicKey(publicKeyHex),
+		publicKey: mustUnmarshalPublicKey(t, publicKeyHex),
 		signingGroupOperators: []chain.Address{
 			operator2.address,
 			operator3.address,
@@ -460,7 +460,7 @@ func TestCoordinationExecutor_GetSeed(t *testing.T) {
 
 	coordinatedWallet := wallet{
 		// Set only relevant fields.
-		publicKey: unmarshalPublicKey(publicKeyHex),
+		publicKey: mustUnmarshalPublicKey(t, publicKeyHex),
 	}
 
 	executor := &coordinationExecutor{
@@ -951,7 +951,7 @@ func TestCoordinationExecutor_ExecuteLeaderRoutine(t *testing.T) {
 
 	coordinatedWallet := wallet{
 		// Set only relevant fields.
-		publicKey: unmarshalPublicKey(publicKeyHex),
+		publicKey: mustUnmarshalPublicKey(t, publicKeyHex),
 	}
 
 	// Deliberately use an unsorted list of members indexes to make sure the
@@ -1219,7 +1219,7 @@ func TestCoordinationExecutor_ExecuteFollowerRoutine(t *testing.T) {
 	follower2 := generateOperator()
 
 	coordinatedWallet := wallet{
-		publicKey: unmarshalPublicKey(publicKeyHex),
+		publicKey: mustUnmarshalPublicKey(t, publicKeyHex),
 		signingGroupOperators: []chain.Address{
 			follower1.address,
 			follower2.address,
@@ -1455,7 +1455,7 @@ func TestCoordinationExecutor_ExecuteFollowerRoutine_WithIdleLeader(t *testing.T
 	follower2 := generateOperator()
 
 	coordinatedWallet := wallet{
-		publicKey: unmarshalPublicKey(publicKeyHex),
+		publicKey: mustUnmarshalPublicKey(t, publicKeyHex),
 		signingGroupOperators: []chain.Address{
 			follower1,
 			follower2,

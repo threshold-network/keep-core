@@ -2,7 +2,6 @@ package tbtc
 
 import (
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"fmt"
 	"math"
 	"math/big"
@@ -12,6 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
 	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 	"github.com/keep-network/keep-core/pkg/tbtc/gen/pb"
@@ -65,7 +65,10 @@ func (s *signer) Unmarshal(bytes []byte) error {
 		return fmt.Errorf("cannot unmarshal signer: [%w]", err)
 	}
 
-	walletPublicKey := unmarshalPublicKey(pbSigner.Wallet.PublicKey)
+	walletPublicKey, err := unmarshalPublicKey(pbSigner.Wallet.PublicKey)
+	if err != nil {
+		return fmt.Errorf("cannot unmarshal wallet public key: [%w]", err)
+	}
 
 	walletSigningGroupOperators := make(
 		[]chain.Address,
@@ -485,26 +488,13 @@ func marshalPublicKey(publicKey *ecdsa.PublicKey) ([]byte, error) {
 		return nil, errIncompatiblePublicKey
 	}
 
-	return elliptic.Marshal(
-		publicKey.Curve,
-		publicKey.X,
-		publicKey.Y,
-	), nil
+	return secp256k1.Marshal(publicKey), nil
 }
 
 // unmarshalPublicKey converts a byte array (uncompressed) to an ECDSA
 // public key.
-func unmarshalPublicKey(bytes []byte) *ecdsa.PublicKey {
-	x, y := elliptic.Unmarshal(
-		tecdsa.Curve,
-		bytes,
-	)
-
-	return &ecdsa.PublicKey{
-		Curve: tecdsa.Curve,
-		X:     x,
-		Y:     y,
-	}
+func unmarshalPublicKey(bytes []byte) (*ecdsa.PublicKey, error) {
+	return secp256k1.Unmarshal(bytes)
 }
 
 func validateMemberIndex(protoIndex uint32) error {

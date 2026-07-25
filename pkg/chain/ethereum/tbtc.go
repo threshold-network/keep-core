@@ -3,7 +3,6 @@ package ethereum
 import (
 	"context"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -31,6 +30,7 @@ import (
 	frostvalidatorabi "github.com/keep-network/keep-core/pkg/chain/ethereum/frost/gen/validatorabi"
 	tbtcabi "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
 	tbtccontract "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/contract"
+	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
 	"github.com/keep-network/keep-core/pkg/internal/byteutils"
 	"github.com/keep-network/keep-core/pkg/operator"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
@@ -1295,11 +1295,7 @@ func (tc *TbtcChain) CalculateDKGResultSignatureHash(
 	misbehavedMembersIndexes []group.MemberIndex,
 	startBlock uint64,
 ) (dkg.ResultSignatureHash, error) {
-	groupPublicKeyBytes := elliptic.Marshal(
-		groupPublicKey.Curve,
-		groupPublicKey.X,
-		groupPublicKey.Y,
-	)
+	groupPublicKeyBytes := secp256k1.Marshal(groupPublicKey)
 	// Crop the 04 prefix as the calculateDKGResultSignatureHash function
 	// expects an unprefixed 64-byte public key,
 	unprefixedGroupPublicKeyBytes := groupPublicKeyBytes[1:]
@@ -1537,11 +1533,7 @@ func (tc *TbtcChain) SubmitInactivityClaim(
 func (tc *TbtcChain) CalculateInactivityClaimHash(
 	claim *inactivity.ClaimPreimage,
 ) (inactivity.ClaimHash, error) {
-	walletPublicKeyBytes := elliptic.Marshal(
-		claim.WalletPublicKey.Curve,
-		claim.WalletPublicKey.X,
-		claim.WalletPublicKey.Y,
-	)
+	walletPublicKeyBytes := secp256k1.Marshal(claim.WalletPublicKey)
 	// Crop the 04 prefix as the calculateInactivityClaimHash function expects
 	// an unprefixed 64-byte public key,
 	unprefixedGroupPublicKeyBytes := walletPublicKeyBytes[1:]

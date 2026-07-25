@@ -208,8 +208,8 @@ func parseDepositSweepTransactionInputs(
 				depositAlreadyProcessed = true
 			}
 		} else {
-			// The type of the input is neither P2PKH, P2WPKH, P2SH or P2WSH.
-			// Report an error.
+			// The input is neither a recognized direct wallet UTXO nor a
+			// registered deposit. Report an error.
 			return bitcoin.UnspentTransactionOutput{}, common.Address{}, fmt.Errorf(
 				"deposit sweep transaction has incorrect input types",
 			)

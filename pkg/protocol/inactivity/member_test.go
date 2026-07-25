@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"encoding/hex"
 	"fmt"
 	"math/big"
@@ -14,9 +13,9 @@ import (
 	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/local_v1"
+	"github.com/keep-network/keep-core/pkg/crypto/secp256k1"
 	"github.com/keep-network/keep-core/pkg/operator"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
-	"github.com/keep-network/keep-core/pkg/tecdsa"
 )
 
 func TestShouldAcceptMessage(t *testing.T) {
@@ -558,14 +557,10 @@ func (mrs *mockClaimSubmitter) SubmitClaim(
 }
 
 func unmarshalPublicKey(bytes []byte) *ecdsa.PublicKey {
-	x, y := elliptic.Unmarshal(
-		tecdsa.Curve,
-		bytes,
-	)
-
-	return &ecdsa.PublicKey{
-		Curve: tecdsa.Curve,
-		X:     x,
-		Y:     y,
+	publicKey, err := secp256k1.Unmarshal(bytes)
+	if err != nil {
+		panic(err)
 	}
+
+	return publicKey
 }
