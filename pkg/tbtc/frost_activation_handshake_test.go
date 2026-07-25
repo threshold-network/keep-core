@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -404,6 +405,59 @@ func TestCanonicalFrostActivationValue_MatchesRuntimeOrdering(t *testing.T) {
 	expected := `{"kind":"frost-signer","nonce":"0x01","state":{"count":3,"healthy":true}}`
 	if string(encoded) != expected {
 		t.Fatalf("unexpected canonical JSON\nexpected: %s\nactual:   %s", expected, encoded)
+	}
+}
+
+func TestDecodeStrictFrostActivationJSON_RejectsAmbiguousObjectKeys(
+	t *testing.T,
+) {
+	type nested struct {
+		Count uint64 `json:"count"`
+	}
+	type payload struct {
+		Schema string `json:"schema"`
+		Nested nested `json:"nested"`
+	}
+	testCases := map[string]string{
+		"duplicate exact key":          `{"schema":"v1","schema":"v2","nested":{"count":1}}`,
+		"case-insensitive field alias": `{"Schema":"v1","nested":{"count":1}}`,
+		"case-fold-equivalent keys":    `{"schema":"v1","SCHEMA":"v2","nested":{"count":1}}`,
+		"nested duplicate key":         `{"schema":"v1","nested":{"count":1,"count":2}}`,
+		"nested field alias":           `{"schema":"v1","nested":{"Count":1}}`,
+		"non-ASCII field alias":        `{"ſchema":"v1","nested":{"count":1}}`,
+	}
+	for name, encoded := range testCases {
+		t.Run(name, func(t *testing.T) {
+			target := payload{}
+			if err := decodeStrictFrostActivationJSON(
+				[]byte(encoded),
+				&target,
+			); err == nil {
+				t.Fatal("expected ambiguous JSON to be rejected")
+			}
+		})
+	}
+
+	target := payload{}
+	if err := decodeStrictFrostActivationJSON(
+		[]byte(`{"schema":"v1","nested":{"count":1}}`),
+		&target,
+	); err != nil {
+		t.Fatalf("expected exact JSON keys to remain valid: [%v]", err)
+	}
+	if target.Schema != "v1" || target.Nested.Count != 1 {
+		t.Fatalf("unexpected exact JSON decode: [%+v]", target)
+	}
+}
+
+func TestCanonicalFrostActivationValue_RejectsDuplicateRawMessageKeys(
+	t *testing.T,
+) {
+	_, err := canonicalFrostActivationValue(
+		json.RawMessage(`{"schema":"v1","schema":"v2"}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "duplicate key") {
+		t.Fatalf("expected duplicate raw-message key rejection, got [%v]", err)
 	}
 }
 

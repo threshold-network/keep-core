@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	frostabi "github.com/keep-network/keep-core/pkg/chain/ethereum/frost/gen/abi"
 	bridgeabi "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
+	frostregistry "github.com/keep-network/keep-core/pkg/frost/registry"
 )
 
 // FrostRetainedGroupActivationEvidenceBinder binds a retained-group history
@@ -42,7 +43,6 @@ type frostRetainedGroupEvidenceProfile struct {
 	sortitionPool     frostRetainedGroupContractPin
 	bridgeABI         ethabi.ABI
 	registryABI       ethabi.ABI
-	membersArguments  ethabi.Arguments
 }
 
 type frostRetainedGroupReceiptCache map[common.Hash]*types.Receipt
@@ -82,10 +82,6 @@ func (source *signedFrostRetainedGroupHistorySource) BindFrostRetainedGroupActiv
 	if err != nil {
 		return fmt.Errorf("cannot parse pinned FROST registry ABI: [%w]", err)
 	}
-	membersType, err := ethabi.NewType("uint32[]", "", nil)
-	if err != nil {
-		return fmt.Errorf("cannot construct pinned DKG members descriptor: [%w]", err)
-	}
 	evidence := &frostRetainedGroupEvidenceProfile{
 		manifestHash:      manifestHash,
 		descriptorSetHash: descriptorSetHash,
@@ -101,9 +97,8 @@ func (source *signedFrostRetainedGroupHistorySource) BindFrostRetainedGroupActiv
 			address:  common.Address(profile.SortitionPool),
 			codeHash: common.Hash(profile.SortitionPoolCodeHash),
 		},
-		bridgeABI:        parsedBridgeABI,
-		registryABI:      parsedRegistryABI,
-		membersArguments: ethabi.Arguments{{Type: membersType}},
+		bridgeABI:   parsedBridgeABI,
+		registryABI: parsedRegistryABI,
 	}
 	for name, event := range map[string]struct {
 		contract *ethabi.ABI
@@ -269,14 +264,38 @@ func (source *signedFrostRetainedGroupHistorySource) verifyAdmissionEvidence(
 	if err != nil {
 		return err
 	}
-	if resultHash != mutation.DkgResultHash || result.XOnlyOutputKey != mutation.WalletID ||
-		result.MembersHash != mutation.RetainedGroupHash ||
-		!frostRetainedGroupEqualOperatorIDs(result.Members, mutation.OperatorIDs) {
-		return fmt.Errorf("DKG submission does not encode the exported admission")
+	fullMembers := frostregistry.FullMembers(result.Members)
+	misbehaved := frostregistry.MisbehavedMemberIndices(
+		result.MisbehavedMembersIndices,
+	)
+	activeMembers, err := frostregistry.ActiveMembersFromMisbehaved(
+		fullMembers,
+		misbehaved,
+	)
+	if err != nil {
+		return fmt.Errorf("DKG submission has invalid misbehaved member indices: [%w]", err)
 	}
-	encodedMembers, err := evidence.membersArguments.Pack(result.Members)
-	if err != nil || crypto.Keccak256Hash(encodedMembers) != common.Hash(result.MembersHash) {
-		return fmt.Errorf("DKG members hash does not commit to the exact ordered member IDs")
+	if len(fullMembers) > 100 {
+		return fmt.Errorf("DKG submission exceeds the supported group size")
+	}
+	for _, operatorID := range fullMembers {
+		if operatorID == 0 {
+			return fmt.Errorf("DKG submission contains a zero operator ID")
+		}
+	}
+	activeMembersHash, err := frostregistry.ActiveMembersHash(activeMembers)
+	if err != nil {
+		return fmt.Errorf("cannot hash active DKG members: [%w]", err)
+	}
+	if resultHash != mutation.DkgResultHash ||
+		result.XOnlyOutputKey != mutation.WalletID ||
+		result.MembersHash != mutation.RetainedGroupHash ||
+		result.MembersHash != activeMembersHash ||
+		!frostRetainedGroupEqualOperatorIDs(
+			[]uint32(activeMembers),
+			mutation.OperatorIDs,
+		) {
+		return fmt.Errorf("DKG submission does not encode the exported admission")
 	}
 
 	approvalLog, err := source.authenticatedEventLog(
@@ -382,6 +401,9 @@ func (source *signedFrostRetainedGroupHistorySource) authenticatedEventLog(
 	transactionHash := common.Hash(point.TransactionHash)
 	receipt, ok := receipts[transactionHash]
 	if !ok {
+		if len(receipts) >= frostRetainedGroupMaximumEvidenceReceipts {
+			return nil, fmt.Errorf("retained-group evidence exceeds the receipt limit")
+		}
 		var err error
 		receipt, err = source.verifier.TransactionReceipt(ctx, transactionHash)
 		if err != nil {
@@ -391,6 +413,9 @@ func (source *signedFrostRetainedGroupHistorySource) authenticatedEventLog(
 			return nil, fmt.Errorf("transaction receipt [%s] is missing", transactionHash.Hex())
 		}
 		receipts[transactionHash] = receipt
+	}
+	if len(receipt.Logs) > frostRetainedGroupMaximumReceiptLogs {
+		return nil, fmt.Errorf("transaction receipt exceeds the retained-group log limit")
 	}
 	if receipt.Status != types.ReceiptStatusSuccessful || receipt.BlockNumber == nil ||
 		!receipt.BlockNumber.IsUint64() || receipt.BlockNumber.Uint64() != point.BlockNumber ||
@@ -427,11 +452,15 @@ func (source *signedFrostRetainedGroupHistorySource) authenticateContractCode(
 	if _, ok := cache[key]; ok {
 		return nil
 	}
+	if len(cache) >= frostRetainedGroupMaximumEvidenceCodePoints {
+		return fmt.Errorf("retained-group evidence exceeds the contract-code point limit")
+	}
 	code, err := source.verifier.CodeAt(ctx, pin.address, new(big.Int).SetUint64(blockNumber))
 	if err != nil {
 		return fmt.Errorf("cannot read pinned contract code at block [%d]: [%w]", blockNumber, err)
 	}
-	if len(code) == 0 || crypto.Keccak256Hash(code) != pin.codeHash {
+	if len(code) == 0 || len(code) > frostRetainedGroupMaximumContractCodeBytes ||
+		crypto.Keccak256Hash(code) != pin.codeHash {
 		return fmt.Errorf("contract code at block [%d] differs from the signed activation manifest", blockNumber)
 	}
 	cache[key] = struct{}{}

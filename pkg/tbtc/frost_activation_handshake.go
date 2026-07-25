@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -618,6 +619,21 @@ func frostActivationHandshakeSignatureTranscript(
 }
 
 func decodeStrictFrostActivationJSON(data []byte, target interface{}) error {
+	if err := validateUniqueFrostActivationJSONKeys(data); err != nil {
+		return err
+	}
+	var decoded interface{}
+	shapeDecoder := json.NewDecoder(bytes.NewReader(data))
+	shapeDecoder.UseNumber()
+	if err := shapeDecoder.Decode(&decoded); err != nil {
+		return err
+	}
+	if err := validateExactFrostActivationJSONShape(
+		decoded,
+		reflect.TypeOf(target),
+	); err != nil {
+		return err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	decoder.UseNumber()
@@ -630,9 +646,197 @@ func decodeStrictFrostActivationJSON(data []byte, target interface{}) error {
 	return nil
 }
 
+func validateUniqueFrostActivationJSONKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var readValue func() error
+	readValue = func() error {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		delimiter, isDelimiter := token.(json.Delim)
+		if !isDelimiter {
+			return nil
+		}
+		switch delimiter {
+		case '{':
+			keys := make(map[string]struct{})
+			foldedKeys := make(map[string]string)
+			for decoder.More() {
+				keyToken, err := decoder.Token()
+				if err != nil {
+					return err
+				}
+				key, ok := keyToken.(string)
+				if !ok {
+					return fmt.Errorf("JSON object key is not a string")
+				}
+				for _, character := range key {
+					if character < 0x20 || character > 0x7e {
+						return fmt.Errorf(
+							"JSON object key [%s] is not printable ASCII",
+							key,
+						)
+					}
+				}
+				if _, exists := keys[key]; exists {
+					return fmt.Errorf("JSON object contains duplicate key [%s]", key)
+				}
+				folded := strings.ToLower(key)
+				if existing, exists := foldedKeys[folded]; exists {
+					return fmt.Errorf(
+						"JSON object contains case-fold-equivalent keys [%s] and [%s]",
+						existing,
+						key,
+					)
+				}
+				keys[key] = struct{}{}
+				foldedKeys[folded] = key
+				if err := readValue(); err != nil {
+					return err
+				}
+			}
+			closing, err := decoder.Token()
+			if err != nil || closing != json.Delim('}') {
+				return fmt.Errorf("JSON object is not closed")
+			}
+		case '[':
+			for decoder.More() {
+				if err := readValue(); err != nil {
+					return err
+				}
+			}
+			closing, err := decoder.Token()
+			if err != nil || closing != json.Delim(']') {
+				return fmt.Errorf("JSON array is not closed")
+			}
+		default:
+			return fmt.Errorf("unexpected JSON delimiter [%s]", delimiter)
+		}
+		return nil
+	}
+	if err := readValue(); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("JSON contains trailing data")
+		}
+		return err
+	}
+	return nil
+}
+
+func validateExactFrostActivationJSONShape(
+	value interface{},
+	targetType reflect.Type,
+) error {
+	if targetType == nil {
+		return fmt.Errorf("JSON target type is nil")
+	}
+	for targetType.Kind() == reflect.Pointer {
+		targetType = targetType.Elem()
+	}
+	rawMessageType := reflect.TypeOf(json.RawMessage{})
+	jsonUnmarshalerType := reflect.TypeOf((*json.Unmarshaler)(nil)).Elem()
+	if targetType == rawMessageType || targetType.Kind() == reflect.Interface {
+		return nil
+	}
+	if targetType.Implements(jsonUnmarshalerType) ||
+		reflect.PointerTo(targetType).Implements(jsonUnmarshalerType) {
+		return fmt.Errorf("custom JSON unmarshal targets are not supported")
+	}
+	if value == nil {
+		return nil
+	}
+	if targetType.Kind() == reflect.Struct {
+		object, ok := value.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		fields := make(map[string]reflect.Type)
+		for index := 0; index < targetType.NumField(); index++ {
+			field := targetType.Field(index)
+			if field.PkgPath != "" {
+				continue
+			}
+			tag := field.Tag.Get("json")
+			name := strings.Split(tag, ",")[0]
+			if name == "-" {
+				continue
+			}
+			if name == "" {
+				name = field.Name
+			}
+			fields[name] = field.Type
+		}
+		for key, item := range object {
+			fieldType, ok := fields[key]
+			if !ok {
+				return fmt.Errorf("JSON object contains non-exact or unknown key [%s]", key)
+			}
+			if err := validateExactFrostActivationJSONShape(item, fieldType); err != nil {
+				return fmt.Errorf("JSON key [%s]: [%w]", key, err)
+			}
+		}
+		return nil
+	}
+	if targetType.Kind() == reflect.Slice || targetType.Kind() == reflect.Array {
+		if targetType.Kind() == reflect.Slice &&
+			targetType.Elem().Kind() == reflect.Uint8 {
+			return nil
+		}
+		items, ok := value.([]interface{})
+		if !ok {
+			return nil
+		}
+		for index, item := range items {
+			if err := validateExactFrostActivationJSONShape(
+				item,
+				targetType.Elem(),
+			); err != nil {
+				return fmt.Errorf("JSON array item [%d]: [%w]", index, err)
+			}
+		}
+		return nil
+	}
+	if targetType.Kind() == reflect.Map {
+		object, ok := value.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		for key, item := range object {
+			if err := validateExactFrostActivationJSONShape(
+				item,
+				targetType.Elem(),
+			); err != nil {
+				return fmt.Errorf("JSON map key [%s]: [%w]", key, err)
+			}
+		}
+	}
+	return nil
+}
+
 func canonicalFrostActivationValue(value interface{}) ([]byte, error) {
+	if raw, ok := value.(json.RawMessage); ok {
+		return canonicalFrostActivationJSON(raw)
+	}
+	if raw, ok := value.(*json.RawMessage); ok {
+		if raw == nil {
+			return nil, fmt.Errorf("canonical JSON raw message is nil")
+		}
+		return canonicalFrostActivationJSON(*raw)
+	}
 	encoded, err := json.Marshal(value)
 	if err != nil {
+		return nil, err
+	}
+	return canonicalFrostActivationJSON(encoded)
+}
+
+func canonicalFrostActivationJSON(encoded []byte) ([]byte, error) {
+	if err := validateUniqueFrostActivationJSONKeys(encoded); err != nil {
 		return nil, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
@@ -640,6 +844,9 @@ func canonicalFrostActivationValue(value interface{}) ([]byte, error) {
 	var decoded interface{}
 	if err := decoder.Decode(&decoded); err != nil {
 		return nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("JSON contains trailing data")
 	}
 	buffer := bytes.NewBuffer(nil)
 	if err := writeCanonicalFrostActivationJSON(buffer, decoded); err != nil {

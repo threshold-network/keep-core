@@ -24,10 +24,10 @@ import (
 )
 
 const (
-	frostRetainedGroupJournalMetadataSchema = "tbtc-frost-retained-group-journal-metadata/v1"
-	frostRetainedGroupJournalBatchSchema    = "tbtc-frost-retained-group-journal-batch/v1"
-	frostRetainedGroupJournalStateSchema    = "tbtc-frost-retained-group-journal-state/v1"
-	frostRetainedGroupJournalSnapshotSchema = "tbtc-frost-retained-group-journal-snapshot/v1"
+	frostRetainedGroupJournalMetadataSchema = "tbtc-frost-retained-group-journal-metadata/v2"
+	frostRetainedGroupJournalBatchSchema    = "tbtc-frost-retained-group-journal-batch/v2"
+	frostRetainedGroupJournalStateSchema    = "tbtc-frost-retained-group-journal-state/v2"
+	frostRetainedGroupJournalSnapshotSchema = "tbtc-frost-retained-group-journal-snapshot/v2"
 	frostRetainedGroupJournalLockFile       = ".lock"
 	frostRetainedGroupJournalMetadataFile   = "metadata.json"
 	frostRetainedGroupJournalStateFile      = "state.json"
@@ -38,17 +38,24 @@ const (
 	frostRetainedGroupCanonicalDirectory    = "canonical"
 	frostRetainedGroupQuarantineDirectory   = "quarantine"
 
-	frostRetainedGroupQuarantineMetadataSchema = "tbtc-frost-retained-group-quarantine-metadata/v1"
-	frostRetainedGroupQuarantineBatchSchema    = "tbtc-frost-retained-group-quarantine-batch/v1"
-	frostRetainedGroupQuarantineStateSchema    = "tbtc-frost-retained-group-quarantine-state/v1"
+	frostRetainedGroupQuarantineMetadataSchema = "tbtc-frost-retained-group-quarantine-metadata/v2"
+	frostRetainedGroupQuarantineBatchSchema    = "tbtc-frost-retained-group-quarantine-batch/v2"
+	frostRetainedGroupQuarantineStateSchema    = "tbtc-frost-retained-group-quarantine-state/v2"
+
+	frostRetainedGroupJournalMetadataSchemaV1 = "tbtc-frost-retained-group-journal-metadata/v1"
+	frostRetainedGroupJournalBatchSchemaV1    = "tbtc-frost-retained-group-journal-batch/v1"
+	frostRetainedGroupJournalStateSchemaV1    = "tbtc-frost-retained-group-journal-state/v1"
+	frostRetainedGroupQuarantineMetadataV1    = "tbtc-frost-retained-group-quarantine-metadata/v1"
+	frostRetainedGroupQuarantineBatchV1       = "tbtc-frost-retained-group-quarantine-batch/v1"
+	frostRetainedGroupQuarantineStateV1       = "tbtc-frost-retained-group-quarantine-state/v1"
 
 	frostRetainedGroupInventoryEntriesDomain = "tbtc-p2tr-frost-wallet-group-inventory-entries-v1\x00"
 	frostRetainedGroupInventoryLeafDomain    = "tbtc-p2tr-frost-wallet-group-inventory-leaf-v1\x00"
 	frostRetainedGroupInventoryNodeDomain    = "tbtc-p2tr-frost-wallet-group-inventory-node-v1\x00"
 	frostRetainedGroupInventoryRootDomain    = "tbtc-p2tr-frost-wallet-group-inventory-root-v1\x00"
-	frostRetainedGroupBatchDomain            = "tbtc-frost-retained-group-journal-batch-v1\x00"
-	frostRetainedGroupQuarantineBatchDomain  = "tbtc-frost-retained-group-quarantine-batch-v1\x00"
-	frostRetainedGroupQuarantineDomain       = "tbtc-frost-retained-group-quarantine-v1\x00"
+	frostRetainedGroupBatchDomain            = "tbtc-frost-retained-group-journal-batch-v2\x00"
+	frostRetainedGroupQuarantineBatchDomain  = "tbtc-frost-retained-group-quarantine-batch-v2\x00"
+	frostRetainedGroupQuarantineDomain       = "tbtc-frost-retained-group-quarantine-v2\x00"
 )
 
 // FrostRetainedGroupEventPoint identifies one canonical Ethereum log. The
@@ -553,6 +560,9 @@ func (frgj *frostRetainedGroupJournal) initialize() error {
 		if err := frgj.readEnvelope(frostRetainedGroupJournalMetadataFile, &stored); err != nil {
 			return fmt.Errorf("cannot read FROST retained-group journal metadata: [%w]", err)
 		}
+		if stored.Schema == frostRetainedGroupJournalMetadataSchemaV1 {
+			return frostRetainedGroupLegacySchemaError("canonical metadata")
+		}
 		if stored != frgj.metadata {
 			return fmt.Errorf("FROST retained-group journal metadata differs from signed manifest")
 		}
@@ -579,6 +589,9 @@ func (frgj *frostRetainedGroupJournal) initialize() error {
 	if stateExists {
 		if err := frgj.readEnvelope(frostRetainedGroupJournalStateFile, &stored); err != nil {
 			return fmt.Errorf("cannot read FROST retained-group journal state: [%w]", err)
+		}
+		if stored.Schema == frostRetainedGroupJournalStateSchemaV1 {
+			return frostRetainedGroupLegacySchemaError("canonical state")
 		}
 		if stored.Schema != frostRetainedGroupJournalStateSchema {
 			return fmt.Errorf("unsupported FROST retained-group journal state schema")
@@ -712,6 +725,9 @@ func (frgj *frostRetainedGroupJournal) initializeQuarantine() error {
 		); err != nil {
 			return fmt.Errorf("cannot read FROST retained-group quarantine metadata: [%w]", err)
 		}
+		if stored.Schema == frostRetainedGroupQuarantineMetadataV1 {
+			return frostRetainedGroupLegacySchemaError("quarantine metadata")
+		}
 		if stored != frgj.quarantineMetadata {
 			return fmt.Errorf("FROST retained-group quarantine metadata differs from signed manifest")
 		}
@@ -743,6 +759,9 @@ func (frgj *frostRetainedGroupJournal) initializeQuarantine() error {
 			&stored,
 		); err != nil {
 			return fmt.Errorf("cannot read FROST retained-group quarantine state: [%w]", err)
+		}
+		if stored.Schema == frostRetainedGroupQuarantineStateV1 {
+			return frostRetainedGroupLegacySchemaError("quarantine state")
 		}
 		if stored.Schema != frostRetainedGroupQuarantineStateSchema {
 			return fmt.Errorf("unsupported FROST retained-group quarantine state schema")
@@ -829,10 +848,21 @@ func frostRetainedGroupBatchFileName(sequence uint64) string {
 	return fmt.Sprintf("%s%020d%s", frostRetainedGroupJournalBatchPrefix, sequence, frostRetainedGroupJournalFileSuffix)
 }
 
+func frostRetainedGroupLegacySchemaError(component string) error {
+	return fmt.Errorf(
+		"legacy FROST retained-group %s schema v1 is not safely migratable; "+
+			"the signed activation manifest must provision a new empty v2 store identity",
+		component,
+	)
+}
+
 func validateFrostRetainedGroupBatch(
 	batch frostRetainedGroupJournalBatch,
 	prior frostRetainedGroupJournalState,
 ) error {
+	if batch.Schema == frostRetainedGroupJournalBatchSchemaV1 {
+		return frostRetainedGroupLegacySchemaError("canonical batch")
+	}
 	if batch.Schema != frostRetainedGroupJournalBatchSchema ||
 		batch.Sequence != prior.BatchSequence+1 || batch.From != prior.CurrentPoint ||
 		batch.PriorBatchRoot != prior.BatchRoot || batch.To.BlockNumber < batch.From.BlockNumber ||
@@ -863,6 +893,9 @@ func validateFrostRetainedGroupQuarantineBatch(
 	batch frostRetainedGroupQuarantineJournalBatch,
 	prior frostRetainedGroupQuarantineJournalState,
 ) error {
+	if batch.Schema == frostRetainedGroupQuarantineBatchV1 {
+		return frostRetainedGroupLegacySchemaError("quarantine batch")
+	}
 	if batch.Schema != frostRetainedGroupQuarantineBatchSchema ||
 		batch.Sequence != prior.BatchSequence+1 || batch.From != prior.CurrentPoint ||
 		batch.PriorBatchRoot != prior.BatchRoot || batch.To.BlockNumber < batch.From.BlockNumber ||
@@ -1227,13 +1260,26 @@ func applyFrostRetainedGroupMutations(
 	if state == nil {
 		return fmt.Errorf("FROST retained-group state is nil")
 	}
+	if len(state.Wallets) > frostRetainedGroupMaximumWallets {
+		return fmt.Errorf("FROST retained-group wallet state exceeds the wallet limit")
+	}
 	wallets := make(map[[32]byte]frostRetainedGroupWalletState, len(state.Wallets))
+	publicKeyHashes := make(
+		map[[20]byte][32]byte,
+		len(state.Wallets),
+	)
 	for _, wallet := range state.Wallets {
-		if wallet.WalletID == [32]byte{} || wallets[wallet.WalletID].WalletID != [32]byte{} {
+		if wallet.WalletID == [32]byte{} ||
+			wallet.WalletPublicKeyHash == [20]byte{} ||
+			wallets[wallet.WalletID].WalletID != [32]byte{} {
 			return fmt.Errorf("FROST retained-group wallet state is duplicate or invalid")
+		}
+		if _, exists := publicKeyHashes[wallet.WalletPublicKeyHash]; exists {
+			return fmt.Errorf("FROST retained-group wallet state repeats a public-key hash")
 		}
 		wallet.OperatorIDs = append([]uint32{}, wallet.OperatorIDs...)
 		wallets[wallet.WalletID] = wallet
+		publicKeyHashes[wallet.WalletPublicKeyHash] = wallet.WalletID
 	}
 	var previous FrostRetainedGroupEventPoint
 	for index, mutation := range mutations {
@@ -1263,18 +1309,16 @@ func applyFrostRetainedGroupMutations(
 				wallet.WalletID != [32]byte{} || mutation.QuarantineID != [32]byte{} {
 				return fmt.Errorf("invalid or duplicate FROST retained-group admission")
 			}
-			for _, existingWallet := range wallets {
-				if existingWallet.WalletID != [32]byte{} &&
-					existingWallet.WalletPublicKeyHash == mutation.WalletPublicKeyHash {
-					return fmt.Errorf("FROST retained-group admission reuses a wallet public-key hash")
-				}
+			if len(wallets) >= frostRetainedGroupMaximumWallets {
+				return fmt.Errorf("FROST retained-group admission exceeds the wallet limit")
 			}
-			seenOperatorIDs := make(map[uint32]bool, len(mutation.OperatorIDs))
+			if _, exists := publicKeyHashes[mutation.WalletPublicKeyHash]; exists {
+				return fmt.Errorf("FROST retained-group admission reuses a wallet public-key hash")
+			}
 			for _, operatorID := range mutation.OperatorIDs {
-				if operatorID == 0 || seenOperatorIDs[operatorID] {
-					return fmt.Errorf("FROST retained-group admission contains zero or duplicate operator ID")
+				if operatorID == 0 {
+					return fmt.Errorf("FROST retained-group admission contains zero operator ID")
 				}
-				seenOperatorIDs[operatorID] = true
 			}
 			wallets[mutation.WalletID] = frostRetainedGroupWalletState{
 				WalletID:                mutation.WalletID,
@@ -1287,6 +1331,7 @@ func applyFrostRetainedGroupMutations(
 				LifecyclePoint:          mutation.BridgeRegistrationPoint,
 				LastBridgePoint:         mutation.Point,
 			}
+			publicKeyHashes[mutation.WalletPublicKeyHash] = mutation.WalletID
 			state.SnapshotGeneration++
 		case FrostRetainedGroupMovingFundsMutation,
 			FrostRetainedGroupClosingMutation,
@@ -1491,6 +1536,11 @@ func appendFrostRetainedGroupQuarantineRoot(
 func frostRetainedGroupInventoryRoot(
 	state frostRetainedGroupJournalState,
 ) ([32]byte, uint64, uint64, uint64, error) {
+	if len(state.Wallets) > frostRetainedGroupMaximumWallets {
+		return [32]byte{}, 0, 0, 0, fmt.Errorf(
+			"FROST retained-group inventory exceeds the wallet limit",
+		)
+	}
 	type inventoryEventPoint struct {
 		BlockNumber      uint64 `json:"blockNumber"`
 		BlockHash        string `json:"blockHash"`
@@ -1645,6 +1695,12 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 	if ctx == nil {
 		return nil, fmt.Errorf("FROST retained-group reconciliation context is nil")
 	}
+	reconciliationContext, cancel := context.WithTimeout(
+		ctx,
+		frostRetainedGroupMaximumReconciliationDuration,
+	)
+	defer cancel()
+	ctx = reconciliationContext
 	frgj.mutex.Lock()
 	defer frgj.mutex.Unlock()
 	if frgj.closed {
@@ -1690,6 +1746,9 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 		history.From != frgj.metadata.Checkpoint ||
 		history.To != target || history.DescriptorSetHash != frgj.metadata.DescriptorSetHash {
 		return nil, fmt.Errorf("FROST retained-group history receipt is incomplete or differently bound")
+	}
+	if len(history.Mutations) > frostRetainedGroupMaximumMutations {
+		return nil, fmt.Errorf("FROST retained-group history exceeds the mutation limit")
 	}
 	if err := validateCompleteFrostRetainedGroupHistory(history); err != nil {
 		return nil, err
@@ -1895,6 +1954,12 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 func validateCompleteFrostRetainedGroupHistory(
 	history *FrostRetainedGroupHistory,
 ) error {
+	if history == nil {
+		return fmt.Errorf("complete FROST retained-group history is nil")
+	}
+	if len(history.Mutations) > frostRetainedGroupMaximumMutations {
+		return fmt.Errorf("complete FROST retained-group history exceeds the mutation limit")
+	}
 	var previous FrostRetainedGroupEventPoint
 	for index, mutation := range history.Mutations {
 		if !mutation.Point.valid() || mutation.Point.BlockNumber <= history.From.BlockNumber ||

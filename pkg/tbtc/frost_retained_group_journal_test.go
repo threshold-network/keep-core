@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -300,6 +302,24 @@ func (fixture *journalTestFixture) openJournal(
 	return journal
 }
 
+func (fixture *journalTestFixture) openJournalError(
+	directory string,
+) error {
+	journal, err := newFrostRetainedGroupJournal(
+		directory,
+		fixture.manifestHash,
+		fixture.manifest,
+		fixture.quarantine,
+		fixture.source,
+		fixture.registry,
+		fixture.localOperator,
+	)
+	if journal != nil {
+		_ = journal.close()
+	}
+	return err
+}
+
 func TestFrostRetainedGroupJournal_ReconcilesAndRejectsRewrittenHistory(
 	t *testing.T,
 ) {
@@ -365,6 +385,171 @@ func TestFrostRetainedGroupJournal_IntegratesCommittedOrphanBatchExactlyOnce(
 	if snapshot.SnapshotGeneration != 1 || restarted.state.BatchSequence != 1 ||
 		len(restarted.mutations) != 1 {
 		t.Fatalf("orphan batch was not integrated exactly once: %+v", restarted.state)
+	}
+}
+
+func TestFrostRetainedGroupJournal_RejectsAuthenticatedV1Fixtures(
+	t *testing.T,
+) {
+	testCases := map[string]func(*testing.T, string){
+		"canonical metadata": func(t *testing.T, directory string) {
+			path := filepath.Join(directory, frostRetainedGroupCanonicalDirectory)
+			metadata := frostRetainedGroupJournalMetadata{}
+			if err := readFrostRetainedGroupEnvelopeAt(
+				path,
+				frostRetainedGroupJournalMetadataFile,
+				&metadata,
+			); err != nil {
+				t.Fatal(err)
+			}
+			metadata.Schema = frostRetainedGroupJournalMetadataSchemaV1
+			if err := persistFrostRetainedGroupEnvelopeAt(
+				path,
+				frostRetainedGroupJournalMetadataFile,
+				&metadata,
+				true,
+			); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"canonical state": func(t *testing.T, directory string) {
+			path := filepath.Join(directory, frostRetainedGroupCanonicalDirectory)
+			state := frostRetainedGroupJournalState{}
+			if err := readFrostRetainedGroupEnvelopeAt(
+				path,
+				frostRetainedGroupJournalStateFile,
+				&state,
+			); err != nil {
+				t.Fatal(err)
+			}
+			state.Schema = frostRetainedGroupJournalStateSchemaV1
+			if err := persistFrostRetainedGroupEnvelopeAt(
+				path,
+				frostRetainedGroupJournalStateFile,
+				&state,
+				true,
+			); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"canonical batch with pre-evidence admission": func(t *testing.T, directory string) {
+			path := filepath.Join(directory, frostRetainedGroupCanonicalDirectory)
+			name := frostRetainedGroupBatchFileName(1)
+			batch := frostRetainedGroupJournalBatch{}
+			if err := readFrostRetainedGroupEnvelopeAt(path, name, &batch); err != nil {
+				t.Fatal(err)
+			}
+			batch.Schema = frostRetainedGroupJournalBatchSchemaV1
+			for index := range batch.Mutations {
+				batch.Mutations[index].DkgResultHash = [32]byte{}
+				batch.Mutations[index].DkgSubmissionPoint = FrostRetainedGroupEventPoint{}
+				batch.Mutations[index].DkgApprovalPoint = FrostRetainedGroupEventPoint{}
+			}
+			batch.Checksum = [32]byte{}
+			payload, err := frostRetainedGroupCanonicalValue(batch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			batch.Checksum = sha256.Sum256(payload)
+			if err := persistFrostRetainedGroupEnvelopeAt(path, name, &batch, true); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"quarantine metadata": func(t *testing.T, directory string) {
+			path := filepath.Join(directory, frostRetainedGroupQuarantineDirectory)
+			metadata := frostRetainedGroupQuarantineMetadata{}
+			if err := readFrostRetainedGroupEnvelopeAt(
+				path,
+				frostRetainedGroupJournalMetadataFile,
+				&metadata,
+			); err != nil {
+				t.Fatal(err)
+			}
+			metadata.Schema = frostRetainedGroupQuarantineMetadataV1
+			if err := persistFrostRetainedGroupEnvelopeAt(
+				path,
+				frostRetainedGroupJournalMetadataFile,
+				&metadata,
+				true,
+			); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"quarantine state": func(t *testing.T, directory string) {
+			path := filepath.Join(directory, frostRetainedGroupQuarantineDirectory)
+			state := frostRetainedGroupQuarantineJournalState{}
+			if err := readFrostRetainedGroupEnvelopeAt(
+				path,
+				frostRetainedGroupJournalStateFile,
+				&state,
+			); err != nil {
+				t.Fatal(err)
+			}
+			state.Schema = frostRetainedGroupQuarantineStateV1
+			if err := persistFrostRetainedGroupEnvelopeAt(
+				path,
+				frostRetainedGroupJournalStateFile,
+				&state,
+				true,
+			); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"quarantine batch": func(t *testing.T, directory string) {
+			path := filepath.Join(directory, frostRetainedGroupQuarantineDirectory)
+			name := frostRetainedGroupBatchFileName(1)
+			batch := frostRetainedGroupQuarantineJournalBatch{}
+			if err := readFrostRetainedGroupEnvelopeAt(path, name, &batch); err != nil {
+				t.Fatal(err)
+			}
+			batch.Schema = frostRetainedGroupQuarantineBatchV1
+			batch.Checksum = [32]byte{}
+			payload, err := frostRetainedGroupCanonicalValue(batch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			batch.Checksum = sha256.Sum256(payload)
+			if err := persistFrostRetainedGroupEnvelopeAt(path, name, &batch, true); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+
+	for name, mutate := range testCases {
+		t.Run(name, func(t *testing.T) {
+			fixture := newJournalTestFixture(t)
+			quarantine := FrostRetainedGroupMutation{
+				Point: FrostRetainedGroupEventPoint{
+					BlockNumber:      5,
+					BlockHash:        [32]byte{0x05},
+					TransactionHash:  [32]byte{0xa5},
+					TransactionIndex: 1,
+					LogIndex:         1,
+				},
+				Kind:         FrostRetainedGroupQuarantineMutation,
+				WalletID:     fixture.walletID,
+				QuarantineID: [32]byte{0x61},
+				EvidenceHash: [32]byte{0x62},
+				Reason:       "authenticated v1 fixture",
+			}
+			fixture.source.mutations = append(fixture.source.mutations, quarantine)
+			directory := filepath.Join(t.TempDir(), "journal")
+			journal := fixture.openJournal(t, directory)
+			if _, err := journal.reconcile(context.Background(), fixture.target); err != nil {
+				t.Fatal(err)
+			}
+			if err := journal.close(); err != nil {
+				t.Fatal(err)
+			}
+
+			mutate(t, directory)
+			err := fixture.openJournalError(directory)
+			if err == nil ||
+				!strings.Contains(err.Error(), "schema v1 is not safely migratable") ||
+				!strings.Contains(err.Error(), "signed activation manifest") {
+				t.Fatalf("expected explicit manifest-pinned v1 rejection, got [%v]", err)
+			}
+		})
 	}
 }
 
@@ -531,7 +716,7 @@ func TestApplyFrostRetainedGroupMutations_EnforcesLifecycleAndRegistryClosure(
 	}
 }
 
-func TestApplyFrostRetainedGroupMutations_RejectsDuplicateAdmissionMember(
+func TestApplyFrostRetainedGroupMutations_AllowsRepeatedStakeWeightedSeats(
 	t *testing.T,
 ) {
 	fixture := newJournalTestFixture(t)
@@ -546,9 +731,130 @@ func TestApplyFrostRetainedGroupMutations_RejectsDuplicateAdmissionMember(
 	if err := applyFrostRetainedGroupMutations(
 		&state,
 		[]FrostRetainedGroupMutation{duplicate},
-	); err == nil || !strings.Contains(err.Error(), "duplicate operator ID") {
-		t.Fatalf("expected duplicate admission member rejection, got [%v]", err)
+	); err != nil {
+		t.Fatalf("expected repeated operator seats to be retained, got [%v]", err)
 	}
+	if len(state.Wallets) != 1 ||
+		state.Wallets[0].OperatorIDs[0] != state.Wallets[0].OperatorIDs[1] {
+		t.Fatalf("repeated stake-weighted seats were not preserved: [%+v]", state.Wallets)
+	}
+}
+
+func TestApplyFrostRetainedGroupMutations_EnforcesWalletLimit(t *testing.T) {
+	state := frostRetainedGroupJournalState{
+		Schema:       frostRetainedGroupJournalStateSchema,
+		CurrentPoint: FrostPreSignFinality{BlockNumber: 1, BlockHash: [32]byte{1}},
+		Wallets:      []frostRetainedGroupWalletState{},
+	}
+	err := applyFrostRetainedGroupMutations(
+		&state,
+		journalTestBoundedAdmissions(frostRetainedGroupMaximumWallets+1),
+	)
+	if err == nil || !strings.Contains(err.Error(), "wallet limit") {
+		t.Fatalf("expected retained-wallet limit rejection, got [%v]", err)
+	}
+}
+
+func TestValidateCompleteFrostRetainedGroupHistory_EnforcesMutationLimit(
+	t *testing.T,
+) {
+	history := &FrostRetainedGroupHistory{
+		From: FrostPreSignFinality{BlockNumber: 1, BlockHash: [32]byte{1}},
+		To:   FrostPreSignFinality{BlockNumber: 2, BlockHash: [32]byte{2}},
+		Mutations: make(
+			[]FrostRetainedGroupMutation,
+			frostRetainedGroupMaximumMutations+1,
+		),
+	}
+	err := validateCompleteFrostRetainedGroupHistory(history)
+	if err == nil || !strings.Contains(err.Error(), "mutation limit") {
+		t.Fatalf("expected aggregate mutation limit rejection, got [%v]", err)
+	}
+}
+
+func BenchmarkApplyFrostRetainedGroupMutations_MaximumWalletSet(
+	b *testing.B,
+) {
+	mutations := journalTestBoundedAdmissions(
+		frostRetainedGroupMaximumWallets,
+	)
+	b.ResetTimer()
+	for iteration := 0; iteration < b.N; iteration++ {
+		state := frostRetainedGroupJournalState{
+			Schema: frostRetainedGroupJournalStateSchema,
+			CurrentPoint: FrostPreSignFinality{
+				BlockNumber: 1,
+				BlockHash:   [32]byte{1},
+			},
+			Wallets: []frostRetainedGroupWalletState{},
+		}
+		if err := applyFrostRetainedGroupMutations(
+			&state,
+			mutations,
+		); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func journalTestBoundedAdmissions(
+	count int,
+) []FrostRetainedGroupMutation {
+	result := make([]FrostRetainedGroupMutation, count)
+	operatorIDs := make([]uint32, 51)
+	for index := range operatorIDs {
+		operatorIDs[index] = uint32((index % 17) + 1)
+	}
+	for index := range result {
+		identifier := uint64(index + 1)
+		walletID := [32]byte{0xa1}
+		binary.BigEndian.PutUint64(walletID[24:], identifier)
+		walletPublicKeyHash := [20]byte{0xa2}
+		binary.BigEndian.PutUint64(walletPublicKeyHash[12:], identifier)
+		blockNumber := uint64(index + 2)
+		blockHash := [32]byte{0xa3}
+		binary.BigEndian.PutUint64(blockHash[24:], blockNumber)
+		submissionTransaction := [32]byte{0xa4}
+		binary.BigEndian.PutUint64(submissionTransaction[24:], identifier)
+		admissionTransaction := [32]byte{0xa5}
+		binary.BigEndian.PutUint64(admissionTransaction[24:], identifier)
+		submission := FrostRetainedGroupEventPoint{
+			BlockNumber:      blockNumber,
+			BlockHash:        blockHash,
+			TransactionHash:  submissionTransaction,
+			TransactionIndex: 0,
+			LogIndex:         1,
+		}
+		approval := FrostRetainedGroupEventPoint{
+			BlockNumber:      blockNumber,
+			BlockHash:        blockHash,
+			TransactionHash:  admissionTransaction,
+			TransactionIndex: 1,
+			LogIndex:         1,
+		}
+		creation := approval
+		creation.LogIndex = 2
+		registration := approval
+		registration.LogIndex = 3
+		retainedGroupHash := [32]byte{0xa6}
+		binary.BigEndian.PutUint64(retainedGroupHash[24:], identifier)
+		dkgResultHash := [32]byte{0xa7}
+		binary.BigEndian.PutUint64(dkgResultHash[24:], identifier)
+		result[index] = FrostRetainedGroupMutation{
+			Point:                   registration,
+			Kind:                    FrostRetainedGroupAdmissionMutation,
+			WalletID:                walletID,
+			WalletPublicKeyHash:     walletPublicKeyHash,
+			OperatorIDs:             append([]uint32{}, operatorIDs...),
+			RetainedGroupHash:       retainedGroupHash,
+			DkgResultHash:           dkgResultHash,
+			DkgSubmissionPoint:      submission,
+			DkgApprovalPoint:        approval,
+			CreationPoint:           creation,
+			BridgeRegistrationPoint: registration,
+		}
+	}
+	return result
 }
 
 func lifecycleMutation(

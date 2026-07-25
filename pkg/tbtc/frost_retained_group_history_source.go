@@ -40,12 +40,20 @@ const (
 	frostRetainedGroupOperatorQueryDomain    = "tbtc-frost-retained-group-operator-query-v1\x00"
 	frostRetainedGroupHistoryRootDomain      = "tbtc-frost-retained-group-export-history-root-v1\x00"
 
-	frostRetainedGroupMaximumResponseBytes = 1024 * 1024
-	frostRetainedGroupMaximumPages         = 4096
-	frostRetainedGroupMaximumMutations     = 250000
-	frostRetainedGroupMaximumCursorBytes   = 256
-	frostRetainedGroupMaximumReasonBytes   = 1024
-	frostRetainedGroupDefaultTimeout       = 20 * time.Second
+	frostRetainedGroupMaximumResponseBytes          = 1024 * 1024
+	frostRetainedGroupMaximumAggregateResponseBytes = 16 * 1024 * 1024
+	frostRetainedGroupMaximumPages                  = 256
+	frostRetainedGroupMaximumMutations              = 4096
+	frostRetainedGroupMaximumWallets                = 2048
+	frostRetainedGroupMaximumUniqueBlocks           = 8192
+	frostRetainedGroupMaximumEvidenceReceipts       = 8192
+	frostRetainedGroupMaximumEvidenceCodePoints     = 16384
+	frostRetainedGroupMaximumReceiptLogs            = 4096
+	frostRetainedGroupMaximumContractCodeBytes      = 64 * 1024
+	frostRetainedGroupMaximumCursorBytes            = 256
+	frostRetainedGroupMaximumReasonBytes            = 1024
+	frostRetainedGroupDefaultTimeout                = 20 * time.Second
+	frostRetainedGroupMaximumReconciliationDuration = 5 * time.Minute
 )
 
 // FrostRetainedGroupHistorySourceConfig configures the independent,
@@ -88,6 +96,11 @@ type signedFrostRetainedGroupHistorySource struct {
 	trustedSignerKeyHash [32]byte
 	evidenceMutex        sync.RWMutex
 	evidence             *frostRetainedGroupEvidenceProfile
+	maximumPages         uint64
+	maximumMutations     uint64
+	maximumResponseBytes uint64
+	maximumUniqueBlocks  uint64
+	maximumReadDuration  time.Duration
 }
 
 var _ FrostRetainedGroupHistorySource = (*signedFrostRetainedGroupHistorySource)(nil)
@@ -293,6 +306,11 @@ func newSignedFrostRetainedGroupHistorySource(
 		chainID:              chainID,
 		identity:             identity,
 		trustedSignerKeyHash: signerHash,
+		maximumPages:         frostRetainedGroupMaximumPages,
+		maximumMutations:     frostRetainedGroupMaximumMutations,
+		maximumResponseBytes: frostRetainedGroupMaximumAggregateResponseBytes,
+		maximumUniqueBlocks:  frostRetainedGroupMaximumUniqueBlocks,
+		maximumReadDuration:  frostRetainedGroupMaximumReconciliationDuration,
 	}
 	if _, err := source.FinalizedHead(ctx); err != nil {
 		return nil, fmt.Errorf("independent retained-group Ethereum verifier has no usable finalized head: [%w]", err)
@@ -500,6 +518,14 @@ func (source *signedFrostRetainedGroupHistorySource) ReadCompleteHistory(
 		to.BlockNumber < from.BlockNumber || to.BlockHash == [32]byte{} {
 		return nil, fmt.Errorf("retained-group history bounds are invalid")
 	}
+	if source.maximumPages == 0 || source.maximumMutations == 0 ||
+		source.maximumResponseBytes == 0 || source.maximumUniqueBlocks == 0 ||
+		source.maximumReadDuration <= 0 {
+		return nil, fmt.Errorf("retained-group history resource limits are invalid")
+	}
+	readContext, cancel := context.WithTimeout(ctx, source.maximumReadDuration)
+	defer cancel()
+	ctx = readContext
 	evidence, err := source.activationEvidence()
 	if err != nil {
 		return nil, err
@@ -529,7 +555,7 @@ func (source *signedFrostRetainedGroupHistorySource) ReadCompleteHistory(
 	}
 
 	mutations := make([]FrostRetainedGroupMutation, 0)
-	wireMutations := make([]frostRetainedGroupWireMutation, 0)
+	mutationHashes := make([][32]byte, 0)
 	seenCursors := make(map[string]bool)
 	blockHashes := map[uint64][32]byte{
 		from.BlockNumber: from.BlockHash,
@@ -539,16 +565,22 @@ func (source *signedFrostRetainedGroupHistorySource) ReadCompleteHistory(
 	var snapshotID [32]byte
 	var descriptorSetHash [32]byte
 	var previousPageHash [32]byte
-	for pageIndex := uint64(0); pageIndex < frostRetainedGroupMaximumPages; pageIndex++ {
+	var aggregateResponseBytes uint64
+	for pageIndex := uint64(0); pageIndex < source.maximumPages; pageIndex++ {
 		if seenCursors[cursor] {
 			return nil, fmt.Errorf("retained-group history cursor repeated")
 		}
 		seenCursors[cursor] = true
 		request := frostRetainedGroupHistoryPageRequest{Query: query, Cursor: cursor}
 		payload := &frostRetainedGroupHistoryPagePayload{}
-		if err := source.postSigned(ctx, "history", request, payload); err != nil {
+		responseBytes, err := source.postSigned(ctx, "history", request, payload)
+		if err != nil {
 			return nil, fmt.Errorf("cannot read retained-group history page [%d]: [%w]", pageIndex, err)
 		}
+		if responseBytes > source.maximumResponseBytes-aggregateResponseBytes {
+			return nil, fmt.Errorf("retained-group history exceeds the aggregate response-byte limit")
+		}
+		aggregateResponseBytes += responseBytes
 		pageHash, err := source.validateHistoryPage(
 			payload,
 			queryHash,
@@ -570,6 +602,10 @@ func (source *signedFrostRetainedGroupHistorySource) ReadCompleteHistory(
 			descriptorSetHash = parsedDescriptorSetHash
 		}
 		for _, wireMutation := range payload.Mutations {
+			canonicalMutation, err := canonicalFrostActivationValue(wireMutation)
+			if err != nil {
+				return nil, fmt.Errorf("cannot hash retained-group history mutation: [%w]", err)
+			}
 			mutation, err := frostRetainedGroupMutationFromWire(wireMutation)
 			if err != nil {
 				return nil, fmt.Errorf("retained-group history contains malformed mutation: [%w]", err)
@@ -577,9 +613,15 @@ func (source *signedFrostRetainedGroupHistorySource) ReadCompleteHistory(
 			if err := addFrostRetainedGroupMutationBlockHashes(blockHashes, mutation); err != nil {
 				return nil, err
 			}
+			if uint64(len(blockHashes)) > source.maximumUniqueBlocks {
+				return nil, fmt.Errorf("retained-group history exceeds the unique-block limit")
+			}
 			mutations = append(mutations, mutation)
-			wireMutations = append(wireMutations, wireMutation)
-			if len(mutations) > frostRetainedGroupMaximumMutations {
+			mutationHashes = append(
+				mutationHashes,
+				sha256.Sum256(canonicalMutation),
+			)
+			if uint64(len(mutations)) > source.maximumMutations {
 				return nil, fmt.Errorf("retained-group history exceeds the mutation limit")
 			}
 		}
@@ -593,8 +635,11 @@ func (source *signedFrostRetainedGroupHistorySource) ReadCompleteHistory(
 			if err != nil {
 				return nil, fmt.Errorf("retained-group history receipt root is invalid")
 			}
-			computedRoot, err := frostRetainedGroupHistoryRoot(queryHash, wireMutations)
-			if err != nil || receiptRoot != computedRoot {
+			computedRoot := frostRetainedGroupHistoryRootFromHashes(
+				queryHash,
+				mutationHashes,
+			)
+			if receiptRoot != computedRoot {
 				return nil, fmt.Errorf("retained-group history receipt does not cover the exact mutation sequence")
 			}
 			history := &FrostRetainedGroupHistory{
@@ -685,7 +730,7 @@ func (source *signedFrostRetainedGroupHistorySource) validateHistoryPage(
 	if err != nil || declaredPreviousPageHash != previousPageHash {
 		return [32]byte{}, fmt.Errorf("retained-group history page hash chain is broken")
 	}
-	if len(payload.Mutations) > frostRetainedGroupMaximumMutations {
+	if uint64(len(payload.Mutations)) > source.maximumMutations {
 		return [32]byte{}, fmt.Errorf("retained-group history page exceeds the mutation limit")
 	}
 	canonical, err := canonicalFrostActivationValue(payload)
@@ -728,7 +773,7 @@ func (source *signedFrostRetainedGroupHistorySource) ResolveOperatorID(
 		return 0, err
 	}
 	payload := &frostRetainedGroupOperatorReceiptPayload{}
-	if err := source.postSigned(ctx, "operator-id", query, payload); err != nil {
+	if _, err := source.postSigned(ctx, "operator-id", query, payload); err != nil {
 		return 0, fmt.Errorf("cannot resolve retained-group operator ID: [%w]", err)
 	}
 	declaredQueryHash, err := parseFrostActivationHex32(payload.QueryHash)
@@ -770,10 +815,10 @@ func (source *signedFrostRetainedGroupHistorySource) postSigned(
 	operation string,
 	requestPayload interface{},
 	responsePayload interface{},
-) error {
+) (uint64, error) {
 	requestBody, err := json.Marshal(requestPayload)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	endpoint := *source.exportEndpoint
 	endpoint.Path = path.Join(endpoint.Path, operation)
@@ -784,34 +829,37 @@ func (source *signedFrostRetainedGroupHistorySource) postSigned(
 		bytes.NewReader(requestBody),
 	)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	response, err := source.httpClient.Do(request)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("retained-group export returned HTTP status [%d]", response.StatusCode)
+		return 0, fmt.Errorf("retained-group export returned HTTP status [%d]", response.StatusCode)
 	}
 	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
-		return fmt.Errorf("retained-group export response is not application/json")
+		return 0, fmt.Errorf("retained-group export response is not application/json")
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, frostRetainedGroupMaximumResponseBytes+1))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if len(data) == 0 || len(data) > frostRetainedGroupMaximumResponseBytes {
-		return fmt.Errorf("retained-group export response size is invalid")
+		return 0, fmt.Errorf("retained-group export response size is invalid")
 	}
 	envelope := &frostRetainedGroupSignedEnvelope{}
 	if err := decodeStrictFrostActivationJSON(data, envelope); err != nil {
-		return fmt.Errorf("cannot decode retained-group signed envelope: [%w]", err)
+		return 0, fmt.Errorf("cannot decode retained-group signed envelope: [%w]", err)
 	}
-	return source.verifySignedEnvelope(envelope, responsePayload)
+	if err := source.verifySignedEnvelope(envelope, responsePayload); err != nil {
+		return 0, err
+	}
+	return uint64(len(data)), nil
 }
 
 func (source *signedFrostRetainedGroupHistorySource) verifySignedEnvelope(
@@ -850,7 +898,7 @@ func (source *signedFrostRetainedGroupHistorySource) verifySignedEnvelope(
 		!ed25519.Verify(publicKey, signed, signature) {
 		return fmt.Errorf("retained-group export signature is invalid")
 	}
-	if err := decodeStrictFrostActivationJSON(envelope.Payload, target); err != nil {
+	if err := decodeStrictFrostActivationJSON(canonical, target); err != nil {
 		return fmt.Errorf("cannot decode retained-group signed payload: [%w]", err)
 	}
 	return nil
@@ -883,25 +931,35 @@ func frostRetainedGroupHistoryRoot(
 	queryHash [32]byte,
 	mutations []frostRetainedGroupWireMutation,
 ) ([32]byte, error) {
-	hasher := sha256.New()
-	hasher.Write([]byte(frostRetainedGroupHistoryRootDomain))
-	hasher.Write(queryHash[:])
-	count := make([]byte, 8)
-	for i := uint(0); i < 8; i++ {
-		count[7-i] = byte(uint64(len(mutations)) >> (i * 8))
-	}
-	hasher.Write(count)
+	hashes := make([][32]byte, 0, len(mutations))
 	for _, mutation := range mutations {
 		canonical, err := canonicalFrostActivationValue(mutation)
 		if err != nil {
 			return [32]byte{}, err
 		}
-		itemHash := sha256.Sum256(canonical)
-		hasher.Write(itemHash[:])
+		hashes = append(hashes, sha256.Sum256(canonical))
+	}
+	return frostRetainedGroupHistoryRootFromHashes(queryHash, hashes), nil
+}
+
+func frostRetainedGroupHistoryRootFromHashes(
+	queryHash [32]byte,
+	mutationHashes [][32]byte,
+) [32]byte {
+	hasher := sha256.New()
+	hasher.Write([]byte(frostRetainedGroupHistoryRootDomain))
+	hasher.Write(queryHash[:])
+	count := make([]byte, 8)
+	for i := uint(0); i < 8; i++ {
+		count[7-i] = byte(uint64(len(mutationHashes)) >> (i * 8))
+	}
+	hasher.Write(count)
+	for _, mutationHash := range mutationHashes {
+		hasher.Write(mutationHash[:])
 	}
 	var result [32]byte
 	copy(result[:], hasher.Sum(nil))
-	return result, nil
+	return result
 }
 
 func frostRetainedGroupFinalityToWire(
@@ -1039,12 +1097,10 @@ func frostRetainedGroupMutationFromWire(
 		return FrostRetainedGroupMutation{}, fmt.Errorf("retained-group mutation exceeds field bounds")
 	}
 	operatorIDs := append([]uint32{}, mutation.OperatorIDs...)
-	seenOperatorIDs := make(map[uint32]bool, len(operatorIDs))
 	for _, operatorID := range operatorIDs {
-		if operatorID == 0 || seenOperatorIDs[operatorID] {
-			return FrostRetainedGroupMutation{}, fmt.Errorf("retained-group mutation has invalid or duplicate operator IDs")
+		if operatorID == 0 {
+			return FrostRetainedGroupMutation{}, fmt.Errorf("retained-group mutation has a zero operator ID")
 		}
-		seenOperatorIDs[operatorID] = true
 	}
 	return FrostRetainedGroupMutation{
 		Point:                   point,

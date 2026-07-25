@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -25,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/keep-network/keep-core/pkg/chain"
 	frostabi "github.com/keep-network/keep-core/pkg/chain/ethereum/frost/gen/abi"
+	frostregistry "github.com/keep-network/keep-core/pkg/frost/registry"
 )
 
 type frostRetainedGroupHistoryTestVerifier struct {
@@ -193,6 +195,8 @@ type frostRetainedGroupHistorySourceFixture struct {
 	descriptorSetHash [32]byte
 	snapshotID        [32]byte
 	mutations         []FrostRetainedGroupMutation
+	dkgFullMembers    []uint32
+	dkgMisbehaved     []uint8
 	pageMutator       func(*frostRetainedGroupHistoryPagePayload)
 	operatorMutator   func(*frostRetainedGroupOperatorReceiptPayload)
 }
@@ -293,6 +297,10 @@ func newFrostRetainedGroupHistorySourceFixture(
 		snapshotID:        [32]byte{0x53},
 	}
 	fixture.mutations = frostRetainedGroupHistoryTestMutations(t, headers, source.evidence)
+	fixture.dkgFullMembers = append(
+		[]uint32{},
+		fixture.mutations[0].OperatorIDs...,
+	)
 	fixture.installReceipts()
 	export.historyResponder = fixture.historyResponse
 	export.operatorResponder = fixture.operatorResponse
@@ -428,19 +436,42 @@ func frostRetainedGroupHistoryTestDkgResult(
 	walletID [32]byte,
 	operatorIDs []uint32,
 ) (frostabi.FrostDkgResult, []byte, [32]byte) {
+	return frostRetainedGroupHistoryTestDkgResultWithMisbehaved(
+		t,
+		evidence,
+		walletID,
+		operatorIDs,
+		nil,
+	)
+}
+
+func frostRetainedGroupHistoryTestDkgResultWithMisbehaved(
+	t *testing.T,
+	evidence *frostRetainedGroupEvidenceProfile,
+	walletID [32]byte,
+	fullMembers []uint32,
+	misbehaved []uint8,
+) (frostabi.FrostDkgResult, []byte, [32]byte) {
 	t.Helper()
-	encodedMembers, err := evidence.membersArguments.Pack(operatorIDs)
+	activeMembers, err := frostregistry.ActiveMembersFromMisbehaved(
+		frostregistry.FullMembers(fullMembers),
+		frostregistry.MisbehavedMemberIndices(misbehaved),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeMembersHash, err := frostregistry.ActiveMembersHash(activeMembers)
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := frostabi.FrostDkgResult{
 		SubmitterMemberIndex:     big.NewInt(1),
 		XOnlyOutputKey:           walletID,
-		MisbehavedMembersIndices: []uint8{},
+		MisbehavedMembersIndices: append([]uint8{}, misbehaved...),
 		Signatures:               []byte{0x01, 0x02},
 		SigningMembersIndices:    []*big.Int{big.NewInt(1)},
-		Members:                  append([]uint32{}, operatorIDs...),
-		MembersHash:              [32]byte(crypto.Keccak256Hash(encodedMembers)),
+		Members:                  append([]uint32{}, fullMembers...),
+		MembersHash:              activeMembersHash,
 	}
 	data, err := evidence.registryABI.Events["DkgResultSubmitted"].Inputs.NonIndexed().Pack(result)
 	if err != nil {
@@ -456,12 +487,24 @@ func (fixture *frostRetainedGroupHistorySourceFixture) installReceipts() {
 		fixture.t.Fatal(err)
 	}
 	admission := fixture.mutations[0]
-	_, dkgData, _ := frostRetainedGroupHistoryTestDkgResult(
+	dkgResult, dkgData, dkgResultHash := frostRetainedGroupHistoryTestDkgResultWithMisbehaved(
 		fixture.t,
 		evidence,
 		admission.WalletID,
-		admission.OperatorIDs,
+		fixture.dkgFullMembers,
+		fixture.dkgMisbehaved,
 	)
+	admission.OperatorIDs = append(
+		[]uint32{},
+		mustFrostRetainedGroupActiveMembers(
+			fixture.t,
+			fixture.dkgFullMembers,
+			fixture.dkgMisbehaved,
+		)...,
+	)
+	admission.RetainedGroupHash = dkgResult.MembersHash
+	admission.DkgResultHash = dkgResultHash
+	fixture.mutations[0] = admission
 	submissionLog := frostRetainedGroupHistoryTestLog(
 		admission.DkgSubmissionPoint,
 		evidence.registry.address,
@@ -551,6 +594,22 @@ func (fixture *frostRetainedGroupHistorySourceFixture) installReceipts() {
 	)
 	fixture.verifier.receipts[common.Hash(closed.Point.TransactionHash)] =
 		frostRetainedGroupHistoryTestReceipt(closed.Point, closedLog, registryClosureLog)
+}
+
+func mustFrostRetainedGroupActiveMembers(
+	t *testing.T,
+	fullMembers []uint32,
+	misbehaved []uint8,
+) []uint32 {
+	t.Helper()
+	activeMembers, err := frostregistry.ActiveMembersFromMisbehaved(
+		frostregistry.FullMembers(fullMembers),
+		frostregistry.MisbehavedMemberIndices(misbehaved),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append([]uint32{}, activeMembers...)
 }
 
 func frostRetainedGroupHistoryTestLog(
@@ -736,6 +795,89 @@ func TestSignedFrostRetainedGroupHistorySource_ReadsCompletePaginatedHistory(
 	}
 }
 
+func TestSignedFrostRetainedGroupHistorySource_DecodesCanonicalVerifiedBytes(
+	t *testing.T,
+) {
+	fixture := newFrostRetainedGroupHistorySourceFixture(t)
+	raw := json.RawMessage("{\n  \"z\": 1,\n  \"a\": 2\n}")
+	canonical, err := canonicalFrostActivationValue(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payloadHash := sha256.Sum256(canonical)
+	signature := ed25519.Sign(
+		fixture.export.privateKey,
+		append([]byte(frostRetainedGroupHistorySignatureDomain), canonical...),
+	)
+	envelope := &frostRetainedGroupSignedEnvelope{
+		Schema:              "tbtc-frost-retained-group-signed-envelope/v1",
+		Payload:             raw,
+		PayloadSHA256:       frostActivationHex32(payloadHash),
+		SignerPublicKeySPKI: base64.StdEncoding.EncodeToString(fixture.export.publicKeyDER),
+		SignatureAlgorithm:  "ed25519",
+		Signature:           base64.StdEncoding.EncodeToString(signature),
+	}
+	capture := json.RawMessage{}
+	if err := fixture.source.verifySignedEnvelope(envelope, &capture); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(capture, canonical) {
+		t.Fatalf(
+			"signed payload decoder did not consume exact verified bytes\nexpected: %s\nactual:   %s",
+			canonical,
+			capture,
+		)
+	}
+}
+
+func TestSignedFrostRetainedGroupHistorySource_RejectsDuplicateSignedPayloadKey(
+	t *testing.T,
+) {
+	fixture := newFrostRetainedGroupHistorySourceFixture(t)
+	envelope := &frostRetainedGroupSignedEnvelope{
+		Schema:              "tbtc-frost-retained-group-signed-envelope/v1",
+		Payload:             json.RawMessage(`{"schema":"v1","schema":"v2"}`),
+		PayloadSHA256:       frostActivationHex32([32]byte{0x01}),
+		SignerPublicKeySPKI: base64.StdEncoding.EncodeToString(fixture.export.publicKeyDER),
+		SignatureAlgorithm:  "ed25519",
+		Signature:           base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize)),
+	}
+	target := frostRetainedGroupHistoryPagePayload{}
+	err := fixture.source.verifySignedEnvelope(envelope, &target)
+	if err == nil || !strings.Contains(err.Error(), "duplicate key") {
+		t.Fatalf("expected duplicate signed payload key rejection, got [%v]", err)
+	}
+}
+
+func TestSignedFrostRetainedGroupHistorySource_RejectsNonExactSignedPayloadKey(
+	t *testing.T,
+) {
+	fixture := newFrostRetainedGroupHistorySourceFixture(t)
+	payload := json.RawMessage(`{"Schema":"tbtc-frost-retained-group-history-page/v1"}`)
+	canonical, err := canonicalFrostActivationValue(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payloadHash := sha256.Sum256(canonical)
+	signature := ed25519.Sign(
+		fixture.export.privateKey,
+		append([]byte(frostRetainedGroupHistorySignatureDomain), canonical...),
+	)
+	envelope := &frostRetainedGroupSignedEnvelope{
+		Schema:              "tbtc-frost-retained-group-signed-envelope/v1",
+		Payload:             payload,
+		PayloadSHA256:       frostActivationHex32(payloadHash),
+		SignerPublicKeySPKI: base64.StdEncoding.EncodeToString(fixture.export.publicKeyDER),
+		SignatureAlgorithm:  "ed25519",
+		Signature:           base64.StdEncoding.EncodeToString(signature),
+	}
+	target := frostRetainedGroupHistoryPagePayload{}
+	err = fixture.source.verifySignedEnvelope(envelope, &target)
+	if err == nil || !strings.Contains(err.Error(), "non-exact or unknown key") {
+		t.Fatalf("expected non-exact signed payload key rejection, got [%v]", err)
+	}
+}
+
 func TestSignedFrostRetainedGroupHistorySource_RejectsOmittedPage(t *testing.T) {
 	fixture := newFrostRetainedGroupHistorySourceFixture(t)
 	fixture.export.historyResponder = func(request frostRetainedGroupHistoryPageRequest) interface{} {
@@ -778,6 +920,79 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsTruncationAndForgery(
 	})
 }
 
+func TestSignedFrostRetainedGroupHistorySource_EnforcesAggregateResourceLimits(
+	t *testing.T,
+) {
+	testCases := map[string]struct {
+		configure func(*signedFrostRetainedGroupHistorySource)
+		expected  string
+	}{
+		"aggregate response bytes": {
+			configure: func(source *signedFrostRetainedGroupHistorySource) {
+				source.maximumResponseBytes = 1
+			},
+			expected: "aggregate response-byte limit",
+		},
+		"page count": {
+			configure: func(source *signedFrostRetainedGroupHistorySource) {
+				source.maximumPages = 1
+			},
+			expected: "exceeded the page limit",
+		},
+		"mutation count": {
+			configure: func(source *signedFrostRetainedGroupHistorySource) {
+				source.maximumMutations = 3
+			},
+			expected: "exceeds the mutation limit",
+		},
+		"unique block count": {
+			configure: func(source *signedFrostRetainedGroupHistorySource) {
+				source.maximumUniqueBlocks = 2
+			},
+			expected: "exceeds the unique-block limit",
+		},
+		"end-to-end duration": {
+			configure: func(source *signedFrostRetainedGroupHistorySource) {
+				source.maximumReadDuration = time.Nanosecond
+			},
+			expected: "context deadline exceeded",
+		},
+	}
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			fixture := newFrostRetainedGroupHistorySourceFixture(t)
+			testCase.configure(fixture.source)
+			_, err := fixture.source.ReadCompleteHistory(
+				context.Background(),
+				fixture.from,
+				fixture.to,
+			)
+			if err == nil || !strings.Contains(err.Error(), testCase.expected) {
+				t.Fatalf("expected %s rejection, got [%v]", name, err)
+			}
+		})
+	}
+}
+
+func TestSignedFrostRetainedGroupHistorySource_RejectsOversizedReceiptLogSet(
+	t *testing.T,
+) {
+	fixture := newFrostRetainedGroupHistorySourceFixture(t)
+	submissionHash := common.Hash(
+		fixture.mutations[0].DkgSubmissionPoint.TransactionHash,
+	)
+	receipt := fixture.verifier.receipts[submissionHash]
+	receipt.Logs = make([]*types.Log, frostRetainedGroupMaximumReceiptLogs+1)
+	_, err := fixture.source.ReadCompleteHistory(
+		context.Background(),
+		fixture.from,
+		fixture.to,
+	)
+	if err == nil || !strings.Contains(err.Error(), "log limit") {
+		t.Fatalf("expected oversized receipt-log rejection, got [%v]", err)
+	}
+}
+
 func TestSignedFrostRetainedGroupHistorySource_RejectsDuplicateAndReorderedHistory(
 	t *testing.T,
 ) {
@@ -788,9 +1003,6 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsDuplicateAndReorderedHisto
 		"reordered event": func(fixture *frostRetainedGroupHistorySourceFixture) {
 			fixture.mutations[0], fixture.mutations[1] = fixture.mutations[1], fixture.mutations[0]
 		},
-		"duplicate DKG member": func(fixture *frostRetainedGroupHistorySourceFixture) {
-			fixture.mutations[0].OperatorIDs[1] = fixture.mutations[0].OperatorIDs[0]
-		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -799,6 +1011,96 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsDuplicateAndReorderedHisto
 			_, err := fixture.source.ReadCompleteHistory(context.Background(), fixture.from, fixture.to)
 			if err == nil {
 				t.Fatal("expected malformed exact history to be rejected")
+			}
+		})
+	}
+}
+
+func TestSignedFrostRetainedGroupHistorySource_AcceptsFilteredStakeWeightedSeats(
+	t *testing.T,
+) {
+	fixture := newFrostRetainedGroupHistorySourceFixture(t)
+	fullMembers := make([]uint32, 52)
+	for index := range fullMembers {
+		fullMembers[index] = uint32(index + 1)
+	}
+	// Repeated nonzero IDs are distinct stake-weighted sortition seats. The
+	// second seat is excluded using the contract's strict 1-based index.
+	fullMembers[51] = fullMembers[0]
+	fixture.dkgFullMembers = fullMembers
+	fixture.dkgMisbehaved = []uint8{2}
+	fixture.installReceipts()
+
+	history, err := fixture.source.ReadCompleteHistory(
+		context.Background(),
+		fixture.from,
+		fixture.to,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := history.Mutations[0].OperatorIDs
+	if len(active) != 51 || active[0] != 1 || active[50] != 1 {
+		t.Fatalf("unexpected ordered active DKG members: [%v]", active)
+	}
+}
+
+func TestSignedFrostRetainedGroupHistorySource_RejectsInvalidMisbehavedIndices(
+	t *testing.T,
+) {
+	testCases := map[string][]uint8{
+		"zero":       {0},
+		"duplicate":  {2, 2},
+		"not sorted": {3, 2},
+		"out of range": {
+			52,
+		},
+	}
+	for name, misbehaved := range testCases {
+		t.Run(name, func(t *testing.T) {
+			fixture := newFrostRetainedGroupHistorySourceFixture(t)
+			evidence, err := fixture.source.activationEvidence()
+			if err != nil {
+				t.Fatal(err)
+			}
+			admission := &fixture.mutations[0]
+			result, _, _ := frostRetainedGroupHistoryTestDkgResult(
+				t,
+				evidence,
+				admission.WalletID,
+				fixture.dkgFullMembers,
+			)
+			result.MisbehavedMembersIndices = append([]uint8{}, misbehaved...)
+			data, err := evidence.registryABI.Events["DkgResultSubmitted"].Inputs.NonIndexed().Pack(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resultHash := [32]byte(crypto.Keccak256Hash(data))
+			admission.DkgResultHash = resultHash
+
+			submissionTransactionHash := common.Hash(
+				admission.DkgSubmissionPoint.TransactionHash,
+			)
+			submissionReceipt := fixture.verifier.receipts[submissionTransactionHash]
+			submissionReceipt.Logs[0].Topics[1] = common.Hash(resultHash)
+			submissionReceipt.Logs[0].Data = data
+			approvalTransactionHash := common.Hash(
+				admission.DkgApprovalPoint.TransactionHash,
+			)
+			approvalReceipt := fixture.verifier.receipts[approvalTransactionHash]
+			approvalReceipt.Logs[0].Topics[1] = common.Hash(resultHash)
+			approvalReceipt.Logs[1].Topics[2] = common.Hash(resultHash)
+
+			_, err = fixture.source.ReadCompleteHistory(
+				context.Background(),
+				fixture.from,
+				fixture.to,
+			)
+			if err == nil || !strings.Contains(
+				err.Error(),
+				"invalid misbehaved member indices",
+			) {
+				t.Fatalf("expected strict 1-based index rejection, got [%v]", err)
 			}
 		})
 	}
