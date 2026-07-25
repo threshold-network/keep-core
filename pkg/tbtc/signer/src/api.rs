@@ -885,6 +885,8 @@ pub struct InitSignerConfigRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_corrupt_backup_limit: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_witness_max_records: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permit_plaintext_state_rollback: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_sessions: Option<u64>,

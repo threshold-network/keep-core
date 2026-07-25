@@ -590,6 +590,7 @@ fn configure_test_state_path(suffix: &str) -> PathBuf {
 fn clear_state_storage_policy_overrides() {
     std::env::remove_var(TBTC_SIGNER_STATE_CORRUPTION_POLICY_ENV);
     std::env::remove_var(TBTC_SIGNER_STATE_CORRUPT_BACKUP_LIMIT_ENV);
+    std::env::remove_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV);
     std::env::remove_var(TBTC_SIGNER_MAX_SESSIONS_ENV);
     std::env::remove_var(TBTC_SIGNER_ENABLE_ROAST_STRICT_ENV);
     std::env::remove_var(TBTC_SIGNER_ROAST_COORDINATOR_TIMEOUT_MS_ENV);
@@ -707,6 +708,8 @@ fn configure_valid_provenance_attestation_for_tests() {
 fn cleanup_test_state_artifacts(path: &Path) {
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(state_lock_file_path(path));
+    let _ = std::fs::remove_file(durable_store_id_file_path(path));
+    let _ = std::fs::remove_file(state_witness_file_path(path));
     let _ = std::fs::remove_file(path.with_extension(format!("tmp-{}", std::process::id())));
 
     if let Ok(backups) = sorted_corrupted_state_backups(path) {
@@ -716,12 +719,30 @@ fn cleanup_test_state_artifacts(path: &Path) {
     }
 }
 
+/// Recreates the on-disk shape of a store written before the witness journal
+/// existed. Overwriting only the state image after `reset_for_tests` would be a
+/// real rollback against an already-committed witness, not a migration fixture.
+fn make_store_pre_witness_for_legacy_fixture(state_path: &Path) {
+    if let Ok(mut lock_slot) = state_file_lock_slot().lock() {
+        *lock_slot = None;
+    }
+    let _ = std::fs::remove_file(state_witness_file_path(state_path));
+}
+
+fn write_legacy_state_fixture(state_path: &Path, bytes: &[u8], label: &str) {
+    std::fs::write(state_path, bytes).unwrap_or_else(|error| panic!("{label}: {error}"));
+    #[cfg(unix)]
+    std::fs::set_permissions(state_path, std::fs::Permissions::from_mode(0o600))
+        .unwrap_or_else(|error| panic!("secure {label} permissions: {error}"));
+}
+
 fn persisted_session_state_fixture() -> PersistedSessionState {
     PersistedSessionState {
         dkg_request_fingerprint: None,
         dkg_key_packages: None,
         dkg_public_key_package_hex: None,
         dkg_result: None,
+        dkg_share_epoch: 0,
         sign_request_fingerprint: None,
         sign_message_hex: None,
         round_state: None,
@@ -756,6 +777,23 @@ fn expect_internal_error_contains(err: EngineError, expected_substring: &str) {
         message.contains(expected_substring),
         "unexpected internal error message: {message}"
     );
+}
+
+fn expect_validation_error_contains(err: EngineError, expected_substring: &str) {
+    let EngineError::Validation(message) = err else {
+        panic!("unexpected error variant");
+    };
+    assert!(
+        message.contains(expected_substring),
+        "unexpected validation error message: {message}"
+    );
+}
+
+#[cfg(unix)]
+fn write_witness_journal_fixture(witness_path: &Path, bytes: &[u8]) {
+    std::fs::write(witness_path, bytes).expect("write witness journal fixture");
+    std::fs::set_permissions(witness_path, std::fs::Permissions::from_mode(0o600))
+        .expect("secure witness journal fixture permissions");
 }
 
 fn persist_state_for_key_provider_test(session_id: &str) -> Result<(), EngineError> {
@@ -2685,7 +2723,7 @@ fn completed_canary_rollback_retries_are_idempotent() {
 }
 
 #[test]
-fn fresh_canary_rollback_noop_does_not_require_a_state_parent_directory() {
+fn fresh_canary_rollback_noop_initializes_anchors_without_replacing_state() {
     let _guard = lock_test_state();
     clear_state_storage_policy_overrides();
 
@@ -2698,11 +2736,24 @@ fn fresh_canary_rollback_noop_does_not_require_a_state_parent_directory() {
     let _ = std::fs::remove_dir(&missing_parent);
     std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, &state_path);
     reset_for_tests();
+    if let Ok(mut lock_slot) = state_file_lock_slot().lock() {
+        *lock_slot = None;
+    }
     cleanup_test_state_artifacts(&state_path);
     let _ = std::fs::remove_dir(&missing_parent);
     assert!(!missing_parent.exists());
 
     let status_before = canary_rollout_status().expect("fresh canary rollout status");
+    assert!(
+        missing_parent.exists(),
+        "the first stateful access must initialize the descriptor-bound store"
+    );
+    assert!(durable_store_id_file_path(&state_path).exists());
+    assert!(state_witness_file_path(&state_path).exists());
+    assert!(
+        !state_path.exists(),
+        "reading fresh state must not synthesize a state image"
+    );
     let directory_syncs_before = state_file_parent_directory_syncs_for_tests();
     let rollback = rollback_canary(RollbackCanaryRequest {
         reason: "fresh state no-op".to_string(),
@@ -2719,11 +2770,11 @@ fn fresh_canary_rollback_noop_does_not_require_a_state_parent_directory() {
     assert_eq!(
         state_file_parent_directory_syncs_for_tests(),
         directory_syncs_before,
-        "an absent state file must not trigger a parent-directory sync"
+        "the no-op rollback must not perform a state-image replacement"
     );
     assert!(
-        !missing_parent.exists(),
-        "a fresh-state no-op must not create persistence directories"
+        !state_path.exists(),
+        "a fresh-state no-op must not create a state image"
     );
 
     std::env::remove_var(TBTC_SIGNER_STATE_PATH_ENV);
@@ -4645,8 +4696,12 @@ fn persisted_engine_state_compacts_migrated_idle_entries_to_legacy_total_bound()
     let key_material = state_encryption_key_material().expect("test state key");
     let oversized_envelope =
         encode_encrypted_state_envelope(&persisted, &key_material).expect("oversized envelope");
-    std::fs::write(&state_path, oversized_envelope.as_slice())
-        .expect("write intermediate oversized state");
+    make_store_pre_witness_for_legacy_fixture(&state_path);
+    write_legacy_state_fixture(
+        &state_path,
+        oversized_envelope.as_slice(),
+        "write intermediate oversized state",
+    );
     let reloaded = load_engine_state_from_storage().expect("load compacts and rewrites state");
     assert_eq!(reloaded.sessions.len(), 2);
 
@@ -5939,7 +5994,7 @@ fn dangling_state_file_symlink_fails_closed() {
         Err(err) => err,
     };
     assert!(
-        matches!(err, EngineError::Internal(ref message) if message.contains("failed to read signer state file")),
+        matches!(err, EngineError::Internal(ref message) if message.contains("removed, replaced, linked, or redirected")),
         "unexpected error: {err:?}"
     );
     assert!(
@@ -6125,8 +6180,17 @@ fn corrupt_state_backup_retention_evicts_old_backups() {
     std::env::set_var(TBTC_SIGNER_STATE_CORRUPT_BACKUP_LIMIT_ENV, "2");
 
     for seed in 0..4 {
+        // Each fixture models a separate startup. Once a held store observes
+        // the state entry absent after quarantine, a file appearing there
+        // out-of-band is correctly treated as replacement.
+        if let Ok(mut lock_slot) = state_file_lock_slot().lock() {
+            *lock_slot = None;
+        }
         std::fs::write(&state_path, format!("{{invalid-state-{seed}"))
             .expect("write corrupt state");
+        #[cfg(unix)]
+        std::fs::set_permissions(&state_path, std::fs::Permissions::from_mode(0o600))
+            .expect("secure corrupt-state fixture permissions");
         let loaded =
             load_engine_state_from_storage().expect("recover from corrupt state iteration");
         assert!(loaded.sessions.is_empty());
@@ -6162,7 +6226,8 @@ fn legacy_plaintext_state_migrates_to_encrypted_envelope_on_load() {
         canary_rollout: CanaryRolloutState::default(),
     };
     let plaintext_bytes = serde_json::to_vec(&plaintext_state).expect("encode plaintext state");
-    std::fs::write(&state_path, &plaintext_bytes).expect("write plaintext state file");
+    make_store_pre_witness_for_legacy_fixture(&state_path);
+    write_legacy_state_fixture(&state_path, &plaintext_bytes, "write plaintext state file");
 
     // Without the opt-in rollback flag the unauthenticated plaintext is refused
     // (fail-closed), even in a non-production profile.
@@ -6231,11 +6296,12 @@ fn legacy_v2_encrypted_state_rewrites_with_current_key_id() {
     };
     ciphertext_and_tag.zeroize();
     authentication_tag.zeroize();
-    std::fs::write(
+    make_store_pre_witness_for_legacy_fixture(&state_path);
+    write_legacy_state_fixture(
         &state_path,
-        serde_json::to_vec(&envelope).expect("encode legacy v2 envelope"),
-    )
-    .expect("write legacy v2 envelope");
+        &serde_json::to_vec(&envelope).expect("encode legacy v2 envelope"),
+        "write legacy v2 envelope",
+    );
 
     let loaded = load_engine_state_from_storage().expect("load legacy v2 envelope");
     assert_eq!(loaded.refresh_epoch_counter, 11);
@@ -14001,5 +14067,307 @@ fn enforce_provenance_gate_rejects_signed_attestation_runtime_version_mismatch()
     };
     assert_eq!(reason_code, "runtime_version_not_attested");
 
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+#[cfg(unix)]
+fn durable_store_identity_survives_restart_and_atomic_state_replacement() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("durable_store_identity_restart");
+
+    let mut first = StateFileLock::acquire(&state_path).expect("open first durable store");
+    let first_identity = first.identity().expect("read first identity");
+    assert_ne!(first_identity.store_id, [0u8; 32]);
+    first
+        .replace_state(b"first atomic state image")
+        .expect("first replacement");
+    assert_eq!(
+        first.identity().expect("identity after first write"),
+        first_identity
+    );
+    first
+        .replace_state(b"second atomic state image")
+        .expect("second replacement");
+    assert_eq!(
+        first.identity().expect("identity after second write"),
+        first_identity
+    );
+    drop(first);
+
+    let mut restarted = StateFileLock::acquire(&state_path).expect("reopen durable store");
+    assert_eq!(
+        restarted.identity().expect("restarted identity"),
+        first_identity
+    );
+    assert_eq!(
+        restarted.read_state().expect("restarted state"),
+        Some(b"second atomic state image".to_vec())
+    );
+    drop(restarted);
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn durable_store_fingerprint_vectors_pin_v2_and_retired_v1_transcripts() {
+    assert_eq!(
+        hex::encode(durable_store_fingerprint(&[0x11; 32])),
+        "8bb8d21c69e78916e8f165b0c861c0d84c5d7af5393f75b0321fe048f772abba"
+    );
+    assert_eq!(
+        hex::encode(durable_store_fingerprint_v1(
+            &[0x11; 32],
+            &[0x22; 32],
+            &[0x33; 32],
+            &[0x44; 32],
+        )),
+        "4d6aae1b6ac64f36ddc58d43ea89bc8eaa5bcece511f53d631d662392313f6c9"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn pending_commit_refuses_to_absorb_same_length_prefix_corruption() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("witness_pending_prefix_corruption");
+    clear_persist_fault_injection_for_tests();
+
+    let mut store = StateFileLock::acquire(&state_path).expect("open durable store");
+    store
+        .replace_state(b"baseline state")
+        .expect("persist baseline");
+    let baseline = store.state_witness_tip().expect("baseline tip");
+
+    set_persist_fault_injection_for_tests(
+        PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+    );
+    let interrupted = store
+        .replace_state(b"prepared replacement")
+        .expect_err("stop after PREPARE and rename");
+    assert!(interrupted.replaced());
+    clear_persist_fault_injection_for_tests();
+
+    let witness_path = state_witness_file_path(&state_path);
+    let prepared_journal = std::fs::read(&witness_path).expect("prepared journal");
+    let prepared_length = prepared_journal.len();
+    let mut corrupted = prepared_journal.clone();
+    let old_commitment_offset =
+        TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH + 80;
+    corrupted[old_commitment_offset] ^= 0x80;
+    write_witness_journal_fixture(&witness_path, &corrupted);
+
+    expect_internal_error_contains(
+        store
+            .state_witness_tip()
+            .expect_err("COMMIT must verify the complete pre-append prefix"),
+        "invalid commitment",
+    );
+    assert_eq!(
+        std::fs::metadata(&witness_path)
+            .expect("corrupted journal metadata")
+            .len() as usize,
+        prepared_length,
+        "a failed verification must not append COMMIT"
+    );
+    assert_eq!(
+        std::fs::read(&witness_path).expect("corrupted journal after rejection"),
+        corrupted,
+        "the rejection must not rewrite attacker-visible evidence"
+    );
+
+    write_witness_journal_fixture(&witness_path, &prepared_journal);
+    let recovered = store
+        .state_witness_tip()
+        .expect("restored PREPARE reconciles");
+    assert_eq!(recovered.generation, baseline.generation + 1);
+    assert_eq!(
+        store.read_state().expect("prepared replacement state"),
+        Some(b"prepared replacement".to_vec())
+    );
+    drop(store);
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+#[cfg(unix)]
+fn state_witness_record_ceiling_fails_closed_before_prepare_and_on_restart() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("witness_record_ceiling");
+    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "4");
+
+    let mut store = StateFileLock::acquire(&state_path).expect("open capped durable store");
+    store
+        .replace_state(b"only permitted replacement")
+        .expect("fill the record budget");
+    let full_tip = store.state_witness_tip().expect("tip at record ceiling");
+    assert_eq!(full_tip.generation, 2);
+
+    let rejected = store
+        .replace_state(b"must not be installed")
+        .expect_err("a new PREPARE must reserve its terminal record");
+    assert!(!rejected.replaced());
+    expect_internal_error_contains(rejected.into_engine_error(), "record ceiling [4] reached");
+    assert_eq!(
+        store.read_state().expect("state after ceiling rejection"),
+        Some(b"only permitted replacement".to_vec())
+    );
+    drop(store);
+
+    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "2");
+    expect_internal_error_contains(
+        match StateFileLock::acquire(&state_path) {
+            Ok(_) => panic!("startup must reject a journal over the configured ceiling"),
+            Err(error) => error,
+        },
+        "exceeding the configured fail-closed ceiling [2]",
+    );
+
+    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "4");
+    let mut reopened = StateFileLock::acquire(&state_path).expect("reopen with adequate ceiling");
+    assert_eq!(
+        reopened.state_witness_tip().expect("reopened tip"),
+        full_tip
+    );
+    drop(reopened);
+
+    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "1");
+    expect_validation_error_contains(
+        state_witness_max_records().expect_err("genesis requires two records"),
+        "must be between 2 and 1000000",
+    );
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+#[cfg(unix)]
+fn state_witness_verification_cost_stays_constant_as_history_grows() {
+    const PERSISTS: usize = 24;
+
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("witness_incremental_cost");
+    reset_witness_verification_counters();
+
+    let mut store = StateFileLock::acquire(&state_path).expect("open durable store");
+    let (full_after_open, _, bytes_after_open) = witness_verification_counters();
+    assert_eq!(full_after_open, 1);
+    for index in 0..PERSISTS {
+        store
+            .replace_state(format!("incremental image {index}").as_bytes())
+            .expect("persist through durable store");
+    }
+
+    let (full, incremental, bytes_read) = witness_verification_counters();
+    assert_eq!(
+        full, 1,
+        "steady-state writes must not reparse historical records"
+    );
+    assert!(incremental >= (PERSISTS * 4) as u64);
+    let bytes_per_persist = (bytes_read - bytes_after_open) / PERSISTS as u64;
+    assert!(
+        bytes_per_persist < 2_048,
+        "verification must remain O(1), got {bytes_per_persist} bytes per persist"
+    );
+    let journal_length = std::fs::metadata(state_witness_file_path(&state_path))
+        .expect("journal metadata")
+        .len();
+    assert!(
+        bytes_per_persist < journal_length,
+        "constant verification reads must stay below the growing journal"
+    );
+    drop(store);
+
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+#[cfg(unix)]
+fn retained_inventory_is_public_sorted_and_bound_to_the_witness_tip() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("retained_inventory");
+    reset_for_tests();
+
+    let baseline = retained_key_package_inventory().expect("baseline inventory");
+    assert!(baseline.entries.is_empty());
+    assert_eq!(
+        baseline.schema,
+        TBTC_SIGNER_RETAINED_KEY_PACKAGE_INVENTORY_SCHEMA
+    );
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(61);
+    for seat in [3u16, 1u16] {
+        persist_distributed_dkg_key_package(PersistDistributedDkgKeyPackageRequest {
+            session_id: "inventory-wallet".to_string(),
+            participant_identifier: seat,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&seat).expect("local seat").clone(),
+            public_key_package: native_public.clone(),
+        })
+        .expect("persist local DKG seat");
+    }
+
+    let inventory = retained_key_package_inventory().expect("retained inventory");
+    assert!(inventory.state_generation > baseline.state_generation);
+    assert_ne!(inventory.state_commitment, baseline.state_commitment);
+    assert_eq!(inventory.entries.len(), 1);
+    let entry = &inventory.entries[0];
+    assert_eq!(entry.wallet_id, format!("0x{}", &entry.key_group[2..]));
+    assert_eq!(entry.threshold, 2);
+    assert_eq!(entry.participant_count, 3);
+    assert_eq!(entry.share_epoch, 0);
+    assert_eq!(
+        entry
+            .key_packages
+            .iter()
+            .map(|package| package.participant_seat)
+            .collect::<Vec<_>>(),
+        vec![1, 3]
+    );
+
+    let inventory_json = serde_json::to_string(&inventory).expect("inventory JSON");
+    for package in native_key_packages.values() {
+        assert!(
+            !inventory_json.contains(package.data_hex.expose_secret()),
+            "the public inventory must not expose a serialized secret key package"
+        );
+    }
+
+    {
+        let engine = state().expect("engine state");
+        let mut guard = engine.lock().expect("engine lock");
+        guard.operator_fault_scores.insert(65000, 1);
+        persist_engine_state_to_storage(&guard).expect("persist unrelated durable state");
+    }
+    let advanced = retained_key_package_inventory().expect("advanced inventory");
+    assert!(advanced.state_generation > inventory.state_generation);
+    assert_eq!(
+        advanced.inventory_commitment,
+        inventory.inventory_commitment
+    );
+    assert_eq!(advanced.entries, inventory.entries);
+
+    {
+        let engine = state().expect("engine state");
+        let mut guard = engine.lock().expect("engine lock");
+        guard
+            .sessions
+            .get_mut("inventory-wallet")
+            .expect("wallet session")
+            .dkg_share_epoch = 1;
+    }
+    expect_internal_error_contains(
+        retained_key_package_inventory().expect_err("unsupported nonzero epoch must fail closed"),
+        "unsupported key-package share epoch",
+    );
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
     clear_state_storage_policy_overrides();
 }

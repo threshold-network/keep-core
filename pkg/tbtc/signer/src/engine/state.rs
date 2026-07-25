@@ -102,6 +102,10 @@ pub(crate) struct SessionState {
     pub(crate) dkg_key_packages: Option<BTreeMap<u16, frost::keys::KeyPackage>>,
     pub(crate) dkg_public_key_package: Option<frost::keys::PublicKeyPackage>,
     pub(crate) dkg_result: Option<DkgResult>,
+    /// Epoch of the retained cryptographic key packages. The current ABI-4
+    /// signer deliberately rejects synthetic share refresh, so zero is the only
+    /// supported value until a real atomic replacement protocol is introduced.
+    pub(crate) dkg_share_epoch: u64,
     pub(crate) sign_request_fingerprint: Option<String>,
     pub(crate) sign_message_bytes: Option<SecretBytes>,
     pub(crate) round_state: Option<RoundState>,
@@ -240,113 +244,24 @@ pub(crate) enum CorruptStatePolicy {
     QuarantineAndReset,
 }
 
-pub(crate) struct StateFileLock {
-    pub(crate) _file: fs::File,
-    pub(crate) state_path: PathBuf,
-    pub(crate) lock_path: PathBuf,
-}
-
-impl StateFileLock {
-    pub(crate) fn acquire(state_path: &Path) -> Result<Self, EngineError> {
-        let lock_path = state_lock_file_path(state_path);
-        if let Some(parent) = lock_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                EngineError::Internal(format!(
-                    "failed to create signer state lock directory [{}]: {e}",
-                    parent.display()
-                ))
-            })?;
-        }
-
-        let mut lock_file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(&lock_path)
-            .map_err(|e| {
-                EngineError::Internal(format!(
-                    "failed to open signer state lock file [{}]: {e}",
-                    lock_path.display()
-                ))
-            })?;
-
-        #[cfg(unix)]
-        {
-            use std::os::fd::AsRawFd;
-
-            let rc = unsafe { flock(lock_file.as_raw_fd(), LOCK_EX | LOCK_NB) };
-            if rc != 0 {
-                let lock_error = std::io::Error::last_os_error();
-                if lock_error
-                    .raw_os_error()
-                    .is_some_and(is_lock_contention_errno)
-                {
-                    return Err(EngineError::Internal(format!(
-                        "signer state lock already held by another process [{}]",
-                        lock_path.display()
-                    )));
-                }
-
-                return Err(EngineError::Internal(format!(
-                    "failed to lock signer state file [{}]: {lock_error}",
-                    lock_path.display()
-                )));
-            }
-        }
-
-        lock_file.set_len(0).map_err(|e| {
-            EngineError::Internal(format!(
-                "failed to truncate signer state lock file [{}]: {e}",
-                lock_path.display()
-            ))
-        })?;
-        writeln!(
-            lock_file,
-            "pid={}\nstate_path={}",
-            std::process::id(),
-            state_path.display()
-        )
-        .map_err(|e| {
-            EngineError::Internal(format!(
-                "failed to write signer state lock file [{}]: {e}",
-                lock_path.display()
-            ))
-        })?;
-        lock_file.sync_all().map_err(|e| {
-            EngineError::Internal(format!(
-                "failed to sync signer state lock file [{}]: {e}",
-                lock_path.display()
-            ))
-        })?;
-
-        Ok(Self {
-            _file: lock_file,
-            state_path: state_path.to_path_buf(),
-            lock_path,
-        })
-    }
-}
-
 pub(crate) fn state_file_lock_slot() -> &'static Mutex<Option<StateFileLock>> {
     STATE_FILE_LOCK.get_or_init(|| Mutex::new(None))
 }
 
-#[cfg(unix)]
-pub(crate) fn is_lock_contention_errno(errno: i32) -> bool {
-    errno == EAGAIN || errno == EWOULDBLOCK
-}
-
 pub(crate) fn state() -> Result<&'static Mutex<EngineState>, EngineError> {
-    ensure_state_file_lock()?;
     warn_disabled_policy_gates();
 
-    initialize_engine_state_with_loader(
+    let engine = initialize_engine_state_with_loader(
         &ENGINE_STATE,
         &ENGINE_STATE_INITIALIZATION_LOCK,
         || {},
         load_engine_state_from_storage,
-    )
+    )?;
+    // The loader uses the startup-only validation path so it can apply the
+    // explicit corruption policy. Once an EngineState exists, every caller
+    // must satisfy the full state-image/witness check.
+    ensure_state_file_lock()?;
+    Ok(engine)
 }
 
 /// Installs the first engine state while serializing the complete fallible load
@@ -447,8 +362,46 @@ pub(crate) fn ensure_state_file_lock() -> Result<(), EngineError> {
         .lock()
         .map_err(|_| EngineError::Internal("state file lock mutex poisoned".to_string()))?;
 
-    if let Some(existing_lock) = lock_slot.as_ref() {
+    if let Some(existing_lock) = lock_slot.as_mut() {
         if existing_lock.state_path == state_path {
+            // `state()` is the front door for every stateful signer operation.
+            // Revalidate the held no-follow store on every call so a lock,
+            // store-ID, directory, witness, or state replacement after startup
+            // cannot be hidden behind the initialized in-memory state.
+            existing_lock.identity()?;
+            return Ok(());
+        }
+
+        return Err(EngineError::Internal(format!(
+            "state file lock already initialized for [{}] with lock [{}]; refusing to switch to [{}] in-process",
+            existing_lock.state_path.display(),
+            existing_lock.lock_path.display(),
+            state_path.display()
+        )));
+    }
+
+    // Acquisition validates descriptor structure and the journal. Validate the
+    // state image against the committed tip before exposing the store through
+    // the ordinary stateful-operation front door.
+    let mut acquired = StateFileLock::acquire(&state_path)?;
+    acquired.identity()?;
+    *lock_slot = Some(acquired);
+    Ok(())
+}
+
+/// Startup-only variant which validates the descriptor-bound store and witness
+/// journal but defers the state-image digest comparison until after decoding.
+/// This lets the explicit corruption policy quarantine malformed state without
+/// allowing a valid rollback image into `EngineState`.
+pub(crate) fn ensure_state_file_lock_for_load() -> Result<(), EngineError> {
+    let state_path = state_file_path()?;
+    let mut lock_slot = state_file_lock_slot()
+        .lock()
+        .map_err(|_| EngineError::Internal("state file lock mutex poisoned".to_string()))?;
+
+    if let Some(existing_lock) = lock_slot.as_mut() {
+        if existing_lock.state_path == state_path {
+            existing_lock.revalidate_store_entries()?;
             return Ok(());
         }
 
@@ -462,6 +415,36 @@ pub(crate) fn ensure_state_file_lock() -> Result<(), EngineError> {
 
     *lock_slot = Some(StateFileLock::acquire(&state_path)?);
     Ok(())
+}
+
+pub(crate) fn with_state_file_lock<T>(
+    operation: impl FnOnce(&mut StateFileLock) -> Result<T, EngineError>,
+) -> Result<T, EngineError> {
+    ensure_state_file_lock()?;
+    let mut lock_slot = state_file_lock_slot()
+        .lock()
+        .map_err(|_| EngineError::Internal("state file lock mutex poisoned".to_string()))?;
+    let store = lock_slot.as_mut().ok_or_else(|| {
+        EngineError::Internal("signer durable store lock is not initialized".to_string())
+    })?;
+    operation(store)
+}
+
+pub(crate) fn with_state_file_lock_for_load<T>(
+    operation: impl FnOnce(&mut StateFileLock) -> Result<T, EngineError>,
+) -> Result<T, EngineError> {
+    ensure_state_file_lock_for_load()?;
+    let mut lock_slot = state_file_lock_slot()
+        .lock()
+        .map_err(|_| EngineError::Internal("state file lock mutex poisoned".to_string()))?;
+    let store = lock_slot.as_mut().ok_or_else(|| {
+        EngineError::Internal("signer durable store lock is not initialized".to_string())
+    })?;
+    operation(store)
+}
+
+pub(crate) fn durable_store_identity() -> Result<DurableStoreIdentity, EngineError> {
+    with_state_file_lock(|store| store.identity())
 }
 
 pub(crate) fn state_corruption_policy() -> CorruptStatePolicy {
@@ -542,6 +525,7 @@ pub(crate) fn per_message_interactive_session(session: &SessionState) -> bool {
         dkg_key_packages,
         dkg_public_key_package,
         dkg_result,
+        dkg_share_epoch,
         sign_request_fingerprint,
         sign_message_bytes,
         round_state,
@@ -596,6 +580,7 @@ pub(crate) fn per_message_interactive_session(session: &SessionState) -> bool {
         consumed_interactive_attempt_markers,
         authorized_interactive_aggregate_markers,
         aggregated_interactive_attempt_markers,
+        dkg_share_epoch,
     );
 
     bound_key_group.is_some()
@@ -603,6 +588,7 @@ pub(crate) fn per_message_interactive_session(session: &SessionState) -> bool {
         && dkg_key_packages.is_none()
         && dkg_public_key_package.is_none()
         && dkg_result.is_none()
+        && *dkg_share_epoch == 0
 }
 
 pub(crate) fn retire_idle_per_message_sessions(

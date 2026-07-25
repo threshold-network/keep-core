@@ -47,6 +47,16 @@ pub(crate) const TBTC_SIGNER_STATE_CORRUPT_BACKUP_LIMIT_ENV: &str =
 
 pub(crate) const TBTC_SIGNER_DEFAULT_CORRUPT_BACKUP_LIMIT: usize = 5;
 
+/// Maximum number of fixed-width PREPARE/COMMIT/ABORT records retained in the
+/// active state-witness segment. The signer currently has no authority-signed
+/// checkpoint rotation protocol, so reaching this ceiling fails closed instead
+/// of silently compacting or re-genesis-ing the anti-rollback chain.
+pub(crate) const TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV: &str =
+    "TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS";
+pub(crate) const TBTC_SIGNER_DEFAULT_STATE_WITNESS_MAX_RECORDS: usize = 262_144;
+pub(crate) const TBTC_SIGNER_MIN_STATE_WITNESS_MAX_RECORDS: usize = 2;
+pub(crate) const TBTC_SIGNER_HARD_MAX_STATE_WITNESS_MAX_RECORDS: usize = 1_000_000;
+
 pub(crate) const TBTC_SIGNER_MAX_SESSIONS_ENV: &str = "TBTC_SIGNER_MAX_SESSIONS";
 
 pub(crate) const TBTC_SIGNER_DEFAULT_MAX_SESSIONS: usize = 1024;
@@ -316,6 +326,25 @@ pub(crate) fn parse_u64_from_env_with_default(
         ))
     })?;
     Ok(parsed)
+}
+
+pub(crate) fn state_witness_max_records() -> Result<usize, EngineError> {
+    let value = parse_usize_from_env_with_default(
+        TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV,
+        TBTC_SIGNER_DEFAULT_STATE_WITNESS_MAX_RECORDS,
+    )?;
+    if !(TBTC_SIGNER_MIN_STATE_WITNESS_MAX_RECORDS..=TBTC_SIGNER_HARD_MAX_STATE_WITNESS_MAX_RECORDS)
+        .contains(&value)
+    {
+        return Err(EngineError::Validation(format!(
+            "{} must be between {} and {}; got [{}]",
+            TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV,
+            TBTC_SIGNER_MIN_STATE_WITNESS_MAX_RECORDS,
+            TBTC_SIGNER_HARD_MAX_STATE_WITNESS_MAX_RECORDS,
+            value
+        )));
+    }
+    Ok(value)
 }
 
 pub(crate) fn parse_u8_from_env_optional(env_name: &str) -> Result<Option<u8>, EngineError> {

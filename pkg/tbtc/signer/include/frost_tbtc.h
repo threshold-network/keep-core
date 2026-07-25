@@ -22,10 +22,10 @@ TbtcSignerResult frost_tbtc_version(void);
 TbtcSignerResult frost_tbtc_abi_version(void);
 /*
  * Returns the exact descriptor-bound durable session-store identity using the
- * tbtc-signer-durable-session-store-identity/v1 JSON schema. The call opens and
+ * tbtc-signer-durable-session-store-identity/v2 JSON schema. The call opens and
  * exclusively locks the store before reading any signer state and fails closed
  * if a live path, lock, store-ID, or state entry no longer matches its held
- * no-follow descriptor. This stable v1 identity does not attest pre-start
+ * no-follow descriptor. This stable v2 identity does not attest pre-start
  * state freshness or the installed key-package inventory.
  */
 TbtcSignerResult frost_tbtc_durable_store_identity(void);

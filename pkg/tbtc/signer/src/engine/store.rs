@@ -192,6 +192,7 @@ pub(crate) struct StateFileLock {
     witness_history: Vec<StateWitness>,
     pending_witness: Option<StateWitness>,
     witness_length: usize,
+    witness_max_records: usize,
     /// The verified prefix of the journal. `None` means "nothing is cached",
     /// which forces the next verification to parse the whole journal. It is
     /// deliberately `None` on every fresh open.
@@ -361,12 +362,14 @@ impl StateFileLock {
 
         let witness_name = state_witness_file_name(&state_name);
         validate_entry_name(&witness_name, "state witness")?;
+        let witness_max_records = state_witness_max_records()?;
         let (witness_file, witness_identity, witness_history, pending_witness, witness_length) =
             open_or_create_state_witness(
                 &directory,
                 &witness_name,
                 &identity,
                 current_state_file.as_ref(),
+                witness_max_records,
             )?;
         // Persist a newly-created witness entry before exposing either the
         // static identity or dynamic state tip.
@@ -395,6 +398,7 @@ impl StateFileLock {
             witness_history,
             pending_witness,
             witness_length,
+            witness_max_records,
             witness_prefix: None,
             last_appended_record: [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH],
             current_state_file,
@@ -592,7 +596,10 @@ impl StateFileLock {
                 self.state_path.display()
             )));
         }
-        let backup_parent = backup_path.parent().unwrap_or_else(|| Path::new("."));
+        let backup_parent = backup_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
         let canonical_backup_parent = fs::canonicalize(backup_parent).map_err(|error| {
             EngineError::Internal(format!(
                 "failed to canonicalize signer state backup directory [{}]: {error}",
@@ -769,6 +776,13 @@ impl StateFileLock {
         {
             return Ok(false);
         }
+        // Take stamps around the anchor reads. A writer that changes the file
+        // between the caller's initial stat and these reads must not be
+        // admitted merely because it restores the same length.
+        let before = witness_change_stamp(&self.witness_file)?;
+        if before != prefix.stamp {
+            return Ok(false);
+        }
         let header = read_file_range_at(
             &self.witness_file,
             0,
@@ -786,38 +800,33 @@ impl StateFileLock {
             TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
             LABEL,
         )?;
+        let after = witness_change_stamp(&self.witness_file)?;
         #[cfg(test)]
         WITNESS_VERIFIED_BYTES_READ.fetch_add(
             (header.len() + tail.len()) as u64,
             std::sync::atomic::Ordering::SeqCst,
         );
-        Ok(tail == prefix.tail_record)
+        Ok(before == after && after == prefix.stamp && tail == prefix.tail_record)
     }
 
     #[cfg(unix)]
     fn verify_state_witness_journal_fully(&mut self) -> Result<(), EngineError> {
-        const LABEL: &str = "signer state witness journal";
         #[cfg(test)]
         WITNESS_FULL_VERIFICATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
         let before = witness_change_stamp(&self.witness_file)?;
-        let witness_bytes = read_file_at(&self.witness_file, LABEL)?;
-        #[cfg(test)]
-        WITNESS_VERIFIED_BYTES_READ.fetch_add(
-            witness_bytes.len() as u64,
-            std::sync::atomic::Ordering::SeqCst,
-        );
-        if witness_bytes.len() != self.witness_length {
+        let (history, pending, parsed_length, tail_record) = read_state_witness_journal_streaming(
+            &self.witness_file,
+            &self.identity.store_id,
+            &self.identity.fingerprint,
+            self.witness_max_records,
+        )?;
+        if parsed_length != self.witness_length {
             return Err(EngineError::Internal(
                 "signer state witness journal length changed outside the locked store".to_string(),
             ));
         }
-        let (history, pending) = parse_state_witness_journal(
-            &witness_bytes,
-            &self.identity.store_id,
-            &self.identity.fingerprint,
-        )?;
-        if pending.is_some() || history != self.witness_history {
+        if pending != self.pending_witness || history != self.witness_history {
             return Err(EngineError::Internal(
                 "signer state witness journal changed outside the locked store".to_string(),
             ));
@@ -826,13 +835,13 @@ impl StateFileLock {
         // Only cache a prefix whose bytes provably did not move while they were
         // being read.
         let after = witness_change_stamp(&self.witness_file)?;
-        let tail_start = witness_bytes
-            .len()
-            .checked_sub(TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH);
-        self.witness_prefix = match (before == after, tail_start) {
-            (true, Some(start)) => self.build_witness_prefix(after, &witness_bytes[start..]),
-            _ => None,
-        };
+        if before != after {
+            self.witness_prefix = None;
+            return Err(EngineError::Internal(
+                "signer state witness journal changed during full verification".to_string(),
+            ));
+        }
+        self.witness_prefix = self.build_witness_prefix(after, &tail_record);
         Ok(())
     }
 
@@ -872,18 +881,39 @@ impl StateFileLock {
     #[cfg(unix)]
     fn extend_witness_prefix(&mut self) -> Result<(), EngineError> {
         const LABEL: &str = "signer state witness journal";
-        if self.witness_prefix.is_none() {
+        let Some(previous) = self.witness_prefix.clone() else {
             // Nothing verified yet; the next access parses the whole journal.
             return Ok(());
-        }
-        let Some(appended_offset) = self
-            .witness_length
-            .checked_sub(TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH)
-        else {
-            self.witness_prefix = None;
-            return Ok(());
         };
+        let appended_offset = previous.verified_length;
+        if appended_offset.checked_add(TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH)
+            != Some(self.witness_length)
+        {
+            self.witness_prefix = None;
+            return Err(EngineError::Internal(
+                "signer state witness journal length did not advance by exactly one record"
+                    .to_string(),
+            ));
+        }
         let before = witness_change_stamp(&self.witness_file)?;
+        if before.size != self.witness_length as u64 {
+            self.witness_prefix = None;
+            return Err(EngineError::Internal(
+                "signer state witness journal size changed during append read-back".to_string(),
+            ));
+        }
+        let header = read_file_range_at(
+            &self.witness_file,
+            0,
+            TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH,
+            LABEL,
+        )?;
+        let old_tail = read_file_range_at(
+            &self.witness_file,
+            previous.verified_length - TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
+            TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH,
+            LABEL,
+        )?;
         let appended = read_file_range_at(
             &self.witness_file,
             appended_offset,
@@ -891,20 +921,31 @@ impl StateFileLock {
             LABEL,
         )?;
         #[cfg(test)]
-        WITNESS_VERIFIED_BYTES_READ
-            .fetch_add(appended.len() as u64, std::sync::atomic::Ordering::SeqCst);
-        if appended != self.last_appended_record {
+        WITNESS_VERIFIED_BYTES_READ.fetch_add(
+            (header.len() + old_tail.len() + appended.len()) as u64,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        let header_matches = &header[..TBTC_SIGNER_STATE_WITNESS_MAGIC.len()]
+            == TBTC_SIGNER_STATE_WITNESS_MAGIC
+            && header[TBTC_SIGNER_STATE_WITNESS_MAGIC.len()..] == self.identity.store_id;
+        if !header_matches
+            || old_tail != previous.tail_record
+            || appended != self.last_appended_record
+        {
+            self.witness_prefix = None;
             return Err(EngineError::Internal(
-                "signer state witness journal read-back does not match the appended record"
+                "signer state witness journal prefix or append read-back changed during append"
                     .to_string(),
             ));
         }
         let after = witness_change_stamp(&self.witness_file)?;
-        self.witness_prefix = if before == after {
-            self.build_witness_prefix(after, &self.last_appended_record)
-        } else {
-            None
-        };
+        if before != after {
+            self.witness_prefix = None;
+            return Err(EngineError::Internal(
+                "signer state witness journal changed during append read-back".to_string(),
+            ));
+        }
+        self.witness_prefix = self.build_witness_prefix(after, &self.last_appended_record);
         Ok(())
     }
 
@@ -975,28 +1016,29 @@ impl StateFileLock {
                 "state witness proof maximumEntries must be between 1 and 256".to_string(),
             ));
         }
-        let ancestor_index = self
-            .witness_history
-            .iter()
-            .position(|entry| {
-                entry.generation == ancestor_generation && entry.commitment == ancestor_commitment
-            })
-            .ok_or_else(|| {
-                EngineError::Validation(
-                    "state witness proof ancestor is not in the active store history".to_string(),
-                )
-            })?;
-        let target_index = self
-            .witness_history
-            .iter()
-            .position(|entry| {
-                entry.generation == target_generation && entry.commitment == target_commitment
-            })
-            .ok_or_else(|| {
-                EngineError::Validation(
-                    "state witness proof target is not in the active store history".to_string(),
-                )
-            })?;
+        let resolve_index = |generation: u64,
+                             commitment: [u8; 32],
+                             label: &str|
+         -> Result<usize, EngineError> {
+            let index = generation
+                .checked_sub(1)
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or_else(|| {
+                    EngineError::Validation(format!(
+                        "state witness proof {label} is not in the active store history"
+                    ))
+                })?;
+            match self.witness_history.get(index) {
+                Some(entry) if entry.generation == generation && entry.commitment == commitment => {
+                    Ok(index)
+                }
+                _ => Err(EngineError::Validation(format!(
+                    "state witness proof {label} is not in the active store history"
+                ))),
+            }
+        };
+        let ancestor_index = resolve_index(ancestor_generation, ancestor_commitment, "ancestor")?;
+        let target_index = resolve_index(target_generation, target_commitment, "target")?;
         if target_index < ancestor_index {
             return Err(EngineError::Validation(
                 "state witness proof target precedes the requested ancestor".to_string(),
@@ -1051,6 +1093,7 @@ impl StateFileLock {
                 "prepared state witness does not extend the active witness tip".to_string(),
             ));
         }
+        self.ensure_witness_record_capacity(2)?;
         self.append_witness_record(TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE, &witness)?;
         self.pending_witness = Some(witness);
         self.extend_witness_prefix()
@@ -1119,6 +1162,12 @@ impl StateFileLock {
         record_type: u8,
         witness: &StateWitness,
     ) -> Result<(), EngineError> {
+        // A cooperating append must never turn an unverified or externally
+        // changed prefix into a new trusted cache entry. Validate the exact
+        // pre-append journal first; this also checks the fixed anchors and
+        // forces a streaming full parse on any stamp mismatch.
+        self.verify_state_witness_journal()?;
+        self.ensure_witness_record_capacity(1)?;
         let stat = descriptor_stat(&self.witness_file, "signer state witness journal")?;
         if stat.st_size < 0 || stat.st_size as usize != self.witness_length {
             return Err(EngineError::Internal(
@@ -1142,16 +1191,37 @@ impl StateFileLock {
         Ok(())
     }
 
-    #[cfg(all(test, unix))]
-    pub(crate) fn release_lock_for_tests(&mut self) -> Result<(), EngineError> {
-        let result = unsafe { libc::flock(self._file.as_raw_fd(), libc::LOCK_UN) };
-        if result != 0 {
+    #[cfg(unix)]
+    fn witness_record_count(&self) -> Result<usize, EngineError> {
+        self.witness_length
+            .checked_sub(TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH)
+            .filter(|bytes| bytes % TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH == 0)
+            .map(|bytes| bytes / TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH)
+            .ok_or_else(|| {
+                EngineError::Internal(
+                    "signer state witness journal length is not record-aligned".to_string(),
+                )
+            })
+    }
+
+    #[cfg(unix)]
+    fn ensure_witness_record_capacity(&self, additional: usize) -> Result<(), EngineError> {
+        let required = self
+            .witness_record_count()?
+            .checked_add(additional)
+            .ok_or_else(|| {
+                EngineError::Internal(
+                    "signer state witness journal record count overflowed".to_string(),
+                )
+            })?;
+        if required > self.witness_max_records {
             return Err(EngineError::Internal(format!(
-                "failed to release signer durable store lock for test: {}",
-                std::io::Error::last_os_error()
+                "signer state witness journal record ceiling [{}] reached; refusing unsigned \
+                 local compaction or re-genesis. Install a future manifest-pinned, \
+                 authority-signed checkpoint through the checkpoint ABI before resuming writes",
+                self.witness_max_records
             )));
         }
-        self.lock_held = false;
         Ok(())
     }
 }
@@ -1568,11 +1638,20 @@ type OpenedStateWitnessJournal = (
 );
 
 #[cfg(unix)]
+type ParsedStateWitnessJournal = (
+    Vec<StateWitness>,
+    Option<StateWitness>,
+    usize,
+    [u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH],
+);
+
+#[cfg(unix)]
 fn open_or_create_state_witness(
     directory: &fs::File,
     name: &OsStr,
     store_identity: &DurableStoreIdentity,
     current_state_file: Option<&fs::File>,
+    maximum_records: usize,
 ) -> Result<OpenedStateWitnessJournal, EngineError> {
     const LABEL: &str = "signer state witness journal";
 
@@ -1591,15 +1670,16 @@ fn open_or_create_state_witness(
         // record with invalid content still fails closed instead of being
         // truncated away. Any PREPARE that survives the repair is returned to
         // the caller, which reconciles it against the held state image.
-        let bytes = read_file_at(&file, LABEL)?;
-        let bytes = truncate_incomplete_witness_record(&file, &store_identity.store_id, bytes)?;
-        let (history, pending) = parse_state_witness_journal(
-            &bytes,
+        let length = truncate_incomplete_witness_record(&file, &store_identity.store_id)?;
+        let (history, pending, parsed_length, _) = read_state_witness_journal_streaming(
+            &file,
             &store_identity.store_id,
             &store_identity.fingerprint,
+            maximum_records,
         )?;
+        debug_assert_eq!(length, parsed_length);
         let identity = descriptor_identity(&file, LABEL)?;
-        return Ok((file, identity, history, pending, bytes.len()));
+        return Ok((file, identity, history, pending, parsed_length));
     }
 
     // Genesis is the one write that is not a single fixed-width record, so it
@@ -1607,6 +1687,12 @@ fn open_or_create_state_witness(
     // short genesis is fatal at every length (0-47 fails the header, 48-152
     // has no complete record, 153-257 has no committed genesis). Publish it
     // atomically so the window does not exist.
+    if maximum_records < 2 {
+        return Err(EngineError::Validation(format!(
+            "signer state witness record ceiling must reserve two genesis records; got [{}]",
+            maximum_records
+        )));
+    }
     let digest = current_state_image_digest(current_state_file)?;
     let genesis_root = state_witness_genesis(&store_identity.fingerprint);
     let genesis = StateWitness {
@@ -1645,24 +1731,36 @@ fn open_or_create_state_witness(
 fn truncate_incomplete_witness_record(
     file: &fs::File,
     expected_store_id: &[u8; 32],
-    mut bytes: Vec<u8>,
-) -> Result<Vec<u8>, EngineError> {
-    if bytes.len() < TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH
-        || &bytes[..TBTC_SIGNER_STATE_WITNESS_MAGIC.len()] != TBTC_SIGNER_STATE_WITNESS_MAGIC
-        || &bytes[TBTC_SIGNER_STATE_WITNESS_MAGIC.len()..TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH]
+) -> Result<usize, EngineError> {
+    const LABEL: &str = "signer state witness journal";
+    let stat = descriptor_stat(file, LABEL)?;
+    if stat.st_size < 0 {
+        return Err(EngineError::Internal(
+            "signer state witness journal has a negative length".to_string(),
+        ));
+    }
+    let length = usize::try_from(stat.st_size).map_err(|_| {
+        EngineError::Internal(
+            "signer state witness journal length does not fit this platform".to_string(),
+        )
+    })?;
+    if length < TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH {
+        return Ok(length);
+    }
+    let header = read_file_range_at(file, 0, TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH, LABEL)?;
+    if &header[..TBTC_SIGNER_STATE_WITNESS_MAGIC.len()] != TBTC_SIGNER_STATE_WITNESS_MAGIC
+        || &header[TBTC_SIGNER_STATE_WITNESS_MAGIC.len()..TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH]
             != expected_store_id
     {
-        return Ok(bytes);
+        return Ok(length);
     }
-    let incomplete_len = bytes[TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH..]
-        .chunks_exact(TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH)
-        .remainder()
-        .len();
+    let incomplete_len = (length - TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH)
+        % TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH;
     if incomplete_len == 0 {
-        return Ok(bytes);
+        return Ok(length);
     }
 
-    let complete_len = bytes.len() - incomplete_len;
+    let complete_len = length - incomplete_len;
     file.set_len(complete_len as u64).map_err(|error| {
         EngineError::Internal(format!(
             "failed to discard the incomplete trailing signer state witness record: {error}"
@@ -1673,8 +1771,7 @@ fn truncate_incomplete_witness_record(
             "failed to sync the repaired signer state witness journal: {error}"
         ))
     })?;
-    bytes.truncate(complete_len);
-    Ok(bytes)
+    Ok(complete_len)
 }
 
 #[cfg(unix)]
@@ -1699,6 +1796,104 @@ fn encode_state_witness_record(record_type: u8, witness: &StateWitness) -> Vec<u
     record
 }
 
+/// Parses and validates the journal one fixed-width record at a time.
+///
+/// Startup must verify the entire anti-rollback chain, but it must not first
+/// materialize an attacker-controlled file-sized `Vec`. The configured hard
+/// record ceiling is checked from descriptor metadata before allocating the
+/// bounded history, and stamps around the streaming read reject concurrent
+/// modification.
+#[cfg(unix)]
+fn read_state_witness_journal_streaming(
+    file: &fs::File,
+    expected_store_id: &[u8; 32],
+    store_fingerprint: &[u8; 32],
+    maximum_records: usize,
+) -> Result<ParsedStateWitnessJournal, EngineError> {
+    const LABEL: &str = "signer state witness journal";
+    let stat = descriptor_stat(file, LABEL)?;
+    if stat.st_size < 0 {
+        return Err(EngineError::Internal(
+            "signer state witness journal has a negative length".to_string(),
+        ));
+    }
+    let before = witness_change_stamp(file)?;
+    let length = usize::try_from(stat.st_size).map_err(|_| {
+        EngineError::Internal(
+            "signer state witness journal length does not fit this platform".to_string(),
+        )
+    })?;
+    if before.size != length as u64 {
+        return Err(EngineError::Internal(
+            "signer state witness journal changed before streaming verification".to_string(),
+        ));
+    }
+    let prefix_length = length.min(TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH);
+    let prefix = read_file_range_at(file, 0, prefix_length, LABEL)?;
+    #[cfg(test)]
+    WITNESS_VERIFIED_BYTES_READ.fetch_add(prefix.len() as u64, std::sync::atomic::Ordering::SeqCst);
+    if is_retired_v1_state_witness_journal(&prefix) {
+        return Err(retired_v1_state_witness_journal_error());
+    }
+    if length < TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH {
+        return Err(truncated_state_witness_journal_error(format!(
+            "signer state witness journal is [{length}] bytes, shorter than its \
+             {TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH}-byte header"
+        )));
+    }
+    if &prefix[..TBTC_SIGNER_STATE_WITNESS_MAGIC.len()] != TBTC_SIGNER_STATE_WITNESS_MAGIC
+        || &prefix[TBTC_SIGNER_STATE_WITNESS_MAGIC.len()..TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH]
+            != expected_store_id
+    {
+        return Err(EngineError::Internal(
+            "signer state witness journal header or store ID is invalid".to_string(),
+        ));
+    }
+    let record_bytes = length - TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH;
+    if record_bytes == 0 || !record_bytes.is_multiple_of(TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH) {
+        return Err(truncated_state_witness_journal_error(
+            "signer state witness journal contains a missing or partial record".to_string(),
+        ));
+    }
+    let record_count = record_bytes / TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH;
+    if record_count > maximum_records {
+        return Err(EngineError::Internal(format!(
+            "signer state witness journal contains [{record_count}] records, exceeding the \
+             configured fail-closed ceiling [{maximum_records}]"
+        )));
+    }
+
+    let mut history = Vec::<StateWitness>::with_capacity(record_count.div_ceil(2));
+    let mut pending = None::<StateWitness>;
+    let mut tail = [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH];
+    for index in 0..record_count {
+        let offset = TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH
+            + index * TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH;
+        let record =
+            read_file_range_at(file, offset, TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH, LABEL)?;
+        #[cfg(test)]
+        WITNESS_VERIFIED_BYTES_READ
+            .fetch_add(record.len() as u64, std::sync::atomic::Ordering::SeqCst);
+        apply_state_witness_record(&record, store_fingerprint, &mut history, &mut pending)?;
+        if index + 1 == record_count {
+            tail.copy_from_slice(&record);
+        }
+    }
+    if history.is_empty() {
+        return Err(truncated_state_witness_journal_error(
+            "signer state witness journal has no committed genesis record".to_string(),
+        ));
+    }
+    let after = witness_change_stamp(file)?;
+    if before != after {
+        return Err(EngineError::Internal(
+            "signer state witness journal changed while it was being verified".to_string(),
+        ));
+    }
+    Ok((history, pending, length, tail))
+}
+
+#[cfg(test)]
 fn parse_state_witness_journal(
     bytes: &[u8],
     expected_store_id: &[u8; 32],
@@ -1733,91 +1928,7 @@ fn parse_state_witness_journal(
     let mut history = Vec::<StateWitness>::new();
     let mut pending = None::<StateWitness>;
     for record in complete_records {
-        let record_type = record[0];
-        let generation = u64::from_be_bytes(
-            record[1..9]
-                .try_into()
-                .expect("fixed state witness generation slice"),
-        );
-        let mut previous_commitment = [0u8; 32];
-        previous_commitment.copy_from_slice(&record[9..41]);
-        let mut state_image_digest = [0u8; 32];
-        state_image_digest.copy_from_slice(&record[41..73]);
-        let mut commitment = [0u8; 32];
-        commitment.copy_from_slice(&record[73..105]);
-        let witness = StateWitness {
-            generation,
-            previous_commitment,
-            commitment,
-            state_image_digest,
-        };
-        if generation == 0
-            || state_image_digest == [0u8; 32]
-            || commitment == [0u8; 32]
-            || commitment
-                != state_commitment(
-                    store_fingerprint,
-                    generation,
-                    &previous_commitment,
-                    &state_image_digest,
-                )
-        {
-            return Err(EngineError::Internal(
-                "signer state witness journal contains an invalid commitment".to_string(),
-            ));
-        }
-
-        match record_type {
-            TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE => {
-                if pending.is_some() {
-                    return Err(EngineError::Internal(
-                        "signer state witness journal contains nested PREPARE records".to_string(),
-                    ));
-                }
-                let (expected_generation, expected_previous) = match history.last() {
-                    Some(tip) => (
-                        tip.generation.checked_add(1).ok_or_else(|| {
-                            EngineError::Internal(
-                                "signer state witness generation exhausted u64".to_string(),
-                            )
-                        })?,
-                        tip.commitment,
-                    ),
-                    None => (1, state_witness_genesis(store_fingerprint)),
-                };
-                if witness.generation != expected_generation
-                    || witness.previous_commitment != expected_previous
-                {
-                    return Err(EngineError::Internal(
-                        "signer state witness PREPARE does not extend the committed tip"
-                            .to_string(),
-                    ));
-                }
-                pending = Some(witness);
-            }
-            TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT => {
-                if pending.as_ref() != Some(&witness) {
-                    return Err(EngineError::Internal(
-                        "signer state witness COMMIT does not match its PREPARE".to_string(),
-                    ));
-                }
-                history.push(witness);
-                pending = None;
-            }
-            TBTC_SIGNER_STATE_WITNESS_RECORD_ABORT => {
-                if pending.as_ref() != Some(&witness) {
-                    return Err(EngineError::Internal(
-                        "signer state witness ABORT does not match its PREPARE".to_string(),
-                    ));
-                }
-                pending = None;
-            }
-            _ => {
-                return Err(EngineError::Internal(format!(
-                    "signer state witness journal contains unknown record type [{record_type}]"
-                )))
-            }
-        }
+        apply_state_witness_record(record, store_fingerprint, &mut history, &mut pending)?;
     }
     if history.is_empty() {
         return Err(truncated_state_witness_journal_error(
@@ -1825,6 +1936,104 @@ fn parse_state_witness_journal(
         ));
     }
     Ok((history, pending))
+}
+
+fn apply_state_witness_record(
+    record: &[u8],
+    store_fingerprint: &[u8; 32],
+    history: &mut Vec<StateWitness>,
+    pending: &mut Option<StateWitness>,
+) -> Result<(), EngineError> {
+    if record.len() != TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH {
+        return Err(truncated_state_witness_journal_error(
+            "signer state witness journal contains a missing or partial record".to_string(),
+        ));
+    }
+    let record_type = record[0];
+    let generation = u64::from_be_bytes(
+        record[1..9]
+            .try_into()
+            .expect("fixed state witness generation slice"),
+    );
+    let mut previous_commitment = [0u8; 32];
+    previous_commitment.copy_from_slice(&record[9..41]);
+    let mut state_image_digest = [0u8; 32];
+    state_image_digest.copy_from_slice(&record[41..73]);
+    let mut commitment = [0u8; 32];
+    commitment.copy_from_slice(&record[73..105]);
+    let witness = StateWitness {
+        generation,
+        previous_commitment,
+        commitment,
+        state_image_digest,
+    };
+    if generation == 0
+        || state_image_digest == [0u8; 32]
+        || commitment == [0u8; 32]
+        || commitment
+            != state_commitment(
+                store_fingerprint,
+                generation,
+                &previous_commitment,
+                &state_image_digest,
+            )
+    {
+        return Err(EngineError::Internal(
+            "signer state witness journal contains an invalid commitment".to_string(),
+        ));
+    }
+
+    match record_type {
+        TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE => {
+            if pending.is_some() {
+                return Err(EngineError::Internal(
+                    "signer state witness journal contains nested PREPARE records".to_string(),
+                ));
+            }
+            let (expected_generation, expected_previous) = match history.last() {
+                Some(tip) => (
+                    tip.generation.checked_add(1).ok_or_else(|| {
+                        EngineError::Internal(
+                            "signer state witness generation exhausted u64".to_string(),
+                        )
+                    })?,
+                    tip.commitment,
+                ),
+                None => (1, state_witness_genesis(store_fingerprint)),
+            };
+            if witness.generation != expected_generation
+                || witness.previous_commitment != expected_previous
+            {
+                return Err(EngineError::Internal(
+                    "signer state witness PREPARE does not extend the committed tip".to_string(),
+                ));
+            }
+            *pending = Some(witness);
+        }
+        TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT => {
+            if pending.as_ref() != Some(&witness) {
+                return Err(EngineError::Internal(
+                    "signer state witness COMMIT does not match its PREPARE".to_string(),
+                ));
+            }
+            history.push(witness);
+            *pending = None;
+        }
+        TBTC_SIGNER_STATE_WITNESS_RECORD_ABORT => {
+            if pending.as_ref() != Some(&witness) {
+                return Err(EngineError::Internal(
+                    "signer state witness ABORT does not match its PREPARE".to_string(),
+                ));
+            }
+            *pending = None;
+        }
+        _ => {
+            return Err(EngineError::Internal(format!(
+                "signer state witness journal contains unknown record type [{record_type}]"
+            )))
+        }
+    }
+    Ok(())
 }
 
 /// True when the journal carries the retired v1 magic. The store ID is not

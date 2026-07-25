@@ -181,6 +181,10 @@ fn validate_candidate_config() -> Result<(), EngineError> {
     // explicit state path; surfacing this at init beats failing the first
     // state access after a host migrates to the config FFI.
     state_file_path()?;
+    // The append-only witness has no unsigned/local-only compaction path.
+    // Reject unusable ceilings at init instead of discovering them after the
+    // signer has begun serving stateful operations.
+    state_witness_max_records()?;
     // The key-provider settings must be structurally usable too (production
     // forbids the env provider; the command provider requires a command).
     // Resolved WITHOUT reading the secret or executing the key command.
@@ -270,6 +274,11 @@ pub(crate) fn config_values_from_request(
         &mut values,
         TBTC_SIGNER_STATE_CORRUPT_BACKUP_LIMIT_ENV,
         request.state_corrupt_backup_limit,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV,
+        request.state_witness_max_records,
     );
     insert_u64(
         &mut values,

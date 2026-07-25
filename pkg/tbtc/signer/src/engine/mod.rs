@@ -12,12 +12,14 @@
 //! - [`dkg`] — distributed-DKG key-package persistence (`persist_distributed_dkg_key_package`).
 //! - [`frost_ops`] — Stateless FROST primitives: dkg_part1..3 and signing-package assembly.
 //! - [`interactive`] — Phase 7.1 hardened interactive signing session: engine-held nonce custody, Round1/Round2, consumption markers.
+//! - [`inventory`] — Public retained-key inventory and bounded witness-proof responses.
 //! - [`lifecycle`] — Operational lifecycle: canary rollout, refresh cadence/shares, emergency rekey, quarantine status.
 //! - [`persistence`] — Encrypted state-file persistence: envelope codec, key providers, corruption recovery, persisted<->live conversions.
 //! - [`policy`] — Admission, signing-policy firewall, rate limiting, and auto-quarantine enforcement.
 //! - [`provenance`] — Runtime provenance attestation gate.
 //! - [`roast`] — ROAST/RFC-21 attempt machinery: request fingerprints, round/attempt ids, attempt-context and transition-evidence validation.
-//! - [`state`] — In-memory engine/session state, the state-file lock, and registry capacity guards.
+//! - [`state`] — In-memory engine/session state and registry capacity guards.
+//! - [`store`] — Descriptor-bound durable identity, atomic state replacement, and append-only witness journal.
 //! - [`telemetry`] — Hardening telemetry: latency trackers and metrics reporting.
 //! - [`transaction`] — Taproot transaction building.
 //! - [`testsupport`] — Cross-module test helpers (cfg(test)): state lock, reset, restart simulation.

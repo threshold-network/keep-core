@@ -6,12 +6,13 @@ mod go_math_rand;
 
 use api::{
     BuildTaprootTxRequest, DeriveInteractiveAttemptContextRequest, DifferentialFuzzRequest,
-    DkgPart1Request, DkgPart2Request, DkgPart3Request, FrostTbtcAbiVersionResult,
-    InitSignerConfigRequest, InteractiveAggregateRequest, InteractiveRound1Request,
-    InteractiveRound2Request, InteractiveSessionAbortRequest, InteractiveSessionOpenRequest,
-    NewSigningPackageRequest, PersistDistributedDkgKeyPackageRequest, PromoteCanaryRequest,
-    QuarantineStatusRequest, RefreshCadenceStatusRequest, RefreshSharesRequest,
-    RollbackCanaryRequest, TranscriptAuditRequest, TriggerEmergencyRekeyRequest,
+    DkgPart1Request, DkgPart2Request, DkgPart3Request, DurableStoreIdentityResult,
+    FrostTbtcAbiVersionResult, InitSignerConfigRequest, InteractiveAggregateRequest,
+    InteractiveRound1Request, InteractiveRound2Request, InteractiveSessionAbortRequest,
+    InteractiveSessionOpenRequest, NewSigningPackageRequest,
+    PersistDistributedDkgKeyPackageRequest, PromoteCanaryRequest, QuarantineStatusRequest,
+    RefreshCadenceStatusRequest, RefreshSharesRequest, RollbackCanaryRequest,
+    StateWitnessProofRequest, TranscriptAuditRequest, TriggerEmergencyRekeyRequest,
     VerifyBlameProofRequest,
 };
 use ffi::{
@@ -44,10 +45,11 @@ const TBTC_SIGNER_VERSION: &str = "tbtc-signer/0.1.0-bootstrap";
 // JSON meaning is incompatible, so ABI-3 bridges must reject the library during
 // negotiation rather than discovering the change at refresh time.
 const TBTC_SIGNER_ABI_MAJOR: u32 = 4;
-// Major bumps reset the additive minor version. ABI 3.1-3.3 introduced the typed
-// heartbeat intent, its rate-limit configuration/metric, and optional canary
-// evidence configuration; all remain present in ABI 4.0.
-const TBTC_SIGNER_ABI_MINOR: u32 = 0;
+// Minor 1 adds the descriptor-bound durable-store identity, retained-key-package
+// inventory, and paginated state-witness proof symbols. These are new symbols
+// and response types; ABI-4.0 callers remain valid and safely ignore them. The
+// new store identity and witness transcripts are defined at schema v2.
+const TBTC_SIGNER_ABI_MINOR: u32 = 1;
 #[cfg(test)]
 use engine::TBTC_SIGNER_PROFILE_ENV;
 
@@ -71,6 +73,53 @@ pub extern "C" fn frost_tbtc_abi_version() -> TbtcSignerResult {
             abi_major: TBTC_SIGNER_ABI_MAJOR,
             abi_minor: TBTC_SIGNER_ABI_MINOR,
         })
+    })
+}
+
+/// Returns the identity of the durable store actually opened and locked by the
+/// signer. This call initializes the descriptor-bound store before any state
+/// access if it has not already been opened, then revalidates every stable
+/// anchor and the current atomic state entry before making safety claims.
+/// State freshness and retained key inventory are separate ABI contracts.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_durable_store_identity() -> TbtcSignerResult {
+    ffi_entry(|| {
+        let identity = engine::durable_store_identity()?;
+        let encode = |value: [u8; 32]| format!("0x{}", hex::encode(value));
+        serialize_response(&DurableStoreIdentityResult {
+            schema: engine::TBTC_SIGNER_DURABLE_STORE_IDENTITY_SCHEMA.to_string(),
+            backend: engine::TBTC_SIGNER_DURABLE_STORE_BACKEND.to_string(),
+            store_id: encode(identity.store_id),
+            canonical_path_fingerprint: encode(identity.canonical_path_fingerprint),
+            filesystem_fingerprint: encode(identity.filesystem_fingerprint),
+            lock_fingerprint: encode(identity.lock_fingerprint),
+            fingerprint: encode(identity.fingerprint),
+            durable: true,
+            exclusive_lock_held: true,
+            symlink_free: true,
+            replacement_protected: true,
+        })
+    })
+}
+
+/// Returns a validated, public-only inventory of every locally retained FROST
+/// key package together with the exact committed durable-state witness tip.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_retained_key_package_inventory() -> TbtcSignerResult {
+    ffi_entry(|| serialize_response(&engine::retained_key_package_inventory()?))
+}
+
+/// Proves a bounded, contiguous segment of the append-only durable-state
+/// witness chain. Callers paginate against a target captured from the inventory
+/// response and persist accepted tips outside this store.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_state_witness_proof(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: StateWitnessProofRequest = parse_request(request_ptr, request_len)?;
+        serialize_response(&engine::state_witness_proof(request)?)
     })
 }
 
@@ -396,21 +445,24 @@ mod tests {
     use crate::api::{
         BuildTaprootTxRequest, CanaryRolloutStatusResult, DifferentialFuzzRequest,
         DifferentialFuzzResult, DkgPart1Request, DkgPart1Result, DkgPart2Request, DkgPart2Result,
-        DkgPart3Request, DkgPart3Result, DkgRound1Package, DkgRound2Package, ErrorResponse,
-        FrostTbtcAbiVersionResult, PromoteCanaryRequest, QuarantineStatusRequest,
-        QuarantineStatusResult, RefreshCadenceStatusRequest, RefreshCadenceStatusResult,
-        RefreshSharesRequest, RoastLivenessPolicyResult, RollbackCanaryRequest,
-        SignerHardeningMetricsResult, TransactionResult, TranscriptAuditRequest,
-        TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
+        DkgPart3Request, DkgPart3Result, DkgRound1Package, DkgRound2Package,
+        DurableStoreIdentityResult, ErrorResponse, FrostTbtcAbiVersionResult, PromoteCanaryRequest,
+        QuarantineStatusRequest, QuarantineStatusResult, RefreshCadenceStatusRequest,
+        RefreshCadenceStatusResult, RefreshSharesRequest, RetainedKeyPackageInventoryResult,
+        RoastLivenessPolicyResult, RollbackCanaryRequest, SignerHardeningMetricsResult,
+        StateWitnessProofRequest, StateWitnessProofResult, TransactionResult,
+        TranscriptAuditRequest, TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
     };
     use crate::{
         frost_tbtc_abi_version, frost_tbtc_build_taproot_tx, frost_tbtc_canary_rollout_status,
-        frost_tbtc_dkg_part1, frost_tbtc_dkg_part2, frost_tbtc_dkg_part3, frost_tbtc_free_buffer,
-        frost_tbtc_hardening_metrics, frost_tbtc_promote_canary, frost_tbtc_quarantine_status,
-        frost_tbtc_refresh_cadence_status, frost_tbtc_refresh_shares,
+        frost_tbtc_dkg_part1, frost_tbtc_dkg_part2, frost_tbtc_dkg_part3,
+        frost_tbtc_durable_store_identity, frost_tbtc_free_buffer, frost_tbtc_hardening_metrics,
+        frost_tbtc_promote_canary, frost_tbtc_quarantine_status, frost_tbtc_refresh_cadence_status,
+        frost_tbtc_refresh_shares, frost_tbtc_retained_key_package_inventory,
         frost_tbtc_roast_liveness_policy, frost_tbtc_roast_transcript_audit,
         frost_tbtc_rollback_canary, frost_tbtc_run_differential_fuzzing,
-        frost_tbtc_trigger_emergency_rekey, frost_tbtc_verify_blame_proof,
+        frost_tbtc_state_witness_proof, frost_tbtc_trigger_emergency_rekey,
+        frost_tbtc_verify_blame_proof,
     };
 
     fn call_ffi<T: serde::Serialize>(
@@ -764,7 +816,154 @@ mod tests {
         // RefreshShares call from a synthetic success response to a terminal error,
         // forcing ABI-3 consumers to fail closed during compatibility negotiation.
         assert_eq!(abi.abi_major, 4);
-        assert_eq!(abi.abi_minor, 0);
+        assert_eq!(abi.abi_minor, 1);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn durable_store_identity_ffi_has_exact_v2_wire_shape_and_transcript() {
+        let _guard = crate::engine::lock_test_state();
+        let path = std::env::temp_dir().join(format!(
+            "frost_tbtc_ffi_store_identity_{}.json",
+            std::process::id()
+        ));
+        let path_string = path.to_string_lossy().into_owned();
+        let _state_path = EnvVarGuard::set("TBTC_SIGNER_STATE_PATH", &path_string);
+        crate::engine::reset_for_tests();
+
+        let (status, payload) = call_ffi_no_input(frost_tbtc_durable_store_identity);
+        assert_eq!(status, 0);
+        let wire: DurableStoreIdentityResult =
+            serde_json::from_slice(&payload).expect("durable store identity payload");
+        assert_eq!(
+            wire.schema,
+            crate::engine::TBTC_SIGNER_DURABLE_STORE_IDENTITY_SCHEMA
+        );
+        assert_eq!(
+            wire.backend,
+            crate::engine::TBTC_SIGNER_DURABLE_STORE_BACKEND
+        );
+        assert!(
+            wire.durable
+                && wire.exclusive_lock_held
+                && wire.symlink_free
+                && wire.replacement_protected
+        );
+
+        let decode = |value: &str| -> [u8; 32] {
+            assert_eq!(value, value.to_ascii_lowercase());
+            assert!(value.starts_with("0x"));
+            assert_eq!(value.len(), 66);
+            let bytes = hex::decode(&value[2..]).expect("bytes32 hex");
+            let mut result = [0u8; 32];
+            result.copy_from_slice(&bytes);
+            assert_ne!(result, [0u8; 32]);
+            result
+        };
+        let store_id = decode(&wire.store_id);
+        decode(&wire.canonical_path_fingerprint);
+        decode(&wire.filesystem_fingerprint);
+        decode(&wire.lock_fingerprint);
+        assert_eq!(
+            decode(&wire.fingerprint),
+            crate::engine::durable_store_fingerprint(&store_id)
+        );
+
+        let (second_status, second_payload) = call_ffi_no_input(frost_tbtc_durable_store_identity);
+        assert_eq!(second_status, 0);
+        assert_eq!(second_payload, payload);
+
+        if let Ok(mut slot) = crate::engine::state_file_lock_slot().lock() {
+            *slot = None;
+        }
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::engine::state_lock_file_path(&path));
+        let _ = std::fs::remove_file(crate::engine::durable_store_id_file_path(&path));
+        let _ = std::fs::remove_file(crate::engine::state_witness_file_path(&path));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn inventory_and_state_witness_ffi_have_exact_wire_contracts() {
+        use std::collections::BTreeSet;
+
+        let _guard = crate::engine::lock_test_state();
+        let path = std::env::temp_dir().join(format!(
+            "frost_tbtc_ffi_state_witness_{}.json",
+            std::process::id()
+        ));
+        let path_string = path.to_string_lossy().into_owned();
+        let _state_path = EnvVarGuard::set("TBTC_SIGNER_STATE_PATH", &path_string);
+        crate::engine::reset_for_tests();
+
+        let (status, payload) = call_ffi_no_input(frost_tbtc_retained_key_package_inventory);
+        assert_eq!(status, 0);
+        let value: serde_json::Value =
+            serde_json::from_slice(&payload).expect("inventory JSON object");
+        let keys = value
+            .as_object()
+            .expect("inventory object")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            keys,
+            BTreeSet::from([
+                "entries",
+                "inventoryCommitment",
+                "previousStateCommitment",
+                "schema",
+                "stateCommitment",
+                "stateGeneration",
+                "stateImageDigest",
+                "storeFingerprint",
+            ])
+        );
+        let inventory: RetainedKeyPackageInventoryResult =
+            serde_json::from_slice(&payload).expect("inventory response");
+        assert_eq!(
+            inventory.schema,
+            crate::engine::TBTC_SIGNER_RETAINED_KEY_PACKAGE_INVENTORY_SCHEMA
+        );
+        assert!(inventory.state_generation > 0);
+        assert!(inventory.entries.is_empty());
+
+        let request = StateWitnessProofRequest {
+            schema: crate::engine::TBTC_SIGNER_STATE_WITNESS_PROOF_REQUEST_SCHEMA.to_string(),
+            store_fingerprint: inventory.store_fingerprint.clone(),
+            ancestor_generation: inventory.state_generation,
+            ancestor_commitment: inventory.state_commitment.clone(),
+            target_generation: inventory.state_generation,
+            target_commitment: inventory.state_commitment.clone(),
+            maximum_entries: 16,
+        };
+        let (proof_status, proof_payload) = call_ffi(&request, frost_tbtc_state_witness_proof);
+        assert_eq!(proof_status, 0);
+        let proof: StateWitnessProofResult =
+            serde_json::from_slice(&proof_payload).expect("state witness proof");
+        assert_eq!(
+            proof.schema,
+            crate::engine::TBTC_SIGNER_STATE_WITNESS_PROOF_SCHEMA
+        );
+        assert_eq!(proof.store_fingerprint, inventory.store_fingerprint);
+        assert_eq!(proof.ancestor_generation, inventory.state_generation);
+        assert_eq!(proof.target_generation, inventory.state_generation);
+        assert!(proof.complete);
+        assert!(proof.entries.is_empty());
+
+        let mut unknown_field_request =
+            serde_json::to_value(&request).expect("proof request value");
+        unknown_field_request["unexpectedField"] = serde_json::json!(true);
+        let (invalid_status, _) = call_ffi(&unknown_field_request, frost_tbtc_state_witness_proof);
+        assert_ne!(invalid_status, 0);
+
+        if let Ok(mut slot) = crate::engine::state_file_lock_slot().lock() {
+            *slot = None;
+        }
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::engine::state_lock_file_path(&path));
+        let _ = std::fs::remove_file(crate::engine::durable_store_id_file_path(&path));
+        let _ = std::fs::remove_file(crate::engine::state_witness_file_path(&path));
     }
 
     #[test]
