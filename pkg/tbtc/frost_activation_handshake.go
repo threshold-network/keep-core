@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	frostActivationHandshakeSchema                = "tbtc-p2tr-production-activation-handshake/v3"
+	frostActivationHandshakeSchema                = "tbtc-p2tr-production-activation-handshake/v4"
 	frostActivationInventorySchema                = "tbtc-p2tr-frost-wallet-group-inventory/v1"
 	frostActivationHandshakeSignatureDomain       = "tbtc-p2tr-production-activation-handshake-signature/v3\x00"
 	frostActivationHandshakeReconciliationTimeout = frostRetainedGroupMaximumReconciliationDuration
@@ -52,10 +52,11 @@ type frostActivationEthereumPoint struct {
 }
 
 type frostActivationChallenge struct {
-	Nonce         string                       `json:"nonce"`
-	ManifestHash  string                       `json:"manifestHash"`
-	BindingHash   string                       `json:"bindingHash"`
-	EthereumPoint frostActivationEthereumPoint `json:"ethereumPoint"`
+	Nonce           string                                 `json:"nonce"`
+	ManifestHash    string                                 `json:"manifestHash"`
+	BindingHash     string                                 `json:"bindingHash"`
+	EthereumPoint   frostActivationEthereumPoint           `json:"ethereumPoint"`
+	CheckpointFloor frostRetainedGroupWireCheckpointCursor `json:"checkpointFloor"`
 }
 
 type frostActivationHandshakeRequest struct {
@@ -128,6 +129,23 @@ type frostActivationNativeSignerState struct {
 	Complete                      bool   `json:"complete"`
 }
 
+type frostActivationCheckpointJournalState struct {
+	ManifestMinimumSequence uint64                                        `json:"manifestMinimumSequence"`
+	ManifestPredecessorHash string                                        `json:"manifestPredecessorHash"`
+	ChallengeFloor          frostRetainedGroupWireCheckpointCursor        `json:"challengeFloor"`
+	DurableHead             frostRetainedGroupWireCheckpointCursor        `json:"durableHead"`
+	Point                   frostActivationEthereumPoint                  `json:"point"`
+	HistoryRoot             string                                        `json:"historyRoot"`
+	CanonicalGeneration     uint64                                        `json:"canonicalGeneration"`
+	CanonicalInventoryRoot  string                                        `json:"canonicalInventoryRoot"`
+	QuarantineGeneration    uint64                                        `json:"quarantineGeneration"`
+	QuarantineEventRoot     string                                        `json:"quarantineEventRoot"`
+	QuarantineActiveRoot    string                                        `json:"quarantineActiveRoot"`
+	QuarantineTombstoneRoot string                                        `json:"quarantineTombstoneRoot"`
+	Ancestry                []frostRetainedGroupWireCheckpointCertificate `json:"ancestry"`
+	Complete                bool                                          `json:"complete"`
+}
+
 type frostActivationHandshakeState struct {
 	ProtocolID                                string                                `json:"protocolID"`
 	ReservationProtocolID                     string                                `json:"reservationProtocolID"`
@@ -142,6 +160,7 @@ type frostActivationHandshakeState struct {
 	FrostWalletGroupInventory                 frostActivationWalletGroupInventory   `json:"frostWalletGroupInventory"`
 	CanonicalJournal                          frostActivationCanonicalJournalState  `json:"canonicalJournal"`
 	QuarantineJournal                         frostActivationQuarantineJournalState `json:"quarantineJournal"`
+	CheckpointJournal                         frostActivationCheckpointJournalState `json:"checkpointJournal"`
 	NativeSignerState                         frostActivationNativeSignerState      `json:"nativeSignerState"`
 	InteractiveSigningReady                   bool                                  `json:"interactiveSigningReady"`
 	FinalizedReservationReadbackEnforced      bool                                  `json:"finalizedReservationReadbackEnforced"`
@@ -212,6 +231,9 @@ type frostActivationJournalStamp struct {
 	quarantineRoot          [32]byte
 	quarantineActiveRoot    [32]byte
 	quarantineTombstoneRoot [32]byte
+	checkpointSequence      uint64
+	checkpointHash          [32]byte
+	checkpointHistoryRoot   [32]byte
 }
 
 type frostActivationReconciliationCache struct {
@@ -273,7 +295,8 @@ func newFrostActivationHandshakeExporter(
 		journal.quarantineMetadata.ManifestHash == manifest.ManifestHash &&
 		journal.quarantineMetadata.BindingHash == bindingHash &&
 		journal.state.BindingHash == bindingHash &&
-		journal.quarantineState.BindingHash == bindingHash
+		journal.quarantineState.BindingHash == bindingHash &&
+		journal.checkpointState.BindingHash == bindingHash
 	journal.mutex.Unlock()
 	if !journalBindingValid {
 		return nil, fmt.Errorf(
@@ -635,6 +658,14 @@ func (fahe *frostActivationHandshakeExporter) validateActivationJournalSnapshot(
 		journalSnapshot.QuarantineRoot == [32]byte{} ||
 		journalSnapshot.QuarantineActiveRoot == [32]byte{} ||
 		journalSnapshot.QuarantineTombstoneRoot == [32]byte{} ||
+		journalSnapshot.CheckpointMinimumSequence !=
+			quarantineManifest.CheckpointMinimumSequence ||
+		journalSnapshot.CheckpointPredecessorHash !=
+			quarantineManifest.CheckpointPredecessorHash ||
+		journalSnapshot.CheckpointSequence <
+			quarantineManifest.CheckpointMinimumSequence ||
+		journalSnapshot.CheckpointCertificateHash == [32]byte{} ||
+		journalSnapshot.CheckpointHistoryRoot == [32]byte{} ||
 		journalSnapshot.QuarantineCount != 0 {
 		return fmt.Errorf(
 			"canonical FROST retained-group journal is not activation-ready",
@@ -663,7 +694,8 @@ func (fahe *frostActivationHandshakeExporter) journalStampLocked() (
 		journal.metadata.BindingHash != fahe.bindingHash ||
 		journal.quarantineMetadata.BindingHash != fahe.bindingHash ||
 		journal.state.BindingHash != fahe.bindingHash ||
-		journal.quarantineState.BindingHash != fahe.bindingHash {
+		journal.quarantineState.BindingHash != fahe.bindingHash ||
+		journal.checkpointState.BindingHash != fahe.bindingHash {
 		return frostActivationJournalStamp{}, fmt.Errorf(
 			"canonical FROST retained-group journal binding is not live",
 		)
@@ -680,6 +712,9 @@ func (fahe *frostActivationHandshakeExporter) journalStampLocked() (
 		quarantineRoot:          journal.quarantineState.Root,
 		quarantineActiveRoot:    journal.quarantineState.ActiveRoot,
 		quarantineTombstoneRoot: journal.quarantineState.TombstoneRoot,
+		checkpointSequence:      journal.checkpointState.Sequence,
+		checkpointHash:          journal.checkpointState.CertificateHash,
+		checkpointHistoryRoot:   journal.checkpointState.HistoryRoot,
 	}, nil
 }
 
@@ -698,7 +733,10 @@ func frostActivationStampMatchesSnapshot(
 		stamp.quarantineGeneration == snapshot.QuarantineGeneration &&
 		stamp.quarantineRoot == snapshot.QuarantineRoot &&
 		stamp.quarantineActiveRoot == snapshot.QuarantineActiveRoot &&
-		stamp.quarantineTombstoneRoot == snapshot.QuarantineTombstoneRoot
+		stamp.quarantineTombstoneRoot == snapshot.QuarantineTombstoneRoot &&
+		stamp.checkpointSequence == snapshot.CheckpointSequence &&
+		stamp.checkpointHash == snapshot.CheckpointCertificateHash &&
+		stamp.checkpointHistoryRoot == snapshot.CheckpointHistoryRoot
 }
 
 func (fahe *frostActivationHandshakeExporter) verifyActivationPointQuick(
@@ -792,6 +830,25 @@ func (fahe *frostActivationHandshakeExporter) attest(
 	if err != nil || bindingHash != fahe.bindingHash {
 		return nil, fmt.Errorf("FROST activation challenge binding hash mismatch")
 	}
+	checkpointFloorHash, err := parseFrostActivationHex32(
+		request.Challenge.CheckpointFloor.CertificateHash,
+	)
+	checkpointFloor := FrostRetainedGroupCheckpointCursor{
+		Sequence:        request.Challenge.CheckpointFloor.Sequence,
+		CertificateHash: checkpointFloorHash,
+	}
+	if err != nil ||
+		request.Challenge.CheckpointFloor.CertificateHash !=
+			frostActivationHex32(checkpointFloorHash) ||
+		checkpointFloor.Sequence <
+			fahe.manifest.QuarantineJournal.CheckpointMinimumSequence ||
+		checkpointFloor.Sequence >
+			frostRetainedGroupMaximumCanonicalJSONInteger ||
+		checkpointFloorHash == [32]byte{} {
+		return nil, fmt.Errorf(
+			"FROST activation challenge checkpoint floor is invalid",
+		)
+	}
 	blockHash, err := parseFrostActivationHex32(request.Challenge.EthereumPoint.BlockHash)
 	if err != nil || request.Challenge.EthereumPoint.BlockNumber == 0 {
 		return nil, fmt.Errorf("FROST activation challenge Ethereum point is invalid")
@@ -858,6 +915,39 @@ func (fahe *frostActivationHandshakeExporter) attest(
 		)
 	}
 	journalManifest := fahe.manifest.CanonicalJournal
+	if !fahe.journal.mutex.TryLock() {
+		return nil, fmt.Errorf(
+			"%w: %v",
+			errFrostActivationReconciliationPending,
+			errFrostActivationJournalBusy,
+		)
+	}
+	ancestryStamp, ancestryStampErr := fahe.journalStampLocked()
+	if ancestryStampErr != nil || ancestryStamp != reconciliation.stamp {
+		fahe.journal.mutex.Unlock()
+		fahe.queueReconciliation(finality, true)
+		return nil, fmt.Errorf(
+			"%w: canonical or quarantine journal generation changed before checkpoint ancestry",
+			errFrostActivationReconciliationPending,
+		)
+	}
+	checkpointAncestry, ancestryErr :=
+		fahe.journal.checkpointAncestryAfter(checkpointFloor)
+	fahe.journal.mutex.Unlock()
+	if ancestryErr != nil {
+		return nil, fmt.Errorf(
+			"checkpoint ancestry rejected the external transparency floor: [%w]",
+			ancestryErr,
+		)
+	}
+	wireCheckpointAncestry := make(
+		[]frostRetainedGroupWireCheckpointCertificate,
+		len(checkpointAncestry),
+	)
+	for index, certificate := range checkpointAncestry {
+		wireCheckpointAncestry[index] =
+			frostRetainedGroupCheckpointCertificateToWire(certificate)
+	}
 	outboxSnapshot, err := fahe.outbox.activationSnapshot()
 	if err != nil {
 		return nil, err
@@ -926,6 +1016,29 @@ func (fahe *frostActivationHandshakeExporter) attest(
 			TombstoneCount:         journalSnapshot.QuarantineTombstoneCount,
 			Complete:               true,
 		},
+		CheckpointJournal: frostActivationCheckpointJournalState{
+			ManifestMinimumSequence: journalSnapshot.CheckpointMinimumSequence,
+			ManifestPredecessorHash: frostActivationHex32(
+				journalSnapshot.CheckpointPredecessorHash,
+			),
+			ChallengeFloor: request.Challenge.CheckpointFloor,
+			DurableHead: frostRetainedGroupWireCheckpointCursor{
+				Sequence: journalSnapshot.CheckpointSequence,
+				CertificateHash: frostActivationHex32(
+					journalSnapshot.CheckpointCertificateHash,
+				),
+			},
+			Point:                   request.Challenge.EthereumPoint,
+			HistoryRoot:             frostActivationHex32(journalSnapshot.CheckpointHistoryRoot),
+			CanonicalGeneration:     journalSnapshot.SnapshotGeneration,
+			CanonicalInventoryRoot:  frostActivationHex32(journalSnapshot.InventoryRoot),
+			QuarantineGeneration:    journalSnapshot.QuarantineGeneration,
+			QuarantineEventRoot:     frostActivationHex32(journalSnapshot.QuarantineRoot),
+			QuarantineActiveRoot:    frostActivationHex32(journalSnapshot.QuarantineActiveRoot),
+			QuarantineTombstoneRoot: frostActivationHex32(journalSnapshot.QuarantineTombstoneRoot),
+			Ancestry:                wireCheckpointAncestry,
+			Complete:                true,
+		},
 		NativeSignerState: frostActivationNativeSignerState{
 			Schema:                        nativeSignerSnapshot.Schema,
 			StoreFingerprint:              frostActivationHex32(nativeSignerSnapshot.StoreFingerprint),
@@ -989,7 +1102,8 @@ func (fahe *frostActivationHandshakeExporter) attest(
 		)
 	}
 	signingStamp, stampErr := fahe.journalStampLocked()
-	if stampErr != nil || signingStamp != reconciliation.stamp {
+	if stampErr != nil || signingStamp != reconciliation.stamp ||
+		!fahe.journal.checkpointDescendsFrom(checkpointFloor) {
 		fahe.journal.mutex.Unlock()
 		fahe.queueReconciliation(finality, true)
 		return nil, fmt.Errorf(

@@ -23,16 +23,21 @@ import (
 )
 
 type journalHistorySource struct {
-	identity    FrostRetainedGroupHistoryIdentity
-	checkpoint  FrostPreSignFinality
-	head        FrostPreSignFinality
-	descriptor  [32]byte
-	mutations   []FrostRetainedGroupMutation
-	complete    bool
-	emptyAtFrom bool
-	points      map[uint64][32]byte
-	operators   map[chain.Address]chain.OperatorID
-	verifyErr   error
+	identity         FrostRetainedGroupHistoryIdentity
+	checkpoint       FrostPreSignFinality
+	head             FrostPreSignFinality
+	descriptor       [32]byte
+	mutations        []FrostRetainedGroupMutation
+	complete         bool
+	emptyAtFrom      bool
+	points           map[uint64][32]byte
+	operators        map[chain.Address]chain.OperatorID
+	verifyErr        error
+	checkpointIssuer func(
+		FrostRetainedGroupCheckpointCursor,
+		FrostPreSignFinality,
+		[]FrostRetainedGroupMutation,
+	) ([]FrostRetainedGroupCheckpointCertificate, error)
 }
 
 func (jhs *journalHistorySource) Identity(
@@ -64,6 +69,7 @@ func (jhs *journalHistorySource) ReadCompleteHistory(
 	_ context.Context,
 	from FrostPreSignFinality,
 	to FrostPreSignFinality,
+	checkpointAfter FrostRetainedGroupCheckpointCursor,
 ) (*FrostRetainedGroupHistory, error) {
 	mutations := make([]FrostRetainedGroupMutation, 0)
 	for _, mutation := range jhs.mutations {
@@ -71,13 +77,57 @@ func (jhs *journalHistorySource) ReadCompleteHistory(
 			mutations = append(mutations, mutation)
 		}
 	}
+	historyRoot, err := frostRetainedGroupTestHistoryRoot(
+		[32]byte{0x44},
+		from,
+		to,
+		mutations,
+	)
+	if err != nil {
+		return nil, err
+	}
+	checkpoints, err := jhs.checkpointIssuer(
+		checkpointAfter,
+		to,
+		mutations,
+	)
+	if err != nil {
+		return nil, err
+	}
+	checkpointComplete := true
+	if len(checkpoints) > frostRetainedGroupMaximumCheckpointsPerPage {
+		checkpoints = checkpoints[:frostRetainedGroupMaximumCheckpointsPerPage]
+		checkpointComplete = false
+	}
+	hashes := make([][32]byte, len(checkpoints))
+	for index, checkpoint := range checkpoints {
+		hashes[index], err =
+			frostRetainedGroupCheckpointCertificateHash(checkpoint)
+		if err != nil {
+			return nil, err
+		}
+	}
+	tipHash := checkpointAfter.CertificateHash
+	if len(hashes) > 0 {
+		tipHash = hashes[len(hashes)-1]
+	}
 	return &FrostRetainedGroupHistory{
-		From:              from,
-		To:                to,
-		Mutations:         cloneFrostRetainedGroupMutations(mutations),
-		Complete:          jhs.complete,
-		EmptyAtFrom:       jhs.emptyAtFrom,
-		DescriptorSetHash: jhs.descriptor,
+		From:            from,
+		To:              to,
+		Mutations:       cloneFrostRetainedGroupMutations(mutations),
+		HistoryRoot:     historyRoot,
+		CheckpointAfter: checkpointAfter,
+		Checkpoints:     checkpoints,
+		CheckpointChainRoot: frostRetainedGroupCheckpointChainRoot(
+			[32]byte{0x44},
+			checkpointAfter,
+			hashes,
+		),
+		CheckpointTipHash:  tipHash,
+		CheckpointComplete: checkpointComplete,
+		Complete:           jhs.complete,
+		EmptyAtFrom:        jhs.emptyAtFrom,
+		DescriptorSetHash:  jhs.descriptor,
 	}, nil
 }
 
@@ -94,24 +144,26 @@ func (jhs *journalHistorySource) ResolveOperatorID(
 }
 
 type journalTestFixture struct {
-	manifest           FrostRetainedGroupCanonicalJournalManifest
-	quarantine         FrostRetainedGroupQuarantineJournalManifest
-	runtime            FrostPreSignActivationRuntimeManifest
-	manifestHash       [32]byte
-	bindingHash        [32]byte
-	liftPrivateKeys    []ed25519.PrivateKey
-	liftPublicKeySPKIs []string
-	checkpoint         FrostPreSignFinality
-	target             FrostPreSignFinality
-	later              FrostPreSignFinality
-	walletID           [32]byte
-	walletPKH          [20]byte
-	operatorIDs        []uint32
-	operatorAddrs      []chain.Address
-	localOperator      chain.Address
-	registry           *walletRegistry
-	source             *journalHistorySource
-	admission          FrostRetainedGroupMutation
+	manifest                 FrostRetainedGroupCanonicalJournalManifest
+	quarantine               FrostRetainedGroupQuarantineJournalManifest
+	runtime                  FrostPreSignActivationRuntimeManifest
+	manifestHash             [32]byte
+	bindingHash              [32]byte
+	liftPrivateKeys          []ed25519.PrivateKey
+	liftPublicKeySPKIs       []string
+	checkpoint               FrostPreSignFinality
+	target                   FrostPreSignFinality
+	later                    FrostPreSignFinality
+	walletID                 [32]byte
+	walletPKH                [20]byte
+	operatorIDs              []uint32
+	operatorAddrs            []chain.Address
+	localOperator            chain.Address
+	registry                 *walletRegistry
+	source                   *journalHistorySource
+	admission                FrostRetainedGroupMutation
+	checkpointPrivateKeys    []ed25519.PrivateKey
+	checkpointPublicKeySPKIs []string
 }
 
 func newJournalTestFixture(t *testing.T) *journalTestFixture {
@@ -172,13 +224,17 @@ func newJournalTestFixture(t *testing.T) *journalTestFixture {
 		MinimumGeneration:         1,
 	}
 	checkpointAuthorities := make([]FrostRetainedGroupAuthority, 3)
+	checkpointPrivateKeys := make([]ed25519.PrivateKey, 3)
+	checkpointPublicKeySPKIs := make([]string, 3)
 	for index := range checkpointAuthorities {
-		authority, _, _ := journalTestAuthority(
+		authority, privateKey, publicKeySPKI := journalTestAuthority(
 			t,
 			fmt.Sprintf("checkpoint-%d", index+1),
 			byte(0x60+index),
 		)
 		checkpointAuthorities[index] = authority
+		checkpointPrivateKeys[index] = privateKey
+		checkpointPublicKeySPKIs[index] = publicKeySPKI
 	}
 	liftAuthorities := make([]FrostRetainedGroupAuthority, 3)
 	liftPrivateKeys := make([]ed25519.PrivateKey, 3)
@@ -199,6 +255,8 @@ func newJournalTestFixture(t *testing.T) *journalTestFixture {
 		TombstoneProtocolID:          [32]byte{0x46},
 		CheckpointAuthorityThreshold: 2,
 		CheckpointAuthorities:        checkpointAuthorities,
+		CheckpointMinimumSequence:    1,
+		CheckpointPredecessorHash:    [32]byte{},
 		LiftAuthorityThreshold:       2,
 		LiftAuthorities:              liftAuthorities,
 		StoreID:                      "quarantine-store-uuid",
@@ -261,26 +319,265 @@ func newJournalTestFixture(t *testing.T) *journalTestFixture {
 		BridgeRegistrationPoint: FrostRetainedGroupEventPoint{BlockNumber: 2, BlockHash: [32]byte{0x02}, TransactionHash: [32]byte{0xa2}, TransactionIndex: 1, LogIndex: 5},
 	}
 	source.mutations = []FrostRetainedGroupMutation{admission}
-	return &journalTestFixture{
-		manifest:           manifest,
-		quarantine:         quarantine,
-		runtime:            runtime,
-		manifestHash:       manifestHash,
-		bindingHash:        bindingHash,
-		liftPrivateKeys:    liftPrivateKeys,
-		liftPublicKeySPKIs: liftPublicKeySPKIs,
-		checkpoint:         checkpoint,
-		target:             target,
-		later:              later,
-		walletID:           walletID,
-		walletPKH:          walletPKH,
-		operatorIDs:        operatorIDs,
-		operatorAddrs:      operatorAddrs,
-		localOperator:      localOperator,
-		registry:           registry,
-		source:             source,
-		admission:          admission,
+	checkpointPolicy, err :=
+		frostRetainedGroupCheckpointPolicyFromRuntimeManifest(
+			bindingHash,
+			runtime,
+		)
+	if err != nil {
+		t.Fatal(err)
 	}
+	source.checkpointIssuer = newFrostRetainedGroupTestCheckpointIssuer(
+		t,
+		checkpointPolicy,
+		checkpoint,
+		checkpointPrivateKeys,
+		checkpointPublicKeySPKIs,
+	)
+	return &journalTestFixture{
+		manifest:                 manifest,
+		quarantine:               quarantine,
+		runtime:                  runtime,
+		manifestHash:             manifestHash,
+		bindingHash:              bindingHash,
+		liftPrivateKeys:          liftPrivateKeys,
+		liftPublicKeySPKIs:       liftPublicKeySPKIs,
+		checkpoint:               checkpoint,
+		target:                   target,
+		later:                    later,
+		walletID:                 walletID,
+		walletPKH:                walletPKH,
+		operatorIDs:              operatorIDs,
+		operatorAddrs:            operatorAddrs,
+		localOperator:            localOperator,
+		registry:                 registry,
+		source:                   source,
+		admission:                admission,
+		checkpointPrivateKeys:    checkpointPrivateKeys,
+		checkpointPublicKeySPKIs: checkpointPublicKeySPKIs,
+	}
+}
+
+func frostRetainedGroupTestHistoryRoot(
+	bindingHash [32]byte,
+	from FrostPreSignFinality,
+	to FrostPreSignFinality,
+	mutations []FrostRetainedGroupMutation,
+) ([32]byte, error) {
+	query := frostRetainedGroupHistoryQuery{
+		Schema:      frostRetainedGroupHistoryRequestSchema,
+		BindingHash: frostActivationHex32(bindingHash),
+		From:        frostRetainedGroupFinalityToWire(from),
+		To:          frostRetainedGroupFinalityToWire(to),
+	}
+	queryHash, err := frostRetainedGroupDomainHash(
+		frostRetainedGroupHistoryQueryDomain,
+		query,
+	)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	wireMutations := make(
+		[]frostRetainedGroupWireMutation,
+		len(mutations),
+	)
+	for index, mutation := range mutations {
+		wireMutations[index] = frostRetainedGroupMutationToWire(mutation)
+	}
+	return frostRetainedGroupHistoryRoot(
+		bindingHash,
+		queryHash,
+		wireMutations,
+	)
+}
+
+func newFrostRetainedGroupTestCheckpointIssuer(
+	t *testing.T,
+	policy frostRetainedGroupCheckpointPolicy,
+	from FrostPreSignFinality,
+	privateKeys []ed25519.PrivateKey,
+	publicKeySPKIs []string,
+) func(
+	FrostRetainedGroupCheckpointCursor,
+	FrostPreSignFinality,
+	[]FrostRetainedGroupMutation,
+) ([]FrostRetainedGroupCheckpointCertificate, error) {
+	t.Helper()
+	certificates := make(
+		map[uint64]FrostRetainedGroupCheckpointCertificate,
+	)
+	hashes := make(map[uint64][32]byte)
+	latest := FrostRetainedGroupCheckpointCursor{
+		Sequence:        policy.MinimumSequence - 1,
+		CertificateHash: policy.PredecessorHash,
+	}
+	var latestPoint FrostPreSignFinality
+	return func(
+		after FrostRetainedGroupCheckpointCursor,
+		to FrostPreSignFinality,
+		mutations []FrostRetainedGroupMutation,
+	) ([]FrostRetainedGroupCheckpointCertificate, error) {
+		if after.Sequence < policy.MinimumSequence-1 ||
+			(after.Sequence == policy.MinimumSequence-1 &&
+				after.CertificateHash != policy.PredecessorHash) {
+			return nil, fmt.Errorf("test checkpoint cursor is invalid")
+		}
+		if after.Sequence >= policy.MinimumSequence {
+			hash, exists := hashes[after.Sequence]
+			if !exists || hash != after.CertificateHash {
+				return nil, fmt.Errorf("test checkpoint cursor is not an ancestor")
+			}
+		}
+		if latest.Sequence >= policy.MinimumSequence &&
+			latestPoint == to {
+			suffix := make(
+				[]FrostRetainedGroupCheckpointCertificate,
+				0,
+				latest.Sequence-after.Sequence,
+			)
+			for sequence := after.Sequence + 1; sequence <= latest.Sequence; sequence++ {
+				suffix = append(suffix, certificates[sequence])
+			}
+			return suffix, nil
+		}
+		if latest.Sequence >= policy.MinimumSequence &&
+			to.BlockNumber <= latestPoint.BlockNumber {
+			return nil, fmt.Errorf(
+				"test checkpoint point does not strictly advance",
+			)
+		}
+		semantic, err := frostRetainedGroupCertifiedStateFromHistory(
+			policy,
+			from,
+			to,
+			mutations,
+		)
+		if err != nil {
+			historyRoot, historyRootErr :=
+				frostRetainedGroupTestHistoryRoot(
+					policy.ProtocolBindingHash,
+					from,
+					to,
+					mutations,
+				)
+			if historyRootErr != nil {
+				return nil, historyRootErr
+			}
+			// Malformed-history tests still need a strictly valid wire
+			// certificate so the source reaches its earlier semantic-history
+			// rejection. These sentinel roots can never pass checkpoint
+			// semantic validation.
+			semantic = FrostRetainedGroupCheckpointBody{
+				Point:                   to,
+				HistoryRoot:             historyRoot,
+				CanonicalGeneration:     policy.CanonicalMinimum,
+				CanonicalInventoryRoot:  [32]byte{0xf1},
+				QuarantineGeneration:    policy.QuarantineMinimum,
+				QuarantineEventRoot:     [32]byte{0xf2},
+				QuarantineActiveRoot:    [32]byte{0xf3},
+				QuarantineTombstoneRoot: [32]byte{0xf4},
+			}
+		}
+		body := FrostRetainedGroupCheckpointBody{
+			Schema:                  frostRetainedGroupCheckpointBodySchema,
+			ProtocolBindingHash:     policy.ProtocolBindingHash,
+			ManifestHash:            policy.ManifestHash,
+			ProfileHash:             policy.ProfileHash,
+			ImplementationSetHash:   policy.ImplementationSetHash,
+			ChainID:                 policy.ChainID,
+			DomainChainID:           policy.DomainChainID,
+			GenesisBlockHash:        policy.GenesisBlockHash,
+			AuthoritySetHash:        policy.AuthoritySetHash,
+			Sequence:                latest.Sequence + 1,
+			PreviousCertificateHash: latest.CertificateHash,
+			Point:                   semantic.Point,
+			HistoryRoot:             semantic.HistoryRoot,
+			CanonicalGeneration:     semantic.CanonicalGeneration,
+			CanonicalInventoryRoot:  semantic.CanonicalInventoryRoot,
+			QuarantineGeneration:    semantic.QuarantineGeneration,
+			QuarantineEventRoot:     semantic.QuarantineEventRoot,
+			QuarantineActiveRoot:    semantic.QuarantineActiveRoot,
+			QuarantineTombstoneRoot: semantic.QuarantineTombstoneRoot,
+		}
+		bodyHash, err := frostRetainedGroupCheckpointBodyHash(body)
+		if err != nil {
+			return nil, err
+		}
+		signatureHash := frostRetainedGroupCheckpointSignatureHash(bodyHash)
+		signatures := make(
+			[]FrostRetainedGroupCheckpointSignature,
+			policy.AuthorityThreshold,
+		)
+		for index := range signatures {
+			signatures[index] = FrostRetainedGroupCheckpointSignature{
+				AuthorityID:         policy.Authorities[index].AuthorityID,
+				SignerPublicKeySPKI: publicKeySPKIs[index],
+				Signature: base64.StdEncoding.EncodeToString(
+					ed25519.Sign(privateKeys[index], signatureHash[:]),
+				),
+			}
+		}
+		certificate := FrostRetainedGroupCheckpointCertificate{
+			Schema:     frostRetainedGroupCheckpointCertificateSchema,
+			Body:       body,
+			BodyHash:   bodyHash,
+			Signatures: signatures,
+		}
+		certificateHash, err :=
+			frostRetainedGroupCheckpointCertificateHash(certificate)
+		if err != nil {
+			return nil, err
+		}
+		certificates[body.Sequence] = certificate
+		hashes[body.Sequence] = certificateHash
+		latest = FrostRetainedGroupCheckpointCursor{
+			Sequence:        body.Sequence,
+			CertificateHash: certificateHash,
+		}
+		latestPoint = to
+		suffix := make(
+			[]FrostRetainedGroupCheckpointCertificate,
+			0,
+			latest.Sequence-after.Sequence,
+		)
+		for sequence := after.Sequence + 1; sequence <= latest.Sequence; sequence++ {
+			suffix = append(suffix, certificates[sequence])
+		}
+		return suffix, nil
+	}
+}
+
+func (fixture *journalTestFixture) resignCheckpointCertificate(
+	t *testing.T,
+	certificate *FrostRetainedGroupCheckpointCertificate,
+	signerIndices []int,
+) {
+	t.Helper()
+	bodyHash, err := frostRetainedGroupCheckpointBodyHash(certificate.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signatureHash := frostRetainedGroupCheckpointSignatureHash(bodyHash)
+	signatures := make(
+		[]FrostRetainedGroupCheckpointSignature,
+		len(signerIndices),
+	)
+	for index, signerIndex := range signerIndices {
+		signatures[index] = FrostRetainedGroupCheckpointSignature{
+			AuthorityID: fixture.quarantine.
+				CheckpointAuthorities[signerIndex].AuthorityID,
+			SignerPublicKeySPKI: fixture.
+				checkpointPublicKeySPKIs[signerIndex],
+			Signature: base64.StdEncoding.EncodeToString(
+				ed25519.Sign(
+					fixture.checkpointPrivateKeys[signerIndex],
+					signatureHash[:],
+				),
+			),
+		}
+	}
+	certificate.BodyHash = bodyHash
+	certificate.Signatures = signatures
 }
 
 func TestFrostLocalSessionSnapshotBindsExactSignerMaterial(t *testing.T) {
@@ -608,6 +905,569 @@ func TestFrostRetainedGroupJournal_ReconcilesAndRejectsRewrittenHistory(
 	if _, err := journal.reconcile(context.Background(), fixture.target); err == nil ||
 		!strings.Contains(err.Error(), "incomplete") {
 		t.Fatalf("expected nonempty-checkpoint failure, got [%v]", err)
+	}
+}
+
+func TestFrostRetainedGroupJournal_RejectsResignedGenerationRollback(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	movingFunds := FrostRetainedGroupMutation{
+		Point: FrostRetainedGroupEventPoint{
+			BlockNumber:      3,
+			BlockHash:        [32]byte{0x03},
+			TransactionHash:  [32]byte{0xb3},
+			TransactionIndex: 1,
+			LogIndex:         1,
+		},
+		Kind:                FrostRetainedGroupMovingFundsMutation,
+		WalletID:            fixture.walletID,
+		WalletPublicKeyHash: fixture.walletPKH,
+	}
+	fixture.source.mutations = append(
+		fixture.source.mutations,
+		movingFunds,
+	)
+	directory := filepath.Join(t.TempDir(), "journal")
+	journal := fixture.openJournal(t, directory)
+	defer journal.close()
+	first, err := journal.reconcile(context.Background(), fixture.target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.SnapshotGeneration != 2 ||
+		journal.checkpointState.CanonicalGeneration != 2 {
+		t.Fatalf("unexpected certified generation: %+v", first)
+	}
+
+	// The exporter and checkpoint quorum now re-sign a history that omits a
+	// previously certified canonical transition. The new certificate is
+	// internally valid and exactly matches the rewritten history, but its
+	// generation rolls back relative to the durable certified predecessor.
+	fixture.source.mutations = []FrostRetainedGroupMutation{
+		fixture.admission,
+	}
+	_, err = journal.reconcile(context.Background(), fixture.later)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"does not monotonically advance the durable head",
+	) {
+		t.Fatalf("expected re-signed generation rollback rejection, got [%v]", err)
+	}
+	if journal.checkpointState.Sequence != 1 ||
+		journal.checkpointState.CanonicalGeneration != 2 {
+		t.Fatalf(
+			"re-signed generation rollback changed durable checkpoint: %+v",
+			journal.checkpointState,
+		)
+	}
+}
+
+func TestFrostRetainedGroupJournal_CheckpointCertificateRejectsBypasses(
+	t *testing.T,
+) {
+	newCertificate := func(
+		t *testing.T,
+	) (
+		*journalTestFixture,
+		frostRetainedGroupCheckpointPolicy,
+		FrostRetainedGroupCheckpointCursor,
+		FrostRetainedGroupCheckpointCertificate,
+	) {
+		t.Helper()
+		fixture := newJournalTestFixture(t)
+		policy, err :=
+			frostRetainedGroupCheckpointPolicyFromRuntimeManifest(
+				fixture.bindingHash,
+				fixture.runtime,
+			)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after := FrostRetainedGroupCheckpointCursor{
+			Sequence:        policy.MinimumSequence - 1,
+			CertificateHash: policy.PredecessorHash,
+		}
+		certificates, err := fixture.source.checkpointIssuer(
+			after,
+			fixture.target,
+			fixture.source.mutations,
+		)
+		if err != nil || len(certificates) != 1 {
+			t.Fatalf("cannot issue test checkpoint: [%v]", err)
+		}
+		return fixture, policy, after, certificates[0]
+	}
+
+	testCases := map[string]func(
+		*testing.T,
+		*journalTestFixture,
+		*FrostRetainedGroupCheckpointCertificate,
+	){
+		"insufficient quorum": func(
+			_ *testing.T,
+			_ *journalTestFixture,
+			certificate *FrostRetainedGroupCheckpointCertificate,
+		) {
+			certificate.Signatures = certificate.Signatures[:1]
+		},
+		"wrong pinned SPKI": func(
+			_ *testing.T,
+			fixture *journalTestFixture,
+			certificate *FrostRetainedGroupCheckpointCertificate,
+		) {
+			certificate.Signatures[0].SignerPublicKeySPKI =
+				fixture.checkpointPublicKeySPKIs[2]
+		},
+		"duplicate authority": func(
+			_ *testing.T,
+			_ *journalTestFixture,
+			certificate *FrostRetainedGroupCheckpointCertificate,
+		) {
+			certificate.Signatures[1] = certificate.Signatures[0]
+		},
+		"unsorted authorities": func(
+			_ *testing.T,
+			_ *journalTestFixture,
+			certificate *FrostRetainedGroupCheckpointCertificate,
+		) {
+			certificate.Signatures[0], certificate.Signatures[1] =
+				certificate.Signatures[1], certificate.Signatures[0]
+		},
+		"re-signed sequence gap": func(
+			t *testing.T,
+			fixture *journalTestFixture,
+			certificate *FrostRetainedGroupCheckpointCertificate,
+		) {
+			certificate.Body.Sequence++
+			fixture.resignCheckpointCertificate(
+				t,
+				certificate,
+				[]int{0, 1},
+			)
+		},
+		"re-signed predecessor fork": func(
+			t *testing.T,
+			fixture *journalTestFixture,
+			certificate *FrostRetainedGroupCheckpointCertificate,
+		) {
+			certificate.Body.PreviousCertificateHash[0] ^= 0xff
+			fixture.resignCheckpointCertificate(
+				t,
+				certificate,
+				[]int{0, 1},
+			)
+		},
+	}
+	for name, mutate := range testCases {
+		t.Run(name, func(t *testing.T) {
+			fixture, policy, after, certificate := newCertificate(t)
+			mutate(t, fixture, &certificate)
+			if _, err := validateFrostRetainedGroupCheckpointSuffix(
+				policy,
+				after,
+				[]FrostRetainedGroupCheckpointCertificate{certificate},
+			); err == nil {
+				t.Fatalf("checkpoint bypass [%s] was accepted", name)
+			}
+		})
+	}
+
+	t.Run("same-point successor", func(t *testing.T) {
+		fixture, policy, after, first := newCertificate(t)
+		firstHash, err :=
+			frostRetainedGroupCheckpointCertificateHash(first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second := first
+		second.Body.Sequence++
+		second.Body.PreviousCertificateHash = firstHash
+		fixture.resignCheckpointCertificate(t, &second, []int{0, 1})
+		if _, err := validateFrostRetainedGroupCheckpointSuffix(
+			policy,
+			after,
+			[]FrostRetainedGroupCheckpointCertificate{first, second},
+		); err == nil || !strings.Contains(err.Error(), "strictly monotonic") {
+			t.Fatalf("same-point checkpoint successor was accepted: [%v]", err)
+		}
+	})
+}
+
+func TestFrostRetainedGroupJournal_CheckpointFrozenHashVector(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	policy, err := frostRetainedGroupCheckpointPolicyFromRuntimeManifest(
+		fixture.bindingHash,
+		fixture.runtime,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := FrostRetainedGroupCheckpointCursor{
+		Sequence:        policy.MinimumSequence - 1,
+		CertificateHash: policy.PredecessorHash,
+	}
+	certificates, err := fixture.source.checkpointIssuer(
+		after,
+		fixture.target,
+		fixture.source.mutations,
+	)
+	if err != nil || len(certificates) != 1 {
+		t.Fatalf("cannot issue frozen checkpoint vector: [%v]", err)
+	}
+	bodyHash, err :=
+		frostRetainedGroupCheckpointBodyHash(certificates[0].Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificateHash, err :=
+		frostRetainedGroupCheckpointCertificateHash(certificates[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	chainRoot := frostRetainedGroupCheckpointChainRoot(
+		fixture.bindingHash,
+		after,
+		[][32]byte{certificateHash},
+	)
+	const expectedBodyHash = "ba0fdaecfc27fac1de867bd56f88fe66198952b3a99ef21f639bc62f331ce1fd"
+	const expectedCertificateHash = "cd396aa5ddc6bc7b53209ba2dc335fb8ed95113efdc256871df87f91a7d619e2"
+	const expectedChainRoot = "85a412822497e9029f7c437cf5c2087f20b2610a76ab4b952823aa3f89b27544"
+	if fmt.Sprintf("%x", bodyHash) != expectedBodyHash ||
+		fmt.Sprintf("%x", certificateHash) != expectedCertificateHash ||
+		fmt.Sprintf("%x", chainRoot) != expectedChainRoot {
+		t.Fatalf(
+			"checkpoint hash vector changed\nbody: %x\ncertificate: %x\nchain: %x",
+			bodyHash,
+			certificateHash,
+			chainRoot,
+		)
+	}
+}
+
+func TestFrostRetainedGroupJournal_RecoversCheckpointChainBeyondOnePage(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	count := frostRetainedGroupMaximumCheckpointsPerPage + 2
+	cursor := FrostRetainedGroupCheckpointCursor{
+		Sequence:        fixture.quarantine.CheckpointMinimumSequence - 1,
+		CertificateHash: fixture.quarantine.CheckpointPredecessorHash,
+	}
+	var oldestCertified FrostRetainedGroupCheckpointCursor
+	var target FrostPreSignFinality
+	for index := 0; index < count; index++ {
+		blockNumber := fixture.checkpoint.BlockNumber + uint64(index) + 1
+		blockHash := [32]byte{}
+		binary.BigEndian.PutUint64(blockHash[24:], blockNumber)
+		target = FrostPreSignFinality{
+			BlockNumber: blockNumber,
+			BlockHash:   blockHash,
+		}
+		if blockNumber == fixture.admission.Point.BlockNumber {
+			target.BlockHash = fixture.admission.Point.BlockHash
+		}
+		fixture.source.points[target.BlockNumber] = target.BlockHash
+		certificates, err := fixture.source.checkpointIssuer(
+			cursor,
+			target,
+			[]FrostRetainedGroupMutation{fixture.admission},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(certificates) != 1 {
+			t.Fatalf(
+				"expected one newly issued certificate, got [%d]",
+				len(certificates),
+			)
+		}
+		certificateHash, err :=
+			frostRetainedGroupCheckpointCertificateHash(certificates[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		cursor = FrostRetainedGroupCheckpointCursor{
+			Sequence:        certificates[0].Body.Sequence,
+			CertificateHash: certificateHash,
+		}
+		if index == 0 {
+			oldestCertified = cursor
+		}
+	}
+	fixture.source.head = FrostPreSignFinality{
+		BlockNumber: 1000,
+		BlockHash:   [32]byte{0xfa},
+	}
+	fixture.source.points[fixture.source.head.BlockNumber] =
+		fixture.source.head.BlockHash
+
+	directory := filepath.Join(t.TempDir(), "journal")
+	journal := fixture.openJournal(t, directory)
+	defer journal.close()
+	snapshot, err := journal.reconcile(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.CheckpointSequence != uint64(count) ||
+		journal.checkpointState.Sequence != uint64(count) ||
+		snapshot.CheckpointCertificateHash != cursor.CertificateHash {
+		t.Fatalf(
+			"multi-page recovery stopped at the wrong checkpoint: %+v",
+			snapshot,
+		)
+	}
+	ancestry, err := journal.checkpointAncestryAfter(oldestCertified)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ancestry) != count-1 ||
+		len(ancestry) <= frostRetainedGroupMaximumCheckpointsPerPage {
+		t.Fatalf(
+			"long-lived ancestry proof was truncated at [%d] certificates",
+			len(ancestry),
+		)
+	}
+	if _, err := validateFrostRetainedGroupCheckpointSuffix(
+		journal.checkpointPolicy,
+		oldestCertified,
+		ancestry,
+	); err != nil {
+		t.Fatalf("long-lived ancestry proof is invalid: [%v]", err)
+	}
+}
+
+func TestFrostRetainedGroupJournal_CheckpointPersistenceRetriesInProcess(
+	t *testing.T,
+) {
+	t.Run("adopts a certificate orphan before the next certificate", func(t *testing.T) {
+		fixture := newJournalTestFixture(t)
+		cursor := FrostRetainedGroupCheckpointCursor{
+			Sequence: fixture.quarantine.CheckpointMinimumSequence - 1,
+			CertificateHash: fixture.quarantine.
+				CheckpointPredecessorHash,
+		}
+		first, err := fixture.source.checkpointIssuer(
+			cursor,
+			fixture.target,
+			fixture.source.mutations,
+		)
+		if err != nil || len(first) != 1 {
+			t.Fatalf("cannot issue first test checkpoint: [%v]", err)
+		}
+		firstHash, err :=
+			frostRetainedGroupCheckpointCertificateHash(first[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		cursor = FrostRetainedGroupCheckpointCursor{
+			Sequence:        first[0].Body.Sequence,
+			CertificateHash: firstHash,
+		}
+		second, err := fixture.source.checkpointIssuer(
+			cursor,
+			fixture.later,
+			fixture.source.mutations,
+		)
+		if err != nil || len(second) != 1 {
+			t.Fatalf("cannot issue second test checkpoint: [%v]", err)
+		}
+
+		journal := fixture.openJournal(
+			t,
+			filepath.Join(t.TempDir(), "journal"),
+		)
+		defer journal.close()
+		certificateBoundaries := 0
+		journal.checkpointPersistFailureHook = func(stage string) error {
+			if stage == "after-checkpoint-certificate-before-next" {
+				certificateBoundaries++
+				if certificateBoundaries == 1 {
+					return fmt.Errorf("simulated certificate-boundary crash")
+				}
+			}
+			return nil
+		}
+		if _, err := journal.reconcile(
+			context.Background(),
+			fixture.later,
+		); err == nil || !strings.Contains(
+			err.Error(),
+			"certificate-boundary",
+		) {
+			t.Fatalf("expected certificate-boundary failure, got [%v]", err)
+		}
+		if journal.checkpointState.Sequence !=
+			fixture.quarantine.CheckpointMinimumSequence-1 ||
+			len(journal.checkpointCertificates) != 0 {
+			t.Fatal("certificate orphan was published to in-memory state")
+		}
+		journal.checkpointPersistFailureHook = nil
+		snapshot, err := journal.reconcile(
+			context.Background(),
+			fixture.later,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.CheckpointSequence != 2 ||
+			journal.checkpointState.Sequence != 2 ||
+			len(journal.checkpointCertificates) != 2 {
+			t.Fatalf(
+				"same-process certificate-orphan retry did not converge: %+v",
+				snapshot,
+			)
+		}
+	})
+
+	for _, stage := range []string{
+		"after-checkpoint-certificates-before-state",
+		"after-checkpoint-state-before-memory",
+	} {
+		t.Run(stage, func(t *testing.T) {
+			fixture := newJournalTestFixture(t)
+			journal := fixture.openJournal(
+				t,
+				filepath.Join(t.TempDir(), "journal"),
+			)
+			defer journal.close()
+			failed := false
+			journal.checkpointPersistFailureHook = func(actual string) error {
+				if actual == stage && !failed {
+					failed = true
+					return fmt.Errorf("simulated checkpoint publication crash")
+				}
+				return nil
+			}
+			if _, err := journal.reconcile(
+				context.Background(),
+				fixture.target,
+			); err == nil || !strings.Contains(
+				err.Error(),
+				"publication crash",
+			) {
+				t.Fatalf("expected checkpoint publication failure, got [%v]", err)
+			}
+			if journal.checkpointState.Sequence !=
+				fixture.quarantine.CheckpointMinimumSequence-1 ||
+				len(journal.checkpointCertificates) != 0 {
+				t.Fatal("failed checkpoint publication changed in-memory head")
+			}
+			journal.checkpointPersistFailureHook = nil
+			snapshot, err := journal.reconcile(
+				context.Background(),
+				fixture.target,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.CheckpointSequence != 1 ||
+				journal.checkpointState.Sequence != 1 ||
+				len(journal.checkpointCertificates) != 1 {
+				t.Fatalf(
+					"same-process state-boundary retry did not converge: %+v",
+					snapshot,
+				)
+			}
+		})
+	}
+}
+
+func TestFrostRetainedGroupJournal_CheckpointCrashBoundariesRecover(
+	t *testing.T,
+) {
+	for _, stage := range []string{
+		"after-canonical-before-quarantine",
+		"after-semantic-journals-before-checkpoints",
+		"after-checkpoint-certificates-before-state",
+	} {
+		t.Run(stage, func(t *testing.T) {
+			fixture := newJournalTestFixture(t)
+			fixture.source.mutations = append(
+				fixture.source.mutations,
+				FrostRetainedGroupMutation{
+					Point: FrostRetainedGroupEventPoint{
+						BlockNumber:      5,
+						BlockHash:        [32]byte{0x05},
+						TransactionHash:  [32]byte{0xa5},
+						TransactionIndex: 1,
+						LogIndex:         1,
+					},
+					Kind:         FrostRetainedGroupRecoveryRequiredMutation,
+					WalletID:     fixture.walletID,
+					QuarantineID: [32]byte{0x51},
+					EvidenceHash: [32]byte{0x52},
+					Reason:       "manual recovery is required",
+				},
+			)
+			directory := filepath.Join(t.TempDir(), "journal")
+			journal := fixture.openJournal(t, directory)
+			failed := false
+			journal.checkpointPersistFailureHook = func(actual string) error {
+				if actual == stage && !failed {
+					failed = true
+					return fmt.Errorf("simulated cross-journal crash")
+				}
+				return nil
+			}
+			if _, err := journal.reconcile(
+				context.Background(),
+				fixture.target,
+			); err == nil || !strings.Contains(
+				err.Error(),
+				"cross-journal crash",
+			) {
+				t.Fatalf("expected cross-journal crash, got [%v]", err)
+			}
+			if err := journal.close(); err != nil {
+				t.Fatal(err)
+			}
+
+			restarted := fixture.openJournal(t, directory)
+			defer restarted.close()
+			snapshot, err := restarted.reconcile(
+				context.Background(),
+				fixture.target,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.SnapshotGeneration != 1 ||
+				snapshot.QuarantineGeneration != 1 ||
+				snapshot.CheckpointSequence != 1 ||
+				len(restarted.mutations) != 1 ||
+				len(restarted.quarantineMutations) != 1 ||
+				len(restarted.checkpointCertificates) != 1 {
+				t.Fatalf(
+					"cross-journal crash recovery did not converge exactly once: %+v",
+					snapshot,
+				)
+			}
+		})
+	}
+}
+
+func TestFrostRetainedGroupJournal_RejectsStaleHandshakeFloorBeforeAllocation(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	journal := fixture.openJournal(
+		t,
+		filepath.Join(t.TempDir(), "journal"),
+	)
+	defer journal.close()
+	floor := FrostRetainedGroupCheckpointCursor{
+		Sequence:        fixture.quarantine.CheckpointMinimumSequence,
+		CertificateHash: [32]byte{0x7a},
+	}
+	journal.checkpointHashes[floor.Sequence] = floor.CertificateHash
+	journal.checkpointState.Sequence =
+		floor.Sequence + frostRetainedGroupMaximumHandshakeAncestry + 1
+	_, err := journal.checkpointAncestryAfter(floor)
+	if err == nil || !strings.Contains(err.Error(), "floor is too stale") {
+		t.Fatalf("expected stale external floor rejection, got [%v]", err)
 	}
 }
 
@@ -1624,7 +2484,7 @@ func TestFrostRetainedGroupJournal_LiftCrashRecoveryAndContentAddressing(
 		}
 	})
 
-	t.Run("conflicting valid certificate orphan has a distinct digest", func(t *testing.T) {
+	t.Run("checkpoint rejects a conflicting valid certificate rewrite", func(t *testing.T) {
 		fixture := newJournalTestFixture(t)
 		directory := filepath.Join(t.TempDir(), "journal")
 		journal, quarantine := fixture.openActiveQuarantine(
@@ -1668,18 +2528,21 @@ func TestFrostRetainedGroupJournal_LiftCrashRecoveryAndContentAddressing(
 		}
 		fixture.source.mutations[len(fixture.source.mutations)-1] =
 			secondLift
-		snapshot, err := restarted.reconcile(
+		_, err := restarted.reconcile(
 			context.Background(),
 			fixture.later,
 		)
-		if err != nil {
-			t.Fatal(err)
+		if err == nil || !strings.Contains(
+			err.Error(),
+			"independently derived semantic state",
+		) {
+			t.Fatalf(
+				"expected checkpoint-bound certificate rewrite rejection, got [%v]",
+				err,
+			)
 		}
-		if len(restarted.liftCertificates) != 2 ||
-			snapshot.QuarantineTombstoneCount != 1 ||
-			restarted.quarantineState.Tombstones[0].LiftCertificateHash !=
-				secondLift.LiftCertificateHash {
-			t.Fatal("content-addressed conflicting certificate handling failed")
+		if len(restarted.quarantineState.Tombstones) != 0 {
+			t.Fatal("conflicting certificate rewrite changed durable state")
 		}
 	})
 }

@@ -33,7 +33,7 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-const frostPreSignManifestVersion = "tbtc-p2tr-fraud-production-activation/v4"
+const frostPreSignManifestVersion = "tbtc-p2tr-fraud-production-activation/v5"
 
 const frostPreSignBridgeABIJSON = `[
  {"type":"function","name":"previewP2TRTransactionAuthorization","stateMutability":"view","inputs":[{"name":"payload","type":"bytes"}],"outputs":[{"name":"","type":"bytes"}]},
@@ -200,6 +200,8 @@ type frostPreSignManifestQuarantineJournal struct {
 	TombstoneProtocolID          string                              `json:"tombstoneProtocolID"`
 	CheckpointAuthorityThreshold uint64                              `json:"checkpointAuthorityThreshold"`
 	CheckpointAuthorities        []frostPreSignManifestLiftAuthority `json:"checkpointAuthorities"`
+	CheckpointMinimumSequence    uint64                              `json:"checkpointMinimumSequence"`
+	CheckpointPredecessorHash    string                              `json:"checkpointPredecessorHash"`
 	LiftAuthorityThreshold       uint64                              `json:"liftAuthorityThreshold"`
 	LiftAuthorities              []frostPreSignManifestLiftAuthority `json:"liftAuthorities"`
 	StoreID                      string                              `json:"storeID"`
@@ -1140,6 +1142,20 @@ func validateFrostPreSignQuarantineLiftAuthorities(
 	}
 	for hash := range checkpointHashes {
 		forbidden[hash] = "checkpoint authority"
+	}
+	checkpointPredecessorHash, err := frostPreSignParseBytes32(
+		quarantine.CheckpointPredecessorHash,
+	)
+	if err != nil ||
+		quarantine.CheckpointMinimumSequence == 0 ||
+		quarantine.CheckpointMinimumSequence > 9007199254740991 ||
+		(quarantine.CheckpointMinimumSequence == 1 &&
+			checkpointPredecessorHash != [32]byte{}) ||
+		(quarantine.CheckpointMinimumSequence > 1 &&
+			checkpointPredecessorHash == [32]byte{}) {
+		return fmt.Errorf(
+			"FROST checkpoint transparency floor is invalid",
+		)
 	}
 	if _, err := validateFrostPreSignManifestAuthoritySet(
 		"quarantine lift",
@@ -2408,6 +2424,12 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 			PublicKeySPKIHash: publicKeySPKIHash,
 		}
 	}
+	checkpointPredecessorHash, err := parse(
+		quarantine.CheckpointPredecessorHash,
+	)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
 	verifierOperatorFingerprint, err := parse(
 		adapter.manifest.Ethereum.VerifierOperatorFingerprint,
 	)
@@ -2504,6 +2526,8 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 			TombstoneProtocolID:          quarantineTombstoneProtocolID,
 			CheckpointAuthorityThreshold: quarantine.CheckpointAuthorityThreshold,
 			CheckpointAuthorities:        checkpointAuthorities,
+			CheckpointMinimumSequence:    quarantine.CheckpointMinimumSequence,
+			CheckpointPredecessorHash:    checkpointPredecessorHash,
 			LiftAuthorityThreshold:       quarantine.LiftAuthorityThreshold,
 			LiftAuthorities:              liftAuthorities,
 			StoreID:                      quarantine.StoreID,

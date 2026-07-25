@@ -31,7 +31,7 @@ const (
 	frostRetainedGroupJournalMetadataSchema = "tbtc-frost-retained-group-journal-metadata/v3"
 	frostRetainedGroupJournalBatchSchema    = "tbtc-frost-retained-group-journal-batch/v3"
 	frostRetainedGroupJournalStateSchema    = "tbtc-frost-retained-group-journal-state/v3"
-	frostRetainedGroupJournalSnapshotSchema = "tbtc-frost-retained-group-journal-snapshot/v3"
+	frostRetainedGroupJournalSnapshotSchema = "tbtc-frost-retained-group-journal-snapshot/v4"
 	frostRetainedGroupJournalLockFile       = ".lock"
 	frostRetainedGroupJournalMetadataFile   = "metadata.json"
 	frostRetainedGroupJournalStateFile      = "state.json"
@@ -246,12 +246,18 @@ type FrostRetainedGroupHistoryIdentity struct {
 }
 
 type FrostRetainedGroupHistory struct {
-	From              FrostPreSignFinality
-	To                FrostPreSignFinality
-	Mutations         []FrostRetainedGroupMutation
-	Complete          bool
-	EmptyAtFrom       bool
-	DescriptorSetHash [32]byte
+	From                FrostPreSignFinality
+	To                  FrostPreSignFinality
+	Mutations           []FrostRetainedGroupMutation
+	HistoryRoot         [32]byte
+	CheckpointAfter     FrostRetainedGroupCheckpointCursor
+	Checkpoints         []FrostRetainedGroupCheckpointCertificate
+	CheckpointChainRoot [32]byte
+	CheckpointTipHash   [32]byte
+	CheckpointComplete  bool
+	Complete            bool
+	EmptyAtFrom         bool
+	DescriptorSetHash   [32]byte
 }
 
 // FrostRetainedGroupHistorySource is independent of the primary deployment
@@ -265,6 +271,7 @@ type FrostRetainedGroupHistorySource interface {
 		context.Context,
 		FrostPreSignFinality,
 		FrostPreSignFinality,
+		FrostRetainedGroupCheckpointCursor,
 	) (*FrostRetainedGroupHistory, error)
 	ResolveOperatorID(
 		context.Context,
@@ -293,6 +300,8 @@ type FrostRetainedGroupQuarantineJournalManifest struct {
 	TombstoneProtocolID          [32]byte
 	CheckpointAuthorityThreshold uint64
 	CheckpointAuthorities        []FrostRetainedGroupAuthority
+	CheckpointMinimumSequence    uint64
+	CheckpointPredecessorHash    [32]byte
 	LiftAuthorityThreshold       uint64
 	LiftAuthorities              []FrostRetainedGroupAuthority
 	StoreID                      string
@@ -913,32 +922,44 @@ type frostRetainedGroupJournalSnapshot struct {
 	QuarantineTombstoneRoot      [32]byte
 	QuarantineCount              uint64
 	QuarantineTombstoneCount     uint64
+	CheckpointMinimumSequence    uint64
+	CheckpointPredecessorHash    [32]byte
+	CheckpointSequence           uint64
+	CheckpointCertificateHash    [32]byte
+	CheckpointHistoryRoot        [32]byte
 	LocalSessionCount            uint64
 	Complete                     bool
 }
 
 type frostRetainedGroupJournal struct {
-	mutex                       sync.Mutex
-	rootDirectory               string
-	directory                   string
-	quarantineDirectory         string
-	metadata                    frostRetainedGroupJournalMetadata
-	quarantineMetadata          frostRetainedGroupQuarantineMetadata
-	minimumGeneration           uint64
-	quarantineMinimumGeneration uint64
-	source                      FrostRetainedGroupHistorySource
-	walletRegistry              *walletRegistry
-	operatorAddress             chain.Address
-	lockFile                    *os.File
-	quarantineLockFile          *os.File
-	state                       frostRetainedGroupJournalState
-	quarantineState             frostRetainedGroupQuarantineJournalState
-	mutations                   []FrostRetainedGroupMutation
-	quarantineMutations         []FrostRetainedGroupMutation
-	liftPolicy                  frostRetainedGroupQuarantineLiftPolicy
-	liftCertificates            map[[32]byte]FrostRetainedGroupQuarantineLiftCertificate
-	persistFailureHook          func(string) error
-	closed                      bool
+	mutex                        sync.Mutex
+	rootDirectory                string
+	directory                    string
+	quarantineDirectory          string
+	checkpointDirectory          string
+	metadata                     frostRetainedGroupJournalMetadata
+	quarantineMetadata           frostRetainedGroupQuarantineMetadata
+	minimumGeneration            uint64
+	quarantineMinimumGeneration  uint64
+	source                       FrostRetainedGroupHistorySource
+	walletRegistry               *walletRegistry
+	operatorAddress              chain.Address
+	lockFile                     *os.File
+	quarantineLockFile           *os.File
+	checkpointLockFile           *os.File
+	state                        frostRetainedGroupJournalState
+	quarantineState              frostRetainedGroupQuarantineJournalState
+	mutations                    []FrostRetainedGroupMutation
+	quarantineMutations          []FrostRetainedGroupMutation
+	liftPolicy                   frostRetainedGroupQuarantineLiftPolicy
+	liftCertificates             map[[32]byte]FrostRetainedGroupQuarantineLiftCertificate
+	checkpointPolicy             frostRetainedGroupCheckpointPolicy
+	checkpointState              frostRetainedGroupCheckpointJournalState
+	checkpointCertificates       map[uint64]FrostRetainedGroupCheckpointCertificate
+	checkpointHashes             map[uint64][32]byte
+	persistFailureHook           func(string) error
+	checkpointPersistFailureHook func(string) error
+	closed                       bool
 }
 
 func newFrostRetainedGroupJournal(
@@ -959,6 +980,17 @@ func newFrostRetainedGroupJournal(
 		return nil, fmt.Errorf(
 			"invalid FROST retained-group quarantine lift policy: [%w]",
 			liftPolicyErr,
+		)
+	}
+	checkpointPolicy, checkpointPolicyErr :=
+		frostRetainedGroupCheckpointPolicyFromRuntimeManifest(
+			bindingHash,
+			runtimeManifest,
+		)
+	if checkpointPolicyErr != nil {
+		return nil, fmt.Errorf(
+			"invalid FROST retained-group checkpoint policy: [%w]",
+			checkpointPolicyErr,
 		)
 	}
 	if strings.TrimSpace(directory) == "" ||
@@ -1000,7 +1032,12 @@ func newFrostRetainedGroupJournal(
 	}
 	canonicalDirectory := filepath.Join(cleanRootDirectory, frostRetainedGroupCanonicalDirectory)
 	quarantineDirectory := filepath.Join(cleanRootDirectory, frostRetainedGroupQuarantineDirectory)
-	for _, child := range []string{canonicalDirectory, quarantineDirectory} {
+	checkpointDirectory := filepath.Join(cleanRootDirectory, frostRetainedGroupCheckpointDirectory)
+	for _, child := range []string{
+		canonicalDirectory,
+		quarantineDirectory,
+		checkpointDirectory,
+	} {
 		if err := os.MkdirAll(child, 0700); err != nil {
 			return nil, fmt.Errorf("cannot create FROST retained-group journal store: [%w]", err)
 		}
@@ -1021,10 +1058,21 @@ func newFrostRetainedGroupJournal(
 		_ = lockFile.Close()
 		return nil, err
 	}
+	checkpointLockFile, err := acquireFrostRetainedGroupJournalLock(
+		checkpointDirectory,
+	)
+	if err != nil {
+		_ = unix.Flock(int(quarantineLockFile.Fd()), unix.LOCK_UN)
+		_ = quarantineLockFile.Close()
+		_ = unix.Flock(int(lockFile.Fd()), unix.LOCK_UN)
+		_ = lockFile.Close()
+		return nil, err
+	}
 	journal := &frostRetainedGroupJournal{
 		rootDirectory:       cleanRootDirectory,
 		directory:           canonicalDirectory,
 		quarantineDirectory: quarantineDirectory,
+		checkpointDirectory: checkpointDirectory,
 		metadata: frostRetainedGroupJournalMetadata{
 			Schema:                    frostRetainedGroupJournalMetadataSchema,
 			ManifestHash:              runtimeManifest.ManifestHash,
@@ -1063,8 +1111,12 @@ func newFrostRetainedGroupJournal(
 		operatorAddress:             operatorAddress,
 		lockFile:                    lockFile,
 		quarantineLockFile:          quarantineLockFile,
+		checkpointLockFile:          checkpointLockFile,
 		liftPolicy:                  liftPolicy,
 		liftCertificates:            make(map[[32]byte]FrostRetainedGroupQuarantineLiftCertificate),
+		checkpointPolicy:            checkpointPolicy,
+		checkpointCertificates:      make(map[uint64]FrostRetainedGroupCheckpointCertificate),
+		checkpointHashes:            make(map[uint64][32]byte),
 	}
 	if err := journal.initialize(); err != nil {
 		_ = journal.close()
@@ -1081,7 +1133,8 @@ func validateFrostRetainedGroupJournalRoot(directory string) error {
 	for _, entry := range entries {
 		if entry.Type()&os.ModeSymlink != 0 ||
 			(entry.Name() != frostRetainedGroupCanonicalDirectory &&
-				entry.Name() != frostRetainedGroupQuarantineDirectory) ||
+				entry.Name() != frostRetainedGroupQuarantineDirectory &&
+				entry.Name() != frostRetainedGroupCheckpointDirectory) ||
 			!entry.IsDir() {
 			return fmt.Errorf("unsafe entry in FROST retained-group journal root: [%s]", entry.Name())
 		}
@@ -1130,7 +1183,11 @@ func (frgj *frostRetainedGroupJournal) close() error {
 	}
 	frgj.closed = true
 	var result error
-	for _, lock := range []*os.File{frgj.quarantineLockFile, frgj.lockFile} {
+	for _, lock := range []*os.File{
+		frgj.checkpointLockFile,
+		frgj.quarantineLockFile,
+		frgj.lockFile,
+	} {
 		if lock == nil {
 			continue
 		}
@@ -1143,6 +1200,7 @@ func (frgj *frostRetainedGroupJournal) close() error {
 	}
 	frgj.lockFile = nil
 	frgj.quarantineLockFile = nil
+	frgj.checkpointLockFile = nil
 	return result
 }
 
@@ -1278,7 +1336,10 @@ func (frgj *frostRetainedGroupJournal) initialize() error {
 			return fmt.Errorf("cannot integrate orphan FROST retained-group batch: [%w]", err)
 		}
 	}
-	return frgj.initializeQuarantine()
+	if err := frgj.initializeQuarantine(); err != nil {
+		return err
+	}
+	return frgj.initializeCheckpointJournal()
 }
 
 func (frgj *frostRetainedGroupJournal) verifyHistorySourceIdentity(
@@ -2133,6 +2194,31 @@ func validateFrostRetainedGroupJournalFileName(name string) error {
 	}
 	if name == frostRetainedGroupJournalMetadataFile ||
 		name == frostRetainedGroupJournalStateFile {
+		return nil
+	}
+	if strings.HasPrefix(name, frostRetainedGroupCheckpointFilePrefix) {
+		checkpointText := strings.TrimSuffix(
+			strings.TrimPrefix(name, frostRetainedGroupCheckpointFilePrefix),
+			frostRetainedGroupJournalFileSuffix,
+		)
+		sequenceText, digestText, separated := strings.Cut(checkpointText, "-")
+		digestBytes, digestErr := hex.DecodeString(digestText)
+		sequence, sequenceErr := strconv.ParseUint(sequenceText, 10, 64)
+		if !separated || len(sequenceText) != 20 || sequenceErr != nil ||
+			sequence == 0 || digestErr != nil || len(digestBytes) != 32 {
+			return fmt.Errorf(
+				"noncanonical FROST retained-group checkpoint certificate name: [%s]",
+				name,
+			)
+		}
+		digest := [32]byte{}
+		copy(digest[:], digestBytes)
+		if frostRetainedGroupCheckpointFileName(sequence, digest) != name {
+			return fmt.Errorf(
+				"noncanonical FROST retained-group checkpoint certificate name: [%s]",
+				name,
+			)
+		}
 		return nil
 	}
 	if strings.HasPrefix(name, frostRetainedGroupLiftCertificatePrefix) {
@@ -3029,6 +3115,40 @@ func cloneFrostRetainedGroupMutations(
 	return result
 }
 
+func equalFrostRetainedGroupSemanticHistories(
+	first *FrostRetainedGroupHistory,
+	second *FrostRetainedGroupHistory,
+) (bool, error) {
+	if first == nil || second == nil ||
+		first.From != second.From ||
+		first.To != second.To ||
+		first.HistoryRoot != second.HistoryRoot ||
+		first.Complete != second.Complete ||
+		first.EmptyAtFrom != second.EmptyAtFrom ||
+		first.DescriptorSetHash != second.DescriptorSetHash ||
+		len(first.Mutations) != len(second.Mutations) {
+		return false, nil
+	}
+	for index := range first.Mutations {
+		firstMutation, err := frostRetainedGroupCanonicalValue(
+			first.Mutations[index],
+		)
+		if err != nil {
+			return false, err
+		}
+		secondMutation, err := frostRetainedGroupCanonicalValue(
+			second.Mutations[index],
+		)
+		if err != nil {
+			return false, err
+		}
+		if !bytes.Equal(firstMutation, secondMutation) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func (frgj *frostRetainedGroupJournal) reconcile(
 	ctx context.Context,
 	target FrostPreSignFinality,
@@ -3050,7 +3170,11 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 	if target.BlockNumber == 0 || target.BlockHash == [32]byte{} ||
 		target.BlockNumber < frgj.metadata.Checkpoint.BlockNumber ||
 		target.BlockNumber < frgj.state.CurrentPoint.BlockNumber ||
-		target.BlockNumber < frgj.quarantineState.CurrentPoint.BlockNumber {
+		target.BlockNumber < frgj.quarantineState.CurrentPoint.BlockNumber ||
+		(frgj.checkpointState.Sequence >=
+			frgj.checkpointPolicy.MinimumSequence &&
+			target.BlockNumber <
+				frgj.checkpointState.Point.BlockNumber) {
 		return nil, fmt.Errorf("FROST retained-group target is invalid or retrograde")
 	}
 	if err := frgj.verifyHistorySourceIdentity(ctx); err != nil {
@@ -3079,23 +3203,201 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 			return nil, fmt.Errorf("cannot verify FROST retained-group %s: [%w]", name, err)
 		}
 	}
-	history, err := frgj.source.ReadCompleteHistory(ctx, frgj.metadata.Checkpoint, target)
-	if err != nil {
-		return nil, fmt.Errorf("cannot reconstruct complete FROST retained-group history: [%w]", err)
+	checkpointAfter := FrostRetainedGroupCheckpointCursor{
+		Sequence:        frgj.checkpointState.Sequence,
+		CertificateHash: frgj.checkpointState.CertificateHash,
 	}
-	if history == nil || !history.Complete || !history.EmptyAtFrom ||
-		history.From != frgj.metadata.Checkpoint ||
-		history.To != target || history.DescriptorSetHash != frgj.metadata.DescriptorSetHash {
-		return nil, fmt.Errorf("FROST retained-group history receipt is incomplete or differently bound")
+	checkpointCursor := checkpointAfter
+	var history *FrostRetainedGroupHistory
+	checkpointHashes := make([][32]byte, 0)
+	checkpointCertificates := make(
+		[]FrostRetainedGroupCheckpointCertificate,
+		0,
+	)
+	checkpointRecoveryComplete := false
+	for checkpointPage := 0; checkpointPage < frostRetainedGroupMaximumCheckpointPages; checkpointPage++ {
+		page, err := frgj.source.ReadCompleteHistory(
+			ctx,
+			frgj.metadata.Checkpoint,
+			target,
+			checkpointCursor,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot reconstruct complete FROST retained-group history: [%w]",
+				err,
+			)
+		}
+		if page == nil || !page.Complete || !page.EmptyAtFrom ||
+			page.From != frgj.metadata.Checkpoint ||
+			page.To != target ||
+			page.DescriptorSetHash != frgj.metadata.DescriptorSetHash {
+			return nil, fmt.Errorf(
+				"FROST retained-group history receipt is incomplete or differently bound",
+			)
+		}
+		if len(page.Mutations) > frostRetainedGroupMaximumMutations {
+			return nil, fmt.Errorf(
+				"FROST retained-group history exceeds the mutation limit",
+			)
+		}
+		if len(page.Checkpoints) >
+			frostRetainedGroupMaximumCheckpointsPerPage {
+			return nil, fmt.Errorf(
+				"FROST retained-group checkpoint page exceeds its bound",
+			)
+		}
+		if err := validateCompleteFrostRetainedGroupHistory(
+			page,
+			frgj.liftPolicy,
+		); err != nil {
+			return nil, err
+		}
+		if page.CheckpointAfter != checkpointCursor {
+			return nil, fmt.Errorf(
+				"FROST retained-group history checkpoint cursor differs from the requested certified head",
+			)
+		}
+		if history == nil {
+			history = page
+		} else {
+			equal, err := equalFrostRetainedGroupSemanticHistories(
+				history,
+				page,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if !equal {
+				return nil, fmt.Errorf(
+					"FROST retained-group history changed between checkpoint pages",
+				)
+			}
+		}
+		pageCheckpointHashes, err :=
+			validateFrostRetainedGroupCheckpointSuffix(
+				frgj.checkpointPolicy,
+				checkpointCursor,
+				page.Checkpoints,
+			)
+		if err != nil {
+			return nil, err
+		}
+		if len(page.Checkpoints) == 0 && !page.CheckpointComplete {
+			return nil, fmt.Errorf(
+				"nonfinal FROST checkpoint page made no progress",
+			)
+		}
+		if len(page.Checkpoints) > 0 {
+			if err := validateFrostRetainedGroupCheckpointSemantics(
+				frgj.checkpointPolicy,
+				page,
+				pageCheckpointHashes,
+			); err != nil {
+				return nil, err
+			}
+			for index, certificate := range page.Checkpoints {
+				if err := frgj.source.VerifyPoint(
+					ctx,
+					certificate.Body.Point,
+				); err != nil {
+					return nil, fmt.Errorf(
+						"cannot verify FROST checkpoint certificate point [%d:%d]: [%w]",
+						checkpointPage,
+						index,
+						err,
+					)
+				}
+			}
+			checkpointCertificates = append(
+				checkpointCertificates,
+				page.Checkpoints...,
+			)
+			checkpointHashes = append(
+				checkpointHashes,
+				pageCheckpointHashes...,
+			)
+			tail := len(page.Checkpoints) - 1
+			checkpointCursor = FrostRetainedGroupCheckpointCursor{
+				Sequence:        page.Checkpoints[tail].Body.Sequence,
+				CertificateHash: pageCheckpointHashes[tail],
+			}
+		}
+		if page.CheckpointComplete {
+			checkpointRecoveryComplete = true
+			break
+		}
 	}
-	if len(history.Mutations) > frostRetainedGroupMaximumMutations {
-		return nil, fmt.Errorf("FROST retained-group history exceeds the mutation limit")
+	if history == nil {
+		return nil, fmt.Errorf(
+			"FROST retained-group history source returned no checkpoint page",
+		)
 	}
-	if err := validateCompleteFrostRetainedGroupHistory(
-		history,
-		frgj.liftPolicy,
-	); err != nil {
-		return nil, err
+	history.CheckpointAfter = checkpointAfter
+	history.Checkpoints = checkpointCertificates
+	history.CheckpointChainRoot =
+		frostRetainedGroupCheckpointChainRoot(
+			frgj.checkpointPolicy.ProtocolBindingHash,
+			checkpointAfter,
+			checkpointHashes,
+		)
+	history.CheckpointTipHash = checkpointAfter.CertificateHash
+	if len(checkpointHashes) > 0 {
+		history.CheckpointTipHash =
+			checkpointHashes[len(checkpointHashes)-1]
+	}
+	history.CheckpointComplete = checkpointRecoveryComplete
+	if len(checkpointCertificates) > 0 {
+		// Revalidate the cross-page predecessor chain and the exact aggregate
+		// semantic binding. Per-page bounds remain enforced above.
+		checkpointHashes, err =
+			validateFrostRetainedGroupCheckpointSuffix(
+				frgj.checkpointPolicy,
+				checkpointAfter,
+				checkpointCertificates,
+			)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateFrostRetainedGroupCheckpointSemantics(
+			frgj.checkpointPolicy,
+			history,
+			checkpointHashes,
+		); err != nil {
+			return nil, err
+		}
+	}
+	if len(history.Checkpoints) == 0 {
+		if !history.CheckpointComplete ||
+			frgj.checkpointState.Sequence <
+				frgj.checkpointPolicy.MinimumSequence ||
+			frgj.checkpointState.Point != target ||
+			frgj.checkpointState.HistoryRoot != history.HistoryRoot ||
+			history.CheckpointTipHash !=
+				frgj.checkpointState.CertificateHash ||
+			history.CheckpointChainRoot !=
+				frostRetainedGroupCheckpointChainRoot(
+					frgj.checkpointPolicy.ProtocolBindingHash,
+					checkpointAfter,
+					nil,
+				) {
+			return nil, fmt.Errorf(
+				"canonical FROST retained-group history rewrote, omitted, or reordered the durable certified head",
+			)
+		}
+	} else {
+		if frgj.checkpointState.Sequence >=
+			frgj.checkpointPolicy.MinimumSequence &&
+			(history.Checkpoints[0].Body.Point.BlockNumber <=
+				frgj.checkpointState.Point.BlockNumber ||
+				history.Checkpoints[0].Body.CanonicalGeneration <
+					frgj.checkpointState.CanonicalGeneration ||
+				history.Checkpoints[0].Body.QuarantineGeneration <
+					frgj.checkpointState.QuarantineGeneration) {
+			return nil, fmt.Errorf(
+				"FROST checkpoint suffix does not monotonically advance the durable head",
+			)
+		}
 	}
 	canonicalInventoryMutations := frostRetainedGroupCanonicalMutations(history.Mutations)
 	if len(frgj.mutations) > len(canonicalInventoryMutations) {
@@ -3179,6 +3481,13 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 		}
 		frgj.state = candidate
 		frgj.mutations = append(frgj.mutations, suffix...)
+	}
+	if frgj.checkpointPersistFailureHook != nil {
+		if err := frgj.checkpointPersistFailureHook(
+			"after-canonical-before-quarantine",
+		); err != nil {
+			return nil, err
+		}
 	}
 	quarantineSuffix := cloneFrostRetainedGroupMutations(
 		canonicalQuarantineMutations[len(frgj.quarantineMutations):],
@@ -3267,6 +3576,25 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 		frgj.quarantineState = candidate
 		frgj.quarantineMutations = append(frgj.quarantineMutations, quarantineSuffix...)
 	}
+	if frgj.checkpointPersistFailureHook != nil {
+		if err := frgj.checkpointPersistFailureHook(
+			"after-semantic-journals-before-checkpoints",
+		); err != nil {
+			return nil, err
+		}
+	}
+	if len(history.Checkpoints) > 0 {
+		if err := frgj.persistCheckpointSuffix(
+			history.Checkpoints,
+			checkpointHashes,
+		); err != nil {
+			return nil, err
+		}
+	} else if err := frgj.validateCheckpointAgainstDurableState(
+		frgj.checkpointState,
+	); err != nil {
+		return nil, err
+	}
 	afterHead, err := frgj.source.FinalizedHead(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read independent finalized head after journal replay: [%w]", err)
@@ -3285,6 +3613,13 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 	if err := frgj.source.VerifyPoint(ctx, target); err != nil {
 		return nil, fmt.Errorf("challenged FROST retained-group point changed during replay: [%w]", err)
 	}
+	if !history.CheckpointComplete {
+		return nil, fmt.Errorf(
+			"FROST checkpoint recovery remains incomplete after [%d] authenticated pages; retry from durable sequence [%d]",
+			frostRetainedGroupMaximumCheckpointPages,
+			frgj.checkpointState.Sequence,
+		)
+	}
 	localSessionCount, err := frgj.reconcileLocalSessions(ctx, target)
 	if err != nil {
 		return nil, err
@@ -3302,6 +3637,15 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 		frgj.quarantineState.ActiveRoot == [32]byte{} ||
 		frgj.quarantineState.TombstoneRoot == [32]byte{} {
 		return nil, fmt.Errorf("independent FROST quarantine journal is not activation-ready")
+	}
+	if frgj.checkpointState.Point != target ||
+		frgj.checkpointState.Sequence <
+			frgj.checkpointPolicy.MinimumSequence ||
+		frgj.checkpointState.CertificateHash == [32]byte{} ||
+		frgj.checkpointState.HistoryRoot != history.HistoryRoot {
+		return nil, fmt.Errorf(
+			"quorum-certified FROST checkpoint journal is not activation-ready",
+		)
 	}
 	return &frostRetainedGroupJournalSnapshot{
 		Schema:                       frostRetainedGroupJournalSnapshotSchema,
@@ -3327,6 +3671,11 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 		QuarantineTombstoneRoot:      frgj.quarantineState.TombstoneRoot,
 		QuarantineCount:              frostRetainedGroupActiveQuarantineCount(frgj.quarantineState),
 		QuarantineTombstoneCount:     uint64(len(frgj.quarantineState.Tombstones)),
+		CheckpointMinimumSequence:    frgj.checkpointPolicy.MinimumSequence,
+		CheckpointPredecessorHash:    frgj.checkpointPolicy.PredecessorHash,
+		CheckpointSequence:           frgj.checkpointState.Sequence,
+		CheckpointCertificateHash:    frgj.checkpointState.CertificateHash,
+		CheckpointHistoryRoot:        frgj.checkpointState.HistoryRoot,
 		LocalSessionCount:            localSessionCount,
 		Complete:                     true,
 	}, nil

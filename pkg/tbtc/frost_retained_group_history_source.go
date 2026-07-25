@@ -32,16 +32,16 @@ import (
 )
 
 const (
-	frostRetainedGroupHistoryPageSchema      = "tbtc-frost-retained-group-history-page/v3"
+	frostRetainedGroupHistoryPageSchema      = "tbtc-frost-retained-group-history-page/v5"
 	frostRetainedGroupOperatorReceiptSchema  = "tbtc-frost-retained-group-operator-receipt/v3"
-	frostRetainedGroupHistoryRequestSchema   = "tbtc-frost-retained-group-history-request/v3"
+	frostRetainedGroupHistoryRequestSchema   = "tbtc-frost-retained-group-history-request/v4"
 	frostRetainedGroupOperatorRequestSchema  = "tbtc-frost-retained-group-operator-request/v3"
-	frostRetainedGroupHistorySignatureDomain = "tbtc-frost-retained-group-export-signature-v3\x00"
+	frostRetainedGroupHistorySignatureDomain = "tbtc-frost-retained-group-export-signature-v5\x00"
 	frostRetainedGroupHistoryEndpointDomain  = "tbtc-frost-retained-group-endpoints-v1\x00"
-	frostRetainedGroupHistoryQueryDomain     = "tbtc-frost-retained-group-history-query-v3\x00"
+	frostRetainedGroupHistoryQueryDomain     = "tbtc-frost-retained-group-history-query-v4\x00"
 	frostRetainedGroupOperatorQueryDomain    = "tbtc-frost-retained-group-operator-query-v3\x00"
-	frostRetainedGroupHistoryRootDomain      = "tbtc-frost-retained-group-export-history-root-v3\x00"
-	frostRetainedGroupProtocolBindingDomain  = "tbtc-frost-retained-group-protocol-binding-v3\x00"
+	frostRetainedGroupHistoryRootDomain      = "tbtc-frost-retained-group-export-history-root-v4\x00"
+	frostRetainedGroupProtocolBindingDomain  = "tbtc-frost-retained-group-protocol-binding-v4\x00"
 
 	frostRetainedGroupMaximumResponseBytes          = 1024 * 1024
 	frostRetainedGroupMaximumAggregateResponseBytes = 16 * 1024 * 1024
@@ -253,6 +253,8 @@ type frostRetainedGroupProtocolBinding struct {
 	TombstoneProtocolID            string                           `json:"tombstoneProtocolID"`
 	LiftAuthoritySetHash           string                           `json:"liftAuthoritySetHash"`
 	CheckpointAuthoritySetHash     string                           `json:"checkpointAuthoritySetHash"`
+	CheckpointMinimumSequence      uint64                           `json:"checkpointMinimumSequence"`
+	CheckpointPredecessorHash      string                           `json:"checkpointPredecessorHash"`
 	SigningPolicyHash              string                           `json:"signingPolicyHash"`
 	CanonicalStoreID               string                           `json:"canonicalStoreID"`
 	CanonicalStoreFingerprint      string                           `json:"canonicalStoreFingerprint"`
@@ -347,36 +349,48 @@ type frostRetainedGroupHistoryQuery struct {
 }
 
 type frostRetainedGroupHistoryPageRequest struct {
-	BindingHash string                         `json:"bindingHash"`
-	Query       frostRetainedGroupHistoryQuery `json:"query"`
-	Cursor      string                         `json:"cursor"`
+	BindingHash     string                                 `json:"bindingHash"`
+	Query           frostRetainedGroupHistoryQuery         `json:"query"`
+	CheckpointAfter frostRetainedGroupWireCheckpointCursor `json:"checkpointAfter"`
+	Cursor          string                                 `json:"cursor"`
+}
+
+type frostRetainedGroupWireCheckpointCursor struct {
+	Sequence        uint64 `json:"sequence"`
+	CertificateHash string `json:"certificateHash"`
 }
 
 type frostRetainedGroupHistoryReceipt struct {
-	PageCount     uint64 `json:"pageCount"`
-	MutationCount uint64 `json:"mutationCount"`
-	BindingHash   string `json:"bindingHash"`
-	HistoryRoot   string `json:"historyRoot"`
+	PageCount              uint64                                        `json:"pageCount"`
+	MutationCount          uint64                                        `json:"mutationCount"`
+	BindingHash            string                                        `json:"bindingHash"`
+	HistoryRoot            string                                        `json:"historyRoot"`
+	CheckpointAfter        frostRetainedGroupWireCheckpointCursor        `json:"checkpointAfter"`
+	CheckpointCertificates []frostRetainedGroupWireCheckpointCertificate `json:"checkpointCertificates"`
+	CheckpointChainRoot    string                                        `json:"checkpointChainRoot"`
+	CheckpointTipHash      string                                        `json:"checkpointTipHash"`
+	CheckpointComplete     bool                                          `json:"checkpointComplete"`
 }
 
 type frostRetainedGroupHistoryPagePayload struct {
-	Schema            string                            `json:"schema"`
-	BindingHash       string                            `json:"bindingHash"`
-	Identity          frostRetainedGroupWireIdentity    `json:"identity"`
-	ChainID           uint64                            `json:"chainID"`
-	QueryHash         string                            `json:"queryHash"`
-	SnapshotID        string                            `json:"snapshotID"`
-	PageIndex         uint64                            `json:"pageIndex"`
-	Cursor            string                            `json:"cursor"`
-	PreviousPageHash  string                            `json:"previousPageHash"`
-	From              frostRetainedGroupWireFinality    `json:"from"`
-	To                frostRetainedGroupWireFinality    `json:"to"`
-	EmptyAtFrom       bool                              `json:"emptyAtFrom"`
-	DescriptorSetHash string                            `json:"descriptorSetHash"`
-	Mutations         []frostRetainedGroupWireMutation  `json:"mutations"`
-	NextCursor        string                            `json:"nextCursor"`
-	Complete          bool                              `json:"complete"`
-	Receipt           *frostRetainedGroupHistoryReceipt `json:"receipt"`
+	Schema            string                                 `json:"schema"`
+	BindingHash       string                                 `json:"bindingHash"`
+	Identity          frostRetainedGroupWireIdentity         `json:"identity"`
+	ChainID           uint64                                 `json:"chainID"`
+	QueryHash         string                                 `json:"queryHash"`
+	SnapshotID        string                                 `json:"snapshotID"`
+	PageIndex         uint64                                 `json:"pageIndex"`
+	Cursor            string                                 `json:"cursor"`
+	PreviousPageHash  string                                 `json:"previousPageHash"`
+	From              frostRetainedGroupWireFinality         `json:"from"`
+	To                frostRetainedGroupWireFinality         `json:"to"`
+	EmptyAtFrom       bool                                   `json:"emptyAtFrom"`
+	DescriptorSetHash string                                 `json:"descriptorSetHash"`
+	CheckpointAfter   frostRetainedGroupWireCheckpointCursor `json:"checkpointAfter"`
+	Mutations         []frostRetainedGroupWireMutation       `json:"mutations"`
+	NextCursor        string                                 `json:"nextCursor"`
+	Complete          bool                                   `json:"complete"`
+	Receipt           *frostRetainedGroupHistoryReceipt      `json:"receipt"`
 }
 
 type frostRetainedGroupOperatorQuery struct {
@@ -752,6 +766,7 @@ func (source *signedFrostRetainedGroupHistorySource) ReadCompleteHistory(
 	ctx context.Context,
 	from FrostPreSignFinality,
 	to FrostPreSignFinality,
+	checkpointAfter FrostRetainedGroupCheckpointCursor,
 ) (*FrostRetainedGroupHistory, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("retained-group history context is nil")
@@ -771,6 +786,20 @@ func (source *signedFrostRetainedGroupHistorySource) ReadCompleteHistory(
 	evidence, err := source.activationEvidence()
 	if err != nil {
 		return nil, err
+	}
+	if checkpointAfter.Sequence == evidence.checkpointPolicy.MinimumSequence-1 {
+		if checkpointAfter.CertificateHash !=
+			evidence.checkpointPolicy.PredecessorHash {
+			return nil, fmt.Errorf(
+				"retained-group checkpoint cursor differs from the manifest floor",
+			)
+		}
+	} else if checkpointAfter.Sequence <
+		evidence.checkpointPolicy.MinimumSequence ||
+		checkpointAfter.CertificateHash == [32]byte{} {
+		return nil, fmt.Errorf(
+			"retained-group checkpoint cursor is below the manifest floor",
+		)
 	}
 	headBefore, err := source.FinalizedHead(ctx)
 	if err != nil {
@@ -817,7 +846,13 @@ func (source *signedFrostRetainedGroupHistorySource) ReadCompleteHistory(
 		request := frostRetainedGroupHistoryPageRequest{
 			BindingHash: frostActivationHex32(evidence.bindingHash),
 			Query:       query,
-			Cursor:      cursor,
+			CheckpointAfter: frostRetainedGroupWireCheckpointCursor{
+				Sequence: checkpointAfter.Sequence,
+				CertificateHash: frostActivationHex32(
+					checkpointAfter.CertificateHash,
+				),
+			},
+			Cursor: cursor,
 		}
 		payload := &frostRetainedGroupHistoryPagePayload{}
 		responseBytes, err := source.postSigned(ctx, "history", request, payload)
@@ -838,6 +873,7 @@ func (source *signedFrostRetainedGroupHistorySource) ReadCompleteHistory(
 			previousPageHash,
 			snapshotID,
 			descriptorSetHash,
+			checkpointAfter,
 		)
 		if err != nil {
 			return nil, err
@@ -877,7 +913,9 @@ func (source *signedFrostRetainedGroupHistorySource) ReadCompleteHistory(
 				payload.Receipt.PageCount != pageIndex+1 ||
 				payload.Receipt.MutationCount != uint64(len(mutations)) ||
 				payload.Receipt.BindingHash !=
-					frostActivationHex32(evidence.bindingHash) {
+					frostActivationHex32(evidence.bindingHash) ||
+				payload.Receipt.CheckpointAfter !=
+					request.CheckpointAfter {
 				return nil, fmt.Errorf("retained-group final history receipt is inconsistent")
 			}
 			receiptRoot, err := parseFrostActivationHex32(payload.Receipt.HistoryRoot)
@@ -892,19 +930,110 @@ func (source *signedFrostRetainedGroupHistorySource) ReadCompleteHistory(
 			if receiptRoot != computedRoot {
 				return nil, fmt.Errorf("retained-group history receipt does not cover the exact mutation sequence")
 			}
+			if len(payload.Receipt.CheckpointCertificates) >
+				frostRetainedGroupMaximumCheckpointsPerPage {
+				return nil, fmt.Errorf(
+					"retained-group checkpoint page exceeds its bound",
+				)
+			}
+			checkpoints := make(
+				[]FrostRetainedGroupCheckpointCertificate,
+				len(payload.Receipt.CheckpointCertificates),
+			)
+			for index, wireCertificate := range payload.Receipt.CheckpointCertificates {
+				checkpoint, err :=
+					frostRetainedGroupCheckpointCertificateFromWire(
+						wireCertificate,
+					)
+				if err != nil {
+					return nil, fmt.Errorf(
+						"retained-group checkpoint certificate [%d] is malformed: [%w]",
+						index,
+						err,
+					)
+				}
+				checkpoints[index] = checkpoint
+			}
+			checkpointHashes, err :=
+				validateFrostRetainedGroupCheckpointSuffix(
+					evidence.checkpointPolicy,
+					checkpointAfter,
+					checkpoints,
+				)
+			if err != nil {
+				return nil, err
+			}
+			checkpointChainRoot, err := parseFrostActivationHex32(
+				payload.Receipt.CheckpointChainRoot,
+			)
+			if err != nil ||
+				checkpointChainRoot !=
+					frostRetainedGroupCheckpointChainRoot(
+						evidence.bindingHash,
+						checkpointAfter,
+						checkpointHashes,
+					) {
+				return nil, fmt.Errorf(
+					"retained-group final receipt checkpoint-chain root mismatch",
+				)
+			}
+			checkpointTipHash, err := parseFrostActivationHex32(
+				payload.Receipt.CheckpointTipHash,
+			)
+			if err != nil ||
+				(len(checkpointHashes) == 0 &&
+					checkpointTipHash != checkpointAfter.CertificateHash) ||
+				(len(checkpointHashes) > 0 &&
+					checkpointTipHash !=
+						checkpointHashes[len(checkpointHashes)-1]) {
+				return nil, fmt.Errorf(
+					"retained-group final receipt checkpoint-tip mismatch",
+				)
+			}
 			history := &FrostRetainedGroupHistory{
-				From:              from,
-				To:                to,
-				Mutations:         mutations,
-				Complete:          true,
-				EmptyAtFrom:       true,
-				DescriptorSetHash: descriptorSetHash,
+				From:                from,
+				To:                  to,
+				Mutations:           mutations,
+				HistoryRoot:         receiptRoot,
+				CheckpointAfter:     checkpointAfter,
+				Checkpoints:         checkpoints,
+				CheckpointChainRoot: checkpointChainRoot,
+				CheckpointTipHash:   checkpointTipHash,
+				CheckpointComplete:  payload.Receipt.CheckpointComplete,
+				Complete:            true,
+				EmptyAtFrom:         true,
+				DescriptorSetHash:   descriptorSetHash,
 			}
 			if err := validateCompleteFrostRetainedGroupHistory(
 				history,
 				evidence.liftPolicy,
 			); err != nil {
 				return nil, err
+			}
+			if !history.CheckpointComplete && len(checkpoints) == 0 {
+				return nil, fmt.Errorf(
+					"retained-group nonfinal checkpoint page made no progress",
+				)
+			}
+			if len(checkpoints) > 0 {
+				if err := validateFrostRetainedGroupCheckpointSemantics(
+					evidence.checkpointPolicy,
+					history,
+					checkpointHashes,
+				); err != nil {
+					return nil, err
+				}
+			}
+			for _, checkpoint := range checkpoints {
+				blockNumber := checkpoint.Body.Point.BlockNumber
+				blockHash := checkpoint.Body.Point.BlockHash
+				if existing, ok := blockHashes[blockNumber]; ok &&
+					existing != blockHash {
+					return nil, fmt.Errorf(
+						"retained-group checkpoint chain contains conflicting block hashes",
+					)
+				}
+				blockHashes[blockNumber] = blockHash
 			}
 			for blockNumber, blockHash := range blockHashes {
 				if err := source.verifyPointAtFinalizedHead(ctx, FrostPreSignFinality{
@@ -950,6 +1079,7 @@ func (source *signedFrostRetainedGroupHistorySource) validateHistoryPage(
 	previousPageHash [32]byte,
 	snapshotID [32]byte,
 	descriptorSetHash [32]byte,
+	checkpointAfter FrostRetainedGroupCheckpointCursor,
 ) ([32]byte, error) {
 	evidence, evidenceErr := source.activationEvidence()
 	if evidenceErr != nil {
@@ -961,6 +1091,13 @@ func (source *signedFrostRetainedGroupHistorySource) validateHistoryPage(
 		payload.Cursor != cursor || !payload.EmptyAtFrom ||
 		!source.validWireIdentity(payload.Identity) {
 		return [32]byte{}, fmt.Errorf("retained-group history page has the wrong identity or position")
+	}
+	if payload.CheckpointAfter.Sequence != checkpointAfter.Sequence ||
+		payload.CheckpointAfter.CertificateHash !=
+			frostActivationHex32(checkpointAfter.CertificateHash) {
+		return [32]byte{}, fmt.Errorf(
+			"retained-group history page checkpoint cursor mismatch",
+		)
 	}
 	declaredQueryHash, err := parseFrostActivationHex32(payload.QueryHash)
 	if err != nil || declaredQueryHash != queryHash {
@@ -1132,7 +1269,7 @@ func (source *signedFrostRetainedGroupHistorySource) verifySignedEnvelope(
 ) error {
 	evidence, evidenceErr := source.activationEvidence()
 	if envelope == nil || evidenceErr != nil ||
-		envelope.Schema != "tbtc-frost-retained-group-signed-envelope/v2" ||
+		envelope.Schema != "tbtc-frost-retained-group-signed-envelope/v3" ||
 		envelope.BindingHash != frostActivationHex32(evidence.bindingHash) ||
 		envelope.SignatureAlgorithm != "ed25519" || len(envelope.Payload) == 0 {
 		return fmt.Errorf("retained-group signed envelope is malformed")

@@ -298,7 +298,7 @@ func (export *frostRetainedGroupHistoryTestExport) ServeHTTP(
 		signature[0] ^= 0xff
 	}
 	envelope := frostRetainedGroupSignedEnvelope{
-		Schema:              "tbtc-frost-retained-group-signed-envelope/v2",
+		Schema:              "tbtc-frost-retained-group-signed-envelope/v3",
 		BindingHash:         frostActivationHex32(export.bindingHash),
 		Payload:             json.RawMessage(canonical),
 		PayloadSHA256:       frostActivationHex32(payloadHash),
@@ -328,8 +328,22 @@ type frostRetainedGroupHistorySourceFixture struct {
 	mutations         []FrostRetainedGroupMutation
 	dkgFullMembers    []uint32
 	dkgMisbehaved     []uint8
-	pageMutator       func(*frostRetainedGroupHistoryPagePayload)
-	operatorMutator   func(*frostRetainedGroupOperatorReceiptPayload)
+	checkpointIssuer  func(
+		FrostRetainedGroupCheckpointCursor,
+		FrostPreSignFinality,
+		[]FrostRetainedGroupMutation,
+	) ([]FrostRetainedGroupCheckpointCertificate, error)
+	pageMutator     func(*frostRetainedGroupHistoryPagePayload)
+	operatorMutator func(*frostRetainedGroupOperatorReceiptPayload)
+}
+
+func (fixture *frostRetainedGroupHistorySourceFixture) checkpointAfter() FrostRetainedGroupCheckpointCursor {
+	return FrostRetainedGroupCheckpointCursor{
+		Sequence: fixture.runtimeManifest.QuarantineJournal.
+			CheckpointMinimumSequence - 1,
+		CertificateHash: fixture.runtimeManifest.QuarantineJournal.
+			CheckpointPredecessorHash,
+	}
 }
 
 func newFrostRetainedGroupHistorySourceFixture(
@@ -363,6 +377,21 @@ func newFrostRetainedGroupHistorySourceFixture(
 		sortitionPoolCode,
 		headers[1].Hash(),
 	)
+	checkpointPrivateKeys := make([]ed25519.PrivateKey, 3)
+	checkpointPublicKeySPKIs := make([]string, 3)
+	checkpointAuthorities := make([]FrostRetainedGroupAuthority, 3)
+	for index := range checkpointAuthorities {
+		authority, privateKey, publicKeySPKI := journalTestAuthority(
+			t,
+			fmt.Sprintf("checkpoint-%d", index+1),
+			byte(0x51+index),
+		)
+		checkpointAuthorities[index] = authority
+		checkpointPrivateKeys[index] = privateKey
+		checkpointPublicKeySPKIs[index] = publicKeySPKI
+	}
+	runtimeManifest.QuarantineJournal.CheckpointAuthorities =
+		checkpointAuthorities
 	operatorAddress := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	verifier := &frostRetainedGroupHistoryTestVerifier{
 		chainID:       big.NewInt(1),
@@ -440,6 +469,13 @@ func newFrostRetainedGroupHistorySourceFixture(
 		fixture.mutations[0].OperatorIDs...,
 	)
 	fixture.installReceipts()
+	fixture.checkpointIssuer = newFrostRetainedGroupTestCheckpointIssuer(
+		t,
+		source.evidence.checkpointPolicy,
+		fixture.from,
+		checkpointPrivateKeys,
+		checkpointPublicKeySPKIs,
+	)
 	export.historyResponder = fixture.historyResponse
 	export.operatorResponder = fixture.operatorResponse
 	return fixture
@@ -569,6 +605,8 @@ func frostRetainedGroupHistoryTestProfile(
 			TombstoneProtocolID:          [32]byte{0x4c},
 			CheckpointAuthorityThreshold: 2,
 			CheckpointAuthorities:        checkpointAuthorities,
+			CheckpointMinimumSequence:    1,
+			CheckpointPredecessorHash:    [32]byte{},
 			LiftAuthorityThreshold:       2,
 			LiftAuthorities:              liftAuthorities,
 			StoreID:                      "quarantine-test-store",
@@ -894,6 +932,7 @@ func frostRetainedGroupHistoryTestReceipt(
 
 func (fixture *frostRetainedGroupHistorySourceFixture) historyPages(
 	query frostRetainedGroupHistoryQuery,
+	checkpointAfterWire frostRetainedGroupWireCheckpointCursor,
 ) []*frostRetainedGroupHistoryPagePayload {
 	fixture.t.Helper()
 	queryHash, err := frostRetainedGroupDomainHash(frostRetainedGroupHistoryQueryDomain, query)
@@ -903,6 +942,51 @@ func (fixture *frostRetainedGroupHistorySourceFixture) historyPages(
 	wireMutations := make([]frostRetainedGroupWireMutation, len(fixture.mutations))
 	for index, mutation := range fixture.mutations {
 		wireMutations[index] = frostRetainedGroupMutationToWire(mutation)
+	}
+	checkpointAfterHash, err := parseFrostActivationHex32(
+		checkpointAfterWire.CertificateHash,
+	)
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	checkpointAfter := FrostRetainedGroupCheckpointCursor{
+		Sequence:        checkpointAfterWire.Sequence,
+		CertificateHash: checkpointAfterHash,
+	}
+	checkpointTarget, err := frostRetainedGroupFinalityFromWire(query.To)
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	checkpoints, err := fixture.checkpointIssuer(
+		checkpointAfter,
+		checkpointTarget,
+		fixture.mutations,
+	)
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	checkpointComplete := true
+	if len(checkpoints) > frostRetainedGroupMaximumCheckpointsPerPage {
+		checkpoints = checkpoints[:frostRetainedGroupMaximumCheckpointsPerPage]
+		checkpointComplete = false
+	}
+	checkpointHashes := make([][32]byte, len(checkpoints))
+	wireCheckpoints := make(
+		[]frostRetainedGroupWireCheckpointCertificate,
+		len(checkpoints),
+	)
+	for index, checkpoint := range checkpoints {
+		checkpointHashes[index], err =
+			frostRetainedGroupCheckpointCertificateHash(checkpoint)
+		if err != nil {
+			fixture.t.Fatal(err)
+		}
+		wireCheckpoints[index] =
+			frostRetainedGroupCheckpointCertificateToWire(checkpoint)
+	}
+	checkpointTipHash := checkpointAfter.CertificateHash
+	if len(checkpointHashes) > 0 {
+		checkpointTipHash = checkpointHashes[len(checkpointHashes)-1]
 	}
 	pageCount := (len(wireMutations) + 1) / 2
 	if pageCount == 0 {
@@ -943,6 +1027,7 @@ func (fixture *frostRetainedGroupHistorySourceFixture) historyPages(
 			To:                query.To,
 			EmptyAtFrom:       true,
 			DescriptorSetHash: frostActivationHex32(fixture.descriptorSetHash),
+			CheckpointAfter:   checkpointAfterWire,
 			Mutations:         append([]frostRetainedGroupWireMutation{}, wireMutations[start:end]...),
 			NextCursor:        nextCursor,
 			Complete:          index+1 == pageCount,
@@ -963,10 +1048,21 @@ func (fixture *frostRetainedGroupHistorySourceFixture) historyPages(
 		fixture.t.Fatal(err)
 	}
 	pages[len(pages)-1].Receipt = &frostRetainedGroupHistoryReceipt{
-		PageCount:     uint64(len(pages)),
-		MutationCount: uint64(len(wireMutations)),
-		BindingHash:   frostActivationHex32(fixture.source.evidence.bindingHash),
-		HistoryRoot:   frostActivationHex32(historyRoot),
+		PageCount:              uint64(len(pages)),
+		MutationCount:          uint64(len(wireMutations)),
+		BindingHash:            frostActivationHex32(fixture.source.evidence.bindingHash),
+		HistoryRoot:            frostActivationHex32(historyRoot),
+		CheckpointAfter:        checkpointAfterWire,
+		CheckpointCertificates: wireCheckpoints,
+		CheckpointChainRoot: frostActivationHex32(
+			frostRetainedGroupCheckpointChainRoot(
+				fixture.source.evidence.bindingHash,
+				checkpointAfter,
+				checkpointHashes,
+			),
+		),
+		CheckpointTipHash:  frostActivationHex32(checkpointTipHash),
+		CheckpointComplete: checkpointComplete,
 	}
 	return pages
 }
@@ -978,7 +1074,7 @@ func (fixture *frostRetainedGroupHistorySourceFixture) historyResponse(
 		frostActivationHex32(fixture.source.evidence.bindingHash) {
 		return nil
 	}
-	pages := fixture.historyPages(request.Query)
+	pages := fixture.historyPages(request.Query, request.CheckpointAfter)
 	for _, page := range pages {
 		if page.Cursor == request.Cursor {
 			copy := *page
@@ -1038,6 +1134,7 @@ func TestSignedFrostRetainedGroupHistorySource_ReadsCompletePaginatedHistory(
 		context.Background(),
 		fixture.from,
 		fixture.to,
+		fixture.checkpointAfter(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1053,6 +1150,106 @@ func TestSignedFrostRetainedGroupHistorySource_ReadsCompletePaginatedHistory(
 	)
 	if err != nil || operatorID != 17 {
 		t.Fatalf("unexpected operator ID: [%d] [%v]", operatorID, err)
+	}
+}
+
+func TestSignedFrostRetainedGroupHistorySource_PaginatesLongCheckpointChain(
+	t *testing.T,
+) {
+	fixture := newFrostRetainedGroupHistorySourceFixture(t)
+	checkpointCount := frostRetainedGroupMaximumCheckpointsPerPage + 2
+	targetBlock := uint64(checkpointCount + 2)
+	finalizedBlock := targetBlock + 10
+	for blockNumber := uint64(11); blockNumber <= finalizedBlock; blockNumber++ {
+		fixture.verifier.headers[blockNumber] = &types.Header{
+			Number: new(big.Int).SetUint64(blockNumber),
+			Time:   blockNumber,
+			Extra:  []byte{byte(blockNumber), 0x9a},
+		}
+	}
+	fixture.to = FrostPreSignFinality{
+		BlockNumber: targetBlock,
+		BlockHash:   fixture.verifier.headers[targetBlock].Hash(),
+	}
+	fixture.verifier.finalized = fixture.verifier.headers[finalizedBlock]
+
+	cursor := fixture.checkpointAfter()
+	for blockNumber := uint64(3); blockNumber <= targetBlock; blockNumber++ {
+		point := FrostPreSignFinality{
+			BlockNumber: blockNumber,
+			BlockHash:   fixture.verifier.headers[blockNumber].Hash(),
+		}
+		prefix := make([]FrostRetainedGroupMutation, 0, len(fixture.mutations))
+		for _, mutation := range fixture.mutations {
+			if mutation.Point.BlockNumber <= blockNumber {
+				prefix = append(prefix, mutation)
+			}
+		}
+		certificates, err := fixture.checkpointIssuer(
+			cursor,
+			point,
+			prefix,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(certificates) != 1 {
+			t.Fatalf(
+				"expected one newly issued checkpoint, got [%d]",
+				len(certificates),
+			)
+		}
+		certificateHash, err :=
+			frostRetainedGroupCheckpointCertificateHash(certificates[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		cursor = FrostRetainedGroupCheckpointCursor{
+			Sequence:        certificates[0].Body.Sequence,
+			CertificateHash: certificateHash,
+		}
+	}
+
+	first, err := fixture.source.ReadCompleteHistory(
+		context.Background(),
+		fixture.from,
+		fixture.to,
+		fixture.checkpointAfter(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.CheckpointComplete ||
+		len(first.Checkpoints) !=
+			frostRetainedGroupMaximumCheckpointsPerPage {
+		t.Fatalf(
+			"unexpected first checkpoint page: complete [%t], count [%d]",
+			first.CheckpointComplete,
+			len(first.Checkpoints),
+		)
+	}
+	firstTail := FrostRetainedGroupCheckpointCursor{
+		Sequence:        first.Checkpoints[len(first.Checkpoints)-1].Body.Sequence,
+		CertificateHash: first.CheckpointTipHash,
+	}
+	second, err := fixture.source.ReadCompleteHistory(
+		context.Background(),
+		fixture.from,
+		fixture.to,
+		firstTail,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.CheckpointComplete ||
+		len(second.Checkpoints) != 2 ||
+		second.CheckpointTipHash != cursor.CertificateHash ||
+		second.HistoryRoot != first.HistoryRoot {
+		t.Fatalf(
+			"unexpected final checkpoint page: complete [%t], count [%d]",
+			second.CheckpointComplete,
+			len(second.Checkpoints),
+		)
 	}
 }
 
@@ -1173,6 +1370,22 @@ func TestSignedFrostRetainedGroupHistorySource_ProtocolBindingCommitsRuntime(
 		) {
 			runtime.QuarantineJournal.CheckpointAuthorities[0].
 				PublicKeySPKIHash[0] ^= 0xff
+		},
+		"checkpoint minimum sequence": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.QuarantineJournal.CheckpointMinimumSequence++
+			runtime.QuarantineJournal.CheckpointPredecessorHash =
+				[32]byte{0x7f}
+		},
+		"checkpoint predecessor": func(
+			_ *FrostPreSignActivationProfile,
+			runtime *FrostPreSignActivationRuntimeManifest,
+		) {
+			runtime.QuarantineJournal.CheckpointMinimumSequence = 2
+			runtime.QuarantineJournal.CheckpointPredecessorHash =
+				[32]byte{0x7e}
 		},
 		"lift authority set": func(
 			_ *FrostPreSignActivationProfile,
@@ -1332,7 +1545,7 @@ func TestSignedFrostRetainedGroupHistorySource_DecodesCanonicalVerifiedBytes(
 		append([]byte(frostRetainedGroupHistorySignatureDomain), canonical...),
 	)
 	envelope := &frostRetainedGroupSignedEnvelope{
-		Schema:              "tbtc-frost-retained-group-signed-envelope/v2",
+		Schema:              "tbtc-frost-retained-group-signed-envelope/v3",
 		BindingHash:         frostActivationHex32(fixture.source.evidence.bindingHash),
 		Payload:             raw,
 		PayloadSHA256:       frostActivationHex32(payloadHash),
@@ -1369,7 +1582,7 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsCrossBindingEnvelopeAndRoo
 			append([]byte(frostRetainedGroupHistorySignatureDomain), canonical...),
 		)
 		envelope := &frostRetainedGroupSignedEnvelope{
-			Schema:              "tbtc-frost-retained-group-signed-envelope/v2",
+			Schema:              "tbtc-frost-retained-group-signed-envelope/v3",
 			BindingHash:         frostActivationHex32([32]byte{0xff}),
 			Payload:             raw,
 			PayloadSHA256:       frostActivationHex32(payloadHash),
@@ -1416,6 +1629,7 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsCrossBindingEnvelopeAndRoo
 			context.Background(),
 			fixture.from,
 			fixture.to,
+			fixture.checkpointAfter(),
 		)
 		if err == nil ||
 			!strings.Contains(err.Error(), "does not cover the exact mutation sequence") {
@@ -1429,7 +1643,7 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsDuplicateSignedPayloadKey(
 ) {
 	fixture := newFrostRetainedGroupHistorySourceFixture(t)
 	envelope := &frostRetainedGroupSignedEnvelope{
-		Schema:              "tbtc-frost-retained-group-signed-envelope/v2",
+		Schema:              "tbtc-frost-retained-group-signed-envelope/v3",
 		BindingHash:         frostActivationHex32(fixture.source.evidence.bindingHash),
 		Payload:             json.RawMessage(`{"schema":"v1","schema":"v2"}`),
 		PayloadSHA256:       frostActivationHex32([32]byte{0x01}),
@@ -1459,7 +1673,7 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsNonExactSignedPayloadKey(
 		append([]byte(frostRetainedGroupHistorySignatureDomain), canonical...),
 	)
 	envelope := &frostRetainedGroupSignedEnvelope{
-		Schema:              "tbtc-frost-retained-group-signed-envelope/v2",
+		Schema:              "tbtc-frost-retained-group-signed-envelope/v3",
 		BindingHash:         frostActivationHex32(fixture.source.evidence.bindingHash),
 		Payload:             payload,
 		PayloadSHA256:       frostActivationHex32(payloadHash),
@@ -1477,10 +1691,18 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsNonExactSignedPayloadKey(
 func TestSignedFrostRetainedGroupHistorySource_RejectsOmittedPage(t *testing.T) {
 	fixture := newFrostRetainedGroupHistorySourceFixture(t)
 	fixture.export.historyResponder = func(request frostRetainedGroupHistoryPageRequest) interface{} {
-		pages := fixture.historyPages(request.Query)
+		pages := fixture.historyPages(
+			request.Query,
+			request.CheckpointAfter,
+		)
 		return pages[len(pages)-1]
 	}
-	_, err := fixture.source.ReadCompleteHistory(context.Background(), fixture.from, fixture.to)
+	_, err := fixture.source.ReadCompleteHistory(
+		context.Background(),
+		fixture.from,
+		fixture.to,
+		fixture.checkpointAfter(),
+	)
 	if err == nil || !strings.Contains(err.Error(), "wrong identity or position") {
 		t.Fatalf("expected omitted-page rejection, got [%v]", err)
 	}
@@ -1500,7 +1722,12 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsTruncationAndForgery(
 			}
 			return defaultResponder(request)
 		}
-		_, err := fixture.source.ReadCompleteHistory(context.Background(), fixture.from, fixture.to)
+		_, err := fixture.source.ReadCompleteHistory(
+			context.Background(),
+			fixture.from,
+			fixture.to,
+			fixture.checkpointAfter(),
+		)
 		if err == nil || !strings.Contains(err.Error(), "HTTP status [503]") {
 			t.Fatalf("expected truncated pagination rejection, got [%v]", err)
 		}
@@ -1509,7 +1736,12 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsTruncationAndForgery(
 	t.Run("forged envelope", func(t *testing.T) {
 		fixture := newFrostRetainedGroupHistorySourceFixture(t)
 		fixture.export.corruptSignature = true
-		_, err := fixture.source.ReadCompleteHistory(context.Background(), fixture.from, fixture.to)
+		_, err := fixture.source.ReadCompleteHistory(
+			context.Background(),
+			fixture.from,
+			fixture.to,
+			fixture.checkpointAfter(),
+		)
 		if err == nil || !strings.Contains(err.Error(), "signature is invalid") {
 			t.Fatalf("expected forged envelope rejection, got [%v]", err)
 		}
@@ -1562,6 +1794,7 @@ func TestSignedFrostRetainedGroupHistorySource_EnforcesAggregateResourceLimits(
 				context.Background(),
 				fixture.from,
 				fixture.to,
+				fixture.checkpointAfter(),
 			)
 			if err == nil || !strings.Contains(err.Error(), testCase.expected) {
 				t.Fatalf("expected %s rejection, got [%v]", name, err)
@@ -1583,6 +1816,7 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsOversizedReceiptLogSet(
 		context.Background(),
 		fixture.from,
 		fixture.to,
+		fixture.checkpointAfter(),
 	)
 	if err == nil || !strings.Contains(err.Error(), "log limit") {
 		t.Fatalf("expected oversized receipt-log rejection, got [%v]", err)
@@ -1604,7 +1838,12 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsDuplicateAndReorderedHisto
 		t.Run(name, func(t *testing.T) {
 			fixture := newFrostRetainedGroupHistorySourceFixture(t)
 			mutate(fixture)
-			_, err := fixture.source.ReadCompleteHistory(context.Background(), fixture.from, fixture.to)
+			_, err := fixture.source.ReadCompleteHistory(
+				context.Background(),
+				fixture.from,
+				fixture.to,
+				fixture.checkpointAfter(),
+			)
 			if err == nil {
 				t.Fatal("expected malformed exact history to be rejected")
 			}
@@ -1631,6 +1870,7 @@ func TestSignedFrostRetainedGroupHistorySource_AcceptsFilteredStakeWeightedSeats
 		context.Background(),
 		fixture.from,
 		fixture.to,
+		fixture.checkpointAfter(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1691,6 +1931,7 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsInvalidMisbehavedIndices(
 				context.Background(),
 				fixture.from,
 				fixture.to,
+				fixture.checkpointAfter(),
 			)
 			if err == nil || !strings.Contains(
 				err.Error(),
@@ -1728,12 +1969,34 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsIdentityCheckpointAndRecei
 				page.Receipt.HistoryRoot = frostActivationHex32([32]byte{0xee})
 			}
 		},
+		"checkpoint chain root": func(page *frostRetainedGroupHistoryPagePayload) {
+			if page.Complete {
+				page.Receipt.CheckpointChainRoot =
+					frostActivationHex32([32]byte{0xed})
+			}
+		},
+		"checkpoint tip": func(page *frostRetainedGroupHistoryPagePayload) {
+			if page.Complete {
+				page.Receipt.CheckpointTipHash =
+					frostActivationHex32([32]byte{0xec})
+			}
+		},
+		"checkpoint completion": func(page *frostRetainedGroupHistoryPagePayload) {
+			if page.Complete {
+				page.Receipt.CheckpointComplete = false
+			}
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
 			fixture := newFrostRetainedGroupHistorySourceFixture(t)
 			fixture.pageMutator = mutate
-			_, err := fixture.source.ReadCompleteHistory(context.Background(), fixture.from, fixture.to)
+			_, err := fixture.source.ReadCompleteHistory(
+				context.Background(),
+				fixture.from,
+				fixture.to,
+				fixture.checkpointAfter(),
+			)
 			if err == nil {
 				t.Fatalf("expected %s drift to be rejected", name)
 			}
@@ -1752,6 +2015,7 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsSemanticForgeryInCanonical
 		context.Background(),
 		fixture.from,
 		fixture.to,
+		fixture.checkpointAfter(),
 	)
 	if err == nil || !strings.Contains(err.Error(), "Bridge registration log") {
 		t.Fatalf("expected canonical-block semantic forgery rejection, got [%v]", err)
@@ -1769,6 +2033,7 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsWrongReceiptLog(
 		context.Background(),
 		fixture.from,
 		fixture.to,
+		fixture.checkpointAfter(),
 	)
 	if err == nil || !strings.Contains(err.Error(), "Bridge registration log") {
 		t.Fatalf("expected wrong receipt-log rejection, got [%v]", err)
@@ -1784,6 +2049,7 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsManifestCodeDrift(
 		context.Background(),
 		fixture.from,
 		fixture.to,
+		fixture.checkpointAfter(),
 	)
 	if err == nil || !strings.Contains(err.Error(), "signed activation manifest") {
 		t.Fatalf("expected manifest code-drift rejection, got [%v]", err)
@@ -1996,7 +2262,12 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsWrongEndpointAndReorg(
 		Time:   999,
 		Extra:  []byte{0xff},
 	}
-	_, err = fixture.source.ReadCompleteHistory(context.Background(), fixture.from, fixture.to)
+	_, err = fixture.source.ReadCompleteHistory(
+		context.Background(),
+		fixture.from,
+		fixture.to,
+		fixture.checkpointAfter(),
+	)
 	if err == nil || !strings.Contains(err.Error(), "canonical chain") {
 		t.Fatalf("expected finalized-chain reorg rejection, got [%v]", err)
 	}

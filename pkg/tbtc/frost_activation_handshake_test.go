@@ -61,15 +61,18 @@ func (tfapv *testFrostActivationPointVerifier) setError(err error) {
 }
 
 type testFrostRetainedGroupHistorySource struct {
-	mutex        sync.Mutex
-	manifest     FrostRetainedGroupCanonicalJournalManifest
-	target       FrostPreSignFinality
-	readCalls    uint64
-	readStarted  chan struct{}
-	readRelease  <-chan struct{}
-	readDeadline time.Time
-	hasDeadline  bool
-	readOnce     sync.Once
+	mutex          sync.Mutex
+	manifest       FrostRetainedGroupCanonicalJournalManifest
+	bindingHash    [32]byte
+	checkpointHead FrostRetainedGroupCheckpointCursor
+	historyRoot    [32]byte
+	target         FrostPreSignFinality
+	readCalls      uint64
+	readStarted    chan struct{}
+	readRelease    <-chan struct{}
+	readDeadline   time.Time
+	hasDeadline    bool
+	readOnce       sync.Once
 }
 
 type testFrostProductionSignerReadiness struct {
@@ -167,11 +170,14 @@ func (source *testFrostRetainedGroupHistorySource) ReadCompleteHistory(
 	ctx context.Context,
 	from FrostPreSignFinality,
 	to FrostPreSignFinality,
+	checkpointAfter FrostRetainedGroupCheckpointCursor,
 ) (*FrostRetainedGroupHistory, error) {
 	source.mutex.Lock()
 	source.readCalls++
 	readStarted := source.readStarted
 	readRelease := source.readRelease
+	historyRoot := source.historyRoot
+	checkpointHead := source.checkpointHead
 	source.readDeadline, source.hasDeadline = ctx.Deadline()
 	source.mutex.Unlock()
 	if readStarted != nil {
@@ -187,11 +193,21 @@ func (source *testFrostRetainedGroupHistorySource) ReadCompleteHistory(
 		}
 	}
 	return &FrostRetainedGroupHistory{
-		From:              from,
-		To:                to,
-		Complete:          true,
-		EmptyAtFrom:       true,
-		DescriptorSetHash: source.manifest.DescriptorSetHash,
+		From:            from,
+		To:              to,
+		HistoryRoot:     historyRoot,
+		CheckpointAfter: checkpointAfter,
+		Checkpoints:     []FrostRetainedGroupCheckpointCertificate{},
+		CheckpointChainRoot: frostRetainedGroupCheckpointChainRoot(
+			source.bindingHash,
+			checkpointAfter,
+			nil,
+		),
+		CheckpointTipHash:  checkpointHead.CertificateHash,
+		CheckpointComplete: true,
+		Complete:           true,
+		EmptyAtFrom:        true,
+		DescriptorSetHash:  source.manifest.DescriptorSetHash,
 	}, nil
 }
 
@@ -291,6 +307,12 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 			ManifestHash:  frostActivationHex32(manifest.ManifestHash),
 			BindingHash:   frostActivationHex32(journal.metadata.BindingHash),
 			EthereumPoint: point,
+			CheckpointFloor: frostRetainedGroupWireCheckpointCursor{
+				Sequence: journal.checkpointState.Sequence,
+				CertificateHash: frostActivationHex32(
+					journal.checkpointState.CertificateHash,
+				),
+			},
 		},
 	}
 	response := postTestFrostActivationHandshake(t, endpoint, request)
@@ -347,7 +369,7 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 	}
 	assertFrostActivationObjectKeys(t, handshake.Payload.State, []string{
 		"authorizationRegistryAddress", "bitcoinOutboxProtocolID", "canonicalJournal",
-		"completeRouterAddress", "durableBitcoinOutboxRecovered", "durableSessionStoreFingerprint",
+		"checkpointJournal", "completeRouterAddress", "durableBitcoinOutboxRecovered", "durableSessionStoreFingerprint",
 		"exactTransactionAuthorizationRootEnforced", "finalizedReservationReadbackEnforced",
 		"frostWalletGroupInventory", "healthy", "maximumGroupSize", "nonceShareGateEnforced",
 		"interactiveSigningReady", "nativeSignerState",
@@ -379,6 +401,29 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 		"stateImageDigest", "storeFingerprint",
 		"trustCertificateDigest", "trustCertificateSequence",
 	})
+	assertFrostActivationObjectKeys(t, handshake.Payload.State.CheckpointJournal, []string{
+		"ancestry", "canonicalGeneration", "canonicalInventoryRoot", "challengeFloor",
+		"complete", "durableHead", "historyRoot", "manifestMinimumSequence",
+		"manifestPredecessorHash", "point", "quarantineActiveRoot",
+		"quarantineEventRoot", "quarantineGeneration", "quarantineTombstoneRoot",
+	})
+	unknownFloor := request
+	unknownFloor.Challenge.CheckpointFloor.CertificateHash =
+		frostActivationHex32([32]byte{0xff})
+	unknownResponse := postTestFrostActivationHandshake(
+		t,
+		endpoint,
+		unknownFloor,
+	)
+	defer unknownResponse.Body.Close()
+	if unknownResponse.StatusCode != http.StatusServiceUnavailable ||
+		unknownResponse.Header.Get("Retry-After") != "" {
+		t.Fatalf(
+			"unknown external checkpoint floor returned [%d] with retry [%s]",
+			unknownResponse.StatusCode,
+			unknownResponse.Header.Get("Retry-After"),
+		)
+	}
 }
 
 func TestFrostActivationHandshakeExporter_PermitsAndAttestsTombstones(
@@ -388,7 +433,7 @@ func TestFrostActivationHandshakeExporter_PermitsAndAttestsTombstones(
 		BlockNumber: 123,
 		BlockHash:   frostActivationHex32([32]byte{0x44}),
 	}
-	_, journal, _, _, endpoint, request :=
+	_, journal, source, _, endpoint, request :=
 		startTestFrostActivationHandshakeExporter(t, point)
 	raisedRecord := FrostRetainedGroupQuarantineRaisedRecord{
 		QuarantineID:     [32]byte{0x51},
@@ -455,6 +500,13 @@ func TestFrostActivationHandshakeExporter_PermitsAndAttestsTombstones(
 	if err != nil {
 		t.Fatal(err)
 	}
+	recertifyTestFrostActivationJournal(
+		t,
+		journal,
+		source,
+		&request,
+		journal.checkpointPolicy.MinimumSequence,
+	)
 
 	response := postTestFrostActivationHandshake(t, endpoint, request)
 	if response.StatusCode != http.StatusServiceUnavailable ||
@@ -574,6 +626,12 @@ func TestFrostActivationHandshakeExporter_FailsClosed(t *testing.T) {
 			ManifestHash:  frostActivationHex32(manifest.ManifestHash),
 			BindingHash:   frostActivationHex32(journal.metadata.BindingHash),
 			EthereumPoint: point,
+			CheckpointFloor: frostRetainedGroupWireCheckpointCursor{
+				Sequence: journal.checkpointState.Sequence,
+				CertificateHash: frostActivationHex32(
+					journal.checkpointState.CertificateHash,
+				),
+			},
 		},
 	}
 	response := postTestFrostActivationHandshake(t, endpoint, request)
@@ -662,6 +720,19 @@ func TestFrostActivationHandshakeExporter_RejectsUnboundOrLegacyChallenge(
 		},
 		"different binding": func(request *frostActivationHandshakeRequest) {
 			request.Challenge.BindingHash = frostActivationHex32([32]byte{0xff})
+		},
+		"missing checkpoint floor": func(request *frostActivationHandshakeRequest) {
+			request.Challenge.CheckpointFloor =
+				frostRetainedGroupWireCheckpointCursor{}
+		},
+		"uncertified manifest predecessor": func(
+			request *frostActivationHandshakeRequest,
+		) {
+			request.Challenge.CheckpointFloor =
+				frostRetainedGroupWireCheckpointCursor{
+					Sequence:        0,
+					CertificateHash: frostActivationHex32([32]byte{}),
+				}
 		},
 	}
 	for name, mutate := range testCases {
@@ -783,6 +854,12 @@ func TestFrostActivationHandshakeExporter_ReconciliationIsAsynchronousAndGenerat
 	journal.mutex.Lock()
 	journal.state.SnapshotGeneration++
 	canonicalGeneration := journal.state.SnapshotGeneration
+	canonicalPoint := FrostPreSignFinality{
+		BlockNumber: point.BlockNumber + 1,
+		BlockHash:   [32]byte{0x45},
+	}
+	journal.state.CurrentPoint = canonicalPoint
+	journal.quarantineState.CurrentPoint = canonicalPoint
 	var rootErr error
 	journal.state.InventoryRoot, _, _, _, rootErr =
 		frostRetainedGroupInventoryRoot(journal.state)
@@ -790,6 +867,18 @@ func TestFrostActivationHandshakeExporter_ReconciliationIsAsynchronousAndGenerat
 	if rootErr != nil {
 		t.Fatal(rootErr)
 	}
+	source.setTarget(canonicalPoint)
+	request.Challenge.EthereumPoint = frostActivationEthereumPoint{
+		BlockNumber: canonicalPoint.BlockNumber,
+		BlockHash:   frostActivationHex32(canonicalPoint.BlockHash),
+	}
+	recertifyTestFrostActivationJournal(
+		t,
+		journal,
+		source,
+		&request,
+		journal.checkpointState.Sequence+1,
+	)
 	response = postTestFrostActivationHandshake(t, endpoint, request)
 	if response.StatusCode != http.StatusServiceUnavailable ||
 		response.Header.Get("Retry-After") != frostActivationHandshakeRetryAfter {
@@ -820,7 +909,30 @@ func TestFrostActivationHandshakeExporter_ReconciliationIsAsynchronousAndGenerat
 	journal.mutex.Lock()
 	journal.quarantineState.Generation++
 	quarantineGeneration := journal.quarantineState.Generation
+	quarantinePoint := FrostPreSignFinality{
+		BlockNumber: canonicalPoint.BlockNumber + 1,
+		BlockHash:   [32]byte{0x46},
+	}
+	journal.state.CurrentPoint = quarantinePoint
+	journal.quarantineState.CurrentPoint = quarantinePoint
+	journal.state.InventoryRoot, _, _, _, rootErr =
+		frostRetainedGroupInventoryRoot(journal.state)
 	journal.mutex.Unlock()
+	if rootErr != nil {
+		t.Fatal(rootErr)
+	}
+	source.setTarget(quarantinePoint)
+	request.Challenge.EthereumPoint = frostActivationEthereumPoint{
+		BlockNumber: quarantinePoint.BlockNumber,
+		BlockHash:   frostActivationHex32(quarantinePoint.BlockHash),
+	}
+	recertifyTestFrostActivationJournal(
+		t,
+		journal,
+		source,
+		&request,
+		journal.checkpointState.Sequence+1,
+	)
 	response = postTestFrostActivationHandshake(t, endpoint, request)
 	if response.StatusCode != http.StatusServiceUnavailable ||
 		response.Header.Get("Retry-After") != frostActivationHandshakeRetryAfter {
@@ -849,8 +961,8 @@ func TestFrostActivationHandshakeExporter_ReconciliationIsAsynchronousAndGenerat
 	}
 
 	nextPoint := FrostPreSignFinality{
-		BlockNumber: point.BlockNumber + 1,
-		BlockHash:   [32]byte{0x45},
+		BlockNumber: quarantinePoint.BlockNumber + 1,
+		BlockHash:   [32]byte{0x47},
 	}
 	source.setTarget(nextPoint)
 	journal.mutex.Lock()
@@ -866,6 +978,13 @@ func TestFrostActivationHandshakeExporter_ReconciliationIsAsynchronousAndGenerat
 		BlockNumber: nextPoint.BlockNumber,
 		BlockHash:   frostActivationHex32(nextPoint.BlockHash),
 	}
+	recertifyTestFrostActivationJournal(
+		t,
+		journal,
+		source,
+		&request,
+		journal.checkpointState.Sequence+1,
+	)
 	response = postTestFrostActivationHandshake(t, endpoint, request)
 	if response.StatusCode != http.StatusServiceUnavailable ||
 		response.Header.Get("Retry-After") != frostActivationHandshakeRetryAfter {
@@ -1012,7 +1131,9 @@ func testFrostActivationRuntimeManifest(
 				{AuthorityID: "checkpoint-2", PublicKeySPKIHash: [32]byte{0x41}},
 				{AuthorityID: "checkpoint-3", PublicKeySPKIHash: [32]byte{0x42}},
 			},
-			LiftAuthorityThreshold: 2,
+			CheckpointMinimumSequence: 1,
+			CheckpointPredecessorHash: [32]byte{},
+			LiftAuthorityThreshold:    2,
 			LiftAuthorities: []FrostRetainedGroupAuthority{
 				{AuthorityID: "lift-1", PublicKeySPKIHash: [32]byte{0x43}},
 				{AuthorityID: "lift-2", PublicKeySPKIHash: [32]byte{0x44}},
@@ -1103,6 +1224,12 @@ func startTestFrostActivationHandshakeExporter(
 			ManifestHash:  frostActivationHex32(manifest.ManifestHash),
 			BindingHash:   frostActivationHex32(journal.metadata.BindingHash),
 			EthereumPoint: point,
+			CheckpointFloor: frostRetainedGroupWireCheckpointCursor{
+				Sequence: journal.checkpointState.Sequence,
+				CertificateHash: frostActivationHex32(
+					journal.checkpointState.CertificateHash,
+				),
+			},
 		},
 	}
 }
@@ -1152,9 +1279,34 @@ func testFrostRetainedGroupJournal(
 	if err != nil {
 		t.Fatal(err)
 	}
+	checkpointPolicy, err :=
+		frostRetainedGroupCheckpointPolicyFromRuntimeManifest(
+			bindingHash,
+			manifest,
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	historyRoot, err := frostRetainedGroupTestHistoryRoot(
+		bindingHash,
+		manifest.CanonicalJournal.Checkpoint,
+		target,
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpointHash := [32]byte{0x55}
+	checkpointHead := FrostRetainedGroupCheckpointCursor{
+		Sequence:        manifest.QuarantineJournal.CheckpointMinimumSequence,
+		CertificateHash: checkpointHash,
+	}
 	source := &testFrostRetainedGroupHistorySource{
-		manifest: manifest.CanonicalJournal,
-		target:   target,
+		manifest:       manifest.CanonicalJournal,
+		bindingHash:    bindingHash,
+		checkpointHead: checkpointHead,
+		historyRoot:    historyRoot,
+		target:         target,
 	}
 	return &frostRetainedGroupJournal{
 		metadata: frostRetainedGroupJournalMetadata{
@@ -1196,6 +1348,25 @@ func testFrostRetainedGroupJournal(
 		state:                       state,
 		liftPolicy:                  liftPolicy,
 		liftCertificates:            make(map[[32]byte]FrostRetainedGroupQuarantineLiftCertificate),
+		checkpointPolicy:            checkpointPolicy,
+		checkpointState: frostRetainedGroupCheckpointJournalState{
+			Schema:                  frostRetainedGroupCheckpointStateSchema,
+			BindingHash:             bindingHash,
+			Sequence:                checkpointHead.Sequence,
+			CertificateHash:         checkpointHead.CertificateHash,
+			Point:                   target,
+			HistoryRoot:             historyRoot,
+			CanonicalGeneration:     state.SnapshotGeneration,
+			CanonicalInventoryRoot:  state.InventoryRoot,
+			QuarantineGeneration:    0,
+			QuarantineEventRoot:     quarantineRoot,
+			QuarantineActiveRoot:    activeRoot,
+			QuarantineTombstoneRoot: tombstoneRoot,
+		},
+		checkpointCertificates: make(map[uint64]FrostRetainedGroupCheckpointCertificate),
+		checkpointHashes: map[uint64][32]byte{
+			checkpointHead.Sequence: checkpointHead.CertificateHash,
+		},
 		quarantineState: frostRetainedGroupQuarantineJournalState{
 			Schema:        frostRetainedGroupQuarantineStateSchema,
 			BindingHash:   bindingHash,
@@ -1207,6 +1378,85 @@ func testFrostRetainedGroupJournal(
 			Tombstones:    []frostRetainedGroupQuarantineTombstone{},
 		},
 	}
+}
+
+func recertifyTestFrostActivationJournal(
+	t *testing.T,
+	journal *frostRetainedGroupJournal,
+	source *testFrostRetainedGroupHistorySource,
+	request *frostActivationHandshakeRequest,
+	sequence uint64,
+) {
+	t.Helper()
+	journal.mutex.Lock()
+	historyRoot, err := frostRetainedGroupTestHistoryRoot(
+		journal.metadata.BindingHash,
+		journal.metadata.Checkpoint,
+		journal.state.CurrentPoint,
+		nil,
+	)
+	if err != nil {
+		journal.mutex.Unlock()
+		t.Fatal(err)
+	}
+	commitment := struct {
+		Sequence                uint64
+		Point                   FrostPreSignFinality
+		HistoryRoot             [32]byte
+		CanonicalGeneration     uint64
+		CanonicalInventoryRoot  [32]byte
+		QuarantineGeneration    uint64
+		QuarantineEventRoot     [32]byte
+		QuarantineActiveRoot    [32]byte
+		QuarantineTombstoneRoot [32]byte
+	}{
+		Sequence:                sequence,
+		Point:                   journal.state.CurrentPoint,
+		HistoryRoot:             historyRoot,
+		CanonicalGeneration:     journal.state.SnapshotGeneration,
+		CanonicalInventoryRoot:  journal.state.InventoryRoot,
+		QuarantineGeneration:    journal.quarantineState.Generation,
+		QuarantineEventRoot:     journal.quarantineState.Root,
+		QuarantineActiveRoot:    journal.quarantineState.ActiveRoot,
+		QuarantineTombstoneRoot: journal.quarantineState.TombstoneRoot,
+	}
+	certificateHash, err := frostRetainedGroupDomainHash(
+		"test-frost-checkpoint-certificate-v1\x00",
+		commitment,
+	)
+	if err != nil {
+		journal.mutex.Unlock()
+		t.Fatal(err)
+	}
+	journal.checkpointState = frostRetainedGroupCheckpointJournalState{
+		Schema:                  frostRetainedGroupCheckpointStateSchema,
+		BindingHash:             journal.metadata.BindingHash,
+		Sequence:                sequence,
+		CertificateHash:         certificateHash,
+		Point:                   journal.state.CurrentPoint,
+		HistoryRoot:             historyRoot,
+		CanonicalGeneration:     journal.state.SnapshotGeneration,
+		CanonicalInventoryRoot:  journal.state.InventoryRoot,
+		QuarantineGeneration:    journal.quarantineState.Generation,
+		QuarantineEventRoot:     journal.quarantineState.Root,
+		QuarantineActiveRoot:    journal.quarantineState.ActiveRoot,
+		QuarantineTombstoneRoot: journal.quarantineState.TombstoneRoot,
+	}
+	journal.checkpointHashes[sequence] = certificateHash
+	journal.mutex.Unlock()
+
+	source.mutex.Lock()
+	source.historyRoot = historyRoot
+	source.checkpointHead = FrostRetainedGroupCheckpointCursor{
+		Sequence:        sequence,
+		CertificateHash: certificateHash,
+	}
+	source.mutex.Unlock()
+	request.Challenge.CheckpointFloor =
+		frostRetainedGroupWireCheckpointCursor{
+			Sequence:        sequence,
+			CertificateHash: frostActivationHex32(certificateHash),
+		}
 }
 
 func testLoopbackEndpoint(t *testing.T) string {

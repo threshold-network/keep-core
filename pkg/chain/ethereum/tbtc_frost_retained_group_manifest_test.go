@@ -78,7 +78,9 @@ func testFrostJournalActivationManifest() *frostPreSignActivationManifest {
 					{AuthorityID: "checkpoint-2", PublicKeySPKIHash: testManifestHex32(0x2c)},
 					{AuthorityID: "checkpoint-3", PublicKeySPKIHash: testManifestHex32(0x2d)},
 				},
-				LiftAuthorityThreshold: 2,
+				CheckpointMinimumSequence: 1,
+				CheckpointPredecessorHash: testManifestHex32(0x00),
+				LiftAuthorityThreshold:    2,
 				LiftAuthorities: []frostPreSignManifestLiftAuthority{
 					{AuthorityID: "authority-1", PublicKeySPKIHash: testManifestHex32(0x36)},
 					{AuthorityID: "authority-2", PublicKeySPKIHash: testManifestHex32(0x37)},
@@ -289,6 +291,31 @@ func TestValidateFrostPreSignActivationManifest_QuarantineAuthoritySets(
 		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
 			!strings.Contains(err.Error(), "not distinct") {
 			t.Fatalf("expected protocol-identity alias rejection, got [%v]", err)
+		}
+	})
+	t.Run("zero checkpoint floor", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.QuarantineJournal.CheckpointMinimumSequence = 0
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "transparency floor") {
+			t.Fatalf("expected zero checkpoint-floor rejection, got [%v]", err)
+		}
+	})
+	t.Run("missing non-genesis predecessor", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.QuarantineJournal.CheckpointMinimumSequence = 2
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "transparency floor") {
+			t.Fatalf("expected missing predecessor rejection, got [%v]", err)
+		}
+	})
+	t.Run("nonzero genesis predecessor", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.QuarantineJournal.CheckpointPredecessorHash =
+			testManifestHex32(0x7f)
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "transparency floor") {
+			t.Fatalf("expected genesis predecessor rejection, got [%v]", err)
 		}
 	})
 }

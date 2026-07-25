@@ -47,6 +47,7 @@ type frostRetainedGroupEvidenceProfile struct {
 	genesisBlockHash               [32]byte
 	bindingHash                    [32]byte
 	liftPolicy                     frostRetainedGroupQuarantineLiftPolicy
+	checkpointPolicy               frostRetainedGroupCheckpointPolicy
 	deployments                    map[string]FrostPreSignDeploymentEvidence
 	bridgeABI                      ethabi.ABI
 	registryABI                    ethabi.ABI
@@ -190,6 +191,16 @@ func (source *signedFrostRetainedGroupHistorySource) BindFrostRetainedGroupActiv
 			err,
 		)
 	}
+	checkpointPolicy, err := frostRetainedGroupCheckpointPolicyFromRuntimeManifest(
+		bindingHash,
+		runtimeManifest,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"retained-group checkpoint policy is invalid: [%w]",
+			err,
+		)
+	}
 	parsedBridgeABI, err := ethabi.JSON(strings.NewReader(bridgeabi.BridgeMetaData.ABI))
 	if err != nil {
 		return fmt.Errorf("cannot parse pinned Bridge ABI: [%w]", err)
@@ -210,6 +221,7 @@ func (source *signedFrostRetainedGroupHistorySource) BindFrostRetainedGroupActiv
 		genesisBlockHash:               runtimeManifest.GenesisBlockHash,
 		bindingHash:                    bindingHash,
 		liftPolicy:                     liftPolicy,
+		checkpointPolicy:               checkpointPolicy,
 		deployments:                    deployments,
 		bridgeABI:                      parsedBridgeABI,
 		registryABI:                    parsedRegistryABI,
@@ -267,7 +279,7 @@ func (source *signedFrostRetainedGroupHistorySource) computeProtocolBinding(
 		return [32]byte{}, err
 	}
 	binding := frostRetainedGroupProtocolBinding{
-		Schema:           "tbtc-frost-retained-group-protocol-binding/v3",
+		Schema:           "tbtc-frost-retained-group-protocol-binding/v4",
 		ChainID:          source.chainID,
 		DomainChainID:    frostActivationHex32(runtimeManifest.DomainChainID),
 		GenesisBlockHash: frostActivationHex32(runtimeManifest.GenesisBlockHash),
@@ -293,6 +305,8 @@ func (source *signedFrostRetainedGroupHistorySource) computeProtocolBinding(
 		TombstoneProtocolID:            frostActivationHex32(runtimeManifest.QuarantineJournal.TombstoneProtocolID),
 		LiftAuthoritySetHash:           frostActivationHex32(liftAuthoritySetHash),
 		CheckpointAuthoritySetHash:     frostActivationHex32(checkpointAuthoritySetHash),
+		CheckpointMinimumSequence:      runtimeManifest.QuarantineJournal.CheckpointMinimumSequence,
+		CheckpointPredecessorHash:      frostActivationHex32(runtimeManifest.QuarantineJournal.CheckpointPredecessorHash),
 		SigningPolicyHash:              frostActivationHex32(runtimeManifest.SigningPolicyHash),
 		CanonicalStoreID:               runtimeManifest.CanonicalJournal.StoreID,
 		CanonicalStoreFingerprint: frostActivationHex32(
