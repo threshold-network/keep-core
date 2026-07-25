@@ -5,15 +5,15 @@ mod ffi;
 mod go_math_rand;
 
 use api::{
-    BuildTaprootTxRequest, DeriveInteractiveAttemptContextRequest, DifferentialFuzzRequest,
-    DkgPart1Request, DkgPart2Request, DkgPart3Request, DurableStoreIdentityResult,
-    FrostTbtcAbiVersionResult, InitSignerConfigRequest, InteractiveAggregateRequest,
-    InteractiveRound1Request, InteractiveRound2Request, InteractiveSessionAbortRequest,
-    InteractiveSessionOpenRequest, NewSigningPackageRequest,
-    PersistDistributedDkgKeyPackageRequest, PromoteCanaryRequest, QuarantineStatusRequest,
-    RefreshCadenceStatusRequest, RefreshSharesRequest, RollbackCanaryRequest,
-    StateWitnessProofRequest, TranscriptAuditRequest, TriggerEmergencyRekeyRequest,
-    VerifyBlameProofRequest,
+    AcknowledgeStateWitnessCheckpointRequest, BuildTaprootTxRequest,
+    DeriveInteractiveAttemptContextRequest, DifferentialFuzzRequest, DkgPart1Request,
+    DkgPart2Request, DkgPart3Request, DurableStoreIdentityResult, FrostTbtcAbiVersionResult,
+    InitSignerConfigRequest, InteractiveAggregateRequest, InteractiveRound1Request,
+    InteractiveRound2Request, InteractiveSessionAbortRequest, InteractiveSessionOpenRequest,
+    NewSigningPackageRequest, PersistDistributedDkgKeyPackageRequest, PromoteCanaryRequest,
+    QuarantineStatusRequest, RecoverStateWitnessCheckpointRequest, RefreshCadenceStatusRequest,
+    RefreshSharesRequest, RollbackCanaryRequest, StateWitnessProofRequest, TranscriptAuditRequest,
+    TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
 };
 use ffi::{
     ffi_entry, free_buffer, parse_request, serialize_response, success_from_string,
@@ -46,10 +46,13 @@ const TBTC_SIGNER_VERSION: &str = "tbtc-signer/0.1.0-bootstrap";
 // negotiation rather than discovering the change at refresh time.
 const TBTC_SIGNER_ABI_MAJOR: u32 = 4;
 // Minor 1 adds the descriptor-bound durable-store identity, retained-key-package
-// inventory, and paginated state-witness proof symbols. These are new symbols
-// and response types; ABI-4.0 callers remain valid and safely ignore them. The
-// new store identity and witness transcripts are defined at schema v2.
-const TBTC_SIGNER_ABI_MINOR: u32 = 1;
+// inventory, and paginated state-witness proof symbols. Minor 2 additionally
+// adds the constant-size witness-tip readback plus signed external-checkpoint
+// acknowledgement and recovery symbols. These are additive symbols and response types;
+// older ABI-4 callers remain valid and safely ignore them. Consumers enforcing
+// the external rollback/output barrier require ABI 4.2 so a 4.1 library cannot
+// pass preflight and then fail late on a missing symbol.
+const TBTC_SIGNER_ABI_MINOR: u32 = 2;
 #[cfg(test)]
 use engine::TBTC_SIGNER_PROFILE_ENV;
 
@@ -120,6 +123,45 @@ pub extern "C" fn frost_tbtc_state_witness_proof(
     ffi_entry(|| {
         let request: StateWitnessProofRequest = parse_request(request_ptr, request_len)?;
         serialize_response(&engine::state_witness_proof(request)?)
+    })
+}
+
+/// Returns the exact durable state-witness tip and latest independently signed
+/// anchor acknowledgement using tbtc-signer-state-witness-tip/v1. All anchor
+/// fields are zero before an acknowledgement has been durably accepted.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_state_witness_tip() -> TbtcSignerResult {
+    ffi_entry(|| serialize_response(&engine::state_witness_tip()?))
+}
+
+/// Verifies and durably applies (or idempotently replays) a signed external
+/// state-witness checkpoint acknowledgement. Unknown JSON fields fail parsing
+/// before engine validation.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_acknowledge_state_witness_checkpoint(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: AcknowledgeStateWitnessCheckpointRequest =
+            parse_request(request_ptr, request_len)?;
+        serialize_response(&engine::acknowledge_state_witness_checkpoint(request)?)
+    })
+}
+
+/// Recovers a remotely committed checkpoint from a fresh signed history-service
+/// read wrapper. The nested original acknowledgement is retained byte-for-byte;
+/// only its historical wall-clock expiry is waived after the fresh wrapper
+/// authenticates its raw SHA-256 digest and exact summary.
+#[no_mangle]
+pub extern "C" fn frost_tbtc_recover_state_witness_checkpoint(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    ffi_entry(|| {
+        let request: RecoverStateWitnessCheckpointRequest =
+            parse_request(request_ptr, request_len)?;
+        serialize_response(&engine::recover_state_witness_checkpoint(request)?)
     })
 }
 
@@ -813,10 +855,10 @@ mod tests {
         // The enforced FFI contract starts at 1.0; bump deliberately per the
         // TBTC_SIGNER_ABI_MAJOR / TBTC_SIGNER_ABI_MINOR rules. This test pins the
         // current value so an accidental bump is caught. ABI 4 changes a valid
-        // RefreshShares call from a synthetic success response to a terminal error,
-        // forcing ABI-3 consumers to fail closed during compatibility negotiation.
+        // RefreshShares call from a synthetic success response to a terminal error;
+        // minor 2 adds the signed external-anchor tip/acknowledgement/recovery symbols.
         assert_eq!(abi.abi_major, 4);
-        assert_eq!(abi.abi_minor, 1);
+        assert_eq!(abi.abi_minor, 2);
     }
 
     #[test]

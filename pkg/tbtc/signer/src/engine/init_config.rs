@@ -185,6 +185,10 @@ fn validate_candidate_config() -> Result<(), EngineError> {
     // Reject unusable ceilings at init instead of discovering them after the
     // signer has begun serving stateful operations.
     state_witness_max_records()?;
+    // Validate the complete anchor pin set and rotation threshold while the
+    // candidate remains thread-local; a partial/non-canonical set must never
+    // become the process-global signer configuration.
+    validate_state_anchor_configuration()?;
     // The key-provider settings must be structurally usable too (production
     // forbids the env provider; the command provider requires a command).
     // Resolved WITHOUT reading the secret or executing the key command.
@@ -279,6 +283,11 @@ pub(crate) fn config_values_from_request(
         &mut values,
         TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV,
         request.state_witness_max_records,
+    );
+    insert_u64(
+        &mut values,
+        TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
+        request.state_witness_rotation_threshold_records,
     );
     insert_u64(
         &mut values,
@@ -408,6 +417,21 @@ pub(crate) fn config_values_from_request(
     );
 
     insert_string(&mut values, TBTC_SIGNER_STATE_PATH_ENV, &request.state_path)?;
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_STATE_ANCHOR_BINDING_HASH_ENV,
+        &request.state_anchor_binding_hash,
+    )?;
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_STATE_ANCHOR_RESPONSE_PUBLIC_KEY_ENV,
+        &request.state_anchor_response_public_key,
+    )?;
+    insert_string(
+        &mut values,
+        TBTC_SIGNER_STATE_ANCHOR_RESPONSE_PUBLIC_KEY_SPKI_SHA256_ENV,
+        &request.state_anchor_response_public_key_spki_sha256,
+    )?;
     insert_string(
         &mut values,
         TBTC_SIGNER_STATE_CORRUPTION_POLICY_ENV,

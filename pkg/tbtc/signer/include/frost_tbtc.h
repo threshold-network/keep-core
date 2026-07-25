@@ -41,6 +41,33 @@ TbtcSignerResult frost_tbtc_retained_key_package_inventory(void);
  * independently of this signer store to detect a coordinated local rollback.
  */
 TbtcSignerResult frost_tbtc_state_witness_proof(const uint8_t* request_ptr, size_t request_len);
+/*
+ * Returns tbtc-signer-state-witness-tip/v1 JSON. Decimal counters are strings.
+ * The mandatory anchor fields are anchorBindingHash, anchorServiceEpoch,
+ * anchorRevision, anchorEventRoot, and anchorAcknowledgementDigest; all five
+ * are zero before an acknowledgement is durably accepted.
+ */
+TbtcSignerResult frost_tbtc_state_witness_tip(void);
+/*
+ * Accepts strict tbtc-signer-state-witness-checkpoint-ack/v1 camelCase JSON,
+ * verifies the pinned Ed25519 service response, expiry and monotonic CAS, and
+ * returns tbtc-signer-state-witness-checkpoint-ack-result/v1. The request's
+ * operation identifier is spelled exactly `operationID`.
+ */
+TbtcSignerResult frost_tbtc_acknowledge_state_witness_checkpoint(
+    const uint8_t* request_ptr,
+    size_t request_len
+);
+
+/*
+ * Recovers a remotely committed checkpoint from an unexpired
+ * tbtc-frost-native-signer-state-anchor-read-response/v1 wrapper. The wrapper
+ * must bind the exact raw nested historical acknowledgement.
+ */
+TbtcSignerResult frost_tbtc_recover_state_witness_checkpoint(
+    const uint8_t* request_ptr,
+    size_t request_len
+);
 TbtcSignerResult frost_tbtc_init_signer_config(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_roast_liveness_policy(void);
 TbtcSignerResult frost_tbtc_hardening_metrics(void);

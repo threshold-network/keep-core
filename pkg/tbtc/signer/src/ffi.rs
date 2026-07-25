@@ -133,10 +133,19 @@ pub fn free_buffer(ptr: *mut u8, len: usize) {
 }
 
 fn error_result(error: EngineError) -> TbtcSignerResult {
+    let (requested_generation, witness_base_generation) = match &error {
+        EngineError::HistoryPruned {
+            requested_generation,
+            witness_base_generation,
+        } => (Some(*requested_generation), Some(*witness_base_generation)),
+        _ => (None, None),
+    };
     let payload = ErrorResponse {
         code: error.code().to_string(),
         message: error.to_string(),
         recovery_class: error.recovery_class().to_string(),
+        requested_generation,
+        witness_base_generation,
         candidate_culprits: error.candidate_culprits().to_vec(),
     };
 
@@ -234,6 +243,22 @@ mod tests {
             message.contains("exceeds maximum"),
             "unexpected validation message: {message}"
         );
+    }
+
+    #[test]
+    fn history_pruned_error_exposes_machine_readable_generations() {
+        let result = error_result(EngineError::HistoryPruned {
+            requested_generation: 41,
+            witness_base_generation: 42,
+        });
+        assert_eq!(result.status_code, STATUS_ERROR);
+        let bytes = unsafe { std::slice::from_raw_parts(result.buffer.ptr, result.buffer.len) };
+        let response: ErrorResponse =
+            serde_json::from_slice(bytes).expect("decode history-pruned error");
+        assert_eq!(response.code, "history_pruned");
+        assert_eq!(response.requested_generation, Some(41));
+        assert_eq!(response.witness_base_generation, Some(42));
+        free_buffer(result.buffer.ptr, result.buffer.len);
     }
 
     // A panic payload may carry internal detail (paths, config). It must be

@@ -82,6 +82,7 @@ use crate::api::{
 use crate::errors::EngineError;
 use crate::go_math_rand::select_coordinator_identifier;
 
+mod anchor;
 mod audit;
 mod codec;
 mod config;
@@ -105,6 +106,7 @@ mod testsupport;
 mod transaction;
 mod verify_share;
 
+pub(crate) use anchor::*;
 pub(crate) use audit::*;
 pub(crate) use codec::*;
 pub(crate) use config::*;
