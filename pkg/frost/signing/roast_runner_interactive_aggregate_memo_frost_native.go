@@ -126,6 +126,13 @@ func aggregateInteractiveOnce(
 	interactiveAggregateMemoMu.Lock()
 	sessionID, _, hasAttemptSeparator := strings.Cut(key, "|")
 	owner := interactiveAggregateMemoSessions[sessionID]
+	if hasAttemptSeparator && owner == nil {
+		interactiveAggregateMemoMu.Unlock()
+		return nil, fmt.Errorf(
+			"interactive aggregate memo key [%s] has no active outer session owner",
+			key,
+		)
+	}
 	entry, ok := interactiveAggregateMemo[key]
 	if !ok {
 		entry = &interactiveAggregateEntry{owner: owner}

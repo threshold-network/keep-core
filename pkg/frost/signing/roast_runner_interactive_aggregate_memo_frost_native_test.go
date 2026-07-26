@@ -261,3 +261,60 @@ func TestInteractiveAggregateMemoSessionCleanupIsExactAndIdentityGuarded(
 		)
 	}
 }
+
+func TestAggregateInteractiveOnce_RejectsProductionKeyAfterSessionRelease(
+	t *testing.T,
+) {
+	ResetInteractiveAggregateMemoForTest()
+	t.Cleanup(ResetInteractiveAggregateMemoForTest)
+
+	session, err := BeginInteractiveAggregateMemoSession("released-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	if _, err := aggregateInteractiveOnce(
+		"released-session|attempt-1",
+		func() ([]byte, error) {
+			calls++
+			return []byte("first"), nil
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	session.Release()
+
+	if _, err := aggregateInteractiveOnce(
+		"released-session|attempt-1",
+		func() ([]byte, error) {
+			calls++
+			return []byte("must-not-run"), nil
+		},
+	); err == nil {
+		t.Fatal("late aggregate after outer-session release was accepted")
+	}
+	if calls != 1 {
+		t.Fatalf("late aggregate callback ran [%d] times", calls)
+	}
+}
+
+func TestAggregateInteractiveOnce_RejectsProductionKeyWithoutOuterSession(
+	t *testing.T,
+) {
+	ResetInteractiveAggregateMemoForTest()
+	t.Cleanup(ResetInteractiveAggregateMemoForTest)
+
+	called := false
+	if _, err := aggregateInteractiveOnce(
+		"never-begun|attempt-1",
+		func() ([]byte, error) {
+			called = true
+			return []byte("must-not-run"), nil
+		},
+	); err == nil {
+		t.Fatal("production-shaped aggregate key without an owner was accepted")
+	}
+	if called {
+		t.Fatal("ownerless aggregate callback ran")
+	}
+}
