@@ -166,6 +166,7 @@ type frostRetainedGroupAttestedRoundTripper struct {
 	base             http.RoundTripper
 	endpoint         frostRetainedGroupResolvedEndpoint
 	identity         FrostRetainedGroupEndpointIdentity
+	separationPolicy *frostPrimaryRetainedSeparationPolicy
 	random           io.Reader
 	now              func() time.Time
 	maximumBodyBytes int64
@@ -187,12 +188,18 @@ type frostRetainedGroupResolver interface {
 	LookupNetIP(context.Context, string, string) ([]netip.Addr, error)
 }
 
+type frostPrimaryEthereumIndependenceVerifier interface {
+	verifyIndependence(
+		context.Context,
+		frostRetainedGroupResolvedEndpoint,
+		frostRetainedGroupResolvedEndpoint,
+	) error
+}
+
 type frostRetainedGroupIndependenceMonitor struct {
 	exportEndpoint   frostRetainedGroupResolvedEndpoint
 	verifierEndpoint frostRetainedGroupResolvedEndpoint
-	primaryEndpoint  frostRetainedGroupResolvedEndpoint
-	resolver         frostRetainedGroupResolver
-	timeout          time.Duration
+	primaryTransport frostPrimaryEthereumIndependenceVerifier
 }
 
 func frostRetainedGroupTLSExporterProtocolID() [32]byte {
@@ -804,7 +811,7 @@ func resolveFrostRetainedGroupEndpoint(
 func validateAndResolveFrostRetainedGroupSourceConfig(
 	ctx context.Context,
 	config FrostRetainedGroupHistorySourceConfig,
-	primaryEthereumURL string,
+	primaryTransport *FrostPrimaryEthereumTransport,
 ) (*frostRetainedGroupValidatedSourceConfig, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("retained-group source validation context is nil")
@@ -830,15 +837,12 @@ func validateAndResolveFrostRetainedGroupSourceConfig(
 	if err != nil {
 		return nil, fmt.Errorf("invalid retained-group Ethereum URL: [%w]", err)
 	}
-	primaryURL, err := validateFrostRetainedGroupPrimaryEndpoint(
-		primaryEthereumURL,
-	)
+	primaryEndpoint, resolver, err := primaryTransport.frozenEndpoint()
 	if err != nil {
-		return nil, fmt.Errorf("invalid primary Ethereum URL: [%w]", err)
-	}
-	resolver := config.Resolver
-	if resolver == nil {
-		resolver = net.DefaultResolver
+		return nil, fmt.Errorf(
+			"invalid guarded primary Ethereum transport: [%w]",
+			err,
+		)
 	}
 	resolveContext, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
@@ -857,14 +861,6 @@ func validateAndResolveFrostRetainedGroupSourceConfig(
 	)
 	if err != nil {
 		return nil, fmt.Errorf("cannot resolve retained-group Ethereum URL: [%w]", err)
-	}
-	primaryEndpoint, err := resolveFrostRetainedGroupEndpoint(
-		resolveContext,
-		primaryURL,
-		resolver,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("cannot resolve primary Ethereum URL: [%w]", err)
 	}
 	if frostRetainedGroupEndpointSetsOverlap(exportEndpoint, verifierEndpoint) {
 		return nil, fmt.Errorf(
@@ -1057,82 +1053,21 @@ func validateAndResolveFrostRetainedGroupSourceConfig(
 	}, nil
 }
 
-func validateFrostRetainedGroupPrimaryEndpoint(raw string) (*url.URL, error) {
-	if raw == "" || raw != strings.TrimSpace(raw) {
-		return nil, fmt.Errorf("URL is empty or has surrounding whitespace")
-	}
-	endpoint, err := url.Parse(raw)
-	if err != nil || endpoint.Host == "" || endpoint.User != nil ||
-		endpoint.Fragment != "" || endpoint.Opaque != "" {
-		return nil, fmt.Errorf("URL is not an absolute credential-free endpoint")
-	}
-	switch endpoint.Scheme {
-	case "https", "wss":
-		if endpoint.Port() == "" {
-			endpoint.Host = net.JoinHostPort(endpoint.Hostname(), "443")
-		}
-	case "http", "ws":
-		if endpoint.Port() == "" {
-			endpoint.Host = net.JoinHostPort(endpoint.Hostname(), "80")
-		}
-	default:
-		return nil, fmt.Errorf("URL scheme is unsupported")
-	}
-	hostname := endpoint.Hostname()
-	if hostname == "" || hostname != strings.ToLower(hostname) ||
-		strings.HasSuffix(hostname, ".") ||
-		!validFrostRetainedGroupEndpointHostname(hostname) {
-		return nil, fmt.Errorf("URL hostname is not canonical")
-	}
-	port := endpoint.Port()
-	parsedPort, err := strconv.ParseUint(port, 10, 16)
-	if err != nil || parsedPort == 0 {
-		return nil, fmt.Errorf("URL port is invalid")
-	}
-	endpoint.Host = net.JoinHostPort(hostname, strconv.FormatUint(parsedPort, 10))
-	if endpoint.Path == "" {
-		endpoint.Path = "/"
-	}
-	return endpoint, nil
-}
-
 func (monitor *frostRetainedGroupIndependenceMonitor) verify(
 	ctx context.Context,
 ) error {
 	if monitor == nil || ctx == nil ||
 		monitor.exportEndpoint.endpoint == nil ||
 		monitor.verifierEndpoint.endpoint == nil ||
-		monitor.primaryEndpoint.endpoint == nil ||
-		monitor.timeout < time.Second || monitor.timeout > time.Minute {
+		monitor.primaryTransport == nil {
 		return fmt.Errorf("retained-group endpoint independence monitor is incomplete")
 	}
-	resolver := monitor.resolver
-	if resolver == nil {
-		resolver = net.DefaultResolver
-	}
-	resolveContext, cancel := context.WithTimeout(ctx, monitor.timeout)
-	defer cancel()
-	currentPrimary, err := resolveFrostRetainedGroupEndpoint(
-		resolveContext,
-		monitor.primaryEndpoint.endpoint,
-		resolver,
-	)
-	if err != nil {
-		return fmt.Errorf(
-			"cannot re-resolve primary Ethereum endpoint: [%w]",
-			err,
-		)
-	}
-	if frostRetainedGroupEndpointSetsOverlap(
-		currentPrimary,
+	if err := monitor.primaryTransport.verifyIndependence(
+		ctx,
 		monitor.exportEndpoint,
-	) || frostRetainedGroupEndpointSetsOverlap(
-		currentPrimary,
 		monitor.verifierEndpoint,
-	) {
-		return fmt.Errorf(
-			"primary Ethereum endpoint now aliases a retained-group endpoint",
-		)
+	); err != nil {
+		return fmt.Errorf("primary Ethereum transport is not independent: [%w]", err)
 	}
 	return nil
 }
@@ -1264,6 +1199,22 @@ func newFrostRetainedGroupAttestedHTTPClient(
 	rootCAs *x509.CertPool,
 	timeout time.Duration,
 ) (*http.Client, *http.Transport, error) {
+	return newFrostRetainedGroupAttestedHTTPClientWithSeparationPolicy(
+		endpoint,
+		identity,
+		rootCAs,
+		timeout,
+		nil,
+	)
+}
+
+func newFrostRetainedGroupAttestedHTTPClientWithSeparationPolicy(
+	endpoint frostRetainedGroupResolvedEndpoint,
+	identity FrostRetainedGroupEndpointIdentity,
+	rootCAs *x509.CertPool,
+	timeout time.Duration,
+	separationPolicy *frostPrimaryRetainedSeparationPolicy,
+) (*http.Client, *http.Transport, error) {
 	if endpoint.endpoint == nil || endpoint.canonical != identity.CanonicalEndpoint ||
 		endpoint.canonicalDNSName != identity.CanonicalDNSName ||
 		endpoint.resolvedDNSName != identity.ResolvedDNSName ||
@@ -1293,6 +1244,7 @@ func newFrostRetainedGroupAttestedHTTPClient(
 		base:             transport,
 		endpoint:         endpoint,
 		identity:         identity,
+		separationPolicy: separationPolicy,
 		maximumBodyBytes: frostRetainedGroupMaximumTransportBodyBytes,
 		maximumClockSkew: frostRetainedGroupTransportClockSkew,
 		maximumLifetime:  frostRetainedGroupTransportAttestationLifetime,
@@ -1635,6 +1587,27 @@ func (roundTripper *frostRetainedGroupAttestedRoundTripper) RoundTrip(
 		roundTripper.maximumLifetime,
 	); err != nil {
 		return nil, err
+	}
+	if roundTripper.separationPolicy != nil {
+		if response.TLS == nil {
+			return nil, fmt.Errorf(
+				"retained-group response has no exact TLS peer state",
+			)
+		}
+		peer, err := frostTransportPeerIdentityFromTLS(
+			roundTripper.endpoint,
+			remote,
+			*response.TLS,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if err := roundTripper.separationPolicy.registerRetainedPeer(
+			roundTripper.identity.Role,
+			peer,
+		); err != nil {
+			return nil, err
+		}
 	}
 	proof := frostRetainedGroupTransportProof{
 		role:           roundTripper.identity.Role,

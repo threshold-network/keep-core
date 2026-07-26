@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -506,6 +507,28 @@ type frostRetainedGroupRebindingResolver struct {
 	addresses []netip.Addr
 }
 
+type testFrostPrimaryEthereumIndependenceVerifier struct {
+	verify func(
+		context.Context,
+		frostRetainedGroupResolvedEndpoint,
+		frostRetainedGroupResolvedEndpoint,
+	) error
+}
+
+func (verifier *testFrostPrimaryEthereumIndependenceVerifier) verifyIndependence(
+	ctx context.Context,
+	exportEndpoint frostRetainedGroupResolvedEndpoint,
+	verifierEndpoint frostRetainedGroupResolvedEndpoint,
+) error {
+	if verifier == nil {
+		return fmt.Errorf("test primary Ethereum verifier is nil")
+	}
+	if verifier.verify == nil {
+		return nil
+	}
+	return verifier.verify(ctx, exportEndpoint, verifierEndpoint)
+}
+
 func (resolver *frostRetainedGroupRebindingResolver) LookupCNAME(
 	context.Context,
 	string,
@@ -534,6 +557,16 @@ func TestFrostRetainedGroupIndependenceMonitor_RejectsPrimaryDNSRebind(
 		cname:     "primary-origin.example.",
 		addresses: []netip.Addr{netip.MustParseAddr("192.0.2.3")},
 	}
+	primaryEndpoint := frostRetainedGroupResolvedEndpoint{
+		canonical:        primaryURL.String(),
+		canonicalDNSName: "primary.example",
+		resolvedDNSName:  "primary-origin.example",
+		addresses:        append([]netip.Addr{}, resolver.addresses...),
+		addressSetHash: frostRetainedGroupResolvedAddressSetHash(
+			resolver.addresses,
+		),
+		endpoint: primaryURL,
+	}
 	monitor := &frostRetainedGroupIndependenceMonitor{
 		exportEndpoint: frostRetainedGroupResolvedEndpoint{
 			canonicalDNSName: "export.example",
@@ -547,14 +580,34 @@ func TestFrostRetainedGroupIndependenceMonitor_RejectsPrimaryDNSRebind(
 			addresses:        []netip.Addr{verifierAddress},
 			endpoint:         &url.URL{Scheme: "https", Host: "verifier.example:443", Path: "/"},
 		},
-		primaryEndpoint: frostRetainedGroupResolvedEndpoint{
-			canonicalDNSName: "primary.example",
-			resolvedDNSName:  "primary-origin.example",
-			addresses:        append([]netip.Addr{}, resolver.addresses...),
-			endpoint:         primaryURL,
+		primaryTransport: &testFrostPrimaryEthereumIndependenceVerifier{
+			verify: func(
+				ctx context.Context,
+				exportEndpoint frostRetainedGroupResolvedEndpoint,
+				verifierEndpoint frostRetainedGroupResolvedEndpoint,
+			) error {
+				currentPrimary, err := resolveFrostRetainedGroupEndpoint(
+					ctx,
+					primaryEndpoint.endpoint,
+					resolver,
+				)
+				if err != nil {
+					return err
+				}
+				if frostRetainedGroupEndpointSetsOverlap(
+					currentPrimary,
+					exportEndpoint,
+				) || frostRetainedGroupEndpointSetsOverlap(
+					currentPrimary,
+					verifierEndpoint,
+				) {
+					return fmt.Errorf(
+						"primary Ethereum endpoint now aliases a retained endpoint",
+					)
+				}
+				return nil
+			},
 		},
-		resolver: resolver,
-		timeout:  time.Second,
 	}
 	if err := monitor.verify(context.Background()); err != nil {
 		t.Fatalf("independent primary endpoint rejected: [%v]", err)

@@ -743,20 +743,6 @@ func newFrostRetainedGroupHistorySourceFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	primaryURL, _, err := validateFrostRetainedGroupTLSEndpoint(
-		"https://127.0.0.3:9444/rpc",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resolvedPrimary, err := resolveFrostRetainedGroupEndpoint(
-		context.Background(),
-		primaryURL,
-		nil,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	source, err := newSignedFrostRetainedGroupHistorySource(
 		context.Background(),
 		endpoint,
@@ -769,8 +755,7 @@ func newFrostRetainedGroupHistorySourceFixture(
 		&frostRetainedGroupIndependenceMonitor{
 			exportEndpoint:   resolvedEndpoint,
 			verifierEndpoint: resolvedVerifier,
-			primaryEndpoint:  resolvedPrimary,
-			timeout:          frostRetainedGroupDefaultTimeout,
+			primaryTransport: &testFrostPrimaryEthereumIndependenceVerifier{},
 		},
 	)
 	if err != nil {

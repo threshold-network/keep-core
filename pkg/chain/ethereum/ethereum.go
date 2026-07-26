@@ -82,7 +82,44 @@ func Connect(
 			err,
 		)
 	}
+	return connectWithClient(ctx, config, client)
+}
 
+// ConnectWithClient creates Random Beacon and TBTC Ethereum chain handles
+// using the exact supplied client. It is used by the FROST start path so the
+// chain handle and retained-history independence monitor share one guarded
+// primary transport.
+func ConnectWithClient(
+	ctx context.Context,
+	config ethereum.Config,
+	client *ethclient.Client,
+) (
+	*BeaconChain,
+	*TbtcChain,
+	chain.BlockCounter,
+	chain.Signing,
+	*operator.PrivateKey,
+	error,
+) {
+	if client == nil {
+		return nil, nil, nil, nil, nil,
+			fmt.Errorf("Ethereum client is nil")
+	}
+	return connectWithClient(ctx, config, client)
+}
+
+func connectWithClient(
+	ctx context.Context,
+	config ethereum.Config,
+	client *ethclient.Client,
+) (
+	*BeaconChain,
+	*TbtcChain,
+	chain.BlockCounter,
+	chain.Signing,
+	*operator.PrivateKey,
+	error,
+) {
 	baseChain, err := newBaseChain(ctx, config, client)
 	if err != nil {
 		return nil, nil, nil, nil, nil, fmt.Errorf(

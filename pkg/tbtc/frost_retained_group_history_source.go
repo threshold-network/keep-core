@@ -81,6 +81,7 @@ type FrostRetainedGroupHistorySourceConfig struct {
 	EthereumTLSLeafSPKIHash           string
 	RequestTimeout                    time.Duration
 	TLSRootCAs                        *x509.CertPool `mapstructure:"-"`
+	PrimaryTLSRootCAs                 *x509.CertPool `mapstructure:"-"`
 	Resolver                          *net.Resolver  `mapstructure:"-"`
 }
 
@@ -439,7 +440,7 @@ func FrostRetainedGroupHistoryEndpointFingerprint(
 func NewFrostRetainedGroupHistorySource(
 	ctx context.Context,
 	config FrostRetainedGroupHistorySourceConfig,
-	primaryEthereumURL string,
+	primaryTransport *FrostPrimaryEthereumTransport,
 	expectedChainID uint64,
 ) (*signedFrostRetainedGroupHistorySource, error) {
 	if ctx == nil {
@@ -448,7 +449,7 @@ func NewFrostRetainedGroupHistorySource(
 	validated, err := validateAndResolveFrostRetainedGroupSourceConfig(
 		ctx,
 		config,
-		primaryEthereumURL,
+		primaryTransport,
 	)
 	if err != nil {
 		return nil, err
@@ -456,12 +457,25 @@ func NewFrostRetainedGroupHistorySource(
 	if expectedChainID == 0 {
 		return nil, fmt.Errorf("retained-group history expected chain ID is zero")
 	}
+	separationPolicy, err := primaryTransport.bindRetainedEndpoints(
+		validated.exportEndpoint,
+		validated.identity.Export,
+		validated.verifierEndpoint,
+		validated.identity.Verifier,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot bind primary Ethereum transport to retained endpoints: [%w]",
+			err,
+		)
+	}
 	rpcHTTPClient, rpcTransport, err :=
-		newFrostRetainedGroupAttestedHTTPClient(
+		newFrostRetainedGroupAttestedHTTPClientWithSeparationPolicy(
 			validated.verifierEndpoint,
 			validated.identity.Verifier,
 			validated.rootCAs,
 			validated.requestTimeout,
+			separationPolicy,
 		)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -483,11 +497,12 @@ func NewFrostRetainedGroupHistorySource(
 		rpcClient: rpcClient,
 	}
 	exportHTTPClient, exportTransport, err :=
-		newFrostRetainedGroupAttestedHTTPClient(
+		newFrostRetainedGroupAttestedHTTPClientWithSeparationPolicy(
 			validated.exportEndpoint,
 			validated.identity.Export,
 			validated.rootCAs,
 			validated.requestTimeout,
+			separationPolicy,
 		)
 	if err != nil {
 		verifier.Close()
@@ -509,9 +524,7 @@ func NewFrostRetainedGroupHistorySource(
 		&frostRetainedGroupIndependenceMonitor{
 			exportEndpoint:   validated.exportEndpoint,
 			verifierEndpoint: validated.verifierEndpoint,
-			primaryEndpoint:  validated.primaryEndpoint,
-			resolver:         config.Resolver,
-			timeout:          validated.requestTimeout,
+			primaryTransport: primaryTransport,
 		},
 	)
 	if err != nil {
