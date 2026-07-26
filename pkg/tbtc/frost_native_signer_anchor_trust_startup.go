@@ -1,10 +1,261 @@
 package tbtc
 
 import (
+	"context"
+	"errors"
 	"fmt"
 
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 )
+
+type frostNativeSignerAnchorAuthenticatedRecoveryArtifact struct {
+	certificates []FrostNativeSignerAnchorTrustCertificate
+	trustFloor   *frostNativeSignerAnchorVerifiedTrustFloor
+}
+
+type frostNativeSignerAnchorTrustTransitionTargetReader func(
+	context.Context,
+	bool,
+) (*FrostNativeSignerAnchorTrustTransitionTarget, error)
+
+type frostNativeSignerAnchorTrustTransitionInvoker func(
+	[]byte,
+) (*frostsigning.NativeTBTCSignerStateAnchorTrustTransitionResult, error)
+
+// authenticateFrostNativeSignerAnchorTrustRecoveryArtifact establishes the
+// authority recovery metadata deliberately lacks. Only a complete sequence-one
+// artifact, independently authenticated through the pinned final head, can be
+// used to select and replay a crash-recovery suffix.
+func authenticateFrostNativeSignerAnchorTrustRecoveryArtifact(
+	configured []FrostNativeSignerAnchorTrustCertificate,
+	options FrostNativeSignerAnchorTrustChainValidationOptions,
+) (*frostNativeSignerAnchorAuthenticatedRecoveryArtifact, error) {
+	if len(configured) == 0 ||
+		configured[0].CertificateSequence != 1 ||
+		configured[0].PreviousCertificateDigest != [32]byte{} {
+		return nil, fmt.Errorf(
+			"native signer anchor recovery requires a complete sequence-one certificate artifact",
+		)
+	}
+	options.PriorHead = nil
+	trustFloor, err :=
+		authenticateFrostNativeSignerAnchorTrustCertificateChain(
+			configured,
+			options,
+		)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot independently authenticate the complete native signer anchor recovery artifact: %w",
+			err,
+		)
+	}
+	certificates := make(
+		[]FrostNativeSignerAnchorTrustCertificate,
+		len(configured),
+	)
+	for index := range configured {
+		certificates[index] =
+			frostNativeSignerAnchorTrustCloneCertificate(&configured[index])
+	}
+	return &frostNativeSignerAnchorAuthenticatedRecoveryArtifact{
+		certificates: certificates,
+		trustFloor:   trustFloor,
+	}, nil
+}
+
+// selectFrostNativeSignerAnchorTrustRecoveryChain treats Rust's durable intent
+// metadata strictly as a selector. It must identify one exact contiguous suffix
+// of the independently authenticated artifact, end at the independently pinned
+// final certificate, and describe that final certificate's embedded target.
+func selectFrostNativeSignerAnchorTrustRecoveryChain(
+	artifact *frostNativeSignerAnchorAuthenticatedRecoveryArtifact,
+	recovery *frostsigning.NativeTBTCSignerStateAnchorTrustRecoveryRequired,
+) ([]FrostNativeSignerAnchorTrustCertificate, error) {
+	if artifact == nil || artifact.trustFloor == nil ||
+		len(artifact.certificates) == 0 || recovery == nil ||
+		recovery.CertificateCount == 0 ||
+		uint64(len(recovery.OrderedCertificateDigests)) !=
+			recovery.CertificateCount {
+		return nil, fmt.Errorf(
+			"native signer anchor trust-recovery selector inputs are incomplete",
+		)
+	}
+	configured := artifact.certificates
+	final := &configured[len(configured)-1]
+	if recovery.StoreFingerprint != final.SignerStoreFingerprint ||
+		recovery.FinalCertificateSequence != final.CertificateSequence ||
+		recovery.FinalCertificateDigest != final.CertificateDigest ||
+		recovery.TargetBindingHash != final.To.BindingHash ||
+		recovery.TargetServiceEpoch != final.To.Reference.ServiceEpoch ||
+		recovery.TargetRevision != final.To.Reference.Revision ||
+		frostNativeSignerAnchorTrustCheckpointFromNative(
+			recovery.TargetCheckpoint,
+		) != final.To.Reference.Checkpoint {
+		return nil, fmt.Errorf(
+			"native signer anchor trust-recovery selector differs from the independently authenticated final certificate",
+		)
+	}
+	if recovery.CertificateCount > uint64(len(configured)) {
+		return nil, fmt.Errorf(
+			"native signer anchor trust-recovery selector exceeds the configured artifact",
+		)
+	}
+
+	match := -1
+	for start := range configured {
+		if uint64(len(configured)-start) < recovery.CertificateCount {
+			break
+		}
+		matches := true
+		for offset := uint64(0); offset < recovery.CertificateCount; offset++ {
+			certificate := &configured[start+int(offset)]
+			if certificate.CertificateSequence !=
+				recovery.FirstCertificateSequence+offset ||
+				certificate.CertificateDigest !=
+					recovery.OrderedCertificateDigests[offset] {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			if match >= 0 {
+				return nil, fmt.Errorf(
+					"native signer anchor trust-recovery selector matches the configured artifact more than once",
+				)
+			}
+			match = start
+		}
+	}
+	if match < 0 ||
+		match+int(recovery.CertificateCount) != len(configured) {
+		return nil, fmt.Errorf(
+			"native signer anchor trust-recovery selector does not identify an exact configured suffix",
+		)
+	}
+
+	result := make(
+		[]FrostNativeSignerAnchorTrustCertificate,
+		recovery.CertificateCount,
+	)
+	for index := range result {
+		result[index] = frostNativeSignerAnchorTrustCloneCertificate(
+			&configured[match+index],
+		)
+	}
+	return result, nil
+}
+
+// executeFrostNativeSignerAnchorTrustTransition obtains a fresh signed Read for
+// every transition attempt. A typed recovery failure is retried at most once,
+// using only an exact suffix selected from the independently authenticated
+// artifact; restored local intent bytes never supply authority or a target.
+func executeFrostNativeSignerAnchorTrustTransition(
+	ctx context.Context,
+	artifact *frostNativeSignerAnchorAuthenticatedRecoveryArtifact,
+	initialChain []FrostNativeSignerAnchorTrustCertificate,
+	initialRecovery *frostsigning.NativeTBTCSignerStateAnchorTrustRecoveryRequired,
+	readTarget frostNativeSignerAnchorTrustTransitionTargetReader,
+	invoke frostNativeSignerAnchorTrustTransitionInvoker,
+) (
+	*frostsigning.NativeTBTCSignerStateAnchorTrustTransitionResult,
+	*FrostNativeSignerAnchorTrustTransitionTarget,
+	[]FrostNativeSignerAnchorTrustCertificate,
+	bool,
+	error,
+) {
+	if ctx == nil || readTarget == nil || invoke == nil {
+		return nil, nil, nil, false, fmt.Errorf(
+			"native signer anchor trust-transition executor dependencies are incomplete",
+		)
+	}
+
+	chain := initialChain
+	recoveryReplay := initialRecovery != nil
+	if initialRecovery != nil {
+		var err error
+		chain, err = selectFrostNativeSignerAnchorTrustRecoveryChain(
+			artifact,
+			initialRecovery,
+		)
+		if err != nil {
+			return nil, nil, nil, false, err
+		}
+	}
+	if len(chain) == 0 {
+		return nil, nil, nil, false, fmt.Errorf(
+			"native signer anchor trust-transition certificate chain is empty",
+		)
+	}
+
+	execute := func(
+		chain []FrostNativeSignerAnchorTrustCertificate,
+	) (
+		*frostsigning.NativeTBTCSignerStateAnchorTrustTransitionResult,
+		*FrostNativeSignerAnchorTrustTransitionTarget,
+		error,
+	) {
+		target, err := readTarget(ctx, false)
+		if err != nil {
+			return nil, nil, fmt.Errorf(
+				"cannot obtain a fresh native signer anchor trust-transition target: %w",
+				err,
+			)
+		}
+		final := &chain[len(chain)-1]
+		if target == nil ||
+			len(target.ExactReadResponse) == 0 ||
+			target.Reference != final.To.Reference {
+			return nil, nil, fmt.Errorf(
+				"fresh native signer anchor trust-transition target differs from the selected certificate",
+			)
+		}
+		request, err := EncodeFrostNativeSignerAnchorTrustTransitionRequest(
+			&FrostNativeSignerAnchorTrustTransitionRequest{
+				CertificateChain:   chain,
+				TargetReadResponse: target.ExactReadResponse,
+			},
+		)
+		if err != nil {
+			return nil, nil, fmt.Errorf(
+				"cannot encode native signer anchor trust transition: %w",
+				err,
+			)
+		}
+		result, err := invoke(request)
+		return result, target, err
+	}
+
+	result, target, err := execute(chain)
+	if err == nil {
+		return result, target, chain, recoveryReplay, nil
+	}
+	if initialRecovery != nil {
+		return nil, nil, nil, false, fmt.Errorf(
+			"native signer anchor trust recovery retry failed: %w",
+			err,
+		)
+	}
+	var recoveryError *frostsigning.NativeTBTCSignerStateAnchorTrustRecoveryRequiredError
+	if !errors.As(err, &recoveryError) {
+		return nil, nil, nil, false, err
+	}
+	recoveryChain, selectErr :=
+		selectFrostNativeSignerAnchorTrustRecoveryChain(
+			artifact,
+			&recoveryError.Recovery,
+		)
+	if selectErr != nil {
+		return nil, nil, nil, false, selectErr
+	}
+	result, target, err = execute(recoveryChain)
+	if err != nil {
+		return nil, nil, nil, false, fmt.Errorf(
+			"native signer anchor trust recovery retry failed: %w",
+			err,
+		)
+	}
+	return result, target, recoveryChain, true, nil
+}
 
 // validateFrostNativeSignerAnchorTrustExpectedHead derives the two exact head
 // representations consumed during startup. It does so only after proving that
@@ -336,6 +587,7 @@ func validateFrostNativeSignerAnchorTrustTransitionResult(
 	expectedNativeHead *frostsigning.NativeTBTCSignerStateAnchorTrustHead,
 	priorHead *FrostNativeSignerAnchorTrustCertificateHead,
 	appliedChain []FrostNativeSignerAnchorTrustCertificate,
+	recoveryReplay bool,
 ) error {
 	if result == nil || target == nil || finalCertificate == nil ||
 		expectedProtocolHead == nil || expectedNativeHead == nil ||
@@ -385,6 +637,11 @@ func validateFrostNativeSignerAnchorTrustTransitionResult(
 	}
 
 	if exactReplay {
+		if recoveryReplay {
+			return fmt.Errorf(
+				"native signer anchor trust-transition result is ambiguously both an exact-head and recovery replay",
+			)
+		}
 		head := &appliedChain[len(appliedChain)-1]
 		if len(appliedChain) != 1 ||
 			head.CertificateSequence !=
@@ -408,6 +665,20 @@ func validateFrostNativeSignerAnchorTrustTransitionResult(
 				witnessBase != currentCheckpoint) {
 			return fmt.Errorf(
 				"native signer anchor completed-restart witness base is outside the retained certified segment",
+			)
+		}
+		return nil
+	}
+	if recoveryReplay {
+		if !result.Idempotent ||
+			result.AppliedCertificateCount != 0 {
+			return fmt.Errorf(
+				"native signer anchor recovered transition is not an exact idempotent replay",
+			)
+		}
+		if witnessBase != finalCertificate.To.Reference.Checkpoint {
+			return fmt.Errorf(
+				"native signer anchor recovered transition witness base differs from the recovered certified floor",
 			)
 		}
 		return nil

@@ -852,6 +852,76 @@ func TestNativeTBTCSignerStateAnchorBarrierPoisonsOversizedGenerationAdvance(
 	}
 }
 
+func TestNativeTBTCSignerStateAnchorBarrierAcceptsMaximumGenerationAdvance(
+	t *testing.T,
+) {
+	resetNativeTBTCSignerStateAnchorBarrierForTest()
+	t.Cleanup(resetNativeTBTCSignerStateAnchorBarrierForTest)
+
+	initial := testNativeTBTCSignerStateWitnessTip(1, [32]byte{2})
+	current := initial
+	committer := &testNativeTBTCSignerStateAnchorCommitter{
+		current: &current,
+		acknowledge: func(
+			candidate NativeTBTCSignerStateWitnessTip,
+		) NativeTBTCSignerStateWitnessTip {
+			candidate.AnchorRevision++
+			candidate.AnchorEventRoot = [32]byte{0xa1}
+			candidate.AnchorAcknowledgementDigest = [32]byte{0xa2}
+			return candidate
+		},
+	}
+	if err := InstallNativeTBTCSignerStateAnchorBarrier(
+		NativeTBTCSignerStateAnchorBarrierConfig{
+			InitialTip:                                &initial,
+			ExpectedAnchorBindingHash:                 [32]byte{10},
+			MinimumAnchorServiceEpoch:                 1,
+			MaximumAnchorRevisionDistance:             NativeTBTCSignerStateAnchorMaximumRevisionDistance,
+			MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
+			ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
+				copy := current
+				return &copy, nil
+			},
+			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+			Committer:     committer,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	payload, err := executeNativeTBTCSignerStateAnchoredOutput(
+		"InteractiveRound2",
+		func() {
+			current = testNativeTBTCSignerStateWitnessTip(
+				initial.Generation+
+					NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+				initial.StateCommitment,
+			)
+		},
+		func() ([]byte, error) {
+			return []byte("accepted"), nil
+		},
+		func() {
+			t.Fatal("maximum valid generation advance was discarded")
+		},
+	)
+	if err != nil || string(payload) != "accepted" ||
+		current.Generation !=
+			initial.Generation+
+				NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation ||
+		committer.calls != 1 {
+		t.Fatalf(
+			"maximum generation advance was rejected [payload %q generation %d commits %d err %v]",
+			payload,
+			current.Generation,
+			committer.calls,
+			err,
+		)
+	}
+}
+
 func TestNativeTBTCSignerStateAnchorBarrierGenerationCapacityAdvancesFasterThanRevision(
 	t *testing.T,
 ) {

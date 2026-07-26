@@ -1221,6 +1221,50 @@ func TestBuildTaggedTBTCSignerErrorPayload_CandidateCulprits(t *testing.T) {
 	}
 }
 
+func TestBuildTaggedTBTCSignerErrorPayload_TrustRecovery(t *testing.T) {
+	recoveryWire :=
+		testNativeTBTCSignerStateAnchorTrustRecoveryRequiredWire()
+	payload, err := json.Marshal(buildTaggedTBTCSignerErrorResponse{
+		Code:                     nativeTBTCSignerStateAnchorTrustRecoveryRequiredCode,
+		Message:                  "recovery required",
+		StateAnchorTrustRecovery: &recoveryWire,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	structured := buildTaggedTBTCSignerErrorPayload(payload)
+	if structured.Code !=
+		nativeTBTCSignerStateAnchorTrustRecoveryRequiredCode ||
+		structured.StateAnchorTrustRecovery == nil ||
+		structured.StateAnchorTrustRecovery.CertificateCount != 2 ||
+		structured.StateAnchorTrustRecovery.FinalCertificateSequence != 5 {
+		t.Fatalf("valid recovery context was not preserved: %+v", structured)
+	}
+
+	recoveryWire.CertificateCount = "1"
+	payload, err = json.Marshal(buildTaggedTBTCSignerErrorResponse{
+		Code:                     nativeTBTCSignerStateAnchorTrustRecoveryRequiredCode,
+		Message:                  "recovery required",
+		StateAnchorTrustRecovery: &recoveryWire,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	structured = buildTaggedTBTCSignerErrorPayload(payload)
+	if structured.Code !=
+		nativeTBTCSignerStateAnchorTrustRecoveryRequiredCode ||
+		structured.StateAnchorTrustRecovery != nil ||
+		!strings.Contains(
+			structured.Message,
+			"invalid state-anchor trust-recovery context",
+		) {
+		t.Fatalf(
+			"malformed recovery context did not remain terminal: %+v",
+			structured,
+		)
+	}
+}
+
 func TestBuildTaggedTBTCSignerDeriveInteractiveAttemptContextRequestPayload(t *testing.T) {
 	payload, err := buildTaggedTBTCSignerDeriveInteractiveAttemptContextRequestPayload(
 		"session-1",

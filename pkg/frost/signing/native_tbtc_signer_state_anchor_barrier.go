@@ -39,7 +39,8 @@ const (
 
 	// NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation is the
 	// maximum durable Rust state writes one request-taking call may perform:
-	// two sweep/repair writes followed by the operation's own write.
+	// one prepared-witness reconciliation, a sweep/repair snapshot (which
+	// also covers protected retirement), and the operation's own write.
 	NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation uint64 = 3
 )
 

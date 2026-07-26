@@ -2,6 +2,7 @@ package tbtc
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"strings"
 	"testing"
@@ -506,6 +507,345 @@ func TestSelectFrostNativeSignerAnchorTrustTransitionChainRejectsAmbiguity(
 	}
 }
 
+func TestSelectFrostNativeSignerAnchorTrustRecoveryChainRequiresExactFinalSuffix(
+	t *testing.T,
+) {
+	bootstrap, authority := trustTestBootstrapCertificate(t)
+	second := trustTestRotationCertificate(t, bootstrap, authority, 0x91)
+	final := trustTestRotationCertificate(t, second, authority, 0x92)
+	configured := []FrostNativeSignerAnchorTrustCertificate{
+		*bootstrap,
+		*second,
+		*final,
+	}
+	artifact, err :=
+		authenticateFrostNativeSignerAnchorTrustRecoveryArtifact(
+			configured,
+			trustTestChainOptions(final),
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery := testFrostNativeSignerAnchorTrustRecoverySelector(
+		configured,
+		1,
+	)
+	selected, err := selectFrostNativeSignerAnchorTrustRecoveryChain(
+		artifact,
+		&recovery,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 2 ||
+		selected[0].CertificateDigest != second.CertificateDigest ||
+		selected[1].CertificateDigest != final.CertificateDigest {
+		t.Fatal("recovery selector did not select the exact final suffix")
+	}
+
+	for name, mutate := range map[string]func(
+		*frostsigning.NativeTBTCSignerStateAnchorTrustRecoveryRequired,
+	){
+		"store": func(
+			value *frostsigning.NativeTBTCSignerStateAnchorTrustRecoveryRequired,
+		) {
+			value.StoreFingerprint[0] ^= 1
+		},
+		"ordered digest": func(
+			value *frostsigning.NativeTBTCSignerStateAnchorTrustRecoveryRequired,
+		) {
+			value.OrderedCertificateDigests[0][0] ^= 1
+		},
+		"final digest": func(
+			value *frostsigning.NativeTBTCSignerStateAnchorTrustRecoveryRequired,
+		) {
+			value.FinalCertificateDigest[0] ^= 1
+		},
+		"target binding": func(
+			value *frostsigning.NativeTBTCSignerStateAnchorTrustRecoveryRequired,
+		) {
+			value.TargetBindingHash[0] ^= 1
+		},
+		"target checkpoint": func(
+			value *frostsigning.NativeTBTCSignerStateAnchorTrustRecoveryRequired,
+		) {
+			value.TargetCheckpoint.Generation++
+		},
+		"stale prior final": func(
+			value *frostsigning.NativeTBTCSignerStateAnchorTrustRecoveryRequired,
+		) {
+			value.CertificateCount = 1
+			value.FirstCertificateSequence = second.CertificateSequence
+			value.OrderedCertificateDigests = [][32]byte{
+				second.CertificateDigest,
+			}
+			value.FinalCertificateSequence = second.CertificateSequence
+			value.FinalCertificateDigest = second.CertificateDigest
+			value.TargetBindingHash = second.To.BindingHash
+			value.TargetServiceEpoch = second.To.Reference.ServiceEpoch
+			value.TargetRevision = second.To.Reference.Revision
+			value.TargetCheckpoint =
+				frostNativeSignerAnchorNativeTrustCheckpoint(
+					second.To.Reference.Checkpoint,
+				)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := testFrostNativeSignerAnchorTrustRecoverySelector(
+				configured,
+				1,
+			)
+			mutate(&candidate)
+			if _, err :=
+				selectFrostNativeSignerAnchorTrustRecoveryChain(
+					artifact,
+					&candidate,
+				); err == nil {
+				t.Fatal("tampered or stale recovery selector was accepted")
+			}
+		})
+	}
+}
+
+func TestExecuteFrostNativeSignerAnchorTrustTransitionRecoversMultiCertificateIntent(
+	t *testing.T,
+) {
+	bootstrap, authority := trustTestBootstrapCertificate(t)
+	second := trustTestRotationCertificate(t, bootstrap, authority, 0x93)
+	final := trustTestRotationCertificate(t, second, authority, 0x94)
+	configured := []FrostNativeSignerAnchorTrustCertificate{
+		*bootstrap,
+		*second,
+		*final,
+	}
+	artifact, err :=
+		authenticateFrostNativeSignerAnchorTrustRecoveryArtifact(
+			configured,
+			trustTestChainOptions(final),
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery := testFrostNativeSignerAnchorTrustRecoverySelector(
+		configured,
+		0,
+	)
+	fresh := []byte(`{"fresh":"multi-certificate-recovery"}`)
+	readCalls := 0
+	invokeCalls := 0
+	expectedResult :=
+		&frostsigning.NativeTBTCSignerStateAnchorTrustTransitionResult{
+			Installed: true,
+		}
+	result, target, applied, recoveryReplay, err :=
+		executeFrostNativeSignerAnchorTrustTransition(
+			context.Background(),
+			artifact,
+			nil,
+			&recovery,
+			func(
+				context.Context,
+				bool,
+			) (*FrostNativeSignerAnchorTrustTransitionTarget, error) {
+				readCalls++
+				return &FrostNativeSignerAnchorTrustTransitionTarget{
+					Reference:         final.To.Reference,
+					ExactReadResponse: fresh,
+				}, nil
+			},
+			func(
+				request []byte,
+			) (*frostsigning.NativeTBTCSignerStateAnchorTrustTransitionResult, error) {
+				invokeCalls++
+				decoded, err :=
+					DecodeFrostNativeSignerAnchorTrustTransitionRequest(
+						request,
+					)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(decoded.CertificateChain) != 3 ||
+					!bytes.Equal(decoded.TargetReadResponse, fresh) {
+					t.Fatal("recovery did not replay the exact intent chain with a fresh Read")
+				}
+				return expectedResult, nil
+			},
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != expectedResult || target == nil ||
+		!bytes.Equal(target.ExactReadResponse, fresh) ||
+		len(applied) != 3 || !recoveryReplay ||
+		readCalls != 1 || invokeCalls != 1 {
+		t.Fatalf(
+			"unexpected multi-certificate recovery result [applied %d reads %d invokes %d]",
+			len(applied),
+			readCalls,
+			invokeCalls,
+		)
+	}
+}
+
+func TestExecuteFrostNativeSignerAnchorTrustTransitionRetriesWithFreshRead(
+	t *testing.T,
+) {
+	bootstrap, authority := trustTestBootstrapCertificate(t)
+	second := trustTestRotationCertificate(t, bootstrap, authority, 0x95)
+	final := trustTestRotationCertificate(t, second, authority, 0x96)
+	configured := []FrostNativeSignerAnchorTrustCertificate{
+		*bootstrap,
+		*second,
+		*final,
+	}
+	artifact, err :=
+		authenticateFrostNativeSignerAnchorTrustRecoveryArtifact(
+			configured,
+			trustTestChainOptions(final),
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery := testFrostNativeSignerAnchorTrustRecoverySelector(
+		configured,
+		0,
+	)
+	freshReads := [][]byte{
+		[]byte(`{"fresh":"before-recovery-signal"}`),
+		[]byte(`{"fresh":"after-recovery-signal"}`),
+	}
+	readCalls := 0
+	invokeCalls := 0
+	expectedResult :=
+		&frostsigning.NativeTBTCSignerStateAnchorTrustTransitionResult{
+			Installed: true,
+		}
+	result, target, applied, recoveryReplay, err :=
+		executeFrostNativeSignerAnchorTrustTransition(
+			context.Background(),
+			artifact,
+			[]FrostNativeSignerAnchorTrustCertificate{*final},
+			nil,
+			func(
+				context.Context,
+				bool,
+			) (*FrostNativeSignerAnchorTrustTransitionTarget, error) {
+				read := freshReads[readCalls]
+				readCalls++
+				return &FrostNativeSignerAnchorTrustTransitionTarget{
+					Reference:         final.To.Reference,
+					ExactReadResponse: read,
+				}, nil
+			},
+			func(
+				request []byte,
+			) (*frostsigning.NativeTBTCSignerStateAnchorTrustTransitionResult, error) {
+				decoded, err :=
+					DecodeFrostNativeSignerAnchorTrustTransitionRequest(
+						request,
+					)
+				if err != nil {
+					t.Fatal(err)
+				}
+				invokeCalls++
+				if invokeCalls == 1 {
+					if len(decoded.CertificateChain) != 1 ||
+						!bytes.Equal(
+							decoded.TargetReadResponse,
+							freshReads[0],
+						) {
+						t.Fatal("initial transition request is unexpected")
+					}
+					return nil,
+						&frostsigning.NativeTBTCSignerStateAnchorTrustRecoveryRequiredError{
+							Recovery: recovery,
+						}
+				}
+				if len(decoded.CertificateChain) != 3 ||
+					!bytes.Equal(
+						decoded.TargetReadResponse,
+						freshReads[1],
+					) {
+					t.Fatal("recovery retry reused stale Read or wrong chain")
+				}
+				return expectedResult, nil
+			},
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != expectedResult || target == nil ||
+		!bytes.Equal(target.ExactReadResponse, freshReads[1]) ||
+		len(applied) != 3 || !recoveryReplay ||
+		readCalls != 2 || invokeCalls != 2 {
+		t.Fatalf(
+			"unexpected recovery retry [applied %d reads %d invokes %d]",
+			len(applied),
+			readCalls,
+			invokeCalls,
+		)
+	}
+}
+
+func TestExecuteFrostNativeSignerAnchorTrustTransitionRejectsStaleRecoveryTarget(
+	t *testing.T,
+) {
+	bootstrap, authority := trustTestBootstrapCertificate(t)
+	final := trustTestRotationCertificate(t, bootstrap, authority, 0x97)
+	configured := []FrostNativeSignerAnchorTrustCertificate{
+		*bootstrap,
+		*final,
+	}
+	artifact, err :=
+		authenticateFrostNativeSignerAnchorTrustRecoveryArtifact(
+			configured,
+			trustTestChainOptions(final),
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery := testFrostNativeSignerAnchorTrustRecoverySelector(
+		configured,
+		0,
+	)
+	staleReference := final.To.Reference
+	staleReference.Revision++
+	staleReference.PreviousEventRoot = staleReference.EventRoot
+	staleReference.EventRoot[0] ^= 1
+	readCalls := 0
+	invokeCalls := 0
+	_, _, _, _, err = executeFrostNativeSignerAnchorTrustTransition(
+		context.Background(),
+		artifact,
+		nil,
+		&recovery,
+		func(
+			context.Context,
+			bool,
+		) (*FrostNativeSignerAnchorTrustTransitionTarget, error) {
+			readCalls++
+			return &FrostNativeSignerAnchorTrustTransitionTarget{
+				Reference:         staleReference,
+				ExactReadResponse: []byte(`{"fresh":"but-target-is-stale"}`),
+			}, nil
+		},
+		func(
+			[]byte,
+		) (*frostsigning.NativeTBTCSignerStateAnchorTrustTransitionResult, error) {
+			invokeCalls++
+			return nil, nil
+		},
+	)
+	if err == nil || readCalls != 1 || invokeCalls != 0 {
+		t.Fatalf(
+			"stale restored target was not rejected before mutation [err %v reads %d invokes %d]",
+			err,
+			readCalls,
+			invokeCalls,
+		)
+	}
+}
+
 func TestValidateFrostNativeSignerAnchorTrustTransitionResult(t *testing.T) {
 	fixture := newFrostNativeSignerAnchorTrustStartupFixture()
 	protocolHead, nativeHead, err :=
@@ -539,6 +879,7 @@ func TestValidateFrostNativeSignerAnchorTrustTransitionResult(t *testing.T) {
 		nativeHead,
 		nil,
 		chain,
+		false,
 	); err != nil {
 		t.Fatalf("valid trust transition result was rejected: %v", err)
 	}
@@ -594,6 +935,7 @@ func TestValidateFrostNativeSignerAnchorTrustTransitionResult(t *testing.T) {
 				nativeHead,
 				nil,
 				chain,
+				false,
 			); err == nil {
 				t.Fatal("invalid trust-transition result was accepted")
 			}
@@ -623,6 +965,7 @@ func TestValidateFrostNativeSignerAnchorTrustTransitionResult(t *testing.T) {
 		nativeHead,
 		nil,
 		chain,
+		false,
 	); err == nil {
 		t.Fatal(
 			"new transition accepted a descendant instead of the exact certified target",
@@ -636,19 +979,19 @@ func TestValidateFrostNativeSignerAnchorReconciledTransitionTargetScopesExactHea
 	fixture := newFrostNativeSignerAnchorTrustStartupFixture()
 	reference := fixture.certificate.To.Reference
 	tip := &frostsigning.NativeTBTCSignerStateWitnessTip{
-		Schema:                          frostsigning.NativeTBTCSignerStateWitnessTipSchema,
-		StoreFingerprint:                reference.Checkpoint.StoreFingerprint,
-		Generation:                      reference.Checkpoint.Generation,
-		PreviousStateCommitment:         reference.Checkpoint.PreviousStateCommitment,
-		StateImageDigest:                reference.Checkpoint.StateImageDigest,
-		StateCommitment:                 reference.Checkpoint.StateCommitment,
-		WitnessBaseGeneration:           reference.Checkpoint.Generation,
-		WitnessBaseCommitment:           reference.Checkpoint.StateCommitment,
-		AnchorBindingHash:               fixture.certificate.To.BindingHash,
-		AnchorServiceEpoch:              reference.ServiceEpoch,
-		AnchorRevision:                  reference.Revision,
-		AnchorEventRoot:                 reference.EventRoot,
-		AnchorAcknowledgementDigest:     reference.AcknowledgementDigest,
+		Schema:                      frostsigning.NativeTBTCSignerStateWitnessTipSchema,
+		StoreFingerprint:            reference.Checkpoint.StoreFingerprint,
+		Generation:                  reference.Checkpoint.Generation,
+		PreviousStateCommitment:     reference.Checkpoint.PreviousStateCommitment,
+		StateImageDigest:            reference.Checkpoint.StateImageDigest,
+		StateCommitment:             reference.Checkpoint.StateCommitment,
+		WitnessBaseGeneration:       reference.Checkpoint.Generation,
+		WitnessBaseCommitment:       reference.Checkpoint.StateCommitment,
+		AnchorBindingHash:           fixture.certificate.To.BindingHash,
+		AnchorServiceEpoch:          reference.ServiceEpoch,
+		AnchorRevision:              reference.Revision,
+		AnchorEventRoot:             reference.EventRoot,
+		AnchorAcknowledgementDigest: reference.AcknowledgementDigest,
 	}
 	target := &FrostNativeSignerAnchorTrustTransitionTarget{
 		ExactReadResponse: []byte(`{"fresh":"transition"}`),
@@ -737,6 +1080,7 @@ func TestValidateFrostNativeSignerAnchorTrustTransitionResultExactReplay(
 		nativeHead,
 		protocolHead,
 		chain,
+		false,
 	); err != nil {
 		t.Fatalf("valid completed-restart result was rejected: %v", err)
 	}
@@ -751,8 +1095,150 @@ func TestValidateFrostNativeSignerAnchorTrustTransitionResultExactReplay(
 		nativeHead,
 		protocolHead,
 		chain,
+		false,
 	); err == nil {
 		t.Fatal("equal-generation forked replay witness base was accepted")
+	}
+}
+
+func TestValidateFrostNativeSignerAnchorTrustTransitionResultRecoveryReplay(
+	t *testing.T,
+) {
+	fixture := newFrostNativeSignerAnchorTrustStartupFixture()
+	protocolHead, nativeHead, err :=
+		validateFrostNativeSignerAnchorTrustExpectedHead(
+			fixture.runtime,
+			&fixture.installed,
+			&fixture.certificate,
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &FrostNativeSignerAnchorTrustTransitionTarget{
+		ExactReadResponse: []byte(`{"fresh":"recovery"}`),
+		Reference:         fixture.certificate.To.Reference,
+	}
+	chain := []FrostNativeSignerAnchorTrustCertificate{
+		fixture.certificate,
+	}
+	floorCheckpoint := fixture.certificate.To.Reference.Checkpoint
+
+	recovered := frostNativeSignerAnchorTrustStartupResult(
+		*nativeHead,
+		target.Reference,
+		floorCheckpoint,
+		true,
+		0,
+	)
+	if err := validateFrostNativeSignerAnchorTrustTransitionResult(
+		&recovered,
+		target,
+		&fixture.certificate,
+		protocolHead,
+		nativeHead,
+		nil,
+		chain,
+		true,
+	); err != nil {
+		t.Fatalf("valid recovered replay at the certified floor was rejected: %v", err)
+	}
+
+	// The identical engine result without the recovery marker must fail: a
+	// fresh transition may never report an idempotent zero-applied outcome.
+	if err := validateFrostNativeSignerAnchorTrustTransitionResult(
+		&recovered,
+		target,
+		&fixture.certificate,
+		protocolHead,
+		nativeHead,
+		nil,
+		chain,
+		false,
+	); err == nil {
+		t.Fatal("idempotent zero-applied result was accepted as a fresh transition")
+	}
+
+	partiallyApplied := frostNativeSignerAnchorTrustStartupResult(
+		*nativeHead,
+		target.Reference,
+		floorCheckpoint,
+		true,
+		1,
+	)
+	if err := validateFrostNativeSignerAnchorTrustTransitionResult(
+		&partiallyApplied,
+		target,
+		&fixture.certificate,
+		protocolHead,
+		nativeHead,
+		nil,
+		chain,
+		true,
+	); err == nil {
+		t.Fatal("recovery replay reporting fresh application was accepted")
+	}
+
+	nonIdempotent := frostNativeSignerAnchorTrustStartupResult(
+		*nativeHead,
+		target.Reference,
+		floorCheckpoint,
+		false,
+		0,
+	)
+	if err := validateFrostNativeSignerAnchorTrustTransitionResult(
+		&nonIdempotent,
+		target,
+		&fixture.certificate,
+		protocolHead,
+		nativeHead,
+		nil,
+		chain,
+		true,
+	); err == nil {
+		t.Fatal("non-idempotent recovery replay was accepted")
+	}
+
+	divergedBase := floorCheckpoint
+	divergedBase.Generation++
+	divergedBase.StateCommitment =
+		frostsigning.ComputeNativeTBTCSignerStateWitnessCommitment(
+			divergedBase.StoreFingerprint,
+			divergedBase.Generation,
+			divergedBase.PreviousStateCommitment,
+			divergedBase.StateImageDigest,
+		)
+	diverged := frostNativeSignerAnchorTrustStartupResult(
+		*nativeHead,
+		target.Reference,
+		divergedBase,
+		true,
+		0,
+	)
+	if err := validateFrostNativeSignerAnchorTrustTransitionResult(
+		&diverged,
+		target,
+		&fixture.certificate,
+		protocolHead,
+		nativeHead,
+		nil,
+		chain,
+		true,
+	); err == nil {
+		t.Fatal("recovery replay witness base off the certified floor was accepted")
+	}
+
+	// A result cannot be both an exact-head replay and a recovery replay.
+	if err := validateFrostNativeSignerAnchorTrustTransitionResult(
+		&recovered,
+		target,
+		&fixture.certificate,
+		protocolHead,
+		nativeHead,
+		protocolHead,
+		chain,
+		true,
+	); err == nil {
+		t.Fatal("ambiguous exact-head and recovery replay was accepted")
 	}
 }
 
@@ -778,6 +1264,33 @@ func frostNativeSignerAnchorTrustStartupResult(
 		),
 		CurrentAnchorReference: frostNativeSignerAnchorNativeTrustReference(
 			current,
+		),
+	}
+}
+
+func testFrostNativeSignerAnchorTrustRecoverySelector(
+	configured []FrostNativeSignerAnchorTrustCertificate,
+	start int,
+) frostsigning.NativeTBTCSignerStateAnchorTrustRecoveryRequired {
+	final := configured[len(configured)-1]
+	digests := make([][32]byte, len(configured)-start)
+	for index := range digests {
+		digests[index] = configured[start+index].CertificateDigest
+	}
+	return frostsigning.NativeTBTCSignerStateAnchorTrustRecoveryRequired{
+		Schema: frostsigning.
+			NativeTBTCSignerStateAnchorTrustRecoveryRequiredSchema,
+		StoreFingerprint:          final.SignerStoreFingerprint,
+		CertificateCount:          uint64(len(digests)),
+		FirstCertificateSequence:  configured[start].CertificateSequence,
+		OrderedCertificateDigests: digests,
+		FinalCertificateSequence:  final.CertificateSequence,
+		FinalCertificateDigest:    final.CertificateDigest,
+		TargetBindingHash:         final.To.BindingHash,
+		TargetServiceEpoch:        final.To.Reference.ServiceEpoch,
+		TargetRevision:            final.To.Reference.Revision,
+		TargetCheckpoint: frostNativeSignerAnchorNativeTrustCheckpoint(
+			final.To.Reference.Checkpoint,
 		),
 	}
 }

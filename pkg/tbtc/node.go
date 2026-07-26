@@ -418,6 +418,7 @@ func newNode(
 		}
 
 		var priorTrustCertificateHead *FrostNativeSignerAnchorTrustCertificateHead
+		var trustRecoverySelector *signing.NativeTBTCSignerStateAnchorTrustRecoveryRequired
 		priorTrustHead, priorTrustHeadErr :=
 			signing.ReadNativeTBTCSignerStateAnchorTrustHead()
 		transitionCertificateChain := trustCertificateChain
@@ -448,22 +449,36 @@ func newNode(
 					err,
 				)
 			}
-		} else if !errors.Is(
-			priorTrustHeadErr,
-			signing.ErrNativeTBTCSignerStateAnchorTrustHeadAbsent,
-		) {
-			_ = outbox.close()
-			return nil, fmt.Errorf(
-				"cannot read the prior FROST native signer anchor trust head: [%w]",
+		} else {
+			var recoveryError *signing.NativeTBTCSignerStateAnchorTrustRecoveryRequiredError
+			switch {
+			case errors.As(priorTrustHeadErr, &recoveryError):
+				recovery := recoveryError.Recovery
+				recovery.OrderedCertificateDigests = append(
+					[][32]byte{},
+					recovery.OrderedCertificateDigests...,
+				)
+				trustRecoverySelector = &recovery
+			case errors.Is(
 				priorTrustHeadErr,
-			)
-		} else if transitionCertificateChain[0].CertificateSequence != 1 ||
-			transitionCertificateChain[0].PreviousCertificateDigest != [32]byte{} {
-			_ = outbox.close()
-			return nil, fmt.Errorf(
-				"cannot read the prior FROST native signer anchor trust head for a certificate suffix: [%w]",
-				priorTrustHeadErr,
-			)
+				signing.ErrNativeTBTCSignerStateAnchorTrustHeadAbsent,
+			):
+				if transitionCertificateChain[0].CertificateSequence != 1 ||
+					transitionCertificateChain[0].PreviousCertificateDigest !=
+						[32]byte{} {
+					_ = outbox.close()
+					return nil, fmt.Errorf(
+						"cannot read the prior FROST native signer anchor trust head for a certificate suffix: [%w]",
+						priorTrustHeadErr,
+					)
+				}
+			default:
+				_ = outbox.close()
+				return nil, fmt.Errorf(
+					"cannot read the prior FROST native signer anchor trust head: [%w]",
+					priorTrustHeadErr,
+				)
+			}
 		}
 		trustChainOptions := FrostNativeSignerAnchorTrustChainValidationOptions{
 			// A sequence-one rotation is an explicit, offline-authorized
@@ -503,6 +518,18 @@ func newNode(
 				err,
 			)
 		}
+		recoveryArtifact, err :=
+			authenticateFrostNativeSignerAnchorTrustRecoveryArtifact(
+				trustCertificateChain,
+				trustChainOptions,
+			)
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot authenticate the complete FROST native signer anchor recovery artifact: [%w]",
+				err,
+			)
+		}
 		anchorClient, err :=
 			newFrostNativeSignerAnchorClientWithTrustFloor(
 				FrostNativeSignerAnchorClientConfig{
@@ -529,37 +556,21 @@ func newNode(
 			)
 		var trustTransitionTarget *FrostNativeSignerAnchorTrustTransitionTarget
 		if !exactTrustHeadReplay {
-			trustTransitionTarget, err =
-				anchorClient.readFrostNativeSignerAnchorTrustTransitionTarget(
-					context.Background(),
-					false,
-				)
-			if err != nil {
-				_ = outbox.close()
-				return nil, fmt.Errorf(
-					"cannot obtain the fresh FROST native signer anchor trust-transition target: [%w]",
-					err,
-				)
-			}
-			trustTransitionRequest, err :=
-				EncodeFrostNativeSignerAnchorTrustTransitionRequest(
-					&FrostNativeSignerAnchorTrustTransitionRequest{
-						CertificateChain: transitionCertificateChain,
-						TargetReadResponse: trustTransitionTarget.
-							ExactReadResponse,
-					},
-				)
-			if err != nil {
-				_ = outbox.close()
-				return nil, fmt.Errorf(
-					"cannot encode FROST native signer anchor trust transition: [%w]",
-					err,
-				)
-			}
-			trustTransitionResult, err :=
-				signing.TransitionNativeTBTCSignerStateWitnessAnchor(
-					trustTransitionRequest,
-				)
+			var trustTransitionResult *signing.NativeTBTCSignerStateAnchorTrustTransitionResult
+			var trustTransitionRecoveryReplay bool
+			trustTransitionResult,
+				trustTransitionTarget,
+				transitionCertificateChain,
+				trustTransitionRecoveryReplay,
+				err = executeFrostNativeSignerAnchorTrustTransition(
+				context.Background(),
+				recoveryArtifact,
+				transitionCertificateChain,
+				trustRecoverySelector,
+				anchorClient.
+					readFrostNativeSignerAnchorTrustTransitionTarget,
+				signing.TransitionNativeTBTCSignerStateWitnessAnchor,
+			)
 			if err != nil {
 				_ = outbox.close()
 				return nil, fmt.Errorf(
@@ -575,6 +586,7 @@ func newNode(
 				expectedTrustHead,
 				priorTrustCertificateHead,
 				transitionCertificateChain,
+				trustTransitionRecoveryReplay,
 			); err != nil {
 				_ = outbox.close()
 				return nil, fmt.Errorf(

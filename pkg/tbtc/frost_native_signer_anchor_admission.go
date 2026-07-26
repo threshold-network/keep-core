@@ -8,10 +8,13 @@ import (
 
 const (
 	// One request-taking interactive signer call can durably advance the Rust
-	// generation up to three times: repair/retire an InteractiveState pending
-	// snapshot (two writes in the sweep prologue), then persist the operation's
-	// own mutation. The process output barrier still advances the remote anchor
-	// revision only once for the call's final checkpoint.
+	// generation up to three times: reconcile one previously prepared witness
+	// snapshot, persist the sweep/repair snapshot (the expiry sweep and any
+	// protected retirement share it), then persist the endpoint's own
+	// mutation. Matching pending operations are covered by the sweep;
+	// nonmatching operations remain pending without another write. The
+	// process output barrier still advances the remote anchor revision only
+	// once for the call's final checkpoint.
 	frostNativeSignerMaximumGenerationAdvancesPerAnchoredCall uint64 = 3
 )
 
@@ -304,9 +307,10 @@ func (reservation *frostNativeSignerAnchorRevisionReservation) Release() {
 //
 // Each of those calls can advance one service revision when its sweep prologue
 // mutates otherwise-unrelated state. Each interactive call can advance up to
-// three Rust generations (two sweep/repair writes plus its own write), so the
-// proof-window cost is three times the anchored-call count. Attempt derivation,
-// package/evidence handling, and authorization guards do not persist Rust state.
+// three Rust generations (prepared-witness reconciliation, one sweep/repair
+// write, and its own write), so the proof-window cost is three times the
+// anchored-call count. Attempt derivation, package/evidence handling, and
+// authorization guards do not persist Rust state.
 func frostPreSignMaximumAnchorCapacityCost(
 	inputCount uint64,
 	localSeatCount uint64,

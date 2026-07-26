@@ -120,6 +120,137 @@ func TestDecodeNativeTBTCSignerStateAnchorTrustRejectsUnknownAndInconsistent(
 	}
 }
 
+func TestDecodeNativeTBTCSignerStateAnchorTrustRecoveryRequired(t *testing.T) {
+	wire := testNativeTBTCSignerStateAnchorTrustRecoveryRequiredWire()
+
+	recovery, err :=
+		decodeNativeTBTCSignerStateAnchorTrustRecoveryRequired(&wire)
+	if err != nil {
+		t.Fatalf("valid trust-recovery selector was rejected: %v", err)
+	}
+	if recovery.Schema !=
+		NativeTBTCSignerStateAnchorTrustRecoveryRequiredSchema ||
+		recovery.StoreFingerprint != [32]byte{0x77} ||
+		recovery.CertificateCount != 2 ||
+		recovery.FirstCertificateSequence != 4 ||
+		len(recovery.OrderedCertificateDigests) != 2 ||
+		recovery.OrderedCertificateDigests[0] != [32]byte{0x41} ||
+		recovery.OrderedCertificateDigests[1] != [32]byte{0x42} ||
+		recovery.FinalCertificateSequence != 5 ||
+		recovery.FinalCertificateDigest != [32]byte{0x42} ||
+		recovery.TargetBindingHash != [32]byte{0x51} ||
+		recovery.TargetServiceEpoch != 7 ||
+		recovery.TargetRevision != 9 ||
+		recovery.TargetCheckpoint.Generation != 12 {
+		t.Fatalf("unexpected decoded trust-recovery selector: %+v", recovery)
+	}
+}
+
+func TestDecodeNativeTBTCSignerStateAnchorTrustRecoveryRequiredRejectsInvalid(
+	t *testing.T,
+) {
+	tests := map[string]func(*nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire){
+		"unsupported schema": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.Schema = "unsupported"
+		},
+		"non-canonical count": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.CertificateCount = "02"
+		},
+		"zero count": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.CertificateCount = "0"
+		},
+		"count differs from digests": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.CertificateCount = "1"
+		},
+		"sequence range overflows": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.FirstCertificateSequence = "18446744073709551615"
+		},
+		"final sequence differs from range": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.FinalCertificateSequence = "6"
+		},
+		"duplicate certificate digest": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.OrderedCertificateDigests[1] =
+				wire.OrderedCertificateDigests[0]
+			wire.FinalCertificateDigest =
+				wire.OrderedCertificateDigests[0]
+		},
+		"final digest differs from ordered suffix": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.FinalCertificateDigest =
+				testNativeTBTCSignerTrustHex32(0x43)
+		},
+		"checkpoint belongs to another store": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.StoreFingerprint =
+				testNativeTBTCSignerTrustHex32(0x78)
+		},
+		"checkpoint commitment is invalid": func(
+			wire *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire,
+		) {
+			wire.TargetCheckpoint.StateCommitment =
+				testNativeTBTCSignerTrustHex32(0x61)
+		},
+	}
+
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			wire := testNativeTBTCSignerStateAnchorTrustRecoveryRequiredWire()
+			mutate(&wire)
+			if _, err :=
+				decodeNativeTBTCSignerStateAnchorTrustRecoveryRequired(
+					&wire,
+				); err == nil {
+				t.Fatal("invalid trust-recovery selector was accepted")
+			}
+		})
+	}
+}
+
+func testNativeTBTCSignerStateAnchorTrustRecoveryRequiredWire(
+) nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire {
+	return nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire{
+		Schema: NativeTBTCSignerStateAnchorTrustRecoveryRequiredSchema,
+		StoreFingerprint: testNativeTBTCSignerTrustHex32(
+			0x77,
+		),
+		CertificateCount:         "2",
+		FirstCertificateSequence: "4",
+		OrderedCertificateDigests: []string{
+			testNativeTBTCSignerTrustHex32(0x41),
+			testNativeTBTCSignerTrustHex32(0x42),
+		},
+		FinalCertificateSequence: "5",
+		FinalCertificateDigest: testNativeTBTCSignerTrustHex32(
+			0x42,
+		),
+		TargetBindingHash: testNativeTBTCSignerTrustHex32(
+			0x51,
+		),
+		TargetServiceEpoch: "7",
+		TargetRevision:     "9",
+		TargetCheckpoint: testNativeTBTCSignerStateAnchorCheckpointWire(
+			12,
+			0x61,
+		),
+	}
+}
+
 func testNativeTBTCSignerStateAnchorCheckpointWire(
 	generation uint64,
 	seed byte,
