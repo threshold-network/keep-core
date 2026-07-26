@@ -217,15 +217,17 @@ func newJournalTestFixture(t *testing.T) *journalTestFixture {
 			},
 		},
 	}
+	sourceIdentity := testFrostRetainedGroupCompleteIdentity()
 	manifest := FrostRetainedGroupCanonicalJournalManifest{
 		StoreID:                   "journal-store-uuid",
 		StoreFingerprint:          [32]byte{0x31},
 		ClusterFingerprint:        [32]byte{0x32},
 		Checkpoint:                checkpoint,
 		DescriptorSetHash:         [32]byte{0x33},
-		SourceTrustDomainID:       "independent-journal-source",
-		SourceEndpointFingerprint: [32]byte{0x34},
-		SourceOperatorFingerprint: [32]byte{0x35},
+		SourceTrustDomainID:       sourceIdentity.TrustDomainID,
+		SourceEndpointFingerprint: sourceIdentity.EndpointFingerprint,
+		SourceOperatorFingerprint: sourceIdentity.OperatorFingerprint,
+		SourceIdentity:            sourceIdentity,
 		MinimumGeneration:         1,
 	}
 	checkpointAuthorities := make([]FrostRetainedGroupAuthority, 3)
@@ -286,11 +288,7 @@ func newJournalTestFixture(t *testing.T) *journalTestFixture {
 		QuarantineJournal:            quarantine,
 	}
 	source := &journalHistorySource{
-		identity: FrostRetainedGroupHistoryIdentity{
-			TrustDomainID:       manifest.SourceTrustDomainID,
-			EndpointFingerprint: manifest.SourceEndpointFingerprint,
-			OperatorFingerprint: manifest.SourceOperatorFingerprint,
-		},
+		identity:    sourceIdentity,
 		checkpoint:  checkpoint,
 		head:        FrostPreSignFinality{BlockNumber: 100, BlockHash: [32]byte{0x64}},
 		descriptor:  manifest.DescriptorSetHash,

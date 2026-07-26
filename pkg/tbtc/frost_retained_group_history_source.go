@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -27,19 +26,17 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
-	"github.com/gorilla/websocket"
 	"github.com/keep-network/keep-core/pkg/chain"
 )
 
 const (
 	frostRetainedGroupHistoryPageSchema      = "tbtc-frost-retained-group-history-page/v5"
-	frostRetainedGroupOperatorReceiptSchema  = "tbtc-frost-retained-group-operator-receipt/v3"
+	frostRetainedGroupOperatorReceiptSchema  = "tbtc-frost-retained-group-operator-receipt/v4"
 	frostRetainedGroupHistoryRequestSchema   = "tbtc-frost-retained-group-history-request/v4"
-	frostRetainedGroupOperatorRequestSchema  = "tbtc-frost-retained-group-operator-request/v3"
+	frostRetainedGroupOperatorRequestSchema  = "tbtc-frost-retained-group-operator-request/v4"
 	frostRetainedGroupHistorySignatureDomain = "tbtc-frost-retained-group-export-signature-v5\x00"
-	frostRetainedGroupHistoryEndpointDomain  = "tbtc-frost-retained-group-endpoints-v1\x00"
 	frostRetainedGroupHistoryQueryDomain     = "tbtc-frost-retained-group-history-query-v4\x00"
-	frostRetainedGroupOperatorQueryDomain    = "tbtc-frost-retained-group-operator-query-v3\x00"
+	frostRetainedGroupOperatorQueryDomain    = "tbtc-frost-retained-group-operator-query-v4\x00"
 	frostRetainedGroupHistoryRootDomain      = "tbtc-frost-retained-group-export-history-root-v4\x00"
 	frostRetainedGroupProtocolBindingDomain  = "tbtc-frost-retained-group-protocol-binding-v4\x00"
 
@@ -62,14 +59,29 @@ const (
 // FrostRetainedGroupHistorySourceConfig configures the independent,
 // receipt-complete retained-group history service. ExportURL and EthereumURL
 // must be distinct from each other and from the primary Ethereum endpoint. The
-// export authority's Ed25519 SPKI hash is pinned rather than learned from the
-// service.
+// history-envelope, backend, operator, and transport-attestation Ed25519 SPKI
+// hashes are separate manifest roles and are pinned rather than learned from
+// either service.
 type FrostRetainedGroupHistorySourceConfig struct {
-	ExportURL            string
-	EthereumURL          string
-	TrustDomainID        string
-	TrustedSignerKeyHash string
-	RequestTimeout       time.Duration
+	ExportURL                         string
+	EthereumURL                       string
+	TrustDomainID                     string
+	ExportTrustDomainID               string
+	EthereumTrustDomainID             string
+	ExportServiceIdentity             string
+	EthereumServiceIdentity           string
+	ExportBackendServiceFingerprint   string
+	EthereumBackendServiceFingerprint string
+	ExportOperatorFingerprint         string
+	EthereumOperatorFingerprint       string
+	TrustedSignerKeyHash              string
+	ExportAttestationKeyHash          string
+	EthereumAttestationKeyHash        string
+	ExportTLSLeafSPKIHash             string
+	EthereumTLSLeafSPKIHash           string
+	RequestTimeout                    time.Duration
+	TLSRootCAs                        *x509.CertPool `mapstructure:"-"`
+	Resolver                          *net.Resolver  `mapstructure:"-"`
 }
 
 type frostRetainedGroupEthereumVerifier interface {
@@ -186,6 +198,8 @@ type signedFrostRetainedGroupHistorySource struct {
 	exportEndpoint       *url.URL
 	verifier             frostRetainedGroupEthereumVerifier
 	httpClient           frostRetainedGroupHTTPClient
+	httpTransports       []*http.Transport
+	independenceMonitor  *frostRetainedGroupIndependenceMonitor
 	chainID              uint64
 	identity             FrostRetainedGroupHistoryIdentity
 	trustedSignerKeyHash [32]byte
@@ -209,12 +223,6 @@ type frostRetainedGroupSignedEnvelope struct {
 	SignerPublicKeySPKI string          `json:"signerPublicKeySpki"`
 	SignatureAlgorithm  string          `json:"signatureAlgorithm"`
 	Signature           string          `json:"signature"`
-}
-
-type frostRetainedGroupWireIdentity struct {
-	TrustDomainID       string `json:"trustDomainID"`
-	EndpointFingerprint string `json:"endpointFingerprint"`
-	OperatorFingerprint string `json:"operatorFingerprint"`
 }
 
 type frostRetainedGroupWireFinality struct {
@@ -412,28 +420,17 @@ type frostRetainedGroupOperatorReceiptPayload struct {
 	Found           bool                           `json:"found"`
 }
 
-// FrostRetainedGroupHistoryEndpointFingerprint returns the identity committed
-// by the activation manifest for this exact export/RPC endpoint pair.
+// FrostRetainedGroupHistoryEndpointFingerprint returns the complete identity
+// committed by the activation manifest. The caller must supply the explicit
+// endpoint descriptors; URL strings alone are not an authenticated endpoint
+// identity.
 func FrostRetainedGroupHistoryEndpointFingerprint(
-	exportURL string,
-	ethereumURL string,
+	identity FrostRetainedGroupHistoryIdentity,
 ) ([32]byte, error) {
-	_, canonicalExport, err := validateFrostRetainedGroupEndpoint(exportURL, true)
-	if err != nil {
-		return [32]byte{}, fmt.Errorf("invalid retained-group export URL: [%w]", err)
+	if err := validateFrostRetainedGroupHistoryIdentity(identity); err != nil {
+		return [32]byte{}, err
 	}
-	_, canonicalEthereum, err := validateFrostRetainedGroupEndpoint(ethereumURL, false)
-	if err != nil {
-		return [32]byte{}, fmt.Errorf("invalid retained-group Ethereum URL: [%w]", err)
-	}
-	hasher := sha256.New()
-	hasher.Write([]byte(frostRetainedGroupHistoryEndpointDomain))
-	hasher.Write([]byte(canonicalExport))
-	hasher.Write([]byte{0})
-	hasher.Write([]byte(canonicalEthereum))
-	var result [32]byte
-	copy(result[:], hasher.Sum(nil))
-	return result, nil
+	return computeFrostRetainedGroupSourceEndpointFingerprint(identity), nil
 }
 
 // NewFrostRetainedGroupHistorySource creates the production source. It fails
@@ -448,58 +445,82 @@ func NewFrostRetainedGroupHistorySource(
 	if ctx == nil {
 		return nil, fmt.Errorf("retained-group history context is nil")
 	}
-	endpoint, canonicalEthereum, identity, signerHash, timeout, err :=
-		validateFrostRetainedGroupSourceConfig(config, primaryEthereumURL)
+	validated, err := validateAndResolveFrostRetainedGroupSourceConfig(
+		ctx,
+		config,
+		primaryEthereumURL,
+	)
 	if err != nil {
 		return nil, err
 	}
 	if expectedChainID == 0 {
 		return nil, fmt.Errorf("retained-group history expected chain ID is zero")
 	}
-	httpTransport := http.DefaultTransport.(*http.Transport).Clone()
-	httpTransport.Proxy = nil
-	rpcHTTPClient := &http.Client{
-		Transport: httpTransport,
-		Timeout:   timeout,
+	rpcHTTPClient, rpcTransport, err :=
+		newFrostRetainedGroupAttestedHTTPClient(
+			validated.verifierEndpoint,
+			validated.identity.Verifier,
+			validated.rootCAs,
+			validated.requestTimeout,
+		)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot configure independent retained-group Ethereum verifier transport: [%w]",
+			err,
+		)
 	}
 	rpcClient, err := rpc.DialOptions(
 		ctx,
-		canonicalEthereum,
+		validated.verifierEndpoint.canonical,
 		rpc.WithHTTPClient(rpcHTTPClient),
-		rpc.WithWebsocketDialer(websocket.Dialer{
-			HandshakeTimeout: timeout,
-			Proxy:            nil,
-		}),
 	)
 	if err != nil {
+		rpcTransport.CloseIdleConnections()
 		return nil, fmt.Errorf("cannot connect independent retained-group Ethereum verifier: [%w]", err)
 	}
 	verifier := &canonicalFrostRetainedGroupEthereumVerifier{
 		Client:    ethclient.NewClient(rpcClient),
 		rpcClient: rpcClient,
 	}
-	exportTransport := http.DefaultTransport.(*http.Transport).Clone()
-	exportTransport.Proxy = nil
+	exportHTTPClient, exportTransport, err :=
+		newFrostRetainedGroupAttestedHTTPClient(
+			validated.exportEndpoint,
+			validated.identity.Export,
+			validated.rootCAs,
+			validated.requestTimeout,
+		)
+	if err != nil {
+		verifier.Close()
+		rpcTransport.CloseIdleConnections()
+		return nil, fmt.Errorf(
+			"cannot configure retained-group export transport: [%w]",
+			err,
+		)
+	}
 	source, err := newSignedFrostRetainedGroupHistorySource(
 		ctx,
-		endpoint,
+		validated.exportEndpoint.endpoint,
 		verifier,
-		&http.Client{
-			Transport: exportTransport,
-			Timeout:   timeout,
-			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-				return fmt.Errorf("retained-group export redirects are forbidden")
-			},
-		},
+		exportHTTPClient,
 		expectedChainID,
-		identity,
-		signerHash,
-		timeout,
+		validated.identity,
+		validated.identity.HistorySignerKeyHash,
+		validated.requestTimeout,
+		&frostRetainedGroupIndependenceMonitor{
+			exportEndpoint:   validated.exportEndpoint,
+			verifierEndpoint: validated.verifierEndpoint,
+			primaryEndpoint:  validated.primaryEndpoint,
+			resolver:         config.Resolver,
+			timeout:          validated.requestTimeout,
+		},
 	)
 	if err != nil {
 		verifier.Close()
+		rpcTransport.CloseIdleConnections()
+		exportTransport.CloseIdleConnections()
 		return nil, err
 	}
+	source.httpTransports = []*http.Transport{exportTransport, rpcTransport}
 	return source, nil
 }
 
@@ -512,13 +533,18 @@ func newSignedFrostRetainedGroupHistorySource(
 	identity FrostRetainedGroupHistoryIdentity,
 	signerHash [32]byte,
 	requestTimeout time.Duration,
+	independenceMonitor *frostRetainedGroupIndependenceMonitor,
 ) (*signedFrostRetainedGroupHistorySource, error) {
 	if exportEndpoint == nil || verifier == nil || httpClient == nil || chainID == 0 ||
-		strings.TrimSpace(identity.TrustDomainID) == "" ||
-		identity.EndpointFingerprint == [32]byte{} || signerHash == [32]byte{} ||
-		identity.OperatorFingerprint != signerHash ||
+		validateFrostRetainedGroupHistoryIdentity(identity) != nil ||
+		signerHash == [32]byte{} ||
+		identity.HistorySignerKeyHash != signerHash ||
+		independenceMonitor == nil ||
 		requestTimeout < time.Second || requestTimeout > time.Minute {
 		return nil, fmt.Errorf("retained-group history source configuration is incomplete")
+	}
+	if err := independenceMonitor.verify(ctx); err != nil {
+		return nil, err
 	}
 	requestContext, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
@@ -533,6 +559,7 @@ func newSignedFrostRetainedGroupHistorySource(
 		exportEndpoint:       exportEndpoint,
 		verifier:             verifier,
 		httpClient:           httpClient,
+		independenceMonitor:  independenceMonitor,
 		chainID:              chainID,
 		identity:             identity,
 		trustedSignerKeyHash: signerHash,
@@ -549,117 +576,17 @@ func newSignedFrostRetainedGroupHistorySource(
 	return source, nil
 }
 
-func validateFrostRetainedGroupSourceConfig(
-	config FrostRetainedGroupHistorySourceConfig,
-	primaryEthereumURL string,
-) (*url.URL, string, FrostRetainedGroupHistoryIdentity, [32]byte, time.Duration, error) {
-	exportEndpoint, _, err := validateFrostRetainedGroupEndpoint(config.ExportURL, true)
-	if err != nil {
-		return nil, "", FrostRetainedGroupHistoryIdentity{}, [32]byte{}, 0,
-			fmt.Errorf("invalid retained-group export URL: [%w]", err)
-	}
-	ethereumEndpoint, canonicalEthereum, err :=
-		validateFrostRetainedGroupEndpoint(config.EthereumURL, false)
-	if err != nil {
-		return nil, "", FrostRetainedGroupHistoryIdentity{}, [32]byte{}, 0,
-			fmt.Errorf("invalid retained-group Ethereum URL: [%w]", err)
-	}
-	primaryEndpoint, _, err := validateFrostRetainedGroupEndpoint(primaryEthereumURL, false)
-	if err != nil {
-		return nil, "", FrostRetainedGroupHistoryIdentity{}, [32]byte{}, 0,
-			fmt.Errorf("invalid primary Ethereum URL: [%w]", err)
-	}
-	if frostRetainedGroupEndpointsShareAuthority(primaryEndpoint, ethereumEndpoint) ||
-		frostRetainedGroupEndpointsShareAuthority(primaryEndpoint, exportEndpoint) {
-		return nil, "", FrostRetainedGroupHistoryIdentity{}, [32]byte{}, 0,
-			fmt.Errorf("retained-group source is not independent of the primary endpoint")
-	}
-	if frostRetainedGroupEndpointsShareAuthority(exportEndpoint, ethereumEndpoint) {
-		return nil, "", FrostRetainedGroupHistoryIdentity{}, [32]byte{}, 0,
-			fmt.Errorf("retained-group exporter and Ethereum verifier are not independent")
-	}
-	trustDomainID := strings.TrimSpace(config.TrustDomainID)
-	if trustDomainID == "" || len(trustDomainID) > 128 || strings.ContainsAny(trustDomainID, "\x00\r\n\t") {
-		return nil, "", FrostRetainedGroupHistoryIdentity{}, [32]byte{}, 0,
-			fmt.Errorf("retained-group trust domain ID is invalid")
-	}
-	signerHash, err := parseFrostActivationHex32(strings.TrimSpace(config.TrustedSignerKeyHash))
-	if err != nil || signerHash == [32]byte{} {
-		return nil, "", FrostRetainedGroupHistoryIdentity{}, [32]byte{}, 0,
-			fmt.Errorf("retained-group trusted signer key hash is invalid")
-	}
-	endpointFingerprint, err := FrostRetainedGroupHistoryEndpointFingerprint(
-		config.ExportURL,
-		config.EthereumURL,
-	)
-	if err != nil {
-		return nil, "", FrostRetainedGroupHistoryIdentity{}, [32]byte{}, 0, err
-	}
-	timeout := config.RequestTimeout
-	if timeout == 0 {
-		timeout = frostRetainedGroupDefaultTimeout
-	}
-	if timeout < time.Second || timeout > time.Minute {
-		return nil, "", FrostRetainedGroupHistoryIdentity{}, [32]byte{}, 0,
-			fmt.Errorf("retained-group request timeout is outside supported bounds")
-	}
-	return exportEndpoint, canonicalEthereum, FrostRetainedGroupHistoryIdentity{
-		TrustDomainID:       trustDomainID,
-		EndpointFingerprint: endpointFingerprint,
-		OperatorFingerprint: signerHash,
-	}, signerHash, timeout, nil
-}
-
-func frostRetainedGroupEndpointsShareAuthority(left *url.URL, right *url.URL) bool {
-	if left == nil || right == nil || !strings.EqualFold(left.Hostname(), right.Hostname()) {
-		return false
-	}
-	leftIP := net.ParseIP(left.Hostname())
-	rightIP := net.ParseIP(right.Hostname())
-	if leftIP != nil && rightIP != nil && leftIP.IsLoopback() && rightIP.IsLoopback() {
-		return strings.EqualFold(left.Host, right.Host)
-	}
-	return true
-}
-
-func validateFrostRetainedGroupEndpoint(
-	raw string,
-	export bool,
-) (*url.URL, string, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" || trimmed != raw {
-		return nil, "", fmt.Errorf("URL is empty or has surrounding whitespace")
-	}
-	endpoint, err := url.Parse(trimmed)
-	if err != nil || endpoint.Host == "" || endpoint.User != nil || endpoint.Fragment != "" {
-		return nil, "", fmt.Errorf("URL is not an absolute credential-free endpoint")
-	}
-	if export && endpoint.RawQuery != "" {
-		return nil, "", fmt.Errorf("export URL must not contain a query")
-	}
-	scheme := strings.ToLower(endpoint.Scheme)
-	secure := scheme == "https" || (!export && scheme == "wss")
-	insecure := scheme == "http" || (!export && scheme == "ws")
-	if !secure && !insecure {
-		return nil, "", fmt.Errorf("URL scheme is unsupported")
-	}
-	if insecure {
-		ip := net.ParseIP(endpoint.Hostname())
-		if ip == nil || !ip.IsLoopback() {
-			return nil, "", fmt.Errorf("non-TLS endpoint must use a numeric loopback address")
-		}
-	}
-	endpoint.Scheme = scheme
-	endpoint.Host = strings.ToLower(endpoint.Host)
-	if endpoint.Path == "" {
-		endpoint.Path = "/"
-	}
-	return endpoint, endpoint.String(), nil
-}
-
 func (source *signedFrostRetainedGroupHistorySource) Close() {
-	if source != nil && source.verifier != nil {
+	if source == nil {
+		return
+	}
+	if source.verifier != nil {
 		source.verifier.Close()
+	}
+	for _, transport := range source.httpTransports {
+		if transport != nil {
+			transport.CloseIdleConnections()
+		}
 	}
 }
 
@@ -688,6 +615,9 @@ func (source *signedFrostRetainedGroupHistorySource) FinalizedHead(
 ) (FrostPreSignFinality, error) {
 	if ctx == nil {
 		return FrostPreSignFinality{}, fmt.Errorf("retained-group finalized-head context is nil")
+	}
+	if err := source.independenceMonitor.verify(ctx); err != nil {
+		return FrostPreSignFinality{}, err
 	}
 	requestContext, cancel := source.requestContext(ctx)
 	defer cancel()
@@ -1215,6 +1145,9 @@ func (source *signedFrostRetainedGroupHistorySource) postSigned(
 	requestPayload interface{},
 	responsePayload interface{},
 ) (uint64, error) {
+	if err := source.independenceMonitor.verify(ctx); err != nil {
+		return 0, err
+	}
 	requestContext, cancel := source.requestContext(ctx)
 	defer cancel()
 	requestBody, err := json.Marshal(requestPayload)
@@ -1239,6 +1172,12 @@ func (source *signedFrostRetainedGroupHistorySource) postSigned(
 		return 0, err
 	}
 	defer response.Body.Close()
+	if err := requireFrostRetainedGroupTransportProof(
+		response,
+		source.identity.Export.Role,
+	); err != nil {
+		return 0, err
+	}
 	if response.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("retained-group export returned HTTP status [%d]", response.StatusCode)
 	}
@@ -1283,7 +1222,9 @@ func (source *signedFrostRetainedGroupHistorySource) verifySignedEnvelope(
 	if err != nil || declaredHash != payloadHash {
 		return fmt.Errorf("retained-group signed envelope payload hash mismatch")
 	}
-	publicKeyDER, err := base64.StdEncoding.Strict().DecodeString(envelope.SignerPublicKeySPKI)
+	publicKeyDER, err := decodeCanonicalFrostRetainedGroupBase64(
+		envelope.SignerPublicKeySPKI,
+	)
 	if err != nil || len(publicKeyDER) == 0 || len(publicKeyDER) > 1024 ||
 		sha256.Sum256(publicKeyDER) != source.trustedSignerKeyHash {
 		return fmt.Errorf("retained-group export signer is not trusted")
@@ -1296,7 +1237,9 @@ func (source *signedFrostRetainedGroupHistorySource) verifySignedEnvelope(
 	if !ok {
 		return fmt.Errorf("retained-group export signer is not Ed25519")
 	}
-	signature, err := base64.StdEncoding.Strict().DecodeString(envelope.Signature)
+	signature, err := decodeCanonicalFrostRetainedGroupBase64(
+		envelope.Signature,
+	)
 	signed := append([]byte(frostRetainedGroupHistorySignatureDomain), canonical...)
 	if err != nil || len(signature) != ed25519.SignatureSize ||
 		!ed25519.Verify(publicKey, signed, signature) {
@@ -1311,11 +1254,8 @@ func (source *signedFrostRetainedGroupHistorySource) verifySignedEnvelope(
 func (source *signedFrostRetainedGroupHistorySource) validWireIdentity(
 	identity frostRetainedGroupWireIdentity,
 ) bool {
-	endpoint, endpointErr := parseFrostActivationHex32(identity.EndpointFingerprint)
-	operator, operatorErr := parseFrostActivationHex32(identity.OperatorFingerprint)
-	return identity.TrustDomainID == source.identity.TrustDomainID &&
-		endpointErr == nil && endpoint == source.identity.EndpointFingerprint &&
-		operatorErr == nil && operator == source.identity.OperatorFingerprint
+	parsed, err := frostRetainedGroupIdentityFromWire(identity)
+	return err == nil && parsed == source.identity
 }
 
 func frostRetainedGroupDomainHash(domain string, value interface{}) ([32]byte, error) {

@@ -112,6 +112,7 @@ func (source *signedFrostRetainedGroupHistorySource) BindFrostRetainedGroupActiv
 			source.identity.EndpointFingerprint ||
 		runtimeManifest.CanonicalJournal.SourceOperatorFingerprint !=
 			source.identity.OperatorFingerprint ||
+		runtimeManifest.CanonicalJournal.SourceIdentity != source.identity ||
 		new(big.Int).SetBytes(runtimeManifest.DomainChainID[:]).BitLen() > 64 ||
 		new(big.Int).SetBytes(runtimeManifest.DomainChainID[:]).Uint64() !=
 			source.chainID ||
@@ -322,15 +323,7 @@ func (source *signedFrostRetainedGroupHistorySource) computeProtocolBinding(
 		QuarantineClusterFingerprint: frostActivationHex32(
 			runtimeManifest.QuarantineJournal.ClusterFingerprint,
 		),
-		SourceIdentity: frostRetainedGroupWireIdentity{
-			TrustDomainID: source.identity.TrustDomainID,
-			EndpointFingerprint: frostActivationHex32(
-				source.identity.EndpointFingerprint,
-			),
-			OperatorFingerprint: frostActivationHex32(
-				source.identity.OperatorFingerprint,
-			),
-		},
+		SourceIdentity: frostRetainedGroupIdentityToWire(source.identity),
 	}
 	return frostRetainedGroupDomainHash(
 		frostRetainedGroupProtocolBindingDomain,

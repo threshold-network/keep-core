@@ -183,15 +183,43 @@ type frostPreSignManifestEthereum struct {
 }
 
 type frostPreSignManifestCanonicalJournal struct {
-	StoreID                   string                    `json:"storeID"`
-	StoreFingerprint          string                    `json:"storeFingerprint"`
-	ClusterFingerprint        string                    `json:"clusterFingerprint"`
-	Checkpoint                frostPreSignManifestPoint `json:"checkpoint"`
-	DescriptorSetHash         string                    `json:"descriptorSetHash"`
-	SourceTrustDomainID       string                    `json:"sourceTrustDomainID"`
-	SourceEndpointFingerprint string                    `json:"sourceEndpointFingerprint"`
-	SourceOperatorFingerprint string                    `json:"sourceOperatorFingerprint"`
-	MinimumGeneration         uint64                    `json:"minimumGeneration"`
+	StoreID                   string                                     `json:"storeID"`
+	StoreFingerprint          string                                     `json:"storeFingerprint"`
+	ClusterFingerprint        string                                     `json:"clusterFingerprint"`
+	Checkpoint                frostPreSignManifestPoint                  `json:"checkpoint"`
+	DescriptorSetHash         string                                     `json:"descriptorSetHash"`
+	SourceTrustDomainID       string                                     `json:"sourceTrustDomainID"`
+	SourceEndpointFingerprint string                                     `json:"sourceEndpointFingerprint"`
+	SourceOperatorFingerprint string                                     `json:"sourceOperatorFingerprint"`
+	SourceIdentity            frostPreSignManifestRetainedSourceIdentity `json:"sourceIdentity"`
+	MinimumGeneration         uint64                                     `json:"minimumGeneration"`
+}
+
+type frostPreSignManifestRetainedEndpointIdentity struct {
+	Schema                    string `json:"schema"`
+	Role                      string `json:"role"`
+	TrustDomainID             string `json:"trustDomainID"`
+	CanonicalEndpoint         string `json:"canonicalEndpoint"`
+	CanonicalDNSName          string `json:"canonicalDNSName"`
+	ResolvedDNSName           string `json:"resolvedDNSName"`
+	ResolvedAddressSetHash    string `json:"resolvedAddressSetHash"`
+	TLSLeafSPKIHash           string `json:"tlsLeafSpkiHash"`
+	ServiceIdentity           string `json:"serviceIdentity"`
+	BackendServiceFingerprint string `json:"backendServiceFingerprint"`
+	OperatorFingerprint       string `json:"operatorFingerprint"`
+	AttestationKeyHash        string `json:"attestationKeyHash"`
+	TLSExporterProtocolID     string `json:"tlsExporterProtocolID"`
+	EndpointFingerprint       string `json:"endpointFingerprint"`
+}
+
+type frostPreSignManifestRetainedSourceIdentity struct {
+	Schema               string                                       `json:"schema"`
+	TrustDomainID        string                                       `json:"trustDomainID"`
+	EndpointFingerprint  string                                       `json:"endpointFingerprint"`
+	OperatorFingerprint  string                                       `json:"operatorFingerprint"`
+	HistorySignerKeyHash string                                       `json:"historySignerKeyHash"`
+	Export               frostPreSignManifestRetainedEndpointIdentity `json:"export"`
+	Verifier             frostPreSignManifestRetainedEndpointIdentity `json:"verifier"`
 }
 
 type frostPreSignManifestQuarantineJournal struct {
@@ -911,6 +939,75 @@ func validateFrostPreSignActivationManifest(
 		}
 		parsedJournalValues[name] = parsed
 	}
+	sourceIdentity, err := frostPreSignRetainedSourceIdentity(
+		journal.SourceIdentity,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"FROST canonical journal complete endpoint identity is invalid: [%w]",
+			err,
+		)
+	}
+	if sourceIdentity.TrustDomainID != journal.SourceTrustDomainID ||
+		sourceIdentity.EndpointFingerprint !=
+			parsedJournalValues["source endpoint fingerprint"] ||
+		sourceIdentity.OperatorFingerprint !=
+			parsedJournalValues["source operator fingerprint"] {
+		return fmt.Errorf(
+			"FROST canonical journal complete endpoint identity differs from its aggregate fields",
+		)
+	}
+	otherRoleHashes := make(map[[32]byte]string)
+	for name, value := range map[string]string{
+		"Ethereum source endpoint":   manifest.Ethereum.SourceEndpointFingerprint,
+		"Ethereum verifier endpoint": manifest.Ethereum.VerifierEndpointFingerprint,
+		"runtime handshake endpoint": frost.HandshakeEndpointFingerprint,
+		"Ethereum source operator":   manifest.Ethereum.SourceOperatorFingerprint,
+		"Ethereum verifier operator": manifest.Ethereum.VerifierOperatorFingerprint,
+		"runtime handshake operator": frost.HandshakeOperatorFingerprint,
+		"runtime attestation signer": frost.AttestationSignerKeyHash,
+	} {
+		parsed, parseErr := frostPreSignParseBytes32(value)
+		if parseErr != nil || parsed == [32]byte{} {
+			return fmt.Errorf("FROST %s identity is invalid", name)
+		}
+		if previous, exists := otherRoleHashes[parsed]; exists {
+			return fmt.Errorf(
+				"FROST %s identity aliases %s",
+				name,
+				previous,
+			)
+		}
+		otherRoleHashes[parsed] = name
+	}
+	if previous, exists := otherRoleHashes[manifest.activationAuthorityKeyHash]; exists {
+		return fmt.Errorf(
+			"FROST activation authority identity aliases %s",
+			previous,
+		)
+	}
+	otherRoleHashes[manifest.activationAuthorityKeyHash] = "activation authority"
+	for name, value := range map[string][32]byte{
+		"retained export endpoint":      sourceIdentity.Export.EndpointFingerprint,
+		"retained verifier endpoint":    sourceIdentity.Verifier.EndpointFingerprint,
+		"retained export TLS leaf":      sourceIdentity.Export.TLSLeafSPKIHash,
+		"retained verifier TLS leaf":    sourceIdentity.Verifier.TLSLeafSPKIHash,
+		"retained export backend":       sourceIdentity.Export.BackendServiceFingerprint,
+		"retained verifier backend":     sourceIdentity.Verifier.BackendServiceFingerprint,
+		"retained export operator":      sourceIdentity.Export.OperatorFingerprint,
+		"retained verifier operator":    sourceIdentity.Verifier.OperatorFingerprint,
+		"retained history signer":       sourceIdentity.HistorySignerKeyHash,
+		"retained export attestation":   sourceIdentity.Export.AttestationKeyHash,
+		"retained verifier attestation": sourceIdentity.Verifier.AttestationKeyHash,
+	} {
+		if other, exists := otherRoleHashes[value]; exists {
+			return fmt.Errorf(
+				"FROST %s identity aliases %s",
+				name,
+				other,
+			)
+		}
+	}
 	for name, value := range map[string]string{
 		"Ethereum source endpoint":   manifest.Ethereum.SourceEndpointFingerprint,
 		"Ethereum verifier endpoint": manifest.Ethereum.VerifierEndpointFingerprint,
@@ -931,14 +1028,26 @@ func validateFrostPreSignActivationManifest(
 			return fmt.Errorf("FROST canonical journal source operator is not independent of %s", name)
 		}
 	}
+	trustDomains := make(map[string]string)
 	for name, value := range map[string]string{
 		"Ethereum source":   manifest.Ethereum.SourceTrustDomainID,
 		"Ethereum verifier": manifest.Ethereum.VerifierTrustDomainID,
 		"runtime signer":    frost.TrustDomainID,
+		"retained source":   journal.SourceTrustDomainID,
+		"retained export":   sourceIdentity.Export.TrustDomainID,
+		"retained verifier": sourceIdentity.Verifier.TrustDomainID,
 	} {
-		if strings.TrimSpace(value) == "" || value == journal.SourceTrustDomainID {
-			return fmt.Errorf("FROST canonical journal source trust domain is not independent of %s", name)
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
+			return fmt.Errorf("FROST %s trust domain is invalid", name)
 		}
+		if previous, exists := trustDomains[value]; exists {
+			return fmt.Errorf(
+				"FROST %s trust domain aliases %s",
+				name,
+				previous,
+			)
+		}
+		trustDomains[value] = name
 	}
 	quarantine := frost.QuarantineJournal
 	if strings.TrimSpace(quarantine.StoreID) == "" || len(quarantine.StoreID) > 255 {
@@ -1095,6 +1204,109 @@ func frostPreSignNativeSignerAnchorManifest(
 	return result, nil
 }
 
+func frostPreSignRetainedEndpointIdentity(
+	wire frostPreSignManifestRetainedEndpointIdentity,
+) (tbtc.FrostRetainedGroupEndpointIdentity, error) {
+	parse := func(name string, value string) ([32]byte, error) {
+		parsed, err := frostPreSignParseBytes32(value)
+		if err != nil {
+			return [32]byte{}, fmt.Errorf("invalid retained %s: [%w]", name, err)
+		}
+		return parsed, nil
+	}
+	addressSet, err := parse("resolved address-set hash", wire.ResolvedAddressSetHash)
+	if err != nil {
+		return tbtc.FrostRetainedGroupEndpointIdentity{}, err
+	}
+	leaf, err := parse("TLS leaf SPKI hash", wire.TLSLeafSPKIHash)
+	if err != nil {
+		return tbtc.FrostRetainedGroupEndpointIdentity{}, err
+	}
+	backend, err := parse(
+		"backend service fingerprint",
+		wire.BackendServiceFingerprint,
+	)
+	if err != nil {
+		return tbtc.FrostRetainedGroupEndpointIdentity{}, err
+	}
+	operator, err := parse("operator fingerprint", wire.OperatorFingerprint)
+	if err != nil {
+		return tbtc.FrostRetainedGroupEndpointIdentity{}, err
+	}
+	attestation, err := parse("attestation key hash", wire.AttestationKeyHash)
+	if err != nil {
+		return tbtc.FrostRetainedGroupEndpointIdentity{}, err
+	}
+	exporter, err := parse("TLS exporter protocol ID", wire.TLSExporterProtocolID)
+	if err != nil {
+		return tbtc.FrostRetainedGroupEndpointIdentity{}, err
+	}
+	fingerprint, err := parse("endpoint fingerprint", wire.EndpointFingerprint)
+	if err != nil {
+		return tbtc.FrostRetainedGroupEndpointIdentity{}, err
+	}
+	return tbtc.FrostRetainedGroupEndpointIdentity{
+		Schema:                    wire.Schema,
+		Role:                      wire.Role,
+		TrustDomainID:             wire.TrustDomainID,
+		CanonicalEndpoint:         wire.CanonicalEndpoint,
+		CanonicalDNSName:          wire.CanonicalDNSName,
+		ResolvedDNSName:           wire.ResolvedDNSName,
+		ResolvedAddressSetHash:    addressSet,
+		TLSLeafSPKIHash:           leaf,
+		ServiceIdentity:           wire.ServiceIdentity,
+		BackendServiceFingerprint: backend,
+		OperatorFingerprint:       operator,
+		AttestationKeyHash:        attestation,
+		TLSExporterProtocolID:     exporter,
+		EndpointFingerprint:       fingerprint,
+	}, nil
+}
+
+func frostPreSignRetainedSourceIdentity(
+	wire frostPreSignManifestRetainedSourceIdentity,
+) (tbtc.FrostRetainedGroupHistoryIdentity, error) {
+	endpointFingerprint, err := frostPreSignParseBytes32(
+		wire.EndpointFingerprint,
+	)
+	if err != nil {
+		return tbtc.FrostRetainedGroupHistoryIdentity{}, err
+	}
+	operatorFingerprint, err := frostPreSignParseBytes32(
+		wire.OperatorFingerprint,
+	)
+	if err != nil {
+		return tbtc.FrostRetainedGroupHistoryIdentity{}, err
+	}
+	historySignerKeyHash, err := frostPreSignParseBytes32(
+		wire.HistorySignerKeyHash,
+	)
+	if err != nil {
+		return tbtc.FrostRetainedGroupHistoryIdentity{}, err
+	}
+	exportIdentity, err := frostPreSignRetainedEndpointIdentity(wire.Export)
+	if err != nil {
+		return tbtc.FrostRetainedGroupHistoryIdentity{}, err
+	}
+	verifierIdentity, err := frostPreSignRetainedEndpointIdentity(wire.Verifier)
+	if err != nil {
+		return tbtc.FrostRetainedGroupHistoryIdentity{}, err
+	}
+	result := tbtc.FrostRetainedGroupHistoryIdentity{
+		Schema:               wire.Schema,
+		TrustDomainID:        wire.TrustDomainID,
+		EndpointFingerprint:  endpointFingerprint,
+		OperatorFingerprint:  operatorFingerprint,
+		HistorySignerKeyHash: historySignerKeyHash,
+		Export:               exportIdentity,
+		Verifier:             verifierIdentity,
+	}
+	if err := tbtc.ValidateFrostRetainedGroupHistoryIdentity(result); err != nil {
+		return tbtc.FrostRetainedGroupHistoryIdentity{}, err
+	}
+	return result, nil
+}
+
 func validateFrostPreSignQuarantineLiftAuthorities(
 	manifest *frostPreSignActivationManifest,
 ) error {
@@ -1114,11 +1326,19 @@ func validateFrostPreSignQuarantineLiftAuthorities(
 
 	forbidden := make(map[[32]byte]string)
 	for name, value := range map[string]string{
-		"runtime attestation":      frost.AttestationSignerKeyHash,
-		"runtime exporter":         frost.HandshakeOperatorFingerprint,
-		"retained history source":  frost.CanonicalJournal.SourceOperatorFingerprint,
-		"primary history source":   manifest.Ethereum.SourceOperatorFingerprint,
-		"primary history verifier": manifest.Ethereum.VerifierOperatorFingerprint,
+		"runtime attestation":           frost.AttestationSignerKeyHash,
+		"runtime exporter":              frost.HandshakeOperatorFingerprint,
+		"retained history source":       frost.CanonicalJournal.SourceOperatorFingerprint,
+		"retained history verifier":     frost.CanonicalJournal.SourceIdentity.Verifier.OperatorFingerprint,
+		"retained history signer":       frost.CanonicalJournal.SourceIdentity.HistorySignerKeyHash,
+		"retained export TLS leaf":      frost.CanonicalJournal.SourceIdentity.Export.TLSLeafSPKIHash,
+		"retained verifier TLS leaf":    frost.CanonicalJournal.SourceIdentity.Verifier.TLSLeafSPKIHash,
+		"retained export backend":       frost.CanonicalJournal.SourceIdentity.Export.BackendServiceFingerprint,
+		"retained verifier backend":     frost.CanonicalJournal.SourceIdentity.Verifier.BackendServiceFingerprint,
+		"retained export attestation":   frost.CanonicalJournal.SourceIdentity.Export.AttestationKeyHash,
+		"retained verifier attestation": frost.CanonicalJournal.SourceIdentity.Verifier.AttestationKeyHash,
+		"primary history source":        manifest.Ethereum.SourceOperatorFingerprint,
+		"primary history verifier":      manifest.Ethereum.VerifierOperatorFingerprint,
 	} {
 		hash, err := frostPreSignParseBytes32(value)
 		if err != nil || hash == [32]byte{} {
@@ -2463,6 +2683,12 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 	if err != nil {
 		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
 	}
+	sourceIdentity, err := frostPreSignRetainedSourceIdentity(
+		journal.SourceIdentity,
+	)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
 	quarantineStoreFingerprint, err := parse(quarantine.StoreFingerprint)
 	if err != nil {
 		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
@@ -2518,6 +2744,7 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 			SourceTrustDomainID:       journal.SourceTrustDomainID,
 			SourceEndpointFingerprint: sourceEndpointFingerprint,
 			SourceOperatorFingerprint: sourceOperatorFingerprint,
+			SourceIdentity:            sourceIdentity,
 			MinimumGeneration:         journal.MinimumGeneration,
 		},
 		QuarantineJournal: tbtc.FrostRetainedGroupQuarantineJournalManifest{
@@ -2544,13 +2771,17 @@ func frostPreSignEndpointIdentitySetHash(
 	ethereum := manifest.Ethereum
 	frost := manifest.FrostSigner
 	type identity struct {
-		role                string
-		trustDomainID       string
-		endpointFingerprint string
-		operatorFingerprint string
-		storeID             string
-		storeFingerprint    string
-		clusterFingerprint  string
+		role                 string
+		trustDomainID        string
+		endpointFingerprint  string
+		tlsLeafSPKIHash      string
+		operatorFingerprint  string
+		backendFingerprint   string
+		attestationKeyHash   string
+		historySignerKeyHash string
+		storeID              string
+		storeFingerprint     string
+		clusterFingerprint   string
 	}
 	identities := []identity{
 		{
@@ -2570,13 +2801,32 @@ func frostPreSignEndpointIdentitySetHash(
 			storeFingerprint:    ethereum.VerifierHistoryStoreFingerprint,
 		},
 		{
-			role:                "retained-group-export",
-			trustDomainID:       frost.CanonicalJournal.SourceTrustDomainID,
-			endpointFingerprint: frost.CanonicalJournal.SourceEndpointFingerprint,
-			operatorFingerprint: frost.CanonicalJournal.SourceOperatorFingerprint,
-			storeID:             frost.CanonicalJournal.StoreID,
-			storeFingerprint:    frost.CanonicalJournal.StoreFingerprint,
-			clusterFingerprint:  frost.CanonicalJournal.ClusterFingerprint,
+			role:                 "retained-group-source",
+			trustDomainID:        frost.CanonicalJournal.SourceTrustDomainID,
+			endpointFingerprint:  frost.CanonicalJournal.SourceEndpointFingerprint,
+			operatorFingerprint:  frost.CanonicalJournal.SourceOperatorFingerprint,
+			historySignerKeyHash: frost.CanonicalJournal.SourceIdentity.HistorySignerKeyHash,
+			storeID:              frost.CanonicalJournal.StoreID,
+			storeFingerprint:     frost.CanonicalJournal.StoreFingerprint,
+			clusterFingerprint:   frost.CanonicalJournal.ClusterFingerprint,
+		},
+		{
+			role:                "retained-history-export",
+			trustDomainID:       frost.CanonicalJournal.SourceIdentity.Export.TrustDomainID,
+			endpointFingerprint: frost.CanonicalJournal.SourceIdentity.Export.EndpointFingerprint,
+			tlsLeafSPKIHash:     frost.CanonicalJournal.SourceIdentity.Export.TLSLeafSPKIHash,
+			operatorFingerprint: frost.CanonicalJournal.SourceIdentity.Export.OperatorFingerprint,
+			backendFingerprint:  frost.CanonicalJournal.SourceIdentity.Export.BackendServiceFingerprint,
+			attestationKeyHash:  frost.CanonicalJournal.SourceIdentity.Export.AttestationKeyHash,
+		},
+		{
+			role:                "retained-history-verifier",
+			trustDomainID:       frost.CanonicalJournal.SourceIdentity.Verifier.TrustDomainID,
+			endpointFingerprint: frost.CanonicalJournal.SourceIdentity.Verifier.EndpointFingerprint,
+			tlsLeafSPKIHash:     frost.CanonicalJournal.SourceIdentity.Verifier.TLSLeafSPKIHash,
+			operatorFingerprint: frost.CanonicalJournal.SourceIdentity.Verifier.OperatorFingerprint,
+			backendFingerprint:  frost.CanonicalJournal.SourceIdentity.Verifier.BackendServiceFingerprint,
+			attestationKeyHash:  frost.CanonicalJournal.SourceIdentity.Verifier.AttestationKeyHash,
 		},
 		{
 			role:                "runtime-handshake",
@@ -2586,7 +2836,7 @@ func frostPreSignEndpointIdentitySetHash(
 		},
 	}
 	hasher := sha256.New()
-	hasher.Write([]byte("tbtc-frost-endpoint-identity-set-v1\x00"))
+	hasher.Write([]byte("tbtc-frost-endpoint-identity-set-v3\x00"))
 	for _, entry := range identities {
 		endpointFingerprint, err := frostPreSignParseBytes32(
 			entry.endpointFingerprint,
@@ -2604,6 +2854,24 @@ func frostPreSignEndpointIdentitySetHash(
 		frostPreSignWriteHashString(hasher, entry.trustDomainID)
 		hasher.Write(endpointFingerprint[:])
 		hasher.Write(operatorFingerprint[:])
+		for _, value := range []string{
+			entry.tlsLeafSPKIHash,
+			entry.backendFingerprint,
+			entry.attestationKeyHash,
+			entry.historySignerKeyHash,
+		} {
+			if value == "" {
+				hasher.Write(make([]byte, 32))
+				continue
+			}
+			parsed, err := frostPreSignParseBytes32(value)
+			if err != nil || parsed == [32]byte{} {
+				return [32]byte{}, fmt.Errorf(
+					"invalid endpoint identity role hash",
+				)
+			}
+			hasher.Write(parsed[:])
+		}
 		frostPreSignWriteHashString(hasher, entry.storeID)
 		if entry.storeFingerprint == "" {
 			hasher.Write(make([]byte, 32))

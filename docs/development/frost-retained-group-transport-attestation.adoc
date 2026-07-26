@@ -1,0 +1,243 @@
+= FROST retained-group endpoint and transport attestation v1
+
+This document specifies the wire contract required by the FROST retained-group
+history export and independent Ethereum verifier endpoints. It is a fail-closed
+protocol: a normal HTTPS or JSON-RPC response without all of these proofs is not
+conforming.
+
+== Endpoint roles
+
+The activation manifest commits a source identity and two endpoint identities:
+
+* `retained-history-export`
+* `retained-history-verifier`
+
+Each endpoint identity commits all of the following:
+
+* canonical HTTPS URL, canonical DNS name, resolved CNAME, and the hash of the
+  frozen resolved IP set;
+* TLS 1.3 leaf SPKI hash and exactly one SPIFFE URI SAN;
+* backend Ed25519 SPKI hash;
+* operator Ed25519 SPKI hash;
+* transport-attestation Ed25519 SPKI hash; and
+* TLS exporter protocol ID.
+
+The source identity additionally commits the retained-history envelope-signing
+Ed25519 SPKI hash. The TLS leaf, backend, operator, transport-attestation, and
+history-envelope keys are distinct roles. The export and verifier instances
+must not reuse any role key, SPIFFE ID, trust domain, DNS/CNAME identity, or
+resolved backend address.
+
+Each endpoint `TrustDomainID` is exactly the authority component of its SPIFFE
+service identity. The export and verifier therefore use different SPIFFE trust
+domains, not merely different paths under one authority.
+
+`BackendServiceFingerprint` and `OperatorFingerprint` are SHA-256 hashes of
+DER-encoded PKIX Ed25519 SubjectPublicKeyInfo values. They are not arbitrary
+labels. The backend and operator key holders sign every response, as described
+below. The backend key must be held by the backend being identified; the
+operator key must be held by the manifest-authorized operator. Co-locating
+either key only at an untrusted TLS edge defeats the role separation.
+
+== Canonical transcript encoding
+
+Every transcript starts with its ASCII domain string, including the terminal
+NUL byte. Each field is then appended in the specified order as:
+
+....
+uint64_be(length(field_name))
+field_name bytes
+uint64_be(length(field_value))
+field_value bytes
+....
+
+Text values use their exact UTF-8 bytes. A `bytes32` value is the raw 32 bytes,
+not its hexadecimal representation. A `uint64` value is eight-byte
+big-endian.
+
+Endpoint and source fingerprints use the field order defined by
+`computeFrostRetainedGroupEndpointFingerprint` and
+`computeFrostRetainedGroupSourceEndpointFingerprint`. Frozen vectors are in
+`TestFrostRetainedGroupIdentityFingerprintsFrozen`.
+
+== TLS profile
+
+The connection must:
+
+* negotiate exactly TLS 1.3 and HTTP/1.1;
+* pass normal PKIX validation for the canonical endpoint host;
+* present the manifest-pinned leaf SPKI;
+* present a non-CA X.509-SVID leaf with `digitalSignature`, without
+  `keyCertSign` or `cRLSign`;
+* include both `serverAuth` and `clientAuth` when an EKU extension is present;
+  and
+* contain exactly one URI SAN, equal to the manifest SPIFFE service identity.
+
+The client connects only to the manifest-frozen IP set. Proxies, redirects,
+connection reuse, compression, content transformation, query strings, encoded
+paths, path normalization, and Host overrides are forbidden.
+
+== Request challenge
+
+For every POST, the client generates 32 fresh random bytes and sends their
+lowercase, unprefixed hexadecimal encoding in:
+
+....
+Tbtc-Retained-Transport-Challenge
+....
+
+The request method, absolute canonical request target, and SHA-256 of the exact
+request-body bytes are bound into the proof.
+
+== TLS exporter
+
+The exporter context is the canonical transcript with domain:
+
+....
+tbtc-frost-retained-group-tls-exporter-context/v1\0
+....
+
+and fields, in order:
+
+....
+endpointFingerprint bytes32
+challenge bytes32
+requestMethod text
+requestTarget text
+requestBodySha256 bytes32
+responseStatus uint64
+responseBodySha256 bytes32
+....
+
+The TLS exporter call is:
+
+....
+label   = "EXPORTER-tbtc-frost-retained-group-v1"
+context = exporter_context_sha256
+length  = 32
+....
+
+The resulting 32 bytes are hashed with the canonical transcript domain
+`tbtc-frost-retained-group-tls-exporter-value/v1\0` and one byte-string field
+named `exporterValue`.
+
+== Response attestation
+
+Every response, including non-200 responses, carries exactly one:
+
+....
+Tbtc-Retained-Transport-Attestation
+....
+
+The header is canonical padded standard Base64 of a strict JSON object with
+schema `tbtc-frost-retained-group-transport-attestation/v1`. Duplicate,
+unknown, missing, non-canonically encoded, or oversized values are rejected.
+The JSON fields are defined by `frostRetainedGroupTransportAttestation`.
+
+The signed transport transcript uses domain:
+
+....
+tbtc-frost-retained-group-transport-attestation/v1\0
+....
+
+and these fields, in order:
+
+....
+schema text
+role text
+endpointFingerprint bytes32
+canonicalEndpoint text
+canonicalDNSName text
+resolvedDNSName text
+resolvedPeerIP text
+tlsLeafSpkiHash bytes32
+serviceIdentity text
+backendServiceFingerprint bytes32
+operatorFingerprint bytes32
+attestationKeyHash bytes32
+tlsExporterProtocolID bytes32
+challenge bytes32
+requestMethod text
+requestTarget text
+requestBodySha256 bytes32
+responseStatus uint64
+responseBodySha256 bytes32
+issuedAtUnixMs uint64
+expiresAtUnixMs uint64
+tlsExporterContextSha256 bytes32
+tlsExporterValueSha256 bytes32
+....
+
+The backend signs a domain-separated transcript containing the transport
+transcript digest:
+
+....
+domain = "tbtc-frost-retained-group-backend-attestation/v1\0"
+field  = transportAttestationDigest bytes32
+....
+
+The operator signs the equivalent transcript under domain:
+
+....
+tbtc-frost-retained-group-operator-attestation/v1\0
+....
+
+The transport-attestation key signs the transport transcript digest directly.
+All three algorithms are exactly `ed25519`. Every public key is canonical
+padded Base64 of DER PKIX SubjectPublicKeyInfo and must hash to its distinct
+manifest role. Every signature is canonical padded Base64.
+
+Attestations have a maximum 30-second lifetime. Clients allow at most five
+seconds of clock skew and reject non-canonical or overflowing decimal
+timestamps.
+
+== Frozen conformance vector
+
+`TestFrostRetainedGroupTransportAttestationFrozenVectors` is the normative
+machine-readable vector. Its fixed outputs are:
+
+....
+TLS exporter context:
+50587c477f56e9d2597c4cf4d9cf69d69a8ded13b9a074d1c18042eb4aea2e30
+
+TLS exporter value hash:
+62e2fd2ccb30b5e2ca49a99f04cbb01a947d8228060ee377dc6896c6c96a08b0
+
+Transport attestation digest:
+53eb0f08ca2c1761592ec90387c5aba9913668ef68c1e4cf6f20dbbd531e267b
+
+Backend digest:
+7fb92657871cf2dd864eeffaac5d699f1131f81b04507b2092f90987aa4a722c
+
+Operator digest:
+02495d610fde3ad437a22de7e93dae5394d34a0ef4e590f4d613e3fa6197cbc4
+
+Transport signature:
+AV8bIwrHUE6ACkJ9vQWtQTVXGJDR8Nm42nQqCka8NISgXIIPbW2abLhOrGlX/bnYVUUUMbhRfcyYCf+asQ9KBg==
+
+Backend signature:
+0ACdPMwZaraKgWpVRMNnwc6qgLtB90rGDoj18kYCcbd2jJG36VCVf0j5OhHlqP5KoQbzKwJ9BRelXF1pYd/yDA==
+
+Operator signature:
+lx22S9wJxUSOsgZZlWqP7S5bTdoULktZQ9Ao7KDwdpI8zJDkq3AD76rj737DSthJUt0+6IEdElMyiCnXwdgFBg==
+
+SHA-256 of the exact JSON response-attestation object:
+174da49defe9c6b6c669a8a33177ccf6257df24e1316c650734c8ff35099dcdb
+....
+
+An independently implemented endpoint must reproduce these values before it is
+eligible for activation.
+
+== Primary-endpoint independence limitation
+
+The retained export and verifier transports are channel-bound as specified
+above. The current keep-core primary Ethereum client does not expose its actual
+connected peer or TLS identity to this component. The retained-history client
+therefore re-resolves the primary URL at every verification boundary and
+rejects DNS/CNAME/IP overlap, but cannot cryptographically bind that observation
+to the primary client's existing connection.
+
+Production activation remains no-go until the primary client exposes a
+manifest-bound connected-peer identity (or is created through a shared pinned
+transport) so split-horizon DNS, proxies, and persistent-connection drift can
+also be excluded.

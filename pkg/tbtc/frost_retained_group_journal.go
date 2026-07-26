@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	frostRetainedGroupJournalMetadataSchema = "tbtc-frost-retained-group-journal-metadata/v3"
+	frostRetainedGroupJournalMetadataSchema = "tbtc-frost-retained-group-journal-metadata/v4"
 	frostRetainedGroupJournalBatchSchema    = "tbtc-frost-retained-group-journal-batch/v3"
 	frostRetainedGroupJournalStateSchema    = "tbtc-frost-retained-group-journal-state/v3"
 	frostRetainedGroupJournalSnapshotSchema = "tbtc-frost-retained-group-journal-snapshot/v4"
@@ -54,6 +54,7 @@ const (
 	frostRetainedGroupQuarantineBatchV1       = "tbtc-frost-retained-group-quarantine-batch/v1"
 	frostRetainedGroupQuarantineStateV1       = "tbtc-frost-retained-group-quarantine-state/v1"
 	frostRetainedGroupJournalMetadataSchemaV2 = "tbtc-frost-retained-group-journal-metadata/v2"
+	frostRetainedGroupJournalMetadataSchemaV3 = "tbtc-frost-retained-group-journal-metadata/v3"
 	frostRetainedGroupJournalBatchSchemaV2    = "tbtc-frost-retained-group-journal-batch/v2"
 	frostRetainedGroupJournalStateSchemaV2    = "tbtc-frost-retained-group-journal-state/v2"
 	frostRetainedGroupQuarantineMetadataV2    = "tbtc-frost-retained-group-quarantine-metadata/v2"
@@ -264,12 +265,6 @@ type FrostRetainedGroupQuarantineLiftCertificate struct {
 	Signatures []FrostRetainedGroupQuarantineLiftSignature `json:"signatures"`
 }
 
-type FrostRetainedGroupHistoryIdentity struct {
-	TrustDomainID       string
-	EndpointFingerprint [32]byte
-	OperatorFingerprint [32]byte
-}
-
 type FrostRetainedGroupHistory struct {
 	From                FrostPreSignFinality
 	To                  FrostPreSignFinality
@@ -316,6 +311,7 @@ type FrostRetainedGroupCanonicalJournalManifest struct {
 	SourceTrustDomainID       string
 	SourceEndpointFingerprint [32]byte
 	SourceOperatorFingerprint [32]byte
+	SourceIdentity            FrostRetainedGroupHistoryIdentity
 	MinimumGeneration         uint64
 }
 
@@ -484,11 +480,18 @@ func frostRetainedGroupLiftPolicyFromRuntimeManifest(
 		)
 	}
 	forbidden := map[[32]byte]string{
-		runtimeManifest.ActivationAuthorityKeyHash:                 "activation",
-		runtimeManifest.AttestationSignerKeyHash:                   "runtime attestation",
-		runtimeManifest.HandshakeOperatorFingerprint:               "runtime exporter",
-		runtimeManifest.CanonicalJournal.SourceOperatorFingerprint: "retained history source",
-		runtimeManifest.VerifierOperatorFingerprint:                "history verifier",
+		runtimeManifest.ActivationAuthorityKeyHash:                                         "activation",
+		runtimeManifest.AttestationSignerKeyHash:                                           "runtime attestation",
+		runtimeManifest.HandshakeOperatorFingerprint:                                       "runtime exporter",
+		runtimeManifest.CanonicalJournal.SourceOperatorFingerprint:                         "retained history source",
+		runtimeManifest.VerifierOperatorFingerprint:                                        "history verifier",
+		runtimeManifest.CanonicalJournal.SourceIdentity.HistorySignerKeyHash:               "retained history signer",
+		runtimeManifest.CanonicalJournal.SourceIdentity.Export.TLSLeafSPKIHash:             "retained export TLS leaf",
+		runtimeManifest.CanonicalJournal.SourceIdentity.Verifier.TLSLeafSPKIHash:           "retained verifier TLS leaf",
+		runtimeManifest.CanonicalJournal.SourceIdentity.Export.BackendServiceFingerprint:   "retained export backend",
+		runtimeManifest.CanonicalJournal.SourceIdentity.Verifier.BackendServiceFingerprint: "retained verifier backend",
+		runtimeManifest.CanonicalJournal.SourceIdentity.Export.AttestationKeyHash:          "retained export attestation",
+		runtimeManifest.CanonicalJournal.SourceIdentity.Verifier.AttestationKeyHash:        "retained verifier attestation",
 	}
 	for hash, role := range forbidden {
 		if hash == [32]byte{} {
@@ -791,17 +794,18 @@ func validateFrostRetainedGroupLiftCertificate(
 }
 
 type frostRetainedGroupJournalMetadata struct {
-	Schema                    string               `json:"schema"`
-	ManifestHash              [32]byte             `json:"manifestHash"`
-	BindingHash               [32]byte             `json:"bindingHash"`
-	StoreID                   string               `json:"storeID"`
-	StoreFingerprint          [32]byte             `json:"storeFingerprint"`
-	ClusterFingerprint        [32]byte             `json:"clusterFingerprint"`
-	Checkpoint                FrostPreSignFinality `json:"checkpoint"`
-	DescriptorSetHash         [32]byte             `json:"descriptorSetHash"`
-	SourceTrustDomainID       string               `json:"sourceTrustDomainID"`
-	SourceEndpointFingerprint [32]byte             `json:"sourceEndpointFingerprint"`
-	SourceOperatorFingerprint [32]byte             `json:"sourceOperatorFingerprint"`
+	Schema                    string                            `json:"schema"`
+	ManifestHash              [32]byte                          `json:"manifestHash"`
+	BindingHash               [32]byte                          `json:"bindingHash"`
+	StoreID                   string                            `json:"storeID"`
+	StoreFingerprint          [32]byte                          `json:"storeFingerprint"`
+	ClusterFingerprint        [32]byte                          `json:"clusterFingerprint"`
+	Checkpoint                FrostPreSignFinality              `json:"checkpoint"`
+	DescriptorSetHash         [32]byte                          `json:"descriptorSetHash"`
+	SourceTrustDomainID       string                            `json:"sourceTrustDomainID"`
+	SourceEndpointFingerprint [32]byte                          `json:"sourceEndpointFingerprint"`
+	SourceOperatorFingerprint [32]byte                          `json:"sourceOperatorFingerprint"`
+	SourceIdentity            FrostRetainedGroupHistoryIdentity `json:"sourceIdentity"`
 }
 
 type frostRetainedGroupWalletState struct {
@@ -1029,6 +1033,10 @@ func newFrostRetainedGroupJournal(
 		strings.TrimSpace(manifest.SourceTrustDomainID) == "" ||
 		manifest.SourceEndpointFingerprint == [32]byte{} ||
 		manifest.SourceOperatorFingerprint == [32]byte{} ||
+		validateFrostRetainedGroupHistoryIdentity(manifest.SourceIdentity) != nil ||
+		manifest.SourceTrustDomainID != manifest.SourceIdentity.TrustDomainID ||
+		manifest.SourceEndpointFingerprint != manifest.SourceIdentity.EndpointFingerprint ||
+		manifest.SourceOperatorFingerprint != manifest.SourceIdentity.OperatorFingerprint ||
 		quarantineManifest.ProtocolID == [32]byte{} ||
 		quarantineManifest.LiftProtocolID == [32]byte{} ||
 		quarantineManifest.TombstoneProtocolID == [32]byte{} ||
@@ -1110,6 +1118,7 @@ func newFrostRetainedGroupJournal(
 			SourceTrustDomainID:       manifest.SourceTrustDomainID,
 			SourceEndpointFingerprint: manifest.SourceEndpointFingerprint,
 			SourceOperatorFingerprint: manifest.SourceOperatorFingerprint,
+			SourceIdentity:            manifest.SourceIdentity,
 		},
 		quarantineMetadata: frostRetainedGroupQuarantineMetadata{
 			Schema:                 frostRetainedGroupQuarantineMetadataSchema,
@@ -1271,7 +1280,8 @@ func (frgj *frostRetainedGroupJournal) initialize() error {
 			return fmt.Errorf("cannot read FROST retained-group journal metadata: [%w]", err)
 		}
 		if stored.Schema == frostRetainedGroupJournalMetadataSchemaV1 ||
-			stored.Schema == frostRetainedGroupJournalMetadataSchemaV2 {
+			stored.Schema == frostRetainedGroupJournalMetadataSchemaV2 ||
+			stored.Schema == frostRetainedGroupJournalMetadataSchemaV3 {
 			return frostRetainedGroupLegacySchemaError("canonical metadata")
 		}
 		if stored != frgj.metadata {
@@ -1376,7 +1386,8 @@ func (frgj *frostRetainedGroupJournal) verifyHistorySourceIdentity(
 	}
 	if identity.TrustDomainID != frgj.metadata.SourceTrustDomainID ||
 		identity.EndpointFingerprint != frgj.metadata.SourceEndpointFingerprint ||
-		identity.OperatorFingerprint != frgj.metadata.SourceOperatorFingerprint {
+		identity.OperatorFingerprint != frgj.metadata.SourceOperatorFingerprint ||
+		identity != frgj.metadata.SourceIdentity {
 		return fmt.Errorf("FROST retained-group history source identity differs from signed manifest")
 	}
 	return nil

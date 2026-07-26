@@ -65,18 +65,19 @@ type frostActivationHandshakeRequest struct {
 }
 
 type frostActivationCanonicalJournalState struct {
-	StoreID                   string                       `json:"storeID"`
-	StoreFingerprint          string                       `json:"storeFingerprint"`
-	ClusterFingerprint        string                       `json:"clusterFingerprint"`
-	BindingHash               string                       `json:"bindingHash"`
-	Checkpoint                frostActivationEthereumPoint `json:"checkpoint"`
-	Current                   frostActivationEthereumPoint `json:"current"`
-	DescriptorSetHash         string                       `json:"descriptorSetHash"`
-	SourceTrustDomainID       string                       `json:"sourceTrustDomainID"`
-	SourceEndpointFingerprint string                       `json:"sourceEndpointFingerprint"`
-	SourceOperatorFingerprint string                       `json:"sourceOperatorFingerprint"`
-	Generation                uint64                       `json:"generation"`
-	Complete                  bool                         `json:"complete"`
+	StoreID                   string                         `json:"storeID"`
+	StoreFingerprint          string                         `json:"storeFingerprint"`
+	ClusterFingerprint        string                         `json:"clusterFingerprint"`
+	BindingHash               string                         `json:"bindingHash"`
+	Checkpoint                frostActivationEthereumPoint   `json:"checkpoint"`
+	Current                   frostActivationEthereumPoint   `json:"current"`
+	DescriptorSetHash         string                         `json:"descriptorSetHash"`
+	SourceTrustDomainID       string                         `json:"sourceTrustDomainID"`
+	SourceEndpointFingerprint string                         `json:"sourceEndpointFingerprint"`
+	SourceOperatorFingerprint string                         `json:"sourceOperatorFingerprint"`
+	SourceIdentity            frostRetainedGroupWireIdentity `json:"sourceIdentity"`
+	Generation                uint64                         `json:"generation"`
+	Complete                  bool                           `json:"complete"`
 }
 
 type frostActivationWalletGroupInventory struct {
@@ -1028,6 +1029,7 @@ func (fahe *frostActivationHandshakeExporter) attest(
 			SourceTrustDomainID:       journalManifest.SourceTrustDomainID,
 			SourceEndpointFingerprint: frostActivationHex32(journalManifest.SourceEndpointFingerprint),
 			SourceOperatorFingerprint: frostActivationHex32(journalManifest.SourceOperatorFingerprint),
+			SourceIdentity:            frostRetainedGroupIdentityToWire(journalManifest.SourceIdentity),
 			Generation:                journalSnapshot.SnapshotGeneration,
 			Complete:                  true,
 		},

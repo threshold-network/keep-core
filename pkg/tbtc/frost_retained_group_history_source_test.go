@@ -3,17 +3,24 @@ package tbtc
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -246,13 +253,27 @@ func (verifier *frostRetainedGroupHistoryTestVerifier) CallContractAtHash(
 }
 
 type frostRetainedGroupHistoryTestExport struct {
-	t                 *testing.T
-	privateKey        ed25519.PrivateKey
-	publicKeyDER      []byte
-	historyResponder  func(frostRetainedGroupHistoryPageRequest) interface{}
-	operatorResponder func(frostRetainedGroupOperatorQuery) interface{}
-	corruptSignature  bool
-	bindingHash       [32]byte
+	t                             *testing.T
+	privateKey                    ed25519.PrivateKey
+	publicKeyDER                  []byte
+	transportPrivateKey           ed25519.PrivateKey
+	transportPublicKeyDER         []byte
+	backendPrivateKey             ed25519.PrivateKey
+	backendPublicKeyDER           []byte
+	operatorPrivateKey            ed25519.PrivateKey
+	operatorPublicKeyDER          []byte
+	historyResponder              func(frostRetainedGroupHistoryPageRequest) interface{}
+	operatorResponder             func(frostRetainedGroupOperatorQuery) interface{}
+	corruptSignature              bool
+	bindingHash                   [32]byte
+	identity                      FrostRetainedGroupEndpointIdentity
+	now                           func() time.Time
+	transportAttestationMutator   func(*frostRetainedGroupTransportAttestation)
+	omitTransportAttestation      bool
+	duplicateTransportAttestation bool
+	replayTransportAttestation    bool
+	transportAttestationMutex     sync.Mutex
+	savedTransportAttestation     string
 }
 
 func (export *frostRetainedGroupHistoryTestExport) ServeHTTP(
@@ -263,18 +284,24 @@ func (export *frostRetainedGroupHistoryTestExport) ServeHTTP(
 		http.Error(responseWriter, "method", http.StatusMethodNotAllowed)
 		return
 	}
+	requestBody, err := io.ReadAll(request.Body)
+	if err != nil {
+		http.Error(responseWriter, "request", http.StatusBadRequest)
+		return
+	}
+	request.Body = io.NopCloser(bytes.NewReader(requestBody))
 	var payload interface{}
 	switch request.URL.Path {
 	case "/history":
 		historyRequest := frostRetainedGroupHistoryPageRequest{}
-		if err := json.NewDecoder(request.Body).Decode(&historyRequest); err != nil {
+		if err := json.NewDecoder(bytes.NewReader(requestBody)).Decode(&historyRequest); err != nil {
 			http.Error(responseWriter, "request", http.StatusBadRequest)
 			return
 		}
 		payload = export.historyResponder(historyRequest)
 	case "/operator-id":
 		operatorRequest := frostRetainedGroupOperatorQuery{}
-		if err := json.NewDecoder(request.Body).Decode(&operatorRequest); err != nil {
+		if err := json.NewDecoder(bytes.NewReader(requestBody)).Decode(&operatorRequest); err != nil {
 			http.Error(responseWriter, "request", http.StatusBadRequest)
 			return
 		}
@@ -284,7 +311,14 @@ func (export *frostRetainedGroupHistoryTestExport) ServeHTTP(
 		return
 	}
 	if payload == nil {
-		http.Error(responseWriter, "missing", http.StatusServiceUnavailable)
+		request.Body = io.NopCloser(bytes.NewReader(requestBody))
+		export.writeAttestedResponse(
+			responseWriter,
+			request,
+			http.StatusServiceUnavailable,
+			"text/plain",
+			[]byte("missing\n"),
+		)
 		return
 	}
 	canonical, err := canonicalFrostActivationValue(payload)
@@ -306,8 +340,112 @@ func (export *frostRetainedGroupHistoryTestExport) ServeHTTP(
 		SignatureAlgorithm:  "ed25519",
 		Signature:           base64.StdEncoding.EncodeToString(signature),
 	}
-	responseWriter.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(responseWriter).Encode(envelope); err != nil {
+	responseBody, err := json.Marshal(envelope)
+	if err != nil {
+		export.t.Fatal(err)
+	}
+	request.Body = io.NopCloser(bytes.NewReader(requestBody))
+	export.writeAttestedResponse(
+		responseWriter,
+		request,
+		http.StatusOK,
+		"application/json",
+		responseBody,
+	)
+}
+
+func (export *frostRetainedGroupHistoryTestExport) writeAttestedResponse(
+	responseWriter http.ResponseWriter,
+	request *http.Request,
+	status int,
+	contentType string,
+	responseBody []byte,
+) {
+	export.t.Helper()
+	localAddress, ok := request.Context().Value(http.LocalAddrContextKey).(net.Addr)
+	if !ok {
+		export.t.Fatal("missing test server local address")
+	}
+	localIP, err := frostRetainedGroupRemoteIP(localAddress)
+	if err != nil {
+		export.t.Fatal(err)
+	}
+	now := time.Now()
+	if export.now != nil {
+		now = export.now()
+	}
+	attestation, err := marshalFrostRetainedGroupTransportAttestation(
+		request,
+		status,
+		responseBody,
+		export.identity,
+		export.transportPrivateKey,
+		export.transportPublicKeyDER,
+		export.backendPrivateKey,
+		export.backendPublicKeyDER,
+		export.operatorPrivateKey,
+		export.operatorPublicKeyDER,
+		now,
+		localIP,
+	)
+	if err != nil {
+		export.t.Fatal(err)
+	}
+	if export.transportAttestationMutator != nil {
+		raw, err := base64.StdEncoding.Strict().DecodeString(attestation)
+		if err != nil {
+			export.t.Fatal(err)
+		}
+		mutated := frostRetainedGroupTransportAttestation{}
+		if err := decodeStrictFrostActivationJSON(raw, &mutated); err != nil {
+			export.t.Fatal(err)
+		}
+		export.transportAttestationMutator(&mutated)
+		digest, err := frostRetainedGroupAttestationTranscript(mutated)
+		if err != nil {
+			export.t.Fatal(err)
+		}
+		backendDigest := frostRetainedGroupBackendAttestationDigest(digest)
+		mutated.BackendSignature = base64.StdEncoding.EncodeToString(
+			ed25519.Sign(export.backendPrivateKey, backendDigest[:]),
+		)
+		operatorDigest := frostRetainedGroupOperatorAttestationDigest(digest)
+		mutated.OperatorSignature = base64.StdEncoding.EncodeToString(
+			ed25519.Sign(export.operatorPrivateKey, operatorDigest[:]),
+		)
+		mutated.Signature = base64.StdEncoding.EncodeToString(
+			ed25519.Sign(export.transportPrivateKey, digest[:]),
+		)
+		encoded, err := json.Marshal(mutated)
+		if err != nil {
+			export.t.Fatal(err)
+		}
+		attestation = base64.StdEncoding.EncodeToString(encoded)
+	}
+	if export.replayTransportAttestation {
+		export.transportAttestationMutex.Lock()
+		if export.savedTransportAttestation == "" {
+			export.savedTransportAttestation = attestation
+		} else {
+			attestation = export.savedTransportAttestation
+		}
+		export.transportAttestationMutex.Unlock()
+	}
+	responseWriter.Header().Set("Content-Type", contentType)
+	if !export.omitTransportAttestation {
+		responseWriter.Header().Add(
+			frostRetainedGroupTransportAttestationHeader,
+			attestation,
+		)
+		if export.duplicateTransportAttestation {
+			responseWriter.Header().Add(
+				frostRetainedGroupTransportAttestationHeader,
+				attestation,
+			)
+		}
+	}
+	responseWriter.WriteHeader(status)
+	if _, err := responseWriter.Write(responseBody); err != nil {
 		export.t.Fatal(err)
 	}
 }
@@ -346,6 +484,66 @@ func (fixture *frostRetainedGroupHistorySourceFixture) checkpointAfter() FrostRe
 	}
 }
 
+func newFrostRetainedGroupHistoryTLSTestServer(
+	t *testing.T,
+	handler http.Handler,
+	serviceIdentity string,
+) (*httptest.Server, *x509.Certificate, *x509.CertPool) {
+	t.Helper()
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceURI, err := url.Parse(serviceIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "retained-history-test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{
+			x509.ExtKeyUsageServerAuth,
+			x509.ExtKeyUsageClientAuth,
+		},
+		BasicConstraintsValid: true,
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		URIs:                  []*url.URL{serviceURI},
+	}
+	certificateDER, err := x509.CreateCertificate(
+		rand.Reader,
+		template,
+		template,
+		&privateKey.PublicKey,
+		privateKey,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(certificateDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(handler)
+	server.TLS = &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		MaxVersion: tls.VersionTLS13,
+		NextProtos: []string{"http/1.1"},
+		Certificates: []tls.Certificate{{
+			Certificate: [][]byte{certificateDER},
+			PrivateKey:  privateKey,
+			Leaf:        leaf,
+		}},
+	}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	roots := x509.NewCertPool()
+	roots.AddCert(leaf)
+	return server, leaf, roots
+}
+
 func newFrostRetainedGroupHistorySourceFixture(
 	t *testing.T,
 ) *frostRetainedGroupHistorySourceFixture {
@@ -358,7 +556,35 @@ func newFrostRetainedGroupHistorySourceFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	operatorFingerprint := sha256.Sum256(publicKeyDER)
+	transportPublicKey, transportPrivateKey, err :=
+		ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transportPublicKeyDER, err := x509.MarshalPKIXPublicKey(
+		transportPublicKey,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendPublicKey, backendPrivateKey, err :=
+		ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendPublicKeyDER, err := x509.MarshalPKIXPublicKey(backendPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operatorPublicKey, operatorPrivateKey, err :=
+		ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operatorPublicKeyDER, err := x509.MarshalPKIXPublicKey(operatorPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 	headers := make(map[uint64]*types.Header)
 	for blockNumber := uint64(1); blockNumber <= 10; blockNumber++ {
 		headers[blockNumber] = &types.Header{
@@ -410,36 +636,147 @@ func newFrostRetainedGroupHistorySourceFixture(
 	verifier.code[common.Address(profile.FrostRegistry)] = registryCode
 	verifier.code[common.Address(profile.SortitionPool)] = sortitionPoolCode
 	export := &frostRetainedGroupHistoryTestExport{
-		t:            t,
-		privateKey:   privateKey,
-		publicKeyDER: publicKeyDER,
+		t:                     t,
+		privateKey:            privateKey,
+		publicKeyDER:          publicKeyDER,
+		transportPrivateKey:   transportPrivateKey,
+		transportPublicKeyDER: transportPublicKeyDER,
+		backendPrivateKey:     backendPrivateKey,
+		backendPublicKeyDER:   backendPublicKeyDER,
+		operatorPrivateKey:    operatorPrivateKey,
+		operatorPublicKeyDER:  operatorPublicKeyDER,
 	}
-	server := httptest.NewServer(export)
-	t.Cleanup(server.Close)
-	endpoint, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	identity := FrostRetainedGroupHistoryIdentity{
-		TrustDomainID:       "independent-retained-history-test",
-		EndpointFingerprint: [32]byte{0x31},
-		OperatorFingerprint: operatorFingerprint,
-	}
-	runtimeManifest.CanonicalJournal.SourceOperatorFingerprint =
-		identity.OperatorFingerprint
-	source, err := newSignedFrostRetainedGroupHistorySource(
-		context.Background(),
-		endpoint,
-		verifier,
-		server.Client(),
-		1,
-		identity,
-		operatorFingerprint,
-		frostRetainedGroupDefaultTimeout,
+	exportServiceIdentity := "spiffe://export.retained.test/export"
+	server, leaf, roots := newFrostRetainedGroupHistoryTLSTestServer(
+		t,
+		export,
+		exportServiceIdentity,
+	)
+	endpoint, canonicalEndpoint, err := validateFrostRetainedGroupTLSEndpoint(
+		server.URL + "/",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	resolvedEndpoint, err := resolveFrostRetainedGroupEndpoint(
+		context.Background(),
+		endpoint,
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exportIdentity := FrostRetainedGroupEndpointIdentity{
+		Schema:                    frostRetainedGroupEndpointIdentitySchema,
+		Role:                      "retained-history-export",
+		TrustDomainID:             "export.retained.test",
+		CanonicalEndpoint:         canonicalEndpoint,
+		CanonicalDNSName:          resolvedEndpoint.canonicalDNSName,
+		ResolvedDNSName:           resolvedEndpoint.resolvedDNSName,
+		ResolvedAddressSetHash:    resolvedEndpoint.addressSetHash,
+		TLSLeafSPKIHash:           sha256.Sum256(leaf.RawSubjectPublicKeyInfo),
+		ServiceIdentity:           exportServiceIdentity,
+		BackendServiceFingerprint: sha256.Sum256(backendPublicKeyDER),
+		OperatorFingerprint:       sha256.Sum256(operatorPublicKeyDER),
+		AttestationKeyHash:        sha256.Sum256(transportPublicKeyDER),
+		TLSExporterProtocolID:     frostRetainedGroupTLSExporterProtocolID(),
+	}
+	exportIdentity.EndpointFingerprint =
+		computeFrostRetainedGroupEndpointFingerprint(exportIdentity)
+	verifierAddress := netip.MustParseAddr("127.0.0.2")
+	verifierIdentity := FrostRetainedGroupEndpointIdentity{
+		Schema:                    frostRetainedGroupEndpointIdentitySchema,
+		Role:                      "retained-history-verifier",
+		TrustDomainID:             "verifier.retained.test",
+		CanonicalEndpoint:         "https://127.0.0.2:9443/rpc",
+		CanonicalDNSName:          "127.0.0.2",
+		ResolvedDNSName:           "127.0.0.2",
+		ResolvedAddressSetHash:    frostRetainedGroupResolvedAddressSetHash([]netip.Addr{verifierAddress}),
+		TLSLeafSPKIHash:           [32]byte{0x63},
+		ServiceIdentity:           "spiffe://verifier.retained.test/verifier",
+		BackendServiceFingerprint: [32]byte{0x64},
+		OperatorFingerprint:       [32]byte{0x65},
+		AttestationKeyHash:        [32]byte{0x66},
+		TLSExporterProtocolID:     frostRetainedGroupTLSExporterProtocolID(),
+	}
+	verifierIdentity.EndpointFingerprint =
+		computeFrostRetainedGroupEndpointFingerprint(verifierIdentity)
+	identity := FrostRetainedGroupHistoryIdentity{
+		Schema:               frostRetainedGroupSourceIdentitySchema,
+		TrustDomainID:        "independent-retained-history-test",
+		OperatorFingerprint:  exportIdentity.OperatorFingerprint,
+		HistorySignerKeyHash: sha256.Sum256(publicKeyDER),
+		Export:               exportIdentity,
+		Verifier:             verifierIdentity,
+	}
+	identity.EndpointFingerprint =
+		computeFrostRetainedGroupSourceEndpointFingerprint(identity)
+	export.identity = exportIdentity
+	runtimeManifest.CanonicalJournal.SourceTrustDomainID =
+		identity.TrustDomainID
+	runtimeManifest.CanonicalJournal.SourceEndpointFingerprint =
+		identity.EndpointFingerprint
+	runtimeManifest.CanonicalJournal.SourceOperatorFingerprint =
+		identity.OperatorFingerprint
+	runtimeManifest.CanonicalJournal.SourceIdentity = identity
+	exportHTTPClient, exportTransport, err :=
+		newFrostRetainedGroupAttestedHTTPClient(
+			resolvedEndpoint,
+			exportIdentity,
+			roots,
+			frostRetainedGroupDefaultTimeout,
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifierURL, _, err := validateFrostRetainedGroupTLSEndpoint(
+		verifierIdentity.CanonicalEndpoint,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedVerifier, err := resolveFrostRetainedGroupEndpoint(
+		context.Background(),
+		verifierURL,
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primaryURL, _, err := validateFrostRetainedGroupTLSEndpoint(
+		"https://127.0.0.3:9444/rpc",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedPrimary, err := resolveFrostRetainedGroupEndpoint(
+		context.Background(),
+		primaryURL,
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := newSignedFrostRetainedGroupHistorySource(
+		context.Background(),
+		endpoint,
+		verifier,
+		exportHTTPClient,
+		1,
+		identity,
+		identity.HistorySignerKeyHash,
+		frostRetainedGroupDefaultTimeout,
+		&frostRetainedGroupIndependenceMonitor{
+			exportEndpoint:   resolvedEndpoint,
+			verifierEndpoint: resolvedVerifier,
+			primaryEndpoint:  resolvedPrimary,
+			timeout:          frostRetainedGroupDefaultTimeout,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.httpTransports = []*http.Transport{exportTransport}
 	descriptorSetHash := [32]byte{0x42}
 	if err := source.BindFrostRetainedGroupActivationEvidence(
 		profile,
@@ -994,11 +1331,7 @@ func (fixture *frostRetainedGroupHistorySourceFixture) historyPages(
 	}
 	pages := make([]*frostRetainedGroupHistoryPagePayload, pageCount)
 	previousPageHash := [32]byte{}
-	identity := frostRetainedGroupWireIdentity{
-		TrustDomainID:       fixture.identity.TrustDomainID,
-		EndpointFingerprint: frostActivationHex32(fixture.identity.EndpointFingerprint),
-		OperatorFingerprint: frostActivationHex32(fixture.identity.OperatorFingerprint),
-	}
+	identity := frostRetainedGroupIdentityToWire(fixture.identity)
 	for index := 0; index < pageCount; index++ {
 		start := index * 2
 		end := start + 2
@@ -1104,11 +1437,7 @@ func (fixture *frostRetainedGroupHistorySourceFixture) operatorResponse(
 		BindingHash: frostActivationHex32(
 			fixture.source.evidence.bindingHash,
 		),
-		Identity: frostRetainedGroupWireIdentity{
-			TrustDomainID:       fixture.identity.TrustDomainID,
-			EndpointFingerprint: frostActivationHex32(fixture.identity.EndpointFingerprint),
-			OperatorFingerprint: frostActivationHex32(fixture.identity.OperatorFingerprint),
-		},
+		Identity:        frostRetainedGroupIdentityToWire(fixture.identity),
 		ChainID:         1,
 		QueryHash:       frostActivationHex32(queryHash),
 		OperatorAddress: query.OperatorAddress,
@@ -2229,29 +2558,32 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsLinkedLibraryDrift(
 func TestSignedFrostRetainedGroupHistorySource_RejectsWrongEndpointAndReorg(
 	t *testing.T,
 ) {
-	_, _, _, _, _, err := validateFrostRetainedGroupSourceConfig(
-		FrostRetainedGroupHistorySourceConfig{
-			ExportURL:            "https://export.example/history",
-			EthereumURL:          "https://primary.example/independent",
-			TrustDomainID:        "independent",
-			TrustedSignerKeyHash: frostActivationHex32([32]byte{0x01}),
-		},
-		"wss://primary.example/rpc",
-	)
-	if err == nil || !strings.Contains(err.Error(), "not independent") {
-		t.Fatalf("expected shared endpoint rejection, got [%v]", err)
+	resolve := func(raw string) frostRetainedGroupResolvedEndpoint {
+		endpoint, _, err := validateFrostRetainedGroupTLSEndpoint(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resolved, err := resolveFrostRetainedGroupEndpoint(
+			context.Background(),
+			endpoint,
+			nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resolved
 	}
-	_, _, _, _, _, err = validateFrostRetainedGroupSourceConfig(
-		FrostRetainedGroupHistorySourceConfig{
-			ExportURL:            "https://history.example/export",
-			EthereumURL:          "https://history.example/rpc",
-			TrustDomainID:        "independent",
-			TrustedSignerKeyHash: frostActivationHex32([32]byte{0x01}),
-		},
-		"wss://primary.example/rpc",
-	)
-	if err == nil || !strings.Contains(err.Error(), "exporter and Ethereum verifier") {
-		t.Fatalf("expected exporter/verifier separation rejection, got [%v]", err)
+	exportEndpoint := resolve("https://127.0.0.1:9443/export")
+	verifierAlias := resolve("https://127.0.0.1:9444/rpc")
+	primaryAlias := resolve("https://127.0.0.1:9445/rpc")
+	if !frostRetainedGroupEndpointSetsOverlap(
+		exportEndpoint,
+		verifierAlias,
+	) || !frostRetainedGroupEndpointSetsOverlap(
+		exportEndpoint,
+		primaryAlias,
+	) {
+		t.Fatal("expected resolved shared-backend aliases to be rejected")
 	}
 
 	fixture := newFrostRetainedGroupHistorySourceFixture(t)
@@ -2262,7 +2594,7 @@ func TestSignedFrostRetainedGroupHistorySource_RejectsWrongEndpointAndReorg(
 		Time:   999,
 		Extra:  []byte{0xff},
 	}
-	_, err = fixture.source.ReadCompleteHistory(
+	_, err := fixture.source.ReadCompleteHistory(
 		context.Background(),
 		fixture.from,
 		fixture.to,

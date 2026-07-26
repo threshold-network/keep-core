@@ -340,11 +340,7 @@ func (source *testFrostRetainedGroupHistorySource) FrostRetainedGroupProtocolBin
 func (source *testFrostRetainedGroupHistorySource) Identity(
 	context.Context,
 ) (FrostRetainedGroupHistoryIdentity, error) {
-	return FrostRetainedGroupHistoryIdentity{
-		TrustDomainID:       source.manifest.SourceTrustDomainID,
-		EndpointFingerprint: source.manifest.SourceEndpointFingerprint,
-		OperatorFingerprint: source.manifest.SourceOperatorFingerprint,
-	}, nil
+	return source.manifest.SourceIdentity, nil
 }
 
 func (source *testFrostRetainedGroupHistorySource) FinalizedHead(
@@ -597,7 +593,7 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 	assertFrostActivationObjectKeys(t, handshake.Payload.State.CanonicalJournal, []string{
 		"bindingHash", "checkpoint", "clusterFingerprint", "complete", "current",
 		"descriptorSetHash", "generation", "sourceEndpointFingerprint", "sourceOperatorFingerprint",
-		"sourceTrustDomainID", "storeFingerprint", "storeID",
+		"sourceIdentity", "sourceTrustDomainID", "storeFingerprint", "storeID",
 	})
 	assertFrostActivationObjectKeys(t, handshake.Payload.State.QuarantineJournal, []string{
 		"activeRoot", "clusterFingerprint", "complete", "currentQuarantineCount",
@@ -1407,6 +1403,7 @@ func testFrostActivationRuntimeManifest(
 ) FrostPreSignActivationRuntimeManifest {
 	checkpointAuthorities, _, _ :=
 		testFrostActivationCheckpointCredentials()
+	sourceIdentity := testFrostRetainedGroupCompleteIdentity()
 	return FrostPreSignActivationRuntimeManifest{
 		ManifestHash:                     [32]byte{0x10},
 		ActivationAuthorityKeyHash:       [32]byte{0x30},
@@ -1436,9 +1433,10 @@ func testFrostActivationRuntimeManifest(
 				BlockHash:   [32]byte{0x20},
 			},
 			DescriptorSetHash:         [32]byte{0x21},
-			SourceTrustDomainID:       "independent-journal-source",
-			SourceEndpointFingerprint: [32]byte{0x22},
-			SourceOperatorFingerprint: [32]byte{0x23},
+			SourceTrustDomainID:       sourceIdentity.TrustDomainID,
+			SourceEndpointFingerprint: sourceIdentity.EndpointFingerprint,
+			SourceOperatorFingerprint: sourceIdentity.OperatorFingerprint,
+			SourceIdentity:            sourceIdentity,
 			MinimumGeneration:         1,
 		},
 		QuarantineJournal: FrostRetainedGroupQuarantineJournalManifest{
@@ -1760,6 +1758,7 @@ func testFrostRetainedGroupJournal(
 			SourceTrustDomainID:       manifest.CanonicalJournal.SourceTrustDomainID,
 			SourceEndpointFingerprint: manifest.CanonicalJournal.SourceEndpointFingerprint,
 			SourceOperatorFingerprint: manifest.CanonicalJournal.SourceOperatorFingerprint,
+			SourceIdentity:            manifest.CanonicalJournal.SourceIdentity,
 		},
 		quarantineMetadata: frostRetainedGroupQuarantineMetadata{
 			Schema:                 frostRetainedGroupQuarantineMetadataSchema,
