@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -11,6 +12,15 @@ import (
 )
 
 const nativeTBTCSignerInitConfigMaximumBytes int64 = 1024 * 1024
+
+const nativeTBTCSignerStateAnchorBootstrapProvisioningWitnessMaximum uint64 = 4
+
+type nativeTBTCSignerStateAnchorBootstrapProvisioningConfig struct {
+	Purpose                *string `json:"purpose"`
+	Profile                *string `json:"profile"`
+	StatePath              *string `json:"state_path"`
+	StateWitnessMaxRecords *uint64 `json:"state_witness_max_records"`
+}
 
 // readSecureNativeTBTCSignerInitConfig opens the operator-selected config
 // without following the final path component and validates the opened
@@ -78,6 +88,80 @@ func readSecureNativeTBTCSignerInitConfig(path string) ([]byte, error) {
 		int64(len(result)) > nativeTBTCSignerInitConfigMaximumBytes {
 		zeroNativeTBTCSignerConfigBytes(result)
 		return nil, fmt.Errorf("native signer init config size is invalid")
+	}
+	return result, nil
+}
+
+// InstallNativeTBTCSignerStateAnchorBootstrapProvisioningConfigFile installs
+// the deliberately minimal, production-only config accepted by the bootstrap
+// facts FFI. It must run before any state-touching signer operation. Requiring
+// an exact four-field object prevents an online ceremony process from
+// accidentally acquiring runtime signing or anchor authority.
+func InstallNativeTBTCSignerStateAnchorBootstrapProvisioningConfigFile(
+	path string,
+) (*NativeTBTCSignerInitConfigResult, error) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return nil, fmt.Errorf(
+			"native signer bootstrap provisioning config path is not canonical absolute",
+		)
+	}
+	configJSON, err := readSecureNativeTBTCSignerInitConfig(path)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot read native signer bootstrap provisioning config: %w",
+			err,
+		)
+	}
+	defer zeroNativeTBTCSignerConfigBytes(configJSON)
+
+	wire := &nativeTBTCSignerStateAnchorBootstrapProvisioningConfig{}
+	if err := decodeStrictNativeTBTCSignerJSON(
+		configJSON,
+		wire,
+		"state-anchor bootstrap provisioning config",
+	); err != nil {
+		return nil, err
+	}
+	if wire.Purpose == nil ||
+		*wire.Purpose !=
+			NativeTBTCSignerStateAnchorBootstrapProvisioningPurpose ||
+		wire.Profile == nil ||
+		*wire.Profile != "production" ||
+		wire.StatePath == nil ||
+		strings.TrimSpace(*wire.StatePath) == "" ||
+		!filepath.IsAbs(*wire.StatePath) ||
+		filepath.Clean(*wire.StatePath) != *wire.StatePath ||
+		wire.StateWitnessMaxRecords == nil ||
+		*wire.StateWitnessMaxRecords !=
+			nativeTBTCSignerStateAnchorBootstrapProvisioningWitnessMaximum {
+		return nil, fmt.Errorf(
+			"native signer bootstrap provisioning config must contain exactly purpose=%q, profile=production, a canonical absolute state_path, and state_witness_max_records=%d",
+			NativeTBTCSignerStateAnchorBootstrapProvisioningPurpose,
+			nativeTBTCSignerStateAnchorBootstrapProvisioningWitnessMaximum,
+		)
+	}
+
+	result, err := InstallNativeTBTCSignerConfig(configJSON)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot install native signer bootstrap provisioning config: %w",
+			err,
+		)
+	}
+	if result == nil || !result.Installed ||
+		strings.TrimSpace(result.ConfigFingerprint) == "" {
+		return nil, fmt.Errorf(
+			"native signer bootstrap provisioning config installation returned an incomplete result",
+		)
+	}
+	if err := recordNativeTBTCSignerInstalledStateAnchorConfig(
+		configJSON,
+		result.ConfigFingerprint,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"cannot bind native signer bootstrap provisioning config: %w",
+			err,
+		)
 	}
 	return result, nil
 }

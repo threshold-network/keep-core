@@ -469,6 +469,9 @@ func DecodeNativeTBTCSignerStateWitnessProof(
 }
 
 func decodeStrictNativeTBTCSignerJSON(payload []byte, target interface{}, subject string) error {
+	if err := preflightStrictNativeTBTCSignerJSON(payload, 0); err != nil {
+		return fmt.Errorf("cannot decode native signer %s: %w", subject, err)
+	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
@@ -480,6 +483,94 @@ func decodeStrictNativeTBTCSignerJSON(payload []byte, target interface{}, subjec
 			return fmt.Errorf("native signer %s contains trailing JSON", subject)
 		}
 		return fmt.Errorf("cannot decode native signer %s trailing data: %w", subject, err)
+	}
+	return nil
+}
+
+func preflightStrictNativeTBTCSignerJSON(payload []byte, depth int) error {
+	const maximumDepth = 32
+	if depth != 0 {
+		return fmt.Errorf("native signer JSON preflight must start at the root")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	var scanValue func(int) error
+	scanValue = func(currentDepth int) error {
+		if currentDepth > maximumDepth {
+			return fmt.Errorf("JSON nesting exceeds the depth bound")
+		}
+		token, err := decoder.Token()
+		if err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		delimiter, ok := token.(json.Delim)
+		if !ok {
+			return nil
+		}
+		switch delimiter {
+		case '{':
+			seen := make(map[string]struct{})
+			seenFolded := make(map[string]struct{})
+			for decoder.More() {
+				keyToken, err := decoder.Token()
+				if err != nil {
+					return fmt.Errorf("invalid JSON object member: %w", err)
+				}
+				key, ok := keyToken.(string)
+				if !ok || key == "" {
+					return fmt.Errorf("JSON object member name is invalid")
+				}
+				for _, character := range key {
+					if character < 0x21 || character > 0x7e {
+						return fmt.Errorf(
+							"JSON object member name [%s] is not canonical ASCII",
+							key,
+						)
+					}
+				}
+				folded := strings.ToLower(key)
+				if _, exists := seen[key]; exists {
+					return fmt.Errorf("JSON object contains duplicate member [%s]", key)
+				}
+				if _, exists := seenFolded[folded]; exists {
+					return fmt.Errorf(
+						"JSON object contains case-folded duplicate member [%s]",
+						key,
+					)
+				}
+				seen[key] = struct{}{}
+				seenFolded[folded] = struct{}{}
+				if err := scanValue(currentDepth + 1); err != nil {
+					return err
+				}
+			}
+			closing, err := decoder.Token()
+			if err != nil || closing != json.Delim('}') {
+				return fmt.Errorf("invalid JSON object termination")
+			}
+		case '[':
+			for decoder.More() {
+				if err := scanValue(currentDepth + 1); err != nil {
+					return err
+				}
+			}
+			closing, err := decoder.Token()
+			if err != nil || closing != json.Delim(']') {
+				return fmt.Errorf("invalid JSON array termination")
+			}
+		default:
+			return fmt.Errorf("unexpected JSON delimiter")
+		}
+		return nil
+	}
+	if err := scanValue(0); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("JSON contains trailing data")
+		}
+		return fmt.Errorf("invalid JSON trailing data: %w", err)
 	}
 	return nil
 }

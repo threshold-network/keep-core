@@ -34,6 +34,16 @@ func ReadNativeTBTCSignerStateAnchorTrustHead() (
 	)
 }
 
+func ReadNativeTBTCSignerStateAnchorBootstrapFacts() (
+	*NativeTBTCSignerStateAnchorBootstrapFacts,
+	error,
+) {
+	return nil, fmt.Errorf(
+		"%w: tbtc-signer bridge operation [StateAnchorBootstrapFacts] is unavailable in this build",
+		ErrNativeCryptographyUnavailable,
+	)
+}
+
 func TransitionNativeTBTCSignerStateWitnessAnchor(
 	requestJSON []byte,
 ) (*NativeTBTCSignerStateAnchorTrustTransitionResult, error) {

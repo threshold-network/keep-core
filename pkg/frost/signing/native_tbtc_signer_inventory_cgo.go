@@ -23,6 +23,7 @@ typedef struct {
 typedef TbtcSignerInventoryResult (*tbtc_retained_key_package_inventory_fn)(void);
 typedef TbtcSignerInventoryResult (*tbtc_state_witness_tip_fn)(void);
 typedef TbtcSignerInventoryResult (*tbtc_state_anchor_trust_head_fn)(void);
+typedef TbtcSignerInventoryResult (*tbtc_state_anchor_bootstrap_facts_fn)(void);
 typedef TbtcSignerInventoryResult (*tbtc_transition_state_witness_anchor_fn)(
   const uint8_t* request_ptr,
   size_t request_len
@@ -78,6 +79,18 @@ static TbtcSignerInventoryResult tbtc_signer_state_anchor_trust_head(void) {
     (tbtc_state_anchor_trust_head_fn)dlsym(
       RTLD_DEFAULT,
       "frost_tbtc_state_anchor_trust_head"
+    );
+  if (operation == NULL) {
+    return unavailable_tbtc_signer_inventory_result();
+  }
+  return operation();
+}
+
+static TbtcSignerInventoryResult tbtc_signer_state_anchor_bootstrap_facts(void) {
+  tbtc_state_anchor_bootstrap_facts_fn operation =
+    (tbtc_state_anchor_bootstrap_facts_fn)dlsym(
+      RTLD_DEFAULT,
+      "frost_tbtc_state_anchor_bootstrap_facts"
     );
   if (operation == NULL) {
     return unavailable_tbtc_signer_inventory_result();
@@ -241,6 +254,35 @@ func ReadNativeTBTCSignerStateAnchorTrustHead() (
 		)
 	}
 	return head, nil
+}
+
+// ReadNativeTBTCSignerStateAnchorBootstrapFacts returns the stable store
+// fingerprint and exact pristine genesis checkpoint used by the offline
+// bootstrap ceremony. Rust permits this call only under the dedicated
+// state_anchor_bootstrap_provisioning config purpose and before any
+// state-touching signer operation.
+func ReadNativeTBTCSignerStateAnchorBootstrapFacts() (
+	*NativeTBTCSignerStateAnchorBootstrapFacts,
+	error,
+) {
+	if err := ensureTBTCSignerABICompatible(); err != nil {
+		return nil, err
+	}
+	payload, err := parseNativeTBTCSignerInventoryResult(
+		"StateAnchorBootstrapFacts",
+		C.tbtc_signer_state_anchor_bootstrap_facts(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	facts, err := DecodeNativeTBTCSignerStateAnchorBootstrapFacts(payload)
+	if err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"StateAnchorBootstrapFacts",
+			err.Error(),
+		)
+	}
+	return facts, nil
 }
 
 func classifyNativeTBTCSignerStateAnchorTrustHeadError(err error) error {

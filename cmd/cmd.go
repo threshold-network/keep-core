@@ -37,6 +37,7 @@ func init() {
 		EthereumCommand,
 		MaintainerCommand,
 		MaintainerCliCommand,
+		TBTCSignerCommand,
 	)
 }
 
