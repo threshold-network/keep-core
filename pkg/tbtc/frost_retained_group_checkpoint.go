@@ -8,9 +8,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/decred/dcrd/dcrec/edwards/v2"
 )
 
 const (
@@ -31,13 +34,22 @@ const (
 	// chain is not. The journal can durably advance through multiple pages and
 	// resume from the last authenticated certificate after a crash or timeout.
 	frostRetainedGroupMaximumCheckpointsPerPage = 256
-	frostRetainedGroupMaximumCheckpointPages    = 16
+	// Reconciliation durably publishes exactly one authenticated page before
+	// yielding an explicit progress result. The controller then re-enters with
+	// a fresh timeout from the new durable cursor, so total history is unbounded
+	// without making one reconciliation attempt unbounded.
+	frostRetainedGroupCheckpointPagesPerReconciliation = 1
 	// Activation verifiers must obtain a fresh rollback-independent floor from
 	// the transparency channel. An arbitrarily stale caller-supplied floor
 	// cannot force the signer to allocate and serialize its entire lifetime
 	// history. This remains above the old 256-certificate recovery limit.
 	frostRetainedGroupMaximumHandshakeAncestry = 512
-	frostRetainedGroupCheckpointDirectory      = "checkpoints"
+	// Canonical checkpoint proof bytes are accounted certificate-by-certificate
+	// before the aggregate handshake payload is materialized. This protects the
+	// signer from a small loopback request expanding into hundreds of megabytes
+	// of authority credentials and canonical-JSON working buffers.
+	frostRetainedGroupMaximumHandshakeProofBytes = 4 * 1024 * 1024
+	frostRetainedGroupCheckpointDirectory        = "checkpoints"
 )
 
 // FrostRetainedGroupCheckpointCursor is the rollback-independent head after
@@ -86,6 +98,20 @@ type FrostRetainedGroupCheckpointCertificate struct {
 	Body       FrostRetainedGroupCheckpointBody
 	BodyHash   [32]byte
 	Signatures []FrostRetainedGroupCheckpointSignature
+}
+
+// FrostRetainedGroupCheckpointCommitment is the exact durable semantic state
+// that the tail of an externally verified checkpoint proof must certify.
+type FrostRetainedGroupCheckpointCommitment struct {
+	DurableHead             FrostRetainedGroupCheckpointCursor
+	Point                   FrostPreSignFinality
+	HistoryRoot             [32]byte
+	CanonicalGeneration     uint64
+	CanonicalInventoryRoot  [32]byte
+	QuarantineGeneration    uint64
+	QuarantineEventRoot     [32]byte
+	QuarantineActiveRoot    [32]byte
+	QuarantineTombstoneRoot [32]byte
 }
 
 type frostRetainedGroupWireCheckpointBody struct {
@@ -459,9 +485,32 @@ func frostRetainedGroupCheckpointSignatureHash(
 func frostRetainedGroupCheckpointCertificateHash(
 	certificate FrostRetainedGroupCheckpointCertificate,
 ) ([32]byte, error) {
+	if certificate.Schema !=
+		frostRetainedGroupCheckpointCertificateSchema {
+		return [32]byte{}, fmt.Errorf(
+			"unsupported FROST checkpoint certificate schema",
+		)
+	}
+	bodyHash, err := frostRetainedGroupCheckpointBodyHash(certificate.Body)
+	if err != nil || bodyHash != certificate.BodyHash {
+		return [32]byte{}, fmt.Errorf(
+			"FROST checkpoint certificate body hash mismatch",
+		)
+	}
+	// A checkpoint's durable identity must not depend on which valid quorum
+	// subset an aggregator happened to include. Otherwise, the same signed
+	// body can acquire multiple predecessor hashes and permanently fork
+	// journals that received different 2-of-3 or 3-of-3 encodings.
+	identity := struct {
+		Schema   string `json:"schema"`
+		BodyHash string `json:"bodyHash"`
+	}{
+		Schema:   certificate.Schema,
+		BodyHash: frostActivationHex32(certificate.BodyHash),
+	}
 	return frostRetainedGroupDomainHash(
 		frostRetainedGroupCheckpointCertificateDomain,
-		frostRetainedGroupCheckpointCertificateToWire(certificate),
+		identity,
 	)
 }
 
@@ -577,6 +626,15 @@ func validateFrostRetainedGroupCheckpointCertificateShape(
 				signature.AuthorityID,
 			)
 		}
+		if err := validateFrostRetainedGroupPrimeOrderEd25519PublicKey(
+			publicKey,
+		); err != nil {
+			return [32]byte{}, fmt.Errorf(
+				"FROST checkpoint authority [%s] key is not a nonidentity prime-order Ed25519 point: [%w]",
+				signature.AuthorityID,
+				err,
+			)
+		}
 		signatureBytes, err := base64.StdEncoding.Strict().DecodeString(
 			signature.Signature,
 		)
@@ -600,6 +658,179 @@ func validateFrostRetainedGroupCheckpointCertificateShape(
 		)
 	}
 	return certificateHash, nil
+}
+
+func validateFrostRetainedGroupPrimeOrderEd25519PublicKey(
+	publicKey ed25519.PublicKey,
+) error {
+	if len(publicKey) != ed25519.PublicKeySize {
+		return fmt.Errorf("invalid Ed25519 public-key length")
+	}
+	parsed, err := edwards.ParsePubKey(publicKey)
+	if err != nil ||
+		!bytes.Equal(parsed.Serialize(), publicKey) {
+		return fmt.Errorf("invalid or noncanonical Ed25519 point encoding")
+	}
+	if parsed.GetX().Sign() == 0 &&
+		parsed.GetY().Cmp(big.NewInt(1)) == 0 {
+		return fmt.Errorf("Ed25519 identity point is forbidden")
+	}
+	curve := edwards.Edwards()
+	x, y := curve.ScalarMult(
+		parsed.GetX(),
+		parsed.GetY(),
+		curve.Params().N.Bytes(),
+	)
+	if x == nil || y == nil ||
+		x.Sign() != 0 ||
+		y.Cmp(big.NewInt(1)) != 0 {
+		return fmt.Errorf("Ed25519 point is outside the prime-order subgroup")
+	}
+	return nil
+}
+
+// VerifyFrostRetainedGroupCheckpointProof validates an inclusive certificate
+// proof from a rollback-independent floor through the exact durable head. The
+// floor cursor is supplied by an external transparency channel; the proof must
+// include the corresponding full floor certificate even when floor and head
+// are equal.
+func VerifyFrostRetainedGroupCheckpointProof(
+	bindingHash [32]byte,
+	runtimeManifest FrostPreSignActivationRuntimeManifest,
+	floor FrostRetainedGroupCheckpointCursor,
+	commitment FrostRetainedGroupCheckpointCommitment,
+	certificates []FrostRetainedGroupCheckpointCertificate,
+) error {
+	policy, err := frostRetainedGroupCheckpointPolicyFromRuntimeManifest(
+		bindingHash,
+		runtimeManifest,
+	)
+	if err != nil {
+		return fmt.Errorf("invalid FROST checkpoint proof policy: [%w]", err)
+	}
+	if floor.Sequence < policy.MinimumSequence ||
+		floor.Sequence > frostRetainedGroupMaximumCanonicalJSONInteger ||
+		floor.CertificateHash == [32]byte{} ||
+		commitment.DurableHead.Sequence < floor.Sequence ||
+		commitment.DurableHead.Sequence >
+			frostRetainedGroupMaximumCanonicalJSONInteger ||
+		commitment.DurableHead.CertificateHash == [32]byte{} ||
+		len(certificates) == 0 ||
+		uint64(len(certificates)) !=
+			commitment.DurableHead.Sequence-floor.Sequence+1 ||
+		uint64(len(certificates)) >
+			frostRetainedGroupMaximumHandshakeAncestry+1 {
+		return fmt.Errorf(
+			"FROST checkpoint proof bounds or cursors are invalid",
+		)
+	}
+	var previousHash [32]byte
+	var previousBody FrostRetainedGroupCheckpointBody
+	for index, certificate := range certificates {
+		certificateHash, err :=
+			validateFrostRetainedGroupCheckpointCertificateShape(
+				policy,
+				certificate,
+			)
+		if err != nil {
+			return fmt.Errorf(
+				"invalid FROST checkpoint proof certificate [%d]: [%w]",
+				index,
+				err,
+			)
+		}
+		body := certificate.Body
+		if index == 0 {
+			if body.Sequence != floor.Sequence ||
+				certificateHash != floor.CertificateHash {
+				return fmt.Errorf(
+					"FROST checkpoint proof does not contain the exact external floor",
+				)
+			}
+			if body.Sequence == policy.MinimumSequence &&
+				body.PreviousCertificateHash != policy.PredecessorHash {
+				return fmt.Errorf(
+					"FROST checkpoint proof floor does not extend the manifest predecessor",
+				)
+			}
+			if body.Sequence > policy.MinimumSequence &&
+				body.PreviousCertificateHash == [32]byte{} {
+				return fmt.Errorf(
+					"FROST checkpoint proof floor has no predecessor",
+				)
+			}
+		} else if body.Sequence != previousBody.Sequence+1 ||
+			body.PreviousCertificateHash != previousHash ||
+			body.Point.BlockNumber <= previousBody.Point.BlockNumber ||
+			body.CanonicalGeneration <
+				previousBody.CanonicalGeneration ||
+			body.QuarantineGeneration <
+				previousBody.QuarantineGeneration {
+			return fmt.Errorf(
+				"FROST checkpoint proof has a gap, fork, rollback, or nonmonotonic successor",
+			)
+		}
+		previousHash = certificateHash
+		previousBody = body
+	}
+	if _, err := frostRetainedGroupCheckpointProofCanonicalSize(
+		certificates,
+		frostRetainedGroupMaximumHandshakeProofBytes,
+	); err != nil {
+		return err
+	}
+
+	tail := certificates[len(certificates)-1].Body
+	if previousBody.Sequence != commitment.DurableHead.Sequence ||
+		previousHash != commitment.DurableHead.CertificateHash ||
+		tail.Point != commitment.Point ||
+		tail.HistoryRoot != commitment.HistoryRoot ||
+		tail.CanonicalGeneration != commitment.CanonicalGeneration ||
+		tail.CanonicalInventoryRoot !=
+			commitment.CanonicalInventoryRoot ||
+		tail.QuarantineGeneration != commitment.QuarantineGeneration ||
+		tail.QuarantineEventRoot != commitment.QuarantineEventRoot ||
+		tail.QuarantineActiveRoot != commitment.QuarantineActiveRoot ||
+		tail.QuarantineTombstoneRoot !=
+			commitment.QuarantineTombstoneRoot {
+		return fmt.Errorf(
+			"FROST checkpoint proof tail differs from the exact durable commitment",
+		)
+	}
+	return nil
+}
+
+func frostRetainedGroupCheckpointProofCanonicalSize(
+	certificates []FrostRetainedGroupCheckpointCertificate,
+	maximum int,
+) (int, error) {
+	if maximum <= 0 {
+		return 0, fmt.Errorf("FROST checkpoint proof byte limit is invalid")
+	}
+	size := 2 // JSON array brackets.
+	for index, certificate := range certificates {
+		encoded, err := frostRetainedGroupCanonicalValue(
+			frostRetainedGroupCheckpointCertificateToWire(certificate),
+		)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"cannot encode FROST checkpoint proof certificate [%d]: [%w]",
+				index,
+				err,
+			)
+		}
+		delimiter := 0
+		if index > 0 {
+			delimiter = 1
+		}
+		if len(encoded) > maximum-size-delimiter {
+			return 0, fmt.Errorf(
+				"FROST checkpoint proof exceeds the canonical byte limit",
+			)
+		}
+		size += delimiter + len(encoded)
+	}
+	return size, nil
 }
 
 func frostRetainedGroupCheckpointChainRoot(
@@ -1271,6 +1502,10 @@ func (frgj *frostRetainedGroupJournal) persistCheckpointSuffix(
 			err,
 		)
 	}
+	persistedCertificates := make(
+		[]FrostRetainedGroupCheckpointCertificate,
+		len(certificates),
+	)
 	for index, certificate := range certificates {
 		hash := hashes[index]
 		sequence := certificate.Body.Sequence
@@ -1280,17 +1515,20 @@ func (frgj *frostRetainedGroupJournal) persistCheckpointSuffix(
 				sequence,
 			)
 		}
-		if err := frgj.persistOrAdoptCheckpointCertificate(
-			certificate,
-			hash,
-			existingEntries,
-		); err != nil {
+		persistedCertificate, err :=
+			frgj.persistOrAdoptCheckpointCertificate(
+				certificate,
+				hash,
+				existingEntries,
+			)
+		if err != nil {
 			return fmt.Errorf(
 				"cannot persist immutable FROST checkpoint certificate [%d]: [%w]",
 				sequence,
 				err,
 			)
 		}
+		persistedCertificates[index] = persistedCertificate
 		if frgj.checkpointPersistFailureHook != nil {
 			if err := frgj.checkpointPersistFailureHook(
 				"after-checkpoint-certificate-before-next",
@@ -1324,7 +1562,7 @@ func (frgj *frostRetainedGroupJournal) persistCheckpointSuffix(
 			return err
 		}
 	}
-	for index, certificate := range certificates {
+	for index, certificate := range persistedCertificates {
 		sequence := certificate.Body.Sequence
 		frgj.checkpointCertificates[sequence] = certificate
 		frgj.checkpointHashes[sequence] = hashes[index]
@@ -1337,7 +1575,7 @@ func (frgj *frostRetainedGroupJournal) persistOrAdoptCheckpointCertificate(
 	certificate FrostRetainedGroupCheckpointCertificate,
 	certificateHash [32]byte,
 	existingEntries []os.DirEntry,
-) error {
+) (FrostRetainedGroupCheckpointCertificate, error) {
 	sequence := certificate.Body.Sequence
 	expectedName := frostRetainedGroupCheckpointFileName(
 		sequence,
@@ -1356,7 +1594,7 @@ func (frgj *frostRetainedGroupJournal) persistOrAdoptCheckpointCertificate(
 			continue
 		}
 		if existingName != "" || name != expectedName {
-			return fmt.Errorf(
+			return FrostRetainedGroupCheckpointCertificate{}, fmt.Errorf(
 				"conflicting immutable checkpoint certificate exists for sequence [%d]",
 				sequence,
 			)
@@ -1366,12 +1604,15 @@ func (frgj *frostRetainedGroupJournal) persistOrAdoptCheckpointCertificate(
 	expectedWire :=
 		frostRetainedGroupCheckpointCertificateToWire(certificate)
 	if existingName == "" {
-		return persistFrostRetainedGroupEnvelopeAt(
+		if err := persistFrostRetainedGroupEnvelopeAt(
 			frgj.checkpointDirectory,
 			expectedName,
 			expectedWire,
 			false,
-		)
+		); err != nil {
+			return FrostRetainedGroupCheckpointCertificate{}, err
+		}
+		return certificate, nil
 	}
 	storedWire := frostRetainedGroupWireCheckpointCertificate{}
 	if err := readFrostRetainedGroupEnvelopeAt(
@@ -1379,25 +1620,40 @@ func (frgj *frostRetainedGroupJournal) persistOrAdoptCheckpointCertificate(
 		existingName,
 		&storedWire,
 	); err != nil {
-		return fmt.Errorf(
+		return FrostRetainedGroupCheckpointCertificate{}, fmt.Errorf(
 			"cannot read orphan checkpoint certificate: [%w]",
 			err,
 		)
 	}
-	storedCanonical, err := frostRetainedGroupCanonicalValue(storedWire)
+	storedCertificate, err :=
+		frostRetainedGroupCheckpointCertificateFromWire(storedWire)
 	if err != nil {
-		return err
-	}
-	expectedCanonical, err := frostRetainedGroupCanonicalValue(expectedWire)
-	if err != nil {
-		return err
-	}
-	if !bytes.Equal(storedCanonical, expectedCanonical) {
-		return fmt.Errorf(
-			"orphan checkpoint certificate differs from the requested exact suffix",
+		return FrostRetainedGroupCheckpointCertificate{}, fmt.Errorf(
+			"cannot decode orphan checkpoint certificate: [%w]",
+			err,
 		)
 	}
-	return nil
+	storedHash, err := validateFrostRetainedGroupCheckpointCertificateShape(
+		frgj.checkpointPolicy,
+		storedCertificate,
+	)
+	if err != nil {
+		return FrostRetainedGroupCheckpointCertificate{}, fmt.Errorf(
+			"cannot validate orphan checkpoint certificate: [%w]",
+			err,
+		)
+	}
+	if storedHash != certificateHash ||
+		storedCertificate.Schema != certificate.Schema ||
+		storedCertificate.BodyHash != certificate.BodyHash ||
+		storedCertificate.Body != certificate.Body {
+		return FrostRetainedGroupCheckpointCertificate{}, fmt.Errorf(
+			"orphan checkpoint certificate differs from the requested checkpoint body",
+		)
+	}
+	// The durable encoding wins when the incoming certificate carries a
+	// different, but equally valid, quorum subset for the same stable body.
+	return storedCertificate, nil
 }
 
 func (frgj *frostRetainedGroupJournal) checkpointDescendsFrom(
@@ -1412,7 +1668,7 @@ func (frgj *frostRetainedGroupJournal) checkpointDescendsFrom(
 	return exists && hash == floor.CertificateHash
 }
 
-func (frgj *frostRetainedGroupJournal) checkpointAncestryAfter(
+func (frgj *frostRetainedGroupJournal) checkpointAncestryFrom(
 	floor FrostRetainedGroupCheckpointCursor,
 ) ([]FrostRetainedGroupCheckpointCertificate, error) {
 	if !frgj.checkpointDescendsFrom(floor) {
@@ -1429,9 +1685,10 @@ func (frgj *frostRetainedGroupJournal) checkpointAncestryAfter(
 	result := make(
 		[]FrostRetainedGroupCheckpointCertificate,
 		0,
-		int(distance),
+		int(distance+1),
 	)
-	for sequence := floor.Sequence + 1; sequence <= frgj.checkpointState.Sequence; sequence++ {
+	proofBytes := 2 // JSON array brackets.
+	for sequence := floor.Sequence; sequence <= frgj.checkpointState.Sequence; sequence++ {
 		certificate, exists := frgj.checkpointCertificates[sequence]
 		if !exists {
 			return nil, fmt.Errorf(
@@ -1439,6 +1696,28 @@ func (frgj *frostRetainedGroupJournal) checkpointAncestryAfter(
 				sequence,
 			)
 		}
+		encoded, err := frostRetainedGroupCanonicalValue(
+			frostRetainedGroupCheckpointCertificateToWire(certificate),
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot encode FROST checkpoint ancestry certificate [%d]: [%w]",
+				sequence,
+				err,
+			)
+		}
+		delimiter := 0
+		if len(result) > 0 {
+			delimiter = 1
+		}
+		if len(encoded) >
+			frostRetainedGroupMaximumHandshakeProofBytes-
+				proofBytes-delimiter {
+			return nil, fmt.Errorf(
+				"FROST checkpoint ancestry exceeds the canonical byte limit",
+			)
+		}
+		proofBytes += delimiter + len(encoded)
 		result = append(result, certificate)
 	}
 	return result, nil

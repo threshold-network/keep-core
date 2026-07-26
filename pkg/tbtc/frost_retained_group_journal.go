@@ -80,6 +80,31 @@ const (
 	frostRetainedGroupMaximumCanonicalJSONInteger uint64 = 9007199254740991
 )
 
+var errFrostRetainedGroupCheckpointRecoveryProgress = errors.New(
+	"FROST checkpoint recovery advanced the durable head",
+)
+
+func frostRetainedGroupCheckpointRecoveryProgressError(
+	sequence uint64,
+	cause error,
+) error {
+	if cause == nil {
+		return fmt.Errorf(
+			"%w after [%d] authenticated page; retry from durable sequence [%d]",
+			errFrostRetainedGroupCheckpointRecoveryProgress,
+			frostRetainedGroupCheckpointPagesPerReconciliation,
+			sequence,
+		)
+	}
+	return fmt.Errorf(
+		"%w after [%d] authenticated page; retry from durable sequence [%d]; post-publication verification failed: %w",
+		errFrostRetainedGroupCheckpointRecoveryProgress,
+		frostRetainedGroupCheckpointPagesPerReconciliation,
+		sequence,
+		cause,
+	)
+}
+
 // FrostRetainedGroupEventPoint identifies one canonical Ethereum log. The
 // transaction identity and ordering indexes prove Registry closure follows
 // the matching Bridge terminal transition in the same transaction.
@@ -3215,7 +3240,8 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 		0,
 	)
 	checkpointRecoveryComplete := false
-	for checkpointPage := 0; checkpointPage < frostRetainedGroupMaximumCheckpointPages; checkpointPage++ {
+	for checkpointPage := 0; checkpointPage <
+		frostRetainedGroupCheckpointPagesPerReconciliation; checkpointPage++ {
 		page, err := frgj.source.ReadCompleteHistory(
 			ctx,
 			frgj.metadata.Checkpoint,
@@ -3595,30 +3621,56 @@ func (frgj *frostRetainedGroupJournal) reconcile(
 	); err != nil {
 		return nil, err
 	}
+	checkpointRecoveryAdvanced :=
+		!history.CheckpointComplete &&
+			frgj.checkpointState.Sequence > checkpointAfter.Sequence
+	withCheckpointRecoveryProgress := func(cause error) error {
+		if !checkpointRecoveryAdvanced {
+			return cause
+		}
+		return frostRetainedGroupCheckpointRecoveryProgressError(
+			frgj.checkpointState.Sequence,
+			cause,
+		)
+	}
 	afterHead, err := frgj.source.FinalizedHead(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("cannot read independent finalized head after journal replay: [%w]", err)
+		return nil, withCheckpointRecoveryProgress(fmt.Errorf(
+			"cannot read independent finalized head after journal replay: [%w]",
+			err,
+		))
 	}
 	if afterHead.BlockNumber < beforeHead.BlockNumber ||
 		afterHead.BlockNumber < target.BlockNumber || afterHead.BlockHash == [32]byte{} ||
 		(beforeHead.BlockNumber == afterHead.BlockNumber && beforeHead.BlockHash != afterHead.BlockHash) {
-		return nil, fmt.Errorf("independent finalized head changed inconsistently during journal replay")
+		return nil, withCheckpointRecoveryProgress(fmt.Errorf(
+			"independent finalized head changed inconsistently during journal replay",
+		))
 	}
 	if afterHead.BlockNumber == target.BlockNumber && afterHead.BlockHash != target.BlockHash {
-		return nil, fmt.Errorf("independent finalized head disagrees with challenged target after replay")
+		return nil, withCheckpointRecoveryProgress(fmt.Errorf(
+			"independent finalized head disagrees with challenged target after replay",
+		))
 	}
 	if err := frgj.source.VerifyPoint(ctx, afterHead); err != nil {
-		return nil, fmt.Errorf("cannot verify independent finalized head after journal replay: [%w]", err)
+		return nil, withCheckpointRecoveryProgress(fmt.Errorf(
+			"cannot verify independent finalized head after journal replay: [%w]",
+			err,
+		))
 	}
 	if err := frgj.source.VerifyPoint(ctx, target); err != nil {
-		return nil, fmt.Errorf("challenged FROST retained-group point changed during replay: [%w]", err)
+		return nil, withCheckpointRecoveryProgress(fmt.Errorf(
+			"challenged FROST retained-group point changed during replay: [%w]",
+			err,
+		))
 	}
 	if !history.CheckpointComplete {
-		return nil, fmt.Errorf(
-			"FROST checkpoint recovery remains incomplete after [%d] authenticated pages; retry from durable sequence [%d]",
-			frostRetainedGroupMaximumCheckpointPages,
-			frgj.checkpointState.Sequence,
-		)
+		if !checkpointRecoveryAdvanced {
+			return nil, fmt.Errorf(
+				"incomplete FROST checkpoint recovery did not advance the durable head",
+			)
+		}
+		return nil, withCheckpointRecoveryProgress(nil)
 	}
 	localSessionCount, err := frgj.reconcileLocalSessions(ctx, target)
 	if err != nil {

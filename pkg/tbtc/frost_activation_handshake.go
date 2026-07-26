@@ -444,6 +444,16 @@ func (fahe *frostActivationHandshakeExporter) close() error {
 func (fahe *frostActivationHandshakeExporter) reconciliationWorker(
 	ctx context.Context,
 ) {
+	fahe.runReconciliationWorker(ctx, fahe.reconcileActivationState)
+}
+
+func (fahe *frostActivationHandshakeExporter) runReconciliationWorker(
+	ctx context.Context,
+	reconcile func(
+		context.Context,
+		FrostPreSignFinality,
+	) (*frostActivationReconciliationCache, error),
+) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -455,7 +465,7 @@ func (fahe *frostActivationHandshakeExporter) reconciliationWorker(
 			if job == nil {
 				break
 			}
-			cache, err := fahe.reconcileActivationState(
+			cache, err := reconcile(
 				reconciliationContext,
 				job.point,
 			)
@@ -506,9 +516,27 @@ func (fahe *frostActivationHandshakeExporter) completeReconciliationJob(
 		fahe.reconciliationDesired == nil {
 		fahe.reconciliationCompleted = cache
 	}
+	checkpointRecoveryProgress := errors.Is(
+		reconciliationErr,
+		errFrostRetainedGroupCheckpointRecoveryProgress,
+	)
+	if checkpointRecoveryProgress &&
+		fahe.reconciliationSequence == job.sequence &&
+		fahe.reconciliationDesired == nil {
+		fahe.reconciliationSequence++
+		fahe.reconciliationDesired = &frostActivationReconciliationJob{
+			sequence: fahe.reconciliationSequence,
+			point:    job.point,
+		}
+	}
 	hasDesired := fahe.reconciliationDesired != nil
 	fahe.reconciliationMutex.Unlock()
-	if reconciliationErr != nil {
+	if checkpointRecoveryProgress {
+		logger.Infof(
+			"background FROST activation reconciliation advanced the checkpoint recovery cursor for block [%d]",
+			job.point.BlockNumber,
+		)
+	} else if reconciliationErr != nil {
 		logger.Warnf(
 			"background FROST activation reconciliation failed for block [%d]: [%v]",
 			job.point.BlockNumber,
@@ -932,7 +960,7 @@ func (fahe *frostActivationHandshakeExporter) attest(
 		)
 	}
 	checkpointAncestry, ancestryErr :=
-		fahe.journal.checkpointAncestryAfter(checkpointFloor)
+		fahe.journal.checkpointAncestryFrom(checkpointFloor)
 	fahe.journal.mutex.Unlock()
 	if ancestryErr != nil {
 		return nil, fmt.Errorf(
@@ -1071,6 +1099,17 @@ func (fahe *frostActivationHandshakeExporter) attest(
 		QuarantineFailClosed:          journalSnapshot.QuarantineCount == 0,
 	}
 	state.Healthy = frostActivationHandshakeHealthy(state)
+	if err := verifyFrostActivationCheckpointHandshakeState(
+		fahe.manifest,
+		fahe.bindingHash,
+		request.Challenge,
+		state,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"cannot self-verify FROST activation checkpoint proof: [%w]",
+			err,
+		)
+	}
 	payload := frostActivationHandshakePayload{
 		Schema:        frostActivationHandshakeSchema,
 		Kind:          "frost-signer",
@@ -1152,6 +1191,157 @@ func frostActivationHandshakeSignatureTranscript(
 	result = append(result, frostActivationHandshakeSignatureDomain...)
 	result = append(result, canonicalPayload...)
 	return result, nil
+}
+
+func verifyFrostActivationCheckpointHandshakeState(
+	manifest FrostPreSignActivationRuntimeManifest,
+	bindingHash [32]byte,
+	challenge frostActivationChallenge,
+	state frostActivationHandshakeState,
+) error {
+	checkpoint := state.CheckpointJournal
+	if !checkpoint.Complete ||
+		checkpoint.ManifestMinimumSequence !=
+			manifest.QuarantineJournal.CheckpointMinimumSequence ||
+		checkpoint.ManifestPredecessorHash !=
+			frostActivationHex32(
+				manifest.QuarantineJournal.CheckpointPredecessorHash,
+			) ||
+		checkpoint.ChallengeFloor != challenge.CheckpointFloor ||
+		checkpoint.Point != challenge.EthereumPoint ||
+		checkpoint.Point != state.CanonicalJournal.Current ||
+		checkpoint.Point != state.FrostWalletGroupInventory.Point ||
+		checkpoint.CanonicalGeneration !=
+			state.CanonicalJournal.Generation ||
+		checkpoint.CanonicalGeneration !=
+			state.FrostWalletGroupInventory.SnapshotGeneration ||
+		checkpoint.CanonicalInventoryRoot !=
+			state.FrostWalletGroupInventory.InventoryRoot ||
+		checkpoint.QuarantineGeneration !=
+			state.QuarantineJournal.Generation ||
+		checkpoint.QuarantineEventRoot !=
+			state.QuarantineJournal.Root ||
+		checkpoint.QuarantineActiveRoot !=
+			state.QuarantineJournal.ActiveRoot ||
+		checkpoint.QuarantineTombstoneRoot !=
+			state.QuarantineJournal.TombstoneRoot {
+		return fmt.Errorf(
+			"FROST activation checkpoint proof differs from the surrounding handshake state",
+		)
+	}
+	parseCursor := func(
+		name string,
+		wire frostRetainedGroupWireCheckpointCursor,
+	) (FrostRetainedGroupCheckpointCursor, error) {
+		certificateHash, err := parseFrostActivationHex32(
+			wire.CertificateHash,
+		)
+		if err != nil ||
+			wire.CertificateHash !=
+				frostActivationHex32(certificateHash) {
+			return FrostRetainedGroupCheckpointCursor{}, fmt.Errorf(
+				"invalid %s checkpoint cursor",
+				name,
+			)
+		}
+		return FrostRetainedGroupCheckpointCursor{
+			Sequence:        wire.Sequence,
+			CertificateHash: certificateHash,
+		}, nil
+	}
+	floor, err := parseCursor("floor", checkpoint.ChallengeFloor)
+	if err != nil {
+		return err
+	}
+	durableHead, err := parseCursor("durable head", checkpoint.DurableHead)
+	if err != nil {
+		return err
+	}
+	pointHash, err := parseFrostActivationHex32(checkpoint.Point.BlockHash)
+	if err != nil ||
+		checkpoint.Point.BlockHash != frostActivationHex32(pointHash) {
+		return fmt.Errorf("invalid FROST checkpoint proof point")
+	}
+	parseRoot := func(name string, value string) ([32]byte, error) {
+		root, err := parseFrostActivationHex32(value)
+		if err != nil || value != frostActivationHex32(root) {
+			return [32]byte{}, fmt.Errorf(
+				"invalid FROST checkpoint proof %s",
+				name,
+			)
+		}
+		return root, nil
+	}
+	historyRoot, err := parseRoot("history root", checkpoint.HistoryRoot)
+	if err != nil {
+		return err
+	}
+	canonicalInventoryRoot, err := parseRoot(
+		"canonical inventory root",
+		checkpoint.CanonicalInventoryRoot,
+	)
+	if err != nil {
+		return err
+	}
+	quarantineEventRoot, err := parseRoot(
+		"quarantine event root",
+		checkpoint.QuarantineEventRoot,
+	)
+	if err != nil {
+		return err
+	}
+	quarantineActiveRoot, err := parseRoot(
+		"quarantine active root",
+		checkpoint.QuarantineActiveRoot,
+	)
+	if err != nil {
+		return err
+	}
+	quarantineTombstoneRoot, err := parseRoot(
+		"quarantine tombstone root",
+		checkpoint.QuarantineTombstoneRoot,
+	)
+	if err != nil {
+		return err
+	}
+	certificates := make(
+		[]FrostRetainedGroupCheckpointCertificate,
+		len(checkpoint.Ancestry),
+	)
+	for index, wireCertificate := range checkpoint.Ancestry {
+		certificate, err :=
+			frostRetainedGroupCheckpointCertificateFromWire(
+				wireCertificate,
+			)
+		if err != nil {
+			return fmt.Errorf(
+				"invalid FROST checkpoint proof certificate [%d]: [%w]",
+				index,
+				err,
+			)
+		}
+		certificates[index] = certificate
+	}
+	return VerifyFrostRetainedGroupCheckpointProof(
+		bindingHash,
+		manifest,
+		floor,
+		FrostRetainedGroupCheckpointCommitment{
+			DurableHead: durableHead,
+			Point: FrostPreSignFinality{
+				BlockNumber: checkpoint.Point.BlockNumber,
+				BlockHash:   pointHash,
+			},
+			HistoryRoot:             historyRoot,
+			CanonicalGeneration:     checkpoint.CanonicalGeneration,
+			CanonicalInventoryRoot:  canonicalInventoryRoot,
+			QuarantineGeneration:    checkpoint.QuarantineGeneration,
+			QuarantineEventRoot:     quarantineEventRoot,
+			QuarantineActiveRoot:    quarantineActiveRoot,
+			QuarantineTombstoneRoot: quarantineTombstoneRoot,
+		},
+		certificates,
+	)
 }
 
 func decodeStrictFrostActivationJSON(data []byte, target interface{}) error {

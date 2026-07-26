@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,6 +27,7 @@ type journalHistorySource struct {
 	identity         FrostRetainedGroupHistoryIdentity
 	checkpoint       FrostPreSignFinality
 	head             FrostPreSignFinality
+	finalizedHeadErr error
 	descriptor       [32]byte
 	mutations        []FrostRetainedGroupMutation
 	complete         bool
@@ -49,6 +51,9 @@ func (jhs *journalHistorySource) Identity(
 func (jhs *journalHistorySource) FinalizedHead(
 	context.Context,
 ) (FrostPreSignFinality, error) {
+	if jhs.finalizedHeadErr != nil {
+		return FrostPreSignFinality{}, jhs.finalizedHeadErr
+	}
 	return jhs.head, nil
 }
 
@@ -1094,6 +1099,195 @@ func TestFrostRetainedGroupJournal_CheckpointCertificateRejectsBypasses(
 	})
 }
 
+func TestFrostRetainedGroupJournal_CheckpointIdentityIgnoresQuorumEncoding(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	policy, err := frostRetainedGroupCheckpointPolicyFromRuntimeManifest(
+		fixture.bindingHash,
+		fixture.runtime,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := FrostRetainedGroupCheckpointCursor{
+		Sequence:        policy.MinimumSequence - 1,
+		CertificateHash: policy.PredecessorHash,
+	}
+	certificates, err := fixture.source.checkpointIssuer(
+		after,
+		fixture.target,
+		fixture.source.mutations,
+	)
+	if err != nil || len(certificates) != 1 {
+		t.Fatalf("cannot issue test checkpoint: [%v]", err)
+	}
+
+	twoOfThreeAB := certificates[0]
+	twoOfThreeAC := certificates[0]
+	fixture.resignCheckpointCertificate(
+		t,
+		&twoOfThreeAC,
+		[]int{0, 2},
+	)
+	threeOfThree := certificates[0]
+	fixture.resignCheckpointCertificate(
+		t,
+		&threeOfThree,
+		[]int{0, 1, 2},
+	)
+
+	var expectedHash [32]byte
+	for index, certificate := range []FrostRetainedGroupCheckpointCertificate{
+		twoOfThreeAB,
+		twoOfThreeAC,
+		threeOfThree,
+	} {
+		certificateHash, err :=
+			validateFrostRetainedGroupCheckpointCertificateShape(
+				policy,
+				certificate,
+			)
+		if err != nil {
+			t.Fatalf(
+				"valid quorum encoding [%d] was rejected: [%v]",
+				index,
+				err,
+			)
+		}
+		if index == 0 {
+			expectedHash = certificateHash
+		} else if certificateHash != expectedHash {
+			t.Fatalf(
+				"checkpoint identity depends on quorum encoding [%d]: [%x != %x]",
+				index,
+				certificateHash,
+				expectedHash,
+			)
+		}
+	}
+	twoOfThreeABWire, err := frostRetainedGroupCanonicalValue(
+		frostRetainedGroupCheckpointCertificateToWire(twoOfThreeAB),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	twoOfThreeACWire, err := frostRetainedGroupCanonicalValue(
+		frostRetainedGroupCheckpointCertificateToWire(twoOfThreeAC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(twoOfThreeABWire, twoOfThreeACWire) {
+		t.Fatal("alternate quorum encodings unexpectedly have identical wire form")
+	}
+}
+
+func TestFrostRetainedGroupJournal_CheckpointRejectsNonPrimeOrderAuthorityKeys(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	policy, err := frostRetainedGroupCheckpointPolicyFromRuntimeManifest(
+		fixture.bindingHash,
+		fixture.runtime,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := FrostRetainedGroupCheckpointCursor{
+		Sequence:        policy.MinimumSequence - 1,
+		CertificateHash: policy.PredecessorHash,
+	}
+	certificates, err := fixture.source.checkpointIssuer(
+		after,
+		fixture.target,
+		fixture.source.mutations,
+	)
+	if err != nil || len(certificates) != 1 {
+		t.Fatalf("cannot issue test checkpoint: [%v]", err)
+	}
+
+	identityKey := make(ed25519.PublicKey, ed25519.PublicKeySize)
+	identityKey[0] = 1
+	identityKeyDER, err := x509.MarshalPKIXPublicKey(identityKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.Authorities = append(
+		[]FrostRetainedGroupAuthority{},
+		policy.Authorities...,
+	)
+	policy.Authorities[0].PublicKeySPKIHash =
+		sha256.Sum256(identityKeyDER)
+	policy.AuthoritySetHash, err =
+		frostRetainedGroupAuthoritySetHash(
+			"tbtc-frost-retained-group-checkpoint-authority-set/v1",
+			policy.AuthorityThreshold,
+			policy.Authorities,
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := certificates[0]
+	certificate.Body.AuthoritySetHash = policy.AuthoritySetHash
+	fixture.resignCheckpointCertificate(
+		t,
+		&certificate,
+		[]int{0, 1},
+	)
+	signatureHash := frostRetainedGroupCheckpointSignatureHash(
+		certificate.BodyHash,
+	)
+	trivialSignature := make([]byte, ed25519.SignatureSize)
+	trivialSignature[0] = 1 // R is the identity; S is zero.
+	if !ed25519.Verify(
+		identityKey,
+		signatureHash[:],
+		trivialSignature,
+	) {
+		t.Fatal(
+			"test runtime no longer accepts the identity-key Ed25519 forgery",
+		)
+	}
+	certificate.Signatures[0] =
+		FrostRetainedGroupCheckpointSignature{
+			AuthorityID: policy.Authorities[0].AuthorityID,
+			SignerPublicKeySPKI: base64.StdEncoding.EncodeToString(
+				identityKeyDER,
+			),
+			Signature: base64.StdEncoding.EncodeToString(
+				trivialSignature,
+			),
+		}
+	if _, err := validateFrostRetainedGroupCheckpointCertificateShape(
+		policy,
+		certificate,
+	); err == nil || !strings.Contains(
+		err.Error(),
+		"nonidentity prime-order",
+	) {
+		t.Fatalf(
+			"identity checkpoint authority key was not rejected: [%v]",
+			err,
+		)
+	}
+
+	orderTwoKey := make(ed25519.PublicKey, ed25519.PublicKeySize)
+	orderTwoKey[0] = 0xec
+	for index := 1; index < len(orderTwoKey)-1; index++ {
+		orderTwoKey[index] = 0xff
+	}
+	orderTwoKey[len(orderTwoKey)-1] = 0x7f
+	if err := validateFrostRetainedGroupPrimeOrderEd25519PublicKey(
+		orderTwoKey,
+	); err == nil || !strings.Contains(err.Error(), "subgroup") {
+		t.Fatalf(
+			"nonidentity torsion Ed25519 key was not rejected: [%v]",
+			err,
+		)
+	}
+}
+
 func TestFrostRetainedGroupJournal_CheckpointFrozenHashVector(
 	t *testing.T,
 ) {
@@ -1133,8 +1327,8 @@ func TestFrostRetainedGroupJournal_CheckpointFrozenHashVector(
 		[][32]byte{certificateHash},
 	)
 	const expectedBodyHash = "ba0fdaecfc27fac1de867bd56f88fe66198952b3a99ef21f639bc62f331ce1fd"
-	const expectedCertificateHash = "cd396aa5ddc6bc7b53209ba2dc335fb8ed95113efdc256871df87f91a7d619e2"
-	const expectedChainRoot = "85a412822497e9029f7c437cf5c2087f20b2610a76ab4b952823aa3f89b27544"
+	const expectedCertificateHash = "0f7a902e61f4d2e47ab936440b865f693c403c263d17aeb9298a515830557d4a"
+	const expectedChainRoot = "a4bb6bd09d47673ef2476afcf6318c7508430623a20011feae3338f3c2302ec6"
 	if fmt.Sprintf("%x", bodyHash) != expectedBodyHash ||
 		fmt.Sprintf("%x", certificateHash) != expectedCertificateHash ||
 		fmt.Sprintf("%x", chainRoot) != expectedChainRoot {
@@ -1151,12 +1345,13 @@ func TestFrostRetainedGroupJournal_RecoversCheckpointChainBeyondOnePage(
 	t *testing.T,
 ) {
 	fixture := newJournalTestFixture(t)
-	count := frostRetainedGroupMaximumCheckpointsPerPage + 2
+	const previousAggregateRecoveryLimit = 4096
+	count := previousAggregateRecoveryLimit + 2
 	cursor := FrostRetainedGroupCheckpointCursor{
 		Sequence:        fixture.quarantine.CheckpointMinimumSequence - 1,
 		CertificateHash: fixture.quarantine.CheckpointPredecessorHash,
 	}
-	var oldestCertified FrostRetainedGroupCheckpointCursor
+	var proofFloor FrostRetainedGroupCheckpointCursor
 	var target FrostPreSignFinality
 	for index := 0; index < count; index++ {
 		blockNumber := fixture.checkpoint.BlockNumber + uint64(index) + 1
@@ -1193,12 +1388,12 @@ func TestFrostRetainedGroupJournal_RecoversCheckpointChainBeyondOnePage(
 			Sequence:        certificates[0].Body.Sequence,
 			CertificateHash: certificateHash,
 		}
-		if index == 0 {
-			oldestCertified = cursor
+		if index == count-1-frostRetainedGroupMaximumHandshakeAncestry {
+			proofFloor = cursor
 		}
 	}
 	fixture.source.head = FrostPreSignFinality{
-		BlockNumber: 1000,
+		BlockNumber: target.BlockNumber + 1,
 		BlockHash:   [32]byte{0xfa},
 	}
 	fixture.source.points[fixture.source.head.BlockNumber] =
@@ -1206,33 +1401,134 @@ func TestFrostRetainedGroupJournal_RecoversCheckpointChainBeyondOnePage(
 
 	directory := filepath.Join(t.TempDir(), "journal")
 	journal := fixture.openJournal(t, directory)
-	defer journal.close()
 	snapshot, err := journal.reconcile(context.Background(), target)
-	if err != nil {
+	if !errors.Is(err, errFrostRetainedGroupCheckpointRecoveryProgress) ||
+		snapshot != nil {
+		_ = journal.close()
+		t.Fatalf(
+			"first bounded recovery page did not report durable progress: [%v]",
+			err,
+		)
+	}
+	if journal.checkpointState.Sequence !=
+		uint64(frostRetainedGroupMaximumCheckpointsPerPage) {
+		_ = journal.close()
+		t.Fatalf(
+			"first bounded recovery page stopped at sequence [%d]",
+			journal.checkpointState.Sequence,
+		)
+	}
+
+	postPublicationTimeoutInjected := false
+	journal.checkpointPersistFailureHook = func(stage string) error {
+		if stage == "after-checkpoint-state-before-memory" &&
+			!postPublicationTimeoutInjected {
+			postPublicationTimeoutInjected = true
+			fixture.source.finalizedHeadErr = context.DeadlineExceeded
+		}
+		return nil
+	}
+	snapshot, err = journal.reconcile(context.Background(), target)
+	if !errors.Is(err, errFrostRetainedGroupCheckpointRecoveryProgress) ||
+		!errors.Is(err, context.DeadlineExceeded) ||
+		snapshot != nil {
+		_ = journal.close()
+		t.Fatalf(
+			"post-publication timeout did not preserve durable progress: [%v]",
+			err,
+		)
+	}
+	if journal.checkpointState.Sequence !=
+		2*uint64(frostRetainedGroupMaximumCheckpointsPerPage) {
+		_ = journal.close()
+		t.Fatal("post-publication timeout lost the durable checkpoint cursor")
+	}
+	journal.checkpointPersistFailureHook = nil
+	fixture.source.finalizedHeadErr = nil
+	if err := journal.close(); err != nil {
 		t.Fatal(err)
 	}
+
+	restarted := fixture.openJournal(t, directory)
+	defer restarted.close()
+	if restarted.checkpointState.Sequence !=
+		2*uint64(frostRetainedGroupMaximumCheckpointsPerPage) {
+		t.Fatalf(
+			"restart lost the durable checkpoint cursor: [%d]",
+			restarted.checkpointState.Sequence,
+		)
+	}
+	previousSequence := restarted.checkpointState.Sequence
+	progressCount := 0
+	for {
+		snapshot, err = restarted.reconcile(context.Background(), target)
+		if err == nil {
+			break
+		}
+		if !errors.Is(
+			err,
+			errFrostRetainedGroupCheckpointRecoveryProgress,
+		) || snapshot != nil {
+			t.Fatalf(
+				"bounded recovery returned a non-progress result: [%v]",
+				err,
+			)
+		}
+		if restarted.checkpointState.Sequence !=
+			previousSequence+
+				uint64(frostRetainedGroupMaximumCheckpointsPerPage) {
+			t.Fatalf(
+				"bounded recovery did not advance exactly one page: [%d] -> [%d]",
+				previousSequence,
+				restarted.checkpointState.Sequence,
+			)
+		}
+		previousSequence = restarted.checkpointState.Sequence
+		progressCount++
+	}
+	expectedProgressCount :=
+		previousAggregateRecoveryLimit/
+			frostRetainedGroupMaximumCheckpointsPerPage -
+			2
+	if progressCount != expectedProgressCount {
+		t.Fatalf(
+			"unexpected bounded recovery progress count: [%d]",
+			progressCount,
+		)
+	}
 	if snapshot.CheckpointSequence != uint64(count) ||
-		journal.checkpointState.Sequence != uint64(count) ||
+		restarted.checkpointState.Sequence != uint64(count) ||
 		snapshot.CheckpointCertificateHash != cursor.CertificateHash {
 		t.Fatalf(
 			"multi-page recovery stopped at the wrong checkpoint: %+v",
 			snapshot,
 		)
 	}
-	ancestry, err := journal.checkpointAncestryAfter(oldestCertified)
+	ancestry, err := restarted.checkpointAncestryFrom(proofFloor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ancestry) != count-1 ||
-		len(ancestry) <= frostRetainedGroupMaximumCheckpointsPerPage {
+	if len(ancestry) != frostRetainedGroupMaximumHandshakeAncestry+1 {
 		t.Fatalf(
 			"long-lived ancestry proof was truncated at [%d] certificates",
 			len(ancestry),
 		)
 	}
-	if _, err := validateFrostRetainedGroupCheckpointSuffix(
-		journal.checkpointPolicy,
-		oldestCertified,
+	if err := VerifyFrostRetainedGroupCheckpointProof(
+		fixture.bindingHash,
+		fixture.runtime,
+		proofFloor,
+		FrostRetainedGroupCheckpointCommitment{
+			DurableHead:             cursor,
+			Point:                   restarted.checkpointState.Point,
+			HistoryRoot:             restarted.checkpointState.HistoryRoot,
+			CanonicalGeneration:     restarted.checkpointState.CanonicalGeneration,
+			CanonicalInventoryRoot:  restarted.checkpointState.CanonicalInventoryRoot,
+			QuarantineGeneration:    restarted.checkpointState.QuarantineGeneration,
+			QuarantineEventRoot:     restarted.checkpointState.QuarantineEventRoot,
+			QuarantineActiveRoot:    restarted.checkpointState.QuarantineActiveRoot,
+			QuarantineTombstoneRoot: restarted.checkpointState.QuarantineTombstoneRoot,
+		},
 		ancestry,
 	); err != nil {
 		t.Fatalf("long-lived ancestry proof is invalid: [%v]", err)
@@ -1242,6 +1538,100 @@ func TestFrostRetainedGroupJournal_RecoversCheckpointChainBeyondOnePage(
 func TestFrostRetainedGroupJournal_CheckpointPersistenceRetriesInProcess(
 	t *testing.T,
 ) {
+	t.Run("adopts an alternate valid quorum encoding", func(t *testing.T) {
+		fixture := newJournalTestFixture(t)
+		cursor := FrostRetainedGroupCheckpointCursor{
+			Sequence: fixture.quarantine.CheckpointMinimumSequence - 1,
+			CertificateHash: fixture.quarantine.
+				CheckpointPredecessorHash,
+		}
+		certificates, err := fixture.source.checkpointIssuer(
+			cursor,
+			fixture.target,
+			fixture.source.mutations,
+		)
+		if err != nil || len(certificates) != 1 {
+			t.Fatalf("cannot issue test checkpoint: [%v]", err)
+		}
+		sourceCertificate := certificates[0]
+		storedCertificate := sourceCertificate
+		fixture.resignCheckpointCertificate(
+			t,
+			&storedCertificate,
+			[]int{0, 2},
+		)
+		sourceHash, err :=
+			frostRetainedGroupCheckpointCertificateHash(sourceCertificate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		storedHash, err :=
+			frostRetainedGroupCheckpointCertificateHash(storedCertificate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sourceHash != storedHash {
+			t.Fatal("alternate quorum encodings have different checkpoint identities")
+		}
+
+		directory := filepath.Join(t.TempDir(), "journal")
+		journal := fixture.openJournal(t, directory)
+		if err := persistFrostRetainedGroupEnvelopeAt(
+			journal.checkpointDirectory,
+			frostRetainedGroupCheckpointFileName(
+				storedCertificate.Body.Sequence,
+				storedHash,
+			),
+			frostRetainedGroupCheckpointCertificateToWire(
+				storedCertificate,
+			),
+			false,
+		); err != nil {
+			_ = journal.close()
+			t.Fatal(err)
+		}
+		snapshot, err := journal.reconcile(
+			context.Background(),
+			fixture.target,
+		)
+		if err != nil {
+			_ = journal.close()
+			t.Fatal(err)
+		}
+		adopted := journal.checkpointCertificates[storedCertificate.Body.Sequence]
+		if snapshot.CheckpointCertificateHash != storedHash ||
+			len(adopted.Signatures) != len(storedCertificate.Signatures) ||
+			adopted.Signatures[1].AuthorityID !=
+				storedCertificate.Signatures[1].AuthorityID {
+			_ = journal.close()
+			t.Fatalf(
+				"journal did not adopt the durable quorum encoding: %+v",
+				adopted,
+			)
+		}
+		if err := journal.close(); err != nil {
+			t.Fatal(err)
+		}
+
+		restarted := fixture.openJournal(t, directory)
+		defer restarted.close()
+		restartedSnapshot, err := restarted.reconcile(
+			context.Background(),
+			fixture.target,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if restartedSnapshot.CheckpointCertificateHash != storedHash ||
+			restarted.checkpointState.Sequence !=
+				storedCertificate.Body.Sequence {
+			t.Fatalf(
+				"alternate quorum encoding did not converge after restart: %+v",
+				restartedSnapshot,
+			)
+		}
+	})
+
 	t.Run("adopts a certificate orphan before the next certificate", func(t *testing.T) {
 		fixture := newJournalTestFixture(t)
 		cursor := FrostRetainedGroupCheckpointCursor{
@@ -1465,9 +1855,67 @@ func TestFrostRetainedGroupJournal_RejectsStaleHandshakeFloorBeforeAllocation(
 	journal.checkpointHashes[floor.Sequence] = floor.CertificateHash
 	journal.checkpointState.Sequence =
 		floor.Sequence + frostRetainedGroupMaximumHandshakeAncestry + 1
-	_, err := journal.checkpointAncestryAfter(floor)
+	_, err := journal.checkpointAncestryFrom(floor)
 	if err == nil || !strings.Contains(err.Error(), "floor is too stale") {
 		t.Fatalf("expected stale external floor rejection, got [%v]", err)
+	}
+}
+
+func TestFrostRetainedGroupJournal_RejectsOversizedHandshakeProofBeforeMaterialization(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	journal := fixture.openJournal(
+		t,
+		filepath.Join(t.TempDir(), "journal"),
+	)
+	defer journal.close()
+	if _, err := journal.reconcile(
+		context.Background(),
+		fixture.target,
+	); err != nil {
+		t.Fatal(err)
+	}
+	floor := FrostRetainedGroupCheckpointCursor{
+		Sequence:        journal.checkpointState.Sequence,
+		CertificateHash: journal.checkpointState.CertificateHash,
+	}
+	certificate := journal.checkpointCertificates[floor.Sequence]
+	baseSignatures := append(
+		[]FrostRetainedGroupCheckpointSignature{},
+		certificate.Signatures...,
+	)
+	certificate.Signatures = make(
+		[]FrostRetainedGroupCheckpointSignature,
+		0,
+		len(baseSignatures)*64,
+	)
+	for index := 0; index < 64; index++ {
+		certificate.Signatures = append(
+			certificate.Signatures,
+			baseSignatures...,
+		)
+	}
+	for offset := uint64(0); offset <=
+		frostRetainedGroupMaximumHandshakeAncestry; offset++ {
+		sequence := floor.Sequence + offset
+		journal.checkpointCertificates[sequence] = certificate
+		journal.checkpointHashes[sequence] = [32]byte{0x7a}
+	}
+	journal.checkpointHashes[floor.Sequence] = floor.CertificateHash
+	journal.checkpointState.Sequence =
+		floor.Sequence + frostRetainedGroupMaximumHandshakeAncestry
+
+	if _, err := journal.checkpointAncestryFrom(
+		floor,
+	); err == nil || !strings.Contains(
+		err.Error(),
+		"canonical byte limit",
+	) {
+		t.Fatalf(
+			"oversized checkpoint proof was not rejected before aggregate materialization: [%v]",
+			err,
+		)
 	}
 }
 

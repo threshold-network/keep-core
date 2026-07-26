@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -26,6 +27,201 @@ import (
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 )
+
+func TestFrostActivationHandshakeExporter_CheckpointRecoveryReentry(
+	t *testing.T,
+) {
+	point := FrostPreSignFinality{
+		BlockNumber: 11,
+		BlockHash:   [32]byte{0x11},
+	}
+
+	t.Run("requeues authenticated progress", func(t *testing.T) {
+		job := &frostActivationReconciliationJob{
+			sequence: 7,
+			point:    point,
+		}
+		exporter := &frostActivationHandshakeExporter{
+			reconciliationSequence: 7,
+			reconciliationActive:   job,
+		}
+		hasDesired := exporter.completeReconciliationJob(
+			job,
+			nil,
+			fmt.Errorf(
+				"wrapped recovery result: %w",
+				errFrostRetainedGroupCheckpointRecoveryProgress,
+			),
+		)
+		if !hasDesired ||
+			exporter.reconciliationActive != nil ||
+			exporter.reconciliationCompleted != nil ||
+			exporter.reconciliationSequence != 8 ||
+			exporter.reconciliationDesired == nil ||
+			exporter.reconciliationDesired.sequence != 8 ||
+			exporter.reconciliationDesired.point != point {
+			t.Fatalf(
+				"authenticated checkpoint progress was not deterministically requeued: %+v",
+				exporter,
+			)
+		}
+	})
+
+	t.Run("does not retry an ordinary failure", func(t *testing.T) {
+		job := &frostActivationReconciliationJob{
+			sequence: 7,
+			point:    point,
+		}
+		exporter := &frostActivationHandshakeExporter{
+			reconciliationSequence: 7,
+			reconciliationActive:   job,
+		}
+		if exporter.completeReconciliationJob(
+			job,
+			nil,
+			errors.New("ordinary failure"),
+		) ||
+			exporter.reconciliationDesired != nil ||
+			exporter.reconciliationSequence != 7 {
+			t.Fatalf(
+				"ordinary reconciliation failure was automatically requeued: %+v",
+				exporter,
+			)
+		}
+	})
+
+	t.Run("preserves a newer request", func(t *testing.T) {
+		job := &frostActivationReconciliationJob{
+			sequence: 7,
+			point:    point,
+		}
+		newerPoint := FrostPreSignFinality{
+			BlockNumber: 12,
+			BlockHash:   [32]byte{0x12},
+		}
+		newerJob := &frostActivationReconciliationJob{
+			sequence: 8,
+			point:    newerPoint,
+		}
+		exporter := &frostActivationHandshakeExporter{
+			reconciliationSequence: 8,
+			reconciliationActive:   job,
+			reconciliationDesired:  newerJob,
+		}
+		if !exporter.completeReconciliationJob(
+			job,
+			nil,
+			errFrostRetainedGroupCheckpointRecoveryProgress,
+		) ||
+			exporter.reconciliationSequence != 8 ||
+			exporter.reconciliationDesired != newerJob {
+			t.Fatalf(
+				"checkpoint progress overwrote the newer reconciliation request: %+v",
+				exporter,
+			)
+		}
+	})
+}
+
+func TestFrostActivationHandshakeExporter_CheckpointRecoveryWorkerLoopsUntilComplete(
+	t *testing.T,
+) {
+	point := FrostPreSignFinality{
+		BlockNumber: 11,
+		BlockHash:   [32]byte{0x11},
+	}
+	job := &frostActivationReconciliationJob{
+		sequence: 1,
+		point:    point,
+	}
+	exporter := &frostActivationHandshakeExporter{
+		reconciliationWake:     make(chan struct{}, 1),
+		reconciliationSequence: 1,
+		reconciliationDesired:  job,
+	}
+	thirdAttemptStarted := make(chan struct{})
+	releaseThirdAttempt := make(chan struct{})
+	attempts := 0
+	reconcile := func(
+		ctx context.Context,
+		actualPoint FrostPreSignFinality,
+	) (*frostActivationReconciliationCache, error) {
+		attempts++
+		if actualPoint != point {
+			return nil, fmt.Errorf("worker reconciled an unexpected point")
+		}
+		if attempts <= 2 {
+			return nil, fmt.Errorf(
+				"bounded page [%d]: %w",
+				attempts,
+				errFrostRetainedGroupCheckpointRecoveryProgress,
+			)
+		}
+		close(thirdAttemptStarted)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-releaseThirdAttempt:
+		}
+		return &frostActivationReconciliationCache{
+			point: point,
+		}, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	workerDone := make(chan struct{})
+	go func() {
+		exporter.runReconciliationWorker(ctx, reconcile)
+		close(workerDone)
+	}()
+	exporter.reconciliationWake <- struct{}{}
+
+	select {
+	case <-thirdAttemptStarted:
+	case <-time.After(3 * time.Second):
+		cancel()
+		<-workerDone
+		t.Fatal("worker did not re-enter checkpoint recovery")
+	}
+	exporter.reconciliationMutex.Lock()
+	if exporter.reconciliationCompleted != nil ||
+		exporter.reconciliationActive == nil ||
+		exporter.reconciliationActive.sequence != 3 ||
+		exporter.reconciliationSequence != 3 {
+		exporter.reconciliationMutex.Unlock()
+		cancel()
+		close(releaseThirdAttempt)
+		<-workerDone
+		t.Fatalf(
+			"worker published health before checkpoint recovery completed: %+v",
+			exporter,
+		)
+	}
+	exporter.reconciliationMutex.Unlock()
+
+	close(releaseThirdAttempt)
+	deadline := time.Now().Add(3 * time.Second)
+	for exporter.cachedReconciliation(point) == nil {
+		if time.Now().After(deadline) {
+			cancel()
+			<-workerDone
+			t.Fatal("worker did not publish completed reconciliation")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-workerDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("checkpoint recovery worker did not stop")
+	}
+	if attempts != 3 {
+		t.Fatalf(
+			"worker made [%d] attempts, expected two progress pages and completion",
+			attempts,
+		)
+	}
+}
 
 type testFrostActivationPointVerifier struct {
 	mutex sync.Mutex
@@ -367,6 +563,23 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 	if err != nil || !ed25519.Verify(publicKey, signatureTranscript, signature) {
 		t.Fatal("handshake signature did not verify over canonical payload")
 	}
+	if len(handshake.Payload.State.CheckpointJournal.Ancestry) != 1 {
+		t.Fatalf(
+			"exact-head checkpoint proof contains [%d] certificates",
+			len(handshake.Payload.State.CheckpointJournal.Ancestry),
+		)
+	}
+	if err := verifyFrostActivationCheckpointHandshakeState(
+		manifest,
+		journal.metadata.BindingHash,
+		request.Challenge,
+		handshake.Payload.State,
+	); err != nil {
+		t.Fatalf(
+			"independent exact-head checkpoint proof verification failed: [%v]",
+			err,
+		)
+	}
 	assertFrostActivationObjectKeys(t, handshake.Payload.State, []string{
 		"authorizationRegistryAddress", "bitcoinOutboxProtocolID", "canonicalJournal",
 		"checkpointJournal", "completeRouterAddress", "durableBitcoinOutboxRecovered", "durableSessionStoreFingerprint",
@@ -423,6 +636,111 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 			unknownResponse.StatusCode,
 			unknownResponse.Header.Get("Retry-After"),
 		)
+	}
+}
+
+func TestFrostActivationHandshakeExporter_AttestsInclusiveCheckpointAncestry(
+	t *testing.T,
+) {
+	point := frostActivationEthereumPoint{
+		BlockNumber: 123,
+		BlockHash:   frostActivationHex32([32]byte{0x44}),
+	}
+	exporter, journal, source, _, endpoint, request :=
+		startTestFrostActivationHandshakeExporter(t, point)
+	externalFloor := request.Challenge.CheckpointFloor
+	nextPoint := FrostPreSignFinality{
+		BlockNumber: point.BlockNumber + 1,
+		BlockHash:   [32]byte{0x45},
+	}
+	journal.mutex.Lock()
+	journal.state.CurrentPoint = nextPoint
+	journal.quarantineState.CurrentPoint = nextPoint
+	var err error
+	journal.state.InventoryRoot, _, _, _, err =
+		frostRetainedGroupInventoryRoot(journal.state)
+	journal.mutex.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.setTarget(nextPoint)
+	request.Challenge.EthereumPoint = frostActivationEthereumPoint{
+		BlockNumber: nextPoint.BlockNumber,
+		BlockHash:   frostActivationHex32(nextPoint.BlockHash),
+	}
+	recertifyTestFrostActivationJournal(
+		t,
+		journal,
+		source,
+		&request,
+		journal.checkpointState.Sequence+1,
+	)
+	request.Challenge.CheckpointFloor = externalFloor
+
+	response := postTestFrostActivationHandshake(t, endpoint, request)
+	if response.StatusCode != http.StatusServiceUnavailable ||
+		response.Header.Get("Retry-After") !=
+			frostActivationHandshakeRetryAfter {
+		response.Body.Close()
+		t.Fatalf(
+			"initial ancestry reconciliation returned [%d]",
+			response.StatusCode,
+		)
+	}
+	response.Body.Close()
+	response = awaitTestFrostActivationHandshake(
+		t,
+		endpoint,
+		request,
+		http.StatusOK,
+	)
+	defer response.Body.Close()
+	handshake := &frostActivationSignedHandshake{}
+	if err := json.NewDecoder(response.Body).Decode(handshake); err != nil {
+		t.Fatal(err)
+	}
+	if len(handshake.Payload.State.CheckpointJournal.Ancestry) != 2 {
+		t.Fatalf(
+			"checkpoint proof contains [%d] certificates, expected floor and head",
+			len(handshake.Payload.State.CheckpointJournal.Ancestry),
+		)
+	}
+	if err := verifyFrostActivationCheckpointHandshakeState(
+		exporter.manifest,
+		journal.metadata.BindingHash,
+		request.Challenge,
+		handshake.Payload.State,
+	); err != nil {
+		t.Fatalf(
+			"independent descendant checkpoint proof verification failed: [%v]",
+			err,
+		)
+	}
+
+	missingFloor := handshake.Payload.State
+	missingFloor.CheckpointJournal.Ancestry =
+		append(
+			[]frostRetainedGroupWireCheckpointCertificate{},
+			missingFloor.CheckpointJournal.Ancestry[1:]...,
+		)
+	if err := verifyFrostActivationCheckpointHandshakeState(
+		exporter.manifest,
+		journal.metadata.BindingHash,
+		request.Challenge,
+		missingFloor,
+	); err == nil {
+		t.Fatal("checkpoint proof without its external floor was accepted")
+	}
+	wrongRoot := handshake.Payload.State
+	wrongRoot.CheckpointJournal.HistoryRoot =
+		frostActivationHex32([32]byte{0xff})
+	if err := verifyFrostActivationCheckpointHandshakeState(
+		exporter.manifest,
+		journal.metadata.BindingHash,
+		request.Challenge,
+		wrongRoot,
+	); err == nil {
+		t.Fatal("checkpoint proof with a different tail root was accepted")
 	}
 }
 
@@ -1087,6 +1405,8 @@ func TestCanonicalFrostActivationValue_RejectsDuplicateRawMessageKeys(
 func testFrostActivationRuntimeManifest(
 	keyHash [32]byte,
 ) FrostPreSignActivationRuntimeManifest {
+	checkpointAuthorities, _, _ :=
+		testFrostActivationCheckpointCredentials()
 	return FrostPreSignActivationRuntimeManifest{
 		ManifestHash:                     [32]byte{0x10},
 		ActivationAuthorityKeyHash:       [32]byte{0x30},
@@ -1126,14 +1446,10 @@ func testFrostActivationRuntimeManifest(
 			LiftProtocolID:               [32]byte{0x35},
 			TombstoneProtocolID:          [32]byte{0x36},
 			CheckpointAuthorityThreshold: 2,
-			CheckpointAuthorities: []FrostRetainedGroupAuthority{
-				{AuthorityID: "checkpoint-1", PublicKeySPKIHash: [32]byte{0x40}},
-				{AuthorityID: "checkpoint-2", PublicKeySPKIHash: [32]byte{0x41}},
-				{AuthorityID: "checkpoint-3", PublicKeySPKIHash: [32]byte{0x42}},
-			},
-			CheckpointMinimumSequence: 1,
-			CheckpointPredecessorHash: [32]byte{},
-			LiftAuthorityThreshold:    2,
+			CheckpointAuthorities:        checkpointAuthorities,
+			CheckpointMinimumSequence:    1,
+			CheckpointPredecessorHash:    [32]byte{},
+			LiftAuthorityThreshold:       2,
 			LiftAuthorities: []FrostRetainedGroupAuthority{
 				{AuthorityID: "lift-1", PublicKeySPKIHash: [32]byte{0x43}},
 				{AuthorityID: "lift-2", PublicKeySPKIHash: [32]byte{0x44}},
@@ -1145,6 +1461,113 @@ func testFrostActivationRuntimeManifest(
 			MinimumGeneration:  0,
 		},
 	}
+}
+
+func testFrostActivationCheckpointCredentials() (
+	[]FrostRetainedGroupAuthority,
+	[]ed25519.PrivateKey,
+	[]string,
+) {
+	authorities := make([]FrostRetainedGroupAuthority, 3)
+	privateKeys := make([]ed25519.PrivateKey, 3)
+	publicKeySPKIs := make([]string, 3)
+	for index := range authorities {
+		seed := make([]byte, ed25519.SeedSize)
+		seed[0] = byte(0x70 + index)
+		privateKey := ed25519.NewKeyFromSeed(seed)
+		publicKeyDER, err := x509.MarshalPKIXPublicKey(
+			privateKey.Public(),
+		)
+		if err != nil {
+			panic(err)
+		}
+		authorities[index] = FrostRetainedGroupAuthority{
+			AuthorityID: fmt.Sprintf(
+				"checkpoint-%d",
+				index+1,
+			),
+			PublicKeySPKIHash: sha256.Sum256(publicKeyDER),
+		}
+		privateKeys[index] = privateKey
+		publicKeySPKIs[index] =
+			base64.StdEncoding.EncodeToString(publicKeyDER)
+	}
+	return authorities, privateKeys, publicKeySPKIs
+}
+
+func testFrostActivationCheckpointCertificate(
+	t *testing.T,
+	policy frostRetainedGroupCheckpointPolicy,
+	sequence uint64,
+	previousHash [32]byte,
+	commitment FrostRetainedGroupCheckpointCommitment,
+) (FrostRetainedGroupCheckpointCertificate, [32]byte) {
+	t.Helper()
+	body := FrostRetainedGroupCheckpointBody{
+		Schema:                  frostRetainedGroupCheckpointBodySchema,
+		ProtocolBindingHash:     policy.ProtocolBindingHash,
+		ManifestHash:            policy.ManifestHash,
+		ProfileHash:             policy.ProfileHash,
+		ImplementationSetHash:   policy.ImplementationSetHash,
+		ChainID:                 policy.ChainID,
+		DomainChainID:           policy.DomainChainID,
+		GenesisBlockHash:        policy.GenesisBlockHash,
+		AuthoritySetHash:        policy.AuthoritySetHash,
+		Sequence:                sequence,
+		PreviousCertificateHash: previousHash,
+		Point:                   commitment.Point,
+		HistoryRoot:             commitment.HistoryRoot,
+		CanonicalGeneration:     commitment.CanonicalGeneration,
+		CanonicalInventoryRoot:  commitment.CanonicalInventoryRoot,
+		QuarantineGeneration:    commitment.QuarantineGeneration,
+		QuarantineEventRoot:     commitment.QuarantineEventRoot,
+		QuarantineActiveRoot:    commitment.QuarantineActiveRoot,
+		QuarantineTombstoneRoot: commitment.QuarantineTombstoneRoot,
+	}
+	bodyHash, err := frostRetainedGroupCheckpointBodyHash(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorities, privateKeys, publicKeySPKIs :=
+		testFrostActivationCheckpointCredentials()
+	if len(authorities) != len(policy.Authorities) {
+		t.Fatal("test checkpoint authority count differs from policy")
+	}
+	signatureHash := frostRetainedGroupCheckpointSignatureHash(bodyHash)
+	signatures := make(
+		[]FrostRetainedGroupCheckpointSignature,
+		policy.AuthorityThreshold,
+	)
+	for index := range signatures {
+		if authorities[index] != policy.Authorities[index] {
+			t.Fatal("test checkpoint authority differs from policy")
+		}
+		signatures[index] = FrostRetainedGroupCheckpointSignature{
+			AuthorityID:         authorities[index].AuthorityID,
+			SignerPublicKeySPKI: publicKeySPKIs[index],
+			Signature: base64.StdEncoding.EncodeToString(
+				ed25519.Sign(
+					privateKeys[index],
+					signatureHash[:],
+				),
+			),
+		}
+	}
+	certificate := FrostRetainedGroupCheckpointCertificate{
+		Schema:     frostRetainedGroupCheckpointCertificateSchema,
+		Body:       body,
+		BodyHash:   bodyHash,
+		Signatures: signatures,
+	}
+	certificateHash, err :=
+		validateFrostRetainedGroupCheckpointCertificateShape(
+			policy,
+			certificate,
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return certificate, certificateHash
 }
 
 func startTestFrostActivationHandshakeExporter(
@@ -1296,7 +1719,23 @@ func testFrostRetainedGroupJournal(
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkpointHash := [32]byte{0x55}
+	checkpointCertificate, checkpointHash :=
+		testFrostActivationCheckpointCertificate(
+			t,
+			checkpointPolicy,
+			manifest.QuarantineJournal.CheckpointMinimumSequence,
+			manifest.QuarantineJournal.CheckpointPredecessorHash,
+			FrostRetainedGroupCheckpointCommitment{
+				Point:                   target,
+				HistoryRoot:             historyRoot,
+				CanonicalGeneration:     state.SnapshotGeneration,
+				CanonicalInventoryRoot:  state.InventoryRoot,
+				QuarantineGeneration:    0,
+				QuarantineEventRoot:     quarantineRoot,
+				QuarantineActiveRoot:    activeRoot,
+				QuarantineTombstoneRoot: tombstoneRoot,
+			},
+		)
 	checkpointHead := FrostRetainedGroupCheckpointCursor{
 		Sequence:        manifest.QuarantineJournal.CheckpointMinimumSequence,
 		CertificateHash: checkpointHash,
@@ -1363,7 +1802,9 @@ func testFrostRetainedGroupJournal(
 			QuarantineActiveRoot:    activeRoot,
 			QuarantineTombstoneRoot: tombstoneRoot,
 		},
-		checkpointCertificates: make(map[uint64]FrostRetainedGroupCheckpointCertificate),
+		checkpointCertificates: map[uint64]FrostRetainedGroupCheckpointCertificate{
+			checkpointHead.Sequence: checkpointCertificate,
+		},
 		checkpointHashes: map[uint64][32]byte{
 			checkpointHead.Sequence: checkpointHead.CertificateHash,
 		},
@@ -1399,18 +1840,7 @@ func recertifyTestFrostActivationJournal(
 		journal.mutex.Unlock()
 		t.Fatal(err)
 	}
-	commitment := struct {
-		Sequence                uint64
-		Point                   FrostPreSignFinality
-		HistoryRoot             [32]byte
-		CanonicalGeneration     uint64
-		CanonicalInventoryRoot  [32]byte
-		QuarantineGeneration    uint64
-		QuarantineEventRoot     [32]byte
-		QuarantineActiveRoot    [32]byte
-		QuarantineTombstoneRoot [32]byte
-	}{
-		Sequence:                sequence,
+	commitment := FrostRetainedGroupCheckpointCommitment{
 		Point:                   journal.state.CurrentPoint,
 		HistoryRoot:             historyRoot,
 		CanonicalGeneration:     journal.state.SnapshotGeneration,
@@ -1420,14 +1850,27 @@ func recertifyTestFrostActivationJournal(
 		QuarantineActiveRoot:    journal.quarantineState.ActiveRoot,
 		QuarantineTombstoneRoot: journal.quarantineState.TombstoneRoot,
 	}
-	certificateHash, err := frostRetainedGroupDomainHash(
-		"test-frost-checkpoint-certificate-v1\x00",
-		commitment,
-	)
-	if err != nil {
-		journal.mutex.Unlock()
-		t.Fatal(err)
+	previousHash := journal.checkpointPolicy.PredecessorHash
+	if sequence > journal.checkpointPolicy.MinimumSequence {
+		var exists bool
+		previousHash, exists =
+			journal.checkpointHashes[sequence-1]
+		if !exists {
+			journal.mutex.Unlock()
+			t.Fatalf(
+				"test checkpoint predecessor [%d] is missing",
+				sequence-1,
+			)
+		}
 	}
+	certificate, certificateHash :=
+		testFrostActivationCheckpointCertificate(
+			t,
+			journal.checkpointPolicy,
+			sequence,
+			previousHash,
+			commitment,
+		)
 	journal.checkpointState = frostRetainedGroupCheckpointJournalState{
 		Schema:                  frostRetainedGroupCheckpointStateSchema,
 		BindingHash:             journal.metadata.BindingHash,
@@ -1442,6 +1885,7 @@ func recertifyTestFrostActivationJournal(
 		QuarantineActiveRoot:    journal.quarantineState.ActiveRoot,
 		QuarantineTombstoneRoot: journal.quarantineState.TombstoneRoot,
 	}
+	journal.checkpointCertificates[sequence] = certificate
 	journal.checkpointHashes[sequence] = certificateHash
 	journal.mutex.Unlock()
 
