@@ -802,19 +802,30 @@ func (se *signingExecutor) signWithTaprootMerkleRootForSessionIntentAndAuthoriza
 			authorizationID,
 		)
 	}
-	aggregateMemoSession, err :=
-		signing.BeginInteractiveAggregateMemoSession(roastSID)
-	if err != nil {
-		if se.metricsRecorder != nil {
-			se.metricsRecorder.IncrementCounter(
-				clientinfo.MetricSigningFailedTotal,
-				1,
+	// Interactive aggregate memoization exists only on the FROST/ROAST path.
+	// A legacy ECDSA wallet never aggregates interactively, so it must not
+	// claim memo ownership it will never use: in frost-native builds the
+	// ownership registry rejects duplicate live session IDs, and a legacy
+	// wallet's roastSID folds an empty key-group, so two wallets signing the
+	// same message at the same start block would collide and fail signing.
+	// Release is nil-safe on the legacy path.
+	var aggregateMemoSession *signing.InteractiveAggregateMemoSession
+	if se.usesSchnorrSignatures() {
+		session, err :=
+			signing.BeginInteractiveAggregateMemoSession(roastSID)
+		if err != nil {
+			if se.metricsRecorder != nil {
+				se.metricsRecorder.IncrementCounter(
+					clientinfo.MetricSigningFailedTotal,
+					1,
+				)
+			}
+			return nil, nil, 0, fmt.Errorf(
+				"cannot bind interactive aggregate memo lifetime: [%w]",
+				err,
 			)
 		}
-		return nil, nil, 0, fmt.Errorf(
-			"cannot bind interactive aggregate memo lifetime: [%w]",
-			err,
-		)
+		aggregateMemoSession = session
 	}
 	defer aggregateMemoSession.Release()
 
