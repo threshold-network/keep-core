@@ -25,6 +25,43 @@ type testNativeTBTCSignerStateAnchorCommitter struct {
 	startOnce   sync.Once
 }
 
+func testNativeTBTCSignerStateAnchorTrustHead() *NativeTBTCSignerStateAnchorTrustHead {
+	floor := testNativeTBTCSignerStateWitnessTip(1, [32]byte{2})
+	return &NativeTBTCSignerStateAnchorTrustHead{
+		Schema:                      NativeTBTCSignerStateAnchorTrustHeadSchema,
+		CertificateSequence:         1,
+		CertificateDigest:           [32]byte{0x21},
+		ActivationManifestSequence:  1,
+		ActivationManifestHash:      [32]byte{0x22},
+		BindingHash:                 [32]byte{10},
+		ResponsePublicKeySPKISHA256: [32]byte{0x23},
+		OfflineAuthoritySPKISHA256:  [32]byte{0x24},
+		ServiceEpoch:                1,
+		CertifiedFloor: NativeTBTCSignerStateAnchorTrustReference{
+			ServiceEpoch:          1,
+			Revision:              1,
+			EventRoot:             [32]byte{0x25},
+			AcknowledgementDigest: [32]byte{0x26},
+			Checkpoint: NativeTBTCSignerStateAnchorCheckpoint{
+				StoreFingerprint:        floor.StoreFingerprint,
+				Generation:              floor.Generation,
+				PreviousStateCommitment: floor.PreviousStateCommitment,
+				StateImageDigest:        floor.StateImageDigest,
+				StateCommitment:         floor.StateCommitment,
+			},
+		},
+		WitnessMaximumRecords:           4096,
+		WitnessRotationThresholdRecords: 1024,
+	}
+}
+
+func readTestNativeTBTCSignerStateAnchorTrustHead() (
+	*NativeTBTCSignerStateAnchorTrustHead,
+	error,
+) {
+	return testNativeTBTCSignerStateAnchorTrustHead(), nil
+}
+
 func (committer *testNativeTBTCSignerStateAnchorCommitter) VerifyNativeTBTCSignerStateTip(
 	ctx context.Context,
 	local NativeTBTCSignerStateWitnessTip,
@@ -99,14 +136,19 @@ func TestNativeTBTCSignerOutputBarrierDoesNotReleaseBeforeAcknowledgement(
 			}
 			if err := InstallNativeTBTCSignerStateAnchorBarrier(
 				NativeTBTCSignerStateAnchorBarrierConfig{
-					InitialTip:                &initial,
-					ExpectedAnchorBindingHash: [32]byte{10},
-					MinimumAnchorServiceEpoch: 1,
+					InitialTip:                                &initial,
+					ExpectedAnchorBindingHash:                 [32]byte{10},
+					MinimumAnchorServiceEpoch:                 1,
+					MaximumAnchorRevisionDistance:             4096,
+					MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+					MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+					ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
 					ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
 						copy := current
 						return &copy, nil
 					},
-					Committer: committer,
+					ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+					Committer:     committer,
 				},
 			); err != nil {
 				t.Fatal(err)
@@ -189,14 +231,19 @@ func TestNativeTBTCSignerOutputBarrierDiscardsExactlyOnceOnAnchorFailure(
 	}
 	if err := InstallNativeTBTCSignerStateAnchorBarrier(
 		NativeTBTCSignerStateAnchorBarrierConfig{
-			InitialTip:                &initial,
-			ExpectedAnchorBindingHash: [32]byte{10},
-			MinimumAnchorServiceEpoch: 1,
+			InitialTip:                                &initial,
+			ExpectedAnchorBindingHash:                 [32]byte{10},
+			MinimumAnchorServiceEpoch:                 1,
+			MaximumAnchorRevisionDistance:             4096,
+			MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
 			ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
 				copy := current
 				return &copy, nil
 			},
-			Committer: committer,
+			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+			Committer:     committer,
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -241,14 +288,19 @@ func TestNativeTBTCSignerOutputBarrierDiscardsAndPoisonsOnInvokePanic(
 	}
 	if err := InstallNativeTBTCSignerStateAnchorBarrier(
 		NativeTBTCSignerStateAnchorBarrierConfig{
-			InitialTip:                &initial,
-			ExpectedAnchorBindingHash: [32]byte{10},
-			MinimumAnchorServiceEpoch: 1,
+			InitialTip:                                &initial,
+			ExpectedAnchorBindingHash:                 [32]byte{10},
+			MinimumAnchorServiceEpoch:                 1,
+			MaximumAnchorRevisionDistance:             4096,
+			MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
 			ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
 				copy := current
 				return &copy, nil
 			},
-			Committer: committer,
+			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+			Committer:     committer,
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -307,11 +359,16 @@ func TestNativeTBTCSignerStateAnchorBarrierCommitsBeforeCompletion(t *testing.T)
 	}
 	if err := InstallNativeTBTCSignerStateAnchorBarrier(
 		NativeTBTCSignerStateAnchorBarrierConfig{
-			InitialTip:                &initial,
-			ExpectedAnchorBindingHash: [32]byte{10},
-			MinimumAnchorServiceEpoch: 1,
-			ReadTip:                   readTip,
-			Committer:                 committer,
+			InitialTip:                                &initial,
+			ExpectedAnchorBindingHash:                 [32]byte{10},
+			MinimumAnchorServiceEpoch:                 1,
+			MaximumAnchorRevisionDistance:             4096,
+			MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
+			ReadTip:                                   readTip,
+			ReadTrustHead:                             readTestNativeTBTCSignerStateAnchorTrustHead,
+			Committer:                                 committer,
 		},
 	); err != nil {
 		t.Fatalf("cannot install state anchor barrier: %v", err)
@@ -355,14 +412,19 @@ func TestNativeTBTCSignerStateAnchorBarrierChecksTipWithoutMutation(t *testing.T
 	}
 	if err := InstallNativeTBTCSignerStateAnchorBarrier(
 		NativeTBTCSignerStateAnchorBarrierConfig{
-			InitialTip:                &initial,
-			ExpectedAnchorBindingHash: [32]byte{10},
-			MinimumAnchorServiceEpoch: 1,
+			InitialTip:                                &initial,
+			ExpectedAnchorBindingHash:                 [32]byte{10},
+			MinimumAnchorServiceEpoch:                 1,
+			MaximumAnchorRevisionDistance:             4096,
+			MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
 			ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
 				copy := current
 				return &copy, nil
 			},
-			Committer: committer,
+			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+			Committer:     committer,
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -393,14 +455,19 @@ func TestNativeTBTCSignerStateAnchorBarrierPoisonsAfterCommitFailure(t *testing.
 	}
 	if err := InstallNativeTBTCSignerStateAnchorBarrier(
 		NativeTBTCSignerStateAnchorBarrierConfig{
-			InitialTip:                &initial,
-			ExpectedAnchorBindingHash: [32]byte{10},
-			MinimumAnchorServiceEpoch: 1,
+			InitialTip:                                &initial,
+			ExpectedAnchorBindingHash:                 [32]byte{10},
+			MinimumAnchorServiceEpoch:                 1,
+			MaximumAnchorRevisionDistance:             4096,
+			MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
 			ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
 				copy := current
 				return &copy, nil
 			},
-			Committer: committer,
+			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+			Committer:     committer,
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -437,14 +504,19 @@ func TestNativeTBTCSignerStateAnchorBarrierRejectsPreMigrationInitialTip(
 	committer := &testNativeTBTCSignerStateAnchorCommitter{}
 	err := InstallNativeTBTCSignerStateAnchorBarrier(
 		NativeTBTCSignerStateAnchorBarrierConfig{
-			InitialTip:                &preMigration,
-			ExpectedAnchorBindingHash: [32]byte{10},
-			MinimumAnchorServiceEpoch: 1,
+			InitialTip:                                &preMigration,
+			ExpectedAnchorBindingHash:                 [32]byte{10},
+			MinimumAnchorServiceEpoch:                 1,
+			MaximumAnchorRevisionDistance:             4096,
+			MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
 			ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
 				copy := postMigration
 				return &copy, nil
 			},
-			Committer: committer,
+			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+			Committer:     committer,
 		},
 	)
 	if err == nil {
@@ -466,18 +538,403 @@ func TestNativeTBTCSignerStateAnchorBarrierRejectsUnacknowledgedInitialTip(
 	initial.AnchorAcknowledgementDigest = [32]byte{}
 	err := InstallNativeTBTCSignerStateAnchorBarrier(
 		NativeTBTCSignerStateAnchorBarrierConfig{
-			InitialTip:                &initial,
-			ExpectedAnchorBindingHash: [32]byte{10},
-			MinimumAnchorServiceEpoch: 1,
+			InitialTip:                                &initial,
+			ExpectedAnchorBindingHash:                 [32]byte{10},
+			MinimumAnchorServiceEpoch:                 1,
+			MaximumAnchorRevisionDistance:             4096,
+			MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
 			ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
 				copy := initial
 				return &copy, nil
 			},
-			Committer: &testNativeTBTCSignerStateAnchorCommitter{},
+			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+			Committer:     &testNativeTBTCSignerStateAnchorCommitter{},
 		},
 	)
 	if err == nil {
 		t.Fatal("unacknowledged initial state tip was accepted")
+	}
+}
+
+func TestNativeTBTCSignerStateAnchorBarrierRejectsUnboundedRevisionWindow(
+	t *testing.T,
+) {
+	resetNativeTBTCSignerStateAnchorBarrierForTest()
+	t.Cleanup(resetNativeTBTCSignerStateAnchorBarrierForTest)
+
+	initial := testNativeTBTCSignerStateWitnessTip(1, [32]byte{2})
+	err := InstallNativeTBTCSignerStateAnchorBarrier(
+		NativeTBTCSignerStateAnchorBarrierConfig{
+			InitialTip:                &initial,
+			ExpectedAnchorBindingHash: [32]byte{10},
+			MinimumAnchorServiceEpoch: 1,
+			MaximumAnchorRevisionDistance: NativeTBTCSignerStateAnchorMaximumRevisionDistance +
+				1,
+			MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
+			ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
+				copy := initial
+				return &copy, nil
+			},
+			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+			Committer:     &testNativeTBTCSignerStateAnchorCommitter{},
+		},
+	)
+	if err == nil {
+		t.Fatal("caller-controlled revision window exceeded the frozen bound")
+	}
+}
+
+func TestNativeTBTCSignerStateAnchorBarrierRejectsUnboundedGenerationConfig(
+	t *testing.T,
+) {
+	for _, test := range []struct {
+		name     string
+		distance uint64
+		advance  uint64
+	}{
+		{
+			"distance",
+			NativeTBTCSignerStateAnchorMaximumGenerationDistance + 1,
+			NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+		},
+		{
+			"per-operation advance",
+			NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation + 1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resetNativeTBTCSignerStateAnchorBarrierForTest()
+			t.Cleanup(resetNativeTBTCSignerStateAnchorBarrierForTest)
+
+			initial := testNativeTBTCSignerStateWitnessTip(1, [32]byte{2})
+			err := InstallNativeTBTCSignerStateAnchorBarrier(
+				NativeTBTCSignerStateAnchorBarrierConfig{
+					InitialTip:                                &initial,
+					ExpectedAnchorBindingHash:                 [32]byte{10},
+					MinimumAnchorServiceEpoch:                 1,
+					MaximumAnchorRevisionDistance:             NativeTBTCSignerStateAnchorMaximumRevisionDistance,
+					MaximumStateGenerationDistance:            test.distance,
+					MaximumStateGenerationAdvancePerOperation: test.advance,
+					ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
+					ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
+						copy := initial
+						return &copy, nil
+					},
+					ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+					Committer:     &testNativeTBTCSignerStateAnchorCommitter{},
+				},
+			)
+			if err == nil {
+				t.Fatal("caller-controlled generation bound exceeded the frozen maximum")
+			}
+		})
+	}
+}
+
+func TestNativeTBTCSignerStateAnchorBarrierRejectsInitialGenerationBeyondFloorWindow(
+	t *testing.T,
+) {
+	resetNativeTBTCSignerStateAnchorBarrierForTest()
+	t.Cleanup(resetNativeTBTCSignerStateAnchorBarrierForTest)
+
+	initial := testNativeTBTCSignerStateWitnessTip(
+		1+NativeTBTCSignerStateAnchorMaximumGenerationDistance+1,
+		[32]byte{2},
+	)
+	err := InstallNativeTBTCSignerStateAnchorBarrier(
+		NativeTBTCSignerStateAnchorBarrierConfig{
+			InitialTip:                                &initial,
+			ExpectedAnchorBindingHash:                 [32]byte{10},
+			MinimumAnchorServiceEpoch:                 1,
+			MaximumAnchorRevisionDistance:             NativeTBTCSignerStateAnchorMaximumRevisionDistance,
+			MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
+			ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
+				copy := initial
+				return &copy, nil
+			},
+			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+			Committer:     &testNativeTBTCSignerStateAnchorCommitter{},
+		},
+	)
+	if err == nil {
+		t.Fatal("initial generation beyond the certified floor window was accepted")
+	}
+}
+
+func TestNativeTBTCSignerStateAnchorBarrierBlocksBeforeMutationAtRevisionBound(
+	t *testing.T,
+) {
+	resetNativeTBTCSignerStateAnchorBarrierForTest()
+	t.Cleanup(resetNativeTBTCSignerStateAnchorBarrierForTest)
+
+	initial := testNativeTBTCSignerStateWitnessTip(1, [32]byte{2})
+	initial.AnchorRevision =
+		testNativeTBTCSignerStateAnchorTrustHead().
+			CertifiedFloor.Revision +
+			NativeTBTCSignerStateAnchorMaximumRevisionDistance
+	current := initial
+	committer := &testNativeTBTCSignerStateAnchorCommitter{
+		current: &current,
+	}
+	if err := InstallNativeTBTCSignerStateAnchorBarrier(
+		NativeTBTCSignerStateAnchorBarrierConfig{
+			InitialTip:                                &initial,
+			ExpectedAnchorBindingHash:                 [32]byte{10},
+			MinimumAnchorServiceEpoch:                 1,
+			MaximumAnchorRevisionDistance:             NativeTBTCSignerStateAnchorMaximumRevisionDistance,
+			MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
+			ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
+				copy := current
+				return &copy, nil
+			},
+			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+			Committer:     committer,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	invoked := false
+	released := false
+	discarded := false
+	_, err := executeNativeTBTCSignerStateAnchoredOutput(
+		"InteractiveRound1",
+		func() {
+			invoked = true
+			current.Generation++
+		},
+		func() ([]byte, error) {
+			released = true
+			return nil, nil
+		},
+		func() {
+			discarded = true
+		},
+	)
+	if !errors.Is(err, ErrNativeTBTCSignerStateAnchorUnavailable) {
+		t.Fatalf("exhausted revision window was not blocked: %v", err)
+	}
+	if invoked || released || discarded || current != initial ||
+		committer.calls != 0 || committer.verifyCalls != 1 {
+		t.Fatal(
+			"revision-bound admission mutated signer state or contacted the commit path",
+		)
+	}
+}
+
+func TestNativeTBTCSignerStateAnchorBarrierBlocksBeforeMutationWithoutGenerationCapacity(
+	t *testing.T,
+) {
+	resetNativeTBTCSignerStateAnchorBarrierForTest()
+	t.Cleanup(resetNativeTBTCSignerStateAnchorBarrierForTest)
+
+	floorGeneration :=
+		testNativeTBTCSignerStateAnchorTrustHead().
+			CertifiedFloor.Checkpoint.Generation
+	initial := testNativeTBTCSignerStateWitnessTip(
+		floorGeneration+
+			NativeTBTCSignerStateAnchorMaximumGenerationDistance-2,
+		[32]byte{2},
+	)
+	current := initial
+	committer := &testNativeTBTCSignerStateAnchorCommitter{current: &current}
+	if err := InstallNativeTBTCSignerStateAnchorBarrier(
+		NativeTBTCSignerStateAnchorBarrierConfig{
+			InitialTip:                                &initial,
+			ExpectedAnchorBindingHash:                 [32]byte{10},
+			MinimumAnchorServiceEpoch:                 1,
+			MaximumAnchorRevisionDistance:             NativeTBTCSignerStateAnchorMaximumRevisionDistance,
+			MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
+			ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
+				copy := current
+				return &copy, nil
+			},
+			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+			Committer:     committer,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	invoked := false
+	released := false
+	discarded := false
+	_, err := executeNativeTBTCSignerStateAnchoredOutput(
+		"InteractiveRound1",
+		func() {
+			invoked = true
+		},
+		func() ([]byte, error) {
+			released = true
+			return nil, nil
+		},
+		func() {
+			discarded = true
+		},
+	)
+	if !errors.Is(err, ErrNativeTBTCSignerStateAnchorUnavailable) {
+		t.Fatalf("insufficient generation capacity was not blocked: %v", err)
+	}
+	if invoked || released || discarded || current != initial ||
+		committer.calls != 0 || committer.verifyCalls != 1 {
+		t.Fatal(
+			"generation-bound admission mutated signer state or contacted the commit path",
+		)
+	}
+}
+
+func TestNativeTBTCSignerStateAnchorBarrierPoisonsOversizedGenerationAdvance(
+	t *testing.T,
+) {
+	resetNativeTBTCSignerStateAnchorBarrierForTest()
+	t.Cleanup(resetNativeTBTCSignerStateAnchorBarrierForTest)
+
+	initial := testNativeTBTCSignerStateWitnessTip(1, [32]byte{2})
+	current := initial
+	committer := &testNativeTBTCSignerStateAnchorCommitter{current: &current}
+	if err := InstallNativeTBTCSignerStateAnchorBarrier(
+		NativeTBTCSignerStateAnchorBarrierConfig{
+			InitialTip:                                &initial,
+			ExpectedAnchorBindingHash:                 [32]byte{10},
+			MinimumAnchorServiceEpoch:                 1,
+			MaximumAnchorRevisionDistance:             NativeTBTCSignerStateAnchorMaximumRevisionDistance,
+			MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
+			ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
+				copy := current
+				return &copy, nil
+			},
+			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+			Committer:     committer,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	var discarded atomic.Int32
+	_, err := executeNativeTBTCSignerStateAnchoredOutput(
+		"InteractiveRound2",
+		func() {
+			current = testNativeTBTCSignerStateWitnessTip(
+				initial.Generation+
+					NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation+1,
+				initial.StateCommitment,
+			)
+		},
+		func() ([]byte, error) {
+			t.Fatal("oversized generation advance released native output")
+			return nil, nil
+		},
+		func() {
+			discarded.Add(1)
+		},
+	)
+	if !errors.Is(err, ErrNativeTBTCSignerStateAnchorTerminal) ||
+		discarded.Load() != 1 || committer.calls != 0 {
+		t.Fatalf(
+			"oversized generation advance was not terminally rejected: [%v] discarded [%d] commits [%d]",
+			err,
+			discarded.Load(),
+			committer.calls,
+		)
+	}
+}
+
+func TestNativeTBTCSignerStateAnchorBarrierGenerationCapacityAdvancesFasterThanRevision(
+	t *testing.T,
+) {
+	resetNativeTBTCSignerStateAnchorBarrierForTest()
+	t.Cleanup(resetNativeTBTCSignerStateAnchorBarrierForTest)
+
+	initial := testNativeTBTCSignerStateWitnessTip(1, [32]byte{2})
+	current := initial
+	committer := &testNativeTBTCSignerStateAnchorCommitter{
+		current: &current,
+		acknowledge: func(
+			candidate NativeTBTCSignerStateWitnessTip,
+		) NativeTBTCSignerStateWitnessTip {
+			candidate.AnchorRevision++
+			candidate.AnchorEventRoot =
+				[32]byte{byte(candidate.AnchorRevision + 20)}
+			candidate.AnchorAcknowledgementDigest =
+				[32]byte{byte(candidate.AnchorRevision + 30)}
+			return candidate
+		},
+	}
+	if err := InstallNativeTBTCSignerStateAnchorBarrier(
+		NativeTBTCSignerStateAnchorBarrierConfig{
+			InitialTip:                                &initial,
+			ExpectedAnchorBindingHash:                 [32]byte{10},
+			MinimumAnchorServiceEpoch:                 1,
+			MaximumAnchorRevisionDistance:             NativeTBTCSignerStateAnchorMaximumRevisionDistance,
+			MaximumStateGenerationDistance:            6,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         testNativeTBTCSignerStateAnchorTrustHead(),
+			ReadTip: func() (*NativeTBTCSignerStateWitnessTip, error) {
+				copy := current
+				return &copy, nil
+			},
+			ReadTrustHead: readTestNativeTBTCSignerStateAnchorTrustHead,
+			Committer:     committer,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 2; i++ {
+		lease, err := beginNativeTBTCSignerStateAnchoredOperation(
+			"InteractiveRound1",
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidate := testNativeTBTCSignerStateWitnessTip(
+			current.Generation+2,
+			current.StateCommitment,
+		)
+		candidate.AnchorBindingHash = current.AnchorBindingHash
+		candidate.AnchorServiceEpoch = current.AnchorServiceEpoch
+		candidate.AnchorRevision = current.AnchorRevision
+		candidate.AnchorEventRoot = current.AnchorEventRoot
+		candidate.AnchorAcknowledgementDigest =
+			current.AnchorAcknowledgementDigest
+		current = candidate
+		if err := lease.commit(); err != nil {
+			lease.release()
+			t.Fatal(err)
+		}
+		lease.release()
+	}
+
+	if current.Generation != initial.Generation+4 ||
+		current.AnchorRevision != initial.AnchorRevision+2 ||
+		committer.calls != 2 {
+		t.Fatalf(
+			"unexpected dual-dimension advance [generation %d revision %d commits %d]",
+			current.Generation,
+			current.AnchorRevision,
+			committer.calls,
+		)
+	}
+	if _, err := beginNativeTBTCSignerStateAnchoredOperation(
+		"InteractiveRound1",
+	); !errors.Is(err, ErrNativeTBTCSignerStateAnchorUnavailable) {
+		t.Fatalf(
+			"generation capacity did not block before the revision window: %v",
+			err,
+		)
 	}
 }
 

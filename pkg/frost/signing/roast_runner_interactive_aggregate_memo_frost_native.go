@@ -3,31 +3,104 @@
 package signing
 
 import (
+	"fmt"
+	"strings"
 	"sync"
-	"time"
 )
-
-// interactiveAggregateMemoTTL bounds how long a memoized aggregate result is
-// retained. It only needs to outlive the window in which a single signing
-// attempt's local seats race to aggregate (bounded by the attempt timeout, tens
-// of seconds), so a few minutes is safely conservative while keeping the memo
-// from growing over the node's lifetime.
-const interactiveAggregateMemoTTL = 5 * time.Minute
 
 type interactiveAggregateEntry struct {
 	once      sync.Once
 	signature []byte
 	err       error
+	owner     *InteractiveAggregateMemoSession
+}
+
+// InteractiveAggregateMemoSession owns every per-attempt aggregate result for
+// one outer tBTC signing operation. The tBTC executor releases it only after
+// all local-seat goroutines have joined, so no wall-clock eviction can cause a
+// straggling seat to repeat the native Aggregate call.
+type InteractiveAggregateMemoSession struct {
+	sessionID string
+	release   sync.Once
 }
 
 var (
-	interactiveAggregateMemoMu sync.Mutex
-	interactiveAggregateMemo   = map[string]*interactiveAggregateEntry{}
+	interactiveAggregateMemoMu       sync.Mutex
+	interactiveAggregateMemo         = map[string]*interactiveAggregateEntry{}
+	interactiveAggregateMemoSessions = map[string]*InteractiveAggregateMemoSession{}
 )
 
-// aggregateInteractiveOnce runs aggregate AT MOST ONCE per key within this
-// process and returns the same (signature, error) to every caller sharing that
-// key.
+// BeginInteractiveAggregateMemoSession binds aggregate memo lifetime to one
+// outer signing operation. A duplicate live session is rejected rather than
+// sharing state across independent operation owners.
+func BeginInteractiveAggregateMemoSession(
+	sessionID string,
+) (*InteractiveAggregateMemoSession, error) {
+	if sessionID == "" || strings.Contains(sessionID, "|") {
+		return nil, fmt.Errorf("interactive aggregate memo session ID is invalid")
+	}
+
+	interactiveAggregateMemoMu.Lock()
+	defer interactiveAggregateMemoMu.Unlock()
+
+	if _, exists := interactiveAggregateMemoSessions[sessionID]; exists {
+		return nil, fmt.Errorf(
+			"interactive aggregate memo session [%s] is already active",
+			sessionID,
+		)
+	}
+	prefix := sessionID + "|"
+	for key := range interactiveAggregateMemo {
+		if strings.HasPrefix(key, prefix) {
+			return nil, fmt.Errorf(
+				"interactive aggregate memo session [%s] has unowned stale entries",
+				sessionID,
+			)
+		}
+	}
+
+	session := &InteractiveAggregateMemoSession{sessionID: sessionID}
+	interactiveAggregateMemoSessions[sessionID] = session
+	return session, nil
+}
+
+// Release deletes exactly the entries owned by this session generation. The
+// pointer identity guard prevents a delayed stale cleanup from deleting a
+// newer operation that happens to reuse the same textual session ID.
+func (session *InteractiveAggregateMemoSession) Release() {
+	if session == nil {
+		return
+	}
+	session.release.Do(func() {
+		releaseInteractiveAggregateMemoSession(session)
+	})
+}
+
+func releaseInteractiveAggregateMemoSession(
+	session *InteractiveAggregateMemoSession,
+) {
+	if session == nil {
+		return
+	}
+
+	interactiveAggregateMemoMu.Lock()
+	defer interactiveAggregateMemoMu.Unlock()
+
+	if interactiveAggregateMemoSessions[session.sessionID] != session {
+		return
+	}
+	delete(interactiveAggregateMemoSessions, session.sessionID)
+	prefix := session.sessionID + "|"
+	for key, entry := range interactiveAggregateMemo {
+		if strings.HasPrefix(key, prefix) && entry.owner == session {
+			delete(interactiveAggregateMemo, key)
+		}
+	}
+}
+
+// aggregateInteractiveOnce runs aggregate AT MOST ONCE per key for the active
+// outer session and returns the same (signature, error) to every caller sharing
+// that key.
 //
 // Why it exists: a multi-seat operator runs one interactiveSigningRunner
 // goroutine per LOCAL seat, and they all drive the SAME per-process interactive
@@ -51,20 +124,18 @@ func aggregateInteractiveOnce(
 	aggregate func() ([]byte, error),
 ) ([]byte, error) {
 	interactiveAggregateMemoMu.Lock()
+	sessionID, _, hasAttemptSeparator := strings.Cut(key, "|")
+	owner := interactiveAggregateMemoSessions[sessionID]
 	entry, ok := interactiveAggregateMemo[key]
 	if !ok {
-		entry = &interactiveAggregateEntry{}
+		entry = &interactiveAggregateEntry{owner: owner}
 		interactiveAggregateMemo[key] = entry
-		// Self-evict well after the attempt's signing window so the memo does not
-		// grow unbounded. Concurrent local seats share the entry via sync.Once long
-		// before this fires; a straggler that arrives after eviction simply
-		// re-aggregates (and, if the engine already consumed the marker, fails its
-		// own attempt into the existing retry path — never a wrong signature).
-		time.AfterFunc(interactiveAggregateMemoTTL, func() {
-			interactiveAggregateMemoMu.Lock()
-			delete(interactiveAggregateMemo, key)
-			interactiveAggregateMemoMu.Unlock()
-		})
+	} else if hasAttemptSeparator && entry.owner != owner {
+		interactiveAggregateMemoMu.Unlock()
+		return nil, fmt.Errorf(
+			"interactive aggregate memo key [%s] belongs to another session owner",
+			key,
+		)
 	}
 	interactiveAggregateMemoMu.Unlock()
 
@@ -82,5 +153,7 @@ func aggregateInteractiveOnce(
 func ResetInteractiveAggregateMemoForTest() {
 	interactiveAggregateMemoMu.Lock()
 	interactiveAggregateMemo = map[string]*interactiveAggregateEntry{}
+	interactiveAggregateMemoSessions =
+		map[string]*InteractiveAggregateMemoSession{}
 	interactiveAggregateMemoMu.Unlock()
 }

@@ -592,6 +592,9 @@ func (wte *walletTransactionExecutor) signTransaction(
 			authorizationCtx,
 			preSignTransaction,
 		)
+		if authorization != nil {
+			defer authorization.releaseAnchorReservation()
+		}
 		if err == nil {
 			err = wte.preSignAuthorizationGate.revalidate(
 				authorizationCtx,

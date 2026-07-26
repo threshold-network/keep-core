@@ -68,6 +68,14 @@ func loadFrostNativeSignerAnchorOnlinePublicKeySPKI(
 			"FROST native signer anchor online key is not Ed25519",
 		)
 	}
+	if err := ValidateFrostNativeSignerAnchorTrustEd25519PublicKey(
+		publicKey,
+	); err != nil {
+		return nil, nil, fmt.Errorf(
+			"FROST native signer anchor online key point is invalid: %w",
+			err,
+		)
+	}
 	canonical, err := x509.MarshalPKIXPublicKey(publicKey)
 	if err != nil || !bytes.Equal(canonical, der) {
 		return nil, nil, fmt.Errorf(
@@ -75,6 +83,22 @@ func loadFrostNativeSignerAnchorOnlinePublicKeySPKI(
 		)
 	}
 	return append([]byte{}, der...), append(ed25519.PublicKey{}, publicKey...), nil
+}
+
+func loadFrostNativeSignerAnchorTrustCertificateChain(
+	path string,
+) ([]byte, error) {
+	data, err := readSecureFrostActivationFile(
+		path,
+		frostNativeSignerAnchorTrustMaximumTransitionRequestBytes,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot read FROST native signer anchor trust-certificate chain: %w",
+			err,
+		)
+	}
+	return data, nil
 }
 
 func zeroFrostNativeSignerKeyBytes(value []byte) {

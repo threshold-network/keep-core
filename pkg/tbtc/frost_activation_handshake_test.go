@@ -78,6 +78,16 @@ func (readiness *testFrostProductionSignerReadiness) verifyFrostProductionSigner
 			StateImageDigest:            [32]byte{0x33},
 			InventoryCommitment:         [32]byte{0x32},
 			ExternalRollbackAnchorBound: true,
+			TrustCertificateSequence:    3,
+			TrustCertificateDigest:      [32]byte{0x34},
+			AnchorServiceEpoch:          1,
+			CertifiedFloorRevision:      1,
+			CertifiedFloorGeneration:    1,
+			CurrentAnchorRevision:       1,
+			RestartableRevisionHeadroom: FrostNativeSignerAnchorMaximumHistoryEvents,
+			RestartableGenerationHeadroom: FrostNativeSignerAnchorMaximumHistoryProofEntries -
+				6,
+			AnchorRotationWarning: false,
 		},
 		InteractiveSigningReady: true,
 	}, nil
@@ -219,8 +229,12 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	signatureTranscript := append(
+		[]byte(frostActivationHandshakeSignatureDomain),
+		canonicalPayload...,
+	)
 	signature, err := base64.StdEncoding.Strict().DecodeString(handshake.Signature)
-	if err != nil || !ed25519.Verify(publicKey, canonicalPayload, signature) {
+	if err != nil || !ed25519.Verify(publicKey, signatureTranscript, signature) {
 		t.Fatal("handshake signature did not verify over canonical payload")
 	}
 	assertFrostActivationObjectKeys(t, handshake.Payload.State, []string{
@@ -247,9 +261,14 @@ func TestFrostActivationHandshakeExporter_AttestsExactReadyState(t *testing.T) {
 		"protocolID", "root", "storeFingerprint", "storeID",
 	})
 	assertFrostActivationObjectKeys(t, handshake.Payload.State.NativeSignerState, []string{
-		"complete", "externalRollbackAnchorBound", "inventoryCommitment",
+		"anchorRotationWarning", "anchorServiceEpoch", "certifiedFloorGeneration",
+		"certifiedFloorRevision",
+		"complete", "currentAnchorRevision", "externalRollbackAnchorBound", "inventoryCommitment",
 		"previousStateCommitment", "retainedKeyPackageCount", "retainedWalletCount",
-		"schema", "stateCommitment", "stateGeneration", "stateImageDigest", "storeFingerprint",
+		"restartableGenerationHeadroom", "restartableRevisionHeadroom",
+		"schema", "stateCommitment", "stateGeneration",
+		"stateImageDigest", "storeFingerprint",
+		"trustCertificateDigest", "trustCertificateSequence",
 	})
 }
 

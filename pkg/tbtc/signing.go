@@ -802,6 +802,21 @@ func (se *signingExecutor) signWithTaprootMerkleRootForSessionIntentAndAuthoriza
 			authorizationID,
 		)
 	}
+	aggregateMemoSession, err :=
+		signing.BeginInteractiveAggregateMemoSession(roastSID)
+	if err != nil {
+		if se.metricsRecorder != nil {
+			se.metricsRecorder.IncrementCounter(
+				clientinfo.MetricSigningFailedTotal,
+				1,
+			)
+		}
+		return nil, nil, 0, fmt.Errorf(
+			"cannot bind interactive aggregate memo lifetime: [%w]",
+			err,
+		)
+	}
+	defer aggregateMemoSession.Release()
 
 	for _, currentSigner := range se.signers {
 		go func(signer *signer) {
@@ -1065,6 +1080,7 @@ func (se *signingExecutor) signWithTaprootMerkleRootForSessionIntentAndAuthoriza
 	// Wait until all controlled signers complete their signing routines,
 	// regardless of their result.
 	wg.Wait()
+	aggregateMemoSession.Release()
 
 	// Take the first outcome from the channel as the outcome of all members.
 	// This assumption is totally valid because the signing loop produces a

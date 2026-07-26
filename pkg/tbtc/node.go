@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"sync"
@@ -69,6 +70,7 @@ type node struct {
 	frostPreSignActivationProfile    FrostPreSignActivationProfile
 	frostDurableSessionStoreBinding  *frostDurableSessionStoreBinding
 	frostProductionSignerReadiness   frostProductionSignerReadinessVerifier
+	frostNativeSignerAnchorAdmission *frostNativeSignerAnchorAdmissionController
 	bitcoinBroadcastOutbox           *bitcoinBroadcastOutbox
 	frostRetainedGroupJournal        *frostRetainedGroupJournal
 	frostActivationHandshakeExporter *frostActivationHandshakeExporter
@@ -336,17 +338,6 @@ func newNode(
 			_ = outbox.close()
 			return nil, fmt.Errorf("cannot read authenticated FROST runtime manifest: [%w]", err)
 		}
-		storeBinding, err := newFrostDurableSessionStoreBinding(
-			runtimeManifest.DurableSessionStoreFingerprint,
-			signing.ReadNativeTBTCSignerDurableStoreIdentity,
-		)
-		if err != nil {
-			_ = outbox.close()
-			return nil, fmt.Errorf(
-				"cannot bind the active FROST durable session store to the signed manifest: [%w]",
-				err,
-			)
-		}
 		anchorManifest := runtimeManifest.NativeSignerAnchor
 		clientPrivateKey, err := loadFrostNativeSignerAnchorClientPrivateKey(
 			config.FrostNativeSignerAnchorClientPrivateKeyPath,
@@ -381,30 +372,149 @@ func newNode(
 		}
 		onlineRawKey := [32]byte{}
 		copy(onlineRawKey[:], onlinePublicKey)
-		expectedAnchorBindingHash :=
-			ComputeFrostNativeSignerAnchorBindingHash(anchorManifest.Identity)
-		if installedAnchorConfig.BindingHash != expectedAnchorBindingHash ||
-			installedAnchorConfig.ResponsePublicKey != onlineRawKey ||
-			installedAnchorConfig.ResponsePublicKeySPKISHA256 !=
-				anchorManifest.Identity.OnlineKeyHash ||
-			installedAnchorConfig.WitnessMaximumRecords !=
-				anchorManifest.WitnessMaximumRecords ||
-			installedAnchorConfig.WitnessRotationThresholdRecords !=
-				anchorManifest.WitnessRotationThresholdRecords {
+		trustCertificateJSON, err :=
+			loadFrostNativeSignerAnchorTrustCertificateChain(
+				config.FrostNativeSignerAnchorTrustCertificatePath,
+			)
+		if err != nil {
 			_ = outbox.close()
 			return nil, fmt.Errorf(
-				"installed native signer anchor configuration differs from the signed manifest",
+				"cannot load FROST native signer anchor trust certificates: [%w]",
+				err,
 			)
 		}
-		anchorClient, err := NewFrostNativeSignerAnchorClient(
-			FrostNativeSignerAnchorClientConfig{
-				Endpoint:            config.FrostNativeSignerAnchorURL,
-				RequestTimeout:      config.FrostNativeSignerAnchorRequestTimeout,
-				ClientPrivateKey:    clientPrivateKey,
-				OnlinePublicKeySPKI: onlineKeySPKI,
-				Identity:            anchorManifest.Identity,
+		trustCertificateChain, err :=
+			DecodeFrostNativeSignerAnchorTrustCertificateChain(
+				trustCertificateJSON,
+			)
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot decode FROST native signer anchor trust certificates: [%w]",
+				err,
+			)
+		}
+		finalTrustCertificate :=
+			&trustCertificateChain[len(trustCertificateChain)-1]
+		expectedTrustCertificateHead, expectedTrustHead, err :=
+			validateFrostNativeSignerAnchorTrustExpectedHead(
+				runtimeManifest,
+				installedAnchorConfig,
+				finalTrustCertificate,
+			)
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot bind the expected FROST native signer anchor trust head: [%w]",
+				err,
+			)
+		}
+		if installedAnchorConfig.ResponsePublicKey != onlineRawKey ||
+			finalTrustCertificate.To.ResponsePublicKey != onlineRawKey {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"native signer anchor online key file differs from the installed and certified key",
+			)
+		}
+
+		var priorTrustCertificateHead *FrostNativeSignerAnchorTrustCertificateHead
+		priorTrustHead, priorTrustHeadErr :=
+			signing.ReadNativeTBTCSignerStateAnchorTrustHead()
+		transitionCertificateChain := trustCertificateChain
+		if priorTrustHeadErr == nil {
+			transitionCertificateChain, err =
+				selectFrostNativeSignerAnchorTrustTransitionChain(
+					trustCertificateChain,
+					priorTrustHead,
+				)
+			if err != nil {
+				_ = outbox.close()
+				return nil, fmt.Errorf(
+					"cannot select the missing FROST native signer anchor trust-certificate suffix: [%w]",
+					err,
+				)
+			}
+			priorTrustCertificateHead, err =
+				reconstructFrostNativeSignerAnchorTrustPriorHead(
+					priorTrustHead,
+					runtimeManifest,
+					installedAnchorConfig,
+					&transitionCertificateChain[0],
+				)
+			if err != nil {
+				_ = outbox.close()
+				return nil, fmt.Errorf(
+					"cannot authenticate the installed FROST native signer anchor trust head: [%w]",
+					err,
+				)
+			}
+		} else if !errors.Is(
+			priorTrustHeadErr,
+			signing.ErrNativeTBTCSignerStateAnchorTrustHeadAbsent,
+		) {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot read the prior FROST native signer anchor trust head: [%w]",
+				priorTrustHeadErr,
+			)
+		} else if transitionCertificateChain[0].CertificateSequence != 1 ||
+			transitionCertificateChain[0].PreviousCertificateDigest != [32]byte{} {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot read the prior FROST native signer anchor trust head for a certificate suffix: [%w]",
+				priorTrustHeadErr,
+			)
+		}
+		trustChainOptions := FrostNativeSignerAnchorTrustChainValidationOptions{
+			// A sequence-one rotation is an explicit, offline-authorized
+			// adoption of a pre-journal anchor. The configured owner-only
+			// certificate artifact and exact installed final digest are the
+			// local authorization to perform it.
+			AllowLegacyAdoption: true,
+			ExpectedProtocolID:  anchorManifest.Identity.ProtocolID,
+			ExpectedStreamID:    anchorManifest.Identity.StreamID,
+			ExpectedSignerStoreFingerprint: anchorManifest.Identity.
+				SignerStoreFingerprint,
+			ExpectedOfflineAuthorityPublicKey: runtimeManifest.
+				ActivationAuthorityPublicKey,
+			ExpectedOfflineAuthoritySPKISHA256: anchorManifest.Identity.
+				OfflineAuthorityHash,
+			PriorHead:    priorTrustCertificateHead,
+			ExpectedHead: expectedTrustCertificateHead,
+			ValidateTargetAcknowledgement: func(
+				certificate *FrostNativeSignerAnchorTrustCertificate,
+				rawAcknowledgement []byte,
+			) error {
+				return ValidateFrostNativeSignerAnchorTrustTargetAcknowledgement(
+					certificate,
+					rawAcknowledgement,
+				)
 			},
-		)
+		}
+		verifiedTrustFloor, err :=
+			authenticateFrostNativeSignerAnchorTrustCertificateChain(
+				transitionCertificateChain,
+				trustChainOptions,
+			)
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot authenticate FROST native signer anchor trust-certificate chain: [%w]",
+				err,
+			)
+		}
+		anchorClient, err :=
+			newFrostNativeSignerAnchorClientWithTrustFloor(
+				FrostNativeSignerAnchorClientConfig{
+					Endpoint: config.FrostNativeSignerAnchorURL,
+					RequestTimeout: config.
+						FrostNativeSignerAnchorRequestTimeout,
+					ClientPrivateKey:    clientPrivateKey,
+					OnlinePublicKeySPKI: onlineKeySPKI,
+					Identity:            anchorManifest.Identity,
+				},
+				verifiedTrustFloor,
+			)
 		if err != nil {
 			_ = outbox.close()
 			return nil, fmt.Errorf(
@@ -412,9 +522,109 @@ func newNode(
 				err,
 			)
 		}
+		exactTrustHeadReplay :=
+			isFrostNativeSignerAnchorTrustExactHeadReplay(
+				priorTrustCertificateHead,
+				expectedTrustCertificateHead,
+			)
+		var trustTransitionTarget *FrostNativeSignerAnchorTrustTransitionTarget
+		if !exactTrustHeadReplay {
+			trustTransitionTarget, err =
+				anchorClient.readFrostNativeSignerAnchorTrustTransitionTarget(
+					context.Background(),
+					false,
+				)
+			if err != nil {
+				_ = outbox.close()
+				return nil, fmt.Errorf(
+					"cannot obtain the fresh FROST native signer anchor trust-transition target: [%w]",
+					err,
+				)
+			}
+			trustTransitionRequest, err :=
+				EncodeFrostNativeSignerAnchorTrustTransitionRequest(
+					&FrostNativeSignerAnchorTrustTransitionRequest{
+						CertificateChain: transitionCertificateChain,
+						TargetReadResponse: trustTransitionTarget.
+							ExactReadResponse,
+					},
+				)
+			if err != nil {
+				_ = outbox.close()
+				return nil, fmt.Errorf(
+					"cannot encode FROST native signer anchor trust transition: [%w]",
+					err,
+				)
+			}
+			trustTransitionResult, err :=
+				signing.TransitionNativeTBTCSignerStateWitnessAnchor(
+					trustTransitionRequest,
+				)
+			if err != nil {
+				_ = outbox.close()
+				return nil, fmt.Errorf(
+					"cannot install FROST native signer anchor trust transition: [%w]",
+					err,
+				)
+			}
+			if err := validateFrostNativeSignerAnchorTrustTransitionResult(
+				trustTransitionResult,
+				trustTransitionTarget,
+				finalTrustCertificate,
+				expectedTrustCertificateHead,
+				expectedTrustHead,
+				priorTrustCertificateHead,
+				transitionCertificateChain,
+			); err != nil {
+				_ = outbox.close()
+				return nil, fmt.Errorf(
+					"cannot validate native signer anchor trust-transition result: [%w]",
+					err,
+				)
+			}
+		}
+		installedTrustHead, err :=
+			signing.ReadNativeTBTCSignerStateAnchorTrustHead()
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot read back the exact installed native signer anchor trust head: [%w]",
+				err,
+			)
+		}
+		if installedTrustHead == nil ||
+			*installedTrustHead != *expectedTrustHead {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"installed native signer anchor trust head differs from the independently pinned expected head",
+			)
+		}
+
+		// A missing suffix must transition before any durable signer-store
+		// access. An exact authenticated head deliberately skips the strict
+		// replay transition so ordinary reconciliation can repair either crash
+		// window where the durable tip or remote CAS is ahead of the persisted
+		// local acknowledgement.
+		storeBinding, err := newFrostDurableSessionStoreBinding(
+			runtimeManifest.DurableSessionStoreFingerprint,
+			signing.ReadNativeTBTCSignerDurableStoreIdentity,
+		)
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot bind the active FROST durable session store to the signed manifest: [%w]",
+				err,
+			)
+		}
+		certifiedFloor := frostNativeSignerAnchorReferenceFromTrust(
+			finalTrustCertificate.To.Reference,
+		)
+		expectedAnchorBindingHash := finalTrustCertificate.To.BindingHash
 		anchorBinding, err := newFrostNativeSignerAnchorBinding(
 			anchorClient,
 			anchorManifest,
+			certifiedFloor,
+			finalTrustCertificate.To.Reference.PreviousEventRoot,
 			signing.ReadNativeTBTCSignerStateWitnessTip,
 			signing.ReadNativeTBTCSignerStateWitnessProof,
 			signing.AcknowledgeNativeTBTCSignerStateWitnessCheckpoint,
@@ -424,6 +634,15 @@ func newNode(
 			_ = outbox.close()
 			return nil, fmt.Errorf(
 				"cannot bind authenticated native signer anchor: [%w]",
+				err,
+			)
+		}
+		anchorAdmission, err :=
+			newFrostNativeSignerAnchorAdmissionController(anchorBinding)
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot initialize native signer anchor admission: [%w]",
 				err,
 			)
 		}
@@ -437,14 +656,27 @@ func newNode(
 				err,
 			)
 		}
+		if err := validateFrostNativeSignerAnchorReconciledTransitionTarget(
+			startupSignerTip,
+			trustTransitionTarget,
+		); err != nil {
+			_ = outbox.close()
+			return nil, err
+		}
 		if err := signing.InstallNativeTBTCSignerStateAnchorBarrier(
 			signing.NativeTBTCSignerStateAnchorBarrierConfig{
-				InitialTip:                startupSignerTip,
-				ExpectedAnchorBindingHash: expectedAnchorBindingHash,
-				MinimumAnchorServiceEpoch: anchorManifest.MinimumServiceEpoch,
-				ReadTip:                   signing.ReadNativeTBTCSignerStateWitnessTip,
-				Committer:                 anchorBinding,
-				Timeout:                   config.FrostNativeSignerAnchorRequestTimeout,
+				InitialTip:                                startupSignerTip,
+				ExpectedAnchorBindingHash:                 expectedAnchorBindingHash,
+				MinimumAnchorServiceEpoch:                 certifiedFloor.ServiceEpoch,
+				MaximumAnchorRevisionDistance:             FrostNativeSignerAnchorMaximumHistoryEvents,
+				MaximumStateGenerationDistance:            FrostNativeSignerAnchorMaximumHistoryProofEntries,
+				MaximumStateGenerationAdvancePerOperation: frostNativeSignerMaximumGenerationAdvancesPerAnchoredCall,
+				ExpectedTrustHead:                         expectedTrustHead,
+				ReadTip:                                   signing.ReadNativeTBTCSignerStateWitnessTip,
+				ReadTrustHead: signing.
+					ReadNativeTBTCSignerStateAnchorTrustHead,
+				Committer: anchorBinding,
+				Timeout:   config.FrostNativeSignerAnchorRequestTimeout,
 			},
 		); err != nil {
 			_ = outbox.close()
@@ -457,6 +689,8 @@ func newNode(
 			storeBinding,
 			anchorBinding,
 			signing.ReadNativeTBTCSignerRetainedKeyPackageInventory,
+			signing.ReadNativeTBTCSignerStateAnchorTrustHead,
+			expectedTrustHead,
 		)
 		if err != nil {
 			_ = outbox.close()
@@ -541,6 +775,7 @@ func newNode(
 		node.frostPreSignActivationProfile = verifiedActivationProfile
 		node.frostDurableSessionStoreBinding = storeBinding
 		node.frostProductionSignerReadiness = readiness
+		node.frostNativeSignerAnchorAdmission = anchorAdmission
 		node.bitcoinBroadcastOutbox = outbox
 		node.frostActivationHandshakeExporter = exporter
 	}
@@ -860,6 +1095,7 @@ func (n *node) getSigningExecutor(
 			n.frostPreSignActivationProfile,
 			n.frostDurableSessionStoreBinding,
 			n.frostProductionSignerReadiness,
+			n.frostNativeSignerAnchorAdmission,
 			n.chain.Signing(),
 			broadcastChannel,
 			membershipValidator,

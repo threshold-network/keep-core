@@ -162,6 +162,25 @@ func executeFrostDKGIfPossible(
 			)
 			return
 		}
+		if node.frostNativeSignerAnchorAdmission == nil {
+			dkgLogger.Errorf(
+				"FROST DKG is blocked: native signer anchor admission is unavailable",
+			)
+			return
+		}
+		anchorReservation, err :=
+			node.frostNativeSignerAnchorAdmission.reserveDKG(
+				dkgCtx,
+				uint64(len(localActiveMemberIndexes)),
+			)
+		if err != nil {
+			dkgLogger.Errorf(
+				"FROST DKG is blocked by native signer anchor admission: [%v]",
+				err,
+			)
+			return
+		}
+		defer anchorReservation.Release()
 
 		tbtcSignerMemberIndexes, err := finalFrostDKGMemberIndexes(
 			activeMemberIndexes,

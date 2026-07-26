@@ -97,6 +97,9 @@ jobs:
             frost_tbtc_retained_key_package_inventory \
             frost_tbtc_state_witness_proof \
             frost_tbtc_state_witness_tip \
+            frost_tbtc_state_anchor_trust_head \
+            frost_tbtc_transition_state_witness_anchor \
+            frost_tbtc_state_anchor_bootstrap_facts \
             frost_tbtc_acknowledge_state_witness_checkpoint \
             frost_tbtc_recover_state_witness_checkpoint \
             frost_tbtc_version \

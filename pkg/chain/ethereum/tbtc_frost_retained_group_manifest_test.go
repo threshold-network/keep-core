@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -15,15 +14,6 @@ func testManifestHex32(value byte) string {
 
 func testFrostJournalActivationManifest() *frostPreSignActivationManifest {
 	checkpointHash := testManifestHex32(0x02)
-	signerStoreFingerprint := [32]byte{0x09}
-	previousStateCommitment := [32]byte{0x50}
-	stateImageDigest := [32]byte{0x51}
-	stateCommitment := frostsigning.ComputeNativeTBTCSignerStateWitnessCommitment(
-		signerStoreFingerprint,
-		1,
-		previousStateCommitment,
-		stateImageDigest,
-	)
 	manifest := &frostPreSignActivationManifest{
 		Schema:             frostPreSignManifestVersion,
 		ActivationSequence: 1,
@@ -85,30 +75,19 @@ func testFrostJournalActivationManifest() *frostPreSignActivationManifest {
 				MinimumGeneration:  0,
 			},
 			NativeSignerAnchor: frostPreSignManifestNativeSignerAnchor{
-				ProtocolID:                   testManifestHex32(0x40),
-				StreamID:                     testManifestHex32(0x41),
-				TrustDomainID:                "independent-native-anchor",
-				EndpointLeafSPKIHash:         testManifestHex32(0x42),
-				OnlineKeyHash:                testManifestHex32(0x43),
-				OperatorFingerprint:          testManifestHex32(0x44),
-				HistoryStoreID:               "native-anchor-history",
-				HistoryStoreFingerprint:      testManifestHex32(0x45),
-				HistoryClusterFingerprint:    testManifestHex32(0x46),
-				OfflineAuthorityHash:         testManifestHex32(0x47),
-				ClientSPKIHash:               testManifestHex32(0x48),
-				SignerStoreFingerprint:       testManifestHex32(0x09),
-				TransportBinding:             testManifestHex32(0x49),
-				MinimumServiceEpoch:          1,
-				MinimumRevision:              1,
-				MinimumEventRoot:             testManifestHex32(0x4a),
-				MinimumAcknowledgementDigest: testManifestHex32(0x4b),
-				MinimumCheckpoint: frostPreSignManifestNativeSignerCheckpoint{
-					StoreFingerprint:        testManifestHex32(0x09),
-					Generation:              1,
-					PreviousStateCommitment: fmt.Sprintf("0x%x", previousStateCommitment[:]),
-					StateImageDigest:        fmt.Sprintf("0x%x", stateImageDigest[:]),
-					StateCommitment:         fmt.Sprintf("0x%x", stateCommitment[:]),
-				},
+				ProtocolID:                      testManifestHex32(0x40),
+				StreamID:                        testManifestHex32(0x41),
+				TrustDomainID:                   "independent-native-anchor",
+				EndpointLeafSPKIHash:            testManifestHex32(0x42),
+				OnlineKeyHash:                   testManifestHex32(0x43),
+				OperatorFingerprint:             testManifestHex32(0x44),
+				HistoryStoreID:                  "native-anchor-history",
+				HistoryStoreFingerprint:         testManifestHex32(0x45),
+				HistoryClusterFingerprint:       testManifestHex32(0x46),
+				OfflineAuthorityHash:            testManifestHex32(0x47),
+				ClientSPKIHash:                  testManifestHex32(0x48),
+				SignerStoreFingerprint:          testManifestHex32(0x09),
+				TransportBinding:                testManifestHex32(0x49),
 				WitnessMaximumRecords:           100,
 				WitnessRotationThresholdRecords: 8,
 			},
@@ -168,17 +147,8 @@ func TestValidateFrostPreSignActivationManifest_CanonicalJournal(t *testing.T) {
 		manifest.FrostSigner.NativeSignerAnchor.SignerStoreFingerprint =
 			testManifestHex32(0xee)
 		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
-			!strings.Contains(err.Error(), "minimum checkpoint belongs to another store") {
+			!strings.Contains(err.Error(), "differs from the durable signer store") {
 			t.Fatalf("expected native anchor store failure, got [%v]", err)
-		}
-	})
-	t.Run("native anchor checkpoint tamper", func(t *testing.T) {
-		manifest := testFrostJournalActivationManifest()
-		manifest.FrostSigner.NativeSignerAnchor.MinimumCheckpoint.StateImageDigest =
-			testManifestHex32(0xee)
-		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
-			!strings.Contains(err.Error(), "checkpoint commitment is invalid") {
-			t.Fatalf("expected native anchor checkpoint failure, got [%v]", err)
 		}
 	})
 	t.Run("native anchor witness geometry", func(t *testing.T) {

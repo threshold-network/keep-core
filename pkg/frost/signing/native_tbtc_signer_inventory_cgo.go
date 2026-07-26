@@ -22,6 +22,11 @@ typedef struct {
 
 typedef TbtcSignerInventoryResult (*tbtc_retained_key_package_inventory_fn)(void);
 typedef TbtcSignerInventoryResult (*tbtc_state_witness_tip_fn)(void);
+typedef TbtcSignerInventoryResult (*tbtc_state_anchor_trust_head_fn)(void);
+typedef TbtcSignerInventoryResult (*tbtc_transition_state_witness_anchor_fn)(
+  const uint8_t* request_ptr,
+  size_t request_len
+);
 typedef TbtcSignerInventoryResult (*tbtc_acknowledge_state_witness_checkpoint_fn)(
   const uint8_t* request_ptr,
   size_t request_len
@@ -66,6 +71,33 @@ static TbtcSignerInventoryResult tbtc_signer_state_witness_tip(void) {
     return unavailable_tbtc_signer_inventory_result();
   }
   return operation();
+}
+
+static TbtcSignerInventoryResult tbtc_signer_state_anchor_trust_head(void) {
+  tbtc_state_anchor_trust_head_fn operation =
+    (tbtc_state_anchor_trust_head_fn)dlsym(
+      RTLD_DEFAULT,
+      "frost_tbtc_state_anchor_trust_head"
+    );
+  if (operation == NULL) {
+    return unavailable_tbtc_signer_inventory_result();
+  }
+  return operation();
+}
+
+static TbtcSignerInventoryResult tbtc_signer_transition_state_witness_anchor(
+  const uint8_t* request_ptr,
+  size_t request_len
+) {
+  tbtc_transition_state_witness_anchor_fn operation =
+    (tbtc_transition_state_witness_anchor_fn)dlsym(
+      RTLD_DEFAULT,
+      "frost_tbtc_transition_state_witness_anchor"
+    );
+  if (operation == NULL) {
+    return unavailable_tbtc_signer_inventory_result();
+  }
+  return operation(request_ptr, request_len);
 }
 
 static TbtcSignerInventoryResult tbtc_signer_acknowledge_state_witness_checkpoint(
@@ -123,9 +155,15 @@ static void tbtc_signer_inventory_free_buffer(uint8_t* ptr, size_t len) {
 import "C"
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"unsafe"
+)
+
+const (
+	nativeTBTCSignerStateAnchorTrustHeadAbsentCode       = "state_anchor_trust_head_absent"
+	nativeTBTCSignerStateAnchorTrustRecoveryRequiredCode = "state_anchor_trust_recovery_required"
 )
 
 func ReadNativeTBTCSignerRetainedKeyPackageInventory() (
@@ -177,6 +215,133 @@ func ReadNativeTBTCSignerStateWitnessTip() (
 		)
 	}
 	return tip, nil
+}
+
+// ReadNativeTBTCSignerStateAnchorTrustHead returns the descriptor-bound
+// offline trust journal head without opening or mutating EngineState.
+func ReadNativeTBTCSignerStateAnchorTrustHead() (
+	*NativeTBTCSignerStateAnchorTrustHead,
+	error,
+) {
+	if err := ensureTBTCSignerABICompatible(); err != nil {
+		return nil, err
+	}
+	payload, err := parseNativeTBTCSignerInventoryResult(
+		"StateAnchorTrustHead",
+		C.tbtc_signer_state_anchor_trust_head(),
+	)
+	if err != nil {
+		return nil, classifyNativeTBTCSignerStateAnchorTrustHeadError(err)
+	}
+	head, err := DecodeNativeTBTCSignerStateAnchorTrustHead(payload)
+	if err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"StateAnchorTrustHead",
+			err.Error(),
+		)
+	}
+	return head, nil
+}
+
+func classifyNativeTBTCSignerStateAnchorTrustHeadError(err error) error {
+	var structured *buildTaggedTBTCSignerStructuredError
+	if !errors.As(err, &structured) {
+		return err
+	}
+	if structured.Code ==
+		nativeTBTCSignerStateAnchorTrustRecoveryRequiredCode &&
+		structured.StateAnchorTrustRecovery != nil {
+		return newNativeTBTCSignerStateAnchorTrustRecoveryRequiredError(
+			structured.StateAnchorTrustRecovery,
+			err,
+		)
+	}
+	if structured.Code == nativeTBTCSignerStateAnchorTrustHeadAbsentCode {
+		return fmt.Errorf(
+			"%w: %v",
+			ErrNativeTBTCSignerStateAnchorTrustHeadAbsent,
+			err,
+		)
+	}
+	return err
+}
+
+// TransitionNativeTBTCSignerStateWitnessAnchor is the sole startup-only trust
+// bootstrap/rotation entry point. Rust rejects it once EngineState or the
+// durable store has been opened. The request is already fully verified by Go,
+// but Rust independently authenticates the certificate chain and fresh final
+// Read before committing its crash-safe trust journal.
+func TransitionNativeTBTCSignerStateWitnessAnchor(
+	requestJSON []byte,
+) (*NativeTBTCSignerStateAnchorTrustTransitionResult, error) {
+	if err := ensureTBTCSignerABICompatible(); err != nil {
+		return nil, err
+	}
+	if len(requestJSON) == 0 ||
+		len(requestJSON) >
+			NativeTBTCSignerStateAnchorTrustTransitionMaximumRequestBytes {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"TransitionStateWitnessAnchor",
+			"trust-transition request size is invalid",
+		)
+	}
+	requestPointer := C.CBytes(requestJSON)
+	defer func() {
+		zeroBytes(unsafe.Slice((*byte)(requestPointer), len(requestJSON)))
+		C.free(requestPointer)
+	}()
+	payload, err := parseNativeTBTCSignerInventoryResult(
+		"TransitionStateWitnessAnchor",
+		C.tbtc_signer_transition_state_witness_anchor(
+			(*C.uint8_t)(requestPointer),
+			C.size_t(len(requestJSON)),
+		),
+	)
+	if err != nil {
+		return nil, classifyNativeTBTCSignerStateAnchorTrustTransitionError(err)
+	}
+	result, err := DecodeNativeTBTCSignerStateAnchorTrustTransitionResult(payload)
+	if err != nil {
+		return nil, buildTaggedTBTCSignerOperationError(
+			"TransitionStateWitnessAnchor",
+			err.Error(),
+		)
+	}
+	return result, nil
+}
+
+func classifyNativeTBTCSignerStateAnchorTrustTransitionError(
+	err error,
+) error {
+	var structured *buildTaggedTBTCSignerStructuredError
+	if !errors.As(err, &structured) ||
+		structured.Code !=
+			nativeTBTCSignerStateAnchorTrustRecoveryRequiredCode ||
+		structured.StateAnchorTrustRecovery == nil {
+		return err
+	}
+	return newNativeTBTCSignerStateAnchorTrustRecoveryRequiredError(
+		structured.StateAnchorTrustRecovery,
+		err,
+	)
+}
+
+func newNativeTBTCSignerStateAnchorTrustRecoveryRequiredError(
+	recovery *NativeTBTCSignerStateAnchorTrustRecoveryRequired,
+	cause error,
+) error {
+	if recovery == nil {
+		return cause
+	}
+	copy := *recovery
+	copy.OrderedCertificateDigests = append(
+		[][32]byte{},
+		recovery.OrderedCertificateDigests...,
+	)
+	return &NativeTBTCSignerStateAnchorTrustRecoveryRequiredError{
+		Recovery: copy,
+		cause:    cause,
+	}
 }
 
 // AcknowledgeNativeTBTCSignerStateWitnessCheckpoint installs the exact signed

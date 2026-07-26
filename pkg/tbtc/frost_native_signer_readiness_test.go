@@ -87,15 +87,48 @@ func testFrostNativeSignerInventoryAnchorBinding(
 		store:       store,
 		identity:    FrostNativeSignerAnchorIdentity{SignerStoreFingerprint: storeFingerprint},
 		bindingHash: bindingHash,
-		floor: FrostNativeSignerAnchorManifest{
-			MinimumServiceEpoch: 1,
-			MinimumRevision:     1,
+		floor: FrostNativeSignerStateWitnessAnchorReference{
+			ServiceEpoch: 1,
+			Revision:     1,
+			Checkpoint:   checkpoint,
 		},
 		readTip: func() (*frostsigning.NativeTBTCSignerStateWitnessTip, error) {
 			result := *tip
 			return &result, nil
 		},
 	}, store
+}
+
+func testFrostNativeSignerInventoryTrustHead(
+	binding *frostNativeSignerAnchorBinding,
+) *frostsigning.NativeTBTCSignerStateAnchorTrustHead {
+	floor := binding.floor
+	return &frostsigning.NativeTBTCSignerStateAnchorTrustHead{
+		Schema:                          frostsigning.NativeTBTCSignerStateAnchorTrustHeadSchema,
+		CertificateSequence:             1,
+		CertificateDigest:               [32]byte{0xb1},
+		ActivationManifestSequence:      1,
+		ActivationManifestHash:          [32]byte{0xb2},
+		BindingHash:                     binding.bindingHash,
+		ResponsePublicKeySPKISHA256:     [32]byte{0xb3},
+		OfflineAuthoritySPKISHA256:      [32]byte{0xb4},
+		ServiceEpoch:                    floor.ServiceEpoch,
+		WitnessMaximumRecords:           4096,
+		WitnessRotationThresholdRecords: 1024,
+		CertifiedFloor: frostsigning.NativeTBTCSignerStateAnchorTrustReference{
+			ServiceEpoch:          floor.ServiceEpoch,
+			Revision:              floor.Revision,
+			EventRoot:             floor.EventRoot,
+			AcknowledgementDigest: floor.AcknowledgementDigest,
+			Checkpoint: frostsigning.NativeTBTCSignerStateAnchorCheckpoint{
+				StoreFingerprint:        floor.Checkpoint.StoreFingerprint,
+				Generation:              floor.Checkpoint.Generation,
+				PreviousStateCommitment: floor.Checkpoint.PreviousStateCommitment,
+				StateImageDigest:        floor.Checkpoint.StateImageDigest,
+				StateCommitment:         floor.Checkpoint.StateCommitment,
+			},
+		},
+	}
 }
 
 func TestCompleteFrostInteractiveSigningReadiness_RequiresEveryRuntimeGate(
@@ -129,6 +162,104 @@ func TestCompleteFrostInteractiveSigningReadiness_RequiresEveryRuntimeGate(
 				t.Fatalf("unexpected readiness: got [%v], want [%v]", actual, test.expected)
 			}
 		})
+	}
+}
+
+func TestValidateFrostNativeSignerAnchorReadinessHeadroomFreezesAtBound(
+	t *testing.T,
+) {
+	inventory := &frostNativeSignerInventorySnapshot{
+		CertifiedFloorRevision: 1,
+		CurrentAnchorRevision: 1 +
+			FrostNativeSignerAnchorMaximumHistoryEvents - 1,
+		CertifiedFloorGeneration:      1,
+		StateGeneration:               1,
+		RestartableRevisionHeadroom:   1,
+		RestartableGenerationHeadroom: FrostNativeSignerAnchorMaximumHistoryProofEntries,
+		AnchorRotationWarning:         true,
+	}
+	if err := validateFrostNativeSignerAnchorReadinessHeadroom(
+		inventory,
+	); err != nil {
+		t.Fatalf("last usable revision was rejected: %v", err)
+	}
+	inventory.CurrentAnchorRevision++
+	inventory.RestartableRevisionHeadroom = 0
+	if err := validateFrostNativeSignerAnchorReadinessHeadroom(
+		inventory,
+	); err == nil || !strings.Contains(err.Error(), "rotation is required") {
+		t.Fatalf("exhausted revision window remained readiness-valid: %v", err)
+	}
+	inventory.CurrentAnchorRevision++
+	if err := validateFrostNativeSignerAnchorReadinessHeadroom(
+		inventory,
+	); err == nil || !strings.Contains(err.Error(), "inconsistent") {
+		t.Fatalf("beyond-bound readiness snapshot was accepted: %v", err)
+	}
+}
+
+func TestValidateFrostNativeSignerAnchorReadinessHeadroomTracksGenerationBound(
+	t *testing.T,
+) {
+	inventory := &frostNativeSignerInventorySnapshot{
+		CertifiedFloorRevision:        1,
+		CurrentAnchorRevision:         1,
+		RestartableRevisionHeadroom:   FrostNativeSignerAnchorMaximumHistoryEvents,
+		CertifiedFloorGeneration:      1,
+		StateGeneration:               FrostNativeSignerAnchorMaximumHistoryProofEntries,
+		RestartableGenerationHeadroom: 1,
+		AnchorRotationWarning:         true,
+	}
+	if err := validateFrostNativeSignerAnchorReadinessHeadroom(
+		inventory,
+	); err != nil {
+		t.Fatalf("last usable generation was rejected: %v", err)
+	}
+	inventory.StateGeneration++
+	inventory.RestartableGenerationHeadroom = 0
+	if err := validateFrostNativeSignerAnchorReadinessHeadroom(
+		inventory,
+	); err == nil || !strings.Contains(err.Error(), "rotation is required") {
+		t.Fatalf("exhausted generation window remained readiness-valid: %v", err)
+	}
+	inventory.StateGeneration++
+	if err := validateFrostNativeSignerAnchorReadinessHeadroom(
+		inventory,
+	); err == nil || !strings.Contains(err.Error(), "inconsistent") {
+		t.Fatalf("beyond-bound generation snapshot was accepted: %v", err)
+	}
+}
+
+func TestValidateFrostNativeSignerAnchorReadinessHeadroomWarningUsesMinimum(
+	t *testing.T,
+) {
+	inventory := &frostNativeSignerInventorySnapshot{
+		CertifiedFloorRevision:      1,
+		CurrentAnchorRevision:       1,
+		RestartableRevisionHeadroom: FrostNativeSignerAnchorMaximumHistoryEvents,
+		CertifiedFloorGeneration:    1,
+	}
+	for _, test := range []struct {
+		headroom uint64
+		warning  bool
+	}{
+		{FrostNativeSignerAnchorRotationWarningHeadroom, true},
+		{FrostNativeSignerAnchorRotationWarningHeadroom + 1, false},
+	} {
+		inventory.RestartableGenerationHeadroom = test.headroom
+		inventory.StateGeneration = 1 +
+			FrostNativeSignerAnchorMaximumHistoryProofEntries -
+			test.headroom
+		inventory.AnchorRotationWarning = test.warning
+		if err := validateFrostNativeSignerAnchorReadinessHeadroom(
+			inventory,
+		); err != nil {
+			t.Fatalf(
+				"generation warning boundary [%d] was rejected: %v",
+				test.headroom,
+				err,
+			)
+		}
 	}
 }
 
@@ -244,12 +375,18 @@ func TestFrostNativeSignerInventoryBindingRequiresExactAuthenticatedAnchor(t *te
 	}
 	anchorBinding, anchorStore :=
 		testFrostNativeSignerInventoryAnchorBinding(storeFingerprint, checkpoint)
+	trustHead := testFrostNativeSignerInventoryTrustHead(anchorBinding)
 	binding, err := newFrostNativeSignerInventoryBinding(
 		storeBinding,
 		anchorBinding,
 		func() (*frostsigning.NativeTBTCSignerRetainedKeyPackageInventory, error) {
 			return inventory, nil
 		},
+		func() (*frostsigning.NativeTBTCSignerStateAnchorTrustHead, error) {
+			copy := *trustHead
+			return &copy, nil
+		},
+		trustHead,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -263,9 +400,60 @@ func TestFrostNativeSignerInventoryBindingRequiresExactAuthenticatedAnchor(t *te
 			ParticipantSeats: []uint16{2},
 		},
 	}
-	if _, err := binding.verify(context.Background(), expected); err != nil {
+	snapshot, err := binding.verify(context.Background(), expected)
+	if err != nil {
 		t.Fatalf("anchored descendant inventory was rejected: [%v]", err)
 	}
+	if snapshot.AnchorServiceEpoch != 1 ||
+		snapshot.CertifiedFloorRevision != 1 ||
+		snapshot.CertifiedFloorGeneration != 2 ||
+		snapshot.CurrentAnchorRevision != 1 ||
+		snapshot.RestartableRevisionHeadroom !=
+			FrostNativeSignerAnchorMaximumHistoryEvents ||
+		snapshot.RestartableGenerationHeadroom !=
+			FrostNativeSignerAnchorMaximumHistoryProofEntries ||
+		snapshot.AnchorRotationWarning {
+		t.Fatalf("unexpected native anchor readiness headroom: %+v", snapshot)
+	}
+
+	warningTip, err := anchorBinding.readTip()
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineTip := *warningTip
+	baselineRecord := *anchorStore.record
+	warningTip.AnchorRevision =
+		anchorBinding.floor.Revision +
+			FrostNativeSignerAnchorMaximumHistoryEvents - 1
+	warningTip.AnchorEventRoot = [32]byte{0xd1}
+	warningTip.AnchorAcknowledgementDigest = [32]byte{0xd2}
+	anchorBinding.readTip = func() (
+		*frostsigning.NativeTBTCSignerStateWitnessTip,
+		error,
+	) {
+		copy := *warningTip
+		return &copy, nil
+	}
+	anchorStore.record.Revision = warningTip.AnchorRevision
+	anchorStore.record.PreviousEventRoot = [32]byte{0xd0}
+	anchorStore.record.EventRoot = warningTip.AnchorEventRoot
+	anchorStore.record.AcknowledgementDigest =
+		warningTip.AnchorAcknowledgementDigest
+	warningSnapshot, err := binding.verify(context.Background(), expected)
+	if err != nil {
+		t.Fatalf("warning-headroom inventory was rejected: %v", err)
+	}
+	if warningSnapshot.RestartableRevisionHeadroom != 1 ||
+		!warningSnapshot.AnchorRotationWarning {
+		t.Fatalf(
+			"revision exhaustion warning was not surfaced: %+v",
+			warningSnapshot,
+		)
+	}
+
+	// Restore the exact baseline before the fork checks below.
+	*warningTip = baselineTip
+	*anchorStore.record = baselineRecord
 
 	forkImage := [32]byte{0xff}
 	anchorStore.record.Checkpoint = FrostNativeSignerStateWitnessCheckpoint{
@@ -417,6 +605,7 @@ func TestFrostProductionSignerReadinessRejectsConcurrentRegistryChange(
 	}
 	anchorBinding, _ :=
 		testFrostNativeSignerInventoryAnchorBinding(storeFingerprint, checkpoint)
+	trustHead := testFrostNativeSignerInventoryTrustHead(anchorBinding)
 	inventoryReads := 0
 	inventoryBinding, err := newFrostNativeSignerInventoryBinding(
 		storeBinding,
@@ -430,6 +619,11 @@ func TestFrostProductionSignerReadinessRejectsConcurrentRegistryChange(
 			}
 			return inventory, nil
 		},
+		func() (*frostsigning.NativeTBTCSignerStateAnchorTrustHead, error) {
+			copy := *trustHead
+			return &copy, nil
+		},
+		trustHead,
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -23,7 +23,25 @@ var (
 	)
 )
 
-const defaultNativeTBTCSignerStateAnchorTimeout = 15 * time.Second
+const (
+	defaultNativeTBTCSignerStateAnchorTimeout = 15 * time.Second
+
+	// NativeTBTCSignerStateAnchorMaximumRevisionDistance is the frozen maximum
+	// number of service revisions that can remain restartable from one
+	// certified floor. Callers may choose a smaller conservative window but
+	// cannot enlarge this protocol bound.
+	NativeTBTCSignerStateAnchorMaximumRevisionDistance uint64 = 4096
+
+	// NativeTBTCSignerStateAnchorMaximumGenerationDistance is the frozen
+	// maximum number of Rust state generations that can remain provable from
+	// one certified floor.
+	NativeTBTCSignerStateAnchorMaximumGenerationDistance uint64 = 4096
+
+	// NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation is the
+	// maximum durable Rust state writes one request-taking call may perform:
+	// two sweep/repair writes followed by the operation's own write.
+	NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation uint64 = 3
+)
 
 // NativeTBTCSignerStateAnchorCommitter durably commits a transition to the
 // independent linearizable anchor, installs the exact signed acknowledgement
@@ -46,26 +64,36 @@ type NativeTBTCSignerStateAnchorCommitter interface {
 // barrier. InitialTip must have already passed startup reconciliation against
 // the independent service.
 type NativeTBTCSignerStateAnchorBarrierConfig struct {
-	InitialTip                *NativeTBTCSignerStateWitnessTip
-	ExpectedAnchorBindingHash [32]byte
-	MinimumAnchorServiceEpoch uint64
-	ReadTip                   func() (*NativeTBTCSignerStateWitnessTip, error)
-	Committer                 NativeTBTCSignerStateAnchorCommitter
-	Timeout                   time.Duration
+	InitialTip                                *NativeTBTCSignerStateWitnessTip
+	ExpectedAnchorBindingHash                 [32]byte
+	MinimumAnchorServiceEpoch                 uint64
+	MaximumAnchorRevisionDistance             uint64
+	MaximumStateGenerationDistance            uint64
+	MaximumStateGenerationAdvancePerOperation uint64
+	ExpectedTrustHead                         *NativeTBTCSignerStateAnchorTrustHead
+	ReadTip                                   func() (*NativeTBTCSignerStateWitnessTip, error)
+	ReadTrustHead                             func() (*NativeTBTCSignerStateAnchorTrustHead, error)
+	Committer                                 NativeTBTCSignerStateAnchorCommitter
+	Timeout                                   time.Duration
 }
 
 type nativeTBTCSignerStateAnchorBarrier struct {
 	mutex sync.Mutex
 
-	installed bool
-	poisoned  error
-	tip       NativeTBTCSignerStateWitnessTip
-	readTip   func() (*NativeTBTCSignerStateWitnessTip, error)
-	committer NativeTBTCSignerStateAnchorCommitter
-	timeout   time.Duration
+	installed     bool
+	poisoned      error
+	tip           NativeTBTCSignerStateWitnessTip
+	readTip       func() (*NativeTBTCSignerStateWitnessTip, error)
+	readTrustHead func() (*NativeTBTCSignerStateAnchorTrustHead, error)
+	committer     NativeTBTCSignerStateAnchorCommitter
+	timeout       time.Duration
 
-	expectedAnchorBindingHash [32]byte
-	minimumAnchorServiceEpoch uint64
+	expectedAnchorBindingHash                 [32]byte
+	minimumAnchorServiceEpoch                 uint64
+	maximumAnchorRevisionDistance             uint64
+	maximumStateGenerationDistance            uint64
+	maximumStateGenerationAdvancePerOperation uint64
+	expectedTrustHead                         NativeTBTCSignerStateAnchorTrustHead
 }
 
 var globalNativeTBTCSignerStateAnchorBarrier nativeTBTCSignerStateAnchorBarrier
@@ -77,9 +105,19 @@ func InstallNativeTBTCSignerStateAnchorBarrier(
 	config NativeTBTCSignerStateAnchorBarrierConfig,
 ) error {
 	if config.InitialTip == nil || config.ReadTip == nil ||
+		config.ReadTrustHead == nil || config.ExpectedTrustHead == nil ||
 		config.Committer == nil ||
 		config.ExpectedAnchorBindingHash == [32]byte{} ||
-		config.MinimumAnchorServiceEpoch == 0 {
+		config.MinimumAnchorServiceEpoch == 0 ||
+		config.MaximumAnchorRevisionDistance == 0 ||
+		config.MaximumAnchorRevisionDistance >
+			NativeTBTCSignerStateAnchorMaximumRevisionDistance ||
+		config.MaximumStateGenerationDistance == 0 ||
+		config.MaximumStateGenerationDistance >
+			NativeTBTCSignerStateAnchorMaximumGenerationDistance ||
+		config.MaximumStateGenerationAdvancePerOperation == 0 ||
+		config.MaximumStateGenerationAdvancePerOperation >
+			NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation {
 		return fmt.Errorf("native tbtc signer state anchor dependencies are incomplete")
 	}
 	initial := *config.InitialTip
@@ -93,6 +131,30 @@ func InstallNativeTBTCSignerStateAnchorBarrier(
 		initial.AnchorAcknowledgementDigest == [32]byte{} {
 		return fmt.Errorf(
 			"native tbtc signer initial tip lacks the pinned signed anchor acknowledgement",
+		)
+	}
+	expectedTrustHead := *config.ExpectedTrustHead
+	if expectedTrustHead.Schema != NativeTBTCSignerStateAnchorTrustHeadSchema ||
+		expectedTrustHead.CertificateSequence == 0 ||
+		expectedTrustHead.CertificateDigest == [32]byte{} ||
+		expectedTrustHead.BindingHash != config.ExpectedAnchorBindingHash ||
+		expectedTrustHead.ServiceEpoch != initial.AnchorServiceEpoch ||
+		expectedTrustHead.ServiceEpoch < config.MinimumAnchorServiceEpoch ||
+		expectedTrustHead.CertifiedFloor.ServiceEpoch !=
+			expectedTrustHead.ServiceEpoch ||
+		expectedTrustHead.CertifiedFloor.Revision > initial.AnchorRevision ||
+		initial.AnchorRevision-expectedTrustHead.CertifiedFloor.Revision >
+			config.MaximumAnchorRevisionDistance ||
+		expectedTrustHead.CertifiedFloor.Checkpoint.StoreFingerprint !=
+			initial.StoreFingerprint ||
+		expectedTrustHead.CertifiedFloor.Checkpoint.Generation == 0 ||
+		expectedTrustHead.CertifiedFloor.Checkpoint.Generation >
+			initial.Generation ||
+		initial.Generation-
+			expectedTrustHead.CertifiedFloor.Checkpoint.Generation >
+			config.MaximumStateGenerationDistance {
+		return fmt.Errorf(
+			"native tbtc signer trust head differs from the initial anchor identity",
 		)
 	}
 	timeout := config.Timeout
@@ -116,6 +178,15 @@ func InstallNativeTBTCSignerStateAnchorBarrier(
 	if readback == nil || *readback != initial {
 		return fmt.Errorf("native tbtc signer initial state tip changed before installation")
 	}
+	trustReadback, err := config.ReadTrustHead()
+	if err != nil {
+		return fmt.Errorf("cannot read native tbtc signer trust head: %w", err)
+	}
+	if trustReadback == nil || *trustReadback != expectedTrustHead {
+		return fmt.Errorf(
+			"native tbtc signer trust head changed before barrier installation",
+		)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if err := config.Committer.VerifyNativeTBTCSignerStateTip(
@@ -131,10 +202,18 @@ func InstallNativeTBTCSignerStateAnchorBarrier(
 	barrier.installed = true
 	barrier.tip = initial
 	barrier.readTip = config.ReadTip
+	barrier.readTrustHead = config.ReadTrustHead
 	barrier.committer = config.Committer
 	barrier.timeout = timeout
 	barrier.expectedAnchorBindingHash = config.ExpectedAnchorBindingHash
 	barrier.minimumAnchorServiceEpoch = config.MinimumAnchorServiceEpoch
+	barrier.maximumAnchorRevisionDistance =
+		config.MaximumAnchorRevisionDistance
+	barrier.maximumStateGenerationDistance =
+		config.MaximumStateGenerationDistance
+	barrier.maximumStateGenerationAdvancePerOperation =
+		config.MaximumStateGenerationAdvancePerOperation
+	barrier.expectedTrustHead = expectedTrustHead
 	return nil
 }
 
@@ -215,6 +294,51 @@ func beginNativeTBTCSignerStateAnchoredOperation(
 			fmt.Errorf("pre-operation state tip differs from the committed process tip"),
 		)
 	}
+	trustHead, err := barrier.readTrustHead()
+	if err != nil {
+		return nil, poisonAndUnlockNativeTBTCSignerStateAnchor(
+			barrier,
+			fmt.Errorf("cannot read pre-operation trust head: %w", err),
+		)
+	}
+	if trustHead == nil || *trustHead != barrier.expectedTrustHead {
+		return nil, poisonAndUnlockNativeTBTCSignerStateAnchor(
+			barrier,
+			fmt.Errorf("pre-operation trust head differs from the installed identity"),
+		)
+	}
+	if readback.AnchorRevision <
+		trustHead.CertifiedFloor.Revision ||
+		readback.AnchorRevision-trustHead.CertifiedFloor.Revision >=
+			barrier.maximumAnchorRevisionDistance {
+		barrier.mutex.Unlock()
+		return nil, fmt.Errorf(
+			"%w: request-taking operation [%s] is blocked because the certified anchor revision window is exhausted; offline anchor rotation is required",
+			ErrNativeTBTCSignerStateAnchorUnavailable,
+			operation,
+		)
+	}
+	certifiedFloorGeneration :=
+		trustHead.CertifiedFloor.Checkpoint.Generation
+	if readback.Generation < certifiedFloorGeneration {
+		return nil, poisonAndUnlockNativeTBTCSignerStateAnchor(
+			barrier,
+			fmt.Errorf(
+				"pre-operation state generation precedes the certified floor",
+			),
+		)
+	}
+	generationDistance := readback.Generation - certifiedFloorGeneration
+	if generationDistance > barrier.maximumStateGenerationDistance ||
+		barrier.maximumStateGenerationDistance-generationDistance <
+			barrier.maximumStateGenerationAdvancePerOperation {
+		barrier.mutex.Unlock()
+		return nil, fmt.Errorf(
+			"%w: request-taking operation [%s] is blocked because the certified signer-generation window cannot cover its maximum advance; offline anchor rotation is required",
+			ErrNativeTBTCSignerStateAnchorUnavailable,
+			operation,
+		)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), barrier.timeout)
 	defer cancel()
 	if err := barrier.committer.VerifyNativeTBTCSignerStateTip(
@@ -256,6 +380,24 @@ func (lease *nativeTBTCSignerStateAnchorLease) commit() error {
 		candidate,
 	); err != nil {
 		return lease.poison(err)
+	}
+	if candidate.Generation > lease.expected.Generation &&
+		candidate.Generation-lease.expected.Generation >
+			barrier.maximumStateGenerationAdvancePerOperation {
+		return lease.poison(fmt.Errorf(
+			"native signer operation advanced [%d] generations, exceeding the per-operation bound [%d]",
+			candidate.Generation-lease.expected.Generation,
+			barrier.maximumStateGenerationAdvancePerOperation,
+		))
+	}
+	certifiedFloorGeneration :=
+		barrier.expectedTrustHead.CertifiedFloor.Checkpoint.Generation
+	if candidate.Generation < certifiedFloorGeneration ||
+		candidate.Generation-certifiedFloorGeneration >
+			barrier.maximumStateGenerationDistance {
+		return lease.poison(fmt.Errorf(
+			"native signer operation exceeded the certified signer-generation window",
+		))
 	}
 
 	if *candidate == lease.expected {
@@ -487,8 +629,13 @@ func resetNativeTBTCSignerStateAnchorBarrierForTest() {
 	barrier.poisoned = nil
 	barrier.tip = NativeTBTCSignerStateWitnessTip{}
 	barrier.readTip = nil
+	barrier.readTrustHead = nil
 	barrier.committer = nil
 	barrier.timeout = 0
 	barrier.expectedAnchorBindingHash = [32]byte{}
 	barrier.minimumAnchorServiceEpoch = 0
+	barrier.maximumAnchorRevisionDistance = 0
+	barrier.maximumStateGenerationDistance = 0
+	barrier.maximumStateGenerationAdvancePerOperation = 0
+	barrier.expectedTrustHead = NativeTBTCSignerStateAnchorTrustHead{}
 }

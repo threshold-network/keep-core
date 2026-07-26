@@ -30,11 +30,10 @@ import (
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
 	tbtcabi "github.com/keep-network/keep-core/pkg/chain/ethereum/tbtc/gen/abi"
-	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-const frostPreSignManifestVersion = "tbtc-p2tr-fraud-production-activation/v3"
+const frostPreSignManifestVersion = "tbtc-p2tr-fraud-production-activation/v4"
 
 const frostPreSignBridgeABIJSON = `[
  {"type":"function","name":"previewP2TRTransactionAuthorization","stateMutability":"view","inputs":[{"name":"payload","type":"bytes"}],"outputs":[{"name":"","type":"bytes"}]},
@@ -204,34 +203,21 @@ type frostPreSignManifestQuarantineJournal struct {
 }
 
 type frostPreSignManifestNativeSignerAnchor struct {
-	ProtocolID                      string                                     `json:"protocolID"`
-	StreamID                        string                                     `json:"streamID"`
-	TrustDomainID                   string                                     `json:"trustDomainID"`
-	EndpointLeafSPKIHash            string                                     `json:"endpointLeafSpkiHash"`
-	OnlineKeyHash                   string                                     `json:"onlineKeyHash"`
-	OperatorFingerprint             string                                     `json:"operatorFingerprint"`
-	HistoryStoreID                  string                                     `json:"historyStoreID"`
-	HistoryStoreFingerprint         string                                     `json:"historyStoreFingerprint"`
-	HistoryClusterFingerprint       string                                     `json:"historyClusterFingerprint"`
-	OfflineAuthorityHash            string                                     `json:"offlineAuthorityHash"`
-	ClientSPKIHash                  string                                     `json:"clientSpkiHash"`
-	SignerStoreFingerprint          string                                     `json:"signerStoreFingerprint"`
-	TransportBinding                string                                     `json:"transportBinding"`
-	MinimumServiceEpoch             uint64                                     `json:"minimumServiceEpoch"`
-	MinimumRevision                 uint64                                     `json:"minimumRevision"`
-	MinimumEventRoot                string                                     `json:"minimumEventRoot"`
-	MinimumAcknowledgementDigest    string                                     `json:"minimumAcknowledgementDigest"`
-	MinimumCheckpoint               frostPreSignManifestNativeSignerCheckpoint `json:"minimumCheckpoint"`
-	WitnessMaximumRecords           uint64                                     `json:"witnessMaximumRecords"`
-	WitnessRotationThresholdRecords uint64                                     `json:"witnessRotationThresholdRecords"`
-}
-
-type frostPreSignManifestNativeSignerCheckpoint struct {
-	StoreFingerprint        string `json:"storeFingerprint"`
-	Generation              uint64 `json:"generation"`
-	PreviousStateCommitment string `json:"previousStateCommitment"`
-	StateImageDigest        string `json:"stateImageDigest"`
-	StateCommitment         string `json:"stateCommitment"`
+	ProtocolID                      string `json:"protocolID"`
+	StreamID                        string `json:"streamID"`
+	TrustDomainID                   string `json:"trustDomainID"`
+	EndpointLeafSPKIHash            string `json:"endpointLeafSpkiHash"`
+	OnlineKeyHash                   string `json:"onlineKeyHash"`
+	OperatorFingerprint             string `json:"operatorFingerprint"`
+	HistoryStoreID                  string `json:"historyStoreID"`
+	HistoryStoreFingerprint         string `json:"historyStoreFingerprint"`
+	HistoryClusterFingerprint       string `json:"historyClusterFingerprint"`
+	OfflineAuthorityHash            string `json:"offlineAuthorityHash"`
+	ClientSPKIHash                  string `json:"clientSpkiHash"`
+	SignerStoreFingerprint          string `json:"signerStoreFingerprint"`
+	TransportBinding                string `json:"transportBinding"`
+	WitnessMaximumRecords           uint64 `json:"witnessMaximumRecords"`
+	WitnessRotationThresholdRecords uint64 `json:"witnessRotationThresholdRecords"`
 }
 
 type frostPreSignManifestFrostSigner struct {
@@ -262,17 +248,18 @@ type frostPreSignManifestFrostSigner struct {
 }
 
 type frostPreSignActivationManifest struct {
-	Schema             string                          `json:"schema"`
-	ActivationSequence uint64                          `json:"activationSequence"`
-	ActivationID       string                          `json:"activationID"`
-	Environment        string                          `json:"environment"`
-	Migrations         json.RawMessage                 `json:"migrations"`
-	Bitcoin            json.RawMessage                 `json:"bitcoin"`
-	Ethereum           frostPreSignManifestEthereum    `json:"ethereum"`
-	ECDSACutover       json.RawMessage                 `json:"ecdsaCutover"`
-	Outbox             json.RawMessage                 `json:"outbox"`
-	FrostSigner        frostPreSignManifestFrostSigner `json:"frostSigner"`
-	manifestHash       [32]byte
+	Schema                       string                          `json:"schema"`
+	ActivationSequence           uint64                          `json:"activationSequence"`
+	ActivationID                 string                          `json:"activationID"`
+	Environment                  string                          `json:"environment"`
+	Migrations                   json.RawMessage                 `json:"migrations"`
+	Bitcoin                      json.RawMessage                 `json:"bitcoin"`
+	Ethereum                     frostPreSignManifestEthereum    `json:"ethereum"`
+	ECDSACutover                 json.RawMessage                 `json:"ecdsaCutover"`
+	Outbox                       json.RawMessage                 `json:"outbox"`
+	FrostSigner                  frostPreSignManifestFrostSigner `json:"frostSigner"`
+	manifestHash                 [32]byte
+	activationAuthorityPublicKey [32]byte
 }
 
 type frostPreSignDeploymentPin struct {
@@ -513,6 +500,14 @@ func loadFrostPreSignActivationManifest(
 	if !ok {
 		return nil, fmt.Errorf("FROST activation signer key is not Ed25519")
 	}
+	if err := tbtc.ValidateFrostNativeSignerAnchorTrustEd25519PublicKey(
+		publicKey,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"FROST activation signer key point is invalid: [%w]",
+			err,
+		)
+	}
 	signature, err := base64.StdEncoding.Strict().DecodeString(envelope.Signature)
 	if err != nil || len(signature) != ed25519.SignatureSize ||
 		!ed25519.Verify(publicKey, canonicalPayload, signature) {
@@ -524,6 +519,7 @@ func loadFrostPreSignActivationManifest(
 		return nil, fmt.Errorf("cannot decode FROST activation payload: [%w]", err)
 	}
 	manifest.manifestHash = payloadHash
+	copy(manifest.activationAuthorityPublicKey[:], publicKey)
 	if err := validateFrostPreSignActivationManifest(manifest); err != nil {
 		return nil, err
 	}
@@ -1042,85 +1038,19 @@ func frostPreSignNativeSignerAnchorManifest(
 		return result, err
 	}
 	anchor := manifest.FrostSigner.NativeSignerAnchor
-	if anchor.MinimumServiceEpoch == 0 || anchor.MinimumRevision == 0 ||
-		anchor.WitnessMaximumRecords < 2 ||
+	if anchor.WitnessMaximumRecords < 2 ||
 		anchor.WitnessMaximumRecords > 1_000_000 ||
 		anchor.WitnessRotationThresholdRecords < 2 ||
 		anchor.WitnessRotationThresholdRecords >
 			anchor.WitnessMaximumRecords-2 {
 		return result, fmt.Errorf(
-			"FROST native signer anchor floor or witness geometry is invalid",
+			"FROST native signer witness geometry is invalid",
 		)
 	}
 	result.Identity = identity
-	result.MinimumServiceEpoch = anchor.MinimumServiceEpoch
-	result.MinimumRevision = anchor.MinimumRevision
 	result.WitnessMaximumRecords = anchor.WitnessMaximumRecords
 	result.WitnessRotationThresholdRecords =
 		anchor.WitnessRotationThresholdRecords
-	for label, input := range map[string]struct {
-		encoded     string
-		destination *[32]byte
-	}{
-		"minimum event root": {
-			anchor.MinimumEventRoot,
-			&result.MinimumEventRoot,
-		},
-		"minimum acknowledgement digest": {
-			anchor.MinimumAcknowledgementDigest,
-			&result.MinimumAcknowledgementDigest,
-		},
-	} {
-		parsed, err := frostPreSignParseBytes32(input.encoded)
-		if err != nil || parsed == [32]byte{} {
-			return result, fmt.Errorf("invalid FROST native signer anchor %s", label)
-		}
-		*input.destination = parsed
-	}
-	checkpoint := anchor.MinimumCheckpoint
-	if checkpoint.Generation == 0 {
-		return result, fmt.Errorf(
-			"FROST native signer anchor minimum checkpoint generation is zero",
-		)
-	}
-	result.MinimumCheckpoint.Generation = checkpoint.Generation
-	checkpointValues := []struct {
-		label       string
-		encoded     string
-		destination *[32]byte
-	}{
-		{"store fingerprint", checkpoint.StoreFingerprint, &result.MinimumCheckpoint.StoreFingerprint},
-		{"previous state commitment", checkpoint.PreviousStateCommitment, &result.MinimumCheckpoint.PreviousStateCommitment},
-		{"state image digest", checkpoint.StateImageDigest, &result.MinimumCheckpoint.StateImageDigest},
-		{"state commitment", checkpoint.StateCommitment, &result.MinimumCheckpoint.StateCommitment},
-	}
-	for _, value := range checkpointValues {
-		parsed, err := frostPreSignParseBytes32(value.encoded)
-		if err != nil || parsed == [32]byte{} {
-			return result, fmt.Errorf(
-				"invalid FROST native signer anchor minimum checkpoint %s",
-				value.label,
-			)
-		}
-		*value.destination = parsed
-	}
-	if result.MinimumCheckpoint.StoreFingerprint !=
-		identity.SignerStoreFingerprint {
-		return result, fmt.Errorf(
-			"FROST native signer anchor minimum checkpoint belongs to another store",
-		)
-	}
-	computed := frostsigning.ComputeNativeTBTCSignerStateWitnessCommitment(
-		result.MinimumCheckpoint.StoreFingerprint,
-		result.MinimumCheckpoint.Generation,
-		result.MinimumCheckpoint.PreviousStateCommitment,
-		result.MinimumCheckpoint.StateImageDigest,
-	)
-	if computed != result.MinimumCheckpoint.StateCommitment {
-		return result, fmt.Errorf(
-			"FROST native signer anchor minimum checkpoint commitment is invalid",
-		)
-	}
 	return result, nil
 }
 
@@ -2337,6 +2267,7 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 		MaximumGroupSize:                 frost.MaximumGroupSize,
 		RetainedGroupInventoryProtocolID: retainedGroupInventoryProtocolID,
 		NativeSignerAnchor:               nativeSignerAnchor,
+		ActivationAuthorityPublicKey:     adapter.manifest.activationAuthorityPublicKey,
 		CanonicalJournal: tbtc.FrostRetainedGroupCanonicalJournalManifest{
 			StoreID:            journal.StoreID,
 			StoreFingerprint:   storeFingerprint,

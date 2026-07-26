@@ -101,6 +101,120 @@ func TestFrostNativeSignerAnchorStreamIDFrozenAndStable(t *testing.T) {
 	}
 }
 
+func TestFrostNativeSignerAnchorRestartBoundsAlignAcrossGoLayers(
+	t *testing.T,
+) {
+	if FrostNativeSignerAnchorMaximumHistoryEvents !=
+		frostsigning.NativeTBTCSignerStateAnchorMaximumRevisionDistance {
+		t.Fatalf(
+			"anchor history bound [%d] differs from signer barrier bound [%d]",
+			FrostNativeSignerAnchorMaximumHistoryEvents,
+			frostsigning.NativeTBTCSignerStateAnchorMaximumRevisionDistance,
+		)
+	}
+	if FrostNativeSignerAnchorMaximumHistoryProofEntries !=
+		frostsigning.NativeTBTCSignerStateAnchorMaximumGenerationDistance {
+		t.Fatalf(
+			"signer proof bound [%d] differs from signer barrier generation bound [%d]",
+			FrostNativeSignerAnchorMaximumHistoryProofEntries,
+			frostsigning.NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+		)
+	}
+	if frostNativeSignerMaximumGenerationAdvancesPerAnchoredCall !=
+		frostsigning.NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation {
+		t.Fatalf(
+			"admission per-call generation bound [%d] differs from output barrier bound [%d]",
+			frostNativeSignerMaximumGenerationAdvancesPerAnchoredCall,
+			frostsigning.NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+		)
+	}
+}
+
+func TestFrostNativeSignerAnchorClientRejectsAliasedCryptographicRoles(
+	t *testing.T,
+) {
+	privateKey := func(seedByte byte) ed25519.PrivateKey {
+		seed := make([]byte, ed25519.SeedSize)
+		for index := range seed {
+			seed[index] = seedByte
+		}
+		return ed25519.NewKeyFromSeed(seed)
+	}
+	spki := func(t *testing.T, publicKey ed25519.PublicKey) []byte {
+		t.Helper()
+		result, err := x509.MarshalPKIXPublicKey(publicKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	clientKey := privateKey(0x11)
+	onlineKey := privateKey(0x22)
+	offlineKey := privateKey(0x33)
+	clientSPKI := spki(t, clientKey.Public().(ed25519.PublicKey))
+	onlineSPKI := spki(t, onlineKey.Public().(ed25519.PublicKey))
+	offlineSPKI := spki(t, offlineKey.Public().(ed25519.PublicKey))
+	endpoint := "http://127.0.0.1:19487/v1/anchor"
+	identity := FrostNativeSignerAnchorIdentity{
+		ProtocolID:                      testFrostNativeSignerAnchorBytes32(0x41),
+		ActivationManifestHash:          testFrostNativeSignerAnchorBytes32(0x42),
+		ActivationManifestSequence:      1,
+		TrustDomainID:                   "role-separation.example",
+		OnlineKeyHash:                   sha256.Sum256(onlineSPKI),
+		OperatorFingerprint:             testFrostNativeSignerAnchorBytes32(0x43),
+		HistoryStoreID:                  "role-separation-history",
+		HistoryStoreFingerprint:         testFrostNativeSignerAnchorBytes32(0x44),
+		HistoryClusterFingerprint:       testFrostNativeSignerAnchorBytes32(0x45),
+		OfflineAuthorityHash:            sha256.Sum256(offlineSPKI),
+		ClientSPKIHash:                  sha256.Sum256(clientSPKI),
+		SignerStoreFingerprint:          testFrostNativeSignerAnchorBytes32(0x46),
+		TransportBinding:                ComputeFrostNativeSignerAnchorTransportBinding(endpoint),
+		WitnessMaximumRecords:           100,
+		WitnessRotationThresholdRecords: 50,
+	}
+	identity.StreamID = ComputeFrostNativeSignerAnchorStreamID(identity)
+	config := FrostNativeSignerAnchorClientConfig{
+		Endpoint:            endpoint,
+		ClientPrivateKey:    clientKey,
+		OnlinePublicKeySPKI: onlineSPKI,
+		Identity:            identity,
+	}
+	if _, err := NewFrostNativeSignerAnchorClient(config); err != nil {
+		t.Fatalf("distinct cryptographic roles were rejected: %v", err)
+	}
+
+	tests := map[string]func(
+		*FrostNativeSignerAnchorClientConfig,
+	){
+		"client and online": func(
+			config *FrostNativeSignerAnchorClientConfig,
+		) {
+			config.OnlinePublicKeySPKI = clientSPKI
+			config.Identity.OnlineKeyHash = sha256.Sum256(clientSPKI)
+		},
+		"client and offline": func(
+			config *FrostNativeSignerAnchorClientConfig,
+		) {
+			config.Identity.OfflineAuthorityHash = sha256.Sum256(clientSPKI)
+		},
+		"online and offline": func(
+			config *FrostNativeSignerAnchorClientConfig,
+		) {
+			config.Identity.OfflineAuthorityHash = sha256.Sum256(onlineSPKI)
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			candidate := config
+			mutate(&candidate)
+			if _, err := NewFrostNativeSignerAnchorClient(candidate); err == nil ||
+				!strings.Contains(err.Error(), "pairwise distinct") {
+				t.Fatalf("aliased cryptographic roles were accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestFrostNativeSignerCheckpointAcknowledgementFrozenVector(t *testing.T) {
 	wire := frostNativeSignerAnchorAcknowledgementWire{
 		Schema:            FrostNativeSignerCheckpointAcknowledgementSchema,

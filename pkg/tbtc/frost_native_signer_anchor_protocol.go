@@ -36,7 +36,12 @@ const (
 	FrostNativeSignerAnchorMaximumHistoryEvents              = 4096
 	FrostNativeSignerAnchorMaximumHistoryProofEntries        = 4096
 	FrostNativeSignerAnchorMaximumHistoryPages               = 16
-	frostNativeSignerAnchorMaximumJSONDepth                  = 32
+	// FrostNativeSignerAnchorRotationWarningHeadroom exposes an operational
+	// warning while a full history page of restartable revisions remains.
+	// Signing freezes at zero so an offline-authorized epoch rotation can
+	// always recover without crossing the bounded-history window.
+	FrostNativeSignerAnchorRotationWarningHeadroom = 256
+	frostNativeSignerAnchorMaximumJSONDepth        = 32
 
 	frostNativeSignerAnchorMaximumRequestBytes         = 2 * 1024 * 1024
 	frostNativeSignerAnchorMaximumResponseBytes        = 256 * 1024
@@ -1117,6 +1122,13 @@ func validateFrostNativeSignerAnchorIdentity(
 		if value == [32]byte{} {
 			return fmt.Errorf("%s is zero", name)
 		}
+	}
+	if identity.ClientSPKIHash == identity.OnlineKeyHash ||
+		identity.ClientSPKIHash == identity.OfflineAuthorityHash ||
+		identity.OnlineKeyHash == identity.OfflineAuthorityHash {
+		return fmt.Errorf(
+			"anchor client, online response, and offline authority keys must be pairwise distinct",
+		)
 	}
 	if identity.ActivationManifestSequence == 0 ||
 		identity.WitnessMaximumRecords < 2 ||

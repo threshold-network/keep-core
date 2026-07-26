@@ -28,10 +28,11 @@ type frostNativeSignerStateWitnessRecoverer func(
 // they must never re-enter a request-taking signer operation while the global
 // signer barrier lock is held.
 type frostNativeSignerAnchorBinding struct {
-	store       FrostNativeSignerStateWitnessAnchorStore
-	identity    FrostNativeSignerAnchorIdentity
-	bindingHash [32]byte
-	floor       FrostNativeSignerAnchorManifest
+	store                  FrostNativeSignerStateWitnessAnchorStore
+	identity               FrostNativeSignerAnchorIdentity
+	bindingHash            [32]byte
+	floor                  FrostNativeSignerStateWitnessAnchorReference
+	floorPreviousEventRoot [32]byte
 
 	readTip     frostNativeSignerStateWitnessTipReader
 	readProof   frostNativeSignerStateWitnessProofReader
@@ -45,6 +46,8 @@ type frostNativeSignerAnchorBinding struct {
 func newFrostNativeSignerAnchorBinding(
 	store FrostNativeSignerStateWitnessAnchorStore,
 	manifest FrostNativeSignerAnchorManifest,
+	floor FrostNativeSignerStateWitnessAnchorReference,
+	floorPreviousEventRoot [32]byte,
 	readTip frostNativeSignerStateWitnessTipReader,
 	readProof frostNativeSignerStateWitnessProofReader,
 	acknowledge frostNativeSignerStateWitnessAcknowledger,
@@ -58,27 +61,27 @@ func newFrostNativeSignerAnchorBinding(
 	if identity.StreamID != ComputeFrostNativeSignerAnchorStreamID(identity) {
 		return nil, fmt.Errorf("FROST native signer anchor stream identity is invalid")
 	}
-	if manifest.MinimumServiceEpoch == 0 || manifest.MinimumRevision == 0 ||
-		manifest.MinimumEventRoot == [32]byte{} ||
-		manifest.MinimumAcknowledgementDigest == [32]byte{} ||
-		manifest.MinimumCheckpoint.StoreFingerprint !=
+	if floor.ServiceEpoch == 0 || floor.Revision == 0 ||
+		floor.EventRoot == [32]byte{} ||
+		floor.AcknowledgementDigest == [32]byte{} ||
+		floor.Checkpoint.StoreFingerprint !=
 			identity.SignerStoreFingerprint ||
 		manifest.WitnessMaximumRecords != identity.WitnessMaximumRecords ||
 		manifest.WitnessRotationThresholdRecords !=
 			identity.WitnessRotationThresholdRecords {
-		return nil, fmt.Errorf("FROST native signer anchor manifest floor is invalid")
+		return nil, fmt.Errorf("FROST native signer certified floor is invalid")
 	}
 	computedFloorCommitment :=
 		frostsigning.ComputeNativeTBTCSignerStateWitnessCommitment(
-			manifest.MinimumCheckpoint.StoreFingerprint,
-			manifest.MinimumCheckpoint.Generation,
-			manifest.MinimumCheckpoint.PreviousStateCommitment,
-			manifest.MinimumCheckpoint.StateImageDigest,
+			floor.Checkpoint.StoreFingerprint,
+			floor.Checkpoint.Generation,
+			floor.Checkpoint.PreviousStateCommitment,
+			floor.Checkpoint.StateImageDigest,
 		)
-	if manifest.MinimumCheckpoint.Generation == 0 ||
-		computedFloorCommitment != manifest.MinimumCheckpoint.StateCommitment {
+	if floor.Checkpoint.Generation == 0 ||
+		computedFloorCommitment != floor.Checkpoint.StateCommitment {
 		return nil, fmt.Errorf(
-			"FROST native signer anchor manifest checkpoint is invalid",
+			"FROST native signer certified checkpoint is invalid",
 		)
 	}
 	bindingHash := ComputeFrostNativeSignerAnchorBindingHash(identity)
@@ -86,15 +89,16 @@ func newFrostNativeSignerAnchorBinding(
 		return nil, fmt.Errorf("FROST native signer anchor binding hash is zero")
 	}
 	return &frostNativeSignerAnchorBinding{
-		store:       store,
-		identity:    identity,
-		bindingHash: bindingHash,
-		floor:       manifest,
-		readTip:     readTip,
-		readProof:   readProof,
-		acknowledge: acknowledge,
-		recover:     recover,
-		now:         time.Now,
+		store:                  store,
+		identity:               identity,
+		bindingHash:            bindingHash,
+		floor:                  floor,
+		floorPreviousEventRoot: floorPreviousEventRoot,
+		readTip:                readTip,
+		readProof:              readProof,
+		acknowledge:            acknowledge,
+		recover:                recover,
+		now:                    time.Now,
 	}, nil
 }
 
@@ -172,6 +176,26 @@ func (binding *frostNativeSignerAnchorBinding) reconcileStartup(
 		// The local state advanced durably before its remote CAS completed.
 		// Its anchor metadata must still be the exact authenticated remote
 		// target observed immediately before that operation.
+		headroom, err := binding.restartableRevisionHeadroom(
+			remote.ServiceEpoch,
+			remote.Revision,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if headroom == 0 {
+			return nil, fmt.Errorf(
+				"startup native signer local-ahead state cannot cross the certified-floor history bound; offline anchor rotation is required",
+			)
+		}
+		if _, err := binding.restartableGenerationHeadroom(
+			localCheckpoint.Generation,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"startup native signer local-ahead state exceeds the certified-floor proof bound: %w",
+				err,
+			)
+		}
 		if !binding.localTipHasAnchorReference(
 			*local,
 			frostNativeSignerAnchorReferenceFromRecord(remote),
@@ -260,6 +284,26 @@ func (binding *frostNativeSignerAnchorBinding) CommitNativeTBTCSignerStateTransi
 	}
 	if err := binding.validateLocalTip(&candidate); err != nil {
 		return nil, fmt.Errorf("invalid candidate native signer tip: %w", err)
+	}
+	headroom, err := binding.restartableRevisionHeadroom(
+		expected.AnchorServiceEpoch,
+		expected.AnchorRevision,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if headroom == 0 {
+		return nil, fmt.Errorf(
+			"native signer anchor certified-floor history bound is exhausted; offline anchor rotation is required",
+		)
+	}
+	if _, err := binding.restartableGenerationHeadroom(
+		candidate.Generation,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"native signer candidate exceeds the certified-floor proof bound: %w",
+			err,
+		)
 	}
 	expectedCheckpoint := frostNativeSignerCheckpointFromTip(expected)
 	candidateCheckpoint := frostNativeSignerCheckpointFromTip(candidate)
@@ -563,8 +607,13 @@ func (binding *frostNativeSignerAnchorBinding) validateRemoteRecord(
 		record.Checkpoint.StateCommitment == [32]byte{} ||
 		record.OperationID == [32]byte{} ||
 		record.TransitionDigest == [32]byte{} ||
-		record.ServiceEpoch != binding.floor.MinimumServiceEpoch ||
-		record.Revision < binding.floor.MinimumRevision ||
+		record.ServiceEpoch != binding.floor.ServiceEpoch ||
+		record.Revision < binding.floor.Revision ||
+		record.Revision-binding.floor.Revision >
+			FrostNativeSignerAnchorMaximumHistoryEvents ||
+		record.Checkpoint.Generation < binding.floor.Checkpoint.Generation ||
+		record.Checkpoint.Generation-binding.floor.Checkpoint.Generation >
+			FrostNativeSignerAnchorMaximumHistoryProofEntries ||
 		record.EventRoot == [32]byte{} ||
 		record.AcknowledgementDigest == [32]byte{} ||
 		len(record.AcknowledgementJSON) == 0 {
@@ -579,13 +628,60 @@ func (binding *frostNativeSignerAnchorBinding) validateRemoteRecord(
 	if computed != record.Checkpoint.StateCommitment {
 		return fmt.Errorf("authenticated native signer anchor checkpoint is invalid")
 	}
-	if (record.Revision == 1 && record.PreviousEventRoot != [32]byte{}) ||
-		(record.Revision > 1 && record.PreviousEventRoot == [32]byte{}) {
+	isCertifiedFloor := record.ServiceEpoch == binding.floor.ServiceEpoch &&
+		record.Revision == binding.floor.Revision &&
+		record.EventRoot == binding.floor.EventRoot &&
+		record.AcknowledgementDigest == binding.floor.AcknowledgementDigest &&
+		record.Checkpoint == binding.floor.Checkpoint
+	if (isCertifiedFloor &&
+		record.PreviousEventRoot != binding.floorPreviousEventRoot) ||
+		(!isCertifiedFloor &&
+			((record.Revision == 1 &&
+				record.PreviousEventRoot != [32]byte{}) ||
+				(record.Revision > 1 &&
+					record.PreviousEventRoot == [32]byte{}))) {
 		return fmt.Errorf(
 			"authenticated native signer anchor event predecessor is invalid",
 		)
 	}
 	return nil
+}
+
+func (binding *frostNativeSignerAnchorBinding) restartableRevisionHeadroom(
+	serviceEpoch uint64,
+	revision uint64,
+) (uint64, error) {
+	if binding == nil || serviceEpoch != binding.floor.ServiceEpoch ||
+		revision < binding.floor.Revision {
+		return 0, fmt.Errorf(
+			"native signer anchor reference is outside its certified service-epoch floor",
+		)
+	}
+	distance := revision - binding.floor.Revision
+	if distance > FrostNativeSignerAnchorMaximumHistoryEvents {
+		return 0, fmt.Errorf(
+			"native signer anchor reference exceeds the restartable certified-floor history bound",
+		)
+	}
+	return FrostNativeSignerAnchorMaximumHistoryEvents - distance, nil
+}
+
+func (binding *frostNativeSignerAnchorBinding) restartableGenerationHeadroom(
+	generation uint64,
+) (uint64, error) {
+	if binding == nil ||
+		generation < binding.floor.Checkpoint.Generation {
+		return 0, fmt.Errorf(
+			"native signer state generation is below its certified checkpoint floor",
+		)
+	}
+	distance := generation - binding.floor.Checkpoint.Generation
+	if distance > FrostNativeSignerAnchorMaximumHistoryProofEntries {
+		return 0, fmt.Errorf(
+			"native signer state generation exceeds the restartable certified-floor proof bound",
+		)
+	}
+	return FrostNativeSignerAnchorMaximumHistoryProofEntries - distance, nil
 }
 
 func (binding *frostNativeSignerAnchorBinding) localTipMatchesRemoteRecord(

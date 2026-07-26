@@ -206,17 +206,14 @@ func newTestAnchorBindingFixture(
 	)
 	manifest := FrostNativeSignerAnchorManifest{
 		Identity:                        identity,
-		MinimumServiceEpoch:             floor.ServiceEpoch,
-		MinimumRevision:                 floor.Revision,
-		MinimumEventRoot:                floor.EventRoot,
-		MinimumAcknowledgementDigest:    floor.AcknowledgementDigest,
-		MinimumCheckpoint:               floor.Checkpoint,
 		WitnessMaximumRecords:           identity.WitnessMaximumRecords,
 		WitnessRotationThresholdRecords: identity.WitnessRotationThresholdRecords,
 	}
 	binding, err := newFrostNativeSignerAnchorBinding(
 		store,
 		manifest,
+		floor,
+		[32]byte{},
 		func() (*frostsigning.NativeTBTCSignerStateWitnessTip, error) {
 			result := fixture.tip
 			return &result, nil
@@ -416,6 +413,166 @@ func TestFrostNativeSignerAnchorBindingCatchesUpLocalAheadState(t *testing.T) {
 	}
 }
 
+func TestFrostNativeSignerAnchorBindingExactHeadRestartRecoversCrashWindowsInOnePass(
+	t *testing.T,
+) {
+	t.Run("durable state before remote CAS", func(t *testing.T) {
+		fixture := newTestAnchorBindingFixture(t, true)
+		remoteCheckpoint := fixture.target.Checkpoint
+		localCheckpoint := testAnchorBindingCheckpoint(
+			remoteCheckpoint.StoreFingerprint,
+			remoteCheckpoint.Generation+1,
+			remoteCheckpoint.StateCommitment,
+			[32]byte{0x91},
+		)
+		fixture.store.proofEntries[localCheckpoint.Generation] =
+			frostsigning.NativeTBTCSignerStateWitnessProofEntry{
+				Generation:              localCheckpoint.Generation,
+				PreviousStateCommitment: localCheckpoint.PreviousStateCommitment,
+				StateImageDigest:        localCheckpoint.StateImageDigest,
+				StateCommitment:         localCheckpoint.StateCommitment,
+			}
+		fixture.tip = testAnchorBindingTip(
+			localCheckpoint,
+			fixture.floor.Checkpoint,
+			fixture.binding.bindingHash,
+			fixture.target,
+		)
+
+		result, err := fixture.binding.reconcileStartup(
+			context.Background(),
+		)
+		if err != nil {
+			t.Fatalf("single restart did not repair pre-CAS crash: %v", err)
+		}
+		if fixture.store.casCalls != 1 ||
+			fixture.acknowledgeCalls != 1 ||
+			!fixture.binding.localTipMatchesRemoteRecord(
+				*result,
+				fixture.store.record,
+			) {
+			t.Fatal("pre-CAS crash required more than one restart to converge")
+		}
+	})
+
+	t.Run("remote CAS before Rust acknowledgement", func(t *testing.T) {
+		fixture := newTestAnchorBindingFixture(t, true)
+		setTestAnchorBindingTipAnchor(
+			&fixture.tip,
+			fixture.binding.bindingHash,
+			fixture.floor,
+		)
+
+		result, err := fixture.binding.reconcileStartup(
+			context.Background(),
+		)
+		if err != nil {
+			t.Fatalf("single restart did not repair post-CAS crash: %v", err)
+		}
+		if fixture.store.casCalls != 0 ||
+			fixture.recoverCalls != 1 ||
+			!fixture.binding.localTipMatchesRemoteRecord(
+				*result,
+				fixture.store.record,
+			) {
+			t.Fatal("post-CAS crash required more than one restart to converge")
+		}
+	})
+}
+
+func TestFrostNativeSignerAnchorBindingEnforcesRestartableRevisionHeadroom(
+	t *testing.T,
+) {
+	fixture := newTestAnchorBindingFixture(t, false)
+	floorRevision := fixture.floor.Revision
+	tests := []struct {
+		distance         uint64
+		expectedHeadroom uint64
+		expectError      bool
+	}{
+		{distance: 4095, expectedHeadroom: 1},
+		{distance: 4096, expectedHeadroom: 0},
+		{distance: 4097, expectError: true},
+	}
+	for _, test := range tests {
+		t.Run(fmt.Sprint(test.distance), func(t *testing.T) {
+			headroom, err := fixture.binding.restartableRevisionHeadroom(
+				fixture.floor.ServiceEpoch,
+				floorRevision+test.distance,
+			)
+			if test.expectError {
+				if err == nil {
+					t.Fatal("out-of-window revision was accepted")
+				}
+				return
+			}
+			if err != nil || headroom != test.expectedHeadroom {
+				t.Fatalf(
+					"unexpected revision headroom [%d, %v]",
+					headroom,
+					err,
+				)
+			}
+		})
+	}
+
+	fixture.store.record.Revision = floorRevision + 4097
+	fixture.store.record.PreviousEventRoot = fixture.floor.EventRoot
+	if err := fixture.binding.validateRemoteRecord(
+		fixture.store.record,
+	); err == nil {
+		t.Fatal("startup remote target beyond the restartable bound was accepted")
+	}
+}
+
+func TestFrostNativeSignerAnchorBindingEnforcesRestartableGenerationHeadroom(
+	t *testing.T,
+) {
+	fixture := newTestAnchorBindingFixture(t, false)
+	floorGeneration := fixture.floor.Checkpoint.Generation
+	tests := []struct {
+		distance         uint64
+		expectedHeadroom uint64
+		expectError      bool
+	}{
+		{distance: 4095, expectedHeadroom: 1},
+		{distance: 4096, expectedHeadroom: 0},
+		{distance: 4097, expectError: true},
+	}
+	for _, test := range tests {
+		t.Run(fmt.Sprint(test.distance), func(t *testing.T) {
+			headroom, err := fixture.binding.restartableGenerationHeadroom(
+				floorGeneration + test.distance,
+			)
+			if test.expectError {
+				if err == nil {
+					t.Fatal("out-of-window generation was accepted")
+				}
+				return
+			}
+			if err != nil || headroom != test.expectedHeadroom {
+				t.Fatalf(
+					"unexpected generation headroom [%d, %v]",
+					headroom,
+					err,
+				)
+			}
+		})
+	}
+
+	fixture.store.record.Checkpoint = testAnchorBindingCheckpoint(
+		fixture.floor.Checkpoint.StoreFingerprint,
+		floorGeneration+4097,
+		fixture.floor.Checkpoint.StateCommitment,
+		[32]byte{0xfd},
+	)
+	if err := fixture.binding.validateRemoteRecord(
+		fixture.store.record,
+	); err == nil {
+		t.Fatal("remote target beyond the restartable generation bound was accepted")
+	}
+}
+
 func TestFrostNativeSignerAnchorBindingRejectsRollbackForkAndPartialAnchor(
 	t *testing.T,
 ) {
@@ -478,6 +635,39 @@ func TestFrostNativeSignerAnchorBindingRejectsRollbackForkAndPartialAnchor(
 			t.Fatalf("expired recovery wrapper was accepted: %v", err)
 		}
 	})
+}
+
+func TestFrostNativeSignerAnchorBindingRejectsCertifiedFloorHistoryGapsAndForks(
+	t *testing.T,
+) {
+	tests := map[string]func(*testAnchorBindingFixture){
+		"skipped event": func(fixture *testAnchorBindingFixture) {
+			fixture.store.history.Events = nil
+		},
+		"gapped revision": func(fixture *testAnchorBindingFixture) {
+			fixture.store.history.Events[0].Acknowledgement.Revision++
+		},
+		"forked parent": func(fixture *testAnchorBindingFixture) {
+			fixture.store.history.Events[0].Acknowledgement.
+				PreviousEventRoot[0] ^= 1
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			fixture := newTestAnchorBindingFixture(t, true)
+			mutate(fixture)
+			if _, err := fixture.binding.reconcileStartup(
+				context.Background(),
+			); err == nil {
+				t.Fatal("discontinuous certified-floor history was accepted")
+			}
+			if fixture.store.casCalls != 0 ||
+				fixture.acknowledgeCalls != 0 ||
+				fixture.recoverCalls != 0 {
+				t.Fatal("invalid history triggered a signer or service mutation")
+			}
+		})
+	}
 }
 
 func testAnchorBindingCheckpoint(

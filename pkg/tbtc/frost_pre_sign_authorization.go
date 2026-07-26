@@ -1468,19 +1468,19 @@ type FrostPreSignActivationRuntimeManifest struct {
 	CanonicalJournal                 FrostRetainedGroupCanonicalJournalManifest
 	QuarantineJournal                FrostRetainedGroupQuarantineJournalManifest
 	NativeSignerAnchor               FrostNativeSignerAnchorManifest
+	// ActivationAuthorityPublicKey is the raw Ed25519 key from the already
+	// verified activation envelope. Its SPKI hash is pinned by
+	// NativeSignerAnchor.Identity.OfflineAuthorityHash. Runtime trust
+	// certificates are accepted only under this exact immutable v1 authority.
+	ActivationAuthorityPublicKey [32]byte
 }
 
-// FrostNativeSignerAnchorManifest carries the authenticated service identity
-// and the offline-reviewed monotonic floor. Online startup may accept this
-// exact state or a signed/proven descendant, never an arbitrary same-store
-// stream head.
+// FrostNativeSignerAnchorManifest carries only authenticated static service
+// identity and witness geometry. The exact monotonic floor deliberately lives
+// in the separately signed trust-certificate chain so the activation manifest
+// hash cannot participate in a circular floor/event-root commitment.
 type FrostNativeSignerAnchorManifest struct {
 	Identity                        FrostNativeSignerAnchorIdentity
-	MinimumServiceEpoch             uint64
-	MinimumRevision                 uint64
-	MinimumEventRoot                [32]byte
-	MinimumAcknowledgementDigest    [32]byte
-	MinimumCheckpoint               FrostNativeSignerStateWitnessCheckpoint
 	WitnessMaximumRecords           uint64
 	WitnessRotationThresholdRecords uint64
 }
@@ -1501,6 +1501,14 @@ type frostPreSignAuthorization struct {
 	Finality              FrostPreSignFinality
 	VariantSequence       FrostPreSignVariantSequence
 	proposal              *FrostPreSignAuthorizationProposal
+	anchorReservation     *frostNativeSignerAnchorRevisionReservation
+}
+
+func (authorization *frostPreSignAuthorization) releaseAnchorReservation() {
+	if authorization == nil {
+		return
+	}
+	authorization.anchorReservation.Release()
 }
 
 type frostPreSignAuthorizationGate interface {
@@ -1519,12 +1527,14 @@ type thresholdFrostPreSignAuthorizationGate struct {
 	activationProfile   FrostPreSignActivationProfile
 	storeBinding        *frostDurableSessionStoreBinding
 	productionReadiness frostProductionSignerReadinessVerifier
+	anchorAdmission     *frostNativeSignerAnchorAdmissionController
 	signing             chain.Signing
 	broadcastChannel    net.BroadcastChannel
 	membershipValidator *group.MembershipValidator
 	wallet              wallet
 	localMemberIndexes  []group.MemberIndex
 	threshold           int
+	maximumAttempts     uint64
 }
 
 func newThresholdFrostPreSignAuthorizationGate(
@@ -1532,6 +1542,7 @@ func newThresholdFrostPreSignAuthorizationGate(
 	activationProfile FrostPreSignActivationProfile,
 	storeBinding *frostDurableSessionStoreBinding,
 	productionReadiness frostProductionSignerReadinessVerifier,
+	anchorAdmission *frostNativeSignerAnchorAdmissionController,
 	signing chain.Signing,
 	broadcastChannel net.BroadcastChannel,
 	membershipValidator *group.MembershipValidator,
@@ -1547,7 +1558,7 @@ func newThresholdFrostPreSignAuthorizationGate(
 	if _, err := storeBinding.verify(); err != nil {
 		return nil, fmt.Errorf("FROST durable session store is not activation-ready: [%w]", err)
 	}
-	if productionReadiness == nil {
+	if productionReadiness == nil || anchorAdmission == nil {
 		return nil, fmt.Errorf("FROST production signer readiness verifier is nil")
 	}
 	if signing == nil {
@@ -1583,12 +1594,14 @@ func newThresholdFrostPreSignAuthorizationGate(
 		activationProfile:   activationProfile,
 		storeBinding:        storeBinding,
 		productionReadiness: productionReadiness,
+		anchorAdmission:     anchorAdmission,
 		signing:             signing,
 		broadcastChannel:    broadcastChannel,
 		membershipValidator: membershipValidator,
 		wallet:              wallet,
 		localMemberIndexes:  indexes,
 		threshold:           frostPreSignAuthorizationThreshold,
+		maximumAttempts:     signingAttemptsLimit,
 	}, nil
 }
 
@@ -1599,14 +1612,44 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) authorize(
 	if ctx == nil {
 		return nil, fmt.Errorf("FROST pre-sign authorization context is nil")
 	}
-	if _, err := tfpsag.verifyCurrentProductionSignerReadiness(ctx); err != nil {
-		return nil, err
-	}
-	if _, err := tfpsag.storeBinding.verify(); err != nil {
-		return nil, fmt.Errorf("FROST durable session store binding failed: [%w]", err)
-	}
 	if err := transaction.validate(); err != nil {
 		return nil, err
+	}
+	_, readinessSnapshot, err :=
+		tfpsag.verifyCurrentProductionSignerReadiness(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if tfpsag.anchorAdmission == nil {
+		return nil, fmt.Errorf(
+			"FROST native signer anchor admission controller is nil",
+		)
+	}
+	maximumAttempts := tfpsag.maximumAttempts
+	if maximumAttempts == 0 {
+		maximumAttempts = signingAttemptsLimit
+	}
+	anchorReservation, err := tfpsag.anchorAdmission.reservePreSign(
+		ctx,
+		readinessSnapshot,
+		uint64(len(transaction.SignatureHashes)),
+		uint64(len(tfpsag.localMemberIndexes)),
+		maximumAttempts,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"FROST pre-sign anchor admission failed: [%w]",
+			err,
+		)
+	}
+	reservationTransferred := false
+	defer func() {
+		if !reservationTransferred {
+			anchorReservation.Release()
+		}
+	}()
+	if _, err := tfpsag.storeBinding.verify(); err != nil {
+		return nil, fmt.Errorf("FROST durable session store binding failed: [%w]", err)
 	}
 	// Freeze the locally constructed signing batch before crossing the backend
 	// boundary. Passing the caller's pointer would let an adapter mutate both the
@@ -1679,11 +1722,13 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) authorize(
 		Finality:              *finality,
 		VariantSequence:       frostPreSignVariantSequence(*finality),
 		proposal:              proposal,
+		anchorReservation:     anchorReservation,
 	}
 	if err := tfpsag.revalidate(ctx, authorization); err != nil {
 		return nil, err
 	}
 
+	reservationTransferred = true
 	return authorization, nil
 }
 
@@ -1691,7 +1736,8 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) revalidate(
 	ctx context.Context,
 	authorization *frostPreSignAuthorization,
 ) error {
-	currentFinality, err := tfpsag.verifyCurrentProductionSignerReadiness(ctx)
+	currentFinality, _, err :=
+		tfpsag.verifyCurrentProductionSignerReadiness(ctx)
 	if err != nil {
 		return err
 	}
@@ -1755,28 +1801,51 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) revalidate(
 
 func (tfpsag *thresholdFrostPreSignAuthorizationGate) verifyCurrentProductionSignerReadiness(
 	ctx context.Context,
-) (*FrostPreSignFinality, error) {
+) (
+	*FrostPreSignFinality,
+	*frostProductionSignerReadinessSnapshot,
+	error,
+) {
 	if tfpsag == nil || tfpsag.backend == nil || tfpsag.productionReadiness == nil {
-		return nil, fmt.Errorf("FROST production signer readiness dependencies are incomplete")
+		return nil, nil, fmt.Errorf(
+			"FROST production signer readiness dependencies are incomplete",
+		)
 	}
 	if ctx == nil {
-		return nil, fmt.Errorf("FROST production signer readiness context is nil")
+		return nil, nil, fmt.Errorf(
+			"FROST production signer readiness context is nil",
+		)
 	}
 	currentFinality, err := tfpsag.backend.CurrentFrostPreSignFinality(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("cannot obtain current FROST pre-sign finality: [%w]", err)
+		return nil, nil, fmt.Errorf(
+			"cannot obtain current FROST pre-sign finality: [%w]",
+			err,
+		)
 	}
 	if currentFinality == nil || currentFinality.BlockNumber == 0 ||
 		currentFinality.BlockHash == [32]byte{} {
-		return nil, fmt.Errorf("invalid current FROST pre-sign finalized checkpoint")
+		return nil, nil, fmt.Errorf(
+			"invalid current FROST pre-sign finalized checkpoint",
+		)
 	}
-	if _, err := tfpsag.productionReadiness.verifyFrostProductionSignerReadiness(
-		ctx,
-		*currentFinality,
-	); err != nil {
-		return nil, fmt.Errorf("FROST production signer is not authorization-ready: [%w]", err)
+	readinessSnapshot, err :=
+		tfpsag.productionReadiness.verifyFrostProductionSignerReadiness(
+			ctx,
+			*currentFinality,
+		)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"FROST production signer is not authorization-ready: [%w]",
+			err,
+		)
 	}
-	return currentFinality, nil
+	if readinessSnapshot == nil {
+		return nil, nil, fmt.Errorf(
+			"FROST production signer readiness snapshot is nil",
+		)
+	}
+	return currentFinality, readinessSnapshot, nil
 }
 
 func (tfpsag *thresholdFrostPreSignAuthorizationGate) validatePinnedAuthorizationStateTwice(

@@ -32,6 +32,11 @@ type frostNativeSignerStateWitnessProofReader func(
 	*frostsigning.NativeTBTCSignerStateWitnessProofRequest,
 ) (*frostsigning.NativeTBTCSignerStateWitnessProof, error)
 
+type frostNativeSignerStateAnchorTrustHeadReader func() (
+	*frostsigning.NativeTBTCSignerStateAnchorTrustHead,
+	error,
+)
+
 type frostNativeSignerInventoryExpectation struct {
 	WalletID         [32]byte
 	KeyGroup         string
@@ -42,22 +47,33 @@ type frostNativeSignerInventoryExpectation struct {
 }
 
 type frostNativeSignerInventorySnapshot struct {
-	Schema                      string
-	StoreFingerprint            [32]byte
-	StateGeneration             uint64
-	StateCommitment             [32]byte
-	PreviousStateCommitment     [32]byte
-	StateImageDigest            [32]byte
-	InventoryCommitment         [32]byte
-	WalletCount                 uint64
-	KeyPackageCount             uint64
-	ExternalRollbackAnchorBound bool
+	Schema                        string
+	StoreFingerprint              [32]byte
+	StateGeneration               uint64
+	StateCommitment               [32]byte
+	PreviousStateCommitment       [32]byte
+	StateImageDigest              [32]byte
+	InventoryCommitment           [32]byte
+	WalletCount                   uint64
+	KeyPackageCount               uint64
+	ExternalRollbackAnchorBound   bool
+	TrustCertificateSequence      uint64
+	TrustCertificateDigest        [32]byte
+	AnchorServiceEpoch            uint64
+	CertifiedFloorRevision        uint64
+	CertifiedFloorGeneration      uint64
+	CurrentAnchorRevision         uint64
+	RestartableRevisionHeadroom   uint64
+	RestartableGenerationHeadroom uint64
+	AnchorRotationWarning         bool
 }
 
 type frostNativeSignerInventoryBinding struct {
-	storeBinding  *frostDurableSessionStoreBinding
-	anchorBinding *frostNativeSignerAnchorBinding
-	readInventory frostNativeSignerInventoryReader
+	storeBinding      *frostDurableSessionStoreBinding
+	anchorBinding     *frostNativeSignerAnchorBinding
+	readInventory     frostNativeSignerInventoryReader
+	readTrustHead     frostNativeSignerStateAnchorTrustHeadReader
+	expectedTrustHead frostsigning.NativeTBTCSignerStateAnchorTrustHead
 
 	mutex sync.Mutex
 }
@@ -66,17 +82,24 @@ func newFrostNativeSignerInventoryBinding(
 	storeBinding *frostDurableSessionStoreBinding,
 	anchorBinding *frostNativeSignerAnchorBinding,
 	readInventory frostNativeSignerInventoryReader,
+	readTrustHead frostNativeSignerStateAnchorTrustHeadReader,
+	expectedTrustHead *frostsigning.NativeTBTCSignerStateAnchorTrustHead,
 ) (*frostNativeSignerInventoryBinding, error) {
-	if storeBinding == nil || anchorBinding == nil || readInventory == nil {
+	if storeBinding == nil || anchorBinding == nil || readInventory == nil ||
+		readTrustHead == nil || expectedTrustHead == nil ||
+		expectedTrustHead.CertificateSequence == 0 ||
+		expectedTrustHead.CertificateDigest == [32]byte{} {
 		return nil, fmt.Errorf("FROST native signer inventory dependencies are incomplete")
 	}
 	if _, err := storeBinding.verify(); err != nil {
 		return nil, fmt.Errorf("FROST native signer inventory store is not bound: [%w]", err)
 	}
 	return &frostNativeSignerInventoryBinding{
-		storeBinding:  storeBinding,
-		anchorBinding: anchorBinding,
-		readInventory: readInventory,
+		storeBinding:      storeBinding,
+		anchorBinding:     anchorBinding,
+		readInventory:     readInventory,
+		readTrustHead:     readTrustHead,
+		expectedTrustHead: *expectedTrustHead,
 	}, nil
 }
 
@@ -96,6 +119,18 @@ func (binding *frostNativeSignerInventoryBinding) verify(
 	storeFingerprint, err := binding.storeBinding.verify()
 	if err != nil {
 		return nil, fmt.Errorf("FROST native signer store binding failed: [%w]", err)
+	}
+	trustHead, err := binding.readTrustHead()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"cannot read native signer state-anchor trust head: [%w]",
+			err,
+		)
+	}
+	if trustHead == nil || *trustHead != binding.expectedTrustHead {
+		return nil, fmt.Errorf(
+			"native signer state-anchor trust head differs from the startup-certified head",
+		)
 	}
 	inventory, err := binding.readInventory()
 	if err != nil {
@@ -120,6 +155,20 @@ func (binding *frostNativeSignerInventoryBinding) verify(
 			"native signer inventory and state-witness tip identify different checkpoints",
 		)
 	}
+	if trustHead.BindingHash != localTip.AnchorBindingHash ||
+		trustHead.ServiceEpoch != localTip.AnchorServiceEpoch ||
+		trustHead.CertifiedFloor.ServiceEpoch != binding.anchorBinding.floor.ServiceEpoch ||
+		trustHead.CertifiedFloor.Revision != binding.anchorBinding.floor.Revision ||
+		trustHead.CertifiedFloor.EventRoot != binding.anchorBinding.floor.EventRoot ||
+		trustHead.CertifiedFloor.AcknowledgementDigest !=
+			binding.anchorBinding.floor.AcknowledgementDigest ||
+		frostNativeSignerCheckpointFromTrustHead(
+			trustHead.CertifiedFloor.Checkpoint,
+		) != binding.anchorBinding.floor.Checkpoint {
+		return nil, fmt.Errorf(
+			"native signer trust head, certified floor, and current anchor are inconsistent",
+		)
+	}
 	if err := binding.anchorBinding.VerifyNativeTBTCSignerStateTip(
 		ctx,
 		*localTip,
@@ -128,6 +177,20 @@ func (binding *frostNativeSignerInventoryBinding) verify(
 			"native signer state is not bound to the authenticated external anchor: [%w]",
 			err,
 		)
+	}
+	revisionHeadroom, err := binding.anchorBinding.restartableRevisionHeadroom(
+		localTip.AnchorServiceEpoch,
+		localTip.AnchorRevision,
+	)
+	if err != nil {
+		return nil, err
+	}
+	generationHeadroom, err :=
+		binding.anchorBinding.restartableGenerationHeadroom(
+			localTip.Generation,
+		)
+	if err != nil {
+		return nil, err
 	}
 	if err := verifyFrostNativeSignerInventoryEntries(inventory.Entries, expected); err != nil {
 		return nil, err
@@ -138,17 +201,57 @@ func (binding *frostNativeSignerInventoryBinding) verify(
 		keyPackageCount += uint64(len(entry.KeyPackages))
 	}
 	return &frostNativeSignerInventorySnapshot{
-		Schema:                      inventory.Schema,
-		StoreFingerprint:            inventory.StoreFingerprint,
-		StateGeneration:             inventory.StateGeneration,
-		StateCommitment:             inventory.StateCommitment,
-		PreviousStateCommitment:     inventory.PreviousStateCommitment,
-		StateImageDigest:            inventory.StateImageDigest,
-		InventoryCommitment:         inventory.InventoryCommitment,
-		WalletCount:                 uint64(len(inventory.Entries)),
-		KeyPackageCount:             keyPackageCount,
-		ExternalRollbackAnchorBound: true,
+		Schema:                        inventory.Schema,
+		StoreFingerprint:              inventory.StoreFingerprint,
+		StateGeneration:               inventory.StateGeneration,
+		StateCommitment:               inventory.StateCommitment,
+		PreviousStateCommitment:       inventory.PreviousStateCommitment,
+		StateImageDigest:              inventory.StateImageDigest,
+		InventoryCommitment:           inventory.InventoryCommitment,
+		WalletCount:                   uint64(len(inventory.Entries)),
+		KeyPackageCount:               keyPackageCount,
+		ExternalRollbackAnchorBound:   true,
+		TrustCertificateSequence:      trustHead.CertificateSequence,
+		TrustCertificateDigest:        trustHead.CertificateDigest,
+		AnchorServiceEpoch:            localTip.AnchorServiceEpoch,
+		CertifiedFloorRevision:        trustHead.CertifiedFloor.Revision,
+		CertifiedFloorGeneration:      trustHead.CertifiedFloor.Checkpoint.Generation,
+		CurrentAnchorRevision:         localTip.AnchorRevision,
+		RestartableRevisionHeadroom:   revisionHeadroom,
+		RestartableGenerationHeadroom: generationHeadroom,
+		AnchorRotationWarning: frostNativeSignerAnchorRotationWarning(
+			minFrostNativeSignerAnchorHeadroom(
+				revisionHeadroom,
+				generationHeadroom,
+			),
+		),
 	}, nil
+}
+
+func frostNativeSignerAnchorRotationWarning(headroom uint64) bool {
+	return headroom <= FrostNativeSignerAnchorRotationWarningHeadroom
+}
+
+func minFrostNativeSignerAnchorHeadroom(
+	revisionHeadroom uint64,
+	generationHeadroom uint64,
+) uint64 {
+	if revisionHeadroom < generationHeadroom {
+		return revisionHeadroom
+	}
+	return generationHeadroom
+}
+
+func frostNativeSignerCheckpointFromTrustHead(
+	checkpoint frostsigning.NativeTBTCSignerStateAnchorCheckpoint,
+) FrostNativeSignerStateWitnessCheckpoint {
+	return FrostNativeSignerStateWitnessCheckpoint{
+		StoreFingerprint:        checkpoint.StoreFingerprint,
+		Generation:              checkpoint.Generation,
+		PreviousStateCommitment: checkpoint.PreviousStateCommitment,
+		StateImageDigest:        checkpoint.StateImageDigest,
+		StateCommitment:         checkpoint.StateCommitment,
+	}
 }
 
 func verifyFrostNativeSignerInventoryEntries(
@@ -265,6 +368,11 @@ func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerRead
 	if *firstInventory != *secondInventory {
 		return nil, fmt.Errorf("native signer state changed during readiness reconciliation")
 	}
+	if err := validateFrostNativeSignerAnchorReadinessHeadroom(
+		secondInventory,
+	); err != nil {
+		return nil, err
+	}
 	if !readiness.journal.walletRegistry.frostReadinessRevisionMatches(
 		registryRevision,
 	) {
@@ -280,6 +388,40 @@ func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerRead
 		Inventory:               secondInventory,
 		InteractiveSigningReady: true,
 	}, nil
+}
+
+func validateFrostNativeSignerAnchorReadinessHeadroom(
+	inventory *frostNativeSignerInventorySnapshot,
+) error {
+	if inventory == nil ||
+		inventory.CurrentAnchorRevision < inventory.CertifiedFloorRevision ||
+		inventory.CurrentAnchorRevision-inventory.CertifiedFloorRevision+
+			inventory.RestartableRevisionHeadroom !=
+			FrostNativeSignerAnchorMaximumHistoryEvents ||
+		inventory.StateGeneration <
+			inventory.CertifiedFloorGeneration ||
+		inventory.StateGeneration-
+			inventory.CertifiedFloorGeneration+
+			inventory.RestartableGenerationHeadroom !=
+			FrostNativeSignerAnchorMaximumHistoryProofEntries ||
+		inventory.AnchorRotationWarning !=
+			frostNativeSignerAnchorRotationWarning(
+				minFrostNativeSignerAnchorHeadroom(
+					inventory.RestartableRevisionHeadroom,
+					inventory.RestartableGenerationHeadroom,
+				),
+			) {
+		return fmt.Errorf(
+			"native signer certified anchor revision or generation headroom is inconsistent",
+		)
+	}
+	if inventory.RestartableRevisionHeadroom == 0 ||
+		inventory.RestartableGenerationHeadroom == 0 {
+		return fmt.Errorf(
+			"native signer certified anchor revision or generation window is exhausted; offline anchor rotation is required",
+		)
+	}
+	return nil
 }
 
 func (journal *frostRetainedGroupJournal) nativeSignerInventoryExpectations(

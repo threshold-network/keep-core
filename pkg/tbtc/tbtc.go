@@ -176,6 +176,11 @@ type Config struct {
 	// FrostNativeSignerAnchorOnlinePublicKeyPath contains the DER SubjectPublicKeyInfo
 	// for the online Ed25519 service key pinned by the signed manifest.
 	FrostNativeSignerAnchorOnlinePublicKeyPath string
+	// FrostNativeSignerAnchorTrustCertificatePath contains an owner-only,
+	// bounded JSON array of one to 64 offline-authority-signed bootstrap or
+	// rotation certificates. The final certificate must exactly match the
+	// verified activation manifest and installed native signer config.
+	FrostNativeSignerAnchorTrustCertificatePath string
 	// FrostNativeSignerAnchorRequestTimeout bounds each authenticated Read/CAS.
 	// Zero selects the protocol client's conservative production default.
 	FrostNativeSignerAnchorRequestTimeout time.Duration

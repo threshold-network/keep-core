@@ -34,7 +34,11 @@ const (
 	// Minor 2 adds the constant-size state-witness tip and signed checkpoint
 	// acknowledgement symbols required by the protocol-output barrier. This
 	// build must reject 4.1 before it can reach a missing symbol via dlsym.
-	requiredTBTCSignerABIMinMinor uint32 = 2
+	//
+	// Minor 3 adds the durable state-anchor trust-head/transition and bootstrap
+	// facts symbols. Production startup and offline provisioning require that
+	// complete surface and must reject an ABI-4.2 library before dlsym.
+	requiredTBTCSignerABIMinMinor uint32 = 3
 )
 
 // ErrTBTCSignerABIIncompatible marks a linked libfrost_tbtc whose FFI contract version

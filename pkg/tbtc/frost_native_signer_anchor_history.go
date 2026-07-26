@@ -8,13 +8,7 @@ import (
 )
 
 func (binding *frostNativeSignerAnchorBinding) manifestFloorReference() FrostNativeSignerStateWitnessAnchorReference {
-	return FrostNativeSignerStateWitnessAnchorReference{
-		ServiceEpoch:          binding.floor.MinimumServiceEpoch,
-		Revision:              binding.floor.MinimumRevision,
-		EventRoot:             binding.floor.MinimumEventRoot,
-		AcknowledgementDigest: binding.floor.MinimumAcknowledgementDigest,
-		Checkpoint:            binding.floor.MinimumCheckpoint,
-	}
+	return binding.floor
 }
 
 // validateStartupHistory independently rechecks the semantic history returned
@@ -190,7 +184,7 @@ func (binding *frostNativeSignerAnchorBinding) validateLocalHistorySplice(
 	local frostsigning.NativeTBTCSignerStateWitnessTip,
 	serviceCommitments map[uint64][32]byte,
 ) error {
-	floor := binding.floor.MinimumCheckpoint
+	floor := binding.floor.Checkpoint
 	var splice FrostNativeSignerStateWitnessCheckpoint
 	if local.WitnessBaseGeneration <= floor.Generation {
 		splice = floor

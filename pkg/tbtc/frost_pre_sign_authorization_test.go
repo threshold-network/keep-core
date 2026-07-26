@@ -15,9 +15,10 @@ import (
 )
 
 type testFrostProductionAuthorizationReadiness struct {
-	err    error
-	calls  uint64
-	points []FrostPreSignFinality
+	err       error
+	calls     uint64
+	points    []FrostPreSignFinality
+	headrooms []uint64
 }
 
 func (readiness *testFrostProductionAuthorizationReadiness) verifyFrostProductionSignerReadiness(
@@ -29,9 +30,15 @@ func (readiness *testFrostProductionAuthorizationReadiness) verifyFrostProductio
 	if readiness.err != nil {
 		return nil, readiness.err
 	}
-	return &frostProductionSignerReadinessSnapshot{
-		InteractiveSigningReady: true,
-	}, nil
+	headroom := uint64(FrostNativeSignerAnchorMaximumHistoryEvents)
+	if len(readiness.headrooms) != 0 {
+		index := int(readiness.calls - 1)
+		if index >= len(readiness.headrooms) {
+			index = len(readiness.headrooms) - 1
+		}
+		headroom = readiness.headrooms[index]
+	}
+	return testFrostAnchorAdmissionReadinessSnapshot(headroom, headroom), nil
 }
 
 func testFrostPreSignTransaction(
@@ -580,6 +587,7 @@ func TestThresholdFrostPreSignAuthorizationGate_ProfileMismatchPrecedesSeatSigna
 		activationProfile:   profile,
 		storeBinding:        testFrostDurableSessionStoreBinding(t),
 		productionReadiness: &testFrostProductionAuthorizationReadiness{},
+		anchorAdmission:     &frostNativeSignerAnchorAdmissionController{},
 		signing:             countingSigner,
 		wallet: wallet{
 			signingGroupOperators: make(

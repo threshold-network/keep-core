@@ -63,14 +63,15 @@ type FrostNativeSignerAnchorClient struct {
 	clockSkew       time.Duration
 	maximumAckLife  time.Duration
 
-	identity         FrostNativeSignerAnchorIdentity
-	bindingHash      [32]byte
-	clientKey        ed25519.PrivateKey
-	clientSPKIDER    []byte
-	clientSPKIBase64 string
-	onlineKey        ed25519.PublicKey
-	random           io.Reader
-	now              func() time.Time
+	identity            FrostNativeSignerAnchorIdentity
+	bindingHash         [32]byte
+	clientKey           ed25519.PrivateKey
+	clientSPKIDER       []byte
+	clientSPKIBase64    string
+	onlineKey           ed25519.PublicKey
+	certifiedTrustFloor *FrostNativeSignerAnchorTrustCertificate
+	random              io.Reader
+	now                 func() time.Time
 
 	mutex             sync.Mutex
 	last              *FrostNativeSignerCheckpointAcknowledgement
@@ -85,6 +86,30 @@ type FrostNativeSignerAnchorClient struct {
 // endpoint. Proxies and redirects are always disabled.
 func NewFrostNativeSignerAnchorClient(
 	config FrostNativeSignerAnchorClientConfig,
+) (*FrostNativeSignerAnchorClient, error) {
+	return newFrostNativeSignerAnchorClient(config, nil)
+}
+
+// newFrostNativeSignerAnchorClientWithTrustFloor is deliberately private. A
+// revision-one acknowledgement with a non-zero predecessor crosses a service
+// epoch and therefore cannot be admitted from caller-supplied client
+// configuration. The only way to obtain the capability accepted here is the
+// full offline-authority certificate-chain validator.
+func newFrostNativeSignerAnchorClientWithTrustFloor(
+	config FrostNativeSignerAnchorClientConfig,
+	trustFloor *frostNativeSignerAnchorVerifiedTrustFloor,
+) (*FrostNativeSignerAnchorClient, error) {
+	if trustFloor == nil {
+		return nil, fmt.Errorf(
+			"verified native signer anchor trust-floor capability is nil",
+		)
+	}
+	return newFrostNativeSignerAnchorClient(config, trustFloor)
+}
+
+func newFrostNativeSignerAnchorClient(
+	config FrostNativeSignerAnchorClientConfig,
+	trustFloor *frostNativeSignerAnchorVerifiedTrustFloor,
 ) (*FrostNativeSignerAnchorClient, error) {
 	endpoint, https, err := validateFrostNativeSignerAnchorEndpoint(config.Endpoint)
 	if err != nil {
@@ -114,6 +139,28 @@ func NewFrostNativeSignerAnchorClient(
 	}
 	if sha256.Sum256(config.OnlinePublicKeySPKI) != config.Identity.OnlineKeyHash {
 		return nil, fmt.Errorf("native signer anchor online key differs from its identity")
+	}
+	var certifiedTrustFloor *FrostNativeSignerAnchorTrustCertificate
+	if trustFloor != nil {
+		certificate := frostNativeSignerAnchorTrustCloneCertificate(
+			&trustFloor.certificate,
+		)
+		rawOnlineKey := [ed25519.PublicKeySize]byte{}
+		copy(rawOnlineKey[:], onlineKey)
+		if certificate.ProtocolID != config.Identity.ProtocolID ||
+			certificate.StreamID != config.Identity.StreamID ||
+			certificate.SignerStoreFingerprint !=
+				config.Identity.SignerStoreFingerprint ||
+			certificate.To.BindingHash !=
+				ComputeFrostNativeSignerAnchorBindingHash(config.Identity) ||
+			certificate.To.ResponsePublicKey != rawOnlineKey ||
+			certificate.To.ResponsePublicKeySPKISHA256 !=
+				config.Identity.OnlineKeyHash {
+			return nil, fmt.Errorf(
+				"native signer certified trust floor differs from the client identity",
+			)
+		}
+		certifiedTrustFloor = &certificate
 	}
 
 	requestTimeout := config.RequestTimeout
@@ -201,17 +248,18 @@ func NewFrostNativeSignerAnchorClient(
 				return fmt.Errorf("native signer anchor redirects are disabled")
 			},
 		},
-		requestTimeout:   requestTimeout,
-		clockSkew:        clockSkew,
-		maximumAckLife:   maximumAckLife,
-		identity:         config.Identity,
-		bindingHash:      ComputeFrostNativeSignerAnchorBindingHash(config.Identity),
-		clientKey:        clientKey,
-		clientSPKIDER:    append([]byte{}, clientSPKIDER...),
-		clientSPKIBase64: base64StdEncoding(clientSPKIDER),
-		onlineKey:        append(ed25519.PublicKey{}, onlineKey...),
-		random:           randomSource,
-		now:              now,
+		requestTimeout:      requestTimeout,
+		clockSkew:           clockSkew,
+		maximumAckLife:      maximumAckLife,
+		identity:            config.Identity,
+		bindingHash:         ComputeFrostNativeSignerAnchorBindingHash(config.Identity),
+		clientKey:           clientKey,
+		clientSPKIDER:       append([]byte{}, clientSPKIDER...),
+		clientSPKIBase64:    base64StdEncoding(clientSPKIDER),
+		onlineKey:           append(ed25519.PublicKey{}, onlineKey...),
+		certifiedTrustFloor: certifiedTrustFloor,
+		random:              randomSource,
+		now:                 now,
 	}, nil
 }
 
@@ -938,16 +986,36 @@ func (client *FrostNativeSignerAnchorClient) readLocked(
 	if err != nil {
 		return nil, err
 	}
-	acknowledgement, err := client.verifyAcknowledgement(
-		readResponse.CheckpointAck,
-		nil,
-		nil,
-		&checkpoint,
-		&operationID,
-		false,
-		"applied",
-		"already-applied",
-	)
+	var acknowledgement *FrostNativeSignerCheckpointAcknowledgement
+	if client.certifiedTrustFloor != nil &&
+		bytes.Equal(
+			readResponse.CheckpointAck,
+			client.certifiedTrustFloor.TargetAcknowledgement,
+		) {
+		acknowledgement, err =
+			verifyFrostNativeSignerAnchorTrustTargetAcknowledgement(
+				client.certifiedTrustFloor,
+				readResponse.CheckpointAck,
+			)
+		if err == nil &&
+			(acknowledgement.Checkpoint != checkpoint ||
+				acknowledgement.OperationID != operationID) {
+			err = fmt.Errorf(
+				"certified trust-floor acknowledgement differs from its Read summary",
+			)
+		}
+	} else {
+		acknowledgement, err = client.verifyAcknowledgement(
+			readResponse.CheckpointAck,
+			nil,
+			nil,
+			&checkpoint,
+			&operationID,
+			false,
+			"applied",
+			"already-applied",
+		)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("invalid stored native signer checkpoint acknowledgement: %w", err)
 	}
@@ -1427,6 +1495,14 @@ func parseFrostNativeSignerAnchorOnlineKey(der []byte) (ed25519.PublicKey, error
 	publicKey, ok := parsed.(ed25519.PublicKey)
 	if !ok || len(publicKey) != ed25519.PublicKeySize {
 		return nil, fmt.Errorf("native signer anchor online key is not Ed25519")
+	}
+	if err := ValidateFrostNativeSignerAnchorTrustEd25519PublicKey(
+		publicKey,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"native signer anchor online key point is invalid: %w",
+			err,
+		)
 	}
 	canonical, err := x509.MarshalPKIXPublicKey(publicKey)
 	if err != nil || !bytes.Equal(canonical, der) {
