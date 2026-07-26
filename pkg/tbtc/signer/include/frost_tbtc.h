@@ -68,6 +68,48 @@ TbtcSignerResult frost_tbtc_recover_state_witness_checkpoint(
     const uint8_t* request_ptr,
     size_t request_len
 );
+/*
+ * Verifies and durably applies a strict
+ * tbtc-signer-state-anchor-trust-transition/v1 request. This operation is
+ * startup-only: it must complete before ordinary signer engine/store access.
+ * Certificate-chain and Read bytes are retained in a durable intent until the
+ * transition completes. The full verified certificate chain and each
+ * certificate's raw embedded target acknowledgement remain in the durable
+ * audit journal.
+ * Callers MUST invoke frost_tbtc_state_anchor_trust_head first on every
+ * startup. If it reports state_anchor_trust_recovery_required, use its bounded
+ * selector to choose the exact configured certificate chain, obtain a newly
+ * signed target Read wrapper, and resubmit this request. Local intent bytes
+ * never waive external freshness.
+ * Returns tbtc-signer-state-anchor-trust-transition-result/v1.
+ */
+TbtcSignerResult frost_tbtc_transition_state_witness_anchor(
+    const uint8_t* request_ptr,
+    size_t request_len
+);
+/*
+ * Required startup preflight returning the committed
+ * tbtc-signer-state-anchor-trust-head/v1 record. Before ordinary store
+ * initialization this performs an ephemeral descriptor-bound inspection, so a
+ * preflight read does not consume the startup-only transition window. It
+ * reports any durable in-progress transition without mutation as
+ * state_anchor_trust_recovery_required. An unbootstrapped store returns
+ * state_anchor_trust_head_absent.
+ */
+TbtcSignerResult frost_tbtc_state_anchor_trust_head(void);
+/*
+ * Provisioning-only startup preflight returning
+ * tbtc-signer-state-anchor-bootstrap-facts/v1: the stable store fingerprint
+ * and exact pristine genesis checkpoint needed for the first offline trust
+ * certificate. Requires a production init config whose purpose is
+ * state_anchor_bootstrap_provisioning and whose only other populated fields
+ * are state_path and state_witness_max_records=4. Every signer, key, session,
+ * policy, network, and anchor/trust field is forbidden.
+ * The call is ephemeral, does not consume the normal signer startup window,
+ * and rejects any store containing state, anchor/trust data, a segmented
+ * witness, or witness history beyond the exact genesis image.
+ */
+TbtcSignerResult frost_tbtc_state_anchor_bootstrap_facts(void);
 TbtcSignerResult frost_tbtc_init_signer_config(const uint8_t* request_ptr, size_t request_len);
 TbtcSignerResult frost_tbtc_roast_liveness_policy(void);
 TbtcSignerResult frost_tbtc_hardening_metrics(void);

@@ -13796,6 +13796,390 @@ fn verify_signature_share_verdicts_match_aggregate_and_handle_edges() {
     );
 }
 
+#[test]
+fn verify_signature_share_is_read_only_across_ttl_and_pending_repair() {
+    use crate::api::ShareVerificationVerdict;
+
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("verify_share_read_only");
+    reset_for_tests();
+
+    let session_id = "verify-share-read-only-session";
+    let key_group = "interactive-test-key-group";
+    let message = [0x79u8; 32];
+    let included = [1u16, 2];
+    let key_packages = ensure_interactive_dkg_session(session_id, key_group);
+    let opened = open_interactive_for_test(session_id, key_group, &message, &included, 1, 1, 2)
+        .expect("open interactive attempt");
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: session_id.to_string(),
+        attempt_id: opened.attempt_id,
+        member_identifier: 1,
+    })
+    .expect("round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 nonces");
+    let signing_package_hex = interactive_package_for_test(
+        &message,
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+    let member2_share = sign_share(SignShareRequest {
+        signing_package_hex: signing_package_hex.clone(),
+        nonces_hex: member2.nonces_hex,
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("member 2 share");
+
+    advance_interactive_clock_for_tests(interactive_session_ttl_seconds().saturating_add(1));
+    mark_persistence_pending(PersistencePendingOperation::InteractiveState {
+        session_id: session_id.to_string(),
+    });
+    let tip_before = state_witness_tip().expect("tip before verify");
+    let state_before = std::fs::read(&state_path).expect("state image before verify");
+    let witness_before =
+        std::fs::read(state_witness_file_path(&state_path)).expect("witness before verify");
+    assert!(interactive_state_persistence_pending());
+
+    let result = verify_signature_share(crate::api::VerifySignatureShareRequest {
+        session_id: session_id.to_string(),
+        signing_package_hex,
+        signature_share_hex: member2_share.signature_share.data_hex,
+        member_identifier: 2,
+        taproot_merkle_root_hex: None,
+    })
+    .expect("delayed share verification");
+    assert_eq!(result.verdict, ShareVerificationVerdict::Valid);
+    assert_eq!(
+        state_witness_tip().expect("tip after verify"),
+        tip_before,
+        "read-only verification must not advance the durable witness"
+    );
+    assert_eq!(
+        std::fs::read(&state_path).expect("state image after verify"),
+        state_before,
+        "read-only verification must not rewrite signer state"
+    );
+    assert_eq!(
+        std::fs::read(state_witness_file_path(&state_path)).expect("witness after verify"),
+        witness_before,
+        "read-only verification must not rewrite the witness journal"
+    );
+    assert!(
+        interactive_state_persistence_pending(),
+        "verification must not consume a pending mutation repair"
+    );
+    {
+        let guard = state().expect("state").lock().expect("lock");
+        assert!(
+            !guard.sessions[session_id].interactive_signing.is_empty(),
+            "verification must not sweep expired nonce state"
+        );
+    }
+
+    interactive_session_abort(InteractiveSessionAbortRequest {
+        session_id: "verify-share-read-only-unrelated".to_string(),
+        attempt_id: None,
+    })
+    .expect("next mutating endpoint repairs and sweeps");
+    assert!(
+        !interactive_state_persistence_pending(),
+        "mutating endpoint must durably clear the pending repair"
+    );
+    assert_ne!(
+        state_witness_tip().expect("tip after mutating sweep"),
+        tip_before,
+        "durable sweep must advance the witness before returning"
+    );
+    let guard = state().expect("state").lock().expect("lock");
+    assert!(
+        guard.sessions[session_id].interactive_signing.is_empty(),
+        "next mutating endpoint must sweep expired nonce state"
+    );
+    drop(guard);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
+#[test]
+fn interactive_anchored_calls_advance_at_most_three_generations_with_repairs() {
+    let _guard = lock_test_state();
+    let state_path = configure_test_state_path("interactive_generation_bound");
+    reset_for_tests();
+
+    let key_group = "generation-bound-key-group";
+    let wallet_session = "generation-bound-wallet";
+    let included = [1u16, 2];
+    let current_generation = || {
+        state_witness_tip()
+            .expect("current witness tip")
+            .generation
+            .parse::<u64>()
+            .expect("canonical generation")
+    };
+    let assert_bound = |label: &str, before: u64| {
+        let after = current_generation();
+        assert!(
+            after >= before && after - before <= 3,
+            "{label} advanced {} generations; anchored-call bound is 3",
+            after.saturating_sub(before)
+        );
+    };
+    let open_bound = |session_id: &str, message: [u8; 32]| {
+        interactive_session_open(InteractiveSessionOpenRequest {
+            session_id: session_id.to_string(),
+            member_identifier: 1,
+            message_hex: hex::encode(message),
+            key_group: key_group.to_string(),
+            threshold: 2,
+            taproot_merkle_root_hex: None,
+            signing_intent: None,
+            attempt_context: interactive_test_attempt_context(
+                session_id, key_group, &message, &included, 1,
+            ),
+        })
+        .expect("bound session opens")
+    };
+    let seed_expired_pending = |session_id: &str, message: [u8; 32]| {
+        let opened = open_bound(session_id, message);
+        interactive_round1(InteractiveRound1Request {
+            session_id: session_id.to_string(),
+            attempt_id: opened.attempt_id,
+            member_identifier: 1,
+        })
+        .expect("expired fixture reaches round 1");
+        {
+            let mut guard = state().expect("state").lock().expect("lock");
+            let stale = interactive_now()
+                .checked_sub(Duration::from_secs(
+                    interactive_session_ttl_seconds().saturating_add(1),
+                ))
+                .expect("interactive clock supports stale instant");
+            for interactive in guard
+                .sessions
+                .get_mut(session_id)
+                .expect("expired fixture session")
+                .interactive_signing
+                .values_mut()
+            {
+                interactive.last_activity_at = stale;
+            }
+        }
+        mark_persistence_pending(PersistencePendingOperation::InteractiveState {
+            session_id: session_id.to_string(),
+        });
+    };
+    let mark_nonmatching_repairs = |suffix: &str| {
+        mark_persistence_pending(PersistencePendingOperation::InteractiveRound2 {
+            session_id: format!("missing-round2-{suffix}"),
+            consumed_marker: format!("missing-marker-{suffix}"),
+        });
+        mark_persistence_pending(PersistencePendingOperation::InteractiveAggregate {
+            session_id: format!("missing-aggregate-{suffix}"),
+            aggregated_marker: format!("missing-aggregate-marker-{suffix}"),
+        });
+    };
+
+    // Open: expiry repair (the sweep snapshot also covers protected
+    // retirement) + Open's binding snapshot stays within the three-generation
+    // hard bound even if a prior prepared witness must first be reconciled.
+    ensure_interactive_dkg_session(wallet_session, key_group);
+    seed_expired_pending("generation-open-expired", [0x31; 32]);
+    mark_nonmatching_repairs("open");
+    let open_request = InteractiveSessionOpenRequest {
+        session_id: "generation-open-target".to_string(),
+        member_identifier: 1,
+        message_hex: hex::encode([0x32; 32]),
+        key_group: key_group.to_string(),
+        threshold: 2,
+        taproot_merkle_root_hex: None,
+        signing_intent: None,
+        attempt_context: interactive_test_attempt_context(
+            "generation-open-target",
+            key_group,
+            &[0x32; 32],
+            &included,
+            1,
+        ),
+    };
+    let before = current_generation();
+    interactive_session_open(open_request).expect("bounded Open");
+    assert_bound("Open", before);
+
+    reset_for_tests();
+    ensure_interactive_dkg_session(wallet_session, key_group);
+    let round1_target = open_bound("generation-round1-target", [0x41; 32]);
+    seed_expired_pending("generation-round1-expired", [0x42; 32]);
+    mark_nonmatching_repairs("round1");
+    let before = current_generation();
+    interactive_round1(InteractiveRound1Request {
+        session_id: "generation-round1-target".to_string(),
+        attempt_id: round1_target.attempt_id,
+        member_identifier: 1,
+    })
+    .expect("bounded Round1");
+    assert_bound("Round1", before);
+
+    reset_for_tests();
+    let key_packages = ensure_interactive_dkg_session(wallet_session, key_group);
+    let round2_target = open_bound("generation-round2-target", [0x51; 32]);
+    let round1 = interactive_round1(InteractiveRound1Request {
+        session_id: "generation-round2-target".to_string(),
+        attempt_id: round2_target.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("Round2 fixture round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("Round2 fixture member 2");
+    let signing_package_hex = interactive_package_for_test(
+        &[0x51; 32],
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+    let round2_request = InteractiveRound2Request {
+        session_id: "generation-round2-target".to_string(),
+        attempt_id: round2_target.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: signing_package_hex.clone(),
+    };
+    seed_expired_pending("generation-round2-expired", [0x52; 32]);
+    mark_nonmatching_repairs("round2");
+    let before = current_generation();
+    interactive_round2(round2_request.clone()).expect("bounded Round2");
+    assert_bound("Round2", before);
+
+    // Matching Round2 repair is covered by the sweep snapshot and cannot add
+    // a write beyond the three-generation bound; the replay then fails closed.
+    let consumed_marker = interactive_consumed_marker(&round2_target.attempt_id, 1);
+    mark_persistence_pending(PersistencePendingOperation::InteractiveRound2 {
+        session_id: round2_request.session_id.clone(),
+        consumed_marker,
+    });
+    seed_expired_pending("generation-round2-match-expired", [0x53; 32]);
+    let before = current_generation();
+    let replay = interactive_round2(round2_request)
+        .expect_err("matching Round2 repair reaches consumed replay gate");
+    assert!(matches!(replay, EngineError::ConsumedNonceReplay { .. }));
+    assert_bound("Round2 matching repair", before);
+
+    reset_for_tests();
+    let key_packages = ensure_interactive_dkg_session(wallet_session, key_group);
+    let aggregate_target = open_bound("generation-aggregate-target", [0x61; 32]);
+    let aggregate_round1 = interactive_round1(InteractiveRound1Request {
+        session_id: "generation-aggregate-target".to_string(),
+        attempt_id: aggregate_target.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("Aggregate fixture round 1");
+    let member2 = generate_nonces_and_commitments(GenerateNoncesAndCommitmentsRequest {
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("Aggregate fixture member 2");
+    let member2_nonces = member2.nonces_hex.clone();
+    let aggregate_package = interactive_package_for_test(
+        &[0x61; 32],
+        vec![
+            NativeFrostCommitment {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: aggregate_round1.commitments_hex,
+            },
+            member2.commitment,
+        ],
+    );
+    let member1_share = interactive_round2(InteractiveRound2Request {
+        session_id: "generation-aggregate-target".to_string(),
+        attempt_id: aggregate_target.attempt_id.clone(),
+        member_identifier: 1,
+        signing_package_hex: aggregate_package.clone(),
+    })
+    .expect("Aggregate fixture member 1 share");
+    let member2_share = sign_share(SignShareRequest {
+        signing_package_hex: aggregate_package.clone(),
+        nonces_hex: member2_nonces,
+        key_package_identifier: key_packages[&2].identifier.clone(),
+        key_package_hex: key_packages[&2].data_hex.clone(),
+    })
+    .expect("Aggregate fixture member 2 share");
+    let aggregate_request = InteractiveAggregateRequest {
+        session_id: "generation-aggregate-target".to_string(),
+        attempt_id: aggregate_target.attempt_id.clone(),
+        signing_package_hex: aggregate_package,
+        signature_shares: vec![
+            NativeFrostSignatureShare {
+                identifier: key_packages[&1].identifier.clone(),
+                data_hex: member1_share.signature_share_hex,
+            },
+            member2_share.signature_share,
+        ],
+        taproot_merkle_root_hex: None,
+    };
+    seed_expired_pending("generation-aggregate-expired", [0x62; 32]);
+    mark_nonmatching_repairs("aggregate");
+    let before = current_generation();
+    interactive_aggregate(aggregate_request.clone()).expect("bounded Aggregate");
+    assert_bound("Aggregate", before);
+
+    let aggregated_marker =
+        interactive_aggregated_marker(&aggregate_target.attempt_id, &hash_hex(&[0x61; 32]), None);
+    mark_persistence_pending(PersistencePendingOperation::InteractiveAggregate {
+        session_id: aggregate_request.session_id.clone(),
+        aggregated_marker,
+    });
+    seed_expired_pending("generation-aggregate-match-expired", [0x63; 32]);
+    let before = current_generation();
+    let replay = interactive_aggregate(aggregate_request)
+        .expect_err("matching Aggregate repair reaches completed replay gate");
+    assert!(matches!(
+        replay,
+        EngineError::InteractiveAttemptAlreadyAggregated { .. }
+    ));
+    assert_bound("Aggregate matching repair", before);
+
+    reset_for_tests();
+    ensure_interactive_dkg_session(wallet_session, key_group);
+    let abort_target = open_bound("generation-abort-target", [0x71; 32]);
+    interactive_round1(InteractiveRound1Request {
+        session_id: "generation-abort-target".to_string(),
+        attempt_id: abort_target.attempt_id.clone(),
+        member_identifier: 1,
+    })
+    .expect("Abort fixture round 1");
+    seed_expired_pending("generation-abort-expired", [0x72; 32]);
+    mark_nonmatching_repairs("abort");
+    let before = current_generation();
+    let aborted = interactive_session_abort(InteractiveSessionAbortRequest {
+        session_id: "generation-abort-target".to_string(),
+        attempt_id: Some(abort_target.attempt_id),
+    })
+    .expect("bounded Abort");
+    assert!(aborted.aborted);
+    assert_bound("Abort", before);
+
+    reset_for_tests();
+    cleanup_test_state_artifacts(&state_path);
+    clear_state_storage_policy_overrides();
+}
+
 // Script-path (tweaked-root) companion to the equivalence test above: the
 // None-root case pins parity on the untweaked path; this pins it on the taproot
 // tweak path, where the even-Y/tweak machinery is exercised. Shares are produced

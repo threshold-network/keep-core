@@ -30,6 +30,8 @@ libc = "0.2"
 zeroize = { version = "1.8", default-features = false, features = ["alloc", "serde"] }
 bitcoin = "0.32"
 ed25519-dalek = { version = "2.1", default-features = false, features = ["std"] }
+curve25519-dalek = { version = "=4.1.3", default-features = false }
+base64ct = { version = "1.8", features = ["alloc"] }
 
 [dev-dependencies]
 criterion = "0.5"

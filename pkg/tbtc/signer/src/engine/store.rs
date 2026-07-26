@@ -38,6 +38,8 @@ pub(crate) const TBTC_SIGNER_DURABLE_STORE_BACKEND: &str = "encrypted-file-v1";
 pub(crate) const TBTC_SIGNER_DURABLE_STORE_ID_SUFFIX: &str = ".store-id";
 pub(crate) const TBTC_SIGNER_STATE_WITNESS_SUFFIX: &str = ".state-witness";
 pub(crate) const TBTC_SIGNER_STATE_ANCHOR_SUFFIX: &str = ".state-anchor";
+pub(crate) const TBTC_SIGNER_STATE_ANCHOR_TRUST_SUFFIX: &str = ".state-anchor-trust";
+pub(crate) const TBTC_SIGNER_STATE_ANCHOR_TRUST_INTENT_SUFFIX: &str = ".state-anchor-trust.intent";
 const TBTC_SIGNER_STATE_WITNESS_NEXT_SUFFIX: &str = ".next";
 const TBTC_SIGNER_STATE_WITNESS_PREVIOUS_SUFFIX: &str = ".previous";
 
@@ -81,6 +83,165 @@ const TBTC_SIGNER_STATE_ANCHOR_ACK_LENGTH: usize = 560;
 const TBTC_SIGNER_STATE_ANCHOR_METADATA_LENGTH: usize =
     16 + 4 + 32 + 4 + 3 * TBTC_SIGNER_STATE_ANCHOR_ACK_LENGTH + 32;
 const TBTC_SIGNER_STATE_ANCHOR_METADATA_DOMAIN: &[u8] = b"tbtc-signer-state-anchor-metadata/v1\0";
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+// The `After` prefix is load-bearing: every fault injects after the named
+// durable step, and the shared prefix keeps that invariant explicit.
+#[allow(clippy::enum_variant_names)]
+enum StateAnchorTrustTransitionFaultInjectionPoint {
+    AfterIntentPublication,
+    AfterPrepareBatch,
+    AfterNextWitnessPublication,
+    AfterPreviousWitnessPublication,
+    AfterCurrentWitnessPublication,
+    AfterTargetAnchorPublication,
+    AfterCommitPublication,
+    AfterPreviousWitnessRetirement,
+}
+
+#[cfg(test)]
+static STATE_ANCHOR_TRUST_TRANSITION_FAULT_INJECTION_POINT: OnceLock<
+    Mutex<Option<StateAnchorTrustTransitionFaultInjectionPoint>>,
+> = OnceLock::new();
+
+#[cfg(test)]
+static REPLACE_TRUST_LOCK_AFTER_GUARDED_PUBLICATION: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+static REPLACE_TRUST_LOCK_AFTER_FLOCK: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+fn maybe_inject_state_anchor_trust_transition_fault(
+    point: StateAnchorTrustTransitionFaultInjectionPoint,
+) -> Result<(), EngineError> {
+    let configured = *STATE_ANCHOR_TRUST_TRANSITION_FAULT_INJECTION_POINT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|_| {
+            EngineError::Internal(
+                "state-anchor trust transition fault-injection mutex poisoned".to_string(),
+            )
+        })?;
+    if configured == Some(point) {
+        return Err(EngineError::Internal(format!(
+            "injected state-anchor trust transition fault at {point:?}"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn set_state_anchor_trust_transition_fault_for_tests(
+    point: StateAnchorTrustTransitionFaultInjectionPoint,
+) {
+    if let Ok(mut configured) = STATE_ANCHOR_TRUST_TRANSITION_FAULT_INJECTION_POINT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+    {
+        *configured = Some(point);
+    }
+}
+
+#[cfg(test)]
+fn clear_state_anchor_trust_transition_fault_for_tests() {
+    if let Ok(mut configured) = STATE_ANCHOR_TRUST_TRANSITION_FAULT_INJECTION_POINT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+    {
+        *configured = None;
+    }
+}
+
+#[cfg(test)]
+fn maybe_replace_trust_lock_after_guarded_publication(
+    recovery_guard: Option<&StateAnchorTrustRecoveryGuard<'_>>,
+) -> Result<(), EngineError> {
+    if !REPLACE_TRUST_LOCK_AFTER_GUARDED_PUBLICATION
+        .swap(false, std::sync::atomic::Ordering::SeqCst)
+    {
+        return Ok(());
+    }
+    let guard = recovery_guard.ok_or_else(|| {
+        EngineError::Internal(
+            "post-publication lock replacement requires a recovery guard".to_string(),
+        )
+    })?;
+    let mut displaced_name = guard.lock_name.to_os_string();
+    displaced_name.push(".test-post-publication-displaced");
+    validate_entry_name(&displaced_name, "displaced test lock")?;
+    ensure_entry_absent(
+        guard.directory.as_raw_fd(),
+        &displaced_name,
+        "displaced test lock",
+    )?;
+    renameat_same_directory(
+        guard.directory.as_raw_fd(),
+        guard.lock_name,
+        &displaced_name,
+        "displace trust-recovery lock in publication-window test",
+    )?;
+    let replacement = openat_regular(
+        guard.directory.as_raw_fd(),
+        guard.lock_name,
+        libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+        0o600,
+        "replacement test lock",
+    )?;
+    set_owner_only_permissions(&replacement, "replacement test lock")?;
+    replacement.sync_all().map_err(|error| {
+        EngineError::Internal(format!("failed to sync replacement test lock: {error}"))
+    })?;
+    guard.directory.sync_all().map_err(|error| {
+        EngineError::Internal(format!(
+            "failed to sync publication-window lock replacement: {error}"
+        ))
+    })
+}
+
+#[cfg(test)]
+fn maybe_replace_trust_lock_after_flock(
+    directory: &fs::File,
+    lock_name: &OsStr,
+) -> Result<(), EngineError> {
+    if !REPLACE_TRUST_LOCK_AFTER_FLOCK.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
+    let mut displaced_name = lock_name.to_os_string();
+    displaced_name.push(".test-post-flock-displaced");
+    validate_entry_name(&displaced_name, "post-flock displaced test lock")?;
+    ensure_entry_absent(
+        directory.as_raw_fd(),
+        &displaced_name,
+        "post-flock displaced test lock",
+    )?;
+    renameat_same_directory(
+        directory.as_raw_fd(),
+        lock_name,
+        &displaced_name,
+        "displace lock after flock",
+    )?;
+    let replacement = openat_regular(
+        directory.as_raw_fd(),
+        lock_name,
+        libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+        0o600,
+        "post-flock replacement test lock",
+    )?;
+    set_owner_only_permissions(&replacement, "post-flock replacement test lock")?;
+    replacement.sync_all().map_err(|error| {
+        EngineError::Internal(format!(
+            "failed to sync post-flock replacement lock: {error}"
+        ))
+    })?;
+    directory.sync_all().map_err(|error| {
+        EngineError::Internal(format!(
+            "failed to sync post-flock lock replacement: {error}"
+        ))
+    })
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct OpenedObjectIdentity {
@@ -156,11 +317,91 @@ type OpenedStateAnchor = (
 );
 
 #[cfg(unix)]
+type OpenedStateAnchorTrustJournal = (
+    Option<fs::File>,
+    Option<OpenedObjectIdentity>,
+    Option<StateAnchorTrustJournalModel>,
+    Option<FileChangeStamp>,
+    Option<Vec<u8>>,
+);
+
+#[cfg(unix)]
 #[derive(Clone, Copy)]
 struct StateWitnessRotationNames<'a> {
     current: &'a OsStr,
     next: &'a OsStr,
     previous: &'a OsStr,
+}
+
+#[cfg(unix)]
+struct StateAnchorTrustRecoveryGuard<'a> {
+    directory: &'a fs::File,
+    canonical_parent: &'a Path,
+    directory_identity: OpenedObjectIdentity,
+    lock_name: &'a OsStr,
+    lock_file: &'a fs::File,
+    lock_identity: OpenedObjectIdentity,
+    store_id_name: &'a OsStr,
+    store_id_file: &'a fs::File,
+    store_id_identity: OpenedObjectIdentity,
+    store_id: [u8; 32],
+    state_name: &'a OsStr,
+    state_file: Option<&'a fs::File>,
+    state_identity: Option<OpenedObjectIdentity>,
+}
+
+#[cfg(unix)]
+impl StateAnchorTrustRecoveryGuard<'_> {
+    fn revalidate(&self) -> Result<(), EngineError> {
+        let live_directory = open_absolute_directory_nofollow(self.canonical_parent)?;
+        if descriptor_identity(&live_directory, "live signer state directory")?
+            != self.directory_identity
+        {
+            return Err(replacement_error("signer state directory"));
+        }
+        validate_live_entry(
+            self.directory,
+            self.lock_name,
+            self.lock_identity,
+            "signer state lock file",
+        )?;
+        validate_live_entry(
+            self.directory,
+            self.store_id_name,
+            self.store_id_identity,
+            "signer durable store ID file",
+        )?;
+        validate_secure_regular_file(self.lock_file, "signer state lock file")?;
+        validate_secure_regular_file(self.store_id_file, "signer durable store ID file")?;
+        if read_store_id(self.store_id_file)? != self.store_id {
+            return Err(EngineError::Internal(
+                "signer durable store ID changed during trust recovery".to_string(),
+            ));
+        }
+        match (self.state_file, self.state_identity) {
+            (Some(file), Some(identity)) => {
+                validate_live_entry(
+                    self.directory,
+                    self.state_name,
+                    identity,
+                    "signer state file",
+                )?;
+                validate_secure_regular_file(file, "signer state file")?;
+            }
+            (None, None) => ensure_entry_absent(
+                self.directory.as_raw_fd(),
+                self.state_name,
+                "signer state file",
+            )?,
+            _ => {
+                return Err(EngineError::Internal(
+                    "signer state descriptor invariant is inconsistent during trust recovery"
+                        .to_string(),
+                ))
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Cheap, exact evidence that a file has not been written since it was last
@@ -256,6 +497,15 @@ pub(crate) struct StateFileLock {
     lock_identity: OpenedObjectIdentity,
     store_id_file: fs::File,
     store_id_identity: OpenedObjectIdentity,
+    trust_name: OsString,
+    trust_file: Option<fs::File>,
+    trust_identity: Option<OpenedObjectIdentity>,
+    trust_journal: Option<StateAnchorTrustJournalModel>,
+    trust_stamp: Option<FileChangeStamp>,
+    trust_bytes: Option<Vec<u8>>,
+    trust_intent_name: OsString,
+    trust_head_inspection: bool,
+    anchor_configuration: Option<StateAnchorConfiguration>,
     anchor_name: OsString,
     anchor_file: Option<fs::File>,
     anchor_identity: Option<OpenedObjectIdentity>,
@@ -289,9 +539,61 @@ pub(crate) struct StateFileLock {
     lock_held: bool,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct StateAnchorTrustTransitionStoreOutcome {
+    pub(crate) idempotent: bool,
+    pub(crate) applied_certificate_count: usize,
+    pub(crate) trust_head: VerifiedStateAnchorTrustCertificate,
+    pub(crate) tip: StateWitness,
+    pub(crate) base: StateWitness,
+    pub(crate) anchor: StateAnchorMetadata,
+}
+
+#[cfg(unix)]
+enum StateFileLockAcquireMode<'a> {
+    Ordinary,
+    BootstrapFactsProvisioning,
+    TrustHeadInspection,
+    TrustTransition(&'a VerifiedStateAnchorTrustTransition),
+}
+
 impl StateFileLock {
     #[cfg(unix)]
     pub(crate) fn acquire(state_path: &Path) -> Result<Self, EngineError> {
+        Self::acquire_with_mode(state_path, StateFileLockAcquireMode::Ordinary)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn acquire_for_trust_transition(
+        state_path: &Path,
+        transition: &VerifiedStateAnchorTrustTransition,
+    ) -> Result<Self, EngineError> {
+        Self::acquire_with_mode(
+            state_path,
+            StateFileLockAcquireMode::TrustTransition(transition),
+        )
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn acquire_for_trust_head_inspection(
+        state_path: &Path,
+    ) -> Result<Self, EngineError> {
+        Self::acquire_with_mode(state_path, StateFileLockAcquireMode::TrustHeadInspection)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn acquire_for_bootstrap_facts(state_path: &Path) -> Result<Self, EngineError> {
+        Self::acquire_with_mode(
+            state_path,
+            StateFileLockAcquireMode::BootstrapFactsProvisioning,
+        )
+    }
+
+    #[cfg(unix)]
+    fn acquire_with_mode(
+        state_path: &Path,
+        mode: StateFileLockAcquireMode<'_>,
+    ) -> Result<Self, EngineError> {
         let state_name = state_path
             .file_name()
             .filter(|name| !name.is_empty())
@@ -303,23 +605,46 @@ impl StateFileLock {
             })?
             .to_os_string();
         validate_entry_name(&state_name, "state")?;
+        let trust_intent_name = state_anchor_trust_intent_file_name(&state_name);
+        validate_entry_name(&trust_intent_name, "state anchor trust transition intent")?;
 
         let configured_parent = state_path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
-        fs::create_dir_all(configured_parent).map_err(|error| {
-            EngineError::Internal(format!(
-                "failed to create signer state directory [{}]: {error}",
-                configured_parent.display()
-            ))
-        })?;
-        let canonical_parent = fs::canonicalize(configured_parent).map_err(|error| {
-            EngineError::Internal(format!(
-                "failed to canonicalize signer state directory [{}]: {error}",
-                configured_parent.display()
-            ))
-        })?;
+        let canonical_parent = match fs::canonicalize(configured_parent) {
+            Ok(parent) => parent,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && matches!(&mode, StateFileLockAcquireMode::TrustHeadInspection) =>
+            {
+                // Trust-head inspection is read-only. An absent parent proves
+                // there cannot be a durable intent or committed head and must
+                // not create the configured directory hierarchy.
+                return Err(EngineError::StateAnchorTrustHeadAbsent);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir_all(configured_parent).map_err(|create_error| {
+                    EngineError::Internal(format!(
+                        "failed to create signer state directory [{}]: {create_error}",
+                        configured_parent.display()
+                    ))
+                })?;
+                fs::canonicalize(configured_parent).map_err(|canonicalize_error| {
+                    EngineError::Internal(format!(
+                        "failed to canonicalize newly created signer state directory [{}]: \
+                         {canonicalize_error}",
+                        configured_parent.display()
+                    ))
+                })?
+            }
+            Err(error) => {
+                return Err(EngineError::Internal(format!(
+                    "failed to canonicalize signer state directory [{}]: {error}",
+                    configured_parent.display()
+                )));
+            }
+        };
         if !canonical_parent.is_absolute() {
             return Err(EngineError::Internal(format!(
                 "canonical signer state directory [{}] is not absolute",
@@ -345,63 +670,126 @@ impl StateFileLock {
             .to_os_string();
         validate_entry_name(&lock_name, "lock")?;
 
-        let mut lock_file = openat_regular(
+        let intent_existed_before_lock = live_entry_stat(
+            directory.as_raw_fd(),
+            &trust_intent_name,
+            "state anchor trust transition intent",
+        )?
+        .is_some();
+        let mut lock_file = match openat_optional(
             directory.as_raw_fd(),
             &lock_name,
-            libc::O_RDWR | libc::O_CREAT,
-            0o600,
+            libc::O_RDWR,
             "signer state lock file",
-        )?;
+        )? {
+            Some(file) => file,
+            None if intent_existed_before_lock => {
+                return Err(EngineError::Internal(
+                    "durable state-anchor trust intent exists without its signer state lock; \
+                     refusing to recreate recovery prerequisites"
+                        .to_string(),
+                ));
+            }
+            None => openat_regular(
+                directory.as_raw_fd(),
+                &lock_name,
+                libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+                0o600,
+                "signer state lock file",
+            )?,
+        };
         validate_owned_unlinked_regular(&lock_file, "signer state lock file")?;
-        set_owner_only_permissions(&lock_file, "signer state lock file")?;
-        validate_secure_regular_file(&lock_file, "signer state lock file")?;
         acquire_exclusive_lock(&lock_file, &lock_path)?;
         let lock_identity = descriptor_identity(&lock_file, "signer state lock file")?;
-
-        lock_file.set_len(0).map_err(|error| {
-            EngineError::Internal(format!(
-                "failed to truncate signer state lock file [{}]: {error}",
-                lock_path.display()
-            ))
-        })?;
-        lock_file.seek(SeekFrom::Start(0)).map_err(|error| {
-            EngineError::Internal(format!(
-                "failed to seek signer state lock file [{}]: {error}",
-                lock_path.display()
-            ))
-        })?;
-        writeln!(
-            lock_file,
-            "pid={}\ncanonical_state_path={}",
-            std::process::id(),
-            canonical_parent.join(&state_name).display()
-        )
-        .map_err(|error| {
-            EngineError::Internal(format!(
-                "failed to write signer state lock file [{}]: {error}",
-                lock_path.display()
-            ))
-        })?;
-        lock_file.sync_all().map_err(|error| {
-            EngineError::Internal(format!(
-                "failed to sync signer state lock file [{}]: {error}",
-                lock_path.display()
-            ))
-        })?;
+        #[cfg(test)]
+        maybe_replace_trust_lock_after_flock(&directory, &lock_name)?;
+        validate_live_entry(
+            &directory,
+            &lock_name,
+            lock_identity,
+            "signer state lock file",
+        )?;
+        let recovery_intent_present = live_entry_stat(
+            directory.as_raw_fd(),
+            &trust_intent_name,
+            "state anchor trust transition intent",
+        )?
+        .is_some();
+        if recovery_intent_present {
+            // A local intent is evidence only. Until a fresh transition request
+            // is supplied, inspection must not chmod, truncate, rewrite, create,
+            // rename, unlink, or fsync any recovery prerequisite.
+            validate_secure_regular_file(&lock_file, "signer state lock file")?;
+        } else {
+            set_owner_only_permissions(&lock_file, "signer state lock file")?;
+            validate_secure_regular_file(&lock_file, "signer state lock file")?;
+            lock_file.set_len(0).map_err(|error| {
+                EngineError::Internal(format!(
+                    "failed to truncate signer state lock file [{}]: {error}",
+                    lock_path.display()
+                ))
+            })?;
+            lock_file.seek(SeekFrom::Start(0)).map_err(|error| {
+                EngineError::Internal(format!(
+                    "failed to seek signer state lock file [{}]: {error}",
+                    lock_path.display()
+                ))
+            })?;
+            writeln!(
+                lock_file,
+                "pid={}\ncanonical_state_path={}",
+                std::process::id(),
+                canonical_parent.join(&state_name).display()
+            )
+            .map_err(|error| {
+                EngineError::Internal(format!(
+                    "failed to write signer state lock file [{}]: {error}",
+                    lock_path.display()
+                ))
+            })?;
+            lock_file.sync_all().map_err(|error| {
+                EngineError::Internal(format!(
+                    "failed to sync signer state lock file [{}]: {error}",
+                    lock_path.display()
+                ))
+            })?;
+        }
 
         let store_id_name = durable_store_id_file_name(&state_name);
         validate_entry_name(&store_id_name, "store ID")?;
-        let (store_id_file, store_id, store_id_identity) =
-            open_or_create_store_id(&directory, &store_id_name)?;
+        let (store_id_file, store_id, store_id_identity) = if recovery_intent_present {
+            let file = openat_optional(
+                directory.as_raw_fd(),
+                &store_id_name,
+                libc::O_RDONLY,
+                "signer durable store ID file",
+            )?
+            .ok_or_else(|| {
+                EngineError::Internal(
+                    "durable state-anchor trust intent exists without its signer durable store \
+                     ID; refusing to recreate recovery prerequisites"
+                        .to_string(),
+                )
+            })?;
+            validate_owned_unlinked_regular(&file, "signer durable store ID file")?;
+            validate_secure_regular_file(&file, "signer durable store ID file")?;
+            let store_id = read_store_id(&file)?;
+            let identity = descriptor_identity(&file, "signer durable store ID file")?;
+            (file, store_id, identity)
+        } else {
+            open_or_create_store_id(&directory, &store_id_name)?
+        };
 
         // Persist the creation of both stable anchor entries before claiming
         // durability to the host.
-        directory.sync_all().map_err(|error| {
-            EngineError::Internal(format!(
-                "failed to sync signer state directory [{}]: {error}",
-                canonical_parent.display()
-            ))
-        })?;
+        if !recovery_intent_present {
+            directory.sync_all().map_err(|error| {
+                EngineError::Internal(format!(
+                    "failed to sync signer state directory [{}]: {error}",
+                    canonical_parent.display()
+                ))
+            })?;
+        }
 
         let (current_state_file, current_state_identity) =
             open_optional_state(&directory, &state_name)?;
@@ -441,17 +829,11 @@ impl StateFileLock {
             fingerprint,
         };
 
-        let anchor_configuration = configured_state_anchor()?;
+        let configured_anchor = configured_state_anchor()?;
+        let trust_name = state_anchor_trust_file_name(&state_name);
+        validate_entry_name(&trust_name, "state anchor trust journal")?;
         let anchor_name = state_anchor_file_name(&state_name);
         validate_entry_name(&anchor_name, "state anchor")?;
-        let (mut anchor_file, mut anchor_identity, mut anchor_metadata, mut anchor_bytes) =
-            open_state_anchor(
-                &directory,
-                &anchor_name,
-                &identity.fingerprint,
-                anchor_configuration.as_ref(),
-            )?;
-
         let witness_name = state_witness_file_name(&state_name);
         validate_entry_name(&witness_name, "state witness")?;
         let mut witness_next_name = witness_name.clone();
@@ -461,6 +843,257 @@ impl StateFileLock {
         witness_previous_name.push(TBTC_SIGNER_STATE_WITNESS_PREVIOUS_SUFFIX);
         validate_entry_name(&witness_previous_name, "previous state witness")?;
         let witness_max_records = state_witness_max_records()?;
+
+        let opened_recovery_intent = open_state_anchor_trust_transition_intent(
+            &directory,
+            &trust_intent_name,
+            &identity.fingerprint,
+        )?;
+        if recovery_intent_present && opened_recovery_intent.is_none() {
+            return Err(EngineError::Internal(
+                "state-anchor trust transition intent disappeared while its store lock was held"
+                    .to_string(),
+            ));
+        }
+        if let Some(intent_bytes) = opened_recovery_intent {
+            if matches!(&mode, StateFileLockAcquireMode::BootstrapFactsProvisioning) {
+                return Err(EngineError::Validation(
+                    "bootstrap facts require a pristine store without a trust-transition intent"
+                        .to_string(),
+                ));
+            }
+            let request =
+                parse_state_anchor_trust_transition_intent(&intent_bytes, &identity.fingerprint)?;
+            let persisted_transition = verify_state_anchor_trust_transition_request(request, false)
+                .map_err(|error| {
+                    EngineError::Internal(format!(
+                        "durable state-anchor trust transition intent failed verification: \
+                         {error}"
+                    ))
+                })?;
+            let requested_transition = match &mode {
+                StateFileLockAcquireMode::TrustTransition(requested) => {
+                    let persisted_final = persisted_transition
+                        .certificates
+                        .last()
+                        .expect("verified durable transition is nonempty");
+                    if requested.request.schema != persisted_transition.request.schema
+                        || requested.request.certificate_chain
+                            != persisted_transition.request.certificate_chain
+                        || requested.certificates.len() != persisted_transition.certificates.len()
+                        || requested
+                            .certificates
+                            .iter()
+                            .zip(&persisted_transition.certificates)
+                            .any(|(requested, persisted)| {
+                                requested.certificate_sequence != persisted.certificate_sequence
+                                    || requested.certificate_digest != persisted.certificate_digest
+                                    || requested.target_acknowledgement_bytes
+                                        != persisted.target_acknowledgement_bytes
+                            })
+                        || requested.target_read_acknowledgement_bytes
+                            != persisted_final.target_acknowledgement_bytes
+                        || requested.target_read_acknowledgement
+                            != persisted_final.target_acknowledgement
+                    {
+                        return Err(EngineError::Validation(
+                            "state-anchor trust transition certificate chain or freshly read \
+                             target acknowledgement differs from the durable recovery intent"
+                                .to_string(),
+                        ));
+                    }
+                    *requested
+                }
+                _ => {
+                    let final_certificate = persisted_transition
+                        .certificates
+                        .last()
+                        .expect("verified durable transition is nonempty");
+                    return Err(EngineError::StateAnchorTrustRecoveryRequired {
+                        context: Box::new(StateAnchorTrustRecoveryContext {
+                            store_fingerprint: identity.fingerprint,
+                            certificate_sequences: persisted_transition
+                                .certificates
+                                .iter()
+                                .map(|certificate| certificate.certificate_sequence)
+                                .collect(),
+                            certificate_digests: persisted_transition
+                                .certificates
+                                .iter()
+                                .map(|certificate| certificate.certificate_digest)
+                                .collect(),
+                            target_binding_hash: final_certificate.to.binding_hash,
+                            target_service_epoch: final_certificate.to.reference.service_epoch,
+                            target_revision: final_certificate.to.reference.revision,
+                            target_checkpoint_store_fingerprint: final_certificate
+                                .to
+                                .reference
+                                .checkpoint
+                                .store_fingerprint,
+                            target_checkpoint_generation: final_certificate
+                                .to
+                                .reference
+                                .checkpoint
+                                .generation,
+                            target_checkpoint_previous_state_commitment: final_certificate
+                                .to
+                                .reference
+                                .checkpoint
+                                .previous_state_commitment,
+                            target_checkpoint_state_image_digest: final_certificate
+                                .to
+                                .reference
+                                .checkpoint
+                                .state_image_digest,
+                            target_checkpoint_state_commitment: final_certificate
+                                .to
+                                .reference
+                                .checkpoint
+                                .state_commitment,
+                        }),
+                    });
+                }
+            };
+            recheck_state_anchor_admission_expiry(
+                requested_transition.target_read_expires_at_unix_ms,
+            )?;
+            let recovery_guard = StateAnchorTrustRecoveryGuard {
+                directory: &directory,
+                canonical_parent: &canonical_parent,
+                directory_identity,
+                lock_name: &lock_name,
+                lock_file: &lock_file,
+                lock_identity,
+                store_id_name: &store_id_name,
+                store_id_file: &store_id_file,
+                store_id_identity,
+                store_id,
+                state_name: &state_name,
+                state_file: current_state_file.as_ref(),
+                state_identity: current_state_identity,
+            };
+            recovery_guard.revalidate()?;
+            recover_state_anchor_trust_transition(
+                &recovery_guard,
+                &trust_name,
+                &trust_intent_name,
+                &anchor_name,
+                StateWitnessRotationNames {
+                    current: &witness_name,
+                    next: &witness_next_name,
+                    previous: &witness_previous_name,
+                },
+                &identity,
+                current_state_file.as_ref(),
+                witness_max_records,
+                configured_anchor.as_ref(),
+                &intent_bytes,
+                requested_transition,
+            )?;
+        }
+        ensure_entry_absent(
+            directory.as_raw_fd(),
+            &trust_intent_name,
+            "state anchor trust transition intent",
+        )?;
+        let trust_required = matches!(
+            &mode,
+            StateFileLockAcquireMode::Ordinary | StateFileLockAcquireMode::TrustHeadInspection
+        ) && configured_anchor
+            .as_ref()
+            .and_then(|configuration| configuration.trust.as_ref())
+            .is_some();
+        let (trust_file, trust_identity, trust_journal, trust_stamp, trust_bytes) =
+            open_state_anchor_trust_journal(
+                &directory,
+                &trust_name,
+                &identity.fingerprint,
+                trust_required,
+            )?;
+        let anchor_configuration = match &mode {
+            StateFileLockAcquireMode::Ordinary => {
+                if let (Some(journal), Some(configuration)) =
+                    (trust_journal.as_ref(), configured_anchor.as_ref())
+                {
+                    validate_state_anchor_trust_journal_head(
+                        journal,
+                        configuration,
+                        &identity.fingerprint,
+                    )?;
+                }
+                configured_anchor.clone()
+            }
+            StateFileLockAcquireMode::BootstrapFactsProvisioning => {
+                if configured_anchor.is_some() || trust_journal.is_some() {
+                    return Err(EngineError::Validation(
+                        "bootstrap facts require a pristine store without anchor or trust state"
+                            .to_string(),
+                    ));
+                }
+                None
+            }
+            StateFileLockAcquireMode::TrustHeadInspection => {
+                let journal = trust_journal
+                    .as_ref()
+                    .ok_or(EngineError::StateAnchorTrustHeadAbsent)?;
+                let target_configuration = configured_anchor.as_ref().ok_or_else(|| {
+                    EngineError::Internal(
+                        "state-anchor trust-head inspection requires installed target pins"
+                            .to_string(),
+                    )
+                })?;
+                validate_state_anchor_trust_journal_stable_pins(
+                    journal,
+                    target_configuration,
+                    &identity.fingerprint,
+                )?;
+                Some(
+                    journal
+                        .head()
+                        .expect("stable-pin validation requires a head")
+                        .to
+                        .anchor_configuration()?,
+                )
+            }
+            StateFileLockAcquireMode::TrustTransition(transition) => {
+                if trust_journal
+                    .as_ref()
+                    .is_some_and(|journal| !journal.pending.is_empty())
+                {
+                    return Err(EngineError::Internal(
+                        "state-anchor trust PREPARE records exist without a durable intent"
+                            .to_string(),
+                    ));
+                }
+                if let Some(head) = trust_journal
+                    .as_ref()
+                    .and_then(StateAnchorTrustJournalModel::head)
+                {
+                    Some(head.to.anchor_configuration()?)
+                } else if let Some(from) = transition
+                    .certificates
+                    .first()
+                    .and_then(|certificate| certificate.from.as_ref())
+                {
+                    Some(from.anchor_configuration()?)
+                } else {
+                    configured_anchor.clone()
+                }
+            }
+        };
+        let certified_floors = trust_journal
+            .as_ref()
+            .map(StateAnchorTrustJournalModel::certified_floors)
+            .unwrap_or_default();
+        let (mut anchor_file, mut anchor_identity, mut anchor_metadata, mut anchor_bytes) =
+            open_state_anchor(
+                &directory,
+                &anchor_name,
+                &identity.fingerprint,
+                anchor_configuration.as_ref(),
+                &certified_floors,
+            )?;
+
         let promote_pending_anchor = recover_state_witness_rotation(
             &directory,
             StateWitnessRotationNames {
@@ -472,6 +1105,8 @@ impl StateFileLock {
             current_state_file.as_ref(),
             anchor_metadata.as_ref(),
             witness_max_records,
+            true,
+            None,
         )?;
         if promote_pending_anchor {
             let current = anchor_metadata.as_ref().ok_or_else(|| {
@@ -496,7 +1131,12 @@ impl StateFileLock {
                         .to_string(),
                 )
             })?;
-            parse_state_anchor_metadata(&bytes, &identity.fingerprint, configuration)?;
+            parse_state_anchor_metadata(
+                &bytes,
+                &identity.fingerprint,
+                configuration,
+                &certified_floors,
+            )?;
             let (file, entry_identity) =
                 replace_state_anchor_entry(&directory, &anchor_name, &bytes)?;
             anchor_file = Some(file);
@@ -512,6 +1152,33 @@ impl StateFileLock {
             witness_max_records,
             anchor_metadata.as_ref(),
         )?;
+        if let Some(head) = trust_journal
+            .as_ref()
+            .and_then(StateAnchorTrustJournalModel::head)
+        {
+            let anchor = anchor_metadata.as_ref().ok_or_else(|| {
+                EngineError::Internal(
+                    "committed state-anchor trust head requires persisted anchor metadata"
+                        .to_string(),
+                )
+            })?;
+            if opened_witness.parsed.segment_header.is_none() {
+                return Err(EngineError::Internal(
+                    "committed state-anchor trust head requires an authenticated witness segment"
+                        .to_string(),
+                ));
+            }
+            validate_state_anchor_trust_reference_descendant(
+                &head.to.reference,
+                &StateAnchorTrustReferenceModel::from_acknowledgement(&anchor.latest),
+                "persisted state-anchor reference",
+            )
+            .map_err(|error| {
+                EngineError::Internal(format!(
+                    "persisted state anchor exceeds its certified restart window: {error}"
+                ))
+            })?;
+        }
         // Persist a newly-created witness entry before exposing either the
         // static identity or dynamic state tip.
         directory.sync_all().map_err(|error| {
@@ -533,6 +1200,19 @@ impl StateFileLock {
             lock_identity,
             store_id_file,
             store_id_identity,
+            trust_name,
+            trust_file,
+            trust_identity,
+            trust_journal,
+            trust_stamp,
+            trust_bytes,
+            trust_intent_name,
+            trust_head_inspection: matches!(
+                &mode,
+                StateFileLockAcquireMode::TrustHeadInspection
+                    | StateFileLockAcquireMode::TrustTransition(_)
+            ),
+            anchor_configuration: anchor_configuration.clone(),
             anchor_name,
             anchor_file,
             anchor_identity,
@@ -564,7 +1244,35 @@ impl StateFileLock {
         // image and apply the explicit corruption policy. Validate every held
         // descriptor and the journal itself here; the state-image commitment
         // is checked before a decoded state is admitted.
-        store.revalidate_store_entries()?;
+        match mode {
+            StateFileLockAcquireMode::Ordinary | StateFileLockAcquireMode::TrustHeadInspection => {
+                store.revalidate_store_entries()?
+            }
+            StateFileLockAcquireMode::BootstrapFactsProvisioning => {
+                store.revalidate_store_entries()?;
+                store.validate_bootstrap_facts_pristine()?;
+            }
+            StateFileLockAcquireMode::TrustTransition(_) => {
+                store.settle_pending_state_witness_rotation_inner(false)?;
+                if store.pending_witness.is_some() {
+                    return Err(EngineError::Internal(
+                        "cannot transition state-anchor trust while a state transaction is pending"
+                            .to_string(),
+                    ));
+                }
+                let current_digest = current_state_image_digest(store.current_state_file.as_ref())?;
+                if store
+                    .witness_history
+                    .last()
+                    .is_none_or(|tip| tip.state_image_digest != current_digest)
+                {
+                    return Err(EngineError::Internal(
+                        "state image does not match its witness before trust transition"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
         Ok(store)
     }
 
@@ -574,6 +1282,26 @@ impl StateFileLock {
             "descriptor-bound durable signer storage is unavailable on this platform for [{}]",
             state_path.display()
         )))
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn acquire_for_trust_transition(
+        state_path: &Path,
+        _transition: &VerifiedStateAnchorTrustTransition,
+    ) -> Result<Self, EngineError> {
+        Self::acquire(state_path)
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn acquire_for_trust_head_inspection(
+        state_path: &Path,
+    ) -> Result<Self, EngineError> {
+        Self::acquire(state_path)
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn acquire_for_bootstrap_facts(state_path: &Path) -> Result<Self, EngineError> {
+        Self::acquire(state_path)
     }
 
     pub(crate) fn identity(&mut self) -> Result<DurableStoreIdentity, EngineError> {
@@ -847,6 +1575,85 @@ impl StateFileLock {
         }
 
         match (
+            self.trust_identity,
+            self.trust_file.as_ref(),
+            self.trust_journal.as_ref(),
+            self.trust_stamp,
+            self.trust_bytes.as_ref(),
+        ) {
+            (
+                Some(identity),
+                Some(file),
+                Some(journal),
+                Some(expected_stamp),
+                Some(expected_bytes),
+            ) => {
+                validate_live_entry(
+                    &self.directory,
+                    &self.trust_name,
+                    identity,
+                    "state-anchor trust journal",
+                )?;
+                validate_secure_regular_file(file, "state-anchor trust journal")?;
+                if file_change_stamp(file, "state-anchor trust journal")? != expected_stamp {
+                    return Err(EngineError::Internal(
+                        "state-anchor trust journal changed after startup verification".to_string(),
+                    ));
+                }
+                if usize::try_from(
+                    file.metadata()
+                        .map_err(|error| {
+                            EngineError::Internal(format!(
+                                "failed to stat state-anchor trust journal: {error}"
+                            ))
+                        })?
+                        .len(),
+                )
+                .ok()
+                    != Some(expected_bytes.len())
+                {
+                    return Err(EngineError::Internal(
+                        "state-anchor trust journal length changed after startup verification"
+                            .to_string(),
+                    ));
+                }
+                let configuration = configured_state_anchor()?.ok_or_else(|| {
+                    EngineError::Internal(
+                        "state-anchor trust journal requires configured anchor pins".to_string(),
+                    )
+                })?;
+                if self.trust_head_inspection {
+                    validate_state_anchor_trust_journal_stable_pins(
+                        journal,
+                        &configuration,
+                        &self.identity.fingerprint,
+                    )?;
+                } else {
+                    validate_state_anchor_trust_journal_head(
+                        journal,
+                        &configuration,
+                        &self.identity.fingerprint,
+                    )?;
+                }
+            }
+            (None, None, None, None, None) => ensure_entry_absent(
+                self.directory.as_raw_fd(),
+                &self.trust_name,
+                "state-anchor trust journal",
+            )?,
+            _ => {
+                return Err(EngineError::Internal(
+                    "state-anchor trust journal descriptor invariant is inconsistent".to_string(),
+                ))
+            }
+        }
+        ensure_entry_absent(
+            self.directory.as_raw_fd(),
+            &self.trust_intent_name,
+            "state-anchor trust transition intent",
+        )?;
+
+        match (
             self.anchor_identity,
             self.anchor_file.as_ref(),
             self.anchor_metadata.as_ref(),
@@ -866,7 +1673,7 @@ impl StateFileLock {
                         "signer state anchor metadata changed outside the locked store".to_string(),
                     ));
                 }
-                let configuration = configured_state_anchor()?.ok_or_else(|| {
+                let configuration = self.anchor_configuration.as_ref().ok_or_else(|| {
                     EngineError::Internal(
                         "persisted signer state anchor metadata requires manifest pins".to_string(),
                     )
@@ -874,7 +1681,12 @@ impl StateFileLock {
                 let parsed = parse_state_anchor_metadata(
                     &live_bytes,
                     &self.identity.fingerprint,
-                    &configuration,
+                    configuration,
+                    &self
+                        .trust_journal
+                        .as_ref()
+                        .map(StateAnchorTrustJournalModel::certified_floors)
+                        .unwrap_or_default(),
                 )?;
                 if &parsed != metadata {
                     return Err(EngineError::Internal(
@@ -882,12 +1694,41 @@ impl StateFileLock {
                             .to_string(),
                     ));
                 }
+                if let Some(head) = self
+                    .trust_journal
+                    .as_ref()
+                    .and_then(StateAnchorTrustJournalModel::head)
+                {
+                    validate_state_anchor_trust_reference_descendant(
+                        &head.to.reference,
+                        &StateAnchorTrustReferenceModel::from_acknowledgement(&parsed.latest),
+                        "persisted state-anchor reference",
+                    )
+                    .map_err(|error| {
+                        EngineError::Internal(format!(
+                            "persisted state anchor exceeds its certified restart window: {error}"
+                        ))
+                    })?;
+                }
             }
-            (None, None, None, None) => ensure_entry_absent(
-                self.directory.as_raw_fd(),
-                &self.anchor_name,
-                "signer state anchor metadata",
-            )?,
+            (None, None, None, None) => {
+                if self
+                    .trust_journal
+                    .as_ref()
+                    .and_then(StateAnchorTrustJournalModel::head)
+                    .is_some()
+                {
+                    return Err(EngineError::Internal(
+                        "committed state-anchor trust head requires persisted anchor metadata"
+                            .to_string(),
+                    ));
+                }
+                ensure_entry_absent(
+                    self.directory.as_raw_fd(),
+                    &self.anchor_name,
+                    "signer state anchor metadata",
+                )?
+            }
             _ => {
                 return Err(EngineError::Internal(
                     "signer state anchor descriptor invariant is inconsistent".to_string(),
@@ -937,7 +1778,20 @@ impl StateFileLock {
             "signer state witness journal",
         )?;
         validate_secure_regular_file(&self.witness_file, "signer state witness journal")?;
-        self.verify_state_witness_journal()
+        self.verify_state_witness_journal()?;
+        if self
+            .trust_journal
+            .as_ref()
+            .and_then(StateAnchorTrustJournalModel::head)
+            .is_some()
+            && self.witness_segment_header.is_none()
+        {
+            return Err(EngineError::Internal(
+                "committed state-anchor trust head requires an authenticated witness segment"
+                    .to_string(),
+            ));
+        }
+        Ok(())
     }
 
     /// Verifies the journal against the in-memory history.
@@ -1018,6 +1872,15 @@ impl StateFileLock {
 
     #[cfg(unix)]
     fn verify_state_witness_journal_fully(&mut self) -> Result<(), EngineError> {
+        let anchor = self.anchor_metadata.clone();
+        self.verify_state_witness_journal_fully_with_anchor(anchor.as_ref())
+    }
+
+    #[cfg(unix)]
+    fn verify_state_witness_journal_fully_with_anchor(
+        &mut self,
+        validation_anchor: Option<&StateAnchorMetadata>,
+    ) -> Result<(), EngineError> {
         #[cfg(test)]
         WITNESS_FULL_VERIFICATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
@@ -1027,7 +1890,7 @@ impl StateFileLock {
             &self.identity.store_id,
             &self.identity.fingerprint,
             self.witness_max_records,
-            self.anchor_metadata.as_ref(),
+            validation_anchor,
         )?;
         if parsed.length != self.witness_length
             || parsed.header_length != self.witness_header_length
@@ -1227,6 +2090,743 @@ impl StateFileLock {
         })
     }
 
+    pub(crate) fn state_anchor_trust_head_snapshot(
+        &mut self,
+    ) -> Result<StateAnchorTrustTransitionStoreOutcome, EngineError> {
+        self.reconcile_pending_witness()?;
+        self.revalidate()?;
+        self.normalize_published_pending_anchor()?;
+        self.state_anchor_trust_transition_outcome(true, 0)
+    }
+
+    pub(crate) fn state_anchor_bootstrap_facts_snapshot(
+        &mut self,
+    ) -> Result<([u8; 32], StateWitness), EngineError> {
+        self.revalidate()?;
+        self.validate_bootstrap_facts_pristine()?;
+        let tip = self.witness_history.last().cloned().ok_or_else(|| {
+            EngineError::Internal(
+                "bootstrap provisioning witness has no committed genesis".to_string(),
+            )
+        })?;
+        Ok((self.identity.fingerprint, tip))
+    }
+
+    fn validate_bootstrap_facts_pristine(&self) -> Result<(), EngineError> {
+        let exact_genesis_length =
+            TBTC_SIGNER_STATE_WITNESS_HEADER_LENGTH + 2 * TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH;
+        let pristine = self.trust_journal.is_none()
+            && self.trust_bytes.is_none()
+            && self.anchor_metadata.is_none()
+            && self.anchor_bytes.is_none()
+            && self.witness_segment_header.is_none()
+            && self.pending_witness.is_none()
+            && self.current_state_file.is_none()
+            && self.current_state_identity.is_none()
+            && self.witness_history.len() == 1
+            && self.witness_history[0].generation == 1
+            && self.witness_length == exact_genesis_length;
+        if !pristine {
+            return Err(EngineError::Validation(
+                "state-anchor bootstrap facts require a pristine genesis-only store".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn transition_state_witness_anchor(
+        &mut self,
+        transition: &VerifiedStateAnchorTrustTransition,
+    ) -> Result<StateAnchorTrustTransitionStoreOutcome, EngineError> {
+        // In transition mode the rotating endpoint may still be the prior
+        // head, but immutable trust pins and every live descriptor must be
+        // revalidated before the first durable mutation.
+        self.revalidate()?;
+        let idempotent = self.validate_state_anchor_trust_transition_local(transition)?;
+        recheck_state_anchor_admission_expiry(transition.target_read_expires_at_unix_ms)?;
+        if idempotent {
+            // Trust-transition acquisition deliberately permits the prior head
+            // while selecting a missing suffix. An exact replay is already at
+            // the installed target, so it must perform the full steady-state
+            // descriptor and state-image validation before returning claims
+            // from held descriptors.
+            self.trust_head_inspection = false;
+            self.revalidate()?;
+            self.normalize_published_pending_anchor()?;
+            return self.state_anchor_trust_transition_outcome(true, 0);
+        }
+
+        let journal_growth = self.state_anchor_trust_transition_journal_growth(transition)?;
+        self.ensure_state_anchor_trust_transition_journal_capacity(journal_growth)?;
+        let intent_bytes = encode_state_anchor_trust_transition_intent(
+            &self.identity.fingerprint,
+            &transition.request,
+        )?;
+        self.revalidate_trust_transition_mutation_guard()?;
+        self.create_state_anchor_trust_transition_intent(
+            &intent_bytes,
+            transition.target_read_expires_at_unix_ms,
+            journal_growth,
+        )?;
+        #[cfg(test)]
+        maybe_inject_state_anchor_trust_transition_fault(
+            StateAnchorTrustTransitionFaultInjectionPoint::AfterIntentPublication,
+        )?;
+        self.revalidate_state_anchor_trust_intent(&intent_bytes)?;
+
+        self.ensure_state_anchor_trust_journal()?;
+        for certificate in &transition.certificates {
+            self.revalidate_state_anchor_trust_intent(&intent_bytes)?;
+            self.revalidate_trust_transition_mutation_guard()?;
+            let previous = self
+                .trust_journal
+                .as_ref()
+                .ok_or_else(|| {
+                    EngineError::Internal(
+                        "state-anchor trust journal disappeared during PREPARE".to_string(),
+                    )
+                })?
+                .last_record_commitment;
+            let record = encode_state_anchor_trust_prepare_record(
+                &self.identity.fingerprint,
+                &previous,
+                certificate,
+            )?;
+            self.publish_state_anchor_trust_journal_record(&record)?;
+        }
+        #[cfg(test)]
+        maybe_inject_state_anchor_trust_transition_fault(
+            StateAnchorTrustTransitionFaultInjectionPoint::AfterPrepareBatch,
+        )?;
+
+        let final_certificate = transition
+            .certificates
+            .last()
+            .expect("verified transition chain is nonempty");
+        let target_acknowledgement = final_certificate.target_acknowledgement.clone();
+        let target_anchor = StateAnchorMetadata {
+            latest: target_acknowledgement.clone(),
+            witness_base: Some(target_acknowledgement.clone()),
+            pending_witness_base: None,
+        };
+        self.revalidate_state_anchor_trust_intent(&intent_bytes)?;
+        self.revalidate_trust_transition_mutation_guard()?;
+        self.rotate_state_witness_segment_for_trust_transition(
+            &target_acknowledgement,
+            &target_anchor,
+        )?;
+
+        self.anchor_configuration = Some(final_certificate.to.anchor_configuration()?);
+        self.revalidate_state_anchor_trust_intent(&intent_bytes)?;
+        self.revalidate_trust_transition_mutation_guard()?;
+        self.persist_state_anchor_metadata(target_anchor)?;
+        #[cfg(test)]
+        maybe_inject_state_anchor_trust_transition_fault(
+            StateAnchorTrustTransitionFaultInjectionPoint::AfterTargetAnchorPublication,
+        )?;
+
+        for certificate in &transition.certificates {
+            self.revalidate_state_anchor_trust_intent(&intent_bytes)?;
+            self.revalidate_trust_transition_mutation_guard()?;
+            let previous = self
+                .trust_journal
+                .as_ref()
+                .ok_or_else(|| {
+                    EngineError::Internal(
+                        "state-anchor trust journal disappeared before COMMIT".to_string(),
+                    )
+                })?
+                .last_record_commitment;
+            let record = encode_state_anchor_trust_commit_record(
+                &self.identity.fingerprint,
+                &previous,
+                certificate,
+            )?;
+            self.publish_state_anchor_trust_journal_record(&record)?;
+            #[cfg(test)]
+            maybe_inject_state_anchor_trust_transition_fault(
+                StateAnchorTrustTransitionFaultInjectionPoint::AfterCommitPublication,
+            )?;
+        }
+
+        let configured = configured_state_anchor()?.ok_or_else(|| {
+            EngineError::Internal(
+                "state-anchor config disappeared during trust transition".to_string(),
+            )
+        })?;
+        validate_state_anchor_trust_journal_head(
+            self.trust_journal.as_ref().ok_or_else(|| {
+                EngineError::Internal(
+                    "state-anchor trust journal is absent after COMMIT".to_string(),
+                )
+            })?,
+            &configured,
+            &self.identity.fingerprint,
+        )?;
+
+        self.revalidate_state_anchor_trust_intent(&intent_bytes)?;
+        self.revalidate_trust_transition_mutation_guard()?;
+        unlinkat_entry(self.directory.as_raw_fd(), &self.witness_previous_name)?;
+        self.directory.sync_all().map_err(|error| {
+            EngineError::Internal(format!(
+                "failed to sync trust transition after retiring previous witness: {error}"
+            ))
+        })?;
+        #[cfg(test)]
+        maybe_inject_state_anchor_trust_transition_fault(
+            StateAnchorTrustTransitionFaultInjectionPoint::AfterPreviousWitnessRetirement,
+        )?;
+        self.revalidate_trust_transition_mutation_guard()?;
+        unlinkat_entry(self.directory.as_raw_fd(), &self.trust_intent_name)?;
+        self.directory.sync_all().map_err(|error| {
+            EngineError::Internal(format!(
+                "failed to sync trust transition intent removal: {error}"
+            ))
+        })?;
+        self.state_anchor_trust_mutation_guard().revalidate()?;
+
+        self.trust_head_inspection = false;
+        self.revalidate_store_entries()?;
+        self.state_anchor_trust_transition_outcome(false, transition.certificates.len())
+    }
+
+    #[cfg(unix)]
+    fn validate_state_anchor_trust_transition_local(
+        &self,
+        transition: &VerifiedStateAnchorTrustTransition,
+    ) -> Result<bool, EngineError> {
+        let first = transition
+            .certificates
+            .first()
+            .expect("verified transition chain is nonempty");
+        let final_certificate = transition
+            .certificates
+            .last()
+            .expect("verified transition chain is nonempty");
+        if transition.certificates.iter().any(|certificate| {
+            certificate.signer_store_fingerprint != self.identity.fingerprint
+                || certificate.to.reference.checkpoint.store_fingerprint
+                    != self.identity.fingerprint
+        }) {
+            return Err(EngineError::Validation(
+                "state-anchor trust certificate targets a different durable signer store"
+                    .to_string(),
+            ));
+        }
+        let tip = self.witness_history.last().ok_or_else(|| {
+            EngineError::Internal("state witness has no committed tip".to_string())
+        })?;
+        let local_checkpoint =
+            StateAnchorTrustCheckpointModel::from_witness(self.identity.fingerprint, tip);
+
+        if let Some(head) = self
+            .trust_journal
+            .as_ref()
+            .and_then(StateAnchorTrustJournalModel::head)
+        {
+            if first.certificate_sequence == head.certificate_sequence {
+                let local_anchor = self.anchor_metadata.as_ref().ok_or_else(|| {
+                    EngineError::Internal(
+                        "state-anchor trust head exists without local anchor metadata".to_string(),
+                    )
+                })?;
+                if transition.certificates.len() != 1
+                    || first.certificate_digest != head.certificate_digest
+                    || first.wire != head.wire
+                    || StateAnchorTrustReferenceModel::from_acknowledgement(&local_anchor.latest)
+                        != StateAnchorTrustReferenceModel::from_acknowledgement(
+                            &transition.target_read_acknowledgement,
+                        )
+                {
+                    return Err(EngineError::Validation(
+                        "completed trust transition accepts only a one-certificate exact replay \
+                         plus a fresh Read of the current local descendant"
+                            .to_string(),
+                    ));
+                }
+                let local_reference =
+                    StateAnchorTrustReferenceModel::from_acknowledgement(&local_anchor.latest);
+                validate_state_anchor_trust_reference_descendant(
+                    &head.to.reference,
+                    &local_reference,
+                    "completed trust transition local anchor",
+                )?;
+                if local_reference.checkpoint != local_checkpoint {
+                    return Err(EngineError::Validation(
+                        "completed trust transition replay requires the current signed anchor \
+                         checkpoint to exactly match the local witness tip"
+                            .to_string(),
+                    ));
+                }
+                return Ok(true);
+            }
+            let expected_sequence = head.certificate_sequence.checked_add(1).ok_or_else(|| {
+                EngineError::Validation(
+                    "state-anchor trust certificate sequence overflows u64".to_string(),
+                )
+            })?;
+            let local_anchor = self.anchor_metadata.as_ref().ok_or_else(|| {
+                EngineError::Internal(
+                    "state-anchor trust head exists without local anchor metadata".to_string(),
+                )
+            })?;
+            let local_reference =
+                StateAnchorTrustReferenceModel::from_acknowledgement(&local_anchor.latest);
+            validate_state_anchor_trust_reference_descendant(
+                &head.to.reference,
+                &local_reference,
+                "persisted local anchor",
+            )?;
+            let mut expected_from = head.to.clone();
+            expected_from.reference = local_reference;
+            if first.certificate_sequence != expected_sequence
+                || first.previous_certificate_digest != head.certificate_digest
+                || first.from.as_ref() != Some(&expected_from)
+            {
+                return Err(EngineError::Validation(
+                    "first missing trust certificate does not extend the exact local trust and \
+                     anchor head"
+                        .to_string(),
+                ));
+            }
+        } else if let Some(local_anchor) = self.anchor_metadata.as_ref() {
+            let from = first.from.as_ref().ok_or_else(|| {
+                EngineError::Validation(
+                    "legacy anchored adoption requires a rotation certificate".to_string(),
+                )
+            })?;
+            if first.kind != StateAnchorTrustCertificateKind::Rotation
+                || first.certificate_sequence != 1
+                || first.previous_certificate_digest != [0u8; 32]
+                || from.binding_hash != local_anchor.latest.binding_hash
+                || from.response_public_key
+                    != self
+                        .anchor_configuration
+                        .as_ref()
+                        .map(|configuration| configuration.response_public_key)
+                        .unwrap_or([0u8; 32])
+                || !from.reference.matches_acknowledgement(&local_anchor.latest)
+            {
+                return Err(EngineError::Validation(
+                    "legacy adoption certificate does not exactly authenticate the persisted \
+                     anchor"
+                        .to_string(),
+                ));
+            }
+        } else if first.kind != StateAnchorTrustCertificateKind::Bootstrap
+            || first.certificate_sequence != 1
+            || self.witness_segment_header.is_some()
+        {
+            return Err(EngineError::Validation(
+                "unanchored store requires a sequence-1 bootstrap certificate and clean \
+                 unsegmented witness"
+                    .to_string(),
+            ));
+        }
+
+        if final_certificate.to.reference.checkpoint != local_checkpoint {
+            return Err(EngineError::Validation(
+                "final trust certificate checkpoint does not exactly match the local witness tip"
+                    .to_string(),
+            ));
+        }
+        for certificate in &transition.certificates {
+            if let Some(from) = certificate.from.as_ref() {
+                self.validate_trust_checkpoint_against_retained_witness(
+                    &from.reference.checkpoint,
+                    "certificate from.reference checkpoint",
+                )?;
+            }
+            self.validate_trust_checkpoint_against_retained_witness(
+                &certificate.to.reference.checkpoint,
+                "certificate to.reference checkpoint",
+            )?;
+        }
+        if transition.target_read_acknowledgement_bytes
+            != final_certificate.target_acknowledgement_bytes
+            || transition.target_read_acknowledgement != final_certificate.target_acknowledgement
+        {
+            return Err(EngineError::Validation(
+                "fresh final Read does not contain the exact final certificate acknowledgement"
+                    .to_string(),
+            ));
+        }
+        Ok(false)
+    }
+
+    fn validate_trust_checkpoint_against_retained_witness(
+        &self,
+        checkpoint: &StateAnchorTrustCheckpointModel,
+        label: &str,
+    ) -> Result<(), EngineError> {
+        if checkpoint.store_fingerprint != self.identity.fingerprint {
+            return Err(EngineError::Validation(format!(
+                "{label} targets a different durable signer store"
+            )));
+        }
+        let base = self.witness_history.first().ok_or_else(|| {
+            EngineError::Internal(
+                "state witness has no retained base during trust transition".to_string(),
+            )
+        })?;
+        let tip = self.witness_history.last().ok_or_else(|| {
+            EngineError::Internal(
+                "state witness has no committed tip during trust transition".to_string(),
+            )
+        })?;
+        if checkpoint.generation > tip.generation {
+            return Err(EngineError::Validation(format!(
+                "{label} is ahead of the local witness tip"
+            )));
+        }
+        if checkpoint.generation < base.generation {
+            // The offline authority authenticates this historical checkpoint;
+            // a compacted local segment cannot prove data older than its signed
+            // retained base.
+            return Ok(());
+        }
+        let index = usize::try_from(checkpoint.generation - base.generation).map_err(|_| {
+            EngineError::Validation(format!("{label} index does not fit this platform"))
+        })?;
+        let witness = self.witness_history.get(index).ok_or_else(|| {
+            EngineError::Validation(format!("{label} is missing from retained witness history"))
+        })?;
+        if StateAnchorTrustCheckpointModel::from_witness(self.identity.fingerprint, witness)
+            != *checkpoint
+        {
+            return Err(EngineError::Validation(format!(
+                "{label} disagrees with retained witness history"
+            )));
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn state_anchor_trust_transition_outcome(
+        &self,
+        idempotent: bool,
+        applied_certificate_count: usize,
+    ) -> Result<StateAnchorTrustTransitionStoreOutcome, EngineError> {
+        let trust_head = self
+            .trust_journal
+            .as_ref()
+            .and_then(StateAnchorTrustJournalModel::head)
+            .cloned()
+            .ok_or_else(|| {
+                EngineError::Internal(
+                    "state-anchor trust transition completed without a trust head".to_string(),
+                )
+            })?;
+        let tip = self.witness_history.last().cloned().ok_or_else(|| {
+            EngineError::Internal("state witness has no committed tip".to_string())
+        })?;
+        let base = self.witness_history.first().cloned().ok_or_else(|| {
+            EngineError::Internal("state witness has no retained base".to_string())
+        })?;
+        let anchor = self.anchor_metadata.clone().ok_or_else(|| {
+            EngineError::Internal(
+                "state-anchor trust transition completed without anchor metadata".to_string(),
+            )
+        })?;
+        Ok(StateAnchorTrustTransitionStoreOutcome {
+            idempotent,
+            applied_certificate_count,
+            trust_head,
+            tip,
+            base,
+            anchor,
+        })
+    }
+
+    #[cfg(unix)]
+    fn ensure_state_anchor_trust_journal(&mut self) -> Result<(), EngineError> {
+        if self.trust_journal.is_some() {
+            return Ok(());
+        }
+        let bytes = encode_state_anchor_trust_journal_header(&self.identity.fingerprint);
+        self.publish_state_anchor_trust_journal(&bytes)
+    }
+
+    #[cfg(unix)]
+    fn publish_state_anchor_trust_journal_record(
+        &mut self,
+        record: &[u8],
+    ) -> Result<(), EngineError> {
+        let mut bytes = self.trust_bytes.clone().ok_or_else(|| {
+            EngineError::Internal(
+                "state-anchor trust journal bytes are unavailable during transition".to_string(),
+            )
+        })?;
+        if bytes
+            .len()
+            .checked_add(record.len())
+            .is_none_or(|length| length > STATE_ANCHOR_TRUST_MAX_JOURNAL_LENGTH)
+        {
+            return Err(EngineError::Validation(
+                "state-anchor trust journal reached its durable size bound".to_string(),
+            ));
+        }
+        bytes.extend_from_slice(record);
+        self.publish_state_anchor_trust_journal(&bytes)
+    }
+
+    #[cfg(unix)]
+    fn publish_state_anchor_trust_journal(&mut self, bytes: &[u8]) -> Result<(), EngineError> {
+        let parsed = parse_state_anchor_trust_journal(bytes, &self.identity.fingerprint)?;
+        let (file, identity) = if self.trust_head_inspection {
+            let guard = self.state_anchor_trust_mutation_guard();
+            replace_durable_entry_with_guard(
+                &self.directory,
+                &self.trust_name,
+                bytes,
+                "state-anchor trust journal",
+                Some(&guard),
+            )?
+        } else {
+            replace_durable_entry(
+                &self.directory,
+                &self.trust_name,
+                bytes,
+                "state-anchor trust journal",
+            )?
+        };
+        let stamp = file_change_stamp(&file, "state-anchor trust journal")?;
+        self.trust_file = Some(file);
+        self.trust_identity = Some(identity);
+        self.trust_journal = Some(parsed);
+        self.trust_stamp = Some(stamp);
+        self.trust_bytes = Some(bytes.to_vec());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn revalidate_state_anchor_trust_intent(
+        &self,
+        expected_bytes: &[u8],
+    ) -> Result<(), EngineError> {
+        let file = openat_optional(
+            self.directory.as_raw_fd(),
+            &self.trust_intent_name,
+            libc::O_RDONLY,
+            "state-anchor trust transition intent",
+        )?
+        .ok_or_else(|| {
+            EngineError::Internal(
+                "state-anchor trust transition intent disappeared during mutation".to_string(),
+            )
+        })?;
+        validate_secure_regular_file(&file, "state-anchor trust transition intent")?;
+        let length = usize::try_from(
+            file.metadata()
+                .map_err(|error| {
+                    EngineError::Internal(format!(
+                        "failed to stat state-anchor trust transition intent: {error}"
+                    ))
+                })?
+                .len(),
+        )
+        .map_err(|_| {
+            EngineError::Internal(
+                "state-anchor trust transition intent length does not fit this platform"
+                    .to_string(),
+            )
+        })?;
+        if length > STATE_ANCHOR_TRUST_MAX_INTENT_LENGTH {
+            return Err(EngineError::Internal(
+                "state-anchor trust transition intent exceeds its durable bound".to_string(),
+            ));
+        }
+        let live_bytes = read_file_at(&file, "state-anchor trust transition intent")?;
+        if live_bytes != expected_bytes {
+            return Err(EngineError::Internal(
+                "state-anchor trust transition intent changed during mutation".to_string(),
+            ));
+        }
+        parse_state_anchor_trust_transition_intent(&live_bytes, &self.identity.fingerprint)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn state_anchor_trust_transition_journal_growth(
+        &self,
+        transition: &VerifiedStateAnchorTrustTransition,
+    ) -> Result<usize, EngineError> {
+        let mut growth = if self.trust_bytes.is_none() {
+            STATE_ANCHOR_TRUST_JOURNAL_HEADER_LENGTH
+        } else {
+            0
+        };
+        for certificate in &transition.certificates {
+            let prepare = encode_state_anchor_trust_prepare_record(
+                &self.identity.fingerprint,
+                &[0u8; 32],
+                certificate,
+            )?;
+            let commit = encode_state_anchor_trust_commit_record(
+                &self.identity.fingerprint,
+                &[0u8; 32],
+                certificate,
+            )?;
+            growth = growth
+                .checked_add(prepare.len())
+                .and_then(|length| length.checked_add(commit.len()))
+                .ok_or_else(|| {
+                    EngineError::Validation(
+                        "state-anchor trust journal batch length overflows this platform"
+                            .to_string(),
+                    )
+                })?;
+        }
+        Ok(growth)
+    }
+
+    #[cfg(unix)]
+    fn ensure_state_anchor_trust_transition_journal_capacity(
+        &self,
+        journal_growth: usize,
+    ) -> Result<(), EngineError> {
+        let current_length = match (&self.trust_journal, &self.trust_bytes) {
+            (Some(_), Some(bytes)) => bytes.len(),
+            (None, None) => 0,
+            _ => {
+                return Err(EngineError::Internal(
+                    "state-anchor trust journal byte/model invariant is inconsistent".to_string(),
+                ))
+            }
+        };
+        ensure_state_anchor_trust_transition_journal_capacity_for_length(
+            current_length,
+            journal_growth,
+        )
+    }
+
+    #[cfg(unix)]
+    fn create_state_anchor_trust_transition_intent(
+        &mut self,
+        bytes: &[u8],
+        admission_expires_at_unix_ms: u64,
+        journal_growth: usize,
+    ) -> Result<(), EngineError> {
+        const LABEL: &str = "state-anchor trust transition intent";
+        let temp_name = unique_temp_name(&self.trust_intent_name)?;
+        let temp_file = openat_regular(
+            self.directory.as_raw_fd(),
+            &temp_name,
+            libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+            0o600,
+            LABEL,
+        )?;
+        let outcome = (|| {
+            validate_owned_unlinked_regular(&temp_file, LABEL)?;
+            set_owner_only_permissions(&temp_file, LABEL)?;
+            validate_secure_regular_file(&temp_file, LABEL)?;
+            write_file_at(&temp_file, bytes, LABEL)?;
+            temp_file.sync_all().map_err(|error| {
+                EngineError::Internal(format!("failed to sync new {LABEL}: {error}"))
+            })?;
+
+            // Resolve absence before the final admission check because even
+            // fstatat can stall. The descriptor guard, capacity, and expiry
+            // checks must be the last operations before publication. The
+            // resulting intent is durable evidence only; resumed mutation
+            // still requires a newly verified fresh Read.
+            ensure_entry_absent(self.directory.as_raw_fd(), &self.trust_intent_name, LABEL)?;
+            self.revalidate()?;
+            self.ensure_state_anchor_trust_transition_journal_capacity(journal_growth)?;
+            recheck_state_anchor_admission_expiry(admission_expires_at_unix_ms)?;
+            renameat_same_directory(
+                self.directory.as_raw_fd(),
+                &temp_name,
+                &self.trust_intent_name,
+                LABEL,
+            )?;
+            self.directory.sync_all().map_err(|error| {
+                EngineError::Internal(format!(
+                    "failed to sync signer state directory after publishing {LABEL}: {error}"
+                ))
+            })?;
+            let identity = descriptor_identity(&temp_file, LABEL)?;
+            validate_live_entry(&self.directory, &self.trust_intent_name, identity, LABEL)?;
+            self.state_anchor_trust_mutation_guard().revalidate()
+        })();
+        if outcome.is_err() {
+            let _ = unlinkat_entry(self.directory.as_raw_fd(), &temp_name);
+        }
+        outcome
+    }
+
+    #[cfg(unix)]
+    fn state_anchor_trust_mutation_guard(&self) -> StateAnchorTrustRecoveryGuard<'_> {
+        StateAnchorTrustRecoveryGuard {
+            directory: &self.directory,
+            canonical_parent: &self.canonical_parent,
+            directory_identity: self.directory_identity,
+            lock_name: &self.lock_name,
+            lock_file: &self._file,
+            lock_identity: self.lock_identity,
+            store_id_name: &self.store_id_name,
+            store_id_file: &self.store_id_file,
+            store_id_identity: self.store_id_identity,
+            store_id: self.identity.store_id,
+            state_name: &self.state_name,
+            state_file: self.current_state_file.as_ref(),
+            state_identity: self.current_state_identity,
+        }
+    }
+
+    #[cfg(unix)]
+    fn revalidate_trust_transition_mutation_guard(&self) -> Result<(), EngineError> {
+        self.state_anchor_trust_mutation_guard().revalidate()?;
+        validate_live_entry(
+            &self.directory,
+            &self.witness_name,
+            self.witness_identity,
+            "signer state witness journal",
+        )?;
+        if let Some(identity) = self.current_state_identity {
+            validate_live_entry(
+                &self.directory,
+                &self.state_name,
+                identity,
+                "signer state file",
+            )?;
+        } else {
+            ensure_entry_absent(
+                self.directory.as_raw_fd(),
+                &self.state_name,
+                "signer state file",
+            )?;
+        }
+        match self.trust_identity {
+            Some(identity) => validate_live_entry(
+                &self.directory,
+                &self.trust_name,
+                identity,
+                "state-anchor trust journal",
+            )?,
+            None => ensure_entry_absent(
+                self.directory.as_raw_fd(),
+                &self.trust_name,
+                "state-anchor trust journal",
+            )?,
+        }
+        match self.anchor_identity {
+            Some(identity) => validate_live_entry(
+                &self.directory,
+                &self.anchor_name,
+                identity,
+                "signer state anchor metadata",
+            )?,
+            None => ensure_entry_absent(
+                self.directory.as_raw_fd(),
+                &self.anchor_name,
+                "signer state anchor metadata",
+            )?,
+        }
+        Ok(())
+    }
+
     #[cfg(unix)]
     pub(crate) fn acknowledge_state_witness_checkpoint(
         &mut self,
@@ -1267,6 +2867,17 @@ impl StateFileLock {
             &acknowledgement,
             allow_unanchored_recovery,
         )?;
+        if let Some(head) = self
+            .trust_journal
+            .as_ref()
+            .and_then(StateAnchorTrustJournalModel::head)
+        {
+            validate_state_anchor_trust_reference_descendant(
+                &head.to.reference,
+                &StateAnchorTrustReferenceModel::from_acknowledgement(&acknowledgement),
+                "state-anchor acknowledgement",
+            )?;
+        }
 
         // A failed state transaction appends PREPARE+ABORT without advancing
         // the tip. Once that reaches the threshold, an exact replay of the
@@ -1330,21 +2941,39 @@ impl StateFileLock {
         &mut self,
         metadata: StateAnchorMetadata,
     ) -> Result<(), EngineError> {
-        let configuration = configured_state_anchor()?.ok_or_else(|| {
+        let configuration = self.anchor_configuration.as_ref().ok_or_else(|| {
             EngineError::Internal(
                 "cannot persist signer state anchor metadata without manifest pins".to_string(),
             )
         })?;
         let bytes = encode_state_anchor_metadata(&self.identity.fingerprint, &metadata);
-        let parsed =
-            parse_state_anchor_metadata(&bytes, &self.identity.fingerprint, &configuration)?;
+        let parsed = parse_state_anchor_metadata(
+            &bytes,
+            &self.identity.fingerprint,
+            configuration,
+            &self
+                .trust_journal
+                .as_ref()
+                .map(StateAnchorTrustJournalModel::certified_floors)
+                .unwrap_or_default(),
+        )?;
         if parsed != metadata {
             return Err(EngineError::Internal(
                 "new signer state anchor metadata failed canonical round-trip".to_string(),
             ));
         }
-        let (file, identity) =
-            replace_state_anchor_entry(&self.directory, &self.anchor_name, &bytes)?;
+        let (file, identity) = if self.trust_head_inspection {
+            let guard = self.state_anchor_trust_mutation_guard();
+            replace_durable_entry_with_guard(
+                &self.directory,
+                &self.anchor_name,
+                &bytes,
+                "signer state anchor metadata",
+                Some(&guard),
+            )?
+        } else {
+            replace_state_anchor_entry(&self.directory, &self.anchor_name, &bytes)?
+        };
         self.anchor_file = Some(file);
         self.anchor_identity = Some(identity);
         self.anchor_metadata = Some(metadata);
@@ -1383,6 +3012,14 @@ impl StateFileLock {
     /// rollback/output barrier.
     #[cfg(unix)]
     fn settle_pending_state_witness_rotation(&mut self) -> Result<(), EngineError> {
+        self.settle_pending_state_witness_rotation_inner(true)
+    }
+
+    #[cfg(unix)]
+    fn settle_pending_state_witness_rotation_inner(
+        &mut self,
+        revalidate_steady_store: bool,
+    ) -> Result<(), EngineError> {
         if self
             .anchor_metadata
             .as_ref()
@@ -1407,6 +3044,8 @@ impl StateFileLock {
             self.current_state_file.as_ref(),
             self.anchor_metadata.as_ref(),
             self.witness_max_records,
+            true,
+            None,
         )? {
             return Err(EngineError::Internal(
                 "pending state witness rotation did not produce a promoted base".to_string(),
@@ -1433,13 +3072,36 @@ impl StateFileLock {
         self.last_appended_record = [0u8; TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH];
         self.verify_state_witness_journal_fully()?;
         self.normalize_published_pending_anchor()?;
-        self.revalidate_store_entries()
+        if revalidate_steady_store {
+            self.revalidate_store_entries()?;
+        }
+        Ok(())
     }
 
     #[cfg(unix)]
     fn rotate_state_witness_segment(
         &mut self,
         acknowledgement: &StateAnchorAcknowledgement,
+    ) -> Result<(), EngineError> {
+        let validation_anchor = self.anchor_metadata.clone();
+        self.rotate_state_witness_segment_inner(acknowledgement, validation_anchor.as_ref(), true)
+    }
+
+    #[cfg(unix)]
+    fn rotate_state_witness_segment_for_trust_transition(
+        &mut self,
+        acknowledgement: &StateAnchorAcknowledgement,
+        target_anchor: &StateAnchorMetadata,
+    ) -> Result<(), EngineError> {
+        self.rotate_state_witness_segment_inner(acknowledgement, Some(target_anchor), false)
+    }
+
+    #[cfg(unix)]
+    fn rotate_state_witness_segment_inner(
+        &mut self,
+        acknowledgement: &StateAnchorAcknowledgement,
+        validation_anchor: Option<&StateAnchorMetadata>,
+        retire_previous: bool,
     ) -> Result<(), EngineError> {
         if self.pending_witness.is_some() {
             return Err(EngineError::Internal(
@@ -1471,18 +3133,29 @@ impl StateFileLock {
         )?;
         let bytes =
             encode_state_witness_segment_header(&self.identity.fingerprint, acknowledgement)?;
-        let (next_file, next_identity) = create_entry_atomically(
-            &self.directory,
-            &self.witness_next_name,
-            &bytes,
-            "next signer state witness journal",
-        )?;
+        let (next_file, next_identity) = if retire_previous {
+            create_entry_atomically(
+                &self.directory,
+                &self.witness_next_name,
+                &bytes,
+                "next signer state witness journal",
+            )?
+        } else {
+            let guard = self.state_anchor_trust_mutation_guard();
+            create_entry_atomically_with_guard(
+                &self.directory,
+                &self.witness_next_name,
+                &bytes,
+                "next signer state witness journal",
+                Some(&guard),
+            )?
+        };
         let parsed = read_state_witness_journal_streaming(
             &next_file,
             &self.identity.store_id,
             &self.identity.fingerprint,
             self.witness_max_records,
-            self.anchor_metadata.as_ref(),
+            validation_anchor,
         )?;
         if parsed.segment_header.is_none()
             || parsed.pending.is_some()
@@ -1493,6 +3166,12 @@ impl StateFileLock {
                 "new state witness segment failed pre-publication verification".to_string(),
             ));
         }
+        #[cfg(test)]
+        if !retire_previous {
+            maybe_inject_state_anchor_trust_transition_fault(
+                StateAnchorTrustTransitionFaultInjectionPoint::AfterNextWitnessPublication,
+            )?;
+        }
         let current_digest = current_state_image_digest(self.current_state_file.as_ref())?;
         if tip.state_image_digest != current_digest {
             let _ = unlinkat_entry(self.directory.as_raw_fd(), &self.witness_next_name);
@@ -1500,6 +3179,9 @@ impl StateFileLock {
                 "new state witness segment base does not commit the current state image"
                     .to_string(),
             ));
+        }
+        if !retire_previous {
+            self.state_anchor_trust_mutation_guard().revalidate()?;
         }
         if let Err(error) = renameat_same_directory(
             self.directory.as_raw_fd(),
@@ -1516,6 +3198,13 @@ impl StateFileLock {
                  segment: {error}"
             ))
         })?;
+        if !retire_previous {
+            self.state_anchor_trust_mutation_guard().revalidate()?;
+            #[cfg(test)]
+            maybe_inject_state_anchor_trust_transition_fault(
+                StateAnchorTrustTransitionFaultInjectionPoint::AfterPreviousWitnessPublication,
+            )?;
+        }
         renameat_same_directory(
             self.directory.as_raw_fd(),
             &self.witness_next_name,
@@ -1533,6 +3222,13 @@ impl StateFileLock {
             next_identity,
             "signer state witness journal",
         )?;
+        if !retire_previous {
+            self.state_anchor_trust_mutation_guard().revalidate()?;
+            #[cfg(test)]
+            maybe_inject_state_anchor_trust_transition_fault(
+                StateAnchorTrustTransitionFaultInjectionPoint::AfterCurrentWitnessPublication,
+            )?;
+        }
 
         self.witness_file = next_file;
         self.witness_identity = next_identity;
@@ -1547,7 +3243,7 @@ impl StateFileLock {
 
         // The new name and complete signed header are durable and verified.
         // Only now may the previous segment be retired.
-        self.verify_state_witness_journal_fully()?;
+        self.verify_state_witness_journal_fully_with_anchor(validation_anchor)?;
         if self
             .witness_history
             .last()
@@ -1560,13 +3256,15 @@ impl StateFileLock {
                     .to_string(),
             ));
         }
-        unlinkat_entry(self.directory.as_raw_fd(), &self.witness_previous_name)?;
-        self.directory.sync_all().map_err(|error| {
-            EngineError::Internal(format!(
-                "failed to sync signer state directory after retiring previous witness \
-                 segment: {error}"
-            ))
-        })?;
+        if retire_previous {
+            unlinkat_entry(self.directory.as_raw_fd(), &self.witness_previous_name)?;
+            self.directory.sync_all().map_err(|error| {
+                EngineError::Internal(format!(
+                    "failed to sync signer state directory after retiring previous witness \
+                     segment: {error}"
+                ))
+            })?;
+        }
         Ok(())
     }
 
@@ -1830,6 +3528,24 @@ fn resolve_witness_history_index(
     }
 }
 
+#[cfg(unix)]
+fn ensure_state_anchor_trust_transition_journal_capacity_for_length(
+    current_length: usize,
+    journal_growth: usize,
+) -> Result<(), EngineError> {
+    if current_length
+        .checked_add(journal_growth)
+        .is_none_or(|length| length > STATE_ANCHOR_TRUST_MAX_JOURNAL_LENGTH)
+    {
+        return Err(EngineError::Validation(
+            "complete state-anchor trust transition batch would exceed the durable journal size \
+             bound"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 pub(crate) struct StoreReplaceError {
     error: EngineError,
@@ -1889,6 +3605,32 @@ pub(crate) fn state_anchor_file_path(state_path: &Path) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(name))
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn state_anchor_trust_file_path(state_path: &Path) -> PathBuf {
+    let name = state_path
+        .file_name()
+        .map(state_anchor_trust_file_name)
+        .unwrap_or_else(|| OsString::from("signer-state.state-anchor-trust"));
+    state_path
+        .parent()
+        .map(|parent| parent.join(&name))
+        .unwrap_or_else(|| PathBuf::from(name))
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn state_anchor_trust_intent_file_path(state_path: &Path) -> PathBuf {
+    let name = state_path
+        .file_name()
+        .map(state_anchor_trust_intent_file_name)
+        .unwrap_or_else(|| OsString::from("signer-state.state-anchor-trust.intent"));
+    state_path
+        .parent()
+        .map(|parent| parent.join(&name))
+        .unwrap_or_else(|| PathBuf::from(name))
+}
+
 fn durable_store_id_file_name(state_name: &OsStr) -> OsString {
     let mut name = state_name.to_os_string();
     name.push(TBTC_SIGNER_DURABLE_STORE_ID_SUFFIX);
@@ -1904,6 +3646,18 @@ fn state_witness_file_name(state_name: &OsStr) -> OsString {
 fn state_anchor_file_name(state_name: &OsStr) -> OsString {
     let mut name = state_name.to_os_string();
     name.push(TBTC_SIGNER_STATE_ANCHOR_SUFFIX);
+    name
+}
+
+fn state_anchor_trust_file_name(state_name: &OsStr) -> OsString {
+    let mut name = state_name.to_os_string();
+    name.push(TBTC_SIGNER_STATE_ANCHOR_TRUST_SUFFIX);
+    name
+}
+
+fn state_anchor_trust_intent_file_name(state_name: &OsStr) -> OsString {
+    let mut name = state_name.to_os_string();
+    name.push(TBTC_SIGNER_STATE_ANCHOR_TRUST_INTENT_SUFFIX);
     name
 }
 
@@ -2180,6 +3934,17 @@ fn create_entry_atomically(
     bytes: &[u8],
     label: &str,
 ) -> Result<(fs::File, OpenedObjectIdentity), EngineError> {
+    create_entry_atomically_with_guard(directory, name, bytes, label, None)
+}
+
+#[cfg(unix)]
+fn create_entry_atomically_with_guard(
+    directory: &fs::File,
+    name: &OsStr,
+    bytes: &[u8],
+    label: &str,
+    recovery_guard: Option<&StateAnchorTrustRecoveryGuard<'_>>,
+) -> Result<(fs::File, OpenedObjectIdentity), EngineError> {
     let temp_name = unique_temp_name(name)?;
     let temp_file = openat_regular(
         directory.as_raw_fd(),
@@ -2201,6 +3966,9 @@ fn create_entry_atomically(
         // so nothing that participates in this protocol can be racing us here;
         // an entry that appeared anyway is not ours to overwrite.
         ensure_entry_absent(directory.as_raw_fd(), name, label)?;
+        if let Some(guard) = recovery_guard {
+            guard.revalidate()?;
+        }
         renameat_same_directory(directory.as_raw_fd(), &temp_name, name, label)?;
         directory.sync_all().map_err(|error| {
             EngineError::Internal(format!(
@@ -2209,6 +3977,11 @@ fn create_entry_atomically(
         })?;
         let identity = descriptor_identity(&temp_file, label)?;
         validate_live_entry(directory, name, identity, label)?;
+        #[cfg(test)]
+        maybe_replace_trust_lock_after_guarded_publication(recovery_guard)?;
+        if let Some(guard) = recovery_guard {
+            guard.revalidate()?;
+        }
         Ok(identity)
     })();
 
@@ -2254,6 +4027,7 @@ fn open_state_anchor(
     name: &OsStr,
     store_fingerprint: &[u8; 32],
     configuration: Option<&StateAnchorConfiguration>,
+    certified_floors: &[StateAnchorTrustReferenceModel],
 ) -> Result<OpenedStateAnchor, EngineError> {
     const LABEL: &str = "signer state anchor metadata";
     let Some(file) = openat_optional(directory.as_raw_fd(), name, libc::O_RDWR, LABEL)? else {
@@ -2270,9 +4044,76 @@ fn open_state_anchor(
     set_owner_only_permissions(&file, LABEL)?;
     validate_secure_regular_file(&file, LABEL)?;
     let bytes = read_file_at(&file, LABEL)?;
-    let metadata = parse_state_anchor_metadata(&bytes, store_fingerprint, configuration)?;
+    let metadata =
+        parse_state_anchor_metadata(&bytes, store_fingerprint, configuration, certified_floors)?;
     let identity = descriptor_identity(&file, LABEL)?;
     Ok((Some(file), Some(identity), Some(metadata), Some(bytes)))
+}
+
+#[cfg(unix)]
+fn open_state_anchor_trust_journal(
+    directory: &fs::File,
+    name: &OsStr,
+    store_fingerprint: &[u8; 32],
+    required: bool,
+) -> Result<OpenedStateAnchorTrustJournal, EngineError> {
+    const LABEL: &str = "state-anchor trust journal";
+    let Some(file) = openat_optional(directory.as_raw_fd(), name, libc::O_RDWR, LABEL)? else {
+        if required {
+            return Err(EngineError::StateAnchorTrustHeadAbsent);
+        }
+        return Ok((None, None, None, None, None));
+    };
+    validate_secure_regular_file(&file, LABEL)?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| EngineError::Internal(format!("failed to stat {LABEL}: {error}")))?;
+    let length = usize::try_from(metadata.len())
+        .map_err(|_| EngineError::Internal(format!("{LABEL} length does not fit this platform")))?;
+    if length > STATE_ANCHOR_TRUST_MAX_JOURNAL_LENGTH {
+        return Err(EngineError::Internal(format!(
+            "{LABEL} exceeds its maximum durable length"
+        )));
+    }
+    let identity = descriptor_identity(&file, LABEL)?;
+    let bytes = read_file_at(&file, LABEL)?;
+    let parsed = parse_state_anchor_trust_journal(&bytes, store_fingerprint)?;
+    let stamp = file_change_stamp(&file, LABEL)?;
+    Ok((
+        Some(file),
+        Some(identity),
+        Some(parsed),
+        Some(stamp),
+        Some(bytes),
+    ))
+}
+
+#[cfg(unix)]
+fn open_state_anchor_trust_transition_intent(
+    directory: &fs::File,
+    name: &OsStr,
+    store_fingerprint: &[u8; 32],
+) -> Result<Option<Vec<u8>>, EngineError> {
+    const LABEL: &str = "state-anchor trust transition intent";
+    let Some(file) = openat_optional(directory.as_raw_fd(), name, libc::O_RDONLY, LABEL)? else {
+        return Ok(None);
+    };
+    validate_owned_unlinked_regular(&file, LABEL)?;
+    validate_secure_regular_file(&file, LABEL)?;
+    let length = usize::try_from(
+        file.metadata()
+            .map_err(|error| EngineError::Internal(format!("failed to stat {LABEL}: {error}")))?
+            .len(),
+    )
+    .map_err(|_| EngineError::Internal(format!("{LABEL} length does not fit this platform")))?;
+    if length > STATE_ANCHOR_TRUST_MAX_INTENT_LENGTH {
+        return Err(EngineError::Internal(format!(
+            "{LABEL} exceeds its maximum durable length"
+        )));
+    }
+    let bytes = read_file_at(&file, LABEL)?;
+    parse_state_anchor_trust_transition_intent(&bytes, store_fingerprint)?;
+    Ok(Some(bytes))
 }
 
 fn encode_state_anchor_acknowledgement(acknowledgement: &StateAnchorAcknowledgement) -> Vec<u8> {
@@ -2414,6 +4255,7 @@ fn parse_state_anchor_metadata(
     bytes: &[u8],
     expected_store_fingerprint: &[u8; 32],
     configuration: &StateAnchorConfiguration,
+    certified_floors: &[StateAnchorTrustReferenceModel],
 ) -> Result<StateAnchorMetadata, EngineError> {
     if bytes.len() != TBTC_SIGNER_STATE_ANCHOR_METADATA_LENGTH {
         return Err(EngineError::Internal(format!(
@@ -2480,9 +4322,11 @@ fn parse_state_anchor_metadata(
     };
     validate_persisted_state_anchor_acknowledgement(&latest, configuration)?;
     validate_anchor_acknowledgement_shape(&latest, expected_store_fingerprint)?;
+    validate_persisted_anchor_parent(&latest, certified_floors)?;
     if let Some(base) = witness_base.as_ref() {
         validate_persisted_state_anchor_acknowledgement(base, configuration)?;
         validate_anchor_acknowledgement_shape(base, expected_store_fingerprint)?;
+        validate_persisted_anchor_parent(base, certified_floors)?;
         if base.service_epoch != latest.service_epoch
             || base.revision > latest.revision
             || (base.revision == latest.revision && base != &latest)
@@ -2499,6 +4343,7 @@ fn parse_state_anchor_metadata(
     if let Some(pending) = pending_witness_base.as_ref() {
         validate_persisted_state_anchor_acknowledgement(pending, configuration)?;
         validate_anchor_acknowledgement_shape(pending, expected_store_fingerprint)?;
+        validate_persisted_anchor_parent(pending, certified_floors)?;
         if pending != &latest {
             return Err(EngineError::Internal(
                 "pending signer state witness base is not the latest accepted acknowledgement"
@@ -2511,6 +4356,28 @@ fn parse_state_anchor_metadata(
         witness_base,
         pending_witness_base,
     })
+}
+
+fn validate_persisted_anchor_parent(
+    acknowledgement: &StateAnchorAcknowledgement,
+    certified_floors: &[StateAnchorTrustReferenceModel],
+) -> Result<(), EngineError> {
+    let ordinary = (acknowledgement.revision == 1
+        && acknowledgement.previous_event_root == [0u8; 32])
+        || (acknowledgement.revision > 1 && acknowledgement.previous_event_root != [0u8; 32]);
+    let certified = acknowledgement.revision == 1
+        && acknowledgement.previous_event_root != [0u8; 32]
+        && certified_floors
+            .iter()
+            .any(|floor| floor.matches_acknowledgement(acknowledgement));
+    if ordinary || certified {
+        return Ok(());
+    }
+    Err(EngineError::Internal(
+        "persisted revision-1 state-anchor acknowledgement lacks its exact offline-certified \
+         epoch-genesis trust record"
+            .to_string(),
+    ))
 }
 
 fn validate_anchor_acknowledgement_shape(
@@ -2536,8 +4403,6 @@ fn validate_anchor_acknowledgement_shape(
             )
         || acknowledgement.operation_id == [0u8; 32]
         || acknowledgement.transition_digest == [0u8; 32]
-        || (acknowledgement.revision == 1 && acknowledgement.previous_event_root != [0u8; 32])
-        || (acknowledgement.revision > 1 && acknowledgement.previous_event_root == [0u8; 32])
     {
         return Err(EngineError::Internal(
             "persisted state-anchor acknowledgement has invalid structural fields".to_string(),
@@ -2690,36 +4555,59 @@ fn replace_state_anchor_entry(
     name: &OsStr,
     bytes: &[u8],
 ) -> Result<(fs::File, OpenedObjectIdentity), EngineError> {
-    const LABEL: &str = "signer state anchor metadata";
+    replace_durable_entry(directory, name, bytes, "signer state anchor metadata")
+}
+
+#[cfg(unix)]
+fn replace_durable_entry(
+    directory: &fs::File,
+    name: &OsStr,
+    bytes: &[u8],
+    label: &str,
+) -> Result<(fs::File, OpenedObjectIdentity), EngineError> {
+    replace_durable_entry_with_guard(directory, name, bytes, label, None)
+}
+
+#[cfg(unix)]
+fn replace_durable_entry_with_guard(
+    directory: &fs::File,
+    name: &OsStr,
+    bytes: &[u8],
+    label: &str,
+    recovery_guard: Option<&StateAnchorTrustRecoveryGuard<'_>>,
+) -> Result<(fs::File, OpenedObjectIdentity), EngineError> {
     let temp_name = unique_temp_name(name)?;
     let temp_file = openat_regular(
         directory.as_raw_fd(),
         &temp_name,
         libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
         0o600,
-        LABEL,
+        label,
     )?;
     let outcome = (|| {
-        validate_owned_unlinked_regular(&temp_file, LABEL)?;
-        set_owner_only_permissions(&temp_file, LABEL)?;
-        validate_secure_regular_file(&temp_file, LABEL)?;
-        write_file_at(&temp_file, bytes, LABEL)?;
+        validate_owned_unlinked_regular(&temp_file, label)?;
+        set_owner_only_permissions(&temp_file, label)?;
+        validate_secure_regular_file(&temp_file, label)?;
+        write_file_at(&temp_file, bytes, label)?;
         temp_file.sync_all().map_err(|error| {
-            EngineError::Internal(format!("failed to sync new {LABEL}: {error}"))
+            EngineError::Internal(format!("failed to sync new {label}: {error}"))
         })?;
-        renameat_same_directory(
-            directory.as_raw_fd(),
-            &temp_name,
-            name,
-            "publish signer state anchor metadata",
-        )?;
+        if let Some(guard) = recovery_guard {
+            guard.revalidate()?;
+        }
+        renameat_same_directory(directory.as_raw_fd(), &temp_name, name, label)?;
         directory.sync_all().map_err(|error| {
             EngineError::Internal(format!(
-                "failed to sync signer state directory after publishing anchor metadata: {error}"
+                "failed to sync signer state directory after publishing {label}: {error}"
             ))
         })?;
-        let identity = descriptor_identity(&temp_file, LABEL)?;
-        validate_live_entry(directory, name, identity, LABEL)?;
+        let identity = descriptor_identity(&temp_file, label)?;
+        validate_live_entry(directory, name, identity, label)?;
+        #[cfg(test)]
+        maybe_replace_trust_lock_after_guarded_publication(recovery_guard)?;
+        if let Some(guard) = recovery_guard {
+            guard.revalidate()?;
+        }
         Ok(identity)
     })();
     match outcome {
@@ -2913,6 +4801,464 @@ fn parse_state_witness_segment_header(
 }
 
 #[cfg(unix)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TrustRecoveryAnchorStage {
+    Prior,
+    Target,
+}
+
+/// Completes every publication boundary authorized by a durable trust
+/// transition intent. This runs while the descriptor-bound store lock is held
+/// and before ordinary anchor/witness opening, because a crash can leave the
+/// rotating endpoint, witness segment, and trust journal at different
+/// individually durable stages.
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn recover_state_anchor_trust_transition(
+    recovery_guard: &StateAnchorTrustRecoveryGuard<'_>,
+    trust_name: &OsStr,
+    intent_name: &OsStr,
+    anchor_name: &OsStr,
+    witness_names: StateWitnessRotationNames<'_>,
+    store_identity: &DurableStoreIdentity,
+    current_state_file: Option<&fs::File>,
+    maximum_records: usize,
+    target_configuration: Option<&StateAnchorConfiguration>,
+    expected_intent_bytes: &[u8],
+    transition: &VerifiedStateAnchorTrustTransition,
+) -> Result<(), EngineError> {
+    let directory = recovery_guard.directory;
+    let target_configuration = target_configuration.ok_or_else(|| {
+        EngineError::Internal(
+            "durable state-anchor trust recovery requires installed target pins".to_string(),
+        )
+    })?;
+    let final_certificate = transition
+        .certificates
+        .last()
+        .expect("verified trust transition is nonempty");
+
+    revalidate_state_anchor_trust_transition_intent_entry(
+        directory,
+        intent_name,
+        &store_identity.fingerprint,
+        expected_intent_bytes,
+    )?;
+    let (_, _, mut journal, _, mut journal_bytes) =
+        open_state_anchor_trust_journal(directory, trust_name, &store_identity.fingerprint, false)?;
+    if journal.is_none() {
+        let header = encode_state_anchor_trust_journal_header(&store_identity.fingerprint);
+        recovery_guard.revalidate()?;
+        replace_durable_entry_with_guard(
+            directory,
+            trust_name,
+            &header,
+            "state-anchor trust journal during recovery",
+            Some(recovery_guard),
+        )?;
+        journal = Some(parse_state_anchor_trust_journal(
+            &header,
+            &store_identity.fingerprint,
+        )?);
+        journal_bytes = Some(header);
+    }
+    let mut journal = journal.expect("journal initialized above");
+    let mut journal_bytes = journal_bytes.expect("journal bytes initialized above");
+    validate_trust_recovery_journal(&journal, transition)?;
+
+    // PREPARE every missing certificate before changing the online endpoint.
+    // A partial COMMIT implies that the complete PREPARE batch was already
+    // durable, which the validation helper enforces.
+    loop {
+        let (committed_count, prepared_count) =
+            trust_recovery_transition_progress(&journal, transition)?;
+        if prepared_count == transition.certificates.len() {
+            break;
+        }
+        if committed_count != 0 {
+            return Err(EngineError::Internal(
+                "state-anchor trust journal committed a partial transition before all PREPARE \
+                 records were durable"
+                    .to_string(),
+            ));
+        }
+        revalidate_state_anchor_trust_transition_intent_entry(
+            directory,
+            intent_name,
+            &store_identity.fingerprint,
+            expected_intent_bytes,
+        )?;
+        recovery_guard.revalidate()?;
+        let certificate = &transition.certificates[prepared_count];
+        let record = encode_state_anchor_trust_prepare_record(
+            &store_identity.fingerprint,
+            &journal.last_record_commitment,
+            certificate,
+        )?;
+        journal_bytes.extend_from_slice(&record);
+        let (next_journal, next_bytes) = publish_state_anchor_trust_journal_for_recovery(
+            directory,
+            trust_name,
+            &store_identity.fingerprint,
+            &journal_bytes,
+            recovery_guard,
+        )?;
+        journal = next_journal;
+        journal_bytes = next_bytes;
+    }
+
+    let certified_floors = journal.certified_floors();
+    let (prior_anchor, anchor_stage) = open_state_anchor_for_trust_recovery(
+        directory,
+        anchor_name,
+        &store_identity.fingerprint,
+        transition,
+        &certified_floors,
+    )?;
+    let target_acknowledgement = final_certificate.target_acknowledgement.clone();
+    let rotation_anchor = match (anchor_stage, prior_anchor.as_ref()) {
+        (Some(TrustRecoveryAnchorStage::Prior), Some(prior)) => StateAnchorMetadata {
+            latest: prior.latest.clone(),
+            witness_base: prior.witness_base.clone(),
+            pending_witness_base: Some(target_acknowledgement.clone()),
+        },
+        (Some(TrustRecoveryAnchorStage::Target), Some(_)) | (None, None) => StateAnchorMetadata {
+            latest: target_acknowledgement.clone(),
+            witness_base: Some(target_acknowledgement.clone()),
+            pending_witness_base: Some(target_acknowledgement.clone()),
+        },
+        _ => {
+            return Err(EngineError::Internal(
+                "state-anchor trust recovery anchor stage is inconsistent".to_string(),
+            ))
+        }
+    };
+
+    revalidate_state_anchor_trust_transition_intent_entry(
+        directory,
+        intent_name,
+        &store_identity.fingerprint,
+        expected_intent_bytes,
+    )?;
+    if !recover_state_witness_rotation(
+        directory,
+        witness_names,
+        store_identity,
+        current_state_file,
+        Some(&rotation_anchor),
+        maximum_records,
+        false,
+        Some(recovery_guard),
+    )? {
+        return Err(EngineError::Internal(
+            "state-anchor trust recovery did not publish the certified witness base".to_string(),
+        ));
+    }
+
+    let target_anchor = StateAnchorMetadata {
+        latest: target_acknowledgement.clone(),
+        witness_base: Some(target_acknowledgement),
+        pending_witness_base: None,
+    };
+    let target_anchor_bytes =
+        encode_state_anchor_metadata(&store_identity.fingerprint, &target_anchor);
+    parse_state_anchor_metadata(
+        &target_anchor_bytes,
+        &store_identity.fingerprint,
+        &final_certificate.to.anchor_configuration()?,
+        &certified_floors,
+    )?;
+    revalidate_state_anchor_trust_transition_intent_entry(
+        directory,
+        intent_name,
+        &store_identity.fingerprint,
+        expected_intent_bytes,
+    )?;
+    recovery_guard.revalidate()?;
+    replace_durable_entry_with_guard(
+        directory,
+        anchor_name,
+        &target_anchor_bytes,
+        "signer state anchor metadata during trust recovery",
+        Some(recovery_guard),
+    )?;
+
+    // COMMIT each already-prepared certificate with a COW publication. The
+    // parser represents a crash after a COMMIT prefix as a committed prefix
+    // plus the still-pending tail, so this loop naturally resumes at the exact
+    // next certificate.
+    loop {
+        let (committed_count, prepared_count) =
+            trust_recovery_transition_progress(&journal, transition)?;
+        if committed_count == transition.certificates.len() {
+            break;
+        }
+        if prepared_count != transition.certificates.len() {
+            return Err(EngineError::Internal(
+                "state-anchor trust recovery reached COMMIT without a complete PREPARE batch"
+                    .to_string(),
+            ));
+        }
+        revalidate_state_anchor_trust_transition_intent_entry(
+            directory,
+            intent_name,
+            &store_identity.fingerprint,
+            expected_intent_bytes,
+        )?;
+        recovery_guard.revalidate()?;
+        let certificate = &transition.certificates[committed_count];
+        let record = encode_state_anchor_trust_commit_record(
+            &store_identity.fingerprint,
+            &journal.last_record_commitment,
+            certificate,
+        )?;
+        journal_bytes.extend_from_slice(&record);
+        let (next_journal, next_bytes) = publish_state_anchor_trust_journal_for_recovery(
+            directory,
+            trust_name,
+            &store_identity.fingerprint,
+            &journal_bytes,
+            recovery_guard,
+        )?;
+        journal = next_journal;
+        journal_bytes = next_bytes;
+    }
+
+    validate_state_anchor_trust_journal_head(
+        &journal,
+        target_configuration,
+        &store_identity.fingerprint,
+    )?;
+    revalidate_state_anchor_trust_transition_intent_entry(
+        directory,
+        intent_name,
+        &store_identity.fingerprint,
+        expected_intent_bytes,
+    )?;
+    recovery_guard.revalidate()?;
+    unlinkat_entry(directory.as_raw_fd(), witness_names.previous)?;
+    directory.sync_all().map_err(|error| {
+        EngineError::Internal(format!(
+            "failed to sync trust recovery after retiring previous witness: {error}"
+        ))
+    })?;
+    recovery_guard.revalidate()?;
+    unlinkat_entry(directory.as_raw_fd(), intent_name)?;
+    directory.sync_all().map_err(|error| {
+        EngineError::Internal(format!(
+            "failed to sync completed state-anchor trust intent removal: {error}"
+        ))
+    })?;
+    recovery_guard.revalidate()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_trust_recovery_journal(
+    journal: &StateAnchorTrustJournalModel,
+    transition: &VerifiedStateAnchorTrustTransition,
+) -> Result<(), EngineError> {
+    trust_recovery_transition_progress(journal, transition).map(|_| ())
+}
+
+/// Returns `(committed_count, prepared_or_committed_count)` within the intent
+/// suffix after proving the durable journal contains no conflicting or extra
+/// certificate at any suffix position.
+#[cfg(unix)]
+fn trust_recovery_transition_progress(
+    journal: &StateAnchorTrustJournalModel,
+    transition: &VerifiedStateAnchorTrustTransition,
+) -> Result<(usize, usize), EngineError> {
+    let first = transition
+        .certificates
+        .first()
+        .expect("verified trust transition is nonempty");
+    let prior_count = usize::try_from(first.certificate_sequence - 1).map_err(|_| {
+        EngineError::Internal(
+            "state-anchor trust recovery sequence does not fit this platform".to_string(),
+        )
+    })?;
+    if journal.committed.len() < prior_count {
+        return Err(EngineError::Internal(
+            "state-anchor trust recovery journal is missing the intent predecessor".to_string(),
+        ));
+    }
+    if prior_count > 0
+        && journal.committed[prior_count - 1].certificate_digest
+            != first.previous_certificate_digest
+    {
+        return Err(EngineError::Internal(
+            "state-anchor trust recovery intent does not extend the durable predecessor"
+                .to_string(),
+        ));
+    }
+    if journal.committed.len()
+        > prior_count
+            .checked_add(transition.certificates.len())
+            .ok_or_else(|| {
+                EngineError::Internal(
+                    "state-anchor trust recovery certificate count overflowed".to_string(),
+                )
+            })?
+    {
+        return Err(EngineError::Internal(
+            "state-anchor trust recovery journal is ahead of its durable intent".to_string(),
+        ));
+    }
+    let committed_count = journal.committed.len() - prior_count;
+    for (index, certificate) in journal.committed[prior_count..].iter().enumerate() {
+        if certificate.wire != transition.certificates[index].wire {
+            return Err(EngineError::Internal(
+                "state-anchor trust recovery committed certificate conflicts with its intent"
+                    .to_string(),
+            ));
+        }
+    }
+    if committed_count
+        .checked_add(journal.pending.len())
+        .is_none_or(|count| count > transition.certificates.len())
+    {
+        return Err(EngineError::Internal(
+            "state-anchor trust recovery journal has an extra PREPARE certificate".to_string(),
+        ));
+    }
+    for (offset, certificate) in journal.pending.iter().enumerate() {
+        if certificate.wire != transition.certificates[committed_count + offset].wire {
+            return Err(EngineError::Internal(
+                "state-anchor trust recovery PREPARE certificate conflicts with its intent"
+                    .to_string(),
+            ));
+        }
+    }
+    if committed_count != 0
+        && committed_count + journal.pending.len() != transition.certificates.len()
+    {
+        return Err(EngineError::Internal(
+            "state-anchor trust recovery has a partial COMMIT without the complete PREPARE batch"
+                .to_string(),
+        ));
+    }
+    Ok((committed_count, committed_count + journal.pending.len()))
+}
+
+#[cfg(unix)]
+fn publish_state_anchor_trust_journal_for_recovery(
+    directory: &fs::File,
+    name: &OsStr,
+    store_fingerprint: &[u8; 32],
+    bytes: &[u8],
+    recovery_guard: &StateAnchorTrustRecoveryGuard<'_>,
+) -> Result<(StateAnchorTrustJournalModel, Vec<u8>), EngineError> {
+    if bytes.len() > STATE_ANCHOR_TRUST_MAX_JOURNAL_LENGTH {
+        return Err(EngineError::Internal(
+            "state-anchor trust recovery journal exceeds its durable bound".to_string(),
+        ));
+    }
+    let parsed = parse_state_anchor_trust_journal(bytes, store_fingerprint)?;
+    replace_durable_entry_with_guard(
+        directory,
+        name,
+        bytes,
+        "state-anchor trust journal during recovery",
+        Some(recovery_guard),
+    )?;
+    Ok((parsed, bytes.to_vec()))
+}
+
+#[cfg(unix)]
+fn open_state_anchor_for_trust_recovery(
+    directory: &fs::File,
+    name: &OsStr,
+    store_fingerprint: &[u8; 32],
+    transition: &VerifiedStateAnchorTrustTransition,
+    certified_floors: &[StateAnchorTrustReferenceModel],
+) -> Result<
+    (
+        Option<StateAnchorMetadata>,
+        Option<TrustRecoveryAnchorStage>,
+    ),
+    EngineError,
+> {
+    const LABEL: &str = "signer state anchor metadata during trust recovery";
+    let Some(file) = openat_optional(directory.as_raw_fd(), name, libc::O_RDWR, LABEL)? else {
+        let first = transition
+            .certificates
+            .first()
+            .expect("verified trust transition is nonempty");
+        if first.from.is_some() {
+            return Err(EngineError::Internal(
+                "rotation/adoption trust recovery is missing its persisted prior anchor"
+                    .to_string(),
+            ));
+        }
+        return Ok((None, None));
+    };
+    validate_owned_unlinked_regular(&file, LABEL)?;
+    validate_secure_regular_file(&file, LABEL)?;
+    let bytes = read_file_at(&file, LABEL)?;
+    let first = transition
+        .certificates
+        .first()
+        .expect("verified trust transition is nonempty");
+    let final_certificate = transition
+        .certificates
+        .last()
+        .expect("verified trust transition is nonempty");
+
+    if let Some(from) = first.from.as_ref() {
+        if let Ok(metadata) = parse_state_anchor_metadata(
+            &bytes,
+            store_fingerprint,
+            &from.anchor_configuration()?,
+            certified_floors,
+        ) {
+            if from.reference.matches_acknowledgement(&metadata.latest) {
+                return Ok((Some(metadata), Some(TrustRecoveryAnchorStage::Prior)));
+            }
+        }
+    }
+    if let Ok(metadata) = parse_state_anchor_metadata(
+        &bytes,
+        store_fingerprint,
+        &final_certificate.to.anchor_configuration()?,
+        certified_floors,
+    ) {
+        if metadata.latest == final_certificate.target_acknowledgement
+            && metadata.witness_base.as_ref() == Some(&final_certificate.target_acknowledgement)
+            && metadata.pending_witness_base.is_none()
+        {
+            return Ok((Some(metadata), Some(TrustRecoveryAnchorStage::Target)));
+        }
+    }
+    Err(EngineError::Internal(
+        "persisted state anchor matches neither the certified prior nor target recovery stage"
+            .to_string(),
+    ))
+}
+
+#[cfg(unix)]
+fn revalidate_state_anchor_trust_transition_intent_entry(
+    directory: &fs::File,
+    name: &OsStr,
+    store_fingerprint: &[u8; 32],
+    expected_bytes: &[u8],
+) -> Result<(), EngineError> {
+    let live = open_state_anchor_trust_transition_intent(directory, name, store_fingerprint)?
+        .ok_or_else(|| {
+            EngineError::Internal(
+                "state-anchor trust transition intent disappeared during recovery".to_string(),
+            )
+        })?;
+    if live != expected_bytes {
+        return Err(EngineError::Internal(
+            "state-anchor trust transition intent changed during recovery".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 fn recover_state_witness_rotation(
     directory: &fs::File,
     names: StateWitnessRotationNames<'_>,
@@ -2920,6 +5266,8 @@ fn recover_state_witness_rotation(
     current_state_file: Option<&fs::File>,
     anchor: Option<&StateAnchorMetadata>,
     maximum_records: usize,
+    retire_previous: bool,
+    recovery_guard: Option<&StateAnchorTrustRecoveryGuard<'_>>,
 ) -> Result<bool, EngineError> {
     let StateWitnessRotationNames {
         current: current_name,
@@ -3004,11 +5352,12 @@ fn recover_state_witness_rotation(
             ));
         }
         let bytes = encode_state_witness_segment_header(&store_identity.fingerprint, pending)?;
-        create_entry_atomically(
+        create_entry_atomically_with_guard(
             directory,
             next_name,
             &bytes,
             "next signer state witness journal during recovery",
+            recovery_guard,
         )?;
         next_exists = true;
     }
@@ -3026,6 +5375,9 @@ fn recover_state_witness_rotation(
             anchor,
             maximum_records,
         )?;
+        if let Some(guard) = recovery_guard {
+            guard.revalidate()?;
+        }
         renameat_same_directory(
             directory.as_raw_fd(),
             current_name,
@@ -3037,6 +5389,9 @@ fn recover_state_witness_rotation(
                 "failed to sync state witness recovery after retaining previous segment: {error}"
             ))
         })?;
+        if let Some(guard) = recovery_guard {
+            guard.revalidate()?;
+        }
         renameat_same_directory(
             directory.as_raw_fd(),
             next_name,
@@ -3048,6 +5403,16 @@ fn recover_state_witness_rotation(
                 "failed to sync state witness recovery after publishing segment: {error}"
             ))
         })?;
+        validate_rotation_candidate(
+            directory,
+            current_name,
+            store_identity,
+            anchor,
+            maximum_records,
+        )?;
+        if let Some(guard) = recovery_guard {
+            guard.revalidate()?;
+        }
         previous_exists = true;
     } else if next_exists && !current_exists && previous_exists {
         validate_rotation_candidate(
@@ -3057,6 +5422,9 @@ fn recover_state_witness_rotation(
             anchor,
             maximum_records,
         )?;
+        if let Some(guard) = recovery_guard {
+            guard.revalidate()?;
+        }
         renameat_same_directory(
             directory.as_raw_fd(),
             next_name,
@@ -3068,6 +5436,16 @@ fn recover_state_witness_rotation(
                 "failed to sync recovered state witness segment publication: {error}"
             ))
         })?;
+        validate_rotation_candidate(
+            directory,
+            current_name,
+            store_identity,
+            anchor,
+            maximum_records,
+        )?;
+        if let Some(guard) = recovery_guard {
+            guard.revalidate()?;
+        }
     } else if !next_exists && current_exists && previous_exists {
         validate_rotation_candidate(
             directory,
@@ -3110,14 +5488,20 @@ fn recover_state_witness_rotation(
                 .to_string(),
         ));
     }
-    if previous_exists {
+    if previous_exists && retire_previous {
+        if let Some(guard) = recovery_guard {
+            guard.revalidate()?;
+        }
         unlinkat_entry(directory.as_raw_fd(), previous_name)?;
     }
     directory.sync_all().map_err(|error| {
         EngineError::Internal(format!(
-            "failed to sync state witness recovery after retiring previous segment: {error}"
+            "failed to sync state witness recovery after finalizing segment publication: {error}"
         ))
     })?;
+    if let Some(guard) = recovery_guard {
+        guard.revalidate()?;
+    }
     Ok(true)
 }
 
@@ -4009,7 +6393,12 @@ fn read_file_range_at(
 
 #[cfg(unix)]
 fn witness_change_stamp(file: &fs::File) -> Result<FileChangeStamp, EngineError> {
-    let stat = descriptor_stat(file, "signer state witness journal")?;
+    file_change_stamp(file, "signer state witness journal")
+}
+
+#[cfg(unix)]
+fn file_change_stamp(file: &fs::File, label: &str) -> Result<FileChangeStamp, EngineError> {
+    let stat = descriptor_stat(file, label)?;
     Ok(FileChangeStamp {
         size: widen_stat_field(stat.st_size),
         modified_seconds: widen_stat_field(stat.st_mtime),
@@ -4130,6 +6519,66 @@ fn unlinkat_entry(directory_fd: RawFd, name: &OsStr) -> Result<(), EngineError> 
 mod witness_transcript_tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
+
+    /// Entry name, inode, mode, length, mtime, mtime nanos, ctime, ctime
+    /// nanos, and contents.
+    #[cfg(unix)]
+    type DirectorySnapshotEntry = (OsString, u64, u32, u64, i64, i64, i64, i64, Vec<u8>);
+
+    #[cfg(unix)]
+    #[derive(Debug, Eq, PartialEq)]
+    struct DirectorySnapshot {
+        directory: (u64, u32, u64, i64, i64, i64, i64),
+        entries: Vec<DirectorySnapshotEntry>,
+    }
+
+    #[cfg(unix)]
+    fn snapshot_directory_without_atime(path: &Path) -> DirectorySnapshot {
+        use std::os::unix::fs::MetadataExt;
+
+        let metadata_tuple = |metadata: &fs::Metadata| {
+            (
+                metadata.ino(),
+                metadata.mode(),
+                metadata.len(),
+                metadata.mtime(),
+                metadata.mtime_nsec(),
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+            )
+        };
+        let directory_metadata = fs::symlink_metadata(path).expect("snapshot directory metadata");
+        let mut entries = fs::read_dir(path)
+            .expect("snapshot directory entries")
+            .map(|entry| {
+                let entry = entry.expect("snapshot directory entry");
+                let metadata = fs::symlink_metadata(entry.path()).expect("snapshot entry metadata");
+                let (inode, mode, length, mtime, mtime_nsec, ctime, ctime_nsec) =
+                    metadata_tuple(&metadata);
+                let bytes = if metadata.file_type().is_file() {
+                    fs::read(entry.path()).expect("snapshot regular entry bytes")
+                } else {
+                    Vec::new()
+                };
+                (
+                    entry.file_name(),
+                    inode,
+                    mode,
+                    length,
+                    mtime,
+                    mtime_nsec,
+                    ctime,
+                    ctime_nsec,
+                    bytes,
+                )
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        DirectorySnapshot {
+            directory: metadata_tuple(&directory_metadata),
+            entries,
+        }
+    }
 
     /// The live cross-language transcript. The Go bridge must reproduce these
     /// bytes exactly; `store_fingerprint` here is a `durable_store_fingerprint`
@@ -4267,6 +6716,444 @@ mod witness_transcript_tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn restored_expired_intent_never_authorizes_local_recovery() {
+        let _guard = lock_test_state();
+        let (state_path, fresh, tip) = bootstrap_trust_store_fixture("expired-intent-rollback");
+        let now = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_millis(),
+        )
+        .expect("clock fits u64");
+        let nested = &fresh.certificates[0].target_acknowledgement;
+        let expired = bootstrap_state_anchor_trust_transition_for_tests(
+            nested.checkpoint_store_fingerprint,
+            &tip,
+            nested.committed_at_unix_ms,
+            nested.expires_at_unix_ms,
+            now - 60_000,
+            now - 30_000,
+            false,
+        )
+        .expect("intrinsically valid expired transition");
+        assert_eq!(
+            expired.request.certificate_chain,
+            fresh.request.certificate_chain
+        );
+
+        let store = StateFileLock::acquire_for_trust_transition(&state_path, &fresh)
+            .expect("open pristine transition store");
+        let intent_bytes = encode_state_anchor_trust_transition_intent(
+            &store.identity.fingerprint,
+            &expired.request,
+        )
+        .expect("encode restored expired intent");
+        let _ = create_entry_atomically(
+            &store.directory,
+            &store.trust_intent_name,
+            &intent_bytes,
+            "restored expired trust intent",
+        )
+        .expect("restore old intent snapshot");
+        let witness_before =
+            fs::read(state_witness_file_path(&state_path)).expect("read pristine witness");
+        drop(store);
+
+        let recovery_error = match StateFileLock::acquire_for_trust_head_inspection(&state_path) {
+            Ok(_) => panic!("expired local intent must not auto-recover"),
+            Err(error) => error,
+        };
+        let EngineError::StateAnchorTrustRecoveryRequired { context } = recovery_error else {
+            panic!("unexpected restored-intent preflight error: {recovery_error}");
+        };
+        assert_eq!(
+            context.certificate_digests,
+            vec![fresh.certificates[0].certificate_digest]
+        );
+        assert_eq!(
+            fs::read(state_anchor_trust_intent_file_path(&state_path))
+                .expect("intent remains after preflight"),
+            intent_bytes
+        );
+        assert_eq!(
+            fs::read(state_witness_file_path(&state_path))
+                .expect("witness remains after preflight"),
+            witness_before
+        );
+        assert!(!state_anchor_trust_file_path(&state_path).exists());
+        assert!(!state_anchor_file_path(&state_path).exists());
+
+        let expired_error = match StateFileLock::acquire_for_trust_transition(&state_path, &expired)
+        {
+            Ok(_) => panic!("expired wrapper must not resume restored intent"),
+            Err(error) => error,
+        };
+        assert!(
+            expired_error.to_string().contains("expired"),
+            "unexpected expired recovery error: {expired_error}"
+        );
+        assert!(state_anchor_trust_intent_file_path(&state_path).exists());
+
+        let mut resumed = StateFileLock::acquire_for_trust_transition(&state_path, &fresh)
+            .expect("fresh wrapper resumes exact restored intent");
+        let outcome = resumed
+            .transition_state_witness_anchor(&fresh)
+            .expect("post-recovery exact replay");
+        assert!(outcome.idempotent);
+        drop(resumed);
+        assert!(!state_anchor_trust_intent_file_path(&state_path).exists());
+        cleanup_anchor_store_fixture(&state_path);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn recovery_required_preflight_is_byte_and_metadata_read_only() {
+        let _guard = lock_test_state();
+
+        let leave_intent = |state_path: &Path| {
+            let (transition, _) = bootstrap_trust_store_fixture_at(state_path);
+            let mut store = StateFileLock::acquire_for_trust_transition(state_path, &transition)
+                .expect("open transition store");
+            set_state_anchor_trust_transition_fault_for_tests(
+                StateAnchorTrustTransitionFaultInjectionPoint::AfterIntentPublication,
+            );
+            store
+                .transition_state_witness_anchor(&transition)
+                .expect_err("leave intent before first transition mutation");
+            clear_state_anchor_trust_transition_fault_for_tests();
+            drop(store);
+            transition
+        };
+        let unique_directory = |label: &str| {
+            let mut random = [0u8; 12];
+            OsRng.fill_bytes(&mut random);
+            std::env::temp_dir().join(format!(
+                "tbtc-signer-zero-write-{label}-{}-{}",
+                std::process::id(),
+                hex::encode(random)
+            ))
+        };
+
+        let directory = unique_directory("intact");
+        fs::create_dir(&directory).expect("create isolated signer directory");
+        let state_path = directory.join("signer-state.json");
+        let transition = leave_intent(&state_path);
+        let before = snapshot_directory_without_atime(&directory);
+        let error = match StateFileLock::acquire_for_trust_head_inspection(&state_path) {
+            Ok(_) => panic!("intent inspection must require externally fresh recovery"),
+            Err(error) => error,
+        };
+        let EngineError::StateAnchorTrustRecoveryRequired { context } = error else {
+            panic!("unexpected intact recovery preflight error: {error}");
+        };
+        assert_eq!(
+            context.certificate_digests,
+            vec![transition.certificates[0].certificate_digest]
+        );
+        assert_eq!(
+            snapshot_directory_without_atime(&directory),
+            before,
+            "recovery-required inspection changed directory entries, bytes, inode, mode, \
+             mtime, or ctime"
+        );
+        cleanup_anchor_store_fixture(&state_path);
+        fs::remove_dir(&directory).expect("remove isolated signer directory");
+
+        let outer_directory = unique_directory("missing-parent");
+        fs::create_dir(&outer_directory).expect("create missing-parent snapshot root");
+        let missing_parent = outer_directory.join("absent-store");
+        let missing_state_path = missing_parent.join("signer-state.json");
+        let before = snapshot_directory_without_atime(&outer_directory);
+        let error = match StateFileLock::acquire_for_trust_head_inspection(&missing_state_path) {
+            Ok(_) => panic!("missing trust store cannot have a committed head"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, EngineError::StateAnchorTrustHeadAbsent));
+        assert_eq!(
+            snapshot_directory_without_atime(&outer_directory),
+            before,
+            "trust-head inspection created or modified a missing parent"
+        );
+        assert!(!missing_parent.exists());
+        fs::remove_dir(&outer_directory).expect("remove missing-parent snapshot root");
+
+        for missing in ["lock", "store-id"] {
+            establish_clean_signer_test_env();
+            let directory = unique_directory(missing);
+            fs::create_dir(&directory).expect("create isolated missing-prerequisite directory");
+            let state_path = directory.join("signer-state.json");
+            let _transition = leave_intent(&state_path);
+            let prerequisite = if missing == "lock" {
+                state_lock_file_path(&state_path)
+            } else {
+                durable_store_id_file_path(&state_path)
+            };
+            fs::remove_file(&prerequisite).expect("remove recovery prerequisite");
+            let before = snapshot_directory_without_atime(&directory);
+            let error = match StateFileLock::acquire_for_trust_head_inspection(&state_path) {
+                Ok(_) => panic!("missing {missing} must fail closed"),
+                Err(error) => error,
+            };
+            assert!(
+                error.to_string().contains("refusing to recreate"),
+                "unexpected missing-{missing} error: {error}"
+            );
+            assert_eq!(
+                snapshot_directory_without_atime(&directory),
+                before,
+                "missing-{missing} preflight recreated or modified recovery state"
+            );
+            cleanup_anchor_store_fixture(&state_path);
+            fs::remove_dir(&directory).expect("remove missing-prerequisite directory");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn guarded_cow_publication_detects_lock_replacement_after_rename_and_fsync() {
+        let _guard = lock_test_state();
+        let (state_path, transition, _) = bootstrap_trust_store_fixture("guarded-cow-lock-swap");
+        let store = StateFileLock::acquire_for_trust_transition(&state_path, &transition)
+            .expect("open guarded publication store");
+        let mut target_name = store.state_name.clone();
+        target_name.push(".guarded-cow-test");
+        validate_entry_name(&target_name, "guarded COW test target").expect("valid target name");
+        ensure_entry_absent(
+            store.directory.as_raw_fd(),
+            &target_name,
+            "guarded COW test target",
+        )
+        .expect("test target absent");
+
+        let restore_lock = |store: &StateFileLock| {
+            let mut displaced_name = store.lock_name.clone();
+            displaced_name.push(".test-post-publication-displaced");
+            unlinkat_entry(store.directory.as_raw_fd(), &store.lock_name)
+                .expect("remove replacement lock");
+            renameat_same_directory(
+                store.directory.as_raw_fd(),
+                &displaced_name,
+                &store.lock_name,
+                "restore publication-window test lock",
+            )
+            .expect("restore held lock");
+            store.directory.sync_all().expect("sync restored lock");
+            store
+                .state_anchor_trust_mutation_guard()
+                .revalidate()
+                .expect("restored mutation guard");
+        };
+
+        let guard = store.state_anchor_trust_mutation_guard();
+        REPLACE_TRUST_LOCK_AFTER_GUARDED_PUBLICATION
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let create_error = create_entry_atomically_with_guard(
+            &store.directory,
+            &target_name,
+            b"created-before-post-publication-revalidation",
+            "guarded COW create test",
+            Some(&guard),
+        )
+        .expect_err("post-publication lock replacement must fail guarded create");
+        assert!(
+            create_error.to_string().contains("replaced"),
+            "unexpected guarded-create error: {create_error}"
+        );
+        assert_eq!(
+            fs::read(state_path.with_file_name(&target_name)).expect("published create target"),
+            b"created-before-post-publication-revalidation"
+        );
+        restore_lock(&store);
+
+        let guard = store.state_anchor_trust_mutation_guard();
+        REPLACE_TRUST_LOCK_AFTER_GUARDED_PUBLICATION
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let replace_error = replace_durable_entry_with_guard(
+            &store.directory,
+            &target_name,
+            b"replaced-before-post-publication-revalidation",
+            "guarded COW replace test",
+            Some(&guard),
+        )
+        .expect_err("post-publication lock replacement must fail guarded replace");
+        assert!(
+            replace_error.to_string().contains("replaced"),
+            "unexpected guarded-replace error: {replace_error}"
+        );
+        assert_eq!(
+            fs::read(state_path.with_file_name(&target_name))
+                .expect("published replacement target"),
+            b"replaced-before-post-publication-revalidation"
+        );
+        restore_lock(&store);
+        REPLACE_TRUST_LOCK_AFTER_GUARDED_PUBLICATION
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+
+        unlinkat_entry(store.directory.as_raw_fd(), &target_name).expect("remove COW test target");
+        store.directory.sync_all().expect("sync COW target removal");
+        drop(store);
+        cleanup_anchor_store_fixture(&state_path);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn recovery_preflight_detects_lock_name_replacement_after_flock() {
+        let _guard = lock_test_state();
+        let (state_path, transition, _) = bootstrap_trust_store_fixture("post-flock-lock-swap");
+        let mut store = StateFileLock::acquire_for_trust_transition(&state_path, &transition)
+            .expect("open transition store");
+        set_state_anchor_trust_transition_fault_for_tests(
+            StateAnchorTrustTransitionFaultInjectionPoint::AfterIntentPublication,
+        );
+        store
+            .transition_state_witness_anchor(&transition)
+            .expect_err("leave durable recovery intent");
+        clear_state_anchor_trust_transition_fault_for_tests();
+        let directory = store
+            .directory
+            .try_clone()
+            .expect("clone directory descriptor");
+        let lock_name = store.lock_name.clone();
+        drop(store);
+
+        REPLACE_TRUST_LOCK_AFTER_FLOCK.store(true, std::sync::atomic::Ordering::SeqCst);
+        let error = match StateFileLock::acquire_for_trust_head_inspection(&state_path) {
+            Ok(_) => panic!("post-flock lock replacement must fail preflight"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("replaced"),
+            "unexpected post-flock replacement error: {error}"
+        );
+        assert!(state_anchor_trust_intent_file_path(&state_path).exists());
+
+        let mut displaced_name = lock_name.clone();
+        displaced_name.push(".test-post-flock-displaced");
+        unlinkat_entry(directory.as_raw_fd(), &lock_name).expect("remove replacement lock");
+        renameat_same_directory(
+            directory.as_raw_fd(),
+            &displaced_name,
+            &lock_name,
+            "restore post-flock test lock",
+        )
+        .expect("restore original lock");
+        directory.sync_all().expect("sync restored original lock");
+        let recovery = match StateFileLock::acquire_for_trust_head_inspection(&state_path) {
+            Ok(_) => panic!("restored intent still requires fresh recovery"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            recovery,
+            EngineError::StateAnchorTrustRecoveryRequired { .. }
+        ));
+        cleanup_anchor_store_fixture(&state_path);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn fresh_remote_read_for_a_later_checkpoint_cannot_resume_an_older_intent() {
+        let _guard = lock_test_state();
+        let (state_path, original, tip) = bootstrap_trust_store_fixture("advanced-read-recovery");
+        let mut store = StateFileLock::acquire_for_trust_transition(&state_path, &original)
+            .expect("open transition store");
+        set_state_anchor_trust_transition_fault_for_tests(
+            StateAnchorTrustTransitionFaultInjectionPoint::AfterIntentPublication,
+        );
+        store
+            .transition_state_witness_anchor(&original)
+            .expect_err("leave durable intent before mutation");
+        clear_state_anchor_trust_transition_fault_for_tests();
+        drop(store);
+
+        let store_fingerprint = original.certificates[0].signer_store_fingerprint;
+        let advanced_state_image_digest = [0x91; 32];
+        let advanced_tip = StateWitness {
+            generation: tip.generation + 1,
+            previous_commitment: tip.commitment,
+            commitment: state_commitment(
+                &store_fingerprint,
+                tip.generation + 1,
+                &tip.commitment,
+                &advanced_state_image_digest,
+            ),
+            state_image_digest: advanced_state_image_digest,
+        };
+        let now = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_millis(),
+        )
+        .expect("clock fits u64");
+        let advanced = bootstrap_state_anchor_trust_transition_for_tests(
+            store_fingerprint,
+            &advanced_tip,
+            now,
+            now + 30_000,
+            now,
+            now + 30_000,
+            true,
+        )
+        .expect("build fresh remote-advanced Read");
+
+        let embedded = &original.certificates[0].target_acknowledgement;
+        let refreshed_exact = bootstrap_state_anchor_trust_transition_for_tests(
+            store_fingerprint,
+            &tip,
+            embedded.committed_at_unix_ms,
+            embedded.expires_at_unix_ms,
+            now,
+            now + 30_000,
+            true,
+        )
+        .expect("restore original pins with refreshed exact Read");
+        assert_eq!(
+            refreshed_exact.request.certificate_chain,
+            original.request.certificate_chain
+        );
+
+        let mut mixed_request = refreshed_exact.request.clone();
+        mixed_request.target_read_response_base64 =
+            advanced.request.target_read_response_base64.clone();
+        let mixed = verify_state_anchor_trust_transition_request(mixed_request, true)
+            .expect("remote-advanced Read is otherwise fresh and correctly signed");
+        assert_ne!(
+            mixed
+                .target_read_acknowledgement
+                .checkpoint_state_commitment,
+            original.certificates[0]
+                .target_acknowledgement
+                .checkpoint_state_commitment
+        );
+
+        let error = match StateFileLock::acquire_for_trust_transition(&state_path, &mixed) {
+            Ok(_) => panic!("later remote checkpoint must not resume older local intent"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("freshly read target acknowledgement differs"),
+            "unexpected advanced-Read recovery error: {error}"
+        );
+        assert!(state_anchor_trust_intent_file_path(&state_path).exists());
+        assert!(!state_anchor_trust_file_path(&state_path).exists());
+        assert!(!state_anchor_file_path(&state_path).exists());
+
+        let mut resumed =
+            StateFileLock::acquire_for_trust_transition(&state_path, &refreshed_exact)
+                .expect("exact fresh Read resumes pending intent");
+        let replay = resumed
+            .transition_state_witness_anchor(&refreshed_exact)
+            .expect("post-recovery exact replay");
+        assert!(replay.idempotent);
+        drop(resumed);
+        cleanup_anchor_store_fixture(&state_path);
+    }
+
+    #[test]
     fn signed_segment_header_matches_frozen_472_byte_vector() {
         let acknowledgement = fixture_acknowledgement();
         let header = encode_state_witness_segment_header(
@@ -4299,6 +7186,38 @@ mod witness_transcript_tests {
         assert_eq!(parsed.base.generation, 42);
     }
 
+    #[test]
+    fn ordinary_anchor_history_allows_a_retained_anchor_behind_the_local_tip() {
+        let mut acknowledgement = fixture_acknowledgement();
+        let anchored = StateWitness {
+            generation: acknowledgement.checkpoint_generation,
+            previous_commitment: acknowledgement.checkpoint_previous_commitment,
+            state_image_digest: acknowledgement.checkpoint_state_image_digest,
+            commitment: acknowledgement.checkpoint_state_commitment,
+        };
+        let next_image = [0x5c; 32];
+        let tip = StateWitness {
+            generation: anchored.generation + 1,
+            previous_commitment: anchored.commitment,
+            state_image_digest: next_image,
+            commitment: state_commitment(
+                &acknowledgement.checkpoint_store_fingerprint,
+                anchored.generation + 1,
+                &anchored.commitment,
+                &next_image,
+            ),
+        };
+        acknowledgement.checkpoint_generation = anchored.generation;
+        let metadata = StateAnchorMetadata {
+            latest: acknowledgement.clone(),
+            witness_base: Some(acknowledgement),
+            pending_witness_base: None,
+        };
+
+        validate_anchor_history(Some(&metadata), &[anchored, tip])
+            .expect("ordinary reconciliation may advance a retained anchor to the local tip");
+    }
+
     fn signed_fixture() -> (StateAnchorConfiguration, StateAnchorAcknowledgement) {
         let signing_key = SigningKey::from_bytes(&[0x07; 32]);
         let response_public_key = signing_key.verifying_key().to_bytes();
@@ -4325,6 +7244,7 @@ mod witness_transcript_tests {
                 response_public_key,
                 response_public_key_spki_sha256: configured_spki_hash,
                 rotation_threshold_records: 8,
+                trust: None,
             },
             acknowledgement,
         )
@@ -4414,9 +7334,594 @@ mod witness_transcript_tests {
             PathBuf::from(witness_next),
             PathBuf::from(witness_previous),
             state_anchor_file_path(state_path),
+            state_anchor_trust_file_path(state_path),
+            state_anchor_trust_intent_file_path(state_path),
         ] {
             let _ = fs::remove_file(path);
         }
+    }
+
+    #[cfg(unix)]
+    fn bootstrap_trust_store_fixture(
+        label: &str,
+    ) -> (PathBuf, VerifiedStateAnchorTrustTransition, StateWitness) {
+        let mut random = [0u8; 12];
+        OsRng.fill_bytes(&mut random);
+        let state_path = std::env::temp_dir().join(format!(
+            "tbtc-signer-trust-{label}-{}-{}",
+            std::process::id(),
+            hex::encode(random)
+        ));
+        let (transition, tip) = bootstrap_trust_store_fixture_at(&state_path);
+        (state_path, transition, tip)
+    }
+
+    #[cfg(unix)]
+    fn bootstrap_trust_store_fixture_at(
+        state_path: &Path,
+    ) -> (VerifiedStateAnchorTrustTransition, StateWitness) {
+        std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, state_path);
+        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "4");
+        let mut initial = StateFileLock::acquire(state_path).expect("open unanchored store");
+        let tip = initial.state_witness_tip().expect("unanchored genesis tip");
+        let store_fingerprint = initial.identity.fingerprint;
+        drop(initial);
+
+        let now = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_millis(),
+        )
+        .expect("clock fits u64");
+        let transition = bootstrap_state_anchor_trust_transition_for_tests(
+            store_fingerprint,
+            &tip,
+            now,
+            now + 30_000,
+            now,
+            now + 30_000,
+            true,
+        )
+        .expect("build verified bootstrap transition");
+        (transition, tip)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn bootstrap_trust_transition_succeeds_on_first_call_and_ordinary_reopen() {
+        let _guard = lock_test_state();
+        let (state_path, transition, tip) = bootstrap_trust_store_fixture("bootstrap");
+        let mut store = StateFileLock::acquire_for_trust_transition(&state_path, &transition)
+            .expect("acquire transition store");
+        let outcome = store
+            .transition_state_witness_anchor(&transition)
+            .expect("bootstrap succeeds on its first call");
+        assert!(!outcome.idempotent);
+        assert_eq!(outcome.applied_certificate_count, 1);
+        assert_eq!(outcome.tip, tip);
+        assert_eq!(outcome.base, tip);
+        assert_eq!(
+            outcome.trust_head.certificate_digest,
+            transition.certificates[0].certificate_digest
+        );
+        ensure_entry_absent(
+            store.directory.as_raw_fd(),
+            &store.trust_intent_name,
+            "completed trust transition intent",
+        )
+        .expect("completed intent removed");
+        drop(store);
+
+        let mut reopened = StateFileLock::acquire(&state_path).expect("ordinary target reopen");
+        let snapshot = reopened
+            .state_anchor_trust_head_snapshot()
+            .expect("ordinary reopened trust head");
+        assert_eq!(snapshot.tip, tip);
+        assert_eq!(snapshot.base, tip);
+        assert_eq!(
+            snapshot.trust_head.certificate_digest,
+            transition.certificates[0].certificate_digest
+        );
+        assert_eq!(
+            snapshot.anchor.latest,
+            transition.certificates[0].target_acknowledgement
+        );
+        drop(reopened);
+        cleanup_anchor_store_fixture(&state_path);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn bootstrap_facts_store_acquisition_is_repeatable_ephemeral_and_pristine_only() {
+        let _guard = lock_test_state();
+        let mut random = [0u8; 12];
+        OsRng.fill_bytes(&mut random);
+        let state_path = std::env::temp_dir().join(format!(
+            "tbtc-signer-bootstrap-facts-store-{}-{}",
+            std::process::id(),
+            hex::encode(random)
+        ));
+        if let Ok(mut slot) = state_file_lock_slot().lock() {
+            *slot = None;
+        }
+
+        let first = {
+            let mut store =
+                StateFileLock::acquire_for_bootstrap_facts(&state_path).expect("first acquisition");
+            store
+                .state_anchor_bootstrap_facts_snapshot()
+                .expect("first bootstrap facts")
+        };
+        let second = {
+            let mut store = StateFileLock::acquire_for_bootstrap_facts(&state_path)
+                .expect("repeat acquisition");
+            store
+                .state_anchor_bootstrap_facts_snapshot()
+                .expect("repeat bootstrap facts")
+        };
+        assert_eq!(first, second);
+        assert!(state_file_lock_slot().lock().expect("store slot").is_none());
+
+        fs::write(&state_path, b"non-pristine-state-image").expect("publish state entry");
+        let mut permissions = fs::metadata(&state_path)
+            .expect("state entry metadata")
+            .permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o600);
+        fs::set_permissions(&state_path, permissions).expect("restrict state entry permissions");
+        let error = match StateFileLock::acquire_for_bootstrap_facts(&state_path) {
+            Ok(_) => panic!("non-pristine store must reject bootstrap facts"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("pristine genesis-only store")
+                || error.to_string().contains("state image"),
+            "unexpected non-pristine rejection: {error}"
+        );
+        cleanup_anchor_store_fixture(&state_path);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn provisioning_config_ffi_is_startup_only_and_capability_minimal() {
+        let mut random = [0u8; 12];
+        OsRng.fill_bytes(&mut random);
+        let state_path = std::env::temp_dir().join(format!(
+            "tbtc-signer-bootstrap-provisioning-{}-{}",
+            std::process::id(),
+            hex::encode(random)
+        ));
+        let output =
+            std::process::Command::new(std::env::current_exe().expect("current test binary path"))
+                .arg("--exact")
+                .arg("engine::store::witness_transcript_tests::provisioning_config_ffi_helper")
+                .arg("--ignored")
+                .arg("--nocapture")
+                .env("TBTC_SIGNER_BOOTSTRAP_PROVISIONING_HELPER", "1")
+                .env("TBTC_SIGNER_BOOTSTRAP_PROVISIONING_STATE_PATH", &state_path)
+                .output()
+                .expect("spawn isolated provisioning helper");
+        assert!(
+            output.status.success(),
+            "provisioning helper failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "provisioning helper did not execute exactly one test\nstdout:\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        cleanup_anchor_store_fixture(&state_path);
+    }
+
+    #[test]
+    #[ignore = "isolated subprocess helper"]
+    #[cfg(unix)]
+    fn provisioning_config_ffi_helper() {
+        if std::env::var("TBTC_SIGNER_BOOTSTRAP_PROVISIONING_HELPER").as_deref() != Ok("1") {
+            return;
+        }
+        assert!(ENGINE_STATE.get().is_none());
+        assert!(state_file_lock_slot().lock().expect("store slot").is_none());
+        let state_path = PathBuf::from(
+            std::env::var("TBTC_SIGNER_BOOTSTRAP_PROVISIONING_STATE_PATH")
+                .expect("helper state path"),
+        );
+
+        let call_with_json = |payload: Vec<u8>,
+                              function: extern "C" fn(
+            *const u8,
+            usize,
+        ) -> crate::ffi::TbtcSignerResult| {
+            let result = function(payload.as_ptr(), payload.len());
+            let bytes = if result.buffer.ptr.is_null() || result.buffer.len == 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(result.buffer.ptr, result.buffer.len).to_vec() }
+            };
+            crate::frost_tbtc_free_buffer(result.buffer.ptr, result.buffer.len);
+            (result.status_code, bytes)
+        };
+        let call_without_json = |function: extern "C" fn() -> crate::ffi::TbtcSignerResult| {
+            let result = function();
+            let bytes = if result.buffer.ptr.is_null() || result.buffer.len == 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(result.buffer.ptr, result.buffer.len).to_vec() }
+            };
+            crate::frost_tbtc_free_buffer(result.buffer.ptr, result.buffer.len);
+            (result.status_code, bytes)
+        };
+
+        let mut provisioning = InitSignerConfigRequest {
+            purpose: Some("state_anchor_bootstrap_provisioning".to_string()),
+            profile: Some("production".to_string()),
+            state_path: Some(state_path.to_string_lossy().into_owned()),
+            state_witness_max_records: Some(4),
+            ..InitSignerConfigRequest::default()
+        };
+        provisioning.state_anchor_binding_hash = Some(bytes32_hex([0x41; 32]));
+        let (invalid_status, invalid_payload) = call_with_json(
+            serde_json::to_vec(&provisioning).expect("invalid config JSON"),
+            crate::frost_tbtc_init_signer_config,
+        );
+        assert_eq!(invalid_status, 1);
+        let invalid_error: crate::api::ErrorResponse =
+            serde_json::from_slice(&invalid_payload).expect("invalid config error");
+        assert!(
+            invalid_error
+                .message
+                .contains("forbids populated field [state_anchor_binding_hash]"),
+            "unexpected provisioning pin rejection: {}",
+            invalid_error.message
+        );
+
+        provisioning.state_anchor_binding_hash = None;
+        let (init_status, _) = call_with_json(
+            serde_json::to_vec(&provisioning).expect("provisioning config JSON"),
+            crate::frost_tbtc_init_signer_config,
+        );
+        assert_eq!(init_status, 0);
+
+        let (first_status, first_payload) =
+            call_without_json(crate::frost_tbtc_state_anchor_bootstrap_facts);
+        let (second_status, second_payload) =
+            call_without_json(crate::frost_tbtc_state_anchor_bootstrap_facts);
+        assert_eq!(first_status, 0);
+        assert_eq!(second_status, 0);
+        assert_eq!(first_payload, second_payload);
+        let facts: StateAnchorBootstrapFactsResult =
+            serde_json::from_slice(&first_payload).expect("bootstrap facts result");
+        assert_eq!(facts.schema, STATE_ANCHOR_BOOTSTRAP_FACTS_SCHEMA);
+        assert_eq!(
+            facts.store_fingerprint,
+            facts.current_checkpoint.store_fingerprint
+        );
+        assert_eq!(facts.current_checkpoint.generation, "1");
+
+        let (ordinary_status, ordinary_payload) =
+            call_without_json(crate::frost_tbtc_durable_store_identity);
+        assert_eq!(ordinary_status, 1);
+        let ordinary_error: crate::api::ErrorResponse =
+            serde_json::from_slice(&ordinary_payload).expect("ordinary operation error");
+        assert!(ordinary_error.message.contains("normal_signer"));
+
+        let dkg_request = DkgPart1Request {
+            participant_identifier: "01".to_string(),
+            max_signers: 3,
+            min_signers: 2,
+        };
+        let (dkg_status, dkg_payload) = call_with_json(
+            serde_json::to_vec(&dkg_request).expect("DKG request JSON"),
+            crate::frost_tbtc_dkg_part1,
+        );
+        assert_eq!(dkg_status, 1);
+        let dkg_error: crate::api::ErrorResponse =
+            serde_json::from_slice(&dkg_payload).expect("DKG purpose error");
+        assert!(dkg_error.message.contains("normal_signer"));
+
+        assert!(ENGINE_STATE.get().is_none());
+        assert!(state_file_lock_slot().lock().expect("store slot").is_none());
+        cleanup_anchor_store_fixture(&state_path);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn committed_trust_head_rejects_missing_anchor_and_legacy_witness_rollback_mix() {
+        let _guard = lock_test_state();
+        for remove_anchor in [true, false] {
+            establish_clean_signer_test_env();
+            let label = if remove_anchor {
+                "rollback-missing-anchor"
+            } else {
+                "rollback-legacy-witness"
+            };
+            let (state_path, transition, _) = bootstrap_trust_store_fixture(label);
+            let witness_path = state_witness_file_path(&state_path);
+            let legacy_witness = fs::read(&witness_path).expect("read pre-bootstrap witness");
+            let mut store = StateFileLock::acquire_for_trust_transition(&state_path, &transition)
+                .expect("acquire bootstrap store");
+            store
+                .transition_state_witness_anchor(&transition)
+                .expect("install committed trust head");
+            drop(store);
+
+            if remove_anchor {
+                fs::remove_file(state_anchor_file_path(&state_path))
+                    .expect("remove anchor rollback component");
+                fs::write(&witness_path, &legacy_witness)
+                    .expect("restore pre-bootstrap witness rollback component");
+            } else {
+                fs::write(&witness_path, &legacy_witness)
+                    .expect("restore pre-bootstrap witness component");
+            }
+            let error = StateFileLock::acquire(&state_path)
+                .err()
+                .expect("mixed pre/post-bootstrap rollback state must fail closed");
+            if remove_anchor {
+                assert!(
+                    error
+                        .to_string()
+                        .contains("requires persisted anchor metadata"),
+                    "unexpected missing-anchor error: {error}"
+                );
+            } else {
+                assert!(
+                    error
+                        .to_string()
+                        .contains("requires an authenticated witness segment"),
+                    "unexpected legacy-witness error: {error}"
+                );
+            }
+            cleanup_anchor_store_fixture(&state_path);
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn durable_bootstrap_intent_requires_fresh_resubmission_at_every_publication_boundary() {
+        let _guard = lock_test_state();
+        let fault_points = [
+            StateAnchorTrustTransitionFaultInjectionPoint::AfterIntentPublication,
+            StateAnchorTrustTransitionFaultInjectionPoint::AfterPrepareBatch,
+            StateAnchorTrustTransitionFaultInjectionPoint::AfterNextWitnessPublication,
+            StateAnchorTrustTransitionFaultInjectionPoint::AfterPreviousWitnessPublication,
+            StateAnchorTrustTransitionFaultInjectionPoint::AfterCurrentWitnessPublication,
+            StateAnchorTrustTransitionFaultInjectionPoint::AfterTargetAnchorPublication,
+            StateAnchorTrustTransitionFaultInjectionPoint::AfterCommitPublication,
+            StateAnchorTrustTransitionFaultInjectionPoint::AfterPreviousWitnessRetirement,
+        ];
+        for point in fault_points {
+            establish_clean_signer_test_env();
+            let (state_path, transition, tip) =
+                bootstrap_trust_store_fixture(&format!("{point:?}"));
+            let mut store = StateFileLock::acquire_for_trust_transition(&state_path, &transition)
+                .expect("acquire transition store");
+            set_state_anchor_trust_transition_fault_for_tests(point);
+            let error = store
+                .transition_state_witness_anchor(&transition)
+                .expect_err("fault interrupts fresh transition");
+            assert!(
+                error
+                    .to_string()
+                    .contains("injected state-anchor trust transition fault"),
+                "unexpected fault result at {point:?}: {error}"
+            );
+            clear_state_anchor_trust_transition_fault_for_tests();
+            let intent_path = state_anchor_trust_intent_file_path(&state_path);
+            assert!(
+                intent_path.exists(),
+                "durable intent must survive fault at {point:?}"
+            );
+            drop(store);
+
+            let recovery_error = match StateFileLock::acquire_for_trust_head_inspection(&state_path)
+            {
+                Ok(_) => panic!("preflight must not recover locally at {point:?}"),
+                Err(error) => error,
+            };
+            let EngineError::StateAnchorTrustRecoveryRequired { context } = recovery_error else {
+                panic!("unexpected preflight result at {point:?}: {recovery_error}");
+            };
+            assert_eq!(
+                context.store_fingerprint,
+                transition.certificates[0].signer_store_fingerprint
+            );
+            assert_eq!(
+                context.certificate_digests,
+                vec![transition.certificates[0].certificate_digest]
+            );
+            assert!(
+                intent_path.exists(),
+                "preflight must leave the intent untouched at {point:?}"
+            );
+
+            let mut resumed = StateFileLock::acquire_for_trust_transition(&state_path, &transition)
+                .unwrap_or_else(|error| {
+                    panic!("fresh transition resumption failed at {point:?}: {error}")
+                });
+            let replay = resumed
+                .transition_state_witness_anchor(&transition)
+                .unwrap_or_else(|error| {
+                    panic!("post-recovery replay failed at {point:?}: {error}")
+                });
+            assert!(replay.idempotent);
+            drop(resumed);
+
+            let mut inspection = StateFileLock::acquire_for_trust_head_inspection(&state_path)
+                .unwrap_or_else(|error| {
+                    panic!("post-recovery preflight failed at {point:?}: {error}")
+                });
+            let recovered = inspection
+                .state_anchor_trust_head_snapshot()
+                .unwrap_or_else(|error| {
+                    panic!("recovered trust head failed at {point:?}: {error}")
+                });
+            assert_eq!(recovered.tip, tip, "tip changed at {point:?}");
+            assert_eq!(recovered.base, tip, "base changed at {point:?}");
+            assert_eq!(
+                recovered.trust_head.certificate_digest,
+                transition.certificates[0].certificate_digest,
+                "wrong recovered head at {point:?}"
+            );
+            assert!(
+                !intent_path.exists(),
+                "preflight must retire recovered intent at {point:?}"
+            );
+            drop(inspection);
+
+            let mut ordinary = StateFileLock::acquire(&state_path)
+                .unwrap_or_else(|error| panic!("ordinary reopen failed at {point:?}: {error}"));
+            assert_eq!(
+                ordinary
+                    .state_witness_tip()
+                    .expect("ordinary recovered tip"),
+                tip,
+                "ordinary tip changed at {point:?}"
+            );
+            drop(ordinary);
+            cleanup_anchor_store_fixture(&state_path);
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn exact_bootstrap_replay_requires_a_fresh_read_and_never_recreates_intent() {
+        let _guard = lock_test_state();
+        let (state_path, transition, tip) = bootstrap_trust_store_fixture("replay");
+        let mut first = StateFileLock::acquire_for_trust_transition(&state_path, &transition)
+            .expect("acquire initial bootstrap");
+        first
+            .transition_state_witness_anchor(&transition)
+            .expect("initial bootstrap");
+        drop(first);
+
+        let mut replay = StateFileLock::acquire_for_trust_transition(&state_path, &transition)
+            .expect("acquire exact replay");
+        let replayed = replay
+            .transition_state_witness_anchor(&transition)
+            .expect("fresh exact replay");
+        assert!(replayed.idempotent);
+        assert_eq!(replayed.applied_certificate_count, 0);
+        drop(replay);
+
+        let now = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_millis(),
+        )
+        .expect("clock fits u64");
+        let nested = &transition.certificates[0].target_acknowledgement;
+        let expired = bootstrap_state_anchor_trust_transition_for_tests(
+            nested.checkpoint_store_fingerprint,
+            &tip,
+            nested.committed_at_unix_ms,
+            nested.expires_at_unix_ms,
+            now - 60_000,
+            now - 30_000,
+            false,
+        )
+        .expect("intrinsically valid expired Read");
+        assert_eq!(
+            expired.certificates[0].certificate_digest,
+            transition.certificates[0].certificate_digest
+        );
+        let mut expired_store = StateFileLock::acquire_for_trust_transition(&state_path, &expired)
+            .expect("acquire expired exact replay for store-level admission check");
+        let error = expired_store
+            .transition_state_witness_anchor(&expired)
+            .expect_err("expired exact replay rejected");
+        assert!(
+            error.to_string().contains("expired"),
+            "unexpected expired replay error: {error}"
+        );
+        ensure_entry_absent(
+            expired_store.directory.as_raw_fd(),
+            &expired_store.trust_intent_name,
+            "expired exact replay intent",
+        )
+        .expect("expired replay cannot publish intent");
+        drop(expired_store);
+        cleanup_anchor_store_fixture(&state_path);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn trust_journal_batch_capacity_preflight_rejects_before_intent_publication() {
+        let _guard = lock_test_state();
+        let (state_path, transition, _) = bootstrap_trust_store_fixture("capacity");
+        let mut store = StateFileLock::acquire_for_trust_transition(&state_path, &transition)
+            .expect("acquire capacity fixture");
+        let certificate = &transition.certificates[0];
+        let prepare_length = encode_state_anchor_trust_prepare_record(
+            &store.identity.fingerprint,
+            &[0u8; 32],
+            certificate,
+        )
+        .expect("encode PREPARE")
+        .len();
+        let commit_length = encode_state_anchor_trust_commit_record(
+            &store.identity.fingerprint,
+            &[0u8; 32],
+            certificate,
+        )
+        .expect("encode COMMIT")
+        .len();
+        for current_length in [
+            STATE_ANCHOR_TRUST_MAX_JOURNAL_LENGTH - prepare_length + 1,
+            STATE_ANCHOR_TRUST_MAX_JOURNAL_LENGTH - prepare_length - commit_length + 1,
+        ] {
+            let growth = store
+                .state_anchor_trust_transition_journal_growth(&transition)
+                .expect("compute exact journal growth");
+            let error = ensure_state_anchor_trust_transition_journal_capacity_for_length(
+                current_length,
+                growth - STATE_ANCHOR_TRUST_JOURNAL_HEADER_LENGTH,
+            )
+            .expect_err("near-capacity batch rejected");
+            assert!(error.to_string().contains("size bound"));
+            ensure_entry_absent(
+                store.directory.as_raw_fd(),
+                &store.trust_intent_name,
+                "capacity-rejected trust intent",
+            )
+            .expect("capacity preflight cannot publish intent");
+        }
+        let intent_bytes = encode_state_anchor_trust_transition_intent(
+            &store.identity.fingerprint,
+            &transition.request,
+        )
+        .expect("encode boundary-test intent");
+        let error = store
+            .create_state_anchor_trust_transition_intent(
+                &intent_bytes,
+                transition.target_read_expires_at_unix_ms,
+                STATE_ANCHOR_TRUST_MAX_JOURNAL_LENGTH + 1,
+            )
+            .expect_err("final pre-rename capacity check rejects publication");
+        assert!(error.to_string().contains("size bound"));
+        ensure_entry_absent(
+            store.directory.as_raw_fd(),
+            &store.trust_intent_name,
+            "capacity-rejected live trust intent",
+        )
+        .expect("oversized batch cannot publish its intent");
+        let temp_prefix = format!("{}.tmp-", store.trust_intent_name.to_string_lossy());
+        let parent = state_path.parent().expect("fixture parent");
+        assert!(
+            fs::read_dir(parent)
+                .expect("read fixture directory")
+                .filter_map(Result::ok)
+                .all(|entry| !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(&temp_prefix)),
+            "capacity-rejected intent temp must be cleaned up"
+        );
+        drop(store);
+        cleanup_anchor_store_fixture(&state_path);
     }
 
     #[test]
@@ -4434,6 +7939,7 @@ mod witness_transcript_tests {
                 &bytes,
                 &acknowledgement.checkpoint_store_fingerprint,
                 &configuration,
+                &[],
             )
             .expect("parse signed metadata"),
             metadata
@@ -4449,6 +7955,7 @@ mod witness_transcript_tests {
             &tampered,
             &acknowledgement.checkpoint_store_fingerprint,
             &configuration,
+            &[],
         )
         .expect_err("a recommitted but signature-tampered anchor must fail");
         assert!(error.to_string().contains("signature"));
@@ -4485,6 +7992,7 @@ mod witness_transcript_tests {
             &bytes,
             &latest.checkpoint_store_fingerprint,
             &configuration,
+            &[],
         )
         .expect_err("adjacent signed fork splice must fail");
         assert!(error.to_string().contains("inconsistent"));
@@ -4510,6 +8018,7 @@ mod witness_transcript_tests {
                 &bytes,
                 &latest.checkpoint_store_fingerprint,
                 &configuration,
+                &[],
             )
             .expect("adjacent linked metadata"),
             linked
@@ -5022,6 +8531,8 @@ mod witness_transcript_tests {
                     None,
                     Some(&metadata),
                     16,
+                    true,
+                    None,
                 )
                 .expect("recover signed rotation"),
                 "case {case} must promote its pending base"

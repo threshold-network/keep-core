@@ -50,6 +50,19 @@ pub(crate) struct StateAnchorConfiguration {
     pub(crate) response_public_key: [u8; 32],
     pub(crate) response_public_key_spki_sha256: [u8; 32],
     pub(crate) rotation_threshold_records: usize,
+    pub(crate) trust: Option<StateAnchorTrustConfiguration>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct StateAnchorTrustConfiguration {
+    pub(crate) protocol_id: [u8; 32],
+    pub(crate) stream_id: [u8; 32],
+    pub(crate) activation_manifest_hash: [u8; 32],
+    pub(crate) activation_manifest_sequence: u64,
+    pub(crate) offline_authority_public_key: [u8; 32],
+    pub(crate) offline_authority_public_key_spki_sha256: [u8; 32],
+    pub(crate) certificate_sequence: u64,
+    pub(crate) certificate_digest: [u8; 32],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -115,11 +128,32 @@ pub(crate) fn configured_state_anchor() -> Result<Option<StateAnchorConfiguratio
     let spki_hash = signer_env_var(TBTC_SIGNER_STATE_ANCHOR_RESPONSE_PUBLIC_KEY_SPKI_SHA256_ENV);
     let rotation_threshold =
         signer_env_var(TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV);
+    let protocol_id = signer_env_var(TBTC_SIGNER_STATE_ANCHOR_PROTOCOL_ID_ENV);
+    let stream_id = signer_env_var(TBTC_SIGNER_STATE_ANCHOR_STREAM_ID_ENV);
+    let activation_manifest_hash =
+        signer_env_var(TBTC_SIGNER_STATE_ANCHOR_ACTIVATION_MANIFEST_HASH_ENV);
+    let activation_manifest_sequence =
+        signer_env_var(TBTC_SIGNER_STATE_ANCHOR_ACTIVATION_MANIFEST_SEQUENCE_ENV);
+    let offline_authority_public_key =
+        signer_env_var(TBTC_SIGNER_STATE_ANCHOR_OFFLINE_AUTHORITY_PUBLIC_KEY_ENV);
+    let offline_authority_spki_hash =
+        signer_env_var(TBTC_SIGNER_STATE_ANCHOR_OFFLINE_AUTHORITY_PUBLIC_KEY_SPKI_SHA256_ENV);
+    let certificate_sequence =
+        signer_env_var(TBTC_SIGNER_STATE_ANCHOR_TRUST_CERTIFICATE_SEQUENCE_ENV);
+    let certificate_digest = signer_env_var(TBTC_SIGNER_STATE_ANCHOR_TRUST_CERTIFICATE_DIGEST_ENV);
 
     if binding_hash.is_none()
         && response_public_key.is_none()
         && spki_hash.is_none()
         && rotation_threshold.is_none()
+        && protocol_id.is_none()
+        && stream_id.is_none()
+        && activation_manifest_hash.is_none()
+        && activation_manifest_sequence.is_none()
+        && offline_authority_public_key.is_none()
+        && offline_authority_spki_hash.is_none()
+        && certificate_sequence.is_none()
+        && certificate_digest.is_none()
     {
         return Ok(None);
     }
@@ -154,12 +188,10 @@ pub(crate) fn configured_state_anchor() -> Result<Option<StateAnchorConfiguratio
         )?,
         TBTC_SIGNER_STATE_ANCHOR_RESPONSE_PUBLIC_KEY_SPKI_SHA256_ENV,
     )?;
-    VerifyingKey::from_bytes(&response_public_key).map_err(|error| {
-        EngineError::Validation(format!(
-            "{} is not a valid Ed25519 public key: {error}",
-            TBTC_SIGNER_STATE_ANCHOR_RESPONSE_PUBLIC_KEY_ENV
-        ))
-    })?;
+    validate_strong_ed25519_verifying_key(
+        &response_public_key,
+        TBTC_SIGNER_STATE_ANCHOR_RESPONSE_PUBLIC_KEY_ENV,
+    )?;
     let computed_spki_hash = ed25519_spki_sha256(&response_public_key);
     if computed_spki_hash != response_public_key_spki_sha256 {
         return Err(EngineError::Validation(format!(
@@ -193,12 +225,114 @@ pub(crate) fn configured_state_anchor() -> Result<Option<StateAnchorConfiguratio
         )));
     }
 
+    let trust_values_are_absent = protocol_id.is_none()
+        && stream_id.is_none()
+        && activation_manifest_hash.is_none()
+        && activation_manifest_sequence.is_none()
+        && offline_authority_public_key.is_none()
+        && offline_authority_spki_hash.is_none()
+        && certificate_sequence.is_none()
+        && certificate_digest.is_none();
+    let trust = if trust_values_are_absent && !signer_profile_is_production() {
+        // Development-only compatibility for the crate's pre-transition
+        // low-level fixtures. Production and every FFI-installed anchor config
+        // must pin the complete trust head and therefore cannot enter this path.
+        None
+    } else {
+        let protocol_id =
+            parse_required_nonzero_bytes32(protocol_id, TBTC_SIGNER_STATE_ANCHOR_PROTOCOL_ID_ENV)?;
+        let stream_id =
+            parse_required_nonzero_bytes32(stream_id, TBTC_SIGNER_STATE_ANCHOR_STREAM_ID_ENV)?;
+        let activation_manifest_hash = parse_required_nonzero_bytes32(
+            activation_manifest_hash,
+            TBTC_SIGNER_STATE_ANCHOR_ACTIVATION_MANIFEST_HASH_ENV,
+        )?;
+        let activation_manifest_sequence = parse_required_nonzero_u64(
+            activation_manifest_sequence,
+            TBTC_SIGNER_STATE_ANCHOR_ACTIVATION_MANIFEST_SEQUENCE_ENV,
+        )?;
+        let offline_authority_public_key = parse_required_nonzero_bytes32(
+            offline_authority_public_key,
+            TBTC_SIGNER_STATE_ANCHOR_OFFLINE_AUTHORITY_PUBLIC_KEY_ENV,
+        )?;
+        validate_strong_ed25519_verifying_key(
+            &offline_authority_public_key,
+            TBTC_SIGNER_STATE_ANCHOR_OFFLINE_AUTHORITY_PUBLIC_KEY_ENV,
+        )?;
+        let offline_authority_public_key_spki_sha256 = parse_required_nonzero_bytes32(
+            offline_authority_spki_hash,
+            TBTC_SIGNER_STATE_ANCHOR_OFFLINE_AUTHORITY_PUBLIC_KEY_SPKI_SHA256_ENV,
+        )?;
+        if ed25519_spki_sha256(&offline_authority_public_key)
+            != offline_authority_public_key_spki_sha256
+        {
+            return Err(EngineError::Validation(format!(
+                "{} does not match the configured raw Ed25519 public key",
+                TBTC_SIGNER_STATE_ANCHOR_OFFLINE_AUTHORITY_PUBLIC_KEY_SPKI_SHA256_ENV
+            )));
+        }
+        if offline_authority_public_key == response_public_key {
+            return Err(EngineError::Validation(
+                "state-anchor offline authority and online response keys must be role-distinct"
+                    .to_string(),
+            ));
+        }
+        let certificate_sequence = parse_required_nonzero_u64(
+            certificate_sequence,
+            TBTC_SIGNER_STATE_ANCHOR_TRUST_CERTIFICATE_SEQUENCE_ENV,
+        )?;
+        let certificate_digest = parse_required_nonzero_bytes32(
+            certificate_digest,
+            TBTC_SIGNER_STATE_ANCHOR_TRUST_CERTIFICATE_DIGEST_ENV,
+        )?;
+        Some(StateAnchorTrustConfiguration {
+            protocol_id,
+            stream_id,
+            activation_manifest_hash,
+            activation_manifest_sequence,
+            offline_authority_public_key,
+            offline_authority_public_key_spki_sha256,
+            certificate_sequence,
+            certificate_digest,
+        })
+    };
+
     Ok(Some(StateAnchorConfiguration {
         binding_hash,
         response_public_key,
         response_public_key_spki_sha256,
         rotation_threshold_records,
+        trust,
     }))
+}
+
+fn parse_required_nonzero_bytes32(
+    value: Option<String>,
+    name: &str,
+) -> Result<[u8; 32], EngineError> {
+    let value = value.ok_or_else(|| {
+        EngineError::Validation(format!(
+            "state-anchor trust configuration is partial; missing [{name}]"
+        ))
+    })?;
+    let parsed = parse_canonical_bytes32(&value, name)?;
+    if parsed == [0u8; 32] {
+        return Err(EngineError::Validation(format!("{name} must be nonzero")));
+    }
+    Ok(parsed)
+}
+
+fn parse_required_nonzero_u64(value: Option<String>, name: &str) -> Result<u64, EngineError> {
+    let value = value.ok_or_else(|| {
+        EngineError::Validation(format!(
+            "state-anchor trust configuration is partial; missing [{name}]"
+        ))
+    })?;
+    let parsed = parse_canonical_u64(&value, name)?;
+    if parsed == 0 {
+        return Err(EngineError::Validation(format!("{name} must be nonzero")));
+    }
+    Ok(parsed)
 }
 
 pub(crate) fn state_witness_tip() -> Result<StateWitnessTipResult, EngineError> {
@@ -341,6 +475,45 @@ fn validate_recovery_request(
     request: RecoverStateWitnessCheckpointRequest,
     configuration: &StateAnchorConfiguration,
 ) -> Result<(StateAnchorAcknowledgement, u64), EngineError> {
+    let (acknowledgement, expires_at, _) = validate_read_response_with_rules(
+        request,
+        configuration,
+        AcknowledgementParentRule::Ordinary,
+        AcknowledgementTimeMode::Fresh,
+        AcknowledgementTimeMode::Recovery,
+    )?;
+    Ok((acknowledgement, expires_at))
+}
+
+pub(crate) fn validate_certified_transition_read_response(
+    request: RecoverStateWitnessCheckpointRequest,
+    configuration: &StateAnchorConfiguration,
+    certified_previous_event_root: [u8; 32],
+    require_fresh: bool,
+) -> Result<(StateAnchorAcknowledgement, u64, Vec<u8>), EngineError> {
+    validate_read_response_with_rules(
+        request,
+        configuration,
+        AcknowledgementParentRule::CertifiedEpochGenesis(certified_previous_event_root),
+        if require_fresh {
+            AcknowledgementTimeMode::Fresh
+        } else {
+            // A persisted intent is parsed intrinsically only to authenticate
+            // its bounded certificate selector. It never authorizes recovery:
+            // mutation resumes only through a separately verified fresh Read.
+            AcknowledgementTimeMode::IntrinsicOnly
+        },
+        AcknowledgementTimeMode::IntrinsicOnly,
+    )
+}
+
+fn validate_read_response_with_rules(
+    request: RecoverStateWitnessCheckpointRequest,
+    configuration: &StateAnchorConfiguration,
+    parent_rule: AcknowledgementParentRule,
+    wrapper_time_mode: AcknowledgementTimeMode,
+    nested_time_mode: AcknowledgementTimeMode,
+) -> Result<(StateAnchorAcknowledgement, u64, Vec<u8>), EngineError> {
     if request.schema != STATE_ANCHOR_READ_RESPONSE_SCHEMA {
         return Err(EngineError::Validation(format!(
             "state-anchor recovery schema must be [{STATE_ANCHOR_READ_RESPONSE_SCHEMA}]"
@@ -386,7 +559,7 @@ fn validate_recovery_request(
     let committed_at_unix_ms =
         parse_canonical_u64(&request.committed_at_unix_ms, "committedAtUnixMs")?;
     let expires_at_unix_ms = parse_canonical_u64(&request.expires_at_unix_ms, "expiresAtUnixMs")?;
-    validate_acknowledgement_time(committed_at_unix_ms, expires_at_unix_ms)?;
+    validate_acknowledgement_lifetime(committed_at_unix_ms, expires_at_unix_ms, wrapper_time_mode)?;
     let checkpoint_ack_digest =
         parse_canonical_bytes32(&request.checkpoint_ack_digest, "checkpointAckDigest")?;
     let signature = parse_canonical_signature(&request.signature)?;
@@ -462,7 +635,13 @@ fn validate_recovery_request(
     // The fresh read wrapper, not the historical nested response, supplies
     // replay freshness. Every intrinsic timestamp, signature, pin, transcript,
     // event-root, and checkpoint rule on the original response still applies.
-    let acknowledgement = validate_acknowledgement_request(nested_request, configuration, false)?;
+    let acknowledgement = validate_acknowledgement_request_with_rules(
+        nested_request,
+        configuration,
+        nested_time_mode,
+        parent_rule,
+        AcknowledgementStatusRule::AllowAppliedOrReplay,
+    )?;
     if acknowledgement.service_epoch != service_epoch
         || acknowledgement.revision != revision
         || acknowledgement.event_root != event_root
@@ -480,7 +659,11 @@ fn validate_recovery_request(
                 .to_string(),
         ));
     }
-    Ok((acknowledgement, expires_at_unix_ms))
+    Ok((
+        acknowledgement,
+        expires_at_unix_ms,
+        raw_acknowledgement.to_vec(),
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -526,10 +709,98 @@ fn state_anchor_read_response_signing_digest(
     digest.finalize().into()
 }
 
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn state_anchor_read_response_signing_digest_for_tests(
+    binding_hash: &[u8; 32],
+    request_digest: &[u8; 32],
+    nonce: &[u8; 32],
+    service_epoch: u64,
+    revision: u64,
+    event_root: &[u8; 32],
+    checkpoint_store_fingerprint: &[u8; 32],
+    checkpoint_generation: u64,
+    checkpoint_previous_commitment: &[u8; 32],
+    checkpoint_state_image_digest: &[u8; 32],
+    checkpoint_state_commitment: &[u8; 32],
+    operation_id: &[u8; 32],
+    transition_digest: &[u8; 32],
+    committed_at_unix_ms: u64,
+    expires_at_unix_ms: u64,
+    checkpoint_ack_digest: &[u8; 32],
+    raw_acknowledgement_digest: &[u8; 32],
+) -> [u8; 32] {
+    state_anchor_read_response_signing_digest(
+        binding_hash,
+        request_digest,
+        nonce,
+        service_epoch,
+        revision,
+        event_root,
+        checkpoint_store_fingerprint,
+        checkpoint_generation,
+        checkpoint_previous_commitment,
+        checkpoint_state_image_digest,
+        checkpoint_state_commitment,
+        operation_id,
+        transition_digest,
+        committed_at_unix_ms,
+        expires_at_unix_ms,
+        checkpoint_ack_digest,
+        raw_acknowledgement_digest,
+    )
+}
+
 fn validate_acknowledgement_request(
     request: AcknowledgeStateWitnessCheckpointRequest,
     configuration: &StateAnchorConfiguration,
     require_fresh: bool,
+) -> Result<StateAnchorAcknowledgement, EngineError> {
+    validate_acknowledgement_request_with_rules(
+        request,
+        configuration,
+        if require_fresh {
+            AcknowledgementTimeMode::Fresh
+        } else {
+            AcknowledgementTimeMode::Recovery
+        },
+        AcknowledgementParentRule::Ordinary,
+        AcknowledgementStatusRule::AllowAppliedOrReplay,
+    )
+}
+
+pub(crate) fn validate_certified_transition_acknowledgement(
+    request: AcknowledgeStateWitnessCheckpointRequest,
+    configuration: &StateAnchorConfiguration,
+    certified_previous_event_root: [u8; 32],
+) -> Result<StateAnchorAcknowledgement, EngineError> {
+    validate_acknowledgement_request_with_rules(
+        request,
+        configuration,
+        AcknowledgementTimeMode::IntrinsicOnly,
+        AcknowledgementParentRule::CertifiedEpochGenesis(certified_previous_event_root),
+        AcknowledgementStatusRule::AppliedOnly,
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AcknowledgementParentRule {
+    Ordinary,
+    CertifiedEpochGenesis([u8; 32]),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AcknowledgementStatusRule {
+    AllowAppliedOrReplay,
+    AppliedOnly,
+}
+
+fn validate_acknowledgement_request_with_rules(
+    request: AcknowledgeStateWitnessCheckpointRequest,
+    configuration: &StateAnchorConfiguration,
+    time_mode: AcknowledgementTimeMode,
+    parent_rule: AcknowledgementParentRule,
+    status_rule: AcknowledgementStatusRule,
 ) -> Result<StateAnchorAcknowledgement, EngineError> {
     if request.schema != TBTC_SIGNER_STATE_WITNESS_CHECKPOINT_ACK_SCHEMA {
         return Err(EngineError::Validation(format!(
@@ -547,12 +818,16 @@ fn validate_acknowledgement_request(
     let nonce = parse_canonical_bytes32(&request.nonce, "nonce")?;
     let status = match request.status.as_str() {
         "applied" => 1,
-        "already-applied" => 2,
+        "already-applied" if status_rule == AcknowledgementStatusRule::AllowAppliedOrReplay => 2,
         _ => {
-            return Err(EngineError::Validation(
-                "state-anchor acknowledgement status must be 'applied' or 'already-applied'"
-                    .to_string(),
-            ))
+            let allowed = if status_rule == AcknowledgementStatusRule::AppliedOnly {
+                "'applied'"
+            } else {
+                "'applied' or 'already-applied'"
+            };
+            return Err(EngineError::Validation(format!(
+                "state-anchor acknowledgement status must be {allowed}"
+            )));
         }
     };
     let service_epoch = parse_canonical_u64(&request.service_epoch, "serviceEpoch")?;
@@ -595,8 +870,16 @@ fn validate_acknowledgement_request(
         || checkpoint_state_commitment == [0u8; 32]
         || operation_id == [0u8; 32]
         || transition_digest == [0u8; 32]
-        || (revision == 1 && previous_event_root != [0u8; 32])
-        || (revision > 1 && previous_event_root == [0u8; 32])
+        || !match parent_rule {
+            AcknowledgementParentRule::Ordinary => {
+                (revision == 1 && previous_event_root == [0u8; 32])
+                    || (revision > 1 && previous_event_root != [0u8; 32])
+            }
+            AcknowledgementParentRule::CertifiedEpochGenesis(certified_parent) => {
+                (revision == 1 && previous_event_root == certified_parent)
+                    || (revision > 1 && previous_event_root != [0u8; 32])
+            }
+        }
     {
         return Err(EngineError::Validation(
             "state-anchor acknowledgement contains an incomplete authenticated summary".to_string(),
@@ -614,15 +897,7 @@ fn validate_acknowledgement_request(
             "state-anchor acknowledgement checkpoint commitment is invalid".to_string(),
         ));
     }
-    validate_acknowledgement_lifetime(
-        committed_at_unix_ms,
-        expires_at_unix_ms,
-        if require_fresh {
-            AcknowledgementTimeMode::Fresh
-        } else {
-            AcknowledgementTimeMode::Recovery
-        },
-    )?;
+    validate_acknowledgement_lifetime(committed_at_unix_ms, expires_at_unix_ms, time_mode)?;
     let signature = parse_canonical_signature(&request.signature)?;
 
     let signing_digest = state_anchor_signing_digest(
@@ -811,6 +1086,7 @@ pub(crate) fn state_anchor_event_root_for_tests(
     state_anchor_event_root(acknowledgement)
 }
 
+#[cfg(test)]
 fn validate_acknowledgement_time(
     committed_at_unix_ms: u64,
     expires_at_unix_ms: u64,
@@ -967,14 +1243,53 @@ fn state_anchor_acknowledgement_digest(
     digest.finalize().into()
 }
 
-fn ed25519_spki_sha256(public_key: &[u8; 32]) -> [u8; 32] {
+#[cfg(test)]
+pub(crate) fn state_anchor_acknowledgement_digest_for_tests(
+    signing_digest: &[u8; 32],
+    signature: &[u8; 64],
+    configured_spki_hash: &[u8; 32],
+) -> [u8; 32] {
+    state_anchor_acknowledgement_digest(signing_digest, signature, configured_spki_hash)
+}
+
+pub(crate) fn ed25519_spki_sha256(public_key: &[u8; 32]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(ED25519_SPKI_PREFIX);
     digest.update(public_key);
     digest.finalize().into()
 }
 
-fn parse_canonical_bytes32(value: &str, label: &str) -> Result<[u8; 32], EngineError> {
+pub(crate) fn validate_strong_ed25519_verifying_key(
+    public_key: &[u8; 32],
+    label: &str,
+) -> Result<VerifyingKey, EngineError> {
+    use curve25519_dalek::edwards::CompressedEdwardsY;
+
+    let point = CompressedEdwardsY(*public_key)
+        .decompress()
+        .ok_or_else(|| {
+            EngineError::Validation(format!(
+                "{label} is not a canonical compressed Edwards25519 point"
+            ))
+        })?;
+    if point.compress().to_bytes() != *public_key {
+        return Err(EngineError::Validation(format!(
+            "{label} is not a canonical compressed Edwards25519 point"
+        )));
+    }
+    if point.is_small_order() || !point.is_torsion_free() {
+        return Err(EngineError::Validation(format!(
+            "{label} must be a non-identity prime-subgroup Ed25519 public key"
+        )));
+    }
+    VerifyingKey::from_bytes(public_key).map_err(|error| {
+        EngineError::Validation(format!(
+            "{label} is not a valid Ed25519 public key: {error}"
+        ))
+    })
+}
+
+pub(crate) fn parse_canonical_bytes32(value: &str, label: &str) -> Result<[u8; 32], EngineError> {
     if value.len() != 66
         || !value.starts_with("0x")
         || value.as_bytes().iter().any(u8::is_ascii_uppercase)
@@ -993,7 +1308,7 @@ fn parse_canonical_bytes32(value: &str, label: &str) -> Result<[u8; 32], EngineE
     Ok(result)
 }
 
-fn parse_canonical_signature(value: &str) -> Result<[u8; 64], EngineError> {
+pub(crate) fn parse_canonical_signature(value: &str) -> Result<[u8; 64], EngineError> {
     if value.len() != 130
         || !value.starts_with("0x")
         || value.as_bytes().iter().any(u8::is_ascii_uppercase)
@@ -1012,7 +1327,7 @@ fn parse_canonical_signature(value: &str) -> Result<[u8; 64], EngineError> {
     Ok(signature)
 }
 
-fn parse_canonical_u64(value: &str, label: &str) -> Result<u64, EngineError> {
+pub(crate) fn parse_canonical_u64(value: &str, label: &str) -> Result<u64, EngineError> {
     if value.is_empty()
         || (value.len() > 1 && value.starts_with('0'))
         || !value.bytes().all(|byte| byte.is_ascii_digit())
@@ -1148,6 +1463,7 @@ mod tests {
             response_public_key,
             response_public_key_spki_sha256: configured_spki_hash,
             rotation_threshold_records: 8,
+            trust: None,
         };
         (signing_key, configuration, acknowledgement)
     }
@@ -1439,5 +1755,99 @@ mod tests {
         );
         let error = configured_state_anchor().expect_err("zero binding hash");
         assert!(error.to_string().contains("must be nonzero"));
+    }
+
+    #[test]
+    fn configured_anchor_rejects_non_prime_subgroup_online_and_offline_keys() {
+        let _guard = lock_test_state();
+        let corpus = [
+            "0100000000000000000000000000000000000000000000000000000000000000",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "9970c93c125fd998ebc1642abe30619e2fd971dbcbeaeb8ccfe919cbfd13b6cf",
+        ];
+        for weak_role_is_online in [true, false] {
+            for encoded in corpus {
+                establish_clean_signer_test_env();
+                let weak: [u8; 32] = hex::decode(encoded)
+                    .expect("vector hex")
+                    .try_into()
+                    .expect("32-byte vector");
+                let online_key = SigningKey::from_bytes(&[0x21; 32])
+                    .verifying_key()
+                    .to_bytes();
+                let offline_key = SigningKey::from_bytes(&[0x22; 32])
+                    .verifying_key()
+                    .to_bytes();
+                let response = if weak_role_is_online {
+                    weak
+                } else {
+                    online_key
+                };
+                let authority = if weak_role_is_online {
+                    offline_key
+                } else {
+                    weak
+                };
+                std::env::set_var(
+                    TBTC_SIGNER_STATE_ANCHOR_BINDING_HASH_ENV,
+                    bytes32_hex([0x31; 32]),
+                );
+                std::env::set_var(
+                    TBTC_SIGNER_STATE_ANCHOR_RESPONSE_PUBLIC_KEY_ENV,
+                    bytes32_hex(response),
+                );
+                std::env::set_var(
+                    TBTC_SIGNER_STATE_ANCHOR_RESPONSE_PUBLIC_KEY_SPKI_SHA256_ENV,
+                    bytes32_hex(ed25519_spki_sha256(&response)),
+                );
+                std::env::set_var(
+                    TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
+                    "8",
+                );
+                std::env::set_var(
+                    TBTC_SIGNER_STATE_ANCHOR_PROTOCOL_ID_ENV,
+                    bytes32_hex([0x32; 32]),
+                );
+                std::env::set_var(
+                    TBTC_SIGNER_STATE_ANCHOR_STREAM_ID_ENV,
+                    bytes32_hex([0x33; 32]),
+                );
+                std::env::set_var(
+                    TBTC_SIGNER_STATE_ANCHOR_ACTIVATION_MANIFEST_HASH_ENV,
+                    bytes32_hex([0x34; 32]),
+                );
+                std::env::set_var(
+                    TBTC_SIGNER_STATE_ANCHOR_ACTIVATION_MANIFEST_SEQUENCE_ENV,
+                    "1",
+                );
+                std::env::set_var(
+                    TBTC_SIGNER_STATE_ANCHOR_OFFLINE_AUTHORITY_PUBLIC_KEY_ENV,
+                    bytes32_hex(authority),
+                );
+                std::env::set_var(
+                    TBTC_SIGNER_STATE_ANCHOR_OFFLINE_AUTHORITY_PUBLIC_KEY_SPKI_SHA256_ENV,
+                    bytes32_hex(ed25519_spki_sha256(&authority)),
+                );
+                std::env::set_var(TBTC_SIGNER_STATE_ANCHOR_TRUST_CERTIFICATE_SEQUENCE_ENV, "1");
+                std::env::set_var(
+                    TBTC_SIGNER_STATE_ANCHOR_TRUST_CERTIFICATE_DIGEST_ENV,
+                    bytes32_hex([0x35; 32]),
+                );
+                let error = configured_state_anchor()
+                    .expect_err("non-prime-subgroup configured key rejected");
+                let error_text = error.to_string();
+                // The all-zero encoding is rejected either by a reserved-value
+                // nonzero pre-check (offline authority) or, where it still
+                // decompresses to a small-order point, by the prime-subgroup
+                // check (response key). Every other vector must fail the
+                // prime-subgroup check itself.
+                let accepted = if weak.iter().all(|&byte| byte == 0) {
+                    error_text.contains("must be nonzero") || error_text.contains("prime-subgroup")
+                } else {
+                    error_text.contains("prime-subgroup")
+                };
+                assert!(accepted, "unexpected configured-key error: {error_text}");
+            }
+        }
     }
 }

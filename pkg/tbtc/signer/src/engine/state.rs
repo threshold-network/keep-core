@@ -248,6 +248,103 @@ pub(crate) fn state_file_lock_slot() -> &'static Mutex<Option<StateFileLock>> {
     STATE_FILE_LOCK.get_or_init(|| Mutex::new(None))
 }
 
+/// Executes the offline-certified trust transition before any ordinary store
+/// or engine access can win the startup race. Lock order intentionally matches
+/// `state()`: engine-initialization gate first, then the store slot.
+pub(crate) fn with_startup_state_anchor_trust_transition<T>(
+    transition: &VerifiedStateAnchorTrustTransition,
+    operation: impl FnOnce(&mut StateFileLock) -> Result<T, EngineError>,
+) -> Result<T, EngineError> {
+    require_installed_signer_config()?;
+    let _initialization_guard = ENGINE_STATE_INITIALIZATION_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if ENGINE_STATE.get().is_some() {
+        return Err(EngineError::Validation(
+            "state-anchor trust transition is startup-only and the signer engine is initialized"
+                .to_string(),
+        ));
+    }
+    let slot = state_file_lock_slot()
+        .lock()
+        .map_err(|_| EngineError::Internal("state file lock mutex poisoned".to_string()))?;
+    if slot.is_some() {
+        return Err(EngineError::Validation(
+            "state-anchor trust transition is startup-only and the durable store was opened"
+                .to_string(),
+        ));
+    }
+    let state_path = state_file_path()?;
+    let mut store = StateFileLock::acquire_for_trust_transition(&state_path, transition)?;
+    operation(&mut store)
+}
+
+/// Reads the durable state-anchor trust head without making a read-only
+/// preflight claim initialize the process-wide signer store. Before any normal
+/// engine/store access, a dedicated inspection acquisition holds the same
+/// descriptor-bound OS lock and performs the trust-specific validation, then
+/// drops it when the operation completes. If the store is already open, use
+/// that held descriptor set so replacement checks and in-process path
+/// consistency remain identical to every other stateful call.
+pub(crate) fn with_startup_state_anchor_trust_head_inspection<T>(
+    operation: impl FnOnce(&mut StateFileLock) -> Result<T, EngineError>,
+) -> Result<T, EngineError> {
+    require_installed_signer_config()?;
+    let _initialization_guard = ENGINE_STATE_INITIALIZATION_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let state_path = state_file_path()?;
+    let mut slot = state_file_lock_slot()
+        .lock()
+        .map_err(|_| EngineError::Internal("state file lock mutex poisoned".to_string()))?;
+
+    if let Some(store) = slot.as_mut() {
+        if store.state_path != state_path {
+            return Err(EngineError::Internal(format!(
+                "state file lock already initialized for [{}] with lock [{}]; refusing to switch to [{}] in-process",
+                store.state_path.display(),
+                store.lock_path.display(),
+                state_path.display()
+            )));
+        }
+        store.revalidate_store_entries()?;
+        return operation(store);
+    }
+
+    let mut store = StateFileLock::acquire_for_trust_head_inspection(&state_path)?;
+    operation(&mut store)
+}
+
+/// Provisioning-only, ephemeral acquisition used to export the stable store
+/// fingerprint and exact pristine genesis checkpoint for offline bootstrap
+/// certification. It must never populate the process-wide engine/store slots.
+pub(crate) fn with_startup_state_anchor_bootstrap_facts<T>(
+    operation: impl FnOnce(&mut StateFileLock) -> Result<T, EngineError>,
+) -> Result<T, EngineError> {
+    require_state_anchor_bootstrap_provisioning_config()?;
+    let _initialization_guard = ENGINE_STATE_INITIALIZATION_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if ENGINE_STATE.get().is_some() {
+        return Err(EngineError::Validation(
+            "state-anchor bootstrap provisioning is unavailable after engine initialization"
+                .to_string(),
+        ));
+    }
+    let slot = state_file_lock_slot()
+        .lock()
+        .map_err(|_| EngineError::Internal("state file lock mutex poisoned".to_string()))?;
+    if slot.is_some() {
+        return Err(EngineError::Validation(
+            "state-anchor bootstrap provisioning requires an unopened process-wide store"
+                .to_string(),
+        ));
+    }
+    let state_path = state_file_path()?;
+    let mut store = StateFileLock::acquire_for_bootstrap_facts(&state_path)?;
+    operation(&mut store)
+}
+
 pub(crate) fn state() -> Result<&'static Mutex<EngineState>, EngineError> {
     warn_disabled_policy_gates();
 
@@ -357,6 +454,7 @@ pub(crate) fn state_lock_file_path(state_path: &Path) -> PathBuf {
 }
 
 pub(crate) fn ensure_state_file_lock() -> Result<(), EngineError> {
+    require_normal_signer_purpose()?;
     let state_path = state_file_path()?;
     let mut lock_slot = state_file_lock_slot()
         .lock()
@@ -394,6 +492,7 @@ pub(crate) fn ensure_state_file_lock() -> Result<(), EngineError> {
 /// This lets the explicit corruption policy quarantine malformed state without
 /// allowing a valid rollback image into `EngineState`.
 pub(crate) fn ensure_state_file_lock_for_load() -> Result<(), EngineError> {
+    require_normal_signer_purpose()?;
     let state_path = state_file_path()?;
     let mut lock_slot = state_file_lock_slot()
         .lock()

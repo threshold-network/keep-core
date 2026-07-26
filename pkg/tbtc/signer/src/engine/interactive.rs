@@ -2008,10 +2008,12 @@ pub(crate) fn zeroize_interactive_round1(interactive: &mut InteractiveSigningSta
     }
 }
 
-// Lazy TTL enforcement: every interactive entry point sweeps before
-// acting, so an abandoned session's nonces are destroyed the first
-// time anything touches the engine after expiry. Expiry has abort
-// semantics - the durable consumption markers are untouched.
+// Lazy TTL enforcement: every nonce-bearing or mutating interactive endpoint
+// sweeps before acting, so an abandoned session's nonces are destroyed before
+// another secret can be released or state can change. VerifySignatureShare is
+// deliberately read-only for delayed blame checks and never performs this
+// sweep. Expiry has abort semantics - durable consumption markers are
+// untouched.
 /// Resolve the session that holds the DKG key material for `key_group`.
 ///
 /// Interactive signing runs under a fresh RoastSessionID per message, but a wallet's

@@ -75,14 +75,18 @@ use crate::api::{
     QuarantineStatusRequest, QuarantineStatusResult, RefreshCadenceStatusRequest,
     RefreshCadenceStatusResult, RefreshSharesRequest, RefreshSharesResult,
     RoastLivenessPolicyResult, RollbackCanaryRequest, RollbackCanaryResult, RoundState, SecretHex,
-    SignatureResult, SignerHardeningMetricsResult, TransactionResult, TranscriptAuditRecord,
-    TranscriptAuditRequest, TranscriptAuditResult, TriggerEmergencyRekeyRequest,
-    TriggerEmergencyRekeyResult, VerifyBlameProofRequest,
+    SignatureResult, SignerHardeningMetricsResult, StateAnchorBootstrapFactsResult,
+    StateAnchorTrustCertificate, StateAnchorTrustCheckpoint, StateAnchorTrustEndpoint,
+    StateAnchorTrustHeadResult, StateAnchorTrustReference, TransactionResult,
+    TranscriptAuditRecord, TranscriptAuditRequest, TranscriptAuditResult,
+    TransitionStateWitnessAnchorRequest, TransitionStateWitnessAnchorResult,
+    TriggerEmergencyRekeyRequest, TriggerEmergencyRekeyResult, VerifyBlameProofRequest,
 };
-use crate::errors::EngineError;
+use crate::errors::{EngineError, StateAnchorTrustRecoveryContext};
 use crate::go_math_rand::select_coordinator_identifier;
 
 mod anchor;
+mod anchor_trust;
 mod audit;
 mod codec;
 mod config;
@@ -107,6 +111,7 @@ mod transaction;
 mod verify_share;
 
 pub(crate) use anchor::*;
+pub(crate) use anchor_trust::*;
 pub(crate) use audit::*;
 pub(crate) use codec::*;
 pub(crate) use config::*;
