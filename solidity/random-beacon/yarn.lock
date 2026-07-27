@@ -1206,7 +1206,7 @@ __metadata:
     solidity-docgen: "npm:^0.6.0-beta.35"
     ts-node: "npm:^10.2.1"
     typechain: "npm:^7.0.0"
-    typescript: "npm:^4.4.3"
+    typescript: "npm:^5.9.3"
   languageName: unknown
   linkType: soft
 
@@ -13549,23 +13549,23 @@ __metadata:
   languageName: node
   linkType: hard
 
-"typescript@npm:^4.4.3":
-  version: 4.4.3
-  resolution: "typescript@npm:4.4.3"
+"typescript@npm:^5.9.3":
+  version: 5.9.3
+  resolution: "typescript@npm:5.9.3"
   bin:
     tsc: bin/tsc
     tsserver: bin/tsserver
-  checksum: 10c0/91ad8993cb9292d8117b537b894501995d1d8b9473b93bdd406749b0b9d59406b97c5d79364dfdac2033e266a67aea318d9b17b1560479e628c60bbec3dcd358
+  checksum: 10c0/6bd7552ce39f97e711db5aa048f6f9995b53f1c52f7d8667c1abdc1700c68a76a308f579cd309ce6b53646deb4e9a1be7c813a93baaf0a28ccd536a30270e1c5
   languageName: node
   linkType: hard
 
-"typescript@patch:typescript@npm%3A^4.4.3#optional!builtin<compat/typescript>":
-  version: 4.4.3
-  resolution: "typescript@patch:typescript@npm%3A4.4.3#optional!builtin<compat/typescript>::version=4.4.3&hash=bbeadb"
+"typescript@patch:typescript@npm%3A^5.9.3#optional!builtin<compat/typescript>":
+  version: 5.9.3
+  resolution: "typescript@patch:typescript@npm%3A5.9.3#optional!builtin<compat/typescript>::version=5.9.3&hash=5786d5"
   bin:
     tsc: bin/tsc
     tsserver: bin/tsserver
-  checksum: 10c0/9051000445e39cc44d90f2e7e1e57d4f8d8b802103b80d66971d89182696047314cc1b11eb6f59ec3244e6cbaebc3b4bb31e72944d3d3f67c7be416d6d300702
+  checksum: 10c0/ad09fdf7a756814dce65bc60c1657b40d44451346858eea230e10f2e95a289d9183b6e32e5c11e95acc0ccc214b4f36289dcad4bf1886b0adb84d711d336a430
   languageName: node
   linkType: hard
 
