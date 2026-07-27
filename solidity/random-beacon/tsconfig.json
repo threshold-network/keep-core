@@ -10,6 +10,26 @@
     "./tasks"
   ],
   "compilerOptions": {
+    // TypeScript 6 turns `strict` on by default. Pinned off so the bump stays
+    // behaviour-preserving. `noImplicitAny` below is the one strict flag this
+    // package had already opted into, and it is kept.
+    "strict": false,
+    // TypeScript 6 stopped including every `node_modules/@types` package
+    // automatically, which silently drops the mocha and chai globals. These
+    // are the three that contribute globals here.
+    "types": ["mocha", "chai", "node"],
+    // Required by TypeScript 6 once a project spans several top-level
+    // directories. `--noEmit` does not need it, but ts-node's emit path does,
+    // so hardhat will not start without it.
+    "rootDir": ".",
+    // Two deprecations are silenced here, both belonging to the published
+    // `export/` bundle that `prepack` builds through tsconfig.export.json:
+    // `target: es5` itself, and `downlevelIteration`, which still changes
+    // emit at that target. Both are removed in TypeScript 7, so the export
+    // target has to be raised before then; doing it is its own change, and
+    // guessing that the option is inert would alter an artifact downstream
+    // packages consume.
+    "ignoreDeprecations": "6.0",
     "esModuleInterop": true,
     "noImplicitAny": true,
     "downlevelIteration": true,
