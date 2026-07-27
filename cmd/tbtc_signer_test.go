@@ -484,6 +484,74 @@ func TestFrostNativeSignerAnchorBootstrapCommandCeremony(t *testing.T) {
 	}
 }
 
+// TestFrostNativeSignerAnchorBootstrapCommandDefaultFactoryLoadsClientConfig
+// proves the production factory is wired: with valid core artifacts the
+// initialize command must reach the bootstrap client config loader instead of
+// failing with the transport-unavailable sentinel reserved for nil factories.
+func TestFrostNativeSignerAnchorBootstrapCommandDefaultFactoryLoadsClientConfig(
+	t *testing.T,
+) {
+	fixture := newTBTCSignerBootstrapTestFixture()
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	core, err := tbtc.PrepareFrostNativeSignerAnchorBootstrapCore(
+		fixture.facts,
+		fixture.plan,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coreJSON, err := tbtc.EncodeFrostNativeSignerAnchorBootstrapCoreArtifact(
+		core,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corePath := filepath.Join(directory, "core.json")
+	writeTBTCSignerBootstrapTestArtifact(t, corePath, coreJSON)
+	coreSignature := &tbtc.FrostNativeSignerAnchorBootstrapDetachedSignature{
+		Schema: tbtc.FrostNativeSignerAnchorBootstrapDetachedSignatureSchema,
+		Stage:  tbtc.FrostNativeSignerAnchorBootstrapCoreSignatureStage,
+		Digest: core.CoreDigest,
+	}
+	copy(
+		coreSignature.Signature[:],
+		ed25519.Sign(fixture.authority, core.CoreDigest[:]),
+	)
+	coreSignatureJSON, err :=
+		tbtc.EncodeFrostNativeSignerAnchorBootstrapDetachedSignature(
+			coreSignature,
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coreSignaturePath := filepath.Join(directory, "core-signature.json")
+	writeTBTCSignerBootstrapTestArtifact(
+		t,
+		coreSignaturePath,
+		coreSignatureJSON,
+	)
+	err = runTBTCSignerBootstrapCommand(
+		t,
+		tbtcSignerAnchorBootstrapTransportFactory,
+		"anchor", "bootstrap", "initialize",
+		"--core", corePath,
+		"--core-signature", coreSignaturePath,
+		"--client-config", filepath.Join(directory, "client-config.json"),
+		"--output", filepath.Join(directory, "final.json"),
+	)
+	if err == nil ||
+		strings.Contains(err.Error(), "transport is not available") ||
+		!strings.Contains(err.Error(), "bootstrap client config") {
+		t.Fatalf(
+			"default transport factory did not reach the config loader: %v",
+			err,
+		)
+	}
+}
+
 func TestFrostNativeSignerAnchorBootstrapCommandInitializeWithoutTransport(
 	t *testing.T,
 ) {
