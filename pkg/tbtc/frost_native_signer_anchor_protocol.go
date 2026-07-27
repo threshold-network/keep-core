@@ -19,11 +19,12 @@ import (
 )
 
 const (
-	FrostNativeSignerAnchorReadRequestSchema     = "tbtc-frost-native-signer-state-anchor-read-request/v1"
-	FrostNativeSignerAnchorReadResponseSchema    = "tbtc-frost-native-signer-state-anchor-read-response/v1"
-	FrostNativeSignerAnchorCASRequestSchema      = "tbtc-frost-native-signer-state-anchor-advance-request/v1"
-	FrostNativeSignerAnchorHistoryRequestSchema  = "tbtc-frost-native-signer-state-anchor-history-request/v1"
-	FrostNativeSignerAnchorHistoryResponseSchema = "tbtc-frost-native-signer-state-anchor-history-response/v1"
+	FrostNativeSignerAnchorReadRequestSchema       = "tbtc-frost-native-signer-state-anchor-read-request/v1"
+	FrostNativeSignerAnchorReadResponseSchema      = "tbtc-frost-native-signer-state-anchor-read-response/v1"
+	FrostNativeSignerAnchorCASRequestSchema        = "tbtc-frost-native-signer-state-anchor-advance-request/v1"
+	FrostNativeSignerAnchorInitializeRequestSchema = "tbtc-frost-native-signer-state-anchor-initialize-request/v1"
+	FrostNativeSignerAnchorHistoryRequestSchema    = "tbtc-frost-native-signer-state-anchor-history-request/v1"
+	FrostNativeSignerAnchorHistoryResponseSchema   = "tbtc-frost-native-signer-state-anchor-history-response/v1"
 
 	// FrostNativeSignerCheckpointAcknowledgementSchema is consumed verbatim by
 	// the native signer after Go verifies the online authority signature and
@@ -47,13 +48,14 @@ const (
 	frostNativeSignerAnchorMaximumResponseBytes        = 256 * 1024
 	frostNativeSignerAnchorMaximumHistoryResponseBytes = 4 * 1024 * 1024
 
-	frostNativeSignerAnchorStreamDomain         = "tbtc-frost-native-signer-anchor-stream-v1\x00"
-	frostNativeSignerAnchorBindingDomain        = "tbtc-frost-native-signer-anchor-binding-v1\x00"
-	frostNativeSignerAnchorTransportDomain      = "tbtc-frost-native-signer-anchor-transport-v1\x00"
-	frostNativeSignerAnchorReadRequestDomain    = "tbtc-frost-native-signer-anchor-read-request-v1\x00"
-	frostNativeSignerAnchorCASRequestDomain     = "tbtc-frost-native-signer-anchor-cas-request-v1\x00"
-	frostNativeSignerAnchorHistoryRequestDomain = "tbtc-frost-native-signer-anchor-history-request-v1\x00"
-	frostNativeSignerAnchorTransitionDomain     = "tbtc-frost-native-signer-anchor-transition-v1\x00"
+	frostNativeSignerAnchorStreamDomain            = "tbtc-frost-native-signer-anchor-stream-v1\x00"
+	frostNativeSignerAnchorBindingDomain           = "tbtc-frost-native-signer-anchor-binding-v1\x00"
+	frostNativeSignerAnchorTransportDomain         = "tbtc-frost-native-signer-anchor-transport-v1\x00"
+	frostNativeSignerAnchorReadRequestDomain       = "tbtc-frost-native-signer-anchor-read-request-v1\x00"
+	frostNativeSignerAnchorCASRequestDomain        = "tbtc-frost-native-signer-anchor-cas-request-v1\x00"
+	frostNativeSignerAnchorInitializeRequestDomain = "tbtc-frost-native-signer-anchor-initialize-request-v1\x00"
+	frostNativeSignerAnchorHistoryRequestDomain    = "tbtc-frost-native-signer-anchor-history-request-v1\x00"
+	frostNativeSignerAnchorTransitionDomain        = "tbtc-frost-native-signer-anchor-transition-v1\x00"
 )
 
 // FrostNativeSignerAnchorIdentity is the complete authenticated identity of

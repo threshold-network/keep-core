@@ -18,11 +18,25 @@ type tbtcSignerAnchorBootstrapClientFactory func(
 	string,
 ) (tbtc.FrostNativeSignerAnchorBootstrapClient, error)
 
+// tbtcSignerAnchorBootstrapTransportFactory loads the hardened online
+// bootstrap client from its canonical owner-only config artifact. Construction
+// performs no network activity, and every trust decision stays inside the
+// offline-signed authorization plus the client's pinned verification.
+func tbtcSignerAnchorBootstrapTransportFactory(
+	_ context.Context,
+	configPath string,
+) (tbtc.FrostNativeSignerAnchorBootstrapClient, error) {
+	return tbtc.LoadFrostNativeSignerAnchorBootstrapClient(configPath)
+}
+
 // TBTCSignerCommand contains fail-closed signer administration tools. The
 // bootstrap subtree is safe in all builds: facts fails when the native ABI is
-// unavailable, and initialize fails until the separately reviewed bootstrap
-// transport supplies its narrow client factory.
-var TBTCSignerCommand = newTBTCSignerCommand(nil)
+// unavailable, and initialize constructs the reviewed bootstrap transport from
+// --client-config. The transport-unavailable error remains only for callers
+// that inject a nil factory through newTBTCSignerCommand.
+var TBTCSignerCommand = newTBTCSignerCommand(
+	tbtcSignerAnchorBootstrapTransportFactory,
+)
 
 func newTBTCSignerCommand(
 	clientFactory tbtcSignerAnchorBootstrapClientFactory,
