@@ -17,7 +17,7 @@ import { signOperatorInactivityClaim } from "./utils/inactivity"
 import { registerOperators } from "./utils/operators"
 import { fakeTokenStaking } from "./mocks/staking"
 
-import type { Groups } from "../typechain/RandomBeacon"
+import type { Groups } from "../typechain/contracts/RandomBeacon"
 import type { Operator, OperatorID } from "./utils/operators"
 import type { Mock } from "./helpers/mock"
 import type {
