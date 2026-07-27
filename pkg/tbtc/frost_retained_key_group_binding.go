@@ -119,6 +119,21 @@ func frostKeyGroupFromWalletCacheValue(
 			frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1 {
 			continue
 		}
+		var payload frostsigning.NativeTBTCSignerMaterialPayload
+		if err := json.Unmarshal(material.Payload, &payload); err != nil {
+			return "", false, fmt.Errorf(
+				"cannot decode FrostTBTCSignerV1 signer material: [%w]",
+				err,
+			)
+		}
+		// Scaffold-era material folds the legacy wallet public key in as its
+		// key group: the wallet keeps its legacy identity (mirroring
+		// frostWalletIDFromSigner) and must not bind a retained FROST key
+		// group derived from that fold.
+		if payload.KeyGroupSource ==
+			frostsigning.NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey {
+			continue
+		}
 		nativeCount++
 		resolved, err := frostKeyGroupFromSignerMaterial(
 			material,
