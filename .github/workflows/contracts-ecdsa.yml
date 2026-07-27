@@ -67,6 +67,9 @@ jobs:
       - name: Lint
         run: yarn lint
 
+      - name: Typecheck
+        run: yarn typecheck
+
   contracts-slither:
     needs: contracts-detect-changes
     runs-on: ubuntu-latest
