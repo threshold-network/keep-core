@@ -132,8 +132,7 @@ func TestClassifyNativeTBTCSignerStateAnchorTrustRecoveryRequiredError(
 	}
 }
 
-func testNativeTBTCSignerStateAnchorTrustRecoveryRequiredWirePointer(
-) *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire {
+func testNativeTBTCSignerStateAnchorTrustRecoveryRequiredWirePointer() *nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire {
 	wire := testNativeTBTCSignerStateAnchorTrustRecoveryRequiredWire()
 	return &wire
 }

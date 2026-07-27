@@ -25,6 +25,43 @@ var realCgoTestSignerAnchor struct {
 	latest     NativeTBTCSignerStateWitnessTip
 }
 
+// realCgoTestSignerAnchorTrustHead derives the barrier's expected trust head
+// from the persisted test anchor: the certified floor IS the initial tip, so a
+// fresh process (in-process suite or a re-exec'd multiproc child) certifies
+// exactly the state it loaded and the full revision/generation windows remain
+// available to the run.
+func realCgoTestSignerAnchorTrustHead(
+	tip *NativeTBTCSignerStateWitnessTip,
+	responsePublicKeySPKISHA256 [32]byte,
+) *NativeTBTCSignerStateAnchorTrustHead {
+	return &NativeTBTCSignerStateAnchorTrustHead{
+		Schema:                      NativeTBTCSignerStateAnchorTrustHeadSchema,
+		CertificateSequence:         1,
+		CertificateDigest:           sha256.Sum256([]byte("real-cgo-test-anchor-trust-certificate/v1")),
+		ActivationManifestSequence:  1,
+		ActivationManifestHash:      sha256.Sum256([]byte("real-cgo-test-anchor-activation-manifest/v1")),
+		BindingHash:                 realCgoTestSignerAnchor.binding,
+		ResponsePublicKeySPKISHA256: responsePublicKeySPKISHA256,
+		OfflineAuthoritySPKISHA256:  sha256.Sum256([]byte("real-cgo-test-anchor-offline-authority/v1")),
+		ServiceEpoch:                tip.AnchorServiceEpoch,
+		CertifiedFloor: NativeTBTCSignerStateAnchorTrustReference{
+			ServiceEpoch:          tip.AnchorServiceEpoch,
+			Revision:              tip.AnchorRevision,
+			EventRoot:             tip.AnchorEventRoot,
+			AcknowledgementDigest: tip.AnchorAcknowledgementDigest,
+			Checkpoint: NativeTBTCSignerStateAnchorCheckpoint{
+				StoreFingerprint:        tip.StoreFingerprint,
+				Generation:              tip.Generation,
+				PreviousStateCommitment: tip.PreviousStateCommitment,
+				StateImageDigest:        tip.StateImageDigest,
+				StateCommitment:         tip.StateCommitment,
+			},
+		},
+		WitnessMaximumRecords:           4096,
+		WitnessRotationThresholdRecords: 1024,
+	}
+}
+
 type realCgoTestSignerAnchorCommitter struct{}
 
 func (committer *realCgoTestSignerAnchorCommitter) VerifyNativeTBTCSignerStateTip(
@@ -158,14 +195,23 @@ func setupRealCgoSignerStateAnchor(t *testing.T) {
 	if installed {
 		return
 	}
+	trustHead := realCgoTestSignerAnchorTrustHead(tip, publicKeySPKIHash)
 	if err := InstallNativeTBTCSignerStateAnchorBarrier(
 		NativeTBTCSignerStateAnchorBarrierConfig{
-			InitialTip:                tip,
-			ExpectedAnchorBindingHash: realCgoTestSignerAnchor.binding,
-			MinimumAnchorServiceEpoch: 1,
-			ReadTip:                   ReadNativeTBTCSignerStateWitnessTip,
-			Committer:                 &realCgoTestSignerAnchorCommitter{},
-			Timeout:                   15 * time.Second,
+			InitialTip:                                tip,
+			ExpectedAnchorBindingHash:                 realCgoTestSignerAnchor.binding,
+			MinimumAnchorServiceEpoch:                 1,
+			MaximumAnchorRevisionDistance:             NativeTBTCSignerStateAnchorMaximumRevisionDistance,
+			MaximumStateGenerationDistance:            NativeTBTCSignerStateAnchorMaximumGenerationDistance,
+			MaximumStateGenerationAdvancePerOperation: NativeTBTCSignerStateAnchorMaximumGenerationAdvancePerOperation,
+			ExpectedTrustHead:                         trustHead,
+			ReadTip:                                   ReadNativeTBTCSignerStateWitnessTip,
+			ReadTrustHead: func() (*NativeTBTCSignerStateAnchorTrustHead, error) {
+				head := *trustHead
+				return &head, nil
+			},
+			Committer: &realCgoTestSignerAnchorCommitter{},
+			Timeout:   15 * time.Second,
 		},
 	); err != nil {
 		t.Fatalf("cannot install real-cgo test signer anchor barrier: %v", err)

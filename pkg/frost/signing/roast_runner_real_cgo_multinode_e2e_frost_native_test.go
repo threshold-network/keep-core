@@ -244,6 +244,13 @@ func TestRealCgoInteractiveSigning_NetTransport_FullIncludedRound(t *testing.T) 
 
 	engine := &buildTaggedTBTCSignerEngine{}
 	sessionID := fmt.Sprintf("real-cgo-multinode-full-%d", realCgoSessionSeq.Add(1))
+	// The production executor owns the aggregate memo session for the outer
+	// signing operation; the harness stands in for it here.
+	memoSession, err := BeginInteractiveAggregateMemoSession(sessionID)
+	if err != nil {
+		t.Fatalf("begin aggregate memo session: %v", err)
+	}
+	t.Cleanup(memoSession.Release)
 	buildRealCgoNetHarness(t, ctx, engine, sessionID, 2, 2).
 		runAllAndAssertRealSignature(t, ctx)
 }
@@ -262,6 +269,13 @@ func TestRealCgoInteractiveSigning_NetTransport_ThresholdSubsetRound(t *testing.
 
 	engine := &buildTaggedTBTCSignerEngine{}
 	sessionID := fmt.Sprintf("real-cgo-multinode-subset-%d", realCgoSessionSeq.Add(1))
+	// The production executor owns the aggregate memo session for the outer
+	// signing operation; the harness stands in for it here.
+	memoSession, err := BeginInteractiveAggregateMemoSession(sessionID)
+	if err != nil {
+		t.Fatalf("begin aggregate memo session: %v", err)
+	}
+	t.Cleanup(memoSession.Release)
 	buildRealCgoNetHarness(t, ctx, engine, sessionID, 3, 2).
 		runAllAndAssertRealSignature(t, ctx)
 }

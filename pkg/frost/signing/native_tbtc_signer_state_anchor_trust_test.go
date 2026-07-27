@@ -222,8 +222,7 @@ func TestDecodeNativeTBTCSignerStateAnchorTrustRecoveryRequiredRejectsInvalid(
 	}
 }
 
-func testNativeTBTCSignerStateAnchorTrustRecoveryRequiredWire(
-) nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire {
+func testNativeTBTCSignerStateAnchorTrustRecoveryRequiredWire() nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire {
 	return nativeTBTCSignerStateAnchorTrustRecoveryRequiredWire{
 		Schema: NativeTBTCSignerStateAnchorTrustRecoveryRequiredSchema,
 		StoreFingerprint: testNativeTBTCSignerTrustHex32(

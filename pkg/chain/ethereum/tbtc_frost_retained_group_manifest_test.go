@@ -146,6 +146,16 @@ func TestValidateFrostPreSignActivationManifest_CanonicalJournal(t *testing.T) {
 		manifest := testFrostJournalActivationManifest()
 		manifest.FrostSigner.NativeSignerAnchor.SignerStoreFingerprint =
 			testManifestHex32(0xee)
+		// The stream ID commits to the store fingerprint, so recompute it over
+		// the mutated identity: otherwise the stream-ID pin fires first and
+		// the store check under test is unreachable.
+		anchorIdentity, err := frostPreSignNativeSignerAnchorIdentity(manifest)
+		if err != nil {
+			t.Fatalf("mutated anchor identity: %v", err)
+		}
+		streamID := tbtc.ComputeFrostNativeSignerAnchorStreamID(anchorIdentity)
+		manifest.FrostSigner.NativeSignerAnchor.StreamID =
+			fmt.Sprintf("0x%x", streamID[:])
 		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
 			!strings.Contains(err.Error(), "differs from the durable signer store") {
 			t.Fatalf("expected native anchor store failure, got [%v]", err)
