@@ -28,7 +28,7 @@ jobs:
           # Using fixed version, because 18.16 may cause issues with the
           # artifacts generation during `hardhat compile` - see
           # https://github.com/NomicFoundation/hardhat/issues/3877.
-          node-version: "22.23.1"
+          node-version: "24.11.1"
           registry-url: "https://registry.npmjs.org"
 
       - uses: ./.github/actions/install-yarn-deps
