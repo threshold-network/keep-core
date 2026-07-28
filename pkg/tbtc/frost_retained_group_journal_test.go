@@ -3473,6 +3473,164 @@ func TestPersistFrostRetainedGroupEnvelopeAt_PreservesInternalFiles(
 	}
 }
 
+func TestFrostRetainedGroupJournal_RecoversInterruptedTemporaryFiles(
+	t *testing.T,
+) {
+	type component struct {
+		directory    string
+		stateFile    string
+		metadataFile string
+	}
+	components := map[string]component{
+		"canonical": {
+			directory:    frostRetainedGroupCanonicalDirectory,
+			stateFile:    frostRetainedGroupJournalStateFile,
+			metadataFile: frostRetainedGroupJournalMetadataFile,
+		},
+		"quarantine": {
+			directory:    frostRetainedGroupQuarantineDirectory,
+			stateFile:    frostRetainedGroupJournalStateFile,
+			metadataFile: frostRetainedGroupJournalMetadataFile,
+		},
+		"checkpoint": {
+			directory:    frostRetainedGroupCheckpointDirectory,
+			stateFile:    frostRetainedGroupCheckpointStateFile,
+			metadataFile: frostRetainedGroupCheckpointMetadataFile,
+		},
+	}
+	stages := map[string]struct {
+		finalName func(component) string
+		prepare   func(string, string) error
+	}{
+		"partial before sync": {
+			finalName: func(component component) string {
+				return component.stateFile
+			},
+			prepare: func(_ string, temporaryPath string) error {
+				return os.WriteFile(temporaryPath, []byte("{"), 0600)
+			},
+		},
+		"synced before publication": {
+			finalName: func(component component) string {
+				return component.stateFile
+			},
+			prepare: func(finalPath string, temporaryPath string) error {
+				data, err := os.ReadFile(finalPath)
+				if err != nil {
+					return err
+				}
+				return os.WriteFile(temporaryPath, data, 0600)
+			},
+		},
+		"linked before temporary unlink": {
+			finalName: func(component component) string {
+				return component.metadataFile
+			},
+			prepare: func(finalPath string, temporaryPath string) error {
+				return os.Link(finalPath, temporaryPath)
+			},
+		},
+	}
+
+	for stageName, stage := range stages {
+		for componentName, component := range components {
+			t.Run(stageName+"/"+componentName, func(t *testing.T) {
+				fixture := newJournalTestFixture(t)
+				rootDirectory := filepath.Join(t.TempDir(), "journal")
+				journal := fixture.openJournal(t, rootDirectory)
+				if _, err := journal.reconcile(
+					context.Background(),
+					fixture.target,
+				); err != nil {
+					t.Fatal(err)
+				}
+				expectedCanonicalGeneration :=
+					journal.state.SnapshotGeneration
+				expectedQuarantineGeneration :=
+					journal.quarantineState.Generation
+				expectedCheckpointSequence :=
+					journal.checkpointState.Sequence
+				if err := journal.close(); err != nil {
+					t.Fatal(err)
+				}
+
+				finalName := stage.finalName(component)
+				directory := filepath.Join(
+					rootDirectory,
+					component.directory,
+				)
+				finalPath := filepath.Join(directory, finalName)
+				temporaryName := finalName + "-" +
+					strings.Repeat("ab", 16) +
+					frostRetainedGroupJournalTempSuffix
+				temporaryPath := filepath.Join(directory, temporaryName)
+				if err := stage.prepare(
+					finalPath,
+					temporaryPath,
+				); err != nil {
+					t.Fatal(err)
+				}
+
+				restarted := fixture.openJournal(t, rootDirectory)
+				defer restarted.close()
+				if restarted.state.SnapshotGeneration !=
+					expectedCanonicalGeneration ||
+					restarted.quarantineState.Generation !=
+						expectedQuarantineGeneration ||
+					restarted.checkpointState.Sequence !=
+						expectedCheckpointSequence {
+					t.Fatalf(
+						"temporary-file recovery changed committed state: canonical=[%d] quarantine=[%d] checkpoint=[%d]",
+						restarted.state.SnapshotGeneration,
+						restarted.quarantineState.Generation,
+						restarted.checkpointState.Sequence,
+					)
+				}
+				if _, err := os.Lstat(temporaryPath); !errors.Is(
+					err,
+					os.ErrNotExist,
+				) {
+					t.Fatalf(
+						"interrupted temporary file was not removed: [%v]",
+						err,
+					)
+				}
+				if _, err := os.Lstat(finalPath); err != nil {
+					t.Fatalf(
+						"committed journal file was lost during recovery: [%v]",
+						err,
+					)
+				}
+			})
+		}
+	}
+}
+
+func TestFrostRetainedGroupJournal_RejectsMalformedTemporaryFileName(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	rootDirectory := filepath.Join(t.TempDir(), "journal")
+	journal := fixture.openJournal(t, rootDirectory)
+	if err := journal.close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(
+			rootDirectory,
+			frostRetainedGroupCanonicalDirectory,
+			"unexpected.tmp",
+		),
+		[]byte("partial"),
+		0600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.openJournalError(rootDirectory); err == nil {
+		t.Fatal("malformed journal temporary file name was discarded")
+	}
+}
+
 func TestFrostRetainedGroupJournal_RejectsCorruptOrPublicStoreFiles(t *testing.T) {
 	t.Run("quarantine batch checksum", func(t *testing.T) {
 		fixture := newJournalTestFixture(t)

@@ -1163,6 +1163,14 @@ func equalFrostRetainedGroupCheckpointStates(
 }
 
 func (frgj *frostRetainedGroupJournal) initializeCheckpointJournal() error {
+	if err := recoverFrostRetainedGroupJournalTemporaryFiles(
+		frgj.checkpointDirectory,
+	); err != nil {
+		return fmt.Errorf(
+			"cannot recover interrupted FROST checkpoint persistence: [%w]",
+			err,
+		)
+	}
 	entries, err := os.ReadDir(frgj.checkpointDirectory)
 	if err != nil {
 		return fmt.Errorf("cannot read FROST checkpoint journal: [%w]", err)
@@ -1189,11 +1197,6 @@ func (frgj *frostRetainedGroupJournal) initializeCheckpointJournal() error {
 		case strings.HasPrefix(name, frostRetainedGroupCheckpointFilePrefix) &&
 			strings.HasSuffix(name, frostRetainedGroupJournalFileSuffix):
 			certificateNames = append(certificateNames, name)
-		case strings.HasSuffix(name, frostRetainedGroupJournalTempSuffix):
-			return fmt.Errorf(
-				"interrupted FROST checkpoint journal temp is present: [%s]",
-				name,
-			)
 		default:
 			return fmt.Errorf(
 				"unexpected file in FROST checkpoint journal: [%s]",

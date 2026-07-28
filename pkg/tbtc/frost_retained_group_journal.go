@@ -1242,6 +1242,14 @@ func (frgj *frostRetainedGroupJournal) initialize() error {
 	if err := frgj.verifyHistorySourceIdentity(context.Background()); err != nil {
 		return err
 	}
+	if err := recoverFrostRetainedGroupJournalTemporaryFiles(
+		frgj.directory,
+	); err != nil {
+		return fmt.Errorf(
+			"cannot recover interrupted FROST retained-group journal persistence: [%w]",
+			err,
+		)
+	}
 
 	entries, err := os.ReadDir(frgj.directory)
 	if err != nil {
@@ -1267,8 +1275,6 @@ func (frgj *frostRetainedGroupJournal) initialize() error {
 		case strings.HasPrefix(name, frostRetainedGroupJournalBatchPrefix) &&
 			strings.HasSuffix(name, frostRetainedGroupJournalFileSuffix):
 			batchNames = append(batchNames, name)
-		case strings.HasSuffix(name, frostRetainedGroupJournalTempSuffix):
-			return fmt.Errorf("interrupted FROST retained-group journal temp is present: [%s]", name)
 		default:
 			return fmt.Errorf("unexpected file in FROST retained-group journal: [%s]", name)
 		}
@@ -1412,6 +1418,14 @@ func equalFrostRetainedGroupStates(
 }
 
 func (frgj *frostRetainedGroupJournal) initializeQuarantine() error {
+	if err := recoverFrostRetainedGroupJournalTemporaryFiles(
+		frgj.quarantineDirectory,
+	); err != nil {
+		return fmt.Errorf(
+			"cannot recover interrupted FROST retained-group quarantine persistence: [%w]",
+			err,
+		)
+	}
 	entries, err := os.ReadDir(frgj.quarantineDirectory)
 	if err != nil {
 		return fmt.Errorf("cannot read FROST retained-group quarantine journal: [%w]", err)
@@ -1440,8 +1454,6 @@ func (frgj *frostRetainedGroupJournal) initializeQuarantine() error {
 		case strings.HasPrefix(name, frostRetainedGroupLiftCertificatePrefix) &&
 			strings.HasSuffix(name, frostRetainedGroupJournalFileSuffix):
 			certificateNames = append(certificateNames, name)
-		case strings.HasSuffix(name, frostRetainedGroupJournalTempSuffix):
-			return fmt.Errorf("interrupted FROST retained-group quarantine temp is present: [%s]", name)
 		default:
 			return fmt.Errorf("unexpected file in FROST retained-group quarantine journal: [%s]", name)
 		}
@@ -2361,6 +2373,120 @@ func validateFrostRetainedGroupJournalFileAt(
 		)
 	}
 	return true, nil
+}
+
+// recoverFrostRetainedGroupJournalTemporaryFiles removes interrupted
+// pre-publication files after validating that they have exactly the private,
+// owner-bound shape and unpredictable name emitted by persistFrostRetainedGroupEnvelopeAt.
+// A temporary name is never a commit point: immutable files commit at Linkat
+// and replaceable state commits at Renameat. The final namespace is replayed
+// after this cleanup, so an already-linked immutable file is retained and an
+// unpublished state file is deterministically rebuilt from its immutable
+// prefix.
+func recoverFrostRetainedGroupJournalTemporaryFiles(
+	directory string,
+) error {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return err
+	}
+	directoryFile, err := openFrostRetainedGroupJournalDirectory(directory)
+	if err != nil {
+		return err
+	}
+	defer directoryFile.Close()
+	directoryDescriptor := int(directoryFile.Fd())
+
+	removed := false
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, frostRetainedGroupJournalTempSuffix) {
+			continue
+		}
+		if entry.Type()&os.ModeSymlink != 0 || entry.IsDir() {
+			return fmt.Errorf(
+				"interrupted journal temporary file is unsafe: [%s]",
+				name,
+			)
+		}
+		if _, err := frostRetainedGroupJournalTemporaryFinalName(name); err != nil {
+			return err
+		}
+		exists, err := validateFrostRetainedGroupJournalFileAt(
+			directoryDescriptor,
+			name,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"interrupted journal temporary file is unsafe [%s]: [%w]",
+				name,
+				err,
+			)
+		}
+		if !exists {
+			return fmt.Errorf(
+				"interrupted journal temporary file disappeared: [%s]",
+				name,
+			)
+		}
+		if err := unix.Unlinkat(directoryDescriptor, name, 0); err != nil {
+			return fmt.Errorf(
+				"cannot remove interrupted journal temporary file [%s]: [%w]",
+				name,
+				err,
+			)
+		}
+		removed = true
+	}
+	if removed {
+		if err := directoryFile.Sync(); err != nil {
+			return fmt.Errorf(
+				"cannot sync interrupted journal temporary-file recovery: [%w]",
+				err,
+			)
+		}
+	}
+	return nil
+}
+
+func frostRetainedGroupJournalTemporaryFinalName(
+	name string,
+) (string, error) {
+	const entropyBytes = 16
+	const entropyCharacters = entropyBytes * 2
+
+	if !strings.HasSuffix(name, frostRetainedGroupJournalTempSuffix) {
+		return "", fmt.Errorf(
+			"interrupted journal temporary file name is invalid: [%s]",
+			name,
+		)
+	}
+	trimmed := strings.TrimSuffix(name, frostRetainedGroupJournalTempSuffix)
+	delimiterIndex := len(trimmed) - entropyCharacters - 1
+	if delimiterIndex <= 0 || trimmed[delimiterIndex] != '-' {
+		return "", fmt.Errorf(
+			"interrupted journal temporary file name is invalid: [%s]",
+			name,
+		)
+	}
+	entropyText := trimmed[delimiterIndex+1:]
+	entropy, err := hex.DecodeString(entropyText)
+	if err != nil || len(entropy) != entropyBytes ||
+		hex.EncodeToString(entropy) != entropyText {
+		return "", fmt.Errorf(
+			"interrupted journal temporary file name is invalid: [%s]",
+			name,
+		)
+	}
+	finalName := trimmed[:delimiterIndex]
+	if err := validateFrostRetainedGroupJournalFileName(finalName); err != nil {
+		return "", fmt.Errorf(
+			"interrupted journal temporary destination is invalid [%s]: [%w]",
+			name,
+			err,
+		)
+	}
+	return finalName, nil
 }
 
 func createFrostRetainedGroupJournalTemporaryFileAt(

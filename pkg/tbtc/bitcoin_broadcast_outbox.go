@@ -726,7 +726,8 @@ func (bbo *bitcoinBroadcastOutbox) replayOnce() error {
 
 type bitcoinBroadcastReplayCandidate struct {
 	reservationID [32]byte
-	record        *bitcoinBroadcastOutboxRecord
+	primary       *bitcoinBroadcastOutboxRecord
+	alternatives  []*bitcoinBroadcastOutboxRecord
 }
 
 type bitcoinBroadcastTransientReplayError struct {
@@ -780,9 +781,12 @@ func (errorValue *bitcoinBroadcastReplayErrors) hasFatalFailure() bool {
 	return false
 }
 
-// replayOnceWithContext checks only the latest/confirmed record of each active
-// reservation. Deeply confirmed history is reconciled in a fixed-size rotating
-// batch, so canonical RPC work is bounded independently of archived history.
+// replayOnceWithContext checks the latest or previously confirmed record first.
+// Before rebroadcasting, it also reconciles every superseded variant with a
+// durable broadcast attempt, because any one of those conflicting variants
+// may be the canonical winner. Deeply confirmed history is reconciled in a
+// fixed-size rotating reservation batch; healthy archived reservations still
+// require only their primary confirmation read.
 func (bbo *bitcoinBroadcastOutbox) replayOnceWithContext(ctx context.Context) error {
 	bbo.replayMutex.Lock()
 	defer bbo.replayMutex.Unlock()
@@ -792,8 +796,9 @@ func (bbo *bitcoinBroadcastOutbox) replayOnceWithContext(ctx context.Context) er
 		return err
 	}
 	replayErrors := &bitcoinBroadcastReplayErrors{}
+candidateLoop:
 	for _, candidate := range append(active, archived...) {
-		refreshed, err := bbo.refreshConfirmation(ctx, candidate.record)
+		refreshed, err := bbo.refreshConfirmation(ctx, candidate.primary)
 		if err != nil {
 			replayErrors.failures = append(
 				replayErrors.failures,
@@ -801,7 +806,25 @@ func (bbo *bitcoinBroadcastOutbox) replayOnceWithContext(ctx context.Context) er
 			)
 			continue
 		}
-		if refreshed.Confirmation != nil || refreshed.Quarantine != nil {
+		if refreshed.Confirmation != nil {
+			continue
+		}
+		canonicalVariantFound := false
+		for _, alternative := range candidate.alternatives {
+			refreshed, err := bbo.refreshConfirmation(ctx, alternative)
+			if err != nil {
+				replayErrors.failures = append(
+					replayErrors.failures,
+					bitcoinBroadcastReplayFailure{candidate.reservationID, err},
+				)
+				continue candidateLoop
+			}
+			if refreshed.Confirmation != nil {
+				canonicalVariantFound = true
+				break
+			}
+		}
+		if canonicalVariantFound {
 			continue
 		}
 		latest, err := bbo.latestBroadcastRecord(candidate.reservationID)
@@ -852,6 +875,7 @@ func (bbo *bitcoinBroadcastOutbox) replayCandidates() (
 	type reservationState struct {
 		latest    *bitcoinBroadcastOutboxRecord
 		confirmed *bitcoinBroadcastOutboxRecord
+		records   []*bitcoinBroadcastOutboxRecord
 	}
 	states := make(map[[32]byte]*reservationState)
 	for _, record := range bbo.records {
@@ -861,6 +885,7 @@ func (bbo *bitcoinBroadcastOutbox) replayCandidates() (
 			state = &reservationState{}
 			states[reservationID] = state
 		}
+		state.records = append(state.records, record)
 		if state.latest == nil || laterBitcoinBroadcastVariant(record, state.latest) {
 			state.latest = record
 		}
@@ -878,17 +903,43 @@ func (bbo *bitcoinBroadcastOutbox) replayCandidates() (
 	active := make([]bitcoinBroadcastReplayCandidate, 0, len(states))
 	archived := make([]bitcoinBroadcastReplayCandidate, 0, len(states))
 	for reservationID, state := range states {
-		record := state.latest
+		primary := state.latest
 		if state.confirmed != nil {
-			record = state.confirmed
+			primary = state.confirmed
 		}
+		alternatives := make(
+			[]*bitcoinBroadcastOutboxRecord,
+			0,
+			len(state.records)-1,
+		)
+		for _, record := range state.records {
+			if record.TransactionHash == primary.TransactionHash {
+				continue
+			}
+			if record.TransactionHash != state.latest.TransactionHash &&
+				record.BroadcastAttempts == 0 &&
+				record.Confirmation == nil {
+				continue
+			}
+			alternatives = append(
+				alternatives,
+				cloneBitcoinBroadcastOutboxRecord(record),
+			)
+		}
+		sort.Slice(alternatives, func(i, j int) bool {
+			return laterBitcoinBroadcastVariant(
+				alternatives[j],
+				alternatives[i],
+			)
+		})
 		candidate := bitcoinBroadcastReplayCandidate{
 			reservationID: reservationID,
-			record:        cloneBitcoinBroadcastOutboxRecord(record),
+			primary:       cloneBitcoinBroadcastOutboxRecord(primary),
+			alternatives:  alternatives,
 		}
-		if record.Confirmation != nil &&
-			record.Confirmation.Canonical &&
-			record.Confirmation.Confirmations >= bbo.archiveConfirmations {
+		if primary.Confirmation != nil &&
+			primary.Confirmation.Canonical &&
+			primary.Confirmation.Confirmations >= bbo.archiveConfirmations {
 			archived = append(archived, candidate)
 		} else {
 			active = append(active, candidate)
@@ -1094,12 +1145,24 @@ func (bbo *bitcoinBroadcastOutbox) broadcastAuthorizedRecord(
 	}
 	broadcastErr := bbo.btcChain.BroadcastTransaction(tx)
 	now := bbo.now().Unix()
+	attemptedAt := maxBitcoinBroadcastTimestamp(
+		next.UpdatedAtUnix,
+		now,
+	)
+	attemptedAt = maxBitcoinBroadcastTimestamp(
+		attemptedAt,
+		next.FirstBroadcastAtUnix,
+	)
+	attemptedAt = maxBitcoinBroadcastTimestamp(
+		attemptedAt,
+		next.LastAttemptUnix,
+	)
 	if next.FirstBroadcastAtUnix == 0 {
-		next.FirstBroadcastAtUnix = now
+		next.FirstBroadcastAtUnix = attemptedAt
 	}
 	next.BroadcastAttempts++
-	next.LastAttemptUnix = now
-	next.UpdatedAtUnix = maxBitcoinBroadcastTimestamp(next.UpdatedAtUnix, now)
+	next.LastAttemptUnix = attemptedAt
+	next.UpdatedAtUnix = attemptedAt
 	if err := bbo.persistAndSwapRecord(record, next); err != nil {
 		return broadcastErr, nil, fmt.Errorf("cannot persist Bitcoin broadcast attempt: [%w]", err)
 	}
