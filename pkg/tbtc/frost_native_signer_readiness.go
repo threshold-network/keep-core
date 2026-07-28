@@ -310,6 +310,9 @@ type frostProductionSignerReadinessSnapshot struct {
 	Journal                 *frostRetainedGroupJournalSnapshot
 	Inventory               *frostNativeSignerInventorySnapshot
 	InteractiveSigningReady bool
+
+	inventoryExpectations []frostNativeSignerInventoryExpectation
+	registryRevision      uint64
 }
 
 type frostProductionSignerReadinessVerifier interface {
@@ -357,20 +360,11 @@ func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerRead
 	if err != nil {
 		return nil, err
 	}
-	firstInventory, err := readiness.inventoryBinding.verify(ctx, expected)
+	inventory, err := readiness.verifyStableFrostProductionSignerInventory(
+		ctx,
+		expected,
+	)
 	if err != nil {
-		return nil, err
-	}
-	secondInventory, err := readiness.inventoryBinding.verify(ctx, expected)
-	if err != nil {
-		return nil, err
-	}
-	if *firstInventory != *secondInventory {
-		return nil, fmt.Errorf("native signer state changed during readiness reconciliation")
-	}
-	if err := validateFrostNativeSignerAnchorReadinessHeadroom(
-		secondInventory,
-	); err != nil {
 		return nil, err
 	}
 	if !readiness.journal.walletRegistry.frostReadinessRevisionMatches(
@@ -385,9 +379,83 @@ func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerRead
 	}
 	return &frostProductionSignerReadinessSnapshot{
 		Journal:                 journalSnapshot,
-		Inventory:               secondInventory,
+		Inventory:               inventory,
 		InteractiveSigningReady: true,
+		inventoryExpectations:   expected,
+		registryRevision:        registryRevision,
 	}, nil
+}
+
+func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerReadinessUnchanged(
+	ctx context.Context,
+	expected *frostProductionSignerReadinessSnapshot,
+) error {
+	if readiness == nil || readiness.interactiveSigningReady == nil ||
+		readiness.journal == nil || readiness.inventoryBinding == nil ||
+		ctx == nil || expected == nil || expected.Inventory == nil ||
+		!expected.InteractiveSigningReady {
+		return fmt.Errorf("cached FROST production signer readiness is incomplete")
+	}
+	if !readiness.interactiveSigningReady() {
+		return fmt.Errorf("interactive FROST signing engine is not ready")
+	}
+	if !readiness.journal.walletRegistry.frostReadinessRevisionMatches(
+		expected.registryRevision,
+	) {
+		return fmt.Errorf(
+			"local FROST signer registry changed since readiness reconciliation",
+		)
+	}
+	inventory, err := readiness.verifyStableFrostProductionSignerInventory(
+		ctx,
+		expected.inventoryExpectations,
+	)
+	if err != nil {
+		return err
+	}
+	if *inventory != *expected.Inventory {
+		return fmt.Errorf(
+			"native signer state changed since readiness reconciliation",
+		)
+	}
+	if !readiness.journal.walletRegistry.frostReadinessRevisionMatches(
+		expected.registryRevision,
+	) {
+		return fmt.Errorf(
+			"local FROST signer registry changed during readiness revalidation",
+		)
+	}
+	if !readiness.interactiveSigningReady() {
+		return fmt.Errorf(
+			"interactive FROST signing engine became unavailable during readiness revalidation",
+		)
+	}
+	return nil
+}
+
+func (readiness *frostProductionSignerReadiness) verifyStableFrostProductionSignerInventory(
+	ctx context.Context,
+	expected []frostNativeSignerInventoryExpectation,
+) (*frostNativeSignerInventorySnapshot, error) {
+	firstInventory, err := readiness.inventoryBinding.verify(ctx, expected)
+	if err != nil {
+		return nil, err
+	}
+	secondInventory, err := readiness.inventoryBinding.verify(ctx, expected)
+	if err != nil {
+		return nil, err
+	}
+	if *firstInventory != *secondInventory {
+		return nil, fmt.Errorf(
+			"native signer state changed during readiness verification",
+		)
+	}
+	if err := validateFrostNativeSignerAnchorReadinessHeadroom(
+		secondInventory,
+	); err != nil {
+		return nil, err
+	}
+	return secondInventory, nil
 }
 
 func validateFrostNativeSignerAnchorReadinessHeadroom(

@@ -977,6 +977,11 @@ func (source *signedFrostRetainedGroupHistorySource) ReadCompleteHistory(
 					)
 				}
 				blockHashes[blockNumber] = blockHash
+				if uint64(len(blockHashes)) > source.maximumUniqueBlocks {
+					return nil, fmt.Errorf(
+						"retained-group history exceeds the unique-block limit",
+					)
+				}
 			}
 			for blockNumber, blockHash := range blockHashes {
 				if err := source.verifyPointAtFinalizedHead(ctx, FrostPreSignFinality{

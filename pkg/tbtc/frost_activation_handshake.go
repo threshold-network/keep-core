@@ -198,7 +198,7 @@ type frostActivationHandshakeExporter struct {
 	storeBinding  *frostDurableSessionStoreBinding
 	outbox        *bitcoinBroadcastOutbox
 	journal       *frostRetainedGroupJournal
-	readiness     frostProductionSignerReadinessVerifier
+	readiness     frostActivationHandshakeReadinessVerifier
 
 	mutex                sync.Mutex
 	listener             net.Listener
@@ -242,7 +242,16 @@ type frostActivationReconciliationCache struct {
 	journal                 frostRetainedGroupJournalSnapshot
 	inventory               frostNativeSignerInventorySnapshot
 	interactiveSigningReady bool
+	readiness               frostProductionSignerReadinessSnapshot
 	stamp                   frostActivationJournalStamp
+}
+
+type frostActivationHandshakeReadinessVerifier interface {
+	frostProductionSignerReadinessVerifier
+	verifyFrostProductionSignerReadinessUnchanged(
+		context.Context,
+		*frostProductionSignerReadinessSnapshot,
+	) error
 }
 
 func newFrostActivationHandshakeExporter(
@@ -253,7 +262,7 @@ func newFrostActivationHandshakeExporter(
 	storeBinding *frostDurableSessionStoreBinding,
 	outbox *bitcoinBroadcastOutbox,
 	journal *frostRetainedGroupJournal,
-	readiness frostProductionSignerReadinessVerifier,
+	readiness frostActivationHandshakeReadinessVerifier,
 ) (*frostActivationHandshakeExporter, error) {
 	parsedEndpoint, err := validateFrostActivationHandshakeEndpoint(endpoint)
 	if err != nil {
@@ -593,6 +602,8 @@ func (fahe *frostActivationHandshakeExporter) cachedReconciliation(
 		return nil
 	}
 	cache := *fahe.reconciliationCompleted
+	cache.readiness.Journal = &cache.journal
+	cache.readiness.Inventory = &cache.inventory
 	return &cache
 }
 
@@ -654,13 +665,17 @@ func (fahe *frostActivationHandshakeExporter) reconcileActivationState(
 			"canonical FROST retained-group journal changed after reconciliation",
 		)
 	}
-	return &frostActivationReconciliationCache{
+	cache := &frostActivationReconciliationCache{
 		point:                   finality,
 		journal:                 *journalSnapshot,
 		inventory:               *inventorySnapshot,
 		interactiveSigningReady: readinessSnapshot.InteractiveSigningReady,
+		readiness:               *readinessSnapshot,
 		stamp:                   stamp,
-	}, nil
+	}
+	cache.readiness.Journal = &cache.journal
+	cache.readiness.Inventory = &cache.inventory
+	return cache, nil
 }
 
 func (fahe *frostActivationHandshakeExporter) validateActivationJournalSnapshot(
@@ -1131,6 +1146,17 @@ func (fahe *frostActivationHandshakeExporter) attest(
 		fahe.queueReconciliation(finality, true)
 		return nil, fmt.Errorf(
 			"%w: cached FROST activation point changed before signing: [%v]",
+			errFrostActivationReconciliationPending,
+			err,
+		)
+	}
+	if err := fahe.readiness.verifyFrostProductionSignerReadinessUnchanged(
+		ctx,
+		&reconciliation.readiness,
+	); err != nil {
+		fahe.queueReconciliation(finality, true)
+		return nil, fmt.Errorf(
+			"%w: cached FROST signer readiness changed before signing: [%v]",
 			errFrostActivationReconciliationPending,
 			err,
 		)

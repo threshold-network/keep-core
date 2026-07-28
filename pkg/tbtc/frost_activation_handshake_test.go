@@ -272,21 +272,77 @@ type testFrostRetainedGroupHistorySource struct {
 }
 
 type testFrostProductionSignerReadiness struct {
+	mutex       sync.Mutex
 	journal     *frostRetainedGroupJournal
 	interactive bool
 	err         error
 	calls       uint64
+	inventory   frostNativeSignerInventorySnapshot
+}
+
+func testFrostProductionSignerInventorySnapshot() frostNativeSignerInventorySnapshot {
+	return frostNativeSignerInventorySnapshot{
+		Schema:                      "tbtc-signer-retained-key-package-inventory/v1",
+		StoreFingerprint:            testFrostDurableSessionStoreIdentity().Fingerprint,
+		StateGeneration:             7,
+		StateCommitment:             [32]byte{0x31},
+		PreviousStateCommitment:     [32]byte{0x30},
+		StateImageDigest:            [32]byte{0x33},
+		InventoryCommitment:         [32]byte{0x32},
+		ExternalRollbackAnchorBound: true,
+		TrustCertificateSequence:    3,
+		TrustCertificateDigest:      [32]byte{0x34},
+		AnchorServiceEpoch:          1,
+		CertifiedFloorRevision:      1,
+		CertifiedFloorGeneration:    1,
+		CurrentAnchorRevision:       1,
+		RestartableRevisionHeadroom: FrostNativeSignerAnchorMaximumHistoryEvents,
+		RestartableGenerationHeadroom: FrostNativeSignerAnchorMaximumHistoryProofEntries -
+			6,
+		AnchorRotationWarning: false,
+	}
+}
+
+func (readiness *testFrostProductionSignerReadiness) snapshot() (
+	bool,
+	error,
+	frostNativeSignerInventorySnapshot,
+) {
+	readiness.mutex.Lock()
+	defer readiness.mutex.Unlock()
+	readiness.calls++
+	inventory := readiness.inventory
+	if inventory.Schema == "" {
+		inventory = testFrostProductionSignerInventorySnapshot()
+	}
+	return readiness.interactive, readiness.err, inventory
+}
+
+func (readiness *testFrostProductionSignerReadiness) setInteractive(
+	interactive bool,
+) {
+	readiness.mutex.Lock()
+	defer readiness.mutex.Unlock()
+	readiness.interactive = interactive
+}
+
+func (readiness *testFrostProductionSignerReadiness) setInventory(
+	inventory frostNativeSignerInventorySnapshot,
+) {
+	readiness.mutex.Lock()
+	defer readiness.mutex.Unlock()
+	readiness.inventory = inventory
 }
 
 func (readiness *testFrostProductionSignerReadiness) verifyFrostProductionSignerReadiness(
 	ctx context.Context,
 	point FrostPreSignFinality,
 ) (*frostProductionSignerReadinessSnapshot, error) {
-	readiness.calls++
-	if readiness.err != nil {
-		return nil, readiness.err
+	interactive, readinessErr, inventory := readiness.snapshot()
+	if readinessErr != nil {
+		return nil, readinessErr
 	}
-	if !readiness.interactive {
+	if !interactive {
 		return nil, fmt.Errorf("interactive signer is not ready")
 	}
 	journalSnapshot, err := readiness.journal.reconcile(ctx, point)
@@ -294,29 +350,31 @@ func (readiness *testFrostProductionSignerReadiness) verifyFrostProductionSigner
 		return nil, err
 	}
 	return &frostProductionSignerReadinessSnapshot{
-		Journal: journalSnapshot,
-		Inventory: &frostNativeSignerInventorySnapshot{
-			Schema:                      "tbtc-signer-retained-key-package-inventory/v1",
-			StoreFingerprint:            testFrostDurableSessionStoreIdentity().Fingerprint,
-			StateGeneration:             7,
-			StateCommitment:             [32]byte{0x31},
-			PreviousStateCommitment:     [32]byte{0x30},
-			StateImageDigest:            [32]byte{0x33},
-			InventoryCommitment:         [32]byte{0x32},
-			ExternalRollbackAnchorBound: true,
-			TrustCertificateSequence:    3,
-			TrustCertificateDigest:      [32]byte{0x34},
-			AnchorServiceEpoch:          1,
-			CertifiedFloorRevision:      1,
-			CertifiedFloorGeneration:    1,
-			CurrentAnchorRevision:       1,
-			RestartableRevisionHeadroom: FrostNativeSignerAnchorMaximumHistoryEvents,
-			RestartableGenerationHeadroom: FrostNativeSignerAnchorMaximumHistoryProofEntries -
-				6,
-			AnchorRotationWarning: false,
-		},
+		Journal:                 journalSnapshot,
+		Inventory:               &inventory,
 		InteractiveSigningReady: true,
 	}, nil
+}
+
+func (readiness *testFrostProductionSignerReadiness) verifyFrostProductionSignerReadinessUnchanged(
+	ctx context.Context,
+	expected *frostProductionSignerReadinessSnapshot,
+) error {
+	if ctx == nil || expected == nil || expected.Inventory == nil ||
+		!expected.InteractiveSigningReady {
+		return fmt.Errorf("cached signer readiness is incomplete")
+	}
+	interactive, readinessErr, inventory := readiness.snapshot()
+	if readinessErr != nil {
+		return readinessErr
+	}
+	if !interactive {
+		return fmt.Errorf("interactive signer is not ready")
+	}
+	if inventory != *expected.Inventory {
+		return fmt.Errorf("native signer state changed since reconciliation")
+	}
+	return nil
 }
 
 func (source *testFrostRetainedGroupHistorySource) BindFrostRetainedGroupActivationEvidence(
@@ -740,6 +798,112 @@ func TestFrostActivationHandshakeExporter_AttestsInclusiveCheckpointAncestry(
 	}
 }
 
+func TestFrostActivationHandshakeExporter_RevalidatesNativeSignerStateBeforeSigning(
+	t *testing.T,
+) {
+	testCases := map[string]func(*testFrostProductionSignerReadiness){
+		"native state advances": func(
+			readiness *testFrostProductionSignerReadiness,
+		) {
+			inventory := testFrostProductionSignerInventorySnapshot()
+			inventory.StateGeneration++
+			inventory.PreviousStateCommitment = inventory.StateCommitment
+			inventory.StateCommitment = [32]byte{0x41}
+			inventory.StateImageDigest = [32]byte{0x42}
+			inventory.InventoryCommitment = [32]byte{0x43}
+			inventory.RestartableGenerationHeadroom--
+			readiness.setInventory(inventory)
+		},
+		"native anchor advances": func(
+			readiness *testFrostProductionSignerReadiness,
+		) {
+			inventory := testFrostProductionSignerInventorySnapshot()
+			inventory.CurrentAnchorRevision++
+			inventory.RestartableRevisionHeadroom--
+			readiness.setInventory(inventory)
+		},
+		"interactive readiness changes": func(
+			readiness *testFrostProductionSignerReadiness,
+		) {
+			readiness.setInteractive(false)
+		},
+	}
+
+	for name, mutate := range testCases {
+		t.Run(name, func(t *testing.T) {
+			point := frostActivationEthereumPoint{
+				BlockNumber: 123,
+				BlockHash:   frostActivationHex32([32]byte{0x44}),
+			}
+			exporter, _, _, _, endpoint, request :=
+				startTestFrostActivationHandshakeExporter(t, point)
+			readiness, ok :=
+				exporter.readiness.(*testFrostProductionSignerReadiness)
+			if !ok {
+				t.Fatal("unexpected production signer readiness verifier")
+			}
+
+			response := postTestFrostActivationHandshake(t, endpoint, request)
+			response.Body.Close()
+			response = awaitTestFrostActivationHandshake(
+				t,
+				endpoint,
+				request,
+				http.StatusOK,
+			)
+			response.Body.Close()
+
+			mutate(readiness)
+			response = postTestFrostActivationHandshake(t, endpoint, request)
+			if response.StatusCode != http.StatusServiceUnavailable ||
+				response.Header.Get("Retry-After") !=
+					frostActivationHandshakeRetryAfter {
+				response.Body.Close()
+				t.Fatalf(
+					"obsolete cached signer state returned status [%d] with retry [%s]",
+					response.StatusCode,
+					response.Header.Get("Retry-After"),
+				)
+			}
+			response.Body.Close()
+
+			readiness.setInteractive(true)
+			response = awaitTestFrostActivationHandshake(
+				t,
+				endpoint,
+				request,
+				http.StatusOK,
+			)
+			defer response.Body.Close()
+			handshake := &frostActivationSignedHandshake{}
+			if err := json.NewDecoder(response.Body).Decode(handshake); err != nil {
+				t.Fatal(err)
+			}
+			if !handshake.Payload.State.Healthy {
+				t.Fatal("fresh stable signer state did not recover healthy attestation")
+			}
+			if name == "native state advances" &&
+				(handshake.Payload.State.NativeSignerState.StateGeneration != 8 ||
+					handshake.Payload.State.NativeSignerState.StateCommitment !=
+						frostActivationHex32([32]byte{0x41})) {
+				t.Fatalf(
+					"reconciled attestation did not use the current native state: %+v",
+					handshake.Payload.State.NativeSignerState,
+				)
+			}
+			if name == "native anchor advances" &&
+				(handshake.Payload.State.NativeSignerState.CurrentAnchorRevision != 2 ||
+					handshake.Payload.State.NativeSignerState.RestartableRevisionHeadroom !=
+						FrostNativeSignerAnchorMaximumHistoryEvents-1) {
+				t.Fatalf(
+					"reconciled attestation did not use the current native anchor: %+v",
+					handshake.Payload.State.NativeSignerState,
+				)
+			}
+		})
+	}
+}
+
 func TestFrostActivationHandshakeExporter_PermitsAndAttestsTombstones(
 	t *testing.T,
 ) {
@@ -978,7 +1142,7 @@ func TestFrostActivationHandshakeExporter_FailsClosed(t *testing.T) {
 	outbox.mutex.Lock()
 	outbox.records = make(map[bitcoin.Hash]*bitcoinBroadcastOutboxRecord)
 	outbox.mutex.Unlock()
-	readiness.interactive = false
+	readiness.setInteractive(false)
 	journal.mutex.Lock()
 	journal.state.SnapshotGeneration++
 	var rootErr error

@@ -2117,6 +2117,85 @@ func TestSignedFrostRetainedGroupHistorySource_EnforcesAggregateResourceLimits(
 	}
 }
 
+func TestSignedFrostRetainedGroupHistorySource_CountsCheckpointPointsTowardUniqueBlockLimit(
+	t *testing.T,
+) {
+	testCases := map[string]struct {
+		maximumUniqueBlocks uint64
+		rejected            bool
+	}{
+		"rejects checkpoint over the limit": {
+			maximumUniqueBlocks: 6,
+			rejected:            true,
+		},
+		"accepts checkpoint at the limit": {
+			maximumUniqueBlocks: 7,
+			rejected:            false,
+		},
+	}
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			fixture := newFrostRetainedGroupHistorySourceFixture(t)
+			fixture.to = FrostPreSignFinality{
+				BlockNumber: 10,
+				BlockHash:   fixture.verifier.headers[10].Hash(),
+			}
+			_, err := fixture.checkpointIssuer(
+				fixture.checkpointAfter(),
+				FrostPreSignFinality{
+					BlockNumber: 7,
+					BlockHash:   fixture.verifier.headers[7].Hash(),
+				},
+				fixture.mutations,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The history bounds and mutation evidence consume exactly six
+			// distinct blocks. The independently signed checkpoint at block 7
+			// must count as a seventh canonical RPC lookup, even though the
+			// final checkpoint at block 10 is already represented by the
+			// history target.
+			fixture.source.maximumUniqueBlocks =
+				testCase.maximumUniqueBlocks
+
+			history, err := fixture.source.ReadCompleteHistory(
+				context.Background(),
+				fixture.from,
+				fixture.to,
+				fixture.checkpointAfter(),
+			)
+			if testCase.rejected {
+				if err == nil ||
+					!strings.Contains(
+						err.Error(),
+						"exceeds the unique-block limit",
+					) {
+					t.Fatalf(
+						"expected checkpoint unique-block rejection, got [%v]",
+						err,
+					)
+				}
+				if fixture.verifier.reads[7] != 0 {
+					t.Fatal(
+						"over-limit checkpoint reached canonical RPC verification",
+					)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("checkpoint at the unique-block limit was rejected: [%v]", err)
+			}
+			if history == nil || len(history.Checkpoints) != 2 ||
+				fixture.verifier.reads[7] == 0 {
+				t.Fatal(
+					"checkpoint at the unique-block limit was not fully verified",
+				)
+			}
+		})
+	}
+}
+
 func TestSignedFrostRetainedGroupHistorySource_RejectsOversizedReceiptLogSet(
 	t *testing.T,
 ) {
