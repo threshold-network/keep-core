@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"github.com/keep-network/keep-core/pkg/clientinfo"
 )
 
 const (
@@ -168,7 +169,7 @@ func (dsa *depositSweepAction) execute() error {
 
 	// Record deposit sweep execution attempt
 	if dsa.metricsRecorder != nil {
-		dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_total", 1)
+		dsa.metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepExecutionsTotal, 1)
 	}
 
 	validateProposalLogger := dsa.logger.With(
@@ -187,8 +188,8 @@ func (dsa *depositSweepAction) execute() error {
 	)
 	if err != nil {
 		if dsa.metricsRecorder != nil {
-			dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_failed_total", 1)
-			dsa.metricsRecorder.RecordDuration("deposit_sweep_execution_duration_seconds", time.Since(executionStartTime))
+			dsa.metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepExecutionsFailedTotal, 1)
+			dsa.metricsRecorder.RecordDuration(clientinfo.MetricDepositSweepExecutionDurationSeconds, time.Since(executionStartTime))
 		}
 		return fmt.Errorf("validate proposal step failed: [%v]", err)
 	}
@@ -203,7 +204,7 @@ func (dsa *depositSweepAction) execute() error {
 		if check, checkErr := checkSweepFeeFloor(dsa.proposal); checkErr == nil &&
 			check.belowFloor {
 			dsa.metricsRecorder.IncrementCounter(
-				"deposit_sweep_fee_below_floor_total", 1,
+				clientinfo.MetricDepositSweepFeeBelowFloorTotal, 1,
 			)
 		}
 	}
@@ -215,8 +216,8 @@ func (dsa *depositSweepAction) execute() error {
 	)
 	if err != nil {
 		if dsa.metricsRecorder != nil {
-			dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_failed_total", 1)
-			dsa.metricsRecorder.RecordDuration("deposit_sweep_execution_duration_seconds", time.Since(executionStartTime))
+			dsa.metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepExecutionsFailedTotal, 1)
+			dsa.metricsRecorder.RecordDuration(clientinfo.MetricDepositSweepExecutionDurationSeconds, time.Since(executionStartTime))
 		}
 		return fmt.Errorf(
 			"error while determining wallet's main UTXO: [%v]",
@@ -232,8 +233,8 @@ func (dsa *depositSweepAction) execute() error {
 	)
 	if err != nil {
 		if dsa.metricsRecorder != nil {
-			dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_failed_total", 1)
-			dsa.metricsRecorder.RecordDuration("deposit_sweep_execution_duration_seconds", time.Since(executionStartTime))
+			dsa.metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepExecutionsFailedTotal, 1)
+			dsa.metricsRecorder.RecordDuration(clientinfo.MetricDepositSweepExecutionDurationSeconds, time.Since(executionStartTime))
 		}
 		return fmt.Errorf(
 			"error while ensuring wallet state is synced between "+
@@ -251,8 +252,8 @@ func (dsa *depositSweepAction) execute() error {
 	)
 	if err != nil {
 		if dsa.metricsRecorder != nil {
-			dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_failed_total", 1)
-			dsa.metricsRecorder.RecordDuration("deposit_sweep_execution_duration_seconds", time.Since(executionStartTime))
+			dsa.metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepExecutionsFailedTotal, 1)
+			dsa.metricsRecorder.RecordDuration(clientinfo.MetricDepositSweepExecutionDurationSeconds, time.Since(executionStartTime))
 		}
 		return fmt.Errorf(
 			"error while assembling deposit sweep transaction: [%v]",
@@ -267,8 +268,8 @@ func (dsa *depositSweepAction) execute() error {
 	// Just in case. This should never happen.
 	if dsa.proposalExpiryBlock < dsa.signingTimeoutSafetyMarginBlocks {
 		if dsa.metricsRecorder != nil {
-			dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_failed_total", 1)
-			dsa.metricsRecorder.RecordDuration("deposit_sweep_execution_duration_seconds", time.Since(executionStartTime))
+			dsa.metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepExecutionsFailedTotal, 1)
+			dsa.metricsRecorder.RecordDuration(clientinfo.MetricDepositSweepExecutionDurationSeconds, time.Since(executionStartTime))
 		}
 		return fmt.Errorf("invalid proposal expiry block")
 	}
@@ -282,15 +283,15 @@ func (dsa *depositSweepAction) execute() error {
 	)
 	if err != nil {
 		if dsa.metricsRecorder != nil {
-			dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_failed_total", 1)
-			dsa.metricsRecorder.RecordDuration("deposit_sweep_execution_duration_seconds", time.Since(executionStartTime))
+			dsa.metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepExecutionsFailedTotal, 1)
+			dsa.metricsRecorder.RecordDuration(clientinfo.MetricDepositSweepExecutionDurationSeconds, time.Since(executionStartTime))
 		}
 		return fmt.Errorf("sign transaction step failed: [%v]", err)
 	}
 
 	// Record deposit sweep transaction signing duration
 	if dsa.metricsRecorder != nil {
-		dsa.metricsRecorder.RecordDuration("deposit_sweep_tx_signing_duration_seconds", time.Since(signingStartTime))
+		dsa.metricsRecorder.RecordDuration(clientinfo.MetricDepositSweepTxSigningDurationSeconds, time.Since(signingStartTime))
 	}
 
 	broadcastTxLogger := dsa.logger.With(
@@ -306,16 +307,16 @@ func (dsa *depositSweepAction) execute() error {
 	)
 	if err != nil {
 		if dsa.metricsRecorder != nil {
-			dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_failed_total", 1)
-			dsa.metricsRecorder.RecordDuration("deposit_sweep_execution_duration_seconds", time.Since(executionStartTime))
+			dsa.metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepExecutionsFailedTotal, 1)
+			dsa.metricsRecorder.RecordDuration(clientinfo.MetricDepositSweepExecutionDurationSeconds, time.Since(executionStartTime))
 		}
 		return fmt.Errorf("broadcast transaction step failed: [%v]", err)
 	}
 
 	// Record successful deposit sweep execution
 	if dsa.metricsRecorder != nil {
-		dsa.metricsRecorder.IncrementCounter("deposit_sweep_executions_success_total", 1)
-		dsa.metricsRecorder.RecordDuration("deposit_sweep_execution_duration_seconds", time.Since(executionStartTime))
+		dsa.metricsRecorder.IncrementCounter(clientinfo.MetricDepositSweepExecutionsSuccessTotal, 1)
+		dsa.metricsRecorder.RecordDuration(clientinfo.MetricDepositSweepExecutionDurationSeconds, time.Since(executionStartTime))
 	}
 
 	return nil
