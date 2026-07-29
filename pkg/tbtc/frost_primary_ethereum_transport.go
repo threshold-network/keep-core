@@ -50,7 +50,7 @@ type FrostPrimaryEthereumTransport struct {
 	timeout       time.Duration
 	rootCAs       *x509.CertPool
 	rpcClient     *rpc.Client
-	client        *ethclient.Client
+	client        FrostPrimaryEthereumClient
 	httpTransport *http.Transport
 	seenPeers     map[[32]byte]frostTransportPeerIdentity
 	livePeers     map[[32]byte]uint64
@@ -212,7 +212,10 @@ func newFrostPrimaryEthereumTransport(
 		return nil, fmt.Errorf("cannot dial guarded primary Ethereum endpoint: [%w]", err)
 	}
 	transport.rpcClient = rpcClient
-	transport.client = ethclient.NewClient(rpcClient)
+	transport.client = &frostPrimaryEthereumTimeoutClient{
+		client:         ethclient.NewClient(rpcClient),
+		requestTimeout: timeout,
+	}
 
 	probeContext, probeCancel := context.WithTimeout(ctx, timeout)
 	defer probeCancel()
@@ -244,7 +247,7 @@ func newFrostPrimaryEthereumTransport(
 
 // Client returns the exact client whose connections are guarded by this
 // transport. It must be passed to ethereum.ConnectWithClient.
-func (transport *FrostPrimaryEthereumTransport) Client() *ethclient.Client {
+func (transport *FrostPrimaryEthereumTransport) Client() FrostPrimaryEthereumClient {
 	if transport == nil {
 		return nil
 	}

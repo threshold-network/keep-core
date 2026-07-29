@@ -2070,6 +2070,12 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) collectSeatAttestations(
 		if !tfpsag.membershipValidator.IsValidMembership(seat, message.SenderPublicKey()) {
 			return
 		}
+		// The wallet broadcast topic is reused across proposals. Reject stale
+		// (including replayed) attestations before claiming the authenticated
+		// seat so they cannot suppress that seat's current attestation.
+		if !bytes.Equal(payload.Digest, proposal.Digest[:]) {
+			return
+		}
 		if !claimFrostPreSignRemoteSeat(
 			seat,
 			len(proposal.WalletMembersIDs),

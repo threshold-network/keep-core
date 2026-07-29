@@ -1,16 +1,21 @@
 package tbtc
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
 	"math/big"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/keep-network/keep-core/internal/testutils"
 	"github.com/keep-network/keep-core/pkg/bitcoin"
 	"github.com/keep-network/keep-core/pkg/chain"
+	"github.com/keep-network/keep-core/pkg/net"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
 
@@ -669,6 +674,197 @@ func TestClaimFrostPreSignRemoteSeat_BoundsAdmissionPerAuthenticatedSeat(
 		claimFrostPreSignRemoteSeat(101, 100, local, seen, mutex) {
 		t.Fatal("out-of-range seat was admitted")
 	}
+}
+
+func TestThresholdFrostPreSignAuthorizationGate_RejectsStaleDigestBeforeSeatAdmission(
+	t *testing.T,
+) {
+	localChain := Connect()
+	remoteChain := Connect()
+	localSigning := &testFrostPreSignFixedSignatureSigning{
+		Signing: localChain.Signing(),
+	}
+	remoteSigning := &testFrostPreSignFixedSignatureSigning{
+		Signing: remoteChain.Signing(),
+	}
+	proposal := &FrostPreSignAuthorizationProposal{
+		Digest:           [32]byte{0x11},
+		WalletMembersIDs: []uint32{1, 2},
+	}
+	staleDigest := proposal.Digest
+	staleDigest[0] ^= 0xff
+	staleSignature, err := remoteSigning.Sign(staleDigest[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentSignature, err := remoteSigning.Sign(proposal.Digest[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	remotePublicKey := remoteSigning.PublicKey()
+	channel := &testFrostPreSignAuthorizationBroadcastChannel{
+		messages: []net.Message{
+			&testFrostPreSignAuthorizationNetworkMessage{
+				publicKey: remotePublicKey,
+				payload: &frostPreSignAuthorizationMessage{
+					SenderIDValue: 2,
+					Digest:        staleDigest[:],
+					PublicKey:     remotePublicKey,
+					Signature:     staleSignature,
+				},
+			},
+			&testFrostPreSignAuthorizationNetworkMessage{
+				publicKey: remotePublicKey,
+				payload: &frostPreSignAuthorizationMessage{
+					SenderIDValue: 2,
+					Digest:        proposal.Digest[:],
+					PublicKey:     remotePublicKey,
+					Signature:     currentSignature,
+				},
+			},
+		},
+	}
+	operators := []chain.Address{
+		localSigning.Address(),
+		remoteSigning.Address(),
+	}
+	gate := &thresholdFrostPreSignAuthorizationGate{
+		signing:          localSigning,
+		broadcastChannel: channel,
+		membershipValidator: group.NewMembershipValidator(
+			&testutils.MockLogger{},
+			operators,
+			localSigning,
+		),
+		wallet: wallet{
+			signingGroupOperators: operators,
+		},
+		localMemberIndexes: []group.MemberIndex{1},
+		threshold:          2,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	attestation, err := gate.collectSeatAttestations(ctx, proposal)
+	if err != nil {
+		t.Fatalf("current attestation was suppressed by stale replay: [%v]", err)
+	}
+	if len(attestation.SigningMemberIndices) != 2 ||
+		attestation.SigningMemberIndices[0] != 1 ||
+		attestation.SigningMemberIndices[1] != 2 {
+		t.Fatalf("unexpected seat attestation: [%+v]", attestation)
+	}
+}
+
+type testFrostPreSignFixedSignatureSigning struct {
+	chain.Signing
+}
+
+func (signing *testFrostPreSignFixedSignatureSigning) Sign(
+	message []byte,
+) ([]byte, error) {
+	return testFrostPreSignFixedSignature(
+		signing.PublicKey(),
+		message,
+	), nil
+}
+
+func (signing *testFrostPreSignFixedSignatureSigning) Verify(
+	message []byte,
+	signature []byte,
+) (bool, error) {
+	return signing.VerifyWithPublicKey(
+		message,
+		signature,
+		signing.PublicKey(),
+	)
+}
+
+func (*testFrostPreSignFixedSignatureSigning) VerifyWithPublicKey(
+	message []byte,
+	signature []byte,
+	publicKey []byte,
+) (bool, error) {
+	return bytes.Equal(
+		signature,
+		testFrostPreSignFixedSignature(publicKey, message),
+	), nil
+}
+
+func testFrostPreSignFixedSignature(
+	publicKey []byte,
+	message []byte,
+) []byte {
+	payload := make([]byte, 0, len(publicKey)+len(message))
+	payload = append(payload, publicKey...)
+	payload = append(payload, message...)
+	digest := sha512.Sum512(payload)
+	return append(digest[:], byte(0))
+}
+
+type testFrostPreSignAuthorizationBroadcastChannel struct {
+	messages []net.Message
+}
+
+func (*testFrostPreSignAuthorizationBroadcastChannel) Name() string {
+	return "test-frost-pre-sign-authorization"
+}
+
+func (*testFrostPreSignAuthorizationBroadcastChannel) Send(
+	context.Context,
+	net.TaggedMarshaler,
+	...net.RetransmissionStrategy,
+) error {
+	return nil
+}
+
+func (channel *testFrostPreSignAuthorizationBroadcastChannel) Recv(
+	ctx context.Context,
+	handler func(net.Message),
+) {
+	for _, message := range channel.messages {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			handler(message)
+		}
+	}
+}
+
+func (*testFrostPreSignAuthorizationBroadcastChannel) SetUnmarshaler(
+	func() net.TaggedUnmarshaler,
+) {
+}
+
+func (*testFrostPreSignAuthorizationBroadcastChannel) SetFilter(
+	net.BroadcastChannelFilter,
+) error {
+	return nil
+}
+
+type testFrostPreSignAuthorizationNetworkMessage struct {
+	publicKey []byte
+	payload   *frostPreSignAuthorizationMessage
+}
+
+func (*testFrostPreSignAuthorizationNetworkMessage) TransportSenderID() net.TransportIdentifier {
+	return nil
+}
+
+func (message *testFrostPreSignAuthorizationNetworkMessage) SenderPublicKey() []byte {
+	return message.publicKey
+}
+
+func (message *testFrostPreSignAuthorizationNetworkMessage) Payload() interface{} {
+	return message.payload
+}
+
+func (*testFrostPreSignAuthorizationNetworkMessage) Type() string {
+	return "test-frost-pre-sign-authorization"
+}
+
+func (*testFrostPreSignAuthorizationNetworkMessage) Seqno() uint64 {
+	return 0
 }
 
 type testFrostPreSignAuthorizationGate struct {

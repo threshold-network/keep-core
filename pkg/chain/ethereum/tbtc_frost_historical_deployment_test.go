@@ -3,6 +3,7 @@ package ethereum
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"strings"
 	"testing"
 
@@ -270,8 +271,19 @@ func TestFrostPreSignExactHashReader_WrappedProductionClient(t *testing.T) {
 			ConcurrencyLimit:       config.ConcurrencyLimit,
 		}),
 	}
+	evidenceReader, err := newFrostPreSignPrimaryEthereumReader(
+		chain.client,
+		chain.rpcClient,
+		big.NewInt(1),
+		0,
+		chain.rpcLimiter,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	adapter := &frostPreSignEthereumAdapter{
-		chain: &TbtcChain{baseChain: chain},
+		chain:  &TbtcChain{baseChain: chain},
+		reader: evidenceReader,
 	}
 
 	reader, err := adapter.exactHashReader()

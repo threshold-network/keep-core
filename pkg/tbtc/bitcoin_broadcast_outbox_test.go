@@ -748,6 +748,74 @@ func TestBitcoinBroadcastOutbox_ReconcilesPreviouslyBroadcastSupersededVariant(
 	}
 }
 
+func TestBitcoinBroadcastOutbox_BroadcastLockWaitHonorsContext(
+	t *testing.T,
+) {
+	statusStarted := make(chan struct{})
+	statusRelease := make(chan struct{})
+	chain := &blockingOutboxTestBitcoinChain{
+		outboxTestBitcoinChain: newOutboxTestBitcoinChain(),
+		statusStarted:          statusStarted,
+		statusRelease:          statusRelease,
+	}
+	outbox := openTestBitcoinBroadcastOutbox(
+		t,
+		t.TempDir(),
+		chain,
+	)
+	defer outbox.close()
+	tx := testOutboxTransaction(0x4a, 9000)
+	enqueueTestBitcoinTransaction(
+		t,
+		outbox,
+		tx,
+		testBitcoinBroadcastAuthorization(0x4b, 0x4c, 1),
+	)
+
+	replayResult := make(chan error, 1)
+	go func() {
+		replayResult <- outbox.replayOnceWithContext(context.Background())
+	}()
+	select {
+	case <-statusStarted:
+	case <-time.After(time.Second):
+		close(statusRelease)
+		t.Fatal("background replay did not enter the blocking Bitcoin read")
+	}
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		50*time.Millisecond,
+	)
+	defer cancel()
+	broadcastResult := make(chan error, 1)
+	go func() {
+		broadcastResult <- outbox.broadcastTransaction(ctx, tx.Hash())
+	}()
+
+	var broadcastErr error
+	select {
+	case broadcastErr = <-broadcastResult:
+	case <-time.After(500 * time.Millisecond):
+		close(statusRelease)
+		<-replayResult
+		broadcastErr = <-broadcastResult
+		t.Fatalf(
+			"foreground broadcast ignored its context while waiting for replay; eventual result: [%v]",
+			broadcastErr,
+		)
+	}
+	if !errors.Is(broadcastErr, context.DeadlineExceeded) {
+		close(statusRelease)
+		<-replayResult
+		t.Fatalf("unexpected canceled broadcast result: [%v]", broadcastErr)
+	}
+	close(statusRelease)
+	if err := <-replayResult; err != nil {
+		t.Fatalf("background replay failed after release: [%v]", err)
+	}
+}
+
 func TestBitcoinBroadcastOutbox_PersistenceFailureDoesNotPublishConfirmationMutation(
 	t *testing.T,
 ) {
@@ -1439,6 +1507,23 @@ type outboxTestBitcoinChain struct {
 	statusErrs  map[bitcoin.Hash]error
 	broadcasts  map[bitcoin.Hash]uint
 	statusCalls uint
+}
+
+type blockingOutboxTestBitcoinChain struct {
+	*outboxTestBitcoinChain
+	statusStarted chan struct{}
+	statusRelease <-chan struct{}
+	statusOnce    sync.Once
+}
+
+func (botbc *blockingOutboxTestBitcoinChain) GetCanonicalTransactionStatus(
+	hash bitcoin.Hash,
+) (*bitcoin.CanonicalTransactionStatus, error) {
+	botbc.statusOnce.Do(func() {
+		close(botbc.statusStarted)
+	})
+	<-botbc.statusRelease
+	return botbc.outboxTestBitcoinChain.GetCanonicalTransactionStatus(hash)
 }
 
 type outboxTestAuthorizationStatusSource struct {

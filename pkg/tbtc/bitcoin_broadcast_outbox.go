@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"golang.org/x/sync/semaphore"
 	"golang.org/x/sys/unix"
 )
 
@@ -235,12 +236,12 @@ type bitcoinBroadcastOutbox struct {
 	deepReconcileCursor       int
 	now                       func() time.Time
 
-	replayMutex sync.Mutex
-	mutex       sync.Mutex
-	records     map[bitcoin.Hash]*bitcoinBroadcastOutboxRecord
-	lockFile    *os.File
-	closed      bool
-	recovered   bool
+	replaySemaphore *semaphore.Weighted
+	mutex           sync.Mutex
+	records         map[bitcoin.Hash]*bitcoinBroadcastOutboxRecord
+	lockFile        *os.File
+	closed          bool
+	recovered       bool
 
 	persistFailureHook func(*bitcoinBroadcastOutboxRecord) error
 }
@@ -291,6 +292,7 @@ func newBitcoinBroadcastOutbox(
 		archiveConfirmations:      defaultBitcoinBroadcastArchiveConfirmations,
 		deepReconcileBatch:        defaultBitcoinBroadcastDeepReconcileBatch,
 		now:                       time.Now,
+		replaySemaphore:           semaphore.NewWeighted(1),
 		records:                   make(map[bitcoin.Hash]*bitcoinBroadcastOutboxRecord),
 		lockFile:                  lockFile,
 	}
@@ -815,8 +817,10 @@ func (errorValue *bitcoinBroadcastReplayErrors) hasFatalFailure() bool {
 // fixed-size rotating reservation batch; healthy archived reservations still
 // require only their primary confirmation read.
 func (bbo *bitcoinBroadcastOutbox) replayOnceWithContext(ctx context.Context) error {
-	bbo.replayMutex.Lock()
-	defer bbo.replayMutex.Unlock()
+	if err := bbo.acquireReplaySemaphore(ctx); err != nil {
+		return err
+	}
+	defer bbo.replaySemaphore.Release(1)
 
 	active, archived, err := bbo.replayCandidates()
 	if err != nil {
@@ -1200,8 +1204,10 @@ func (bbo *bitcoinBroadcastOutbox) broadcastTransaction(
 	ctx context.Context,
 	transactionHash bitcoin.Hash,
 ) error {
-	bbo.replayMutex.Lock()
-	defer bbo.replayMutex.Unlock()
+	if err := bbo.acquireReplaySemaphore(ctx); err != nil {
+		return err
+	}
+	defer bbo.replaySemaphore.Release(1)
 
 	bbo.mutex.Lock()
 	record := bbo.records[transactionHash]
@@ -1230,6 +1236,24 @@ func (bbo *bitcoinBroadcastOutbox) broadcastTransaction(
 		return err
 	}
 	return broadcastErr
+}
+
+func (bbo *bitcoinBroadcastOutbox) acquireReplaySemaphore(
+	ctx context.Context,
+) error {
+	if ctx == nil {
+		return fmt.Errorf("Bitcoin broadcast replay context is nil")
+	}
+	if bbo == nil || bbo.replaySemaphore == nil {
+		return fmt.Errorf("Bitcoin broadcast replay semaphore is unavailable")
+	}
+	if err := bbo.replaySemaphore.Acquire(ctx, 1); err != nil {
+		return fmt.Errorf(
+			"cannot acquire Bitcoin broadcast replay semaphore: [%w]",
+			err,
+		)
+	}
+	return nil
 }
 
 func (bbo *bitcoinBroadcastOutbox) persistAndSwapRecord(
