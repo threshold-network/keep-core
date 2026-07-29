@@ -430,3 +430,39 @@ func TestJoinFailureAndOnChainCountersRegistered(t *testing.T) {
 		}
 	}
 }
+
+// TestDepositSweepProofSubmissionCountersRegistered tests that the
+// deposit-sweep proof-submission counters are registered upfront so they
+// appear in the metrics endpoint before any increment.
+func TestDepositSweepProofSubmissionCountersRegistered(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	registry := &Registry{keepclientinfo.NewRegistry(), ctx}
+	pm := NewPerformanceMetrics(ctx, registry)
+
+	expectedCounters := []string{
+		MetricDepositSweepProofSubmissionsTotal,
+		MetricDepositSweepProofSubmissionsSuccessTotal,
+		MetricDepositSweepProofSubmissionsFailedTotal,
+	}
+
+	for _, counterName := range expectedCounters {
+		pm.countersMutex.RLock()
+		_, exists := pm.counters[counterName]
+		pm.countersMutex.RUnlock()
+		if !exists {
+			t.Errorf("counter %s should be registered upfront", counterName)
+			continue
+		}
+
+		if value := pm.GetCounterValue(counterName); value != 0 {
+			t.Errorf("counter %s should start at 0, got %v", counterName, value)
+		}
+
+		pm.IncrementCounter(counterName, 1)
+		if value := pm.GetCounterValue(counterName); value != 1 {
+			t.Errorf("counter %s should increment to 1, got %v", counterName, value)
+		}
+	}
+}
