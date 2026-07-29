@@ -5,7 +5,6 @@ package tbtc
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"sort"
 
@@ -15,7 +14,6 @@ import (
 
 type frostPendingDKGDescriptor struct {
 	walletID         [32]byte
-	keyGroup         string
 	participantCount uint16
 	preserveAll      bool
 }
@@ -177,7 +175,6 @@ func (reconciler *frostOrphanedDKGReconciler) reconcile(
 		if pending != nil {
 			if pending.preserveAll ||
 				(pending.walletID == candidate.walletID &&
-					pending.keyGroup == candidate.keyGroup &&
 					pending.participantCount == candidate.participantCount) {
 				continue
 			}
@@ -274,7 +271,12 @@ func (reconciler *frostOrphanedDKGReconciler) currentPendingDescriptor() (
 		return nil, fmt.Errorf("cannot validate pending FROST DKG result: [%w]", err)
 	}
 	if !valid {
-		return nil, nil
+		// A successfully challenged invalid result returns this same DKG
+		// attempt to AwaitingResult, where another member may submit the valid
+		// result backed by the packages already persisted by this node. The
+		// invalid submission gives us no trustworthy wallet identity to match,
+		// so retain every noncanonical package until the attempt is resolved.
+		return &frostPendingDKGDescriptor{preserveAll: true}, nil
 	}
 	activeMembers, err := registry.ActiveMembersFromMisbehaved(
 		latest.Result.Members,
@@ -288,7 +290,6 @@ func (reconciler *frostOrphanedDKGReconciler) currentPendingDescriptor() (
 	}
 	return &frostPendingDKGDescriptor{
 		walletID:         [32]byte(latest.Result.XOnlyOutputKey),
-		keyGroup:         "02" + hex.EncodeToString(latest.Result.XOnlyOutputKey[:]),
 		participantCount: uint16(len(activeMembers)),
 	}, nil
 }
