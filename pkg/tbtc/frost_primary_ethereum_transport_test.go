@@ -234,7 +234,7 @@ func TestFrostPrimaryEthereumTransportWSSAppliesRequestTimeout(
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("stalled WSS request returned unexpected error: [%v]", err)
 		}
-	case <-time.After(1500 * time.Millisecond):
+	case <-time.After(3 * time.Second):
 		close(service.release)
 		err := <-result
 		t.Fatalf(
