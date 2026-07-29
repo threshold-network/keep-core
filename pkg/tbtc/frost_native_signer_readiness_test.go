@@ -645,3 +645,39 @@ func TestFrostProductionSignerReadinessRejectsConcurrentRegistryChange(
 		t.Fatalf("concurrent local registry change was accepted: [%v]", err)
 	}
 }
+
+func TestFrostProductionSignerReadinessRejectsChangedOrBusyJournalStamp(
+	t *testing.T,
+) {
+	fixture := newJournalTestFixture(t)
+	journalDirectory := t.TempDir()
+	if err := os.Chmod(journalDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	journal := fixture.openJournal(t, journalDirectory)
+	expected, err := journal.reconcile(context.Background(), fixture.target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readiness := &frostProductionSignerReadiness{journal: journal}
+	if err := readiness.verifyFrostRetainedGroupJournalStampUnchanged(
+		expected,
+	); err != nil {
+		t.Fatalf("matching retained-group journal stamp was rejected: [%v]", err)
+	}
+
+	journal.quarantineState.Generation++
+	if err := readiness.verifyFrostRetainedGroupJournalStampUnchanged(
+		expected,
+	); err == nil || !strings.Contains(err.Error(), "journal changed") {
+		t.Fatalf("advanced quarantine journal stamp was accepted: [%v]", err)
+	}
+	journal.quarantineState.Generation--
+
+	journal.mutex.Lock()
+	err = readiness.verifyFrostRetainedGroupJournalStampUnchanged(expected)
+	journal.mutex.Unlock()
+	if err == nil || !strings.Contains(err.Error(), "journal is busy") {
+		t.Fatalf("busy retained-group journal did not fail closed: [%v]", err)
+	}
+}

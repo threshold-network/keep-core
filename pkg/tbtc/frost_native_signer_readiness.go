@@ -425,12 +425,18 @@ func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerRead
 ) error {
 	if readiness == nil || readiness.interactiveSigningReady == nil ||
 		readiness.journal == nil || readiness.inventoryBinding == nil ||
-		ctx == nil || expected == nil || expected.Inventory == nil ||
+		ctx == nil || expected == nil || expected.Journal == nil ||
+		expected.Inventory == nil ||
 		!expected.InteractiveSigningReady {
 		return fmt.Errorf("cached FROST production signer readiness is incomplete")
 	}
 	if !readiness.interactiveSigningReady() {
 		return fmt.Errorf("interactive FROST signing engine is not ready")
+	}
+	if err := readiness.verifyFrostRetainedGroupJournalStampUnchanged(
+		expected.Journal,
+	); err != nil {
+		return err
 	}
 	if !readiness.journal.walletRegistry.frostReadinessRevisionMatches(
 		expected.registryRevision,
@@ -461,6 +467,97 @@ func (readiness *frostProductionSignerReadiness) verifyFrostProductionSignerRead
 	if !readiness.interactiveSigningReady() {
 		return fmt.Errorf(
 			"interactive FROST signing engine became unavailable during readiness revalidation",
+		)
+	}
+	if err := readiness.verifyFrostRetainedGroupJournalStampUnchanged(
+		expected.Journal,
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (readiness *frostProductionSignerReadiness) verifyFrostRetainedGroupJournalStampUnchanged(
+	expected *frostRetainedGroupJournalSnapshot,
+) error {
+	if readiness == nil || readiness.journal == nil || expected == nil {
+		return fmt.Errorf(
+			"cached FROST retained-group journal readiness is incomplete",
+		)
+	}
+	journal := readiness.journal
+	if !journal.mutex.TryLock() {
+		return fmt.Errorf(
+			"canonical FROST retained-group journal is busy during readiness revalidation",
+		)
+	}
+	defer journal.mutex.Unlock()
+
+	if !expected.Complete ||
+		expected.Schema != frostRetainedGroupJournalSnapshotSchema ||
+		journal.closed ||
+		journal.metadata.Schema != frostRetainedGroupJournalMetadataSchema ||
+		journal.metadata.BindingHash != expected.BindingHash ||
+		journal.metadata.StoreID != expected.StoreID ||
+		journal.metadata.StoreFingerprint != expected.StoreFingerprint ||
+		journal.metadata.ClusterFingerprint != expected.ClusterFingerprint ||
+		journal.state.Schema != frostRetainedGroupJournalStateSchema ||
+		journal.state.BindingHash != expected.BindingHash ||
+		journal.state.CurrentPoint != expected.CurrentPoint ||
+		journal.state.SnapshotGeneration != expected.SnapshotGeneration ||
+		journal.state.BatchRoot != expected.BatchRoot ||
+		journal.state.InventoryRoot != expected.InventoryRoot ||
+		journal.quarantineMetadata.Schema !=
+			frostRetainedGroupQuarantineMetadataSchema ||
+		journal.quarantineMetadata.BindingHash != expected.BindingHash ||
+		journal.quarantineMetadata.ProtocolID != expected.QuarantineProtocolID ||
+		journal.quarantineMetadata.StoreID != expected.QuarantineStoreID ||
+		journal.quarantineMetadata.StoreFingerprint !=
+			expected.QuarantineStoreFingerprint ||
+		journal.quarantineMetadata.ClusterFingerprint !=
+			expected.QuarantineClusterFingerprint ||
+		journal.quarantineMinimumGeneration !=
+			expected.QuarantineMinimumGeneration ||
+		journal.quarantineState.Schema !=
+			frostRetainedGroupQuarantineStateSchema ||
+		journal.quarantineState.BindingHash != expected.BindingHash ||
+		journal.quarantineState.CurrentPoint != expected.CurrentPoint ||
+		journal.quarantineState.Generation != expected.QuarantineGeneration ||
+		journal.quarantineState.Root != expected.QuarantineRoot ||
+		journal.quarantineState.ActiveRoot != expected.QuarantineActiveRoot ||
+		journal.quarantineState.TombstoneRoot !=
+			expected.QuarantineTombstoneRoot ||
+		frostRetainedGroupActiveQuarantineCount(journal.quarantineState) !=
+			expected.QuarantineCount ||
+		uint64(len(journal.quarantineState.Tombstones)) !=
+			expected.QuarantineTombstoneCount ||
+		journal.checkpointPolicy.MinimumSequence !=
+			expected.CheckpointMinimumSequence ||
+		journal.checkpointPolicy.PredecessorHash !=
+			expected.CheckpointPredecessorHash ||
+		journal.checkpointState.Schema !=
+			frostRetainedGroupCheckpointStateSchema ||
+		journal.checkpointState.BindingHash != expected.BindingHash ||
+		journal.checkpointState.Point != expected.CurrentPoint ||
+		journal.checkpointState.Sequence != expected.CheckpointSequence ||
+		journal.checkpointState.CertificateHash !=
+			expected.CheckpointCertificateHash ||
+		journal.checkpointState.HistoryRoot !=
+			expected.CheckpointHistoryRoot ||
+		journal.checkpointState.CanonicalGeneration !=
+			expected.SnapshotGeneration ||
+		journal.checkpointState.CanonicalInventoryRoot !=
+			expected.InventoryRoot ||
+		journal.checkpointState.QuarantineGeneration !=
+			expected.QuarantineGeneration ||
+		journal.checkpointState.QuarantineEventRoot !=
+			expected.QuarantineRoot ||
+		journal.checkpointState.QuarantineActiveRoot !=
+			expected.QuarantineActiveRoot ||
+		journal.checkpointState.QuarantineTombstoneRoot !=
+			expected.QuarantineTombstoneRoot {
+		return fmt.Errorf(
+			"canonical, quarantine, or checkpoint FROST retained-group journal changed since readiness reconciliation",
 		)
 	}
 	return nil
