@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net"
+	"net/http"
 	"net/netip"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -179,6 +182,76 @@ func TestFrostPrimaryEthereumTransportRequiresExactLiveChannel(t *testing.T) {
 	transport.releaseLivePeer(channelKey)
 	if err := transport.verifySeenPeer(peer); err == nil {
 		t.Fatal("closed TLS channel accepted")
+	}
+}
+
+func TestFrostPrimaryEthereumTransportTriesEveryPinnedAddressWithinDeadline(
+	t *testing.T,
+) {
+	server, _, roots := newFrostRetainedGroupHistoryTLSTestServer(
+		t,
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+		"spiffe://primary.example/rpc",
+	)
+	endpoint, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, port, err := net.SplitHostPort(endpoint.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stalledListener, err := net.Listen(
+		"tcp6",
+		net.JoinHostPort("::1", port),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseStalledConnection := make(chan struct{})
+	stalledConnectionDone := make(chan struct{})
+	go func() {
+		defer close(stalledConnectionDone)
+		connection, acceptErr := stalledListener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer connection.Close()
+		<-releaseStalledConnection
+	}()
+	t.Cleanup(func() {
+		close(releaseStalledConnection)
+		_ = stalledListener.Close()
+		<-stalledConnectionDone
+	})
+
+	transport := &FrostPrimaryEthereumTransport{
+		endpoint: frostRetainedGroupResolvedEndpoint{
+			endpoint:  endpoint,
+			canonical: endpoint.String(),
+			addresses: []netip.Addr{
+				netip.MustParseAddr("::1"),
+				netip.MustParseAddr("127.0.0.1"),
+			},
+		},
+		timeout:   time.Second,
+		rootCAs:   roots,
+		seenPeers: make(map[[32]byte]frostTransportPeerIdentity),
+		livePeers: make(map[[32]byte]uint64),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	connection, err := transport.dialTLSContext(ctx, "tcp", endpoint.Host)
+	if err != nil {
+		t.Fatalf(
+			"healthy pinned address was starved by a stalled predecessor: [%v]",
+			err,
+		)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

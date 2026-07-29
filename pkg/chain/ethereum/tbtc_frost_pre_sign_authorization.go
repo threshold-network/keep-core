@@ -35,7 +35,12 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-const frostPreSignManifestVersion = "tbtc-p2tr-fraud-production-activation/v5"
+const (
+	frostPreSignManifestVersion = "tbtc-p2tr-fraud-production-activation/v5"
+
+	frostPreSignFinalityAgreementAttempts   = 4
+	frostPreSignFinalityAgreementRetryDelay = time.Second
+)
 
 const frostPreSignBridgeABIJSON = `[
  {"type":"function","name":"previewP2TRTransactionAuthorization","stateMutability":"view","inputs":[{"name":"payload","type":"bytes"}],"outputs":[{"name":"","type":"bytes"}]},
@@ -3364,27 +3369,80 @@ func frostPreSignMatchingCurrentFinality(
 	primary *frostPreSignEthereumAdapter,
 	verifier *frostPreSignEthereumAdapter,
 ) (*tbtc.FrostPreSignFinality, error) {
+	return frostPreSignMatchingCurrentFinalityWithRetry(
+		ctx,
+		primary,
+		verifier,
+		frostPreSignFinalityAgreementAttempts,
+		frostPreSignFinalityAgreementRetryDelay,
+	)
+}
+
+func frostPreSignMatchingCurrentFinalityWithRetry(
+	ctx context.Context,
+	primary *frostPreSignEthereumAdapter,
+	verifier *frostPreSignEthereumAdapter,
+	attempts int,
+	retryDelay time.Duration,
+) (*tbtc.FrostPreSignFinality, error) {
 	if ctx == nil || primary == nil || verifier == nil ||
 		primary.reader == nil || verifier.reader == nil {
 		return nil, fmt.Errorf("FROST Ethereum verifier pair is incomplete")
 	}
-	primaryFinality, err := frostPreSignCurrentFinality(ctx, primary.reader)
-	if err != nil {
-		return nil, err
+	if attempts <= 0 || retryDelay < 0 {
+		return nil, fmt.Errorf("FROST Ethereum finality retry policy is invalid")
 	}
-	verifiedFinality, err := frostPreSignCurrentFinality(ctx, verifier.reader)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"cannot obtain independent finalized Ethereum header: [%w]",
-			err,
+
+	var primaryFinality *tbtc.FrostPreSignFinality
+	var verifiedFinality *tbtc.FrostPreSignFinality
+	for attempt := 0; attempt < attempts; attempt++ {
+		var err error
+		primaryFinality, err = frostPreSignCurrentFinality(
+			ctx,
+			primary.reader,
 		)
-	}
-	if primaryFinality.BlockNumber != verifiedFinality.BlockNumber ||
-		primaryFinality.BlockHash != verifiedFinality.BlockHash {
-		return nil, fmt.Errorf(
-			"FROST Ethereum endpoints disagree on the current finalized block",
+		if err != nil {
+			return nil, err
+		}
+		verifiedFinality, err = frostPreSignCurrentFinality(
+			ctx,
+			verifier.reader,
 		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot obtain independent finalized Ethereum header: [%w]",
+				err,
+			)
+		}
+		if primaryFinality.BlockNumber == verifiedFinality.BlockNumber &&
+			primaryFinality.BlockHash == verifiedFinality.BlockHash {
+			break
+		}
+		if attempt == attempts-1 {
+			return nil, fmt.Errorf(
+				"FROST Ethereum endpoints disagree on the current finalized block",
+			)
+		}
+		if retryDelay == 0 {
+			continue
+		}
+		timer := time.NewTimer(retryDelay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return nil, fmt.Errorf(
+				"cannot retry independent finalized Ethereum headers: [%w]",
+				ctx.Err(),
+			)
+		case <-timer.C:
+		}
 	}
+
 	if err := primary.requireCanonicalFinality(
 		ctx,
 		primaryFinality,

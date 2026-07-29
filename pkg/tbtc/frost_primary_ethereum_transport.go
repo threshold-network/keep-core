@@ -385,18 +385,34 @@ func (transport *FrostPrimaryEthereumTransport) dialTLSContext(
 			"primary Ethereum transport attempted an unpinned endpoint",
 		)
 	}
-	dialer := &net.Dialer{
-		Timeout:   transport.timeout,
-		KeepAlive: 30 * time.Second,
-	}
+	dialContext, dialCancel := context.WithTimeout(ctx, transport.timeout)
+	defer dialCancel()
+	dialer := &net.Dialer{KeepAlive: 30 * time.Second}
 	var lastErr error
-	for _, pinned := range transport.endpoint.addresses {
+	for index, pinned := range transport.endpoint.addresses {
+		deadline, ok := dialContext.Deadline()
+		if !ok {
+			return nil, fmt.Errorf(
+				"primary Ethereum TLS dial has no bounded deadline",
+			)
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			lastErr = dialContext.Err()
+			break
+		}
+		attemptsRemaining := len(transport.endpoint.addresses) - index
+		attemptContext, attemptCancel := context.WithTimeout(
+			dialContext,
+			remaining/time.Duration(attemptsRemaining),
+		)
 		raw, dialErr := dialer.DialContext(
-			ctx,
+			attemptContext,
 			network,
 			net.JoinHostPort(pinned.String(), port),
 		)
 		if dialErr != nil {
+			attemptCancel()
 			lastErr = dialErr
 			continue
 		}
@@ -405,11 +421,15 @@ func (transport *FrostPrimaryEthereumTransport) dialTLSContext(
 			transport: transport,
 		}
 		tlsConnection := tls.Client(tracked, transport.tlsConfig())
-		if handshakeErr := tlsConnection.HandshakeContext(ctx); handshakeErr != nil {
+		if handshakeErr := tlsConnection.HandshakeContext(
+			attemptContext,
+		); handshakeErr != nil {
 			_ = tlsConnection.Close()
+			attemptCancel()
 			lastErr = handshakeErr
 			continue
 		}
+		attemptCancel()
 		state := tlsConnection.ConnectionState()
 		if verifyErr := verifyFrostPrimaryEthereumTLSConnection(
 			state,

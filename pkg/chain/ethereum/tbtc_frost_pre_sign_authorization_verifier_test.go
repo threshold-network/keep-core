@@ -18,10 +18,12 @@ import (
 )
 
 type testFrostPreSignEvidenceReader struct {
-	finalized   *types.Header
-	headers     map[uint64]*types.Header
-	receipts    []*types.Receipt
-	receiptCall int
+	finalized         *types.Header
+	finalizedSequence []*types.Header
+	finalizedCall     int
+	headers           map[uint64]*types.Header
+	receipts          []*types.Receipt
+	receiptCall       int
 }
 
 func TestNewFrostPreSignPrimaryEthereumReaderAcceptsWrappedClient(
@@ -62,7 +64,15 @@ func (reader *testFrostPreSignEvidenceReader) HeaderByNumber(
 		return nil, fmt.Errorf("header unavailable")
 	}
 	if number.Sign() < 0 {
-		return reader.finalized, nil
+		if len(reader.finalizedSequence) == 0 {
+			return reader.finalized, nil
+		}
+		index := reader.finalizedCall
+		if index >= len(reader.finalizedSequence) {
+			index = len(reader.finalizedSequence) - 1
+		}
+		reader.finalizedCall++
+		return reader.finalizedSequence[index], nil
 	}
 	if number.IsUint64() && reader.headers != nil {
 		if header := reader.headers[number.Uint64()]; header != nil {
@@ -157,8 +167,12 @@ func TestFrostPreSignCurrentFinalityRequiresEndpointAgreement(t *testing.T) {
 		},
 	}
 
-	if _, err := chain.CurrentFrostPreSignFinality(
+	if _, err := frostPreSignMatchingCurrentFinalityWithRetry(
 		context.Background(),
+		chain.frostPreSignAuthorizationAdapter,
+		chain.frostPreSignAuthorizationVerifier,
+		1,
+		0,
 	); err == nil {
 		t.Fatal("different finalized block hashes were accepted")
 	}
@@ -172,6 +186,61 @@ func TestFrostPreSignCurrentFinalityRequiresEndpointAgreement(t *testing.T) {
 	if actual.BlockNumber != 10 ||
 		actual.BlockHash != [32]byte(primaryHeader.Hash()) {
 		t.Fatalf("unexpected common finality [%+v]", actual)
+	}
+}
+
+func TestFrostPreSignCurrentFinalityRetriesTransientEndpointSkew(
+	t *testing.T,
+) {
+	olderHeader := &types.Header{
+		Number: big.NewInt(10),
+		Time:   10,
+		Extra:  []byte{0x01},
+	}
+	newerHeader := &types.Header{
+		Number: big.NewInt(11),
+		Time:   11,
+		Extra:  []byte{0x02},
+	}
+	primaryReader := &testFrostPreSignEvidenceReader{
+		finalized: newerHeader,
+		finalizedSequence: []*types.Header{
+			olderHeader,
+			newerHeader,
+			newerHeader,
+			newerHeader,
+		},
+		headers: map[uint64]*types.Header{
+			10: olderHeader,
+			11: newerHeader,
+		},
+	}
+	verifierReader := &testFrostPreSignEvidenceReader{
+		finalized: newerHeader,
+		finalizedSequence: []*types.Header{
+			newerHeader,
+			newerHeader,
+			newerHeader,
+			newerHeader,
+		},
+		headers: map[uint64]*types.Header{
+			11: newerHeader,
+		},
+	}
+
+	actual, err := frostPreSignMatchingCurrentFinalityWithRetry(
+		context.Background(),
+		&frostPreSignEthereumAdapter{reader: primaryReader},
+		&frostPreSignEthereumAdapter{reader: verifierReader},
+		2,
+		0,
+	)
+	if err != nil {
+		t.Fatalf("temporary finalized-head skew was not retried: [%v]", err)
+	}
+	if actual.BlockNumber != 11 ||
+		actual.BlockHash != [32]byte(newerHeader.Hash()) {
+		t.Fatalf("unexpected converged finality [%+v]", actual)
 	}
 }
 
