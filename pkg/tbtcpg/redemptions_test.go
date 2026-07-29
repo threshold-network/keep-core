@@ -207,22 +207,41 @@ func TestRedemptionAction_ProposeRedemption(t *testing.T) {
 
 	var tests = map[string]struct {
 		fee              int64
+		txMaxFee         uint64
+		txMaxTotalFee    uint64
 		expectedProposal *tbtc.RedemptionProposal
 	}{
 		"fee provided": {
-			fee: 10000,
+			fee:           10000,
+			txMaxFee:      6000,
+			txMaxTotalFee: 6000,
 			expectedProposal: &tbtc.RedemptionProposal{
 				RedeemersOutputScripts: redeemersOutputScripts,
 				RedemptionTxFee:        big.NewInt(10000),
 			},
 		},
 		"fee estimated": {
-			fee: 0, // trigger fee estimation
+			fee:           0, // trigger fee estimation
+			txMaxFee:      6000,
+			txMaxTotalFee: 6000,
 			expectedProposal: &tbtc.RedemptionProposal{
 				RedeemersOutputScripts: redeemersOutputScripts,
 				// raw 4300 (172 vByte * 25 sat/vByte), buffered to
-				// ceil(25*1.25)=32 sat/vByte * 172 = 5504, below the cap.
+				// ceil(25*1.25)=32 sat/vByte * 172 = 5504, below both caps.
 				RedemptionTxFee: big.NewInt(5504),
+			},
+		},
+		"fee estimated, bounded by the per-request fee-share cap": {
+			fee:           0,    // trigger fee estimation
+			txMaxFee:      2500, // aggregated over 2 requests: 5000
+			txMaxTotalFee: 100000,
+			expectedProposal: &tbtc.RedemptionProposal{
+				RedeemersOutputScripts: redeemersOutputScripts,
+				// The buffered fee (5504, see above) would fit under
+				// txMaxTotalFee alone, but must also respect the per-request
+				// fee-share cap once aggregated over the 2 requests
+				// (2 * 2500 = 5000), which is the tighter of the two caps.
+				RedemptionTxFee: big.NewInt(5000),
 			},
 		},
 	}
@@ -234,9 +253,9 @@ func TestRedemptionAction_ProposeRedemption(t *testing.T) {
 
 			btcChain.SetEstimateSatPerVByteFee(1, 25)
 
-			// Fee estimation bounds the safe-minimum floor by the redemption
-			// tx max total fee; set a cap comfortably above the buffered fee.
-			tbtcChain.SetRedemptionParameters(0, 0, 0, 6000, 0, nil, 0)
+			// Fee estimation bounds the safe-minimum floor by the tighter of
+			// the redemption tx max fee (per-request) and max total fee.
+			tbtcChain.SetRedemptionParameters(0, 0, test.txMaxFee, test.txMaxTotalFee, 0, nil, 0)
 
 			for _, script := range redeemersOutputScripts {
 				tbtcChain.SetPendingRedemptionRequest(
