@@ -1227,6 +1227,153 @@ func TestFrostRetainedGroupVerifierRPC_RequiresPerResponseConformanceAttestation
 	}
 }
 
+func TestFrostRetainedGroupPinnedTLS_TriesEveryAddressWithinDeadline(
+	t *testing.T,
+) {
+	for _, test := range []struct {
+		name        string
+		firstServer func(*testing.T, net.Listener) func()
+	}{
+		{
+			name: "stalled TLS handshake",
+			firstServer: func(t *testing.T, listener net.Listener) func() {
+				t.Helper()
+				release := make(chan struct{})
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					connection, err := listener.Accept()
+					if err != nil {
+						return
+					}
+					defer connection.Close()
+					<-release
+				}()
+				return func() {
+					close(release)
+					_ = listener.Close()
+					<-done
+				}
+			},
+		},
+		{
+			name: "invalid TLS certificate",
+			firstServer: func(t *testing.T, listener net.Listener) func() {
+				t.Helper()
+				badServer, _, _ := newFrostRetainedGroupHistoryTLSTestServer(
+					t,
+					http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+					"spiffe://retained-export.example/export",
+				)
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					raw, err := listener.Accept()
+					if err != nil {
+						return
+					}
+					connection := tls.Server(raw, badServer.TLS.Clone())
+					defer connection.Close()
+					_ = connection.Handshake()
+				}()
+				return func() {
+					_ = listener.Close()
+					<-done
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const serviceIdentity = "spiffe://retained-export.example/export"
+			server, leaf, roots := newFrostRetainedGroupHistoryTLSTestServer(
+				t,
+				http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+				serviceIdentity,
+			)
+			endpointURL, canonicalEndpoint, err :=
+				validateFrostRetainedGroupTLSEndpoint(server.URL + "/")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, port, err := net.SplitHostPort(endpointURL.Host)
+			if err != nil {
+				t.Fatal(err)
+			}
+			firstListener, err := net.Listen(
+				"tcp6",
+				net.JoinHostPort("::1", port),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stopFirst := test.firstServer(t, firstListener)
+			defer stopFirst()
+
+			addresses := []netip.Addr{
+				netip.MustParseAddr("::1"),
+				netip.MustParseAddr("127.0.0.1"),
+			}
+			endpoint := frostRetainedGroupResolvedEndpoint{
+				endpoint:         endpointURL,
+				canonical:        canonicalEndpoint,
+				canonicalDNSName: endpointURL.Hostname(),
+				resolvedDNSName:  endpointURL.Hostname(),
+				addresses:        addresses,
+				addressSetHash: frostRetainedGroupResolvedAddressSetHash(
+					addresses,
+				),
+			}
+			identity := testFrostRetainedGroupCompleteIdentity().Export
+			identity.CanonicalEndpoint = endpoint.canonical
+			identity.CanonicalDNSName = endpoint.canonicalDNSName
+			identity.ResolvedDNSName = endpoint.resolvedDNSName
+			identity.ResolvedAddressSetHash = endpoint.addressSetHash
+			identity.TLSLeafSPKIHash = sha256.Sum256(
+				leaf.RawSubjectPublicKeyInfo,
+			)
+			identity.ServiceIdentity = serviceIdentity
+			identity.EndpointFingerprint =
+				computeFrostRetainedGroupEndpointFingerprint(identity)
+			tlsConfig, err := newFrostRetainedGroupPinnedTLSConfig(
+				identity,
+				roots,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dial := frostRetainedGroupPinnedDialTLSContext(
+				endpoint,
+				tlsConfig,
+				2*time.Second,
+			)
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				2*time.Second,
+			)
+			defer cancel()
+
+			connection, err := dial(ctx, "tcp", endpointURL.Host)
+			if err != nil {
+				t.Fatalf(
+					"healthy pinned address was ignored after first replica failure: [%v]",
+					err,
+				)
+			}
+			defer connection.Close()
+			remoteIP, err := frostRetainedGroupRemoteIP(
+				connection.RemoteAddr(),
+			)
+			if err != nil || remoteIP != netip.MustParseAddr("127.0.0.1") {
+				t.Fatalf(
+					"TLS dial did not fail over to the healthy replica: [%v] [%v]",
+					remoteIP,
+					err,
+				)
+			}
+		})
+	}
+}
+
 func TestFrostRetainedGroupTLSExporterProtocolIDFrozen(t *testing.T) {
 	const expected = "42e4447e7981f7691f5d7a0f93fa5500bbc3dda7e58438a9db475ae6c4e39b5c"
 	protocolID := frostRetainedGroupTLSExporterProtocolID()

@@ -1130,19 +1130,20 @@ func frostRetainedGroupEndpointSetsOverlap(
 	return false
 }
 
-func frostRetainedGroupPinnedDialContext(
+func frostRetainedGroupPinnedDialTLSContext(
 	endpoint frostRetainedGroupResolvedEndpoint,
+	tlsConfig *tls.Config,
 	timeout time.Duration,
 ) func(context.Context, string, string) (net.Conn, error) {
-	dialer := &net.Dialer{
-		Timeout:   timeout,
-		KeepAlive: -1,
-	}
 	return func(
 		ctx context.Context,
 		network string,
 		address string,
 	) (net.Conn, error) {
+		if ctx == nil || tlsConfig == nil ||
+			!strings.HasPrefix(network, "tcp") {
+			return nil, fmt.Errorf("retained-group TLS dial is invalid")
+		}
 		host, port, err := net.SplitHostPort(address)
 		if err != nil ||
 			host != endpoint.endpoint.Hostname() ||
@@ -1151,17 +1152,53 @@ func frostRetainedGroupPinnedDialContext(
 				"retained-group transport attempted an unpinned endpoint",
 			)
 		}
+		dialContext, dialCancel := context.WithTimeout(ctx, timeout)
+		defer dialCancel()
+		dialer := &net.Dialer{KeepAlive: -1}
 		var lastErr error
-		for _, pinned := range endpoint.addresses {
-			connection, err := dialer.DialContext(
-				ctx,
+		for index, pinned := range endpoint.addresses {
+			deadline, ok := dialContext.Deadline()
+			if !ok {
+				return nil, fmt.Errorf(
+					"retained-group TLS dial has no bounded deadline",
+				)
+			}
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				lastErr = dialContext.Err()
+				break
+			}
+			attemptsRemaining := len(endpoint.addresses) - index
+			attemptContext, attemptCancel := context.WithTimeout(
+				dialContext,
+				remaining/time.Duration(attemptsRemaining),
+			)
+			raw, dialErr := dialer.DialContext(
+				attemptContext,
 				network,
 				net.JoinHostPort(pinned.String(), port),
 			)
-			if err == nil {
-				return connection, nil
+			if dialErr != nil {
+				attemptCancel()
+				lastErr = dialErr
+				continue
 			}
-			lastErr = err
+			connection := tls.Client(raw, tlsConfig.Clone())
+			if handshakeErr := connection.HandshakeContext(
+				attemptContext,
+			); handshakeErr != nil {
+				_ = connection.Close()
+				attemptCancel()
+				lastErr = handshakeErr
+				continue
+			}
+			attemptCancel()
+			return connection, nil
+		}
+		if lastErr == nil {
+			lastErr = fmt.Errorf(
+				"retained-group endpoint has no pinned addresses",
+			)
 		}
 		return nil, fmt.Errorf(
 			"cannot connect any pinned retained-group endpoint address: [%w]",
@@ -1228,8 +1265,12 @@ func newFrostRetainedGroupAttestedHTTPClientWithSeparationPolicy(
 		return nil, nil, err
 	}
 	transport := &http.Transport{
-		Proxy:                  nil,
-		DialContext:            frostRetainedGroupPinnedDialContext(endpoint, timeout),
+		Proxy: nil,
+		DialTLSContext: frostRetainedGroupPinnedDialTLSContext(
+			endpoint,
+			tlsConfig,
+			timeout,
+		),
 		DisableKeepAlives:      true,
 		DisableCompression:     true,
 		ForceAttemptHTTP2:      false,
