@@ -1227,6 +1227,142 @@ fn persist_distributed_dkg_key_package_accumulates_seats_under_one_session() {
 }
 
 #[test]
+fn retire_distributed_dkg_key_packages_removes_every_seat_and_is_idempotent() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(11);
+    let session_id = "session-distributed-retirement".to_string();
+    let mut key_group = String::new();
+    for participant_identifier in [1_u16, 2] {
+        let result = persist_distributed_dkg_key_package(
+            crate::api::PersistDistributedDkgKeyPackageRequest {
+                session_id: session_id.clone(),
+                participant_identifier,
+                threshold: 2,
+                participant_count: 3,
+                key_package: native_key_packages
+                    .get(&participant_identifier)
+                    .expect("local seat")
+                    .clone(),
+                public_key_package: native_public.clone(),
+            },
+        )
+        .expect("persist distributed DKG seat");
+        key_group = result.key_group;
+    }
+
+    let retired =
+        retire_distributed_dkg_key_packages(crate::api::RetireDistributedDkgKeyPackagesRequest {
+            key_group: key_group.clone(),
+        })
+        .expect("retire distributed DKG packages");
+    assert_eq!(retired.key_group, key_group);
+    assert!(retired.retired);
+    assert_eq!(retired.retired_key_package_count, 2);
+    assert!(!state()
+        .expect("state")
+        .lock()
+        .expect("engine lock")
+        .sessions
+        .contains_key(&session_id));
+
+    let repeated =
+        retire_distributed_dkg_key_packages(crate::api::RetireDistributedDkgKeyPackagesRequest {
+            key_group: key_group.clone(),
+        })
+        .expect("repeat distributed DKG retirement");
+    assert_eq!(repeated.key_group, key_group);
+    assert!(!repeated.retired);
+    assert_eq!(repeated.retired_key_package_count, 0);
+}
+
+#[test]
+fn retire_distributed_dkg_key_packages_does_not_remove_another_group() {
+    let _guard = lock_test_state();
+    reset_for_tests();
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(13);
+    let session_id = "session-distributed-retirement-exact-match".to_string();
+    let persisted =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: session_id.clone(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("local seat").clone(),
+            public_key_package: native_public,
+        })
+        .expect("persist distributed DKG seat");
+
+    let result =
+        retire_distributed_dkg_key_packages(crate::api::RetireDistributedDkgKeyPackagesRequest {
+            key_group: "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+                .to_string(),
+        })
+        .expect("unrelated retirement is an idempotent no-op");
+    assert!(!result.retired);
+    assert_eq!(result.retired_key_package_count, 0);
+    let guard = state().expect("state").lock().expect("engine lock");
+    assert_eq!(
+        guard.sessions[&session_id]
+            .dkg_result
+            .as_ref()
+            .expect("retained DKG result")
+            .key_group,
+        persisted.key_group
+    );
+}
+
+#[test]
+fn retire_distributed_dkg_key_packages_pre_replace_failure_restores_owner() {
+    let _guard = lock_test_state();
+    let _state_path = configure_test_state_path("distributed_dkg_retirement_rollback");
+    reset_for_tests();
+    clear_state_storage_policy_overrides();
+
+    let (native_public, native_key_packages) = sample_distributed_dkg_native_material(15);
+    let session_id = "session-distributed-retirement-rollback".to_string();
+    let persisted =
+        persist_distributed_dkg_key_package(crate::api::PersistDistributedDkgKeyPackageRequest {
+            session_id: session_id.clone(),
+            participant_identifier: 1,
+            threshold: 2,
+            participant_count: 3,
+            key_package: native_key_packages.get(&1).expect("local seat").clone(),
+            public_key_package: native_public,
+        })
+        .expect("persist distributed DKG seat");
+
+    set_persist_fault_injection_for_tests(PersistFaultInjectionPoint::AfterTempSyncBeforeRename);
+    let error =
+        retire_distributed_dkg_key_packages(crate::api::RetireDistributedDkgKeyPackagesRequest {
+            key_group: persisted.key_group.clone(),
+        })
+        .expect_err("pre-replacement retirement failure must roll back");
+    clear_persist_fault_injection_for_tests();
+    assert!(matches!(
+        error,
+        EngineError::Internal(ref message) if message.contains("injected persist fault")
+    ));
+    assert!(state()
+        .expect("state")
+        .lock()
+        .expect("engine lock")
+        .sessions
+        .contains_key(&session_id));
+
+    simulate_process_restart_for_tests();
+    reload_state_from_storage_for_tests();
+    assert!(state()
+        .expect("state")
+        .lock()
+        .expect("engine lock")
+        .sessions
+        .contains_key(&session_id));
+}
+
+#[test]
 fn persist_distributed_dkg_key_package_rejects_second_key_group_owner() {
     let _guard = lock_test_state();
     reset_for_tests();

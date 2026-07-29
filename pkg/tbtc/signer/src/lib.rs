@@ -12,8 +12,9 @@ use api::{
     InteractiveRound2Request, InteractiveSessionAbortRequest, InteractiveSessionOpenRequest,
     NewSigningPackageRequest, PersistDistributedDkgKeyPackageRequest, PromoteCanaryRequest,
     QuarantineStatusRequest, RecoverStateWitnessCheckpointRequest, RefreshCadenceStatusRequest,
-    RefreshSharesRequest, RollbackCanaryRequest, StateWitnessProofRequest, TranscriptAuditRequest,
-    TransitionStateWitnessAnchorRequest, TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
+    RefreshSharesRequest, RetireDistributedDkgKeyPackagesRequest, RollbackCanaryRequest,
+    StateWitnessProofRequest, TranscriptAuditRequest, TransitionStateWitnessAnchorRequest,
+    TriggerEmergencyRekeyRequest, VerifyBlameProofRequest,
 };
 use ffi::{
     ffi_entry, free_buffer, parse_request, serialize_response, success_from_string,
@@ -55,7 +56,9 @@ const TBTC_SIGNER_ABI_MAJOR: u32 = 4;
 // offline-certified anchor trust-transition, trust-head inspection, and
 // bootstrap-facts provisioning symbols; consumers of those surfaces require
 // ABI 4.3 so a published 4.2 library cannot pass negotiation then fail dlsym.
-const TBTC_SIGNER_ABI_MINOR: u32 = 3;
+// Minor 4 adds idempotent durable retirement of distributed-DKG key packages,
+// allowing the host to reconcile packages whose DKG result was never accepted.
+const TBTC_SIGNER_ABI_MINOR: u32 = 4;
 #[cfg(test)]
 use engine::TBTC_SIGNER_PROFILE_ENV;
 
@@ -410,6 +413,19 @@ pub extern "C" fn frost_tbtc_persist_distributed_dkg_key_package(
         let request: PersistDistributedDkgKeyPackageRequest =
             parse_request(request_ptr, request_len)?;
         let response = engine::persist_distributed_dkg_key_package(request)?;
+        serialize_response(&response)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn frost_tbtc_retire_distributed_dkg_key_packages(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> TbtcSignerResult {
+    normal_ffi_entry(|| {
+        let request: RetireDistributedDkgKeyPackagesRequest =
+            parse_request(request_ptr, request_len)?;
+        let response = engine::retire_distributed_dkg_key_packages(request)?;
         serialize_response(&response)
     })
 }
@@ -922,9 +938,10 @@ mod tests {
         // current value so an accidental bump is caught. ABI 4 changes a valid
         // RefreshShares call from a synthetic success response to a terminal error;
         // minor 2 adds the signed external-anchor tip/acknowledgement/recovery symbols;
-        // minor 3 adds offline trust transition/head and provisioning bootstrap facts.
+        // minor 3 adds offline trust transition/head and provisioning bootstrap facts;
+        // minor 4 adds durable distributed-DKG key-package retirement.
         assert_eq!(abi.abi_major, 4);
-        assert_eq!(abi.abi_minor, 3);
+        assert_eq!(abi.abi_minor, 4);
     }
 
     #[test]

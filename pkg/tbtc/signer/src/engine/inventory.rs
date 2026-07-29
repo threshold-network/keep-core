@@ -328,7 +328,7 @@ fn validate_inventory_entry(
     })
 }
 
-fn parse_key_group(key_group: &str) -> Result<([u8; 32], [u8; 33]), EngineError> {
+pub(crate) fn parse_key_group(key_group: &str) -> Result<([u8; 32], [u8; 33]), EngineError> {
     if key_group.len() != 66 || key_group != key_group.to_ascii_lowercase() {
         return Err(EngineError::Internal(
             "retained wallet key group is not canonical lowercase compressed SEC1 hex".to_string(),
