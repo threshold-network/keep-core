@@ -17,7 +17,6 @@ import (
 
 	"github.com/keep-network/keep-common/pkg/chain/ethereum"
 	"github.com/keep-network/keep-common/pkg/chain/ethereum/ethutil"
-	"github.com/keep-network/keep-common/pkg/rate"
 	"github.com/keep-network/keep-core/pkg/chain"
 	"github.com/keep-network/keep-core/pkg/chain/ethereum/threshold/gen/contract"
 	"github.com/keep-network/keep-core/pkg/maintainer"
@@ -72,7 +71,7 @@ type EthereumClient interface {
 }
 
 type ethereumRPCLimiter interface {
-	AcquirePermit() error
+	AcquirePermit(context.Context) error
 	ReleasePermit()
 }
 
@@ -571,12 +570,12 @@ func wrapClientAddons(
 			config.ConcurrencyLimit,
 		)
 
-		return ethutil.WrapRateLimiting(
+		return wrapEthereumClientWithRPCLimiter(
 			loggingClient,
-			&rate.LimiterConfig{
-				RequestsPerSecondLimit: config.RequestsPerSecondLimit,
-				ConcurrencyLimit:       config.ConcurrencyLimit,
-			},
+			newEthereumRPCLimiter(
+				config.RequestsPerSecondLimit,
+				config.ConcurrencyLimit,
+			),
 		)
 	}
 

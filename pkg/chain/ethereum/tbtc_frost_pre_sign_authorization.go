@@ -19,7 +19,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	geth "github.com/ethereum/go-ethereum"
@@ -659,10 +658,7 @@ type frostPreSignCanonicalHashReader struct {
 	rpcClient      *rpc.Client
 	chainID        *big.Int
 	requestTimeout time.Duration
-	rpcLimiter     interface {
-		AcquirePermit() error
-		ReleasePermit()
-	}
+	rpcLimiter     ethereumRPCLimiter
 }
 
 func (reader *frostPreSignCanonicalHashReader) ChainID(
@@ -681,6 +677,8 @@ func (reader *frostPreSignCanonicalHashReader) HeaderByNumber(
 	if reader.standardReader == nil {
 		return nil, fmt.Errorf("standard Ethereum reader is unavailable")
 	}
+	ctx, cancel := reader.requestContext(ctx)
+	defer cancel()
 	return reader.standardReader.HeaderByNumber(ctx, number)
 }
 
@@ -692,8 +690,12 @@ func (reader *frostPreSignCanonicalHashReader) HeaderByHash(
 		if reader.headerReader == nil {
 			return nil, fmt.Errorf("exact-hash Ethereum reader is unavailable")
 		}
+		ctx, cancel := reader.requestContext(ctx)
+		defer cancel()
 		return reader.headerReader.HeaderByHash(ctx, blockHash)
 	}
+	ctx, cancel := reader.requestContext(ctx)
+	defer cancel()
 	return reader.standardReader.HeaderByHash(ctx, blockHash)
 }
 
@@ -704,6 +706,8 @@ func (reader *frostPreSignCanonicalHashReader) TransactionReceipt(
 	if reader.standardReader == nil {
 		return nil, fmt.Errorf("standard Ethereum reader is unavailable")
 	}
+	ctx, cancel := reader.requestContext(ctx)
+	defer cancel()
 	return reader.standardReader.TransactionReceipt(ctx, transactionHash)
 }
 
@@ -714,6 +718,8 @@ func (reader *frostPreSignCanonicalHashReader) FilterLogs(
 	if reader.standardReader == nil {
 		return nil, fmt.Errorf("standard Ethereum reader is unavailable")
 	}
+	ctx, cancel := reader.requestContext(ctx)
+	defer cancel()
 	return reader.standardReader.FilterLogs(ctx, query)
 }
 
@@ -780,70 +786,12 @@ func (reader *frostPreSignCanonicalHashReader) callContext(
 	args ...interface{},
 ) error {
 	if reader.rpcLimiter != nil {
-		if err := acquireFrostPreSignEthereumRPCPermit(
-			ctx,
-			reader.rpcLimiter,
-		); err != nil {
+		if err := reader.rpcLimiter.AcquirePermit(ctx); err != nil {
 			return fmt.Errorf("cannot acquire Ethereum RPC rate limiter permit: [%w]", err)
 		}
 		defer reader.rpcLimiter.ReleasePermit()
 	}
 	return reader.rpcClient.CallContext(ctx, result, method, args...)
-}
-
-func acquireFrostPreSignEthereumRPCPermit(
-	ctx context.Context,
-	limiter interface {
-		AcquirePermit() error
-		ReleasePermit()
-	},
-) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	const (
-		acquisitionPending uint32 = iota
-		acquisitionCanceled
-		acquisitionDelivered
-	)
-	var acquisitionState atomic.Uint32
-	acquisitionResult := make(chan error, 1)
-	go func() {
-		err := limiter.AcquirePermit()
-		if acquisitionState.CompareAndSwap(
-			acquisitionPending,
-			acquisitionDelivered,
-		) {
-			acquisitionResult <- err
-			return
-		}
-
-		// The caller stopped waiting before the legacy limiter completed.
-		// Return any permit acquired after cancellation instead of leaking it.
-		if err == nil {
-			limiter.ReleasePermit()
-		}
-	}()
-
-	select {
-	case err := <-acquisitionResult:
-		return err
-	case <-ctx.Done():
-		if acquisitionState.CompareAndSwap(
-			acquisitionPending,
-			acquisitionCanceled,
-		) {
-			return ctx.Err()
-		}
-
-		// Acquisition won the race with cancellation. Drain the delivered
-		// result and return a successfully acquired permit before exiting.
-		if err := <-acquisitionResult; err == nil {
-			limiter.ReleasePermit()
-		}
-		return ctx.Err()
-	}
 }
 
 func (reader *frostPreSignCanonicalHashReader) requestContext(
@@ -908,10 +856,7 @@ func newFrostPreSignPrimaryEthereumReader(
 	rpcClient *rpc.Client,
 	chainID *big.Int,
 	requestTimeout time.Duration,
-	rpcLimiter interface {
-		AcquirePermit() error
-		ReleasePermit()
-	},
+	rpcLimiter ethereumRPCLimiter,
 ) (tbtc.FrostPreSignEthereumEvidenceVerifier, error) {
 	standardReader, ok := client.(frostPreSignStandardEthereumReader)
 	if !ok {

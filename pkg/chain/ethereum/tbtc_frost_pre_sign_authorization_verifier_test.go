@@ -29,14 +29,17 @@ type testFrostPreSignEvidenceReader struct {
 
 type testBlockingEthereumRPCLimiter struct {
 	acquisitionStarted chan struct{}
-	allowAcquisition   chan struct{}
+	acquisitionStopped chan struct{}
 	permitReleased     chan struct{}
 }
 
-func (limiter *testBlockingEthereumRPCLimiter) AcquirePermit() error {
+func (limiter *testBlockingEthereumRPCLimiter) AcquirePermit(
+	ctx context.Context,
+) error {
 	close(limiter.acquisitionStarted)
-	<-limiter.allowAcquisition
-	return nil
+	defer close(limiter.acquisitionStopped)
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func (limiter *testBlockingEthereumRPCLimiter) ReleasePermit() {
@@ -88,7 +91,7 @@ func TestFrostPrimaryEthereumRPCLimiterWaitHonorsContext(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			limiter := &testBlockingEthereumRPCLimiter{
 				acquisitionStarted: make(chan struct{}),
-				allowAcquisition:   make(chan struct{}),
+				acquisitionStopped: make(chan struct{}),
 				permitReleased:     make(chan struct{}),
 			}
 			reader := &frostPreSignCanonicalHashReader{
@@ -130,11 +133,93 @@ func TestFrostPrimaryEthereumRPCLimiterWaitHonorsContext(t *testing.T) {
 				t.Fatal("rate limiter wait ignored the request context")
 			}
 
-			close(limiter.allowAcquisition)
+			select {
+			case <-limiter.acquisitionStopped:
+			case <-time.After(time.Second):
+				t.Fatal("underlying rate limiter acquisition was not canceled")
+			}
 			select {
 			case <-limiter.permitReleased:
-			case <-time.After(time.Second):
-				t.Fatal("permit acquired after cancellation was not released")
+				t.Fatal("unacquired rate limiter permit was released")
+			default:
+			}
+		})
+	}
+}
+
+func TestFrostPrimaryEthereumStandardReadsHonorRequestTimeout(t *testing.T) {
+	server := rpc.NewServer()
+	rpcClient := rpc.DialInProc(server)
+	defer rpcClient.Close()
+	client := ethclient.NewClient(rpcClient)
+	config := ethereumConfig.Config{ConcurrencyLimit: 1}
+	wrapped := wrapClientAddons(config, client)
+	limiter, err := sharedEthereumRPCLimiter(config, wrapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := limiter.AcquirePermit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer limiter.ReleasePermit()
+
+	reader := &frostPreSignCanonicalHashReader{
+		standardReader: wrapped,
+		requestTimeout: 25 * time.Millisecond,
+	}
+	for _, test := range []struct {
+		name string
+		read func() error
+	}{
+		{
+			name: "header by number",
+			read: func() error {
+				_, err := reader.HeaderByNumber(context.Background(), nil)
+				return err
+			},
+		},
+		{
+			name: "header by hash",
+			read: func() error {
+				_, err := reader.HeaderByHash(
+					context.Background(),
+					common.HexToHash("0x1234"),
+				)
+				return err
+			},
+		},
+		{
+			name: "transaction receipt",
+			read: func() error {
+				_, err := reader.TransactionReceipt(
+					context.Background(),
+					common.HexToHash("0x1234"),
+				)
+				return err
+			},
+		},
+		{
+			name: "filter logs",
+			read: func() error {
+				_, err := reader.FilterLogs(
+					context.Background(),
+					geth.FilterQuery{},
+				)
+				return err
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			startedAt := time.Now()
+			err := test.read()
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("unexpected standard read error: [%v]", err)
+			}
+			if elapsed := time.Since(startedAt); elapsed > time.Second {
+				t.Fatalf(
+					"standard read exceeded its request timeout: [%v]",
+					elapsed,
+				)
 			}
 		})
 	}
@@ -154,7 +239,7 @@ func TestFrostPrimaryEthereumRPCSharesConfiguredLimiter(t *testing.T) {
 	if limiter == nil {
 		t.Fatal("shared Ethereum RPC limiter is nil")
 	}
-	if err := limiter.AcquirePermit(); err != nil {
+	if err := limiter.AcquirePermit(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	permitHeld := true
