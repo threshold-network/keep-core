@@ -3,6 +3,7 @@ package tbtc
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"math/big"
@@ -247,6 +248,77 @@ func TestFrostPrimaryEthereumTransportTriesEveryPinnedAddressWithinDeadline(
 	if err != nil {
 		t.Fatalf(
 			"healthy pinned address was starved by a stalled predecessor: [%v]",
+			err,
+		)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFrostPrimaryEthereumTransportTriesNextAddressAfterTLSProfileRejection(
+	t *testing.T,
+) {
+	server, _, roots := newFrostRetainedGroupHistoryTLSTestServer(
+		t,
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+		"spiffe://primary.example/rpc",
+	)
+	endpoint, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, port, err := net.SplitHostPort(endpoint.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	profileMismatchListener, err := net.Listen(
+		"tcp6",
+		net.JoinHostPort("::1", port),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileMismatchDone := make(chan struct{})
+	go func() {
+		defer close(profileMismatchDone)
+		raw, acceptErr := profileMismatchListener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		serverTLSConfig := server.TLS.Clone()
+		serverTLSConfig.NextProtos = nil
+		connection := tls.Server(raw, serverTLSConfig)
+		defer connection.Close()
+		_ = connection.Handshake()
+	}()
+	t.Cleanup(func() {
+		_ = profileMismatchListener.Close()
+		<-profileMismatchDone
+	})
+
+	transport := &FrostPrimaryEthereumTransport{
+		endpoint: frostRetainedGroupResolvedEndpoint{
+			endpoint:  endpoint,
+			canonical: endpoint.String(),
+			addresses: []netip.Addr{
+				netip.MustParseAddr("::1"),
+				netip.MustParseAddr("127.0.0.1"),
+			},
+		},
+		timeout:   time.Second,
+		rootCAs:   roots,
+		seenPeers: make(map[[32]byte]frostTransportPeerIdentity),
+		livePeers: make(map[[32]byte]uint64),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	connection, err := transport.dialTLSContext(ctx, "tcp", endpoint.Host)
+	if err != nil {
+		t.Fatalf(
+			"healthy pinned address was ignored after TLS profile rejection: [%v]",
 			err,
 		)
 	}

@@ -436,7 +436,8 @@ func (transport *FrostPrimaryEthereumTransport) dialTLSContext(
 			transport.endpoint,
 		); verifyErr != nil {
 			_ = tlsConnection.Close()
-			return nil, verifyErr
+			lastErr = verifyErr
+			continue
 		}
 		peer, peerErr := frostTransportPeerIdentityFromTLS(
 			transport.endpoint,
