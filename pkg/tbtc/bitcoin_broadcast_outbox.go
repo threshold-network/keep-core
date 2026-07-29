@@ -811,11 +811,11 @@ func (errorValue *bitcoinBroadcastReplayErrors) hasFatalFailure() bool {
 }
 
 // replayOnceWithContext checks the latest or previously confirmed record first.
-// Before rebroadcasting, it also reconciles every superseded variant with a
-// durable broadcast attempt, because any one of those conflicting variants
-// may be the canonical winner. Deeply confirmed history is reconciled in a
-// fixed-size rotating reservation batch; healthy archived reservations still
-// require only their primary confirmation read.
+// Before rebroadcasting, it also reconciles every superseded signed variant,
+// because another wallet operator may have broadcast any one of those
+// conflicting variants. Deeply confirmed history is reconciled in a fixed-size
+// rotating reservation batch; healthy archived reservations still require only
+// their primary confirmation read.
 func (bbo *bitcoinBroadcastOutbox) replayOnceWithContext(ctx context.Context) error {
 	if err := bbo.acquireReplaySemaphore(ctx); err != nil {
 		return err
@@ -945,11 +945,6 @@ func (bbo *bitcoinBroadcastOutbox) replayCandidates() (
 		)
 		for _, record := range state.records {
 			if record.TransactionHash == primary.TransactionHash {
-				continue
-			}
-			if record.TransactionHash != state.latest.TransactionHash &&
-				record.BroadcastAttempts == 0 &&
-				record.Confirmation == nil {
 				continue
 			}
 			alternatives = append(

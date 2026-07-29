@@ -748,6 +748,52 @@ func TestBitcoinBroadcastOutbox_ReconcilesPreviouslyBroadcastSupersededVariant(
 	}
 }
 
+func TestBitcoinBroadcastOutbox_ReconcilesExternallyBroadcastSupersededVariant(
+	t *testing.T,
+) {
+	chain := newOutboxTestBitcoinChain()
+	outbox := openTestBitcoinBroadcastOutbox(t, t.TempDir(), chain)
+	defer outbox.close()
+
+	oldVariant := testOutboxTransaction(34, 7000)
+	enqueueTestBitcoinTransaction(
+		t,
+		outbox,
+		oldVariant,
+		testBitcoinBroadcastAuthorization(35, 34, 1),
+	)
+
+	replacement := testOutboxTransaction(34, 6000)
+	enqueueTestBitcoinTransaction(
+		t,
+		outbox,
+		replacement,
+		testBitcoinBroadcastAuthorization(36, 34, 2),
+	)
+	chain.setCanonicalStatus(
+		oldVariant.Hash(),
+		&bitcoin.CanonicalTransactionStatus{
+			Found:         true,
+			Confirmations: 2,
+			BlockHeight:   800034,
+			BlockHash:     bitcoin.Hash{0x34, 0xcc},
+		},
+	)
+
+	if outbox.records[oldVariant.Hash()].BroadcastAttempts != 0 {
+		t.Fatal("old variant unexpectedly has a local broadcast attempt")
+	}
+	if err := outbox.replayOnce(); err != nil {
+		t.Fatal(err)
+	}
+	if outbox.records[oldVariant.Hash()].Confirmation == nil {
+		t.Fatal("externally broadcast superseded RBF variant was not persisted")
+	}
+	if chain.broadcastCount(replacement.Hash()) != 0 {
+		t.Fatal("replacement was broadcast after its predecessor confirmed externally")
+	}
+}
+
 func TestBitcoinBroadcastOutbox_BroadcastLockWaitHonorsContext(
 	t *testing.T,
 ) {
