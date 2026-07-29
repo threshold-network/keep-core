@@ -1283,6 +1283,7 @@ type FrostPreSignAuthorizationConfigurator interface {
 		string,
 		string,
 		string,
+		FrostPreSignEthereumEvidenceVerifier,
 	) (*FrostPreSignActivationProfile, error)
 }
 
@@ -1448,11 +1449,15 @@ func frostPreSignWriteCommitmentUint64(
 
 type FrostPreSignActivationRuntimeManifest struct {
 	ManifestHash                     [32]byte
+	ActivationAuthorityKeyHash       [32]byte
+	VerifierOperatorFingerprint      [32]byte
+	HandshakeOperatorFingerprint     [32]byte
 	DomainChainID                    [32]byte
 	GenesisBlockHash                 [32]byte
 	ProfileHash                      [32]byte
 	ImplementationSetHash            [32]byte
 	LinkedLibraryDescriptorSetHash   [32]byte
+	EndpointIdentitySetHash          [32]byte
 	Deployments                      []FrostPreSignDeploymentEvidence
 	SignerProtocolID                 [32]byte
 	ReservationProtocolID            [32]byte
@@ -2064,6 +2069,12 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) collectSeatAttestations(
 			return
 		}
 		if !tfpsag.membershipValidator.IsValidMembership(seat, message.SenderPublicKey()) {
+			return
+		}
+		// The wallet broadcast topic is reused across proposals. Reject stale
+		// (including replayed) attestations before claiming the authenticated
+		// seat so they cannot suppress that seat's current attestation.
+		if !bytes.Equal(payload.Digest, proposal.Digest[:]) {
 			return
 		}
 		if !claimFrostPreSignRemoteSeat(

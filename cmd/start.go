@@ -65,10 +65,63 @@ Environment variables:
 func start(cmd *cobra.Command) error {
 	ctx := context.Background()
 
-	beaconChain, tbtcChain, blockCounter, signing, operatorPrivateKey, err :=
-		ethereum.Connect(ctx, clientConfig.Ethereum)
+	var primaryEthereumTransport *tbtc.FrostPrimaryEthereumTransport
+	var err error
+	if clientConfig.Tbtc.EnableFrostPreSignAuthorization &&
+		!clientConfig.LibP2P.Bootstrap {
+		historyConfig := clientConfig.Tbtc.FrostRetainedGroupHistory
+		primaryEthereumTransport, err =
+			tbtc.NewFrostPrimaryEthereumTransport(
+				ctx,
+				tbtc.FrostPrimaryEthereumTransportConfig{
+					URL:            clientConfig.Ethereum.URL,
+					RequestTimeout: historyConfig.RequestTimeout,
+					TLSRootCAs:     historyConfig.PrimaryTLSRootCAs,
+					Resolver:       historyConfig.Resolver,
+				},
+			)
+		if err != nil {
+			return fmt.Errorf(
+				"cannot initialize guarded primary Ethereum transport: [%w]",
+				err,
+			)
+		}
+	}
+
+	var (
+		beaconChain        *ethereum.BeaconChain
+		tbtcChain          *ethereum.TbtcChain
+		blockCounter       chain.BlockCounter
+		signing            chain.Signing
+		operatorPrivateKey *operator.PrivateKey
+	)
+	if primaryEthereumTransport != nil {
+		beaconChain,
+			tbtcChain,
+			blockCounter,
+			signing,
+			operatorPrivateKey,
+			err = ethereum.ConnectWithClient(
+			ctx,
+			clientConfig.Ethereum,
+			primaryEthereumTransport.Client(),
+		)
+	} else {
+		beaconChain,
+			tbtcChain,
+			blockCounter,
+			signing,
+			operatorPrivateKey,
+			err = ethereum.Connect(ctx, clientConfig.Ethereum)
+	}
 	if err != nil {
+		if primaryEthereumTransport != nil {
+			primaryEthereumTransport.Close()
+		}
 		return fmt.Errorf("error connecting to Ethereum node: [%v]", err)
+	}
+	if primaryEthereumTransport != nil {
+		defer primaryEthereumTransport.Close()
 	}
 
 	netProvider, err := initializeNetwork(
@@ -161,6 +214,25 @@ func start(cmd *cobra.Command) error {
 			tbtcChain,
 			btcChain,
 		)
+
+		var retainedGroupHistorySource interface{ Close() }
+		if clientConfig.Tbtc.EnableFrostPreSignAuthorization {
+			source, err := tbtc.NewFrostRetainedGroupHistorySource(
+				ctx,
+				clientConfig.Tbtc.FrostRetainedGroupHistory,
+				primaryEthereumTransport,
+				primaryEthereumTransport.ChainID(),
+			)
+			if err != nil {
+				return fmt.Errorf(
+					"cannot initialize independent FROST retained-group history source: [%w]",
+					err,
+				)
+			}
+			retainedGroupHistorySource = source
+			defer retainedGroupHistorySource.Close()
+			clientConfig.Tbtc.FrostRetainedGroupHistorySource = source
+		}
 
 		err = tbtc.Initialize(
 			ctx,

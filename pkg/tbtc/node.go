@@ -254,11 +254,28 @@ func newNode(
 					"cannot enable production FROST pre-sign authorization without an activation manifest",
 				)
 			}
+			verifierSource, ok := config.FrostRetainedGroupHistorySource.(FrostPreSignEthereumEvidenceVerifierSource)
+			if !ok {
+				return nil, fmt.Errorf(
+					"cannot enable production FROST pre-sign authorization without an independent Ethereum evidence verifier",
+				)
+			}
+			ethereumEvidenceVerifier, err :=
+				verifierSource.FrostPreSignEthereumEvidenceVerifier(
+					context.Background(),
+				)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"cannot obtain independent FROST Ethereum evidence verifier: [%w]",
+					err,
+				)
+			}
 			configuredProfile, err := configurator.ConfigureFrostPreSignAuthorization(
 				context.Background(),
 				config.FrostPreSignActivationManifestPath,
 				config.FrostPreSignActivationEnvelopeSignerKeyHash,
 				config.FrostPreSignLinkedLibraryDescriptorSetHash,
+				ethereumEvidenceVerifier,
 			)
 			if err != nil {
 				return nil, fmt.Errorf(
@@ -717,11 +734,44 @@ func newNode(
 				"cannot enable FROST activation handshake without an independent retained-group history source",
 			)
 		}
+		evidenceBinder, ok := config.FrostRetainedGroupHistorySource.(FrostRetainedGroupActivationEvidenceBinder)
+		if !ok {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot enable FROST activation handshake without a manifest-bound retained-group evidence source",
+			)
+		}
+		if err := evidenceBinder.BindFrostRetainedGroupActivationEvidence(
+			verifiedActivationProfile,
+			runtimeManifest,
+		); err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot bind retained-group evidence to the authenticated activation manifest: [%w]",
+				err,
+			)
+		}
+		bindingSource, ok :=
+			config.FrostRetainedGroupHistorySource.(FrostRetainedGroupProtocolBindingSource)
+		if !ok {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot enable FROST activation handshake without a protocol-bound retained-group source",
+			)
+		}
+		retainedGroupBindingHash, err :=
+			bindingSource.FrostRetainedGroupProtocolBindingHash()
+		if err != nil {
+			_ = outbox.close()
+			return nil, fmt.Errorf(
+				"cannot read retained-group protocol binding: [%w]",
+				err,
+			)
+		}
 		journal, err := newFrostRetainedGroupJournal(
 			config.FrostRetainedGroupJournalDirectory,
-			runtimeManifest.ManifestHash,
-			runtimeManifest.CanonicalJournal,
-			runtimeManifest.QuarantineJournal,
+			retainedGroupBindingHash,
+			runtimeManifest,
 			config.FrostRetainedGroupHistorySource,
 			walletRegistry,
 			operatorAddress,
@@ -776,6 +826,7 @@ func newNode(
 			pointVerifier,
 			storeBinding,
 			outbox,
+			journal,
 			readiness,
 		)
 		if err != nil {

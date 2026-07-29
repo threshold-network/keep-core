@@ -699,6 +699,169 @@ func TestBitcoinBroadcastOutbox_StartRetriesTransientCandidateFailure(
 	}
 }
 
+func TestBitcoinBroadcastOutbox_ReconcilesPreviouslyBroadcastSupersededVariant(
+	t *testing.T,
+) {
+	chain := newOutboxTestBitcoinChain()
+	outbox := openTestBitcoinBroadcastOutbox(t, t.TempDir(), chain)
+	defer outbox.close()
+
+	oldVariant := testOutboxTransaction(31, 7000)
+	enqueueTestBitcoinTransaction(
+		t,
+		outbox,
+		oldVariant,
+		testBitcoinBroadcastAuthorization(32, 31, 1),
+	)
+	if err := outbox.replayOnce(); err != nil {
+		t.Fatal(err)
+	}
+	if chain.broadcastCount(oldVariant.Hash()) != 1 {
+		t.Fatal("initial variant was not broadcast")
+	}
+
+	replacement := testOutboxTransaction(31, 6000)
+	enqueueTestBitcoinTransaction(
+		t,
+		outbox,
+		replacement,
+		testBitcoinBroadcastAuthorization(33, 31, 2),
+	)
+	chain.setCanonicalStatus(
+		oldVariant.Hash(),
+		&bitcoin.CanonicalTransactionStatus{
+			Found:         true,
+			Confirmations: 2,
+			BlockHeight:   800031,
+			BlockHash:     bitcoin.Hash{0x31, 0xcc},
+		},
+	)
+
+	if err := outbox.replayOnce(); err != nil {
+		t.Fatal(err)
+	}
+	if outbox.records[oldVariant.Hash()].Confirmation == nil {
+		t.Fatal("canonical superseded RBF variant was not persisted")
+	}
+	if chain.broadcastCount(replacement.Hash()) != 0 {
+		t.Fatal("replacement was broadcast after its predecessor confirmed")
+	}
+}
+
+func TestBitcoinBroadcastOutbox_ReconcilesExternallyBroadcastSupersededVariant(
+	t *testing.T,
+) {
+	chain := newOutboxTestBitcoinChain()
+	outbox := openTestBitcoinBroadcastOutbox(t, t.TempDir(), chain)
+	defer outbox.close()
+
+	oldVariant := testOutboxTransaction(34, 7000)
+	enqueueTestBitcoinTransaction(
+		t,
+		outbox,
+		oldVariant,
+		testBitcoinBroadcastAuthorization(35, 34, 1),
+	)
+
+	replacement := testOutboxTransaction(34, 6000)
+	enqueueTestBitcoinTransaction(
+		t,
+		outbox,
+		replacement,
+		testBitcoinBroadcastAuthorization(36, 34, 2),
+	)
+	chain.setCanonicalStatus(
+		oldVariant.Hash(),
+		&bitcoin.CanonicalTransactionStatus{
+			Found:         true,
+			Confirmations: 2,
+			BlockHeight:   800034,
+			BlockHash:     bitcoin.Hash{0x34, 0xcc},
+		},
+	)
+
+	if outbox.records[oldVariant.Hash()].BroadcastAttempts != 0 {
+		t.Fatal("old variant unexpectedly has a local broadcast attempt")
+	}
+	if err := outbox.replayOnce(); err != nil {
+		t.Fatal(err)
+	}
+	if outbox.records[oldVariant.Hash()].Confirmation == nil {
+		t.Fatal("externally broadcast superseded RBF variant was not persisted")
+	}
+	if chain.broadcastCount(replacement.Hash()) != 0 {
+		t.Fatal("replacement was broadcast after its predecessor confirmed externally")
+	}
+}
+
+func TestBitcoinBroadcastOutbox_BroadcastLockWaitHonorsContext(
+	t *testing.T,
+) {
+	statusStarted := make(chan struct{})
+	statusRelease := make(chan struct{})
+	chain := &blockingOutboxTestBitcoinChain{
+		outboxTestBitcoinChain: newOutboxTestBitcoinChain(),
+		statusStarted:          statusStarted,
+		statusRelease:          statusRelease,
+	}
+	outbox := openTestBitcoinBroadcastOutbox(
+		t,
+		t.TempDir(),
+		chain,
+	)
+	defer outbox.close()
+	tx := testOutboxTransaction(0x4a, 9000)
+	enqueueTestBitcoinTransaction(
+		t,
+		outbox,
+		tx,
+		testBitcoinBroadcastAuthorization(0x4b, 0x4c, 1),
+	)
+
+	replayResult := make(chan error, 1)
+	go func() {
+		replayResult <- outbox.replayOnceWithContext(context.Background())
+	}()
+	select {
+	case <-statusStarted:
+	case <-time.After(time.Second):
+		close(statusRelease)
+		t.Fatal("background replay did not enter the blocking Bitcoin read")
+	}
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		50*time.Millisecond,
+	)
+	defer cancel()
+	broadcastResult := make(chan error, 1)
+	go func() {
+		broadcastResult <- outbox.broadcastTransaction(ctx, tx.Hash())
+	}()
+
+	var broadcastErr error
+	select {
+	case broadcastErr = <-broadcastResult:
+	case <-time.After(500 * time.Millisecond):
+		close(statusRelease)
+		<-replayResult
+		broadcastErr = <-broadcastResult
+		t.Fatalf(
+			"foreground broadcast ignored its context while waiting for replay; eventual result: [%v]",
+			broadcastErr,
+		)
+	}
+	if !errors.Is(broadcastErr, context.DeadlineExceeded) {
+		close(statusRelease)
+		<-replayResult
+		t.Fatalf("unexpected canceled broadcast result: [%v]", broadcastErr)
+	}
+	close(statusRelease)
+	if err := <-replayResult; err != nil {
+		t.Fatalf("background replay failed after release: [%v]", err)
+	}
+}
+
 func TestBitcoinBroadcastOutbox_PersistenceFailureDoesNotPublishConfirmationMutation(
 	t *testing.T,
 ) {
@@ -775,6 +938,53 @@ func TestBitcoinBroadcastOutbox_PersistenceFailureDoesNotPublishAttemptCounters(
 	if outbox.records[tx.Hash()].BroadcastAttempts != 1 ||
 		chain.broadcastCount(tx.Hash()) != 2 {
 		t.Fatal("failed broadcast attempt was not safely retried")
+	}
+}
+
+func TestBitcoinBroadcastOutbox_BroadcastAttemptTimestampsRemainMonotonicAcrossClockRollback(
+	t *testing.T,
+) {
+	chain := newOutboxTestBitcoinChain()
+	directory := t.TempDir()
+	outbox := openTestBitcoinBroadcastOutbox(t, directory, chain)
+	tx := testOutboxTransaction(34, 7000)
+	currentTime := time.Unix(2_000, 0)
+	outbox.now = func() time.Time {
+		return currentTime
+	}
+	enqueueTestBitcoinTransaction(
+		t,
+		outbox,
+		tx,
+		testBitcoinBroadcastAuthorization(35, 34, 1),
+	)
+
+	currentTime = time.Unix(2_100, 0)
+	if err := outbox.replayOnce(); err != nil {
+		t.Fatal(err)
+	}
+	currentTime = time.Unix(1_900, 0)
+	if err := outbox.replayOnce(); err != nil {
+		t.Fatalf("clock rollback broke durable replay: [%v]", err)
+	}
+	record := outbox.records[tx.Hash()]
+	if record.BroadcastAttempts != 2 ||
+		record.FirstBroadcastAtUnix != 2_100 ||
+		record.LastAttemptUnix != 2_100 ||
+		record.UpdatedAtUnix != 2_100 ||
+		chain.broadcastCount(tx.Hash()) != 2 {
+		t.Fatalf(
+			"broadcast attempt timestamps regressed after clock rollback: %+v",
+			record,
+		)
+	}
+	if err := outbox.close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted := openTestBitcoinBroadcastOutbox(t, directory, chain)
+	defer restarted.close()
+	if restarted.records[tx.Hash()].LastAttemptUnix != 2_100 {
+		t.Fatal("monotonic broadcast attempt timestamp did not survive restart")
 	}
 }
 
@@ -1343,6 +1553,23 @@ type outboxTestBitcoinChain struct {
 	statusErrs  map[bitcoin.Hash]error
 	broadcasts  map[bitcoin.Hash]uint
 	statusCalls uint
+}
+
+type blockingOutboxTestBitcoinChain struct {
+	*outboxTestBitcoinChain
+	statusStarted chan struct{}
+	statusRelease <-chan struct{}
+	statusOnce    sync.Once
+}
+
+func (botbc *blockingOutboxTestBitcoinChain) GetCanonicalTransactionStatus(
+	hash bitcoin.Hash,
+) (*bitcoin.CanonicalTransactionStatus, error) {
+	botbc.statusOnce.Do(func() {
+		close(botbc.statusStarted)
+	})
+	<-botbc.statusRelease
+	return botbc.outboxTestBitcoinChain.GetCanonicalTransactionStatus(hash)
 }
 
 type outboxTestAuthorizationStatusSource struct {

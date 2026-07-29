@@ -12,14 +12,96 @@ func testManifestHex32(value byte) string {
 	return fmt.Sprintf("0x%02x%s", value, strings.Repeat("00", 31))
 }
 
+func testFrostRetainedSourceIdentity() (
+	tbtc.FrostRetainedGroupHistoryIdentity,
+	frostPreSignManifestRetainedSourceIdentity,
+) {
+	protocolID := tbtc.FrostRetainedGroupTLSExporterProtocolID()
+	exportIdentity := tbtc.FrostRetainedGroupEndpointIdentity{
+		Schema:                    "tbtc-frost-retained-group-endpoint-identity/v1",
+		Role:                      "retained-history-export",
+		TrustDomainID:             "export.retained.example",
+		CanonicalEndpoint:         "https://export.example:443/history",
+		CanonicalDNSName:          "export.example",
+		ResolvedDNSName:           "export-origin.example",
+		ResolvedAddressSetHash:    [32]byte{0x60},
+		TLSLeafSPKIHash:           [32]byte{0x61},
+		ServiceIdentity:           "spiffe://export.retained.example/export",
+		BackendServiceFingerprint: [32]byte{0x62},
+		OperatorFingerprint:       [32]byte{0x63},
+		AttestationKeyHash:        [32]byte{0x64},
+		TLSExporterProtocolID:     protocolID,
+	}
+	exportIdentity.EndpointFingerprint =
+		tbtc.ComputeFrostRetainedGroupEndpointIdentityFingerprint(exportIdentity)
+	verifierIdentity := tbtc.FrostRetainedGroupEndpointIdentity{
+		Schema:                    "tbtc-frost-retained-group-endpoint-identity/v1",
+		Role:                      "retained-history-verifier",
+		TrustDomainID:             "verifier.retained.example",
+		CanonicalEndpoint:         "https://verifier.example:443/rpc",
+		CanonicalDNSName:          "verifier.example",
+		ResolvedDNSName:           "verifier-origin.example",
+		ResolvedAddressSetHash:    [32]byte{0x65},
+		TLSLeafSPKIHash:           [32]byte{0x66},
+		ServiceIdentity:           "spiffe://verifier.retained.example/verifier",
+		BackendServiceFingerprint: [32]byte{0x67},
+		OperatorFingerprint:       [32]byte{0x68},
+		AttestationKeyHash:        [32]byte{0x69},
+		TLSExporterProtocolID:     protocolID,
+	}
+	verifierIdentity.EndpointFingerprint =
+		tbtc.ComputeFrostRetainedGroupEndpointIdentityFingerprint(verifierIdentity)
+	identity := tbtc.FrostRetainedGroupHistoryIdentity{
+		Schema:               "tbtc-frost-retained-group-source-identity/v1",
+		TrustDomainID:        "independent-journal-source",
+		OperatorFingerprint:  exportIdentity.OperatorFingerprint,
+		HistorySignerKeyHash: [32]byte{0x6a},
+		Export:               exportIdentity,
+		Verifier:             verifierIdentity,
+	}
+	identity.EndpointFingerprint =
+		tbtc.ComputeFrostRetainedGroupSourceEndpointFingerprint(identity)
+	toEndpoint := func(
+		value tbtc.FrostRetainedGroupEndpointIdentity,
+	) frostPreSignManifestRetainedEndpointIdentity {
+		return frostPreSignManifestRetainedEndpointIdentity{
+			Schema:                    value.Schema,
+			Role:                      value.Role,
+			TrustDomainID:             value.TrustDomainID,
+			CanonicalEndpoint:         value.CanonicalEndpoint,
+			CanonicalDNSName:          value.CanonicalDNSName,
+			ResolvedDNSName:           value.ResolvedDNSName,
+			ResolvedAddressSetHash:    fmt.Sprintf("0x%x", value.ResolvedAddressSetHash),
+			TLSLeafSPKIHash:           fmt.Sprintf("0x%x", value.TLSLeafSPKIHash),
+			ServiceIdentity:           value.ServiceIdentity,
+			BackendServiceFingerprint: fmt.Sprintf("0x%x", value.BackendServiceFingerprint),
+			OperatorFingerprint:       fmt.Sprintf("0x%x", value.OperatorFingerprint),
+			AttestationKeyHash:        fmt.Sprintf("0x%x", value.AttestationKeyHash),
+			TLSExporterProtocolID:     fmt.Sprintf("0x%x", value.TLSExporterProtocolID),
+			EndpointFingerprint:       fmt.Sprintf("0x%x", value.EndpointFingerprint),
+		}
+	}
+	return identity, frostPreSignManifestRetainedSourceIdentity{
+		Schema:               identity.Schema,
+		TrustDomainID:        identity.TrustDomainID,
+		EndpointFingerprint:  fmt.Sprintf("0x%x", identity.EndpointFingerprint),
+		OperatorFingerprint:  fmt.Sprintf("0x%x", identity.OperatorFingerprint),
+		HistorySignerKeyHash: fmt.Sprintf("0x%x", identity.HistorySignerKeyHash),
+		Export:               toEndpoint(identity.Export),
+		Verifier:             toEndpoint(identity.Verifier),
+	}
+}
+
 func testFrostJournalActivationManifest() *frostPreSignActivationManifest {
 	checkpointHash := testManifestHex32(0x02)
+	sourceIdentity, wireSourceIdentity := testFrostRetainedSourceIdentity()
 	manifest := &frostPreSignActivationManifest{
-		Schema:             frostPreSignManifestVersion,
-		ActivationSequence: 1,
-		ActivationID:       testManifestHex32(0x01),
-		Environment:        "test",
-		manifestHash:       [32]byte{0x99},
+		Schema:                     frostPreSignManifestVersion,
+		ActivationSequence:         1,
+		ActivationID:               testManifestHex32(0x01),
+		Environment:                "test",
+		manifestHash:               [32]byte{0x99},
+		activationAuthorityKeyHash: [32]byte{0x40},
 		Ethereum: frostPreSignManifestEthereum{
 			ChainID:                         1,
 			GenesisBlockHash:                testManifestHex32(0x30),
@@ -63,12 +145,29 @@ func testFrostJournalActivationManifest() *frostPreSignActivationManifest {
 				Checkpoint:                frostPreSignManifestPoint{BlockNumber: 1, BlockHash: testManifestHex32(0x28)},
 				DescriptorSetHash:         testManifestHex32(0x22),
 				SourceTrustDomainID:       "independent-journal-source",
-				SourceEndpointFingerprint: testManifestHex32(0x23),
-				SourceOperatorFingerprint: testManifestHex32(0x24),
+				SourceEndpointFingerprint: fmt.Sprintf("0x%x", sourceIdentity.EndpointFingerprint),
+				SourceOperatorFingerprint: fmt.Sprintf("0x%x", sourceIdentity.OperatorFingerprint),
+				SourceIdentity:            wireSourceIdentity,
 				MinimumGeneration:         7,
 			},
 			QuarantineJournal: frostPreSignManifestQuarantineJournal{
-				ProtocolID:         testManifestHex32(0x25),
+				ProtocolID:                   testManifestHex32(0x25),
+				LiftProtocolID:               testManifestHex32(0x29),
+				TombstoneProtocolID:          testManifestHex32(0x2a),
+				CheckpointAuthorityThreshold: 2,
+				CheckpointAuthorities: []frostPreSignManifestLiftAuthority{
+					{AuthorityID: "checkpoint-1", PublicKeySPKIHash: testManifestHex32(0x2b)},
+					{AuthorityID: "checkpoint-2", PublicKeySPKIHash: testManifestHex32(0x2c)},
+					{AuthorityID: "checkpoint-3", PublicKeySPKIHash: testManifestHex32(0x2d)},
+				},
+				CheckpointMinimumSequence: 1,
+				CheckpointPredecessorHash: testManifestHex32(0x00),
+				LiftAuthorityThreshold:    2,
+				LiftAuthorities: []frostPreSignManifestLiftAuthority{
+					{AuthorityID: "authority-1", PublicKeySPKIHash: testManifestHex32(0x36)},
+					{AuthorityID: "authority-2", PublicKeySPKIHash: testManifestHex32(0x37)},
+					{AuthorityID: "authority-3", PublicKeySPKIHash: testManifestHex32(0x38)},
+				},
 				StoreID:            "quarantine-journal-store",
 				StoreFingerprint:   testManifestHex32(0x26),
 				ClusterFingerprint: testManifestHex32(0x27),
@@ -113,7 +212,7 @@ func TestValidateFrostPreSignActivationManifest_CanonicalJournal(t *testing.T) {
 		manifest.FrostSigner.CanonicalJournal.SourceEndpointFingerprint =
 			manifest.Ethereum.SourceEndpointFingerprint
 		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
-			!strings.Contains(err.Error(), "not independent") {
+			!strings.Contains(err.Error(), "differs from its aggregate") {
 			t.Fatalf("expected independent-source validation failure, got [%v]", err)
 		}
 	})
@@ -188,6 +287,204 @@ func TestValidateFrostPreSignActivationManifest_CanonicalJournal(t *testing.T) {
 		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
 			!strings.Contains(err.Error(), "authority keys are not independent") {
 			t.Fatalf("expected native anchor authority failure, got [%v]", err)
+		}
+	})
+	t.Run("history signer aliases runtime attestation", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.AttestationSignerKeyHash =
+			manifest.FrostSigner.CanonicalJournal.SourceIdentity.
+				HistorySignerKeyHash
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "retained history signer") {
+			t.Fatalf("expected history-signer role alias rejection, got [%v]", err)
+		}
+	})
+	t.Run("retained TLS leaf aliases activation authority", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		leaf, err := frostPreSignParseBytes32(
+			manifest.FrostSigner.CanonicalJournal.SourceIdentity.Export.
+				TLSLeafSPKIHash,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifest.activationAuthorityKeyHash = leaf
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "retained export TLS leaf") {
+			t.Fatalf("expected retained-leaf role alias rejection, got [%v]", err)
+		}
+	})
+	t.Run("retained backend aliases primary verifier", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.Ethereum.VerifierOperatorFingerprint =
+			manifest.FrostSigner.CanonicalJournal.SourceIdentity.Export.
+				BackendServiceFingerprint
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "retained export backend") {
+			t.Fatalf("expected retained-backend role alias rejection, got [%v]", err)
+		}
+	})
+	t.Run("outer operator roles alias", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.Ethereum.VerifierOperatorFingerprint =
+			manifest.Ethereum.SourceOperatorFingerprint
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "aliases") {
+			t.Fatalf("expected outer-role alias rejection, got [%v]", err)
+		}
+	})
+	t.Run("activation authority aliases outer role", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		operator, err := frostPreSignParseBytes32(
+			manifest.Ethereum.SourceOperatorFingerprint,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifest.activationAuthorityKeyHash = operator
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "activation authority") {
+			t.Fatalf("expected activation/outer alias rejection, got [%v]", err)
+		}
+	})
+	t.Run("outer trust domains alias", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.Ethereum.VerifierTrustDomainID =
+			manifest.Ethereum.SourceTrustDomainID
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "trust domain aliases") {
+			t.Fatalf("expected outer trust-domain alias rejection, got [%v]", err)
+		}
+	})
+	t.Run("retained nested trust domain aliases outer role", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.Ethereum.SourceTrustDomainID =
+			manifest.FrostSigner.CanonicalJournal.SourceIdentity.Export.
+				TrustDomainID
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "trust domain aliases") {
+			t.Fatalf("expected nested/outer trust-domain alias rejection, got [%v]", err)
+		}
+	})
+}
+
+func TestValidateFrostPreSignActivationManifest_QuarantineAuthoritySets(
+	t *testing.T,
+) {
+	t.Run("2-of-3 lift authority set", func(t *testing.T) {
+		if err := validateFrostPreSignActivationManifest(
+			testFrostJournalActivationManifest(),
+		); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("3-of-4 lift authority set", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.QuarantineJournal.LiftAuthorityThreshold = 3
+		manifest.FrostSigner.QuarantineJournal.LiftAuthorities = append(
+			manifest.FrostSigner.QuarantineJournal.LiftAuthorities,
+			frostPreSignManifestLiftAuthority{
+				AuthorityID:       "authority-4",
+				PublicKeySPKIHash: testManifestHex32(0x39),
+			},
+		)
+		if err := validateFrostPreSignActivationManifest(manifest); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("2-of-4 is not a strict majority", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.QuarantineJournal.LiftAuthorities = append(
+			manifest.FrostSigner.QuarantineJournal.LiftAuthorities,
+			frostPreSignManifestLiftAuthority{
+				AuthorityID:       "authority-4",
+				PublicKeySPKIHash: testManifestHex32(0x39),
+			},
+		)
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "strict majority") {
+			t.Fatalf("expected 2-of-4 rejection, got [%v]", err)
+		}
+	})
+	t.Run("unsorted authority IDs", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		authorities := manifest.FrostSigner.QuarantineJournal.LiftAuthorities
+		authorities[0], authorities[1] = authorities[1], authorities[0]
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "strictly sorted") {
+			t.Fatalf("expected unsorted authority rejection, got [%v]", err)
+		}
+	})
+	t.Run("duplicate authority key", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		authorities := manifest.FrostSigner.QuarantineJournal.LiftAuthorities
+		authorities[1].PublicKeySPKIHash = authorities[0].PublicKeySPKIHash
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "duplicate") {
+			t.Fatalf("expected duplicate authority-key rejection, got [%v]", err)
+		}
+	})
+	t.Run("activation role alias", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.QuarantineJournal.LiftAuthorities[0].
+			PublicKeySPKIHash = testManifestHex32(0x40)
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "aliases the activation role") {
+			t.Fatalf("expected activation-role alias rejection, got [%v]", err)
+		}
+	})
+	t.Run("checkpoint role alias", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.QuarantineJournal.LiftAuthorities[0].
+			PublicKeySPKIHash = manifest.FrostSigner.QuarantineJournal.
+			CheckpointAuthorities[0].PublicKeySPKIHash
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "checkpoint authority") {
+			t.Fatalf("expected checkpoint-role alias rejection, got [%v]", err)
+		}
+	})
+	t.Run("retained backend role alias", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.QuarantineJournal.LiftAuthorities[0].
+			PublicKeySPKIHash = manifest.FrostSigner.CanonicalJournal.
+			SourceIdentity.Verifier.BackendServiceFingerprint
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "retained verifier backend") {
+			t.Fatalf("expected retained-backend authority alias rejection, got [%v]", err)
+		}
+	})
+	t.Run("protocol identity alias", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.QuarantineJournal.LiftProtocolID =
+			manifest.FrostSigner.QuarantineJournal.ProtocolID
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "not distinct") {
+			t.Fatalf("expected protocol-identity alias rejection, got [%v]", err)
+		}
+	})
+	t.Run("zero checkpoint floor", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.QuarantineJournal.CheckpointMinimumSequence = 0
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "transparency floor") {
+			t.Fatalf("expected zero checkpoint-floor rejection, got [%v]", err)
+		}
+	})
+	t.Run("missing non-genesis predecessor", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.QuarantineJournal.CheckpointMinimumSequence = 2
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "transparency floor") {
+			t.Fatalf("expected missing predecessor rejection, got [%v]", err)
+		}
+	})
+	t.Run("nonzero genesis predecessor", func(t *testing.T) {
+		manifest := testFrostJournalActivationManifest()
+		manifest.FrostSigner.QuarantineJournal.CheckpointPredecessorHash =
+			testManifestHex32(0x7f)
+		if err := validateFrostPreSignActivationManifest(manifest); err == nil ||
+			!strings.Contains(err.Error(), "transparency floor") {
+			t.Fatalf("expected genesis predecessor rejection, got [%v]", err)
 		}
 	})
 }

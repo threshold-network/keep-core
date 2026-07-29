@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"golang.org/x/sync/semaphore"
 	"golang.org/x/sys/unix"
 )
 
@@ -235,12 +236,12 @@ type bitcoinBroadcastOutbox struct {
 	deepReconcileCursor       int
 	now                       func() time.Time
 
-	replayMutex sync.Mutex
-	mutex       sync.Mutex
-	records     map[bitcoin.Hash]*bitcoinBroadcastOutboxRecord
-	lockFile    *os.File
-	closed      bool
-	recovered   bool
+	replaySemaphore *semaphore.Weighted
+	mutex           sync.Mutex
+	records         map[bitcoin.Hash]*bitcoinBroadcastOutboxRecord
+	lockFile        *os.File
+	closed          bool
+	recovered       bool
 
 	persistFailureHook func(*bitcoinBroadcastOutboxRecord) error
 }
@@ -291,6 +292,7 @@ func newBitcoinBroadcastOutbox(
 		archiveConfirmations:      defaultBitcoinBroadcastArchiveConfirmations,
 		deepReconcileBatch:        defaultBitcoinBroadcastDeepReconcileBatch,
 		now:                       time.Now,
+		replaySemaphore:           semaphore.NewWeighted(1),
 		records:                   make(map[bitcoin.Hash]*bitcoinBroadcastOutboxRecord),
 		lockFile:                  lockFile,
 	}
@@ -677,6 +679,33 @@ func (bbo *bitcoinBroadcastOutbox) activationSnapshot() (
 		return bitcoinBroadcastOutboxActivationSnapshot{},
 			fmt.Errorf("Bitcoin broadcast outbox is closed")
 	}
+	return bbo.activationSnapshotLocked(), nil
+}
+
+// withUnchangedActivationSnapshot serializes the final activation-state check
+// and the operation it authorizes with every outbox mutation. Callers must
+// keep operation short and must not call another method that acquires mutex.
+func (bbo *bitcoinBroadcastOutbox) withUnchangedActivationSnapshot(
+	expected bitcoinBroadcastOutboxActivationSnapshot,
+	operation func() error,
+) error {
+	if operation == nil {
+		return fmt.Errorf("Bitcoin broadcast outbox activation operation is nil")
+	}
+	bbo.mutex.Lock()
+	defer bbo.mutex.Unlock()
+	if bbo.closed {
+		return fmt.Errorf("Bitcoin broadcast outbox is closed")
+	}
+	if bbo.activationSnapshotLocked() != expected {
+		return fmt.Errorf(
+			"Bitcoin broadcast outbox activation state changed before signing",
+		)
+	}
+	return operation()
+}
+
+func (bbo *bitcoinBroadcastOutbox) activationSnapshotLocked() bitcoinBroadcastOutboxActivationSnapshot {
 	type reservationState struct {
 		pending          bool
 		confirmedVariant bitcoin.Hash
@@ -716,7 +745,7 @@ func (bbo *bitcoinBroadcastOutbox) activationSnapshot() (
 			snapshot.AmbiguousReservationCount++
 		}
 	}
-	return snapshot, nil
+	return snapshot
 }
 
 // replayOnce is the test/internal synchronous entry point.
@@ -726,7 +755,8 @@ func (bbo *bitcoinBroadcastOutbox) replayOnce() error {
 
 type bitcoinBroadcastReplayCandidate struct {
 	reservationID [32]byte
-	record        *bitcoinBroadcastOutboxRecord
+	primary       *bitcoinBroadcastOutboxRecord
+	alternatives  []*bitcoinBroadcastOutboxRecord
 }
 
 type bitcoinBroadcastTransientReplayError struct {
@@ -780,20 +810,26 @@ func (errorValue *bitcoinBroadcastReplayErrors) hasFatalFailure() bool {
 	return false
 }
 
-// replayOnceWithContext checks only the latest/confirmed record of each active
-// reservation. Deeply confirmed history is reconciled in a fixed-size rotating
-// batch, so canonical RPC work is bounded independently of archived history.
+// replayOnceWithContext checks the latest or previously confirmed record first.
+// Before rebroadcasting, it also reconciles every superseded signed variant,
+// because another wallet operator may have broadcast any one of those
+// conflicting variants. Deeply confirmed history is reconciled in a fixed-size
+// rotating reservation batch; healthy archived reservations still require only
+// their primary confirmation read.
 func (bbo *bitcoinBroadcastOutbox) replayOnceWithContext(ctx context.Context) error {
-	bbo.replayMutex.Lock()
-	defer bbo.replayMutex.Unlock()
+	if err := bbo.acquireReplaySemaphore(ctx); err != nil {
+		return err
+	}
+	defer bbo.replaySemaphore.Release(1)
 
 	active, archived, err := bbo.replayCandidates()
 	if err != nil {
 		return err
 	}
 	replayErrors := &bitcoinBroadcastReplayErrors{}
+candidateLoop:
 	for _, candidate := range append(active, archived...) {
-		refreshed, err := bbo.refreshConfirmation(ctx, candidate.record)
+		refreshed, err := bbo.refreshConfirmation(ctx, candidate.primary)
 		if err != nil {
 			replayErrors.failures = append(
 				replayErrors.failures,
@@ -801,7 +837,25 @@ func (bbo *bitcoinBroadcastOutbox) replayOnceWithContext(ctx context.Context) er
 			)
 			continue
 		}
-		if refreshed.Confirmation != nil || refreshed.Quarantine != nil {
+		if refreshed.Confirmation != nil {
+			continue
+		}
+		canonicalVariantFound := false
+		for _, alternative := range candidate.alternatives {
+			refreshed, err := bbo.refreshConfirmation(ctx, alternative)
+			if err != nil {
+				replayErrors.failures = append(
+					replayErrors.failures,
+					bitcoinBroadcastReplayFailure{candidate.reservationID, err},
+				)
+				continue candidateLoop
+			}
+			if refreshed.Confirmation != nil {
+				canonicalVariantFound = true
+				break
+			}
+		}
+		if canonicalVariantFound {
 			continue
 		}
 		latest, err := bbo.latestBroadcastRecord(candidate.reservationID)
@@ -852,6 +906,7 @@ func (bbo *bitcoinBroadcastOutbox) replayCandidates() (
 	type reservationState struct {
 		latest    *bitcoinBroadcastOutboxRecord
 		confirmed *bitcoinBroadcastOutboxRecord
+		records   []*bitcoinBroadcastOutboxRecord
 	}
 	states := make(map[[32]byte]*reservationState)
 	for _, record := range bbo.records {
@@ -861,6 +916,7 @@ func (bbo *bitcoinBroadcastOutbox) replayCandidates() (
 			state = &reservationState{}
 			states[reservationID] = state
 		}
+		state.records = append(state.records, record)
 		if state.latest == nil || laterBitcoinBroadcastVariant(record, state.latest) {
 			state.latest = record
 		}
@@ -878,17 +934,38 @@ func (bbo *bitcoinBroadcastOutbox) replayCandidates() (
 	active := make([]bitcoinBroadcastReplayCandidate, 0, len(states))
 	archived := make([]bitcoinBroadcastReplayCandidate, 0, len(states))
 	for reservationID, state := range states {
-		record := state.latest
+		primary := state.latest
 		if state.confirmed != nil {
-			record = state.confirmed
+			primary = state.confirmed
 		}
+		alternatives := make(
+			[]*bitcoinBroadcastOutboxRecord,
+			0,
+			len(state.records)-1,
+		)
+		for _, record := range state.records {
+			if record.TransactionHash == primary.TransactionHash {
+				continue
+			}
+			alternatives = append(
+				alternatives,
+				cloneBitcoinBroadcastOutboxRecord(record),
+			)
+		}
+		sort.Slice(alternatives, func(i, j int) bool {
+			return laterBitcoinBroadcastVariant(
+				alternatives[j],
+				alternatives[i],
+			)
+		})
 		candidate := bitcoinBroadcastReplayCandidate{
 			reservationID: reservationID,
-			record:        cloneBitcoinBroadcastOutboxRecord(record),
+			primary:       cloneBitcoinBroadcastOutboxRecord(primary),
+			alternatives:  alternatives,
 		}
-		if record.Confirmation != nil &&
-			record.Confirmation.Canonical &&
-			record.Confirmation.Confirmations >= bbo.archiveConfirmations {
+		if primary.Confirmation != nil &&
+			primary.Confirmation.Canonical &&
+			primary.Confirmation.Confirmations >= bbo.archiveConfirmations {
 			archived = append(archived, candidate)
 		} else {
 			active = append(active, candidate)
@@ -1094,12 +1171,24 @@ func (bbo *bitcoinBroadcastOutbox) broadcastAuthorizedRecord(
 	}
 	broadcastErr := bbo.btcChain.BroadcastTransaction(tx)
 	now := bbo.now().Unix()
+	attemptedAt := maxBitcoinBroadcastTimestamp(
+		next.UpdatedAtUnix,
+		now,
+	)
+	attemptedAt = maxBitcoinBroadcastTimestamp(
+		attemptedAt,
+		next.FirstBroadcastAtUnix,
+	)
+	attemptedAt = maxBitcoinBroadcastTimestamp(
+		attemptedAt,
+		next.LastAttemptUnix,
+	)
 	if next.FirstBroadcastAtUnix == 0 {
-		next.FirstBroadcastAtUnix = now
+		next.FirstBroadcastAtUnix = attemptedAt
 	}
 	next.BroadcastAttempts++
-	next.LastAttemptUnix = now
-	next.UpdatedAtUnix = maxBitcoinBroadcastTimestamp(next.UpdatedAtUnix, now)
+	next.LastAttemptUnix = attemptedAt
+	next.UpdatedAtUnix = attemptedAt
 	if err := bbo.persistAndSwapRecord(record, next); err != nil {
 		return broadcastErr, nil, fmt.Errorf("cannot persist Bitcoin broadcast attempt: [%w]", err)
 	}
@@ -1110,8 +1199,10 @@ func (bbo *bitcoinBroadcastOutbox) broadcastTransaction(
 	ctx context.Context,
 	transactionHash bitcoin.Hash,
 ) error {
-	bbo.replayMutex.Lock()
-	defer bbo.replayMutex.Unlock()
+	if err := bbo.acquireReplaySemaphore(ctx); err != nil {
+		return err
+	}
+	defer bbo.replaySemaphore.Release(1)
 
 	bbo.mutex.Lock()
 	record := bbo.records[transactionHash]
@@ -1140,6 +1231,24 @@ func (bbo *bitcoinBroadcastOutbox) broadcastTransaction(
 		return err
 	}
 	return broadcastErr
+}
+
+func (bbo *bitcoinBroadcastOutbox) acquireReplaySemaphore(
+	ctx context.Context,
+) error {
+	if ctx == nil {
+		return fmt.Errorf("Bitcoin broadcast replay context is nil")
+	}
+	if bbo == nil || bbo.replaySemaphore == nil {
+		return fmt.Errorf("Bitcoin broadcast replay semaphore is unavailable")
+	}
+	if err := bbo.replaySemaphore.Acquire(ctx, 1); err != nil {
+		return fmt.Errorf(
+			"cannot acquire Bitcoin broadcast replay semaphore: [%w]",
+			err,
+		)
+	}
+	return nil
 }
 
 func (bbo *bitcoinBroadcastOutbox) persistAndSwapRecord(

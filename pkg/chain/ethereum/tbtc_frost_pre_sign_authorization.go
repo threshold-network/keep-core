@@ -12,8 +12,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -33,7 +35,12 @@ import (
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
-const frostPreSignManifestVersion = "tbtc-p2tr-fraud-production-activation/v4"
+const (
+	frostPreSignManifestVersion = "tbtc-p2tr-fraud-production-activation/v5"
+
+	frostPreSignFinalityAgreementAttempts   = 4
+	frostPreSignFinalityAgreementRetryDelay = time.Second
+)
 
 const frostPreSignBridgeABIJSON = `[
  {"type":"function","name":"previewP2TRTransactionAuthorization","stateMutability":"view","inputs":[{"name":"payload","type":"bytes"}],"outputs":[{"name":"","type":"bytes"}]},
@@ -183,23 +190,64 @@ type frostPreSignManifestEthereum struct {
 }
 
 type frostPreSignManifestCanonicalJournal struct {
-	StoreID                   string                    `json:"storeID"`
-	StoreFingerprint          string                    `json:"storeFingerprint"`
-	ClusterFingerprint        string                    `json:"clusterFingerprint"`
-	Checkpoint                frostPreSignManifestPoint `json:"checkpoint"`
-	DescriptorSetHash         string                    `json:"descriptorSetHash"`
-	SourceTrustDomainID       string                    `json:"sourceTrustDomainID"`
-	SourceEndpointFingerprint string                    `json:"sourceEndpointFingerprint"`
-	SourceOperatorFingerprint string                    `json:"sourceOperatorFingerprint"`
-	MinimumGeneration         uint64                    `json:"minimumGeneration"`
+	StoreID                   string                                     `json:"storeID"`
+	StoreFingerprint          string                                     `json:"storeFingerprint"`
+	ClusterFingerprint        string                                     `json:"clusterFingerprint"`
+	Checkpoint                frostPreSignManifestPoint                  `json:"checkpoint"`
+	DescriptorSetHash         string                                     `json:"descriptorSetHash"`
+	SourceTrustDomainID       string                                     `json:"sourceTrustDomainID"`
+	SourceEndpointFingerprint string                                     `json:"sourceEndpointFingerprint"`
+	SourceOperatorFingerprint string                                     `json:"sourceOperatorFingerprint"`
+	SourceIdentity            frostPreSignManifestRetainedSourceIdentity `json:"sourceIdentity"`
+	MinimumGeneration         uint64                                     `json:"minimumGeneration"`
+}
+
+type frostPreSignManifestRetainedEndpointIdentity struct {
+	Schema                    string `json:"schema"`
+	Role                      string `json:"role"`
+	TrustDomainID             string `json:"trustDomainID"`
+	CanonicalEndpoint         string `json:"canonicalEndpoint"`
+	CanonicalDNSName          string `json:"canonicalDNSName"`
+	ResolvedDNSName           string `json:"resolvedDNSName"`
+	ResolvedAddressSetHash    string `json:"resolvedAddressSetHash"`
+	TLSLeafSPKIHash           string `json:"tlsLeafSpkiHash"`
+	ServiceIdentity           string `json:"serviceIdentity"`
+	BackendServiceFingerprint string `json:"backendServiceFingerprint"`
+	OperatorFingerprint       string `json:"operatorFingerprint"`
+	AttestationKeyHash        string `json:"attestationKeyHash"`
+	TLSExporterProtocolID     string `json:"tlsExporterProtocolID"`
+	EndpointFingerprint       string `json:"endpointFingerprint"`
+}
+
+type frostPreSignManifestRetainedSourceIdentity struct {
+	Schema               string                                       `json:"schema"`
+	TrustDomainID        string                                       `json:"trustDomainID"`
+	EndpointFingerprint  string                                       `json:"endpointFingerprint"`
+	OperatorFingerprint  string                                       `json:"operatorFingerprint"`
+	HistorySignerKeyHash string                                       `json:"historySignerKeyHash"`
+	Export               frostPreSignManifestRetainedEndpointIdentity `json:"export"`
+	Verifier             frostPreSignManifestRetainedEndpointIdentity `json:"verifier"`
 }
 
 type frostPreSignManifestQuarantineJournal struct {
-	ProtocolID         string `json:"protocolID"`
-	StoreID            string `json:"storeID"`
-	StoreFingerprint   string `json:"storeFingerprint"`
-	ClusterFingerprint string `json:"clusterFingerprint"`
-	MinimumGeneration  uint64 `json:"minimumGeneration"`
+	ProtocolID                   string                              `json:"protocolID"`
+	LiftProtocolID               string                              `json:"liftProtocolID"`
+	TombstoneProtocolID          string                              `json:"tombstoneProtocolID"`
+	CheckpointAuthorityThreshold uint64                              `json:"checkpointAuthorityThreshold"`
+	CheckpointAuthorities        []frostPreSignManifestLiftAuthority `json:"checkpointAuthorities"`
+	CheckpointMinimumSequence    uint64                              `json:"checkpointMinimumSequence"`
+	CheckpointPredecessorHash    string                              `json:"checkpointPredecessorHash"`
+	LiftAuthorityThreshold       uint64                              `json:"liftAuthorityThreshold"`
+	LiftAuthorities              []frostPreSignManifestLiftAuthority `json:"liftAuthorities"`
+	StoreID                      string                              `json:"storeID"`
+	StoreFingerprint             string                              `json:"storeFingerprint"`
+	ClusterFingerprint           string                              `json:"clusterFingerprint"`
+	MinimumGeneration            uint64                              `json:"minimumGeneration"`
+}
+
+type frostPreSignManifestLiftAuthority struct {
+	AuthorityID       string `json:"authorityID"`
+	PublicKeySPKIHash string `json:"publicKeySpkiHash"`
 }
 
 type frostPreSignManifestNativeSignerAnchor struct {
@@ -260,6 +308,7 @@ type frostPreSignActivationManifest struct {
 	FrostSigner                  frostPreSignManifestFrostSigner `json:"frostSigner"`
 	manifestHash                 [32]byte
 	activationAuthorityPublicKey [32]byte
+	activationAuthorityKeyHash   [32]byte
 }
 
 type frostPreSignDeploymentPin struct {
@@ -298,6 +347,8 @@ type frostPreSignLinkedLibraryPin struct {
 
 type frostPreSignEthereumAdapter struct {
 	chain       *TbtcChain
+	reader      tbtc.FrostPreSignEthereumEvidenceVerifier
+	fromAddress common.Address
 	profile     tbtc.FrostPreSignActivationProfile
 	manifest    frostPreSignActivationManifest
 	deployments []frostPreSignDeploymentPin
@@ -320,6 +371,13 @@ type frostPreSignExactHashReader interface {
 		geth.CallMsg,
 		common.Hash,
 	) ([]byte, error)
+}
+
+type frostPreSignStandardEthereumReader interface {
+	HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
+	HeaderByHash(context.Context, common.Hash) (*types.Header, error)
+	TransactionReceipt(context.Context, common.Hash) (*types.Receipt, error)
+	FilterLogs(context.Context, geth.FilterQuery) ([]types.Log, error)
 }
 
 type frostPreSignBitcoinTxInfo struct {
@@ -410,9 +468,18 @@ func (tc *TbtcChain) ConfigureFrostPreSignAuthorization(
 	manifestPath string,
 	trustedEnvelopeSignerKeyHash string,
 	expectedLinkedLibraryDescriptorSetHash string,
+	ethereumEvidenceVerifier tbtc.FrostPreSignEthereumEvidenceVerifier,
 ) (*tbtc.FrostPreSignActivationProfile, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("FROST activation context is nil")
+	}
+	if tc == nil || tc.baseChain == nil {
+		return nil, fmt.Errorf("FROST Ethereum chain is unavailable")
+	}
+	if ethereumEvidenceVerifier == nil {
+		return nil, fmt.Errorf(
+			"independent FROST Ethereum evidence verifier is nil",
+		)
 	}
 	manifest, err := loadFrostPreSignActivationManifest(
 		manifestPath,
@@ -433,11 +500,51 @@ func (tc *TbtcChain) ConfigureFrostPreSignAuthorization(
 	if err != nil || expectedDescriptorSetHash != manifestDescriptorSetHash {
 		return nil, fmt.Errorf("signed activation linked-library descriptor set differs from this signer build")
 	}
-	adapter, err := newFrostPreSignEthereumAdapter(ctx, tc, manifest)
+	primaryReader, err := newFrostPreSignPrimaryEthereumReader(
+		tc.client,
+		tc.rpcClient,
+		tc.chainID,
+		tc.frostPrimaryEthereumRequestTimeout,
+		tc.rpcLimiter,
+	)
 	if err != nil {
 		return nil, err
 	}
+	adapter, err := newFrostPreSignEthereumAdapter(
+		ctx,
+		tc,
+		manifest,
+		primaryReader,
+		true,
+	)
+	if err != nil {
+		return nil, err
+	}
+	verifier, err := newFrostPreSignEthereumAdapter(
+		ctx,
+		tc,
+		manifest,
+		ethereumEvidenceVerifier,
+		false,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"independent FROST Ethereum verifier rejected activation: [%w]",
+			err,
+		)
+	}
+	if _, err := frostPreSignMatchingCurrentFinality(
+		ctx,
+		adapter,
+		verifier,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"FROST Ethereum endpoints do not share one finalized activation point: [%w]",
+			err,
+		)
+	}
 	tc.frostPreSignAuthorizationAdapter = adapter
+	tc.frostPreSignAuthorizationVerifier = verifier
 	profile := adapter.profile
 	return &profile, nil
 }
@@ -520,6 +627,7 @@ func loadFrostPreSignActivationManifest(
 	}
 	manifest.manifestHash = payloadHash
 	copy(manifest.activationAuthorityPublicKey[:], publicKey)
+	manifest.activationAuthorityKeyHash = trustedKeyHash
 	if err := validateFrostPreSignActivationManifest(manifest); err != nil {
 		return nil, err
 	}
@@ -543,21 +651,69 @@ func loadFrostPreSignActivationManifest(
 }
 
 type frostPreSignCanonicalHashReader struct {
-	headerReader interface {
+	standardReader frostPreSignStandardEthereumReader
+	headerReader   interface {
 		HeaderByHash(context.Context, common.Hash) (*types.Header, error)
 	}
-	rpcClient  *rpc.Client
-	rpcLimiter interface {
+	rpcClient      *rpc.Client
+	chainID        *big.Int
+	requestTimeout time.Duration
+	rpcLimiter     interface {
 		AcquirePermit() error
 		ReleasePermit()
 	}
+}
+
+func (reader *frostPreSignCanonicalHashReader) ChainID(
+	context.Context,
+) (*big.Int, error) {
+	if reader.chainID == nil {
+		return nil, fmt.Errorf("Ethereum chain ID is unavailable")
+	}
+	return new(big.Int).Set(reader.chainID), nil
+}
+
+func (reader *frostPreSignCanonicalHashReader) HeaderByNumber(
+	ctx context.Context,
+	number *big.Int,
+) (*types.Header, error) {
+	if reader.standardReader == nil {
+		return nil, fmt.Errorf("standard Ethereum reader is unavailable")
+	}
+	return reader.standardReader.HeaderByNumber(ctx, number)
 }
 
 func (reader *frostPreSignCanonicalHashReader) HeaderByHash(
 	ctx context.Context,
 	blockHash common.Hash,
 ) (*types.Header, error) {
-	return reader.headerReader.HeaderByHash(ctx, blockHash)
+	if reader.standardReader == nil {
+		if reader.headerReader == nil {
+			return nil, fmt.Errorf("exact-hash Ethereum reader is unavailable")
+		}
+		return reader.headerReader.HeaderByHash(ctx, blockHash)
+	}
+	return reader.standardReader.HeaderByHash(ctx, blockHash)
+}
+
+func (reader *frostPreSignCanonicalHashReader) TransactionReceipt(
+	ctx context.Context,
+	transactionHash common.Hash,
+) (*types.Receipt, error) {
+	if reader.standardReader == nil {
+		return nil, fmt.Errorf("standard Ethereum reader is unavailable")
+	}
+	return reader.standardReader.TransactionReceipt(ctx, transactionHash)
+}
+
+func (reader *frostPreSignCanonicalHashReader) FilterLogs(
+	ctx context.Context,
+	query geth.FilterQuery,
+) ([]types.Log, error) {
+	if reader.standardReader == nil {
+		return nil, fmt.Errorf("standard Ethereum reader is unavailable")
+	}
+	return reader.standardReader.FilterLogs(ctx, query)
 }
 
 func (reader *frostPreSignCanonicalHashReader) CodeAtHash(
@@ -565,6 +721,8 @@ func (reader *frostPreSignCanonicalHashReader) CodeAtHash(
 	account common.Address,
 	blockHash common.Hash,
 ) ([]byte, error) {
+	ctx, cancel := reader.requestContext(ctx)
+	defer cancel()
 	var result hexutil.Bytes
 	err := reader.callContext(
 		ctx,
@@ -582,6 +740,8 @@ func (reader *frostPreSignCanonicalHashReader) StorageAtHash(
 	key common.Hash,
 	blockHash common.Hash,
 ) ([]byte, error) {
+	ctx, cancel := reader.requestContext(ctx)
+	defer cancel()
 	var result hexutil.Bytes
 	err := reader.callContext(
 		ctx,
@@ -599,6 +759,8 @@ func (reader *frostPreSignCanonicalHashReader) CallContractAtHash(
 	message geth.CallMsg,
 	blockHash common.Hash,
 ) ([]byte, error) {
+	ctx, cancel := reader.requestContext(ctx)
+	defer cancel()
 	var result hexutil.Bytes
 	err := reader.callContext(
 		ctx,
@@ -622,8 +784,19 @@ func (reader *frostPreSignCanonicalHashReader) callContext(
 		}
 		defer reader.rpcLimiter.ReleasePermit()
 	}
-
 	return reader.rpcClient.CallContext(ctx, result, method, args...)
+}
+
+func (reader *frostPreSignCanonicalHashReader) requestContext(
+	ctx context.Context,
+) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if reader.requestTimeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, reader.requestTimeout)
 }
 
 func frostPreSignCallArgument(message geth.CallMsg) map[string]interface{} {
@@ -665,19 +838,38 @@ func (adapter *frostPreSignEthereumAdapter) exactHashReader() (
 	frostPreSignExactHashReader,
 	error,
 ) {
-	headerReader, ok := adapter.chain.client.(interface {
-		HeaderByHash(context.Context, common.Hash) (*types.Header, error)
-	})
-	if !ok {
-		return nil, fmt.Errorf("Ethereum client does not expose exact-block-hash headers")
+	if adapter == nil || adapter.reader == nil {
+		return nil, fmt.Errorf("FROST Ethereum evidence reader is unavailable")
 	}
-	if adapter.chain.rpcClient == nil {
+	return adapter.reader, nil
+}
+
+func newFrostPreSignPrimaryEthereumReader(
+	client interface{},
+	rpcClient *rpc.Client,
+	chainID *big.Int,
+	requestTimeout time.Duration,
+	rpcLimiter interface {
+		AcquirePermit() error
+		ReleasePermit()
+	},
+) (tbtc.FrostPreSignEthereumEvidenceVerifier, error) {
+	standardReader, ok := client.(frostPreSignStandardEthereumReader)
+	if !ok {
+		return nil, fmt.Errorf(
+			"Ethereum client does not expose required canonical evidence reads",
+		)
+	}
+	if rpcClient == nil || chainID == nil || chainID.Sign() <= 0 {
 		return nil, fmt.Errorf("Ethereum client does not expose canonical EIP-1898 reads")
 	}
 	return &frostPreSignCanonicalHashReader{
-		headerReader: headerReader,
-		rpcClient:    adapter.chain.rpcClient,
-		rpcLimiter:   adapter.chain.rpcLimiter,
+		standardReader: standardReader,
+		headerReader:   standardReader,
+		rpcClient:      rpcClient,
+		chainID:        new(big.Int).Set(chainID),
+		requestTimeout: requestTimeout,
+		rpcLimiter:     rpcLimiter,
 	}, nil
 }
 
@@ -809,9 +1001,12 @@ func validateFrostPreSignActivationManifest(
 		"attestation signer key":            frost.AttestationSignerKeyHash,
 		"retained group inventory protocol": frost.RetainedGroupInventoryProtocolID,
 		"quarantine journal protocol":       frost.QuarantineJournal.ProtocolID,
+		"quarantine lift protocol":          frost.QuarantineJournal.LiftProtocolID,
+		"quarantine tombstone protocol":     frost.QuarantineJournal.TombstoneProtocolID,
 	} {
-		if _, err := frostPreSignParseBytes32(value); err != nil {
-			return fmt.Errorf("invalid FROST activation %s: [%w]", name, err)
+		parsed, err := frostPreSignParseBytes32(value)
+		if err != nil || parsed == [32]byte{} {
+			return fmt.Errorf("invalid FROST activation %s", name)
 		}
 	}
 	durableSessionStoreFingerprint, err := frostPreSignParseBytes32(
@@ -893,6 +1088,75 @@ func validateFrostPreSignActivationManifest(
 		}
 		parsedJournalValues[name] = parsed
 	}
+	sourceIdentity, err := frostPreSignRetainedSourceIdentity(
+		journal.SourceIdentity,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"FROST canonical journal complete endpoint identity is invalid: [%w]",
+			err,
+		)
+	}
+	if sourceIdentity.TrustDomainID != journal.SourceTrustDomainID ||
+		sourceIdentity.EndpointFingerprint !=
+			parsedJournalValues["source endpoint fingerprint"] ||
+		sourceIdentity.OperatorFingerprint !=
+			parsedJournalValues["source operator fingerprint"] {
+		return fmt.Errorf(
+			"FROST canonical journal complete endpoint identity differs from its aggregate fields",
+		)
+	}
+	otherRoleHashes := make(map[[32]byte]string)
+	for name, value := range map[string]string{
+		"Ethereum source endpoint":   manifest.Ethereum.SourceEndpointFingerprint,
+		"Ethereum verifier endpoint": manifest.Ethereum.VerifierEndpointFingerprint,
+		"runtime handshake endpoint": frost.HandshakeEndpointFingerprint,
+		"Ethereum source operator":   manifest.Ethereum.SourceOperatorFingerprint,
+		"Ethereum verifier operator": manifest.Ethereum.VerifierOperatorFingerprint,
+		"runtime handshake operator": frost.HandshakeOperatorFingerprint,
+		"runtime attestation signer": frost.AttestationSignerKeyHash,
+	} {
+		parsed, parseErr := frostPreSignParseBytes32(value)
+		if parseErr != nil || parsed == [32]byte{} {
+			return fmt.Errorf("FROST %s identity is invalid", name)
+		}
+		if previous, exists := otherRoleHashes[parsed]; exists {
+			return fmt.Errorf(
+				"FROST %s identity aliases %s",
+				name,
+				previous,
+			)
+		}
+		otherRoleHashes[parsed] = name
+	}
+	if previous, exists := otherRoleHashes[manifest.activationAuthorityKeyHash]; exists {
+		return fmt.Errorf(
+			"FROST activation authority identity aliases %s",
+			previous,
+		)
+	}
+	otherRoleHashes[manifest.activationAuthorityKeyHash] = "activation authority"
+	for name, value := range map[string][32]byte{
+		"retained export endpoint":      sourceIdentity.Export.EndpointFingerprint,
+		"retained verifier endpoint":    sourceIdentity.Verifier.EndpointFingerprint,
+		"retained export TLS leaf":      sourceIdentity.Export.TLSLeafSPKIHash,
+		"retained verifier TLS leaf":    sourceIdentity.Verifier.TLSLeafSPKIHash,
+		"retained export backend":       sourceIdentity.Export.BackendServiceFingerprint,
+		"retained verifier backend":     sourceIdentity.Verifier.BackendServiceFingerprint,
+		"retained export operator":      sourceIdentity.Export.OperatorFingerprint,
+		"retained verifier operator":    sourceIdentity.Verifier.OperatorFingerprint,
+		"retained history signer":       sourceIdentity.HistorySignerKeyHash,
+		"retained export attestation":   sourceIdentity.Export.AttestationKeyHash,
+		"retained verifier attestation": sourceIdentity.Verifier.AttestationKeyHash,
+	} {
+		if other, exists := otherRoleHashes[value]; exists {
+			return fmt.Errorf(
+				"FROST %s identity aliases %s",
+				name,
+				other,
+			)
+		}
+	}
 	for name, value := range map[string]string{
 		"Ethereum source endpoint":   manifest.Ethereum.SourceEndpointFingerprint,
 		"Ethereum verifier endpoint": manifest.Ethereum.VerifierEndpointFingerprint,
@@ -913,18 +1177,35 @@ func validateFrostPreSignActivationManifest(
 			return fmt.Errorf("FROST canonical journal source operator is not independent of %s", name)
 		}
 	}
+	trustDomains := make(map[string]string)
 	for name, value := range map[string]string{
 		"Ethereum source":   manifest.Ethereum.SourceTrustDomainID,
 		"Ethereum verifier": manifest.Ethereum.VerifierTrustDomainID,
 		"runtime signer":    frost.TrustDomainID,
+		"retained source":   journal.SourceTrustDomainID,
+		"retained export":   sourceIdentity.Export.TrustDomainID,
+		"retained verifier": sourceIdentity.Verifier.TrustDomainID,
 	} {
-		if strings.TrimSpace(value) == "" || value == journal.SourceTrustDomainID {
-			return fmt.Errorf("FROST canonical journal source trust domain is not independent of %s", name)
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
+			return fmt.Errorf("FROST %s trust domain is invalid", name)
 		}
+		if previous, exists := trustDomains[value]; exists {
+			return fmt.Errorf(
+				"FROST %s trust domain aliases %s",
+				name,
+				previous,
+			)
+		}
+		trustDomains[value] = name
 	}
 	quarantine := frost.QuarantineJournal
 	if strings.TrimSpace(quarantine.StoreID) == "" || len(quarantine.StoreID) > 255 {
 		return fmt.Errorf("FROST quarantine journal manifest is incomplete")
+	}
+	if err := validateFrostPreSignQuarantineLiftAuthorities(
+		manifest,
+	); err != nil {
+		return err
 	}
 	quarantineStoreFingerprint, err := frostPreSignParseBytes32(quarantine.StoreFingerprint)
 	if err != nil || quarantineStoreFingerprint == [32]byte{} {
@@ -1072,12 +1353,259 @@ func frostPreSignNativeSignerAnchorManifest(
 	return result, nil
 }
 
+func frostPreSignRetainedEndpointIdentity(
+	wire frostPreSignManifestRetainedEndpointIdentity,
+) (tbtc.FrostRetainedGroupEndpointIdentity, error) {
+	parse := func(name string, value string) ([32]byte, error) {
+		parsed, err := frostPreSignParseBytes32(value)
+		if err != nil {
+			return [32]byte{}, fmt.Errorf("invalid retained %s: [%w]", name, err)
+		}
+		return parsed, nil
+	}
+	addressSet, err := parse("resolved address-set hash", wire.ResolvedAddressSetHash)
+	if err != nil {
+		return tbtc.FrostRetainedGroupEndpointIdentity{}, err
+	}
+	leaf, err := parse("TLS leaf SPKI hash", wire.TLSLeafSPKIHash)
+	if err != nil {
+		return tbtc.FrostRetainedGroupEndpointIdentity{}, err
+	}
+	backend, err := parse(
+		"backend service fingerprint",
+		wire.BackendServiceFingerprint,
+	)
+	if err != nil {
+		return tbtc.FrostRetainedGroupEndpointIdentity{}, err
+	}
+	operator, err := parse("operator fingerprint", wire.OperatorFingerprint)
+	if err != nil {
+		return tbtc.FrostRetainedGroupEndpointIdentity{}, err
+	}
+	attestation, err := parse("attestation key hash", wire.AttestationKeyHash)
+	if err != nil {
+		return tbtc.FrostRetainedGroupEndpointIdentity{}, err
+	}
+	exporter, err := parse("TLS exporter protocol ID", wire.TLSExporterProtocolID)
+	if err != nil {
+		return tbtc.FrostRetainedGroupEndpointIdentity{}, err
+	}
+	fingerprint, err := parse("endpoint fingerprint", wire.EndpointFingerprint)
+	if err != nil {
+		return tbtc.FrostRetainedGroupEndpointIdentity{}, err
+	}
+	return tbtc.FrostRetainedGroupEndpointIdentity{
+		Schema:                    wire.Schema,
+		Role:                      wire.Role,
+		TrustDomainID:             wire.TrustDomainID,
+		CanonicalEndpoint:         wire.CanonicalEndpoint,
+		CanonicalDNSName:          wire.CanonicalDNSName,
+		ResolvedDNSName:           wire.ResolvedDNSName,
+		ResolvedAddressSetHash:    addressSet,
+		TLSLeafSPKIHash:           leaf,
+		ServiceIdentity:           wire.ServiceIdentity,
+		BackendServiceFingerprint: backend,
+		OperatorFingerprint:       operator,
+		AttestationKeyHash:        attestation,
+		TLSExporterProtocolID:     exporter,
+		EndpointFingerprint:       fingerprint,
+	}, nil
+}
+
+func frostPreSignRetainedSourceIdentity(
+	wire frostPreSignManifestRetainedSourceIdentity,
+) (tbtc.FrostRetainedGroupHistoryIdentity, error) {
+	endpointFingerprint, err := frostPreSignParseBytes32(
+		wire.EndpointFingerprint,
+	)
+	if err != nil {
+		return tbtc.FrostRetainedGroupHistoryIdentity{}, err
+	}
+	operatorFingerprint, err := frostPreSignParseBytes32(
+		wire.OperatorFingerprint,
+	)
+	if err != nil {
+		return tbtc.FrostRetainedGroupHistoryIdentity{}, err
+	}
+	historySignerKeyHash, err := frostPreSignParseBytes32(
+		wire.HistorySignerKeyHash,
+	)
+	if err != nil {
+		return tbtc.FrostRetainedGroupHistoryIdentity{}, err
+	}
+	exportIdentity, err := frostPreSignRetainedEndpointIdentity(wire.Export)
+	if err != nil {
+		return tbtc.FrostRetainedGroupHistoryIdentity{}, err
+	}
+	verifierIdentity, err := frostPreSignRetainedEndpointIdentity(wire.Verifier)
+	if err != nil {
+		return tbtc.FrostRetainedGroupHistoryIdentity{}, err
+	}
+	result := tbtc.FrostRetainedGroupHistoryIdentity{
+		Schema:               wire.Schema,
+		TrustDomainID:        wire.TrustDomainID,
+		EndpointFingerprint:  endpointFingerprint,
+		OperatorFingerprint:  operatorFingerprint,
+		HistorySignerKeyHash: historySignerKeyHash,
+		Export:               exportIdentity,
+		Verifier:             verifierIdentity,
+	}
+	if err := tbtc.ValidateFrostRetainedGroupHistoryIdentity(result); err != nil {
+		return tbtc.FrostRetainedGroupHistoryIdentity{}, err
+	}
+	return result, nil
+}
+
+func validateFrostPreSignQuarantineLiftAuthorities(
+	manifest *frostPreSignActivationManifest,
+) error {
+	if manifest == nil {
+		return fmt.Errorf("FROST quarantine lift manifest is nil")
+	}
+	frost := manifest.FrostSigner
+	quarantine := frost.QuarantineJournal
+	quarantineProtocolID, _ := frostPreSignParseBytes32(quarantine.ProtocolID)
+	liftProtocolID, _ := frostPreSignParseBytes32(quarantine.LiftProtocolID)
+	tombstoneProtocolID, _ := frostPreSignParseBytes32(quarantine.TombstoneProtocolID)
+	if quarantineProtocolID == liftProtocolID ||
+		quarantineProtocolID == tombstoneProtocolID ||
+		liftProtocolID == tombstoneProtocolID {
+		return fmt.Errorf("FROST quarantine protocol identities are not distinct")
+	}
+
+	forbidden := make(map[[32]byte]string)
+	for name, value := range map[string]string{
+		"runtime attestation":           frost.AttestationSignerKeyHash,
+		"runtime exporter":              frost.HandshakeOperatorFingerprint,
+		"retained history source":       frost.CanonicalJournal.SourceOperatorFingerprint,
+		"retained history verifier":     frost.CanonicalJournal.SourceIdentity.Verifier.OperatorFingerprint,
+		"retained history signer":       frost.CanonicalJournal.SourceIdentity.HistorySignerKeyHash,
+		"retained export TLS leaf":      frost.CanonicalJournal.SourceIdentity.Export.TLSLeafSPKIHash,
+		"retained verifier TLS leaf":    frost.CanonicalJournal.SourceIdentity.Verifier.TLSLeafSPKIHash,
+		"retained export backend":       frost.CanonicalJournal.SourceIdentity.Export.BackendServiceFingerprint,
+		"retained verifier backend":     frost.CanonicalJournal.SourceIdentity.Verifier.BackendServiceFingerprint,
+		"retained export attestation":   frost.CanonicalJournal.SourceIdentity.Export.AttestationKeyHash,
+		"retained verifier attestation": frost.CanonicalJournal.SourceIdentity.Verifier.AttestationKeyHash,
+		"primary history source":        manifest.Ethereum.SourceOperatorFingerprint,
+		"primary history verifier":      manifest.Ethereum.VerifierOperatorFingerprint,
+	} {
+		hash, err := frostPreSignParseBytes32(value)
+		if err != nil || hash == [32]byte{} {
+			return fmt.Errorf("FROST %s role key is invalid", name)
+		}
+		forbidden[hash] = name
+	}
+	if manifest.activationAuthorityKeyHash == [32]byte{} {
+		return fmt.Errorf("FROST activation authority key is unavailable")
+	}
+	forbidden[manifest.activationAuthorityKeyHash] = "activation"
+
+	checkpointHashes, err := validateFrostPreSignManifestAuthoritySet(
+		"checkpoint",
+		quarantine.CheckpointAuthorityThreshold,
+		quarantine.CheckpointAuthorities,
+		forbidden,
+	)
+	if err != nil {
+		return err
+	}
+	for hash := range checkpointHashes {
+		forbidden[hash] = "checkpoint authority"
+	}
+	checkpointPredecessorHash, err := frostPreSignParseBytes32(
+		quarantine.CheckpointPredecessorHash,
+	)
+	if err != nil ||
+		quarantine.CheckpointMinimumSequence == 0 ||
+		quarantine.CheckpointMinimumSequence > 9007199254740991 ||
+		(quarantine.CheckpointMinimumSequence == 1 &&
+			checkpointPredecessorHash != [32]byte{}) ||
+		(quarantine.CheckpointMinimumSequence > 1 &&
+			checkpointPredecessorHash == [32]byte{}) {
+		return fmt.Errorf(
+			"FROST checkpoint transparency floor is invalid",
+		)
+	}
+	if _, err := validateFrostPreSignManifestAuthoritySet(
+		"quarantine lift",
+		quarantine.LiftAuthorityThreshold,
+		quarantine.LiftAuthorities,
+		forbidden,
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateFrostPreSignManifestAuthoritySet(
+	name string,
+	threshold uint64,
+	authorities []frostPreSignManifestLiftAuthority,
+	forbidden map[[32]byte]string,
+) (map[[32]byte]bool, error) {
+	if threshold < 2 || len(authorities) < 3 ||
+		threshold > uint64(len(authorities)) ||
+		threshold <= uint64(len(authorities))/2 {
+		return nil, fmt.Errorf(
+			"FROST %s authority set must be a production strict majority of at least 2-of-3",
+			name,
+		)
+	}
+	seenHashes := make(map[[32]byte]bool, len(authorities))
+	previousID := ""
+	for index, authority := range authorities {
+		if !validFrostPreSignLiftAuthorityID(authority.AuthorityID) ||
+			(index > 0 && authority.AuthorityID <= previousID) {
+			return nil, fmt.Errorf(
+				"FROST %s authority IDs are not canonical and strictly sorted",
+				name,
+			)
+		}
+		previousID = authority.AuthorityID
+		keyHash, err := frostPreSignParseBytes32(authority.PublicKeySPKIHash)
+		if err != nil || keyHash == [32]byte{} || seenHashes[keyHash] {
+			return nil, fmt.Errorf(
+				"FROST %s authority SPKI hashes are invalid or duplicate",
+				name,
+			)
+		}
+		if role, exists := forbidden[keyHash]; exists {
+			return nil, fmt.Errorf(
+				"FROST %s authority [%s] aliases the %s role",
+				name,
+				authority.AuthorityID,
+				role,
+			)
+		}
+		seenHashes[keyHash] = true
+	}
+	return seenHashes, nil
+}
+
+func validFrostPreSignLiftAuthorityID(value string) bool {
+	if value == "" || len(value) > 64 {
+		return false
+	}
+	for index := range value {
+		character := value[index]
+		if !((character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') ||
+			(index > 0 && (character == '-' || character == '_'))) {
+			return false
+		}
+	}
+	return true
+}
+
 func newFrostPreSignEthereumAdapter(
 	ctx context.Context,
 	tc *TbtcChain,
 	manifest *frostPreSignActivationManifest,
+	reader tbtc.FrostPreSignEthereumEvidenceVerifier,
+	enableRelay bool,
 ) (*frostPreSignEthereumAdapter, error) {
-	if tc == nil || tc.baseChain == nil || tc.client == nil || manifest == nil {
+	if tc == nil || tc.baseChain == nil || tc.client == nil ||
+		manifest == nil || reader == nil {
 		return nil, fmt.Errorf("FROST Ethereum adapter dependencies are nil")
 	}
 	if tc.frostWalletRegistry == nil || tc.frostSortitionPool == nil {
@@ -1094,31 +1622,43 @@ func newFrostPreSignEthereumAdapter(
 		common.Address(profile.FrostRegistry) != tc.frostWalletRegistryAddr {
 		return nil, fmt.Errorf("activation manifest differs from configured Bridge/FROST registry")
 	}
+	actualChainID, err := reader.ChainID(ctx)
+	if err != nil || actualChainID == nil ||
+		actualChainID.Cmp(tc.chainID) != 0 {
+		return nil, fmt.Errorf(
+			"activation manifest chain ID differs from Ethereum evidence reader: [%w]",
+			err,
+		)
+	}
 	expectedGenesisHash, err := frostPreSignParseBytes32(
 		manifest.Ethereum.GenesisBlockHash,
 	)
 	if err != nil {
 		return nil, err
 	}
-	genesisHeader, err := tc.client.HeaderByNumber(ctx, big.NewInt(0))
+	genesisHeader, err := reader.HeaderByNumber(ctx, big.NewInt(0))
 	if err != nil || genesisHeader == nil ||
 		genesisHeader.Number == nil || genesisHeader.Number.Sign() != 0 ||
 		genesisHeader.Hash() != common.Hash(expectedGenesisHash) {
 		return nil, fmt.Errorf("activation manifest genesis block differs from connected Ethereum chain: [%w]", err)
 	}
-	finality, err := frostPreSignCurrentFinality(ctx, tc.client)
+	finality, err := frostPreSignCurrentFinality(ctx, reader)
 	if err != nil {
 		return nil, err
 	}
 	adapter := &frostPreSignEthereumAdapter{
 		chain:       tc,
+		reader:      reader,
+		fromAddress: tc.key.Address,
 		profile:     profile,
 		manifest:    *manifest,
 		deployments: deployments,
-		bridge: bind.NewBoundContract(
+	}
+	if enableRelay {
+		adapter.bridge = bind.NewBoundContract(
 			common.Address(profile.BridgeAddress), frostPreSignBridgeABI,
 			tc.client, tc.client, tc.client,
-		),
+		)
 	}
 	if err := adapter.verifyDeploymentAt(ctx, finality); err != nil {
 		return nil, fmt.Errorf("FROST activation manifest verification failed: [%w]", err)
@@ -1740,7 +2280,9 @@ func frostPreSignCurrentFinality(
 	if err != nil {
 		return nil, fmt.Errorf("cannot obtain finalized Ethereum header: [%w]", err)
 	}
-	if header == nil || header.Number == nil || header.Number.Sign() <= 0 {
+	if header == nil || header.Number == nil ||
+		!header.Number.IsUint64() || header.Number.Sign() <= 0 ||
+		header.Hash() == (common.Hash{}) {
 		return nil, fmt.Errorf("finalized Ethereum header is invalid")
 	}
 	return &tbtc.FrostPreSignFinality{
@@ -2005,7 +2547,7 @@ func (adapter *frostPreSignEthereumAdapter) requireCanonicalFinality(
 	if finality == nil || finality.BlockNumber == 0 || finality.BlockHash == [32]byte{} {
 		return fmt.Errorf("Ethereum finality checkpoint is invalid")
 	}
-	before, err := frostPreSignCurrentFinality(ctx, adapter.chain.client)
+	before, err := frostPreSignCurrentFinality(ctx, adapter.reader)
 	if err != nil {
 		return err
 	}
@@ -2032,7 +2574,7 @@ func (adapter *frostPreSignEthereumAdapter) requireCanonicalFinality(
 		exactHeader.Hash() != common.Hash(finality.BlockHash) {
 		return fmt.Errorf("exact finalized Ethereum header mismatch")
 	}
-	header, err := adapter.chain.client.HeaderByNumber(
+	header, err := adapter.reader.HeaderByNumber(
 		ctx,
 		new(big.Int).SetUint64(finality.BlockNumber),
 	)
@@ -2042,7 +2584,7 @@ func (adapter *frostPreSignEthereumAdapter) requireCanonicalFinality(
 	if header == nil || [32]byte(header.Hash()) != finality.BlockHash {
 		return fmt.Errorf("finalized Ethereum block hash mismatch")
 	}
-	after, err := frostPreSignCurrentFinality(ctx, adapter.chain.client)
+	after, err := frostPreSignCurrentFinality(ctx, adapter.reader)
 	if err != nil {
 		return err
 	}
@@ -2052,7 +2594,7 @@ func (adapter *frostPreSignEthereumAdapter) requireCanonicalFinality(
 		(before.BlockNumber == after.BlockNumber && before.BlockHash != after.BlockHash) {
 		return fmt.Errorf("Ethereum finalized head changed inconsistently while verifying checkpoint")
 	}
-	headerAfter, err := adapter.chain.client.HeaderByNumber(
+	headerAfter, err := adapter.reader.HeaderByNumber(
 		ctx,
 		new(big.Int).SetUint64(finality.BlockNumber),
 	)
@@ -2100,7 +2642,7 @@ func (adapter *frostPreSignEthereumAdapter) callAtHash(
 	output, err := exactReader.CallContractAtHash(
 		ctx,
 		geth.CallMsg{
-			From: adapter.chain.key.Address,
+			From: adapter.fromAddress,
 			To:   &address,
 			Data: callData,
 		},
@@ -2165,22 +2707,67 @@ func (tc *TbtcChain) PrepareFrostPreSignAuthorization(
 	transaction *tbtc.FrostPreSignTransaction,
 	walletOperators []chain.Address,
 ) (*tbtc.FrostPreSignAuthorizationProposal, error) {
-	adapter, err := tc.frostPreSignAdapter()
+	adapter, verifier, err := tc.frostPreSignAdapterPair()
 	if err != nil {
 		return nil, err
 	}
-	return adapter.prepare(ctx, transaction, walletOperators)
+	finality, err := frostPreSignMatchingCurrentFinality(
+		ctx,
+		adapter,
+		verifier,
+	)
+	if err != nil {
+		return nil, err
+	}
+	primaryProposal, err := adapter.prepareAtFinality(
+		ctx,
+		transaction,
+		walletOperators,
+		finality,
+	)
+	if err != nil {
+		return nil, err
+	}
+	verifiedProposal, err := verifier.prepareAtFinality(
+		ctx,
+		transaction,
+		walletOperators,
+		finality,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"independent FROST authorization preparation failed: [%w]",
+			err,
+		)
+	}
+	if err := frostPreSignRequireMatchingEvidence(
+		"authorization preparation",
+		primaryProposal,
+		verifiedProposal,
+	); err != nil {
+		return nil, err
+	}
+	return primaryProposal, nil
 }
 
 func (tc *TbtcChain) VerifyFrostPreSignActivationPoint(
 	ctx context.Context,
 	finality tbtc.FrostPreSignFinality,
 ) error {
-	adapter, err := tc.frostPreSignAdapter()
+	adapter, verifier, err := tc.frostPreSignAdapterPair()
 	if err != nil {
 		return err
 	}
-	return adapter.verifyDeploymentAt(ctx, &finality)
+	if err := adapter.verifyDeploymentAt(ctx, &finality); err != nil {
+		return err
+	}
+	if err := verifier.verifyDeploymentAt(ctx, &finality); err != nil {
+		return fmt.Errorf(
+			"independent FROST activation-point verification failed: [%w]",
+			err,
+		)
+	}
+	return nil
 }
 
 func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
@@ -2221,8 +2808,68 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 	if err != nil {
 		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
 	}
+	endpointIdentitySetHash, err := frostPreSignEndpointIdentitySetHash(
+		adapter.manifest,
+	)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
 	quarantine := frost.QuarantineJournal
 	quarantineJournalProtocolID, err := parse(quarantine.ProtocolID)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
+	quarantineLiftProtocolID, err := parse(quarantine.LiftProtocolID)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
+	quarantineTombstoneProtocolID, err := parse(quarantine.TombstoneProtocolID)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
+	liftAuthorities := make(
+		[]tbtc.FrostRetainedGroupAuthority,
+		len(quarantine.LiftAuthorities),
+	)
+	for index, authority := range quarantine.LiftAuthorities {
+		publicKeySPKIHash, err := parse(authority.PublicKeySPKIHash)
+		if err != nil {
+			return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+		}
+		liftAuthorities[index] = tbtc.FrostRetainedGroupAuthority{
+			AuthorityID:       authority.AuthorityID,
+			PublicKeySPKIHash: publicKeySPKIHash,
+		}
+	}
+	checkpointAuthorities := make(
+		[]tbtc.FrostRetainedGroupAuthority,
+		len(quarantine.CheckpointAuthorities),
+	)
+	for index, authority := range quarantine.CheckpointAuthorities {
+		publicKeySPKIHash, err := parse(authority.PublicKeySPKIHash)
+		if err != nil {
+			return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+		}
+		checkpointAuthorities[index] = tbtc.FrostRetainedGroupAuthority{
+			AuthorityID:       authority.AuthorityID,
+			PublicKeySPKIHash: publicKeySPKIHash,
+		}
+	}
+	checkpointPredecessorHash, err := parse(
+		quarantine.CheckpointPredecessorHash,
+	)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
+	verifierOperatorFingerprint, err := parse(
+		adapter.manifest.Ethereum.VerifierOperatorFingerprint,
+	)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
+	handshakeOperatorFingerprint, err := parse(
+		adapter.manifest.FrostSigner.HandshakeOperatorFingerprint,
+	)
 	if err != nil {
 		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
 	}
@@ -2247,6 +2894,12 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 	if err != nil {
 		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
 	}
+	sourceIdentity, err := frostPreSignRetainedSourceIdentity(
+		journal.SourceIdentity,
+	)
+	if err != nil {
+		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
+	}
 	quarantineStoreFingerprint, err := parse(quarantine.StoreFingerprint)
 	if err != nil {
 		return tbtc.FrostPreSignActivationRuntimeManifest{}, err
@@ -2267,11 +2920,15 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 	}
 	return tbtc.FrostPreSignActivationRuntimeManifest{
 		ManifestHash:                     adapter.profile.ActivationManifestHash,
+		ActivationAuthorityKeyHash:       adapter.manifest.activationAuthorityKeyHash,
+		VerifierOperatorFingerprint:      verifierOperatorFingerprint,
+		HandshakeOperatorFingerprint:     handshakeOperatorFingerprint,
 		DomainChainID:                    adapter.profile.DomainChainID,
 		GenesisBlockHash:                 genesisBlockHash,
 		ProfileHash:                      adapter.profile.ProfileHash,
 		ImplementationSetHash:            adapter.profile.ImplementationSetHash,
 		LinkedLibraryDescriptorSetHash:   linkedLibraryDescriptorSetHash,
+		EndpointIdentitySetHash:          endpointIdentitySetHash,
 		Deployments:                      frostPreSignRuntimeDeploymentEvidence(adapter.deployments),
 		SignerProtocolID:                 signerProtocolID,
 		ReservationProtocolID:            adapter.profile.ReservationProtocolID,
@@ -2298,16 +2955,161 @@ func (tc *TbtcChain) FrostPreSignActivationRuntimeManifest() (
 			SourceTrustDomainID:       journal.SourceTrustDomainID,
 			SourceEndpointFingerprint: sourceEndpointFingerprint,
 			SourceOperatorFingerprint: sourceOperatorFingerprint,
+			SourceIdentity:            sourceIdentity,
 			MinimumGeneration:         journal.MinimumGeneration,
 		},
 		QuarantineJournal: tbtc.FrostRetainedGroupQuarantineJournalManifest{
-			ProtocolID:         quarantineJournalProtocolID,
-			StoreID:            quarantine.StoreID,
-			StoreFingerprint:   quarantineStoreFingerprint,
-			ClusterFingerprint: quarantineClusterFingerprint,
-			MinimumGeneration:  quarantine.MinimumGeneration,
+			ProtocolID:                   quarantineJournalProtocolID,
+			LiftProtocolID:               quarantineLiftProtocolID,
+			TombstoneProtocolID:          quarantineTombstoneProtocolID,
+			CheckpointAuthorityThreshold: quarantine.CheckpointAuthorityThreshold,
+			CheckpointAuthorities:        checkpointAuthorities,
+			CheckpointMinimumSequence:    quarantine.CheckpointMinimumSequence,
+			CheckpointPredecessorHash:    checkpointPredecessorHash,
+			LiftAuthorityThreshold:       quarantine.LiftAuthorityThreshold,
+			LiftAuthorities:              liftAuthorities,
+			StoreID:                      quarantine.StoreID,
+			StoreFingerprint:             quarantineStoreFingerprint,
+			ClusterFingerprint:           quarantineClusterFingerprint,
+			MinimumGeneration:            quarantine.MinimumGeneration,
 		},
 	}, nil
+}
+
+func frostPreSignEndpointIdentitySetHash(
+	manifest frostPreSignActivationManifest,
+) ([32]byte, error) {
+	ethereum := manifest.Ethereum
+	frost := manifest.FrostSigner
+	type identity struct {
+		role                 string
+		trustDomainID        string
+		endpointFingerprint  string
+		tlsLeafSPKIHash      string
+		operatorFingerprint  string
+		backendFingerprint   string
+		attestationKeyHash   string
+		historySignerKeyHash string
+		storeID              string
+		storeFingerprint     string
+		clusterFingerprint   string
+	}
+	identities := []identity{
+		{
+			role:                "ethereum-source",
+			trustDomainID:       ethereum.SourceTrustDomainID,
+			endpointFingerprint: ethereum.SourceEndpointFingerprint,
+			operatorFingerprint: ethereum.SourceOperatorFingerprint,
+			storeID:             ethereum.SourceHistoryStoreID,
+			storeFingerprint:    ethereum.SourceHistoryStoreFingerprint,
+		},
+		{
+			role:                "ethereum-verifier",
+			trustDomainID:       ethereum.VerifierTrustDomainID,
+			endpointFingerprint: ethereum.VerifierEndpointFingerprint,
+			operatorFingerprint: ethereum.VerifierOperatorFingerprint,
+			storeID:             ethereum.VerifierHistoryStoreID,
+			storeFingerprint:    ethereum.VerifierHistoryStoreFingerprint,
+		},
+		{
+			role:                 "retained-group-source",
+			trustDomainID:        frost.CanonicalJournal.SourceTrustDomainID,
+			endpointFingerprint:  frost.CanonicalJournal.SourceEndpointFingerprint,
+			operatorFingerprint:  frost.CanonicalJournal.SourceOperatorFingerprint,
+			historySignerKeyHash: frost.CanonicalJournal.SourceIdentity.HistorySignerKeyHash,
+			storeID:              frost.CanonicalJournal.StoreID,
+			storeFingerprint:     frost.CanonicalJournal.StoreFingerprint,
+			clusterFingerprint:   frost.CanonicalJournal.ClusterFingerprint,
+		},
+		{
+			role:                "retained-history-export",
+			trustDomainID:       frost.CanonicalJournal.SourceIdentity.Export.TrustDomainID,
+			endpointFingerprint: frost.CanonicalJournal.SourceIdentity.Export.EndpointFingerprint,
+			tlsLeafSPKIHash:     frost.CanonicalJournal.SourceIdentity.Export.TLSLeafSPKIHash,
+			operatorFingerprint: frost.CanonicalJournal.SourceIdentity.Export.OperatorFingerprint,
+			backendFingerprint:  frost.CanonicalJournal.SourceIdentity.Export.BackendServiceFingerprint,
+			attestationKeyHash:  frost.CanonicalJournal.SourceIdentity.Export.AttestationKeyHash,
+		},
+		{
+			role:                "retained-history-verifier",
+			trustDomainID:       frost.CanonicalJournal.SourceIdentity.Verifier.TrustDomainID,
+			endpointFingerprint: frost.CanonicalJournal.SourceIdentity.Verifier.EndpointFingerprint,
+			tlsLeafSPKIHash:     frost.CanonicalJournal.SourceIdentity.Verifier.TLSLeafSPKIHash,
+			operatorFingerprint: frost.CanonicalJournal.SourceIdentity.Verifier.OperatorFingerprint,
+			backendFingerprint:  frost.CanonicalJournal.SourceIdentity.Verifier.BackendServiceFingerprint,
+			attestationKeyHash:  frost.CanonicalJournal.SourceIdentity.Verifier.AttestationKeyHash,
+		},
+		{
+			role:                "runtime-handshake",
+			trustDomainID:       frost.TrustDomainID,
+			endpointFingerprint: frost.HandshakeEndpointFingerprint,
+			operatorFingerprint: frost.HandshakeOperatorFingerprint,
+		},
+	}
+	hasher := sha256.New()
+	hasher.Write([]byte("tbtc-frost-endpoint-identity-set-v3\x00"))
+	for _, entry := range identities {
+		endpointFingerprint, err := frostPreSignParseBytes32(
+			entry.endpointFingerprint,
+		)
+		if err != nil {
+			return [32]byte{}, err
+		}
+		operatorFingerprint, err := frostPreSignParseBytes32(
+			entry.operatorFingerprint,
+		)
+		if err != nil {
+			return [32]byte{}, err
+		}
+		frostPreSignWriteHashString(hasher, entry.role)
+		frostPreSignWriteHashString(hasher, entry.trustDomainID)
+		hasher.Write(endpointFingerprint[:])
+		hasher.Write(operatorFingerprint[:])
+		for _, value := range []string{
+			entry.tlsLeafSPKIHash,
+			entry.backendFingerprint,
+			entry.attestationKeyHash,
+			entry.historySignerKeyHash,
+		} {
+			if value == "" {
+				hasher.Write(make([]byte, 32))
+				continue
+			}
+			parsed, err := frostPreSignParseBytes32(value)
+			if err != nil || parsed == [32]byte{} {
+				return [32]byte{}, fmt.Errorf(
+					"invalid endpoint identity role hash",
+				)
+			}
+			hasher.Write(parsed[:])
+		}
+		frostPreSignWriteHashString(hasher, entry.storeID)
+		if entry.storeFingerprint == "" {
+			hasher.Write(make([]byte, 32))
+		} else {
+			storeFingerprint, err := frostPreSignParseBytes32(
+				entry.storeFingerprint,
+			)
+			if err != nil {
+				return [32]byte{}, err
+			}
+			hasher.Write(storeFingerprint[:])
+		}
+		if entry.clusterFingerprint == "" {
+			hasher.Write(make([]byte, 32))
+		} else {
+			clusterFingerprint, err := frostPreSignParseBytes32(
+				entry.clusterFingerprint,
+			)
+			if err != nil {
+				return [32]byte{}, err
+			}
+			hasher.Write(clusterFingerprint[:])
+		}
+	}
+	result := [32]byte{}
+	copy(result[:], hasher.Sum(nil))
+	return result, nil
 }
 
 func frostPreSignRuntimeDeploymentEvidence(
@@ -2399,9 +3201,26 @@ func (adapter *frostPreSignEthereumAdapter) prepare(
 	if ctx == nil || transaction == nil {
 		return nil, fmt.Errorf("FROST authorization preparation input is nil")
 	}
-	finality, err := frostPreSignCurrentFinality(ctx, adapter.chain.client)
+	finality, err := frostPreSignCurrentFinality(ctx, adapter.reader)
 	if err != nil {
 		return nil, err
+	}
+	return adapter.prepareAtFinality(
+		ctx,
+		transaction,
+		walletOperators,
+		finality,
+	)
+}
+
+func (adapter *frostPreSignEthereumAdapter) prepareAtFinality(
+	ctx context.Context,
+	transaction *tbtc.FrostPreSignTransaction,
+	walletOperators []chain.Address,
+	finality *tbtc.FrostPreSignFinality,
+) (*tbtc.FrostPreSignAuthorizationProposal, error) {
+	if ctx == nil || transaction == nil || finality == nil {
+		return nil, fmt.Errorf("FROST authorization preparation input is nil")
 	}
 	if err := adapter.verifyDeploymentAt(ctx, finality); err != nil {
 		return nil, err
@@ -2527,6 +3346,119 @@ func (tc *TbtcChain) frostPreSignAdapter() (*frostPreSignEthereumAdapter, error)
 		return nil, fmt.Errorf("production FROST authorization adapter is not configured")
 	}
 	return tc.frostPreSignAuthorizationAdapter, nil
+}
+
+func (tc *TbtcChain) frostPreSignAdapterPair() (
+	*frostPreSignEthereumAdapter,
+	*frostPreSignEthereumAdapter,
+	error,
+) {
+	if tc == nil || tc.frostPreSignAuthorizationAdapter == nil ||
+		tc.frostPreSignAuthorizationVerifier == nil {
+		return nil, nil, fmt.Errorf(
+			"production FROST authorization verifier pair is not configured",
+		)
+	}
+	return tc.frostPreSignAuthorizationAdapter,
+		tc.frostPreSignAuthorizationVerifier,
+		nil
+}
+
+func frostPreSignMatchingCurrentFinality(
+	ctx context.Context,
+	primary *frostPreSignEthereumAdapter,
+	verifier *frostPreSignEthereumAdapter,
+) (*tbtc.FrostPreSignFinality, error) {
+	return frostPreSignMatchingCurrentFinalityWithRetry(
+		ctx,
+		primary,
+		verifier,
+		frostPreSignFinalityAgreementAttempts,
+		frostPreSignFinalityAgreementRetryDelay,
+	)
+}
+
+func frostPreSignMatchingCurrentFinalityWithRetry(
+	ctx context.Context,
+	primary *frostPreSignEthereumAdapter,
+	verifier *frostPreSignEthereumAdapter,
+	attempts int,
+	retryDelay time.Duration,
+) (*tbtc.FrostPreSignFinality, error) {
+	if ctx == nil || primary == nil || verifier == nil ||
+		primary.reader == nil || verifier.reader == nil {
+		return nil, fmt.Errorf("FROST Ethereum verifier pair is incomplete")
+	}
+	if attempts <= 0 || retryDelay < 0 {
+		return nil, fmt.Errorf("FROST Ethereum finality retry policy is invalid")
+	}
+
+	var primaryFinality *tbtc.FrostPreSignFinality
+	var verifiedFinality *tbtc.FrostPreSignFinality
+	for attempt := 0; attempt < attempts; attempt++ {
+		var err error
+		primaryFinality, err = frostPreSignCurrentFinality(
+			ctx,
+			primary.reader,
+		)
+		if err != nil {
+			return nil, err
+		}
+		verifiedFinality, err = frostPreSignCurrentFinality(
+			ctx,
+			verifier.reader,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot obtain independent finalized Ethereum header: [%w]",
+				err,
+			)
+		}
+		if primaryFinality.BlockNumber == verifiedFinality.BlockNumber &&
+			primaryFinality.BlockHash == verifiedFinality.BlockHash {
+			break
+		}
+		if attempt == attempts-1 {
+			return nil, fmt.Errorf(
+				"FROST Ethereum endpoints disagree on the current finalized block",
+			)
+		}
+		if retryDelay == 0 {
+			continue
+		}
+		timer := time.NewTimer(retryDelay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return nil, fmt.Errorf(
+				"cannot retry independent finalized Ethereum headers: [%w]",
+				ctx.Err(),
+			)
+		case <-timer.C:
+		}
+	}
+
+	if err := primary.requireCanonicalFinality(
+		ctx,
+		primaryFinality,
+	); err != nil {
+		return nil, err
+	}
+	if err := verifier.requireCanonicalFinality(
+		ctx,
+		verifiedFinality,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"independent finalized Ethereum checkpoint verification failed: [%w]",
+			err,
+		)
+	}
+	return primaryFinality, nil
 }
 
 func (adapter *frostPreSignEthereumAdapter) resolveWalletMembersAt(
@@ -2873,6 +3805,11 @@ func (adapter *frostPreSignEthereumAdapter) relay(
 	if ctx == nil || proposal == nil || proposal.Transaction == nil || attestation == nil {
 		return [32]byte{}, fmt.Errorf("FROST authorization relay input is nil")
 	}
+	if adapter == nil || adapter.chain == nil || adapter.bridge == nil {
+		return [32]byte{}, fmt.Errorf(
+			"FROST authorization relay adapter is unavailable",
+		)
+	}
 	if !bytes.Equal(frostPreSignUint32SliceBytes(proposal.WalletMembersIDs), frostPreSignUint32SliceBytes(attestation.WalletMembersIDs)) {
 		return [32]byte{}, fmt.Errorf("FROST relay attestation wallet members differ from preview")
 	}
@@ -2952,11 +3889,37 @@ func (tc *TbtcChain) WaitForFrostPreSignAuthorizationFinality(
 	relayTransactionHash [32]byte,
 	proposal *tbtc.FrostPreSignAuthorizationProposal,
 ) (*tbtc.FrostPreSignFinality, error) {
-	adapter, err := tc.frostPreSignAdapter()
+	adapter, verifier, err := tc.frostPreSignAdapterPair()
 	if err != nil {
 		return nil, err
 	}
-	return adapter.waitForFinality(ctx, relayTransactionHash, proposal)
+	verifiedFinality, err := verifier.waitForFinality(
+		ctx,
+		relayTransactionHash,
+		proposal,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"independent COMPLETE relay finality verification failed: [%w]",
+			err,
+		)
+	}
+	primaryFinality, err := adapter.waitForFinality(
+		ctx,
+		relayTransactionHash,
+		proposal,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := frostPreSignRequireMatchingEvidence(
+		"COMPLETE relay finality",
+		primaryFinality,
+		verifiedFinality,
+	); err != nil {
+		return nil, err
+	}
+	return primaryFinality, nil
 }
 
 func (adapter *frostPreSignEthereumAdapter) waitForFinality(
@@ -2970,54 +3933,62 @@ func (adapter *frostPreSignEthereumAdapter) waitForFinality(
 	}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-	var receipt *types.Receipt
-	for receipt == nil {
-		var err error
-		receipt, err = adapter.chain.client.TransactionReceipt(
+	for {
+		// A pre-finality receipt is provisional. Re-read it on every poll so a
+		// transaction re-included at a different canonical block after a reorg
+		// can still reach finality.
+		receipt, err := adapter.reader.TransactionReceipt(
 			ctx,
 			common.Hash(relayTransactionHash),
 		)
 		if err != nil && err != geth.NotFound {
 			return nil, fmt.Errorf("cannot obtain COMPLETE relay receipt: [%w]", err)
 		}
-		if receipt != nil {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-ticker.C:
-		}
-	}
-	if receipt.Status != types.ReceiptStatusSuccessful || receipt.BlockNumber == nil {
-		return nil, fmt.Errorf("COMPLETE relay transaction reverted or has no inclusion block")
-	}
-	sequence, logIndex, err := adapter.validateAuthorizationReceipt(receipt, proposal)
-	if err != nil {
-		return nil, err
-	}
-
-	for {
-		finalized, err := frostPreSignCurrentFinality(ctx, adapter.chain.client)
-		if err != nil {
-			return nil, err
-		}
-		if finalized.BlockNumber >= receipt.BlockNumber.Uint64() {
-			header, err := adapter.chain.client.HeaderByNumber(ctx, receipt.BlockNumber)
+		if err != geth.NotFound && receipt != nil {
+			if receipt.BlockNumber == nil || !receipt.BlockNumber.IsUint64() ||
+				receipt.BlockNumber.Sign() <= 0 {
+				return nil, fmt.Errorf(
+					"COMPLETE relay transaction has no valid inclusion block",
+				)
+			}
+			finalized, err := frostPreSignCurrentFinality(ctx, adapter.reader)
 			if err != nil {
-				return nil, fmt.Errorf("cannot verify COMPLETE receipt block: [%w]", err)
+				return nil, err
 			}
-			if header == nil || header.Hash() != receipt.BlockHash {
-				return nil, fmt.Errorf("COMPLETE relay receipt is not canonical")
+			if finalized.BlockNumber >= receipt.BlockNumber.Uint64() {
+				header, err := adapter.reader.HeaderByNumber(ctx, receipt.BlockNumber)
+				if err != nil {
+					return nil, fmt.Errorf(
+						"cannot verify COMPLETE receipt block: [%w]",
+						err,
+					)
+				}
+				if header != nil && header.Hash() == receipt.BlockHash {
+					if receipt.Status != types.ReceiptStatusSuccessful {
+						return nil, fmt.Errorf(
+							"COMPLETE relay transaction reverted",
+						)
+					}
+					sequence, logIndex, err := adapter.validateAuthorizationReceipt(
+						receipt,
+						relayTransactionHash,
+						proposal,
+					)
+					if err != nil {
+						return nil, err
+					}
+					return &tbtc.FrostPreSignFinality{
+						RelayTransactionHash:  relayTransactionHash,
+						BlockNumber:           receipt.BlockNumber.Uint64(),
+						BlockHash:             [32]byte(receipt.BlockHash),
+						TransactionIndex:      uint32(receipt.TransactionIndex),
+						LogIndex:              logIndex,
+						AuthorizationSequence: sequence,
+					}, nil
+				}
+				// The observed receipt was orphaned. Continue polling for the
+				// same transaction's canonical re-inclusion.
 			}
-			return &tbtc.FrostPreSignFinality{
-				RelayTransactionHash:  relayTransactionHash,
-				BlockNumber:           receipt.BlockNumber.Uint64(),
-				BlockHash:             [32]byte(receipt.BlockHash),
-				TransactionIndex:      uint32(receipt.TransactionIndex),
-				LogIndex:              logIndex,
-				AuthorizationSequence: sequence,
-			}, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -3029,8 +4000,20 @@ func (adapter *frostPreSignEthereumAdapter) waitForFinality(
 
 func (adapter *frostPreSignEthereumAdapter) validateAuthorizationReceipt(
 	receipt *types.Receipt,
+	relayTransactionHash [32]byte,
 	proposal *tbtc.FrostPreSignAuthorizationProposal,
 ) ([32]byte, uint32, error) {
+	if receipt == nil || proposal == nil || proposal.Transaction == nil ||
+		receipt.TxHash != common.Hash(relayTransactionHash) ||
+		receipt.BlockHash == (common.Hash{}) ||
+		receipt.BlockNumber == nil ||
+		!receipt.BlockNumber.IsUint64() ||
+		receipt.BlockNumber.Sign() <= 0 ||
+		uint64(receipt.TransactionIndex) > uint64(math.MaxUint32) {
+		return [32]byte{}, 0, fmt.Errorf(
+			"COMPLETE receipt transaction identity mismatch",
+		)
+	}
 	authorizedEvent := frostPreSignRegistryABI.Events["P2TRPreSigningReservationAuthorized"]
 	advancedEvent := frostPreSignRegistryABI.Events["P2TRAuthorizedVariantAdvanced"]
 	registryAddress := common.Address(adapter.profile.RegistryAddress)
@@ -3038,6 +4021,15 @@ func (adapter *frostPreSignEthereumAdapter) validateAuthorizationReceipt(
 	for _, logEntry := range receipt.Logs {
 		if logEntry == nil || logEntry.Address != registryAddress || len(logEntry.Topics) == 0 {
 			continue
+		}
+		if logEntry.Removed ||
+			logEntry.TxHash != receipt.TxHash ||
+			logEntry.BlockHash != receipt.BlockHash ||
+			logEntry.BlockNumber != receipt.BlockNumber.Uint64() ||
+			logEntry.TxIndex != receipt.TransactionIndex {
+			return [32]byte{}, 0, fmt.Errorf(
+				"COMPLETE receipt log transaction identity mismatch",
+			)
 		}
 		switch logEntry.Topics[0] {
 		case authorizedEvent.ID:
@@ -3079,17 +4071,22 @@ func (adapter *frostPreSignEthereumAdapter) validateAuthorizationReceipt(
 	if sequence == [32]byte{} {
 		return [32]byte{}, 0, fmt.Errorf("COMPLETE authorization sequence is zero")
 	}
+	if uint64(advancedLog.Index) > uint64(math.MaxUint32) {
+		return [32]byte{}, 0, fmt.Errorf(
+			"COMPLETE authorization log index overflows",
+		)
+	}
 	return sequence, uint32(advancedLog.Index), nil
 }
 
 func (tc *TbtcChain) CurrentFrostPreSignFinality(
 	ctx context.Context,
 ) (*tbtc.FrostPreSignFinality, error) {
-	adapter, err := tc.frostPreSignAdapter()
+	adapter, verifier, err := tc.frostPreSignAdapterPair()
 	if err != nil {
 		return nil, err
 	}
-	return frostPreSignCurrentFinality(ctx, adapter.chain.client)
+	return frostPreSignMatchingCurrentFinality(ctx, adapter, verifier)
 }
 
 func (tc *TbtcChain) ReadFrostPreSignAuthorizationState(
@@ -3097,11 +4094,37 @@ func (tc *TbtcChain) ReadFrostPreSignAuthorizationState(
 	proposal *tbtc.FrostPreSignAuthorizationProposal,
 	finality tbtc.FrostPreSignFinality,
 ) (*tbtc.FrostPreSignAuthorizationState, error) {
-	adapter, err := tc.frostPreSignAdapter()
+	adapter, verifier, err := tc.frostPreSignAdapterPair()
 	if err != nil {
 		return nil, err
 	}
-	return adapter.readAuthorizationState(ctx, proposal, finality)
+	primaryState, err := adapter.readAuthorizationState(
+		ctx,
+		proposal,
+		finality,
+	)
+	if err != nil {
+		return nil, err
+	}
+	verifiedState, err := verifier.readAuthorizationState(
+		ctx,
+		proposal,
+		finality,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"independent FROST authorization state verification failed: [%w]",
+			err,
+		)
+	}
+	if err := frostPreSignRequireMatchingEvidence(
+		"authorization state",
+		primaryState,
+		verifiedState,
+	); err != nil {
+		return nil, err
+	}
+	return primaryState, nil
 }
 
 func (adapter *frostPreSignEthereumAdapter) readAuthorizationState(
@@ -3270,20 +4293,70 @@ func (tc *TbtcChain) GetCanonicalFrostBitcoinBroadcastAuthorizationStatus(
 	ctx context.Context,
 	request *tbtc.FrostBitcoinBroadcastAuthorizationStatusRequest,
 ) (*tbtc.FrostBitcoinBroadcastAuthorizationStatus, error) {
-	adapter, err := tc.frostPreSignAdapter()
+	adapter, verifier, err := tc.frostPreSignAdapterPair()
 	if err != nil {
 		return nil, err
 	}
-	return adapter.canonicalBroadcastStatus(ctx, request)
+	current, err := frostPreSignMatchingCurrentFinality(
+		ctx,
+		adapter,
+		verifier,
+	)
+	if err != nil {
+		return nil, err
+	}
+	primaryStatus, err := adapter.canonicalBroadcastStatus(
+		ctx,
+		request,
+		current,
+	)
+	if err != nil {
+		return nil, err
+	}
+	verifiedStatus, err := verifier.canonicalBroadcastStatus(
+		ctx,
+		request,
+		current,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"independent Bitcoin broadcast authorization verification failed: [%w]",
+			err,
+		)
+	}
+	if err := frostPreSignRequireMatchingEvidence(
+		"Bitcoin broadcast authorization",
+		primaryStatus,
+		verifiedStatus,
+	); err != nil {
+		return nil, err
+	}
+	return primaryStatus, nil
+}
+
+func frostPreSignRequireMatchingEvidence(
+	evidenceName string,
+	primary interface{},
+	verified interface{},
+) error {
+	if !reflect.DeepEqual(primary, verified) {
+		return fmt.Errorf(
+			"FROST Ethereum endpoints disagree on %s",
+			evidenceName,
+		)
+	}
+	return nil
 }
 
 func (adapter *frostPreSignEthereumAdapter) canonicalBroadcastStatus(
 	ctx context.Context,
 	request *tbtc.FrostBitcoinBroadcastAuthorizationStatusRequest,
+	current *tbtc.FrostPreSignFinality,
 ) (*tbtc.FrostBitcoinBroadcastAuthorizationStatus, error) {
 	if ctx == nil || request == nil || request.FinalizedBlock == 0 ||
 		request.FinalizedBlockHash == [32]byte{} ||
-		request.VariantSequence.AuthorizationSequence == [32]byte{} {
+		request.VariantSequence.AuthorizationSequence == [32]byte{} ||
+		current == nil {
 		return nil, fmt.Errorf("Bitcoin broadcast authorization request is invalid")
 	}
 	requestHash := request.ComputeHash()
@@ -3316,10 +4389,6 @@ func (adapter *frostPreSignEthereumAdapter) canonicalBroadcastStatus(
 		}, nil
 	}
 
-	current, err := frostPreSignCurrentFinality(ctx, adapter.chain.client)
-	if err != nil {
-		return nil, err
-	}
 	if err := adapter.verifyDeploymentAt(ctx, current); err != nil {
 		return nil, err
 	}
@@ -3352,7 +4421,7 @@ func (adapter *frostPreSignEthereumAdapter) validateHistoricalBroadcastEvent(
 ) error {
 	blockHash := common.Hash(request.FinalizedBlockHash)
 	event := frostPreSignRegistryABI.Events["P2TRAuthorizedVariantAdvanced"]
-	logs, err := adapter.chain.client.FilterLogs(ctx, geth.FilterQuery{
+	logs, err := adapter.reader.FilterLogs(ctx, geth.FilterQuery{
 		BlockHash: &blockHash,
 		Addresses: []common.Address{common.Address(adapter.profile.RegistryAddress)},
 		Topics: [][]common.Hash{
@@ -3366,7 +4435,17 @@ func (adapter *frostPreSignEthereumAdapter) validateHistoricalBroadcastEvent(
 		return fmt.Errorf("cannot read historical COMPLETE authorization event: [%w]", err)
 	}
 	if len(logs) != 1 || logs[0].Index != uint(request.FinalizedLogIndex) ||
-		logs[0].TxIndex != uint(request.FinalizedTransactionIndex) || logs[0].Removed {
+		logs[0].TxIndex != uint(request.FinalizedTransactionIndex) ||
+		logs[0].Removed ||
+		logs[0].Address != common.Address(adapter.profile.RegistryAddress) ||
+		logs[0].BlockHash != blockHash ||
+		logs[0].TxHash == (common.Hash{}) ||
+		len(logs[0].Topics) != 4 ||
+		logs[0].Topics[0] != event.ID ||
+		logs[0].Topics[1] != common.Hash(request.ReservationID) ||
+		logs[0].Topics[2] != common.Hash(request.TransactionHash) ||
+		logs[0].Topics[3] !=
+			common.Hash(request.VariantSequence.AuthorizationSequence) {
 		return fmt.Errorf("historical COMPLETE authorization event identity mismatch")
 	}
 	return nil

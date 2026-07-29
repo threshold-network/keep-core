@@ -35,11 +35,12 @@ var logger = log.Logger("keep-ethereum")
 // provides the implementation of generic features like balance monitor,
 // block counter and similar.
 type baseChain struct {
-	key        *keystore.Key
-	client     ethutil.EthereumClient
-	rpcClient  *rpc.Client
-	rpcLimiter *rate.Limiter
-	chainID    *big.Int
+	key                                *keystore.Key
+	client                             ethutil.EthereumClient
+	rpcClient                          *rpc.Client
+	rpcLimiter                         *rate.Limiter
+	chainID                            *big.Int
+	frostPrimaryEthereumRequestTimeout time.Duration
 
 	blockCounter *ethereum.BlockCounter
 	nonceManager *ethereum.NonceManager
@@ -62,6 +63,14 @@ type baseChain struct {
 	tokenStaking *contract.TokenStaking
 }
 
+// EthereumClient is the client surface required to build chain handles from
+// an already-established transport.
+type EthereumClient interface {
+	ethutil.EthereumClient
+	ChainID(context.Context) (*big.Int, error)
+	Client() *rpc.Client
+}
+
 // Connect creates Random Beacon and TBTC Ethereum chain handles.
 func Connect(
 	ctx context.Context,
@@ -82,7 +91,44 @@ func Connect(
 			err,
 		)
 	}
+	return connectWithClient(ctx, config, client)
+}
 
+// ConnectWithClient creates Random Beacon and TBTC Ethereum chain handles
+// using the exact supplied client. It is used by the FROST start path so the
+// chain handle and retained-history independence monitor share one guarded
+// primary transport.
+func ConnectWithClient(
+	ctx context.Context,
+	config ethereum.Config,
+	client EthereumClient,
+) (
+	*BeaconChain,
+	*TbtcChain,
+	chain.BlockCounter,
+	chain.Signing,
+	*operator.PrivateKey,
+	error,
+) {
+	if client == nil {
+		return nil, nil, nil, nil, nil,
+			fmt.Errorf("Ethereum client is nil")
+	}
+	return connectWithClient(ctx, config, client)
+}
+
+func connectWithClient(
+	ctx context.Context,
+	config ethereum.Config,
+	client EthereumClient,
+) (
+	*BeaconChain,
+	*TbtcChain,
+	chain.BlockCounter,
+	chain.Signing,
+	*operator.PrivateKey,
+	error,
+) {
 	baseChain, err := newBaseChain(ctx, config, client)
 	if err != nil {
 		return nil, nil, nil, nil, nil, fmt.Errorf(
@@ -219,7 +265,7 @@ func validateContractsAddresses(
 func newBaseChain(
 	ctx context.Context,
 	config ethereum.Config,
-	client *ethclient.Client,
+	client EthereumClient,
 ) (*baseChain, error) {
 	chainID, err := client.ChainID(ctx)
 	if err != nil {
@@ -254,6 +300,13 @@ func newBaseChain(
 		RequestsPerSecondLimit: config.RequestsPerSecondLimit,
 		ConcurrencyLimit:       config.ConcurrencyLimit,
 	})
+	var frostPrimaryEthereumRequestTimeout time.Duration
+	if timeoutSource, ok := client.(interface {
+		FrostPrimaryEthereumRequestTimeout() time.Duration
+	}); ok {
+		frostPrimaryEthereumRequestTimeout =
+			timeoutSource.FrostPrimaryEthereumRequestTimeout()
+	}
 
 	blockCounter, err := ethutil.NewBlockCounter(clientWithAddons)
 	if err != nil {
@@ -302,16 +355,17 @@ func newBaseChain(
 	}
 
 	return &baseChain{
-		key:              key,
-		client:           clientWithAddons,
-		rpcClient:        client.Client(),
-		rpcLimiter:       rpcLimiter,
-		chainID:          chainID,
-		blockCounter:     blockCounter,
-		nonceManager:     nonceManager,
-		miningWaiter:     miningWaiter,
-		transactionMutex: transactionMutex,
-		tokenStaking:     tokenStaking,
+		key:                                key,
+		client:                             clientWithAddons,
+		rpcClient:                          client.Client(),
+		rpcLimiter:                         rpcLimiter,
+		chainID:                            chainID,
+		frostPrimaryEthereumRequestTimeout: frostPrimaryEthereumRequestTimeout,
+		blockCounter:                       blockCounter,
+		nonceManager:                       nonceManager,
+		miningWaiter:                       miningWaiter,
+		transactionMutex:                   transactionMutex,
+		tokenStaking:                       tokenStaking,
 	}, nil
 }
 
