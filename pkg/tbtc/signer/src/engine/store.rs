@@ -69,11 +69,11 @@ pub(crate) const TBTC_SIGNER_STATE_WITNESS_SEGMENT_HEADER_LENGTH: usize = 472;
 /// tests build on-disk fixtures from this geometry, so it is part of the
 /// crate-visible store contract.
 pub(crate) const TBTC_SIGNER_STATE_WITNESS_RECORD_LENGTH: usize = 105;
-/// A mutating interactive request can persist two expiry-sweep repairs before
-/// persisting its requested mutation. If the first snapshot reaches the
-/// rotation threshold, the other two snapshots still need four records to
-/// finish the in-flight request before a checkpoint can be acknowledged.
-pub(crate) const TBTC_SIGNER_STATE_WITNESS_ROTATION_TERMINAL_RECORD_RESERVATION: usize = 4;
+/// Reconciliation can commit an interrupted write at the rotation threshold
+/// before a mutating interactive retry persists two expiry-sweep repairs and
+/// its requested mutation. Those three snapshots need six records to finish
+/// the in-flight request before a checkpoint can be acknowledged.
+pub(crate) const TBTC_SIGNER_STATE_WITNESS_ROTATION_TERMINAL_RECORD_RESERVATION: usize = 6;
 const TBTC_SIGNER_STATE_WITNESS_RECORD_PREPARE: u8 = 1;
 const TBTC_SIGNER_STATE_WITNESS_RECORD_COMMIT: u8 = 2;
 const TBTC_SIGNER_STATE_WITNESS_RECORD_ABORT: u8 = 3;
@@ -7593,7 +7593,7 @@ mod witness_transcript_tests {
         spki_digest.update(response_public_key);
         let configured_spki_hash: [u8; 32] = spki_digest.finalize().into();
         std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, state_path);
-        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "6");
+        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "8");
         std::env::set_var(
             TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
             "2",
@@ -7726,7 +7726,7 @@ mod witness_transcript_tests {
         state_path: &Path,
     ) -> (VerifiedStateAnchorTrustTransition, StateWitness) {
         std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, state_path);
-        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "6");
+        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "8");
         let mut initial = StateFileLock::acquire(state_path).expect("open unanchored store");
         let tip = initial.state_witness_tip().expect("unanchored genesis tip");
         let store_fingerprint = initial.identity.fingerprint;
@@ -8449,7 +8449,7 @@ mod witness_transcript_tests {
             hex::encode(random)
         ));
         std::env::set_var(TBTC_SIGNER_STATE_PATH_ENV, &state_path);
-        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "6");
+        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "8");
         std::env::set_var(
             TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
             "2",
@@ -8634,7 +8634,7 @@ mod witness_transcript_tests {
 
     #[test]
     #[cfg(unix)]
-    fn terminal_record_reservation_allows_a_multi_snapshot_call_to_finish() {
+    fn terminal_record_reservation_allows_an_interrupted_multi_snapshot_retry_to_finish() {
         let _guard = lock_test_state();
         let mut random = [0u8; 12];
         OsRng.fill_bytes(&mut random);
@@ -8667,24 +8667,45 @@ mod witness_transcript_tests {
         );
         assert_eq!(store.witness_record_count().expect("empty segment"), 0);
 
-        // Model one FFI call that first repairs an InteractiveState
-        // persistence-pending marker, then retires the newly unprotected
-        // expired session, and finally persists its requested mutation. The
-        // first snapshot reaches the rotation threshold; the other two must
-        // be able to consume the four terminal records reserved below the
-        // hard ceiling.
+        // Model a write that begins immediately below the threshold, renames
+        // the new image, and is interrupted before COMMIT. The next state()
+        // reconciliation appends COMMIT and reaches the threshold before the
+        // retry starts its ordinary work.
+        set_persist_fault_injection_for_tests(
+            PersistFaultInjectionPoint::AfterRenameBeforeDirectorySync,
+        );
+        let interrupted = store
+            .replace_state(b"interrupted pre-retry snapshot")
+            .expect_err("fault after rename leaves PREPARE pending");
+        clear_persist_fault_injection_for_tests();
+        assert!(interrupted.replaced());
+        assert_eq!(
+            store
+                .witness_record_count()
+                .expect("interrupted PREPARE count"),
+            1
+        );
+        store
+            .reconcile_pending_witness()
+            .expect("startup reconciliation commits renamed state");
+        assert_eq!(store.witness_record_count().expect("threshold count"), 2);
+
+        // The retry repairs an InteractiveState persistence-pending marker,
+        // retires the newly unprotected expired session, and then persists its
+        // requested mutation. All three snapshots must fit after the
+        // reconciliation has already reached the threshold.
         store
             .replace_state(b"persistence-pending repair snapshot")
-            .expect("first snapshot reaches threshold");
-        assert_eq!(store.witness_record_count().expect("threshold count"), 2);
-        store
-            .replace_state(b"expired session retirement snapshot")
-            .expect("second snapshot uses the first terminal record pair");
+            .expect("first repair snapshot uses terminal reservation");
         assert_eq!(store.witness_record_count().expect("terminal count"), 4);
         store
-            .replace_state(b"requested mutation snapshot")
-            .expect("third snapshot uses the second terminal record pair");
+            .replace_state(b"expired session retirement snapshot")
+            .expect("second repair snapshot uses terminal reservation");
         assert_eq!(store.witness_record_count().expect("terminal count"), 6);
+        store
+            .replace_state(b"requested mutation snapshot")
+            .expect("requested mutation uses the final terminal record pair");
+        assert_eq!(store.witness_record_count().expect("terminal count"), 8);
         assert_eq!(
             store.read_state().expect("completed multi-snapshot state"),
             Some(b"requested mutation snapshot".to_vec())
@@ -8750,11 +8771,14 @@ mod witness_transcript_tests {
             .replace_state(b"first pre-rewrite snapshot")
             .expect("consume first terminal record pair");
         store
+            .replace_state(b"second pre-rewrite snapshot")
+            .expect("consume second terminal record pair");
+        store
             .replace_state(&legacy_bytes)
             .expect("install legacy image at the terminal record limit");
         assert_eq!(
             store.witness_record_count().expect("terminal record count"),
-            6
+            8
         );
 
         let tip = store.state_witness_tip().expect("legacy image tip");

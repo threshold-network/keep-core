@@ -219,7 +219,7 @@ pub(crate) fn configured_state_anchor() -> Result<Option<StateAnchorConfiguratio
         })?;
     if rotation_threshold_records < 2 || threshold_with_terminal > maximum_records {
         return Err(EngineError::Validation(format!(
-            "{} must be at least 2 and leave four records below {} [{}]; got [{}]",
+            "{} must be at least 2 and leave six records below {} [{}]; got [{}]",
             TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
             TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV,
             maximum_records,
@@ -1752,7 +1752,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_anchor_reserves_four_terminal_witness_records() {
+    fn configured_anchor_reserves_six_terminal_witness_records() {
         let _guard = lock_test_state();
         let signing_key = SigningKey::from_bytes(&[0x01; 32]);
         let public_key = signing_key.verifying_key().to_bytes();
@@ -1772,14 +1772,14 @@ mod tests {
             TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
             "2",
         );
-        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "5");
-        let error = configured_state_anchor().expect_err("three records are insufficient");
-        assert!(error.to_string().contains("leave four records"));
+        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "7");
+        let error = configured_state_anchor().expect_err("five records are insufficient");
+        assert!(error.to_string().contains("leave six records"));
 
-        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "6");
+        std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "8");
         assert_eq!(
             configured_state_anchor()
-                .expect("six records satisfy the configured reservation")
+                .expect("eight records satisfy the configured reservation")
                 .expect("anchor configuration")
                 .rotation_threshold_records,
             2

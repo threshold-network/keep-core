@@ -1125,7 +1125,7 @@ fn parse_endpoint(
             .is_none_or(|reserved| reserved > witness_maximum_records)
     {
         return Err(EngineError::Validation(format!(
-            "{label}.witnessRotationThresholdRecords must be at least 2 and reserve four terminal records"
+            "{label}.witnessRotationThresholdRecords must be at least 2 and reserve six terminal records"
         )));
     }
     let reference = parse_reference(&wire.reference, &format!("{label}.reference"))?;
@@ -1794,7 +1794,7 @@ pub(crate) fn bootstrap_state_anchor_trust_transition_for_tests(
         response_public_key_spki_sha256,
         offline_authority_public_key,
         offline_authority_spki_sha256,
-        witness_maximum_records: 6,
+        witness_maximum_records: 8,
         witness_rotation_threshold_records: 2,
         reference: StateAnchorTrustReferenceModel {
             service_epoch: 1,
@@ -1963,7 +1963,7 @@ pub(crate) fn bootstrap_state_anchor_trust_transition_for_tests(
         EngineError::Internal(format!("failed to encode test target Read: {error}"))
     })?;
 
-    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "6");
+    std::env::set_var(TBTC_SIGNER_STATE_WITNESS_MAX_RECORDS_ENV, "8");
     std::env::set_var(
         TBTC_SIGNER_STATE_WITNESS_ROTATION_THRESHOLD_RECORDS_ENV,
         "2",
