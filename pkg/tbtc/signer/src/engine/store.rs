@@ -24,7 +24,10 @@
 
 use super::*;
 
-use std::ffi::{CString, OsStr, OsString};
+#[cfg(unix)]
+use std::ffi::CString;
+use std::ffi::{OsStr, OsString};
+#[cfg(unix)]
 use std::io::{Seek, SeekFrom};
 
 #[cfg(unix)]
@@ -501,6 +504,7 @@ pub(crate) struct StateFileLock {
     trust_file: Option<fs::File>,
     trust_identity: Option<OpenedObjectIdentity>,
     trust_journal: Option<StateAnchorTrustJournalModel>,
+    #[cfg(unix)]
     trust_stamp: Option<FileChangeStamp>,
     trust_bytes: Option<Vec<u8>>,
     trust_intent_name: OsString,
@@ -2084,6 +2088,7 @@ impl StateFileLock {
         })
     }
 
+    #[cfg(unix)]
     pub(crate) fn state_witness_tip_snapshot(
         &mut self,
     ) -> Result<StateWitnessTipSnapshot, EngineError> {
@@ -2104,6 +2109,16 @@ impl StateFileLock {
         })
     }
 
+    #[cfg(not(unix))]
+    pub(crate) fn state_witness_tip_snapshot(
+        &mut self,
+    ) -> Result<StateWitnessTipSnapshot, EngineError> {
+        Err(EngineError::Internal(
+            "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
+        ))
+    }
+
+    #[cfg(unix)]
     pub(crate) fn state_anchor_trust_head_snapshot(
         &mut self,
     ) -> Result<StateAnchorTrustTransitionStoreOutcome, EngineError> {
@@ -2111,6 +2126,15 @@ impl StateFileLock {
         self.revalidate()?;
         self.normalize_published_pending_anchor()?;
         self.state_anchor_trust_transition_outcome(true, 0)
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn state_anchor_trust_head_snapshot(
+        &mut self,
+    ) -> Result<StateAnchorTrustTransitionStoreOutcome, EngineError> {
+        Err(EngineError::Internal(
+            "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
+        ))
     }
 
     pub(crate) fn state_anchor_bootstrap_facts_snapshot(
@@ -2303,6 +2327,16 @@ impl StateFileLock {
         self.trust_head_inspection = false;
         self.revalidate_store_entries()?;
         self.state_anchor_trust_transition_outcome(false, transition.certificates.len())
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn transition_state_witness_anchor(
+        &mut self,
+        _transition: &VerifiedStateAnchorTrustTransition,
+    ) -> Result<StateAnchorTrustTransitionStoreOutcome, EngineError> {
+        Err(EngineError::Internal(
+            "descriptor-bound durable signer storage is unavailable on this platform".to_string(),
+        ))
     }
 
     #[cfg(unix)]
