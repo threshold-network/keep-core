@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/chain"
-	"github.com/keep-network/keep-core/pkg/frost"
 	"github.com/keep-network/keep-core/pkg/frost/registry"
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
@@ -103,11 +102,11 @@ func TestReserveAndAnnounceFrostDKGReadiness_ReservesEverySelectedLocalSeat(
 			admission.activeMemberIndexes,
 		)
 	}
-	expectedPersistenceCalls := uint64(len(localMemberIndexes) + 1)
+	expectedPersistenceCalls := uint64(len(localMemberIndexes) * 2)
 	if controller.reserved.Revisions != expectedPersistenceCalls ||
 		controller.reserved.Generations != expectedPersistenceCalls {
 		t.Fatalf(
-			"DKG did not reserve every selected local seat and retirement: [%+v]",
+			"DKG did not reserve persistence and retirement for every selected local seat: [%+v]",
 			controller.reserved,
 		)
 	}
@@ -145,19 +144,12 @@ type currentFrostDKGResultTestChain struct {
 	state  DKGState
 	events []*FrostDKGResultSubmittedEvent
 	valid  bool
-
-	stateErr        error
-	registered      bool
-	registrationErr error
 }
 
 func (chain *currentFrostDKGResultTestChain) GetFrostDKGState() (
 	DKGState,
 	error,
 ) {
-	if chain.stateErr != nil {
-		return 0, chain.stateErr
-	}
 	return chain.state, nil
 }
 
@@ -171,12 +163,6 @@ func (chain *currentFrostDKGResultTestChain) IsFrostDKGResultValid(
 	*registry.Result,
 ) (bool, string, error) {
 	return chain.valid, "", nil
-}
-
-func (chain *currentFrostDKGResultTestChain) IsFrostWalletRegistered(
-	[32]byte,
-) (bool, error) {
-	return chain.registered, chain.registrationErr
 }
 
 func TestCurrentFrostDKGResultMatchesExactPendingWallet(t *testing.T) {
@@ -216,72 +202,6 @@ func TestCurrentFrostDKGResultMatchesExactPendingWallet(t *testing.T) {
 	}
 	if matches {
 		t.Fatal("a different pending wallet result was accepted")
-	}
-}
-
-func TestCanRetireFailedFrostDKGRequiresResolvedUnregisteredAttempt(
-	t *testing.T,
-) {
-	outputKey := frost.OutputKey{1}
-	testCases := map[string]struct {
-		chain         *currentFrostDKGResultTestChain
-		expected      bool
-		errorExpected bool
-	}{
-		"awaiting result": {
-			chain: &currentFrostDKGResultTestChain{
-				state: AwaitingResult,
-			},
-		},
-		"challenge": {
-			chain: &currentFrostDKGResultTestChain{
-				state: Challenge,
-			},
-		},
-		"resolved registered wallet": {
-			chain: &currentFrostDKGResultTestChain{
-				state:      Idle,
-				registered: true,
-			},
-		},
-		"resolved unregistered wallet": {
-			chain: &currentFrostDKGResultTestChain{
-				state: Idle,
-			},
-			expected: true,
-		},
-		"ambiguous state": {
-			chain: &currentFrostDKGResultTestChain{
-				stateErr: errors.New("state unavailable"),
-			},
-			errorExpected: true,
-		},
-		"ambiguous registration": {
-			chain: &currentFrostDKGResultTestChain{
-				state:           Idle,
-				registrationErr: errors.New("registration unavailable"),
-			},
-			errorExpected: true,
-		},
-	}
-
-	for name, test := range testCases {
-		t.Run(name, func(t *testing.T) {
-			actual, err := canRetireFailedFrostDKG(
-				test.chain,
-				outputKey,
-			)
-			if (err != nil) != test.errorExpected {
-				t.Fatalf("unexpected retirement proof error: [%v]", err)
-			}
-			if actual != test.expected {
-				t.Fatalf(
-					"unexpected retirement decision\nexpected: [%t]\nactual:   [%t]",
-					test.expected,
-					actual,
-				)
-			}
-		})
 	}
 }
 

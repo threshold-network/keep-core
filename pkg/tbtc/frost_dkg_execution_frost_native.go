@@ -47,11 +47,10 @@ func executeFrostDKGIfPossible(
 		)
 		return false
 	}
-	retirementEngine, ok := nativeTBTCSignerEngine.(frostsigning.NativeTBTCSignerDistributedDKGRetirementEngine)
-	if !ok {
+	if _, ok := nativeTBTCSignerEngine.(frostsigning.NativeTBTCSignerDistributedDKGRetirementEngine); !ok {
 		logger.Errorf(
 			"FROST DKG with seed [0x%x] selected this operator, but the native "+
-				"tbtc-signer engine cannot durably retire failed DKG packages",
+				"tbtc-signer engine cannot durably retire partially persisted DKG packages",
 			event.Seed,
 		)
 		return false
@@ -228,37 +227,11 @@ func executeFrostDKGIfPossible(
 			dkgLogger.Errorf("FROST DKG execution failed: [%v]", err)
 			return
 		}
-		resultRetained := false
-		defer func() {
-			if resultRetained {
-				return
-			}
-			canRetire, resolutionErr := canRetireFailedFrostDKG(
-				frostChain,
-				executionResult.outputKey,
-			)
-			if resolutionErr != nil {
-				dkgLogger.Errorf(
-					"preserving unresolved FROST DKG key packages because "+
-						"the on-chain attempt outcome could not be proven: [%v]",
-					resolutionErr,
-				)
-				return
-			}
-			if !canRetire {
-				return
-			}
-			if err := retireFailedFrostDKG(
-				retirementEngine,
-				node.walletRegistry,
-				executionResult.keyGroup,
-			); err != nil {
-				dkgLogger.Errorf(
-					"failed to retire rejected FROST DKG key packages: [%v]",
-					err,
-				)
-			}
-		}()
+		// From this point every local key package is durable. Do not retire it
+		// from any error exit below using latest-state DKG or registration reads:
+		// replicas can observe those values at different chain points. Only
+		// reconciliation rooted in finalized retained history may prove that the
+		// attempt resolved without this wallet and retire the material.
 
 		for _, localMemberIndex := range localActiveMemberIndexes {
 			if err := registerFrostSignerWithMaterial(
@@ -323,18 +296,9 @@ func executeFrostDKGIfPossible(
 			activeMemberIndexes,
 			signedResult,
 		); err != nil {
-			if errors.Is(err, errFrostDKGSubmissionOutcomeUncertain) {
-				// An Ethereum RPC may report an error after accepting the
-				// transaction. Preserve the packages while the registry still
-				// reports AwaitingResult; finalized journal reconciliation will
-				// retain an exact Challenge result or retire the packages after
-				// the attempt resolves/expires.
-				resultRetained = true
-			}
 			dkgLogger.Errorf("failed to submit FROST DKG result: [%v]", err)
 			return
 		}
-		resultRetained = true
 	}()
 
 	return true
@@ -401,7 +365,6 @@ func reserveAndAnnounceFrostDKGReadiness(
 
 type frostDKGExecutionResult struct {
 	outputKey      frost.OutputKey
-	keyGroup       string
 	signerMaterial *frostsigning.NativeSignerMaterial
 }
 
@@ -538,7 +501,6 @@ func executeDistributedFrostDKG(
 
 	return &frostDKGExecutionResult{
 		outputKey: outputKey,
-		keyGroup:  persisted.KeyGroup,
 		signerMaterial: &frostsigning.NativeSignerMaterial{
 			Format:  frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
 			Payload: payload,
@@ -921,39 +883,6 @@ func sameFrostDKGWalletResult(first, second *registry.Result) bool {
 		)
 }
 
-func canRetireFailedFrostDKG(
-	frostChain FrostDKGChain,
-	outputKey frost.OutputKey,
-) (bool, error) {
-	if frostChain == nil {
-		return false, fmt.Errorf("FROST DKG chain is nil")
-	}
-	state, err := frostChain.GetFrostDKGState()
-	if err != nil {
-		return false, fmt.Errorf("cannot read FROST DKG state: [%w]", err)
-	}
-	if state == AwaitingResult || state == Challenge {
-		return false, nil
-	}
-
-	registrationChain, ok := frostChain.(frostWalletRegistrationChain)
-	if !ok {
-		return false, fmt.Errorf(
-			"chain does not expose FROST wallet registration",
-		)
-	}
-	registered, err := registrationChain.IsFrostWalletRegistered(
-		[32]byte(outputKey),
-	)
-	if err != nil {
-		return false, fmt.Errorf(
-			"cannot check failed FROST DKG wallet registration: [%w]",
-			err,
-		)
-	}
-	return !registered, nil
-}
-
 func retirePersistedFrostDKGKeyGroups(
 	nativeEngine frostsigning.NativeTBTCSignerEngine,
 	persistBySeat map[group.MemberIndex]*frostsigning.NativeTBTCSignerDKGResult,
@@ -998,42 +927,6 @@ func retirePersistedFrostDKGKeyGroups(
 		}
 	}
 	return errors.Join(retirementErrors...)
-}
-
-func retireFailedFrostDKG(
-	retirementEngine frostsigning.NativeTBTCSignerDistributedDKGRetirementEngine,
-	walletRegistry *walletRegistry,
-	keyGroup string,
-) error {
-	if retirementEngine == nil || walletRegistry == nil || keyGroup == "" {
-		return fmt.Errorf("failed FROST DKG retirement dependencies are incomplete")
-	}
-
-	// Retire native secret packages first. If the process crashes after this
-	// durable mutation, startup reconciliation can safely repeat it and then
-	// archive the Go wallet. Archiving first would lose the identity needed to
-	// prove which native package must be removed.
-	if err := retirementEngine.RetireDistributedDKGKeyPackages(keyGroup); err != nil {
-		return fmt.Errorf("cannot retire native DKG packages: [%w]", err)
-	}
-
-	sessions, err := walletRegistry.frostLocalSessionSnapshot()
-	if err != nil {
-		return fmt.Errorf("cannot inspect local FROST sessions: [%w]", err)
-	}
-	for _, session := range sessions {
-		if session.KeyGroup != keyGroup {
-			continue
-		}
-		if err := walletRegistry.archiveWallet(session.WalletPublicKeyHash); err != nil {
-			return fmt.Errorf(
-				"cannot archive failed FROST DKG wallet [0x%x]: [%w]",
-				session.WalletID,
-				err,
-			)
-		}
-	}
-	return nil
 }
 
 func frostOutputKeyToECDSAPublicKey(

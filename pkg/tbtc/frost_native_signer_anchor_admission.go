@@ -123,10 +123,11 @@ func (controller *frostNativeSignerAnchorAdmissionController) reservePreSign(
 	)
 }
 
-// reserveDKG accounts for one request-taking persistence call per local seat
-// plus one worst-case retirement call if the persisted DKG result is rejected
-// or cannot be submitted. DKG has no interactive sweep prologue, so each call
-// advances at most one service revision and one Rust generation.
+// reserveDKG accounts for one request-taking persistence call and one
+// worst-case retirement call per local seat. Successful seats normally share
+// one key group and need one retirement, but a disagreement can produce one
+// distinct durable group per seat. DKG has no interactive sweep prologue, so
+// each call advances at most one service revision and one Rust generation.
 func (controller *frostNativeSignerAnchorAdmissionController) reserveDKG(
 	ctx context.Context,
 	localSeatCount uint64,
@@ -136,12 +137,12 @@ func (controller *frostNativeSignerAnchorAdmissionController) reserveDKG(
 			"FROST native DKG anchor admission controls no local seats",
 		)
 	}
-	if localSeatCount == ^uint64(0) {
+	if localSeatCount > ^uint64(0)/2 {
 		return nil, fmt.Errorf(
 			"FROST native DKG anchor admission seat count overflows",
 		)
 	}
-	maximumPersistenceCalls := localSeatCount + 1
+	maximumPersistenceCalls := localSeatCount * 2
 	cost := frostNativeSignerAnchorCapacity{
 		Revisions:   maximumPersistenceCalls,
 		Generations: maximumPersistenceCalls,
