@@ -1507,6 +1507,10 @@ type frostPreSignAuthorization struct {
 	VariantSequence       FrostPreSignVariantSequence
 	proposal              *FrostPreSignAuthorizationProposal
 	anchorReservation     *frostNativeSignerAnchorRevisionReservation
+
+	readinessMutex    sync.Mutex
+	readinessPoint    FrostPreSignFinality
+	readinessSnapshot *frostProductionSignerReadinessSnapshot
 }
 
 func (authorization *frostPreSignAuthorization) releaseAnchorReservation() {
@@ -1514,6 +1518,37 @@ func (authorization *frostPreSignAuthorization) releaseAnchorReservation() {
 		return
 	}
 	authorization.anchorReservation.Release()
+}
+
+func (authorization *frostPreSignAuthorization) cacheReadiness(
+	point FrostPreSignFinality,
+	snapshot *frostProductionSignerReadinessSnapshot,
+) {
+	if authorization == nil || snapshot == nil {
+		return
+	}
+	authorization.readinessMutex.Lock()
+	defer authorization.readinessMutex.Unlock()
+	authorization.readinessPoint = point
+	authorization.readinessSnapshot =
+		cloneFrostProductionSignerReadinessSnapshot(snapshot)
+}
+
+func (authorization *frostPreSignAuthorization) cachedReadiness(
+	point FrostPreSignFinality,
+) *frostProductionSignerReadinessSnapshot {
+	if authorization == nil {
+		return nil
+	}
+	authorization.readinessMutex.Lock()
+	defer authorization.readinessMutex.Unlock()
+	if authorization.readinessSnapshot == nil ||
+		authorization.readinessPoint != point {
+		return nil
+	}
+	return cloneFrostProductionSignerReadinessSnapshot(
+		authorization.readinessSnapshot,
+	)
 }
 
 type frostPreSignAuthorizationGate interface {
@@ -1620,8 +1655,8 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) authorize(
 	if err := transaction.validate(); err != nil {
 		return nil, err
 	}
-	_, readinessSnapshot, err :=
-		tfpsag.verifyCurrentProductionSignerReadiness(ctx)
+	readinessPoint, readinessSnapshot, err :=
+		tfpsag.verifyCurrentProductionSignerReadiness(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1729,6 +1764,7 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) authorize(
 		proposal:              proposal,
 		anchorReservation:     anchorReservation,
 	}
+	authorization.cacheReadiness(*readinessPoint, readinessSnapshot)
 	if err := tfpsag.revalidate(ctx, authorization); err != nil {
 		return nil, err
 	}
@@ -1741,8 +1777,8 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) revalidate(
 	ctx context.Context,
 	authorization *frostPreSignAuthorization,
 ) error {
-	currentFinality, _, err :=
-		tfpsag.verifyCurrentProductionSignerReadiness(ctx)
+	currentFinality, readinessSnapshot, err :=
+		tfpsag.verifyCurrentProductionSignerReadiness(ctx, authorization)
 	if err != nil {
 		return err
 	}
@@ -1794,9 +1830,9 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) revalidate(
 	); err != nil {
 		return err
 	}
-	if _, err := tfpsag.productionReadiness.verifyFrostProductionSignerReadiness(
+	if err := tfpsag.productionReadiness.verifyFrostProductionSignerReadinessUnchanged(
 		ctx,
-		*currentFinality,
+		readinessSnapshot,
 	); err != nil {
 		return fmt.Errorf("FROST signer readiness changed during authorization revalidation: [%w]", err)
 	}
@@ -1806,6 +1842,7 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) revalidate(
 
 func (tfpsag *thresholdFrostPreSignAuthorizationGate) verifyCurrentProductionSignerReadiness(
 	ctx context.Context,
+	authorization *frostPreSignAuthorization,
 ) (
 	*FrostPreSignFinality,
 	*frostProductionSignerReadinessSnapshot,
@@ -1834,6 +1871,21 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) verifyCurrentProductionSig
 			"invalid current FROST pre-sign finalized checkpoint",
 		)
 	}
+	if readinessSnapshot := authorization.cachedReadiness(
+		*currentFinality,
+	); readinessSnapshot != nil {
+		if err := tfpsag.productionReadiness.
+			verifyFrostProductionSignerReadinessUnchanged(
+				ctx,
+				readinessSnapshot,
+			); err != nil {
+			return nil, nil, fmt.Errorf(
+				"cached FROST production signer readiness changed: [%w]",
+				err,
+			)
+		}
+		return currentFinality, readinessSnapshot, nil
+	}
 	readinessSnapshot, err :=
 		tfpsag.productionReadiness.verifyFrostProductionSignerReadiness(
 			ctx,
@@ -1850,6 +1902,7 @@ func (tfpsag *thresholdFrostPreSignAuthorizationGate) verifyCurrentProductionSig
 			"FROST production signer readiness snapshot is nil",
 		)
 	}
+	authorization.cacheReadiness(*currentFinality, readinessSnapshot)
 	return currentFinality, readinessSnapshot, nil
 }
 

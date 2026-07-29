@@ -358,7 +358,9 @@ const defaultFrostAuthorizationMonitorInterval = time.Second
 // frostPreSignAuthorizationMonitor keeps the pinned Ethereum authorization
 // live for the entire native signing window. All explicit nonce/share guards
 // and the periodic monitor serialize through validationMutex so a backend never
-// observes overlapping reads for one authorization.
+// observes overlapping reads for one authorization. Production revalidation
+// polls the current finalized point on every pass but reuses the authorization's
+// cached signer-readiness reconciliation while that exact point is unchanged.
 type frostPreSignAuthorizationMonitor struct {
 	gate          frostPreSignAuthorizationGate
 	authorization *frostPreSignAuthorization

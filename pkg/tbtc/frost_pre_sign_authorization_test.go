@@ -20,10 +20,12 @@ import (
 )
 
 type testFrostProductionAuthorizationReadiness struct {
-	err       error
-	calls     uint64
-	points    []FrostPreSignFinality
-	headrooms []uint64
+	err            error
+	unchangedErr   error
+	calls          uint64
+	unchangedCalls uint64
+	points         []FrostPreSignFinality
+	headrooms      []uint64
 }
 
 func (readiness *testFrostProductionAuthorizationReadiness) verifyFrostProductionSignerReadiness(
@@ -44,6 +46,14 @@ func (readiness *testFrostProductionAuthorizationReadiness) verifyFrostProductio
 		headroom = readiness.headrooms[index]
 	}
 	return testFrostAnchorAdmissionReadinessSnapshot(headroom, headroom), nil
+}
+
+func (readiness *testFrostProductionAuthorizationReadiness) verifyFrostProductionSignerReadinessUnchanged(
+	_ context.Context,
+	_ *frostProductionSignerReadinessSnapshot,
+) error {
+	readiness.unchangedCalls++
+	return readiness.unchangedErr
 }
 
 func testFrostPreSignTransaction(
@@ -321,6 +331,94 @@ func TestThresholdFrostPreSignAuthorizationGate_RefusesUnreadyInteractiveSigner(
 				t.Fatalf("revalidation readiness called [%d] total times", readiness.calls)
 			}
 		})
+	}
+}
+
+func TestThresholdFrostPreSignAuthorizationGate_ReusesReadinessAtUnchangedFinality(
+	t *testing.T,
+) {
+	unsignedTx, _ := buildTaprootKeyPathUnsignedTxForTest(t)
+	transaction := testFrostPreSignTransaction(t, unsignedTx)
+	proposal := completeTestFrostPreSignProposal(transaction)
+	relayFinality := FrostPreSignFinality{
+		RelayTransactionHash:  [32]byte{0x71},
+		BlockNumber:           100,
+		BlockHash:             [32]byte{0x72},
+		AuthorizationSequence: [32]byte{31: 1},
+	}
+	currentFinality := FrostPreSignFinality{
+		BlockNumber: 101,
+		BlockHash:   [32]byte{0x73},
+	}
+	laterFinality := FrostPreSignFinality{
+		BlockNumber: 102,
+		BlockHash:   [32]byte{0x74},
+	}
+	backend := &testFrostPreSignAuthorizationBackend{
+		currentFinality: &currentFinality,
+		states: map[uint64]*FrostPreSignAuthorizationState{
+			relayFinality.BlockNumber: completeTestFrostPreSignState(
+				proposal,
+				relayFinality,
+			),
+			currentFinality.BlockNumber: completeTestFrostPreSignState(
+				proposal,
+				currentFinality,
+			),
+			laterFinality.BlockNumber: completeTestFrostPreSignState(
+				proposal,
+				laterFinality,
+			),
+		},
+	}
+	readiness := &testFrostProductionAuthorizationReadiness{}
+	gate := &thresholdFrostPreSignAuthorizationGate{
+		backend:             backend,
+		activationProfile:   activationProfileForTestProposal(proposal),
+		storeBinding:        testFrostDurableSessionStoreBinding(t),
+		productionReadiness: readiness,
+	}
+	authorization := &frostPreSignAuthorization{
+		ActivationProfileHash: gate.activationProfile.ProfileHash,
+		AuthorizationID:       proposal.Digest,
+		ReservationID:         proposal.ReservationID,
+		VariantRoot:           proposal.AuthorizationRoot,
+		TransactionHash:       proposal.Transaction.TransactionHash,
+		Finality:              relayFinality,
+		VariantSequence:       frostPreSignVariantSequence(relayFinality),
+		proposal:              proposal,
+	}
+
+	if err := gate.revalidate(context.Background(), authorization); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.revalidate(context.Background(), authorization); err != nil {
+		t.Fatal(err)
+	}
+	if readiness.calls != 1 || readiness.unchangedCalls != 3 {
+		t.Fatalf(
+			"unchanged finality repeated full readiness reconciliation: full [%d], unchanged [%d]",
+			readiness.calls,
+			readiness.unchangedCalls,
+		)
+	}
+
+	backend.currentFinality = &laterFinality
+	if err := gate.revalidate(context.Background(), authorization); err != nil {
+		t.Fatal(err)
+	}
+	if readiness.calls != 2 || readiness.unchangedCalls != 4 {
+		t.Fatalf(
+			"new finality did not refresh exactly one readiness reconciliation: full [%d], unchanged [%d]",
+			readiness.calls,
+			readiness.unchangedCalls,
+		)
+	}
+	if backend.currentFinalityCalls != 3 {
+		t.Fatalf(
+			"revalidation did not poll finalized point on every pass: [%d]",
+			backend.currentFinalityCalls,
+		)
 	}
 }
 
@@ -1076,9 +1174,10 @@ func (cfpscs *countingFrostPreSignChainSigning) Sign(message []byte) ([]byte, er
 }
 
 type testFrostPreSignAuthorizationBackend struct {
-	proposal        *FrostPreSignAuthorizationProposal
-	currentFinality *FrostPreSignFinality
-	states          map[uint64]*FrostPreSignAuthorizationState
+	proposal             *FrostPreSignAuthorizationProposal
+	currentFinality      *FrostPreSignFinality
+	currentFinalityCalls uint64
+	states               map[uint64]*FrostPreSignAuthorizationState
 }
 
 func (tfpsab *testFrostPreSignAuthorizationBackend) PrepareFrostPreSignAuthorization(
@@ -1108,6 +1207,7 @@ func (tfpsab *testFrostPreSignAuthorizationBackend) WaitForFrostPreSignAuthoriza
 func (tfpsab *testFrostPreSignAuthorizationBackend) CurrentFrostPreSignFinality(
 	ctx context.Context,
 ) (*FrostPreSignFinality, error) {
+	tfpsab.currentFinalityCalls++
 	if tfpsab.currentFinality == nil {
 		return nil, nil
 	}

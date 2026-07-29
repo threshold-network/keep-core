@@ -320,6 +320,39 @@ type frostProductionSignerReadinessVerifier interface {
 		context.Context,
 		FrostPreSignFinality,
 	) (*frostProductionSignerReadinessSnapshot, error)
+	verifyFrostProductionSignerReadinessUnchanged(
+		context.Context,
+		*frostProductionSignerReadinessSnapshot,
+	) error
+}
+
+func cloneFrostProductionSignerReadinessSnapshot(
+	snapshot *frostProductionSignerReadinessSnapshot,
+) *frostProductionSignerReadinessSnapshot {
+	if snapshot == nil {
+		return nil
+	}
+	result := *snapshot
+	if snapshot.Journal != nil {
+		journal := *snapshot.Journal
+		result.Journal = &journal
+	}
+	if snapshot.Inventory != nil {
+		inventory := *snapshot.Inventory
+		result.Inventory = &inventory
+	}
+	result.inventoryExpectations = make(
+		[]frostNativeSignerInventoryExpectation,
+		len(snapshot.inventoryExpectations),
+	)
+	for i, expectation := range snapshot.inventoryExpectations {
+		result.inventoryExpectations[i] = expectation
+		result.inventoryExpectations[i].ParticipantSeats = append(
+			[]uint16{},
+			expectation.ParticipantSeats...,
+		)
+	}
+	return &result
 }
 
 type frostProductionSignerReadiness struct {
