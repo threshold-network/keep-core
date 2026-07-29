@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/hex"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/keep-network/keep-core/pkg/chain"
@@ -14,6 +15,108 @@ import (
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
 	"github.com/keep-network/keep-core/pkg/protocol/group"
 )
+
+func TestReserveAndAnnounceFrostDKGReadiness_AdmissionFailureDoesNotAnnounce(
+	t *testing.T,
+) {
+	controller := &frostNativeSignerAnchorAdmissionController{
+		readHeadroom: func(
+			context.Context,
+		) (frostNativeSignerAnchorCapacity, error) {
+			return frostNativeSignerAnchorCapacity{
+				Revisions: FrostNativeSignerAnchorRotationWarningHeadroom + 1,
+				Generations: FrostNativeSignerAnchorRotationWarningHeadroom +
+					1,
+			}, nil
+		},
+		reserved: frostNativeSignerAnchorCapacity{
+			Revisions:   FrostNativeSignerAnchorRotationWarningHeadroom,
+			Generations: FrostNativeSignerAnchorRotationWarningHeadroom,
+		},
+	}
+	announced := false
+
+	admission, err := reserveAndAnnounceFrostDKGReadiness(
+		context.Background(),
+		controller,
+		[]group.MemberIndex{1, 2},
+		func() (
+			[]group.MemberIndex,
+			registry.MisbehavedMemberIndices,
+			error,
+		) {
+			announced = true
+			return nil, nil, nil
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "unreserved") {
+		t.Fatalf("unexpected DKG admission result: [%v]", err)
+	}
+	if admission != nil {
+		t.Fatal("failed DKG admission returned a reservation")
+	}
+	if announced {
+		t.Fatal("DKG readiness was announced after admission failed")
+	}
+}
+
+func TestReserveAndAnnounceFrostDKGReadiness_ReservesEverySelectedLocalSeat(
+	t *testing.T,
+) {
+	controller := &frostNativeSignerAnchorAdmissionController{
+		readHeadroom: func(
+			context.Context,
+		) (frostNativeSignerAnchorCapacity, error) {
+			return frostNativeSignerAnchorCapacity{
+				Revisions: FrostNativeSignerAnchorRotationWarningHeadroom + 10,
+				Generations: FrostNativeSignerAnchorRotationWarningHeadroom +
+					10,
+			}, nil
+		},
+	}
+	localMemberIndexes := []group.MemberIndex{2, 4, 6}
+
+	admission, err :=
+		reserveAndAnnounceFrostDKGReadiness(
+			context.Background(),
+			controller,
+			localMemberIndexes,
+			func() (
+				[]group.MemberIndex,
+				registry.MisbehavedMemberIndices,
+				error,
+			) {
+				return []group.MemberIndex{1, 2}, nil, nil
+			},
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admission == nil || admission.anchorReservation == nil {
+		t.Fatal("successful DKG admission returned no reservation")
+	}
+	if len(admission.activeMemberIndexes) != 2 {
+		t.Fatalf(
+			"unexpected active member indexes: [%v]",
+			admission.activeMemberIndexes,
+		)
+	}
+	if controller.reserved.Revisions != uint64(len(localMemberIndexes)) ||
+		controller.reserved.Generations != uint64(len(localMemberIndexes)) {
+		t.Fatalf(
+			"DKG did not reserve every selected local seat: [%+v]",
+			controller.reserved,
+		)
+	}
+
+	admission.anchorReservation.Release()
+	if controller.reserved != (frostNativeSignerAnchorCapacity{}) {
+		t.Fatalf(
+			"released DKG reservation remained charged: [%+v]",
+			controller.reserved,
+		)
+	}
+}
 
 func TestExecuteFrostDKGIfPossible_RequiresRoastRetryReadiness(t *testing.T) {
 	t.Setenv(frostsigning.InteractiveSigningOptInEnvVar, "true")
