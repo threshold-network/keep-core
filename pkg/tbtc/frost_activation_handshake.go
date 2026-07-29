@@ -1161,25 +1161,38 @@ func (fahe *frostActivationHandshakeExporter) attest(
 			err,
 		)
 	}
-	if !fahe.journal.mutex.TryLock() {
-		return nil, fmt.Errorf(
-			"%w: %v",
-			errFrostActivationReconciliationPending,
-			errFrostActivationJournalBusy,
-		)
-	}
-	signingStamp, stampErr := fahe.journalStampLocked()
-	if stampErr != nil || signingStamp != reconciliation.stamp ||
-		!fahe.journal.checkpointDescendsFrom(checkpointFloor) {
-		fahe.journal.mutex.Unlock()
+	var signature []byte
+	journalChanged := false
+	err = fahe.outbox.withUnchangedActivationSnapshot(
+		outboxSnapshot,
+		func() error {
+			if !fahe.journal.mutex.TryLock() {
+				return fmt.Errorf(
+					"%w: %v",
+					errFrostActivationReconciliationPending,
+					errFrostActivationJournalBusy,
+				)
+			}
+			defer fahe.journal.mutex.Unlock()
+			signingStamp, stampErr := fahe.journalStampLocked()
+			if stampErr != nil || signingStamp != reconciliation.stamp ||
+				!fahe.journal.checkpointDescendsFrom(checkpointFloor) {
+				journalChanged = true
+				return fmt.Errorf(
+					"%w: canonical or quarantine journal generation changed before signing",
+					errFrostActivationReconciliationPending,
+				)
+			}
+			signature = ed25519.Sign(fahe.privateKey, signatureTranscript)
+			return nil
+		},
+	)
+	if journalChanged {
 		fahe.queueReconciliation(finality, true)
-		return nil, fmt.Errorf(
-			"%w: canonical or quarantine journal generation changed before signing",
-			errFrostActivationReconciliationPending,
-		)
 	}
-	signature := ed25519.Sign(fahe.privateKey, signatureTranscript)
-	fahe.journal.mutex.Unlock()
+	if err != nil {
+		return nil, err
+	}
 	return &frostActivationSignedHandshake{
 		Payload:             payload,
 		SignerPublicKeySPKI: fahe.publicKeySPKI,

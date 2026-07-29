@@ -677,6 +677,33 @@ func (bbo *bitcoinBroadcastOutbox) activationSnapshot() (
 		return bitcoinBroadcastOutboxActivationSnapshot{},
 			fmt.Errorf("Bitcoin broadcast outbox is closed")
 	}
+	return bbo.activationSnapshotLocked(), nil
+}
+
+// withUnchangedActivationSnapshot serializes the final activation-state check
+// and the operation it authorizes with every outbox mutation. Callers must
+// keep operation short and must not call another method that acquires mutex.
+func (bbo *bitcoinBroadcastOutbox) withUnchangedActivationSnapshot(
+	expected bitcoinBroadcastOutboxActivationSnapshot,
+	operation func() error,
+) error {
+	if operation == nil {
+		return fmt.Errorf("Bitcoin broadcast outbox activation operation is nil")
+	}
+	bbo.mutex.Lock()
+	defer bbo.mutex.Unlock()
+	if bbo.closed {
+		return fmt.Errorf("Bitcoin broadcast outbox is closed")
+	}
+	if bbo.activationSnapshotLocked() != expected {
+		return fmt.Errorf(
+			"Bitcoin broadcast outbox activation state changed before signing",
+		)
+	}
+	return operation()
+}
+
+func (bbo *bitcoinBroadcastOutbox) activationSnapshotLocked() bitcoinBroadcastOutboxActivationSnapshot {
 	type reservationState struct {
 		pending          bool
 		confirmedVariant bitcoin.Hash
@@ -716,7 +743,7 @@ func (bbo *bitcoinBroadcastOutbox) activationSnapshot() (
 			snapshot.AmbiguousReservationCount++
 		}
 	}
-	return snapshot, nil
+	return snapshot
 }
 
 // replayOnce is the test/internal synchronous entry point.

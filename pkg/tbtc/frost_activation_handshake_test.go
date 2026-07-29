@@ -272,12 +272,15 @@ type testFrostRetainedGroupHistorySource struct {
 }
 
 type testFrostProductionSignerReadiness struct {
-	mutex       sync.Mutex
-	journal     *frostRetainedGroupJournal
-	interactive bool
-	err         error
-	calls       uint64
-	inventory   frostNativeSignerInventorySnapshot
+	mutex            sync.Mutex
+	journal          *frostRetainedGroupJournal
+	interactive      bool
+	err              error
+	calls            uint64
+	inventory        frostNativeSignerInventorySnapshot
+	unchangedStarted chan struct{}
+	unchangedRelease <-chan struct{}
+	unchangedOnce    sync.Once
 }
 
 func testFrostProductionSignerInventorySnapshot() frostNativeSignerInventorySnapshot {
@@ -334,6 +337,16 @@ func (readiness *testFrostProductionSignerReadiness) setInventory(
 	readiness.inventory = inventory
 }
 
+func (readiness *testFrostProductionSignerReadiness) blockUnchangedVerification(
+	started chan struct{},
+	release <-chan struct{},
+) {
+	readiness.mutex.Lock()
+	defer readiness.mutex.Unlock()
+	readiness.unchangedStarted = started
+	readiness.unchangedRelease = release
+}
+
 func (readiness *testFrostProductionSignerReadiness) verifyFrostProductionSignerReadiness(
 	ctx context.Context,
 	point FrostPreSignFinality,
@@ -363,6 +376,22 @@ func (readiness *testFrostProductionSignerReadiness) verifyFrostProductionSigner
 	if ctx == nil || expected == nil || expected.Inventory == nil ||
 		!expected.InteractiveSigningReady {
 		return fmt.Errorf("cached signer readiness is incomplete")
+	}
+	readiness.mutex.Lock()
+	unchangedStarted := readiness.unchangedStarted
+	unchangedRelease := readiness.unchangedRelease
+	readiness.mutex.Unlock()
+	if unchangedStarted != nil {
+		readiness.unchangedOnce.Do(func() {
+			close(unchangedStarted)
+		})
+	}
+	if unchangedRelease != nil {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-unchangedRelease:
+		}
 	}
 	interactive, readinessErr, inventory := readiness.snapshot()
 	if readinessErr != nil {
@@ -899,6 +928,123 @@ func TestFrostActivationHandshakeExporter_RevalidatesNativeSignerStateBeforeSign
 					"reconciled attestation did not use the current native anchor: %+v",
 					handshake.Payload.State.NativeSignerState,
 				)
+			}
+		})
+	}
+}
+
+func TestFrostActivationHandshakeExporter_RevalidatesOutboxStateBeforeSigning(
+	t *testing.T,
+) {
+	testCases := map[string]func(*bitcoinBroadcastOutbox){
+		"quarantine": func(outbox *bitcoinBroadcastOutbox) {
+			transactionHash := bitcoin.Hash{0x91}
+			outbox.records[transactionHash] = &bitcoinBroadcastOutboxRecord{
+				TransactionHash: transactionHash,
+				Authorization: bitcoinBroadcastAuthorization{
+					ReservationID: [32]byte{0x92},
+				},
+				Quarantine: &bitcoinBroadcastQuarantine{},
+			}
+		},
+		"ambiguous reservation": func(outbox *bitcoinBroadcastOutbox) {
+			reservationID := [32]byte{0xa1}
+			for _, transactionHash := range []bitcoin.Hash{
+				{0xa2},
+				{0xa3},
+			} {
+				outbox.records[transactionHash] = &bitcoinBroadcastOutboxRecord{
+					TransactionHash: transactionHash,
+					Authorization: bitcoinBroadcastAuthorization{
+						ReservationID: reservationID,
+					},
+					Confirmation: &bitcoinBroadcastConfirmation{
+						Canonical: true,
+					},
+				}
+			}
+		},
+	}
+
+	for name, mutate := range testCases {
+		t.Run(name, func(t *testing.T) {
+			point := frostActivationEthereumPoint{
+				BlockNumber: 123,
+				BlockHash:   frostActivationHex32([32]byte{0x44}),
+			}
+			exporter, _, _, _, endpoint, request :=
+				startTestFrostActivationHandshakeExporter(t, point)
+			readiness, ok :=
+				exporter.readiness.(*testFrostProductionSignerReadiness)
+			if !ok {
+				t.Fatal("unexpected production signer readiness verifier")
+			}
+
+			response := postTestFrostActivationHandshake(t, endpoint, request)
+			response.Body.Close()
+			response = awaitTestFrostActivationHandshake(
+				t,
+				endpoint,
+				request,
+				http.StatusOK,
+			)
+			response.Body.Close()
+
+			unchangedStarted := make(chan struct{})
+			unchangedRelease := make(chan struct{})
+			readiness.blockUnchangedVerification(
+				unchangedStarted,
+				unchangedRelease,
+			)
+			type attestationResult struct {
+				handshake *frostActivationSignedHandshake
+				err       error
+			}
+			result := make(chan attestationResult, 1)
+			go func() {
+				handshake, err := exporter.attest(
+					context.Background(),
+					&request,
+				)
+				result <- attestationResult{handshake: handshake, err: err}
+			}()
+
+			select {
+			case <-unchangedStarted:
+			case <-time.After(time.Second):
+				t.Fatal("signing-boundary readiness verification did not start")
+			}
+			exporter.outbox.mutex.Lock()
+			mutate(exporter.outbox)
+			exporter.outbox.mutex.Unlock()
+			close(unchangedRelease)
+
+			var obsolete attestationResult
+			select {
+			case obsolete = <-result:
+			case <-time.After(time.Second):
+				t.Fatal("activation attestation did not complete")
+			}
+			if obsolete.err == nil || obsolete.handshake != nil {
+				t.Fatal("activation signed state from an obsolete outbox snapshot")
+			}
+			if !strings.Contains(
+				obsolete.err.Error(),
+				"outbox activation state changed before signing",
+			) {
+				t.Fatalf("unexpected obsolete outbox error: [%v]", obsolete.err)
+			}
+
+			exporter.outbox.mutex.Lock()
+			exporter.outbox.records =
+				make(map[bitcoin.Hash]*bitcoinBroadcastOutboxRecord)
+			exporter.outbox.mutex.Unlock()
+			handshake, err := exporter.attest(context.Background(), &request)
+			if err != nil {
+				t.Fatalf("healthy outbox did not recover signing: [%v]", err)
+			}
+			if handshake == nil || !handshake.Payload.State.Healthy {
+				t.Fatal("healthy stable outbox did not produce a healthy attestation")
 			}
 		})
 	}
