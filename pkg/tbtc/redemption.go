@@ -3,6 +3,7 @@ package tbtc
 import (
 	"crypto/ecdsa"
 	"fmt"
+	"math"
 	"math/big"
 	"time"
 
@@ -249,6 +250,27 @@ func (ra *redemptionAction) execute() error {
 			"error while assembling redemption transaction: [%v]",
 			err,
 		)
+	}
+
+	_, _, _, txMaxTotalFee, _, _, _, err :=
+		ra.chain.GetRedemptionParameters()
+	if err != nil {
+		if ra.metricsRecorder != nil {
+			ra.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionExecutionsFailedTotal, 1)
+		}
+		return fmt.Errorf(
+			"error while obtaining redemption parameters: [%v]",
+			err,
+		)
+	}
+	if err := validateRedemptionTransactionTotalFee(
+		unsignedRedemptionTx,
+		txMaxTotalFee,
+	); err != nil {
+		if ra.metricsRecorder != nil {
+			ra.metricsRecorder.IncrementCounter(clientinfo.MetricRedemptionExecutionsFailedTotal, 1)
+		}
+		return fmt.Errorf("invalid redemption transaction fee: [%v]", err)
 	}
 
 	signTxLogger := ra.logger.With(
@@ -547,13 +569,17 @@ func assembleRedemptionTransaction(
 			PublicKeyScript: changeOutputScript,
 		}
 
-		switch resolvedShape {
-		case RedemptionChangeFirst:
-			outputs = append([]*bitcoin.TransactionOutput{changeOutput}, outputs...)
-		case RedemptionChangeLast:
-			outputs = append(outputs, changeOutput)
-		default:
-			panic("unknown redemption transaction shape")
+		// A sub-dust change output is not relayable under Bitcoin Core's
+		// standard policy. Omit it and let its value become additional fee.
+		if !bitcoin.IsDustOutput(changeOutput) {
+			switch resolvedShape {
+			case RedemptionChangeFirst:
+				outputs = append([]*bitcoin.TransactionOutput{changeOutput}, outputs...)
+			case RedemptionChangeLast:
+				outputs = append(outputs, changeOutput)
+			default:
+				panic("unknown redemption transaction shape")
+			}
 		}
 	}
 
@@ -563,4 +589,41 @@ func assembleRedemptionTransaction(
 	}
 
 	return builder, nil
+}
+
+func validateRedemptionTransactionTotalFee(
+	builder *bitcoin.TransactionBuilder,
+	maxTotalFee uint64,
+) error {
+	if builder == nil {
+		return fmt.Errorf("redemption transaction builder is nil")
+	}
+
+	totalOutputsValue := int64(0)
+	for index, output := range builder.UnsignedTransaction().Outputs {
+		if output == nil || output.Value < 0 {
+			return fmt.Errorf(
+				"redemption transaction output [%d] has invalid value",
+				index,
+			)
+		}
+		if output.Value > math.MaxInt64-totalOutputsValue {
+			return fmt.Errorf("redemption transaction output value overflows")
+		}
+		totalOutputsValue += output.Value
+	}
+
+	actualFee := builder.TotalInputsValue() - totalOutputsValue
+	if actualFee < 0 {
+		return fmt.Errorf("redemption transaction fee is negative")
+	}
+	if uint64(actualFee) > maxTotalFee {
+		return fmt.Errorf(
+			"redemption transaction total fee [%d] exceeds maximum [%d]",
+			actualFee,
+			maxTotalFee,
+		)
+	}
+
+	return nil
 }

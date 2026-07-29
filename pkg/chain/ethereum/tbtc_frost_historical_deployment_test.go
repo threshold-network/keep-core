@@ -10,7 +10,10 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
+	commonethereum "github.com/keep-network/keep-common/pkg/chain/ethereum"
+	"github.com/keep-network/keep-common/pkg/rate"
 	"github.com/keep-network/keep-core/pkg/tbtc"
 )
 
@@ -242,5 +245,53 @@ func TestFrostPreSignCanonicalHashReader_RequiresCanonicalEIP1898State(
 			!point.RequireCanonical || point.BlockNumber != nil {
 			t.Fatalf("state read did not require canonical hash [%+v]", point)
 		}
+	}
+}
+
+func TestFrostPreSignExactHashReader_WrappedProductionClient(t *testing.T) {
+	server := rpc.NewServer()
+	api := &testFrostCanonicalRPCAPI{}
+	if err := server.RegisterName("eth", api); err != nil {
+		t.Fatal(err)
+	}
+	rpcClient := rpc.DialInProc(server)
+	defer rpcClient.Close()
+	client := ethclient.NewClient(rpcClient)
+
+	config := commonethereum.Config{
+		RequestsPerSecondLimit: 10,
+		ConcurrencyLimit:       2,
+	}
+	chain := &baseChain{
+		client:    wrapClientAddons(config, client),
+		rpcClient: client.Client(),
+		rpcLimiter: rate.NewLimiter(&rate.LimiterConfig{
+			RequestsPerSecondLimit: config.RequestsPerSecondLimit,
+			ConcurrencyLimit:       config.ConcurrencyLimit,
+		}),
+	}
+	adapter := &frostPreSignEthereumAdapter{
+		chain: &TbtcChain{baseChain: chain},
+	}
+
+	reader, err := adapter.exactHashReader()
+	if err != nil {
+		t.Fatalf("wrapped production client rejected: %v", err)
+	}
+	blockHash := common.HexToHash("0x1234")
+	address := common.HexToAddress(
+		"0x1111111111111111111111111111111111111111",
+	)
+	if _, err := reader.CodeAtHash(
+		context.Background(),
+		address,
+		blockHash,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.points) != 1 || api.points[0].BlockHash == nil ||
+		*api.points[0].BlockHash != blockHash ||
+		!api.points[0].RequireCanonical {
+		t.Fatalf("unexpected exact-hash RPC point [%+v]", api.points)
 	}
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ipfs/go-log"
 
 	"github.com/keep-network/keep-common/pkg/chain/ethereum"
@@ -34,9 +35,11 @@ var logger = log.Logger("keep-ethereum")
 // provides the implementation of generic features like balance monitor,
 // block counter and similar.
 type baseChain struct {
-	key     *keystore.Key
-	client  ethutil.EthereumClient
-	chainID *big.Int
+	key        *keystore.Key
+	client     ethutil.EthereumClient
+	rpcClient  *rpc.Client
+	rpcLimiter *rate.Limiter
+	chainID    *big.Int
 
 	blockCounter *ethereum.BlockCounter
 	nonceManager *ethereum.NonceManager
@@ -247,6 +250,10 @@ func newBaseChain(
 	}
 
 	clientWithAddons := wrapClientAddons(config, client)
+	rpcLimiter := rate.NewLimiter(&rate.LimiterConfig{
+		RequestsPerSecondLimit: config.RequestsPerSecondLimit,
+		ConcurrencyLimit:       config.ConcurrencyLimit,
+	})
 
 	blockCounter, err := ethutil.NewBlockCounter(clientWithAddons)
 	if err != nil {
@@ -297,6 +304,8 @@ func newBaseChain(
 	return &baseChain{
 		key:              key,
 		client:           clientWithAddons,
+		rpcClient:        client.Client(),
+		rpcLimiter:       rpcLimiter,
 		chainID:          chainID,
 		blockCounter:     blockCounter,
 		nonceManager:     nonceManager,

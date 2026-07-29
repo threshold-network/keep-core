@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/keep-network/keep-core/pkg/bitcoin"
+	"golang.org/x/sys/unix"
 )
 
 var (
@@ -64,6 +66,20 @@ func TestBitcoinBroadcastOutbox_PersistsAndRestoresFullRecord(t *testing.T) {
 	}
 	if string(record.RawTransaction) != string(tx.Serialize(bitcoin.Witness)) {
 		t.Fatal("restored raw transaction differs")
+	}
+}
+
+func TestBitcoinBroadcastOutbox_RejectsFIFORecordWithoutBlocking(t *testing.T) {
+	directory := t.TempDir()
+	name := strings.Repeat("01", 32) + bitcoinBroadcastOutboxFileSuffix
+	if err := unix.Mkfifo(filepath.Join(directory, name), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newTestBitcoinBroadcastOutbox(
+		directory,
+		newOutboxTestBitcoinChain(),
+	); err == nil {
+		t.Fatal("FIFO Bitcoin outbox record was accepted")
 	}
 }
 
@@ -600,6 +616,86 @@ func TestBitcoinBroadcastOutbox_ReplaysLatestVariantAndRecoversFromReorg(t *test
 	}
 	if chain.broadcastCount(newVariant.Hash()) != confirmedBroadcasts+2 {
 		t.Fatal("reorg recovery did not remain active after restart")
+	}
+}
+
+func TestBitcoinBroadcastOutbox_ReplayIsolatesCandidateFailures(t *testing.T) {
+	chain := newOutboxTestBitcoinChain()
+	statusSource := newOutboxTestAuthorizationStatusSource()
+	outbox := openTestBitcoinBroadcastOutboxWithStatusSource(
+		t,
+		t.TempDir(),
+		chain,
+		statusSource,
+	)
+	defer outbox.close()
+
+	failing := testOutboxTransaction(31, 7000)
+	healthy := testOutboxTransaction(32, 7000)
+	enqueueTestBitcoinTransaction(
+		t,
+		outbox,
+		failing,
+		testBitcoinBroadcastAuthorization(31, 1, 1),
+	)
+	enqueueTestBitcoinTransaction(
+		t,
+		outbox,
+		healthy,
+		testBitcoinBroadcastAuthorization(32, 2, 1),
+	)
+	statusSource.setTransactionError(
+		failing.Hash(),
+		errors.New("historical state unavailable"),
+	)
+
+	if err := outbox.replayOnce(); err == nil ||
+		!strings.Contains(err.Error(), "historical state unavailable") {
+		t.Fatalf("unexpected replay result: [%v]", err)
+	}
+	if chain.broadcastCount(failing.Hash()) != 0 {
+		t.Fatal("failing candidate reached broadcast")
+	}
+	if chain.broadcastCount(healthy.Hash()) != 1 {
+		t.Fatal("candidate after a failing record was starved")
+	}
+}
+
+func TestBitcoinBroadcastOutbox_StartRetriesTransientCandidateFailure(
+	t *testing.T,
+) {
+	chain := newOutboxTestBitcoinChain()
+	statusSource := newOutboxTestAuthorizationStatusSource()
+	outbox := openTestBitcoinBroadcastOutboxWithStatusSource(
+		t,
+		t.TempDir(),
+		chain,
+		statusSource,
+	)
+	defer outbox.close()
+	transaction := testOutboxTransaction(33, 7000)
+	enqueueTestBitcoinTransaction(
+		t,
+		outbox,
+		transaction,
+		testBitcoinBroadcastAuthorization(33, 3, 1),
+	)
+	statusSource.setTransactionError(
+		transaction.Hash(),
+		errors.New("provider temporarily unavailable"),
+	)
+	contextValue, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := outbox.start(contextValue); err != nil {
+		t.Fatalf("transient first-pass failure stopped outbox: [%v]", err)
+	}
+	snapshot, err := outbox.activationSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Recovered || snapshot.PendingReservationCount != 1 {
+		t.Fatalf("unexpected recovery snapshot: [%+v]", snapshot)
 	}
 }
 
@@ -1252,6 +1348,7 @@ type outboxTestBitcoinChain struct {
 type outboxTestAuthorizationStatusSource struct {
 	mutex            sync.Mutex
 	err              error
+	transactionErrs  map[bitcoin.Hash]error
 	canonical        bool
 	broadcastAllowed bool
 	calls            int
@@ -1262,6 +1359,7 @@ func newOutboxTestAuthorizationStatusSource() *outboxTestAuthorizationStatusSour
 	return &outboxTestAuthorizationStatusSource{
 		canonical:        true,
 		broadcastAllowed: true,
+		transactionErrs:  make(map[bitcoin.Hash]error),
 	}
 }
 
@@ -1281,11 +1379,23 @@ func (otass *outboxTestAuthorizationStatusSource) GetCanonicalFrostBitcoinBroadc
 	if otass.err != nil {
 		return nil, otass.err
 	}
+	if err := otass.transactionErrs[request.TransactionHash]; err != nil {
+		return nil, err
+	}
 	return &FrostBitcoinBroadcastAuthorizationStatus{
 		RequestHash:      request.ComputeHash(),
 		Canonical:        otass.canonical,
 		BroadcastAllowed: otass.broadcastAllowed,
 	}, nil
+}
+
+func (otass *outboxTestAuthorizationStatusSource) setTransactionError(
+	hash bitcoin.Hash,
+	err error,
+) {
+	otass.mutex.Lock()
+	defer otass.mutex.Unlock()
+	otass.transactionErrs[hash] = err
 }
 
 func (otass *outboxTestAuthorizationStatusSource) setBroadcastAllowed(

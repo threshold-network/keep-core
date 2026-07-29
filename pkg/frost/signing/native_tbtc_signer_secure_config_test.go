@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestReadSecureNativeTBTCSignerInitConfig(t *testing.T) {
@@ -55,6 +57,16 @@ func TestReadSecureNativeTBTCSignerInitConfigRejectsUnsafeFiles(t *testing.T) {
 		}
 		if _, err := readSecureNativeTBTCSignerInitConfig(path); err == nil {
 			t.Fatal("directory native signer init config was accepted")
+		}
+	})
+
+	t.Run("fifo", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "signer-config.json")
+		if err := unix.Mkfifo(path, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readSecureNativeTBTCSignerInitConfig(path); err == nil {
+			t.Fatal("FIFO native signer init config was accepted")
 		}
 	})
 

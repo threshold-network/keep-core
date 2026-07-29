@@ -42,7 +42,7 @@ func ReadFrostNativeSignerAnchorProvisioningArtifact(
 	fd, err := unix.Openat(
 		int(directoryFile.Fd()),
 		name,
-		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW,
+		unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW,
 		0,
 	)
 	if err != nil {

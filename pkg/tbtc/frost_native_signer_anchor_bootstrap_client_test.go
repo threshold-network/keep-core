@@ -668,7 +668,7 @@ func TestFrostNativeSignerAnchorBootstrapClientDoesNotPoisonUnreachableService(
 		environment.authorization(),
 	)
 	if err == nil || strings.Contains(err.Error(), "poisoned") ||
-		!strings.Contains(err.Error(), "cannot reconcile") {
+		!strings.Contains(err.Error(), "request failed") {
 		t.Fatalf("expected retryable transport failure, got [%v]", err)
 	}
 	_, secondErr := environment.client.InitializeFrostNativeSignerAnchor(

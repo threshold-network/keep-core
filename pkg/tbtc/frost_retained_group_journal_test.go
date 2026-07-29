@@ -252,6 +252,29 @@ func TestFrostLocalSessionSnapshotBindsExactSignerMaterial(t *testing.T) {
 		!strings.Contains(err.Error(), "does not identify its wallet") {
 		t.Fatalf("mismatched local key-group material was accepted: [%v]", err)
 	}
+
+	scaffoldPayload, err := json.Marshal(
+		frostsigning.NativeTBTCSignerMaterialPayload{
+			KeyGroup: strings.Repeat("33", 32),
+			KeyGroupSource: frostsigning.
+				NativeTBTCSignerKeyGroupSourceLegacyWalletPubKey,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.registry.walletCache["wallet"].signers[0].signerMaterial =
+		&frostsigning.NativeSignerMaterial{
+			Format:  frostsigning.NativeSignerMaterialFormatFrostTBTCSignerV1,
+			Payload: scaffoldPayload,
+		}
+	sessions, err = fixture.registry.frostLocalSessionSnapshot()
+	if err != nil {
+		t.Fatalf("scaffold session failed readiness classification: [%v]", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("scaffold session classified as retained FROST: [%+v]", sessions)
+	}
 }
 
 func (fixture *journalTestFixture) openJournal(

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func bootstrapProvisioningTestDirectory(t *testing.T) string {
@@ -247,6 +249,18 @@ func TestFrostNativeSignerAnchorBootstrapProvisioningArtifactReadRejections(
 			1024,
 		); err == nil {
 			t.Fatal("symlinked provisioning artifact was read")
+		}
+	})
+	t.Run("fifo artifact", func(t *testing.T) {
+		fifo := filepath.Join(directory, "fifo.json")
+		if err := unix.Mkfifo(fifo, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ReadFrostNativeSignerAnchorProvisioningArtifact(
+			fifo,
+			1024,
+		); err == nil {
+			t.Fatal("FIFO provisioning artifact was read")
 		}
 	})
 	t.Run("group-accessible directory", func(t *testing.T) {

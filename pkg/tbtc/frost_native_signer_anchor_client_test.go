@@ -101,6 +101,63 @@ func TestFrostNativeSignerAnchorStreamIDFrozenAndStable(t *testing.T) {
 	}
 }
 
+func TestFrostNativeSignerAnchorPost_ClassifiesTransportDelivery(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedEndpoint := "http://" + listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	client := &FrostNativeSignerAnchorClient{
+		httpClient:     &http.Client{Transport: &http.Transport{}},
+		requestTimeout: time.Second,
+	}
+	if _, sent, err := client.post(
+		context.Background(),
+		closedEndpoint,
+		[]byte(`{"request":"test"}`),
+	); err == nil || sent {
+		t.Fatalf(
+			"connection-refused request was not definitively unsent: sent [%v], error [%v]",
+			sent,
+			err,
+		)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(writer http.ResponseWriter, request *http.Request) {
+			if _, err := io.ReadAll(request.Body); err != nil {
+				t.Errorf("failed to read request body: %v", err)
+			}
+			hijacker, ok := writer.(http.Hijacker)
+			if !ok {
+				t.Error("response writer cannot be hijacked")
+				return
+			}
+			connection, _, err := hijacker.Hijack()
+			if err != nil {
+				t.Errorf("failed to hijack response: %v", err)
+				return
+			}
+			_ = connection.Close()
+		},
+	))
+	defer server.Close()
+	if _, sent, err := client.post(
+		context.Background(),
+		server.URL,
+		[]byte(`{"request":"test"}`),
+	); err == nil || !sent {
+		t.Fatalf(
+			"written request was not classified ambiguous: sent [%v], error [%v]",
+			sent,
+			err,
+		)
+	}
+}
+
 func TestFrostNativeSignerAnchorRestartBoundsAlignAcrossGoLayers(
 	t *testing.T,
 ) {

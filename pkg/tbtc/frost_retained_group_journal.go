@@ -1970,6 +1970,16 @@ func (wr *walletRegistry) frostLocalSessionSnapshotLocked() (
 		if value == nil || len(value.signers) == 0 {
 			return nil, fmt.Errorf("wallet registry contains an empty session")
 		}
+		_, isFrostWallet, err := frostKeyGroupFromWalletCacheValue(value)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"wallet registry cannot classify local session material: [%w]",
+				err,
+			)
+		}
+		if !isFrostWallet {
+			continue
+		}
 		nativeSigners := make([]*signer, 0)
 		for _, signer := range value.signers {
 			if signer == nil {

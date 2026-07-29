@@ -546,7 +546,11 @@ type frostPreSignCanonicalHashReader struct {
 	headerReader interface {
 		HeaderByHash(context.Context, common.Hash) (*types.Header, error)
 	}
-	rpcClient *rpc.Client
+	rpcClient  *rpc.Client
+	rpcLimiter interface {
+		AcquirePermit() error
+		ReleasePermit()
+	}
 }
 
 func (reader *frostPreSignCanonicalHashReader) HeaderByHash(
@@ -562,7 +566,7 @@ func (reader *frostPreSignCanonicalHashReader) CodeAtHash(
 	blockHash common.Hash,
 ) ([]byte, error) {
 	var result hexutil.Bytes
-	err := reader.rpcClient.CallContext(
+	err := reader.callContext(
 		ctx,
 		&result,
 		"eth_getCode",
@@ -579,7 +583,7 @@ func (reader *frostPreSignCanonicalHashReader) StorageAtHash(
 	blockHash common.Hash,
 ) ([]byte, error) {
 	var result hexutil.Bytes
-	err := reader.rpcClient.CallContext(
+	err := reader.callContext(
 		ctx,
 		&result,
 		"eth_getStorageAt",
@@ -596,7 +600,7 @@ func (reader *frostPreSignCanonicalHashReader) CallContractAtHash(
 	blockHash common.Hash,
 ) ([]byte, error) {
 	var result hexutil.Bytes
-	err := reader.rpcClient.CallContext(
+	err := reader.callContext(
 		ctx,
 		&result,
 		"eth_call",
@@ -604,6 +608,22 @@ func (reader *frostPreSignCanonicalHashReader) CallContractAtHash(
 		rpc.BlockNumberOrHashWithHash(blockHash, true),
 	)
 	return result, err
+}
+
+func (reader *frostPreSignCanonicalHashReader) callContext(
+	ctx context.Context,
+	result interface{},
+	method string,
+	args ...interface{},
+) error {
+	if reader.rpcLimiter != nil {
+		if err := reader.rpcLimiter.AcquirePermit(); err != nil {
+			return fmt.Errorf("cannot acquire Ethereum RPC rate limiter permit: [%w]", err)
+		}
+		defer reader.rpcLimiter.ReleasePermit()
+	}
+
+	return reader.rpcClient.CallContext(ctx, result, method, args...)
 }
 
 func frostPreSignCallArgument(message geth.CallMsg) map[string]interface{} {
@@ -651,15 +671,13 @@ func (adapter *frostPreSignEthereumAdapter) exactHashReader() (
 	if !ok {
 		return nil, fmt.Errorf("Ethereum client does not expose exact-block-hash headers")
 	}
-	rpcProvider, ok := adapter.chain.client.(interface {
-		Client() *rpc.Client
-	})
-	if !ok || rpcProvider.Client() == nil {
+	if adapter.chain.rpcClient == nil {
 		return nil, fmt.Errorf("Ethereum client does not expose canonical EIP-1898 reads")
 	}
 	return &frostPreSignCanonicalHashReader{
 		headerReader: headerReader,
-		rpcClient:    rpcProvider.Client(),
+		rpcClient:    adapter.chain.rpcClient,
+		rpcLimiter:   adapter.chain.rpcLimiter,
 	}, nil
 }
 

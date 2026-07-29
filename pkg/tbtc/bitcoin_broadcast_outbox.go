@@ -385,7 +385,7 @@ func openSecureBitcoinBroadcastFile(
 ) (*os.File, error) {
 	fd, err := unix.Open(
 		path,
-		flags|unix.O_CLOEXEC|unix.O_NOFOLLOW,
+		flags|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW,
 		mode,
 	)
 	if err != nil {
@@ -599,10 +599,14 @@ func (bbo *bitcoinBroadcastOutbox) canonicalAuthorizationStatus(
 	status, err := bbo.authorizationStatusSource.
 		GetCanonicalFrostBitcoinBroadcastAuthorizationStatus(ctx, request)
 	if err != nil {
-		return nil, fmt.Errorf(
+		requestError := fmt.Errorf(
 			"cannot revalidate canonical Bitcoin broadcast authorization: [%w]",
 			err,
 		)
+		if ctx.Err() != nil {
+			return nil, requestError
+		}
+		return nil, &bitcoinBroadcastTransientReplayError{requestError}
 	}
 	if status == nil ||
 		status.RequestHash != request.ComputeHash() ||
@@ -617,7 +621,14 @@ func (bbo *bitcoinBroadcastOutbox) start(ctx context.Context) error {
 		return fmt.Errorf("Bitcoin broadcast outbox context is nil")
 	}
 	if err := bbo.replayOnceWithContext(ctx); err != nil {
-		return err
+		var replayErrors *bitcoinBroadcastReplayErrors
+		if !errors.As(err, &replayErrors) || replayErrors.hasFatalFailure() {
+			return err
+		}
+		logger.Warnf(
+			"Bitcoin broadcast outbox initial replay has retryable failures: [%v]",
+			err,
+		)
 	}
 	bbo.mutex.Lock()
 	if bbo.closed {
@@ -718,6 +729,57 @@ type bitcoinBroadcastReplayCandidate struct {
 	record        *bitcoinBroadcastOutboxRecord
 }
 
+type bitcoinBroadcastTransientReplayError struct {
+	err error
+}
+
+func (errorValue *bitcoinBroadcastTransientReplayError) Error() string {
+	return errorValue.err.Error()
+}
+
+func (errorValue *bitcoinBroadcastTransientReplayError) Unwrap() error {
+	return errorValue.err
+}
+
+type bitcoinBroadcastReplayFailure struct {
+	reservationID [32]byte
+	err           error
+}
+
+type bitcoinBroadcastReplayErrors struct {
+	failures []bitcoinBroadcastReplayFailure
+}
+
+func (errorValue *bitcoinBroadcastReplayErrors) Error() string {
+	parts := make([]string, 0, len(errorValue.failures))
+	for _, failure := range errorValue.failures {
+		parts = append(parts, fmt.Sprintf(
+			"reservation [%x]: %v",
+			failure.reservationID,
+			failure.err,
+		))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func (errorValue *bitcoinBroadcastReplayErrors) Unwrap() []error {
+	result := make([]error, 0, len(errorValue.failures))
+	for _, failure := range errorValue.failures {
+		result = append(result, failure.err)
+	}
+	return result
+}
+
+func (errorValue *bitcoinBroadcastReplayErrors) hasFatalFailure() bool {
+	for _, failure := range errorValue.failures {
+		var transient *bitcoinBroadcastTransientReplayError
+		if !errors.As(failure.err, &transient) {
+			return true
+		}
+	}
+	return false
+}
+
 // replayOnceWithContext checks only the latest/confirmed record of each active
 // reservation. Deeply confirmed history is reconciled in a fixed-size rotating
 // batch, so canonical RPC work is bounded independently of archived history.
@@ -729,31 +791,50 @@ func (bbo *bitcoinBroadcastOutbox) replayOnceWithContext(ctx context.Context) er
 	if err != nil {
 		return err
 	}
+	replayErrors := &bitcoinBroadcastReplayErrors{}
 	for _, candidate := range append(active, archived...) {
 		refreshed, err := bbo.refreshConfirmation(ctx, candidate.record)
 		if err != nil {
-			return err
+			replayErrors.failures = append(
+				replayErrors.failures,
+				bitcoinBroadcastReplayFailure{candidate.reservationID, err},
+			)
+			continue
 		}
 		if refreshed.Confirmation != nil || refreshed.Quarantine != nil {
 			continue
 		}
 		latest, err := bbo.latestBroadcastRecord(candidate.reservationID)
 		if err != nil {
-			return err
+			replayErrors.failures = append(
+				replayErrors.failures,
+				bitcoinBroadcastReplayFailure{candidate.reservationID, err},
+			)
+			continue
 		}
 		broadcastErr, broadcastRecord, err := bbo.broadcastAuthorizedRecord(ctx, latest)
 		if err != nil {
 			if errors.Is(err, errBitcoinBroadcastQuarantined) {
 				continue
 			}
-			return err
+			replayErrors.failures = append(
+				replayErrors.failures,
+				bitcoinBroadcastReplayFailure{candidate.reservationID, err},
+			)
+			continue
 		}
 		if broadcastErr != nil {
 			continue
 		}
 		if _, err := bbo.refreshConfirmation(ctx, broadcastRecord); err != nil {
-			return err
+			replayErrors.failures = append(
+				replayErrors.failures,
+				bitcoinBroadcastReplayFailure{candidate.reservationID, err},
+			)
 		}
+	}
+	if len(replayErrors.failures) > 0 {
+		return replayErrors
 	}
 	return nil
 }

@@ -33,7 +33,7 @@ func readSecureNativeTBTCSignerInitConfig(path string) ([]byte, error) {
 	}
 	fd, err := unix.Open(
 		path,
-		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW,
+		unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW,
 		0,
 	)
 	if err != nil {

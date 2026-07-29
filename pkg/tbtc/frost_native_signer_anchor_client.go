@@ -16,11 +16,13 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"path"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	frostsigning "github.com/keep-network/keep-core/pkg/frost/signing"
@@ -1447,9 +1449,21 @@ func (client *FrostNativeSignerAnchorClient) postWithResponseLimit(
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Cache-Control", "no-store")
+	var wroteRequest atomic.Bool
+	request = request.WithContext(httptrace.WithClientTrace(
+		request.Context(),
+		&httptrace.ClientTrace{
+			WroteRequest: func(httptrace.WroteRequestInfo) {
+				wroteRequest.Store(true)
+			},
+		},
+	))
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return nil, true, fmt.Errorf("native signer anchor request failed: %w", err)
+		return nil, wroteRequest.Load(), fmt.Errorf(
+			"native signer anchor request failed: %w",
+			err,
+		)
 	}
 	defer response.Body.Close()
 	limited := io.LimitReader(response.Body, responseLimit+1)
